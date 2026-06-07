@@ -11,6 +11,7 @@
 int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
                                                          const FengCliProjectContext *context,
                                                          bool release,
+                                                         bool keep_intermediate,
                                                          size_t package_count,
                                                          const char *const *package_paths,
                                                          size_t dependency_fd_count,
@@ -56,7 +57,7 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
     options.target = context->manifest.target;
     options.out_dir = context->out_root;
     options.release = release;
-    options.keep_intermediate = false;
+    options.keep_intermediate = keep_intermediate;
     options.artifact_name = context->manifest.name;
     options.input_count = (int)context->source_count;
     options.inputs = inputs;
@@ -84,10 +85,12 @@ cleanup:
 
 int feng_cli_project_invoke_direct_compile(const char *program,
                                            const FengCliProjectContext *context,
-                                           bool release) {
+                                           bool release,
+                                           bool keep_intermediate) {
     return feng_cli_project_invoke_direct_compile_with_packages(program,
                                                                 context,
                                                                 release,
+                                                                keep_intermediate,
                                                                 0U,
                                                                 NULL,
                                                                 0U,
@@ -160,10 +163,12 @@ bool feng_cli_project_prepare_build(const char *program,
 int feng_cli_project_compile_prepared(const char *program,
                                       const FengCliProjectContext *context,
                                       const FengCliDepsResolved *resolved,
-                                      bool release) {
+                                      bool release,
+                                      bool keep_intermediate) {
     return feng_cli_project_invoke_direct_compile_with_packages(program,
                                                                 context,
                                                                 release,
+                                                                keep_intermediate,
                                                                 resolved->package_count,
                                                                 (const char *const *)resolved->package_paths,
                                                                 resolved->debug_fd_count,

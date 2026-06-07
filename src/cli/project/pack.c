@@ -182,7 +182,7 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
                 program);
         goto done;
     }
-    rc = feng_cli_project_compile_prepared(program, &context, &resolved, release);
+    rc = feng_cli_project_compile_prepared(program, &context, &resolved, release, false);
     if (rc != 0) {
         goto done;
     }

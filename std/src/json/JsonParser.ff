@@ -1,0 +1,379 @@
+open module std.json;
+
+import std;
+import std.numeric;
+import std.text;
+import std.collections;
+
+/**
+ * A recursive-descent JSON parser.
+ * Parses a JSON string into a JsonValue according to RFC 8259.
+ */
+open type JsonParser {
+  seal let input: byte[];
+  seal let len: i32;
+  seal var pos: i32;
+
+  seal func JsonParser(input: byte[], len: i32) {
+    self.input = input;
+    self.len = len;
+    self.pos = 0;
+  }
+
+  /**
+   * Parses a JSON string and returns the resulting JsonValue.
+   * @param text - a valid JSON string
+   * @return the parsed JsonValue
+   * @throws if the input is not valid JSON
+   */
+  open static func parse(text: string): JsonValue {
+    let bytes = text.toBytes();
+    let parser = JsonParser(bytes, (i32)bytes.length());
+    let value = parser.parseValue();
+    parser.skipWhitespace();
+    if parser.pos < parser.len {
+      throw "JSON: unexpected character at position " + parser.pos.toString();
+    }
+    return value;
+  }
+
+  seal func peek(): byte {
+    if self.pos >= self.len {
+      throw "JSON: unexpected end of input";
+    }
+    return self.input[self.pos];
+  }
+
+  seal func advance(): byte {
+    let ch = self.peek();
+    self.pos = self.pos + 1;
+    return ch;
+  }
+
+  seal func skipWhitespace() {
+    while self.pos < self.len {
+      let ch = self.input[self.pos];
+      if ch == (byte)0x20 || ch == (byte)0x09 || ch == (byte)0x0A || ch == (byte)0x0D {
+        self.pos = self.pos + 1;
+      } else {
+        return;
+      }
+    }
+  }
+
+  seal func expect(expected: byte) {
+    let ch = self.advance();
+    if ch != expected {
+      throw "JSON: unexpected character at position " + (self.pos - 1).toString();
+    }
+  }
+
+  seal func parseValue(): JsonValue {
+    self.skipWhitespace();
+    let ch = self.peek();
+    if ch == (byte)0x22 {
+      return JsonValue(self.parseString());
+    }
+    if ch == (byte)0x7B {
+      return JsonValue(self.parseObject());
+    }
+    if ch == (byte)0x5B {
+      return JsonValue(self.parseArray());
+    }
+    if ch == (byte)0x74 {
+      return JsonValue(self.parseTrue());
+    }
+    if ch == (byte)0x66 {
+      return JsonValue(self.parseFalse());
+    }
+    if ch == (byte)0x6E {
+      return JsonValue(self.parseNull());
+    }
+    if ch == (byte)0x2D || (ch >= (byte)0x30 && ch <= (byte)0x39) {
+      return JsonValue(self.parseNumber());
+    }
+    throw "JSON: unexpected character at position " + self.pos.toString();
+  }
+
+  seal func parseString(): string {
+    self.expect((byte)0x22);
+    let buf = List<byte>();
+    while self.pos < self.len {
+      let ch = self.advance();
+      if ch == (byte)0x22 {
+        return string.fromUtf8Bytes(buf.entries());
+      }
+      if ch == (byte)0x5C {
+        let esc = self.advance();
+        if esc == (byte)0x22 {
+          buf.add((byte)0x22);
+        } else if esc == (byte)0x5C {
+          buf.add((byte)0x5C);
+        } else if esc == (byte)0x2F {
+          buf.add((byte)0x2F);
+        } else if esc == (byte)0x62 {
+          buf.add((byte)0x08);
+        } else if esc == (byte)0x66 {
+          buf.add((byte)0x0C);
+        } else if esc == (byte)0x6E {
+          buf.add((byte)0x0A);
+        } else if esc == (byte)0x72 {
+          buf.add((byte)0x0D);
+        } else if esc == (byte)0x74 {
+          buf.add((byte)0x09);
+        } else if esc == (byte)0x75 {
+          let cp = self.parseUnicodeEscape();
+          // Handle surrogate pairs
+          if cp >= (i32)0xD800 && cp <= (i32)0xDBFF {
+            if self.pos + 1 < self.len && self.input[self.pos] == (byte)0x5C && self.input[self.pos + 1] == (byte)0x75 {
+              self.pos = self.pos + 2;
+              let low = self.parseUnicodeEscape();
+              if low >= (i32)0xDC00 && low <= (i32)0xDFFF {
+                let full = (i32)0x10000 + ((cp - (i32)0xD800) * (i32)0x400) + (low - (i32)0xDC00);
+                self.encodeUtf8(full, buf);
+              } else {
+                throw "JSON: invalid low surrogate at position " + self.pos.toString();
+              }
+            } else {
+              throw "JSON: missing low surrogate at position " + self.pos.toString();
+            }
+          } else {
+            self.encodeUtf8(cp, buf);
+          }
+        } else {
+          throw "JSON: invalid escape sequence at position " + (self.pos - 1).toString();
+        }
+      } else {
+        buf.add(ch);
+      }
+    }
+    throw "JSON: unterminated string";
+  }
+
+  seal func parseUnicodeEscape(): i32 {
+    if self.pos + 4 > self.len {
+      throw "JSON: incomplete unicode escape at position " + self.pos.toString();
+    }
+    var result: i32 = 0;
+    for var i: i32 = 0; i < 4; i = i + 1 {
+      let ch = self.advance();
+      let digit = self.hexDigit(ch);
+      if digit < 0 {
+        throw "JSON: invalid hex digit at position " + (self.pos - 1).toString();
+      }
+      result = result * 16 + digit;
+    }
+    return result;
+  }
+
+  seal func hexDigit(ch: byte): i32 {
+    if ch >= (byte)0x30 && ch <= (byte)0x39 {
+      return (i32)ch - (i32)0x30;
+    }
+    if ch >= (byte)0x41 && ch <= (byte)0x46 {
+      return (i32)ch - (i32)0x41 + 10;
+    }
+    if ch >= (byte)0x61 && ch <= (byte)0x66 {
+      return (i32)ch - (i32)0x61 + 10;
+    }
+    return -1;
+  }
+
+  seal func encodeUtf8(cp: i32, buf: List<byte>) {
+    if cp < (i32)0x80 {
+      buf.add((byte)cp);
+    } else if cp < (i32)0x800 {
+      buf.add((byte)((i32)0xC0 | (cp >> 6)));
+      buf.add((byte)((i32)0x80 | (cp & (i32)0x3F)));
+    } else if cp < (i32)0x10000 {
+      buf.add((byte)((i32)0xE0 | (cp >> 12)));
+      buf.add((byte)((i32)0x80 | ((cp >> 6) & (i32)0x3F)));
+      buf.add((byte)((i32)0x80 | (cp & (i32)0x3F)));
+    } else {
+      buf.add((byte)((i32)0xF0 | (cp >> 18)));
+      buf.add((byte)((i32)0x80 | ((cp >> 12) & (i32)0x3F)));
+      buf.add((byte)((i32)0x80 | ((cp >> 6) & (i32)0x3F)));
+      buf.add((byte)((i32)0x80 | (cp & (i32)0x3F)));
+    }
+  }
+
+  seal func isDigit(ch: byte): bool {
+    return ch >= (byte)0x30 && ch <= (byte)0x39;
+  }
+
+  seal func currentByte(): byte {
+    return self.input[self.pos];
+  }
+
+  seal func parseNumber(): double {
+    let start = self.pos;
+    // Optional minus
+    if self.pos < self.len {
+      if self.currentByte() == (byte)0x2D {
+        self.pos = self.pos + 1;
+      }
+    }
+    // Integer part
+    if self.pos >= self.len {
+      throw "JSON: unexpected end of number at position " + start.toString();
+    }
+    let first = self.currentByte();
+    if first == (byte)0x30 {
+      self.pos = self.pos + 1;
+    } else if first >= (byte)0x31 && first <= (byte)0x39 {
+      self.pos = self.pos + 1;
+      while self.pos < self.len && self.isDigit(self.currentByte()) {
+        self.pos = self.pos + 1;
+      }
+    } else {
+      throw "JSON: invalid number at position " + start.toString();
+    }
+    // Fraction part
+    if self.pos < self.len && self.currentByte() == (byte)0x2E {
+      self.pos = self.pos + 1;
+      if self.pos >= self.len || !self.isDigit(self.currentByte()) {
+        throw "JSON: invalid number fraction at position " + self.pos.toString();
+      }
+      while self.pos < self.len && self.isDigit(self.currentByte()) {
+        self.pos = self.pos + 1;
+      }
+    }
+    // Exponent part
+    if self.pos < self.len {
+      let expCh = self.currentByte();
+      if expCh == (byte)0x65 || expCh == (byte)0x45 {
+        self.pos = self.pos + 1;
+        if self.pos < self.len {
+          let signCh = self.currentByte();
+          if signCh == (byte)0x2B || signCh == (byte)0x2D {
+            self.pos = self.pos + 1;
+          }
+        }
+        if self.pos >= self.len || !self.isDigit(self.currentByte()) {
+          throw "JSON: invalid number exponent at position " + self.pos.toString();
+        }
+        while self.pos < self.len && self.isDigit(self.currentByte()) {
+          self.pos = self.pos + 1;
+        }
+      }
+    }
+    let numBytes = self.input.clone((long)start, (long)self.pos);
+    let numStr = string.fromUtf8Bytes(numBytes);
+    return f64.parse(numStr);
+  }
+
+  seal func parseObject(): JsonObject {
+    self.expect((byte)0x7B);
+    self.skipWhitespace();
+    let obj = JsonObject();
+    if self.pos < self.len && self.input[self.pos] == (byte)0x7D {
+      self.pos = self.pos + 1;
+      return obj;
+    }
+    // First entry
+    self.skipWhitespace();
+    let key1 = self.parseString();
+    self.skipWhitespace();
+    self.expect((byte)0x3A);
+    let val1 = self.parseValue();
+    obj.set(key1, val1);
+    // Remaining entries
+    while true {
+      self.skipWhitespace();
+      if self.pos >= self.len {
+        throw "JSON: unterminated object";
+      }
+      let ch = self.input[self.pos];
+      if ch == (byte)0x7D {
+        self.pos = self.pos + 1;
+        return obj;
+      }
+      if ch != (byte)0x2C {
+        throw "JSON: expected ',' or '}' at position " + self.pos.toString();
+      }
+      self.pos = self.pos + 1;
+      self.skipWhitespace();
+      let key = self.parseString();
+      self.skipWhitespace();
+      self.expect((byte)0x3A);
+      let val = self.parseValue();
+      obj.set(key, val);
+    }
+    throw "JSON: unterminated object";
+  }
+
+  seal func parseArray(): JsonArray {
+    self.expect((byte)0x5B);
+    self.skipWhitespace();
+    let arr = JsonArray();
+    if self.pos < self.len && self.input[self.pos] == (byte)0x5D {
+      self.pos = self.pos + 1;
+      return arr;
+    }
+    // First element
+    let val1 = self.parseValue();
+    arr.add(val1);
+    // Remaining elements
+    while true {
+      self.skipWhitespace();
+      if self.pos >= self.len {
+        throw "JSON: unterminated array";
+      }
+      let ch = self.input[self.pos];
+      if ch == (byte)0x5D {
+        self.pos = self.pos + 1;
+        return arr;
+      }
+      if ch != (byte)0x2C {
+        throw "JSON: expected ',' or ']' at position " + self.pos.toString();
+      }
+      self.pos = self.pos + 1;
+      let val = self.parseValue();
+      arr.add(val);
+    }
+    throw "JSON: unterminated array";
+  }
+
+  seal func parseTrue(): bool {
+    if self.pos + 4 > self.len {
+      throw "JSON: unexpected end of input";
+    }
+    if self.input[self.pos] == (byte)0x74
+    && self.input[self.pos + 1] == (byte)0x72
+    && self.input[self.pos + 2] == (byte)0x75
+    && self.input[self.pos + 3] == (byte)0x65 {
+      self.pos = self.pos + 4;
+      return true;
+    }
+    throw "JSON: invalid literal at position " + self.pos.toString();
+  }
+
+  seal func parseFalse(): bool {
+    if self.pos + 5 > self.len {
+      throw "JSON: unexpected end of input";
+    }
+    if self.input[self.pos] == (byte)0x66
+    && self.input[self.pos + 1] == (byte)0x61
+    && self.input[self.pos + 2] == (byte)0x6C
+    && self.input[self.pos + 3] == (byte)0x73
+    && self.input[self.pos + 4] == (byte)0x65 {
+      self.pos = self.pos + 5;
+      return false;
+    }
+    throw "JSON: invalid literal at position " + self.pos.toString();
+  }
+
+  seal func parseNull(): None {
+    if self.pos + 4 > self.len {
+      throw "JSON: unexpected end of input";
+    }
+    if self.input[self.pos] == (byte)0x6E
+    && self.input[self.pos + 1] == (byte)0x75
+    && self.input[self.pos + 2] == (byte)0x6C
+    && self.input[self.pos + 3] == (byte)0x6C {
+      self.pos = self.pos + 4;
+      return none;
+    }
+    throw "JSON: invalid literal at position " + self.pos.toString();
+  }
+}

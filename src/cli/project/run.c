@@ -14,7 +14,7 @@
 
 static void print_usage(const char *program, FILE *stream) {
     fprintf(stream, "Usage:\n");
-    fprintf(stream, "  %s run [<path>] [--release] [-- <program-args>...]\n", program);
+    fprintf(stream, "  %s run [<path>] [--release] [--keep-ir] [-- <program-args>...]\n", program);
 }
 
 static FengCliParseResult parse_args(const char *program,
@@ -22,12 +22,14 @@ static FengCliParseResult parse_args(const char *program,
                                      char **argv,
                                      const char **out_path,
                                      bool *out_release,
+                                     bool *out_keep_ir,
                                      int *out_program_argc,
                                      char ***out_program_argv) {
     int index;
 
     *out_path = NULL;
     *out_release = false;
+    *out_keep_ir = false;
     *out_program_argc = 0;
     *out_program_argv = NULL;
 
@@ -45,6 +47,10 @@ static FengCliParseResult parse_args(const char *program,
         }
         if (strcmp(arg, "--release") == 0) {
             *out_release = true;
+            continue;
+        }
+        if (strcmp(arg, "--keep-ir") == 0) {
+            *out_keep_ir = true;
             continue;
         }
         if (strncmp(arg, "--", 2) == 0) {
@@ -109,6 +115,7 @@ static int execute_program(const char *binary_path, int argc, char **argv) {
 int feng_cli_project_run_main(const char *program, int argc, char **argv) {
     const char *path_arg = NULL;
     bool release = false;
+    bool keep_ir = false;
     int program_argc = 0;
     char **program_argv = NULL;
     FengCliParseResult parse_result;
@@ -117,7 +124,7 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv) {
     FengCliDepsResolved resolved = {0};
     int rc;
 
-    parse_result = parse_args(program, argc, argv, &path_arg, &release, &program_argc, &program_argv);
+    parse_result = parse_args(program, argc, argv, &path_arg, &release, &keep_ir, &program_argc, &program_argv);
     if (parse_result != FENG_CLI_PARSE_OK) {
         return parse_result == FENG_CLI_PARSE_HELP ? 0 : 1;
     }
@@ -144,7 +151,7 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv) {
         return 1;
     }
 
-    rc = feng_cli_project_compile_prepared(program, &context, &resolved, release);
+    rc = feng_cli_project_compile_prepared(program, &context, &resolved, release, keep_ir);
     feng_cli_deps_resolved_dispose(&resolved);
     if (rc == 0) {
         rc = execute_program(context.binary_path, program_argc, program_argv);

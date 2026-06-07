@@ -1,7 +1,8 @@
-open module std.text;
+open module std.json;
 
 import std;
 import std.numeric;
+import std.text;
 import std.collections;
 
 open fit bool {
@@ -43,6 +44,20 @@ open type JsonArray {
   func add(item: JsonValue) {
     self.payload.add(item.payload);
   }
+  /**
+   * Returns the number of elements in this array.
+   */
+  func size(): i32 {
+    return self.payload.size();
+  }
+  /**
+   * Returns the element at the given index as a JsonValue.
+   * @param index - zero-based position
+   * @return the element as JsonValue
+   */
+  func get(index: i32): JsonValue {
+    return JsonValue(self.payload.get(index));
+  }
   func toJsonString(): string {
     let size = self.payload.size();
     if size == 0 {
@@ -63,6 +78,38 @@ open type JsonObject {
     self.payload = payload;
   }
   func JsonObject() {}
+  /**
+   * Sets the value for the given key.
+   * @param key - the key to set
+   * @param value - the value to associate with the key
+   */
+  func set(key: string, value: JsonPayload) {
+    self.payload.set(key, value);
+  }
+  /**
+   * Sets the value for the given key from a JsonValue.
+   * @param key - the key to set
+   * @param value - the JsonValue whose payload to associate with the key
+   */
+  func set(key: string, value: JsonValue) {
+    self.payload.set(key, value.payload);
+  }
+  /**
+   * Returns the value for the given key as a JsonValue.
+   * @param key - the key to look up
+   * @return the associated JsonValue, or an empty JsonValue if not found
+   */
+  func get(key: string): JsonValue {
+    return JsonValue(self.payload.get(key));
+  }
+  /**
+   * Returns true if the given key exists in this object.
+   * @param key - the key to check
+   * @return true if the key exists
+   */
+  func has(key: string): bool {
+    return self.payload.has(key);
+  }
   func toJsonString(): string {
     let entries = self.payload.entries();
     if entries.length() == (long)0 {

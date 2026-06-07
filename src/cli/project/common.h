@@ -42,6 +42,7 @@ bool feng_cli_project_remove_tree(const char *path, char **out_error_message);
 int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
                                                          const FengCliProjectContext *context,
                                                          bool release,
+                                                         bool keep_intermediate,
                                                          size_t package_count,
                                                          const char *const *package_paths,
                                                          size_t dependency_fd_count,
@@ -49,7 +50,8 @@ int feng_cli_project_invoke_direct_compile_with_packages(const char *program,
 
 int feng_cli_project_invoke_direct_compile(const char *program,
                                            const FengCliProjectContext *context,
-                                           bool release);
+                                           bool release,
+                                           bool keep_intermediate);
 
 bool feng_cli_project_resolve_build_dependencies(const char *program,
                                                  const FengCliProjectContext *context,
@@ -72,6 +74,7 @@ bool feng_cli_project_stage_assets(const FengCliProjectContext *context,
 int feng_cli_project_compile_prepared(const char *program,
                                       const FengCliProjectContext *context,
                                       const FengCliDepsResolved *resolved,
-                                      bool release);
+                                      bool release,
+                                      bool keep_intermediate);
 
 #endif /* FENG_CLI_PROJECT_COMMON_H */
