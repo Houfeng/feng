@@ -55,6 +55,7 @@ open type List<T> {
   open func List(items: T[!]) {
     self.items = items;
     self.count = (i32)(items.length());
+    self.capacity = self.count;
   }
 
   open func List(items: T[]) {
@@ -64,6 +65,7 @@ open type List<T> {
       self.items[i] = items[i];
     }
     self.count = length;
+    self.capacity = length;
   }
 
   /**

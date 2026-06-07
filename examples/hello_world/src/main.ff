@@ -6,19 +6,21 @@ import std.numeric;
 import std.time;
 import std.collections;
 
-let TEST_NAME = "hello_world";
+// let TEST_NAME = "hello_world";
 
 /**
  * This is a simple "Hello, world!" program in Flare.
  * It prints "Hello, world!" 1000 times to the console.
  */
 func main(args: string[]) {
-  println("Running test: " + TEST_NAME);
-  let x = "123".length();
-  let time = DateTime();
-  for var i = 1; i <= 10; i += 1 {
-    println("Hello, world! {0}", time.toString());
-  }
-  let json = JsonValue(JsonArray(["1", "2", "3"]));
-  println("JSON: {0}", json.toJsonString());
+  // println("Running test: " + TEST_NAME);
+  // let x = "123".length();
+  // let time = DateTime();
+  // for var i = 1; i <= 10; i += 1 {
+  //   println("Hello, world! {0}", time.toString());
+  // }
+  let array = JsonArray(["1", "2", "3"]);
+  array.add((double)4);
+  let json = JsonValue(array);
+  println("JSON: {0}", json.toString());
 }
