@@ -25958,12 +25958,18 @@ static bool cg_emit_all_programs(CG *cg,
     for (size_t i = 0; i < cg->user_spec_count; i++) {
         if (cg_program_origin(cg, cg->user_specs[i].owner_program) ==
             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
-            /* Imported specs with generic context type params need their
-             * witness struct body emitted here — consumer modules create
-             * witness instances that require the complete struct layout.
-             * cg_emit_user_spec_definition returns early for these specs
-             * (no aggregate descriptor emitted), so no symbol conflicts. */
-            if (cg->user_specs[i].generic_context_type_param_count > 0U) {
+            /* Imported specs need their definition emitted here when the
+             * consumer module references them:
+             * - Generic-context specs: witness struct body is needed so
+             *   consumer-side witness instances can be properly typed.
+             *   cg_emit_user_spec_definition returns early for these
+             *   (no aggregate descriptor emitted).
+             * - Union-form specs: the aggregate descriptor (with init fn,
+             *   slots, etc.) uses internal linkage in the originating
+             *   library and cannot be referenced from the consumer, so we
+             *   must emit our own copy here. */
+            if (cg->user_specs[i].generic_context_type_param_count > 0U ||
+                cg->user_specs[i].form == FENG_SPEC_FORM_UNION) {
                 cg->cur_program = cg->user_specs[i].owner_program;
                 cg_emit_user_spec_definition(cg, &cg->user_specs[i]);
                 cg->cur_program = NULL;
