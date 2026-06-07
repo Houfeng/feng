@@ -4,9 +4,10 @@ Usage:
 
 Project:
   feng init       [<name>] [--target=<bin|lib>]
-  feng build      [<path>] [--release]
+  feng build      [<path>] [--release] [--keep-ir]
   feng check      [<path>] [--format=<text|json>]
-  feng run        [<path>] [--release] [-- <program-args>...]
+  feng run        [<path>] [--release] [--keep-ir]
+                  [-- <program-args>...]
   feng clean      [<path>]
   feng pack       [<path>]
   feng deps       <add|remove|install> ...

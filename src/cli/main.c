@@ -21,9 +21,10 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
     fprintf(stream, "\n");
     fprintf(stream, "Project:\n");
     fprintf(stream, "  %s init       [<name>] [--target=<bin|lib>]\n", program);
-    fprintf(stream, "  %s build      [<path>] [--release]\n", program);
+    fprintf(stream, "  %s build      [<path>] [--release] [--keep-ir]\n", program);
     fprintf(stream, "  %s check      [<path>] [--format=<text|json>]\n", program);
-    fprintf(stream, "  %s run        [<path>] [--release] [-- <program-args>...]\n", program);
+    fprintf(stream, "  %s run        [<path>] [--release] [--keep-ir]\n", program);
+    fprintf(stream, "%*s[-- <program-args>...]\n", (int)(2U + strlen(program) + strlen(" run        ")), "");
     fprintf(stream, "  %s clean      [<path>]\n", program);
     fprintf(stream, "  %s pack       [<path>]\n", program);
     fprintf(stream, "  %s deps       <add|remove|install> ...\n", program);
