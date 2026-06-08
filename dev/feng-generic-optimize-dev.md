@@ -366,7 +366,7 @@ void process__G__K__V(const FengFunctionDescriptor *_desc,
                       const FengGenericParamDescriptor *_V, ...)
 ```
 
-**泛型类型的实例方法共享体**——仅保留 `_self`，移除 `_field_offsets`、`_K`、`_V`（均从 `self->_hdr.desc` 获取）：
+**泛型类型的实例方法共享体（无方法级泛型）**——仅保留 `_self`，移除 `_field_offsets`、`_K`、`_V`（均从 `self->_hdr.desc` 获取）。共享体内通过 `((FengManagedHeader *)_self)->desc->reified_generic_params[i]` 访问类型级泛型参数，支持方法体内使用 `K`、`V` 进行类型判断、传递给其他泛型调用等操作：
 
 ```c
 /* 旧签名 */
@@ -375,9 +375,15 @@ void Container_method__G__K__V(void *_self, const size_t *_field_offsets,
                                 const FengGenericParamDescriptor *_V, ...)
 /* 新签名：_field_offsets/_K/_V 均从 self->_hdr.desc 获取 */
 void Container_method__G__K__V(void *_self, ...)
+
+/* 共享体内访问类型级泛型参数（即使方法本身无方法级泛型） */
+const FengTypeDescriptor *_td = ((FengManagedHeader *)_self)->desc;
+const FengGenericParamDescriptor *_K = _td->reified_generic_params[0];
+const FengGenericParamDescriptor *_V = _td->reified_generic_params[1];
+/* _K/_V 可用于：kind 判断、size 获取、传递给其他泛型函数调用、数组创建等 */
 ```
 
-**泛型类型的静态方法共享体**——移除 `_K`、`_V`，新增 `_type_desc`（承载 `reified_generic_params`/`reified_agg_deps`/`reified_type_deps`）：
+**泛型类型的静态方法共享体（无方法级泛型）**——移除 `_K`、`_V`，新增 `_type_desc`（承载 `reified_generic_params`/`reified_agg_deps`/`reified_type_deps`）。共享体内通过 `_type_desc->reified_generic_params[i]` 访问类型级泛型参数，支持方法体内使用 `K`、`V`：
 
 ```c
 /* 旧签名 */
@@ -385,6 +391,11 @@ void Container_static_method__G__K__V(const FengGenericParamDescriptor *_K,
                                        const FengGenericParamDescriptor *_V, ...)
 /* 新签名：_type_desc 承载所有类型级信息，_K/_V 从 _type_desc->reified_generic_params 获取 */
 void Container_static_method__G__K__V(const FengTypeDescriptor *_type_desc, ...)
+
+/* 共享体内访问类型级泛型参数（即使方法本身无方法级泛型） */
+const FengGenericParamDescriptor *_K = _type_desc->reified_generic_params[0];
+const FengGenericParamDescriptor *_V = _type_desc->reified_generic_params[1];
+/* _K/_V 可用于：kind 判断、size 获取、传递给其他泛型函数调用、数组创建等 */
 ```
 
 **含方法级泛型参数时**——类型级泛型从描述符获取，仅方法级泛型以独立 `FengGenericParamDescriptor*` 参数传入：
