@@ -43,27 +43,25 @@ feng: panic: feng_aggregate: unknown forwarded slot kind 6 in 'JsonPayload'
 
 ### 2.1 核心思路：编译期描述符树
 
-**Wrapper（调用点）在编译时已知所有具体类型**，因此由 Wrapper 静态生成具体化描述符（全在 `.rodata`，零运行时开销）。共享体通过统一的"自身具体化描述符"在运行时访问所有依赖。
+**Wrapper（调用点）在编译时已知所有具体类型**，因此由 Wrapper 静态生成具体化描述符（全在 `.rodata`，零运行时开销）。共享体通过描述符在运行时访问所有依赖。
+
+泛型参数描述符（`_K`、`_V` 等）保持原有的函数参数传递方式不变（Wrapper 负责生成并传入）。字段偏移（`_field_offsets`）和具体化依赖（`agg_deps`/`type_deps`）收归到类型/函数描述符中。
 
 **路径一：类型实例方法（有 `self`）**
 
-`self->_hdr.desc` 即是当前实例的具体化 `FengTypeDescriptor`，永远可靠。**共享体不新增任何额外参数**，原先通过函数参数传入的 `_field_offsets` 和类型级泛型参数描述符（`_K`、`_V` 等）统一收归到 `FengTypeDescriptor` 中；共享体在运行时通过 `self->_hdr.desc->field_offsets[i]`、`->generic_params[i]`、`->agg_deps[i]`、`->type_deps[i]` 访问所有具体化信息。
+`self->_hdr.desc` 即是当前实例的具体化 `FengTypeDescriptor`，永远可靠。原先通过函数参数传入的 `_field_offsets` 收归到 `FengTypeDescriptor` 中；共享体在运行时通过 `self->_hdr.desc->field_offsets[i]`、`->agg_deps[i]`、`->type_deps[i]` 访问所有具体化信息。**共享体不新增任何额外参数**，原有 `_self`、`_K`、`_V` 参数不变，移除 `_field_offsets`。
 
 **路径二：类型静态方法（无 `self`）**
 
-Wrapper 将具体化 `FengTypeDescriptor*` 作为额外参数 `_type_desc` 传入共享体，共享体通过 `_type_desc->generic_params[i]`、`->agg_deps[i]`、`->type_deps[i]` 访问所有具体化信息。
-
-`FengTypeDescriptor.agg_deps[]` 和 `type_deps[]` 的索引在整个类型范围内**全局稳定**：codegen 收集该类型所有方法（实例方法 + 静态方法）中全部依赖（成员字段 + 各方法体局部依赖），按依赖排序 key（见 §2.2）字典序升序分配全局唯一索引，所有方法共享同一 `FengTypeDescriptor`，各方法按编译期确定的固定索引访问各自所需的描述符。
+Wrapper 将具体化 `FengTypeDescriptor*` 作为额外参数 `_type_desc` 传入共享体，共享体通过 `_type_desc->agg_deps[i]`、`->type_deps[i]` 访问所有具体化信息。泛型参数 `_K`、`_V` 保持为独立函数参数。
 
 **路径三：独立泛型函数（无 `self`）**
 
-Wrapper 为本次具体化静态生成一个 **`FengFunctionDescriptor`**（`static const`），传入共享体时命名为 `_desc`。共享体通过 `_desc->generic_params[i]`、`->agg_deps[i]`、`->type_deps[i]` 在运行时访问所有具体化信息。
+Wrapper 为本次具体化静态生成一个 **`FengFunctionDescriptor`**（`static const`），传入共享体时命名为 `_desc`。共享体通过 `_desc->agg_deps[i]`、`->type_deps[i]` 在运行时访问所有具体化信息。泛型参数 `_K`、`_V` 保持为独立函数参数。
 
-三条路径形式完全统一：`自身具体化描述符->generic_params[i]` / `->field_offsets[i]` / `->agg_deps[i]` / `->type_deps[i]`，区别仅在"自身具体化描述符"的来源。所有泛型参数信息均通过描述符传递，不再有独立的 `FengGenericParamDescriptor*` 函数参数：
+三条路径中，泛型参数均通过 `FengGenericParamDescriptor*` 函数参数传递（与原有方式一致），具体化复合类型描述符通过描述符的 `agg_deps[i]` / `type_deps[i]` 访问。方法级泛型参数（如 `Container<K>.map<U>()` 中的 `U`）同样以 `FengGenericParamDescriptor*` 函数参数传入，由 Wrapper 在调用点生成。
 
-- **类型级泛型参数**（`_K`、`_V` 等）和**字段偏移**（`_field_offsets`）收归到 `FengTypeDescriptor` 中
-- **方法级泛型参数**（如 `Container<K>.map<U>()` 中的 `U`）不属于类型描述符（因实例方法的类型描述符跟随对象，在创建时确定，而方法级泛型在调用点才确定），以 `FengFunctionDescriptor*`（`_method_desc`）形式传入
-- **独立泛型函数**的所有泛型参数均在 `FengFunctionDescriptor*`（`_desc`）中
+`FengTypeDescriptor.agg_deps[]` 和 `type_deps[]` 的索引在整个类型范围内**全局稳定**：codegen 收集该类型所有方法（实例方法 + 静态方法）中全部依赖（成员字段 + 各方法体局部依赖），按依赖排序 key（见 §2.2）字典序升序分配全局唯一索引，所有方法共享同一 `FengTypeDescriptor`，各方法按编译期确定的固定索引访问各自所需的描述符。含方法级泛型的方法，其涉及方法级类型参数的依赖使用独立索引（在类型级依赖之后追加）。
 
 新增 `FengFunctionDescriptor` 描述独立泛型函数的具体化依赖（详见 §2.2）。生命周期三大类不变。Aggregate walker 不变。不新增 runtime 函数。
 
@@ -71,21 +69,11 @@ Wrapper 为本次具体化静态生成一个 **`FengFunctionDescriptor`**（`sta
 
 #### `FengFunctionDescriptor`（新增）
 
-泛型函数/方法的具体化描述符，Wrapper 静态生成。用于两种场景：
-
-1. **独立泛型函数**：传入共享体时命名 `_desc`，承载函数的所有泛型参数和依赖
-2. **泛型类型的泛型方法**（方法自身有类型参数）：传入共享体时命名 `_method_desc`，仅承载方法级泛型参数和方法体内的依赖
+独立泛型函数的具体化描述符，Wrapper 静态生成，传入共享体时命名 `_desc`，承载函数体内的具体化依赖。泛型参数（`_K`、`_V`）不在此描述符中，仍以独立 `FengGenericParamDescriptor*` 函数参数传入。
 
 ```c
-/* 新增：泛型函数/方法具体化描述符 */
 typedef struct FengFunctionDescriptor {
     const char *name;
-    /* 泛型参数的具体化描述符，按声明顺序排列（index 0 = 第一个类型参数）。
-     * 独立函数：承载所有泛型参数（_K、_V 等）。
-     * 方法级：仅承载方法自身声明的泛型参数（_U 等），
-     *         类型级参数（_K、_V）从 FengTypeDescriptor 获取。 */
-    size_t generic_param_count;
-    const FengGenericParamDescriptor *generic_params;
     /* 本次调用中直接使用的各具体化 aggregate（tuple）类型的描述符，
      * 按排序 key（见下方"依赖排序 key 规则"）字典序升序排列。
      * [约束] 严禁用于生命周期管理（retain/release/destroy）；唯一用途是在运行时
@@ -127,14 +115,6 @@ typedef struct FengAggregateDescriptor {
 typedef struct FengTypeDescriptor {
     /* ... 已有字段不变 ... */
 
-    /* 类型级泛型参数的具体化描述符（原共享体函数参数 _K、_V 等），
-     * 按声明顺序排列（index 0 = 第一个类型参数）。
-     * 共享体通过 generic_params[i] 获取各泛型参数的 kind/descriptor/witness，
-     * 替代原先逐个传入的 FengGenericParamDescriptor* 函数参数。
-     * 非泛型类型此字段为 0/NULL。 */
-    size_t generic_param_count;
-    const FengGenericParamDescriptor *generic_params;
-
     /* 具体化字段偏移（原共享体函数参数 _field_offsets），
      * 按字段声明顺序排列（index 0 = 第一个字段）。
      * 共享体通过 field_offsets[i] 获取各字段在具体化 struct 中的偏移，
@@ -161,15 +141,17 @@ typedef struct FengTypeDescriptor {
 } FengTypeDescriptor;
 ```
 
+泛型参数（`_K`、`_V`）不在类型描述符中，仍以独立 `FengGenericParamDescriptor*` 函数参数传入。
+
 访问方式对比：
 
-| 场景 | 自身具体化描述符 | 类型级泛型参数 | 方法级泛型参数 | 字段偏移 | aggregate 依赖 | managed 依赖 |
-|------|------|------|------|------|------|------|
-| 类型实例方法 | `_td`（`self->_hdr.desc`） | `_td->generic_params[i]` | — | `_td->field_offsets[i]` | `_td->agg_deps[i]` | `_td->type_deps[i]` |
-| 类型实例方法（有方法级泛型） | `_td`（`self->_hdr.desc`） | `_td->generic_params[i]` | `_method_desc->generic_params[j]` | `_td->field_offsets[i]` | `_td->agg_deps[i]` | `_td->type_deps[i]` |
-| 类型静态方法 | `_type_desc`（Wrapper 传入） | `_type_desc->generic_params[i]` | — | N/A | `_type_desc->agg_deps[i]` | `_type_desc->type_deps[i]` |
-| 类型静态方法（有方法级泛型） | `_type_desc`（Wrapper 传入） | `_type_desc->generic_params[i]` | `_method_desc->generic_params[j]` | N/A | `_type_desc->agg_deps[i]` | `_type_desc->type_deps[i]` |
-| 独立泛型函数 | `_desc`（Wrapper 传入） | — | `_desc->generic_params[i]` | N/A | `_desc->agg_deps[i]` | `_desc->type_deps[i]` |
+| 场景 | 具体化描述符来源 | 泛型参数 | 字段偏移 | aggregate 依赖 | managed 依赖 |
+|------|------|------|------|------|------|
+| 类型实例方法 | `_td`（`self->_hdr.desc`） | `_K`, `_V`（函数参数） | `_td->field_offsets[i]` | `_td->agg_deps[i]` | `_td->type_deps[i]` |
+| 类型实例方法（有方法级泛型） | `_td`（`self->_hdr.desc`） | `_K`（函数参数）+ `_U`（函数参数） | `_td->field_offsets[i]` | `_td->agg_deps[i]` | `_td->type_deps[i]` |
+| 类型静态方法 | `_type_desc`（Wrapper 传入） | `_K`, `_V`（函数参数） | N/A | `_type_desc->agg_deps[i]` | `_type_desc->type_deps[i]` |
+| 类型静态方法（有方法级泛型） | `_type_desc`（Wrapper 传入） | `_K`（函数参数）+ `_U`（函数参数） | N/A | `_type_desc->agg_deps[i]` | `_type_desc->type_deps[i]` |
+| 独立泛型函数 | `_desc`（Wrapper 传入） | `_K`, `_V`（函数参数） | N/A | `_desc->agg_deps[i]` | `_desc->type_deps[i]` |
 
 > **重要约束**：`agg_deps`/`type_deps` 两组字段**严禁直接用于生命周期管理**（retain/release/destroy）。它们的唯一用途是声明静态描述符之间的依赖关系，使类型的方法和成员能在运行时正确找到并使用相应具体化描述符，完成大小计算、栈分配、数组 stride、创建实例等操作。生命周期管理仍由 `managed_slots`（`FengAggregateDescriptor`）和 ARC 指针操作（`FengTypeDescriptor`）负责，与这两个字段无关。
 
@@ -223,23 +205,21 @@ static const FengAggregateDescriptor MapEntity__K_Foo__V_Bar__desc = {
     .name = "MapEntity", .size = sizeof(struct MapEntity__K_Foo__V_Bar),
     .managed_slot_count = 2, .managed_slots = MapEntity__K_Foo__V_Bar__slots,
 };
-/* process<Foo, Bar> 的泛型参数具体化描述符 */
-static const FengGenericParamDescriptor process__K_Foo__V_Bar__gparams[] = {
-    { FENG_VALUE_MANAGED_POINTER, &Foo__type_desc, &Foo__witness },   /* K=Foo */
-    { FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &Bar__agg_desc, NULL }, /* V=Bar */
-};
 /* process<Foo, Bar> 函数具体化描述符，agg_deps[0] = MapEntity<Foo,Bar> */
 static const FengAggregateDescriptor *process__K_Foo__V_Bar__agg_deps[] = {
     &MapEntity__K_Foo__V_Bar__desc,
 };
 static const FengFunctionDescriptor process__K_Foo__V_Bar__desc = {
     .name = "process",
-    .generic_param_count = 2, .generic_params = process__K_Foo__V_Bar__gparams,
     .agg_deps_count = 1, .agg_deps = process__K_Foo__V_Bar__agg_deps,
     .type_deps_count = 0, .type_deps = NULL,
 };
-/* 调用共享体：仅传入 _desc（泛型参数信息已在 _desc->generic_params 中） */
-process__G__K__V(&process__K_Foo__V_Bar__desc, ...);
+/* 调用共享体：_desc 在最前，_K/_V 保持为独立函数参数 */
+process__G__K__V(
+    &process__K_Foo__V_Bar__desc,  /* _desc */
+    &(const FengGenericParamDescriptor){ FENG_VALUE_MANAGED_POINTER, &Foo__type_desc, &Foo__witness },   /* _K */
+    &(const FengGenericParamDescriptor){ FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &Bar__agg_desc, NULL }, /* _V */
+    ...);
 ```
 
 共享体内访问：`_desc->agg_deps[0]->size` 在运行时给出 `MapEntity<Foo,Bar>` 的正确大小。
@@ -258,11 +238,6 @@ static const FengAggregateDescriptor Foo__int__Bar__desc = {
     .name = "Foo", .size = sizeof(struct Foo__int__Bar),
     .managed_slot_count = ..., .managed_slots = ...,
 };
-/* Container<Foo,Bar> 的泛型参数具体化描述符 */
-static const FengGenericParamDescriptor Container__K_Foo__V_Bar__gparams[] = {
-    { FENG_VALUE_MANAGED_POINTER, &Foo__type_desc, &Foo__witness },   /* K=Foo */
-    { FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &Bar__agg_desc, NULL }, /* V=Bar */
-};
 /* Container<Foo,Bar> 的具体化字段偏移 */
 static const size_t Container__K_Foo__V_Bar__field_offsets[] = {
     offsetof(struct Container__K_Foo__V_Bar, entry),
@@ -277,22 +252,22 @@ static const FengAggregateDescriptor *Container__K_Foo__V_Bar__agg_deps[] = {
 static const FengTypeDescriptor Container__K_Foo__V_Bar__type_desc = {
     .name = "Container", .size = sizeof(struct Container__K_Foo__V_Bar),
     /* ... 其他字段 ... */
-    .generic_param_count = 2, .generic_params = Container__K_Foo__V_Bar__gparams,
     .field_offset_count = 1, .field_offsets = Container__K_Foo__V_Bar__field_offsets,
     .agg_deps_count = 2, .agg_deps = Container__K_Foo__V_Bar__agg_deps,
     .type_deps_count = 0, .type_deps = NULL,
 };
-/* 调用方法共享体：无额外参数（泛型参数、字段偏移均在 self->_hdr.desc 中） */
-Container_method__G__K__V(self, ...);
+/* 调用方法共享体：_K/_V 保持为函数参数，field_offsets/agg_deps/type_deps 在 self->_hdr.desc 中 */
+Container_method__G__K__V(
+    self,
+    &(const FengGenericParamDescriptor){ FENG_VALUE_MANAGED_POINTER, &Foo__type_desc, &Foo__witness },   /* _K */
+    &(const FengGenericParamDescriptor){ FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &Bar__agg_desc, NULL }, /* _V */
+    ...);
 ```
 
 方法共享体内访问（索引由 codegen 在编译期按全局稳定顺序确定）：
+
 ```c
 const FengTypeDescriptor *_td = ((FengManagedHeader *)_self)->desc;
-
-/* 泛型参数访问（原函数参数 _K、_V，现从描述符获取） */
-const FengGenericParamDescriptor *_K = &_td->generic_params[0];
-const FengGenericParamDescriptor *_V = &_td->generic_params[1];
 
 /* 字段访问（原函数参数 _field_offsets，现从描述符获取） */
 void *_entry_ptr = (char *)_self + _td->field_offsets[0];
@@ -307,7 +282,7 @@ const FengAggregateDescriptor *_entry_desc = _td->agg_deps[1];
 feng_aggregate_assign(_entry_ptr, &new_entry, _entry_desc);
 ```
 
-**成员字段为托管对象（type）时**：ARC 操作（retain/release）无需描述符；若需在方法体内**创建该托管类型新实例**，则通过 `self->_hdr.desc->type_deps[i]` 获取其具体化 `FengTypeDescriptor`。
+**成员字段为托管对象（type）时**：ARC 操作（retain/release）无需描述符；若需在方法体内**创建该托管类型新实例**，则通过 `_td->type_deps[i]` 获取其具体化 `FengTypeDescriptor`。
 
 **每种具体化（如 `Container<Foo,Bar>`）生成一份 `FengTypeDescriptor`**，所有方法的共享体共享该描述符，各自按编译期已知的固定索引访问。
 
@@ -316,101 +291,101 @@ feng_aggregate_assign(_entry_ptr, &new_entry, _entry_desc);
 **示例**（`type Container<K,V>` 的方法 `map<U>(fn: (V) -> U) -> [U]`，调用 `Container<Foo,Bar>.map<Baz>(...)`）：
 
 ```c
-/* map<Baz> 方法级泛型参数具体化描述符 */
-static const FengGenericParamDescriptor Container__Foo_Bar__map__Baz__gparams[] = {
-    { FENG_VALUE_MANAGED_POINTER, &Baz__type_desc, &Baz__witness }, /* U=Baz */
-};
-/* map<Baz> 方法描述符（如有方法体内的 agg_deps/type_deps 依赖，也填入此处） */
-static const FengFunctionDescriptor Container__Foo_Bar__map__Baz__method_desc = {
-    .name = "map",
-    .generic_param_count = 1, .generic_params = Container__Foo_Bar__map__Baz__gparams,
-    .agg_deps_count = 0, .agg_deps = NULL,
-    .type_deps_count = 0, .type_deps = NULL,
-};
-/* 调用方法共享体：self 携带类型描述符，_method_desc 携带方法级泛型 */
-Container_map__G__K__M__U(self, &Container__Foo_Bar__map__Baz__method_desc, ...);
+/* 调用方法共享体：_K/_V 为类型级参数，_U 为方法级参数，均为独立函数参数 */
+Container_map__G__K__M__U(
+    self,
+    &(const FengGenericParamDescriptor){ FENG_VALUE_MANAGED_POINTER, &Foo__type_desc, &Foo__witness },   /* _K（类型级） */
+    &(const FengGenericParamDescriptor){ FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &Bar__agg_desc, NULL }, /* _V（类型级） */
+    &(const FengGenericParamDescriptor){ FENG_VALUE_MANAGED_POINTER, &Baz__type_desc, &Baz__witness },   /* _U（方法级） */
+    ...);
 ```
 
 方法共享体内访问：
+
 ```c
 const FengTypeDescriptor *_td = ((FengManagedHeader *)_self)->desc;
-/* 类型级：K, V */
-const FengGenericParamDescriptor *_K = &_td->generic_params[0];
-const FengGenericParamDescriptor *_V = &_td->generic_params[1];
-/* 方法级：U */
-const FengGenericParamDescriptor *_U = &_method_desc->generic_params[0];
+
+/* 类型级泛型参数 _K、_V 和方法级泛型参数 _U 均为函数参数，直接使用 */
+/* _K->kind / _K->descriptor / _K->witness 等访问方式与原有代码一致 */
+
+/* 字段偏移和类型级依赖从描述符获取（与场景二一致） */
+void *_entry_ptr = (char *)_self + _td->field_offsets[0];
+const FengAggregateDescriptor *_boo_desc = _td->agg_deps[0];
+
+/* 方法级泛型参数 _U 的描述信息从函数参数获取 */
+/* _U->kind / _U->descriptor 等访问方式与原有代码一致 */
 ```
 
 ### 2.4 共享体 ABI 变更
 
-所有泛型参数信息均通过描述符传递，不再有独立的 `FengGenericParamDescriptor*` 函数参数。类型级泛型参数和字段偏移收归到 `FengTypeDescriptor` 中；方法级泛型参数以 `FengFunctionDescriptor*`（`_method_desc`）形式传入；独立泛型函数的所有泛型参数以 `FengFunctionDescriptor*`（`_desc`）形式传入。
+泛型参数（`_K`、`_V` 等）保持原有的函数参数传递方式不变。字段偏移（`_field_offsets`）和具体化依赖（`agg_deps`/`type_deps`）收归到描述符中。独立泛型函数新增 `_desc`（`FengFunctionDescriptor*`）参数；类型静态方法新增 `_type_desc`（`FengTypeDescriptor*`）参数；类型实例方法不新增参数（通过 `self->_hdr.desc` 获取），并移除原有 `_field_offsets` 参数。
 
-**独立泛型函数**——以 `_desc`（`FengFunctionDescriptor*`）替代原先的 `_K`、`_V` 等参数：
+**独立泛型函数**——保持 `_K`、`_V` 参数，新增 `_desc`：
 
 ```c
 /* 旧签名 */
-void process__G__K__V(FengGenericParamDescriptor *_K, FengGenericParamDescriptor *_V, ...)
+void process__G__K__V(const FengGenericParamDescriptor *_K,
+                      const FengGenericParamDescriptor *_V, ...)
 
-/* 新签名：_K、_V 已在 _desc->generic_params 中 */
-void process__G__K__V(const FengFunctionDescriptor *_desc, ...)
+/* 新签名：_desc 在最前，_K、_V 不变 */
+void process__G__K__V(const FengFunctionDescriptor *_desc,
+                      const FengGenericParamDescriptor *_K,
+                      const FengGenericParamDescriptor *_V, ...)
 ```
 
-**泛型类型的实例方法共享体**——移除 `_field_offsets` 和类型级 `_K`、`_V` 参数，所有信息通过 `self->_hdr.desc` 访问：
+**泛型类型的实例方法共享体**——保持 `_self`、`_K`、`_V` 参数，移除 `_field_offsets`（改从 `self->_hdr.desc` 获取）：
 
 ```c
 /* 旧签名 */
 void Container_method__G__K__V(void *_self, const size_t *_field_offsets,
-                                FengGenericParamDescriptor *_K,
-                                FengGenericParamDescriptor *_V, ...)
-/* 新签名：_field_offsets、_K、_V 已在 self->_hdr.desc 中 */
-void Container_method__G__K__V(void *_self, ...)
+                                const FengGenericParamDescriptor *_K,
+                                const FengGenericParamDescriptor *_V, ...)
+/* 新签名：移除 _field_offsets，field_offsets/agg_deps/type_deps 均从 self->_hdr.desc 获取 */
+void Container_method__G__K__V(void *_self,
+                                const FengGenericParamDescriptor *_K,
+                                const FengGenericParamDescriptor *_V, ...)
 ```
 
-**泛型类型的静态方法共享体**——以 `_type_desc`（`FengTypeDescriptor*`）替代原先的 `_K`、`_V` 等参数：
+**泛型类型的静态方法共享体**——保持 `_K`、`_V` 参数，新增 `_type_desc`：
 
 ```c
 /* 旧签名 */
-void Container_static_method__G__K__V(FengGenericParamDescriptor *_K,
-                                       FengGenericParamDescriptor *_V, ...)
-/* 新签名：_K、_V 已在 _type_desc->generic_params 中 */
-void Container_static_method__G__K__V(const FengTypeDescriptor *_type_desc, ...)
+void Container_static_method__G__K__V(const FengGenericParamDescriptor *_K,
+                                       const FengGenericParamDescriptor *_V, ...)
+/* 新签名：新增 _type_desc，承载 agg_deps/type_deps */
+void Container_static_method__G__K__V(const FengTypeDescriptor *_type_desc,
+                                       const FengGenericParamDescriptor *_K,
+                                       const FengGenericParamDescriptor *_V, ...)
 ```
 
-**含方法级泛型参数时**，方法级泛型也包装为 `FengFunctionDescriptor`，以 `_method_desc` 参数传入（不在类型描述符中，因类型描述符跟随对象实例、在创建时确定，而方法级泛型在调用点才确定）：
+**含方法级泛型参数时**——方法级泛型以独立 `FengGenericParamDescriptor*` 参数传入（在类型级参数之后）：
 
 ```c
-/* 实例方法：Container<K>.map<U>()
- * K 从 self->_hdr.desc->generic_params[0] 获取
- * U 从 _method_desc->generic_params[0] 获取 */
+/* 实例方法：Container<K>.map<U>()——不新增参数 */
 void Container_map__G__K__M__U(void *_self,
-                                const FengFunctionDescriptor *_method_desc, ...)
+                                const FengGenericParamDescriptor *_K,
+                                const FengGenericParamDescriptor *_U, ...)
 
-/* 静态方法：Container<K>.make<U>()
- * K 从 _type_desc->generic_params[0] 获取
- * U 从 _method_desc->generic_params[0] 获取 */
+/* 静态方法：Container<K>.make<U>()——新增 _type_desc */
 void Container_make__G__K__M__U(const FengTypeDescriptor *_type_desc,
-                                 const FengFunctionDescriptor *_method_desc, ...)
+                                 const FengGenericParamDescriptor *_K,
+                                 const FengGenericParamDescriptor *_U, ...)
 ```
 
 ### 2.5 共享体内使用具体化描述符
 
-以下各路径中，`agg_deps`/`type_deps` 的索引 `i` 均由 codegen 在**编译期**按排序 key（见 §2.2）全局分配，不是运行时计算的值。`generic_params` 按声明顺序访问，`field_offsets` 按字段声明顺序访问。
+以下各路径中，`agg_deps` / `type_deps` 的索引 `i` 均由 codegen 在**编译期**按排序 key（见 §2.2）全局分配，不是运行时计算的值。描述符来源因路径而异：
+
+- 类型实例方法：`_td = ((FengManagedHeader *)_self)->desc`，通过 `_td->agg_deps[i]` / `_td->type_deps[i]` 访问
+- 类型静态方法：`_type_desc`（Wrapper 传入），通过 `_type_desc->agg_deps[i]` / `_type_desc->type_deps[i]` 访问
+- 独立泛型函数：`_desc`（Wrapper 传入），通过 `_desc->agg_deps[i]` / `_desc->type_deps[i]` 访问
+
+取到具体化描述符后，后续操作完全一致。以下示例以类型实例方法（`_td`）为例。
 
 #### 2.5.1 修复数组创建（~L15448）
 
 ```c
-/* 独立函数：i 由 codegen 编译期确定，_desc 为 FengFunctionDescriptor* */
-const FengAggregateDescriptor *_ed = _desc->agg_deps[i];
-FengArray *_arr = feng_array_new_kinded(
-    FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, _ed, NULL, _ed->size, _n);
-
-/* 类型实例方法：_td = ((FengManagedHeader *)_self)->desc */
 const FengAggregateDescriptor *_ed = _td->agg_deps[i];
-FengArray *_arr = feng_array_new_kinded(
-    FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, _ed, NULL, _ed->size, _n);
-
-/* 类型静态方法：_type_desc 为 FengTypeDescriptor* */
-const FengAggregateDescriptor *_ed = _type_desc->agg_deps[i];
 FengArray *_arr = feng_array_new_kinded(
     FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, _ed, NULL, _ed->size, _n);
 ```
@@ -418,13 +393,7 @@ FengArray *_arr = feng_array_new_kinded(
 #### 2.5.2 修复局部变量（~L9667）
 
 ```c
-/* 独立函数 */
-const FengAggregateDescriptor *_ed = _desc->agg_deps[i];
-/* 类型实例方法（_td = ((FengManagedHeader *)_self)->desc） */
 const FengAggregateDescriptor *_ed = _td->agg_deps[i];
-/* 类型静态方法 */
-const FengAggregateDescriptor *_ed = _type_desc->agg_deps[i];
-
 _Alignas(max_align_t) char _mem[_ed->size];  /* VLA，大小在运行时从具体化描述符读取 */
 feng_aggregate_default_init(_mem, _ed);
 ```
@@ -432,20 +401,18 @@ feng_aggregate_default_init(_mem, _ed);
 #### 2.5.3 修复数组元素写入（~L18376）
 
 ```c
-/* 独立函数 / 类型实例方法 / 类型静态方法，取 _ed 方式同 2.5.1 */
-void *_slot = (char *)feng_array_data(_arr) + _idx * _ed->size;
-feng_aggregate_assign(_slot, _src, _ed);
+void *_slot = (char *)feng_array_data(_arr) + _idx * _td->agg_deps[i]->size;
+feng_aggregate_assign(_slot, _src, _td->agg_deps[i]);
 ```
 
 #### 2.5.4 修复数组元素读取 / for-in（~L20526）
 
 ```c
-/* 独立函数 / 类型实例方法 / 类型静态方法，取 _ed 方式同 2.5.1 */
-void *_elem = (char *)feng_array_data(_arr) + _fidx * _ed->size;
-feng_aggregate_assign(_iter_mem, _elem, _ed);
+void *_elem = (char *)feng_array_data(_arr) + _fidx * _td->agg_deps[i]->size;
+feng_aggregate_assign(_iter_mem, _elem, _td->agg_deps[i]);
 ```
 
-三大路径（独立函数、实例方法、静态方法）在取到 `_ed` 后，后续操作完全一致，无特判。**tuple 与其他 by-value aggregate 均走同一路径，无需额外处理**；tuple 是否需要生命周期管理由 `_ed->managed_slots` 决定，walker 自动分派。
+取到描述符后后续操作完全一致，无特判。**tuple 与其他 by-value aggregate 均走同一路径，无需额外处理**；tuple 是否需要生命周期管理由描述符的 `managed_slots` 决定，walker 自动分派。
 
 #### 2.5.5 修复 Wrapper `_erased_buf`（~L28443）
 
@@ -456,34 +423,9 @@ feng_aggregate_assign(_iter_mem, _elem, _ed);
 需创建某个泛型托管类型新实例时，通过 `type_deps[i]` 获取其具体化 `FengTypeDescriptor`：
 
 ```c
-/* 独立泛型函数：通过 _desc->type_deps[i]，泛型参数通过 _desc->generic_params[i] */
-void BoxedNode__init__G__T(const FengFunctionDescriptor *_desc, ...)
-{
-    const FengGenericParamDescriptor *_T = &_desc->generic_params[0];
-    const FengTypeDescriptor *_node_desc = _desc->type_deps[0];
-    FengObject *_obj = feng_obj_alloc(_node_desc->size, _node_desc);
-    ...
-}
-
-/* 类型实例方法：通过 self->_hdr.desc->type_deps[i] */
-void Container_create__G__K__V(void *_self, ...)
-{
-    const FengTypeDescriptor *_td = ((FengManagedHeader *)_self)->desc;
-    const FengTypeDescriptor *_node_desc = _td->type_deps[0];
-    FengObject *_obj = feng_obj_alloc(_node_desc->size, _node_desc);
-    ...
-}
-
-/* 类型静态方法：通过 _type_desc->type_deps[i] */
-void Container_make__G__K__V(const FengTypeDescriptor *_type_desc, ...)
-{
-    const FengTypeDescriptor *_node_desc = _type_desc->type_deps[0];
-    FengObject *_obj = feng_obj_alloc(_node_desc->size, _node_desc);
-    ...
-}
+const FengTypeDescriptor *_node_desc = _td->type_deps[i];
+FengObject *_obj = feng_obj_alloc(_node_desc->size, _node_desc);
 ```
-
-三种场景取 `type_deps[i]` 后，后续创建流程完全一致。
 
 ### 2.7 跨包泛型依赖信息（ft 扩展）
 
@@ -520,27 +462,29 @@ typedef enum FengSymbolAttrKind {
 
 ### 2.6 不新增 Runtime 函数
 
-本方案不引入任何新的 runtime 函数和新的 runtime 源文件：
+本方案不引入任何新的 runtime 函数和 runtime 源文件：
 
 - `feng_generic_aggregate_instance_size`：不需要（大小直接来自 `desc->size`）
 - `feng_generic_type_instance_size`：不需要
 - `feng_generic_desc_resolve` / 全局缓存：不需要（全部静态，`.rodata`）
 - `feng_generic_array_new`：不需要（直接调用 `feng_array_new_kinded`）
 
+新增一个结构体 `FengFunctionDescriptor`（详见 §2.2），用于独立泛型函数的具体化依赖传递。扩展现有 `FengTypeDescriptor`（新增 `field_offsets`/`agg_deps`/`type_deps` 三组字段）和 `FengAggregateDescriptor`（新增保留字段 `agg_deps`/`type_deps`，当前恒为 0/NULL）。
+
 ## 3. 不变量
 
 1. **生命周期三大类不变**
 2. **Aggregate walker 不变**
-3. **已有非泛型代码路径不变**：`agg_deps_count == 0` 且 `type_deps_count == 0` 的描述符行为完全等同于原先
-4. **描述符结构向后兼容**：新增字段在末尾，已有初始化代码中 count 字段默认为 0、指针字段默认为 NULL
+3. **已有非泛型代码路径不变**：无具体化描述符需求的共享体行为完全等同于原先
+4. **`FengAggregateDescriptor` 向后兼容**：新增保留字段在末尾，count 字段默认为 0、指针字段默认为 NULL
 5. **零运行时开销**：所有具体化描述符均为 `static const`，全在 `.rodata`
 
 ## 4. 涉及文件
 
 | 文件 | 变更 |
 |------|------|
-| `src/runtime/feng_runtime.h` | 新增 `FengFunctionDescriptor`（`name`/`generic_params`/`agg_deps`/`type_deps`）；`FengAggregateDescriptor` 新增 `agg_deps_count`/`agg_deps`/`type_deps_count`/`type_deps` 四个保留字段（当前恒为 0/NULL）；`FengTypeDescriptor` 新增 `generic_params`/`field_offsets`/`agg_deps`/`type_deps` 相关字段 |
-| `src/codegen/codegen.c` | Wrapper 生成具体化描述符树（含 `generic_params`、`field_offsets`、`agg_deps`/`type_deps`）；独立函数共享体 ABI：`_K`/`_V` 等参数替换为 `const FengFunctionDescriptor *_desc`；静态方法共享体 ABI：`_K`/`_V` 等参数替换为 `const FengTypeDescriptor *_type_desc`；实例方法共享体 ABI：移除 `_field_offsets` 和类型级 `_K`/`_V` 参数；修复 6 个创建路径（§2.5.1–§2.5.6）；读取 ft ATTRS 中 `GENERIC_AGG_DEP`/`GENERIC_TYPE_DEP` 支持跨包特化 |
+| `src/runtime/feng_runtime.h` | 新增 `FengFunctionDescriptor` 结构体（独立泛型函数描述符）；`FengTypeDescriptor` 新增 `field_offset_count`/`field_offsets`/`agg_deps_count`/`agg_deps`/`type_deps_count`/`type_deps` 六个字段；`FengAggregateDescriptor` 新增 `agg_deps_count`/`agg_deps`/`type_deps_count`/`type_deps` 四个保留字段（当前恒为 0/NULL） |
+| `src/codegen/codegen.c` | Wrapper 生成具体化描述符树（`FengFunctionDescriptor`/`FengTypeDescriptor` 静态实例含 `agg_deps`/`type_deps`）；实例方法共享体移除 `_field_offsets` 参数改从 `self->_hdr.desc->field_offsets` 获取；独立函数共享体新增 `_desc`（`FengFunctionDescriptor*`）参数；静态方法共享体新增 `_type_desc`（`FengTypeDescriptor*`）参数；修复 6 个创建路径（§2.5.1–§2.5.6）；读取 ft ATTRS 中 `GENERIC_AGG_DEP`/`GENERIC_TYPE_DEP` 支持跨包特化 |
 | `src/symbol/internal.h` | `FengSymbolAttrKind` 新增 `FENG_SYMBOL_ATTR_GENERIC_AGG_DEP = 9`、`FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP = 10` |
 | `src/symbol/ft_write.c` | 写出泛型 type/func 的 aggregate 和 managed 依赖 attr 记录 |
 | `src/symbol/ft_read.c` | 解析新 attr kind，填入对应符号的依赖列表 |
