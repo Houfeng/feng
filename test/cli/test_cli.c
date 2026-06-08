@@ -3654,7 +3654,7 @@ static void test_project_build_help_writes_stdout_and_returns_success(void) {
                                                           &stderr_text);
 
     ASSERT(rc == 0);
-    ASSERT(strstr(stdout_text, "Usage:\n  feng build [<path>] [--release]\n") != NULL);
+    ASSERT(strstr(stdout_text, "Usage:\n  feng build [<path>] [--release] [--keep-ir]\n") != NULL);
     ASSERT(stderr_text[0] == '\0');
 
     free(stderr_text);
