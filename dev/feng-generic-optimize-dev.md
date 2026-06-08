@@ -98,10 +98,12 @@ typedef struct FengAggregateDescriptor {
     /* 保留字段，当前版本始终为 0 / NULL。
      * 预留给未来非托管结构体（non-managed struct）场景：
      * 若非托管 struct 内含泛型 aggregate 字段且无法通过 managed_slots.nested 表达，
-     * 届时启用这两组字段，语义与 FengTypeDescriptor 上的同名字段一致。
+     * 届时启用这三组字段，语义与 FengTypeDescriptor 上的同名字段一致。
      * 当前所有 aggregate 类型的内部嵌套依赖均由 managed_slots[i].nested 链式引用。
      * [约束] 届时同样严禁用于生命周期管理（retain/release/destroy），
      *        唯一用途是在运行时找到具体化描述符，完成大小计算等操作。 */
+    size_t reified_field_offset_count;                                   /* 当前恒为 0 */
+    const size_t *reified_field_offsets;                                  /* 当前恒为 NULL */
     size_t reified_agg_deps_count;                                       /* 当前恒为 0 */
     const struct FengAggregateDescriptor *const *reified_agg_deps;       /* 当前恒为 NULL */
     size_t reified_type_deps_count;                                      /* 当前恒为 0 */
@@ -469,7 +471,7 @@ typedef enum FengSymbolAttrKind {
 - `feng_generic_desc_resolve` / 全局缓存：不需要（全部静态，`.rodata`）
 - `feng_generic_array_new`：不需要（直接调用 `feng_array_new_kinded`）
 
-新增一个结构体 `FengFunctionDescriptor`（详见 §2.2），用于独立泛型函数的具体化依赖传递。扩展现有 `FengTypeDescriptor`（新增 `reified_field_offsets`/`reified_agg_deps`/`reified_type_deps` 三组字段）和 `FengAggregateDescriptor`（新增保留字段 `reified_agg_deps`/`reified_type_deps`，当前恒为 0/NULL）。
+新增一个结构体 `FengFunctionDescriptor`（详见 §2.2），用于独立泛型函数的具体化依赖传递。扩展现有 `FengTypeDescriptor`（新增 `reified_field_offsets`/`reified_agg_deps`/`reified_type_deps` 三组字段）和 `FengAggregateDescriptor`（新增保留字段 `reified_field_offsets`/`reified_agg_deps`/`reified_type_deps`，当前恒为 0/NULL）。
 
 ## 3. 不变量
 
@@ -483,7 +485,7 @@ typedef enum FengSymbolAttrKind {
 
 | 文件 | 变更 |
 |------|------|
-| `src/runtime/feng_runtime.h` | 新增 `FengFunctionDescriptor` 结构体（独立泛型函数描述符）；`FengTypeDescriptor` 新增 `reified_field_offset_count`/`reified_field_offsets`/`reified_agg_deps_count`/`reified_agg_deps`/`reified_type_deps_count`/`reified_type_deps` 六个字段；`FengAggregateDescriptor` 新增 `reified_agg_deps_count`/`reified_agg_deps`/`reified_type_deps_count`/`reified_type_deps` 四个保留字段（当前恒为 0/NULL） |
+| `src/runtime/feng_runtime.h` | 新增 `FengFunctionDescriptor` 结构体（独立泛型函数描述符）；`FengTypeDescriptor` 新增 `reified_field_offset_count`/`reified_field_offsets`/`reified_agg_deps_count`/`reified_agg_deps`/`reified_type_deps_count`/`reified_type_deps` 六个字段；`FengAggregateDescriptor` 新增 `reified_field_offset_count`/`reified_field_offsets`/`reified_agg_deps_count`/`reified_agg_deps`/`reified_type_deps_count`/`reified_type_deps` 六个保留字段（当前恒为 0/NULL） |
 | `src/codegen/codegen.c` | Wrapper 生成具体化描述符树（`FengFunctionDescriptor`/`FengTypeDescriptor` 静态实例含 `reified_agg_deps`/`reified_type_deps`）；实例方法共享体移除 `_field_offsets` 参数改从 `self->_hdr.desc->reified_field_offsets` 获取；独立函数共享体新增 `_desc`（`FengFunctionDescriptor*`）参数；静态方法共享体新增 `_type_desc`（`FengTypeDescriptor*`）参数；修复 6 个创建路径（§2.5.1–§2.5.6）；读取 ft ATTRS 中 `GENERIC_AGG_DEP`/`GENERIC_TYPE_DEP` 支持跨包特化 |
 | `src/symbol/internal.h` | `FengSymbolAttrKind` 新增 `FENG_SYMBOL_ATTR_GENERIC_AGG_DEP = 9`、`FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP = 10` |
 | `src/symbol/ft_write.c` | 写出泛型 type/func 的 aggregate 和 managed 依赖 attr 记录 |
