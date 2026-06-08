@@ -29,6 +29,10 @@ const FengTypeDescriptor feng_string_descriptor = {
     .size = 0U, /* variable length; allocator computes per instance */
     .finalizer = NULL,
     .equal_fn = feng_string_descriptor_equal,
+    .reified_generic_params_count = 0, .reified_generic_params = NULL,
+    .reified_field_offset_count = 0,   .reified_field_offsets = NULL,
+    .reified_agg_deps_count = 0,       .reified_agg_deps = NULL,
+    .reified_type_deps_count = 0,      .reified_type_deps = NULL,
 };
 
 void feng_string_finalize_internal(struct FengString *s) {

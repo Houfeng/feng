@@ -92,6 +92,10 @@ const FengTypeDescriptor feng_array_descriptor = {
     .name = "feng.builtin.array",
     .size = 0U, /* variable layout per instance */
     .finalizer = NULL,
+    .reified_generic_params_count = 0, .reified_generic_params = NULL,
+    .reified_field_offset_count = 0,   .reified_field_offsets = NULL,
+    .reified_agg_deps_count = 0,       .reified_agg_deps = NULL,
+    .reified_type_deps_count = 0,      .reified_type_deps = NULL,
 };
 
 void feng_array_finalize_internal(struct FengArray *a) {

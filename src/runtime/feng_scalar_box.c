@@ -20,6 +20,10 @@ const FengTypeDescriptor feng_scalar_box_descriptor = {
     .managed_field_count = 0,
     .managed_fields = NULL,
     .equal_fn = feng_scalar_box_equal,
+    .reified_generic_params_count = 0, .reified_generic_params = NULL,
+    .reified_field_offset_count = 0,   .reified_field_offsets = NULL,
+    .reified_agg_deps_count = 0,       .reified_agg_deps = NULL,
+    .reified_type_deps_count = 0,      .reified_type_deps = NULL,
 };
 
 #define FENG_SCALAR_EXCEPTION_DESCRIPTOR(symbol, runtime_name) \
@@ -31,6 +35,10 @@ const FengTypeDescriptor feng_scalar_box_descriptor = {
         .is_potentially_cyclic = false, \
         .managed_field_count = 0, \
         .managed_fields = NULL, \
+        .reified_generic_params_count = 0, .reified_generic_params = NULL, \
+        .reified_field_offset_count = 0,   .reified_field_offsets = NULL, \
+        .reified_agg_deps_count = 0,       .reified_agg_deps = NULL, \
+        .reified_type_deps_count = 0,      .reified_type_deps = NULL, \
     }
 
 FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_bool_exception_descriptor, "bool");
