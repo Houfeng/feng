@@ -542,12 +542,12 @@ feng test
 
 ### 6.1 Runtime 头文件变更
 
-- [ ] `src/runtime/feng_runtime.h`：新增 `FengFunctionDescriptor` 结构体定义
-- [ ] `src/runtime/feng_runtime.h`：`FengTypeDescriptor` 新增 `reified_generic_params_count`/`reified_generic_params`/`reified_field_offset_count`/`reified_field_offsets`/`reified_agg_deps_count`/`reified_agg_deps`/`reified_type_deps_count`/`reified_type_deps` 八个字段
-- [ ] `src/runtime/feng_runtime.h`：`FengAggregateDescriptor` 新增 `reified_generic_params_count`/`reified_generic_params` 两个字段及六个保留字段（恒为 0/NULL）
-- [ ] 更新所有现有 `FengTypeDescriptor` 静态实例（补充新字段初始化为 0/NULL）
-- [ ] 更新所有现有 `FengAggregateDescriptor` 静态实例（补充新字段初始化为 0/NULL）
-- [ ] 编译验证：`feng test` 全量回归通过（纯结构扩展，行为不变）
+- [x] `src/runtime/feng_runtime.h`：新增 `FengFunctionDescriptor` 结构体定义
+- [x] `src/runtime/feng_runtime.h`：`FengTypeDescriptor` 新增 `reified_generic_params_count`/`reified_generic_params`/`reified_field_offset_count`/`reified_field_offsets`/`reified_agg_deps_count`/`reified_agg_deps`/`reified_type_deps_count`/`reified_type_deps` 八个字段
+- [x] `src/runtime/feng_runtime.h`：`FengAggregateDescriptor` 新增 `reified_generic_params_count`/`reified_generic_params` 两个字段及六个保留字段（恒为 0/NULL）
+- [x] 更新所有现有 `FengTypeDescriptor` 静态实例（补充新字段初始化为 0/NULL）
+- [x] 更新所有现有 `FengAggregateDescriptor` 静态实例（补充新字段初始化为 0/NULL）
+- [x] 编译验证：`feng test` 全量回归通过（纯结构扩展，行为不变）
 
 ### 6.2 符号表 ft 扩展
 
