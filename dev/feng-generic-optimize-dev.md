@@ -228,6 +228,8 @@ process__G__K__V(
 
 #### 场景二：泛型类型的方法
 
+普通方法虽无方法级泛型，但共享体中仍需具体化信息：**访问自身成员字段**需要具体化后的偏移（`reified_field_offsets`），**使用类型级泛型参数**（如在方法体内创建 `Boo<K>` 局部变量、操作 `Foo<int,V>` 成员）需要从 `self->_hdr.desc` 读取对应的 `reified_agg_deps`/`reified_type_deps`。
+
 **示例**（`type Container<K,V>` 有成员字段 `entry: Foo<int,V>`（tuple），方法体内局部使用 `Boo<K>`（tuple））：
 
 ```c
