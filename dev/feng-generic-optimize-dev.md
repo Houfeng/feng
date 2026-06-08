@@ -14,7 +14,7 @@ feng: panic: feng_aggregate: unknown forwarded slot kind 6 in 'JsonPayload'
 
 ### 1.2 根因
 
-共享泛型方法体中，含泛型参数字段的复合类型的 C struct 为擦除形态——每个泛型参数字段为 `void*`（8 字节）。当泛型参数具体化为 by-value aggregate（如 `JsonPayload` = 40 字节）时，`sizeof(未特化 struct)` 不等于实际实例大小，导致内存截断和数据损坏。
+共享泛型方法体中，含泛型参数字段的复合类型的 C struct 为未特化形态——泛型参数字段为 `void*`（8 字节）。当泛型参数具体化为 by-value aggregate（如 `JsonPayload` = 40 字节）时，`sizeof(未特化 struct)` 不等于实际实例大小，导致内存截断和数据损坏。
 
 ### 1.3 问题本质
 
@@ -33,10 +33,10 @@ feng: panic: feng_aggregate: unknown forwarded slot kind 6 in 'JsonPayload'
 ### 1.5 受影响的代码路径（`src/codegen/codegen.c`）
 
 1. **数组创建**（~L15448）：`feng_array_new(NULL, sizeof(未特化struct), false, n)` — element_size 错误，element_aggregate 使用未特化描述符
-2. **Tuple 局部变量**（~L9667）：`struct Erased _tuple; memset(...)` — 栈变量太小
-3. **数组元素写入**（~L18376）：`((ErasedT*)data)[idx] = value` — stride 错误
+2. **Tuple 局部变量**（~L9667）：`struct <未特化形态> _tuple; memset(...)` — 栈变量太小
+3. **数组元素写入**（~L18376）：`((未特化元素类型*)data)[idx] = value` — stride 错误
 4. **数组元素读取 / for-in**（~L20526）：stride 错误
-5. **Wrapper `_erased_buf`**（~L28443）：接收缓冲区太小
+5. **Wrapper `_ret_buf`**（~L28443）：接收返回值的缓冲区按未特化大小分配，偏小
 6. **托管对象创建**：共享体中若创建含泛型字段的托管对象，分配大小错误
 
 ## 2. 设计方案
@@ -421,7 +421,8 @@ FengArray *_arr = feng_array_new_kinded(
 
 ```c
 const FengAggregateDescriptor *_ed = _td->reified_agg_deps[i];
-_Alignas(max_align_t) char _mem[_ed->size];  /* VLA，大小在运行时从具体化描述符读取 */
+void *_mem = alloca(_ed->size);
+memset(_mem, 0, _ed->size);
 feng_aggregate_default_init(_mem, _ed);
 ```
 
@@ -441,9 +442,9 @@ feng_aggregate_assign(_iter_mem, _elem, _td->reified_agg_deps[i]);
 
 取到描述符后后续操作完全一致，无特判。**tuple 与其他 by-value aggregate 均走同一路径，无需额外处理**；tuple 是否需要生命周期管理由描述符的 `managed_slots` 决定，walker 自动分派。
 
-#### 2.5.5 修复 Wrapper `_erased_buf`（~L28443）
+#### 2.5.5 修复 Wrapper 返回值缓冲区（~L28443）
 
-字段偏移在未特化和具体化 struct 间一致（padding 机制保证）。直接传 `&ret_tmp`（具体化类型，大小正确），去掉 `_erased_buf`。
+字段偏移在未特化和具体化 struct 间一致（padding 机制保证）。直接传 `&ret_tmp`（具体化类型，大小正确），去掉原先按未特化大小分配的临时缓冲区。
 
 #### 2.5.6 修复托管对象创建
 
