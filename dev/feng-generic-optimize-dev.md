@@ -713,13 +713,13 @@ make test
 
 Wrapper 传入描述符，共享体从描述符读取泛型参数和字段偏移。创建路径暂未修复。
 
-- [ ] 路径一（类型实例方法）：共享体移除 `_field_offsets`/`_K`/`_V` 参数，改从 `((FengManagedHeader *)_self)->desc` 获取 `reified_generic_params[i]`/`reified_field_offsets[i]`
-- [ ] 路径二（类型静态方法）：共享体移除 `_K`/`_V` 参数，新增 `_type_desc`（`FengTypeDescriptor*`），从 `_type_desc->reified_generic_params[i]` 获取
-- [ ] 路径三（独立泛型函数）：共享体新增 `_desc`（`FengFunctionDescriptor*`）参数，`_K`/`_V` 保持为独立函数参数
-- [ ] 路径四（fit 泛型方法）：共享体新增 `_desc`（`FengFunctionDescriptor*`）参数，类型级泛型参数从 `self->_hdr.desc` 获取
-- [ ] Wrapper 调用点同步更新：传入对应描述符，移除已废弃的参数
-- [ ] 含方法级泛型时：类型级泛型从描述符获取，仅方法级泛型以独立 `FengGenericParamDescriptor*` 参数传入
-- [ ] `make test` 全量回归通过
+- [x] 路径一（类型实例方法）：共享体移除 `_field_offsets`/`_K`/`_V` 参数，改从 `((FengManagedHeader *)_self)->desc` 获取 `reified_generic_params[i]`/`reified_field_offsets[i]`
+- [x] 路径二（类型静态方法）：共享体移除 `_K`/`_V` 参数，新增 `_type_desc`（`FengTypeDescriptor*`），从 `_type_desc->reified_generic_params[i]` 获取
+- [x] 路径三（独立泛型函数）：共享体新增 `_desc`（`FengFunctionDescriptor*`）参数，`_K`/`_V` 保持为独立函数参数
+- [x] 路径四（fit 泛型方法）：共享体新增 `_desc`（`FengFunctionDescriptor*`）参数，类型级泛型参数从 `self->_hdr.desc` 获取
+- [x] Wrapper 调用点同步更新：传入对应描述符，移除已废弃的参数
+- [x] 含方法级泛型时：类型级泛型从描述符获取，仅方法级泛型以独立 `FengGenericParamDescriptor*` 参数传入
+- [x] `make test` 全量回归通过
 
 ### 6.8 修复创建路径（§2.6.1–§2.6.6）
 

@@ -847,11 +847,50 @@ static const FengDecl *find_fit_target_type_decl(
     return NULL;
 }
 
+/* 从 fit target TypeRef 中提取隐含的 fit 级类型参数。
+ * 例如 `fit T[]` → 提取 T；`fit T[!]` → 提取 T。
+ * 仅处理数组形式（ARRAY / POINTER+ARRAY），inner 为单 segment NAMED ref 时
+ * 视为隐含类型参数。成功时写入 out_param 并返回 true。 */
+static bool extract_fit_target_implicit_type_param(
+    const FengTypeRef *target_ref,
+    FengTypeParam *out_param) {
+    const FengTypeRef *element_ref;
+
+    if (target_ref == NULL || out_param == NULL) {
+        return false;
+    }
+
+    /* fit T[!] 解析为 POINTER → ARRAY → inner，取 ARRAY 层的 inner。 */
+    if (target_ref->kind == FENG_TYPE_REF_POINTER &&
+        target_ref->as.inner != NULL &&
+        target_ref->as.inner->kind == FENG_TYPE_REF_ARRAY) {
+        element_ref = target_ref->as.inner->as.inner;
+    } else if (target_ref->kind == FENG_TYPE_REF_ARRAY) {
+        element_ref = target_ref->as.inner;
+    } else {
+        return false;
+    }
+
+    if (element_ref == NULL ||
+        element_ref->kind != FENG_TYPE_REF_NAMED ||
+        element_ref->as.named.segment_count != 1U ||
+        element_ref->as.named.type_arg_count != 0U) {
+        return false;
+    }
+
+    memset(out_param, 0, sizeof(*out_param));
+    out_param->token = element_ref->token;
+    out_param->name = element_ref->as.named.segments[0];
+    out_param->constraint = NULL;
+    return true;
+}
+
 static void collect_for_fit(FengSemanticAnalysis *analysis,
                             const FengDecl *decl) {
     const FengDecl *target_type_decl;
     const FengTypeParam *type_level_params = NULL;
     size_t type_level_param_count = 0U;
+    FengTypeParam implicit_type_param;
     bool has_generic_context;
     FengReifiableDepSet *dep_set;
     CollectContext ctx;
@@ -864,6 +903,15 @@ static void collect_for_fit(FengSemanticAnalysis *analysis,
         type_level_params = target_type_decl->as.type_decl.type_params;
         type_level_param_count =
             target_type_decl->as.type_decl.type_param_count;
+    }
+
+    /* 对于数组形式的 fit target（如 fit T[]、fit T[!]），从 target TypeRef
+     * 中提取隐含的类型参数。 */
+    if (type_level_param_count == 0U &&
+        extract_fit_target_implicit_type_param(
+            decl->as.fit_decl.target, &implicit_type_param)) {
+        type_level_params = &implicit_type_param;
+        type_level_param_count = 1U;
     }
 
     /* 判断 fit 是否有泛型上下文：target 类型有泛型参数，或某 member 有方法级
