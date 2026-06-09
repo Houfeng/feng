@@ -14533,36 +14533,40 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         }
 
         obj_name = cg_fresh_temp(cg, "_obj");
-        obj_init = cg_user_type_raw_object_new_expr(ut);
-        if (obj_name == NULL || obj_init == NULL) {
-            free(obj_name);
-            free(obj_init);
-            return cg_fail(cg, e->token, "codegen: out of memory");
-        }
-        buf_append_fmt(cg->cur_body,
-                       "    struct %s *%s = %s;\n",
-                       ut->c_struct_name,
-                       obj_name,
-                       obj_init);
-        free(obj_init);
 
-        /* §2.6.6 前置：共享体内创建依赖泛型的托管对象时，
-         * 用具体描述符覆写 desc，使构造函数共享体能正确访问
-         * reified_generic_params / reified_field_offsets。 */
-        if (cg->generic_type_method_rtd_count > 0U &&
-            ut->is_generic_instance && ut->generic_origin_decl != NULL) {
-            for (size_t ri = 0; ri < cg->generic_type_method_rtd_count; ri++) {
-                if (cg->generic_type_method_rtd_descs[ri] != NULL &&
-                    strcmp(ut->c_desc_name,
-                           cg->generic_type_method_rtd_descs[ri]) == 0) {
-                    const char *src = cg->generic_type_method_rtd_via_desc
-                                          ? "_desc" : "_td";
-                    buf_append_fmt(cg->cur_body,
-                        "    ((FengManagedHeader *)%s)->desc = "
-                        "%s->reified_type_deps[%zu];\n",
-                        obj_name, src, ri);
-                    break;
+        /* 共享体内创建依赖泛型的托管对象时，直接用具体描述符
+         * （reified_type_deps[i]）分配，避免先用擦除描述符分配
+         * 再覆写 desc 的脆弱模式。 */
+        {
+            const char *desc_expr = NULL;
+            if (cg->generic_type_method_rtd_count > 0U &&
+                ut->is_generic_instance && ut->generic_origin_decl != NULL) {
+                for (size_t ri = 0; ri < cg->generic_type_method_rtd_count; ri++) {
+                    if (cg->generic_type_method_rtd_descs[ri] != NULL &&
+                        strcmp(ut->c_desc_name,
+                               cg->generic_type_method_rtd_descs[ri]) == 0) {
+                        const char *src = cg->generic_type_method_rtd_via_desc
+                                              ? "_desc" : "_td";
+                        buf_append_fmt(cg->cur_body,
+                            "    struct %s *%s = (struct %s *)feng_object_new("
+                            "%s->reified_type_deps[%zu]);\n",
+                            ut->c_struct_name, obj_name,
+                            ut->c_struct_name, src, ri);
+                        desc_expr = src;
+                        break;
+                    }
                 }
+            }
+            if (desc_expr == NULL) {
+                obj_init = cg_user_type_raw_object_new_expr(ut);
+                if (obj_init == NULL) {
+                    free(obj_name);
+                    return cg_fail(cg, e->token, "codegen: out of memory");
+                }
+                buf_append_fmt(cg->cur_body,
+                               "    struct %s *%s = %s;\n",
+                               ut->c_struct_name, obj_name, obj_init);
+                free(obj_init);
             }
         }
 
@@ -15135,16 +15139,7 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     char *tmp = cg_fresh_temp(cg, "_obj");
     if (!tmp) return cg_fail(cg, e->token, "codegen: out of memory");
     {
-        char *obj_init = cg_user_type_raw_object_new_expr(ut);
-        if (obj_init == NULL) {
-            free(tmp);
-            return cg_fail(cg, e->token, "codegen: out of memory");
-        }
-        buf_append_fmt(cg->cur_body,
-            "    struct %s *%s = %s;\n",
-            ut->c_struct_name, tmp, obj_init);
-        free(obj_init);
-
+        const char *used_rtd = NULL;
         if (cg->generic_type_method_rtd_count > 0U &&
             ut->is_generic_instance && ut->generic_origin_decl != NULL) {
             for (size_t ri = 0; ri < cg->generic_type_method_rtd_count; ri++) {
@@ -15154,12 +15149,25 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                     const char *src = cg->generic_type_method_rtd_via_desc
                                           ? "_desc" : "_td";
                     buf_append_fmt(cg->cur_body,
-                        "    ((FengManagedHeader *)%s)->desc = "
-                        "%s->reified_type_deps[%zu];\n",
-                        tmp, src, ri);
+                        "    struct %s *%s = (struct %s *)feng_object_new("
+                        "%s->reified_type_deps[%zu]);\n",
+                        ut->c_struct_name, tmp,
+                        ut->c_struct_name, src, ri);
+                    used_rtd = src;
                     break;
                 }
             }
+        }
+        if (used_rtd == NULL) {
+            char *obj_init = cg_user_type_raw_object_new_expr(ut);
+            if (obj_init == NULL) {
+                free(tmp);
+                return cg_fail(cg, e->token, "codegen: out of memory");
+            }
+            buf_append_fmt(cg->cur_body,
+                "    struct %s *%s = %s;\n",
+                ut->c_struct_name, tmp, obj_init);
+            free(obj_init);
         }
     }
 
