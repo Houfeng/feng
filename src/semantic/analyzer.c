@@ -22614,6 +22614,11 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
         free(analysis->reifiable_dep_sets[index].deps);
     }
     free(analysis->reifiable_dep_sets);
+    for (index = 0U; index < analysis->synthesized_type_ref_count; ++index) {
+        free(analysis->synthesized_type_refs[index]->as.named.segments);
+        free(analysis->synthesized_type_refs[index]);
+    }
+    free(analysis->synthesized_type_refs);
     feng_semantic_infos_free(analysis->infos, analysis->info_count);
     free(analysis);
 }

@@ -302,6 +302,148 @@ static bool determine_dep_kind(const FengDecl *decl,
     }
 }
 
+/* ---- 前向声明（供 GENERIC_TARGET 合成函数使用） ------------------------- */
+
+static void try_collect_type_ref(CollectContext *ctx,
+                                 const FengTypeRef *type_ref);
+
+/* ---- GENERIC_TARGET 合成 FengTypeRef ---------------------------------- */
+
+/* 计算表达式路径的 segment 数量（IDENTIFIER → 1，MEMBER 链 → n）。
+ * 参照 codegen.c:cg_expr_path_segment_count 模式。 */
+static size_t rd_expr_path_segment_count(const FengExpr *expr) {
+    size_t object_count;
+
+    if (expr == NULL) {
+        return 0U;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+            return 1U;
+        case FENG_EXPR_MEMBER:
+            object_count = rd_expr_path_segment_count(expr->as.member.object);
+            return object_count == 0U ? 0U : object_count + 1U;
+        default:
+            return 0U;
+    }
+}
+
+/* 从表达式路径中收集 segments（按从左到右顺序）。
+ * 参照 codegen.c:cg_expr_collect_path_segments 模式。 */
+static bool rd_expr_collect_path_segments(const FengExpr *expr,
+                                          FengSlice *segments,
+                                          size_t segment_count,
+                                          size_t *next_index) {
+    if (expr == NULL || segments == NULL || next_index == NULL ||
+        *next_index >= segment_count) {
+        return false;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+            segments[(*next_index)++] = expr->as.identifier;
+            return true;
+        case FENG_EXPR_MEMBER:
+            if (!rd_expr_collect_path_segments(expr->as.member.object,
+                                               segments,
+                                               segment_count,
+                                               next_index) ||
+                *next_index >= segment_count) {
+                return false;
+            }
+            segments[(*next_index)++] = expr->as.member.member;
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* 将合成的 FengTypeRef 存入 analysis 的 synthesized_type_refs 中管理生命周期。 */
+static bool rd_store_synthesized_ref(FengSemanticAnalysis *analysis,
+                                     FengTypeRef *ref) {
+    if (analysis->synthesized_type_ref_count ==
+        analysis->synthesized_type_ref_capacity) {
+        size_t new_capacity = analysis->synthesized_type_ref_capacity == 0U
+                                  ? 8U
+                                  : analysis->synthesized_type_ref_capacity * 2U;
+        FengTypeRef **grown = (FengTypeRef **)realloc(
+            analysis->synthesized_type_refs,
+            new_capacity * sizeof(*grown));
+
+        if (grown == NULL) {
+            return false;
+        }
+        analysis->synthesized_type_refs = grown;
+        analysis->synthesized_type_ref_capacity = new_capacity;
+    }
+    analysis->synthesized_type_refs[analysis->synthesized_type_ref_count++] =
+        ref;
+    return true;
+}
+
+/* 从 GENERIC_TARGET 表达式合成等效的 FengTypeRef 并尝试收集。
+ * AST 中 GENERIC_TARGET 将类型名放在表达式层（IDENTIFIER/MEMBER），
+ * 类型参数放在 type_args[] 中，不存在整体的 FengTypeRef 节点。
+ * 此函数合成一个堆分配的 FengTypeRef（kind=NAMED，segments 从表达式路径提取，
+ * type_args 直接引用 GENERIC_TARGET 的 type_args），交由 try_collect_type_ref
+ * 处理，并将合成节点存入 dep_set 的 synthesized_refs 中管理生命周期。 */
+static void rd_try_collect_generic_target(CollectContext *ctx,
+                                          const FengExpr *expr) {
+    size_t segment_count;
+    FengSlice *segments;
+    size_t next_index;
+    FengTypeRef *ref;
+
+    if (expr == NULL || ctx == NULL || ctx->dep_set == NULL ||
+        expr->kind != FENG_EXPR_GENERIC_TARGET ||
+        expr->as.generic_target.type_arg_count == 0U) {
+        return;
+    }
+
+    /* 提取路径 segments。 */
+    segment_count = rd_expr_path_segment_count(expr->as.generic_target.target);
+    if (segment_count == 0U) {
+        return;
+    }
+
+    segments = (FengSlice *)calloc(segment_count, sizeof(*segments));
+    if (segments == NULL) {
+        return;
+    }
+
+    next_index = 0U;
+    if (!rd_expr_collect_path_segments(expr->as.generic_target.target,
+                                       segments, segment_count, &next_index) ||
+        next_index != segment_count) {
+        free(segments);
+        return;
+    }
+
+    /* 合成 FengTypeRef。 */
+    ref = (FengTypeRef *)calloc(1U, sizeof(*ref));
+    if (ref == NULL) {
+        free(segments);
+        return;
+    }
+
+    ref->token = expr->token;
+    ref->kind = FENG_TYPE_REF_NAMED;
+    ref->as.named.segments = segments;
+    ref->as.named.segment_count = segment_count;
+    /* type_args 直接引用 GENERIC_TARGET 的 type_args（AST 节点，非拥有）。 */
+    ref->as.named.type_args = expr->as.generic_target.type_args;
+    ref->as.named.type_arg_count = expr->as.generic_target.type_arg_count;
+
+    /* 存入 analysis 管理生命周期。 */
+    if (!rd_store_synthesized_ref(ctx->analysis, ref)) {
+        free(segments);
+        free(ref);
+        return;
+    }
+
+    /* 尝试收集合成的 type_ref（含 type_param 引用才会实际记录）。 */
+    try_collect_type_ref(ctx, ref);
+}
+
 /* ---- 前向声明 ---------------------------------------------------------- */
 
 static void collect_from_expr(CollectContext *ctx, const FengExpr *expr);
@@ -400,6 +542,8 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
             return;
 
         case FENG_EXPR_GENERIC_TARGET:
+            /* 合成整体 FengTypeRef（如 Helper<K>）并尝试收集为具体化依赖。 */
+            rd_try_collect_generic_target(ctx, expr);
             collect_from_expr(ctx, expr->as.generic_target.target);
             for (i = 0U; i < expr->as.generic_target.type_arg_count; ++i) {
                 try_collect_type_ref(ctx,

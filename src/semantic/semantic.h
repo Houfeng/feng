@@ -338,6 +338,13 @@ typedef struct FengSemanticAnalysis {
     FengReifiableDepSet *reifiable_dep_sets;
     size_t reifiable_dep_set_count;
     size_t reifiable_dep_set_capacity;
+    /* 为 GENERIC_TARGET 表达式合成的 FengTypeRef（堆分配）。
+     * AST 中 GENERIC_TARGET 将类型名放在表达式层、类型参数放在 type_args 中，
+     * 不存在整体的 FengTypeRef 节点。收集阶段合成等效的 FengTypeRef 供
+     * dep 记录引用，由 analysis 持有并在释放时统一释放。 */
+    FengTypeRef **synthesized_type_refs;
+    size_t synthesized_type_ref_count;
+    size_t synthesized_type_ref_capacity;
 } FengSemanticAnalysis;
 
 typedef enum FengCompileTarget {
