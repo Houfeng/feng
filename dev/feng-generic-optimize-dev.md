@@ -725,13 +725,13 @@ Wrapper 传入描述符，共享体从描述符读取泛型参数和字段偏移
 
 核心 bug 修复：使用具体化描述符替代 `sizeof(未特化 struct)`。
 
-- [ ] §2.6.1 数组创建：`feng_array_new_kinded()` 使用 `reified_agg_deps[i]->size` 和具体化描述符
-- [ ] §2.6.2 局部变量栈分配：VLA/alloca + `desc->size`，`feng_aggregate_default_init`
-- [ ] §2.6.3 数组元素写入：stride 使用 `reified_agg_deps[i]->size`
-- [ ] §2.6.4 数组元素读取/for-in：stride 使用 `reified_agg_deps[i]->size`
-- [ ] §2.6.5 Wrapper `_ret_buf`：按具体化类型大小分配返回值缓冲区
-- [ ] §2.6.6 托管对象创建：通过 `reified_type_deps[i]` 获取具体化 `FengTypeDescriptor`，`feng_obj_alloc(desc->size, desc)`
-- [ ] `make test` 全量回归通过
+- [x] §2.6.1 数组创建：`feng_array_new_kinded()` 使用 `reified_agg_deps[i]->size` 和具体化描述符
+- [x] §2.6.2 局部变量栈分配：VLA/alloca + `desc->size`，`feng_aggregate_default_init`
+- [x] §2.6.3 数组元素写入：stride 使用 `reified_agg_deps[i]->size`
+- [x] §2.6.4 数组元素读取/for-in：stride 使用 `reified_agg_deps[i]->size`
+- [x] §2.6.5 Wrapper `_ret_buf`：按具体化类型大小分配返回值缓冲区
+- [x] §2.6.6 托管对象创建：通过 `reified_type_deps[i]` 获取具体化 `FengTypeDescriptor`，`feng_obj_alloc(desc->size, desc)`
+- [x] `make test` 全量回归通过
 
 ### 6.9 端到端验证
 

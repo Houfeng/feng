@@ -1236,6 +1236,13 @@ typedef struct CG {
     char       **generic_type_method_rtd_descs;
     size_t       generic_type_method_rtd_count;
     bool         generic_type_method_rtd_via_desc;
+    /* §2.6.1-§2.6.4：共享体内操作依赖泛型的聚合类型时，用于查找
+     * reified_agg_deps 索引。按 cg_reifiable_sort_key 排序。
+     * rad_via_desc 为 true 时生成 _desc->reified_agg_deps[i]，
+     * 为 false 时生成 _td->reified_agg_deps[i]。 */
+    char       **generic_type_method_rad_descs;
+    size_t       generic_type_method_rad_count;
+    bool         generic_type_method_rad_via_desc;
     char       **captured_binding_names;
     size_t       captured_binding_name_count;
     bool         current_callable_captures_self;
@@ -3988,6 +3995,24 @@ static const UserType *cg_find_open_generic_instance(const CG *cg,
         }
     }
     return NULL;
+}
+
+/* 在共享体的 reified_agg_deps 映射中查找给定聚合描述符名称的索引。
+ * 返回 true 并设置 *out_index 表示找到；返回 false 表示无匹配。 */
+static bool cg_lookup_reified_agg_dep_index(const CG *cg,
+                                             const char *agg_desc_name,
+                                             size_t *out_index) {
+    if (cg->generic_type_method_rad_count == 0U || agg_desc_name == NULL) {
+        return false;
+    }
+    for (size_t i = 0; i < cg->generic_type_method_rad_count; i++) {
+        if (cg->generic_type_method_rad_descs[i] != NULL &&
+            strcmp(agg_desc_name, cg->generic_type_method_rad_descs[i]) == 0) {
+            *out_index = i;
+            return true;
+        }
+    }
+    return false;
 }
 
 static const UserSpec *cg_find_user_spec_by_decl(const CG *cg, const FengDecl *decl) {
@@ -12027,10 +12052,20 @@ static bool cg_pack_variadic_args(CG *cg,
         /* Empty variadic: produce a zero-length array. */
         cg_emit_current_stmt_line_directive_force(cg);
         if (elem_aggregate) {
-            buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new_kinded("
-                "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0);\n",
-                arr_tmp, agg_desc, elem_cty);
+            size_t rad_idx;
+            if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+                const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
+                buf_append_fmt(cg->cur_body,
+                    "    FengArray *%s = feng_array_new_kinded("
+                    "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s->reified_agg_deps[%zu], "
+                    "NULL, %s->reified_agg_deps[%zu]->size, (size_t)0);\n",
+                    arr_tmp, rad_src, rad_idx, rad_src, rad_idx);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    FengArray *%s = feng_array_new_kinded("
+                    "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0);\n",
+                    arr_tmp, agg_desc, elem_cty);
+            }
         } else {
             buf_append_fmt(cg->cur_body,
                 "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
@@ -12068,10 +12103,20 @@ static bool cg_pack_variadic_args(CG *cg,
     /* Allocate the array and fill slots. */
     cg_emit_current_stmt_line_directive_force(cg);
     if (elem_aggregate) {
-        buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = feng_array_new_kinded("
-            "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)%zu);\n",
-            arr_tmp, agg_desc, elem_cty, n);
+        size_t rad_idx;
+        if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+            const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = feng_array_new_kinded("
+                "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s->reified_agg_deps[%zu], "
+                "NULL, %s->reified_agg_deps[%zu]->size, (size_t)%zu);\n",
+                arr_tmp, rad_src, rad_idx, rad_src, rad_idx, n);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = feng_array_new_kinded("
+                "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)%zu);\n",
+                arr_tmp, agg_desc, elem_cty, n);
+        }
     } else {
         buf_append_fmt(cg->cur_body,
             "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)%zu);\n",
@@ -12085,16 +12130,35 @@ static bool cg_pack_variadic_args(CG *cg,
         return cg_fail(cg, *tok, "codegen: out of memory");
     }
     cg_emit_current_stmt_line_directive_force(cg);
-    buf_append_fmt(cg->cur_body,
-        "    %s *%s = (%s *)feng_array_data(%s);\n",
-        elem_cty, slots_tmp, elem_cty, arr_tmp);
+    size_t variadic_rad_idx;
+    bool variadic_has_rad = elem_aggregate &&
+        cg_lookup_reified_agg_dep_index(cg, agg_desc, &variadic_rad_idx);
+    if (variadic_has_rad) {
+        buf_append_fmt(cg->cur_body,
+            "    char *%s = (char *)feng_array_data(%s);\n",
+            slots_tmp, arr_tmp);
+    } else {
+        buf_append_fmt(cg->cur_body,
+            "    %s *%s = (%s *)feng_array_data(%s);\n",
+            elem_cty, slots_tmp, elem_cty, arr_tmp);
+    }
 
     for (size_t i = 0; i < n; i++) {
         cg_emit_current_stmt_line_directive_force(cg);
         if (elem_aggregate) {
-            buf_append_fmt(cg->cur_body,
-                "    feng_aggregate_assign(&%s[%zu], &%s, &%s);\n",
-                slots_tmp, i, items[i].c_expr, agg_desc);
+            if (variadic_has_rad) {
+                const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
+                buf_append_fmt(cg->cur_body,
+                    "    feng_aggregate_assign("
+                    "(void *)(%s + %zu * %s->reified_agg_deps[%zu]->size), "
+                    "&%s, %s->reified_agg_deps[%zu]);\n",
+                    slots_tmp, i, rad_src, variadic_rad_idx,
+                    items[i].c_expr, rad_src, variadic_rad_idx);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    feng_aggregate_assign(&%s[%zu], &%s, &%s);\n",
+                    slots_tmp, i, items[i].c_expr, agg_desc);
+            }
         } else if (elem_managed) {
             buf_append_fmt(cg->cur_body,
                 "    %s[%zu] = %s; feng_retain(%s[%zu]);\n",
@@ -15311,10 +15375,20 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
         }
 
         if (elem_aggregate) {
-            buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new_kinded("
-                "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0);\n",
-                arr_tmp, agg_desc, elem_cty);
+            size_t rad_idx;
+            if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+                const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
+                buf_append_fmt(cg->cur_body,
+                    "    FengArray *%s = feng_array_new_kinded("
+                    "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s->reified_agg_deps[%zu], "
+                    "NULL, %s->reified_agg_deps[%zu]->size, (size_t)0);\n",
+                    arr_tmp, rad_src, rad_idx, rad_src, rad_idx);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    FengArray *%s = feng_array_new_kinded("
+                    "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0);\n",
+                    arr_tmp, agg_desc, elem_cty);
+            }
         } else if (elem->kind == CG_TYPE_GENERIC_PARAM) {
             const char *desc = cg_generic_param_desc_name(cg, elem->generic_param_index);
             if (desc == NULL) {
@@ -15426,18 +15500,39 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
         /* Step 4b-γ §9.6 — aggregate-element arrays must use the kinded
          * factory so the cycle collector walks each element's managed
          * slots and so default_init seeds every slot before assignment. */
-        buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = feng_array_new_kinded("
-            "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)%zu);\n",
-            arr_tmp, agg_desc, elem_cty, n);
+        size_t rad_idx;
+        if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+            const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = feng_array_new_kinded("
+                "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s->reified_agg_deps[%zu], "
+                "NULL, %s->reified_agg_deps[%zu]->size, (size_t)%zu);\n",
+                arr_tmp, rad_src, rad_idx, rad_src, rad_idx, n);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = feng_array_new_kinded("
+                "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)%zu);\n",
+                arr_tmp, agg_desc, elem_cty, n);
+        }
     } else {
         buf_append_fmt(cg->cur_body,
             "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)%zu);\n",
             arr_tmp, desc_expr, elem_cty, elem_managed ? "true" : "false", n);
     }
-    buf_append_fmt(cg->cur_body,
-        "    %s *%s = (%s *)feng_array_data(%s);\n",
-        elem_cty, slots_tmp, elem_cty, arr_tmp);
+    bool literal_has_rad = false;
+    size_t literal_rad_idx = 0;
+    if (elem_aggregate) {
+        literal_has_rad = cg_lookup_reified_agg_dep_index(cg, agg_desc, &literal_rad_idx);
+    }
+    if (literal_has_rad) {
+        buf_append_fmt(cg->cur_body,
+            "    char *%s = (char *)feng_array_data(%s);\n",
+            slots_tmp, arr_tmp);
+    } else {
+        buf_append_fmt(cg->cur_body,
+            "    %s *%s = (%s *)feng_array_data(%s);\n",
+            elem_cty, slots_tmp, elem_cty, arr_tmp);
+    }
     for (size_t i = 0; i < n; i++) {
         if (elem_aggregate) {
             /* feng_aggregate_assign releases the default-init'd slot (which
@@ -15445,9 +15540,19 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
              * value's managed slots — so both owns_ref temps and borrowed
              * sources arrive in the slot with the correct refcount. The
              * source temp's eventual cleanup balances the local +1. */
-            buf_append_fmt(cg->cur_body,
-                "    feng_aggregate_assign(&%s[%zu], &%s, &%s);\n",
-                slots_tmp, i, items[i].c_expr, agg_desc);
+            if (literal_has_rad) {
+                const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
+                buf_append_fmt(cg->cur_body,
+                    "    feng_aggregate_assign("
+                    "(void *)(%s + %zu * %s->reified_agg_deps[%zu]->size), "
+                    "&%s, %s->reified_agg_deps[%zu]);\n",
+                    slots_tmp, i, rad_src, literal_rad_idx,
+                    items[i].c_expr, rad_src, literal_rad_idx);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    feng_aggregate_assign(&%s[%zu], &%s, &%s);\n",
+                    slots_tmp, i, items[i].c_expr, agg_desc);
+            }
         } else if (elem_managed) {
             /* Slots own +1 each: retain (items already materialised). */
             buf_append_fmt(cg->cur_body,
@@ -15524,10 +15629,20 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
     }
 
     if (elem_aggregate) {
-        buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = feng_array_new_kinded("
-            "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), %s);\n",
-            arr_tmp, agg_desc, elem_cty, size_tmp);
+        size_t rad_idx;
+        if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+            const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = feng_array_new_kinded("
+                "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s->reified_agg_deps[%zu], "
+                "NULL, %s->reified_agg_deps[%zu]->size, %s);\n",
+                arr_tmp, rad_src, rad_idx, rad_src, rad_idx, size_tmp);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    FengArray *%s = feng_array_new_kinded("
+                "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), %s);\n",
+                arr_tmp, agg_desc, elem_cty, size_tmp);
+        }
     } else if (elem->kind == CG_TYPE_GENERIC_PARAM) {
         size_t gp_index = elem->generic_param_index;
         const char *desc = cg_generic_param_desc_name(cg, gp_index);
@@ -18492,9 +18607,20 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             if (v.owns_ref) {
                 cg_materialize_to_local(cg, &v, "_t");
             }
-            buf_append_fmt(cg->cur_body,
-                "    feng_aggregate_assign(&((%s *)feng_array_data(%s))[%s], &%s, &%s);\n",
-                elem_cty, recv.c_expr, idx_tmp, v.c_expr, agg_desc);
+            size_t rad_idx;
+            if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+                const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
+                buf_append_fmt(cg->cur_body,
+                    "    feng_aggregate_assign("
+                    "(void *)((char *)feng_array_data(%s) + (%s) * %s->reified_agg_deps[%zu]->size), "
+                    "&%s, %s->reified_agg_deps[%zu]);\n",
+                    recv.c_expr, idx_tmp, rad_src, rad_idx,
+                    v.c_expr, rad_src, rad_idx);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    feng_aggregate_assign(&((%s *)feng_array_data(%s))[%s], &%s, &%s);\n",
+                    elem_cty, recv.c_expr, idx_tmp, v.c_expr, agg_desc);
+            }
         } else {
             buf_append_fmt(cg->cur_body,
                 "    ((%s *)feng_array_data(%s))[%s] = (%s)(%s);\n",
@@ -20651,9 +20777,19 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
             return cg_fail(cg, stmt->token,
                 "codegen: missing aggregate descriptor for spec for/in element");
         }
-        buf_append_fmt(cg->cur_body,
-            "        %s %s = ((%s *)feng_array_data(%s))[%s]; feng_aggregate_retain(&%s, &%s);\n",
-            elem_cty, iter_cname, elem_cty, seq_tmp, idx_var, iter_cname, desc);
+        size_t forin_rad_idx;
+        if (cg_lookup_reified_agg_dep_index(cg, desc, &forin_rad_idx)) {
+            const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
+            buf_append_fmt(cg->cur_body,
+                "        %s %s; memcpy(&%s, (char *)feng_array_data(%s) + (%s) * %s->reified_agg_deps[%zu]->size, "
+                "%s->reified_agg_deps[%zu]->size); feng_aggregate_retain(&%s, %s->reified_agg_deps[%zu]);\n",
+                elem_cty, iter_cname, iter_cname, seq_tmp, idx_var, rad_src, forin_rad_idx,
+                rad_src, forin_rad_idx, iter_cname, rad_src, forin_rad_idx);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "        %s %s = ((%s *)feng_array_data(%s))[%s]; feng_aggregate_retain(&%s, &%s);\n",
+                elem_cty, iter_cname, elem_cty, seq_tmp, idx_var, iter_cname, desc);
+        }
     } else {
         buf_append_fmt(cg->cur_body,
             "        %s %s = ((%s *)feng_array_data(%s))[%s];\n",
@@ -22257,6 +22393,92 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
             }
         }
 
+        /* 预计算 reified_agg_deps 映射，使独立泛型函数共享体内
+         * 操作依赖泛型的聚合类型时能使用正确的大小和描述符。 */
+        {
+            const FengReifiableDepSet *fn_rad_set =
+                feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl);
+            if (fn_rad_set != NULL && fn_rad_set->dep_count > 0U) {
+                const FengCallableSignature *fn_sig_rad = &decl->as.function_decl;
+                FengSlice *fn_tp_names_rad = (FengSlice *)calloc(
+                    fn_sig_rad->type_param_count, sizeof(FengSlice));
+                if (fn_tp_names_rad != NULL) {
+                    for (size_t i = 0; i < fn_sig_rad->type_param_count; ++i) {
+                        fn_tp_names_rad[i] = fn_sig_rad->type_params[i].name;
+                    }
+                    typedef struct { size_t idx; char *key; } RADSort;
+                    size_t ac = 0;
+                    for (size_t i = 0; i < fn_rad_set->dep_count; ++i) {
+                        if (fn_rad_set->deps[i].kind ==
+                            FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
+                            ac++;
+                        }
+                    }
+                    if (ac > 0U) {
+                        RADSort *sorted = (RADSort *)calloc(ac, sizeof(RADSort));
+                        if (sorted != NULL) {
+                            size_t si = 0;
+                            for (size_t i = 0; i < fn_rad_set->dep_count; ++i) {
+                                if (fn_rad_set->deps[i].kind !=
+                                    FENG_REIFIABLE_DEP_KIND_AGGREGATE) continue;
+                                sorted[si].idx = i;
+                                sorted[si].key = cg_reifiable_sort_key(
+                                    fn_rad_set->deps[i].type_ref,
+                                    fn_tp_names_rad,
+                                    fn_sig_rad->type_param_count, true);
+                                si++;
+                            }
+                            for (size_t i = 1; i < ac; ++i) {
+                                RADSort tmp = sorted[i];
+                                size_t j = i;
+                                while (j > 0 &&
+                                       strcmp(sorted[j - 1].key, tmp.key) > 0) {
+                                    sorted[j] = sorted[j - 1];
+                                    j--;
+                                }
+                                sorted[j] = tmp;
+                            }
+                            cg->generic_type_method_rad_descs =
+                                (char **)calloc(ac, sizeof(char *));
+                            if (cg->generic_type_method_rad_descs != NULL) {
+                                cg->generic_type_method_rad_count = ac;
+                                cg->generic_type_method_rad_via_desc = true;
+                                for (size_t i = 0; i < ac; ++i) {
+                                    const FengReifiableDep *dep =
+                                        &fn_rad_set->deps[sorted[i].idx];
+                                    const FengDecl *dep_origin = NULL;
+                                    if (dep->type_ref != NULL &&
+                                        dep->type_ref->kind == FENG_TYPE_REF_NAMED &&
+                                        dep->type_ref->as.named.type_arg_count > 0U) {
+                                        const GenericTypeDecl *gtd =
+                                            cg_find_generic_type_decl(cg,
+                                                dep->type_ref);
+                                        if (gtd != NULL) dep_origin = gtd->decl;
+                                    }
+                                    if (dep_origin != NULL) {
+                                        const UserType *erased =
+                                            cg_find_open_generic_instance(
+                                                cg,
+                                                &(UserType){
+                                                    .is_generic_instance = true,
+                                                    .generic_origin_decl = dep_origin
+                                                });
+                                        if (erased != NULL) {
+                                            cg->generic_type_method_rad_descs[i] =
+                                                strdup(erased->c_aggregate_desc_name);
+                                        }
+                                    }
+                                }
+                            }
+                            for (size_t i = 0; i < ac; ++i) free(sorted[i].key);
+                            free(sorted);
+                        }
+                    }
+                    free(fn_tp_names_rad);
+                }
+            }
+        }
+
         if (!cg_emit_function_eh_prologue(cg, decl->token)) {
             cg->cur_scope = NULL;
             scope_pop_free(fn_scope);
@@ -22351,6 +22573,13 @@ cleanup:
     cg->generic_type_method_rtd_descs = NULL;
     cg->generic_type_method_rtd_count = 0;
     cg->generic_type_method_rtd_via_desc = false;
+    for (size_t i = 0; i < cg->generic_type_method_rad_count; i++) {
+        free(cg->generic_type_method_rad_descs[i]);
+    }
+    free(cg->generic_type_method_rad_descs);
+    cg->generic_type_method_rad_descs = NULL;
+    cg->generic_type_method_rad_count = 0;
+    cg->generic_type_method_rad_via_desc = false;
     return ok;
 }
 
@@ -29279,6 +29508,13 @@ static void cg_clear_generic_type_context(CG *cg) {
     cg->generic_type_method_rtd_descs = NULL;
     cg->generic_type_method_rtd_count = 0;
     cg->generic_type_method_rtd_via_desc = false;
+    for (size_t i = 0; i < cg->generic_type_method_rad_count; i++) {
+        free(cg->generic_type_method_rad_descs[i]);
+    }
+    free(cg->generic_type_method_rad_descs);
+    cg->generic_type_method_rad_descs = NULL;
+    cg->generic_type_method_rad_count = 0;
+    cg->generic_type_method_rad_via_desc = false;
 }
 
 static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
@@ -29455,6 +29691,89 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                     }
                 }
                 free(owner_tp_names);
+            }
+        }
+    }
+
+    /* §2.6.1-§2.6.4：预计算 reified_agg_deps 映射，使共享体内
+     * 操作依赖泛型的聚合类型时能使用正确的大小和描述符。 */
+    {
+        const FengReifiableDepSet *rad_dep_set =
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl);
+        if (rad_dep_set != NULL && rad_dep_set->dep_count > 0U) {
+            FengSlice *owner_tp_names_rad = (FengSlice *)calloc(
+                outer_tp_count, sizeof(FengSlice));
+            if (owner_tp_names_rad != NULL) {
+                for (size_t i = 0; i < outer_tp_count; ++i) {
+                    owner_tp_names_rad[i] = decl->as.type_decl.type_params[i].name;
+                }
+                typedef struct { size_t idx; char *key; } RADSort;
+                size_t ac = 0;
+                for (size_t i = 0; i < rad_dep_set->dep_count; ++i) {
+                    if (rad_dep_set->deps[i].kind ==
+                        FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
+                        ac++;
+                    }
+                }
+                if (ac > 0U) {
+                    RADSort *sorted = (RADSort *)calloc(ac, sizeof(RADSort));
+                    if (sorted != NULL) {
+                        size_t si = 0;
+                        for (size_t i = 0; i < rad_dep_set->dep_count; ++i) {
+                            if (rad_dep_set->deps[i].kind !=
+                                FENG_REIFIABLE_DEP_KIND_AGGREGATE) continue;
+                            sorted[si].idx = i;
+                            sorted[si].key = cg_reifiable_sort_key(
+                                rad_dep_set->deps[i].type_ref,
+                                owner_tp_names_rad, outer_tp_count, true);
+                            si++;
+                        }
+                        for (size_t i = 1; i < ac; ++i) {
+                            RADSort tmp = sorted[i];
+                            size_t j = i;
+                            while (j > 0 &&
+                                   strcmp(sorted[j - 1].key, tmp.key) > 0) {
+                                sorted[j] = sorted[j - 1];
+                                j--;
+                            }
+                            sorted[j] = tmp;
+                        }
+                        cg->generic_type_method_rad_descs =
+                            (char **)calloc(ac, sizeof(char *));
+                        if (cg->generic_type_method_rad_descs != NULL) {
+                            cg->generic_type_method_rad_count = ac;
+                            for (size_t i = 0; i < ac; ++i) {
+                                const FengReifiableDep *dep =
+                                    &rad_dep_set->deps[sorted[i].idx];
+                                const FengDecl *dep_origin = NULL;
+                                if (dep->type_ref != NULL &&
+                                    dep->type_ref->kind == FENG_TYPE_REF_NAMED &&
+                                    dep->type_ref->as.named.type_arg_count > 0U) {
+                                    const GenericTypeDecl *gtd =
+                                        cg_find_generic_type_decl(cg,
+                                            dep->type_ref);
+                                    if (gtd != NULL) dep_origin = gtd->decl;
+                                }
+                                if (dep_origin != NULL) {
+                                    const UserType *erased =
+                                        cg_find_open_generic_instance(
+                                            cg,
+                                            &(UserType){
+                                                .is_generic_instance = true,
+                                                .generic_origin_decl = dep_origin
+                                            });
+                                    if (erased != NULL) {
+                                        cg->generic_type_method_rad_descs[i] =
+                                            strdup(erased->c_aggregate_desc_name);
+                                    }
+                                }
+                            }
+                        }
+                        for (size_t i = 0; i < ac; ++i) free(sorted[i].key);
+                        free(sorted);
+                    }
+                }
+                free(owner_tp_names_rad);
             }
         }
     }
@@ -30006,7 +30325,6 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     }
 
     char *ret_tmp = NULL;
-    const UserType *ret_open_tuple = NULL;
     if (method_tp_count == 0U && m->return_type->kind != CG_TYPE_VOID) {
         ret_tmp = cg_fresh_temp(cg, "_ret");
         if (!ret_tmp) goto cleanup;
@@ -30014,15 +30332,6 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         if (!ret_cty) { free(ret_tmp); ret_tmp = NULL; goto cleanup; }
         buf_append_fmt(body, "    %s %s;\n", ret_cty, ret_tmp);
         free(ret_cty);
-        if (m->return_type->user != NULL &&
-            m->return_type->user->is_generic_instance &&
-            cg_user_type_is_tuple(m->return_type->user)) {
-            ret_open_tuple = cg_find_open_generic_instance(cg, m->return_type->user);
-        }
-        if (ret_open_tuple != NULL) {
-            buf_append_fmt(body, "    struct %s _erased_buf;\n",
-                           ret_open_tuple->c_struct_name);
-        }
     }
 
     buf_append_fmt(body, "    %s(", shared_name);
@@ -30069,26 +30378,12 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         buf_append_cstr(body, "_out");
     } else if (ret_tmp) {
         if (call_has_arg) buf_append_cstr(body, ", ");
-        if (ret_open_tuple != NULL) {
-            buf_append_cstr(body, "&_erased_buf");
-        } else {
-            buf_append_fmt(body, "&%s", ret_tmp);
-        }
+        buf_append_fmt(body, "&%s", ret_tmp);
     }
     buf_append_cstr(body, ");\n");
     if (method_tp_count > 0U) {
         buf_append_cstr(body, "    return;\n");
     } else if (ret_tmp) {
-        if (ret_open_tuple != NULL) {
-            const UserType *ret_ut = m->return_type->user;
-            for (size_t fi = 0; fi < ret_ut->field_count; fi++) {
-                buf_append_fmt(body,
-                    "    memcpy(&%s.%s, &_erased_buf.%s, sizeof(%s.%s));\n",
-                    ret_tmp, ret_ut->fields[fi].c_name,
-                    ret_ut->fields[fi].c_name,
-                    ret_tmp, ret_ut->fields[fi].c_name);
-            }
-        }
         buf_append_fmt(body, "    return %s;\n", ret_tmp);
     } else {
         buf_append_cstr(body, "    return;\n");
@@ -30401,10 +30696,13 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     size_t saved_captured_name_count = cg->captured_binding_name_count;
     bool saved_captures_self = cg->current_callable_captures_self;
     size_t saved_ambient_tp_count = cg->ambient_type_param_count;
-    /* 保存 rtd 状态，以便在 BuiltinFit 方法体内临时设置。 */
+    /* 保存 rtd/rad 状态，以便在 BuiltinFit 方法体内临时设置。 */
     char **saved_rtd_descs = cg->generic_type_method_rtd_descs;
     size_t saved_rtd_count = cg->generic_type_method_rtd_count;
     bool saved_rtd_via_desc = cg->generic_type_method_rtd_via_desc;
+    char **saved_rad_descs = cg->generic_type_method_rad_descs;
+    size_t saved_rad_count = cg->generic_type_method_rad_count;
+    bool saved_rad_via_desc = cg->generic_type_method_rad_via_desc;
     char **saved_ambient_tp_names = cg->ambient_type_param_names;
     bool saved_in_generic_fn = cg->in_generic_fn;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
@@ -30616,6 +30914,91 @@ static bool cg_emit_builtin_fit_method(CG *cg,
         }
     }
 
+    /* §2.6.1-§2.6.4：预计算 BuiltinFit 方法体的 reified_agg_deps 映射。 */
+    {
+        const FengReifiableDepSet *rad_dep_set =
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis,
+                                                     bf->decl);
+        if (rad_dep_set != NULL && rad_dep_set->dep_count > 0U) {
+            FengSlice *tp_names_rad = (FengSlice *)calloc(
+                bf->target_type_param_count, sizeof(FengSlice));
+            if (tp_names_rad != NULL) {
+                for (size_t i = 0; i < bf->target_type_param_count; ++i) {
+                    tp_names_rad[i] = bf->target_type_params[i].name;
+                }
+                typedef struct { size_t idx; char *key; } RADSort;
+                size_t ac = 0;
+                for (size_t i = 0; i < rad_dep_set->dep_count; ++i) {
+                    if (rad_dep_set->deps[i].kind ==
+                        FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
+                        ac++;
+                    }
+                }
+                if (ac > 0U) {
+                    RADSort *sorted = (RADSort *)calloc(ac, sizeof(RADSort));
+                    if (sorted != NULL) {
+                        size_t si = 0;
+                        for (size_t i = 0; i < rad_dep_set->dep_count; ++i) {
+                            if (rad_dep_set->deps[i].kind !=
+                                FENG_REIFIABLE_DEP_KIND_AGGREGATE) continue;
+                            sorted[si].idx = i;
+                            sorted[si].key = cg_reifiable_sort_key(
+                                rad_dep_set->deps[i].type_ref,
+                                tp_names_rad,
+                                bf->target_type_param_count, true);
+                            si++;
+                        }
+                        for (size_t i = 1; i < ac; ++i) {
+                            RADSort tmp = sorted[i];
+                            size_t j = i;
+                            while (j > 0 &&
+                                   strcmp(sorted[j - 1].key, tmp.key) > 0) {
+                                sorted[j] = sorted[j - 1];
+                                j--;
+                            }
+                            sorted[j] = tmp;
+                        }
+                        cg->generic_type_method_rad_descs =
+                            (char **)calloc(ac, sizeof(char *));
+                        if (cg->generic_type_method_rad_descs != NULL) {
+                            cg->generic_type_method_rad_count = ac;
+                            cg->generic_type_method_rad_via_desc = true;
+                            for (size_t i = 0; i < ac; ++i) {
+                                const FengReifiableDep *dep =
+                                    &rad_dep_set->deps[sorted[i].idx];
+                                const FengDecl *dep_origin = NULL;
+                                if (dep->type_ref != NULL &&
+                                    dep->type_ref->kind == FENG_TYPE_REF_NAMED &&
+                                    dep->type_ref->as.named.type_arg_count > 0U) {
+                                    const GenericTypeDecl *gtd =
+                                        cg_find_generic_type_decl(cg,
+                                            dep->type_ref);
+                                    if (gtd != NULL) dep_origin = gtd->decl;
+                                }
+                                if (dep_origin != NULL) {
+                                    const UserType *erased =
+                                        cg_find_open_generic_instance(
+                                            cg,
+                                            &(UserType){
+                                                .is_generic_instance = true,
+                                                .generic_origin_decl = dep_origin
+                                            });
+                                    if (erased != NULL) {
+                                        cg->generic_type_method_rad_descs[i] =
+                                            strdup(erased->c_aggregate_desc_name);
+                                    }
+                                }
+                            }
+                        }
+                        for (size_t i = 0; i < ac; ++i) free(sorted[i].key);
+                        free(sorted);
+                    }
+                }
+                free(tp_names_rad);
+            }
+        }
+    }
+
     if (!cg_compute_capture_requirements_in_block(m->member->as.callable.body,
                                                   &captured_names,
                                                   &captured_name_count,
@@ -30727,7 +31110,7 @@ cleanup:
     cg->generic_fn_type_param_names = saved_tp_names;
     cg->generic_fn_type_param_constraints = saved_tp_constraints;
     cg->generic_fn_type_param_descs = saved_tp_descs;
-    /* 清理本方法体内分配的 rtd 映射，恢复先前状态。 */
+    /* 清理本方法体内分配的 rtd/rad 映射，恢复先前状态。 */
     for (size_t i = 0; i < cg->generic_type_method_rtd_count; i++) {
         free(cg->generic_type_method_rtd_descs[i]);
     }
@@ -30735,6 +31118,13 @@ cleanup:
     cg->generic_type_method_rtd_descs = saved_rtd_descs;
     cg->generic_type_method_rtd_count = saved_rtd_count;
     cg->generic_type_method_rtd_via_desc = saved_rtd_via_desc;
+    for (size_t i = 0; i < cg->generic_type_method_rad_count; i++) {
+        free(cg->generic_type_method_rad_descs[i]);
+    }
+    free(cg->generic_type_method_rad_descs);
+    cg->generic_type_method_rad_descs = saved_rad_descs;
+    cg->generic_type_method_rad_count = saved_rad_count;
+    cg->generic_type_method_rad_via_desc = saved_rad_via_desc;
     cg_free_const_cstr_array(fit_target_desc_names, bf->target_type_param_count);
     cg_free_cstr_array(fit_target_type_param_names, bf->target_type_param_count);
     for (size_t i = 0; i < captured_name_count; ++i) free(captured_names[i]);
