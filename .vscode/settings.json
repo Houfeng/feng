@@ -16,6 +16,7 @@
     "nums",
     "pcre",
     "println",
+    "Reifiable",
     "venv"
   ],
   "chat.agent.maxRequests": 200

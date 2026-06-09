@@ -84,7 +84,7 @@ fit 方法本质上是类型外部函数（类似独立函数的语法糖）。�
 
 ### 2.2 语义阶段具体化依赖与符号表导出
 
-语义阶段为每个泛型声明（泛型类型、独立泛型函数、fit 泛型方法）收集待具体化依赖，存入 `FengSemanticAnalysis` 的侧表。符号表导出阶段将依赖信息填入 `FengSymbolDeclView`，再由 ft 序列化写出（ft 二进制格式详见 §2.8）。
+语义阶段为每个泛型声明（泛型类型、独立泛型函数、fit 泛型方法）收集待具体化依赖，存入 `FengSemanticAnalysis` 的侧表。符号表导出阶段将依赖信息填入 `FengSymbolDeclView`，再由 ft 序列化写出（ft 二进制格式详见 §2.2.2）。
 
 #### 2.2.1 语义阶段数据结构
 
@@ -92,16 +92,16 @@ fit 方法本质上是类型外部函数（类似独立函数的语法糖）。�
 
 ```c
 /* 具体化依赖的分类：aggregate（tuple/struct by-value）或 managed（type 托管对象）。 */
-typedef enum FengGenericDepKind {
-    FENG_GENERIC_DEP_KIND_AGGREGATE = 0,
-    FENG_GENERIC_DEP_KIND_MANAGED
-} FengGenericDepKind;
+typedef enum FengReifiableDepKind {
+    FENG_REIFIABLE_DEP_KIND_AGGREGATE = 0,
+    FENG_REIFIABLE_DEP_KIND_MANAGED
+} FengReifiableDepKind;
 
 /* 单条具体化依赖记录。
  * type_ref 指向 AST 中的泛型类型引用（如 Foo<int,V>），
  * 其类型参数可含 TYPE_REF_TYPE_PARAM 节点（引用 owner 的泛型参数）。 */
-typedef struct FengGenericDep {
-    FengGenericDepKind kind;
+typedef struct FengReifiableDep {
+    FengReifiableDepKind kind;
     const FengTypeRef *type_ref;
 } FengReifiedDep;
 
@@ -111,12 +111,12 @@ typedef struct FengGenericDep {
  *   - 独立泛型函数：FENG_DECL_FUNCTION
  *   - fit 泛型方法：fit 下的方法声明
  * deps 数组按收集顺序追加，同一类型引用不重复记录。 */
-typedef struct FengGenericDepSet {
+typedef struct FengReifiableDepSet {
     const FengDecl *owner_decl;
-    FengGenericDep *deps;
+    FengReifiableDep *deps;
     size_t dep_count;
     size_t dep_capacity;
-} FengGenericDepSet;
+} FengReifiableDepSet;
 ```
 
 `FengSemanticAnalysis` 新增侧表：
@@ -124,28 +124,28 @@ typedef struct FengGenericDepSet {
 ```c
 typedef struct FengSemanticAnalysis {
     /* ... 已有字段不变 ... */
-    FengGenericDepSet *generic_dep_sets;
-    size_t generic_dep_set_count;
-    size_t generic_dep_set_capacity;
+    FengReifiableDepSet *reifiable_dep_sets;
+    size_t reifiable_dep_set_count;
+    size_t reifiable_dep_set_capacity;
 } FengSemanticAnalysis;
 ```
 
-配套 API（声明于 `src/semantic/semantic.h`，实现于新文件 `src/semantic/reified_deps.c`）：
+配套 API（声明于 `src/semantic/semantic.h`，实现于新文件 `src/semantic/reifiable_deps.c`）：
 
 ```c
 /* 获取或创建 owner_decl 的具体化依赖集。 */
-FengGenericDepSet *feng_semantic_get_or_create_generic_dep_set(
+FengReifiableDepSet *feng_semantic_get_or_create_reifiable_dep_set(
     FengSemanticAnalysis *analysis,
     const FengDecl *owner_decl);
 
 /* 向依赖集追加一条具体化依赖。 */
-bool feng_semantic_generic_dep_set_append(
-    FengGenericDepSet *dep_set,
-    FengGenericDepKind kind,
+bool feng_semantic_reifiable_dep_set_append(
+    FengReifiableDepSet *dep_set,
+    FengReifiableDepKind kind,
     const FengTypeRef *type_ref);
 
 /* 查找 owner_decl 的具体化依赖集，不存在时返回 NULL。 */
-const FengGenericDepSet *feng_semantic_lookup_generic_dep_set(
+const FengReifiableDepSet *feng_semantic_lookup_reifiable_dep_set(
     const FengSemanticAnalysis *analysis,
     const FengDecl *owner_decl);
 ```
@@ -167,14 +167,14 @@ const FengGenericDepSet *feng_semantic_lookup_generic_dep_set(
 ```c
 struct FengSymbolDeclView {
     /* ... 已有字段不变 ... */
-    FengSymbolTypeView **generic_agg_deps;    /* aggregate 类型依赖列表 */
-    size_t generic_agg_dep_count;
-    FengSymbolTypeView **generic_type_deps;   /* managed 类型依赖列表 */
-    size_t generic_type_dep_count;
+    FengSymbolTypeView **reifiable_agg_deps;    /* aggregate 类型依赖列表 */
+    size_t reifiable_agg_dep_count;
+    FengSymbolTypeView **reifiable_type_deps;   /* managed 类型依赖列表 */
+    size_t reifiable_type_dep_count;
 };
 ```
 
-`export.c` 从 `FengSemanticAnalysis` 的 `FengGenericDepSet` 读取依赖，按 `kind` 分类填入 `generic_agg_deps`（`FENG_GENERIC_DEP_KIND_AGGREGATE`）和 `generic_type_deps`（`FENG_GENERIC_DEP_KIND_MANAGED`）。每个 `FengSymbolTypeView*` 为 `FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC` 类型视图，完整保留基础类型名和类型参数信息（含 `TYPE_PARAM_REF` 引用）。
+`export.c` 从 `FengSemanticAnalysis` 的 `FengReifiableDepSet` 读取依赖，按 `kind` 分类填入 `reifiable_agg_deps`（`FENG_REIFIABLE_DEP_KIND_AGGREGATE`）和 `reifiable_type_deps`（`FENG_REIFIABLE_DEP_KIND_MANAGED`）。每个 `FengSymbolTypeView*` 为 `FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC` 类型视图，完整保留基础类型名和类型参数信息（含 `TYPE_PARAM_REF` 引用）。
 
 `FengSymbolAttrKind`（`src/symbol/internal.h`）新增两个值：
 
@@ -205,7 +205,7 @@ typedef enum FengSymbolAttrKind {
 
 排序 key 由读取方从 `TYPS` 记录按 §2.3 规则推导，不存 ft，保持 ft 紧凑。
 
-每个泛型依赖对应一条 attr 记录，多个依赖对应多条记录。`ft_read.c` 解析 attr 记录，还原为 `FengSymbolDeclView` 的 `generic_agg_deps` / `generic_type_deps` 列表。Wrapper codegen 读取后按 sort key 字典序排列，分配 `reified_agg_deps[]` / `reified_type_deps[]` 索引。
+每个泛型依赖对应一条 attr 记录，多个依赖对应多条记录。`ft_read.c` 解析 attr 记录，还原为 `FengSymbolDeclView` 的 `reifiable_agg_deps` / `reifiable_type_deps` 列表。Wrapper codegen 读取后按 sort key 字典序排列，分配 `reified_agg_deps[]` / `reified_type_deps[]` 索引。
 
 ### 2.3 描述符结构
 
@@ -345,7 +345,7 @@ Wrapper 在编译时按以下步骤生成：
 2. 生成某 aggregate 描述符的 `managed_slots` 时，若某字段的类型仍含未特化泛型参数，则触发链式物化：递归对该类型执行步骤 1，直到所有字段均为非泛型叶子类型（类型图无环，DFS 必然终止）；内层描述符直接作为外层 `managed_slots` 中对应 slot 的 `nested` 指针（不经过 `reified_agg_deps`/`reified_type_deps`）
 3. 按依赖排序 key（见 §2.3）字典序升序为所有依赖分配**全局稳定索引**，填入 `reified_agg_deps[]` / `reified_type_deps[]`
 
-上述步骤均为**编译期逻辑**：静态描述符本身及描述符间的依赖关系，在同包内依赖 AST 生成，跨包依赖符号表（ft，见 §2.8）生成；生成结果以 `static const` 形式写入目标文件，运行时只读取，不动态构造。
+上述步骤均为**编译期逻辑**：静态描述符本身及描述符间的依赖关系，在同包内依赖 AST 生成，跨包依赖符号表（ft，见 §2.2.2）生成；生成结果以 `static const` 形式写入目标文件，运行时只读取，不动态构造。
 
 **链式物化无需特殊检测**：触发条件就是"生成某个 `FENG_SLOT_NESTED_AGGREGATE` 的 `nested` 指针时，该字段的类型仍含泛型参数"，codegen 在生成每个字段 slot 时递归走该逻辑即可。
 
@@ -643,7 +643,7 @@ FengObject *_obj = feng_obj_alloc(_node_desc->size, _node_desc);
 feng run examples/hello_world --keep-ir
 # 预期: START / OBJ_CREATED / OBJ_SET / JV_CREATED / JV: {"a":1}
 
-feng test
+make test
 # 全量回归
 ```
 
@@ -656,14 +656,14 @@ feng test
 - [x] `src/runtime/feng_runtime.h`：`FengAggregateDescriptor` 新增 `reified_generic_params_count`/`reified_generic_params` 两个字段及六个保留字段（恒为 0/NULL）
 - [x] 更新所有现有 `FengTypeDescriptor` 静态实例（补充新字段初始化为 0/NULL）
 - [x] 更新所有现有 `FengAggregateDescriptor` 静态实例（补充新字段初始化为 0/NULL）
-- [x] 编译验证：`feng test` 全量回归通过（纯结构扩展，行为不变）
+- [x] 编译验证：`make test` 全量回归通过（纯结构扩展，行为不变）
 
 ### 6.2 符号表 ft 扩展
 
 - [ ] `src/symbol/internal.h`：`FengSymbolAttrKind` 新增 `FENG_SYMBOL_ATTR_GENERIC_AGG_DEP = 9`、`FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP = 10`
 - [ ] `src/symbol/ft_write.c`：泛型 type/func 导出时写出 aggregate 和 managed 依赖 attr 记录
 - [ ] `src/symbol/ft_read.c`：解析新 attr kind，填入对应符号的依赖列表
-- [ ] 编译验证：`feng test` 全量回归通过
+- [ ] 编译验证：`make test` 全量回归通过
 
 ### 6.3 Codegen——共享体 ABI 变更
 
@@ -671,7 +671,7 @@ feng test
 - [ ] 类型静态方法共享体：移除类型级 `_K`/`_V` 参数，新增 `_type_desc`（`FengTypeDescriptor*`）参数
 - [ ] 独立泛型函数共享体：新增 `_desc`（`FengFunctionDescriptor*`）参数（保留 `_K`/`_V` 参数）
 - [ ] 含方法级泛型的方法：类型级泛型从描述符获取，仅方法级泛型保留为函数参数
-- [ ] 编译验证：`feng test` 全量回归通过
+- [ ] 编译验证：`make test` 全量回归通过
 
 ### 6.4 Codegen——Wrapper 生成具体化描述符树
 
@@ -681,7 +681,7 @@ feng test
 - [ ] Wrapper 生成具体化 `FengAggregateDescriptor`（含 `managed_slots` 链式物化）
 - [ ] Wrapper 生成具体化 `FengTypeDescriptor`（含 `reified_generic_params`/`reified_field_offsets`/`reified_agg_deps`/`reified_type_deps`）
 - [ ] Wrapper 生成 `FengFunctionDescriptor`（独立泛型函数场景）
-- [ ] 编译验证：`feng test` 全量回归通过
+- [ ] 编译验证：`make test` 全量回归通过
 
 ### 6.5 Codegen——修复六个创建路径
 
@@ -691,16 +691,16 @@ feng test
 - [ ] §2.6.4 修复数组元素读取/for-in：stride 使用具体化描述符大小
 - [ ] §2.6.5 修复 Wrapper `_ret_buf`：按具体化类型大小分配
 - [ ] §2.6.6 修复托管对象创建：通过 `reified_type_deps[i]` 获取具体化 `FengTypeDescriptor`
-- [ ] 编译验证：`feng test` 全量回归通过
+- [ ] 编译验证：`make test` 全量回归通过
 
 ### 6.6 跨包特化支持
 
 - [ ] Wrapper codegen 读取 ft ATTRS 中 `GENERIC_AGG_DEP`/`GENERIC_TYPE_DEP`，推导排序 key 并分配索引
 - [ ] 跨包调用场景生成正确的具体化描述符树
-- [ ] 编译验证：`feng test` 全量回归通过
+- [ ] 编译验证：`make test` 全量回归通过
 
 ### 6.7 端到端验证
 
 - [ ] `feng run examples/hello_world --keep-ir` 输出符合预期
-- [ ] `feng test` 全量回归通过
+- [ ] `make test` 全量回归通过
 - [ ] 检查生成的 C 代码中描述符为 `static const`，确认零运行时开销
