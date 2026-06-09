@@ -22601,6 +22601,10 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     }
     free(analysis->spec_witnesses);
     free(analysis->spec_equalities);
+    for (index = 0U; index < analysis->reifiable_dep_set_count; ++index) {
+        free(analysis->reifiable_dep_sets[index].deps);
+    }
+    free(analysis->reifiable_dep_sets);
     feng_semantic_infos_free(analysis->infos, analysis->info_count);
     free(analysis);
 }

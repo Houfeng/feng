@@ -268,6 +268,33 @@ typedef struct FengUnionCoercionSite {
     const FengTypeRef *member_type_ref;
 } FengUnionCoercionSite;
 
+/* 具体化依赖的分类：aggregate（tuple/struct by-value）或 managed（type 托管对象）。 */
+typedef enum FengReifiableDepKind {
+    FENG_REIFIABLE_DEP_KIND_AGGREGATE = 0,
+    FENG_REIFIABLE_DEP_KIND_MANAGED
+} FengReifiableDepKind;
+
+/* 单条具体化依赖记录。
+ * type_ref 指向 AST 中的泛型类型引用（如 Foo<int,V>），
+ * 其类型参数可含 TYPE_REF_TYPE_PARAM 节点（引用 owner 的泛型参数）。 */
+typedef struct FengReifiableDep {
+    FengReifiableDepKind kind;
+    const FengTypeRef *type_ref;
+} FengReifiableDep;
+
+/* 一个泛型声明的全部具体化依赖。
+ * owner_decl 标识所属泛型声明：
+ *   - 泛型类型：FENG_DECL_TYPE（聚合该类型所有方法的依赖）
+ *   - 独立泛型函数：FENG_DECL_FUNCTION
+ *   - fit 泛型方法：fit 下的方法声明
+ * deps 数组按收集顺序追加，同一类型引用不重复记录。 */
+typedef struct FengReifiableDepSet {
+    const FengDecl *owner_decl;
+    FengReifiableDep *deps;
+    size_t dep_count;
+    size_t dep_capacity;
+} FengReifiableDepSet;
+
 typedef struct FengSemanticAnalysis {
     FengSemanticModule *modules;
     size_t module_count;
@@ -308,6 +335,9 @@ typedef struct FengSemanticAnalysis {
     struct FengSpecEquality *spec_equalities;
     size_t spec_equality_count;
     size_t spec_equality_capacity;
+    FengReifiableDepSet *reifiable_dep_sets;
+    size_t reifiable_dep_set_count;
+    size_t reifiable_dep_set_capacity;
 } FengSemanticAnalysis;
 
 typedef enum FengCompileTarget {
@@ -787,6 +817,24 @@ FengSemanticValueKind feng_semantic_value_kind_of_builtin(FengSlice name);
  * Implemented in value_kind.c. The function does not consult the
  * analysis; the decl carries enough information on its own. */
 FengSemanticValueKind feng_semantic_value_kind_of_decl(const FengDecl *decl);
+
+/* --- ReifiableDepSet (§2.2.1 具体化依赖收集) ----------------------------- */
+
+/* 获取或创建 owner_decl 的具体化依赖集。 */
+FengReifiableDepSet *feng_semantic_get_or_create_reifiable_dep_set(
+    FengSemanticAnalysis *analysis,
+    const FengDecl *owner_decl);
+
+/* 向依赖集追加一条具体化依赖。相同 type_ref 不重复追加。 */
+bool feng_semantic_reifiable_dep_set_append(
+    FengReifiableDepSet *dep_set,
+    FengReifiableDepKind kind,
+    const FengTypeRef *type_ref);
+
+/* 查找 owner_decl 的具体化依赖集，不存在时返回 NULL。 */
+const FengReifiableDepSet *feng_semantic_lookup_reifiable_dep_set(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *owner_decl);
 
 #ifdef __cplusplus
 }

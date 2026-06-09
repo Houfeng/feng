@@ -662,12 +662,12 @@ make test
 
 纯结构新增与 API 实现，无行为变更。
 
-- [ ] `src/semantic/semantic.h`：新增 `FengReifiableDepKind`、`FengReifiableDep`、`FengReifiableDepSet` 类型定义
-- [ ] `src/semantic/semantic.h`：`FengSemanticAnalysis` 新增 `reifiable_dep_sets`/`reifiable_dep_set_count`/`reifiable_dep_set_capacity` 侧表字段
-- [ ] 新建 `src/semantic/reifiable_deps.c`：实现 `feng_semantic_get_or_create_reifiable_dep_set`、`feng_semantic_reifiable_dep_set_append`、`feng_semantic_lookup_reifiable_dep_set` 三个 API
-- [ ] 初始化：`FengSemanticAnalysis` 初始化时新字段置零
-- [ ] 清理：`FengSemanticAnalysis` 释放时遍历释放各 `FengReifiableDepSet` 的 `deps` 数组
-- [ ] `make test` 全量回归通过
+- [x] `src/semantic/semantic.h`：新增 `FengReifiableDepKind`、`FengReifiableDep`、`FengReifiableDepSet` 类型定义
+- [x] `src/semantic/semantic.h`：`FengSemanticAnalysis` 新增 `reifiable_dep_sets`/`reifiable_dep_set_count`/`reifiable_dep_set_capacity` 侧表字段
+- [x] 新建 `src/semantic/reifiable_deps.c`：实现 `feng_semantic_get_or_create_reifiable_dep_set`、`feng_semantic_reifiable_dep_set_append`、`feng_semantic_lookup_reifiable_dep_set` 三个 API
+- [x] 初始化：`FengSemanticAnalysis` 初始化时新字段置零
+- [x] 清理：`FengSemanticAnalysis` 释放时遍历释放各 `FengReifiableDepSet` 的 `deps` 数组
+- [x] `make test` 全量回归通过
 
 ### 6.3 符号表：结构扩展（§2.2.2）
 
