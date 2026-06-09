@@ -92,16 +92,16 @@ fit 方法本质上是类型外部函数（类似独立函数的语法糖）。�
 
 ```c
 /* 具体化依赖的分类：aggregate（tuple/struct by-value）或 managed（type 托管对象）。 */
-typedef enum FengReifiedDepKind {
-    FENG_REIFIED_DEP_KIND_AGGREGATE = 0,
-    FENG_REIFIED_DEP_KIND_MANAGED
-} FengReifiedDepKind;
+typedef enum FengGenericDepKind {
+    FENG_GENERIC_DEP_KIND_AGGREGATE = 0,
+    FENG_GENERIC_DEP_KIND_MANAGED
+} FengGenericDepKind;
 
 /* 单条具体化依赖记录。
  * type_ref 指向 AST 中的泛型类型引用（如 Foo<int,V>），
  * 其类型参数可含 TYPE_REF_TYPE_PARAM 节点（引用 owner 的泛型参数）。 */
-typedef struct FengReifiedDep {
-    FengReifiedDepKind kind;
+typedef struct FengGenericDep {
+    FengGenericDepKind kind;
     const FengTypeRef *type_ref;
 } FengReifiedDep;
 
@@ -111,12 +111,12 @@ typedef struct FengReifiedDep {
  *   - 独立泛型函数：FENG_DECL_FUNCTION
  *   - fit 泛型方法：fit 下的方法声明
  * deps 数组按收集顺序追加，同一类型引用不重复记录。 */
-typedef struct FengReifiedDepSet {
+typedef struct FengGenericDepSet {
     const FengDecl *owner_decl;
-    FengReifiedDep *deps;
+    FengGenericDep *deps;
     size_t dep_count;
     size_t dep_capacity;
-} FengReifiedDepSet;
+} FengGenericDepSet;
 ```
 
 `FengSemanticAnalysis` 新增侧表：
@@ -124,9 +124,9 @@ typedef struct FengReifiedDepSet {
 ```c
 typedef struct FengSemanticAnalysis {
     /* ... 已有字段不变 ... */
-    FengReifiedDepSet *reified_dep_sets;
-    size_t reified_dep_set_count;
-    size_t reified_dep_set_capacity;
+    FengGenericDepSet *generic_dep_sets;
+    size_t generic_dep_set_count;
+    size_t generic_dep_set_capacity;
 } FengSemanticAnalysis;
 ```
 
@@ -134,18 +134,18 @@ typedef struct FengSemanticAnalysis {
 
 ```c
 /* 获取或创建 owner_decl 的具体化依赖集。 */
-FengReifiedDepSet *feng_semantic_get_or_create_reified_dep_set(
+FengGenericDepSet *feng_semantic_get_or_create_generic_dep_set(
     FengSemanticAnalysis *analysis,
     const FengDecl *owner_decl);
 
 /* 向依赖集追加一条具体化依赖。 */
-bool feng_semantic_reified_dep_set_append(
-    FengReifiedDepSet *dep_set,
-    FengReifiedDepKind kind,
+bool feng_semantic_generic_dep_set_append(
+    FengGenericDepSet *dep_set,
+    FengGenericDepKind kind,
     const FengTypeRef *type_ref);
 
 /* 查找 owner_decl 的具体化依赖集，不存在时返回 NULL。 */
-const FengReifiedDepSet *feng_semantic_lookup_reified_dep_set(
+const FengGenericDepSet *feng_semantic_lookup_generic_dep_set(
     const FengSemanticAnalysis *analysis,
     const FengDecl *owner_decl);
 ```
@@ -167,16 +167,45 @@ const FengReifiedDepSet *feng_semantic_lookup_reified_dep_set(
 ```c
 struct FengSymbolDeclView {
     /* ... 已有字段不变 ... */
-    FengSymbolTypeView **reified_agg_deps;    /* aggregate 类型依赖列表 */
-    size_t reified_agg_dep_count;
-    FengSymbolTypeView **reified_type_deps;   /* managed 类型依赖列表 */
-    size_t reified_type_dep_count;
+    FengSymbolTypeView **generic_agg_deps;    /* aggregate 类型依赖列表 */
+    size_t generic_agg_dep_count;
+    FengSymbolTypeView **generic_type_deps;   /* managed 类型依赖列表 */
+    size_t generic_type_dep_count;
 };
 ```
 
-`export.c` 从 `FengSemanticAnalysis` 的 `FengReifiedDepSet` 读取依赖，按 `kind` 分类填入 `reified_agg_deps`（`FENG_REIFIED_DEP_KIND_AGGREGATE`）和 `reified_type_deps`（`FENG_REIFIED_DEP_KIND_MANAGED`）。每个 `FengSymbolTypeView*` 为 `FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC` 类型视图，完整保留基础类型名和类型参数信息（含 `TYPE_PARAM_REF` 引用）。
+`export.c` 从 `FengSemanticAnalysis` 的 `FengGenericDepSet` 读取依赖，按 `kind` 分类填入 `generic_agg_deps`（`FENG_GENERIC_DEP_KIND_AGGREGATE`）和 `generic_type_deps`（`FENG_GENERIC_DEP_KIND_MANAGED`）。每个 `FengSymbolTypeView*` 为 `FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC` 类型视图，完整保留基础类型名和类型参数信息（含 `TYPE_PARAM_REF` 引用）。
 
-`ft_write.c` 将每条依赖序列化为 ATTRS 节中的 `FengSymbolFtAttrRecord`（attr kind 定义见 §2.8）；`ft_read.c` 反序列化回 `FengSymbolDeclView` 字段。ft 二进制格式详见 §2.8。
+`FengSymbolAttrKind`（`src/symbol/internal.h`）新增两个值：
+
+```c
+typedef enum FengSymbolAttrKind {
+    /* ... 已有 1–8 不变 ... */
+    FENG_SYMBOL_ATTR_GENERIC_AGG_DEP  = 9,   /* 泛型 aggregate 依赖 */
+    FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP = 10,  /* 泛型 managed 依赖 */
+} FengSymbolAttrKind;
+```
+
+**ft 现有能力**
+
+- **TYPS** 节已有 `NAMED_GENERIC`（kind=6）：`string_ref`=全限定基础名，`elem_start`=TSEQ 起始，`elem_count`=类型参数数量——已能完整表达 `Foo<int,K>`
+- **ATTRS** 节：`symbol_id` + `kind`（16 位）+ `value0/1/2`（各 32 位），可挂在任意符号上
+
+**ft 序列化格式**
+
+`ft_write.c` 将每条依赖序列化为 ATTRS 节中一条 `FengSymbolFtAttrRecord`（定义见 `src/symbol/ft_internal.h`）：
+
+| 字段 | 含义 |
+|------|------|
+| `symbol_id` | 泛型 type 的 sym id（`SYM_KIND_TYPE`）、func 的 sym id（`SYM_KIND_TOP_FN`）或 fit 方法的 sym id（`SYM_KIND_METHOD`） |
+| `kind` | `FENG_SYMBOL_ATTR_GENERIC_AGG_DEP`（9）或 `FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP`（10） |
+| `value0` | `TYPS.id`（`NAMED_GENERIC` 记录，包含完整类型名和参数信息） |
+| `value1` | 0（保留） |
+| `value2` | 0（保留） |
+
+排序 key 由读取方从 `TYPS` 记录按 §2.3 规则推导，不存 ft，保持 ft 紧凑。
+
+每个泛型依赖对应一条 attr 记录，多个依赖对应多条记录。`ft_read.c` 解析 attr 记录，还原为 `FengSymbolDeclView` 的 `generic_agg_deps` / `generic_type_deps` 列表。Wrapper codegen 读取后按 sort key 字典序排列，分配 `reified_agg_deps[]` / `reified_type_deps[]` 索引。
 
 ### 2.3 描述符结构
 
@@ -578,39 +607,6 @@ feng_aggregate_assign(_iter_mem, _elem, _td->reified_agg_deps[i]);
 const FengTypeDescriptor *_node_desc = _td->reified_type_deps[i];
 FengObject *_obj = feng_obj_alloc(_node_desc->size, _node_desc);
 ```
-
-### 2.8 跨包泛型依赖信息（ft 扩展）
-
-同包内 Wrapper 可直接从 AST 语义信息收集目标 type/func 的依赖列表。跨包时只有 ft，需在 ft 中记录每个泛型 type/func 的依赖元数据，供调用方 codegen 读取并按排序 key 分配索引。
-
-#### ft 现有能力
-
-- **TYPS** 节已有 `NAMED_GENERIC`（kind=6）：`string_ref`=全限定基础名，`elem_start`=TSEQ 起始，`elem_count`=类型参数数量——已能完整表达 `Foo<int,K>`
-- **ATTRS** 节：`symbol_id` + `kind`（16 位）+ `value0/1/2`（各 32 位），可挂在任意符号上
-
-#### 新增两个 attr kind（`src/symbol/internal.h`）
-
-```c
-typedef enum FengSymbolAttrKind {
-    /* ... 已有 1–8 不变 ... */
-    FENG_SYMBOL_ATTR_GENERIC_AGG_DEP  = 9,   /* 泛型 aggregate 依赖 */
-    FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP = 10,  /* 泛型 managed 依赖 */
-} FengSymbolAttrKind;
-```
-
-两个 attr 的字段布局（`FengSymbolFtAttrRecord`）：
-
-| 字段 | 含义 |
-|------|------|
-| `symbol_id` | 泛型 type 的 sym id（`SYM_KIND_TYPE`）或 func 的 sym id（`SYM_KIND_TOP_FN` / `SYM_KIND_METHOD`） |
-| `kind` | `FENG_SYMBOL_ATTR_GENERIC_AGG_DEP`（9）或 `FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP`（10） |
-| `value0` | `TYPS.id`（`NAMED_GENERIC` 记录，包含完整类型名和参数信息） |
-| `value1` | 0（保留） |
-| `value2` | 0（保留） |
-
-排序 key 由读取方从 `TYPS` 记录按 §2.3 规则推导，不存 ft，保持 ft 紧凑。
-
-每个泛型依赖对应一条 attr 记录，多个依赖对应多条记录，Wrapper 读取后按 sort key 字典序排列，分配 `reified_agg_deps[]`/`reified_type_deps[]` 索引。
 
 ### 2.7 不新增 Runtime 函数
 
