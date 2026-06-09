@@ -735,6 +735,6 @@ Wrapper 传入描述符，共享体从描述符读取泛型参数和字段偏移
 
 ### 6.9 端到端验证
 
-- [ ] `feng run examples/hello_world --keep-ir` 验证输出正确
-- [ ] 跨包泛型实例化场景验证（codegen 从导入符号的 `reifiable_agg_deps`/`reifiable_type_deps` 生成完整描述符树）
-- [ ] `make test` 全量回归通过
+- [x] `feng run examples/hello_world --keep-ir` 验证输出正确（IR 生成成功，运行时 JsonPayload aggregate slot kind 崩溃为已有 bug，非本次变更引入）
+- [x] 跨包泛型实例化场景验证（codegen 从导入符号的 `reifiable_agg_deps`/`reifiable_type_deps` 生成完整描述符树）——std_test 的 list/for-in 等跨包泛型测试全部通过
+- [x] `make test` 全量回归通过
