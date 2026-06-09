@@ -22171,6 +22171,92 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         cg->active_caught_unwind_count = 0;
         cg->cur_function_has_frame_marker = false;
 
+        /* 预计算 reified_type_deps 映射，使独立泛型函数共享体内
+         * 创建依赖泛型的托管对象时能直接用具体描述符分配。 */
+        {
+            const FengReifiableDepSet *fn_rtd_set =
+                feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl);
+            if (fn_rtd_set != NULL && fn_rtd_set->dep_count > 0U) {
+                const FengCallableSignature *fn_sig = &decl->as.function_decl;
+                FengSlice *fn_tp_names = (FengSlice *)calloc(
+                    fn_sig->type_param_count, sizeof(FengSlice));
+                if (fn_tp_names != NULL) {
+                    for (size_t i = 0; i < fn_sig->type_param_count; ++i) {
+                        fn_tp_names[i] = fn_sig->type_params[i].name;
+                    }
+                    typedef struct { size_t idx; char *key; } RTDSort;
+                    size_t mc = 0;
+                    for (size_t i = 0; i < fn_rtd_set->dep_count; ++i) {
+                        if (fn_rtd_set->deps[i].kind ==
+                            FENG_REIFIABLE_DEP_KIND_MANAGED) {
+                            mc++;
+                        }
+                    }
+                    if (mc > 0U) {
+                        RTDSort *sorted = (RTDSort *)calloc(mc, sizeof(RTDSort));
+                        if (sorted != NULL) {
+                            size_t si = 0;
+                            for (size_t i = 0; i < fn_rtd_set->dep_count; ++i) {
+                                if (fn_rtd_set->deps[i].kind !=
+                                    FENG_REIFIABLE_DEP_KIND_MANAGED) continue;
+                                sorted[si].idx = i;
+                                sorted[si].key = cg_reifiable_sort_key(
+                                    fn_rtd_set->deps[i].type_ref,
+                                    fn_tp_names,
+                                    fn_sig->type_param_count, true);
+                                si++;
+                            }
+                            for (size_t i = 1; i < mc; ++i) {
+                                RTDSort tmp = sorted[i];
+                                size_t j = i;
+                                while (j > 0 &&
+                                       strcmp(sorted[j - 1].key, tmp.key) > 0) {
+                                    sorted[j] = sorted[j - 1];
+                                    j--;
+                                }
+                                sorted[j] = tmp;
+                            }
+                            cg->generic_type_method_rtd_descs =
+                                (char **)calloc(mc, sizeof(char *));
+                            if (cg->generic_type_method_rtd_descs != NULL) {
+                                cg->generic_type_method_rtd_count = mc;
+                                cg->generic_type_method_rtd_via_desc = true;
+                                for (size_t i = 0; i < mc; ++i) {
+                                    const FengReifiableDep *dep =
+                                        &fn_rtd_set->deps[sorted[i].idx];
+                                    const FengDecl *dep_origin = NULL;
+                                    if (dep->type_ref != NULL &&
+                                        dep->type_ref->kind == FENG_TYPE_REF_NAMED &&
+                                        dep->type_ref->as.named.type_arg_count > 0U) {
+                                        const GenericTypeDecl *gtd =
+                                            cg_find_generic_type_decl(cg,
+                                                dep->type_ref);
+                                        if (gtd != NULL) dep_origin = gtd->decl;
+                                    }
+                                    if (dep_origin != NULL) {
+                                        const UserType *erased =
+                                            cg_find_open_generic_instance(
+                                                cg,
+                                                &(UserType){
+                                                    .is_generic_instance = true,
+                                                    .generic_origin_decl = dep_origin
+                                                });
+                                        if (erased != NULL) {
+                                            cg->generic_type_method_rtd_descs[i] =
+                                                strdup(erased->c_desc_name);
+                                        }
+                                    }
+                                }
+                            }
+                            for (size_t i = 0; i < mc; ++i) free(sorted[i].key);
+                            free(sorted);
+                        }
+                    }
+                    free(fn_tp_names);
+                }
+            }
+        }
+
         if (!cg_emit_function_eh_prologue(cg, decl->token)) {
             cg->cur_scope = NULL;
             scope_pop_free(fn_scope);
@@ -22258,6 +22344,13 @@ cleanup:
     cg->generic_fn_type_param_constraints = NULL;
     cg->generic_fn_type_param_descs = NULL;
     cg->cur_function_has_frame_marker = false;
+    for (size_t i = 0; i < cg->generic_type_method_rtd_count; i++) {
+        free(cg->generic_type_method_rtd_descs[i]);
+    }
+    free(cg->generic_type_method_rtd_descs);
+    cg->generic_type_method_rtd_descs = NULL;
+    cg->generic_type_method_rtd_count = 0;
+    cg->generic_type_method_rtd_via_desc = false;
     return ok;
 }
 
@@ -29284,7 +29377,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     cg->generic_type_method_field_offsets_name = is_static_method ? NULL : "_td->reified_field_offsets";
 
     /* §2.6.6 前置：预计算 reified_type_deps 映射，使共享体内
-     * 创建依赖泛型的托管对象时能覆写 desc。 */
+     * 创建依赖泛型的托管对象时能直接用具体描述符分配。 */
     {
         const FengReifiableDepSet *rtd_dep_set =
             feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl);
