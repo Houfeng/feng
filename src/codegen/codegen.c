@@ -13530,9 +13530,9 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
         }
     }
 
-    /* §6.7: shared body self-call — only recv + method-level descs;
-     * type-level params are obtained from descriptor inside shared body. */
-    buf_append_fmt(cg->cur_body, "    %s(%s",
+    /* §6.7: shared body self-call — recv + _td + method-level descs;
+     * type-level params are obtained from _type_desc inside shared body. */
+    buf_append_fmt(cg->cur_body, "    %s(%s, _td",
                    shared_name,
                    recv->c_expr);
     for (size_t i = 0; i < method_tp_count; ++i) {
@@ -30148,9 +30148,11 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
 
     /* §2.5: emit shared body prototype + definition signature.
      *
-     * Instance method: void shared(void *_self, [method-level _U, ...],
+     * Instance method: void shared(void *_self,
+     *                              const FengTypeDescriptor *_type_desc,
+     *                              [method-level _U, ...],
      *                              <params>, [void *_out]);
-     *   — type-level _K/_V extracted from self->_hdr.desc in prologue
+     *   — type-level _K/_V extracted from _type_desc in prologue
      *
      * Static method:   void shared(const FengTypeDescriptor *_type_desc,
      *                              [method-level _U, ...],
@@ -30161,7 +30163,8 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     #define EMIT_SHARED_PARAMS(buf_ptr, has_param_ptr)                            \
     do {                                                                            \
         if (!is_static_method) {                                                   \
-            buf_append_cstr((buf_ptr), "void *_self");                             \
+            buf_append_cstr((buf_ptr),                                             \
+                "void *_self, const FengTypeDescriptor *_type_desc");              \
             *(has_param_ptr) = true;                                               \
         } else {                                                                   \
             buf_append_cstr((buf_ptr), "const FengTypeDescriptor *_type_desc");    \
@@ -30223,15 +30226,11 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     buf_append_cstr(body, ") {\n");
 
     /* §2.5 prologue: extract _td and type-level generic params from descriptor. */
+    buf_append_cstr(body,
+        "    const FengTypeDescriptor *_td = _type_desc;\n"
+        "    (void)_type_desc; (void)_td;\n");
     if (!is_static_method) {
-        buf_append_cstr(body,
-            "    const FengTypeDescriptor *_td = "
-            "((const FengManagedHeader *)_self)->desc;\n"
-            "    (void)_self; (void)_td;\n");
-    } else {
-        buf_append_cstr(body,
-            "    const FengTypeDescriptor *_td = _type_desc;\n"
-            "    (void)_type_desc; (void)_td;\n");
+        buf_append_cstr(body, "    (void)_self;\n");
     }
     if (has_func_desc) {
         buf_append_cstr(body, "    (void)_desc;\n");
@@ -30487,7 +30486,8 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         buf_append_fmt(&cg->fn_protos, "void %s(", shared_name);
         bool proto_has_param = false;
         if (!is_static_method) {
-            buf_append_cstr(&cg->fn_protos, "void *_self");
+            buf_append_cstr(&cg->fn_protos,
+                "void *_self, const FengTypeDescriptor *_type_desc");
             proto_has_param = true;
         } else {
             buf_append_cstr(&cg->fn_protos, "const FengTypeDescriptor *_type_desc");
@@ -30679,7 +30679,12 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     buf_append_fmt(body, "    %s(", shared_name);
     bool call_has_arg = false;
     if (!is_static_method) {
-        buf_append_cstr(body, "(void *)self");
+        if (t->generic_context_type_param_count > 0U) {
+            buf_append_cstr(body,
+                "(void *)self, ((const FengManagedHeader *)self)->desc");
+        } else {
+            buf_append_fmt(body, "(void *)self, &%s", t->c_desc_name);
+        }
         call_has_arg = true;
     } else {
         buf_append_fmt(body, "&%s", t->c_desc_name);
