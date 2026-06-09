@@ -657,3 +657,84 @@ make test
 - [x] 更新所有现有 `FengTypeDescriptor` 静态实例（补充新字段初始化为 0/NULL）
 - [x] 更新所有现有 `FengAggregateDescriptor` 静态实例（补充新字段初始化为 0/NULL）
 - [x] 编译验证：`make test` 全量回归通过（纯结构扩展，行为不变）
+
+### 6.2 语义阶段：数据结构与 API（§2.2.1）
+
+纯结构新增与 API 实现，无行为变更。
+
+- [ ] `src/semantic/semantic.h`：新增 `FengReifiableDepKind`、`FengReifiableDep`、`FengReifiableDepSet` 类型定义
+- [ ] `src/semantic/semantic.h`：`FengSemanticAnalysis` 新增 `reifiable_dep_sets`/`reifiable_dep_set_count`/`reifiable_dep_set_capacity` 侧表字段
+- [ ] 新建 `src/semantic/reifiable_deps.c`：实现 `feng_semantic_get_or_create_reifiable_dep_set`、`feng_semantic_reifiable_dep_set_append`、`feng_semantic_lookup_reifiable_dep_set` 三个 API
+- [ ] 初始化：`FengSemanticAnalysis` 初始化时新字段置零
+- [ ] 清理：`FengSemanticAnalysis` 释放时遍历释放各 `FengReifiableDepSet` 的 `deps` 数组
+- [ ] `make test` 全量回归通过
+
+### 6.3 符号表：结构扩展（§2.2.2）
+
+纯结构新增，无行为变更。
+
+- [ ] `src/symbol/internal.h`：`FengSymbolDeclView` 新增 `reifiable_agg_deps`/`reifiable_agg_dep_count`/`reifiable_type_deps`/`reifiable_type_dep_count` 四个字段
+- [ ] `src/symbol/internal.h`：`FengSymbolAttrKind` 新增 `FENG_SYMBOL_ATTR_GENERIC_AGG_DEP = 9`、`FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP = 10`
+- [ ] 更新 `feng_symbol_internal_decl_clone`：深拷贝 `reifiable_*_deps` 数组及其 `FengSymbolTypeView` 元素
+- [ ] 更新 `feng_symbol_internal_decl_free_members`：释放新字段
+- [ ] `make test` 全量回归通过
+
+### 6.4 语义阶段：收集待具体化依赖（§2.2.1 收集逻辑）
+
+填充侧表，下游暂不消费。
+
+- [ ] 泛型类型：遍历成员字段类型、方法参数及返回值类型、方法体内泛型类型引用、成员初始化中的泛型类型、静态方法体内的泛型类型，按收集约束记录到 `FengReifiableDepSet`
+- [ ] 独立泛型函数：遍历函数参数及返回值类型、函数体内泛型类型引用
+- [ ] fit 泛型方法：遍历方法参数及返回值类型、方法体内泛型类型引用
+- [ ] 收集约束：仅收集含当前声明泛型参数的类型引用（`type_ref` 的类型参数树中至少存在一个 `TYPE_REF_TYPE_PARAM` 引用当前声明的泛型参数），已完全具体化的类型引用不记录
+- [ ] 确认泛型参数信息（`type_param_count`）在语义阶段已完备
+- [ ] `make test` 全量回归通过
+
+### 6.5 符号表导出与 ft 序列化（§2.2.2 管线）
+
+管线完整但 codegen 暂不消费。
+
+- [ ] `src/symbol/export.c`：从 `FengReifiableDepSet` 读取依赖，按 `kind` 分类填入 `DeclView` 的 `reifiable_agg_deps`（`AGGREGATE`）/`reifiable_type_deps`（`MANAGED`），每个 `FengSymbolTypeView*` 为 `NAMED_GENERIC` 类型视图
+- [ ] `src/symbol/ft_write.c`：将每条依赖序列化为 ATTRS 节中一条 `FengSymbolFtAttrRecord`（`kind` = `GENERIC_AGG_DEP`/`GENERIC_TYPE_DEP`，`value0` = `TYPS.id`）
+- [ ] `src/symbol/ft_read.c`：解析新 attr kind，还原到 `DeclView` 的 `reifiable_agg_deps`/`reifiable_type_deps` 列表
+- [ ] `make test` 全量回归通过
+
+### 6.6 排序 key 与 Wrapper 描述符生成（§2.3 + §2.4）
+
+Wrapper 生成 `static const` 描述符，暂未传入共享体。
+
+- [ ] 实现排序 key 生成逻辑（§2.3 递归命名规则：根模式 `__` 分隔，参数模式 `_` 分隔，泛型参数以 `T0`/`T1` 表示）
+- [ ] Wrapper 为泛型类型生成 `FengTypeDescriptor`，填充 `reified_generic_params`/`reified_field_offsets`/`reified_agg_deps`/`reified_type_deps`（按排序 key 字典序分配索引）
+- [ ] Wrapper 为独立泛型函数和 fit 泛型方法生成 `FengFunctionDescriptor`，填充 `reified_agg_deps`/`reified_type_deps`
+- [ ] 生成具体化 `FengAggregateDescriptor`（含 `reified_generic_params`，`managed_slots` 链式物化）
+- [ ] `make test` 全量回归通过
+
+### 6.7 共享体 ABI 变更（§2.5）
+
+Wrapper 传入描述符，共享体从描述符读取泛型参数和字段偏移。创建路径暂未修复。
+
+- [ ] 路径一（类型实例方法）：共享体移除 `_field_offsets`/`_K`/`_V` 参数，改从 `((FengManagedHeader *)_self)->desc` 获取 `reified_generic_params[i]`/`reified_field_offsets[i]`
+- [ ] 路径二（类型静态方法）：共享体移除 `_K`/`_V` 参数，新增 `_type_desc`（`FengTypeDescriptor*`），从 `_type_desc->reified_generic_params[i]` 获取
+- [ ] 路径三（独立泛型函数）：共享体新增 `_desc`（`FengFunctionDescriptor*`）参数，`_K`/`_V` 保持为独立函数参数
+- [ ] 路径四（fit 泛型方法）：共享体新增 `_desc`（`FengFunctionDescriptor*`）参数，类型级泛型参数从 `self->_hdr.desc` 获取
+- [ ] Wrapper 调用点同步更新：传入对应描述符，移除已废弃的参数
+- [ ] 含方法级泛型时：类型级泛型从描述符获取，仅方法级泛型以独立 `FengGenericParamDescriptor*` 参数传入
+- [ ] `make test` 全量回归通过
+
+### 6.8 修复创建路径（§2.6.1–§2.6.6）
+
+核心 bug 修复：使用具体化描述符替代 `sizeof(未特化 struct)`。
+
+- [ ] §2.6.1 数组创建：`feng_array_new_kinded()` 使用 `reified_agg_deps[i]->size` 和具体化描述符
+- [ ] §2.6.2 局部变量栈分配：VLA/alloca + `desc->size`，`feng_aggregate_default_init`
+- [ ] §2.6.3 数组元素写入：stride 使用 `reified_agg_deps[i]->size`
+- [ ] §2.6.4 数组元素读取/for-in：stride 使用 `reified_agg_deps[i]->size`
+- [ ] §2.6.5 Wrapper `_ret_buf`：按具体化类型大小分配返回值缓冲区
+- [ ] §2.6.6 托管对象创建：通过 `reified_type_deps[i]` 获取具体化 `FengTypeDescriptor`，`feng_obj_alloc(desc->size, desc)`
+- [ ] `make test` 全量回归通过
+
+### 6.9 端到端验证
+
+- [ ] `feng run examples/hello_world --keep-ir` 验证输出正确
+- [ ] 跨包泛型实例化场景验证（codegen 从导入符号的 `reifiable_agg_deps`/`reifiable_type_deps` 生成完整描述符树）
+- [ ] `make test` 全量回归通过
