@@ -290,13 +290,9 @@ static bool determine_dep_kind(const FengDecl *decl,
             }
             return true;
         case FENG_DECL_SPEC:
-            /* object-form / union-form spec → AGGREGATE；callable-form → 不记录
-             * （callable-form spec 是闭包指针，不需要具体化描述符）。 */
-            if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
-                return false;
-            }
-            *out_kind = FENG_REIFIABLE_DEP_KIND_AGGREGATE;
-            return true;
+            /* spec 是契约，不是可实例化的类型，运行时表示（存在容器）大小固定，
+             * 不随类型参数变化，无需具体化描述符。 */
+            return false;
         default:
             return false;
     }
