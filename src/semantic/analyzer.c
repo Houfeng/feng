@@ -22542,6 +22542,15 @@ finish:
     if (out_errors != NULL) {
         *out_errors = NULL;
     }
+    /* Post-pass: 收集泛型声明的待具体化依赖（§2.2.1）。
+     * 在 fixpoint 循环完成后、type cyclicity 计算前执行。 */
+    if (out_analysis != NULL && *out_analysis != NULL) {
+        if (!feng_semantic_collect_reifiable_deps(*out_analysis)) {
+            feng_semantic_analysis_free(*out_analysis);
+            *out_analysis = NULL;
+            return false;
+        }
+    }
     /* Phase 1B: post-pass that classifies user `type` decls into acyclic vs
      * potentially-cyclic via Tarjan SCC over the managed-reference graph.
      * Failure here is treated as fatal — codegen relies on the marker table

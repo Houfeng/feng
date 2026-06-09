@@ -836,6 +836,11 @@ const FengReifiableDepSet *feng_semantic_lookup_reifiable_dep_set(
     const FengSemanticAnalysis *analysis,
     const FengDecl *owner_decl);
 
+/* Post-pass：遍历所有本地模块中的泛型声明（泛型类型、独立泛型函数、
+ * fit 泛型方法），收集待具体化依赖到 analysis->reifiable_dep_sets 侧表。
+ * 在 fixpoint 循环完成后、type cyclicity 计算前调用。 */
+bool feng_semantic_collect_reifiable_deps(FengSemanticAnalysis *analysis);
+
 #ifdef __cplusplus
 }
 #endif
