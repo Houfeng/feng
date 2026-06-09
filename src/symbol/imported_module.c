@@ -10,6 +10,9 @@
 typedef struct SynthDecl {
     char *name_buf;  /* owned copy of the name string */
     FengDecl decl;   /* name slices point into name_buf */
+    const FengSymbolDeclView *symbol_view; /* borrowed: original symbol view */
+    FengTypeRef **reifiable_dep_refs;      /* owned: converted dep type refs */
+    size_t reifiable_dep_ref_count;
 } SynthDecl;
 
 /* One synthetic FengProgram holding the public decls of an external module. */
@@ -1236,8 +1239,15 @@ static void entry_free_partial(SynthModuleEntry *entry) {
 
     if (entry->prog != NULL) {
         for (index = 0U; index < entry->prog->decl_count; ++index) {
-            free_synthetic_decl_payload(&entry->prog->decls[index].decl);
-            free(entry->prog->decls[index].name_buf);
+            SynthDecl *sd = &entry->prog->decls[index];
+            size_t ri;
+
+            for (ri = 0U; ri < sd->reifiable_dep_ref_count; ++ri) {
+                free_synthetic_type_ref(sd->reifiable_dep_refs[ri]);
+            }
+            free(sd->reifiable_dep_refs);
+            free_synthetic_decl_payload(&sd->decl);
+            free(sd->name_buf);
         }
         free(entry->prog->path_buf);
         free(entry->prog->decls);
@@ -1333,6 +1343,7 @@ static const FengSemanticModule *cache_get_module(const void *user,
         if (!synthesize_decl_from_symbol(synth_decl, imp_mod->module, symbol_decl)) {
             goto fail;
         }
+        synth_decl->symbol_view = symbol_decl;
 
         entry.prog->decl_ptrs[entry.prog->decl_count] = &synth_decl->decl;
         ++entry.prog->decl_count;
@@ -1403,4 +1414,83 @@ FengSemanticImportedModuleQuery feng_symbol_imported_module_cache_as_query(
         query.get_module = cache_get_module;
     }
     return query;
+}
+
+/* Convert imported symbol-level reifiable deps into semantic-level dep sets
+ * so that codegen can query them uniformly via
+ * feng_semantic_lookup_reifiable_dep_set(). Must be called after semantic
+ * analysis completes and before codegen begins. */
+void feng_symbol_imported_module_cache_populate_reifiable_deps(
+    FengSymbolImportedModuleCache *cache,
+    FengSemanticAnalysis *analysis) {
+    size_t ei;
+
+    if (cache == NULL || analysis == NULL) {
+        return;
+    }
+    for (ei = 0U; ei < cache->entry_count; ++ei) {
+        SynthModuleEntry *entry = &cache->entries[ei];
+        size_t di;
+
+        if (entry->prog == NULL) {
+            continue;
+        }
+        for (di = 0U; di < entry->prog->decl_count; ++di) {
+            SynthDecl *sd = &entry->prog->decls[di];
+            const FengSymbolDeclView *sv = sd->symbol_view;
+            size_t total_deps;
+            size_t ri;
+            FengReifiableDepSet *dep_set;
+
+            if (sv == NULL) {
+                continue;
+            }
+            total_deps = sv->reifiable_agg_dep_count +
+                         sv->reifiable_type_dep_count;
+            if (total_deps == 0U) {
+                continue;
+            }
+
+            /* Allocate storage for converted FengTypeRef pointers. */
+            sd->reifiable_dep_refs = (FengTypeRef **)calloc(
+                total_deps, sizeof(FengTypeRef *));
+            if (sd->reifiable_dep_refs == NULL) {
+                continue;
+            }
+
+            dep_set = feng_semantic_get_or_create_reifiable_dep_set(
+                analysis, &sd->decl);
+            if (dep_set == NULL) {
+                free(sd->reifiable_dep_refs);
+                sd->reifiable_dep_refs = NULL;
+                continue;
+            }
+
+            /* Convert aggregate deps. */
+            for (ri = 0U; ri < sv->reifiable_agg_dep_count; ++ri) {
+                FengTypeRef *ref = synthesize_type_ref(
+                    sv->reifiable_agg_deps[ri]);
+                if (ref == NULL) {
+                    continue;
+                }
+                sd->reifiable_dep_refs[sd->reifiable_dep_ref_count] = ref;
+                sd->reifiable_dep_ref_count++;
+                feng_semantic_reifiable_dep_set_append(
+                    dep_set, FENG_REIFIABLE_DEP_KIND_AGGREGATE, ref);
+            }
+
+            /* Convert managed deps. */
+            for (ri = 0U; ri < sv->reifiable_type_dep_count; ++ri) {
+                FengTypeRef *ref = synthesize_type_ref(
+                    sv->reifiable_type_deps[ri]);
+                if (ref == NULL) {
+                    continue;
+                }
+                sd->reifiable_dep_refs[sd->reifiable_dep_ref_count] = ref;
+                sd->reifiable_dep_ref_count++;
+                feng_semantic_reifiable_dep_set_append(
+                    dep_set, FENG_REIFIABLE_DEP_KIND_MANAGED, ref);
+            }
+        }
+    }
 }

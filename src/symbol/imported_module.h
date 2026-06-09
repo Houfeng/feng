@@ -27,6 +27,13 @@ void feng_symbol_imported_module_cache_free(FengSymbolImportedModuleCache *cache
 FengSemanticImportedModuleQuery feng_symbol_imported_module_cache_as_query(
     FengSymbolImportedModuleCache *cache);
 
+/* Convert imported reifiable deps from symbol views into semantic dep sets
+ * so that codegen can query them uniformly. Call after semantic analysis
+ * succeeds and before codegen begins. Safe to call with NULL arguments. */
+void feng_symbol_imported_module_cache_populate_reifiable_deps(
+    FengSymbolImportedModuleCache *cache,
+    FengSemanticAnalysis *analysis);
+
 #ifdef __cplusplus
 }
 #endif

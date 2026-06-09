@@ -703,11 +703,11 @@ make test
 
 Wrapper 生成 `static const` 描述符，暂未传入共享体。
 
-- [ ] 实现排序 key 生成逻辑（§2.3 递归命名规则：根模式 `__` 分隔，参数模式 `_` 分隔，泛型参数以 `T0`/`T1` 表示）
-- [ ] Wrapper 为泛型类型生成 `FengTypeDescriptor`，填充 `reified_generic_params`/`reified_field_offsets`/`reified_agg_deps`/`reified_type_deps`（按排序 key 字典序分配索引）
-- [ ] Wrapper 为独立泛型函数和 fit 泛型方法生成 `FengFunctionDescriptor`，填充 `reified_agg_deps`/`reified_type_deps`
-- [ ] 生成具体化 `FengAggregateDescriptor`（含 `reified_generic_params`，`managed_slots` 链式物化）
-- [ ] `make test` 全量回归通过
+- [x] 实现排序 key 生成逻辑（§2.3 递归命名规则：根模式 `__` 分隔，参数模式 `_` 分隔，泛型参数以 `T0`/`T1` 表示）
+- [x] 为泛型类型实例生成 `FengTypeDescriptor`，填充 `reified_generic_params`/`reified_field_offsets`/`reified_agg_deps`/`reified_type_deps`（按排序 key 字典序分配索引）
+- [x] 为独立泛型函数和 fit 泛型方法生成 `FengFunctionDescriptor`，填充 `reified_agg_deps`/`reified_type_deps`
+- [x] 生成具体化 `FengAggregateDescriptor`（含 `reified_generic_params`，`managed_slots` 链式物化）
+- [x] `make test` 全量回归通过
 
 ### 6.7 共享体 ABI 变更（§2.5）
 
