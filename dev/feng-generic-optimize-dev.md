@@ -65,9 +65,9 @@ fit 方法本质上是类型外部函数（类似独立函数的语法糖）。�
 
 路径一、二中，类型级泛型参数收归到描述符的 `reified_generic_params` 中，共享体不再接收 `_K`、`_V` 函数参数；路径三中，独立泛型函数的泛型参数仍以 `FengGenericParamDescriptor*` 函数参数传入（调用点确定，无法收归）；路径四中，fit 方法的类型级泛型参数从 `self->_hdr.desc->reified_generic_params` 获取（与路径一一致），函数级泛型参数和方法体内的具体化依赖通过 `FengFunctionDescriptor`（`_desc`）传入（与路径三一致）。方法级泛型参数（如 `Container<K>.map<U>()` 中的 `U`）同样以 `FengGenericParamDescriptor*` 函数参数传入，由 Wrapper 在调用点生成。
 
-`FengTypeDescriptor.reified_agg_deps[]` 和 `reified_type_deps[]` 的索引在整个类型范围内**全局稳定**：codegen 收集该类型所有方法（实例方法 + 静态方法）中全部依赖（成员字段 + 各方法体局部依赖），按依赖排序 key（见 §2.2）字典序升序分配全局唯一索引，所有方法共享同一 `FengTypeDescriptor`，各方法按编译期确定的固定索引访问各自所需的描述符。含方法级泛型的方法，其涉及方法级类型参数的依赖使用独立索引（在类型级依赖之后追加）。
+`FengTypeDescriptor.reified_agg_deps[]` 和 `reified_type_deps[]` 的索引在整个类型范围内**全局稳定**：codegen 收集该类型所有方法（实例方法 + 静态方法）中全部依赖（成员字段 + 各方法体局部依赖），按依赖排序 key（见 §2.3）字典序升序分配全局唯一索引，所有方法共享同一 `FengTypeDescriptor`，各方法按编译期确定的固定索引访问各自所需的描述符。含方法级泛型的方法，其涉及方法级类型参数的依赖使用独立索引（在类型级依赖之后追加）。
 
-新增 `FengFunctionDescriptor` 描述独立泛型函数的具体化依赖（详见 §2.2）。生命周期三大类不变。Aggregate walker 不变。不新增 runtime 函数。
+新增 `FengFunctionDescriptor` 描述独立泛型函数的具体化依赖（详见 §2.3）。生命周期三大类不变。Aggregate walker 不变。不新增 runtime 函数。
 
 **核心处理流程**
 
@@ -82,7 +82,103 @@ fit 方法本质上是类型外部函数（类似独立函数的语法糖）。�
 5. 符号表导出，将本包各泛型类型、独立泛型函数、fit 泛方法的具体化依赖导出到符号表（泛型参数目前应该是有的）
 6. 发码阶段，根据语义阶段收集到的具体化依赖，生成具化的描述符 `FengTypeDescriptor`、`FengFunctionDescriptor`，如果有依赖则级连生成具化的描述符
 
-### 2.2 描述符结构
+### 2.2 语义阶段具体化依赖与符号表导出
+
+语义阶段为每个泛型声明（泛型类型、独立泛型函数、fit 泛型方法）收集待具体化依赖，存入 `FengSemanticAnalysis` 的侧表。符号表导出阶段将依赖信息填入 `FengSymbolDeclView`，再由 ft 序列化写出（ft 二进制格式详见 §2.8）。
+
+#### 2.2.1 语义阶段数据结构
+
+新增结构定义于 `src/semantic/semantic.h`：
+
+```c
+/* 具体化依赖的分类：aggregate（tuple/struct by-value）或 managed（type 托管对象）。 */
+typedef enum FengReifiedDepKind {
+    FENG_REIFIED_DEP_KIND_AGGREGATE = 0,
+    FENG_REIFIED_DEP_KIND_MANAGED
+} FengReifiedDepKind;
+
+/* 单条具体化依赖记录。
+ * type_ref 指向 AST 中的泛型类型引用（如 Foo<int,V>），
+ * 其类型参数可含 TYPE_REF_TYPE_PARAM 节点（引用 owner 的泛型参数）。 */
+typedef struct FengReifiedDep {
+    FengReifiedDepKind kind;
+    const FengTypeRef *type_ref;
+} FengReifiedDep;
+
+/* 一个泛型声明的全部具体化依赖。
+ * owner_decl 标识所属泛型声明：
+ *   - 泛型类型：FENG_DECL_TYPE（聚合该类型所有方法的依赖）
+ *   - 独立泛型函数：FENG_DECL_FUNCTION
+ *   - fit 泛型方法：fit 下的方法声明
+ * deps 数组按收集顺序追加，同一类型引用不重复记录。 */
+typedef struct FengReifiedDepSet {
+    const FengDecl *owner_decl;
+    FengReifiedDep *deps;
+    size_t dep_count;
+    size_t dep_capacity;
+} FengReifiedDepSet;
+```
+
+`FengSemanticAnalysis` 新增侧表：
+
+```c
+typedef struct FengSemanticAnalysis {
+    /* ... 已有字段不变 ... */
+    FengReifiedDepSet *reified_dep_sets;
+    size_t reified_dep_set_count;
+    size_t reified_dep_set_capacity;
+} FengSemanticAnalysis;
+```
+
+配套 API（声明于 `src/semantic/semantic.h`，实现于新文件 `src/semantic/reified_deps.c`）：
+
+```c
+/* 获取或创建 owner_decl 的具体化依赖集。 */
+FengReifiedDepSet *feng_semantic_get_or_create_reified_dep_set(
+    FengSemanticAnalysis *analysis,
+    const FengDecl *owner_decl);
+
+/* 向依赖集追加一条具体化依赖。 */
+bool feng_semantic_reified_dep_set_append(
+    FengReifiedDepSet *dep_set,
+    FengReifiedDepKind kind,
+    const FengTypeRef *type_ref);
+
+/* 查找 owner_decl 的具体化依赖集，不存在时返回 NULL。 */
+const FengReifiedDepSet *feng_semantic_lookup_reified_dep_set(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *owner_decl);
+```
+
+收集规则（对应 §2.1 核心处理流程第 1 步）：
+
+| 泛型声明类型 | 收集来源 |
+|------|------|
+| 泛型类型 | 成员字段类型、方法参数及返回值类型、方法体内局部使用的泛型类型、成员初始化表达式中的泛型类型、静态方法体内的泛型类型 |
+| 独立泛型函数 | 函数参数及返回值类型、函数体内局部使用的泛型类型 |
+| fit 泛型方法 | 与独立泛型函数一致：方法参数及返回值类型、方法体内局部使用的泛型类型 |
+
+**收集约束**：仅收集**含当前声明的泛型参数**的泛型类型引用——即 `type_ref` 的类型参数树中至少存在一个 `TYPE_REF_TYPE_PARAM` 引用当前声明的泛型参数。已完全具体化的类型引用（如 `Foo<int,string>`）无需运行时具体化，不记录。
+
+#### 2.2.2 符号表导出结构
+
+`FengSymbolDeclView`（`src/symbol/internal.h`）新增字段，承载从语义阶段传递到符号表导出的具体化依赖信息：
+
+```c
+struct FengSymbolDeclView {
+    /* ... 已有字段不变 ... */
+    FengSymbolTypeView **reified_agg_deps;    /* aggregate 类型依赖列表 */
+    size_t reified_agg_dep_count;
+    FengSymbolTypeView **reified_type_deps;   /* managed 类型依赖列表 */
+    size_t reified_type_dep_count;
+};
+```
+
+`export.c` 从 `FengSemanticAnalysis` 的 `FengReifiedDepSet` 读取依赖，按 `kind` 分类填入 `reified_agg_deps`（`FENG_REIFIED_DEP_KIND_AGGREGATE`）和 `reified_type_deps`（`FENG_REIFIED_DEP_KIND_MANAGED`）。每个 `FengSymbolTypeView*` 为 `FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC` 类型视图，完整保留基础类型名和类型参数信息（含 `TYPE_PARAM_REF` 引用）。
+
+`ft_write.c` 将每条依赖序列化为 ATTRS 节中的 `FengSymbolFtAttrRecord`（attr kind 定义见 §2.8）；`ft_read.c` 反序列化回 `FengSymbolDeclView` 字段。ft 二进制格式详见 §2.8。
+
+### 2.3 描述符结构
 
 #### `FengFunctionDescriptor`（新增）
 
@@ -212,15 +308,15 @@ typedef struct FengTypeDescriptor {
 
 三者按字典序：`Bar__T1` < `Foo__int__T0` < `Xyz__Foo_int_T0__Bar_T1`，分别占 `reified_agg_deps[0]`、`reified_agg_deps[1]`、`reified_agg_deps[2]`。
 
-### 2.3 Wrapper 静态生成具体化描述符
+### 2.4 Wrapper 静态生成具体化描述符
 
 Wrapper 在编译时按以下步骤生成：
 
 1. 遍历共享体内所有含泛型字段的 aggregate/managed 类型（成员字段 + 方法体局部使用），代入具体类型参数，为每个类型生成具体化描述符
 2. 生成某 aggregate 描述符的 `managed_slots` 时，若某字段的类型仍含未特化泛型参数，则触发链式物化：递归对该类型执行步骤 1，直到所有字段均为非泛型叶子类型（类型图无环，DFS 必然终止）；内层描述符直接作为外层 `managed_slots` 中对应 slot 的 `nested` 指针（不经过 `reified_agg_deps`/`reified_type_deps`）
-3. 按依赖排序 key（见 §2.2）字典序升序为所有依赖分配**全局稳定索引**，填入 `reified_agg_deps[]` / `reified_type_deps[]`
+3. 按依赖排序 key（见 §2.3）字典序升序为所有依赖分配**全局稳定索引**，填入 `reified_agg_deps[]` / `reified_type_deps[]`
 
-上述步骤均为**编译期逻辑**：静态描述符本身及描述符间的依赖关系，在同包内依赖 AST 生成，跨包依赖符号表（ft，见 §2.7）生成；生成结果以 `static const` 形式写入目标文件，运行时只读取，不动态构造。
+上述步骤均为**编译期逻辑**：静态描述符本身及描述符间的依赖关系，在同包内依赖 AST 生成，跨包依赖符号表（ft，见 §2.8）生成；生成结果以 `static const` 形式写入目标文件，运行时只读取，不动态构造。
 
 **链式物化无需特殊检测**：触发条件就是"生成某个 `FENG_SLOT_NESTED_AGGREGATE` 的 `nested` 指针时，该字段的类型仍含泛型参数"，codegen 在生成每个字段 slot 时递归走该逻辑即可。
 
@@ -366,7 +462,7 @@ const FengAggregateDescriptor *_boo_desc = _td->reified_agg_deps[0];
 /* _U->kind / _U->descriptor 等访问方式与原有代码一致 */
 ```
 
-### 2.4 共享体 ABI 变更
+### 2.5 共享体 ABI 变更
 
 类型级泛型参数（`_K`、`_V` 等）收归到 `FengTypeDescriptor` 的 `reified_generic_params` 中，不再作为类型方法的函数参数。独立泛型函数的泛型参数和方法级泛型参数仍以函数参数传入。字段偏移（`_field_offsets`）和具体化依赖（`reified_agg_deps`/`reified_type_deps`）收归到描述符中。独立泛型函数新增 `_desc`（`FengFunctionDescriptor*`）参数；类型静态方法新增 `_type_desc`（`FengTypeDescriptor*`）参数；类型实例方法不新增参数（通过 `self->_hdr.desc` 获取），并移除原有 `_field_offsets`、`_K`、`_V` 参数。
 
@@ -427,7 +523,7 @@ void Container_make__G__K__M__U(const FengTypeDescriptor *_type_desc,
                                  const FengGenericParamDescriptor *_U, ...)
 ```
 
-### 2.5 共享体内使用具体化描述符
+### 2.6 共享体内使用具体化描述符
 
 以下各路径中，`reified_generic_params` / `reified_agg_deps` / `reified_type_deps` 的索引 `i` 均由 codegen 在**编译期**确定（泛型参数按声明顺序，依赖按排序 key 字典序），不是运行时计算的值。描述符来源因路径而异：
 
@@ -437,7 +533,7 @@ void Container_make__G__K__M__U(const FengTypeDescriptor *_type_desc,
 
 取到具体化描述符后，后续操作完全一致。以下示例以类型实例方法（`_td`）为例。
 
-#### 2.5.1 修复数组创建（~L15448）
+#### 2.6.1 修复数组创建（~L15448）
 
 ```c
 const FengAggregateDescriptor *_ed = _td->reified_agg_deps[i];
@@ -445,7 +541,7 @@ FengArray *_arr = feng_array_new_kinded(
     FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, _ed, NULL, _ed->size, _n);
 ```
 
-#### 2.5.2 修复局部变量（~L9667）
+#### 2.6.2 修复局部变量（~L9667）
 
 ```c
 const FengAggregateDescriptor *_ed = _td->reified_agg_deps[i];
@@ -454,14 +550,14 @@ memset(_mem, 0, _ed->size);
 feng_aggregate_default_init(_mem, _ed);
 ```
 
-#### 2.5.3 修复数组元素写入（~L18376）
+#### 2.6.3 修复数组元素写入（~L18376）
 
 ```c
 void *_slot = (char *)feng_array_data(_arr) + _idx * _td->reified_agg_deps[i]->size;
 feng_aggregate_assign(_slot, _src, _td->reified_agg_deps[i]);
 ```
 
-#### 2.5.4 修复数组元素读取 / for-in（~L20526）
+#### 2.6.4 修复数组元素读取 / for-in（~L20526）
 
 ```c
 void *_elem = (char *)feng_array_data(_arr) + _fidx * _td->reified_agg_deps[i]->size;
@@ -470,11 +566,11 @@ feng_aggregate_assign(_iter_mem, _elem, _td->reified_agg_deps[i]);
 
 取到描述符后后续操作完全一致，无特判。**tuple 与其他 by-value aggregate 均走同一路径，无需额外处理**；tuple 是否需要生命周期管理由描述符的 `managed_slots` 决定，walker 自动分派。
 
-#### 2.5.5 修复 Wrapper 返回值缓冲区（~L28443）
+#### 2.6.5 修复 Wrapper 返回值缓冲区（~L28443）
 
 字段偏移在未特化和具体化 struct 间一致（padding 机制保证）。直接传 `&ret_tmp`（具体化类型，大小正确），去掉原先按未特化大小分配的临时缓冲区。
 
-#### 2.5.6 修复托管对象创建
+#### 2.6.6 修复托管对象创建
 
 需创建某个泛型托管类型新实例时，通过 `reified_type_deps[i]` 获取其具体化 `FengTypeDescriptor`：
 
@@ -483,7 +579,7 @@ const FengTypeDescriptor *_node_desc = _td->reified_type_deps[i];
 FengObject *_obj = feng_obj_alloc(_node_desc->size, _node_desc);
 ```
 
-### 2.7 跨包泛型依赖信息（ft 扩展）
+### 2.8 跨包泛型依赖信息（ft 扩展）
 
 同包内 Wrapper 可直接从 AST 语义信息收集目标 type/func 的依赖列表。跨包时只有 ft，需在 ft 中记录每个泛型 type/func 的依赖元数据，供调用方 codegen 读取并按排序 key 分配索引。
 
@@ -512,11 +608,11 @@ typedef enum FengSymbolAttrKind {
 | `value1` | 0（保留） |
 | `value2` | 0（保留） |
 
-排序 key 由读取方从 `TYPS` 记录按 §2.2 规则推导，不存 ft，保持 ft 紧凑。
+排序 key 由读取方从 `TYPS` 记录按 §2.3 规则推导，不存 ft，保持 ft 紧凑。
 
 每个泛型依赖对应一条 attr 记录，多个依赖对应多条记录，Wrapper 读取后按 sort key 字典序排列，分配 `reified_agg_deps[]`/`reified_type_deps[]` 索引。
 
-### 2.6 不新增 Runtime 函数
+### 2.7 不新增 Runtime 函数
 
 本方案不引入任何新的 runtime 函数和 runtime 源文件：
 
@@ -525,7 +621,7 @@ typedef enum FengSymbolAttrKind {
 - `feng_generic_desc_resolve` / 全局缓存：不需要（全部静态，`.rodata`）
 - `feng_generic_array_new`：不需要（直接调用 `feng_array_new_kinded`）
 
-新增一个结构体 `FengFunctionDescriptor`（详见 §2.2），用于独立泛型函数的具体化依赖传递。扩展现有 `FengTypeDescriptor`（新增 `reified_generic_params`/`reified_field_offsets`/`reified_agg_deps`/`reified_type_deps` 四组字段）和 `FengAggregateDescriptor`（新增 `reified_generic_params` 一组字段，以及保留字段 `reified_field_offsets`/`reified_agg_deps`/`reified_type_deps`，当前恒为 0/NULL）。
+新增一个结构体 `FengFunctionDescriptor`（详见 §2.3），用于独立泛型函数的具体化依赖传递。扩展现有 `FengTypeDescriptor`（新增 `reified_generic_params`/`reified_field_offsets`/`reified_agg_deps`/`reified_type_deps` 四组字段）和 `FengAggregateDescriptor`（新增 `reified_generic_params` 一组字段，以及保留字段 `reified_field_offsets`/`reified_agg_deps`/`reified_type_deps`，当前恒为 0/NULL）。
 
 ## 3. 不变量
 
@@ -540,7 +636,7 @@ typedef enum FengSymbolAttrKind {
 | 文件 | 变更 |
 |------|------|
 | `src/runtime/feng_runtime.h` | 新增 `FengFunctionDescriptor` 结构体（独立泛型函数描述符）；`FengTypeDescriptor` 新增 `reified_generic_params_count`/`reified_generic_params`/`reified_field_offset_count`/`reified_field_offsets`/`reified_agg_deps_count`/`reified_agg_deps`/`reified_type_deps_count`/`reified_type_deps` 八个字段；`FengAggregateDescriptor` 新增 `reified_generic_params_count`/`reified_generic_params` 两个字段和 `reified_field_offset_count`/`reified_field_offsets`/`reified_agg_deps_count`/`reified_agg_deps`/`reified_type_deps_count`/`reified_type_deps` 六个保留字段（当前恒为 0/NULL） |
-| `src/codegen/codegen.c` | Wrapper 生成具体化描述符树（`FengFunctionDescriptor`/`FengTypeDescriptor`/`FengAggregateDescriptor` 静态实例含 `reified_generic_params`/`reified_agg_deps`/`reified_type_deps`）；实例方法共享体移除 `_field_offsets`、`_K`、`_V` 参数改从 `self->_hdr.desc` 获取；静态方法共享体移除 `_K`、`_V` 参数新增 `_type_desc`（`FengTypeDescriptor*`）参数；独立函数共享体新增 `_desc`（`FengFunctionDescriptor*`）参数（泛型参数仍为函数参数）；修复 6 个创建路径（§2.5.1–§2.5.6）；读取 ft ATTRS 中 `GENERIC_AGG_DEP`/`GENERIC_TYPE_DEP` 支持跨包特化 |
+| `src/codegen/codegen.c` | Wrapper 生成具体化描述符树（`FengFunctionDescriptor`/`FengTypeDescriptor`/`FengAggregateDescriptor` 静态实例含 `reified_generic_params`/`reified_agg_deps`/`reified_type_deps`）；实例方法共享体移除 `_field_offsets`、`_K`、`_V` 参数改从 `self->_hdr.desc` 获取；静态方法共享体移除 `_K`、`_V` 参数新增 `_type_desc`（`FengTypeDescriptor*`）参数；独立函数共享体新增 `_desc`（`FengFunctionDescriptor*`）参数（泛型参数仍为函数参数）；修复 6 个创建路径（§2.6.1–§2.6.6）；读取 ft ATTRS 中 `GENERIC_AGG_DEP`/`GENERIC_TYPE_DEP` 支持跨包特化 |
 | `src/symbol/internal.h` | `FengSymbolAttrKind` 新增 `FENG_SYMBOL_ATTR_GENERIC_AGG_DEP = 9`、`FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP = 10` |
 | `src/symbol/ft_write.c` | 写出泛型 type/func 的 aggregate 和 managed 依赖 attr 记录 |
 | `src/symbol/ft_read.c` | 解析新 attr kind，填入对应符号的依赖列表 |
@@ -584,7 +680,7 @@ feng test
 ### 6.4 Codegen——Wrapper 生成具体化描述符树
 
 - [ ] 实现依赖收集：遍历泛型 type 所有方法（实例+静态）收集 aggregate/managed 依赖
-- [ ] 实现排序 key 生成逻辑（§2.2 规则）
+- [ ] 实现排序 key 生成逻辑（§2.3 规则）
 - [ ] 实现全局稳定索引分配（按排序 key 字典序升序）
 - [ ] Wrapper 生成具体化 `FengAggregateDescriptor`（含 `managed_slots` 链式物化）
 - [ ] Wrapper 生成具体化 `FengTypeDescriptor`（含 `reified_generic_params`/`reified_field_offsets`/`reified_agg_deps`/`reified_type_deps`）
@@ -593,12 +689,12 @@ feng test
 
 ### 6.5 Codegen——修复六个创建路径
 
-- [ ] §2.5.1 修复数组创建：使用 `reified_agg_deps[i]->size` 替代 `sizeof(未特化struct)`
-- [ ] §2.5.2 修复局部变量栈分配：VLA 或 alloca + `desc->size`
-- [ ] §2.5.3 修复数组元素写入：stride 使用具体化描述符大小
-- [ ] §2.5.4 修复数组元素读取/for-in：stride 使用具体化描述符大小
-- [ ] §2.5.5 修复 Wrapper `_ret_buf`：按具体化类型大小分配
-- [ ] §2.5.6 修复托管对象创建：通过 `reified_type_deps[i]` 获取具体化 `FengTypeDescriptor`
+- [ ] §2.6.1 修复数组创建：使用 `reified_agg_deps[i]->size` 替代 `sizeof(未特化struct)`
+- [ ] §2.6.2 修复局部变量栈分配：VLA 或 alloca + `desc->size`
+- [ ] §2.6.3 修复数组元素写入：stride 使用具体化描述符大小
+- [ ] §2.6.4 修复数组元素读取/for-in：stride 使用具体化描述符大小
+- [ ] §2.6.5 修复 Wrapper `_ret_buf`：按具体化类型大小分配
+- [ ] §2.6.6 修复托管对象创建：通过 `reified_type_deps[i]` 获取具体化 `FengTypeDescriptor`
 - [ ] 编译验证：`feng test` 全量回归通过
 
 ### 6.6 跨包特化支持
