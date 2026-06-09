@@ -8770,13 +8770,17 @@ static bool cg_append_union_member_slot_descriptor(CG *cg,
     return false;
 }
 
-/* Forward declarations for spec value-struct + witness-struct, plus the
- * value-struct definition. The witness-struct definition is emitted later in
- * cg_emit_user_spec_definition (which needs every method's CType resolved). */
+static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out);
+
+/* Forward declarations for spec value-struct + witness-struct body, plus the
+ * value-struct definition. The witness-struct body is emitted here (not
+ * deferred to cg_emit_user_spec_definition) so it precedes witness-instance
+ * tentative definitions in the headers buffer. */
 static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
     if (s->form == FENG_SPEC_FORM_CALLABLE) {
         cg_emit_callable_abi_function_pointer_typedef(&cg->headers, s);
         buf_append_fmt(&cg->headers, "struct %s;\n", s->c_closure_struct_name);
+        cg_emit_witness_struct_body(cg, s, &cg->headers);
         return;
     }
     if (s->form == FENG_SPEC_FORM_UNION) {
@@ -8807,9 +8811,10 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
             s->c_aggregate_desc_name);
         return;
     }
-    /* Witness struct is forward-declared here so the value struct (whose
-     * `witness` field points at it) can be defined immediately. */
-    buf_append_fmt(&cg->headers, "struct %s;\n", s->c_witness_struct_name);
+    /* Witness struct body is emitted here (not just forward-declared) so
+     * it precedes any witness-instance tentative definitions that appear
+     * later in headers during type-descriptor generation. */
+    cg_emit_witness_struct_body(cg, s, &cg->headers);
     buf_append_fmt(&cg->headers,
         "struct %s { void *subject; const struct %s *witness; };\n",
         s->c_value_struct_name, s->c_witness_struct_name);
@@ -8818,11 +8823,69 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
         s->c_aggregate_desc_name);
 }
 
-/* Emit the witness struct body. Method members get a single function-pointer
- * slot; field members get a getter slot and (for `var`) a setter slot. The
- * declaration order of slots matches the spec source so codegen iteration
- * and debugger inspection stay aligned. If a spec has no slots at all an
- * empty struct would be invalid C — emit a `_padding` byte. */
+/* Emit the witness struct body to `out`. Method members get a single
+ * function-pointer slot; field members get a getter slot and (for `var`)
+ * a setter slot. The declaration order of slots matches the spec source
+ * so codegen iteration and debugger inspection stay aligned. If a spec
+ * has no slots at all an empty struct would be invalid C — emit a
+ * `_padding` byte.
+ *
+ * Called from cg_emit_user_spec_forward so the complete struct appears
+ * in the headers buffer before any witness-instance tentative definitions
+ * (which reference the struct type). */
+static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
+    (void)cg;
+    if (s->form == FENG_SPEC_FORM_CALLABLE) {
+        buf_append_fmt(out, "struct %s {\n    void (*invoke)(const void *_callee",
+                       s->c_witness_struct_name);
+        for (size_t i = 0; i < s->callable_param_count; ++i) {
+            buf_append_cstr(out, ", const void *");
+        }
+        buf_append_cstr(out, ", void *_out);\n};\n\n");
+        return;
+    }
+    buf_append_fmt(out, "struct %s {\n", s->c_witness_struct_name);
+    size_t emitted = 0;
+    for (size_t i = 0; i < s->member_count; i++) {
+        const UserSpecMember *sm = &s->members[i];
+        if (sm->kind == USM_KIND_METHOD) {
+            buf_append_cstr(out, "    ");
+            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                buf_append_fmt(out, "void (*%s)(void *_subject", sm->c_field_name);
+            } else {
+                cg_emit_c_type(out, sm->type);
+                buf_append_fmt(out, " (*%s)(void *_subject", sm->c_field_name);
+            }
+            for (size_t pi = 0; pi < sm->param_count; pi++) {
+                buf_append_cstr(out, ", ");
+                cg_emit_c_type(out, sm->param_types[pi]);
+            }
+            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                buf_append_cstr(out, ", void *_out");
+            }
+            buf_append_cstr(out, ");\n");
+            emitted++;
+        } else if (sm->kind == USM_KIND_FIELD) {
+            buf_append_cstr(out, "    ");
+            cg_emit_c_type(out, sm->type);
+            buf_append_fmt(out, " (*get_%s)(void *_subject);\n", sm->c_field_name);
+            emitted++;
+            if (sm->is_var) {
+                buf_append_cstr(out, "    void (*set_");
+                buf_append_cstr(out, sm->c_field_name);
+                buf_append_cstr(out, ")(void *_subject, ");
+                cg_emit_c_type(out, sm->type);
+                buf_append_cstr(out, " value);\n");
+                emitted++;
+            }
+        }
+    }
+    if (emitted == 0) {
+        buf_append_cstr(out, "    char _padding;\n");
+    }
+    buf_append_cstr(out, "};\n\n");
+}
+
 static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     Buf *td = &cg->type_defs;
     if (s->form == FENG_SPEC_FORM_CALLABLE) {
@@ -8836,12 +8899,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         }
         buf_append_cstr(td, ");\n};\n\n");
 
-        buf_append_fmt(td, "struct %s {\n    void (*invoke)(const void *_callee",
-                       s->c_witness_struct_name);
-        for (size_t i = 0; i < s->callable_param_count; ++i) {
-            buf_append_cstr(td, ", const void *");
-        }
-        buf_append_cstr(td, ", void *_out);\n};\n\n");
+        /* Witness struct body already emitted in cg_emit_user_spec_forward. */
 
         buf_append_fmt(td,
             "static void %s__release_children(void *_self) {\n"
@@ -9026,50 +9084,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             s->c_aggregate_slots_name);
         return;
     }
-    buf_append_fmt(td, "struct %s {\n", s->c_witness_struct_name);
-    size_t emitted = 0;
-    for (size_t i = 0; i < s->member_count; i++) {
-        const UserSpecMember *sm = &s->members[i];
-        if (sm->kind == USM_KIND_METHOD) {
-            buf_append_cstr(td, "    ");
-            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
-                buf_append_fmt(td, "void (*%s)(void *_subject", sm->c_field_name);
-            } else {
-                cg_emit_c_type(td, sm->type);
-                buf_append_fmt(td, " (*%s)(void *_subject", sm->c_field_name);
-            }
-            for (size_t pi = 0; pi < sm->param_count; pi++) {
-                buf_append_cstr(td, ", ");
-                cg_emit_c_type(td, sm->param_types[pi]);
-            }
-            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
-                buf_append_cstr(td, ", void *_out");
-            }
-            buf_append_cstr(td, ");\n");
-            emitted++;
-        } else if (sm->kind == USM_KIND_FIELD) {
-            /* Getter — borrowed return per dev/feng-spec-codegen-pending.md
-             * §5.3 (witness thunks pass values borrowed). */
-            buf_append_cstr(td, "    ");
-            cg_emit_c_type(td, sm->type);
-            buf_append_fmt(td, " (*get_%s)(void *_subject);\n", sm->c_field_name);
-            emitted++;
-            if (sm->is_var) {
-                /* Setter — stores via direct assignment / feng_assign /
-                 * feng_aggregate_assign depending on the field value model. */
-                buf_append_cstr(td, "    void (*set_");
-                buf_append_cstr(td, sm->c_field_name);
-                buf_append_cstr(td, ")(void *_subject, ");
-                cg_emit_c_type(td, sm->type);
-                buf_append_cstr(td, " value);\n");
-                emitted++;
-            }
-        }
-    }
-    if (emitted == 0) {
-        buf_append_cstr(td, "    char _padding;\n");
-    }
-    buf_append_cstr(td, "};\n\n");
+    /* Witness struct body already emitted in cg_emit_user_spec_forward. */
 
     if (s->generic_context_type_param_count > 0U) {
         return;
@@ -30764,7 +30779,6 @@ static char *cg_finalize(CG *cg) {
         "\n"
         "#if defined(__clang__)\n"
         "#pragma clang diagnostic ignored \"-Wbuiltin-requires-header\"\n"
-        "#pragma clang diagnostic ignored \"-Wtentative-definition-incomplete-type\"\n"
         "#endif\n"
         "\n"
         "#if defined(_WIN32)\n"
