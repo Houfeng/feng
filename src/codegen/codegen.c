@@ -1265,6 +1265,14 @@ typedef struct CG {
     size_t           expr_narrowing_capacity;
 } CG;
 
+/* 判断元组类型是否依赖未特化泛型参数（即共享体中的布局不可靠）。 */
+static bool cg_tuple_needs_reified_layout(const CG *cg, const CGType *type) {
+    return cg_type_is_tuple_user(type) &&
+           type->user != NULL &&
+           type->user->generic_context_type_param_count > 0U &&
+           (cg->in_generic_type_method || cg->in_generic_fn);
+}
+
 /* Forward decls. */
 static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fallback,
                             CGType **out_type);
@@ -9536,7 +9544,9 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
                                             const char *tuple_expr,
                                             const UserField *field,
                                             ExprResult *value,
-                                            FengToken blame) {
+                                            FengToken blame,
+                                            const char *rad_desc_expr,
+                                            size_t field_index) {
     if (cg == NULL || tuple_expr == NULL || field == NULL || value == NULL) {
         return false;
     }
@@ -9569,40 +9579,78 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
             return cg_fail(cg, blame, "codegen: out of memory");
         }
 
-        buf_append_fmt(cg->cur_body,
-                       "    void *%s = (void *)&%s.%s;\n"
-                       "    const void *%s = %s;\n"
-                       "    switch (%s->kind) {\n"
-                       "        case FENG_VALUE_TRIVIAL:\n"
-                       "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
-                       "            break;\n"
-                       "        case FENG_VALUE_MANAGED_POINTER: {\n"
-                       "            void *_new_value = *(void *const *)%s;\n"
-                       "            if (!%s) {\n"
-                       "                feng_retain(_new_value);\n"
-                       "            }\n"
-                       "            *(void **)%s = _new_value;\n"
-                       "            break;\n"
-                       "        }\n"
-                       "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-                       "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
-                       "            break;\n"
-                       "    }\n",
-                       slot_tmp,
-                       tuple_expr,
-                       field->c_name,
-                       src_tmp,
-                       value->c_expr,
-                       desc,
-                       slot_tmp,
-                       src_tmp,
-                       desc,
-                       src_tmp,
-                       value->owns_ref ? "true" : "false",
-                       slot_tmp,
-                       slot_tmp,
-                       src_tmp,
-                       desc);
+        if (rad_desc_expr != NULL) {
+            buf_append_fmt(cg->cur_body,
+                           "    void *%s = (void *)((char *)%s + %s->reified_field_offsets[%zu]);\n"
+                           "    const void *%s = %s;\n"
+                           "    switch (%s->kind) {\n"
+                           "        case FENG_VALUE_TRIVIAL:\n"
+                           "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
+                           "            break;\n"
+                           "        case FENG_VALUE_MANAGED_POINTER: {\n"
+                           "            void *_new_value = *(void *const *)%s;\n"
+                           "            if (!%s) {\n"
+                           "                feng_retain(_new_value);\n"
+                           "            }\n"
+                           "            *(void **)%s = _new_value;\n"
+                           "            break;\n"
+                           "        }\n"
+                           "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+                           "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
+                           "            break;\n"
+                           "    }\n",
+                           slot_tmp,
+                           tuple_expr,
+                           rad_desc_expr,
+                           field_index,
+                           src_tmp,
+                           value->c_expr,
+                           desc,
+                           slot_tmp,
+                           src_tmp,
+                           desc,
+                           src_tmp,
+                           value->owns_ref ? "true" : "false",
+                           slot_tmp,
+                           slot_tmp,
+                           src_tmp,
+                           desc);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "    void *%s = (void *)&%s.%s;\n"
+                           "    const void *%s = %s;\n"
+                           "    switch (%s->kind) {\n"
+                           "        case FENG_VALUE_TRIVIAL:\n"
+                           "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
+                           "            break;\n"
+                           "        case FENG_VALUE_MANAGED_POINTER: {\n"
+                           "            void *_new_value = *(void *const *)%s;\n"
+                           "            if (!%s) {\n"
+                           "                feng_retain(_new_value);\n"
+                           "            }\n"
+                           "            *(void **)%s = _new_value;\n"
+                           "            break;\n"
+                           "        }\n"
+                           "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+                           "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
+                           "            break;\n"
+                           "    }\n",
+                           slot_tmp,
+                           tuple_expr,
+                           field->c_name,
+                           src_tmp,
+                           value->c_expr,
+                           desc,
+                           slot_tmp,
+                           src_tmp,
+                           desc,
+                           src_tmp,
+                           value->owns_ref ? "true" : "false",
+                           slot_tmp,
+                           slot_tmp,
+                           src_tmp,
+                           desc);
+        }
 
         free(slot_tmp);
         free(src_tmp);
@@ -9610,20 +9658,36 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
     }
 
     if (cgtype_is_managed(field->type)) {
-        if (value->owns_ref) {
-            buf_append_fmt(cg->cur_body,
-                           "    %s.%s = %s;\n",
-                           tuple_expr,
-                           field->c_name,
-                           value->c_expr);
+        if (rad_desc_expr != NULL) {
+            if (value->owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                               "    *(void **)((char *)%s + %s->reified_field_offsets[%zu]) = %s;\n",
+                               tuple_expr, rad_desc_expr, field_index,
+                               value->c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                               "    *(void **)((char *)%s + %s->reified_field_offsets[%zu]) = %s;"
+                               " feng_retain(*(void **)((char *)%s + %s->reified_field_offsets[%zu]));\n",
+                               tuple_expr, rad_desc_expr, field_index,
+                               value->c_expr,
+                               tuple_expr, rad_desc_expr, field_index);
+            }
         } else {
-            buf_append_fmt(cg->cur_body,
-                           "    %s.%s = %s; feng_retain(%s.%s);\n",
-                           tuple_expr,
-                           field->c_name,
-                           value->c_expr,
-                           tuple_expr,
-                           field->c_name);
+            if (value->owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                               "    %s.%s = %s;\n",
+                               tuple_expr,
+                               field->c_name,
+                               value->c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                               "    %s.%s = %s; feng_retain(%s.%s);\n",
+                               tuple_expr,
+                               field->c_name,
+                               value->c_expr,
+                               tuple_expr,
+                               field->c_name);
+            }
         }
         return true;
     }
@@ -9640,19 +9704,30 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
                            field->feng_name);
         }
         buf_init(&lvalue);
-        buf_append_fmt(&lvalue, "%s.%s", tuple_expr, field->c_name);
+        if (rad_desc_expr != NULL) {
+            buf_append_fmt(&lvalue, "((char *)%s + %s->reified_field_offsets[%zu])",
+                           tuple_expr, rad_desc_expr, field_index);
+        } else {
+            buf_append_fmt(&lvalue, "%s.%s", tuple_expr, field->c_name);
+        }
         if (lvalue.data == NULL) {
             return cg_fail(cg, blame, "codegen: out of memory");
         }
-        buf_append_cstr(cg->cur_body, "    ");
-        ok = cg_append_aggregate_default_init_call(cg->cur_body, field->type, lvalue.data);
-        buf_append_cstr(cg->cur_body, ";\n");
-        if (!ok) {
-            buf_free(&lvalue);
-            return cg_fail(cg,
-                           blame,
-                           "codegen: missing aggregate default-init rule for tuple field '%s'",
-                           field->feng_name);
+        if (rad_desc_expr != NULL) {
+            buf_append_fmt(cg->cur_body,
+                           "    feng_aggregate_default_init((void *)%s, &%s);\n",
+                           lvalue.data, agg_desc);
+        } else {
+            buf_append_cstr(cg->cur_body, "    ");
+            ok = cg_append_aggregate_default_init_call(cg->cur_body, field->type, lvalue.data);
+            buf_append_cstr(cg->cur_body, ";\n");
+            if (!ok) {
+                buf_free(&lvalue);
+                return cg_fail(cg,
+                               blame,
+                               "codegen: missing aggregate default-init rule for tuple field '%s'",
+                               field->feng_name);
+            }
         }
         if (value->owns_ref && cg_materialize_to_local(cg, value, "_t") == NULL) {
             buf_free(&lvalue);
@@ -9663,11 +9738,19 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
             return cg_fail(cg, blame, "codegen: internal tuple aggregate ownership state was not materialized");
         }
         if (cgtype_is_aggregate(value->type)) {
-            buf_append_fmt(cg->cur_body,
-                           "    feng_aggregate_assign(&%s, &%s, &%s);\n",
-                           lvalue.data,
-                           value->c_expr,
-                           agg_desc);
+            if (rad_desc_expr != NULL) {
+                buf_append_fmt(cg->cur_body,
+                               "    feng_aggregate_assign((void *)%s, (const void *)&%s, &%s);\n",
+                               lvalue.data,
+                               value->c_expr,
+                               agg_desc);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                               "    feng_aggregate_assign(&%s, &%s, &%s);\n",
+                               lvalue.data,
+                               value->c_expr,
+                               agg_desc);
+            }
         } else {
             buf_free(&lvalue);
             return cg_fail(cg, blame, "codegen: tuple aggregate field initializer type mismatch");
@@ -9682,7 +9765,21 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
         if (cty == NULL) {
             return cg_fail(cg, blame, "codegen: out of memory");
         }
-        if (cgtype_is_by_value_struct(field->type)) {
+        if (rad_desc_expr != NULL) {
+            if (cgtype_is_by_value_struct(field->type)) {
+                buf_append_fmt(cg->cur_body,
+                               "    memcpy((char *)%s + %s->reified_field_offsets[%zu], &%s, sizeof(%s));\n",
+                               tuple_expr, rad_desc_expr, field_index,
+                               value->c_expr, cty);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                               "    *(%s *)((char *)%s + %s->reified_field_offsets[%zu]) = (%s)(%s);\n",
+                               cty,
+                               tuple_expr, rad_desc_expr, field_index,
+                               cty,
+                               value->c_expr);
+            }
+        } else if (cgtype_is_by_value_struct(field->type)) {
             buf_append_fmt(cg->cur_body,
                            "    %s.%s = %s;\n",
                            tuple_expr,
@@ -9722,6 +9819,72 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
                        ut->feng_name);
     }
 
+    /* VLA path for tuples that depend on generic parameters in shared bodies. */
+    if (cg_tuple_needs_reified_layout(cg, expected_type)) {
+        const char *agg_desc = cg_aggregate_desc_name(expected_type);
+        size_t rad_idx;
+        bool has_rad = agg_desc != NULL &&
+                       cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx);
+        if (!has_rad) {
+            return cg_fail(cg, e->token,
+                "codegen: tuple type '%s' requires reified layout but no "
+                "reified_agg_dep found for '%s'",
+                ut->feng_name, agg_desc ? agg_desc : "(null)");
+        }
+        const char *rad_src = cg->generic_type_method_rad_via_desc
+                                  ? "_desc" : "_td";
+
+        Buf rad_expr_buf; buf_init(&rad_expr_buf);
+        buf_append_fmt(&rad_expr_buf,
+            "((const FengAggregateDescriptor *)%s->reified_agg_deps[%zu])",
+            rad_src, rad_idx);
+        if (rad_expr_buf.data == NULL) {
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+
+        char *tmp = cg_fresh_temp(cg, "_tuple");
+        if (tmp == NULL) {
+            buf_free(&rad_expr_buf);
+            return cg_fail(cg, e->token, "codegen: out of memory");
+        }
+        cg_emit_current_stmt_line_directive_force(cg);
+        buf_append_fmt(cg->cur_body,
+            "    _Alignas(max_align_t) char %s[%s->size];\n"
+            "    memset(%s, 0, %s->size);\n"
+            "    feng_aggregate_default_init(%s, %s);\n",
+            tmp, rad_expr_buf.data,
+            tmp, rad_expr_buf.data,
+            tmp, rad_expr_buf.data);
+
+        for (size_t i = 0; i < item_count; ++i) {
+            ExprResult value;
+            if (!cg_emit_expr_for_expected_type(cg,
+                                                e->as.tuple_literal.items[i],
+                                                ut->fields[i].type,
+                                                &value)) {
+                free(tmp);
+                buf_free(&rad_expr_buf);
+                return false;
+            }
+            if (!cg_emit_tuple_field_value_store(cg, tmp, &ut->fields[i],
+                                                  &value, e->token,
+                                                  rad_expr_buf.data, i)) {
+                er_free(&value);
+                free(tmp);
+                buf_free(&rad_expr_buf);
+                return false;
+            }
+            er_free(&value);
+        }
+
+        out->c_expr = strdup(tmp);
+        out->type = cgtype_clone(expected_type);
+        out->owns_ref = true;
+        free(tmp);
+        buf_free(&rad_expr_buf);
+        return out->c_expr != NULL && out->type != NULL;
+    }
+
     char *tmp = cg_fresh_temp(cg, "_tuple");
     char *cty = cg_ctype_dup(expected_type);
     if (tmp == NULL || cty == NULL) {
@@ -9743,7 +9906,8 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
             free(tmp);
             return false;
         }
-        if (!cg_emit_tuple_field_value_store(cg, tmp, &ut->fields[i], &value, e->token)) {
+        if (!cg_emit_tuple_field_value_store(cg, tmp, &ut->fields[i], &value, e->token,
+                                                NULL, 0)) {
             er_free(&value);
             free(tmp);
             return false;
@@ -9883,7 +10047,8 @@ static bool cg_emit_tuple_cast_to_type(CG *cg,
                                              tmp,
                                              &target->user->fields[i],
                                              &field_value,
-                                             e->token)) {
+                                             e->token,
+                                             NULL, 0)) {
             er_free(&field_value);
             free(tmp);
             er_free(&source);
@@ -14887,6 +15052,45 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
             er_free(&recv);
             return cg_fail(cg, e->token, "codegen: out of memory");
         }
+
+        if (cg_tuple_needs_reified_layout(cg, recv.type)) {
+            const char *agg_desc = cg_aggregate_desc_name(recv.type);
+            size_t rad_idx;
+            bool has_rad = agg_desc != NULL &&
+                           cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx);
+            if (!has_rad) {
+                er_free(&recv);
+                return cg_fail(cg, e->token,
+                    "codegen: tuple type '%s' requires reified layout but no "
+                    "reified_agg_dep found", ut->feng_name);
+            }
+            const char *rad_src = cg->generic_type_method_rad_via_desc
+                                      ? "_desc" : "_td";
+
+            size_t fi = 0;
+            for (size_t k = 0; k < ut->field_count; ++k) {
+                if (&ut->fields[k] == uf) { fi = k; break; }
+            }
+
+            Buf b; buf_init(&b);
+            if (uf->type != NULL && uf->type->kind == CG_TYPE_GENERIC_PARAM) {
+                buf_append_fmt(&b,
+                    "(void *)((char *)%s + ((const FengAggregateDescriptor *)%s->reified_agg_deps[%zu])->reified_field_offsets[%zu])",
+                    recv.c_expr, rad_src, rad_idx, fi);
+            } else {
+                char *cty = cg_ctype_dup(uf->type);
+                buf_append_fmt(&b,
+                    "(*(%s *)((char *)%s + ((const FengAggregateDescriptor *)%s->reified_agg_deps[%zu])->reified_field_offsets[%zu]))",
+                    cty, recv.c_expr, rad_src, rad_idx, fi);
+                free(cty);
+            }
+            out->c_expr = b.data;
+            out->type = cgtype_clone(uf->type);
+            out->owns_ref = false;
+            er_free(&recv);
+            return out->c_expr && out->type;
+        }
+
         Buf b; buf_init(&b);
         buf_append_fmt(&b, "(%s).%s", recv.c_expr, uf->c_name);
         out->c_expr = b.data;
@@ -15620,6 +15824,9 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
 
     bool elem_managed   = cgtype_is_managed(elem);
     bool elem_aggregate = cgtype_is_aggregate(elem);
+    if (!elem_aggregate && cg_tuple_needs_reified_layout(cg, elem)) {
+        elem_aggregate = true;
+    }
     const char *agg_desc = elem_aggregate ? cg_aggregate_desc_name(elem) : NULL;
     if (elem_aggregate && agg_desc == NULL) {
         free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
@@ -18579,7 +18786,36 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             er_free(&recv);
             return true;
         }
-        if (cgtype_is_managed(recv.type->element)) {
+        if (cg_tuple_needs_reified_layout(cg, recv.type->element)) {
+            const char *agg_desc = cg_aggregate_desc_name(recv.type->element);
+            size_t rad_idx;
+            bool has_rad = agg_desc != NULL &&
+                           cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx);
+            if (!has_rad) {
+                free(elem_cty); free(idx_tmp);
+                er_free(&v); er_free(&ix); er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "codegen: tuple array element requires reified layout "
+                    "but no reified_agg_dep found");
+            }
+            const char *rad_src = cg->generic_type_method_rad_via_desc
+                                      ? "_desc" : "_td";
+            if (v.owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                    "    feng_aggregate_take("
+                    "(void *)((char *)feng_array_data(%s) + (%s) * %s->reified_agg_deps[%zu]->size), "
+                    "(void *)%s, %s->reified_agg_deps[%zu]);\n",
+                    recv.c_expr, idx_tmp, rad_src, rad_idx,
+                    v.c_expr, rad_src, rad_idx);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    feng_aggregate_assign("
+                    "(void *)((char *)feng_array_data(%s) + (%s) * %s->reified_agg_deps[%zu]->size), "
+                    "(const void *)%s, %s->reified_agg_deps[%zu]);\n",
+                    recv.c_expr, idx_tmp, rad_src, rad_idx,
+                    v.c_expr, rad_src, rad_idx);
+            }
+        } else if (cgtype_is_managed(recv.type->element)) {
             if (v.owns_ref) {
                 buf_append_fmt(cg->cur_body,
                     "    { %s *_slots = (%s *)feng_array_data(%s);"
@@ -20513,6 +20749,21 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
     cg->cur_scope = body_scope;
 
     /* Call @iterator: result = cursor.next() */
+    if (cg_tuple_needs_reified_layout(cg, result_type)) {
+        free(result_cty); cgtype_free(element_type); cgtype_free(result_type);
+        free(cont_label_owned);
+        body_scope->continue_label = NULL;
+        cg->cur_scope = body_scope->parent;
+        scope_pop_free(body_scope);
+        free(cursor_var);
+        cg->loop_depth--;
+        cg_release_scope(cg, outer_scope);
+        cg->cur_scope = outer_scope->parent;
+        scope_pop_free(outer_scope);
+        return cg_fail(cg, stmt->token,
+            "codegen: for-in loop with generic-dependent iterator result "
+            "type inside a shared body is not yet supported");
+    }
     char *result_var = cg_fresh_temp(cg, "_ir");
     buf_append_fmt(cg->cur_body, "        %s %s = %s(%s);\n",
                    result_cty, result_var, iter_um->c_name, cursor_var);
@@ -22057,7 +22308,60 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
     }
     /* Concrete return type inside a generic function: compute result and
      * memcpy into _out. */
-    if (cgtype_is_managed(r.type)) {
+    if (cg_tuple_needs_reified_layout(cg, r.type)) {
+        const char *desc = cg_aggregate_desc_name(r.type);
+        size_t rad_idx;
+        bool has_rad = desc != NULL &&
+                       cg_lookup_reified_agg_dep_index(cg, desc, &rad_idx);
+        if (!has_rad) {
+            er_free(&r);
+            return cg_fail(cg, stmt->token,
+                "codegen: tuple return requires reified layout but no "
+                "reified_agg_dep found for '%s'", desc ? desc : "(null)");
+        }
+        const char *rad_src = cg->generic_type_method_rad_via_desc
+                                  ? "_desc" : "_td";
+
+        Buf rad_buf; buf_init(&rad_buf);
+        buf_append_fmt(&rad_buf,
+            "((const FengAggregateDescriptor *)%s->reified_agg_deps[%zu])",
+            rad_src, rad_idx);
+
+        char *tmp = cg_fresh_temp(cg, "_ret");
+        if (!tmp || !rad_buf.data) {
+            free(tmp);
+            buf_free(&rad_buf);
+            er_free(&r);
+            return cg_fail(cg, stmt->token,
+                "codegen: out of memory while emitting generic aggregate return");
+        }
+
+        if (!r.owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                "    _Alignas(max_align_t) char %s[%s->size];\n"
+                "    memcpy(%s, %s, %s->size);\n"
+                "    feng_aggregate_retain(%s, %s);\n",
+                tmp, rad_buf.data,
+                tmp, r.c_expr, rad_buf.data,
+                tmp, rad_buf.data);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    _Alignas(max_align_t) char %s[%s->size];\n"
+                "    memset(%s, 0, %s->size);\n"
+                "    feng_aggregate_take(%s, (void *)%s, %s);\n",
+                tmp, rad_buf.data,
+                tmp, rad_buf.data,
+                tmp, r.c_expr, rad_buf.data);
+        }
+
+        cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
+        buf_append_fmt(cg->cur_body,
+            "    memcpy(_out, %s, %s->size);\n    return;\n",
+            tmp, rad_buf.data);
+        free(tmp);
+        buf_free(&rad_buf);
+    } else if (cgtype_is_managed(r.type)) {
         char *tmp = cg_fresh_temp(cg, "_ret");
         char *cty = cg_ctype_dup(r.type);
         if (!r.owns_ref) {
@@ -22107,7 +22411,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
 
         free(cty);
         cg_release_through(cg, NULL);
-    cg_emit_return_control_cleanup(cg);
+        cg_emit_return_control_cleanup(cg);
         buf_append_fmt(cg->cur_body,
             "    memcpy(_out, &%s, sizeof %s);\n    return;\n", tmp, tmp);
         free(tmp);
@@ -28287,6 +28591,8 @@ static bool cg_emit_tuple_equal_function(CG *cg,
 static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
     Buf *td = &cg->type_defs;
     size_t slot_count = cg_tuple_aggregate_top_level_slot_count(t);
+    bool needs_agg_desc = slot_count > 0U ||
+        (t->is_generic_instance && t->generic_context_type_param_count == 0U);
     Buf equal_fn_name;
 
     /* Struct body already emitted in cg_emit_user_type_forward (headers). */
@@ -28421,7 +28727,15 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
             t->c_aggregate_default_name,
             init_fn_name.data);
         buf_free(&init_fn_name);
+    } else if (needs_agg_desc) {
+        buf_append_fmt(td,
+            "static const FengAggregateDefaultInitDescriptor %s = {\n"
+            "    .kind = FENG_DEFAULT_ZERO_BYTES,\n"
+            "};\n",
+            t->c_aggregate_default_name);
+    }
 
+    if (needs_agg_desc) {
         /* Reified generic params for fully-concrete generic tuple instances.
          * Use already-resolved field types rather than re-resolving type refs,
          * because the field types from cg_register_user_type_members are
@@ -28451,6 +28765,22 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
             buf_append_cstr(td, "};\n\n");
         }
 
+        /* Reified field offsets for fully-concrete generic tuple instances. */
+        size_t tuple_rfo_count = 0U;
+        if (t->is_generic_instance &&
+            t->generic_context_type_param_count == 0U &&
+            t->field_count > 0U) {
+            tuple_rfo_count = t->field_count;
+            buf_append_fmt(td,
+                "static const size_t %s__rfo[] = {\n",
+                t->c_aggregate_desc_name);
+            for (size_t rfi = 0; rfi < t->field_count; ++rfi) {
+                buf_append_fmt(td, "    offsetof(struct %s, %s),\n",
+                               t->c_struct_name, t->fields[rfi].c_name);
+            }
+            buf_append_cstr(td, "};\n\n");
+        }
+
         buf_append_fmt(td,
             "static const FengAggregateDescriptor %s __attribute__((unused)) = {\n"
             "    .name = \"%s.%s\",\n"
@@ -28463,7 +28793,11 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
             t->c_struct_name,
             t->c_aggregate_default_name,
             slot_count);
-        buf_append_fmt(td, "    .managed_slots = %s,\n", t->c_aggregate_slots_name);
+        if (slot_count > 0U) {
+            buf_append_fmt(td, "    .managed_slots = %s,\n", t->c_aggregate_slots_name);
+        } else {
+            buf_append_cstr(td, "    .managed_slots = NULL,\n");
+        }
         buf_append_fmt(td, "    .equal_fn = &%s,\n", equal_fn_name.data);
         if (tuple_rgp_count > 0U) {
             buf_append_fmt(td,
@@ -28473,6 +28807,12 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
         } else {
             buf_append_cstr(td,
                 "    .reified_generic_params_count = 0,\n");
+        }
+        if (tuple_rfo_count > 0U) {
+            buf_append_fmt(td,
+                "    .reified_field_offset_count = %zu,\n"
+                "    .reified_field_offsets = %s__rfo,\n",
+                tuple_rfo_count, t->c_aggregate_desc_name);
         }
         buf_append_cstr(td, "};\n\n");
     } else {
@@ -28577,7 +28917,9 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
             buf_append_fmt(&cg->headers, "struct %s;\n", t->c_struct_name);
         }
 
-        const char *descriptor_type = cg_tuple_aggregate_top_level_slot_count(t) > 0U
+        bool tuple_needs_agg = cg_tuple_aggregate_top_level_slot_count(t) > 0U ||
+            (t->is_generic_instance && t->generic_context_type_param_count == 0U);
+        const char *descriptor_type = tuple_needs_agg
                                           ? "FengAggregateDescriptor"
                                           : "FengTrivialDescriptor";
 
