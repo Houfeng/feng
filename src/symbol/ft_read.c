@@ -1125,6 +1125,44 @@ static bool parse_attrs(ReadContext *ctx,
             decl->is_iterator = true;
             continue;
         }
+        if (kind == FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP) {
+            FengSymbolTypeView *type = parse_type_by_id(ctx, value0, path, out_error);
+            FengSymbolTypeView **grown;
+
+            if (type == NULL) {
+                return false;
+            }
+            grown = (FengSymbolTypeView **)realloc(
+                decl->reifiable_agg_deps,
+                (decl->reifiable_agg_dep_count + 1U) * sizeof(*decl->reifiable_agg_deps));
+            if (grown == NULL) {
+                feng_symbol_internal_type_free(type);
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                      "out of memory loading reifiable agg dep");
+            }
+            decl->reifiable_agg_deps = grown;
+            decl->reifiable_agg_deps[decl->reifiable_agg_dep_count++] = type;
+            continue;
+        }
+        if (kind == FENG_SYMBOL_ATTR_REIFIABLE_MANAGED_DEP) {
+            FengSymbolTypeView *type = parse_type_by_id(ctx, value0, path, out_error);
+            FengSymbolTypeView **grown;
+
+            if (type == NULL) {
+                return false;
+            }
+            grown = (FengSymbolTypeView **)realloc(
+                decl->reifiable_type_deps,
+                (decl->reifiable_type_dep_count + 1U) * sizeof(*decl->reifiable_type_deps));
+            if (grown == NULL) {
+                feng_symbol_internal_type_free(type);
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                      "out of memory loading reifiable type dep");
+            }
+            decl->reifiable_type_deps = grown;
+            decl->reifiable_type_deps[decl->reifiable_type_dep_count++] = type;
+            continue;
+        }
         if (kind != FENG_SYMBOL_ATTR_DECLARED_SPECS) {
             continue;
         }

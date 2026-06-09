@@ -694,10 +694,10 @@ make test
 
 管线完整但 codegen 暂不消费。
 
-- [ ] `src/symbol/export.c`：从 `FengReifiableDepSet` 读取依赖，按 `kind` 分类填入 `DeclView` 的 `reifiable_agg_deps`（`AGGREGATE`）/`reifiable_type_deps`（`MANAGED`），每个 `FengSymbolTypeView*` 为 `NAMED_GENERIC` 类型视图
-- [ ] `src/symbol/ft_write.c`：将每条依赖序列化为 ATTRS 节中一条 `FengSymbolFtAttrRecord`（`kind` = `GENERIC_AGG_DEP`/`GENERIC_TYPE_DEP`，`value0` = `TYPS.id`）
-- [ ] `src/symbol/ft_read.c`：解析新 attr kind，还原到 `DeclView` 的 `reifiable_agg_deps`/`reifiable_type_deps` 列表
-- [ ] `make test` 全量回归通过
+- [x] `src/symbol/export.c`：从 `FengReifiableDepSet` 读取依赖，按 `kind` 分类填入 `DeclView` 的 `reifiable_agg_deps`（`AGGREGATE`）/`reifiable_type_deps`（`MANAGED`），每个 `FengSymbolTypeView*` 为 `NAMED_GENERIC` 类型视图
+- [x] `src/symbol/ft_write.c`：将每条依赖序列化为 ATTRS 节中一条 `FengSymbolFtAttrRecord`（`kind` = `GENERIC_AGG_DEP`/`GENERIC_TYPE_DEP`，`value0` = `TYPS.id`）
+- [x] `src/symbol/ft_read.c`：解析新 attr kind，还原到 `DeclView` 的 `reifiable_agg_deps`/`reifiable_type_deps` 列表
+- [x] `make test` 全量回归通过
 
 ### 6.6 排序 key 与 Wrapper 描述符生成（§2.3 + §2.4）
 

@@ -1396,6 +1396,66 @@ static bool fill_union_members_with_tparams(const BuildContext *ctx,
     return true;
 }
 
+/* 从语义阶段的 FengReifiableDepSet 读取依赖，按 kind 分类填入 DeclView 的
+ * reifiable_agg_deps（AGGREGATE）和 reifiable_type_deps（MANAGED）。
+ * 每个依赖的 type_ref 转换为 NAMED_GENERIC 类型视图。 */
+static bool fill_reifiable_deps(const BuildContext *ctx,
+                                FengSymbolDeclView *decl,
+                                const FengDecl *source_decl,
+                                const FengTypeParam *type_params,
+                                size_t type_param_count,
+                                const char *path,
+                                FengToken token,
+                                FengSymbolError *out_error) {
+    const FengReifiableDepSet *dep_set;
+    size_t index;
+
+    dep_set = feng_semantic_lookup_reifiable_dep_set(ctx->analysis, source_decl);
+    if (dep_set == NULL || dep_set->dep_count == 0U) {
+        return true;
+    }
+
+    for (index = 0U; index < dep_set->dep_count; ++index) {
+        const FengReifiableDep *dep = &dep_set->deps[index];
+        FengSymbolTypeView *type = build_type_from_type_ref_with_tparams(
+            ctx,
+            dep->type_ref,
+            type_params,
+            type_param_count,
+            path,
+            token,
+            out_error);
+
+        if (dep->type_ref != NULL && type == NULL) {
+            return false;
+        }
+
+        if (dep->kind == FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
+            if (!append_type_pointer(&decl->reifiable_agg_deps,
+                                     &decl->reifiable_agg_dep_count,
+                                     type,
+                                     path,
+                                     token,
+                                     out_error)) {
+                feng_symbol_internal_type_free(type);
+                return false;
+            }
+        } else {
+            if (!append_type_pointer(&decl->reifiable_type_deps,
+                                     &decl->reifiable_type_dep_count,
+                                     type,
+                                     path,
+                                     token,
+                                     out_error)) {
+                feng_symbol_internal_type_free(type);
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 static bool fill_params_with_tparams(const BuildContext *ctx,
                                      FengSymbolDeclView *decl,
                                      const FengParameter *params,
@@ -2507,6 +2567,18 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                     return NULL;
                 }
             }
+            if (!fill_reifiable_deps(ctx, decl, source_decl,
+                                     ctx->type_params,
+                                     ctx->type_param_count,
+                                     path,
+                                     source_decl->token,
+                                     out_error)) {
+                ctx->type_params = NULL;
+                ctx->type_param_count = 0U;
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
+                return NULL;
+            }
             ctx->type_params = NULL;
             ctx->type_param_count = 0U;
             return decl;
@@ -2742,6 +2814,18 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                     return NULL;
                 }
             }
+            if (!fill_reifiable_deps(ctx, decl, source_decl,
+                                     ctx->type_params,
+                                     ctx->type_param_count,
+                                     path,
+                                     source_decl->token,
+                                     out_error)) {
+                ctx->type_params = NULL;
+                ctx->type_param_count = 0U;
+                feng_symbol_internal_decl_free_members(decl);
+                free(decl);
+                return NULL;
+            }
             ctx->type_params = NULL;
             ctx->type_param_count = 0U;
             return decl;
@@ -2803,7 +2887,13 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                                         source_decl->is_extern,
                                         path,
                                         source_decl->token,
-                                        out_error)) {
+                                        out_error) ||
+                !fill_reifiable_deps(ctx, decl, source_decl,
+                                     ctx->type_params,
+                                     ctx->type_param_count,
+                                     path,
+                                     source_decl->token,
+                                     out_error)) {
                 ctx->type_params = NULL;
                 ctx->type_param_count = 0U;
                 feng_symbol_internal_decl_free_members(decl);

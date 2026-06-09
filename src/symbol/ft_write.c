@@ -913,6 +913,66 @@ static bool writer_emit_decl_attrs(WriterContext *ctx,
             return false;
         }
     }
+    /* 具体化 aggregate 依赖。 */
+    if (decl->reifiable_agg_dep_count > 0U) {
+        size_t dep_index;
+
+        for (dep_index = 0U; dep_index < decl->reifiable_agg_dep_count; ++dep_index) {
+            FengSymbolFtAttrRecord attr;
+            uint32_t type_id = writer_serialize_type(ctx,
+                                                     decl->reifiable_agg_deps[dep_index],
+                                                     path,
+                                                     token,
+                                                     out_error);
+
+            if (type_id == 0U) {
+                return false;
+            }
+            memset(&attr, 0, sizeof(attr));
+            attr.symbol_id = symbol_id;
+            attr.kind = (uint16_t)FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP;
+            attr.value0 = type_id;
+            if (!append_record((void **)&ctx->attrs,
+                               &ctx->attr_count,
+                               sizeof(attr),
+                               &attr,
+                               path,
+                               token,
+                               out_error)) {
+                return false;
+            }
+        }
+    }
+    /* 具体化 managed 依赖。 */
+    if (decl->reifiable_type_dep_count > 0U) {
+        size_t dep_index;
+
+        for (dep_index = 0U; dep_index < decl->reifiable_type_dep_count; ++dep_index) {
+            FengSymbolFtAttrRecord attr;
+            uint32_t type_id = writer_serialize_type(ctx,
+                                                     decl->reifiable_type_deps[dep_index],
+                                                     path,
+                                                     token,
+                                                     out_error);
+
+            if (type_id == 0U) {
+                return false;
+            }
+            memset(&attr, 0, sizeof(attr));
+            attr.symbol_id = symbol_id;
+            attr.kind = (uint16_t)FENG_SYMBOL_ATTR_REIFIABLE_MANAGED_DEP;
+            attr.value0 = type_id;
+            if (!append_record((void **)&ctx->attrs,
+                               &ctx->attr_count,
+                               sizeof(attr),
+                               &attr,
+                               path,
+                               token,
+                               out_error)) {
+                return false;
+            }
+        }
+    }
     return true;
 }
 
