@@ -699,9 +699,9 @@ make test
 - [x] `src/symbol/ft_read.c`：解析新 attr kind，还原到 `DeclView` 的 `reifiable_agg_deps`/`reifiable_type_deps` 列表
 - [x] `make test` 全量回归通过
 
-### 6.6 排序 key 与 Wrapper 描述符生成（§2.3 + §2.4）
+### 6.6 排序 key 与 具化描述符生成（§2.3 + §2.4）
 
-Wrapper 生成 `static const` 描述符，暂未传入共享体。
+根据调用点，生成 `static const` 描述符，暂未传入共享体。
 
 - [x] 实现排序 key 生成逻辑（§2.3 递归命名规则：根模式 `__` 分隔，参数模式 `_` 分隔，泛型参数以 `T0`/`T1` 表示）
 - [x] 为泛型类型实例生成 `FengTypeDescriptor`，填充 `reified_generic_params`/`reified_field_offsets`/`reified_agg_deps`/`reified_type_deps`（按排序 key 字典序分配索引）
