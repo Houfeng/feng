@@ -59,7 +59,11 @@ Wrapper 将具体化 `FengTypeDescriptor*` 作为额外参数 `_type_desc` 传�
 
 Wrapper 为本次具体化静态生成一个 **`FengFunctionDescriptor`**（`static const`），传入共享体时命名为 `_desc`。共享体通过 `_desc->reified_agg_deps[i]`、`->reified_type_deps[i]` 在运行时访问所有具体化信息。泛型参数 `_K`、`_V` 保持为独立函数参数。
 
-路径一、二中，类型级泛型参数收归到描述符的 `reified_generic_params` 中，共享体不再接收 `_K`、`_V` 函数参数；路径三中，独立泛型函数的泛型参数仍以 `FengGenericParamDescriptor*` 函数参数传入（调用点确定，无法收归）。方法级泛型参数（如 `Container<K>.map<U>()` 中的 `U`）同样以 `FengGenericParamDescriptor*` 函数参数传入，由 Wrapper 在调用点生成。
+**路径四：fit 泛型方法（有 `self`，类型外部函数）**
+
+fit 方法本质上是类型外部函数（类似独立函数的语法糖）。若 fit 方法本身有函数级泛型参数，或 fit 目标类型有类型级泛型参数，则需在语义阶段收集待具体化的依赖，在发码阶段生成 `FengFunctionDescriptor`。处理逻辑与路径三（独立泛型函数）非常接近：Wrapper 为本次具体化静态生成 `FengFunctionDescriptor`，传入共享体时命名为 `_desc`，共享体通过 `_desc->reified_agg_deps[i]`、`_desc->reified_type_deps[i]` 在运行时访问 fit 方法体内的具体化依赖。函数级泛型参数以 `FengGenericParamDescriptor*` 函数参数传入。与路径三唯一的区别是：fit 方法有 `self`，可通过 `self->_hdr.desc->reified_generic_params[i]` 访问 fit 目标类型的类型级泛型参数，无需将类型级泛型参数作为独立函数参数传入。
+
+路径一、二中，类型级泛型参数收归到描述符的 `reified_generic_params` 中，共享体不再接收 `_K`、`_V` 函数参数；路径三中，独立泛型函数的泛型参数仍以 `FengGenericParamDescriptor*` 函数参数传入（调用点确定，无法收归）；路径四中，fit 方法的类型级泛型参数从 `self->_hdr.desc->reified_generic_params` 获取（与路径一一致），函数级泛型参数和方法体内的具体化依赖通过 `FengFunctionDescriptor`（`_desc`）传入（与路径三一致）。方法级泛型参数（如 `Container<K>.map<U>()` 中的 `U`）同样以 `FengGenericParamDescriptor*` 函数参数传入，由 Wrapper 在调用点生成。
 
 `FengTypeDescriptor.reified_agg_deps[]` 和 `reified_type_deps[]` 的索引在整个类型范围内**全局稳定**：codegen 收集该类型所有方法（实例方法 + 静态方法）中全部依赖（成员字段 + 各方法体局部依赖），按依赖排序 key（见 §2.2）字典序升序分配全局唯一索引，所有方法共享同一 `FengTypeDescriptor`，各方法按编译期确定的固定索引访问各自所需的描述符。含方法级泛型的方法，其涉及方法级类型参数的依赖使用独立索引（在类型级依赖之后追加）。
 
