@@ -212,6 +212,16 @@ static void decl_dispose(FengSymbolDeclView *decl, bool free_self) {
     }
     free(decl->members);
 
+    for (index = 0U; index < decl->reifiable_agg_dep_count; ++index) {
+        feng_symbol_internal_type_free(decl->reifiable_agg_deps[index]);
+    }
+    free(decl->reifiable_agg_deps);
+
+    for (index = 0U; index < decl->reifiable_type_dep_count; ++index) {
+        feng_symbol_internal_type_free(decl->reifiable_type_deps[index]);
+    }
+    free(decl->reifiable_type_deps);
+
     memset(decl, 0, sizeof(*decl));
     if (free_self) {
         free(decl);
@@ -437,6 +447,8 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     clone->declared_specs = NULL;
     clone->union_members = NULL;
     clone->members = NULL;
+    clone->reifiable_agg_deps = NULL;
+    clone->reifiable_type_deps = NULL;
 
     if ((decl->abi_library != NULL && clone->abi_library == NULL) ||
         (decl->abi_symbol != NULL && clone->abi_symbol == NULL) ||
@@ -510,6 +522,44 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
             clone->union_members[index] = feng_symbol_internal_type_clone(decl->union_members[index],
                                                                           out_error);
             if (decl->union_members[index] != NULL && clone->union_members[index] == NULL) {
+                decl_dispose(clone, true);
+                return NULL;
+            }
+        }
+    }
+
+    if (decl->reifiable_agg_dep_count > 0U) {
+        clone->reifiable_agg_deps = (FengSymbolTypeView **)calloc(decl->reifiable_agg_dep_count,
+                                                                   sizeof(*clone->reifiable_agg_deps));
+        if (clone->reifiable_agg_deps == NULL) {
+            feng_symbol_internal_set_error(out_error, decl->path, decl->token, "out of memory cloning reifiable agg deps");
+            decl_dispose(clone, true);
+            return NULL;
+        }
+        clone->reifiable_agg_dep_count = decl->reifiable_agg_dep_count;
+        for (index = 0U; index < decl->reifiable_agg_dep_count; ++index) {
+            clone->reifiable_agg_deps[index] = feng_symbol_internal_type_clone(decl->reifiable_agg_deps[index],
+                                                                                out_error);
+            if (decl->reifiable_agg_deps[index] != NULL && clone->reifiable_agg_deps[index] == NULL) {
+                decl_dispose(clone, true);
+                return NULL;
+            }
+        }
+    }
+
+    if (decl->reifiable_type_dep_count > 0U) {
+        clone->reifiable_type_deps = (FengSymbolTypeView **)calloc(decl->reifiable_type_dep_count,
+                                                                    sizeof(*clone->reifiable_type_deps));
+        if (clone->reifiable_type_deps == NULL) {
+            feng_symbol_internal_set_error(out_error, decl->path, decl->token, "out of memory cloning reifiable type deps");
+            decl_dispose(clone, true);
+            return NULL;
+        }
+        clone->reifiable_type_dep_count = decl->reifiable_type_dep_count;
+        for (index = 0U; index < decl->reifiable_type_dep_count; ++index) {
+            clone->reifiable_type_deps[index] = feng_symbol_internal_type_clone(decl->reifiable_type_deps[index],
+                                                                                 out_error);
+            if (decl->reifiable_type_deps[index] != NULL && clone->reifiable_type_deps[index] == NULL) {
                 decl_dispose(clone, true);
                 return NULL;
             }

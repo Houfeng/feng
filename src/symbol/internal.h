@@ -22,7 +22,9 @@ typedef enum FengSymbolAttrKind {
     FENG_SYMBOL_ATTR_STATIC_MEMBER = 5,
     FENG_SYMBOL_ATTR_ABI_SYMBOL = 6,
     FENG_SYMBOL_ATTR_ITERABLE_METHOD = 7,
-    FENG_SYMBOL_ATTR_ITERATOR_METHOD = 8
+    FENG_SYMBOL_ATTR_ITERATOR_METHOD = 8,
+    FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP = 9,
+    FENG_SYMBOL_ATTR_REIFIABLE_MANAGED_DEP = 10
 } FengSymbolAttrKind;
 
 typedef struct FengSymbolParamView {
@@ -98,6 +100,10 @@ struct FengSymbolDeclView {
     bool has_enum_item_value;
     size_t type_param_count;  /* number of generic type parameters (TYPE_PARAM children) */
     bool is_tuple;
+    FengSymbolTypeView **reifiable_agg_deps;
+    size_t reifiable_agg_dep_count;
+    FengSymbolTypeView **reifiable_type_deps;
+    size_t reifiable_type_dep_count;
 };
 
 typedef struct FengSymbolRelation {

@@ -181,8 +181,8 @@ struct FengSymbolDeclView {
 ```c
 typedef enum FengSymbolAttrKind {
     /* ... 已有 1–8 不变 ... */
-    FENG_SYMBOL_ATTR_GENERIC_AGG_DEP  = 9,   /* 泛型 aggregate 依赖 */
-    FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP = 10,  /* 泛型 managed 依赖 */
+    FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP  = 9,   /* 泛型 aggregate 依赖 */
+    FENG_SYMBOL_ATTR_REIFIABLE_MANAGED_DEP = 10,  /* 泛型 managed 依赖 */
 } FengSymbolAttrKind;
 ```
 
@@ -198,7 +198,7 @@ typedef enum FengSymbolAttrKind {
 | 字段 | 含义 |
 |------|------|
 | `symbol_id` | 泛型 type 的 sym id（`SYM_KIND_TYPE`）、func 的 sym id（`SYM_KIND_TOP_FN`）或 fit 方法的 sym id（`SYM_KIND_METHOD`） |
-| `kind` | `FENG_SYMBOL_ATTR_GENERIC_AGG_DEP`（9）或 `FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP`（10） |
+| `kind` | `FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP`（9）或 `FENG_SYMBOL_ATTR_REIFIABLE_MANAGED_DEP`（10） |
 | `value0` | `TYPS.id`（`NAMED_GENERIC` 记录，包含完整类型名和参数信息） |
 | `value1` | 0（保留） |
 | `value2` | 0（保留） |
@@ -633,7 +633,7 @@ FengObject *_obj = feng_obj_alloc(_node_desc->size, _node_desc);
 |------|------|
 | `src/runtime/feng_runtime.h` | 新增 `FengFunctionDescriptor` 结构体（独立泛型函数描述符）；`FengTypeDescriptor` 新增 `reified_generic_params_count`/`reified_generic_params`/`reified_field_offset_count`/`reified_field_offsets`/`reified_agg_deps_count`/`reified_agg_deps`/`reified_type_deps_count`/`reified_type_deps` 八个字段；`FengAggregateDescriptor` 新增 `reified_generic_params_count`/`reified_generic_params` 两个字段和 `reified_field_offset_count`/`reified_field_offsets`/`reified_agg_deps_count`/`reified_agg_deps`/`reified_type_deps_count`/`reified_type_deps` 六个保留字段（当前恒为 0/NULL） |
 | `src/codegen/codegen.c` | Wrapper 生成具体化描述符树（`FengFunctionDescriptor`/`FengTypeDescriptor`/`FengAggregateDescriptor` 静态实例含 `reified_generic_params`/`reified_agg_deps`/`reified_type_deps`）；实例方法共享体移除 `_field_offsets`、`_K`、`_V` 参数改从 `self->_hdr.desc` 获取；静态方法共享体移除 `_K`、`_V` 参数新增 `_type_desc`（`FengTypeDescriptor*`）参数；独立函数共享体新增 `_desc`（`FengFunctionDescriptor*`）参数（泛型参数仍为函数参数）；修复 6 个创建路径（§2.6.1–§2.6.6）；读取 ft ATTRS 中 `GENERIC_AGG_DEP`/`GENERIC_TYPE_DEP` 支持跨包特化 |
-| `src/symbol/internal.h` | `FengSymbolAttrKind` 新增 `FENG_SYMBOL_ATTR_GENERIC_AGG_DEP = 9`、`FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP = 10` |
+| `src/symbol/internal.h` | `FengSymbolAttrKind` 新增 `FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP = 9`、`FENG_SYMBOL_ATTR_REIFIABLE_MANAGED_DEP = 10` |
 | `src/symbol/ft_write.c` | 写出泛型 type/func 的 aggregate 和 managed 依赖 attr 记录 |
 | `src/symbol/ft_read.c` | 解析新 attr kind，填入对应符号的依赖列表 |
 
@@ -673,11 +673,11 @@ make test
 
 纯结构新增，无行为变更。
 
-- [ ] `src/symbol/internal.h`：`FengSymbolDeclView` 新增 `reifiable_agg_deps`/`reifiable_agg_dep_count`/`reifiable_type_deps`/`reifiable_type_dep_count` 四个字段
-- [ ] `src/symbol/internal.h`：`FengSymbolAttrKind` 新增 `FENG_SYMBOL_ATTR_GENERIC_AGG_DEP = 9`、`FENG_SYMBOL_ATTR_GENERIC_TYPE_DEP = 10`
-- [ ] 更新 `feng_symbol_internal_decl_clone`：深拷贝 `reifiable_*_deps` 数组及其 `FengSymbolTypeView` 元素
-- [ ] 更新 `feng_symbol_internal_decl_free_members`：释放新字段
-- [ ] `make test` 全量回归通过
+- [x] `src/symbol/internal.h`：`FengSymbolDeclView` 新增 `reifiable_agg_deps`/`reifiable_agg_dep_count`/`reifiable_type_deps`/`reifiable_type_dep_count` 四个字段
+- [x] `src/symbol/internal.h`：`FengSymbolAttrKind` 新增 `FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP = 9`、`FENG_SYMBOL_ATTR_REIFIABLE_MANAGED_DEP = 10`
+- [x] 更新 `feng_symbol_internal_decl_clone`：深拷贝 `reifiable_*_deps` 数组及其 `FengSymbolTypeView` 元素
+- [x] 更新 `feng_symbol_internal_decl_free_members`：释放新字段
+- [x] `make test` 全量回归通过
 
 ### 6.4 语义阶段：收集待具体化依赖（§2.2.1 收集逻辑）
 
