@@ -1,0 +1,77 @@
+module fcts_bin;
+
+import std.io;
+import fcts_lib.helper;
+
+// 基本 tuple type
+type TPoint(int, int);
+
+// 三元素 tuple
+type TTriple(int, string, bool);
+
+// Unit type
+type TUnit();
+
+// Tuple 满足 spec
+spec TSummable {
+  func tsum(): int;
+}
+
+fit TPoint: TSummable {
+  func tsum(): int {
+    return self.item1 + self.item2;
+  }
+}
+
+// 接受 spec 参数
+func consume_tsummable(value: TSummable): int {
+  return value.tsum();
+}
+
+// 返回 unit
+func make_tunit(): TUnit {
+  return ();
+}
+
+/** Tuple 类型测试 */
+open func test_tuple() {
+  println("--- test_tuple ---");
+
+  // Unit type 创建
+  let unit: TUnit = ();
+  let () = unit;
+  let () = ();
+  assert(true, "unit type creation and destructuring");
+
+  // Unit 函数返回
+  let u2 = make_tunit();
+  let () = u2;
+  assert(true, "unit returned from function");
+
+  // 基本 tuple 字面量与 .itemN 访问
+  let point: TPoint = (5, 6);
+  assert(point.item1 == 5 && point.item2 == 6, "tuple literal and .itemN access");
+
+  // tuple 方法 (via fit)
+  assert(point.tsum() == 11, "tuple method via fit");
+
+  // tuple 赋值到 spec
+  let s: TSummable = point;
+  assert(s.tsum() == 11, "tuple assigned to spec");
+  assert(consume_tsummable(point) == 11, "tuple passed as spec argument");
+
+  // var tuple 重新赋值
+  var mpoint: TPoint = (1, 2);
+  mpoint = (3, 4);
+  assert(mpoint.item1 == 3 && mpoint.item2 == 4, "var tuple reassignment");
+
+  // tuple 解构 - 跳过中间元素
+  let (x, , z) = (7, 8, 9);
+  assert(x == 7 && z == 9, "tuple destructuring with skip");
+
+  // 三元素 tuple
+  let triple: TTriple = (42, "hello", true);
+  assert(triple.item1 == 42, "triple tuple item1");
+  assert(triple.item2 == "hello", "triple tuple item2");
+  assert(triple.item3, "triple tuple item3");
+}

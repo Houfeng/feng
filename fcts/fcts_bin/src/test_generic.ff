@@ -55,6 +55,128 @@ func wrap_string(v: string): string {
   return gidentity<string>(v);
 }
 
+// 泛型 type 带方法
+type GBox<T> {
+  var value: T;
+
+  func set_val(next: T) {
+    self.value = next;
+  }
+
+  func get_val(): T {
+    return self.value;
+  }
+}
+
+// 泛型 void 函数
+func gdiscard<T>(x: T) {
+}
+
+// 多类型参数
+func gswap_discard<T, U>(a: T, b: U) {
+}
+
+// 泛型 type 上的泛型方法
+type GMethodBox<T> {
+  var value: T;
+
+  func echo<U>(item: U): U {
+    return item;
+  }
+
+  func replace<U>(next: T, result: U): U {
+    self.value = next;
+    return result;
+  }
+
+  func current(): T {
+    return self.value;
+  }
+}
+
+// 泛型自约束 - spec Eq<T>
+spec GEq<T> {
+  func gsame(other: T): bool;
+}
+
+type GKey: GEq<GKey> {
+  var id: int;
+
+  func gsame(other: GKey): bool {
+    return self.id == other.id;
+  }
+}
+
+// 泛型自约束 - MiniMap
+type GMiniMap<K: GEq<K>, V> {
+  var key: K;
+  var val: V;
+
+  func gput(key: K, val: V) {
+    self.key = key;
+    self.val = val;
+  }
+
+  func ghas(key: K): bool {
+    return key.gsame(self.key);
+  }
+
+  func gget(key: K): V {
+    return self.val;
+  }
+}
+
+// 函数级自约束
+func gsame_as<U: GEq<U>>(left: U, right: U): bool {
+  return left.gsame(right);
+}
+
+// 泛型自约束返回自身 - Cloneable
+spec GCloneable<T> {
+  func gclone_val(): T;
+}
+
+type GCloneKey: GCloneable<GCloneKey> {
+  var id: int;
+
+  func gclone_val(): GCloneKey {
+    return GCloneKey { id: self.id };
+  }
+}
+
+type GCopier<K: GCloneable<K>> {
+  func gcopy(key: K): K {
+    return key.gclone_val();
+  }
+}
+
+// 泛型 spec 继承
+spec GSequence<T> {
+  func gfirst(): T;
+}
+
+spec GCollection<T>: GSequence<T> {
+  func gcount(): int;
+}
+
+type GIntList: GCollection<int> {
+  let head: int;
+  let len: int;
+
+  func gfirst(): int {
+    return self.head;
+  }
+
+  func gcount(): int {
+    return self.len;
+  }
+}
+
+// 泛型约束转发
+func gfirst_of<T, C: GSequence<T>>(col: C): T {
+  return col.gfirst();
+}
+
 /** 泛型测试 */
 open func test_generic() {
   println("--- test_generic ---");
@@ -88,4 +210,68 @@ open func test_generic() {
   let sreader: GReader<string> = sr;
   let sv = sreader.read_val();
   assert(sv == "data", "generic spec (string reader)");
+
+  // 泛型 type 带方法
+  let gbox: GBox<int> = GBox<int>();
+  gbox.set_val(7);
+  assert(gbox.get_val() == 7, "generic type method (int)");
+
+  let sbox: GBox<string> = GBox<string>();
+  sbox.set_val("gen");
+  assert(sbox.get_val() == "gen", "generic type method (string)");
+
+  // 泛型 type 构造
+  let cbox: GBox<int> = GBox<int>();
+  cbox.value = 99;
+  assert(cbox.value == 99, "generic type constructor");
+
+  // 泛型 void 函数
+  gdiscard(1);
+  gdiscard("hello");
+  gdiscard(true);
+  assert(true, "generic void function");
+
+  // 多类型参数
+  gswap_discard(1, "hello");
+  gswap_discard("world", 42);
+  assert(true, "generic two type params");
+
+  // 泛型 type 上的泛型方法
+  let mbox: GMethodBox<int> = GMethodBox<int>();
+  let echo_val: int = mbox.echo(20);
+  let replace_val: int = mbox.replace<int>(22, echo_val);
+  assert(mbox.current() + replace_val + mbox.echo(1) == 43, "generic type with generic method");
+
+  // 泛型自约束 - Eq
+  let ka = GKey { id: 7 };
+  let kb = GKey { id: 7 };
+  let kc = GKey { id: 8 };
+  assert(ka.gsame(kb), "generic self constraint (same)");
+  assert(!kc.gsame(ka), "generic self constraint (different)");
+
+  // 泛型自约束 - MiniMap
+  let gmap: GMiniMap<GKey, string> = GMiniMap<GKey, string>();
+  gmap.gput(ka, "self constraint ok");
+  assert(gmap.ghas(ka), "generic self constraint MiniMap");
+  assert(gmap.gget(ka) == "self constraint ok", "generic self constraint MiniMap get");
+
+  // 函数级自约束
+  assert(gsame_as(ka, kb), "function self constraint");
+
+  // 泛型自约束返回自身 - Cloneable
+  let ck = GCloneKey { id: 7 };
+  let copier: GCopier<GCloneKey> = GCopier<GCloneKey>();
+  let copied = copier.gcopy(ck);
+  assert(copied.id == 7, "generic self constraint return");
+
+  // 泛型 spec 继承
+  let glist = GIntList { head: 10, len: 3 };
+  let gcol: GCollection<int> = glist;
+  assert(gcol.gfirst() == 10, "generic spec inheritance (first)");
+  assert(gcol.gcount() == 3, "generic spec inheritance (count)");
+  let gseq: GSequence<int> = glist;
+  assert(gseq.gfirst() == 10, "generic spec inheritance (parent view)");
+
+  // 泛型约束转发
+  assert(gfirst_of<int, GIntList>(glist) == 10, "generic constraint forwarding");
 }

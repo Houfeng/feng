@@ -54,6 +54,23 @@ func sum_nums(a: int, b: int, c: int): int {
   return a + b + c;
 }
 
+// 方法重载
+type OverloadObj {
+  let name: string;
+
+  func olabel(n: int): string {
+    return "int";
+  }
+
+  func olabel(s: string): string {
+    return s;
+  }
+
+  func olabel(): string {
+    return self.name;
+  }
+}
+
 /** 函数测试 */
 open func test_function() {
   println("--- test_function ---");
@@ -80,4 +97,10 @@ open func test_function() {
 
   // 函数重载 - 参数数量
   assert(sum_nums(1) == 1 && sum_nums(1, 2) == 3 && sum_nums(1, 2, 3) == 6, "function overload by arity");
+
+  // 方法重载
+  let obj = OverloadObj { name: "feng" };
+  assert(obj.olabel(7) == "int", "method overload by type (int)");
+  assert(obj.olabel("hello") == "hello", "method overload by type (string)");
+  assert(obj.olabel() == "feng", "method overload by arity (no args)");
 }

@@ -8,6 +8,24 @@ spec IntMapper(x: int): int;
 spec IntProducer(): int;
 spec Action(): void;
 
+// 兼容 callable spec (用于强转测试)
+spec IntMapper2(x: int): int;
+
+// lambda 捕获 self 的 type
+type SelfCapBox {
+  var n: int;
+
+  func make_reader(): IntProducer {
+    return () -> self.n;
+  }
+}
+
+// type 字段 callable lambda 默认值
+type FieldLambdaBox {
+  var n: int;
+  let read: IntProducer = () -> self.n;
+}
+
 /** Lambda 与闭包测试 */
 open func test_lambda() {
   println("--- test_lambda ---");
@@ -50,6 +68,21 @@ open func test_lambda() {
   let obj = LambdaTestObj { value: 42 };
   let getter: IntProducer = obj.get_value;
   assert(getter() == 42, "method value");
+
+  // callable spec 强转
+  let mapper_a: IntMapper = (x: int) -> x + 1;
+  let mapper_b: IntMapper2 = (IntMapper2)mapper_a;
+  assert(mapper_b(41) == 42, "callable spec cast");
+
+  // lambda 在方法中捕获 self
+  let scbox = SelfCapBox { n: 7 };
+  let screader: IntProducer = scbox.make_reader();
+  scbox.n = 8;
+  assert(screader() == 8, "lambda captures self in method (reference)");
+
+  // type 字段 callable lambda 默认值
+  let flbox = FieldLambdaBox { n: 7 };
+  assert(flbox.read() == 7, "type field callable lambda default");
 }
 
 func apply_mapper(x: int, f: IntMapper): int {

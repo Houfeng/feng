@@ -3,6 +3,45 @@ module fcts_bin;
 import std.io;
 import fcts_lib.helper;
 
+// 用于 if 表达式聚合返回测试
+spec FlowNamed {
+  func flow_name(): string;
+}
+
+type FlowUser: FlowNamed {
+  let name: string;
+
+  func flow_name(): string {
+    return self.name;
+  }
+}
+
+// return if 表达式 (标量)
+func flow_int_pick(flag: bool): int {
+  return if flag {
+    100;
+  } else {
+    200;
+  };
+}
+
+// return if 表达式 (聚合)
+func flow_pick(flag: bool, a: FlowNamed, b: FlowNamed): FlowNamed {
+  return if flag {
+    a;
+  } else {
+    b;
+  };
+}
+
+// return if 值匹配 (聚合)
+func flow_match_pick(tag: int, a: FlowNamed, b: FlowNamed): FlowNamed {
+  return if tag {
+    0 { a }
+    else { b }
+  };
+}
+
 /** 流程控制测试 */
 open func test_flow() {
   println("--- test_flow ---");
@@ -111,4 +150,58 @@ open func test_flow() {
     else { "other" }
   };
   assert(category == "hundred", "value match - mixed range and values");
+
+  // 条件匹配 - 字符串值
+  let word = "hello";
+  let translated = if word {
+    "hi", "hello" { "greeting" }
+    "bye", "goodbye" { "farewell" }
+    else { "unknown" }
+  };
+  assert(translated == "greeting", "value match - string");
+
+  // 条件匹配 - 字符串值 (其他分支)
+  let word2 = "bye";
+  let translated2 = if word2 {
+    "hi", "hello" { "greeting" }
+    "bye", "goodbye" { "farewell" }
+    else { "unknown" }
+  };
+  assert(translated2 == "farewell", "value match - string (second branch)");
+
+  // for/in continue
+  let nums = [1, 2, 3];
+  var forin_sum = 0;
+  for let n in nums {
+    if n == 2 {
+      continue;
+    }
+    forin_sum += n;
+  }
+  assert(forin_sum == 4, "for/in continue");
+
+  // 空 for 循环 (无限循环 + break)
+  var empty_for_count = 0;
+  for ;; {
+    if empty_for_count == 3 {
+      break;
+    }
+    empty_for_count += 1;
+  }
+  assert(empty_for_count == 3, "empty for loop (infinite + break)");
+
+  // return if 表达式 (标量)
+  assert(flow_int_pick(true) == 100 && flow_int_pick(false) == 200, "return if expression (scalar)");
+
+  // if 表达式返回聚合类型
+  let left: FlowNamed = FlowUser { name: "left" };
+  let right: FlowNamed = FlowUser { name: "right" };
+  let picked = flow_pick(true, left, right);
+  assert(picked.flow_name() == "left", "if expression returns aggregate (true)");
+  let picked2 = flow_pick(false, left, right);
+  assert(picked2.flow_name() == "right", "if expression returns aggregate (false)");
+
+  // if 值匹配返回聚合类型
+  let match_picked = flow_match_pick(0, left, right);
+  assert(match_picked.flow_name() == "left", "value match returns aggregate");
 }

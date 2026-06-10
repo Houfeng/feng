@@ -48,6 +48,49 @@ type NamedEntity: HasName {
   let name: string;
 }
 
+// 用于 spec 参数/返回值测试
+spec SpecGreetable {
+  func spec_greet(): string;
+}
+
+type SpecUser: SpecGreetable {
+  let name: string;
+
+  func spec_greet(): string {
+    return self.name;
+  }
+}
+
+// spec 作为函数参数
+func announce_spec(n: SpecGreetable): string {
+  return n.spec_greet();
+}
+
+// spec 作为返回值
+func make_spec_named(label: string): SpecGreetable {
+  let u = SpecUser { name: label };
+  return u;
+}
+
+// 转发 spec 返回值
+func forward_spec(label: string): SpecGreetable {
+  return make_spec_named(label);
+}
+
+// spec 中带 var 字段 (用于修改测试)
+spec MutableNamed {
+  var mname: string;
+  func mgreet(): string;
+}
+
+type MutableUser: MutableNamed {
+  var mname: string;
+
+  func mgreet(): string {
+    return self.mname;
+  }
+}
+
 /** spec 契约测试 */
 open func test_spec() {
   println("--- test_spec ---");
@@ -78,6 +121,34 @@ open func test_spec() {
   // 默认 witness
   let default_p: Printable;
   assert(default_p.to_string() == "", "default witness (spec default value)");
+
+  // spec 作为函数参数 (对象→spec 隐式转换)
+  let su = SpecUser { name: "param" };
+  assert(announce_spec(su) == "param", "spec as function parameter");
+
+  // spec 作为函数返回值
+  let sn = make_spec_named("returned");
+  assert(sn.spec_greet() == "returned", "spec as function return value");
+
+  // spec 返回值转发
+  let sf = forward_spec("forwarded");
+  assert(sf.spec_greet() == "forwarded", "spec return value forwarding");
+
+  // spec var 字段通过 spec 视图修改
+  let mu = MutableUser { mname: "before" };
+  let mn: MutableNamed = mu;
+  mn.mname = "after";
+  assert(mn.mgreet() == "after", "spec var field mutation via spec view");
+  assert(mu.mname == "after", "spec var field mutation reflects on original");
+
+  // spec == / != 比较 (引用相等)
+  let sa = SpecUser { name: "alice" };
+  let sb = SpecUser { name: "bob" };
+  let sna: SpecGreetable = sa;
+  let sna2: SpecGreetable = sa;
+  let snb: SpecGreetable = sb;
+  assert(sna == sna2, "spec == same reference");
+  assert(sna != snb, "spec != different reference");
 }
 
 func double_it(x: int): int {

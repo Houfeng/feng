@@ -3,6 +3,84 @@ module fcts_bin;
 import std.io;
 import fcts_lib.helper;
 
+// 用于异常测试的自定义 type
+type ExAppError {
+  let code: int;
+  let msg: string;
+}
+
+// 用于异常测试的 spec
+spec ExDescribable {
+  func ex_describe(): string;
+}
+
+type ExTaggedError: ExDescribable {
+  let msg: string;
+
+  func ex_describe(): string {
+    return self.msg;
+  }
+}
+
+// 构造 spec 值并 throw
+func make_ex_describable(msg: string): ExDescribable {
+  let e = ExTaggedError { msg: msg };
+  return e;
+}
+
+func throw_ex_spec(msg: string): string {
+  throw make_ex_describable(msg);
+  return "unreachable";
+}
+
+// throw 自定义 type
+func throw_ex_type(code: int, msg: string): string {
+  let e = ExAppError { code: code, msg: msg };
+  throw e;
+  return "unreachable";
+}
+
+// catch 中 break 辅助
+func throw_ex_void() {
+  throw "boom";
+}
+
+func ex_break_from_catch(): string {
+  while true {
+    try throw_ex_void() catch ex: string {
+      break;
+    };
+  }
+  return "after-break";
+}
+
+// catch 中 continue 辅助
+func ex_continue_from_catch(): int {
+  var index = 0;
+  var skipped = 0;
+  while index < 3 {
+    index += 1;
+    try throw_ex_void() catch ex: string {
+      skipped += 1;
+      continue;
+    };
+  }
+  return skipped;
+}
+
+// catch 中 return 辅助
+func ex_return_from_catch(): string {
+  let value = try throw_ex_text() catch ex: string {
+    return "catch-return";
+  };
+  return value;
+}
+
+func throw_ex_text(): string {
+  throw "boom";
+  return "unreachable";
+}
+
 /** 异常处理测试 */
 open func test_exception() {
   println("--- test_exception ---");
@@ -78,6 +156,31 @@ open func test_exception() {
     }
   };
   assert(rethrown, "rethrow in catch");
+
+  // catch 中 break
+  assert(ex_break_from_catch() == "after-break", "break from catch");
+
+  // catch 中 continue
+  assert(ex_continue_from_catch() == 3, "continue from catch");
+
+  // catch 中 return
+  assert(ex_return_from_catch() == "catch-return", "return from catch");
+
+  // throw/catch 自定义 type
+  var app_code = 0;
+  var app_msg = "";
+  try throw_ex_type(404, "not found") catch ex: ExAppError {
+    app_code = ex.code;
+    app_msg = ex.msg;
+  };
+  assert(app_code == 404 && app_msg == "not found", "throw/catch custom type");
+
+  // throw/catch spec 值 (通过具体 type catch)
+  var spec_msg = "";
+  try throw_ex_spec("spec-error") catch ex: ExTaggedError {
+    spec_msg = ex.msg;
+  };
+  assert(spec_msg == "spec-error", "throw/catch spec value via concrete type");
 }
 
 func throw_error() {

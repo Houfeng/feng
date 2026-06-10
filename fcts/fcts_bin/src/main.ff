@@ -24,6 +24,8 @@ func main(args: string[]) {
   test_array();
   test_generic();
   test_variadic();
+  test_tuple();
+  test_iterator();
   test_module();
 
   println("");

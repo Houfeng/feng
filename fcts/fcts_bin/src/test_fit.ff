@@ -43,6 +43,42 @@ fit FitBox {
   }
 }
 
+// fit 内建类型 i32
+fit i32 {
+  func fit_doubled(): i32 {
+    return self * 2;
+  }
+}
+
+// fit 内建类型 int[]
+fit int[] {
+  func fit_head(): int {
+    return self[0];
+  }
+}
+
+// 泛型 fit 用 spec
+spec FitReadable<T> {
+  func fit_read(): T;
+}
+
+// 泛型 fit 用 type
+type FitGenBox<T> {
+  var value: T;
+}
+
+// 泛型 fit
+fit FitGenBox<T>: FitReadable<T> {
+  func fit_read(): T {
+    return self.value;
+  }
+}
+
+// 泛型 fit 辅助函数
+func read_fit_int(reader: FitReadable<int>): int {
+  return reader.fit_read();
+}
+
 /** fit 适配测试 */
 open func test_fit() {
   println("--- test_fit ---");
@@ -64,4 +100,17 @@ open func test_fit() {
   // fit 方法通过 spec 视角调用
   let desc: Describable = FitAnimal { kind: "dog" };
   assert(desc.describe() == "Animal: dog", "fit method via spec view");
+
+  // fit 内建类型 i32
+  let doubled: i32 = 21;
+  assert(doubled.fit_doubled() == 42, "fit builtin i32 method");
+
+  // fit 内建类型 int[]
+  let xs: int[] = [7, 9];
+  assert(xs.fit_head() == 7, "fit builtin int[] method");
+
+  // 泛型 fit
+  let gbox: FitGenBox<int> = FitGenBox<int>();
+  gbox.value = 42;
+  assert(read_fit_int(gbox) == 42, "generic fit");
 }

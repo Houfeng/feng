@@ -13,6 +13,42 @@ type UnionTag {
 
 spec TagOrInt: UnionTag | int;
 
+// union 含 spec 类型
+spec UnionGreetable {
+  func ugreet(): string;
+}
+
+type UnionUser: UnionGreetable {
+  let name: string;
+
+  func ugreet(): string {
+    return self.name;
+  }
+}
+
+spec DisplayUnion: UnionGreetable | string;
+
+// 泛型 union
+type UnionError {
+  let code: int;
+}
+
+spec UnionResult<T>: UnionError | T;
+
+// union 含 spec 辅助函数
+func make_display_named(name: string): DisplayUnion {
+  let named: UnionGreetable = UnionUser { name: name };
+  return named;
+}
+
+func print_display_union(value: DisplayUnion): string {
+  return if value {
+    UnionGreetable { value.ugreet() }
+    string { value }
+    else { "else" }
+  };
+}
+
 /** 联合类型测试 */
 open func test_union() {
   println("--- test_union ---");
@@ -70,4 +106,38 @@ open func test_union() {
     else { "else" }
   };
   assert(result4 == "int", "union with custom type (int branch)");
+
+  // union 默认零值
+  let default_choice: IntOrString;
+  let default_result = if default_choice {
+    int { "int" }
+    string { "string" }
+    else { "else" }
+  };
+  assert(default_result == "int", "union default zero value");
+
+  // union 含 spec 类型
+  let du1 = make_display_named("spec-user");
+  assert(print_display_union(du1) == "spec-user", "union with spec member (Named branch)");
+
+  // union 含 spec 类型 - string 分支
+  let du2: DisplayUnion = "text";
+  assert(print_display_union(du2) == "text", "union with spec member (string branch)");
+
+  // 泛型 union
+  let ok_val: UnionResult<int> = 42;
+  let ok_result = if ok_val {
+    int { "int-ok" }
+    UnionError { "error" }
+    else { "else" }
+  };
+  assert(ok_result == "int-ok", "generic union (value branch)");
+
+  let err_val: UnionResult<int> = UnionError { code: 7 };
+  let err_result = if err_val {
+    int { "int" }
+    UnionError { "error-ok" }
+    else { "else" }
+  };
+  assert(err_result == "error-ok", "generic union (error branch)");
 }
