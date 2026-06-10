@@ -3,12 +3,10 @@ open module fcts_lib.helper;
 import std.io;
 import std.text;
 
-/** 跨包辅助函数 */
-open func lib_helper(): int {
-  return 42;
-}
-
-/** 断言辅助函数，根据 ok 输出 ✅ 或 ❌ emoji 前缀，后跟 msgs 以空格拼接的描述信息 */
+/** 
+ * 断言辅助函数
+ * 根据 ok 输出 ✅ 或 ❌ emoji 前缀，后跟 msgs 以空格拼接的描述信息 
+ */
 open func assert(ok: bool, msgs: string...): void {
   let message = string.join(" ", msgs);
   if ok {
