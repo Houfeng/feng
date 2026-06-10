@@ -4,43 +4,33 @@ import std.io;
 import fcts_lib.helper;
 import fcts_lib.test;
 
-/// 模块与导入测试
+/** 模块与导入测试 */
 open func test_module() {
   println("--- test_module ---");
 
   // 跨包函数调用
   let result = lib_helper();
-  if result == 42 {
-    println("[PASS] cross-package function call");
-  }
+  assert(result == 42, "cross-package function call");
 
   // 跨包 type 使用
   let user = LibUser("cross-pkg", 30);
-  if user.name == "cross-pkg" && user.age == 30 {
-    println("[PASS] cross-package type usage");
-  }
+  assert(user.name == "cross-pkg" && user.age == 30, "cross-package type usage");
 
   // 跨包 type 方法调用
-  if user.greet() == "Hello, cross-pkg" {
-    println("[PASS] cross-package method call");
-  }
+  assert(user.greet() == "Hello, cross-pkg", "cross-package method call");
 
   // 跨包 spec 满足
   let named: LibNamed = user;
-  if named.display() == "cross-pkg" {
-    println("[PASS] cross-package spec satisfaction");
-  }
+  assert(named.display() == "cross-pkg", "cross-package spec satisfaction");
 
   // 跨包 enum
   let color = LibColor.Green;
-  if (int)color == 1 {
-    println("[PASS] cross-package enum");
-  }
+  assert((int)color == 1, "cross-package enum");
 
   // 跨包泛型 type
   let box = LibBox<int> { value: 123 };
-  println("[PASS] cross-package generic type");
+  assert(true, "cross-package generic type");
 
   let sbox = LibBox<string> { value: "pkg" };
-  println("[PASS] cross-package generic type (string)");
+  assert(true, "cross-package generic type (string)");
 }

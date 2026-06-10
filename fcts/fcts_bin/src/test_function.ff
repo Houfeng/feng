@@ -1,6 +1,7 @@
 module fcts_bin;
 
 import std.io;
+import fcts_lib.helper;
 
 // 顶层函数
 func add(a: int, b: int): int {
@@ -53,42 +54,30 @@ func sum_nums(a: int, b: int, c: int): int {
   return a + b + c;
 }
 
-/// 函数测试
+/** 函数测试 */
 open func test_function() {
   println("--- test_function ---");
 
   // 顶层函数调用
-  if add(3, 4) == 7 {
-    println("[PASS] top-level function");
-  }
+  assert(add(3, 4) == 7, "top-level function");
 
   // 有返回值的函数
-  if multiply(3, 4) == 12 {
-    println("[PASS] function with return value");
-  }
+  assert(multiply(3, 4) == 12, "function with return value");
 
   // void 函数
   do_nothing();
   do_nothing2();
-  println("[PASS] void function");
+  assert(true, "void function");
 
   // var 参数
-  if increment(10) == 11 {
-    println("[PASS] var parameter");
-  }
+  assert(increment(10) == 11, "var parameter");
 
   // let 参数
-  if readonly_param(10) == 11 {
-    println("[PASS] explicit let parameter");
-  }
+  assert(readonly_param(10) == 11, "explicit let parameter");
 
   // 函数重载 - 类型
-  if describe(42) == "int" && describe("hi") == "string" {
-    println("[PASS] function overload by type");
-  }
+  assert(describe(42) == "int" && describe("hi") == "string", "function overload by type");
 
   // 函数重载 - 参数数量
-  if sum_nums(1) == 1 && sum_nums(1, 2) == 3 && sum_nums(1, 2, 3) == 6 {
-    println("[PASS] function overload by arity");
-  }
+  assert(sum_nums(1) == 1 && sum_nums(1, 2) == 3 && sum_nums(1, 2, 3) == 6, "function overload by arity");
 }

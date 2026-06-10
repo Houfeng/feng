@@ -1,98 +1,67 @@
 module fcts_bin;
 
 import std.io;
+import fcts_lib.helper;
 
-/// 数值字面量测试
+/** 数值字面量测试 */
 open func test_numeric_literal() {
   println("--- test_numeric_literal ---");
 
   // 十进制
   let dec = 255;
-  if dec == 255 {
-    println("[PASS] decimal literal");
-  }
+  assert(dec == 255, "decimal literal");
 
   // 十六进制
   let hex = 0xFF;
-  if hex == 255 {
-    println("[PASS] hexadecimal literal 0xFF");
-  }
+  assert(hex == 255, "hexadecimal literal 0xFF");
 
   // 十六进制小写
   let hex_lower = 0xff;
-  if hex_lower == 255 {
-    println("[PASS] hexadecimal literal 0xff");
-  }
+  assert(hex_lower == 255, "hexadecimal literal 0xff");
 
   // 二进制
   let bin = 0b11111111;
-  if bin == 255 {
-    println("[PASS] binary literal 0b11111111");
-  }
+  assert(bin == 255, "binary literal 0b11111111");
 
   // 八进制
   let oct = 0o377;
-  if oct == 255 {
-    println("[PASS] octal literal 0o377");
-  }
+  assert(oct == 255, "octal literal 0o377");
 
   // 数字分隔符
   let million = 1_000_000;
-  if million == 1000000 {
-    println("[PASS] numeric separator _");
-  }
+  assert(million == 1000000, "numeric separator _");
 
   let hex_sep = 0xFF_FF;
-  if hex_sep == 65535 {
-    println("[PASS] hex with separator 0xFF_FF");
-  }
+  assert(hex_sep == 65535, "hex with separator 0xFF_FF");
 
   let bin_sep = 0b1111_0000;
-  if bin_sep == 240 {
-    println("[PASS] binary with separator 0b1111_0000");
-  }
+  assert(bin_sep == 240, "binary with separator 0b1111_0000");
 
   // 浮点字面量
   let pi = 3.14;
-  if pi > 3.0 && pi < 4.0 {
-    println("[PASS] float literal");
-  }
+  assert(pi > 3.0 && pi < 4.0, "float literal");
 
   // 科学计数法
   let sci = 1.5e3;
-  if sci > 1499.0 && sci < 1501.0 {
-    println("[PASS] scientific notation 1.5e3");
-  }
+  assert(sci > 1499.0 && sci < 1501.0, "scientific notation 1.5e3");
 
   let sci_neg = 2.0e-1;
-  if sci_neg > 0.19 && sci_neg < 0.21 {
-    println("[PASS] scientific notation 2.0e-1");
-  }
+  assert(sci_neg > 0.19 && sci_neg < 0.21, "scientific notation 2.0e-1");
 
   // 数值类型贴合
   let x: f64 = 1;
-  if x > 0.0 {
-    println("[PASS] numeric literal fitting to f64");
-  }
+  assert(x > 0.0, "numeric literal fitting to f64");
 
   let y: f32 = 1;
-  if (double)y > 0.0 {
-    println("[PASS] numeric literal fitting to f32");
-  }
+  assert((double)y > 0.0, "numeric literal fitting to f32");
 
   let z: i64 = 100;
-  if z == (i64)100 {
-    println("[PASS] numeric literal fitting to i64");
-  }
+  assert(z == (i64)100, "numeric literal fitting to i64");
 
   let w: u8 = 200;
-  if (int)w == 200 {
-    println("[PASS] numeric literal fitting to u8");
-  }
+  assert((int)w == 200, "numeric literal fitting to u8");
 
   // 纯字面量常量表达式贴合
   let expr_fit: f64 = 100 + 50;
-  if expr_fit > 149.0 && expr_fit < 151.0 {
-    println("[PASS] literal expression fitting to f64");
-  }
+  assert(expr_fit > 149.0 && expr_fit < 151.0, "literal expression fitting to f64");
 }

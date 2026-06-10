@@ -1,37 +1,32 @@
 module fcts_bin;
 
 import std.io;
+import fcts_lib.helper;
 
 // 可调用形状
 spec IntMapper(x: int): int;
 spec IntProducer(): int;
 spec Action(): void;
 
-/// Lambda 与闭包测试
+/** Lambda 与闭包测试 */
 open func test_lambda() {
   println("--- test_lambda ---");
 
   // 单表达式 Lambda
   let double: IntMapper = (x: int) -> x * 2;
-  if double(5) == 10 {
-    println("[PASS] single-expression lambda");
-  }
+  assert(double(5) == 10, "single-expression lambda");
 
   // 多行 Lambda
   let compute: IntMapper = (x: int) {
     let temp = x + 10;
     return temp * 2;
   };
-  if compute(5) == 30 {
-    println("[PASS] multi-line lambda");
-  }
+  assert(compute(5) == 30, "multi-line lambda");
 
   // 闭包捕获外部变量 (let)
   let base = 100;
   let add_base: IntMapper = (x: int) -> x + base;
-  if add_base(5) == 105 {
-    println("[PASS] closure captures let binding");
-  }
+  assert(add_base(5) == 105, "closure captures let binding");
 
   // 闭包捕获外部变量 (var) - 引用捕获
   var counter = 0;
@@ -41,28 +36,20 @@ open func test_lambda() {
   inc();
   inc();
   inc();
-  if counter == 3 {
-    println("[PASS] closure captures var binding (reference)");
-  }
+  assert(counter == 3, "closure captures var binding (reference)");
 
   // Lambda 作为参数传递
   let result = apply_mapper(10, (x: int) -> x * 3);
-  if result == 30 {
-    println("[PASS] lambda as argument");
-  }
+  assert(result == 30, "lambda as argument");
 
   // Lambda 作为返回值
   let adder = make_adder(100);
-  if adder(5) == 105 {
-    println("[PASS] lambda as return value (closure)");
-  }
+  assert(adder(5) == 105, "lambda as return value (closure)");
 
   // 方法值
   let obj = LambdaTestObj { value: 42 };
   let getter: IntProducer = obj.get_value;
-  if getter() == 42 {
-    println("[PASS] method value");
-  }
+  assert(getter() == 42, "method value");
 }
 
 func apply_mapper(x: int, f: IntMapper): int {

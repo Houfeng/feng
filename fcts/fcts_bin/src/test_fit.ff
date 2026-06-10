@@ -1,6 +1,7 @@
 module fcts_bin;
 
 import std.io;
+import fcts_lib.helper;
 
 // 用于 fit 测试的 spec
 spec Describable {
@@ -42,35 +43,25 @@ fit FitBox {
   }
 }
 
-/// fit 适配测试
+/** fit 适配测试 */
 open func test_fit() {
   println("--- test_fit ---");
 
   // 契约适配 - fit A: B
   let animal = FitAnimal { kind: "cat" };
   let d: Describable = animal;
-  if d.describe() == "Animal: cat" {
-    println("[PASS] fit contract adaptation");
-  }
+  assert(d.describe() == "Animal: cat", "fit contract adaptation");
 
   // 自扩展 - fit A {}
   let box = FitBox { value: 5 };
-  if box.doubled() == 10 {
-    println("[PASS] fit self-extension method");
-  }
-  if box.is_positive() {
-    println("[PASS] fit self-extension method (bool)");
-  }
+  assert(box.doubled() == 10, "fit self-extension method");
+  assert(box.is_positive(), "fit self-extension method (bool)");
 
   // fit 静态方法
   let box2 = FitBox.of(42);
-  if box2.value == 42 {
-    println("[PASS] fit static method");
-  }
+  assert(box2.value == 42, "fit static method");
 
   // fit 方法通过 spec 视角调用
   let desc: Describable = FitAnimal { kind: "dog" };
-  if desc.describe() == "Animal: dog" {
-    println("[PASS] fit method via spec view");
-  }
+  assert(desc.describe() == "Animal: dog", "fit method via spec view");
 }

@@ -1,6 +1,7 @@
 module fcts_bin;
 
 import std.io;
+import fcts_lib.helper;
 
 // union-form spec
 spec IntOrString: int | string;
@@ -12,7 +13,7 @@ type UnionTag {
 
 spec TagOrInt: UnionTag | int;
 
-/// 联合类型测试
+/** 联合类型测试 */
 open func test_union() {
   println("--- test_union ---");
 
@@ -20,9 +21,7 @@ open func test_union() {
   let v1: IntOrString = 42;
   if v1 {
     int {
-      if v1 == 42 {
-        println("[PASS] union entry with int");
-      }
+      assert(v1 == 42, "union entry with int");
     }
     else {}
   }
@@ -31,9 +30,7 @@ open func test_union() {
   let v2: IntOrString = "hello";
   if v2 {
     string {
-      if v2 == "hello" {
-        println("[PASS] union entry with string");
-      }
+      assert(v2 == "hello", "union entry with string");
     }
     else {}
   }
@@ -45,9 +42,7 @@ open func test_union() {
     string { "is string" }
     else { "else" }
   };
-  if result == "is int" {
-    println("[PASS] union match narrowing");
-  }
+  assert(result == "is int", "union match narrowing");
 
   // union 匹配 string 分支
   let v4: IntOrString = "world";
@@ -56,9 +51,7 @@ open func test_union() {
     string { "string" }
     else { "else" }
   };
-  if result2 == "string" {
-    println("[PASS] union match string branch");
-  }
+  assert(result2 == "string", "union match string branch");
 
   // union 带自定义 type
   let v5: TagOrInt = UnionTag { tag: "x" };
@@ -67,9 +60,7 @@ open func test_union() {
     int { "int" }
     else { "else" }
   };
-  if result3 == "tag" {
-    println("[PASS] union with custom type");
-  }
+  assert(result3 == "tag", "union with custom type");
 
   // union 带自定义 type - int 分支
   let v6: TagOrInt = 99;
@@ -78,7 +69,5 @@ open func test_union() {
     int { "int" }
     else { "else" }
   };
-  if result4 == "int" {
-    println("[PASS] union with custom type (int branch)");
-  }
+  assert(result4 == "int", "union with custom type (int branch)");
 }

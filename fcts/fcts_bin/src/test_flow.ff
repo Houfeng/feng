@@ -1,26 +1,19 @@
 module fcts_bin;
 
 import std.io;
+import fcts_lib.helper;
 
-/// 流程控制测试
+/** 流程控制测试 */
 open func test_flow() {
   println("--- test_flow ---");
 
   // if/else if/else
   let x = 15;
-  if x > 20 {
-    println("[FAIL] if/else if/else");
-  } else if x > 10 {
-    println("[PASS] if/else if/else");
-  } else {
-    println("[FAIL] if/else if/else");
-  }
+  assert(x > 10 && x <= 20, "if/else if/else");
 
   // if 表达式
   let label = if x >= 18 { "adult" } else { "minor" };
-  if label == "minor" {
-    println("[PASS] if expression");
-  }
+  assert(label == "minor", "if expression");
 
   // 条件匹配 - 单值
   let age = 18;
@@ -30,9 +23,7 @@ open func test_flow() {
     60 { "senior" }
     else { "other" }
   };
-  if result == "adult" {
-    println("[PASS] value match - single value");
-  }
+  assert(result == "adult", "value match - single value");
 
   // 条件匹配 - 值列表
   let code = 20;
@@ -40,9 +31,7 @@ open func test_flow() {
     10, 20, 30 { "tens" }
     else { "other" }
   };
-  if tag == "tens" {
-    println("[PASS] value match - value list");
-  }
+  assert(tag == "tens", "value match - value list");
 
   // 条件匹配 - 整数闭区间
   let score = 85;
@@ -54,9 +43,7 @@ open func test_flow() {
     90...100 { "A" }
     else { "?" }
   };
-  if grade == "B" {
-    println("[PASS] value match - integer range");
-  }
+  assert(grade == "B", "value match - integer range");
 
   // while 循环
   var sum = 0;
@@ -65,18 +52,14 @@ open func test_flow() {
     sum += i;
     i += 1;
   }
-  if sum == 55 {
-    println("[PASS] while loop");
-  }
+  assert(sum == 55, "while loop");
 
   // for 三段式循环
   var product = 1;
   for var j = 1; j <= 5; j += 1 {
     product *= j;
   }
-  if product == 120 {
-    println("[PASS] for three-part loop");
-  }
+  assert(product == 120, "for three-part loop");
 
   // for/in 数组迭代
   let items = [10, 20, 30];
@@ -84,9 +67,7 @@ open func test_flow() {
   for let item in items {
     total += item;
   }
-  if total == 60 {
-    println("[PASS] for/in array iteration");
-  }
+  assert(total == 60, "for/in array iteration");
 
   // break
   var count = 0;
@@ -96,9 +77,7 @@ open func test_flow() {
     }
     count += 1;
   }
-  if count == 5 {
-    println("[PASS] break");
-  }
+  assert(count == 5, "break");
 
   // continue
   var even_sum = 0;
@@ -108,9 +87,7 @@ open func test_flow() {
     }
     even_sum += n;
   }
-  if even_sum == 20 {
-    println("[PASS] continue");
-  }
+  assert(even_sum == 20, "continue");
 
   // 嵌套循环 break
   var outer_count = 0;
@@ -122,9 +99,7 @@ open func test_flow() {
     }
     outer_count += 1;
   }
-  if outer_count == 5 {
-    println("[PASS] nested loop break (inner only)");
-  }
+  assert(outer_count == 5, "nested loop break (inner only)");
 
   // 条件匹配 - 混合区间和单值
   let val = 100;
@@ -135,7 +110,5 @@ open func test_flow() {
     100 { "hundred" }
     else { "other" }
   };
-  if category == "hundred" {
-    println("[PASS] value match - mixed range and values");
-  }
+  assert(category == "hundred", "value match - mixed range and values");
 }

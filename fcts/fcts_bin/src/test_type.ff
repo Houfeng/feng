@@ -1,6 +1,7 @@
 module fcts_bin;
 
 import std.io;
+import fcts_lib.helper;
 
 // 基本 type 定义
 type Point {
@@ -56,90 +57,62 @@ type Resource {
   }
 }
 
-/// type 类型定义测试
+/** type 类型定义测试 */
 open func test_type() {
   println("--- test_type ---");
 
   // 基本 type + 对象字面量
   let p = Point { x: 10, y: 20 };
-  if p.x == 10 && p.y == 20 {
-    println("[PASS] basic type with object literal");
-  }
+  assert(p.x == 10 && p.y == 20, "basic type with object literal");
 
   // var 成员修改
   p.x = 30;
-  if p.x == 30 {
-    println("[PASS] var member mutation");
-  }
+  assert(p.x == 30, "var member mutation");
 
   // 构造函数
   let person = Person("Alice", 25);
-  if person.name == "Alice" && person.age == 25 {
-    println("[PASS] constructor");
-  }
+  assert(person.name == "Alice" && person.age == 25, "constructor");
 
   // 成员方法
-  if person.info() == "Alice" {
-    println("[PASS] member method");
-  }
+  assert(person.info() == "Alice", "member method");
 
   // 对象字面量覆盖构造函数
   let person2 = Person("Bob", 30) { age: 31 };
-  if person2.name == "Bob" && person2.age == 31 {
-    println("[PASS] object literal override after constructor");
-  }
+  assert(person2.name == "Bob" && person2.age == 31, "object literal override after constructor");
 
   // 引用语义
   let a = Point { x: 1, y: 2 };
   let b = a;
   b.x = 99;
-  if a.x == 99 {
-    println("[PASS] reference semantics");
-  }
+  assert(a.x == 99, "reference semantics");
 
   // 默认零值
   let empty_point: Point;
-  if empty_point.x == 0 && empty_point.y == 0 {
-    println("[PASS] default zero value for type");
-  }
+  assert(empty_point.x == 0 && empty_point.y == 0, "default zero value for type");
 
   // Type() 构造
   let p2 = Point();
-  if p2.x == 0 && p2.y == 0 {
-    println("[PASS] Type() construction");
-  }
+  assert(p2.x == 0 && p2.y == 0, "Type() construction");
 
   // Type {} 简写
   let p3 = Point {};
-  if p3.x == 0 && p3.y == 0 {
-    println("[PASS] Type {} shorthand");
-  }
+  assert(p3.x == 0 && p3.y == 0, "Type {} shorthand");
 
   // 静态成员
   Counter.count = 0;
   let c1 = Counter.create(10);
   let c2 = Counter.create(20);
-  if Counter.get_count() == 2 {
-    println("[PASS] static member and method");
-  }
-  if c1.get_value() == 10 && c2.get_value() == 20 {
-    println("[PASS] static factory creates instances");
-  }
+  assert(Counter.get_count() == 2, "static member and method");
+  assert(c1.get_value() == 10 && c2.get_value() == 20, "static factory creates instances");
 
   // 终结器 (确保不会 crash)
   let r = Resource(1);
-  if r.id == 1 {
-    println("[PASS] type with destructor");
-  }
+  assert(r.id == 1, "type with destructor");
 
   // == / != 引用比较
   let pa = Point { x: 1, y: 2 };
   let pb = Point { x: 1, y: 2 };
   let pc = pa;
-  if pa != pb {
-    println("[PASS] object == compares reference identity (different)");
-  }
-  if pa == pc {
-    println("[PASS] object == compares reference identity (same)");
-  }
+  assert(pa != pb, "object == compares reference identity (different)");
+  assert(pa == pc, "object == compares reference identity (same)");
 }

@@ -1,8 +1,9 @@
 module fcts_bin;
 
 import std.io;
+import fcts_lib.helper;
 
-/// 异常处理测试
+/** 异常处理测试 */
 open func test_exception() {
   println("--- test_exception ---");
 
@@ -13,26 +14,20 @@ open func test_exception() {
       caught = true;
     }
   };
-  if caught {
-    println("[PASS] basic try/catch");
-  }
+  assert(caught, "basic try/catch");
 
   // try/catch 表达式
   let fallback: int = -1;
   let value = try parse_int("bad") catch ex: string {
     fallback;
   };
-  if value == -1 {
-    println("[PASS] try/catch expression");
-  }
+  assert(value == -1, "try/catch expression");
 
   // try/catch 正常路径
   let ok_value = try parse_int("ok") catch ex: string {
     fallback;
   };
-  if ok_value == 42 {
-    println("[PASS] try/catch normal path");
-  }
+  assert(ok_value == 42, "try/catch normal path");
 
   // 多 catch 子句
   var catch_type = "";
@@ -41,9 +36,7 @@ open func test_exception() {
   } catch ex: i32 {
     catch_type = "int";
   };
-  if catch_type == "int" {
-    println("[PASS] multiple catch clauses");
-  }
+  assert(catch_type == "int", "multiple catch clauses");
 
   // catch unknown 兜底
   var unknown_caught = false;
@@ -52,18 +45,14 @@ open func test_exception() {
   } catch ex: unknown {
     unknown_caught = true;
   };
-  if unknown_caught {
-    println("[PASS] catch unknown fallback");
-  }
+  assert(unknown_caught, "catch unknown fallback");
 
   // 匿名 catch
   var anon_caught = false;
   try throw_error() catch {
     anon_caught = true;
   };
-  if anon_caught {
-    println("[PASS] anonymous catch");
-  }
+  assert(anon_caught, "anonymous catch");
 
   // 省略 catch 自动上抛
   var propagated = false;
@@ -72,18 +61,14 @@ open func test_exception() {
       propagated = true;
     }
   };
-  if propagated {
-    println("[PASS] try without catch auto-propagation");
-  }
+  assert(propagated, "try without catch auto-propagation");
 
   // try/catch void 路径 (no throw)
   var no_error = true;
   try maybe_throw(false) catch ex: string {
     no_error = false;
   };
-  if no_error {
-    println("[PASS] try/catch normal path (no throw)");
-  }
+  assert(no_error, "try/catch normal path (no throw)");
 
   // catch 中再 throw
   var rethrown = false;
@@ -92,9 +77,7 @@ open func test_exception() {
       rethrown = true;
     }
   };
-  if rethrown {
-    println("[PASS] rethrow in catch");
-  }
+  assert(rethrown, "rethrow in catch");
 }
 
 func throw_error() {
