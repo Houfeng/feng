@@ -16077,7 +16077,8 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
 }
 
 static void record_resolved_callable_from_resolution(
-    const FengExpr *call_expr, const FunctionCallResolution *resolution) {
+    const FengExpr *call_expr, const FunctionCallResolution *resolution,
+    const FengTypeRef *owner_instance_type_ref) {
     FengExpr *mutable_expr = (FengExpr *)call_expr;
     FengResolvedCallable *slot;
 
@@ -16088,6 +16089,7 @@ static void record_resolved_callable_from_resolution(
     }
 
     slot = &mutable_expr->as.call.resolved_callable;
+    slot->owner_instance_type_ref = owner_instance_type_ref;
     if (resolution->fit_decl != NULL) {
         slot->kind = resolution->member != NULL && resolution->member->is_static
                          ? FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD
@@ -16151,7 +16153,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
                                                                         resolution.callable);
-                    record_resolved_callable_from_resolution(expr, &resolution);
+                    record_resolved_callable_from_resolution(expr, &resolution, NULL);
                     record_object_arg_coercion_sites(context,
                                                      expr->as.call.args,
                                                      expr->as.call.arg_count,
@@ -16234,7 +16236,8 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
                                                                         resolution.callable);
-                    record_resolved_callable_from_resolution(expr, &resolution);
+                    record_resolved_callable_from_resolution(expr, &resolution,
+                                                             static_owner_type.type_ref);
                     record_object_arg_coercion_sites_for_owner_instance(context,
                                                                         expr->as.call.args,
                                                                         expr->as.call.arg_count,
@@ -16344,7 +16347,8 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 materialize_callable_type_param_constraint_witnesses(context,
                                                                     expr,
                                                                     resolution.callable);
-                record_resolved_callable_from_resolution(expr, &resolution);
+                record_resolved_callable_from_resolution(expr, &resolution,
+                                                         owner_type.type_ref);
                 record_object_arg_coercion_sites_for_owner_instance(context,
                                                                     expr->as.call.args,
                                                                     expr->as.call.arg_count,
@@ -16418,7 +16422,8 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 materialize_callable_type_param_constraint_witnesses(context,
                                                                     expr,
                                                                     resolution.callable);
-                record_resolved_callable_from_resolution(expr, &resolution);
+                record_resolved_callable_from_resolution(expr, &resolution,
+                                                         owner_type.type_ref);
                 record_object_arg_coercion_sites_for_owner_instance(context,
                                                                     expr->as.call.args,
                                                                     expr->as.call.arg_count,
@@ -16488,7 +16493,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
                                                                         resolution.callable);
-                    record_resolved_callable_from_resolution(expr, &resolution);
+                    record_resolved_callable_from_resolution(expr, &resolution, NULL);
                     record_object_arg_coercion_sites(context,
                                                      expr->as.call.args,
                                                      expr->as.call.arg_count,

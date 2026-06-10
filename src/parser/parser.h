@@ -62,6 +62,9 @@ typedef struct FengResolvedCallable {
     const FengDecl *owner_type_decl;   /* set for TYPE_METHOD/FIT_METHOD/TYPE_CONSTRUCTOR */
     const FengTypeMember *member;      /* set for TYPE_METHOD/FIT_METHOD/TYPE_CONSTRUCTOR */
     const FengDecl *fit_decl;          /* set for FIT_METHOD */
+    /* 调用点 receiver 的具体化类型引用（含 type_args）。用于 post-pass
+     * 对方法返回类型做参数代入以收集间接泛型依赖。借用 AST 生命周期。 */
+    const FengTypeRef *owner_instance_type_ref;
 } FengResolvedCallable;
 
 typedef struct FengParameter {
