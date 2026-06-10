@@ -3176,6 +3176,23 @@ static bool resolver_track_synthetic_type_ref(ResolveContext *context, FengTypeR
                       &type_ref);
 }
 
+/* Transfer a synthetic type_ref to Analysis-level lifetime management.
+ * Synthetic type_refs stored in AST nodes for consumption by post-analysis
+ * passes (e.g. reifiable_deps) must outlive the ResolveContext that created
+ * them.  This function stores ownership in Analysis.synthesized_type_refs,
+ * which is freed only when the entire Analysis is freed. */
+static bool analysis_track_synthetic_type_ref(
+    const FengSemanticAnalysis *analysis_const,
+    FengTypeRef *type_ref) {
+    FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
+
+    return append_raw((void **)&analysis->synthesized_type_refs,
+                      &analysis->synthesized_type_ref_count,
+                      &analysis->synthesized_type_ref_capacity,
+                      sizeof(type_ref),
+                      &type_ref);
+}
+
 static FengTypeRef *clone_type_ref_for_inference(const FengTypeRef *type_ref) {
     FengTypeRef *clone;
 
@@ -18430,7 +18447,27 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                                         mutable_stmt->as.for_stmt.iter_iterable_method = iterable_m;
                                         mutable_stmt->as.for_stmt.iter_iterator_method = cursor_iter_m;
                                         mutable_stmt->as.for_stmt.iter_cursor_type_decl = cursor_decl;
-                                        mutable_stmt->as.for_stmt.iter_cursor_type_ref = cursor_type_ref;
+                                        /* Clone cursor/result type_refs for for_stmt storage.
+                                         * The originals may be synthetic refs freed with the
+                                         * ResolveContext; clones are owned by Analysis and
+                                         * persist for post-analysis passes (reifiable_deps). */
+                                        {
+                                            FengTypeRef *pc = clone_type_ref_for_inference(cursor_type_ref);
+                                            FengTypeRef *pr = clone_type_ref_for_inference(result_type_ref);
+
+                                            if (pc != NULL && !analysis_track_synthetic_type_ref(
+                                                                  context->analysis, pc)) {
+                                                free_synthetic_type_ref(pc);
+                                                pc = NULL;
+                                            }
+                                            if (pr != NULL && !analysis_track_synthetic_type_ref(
+                                                                  context->analysis, pr)) {
+                                                free_synthetic_type_ref(pr);
+                                                pr = NULL;
+                                            }
+                                            mutable_stmt->as.for_stmt.iter_cursor_type_ref = pc;
+                                            mutable_stmt->as.for_stmt.iter_result_type_ref = pr;
+                                        }
                                         iter_protocol_resolved = true;
                                     }
                                 }
@@ -18488,7 +18525,25 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                                     mutable_stmt->as.for_stmt.iter_iterable_method = NULL;
                                     mutable_stmt->as.for_stmt.iter_iterator_method = iterator_m;
                                     mutable_stmt->as.for_stmt.iter_cursor_type_decl = iter_decl;
-                                    mutable_stmt->as.for_stmt.iter_cursor_type_ref = iter_type_ref;
+                                    /* Clone cursor/result type_refs for persistent
+                                     * for_stmt storage (same pattern as @iterable path). */
+                                    {
+                                        FengTypeRef *pc = clone_type_ref_for_inference(iter_type_ref);
+                                        FengTypeRef *pr = clone_type_ref_for_inference(result_type_ref);
+
+                                        if (pc != NULL && !analysis_track_synthetic_type_ref(
+                                                              context->analysis, pc)) {
+                                            free_synthetic_type_ref(pc);
+                                            pc = NULL;
+                                        }
+                                        if (pr != NULL && !analysis_track_synthetic_type_ref(
+                                                              context->analysis, pr)) {
+                                            free_synthetic_type_ref(pr);
+                                            pr = NULL;
+                                        }
+                                        mutable_stmt->as.for_stmt.iter_cursor_type_ref = pc;
+                                        mutable_stmt->as.for_stmt.iter_result_type_ref = pr;
+                                    }
                                     iter_protocol_resolved = true;
                                 }
                             }

@@ -911,6 +911,13 @@ static void collect_from_stmt(CollectContext *ctx, const FengStmt *stmt) {
             collect_from_stmt(ctx, stmt->as.for_stmt.update);
             collect_from_binding(ctx, &stmt->as.for_stmt.iter_binding);
             collect_from_expr(ctx, stmt->as.for_stmt.iter_expr);
+            /* for-in 迭代器协议的 iter()/next() 调用由 codegen 合成，不在
+             * AST 中。cursor 类型（RTD）和 result 元组类型（RAD）的依赖
+             * 必须在此显式收集，否则共享体中 RTD/RAD 查找会失败。
+             * iter_cursor_type_ref 和 iter_result_type_ref 由 analyzer 代入
+             * 后克隆，生命周期由 Analysis 管理，此处安全读取。 */
+            try_collect_type_ref(ctx, stmt->as.for_stmt.iter_cursor_type_ref);
+            try_collect_type_ref(ctx, stmt->as.for_stmt.iter_result_type_ref);
             collect_from_block(ctx, stmt->as.for_stmt.body);
             return;
 

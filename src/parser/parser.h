@@ -356,6 +356,11 @@ struct FengStmt {
             const FengTypeMember *iter_iterator_method;
             const FengDecl *iter_cursor_type_decl;
             const FengTypeRef *iter_cursor_type_ref;
+            /* Substituted result tuple type ref (e.g. (Bool, T) with the
+             * enclosing type's T).  Synthesized by the analyzer; lifetime
+             * managed by FengSemanticAnalysis.synthesized_type_refs so that
+             * post-analysis passes (reifiable_deps) can safely read it. */
+            const FengTypeRef *iter_result_type_ref;
         } for_stmt;
         FengExpr *return_value;
         FengExpr *throw_value;

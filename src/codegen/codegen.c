@@ -2136,6 +2136,33 @@ static bool cg_append_user_type_context_descriptor_args(CG *cg,
                    "codegen: no reified_type_dep found for generic type method call");
 }
 
+/* Return the RTD expression string (e.g. "_td->reified_type_deps[2]") for a
+ * generic UserType inside a shared body.  Caller frees.  Returns NULL and
+ * emits an error on failure. */
+static char *cg_rtd_expr_for_type(CG *cg,
+                                  const UserType *ut,
+                                  FengToken blame) {
+    if (ut == NULL || ut->generic_context_type_param_count == 0U) {
+        cg_fail(cg, blame,
+                "codegen: cg_rtd_expr_for_type called on non-generic type");
+        return NULL;
+    }
+    for (size_t ri = 0U; ri < cg->generic_type_method_rtd_count; ri++) {
+        if (cg->generic_type_method_rtd_descs[ri] != NULL &&
+            strcmp(ut->c_desc_name,
+                   cg->generic_type_method_rtd_descs[ri]) == 0) {
+            const char *src = cg->generic_type_method_rtd_via_desc
+                                  ? "_desc" : "_td";
+            Buf b; buf_init(&b);
+            buf_append_fmt(&b, "%s->reified_type_deps[%zu]", src, ri);
+            return b.data;
+        }
+    }
+    cg_fail(cg, blame,
+            "codegen: no reified_type_dep found for generic cross-type call");
+    return NULL;
+}
+
 static char *cg_generic_witness_subject_expr(const char *desc_name,
                                              const char *slot_expr) {
     Buf b; buf_init(&b);
@@ -10283,11 +10310,26 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
          *   source's subject pointer without incrementing its refcount, so
          *   retain here to give the copy an independent +1. */
         if (!r->owns_ref) {
-            const char *desc = cg_aggregate_desc_name(r->type);
-            if (desc) {
-                cg_emit_current_stmt_line_directive_force(cg);
-                buf_append_fmt(cg->cur_body,
-                               "    feng_aggregate_retain(&%s, &%s);\n", tmp, desc);
+            if (cg_tuple_needs_reified_layout(cg, r->type)) {
+                const char *agg_desc = cg_aggregate_desc_name(r->type);
+                size_t rad_idx;
+                if (agg_desc &&
+                    cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+                    const char *src = cg->generic_type_method_rad_via_desc
+                                          ? "_desc" : "_td";
+                    cg_emit_current_stmt_line_directive_force(cg);
+                    buf_append_fmt(cg->cur_body,
+                        "    feng_aggregate_retain(&%s, "
+                        "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]);\n",
+                        tmp, src, rad_idx);
+                }
+            } else {
+                const char *desc = cg_aggregate_desc_name(r->type);
+                if (desc) {
+                    cg_emit_current_stmt_line_directive_force(cg);
+                    buf_append_fmt(cg->cur_body,
+                                   "    feng_aggregate_retain(&%s, &%s);\n", tmp, desc);
+                }
             }
         }
         scope_add(cg->cur_scope, tmp, tmp, cgtype_clone(r->type), false);
@@ -17641,26 +17683,46 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
                            "    feng_cleanup_pop(); feng_release(%s); %s = NULL;\n",
                            l->c_name, l->c_name);
         } else if (cgtype_is_aggregate(l->type)) {
-            /* Pop every cleanup node registered for the aggregate's managed
-             * slots before releasing through the descriptor. If release
-             * panics, the throwing cleanup walk must not re-enter the same
-             * slots. */
-            const char *desc = cg_aggregate_desc_name(l->type);
-            if (!desc) {
+            if (cg_tuple_needs_reified_layout(cg, l->type)) {
+                /* Reified tuple: single cleanup node (pushed by RAD path in
+                 * cg_emit_cleanup_push_for_aggregate_local), pop 1, release
+                 * via RAD, zero entire struct. */
+                const char *agg_desc = cg_aggregate_desc_name(l->type);
+                size_t rad_idx;
+                if (agg_desc &&
+                    cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+                    const char *src = cg->generic_type_method_rad_via_desc
+                                          ? "_desc" : "_td";
+                    cg_emit_current_stmt_line_directive_force(cg);
+                    buf_append_fmt(cg->cur_body,
+                        "    feng_cleanup_pop(); "
+                        "feng_aggregate_release(&%s, "
+                        "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]); "
+                        "memset(&%s, 0, sizeof %s);\n",
+                        l->c_name, src, rad_idx, l->c_name, l->c_name);
+                }
+            } else {
+                /* Pop every cleanup node registered for the aggregate's managed
+                 * slots before releasing through the descriptor. If release
+                 * panics, the throwing cleanup walk must not re-enter the same
+                 * slots. */
+                const char *desc = cg_aggregate_desc_name(l->type);
+                if (!desc) {
+                    cg_emit_current_stmt_line_directive_force(cg);
+                    buf_append_fmt(cg->cur_body,
+                        "    feng_panic(\"codegen: missing aggregate descriptor for %s\");\n",
+                        l->c_name);
+                    continue;
+                }
                 cg_emit_current_stmt_line_directive_force(cg);
+                buf_append_cstr(cg->cur_body, "    ");
+                cg_emit_cleanup_pops_for_aggregate_local(cg->cur_body, l->type);
                 buf_append_fmt(cg->cur_body,
-                    "    feng_panic(\"codegen: missing aggregate descriptor for %s\");\n",
-                    l->c_name);
-                continue;
+                    "feng_aggregate_release(&%s, &%s); ",
+                    l->c_name, desc);
+                cg_emit_cleanup_zero_for_aggregate_local(cg->cur_body, l->c_name, l->type);
+                buf_append_cstr(cg->cur_body, "\n");
             }
-            cg_emit_current_stmt_line_directive_force(cg);
-            buf_append_cstr(cg->cur_body, "    ");
-            cg_emit_cleanup_pops_for_aggregate_local(cg->cur_body, l->type);
-            buf_append_fmt(cg->cur_body,
-                "feng_aggregate_release(&%s, &%s); ",
-                l->c_name, desc);
-            cg_emit_cleanup_zero_for_aggregate_local(cg->cur_body, l->c_name, l->type);
-            buf_append_cstr(cg->cur_body, "\n");
         }
     }
 }
@@ -17732,6 +17794,25 @@ static bool cg_register_local_for_cleanup(CG *cg,
 static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
                                                      const char *cname,
                                                      const CGType *type) {
+    /* Reified tuple: use RAD to push a single aggregate cleanup node that
+     * covers the entire struct, rather than per-field nodes (which would skip
+     * CG_TYPE_GENERIC_PARAM fields classified as CG_VK_TRIVIAL). */
+    if (cg_tuple_needs_reified_layout(cg, type)) {
+        const char *agg_desc = cg_aggregate_desc_name(type);
+        size_t rad_idx;
+        if (agg_desc &&
+            cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+            const char *src = cg->generic_type_method_rad_via_desc
+                                  ? "_desc" : "_td";
+            cg_emit_current_stmt_line_directive_force(cg);
+            buf_append_fmt(cg->cur_body,
+                "    FengCleanupNode _cu_%s; "
+                "feng_cleanup_push_aggregate(&_cu_%s, &%s, "
+                "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]);\n",
+                cname, cname, cname, src, rad_idx);
+        }
+        return;
+    }
     CGAggregateFacts facts;
     if (cg_aggregate_facts(type, &facts) && facts.emit_cleanup_push != NULL) {
         cg_emit_current_stmt_line_directive_force(cg);
@@ -18506,14 +18587,24 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                                cty, cname, init.c_expr, cname);
             }
         } else if (cgtype_is_aggregate(decl_type)) {
-            /* Step 4b-β — fat spec value: by-value struct copy carries the
-             * subject reference. If the producer was +1 (e.g., wrapped object
-             * literal), take it directly; otherwise route through the
-             * value-model aggregate retain so every managed slot of the
-             * descriptor gets bumped (today subject only, future descriptors
-             * may carry more). */
             if (init.owns_ref) {
                 buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, init.c_expr);
+            } else if (cg_tuple_needs_reified_layout(cg, decl_type)) {
+                /* Reified tuple: retain via RAD. */
+                const char *agg_desc = cg_aggregate_desc_name(decl_type);
+                size_t rad_idx;
+                if (agg_desc &&
+                    cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+                    const char *src = cg->generic_type_method_rad_via_desc
+                                          ? "_desc" : "_td";
+                    buf_append_fmt(cg->cur_body,
+                        "    %s %s = %s; feng_aggregate_retain(&%s, "
+                        "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]);\n",
+                        cty, cname, init.c_expr, cname, src, rad_idx);
+                } else {
+                    buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
+                                   cty, cname, init.c_expr);
+                }
             } else {
                 const char *desc = cg_aggregate_desc_name(decl_type);
                 if (!desc) {
@@ -20623,9 +20714,45 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 "&(const FengFunctionDescriptor){.name = \"%s\"});\n",
                 cursor_cty, cursor_var, iterable_um->c_name, src.c_expr,
                 iterable_um->feng_name);
+        } else if (cg->in_generic_type_method && src_ut != NULL &&
+                   src_ut->generic_context_type_param_count > 0U) {
+            /* Shared body cross-type call: iter() on another generic type.
+             * Use the target's shared body name and calling convention. */
+            char *shared_iter = cg_generic_type_method_shared_cname(
+                cg, src_ut->generic_origin_decl, iterable_method);
+            char *rtd_expr = cg_rtd_expr_for_type(cg, src_ut, stmt->token);
+            if (!shared_iter || !rtd_expr) {
+                free(shared_iter); free(rtd_expr);
+                free(cursor_cty); free(cursor_var);
+                er_free(&src);
+                cg_release_scope(cg, outer_scope);
+                cg->cur_scope = outer_scope->parent;
+                scope_pop_free(outer_scope);
+                return false;
+            }
+            buf_append_fmt(cg->cur_body,
+                "    %s %s; %s((void *)%s, %s, &%s);\n",
+                cursor_cty, cursor_var,
+                shared_iter, src.c_expr, rtd_expr, cursor_var);
+            free(shared_iter);
+            free(rtd_expr);
         } else {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s(%s);\n",
-                           cursor_cty, cursor_var, iterable_um->c_name, src.c_expr);
+            Buf iter_call; buf_init(&iter_call);
+            buf_append_fmt(&iter_call, "%s(%s", iterable_um->c_name, src.c_expr);
+            if (!cg_append_user_type_context_descriptor_args(
+                    cg, &iter_call, src_ut, stmt->token)) {
+                buf_free(&iter_call);
+                free(cursor_cty); free(cursor_var);
+                er_free(&src);
+                cg_release_scope(cg, outer_scope);
+                cg->cur_scope = outer_scope->parent;
+                scope_pop_free(outer_scope);
+                return false;
+            }
+            buf_append_cstr(&iter_call, ")");
+            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
+                           cursor_cty, cursor_var, iter_call.data);
+            buf_free(&iter_call);
         }
         free(cursor_cty);
         er_free(&src);
@@ -20749,24 +20876,58 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
     cg->cur_scope = body_scope;
 
     /* Call @iterator: result = cursor.next() */
-    if (cg_tuple_needs_reified_layout(cg, result_type)) {
-        free(result_cty); cgtype_free(element_type); cgtype_free(result_type);
-        free(cont_label_owned);
-        body_scope->continue_label = NULL;
-        cg->cur_scope = body_scope->parent;
-        scope_pop_free(body_scope);
-        free(cursor_var);
-        cg->loop_depth--;
-        cg_release_scope(cg, outer_scope);
-        cg->cur_scope = outer_scope->parent;
-        scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token,
-            "codegen: for-in loop with generic-dependent iterator result "
-            "type inside a shared body is not yet supported");
-    }
     char *result_var = cg_fresh_temp(cg, "_ir");
-    buf_append_fmt(cg->cur_body, "        %s %s = %s(%s);\n",
-                   result_cty, result_var, iter_um->c_name, cursor_var);
+    if (cg->in_generic_type_method && cursor_ut != NULL &&
+        cursor_ut->generic_context_type_param_count > 0U) {
+        /* Shared body cross-type call for next(). */
+        char *shared_next = cg_generic_type_method_shared_cname(
+            cg, cursor_ut->generic_origin_decl, iterator_method);
+        char *rtd_expr = cg_rtd_expr_for_type(cg, cursor_ut, stmt->token);
+        if (!shared_next || !rtd_expr) {
+            free(shared_next); free(rtd_expr);
+            free(result_var); free(result_cty);
+            cgtype_free(element_type); cgtype_free(result_type);
+            free(cont_label_owned);
+            body_scope->continue_label = NULL;
+            cg->cur_scope = body_scope->parent;
+            scope_pop_free(body_scope);
+            free(cursor_var);
+            cg->loop_depth--;
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return false;
+        }
+        buf_append_fmt(cg->cur_body,
+            "        %s %s; %s((void *)%s, %s, &%s);\n",
+            result_cty, result_var,
+            shared_next, cursor_var, rtd_expr, result_var);
+        free(shared_next);
+        free(rtd_expr);
+    } else {
+        Buf next_call; buf_init(&next_call);
+        buf_append_fmt(&next_call, "%s(%s", iter_um->c_name, cursor_var);
+        if (!cg_append_user_type_context_descriptor_args(
+                cg, &next_call, cursor_ut, stmt->token)) {
+            buf_free(&next_call);
+            free(result_var); free(result_cty);
+            cgtype_free(element_type); cgtype_free(result_type);
+            free(cont_label_owned);
+            body_scope->continue_label = NULL;
+            cg->cur_scope = body_scope->parent;
+            scope_pop_free(body_scope);
+            free(cursor_var);
+            cg->loop_depth--;
+            cg_release_scope(cg, outer_scope);
+            cg->cur_scope = outer_scope->parent;
+            scope_pop_free(outer_scope);
+            return false;
+        }
+        buf_append_cstr(&next_call, ")");
+        buf_append_fmt(cg->cur_body, "        %s %s = %s;\n",
+                       result_cty, result_var, next_call.data);
+        buf_free(&next_call);
+    }
 
     /* Register result tuple for aggregate cleanup if needed. */
     if (cgtype_is_aggregate(result_type)) {
@@ -20775,17 +20936,34 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         cg_emit_cleanup_push_for_aggregate_local(cg, result_var, result_type);
     }
 
-    /* Check termination: if (!result.item1) break; */
+    /* Check termination: if (!result.item1) { release + pop + break; } */
     buf_append_fmt(cg->cur_body, "        if (!%s.%s) { ",
                    result_var, bool_field->c_name);
-    /* Release the result tuple and pop its cleanup node before breaking. */
-    if (cgtype_is_aggregate(result_type)) {
+    if (cg_tuple_needs_reified_layout(cg, result_type)) {
+        /* Reified tuple: single cleanup node, release via RAD, zero. */
+        const char *agg_desc = cg_aggregate_desc_name(result_type);
+        size_t rad_idx;
+        if (agg_desc &&
+            cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+            const char *src = cg->generic_type_method_rad_via_desc
+                                  ? "_desc" : "_td";
+            buf_append_fmt(cg->cur_body,
+                "feng_cleanup_pop(); feng_aggregate_release(&%s, "
+                "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]); "
+                "memset(&%s, 0, sizeof %s); ",
+                result_var, src, rad_idx, result_var, result_var);
+        }
+    } else if (cgtype_is_aggregate(result_type)) {
+        /* Static aggregate: pop correct number of cleanup nodes, release
+         * via static descriptor, zero managed slots. */
         const char *desc = cg_aggregate_desc_name(result_type);
         if (desc) {
             buf_append_fmt(cg->cur_body,
                 "feng_aggregate_release(&%s, &%s); ", result_var, desc);
         }
-        buf_append_cstr(cg->cur_body, "feng_cleanup_pop(); ");
+        cg_emit_cleanup_pops_for_aggregate_local(cg->cur_body, result_type);
+        cg_emit_cleanup_zero_for_aggregate_local(cg->cur_body, result_var,
+                                                 result_type);
     }
     buf_append_cstr(cg->cur_body, "break; }\n");
 
@@ -20808,7 +20986,14 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
     }
 
     char *elem_cty = cg_ctype_dup(element_type);
-    if (cgtype_is_managed(element_type)) {
+    if (element_type->kind == CG_TYPE_GENERIC_PARAM) {
+        /* Generic param element in shared body: the result tuple's field is
+         * a void * slot.  The shared body convention expects generic param
+         * variables to be pointers TO the data, so take the field address. */
+        buf_append_fmt(cg->cur_body,
+            "        %s %s = &%s.%s;\n",
+            elem_cty, iter_cname, result_var, elem_field->c_name);
+    } else if (cgtype_is_managed(element_type)) {
         buf_append_fmt(cg->cur_body,
             "        %s %s = %s.%s; feng_retain(%s);\n",
             elem_cty, iter_cname, result_var, elem_field->c_name, iter_cname);
@@ -27989,6 +28174,15 @@ static size_t cg_tuple_aggregate_flattened_pointer_slot_count(const UserType *tu
     }
     for (size_t i = 0; i < tuple_type->field_count; ++i) {
         const CGType *field_type = tuple_type->fields[i].type;
+        /* CG_TYPE_GENERIC_PARAM is CG_VK_TRIVIAL in cgtype_value_kind (ARC is
+         * dispatch'd at call-site via descriptor), but inside a tuple it is a
+         * potential managed slot — at runtime T may be string/array/object.
+         * Count it so the tuple is classified as aggregate and triggers the
+         * cleanup/retain/release paths. */
+        if (field_type != NULL && field_type->kind == CG_TYPE_GENERIC_PARAM) {
+            count++;
+            continue;
+        }
         switch (cgtype_value_kind(field_type)) {
             case CG_VK_TRIVIAL:
                 break;
