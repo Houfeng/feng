@@ -5,6 +5,7 @@
     "codegen",
     "extlib",
     "fastcall",
+    "fcts",
     "feng",
     "finalizer",
     "kinded",

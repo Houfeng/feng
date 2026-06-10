@@ -1,0 +1,5 @@
+module fcts_lib;
+
+func helper(): int {
+  return 0;
+}

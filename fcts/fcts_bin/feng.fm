@@ -1,0 +1,10 @@
+[package]
+name: "fcts_bin"
+version: "0.1.0"
+target: "bin"
+src: "src/"
+out: "build/"
+
+[dependencies]
+std: "../../std"
+fcts_lib: "../fcts_lib"

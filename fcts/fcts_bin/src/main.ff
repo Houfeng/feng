@@ -1,0 +1,4 @@
+module fcts_bin;
+
+func main(args: string[]) {
+}

@@ -1,0 +1,9 @@
+[package]
+name: "fcts_lib"
+version: "0.1.0"
+target: "lib"
+src: "src/"
+out: "build/"
+
+[dependencies]
+std: "../../std"
