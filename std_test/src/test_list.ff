@@ -154,6 +154,43 @@ func list_for_in_string() {
   writeLine("__LIST_FOR_IN__=" + result);
 }
 
+// type ForInGenericTester<T> {
+//   var items: List<T>;
+//   var lastSeen: T;
+//   var total: i32;
+
+//   func iterateAll() {
+//     self.total = 0;
+//     for let v in self.items {
+//       self.lastSeen = v;
+//       self.total = self.total + 1;
+//     }
+//   }
+// }
+
+// func list_for_in_generic() {
+//   let l = List<i32>();
+//   l.add(10);
+//   l.add(20);
+//   l.add(30);
+//   let t = ForInGenericTester<i32>();
+//   t.items = l;
+//   t.iterateAll();
+//   check(t.total == 3, "list/for-in-generic-count");
+//   check(t.lastSeen == 30, "list/for-in-generic-last-i32");
+// }
+
+// func list_for_in_generic_string() {
+//   let l = List<string>();
+//   l.add("alpha");
+//   l.add("beta");
+//   let t = ForInGenericTester<string>();
+//   t.items = l;
+//   t.iterateAll();
+//   check(t.total == 2, "list/for-in-generic-string-count");
+//   check(t.lastSeen == "beta", "list/for-in-generic-last-string");
+// }
+
 open func run_list_tests() {
   list_add_get();
   list_size();
@@ -168,4 +205,6 @@ open func run_list_tests() {
   list_for_in_empty();
   list_for_in_nested();
   list_for_in_string();
+  // list_for_in_generic();
+  // list_for_in_generic_string();
 }
