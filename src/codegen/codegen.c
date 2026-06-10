@@ -2123,17 +2123,17 @@ static bool cg_append_user_type_context_descriptor_args(CG *cg,
     if (owner_type == NULL || owner_type->generic_context_type_param_count == 0U) {
         return true;
     }
-    for (size_t i = 0U; i < owner_type->generic_context_type_param_count; ++i) {
-        const char *name = owner_type->generic_context_type_param_names[i];
-        const char *desc = cg_generic_param_desc_name_for_name(cg, name);
-
-        if (desc == NULL) {
-            return cg_fail(cg, blame,
-                           "codegen: generic type argument forwarding requires an active generic descriptor context");
+    for (size_t ri = 0U; ri < cg->generic_type_method_rtd_count; ri++) {
+        if (cg->generic_type_method_rtd_descs[ri] != NULL &&
+            strcmp(owner_type->c_desc_name,
+                   cg->generic_type_method_rtd_descs[ri]) == 0) {
+            const char *src = cg->generic_type_method_rtd_via_desc ? "_desc" : "_td";
+            buf_append_fmt(out, ", %s->reified_type_deps[%zu]", src, ri);
+            return true;
         }
-        buf_append_fmt(out, ", %s", desc);
     }
-    return true;
+    return cg_fail(cg, blame,
+                   "codegen: no reified_type_dep found for generic type method call");
 }
 
 static char *cg_generic_witness_subject_expr(const char *desc_name,
@@ -21503,13 +21503,9 @@ static void cg_emit_user_method_proto(Buf *out,
         }
         has_param = true;
     }
-    for (size_t i = 0; i < t->generic_context_type_param_count; ++i) {
-        if (has_param) {
-            buf_append_cstr(out, ", ");
-        }
-        buf_append_fmt(out,
-                       "const FengGenericParamDescriptor *_%s",
-                       t->generic_context_type_param_names[i]);
+    if (t->generic_context_type_param_count > 0U) {
+        if (has_param) buf_append_cstr(out, ", ");
+        buf_append_cstr(out, "const FengTypeDescriptor *_type_desc");
         has_param = true;
     }
     for (size_t i = 0; i < m->param_count; i++) {
@@ -30404,7 +30400,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             Buf b;
 
             buf_init(&b);
-            buf_append_fmt(&b, "_%s", t->generic_context_type_param_names[i]);
+            buf_append_fmt(&b, "_type_desc->reified_generic_params[%zu]", i);
             wrapper_context_desc_names[i] = b.data;
             if (wrapper_context_desc_names[i] == NULL) {
                 cg_fail(cg, m->member->token, "codegen: out of memory");
@@ -30541,11 +30537,9 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             buf_append_fmt(body, "struct %s *self", t->c_struct_name);
             body_has_param = true;
         }
-        for (size_t i = 0; i < t->generic_context_type_param_count; ++i) {
+        if (t->generic_context_type_param_count > 0U) {
             if (body_has_param) buf_append_cstr(body, ", ");
-            buf_append_fmt(body,
-                           "const FengGenericParamDescriptor *%s",
-                           wrapper_context_desc_names[i]);
+            buf_append_cstr(body, "const FengTypeDescriptor *_type_desc");
             body_has_param = true;
         }
         for (size_t i = 0; i < m->param_count; ++i) {
@@ -30572,11 +30566,9 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             buf_append_fmt(proto, "struct %s *self", t->c_struct_name);
             proto_has_param = true;
         }
-        for (size_t i = 0; i < t->generic_context_type_param_count; ++i) {
+        if (t->generic_context_type_param_count > 0U) {
             if (proto_has_param) buf_append_cstr(proto, ", ");
-            buf_append_fmt(proto,
-                           "const FengGenericParamDescriptor *%s",
-                           wrapper_context_desc_names[i]);
+            buf_append_cstr(proto, "const FengTypeDescriptor *_type_desc");
             proto_has_param = true;
         }
         for (size_t i = 0; i < method_tp_count; ++i) {
@@ -30614,11 +30606,9 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             buf_append_fmt(body, "struct %s *self", t->c_struct_name);
             wrapper_body_has_param = true;
         }
-        for (size_t i = 0; i < t->generic_context_type_param_count; ++i) {
+        if (t->generic_context_type_param_count > 0U) {
             if (wrapper_body_has_param) buf_append_cstr(body, ", ");
-            buf_append_fmt(body,
-                           "const FengGenericParamDescriptor *%s",
-                           wrapper_context_desc_names[i]);
+            buf_append_cstr(body, "const FengTypeDescriptor *_type_desc");
             wrapper_body_has_param = true;
         }
         for (size_t i = 0; i < method_tp_count; ++i) {
@@ -30653,8 +30643,8 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     if (!is_static_method) {
         buf_append_cstr(body, "    (void)self;\n");
     }
-    for (size_t i = 0; i < t->generic_context_type_param_count; ++i) {
-        buf_append_fmt(body, "    (void)%s;\n", wrapper_context_desc_names[i]);
+    if (t->generic_context_type_param_count > 0U) {
+        buf_append_cstr(body, "    (void)_type_desc;\n");
     }
     for (size_t i = 0; i < method_tp_count; ++i) {
         buf_append_fmt(body, "    (void)%s;\n", method_desc_names[i]);
@@ -30680,8 +30670,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     bool call_has_arg = false;
     if (!is_static_method) {
         if (t->generic_context_type_param_count > 0U) {
-            buf_append_cstr(body,
-                "(void *)self, ((const FengManagedHeader *)self)->desc");
+            buf_append_cstr(body, "(void *)self, _type_desc");
         } else {
             buf_append_fmt(body, "(void *)self, &%s", t->c_desc_name);
         }
