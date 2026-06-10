@@ -1,0 +1,6 @@
+open module fcts_lib.test;
+
+/** 跨包测试用泛型 type */
+open type LibBox<T> {
+  open let value: T;
+}

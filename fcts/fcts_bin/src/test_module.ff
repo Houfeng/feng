@@ -1,7 +1,8 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib;
+import fcts_lib.helper;
+import fcts_lib.test;
 
 /// 模块与导入测试
 open func test_module() {

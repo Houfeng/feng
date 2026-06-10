@@ -1,0 +1,7 @@
+open module fcts_lib.test;
+
+/** 跨包测试用 spec */
+open spec LibNamed {
+  let name: string;
+  func display(): string;
+}

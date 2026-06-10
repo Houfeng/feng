@@ -1,0 +1,8 @@
+open module fcts_lib.test;
+
+/** 跨包测试用 enum */
+open enum LibColor {
+  Red,
+  Green,
+  Blue
+}
