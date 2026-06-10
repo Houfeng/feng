@@ -1,0 +1,96 @@
+module fcts_bin;
+
+import std.io;
+
+/// 内建基础类型测试
+open func test_builtin_type() {
+  println("--- test_builtin_type ---");
+
+  // 整数类型
+  let a_i8: i8 = 127;
+  let a_i16: i16 = 32767;
+  let a_i32: i32 = 2147483647;
+  let a_i64: i64 = 100;
+
+  if (int)a_i8 == 127 {
+    println("[PASS] i8 type");
+  }
+  if (int)a_i16 == 32767 {
+    println("[PASS] i16 type");
+  }
+  if a_i32 == 2147483647 {
+    println("[PASS] i32 type");
+  }
+  if a_i64 == (i64)100 {
+    println("[PASS] i64 type");
+  }
+
+  // 无符号整数
+  let a_u8: u8 = 255;
+  let a_u16: u16 = 65535;
+  let a_u32: u32 = 100;
+  let a_u64: u64 = 200;
+
+  if (int)a_u8 == 255 {
+    println("[PASS] u8 type");
+  }
+  if (int)a_u16 == 65535 {
+    println("[PASS] u16 type");
+  }
+  if (int)a_u32 == 100 {
+    println("[PASS] u32 type");
+  }
+  if (long)a_u64 == (long)200 {
+    println("[PASS] u64 type");
+  }
+
+  // 类型别名
+  let alias_int: int = 42;
+  let alias_long: long = 42;
+  let alias_byte: byte = 42;
+  let alias_float: float = 3.14;
+  let alias_double: double = 3.14;
+
+  if alias_int == 42 {
+    println("[PASS] int alias for i32");
+  }
+  if alias_long == (long)42 {
+    println("[PASS] long alias for i64");
+  }
+  if (int)alias_byte == 42 {
+    println("[PASS] byte alias for u8");
+  }
+
+  // 浮点类型
+  let f1: f32 = 1.5;
+  let f2: f64 = 2.5;
+  if (double)f1 > 1.0 {
+    println("[PASS] f32 type");
+  }
+  if f2 > 2.0 {
+    println("[PASS] f64 type");
+  }
+
+  // bool
+  let t = true;
+  let f = false;
+  if t && !f {
+    println("[PASS] bool type");
+  }
+
+  // string
+  let s = "hello";
+  if s == "hello" {
+    println("[PASS] string type");
+  }
+
+  // 默认零值
+  let zi: int;
+  let zl: long;
+  let zb: bool;
+  let zs: string;
+  let zf: double;
+  if zi == 0 && zl == (long)0 && zb == false && zs == "" && zf == 0.0 {
+    println("[PASS] default zero values");
+  }
+}

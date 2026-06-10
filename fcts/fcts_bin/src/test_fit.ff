@@ -1,0 +1,76 @@
+module fcts_bin;
+
+import std.io;
+
+// 用于 fit 测试的 spec
+spec Describable {
+  func describe(): string;
+}
+
+// 用于 fit 测试的 type
+type FitAnimal {
+  let kind: string;
+}
+
+// 契约适配
+fit FitAnimal: Describable {
+  func describe(): string {
+    return "Animal: " + self.kind;
+  }
+}
+
+// 用于自扩展测试的 type
+type FitBox {
+  var value: int;
+}
+
+// 自扩展
+fit FitBox {
+  func doubled(): int {
+    return self.value * 2;
+  }
+
+  func is_positive(): bool {
+    return self.value > 0;
+  }
+}
+
+// 静态扩展方法
+fit FitBox {
+  open static func of(v: int): FitBox {
+    return FitBox { value: v };
+  }
+}
+
+/// fit 适配测试
+open func test_fit() {
+  println("--- test_fit ---");
+
+  // 契约适配 - fit A: B
+  let animal = FitAnimal { kind: "cat" };
+  let d: Describable = animal;
+  if d.describe() == "Animal: cat" {
+    println("[PASS] fit contract adaptation");
+  }
+
+  // 自扩展 - fit A {}
+  let box = FitBox { value: 5 };
+  if box.doubled() == 10 {
+    println("[PASS] fit self-extension method");
+  }
+  if box.is_positive() {
+    println("[PASS] fit self-extension method (bool)");
+  }
+
+  // fit 静态方法
+  let box2 = FitBox.of(42);
+  if box2.value == 42 {
+    println("[PASS] fit static method");
+  }
+
+  // fit 方法通过 spec 视角调用
+  let desc: Describable = FitAnimal { kind: "dog" };
+  if desc.describe() == "Animal: dog" {
+    println("[PASS] fit method via spec view");
+  }
+}

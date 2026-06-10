@@ -1,0 +1,96 @@
+module fcts_bin;
+
+import std.io;
+import std.text;
+import std.collections;
+
+/// 数组测试
+open func test_array() {
+  println("--- test_array ---");
+
+  // 数组字面量
+  let nums = [1, 2, 3];
+  if nums.length() == (long)3 {
+    println("[PASS] array literal");
+  }
+
+  // 下标访问
+  if nums[0] == 1 && nums[1] == 2 && nums[2] == 3 {
+    println("[PASS] array index access");
+  }
+
+  // 可写数组
+  let writable: int[!] = [10, 20, 30];
+  writable[0] = 99;
+  if writable[0] == 99 {
+    println("[PASS] writable array T[!]");
+  }
+
+  // 数组创建表达式
+  let buf: int[!] = int[: (long)5];
+  if buf.length() == (long)5 && buf[0] == 0 {
+    println("[PASS] array creation expression Type[:n]");
+  }
+
+  // 空数组
+  let empty: int[] = [];
+  if empty.length() == (long)0 {
+    println("[PASS] empty array");
+  }
+
+  // 多维数组
+  let matrix = [[1, 2], [3, 4]];
+  if matrix[0][0] == 1 && matrix[1][1] == 4 {
+    println("[PASS] multi-dimensional array");
+  }
+
+  // 可写多维数组
+  let w_matrix: int[][!] = [[1, 2], [3, 4]];
+  w_matrix[0] = [5, 6];
+  if w_matrix[0][0] == 5 {
+    println("[PASS] writable outer array int[][!]");
+  }
+
+  // 内层可写
+  let iw_matrix: int[!][] = [[1, 2], [3, 4]];
+  iw_matrix[0][0] = 99;
+  if iw_matrix[0][0] == 99 {
+    println("[PASS] writable inner array int[!][]");
+  }
+
+  // 数组显式转换 T[!] -> T[]
+  let ro = (int[])writable;
+  if ro[0] == 99 {
+    println("[PASS] explicit cast T[!] to T[]");
+  }
+
+  // for/in 遍历数组
+  let items = [10, 20, 30];
+  var sum = 0;
+  for let item in items {
+    sum += item;
+  }
+  if sum == 60 {
+    println("[PASS] for/in array traversal");
+  }
+
+  // 数组引用语义
+  let arr1: int[!] = [1, 2, 3];
+  let arr2 = arr1;
+  arr2[0] = 100;
+  if arr1[0] == 100 {
+    println("[PASS] array reference semantics");
+  }
+
+  // 字符串数组
+  let names = ["Alice", "Bob", "Charlie"];
+  if names[1] == "Bob" {
+    println("[PASS] string array");
+  }
+
+  // 数组默认零值
+  let default_arr: int[];
+  if default_arr.length() == (long)0 {
+    println("[PASS] array default zero value (empty)");
+  }
+}

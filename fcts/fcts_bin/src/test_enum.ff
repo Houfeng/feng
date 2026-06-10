@@ -1,0 +1,68 @@
+module fcts_bin;
+
+import std.io;
+
+// 隐式取值 enum
+enum Direction {
+  North,
+  East,
+  South,
+  West
+}
+
+// 显式取值 enum
+enum HttpStatus {
+  Ok = 200,
+  NotFound = 404,
+  ServerError = 500
+}
+
+/// enum 枚举测试
+open func test_enum() {
+  println("--- test_enum ---");
+
+  // 隐式取值
+  let d = Direction.North;
+  if (int)d == 0 {
+    println("[PASS] enum implicit value (first = 0)");
+  }
+
+  let d2 = Direction.West;
+  if (int)d2 == 3 {
+    println("[PASS] enum implicit value (sequential)");
+  }
+
+  // 显式取值
+  let s = HttpStatus.Ok;
+  if (int)s == 200 {
+    println("[PASS] enum explicit value");
+  }
+
+  let s2 = HttpStatus.NotFound;
+  if (int)s2 == 404 {
+    println("[PASS] enum explicit value (404)");
+  }
+
+  // enum 比较
+  let d3 = Direction.North;
+  if d == d3 {
+    println("[PASS] enum == comparison");
+  }
+
+  let d4 = Direction.South;
+  if d != d4 {
+    println("[PASS] enum != comparison");
+  }
+
+  // enum 默认值 (第一个枚举项)
+  let default_dir: Direction;
+  if default_dir == Direction.North {
+    println("[PASS] enum default value (first item)");
+  }
+
+  // enum 到 int 转换
+  let code = (int)HttpStatus.ServerError;
+  if code == 500 {
+    println("[PASS] enum to int explicit cast");
+  }
+}

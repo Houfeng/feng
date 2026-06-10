@@ -1,0 +1,106 @@
+module fcts_bin;
+
+import std.io;
+
+// 泛型 func
+func gidentity<T>(value: T): T {
+  return value;
+}
+
+// 泛型约束
+spec GSizeable {
+  func gsize(): int;
+}
+
+type GSizedList: GSizeable {
+  let count: int;
+
+  func gsize(): int {
+    return self.count;
+  }
+}
+
+func get_gsize<T: GSizeable>(item: T): int {
+  return item.gsize();
+}
+
+// 泛型 spec
+spec GReader<T> {
+  func read_val(): T;
+}
+
+type IntReader: GReader<int> {
+  let value: int;
+
+  func read_val(): int {
+    return self.value;
+  }
+}
+
+type StringReader: GReader<string> {
+  let value: string;
+
+  func read_val(): string {
+    return self.value;
+  }
+}
+
+// 泛型 type 用于接受值
+func wrap_int(v: int): int {
+  return gidentity<int>(v);
+}
+
+func wrap_string(v: string): string {
+  return gidentity<string>(v);
+}
+
+/// 泛型测试
+open func test_generic() {
+  println("--- test_generic ---");
+
+  // 泛型 func - 显式类型参数
+  let r1 = gidentity<int>(100);
+  if r1 == 100 {
+    println("[PASS] generic function (explicit type arg)");
+  }
+
+  // 泛型推导
+  let r2 = gidentity(200);
+  if r2 == 200 {
+    println("[PASS] generic function (type inference int)");
+  }
+
+  let r3 = gidentity("test");
+  if r3 == "test" {
+    println("[PASS] generic function (type inference string)");
+  }
+
+  // 泛型 func 包装
+  if wrap_int(42) == 42 {
+    println("[PASS] generic func wrap int");
+  }
+  if wrap_string("hello") == "hello" {
+    println("[PASS] generic func wrap string");
+  }
+
+  // 泛型约束
+  let list = GSizedList { count: 5 };
+  if get_gsize(list) == 5 {
+    println("[PASS] generic constraint");
+  }
+
+  // 泛型 spec - 具体实现
+  let ir = IntReader { value: 77 };
+  let reader: GReader<int> = ir;
+  let rv = reader.read_val();
+  if rv == 77 {
+    println("[PASS] generic spec (int reader)");
+  }
+
+  let sr = StringReader { value: "data" };
+  let sreader: GReader<string> = sr;
+  let sv = sreader.read_val();
+  if sv == "data" {
+    println("[PASS] generic spec (string reader)");
+  }
+}

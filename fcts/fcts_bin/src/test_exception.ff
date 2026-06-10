@@ -1,0 +1,139 @@
+module fcts_bin;
+
+import std.io;
+
+/// 异常处理测试
+open func test_exception() {
+  println("--- test_exception ---");
+
+  // 基本 try/catch
+  var caught = false;
+  try throw_error() catch ex: string {
+    if ex == "test error" {
+      caught = true;
+    }
+  };
+  if caught {
+    println("[PASS] basic try/catch");
+  }
+
+  // try/catch 表达式
+  let fallback: int = -1;
+  let value = try parse_int("bad") catch ex: string {
+    fallback;
+  };
+  if value == -1 {
+    println("[PASS] try/catch expression");
+  }
+
+  // try/catch 正常路径
+  let ok_value = try parse_int("ok") catch ex: string {
+    fallback;
+  };
+  if ok_value == 42 {
+    println("[PASS] try/catch normal path");
+  }
+
+  // 多 catch 子句
+  var catch_type = "";
+  try throw_int() catch ex: string {
+    catch_type = "string";
+  } catch ex: i32 {
+    catch_type = "int";
+  };
+  if catch_type == "int" {
+    println("[PASS] multiple catch clauses");
+  }
+
+  // catch unknown 兜底
+  var unknown_caught = false;
+  try throw_error() catch ex: int {
+    // 不匹配
+  } catch ex: unknown {
+    unknown_caught = true;
+  };
+  if unknown_caught {
+    println("[PASS] catch unknown fallback");
+  }
+
+  // 匿名 catch
+  var anon_caught = false;
+  try throw_error() catch {
+    anon_caught = true;
+  };
+  if anon_caught {
+    println("[PASS] anonymous catch");
+  }
+
+  // 省略 catch 自动上抛
+  var propagated = false;
+  try call_auto_propagate() catch ex: string {
+    if ex == "propagated" {
+      propagated = true;
+    }
+  };
+  if propagated {
+    println("[PASS] try without catch auto-propagation");
+  }
+
+  // try/catch void 路径 (no throw)
+  var no_error = true;
+  try maybe_throw(false) catch ex: string {
+    no_error = false;
+  };
+  if no_error {
+    println("[PASS] try/catch normal path (no throw)");
+  }
+
+  // catch 中再 throw
+  var rethrown = false;
+  try call_rethrow() catch ex: string {
+    if ex == "rethrown: test error" {
+      rethrown = true;
+    }
+  };
+  if rethrown {
+    println("[PASS] rethrow in catch");
+  }
+}
+
+func throw_error() {
+  throw "test error";
+}
+
+func throw_int() {
+  let v: i32 = 42;
+  throw v;
+}
+
+func parse_int(s: string): int {
+  if s == "ok" {
+    return 42;
+  }
+  throw "parse failed";
+  return 0;
+}
+
+func auto_propagate() {
+  throw_propagated();
+}
+
+func throw_propagated() {
+  throw "propagated";
+}
+
+func maybe_throw(do_throw: bool) {
+  if do_throw {
+    throw "error";
+  }
+}
+
+func call_auto_propagate() {
+  auto_propagate();
+}
+
+func call_rethrow() {
+  try throw_error() catch ex: string {
+    throw "rethrown: " + ex;
+  };
+}

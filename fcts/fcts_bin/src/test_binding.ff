@@ -1,0 +1,66 @@
+module fcts_bin;
+
+import std.io;
+
+/// let/var 绑定与作用域测试
+open func test_binding() {
+  println("--- test_binding ---");
+
+  // let 不可变绑定 + 类型推导
+  let a = 10;
+  if a == 10 {
+    println("[PASS] let binding with type inference");
+  }
+
+  // var 可变绑定
+  var b = 20;
+  b = 30;
+  if b == 30 {
+    println("[PASS] var binding mutation");
+  }
+
+  // 显式类型标注
+  let c: int = 100;
+  if c == 100 {
+    println("[PASS] explicit type annotation");
+  }
+
+  // 默认零值 - int
+  let d: int;
+  if d == 0 {
+    println("[PASS] default zero value for int");
+  }
+
+  // 默认零值 - string
+  let e: string;
+  if e == "" {
+    println("[PASS] default zero value for string");
+  }
+
+  // 默认零值 - bool
+  let f: bool;
+  if f == false {
+    println("[PASS] default zero value for bool");
+  }
+
+  // 块作用域与名称屏蔽
+  let label = "outer";
+  if true {
+    let label = "inner";
+    if label == "inner" {
+      println("[PASS] block scope shadowing (inner)");
+    }
+  }
+  if label == "outer" {
+    println("[PASS] block scope shadowing (outer restored)");
+  }
+
+  // var 在块内修改
+  var counter = 0;
+  for var i = 0; i < 5; i += 1 {
+    counter += 1;
+  }
+  if counter == 5 {
+    println("[PASS] var mutation in loop");
+  }
+}

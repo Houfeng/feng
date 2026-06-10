@@ -1,0 +1,96 @@
+module fcts_bin;
+
+import std.io;
+
+// object-form spec
+spec Printable {
+  func to_string(): string;
+}
+
+// spec 继承
+spec DetailPrintable: Printable {
+  func detail(): string;
+}
+
+// callable-form spec
+spec Transformer(x: int): int;
+
+// type 声明头满足 spec
+type SpecItem: Printable {
+  let label: string;
+
+  func to_string(): string {
+    return self.label;
+  }
+}
+
+// type 满足多个 spec
+type DetailItem: DetailPrintable {
+  let label: string;
+  let desc: string;
+
+  func to_string(): string {
+    return self.label;
+  }
+
+  func detail(): string {
+    return self.label + ": " + self.desc;
+  }
+}
+
+// spec 中的字段
+spec HasName {
+  let name: string;
+}
+
+type NamedEntity: HasName {
+  let name: string;
+}
+
+/// spec 契约测试
+open func test_spec() {
+  println("--- test_spec ---");
+
+  // object-form spec - type 声明头满足
+  let item = SpecItem { label: "test" };
+  let p: Printable = item;
+  if p.to_string() == "test" {
+    println("[PASS] object-form spec via declaration");
+  }
+
+  // spec 继承
+  let detail = DetailItem { label: "item", desc: "a test item" };
+  let dp: DetailPrintable = detail;
+  if dp.to_string() == "item" && dp.detail() == "item: a test item" {
+    println("[PASS] spec inheritance");
+  }
+
+  // callable-form spec
+  let t: Transformer = (x: int) -> x * 2;
+  if t(5) == 10 {
+    println("[PASS] callable-form spec");
+  }
+
+  // 函数赋值到 callable-form spec
+  let t2: Transformer = double_it;
+  if t2(7) == 14 {
+    println("[PASS] function assigned to callable-form spec");
+  }
+
+  // spec 中的字段匹配
+  let entity = NamedEntity { name: "entity1" };
+  let hn: HasName = entity;
+  if hn.name == "entity1" {
+    println("[PASS] spec field matching");
+  }
+
+  // 默认 witness
+  let default_p: Printable;
+  if default_p.to_string() == "" {
+    println("[PASS] default witness (spec default value)");
+  }
+}
+
+func double_it(x: int): int {
+  return x * 2;
+}

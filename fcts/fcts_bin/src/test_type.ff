@@ -1,0 +1,145 @@
+module fcts_bin;
+
+import std.io;
+
+// 基本 type 定义
+type Point {
+  var x: int;
+  var y: int;
+}
+
+// 带构造函数的 type
+type Person {
+  let name: string;
+  var age: int;
+
+  func Person(name: string, age: int) {
+    self.name = name;
+    self.age = age;
+  }
+
+  func info(): string {
+    return self.name;
+  }
+}
+
+// 带静态成员的 type
+type Counter {
+  open static var count: int = 0;
+
+  open static func create(value: int): Counter {
+    Counter.count += 1;
+    return Counter { value: value };
+  }
+
+  open static func get_count(): int {
+    return Counter.count;
+  }
+
+  var value: int;
+
+  func get_value(): int {
+    return self.value;
+  }
+}
+
+// 带终结器的 type
+type Resource {
+  var id: int;
+
+  func Resource(id: int) {
+    self.id = id;
+  }
+
+  func ~Resource() {
+    // 终结器在释放前自动调用
+  }
+}
+
+/// type 类型定义测试
+open func test_type() {
+  println("--- test_type ---");
+
+  // 基本 type + 对象字面量
+  let p = Point { x: 10, y: 20 };
+  if p.x == 10 && p.y == 20 {
+    println("[PASS] basic type with object literal");
+  }
+
+  // var 成员修改
+  p.x = 30;
+  if p.x == 30 {
+    println("[PASS] var member mutation");
+  }
+
+  // 构造函数
+  let person = Person("Alice", 25);
+  if person.name == "Alice" && person.age == 25 {
+    println("[PASS] constructor");
+  }
+
+  // 成员方法
+  if person.info() == "Alice" {
+    println("[PASS] member method");
+  }
+
+  // 对象字面量覆盖构造函数
+  let person2 = Person("Bob", 30) { age: 31 };
+  if person2.name == "Bob" && person2.age == 31 {
+    println("[PASS] object literal override after constructor");
+  }
+
+  // 引用语义
+  let a = Point { x: 1, y: 2 };
+  let b = a;
+  b.x = 99;
+  if a.x == 99 {
+    println("[PASS] reference semantics");
+  }
+
+  // 默认零值
+  let empty_point: Point;
+  if empty_point.x == 0 && empty_point.y == 0 {
+    println("[PASS] default zero value for type");
+  }
+
+  // Type() 构造
+  let p2 = Point();
+  if p2.x == 0 && p2.y == 0 {
+    println("[PASS] Type() construction");
+  }
+
+  // Type {} 简写
+  let p3 = Point {};
+  if p3.x == 0 && p3.y == 0 {
+    println("[PASS] Type {} shorthand");
+  }
+
+  // 静态成员
+  Counter.count = 0;
+  let c1 = Counter.create(10);
+  let c2 = Counter.create(20);
+  if Counter.get_count() == 2 {
+    println("[PASS] static member and method");
+  }
+  if c1.get_value() == 10 && c2.get_value() == 20 {
+    println("[PASS] static factory creates instances");
+  }
+
+  // 终结器 (确保不会 crash)
+  let r = Resource(1);
+  if r.id == 1 {
+    println("[PASS] type with destructor");
+  }
+
+  // == / != 引用比较
+  let pa = Point { x: 1, y: 2 };
+  let pb = Point { x: 1, y: 2 };
+  let pc = pa;
+  if pa != pb {
+    println("[PASS] object == compares reference identity (different)");
+  }
+  if pa == pc {
+    println("[PASS] object == compares reference identity (same)");
+  }
+}

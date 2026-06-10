@@ -1,0 +1,94 @@
+module fcts_bin;
+
+import std.io;
+
+// 顶层函数
+func add(a: int, b: int): int {
+  return a + b;
+}
+
+// 有返回值的函数
+func multiply(a: int, b: int): int {
+  return a * b;
+}
+
+// void 省略
+func do_nothing() {
+}
+
+// 显式 void
+func do_nothing2(): void {
+}
+
+// 参数 var
+func increment(var x: int): int {
+  x += 1;
+  return x;
+}
+
+// 参数 let (显式)
+func readonly_param(let x: int): int {
+  return x + 1;
+}
+
+// 函数重载 - 不同参数类型
+func describe(x: int): string {
+  return "int";
+}
+
+func describe(x: string): string {
+  return "string";
+}
+
+// 函数重载 - 不同参数数量
+func sum_nums(a: int): int {
+  return a;
+}
+
+func sum_nums(a: int, b: int): int {
+  return a + b;
+}
+
+func sum_nums(a: int, b: int, c: int): int {
+  return a + b + c;
+}
+
+/// 函数测试
+open func test_function() {
+  println("--- test_function ---");
+
+  // 顶层函数调用
+  if add(3, 4) == 7 {
+    println("[PASS] top-level function");
+  }
+
+  // 有返回值的函数
+  if multiply(3, 4) == 12 {
+    println("[PASS] function with return value");
+  }
+
+  // void 函数
+  do_nothing();
+  do_nothing2();
+  println("[PASS] void function");
+
+  // var 参数
+  if increment(10) == 11 {
+    println("[PASS] var parameter");
+  }
+
+  // let 参数
+  if readonly_param(10) == 11 {
+    println("[PASS] explicit let parameter");
+  }
+
+  // 函数重载 - 类型
+  if describe(42) == "int" && describe("hi") == "string" {
+    println("[PASS] function overload by type");
+  }
+
+  // 函数重载 - 参数数量
+  if sum_nums(1) == 1 && sum_nums(1, 2) == 3 && sum_nums(1, 2, 3) == 6 {
+    println("[PASS] function overload by arity");
+  }
+}

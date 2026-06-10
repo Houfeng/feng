@@ -1,0 +1,63 @@
+module fcts_bin;
+
+import std.io;
+import std.collections;
+
+// 变长参数函数
+func join_strings(sep: string, parts: string...): string {
+  var result = "";
+  let length = parts.length();
+  for var i: long = (long)0; i < length; i += (long)1 {
+    if i > (long)0 {
+      result = result + sep;
+    }
+    result = result + parts[i];
+  }
+  return result;
+}
+
+// 仅变长参数
+func count_args(items: int...): int {
+  return (int)items.length();
+}
+
+// callable-form spec 中的变长参数
+spec Printer(args: string...): void;
+
+/// 变长参数测试
+open func test_variadic() {
+  println("--- test_variadic ---");
+
+  // 多参数调用
+  let result = join_strings(", ", "a", "b", "c");
+  if result == "a, b, c" {
+    println("[PASS] variadic multiple args");
+  }
+
+  // 单参数调用
+  let single = join_strings("-", "only");
+  if single == "only" {
+    println("[PASS] variadic single arg");
+  }
+
+  // 零参数调用
+  let empty = join_strings("+");
+  if empty == "" {
+    println("[PASS] variadic zero args");
+  }
+
+  // 仅变长参数函数
+  if count_args(1, 2, 3, 4, 5) == 5 {
+    println("[PASS] variadic-only function");
+  }
+  if count_args() == 0 {
+    println("[PASS] variadic-only function (zero args)");
+  }
+
+  // callable-form spec 中的变长参数
+  let p: Printer = (args: string...) {
+    // 简单使用
+  };
+  p("hello", "world");
+  println("[PASS] variadic callable-form spec");
+}

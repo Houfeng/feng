@@ -1,0 +1,91 @@
+module fcts_bin;
+
+import std.io;
+import std.text;
+import std.collections;
+
+/// 字符串测试
+open func test_string() {
+  println("--- test_string ---");
+
+  // 基本字面量
+  let s = "Hello, World!";
+  if s == "Hello, World!" {
+    println("[PASS] string literal");
+  }
+
+  // 转义序列
+  let escaped = "line1\nline2";
+  if escaped.length() > (long)10 {
+    println("[PASS] string escape \\n");
+  }
+
+  let tab = "a\tb";
+  if tab.length() == (long)3 {
+    println("[PASS] string escape \\t");
+  }
+
+  let quote = "say: \"hi\"";
+  if quote.length() == (long)9 {
+    println("[PASS] string escape \\\"");
+  }
+
+  let backslash = "path\\file";
+  if backslash.length() == (long)9 {
+    println("[PASS] string escape \\\\");
+  }
+
+  // 字符串拼接
+  let full = "Hello" + ", " + "World";
+  if full == "Hello, World" {
+    println("[PASS] string concatenation");
+  }
+
+  // 字符串比较 (值语义)
+  let a = "test";
+  let b = "te" + "st";
+  if a == b {
+    println("[PASS] string value equality");
+  }
+
+  // != 比较
+  if "abc" != "def" {
+    println("[PASS] string != comparison");
+  }
+
+  // 空字符串
+  let empty = "";
+  if empty == "" && empty.length() == (long)0 {
+    println("[PASS] empty string");
+  }
+
+  // length() 方法
+  let msg = "Hello";
+  if msg.length() == (long)5 {
+    println("[PASS] string length()");
+  }
+
+  // 中文字符串 (UTF-8)
+  let chinese = "你好";
+  if chinese.length() == (long)6 {
+    println("[PASS] string UTF-8 length (Chinese chars)");
+  }
+
+  // 默认零值
+  let default_s: string;
+  if default_s == "" {
+    println("[PASS] string default zero value");
+  }
+
+  // format 格式化
+  let formatted = format("Hello, {0}!", "World");
+  if formatted == "Hello, World!" {
+    println("[PASS] string format with placeholder");
+  }
+
+  // 多占位符
+  let multi = format("{0} + {1} = {2}", "1", "2", "3");
+  if multi == "1 + 2 = 3" {
+    println("[PASS] string format multiple placeholders");
+  }
+}
