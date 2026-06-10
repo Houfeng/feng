@@ -18872,10 +18872,9 @@ static bool spec_collect_closure(const ResolveContext *ctx,
             return true;
         }
     }
-    if (!append_raw((void **)out_set, out_count, out_capacity,
-                    sizeof(**out_set), &spec_decl)) {
-        return false;
-    }
+    /* Recurse into parent specs first so that closure order matches the
+     * codegen UserSpec member registration order (parents before self).
+     * This keeps witness->members[] indices aligned with s->members[]. */
     for (i = 0U; i < spec_decl->as.spec_decl.parent_spec_count; ++i) {
         const FengDecl *next = resolve_type_ref_decl(ctx, spec_decl->as.spec_decl.parent_specs[i]);
 
@@ -18885,6 +18884,10 @@ static bool spec_collect_closure(const ResolveContext *ctx,
         if (!spec_collect_closure(ctx, next, out_set, out_count, out_capacity)) {
             return false;
         }
+    }
+    if (!append_raw((void **)out_set, out_count, out_capacity,
+                    sizeof(**out_set), &spec_decl)) {
+        return false;
     }
     return true;
 }
