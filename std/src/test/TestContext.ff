@@ -28,6 +28,7 @@ type TestState {
   let name: string;
   let kind: TestKind;
   var state: bool;
+  let output: Option<List<string>>;
 }
 
 /**
@@ -52,7 +53,21 @@ type TestContext {
   }
 
   func push(name: string, kind: TestKind) {
-    self.stack.add(TestState { name: name, kind: kind, state: true });
+    if (kind == TestKind.Describe) {
+      self.stack.add(TestState {
+          name: name,
+          kind: kind,
+          state: true,
+          output: none
+      });
+    } else {
+      self.stack.add(TestState {
+          name: name,
+          kind: kind,
+          state: true,
+          output: List<string>()
+      });
+    }
   }
 
   func pop() {
@@ -96,6 +111,61 @@ type TestContext {
 
   func toErrorString(): string {
     return string.join("\n", self.errors.entries());
+  }
+
+  func getParentOutput(): Option<List<string>> {
+    if self.stack.size() == 0 { return none; }
+    // 从后往前找到第一个 Test 块，用 feng 的写法
+    // 减 2 是因为不算自已
+    for var i = self.stack.size() - 2; i >= 0; i -= 1 {
+      let state = self.stack.get(i);
+      if state.kind == TestKind.Test {
+        return state.output;
+      }
+    }
+    return none;
+  }
+
+  func println(format: string, args: string...) {
+    let parentOutput = self.getParentOutput();
+    let line = string.format(format, args);
+    if parentOutput {
+      List<string> {
+        parentOutput.add(line);
+      } else {
+        // 没有 Test 块，直接输出到控制台
+        println(line);
+      }
+    }
+  }
+
+  // func println(format: string, args: string...) {
+  //   self.println(format, args);
+  // }
+
+  func flushOutput() {
+    let current = self.current();
+    if (current.kind != TestKind.Test) { return; }
+    let selfOutput = current.output;
+    if selfOutput {
+      List<string> {
+        let parentOutput = self.getParentOutput();
+        if parentOutput {
+          List<string> {
+            for var i = 0; i < selfOutput.size(); i += 1 {
+              parentOutput.add(selfOutput.get(i));
+            }
+          } else {
+            for var i = 0; i < selfOutput.size(); i += 1 {
+              println(selfOutput.get(i));
+            }
+          }
+        }
+        selfOutput.clear();
+      } else {
+        // do nothing
+      }
+    }
   }
 
 }

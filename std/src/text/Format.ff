@@ -98,4 +98,8 @@ open fit string {
 	open static func format(format: string, args: string...): string {
 		return renderFormattedString(format, args);
 	}
+
+	open static func format(format: string, args: string[]): string {
+		return renderFormattedString(format, args);
+	}
 }
