@@ -22,33 +22,46 @@ open spec TestFunction(): void;
  * @param fn 测试函数
  */
 func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
-  let state = TestState { name: name, kind: kind, state: true, skip: skip };
   let isTopLevel = context.stack.size() == 0;
   if isTopLevel {
-    println("---------------------------------------------------------------");
+    println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }
   let indent = context.indent();
   if skip {
-    println("{0} ⚠️ [SKIP] {1}", indent, name);
+    println("{0}⚠️ [SKIP] {1}", indent, name);
     return;
   }
-  let icon = if kind == TestKind.Describe { "📦 " } else { "🧪 " };
-  println("{0}{1}{2}", indent, icon, name);
+  let isTestCase = kind == TestKind.Test;
+  if (isTestCase) {
+    context.total += 1;
+  } else {
+    println("{0}📦 {1}", indent, name);
+  }
   // ---
-  context.stack.add(state);
-  try fn()catch {
-    state.state = false;
-  };
+  context.push(name, kind);
+  fn();
+  if isTestCase && context.current().state {
+    context.passed += 1;
+    println("{0}✅ [PASS] {1}", indent, name);
+  } else if isTestCase {
+    context.failed += 1;
+    println("{0}❌ [FAIL] {1}", indent, name);
+  }
+  context.pop();
   // ---
   if isTopLevel {
-    let(t, p, f, s) = context.result();
-    context.reset();
-    println("---------------------------------------------------------------");
+    println("───────────────────────────────────────────────────────────────");
+    if context.hasError() {
+      println("Errors: \n{0}", context.toErrorString());
+    }
+    println("───────────────────────────────────────────────────────────────");
     println(
-      "Total: {0}, Passed: {1}, Failed: {2}, Skipped: {3}",
-      t.toString(), p.toString(), f.toString(), s.toString()
+      "Total: {0}, Passed: {1}, Failed: {2}",
+      context.total.toString(),
+      context.passed.toString(),
+      context.failed.toString()
     );
-    println("---------------------------------------------------------------");
+    println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }
 }
 
@@ -96,14 +109,7 @@ open func test(name: string, skip: bool, fn: TestFunction): void {
  * @param messages 描述信息
  */
 open func assert(ok: bool, messages: string...): void {
-  let current = context.current();
-  let indent = context.indent();
-  let text = string.join(" ", messages);
-  if ok {
-    println("{0} ✅ [PASS] {1}", indent, text);
-    current.state = true;
-  } else {
-    println("{0} ❌ [FAIL] {1}", indent, text);
-    current.state = false;
-  }
+  if ok { return; }
+  context.markFailed();
+  context.addError(string.join(" ", messages));
 }

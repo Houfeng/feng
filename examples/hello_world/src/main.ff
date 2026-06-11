@@ -19,8 +19,14 @@ func main(args: string[]) {
   println("JV: {0}", jv.toString());
 
   describe("JSON Tests", () {
-    test("should create a JSON object", () {
-      assert(true, "JSON object created successfully");
-    });
+      test("should create a JSON object", () {
+          assert(true, "JSON object created successfully");
+          test("1111111111111", () {
+              assert(true, "J1111111111");
+          });
+      });
+      test("should create a JSON object", () {
+          assert(false, "JSON object created successfully");
+      });
   });
 }
