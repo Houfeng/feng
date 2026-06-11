@@ -1,0 +1,89 @@
+open module std.test;
+
+import std;
+import std.collections;
+import std.io;
+import std.text;
+import std.numeric;
+
+/**
+ * 测试类型
+ */
+enum TestKind {
+  /**
+   * Describe 块用于描述一个测试套件，通常包含多个 Test 块
+   */
+  Describe = 0,
+
+  /**
+   * Test 块用于描述一个测试用例
+   */
+  Test = 1
+}
+
+/**
+ * 测试状态
+ */
+type TestState {
+  let name: string;
+  let kind: TestKind;
+  let skip: bool;
+  var state: bool;
+}
+
+/**
+ * 测试结果
+ */
+type TestResult(int, int, int, int);
+
+/**
+ * 测试上下文
+ */
+type TestContext {
+  /**
+   * 测试执行栈
+   * 栈尾为当前正在测试的的测试用例
+   */
+  let stack: List<TestState>;
+
+  func current(): TestState {
+    return self.stack.get(self.stack.size() - 1);
+  }
+
+  /**
+   * 获取测试结果
+   */
+  func result(): TestResult {
+    var total = 0;
+    var passed = 0;
+    var failed = 0;
+    var skipped = 0;
+    for let state in self.stack {
+      if state.kind != TestKind.Test { continue; }
+      total += 1;
+      if state.skip {
+        skipped += 1;
+      } else if state.state {
+        passed += 1;
+      } else {
+        failed += 1;
+      }
+    }
+    return (total, passed, failed, skipped);
+  }
+
+  /**
+   * 重置测试上下文
+   */
+  func reset() {
+    self.stack.clear();
+  }
+
+  /**
+   * 获取缩进
+   */
+  func indent(): string {
+    return ("").padStart(self.stack.size() * 2, " ");
+  }
+
+}

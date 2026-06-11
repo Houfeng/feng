@@ -105,6 +105,14 @@ open type List<T> {
   }
 
   /**
+   * Removes all elements from the list, resetting it to an empty state.
+   */
+  open func clear() {
+    self.items = T[:0];
+    self.count = 0;
+  }
+
+  /**
    * Returns the number of elements in the list.
    */
   open func size(): i32 {

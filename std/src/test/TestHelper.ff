@@ -1,0 +1,104 @@
+open module std.test;
+
+import std.io;
+import std.text;
+import std.numeric;
+
+/**
+ * 全局测试上下文
+ */
+let context = TestContext();
+
+/**
+ * 测试函数
+ */
+open spec TestFunction(): void;
+
+/**
+ * 测试执行
+ * @param name 测试名称
+ * @param kind 测试类型
+ * @param skip 跳过测试
+ * @param fn 测试函数
+ */
+func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
+  let state = TestState { name: name, kind: kind, state: true, skip: skip };
+  let indent = context.indent();
+  println("{0}{1}", indent, name);
+  let isTopLevel = context.stack.size() == 0;
+  context.stack.add(state);
+  if skip {
+    println("{0}⚠️ [SKIP] {1}", indent, name);
+    return;
+  }
+  try fn()catch {
+    state.state = false;
+  };
+  if isTopLevel {
+    let(t, p, f, s) = context.result();
+    context.reset();
+    println("---------------------------------------------------------------");
+    println(
+      "Total: {0}, Passed: {1}, Failed: {2}, Skipped: {3}",
+      t.toString(), p.toString(), f.toString(), s.toString()
+    );
+    println("---------------------------------------------------------------");
+  }
+}
+
+/**
+ * 测试描述
+ * @param name 测试名称
+ * @param fn 测试函数
+ */
+open func describe(name: string, fn: TestFunction): void {
+  execute(name, TestKind.Describe, false, fn);
+}
+
+/**
+ * 测试描述（可跳过）
+ * @param name 测试名称
+ * @param skip 是否跳过测试
+ * @param fn 测试函数
+ */
+open func describe(name: string, skip: bool, fn: TestFunction): void {
+  execute(name, TestKind.Describe, skip, fn);
+}
+
+/**
+ * 测试用例
+ * @param name 测试名称
+ * @param fn 测试函数
+ */
+open func test(name: string, fn: TestFunction): void {
+  execute(name, TestKind.Test, false, fn);
+}
+
+/**
+ * 测试用例（可跳过）
+ * @param name 测试名称
+ * @param skip 是否跳过测试
+ * @param fn 测试函数
+ */
+open func test(name: string, skip: bool, fn: TestFunction): void {
+  execute(name, TestKind.Test, skip, fn);
+}
+
+/**
+ * 断言辅助函数
+ * 根据 ok 输出 ✅ 或 ❌ emoji 前缀，后跟 msgs 以空格拼接的描述信息
+ * @param ok 断言结果
+ * @param messages 描述信息
+ */
+open func assert(ok: bool, messages: string...): void {
+  let current = context.current();
+  let indent = context.indent();
+  let text = string.join(" ", messages);
+  if ok {
+    println("{0}✅ [PASS] {1}", indent, text);
+    current.state = true;
+  } else {
+    println("{0}❌ [FAIL] {1}", indent, text);
+    current.state = false;
+  }
+}
