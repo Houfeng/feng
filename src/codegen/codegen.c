@@ -518,6 +518,7 @@ typedef struct UserMethod {
     CGType **param_types;  /* heap-owned, length param_count */
     char  **param_names;
     size_t  param_count;
+    bool    is_variadic;   /* true when the last param is a variadic T... */
     const FengTypeMember *member;
 } UserMethod;
 
@@ -2275,7 +2276,8 @@ static bool cg_encode_type_short(const CGType *t, Buf *out) {
  * so symbol shape stays predictable and deterministic for every callable.
  * No-arg functions encode as `__from__void`. Returns a malloc'd string;
  * caller frees. */
-static char *cg_build_param_suffix(CGType *const *param_types, size_t count) {
+static char *cg_build_param_suffix(CGType *const *param_types, size_t count,
+                                   bool is_variadic) {
     Buf b; buf_init(&b);
     buf_append_cstr(&b, "__from__");
     if (count == 0) {
@@ -2283,6 +2285,11 @@ static char *cg_build_param_suffix(CGType *const *param_types, size_t count) {
     } else {
         for (size_t i = 0; i < count; i++) {
             if (i) buf_append_cstr(&b, "__");
+            /* Variadic last parameter: prefix with "V" to distinguish
+             * func f(x: T...) from func f(x: T[]) in the mangled name. */
+            if (is_variadic && i == count - 1U) {
+                buf_append_cstr(&b, "V");
+            }
             if (!cg_encode_type_short(param_types[i], &b)) {
                 buf_free(&b);
                 return NULL;
@@ -2295,8 +2302,8 @@ static char *cg_build_param_suffix(CGType *const *param_types, size_t count) {
 /* Append the param-type suffix to an existing c_name buffer. Frees the old
  * c_name and returns the new heap-owned string. */
 static char *cg_append_param_suffix(char *c_name, CGType *const *param_types,
-                                    size_t count) {
-    char *suffix = cg_build_param_suffix(param_types, count);
+                                    size_t count, bool is_variadic) {
+    char *suffix = cg_build_param_suffix(param_types, count, is_variadic);
     if (!suffix) { free(c_name); return NULL; }
     Buf b; buf_init(&b);
     buf_append_cstr(&b, c_name);
@@ -7505,7 +7512,7 @@ static bool cg_register_free_fn(CG *cg, const FengDecl *decl) {
     /* Append param-type suffix for overload-aware mangling. Applied
      * unconditionally so the symbol shape is the same regardless of whether
      * the function is part of an overload set today. */
-    surface_name = cg_append_param_suffix(surface_name, f->param_types, f->param_count);
+    surface_name = cg_append_param_suffix(surface_name, f->param_types, f->param_count, f->is_variadic);
     if (!surface_name) return false;
     if (f->is_abi) {
         Buf impl; buf_init(&impl);
@@ -7769,6 +7776,8 @@ static bool cg_register_user_type_members(CG *cg, UserType *t, FengCompileTarget
             um->c_name = cb.data;
             free(msan);
             um->param_count = sig->param_count;
+            um->is_variadic = sig->param_count > 0U &&
+                              sig->params[sig->param_count - 1U].is_variadic;
             um->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
             um->param_names = sig->param_count ? calloc(sig->param_count, sizeof(char*)) : NULL;
             for (size_t pi = 0; pi < sig->param_count; pi++) {
@@ -7784,7 +7793,8 @@ static bool cg_register_user_type_members(CG *cg, UserType *t, FengCompileTarget
                 return false;
             }
             um->c_name = cg_append_param_suffix(um->c_name,
-                                                um->param_types, um->param_count);
+                                                um->param_types, um->param_count,
+                                                um->is_variadic);
             if (!um->c_name) return false;
         }
     }
@@ -8676,6 +8686,8 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
         um->c_name = cb.data;
         free(msan);
         um->param_count = sig->param_count;
+        um->is_variadic = sig->param_count > 0U &&
+                          sig->params[sig->param_count - 1U].is_variadic;
         um->param_types = sig->param_count
             ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
         um->param_names = sig->param_count
@@ -8692,7 +8704,8 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
         if (!cg_resolve_type_for_user_fit_member(cg, uf, sig->return_type, &sig->token,
                                                  &um->return_type)) return false;
         um->c_name = cg_append_param_suffix(um->c_name,
-                                            um->param_types, um->param_count);
+                                            um->param_types, um->param_count,
+                                            um->is_variadic);
         if (!um->c_name) return false;
     }
     uf->method_count = mi;
@@ -8737,6 +8750,8 @@ static bool cg_register_builtin_fit_members(CG *cg, BuiltinFit *bf) {
         um->c_name = cb.data;
         free(msan);
         um->param_count = sig->param_count;
+        um->is_variadic = sig->param_count > 0U &&
+                          sig->params[sig->param_count - 1U].is_variadic;
         um->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType *)) : NULL;
         um->param_names = sig->param_count ? calloc(sig->param_count, sizeof(char *)) : NULL;
         for (size_t pi = 0; pi < sig->param_count; pi++) {
@@ -8759,7 +8774,8 @@ static bool cg_register_builtin_fit_members(CG *cg, BuiltinFit *bf) {
         }
         um->c_name = cg_append_param_suffix(um->c_name,
                                             um->param_types,
-                                            um->param_count);
+                                            um->param_count,
+                                            um->is_variadic);
         if (um->c_name == NULL) {
             return false;
         }
@@ -14636,17 +14652,27 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_emit_generic_type_method_call(cg, e, &recv, ut, um, out);
         }
         if (e->as.call.arg_count != um->param_count) {
-            er_free(&recv);
-            return cg_fail(cg, e->token,
-                "codegen: wrong argument count for method '%s' (expected %zu, got %zu)",
-                um->feng_name, um->param_count, e->as.call.arg_count);
+            if (!um->is_variadic) {
+                er_free(&recv);
+                return cg_fail(cg, e->token,
+                    "codegen: wrong argument count for method '%s' (expected %zu, got %zu)",
+                    um->feng_name, um->param_count, e->as.call.arg_count);
+            }
+            size_t fixed_count = um->param_count - 1U;
+            if (e->as.call.arg_count < fixed_count) {
+                er_free(&recv);
+                return cg_fail(cg, e->token,
+                    "codegen: too few arguments for variadic method '%s' (need at least %zu, got %zu)",
+                    um->feng_name, fixed_count, e->as.call.arg_count);
+            }
         }
         /* Materialize receiver if it's a +1 owns_ref (so it lives across args). */
         if (cgtype_is_managed(recv.type) && recv.owns_ref) {
             cg_materialize_to_local(cg, &recv, "_t");
         }
         Buf args_buf; buf_init(&args_buf);
-        for (size_t i = 0; i < e->as.call.arg_count; i++) {
+        size_t fixed_arg_limit = um->is_variadic ? um->param_count - 1U : e->as.call.arg_count;
+        for (size_t i = 0; i < fixed_arg_limit; i++) {
             ExprResult ar;
             if (!cg_emit_expr_for_expected_type(cg,
                                                 e->as.call.args[i],
@@ -14660,6 +14686,24 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             buf_append_cstr(&args_buf, ", ");
             buf_append_cstr(&args_buf, ar.c_expr);
             er_free(&ar);
+        }
+        /* Pack variadic arguments into a FengArray* and append as the last argument. */
+        if (um->is_variadic) {
+            const CGType *elem_type = um->param_types[um->param_count - 1U]->element;
+            size_t variadic_arg_count = e->as.call.arg_count - fixed_arg_limit;
+            ExprResult varr;
+            if (!cg_pack_variadic_args(cg, &e->token,
+                                       e->as.call.args + fixed_arg_limit,
+                                       variadic_arg_count,
+                                       elem_type, &varr)) {
+                buf_free(&args_buf); er_free(&recv); return false;
+            }
+            if (cgtype_is_managed(varr.type) && varr.owns_ref) {
+                cg_materialize_to_local(cg, &varr, "_t");
+            }
+            buf_append_cstr(&args_buf, ", ");
+            buf_append_cstr(&args_buf, varr.c_expr);
+            er_free(&varr);
         }
         Buf b; buf_init(&b);
         buf_append_fmt(&b, "%s(%s", um->c_name, recv.c_expr);
