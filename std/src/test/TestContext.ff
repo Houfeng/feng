@@ -39,6 +39,7 @@ type TestContext {
   var total: int;
   var passed: int;
   var failed: int;
+  var skipped: int;
 
   seal let errors: List<string>;
 

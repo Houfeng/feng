@@ -27,10 +27,6 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
     println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }
   let indent = context.indent();
-  if skip {
-    context.println("{0} ⚠️  [SKIP] {1}", indent, name);
-    return;
-  }
   let isTestCase = kind == TestKind.Test;
   if (isTestCase) {
     context.total += 1;
@@ -39,8 +35,11 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
   }
   // ---
   context.push(name, kind);
-  fn();
-  if isTestCase && context.current().state {
+  if !skip { fn(); }
+  if skip {
+    context.skipped += 1;
+    context.println("{0} ⚠️  [SKIP] {1}", indent, name);
+  } else if isTestCase && context.current().state {
     context.passed += 1;
     context.println("{0} ✅ [PASS] {1}", indent, name);
   } else if isTestCase {
@@ -57,10 +56,11 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
     }
     println("───────────────────────────────────────────────────────────────");
     println(
-      "Total: {0}, Passed: {1}, Failed: {2}",
+      "Total: {0}, Passed: {1}, Failed: {2}, Skipped: {3}",
       context.total.toString(),
       context.passed.toString(),
-      context.failed.toString()
+      context.failed.toString(),
+      context.skipped.toString()
     );
     println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }
