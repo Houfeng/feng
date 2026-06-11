@@ -81,89 +81,145 @@ func throw_ex_text(): string {
   return "unreachable";
 }
 
+/** 异常处理测试 - 辅助函数（try/catch 须在普通函数中执行，不能在 lambda 闭包内） */
+
+func test_basic_try_catch(): bool {
+  var caught = false;
+  try throw_error() catch ex: string {
+    if ex == "test error" {
+      caught = true;
+    }
+  };
+  return caught;
+}
+
+func test_try_catch_expression(): bool {
+  let fallback: int = -1;
+  let value = try parse_int("bad") catch ex: string {
+    fallback;
+  };
+  return value == -1;
+}
+
+func test_try_catch_normal_path(): bool {
+  let fallback: int = -1;
+  let ok_value = try parse_int("ok") catch ex: string {
+    fallback;
+  };
+  return ok_value == 42;
+}
+
+func test_multiple_catch_clauses(): bool {
+  var catch_type = "";
+  try throw_int() catch ex: string {
+    catch_type = "string";
+  } catch ex: i32 {
+    catch_type = "int";
+  };
+  return catch_type == "int";
+}
+
+func test_catch_unknown_fallback(): bool {
+  var unknown_caught = false;
+  try throw_error() catch ex: int {
+    // 不匹配
+  } catch ex: unknown {
+    unknown_caught = true;
+  };
+  return unknown_caught;
+}
+
+func test_anonymous_catch(): bool {
+  var anon_caught = false;
+  try throw_error() catch {
+    anon_caught = true;
+  };
+  return anon_caught;
+}
+
+func test_auto_propagation(): bool {
+  var propagated = false;
+  try call_auto_propagate() catch ex: string {
+    if ex == "propagated" {
+      propagated = true;
+    }
+  };
+  return propagated;
+}
+
+func test_no_throw_path(): bool {
+  var no_error = true;
+  try maybe_throw(false) catch ex: string {
+    no_error = false;
+  };
+  return no_error;
+}
+
+func test_rethrow_in_catch(): bool {
+  var rethrown = false;
+  try call_rethrow() catch ex: string {
+    if ex == "rethrown: test error" {
+      rethrown = true;
+    }
+  };
+  return rethrown;
+}
+
+func test_throw_catch_custom_type(): bool {
+  var app_code = 0;
+  var app_msg = "";
+  try throw_ex_type(404, "not found") catch ex: ExAppError {
+    app_code = ex.code;
+    app_msg = ex.msg;
+  };
+  return app_code == 404 && app_msg == "not found";
+}
+
+func test_throw_catch_spec_value(): bool {
+  var spec_msg = "";
+  try throw_ex_spec("spec-error") catch ex: ExTaggedError {
+    spec_msg = ex.msg;
+  };
+  return spec_msg == "spec-error";
+}
+
 /** 异常处理测试 */
 open func test_exception() {
   describe("exception", () {
     test("basic try/catch", () {
-      var caught = false;
-      try throw_error() catch ex: string {
-        if ex == "test error" {
-          caught = true;
-        }
-      };
-      assert(caught, "basic try/catch");
+      assert(test_basic_try_catch(), "basic try/catch");
     });
 
     test("try/catch expression", () {
-      let fallback: int = -1;
-      let value = try parse_int("bad") catch ex: string {
-        fallback;
-      };
-      assert(value == -1, "try/catch expression");
+      assert(test_try_catch_expression(), "try/catch expression");
     });
 
     test("try/catch normal path", () {
-      let fallback: int = -1;
-      let ok_value = try parse_int("ok") catch ex: string {
-        fallback;
-      };
-      assert(ok_value == 42, "try/catch normal path");
+      assert(test_try_catch_normal_path(), "try/catch normal path");
     });
 
     test("multiple catch clauses", () {
-      var catch_type = "";
-      try throw_int() catch ex: string {
-        catch_type = "string";
-      } catch ex: i32 {
-        catch_type = "int";
-      };
-      assert(catch_type == "int", "multiple catch clauses");
+      assert(test_multiple_catch_clauses(), "multiple catch clauses");
     });
 
     test("catch unknown fallback", () {
-      var unknown_caught = false;
-      try throw_error() catch ex: int {
-        // 不匹配
-      } catch ex: unknown {
-        unknown_caught = true;
-      };
-      assert(unknown_caught, "catch unknown fallback");
+      assert(test_catch_unknown_fallback(), "catch unknown fallback");
     });
 
     test("anonymous catch", () {
-      var anon_caught = false;
-      try throw_error() catch {
-        anon_caught = true;
-      };
-      assert(anon_caught, "anonymous catch");
+      assert(test_anonymous_catch(), "anonymous catch");
     });
 
     test("try without catch auto-propagation", () {
-      var propagated = false;
-      try call_auto_propagate() catch ex: string {
-        if ex == "propagated" {
-          propagated = true;
-        }
-      };
-      assert(propagated, "try without catch auto-propagation");
+      assert(test_auto_propagation(), "try without catch auto-propagation");
     });
 
     test("try/catch normal path (no throw)", () {
-      var no_error = true;
-      try maybe_throw(false) catch ex: string {
-        no_error = false;
-      };
-      assert(no_error, "try/catch normal path (no throw)");
+      assert(test_no_throw_path(), "try/catch normal path (no throw)");
     });
 
     test("rethrow in catch", () {
-      var rethrown = false;
-      try call_rethrow() catch ex: string {
-        if ex == "rethrown: test error" {
-          rethrown = true;
-        }
-      };
-      assert(rethrown, "rethrow in catch");
+      assert(test_rethrow_in_catch(), "rethrow in catch");
     });
 
     test("break from catch", () {
@@ -179,21 +235,11 @@ open func test_exception() {
     });
 
     test("throw/catch custom type", () {
-      var app_code = 0;
-      var app_msg = "";
-      try throw_ex_type(404, "not found") catch ex: ExAppError {
-        app_code = ex.code;
-        app_msg = ex.msg;
-      };
-      assert(app_code == 404 && app_msg == "not found", "throw/catch custom type");
+      assert(test_throw_catch_custom_type(), "throw/catch custom type");
     });
 
     test("throw/catch spec value via concrete type", () {
-      var spec_msg = "";
-      try throw_ex_spec("spec-error") catch ex: ExTaggedError {
-        spec_msg = ex.msg;
-      };
-      assert(spec_msg == "spec-error", "throw/catch spec value via concrete type");
+      assert(test_throw_catch_spec_value(), "throw/catch spec value via concrete type");
     });
   });
 }

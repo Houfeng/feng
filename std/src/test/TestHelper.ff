@@ -28,37 +28,40 @@ open spec TestFunction(): void;
 func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
   let isTopLevel = context.stack.size() == 0;
   if isTopLevel {
-    println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }
   let indent = context.indent();
   let isTestCase = kind == TestKind.Test;
   if (isTestCase) {
     context.total += 1;
   } else {
-    context.println("{0} 📁 {1}", indent, name);
+    context.println("{0}{1}", indent, name);
+  }
+  if isTopLevel {
+    println("─────────────────────────────────────────────────────────────");
   }
   // ---
   context.push(name, kind);
   if !skip { fn(); }
   if skip {
     context.skipped += 1;
-    context.println("{0} ⚠️  [SKIP] {1}", indent, name);
+    context.println("{0}⚠️  [SKIP] {1}", indent, name);
   } else if isTestCase && context.current().state {
     context.passed += 1;
-    context.println("{0} ✅ [PASS] {1}", indent, name);
+    context.println("{0}✅ [PASS] {1}", indent, name);
   } else if isTestCase {
     context.failed += 1;
-    context.println("{0} ❌ [FAIL] {1}", indent, name);
+    context.println("{0}❌ [FAIL] {1}", indent, name);
   }
   context.flushOutput();
   context.pop();
   // ---
   if isTopLevel {
-    println("───────────────────────────────────────────────────────────────");
     if context.hasError() {
+      println("─────────────────────────────────────────────────────────────");
       println("Errors: \n{0}", context.toErrorString());
     }
-    println("───────────────────────────────────────────────────────────────");
+    println("─────────────────────────────────────────────────────────────");
     println(
       "Total: {0}, Passed: {1}, Failed: {2}, Skipped: {3}",
       context.total.toString(),
@@ -66,7 +69,7 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
       context.failed.toString(),
       context.skipped.toString()
     );
-    println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }
 }
 

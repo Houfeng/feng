@@ -97,9 +97,10 @@ type TestContext {
    * 获取缩进
    */
   func indent(): string {
-    let size = self.stack.size();
-    if (size <= 0) { return ""; }
-    return " ".repeat((long)(size* 3));
+    // 根节点不缩进
+    let depth = self.stack.size() - 1;
+    if (depth <= 0) { return ""; }
+    return " ".repeat((long)(depth * 2));
   }
 
   func hasError(): bool {
