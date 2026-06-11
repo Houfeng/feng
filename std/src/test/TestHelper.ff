@@ -86,7 +86,6 @@ open func test(name: string, skip: bool, fn: TestFunction): void {
 
 /**
  * 断言辅助函数
- * 根据 ok 输出 ✅ 或 ❌ emoji 前缀，后跟 msgs 以空格拼接的描述信息
  * @param ok 断言结果
  * @param messages 描述信息
  */
