@@ -1,33 +1,30 @@
 module fcts_bin;
 
 import std.io;
+import std.test;
 
 /// Feng Conformance Test Suite 入口
 func main(args: string[]) {
-  println("=== Feng Conformance Test Suite ===");
-  println("");
-
-  test_binding();
-  test_builtin_type();
-  test_numeric_literal();
-  test_expression();
-  test_string();
-  test_flow();
-  test_function();
-  test_lambda();
-  test_type();
-  test_enum();
-  test_spec();
-  test_fit();
-  test_union();
-  test_exception();
-  test_array();
-  test_generic();
-  test_variadic();
-  test_tuple();
-  test_iterator();
-  test_module();
-
-  println("");
-  println("=== All tests completed ===");
+  describe("Feng Conformance Test Suite", () {
+      test_binding();
+      test_builtin_type();
+      test_numeric_literal();
+      test_expression();
+      test_string();
+      test_flow();
+      test_function();
+      test_lambda();
+      test_type();
+      test_enum();
+      test_spec();
+      test_fit();
+      test_union();
+      test_exception();
+      test_array();
+      test_generic();
+      test_variadic();
+      test_tuple();
+      test_iterator();
+      test_module();
+  });
 }

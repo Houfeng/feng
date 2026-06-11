@@ -1,7 +1,7 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib.helper;
+import std.test;
 
 // 顶层函数
 func add(a: int, b: int): int {
@@ -33,11 +33,11 @@ func readonly_param(let x: int): int {
 }
 
 // 函数重载 - 不同参数类型
-func describe(x: int): string {
+func type_of(x: int): string {
   return "int";
 }
 
-func describe(x: string): string {
+func type_of(x: string): string {
   return "string";
 }
 
@@ -73,34 +73,42 @@ type OverloadObj {
 
 /** 函数测试 */
 open func test_function() {
-  println("--- test_function ---");
+  describe("function", () {
+    test("top-level function", () {
+      assert(add(3, 4) == 7, "top-level function");
+    });
 
-  // 顶层函数调用
-  assert(add(3, 4) == 7, "top-level function");
+    test("function with return value", () {
+      assert(multiply(3, 4) == 12, "function with return value");
+    });
 
-  // 有返回值的函数
-  assert(multiply(3, 4) == 12, "function with return value");
+    test("void function", () {
+      do_nothing();
+      do_nothing2();
+      assert(true, "void function");
+    });
 
-  // void 函数
-  do_nothing();
-  do_nothing2();
-  assert(true, "void function");
+    test("var parameter", () {
+      assert(increment(10) == 11, "var parameter");
+    });
 
-  // var 参数
-  assert(increment(10) == 11, "var parameter");
+    test("explicit let parameter", () {
+      assert(readonly_param(10) == 11, "explicit let parameter");
+    });
 
-  // let 参数
-  assert(readonly_param(10) == 11, "explicit let parameter");
+    test("function overload by type", () {
+      assert(type_of(42) == "int" && type_of("hi") == "string", "function overload by type");
+    });
 
-  // 函数重载 - 类型
-  assert(describe(42) == "int" && describe("hi") == "string", "function overload by type");
+    test("function overload by arity", () {
+      assert(sum_nums(1) == 1 && sum_nums(1, 2) == 3 && sum_nums(1, 2, 3) == 6, "function overload by arity");
+    });
 
-  // 函数重载 - 参数数量
-  assert(sum_nums(1) == 1 && sum_nums(1, 2) == 3 && sum_nums(1, 2, 3) == 6, "function overload by arity");
-
-  // 方法重载
-  let obj = OverloadObj { name: "feng" };
-  assert(obj.olabel(7) == "int", "method overload by type (int)");
-  assert(obj.olabel("hello") == "hello", "method overload by type (string)");
-  assert(obj.olabel() == "feng", "method overload by arity (no args)");
+    test("method overload", () {
+      let obj = OverloadObj { name: "feng" };
+      assert(obj.olabel(7) == "int", "method overload by type (int)");
+      assert(obj.olabel("hello") == "hello", "method overload by type (string)");
+      assert(obj.olabel() == "feng", "method overload by arity (no args)");
+    });
+  });
 }

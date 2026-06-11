@@ -1,49 +1,57 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib.helper;
+import std.test;
 
 /** let/var 绑定与作用域测试 */
 open func test_binding() {
-  println("--- test_binding ---");
+  describe("binding", () {
+    test("let binding with type inference", () {
+      let a = 10;
+      assert(a == 10, "let binding with type inference");
+    });
 
-  // let 不可变绑定 + 类型推导
-  let a = 10;
-  assert(a == 10, "let binding with type inference");
+    test("var binding mutation", () {
+      var b = 20;
+      b = 30;
+      assert(b == 30, "var binding mutation");
+    });
 
-  // var 可变绑定
-  var b = 20;
-  b = 30;
-  assert(b == 30, "var binding mutation");
+    test("explicit type annotation", () {
+      let c: int = 100;
+      assert(c == 100, "explicit type annotation");
+    });
 
-  // 显式类型标注
-  let c: int = 100;
-  assert(c == 100, "explicit type annotation");
+    test("default zero value for int", () {
+      let d: int;
+      assert(d == 0, "default zero value for int");
+    });
 
-  // 默认零值 - int
-  let d: int;
-  assert(d == 0, "default zero value for int");
+    test("default zero value for string", () {
+      let e: string;
+      assert(e == "", "default zero value for string");
+    });
 
-  // 默认零值 - string
-  let e: string;
-  assert(e == "", "default zero value for string");
+    test("default zero value for bool", () {
+      let f: bool;
+      assert(f == false, "default zero value for bool");
+    });
 
-  // 默认零值 - bool
-  let f: bool;
-  assert(f == false, "default zero value for bool");
+    test("block scope shadowing", () {
+      let label = "outer";
+      if true {
+        let label = "inner";
+        assert(label == "inner", "block scope shadowing (inner)");
+      }
+      assert(label == "outer", "block scope shadowing (outer restored)");
+    });
 
-  // 块作用域与名称屏蔽
-  let label = "outer";
-  if true {
-    let label = "inner";
-    assert(label == "inner", "block scope shadowing (inner)");
-  }
-  assert(label == "outer", "block scope shadowing (outer restored)");
-
-  // var 在块内修改
-  var counter = 0;
-  for var i = 0; i < 5; i += 1 {
-    counter += 1;
-  }
-  assert(counter == 5, "var mutation in loop");
+    test("var mutation in loop", () {
+      var counter = 0;
+      for var i = 0; i < 5; i += 1 {
+        counter += 1;
+      }
+      assert(counter == 5, "var mutation in loop");
+    });
+  });
 }

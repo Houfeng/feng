@@ -1,7 +1,7 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib.helper;
+import std.test;
 
 // 迭代结果 tuple
 type IterPair(bool, int);
@@ -51,44 +51,48 @@ type SelfCursor {
 
 /** 自定义迭代器测试 */
 open func test_iterator() {
-  println("--- test_iterator ---");
+  describe("iterator", () {
+    test("custom iterator for/in (1+2+3)", () {
+      let r = IRange { start: 1, end: 4 };
+      var sum = 0;
+      for let n in r {
+        sum += n;
+      }
+      assert(sum == 6, "custom iterator for/in (1+2+3)");
+    });
 
-  // 自定义迭代器 for/in
-  let r = IRange { start: 1, end: 4 };
-  var sum = 0;
-  for let n in r {
-    sum += n;
-  }
-  assert(sum == 6, "custom iterator for/in (1+2+3)");
+    test("self-cursor iterator", () {
+      let c = SelfCursor { current: 0, limit: 3 };
+      var count = 0;
+      for let i in c {
+        count += 1;
+      }
+      assert(count == 3, "self-cursor iterator");
+    });
 
-  // 自迭代 cursor
-  let c = SelfCursor { current: 0, limit: 3 };
-  var count = 0;
-  for let i in c {
-    count += 1;
-  }
-  assert(count == 3, "self-cursor iterator");
+    test("nested custom iterators", () {
+      let r2 = IRange { start: 0, end: 2 };
+      var pairs = 0;
+      for let i in r2 {
+        for let j in r2 {
+          pairs += 1;
+        }
+      }
+      assert(pairs == 4, "nested custom iterators");
+    });
 
-  // 迭代器嵌套
-  let r2 = IRange { start: 0, end: 2 };
-  var pairs = 0;
-  for let i in r2 {
-    for let j in r2 {
-      pairs += 1;
-    }
-  }
-  assert(pairs == 4, "nested custom iterators");
-
-  // 数组和迭代器共存
-  let nums: int[] = [10, 20];
-  var arr_sum = 0;
-  for let n in nums {
-    arr_sum += n;
-  }
-  let r3 = IRange { start: 0, end: 2 };
-  var iter_sum = 0;
-  for let i in r3 {
-    iter_sum += i;
-  }
-  assert(arr_sum == 30 && iter_sum == 1, "array and iterator coexist");
+    test("array and iterator coexist", () {
+      let nums: int[] = [10, 20];
+      var arr_sum = 0;
+      for let n in nums {
+        arr_sum += n;
+      }
+      let r3 = IRange { start: 0, end: 2 };
+      var iter_sum = 0;
+      for let i in r3 {
+        iter_sum += i;
+      }
+      assert(arr_sum == 30 && iter_sum == 1, "array and iterator coexist");
+    });
+  });
 }

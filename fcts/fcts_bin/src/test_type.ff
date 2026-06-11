@@ -1,7 +1,7 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib.helper;
+import std.test;
 
 // 基本 type 定义
 type Point {
@@ -59,60 +59,74 @@ type Resource {
 
 /** type 类型定义测试 */
 open func test_type() {
-  println("--- test_type ---");
+  describe("type", () {
+    test("basic type with object literal", () {
+      let p = Point { x: 10, y: 20 };
+      assert(p.x == 10 && p.y == 20, "basic type with object literal");
+    });
 
-  // 基本 type + 对象字面量
-  let p = Point { x: 10, y: 20 };
-  assert(p.x == 10 && p.y == 20, "basic type with object literal");
+    test("var member mutation", () {
+      let p = Point { x: 10, y: 20 };
+      p.x = 30;
+      assert(p.x == 30, "var member mutation");
+    });
 
-  // var 成员修改
-  p.x = 30;
-  assert(p.x == 30, "var member mutation");
+    test("constructor", () {
+      let person = Person("Alice", 25);
+      assert(person.name == "Alice" && person.age == 25, "constructor");
+    });
 
-  // 构造函数
-  let person = Person("Alice", 25);
-  assert(person.name == "Alice" && person.age == 25, "constructor");
+    test("member method", () {
+      let person = Person("Alice", 25);
+      assert(person.info() == "Alice", "member method");
+    });
 
-  // 成员方法
-  assert(person.info() == "Alice", "member method");
+    test("object literal override after constructor", () {
+      let person2 = Person("Bob", 30) { age: 31 };
+      assert(person2.name == "Bob" && person2.age == 31, "object literal override after constructor");
+    });
 
-  // 对象字面量覆盖构造函数
-  let person2 = Person("Bob", 30) { age: 31 };
-  assert(person2.name == "Bob" && person2.age == 31, "object literal override after constructor");
+    test("reference semantics", () {
+      let a = Point { x: 1, y: 2 };
+      let b = a;
+      b.x = 99;
+      assert(a.x == 99, "reference semantics");
+    });
 
-  // 引用语义
-  let a = Point { x: 1, y: 2 };
-  let b = a;
-  b.x = 99;
-  assert(a.x == 99, "reference semantics");
+    test("default zero value for type", () {
+      let empty_point: Point;
+      assert(empty_point.x == 0 && empty_point.y == 0, "default zero value for type");
+    });
 
-  // 默认零值
-  let empty_point: Point;
-  assert(empty_point.x == 0 && empty_point.y == 0, "default zero value for type");
+    test("Type() construction", () {
+      let p2 = Point();
+      assert(p2.x == 0 && p2.y == 0, "Type() construction");
+    });
 
-  // Type() 构造
-  let p2 = Point();
-  assert(p2.x == 0 && p2.y == 0, "Type() construction");
+    test("Type {} shorthand", () {
+      let p3 = Point {};
+      assert(p3.x == 0 && p3.y == 0, "Type {} shorthand");
+    });
 
-  // Type {} 简写
-  let p3 = Point {};
-  assert(p3.x == 0 && p3.y == 0, "Type {} shorthand");
+    test("static member and method", () {
+      Counter.count = 0;
+      let c1 = Counter.create(10);
+      let c2 = Counter.create(20);
+      assert(Counter.get_count() == 2, "static member and method");
+      assert(c1.get_value() == 10 && c2.get_value() == 20, "static factory creates instances");
+    });
 
-  // 静态成员
-  Counter.count = 0;
-  let c1 = Counter.create(10);
-  let c2 = Counter.create(20);
-  assert(Counter.get_count() == 2, "static member and method");
-  assert(c1.get_value() == 10 && c2.get_value() == 20, "static factory creates instances");
+    test("type with destructor", () {
+      let r = Resource(1);
+      assert(r.id == 1, "type with destructor");
+    });
 
-  // 终结器 (确保不会 crash)
-  let r = Resource(1);
-  assert(r.id == 1, "type with destructor");
-
-  // == / != 引用比较
-  let pa = Point { x: 1, y: 2 };
-  let pb = Point { x: 1, y: 2 };
-  let pc = pa;
-  assert(pa != pb, "object == compares reference identity (different)");
-  assert(pa == pc, "object == compares reference identity (same)");
+    test("object == compares reference identity", () {
+      let pa = Point { x: 1, y: 2 };
+      let pb = Point { x: 1, y: 2 };
+      let pc = pa;
+      assert(pa != pb, "object == compares reference identity (different)");
+      assert(pa == pc, "object == compares reference identity (same)");
+    });
+  });
 }

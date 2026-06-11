@@ -1,8 +1,8 @@
 module fcts_bin;
 
 import std.io;
+import std.test;
 import std.text;
-import fcts_lib.helper;
 
 // 用于 fit 测试的 spec
 spec Describable {
@@ -82,44 +82,53 @@ func read_fit_int(reader: FitReadable<int>): int {
 
 /** fit 适配测试 */
 open func test_fit() {
-  println("--- test_fit ---");
+  describe("fit", () {
+    test("fit contract adaptation", () {
+      let animal = FitAnimal { kind: "cat" };
+      let d: Describable = animal;
+      assert(d.describe() == "Animal: cat", "fit contract adaptation");
+    });
 
-  // 契约适配 - fit A: B
-  let animal = FitAnimal { kind: "cat" };
-  let d: Describable = animal;
-  assert(d.describe() == "Animal: cat", "fit contract adaptation");
+    test("fit self-extension method", () {
+      let box = FitBox { value: 5 };
+      assert(box.doubled() == 10, "fit self-extension method");
+      assert(box.is_positive(), "fit self-extension method (bool)");
+    });
 
-  // 自扩展 - fit A {}
-  let box = FitBox { value: 5 };
-  assert(box.doubled() == 10, "fit self-extension method");
-  assert(box.is_positive(), "fit self-extension method (bool)");
+    test("fit static method", () {
+      let box2 = FitBox.of(42);
+      assert(box2.value == 42, "fit static method");
+    });
 
-  // fit 静态方法
-  let box2 = FitBox.of(42);
-  assert(box2.value == 42, "fit static method");
+    test("fit method via spec view", () {
+      let desc: Describable = FitAnimal { kind: "dog" };
+      assert(desc.describe() == "Animal: dog", "fit method via spec view");
+    });
 
-  // fit 方法通过 spec 视角调用
-  let desc: Describable = FitAnimal { kind: "dog" };
-  assert(desc.describe() == "Animal: dog", "fit method via spec view");
+    test("fit builtin i32 method", () {
+      let doubled: i32 = 21;
+      assert(doubled.fit_doubled() == 42, "fit builtin i32 method");
+    });
 
-  // fit 内建类型 i32
-  let doubled: i32 = 21;
-  assert(doubled.fit_doubled() == 42, "fit builtin i32 method");
+    test("fit builtin int[] method", () {
+      let xs: int[] = [7, 9];
+      assert(xs.fit_head() == 7, "fit builtin int[] method");
+    });
 
-  // fit 内建类型 int[]
-  let xs: int[] = [7, 9];
-  assert(xs.fit_head() == 7, "fit builtin int[] method");
+    test("generic fit", () {
+      let gbox: FitGenBox<int> = FitGenBox<int>();
+      gbox.value = 42;
+      assert(read_fit_int(gbox) == 42, "generic fit");
+    });
 
-  // 泛型 fit
-  let gbox: FitGenBox<int> = FitGenBox<int>();
-  gbox.value = 42;
-  assert(read_fit_int(gbox) == 42, "generic fit");
+    test("fit builtin string methods (cross-module)", () {
+      assert("hello".length() == (long)5, "fit builtin string.length (cross-module)");
+      assert("hello".indexOf("ll") == (long)2, "fit builtin string.indexOf (cross-module)");
+    });
 
-  // 内建类型跨模块非泛型 fit 方法
-  assert("hello".length() == (long)5, "fit builtin string.length (cross-module)");
-  assert("hello".indexOf("ll") == (long)2, "fit builtin string.indexOf (cross-module)");
-
-  // 内建类型跨模块 fit 静态方法
-  let joined = string.join(", ", ["a", "b", "c"]);
-  assert(joined == "a, b, c", "fit builtin string.join (cross-module)");
+    test("fit builtin string.join (cross-module)", () {
+      let joined = string.join(", ", ["a", "b", "c"]);
+      assert(joined == "a, b, c", "fit builtin string.join (cross-module)");
+    });
+  });
 }

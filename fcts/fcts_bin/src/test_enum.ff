@@ -1,7 +1,7 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib.helper;
+import std.test;
 
 // 隐式取值 enum
 enum Direction {
@@ -20,34 +20,44 @@ enum HttpStatus {
 
 /** enum 枚举测试 */
 open func test_enum() {
-  println("--- test_enum ---");
+  describe("enum", () {
+    test("enum implicit value (first = 0)", () {
+      let d = Direction.North;
+      assert((int)d == 0, "enum implicit value (first = 0)");
+    });
 
-  // 隐式取值
-  let d = Direction.North;
-  assert((int)d == 0, "enum implicit value (first = 0)");
+    test("enum implicit value (sequential)", () {
+      let d2 = Direction.West;
+      assert((int)d2 == 3, "enum implicit value (sequential)");
+    });
 
-  let d2 = Direction.West;
-  assert((int)d2 == 3, "enum implicit value (sequential)");
+    test("enum explicit value", () {
+      let s = HttpStatus.Ok;
+      assert((int)s == 200, "enum explicit value");
+      let s2 = HttpStatus.NotFound;
+      assert((int)s2 == 404, "enum explicit value (404)");
+    });
 
-  // 显式取值
-  let s = HttpStatus.Ok;
-  assert((int)s == 200, "enum explicit value");
+    test("enum == comparison", () {
+      let d = Direction.North;
+      let d3 = Direction.North;
+      assert(d == d3, "enum == comparison");
+    });
 
-  let s2 = HttpStatus.NotFound;
-  assert((int)s2 == 404, "enum explicit value (404)");
+    test("enum != comparison", () {
+      let d = Direction.North;
+      let d4 = Direction.South;
+      assert(d != d4, "enum != comparison");
+    });
 
-  // enum 比较
-  let d3 = Direction.North;
-  assert(d == d3, "enum == comparison");
+    test("enum default value (first item)", () {
+      let default_dir: Direction;
+      assert(default_dir == Direction.North, "enum default value (first item)");
+    });
 
-  let d4 = Direction.South;
-  assert(d != d4, "enum != comparison");
-
-  // enum 默认值 (第一个枚举项)
-  let default_dir: Direction;
-  assert(default_dir == Direction.North, "enum default value (first item)");
-
-  // enum 到 int 转换
-  let code = (int)HttpStatus.ServerError;
-  assert(code == 500, "enum to int explicit cast");
+    test("enum to int explicit cast", () {
+      let code = (int)HttpStatus.ServerError;
+      assert(code == 500, "enum to int explicit cast");
+    });
+  });
 }

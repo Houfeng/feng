@@ -1,64 +1,75 @@
 module fcts_bin;
 
 import std.io;
+import std.test;
 import std.text;
 import std.collections;
-import fcts_lib.helper;
 
 /** 字符串测试 */
 open func test_string() {
-  println("--- test_string ---");
+  describe("string", () {
+    test("string literal", () {
+      let s = "Hello, World!";
+      assert(s == "Hello, World!", "string literal");
+    });
 
-  // 基本字面量
-  let s = "Hello, World!";
-  assert(s == "Hello, World!", "string literal");
+    test("string escape sequences", () {
+      let escaped = "line1\nline2";
+      assert(escaped.length() > (long)10, "string escape \\n");
 
-  // 转义序列
-  let escaped = "line1\nline2";
-  assert(escaped.length() > (long)10, "string escape \\n");
+      let tab = "a\tb";
+      assert(tab.length() == (long)3, "string escape \\t");
 
-  let tab = "a\tb";
-  assert(tab.length() == (long)3, "string escape \\t");
+      let quote = "say: \"hi\"";
+      assert(quote.length() == (long)9, "string escape \\\"");
 
-  let quote = "say: \"hi\"";
-  assert(quote.length() == (long)9, "string escape \\\"");
+      let backslash = "path\\file";
+      assert(backslash.length() == (long)9, "string escape \\\\");
+    });
 
-  let backslash = "path\\file";
-  assert(backslash.length() == (long)9, "string escape \\\\");
+    test("string concatenation", () {
+      let full = "Hello" + ", " + "World";
+      assert(full == "Hello, World", "string concatenation");
+    });
 
-  // 字符串拼接
-  let full = "Hello" + ", " + "World";
-  assert(full == "Hello, World", "string concatenation");
+    test("string value equality", () {
+      let a = "test";
+      let b = "te" + "st";
+      assert(a == b, "string value equality");
+    });
 
-  // 字符串比较 (值语义)
-  let a = "test";
-  let b = "te" + "st";
-  assert(a == b, "string value equality");
+    test("string != comparison", () {
+      assert("abc" != "def", "string != comparison");
+    });
 
-  // != 比较
-  assert("abc" != "def", "string != comparison");
+    test("empty string", () {
+      let empty = "";
+      assert(empty == "" && empty.length() == (long)0, "empty string");
+    });
 
-  // 空字符串
-  let empty = "";
-  assert(empty == "" && empty.length() == (long)0, "empty string");
+    test("string length()", () {
+      let msg = "Hello";
+      assert(msg.length() == (long)5, "string length()");
+    });
 
-  // length() 方法
-  let msg = "Hello";
-  assert(msg.length() == (long)5, "string length()");
+    test("string UTF-8 length (Chinese chars)", () {
+      let chinese = "你好";
+      assert(chinese.length() == (long)6, "string UTF-8 length (Chinese chars)");
+    });
 
-  // 中文字符串 (UTF-8)
-  let chinese = "你好";
-  assert(chinese.length() == (long)6, "string UTF-8 length (Chinese chars)");
+    test("string default zero value", () {
+      let default_s: string;
+      assert(default_s == "", "string default zero value");
+    });
 
-  // 默认零值
-  let default_s: string;
-  assert(default_s == "", "string default zero value");
+    test("string format with placeholder", () {
+      let formatted = format("Hello, {0}!", "World");
+      assert(formatted == "Hello, World!", "string format with placeholder");
+    });
 
-  // format 格式化
-  let formatted = format("Hello, {0}!", "World");
-  assert(formatted == "Hello, World!", "string format with placeholder");
-
-  // 多占位符
-  let multi = format("{0} + {1} = {2}", "1", "2", "3");
-  assert(multi == "1 + 2 = 3", "string format multiple placeholders");
+    test("string format multiple placeholders", () {
+      let multi = format("{0} + {1} = {2}", "1", "2", "3");
+      assert(multi == "1 + 2 = 3", "string format multiple placeholders");
+    });
+  });
 }

@@ -1,7 +1,7 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib.helper;
+import std.test;
 
 // 用于 if 表达式聚合返回测试
 spec FlowNamed {
@@ -44,164 +44,186 @@ func flow_match_pick(tag: int, a: FlowNamed, b: FlowNamed): FlowNamed {
 
 /** 流程控制测试 */
 open func test_flow() {
-  println("--- test_flow ---");
+  describe("flow", () {
+    test("if/else if/else", () {
+      let x = 15;
+      assert(x > 10 && x <= 20, "if/else if/else");
+    });
 
-  // if/else if/else
-  let x = 15;
-  assert(x > 10 && x <= 20, "if/else if/else");
+    test("if expression", () {
+      let x = 15;
+      let label = if x >= 18 { "adult" } else { "minor" };
+      assert(label == "minor", "if expression");
+    });
 
-  // if 表达式
-  let label = if x >= 18 { "adult" } else { "minor" };
-  assert(label == "minor", "if expression");
+    test("value match - single value", () {
+      let age = 18;
+      let result = if age {
+        0 { "baby" }
+        18 { "adult" }
+        60 { "senior" }
+        else { "other" }
+      };
+      assert(result == "adult", "value match - single value");
+    });
 
-  // 条件匹配 - 单值
-  let age = 18;
-  let result = if age {
-    0 { "baby" }
-    18 { "adult" }
-    60 { "senior" }
-    else { "other" }
-  };
-  assert(result == "adult", "value match - single value");
+    test("value match - value list", () {
+      let code = 20;
+      let tag = if code {
+        10, 20, 30 { "tens" }
+        else { "other" }
+      };
+      assert(tag == "tens", "value match - value list");
+    });
 
-  // 条件匹配 - 值列表
-  let code = 20;
-  let tag = if code {
-    10, 20, 30 { "tens" }
-    else { "other" }
-  };
-  assert(tag == "tens", "value match - value list");
+    test("value match - integer range", () {
+      let score = 85;
+      let grade = if score {
+        0...59 { "F" }
+        60...69 { "D" }
+        70...79 { "C" }
+        80...89 { "B" }
+        90...100 { "A" }
+        else { "?" }
+      };
+      assert(grade == "B", "value match - integer range");
+    });
 
-  // 条件匹配 - 整数闭区间
-  let score = 85;
-  let grade = if score {
-    0...59 { "F" }
-    60...69 { "D" }
-    70...79 { "C" }
-    80...89 { "B" }
-    90...100 { "A" }
-    else { "?" }
-  };
-  assert(grade == "B", "value match - integer range");
-
-  // while 循环
-  var sum = 0;
-  var i = 1;
-  while i <= 10 {
-    sum += i;
-    i += 1;
-  }
-  assert(sum == 55, "while loop");
-
-  // for 三段式循环
-  var product = 1;
-  for var j = 1; j <= 5; j += 1 {
-    product *= j;
-  }
-  assert(product == 120, "for three-part loop");
-
-  // for/in 数组迭代
-  let items = [10, 20, 30];
-  var total = 0;
-  for let item in items {
-    total += item;
-  }
-  assert(total == 60, "for/in array iteration");
-
-  // break
-  var count = 0;
-  for var k = 0; k < 100; k += 1 {
-    if k == 5 {
-      break;
-    }
-    count += 1;
-  }
-  assert(count == 5, "break");
-
-  // continue
-  var even_sum = 0;
-  for var n = 0; n < 10; n += 1 {
-    if n % 2 != 0 {
-      continue;
-    }
-    even_sum += n;
-  }
-  assert(even_sum == 20, "continue");
-
-  // 嵌套循环 break
-  var outer_count = 0;
-  for var o = 0; o < 5; o += 1 {
-    for var p = 0; p < 5; p += 1 {
-      if p == 2 {
-        break;
+    test("while loop", () {
+      var sum = 0;
+      var i = 1;
+      while i <= 10 {
+        sum += i;
+        i += 1;
       }
-    }
-    outer_count += 1;
-  }
-  assert(outer_count == 5, "nested loop break (inner only)");
+      assert(sum == 55, "while loop");
+    });
 
-  // 条件匹配 - 混合区间和单值
-  let val = 100;
-  let category = if val {
-    0 { "zero" }
-    1...9 { "single" }
-    10, 20, 30 { "special" }
-    100 { "hundred" }
-    else { "other" }
-  };
-  assert(category == "hundred", "value match - mixed range and values");
+    test("for three-part loop", () {
+      var product = 1;
+      for var j = 1; j <= 5; j += 1 {
+        product *= j;
+      }
+      assert(product == 120, "for three-part loop");
+    });
 
-  // 条件匹配 - 字符串值
-  let word = "hello";
-  let translated = if word {
-    "hi", "hello" { "greeting" }
-    "bye", "goodbye" { "farewell" }
-    else { "unknown" }
-  };
-  assert(translated == "greeting", "value match - string");
+    test("for/in array iteration", () {
+      let items = [10, 20, 30];
+      var total = 0;
+      for let item in items {
+        total += item;
+      }
+      assert(total == 60, "for/in array iteration");
+    });
 
-  // 条件匹配 - 字符串值 (其他分支)
-  let word2 = "bye";
-  let translated2 = if word2 {
-    "hi", "hello" { "greeting" }
-    "bye", "goodbye" { "farewell" }
-    else { "unknown" }
-  };
-  assert(translated2 == "farewell", "value match - string (second branch)");
+    test("break", () {
+      var count = 0;
+      for var k = 0; k < 100; k += 1 {
+        if k == 5 {
+          break;
+        }
+        count += 1;
+      }
+      assert(count == 5, "break");
+    });
 
-  // for/in continue
-  let nums = [1, 2, 3];
-  var forin_sum = 0;
-  for let n in nums {
-    if n == 2 {
-      continue;
-    }
-    forin_sum += n;
-  }
-  assert(forin_sum == 4, "for/in continue");
+    test("continue", () {
+      var even_sum = 0;
+      for var n = 0; n < 10; n += 1 {
+        if n % 2 != 0 {
+          continue;
+        }
+        even_sum += n;
+      }
+      assert(even_sum == 20, "continue");
+    });
 
-  // 空 for 循环 (无限循环 + break)
-  var empty_for_count = 0;
-  for ;; {
-    if empty_for_count == 3 {
-      break;
-    }
-    empty_for_count += 1;
-  }
-  assert(empty_for_count == 3, "empty for loop (infinite + break)");
+    test("nested loop break (inner only)", () {
+      var outer_count = 0;
+      for var o = 0; o < 5; o += 1 {
+        for var p = 0; p < 5; p += 1 {
+          if p == 2 {
+            break;
+          }
+        }
+        outer_count += 1;
+      }
+      assert(outer_count == 5, "nested loop break (inner only)");
+    });
 
-  // return if 表达式 (标量)
-  assert(flow_int_pick(true) == 100 && flow_int_pick(false) == 200, "return if expression (scalar)");
+    test("value match - mixed range and values", () {
+      let val = 100;
+      let category = if val {
+        0 { "zero" }
+        1...9 { "single" }
+        10, 20, 30 { "special" }
+        100 { "hundred" }
+        else { "other" }
+      };
+      assert(category == "hundred", "value match - mixed range and values");
+    });
 
-  // if 表达式返回聚合类型
-  let left: FlowNamed = FlowUser { name: "left" };
-  let right: FlowNamed = FlowUser { name: "right" };
-  let picked = flow_pick(true, left, right);
-  assert(picked.flow_name() == "left", "if expression returns aggregate (true)");
-  let picked2 = flow_pick(false, left, right);
-  assert(picked2.flow_name() == "right", "if expression returns aggregate (false)");
+    test("value match - string", () {
+      let word = "hello";
+      let translated = if word {
+        "hi", "hello" { "greeting" }
+        "bye", "goodbye" { "farewell" }
+        else { "unknown" }
+      };
+      assert(translated == "greeting", "value match - string");
+    });
 
-  // if 值匹配返回聚合类型
-  let match_picked = flow_match_pick(0, left, right);
-  assert(match_picked.flow_name() == "left", "value match returns aggregate");
+    test("value match - string (second branch)", () {
+      let word2 = "bye";
+      let translated2 = if word2 {
+        "hi", "hello" { "greeting" }
+        "bye", "goodbye" { "farewell" }
+        else { "unknown" }
+      };
+      assert(translated2 == "farewell", "value match - string (second branch)");
+    });
+
+    test("for/in continue", () {
+      let nums = [1, 2, 3];
+      var forin_sum = 0;
+      for let n in nums {
+        if n == 2 {
+          continue;
+        }
+        forin_sum += n;
+      }
+      assert(forin_sum == 4, "for/in continue");
+    });
+
+    test("empty for loop (infinite + break)", () {
+      var empty_for_count = 0;
+      for ;; {
+        if empty_for_count == 3 {
+          break;
+        }
+        empty_for_count += 1;
+      }
+      assert(empty_for_count == 3, "empty for loop (infinite + break)");
+    });
+
+    test("return if expression (scalar)", () {
+      assert(flow_int_pick(true) == 100 && flow_int_pick(false) == 200, "return if expression (scalar)");
+    });
+
+    test("if expression returns aggregate", () {
+      let left: FlowNamed = FlowUser { name: "left" };
+      let right: FlowNamed = FlowUser { name: "right" };
+      let picked = flow_pick(true, left, right);
+      assert(picked.flow_name() == "left", "if expression returns aggregate (true)");
+      let picked2 = flow_pick(false, left, right);
+      assert(picked2.flow_name() == "right", "if expression returns aggregate (false)");
+    });
+
+    test("value match returns aggregate", () {
+      let left: FlowNamed = FlowUser { name: "left" };
+      let right: FlowNamed = FlowUser { name: "right" };
+      let match_picked = flow_match_pick(0, left, right);
+      assert(match_picked.flow_name() == "left", "value match returns aggregate");
+    });
+  });
 }

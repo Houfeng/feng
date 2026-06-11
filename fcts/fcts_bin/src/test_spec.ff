@@ -1,7 +1,7 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib.helper;
+import std.test;
 
 // object-form spec
 spec Printable {
@@ -93,62 +93,73 @@ type MutableUser: MutableNamed {
 
 /** spec 契约测试 */
 open func test_spec() {
-  println("--- test_spec ---");
+  describe("spec", () {
+    test("object-form spec via declaration", () {
+      let item = SpecItem { label: "test" };
+      let p: Printable = item;
+      assert(p.to_string() == "test", "object-form spec via declaration");
+    });
 
-  // object-form spec - type 声明头满足
-  let item = SpecItem { label: "test" };
-  let p: Printable = item;
-  assert(p.to_string() == "test", "object-form spec via declaration");
+    test("spec inheritance", () {
+      let detail = DetailItem { label: "item", desc: "a test item" };
+      let dp: DetailPrintable = detail;
+      assert(dp.to_string() == "item" && dp.detail() == "item: a test item", "spec inheritance");
+    });
 
-  // spec 继承
-  let detail = DetailItem { label: "item", desc: "a test item" };
-  let dp: DetailPrintable = detail;
-  assert(dp.to_string() == "item" && dp.detail() == "item: a test item", "spec inheritance");
+    test("callable-form spec", () {
+      let t: Transformer = (x: int) -> x * 2;
+      assert(t(5) == 10, "callable-form spec");
+    });
 
-  // callable-form spec
-  let t: Transformer = (x: int) -> x * 2;
-  assert(t(5) == 10, "callable-form spec");
+    test("function assigned to callable-form spec", () {
+      let t2: Transformer = double_it;
+      assert(t2(7) == 14, "function assigned to callable-form spec");
+    });
 
-  // 函数赋值到 callable-form spec
-  let t2: Transformer = double_it;
-  assert(t2(7) == 14, "function assigned to callable-form spec");
+    test("spec field matching", () {
+      let entity = NamedEntity { name: "entity1" };
+      let hn: HasName = entity;
+      assert(hn.name == "entity1", "spec field matching");
+    });
 
-  // spec 中的字段匹配
-  let entity = NamedEntity { name: "entity1" };
-  let hn: HasName = entity;
-  assert(hn.name == "entity1", "spec field matching");
+    test("default witness (spec default value)", () {
+      let default_p: Printable;
+      assert(default_p.to_string() == "", "default witness (spec default value)");
+    });
 
-  // 默认 witness
-  let default_p: Printable;
-  assert(default_p.to_string() == "", "default witness (spec default value)");
+    test("spec as function parameter", () {
+      let su = SpecUser { name: "param" };
+      assert(announce_spec(su) == "param", "spec as function parameter");
+    });
 
-  // spec 作为函数参数 (对象→spec 隐式转换)
-  let su = SpecUser { name: "param" };
-  assert(announce_spec(su) == "param", "spec as function parameter");
+    test("spec as function return value", () {
+      let sn = make_spec_named("returned");
+      assert(sn.spec_greet() == "returned", "spec as function return value");
+    });
 
-  // spec 作为函数返回值
-  let sn = make_spec_named("returned");
-  assert(sn.spec_greet() == "returned", "spec as function return value");
+    test("spec return value forwarding", () {
+      let sf = forward_spec("forwarded");
+      assert(sf.spec_greet() == "forwarded", "spec return value forwarding");
+    });
 
-  // spec 返回值转发
-  let sf = forward_spec("forwarded");
-  assert(sf.spec_greet() == "forwarded", "spec return value forwarding");
+    test("spec var field mutation via spec view", () {
+      let mu = MutableUser { mname: "before" };
+      let mn: MutableNamed = mu;
+      mn.mname = "after";
+      assert(mn.mgreet() == "after", "spec var field mutation via spec view");
+      assert(mu.mname == "after", "spec var field mutation reflects on original");
+    });
 
-  // spec var 字段通过 spec 视图修改
-  let mu = MutableUser { mname: "before" };
-  let mn: MutableNamed = mu;
-  mn.mname = "after";
-  assert(mn.mgreet() == "after", "spec var field mutation via spec view");
-  assert(mu.mname == "after", "spec var field mutation reflects on original");
-
-  // spec == / != 比较 (引用相等)
-  let sa = SpecUser { name: "alice" };
-  let sb = SpecUser { name: "bob" };
-  let sna: SpecGreetable = sa;
-  let sna2: SpecGreetable = sa;
-  let snb: SpecGreetable = sb;
-  assert(sna == sna2, "spec == same reference");
-  assert(sna != snb, "spec != different reference");
+    test("spec == / != comparison", () {
+      let sa = SpecUser { name: "alice" };
+      let sb = SpecUser { name: "bob" };
+      let sna: SpecGreetable = sa;
+      let sna2: SpecGreetable = sa;
+      let snb: SpecGreetable = sb;
+      assert(sna == sna2, "spec == same reference");
+      assert(sna != snb, "spec != different reference");
+    });
+  });
 }
 
 func double_it(x: int): int {

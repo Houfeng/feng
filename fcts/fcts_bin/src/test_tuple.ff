@@ -1,7 +1,7 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib.helper;
+import std.test;
 
 // 基本 tuple type
 type TPoint(int, int);
@@ -35,43 +35,53 @@ func make_tunit(): TUnit {
 
 /** Tuple 类型测试 */
 open func test_tuple() {
-  println("--- test_tuple ---");
+  describe("tuple", () {
+    test("unit type creation and destructuring", () {
+      let unit: TUnit = ();
+      let () = unit;
+      let () = ();
+      assert(true, "unit type creation and destructuring");
+    });
 
-  // Unit type 创建
-  let unit: TUnit = ();
-  let () = unit;
-  let () = ();
-  assert(true, "unit type creation and destructuring");
+    test("unit returned from function", () {
+      let u2 = make_tunit();
+      let () = u2;
+      assert(true, "unit returned from function");
+    });
 
-  // Unit 函数返回
-  let u2 = make_tunit();
-  let () = u2;
-  assert(true, "unit returned from function");
+    test("tuple literal and .itemN access", () {
+      let point: TPoint = (5, 6);
+      assert(point.item1 == 5 && point.item2 == 6, "tuple literal and .itemN access");
+    });
 
-  // 基本 tuple 字面量与 .itemN 访问
-  let point: TPoint = (5, 6);
-  assert(point.item1 == 5 && point.item2 == 6, "tuple literal and .itemN access");
+    test("tuple method via fit", () {
+      let point: TPoint = (5, 6);
+      assert(point.tsum() == 11, "tuple method via fit");
+    });
 
-  // tuple 方法 (via fit)
-  assert(point.tsum() == 11, "tuple method via fit");
+    test("tuple assigned to spec", () {
+      let point: TPoint = (5, 6);
+      let s: TSummable = point;
+      assert(s.tsum() == 11, "tuple assigned to spec");
+      assert(consume_tsummable(point) == 11, "tuple passed as spec argument");
+    });
 
-  // tuple 赋值到 spec
-  let s: TSummable = point;
-  assert(s.tsum() == 11, "tuple assigned to spec");
-  assert(consume_tsummable(point) == 11, "tuple passed as spec argument");
+    test("var tuple reassignment", () {
+      var mpoint: TPoint = (1, 2);
+      mpoint = (3, 4);
+      assert(mpoint.item1 == 3 && mpoint.item2 == 4, "var tuple reassignment");
+    });
 
-  // var tuple 重新赋值
-  var mpoint: TPoint = (1, 2);
-  mpoint = (3, 4);
-  assert(mpoint.item1 == 3 && mpoint.item2 == 4, "var tuple reassignment");
+    test("tuple destructuring with skip", () {
+      let (x, , z) = (7, 8, 9);
+      assert(x == 7 && z == 9, "tuple destructuring with skip");
+    });
 
-  // tuple 解构 - 跳过中间元素
-  let (x, , z) = (7, 8, 9);
-  assert(x == 7 && z == 9, "tuple destructuring with skip");
-
-  // 三元素 tuple
-  let triple: TTriple = (42, "hello", true);
-  assert(triple.item1 == 42, "triple tuple item1");
-  assert(triple.item2 == "hello", "triple tuple item2");
-  assert(triple.item3, "triple tuple item3");
+    test("triple tuple", () {
+      let triple: TTriple = (42, "hello", true);
+      assert(triple.item1 == 42, "triple tuple item1");
+      assert(triple.item2 == "hello", "triple tuple item2");
+      assert(triple.item3, "triple tuple item3");
+    });
+  });
 }

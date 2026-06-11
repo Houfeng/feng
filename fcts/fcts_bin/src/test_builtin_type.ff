@@ -1,65 +1,94 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib.helper;
+import std.test;
 
 /** 内建基础类型测试 */
 open func test_builtin_type() {
-  println("--- test_builtin_type ---");
+  describe("builtin_type", () {
+    test("i8 type", () {
+      let a_i8: i8 = 127;
+      assert((int)a_i8 == 127, "i8 type");
+    });
 
-  // 整数类型
-  let a_i8: i8 = 127;
-  let a_i16: i16 = 32767;
-  let a_i32: i32 = 2147483647;
-  let a_i64: i64 = 100;
+    test("i16 type", () {
+      let a_i16: i16 = 32767;
+      assert((int)a_i16 == 32767, "i16 type");
+    });
 
-  assert((int)a_i8 == 127, "i8 type");
-  assert((int)a_i16 == 32767, "i16 type");
-  assert(a_i32 == 2147483647, "i32 type");
-  assert(a_i64 == (i64)100, "i64 type");
+    test("i32 type", () {
+      let a_i32: i32 = 2147483647;
+      assert(a_i32 == 2147483647, "i32 type");
+    });
 
-  // 无符号整数
-  let a_u8: u8 = 255;
-  let a_u16: u16 = 65535;
-  let a_u32: u32 = 100;
-  let a_u64: u64 = 200;
+    test("i64 type", () {
+      let a_i64: i64 = 100;
+      assert(a_i64 == (i64)100, "i64 type");
+    });
 
-  assert((int)a_u8 == 255, "u8 type");
-  assert((int)a_u16 == 65535, "u16 type");
-  assert((int)a_u32 == 100, "u32 type");
-  assert((long)a_u64 == (long)200, "u64 type");
+    test("u8 type", () {
+      let a_u8: u8 = 255;
+      assert((int)a_u8 == 255, "u8 type");
+    });
 
-  // 类型别名
-  let alias_int: int = 42;
-  let alias_long: long = 42;
-  let alias_byte: byte = 42;
-  let alias_float: float = 3.14;
-  let alias_double: double = 3.14;
+    test("u16 type", () {
+      let a_u16: u16 = 65535;
+      assert((int)a_u16 == 65535, "u16 type");
+    });
 
-  assert(alias_int == 42, "int alias for i32");
-  assert(alias_long == (long)42, "long alias for i64");
-  assert((int)alias_byte == 42, "byte alias for u8");
+    test("u32 type", () {
+      let a_u32: u32 = 100;
+      assert((int)a_u32 == 100, "u32 type");
+    });
 
-  // 浮点类型
-  let f1: f32 = 1.5;
-  let f2: f64 = 2.5;
-  assert((double)f1 > 1.0, "f32 type");
-  assert(f2 > 2.0, "f64 type");
+    test("u64 type", () {
+      let a_u64: u64 = 200;
+      assert((long)a_u64 == (long)200, "u64 type");
+    });
 
-  // bool
-  let t = true;
-  let f = false;
-  assert(t && !f, "bool type");
+    test("int alias for i32", () {
+      let alias_int: int = 42;
+      assert(alias_int == 42, "int alias for i32");
+    });
 
-  // string
-  let s = "hello";
-  assert(s == "hello", "string type");
+    test("long alias for i64", () {
+      let alias_long: long = 42;
+      assert(alias_long == (long)42, "long alias for i64");
+    });
 
-  // 默认零值
-  let zi: int;
-  let zl: long;
-  let zb: bool;
-  let zs: string;
-  let zf: double;
-  assert(zi == 0 && zl == (long)0 && zb == false && zs == "" && zf == 0.0, "default zero values");
+    test("byte alias for u8", () {
+      let alias_byte: byte = 42;
+      assert((int)alias_byte == 42, "byte alias for u8");
+    });
+
+    test("f32 type", () {
+      let f1: f32 = 1.5;
+      assert((double)f1 > 1.0, "f32 type");
+    });
+
+    test("f64 type", () {
+      let f2: f64 = 2.5;
+      assert(f2 > 2.0, "f64 type");
+    });
+
+    test("bool type", () {
+      let t = true;
+      let f = false;
+      assert(t && !f, "bool type");
+    });
+
+    test("string type", () {
+      let s = "hello";
+      assert(s == "hello", "string type");
+    });
+
+    test("default zero values", () {
+      let zi: int;
+      let zl: long;
+      let zb: bool;
+      let zs: string;
+      let zf: double;
+      assert(zi == 0 && zl == (long)0 && zb == false && zs == "" && zf == 0.0, "default zero values");
+    });
+  });
 }

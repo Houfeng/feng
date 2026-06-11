@@ -1,7 +1,7 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib.helper;
+import std.test;
 
 func returns_true(): bool {
   return true;
@@ -13,96 +13,106 @@ func returns_false(): bool {
 
 /** 表达式与运算测试 */
 open func test_expression() {
-  println("--- test_expression ---");
+  describe("expression", () {
+    test("arithmetic operations", () {
+      let a = 10;
+      let b = 3;
+      assert(a + b == 13, "addition");
+      assert(a - b == 7, "subtraction");
+      assert(a * b == 30, "multiplication");
+      assert(a / b == 3, "integer division (truncate toward zero)");
+      assert(a % b == 1, "modulo");
+    });
 
-  // 算术运算
-  let a = 10;
-  let b = 3;
-  assert(a + b == 13, "addition");
-  assert(a - b == 7, "subtraction");
-  assert(a * b == 30, "multiplication");
-  assert(a / b == 3, "integer division (truncate toward zero)");
-  assert(a % b == 1, "modulo");
+    test("negative modulo", () {
+      let neg = -7;
+      assert(neg % 3 == -1, "negative modulo");
+    });
 
-  // 负数取模
-  let neg = -7;
-  assert(neg % 3 == -1, "negative modulo");
+    test("comparison operators", () {
+      assert(5 < 10 && 10 > 5 && 5 <= 5 && 5 >= 5 && 5 == 5 && 5 != 6, "comparison operators");
+    });
 
-  // 比较运算
-  assert(5 < 10 && 10 > 5 && 5 <= 5 && 5 >= 5 && 5 == 5 && 5 != 6, "comparison operators");
+    test("logical operators", () {
+      assert(true && true, "logical AND");
+      assert(true || false, "logical OR");
+      assert(!false, "logical NOT");
+    });
 
-  // 逻辑运算
-  assert(true && true, "logical AND");
-  assert(true || false, "logical OR");
-  assert(!false, "logical NOT");
+    test("short-circuit evaluation", () {
+      let short_and = false && returns_true();
+      assert(!short_and, "short-circuit AND");
+      let short_or = true || returns_false();
+      assert(short_or, "short-circuit OR");
+    });
 
-  // 短路求值 - && 左侧 false 不执行右侧
-  let short_and = false && returns_true();
-  assert(!short_and, "short-circuit AND");
+    test("bitwise operators", () {
+      let x: int = 0b1010;
+      let y: int = 0b1100;
+      assert((x & y) == 0b1000, "bitwise AND");
+      assert((x | y) == 0b1110, "bitwise OR");
+      assert((x ^ y) == 0b0110, "bitwise XOR");
+      let bitmask: int = 0xFF;
+      let inverted: int = ~bitmask;
+      assert((inverted & 0xFF) == 0, "bitwise NOT");
+      assert((1 << 3) == 8, "left shift");
+      assert((8 >> 2) == 2, "right shift");
+    });
 
-  // 短路求值 - || 左侧 true 不执行右侧
-  let short_or = true || returns_false();
-  assert(short_or, "short-circuit OR");
+    test("compound assignment", () {
+      var c = 10;
+      c += 5;
+      assert(c == 15, "compound += ");
+      c -= 3;
+      assert(c == 12, "compound -= ");
+      c *= 2;
+      assert(c == 24, "compound *= ");
+      c /= 4;
+      assert(c == 6, "compound /= ");
+      c %= 4;
+      assert(c == 2, "compound %= ");
+    });
 
-  // 位运算
-  let x: int = 0b1010;
-  let y: int = 0b1100;
-  assert((x & y) == 0b1000, "bitwise AND");
-  assert((x | y) == 0b1110, "bitwise OR");
-  assert((x ^ y) == 0b0110, "bitwise XOR");
-  let bitmask: int = 0xFF;
-  let inverted: int = ~bitmask;
-  assert((inverted & 0xFF) == 0, "bitwise NOT");
-  assert((1 << 3) == 8, "left shift");
-  assert((8 >> 2) == 2, "right shift");
+    test("bitwise compound assignment", () {
+      var m: int = 0xFF;
+      m &= 0x0F;
+      assert(m == 0x0F, "compound &= ");
+      m |= 0xF0;
+      assert(m == 0xFF, "compound |= ");
+      m ^= 0x0F;
+      assert(m == 0xF0, "compound ^= ");
 
-  // 复合赋值
-  var c = 10;
-  c += 5;
-  assert(c == 15, "compound += ");
-  c -= 3;
-  assert(c == 12, "compound -= ");
-  c *= 2;
-  assert(c == 24, "compound *= ");
-  c /= 4;
-  assert(c == 6, "compound /= ");
-  c %= 4;
-  assert(c == 2, "compound %= ");
+      var sh: int = 1;
+      sh <<= 4;
+      assert(sh == 16, "compound <<= ");
+      sh >>= 2;
+      assert(sh == 4, "compound >>= ");
+    });
 
-  // 位运算复合赋值
-  var m: int = 0xFF;
-  m &= 0x0F;
-  assert(m == 0x0F, "compound &= ");
-  m |= 0xF0;
-  assert(m == 0xFF, "compound |= ");
-  m ^= 0x0F;
-  assert(m == 0xF0, "compound ^= ");
+    test("operator precedence", () {
+      assert(2 + 3 * 4 == 14, "operator precedence (mul before add)");
+      assert((2 + 3) * 4 == 20, "parentheses override precedence");
+    });
 
-  var sh: int = 1;
-  sh <<= 4;
-  assert(sh == 16, "compound <<= ");
-  sh >>= 2;
-  assert(sh == 4, "compound >>= ");
+    test("explicit cast", () {
+      let big: i64 = 1000;
+      let small = (i32)big;
+      assert(small == 1000, "explicit cast i64 to i32");
 
-  // 运算符优先级
-  assert(2 + 3 * 4 == 14, "operator precedence (mul before add)");
-  assert((2 + 3) * 4 == 20, "parentheses override precedence");
+      let fi = 3.7;
+      let ti = (int)fi;
+      assert(ti == 3, "explicit cast double to int (truncate)");
+    });
 
-  // 显式类型转换
-  let big: i64 = 1000;
-  let small = (i32)big;
-  assert(small == 1000, "explicit cast i64 to i32");
+    test("string concatenation", () {
+      let s1 = "Hello";
+      let s2 = ", World!";
+      assert(s1 + s2 == "Hello, World!", "string concatenation");
+    });
 
-  let fi = 3.7;
-  let ti = (int)fi;
-  assert(ti == 3, "explicit cast double to int (truncate)");
-
-  // 字符串拼接
-  let s1 = "Hello";
-  let s2 = ", World!";
-  assert(s1 + s2 == "Hello, World!", "string concatenation");
-
-  // 一元取负
-  let neg_val = -42;
-  assert(neg_val == 0 - 42, "unary negation");
+    test("unary negation", () {
+      let neg_val = -42;
+      assert(neg_val == 0 - 42, "unary negation");
+    });
+  });
 }

@@ -1,7 +1,7 @@
 module fcts_bin;
 
 import std.io;
-import fcts_lib.helper;
+import std.test;
 
 // 可调用形状
 spec IntMapper(x: int): int;
@@ -28,61 +28,71 @@ type FieldLambdaBox {
 
 /** Lambda 与闭包测试 */
 open func test_lambda() {
-  println("--- test_lambda ---");
+  describe("lambda", () {
+    test("single-expression lambda", () {
+      let double: IntMapper = (x: int) -> x * 2;
+      assert(double(5) == 10, "single-expression lambda");
+    });
 
-  // 单表达式 Lambda
-  let double: IntMapper = (x: int) -> x * 2;
-  assert(double(5) == 10, "single-expression lambda");
+    test("multi-line lambda", () {
+      let compute: IntMapper = (x: int) {
+        let temp = x + 10;
+        return temp * 2;
+      };
+      assert(compute(5) == 30, "multi-line lambda");
+    });
 
-  // 多行 Lambda
-  let compute: IntMapper = (x: int) {
-    let temp = x + 10;
-    return temp * 2;
-  };
-  assert(compute(5) == 30, "multi-line lambda");
+    test("closure captures let binding", () {
+      let base = 100;
+      let add_base: IntMapper = (x: int) -> x + base;
+      assert(add_base(5) == 105, "closure captures let binding");
+    });
 
-  // 闭包捕获外部变量 (let)
-  let base = 100;
-  let add_base: IntMapper = (x: int) -> x + base;
-  assert(add_base(5) == 105, "closure captures let binding");
+    test("closure captures var binding (reference)", () {
+      var counter = 0;
+      let inc: Action = () {
+        counter += 1;
+      };
+      inc();
+      inc();
+      inc();
+      assert(counter == 3, "closure captures var binding (reference)");
+    });
 
-  // 闭包捕获外部变量 (var) - 引用捕获
-  var counter = 0;
-  let inc: Action = () {
-    counter += 1;
-  };
-  inc();
-  inc();
-  inc();
-  assert(counter == 3, "closure captures var binding (reference)");
+    test("lambda as argument", () {
+      let result = apply_mapper(10, (x: int) -> x * 3);
+      assert(result == 30, "lambda as argument");
+    });
 
-  // Lambda 作为参数传递
-  let result = apply_mapper(10, (x: int) -> x * 3);
-  assert(result == 30, "lambda as argument");
+    test("lambda as return value (closure)", () {
+      let adder = make_adder(100);
+      assert(adder(5) == 105, "lambda as return value (closure)");
+    });
 
-  // Lambda 作为返回值
-  let adder = make_adder(100);
-  assert(adder(5) == 105, "lambda as return value (closure)");
+    test("method value", () {
+      let obj = LambdaTestObj { value: 42 };
+      let getter: IntProducer = obj.get_value;
+      assert(getter() == 42, "method value");
+    });
 
-  // 方法值
-  let obj = LambdaTestObj { value: 42 };
-  let getter: IntProducer = obj.get_value;
-  assert(getter() == 42, "method value");
+    test("callable spec cast", () {
+      let mapper_a: IntMapper = (x: int) -> x + 1;
+      let mapper_b: IntMapper2 = (IntMapper2)mapper_a;
+      assert(mapper_b(41) == 42, "callable spec cast");
+    });
 
-  // callable spec 强转
-  let mapper_a: IntMapper = (x: int) -> x + 1;
-  let mapper_b: IntMapper2 = (IntMapper2)mapper_a;
-  assert(mapper_b(41) == 42, "callable spec cast");
+    test("lambda captures self in method (reference)", () {
+      let scbox = SelfCapBox { n: 7 };
+      let screader: IntProducer = scbox.make_reader();
+      scbox.n = 8;
+      assert(screader() == 8, "lambda captures self in method (reference)");
+    });
 
-  // lambda 在方法中捕获 self
-  let scbox = SelfCapBox { n: 7 };
-  let screader: IntProducer = scbox.make_reader();
-  scbox.n = 8;
-  assert(screader() == 8, "lambda captures self in method (reference)");
-
-  // type 字段 callable lambda 默认值
-  let flbox = FieldLambdaBox { n: 7 };
-  assert(flbox.read() == 7, "type field callable lambda default");
+    test("type field callable lambda default", () {
+      let flbox = FieldLambdaBox { n: 7 };
+      assert(flbox.read() == 7, "type field callable lambda default");
+    });
+  });
 }
 
 func apply_mapper(x: int, f: IntMapper): int {

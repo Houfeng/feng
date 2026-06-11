@@ -1,8 +1,8 @@
 module fcts_bin;
 
 import std.io;
+import std.test;
 import std.collections;
-import fcts_lib.helper;
 
 // 变长参数函数
 func join_strings(sep: string, parts: string...): string {
@@ -27,28 +27,33 @@ spec Printer(args: string...): void;
 
 /** 变长参数测试 */
 open func test_variadic() {
-  println("--- test_variadic ---");
+  describe("variadic", () {
+    test("variadic multiple args", () {
+      let result = join_strings(", ", "a", "b", "c");
+      assert(result == "a, b, c", "variadic multiple args");
+    });
 
-  // 多参数调用
-  let result = join_strings(", ", "a", "b", "c");
-  assert(result == "a, b, c", "variadic multiple args");
+    test("variadic single arg", () {
+      let single = join_strings("-", "only");
+      assert(single == "only", "variadic single arg");
+    });
 
-  // 单参数调用
-  let single = join_strings("-", "only");
-  assert(single == "only", "variadic single arg");
+    test("variadic zero args", () {
+      let empty = join_strings("+");
+      assert(empty == "", "variadic zero args");
+    });
 
-  // 零参数调用
-  let empty = join_strings("+");
-  assert(empty == "", "variadic zero args");
+    test("variadic-only function", () {
+      assert(count_args(1, 2, 3, 4, 5) == 5, "variadic-only function");
+      assert(count_args() == 0, "variadic-only function (zero args)");
+    });
 
-  // 仅变长参数函数
-  assert(count_args(1, 2, 3, 4, 5) == 5, "variadic-only function");
-  assert(count_args() == 0, "variadic-only function (zero args)");
-
-  // callable-form spec 中的变长参数
-  let p: Printer = (args: string...) {
-    // 简单使用
-  };
-  p("hello", "world");
-  assert(true, "variadic callable-form spec");
+    test("variadic callable-form spec", () {
+      let p: Printer = (args: string...) {
+        // 简单使用
+      };
+      p("hello", "world");
+      assert(true, "variadic callable-form spec");
+    });
+  });
 }

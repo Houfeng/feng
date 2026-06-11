@@ -1,36 +1,44 @@
 module fcts_bin;
 
 import std.io;
+import std.test;
 import fcts_lib.helper;
 import fcts_lib.test;
 
 /** 模块与导入测试 */
 open func test_module() {
-  println("--- test_module ---");
+  describe("module", () {
+    test("cross-package function call", () {
+      let result = lib_helper();
+      assert(result == 42, "cross-package function call");
+    });
 
-  // 跨包函数调用
-  let result = lib_helper();
-  assert(result == 42, "cross-package function call");
+    test("cross-package type usage", () {
+      let user = LibUser("cross-pkg", 30);
+      assert(user.name == "cross-pkg" && user.age == 30, "cross-package type usage");
+    });
 
-  // 跨包 type 使用
-  let user = LibUser("cross-pkg", 30);
-  assert(user.name == "cross-pkg" && user.age == 30, "cross-package type usage");
+    test("cross-package method call", () {
+      let user = LibUser("cross-pkg", 30);
+      assert(user.greet() == "Hello, cross-pkg", "cross-package method call");
+    });
 
-  // 跨包 type 方法调用
-  assert(user.greet() == "Hello, cross-pkg", "cross-package method call");
+    test("cross-package spec satisfaction", () {
+      let user = LibUser("cross-pkg", 30);
+      let named: LibNamed = user;
+      assert(named.display() == "cross-pkg", "cross-package spec satisfaction");
+    });
 
-  // 跨包 spec 满足
-  let named: LibNamed = user;
-  assert(named.display() == "cross-pkg", "cross-package spec satisfaction");
+    test("cross-package enum", () {
+      let color = LibColor.Green;
+      assert((int)color == 1, "cross-package enum");
+    });
 
-  // 跨包 enum
-  let color = LibColor.Green;
-  assert((int)color == 1, "cross-package enum");
-
-  // 跨包泛型 type
-  let box = LibBox<int> { value: 123 };
-  assert(true, "cross-package generic type");
-
-  let sbox = LibBox<string> { value: "pkg" };
-  assert(true, "cross-package generic type (string)");
+    test("cross-package generic type", () {
+      let box = LibBox<int> { value: 123 };
+      assert(true, "cross-package generic type");
+      let sbox = LibBox<string> { value: "pkg" };
+      assert(true, "cross-package generic type (string)");
+    });
+  });
 }
