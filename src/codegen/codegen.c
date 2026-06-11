@@ -19994,18 +19994,114 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
 }
 
 static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
+    /*
+     * In C, nothing may appear between `}` and `else`.  When the condition of
+     * an `else if` clause requires preamble code (function calls producing
+     * temporaries, cleanup pushes, etc.), we rewrite:
+     *
+     *   } else if (<complex>) { body }
+     *
+     * into:
+     *
+     *   } else {                        // wrapper block
+     *       <preamble>                  // temporaries live in wrapper_scope
+     *       if (<result>) { body }
+     *       ...remaining else-if/else...
+     *       <cleanup preamble temps>    // wrapper_scope released
+     *   }
+     *
+     * Wrapper scopes nest: each one wraps all remaining clauses and the
+     * optional else block, so they are closed in reverse order at the end.
+     */
+    #define MAX_IF_WRAPPER_SCOPES 64
+    Scope  *wrapper_scopes[MAX_IF_WRAPPER_SCOPES];
+    size_t  wrapper_count = 0;
+
     for (size_t i = 0; i < stmt->as.if_stmt.clause_count; i++) {
         const FengIfClause *c = &stmt->as.if_stmt.clauses[i];
         ExprResult cond;
         Scope *branch_scope;
-        if (!cg_emit_expr(cg, c->condition, &cond)) return false;
-        if (cond.type->kind != CG_TYPE_BOOL) {
-            er_free(&cond);
-            return cg_fail(cg, c->token, "codegen: if condition must be bool");
+
+        if (i > 0) {
+            /*
+             * Push a wrapper scope *before* evaluating the condition so that
+             * any temporaries produced by cg_emit_expr are registered in this
+             * scope (and cleaned up when we close the wrapper).
+             */
+            Scope *ws = scope_push(cg->cur_scope);
+            if (!ws) return cg_fail(cg, c->token, "codegen: out of memory");
+            cg->cur_scope = ws;
+
+            /* Record buffer position to detect preamble. */
+            size_t body_len_before = cg->cur_body->length;
+
+            if (!cg_emit_expr(cg, c->condition, &cond)) {
+                cg->cur_scope = ws->parent;
+                scope_pop_free(ws);
+                return false;
+            }
+            if (cond.type->kind != CG_TYPE_BOOL) {
+                er_free(&cond);
+                cg->cur_scope = ws->parent;
+                scope_pop_free(ws);
+                return cg_fail(cg, c->token, "codegen: if condition must be bool");
+            }
+
+            bool has_preamble = (cg->cur_body->length != body_len_before);
+
+            if (has_preamble) {
+                /*
+                 * Preamble was emitted after the previous clause's `}`.
+                 * Insert `else {\n` before it and use a plain `if`.
+                 */
+                const char *else_open = "    else {\n";
+                size_t eo_len = strlen(else_open);
+                size_t pr_len = cg->cur_body->length - body_len_before;
+
+                if (!buf_reserve(cg->cur_body, eo_len)) {
+                    er_free(&cond);
+                    cg->cur_scope = ws->parent;
+                    scope_pop_free(ws);
+                    return cg_fail(cg, c->token, "codegen: out of memory");
+                }
+                memmove(cg->cur_body->data + body_len_before + eo_len,
+                        cg->cur_body->data + body_len_before,
+                        pr_len);
+                memcpy(cg->cur_body->data + body_len_before, else_open, eo_len);
+                cg->cur_body->length += eo_len;
+                cg->cur_body->data[cg->cur_body->length] = '\0';
+
+                buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond.c_expr);
+
+                if (wrapper_count >= MAX_IF_WRAPPER_SCOPES) {
+                    er_free(&cond);
+                    cg->cur_scope = ws->parent;
+                    scope_pop_free(ws);
+                    return cg_fail(cg, c->token, "codegen: too many nested else-if wrappers");
+                }
+                wrapper_scopes[wrapper_count++] = ws;
+            } else {
+                /*
+                 * No preamble — the wrapper scope is empty.  Pop it and emit
+                 * a normal `else if`.
+                 */
+                cg->cur_scope = ws->parent;
+                scope_pop_free(ws);
+
+                buf_append_fmt(cg->cur_body, "    else if (%s) {\n", cond.c_expr);
+            }
+        } else {
+            /* First clause (i == 0): plain `if`. */
+            if (!cg_emit_expr(cg, c->condition, &cond)) return false;
+            if (cond.type->kind != CG_TYPE_BOOL) {
+                er_free(&cond);
+                return cg_fail(cg, c->token, "codegen: if condition must be bool");
+            }
+            buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond.c_expr);
         }
-        buf_append_fmt(cg->cur_body, "    %sif (%s) {\n",
-                       i == 0 ? "" : "else ", cond.c_expr);
+
         er_free(&cond);
+
         branch_scope = scope_push(cg->cur_scope);
         if (!branch_scope) return cg_fail(cg, c->token, "codegen: out of memory");
         cg->cur_scope = branch_scope;
@@ -20019,6 +20115,7 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
         scope_pop_free(branch_scope);
         buf_append_cstr(cg->cur_body, "    }\n");
     }
+
     if (stmt->as.if_stmt.else_block) {
         Scope *else_scope = scope_push(cg->cur_scope);
         if (!else_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
@@ -20032,6 +20129,15 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, else_scope);
         cg->cur_scope = else_scope->parent;
         scope_pop_free(else_scope);
+        buf_append_cstr(cg->cur_body, "    }\n");
+    }
+
+    /* Close wrapper scopes in reverse order: release temporaries, then `}`. */
+    for (size_t d = wrapper_count; d > 0; d--) {
+        Scope *ws = wrapper_scopes[d - 1];
+        cg_release_scope(cg, ws);
+        cg->cur_scope = ws->parent;
+        scope_pop_free(ws);
         buf_append_cstr(cg->cur_body, "    }\n");
     }
     return true;
