@@ -2369,7 +2369,31 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
 
         case FENG_TYPE_MEMBER_METHOD:
         case FENG_TYPE_MEMBER_CONSTRUCTOR:
-        case FENG_TYPE_MEMBER_FINALIZER:
+        case FENG_TYPE_MEMBER_FINALIZER: {
+            const FengCallableSignature *sig = &member->as.callable;
+            /* Merge owner-level and method-level type params so that
+             * method-level generic parameters (e.g. func foo<T>(...))
+             * are correctly serialized as TYPE_PARAM_REF in the .ft file. */
+            const FengTypeParam *effective_tparams = ctx->type_params;
+            size_t effective_tparam_count = ctx->type_param_count;
+            FengTypeParam *merged_tparams = NULL;
+
+            if (sig->type_param_count > 0U) {
+                size_t total = ctx->type_param_count + sig->type_param_count;
+                merged_tparams = (FengTypeParam *)calloc(total, sizeof(FengTypeParam));
+                if (merged_tparams == NULL) {
+                    return NULL;
+                }
+                for (size_t ti = 0; ti < ctx->type_param_count; ++ti) {
+                    merged_tparams[ti] = ctx->type_params[ti];
+                }
+                for (size_t ti = 0; ti < sig->type_param_count; ++ti) {
+                    merged_tparams[ctx->type_param_count + ti] = sig->type_params[ti];
+                }
+                effective_tparams = merged_tparams;
+                effective_tparam_count = total;
+            }
+
             decl = new_decl_from_slice(member->kind == FENG_TYPE_MEMBER_METHOD
                                            ? FENG_SYMBOL_DECL_KIND_METHOD
                                            : member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR
@@ -2377,37 +2401,53 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
                                                  : FENG_SYMBOL_DECL_KIND_FINALIZER,
                                        member_visibility,
                                        FENG_MUTABILITY_LET,
-                                       member->as.callable.name,
+                                       sig->name,
                                        path,
                                        member->token,
                                        out_error);
             if (decl == NULL) {
+                free(merged_tparams);
                 return NULL;
             }
             if (!apply_decl_doc_comment(decl, member->doc_comment, path, member->token, out_error)) {
+                free(merged_tparams);
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
                 return NULL;
             }
+            /* Emit method-level type param children before params/return type. */
+            if (sig->type_param_count > 0U) {
+                if (!emit_type_param_children(ctx, decl,
+                                              sig->type_params,
+                                              sig->type_param_count,
+                                              path,
+                                              out_error)) {
+                    free(merged_tparams);
+                    feng_symbol_internal_decl_free_members(decl);
+                    free(decl);
+                    return NULL;
+                }
+            }
             decl->return_type = build_callable_return_type_with_tparams(ctx,
-                                                                        &member->as.callable,
-                                                                        member->as.callable.return_type,
+                                                                        sig,
+                                                                        sig->return_type,
                                                                         true,
-                                                                        ctx->type_params,
-                                                                        ctx->type_param_count,
+                                                                        effective_tparams,
+                                                                        effective_tparam_count,
                                                                         path,
                                                                         member->token,
                                                                         out_error);
             if (decl->return_type == NULL) {
+                free(merged_tparams);
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
                 return NULL;
             }
             if (!fill_params_with_tparams(ctx, decl,
-                                          member->as.callable.params,
-                                          member->as.callable.param_count,
-                                          ctx->type_params,
-                                          ctx->type_param_count,
+                                          sig->params,
+                                          sig->param_count,
+                                          effective_tparams,
+                                          effective_tparam_count,
                                           path,
                                           member->token,
                                           out_error) ||
@@ -2419,11 +2459,14 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
                                         path,
                                         member->token,
                                         out_error)) {
+                free(merged_tparams);
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
                 return NULL;
             }
+            free(merged_tparams);
             break;
+        }
     }
 
             decl->is_static = member->is_static;

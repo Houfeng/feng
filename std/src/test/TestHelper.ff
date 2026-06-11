@@ -1,5 +1,6 @@
 open module std.test;
 
+import std;
 import std.io;
 import std.text;
 import std.numeric;
@@ -110,28 +111,48 @@ open func test(name: string, skip: bool, fn: TestFunction): void {
 /**
  * 断言辅助函数
  * @param ok 断言结果
- * @param messages 描述信息
+ * @param message 错误信息，支持参数占位符
+ * @param args 错误信息参数
  */
-open func assert(ok: bool, messages: string[]): void {
+open func assert(ok: bool, message: string, args: string[]): void {
   if ok { return; }
   context.markFailed();
-  context.addError(string.join(" ", messages));
+  context.addError(string.format(message, args));
 }
 
-open func assert(ok: bool, messages: string...): void {
-  assert(ok, messages);
+/**
+ * 断言辅助函数
+ * @param ok 断言结果
+ * @param message 错误信息，支持参数占位符
+ * @param args 错误信息参数
+ */
+open func assert(ok: bool, message: string, args: string...): void {
+  assert(ok, message, args);
 }
 
 /**
  * 断言相等
  * @param actual 实际值
  * @param expected 期望值
- * @param messages 描述信息
+ * @param message 错误信息，支持参数占位符
+ * @param args 错误信息参数
  */
-open func assertEquals<T>(actual: T, expected: T, messages: string[]): void {
-  assert(feng_expression_equal(actual, expected), messages);
+open func assertEquals<T: Display>(actual: T, expected: T, message: string, args: string[]): void {
+  let result = feng_expression_equal(actual, expected);
+  assert(result, message, args);
+  if !result {
+    let reason = string.format("expected: {0}, actual: {1}", expected, actual);
+    context.addError(reason);
+  }
 }
 
-open func assertEquals<T>(actual: T, expected: T, messages: string...): void {
-  assertEquals(actual, expected, messages);
+/**
+ * 断言相等
+ * @param actual 实际值
+ * @param expected 期望值
+ * @param message 错误信息，支持参数占位符
+ * @param args 错误信息参数
+ */
+open func assertEquals<T: Display>(actual: T, expected: T, message: string, args: string...): void {
+  assertEquals(actual, expected, message, args);
 }
