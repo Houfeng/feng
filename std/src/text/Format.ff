@@ -1,0 +1,101 @@
+open module std.text;
+
+import std.collections;
+
+/**
+ * Appends all bytes from `values` to `target`.
+ * @param target - byte list receiving appended data
+ * @param values - bytes to append
+ */
+seal func appendFormatBytes(target: List<byte>, values: byte[]) {
+	let length = values.length();
+	for var index: long = (long)0; index < length; index += (long)1 {
+		target.add(values[index]);
+	}
+}
+
+/**
+ * Builds the final UTF-8 byte sequence by replacing `{argsIndex}` placeholders with corresponding arguments.
+ * @param format - source format string containing `{argsIndex}` placeholders
+ * @param args - interpolation arguments packed as a read-only string array
+ * @return rendered bytes without any trailing newline byte
+ */
+open func renderFormattedBytes(format: string, args: string[]): byte[] {
+	let output = List<byte>();
+	let formatBytes = feng_string_to_utf8_bytes(format);
+	let encodedArgList = List<byte[]>();
+	let argsLength = args.length();
+
+	for var argIndex: long = (long)0; argIndex < argsLength; argIndex += (long)1 {
+		encodedArgList.add(feng_string_to_utf8_bytes(args[argIndex]));
+	}
+
+	let encodedArgs = encodedArgList.entries();
+	let formatLength = formatBytes.length();
+	var index: long = (long)0;
+
+	while index < formatLength {
+		let current = formatBytes[index];
+		if current != (byte)123 {
+			output.add(current);
+			index += (long)1;
+			continue;
+		}
+
+		var closing: long = index + (long)1;
+		var placeholderIndex: long = (long)0;
+		var hasDigits = false;
+		var isValid = true;
+
+		while closing < formatLength {
+			let token = formatBytes[closing];
+			if token == (byte)125 {
+				break;
+			}
+			if token < (byte)48 || token > (byte)57 {
+				isValid = false;
+				break;
+			}
+			hasDigits = true;
+			placeholderIndex = placeholderIndex * (long)10 + ((long)token - (long)48);
+			closing += (long)1;
+		}
+
+		if isValid && hasDigits && closing < formatLength && formatBytes[closing] == (byte)125 && placeholderIndex < encodedArgs.length() {
+			appendFormatBytes(output, encodedArgs[placeholderIndex]);
+			index = closing + (long)1;
+			continue;
+		}
+
+		output.add(current);
+		index += (long)1;
+	}
+
+	return output.entries();
+}
+
+/**
+ * Builds the final formatted string by replacing `{argsIndex}` placeholders with corresponding arguments.
+ * @param format - source format string containing `{argsIndex}` placeholders
+ * @param args - interpolation arguments packed as a read-only string array
+ * @return formatted UTF-8 string without any implicit trailing newline
+ */
+open func renderFormattedString(format: string, args: string[]): string {
+	let rendered = renderFormattedBytes(format, args);
+	return string.fromUtf8Bytes(rendered);
+}
+
+/**
+ * Extends `string` with format operations.
+ */
+open fit string {
+	/**
+	 * Returns a new string by replacing `{argsIndex}` placeholders with corresponding arguments.
+	 * @param format - source format string containing `{argsIndex}` placeholders
+	 * @param args - zero-based interpolation arguments
+	 * @return formatted text without any implicit trailing newline
+	 */
+	open static func format(format: string, args: string...): string {
+		return renderFormattedString(format, args);
+	}
+}
