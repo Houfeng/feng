@@ -34,6 +34,7 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
   let isTestCase = kind == TestKind.Test;
   if (isTestCase) {
     context.total += 1;
+    println("{0}🔎 {1}", indent, name);
   } else {
     println("{0}📦 {1}", indent, name);
   }
@@ -42,10 +43,10 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
   fn();
   if isTestCase && context.current().state {
     context.passed += 1;
-    println("{0}✅ [PASS] {1}", indent, name);
+    println("{0} ✅ [PASS]", indent);
   } else if isTestCase {
     context.failed += 1;
-    println("{0}❌ [FAIL] {1}", indent, name);
+    println("{0} ❌ [FAIL]", indent);
   }
   context.pop();
   // ---
