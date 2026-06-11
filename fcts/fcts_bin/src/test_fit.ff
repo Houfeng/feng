@@ -1,6 +1,7 @@
 module fcts_bin;
 
 import std.io;
+import std.text;
 import fcts_lib.helper;
 
 // 用于 fit 测试的 spec
@@ -113,4 +114,12 @@ open func test_fit() {
   let gbox: FitGenBox<int> = FitGenBox<int>();
   gbox.value = 42;
   assert(read_fit_int(gbox) == 42, "generic fit");
+
+  // 内建类型跨模块非泛型 fit 方法
+  assert("hello".length() == (long)5, "fit builtin string.length (cross-module)");
+  assert("hello".indexOf("ll") == (long)2, "fit builtin string.indexOf (cross-module)");
+
+  // 内建类型跨模块 fit 静态方法
+  let joined = string.join(", ", ["a", "b", "c"]);
+  assert(joined == "a, b, c", "fit builtin string.join (cross-module)");
 }
