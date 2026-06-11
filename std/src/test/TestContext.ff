@@ -83,7 +83,9 @@ type TestContext {
    * 获取缩进
    */
   func indent(): string {
-    return ("").padStart(self.stack.size() * 2, " ");
+    let size = self.stack.size();
+    if (size <= 1) { return ""; }
+    return " ".repeat((long)(size* 2));
   }
 
 }
