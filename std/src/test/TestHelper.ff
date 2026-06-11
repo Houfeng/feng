@@ -30,9 +30,9 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
   let isTestCase = kind == TestKind.Test;
   if (isTestCase) {
     context.total += 1;
-    println("{0} 📁 {1}", indent, name);
-  } else {
     println("{0} 🧪 {1}", indent, name);
+  } else {
+    println("{0} 📁 {1}", indent, name);
   }
   // ---
   context.push(name, kind);
