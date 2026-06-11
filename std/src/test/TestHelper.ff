@@ -27,10 +27,6 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
     println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }
   let indent = context.indent();
-  if skip {
-    println("{0}⚠️ [SKIP] {1}", indent, name);
-    return;
-  }
   let isTestCase = kind == TestKind.Test;
   if (isTestCase) {
     context.total += 1;
@@ -40,13 +36,18 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
   }
   // ---
   context.push(name, kind);
+  if skip {
+    println("{0} ⚠️ Skipped", indent);
+    context.pop();
+    return;
+  }
   fn();
   if isTestCase && context.current().state {
     context.passed += 1;
-    println("{0} ✅ [PASS]", indent);
+    println("{0} ✅ Passed", indent);
   } else if isTestCase {
     context.failed += 1;
-    println("{0} ❌ [FAIL]", indent);
+    println("{0} ❌ Failed", indent);
   }
   context.pop();
   // ---

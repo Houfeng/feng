@@ -21,7 +21,7 @@ func main(args: string[]) {
   describe("JSON Tests", () {
       test("should create a JSON object", () {
           assert(true, "JSON object created successfully");
-          test("1111111111111", () {
+          test("1111111111111",true, () {
               assert(true, "J1111111111");
           });
       });
