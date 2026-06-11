@@ -4,6 +4,9 @@ import std.io;
 import std.text;
 import std.numeric;
 
+@runtime
+extern func feng_expression_equal<T>(left: T, right: T): bool;
+
 /**
  * 全局测试上下文
  */
@@ -109,8 +112,26 @@ open func test(name: string, skip: bool, fn: TestFunction): void {
  * @param ok 断言结果
  * @param messages 描述信息
  */
-open func assert(ok: bool, messages: string...): void {
+open func assert(ok: bool, messages: string[]): void {
   if ok { return; }
   context.markFailed();
   context.addError(string.join(" ", messages));
+}
+
+open func assert(ok: bool, messages: string...): void {
+  assert(ok, messages);
+}
+
+/**
+ * 断言相等
+ * @param actual 实际值
+ * @param expected 期望值
+ * @param messages 描述信息
+ */
+open func assertEquals<T>(actual: T, expected: T, messages: string[]): void {
+  assert(feng_expression_equal(actual, expected), messages);
+}
+
+open func assertEquals<T>(actual: T, expected: T, messages: string...): void {
+  assertEquals(actual, expected, messages);
 }

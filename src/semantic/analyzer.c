@@ -20293,6 +20293,15 @@ static bool signatures_potentially_overlap(const ResolveContext *ctx,
         return false;
     }
     for (i = 0U; i < a->param_count; ++i) {
+        /* A variadic parameter (T...) and a non-variadic parameter (T[]) at
+         * the same position cannot both match the same call: the variadic
+         * position accepts only individual T values (packing them into T[]),
+         * while the explicit T[] position accepts only an existing array.
+         * Per §4.2 of the variadic spec, passing an existing T[] into a
+         * variadic position is forbidden, so they never overlap. */
+        if (a->params[i].is_variadic != b->params[i].is_variadic) {
+            return false;
+        }
         if (!param_type_refs_potentially_overlap(ctx, a->params[i].type, b->params[i].type)) {
             return false;
         }

@@ -4616,7 +4616,6 @@ static bool cg_register_generic_fn(CG *cg, const FengDecl *decl) {
     memcpy(feng_n, sig->name.data, sig->name.length);
     feng_n[sig->name.length] = '\0';
     gf->feng_name = feng_n;
-    /* C name: module-mangled base only — no param suffix for generic fns. */
     gf->c_name = cg_fn_mangle(cg->module_mangle, &sig->name);
     if (!gf->c_name) { free(feng_n); return false; }
     gf->type_param_count = sig->type_param_count;
@@ -4641,6 +4640,60 @@ static bool cg_register_generic_fn(CG *cg, const FengDecl *decl) {
     gf->decl = decl;
     gf->owner_program = cg->cur_program;
     cg->generic_fn_count++;
+
+    /* Append overload-aware param-type suffix to c_name, matching the scheme
+     * used by non-generic functions and type methods (e.g. string.format).
+     * We temporarily activate generic-fn state so that cg_resolve_type maps
+     * type parameters to CG_TYPE_GENERIC_PARAM correctly. */
+    if (sig->param_count > 0U) {
+        bool saved_in_generic_fn = cg->in_generic_fn;
+        size_t saved_tp_count = cg->generic_fn_type_param_count;
+        char **saved_tp_names = cg->generic_fn_type_param_names;
+        const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+        const char **saved_tp_descs = cg->generic_fn_type_param_descs;
+
+        cg->in_generic_fn = true;
+        cg->generic_fn_type_param_count = gf->type_param_count;
+        cg->generic_fn_type_param_names = gf->type_param_names;
+        cg->generic_fn_type_param_constraints = NULL;
+        cg->generic_fn_type_param_descs = NULL;
+
+        CGType **ptypes = calloc(sig->param_count, sizeof *ptypes);
+        bool resolve_ok = (ptypes != NULL);
+        if (resolve_ok) {
+            for (size_t i = 0; i < sig->param_count; i++) {
+                if (!cg_resolve_type(cg, sig->params[i].type,
+                                     &sig->params[i].token, &ptypes[i])) {
+                    resolve_ok = false;
+                    break;
+                }
+            }
+        }
+        if (resolve_ok) {
+            bool is_variadic = sig->params[sig->param_count - 1U].is_variadic;
+            gf->c_name = cg_append_param_suffix(gf->c_name, ptypes,
+                                                sig->param_count, is_variadic);
+        }
+        if (ptypes) {
+            for (size_t i = 0; i < sig->param_count; i++) {
+                cgtype_free(ptypes[i]);
+            }
+            free(ptypes);
+        }
+
+        cg->in_generic_fn = saved_in_generic_fn;
+        cg->generic_fn_type_param_count = saved_tp_count;
+        cg->generic_fn_type_param_names = saved_tp_names;
+        cg->generic_fn_type_param_constraints = saved_tp_constraints;
+        cg->generic_fn_type_param_descs = saved_tp_descs;
+
+        if (!gf->c_name) return false;
+    } else {
+        /* No params — append __from__void suffix for consistency. */
+        gf->c_name = cg_append_param_suffix(gf->c_name, NULL, 0U, false);
+        if (!gf->c_name) return false;
+    }
+
     return true;
 }
 
