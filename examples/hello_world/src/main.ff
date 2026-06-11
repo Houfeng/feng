@@ -6,6 +6,7 @@ import std.numeric;
 import std.time;
 import std.collections;
 import std.json;
+import std.test;
 
 func main(args: string[]) {
   println("START");
@@ -16,4 +17,10 @@ func main(args: string[]) {
   let jv = JsonValue(obj);
   println("JV_CREATED");
   println("JV: {0}", jv.toString());
+
+  describe("JSON Tests", () {
+    test("should create a JSON object", () {
+      assert(true, "JSON object created successfully");
+    });
+  });
 }

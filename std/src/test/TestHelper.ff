@@ -23,17 +23,23 @@ open spec TestFunction(): void;
  */
 func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
   let state = TestState { name: name, kind: kind, state: true, skip: skip };
-  let indent = context.indent();
-  println("{0}{1}", indent, name);
   let isTopLevel = context.stack.size() == 0;
-  context.stack.add(state);
+  if isTopLevel {
+    println("---------------------------------------------------------------");
+  }
+  let indent = context.indent();
   if skip {
-    println("{0}⚠️ [SKIP] {1}", indent, name);
+    println("{0} ⚠️ [SKIP] {1}", indent, name);
     return;
   }
+  let icon = if kind == TestKind.Describe { "📦 " } else { "🧪 " };
+  println("{0}{1}{2}", indent, icon, name);
+  // ---
+  context.stack.add(state);
   try fn()catch {
     state.state = false;
   };
+  // ---
   if isTopLevel {
     let(t, p, f, s) = context.result();
     context.reset();
@@ -94,10 +100,10 @@ open func assert(ok: bool, messages: string...): void {
   let indent = context.indent();
   let text = string.join(" ", messages);
   if ok {
-    println("{0}✅ [PASS] {1}", indent, text);
+    println("{0} ✅ [PASS] {1}", indent, text);
     current.state = true;
   } else {
-    println("{0}❌ [FAIL] {1}", indent, text);
+    println("{0} ❌ [FAIL] {1}", indent, text);
     current.state = false;
   }
 }
