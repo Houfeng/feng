@@ -30,24 +30,24 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
   let isTestCase = kind == TestKind.Test;
   if (isTestCase) {
     context.total += 1;
-    println("{0}🔎 {1}", indent, name);
+    println("{0} 📁 {1}", indent, name);
   } else {
-    println("{0}📦 {1}", indent, name);
+    println("{0} 🧪 {1}", indent, name);
   }
   // ---
   context.push(name, kind);
   if skip {
-    println("{0} ⚠️ Skipped", indent);
+    println("{0} ⚠️  [Skipped]", indent);
     context.pop();
     return;
   }
   fn();
   if isTestCase && context.current().state {
     context.passed += 1;
-    println("{0} ✅ Passed", indent);
+    println("{0} ✅ [Passed]", indent);
   } else if isTestCase {
     context.failed += 1;
-    println("{0} ❌ Failed", indent);
+    println("{0} ❌ [Failed]", indent);
   }
   context.pop();
   // ---
