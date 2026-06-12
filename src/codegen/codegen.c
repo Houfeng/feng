@@ -105,6 +105,8 @@ struct UserSpec;     /* forward (Step 4b) */
 typedef struct CG CG;
 
 static bool cg_user_type_is_abi(const struct UserType *t);
+static bool cg_user_spec_index(const CG *cg, const struct UserSpec *spec, size_t *out_index);
+static const struct UserSpec *cg_user_spec_by_index(const CG *cg, size_t index);
 
 typedef struct CGType {
     CGTypeKind kind;
@@ -584,6 +586,7 @@ struct UserType {
     FengTypeRef **generic_type_args;
     size_t generic_type_arg_count;
     char **generic_context_type_param_names;
+    size_t *generic_context_type_param_constraint_indices;
     size_t generic_context_type_param_count;
     const FengProgram *instantiation_program;
     /* Owning program — set when the type shell is registered while emitting
@@ -1993,9 +1996,18 @@ static bool cg_build_generic_param_constraints(CG *cg,
     if (!constraints) {
         return cg_fail(cg, blame, "codegen: out of memory");
     }
+    size_t *constraint_indices = calloc(type_param_count, sizeof *constraint_indices);
+    if (!constraint_indices) {
+        free(constraints);
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+    for (size_t i = 0; i < type_param_count; ++i) {
+        constraint_indices[i] = (size_t)-1;
+    }
 
     char **type_param_names = calloc(type_param_count, sizeof *type_param_names);
     if (type_param_names == NULL) {
+        free(constraint_indices);
         free(constraints);
         return cg_fail(cg, blame, "codegen: out of memory");
     }
@@ -2004,6 +2016,7 @@ static bool cg_build_generic_param_constraints(CG *cg,
                                       type_params[i].name.length);
         if (type_param_names[i] == NULL) {
             cg_free_cstr_array(type_param_names, i);
+            free(constraint_indices);
             free(constraints);
             return cg_fail(cg, blame, "codegen: out of memory");
         }
@@ -2033,6 +2046,7 @@ static bool cg_build_generic_param_constraints(CG *cg,
             cg->generic_fn_type_param_constraints = saved_tp_constraints;
             cg->generic_fn_type_param_descs = saved_tp_descs;
             cg_free_cstr_array(type_param_names, type_param_count);
+            free(constraint_indices);
             free(constraints);
             return false;
         }
@@ -2047,6 +2061,7 @@ static bool cg_build_generic_param_constraints(CG *cg,
             cg->generic_fn_type_param_constraints = saved_tp_constraints;
             cg->generic_fn_type_param_descs = saved_tp_descs;
             cg_free_cstr_array(type_param_names, type_param_count);
+            free(constraint_indices);
             free(constraints);
             return cg_fail(cg, type_params[i].token,
                 "codegen: generic constraint for '%.*s' must be a spec supported by codegen",
@@ -2054,7 +2069,20 @@ static bool cg_build_generic_param_constraints(CG *cg,
                 type_params[i].name.data);
         }
 
-        constraints[i] = constraint_type->user_spec;
+        if (!cg_user_spec_index(cg, constraint_type->user_spec,
+                                &constraint_indices[i])) {
+            cgtype_free(constraint_type);
+            cg->in_generic_fn = saved_in_generic_fn;
+            cg->generic_fn_type_param_count = saved_tp_count;
+            cg->generic_fn_type_param_names = saved_tp_names;
+            cg->generic_fn_type_param_constraints = saved_tp_constraints;
+            cg->generic_fn_type_param_descs = saved_tp_descs;
+            cg_free_cstr_array(type_param_names, type_param_count);
+            free(constraint_indices);
+            free(constraints);
+            return cg_fail(cg, type_params[i].token,
+                           "codegen: internal: generic constraint spec was not registered");
+        }
         cgtype_free(constraint_type);
     }
 
@@ -2065,6 +2093,10 @@ static bool cg_build_generic_param_constraints(CG *cg,
     cg->generic_fn_type_param_descs = saved_tp_descs;
     cg_free_cstr_array(type_param_names, type_param_count);
 
+    for (size_t i = 0; i < type_param_count; ++i) {
+        constraints[i] = cg_user_spec_by_index(cg, constraint_indices[i]);
+    }
+    free(constraint_indices);
     *out_constraints = constraints;
     return true;
 }
@@ -4064,6 +4096,75 @@ static const UserSpec *cg_find_user_spec_by_decl(const CG *cg, const FengDecl *d
     return NULL;
 }
 
+static bool cg_user_spec_index(const CG *cg, const UserSpec *spec, size_t *out_index) {
+    if (spec == NULL) {
+        *out_index = (size_t)-1;
+        return true;
+    }
+    for (size_t i = 0U; i < cg->user_spec_count; ++i) {
+        if (&cg->user_specs[i] == spec) {
+            *out_index = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static const UserSpec *cg_user_spec_by_index(const CG *cg, size_t index) {
+    if (index == (size_t)-1) return NULL;
+    if (index >= cg->user_spec_count) return NULL;
+    return &cg->user_specs[index];
+}
+
+static bool cg_user_spec_constraint_indices(CG *cg,
+                                            const UserSpec **constraints,
+                                            size_t constraint_count,
+                                            FengToken blame,
+                                            size_t **out_indices) {
+    size_t *indices = NULL;
+
+    *out_indices = NULL;
+    if (constraint_count == 0U) return true;
+    indices = calloc(constraint_count, sizeof *indices);
+    if (indices == NULL) {
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+    for (size_t i = 0U; i < constraint_count; ++i) {
+        if (!cg_user_spec_index(cg, constraints != NULL ? constraints[i] : NULL, &indices[i])) {
+            free(indices);
+            return cg_fail(cg, blame,
+                           "codegen: internal: generic constraint spec moved before it could be indexed");
+        }
+    }
+    *out_indices = indices;
+    return true;
+}
+
+static bool cg_user_spec_constraints_from_indices(CG *cg,
+                                                  const size_t *indices,
+                                                  size_t constraint_count,
+                                                  FengToken blame,
+                                                  const UserSpec ***out_constraints) {
+    const UserSpec **constraints = NULL;
+
+    *out_constraints = NULL;
+    if (constraint_count == 0U) return true;
+    constraints = calloc(constraint_count, sizeof *constraints);
+    if (constraints == NULL) {
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+    for (size_t i = 0U; i < constraint_count; ++i) {
+        constraints[i] = cg_user_spec_by_index(cg, indices != NULL ? indices[i] : (size_t)-1);
+        if (indices != NULL && indices[i] != (size_t)-1 && constraints[i] == NULL) {
+            free(constraints);
+            return cg_fail(cg, blame,
+                           "codegen: internal: generic constraint spec index is out of range");
+        }
+    }
+    *out_constraints = constraints;
+    return true;
+}
+
 static const UserType *cg_find_user_type_by_ref(const CG *cg,
                                                 const FengTypeRef *ref) {
     const UserType *visible = NULL;
@@ -4769,6 +4870,83 @@ static bool cg_type_param_scope_copy_names(const CGTypeParamScope *scope,
     }
     *out_names = names;
     *out_count = count;
+    return true;
+}
+
+static bool cg_type_param_scope_build_constraints(CG *cg,
+                                                  const CGTypeParamScope *scope,
+                                                  FengToken blame,
+                                                  const UserSpec ***out_constraints) {
+    const UserSpec **constraints = NULL;
+    const UserSpec **first_constraints = NULL;
+    const UserSpec **second_constraints = NULL;
+    size_t *first_constraint_indices = NULL;
+    size_t *second_constraint_indices = NULL;
+    size_t count = 0U;
+
+    *out_constraints = NULL;
+    if (scope == NULL) return true;
+    count = scope->first_count + scope->second_count;
+    if (count == 0U) return true;
+
+    constraints = calloc(count, sizeof *constraints);
+    if (constraints == NULL) {
+        return cg_fail(cg, blame, "codegen: out of memory");
+    }
+
+    if (!cg_build_generic_param_constraints(cg,
+                                            scope->first,
+                                            scope->first_count,
+                                            blame,
+                                            &first_constraints)) {
+        free(constraints);
+        return false;
+    }
+    if (!cg_user_spec_constraint_indices(cg,
+                                         first_constraints,
+                                         scope->first_count,
+                                         blame,
+                                         &first_constraint_indices)) {
+        free((void *)first_constraints);
+        free(constraints);
+        return false;
+    }
+    free((void *)first_constraints);
+    first_constraints = NULL;
+
+    if (!cg_build_generic_param_constraints(cg,
+                                            scope->second,
+                                            scope->second_count,
+                                            blame,
+                                            &second_constraints)) {
+        free(first_constraint_indices);
+        free(constraints);
+        return false;
+    }
+    if (!cg_user_spec_constraint_indices(cg,
+                                         second_constraints,
+                                         scope->second_count,
+                                         blame,
+                                         &second_constraint_indices)) {
+        free((void *)second_constraints);
+        free(first_constraint_indices);
+        free(constraints);
+        return false;
+    }
+    free((void *)second_constraints);
+    second_constraints = NULL;
+
+    for (size_t i = 0U; i < scope->first_count; ++i) {
+        constraints[i] = cg_user_spec_by_index(cg, first_constraint_indices[i]);
+    }
+    for (size_t i = 0U; i < scope->second_count; ++i) {
+        constraints[scope->first_count + i] =
+            cg_user_spec_by_index(cg, second_constraint_indices[i]);
+    }
+
+    free(first_constraint_indices);
+    free(second_constraint_indices);
+    *out_constraints = constraints;
     return true;
 }
 
@@ -5700,10 +5878,9 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
                        decl->as.type_decl.type_param_count,
                        type_arg_count);
     }
-    if (cg_find_generic_instance_user_type(cg, decl, type_args, type_arg_count) != NULL) {
-        return true;
-    }
     char **context_names = NULL;
+    const UserSpec **context_constraints = NULL;
+    size_t *context_constraint_indices = NULL;
     size_t context_count = 0U;
     bool has_open_type_arg = false;
     if (open_scope != NULL) {
@@ -5717,6 +5894,23 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
             return cg_fail(cg, blame, "codegen: out of memory");
         }
         if (has_open_type_arg &&
+            !cg_type_param_scope_build_constraints(cg, open_scope, blame, &context_constraints)) {
+            cg_free_cstr_array(context_names, context_count);
+            return false;
+        }
+        if (has_open_type_arg &&
+            !cg_user_spec_constraint_indices(cg,
+                                             context_constraints,
+                                             context_count,
+                                             blame,
+                                             &context_constraint_indices)) {
+            cg_free_cstr_array(context_names, context_count);
+            free((void *)context_constraints);
+            return false;
+        }
+        free((void *)context_constraints);
+        context_constraints = NULL;
+        if (has_open_type_arg &&
             cg_find_generic_instance_user_type_with_context(cg,
                                                             decl,
                                                             type_args,
@@ -5724,8 +5918,13 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
                                                             context_names,
                                                             context_count) != NULL) {
             cg_free_cstr_array(context_names, context_count);
+            free(context_constraint_indices);
             return true;
         }
+    }
+    if (!has_open_type_arg &&
+        cg_find_generic_instance_user_type(cg, decl, type_args, type_arg_count) != NULL) {
+        return true;
     }
     if (cg->user_type_count + 1 > cg->user_type_capacity) {
         size_t cap = cg->user_type_capacity ? cg->user_type_capacity * 2 : 4;
@@ -5748,8 +5947,10 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     t->generic_type_args = type_arg_count ? calloc(type_arg_count, sizeof(FengTypeRef *)) : NULL;
     if (type_arg_count && !t->generic_type_args) return false;
     t->generic_context_type_param_names = context_names;
+    t->generic_context_type_param_constraint_indices = context_constraint_indices;
     t->generic_context_type_param_count = context_count;
     context_names = NULL;
+    context_constraint_indices = NULL;
     context_count = 0U;
     for (size_t i = 0; i < type_arg_count; ++i) {
         t->generic_type_args[i] = cg_type_ref_clone(type_args[i]);
@@ -24907,6 +25108,9 @@ static bool cg_user_spec_witness_prefix_compatible(const UserSpec *src,
     if (src == dst) {
         return true;
     }
+    if (src->decl != NULL && src->decl == dst->decl) {
+        return true;
+    }
     if (src->form == FENG_SPEC_FORM_CALLABLE) {
         if (src->callable_param_count != dst->callable_param_count ||
             src->callable_is_variadic != dst->callable_is_variadic ||
@@ -30938,6 +31142,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     char **method_type_param_names = NULL;
     char **combined_type_param_names = NULL;
     const char **wrapper_context_desc_names = NULL;
+    const UserSpec **wrapper_context_constraint_specs = NULL;
     const UserSpec **constraint_specs = NULL;
     CGType **origin_param_types = NULL;
     char **desc_exprs = NULL;
@@ -30978,6 +31183,13 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         }
     }
     if (t->generic_context_type_param_count > 0U) {
+        if (!cg_user_spec_constraints_from_indices(cg,
+                                                   t->generic_context_type_param_constraint_indices,
+                                                   t->generic_context_type_param_count,
+                                                   m->member->token,
+                                                   &wrapper_context_constraint_specs)) {
+            goto cleanup;
+        }
         wrapper_context_desc_names = calloc(t->generic_context_type_param_count,
                                             sizeof *wrapper_context_desc_names);
         if (wrapper_context_desc_names == NULL) {
@@ -31039,7 +31251,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             cg_activate_generic_type_context(cg,
                                              t->generic_context_type_param_count,
                                              t->generic_context_type_param_names,
-                                             NULL,
+                                             wrapper_context_constraint_specs,
                                              wrapper_context_desc_names);
         }
         if (i >= t->generic_type_arg_count ||
@@ -31333,6 +31545,7 @@ cleanup:
         for (size_t i = 0; i < tp_count; ++i) free(desc_exprs[i]);
     }
     free(desc_exprs);
+    free((void *)wrapper_context_constraint_specs);
     cg_free_const_cstr_array(wrapper_context_desc_names,
                              t->generic_context_type_param_count);
     cg_free_const_cstr_array(method_desc_names, method_tp_count);
