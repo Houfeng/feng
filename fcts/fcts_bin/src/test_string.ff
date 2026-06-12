@@ -63,12 +63,12 @@ open func test_string() {
     });
 
     test("string format with placeholder", () {
-      let formatted = format("Hello, {0}!", "World");
+      let formatted = string.format("Hello, {0}!", "World");
       assert(formatted == "Hello, World!", "string format with placeholder");
     });
 
     test("string format multiple placeholders", () {
-      let multi = format("{0} + {1} = {2}", "1", "2", "3");
+      let multi = string.format("{0} + {1} = {2}", "1", "2", "3");
       assert(multi == "1 + 2 = 3", "string format multiple placeholders");
     });
   });
