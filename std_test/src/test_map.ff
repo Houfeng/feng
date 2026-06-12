@@ -1,5 +1,7 @@
 module std_test;
 
+import std.test;
+
 import std.collections;
 
 func map_set_get() {
@@ -106,14 +108,16 @@ func map_entries_tuple_entity() {
 }
 
 open func run_map_tests() {
-  map_set_get();
-  map_get_missing_default();
-  map_has_true();
-  map_has_false();
-  map_overwrite();
-  map_remove();
-  map_remove_absent();
-  map_multiple_keys();
-  map_count();
-  map_entries_tuple_entity();
+  describe("map tests", () {
+    test("map_set_get()", () { map_set_get(); });
+    test("map_get_missing_default()", () { map_get_missing_default(); });
+    test("map_has_true()", () { map_has_true(); });
+    test("map_has_false()", () { map_has_false(); });
+    test("map_overwrite()", () { map_overwrite(); });
+    test("map_remove()", () { map_remove(); });
+    test("map_remove_absent()", () { map_remove_absent(); });
+    test("map_multiple_keys()", () { map_multiple_keys(); });
+    test("map_count()", () { map_count(); });
+    test("map_entries_tuple_entity()", () { map_entries_tuple_entity(); });
+  });
 }

@@ -1,5 +1,7 @@
 module std_test;
 
+import std.test;
+
 import std.io;
 import std.text;
 
@@ -87,13 +89,15 @@ func print_formats_output() {
 }
 
 open func run_stdio_api_tests() {
-  read_reads_into_buffer();
-  readLine_uses_remaining_input();
-  write_writes_stdout();
-  write_text_writes_stdout();
-  writeLine_writes_stdout();
-  writeError_writes_stderr();
-  writeError_text_writes_stderr();
-  writeErrorLine_writes_stderr();
-  print_formats_output();
+  describe("stdio_api tests", () {
+    test("read_reads_into_buffer()", () { read_reads_into_buffer(); });
+    test("readLine_uses_remaining_input()", () { readLine_uses_remaining_input(); });
+    test("write_writes_stdout()", () { write_writes_stdout(); });
+    test("write_text_writes_stdout()", () { write_text_writes_stdout(); });
+    test("writeLine_writes_stdout()", () { writeLine_writes_stdout(); });
+    test("writeError_writes_stderr()", () { writeError_writes_stderr(); });
+    test("writeError_text_writes_stderr()", () { writeError_text_writes_stderr(); });
+    test("writeErrorLine_writes_stderr()", () { writeErrorLine_writes_stderr(); });
+    test("print_formats_output()", () { print_formats_output(); });
+  });
 }

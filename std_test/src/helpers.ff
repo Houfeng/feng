@@ -1,5 +1,6 @@
 module std_test;
 
+import std.test;
 import std.text;
 
 @cdecl("libc")
@@ -30,11 +31,7 @@ func failNow(name: string) {
 }
 
 open func check(cond: bool, name: string) {
-  if cond {
-    logLine("ok: " + name);
-  } else {
-    failNow(name);
-  }
+  assert(cond, name, []);
 }
 
 open func replaceStdin(text: string) {

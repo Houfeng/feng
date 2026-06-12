@@ -1,5 +1,7 @@
 module std_test;
 
+import std.test;
+
 import std.collections;
 import std.text;
 
@@ -128,20 +130,22 @@ func span_get_negative_index() {
 }
 
 open func run_length_tests() {
-  string_length_ascii();
-  string_length_utf8_bytes();
-  string_length_empty();
-  array_length_readonly();
-  array_length_writable();
-  array_length_empty();
-  array_length_nested();
-  array_index_of_int();
-  array_index_of_string();
-  span_length_readonly();
-  span_get_readonly();
-  span_slice_writable_source();
-  span_slice_invalid_range();
-  span_slice_negative_start();
-  span_get_invalid_index();
-  span_get_negative_index();
+  describe("length tests", () {
+    test("string_length_ascii()", () { string_length_ascii(); });
+    test("string_length_utf8_bytes()", () { string_length_utf8_bytes(); });
+    test("string_length_empty()", () { string_length_empty(); });
+    test("array_length_readonly()", () { array_length_readonly(); });
+    test("array_length_writable()", () { array_length_writable(); });
+    test("array_length_empty()", () { array_length_empty(); });
+    test("array_length_nested()", () { array_length_nested(); });
+    test("array_index_of_int()", () { array_index_of_int(); });
+    test("array_index_of_string()", () { array_index_of_string(); });
+    test("span_length_readonly()", () { span_length_readonly(); });
+    test("span_get_readonly()", () { span_get_readonly(); });
+    test("span_slice_writable_source()", () { span_slice_writable_source(); });
+    test("span_slice_invalid_range()", () { span_slice_invalid_range(); });
+    test("span_slice_negative_start()", () { span_slice_negative_start(); });
+    test("span_get_invalid_index()", () { span_get_invalid_index(); });
+    test("span_get_negative_index()", () { span_get_negative_index(); });
+  });
 }

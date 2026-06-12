@@ -1,19 +1,23 @@
 module std_test;
 
-func main(args: string[]) {
-  replaceStdin("ABCDE\nFG");
-  run_map_tests();
-  run_set_tests();
-  run_list_tests();
-  run_length_tests();
-  run_math_tests();
-  run_platform_tests();
-  run_string_tests();
-  run_regexp_tests();
-  run_slice_tests();
-  run_io_tests();
-  run_numeric_tests();
+import std.test;
 
-  replaceStdin("ABCDE\nFG");
-  run_stdio_api_tests();
+func main(args: string[]) {
+  describe("std_test suite", () {
+    replaceStdin("ABCDE\nFG");
+    run_map_tests();
+    run_set_tests();
+    run_list_tests();
+    run_length_tests();
+    run_math_tests();
+    run_platform_tests();
+    run_string_tests();
+    run_regexp_tests();
+    run_slice_tests();
+    run_io_tests();
+    run_numeric_tests();
+
+    replaceStdin("ABCDE\nFG");
+    run_stdio_api_tests();
+  });
 }

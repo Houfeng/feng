@@ -1,5 +1,7 @@
 module std_test;
 
+import std.test;
+
 import std.platform;
 
 func platform_system_info_tests() {
@@ -27,7 +29,9 @@ func platform_cpu_info_tests() {
 }
 
 open func run_platform_tests() {
-  platform_system_info_tests();
-  platform_memory_info_tests();
-  platform_cpu_info_tests();
+  describe("platform tests", () {
+    test("platform_system_info_tests()", () { platform_system_info_tests(); });
+    test("platform_memory_info_tests()", () { platform_memory_info_tests(); });
+    test("platform_cpu_info_tests()", () { platform_cpu_info_tests(); });
+  });
 }

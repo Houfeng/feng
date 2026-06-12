@@ -1,5 +1,7 @@
 module std_test;
 
+import std.test;
+
 import std.math;
 
 func absValue(value: f64): f64 {
@@ -68,8 +70,10 @@ func math_rounding_tests() {
 }
 
 open func run_math_tests() {
-  math_basic_tests();
-  math_trigonometry_tests();
-  math_exponential_tests();
-  math_rounding_tests();
+  describe("math tests", () {
+    test("math_basic_tests()", () { math_basic_tests(); });
+    test("math_trigonometry_tests()", () { math_trigonometry_tests(); });
+    test("math_exponential_tests()", () { math_exponential_tests(); });
+    test("math_rounding_tests()", () { math_rounding_tests(); });
+  });
 }

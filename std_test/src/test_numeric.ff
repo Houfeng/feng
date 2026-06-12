@@ -1,5 +1,7 @@
 module std_test;
 
+import std.test;
+
 import std.numeric;
 
 /* ---------- f64 ---------- */
@@ -403,32 +405,34 @@ func u64_parse_error_tests() {
 /* ---------- runner ---------- */
 
 open func run_numeric_tests() {
-  f64_parse_tests();
-  f64_parse_error_tests();
-  f32_parse_tests();
-  f32_parse_error_tests();
-  i8_toString_tests();
-  i8_parse_tests();
-  i8_parse_error_tests();
-  i16_toString_tests();
-  i16_parse_tests();
-  i16_parse_error_tests();
-  i32_toString_tests();
-  i32_parse_tests();
-  i32_parse_error_tests();
-  i64_toString_tests();
-  i64_parse_tests();
-  i64_parse_error_tests();
-  u8_toString_tests();
-  u8_parse_tests();
-  u8_parse_error_tests();
-  u16_toString_tests();
-  u16_parse_tests();
-  u16_parse_error_tests();
-  u32_toString_tests();
-  u32_parse_tests();
-  u32_parse_error_tests();
-  u64_toString_tests();
-  u64_parse_tests();
-  u64_parse_error_tests();
+  describe("numeric tests", () {
+    test("f64_parse_tests()", () { f64_parse_tests(); });
+    test("f64_parse_error_tests()", () { f64_parse_error_tests(); });
+    test("f32_parse_tests()", () { f32_parse_tests(); });
+    test("f32_parse_error_tests()", () { f32_parse_error_tests(); });
+    test("i8_toString_tests()", () { i8_toString_tests(); });
+    test("i8_parse_tests()", () { i8_parse_tests(); });
+    test("i8_parse_error_tests()", () { i8_parse_error_tests(); });
+    test("i16_toString_tests()", () { i16_toString_tests(); });
+    test("i16_parse_tests()", () { i16_parse_tests(); });
+    test("i16_parse_error_tests()", () { i16_parse_error_tests(); });
+    test("i32_toString_tests()", () { i32_toString_tests(); });
+    test("i32_parse_tests()", () { i32_parse_tests(); });
+    test("i32_parse_error_tests()", () { i32_parse_error_tests(); });
+    test("i64_toString_tests()", () { i64_toString_tests(); });
+    test("i64_parse_tests()", () { i64_parse_tests(); });
+    test("i64_parse_error_tests()", () { i64_parse_error_tests(); });
+    test("u8_toString_tests()", () { u8_toString_tests(); });
+    test("u8_parse_tests()", () { u8_parse_tests(); });
+    test("u8_parse_error_tests()", () { u8_parse_error_tests(); });
+    test("u16_toString_tests()", () { u16_toString_tests(); });
+    test("u16_parse_tests()", () { u16_parse_tests(); });
+    test("u16_parse_error_tests()", () { u16_parse_error_tests(); });
+    test("u32_toString_tests()", () { u32_toString_tests(); });
+    test("u32_parse_tests()", () { u32_parse_tests(); });
+    test("u32_parse_error_tests()", () { u32_parse_error_tests(); });
+    test("u64_toString_tests()", () { u64_toString_tests(); });
+    test("u64_parse_tests()", () { u64_parse_tests(); });
+    test("u64_parse_error_tests()", () { u64_parse_error_tests(); });
+  });
 }

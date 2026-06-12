@@ -1,5 +1,7 @@
 module std_test;
 
+import std.test;
+
 import std;
 import std.io;
 import std.text;
@@ -51,9 +53,11 @@ func println_writes_stdout_with_newline() {
 }
 
 open func run_io_tests() {
-  readLine_reads_one_line_per_call();
-  writeLine_writes_stdout_with_newline();
-  format_returns_text();
-  print_writes_stdout_without_newline();
-  println_writes_stdout_with_newline();
+  describe("io tests", () {
+    test("readLine_reads_one_line_per_call()", () { readLine_reads_one_line_per_call(); });
+    test("writeLine_writes_stdout_with_newline()", () { writeLine_writes_stdout_with_newline(); });
+    test("format_returns_text()", () { format_returns_text(); });
+    test("print_writes_stdout_without_newline()", () { print_writes_stdout_without_newline(); });
+    test("println_writes_stdout_with_newline()", () { println_writes_stdout_with_newline(); });
+  });
 }

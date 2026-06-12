@@ -1,5 +1,7 @@
 module std_test;
 
+import std.test;
+
 import std.io;
 import std.collections;
 
@@ -192,19 +194,21 @@ func list_for_in_generic_string() {
 }
 
 open func run_list_tests() {
-  list_add_get();
-  list_size();
-  list_set_index();
-  list_remove_shifts();
-  list_size_after_remove();
-  list_multiple_elements();
-  list_entities_order();
-  list_entities_count();
-  list_reference_semantics();
-  list_for_in_basic();
-  list_for_in_empty();
-  list_for_in_nested();
-  list_for_in_string();
-  list_for_in_generic();
-  list_for_in_generic_string();
+  describe("list tests", () {
+    test("list_add_get()", () { list_add_get(); });
+    test("list_size()", () { list_size(); });
+    test("list_set_index()", () { list_set_index(); });
+    test("list_remove_shifts()", () { list_remove_shifts(); });
+    test("list_size_after_remove()", () { list_size_after_remove(); });
+    test("list_multiple_elements()", () { list_multiple_elements(); });
+    test("list_entities_order()", () { list_entities_order(); });
+    test("list_entities_count()", () { list_entities_count(); });
+    test("list_reference_semantics()", () { list_reference_semantics(); });
+    test("list_for_in_basic()", () { list_for_in_basic(); });
+    test("list_for_in_empty()", () { list_for_in_empty(); });
+    test("list_for_in_nested()", () { list_for_in_nested(); });
+    test("list_for_in_string()", () { list_for_in_string(); });
+    test("list_for_in_generic()", () { list_for_in_generic(); });
+    test("list_for_in_generic_string()", () { list_for_in_generic_string(); });
+  });
 }

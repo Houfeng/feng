@@ -1,5 +1,7 @@
 module std_test;
 
+import std.test;
+
 import std.io;
 import std.text;
 import std.collections;
@@ -353,24 +355,26 @@ func regexp_test_edge_cases() {
 /* ---------- Entry point ---------- */
 
 open func run_regexp_tests() {
-  regexp_test_basic();
-  regexp_test_case_insensitive();
-  regexp_test_find();
-  regexp_test_findAll();
-  regexp_test_split();
-  regexp_test_replace();
-  regexp_test_unicode();
-  regexp_test_compile_error();
-  regexp_test_string_methods();
-  regexp_test_multiline();
-  regexp_test_dotall();
-  regexp_test_findAll_positions();
-  regexp_test_findAll_groups();
-  regexp_test_replace_edge();
-  regexp_test_replace_empty_replacement();
-  regexp_test_empty_subject();
-  regexp_test_find_utf8();
-  regexp_test_split_edges();
-  regexp_test_string_methods_edge();
-  regexp_test_edge_cases();
+  describe("regexp tests", () {
+    test("regexp_test_basic()", () { regexp_test_basic(); });
+    test("regexp_test_case_insensitive()", () { regexp_test_case_insensitive(); });
+    test("regexp_test_find()", () { regexp_test_find(); });
+    test("regexp_test_findAll()", () { regexp_test_findAll(); });
+    test("regexp_test_split()", () { regexp_test_split(); });
+    test("regexp_test_replace()", () { regexp_test_replace(); });
+    test("regexp_test_unicode()", () { regexp_test_unicode(); });
+    test("regexp_test_compile_error()", () { regexp_test_compile_error(); });
+    test("regexp_test_string_methods()", () { regexp_test_string_methods(); });
+    test("regexp_test_multiline()", () { regexp_test_multiline(); });
+    test("regexp_test_dotall()", () { regexp_test_dotall(); });
+    test("regexp_test_findAll_positions()", () { regexp_test_findAll_positions(); });
+    test("regexp_test_findAll_groups()", () { regexp_test_findAll_groups(); });
+    test("regexp_test_replace_edge()", () { regexp_test_replace_edge(); });
+    test("regexp_test_replace_empty_replacement()", () { regexp_test_replace_empty_replacement(); });
+    test("regexp_test_empty_subject()", () { regexp_test_empty_subject(); });
+    test("regexp_test_find_utf8()", () { regexp_test_find_utf8(); });
+    test("regexp_test_split_edges()", () { regexp_test_split_edges(); });
+    test("regexp_test_string_methods_edge()", () { regexp_test_string_methods_edge(); });
+    test("regexp_test_edge_cases()", () { regexp_test_edge_cases(); });
+  });
 }

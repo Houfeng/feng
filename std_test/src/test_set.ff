@@ -1,5 +1,7 @@
 module std_test;
 
+import std.test;
+
 import std.collections;
 
 func set_add_has() {
@@ -96,13 +98,15 @@ func set_int_direct_call() {
 }
 
 open func run_set_tests() {
-  set_add_has();
-  set_has_false();
-  set_add_duplicate();
-  set_remove();
-  set_remove_absent();
-  set_multiple_elements();
-  set_count();
-  set_entities_two();
-  set_int_direct_call();
+  describe("set tests", () {
+    test("set_add_has()", () { set_add_has(); });
+    test("set_has_false()", () { set_has_false(); });
+    test("set_add_duplicate()", () { set_add_duplicate(); });
+    test("set_remove()", () { set_remove(); });
+    test("set_remove_absent()", () { set_remove_absent(); });
+    test("set_multiple_elements()", () { set_multiple_elements(); });
+    test("set_count()", () { set_count(); });
+    test("set_entities_two()", () { set_entities_two(); });
+    test("set_int_direct_call()", () { set_int_direct_call(); });
+  });
 }

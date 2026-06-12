@@ -1,5 +1,7 @@
 module std_test;
 
+import std.test;
+
 import std.collections;
 
 func array_clone_all_readonly() {
@@ -121,15 +123,17 @@ func span_to_array_empty() {
 }
 
 open func run_slice_tests() {
-  array_clone_all_readonly();
-  array_clone_range_is_independent();
-  array_clone_invalid_range();
-  array_clone_negative_end();
-  array_slice_to_end_readonly();
-  array_slice_to_end_writable();
-  span_slice_relative_range();
-  span_slice_relative_tail();
-  span_slice_invalid_relative_range();
-  span_to_array_is_independent();
-  span_to_array_empty();
+  describe("slice tests", () {
+    test("array_clone_all_readonly()", () { array_clone_all_readonly(); });
+    test("array_clone_range_is_independent()", () { array_clone_range_is_independent(); });
+    test("array_clone_invalid_range()", () { array_clone_invalid_range(); });
+    test("array_clone_negative_end()", () { array_clone_negative_end(); });
+    test("array_slice_to_end_readonly()", () { array_slice_to_end_readonly(); });
+    test("array_slice_to_end_writable()", () { array_slice_to_end_writable(); });
+    test("span_slice_relative_range()", () { span_slice_relative_range(); });
+    test("span_slice_relative_tail()", () { span_slice_relative_tail(); });
+    test("span_slice_invalid_relative_range()", () { span_slice_invalid_relative_range(); });
+    test("span_to_array_is_independent()", () { span_to_array_is_independent(); });
+    test("span_to_array_empty()", () { span_to_array_empty(); });
+  });
 }
