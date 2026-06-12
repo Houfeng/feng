@@ -35,10 +35,10 @@ open func test_module() {
     });
 
     test("cross-package generic type", () {
-      let box = LibBox<int> { value: 123 };
-      assert(true, "cross-package generic type");
-      let sbox = LibBox<string> { value: "pkg" };
-      assert(true, "cross-package generic type (string)");
+      let box: LibBox<int> = LibBox<int> { value: 123 };
+      assert(box.value == 123, "cross-package generic type");
+      let sbox: LibBox<string> = LibBox<string> { value: "pkg" };
+      assert(sbox.value == "pkg", "cross-package generic type (string)");
     });
 
     test("cross-package open generic constraint forwarding", () {

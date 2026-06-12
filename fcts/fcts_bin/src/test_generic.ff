@@ -177,6 +177,215 @@ func gfirst_of<T, C: GSequence<T>>(col: C): T {
   return col.gfirst();
 }
 
+// 泛型聚合返回用 spec。
+spec GNamed {
+  func ggreet(): string;
+}
+
+// 泛型聚合返回用 type。
+type GNamedUser: GNamed {
+  let name: string;
+
+  func ggreet(): string {
+    return self.name;
+  }
+}
+
+// 创建并以 spec 视图返回聚合值。
+func make_gnamed<T>(name: string): GNamed {
+  let user: GNamedUser = GNamedUser { name: name };
+  return user;
+}
+
+// 转发 spec 视图形式的聚合值。
+func forward_gnamed<T>(named: GNamed): GNamed {
+  return named;
+}
+
+// 通过泛型函数链路重新创建 spec 视图值。
+func rebound_gnamed<T>(name: string): GNamed {
+  return make_gnamed<T>(name);
+}
+
+// spec 作为泛型实参的约束入口。
+func gid_gnamed<T: GNamed>(value: T): T {
+  return value;
+}
+
+// spec 作为泛型实参的容器。
+type GNamedHolder<T: GNamed> {
+  var value: T;
+
+  func set_named(next: T) {
+    self.value = next;
+  }
+
+  func read_named(): string {
+    return self.value.ggreet();
+  }
+
+  func relay_named<U: GNamed>(item: U): string {
+    return item.ggreet();
+  }
+}
+
+// 泛型值实参场景的容器。
+type GValueHolder<T> {
+  var value: T;
+
+  func put_value(value: T) {
+    self.value = value;
+  }
+
+  func read_value(): T {
+    return self.value;
+  }
+
+  func echo_value<U>(value: U): U {
+    return value;
+  }
+
+  func echo_value_through_method(value: T): T {
+    return self.echo_value(value);
+  }
+}
+
+// 泛型约束 witness 字段访问用 spec。
+spec GMutableNamed {
+  var gname: string;
+  func greet_mutable(): string;
+}
+
+// 泛型约束 witness 字段访问用 type。
+type GMutableUser: GMutableNamed {
+  var gname: string;
+
+  func greet_mutable(): string {
+    return self.gname;
+  }
+}
+
+// 通过泛型约束访问并修改字段。
+func rename_gmutable<T: GMutableNamed>(user: T, next: string): string {
+  user.gname = next;
+  return user.gname;
+}
+
+// 通过泛型约束调用方法。
+func greet_gmutable<T: GMutableNamed>(user: T): string {
+  return user.greet_mutable();
+}
+
+// 父级约束转发用父 spec。
+spec GForwardNamed {
+  func gforward_name(): string;
+}
+
+// 父级约束转发用子 spec。
+spec GLabelled: GForwardNamed {
+}
+
+// 父级约束转发用 type。
+type GForwardItem: GLabelled {
+  func gforward_name(): string {
+    return "item";
+  }
+}
+
+// 使用父级约束读取名称。
+func use_gforward_named<T: GForwardNamed>(value: T): string {
+  return value.gforward_name();
+}
+
+// 将子级约束转发给父级约束函数。
+func use_glabelled<U: GLabelled>(value: U): string {
+  return use_gforward_named<U>(value);
+}
+
+// 具体化父泛型 spec。
+spec GCountSequence<T> {
+  func gsize_value(): int;
+}
+
+// 具体化父泛型 spec 的子 spec。
+spec GIntCountSequence: GCountSequence<int> {
+}
+
+// 具体化父泛型 spec 的实现类型。
+type GCounter: GIntCountSequence {
+  var n: int;
+
+  func gsize_value(): int {
+    return self.n;
+  }
+}
+
+// 通过具体化子 spec 视图调用继承成员。
+func check_gint_sequence(seq: GIntCountSequence): int {
+  return seq.gsize_value();
+}
+
+// 重新声明父泛型 spec 成员的具体化子 spec。
+spec GIntSequenceOverride: GCountSequence<int> {
+  func gsize_value(): int;
+}
+
+// 实现重新声明成员的具体化子 spec。
+type GOverrideCounter: GIntSequenceOverride {
+  func gsize_value(): int {
+    return 1;
+  }
+}
+
+// 泛型数组创建用元素类型。
+type GPair<A, B> {
+  var left: A;
+  var right: B;
+}
+
+// 嵌套泛型默认初始化用容器。
+type GNestedHolder<T> {
+  var inner: GBox<T>;
+}
+
+// 非自约束泛型映射用 spec。
+spec GHashable {
+  func ghash(): int;
+  func gsame_hash(hash: int): bool;
+}
+
+// 非自约束泛型映射用 key。
+type GHashKey: GHashable {
+  var code: int;
+
+  func ghash(): int {
+    return self.code;
+  }
+
+  func gsame_hash(hash: int): bool {
+    return self.ghash() == hash;
+  }
+}
+
+// 非自约束泛型映射。
+type GHashMiniMap<K: GHashable, V> {
+  var key: K;
+  var val: V;
+
+  func gput_hash(key: K, val: V) {
+    self.key = key;
+    self.val = val;
+  }
+
+  func ghas_hash(key: K): bool {
+    return key.gsame_hash(self.key.ghash());
+  }
+
+  func gget_hash(key: K): V {
+    return self.val;
+  }
+}
+
 /** 泛型测试 */
 open func test_generic() {
   describe("generic", () {
@@ -291,6 +500,87 @@ open func test_generic() {
     test("generic constraint forwarding", () {
       let glist = GIntList { head: 10, len: 3 };
       assert(gfirst_of<int, GIntList>(glist) == 10, "generic constraint forwarding");
+    });
+
+    test("generic aggregate return", () {
+      let created: GNamed = make_gnamed<int>("generic aggregate return ok");
+      assert(created.ggreet() == "generic aggregate return ok", "generic aggregate return created");
+      let forwarded: GNamed = forward_gnamed<int>(created);
+      assert(forwarded.ggreet() == "generic aggregate return ok", "generic aggregate return forwarded");
+      let rebound: GNamed = rebound_gnamed<int>("generic aggregate return ok");
+      assert(rebound.ggreet() == "generic aggregate return ok", "generic aggregate return rebound");
+    });
+
+    test("generic spec value argument", () {
+      let named: GNamed = GNamedUser { name: "spec generic value ok" };
+      let from_fn: GNamed = gidentity(named);
+      assert(from_fn.ggreet() == "spec generic value ok", "generic spec value argument function");
+      let holder: GValueHolder<GNamed> = GValueHolder<GNamed>();
+      holder.put_value(named);
+      let from_type_arg: GNamed = holder.read_value();
+      assert(from_type_arg.ggreet() == "spec generic value ok", "generic spec value argument type");
+      let from_method: GNamed = holder.echo_value(named);
+      assert(from_method.ggreet() == "spec generic value ok", "generic spec value argument method");
+      let from_self_call: GNamed = holder.echo_value_through_method(named);
+      assert(from_self_call.ggreet() == "spec generic value ok", "generic spec value argument self call");
+    });
+
+    test("generic aggregate three entrances", () {
+      let named: GNamed = GNamedUser { name: "phase-e-ok" };
+      let from_fn: GNamed = gid_gnamed<GNamed>(named);
+      let holder: GNamedHolder<GNamed> = GNamedHolder<GNamed>();
+      holder.set_named(from_fn);
+      let from_method: string = holder.relay_named<GNamed>(from_fn);
+      assert(from_method == "phase-e-ok", "generic aggregate entrance method");
+      assert(holder.read_named() == "phase-e-ok", "generic aggregate entrance holder");
+    });
+
+    test("generic constraint witness field", () {
+      let user: GMutableUser = GMutableUser { gname: "before" };
+      assert(rename_gmutable(user, "generic constraint field ok") == "generic constraint field ok", "generic constraint witness field rename");
+      assert(greet_gmutable(user) == "generic constraint field ok", "generic constraint witness method");
+    });
+
+    test("generic parent constraint forwarding", () {
+      let item: GForwardItem = GForwardItem {};
+      assert(use_glabelled<GForwardItem>(item) == "item", "generic parent constraint forwarding");
+    });
+
+    test("generic spec parent concrete inheritance", () {
+      let counter: GCounter = GCounter { n: 7 };
+      assert(check_gint_sequence(counter) == 7, "generic spec parent inherited member");
+    });
+
+    test("generic spec parent concrete override", () {
+      let counter: GIntSequenceOverride = GOverrideCounter {};
+      assert(counter.gsize_value() == 1, "generic spec parent override");
+    });
+
+    test("generic array creation", () {
+      let pairs: GPair<int, int>[!] = GPair<int, int>[: (long)2];
+      pairs[0].left = 10;
+      pairs[0].right = 20;
+      assert(pairs[0].left == 10 && pairs[0].right == 20, "generic array creation");
+    });
+
+    test("generic nested default", () {
+      let holder: GNestedHolder<int> = GNestedHolder<int>();
+      holder.inner.value = 11;
+      assert(holder.inner.value == 11, "generic nested default");
+    });
+
+    test("generic object literal", () {
+      let box: GBox<int> = GBox<int>() { value: 7 };
+      assert(box.value == 7, "generic object literal");
+    });
+
+    test("generic non-self constraint MiniMap", () {
+      let key = GHashKey { code: 9 };
+      let same_key = GHashKey { code: 9 };
+      let map: GHashMiniMap<GHashKey, string> = GHashMiniMap<GHashKey, string>();
+      map.gput_hash(key, "hash constraint ok");
+      assert(map.ghas_hash(same_key), "generic non-self constraint MiniMap has");
+      assert(map.gget_hash(key) == "hash constraint ok", "generic non-self constraint MiniMap get");
     });
   });
 }
