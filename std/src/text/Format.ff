@@ -105,14 +105,19 @@ open fit string {
 	}
 
 	open static func format<T: Display>(format: string, args: T[]): string {
-		let stringArgs:string[!] = string[:args.length()];
+		let stringArgs: string[!] = string[:args.length()];
 		for var i: long = (long)0; i < args.length(); i += (long)1 {
 			stringArgs[i] = args[i].toString();
 		}
 		return renderFormattedString(format, (string[])stringArgs);
 	}
 
-	open static func format<T: Display>(format: string, args: T...): string {
-		return string.format(format, args);
+	open static func format<T: Display>(format: string, first: T, args: T...): string {
+		let stringArgs: string[!] = string[:args.length() + (long)1];
+		stringArgs[0] = first.toString();
+		for var i: long = (long)0; i < args.length(); i += (long)1 {
+			stringArgs[i + (long)1] = args[i].toString();
+		}
+		return string.format(format, (string[])stringArgs);
 	}
 }

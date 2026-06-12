@@ -483,6 +483,90 @@ static void test_member_method_overload_overlap_via_fit_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_fit_method_overload_conflicts_match_method_rules(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *message;
+    } cases[] = {
+        {
+            "fit_duplicate_method.f",
+            "module demo.main;\n"
+            "type Box {}\n"
+            "fit Box {\n"
+            "    func pick(a: int): int { return a; }\n"
+            "    func pick(a: int): int { return a + 1; }\n"
+            "}\n",
+            "duplicate method signature"
+        },
+        {
+            "fit_return_only_method.f",
+            "module demo.main;\n"
+            "type Box {}\n"
+            "fit Box {\n"
+            "    func pick(a: int): int { return a; }\n"
+            "    func pick(a: int): bool { return true; }\n"
+            "}\n",
+            "cannot differ only by return type"
+        },
+        {
+            "fit_variadic_method.f",
+            "module demo.main;\n"
+            "type Box {}\n"
+            "fit Box {\n"
+            "    func pick(a: int) {}\n"
+            "    func pick(values: int...) {}\n"
+            "}\n",
+            "variadic method overload conflicts"
+        },
+        {
+            "fit_static_duplicate_method.f",
+            "module demo.main;\n"
+            "type Box {}\n"
+            "fit Box {\n"
+            "    static func make(): int { return 1; }\n"
+            "    static func make(): int { return 2; }\n"
+            "}\n",
+            "duplicate method signature"
+        },
+        {
+            "fit_overlap_method.f",
+            "module demo.main;\n"
+            "spec Animal {\n"
+            "    func name(): string;\n"
+            "}\n"
+            "type Dog {\n"
+            "    let name: string;\n"
+            "}\n"
+            "fit Dog: Animal {\n"
+            "    func name(): string { return self.name; }\n"
+            "}\n"
+            "type Owner {}\n"
+            "fit Owner {\n"
+            "    func pet(a: Animal) {}\n"
+            "    func pet(d: Dog) {}\n"
+            "}\n",
+            "may both match the same arguments"
+        }
+    };
+    size_t i;
+
+    for (i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        FengProgram *program = parse_program_or_die(cases[i].path, cases[i].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strstr(errors[0].message, cases[i].message) != NULL);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
 static void test_extern_function_accepts_module_string_library_binding(void) {
     const char *source =
         "module demo.main;\n"
@@ -13462,6 +13546,62 @@ static void test_generic_explicit_type_args_ok(void) {
     feng_program_free(program);
 }
 
+static void test_generic_exact_non_generic_overload_is_preferred(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func pick(value: int): string {\n"
+        "    return \"exact\";\n"
+        "}\n"
+        "func pick<T>(value: T): T {\n"
+        "    return value;\n"
+        "}\n"
+        "type Picker {\n"
+        "    func choose(value: int): string {\n"
+        "        return \"exact\";\n"
+        "    }\n"
+        "    func choose<T>(value: T): T {\n"
+        "        return value;\n"
+        "    }\n"
+        "    static func make(value: int): string {\n"
+        "        return \"exact\";\n"
+        "    }\n"
+        "    static func make<T>(value: T): T {\n"
+        "        return value;\n"
+        "    }\n"
+        "}\n"
+        "fit string {\n"
+        "    static func formatLike(value: int): string {\n"
+        "        return \"exact\";\n"
+        "    }\n"
+        "    static func formatLike<T>(value: T): T {\n"
+        "        return value;\n"
+        "    }\n"
+        "}\n"
+        "func check(): void {\n"
+        "    let topExact: string = pick(1);\n"
+        "    let topGeneric: int = pick<int>(1);\n"
+        "    let picker: Picker = Picker();\n"
+        "    let memberExact: string = picker.choose(1);\n"
+        "    let memberGeneric: int = picker.choose<int>(1);\n"
+        "    let staticExact: string = Picker.make(1);\n"
+        "    let staticGeneric: int = Picker.make<int>(1);\n"
+        "    let fitExact: string = string.formatLike(1);\n"
+        "    let fitGeneric: int = string.formatLike<int>(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_exact_overload_preferred.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_generic_type_param_constraint_must_be_spec(void) {
     /* A type parameter constraint that names a *type* (not a spec) must be
      * rejected.  Only specs are legal as constraints. */
@@ -14749,6 +14889,7 @@ int main(void) {
     test_top_level_overload_overlap_via_two_specs_rejected();
     test_top_level_overload_two_specs_no_common_type_accepted();
     test_member_method_overload_overlap_via_fit_rejected();
+    test_fit_method_overload_conflicts_match_method_rules();
     test_extern_function_accepts_module_string_library_binding();
     test_extern_function_accepts_c_symbol_name_argument();
     test_extern_function_accepts_imported_string_c_symbol_binding();
@@ -15185,6 +15326,7 @@ int main(void) {
     test_generic_spec_decl_ok();
     test_generic_function_call_wildcard_ok();
     test_generic_explicit_type_args_ok();
+    test_generic_exact_non_generic_overload_is_preferred();
     test_generic_type_param_constraint_must_be_spec();
     test_generic_type_ref_arity_too_many();
     test_generic_non_generic_type_with_type_args_rejected();

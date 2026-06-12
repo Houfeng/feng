@@ -14422,12 +14422,23 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
                        "codegen: generic builtin static fit methods are not supported yet");
     }
     if (e->as.call.arg_count != um->param_count) {
-        return cg_fail(cg,
-                       e->token,
-                       "codegen: wrong argument count for static method '%s' (expected %zu, got %zu)",
-                       um->feng_name,
-                       um->param_count,
-                       e->as.call.arg_count);
+        if (!um->is_variadic) {
+            return cg_fail(cg,
+                           e->token,
+                           "codegen: wrong argument count for static method '%s' (expected %zu, got %zu)",
+                           um->feng_name,
+                           um->param_count,
+                           e->as.call.arg_count);
+        }
+        size_t fixed_count = um->param_count - 1U;
+        if (e->as.call.arg_count < fixed_count) {
+            return cg_fail(cg,
+                           e->token,
+                           "codegen: too few arguments for variadic static method '%s' (need at least %zu, got %zu)",
+                           um->feng_name,
+                           fixed_count,
+                           e->as.call.arg_count);
+        }
     }
 
     buf_init(&args_buf);
@@ -14439,7 +14450,8 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
         buf_free(&args_buf);
         return false;
     }
-    for (size_t i = 0; i < e->as.call.arg_count; i++) {
+    size_t fixed_arg_limit = um->is_variadic ? um->param_count - 1U : e->as.call.arg_count;
+    for (size_t i = 0; i < fixed_arg_limit; i++) {
         ExprResult arg;
         char *arg_expr = NULL;
 
@@ -14507,6 +14519,27 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
         buf_append_cstr(&args_buf, arg_expr);
         free(arg_expr);
         er_free(&arg);
+    }
+    if (um->is_variadic) {
+        const CGType *elem_type = um->param_types[um->param_count - 1U]->element;
+        size_t variadic_arg_count = e->as.call.arg_count - fixed_arg_limit;
+        ExprResult varr;
+
+        if (!cg_pack_variadic_args(cg,
+                                   &e->token,
+                                   e->as.call.args + fixed_arg_limit,
+                                   variadic_arg_count,
+                                   elem_type,
+                                   &varr)) {
+            buf_free(&args_buf);
+            return false;
+        }
+        if (cgtype_is_managed(varr.type) && varr.owns_ref) {
+            cg_materialize_to_local(cg, &varr, "_t");
+        }
+        cg_append_call_arg_separator(&args_buf, &has_arg);
+        buf_append_cstr(&args_buf, varr.c_expr);
+        er_free(&varr);
     }
 
     {

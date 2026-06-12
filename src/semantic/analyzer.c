@@ -179,6 +179,7 @@ typedef struct FunctionCallResolution {
     const FengDecl *decl;
     const FengCallableSignature *callable;
     bool rejected_existing_array_for_variadic;
+    int match_priority;
     const FengTypeMember *member;       /* set for type-method / fit-method */
     const FengDecl *owner_type_decl;    /* set for type-method / fit-method */
     const FengDecl *fit_decl;           /* set for fit-method */
@@ -8801,6 +8802,91 @@ static bool callable_parameters_match_args_for_owner_instance(
     return ok;
 }
 
+static bool callable_parameters_exactly_match_args(
+    ResolveContext *context,
+    const FengCallableSignature *callable,
+    FengExpr *const *args,
+    size_t arg_count) {
+    size_t arg_index;
+    bool is_variadic;
+    size_t fixed_count;
+
+    if (context == NULL || callable == NULL || callable->type_param_count != 0U) {
+        return false;
+    }
+    is_variadic = callable->param_count > 0U &&
+                  callable->params[callable->param_count - 1U].is_variadic;
+    fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
+    if (is_variadic) {
+        if (arg_count < fixed_count) {
+            return false;
+        }
+    } else if (callable->param_count != arg_count) {
+        return false;
+    }
+
+    for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
+        const FengTypeRef *param_type = arg_index < fixed_count
+                                            ? callable->params[arg_index].type
+                                            : callable->params[fixed_count].type->as.inner;
+
+        if (!inferred_expr_type_exactly_matches_type_ref(context,
+                                                         infer_expr_type(context, args[arg_index]),
+                                                         param_type)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool callable_parameters_exactly_match_args_for_owner_instance(
+    ResolveContext *context,
+    const FengCallableSignature *callable,
+    const FengDecl *owner_type_decl,
+    const FengDecl *fit_decl,
+    InferredExprType owner_type,
+    FengExpr *const *args,
+    size_t arg_count) {
+    size_t arg_index;
+    bool is_variadic;
+    size_t fixed_count;
+
+    if (context == NULL || callable == NULL || callable->type_param_count != 0U) {
+        return false;
+    }
+    is_variadic = callable->param_count > 0U &&
+                  callable->params[callable->param_count - 1U].is_variadic;
+    fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
+    if (is_variadic) {
+        if (arg_count < fixed_count) {
+            return false;
+        }
+    } else if (callable->param_count != arg_count) {
+        return false;
+    }
+
+    for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
+        const FengTypeRef *param_type = arg_index < fixed_count
+                                            ? callable->params[arg_index].type
+                                            : callable->params[fixed_count].type->as.inner;
+
+        param_type = substitute_type_ref_for_owner_instance(context,
+                                                            owner_type_decl,
+                                                            owner_type,
+                                                            param_type);
+        param_type = substitute_type_ref_for_fit_instance(context,
+                                                          fit_decl,
+                                                          owner_type,
+                                                          param_type);
+        if (!inferred_expr_type_exactly_matches_type_ref(context,
+                                                         infer_expr_type(context, args[arg_index]),
+                                                         param_type)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool callable_signatures_equal_for_owner_instance(
     ResolveContext *context,
     const FengCallableSignature *left,
@@ -9268,7 +9354,9 @@ static FunctionCallResolution resolve_top_level_function_overload(
     ResolveContext *context,
     const FunctionOverloadSetEntry *overload_set,
     FengExpr *const *args,
-    size_t arg_count) {
+    size_t arg_count,
+    bool has_explicit_type_args,
+    size_t explicit_type_arg_count) {
     size_t decl_index;
     FunctionCallResolution result;
 
@@ -9297,10 +9385,26 @@ static FunctionCallResolution resolve_top_level_function_overload(
             continue;
         }
 
-        if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
+        int priority = has_explicit_type_args
+                           ? (decl->as.function_decl.type_param_count == explicit_type_arg_count
+                                  ? 0
+                                  : (decl->as.function_decl.type_param_count > 0U ? 1 : 2))
+                           : (callable_parameters_exactly_match_args(context,
+                                                                     &decl->as.function_decl,
+                                                                     args,
+                                                                     arg_count)
+                                  ? 0
+                                  : 1);
+
+        if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
+            priority < result.match_priority) {
             result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+            result.match_priority = priority;
             result.decl = decl;
             result.callable = &decl->as.function_decl;
+            continue;
+        }
+        if (priority > result.match_priority) {
             continue;
         }
 
@@ -9620,7 +9724,9 @@ static FunctionCallResolution resolve_module_public_function_overload(
     const FengSemanticModule *module,
     FengSlice name,
     FengExpr *const *args,
-    size_t arg_count) {
+    size_t arg_count,
+    bool has_explicit_type_args,
+    size_t explicit_type_arg_count) {
     size_t program_index;
     FunctionCallResolution result;
 
@@ -9654,10 +9760,26 @@ static FunctionCallResolution resolve_module_public_function_overload(
                 continue;
             }
 
-            if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
+            int priority = has_explicit_type_args
+                               ? (decl->as.function_decl.type_param_count == explicit_type_arg_count
+                                      ? 0
+                                      : (decl->as.function_decl.type_param_count > 0U ? 1 : 2))
+                               : (callable_parameters_exactly_match_args(context,
+                                                                         &decl->as.function_decl,
+                                                                         args,
+                                                                         arg_count)
+                                      ? 0
+                                      : 1);
+
+            if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
+                priority < result.match_priority) {
                 result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+                result.match_priority = priority;
                 result.decl = decl;
                 result.callable = &decl->as.function_decl;
+                continue;
+            }
+            if (priority > result.match_priority) {
                 continue;
             }
 
@@ -10074,6 +10196,8 @@ typedef struct FitOverloadResolveCtx {
     InferredExprType owner_type;
     FengExpr *const *args;
     size_t arg_count;
+    bool has_explicit_type_args;
+    size_t explicit_type_arg_count;
     FunctionCallResolution result;
 } FitOverloadResolveCtx;
 
@@ -10103,13 +10227,33 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
             return true;
         }
     }
-    if (st->result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
+    int priority = st->has_explicit_type_args
+                       ? (member->as.callable.type_param_count == st->explicit_type_arg_count
+                              ? 0
+                              : (member->as.callable.type_param_count > 0U ? 1 : 2))
+                       : (callable_parameters_exactly_match_args_for_owner_instance(
+                              st->context,
+                              &member->as.callable,
+                              st->owner_type_decl,
+                              fit_decl,
+                              st->owner_type,
+                              st->args,
+                              st->arg_count)
+                              ? 0
+                              : 1);
+
+    if (st->result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
+        priority < st->result.match_priority) {
         st->result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+        st->result.match_priority = priority;
         st->result.decl = NULL;
         st->result.callable = &member->as.callable;
         st->result.member = member;
         st->result.owner_type_decl = st->owner_type_decl;
         st->result.fit_decl = fit_decl;
+        return true;
+    }
+    if (priority > st->result.match_priority) {
         return true;
     }
     st->result.kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
@@ -10127,7 +10271,9 @@ static FunctionCallResolution resolve_accessible_method_overload(
     InferredExprType owner_type,
     FengSlice name,
     FengExpr *const *args,
-    size_t arg_count) {
+    size_t arg_count,
+    bool has_explicit_type_args,
+    size_t explicit_type_arg_count) {
     size_t member_index;
     FunctionCallResolution result;
     FitOverloadResolveCtx st;
@@ -10139,6 +10285,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
         st.owner_type = owner_type;
         st.args = args;
         st.arg_count = arg_count;
+        st.has_explicit_type_args = has_explicit_type_args;
+        st.explicit_type_arg_count = explicit_type_arg_count;
         st.result = result;
         (void)visit_visible_fit_methods_for_owner_type(context,
                                                        NULL,
@@ -10192,12 +10340,32 @@ static FunctionCallResolution resolve_accessible_method_overload(
                     }
                     continue;
                 }
-                if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
+                int priority = has_explicit_type_args
+                                   ? (member->as.callable.type_param_count == explicit_type_arg_count
+                                          ? 0
+                                          : (member->as.callable.type_param_count > 0U ? 1 : 2))
+                                   : (callable_parameters_exactly_match_args_for_owner_instance(
+                                          context,
+                                          &member->as.callable,
+                                          type_decl,
+                                          NULL,
+                                          owner_type,
+                                          args,
+                                          arg_count)
+                                          ? 0
+                                          : 1);
+
+                if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
+                    priority < result.match_priority) {
                     result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+                    result.match_priority = priority;
                     result.decl = NULL;
                     result.callable = &member->as.callable;
                     result.member = member;
                     result.owner_type_decl = type_decl;
+                    continue;
+                }
+                if (priority > result.match_priority) {
                     continue;
                 }
 
@@ -10251,12 +10419,32 @@ static FunctionCallResolution resolve_accessible_method_overload(
                 continue;
             }
 
-            if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
+            int priority = has_explicit_type_args
+                               ? (member->as.callable.type_param_count == explicit_type_arg_count
+                                      ? 0
+                                      : (member->as.callable.type_param_count > 0U ? 1 : 2))
+                               : (callable_parameters_exactly_match_args_for_owner_instance(
+                                      context,
+                                      &member->as.callable,
+                                      type_decl,
+                                      NULL,
+                                      owner_type,
+                                      args,
+                                      arg_count)
+                                      ? 0
+                                      : 1);
+
+            if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
+                priority < result.match_priority) {
                 result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+                result.match_priority = priority;
                 result.decl = NULL;
                 result.callable = &member->as.callable;
                 result.member = member;
                 result.owner_type_decl = type_decl;
+                continue;
+            }
+            if (priority > result.match_priority) {
                 continue;
             }
 
@@ -10272,6 +10460,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
     st.owner_type = owner_type;
     st.args = args;
     st.arg_count = arg_count;
+    st.has_explicit_type_args = has_explicit_type_args;
+    st.explicit_type_arg_count = explicit_type_arg_count;
     st.result = result;
     (void)visit_visible_fit_methods_for_type(context, type_decl, name, true, false,
                                              fit_overload_resolve_visitor, &st);
@@ -10285,7 +10475,9 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
     InferredExprType owner_type,
     FengSlice name,
     FengExpr *const *args,
-    size_t arg_count) {
+    size_t arg_count,
+    bool has_explicit_type_args,
+    size_t explicit_type_arg_count) {
     size_t member_index;
     FunctionCallResolution result;
     FitOverloadResolveCtx st;
@@ -10297,6 +10489,8 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
         st.owner_type = owner_type;
         st.args = args;
         st.arg_count = arg_count;
+        st.has_explicit_type_args = has_explicit_type_args;
+        st.explicit_type_arg_count = explicit_type_arg_count;
         st.result = result;
         (void)visit_visible_fit_methods_for_owner_type(context,
                                                        NULL,
@@ -10337,13 +10531,33 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
             continue;
         }
 
-        if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE) {
+        int priority = has_explicit_type_args
+                           ? (member->as.callable.type_param_count == explicit_type_arg_count
+                                  ? 0
+                                  : (member->as.callable.type_param_count > 0U ? 1 : 2))
+                           : (callable_parameters_exactly_match_args_for_owner_instance(
+                                  context,
+                                  &member->as.callable,
+                                  type_decl,
+                                  NULL,
+                                  owner_type,
+                                  args,
+                                  arg_count)
+                                  ? 0
+                                  : 1);
+
+        if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
+            priority < result.match_priority) {
             result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+            result.match_priority = priority;
             result.decl = NULL;
             result.callable = &member->as.callable;
             result.member = member;
             result.owner_type_decl = type_decl;
             result.fit_decl = NULL;
+            continue;
+        }
+        if (priority > result.match_priority) {
             continue;
         }
 
@@ -10359,6 +10573,8 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
     st.owner_type = owner_type;
     st.args = args;
     st.arg_count = arg_count;
+    st.has_explicit_type_args = has_explicit_type_args;
+    st.explicit_type_arg_count = explicit_type_arg_count;
     st.result = result;
     (void)visit_visible_fit_methods_for_type(context, type_decl, name, true, true,
                                              fit_overload_resolve_visitor, &st);
@@ -10813,7 +11029,9 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                 resolve_top_level_function_overload(context,
                                                     overload_set,
                                                     expr->as.call.args,
-                                                    expr->as.call.arg_count);
+                                                    expr->as.call.arg_count,
+                                                    expr->as.call.has_explicit_type_args,
+                                                    expr->as.call.explicit_type_arg_count);
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                 resolution.callable != NULL) {
@@ -10858,7 +11076,9 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                               owner_type,
                                                               callee->as.member.member,
                                                               expr->as.call.args,
-                                                              expr->as.call.arg_count);
+                                                              expr->as.call.arg_count,
+                                                              expr->as.call.has_explicit_type_args,
+                                                              expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                     resolution.callable != NULL) {
@@ -10893,7 +11113,9 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                               owner_type,
                                                               callee->as.member.member,
                                                               expr->as.call.args,
-                                                              expr->as.call.arg_count);
+                                                              expr->as.call.arg_count,
+                                                              expr->as.call.has_explicit_type_args,
+                                                              expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                     resolution.callable != NULL) {
@@ -10930,7 +11152,9 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                             alias->target_module,
                                                             callee->as.member.member,
                                                             expr->as.call.args,
-                                                            expr->as.call.arg_count);
+                                                            expr->as.call.arg_count,
+                                                            expr->as.call.has_explicit_type_args,
+                                                            expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                     resolution.callable != NULL) {
@@ -10972,7 +11196,9 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                             owner_type,
                                                             callee->as.member.member,
                                                             expr->as.call.args,
-                                                            expr->as.call.arg_count);
+                                                            expr->as.call.arg_count,
+                                                            expr->as.call.has_explicit_type_args,
+                                                            expr->as.call.explicit_type_arg_count);
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                 resolution.callable != NULL) {
                 InferredExprType return_type;
@@ -11062,7 +11288,9 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
                         resolve_top_level_function_overload(context,
                                                             overload_set,
                                                             expr->as.call.args,
-                                                            expr->as.call.arg_count);
+                                                            expr->as.call.arg_count,
+                                                            expr->as.call.has_explicit_type_args,
+                                                            expr->as.call.explicit_type_arg_count);
 
                     if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                         callable_return_inference_is_pending(context, resolution.callable)) {
@@ -11084,7 +11312,9 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
                                                                     alias->target_module,
                                                                     callee->as.member.member,
                                                                     expr->as.call.args,
-                                                                    expr->as.call.arg_count);
+                                                                    expr->as.call.arg_count,
+                                                                    expr->as.call.has_explicit_type_args,
+                                                                    expr->as.call.explicit_type_arg_count);
 
                         if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                             callable_return_inference_is_pending(context, resolution.callable)) {
@@ -11106,7 +11336,9 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
                                                                     owner_type,
                                                                     callee->as.member.member,
                                                                     expr->as.call.args,
-                                                                    expr->as.call.arg_count);
+                                                                    expr->as.call.arg_count,
+                                                                    expr->as.call.has_explicit_type_args,
+                                                                    expr->as.call.explicit_type_arg_count);
                     if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                         callable_return_inference_is_pending(context, resolution.callable)) {
                         return true;
@@ -15267,6 +15499,9 @@ static bool validate_type_member_overloads(ResolveContext *context, const FengDe
             if (!slice_equals(si->name, sj->name)) {
                 continue;
             }
+            if (si->type_param_count != sj->type_param_count) {
+                continue;
+            }
             if (parameters_equal(si, sj)) {
                 if (return_type_equals(si->return_type, sj->return_type)) {
                     ok = resolver_append_error(
@@ -15301,6 +15536,77 @@ static bool validate_type_member_overloads(ResolveContext *context, const FengDe
         }
     }
 
+    return ok;
+}
+
+static bool validate_fit_member_overloads(ResolveContext *context, const FengDecl *fit_decl) {
+    size_t i;
+    size_t j;
+    bool ok = true;
+    char *target_name;
+
+    if (context == NULL || fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT) {
+        return true;
+    }
+
+    target_name = format_type_ref_name(fit_decl->as.fit_decl.target);
+
+    for (i = 0U; i < fit_decl->as.fit_decl.member_count; ++i) {
+        const FengTypeMember *mi = fit_decl->as.fit_decl.members[i];
+        const FengCallableSignature *si;
+
+        if (mi == NULL || mi->kind != FENG_TYPE_MEMBER_METHOD) {
+            continue;
+        }
+        si = &mi->as.callable;
+
+        for (j = 0U; j < i; ++j) {
+            const FengTypeMember *mj = fit_decl->as.fit_decl.members[j];
+            const FengCallableSignature *sj;
+
+            if (mj == NULL || mj->kind != FENG_TYPE_MEMBER_METHOD ||
+                mi->is_static != mj->is_static) {
+                continue;
+            }
+            sj = &mj->as.callable;
+            if (!slice_equals(si->name, sj->name)) {
+                continue;
+            }
+            if (si->type_param_count != sj->type_param_count) {
+                continue;
+            }
+            if (parameters_equal(si, sj)) {
+                if (return_type_equals(si->return_type, sj->return_type)) {
+                    ok = resolver_append_error(
+                             context,
+                             si->token,
+                             format_message(
+                                 "duplicate method signature '%.*s' in fit target '%s'",
+                                 (int)si->name.length, si->name.data,
+                                 target_name != NULL ? target_name : "<unknown>")) && ok;
+                } else {
+                    ok = resolver_append_error(
+                             context,
+                             si->token,
+                             format_message(
+                                 "method overloads in fit target '%s' cannot differ only by return type: '%.*s'",
+                                 target_name != NULL ? target_name : "<unknown>",
+                                 (int)si->name.length, si->name.data)) && ok;
+                }
+            } else if ((sig_is_variadic(si) || sig_is_variadic(sj)) &&
+                       variadic_parameters_conflict(si, sj)) {
+                ok = resolver_append_error(
+                         context,
+                         si->token,
+                         format_message(
+                             "variadic method overload conflicts with existing method '%.*s' in fit target '%s'",
+                             (int)si->name.length, si->name.data,
+                             target_name != NULL ? target_name : "<unknown>")) && ok;
+            }
+        }
+    }
+
+    free(target_name);
     return ok;
 }
 
@@ -16153,7 +16459,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                     alias->target_module,
                                                                     callee->as.member.member,
                                                                     expr->as.call.args,
-                                                                    expr->as.call.arg_count);
+                                                                    expr->as.call.arg_count,
+                                                                    expr->as.call.has_explicit_type_args,
+                                                                    expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                     if (!validate_borrowed_data_pointer_call_arguments(
@@ -16237,7 +16545,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                        static_owner_type,
                                                                        callee->as.member.member,
                                                                        expr->as.call.args,
-                                                                       expr->as.call.arg_count);
+                                                                       expr->as.call.arg_count,
+                                                                       expr->as.call.has_explicit_type_args,
+                                                                       expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                     if (!validate_borrowed_data_pointer_call_arguments(context,
@@ -16348,7 +16658,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                             owner_type,
                                                             callee->as.member.member,
                                                             expr->as.call.args,
-                                                            expr->as.call.arg_count);
+                                                            expr->as.call.arg_count,
+                                                            expr->as.call.has_explicit_type_args,
+                                                            expr->as.call.explicit_type_arg_count);
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                 if (!validate_borrowed_data_pointer_call_arguments(context,
@@ -16423,7 +16735,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                             owner_type,
                                                             callee->as.member.member,
                                                             expr->as.call.args,
-                                                            expr->as.call.arg_count);
+                                                            expr->as.call.arg_count,
+                                                            expr->as.call.has_explicit_type_args,
+                                                            expr->as.call.explicit_type_arg_count);
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                 if (!validate_borrowed_data_pointer_call_arguments(context,
@@ -16493,7 +16807,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     resolve_top_level_function_overload(context,
                                                         overload_set,
                                                         expr->as.call.args,
-                                                        expr->as.call.arg_count);
+                                                        expr->as.call.arg_count,
+                                                        expr->as.call.has_explicit_type_args,
+                                                        expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
                     if (!validate_borrowed_data_pointer_call_arguments(
@@ -20340,6 +20656,9 @@ static bool validate_type_member_overload_overlap(ResolveContext *context,
             if (!slice_equals(si->name, sj->name)) {
                 continue;
             }
+            if (si->type_param_count != sj->type_param_count) {
+                continue;
+            }
             /* Identical-parameter pairs are already reported by
              * validate_type_member_overloads with a more specific message.
              * Variadic conflicts are also reported there. */
@@ -20362,6 +20681,66 @@ static bool validate_type_member_overload_overlap(ResolveContext *context,
             }
         }
     }
+    return ok;
+}
+
+static bool validate_fit_member_overload_overlap(ResolveContext *context,
+                                                 const FengDecl *fit_decl) {
+    size_t i;
+    size_t j;
+    bool ok = true;
+    char *target_name;
+
+    if (context == NULL || fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT) {
+        return true;
+    }
+
+    target_name = format_type_ref_name(fit_decl->as.fit_decl.target);
+
+    for (i = 0U; i < fit_decl->as.fit_decl.member_count; ++i) {
+        const FengTypeMember *mi = fit_decl->as.fit_decl.members[i];
+        const FengCallableSignature *si;
+
+        if (mi == NULL || mi->kind != FENG_TYPE_MEMBER_METHOD) {
+            continue;
+        }
+        si = &mi->as.callable;
+
+        for (j = 0U; j < i; ++j) {
+            const FengTypeMember *mj = fit_decl->as.fit_decl.members[j];
+            const FengCallableSignature *sj;
+
+            if (mj == NULL || mj->kind != FENG_TYPE_MEMBER_METHOD ||
+                mi->is_static != mj->is_static) {
+                continue;
+            }
+            sj = &mj->as.callable;
+            if (!slice_equals(si->name, sj->name)) {
+                continue;
+            }
+            if (si->type_param_count != sj->type_param_count) {
+                continue;
+            }
+            if (parameters_equal(si, sj)) {
+                continue;
+            }
+            if ((sig_is_variadic(si) || sig_is_variadic(sj)) &&
+                variadic_parameters_conflict(si, sj)) {
+                continue;
+            }
+            if (signatures_potentially_overlap(context, si, sj)) {
+                ok = resolver_append_error(
+                         context,
+                         si->token,
+                         format_message(
+                             "method overloads in fit target '%s' may both match the same arguments under visible contract relations: '%.*s'",
+                             target_name != NULL ? target_name : "<unknown>",
+                             (int)si->name.length, si->name.data)) && ok;
+            }
+        }
+    }
+
+    free(target_name);
     return ok;
 }
 
@@ -20411,6 +20790,9 @@ static bool validate_top_level_overload_overlap(ResolveContext *context,
                 continue;
             }
             other_sig = &other->as.function_decl;
+            if (current->type_param_count != other_sig->type_param_count) {
+                continue;
+            }
             /* Identical-parameter pairs are already reported by
              * check_symbol_conflicts with a more specific message.
              * Variadic conflicts are also reported there. */
@@ -21225,7 +21607,13 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     return false;
                 }
             }
-            ok = validate_fit_declaration_contracts(context, decl);
+            ok = validate_fit_member_overloads(context, decl);
+            if (ok) {
+                ok = validate_fit_member_overload_overlap(context, decl);
+            }
+            if (ok) {
+                ok = validate_fit_declaration_contracts(context, decl);
+            }
             if (fit_scope_pushed) {
                 resolver_pop_type_params(context, prev_fit_tp, prev_fit_tp_count);
             }
@@ -21513,6 +21901,9 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                         for (index = 0U; index < function_set->decl_count; ++index) {
                             const FengCallableSignature *existing =
                                 &function_set->decls[index]->as.function_decl;
+                            if (existing->type_param_count != decl->as.function_decl.type_param_count) {
+                                continue;
+                            }
                             bool params_eq = parameters_equal(existing, &decl->as.function_decl);
                             bool var_conflict = !params_eq &&
                                 (sig_is_variadic(existing) || sig_is_variadic(&decl->as.function_decl)) &&
