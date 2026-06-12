@@ -9,6 +9,10 @@ import std.json;
 import std.test;
 
 func main(args: string[]) {
+
+  // println("\u001b[32m✓\u001b[0m");
+  println("\x1b[32m✓\x1b[0m");
+
   println("START");
   let obj = JsonObject();
   println("OBJ_CREATED");
