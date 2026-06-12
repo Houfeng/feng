@@ -45,13 +45,13 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
   if !skip { fn(); }
   if skip {
     context.skipped += 1;
-    context.println("{0}⚠️  [SKIP] {1}", indent, name);
+    context.println("{0}\x1b[33m - [SKIP] \x1b[0m{1}", indent, name);
   } else if isTestCase && context.current().state {
     context.passed += 1;
-    context.println("{0}✅ [PASS] {1}", indent, name);
+    context.println("{0}\x1b[32m ✔ [PASS] \x1b[0m{1}", indent, name);
   } else if isTestCase {
     context.failed += 1;
-    context.println("{0}❌ [FAIL] {1}", indent, name);
+    context.println("{0}\x1b[31m ✘ [FAIL] \x1b[0m{1}", indent, name);
   }
   context.flushOutput();
   context.pop();
