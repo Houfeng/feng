@@ -10825,7 +10825,7 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         /* The parser stores the raw lexeme including the surrounding quotes
          * and unprocessed escapes. Decode here. The lexer guarantees the
          * literal is well-formed: starts/ends with '"' and uses only the
-         * supported escape set (\\ \" \n \r \t \0). */
+         * supported escape set (\\ \" \n \r \t \0 \xNN). */
         const char *raw = e->as.string.data;
         size_t rlen = e->as.string.length;
         if (rlen < 2 || raw[0] != '"' || raw[rlen - 1] != '"') {
@@ -10847,6 +10847,39 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                     case 'r':  decoded[di++] = '\r'; break;
                     case 't':  decoded[di++] = '\t'; break;
                     case '0':  decoded[di++] = '\0'; break;
+                    case 'x':
+                        /* \xNN: exactly 2 hex digits → one byte.
+                         * Lexer already validated syntax; this is defensive. */
+                        if (i + 2 >= blen) {
+                            free(decoded);
+                            return cg_fail(cg, e->token,
+                                "codegen: invalid \\x escape: expected 2 hex digits");
+                        }
+                        {
+                            char h1 = body[i + 1];
+                            char h2 = body[i + 2];
+                            unsigned int high, low;
+                            /* Convert hex char to value 0-15 */
+                            if (h1 >= '0' && h1 <= '9')      high = (unsigned int)(h1 - '0');
+                            else if (h1 >= 'a' && h1 <= 'f') high = (unsigned int)(h1 - 'a' + 10);
+                            else if (h1 >= 'A' && h1 <= 'F') high = (unsigned int)(h1 - 'A' + 10);
+                            else {
+                                free(decoded);
+                                return cg_fail(cg, e->token,
+                                    "codegen: invalid \\x escape: expected hex digit");
+                            }
+                            if (h2 >= '0' && h2 <= '9')      low = (unsigned int)(h2 - '0');
+                            else if (h2 >= 'a' && h2 <= 'f') low = (unsigned int)(h2 - 'a' + 10);
+                            else if (h2 >= 'A' && h2 <= 'F') low = (unsigned int)(h2 - 'A' + 10);
+                            else {
+                                free(decoded);
+                                return cg_fail(cg, e->token,
+                                    "codegen: invalid \\x escape: expected hex digit");
+                            }
+                            decoded[di++] = (char)((high << 4) | low);
+                            i += 2; /* skip the 2 hex digits (loop will ++i) */
+                        }
+                        break;
                     default:
                         free(decoded);
                         return cg_fail(cg, e->token,

@@ -17,6 +17,13 @@ static char lexer_peek_raw(const FengLexer *lexer, size_t lookahead) {
     return lexer->source[index];
 }
 
+/* Check if a character is a valid hexadecimal digit (0-9, a-f, A-F). */
+static bool is_hex_digit_char(char c) {
+    return (c >= '0' && c <= '9') ||
+           (c >= 'a' && c <= 'f') ||
+           (c >= 'A' && c <= 'F');
+}
+
 static char lexer_advance(FengLexer *lexer) {
     char current_char;
 
@@ -545,6 +552,41 @@ static FengToken scan_string(FengLexer *lexer,
                 case 'r':
                 case 't':
                 case '0':
+                    break;
+                case 'x':
+                    /* \xNN: exactly 2 hex digits */
+                    if (lexer_at_end(lexer)) {
+                        return make_error(lexer,
+                                          start_offset,
+                                          start_line,
+                                          start_column,
+                                          "invalid \\x escape: expected 2 hex digits");
+                    }
+                    {
+                        char h1 = lexer_advance(lexer);
+                        if (!is_hex_digit_char(h1)) {
+                            return make_error(lexer,
+                                              start_offset,
+                                              start_line,
+                                              start_column,
+                                              "invalid \\x escape: expected hex digit");
+                        }
+                        if (lexer_at_end(lexer)) {
+                            return make_error(lexer,
+                                              start_offset,
+                                              start_line,
+                                              start_column,
+                                              "invalid \\x escape: expected 2 hex digits");
+                        }
+                        char h2 = lexer_advance(lexer);
+                        if (!is_hex_digit_char(h2)) {
+                            return make_error(lexer,
+                                              start_offset,
+                                              start_line,
+                                              start_column,
+                                              "invalid \\x escape: expected hex digit");
+                        }
+                    }
                     break;
                 default:
                     return make_error(lexer,

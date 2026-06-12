@@ -443,6 +443,61 @@ static void test_error_tokens(void) {
     ASSERT(strstr(token.message, "numeric") != NULL);
 }
 
+static void test_hex_escape_valid(void) {
+    FengLexer lexer;
+    FengToken token;
+
+    /* \x1b alone */
+    feng_lexer_init(&lexer, "\"\\x1b\"", 6U, "hex_esc.f");
+    token = next_token(&lexer, FENG_TOKEN_STRING);
+    assert_lexeme(&token, "\"\\x1b\"");
+
+    /* \x1b followed by normal chars */
+    feng_lexer_init(&lexer, "\"\\x1b[32m\"", 10U, "hex_esc2.f");
+    token = next_token(&lexer, FENG_TOKEN_STRING);
+    assert_lexeme(&token, "\"\\x1b[32m\"");
+
+    /* consecutive \xNN */
+    feng_lexer_init(&lexer, "\"\\xe4\\xb8\\xad\"", 14U, "hex_esc3.f");
+    token = next_token(&lexer, FENG_TOKEN_STRING);
+    assert_lexeme(&token, "\"\\xe4\\xb8\\xad\"");
+
+    /* uppercase hex digits */
+    feng_lexer_init(&lexer, "\"\\xAB\\xCD\"", 10U, "hex_esc4.f");
+    token = next_token(&lexer, FENG_TOKEN_STRING);
+    assert_lexeme(&token, "\"\\xAB\\xCD\"");
+
+    /* \xNN followed by hex digit char (should be separate) */
+    feng_lexer_init(&lexer, "\"\\x1b1\"", 7U, "hex_esc5.f");
+    token = next_token(&lexer, FENG_TOKEN_STRING);
+    assert_lexeme(&token, "\"\\x1b1\"");
+}
+
+static void test_hex_escape_invalid(void) {
+    FengLexer lexer;
+    FengToken token;
+
+    /* \x with only 1 hex digit */
+    feng_lexer_init(&lexer, "\"\\x1\"", 5U, "hex_err1.f");
+    token = next_token(&lexer, FENG_TOKEN_ERROR);
+    ASSERT(strstr(token.message, "\\x") != NULL);
+
+    /* \x with no hex digits */
+    feng_lexer_init(&lexer, "\"\\x\"", 4U, "hex_err2.f");
+    token = next_token(&lexer, FENG_TOKEN_ERROR);
+    ASSERT(strstr(token.message, "\\x") != NULL);
+
+    /* \x with non-hex character */
+    feng_lexer_init(&lexer, "\"\\xGG\"", 6U, "hex_err3.f");
+    token = next_token(&lexer, FENG_TOKEN_ERROR);
+    ASSERT(strstr(token.message, "\\x") != NULL);
+
+    /* \x at end of string */
+    feng_lexer_init(&lexer, "\"abc\\x\"", 7U, "hex_err4.f");
+    token = next_token(&lexer, FENG_TOKEN_ERROR);
+    ASSERT(strstr(token.message, "\\x") != NULL);
+}
+
 static void test_bitwise_tokens(void) {
     FengLexer lexer;
     const char *source = "a & b | c ^ d << 1 >> 2 ~e";
@@ -651,6 +706,8 @@ int main(void) {
     test_doc_comment_attaches_to_next_token();
     test_doc_comment_binding_breaks_on_blank_line_and_normal_comment();
     test_error_tokens();
+    test_hex_escape_valid();
+    test_hex_escape_invalid();
     test_bitwise_tokens();
     test_compound_assignment_tokens();
     test_numeric_literal_bases_and_separators();
