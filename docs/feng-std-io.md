@@ -6,8 +6,8 @@
 
 - 为 Feng 提供一个可复用的标准输入输出对象 `Stdio`，把底层字节 I/O 与上层文本封装收敛到同一处公开面。
 - 保持低层 API bytes-first：`read`、`write` 与 `writeError` 都直接处理 `byte` 缓冲或 `byte[]` 数据，不隐式引入文本编码规则。
-- 提供最小必要的按行便利能力：`Stdio.readLine` 与 `Stdio.writeLine` 都直接面向 UTF-8 `string`，`Stdio.write` 与 `Stdio.writeError` 提供 `string` 便利重载，顶层 `readLine`、`writeLine`、`format`、`print` 与 `println` 负责默认实例上的文本包装。
-- 为现有使用方保留顶层函数 `readLine`、`writeLine`、`format`、`print` 与 `println`；这些函数只是默认实例 `stdio` 的语义包装或共享格式化入口，不另建独立实现分支。
+- 提供最小必要的按行便利能力：`Stdio.readLine` 与 `Stdio.writeLine` 都直接面向 UTF-8 `string`，`Stdio.write` 与 `Stdio.writeError` 提供 `string` 便利重载，顶层 `readLine`、`writeLine`、`print` 与 `println` 负责默认实例上的文本包装。
+- 顶层 `print` 支持任何满足 `Display` 契约的参数，并与 `println` 的 `string` 参数重载共享 `string.format` 的 `{argsIndex}` 插值语义；标准库不再提供独立的顶层 `format`，格式化字符串应使用 `string.format`。
 
 ## 2 公开 API
 
@@ -35,9 +35,10 @@
 | --- | --- | --- |
 | `readLine` | `open func readLine(): string` | `stdio.readLine()` 的顶层包装 |
 | `writeLine` | `open func writeLine(text: string): long` | `stdio.writeLine(text)` 的顶层包装 |
-| `format` | `open func format(fmt: string, args: string...): string` | 返回将 `fmt` 按 `{argsIndex}` 规则插值后的字符串，不自动追加换行 |
-| `print` | `open func print(format: string, args: string...): long` | 将 `format` 按 `{argsIndex}` 规则插值后输出到默认标准输出，不自动追加换行 |
+| `print` | `open func print(format: string, args: string...): long` | 将变长 `string` 参数按 `{argsIndex}` 规则插值后输出到默认标准输出，不自动追加换行 |
+| `print` | `open func print(format: string, args: Display...): long` | 先将每个 `args` 按 `Display.toString()` 转为 `string`，再按 `{argsIndex}` 规则插值输出到默认标准输出，不自动追加换行 |
 | `println` | `open func println(format: string, args: string...): long` | 将 `format` 按 `{argsIndex}` 规则插值后输出到默认标准输出，并追加单个 `"\n"` |
+| `println` | `open func println(format: string, args: Display...): long` | 先将每个 `args` 按 `Display.toString()` 转为 `string`，再按 `{argsIndex}` 规则插值输出到默认标准输出，并追加单个 `"\n"` |
 
 ## 3 语义
 
@@ -61,27 +62,29 @@
 - `Stdio.readLine()` 必须忽略行内的回车字节 `"\r"`，以兼容 `CRLF` 输入；该规则只影响按行读取包装，不改变低层 `read` 的原始字节语义。
 - `Stdio.readLine()` 若底层 `read` 返回负值错误结果，不得静默吞掉错误；实现必须抛出明确的标准库异常文本。
 
-### 3.3 `format`、`print` 与 `println`
+### 3.3 `string.format`、`print` 与 `println`
 
-- 顶层 `format(fmt, args...)` 先解析 `fmt` 的 UTF-8 字节序列，再返回插值后的新 `string`，不自动追加换行。
+- 字符串格式化能力由 `string.format(format, args...)` 提供；标准库 `std.io` 不再提供独立的顶层 `format` 函数。
 - 顶层 `print(format, args...)` 先解析 `format` 的 UTF-8 字节序列，再把解析结果写到默认标准输出，不自动追加换行。
-- 顶层 `println(format, args...)` 与 `print(format, args...)` 拥有相同的入参与返回语义，唯一区别是 `println` 会在末尾自动追加单个 `"\n"` 字节。
+- 当 `print` 的 `args` 为满足 `Display` 的类型时，必须先按参数顺序调用每个参数的 `toString()` 得到 `string` 参数序列，再执行 `{argsIndex}` 插值。
+- 顶层 `println(format, args...)` 与 `print(format, args...)` 共享同一套 `string` 参数插值语义，唯一区别是 `println` 会在末尾自动追加单个 `"\n"` 字节。
 - 占位符语法固定为 `{argsIndex}`：其中 `argsIndex` 是十进制、零基、仅由 ASCII 数字组成的参数下标，例如 `{0}`、`{1}`、`{12}`。
-- 当占位符合法且 `argsIndex` 在 `args` 范围内时，`print` 必须以对应 `args[argsIndex]` 的 UTF-8 字节序列替换该占位符。
+- 当占位符合法且 `argsIndex` 在 `args` 范围内时，`print` 必须以对应参数的 UTF-8 字节序列替换该占位符。
 - 当 `{...}` 片段不是合法占位符，或合法但下标越界时，`print` 必须按字面文本原样输出该片段，不得报错、丢弃或做其他隐式转换。
-- 顶层 `format(fmt, args...)` 的返回值是插值完成后的 `string`，其中不包含任何隐式追加的换行字节。
 - 顶层 `print(format, args...)` 的返回值是实际写到默认标准输出的总字节数；若调用方在 `format` 中显式包含 `"\n"`，该换行字节计入返回值。
 - 顶层 `println(format, args...)` 的返回值是实际写到默认标准输出的总字节数，包含其自动追加的单个换行字节。
 - 需要换行时，调用方可以显式在 `format` 中加入 `"\n"`，或者直接调用 `writeLine(text)`。
-- `format`、`print` 与 `println` 都只接受 `string` 与 `string...`；不得为其引入隐式数值转字符串、`spec` 值格式化或其他未定义的格式系统。
+- `print` 与 `println` 不引入除 `{argsIndex}` 与 `Display.toString()` 之外的其他格式化规则。
 
 ### 3.4 顶层兼容包装
 
 - 顶层 `readLine()` 的语义固定等价于 `stdio.readLine()`。
 - 顶层 `writeLine(text)` 的语义固定等价于 `stdio.writeLine(text)`。
-- 顶层 `format(fmt, args...)` 与 `print/println` 必须共享同一套 `{argsIndex}` 插值语义。
-- 顶层 `print(format, args...)` 的语义固定等价于把 variadic `args` 组装成 `string[]`、完成 `{argsIndex}` 插值后委托给 `stdio.write(...)`。
-- 顶层 `println(format, args...)` 的语义固定等价于把 variadic `args` 组装成 `string[]`、完成 `{argsIndex}` 插值后委托给 `stdio.writeLine(...)`。
+- 顶层 `print` 与 `println` 必须共享 `string.format` 的 `{argsIndex}` 插值语义。
+- 顶层 `print(format, args...)` 的 `string...` 重载必须保留原有语义：把 `args` 作为字符串参数序列完成 `{argsIndex}` 插值后委托给 `stdio.write(...)`。
+- 顶层 `print(format, args...)` 的 `Display...` 重载必须先将每个参数按顺序转换为 `string`，再完成 `{argsIndex}` 插值并委托给 `stdio.write(...)`。
+- 顶层 `println(format, args...)` 的 `string...` 重载语义固定等价于把 variadic `args` 组装成 `string[]`、完成 `{argsIndex}` 插值后委托给 `stdio.writeLine(...)`。
+- 顶层 `println(format, args...)` 的 `Display...` 重载必须先将每个参数按顺序转换为 `string`，再完成 `{argsIndex}` 插值并委托给 `stdio.writeLine(...)`。
 - 兼容顶层函数不得拥有与 `stdio` 方法不一致的独立分支逻辑。
 
 ## 4 规则
@@ -98,22 +101,21 @@
 - [必须] `Stdio` 不得公开 `print` 方法；带格式插值的文本输出便利能力只由顶层 `print` 提供。
 - [必须] 顶层 `readLine` 的签名固定为 `readLine(): string`。
 - [必须] 顶层 `writeLine` 的签名固定为 `writeLine(text: string): long`。
-- [必须] 顶层 `format` 的签名固定为 `format(fmt: string, args: string...): string`。
-- [必须] 顶层 `print` 的签名固定为 `print(format: string, args: string...)`。
-- [必须] 顶层 `println` 的签名固定为 `println(format: string, args: string...): long`，并且其入参与返回类型必须与 `print` 完全一致。
+- [必须] 顶层 `print` 必须保留 `print(format: string, args: string...): long` 字符串参数重载，并新增 `Display...` 参数重载。
+- [必须] 顶层 `println` 必须保留 `println(format: string, args: string...): long` 字符串参数重载，并新增 `Display...` 参数重载。
 - [必须] 顶层 `print` 默认不得追加换行；需要换行时只能由调用方显式提供 `"\n"` 或调用 `writeLine`。
 - [必须] 顶层 `println` 必须自动追加且只能追加一个 `"\n"` 字节。
 - [必须] `{argsIndex}` 占位符中的下标按零基解释。
 - [必须] 非法或越界占位符按字面文本输出，不得抛错或静默删除。
 - [必须] 当前标准库 `stdio` 不得暴露 `flush()`；只有在引入独立可见缓冲后才允许新增。
-- [必须] 顶层 `readLine`、`writeLine`、`format`、`print` 与 `println` 都必须与默认实例或共享格式化语义保持一致。
+- [必须] 顶层 `readLine`、`writeLine`、`print` 与 `println` 都必须与默认实例或共享格式化语义保持一致。
 - [禁止] 为 `write` 或 `writeError` 自动追加换行。
-- [禁止] 为 `print` 或 `println` 引入除 `{argsIndex}` 之外的隐式格式规则。
+- [禁止] 为 `print` 或 `println` 引入除 `{argsIndex}` 与 `Display.toString()` 之外的隐式格式规则。
 - [禁止] 在兼容层重新实现一套独立 I/O 行为，导致与 `stdio` 语义分叉。
 
 ## 5 关联
 
 - [feng-language.md](./feng-language.md): 语言核心总览。
 - [feng-builtin-type.md](./feng-builtin-type.md): `string`、`byte`、`byte[]` 与 `byte[!]` 的语义。
-- [feng-function-variadic.md](./feng-function-variadic.md): 顶层 `print(format, args: string...)` 使用的变长参数规则。
+- [feng-function-variadic.md](./feng-function-variadic.md): 顶层 `print(format, args...)` 使用的变长参数规则。
 - [feng-interop.md](./feng-interop.md): 标准库通过普通 `extern func` 暴露原生能力时的 ABI 约束。

@@ -1,12 +1,13 @@
 open module std.numeric;
 
+import std;
 import std.text;
 import std.collections;
 
 /**
  * Extends i16 with conversion operations.
  */
-open fit i16 {
+open fit i16: Display {
   /**
    * Returns the decimal string representation of this integer.
    * @return decimal string

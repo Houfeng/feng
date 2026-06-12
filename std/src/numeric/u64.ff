@@ -1,12 +1,13 @@
 open module std.numeric;
 
+import std;
 import std.text;
 import std.collections;
 
 /**
  * Extends u64 with conversion operations.
  */
-open fit u64 {
+open fit u64: Display {
   /**
    * Returns the decimal string representation of this unsigned integer.
    * @return decimal string

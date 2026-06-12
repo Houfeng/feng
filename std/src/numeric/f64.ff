@@ -1,5 +1,6 @@
 open module std.numeric;
 
+import std;
 import std.text;
 import std.collections;
 
@@ -18,7 +19,7 @@ extern func feng_pointer_get_scalar<T>(ptr: long*): T;
 /**
  * Extends f64 with conversion operations.
  */
-open fit f64 {
+open fit f64: Display {
   /**
    * Returns the decimal string representation of this f64 value.
    * Uses "%g" format which removes trailing zeros.

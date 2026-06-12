@@ -1,12 +1,13 @@
 open module std.numeric;
 
+import std;
 import std.text;
 import std.collections;
 
 /**
  * Extends i64 (long) with conversion operations.
  */
-open fit i64 {
+open fit i64: Display {
   /**
    * Returns the decimal string representation of this integer.
    * Uses negative accumulation to correctly handle the minimum value.

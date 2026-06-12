@@ -1,5 +1,6 @@
 open module std.text;
 
+import std;
 import std.collections;
 
 @cdecl("feng_std_unistring", "uc_toupper")
@@ -38,7 +39,15 @@ extern func feng_pointer_diff(a: string*, b: string*): long;
 /**
  * Extends `string` with standard UTF-8 operations.
  */
-open fit string {
+open fit string: Display {
+  /**
+   * Returns this string unchanged.
+   * @return this string
+   */
+  open func toString(): string {
+    return self;
+  }
+
   /**
    * Returns a new string by copying all bytes from `bytes`.
    * @param bytes - UTF-8 byte sequence to copy

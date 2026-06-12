@@ -36,6 +36,8 @@
 | `bool` | - | `bool` | 布尔类型,值为 `true` / `false` | `false` |
 | `string` | - | - | UTF-8 字符串 | `""` |
 
+标准库在 `std/src/basic` 定义 `Display` 契约，要求实现 `toString(): string`。标准库内置基础类型 `i8`、`i16`、`i32`（`int`）、`i64`（`long`）、`u8`（`byte`）、`u16`、`u32`、`u64`、`f32`（`float`）、`f64`（`double`）、`bool` 与 `string` 都声明满足 `Display`。
+
 ## 4 字符串类型
 
 `string` 是 Feng 的内置字符串类型，采用 UTF-8 编码，由自动内存管理机制托管，内容不可变。

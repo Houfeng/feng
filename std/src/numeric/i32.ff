@@ -1,12 +1,13 @@
 open module std.numeric;
 
+import std;
 import std.text;
 import std.collections;
 
 /**
  * Extends i32 with conversion operations.
  */
-open fit i32 {
+open fit i32: Display {
   /**
    * Returns the decimal string representation of this integer.
    * @return decimal string

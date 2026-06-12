@@ -1,5 +1,6 @@
 open module std.numeric;
 
+import std;
 import std.text;
 import std.collections;
 
@@ -12,7 +13,7 @@ extern func snprintf_f32(buf: byte*, size: long, fmt: byte*, value: f32): i32;
 /**
  * Extends f32 with conversion operations.
  */
-open fit f32 {
+open fit f32: Display {
   /**
    * Returns the decimal string representation of this f32 value.
    * Uses "%g" format which removes trailing zeros.

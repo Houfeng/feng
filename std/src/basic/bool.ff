@@ -1,6 +1,6 @@
 open module std;
 
-open fit bool {
+open fit bool: Display {
 
   func toString(): string {
     return if self { "true" } else { "false" };
