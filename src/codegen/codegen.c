@@ -30512,12 +30512,26 @@ static bool cg_generic_type_param_names(CG *cg, const FengDecl *decl,
     return true;
 }
 
-/* Returns true if the method is treated as public for cross-module dispatch.
- * Public methods use ordinal m<N> (counting only public methods) so consumers
- * that only see the bundle interface assign the same index as the library,
- * ensuring cross-module generic method dispatch links correctly. */
-static bool cg_generic_method_is_public(const FengTypeMember *member) {
-    return member->visibility == FENG_VISIBILITY_PUBLIC;
+/* Public-surface generic type methods use ordinal m<N> so consumers that only
+ * see the bundle interface assign the same index as the library. A public
+ * type's non-private members belong to that public surface, including members
+ * with default visibility. */
+static bool cg_generic_type_member_exports_public_surface(const FengDecl *decl,
+                                                          const FengTypeMember *member,
+                                                          FengCompileTarget target) {
+    return target == FENG_COMPILE_TARGET_LIB &&
+           decl != NULL &&
+           decl->visibility == FENG_VISIBILITY_PUBLIC &&
+           member != NULL &&
+           member->visibility != FENG_VISIBILITY_PRIVATE;
+}
+
+static bool cg_generic_type_member_uses_public_symbol(const FengDecl *decl,
+                                                      const FengTypeMember *member) {
+    return decl != NULL &&
+           decl->visibility == FENG_VISIBILITY_PUBLIC &&
+           member != NULL &&
+           member->visibility != FENG_VISIBILITY_PRIVATE;
 }
 
 static char *cg_generic_type_method_shared_cname(CG *cg,
@@ -30545,13 +30559,13 @@ static char *cg_generic_type_method_shared_cname(CG *cg,
      * methods and constructors). Private/internal members use their private
      * ordinal (i<N>). This ensures consumers that only see the public
      * interface assign the same m<N> index as the library. */
-    bool is_pub = cg_generic_method_is_public(member);
+    bool is_pub = cg_generic_type_member_uses_public_symbol(decl, member);
     size_t ordinal = 0;
     for (size_t _i = 0; _i < decl->as.type_decl.member_count; ++_i) {
         const FengTypeMember *_c = decl->as.type_decl.members[_i];
         if (_c->kind != FENG_TYPE_MEMBER_METHOD &&
             _c->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) continue;
-        if (cg_generic_method_is_public(_c) != is_pub) continue;
+        if (cg_generic_type_member_uses_public_symbol(decl, _c) != is_pub) continue;
         if (_c == member) break;
         ordinal++;
     }
@@ -30657,9 +30671,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         ? strdup(shared_name_override)
         : cg_generic_type_method_shared_cname(cg, decl, member);
     if (!shared_name) return cg_fail(cg, member->token, "codegen: out of memory");
-    bool export_shared = target == FENG_COMPILE_TARGET_LIB &&
-                         decl->visibility == FENG_VISIBILITY_PUBLIC &&
-                         member->visibility == FENG_VISIBILITY_PUBLIC;
+    bool export_shared = cg_generic_type_member_exports_public_surface(decl, member, target);
     bool is_static_method = member->is_static;
 
     size_t outer_tp_count = decl->as.type_decl.type_param_count;

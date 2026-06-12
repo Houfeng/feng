@@ -34,16 +34,3 @@ open type LibGenericOuter<T: Display> {
     return self.inner.displayPayload2();
   }
 }
-
-open func lib_generic_constraint_forwarding(): bool {
-  let payload = LibGenericDisplayPayload { value: 42 };
-  let inner = LibGenericInner<LibGenericDisplayPayload, LibGenericDisplayPayload> {
-    name: "inner",
-    payload1: payload,
-    payload2: payload,
-    value: 1
-  };
-  let outer = LibGenericOuter<LibGenericDisplayPayload> { inner: inner };
-  let copied = outer.getInner();
-  return copied.displayPayload2() == "lib-generic-display-payload" && outer.displayInner() == "lib-generic-display-payload";
-}

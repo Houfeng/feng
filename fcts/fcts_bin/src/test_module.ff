@@ -42,7 +42,7 @@ open func test_module() {
     });
 
     test("cross-package open generic constraint forwarding", () {
-      assert(lib_generic_constraint_forwarding(), "cross-package open generic constraint forwarding");
+      assert(generic_constraint_forwarding_cross_package(), "cross-package open generic constraint forwarding");
     });
   });
 }
