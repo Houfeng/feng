@@ -28,6 +28,12 @@ func main(args: string[]) {
       });
       test("should create a JSON object", () {
           assert(false, "JSON object create");
+          test("should create a JSON object", () {
+            assert(false, "JSON object create");
+          });
+          test("should create a JSON object", () {
+            assert(false, "JSON object create");
+          });
       });
   });
 }
