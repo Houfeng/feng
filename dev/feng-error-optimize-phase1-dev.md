@@ -52,9 +52,23 @@ path:line:col: kind: message
 
 `{前缀}{4位数字}:`，例如 `SE0001:`、`AE0042:`
 
-- 4 位数字从 `0001` 开始递增
+- 4 位数字从 `0001` 开始递增，**各阶段独立编号**
 - 错误码后必须跟 `:` 再跟消息文本
 - 本阶段错误码可临时硬编码，Phase 2 再统一码表管理
+
+### 3.3 错误码分配原则
+
+- **按阶段归属**：错误码前缀由**产生错误的阶段**决定，而非传递错误的结构体。例如词法错误虽通过 `FengParseError` 传出，但其产生阶段是词法分析，应使用 LE 前缀。
+- **同一错误同一码**：同一阶段内，**相同错误消息文本**必须使用相同的错误码，不因出现位置不同而分配不同编号。
+- **基础设施错误归入所在阶段**：如 `out of memory` 等错误，按其发生阶段归类（parser 中的 OOM → SE，semantic 中的 OOM → AE，codegen 中的 OOM → CE）。
+
+### 3.4 词法错误（LE）的处理方式
+
+当前架构中，lexer 不直接报出错误，而是产生 `FENG_TOKEN_ERROR` token 并将错误消息挂在 `token.error_message` 上返回。parser 在 `parser_tokenize()`（`src/parser/parser.c`）中检测到该 token 后，将其转为 `FengParseError` 传出。
+
+**LE 前缀的判定规则**：在 `parser_tokenize()` 中，当检测到 `token.kind == FENG_TOKEN_ERROR` 时，该错误由词法阶段产生，`parser->error.code` 应使用 LE 前缀。parser 自身在其他位置（如 `parser_error_at()` / `parser_error_current()` / `parser_expect()` 等函数中）产生的错误，使用 SE 前缀。
+
+**实现方式**：给 `FengToken` 增加 `const char *error_code` 字段，并将现有 `message` 重命名为 `error_message`（两者对称：正常 token 均为 NULL，错误 token 均非 NULL）。lexer 在 `make_error()` 中直接硬编码对应的 LE 错误码字符串字面量赋值给 `token.error_code`，parser 在 `parser_tokenize()` 中透传 `token.error_code` → `parser->error.code`，无需字符串匹配。所有引用 `token.message` 的代码同步改为 `token.error_message`。具体的 LE 错误码在实现时根据 lexer 中 `make_error()` 的所有调用点逐一确定，相同消息文本使用相同错误码。Phase 2 再统一为码表管理。
 
 ## 4. 输出格式规范
 
@@ -87,13 +101,16 @@ SE0001: expression statements and local bindings must end with ';'
 
 ### 5.1 需要修改的文件
 
-#### 5.1.1 核心编译器：三个错误结构体增加 `code` 字段
+#### 5.1.1 核心编译器：错误相关结构体增加 `code` 字段
 
+- `src/lexer/token.h` — `FengToken` 中现有 `message` 字段重命名为 `error_message`，新增 `const char *error_code`（与 `error_message` 对称，正常 token 两者均为 NULL，错误 token 由 lexer 在 `make_error()` 中直接赋值 LE 错误码字面量）。所有引用 `token.message` 的代码同步改为 `token.error_message`
 - `src/parser/parser.h` — `FengParseError` 增加 `const char *code`
 - `src/semantic/semantic.h` — `FengSemanticError` 增加 `const char *code`
 - `src/codegen/codegen.h` — `FengCodegenError` 增加 `const char *code`
 
 各模块在构造错误时填入对应的错误码字符串字面量（如 `"SE0001"`），指向 `.rodata` 段静态字符串，无需动态分配和释放。
+
+**词法错误的处理**：lexer 在 `make_error()` 中直接设置 `token.error_code` 为 LE 前缀的错误码字面量。parser 在 `parser_tokenize()` 中透传 `token.error_code` → `parser->error.code`。parser 自身产生的语法错误在 `parser_error_at()` / `parser_error_current()` / `parser_expect()` 等函数中设置 SE 前缀的 code。
 
 #### 5.1.2 CLI：渲染函数参数及输出格式调整
 
@@ -155,9 +172,12 @@ void feng_cli_print_diagnostic(FILE *stream,
 
 ### 实现阶段
 
+- [ ] `FengToken` 中 `message` 重命名为 `error_message`，新增 `const char *error_code`（`src/lexer/token.h`），`make_token()` 中初始化为 NULL，所有引用 `token.message` 的代码同步改为 `token.error_message`
+- [ ] lexer 的 `make_error()` 增加 `error_code` 参数，所有调用点传入对应的 LE 错误码字面量（`src/lexer/lexer.c`）
 - [ ] 三个错误结构体增加 `const char *code` 字段（`src/parser/parser.h`、`src/semantic/semantic.h`、`src/codegen/codegen.h`）
 - [ ] 全量回归测试（结构体变更后）
-- [ ] 核心编译器各模块在构造错误时填入错误码字符串字面量（parser → `"SE..."`、semantic → `"AE..."`、codegen → `"CE..."`）
+- [ ] `parser_tokenize()` 中透传 `token.error_code` → `parser->error.code`；parser 自身错误在 `parser_error_at()` 等函数中设置 SE 错误码（`src/parser/parser.c`）
+- [ ] 核心编译器 semantic、codegen 模块在构造错误时填入错误码字符串字面量（semantic → `"AE..."`、codegen → `"CE..."`）
 - [ ] 全量回归测试（错误码填入后）
 - [ ] `feng_cli_print_diagnostic` 签名中 `kind` 参数改为 `code`，输出格式调整为两行（`src/cli/common.h`、`src/cli/common.c`）
 - [ ] 全量回归测试（渲染函数变更后）
