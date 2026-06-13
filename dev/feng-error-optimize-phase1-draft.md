@@ -26,16 +26,16 @@ path:line:col: kind: message
 将错误输出格式调整为：
 
 ```
+{path}:{line}:{col}
 {错误码}: {消息}
--> {path}:{line}:{col}:
   {源码上下文}
   ^ pointer
 ```
 
 **核心变化**：
-- 错误码 + 消息前置，核心诊断信息第一时间可见
-- 路径位置降级为辅助定位，用 `->` 引导
-- 移除 `kind` 文本（"parse error" 等），由错误码前缀表达类型
+- 位置信息独占第一行，与诊断描述分行显示，终端视觉更清晰
+- 错误码 + 消息在第二行，移除 `kind` 文本（"parse error" 等），由错误码前缀表达类型
+- 第一行位置信息末尾不加 `:`
 
 ## 3. 错误码编码规则
 
@@ -61,16 +61,16 @@ path:line:col: kind: message
 ### 4.1 单条错误
 
 ```
+/path/to/file.ff:17:3
 SE0001: expression statements and local bindings must end with ';'
--> /path/to/file.ff:17:3:
   got: KW_LET "let"
   17 |   let obj = JsonObject();
      |   ^
 ```
 
 **结构分解**：
-- **第 1 行**：`{错误码}: {消息}` — 核心诊断信息
-- **第 2 行**：`-> {path}:{line}:{col}:` — 位置信息
+- **第 1 行**：`{path}:{line}:{col}` — 位置信息，无尾部冒号
+- **第 2 行**：`{错误码}: {消息}` — 核心诊断信息
 - **后续行**：源码上下文 + `^` 指针（保持现有逻辑不变）
 
 ### 4.2 多条错误
@@ -116,7 +116,7 @@ void feng_cli_print_diagnostic(FILE *stream,
 
 - `kind` 参数（原值为 `"parse error"` / `"semantic error"` / `"codegen error"`）替换为 `error_code`（如 `"SE0001"`）
 - 调用方负责传入完整的错误码字符串（含前缀和数字）
-- 函数内部按 `{error_code}: {message}` 格式输出第一行，不再拼接 kind 文本
+- 函数内部按新格式输出：第一行 `{path}:{line}:{col}`（无尾部冒号），第二行 `{error_code}: {message}`，后续为源码上下文
 
 ### 5.2 不需要修改的部分
 
