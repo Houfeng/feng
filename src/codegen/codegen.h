@@ -64,8 +64,9 @@ typedef struct FengCodegenOutput {
 } FengCodegenOutput;
 
 typedef struct FengCodegenError {
-    char    *message;            /* malloc'd, owned by caller */
     FengToken token;             /* offending token (line/col only) */
+    const char *code;            /* error code, e.g. "CE0001" */
+    char    *message;            /* malloc'd, owned by caller */
     const char *path;            /* borrowed, source path */
 } FengCodegenError;
 

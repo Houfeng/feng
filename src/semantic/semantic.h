@@ -13,9 +13,10 @@ extern "C" {
 
 
 typedef struct FengSemanticError {
-    const char *path;
-    char *message;
     FengToken token;
+    const char *code;
+    char *message;
+    const char *path;
 } FengSemanticError;
 
 typedef struct FengSemanticInfo {

@@ -176,7 +176,7 @@ void feng_cli_print_diagnostic(FILE *stream,
 
 - [x] `FengToken` 中 `message` 重命名为 `error_message`，新增 `const char *error_code`（`src/lexer/token.h`），`make_token()` 中初始化为 NULL，所有引用 `token.message` 的代码同步改为 `token.error_message`
 - [x] lexer 的 `make_error()` 增加 `error_code` 参数，所有调用点传入对应的 LE 错误码字面量（`src/lexer/lexer.c`）
-- [ ] 三个错误结构体增加 `const char *code` 字段（`src/parser/parser.h`、`src/semantic/semantic.h`、`src/codegen/codegen.h`）
+- [x] 三个错误结构体增加 `const char *code` 字段（`src/parser/parser.h`、`src/semantic/semantic.h`、`src/codegen/codegen.h`）
 - [ ] 全量回归测试（结构体变更后）
 - [ ] `parser_tokenize()` 中透传 `token.error_code` → `parser->error.code`；parser 自身错误在 `parser_error_at()` 等函数中设置 SE 错误码（`src/parser/parser.c`）
 - [ ] 核心编译器 semantic、codegen 模块在构造错误时填入错误码字符串字面量（semantic → `"AE..."`、codegen → `"CE..."`）

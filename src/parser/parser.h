@@ -510,8 +510,9 @@ typedef struct FengProgram {
 } FengProgram;
 
 typedef struct FengParseError {
-    const char *message;
     FengToken token;
+    const char *code;
+    const char *message;
 } FengParseError;
 
 bool feng_parse_source(const char *source,
