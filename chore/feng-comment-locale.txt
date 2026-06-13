@@ -1,0 +1,15 @@
+ /**
+  * Splits this string by a regex pattern.
+  * @param pattern - regex pattern string
+  * @return array of substrings
+  * 
+  * @locale zh-CN
+  * 将此字符串按正则表达式模式分割。
+  * @param pattern - 正则表达式模式字符串
+  * @return 子字符串数组
+  * 
+  * @locale zh-HK
+  * 將此字符串按正則表達式模式分割。
+  * @param pattern - 正則表達式模式字符串
+  * @return 子字符串數組
+  */
