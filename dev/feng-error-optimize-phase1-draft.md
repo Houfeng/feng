@@ -150,3 +150,32 @@ void feng_cli_print_diagnostic(FILE *stream,
 - 现有测试用例中有大量硬编码的错误消息断言，格式变更后需同步更新
 - 修改测试用例需获得明确的人工批准
 - LSP 插件（VSCode/Zed）可能需要适配新的输出格式以正确解析 diagnostic code
+
+## 8. 开发任务拆解
+
+### 实现阶段
+
+- [ ] 三个错误结构体增加 `const char *code` 字段（`src/parser/parser.h`、`src/semantic/semantic.h`、`src/codegen/codegen.h`）
+- [ ] 全量回归测试（结构体变更后）
+- [ ] 核心编译器各模块在构造错误时填入错误码字符串字面量（parser → `"SE..."`、semantic → `"AE..."`、codegen → `"CE..."`）
+- [ ] 全量回归测试（错误码填入后）
+- [ ] `feng_cli_print_diagnostic` 签名中 `kind` 参数改为 `code`，输出格式调整为两行（`src/cli/common.h`、`src/cli/common.c`）
+- [ ] 全量回归测试（渲染函数变更后）
+- [ ] CLI 层所有 `feng_cli_print_diagnostic` 调用点将硬编码分类标签替换为从结构体取 `code` 字段传入，涉及以下文件（均在 `src/cli/` 下，非核心编译器）：
+  - `src/cli/compile/direct.c` — 新版编译路径，通过回调处理错误，3 处调用（parse error / semantic error / semantic info）
+  - `src/cli/compile/legacy.c` — 旧版单文件编译路径，直接调用 parser/semantic/codegen，3 处调用（parse error / semantic error / codegen error）
+  - `src/cli/tool/parse.c` — `feng parse` 子命令，1 处调用（parse error）
+  - `src/cli/tool/semantic.c` — `feng semantic` 子命令，3 处调用（parse error / semantic error / info）
+  - `src/cli/project/check.c` — `feng check` 子命令，3 处调用（parse error / semantic error / semantic info）
+  - 示例：`"parse error"` → `error->code`，`"semantic error"` → `error->code`，`"codegen error"` → `cgerr.code`
+- [ ] 全量回归测试（调用点变更后）
+
+### 测试阶段
+
+- [ ] 更新测试用例中的错误输出断言（需人工批准后执行）
+- [ ] 运行全量回归测试，确保未破坏现有错误输出行为
+
+### 收尾阶段
+
+- [ ] 检查 lint 错误，确保修改文件无新增问题
+- [ ] 给出建议的 commit message
