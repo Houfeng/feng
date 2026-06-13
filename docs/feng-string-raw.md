@@ -44,18 +44,15 @@ line2`             // 多行文本，中间包含真实换行符 (0x0A)
 
 | 阶段 | 文件 | 职责 |
 |------|------|------|
-| Lexer | `src/lexer/lexer.c` | 识别 `` ` `` 界定符，扫描至配对 `` ` ``，将 `` `` `` 替换为 `` ` ``，去掉首尾界定符 |
-| Codegen | `src/codegen/codegen.c` | 反引号字符串无需转义解码，直接将 token 内容作为字节数组传给 `cg_string_literal_var()` |
+| Lexer | `src/lexer/lexer.c` | 识别 `` ` `` 界定符，扫描至配对 `` ` ``，保留首尾界定符，输出 `FENG_TOKEN_STRING`（与双引号字符串相同 token kind） |
+| Parser | `src/parser/parser.c` | 将 `FENG_TOKEN_STRING` 映射为 `FENG_EXPR_STRING` AST 节点（无需区分） |
+| Codegen | `src/codegen/codegen.c` | 通过检查 `lexeme[0]` 区分字符串类型：`"` 走转义解码，`` ` `` 去掉首尾界定符并将 `` `` `` 替换为 `` ` `` |
 | Runtime | `src/runtime/feng_string.c` | `feng_string_literal()` 仅做 memcpy，不做任何转换 |
 
 ## Codegen 处理方案
 
-反引号字符串在 Lexer 阶段已完成以下处理：
--   去掉首尾 `` ` `` 界定符
--   将 `` `` `` 替换为单个 `` ` ``
+反引号字符串在 Lexer 阶段保留首尾 `` ` `` 界定符，并输出 `FENG_TOKEN_STRING`（与双引号字符串使用相同的 token kind）。Parser 统一将其映射为 `FENG_EXPR_STRING` AST 节点。
 
-Lexer 输出 `FENG_TOKEN_RAW_STRING` token（区别于双引号的 `FENG_TOKEN_STRING`）。Parser 将两种 token 均映射为 `FENG_EXPR_STRING` AST 节点，但保留原始 token kind 信息。
-
-Codegen 在处理 `FENG_EXPR_STRING` 时，通过检查原始 token kind 区分：
--   `FENG_TOKEN_STRING`：走转义解码循环（现有逻辑）
--   `FENG_TOKEN_RAW_STRING`：**不走转义解码循环**，直接将 token 内容（已去掉界定符、已替换 `` `` ``）作为字节数组传给 `cg_string_literal_var()`
+Codegen 在处理 `FENG_EXPR_STRING` 时，通过检查 `e->as.string.data[0]` 区分：
+-   `"`：走转义解码循环（现有逻辑），去掉首尾 `"`
+-   `` ` ``：**不走转义解码循环**，去掉首尾 `` ` ``，将 `` `` `` 替换为单个 `` ` ``，直接将处理后的字节数组传给 `cg_string_literal_var()`

@@ -608,6 +608,40 @@ static FengToken scan_string(FengLexer *lexer,
                       "unterminated string literal");
 }
 
+static FengToken scan_raw_string(FengLexer *lexer,
+                                 size_t start_offset,
+                                 unsigned int start_line,
+                                 unsigned int start_column) {
+    /* Scan until matching closing backtick. Handle `` as escaped backtick.
+     * Newlines are preserved as-is. Delimiters are kept in lexeme (like
+     * double-quoted strings). */
+    while (!lexer_at_end(lexer)) {
+        char c = lexer_peek_raw(lexer, 0);
+
+        if (c == '`') {
+            /* Check for escaped backtick: `` -> skip both, continue scanning */
+            if (lexer_peek_raw(lexer, 1) == '`') {
+                (void)lexer_advance(lexer);
+                (void)lexer_advance(lexer);
+                continue;
+            }
+
+            /* Single backtick terminates the raw string */
+            (void)lexer_advance(lexer);
+            return make_token(lexer, FENG_TOKEN_STRING, start_offset, start_line, start_column);
+        }
+
+        /* All other characters (including newlines) are consumed as-is */
+        (void)lexer_advance(lexer);
+    }
+
+    return make_error(lexer,
+                      start_offset,
+                      start_line,
+                      start_column,
+                      "unterminated raw string literal");
+}
+
 static FengToken scan_token_internal(FengLexer *lexer) {
     FengToken trivia_error;
     size_t start_offset;
@@ -642,6 +676,8 @@ static FengToken scan_token_internal(FengLexer *lexer) {
             return scan_annotation(lexer, start_offset, start_line, start_column);
         case '"':
             return scan_string(lexer, start_offset, start_line, start_column);
+        case '`':
+            return scan_raw_string(lexer, start_offset, start_line, start_column);
         case '(':
             return make_token(lexer, FENG_TOKEN_LPAREN, start_offset, start_line, start_column);
         case ')':

@@ -8,13 +8,13 @@
 
 ## 实现阶段
 
-- [ ] Token：在 `src/lexer/token.h` 中新增 `FENG_TOKEN_RAW_STRING` token kind
-- [ ] 全量回归测试（Token kind 变更后）
-- [ ] Lexer：在 `src/lexer/lexer.c` 中增加反引号字符串扫描逻辑（识别 `` ` `` 界定符、处理 `` `` `` → `` ` ``、去掉首尾界定符、输出 `FENG_TOKEN_RAW_STRING`）
+- [x] Token：复用 `FENG_TOKEN_STRING`，无需新增 token kind
+- [x] 全量回归测试（Token kind 无变更）
+- [ ] Lexer：在 `src/lexer/lexer.c` 中增加反引号字符串扫描逻辑（识别 `` ` `` 界定符、保留首尾界定符、输出 `FENG_TOKEN_STRING`）
 - [ ] 全量回归测试（Lexer 变更后）
-- [ ] Parser：在 `src/parser/parser.c` 中将 `FENG_TOKEN_RAW_STRING` 映射为 `FENG_EXPR_STRING` AST 节点
-- [ ] 全量回归测试（Parser 变更后）
-- [ ] Codegen：在 `src/codegen/codegen.c` 中区分 `FENG_TOKEN_RAW_STRING`，不走转义解码循环，直接传字节数组
+- [ ] Parser：无需修改，`FENG_TOKEN_STRING` 已映射为 `FENG_EXPR_STRING`
+- [ ] 全量回归测试（Parser 无变更）
+- [ ] Codegen：在 `src/codegen/codegen.c` 中通过 `lexeme[0]` 区分，`` ` `` 开头时去掉首尾界定符并将 `` `` `` 替换为 `` ` ``，不走转义解码
 - [ ] 全量回归测试（Codegen 变更后）
 
 ## 测试阶段

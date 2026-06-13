@@ -694,6 +694,81 @@ static void test_generic_token_sequences(void) {
     }
 }
 
+static void test_raw_string_literals(void) {
+    /* Test basic raw string: `\d+` should produce RAW_STRING with lexeme including delimiters */
+    {
+        const char *src = "`\\d+`";
+        FengLexer lexer;
+        FengToken token;
+
+        feng_lexer_init(&lexer, src, strlen(src), "raw1.f");
+        token = next_token(&lexer, FENG_TOKEN_STRING);
+        assert_lexeme(&token, "`\\d+`");
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+
+    /* Test raw string with embedded backtick: `say ``hello``` -> lexeme includes delimiters and `` */
+    {
+        const char *src = "`say ``hello```";
+        FengLexer lexer;
+        FengToken token;
+
+        feng_lexer_init(&lexer, src, strlen(src), "raw2.f");
+        token = next_token(&lexer, FENG_TOKEN_STRING);
+        assert_lexeme(&token, "`say ``hello```");
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+
+    /* Test empty raw string: `` */
+    {
+        const char *src = "``";
+        FengLexer lexer;
+        FengToken token;
+
+        feng_lexer_init(&lexer, src, strlen(src), "raw3.f");
+        token = next_token(&lexer, FENG_TOKEN_STRING);
+        assert_lexeme(&token, "``");
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+
+    /* Test raw string with newline preserved */
+    {
+        const char *src = "`line1\nline2`";
+        FengLexer lexer;
+        FengToken token;
+
+        feng_lexer_init(&lexer, src, strlen(src), "raw4.f");
+        token = next_token(&lexer, FENG_TOKEN_STRING);
+        assert_lexeme(&token, "`line1\nline2`");
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+
+    /* Test raw string with literal \n (not escape) */
+    {
+        const char *src = "`hello\\nworld`";
+        FengLexer lexer;
+        FengToken token;
+
+        feng_lexer_init(&lexer, src, strlen(src), "raw5.f");
+        token = next_token(&lexer, FENG_TOKEN_STRING);
+        assert_lexeme(&token, "`hello\\nworld`");
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+}
+
+static void test_raw_string_unterminated(void) {
+    /* Unterminated raw string should produce ERROR token */
+    {
+        const char *src = "`unterminated";
+        FengLexer lexer;
+        FengToken token;
+
+        feng_lexer_init(&lexer, src, strlen(src), "raw_err.f");
+        token = next_token(&lexer, FENG_TOKEN_ERROR);
+        ASSERT(strstr(token.message, "unterminated") != NULL);
+    }
+}
+
 int main(void) {
     test_keyword_and_annotation_counts();
     test_reserved_words_rejected();
@@ -714,6 +789,8 @@ int main(void) {
     test_numeric_literal_rejects_trailing_underscore();
     test_flow_control_tokens();
     test_generic_token_sequences();
+    test_raw_string_literals();
+    test_raw_string_unterminated();
 
     puts("lexer tests passed");
     return 0;

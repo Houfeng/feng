@@ -10822,12 +10822,54 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         return out->c_expr && out->type;
     }
     if (e->kind == FENG_EXPR_STRING) {
-        /* The parser stores the raw lexeme including the surrounding quotes
-         * and unprocessed escapes. Decode here. The lexer guarantees the
-         * literal is well-formed: starts/ends with '"' and uses only the
-         * supported escape set (\\ \" \n \r \t \0 \xNN). */
+        /* Check if this is a raw string (backtick-delimited) by examining the
+         * first character of the lexeme. Raw strings have delimiters preserved
+         * in lexeme (like double-quoted strings). Process here: remove delimiters
+         * and replace `` with `. No escape decoding. */
         const char *raw = e->as.string.data;
         size_t rlen = e->as.string.length;
+        if (rlen >= 2 && raw[0] == '`' && raw[rlen - 1] == '`') {
+            const char *body = raw + 1;
+            size_t blen = rlen - 2;
+
+            /* First pass: count output length (`` becomes single `) */
+            size_t out_len = 0;
+            for (size_t i = 0; i < blen; ) {
+                if (body[i] == '`' && i + 1 < blen && body[i + 1] == '`') {
+                    out_len++;
+                    i += 2;
+                } else {
+                    out_len++;
+                    i++;
+                }
+            }
+
+            char *processed = malloc(out_len + 1);
+            if (!processed) return cg_fail(cg, e->token, "codegen: out of memory");
+            size_t di = 0;
+            for (size_t i = 0; i < blen; ) {
+                if (body[i] == '`' && i + 1 < blen && body[i + 1] == '`') {
+                    processed[di++] = '`';
+                    i += 2;
+                } else {
+                    processed[di++] = body[i];
+                    i++;
+                }
+            }
+            processed[di] = '\0';
+
+            const char *cv = cg_string_literal_var(cg, processed, di);
+            free(processed);
+            if (!cv) return cg_fail(cg, e->token, "codegen: out of memory");
+            out->c_expr = strdup(cv);
+            out->type = cgtype_new(CG_TYPE_STRING);
+            out->owns_ref = false;   /* immortal */
+            return out->c_expr && out->type;
+        }
+
+        /* Double-quoted string: decode escapes. The lexer guarantees the
+         * literal is well-formed: starts/ends with '"' and uses only the
+         * supported escape set (\\ \" \n \r \t \0 \xNN). */
         if (rlen < 2 || raw[0] != '"' || raw[rlen - 1] != '"') {
             return cg_fail(cg, e->token, "codegen: malformed string literal");
         }
