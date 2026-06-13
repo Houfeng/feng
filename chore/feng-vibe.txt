@@ -1,0 +1,5 @@
+###### feng v0.1.0
+##     Current folder: ~/Repositories/feng-language
+#####    
+##     To start a new project: feng init <name>
+##     To see all commands:    feng --help

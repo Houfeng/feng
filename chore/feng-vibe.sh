@@ -1,0 +1,5 @@
+echo -e "\033[31m######\033[0m  feng v0.1.0"
+echo -e "\033[33m##\033[0m      Current folder: ~/Repositories/feng-language"
+echo -e "\033[32m#####\033[0m   "
+echo -e "\033[36m##\033[0m      To start a new project: feng init <name>"
+echo -e "\033[34m##\033[0m      To see all commands:    feng --help"
