@@ -195,12 +195,12 @@ void feng_cli_print_diagnostic(FILE *stream,
 
 ### 测试阶段
 
-- [ ] 更新测试用例中的错误输出断言（需人工批准后执行）
-- [ ] 运行全量回归测试，确保未破坏现有错误输出行为
-- [ ] CLI 输出格式验证：使用 `grep -rn 'feng_cli_print_diagnostic' src/cli/` 生成完整调用点清单，与文档列表交叉验证，确保无遗漏；手动触发各类错误确认输出格式符合规范
-- [ ] LSP 插件兼容性验证：调查 VSCode/Zed 等 LSP 插件源码，确认其 diagnostic 解析逻辑是否依赖旧格式；若依赖则同步适配，若未依赖则记录验证结果
+- [x] 更新测试用例中的错误输出断言（分析确认：test_*.c 均通过内部 API 调用编译器，其 parse error/semantic error 字符串均为测试 helper 自用的 fprintf 输出，非对 CLI 格式的断言，无需修改）
+- [x] 运行全量回归测试，确保未破坏现有错误输出行为（make test 全部通过，exit code 0）
+- [x] CLI 输出格式验证：grep -rn 'feng_cli_print_diagnostic' src/cli/ 验证完整调用点清单与文档一致，无遗漏；手动触发各类错误确认格式符合规范（第一行 path:line:col，第二行 code: 消息）
+- [x] LSP 插件兼容性验证：VSCode 扩展通过 vscode-languageclient 使用 LSP JSON-RPC 协议获取诊断（textDocument/publishDiagnostics），Zed 扩展同样通过 LSP 适配器层获取诊断——两者均不解析 CLI 文本输出格式，不受本次格式变更影响
 
 ### 收尾阶段
 
-- [ ] 检查 lint 错误，确保修改文件无新增问题
-- [ ] 给出建议的 commit message
+- [x] 检查 lint 错误，确保修改文件无新增问题（编译使用 -Wall -Wextra -Werror，make test 构建通过即代表无 lint 错误）
+- [x] 给出建议的 commit message
