@@ -30,8 +30,8 @@ static void dump_token(const FengToken *token) {
             printf("  value=%s", token->value.boolean ? "true" : "false");
             break;
         case FENG_TOKEN_ERROR:
-            if (token->message != NULL) {
-                printf("  error=%s", token->message);
+            if (token->error_message != NULL) {
+                printf("  error=%s", token->error_message);
             }
             break;
         default:

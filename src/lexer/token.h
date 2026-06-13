@@ -134,7 +134,8 @@ typedef struct FengToken {
     size_t offset;
     unsigned int line;
     unsigned int column;
-    const char *message;
+    const char *error_message;
+    const char *error_code;
     const char *leading_doc;
     size_t leading_doc_length;
     union {

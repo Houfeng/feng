@@ -159,7 +159,8 @@ static FengToken make_token(FengLexer *lexer,
     token.offset = start_offset;
     token.line = start_line;
     token.column = start_column;
-    token.message = NULL;
+    token.error_message = NULL;
+    token.error_code = NULL;
     token.leading_doc = NULL;
     token.leading_doc_length = 0U;
     token.value.integer = 0;
@@ -174,7 +175,7 @@ static FengToken make_error(FengLexer *lexer,
                             const char *message) {
     FengToken token = make_token(lexer, FENG_TOKEN_ERROR, start_offset, start_line, start_column);
 
-    token.message = message;
+    token.error_message = message;
     lexer->last_error = message;
     return token;
 }
@@ -816,7 +817,8 @@ void feng_lexer_reset(FengLexer *lexer) {
     lexer->peeked.offset = 0;
     lexer->peeked.line = 1U;
     lexer->peeked.column = 1U;
-    lexer->peeked.message = NULL;
+    lexer->peeked.error_message = NULL;
+    lexer->peeked.error_code = NULL;
     lexer->peeked.leading_doc = NULL;
     lexer->peeked.leading_doc_length = 0U;
     lexer->peeked.value.integer = 0;

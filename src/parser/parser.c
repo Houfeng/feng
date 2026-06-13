@@ -304,7 +304,7 @@ static bool parser_tokenize(Parser *parser) {
         }
 
         if (token.kind == FENG_TOKEN_ERROR) {
-            parser->error.message = token.message;
+            parser->error.message = token.error_message;
             parser->error.token = token;
             return false;
         }

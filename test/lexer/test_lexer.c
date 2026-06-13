@@ -117,7 +117,7 @@ static void test_reserved_words_rejected(void) {
                         "reserved.ff");
         token = next_token(&lexer, FENG_TOKEN_ERROR);
         assert_lexeme(&token, reserved_words[index]);
-        ASSERT(strstr(token.message, "reserved word") != NULL);
+        ASSERT(strstr(token.error_message, "reserved word") != NULL);
     }
 }
 
@@ -428,19 +428,19 @@ static void test_error_tokens(void) {
 
     feng_lexer_init(&lexer, "@1", 2U, "annotation_error.f");
     token = next_token(&lexer, FENG_TOKEN_ERROR);
-    ASSERT(strstr(token.message, "annotation") != NULL);
+    ASSERT(strstr(token.error_message, "annotation") != NULL);
 
     feng_lexer_init(&lexer, "/* unterminated", strlen("/* unterminated"), "comment_error.f");
     token = next_token(&lexer, FENG_TOKEN_ERROR);
-    ASSERT(strstr(token.message, "comment") != NULL);
+    ASSERT(strstr(token.error_message, "comment") != NULL);
 
     feng_lexer_init(&lexer, "\"oops", strlen("\"oops"), "string_error.f");
     token = next_token(&lexer, FENG_TOKEN_ERROR);
-    ASSERT(strstr(token.message, "string") != NULL);
+    ASSERT(strstr(token.error_message, "string") != NULL);
 
     feng_lexer_init(&lexer, "123abc", 6U, "number_error.f");
     token = next_token(&lexer, FENG_TOKEN_ERROR);
-    ASSERT(strstr(token.message, "numeric") != NULL);
+    ASSERT(strstr(token.error_message, "numeric") != NULL);
 }
 
 static void test_hex_escape_valid(void) {
@@ -480,22 +480,22 @@ static void test_hex_escape_invalid(void) {
     /* \x with only 1 hex digit */
     feng_lexer_init(&lexer, "\"\\x1\"", 5U, "hex_err1.f");
     token = next_token(&lexer, FENG_TOKEN_ERROR);
-    ASSERT(strstr(token.message, "\\x") != NULL);
+    ASSERT(strstr(token.error_message, "\\x") != NULL);
 
     /* \x with no hex digits */
     feng_lexer_init(&lexer, "\"\\x\"", 4U, "hex_err2.f");
     token = next_token(&lexer, FENG_TOKEN_ERROR);
-    ASSERT(strstr(token.message, "\\x") != NULL);
+    ASSERT(strstr(token.error_message, "\\x") != NULL);
 
     /* \x with non-hex character */
     feng_lexer_init(&lexer, "\"\\xGG\"", 6U, "hex_err3.f");
     token = next_token(&lexer, FENG_TOKEN_ERROR);
-    ASSERT(strstr(token.message, "\\x") != NULL);
+    ASSERT(strstr(token.error_message, "\\x") != NULL);
 
     /* \x at end of string */
     feng_lexer_init(&lexer, "\"abc\\x\"", 7U, "hex_err4.f");
     token = next_token(&lexer, FENG_TOKEN_ERROR);
-    ASSERT(strstr(token.message, "\\x") != NULL);
+    ASSERT(strstr(token.error_message, "\\x") != NULL);
 }
 
 static void test_bitwise_tokens(void) {
@@ -568,7 +568,7 @@ static void test_numeric_literal_bases_and_separators(void) {
 
     /* 0x_bad: '_' immediately after prefix -> error */
     token = next_token(&lexer, FENG_TOKEN_ERROR);
-    ASSERT(strstr(token.message, "numeric") != NULL);
+    ASSERT(strstr(token.error_message, "numeric") != NULL);
 
     token = next_token(&lexer, FENG_TOKEN_INTEGER);
     ASSERT(token.value.integer == 0xFF);
@@ -600,11 +600,11 @@ static void test_numeric_literal_rejects_trailing_underscore(void) {
 
     feng_lexer_init(&lexer, "1_", 2U, "trailing_underscore.f");
     token = next_token(&lexer, FENG_TOKEN_ERROR);
-    ASSERT(strstr(token.message, "numeric") != NULL);
+    ASSERT(strstr(token.error_message, "numeric") != NULL);
 
     feng_lexer_init(&lexer, "0x_", 3U, "prefix_underscore.f");
     token = next_token(&lexer, FENG_TOKEN_ERROR);
-    ASSERT(strstr(token.message, "numeric") != NULL);
+    ASSERT(strstr(token.error_message, "numeric") != NULL);
 }
 
 static void test_flow_control_tokens(void) {
@@ -765,7 +765,7 @@ static void test_raw_string_unterminated(void) {
 
         feng_lexer_init(&lexer, src, strlen(src), "raw_err.f");
         token = next_token(&lexer, FENG_TOKEN_ERROR);
-        ASSERT(strstr(token.message, "unterminated") != NULL);
+        ASSERT(strstr(token.error_message, "unterminated") != NULL);
     }
 }
 
