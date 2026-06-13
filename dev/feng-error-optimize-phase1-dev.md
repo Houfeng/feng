@@ -47,6 +47,7 @@ path:line:col: kind: message
 | SE | Syntax Error | 语法分析 |
 | AE | Analysis Error | 语义分析 |
 | CE | Codegen Error | 代码生成 |
+| IE | Infrastructure Error | 基础设施（跨阶段） |
 
 ### 3.2 编码格式
 
@@ -60,7 +61,7 @@ path:line:col: kind: message
 
 - **按阶段归属**：错误码前缀由**产生错误的阶段**决定，而非传递错误的结构体。例如词法错误虽通过 `FengParseError` 传出，但其产生阶段是词法分析，应使用 LE 前缀。
 - **同一错误同一码**：同一阶段内，**相同错误消息文本**必须使用相同的错误码，不因出现位置不同而分配不同编号。
-- **基础设施错误归入所在阶段**：如 `out of memory` 等错误，按其发生阶段归类（parser 中的 OOM → SE，semantic 中的 OOM → AE，codegen 中的 OOM → CE）。
+- **基础设施错误统一使用 IE 前缀**：如 `out of memory`、文件 I/O 失败等由底层设施直接抛出的错误，**不按发生阶段归类**，统一使用 `IE` 前缀。`IE` 错误码采用**全局统一编号**（如 `IE0001`、`IE0002`...），不分阶段独立编号，确保全局唯一性。具体阶段信息通过错误消息文本体现（如 `IE0001: out of memory in semantic analysis`）。
 
 ### 3.4 词法错误（LE）的处理方式
 
@@ -178,6 +179,7 @@ void feng_cli_print_diagnostic(FILE *stream,
 - [ ] 全量回归测试（结构体变更后）
 - [ ] `parser_tokenize()` 中透传 `token.error_code` → `parser->error.code`；parser 自身错误在 `parser_error_at()` 等函数中设置 SE 错误码（`src/parser/parser.c`）
 - [ ] 核心编译器 semantic、codegen 模块在构造错误时填入错误码字符串字面量（semantic → `"AE..."`、codegen → `"CE..."`）
+- [ ] 梳理所有基础设施错误（OOM、I/O 失败等）调用点，确定全局唯一的 IE 错误码（如 `IE0001`、`IE0002`...），并在对应模块构造错误时填入
 - [ ] 全量回归测试（错误码填入后）
 - [ ] `feng_cli_print_diagnostic` 签名中 `kind` 参数改为 `code`，输出格式调整为两行（`src/cli/common.h`、`src/cli/common.c`）
 - [ ] 全量回归测试（渲染函数变更后）
