@@ -87,8 +87,18 @@ SE0001: expression statements and local bindings must end with ';'
 
 ### 5.1 需要修改的文件
 
+#### 5.1.1 核心编译器：三个错误结构体增加 `code` 字段
+
+- `src/parser/parser.h` — `FengParseError` 增加 `const char *code`
+- `src/semantic/semantic.h` — `FengSemanticError` 增加 `const char *code`
+- `src/codegen/codegen.h` — `FengCodegenError` 增加 `const char *code`
+
+各模块在构造错误时填入对应的错误码字符串字面量（如 `"SE0001"`），指向 `.rodata` 段静态字符串，无需动态分配和释放。
+
+#### 5.1.2 CLI：渲染函数参数及输出格式调整
+
 - `src/cli/common.c` — `feng_cli_print_diagnostic` 函数，调整输出格式
-- `src/cli/common.h` — 函数签名需增加错误码参数
+- `src/cli/common.h` — 函数签名中 `kind` 参数改为 `code`
 
 **签名变化**：
 
@@ -103,20 +113,20 @@ void feng_cli_print_diagnostic(FILE *stream,
                                size_t source_length);
 ```
 
-Phase 1 新签名（`kind` 替换为 `error_code`）：
+Phase 1 新签名（`kind` 改为 `code`）：
 ```c
 void feng_cli_print_diagnostic(FILE *stream,
                                const char *path,
-                               const char *error_code,
+                               const char *code,
                                const char *message,
                                const FengToken *token,
                                const char *source,
                                size_t source_length);
 ```
 
-- `kind` 参数（原值为 `"parse error"` / `"semantic error"` / `"codegen error"`）替换为 `error_code`（如 `"SE0001"`）
-- 调用方负责传入完整的错误码字符串（含前缀和数字）
-- 函数内部按新格式输出：第一行 `{path}:{line}:{col}`（无尾部冒号），第二行 `{error_code}: {message}`，后续为源码上下文
+- `kind` 参数（原值为 `"parse error"` / `"semantic error"` / `"codegen error"`）改为 `code`（如 `"SE0001"`）
+- 所有调用点从结构体的 `code` 字段取值传入，不再硬编码分类标签
+- 函数内部按新格式输出：第一行 `{path}:{line}:{col}`（无尾部冒号），第二行 `{code}: {message}`，后续为源码上下文
 
 ### 5.2 不需要修改的部分
 
