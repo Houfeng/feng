@@ -6,6 +6,7 @@
 #include "cli/cli.h"
 
 void feng_cli_tool_print_usage(const char *program, FILE *stream) {
+    if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     fprintf(stream, "  %s tool lex <file>\n", program);
@@ -16,8 +17,8 @@ void feng_cli_tool_print_usage(const char *program, FILE *stream) {
 
 int feng_cli_tool_main(const char *program, int argc, char **argv) {
     if (argc < 1) {
-        feng_cli_tool_print_usage(program, stderr);
-        return 1;
+        feng_cli_tool_print_usage(program, stdout);
+        return 0;
     }
 
     const char *sub = argv[0];

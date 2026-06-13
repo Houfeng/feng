@@ -8,6 +8,7 @@
 #include "cli/project/common.h"
 
 static void print_usage(const char *program, FILE *stream) {
+    if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream, "  %s build [<path>] [--release] [--keep-ir]\n", program);
 }

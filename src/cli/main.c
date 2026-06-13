@@ -15,6 +15,7 @@ static void feng_cli_print_version(const char *program, FILE *stream) {
 void feng_cli_print_usage(const char *program, FILE *stream) {
     int compile_indent = (int)(2U + strlen(program) + strlen(" <files>... "));
 
+    if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream, "  %s <command>  [options]\n", program);
     fprintf(stream, "  %s <files>... [options]\n", program);
@@ -66,8 +67,8 @@ int main(int argc, char **argv) {
     }
 
     if (argc < 2) {
-        feng_cli_print_usage(program, stderr);
-        return 1;
+        feng_cli_print_usage(program, stdout);
+        return 0;
     }
 
     const char *cmd = argv[1];

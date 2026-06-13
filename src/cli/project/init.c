@@ -39,6 +39,7 @@ static const char *kLibTemplate =
     "}\n";
 
 static void print_usage(const char *program, FILE *stream) {
+    if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream, "  %s init [<name>] [--target=<bin|lib>]\n", program);
 }

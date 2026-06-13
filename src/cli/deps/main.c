@@ -49,6 +49,7 @@ static bool write_text_file(const char *path, const char *content, char **out_er
 }
 
 static void print_usage(const char *program, FILE *stream) {
+    if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream, "  %s deps add <pkg-name> <version-or-path> [<path>]\n", program);
     fprintf(stream, "  %s deps remove <pkg-name> [<path>]\n", program);

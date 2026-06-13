@@ -20,6 +20,7 @@ typedef struct JsonState {
 } JsonState;
 
 static void print_usage(const char *program, FILE *stream) {
+    if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream, "  %s check [<path>] [--format <text|json>]\n", program);
 }

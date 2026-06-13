@@ -210,6 +210,7 @@ static char *resolve_lldb_dap_backend_program(void) {
 
 /* Print command usage for `feng dap`. */
 static void print_usage(const char *program, FILE *stream) {
+    if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream, "  %s dap [--stdio]\n", program);
     fprintf(stream, "\n");

@@ -12,6 +12,7 @@
 #include "cli/project/common.h"
 
 static void print_usage(const char *program, FILE *stream) {
+    if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream, "  %s pack [<path>]\n", program);
 }

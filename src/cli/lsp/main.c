@@ -6,6 +6,7 @@
 #include "cli/lsp/server.h"
 
 static void print_usage(const char *program, FILE *stream) {
+    if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
     fprintf(stream, "  %s lsp [--stdio]\n", program);
     fprintf(stream, "\n");
