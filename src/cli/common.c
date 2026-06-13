@@ -207,7 +207,7 @@ static void print_error_context(FILE *stream,
 
 void feng_cli_print_diagnostic(FILE *stream,
                                const char *path,
-                               const char *kind,
+                               const char *code,
                                const char *message,
                                const FengToken *token,
                                const char *source,
@@ -218,7 +218,8 @@ void feng_cli_print_diagnostic(FILE *stream,
     feng_cli_set_stream_color(stream, use_color, FENG_COLOR_RED);
     fprintf(stream, "%u:%u", token->line, token->column);
     feng_cli_reset_stream_color(stream, use_color);
-    fprintf(stream, ": %s: %s\n", kind, message != NULL ? message : "unknown error");
+    fprintf(stream, "\n");
+    fprintf(stream, "%s: %s\n", code != NULL ? code : "IE0001", message != NULL ? message : "unknown error");
 
     if (source != NULL) {
         print_error_context(stream, source, source_length, token);

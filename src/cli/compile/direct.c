@@ -187,7 +187,7 @@ static void on_parse_error(void *user,
                            const FengParseError *error,
                            const FengCliLoadedSource *source) {
     (void)user;
-    feng_cli_print_diagnostic(stderr, path, "parse error", error->message,
+    feng_cli_print_diagnostic(stderr, path, error->code, error->message,
                               &error->token,
                               source != NULL ? source->source : NULL,
                               source != NULL ? source->source_length : 0U);
@@ -201,7 +201,7 @@ static void on_semantic_error(void *user,
     (void)user;
     (void)error_count;
     if (error_index > 0U) fputc('\n', stderr);
-    feng_cli_print_diagnostic(stderr, error->path, "semantic error",
+    feng_cli_print_diagnostic(stderr, error->path, error->code,
                               error->message, &error->token,
                               source != NULL ? source->source : NULL,
                               source != NULL ? source->source_length : 0U);
@@ -215,7 +215,7 @@ static void on_semantic_info(void *user,
     (void)user;
     (void)info_index;
     (void)info_count;
-    feng_cli_print_diagnostic(stderr, info->path, "semantic info",
+    feng_cli_print_diagnostic(stderr, info->path, "info",
                               info->message, &info->token,
                               source != NULL ? source->source : NULL,
                               source != NULL ? source->source_length : 0U);
@@ -364,7 +364,7 @@ int feng_cli_direct_run(const char *program,
                                       symbol_error.path != NULL
                                           ? symbol_error.path
                                           : (source_count > 0 ? sources[0].path : "<input>"),
-                                      "symbol export error",
+                                      "IE0002",
                                       symbol_error.message != NULL ? symbol_error.message : "(unknown)",
                                       &symbol_error.token,
                                       blame_src != NULL ? blame_src->source : NULL,
@@ -409,7 +409,7 @@ int feng_cli_direct_run(const char *program,
         feng_cli_print_diagnostic(stderr,
                                   cgerr.path != NULL ? cgerr.path
                                                      : (source_count > 0 ? sources[0].path : "<input>"),
-                                  "codegen error",
+                                  cgerr.code,
                                   cgerr.message ? cgerr.message : "(unknown)",
                                   &cgerr.token,
                                   blame_src != NULL ? blame_src->source : NULL,

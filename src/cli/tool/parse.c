@@ -33,7 +33,7 @@ int feng_cli_tool_parse_main(const char *program, int argc, char **argv) {
     if (!feng_parse_source(source, source_length, path, &program_ast, &error)) {
         feng_cli_print_diagnostic(stderr,
                                   path,
-                                  "parse error",
+                                  error.code,
                                   error.message,
                                   &error.token,
                                   source,

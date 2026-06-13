@@ -1540,7 +1540,7 @@ static char *cg_vformat(const char *fmt, va_list ap) {
     return p;
 }
 
-static bool cg_fail(CG *cg, FengToken token, const char *fmt, ...) {
+static bool cg_fail(CG *cg, FengToken token, const char *code, const char *fmt, ...) {
     if (cg->failed) return false;
     cg->failed = true;
     if (cg->error) {
@@ -1548,6 +1548,7 @@ static bool cg_fail(CG *cg, FengToken token, const char *fmt, ...) {
         va_start(ap, fmt);
         cg->error->message = cg_vformat(fmt, ap);
         va_end(ap);
+        cg->error->code = code;
         cg->error->token = token;
         /* Pin the diagnostic to the source program currently being emitted.
          * Without this the CLI falls back to sources[0].path which, in
@@ -1586,7 +1587,7 @@ static bool cg_debug_add_frame_record(CG *cg,
                                    backend_symbol,
                                    display_name,
                                    policy)) {
-        return cg_fail(cg, blame, "codegen: out of memory recording debug frame");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory recording debug frame");
     }
     return true;
 }
@@ -1664,7 +1665,7 @@ static bool cg_debug_add_variable_record_cstr_typed(CG *cg,
             read_expr,
             display_type,
             kind)) {
-        return cg_fail(cg, blame, "codegen: out of memory recording debug variable");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory recording debug variable");
     }
     return true;
 }
@@ -1681,7 +1682,7 @@ static bool cg_debug_add_variable_record_slice_typed(CG *cg,
     bool ok;
 
     if (name == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory recording debug variable");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory recording debug variable");
     }
     ok = cg_debug_add_variable_record_cstr_typed(cg,
                                                  backend_name,
@@ -1708,7 +1709,7 @@ static bool cg_debug_add_variable_record_cstr_type_ref(CG *cg,
 
     cg_type_ref_free(qualified_ref);
     if (display_type == NULL) {
-        return cg_fail(cg, blame, "codegen: missing debug display type");
+        return cg_fail(cg, blame, "CE0001", "codegen: missing debug display type");
     }
     ok = cg_debug_add_variable_record_cstr_typed(cg,
                                                  backend_name,
@@ -1736,7 +1737,7 @@ static bool cg_debug_add_variable_record_slice_type_ref(CG *cg,
 
     cg_type_ref_free(qualified_ref);
     if (display_type == NULL) {
-        return cg_fail(cg, blame, "codegen: missing debug display type");
+        return cg_fail(cg, blame, "CE0001", "codegen: missing debug display type");
     }
     ok = cg_debug_add_variable_record_slice_typed(cg,
                                                   backend_name,
@@ -1761,7 +1762,7 @@ static bool cg_debug_add_variable_record_cstr_cgtype(CG *cg,
     bool ok;
 
     if (display_type == NULL) {
-        return cg_fail(cg, blame, "codegen: missing debug display type");
+        return cg_fail(cg, blame, "CE0001", "codegen: missing debug display type");
     }
     ok = cg_debug_add_variable_record_cstr_typed(cg,
                                                  backend_name,
@@ -1786,7 +1787,7 @@ static bool cg_debug_add_variable_record_slice_cgtype(CG *cg,
     bool ok;
 
     if (display_type == NULL) {
-        return cg_fail(cg, blame, "codegen: missing debug display type");
+        return cg_fail(cg, blame, "CE0001", "codegen: missing debug display type");
     }
     ok = cg_debug_add_variable_record_slice_typed(cg,
                                                   backend_name,
@@ -1843,7 +1844,7 @@ static bool cg_debug_add_user_type_field_records(CG *cg,
             free(read_expr.data);
             free(field_display_type);
             free(parent_display_type);
-            return cg_fail(cg, blame, "codegen: out of memory recording debug field");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory recording debug field");
         }
         free(read_expr.data);
         free(field_display_type);
@@ -1912,7 +1913,7 @@ static bool cg_debug_prepare_line_source(CG *cg) {
         cg->debug_line_source_path = NULL;
         return cg_fail(cg,
                        cg->cur_program->module_token,
-                       "codegen: missing debug source mapping for '%s'",
+                       "CE0002", "codegen: missing debug source mapping for '%s'",
                        cg->cur_program->path);
     }
 
@@ -1994,12 +1995,12 @@ static bool cg_build_generic_param_constraints(CG *cg,
 
     const UserSpec **constraints = calloc(type_param_count, sizeof *constraints);
     if (!constraints) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     size_t *constraint_indices = calloc(type_param_count, sizeof *constraint_indices);
     if (!constraint_indices) {
         free(constraints);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     for (size_t i = 0; i < type_param_count; ++i) {
         constraint_indices[i] = (size_t)-1;
@@ -2009,7 +2010,7 @@ static bool cg_build_generic_param_constraints(CG *cg,
     if (type_param_names == NULL) {
         free(constraint_indices);
         free(constraints);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     for (size_t i = 0; i < type_param_count; ++i) {
         type_param_names[i] = strndup(type_params[i].name.data,
@@ -2018,7 +2019,7 @@ static bool cg_build_generic_param_constraints(CG *cg,
             cg_free_cstr_array(type_param_names, i);
             free(constraint_indices);
             free(constraints);
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
     }
 
@@ -2064,7 +2065,7 @@ static bool cg_build_generic_param_constraints(CG *cg,
             free(constraint_indices);
             free(constraints);
             return cg_fail(cg, type_params[i].token,
-                "codegen: generic constraint for '%.*s' must be a spec supported by codegen",
+                "CE0003", "codegen: generic constraint for '%.*s' must be a spec supported by codegen",
                 (int)type_params[i].name.length,
                 type_params[i].name.data);
         }
@@ -2081,7 +2082,7 @@ static bool cg_build_generic_param_constraints(CG *cg,
             free(constraint_indices);
             free(constraints);
             return cg_fail(cg, type_params[i].token,
-                           "codegen: internal: generic constraint spec was not registered");
+                           "CE0004", "codegen: internal: generic constraint spec was not registered");
         }
         cgtype_free(constraint_type);
     }
@@ -2166,7 +2167,7 @@ static bool cg_append_user_type_context_descriptor_args(CG *cg,
         }
     }
     return cg_fail(cg, blame,
-                   "codegen: no reified_type_dep found for generic type method call");
+                   "CE0005", "codegen: no reified_type_dep found for generic type method call");
 }
 
 /* Return the RTD expression string (e.g. "_td->reified_type_deps[2]") for a
@@ -2177,7 +2178,7 @@ static char *cg_rtd_expr_for_type(CG *cg,
                                   FengToken blame) {
     if (ut == NULL || ut->generic_context_type_param_count == 0U) {
         cg_fail(cg, blame,
-                "codegen: cg_rtd_expr_for_type called on non-generic type");
+                "CE0006", "codegen: cg_rtd_expr_for_type called on non-generic type");
         return NULL;
     }
     for (size_t ri = 0U; ri < cg->generic_type_method_rtd_count; ri++) {
@@ -2192,7 +2193,7 @@ static char *cg_rtd_expr_for_type(CG *cg,
         }
     }
     cg_fail(cg, blame,
-            "codegen: no reified_type_dep found for generic cross-type call");
+            "CE0007", "codegen: no reified_type_dep found for generic cross-type call");
     return NULL;
 }
 
@@ -2868,7 +2869,7 @@ static bool cg_emit_capture_cell_type(CG *cg,
     if (sb.data == NULL || db.data == NULL) {
         buf_free(&sb);
         buf_free(&db);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     buf_append_fmt(td, "struct %s {\n", sb.data);
@@ -3000,7 +3001,7 @@ static bool cg_emit_capture_cell_init_from_expr(CG *cg,
             const char *desc = cg_aggregate_desc_name(value_type);
             if (desc == NULL) {
                 return cg_fail(cg, blame,
-                    "codegen: missing aggregate descriptor for capture cell");
+                    "CE0008", "codegen: missing aggregate descriptor for capture cell");
             }
             buf_append_fmt(cg->cur_body,
                            "    %s->value = %s; feng_aggregate_retain(&%s->value, &%s);\n",
@@ -3014,7 +3015,7 @@ static bool cg_emit_capture_cell_init_from_expr(CG *cg,
     {
         char *cty = cg_ctype_dup(value_type);
         if (cty == NULL) {
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
                        "    %s->value = (%s)(%s);\n",
@@ -3036,14 +3037,14 @@ static bool cg_emit_capture_cell_default_init(CG *cg,
         buf_init(&lvalue);
         buf_append_fmt(&lvalue, "%s->value", cell_expr);
         if (lvalue.data == NULL) {
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         buf_append_cstr(cg->cur_body, "    ");
         ok = cg_append_aggregate_default_init_call(cg->cur_body, value_type, lvalue.data);
         buf_free(&lvalue);
         if (!ok) {
             return cg_fail(cg, blame,
-                "codegen: missing aggregate default-init rule for capture cell");
+                "CE0009", "codegen: missing aggregate default-init rule for capture cell");
         }
         buf_append_cstr(cg->cur_body, ";\n");
         return true;
@@ -3085,7 +3086,7 @@ static bool cg_scope_bind_capture_cell(CG *cg,
     }
     cell_var = cg_local_cname(cg, name.data, name.length);
     if (cell_var == NULL) {
-        cg_fail(cg, blame, "codegen: out of memory");
+        cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
 
@@ -3112,7 +3113,7 @@ static bool cg_scope_bind_capture_cell(CG *cg,
     if (cell_type == NULL ||
         !scope_add(scope, "__capture_cell__", cell_var, cell_type, false)) {
         cgtype_free(cell_type);
-        cg_fail(cg, blame, "codegen: out of memory");
+        cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     cell_type = NULL;
@@ -3132,7 +3133,7 @@ static bool cg_scope_bind_capture_cell(CG *cg,
                                     cell_struct_name,
                                     cell_desc_name,
                                     value_type)) {
-        cg_fail(cg, blame, "codegen: out of memory");
+        cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     if (record_debug_variable &&
@@ -3622,7 +3623,7 @@ static char *cg_decode_annotation_string_literal(CG *cg,
     if (expr == NULL || expr->kind != FENG_EXPR_STRING) {
         cg_fail(cg,
                 expr != NULL ? expr->token : (FengToken){0},
-                "codegen: extern annotation %s argument must resolve to a string literal",
+                "CE0010", "codegen: extern annotation %s argument must resolve to a string literal",
                 role != NULL ? role : "string");
         return NULL;
     }
@@ -3630,7 +3631,7 @@ static char *cg_decode_annotation_string_literal(CG *cg,
     raw = expr->as.string.data;
     raw_length = expr->as.string.length;
     if (raw_length < 2U || raw == NULL || raw[0] != '"' || raw[raw_length - 1U] != '"') {
-        cg_fail(cg, expr->token, "codegen: malformed extern annotation string literal");
+        cg_fail(cg, expr->token, "CE0011", "codegen: malformed extern annotation string literal");
         return NULL;
     }
 
@@ -3638,7 +3639,7 @@ static char *cg_decode_annotation_string_literal(CG *cg,
     body_length = raw_length - 2U;
     decoded = (char *)malloc(body_length + 1U);
     if (decoded == NULL) {
-        cg_fail(cg, expr->token, "codegen: out of memory");
+        cg_fail(cg, expr->token, "IE0001", "codegen: out of memory");
         return NULL;
     }
 
@@ -3657,7 +3658,7 @@ static char *cg_decode_annotation_string_literal(CG *cg,
                 case '0':  decoded[decoded_index++] = '\0'; break;
                 default:
                     free(decoded);
-                    cg_fail(cg, expr->token, "codegen: unknown extern annotation string escape '\\%c'", esc);
+                    cg_fail(cg, expr->token, "CE0012", "codegen: unknown extern annotation string escape '\\%c'", esc);
                     return NULL;
             }
         } else {
@@ -3676,7 +3677,7 @@ static char *cg_resolve_extern_annotation_string_arg(CG *cg,
     if (expr == NULL) {
         cg_fail(cg,
                 (FengToken){0},
-                "codegen: extern annotation %s argument is missing",
+                "CE0013", "codegen: extern annotation %s argument is missing",
                 role != NULL ? role : "string");
         return NULL;
     }
@@ -3686,7 +3687,7 @@ static char *cg_resolve_extern_annotation_string_arg(CG *cg,
     if (expr->kind != FENG_EXPR_IDENTIFIER) {
         cg_fail(cg,
                 expr->token,
-                "codegen: extern annotation %s argument must be a string literal or visible let binding",
+                "CE0014", "codegen: extern annotation %s argument must be a string literal or visible let binding",
                 role != NULL ? role : "string");
         return NULL;
     }
@@ -3700,7 +3701,7 @@ static char *cg_resolve_extern_annotation_string_arg(CG *cg,
         decl->as.binding.initializer->kind != FENG_EXPR_STRING) {
         cg_fail(cg,
                 expr->token,
-                "codegen: extern annotation %s argument must be a string literal or visible let binding initialized directly with a string literal",
+                "CE0015", "codegen: extern annotation %s argument must be a string literal or visible let binding initialized directly with a string literal",
                 role != NULL ? role : "string");
         return NULL;
     }
@@ -3826,7 +3827,7 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
         free(typedef_name);
         free(descriptor_name);
         free(module_dot_name);
-        return cg_fail(cg, decl->token, "codegen: out of memory emitting enum typedef");
+        return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory emitting enum typedef");
     }
 
     buf_append_fmt(&cg->type_defs, "typedef int32_t %s;\n", typedef_name);
@@ -3852,7 +3853,7 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
             free(typedef_name);
             free(descriptor_name);
             free(module_dot_name);
-            return cg_fail(cg, item->token, "codegen: out of memory emitting enum item constant");
+            return cg_fail(cg, item->token, "IE0001", "codegen: out of memory emitting enum item constant");
         }
 
         buf_append_fmt(&cg->type_defs,
@@ -3896,7 +3897,7 @@ static bool cg_ensure_enum_emitted(CG *cg, const FengDecl *decl) {
                                        new_cap * sizeof(*tmp));
         if (tmp == NULL) {
             return cg_fail(cg, decl->token,
-                           "codegen: out of memory tracking emitted enum");
+                           "CE0016", "codegen: out of memory tracking emitted enum");
         }
         cg->emitted_enum_decls = tmp;
         cg->emitted_enum_decl_capacity = new_cap;
@@ -4127,13 +4128,13 @@ static bool cg_user_spec_constraint_indices(CG *cg,
     if (constraint_count == 0U) return true;
     indices = calloc(constraint_count, sizeof *indices);
     if (indices == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     for (size_t i = 0U; i < constraint_count; ++i) {
         if (!cg_user_spec_index(cg, constraints != NULL ? constraints[i] : NULL, &indices[i])) {
             free(indices);
             return cg_fail(cg, blame,
-                           "codegen: internal: generic constraint spec moved before it could be indexed");
+                           "CE0017", "codegen: internal: generic constraint spec moved before it could be indexed");
         }
     }
     *out_indices = indices;
@@ -4151,14 +4152,14 @@ static bool cg_user_spec_constraints_from_indices(CG *cg,
     if (constraint_count == 0U) return true;
     constraints = calloc(constraint_count, sizeof *constraints);
     if (constraints == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     for (size_t i = 0U; i < constraint_count; ++i) {
         constraints[i] = cg_user_spec_by_index(cg, indices != NULL ? indices[i] : (size_t)-1);
         if (indices != NULL && indices[i] != (size_t)-1 && constraints[i] == NULL) {
             free(constraints);
             return cg_fail(cg, blame,
-                           "codegen: internal: generic constraint spec index is out of range");
+                           "CE0018", "codegen: internal: generic constraint spec index is out of range");
         }
     }
     *out_constraints = constraints;
@@ -4304,7 +4305,7 @@ static bool cg_resolve_global_binding_type(CG *cg,
                 }
                 return cg_fail(cg,
                                decl->token,
-                               "codegen: unsupported builtin inferred type for global binding '%.*s'",
+                               "CE0019", "codegen: unsupported builtin inferred type for global binding '%.*s'",
                                (int)binding->name.length,
                                binding->name.data);
 
@@ -4315,7 +4316,7 @@ static bool cg_resolve_global_binding_type(CG *cg,
                 if (fact->type_decl == NULL) {
                     return cg_fail(cg,
                                    decl->token,
-                                   "codegen: inferred type for global binding '%.*s' is missing its declaration",
+                                   "CE0020", "codegen: inferred type for global binding '%.*s' is missing its declaration",
                                    (int)binding->name.length,
                                    binding->name.data);
                 }
@@ -4355,7 +4356,7 @@ static bool cg_resolve_global_binding_type(CG *cg,
                 }
                 return cg_fail(cg,
                                decl->token,
-                               "codegen: unsupported declared inferred type for global binding '%.*s'",
+                               "CE0021", "codegen: unsupported declared inferred type for global binding '%.*s'",
                                (int)binding->name.length,
                                binding->name.data);
 
@@ -4367,7 +4368,7 @@ static bool cg_resolve_global_binding_type(CG *cg,
     if (binding->initializer == NULL) {
         return cg_fail(cg,
                        decl->token,
-                       "codegen: module-level binding requires an explicit type or initializer");
+                       "CE0022", "codegen: module-level binding requires an explicit type or initializer");
     }
 
     switch (binding->initializer->kind) {
@@ -4386,7 +4387,7 @@ static bool cg_resolve_global_binding_type(CG *cg,
         default:
             return cg_fail(cg,
                            decl->token,
-                           "codegen: missing semantic type fact for inferred global binding '%.*s'; add an explicit type if this persists",
+                           "CE0023", "codegen: missing semantic type fact for inferred global binding '%.*s'; add an explicit type if this persists",
                            (int)binding->name.length,
                            binding->name.data);
     }
@@ -4411,7 +4412,7 @@ static bool cg_resolve_coercion_target_user_spec(CG *cg,
             target_type->user_spec == NULL) {
             cgtype_free(target_type);
             return cg_fail(cg, blame,
-                "codegen: coercion target did not resolve to a concrete spec instance");
+                "CE0024", "codegen: coercion target did not resolve to a concrete spec instance");
         }
         *out_spec = target_type->user_spec;
         cgtype_free(target_type);
@@ -4441,7 +4442,7 @@ static bool cg_resolve_union_target_user_spec(CG *cg,
             target_type->user_spec->form != FENG_SPEC_FORM_UNION) {
             cgtype_free(target_type);
             return cg_fail(cg, blame,
-                           "codegen: union coercion target did not resolve to a concrete union-form spec");
+                           "CE0025", "codegen: union coercion target did not resolve to a concrete union-form spec");
         }
         *out_spec = target_type->user_spec;
         cgtype_free(target_type);
@@ -4482,7 +4483,7 @@ static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
     if (out_var == NULL || spec == NULL || spec->form != FENG_SPEC_FORM_CALLABLE ||
         function_decl == NULL || function_decl->kind != FENG_DECL_FUNCTION) {
         return cg_fail(cg, blame,
-            "codegen: invalid callable function-value request");
+            "CE0026", "codegen: invalid callable function-value request");
     }
     for (size_t i = 0; i < cg->callable_fn_value_count; ++i) {
         if (cg->callable_fn_values[i].spec == spec &&
@@ -4495,13 +4496,13 @@ static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
     fn = cg_find_free_fn_by_decl(cg, function_decl);
     if (fn == NULL) {
         return cg_fail(cg, blame,
-            "codegen: callable value source function was not registered");
+            "CE0027", "codegen: callable value source function was not registered");
     }
     if (cg->callable_fn_value_count + 1 > cg->callable_fn_value_capacity) {
         size_t cap = cg->callable_fn_value_capacity ? cg->callable_fn_value_capacity * 2 : 4;
         void *grown = realloc(cg->callable_fn_values, cap * sizeof *cg->callable_fn_values);
         if (grown == NULL) {
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         cg->callable_fn_values = grown;
         cg->callable_fn_value_capacity = cap;
@@ -4509,7 +4510,7 @@ static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
 
     char *fn_san = cg_sanitize(fn->c_name, strlen(fn->c_name));
     if (fn_san == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     Buf vb; buf_init(&vb);
@@ -4524,7 +4525,7 @@ static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
     if (var_name == NULL || adapter_name == NULL) {
         free(var_name);
         free(adapter_name);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     buf_append_cstr(&cg->headers, "static ");
@@ -4589,7 +4590,7 @@ static bool cg_ensure_callable_method_value(CG *cg, const UserSpec *spec,
     if (out_bind_fn == NULL || spec == NULL || owner == NULL || method == NULL ||
         spec->form != FENG_SPEC_FORM_CALLABLE) {
         return cg_fail(cg, blame,
-            "codegen: invalid callable method-value request");
+            "CE0028", "codegen: invalid callable method-value request");
     }
     for (size_t i = 0; i < cg->callable_method_value_count; ++i) {
         if (cg->callable_method_values[i].spec == spec &&
@@ -4606,7 +4607,7 @@ static bool cg_ensure_callable_method_value(CG *cg, const UserSpec *spec,
         void *grown = realloc(cg->callable_method_values,
                               cap * sizeof *cg->callable_method_values);
         if (grown == NULL) {
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         cg->callable_method_values = grown;
         cg->callable_method_value_capacity = cap;
@@ -4629,7 +4630,7 @@ static bool cg_ensure_callable_method_value(CG *cg, const UserSpec *spec,
     if (adapter_name == NULL || bind_name == NULL) {
         free(adapter_name);
         free(bind_name);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     buf_append_cstr(&cg->headers, "static ");
@@ -4891,7 +4892,7 @@ static bool cg_type_param_scope_build_constraints(CG *cg,
 
     constraints = calloc(count, sizeof *constraints);
     if (constraints == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     if (!cg_build_generic_param_constraints(cg,
@@ -5872,7 +5873,7 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     if (decl->kind != FENG_DECL_TYPE) return true;
     if (type_arg_count != decl->as.type_decl.type_param_count) {
         return cg_fail(cg, blame,
-                       "codegen: generic type '%.*s' expects %zu type argument(s), got %zu",
+                       "CE0029", "codegen: generic type '%.*s' expects %zu type argument(s), got %zu",
                        (int)decl->as.type_decl.name.length,
                        decl->as.type_decl.name.data,
                        decl->as.type_decl.type_param_count,
@@ -5891,7 +5892,7 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
             }
         }
         if (has_open_type_arg && !cg_type_param_scope_copy_names(open_scope, &context_names, &context_count)) {
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (has_open_type_arg &&
             !cg_type_param_scope_build_constraints(cg, open_scope, blame, &context_constraints)) {
@@ -6317,7 +6318,7 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
     if (decl->kind != FENG_DECL_SPEC) return true;
     if (type_arg_count != decl->as.spec_decl.type_param_count) {
         return cg_fail(cg, blame,
-                       "codegen: generic spec '%.*s' expects %zu type argument(s), got %zu",
+                       "CE0030", "codegen: generic spec '%.*s' expects %zu type argument(s), got %zu",
                        (int)decl->as.spec_decl.name.length,
                        decl->as.spec_decl.name.data,
                        decl->as.spec_decl.type_param_count,
@@ -6331,7 +6332,7 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
     }
     if (has_open_type_arg &&
         !cg_type_param_scope_copy_names(open_scope, &context_names, &context_count)) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     if (cg_find_generic_instance_user_spec_with_context(cg,
                                                         decl,
@@ -6627,7 +6628,7 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
                 return true;
             }
             return cg_fail(cg, ref->token,
-                "codegen: generic type/spec instance '%.*s<...>' was not registered",
+                "CE0031", "codegen: generic type/spec instance '%.*s<...>' was not registered",
                 (int)seg->length, seg->data);
         }
         /* G6: when inside a generic function body, check type parameter names
@@ -6708,7 +6709,7 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         FengToken tk = fallback ? *fallback : ref->token;
         (void)tk;
         return cg_fail(cg, ref->token,
-            "codegen: unknown type '%.*s'",
+            "CE0032", "codegen: unknown type '%.*s'",
             (int)seg->length, seg->data);
     }
     if (ref->kind == FENG_TYPE_REF_ARRAY) {
@@ -6727,7 +6728,7 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         if (!cg_pointer_inner_is_lowerable(inner)) {
             cgtype_free(inner);
             return cg_fail(cg, ref->token,
-                "codegen: this pointee type does not support ABI pointer lowering");
+                "CE0033", "codegen: this pointee type does not support ABI pointer lowering");
         }
         CGType *t = cgtype_new(CG_TYPE_POINTER);
         if (!t) {
@@ -6739,7 +6740,7 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         return true;
     }
     return cg_fail(cg, ref->token,
-        "codegen: unknown type reference kind");
+        "CE0034", "codegen: unknown type reference kind");
 }
 
 static bool cg_register_open_generic_type_instances_in_ref(CG *cg,
@@ -6767,7 +6768,7 @@ static bool cg_resolve_type_with_open_scope(CG *cg,
     }
 
     if (!cg_type_param_scope_copy_names(scope, &type_param_names, &type_param_count)) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     cg->in_generic_fn = true;
@@ -6935,7 +6936,7 @@ static bool cg_resolve_type_fact_for_user_type_member(CG *cg,
             }
             return cg_fail(cg,
                            fallback ? *fallback : (FengToken){0},
-                           "codegen: unsupported builtin inferred type for field");
+                           "CE0035", "codegen: unsupported builtin inferred type for field");
 
         case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
             return cg_resolve_type_for_user_type_member(cg,
@@ -6948,7 +6949,7 @@ static bool cg_resolve_type_fact_for_user_type_member(CG *cg,
             if (fact->type_decl == NULL) {
                 return cg_fail(cg,
                                fallback ? *fallback : (FengToken){0},
-                               "codegen: inferred field type is missing its declaration");
+                               "CE0036", "codegen: inferred field type is missing its declaration");
             }
             if (fact->type_decl->kind == FENG_DECL_ENUM) {
                 *out_type = cgtype_new_enum(fact->type_decl);
@@ -6986,7 +6987,7 @@ static bool cg_resolve_type_fact_for_user_type_member(CG *cg,
             }
             return cg_fail(cg,
                            fallback ? *fallback : (FengToken){0},
-                           "codegen: unsupported declared inferred field type");
+                           "CE0037", "codegen: unsupported declared inferred field type");
 
         case FENG_SEMANTIC_TYPE_FACT_UNKNOWN:
             break;
@@ -7049,7 +7050,7 @@ static bool cg_resolve_user_field_type(CG *cg,
 
     return cg_fail(cg,
                    member->token,
-                   "codegen: field '%.*s' requires an explicit type or semantic inferred type",
+                   "CE0038", "codegen: field '%.*s' requires an explicit type or semantic inferred type",
                    (int)member->as.field.name.length,
                    member->as.field.name.data);
 }
@@ -7061,14 +7062,14 @@ static bool cg_callable_type_param_names(CG *cg,
     size_t count = sig ? sig->type_param_count : 0U;
     char **names = count ? calloc(count, sizeof *names) : NULL;
     if (count > 0U && names == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     for (size_t i = 0; i < count; ++i) {
         FengSlice name = sig->type_params[i].name;
         names[i] = strndup(name.data, name.length);
         if (names[i] == NULL) {
             cg_free_cstr_array(names, i);
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
     }
     *out_names = names;
@@ -7184,14 +7185,14 @@ static bool cg_type_param_names_from_decl(CG *cg,
                                           char ***out_names) {
     char **names = type_param_count ? calloc(type_param_count, sizeof *names) : NULL;
     if (type_param_count > 0U && names == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     for (size_t i = 0; i < type_param_count; ++i) {
         FengSlice name = type_params[i].name;
         names[i] = strndup(name.data, name.length);
         if (names[i] == NULL) {
             cg_free_cstr_array(names, i);
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
     }
     *out_names = names;
@@ -7504,7 +7505,7 @@ static bool cg_user_spec_append_decl_member(CG *cg,
                                                   &sig->token, &sm->type)) return false;
     } else {
         return cg_fail(cg, m->token,
-            "codegen: spec member kind not supported (Step 4b-α only handles fields/methods)");
+            "CE0039", "codegen: spec member kind not supported (Step 4b-α only handles fields/methods)");
     }
     return sm->feng_name != NULL && sm->c_field_name != NULL;
 }
@@ -7546,27 +7547,27 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     if (ef->uses_runtime_contract && !cg_runtime_contract_contains_name(sig->name)) {
         return cg_fail(cg,
                        sig->token,
-                       "codegen: @runtime extern func '%.*s' is not declared by runtime contract",
+                       "CE0040", "codegen: @runtime extern func '%.*s' is not declared by runtime contract",
                        (int)sig->name.length,
                        sig->name.data);
     }
 
     ef->name = strndup(sig->name.data, sig->name.length);
     if (ef->name == NULL) {
-        cg_fail(cg, sig->token, "codegen: out of memory");
+        cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     ef->c_name = cg_extern_c_symbol_name(cg, decl, sig);
     if (ef->c_name == NULL) {
         if (!cg->failed) {
-            cg_fail(cg, sig->token, "codegen: out of memory");
+            cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
         }
         goto cleanup;
     }
     ef->param_count = sig->param_count;
     ef->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
     if (sig->param_count > 0U && ef->param_types == NULL) {
-        cg_fail(cg, sig->token, "codegen: out of memory");
+        cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
 
@@ -7597,7 +7598,7 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
         if (sig->type_param_count > 0U && !has_stable_surface) {
             cg_fail(cg,
                     sig->params[i].token,
-                    "codegen: generic extern func '%.*s' parameter '%.*s' does not lower to a single external surface",
+                    "CE0041", "codegen: generic extern func '%.*s' parameter '%.*s' does not lower to a single external surface",
                     (int)sig->name.length,
                     sig->name.data,
                     (int)sig->params[i].name.length,
@@ -7619,7 +7620,7 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
         if (!has_stable_surface) {
             cg_fail(cg,
                     sig->token,
-                    "codegen: generic extern func '%.*s' return type does not lower to a single external surface",
+                    "CE0042", "codegen: generic extern func '%.*s' return type does not lower to a single external surface",
                     (int)sig->name.length,
                     sig->name.data);
             goto cleanup;
@@ -7918,7 +7919,7 @@ static bool cg_emit_type_static_binding_decl(CG *cg, const TypeStaticBinding *bi
     if (cty == NULL) {
         return cg_fail(cg,
                        binding->member != NULL ? binding->member->token : (FengToken){0},
-                       "codegen: out of memory");
+                       "IE0001", "codegen: out of memory");
     }
     if (cgtype_is_managed(binding->type)) {
         buf_append_fmt(&cg->statics,
@@ -7960,7 +7961,7 @@ static bool cg_register_user_type_members(CG *cg, UserType *t, FengCompileTarget
         else if (m->kind == FENG_TYPE_MEMBER_FINALIZER) {
             if (t->finalizer) {
                 return cg_fail(cg, m->token,
-                    "codegen: type already declares a finalizer");
+                    "CE0043", "codegen: type already declares a finalizer");
             }
             t->finalizer = m;
         }
@@ -8347,12 +8348,12 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
 
         if (member_count == 0U) {
             return cg_fail(cg, decl->token,
-                           "codegen: union-form spec has no normalized members");
+                           "CE0044", "codegen: union-form spec has no normalized members");
         }
         s->union_member_types = (CGType **)calloc(member_count,
                                                   sizeof(*s->union_member_types));
         if (s->union_member_types == NULL) {
-            return cg_fail(cg, decl->token, "codegen: out of memory");
+            return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
         }
         s->union_member_count = member_count;
         for (size_t member_index = 0U; member_index < member_count; ++member_index) {
@@ -8371,7 +8372,7 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                 s->union_member_types[member_index]->kind == CG_TYPE_GENERIC_PARAM) {
                 return cg_fail(cg,
                                member_ref != NULL ? member_ref->token : decl->token,
-                               "codegen: union-form spec member layout requires a concrete type argument");
+                               "CE0045", "codegen: union-form spec member layout requires a concrete type argument");
             }
         }
         return true;
@@ -8389,7 +8390,7 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
         if (parent_type == NULL || parent_type->kind != CG_TYPE_SPEC || parent_type->user_spec == NULL) {
             cgtype_free(parent_type);
             return cg_fail(cg, decl->token,
-                "codegen: spec parent did not resolve to an object-form spec");
+                "CE0046", "codegen: spec parent did not resolve to an object-form spec");
         }
         parent_spec = (UserSpec *)parent_type->user_spec;
         if (!cg_ensure_user_spec_members_registered(cg, parent_spec)) {
@@ -8452,7 +8453,7 @@ static bool cg_ensure_user_spec_members_registered(CG *cg, UserSpec *s) {
     if (s->members_registered) return true;
     if (s->members_registering) {
         return cg_fail(cg, s->decl->token,
-            "codegen: recursive spec parent registration detected");
+            "CE0047", "codegen: recursive spec parent registration detected");
     }
     s->members_registering = true;
     saved_program = cg->cur_program;
@@ -8535,7 +8536,7 @@ static bool cg_register_user_fit_shell_for_target(CG *cg,
             spec_type->user_spec == NULL) {
             cgtype_free(spec_type);
             return cg_fail(cg, decl->token,
-                "codegen: fit spec did not resolve to a known user spec");
+                "CE0048", "codegen: fit spec did not resolve to a known user spec");
         }
         uf->specs[spec_index] = spec_type->user_spec;
         cgtype_free(spec_type);
@@ -8670,7 +8671,7 @@ static bool cg_register_builtin_fit_shell(CG *cg,
         target_type == NULL) {
         cgtype_free(target_type);
         return cg_fail(cg, decl->token,
-            "codegen: fit target did not resolve to a builtin/array type");
+            "CE0049", "codegen: fit target did not resolve to a builtin/array type");
     }
 
     bf = &cg->builtin_fits[cg->builtin_fit_count];
@@ -8682,7 +8683,7 @@ static bool cg_register_builtin_fit_shell(CG *cg,
         if (bf->target_type_params == NULL) {
             cgtype_free(target_type);
             memset(bf, 0, sizeof *bf);
-            return cg_fail(cg, decl->token, "codegen: out of memory");
+            return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
         }
         bf->target_type_params[0] = local_type_param;
         bf->target_type_param_count = 1U;
@@ -8715,7 +8716,7 @@ static bool cg_register_builtin_fit_shell(CG *cg,
             cgtype_free(target_type);
             memset(bf, 0, sizeof *bf);
             return cg_fail(cg, decl->token,
-                "codegen: fit spec did not resolve to a known user spec");
+                "CE0048", "codegen: fit spec did not resolve to a known user spec");
         }
         bf->specs[spec_index] = spec_type->user_spec;
         cgtype_free(spec_type);
@@ -8805,7 +8806,7 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
     const FengTypeRef *target_ref = decl->as.fit_decl.target;
     if (!target_ref) {
         return cg_fail(cg, decl->token,
-            "codegen: fit target is missing");
+            "CE0050", "codegen: fit target is missing");
     }
 
     if (target_ref->kind == FENG_TYPE_REF_ARRAY) {
@@ -8814,7 +8815,7 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
 
     if (target_ref->kind != FENG_TYPE_REF_NAMED) {
         return cg_fail(cg, decl->token,
-            "codegen: only named or array fit targets are supported");
+            "CE0051", "codegen: only named or array fit targets are supported");
     }
     if (target_ref->as.named.segment_count == 1U &&
         cg_is_builtin_named_fit_target(target_ref->as.named.segments[0])) {
@@ -8825,7 +8826,7 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
         const FengDecl *target_decl = generic_target != NULL ? generic_target->decl : NULL;
         if (target_decl == NULL || target_decl->kind != FENG_DECL_TYPE) {
             return cg_fail(cg, decl->token,
-                "codegen: fit target did not resolve to a known user type");
+                "CE0052", "codegen: fit target did not resolve to a known user type");
         }
         for (size_t i = 0; i < cg->user_type_count; ++i) {
             const UserType *candidate = &cg->user_types[i];
@@ -8867,7 +8868,7 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
         }
         cgtype_free(resolved_target);
         return cg_fail(cg, decl->token,
-            "codegen: fit target type '%.*s' is not a known user type",
+            "CE0053", "codegen: fit target type '%.*s' is not a known user type",
             (int)seg->length, seg->data);
     }
     return cg_register_user_fit_shell_for_target(cg, decl, target, NULL, 0U, NULL, 0U);
@@ -8927,7 +8928,7 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
         const FengTypeMember *m = decl->as.fit_decl.members[i];
         if (m->kind != FENG_TYPE_MEMBER_METHOD) {
             return cg_fail(cg, m->token,
-                "codegen: only methods are supported in fit bodies");
+                "CE0054", "codegen: only methods are supported in fit bodies");
         }
         UserMethod *um = &uf->methods[mi++];
         const FengCallableSignature *sig = &m->as.callable;
@@ -8982,7 +8983,7 @@ static bool cg_register_builtin_fit_members(CG *cg, BuiltinFit *bf) {
 
         if (m->kind != FENG_TYPE_MEMBER_METHOD) {
             return cg_fail(cg, m->token,
-                "codegen: only methods are supported in fit bodies");
+                "CE0054", "codegen: only methods are supported in fit bodies");
         }
         UserMethod *um = &bf->methods[mi++];
         const FengCallableSignature *sig = &m->as.callable;
@@ -9094,7 +9095,7 @@ static bool cg_append_union_member_slot_descriptor(CG *cg,
         const char *aggregate_desc = cg_aggregate_desc_name(member_type);
         if (aggregate_desc == NULL) {
             return cg_fail(cg, blame,
-                           "codegen: union-form aggregate member is missing a descriptor");
+                           "CE0055", "codegen: union-form aggregate member is missing a descriptor");
         }
         buf_append_fmt(b,
                        "), .kind = FENG_SLOT_NESTED_AGGREGATE, .nested = &%s }",
@@ -9325,7 +9326,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         buf_init(&slot_descriptor);
         if (s->union_member_count == 0U) {
             (void)cg_fail(cg, s->decl->token,
-                          "codegen: union-form spec has no members");
+                          "CE0056", "codegen: union-form spec has no members");
             return;
         }
         if (!cg_append_union_member_slot_descriptor(cg,
@@ -9364,7 +9365,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
                 if (member_desc == NULL) {
                     (void)cg_fail(cg,
                                   s->decl->token,
-                                  "codegen: union default aggregate member is missing a descriptor");
+                                  "CE0057", "codegen: union default aggregate member is missing a descriptor");
                     return;
                 }
                 buf_append_fmt(td,
@@ -9861,14 +9862,14 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
         if (desc == NULL) {
             return cg_fail(cg,
                            blame,
-                           "codegen: missing generic descriptor for tuple field '%s'",
+                           "CE0058", "codegen: missing generic descriptor for tuple field '%s'",
                            field->feng_name);
         }
         if (value->type == NULL || value->type->kind != CG_TYPE_GENERIC_PARAM ||
             value->type->generic_param_index != gp_index) {
             return cg_fail(cg,
                            blame,
-                           "codegen: tuple field '%s' generic initializer type mismatch",
+                           "CE0059", "codegen: tuple field '%s' generic initializer type mismatch",
                            field->feng_name);
         }
 
@@ -9877,7 +9878,7 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
         if (slot_tmp == NULL || src_tmp == NULL) {
             free(slot_tmp);
             free(src_tmp);
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
 
         if (rad_desc_expr != NULL) {
@@ -10001,7 +10002,7 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
         if (agg_desc == NULL) {
             return cg_fail(cg,
                            blame,
-                           "codegen: missing aggregate descriptor for tuple field '%s'",
+                           "CE0060", "codegen: missing aggregate descriptor for tuple field '%s'",
                            field->feng_name);
         }
         buf_init(&lvalue);
@@ -10012,7 +10013,7 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
             buf_append_fmt(&lvalue, "%s.%s", tuple_expr, field->c_name);
         }
         if (lvalue.data == NULL) {
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (rad_desc_expr != NULL) {
             buf_append_fmt(cg->cur_body,
@@ -10026,17 +10027,17 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
                 buf_free(&lvalue);
                 return cg_fail(cg,
                                blame,
-                               "codegen: missing aggregate default-init rule for tuple field '%s'",
+                               "CE0061", "codegen: missing aggregate default-init rule for tuple field '%s'",
                                field->feng_name);
             }
         }
         if (value->owns_ref && cg_materialize_to_local(cg, value, "_t") == NULL) {
             buf_free(&lvalue);
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (value->owns_ref) {
             buf_free(&lvalue);
-            return cg_fail(cg, blame, "codegen: internal tuple aggregate ownership state was not materialized");
+            return cg_fail(cg, blame, "CE0062", "codegen: internal tuple aggregate ownership state was not materialized");
         }
         if (cgtype_is_aggregate(value->type)) {
             if (rad_desc_expr != NULL) {
@@ -10054,7 +10055,7 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
             }
         } else {
             buf_free(&lvalue);
-            return cg_fail(cg, blame, "codegen: tuple aggregate field initializer type mismatch");
+            return cg_fail(cg, blame, "CE0063", "codegen: tuple aggregate field initializer type mismatch");
         }
         buf_free(&lvalue);
         return true;
@@ -10064,7 +10065,7 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
         char *cty = cg_ctype_dup(field->type);
 
         if (cty == NULL) {
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (rad_desc_expr != NULL) {
             if (cgtype_is_by_value_struct(field->type)) {
@@ -10108,7 +10109,7 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
         !cg_type_is_tuple_user(expected_type)) {
         return cg_fail(cg,
                        e != NULL ? e->token : (FengToken){0},
-                       "codegen: tuple literal requires a named tuple target type");
+                       "CE0064", "codegen: tuple literal requires a named tuple target type");
     }
 
     const UserType *ut = expected_type->user;
@@ -10116,7 +10117,7 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
     if (!cg_tuple_user_has_field_count(ut, item_count)) {
         return cg_fail(cg,
                        e->token,
-                       "codegen: tuple literal arity does not match target tuple type '%s'",
+                       "CE0065", "codegen: tuple literal arity does not match target tuple type '%s'",
                        ut->feng_name);
     }
 
@@ -10128,7 +10129,7 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
                        cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx);
         if (!has_rad) {
             return cg_fail(cg, e->token,
-                "codegen: tuple type '%s' requires reified layout but no "
+                "CE0066", "codegen: tuple type '%s' requires reified layout but no "
                 "reified_agg_dep found for '%s'",
                 ut->feng_name, agg_desc ? agg_desc : "(null)");
         }
@@ -10140,13 +10141,13 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
             "((const FengAggregateDescriptor *)%s->reified_agg_deps[%zu])",
             rad_src, rad_idx);
         if (rad_expr_buf.data == NULL) {
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
 
         char *tmp = cg_fresh_temp(cg, "_tuple");
         if (tmp == NULL) {
             buf_free(&rad_expr_buf);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
         cg_emit_current_stmt_line_directive_force(cg);
         buf_append_fmt(cg->cur_body,
@@ -10191,7 +10192,7 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
     if (tmp == NULL || cty == NULL) {
         free(tmp);
         free(cty);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, tmp);
@@ -10235,16 +10236,16 @@ static bool cg_emit_tuple_spec_box_subject(CG *cg,
     if (source == NULL || tuple_type == NULL || out_subject_expr == NULL ||
         !cg_user_type_is_tuple(tuple_type) || tuple_type->c_tuple_box_struct_name == NULL ||
         tuple_type->c_tuple_box_desc_name == NULL) {
-        return cg_fail(cg, blame, "codegen: tuple spec coercion is missing box metadata");
+        return cg_fail(cg, blame, "CE0067", "codegen: tuple spec coercion is missing box metadata");
     }
 
     if (cg_materialize_to_local(cg, source, "_tuple_subject") == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     box_tmp = cg_fresh_temp(cg, "_tuple_box");
     if (box_tmp == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     buf_append_fmt(cg->cur_body,
                    "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n",
@@ -10258,7 +10259,7 @@ static bool cg_emit_tuple_spec_box_subject(CG *cg,
 
         if (desc == NULL) {
             free(box_tmp);
-            return cg_fail(cg, blame, "codegen: missing tuple aggregate descriptor for spec coercion");
+            return cg_fail(cg, blame, "CE0068", "codegen: missing tuple aggregate descriptor for spec coercion");
         }
         buf_append_fmt(cg->cur_body,
                        "    feng_aggregate_assign(&%s->value, &%s, &%s);\n",
@@ -10291,7 +10292,7 @@ static bool cg_emit_tuple_cast_to_type(CG *cg,
     }
     if (!cg_type_is_tuple_user(source.type)) {
         er_free(&source);
-        return cg_fail(cg, e->token, "codegen: tuple cast source must be a tuple value");
+        return cg_fail(cg, e->token, "CE0069", "codegen: tuple cast source must be a tuple value");
     }
     if (source.type->user == target->user) {
         cgtype_free(source.type);
@@ -10301,12 +10302,12 @@ static bool cg_emit_tuple_cast_to_type(CG *cg,
     }
     if (!cg_tuple_user_has_field_count(source.type->user, target->user->field_count)) {
         er_free(&source);
-        return cg_fail(cg, e->token, "codegen: tuple cast arity mismatch");
+        return cg_fail(cg, e->token, "CE0070", "codegen: tuple cast arity mismatch");
     }
 
     if (cg_materialize_to_local(cg, &source, "_tuple_src") == NULL) {
         er_free(&source);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
 
     char *tmp = cg_fresh_temp(cg, "_tuple_cast");
@@ -10315,7 +10316,7 @@ static bool cg_emit_tuple_cast_to_type(CG *cg,
         free(tmp);
         free(cty);
         er_free(&source);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, tmp);
@@ -10342,7 +10343,7 @@ static bool cg_emit_tuple_cast_to_type(CG *cg,
             er_free(&field_value);
             free(tmp);
             er_free(&source);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
         if (!cg_emit_tuple_field_value_store(cg,
                                              tmp,
@@ -10377,7 +10378,7 @@ static bool cg_emit_imported_binding_expr(CG *cg,
         return false;
     }
     if (!cg_binding_public_surface_names(cg, decl, &slot_name, &ensure_init_name)) {
-        return cg_fail(cg, decl->token, "codegen: out of memory");
+        return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
     }
     if (!cg_resolve_global_binding_type(cg, decl, &out->type)) {
         free(slot_name);
@@ -10406,12 +10407,12 @@ static bool cg_emit_imported_binding_assign(CG *cg,
     }
     if (decl->as.binding.mutability != FENG_MUTABILITY_VAR) {
         return cg_fail(cg, stmt->token,
-            "codegen: cannot assign to immutable imported binding '%.*s'",
+            "CE0071", "codegen: cannot assign to immutable imported binding '%.*s'",
             (int)decl->as.binding.name.length,
             decl->as.binding.name.data);
     }
     if (!cg_binding_public_surface_names(cg, decl, &slot_name, &ensure_init_name)) {
-        return cg_fail(cg, decl->token, "codegen: out of memory");
+        return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
     }
     if (!cg_resolve_global_binding_type(cg, decl, &binding_type)) {
         free(slot_name);
@@ -10433,7 +10434,7 @@ static bool cg_emit_imported_binding_assign(CG *cg,
             free(slot_name);
             free(ensure_init_name);
             return cg_fail(cg, stmt->token,
-                "codegen: compound assignment requires a numeric binding type");
+                "CE0072", "codegen: compound assignment requires a numeric binding type");
         }
 
         old_tmp = cg_fresh_temp(cg, "_old");
@@ -10469,7 +10470,7 @@ static bool cg_emit_imported_binding_assign(CG *cg,
             free(slot_name);
             free(ensure_init_name);
             return cg_fail(cg, stmt->token,
-                "codegen: unsupported compound assignment operator");
+                "CE0073", "codegen: unsupported compound assignment operator");
         }
 
         buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
@@ -10512,14 +10513,14 @@ static bool cg_emit_imported_binding_assign(CG *cg,
             free(ensure_init_name);
             return cg_fail(cg,
                            stmt->token,
-                           "codegen: missing aggregate descriptor for assignment");
+                           "CE0074", "codegen: missing aggregate descriptor for assignment");
         }
         if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
             er_free(&v);
             cgtype_free(binding_type);
             free(slot_name);
             free(ensure_init_name);
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
             "    feng_aggregate_assign(&%s, &%s, &%s);\n",
@@ -10628,7 +10629,7 @@ static bool cg_emit_return_expr_result(CG *cg,
             free(tmp);
             free(cty);
             er_free(r);
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (!r->owns_ref) {
             buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
@@ -10646,7 +10647,7 @@ static bool cg_emit_return_expr_result(CG *cg,
         if (!desc) {
             er_free(r);
             return cg_fail(cg, blame,
-                "codegen: missing aggregate descriptor for spec return");
+                "CE0075", "codegen: missing aggregate descriptor for spec return");
         }
         char *tmp = cg_fresh_temp(cg, "_ret");
         char *cty = cg_ctype_dup(r->type);
@@ -10654,7 +10655,7 @@ static bool cg_emit_return_expr_result(CG *cg,
             free(tmp);
             free(cty);
             er_free(r);
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (!r->owns_ref) {
             buf_append_fmt(cg->cur_body,
@@ -10679,7 +10680,7 @@ static bool cg_emit_return_expr_result(CG *cg,
             free(tmp);
             free(cty);
             er_free(r);
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (cgtype_is_by_value_struct(r->type)) {
             buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
@@ -10713,14 +10714,14 @@ static bool cg_emit_constructor_invoke(CG *cg,
         if (arg_count != 0U) {
             buf_free(&args_buf);
             return cg_fail(cg, blame,
-                           "codegen: constructor arguments require a resolved user-defined constructor");
+                           "CE0076", "codegen: constructor arguments require a resolved user-defined constructor");
         }
         return true;
     }
     if (arg_count != ctor->param_count) {
         buf_free(&args_buf);
         return cg_fail(cg, blame,
-                       "codegen: wrong argument count for constructor '%s' (expected %zu, got %zu)",
+                       "CE0077", "codegen: wrong argument count for constructor '%s' (expected %zu, got %zu)",
                        ctor->feng_name,
                        ctor->param_count,
                        arg_count);
@@ -10845,7 +10846,7 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
             }
 
             char *processed = malloc(out_len + 1);
-            if (!processed) return cg_fail(cg, e->token, "codegen: out of memory");
+            if (!processed) return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             size_t di = 0;
             for (size_t i = 0; i < blen; ) {
                 if (body[i] == '`' && i + 1 < blen && body[i + 1] == '`') {
@@ -10860,7 +10861,7 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
 
             const char *cv = cg_string_literal_var(cg, processed, di);
             free(processed);
-            if (!cv) return cg_fail(cg, e->token, "codegen: out of memory");
+            if (!cv) return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             out->c_expr = strdup(cv);
             out->type = cgtype_new(CG_TYPE_STRING);
             out->owns_ref = false;   /* immortal */
@@ -10871,12 +10872,12 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
          * literal is well-formed: starts/ends with '"' and uses only the
          * supported escape set (\\ \" \n \r \t \0 \xNN). */
         if (rlen < 2 || raw[0] != '"' || raw[rlen - 1] != '"') {
-            return cg_fail(cg, e->token, "codegen: malformed string literal");
+            return cg_fail(cg, e->token, "CE0078", "codegen: malformed string literal");
         }
         const char *body = raw + 1;
         size_t blen = rlen - 2;
         char *decoded = malloc(blen + 1);
-        if (!decoded) return cg_fail(cg, e->token, "codegen: out of memory");
+        if (!decoded) return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         size_t di = 0;
         for (size_t i = 0; i < blen; i++) {
             char ch = body[i];
@@ -10895,7 +10896,7 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                         if (i + 2 >= blen) {
                             free(decoded);
                             return cg_fail(cg, e->token,
-                                "codegen: invalid \\x escape: expected 2 hex digits");
+                                "CE0079", "codegen: invalid \\x escape: expected 2 hex digits");
                         }
                         {
                             char h1 = body[i + 1];
@@ -10908,7 +10909,7 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                             else {
                                 free(decoded);
                                 return cg_fail(cg, e->token,
-                                    "codegen: invalid \\x escape: expected hex digit");
+                                    "CE0080", "codegen: invalid \\x escape: expected hex digit");
                             }
                             if (h2 >= '0' && h2 <= '9')      low = (unsigned int)(h2 - '0');
                             else if (h2 >= 'a' && h2 <= 'f') low = (unsigned int)(h2 - 'a' + 10);
@@ -10916,7 +10917,7 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                             else {
                                 free(decoded);
                                 return cg_fail(cg, e->token,
-                                    "codegen: invalid \\x escape: expected hex digit");
+                                    "CE0080", "codegen: invalid \\x escape: expected hex digit");
                             }
                             decoded[di++] = (char)((high << 4) | low);
                             i += 2; /* skip the 2 hex digits (loop will ++i) */
@@ -10925,7 +10926,7 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                     default:
                         free(decoded);
                         return cg_fail(cg, e->token,
-                            "codegen: unknown string escape '\\%c'", esc);
+                            "CE0081", "codegen: unknown string escape '\\%c'", esc);
                 }
             } else {
                 decoded[di++] = ch;
@@ -10934,13 +10935,13 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         decoded[di] = '\0';
         const char *cv = cg_string_literal_var(cg, decoded, di);
         free(decoded);
-        if (!cv) return cg_fail(cg, e->token, "codegen: out of memory");
+        if (!cv) return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         out->c_expr = strdup(cv);
         out->type = cgtype_new(CG_TYPE_STRING);
         out->owns_ref = false;   /* immortal */
         return out->c_expr && out->type;
     }
-    return cg_fail(cg, e->token, "codegen: unsupported literal kind");
+    return cg_fail(cg, e->token, "CE0082", "codegen: unsupported literal kind");
 }
 
 static const char *cg_binop_c(FengTokenKind op) {
@@ -11037,7 +11038,7 @@ static bool cg_unify_numeric(CG *cg, FengToken tok, ExprResult *l, ExprResult *r
         *out_common = cgtype_new(chosen);
         return true;
     }
-    return cg_fail(cg, tok, "codegen: cannot apply numeric op to non-numeric operands");
+    return cg_fail(cg, tok, "CE0083", "codegen: cannot apply numeric op to non-numeric operands");
 }
 
 static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
@@ -11060,7 +11061,7 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
         if (!cgtype_is_aggregate(lr.type) || !cgtype_is_aggregate(rr.type)) {
             er_free(&lr); er_free(&rr);
             return cg_fail(cg, e->token,
-                "codegen: spec equality requires aggregate spec operands");
+                "CE0084", "codegen: spec equality requires aggregate spec operands");
         }
         cg_materialize_to_local(cg, &lr, "_t");
         cg_materialize_to_local(cg, &rr, "_t");
@@ -11125,7 +11126,7 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
         const char *desc_name = lr.type->user->c_aggregate_desc_name;
         if (desc_name == NULL) {
             er_free(&lr); er_free(&rr);
-            return cg_fail(cg, e->token, "codegen: tuple type has no aggregate descriptor for equality");
+            return cg_fail(cg, e->token, "CE0085", "codegen: tuple type has no aggregate descriptor for equality");
         }
         Buf b; buf_init(&b);
         if (e->as.binary.op == FENG_TOKEN_EQ) {
@@ -11142,14 +11143,14 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
     const char *cop = cg_binop_c(e->as.binary.op);
     if (!cop) {
         er_free(&lr); er_free(&rr);
-        return cg_fail(cg, e->token, "codegen: unsupported binary operator");
+        return cg_fail(cg, e->token, "CE0086", "codegen: unsupported binary operator");
     }
 
     /* Logical operators: bool && bool, bool || bool. */
     if (e->as.binary.op == FENG_TOKEN_AND_AND || e->as.binary.op == FENG_TOKEN_OR_OR) {
         if (lr.type->kind != CG_TYPE_BOOL || rr.type->kind != CG_TYPE_BOOL) {
             er_free(&lr); er_free(&rr);
-            return cg_fail(cg, e->token, "codegen: && / || require bool operands");
+            return cg_fail(cg, e->token, "CE0087", "codegen: && / || require bool operands");
         }
         Buf b; buf_init(&b);
         buf_append_fmt(&b, "(%s %s %s)", lr.c_expr, cop, rr.c_expr);
@@ -11166,7 +11167,7 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
     if (is_cmp && lr.type->kind == CG_TYPE_BOOL && rr.type->kind == CG_TYPE_BOOL) {
         if (e->as.binary.op != FENG_TOKEN_EQ && e->as.binary.op != FENG_TOKEN_NE) {
             er_free(&lr); er_free(&rr);
-            return cg_fail(cg, e->token, "codegen: ordering comparisons require numeric operands");
+            return cg_fail(cg, e->token, "CE0088", "codegen: ordering comparisons require numeric operands");
         }
         Buf b; buf_init(&b);
         buf_append_fmt(&b, "(%s %s %s)", lr.c_expr, cop, rr.c_expr);
@@ -11199,7 +11200,7 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
             cgtype_free(common);
             er_free(&lr);
             er_free(&rr);
-            return cg_fail(cg, e->token, "codegen: unsupported float modulo operation");
+            return cg_fail(cg, e->token, "CE0089", "codegen: unsupported float modulo operation");
         }
     } else {
         buf_append_fmt(&b, "((%s)%s %s (%s)%s)", cty, lr.c_expr, cop, cty, rr.c_expr);
@@ -11269,7 +11270,7 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
         if (inner.type == NULL) {
             er_free(&inner);
             return cg_fail(cg, e->token,
-                "codegen: unary '&' is missing an operand type");
+                "CE0090", "codegen: unary '&' is missing an operand type");
         }
 
         if (inner.type->kind == CG_TYPE_OBJECT &&
@@ -11280,7 +11281,7 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
             if (inner.owns_ref) {
                 if (cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
                     er_free(&inner);
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
             }
 
@@ -11314,7 +11315,7 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
             if (inner.owns_ref) {
                 if (cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
                     er_free(&inner);
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
             }
             Buf b; buf_init(&b);
@@ -11350,29 +11351,29 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
                 !cg_array_data_pointer_element_is_lowerable(inner.type->element)) {
                 er_free(&inner);
                 return cg_fail(cg, e->token,
-                    "codegen: this ABI-compatible array element type does not support data-pointer lowering");
+                    "CE0091", "codegen: this ABI-compatible array element type does not support data-pointer lowering");
             }
             if (inner.owns_ref && cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
                 er_free(&inner);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
 
             elem_ptr_type = cgtype_new(CG_TYPE_POINTER);
             if (elem_ptr_type == NULL) {
                 er_free(&inner);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             elem_ptr_type->element = cgtype_clone(inner.type->element);
             if (elem_ptr_type->element == NULL) {
                 cgtype_free(elem_ptr_type);
                 er_free(&inner);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             elem_ptr_cty = cg_ctype_dup(elem_ptr_type);
             cgtype_free(elem_ptr_type);
             if (elem_ptr_cty == NULL) {
                 er_free(&inner);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
 
             buf_init(&b);
@@ -11419,12 +11420,12 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
                 inner.c_expr = strdup(addr_binding->c_name);
                 if (inner.c_expr == NULL) {
                     er_free(&inner);
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
             } else if (!cg_expr_is_direct_lvalue(e->as.unary.operand)) {
                 if (cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
                     er_free(&inner);
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
             }
 
@@ -11454,7 +11455,7 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
 
         er_free(&inner);
         return cg_fail(cg, e->token,
-            "codegen: this operand type does not support ABI pointer formation; only string, ABI scalar, fielded @abi value, and ABI-compatible array operands are allowed here");
+            "CE0092", "codegen: this operand type does not support ABI pointer formation; only string, ABI scalar, fielded @abi value, and ABI-compatible array operands are allowed here");
     }
     const char *op = NULL;
     bool require_bool = false;
@@ -11466,19 +11467,19 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
         case FENG_TOKEN_TILDE: op = "~"; require_int = true; break;
         default:
             er_free(&inner);
-            return cg_fail(cg, e->token, "codegen: unsupported unary operator");
+            return cg_fail(cg, e->token, "CE0093", "codegen: unsupported unary operator");
     }
     if (require_bool && inner.type->kind != CG_TYPE_BOOL) {
         er_free(&inner);
-        return cg_fail(cg, e->token, "codegen: '!' requires bool operand");
+        return cg_fail(cg, e->token, "CE0094", "codegen: '!' requires bool operand");
     }
     if (require_int && !cgtype_is_integer(inner.type->kind)) {
         er_free(&inner);
-        return cg_fail(cg, e->token, "codegen: '~' requires integer operand");
+        return cg_fail(cg, e->token, "CE0095", "codegen: '~' requires integer operand");
     }
     if (!require_bool && !require_int && !cgtype_is_numeric(inner.type->kind)) {
         er_free(&inner);
-        return cg_fail(cg, e->token, "codegen: unary +/- requires numeric operand");
+        return cg_fail(cg, e->token, "CE0096", "codegen: unary +/- requires numeric operand");
     }
     Buf b; buf_init(&b);
     buf_append_fmt(&b, "(%s%s)", op, inner.c_expr);
@@ -11511,7 +11512,7 @@ static bool cg_emit_lambda_closure_type(CG *cg,
     for (size_t i = 0; i < capture_count; ++i) {
         if (captures[i]->capture_cell_struct_name == NULL) {
             return cg_fail(cg, blame,
-                "codegen: lambda capture was not lowered to a capture cell");
+                "CE0097", "codegen: lambda capture was not lowered to a capture cell");
         }
         buf_append_fmt(td, "    struct %s *%s;\n",
                        captures[i]->capture_cell_struct_name,
@@ -11620,12 +11621,12 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
                                                         &body_captured_names,
                                                         &body_captured_name_count,
                                                         &body_captures_self)) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     fn_scope = scope_push(NULL);
     if (fn_scope == NULL) {
-        cg_fail(cg, blame, "codegen: out of memory");
+        cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
 
@@ -11696,7 +11697,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
                                         captures[i]->type)) {
             buf_free(&cell_expr);
             buf_free(&value_expr);
-            cg_fail(cg, blame, "codegen: out of memory");
+            cg_fail(cg, blame, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         if (!cg_debug_add_variable_record_slice_cgtype(cg,
@@ -11722,7 +11723,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
         char arg_name[32];
         int n = snprintf(arg_name, sizeof arg_name, "_arg%zu", i);
         if (n < 0 || (size_t)n >= sizeof arg_name) {
-            cg_fail(cg, param->token, "codegen: lambda argument name overflow");
+            cg_fail(cg, param->token, "CE0098", "codegen: lambda argument name overflow");
             goto cleanup;
         }
         buf_append_fmt(&fn, "    (void)%s;\n", arg_name);
@@ -11747,7 +11748,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
             !scope_add(fn_scope, param_name, arg_name, param_type, true)) {
             free(param_name);
             cgtype_free(param_type);
-            cg_fail(cg, param->token, "codegen: out of memory");
+            cg_fail(cg, param->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         if (!cg_debug_add_variable_record_slice_cgtype(cg,
@@ -11791,7 +11792,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     }
     buf_append_cstr(&fn, "}\n\n");
     if (fn.data == NULL) {
-        cg_fail(cg, blame, "codegen: out of memory");
+        cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     buf_append(&cg->witness_defs, fn.data, fn.length);
@@ -11841,18 +11842,18 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
     er_init(out);
     if (lambda_expr == NULL || lambda_expr->kind != FENG_EXPR_LAMBDA) {
         return cg_fail(cg, blame,
-            "codegen: callable lambda coercion is missing lambda semantic data");
+            "CE0099", "codegen: callable lambda coercion is missing lambda semantic data");
     }
     if (!cg_resolve_coercion_target_user_spec(cg, cs, blame, &target_spec)) {
         return false;
     }
     if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_CALLABLE) {
         return cg_fail(cg, blame,
-            "codegen: callable lambda coercion target was not registered as a callable-form spec");
+            "CE0100", "codegen: callable lambda coercion target was not registered as a callable-form spec");
     }
     if (target_spec->callable_param_count != lambda_expr->as.lambda.param_count) {
         return cg_fail(cg, blame,
-            "codegen: callable lambda coercion parameter count mismatch");
+            "CE0101", "codegen: callable lambda coercion parameter count mismatch");
     }
 
     capture_capacity = lambda_expr->as.lambda.capture_count +
@@ -11862,7 +11863,7 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
         capture_names = calloc(capture_capacity, sizeof *capture_names);
         capture_field_names = calloc(capture_capacity, sizeof *capture_field_names);
         if (captures == NULL || capture_names == NULL || capture_field_names == NULL) {
-            cg_fail(cg, blame, "codegen: out of memory");
+            cg_fail(cg, blame, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
     }
@@ -11879,7 +11880,7 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
             local->capture_cell_struct_name == NULL ||
             local->capture_cell_desc_name == NULL) {
             cg_fail(cg, blame,
-                "codegen: lambda capture '%.*s' was not lowered to a capture cell",
+                "CE0102", "codegen: lambda capture '%.*s' was not lowered to a capture cell",
                 (int)capture->name.length,
                 capture->name.data);
             goto cleanup;
@@ -11891,7 +11892,7 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
         buf_append_fmt(&fb, "_cap%zu", capture_count);
         capture_field_names[capture_count] = fb.data;
         if (capture_field_names[capture_count] == NULL) {
-            cg_fail(cg, blame, "codegen: out of memory");
+            cg_fail(cg, blame, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         capture_count += 1U;
@@ -11903,7 +11904,7 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
             local->capture_cell_struct_name == NULL ||
             local->capture_cell_desc_name == NULL) {
             cg_fail(cg, blame,
-                "codegen: lambda self capture was not lowered to a capture cell");
+                "CE0103", "codegen: lambda self capture was not lowered to a capture cell");
             goto cleanup;
         }
         captures[capture_count] = local;
@@ -11913,7 +11914,7 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
         buf_append_fmt(&fb, "_cap%zu", capture_count);
         capture_field_names[capture_count] = fb.data;
         if (capture_field_names[capture_count] == NULL) {
-            cg_fail(cg, blame, "codegen: out of memory");
+            cg_fail(cg, blame, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         capture_count += 1U;
@@ -11941,7 +11942,7 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
         invoke_name = ib.data;
     }
     if (closure_struct_name == NULL || closure_desc_name == NULL || invoke_name == NULL) {
-        cg_fail(cg, blame, "codegen: out of memory");
+        cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
 
@@ -11971,7 +11972,7 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
 
     closure_var = cg_fresh_temp(cg, "_lambda");
     if (closure_var == NULL) {
-        cg_fail(cg, blame, "codegen: out of memory");
+        cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     buf_append_fmt(cg->cur_body,
@@ -12009,7 +12010,7 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
     out->type = cgtype_new(CG_TYPE_CALLABLE);
     if (out->c_expr == NULL || out->type == NULL) {
         er_free(out);
-        cg_fail(cg, blame, "codegen: out of memory");
+        cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     out->type->user_spec = target_spec;
@@ -12059,7 +12060,7 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
         }
     }
     return cg_fail(cg, e->token,
-        "codegen: identifier '%.*s' not found",
+        "CE0104", "codegen: identifier '%.*s' not found",
         (int)e->as.identifier.length, e->as.identifier.data);
 }
 
@@ -12076,11 +12077,11 @@ static bool cg_emit_callable_function_coercion(CG *cg,
     }
     if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_CALLABLE) {
         return cg_fail(cg, e->token,
-            "codegen: callable coercion target was not registered as a callable-form spec");
+            "CE0105", "codegen: callable coercion target was not registered as a callable-form spec");
     }
     if (cs->callable_decl == NULL || cs->callable_decl->kind != FENG_DECL_FUNCTION) {
         return cg_fail(cg, e->token,
-            "codegen: only top-level function callable coercions are supported in this step");
+            "CE0106", "codegen: only top-level function callable coercions are supported in this step");
     }
     if (!cg_ensure_callable_function_value(cg, target_spec, cs->callable_decl,
                                            e->token, &callable_var)) {
@@ -12114,17 +12115,17 @@ static bool cg_emit_abi_function_pointer_site(CG *cg,
     }
     if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_CALLABLE) {
         return cg_fail(cg, e->token,
-            "codegen: ABI function pointer target was not registered as a callable-form spec");
+            "CE0107", "codegen: ABI function pointer target was not registered as a callable-form spec");
     }
     if (cs->callable_source != FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN ||
         cs->callable_decl == NULL || cs->callable_decl->kind != FENG_DECL_FUNCTION) {
         return cg_fail(cg, e->token,
-            "codegen: ABI function pointers currently support only top-level @abi functions");
+            "CE0108", "codegen: ABI function pointers currently support only top-level @abi functions");
     }
     fn = cg_find_free_fn_by_decl(cg, cs->callable_decl);
     if (fn == NULL || (fn->c_name == NULL && fn->c_abi_name == NULL)) {
         return cg_fail(cg, e->token,
-            "codegen: ABI function pointer source function was not registered");
+            "CE0109", "codegen: ABI function pointer source function was not registered");
     }
 
     {
@@ -12160,18 +12161,18 @@ static bool cg_emit_callable_method_coercion(CG *cg,
     er_init(out);
     if (e == NULL || e->kind != FENG_EXPR_MEMBER || e->as.member.object == NULL) {
         return cg_fail(cg, e ? e->token : (FengToken){0},
-            "codegen: callable method coercion requires a member expression");
+            "CE0110", "codegen: callable method coercion requires a member expression");
     }
     if (!cg_resolve_coercion_target_user_spec(cg, cs, e->token, &target_spec)) {
         return false;
     }
     if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_CALLABLE) {
         return cg_fail(cg, e->token,
-            "codegen: callable coercion target was not registered as a callable-form spec");
+            "CE0105", "codegen: callable coercion target was not registered as a callable-form spec");
     }
     if (cs->callable_member == NULL || cs->callable_owner_type_decl == NULL) {
         return cg_fail(cg, e->token,
-            "codegen: callable method coercion is missing semantic resolution data");
+            "CE0111", "codegen: callable method coercion is missing semantic resolution data");
     }
     if (!cg_emit_expr(cg, e->as.member.object, &recv)) {
         return false;
@@ -12179,18 +12180,18 @@ static bool cg_emit_callable_method_coercion(CG *cg,
     if (recv.type == NULL || recv.type->kind != CG_TYPE_OBJECT || recv.type->user == NULL) {
         er_free(&recv);
         return cg_fail(cg, e->token,
-            "codegen: callable method coercion source must be an object value");
+            "CE0112", "codegen: callable method coercion source must be an object value");
     }
     if (recv.type->user->decl != cs->callable_owner_type_decl) {
         er_free(&recv);
         return cg_fail(cg, e->token,
-            "codegen: callable method coercion receiver type does not match resolved owner type");
+            "CE0113", "codegen: callable method coercion receiver type does not match resolved owner type");
     }
     method = cg_user_type_method_by_member(recv.type->user, cs->callable_member);
     if (method == NULL) {
         er_free(&recv);
         return cg_fail(cg, e->token,
-            "codegen: callable method coercion source method was not registered");
+            "CE0114", "codegen: callable method coercion source method was not registered");
     }
     if (cgtype_is_managed(recv.type) && recv.owns_ref) {
         cg_materialize_to_local(cg, &recv, "_t");
@@ -12251,7 +12252,7 @@ static bool cg_emit_callable_other_rewrap(CG *cg,
 
     if (!cg_callable_specs_signature_compatible(src_spec, dst_spec)) {
         return cg_fail(cg, blame,
-            "codegen: callable-form coercion requires source/target callable signatures to match");
+            "CE0115", "codegen: callable-form coercion requires source/target callable signatures to match");
     }
     if (cgtype_is_managed(source->type) && source->owns_ref) {
         cg_materialize_to_local(cg, source, "_t");
@@ -12271,7 +12272,7 @@ static bool cg_emit_callable_other_rewrap(CG *cg,
     if (adapter_name == NULL || closure_var == NULL) {
         free(adapter_name);
         free(closure_var);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     /* Prototype emitted early because fn_defs are emitted before witness_defs. */
@@ -12343,7 +12344,7 @@ static bool cg_emit_callable_other_rewrap(CG *cg,
         free(adapter_name);
         free(closure_var);
         er_free(out);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     out->type->user_spec = dst_spec;
     out->owns_ref = true;
@@ -12394,10 +12395,10 @@ static bool cg_emit_callable_spec_coercion(CG *cg,
         }
         er_free(&src);
         return cg_fail(cg, e->token,
-            "codegen: callable-form coercion source must be a callable value");
+            "CE0116", "codegen: callable-form coercion source must be a callable value");
     }
     return cg_fail(cg, e->token,
-        "codegen: callable-form lambda/method coercion not yet supported in this step");
+        "CE0117", "codegen: callable-form lambda/method coercion not yet supported in this step");
 }
 
 static bool cg_emit_union_spec_coercion(CG *cg,
@@ -12421,7 +12422,7 @@ static bool cg_emit_union_spec_coercion(CG *cg,
     if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_UNION ||
         site->member_index >= target_spec->union_member_count) {
         return cg_fail(cg, e->token,
-                       "codegen: union coercion target member is invalid");
+                       "CE0118", "codegen: union coercion target member is invalid");
     }
     if (!cg_emit_expr_raw(cg, e, &source)) {
         return false;
@@ -12457,7 +12458,7 @@ static bool cg_emit_union_spec_coercion(CG *cg,
                 er_free(&source);
                 buf_free(&expr);
                 buf_free(&slot_descriptor);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             buf_append_fmt(&expr, "(%s)(%s)", member_ctype, source.c_expr);
             free(member_ctype);
@@ -12473,7 +12474,7 @@ static bool cg_emit_union_spec_coercion(CG *cg,
     if (out->type == NULL || out->c_expr == NULL) {
         er_free(&source);
         er_free(out);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     out->type->user_spec = target_spec;
     out->owns_ref = payload_owns_ref;
@@ -12530,7 +12531,7 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
             const Local *l = scope_lookup(cg->cur_scope, "self", 4);
             if (!l) {
                 return cg_fail(cg, e->token,
-                    "codegen: 'self' used outside of method body");
+                    "CE0119", "codegen: 'self' used outside of method body");
             }
             er_init(out);
             out->c_expr = strdup(l->c_name);
@@ -12547,11 +12548,11 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
         case FENG_EXPR_GENERIC_TARGET:
             return cg_fail(cg,
                            e->token,
-                           "codegen: explicit generic target must be consumed before emission");
+                           "CE0120", "codegen: explicit generic target must be consumed before emission");
         case FENG_EXPR_ARRAY_LITERAL: ok = cg_emit_array_literal(cg, e, out); break;
         case FENG_EXPR_TUPLE_LITERAL:
             return cg_fail(cg, e->token,
-                "codegen: tuple literal requires an explicit named tuple target type");
+                "CE0121", "codegen: tuple literal requires an explicit named tuple target type");
         case FENG_EXPR_ARRAY_NEW:     ok = cg_emit_array_new(cg, e, out); break;
         case FENG_EXPR_INDEX:         ok = cg_emit_index(cg, e, out); break;
         case FENG_EXPR_CAST:          ok = cg_emit_cast(cg, e, out); break;
@@ -12560,7 +12561,7 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
         case FENG_EXPR_TRY:           ok = cg_emit_try_expr(cg, e, out, true); break;
         default:
             return cg_fail(cg, e->token,
-                "codegen: expression kind not yet supported in this iteration");
+                "CE0122", "codegen: expression kind not yet supported in this iteration");
     }
     return ok;
 }
@@ -12591,7 +12592,7 @@ static bool cg_pack_variadic_args(CG *cg,
 
     if (!elem || !arr_tmp || !elem_cty || !desc_expr) {
         cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
-        return cg_fail(cg, *tok, "codegen: out of memory packing variadic arguments");
+        return cg_fail(cg, *tok, "IE0001", "codegen: out of memory packing variadic arguments");
     }
 
     bool elem_managed = cgtype_is_managed(elem);
@@ -12601,7 +12602,7 @@ static bool cg_pack_variadic_args(CG *cg,
     if (elem_aggregate && agg_desc == NULL) {
         cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
         return cg_fail(cg, *tok,
-            "codegen: missing aggregate descriptor for variadic element type");
+            "CE0123", "codegen: missing aggregate descriptor for variadic element type");
     }
 
     if (n == 0) {
@@ -12641,7 +12642,7 @@ static bool cg_pack_variadic_args(CG *cg,
     ExprResult *items = calloc(n, sizeof *items);
     if (!items) {
         cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
-        return cg_fail(cg, *tok, "codegen: out of memory packing variadic arguments");
+        return cg_fail(cg, *tok, "IE0001", "codegen: out of memory packing variadic arguments");
     }
     for (size_t i = 0; i < n; i++) {
         if (!cg_emit_expr_for_expected_type(cg, args[i], elem, &items[i])) {
@@ -12683,7 +12684,7 @@ static bool cg_pack_variadic_args(CG *cg,
     if (!slots_tmp) {
         for (size_t k = 0; k < n; k++) er_free(&items[k]);
         free(items); cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
-        return cg_fail(cg, *tok, "codegen: out of memory");
+        return cg_fail(cg, *tok, "IE0001", "codegen: out of memory");
     }
     cg_emit_current_stmt_line_directive_force(cg);
     size_t variadic_rad_idx;
@@ -12765,14 +12766,14 @@ static bool cg_emit_registered_call(CG *cg,
 
     if (!ext && !fn) {
         return cg_fail(cg, e->token,
-            "codegen: undefined function '%.*s'", (int)name.length, name.data);
+            "CE0124", "codegen: undefined function '%.*s'", (int)name.length, name.data);
     }
 
     /* Argument-count validation. */
     if (fn_is_variadic) {
         if (e->as.call.arg_count < fixed_count) {
             return cg_fail(cg, e->token,
-                "codegen: too few arguments for variadic function '%.*s' (need at least %zu, got %zu)",
+                "CE0125", "codegen: too few arguments for variadic function '%.*s' (need at least %zu, got %zu)",
                 (int)name.length, name.data, fixed_count, e->as.call.arg_count);
         }
     } else {
@@ -12780,7 +12781,7 @@ static bool cg_emit_registered_call(CG *cg,
 
         if (e->as.call.arg_count != expected) {
             return cg_fail(cg, e->token,
-                "codegen: wrong argument count for '%.*s' (expected %zu, got %zu)",
+                "CE0126", "codegen: wrong argument count for '%.*s' (expected %zu, got %zu)",
                 (int)name.length, name.data, expected, e->as.call.arg_count);
         }
     }
@@ -12856,7 +12857,7 @@ static bool cg_emit_registered_call(CG *cg,
                 free(abi_tmp);
                 free(ret_tmp);
                 buf_free(&args_buf);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
 
             buf_append_fmt(cg->cur_body,
@@ -12906,7 +12907,7 @@ static bool cg_emit_free_fn_abi_wrapper(CG *cg,
     if (fn->param_count > 0U && (call_args == NULL || boxed_params == NULL)) {
         free(call_args);
         free(boxed_params);
-        return cg_fail(cg, fn->decl->token, "codegen: out of memory");
+        return cg_fail(cg, fn->decl->token, "IE0001", "codegen: out of memory");
     }
 
     Buf *body = &cg->fn_defs;
@@ -12962,7 +12963,7 @@ static bool cg_emit_free_fn_abi_wrapper(CG *cg,
         }
         free(call_args);
         free(boxed_params);
-        return cg_fail(cg, fn->decl->token, "codegen: out of memory");
+        return cg_fail(cg, fn->decl->token, "IE0001", "codegen: out of memory");
     }
 
     const UserType *return_abi_user = cg_abi_value_user_type(fn->return_type);
@@ -13059,21 +13060,21 @@ static bool cg_emit_callable_value_call(CG *cg,
     er_init(out);
     if (spec == NULL || spec->form != FENG_SPEC_FORM_CALLABLE) {
         return cg_fail(cg, e->token,
-            "codegen: callable value call requires a callable-form spec type");
+            "CE0127", "codegen: callable value call requires a callable-form spec type");
     }
     is_variadic = spec->callable_is_variadic;
     fixed_count = is_variadic ? spec->callable_param_count - 1U : spec->callable_param_count;
     if (is_variadic) {
         if (e->as.call.arg_count < fixed_count) {
             return cg_fail(cg, e->token,
-                "codegen: too few arguments for variadic callable '%s' (need at least %zu, got %zu)",
+                "CE0128", "codegen: too few arguments for variadic callable '%s' (need at least %zu, got %zu)",
                 spec->feng_name,
                 fixed_count,
                 e->as.call.arg_count);
         }
     } else if (e->as.call.arg_count != spec->callable_param_count) {
         return cg_fail(cg, e->token,
-            "codegen: wrong argument count for callable '%s' (expected %zu, got %zu)",
+            "CE0129", "codegen: wrong argument count for callable '%s' (expected %zu, got %zu)",
             spec->feng_name,
             spec->callable_param_count,
             e->as.call.arg_count);
@@ -13154,7 +13155,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
         desc_name == NULL) {
         er_free(callee);
         return cg_fail(cg, e->token,
-            "codegen: generic direct call requires a callable-form spec constraint");
+            "CE0130", "codegen: generic direct call requires a callable-form spec constraint");
     }
     is_variadic = constraint->callable_is_variadic;
     fixed_count = is_variadic ? constraint->callable_param_count - 1U
@@ -13164,7 +13165,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
         if (e->as.call.arg_count < fixed_count) {
             er_free(callee);
             return cg_fail(cg, e->token,
-                "codegen: too few arguments for variadic callable constraint '%s' (need at least %zu, got %zu)",
+                "CE0131", "codegen: too few arguments for variadic callable constraint '%s' (need at least %zu, got %zu)",
                 constraint->feng_name,
                 fixed_count,
                 e->as.call.arg_count);
@@ -13172,7 +13173,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
     } else if (e->as.call.arg_count != constraint->callable_param_count) {
         er_free(callee);
         return cg_fail(cg, e->token,
-            "codegen: wrong argument count for callable constraint '%s' (expected %zu, got %zu)",
+            "CE0132", "codegen: wrong argument count for callable constraint '%s' (expected %zu, got %zu)",
             constraint->feng_name,
             constraint->callable_param_count,
             e->as.call.arg_count);
@@ -13181,7 +13182,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
     arg_addr_exprs = calloc(emitted_arg_count, sizeof *arg_addr_exprs);
     if (arg_addr_exprs == NULL) {
         er_free(callee);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
 
     for (size_t i = 0; i < fixed_count; ++i) {
@@ -13331,7 +13332,7 @@ static bool cg_build_method_type_param_constraints(CG *cg,
     size_t count = sig ? sig->type_param_count : 0U;
     const UserSpec **constraints = count ? calloc(count, sizeof *constraints) : NULL;
     if (count > 0U && constraints == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     for (size_t i = 0; i < count; ++i) {
@@ -13370,7 +13371,7 @@ static bool cg_build_method_type_param_constraints(CG *cg,
             cgtype_free(constraint_type);
             free((void *)constraints);
             return cg_fail(cg, sig->type_params[i].token,
-                "codegen: generic method constraint for '%.*s' must be a spec supported by codegen",
+                "CE0133", "codegen: generic method constraint for '%.*s' must be a spec supported by codegen",
                 (int)sig->type_params[i].name.length,
                 sig->type_params[i].name.data);
         }
@@ -13472,20 +13473,20 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     if (sig == NULL || method_tp_count == 0U) {
         er_free(recv);
         return cg_fail(cg, e->token,
-            "codegen: internal: generic type method call missing method type parameters");
+            "CE0134", "codegen: internal: generic type method call missing method type parameters");
     }
     if (e->as.call.has_explicit_type_args &&
         e->as.call.explicit_type_arg_count != method_tp_count) {
         er_free(recv);
         return cg_fail(cg, e->token,
-            "codegen: method expects %zu type argument(s), got %zu",
+            "CE0135", "codegen: method expects %zu type argument(s), got %zu",
             method_tp_count,
             e->as.call.explicit_type_arg_count);
     }
     if (arg_count != um->param_count) {
         er_free(recv);
         return cg_fail(cg, e->token,
-            "codegen: wrong argument count for generic method '%s' (expected %zu, got %zu)",
+            "CE0136", "codegen: wrong argument count for generic method '%s' (expected %zu, got %zu)",
             um->feng_name,
             um->param_count,
             arg_count);
@@ -13500,7 +13501,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     arg_exprs = arg_count ? calloc(arg_count, sizeof *arg_exprs) : NULL;
     if ((arg_count && (args == NULL || arg_exprs == NULL)) ||
         (method_tp_count && (type_args == NULL || desc_exprs == NULL))) {
-        cg_fail(cg, e->token, "codegen: out of memory");
+        cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         ok = false;
         goto cleanup;
     }
@@ -13528,7 +13529,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
             type_args[i] = cg_infer_method_type_arg(sig, i, args, arg_count);
             if (type_args[i] == NULL) {
                 cg_fail(cg, e->token,
-                    "codegen: cannot infer type argument %zu for generic method '%s'",
+                    "CE0137", "codegen: cannot infer type argument %zu for generic method '%s'",
                     i,
                     um->feng_name);
                 ok = false;
@@ -13605,7 +13606,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
             arg_exprs[i] = strdup(args[i].c_expr);
         }
         if (arg_exprs[i] == NULL) {
-            cg_fail(cg, e->token, "codegen: out of memory");
+            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             ok = false;
             goto cleanup;
         }
@@ -13620,7 +13621,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         concrete_return = cgtype_clone(um->return_type);
     }
     if (concrete_return == NULL) {
-        cg_fail(cg, e->token, "codegen: cannot determine concrete generic method return type");
+        cg_fail(cg, e->token, "CE0138", "codegen: cannot determine concrete generic method return type");
         ok = false;
         goto cleanup;
     }
@@ -13662,7 +13663,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         concrete_return = NULL;
     }
     if (out->c_expr == NULL || out->type == NULL) {
-        cg_fail(cg, e->token, "codegen: out of memory");
+        cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         ok = false;
         goto cleanup;
     }
@@ -13766,7 +13767,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
     if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD) {
         er_free(recv);
         return cg_fail(cg, e->token,
-            "codegen: generic type '%.*s' has no method '%.*s'",
+            "CE0139", "codegen: generic type '%.*s' has no method '%.*s'",
             (int)owner->as.type_decl.name.length,
             owner->as.type_decl.name.data,
             (int)member_expr->as.member.member.length,
@@ -13779,14 +13780,14 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
         e->as.call.explicit_type_arg_count != method_tp_count) {
         er_free(recv);
         return cg_fail(cg, e->token,
-            "codegen: method expects %zu type argument(s), got %zu",
+            "CE0135", "codegen: method expects %zu type argument(s), got %zu",
             method_tp_count,
             e->as.call.explicit_type_arg_count);
     }
     if (e->as.call.arg_count != sig->param_count) {
         er_free(recv);
         return cg_fail(cg, e->token,
-            "codegen: wrong argument count for method '%.*s' (expected %zu, got %zu)",
+            "CE0140", "codegen: wrong argument count for method '%.*s' (expected %zu, got %zu)",
             (int)sig->name.length,
             sig->name.data,
             sig->param_count,
@@ -13802,7 +13803,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
     if (shared_name == NULL ||
         (sig->param_count > 0U && (param_types == NULL || args == NULL || arg_exprs == NULL)) ||
         (method_tp_count > 0U && (type_args == NULL || desc_exprs == NULL))) {
-        cg_fail(cg, e->token, "codegen: out of memory");
+        cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         ok = false;
         goto cleanup;
     }
@@ -13827,7 +13828,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
             type_args[i] = cg_infer_method_type_arg(sig, i, args, sig->param_count);
             if (type_args[i] == NULL) {
                 cg_fail(cg, e->token,
-                    "codegen: cannot infer type argument %zu for generic method '%.*s'",
+                    "CE0141", "codegen: cannot infer type argument %zu for generic method '%.*s'",
                     i,
                     (int)sig->name.length,
                     sig->name.data);
@@ -13866,7 +13867,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
             goto cleanup;
         }
         if (param_types[i] == NULL) {
-            cg_fail(cg, e->token, "codegen: out of memory");
+            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             ok = false;
             goto cleanup;
         }
@@ -13919,7 +13920,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
             arg_exprs[i] = strdup(args[i].c_expr);
         }
         if (arg_exprs[i] == NULL) {
-            cg_fail(cg, e->token, "codegen: out of memory");
+            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             ok = false;
             goto cleanup;
         }
@@ -13996,7 +13997,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
         return_type = NULL;
     }
     if (out->c_expr == NULL || out->type == NULL) {
-        cg_fail(cg, e->token, "codegen: out of memory");
+        cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         ok = false;
         goto cleanup;
     }
@@ -14065,7 +14066,7 @@ static bool cg_append_static_owner_context_args(CG *cg,
 
         if (desc == NULL) {
             return cg_fail(cg, blame,
-                           "codegen: generic static method call requires an active generic descriptor context");
+                           "CE0142", "codegen: generic static method call requires an active generic descriptor context");
         }
         cg_append_call_arg_separator(buf, has_arg);
         buf_append_cstr(buf, desc);
@@ -14099,17 +14100,17 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     er_init(out);
     if (sig == NULL || method_tp_count == 0U) {
         return cg_fail(cg, e->token,
-                       "codegen: internal: generic static method call missing type parameters");
+                       "CE0143", "codegen: internal: generic static method call missing type parameters");
     }
     if (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U) {
         return cg_fail(cg,
                        e->token,
-                       "codegen: generic builtin static fit methods are not supported yet");
+                       "CE0144", "codegen: generic builtin static fit methods are not supported yet");
     }
     if (e->as.call.has_explicit_type_args &&
         e->as.call.explicit_type_arg_count != method_tp_count) {
         return cg_fail(cg, e->token,
-                       "codegen: static method expects %zu type argument(s), got %zu",
+                       "CE0145", "codegen: static method expects %zu type argument(s), got %zu",
                        method_tp_count,
                        e->as.call.explicit_type_arg_count);
     }
@@ -14117,14 +14118,14 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     if (method_is_variadic) {
         if (arg_count < fixed_param_count) {
             return cg_fail(cg, e->token,
-                           "codegen: too few arguments for variadic generic static method '%s' "
+                           "CE0146", "codegen: too few arguments for variadic generic static method '%s' "
                            "(need at least %zu, got %zu)",
                            um->feng_name, fixed_param_count, arg_count);
         }
     } else {
         if (arg_count != um->param_count) {
             return cg_fail(cg, e->token,
-                           "codegen: wrong argument count for generic static method '%s' "
+                           "CE0147", "codegen: wrong argument count for generic static method '%s' "
                            "(expected %zu, got %zu)",
                            um->feng_name, um->param_count, arg_count);
         }
@@ -14139,7 +14140,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     if ((arg_count > 0U && args == NULL) ||
         (emitted_arg_count > 0U && arg_exprs == NULL) ||
         (method_tp_count > 0U && (type_args == NULL || desc_exprs == NULL))) {
-        cg_fail(cg, e->token, "codegen: out of memory");
+        cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         ok = false;
         goto cleanup;
     }
@@ -14195,7 +14196,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
             type_args[i] = cg_infer_method_type_arg(sig, i, args, arg_count);
             if (type_args[i] == NULL) {
                 cg_fail(cg, e->token,
-                        "codegen: cannot infer type argument %zu for generic static method '%s'",
+                        "CE0148", "codegen: cannot infer type argument %zu for generic static method '%s'",
                         i,
                         um->feng_name);
                 ok = false;
@@ -14270,7 +14271,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
             arg_exprs[i] = strdup(args[i].c_expr);
         }
         if (arg_exprs[i] == NULL) {
-            cg_fail(cg, e->token, "codegen: out of memory");
+            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             ok = false;
             goto cleanup;
         }
@@ -14295,7 +14296,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         arg_exprs[fixed_param_count] = strdup(varr.c_expr);
         er_free(&varr);
         if (arg_exprs[fixed_param_count] == NULL) {
-            cg_fail(cg, e->token, "codegen: out of memory");
+            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             ok = false;
             goto cleanup;
         }
@@ -14353,7 +14354,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
                 arg_exprs[i] = strdup(args[i].c_expr);
             }
             if (arg_exprs[i] == NULL) {
-                cg_fail(cg, e->token, "codegen: out of memory");
+                cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 ok = false;
                 goto cleanup;
             }
@@ -14383,7 +14384,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
                               : cgtype_clone(um->return_type);
     }
     if (concrete_return == NULL) {
-        cg_fail(cg, e->token, "codegen: cannot determine generic static method return type");
+        cg_fail(cg, e->token, "CE0149", "codegen: cannot determine generic static method return type");
         ok = false;
         goto cleanup;
     }
@@ -14441,7 +14442,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         concrete_return = NULL;
     }
     if (out->c_expr == NULL || out->type == NULL) {
-        cg_fail(cg, e->token, "codegen: out of memory");
+        cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         ok = false;
         goto cleanup;
     }
@@ -14481,7 +14482,7 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
 
     er_init(out);
     if (um == NULL) {
-        return cg_fail(cg, e->token, "codegen: resolved static method was not registered");
+        return cg_fail(cg, e->token, "CE0150", "codegen: resolved static method was not registered");
     }
     if (um->member != NULL && um->member->as.callable.type_param_count > 0U) {
         return cg_emit_generic_static_method_call(cg,
@@ -14494,13 +14495,13 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
     if (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U) {
         return cg_fail(cg,
                        e->token,
-                       "codegen: generic builtin static fit methods are not supported yet");
+                       "CE0144", "codegen: generic builtin static fit methods are not supported yet");
     }
     if (e->as.call.arg_count != um->param_count) {
         if (!um->is_variadic) {
             return cg_fail(cg,
                            e->token,
-                           "codegen: wrong argument count for static method '%s' (expected %zu, got %zu)",
+                           "CE0151", "codegen: wrong argument count for static method '%s' (expected %zu, got %zu)",
                            um->feng_name,
                            um->param_count,
                            e->as.call.arg_count);
@@ -14509,7 +14510,7 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
         if (e->as.call.arg_count < fixed_count) {
             return cg_fail(cg,
                            e->token,
-                           "codegen: too few arguments for variadic static method '%s' (need at least %zu, got %zu)",
+                           "CE0152", "codegen: too few arguments for variadic static method '%s' (need at least %zu, got %zu)",
                            um->feng_name,
                            fixed_count,
                            e->as.call.arg_count);
@@ -14544,7 +14545,7 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
             if (tmp == NULL) {
                 er_free(&arg);
                 buf_free(&args_buf);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             if (arg.type != NULL && arg.type->kind == CG_TYPE_GENERIC_PARAM) {
                 buf_append_fmt(cg->cur_body, "    const void *%s = %s;\n", tmp, arg.c_expr);
@@ -14556,7 +14557,7 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
                     free(tmp);
                     er_free(&arg);
                     buf_free(&args_buf);
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
                 buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, arg.c_expr);
                 if ((cgtype_is_managed(arg.type) || cgtype_is_aggregate(arg.type)) &&
@@ -14588,7 +14589,7 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
         if (arg_expr == NULL) {
             er_free(&arg);
             buf_free(&args_buf);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
         cg_append_call_arg_separator(&args_buf, &has_arg);
         buf_append_cstr(&args_buf, arg_expr);
@@ -14647,7 +14648,7 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
                     : cgtype_clone(um->return_type);
     if (out->type == NULL) {
         er_free(out);
-        return cg_fail(cg, e->token, "codegen: failed to determine static method return type");
+        return cg_fail(cg, e->token, "CE0153", "codegen: failed to determine static method return type");
     }
     out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
     return out->c_expr != NULL && out->type != NULL;
@@ -14681,7 +14682,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 callee.type->user_spec == NULL) {
                 er_free(&callee);
                 return cg_fail(cg, e->token,
-                    "codegen: imported binding '%.*s' is not callable",
+                    "CE0154", "codegen: imported binding '%.*s' is not callable",
                     (int)ma->as.member.member.length,
                     ma->as.member.member.data);
             }
@@ -14759,21 +14760,21 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             if (!us || !desc_name) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: generic method call requires an object-form spec constraint");
+                    "CE0155", "codegen: generic method call requires an object-form spec constraint");
             }
             const UserSpecMember *sm = cg_user_spec_member(us,
                 ma->as.member.member.data, ma->as.member.member.length);
             if (!sm || sm->kind != USM_KIND_METHOD) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: spec '%s' has no method '%.*s'",
+                    "CE0156", "codegen: spec '%s' has no method '%.*s'",
                     us->feng_name,
                     (int)ma->as.member.member.length, ma->as.member.member.data);
             }
             if (e->as.call.arg_count != sm->param_count) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: wrong argument count for spec method '%s' (expected %zu, got %zu)",
+                    "CE0157", "codegen: wrong argument count for spec method '%s' (expected %zu, got %zu)",
                     sm->feng_name, sm->param_count, e->as.call.arg_count);
             }
             char *subject_expr = cg_generic_witness_subject_expr(desc_name, recv.c_expr);
@@ -14821,7 +14822,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     buf_free(&args_buf);
                     er_free(&recv);
                     return cg_fail(cg, e->token,
-                        "codegen: missing descriptor for generic spec method return");
+                        "CE0158", "codegen: missing descriptor for generic spec method return");
                 }
                 buf_append_fmt(cg->cur_body,
                     "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
@@ -14868,14 +14869,14 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             if (!sm || sm->kind != USM_KIND_METHOD) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: spec '%s' has no method '%.*s'",
+                    "CE0156", "codegen: spec '%s' has no method '%.*s'",
                     us->feng_name,
                     (int)ma->as.member.member.length, ma->as.member.member.data);
             }
             if (e->as.call.arg_count != sm->param_count) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: wrong argument count for spec method '%s' (expected %zu, got %zu)",
+                    "CE0157", "codegen: wrong argument count for spec method '%s' (expected %zu, got %zu)",
                     sm->feng_name, sm->param_count, e->as.call.arg_count);
             }
             /* Materialize the receiver so .subject / .witness load exactly
@@ -14936,13 +14937,13 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             if (um == NULL) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: builtin/array fit has no method '%.*s'",
+                    "CE0159", "codegen: builtin/array fit has no method '%.*s'",
                     (int)ma->as.member.member.length, ma->as.member.member.data);
             }
             if (e->as.call.arg_count != um->param_count) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: wrong argument count for method '%s' (expected %zu, got %zu)",
+                    "CE0160", "codegen: wrong argument count for method '%s' (expected %zu, got %zu)",
                     um->feng_name, um->param_count, e->as.call.arg_count);
             }
             if (cgtype_is_managed(recv.type) && recv.owns_ref) {
@@ -14965,7 +14966,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         buf_free(&args_buf);
                         er_free(&ar);
                         er_free(&recv);
-                        return cg_fail(cg, e->token, "codegen: out of memory");
+                        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                     }
                     if (ar.type != NULL && ar.type->kind == CG_TYPE_GENERIC_PARAM) {
                         buf_append_fmt(cg->cur_body, "    const void *%s = %s;\n", tmp, ar.c_expr);
@@ -14978,7 +14979,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                             buf_free(&args_buf);
                             er_free(&ar);
                             er_free(&recv);
-                            return cg_fail(cg, e->token, "codegen: out of memory");
+                            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                         }
                         buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, ar.c_expr);
                         if (cgtype_is_managed(ar.type) && ar.owns_ref) {
@@ -15001,7 +15002,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     buf_free(&args_buf);
                     er_free(&ar);
                     er_free(&recv);
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
                 buf_append_cstr(&args_buf, ", ");
                 buf_append_cstr(&args_buf, arg_expr);
@@ -15035,7 +15036,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     buf_free(&args_buf);
                     er_free(&recv);
                     return cg_fail(cg, e->token,
-                        "codegen: out of memory");
+                        "IE0001", "codegen: out of memory");
                 }
                 buf_append_fmt(&b, "%s(%s, %s",
                                um->c_name, recv.c_expr, fdesc);
@@ -15049,7 +15050,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     buf_free(&b);
                     er_free(&recv);
                     return cg_fail(cg, e->token,
-                        "codegen: builtin fit generic descriptor emission only supports array targets in this phase");
+                        "CE0161", "codegen: builtin fit generic descriptor emission only supports array targets in this phase");
                 }
                 char *desc_expr = NULL;
                 if (!cg_generic_descriptor_expr(cg,
@@ -15075,7 +15076,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             if (out->type == NULL) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: failed to instantiate builtin fit return type");
+                    "CE0162", "codegen: failed to instantiate builtin fit return type");
             }
             if (bf->target_type_param_count > 0U &&
                 out->type->kind == CG_TYPE_OBJECT &&
@@ -15087,7 +15088,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 if (target_ctype == NULL) {
                     free(raw_expr);
                     er_free(&recv);
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
                 Buf cast_expr;
                 buf_init(&cast_expr);
@@ -15097,7 +15098,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 out->c_expr = cast_expr.data;
                 if (out->c_expr == NULL) {
                     er_free(&recv);
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
             }
             out->owns_ref = cgtype_is_managed(out->type);
@@ -15108,7 +15109,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         if (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user) {
             er_free(&recv);
             return cg_fail(cg, e->token,
-                "codegen: method call on non-object value");
+                "CE0163", "codegen: method call on non-object value");
         }
         const UserType *ut = recv.type->user;
         if (rc->kind == FENG_RESOLVED_CALLABLE_NONE) {
@@ -15140,7 +15141,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 er_free(&recv);
                 if (callee.c_expr == NULL || callee.type == NULL) {
                     er_free(&callee);
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
                 return cg_emit_callable_value_call(cg,
                                                    e,
@@ -15165,7 +15166,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             if (um == NULL) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: type '%s' has no method '%.*s'",
+                    "CE0164", "codegen: type '%s' has no method '%.*s'",
                     ut->feng_name,
                     (int)ma->as.member.member.length, ma->as.member.member.data);
             }
@@ -15181,7 +15182,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         if (!um) {
             er_free(&recv);
             return cg_fail(cg, e->token,
-                "codegen: type '%s' has no method '%.*s'",
+                "CE0164", "codegen: type '%s' has no method '%.*s'",
                 ut->feng_name,
                 (int)ma->as.member.member.length, ma->as.member.member.data);
         }
@@ -15194,14 +15195,14 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             if (!um->is_variadic) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: wrong argument count for method '%s' (expected %zu, got %zu)",
+                    "CE0160", "codegen: wrong argument count for method '%s' (expected %zu, got %zu)",
                     um->feng_name, um->param_count, e->as.call.arg_count);
             }
             size_t fixed_count = um->param_count - 1U;
             if (e->as.call.arg_count < fixed_count) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: too few arguments for variadic method '%s' (need at least %zu, got %zu)",
+                    "CE0165", "codegen: too few arguments for variadic method '%s' (need at least %zu, got %zu)",
                     um->feng_name, fixed_count, e->as.call.arg_count);
             }
         }
@@ -15266,7 +15267,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
 
     if (e->as.call.callee->kind != FENG_EXPR_IDENTIFIER) {
         return cg_fail(cg, e->token,
-            "codegen: only direct or method calls supported in this iteration");
+            "CE0166", "codegen: only direct or method calls supported in this iteration");
     }
     const FengSlice name = e->as.call.callee->as.identifier;
 
@@ -15339,7 +15340,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     callee.type->user_spec == NULL) {
                     er_free(&callee);
                     return cg_fail(cg, e->token,
-                        "codegen: imported binding '%.*s' is not callable",
+                        "CE0154", "codegen: imported binding '%.*s' is not callable",
                         (int)name.length,
                         name.data);
                 }
@@ -15365,14 +15366,14 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 e->as.call.explicit_type_arg_count);
             if (ut == NULL) {
                 return cg_fail(cg, e->token,
-                    "codegen: generic type constructor instance for '%.*s' was not registered",
+                    "CE0167", "codegen: generic type constructor instance for '%.*s' was not registered",
                     (int)name.length, name.data);
             }
         } else {
             ut = cg_find_user_type(cg, name.data, name.length);
             if (ut == NULL) {
                 return cg_fail(cg, e->token,
-                    "codegen: unknown type '%.*s' in constructor call",
+                    "CE0168", "codegen: unknown type '%.*s' in constructor call",
                     (int)name.length, name.data);
             }
         }
@@ -15381,7 +15382,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             ctor = cg_user_type_constructor_by_member(ut, rc->member);
             if (ctor == NULL) {
                 return cg_fail(cg, e->token,
-                    "codegen: resolved constructor for type '%s' was not registered",
+                    "CE0169", "codegen: resolved constructor for type '%s' was not registered",
                     ut->feng_name);
             }
         }
@@ -15415,7 +15416,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 obj_init = cg_user_type_raw_object_new_expr(ut);
                 if (obj_init == NULL) {
                     free(obj_name);
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
                 buf_append_fmt(cg->cur_body,
                                "    struct %s *%s = %s;\n",
@@ -15501,7 +15502,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         if (!found) {
             return cg_fail(cg,
                            e->token,
-                           "codegen: enum '%.*s' has no item '%.*s'",
+                           "CE0170", "codegen: enum '%.*s' has no item '%.*s'",
                            (int)enum_decl->as.enum_decl.name.length,
                            enum_decl->as.enum_decl.name.data,
                            (int)e->as.member.member.length,
@@ -15510,7 +15511,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
 
         item_c_name = cg_enum_item_c_name(cg, enum_decl, e->as.member.member);
         if (item_c_name == NULL) {
-            return cg_fail(cg, e->token, "codegen: out of memory referencing enum item constant");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory referencing enum item constant");
         }
 
         buf_init(&b);
@@ -15569,7 +15570,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         if (field_member == NULL) {
             er_free(&recv);
             return cg_fail(cg, e->token,
-                "codegen: generic type '%.*s' has no field '%.*s'",
+                "CE0171", "codegen: generic type '%.*s' has no field '%.*s'",
                 (int)owner->as.type_decl.name.length,
                 owner->as.type_decl.name.data,
                 (int)e->as.member.member.length,
@@ -15610,14 +15611,14 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         if (!us || !desc_name) {
             er_free(&recv);
             return cg_fail(cg, e->token,
-                "codegen: generic member access requires an object-form spec constraint");
+                "CE0172", "codegen: generic member access requires an object-form spec constraint");
         }
         const UserSpecMember *sm = cg_user_spec_member(us,
             e->as.member.member.data, e->as.member.member.length);
         if (!sm || sm->kind != USM_KIND_FIELD) {
             er_free(&recv);
             return cg_fail(cg, e->token,
-                "codegen: spec '%s' has no field '%.*s'",
+                "CE0173", "codegen: spec '%s' has no field '%.*s'",
                 us->feng_name,
                 (int)e->as.member.member.length, e->as.member.member.data);
         }
@@ -15645,7 +15646,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         if (!sm || sm->kind != USM_KIND_FIELD) {
             er_free(&recv);
             return cg_fail(cg, e->token,
-                "codegen: spec '%s' has no field '%.*s'",
+                "CE0173", "codegen: spec '%s' has no field '%.*s'",
                 us->feng_name,
                 (int)e->as.member.member.length, e->as.member.member.data);
         }
@@ -15667,7 +15668,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         if (!uf) {
             er_free(&recv);
             return cg_fail(cg, e->token,
-                "codegen: tuple type '%s' has no field '%.*s'",
+                "CE0174", "codegen: tuple type '%s' has no field '%.*s'",
                 ut->feng_name,
                 (int)e->as.member.member.length,
                 e->as.member.member.data);
@@ -15675,7 +15676,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         if (cgtype_is_aggregate(recv.type) && recv.owns_ref &&
             cg_materialize_to_local(cg, &recv, "_tuple") == NULL) {
             er_free(&recv);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
 
         if (cg_tuple_needs_reified_layout(cg, recv.type)) {
@@ -15686,7 +15687,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
             if (!has_rad) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
-                    "codegen: tuple type '%s' requires reified layout but no "
+                    "CE0066", "codegen: tuple type '%s' requires reified layout but no "
                     "reified_agg_dep found", ut->feng_name);
             }
             const char *rad_src = cg->generic_type_method_rad_via_desc
@@ -15727,7 +15728,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
     if (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user) {
         er_free(&recv);
         return cg_fail(cg, e->token,
-            "codegen: member access on non-object value");
+            "CE0175", "codegen: member access on non-object value");
     }
     const UserType *ut = recv.type->user;
     const UserField *uf = cg_user_type_field(ut,
@@ -15735,7 +15736,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
     if (!uf) {
         er_free(&recv);
         return cg_fail(cg, e->token,
-            "codegen: type '%s' has no field '%.*s'",
+            "CE0176", "codegen: type '%s' has no field '%.*s'",
             ut->feng_name,
             (int)e->as.member.member.length, e->as.member.member.data);
     }
@@ -15880,7 +15881,7 @@ static bool cg_resolve_object_literal_target_user_type(CG *cg,
     if (out != NULL) *out = NULL;
     if (target == NULL) {
         return cg_fail(cg, (FengToken){0},
-            "codegen: missing object literal target");
+            "CE0177", "codegen: missing object literal target");
     }
 
     if (target->kind == FENG_EXPR_IDENTIFIER || target->kind == FENG_EXPR_MEMBER) {
@@ -15894,7 +15895,7 @@ static bool cg_resolve_object_literal_target_user_type(CG *cg,
         if (!ut) {
             free(segments);
             return cg_fail(cg, target->token,
-                "codegen: unknown type '%.*s' in object literal",
+                "CE0178", "codegen: unknown type '%.*s' in object literal",
                 (int)tn.length, tn.data);
         }
         free(segments);
@@ -15931,7 +15932,7 @@ static bool cg_resolve_object_literal_target_user_type(CG *cg,
                                              sizeof(*owned_type_args));
                     if (owned_type_args == NULL) {
                         free(segments);
-                        return cg_fail(cg, target->token, "codegen: out of memory");
+                        return cg_fail(cg, target->token, "IE0001", "codegen: out of memory");
                     }
                     for (size_t i = 0U; i < target->as.call.explicit_type_arg_count; ++i) {
                         owned_type_args[i] = cg_type_ref_substitute(
@@ -15969,7 +15970,7 @@ static bool cg_resolve_object_literal_target_user_type(CG *cg,
             if (ut == NULL) {
                 free(segments);
                 return cg_fail(cg, target->token,
-                    "codegen: generic type object literal instance for '%.*s' was not registered",
+                    "CE0179", "codegen: generic type object literal instance for '%.*s' was not registered",
                     (int)tn.length, tn.data);
             }
             free(segments);
@@ -15982,7 +15983,7 @@ static bool cg_resolve_object_literal_target_user_type(CG *cg,
             if (!ut) {
                 free(segments);
                 return cg_fail(cg, target->token,
-                    "codegen: unknown type '%.*s' in object literal",
+                    "CE0178", "codegen: unknown type '%.*s' in object literal",
                     (int)tn.length, tn.data);
             }
             free(segments);
@@ -15992,7 +15993,7 @@ static bool cg_resolve_object_literal_target_user_type(CG *cg,
     }
 
     return cg_fail(cg, target->token,
-        "codegen: only direct type constructor targets are supported for object literals");
+        "CE0180", "codegen: only direct type constructor targets are supported for object literals");
 }
 
 static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
@@ -16016,12 +16017,12 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                 target_call->as.call.resolved_callable.member);
             if (ctor == NULL) {
                 return cg_fail(cg, target_call->token,
-                    "codegen: resolved constructor for type '%s' was not registered",
+                    "CE0169", "codegen: resolved constructor for type '%s' was not registered",
                     ut->feng_name);
             }
         } else if (target_call->as.call.arg_count != 0U) {
             return cg_fail(cg, target_call->token,
-                "codegen: constructor arguments require a resolved user-defined constructor");
+                "CE0076", "codegen: constructor arguments require a resolved user-defined constructor");
         }
     }
     /* Allocate, then assign each field. We open an inline statement block in
@@ -16030,7 +16031,7 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
      * + assignments into a fresh temp via cg->cur_body and return the temp
      * as the c_expr. */
     char *tmp = cg_fresh_temp(cg, "_obj");
-    if (!tmp) return cg_fail(cg, e->token, "codegen: out of memory");
+    if (!tmp) return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     {
         const char *used_rtd = NULL;
         if (cg->generic_type_method_rtd_count > 0U &&
@@ -16055,7 +16056,7 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
             char *obj_init = cg_user_type_raw_object_new_expr(ut);
             if (obj_init == NULL) {
                 free(tmp);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             buf_append_fmt(cg->cur_body,
                 "    struct %s *%s = %s;\n",
@@ -16086,7 +16087,7 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     bool *assigned = ut->field_count ? calloc(ut->field_count, sizeof *assigned) : NULL;
     if (ut->field_count && !assigned) {
         free(tmp);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     for (size_t i = 0; i < e->as.object_literal.field_count; i++) {
         const FengObjectFieldInit *fi = &e->as.object_literal.fields[i];
@@ -16100,13 +16101,13 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         if (idx == (size_t)-1) {
             free(assigned); free(tmp);
             return cg_fail(cg, fi->token,
-                "codegen: type '%s' has no field '%.*s'",
+                "CE0176", "codegen: type '%s' has no field '%.*s'",
                 ut->feng_name, (int)fi->name.length, fi->name.data);
         }
         if (assigned[idx]) {
             free(assigned); free(tmp);
             return cg_fail(cg, fi->token,
-                "codegen: duplicate field '%s' in object literal",
+                "CE0181", "codegen: duplicate field '%s' in object literal",
                 ut->fields[idx].feng_name);
         }
         assigned[idx] = true;
@@ -16180,7 +16181,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
     if (e->as.array_literal.count == 0) {
         if (expected_elem == NULL) {
             return cg_fail(cg, e->token,
-                "codegen: empty array literal needs an explicit element type");
+                "CE0182", "codegen: empty array literal needs an explicit element type");
         }
 
         CGType *elem = cgtype_clone(expected_elem);
@@ -16190,7 +16191,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
         if (elem == NULL || arr_tmp == NULL || elem_cty == NULL || desc_expr == NULL) {
             cgtype_free(elem);
             free(arr_tmp); free(elem_cty); free(desc_expr);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
 
         bool elem_managed = cgtype_is_managed(elem);
@@ -16200,7 +16201,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
             cgtype_free(elem);
             free(arr_tmp); free(elem_cty); free(desc_expr);
             return cg_fail(cg, e->token,
-                "codegen: missing aggregate descriptor for spec array element");
+                "CE0183", "codegen: missing aggregate descriptor for spec array element");
         }
 
         if (elem_aggregate) {
@@ -16224,7 +16225,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
                 cgtype_free(elem);
                 free(arr_tmp); free(elem_cty); free(desc_expr);
                 return cg_fail(cg, e->token,
-                    "codegen: generic empty array literal requires an active generic descriptor");
+                    "CE0184", "codegen: generic empty array literal requires an active generic descriptor");
             }
             buf_append_fmt(cg->cur_body,
                 "    FengArray *%s = feng_array_new_kinded("
@@ -16250,7 +16251,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
      * exactly once after the slot writes complete. */
     size_t n = e->as.array_literal.count;
     ExprResult *items = calloc(n, sizeof *items);
-    if (!items) return cg_fail(cg, e->token, "codegen: out of memory");
+    if (!items) return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     /* When narrowing into a nested array element, recurse with the inner
      * element type. Otherwise emit each item with the default rules. */
     bool nested_narrow = (expected_elem != NULL &&
@@ -16273,7 +16274,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
             for (size_t k = 0; k <= i; k++) er_free(&items[k]);
             free(items);
             return cg_fail(cg, e->as.array_literal.items[i]->token,
-                "codegen: heterogeneous array literal (all elements must share a type)");
+                "CE0185", "codegen: heterogeneous array literal (all elements must share a type)");
         }
         if (cgtype_is_managed(items[i].type) && items[i].owns_ref) {
             cg_materialize_to_local(cg, &items[i], "_t");
@@ -16301,7 +16302,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
     if (!elem) {
         for (size_t k = 0; k < n; k++) er_free(&items[k]);
         free(items);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     char *arr_tmp = cg_fresh_temp(cg, "_arr");
     char *slots_tmp = cg_fresh_temp(cg, "_slots");
@@ -16312,7 +16313,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
         cgtype_free(elem);
         for (size_t k = 0; k < n; k++) er_free(&items[k]);
         free(items);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     bool elem_managed = cgtype_is_managed(elem);
     bool elem_aggregate = cgtype_is_aggregate(elem);
@@ -16323,7 +16324,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
         for (size_t k = 0; k < n; k++) er_free(&items[k]);
         free(items);
         return cg_fail(cg, e->token,
-            "codegen: missing aggregate descriptor for spec array element");
+            "CE0183", "codegen: missing aggregate descriptor for spec array element");
     }
     if (elem_aggregate) {
         /* Step 4b-γ §9.6 — aggregate-element arrays must use the kinded
@@ -16432,7 +16433,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
     char *size_tmp = cg_fresh_temp(cg, "_n");
     if (!size_tmp) {
         er_free(&size_res); cgtype_free(elem);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     buf_append_fmt(cg->cur_body,
         "    size_t %s = (size_t)(%s);\n", size_tmp, size_res.c_expr);
@@ -16444,7 +16445,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
     if (!arr_tmp || !elem_cty || !desc_expr) {
         free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
         cgtype_free(elem);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
 
     bool elem_managed   = cgtype_is_managed(elem);
@@ -16457,7 +16458,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
         free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
         cgtype_free(elem);
         return cg_fail(cg, e->token,
-            "codegen: missing aggregate descriptor for array-new element type");
+            "CE0186", "codegen: missing aggregate descriptor for array-new element type");
     }
 
     if (elem_aggregate) {
@@ -16482,7 +16483,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
             free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
             cgtype_free(elem);
             return cg_fail(cg, e->token,
-                "codegen: generic array-new requires an active generic descriptor");
+                "CE0187", "codegen: generic array-new requires an active generic descriptor");
         }
         buf_append_fmt(cg->cur_body,
             "    FengArray *%s = feng_array_new_kinded("
@@ -16500,7 +16501,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
             free(slots_tmp); free(idx_tmp);
             free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
             cgtype_free(elem);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
             "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, %s);\n",
@@ -16540,7 +16541,7 @@ static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out) {
     if (recv.type->kind != CG_TYPE_ARRAY || !recv.type->element) {
         er_free(&recv);
         return cg_fail(cg, e->token,
-            "codegen: indexing requires an array value");
+            "CE0188", "codegen: indexing requires an array value");
     }
     if (cgtype_is_managed(recv.type) && recv.owns_ref) {
         cg_materialize_to_local(cg, &recv, "_t");
@@ -16551,7 +16552,7 @@ static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out) {
     }
     if (!cgtype_is_integer(idx.type->kind)) {
         er_free(&idx); er_free(&recv);
-        return cg_fail(cg, e->token, "codegen: array index must be an integer");
+        return cg_fail(cg, e->token, "CE0189", "codegen: array index must be an integer");
     }
     /* Materialize index into a `size_t` local so we can both bounds-check
      * and slot-load using the same value. */
@@ -16574,7 +16575,7 @@ static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out) {
             free(elem_cty); free(idx_tmp);
             er_free(&idx); er_free(&recv);
             return cg_fail(cg, e->token,
-                "codegen: generic array index requires an active generic descriptor");
+                "CE0190", "codegen: generic array index requires an active generic descriptor");
         }
         buf_append_fmt(&b,
             "((%s->kind == FENG_VALUE_MANAGED_POINTER) ? "
@@ -16631,7 +16632,7 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
                     if (inner.c_expr == NULL) {
                         er_free(&inner);
                         cgtype_free(target);
-                        return cg_fail(cg, e->token, "codegen: out of memory");
+                        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                     }
                 }
                 cgtype_free(inner.type);
@@ -16644,7 +16645,7 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
         cgtype_free(target);
         return cg_fail(cg,
                        e->token,
-                       "codegen: callable-form cast operand must be a callable-form spec value");
+                       "CE0191", "codegen: callable-form cast operand must be a callable-form spec value");
     }
     if (target->kind == CG_TYPE_ARRAY) {
         ExprResult inner;
@@ -16658,7 +16659,7 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
             cgtype_free(target);
             return cg_fail(cg,
                            e->token,
-                           "codegen: array cast requires the same lowered array type");
+                           "CE0192", "codegen: array cast requires the same lowered array type");
         }
         out->c_expr = strdup(inner.c_expr);
         out->type = target;
@@ -16668,13 +16669,13 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
     }
     if (!cgtype_is_numeric(target->kind) && target->kind != CG_TYPE_BOOL) {
         cgtype_free(target);
-        return cg_fail(cg, e->token, "codegen: only numeric/bool casts supported in 1A iter 1");
+        return cg_fail(cg, e->token, "CE0193", "codegen: only numeric/bool casts supported in 1A iter 1");
     }
     ExprResult inner;
     if (!cg_emit_expr(cg, e->as.cast.value, &inner)) { cgtype_free(target); return false; }
     if (!cgtype_is_numeric(inner.type->kind) && inner.type->kind != CG_TYPE_BOOL) {
         er_free(&inner); cgtype_free(target);
-        return cg_fail(cg, e->token, "codegen: cast operand must be numeric/bool");
+        return cg_fail(cg, e->token, "CE0194", "codegen: cast operand must be numeric/bool");
     }
     Buf b; buf_init(&b);
     buf_append_fmt(&b, "((%s)%s)", cgtype_to_c(target->kind), inner.c_expr);
@@ -16728,7 +16729,7 @@ static bool cg_emit_branch_into_slot(CG *cg,
                                      bool aggregate,
                                      FengToken err_token) {
     Scope *bsc = scope_push(cg->cur_scope);
-    if (!bsc) return cg_fail(cg, err_token, "codegen: out of memory");
+    if (!bsc) return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
     cg->cur_scope = bsc;
 
     bool ok = true;
@@ -16745,7 +16746,7 @@ static bool cg_emit_branch_into_slot(CG *cg,
             ok = false;
         } else if (!cg_types_equal(result_type, r.type)) {
             cg_fail(cg, err_token,
-                "codegen: if-expression branches yield mismatched types");
+                "CE0195", "codegen: if-expression branches yield mismatched types");
             er_free(&r);
             ok = false;
         } else {
@@ -16765,7 +16766,7 @@ static bool cg_emit_branch_into_slot(CG *cg,
                     cg->cur_scope = bsc->parent;
                     scope_pop_free(bsc);
                     return cg_fail(cg, err_token,
-                        "codegen: missing aggregate descriptor for if/match result slot");
+                        "CE0196", "codegen: missing aggregate descriptor for if/match result slot");
                 }
                 if (r.owns_ref) {
                     cg_materialize_to_local(cg, &r, "_t");
@@ -16783,7 +16784,7 @@ static bool cg_emit_branch_into_slot(CG *cg,
                     er_free(&r);
                     cg->cur_scope = bsc->parent;
                     scope_pop_free(bsc);
-                    return cg_fail(cg, err_token, "codegen: out of memory");
+                    return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
                 }
                 buf_append_fmt(cg->cur_body,
                     "        %s = (%s)(%s);\n", ifv_name, cty, r.c_expr);
@@ -16840,7 +16841,7 @@ static bool cg_assign_expr_result_to_slot(CG *cg,
                                           FengToken err_token) {
     if (!cg_types_equal(result_type, r->type)) {
         return cg_fail(cg, err_token,
-                       "codegen: try/catch branches yield mismatched types");
+                       "CE0197", "codegen: try/catch branches yield mismatched types");
     }
     if (result_type->kind == CG_TYPE_VOID) {
         buf_append_fmt(cg->cur_body,
@@ -16869,7 +16870,7 @@ static bool cg_assign_expr_result_to_slot(CG *cg,
 
         if (agg_desc == NULL) {
             return cg_fail(cg, err_token,
-                           "codegen: missing aggregate descriptor for try-expression result");
+                           "CE0198", "codegen: missing aggregate descriptor for try-expression result");
         }
         if (r->owns_ref) {
             cg_materialize_to_local(cg, r, "_t");
@@ -16891,7 +16892,7 @@ static bool cg_assign_expr_result_to_slot(CG *cg,
         char *cty = cg_ctype_dup(result_type);
 
         if (cty == NULL) {
-            return cg_fail(cg, err_token, "codegen: out of memory");
+            return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
                        "        %s = (%s)(%s);\n",
@@ -16912,7 +16913,7 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     const FengExpr *else_yield = cg_branch_yield_expr(else_b);
     if (!then_yield || !else_yield) {
         return cg_fail(cg, e->token,
-            "codegen: if-expression branches must end with an expression statement");
+            "CE0199", "codegen: if-expression branches must end with an expression statement");
     }
 
     CGType *result_type = cg_probe_branch_yield_type(cg, then_yield);
@@ -16924,14 +16925,14 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     if (aggregate && agg_desc == NULL) {
         cgtype_free(result_type);
         return cg_fail(cg, e->token,
-            "codegen: missing aggregate descriptor for if-expression result");
+            "CE0200", "codegen: missing aggregate descriptor for if-expression result");
     }
 
     char *cond_tmp = cg_fresh_temp(cg, "_cond");
     char *ifv = cg_fresh_temp(cg, "_ifv");
     if (!cond_tmp || !ifv) {
         free(cond_tmp); free(ifv); cgtype_free(result_type);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
 
     /* Emit the condition first; the slot decl follows so a panic raised by
@@ -16946,7 +16947,7 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         er_free(&cond);
         free(cond_tmp); free(ifv); cgtype_free(result_type);
         return cg_fail(cg, e->token,
-            "codegen: if-expression condition must be bool");
+            "CE0201", "codegen: if-expression condition must be bool");
     }
     buf_append_fmt(cg->cur_body, "    bool %s = %s;\n", cond_tmp, cond.c_expr);
     er_free(&cond);
@@ -16954,7 +16955,7 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     char *cty = cg_ctype_dup(result_type);
     if (!cty) {
         free(cond_tmp); free(ifv); cgtype_free(result_type);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     if (managed) {
         buf_append_fmt(cg->cur_body, "    %s %s = NULL;\n", cty, ifv);
@@ -16962,21 +16963,21 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         if (!scope_add(cg->cur_scope, ifv, ifv,
                        cgtype_clone(result_type), false)) {
             free(cty); free(cond_tmp); free(ifv); cgtype_free(result_type);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
     } else if (aggregate) {
         buf_append_fmt(cg->cur_body, "    %s %s; ", cty, ifv);
         if (!cg_append_aggregate_default_init_call(cg->cur_body, result_type, ifv)) {
             free(cty); free(cond_tmp); free(ifv); cgtype_free(result_type);
             return cg_fail(cg, e->token,
-                "codegen: missing aggregate default-init rule for if-expression result");
+                "CE0202", "codegen: missing aggregate default-init rule for if-expression result");
         }
         buf_append_cstr(cg->cur_body, ";\n");
         cg_emit_cleanup_push_for_aggregate_local(cg, ifv, result_type);
         if (!scope_add(cg->cur_scope, ifv, ifv,
                        cgtype_clone(result_type), false)) {
             free(cty); free(cond_tmp); free(ifv); cgtype_free(result_type);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
     } else if (cgtype_is_by_value_struct(result_type)) {
         buf_append_fmt(cg->cur_body, "    %s %s = {0};\n", cty, ifv);
@@ -17040,7 +17041,7 @@ static bool cg_emit_match_label_cond(CG *cg, const char *target_tmp,
     if (lab->kind == FENG_MATCH_LABEL_RANGE) {
         if (target_kind == CG_TYPE_STRING || target_kind == CG_TYPE_BOOL) {
             return cg_fail(cg, lab->token,
-                "codegen: range labels apply to integer match targets only");
+                "CE0203", "codegen: range labels apply to integer match targets only");
         }
         ExprResult lo, hi;
         if (!cg_emit_expr(cg, lab->range_low, &lo)) return false;
@@ -17054,7 +17055,7 @@ static bool cg_emit_match_label_cond(CG *cg, const char *target_tmp,
         er_free(&hi);
         return true;
     }
-    return cg_fail(cg, lab->token, "codegen: unknown match label kind");
+    return cg_fail(cg, lab->token, "CE0204", "codegen: unknown match label kind");
 }
 
 static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
@@ -17062,18 +17063,18 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
     if (!e->as.match_expr.else_block) {
         return cg_fail(cg, e->token,
-            "codegen: match expression requires an else branch");
+            "CE0205", "codegen: match expression requires an else branch");
     }
     const FengExpr *else_yield =
         cg_branch_yield_expr(e->as.match_expr.else_block);
     if (!else_yield) {
         return cg_fail(cg, e->token,
-            "codegen: match expression else branch must end with an expression statement");
+            "CE0206", "codegen: match expression else branch must end with an expression statement");
     }
     for (size_t i = 0; i < e->as.match_expr.branch_count; i++) {
         if (!cg_branch_yield_expr(e->as.match_expr.branches[i].body)) {
             return cg_fail(cg, e->token,
-                "codegen: match branch must end with an expression statement");
+                "CE0207", "codegen: match branch must end with an expression statement");
         }
     }
 
@@ -17085,7 +17086,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     if (aggregate && agg_desc == NULL) {
         cgtype_free(result_type);
         return cg_fail(cg, e->token,
-            "codegen: missing aggregate descriptor for match expression result");
+            "CE0208", "codegen: missing aggregate descriptor for match expression result");
     }
 
     /* Materialise the target so it is evaluated exactly once and (for managed
@@ -17099,14 +17100,14 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     if (!ifv) {
         er_free(&tgt);
         cgtype_free(result_type);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     char *cty = cg_ctype_dup(result_type);
     if (!cty) {
         free(ifv);
         er_free(&tgt);
         cgtype_free(result_type);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     if (managed) {
         buf_append_fmt(cg->cur_body, "    %s %s = NULL;\n", cty, ifv);
@@ -17117,7 +17118,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             free(ifv);
             er_free(&tgt);
             cgtype_free(result_type);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
     } else if (aggregate) {
         buf_append_fmt(cg->cur_body, "    %s %s; ", cty, ifv);
@@ -17127,7 +17128,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             er_free(&tgt);
             cgtype_free(result_type);
             return cg_fail(cg, e->token,
-                "codegen: missing aggregate default-init rule for match expression result");
+                "CE0209", "codegen: missing aggregate default-init rule for match expression result");
         }
         buf_append_cstr(cg->cur_body, ";\n");
         cg_emit_cleanup_push_for_aggregate_local(cg, ifv, result_type);
@@ -17137,7 +17138,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             free(ifv);
             er_free(&tgt);
             cgtype_free(result_type);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
     } else if (cgtype_is_by_value_struct(result_type)) {
         buf_append_fmt(cg->cur_body, "    %s %s = {0};\n", cty, ifv);
@@ -17163,7 +17164,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             free(ifv);
             er_free(&tgt);
             cgtype_free(result_type);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
         er_free(&tgt);
 
@@ -17175,7 +17176,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             free(tgt_tmp);
             free(ifv);
             cgtype_free(result_type);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
 
         for (size_t branch_index = 0U;
@@ -17188,7 +17189,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
             if (branch->label_count == 0U) {
                 ok = cg_fail(cg, branch->token,
-                             "codegen: match branch has no labels");
+                             "CE0210", "codegen: match branch has no labels");
                 break;
             }
 
@@ -17236,7 +17237,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                 size_t narrowing_save = cg->expr_narrowing_count;
 
                 if (branch_scope == NULL) {
-                    ok = cg_fail(cg, branch->token, "codegen: out of memory");
+                    ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
                     break;
                 }
                 cg->cur_scope = branch_scope;
@@ -17263,7 +17264,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                             buf_free(&payload_expr);
                             cg->cur_scope = branch_scope->parent;
                             scope_pop_free(branch_scope);
-                            ok = cg_fail(cg, branch->token, "codegen: out of memory");
+                            ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
                             break;
                         }
                         free(alias_name);
@@ -17282,7 +17283,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                                 buf_free(&payload_expr);
                                 cg->cur_scope = branch_scope->parent;
                                 scope_pop_free(branch_scope);
-                                ok = cg_fail(cg, branch->token, "codegen: out of memory");
+                                ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
                                 break;
                             }
                             cg->expr_narrowings = grown;
@@ -17356,7 +17357,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                 size_t else_narrowing_save = cg->expr_narrowing_count;
 
                 if (else_scope == NULL) {
-                    ok = cg_fail(cg, e->token, "codegen: out of memory");
+                    ok = cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 } else {
                     cg->cur_scope = else_scope;
                     if (else_has_single_member) {
@@ -17380,7 +17381,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                                 cgtype_free(alias_type);
                                 free(alias_name);
                                 buf_free(&payload_expr);
-                                ok = cg_fail(cg, e->token, "codegen: out of memory");
+                                ok = cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                             } else {
                                 free(alias_name);
                             }
@@ -17396,7 +17397,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                                 if (grown == NULL) {
                                     cgtype_free(alias_type);
                                     buf_free(&payload_expr);
-                                    ok = cg_fail(cg, e->token, "codegen: out of memory");
+                                    ok = cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                                 } else {
                                     cg->expr_narrowings = grown;
                                     cg->expr_narrowing_capacity = new_cap;
@@ -17470,7 +17471,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             free(ifv);
             cgtype_free(result_type);
             return cg_fail(cg, e->token,
-                "codegen: match target must be integer, bool, or string");
+                "CE0211", "codegen: match target must be integer, bool, or string");
         }
     }
     /* materialize_to_local registers managed +1 results into the current
@@ -17481,7 +17482,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         er_free(&tgt);
         free(ifv);
         cgtype_free(result_type);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     {
         CGTypeKind tk = tgt.type->kind;
@@ -17494,7 +17495,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             if (br->label_count == 0) {
                 free(ifv); free(tgt_tmp); cgtype_free(result_type);
                 return cg_fail(cg, br->token,
-                    "codegen: match branch has no labels");
+                    "CE0210", "codegen: match branch has no labels");
             }
             Buf cond; buf_init(&cond);
             bool cond_ok = true;
@@ -17566,12 +17567,12 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
     char *c_name = NULL;
 
     if (feng_name == NULL) {
-        return cg_fail(cg, err_token, "codegen: out of memory");
+        return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
     }
     c_name = cg_local_cname(cg, clause->name.data, clause->name.length);
     if (c_name == NULL) {
         free(feng_name);
-        return cg_fail(cg, err_token, "codegen: out of memory");
+        return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
     }
 
     if (is_unknown) {
@@ -17580,7 +17581,7 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
         if (local_type == NULL) {
             free(c_name);
             free(feng_name);
-            return cg_fail(cg, err_token, "codegen: out of memory");
+            return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
                        "        void *%s = feng_caught_value();\n",
@@ -17592,7 +17593,7 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
                        true)) {
             free(c_name);
             free(feng_name);
-            return cg_fail(cg, err_token, "codegen: out of memory");
+            return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
         }
         if (!scope_mark_unknown_exception(cg->cur_scope,
                                           feng_name,
@@ -17600,7 +17601,7 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
             free(c_name);
             free(feng_name);
             return cg_fail(cg, err_token,
-                           "codegen: failed to register unknown catch binding");
+                           "CE0212", "codegen: failed to register unknown catch binding");
         }
         free(c_name);
         free(feng_name);
@@ -17610,7 +17611,7 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
     if (catch_type == NULL) {
         free(c_name);
         free(feng_name);
-        return cg_fail(cg, err_token, "codegen: missing catch binding type");
+        return cg_fail(cg, err_token, "CE0213", "codegen: missing catch binding type");
     }
     if (cg_type_kind_is_scalar_builtin(catch_type->kind)) {
         const char *field_name = cg_scalar_box_payload_field_name(catch_type->kind);
@@ -17621,7 +17622,7 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
             free(c_name);
             free(feng_name);
             return cg_fail(cg, err_token,
-                           "codegen: missing scalar catch binding payload field");
+                           "CE0214", "codegen: missing scalar catch binding payload field");
         }
         buf_append_fmt(cg->cur_body,
                        "        %s %s = ((FengScalarBox *)feng_caught_value())->payload.%s;\n",
@@ -17635,7 +17636,7 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
         if (cty == NULL) {
             free(c_name);
             free(feng_name);
-            return cg_fail(cg, err_token, "codegen: out of memory");
+            return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
                        "        %s %s = (%s)feng_caught_value();\n",
@@ -17651,7 +17652,7 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
                    true)) {
         free(c_name);
         free(feng_name);
-        return cg_fail(cg, err_token, "codegen: out of memory");
+        return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
     }
     free(c_name);
     free(feng_name);
@@ -17667,7 +17668,7 @@ static bool cg_emit_try_expr_body_to_slot(CG *cg,
                                           FengToken err_token) {
     Scope *body_scope = scope_push(cg->cur_scope);
     if (body_scope == NULL) {
-        return cg_fail(cg, err_token, "codegen: out of memory");
+        return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
     }
     cg->cur_scope = body_scope;
 
@@ -17709,7 +17710,7 @@ static bool cg_emit_try_expr_body_discard(CG *cg,
                                           FengToken err_token) {
     Scope *body_scope = scope_push(cg->cur_scope);
     if (body_scope == NULL) {
-        return cg_fail(cg, err_token, "codegen: out of memory");
+        return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
     }
     cg->cur_scope = body_scope;
 
@@ -17743,7 +17744,7 @@ static bool cg_emit_try_catch_block_to_slot(CG *cg,
     }
     if (block == NULL || block->statement_count == 0U) {
         return cg_fail(cg, err_token,
-                       "codegen: catch block must produce a try-expression value");
+                       "CE0215", "codegen: catch block must produce a try-expression value");
     }
 
     const FengExpr *yield = cg_branch_yield_expr(block);
@@ -17790,7 +17791,7 @@ static bool cg_emit_try_expr(CG *cg,
     if (aggregate && agg_desc == NULL) {
         cgtype_free(result_type);
         return cg_fail(cg, e->token,
-                       "codegen: missing aggregate descriptor for try-expression result");
+                       "CE0198", "codegen: missing aggregate descriptor for try-expression result");
     }
 
     int try_id = cg->label_counter++;
@@ -17821,7 +17822,7 @@ static bool cg_emit_try_expr(CG *cg,
         free(slot_name);
         free(marker_name);
         cgtype_free(result_type);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
 
     if (!is_void) {
@@ -17830,7 +17831,7 @@ static bool cg_emit_try_expr(CG *cg,
             free(slot_name);
                 free(marker_name);
             cgtype_free(result_type);
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
         if (managed) {
             buf_append_fmt(cg->cur_body, "    %s %s = NULL;\n", cty, slot_name);
@@ -17844,7 +17845,7 @@ static bool cg_emit_try_expr(CG *cg,
                 free(slot_name);
                 free(marker_name);
                 cgtype_free(result_type);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
         } else if (aggregate) {
             buf_append_fmt(cg->cur_body, "    %s %s; ", cty, slot_name);
@@ -17854,7 +17855,7 @@ static bool cg_emit_try_expr(CG *cg,
                 free(marker_name);
                 cgtype_free(result_type);
                 return cg_fail(cg, e->token,
-                               "codegen: missing aggregate default-init rule for try-expression result");
+                               "CE0216", "codegen: missing aggregate default-init rule for try-expression result");
             }
             buf_append_cstr(cg->cur_body, ";\n");
             cg_emit_cleanup_push_for_aggregate_local(cg, slot_name, result_type);
@@ -17867,7 +17868,7 @@ static bool cg_emit_try_expr(CG *cg,
                 free(slot_name);
                 free(marker_name);
                 cgtype_free(result_type);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
         } else if (cgtype_is_by_value_struct(result_type)) {
             buf_append_fmt(cg->cur_body, "    %s %s = {0};\n", cty, slot_name);
@@ -18004,7 +18005,7 @@ static bool cg_emit_try_expr(CG *cg,
             free(slot_name);
             free(marker_name);
             cgtype_free(result_type);
-            return cg_fail(cg, clause->token, "codegen: out of memory");
+            return cg_fail(cg, clause->token, "IE0001", "codegen: out of memory");
         }
         cg->cur_scope = catch_scope;
         if (!is_anonymous &&
@@ -18106,7 +18107,7 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     if (cs && cs->form == FENG_SPEC_COERCION_FORM_OBJECT) {
         if (out->type == NULL) {
             return cg_fail(cg, e->token,
-                "codegen: spec coercion source type is missing");
+                "CE0217", "codegen: spec coercion source type is missing");
         }
         const UserSpec *tgt_s = NULL;
         if (!cg_resolve_coercion_target_user_spec(cg, cs, e->token, &tgt_s)) {
@@ -18114,7 +18115,7 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         }
         if (tgt_s == NULL) {
             return cg_fail(cg, e->token,
-                "codegen: coercion target did not resolve to a concrete spec instance");
+                "CE0024", "codegen: coercion target did not resolve to a concrete spec instance");
         }
         const char *witness_var = NULL;
         bool subject_owned = false;
@@ -18127,7 +18128,7 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
             if (!src_t) {
                 return cg_fail(cg, e->token,
-                    "codegen: spec coercion references type outside current codegen scope");
+                    "CE0218", "codegen: spec coercion references type outside current codegen scope");
             }
             if (out->type->kind == CG_TYPE_OBJECT && out->type->user != NULL) {
                 src_t = out->type->user;
@@ -18208,11 +18209,11 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                     }
                     if (!cg_scalar_box_ctor_name(out->type->kind, &ctor_name) || ctor_name == NULL) {
                         return cg_fail(cg, e->token,
-                            "codegen: scalar spec coercion has unsupported source kind");
+                            "CE0219", "codegen: scalar spec coercion has unsupported source kind");
                     }
                     box_tmp = cg_fresh_temp(cg, "_sb");
                     if (box_tmp == NULL) {
-                        return cg_fail(cg, e->token, "codegen: out of memory");
+                        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                     }
                     buf_append_fmt(cg->cur_body,
                         "    struct FengScalarBox *%s = %s(%s);\n",
@@ -18226,11 +18227,11 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                 subject_owned = false;
             } else {
                 return cg_fail(cg, e->token,
-                    "codegen: object-form spec coercion source kind is invalid");
+                    "CE0220", "codegen: object-form spec coercion source kind is invalid");
             }
         }
         if (subject_expr == NULL) {
-            return cg_fail(cg, e->token, "codegen: out of memory");
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
 
         Buf b; buf_init(&b);
@@ -18358,11 +18359,11 @@ static bool cg_register_local_for_cleanup(CG *cg,
     CGType *owned_type = cgtype_clone(type);
 
     if (owned_type == NULL) {
-        return cg_fail(cg, token, "codegen: out of memory");
+        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
     }
     if (!scope_add(cg->cur_scope, cname, cname, owned_type, false)) {
         cgtype_free(owned_type);
-        return cg_fail(cg, token, "codegen: out of memory");
+        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
     }
     if (cgtype_is_managed(type)) {
         cg_emit_cleanup_push_for_managed_local(cg, cname);
@@ -18499,7 +18500,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
                     buf_free(&b);
                     return cg_fail(cg,
                                    blame ? *blame : (FengToken){0},
-                                   "codegen: enum has no items for default value");
+                                   "CE0221", "codegen: enum has no items for default value");
                 }
                 item_c_name = cg_enum_item_c_name(cg, type->enum_decl,
                                                    type->enum_decl->as.enum_decl.items[0].name);
@@ -18507,7 +18508,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
                     buf_free(&b);
                     return cg_fail(cg,
                                    blame ? *blame : (FengToken){0},
-                                   "codegen: out of memory emitting enum default value");
+                                   "CE0222", "codegen: out of memory emitting enum default value");
                 }
                 buf_append_cstr(&b, item_c_name);
                 free(item_c_name);
@@ -18528,7 +18529,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             } else {
                 buf_free(&b);
                 return cg_fail(cg, blame ? *blame : (FengToken){0},
-                    "codegen: cannot produce default value for unresolved callable type");
+                    "CE0223", "codegen: cannot produce default value for unresolved callable type");
             }
             break;
         case CG_TYPE_GENERIC_PARAM:
@@ -18552,7 +18553,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
                 if (agg_desc == NULL) {
                     free(desc); free(elem_cty); buf_free(&b);
                     return cg_fail(cg, blame ? *blame : (FengToken){0},
-                        "codegen: missing aggregate descriptor for spec array default-zero");
+                        "CE0224", "codegen: missing aggregate descriptor for spec array default-zero");
                 }
                 buf_append_fmt(&b,
                     "feng_array_new_kinded("
@@ -18572,7 +18573,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             if (!type->user) {
                 buf_free(&b);
                 return cg_fail(cg, blame ? *blame : (FengToken){0},
-                    "codegen: cannot default-zero an unresolved object type");
+                    "CE0225", "codegen: cannot default-zero an unresolved object type");
             }
             if (cg_user_type_is_tuple(type->user)) {
                 buf_append_fmt(&b, "(struct %s){0}", type->user->c_struct_name);
@@ -18581,7 +18582,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             if (!cg_user_type_is_default_zero_safe(cg, type->user)) {
                 buf_free(&b);
                 return cg_fail(cg, blame ? *blame : (FengToken){0},
-                    "codegen: type '%s' contains reference cycles and has no default zero value; provide an explicit initializer",
+                    "CE0226", "codegen: type '%s' contains reference cycles and has no default zero value; provide an explicit initializer",
                     type->user->feng_name);
             }
             buf_append_fmt(&b, "%s()", type->user->c_default_zero_name);
@@ -18590,7 +18591,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
         default:
             buf_free(&b);
             return cg_fail(cg, blame ? *blame : (FengToken){0},
-                "codegen: cannot produce default value for this type");
+                "CE0227", "codegen: cannot produce default value for this type");
     }
     *out_expr = b.data ? b.data : strdup("0");
     return *out_expr != NULL;
@@ -18645,7 +18646,7 @@ static bool cg_emit_initialized_local_binding(CG *cg,
     if (cname == NULL || cty == NULL) {
         free(cname);
         free(cty);
-        return cg_fail(cg, token, "codegen: out of memory");
+        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
     }
 
     if (!cg_emit_line_directive_force(cg, token)) {
@@ -18672,7 +18673,7 @@ static bool cg_emit_initialized_local_binding(CG *cg,
             if (desc == NULL) {
                 free(cname);
                 free(cty);
-                return cg_fail(cg, token, "codegen: missing aggregate descriptor for local binding");
+                return cg_fail(cg, token, "CE0228", "codegen: missing aggregate descriptor for local binding");
             }
             buf_append_fmt(cg->cur_body,
                            "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
@@ -18705,14 +18706,14 @@ static bool cg_emit_initialized_local_binding(CG *cg,
         !scope_add(cg->cur_scope, "_unused_internal_name__", cname, local_type, false)) {
         cgtype_free(local_type);
         free(cname);
-        return cg_fail(cg, token, "codegen: out of memory");
+        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
     }
     Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
     free(added->name);
     added->name = strndup(name.data, name.length);
     if (added->name == NULL) {
         free(cname);
-        return cg_fail(cg, token, "codegen: out of memory");
+        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
     }
     if (!cg_debug_add_variable_record_slice_cgtype(cg,
                                                    cname,
@@ -18738,13 +18739,13 @@ static bool cg_emit_destructure_binding(CG *cg, const FengStmt *stmt) {
 
     if (binding->initializer == NULL) {
         return cg_fail(cg, binding->token,
-                       "codegen: destructuring binding requires an initializer");
+                       "CE0229", "codegen: destructuring binding requires an initializer");
     }
     if (binding->initializer->kind == FENG_EXPR_TUPLE_LITERAL) {
         const FengExpr *tuple = binding->initializer;
         if (tuple->as.tuple_literal.count != binding->destructure_count) {
             return cg_fail(cg, binding->token,
-                           "codegen: destructuring arity mismatch");
+                           "CE0230", "codegen: destructuring arity mismatch");
         }
         for (size_t i = 0; i < binding->destructure_count; ++i) {
             FengSlice name = binding->destructure_names[i];
@@ -18775,12 +18776,12 @@ static bool cg_emit_destructure_binding(CG *cg, const FengStmt *stmt) {
     if (!cg_type_is_tuple_user(source.type)) {
         er_free(&source);
         return cg_fail(cg, binding->token,
-                       "codegen: destructuring source must be a tuple value");
+                       "CE0231", "codegen: destructuring source must be a tuple value");
     }
     if (source.type->user->field_count != binding->destructure_count) {
         er_free(&source);
         return cg_fail(cg, binding->token,
-                       "codegen: destructuring arity mismatch");
+                       "CE0230", "codegen: destructuring arity mismatch");
     }
     if (binding->destructure_count == 0U) {
         cg_emit_current_stmt_line_directive_force(cg);
@@ -18790,7 +18791,7 @@ static bool cg_emit_destructure_binding(CG *cg, const FengStmt *stmt) {
     }
     if (cg_materialize_to_local(cg, &source, "_tuple") == NULL) {
         er_free(&source);
-        return cg_fail(cg, binding->token, "codegen: out of memory");
+        return cg_fail(cg, binding->token, "IE0001", "codegen: out of memory");
     }
     for (size_t i = 0; i < binding->destructure_count; ++i) {
         FengSlice name = binding->destructure_names[i];
@@ -18810,7 +18811,7 @@ static bool cg_emit_destructure_binding(CG *cg, const FengStmt *stmt) {
         if (field_value.c_expr == NULL || field_value.type == NULL) {
             er_free(&field_value);
             er_free(&source);
-            return cg_fail(cg, binding->token, "codegen: out of memory");
+            return cg_fail(cg, binding->token, "IE0001", "codegen: out of memory");
         }
         if (!cg_emit_initialized_local_binding(cg,
                                                name,
@@ -18868,11 +18869,11 @@ static bool cg_emit_user_field_value_store(CG *cg,
         if (agg_desc == NULL) {
             return cg_fail(cg,
                            blame,
-                           "codegen: missing aggregate descriptor for field '%s'",
+                           "CE0232", "codegen: missing aggregate descriptor for field '%s'",
                            uf->feng_name);
         }
         if (value->owns_ref && cg_materialize_to_local(cg, value, "_t") == NULL) {
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
             "    feng_aggregate_assign(&%s->%s, &%s, &%s);\n",
@@ -18884,7 +18885,7 @@ static bool cg_emit_user_field_value_store(CG *cg,
         char *cty = cg_ctype_dup(uf->type);
 
         if (cty == NULL) {
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (cgtype_is_by_value_struct(uf->type)) {
             buf_append_fmt(cg->cur_body,
@@ -18920,7 +18921,7 @@ static bool cg_emit_user_field_default_value(CG *cg,
         buf_init(&lvalue);
         buf_append_fmt(&lvalue, "%s->%s", object_expr, uf->c_name);
         if (lvalue.data == NULL) {
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         buf_append_cstr(cg->cur_body, "    ");
         ok = cg_append_aggregate_default_init_call(cg->cur_body, uf->type, lvalue.data);
@@ -18928,7 +18929,7 @@ static bool cg_emit_user_field_default_value(CG *cg,
         if (!ok) {
             return cg_fail(cg,
                            blame,
-                           "codegen: missing aggregate default-init rule for field '%s'",
+                           "CE0233", "codegen: missing aggregate default-init rule for field '%s'",
                            uf->feng_name);
         }
         buf_append_cstr(cg->cur_body, ";\n");
@@ -18945,7 +18946,7 @@ static bool cg_emit_user_field_default_value(CG *cg,
         cty = cg_ctype_dup(uf->type);
         if (cty == NULL) {
             free(def_expr);
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (cgtype_is_by_value_struct(uf->type)) {
             buf_append_fmt(cg->cur_body,
@@ -19017,7 +19018,7 @@ static bool cg_emit_user_type_member_initializers(CG *cg,
     }
 
     if (!cg_user_type_member_initializers_capture_self(ut, &captures_self)) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     if (captures_self) {
         FengSlice self_name = {"self", 4U};
@@ -19028,7 +19029,7 @@ static bool cg_emit_user_type_member_initializers(CG *cg,
         if (initializer_scope == NULL || self_t == NULL) {
             cgtype_free(self_t);
             if (initializer_scope != NULL) scope_pop_free(initializer_scope);
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         self_t->user = (UserType *)ut;
         cg->cur_scope = initializer_scope;
@@ -19118,7 +19119,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     } else {
         if (!decl_type) {
             return cg_fail(cg, b->token,
-                "codegen: binding without type or initializer not supported");
+                "CE0234", "codegen: binding without type or initializer not supported");
         }
     }
     if (cg_current_callable_captures_name(cg, b->name.data, b->name.length)) {
@@ -19194,7 +19195,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                     er_free(&init);
                     free(cty); free(cname); cgtype_free(decl_type);
                     return cg_fail(cg, b->token,
-                        "codegen: missing aggregate descriptor for spec local");
+                        "CE0235", "codegen: missing aggregate descriptor for spec local");
                 }
                 buf_append_fmt(cg->cur_body,
                                "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
@@ -19226,7 +19227,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                 buf_free(&init_call);
                 free(cname); free(cty); cgtype_free(decl_type);
                 return cg_fail(cg, b->token,
-                    "codegen: missing aggregate default-init rule");
+                    "CE0236", "codegen: missing aggregate default-init rule");
             }
             buf_append_fmt(cg->cur_body, "    %s %s; ", cty, cname);
             buf_append_cstr(cg->cur_body, init_call.data);
@@ -19288,7 +19289,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         if (recv.type->kind != CG_TYPE_ARRAY || !recv.type->element) {
             er_free(&recv);
             return cg_fail(cg, stmt->token,
-                "codegen: indexed assignment requires an array value");
+                "CE0237", "codegen: indexed assignment requires an array value");
         }
         if (cgtype_is_managed(recv.type) && recv.owns_ref) {
             cg_materialize_to_local(cg, &recv, "_t");
@@ -19300,7 +19301,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         if (!cgtype_is_integer(ix.type->kind)) {
             er_free(&ix); er_free(&recv);
             return cg_fail(cg, stmt->token,
-                "codegen: array index must be an integer");
+                "CE0189", "codegen: array index must be an integer");
         }
         char *idx_tmp = cg_fresh_temp(cg, "_idx");
         if (!idx_tmp) { er_free(&ix); er_free(&recv); return false; }
@@ -19320,7 +19321,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 er_free(&ix);
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: compound indexed assignment requires a numeric element type");
+                    "CE0238", "codegen: compound indexed assignment requires a numeric element type");
             }
 
             old_tmp = cg_fresh_temp(cg, "_old");
@@ -19359,7 +19360,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 er_free(&ix);
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: unsupported compound indexed assignment operator");
+                    "CE0239", "codegen: unsupported compound indexed assignment operator");
             }
 
             buf_append_fmt(cg->cur_body,
@@ -19396,7 +19397,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 er_free(&ix);
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: missing generic descriptor for array element assignment");
+                    "CE0240", "codegen: missing generic descriptor for array element assignment");
             }
             if (v.type->kind != CG_TYPE_GENERIC_PARAM ||
                 v.type->generic_param_index != gp_index) {
@@ -19406,7 +19407,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 er_free(&ix);
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: generic array element assignment requires a value with the same generic type parameter");
+                    "CE0241", "codegen: generic array element assignment requires a value with the same generic type parameter");
             }
             char *slot_tmp = cg_fresh_temp(cg, "_gslot");
             char *src_tmp = cg_fresh_temp(cg, "_gsrc");
@@ -19469,7 +19470,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 free(elem_cty); free(idx_tmp);
                 er_free(&v); er_free(&ix); er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: tuple array element requires reified layout "
+                    "CE0242", "codegen: tuple array element requires reified layout "
                     "but no reified_agg_dep found");
             }
             const char *rad_src = cg->generic_type_method_rad_via_desc
@@ -19512,7 +19513,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 free(elem_cty); free(idx_tmp);
                 er_free(&v); er_free(&ix); er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: missing aggregate descriptor for spec array element write");
+                    "CE0243", "codegen: missing aggregate descriptor for spec array element write");
             }
             if (v.owns_ref) {
                 cg_materialize_to_local(cg, &v, "_t");
@@ -19564,7 +19565,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 if (!binding->is_var) {
                     return cg_fail(cg,
                                    stmt->token,
-                                   "codegen: cannot assign to immutable static binding '%s.%s'",
+                                   "CE0244", "codegen: cannot assign to immutable static binding '%s.%s'",
                                    static_target->feng_name,
                                    binding->feng_name);
                 }
@@ -19579,7 +19580,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                         free(cty);
                         return cg_fail(cg,
                                        stmt->token,
-                                       "codegen: compound assignment requires a numeric static binding type");
+                                       "CE0245", "codegen: compound assignment requires a numeric static binding type");
                     }
                     old_tmp = cg_fresh_temp(cg, "_old");
                     if (old_tmp == NULL) {
@@ -19604,7 +19605,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                         free(cty);
                         return cg_fail(cg,
                                        stmt->token,
-                                       "codegen: unsupported compound assignment operator");
+                                       "CE0073", "codegen: unsupported compound assignment operator");
                     }
                     buf_append_fmt(cg->cur_body,
                                    "    %s = (%s)(%s);\n",
@@ -19646,7 +19647,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                             er_free(&v);
                             return cg_fail(cg,
                                            stmt->token,
-                                           "codegen: missing aggregate descriptor for static binding write");
+                                           "CE0246", "codegen: missing aggregate descriptor for static binding write");
                         }
                         if (v.owns_ref) {
                             cg_materialize_to_local(cg, &v, "_t");
@@ -19700,7 +19701,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             if (field_member == NULL) {
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: generic type '%.*s' has no field '%.*s'",
+                    "CE0171", "codegen: generic type '%.*s' has no field '%.*s'",
                     (int)owner->as.type_decl.name.length,
                     owner->as.type_decl.name.data,
                     (int)target->as.member.member.length,
@@ -19717,7 +19718,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     cgtype_free(field_type);
                     er_free(&recv);
                     return cg_fail(cg, stmt->token,
-                        "codegen: compound assignment to generic field requires a concrete numeric field type");
+                        "CE0247", "codegen: compound assignment to generic field requires a concrete numeric field type");
                 }
                 ExprResult v;
                 if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
@@ -19727,7 +19728,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     v.type->generic_param_index != field_type->generic_param_index) {
                     er_free(&v); cgtype_free(field_type); er_free(&recv);
                     return cg_fail(cg, stmt->token,
-                        "codegen: generic field assignment requires a value with the same generic type parameter");
+                        "CE0248", "codegen: generic field assignment requires a value with the same generic type parameter");
                 }
                 const char *desc = cg->generic_fn_type_param_descs[field_type->generic_param_index];
                 char *dst_tmp = cg_fresh_temp(cg, "_gdst");
@@ -19785,7 +19786,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     free(field_addr); free(field_cty);
                     cgtype_free(field_type); er_free(&recv);
                     return cg_fail(cg, stmt->token,
-                        "codegen: compound member assignment requires a numeric field type");
+                        "CE0249", "codegen: compound member assignment requires a numeric field type");
                 }
                 char *old_tmp = cg_fresh_temp(cg, "_old");
                 if (!old_tmp) {
@@ -19809,7 +19810,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     free(old_tmp); free(field_addr); free(field_cty);
                     cgtype_free(field_type); er_free(&recv);
                     return cg_fail(cg, stmt->token,
-                        "codegen: unsupported compound member assignment operator");
+                        "CE0250", "codegen: unsupported compound member assignment operator");
                 }
                 buf_append_fmt(cg->cur_body,
                     "    *(%s *)%s = (%s)(%s);\n",
@@ -19844,7 +19845,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     er_free(&v); free(field_addr); free(field_cty);
                     cgtype_free(field_type); er_free(&recv);
                     return cg_fail(cg, stmt->token,
-                        "codegen: missing aggregate descriptor for generic method field write");
+                        "CE0251", "codegen: missing aggregate descriptor for generic method field write");
                 }
                 if (v.owns_ref) cg_materialize_to_local(cg, &v, "_t");
                 buf_append_fmt(cg->cur_body,
@@ -19867,7 +19868,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             if (!us || !desc_name) {
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: generic member assignment requires an object-form spec constraint");
+                    "CE0252", "codegen: generic member assignment requires an object-form spec constraint");
             }
             const UserSpecMember *sm = cg_user_spec_member(us,
                 target->as.member.member.data,
@@ -19875,7 +19876,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             if (!sm || sm->kind != USM_KIND_FIELD) {
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: spec '%s' has no field '%.*s'",
+                    "CE0173", "codegen: spec '%s' has no field '%.*s'",
                     us->feng_name,
                     (int)target->as.member.member.length,
                     target->as.member.member.data);
@@ -19883,7 +19884,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             if (!sm->is_var) {
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: spec field '%s' is not declared `var`",
+                    "CE0253", "codegen: spec field '%s' is not declared `var`",
                     sm->feng_name);
             }
             char *subject_expr = cg_generic_witness_subject_expr(desc_name, recv.c_expr);
@@ -19902,7 +19903,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     free(subject_expr);
                     er_free(&recv);
                     return cg_fail(cg, stmt->token,
-                        "codegen: compound spec field assignment requires a numeric field type");
+                        "CE0254", "codegen: compound spec field assignment requires a numeric field type");
                 }
 
                 old_tmp = cg_fresh_temp(cg, "_old");
@@ -19939,7 +19940,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     free(subject_expr);
                     er_free(&recv);
                     return cg_fail(cg, stmt->token,
-                        "codegen: unsupported compound spec field assignment operator");
+                        "CE0255", "codegen: unsupported compound spec field assignment operator");
                 }
 
                 buf_append_fmt(cg->cur_body,
@@ -19992,7 +19993,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             if (!sm || sm->kind != USM_KIND_FIELD) {
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: spec '%s' has no field '%.*s'",
+                    "CE0173", "codegen: spec '%s' has no field '%.*s'",
                     us->feng_name,
                     (int)target->as.member.member.length,
                     target->as.member.member.data);
@@ -20000,7 +20001,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             if (!sm->is_var) {
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: spec field '%s' is not declared `var`",
+                    "CE0253", "codegen: spec field '%s' is not declared `var`",
                     sm->feng_name);
             }
             cg_materialize_to_local(cg, &recv, "_t");
@@ -20014,7 +20015,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     free(field_cty);
                     er_free(&recv);
                     return cg_fail(cg, stmt->token,
-                        "codegen: compound spec field assignment requires a numeric field type");
+                        "CE0254", "codegen: compound spec field assignment requires a numeric field type");
                 }
 
                 old_tmp = cg_fresh_temp(cg, "_old");
@@ -20047,7 +20048,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     free(field_cty);
                     er_free(&recv);
                     return cg_fail(cg, stmt->token,
-                        "codegen: unsupported compound spec field assignment operator");
+                        "CE0255", "codegen: unsupported compound spec field assignment operator");
                 }
 
                 buf_append_fmt(cg->cur_body,
@@ -20092,7 +20093,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         if (recv.type->kind != CG_TYPE_OBJECT || !recv.type->user) {
             er_free(&recv);
             return cg_fail(cg, stmt->token,
-                "codegen: member assignment on non-object value");
+                "CE0256", "codegen: member assignment on non-object value");
         }
         const UserType *ut = recv.type->user;
         const UserField *uf = cg_user_type_field(ut,
@@ -20100,7 +20101,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         if (!uf) {
             er_free(&recv);
             return cg_fail(cg, stmt->token,
-                "codegen: type '%s' has no field '%.*s'",
+                "CE0176", "codegen: type '%s' has no field '%.*s'",
                 ut->feng_name,
                 (int)target->as.member.member.length,
                 target->as.member.member.data);
@@ -20118,7 +20119,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 free(field_cty);
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: compound member assignment requires a numeric field type");
+                    "CE0249", "codegen: compound member assignment requires a numeric field type");
             }
 
             old_tmp = cg_fresh_temp(cg, "_old");
@@ -20151,7 +20152,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 free(field_cty);
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                    "codegen: unsupported compound member assignment operator");
+                    "CE0250", "codegen: unsupported compound member assignment operator");
             }
 
             buf_append_fmt(cg->cur_body,
@@ -20188,12 +20189,12 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 er_free(&v);
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
-                               "codegen: missing aggregate descriptor for member assignment");
+                               "CE0257", "codegen: missing aggregate descriptor for member assignment");
             }
             if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
                 er_free(&v);
                 er_free(&recv);
-                return cg_fail(cg, stmt->token, "codegen: out of memory");
+                return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
             }
             buf_append_fmt(cg->cur_body,
                 "    feng_aggregate_assign(&(%s)->%s, &%s, &%s);\n",
@@ -20215,7 +20216,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
     }
     if (target->kind != FENG_EXPR_IDENTIFIER) {
         return cg_fail(cg, stmt->token,
-            "codegen: only identifier or member assignments supported in this iteration");
+            "CE0258", "codegen: only identifier or member assignments supported in this iteration");
     }
     const FengSlice n = target->as.identifier;
     const Local *l = scope_lookup(cg->cur_scope, n.data, n.length);
@@ -20233,12 +20234,12 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                                                        binary_op);
             }
             return cg_fail(cg, stmt->token,
-                "codegen: assignment to undefined identifier '%.*s'",
+                "CE0259", "codegen: assignment to undefined identifier '%.*s'",
                 (int)n.length, n.data);
         }
         if (!mb->is_var) {
             return cg_fail(cg, stmt->token,
-                "codegen: cannot assign to immutable module binding '%s'",
+                "CE0260", "codegen: cannot assign to immutable module binding '%s'",
                 mb->feng_name);
         }
         cg_emit_module_binding_ensure_init_call(cg, mb);
@@ -20251,7 +20252,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             if (!cty || !cgtype_is_numeric(mb->type->kind)) {
                 free(cty);
                 return cg_fail(cg, stmt->token,
-                    "codegen: compound assignment requires a numeric binding type");
+                    "CE0072", "codegen: compound assignment requires a numeric binding type");
             }
 
             old_tmp = cg_fresh_temp(cg, "_old");
@@ -20278,7 +20279,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 free(old_tmp);
                 free(cty);
                 return cg_fail(cg, stmt->token,
-                    "codegen: unsupported compound assignment operator");
+                    "CE0073", "codegen: unsupported compound assignment operator");
             }
 
             buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
@@ -20309,11 +20310,11 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             if (desc == NULL) {
                 er_free(&v);
                 return cg_fail(cg, stmt->token,
-                               "codegen: missing aggregate descriptor for module assignment");
+                               "CE0261", "codegen: missing aggregate descriptor for module assignment");
             }
             if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
                 er_free(&v);
-                return cg_fail(cg, stmt->token, "codegen: out of memory");
+                return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
             }
             buf_append_fmt(cg->cur_body,
                 "    feng_aggregate_assign(&%s, &%s, &%s);\n",
@@ -20341,7 +20342,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         if (!cty || !cgtype_is_numeric(l->type->kind)) {
             free(cty);
             return cg_fail(cg, stmt->token,
-                "codegen: compound assignment requires a numeric local type");
+                "CE0262", "codegen: compound assignment requires a numeric local type");
         }
 
         old_tmp = cg_fresh_temp(cg, "_old");
@@ -20368,7 +20369,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             free(old_tmp);
             free(cty);
             return cg_fail(cg, stmt->token,
-                "codegen: unsupported compound assignment operator");
+                "CE0073", "codegen: unsupported compound assignment operator");
         }
 
         buf_append_fmt(cg->cur_body, "    %s = (%s)(%s);\n",
@@ -20400,11 +20401,11 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         if (desc == NULL) {
             er_free(&v);
             return cg_fail(cg, stmt->token,
-                           "codegen: missing aggregate descriptor for local assignment");
+                           "CE0263", "codegen: missing aggregate descriptor for local assignment");
         }
         if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
             er_free(&v);
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
             "    feng_aggregate_assign(&%s, &%s, &%s);\n",
@@ -20433,7 +20434,7 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
         cg->cur_return_type->kind == CG_TYPE_VOID) {
         if (stmt->as.return_value) {
             return cg_fail(cg, stmt->token,
-                "codegen: void function cannot return a value");
+                "CE0264", "codegen: void function cannot return a value");
         }
         cg_release_through(cg, NULL);
         cg_emit_return_control_cleanup(cg);
@@ -20446,7 +20447,7 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
     }
     if (!stmt->as.return_value) {
         return cg_fail(cg, stmt->token,
-            "codegen: non-void function must return a value");
+            "CE0265", "codegen: non-void function must return a value");
     }
     ExprResult r;
     if (!cg_emit_expr_for_expected_type(cg,
@@ -20492,7 +20493,7 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
         if (!desc) {
             er_free(&r);
             return cg_fail(cg, stmt->token,
-                "codegen: missing aggregate descriptor for spec return");
+                "CE0075", "codegen: missing aggregate descriptor for spec return");
         }
         char *tmp = cg_fresh_temp(cg, "_ret");
         char *cty = cg_ctype_dup(r.type);
@@ -20568,7 +20569,7 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
              * scope (and cleaned up when we close the wrapper).
              */
             Scope *ws = scope_push(cg->cur_scope);
-            if (!ws) return cg_fail(cg, c->token, "codegen: out of memory");
+            if (!ws) return cg_fail(cg, c->token, "IE0001", "codegen: out of memory");
             cg->cur_scope = ws;
 
             /* Record buffer position to detect preamble. */
@@ -20583,7 +20584,7 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
                 er_free(&cond);
                 cg->cur_scope = ws->parent;
                 scope_pop_free(ws);
-                return cg_fail(cg, c->token, "codegen: if condition must be bool");
+                return cg_fail(cg, c->token, "CE0266", "codegen: if condition must be bool");
             }
 
             bool has_preamble = (cg->cur_body->length != body_len_before);
@@ -20601,7 +20602,7 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
                     er_free(&cond);
                     cg->cur_scope = ws->parent;
                     scope_pop_free(ws);
-                    return cg_fail(cg, c->token, "codegen: out of memory");
+                    return cg_fail(cg, c->token, "IE0001", "codegen: out of memory");
                 }
                 memmove(cg->cur_body->data + body_len_before + eo_len,
                         cg->cur_body->data + body_len_before,
@@ -20616,7 +20617,7 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
                     er_free(&cond);
                     cg->cur_scope = ws->parent;
                     scope_pop_free(ws);
-                    return cg_fail(cg, c->token, "codegen: too many nested else-if wrappers");
+                    return cg_fail(cg, c->token, "CE0267", "codegen: too many nested else-if wrappers");
                 }
                 wrapper_scopes[wrapper_count++] = ws;
             } else {
@@ -20634,7 +20635,7 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
             if (!cg_emit_expr(cg, c->condition, &cond)) return false;
             if (cond.type->kind != CG_TYPE_BOOL) {
                 er_free(&cond);
-                return cg_fail(cg, c->token, "codegen: if condition must be bool");
+                return cg_fail(cg, c->token, "CE0266", "codegen: if condition must be bool");
             }
             buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond.c_expr);
         }
@@ -20642,7 +20643,7 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
         er_free(&cond);
 
         branch_scope = scope_push(cg->cur_scope);
-        if (!branch_scope) return cg_fail(cg, c->token, "codegen: out of memory");
+        if (!branch_scope) return cg_fail(cg, c->token, "IE0001", "codegen: out of memory");
         cg->cur_scope = branch_scope;
         if (!cg_emit_block(cg, c->block)) {
             cg->cur_scope = branch_scope->parent;
@@ -20657,7 +20658,7 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
 
     if (stmt->as.if_stmt.else_block) {
         Scope *else_scope = scope_push(cg->cur_scope);
-        if (!else_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+        if (!else_scope) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         cg->cur_scope = else_scope;
         buf_append_cstr(cg->cur_body, "    else {\n");
         if (!cg_emit_block(cg, stmt->as.if_stmt.else_block)) {
@@ -20684,7 +20685,7 @@ static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
 
 static bool cg_emit_match_stmt_branch(CG *cg, const FengBlock *block, FengToken token) {
     Scope *branch_scope = scope_push(cg->cur_scope);
-    if (!branch_scope) return cg_fail(cg, token, "codegen: out of memory");
+    if (!branch_scope) return cg_fail(cg, token, "IE0001", "codegen: out of memory");
     cg->cur_scope = branch_scope;
 
     bool ok = cg_emit_block(cg, block);
@@ -20716,7 +20717,7 @@ static bool cg_union_member_index_for_label(CG *cg,
     }
     cgtype_free(label_type);
     return cg_fail(cg, label->token,
-                   "codegen: union-form match label is not a normalized member");
+                   "CE0268", "codegen: union-form match label is not a normalized member");
 }
 
 static bool cg_emit_union_match_stmt_branch(CG *cg,
@@ -20731,7 +20732,7 @@ static bool cg_emit_union_match_stmt_branch(CG *cg,
     bool ok;
 
     if (branch_scope == NULL) {
-        return cg_fail(cg, token, "codegen: out of memory");
+        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
     }
     cg->cur_scope = branch_scope;
     if (target_name.data != NULL && target_name.length > 0U && has_single_member) {
@@ -20755,7 +20756,7 @@ static bool cg_emit_union_match_stmt_branch(CG *cg,
             buf_free(&payload_expr);
             cg->cur_scope = branch_scope->parent;
             scope_pop_free(branch_scope);
-            return cg_fail(cg, token, "codegen: out of memory");
+            return cg_fail(cg, token, "IE0001", "codegen: out of memory");
         }
         free(alias_name);
         buf_free(&payload_expr);
@@ -20773,7 +20774,7 @@ static bool cg_emit_union_match_stmt_branch(CG *cg,
 static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
     buf_append_cstr(cg->cur_body, "    {\n");
     Scope *match_scope = scope_push(cg->cur_scope);
-    if (!match_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    if (!match_scope) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     cg->cur_scope = match_scope;
 
     ExprResult target;
@@ -20800,7 +20801,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
             er_free(&target);
             cg->cur_scope = match_scope->parent;
             scope_pop_free(match_scope);
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
         er_free(&target);
         covered_members = union_spec->union_member_count > 0U
@@ -20811,7 +20812,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
             free(target_tmp);
             cg->cur_scope = match_scope->parent;
             scope_pop_free(match_scope);
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
 
         for (size_t branch_index = 0U;
@@ -20824,7 +20825,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
 
             if (branch->label_count == 0U) {
                 ok = cg_fail(cg, branch->token,
-                             "codegen: if-match branch has no labels");
+                             "CE0269", "codegen: if-match branch has no labels");
                 break;
             }
             buf_init(&condition);
@@ -20933,7 +20934,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
         cg->cur_scope = match_scope->parent;
         scope_pop_free(match_scope);
         return cg_fail(cg, stmt->token,
-            "codegen: if-match target must be integer, bool, or string");
+            "CE0270", "codegen: if-match target must be integer, bool, or string");
     }
 
     char *target_tmp = cg_materialize_to_local(cg, &target, "_mt");
@@ -20941,7 +20942,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
         er_free(&target);
         cg->cur_scope = match_scope->parent;
         scope_pop_free(match_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     er_free(&target);
 
@@ -20954,7 +20955,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
 
         if (branch->label_count == 0) {
             ok = cg_fail(cg, branch->token,
-                "codegen: if-match branch has no labels");
+                "CE0269", "codegen: if-match branch has no labels");
             break;
         }
 
@@ -21025,7 +21026,7 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
     buf_append_cstr(cg->cur_body, "    for (;;) {\n");
     /* Condition scope: any temporaries from cond eval get released here. */
     Scope *cond_scope = scope_push(cg->cur_scope);
-    if (!cond_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    if (!cond_scope) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     cg->cur_scope = cond_scope;
     ExprResult cond;
     if (!cg_emit_expr(cg, stmt->as.while_stmt.condition, &cond)) {
@@ -21037,7 +21038,7 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
         er_free(&cond);
         cg->cur_scope = cond_scope->parent;
         scope_pop_free(cond_scope);
-        return cg_fail(cg, stmt->token, "codegen: while condition must be bool");
+        return cg_fail(cg, stmt->token, "CE0271", "codegen: while condition must be bool");
     }
     char *cond_tmp = cg_fresh_temp(cg, "_cond");
     buf_append_fmt(cg->cur_body, "        bool %s = %s;\n", cond_tmp, cond.c_expr);
@@ -21050,7 +21051,7 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
 
     cg->loop_depth++;
     Scope *body_scope = scope_push(cg->cur_scope);
-    if (!body_scope) { cg->loop_depth--; return cg_fail(cg, stmt->token, "codegen: out of memory"); }
+    if (!body_scope) { cg->loop_depth--; return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory"); }
     body_scope->is_loop = true;
     body_scope->try_depth_at_entry = cg->try_depth;
     cg->cur_scope = body_scope;
@@ -21115,7 +21116,7 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
      * scope so binding-form inits are released when the loop exits, and so
      * a binding declared here is invisible outside the for. */
     Scope *outer_scope = scope_push(cg->cur_scope);
-    if (!outer_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    if (!outer_scope) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     cg->cur_scope = outer_scope;
 
     if (stmt->as.for_stmt.init != NULL) {
@@ -21148,7 +21149,7 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
             cg_release_scope(cg, outer_scope);
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
         cg->cur_scope = cond_scope;
         if (!cg_emit_line_directive_force(cg, stmt->token)) {
@@ -21176,7 +21177,7 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
             return cg_fail(cg, stmt->token,
-                "codegen: for condition must be bool");
+                "CE0272", "codegen: for condition must be bool");
         }
         char *cond_tmp = cg_fresh_temp(cg, "_fcond");
         buf_append_fmt(cg->cur_body, "        bool %s = %s;\n",
@@ -21197,7 +21198,7 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     body_scope->is_loop = true;
     body_scope->try_depth_at_entry = cg->try_depth;
@@ -21243,7 +21244,7 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
             cg_release_scope(cg, outer_scope);
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
         cg->cur_scope = upd_scope;
         if (!cg_emit_line_directive_force(cg, stmt->token)) {
@@ -21296,7 +21297,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
     buf_append_cstr(cg->cur_body, "    {\n");
 
     Scope *outer_scope = scope_push(cg->cur_scope);
-    if (!outer_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    if (!outer_scope) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     cg->cur_scope = outer_scope;
 
     /* Emit the iteration source expression. */
@@ -21345,7 +21346,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
             return cg_fail(cg, stmt->token,
-                "codegen: @iterable method not found on source type");
+                "CE0273", "codegen: @iterable method not found on source type");
         }
         /* Get cursor_ut from the resolved return type of @iterable. */
         cursor_ut = iterable_um->return_type != NULL
@@ -21359,7 +21360,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
             return cg_fail(cg, stmt->token,
-                "codegen: iterator cursor type not found");
+                "CE0274", "codegen: iterator cursor type not found");
         }
         iter_um = cg_user_type_method_by_member(cursor_ut, iterator_method);
         if (!iter_um) {
@@ -21368,7 +21369,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
             return cg_fail(cg, stmt->token,
-                "codegen: @iterator method not found on cursor type");
+                "CE0275", "codegen: @iterator method not found on cursor type");
         }
 
         /* Materialize receiver if it owns a ref. */
@@ -21383,7 +21384,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             cg_release_scope(cg, outer_scope);
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
         char *cursor_cty = cg_ctype_dup(iterable_um->return_type);
         if (!cursor_cty) {
@@ -21392,7 +21393,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             cg_release_scope(cg, outer_scope);
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
 
         /* The @iterable method returns the cursor type (managed pointer). */
@@ -21468,7 +21469,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
             return cg_fail(cg, stmt->token,
-                "codegen: iterator cursor type not found");
+                "CE0274", "codegen: iterator cursor type not found");
         }
         iter_um = cg_user_type_method_by_member(cursor_ut, iterator_method);
         if (!iter_um) {
@@ -21477,7 +21478,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
             return cg_fail(cg, stmt->token,
-                "codegen: @iterator method not found on cursor type");
+                "CE0275", "codegen: @iterator method not found on cursor type");
         }
         if (cgtype_is_managed(src.type) && src.owns_ref) {
             cursor_var = cg_materialize_to_local(cg, &src, "_cursor");
@@ -21499,7 +21500,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             cg_release_scope(cg, outer_scope);
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
     }
 
@@ -21512,7 +21513,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
 
     /* Get the tuple UserType for the result to access field names. */
@@ -21524,7 +21525,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
         return cg_fail(cg, stmt->token,
-            "codegen: @iterator return type must be a 2-field tuple");
+            "CE0276", "codegen: @iterator return type must be a 2-field tuple");
     }
 
     const UserField *bool_field = &result_ut->fields[0];
@@ -21540,7 +21541,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
 
     /* Begin the loop. */
@@ -21556,7 +21557,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     body_scope->is_loop = true;
     body_scope->try_depth_at_entry = cg->try_depth;
@@ -21671,7 +21672,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
 
     char *elem_cty = cg_ctype_dup(element_type);
@@ -21717,7 +21718,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
     free(added->name);
@@ -21782,7 +21783,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
     /* Outer scope: holds the materialised iteration sequence (so its +1
      * reference outlives the loop) and the loop index. */
     Scope *outer_scope = scope_push(cg->cur_scope);
-    if (!outer_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    if (!outer_scope) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     cg->cur_scope = outer_scope;
 
     ExprResult seq;
@@ -21797,7 +21798,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
         return cg_fail(cg, stmt->token,
-            "codegen: for/in sequence must be an array");
+            "CE0277", "codegen: for/in sequence must be an array");
     }
     /* Stash the element type before materialise possibly invalidates seq.type's
      * lifetime via cgtype clone semantics. cg_materialize_to_local hands
@@ -21808,7 +21809,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     /* Materialise the sequence into a local that owns +1 if it's an owning
      * temp; if it was borrowed (e.g. a bound var read), we still hold the
@@ -21836,7 +21837,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
 
     char *idx_var = cg_fresh_temp(cg, "_fidx");
@@ -21856,7 +21857,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     body_scope->is_loop = true;
     body_scope->try_depth_at_entry = cg->try_depth;
@@ -21879,7 +21880,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     char *elem_cty = cg_ctype_dup(element_type);
     /* Slot read: ((T*)feng_array_data(seq))[idx]. */
@@ -21900,7 +21901,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
             return cg_fail(cg, stmt->token,
-                "codegen: missing aggregate descriptor for spec for/in element");
+                "CE0278", "codegen: missing aggregate descriptor for spec for/in element");
         }
         size_t forin_rad_idx;
         if (cg_lookup_reified_agg_dep_index(cg, desc, &forin_rad_idx)) {
@@ -21934,7 +21935,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
         cg_release_scope(cg, outer_scope);
         cg->cur_scope = outer_scope->parent;
         scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
     free(added->name);
@@ -21989,7 +21990,7 @@ static bool cg_emit_for(CG *cg, const FengStmt *stmt) {
 static bool cg_emit_break_continue(CG *cg, const FengStmt *stmt, bool is_break) {
     if (cg->loop_depth == 0) {
         return cg_fail(cg, stmt->token,
-            "codegen: '%s' outside of loop", is_break ? "break" : "continue");
+            "CE0279", "codegen: '%s' outside of loop", is_break ? "break" : "continue");
     }
     /* Release scopes up to (but not including) the nearest loop scope. */
     const Scope *stop = NULL;
@@ -22022,7 +22023,7 @@ static bool cg_emit_try_stmt(CG *cg, const FengStmt *stmt) {
     /* Open a fresh inner scope so any +1 temporaries are released at the
      * statement boundary (mirrors cg_emit_expr_stmt). */
     Scope *st_scope = scope_push(cg->cur_scope);
-    if (!st_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    if (!st_scope) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     cg->cur_scope = st_scope;
     buf_append_cstr(cg->cur_body, "    {\n");
     ExprResult r;
@@ -22048,7 +22049,7 @@ static bool cg_emit_expr_stmt(CG *cg, const FengStmt *stmt) {
     /* Open a fresh inner scope so any +1 temporaries from the expression
      * are released at the statement boundary. */
     Scope *st_scope = scope_push(cg->cur_scope);
-    if (!st_scope) return cg_fail(cg, stmt->token, "codegen: out of memory");
+    if (!st_scope) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     cg->cur_scope = st_scope;
     buf_append_cstr(cg->cur_body, "    {\n");
     ExprResult r;
@@ -22085,7 +22086,7 @@ static bool cg_exception_descriptor_expr_for_type(CG *cg,
     }
     *out_expr = NULL;
     if (type == NULL) {
-        return cg_fail(cg, token, "codegen: missing exception payload type");
+        return cg_fail(cg, token, "CE0280", "codegen: missing exception payload type");
     }
 
     if (cg_scalar_exception_descriptor_name(type->kind, &scalar_desc)) {
@@ -22105,7 +22106,7 @@ static bool cg_exception_descriptor_expr_for_type(CG *cg,
         case CG_TYPE_OBJECT:
             if (type->user == NULL || type->user->c_desc_name == NULL) {
                 return cg_fail(cg, token,
-                               "codegen: object exception payload is missing a descriptor");
+                               "CE0281", "codegen: object exception payload is missing a descriptor");
             }
             buf_init(&b);
             buf_append_fmt(&b, "&%s", type->user->c_desc_name);
@@ -22113,7 +22114,7 @@ static bool cg_exception_descriptor_expr_for_type(CG *cg,
             return *out_expr != NULL;
         default:
             return cg_fail(cg, token,
-                           "codegen: unsupported exception payload type");
+                           "CE0282", "codegen: unsupported exception payload type");
     }
 }
 
@@ -22132,7 +22133,7 @@ static bool cg_expr_is_unknown_exception_identifier(CG *cg, const FengExpr *expr
 static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
     if (stmt->as.throw_value == NULL) {
         return cg_fail(cg, stmt->token,
-            "codegen: 'throw' requires a value");
+            "CE0283", "codegen: 'throw' requires a value");
     }
     if (cg_expr_is_unknown_exception_identifier(cg, stmt->as.throw_value)) {
         buf_append_cstr(cg->cur_body, "    feng_rethrow();\n");
@@ -22148,7 +22149,7 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
         if (r.type->user_spec == NULL || r.type->user_spec->c_value_struct_name == NULL) {
             er_free(&r);
             return cg_fail(cg, stmt->token,
-                           "codegen: spec fat value is missing its value struct name");
+                           "CE0284", "codegen: spec fat value is missing its value struct name");
         }
         char *tmp_sv   = cg_fresh_temp(cg, "_thr_sv");
         char *tmp_subj = cg_fresh_temp(cg, "_thr");
@@ -22156,7 +22157,7 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
             free(tmp_sv);
             free(tmp_subj);
             er_free(&r);
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
         /* Materialize the fat value struct to load .subject exactly once, then
          * retain the subject before transferring ownership to feng_throw. */
@@ -22184,7 +22185,7 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
     if (tmp == NULL) {
         free(desc_expr);
         er_free(&r);
-        return cg_fail(cg, stmt->token, "codegen: out of memory");
+        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     if (cg_type_kind_is_scalar_builtin(r.type->kind)) {
         const char *ctor_name = NULL;
@@ -22196,7 +22197,7 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
             free(desc_expr);
             er_free(&r);
             return cg_fail(cg, stmt->token,
-                           "codegen: missing scalar box constructor for throw payload");
+                           "CE0285", "codegen: missing scalar box constructor for throw payload");
         }
         buf_append_fmt(cg->cur_body,
                        "    FengScalarBox *%s = %s(%s);\n",
@@ -22209,7 +22210,7 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
             free(tmp);
             free(desc_expr);
             er_free(&r);
-            return cg_fail(cg, stmt->token, "codegen: out of memory");
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
         if (r.owns_ref) {
             buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
@@ -22240,7 +22241,7 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
         case FENG_STMT_BLOCK: {
             buf_append_cstr(cg->cur_body, "    {\n");
             Scope *s = scope_push(cg->cur_scope);
-            if (!s) return cg_fail(cg, stmt->token, "codegen: out of memory");
+            if (!s) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
             cg->cur_scope = s;
             ok = cg_emit_block(cg, stmt->as.block);
             cg_release_scope(cg, s);
@@ -22264,7 +22265,7 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
         default:
             ok = cg_fail(cg,
                          stmt->token,
-                         "codegen: statement kind not yet supported in this iteration");
+                         "CE0286", "codegen: statement kind not yet supported in this iteration");
             break;
     }
     cg->current_stmt_anchor_token = saved_stmt_anchor_token;
@@ -22285,7 +22286,7 @@ static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
     char *frame_name = cg_fresh_temp(cg, "_fn_frame");
 
     if (frame_name == NULL) {
-        return cg_fail(cg, token, "codegen: out of memory");
+        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
     }
     buf_append_cstr(cg->cur_body,
                     "#if !defined(_WIN32)\n"
@@ -22473,10 +22474,10 @@ static bool cg_emit_imported_binding_decl(CG *cg, const FengDecl *decl) {
     if (decl == NULL || decl->kind != FENG_DECL_GLOBAL_BINDING) {
         return cg_fail(cg,
                        decl != NULL ? decl->token : (FengToken){0},
-                       "codegen: imported public binding surface is missing a type");
+                       "CE0287", "codegen: imported public binding surface is missing a type");
     }
     if (!cg_binding_public_surface_names(cg, decl, &slot_name, &ensure_init_name)) {
-        return cg_fail(cg, decl->token, "codegen: out of memory");
+        return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
     }
     if (!cg_resolve_global_binding_type(cg, decl, &binding_type)) {
         free(slot_name);
@@ -22506,7 +22507,7 @@ static bool cg_emit_imported_type_static_binding_decl(CG *cg,
         if (cty == NULL) {
             return cg_fail(cg,
                            binding->member != NULL ? binding->member->token : (FengToken){0},
-                           "codegen: out of memory");
+                           "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(&cg->fn_protos, "extern %s %s;\n", cty, binding->c_name);
         buf_append_fmt(&cg->fn_protos, "extern void %s(void);\n", binding->c_ensure_init_name);
@@ -22547,7 +22548,7 @@ static bool cg_emit_imported_function_decl(CG *cg, const FengDecl *decl) {
 
         desc_names = tp_count ? calloc(tp_count, sizeof *desc_names) : NULL;
         if (tp_count > 0U && desc_names == NULL) {
-            return cg_fail(cg, decl->token, "codegen: out of memory");
+            return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
         }
         for (size_t i = 0U; i < tp_count; ++i) {
             Buf b;
@@ -22555,7 +22556,7 @@ static bool cg_emit_imported_function_decl(CG *cg, const FengDecl *decl) {
             buf_append_fmt(&b, "_%s", gfn->type_param_names[i]);
             desc_names[i] = b.data;
             if (desc_names[i] == NULL) {
-                cg_fail(cg, decl->token, "codegen: out of memory");
+                cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
                 goto cleanup;
             }
         }
@@ -22573,14 +22574,14 @@ static bool cg_emit_imported_function_decl(CG *cg, const FengDecl *decl) {
         } else {
             return_type = cgtype_new(CG_TYPE_VOID);
             if (return_type == NULL) {
-                cg_fail(cg, decl->token, "codegen: out of memory");
+                cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
                 goto cleanup;
             }
         }
 
         param_types = sig->param_count ? calloc(sig->param_count, sizeof *param_types) : NULL;
         if (sig->param_count > 0U && param_types == NULL) {
-            cg_fail(cg, decl->token, "codegen: out of memory");
+            cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         for (size_t i = 0U; i < sig->param_count; ++i) {
@@ -22650,14 +22651,14 @@ static bool cg_check_main_signature(CG *cg, const FreeFn *fn) {
     if (fn->return_type->kind != CG_TYPE_VOID &&
         fn->return_type->kind != CG_TYPE_I32) {
         return cg_fail(cg, fn->decl->token,
-            "codegen: main must return void or i32");
+            "CE0288", "codegen: main must return void or i32");
     }
     if (fn->param_count != 1 ||
         fn->param_types[0]->kind != CG_TYPE_ARRAY ||
         !fn->param_types[0]->element ||
         fn->param_types[0]->element->kind != CG_TYPE_STRING) {
         return cg_fail(cg, fn->decl->token,
-            "codegen: main must have signature (args: string[])");
+            "CE0289", "codegen: main must have signature (args: string[])");
     }
     return true;
 }
@@ -22796,7 +22797,7 @@ static char *cg_resolve_dep_descriptor_name(CG *cg,
                                          concrete_type_args);
     if (substituted == NULL) {
         (void)cg_fail(cg, *blame,
-            "codegen: failed to substitute type params in reifiable dep");
+            "CE0290", "codegen: failed to substitute type params in reifiable dep");
         return NULL;
     }
     if (!cg_resolve_type(cg, substituted, blame, &resolved)) {
@@ -22814,7 +22815,7 @@ static char *cg_resolve_dep_descriptor_name(CG *cg,
         result = strdup(name);
     } else {
         (void)cg_fail(cg, *blame,
-            "codegen: failed to resolve descriptor name for reifiable dep");
+            "CE0291", "codegen: failed to resolve descriptor name for reifiable dep");
     }
     cgtype_free(resolved);
     cg_type_ref_free(substituted);
@@ -22968,13 +22969,13 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             cg_generic_param_constraint_spec(cg, t->generic_param_index);
         if (!desc) {
             return cg_fail(cg, *tok,
-                "codegen: generic type argument forwarding requires an active generic descriptor context");
+                "CE0292", "codegen: generic type argument forwarding requires an active generic descriptor context");
         }
         if (constraint_spec && current_constraint != constraint_spec) {
             if (current_constraint == NULL ||
                 !cg_user_spec_witness_prefix_compatible(current_constraint, constraint_spec)) {
                 return cg_fail(cg, *tok,
-                    "codegen: forwarding a generic type argument across a different constraint surface requires a parent-compatible witness surface (G6)");
+                    "CE0293", "codegen: forwarding a generic type argument across a different constraint surface requires a parent-compatible witness surface (G6)");
             }
             Buf adapter; buf_init(&adapter);
             buf_append_fmt(&adapter,
@@ -23044,7 +23045,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             if (builtin_name == NULL) {
                 buf_free(&b);
                 return cg_fail(cg, *tok,
-                    "codegen: constrained generic type argument currently requires a concrete user type, concrete spec value, matching outer generic parameter, or concrete builtin type");
+                    "CE0294", "codegen: constrained generic type argument currently requires a concrete user type, concrete spec value, matching outer generic parameter, or concrete builtin type");
             }
 
             const char *witness_var = NULL;
@@ -23066,7 +23067,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
         } else {
             buf_free(&b);
             return cg_fail(cg, *tok,
-                "codegen: constrained generic type argument currently requires a concrete user type, concrete spec value, or matching outer generic parameter (G6)");
+                "CE0295", "codegen: constrained generic type argument currently requires a concrete user type, concrete spec value, or matching outer generic parameter (G6)");
         }
     }
 
@@ -23077,7 +23078,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                 free(owned_witness_expr);
                 buf_free(&b);
                 return cg_fail(cg, *tok,
-                    "codegen: trivial generic type argument requires a trivial descriptor");
+                    "CE0296", "codegen: trivial generic type argument requires a trivial descriptor");
             }
             buf_append_fmt(&b,
                 "&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = %s, .witness = %s}",
@@ -23091,7 +23092,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                 free(owned_witness_expr);
                 buf_free(&b);
                 return cg_fail(cg, *tok,
-                    "codegen: managed generic type argument requires a type descriptor");
+                    "CE0297", "codegen: managed generic type argument requires a type descriptor");
             }
             buf_append_fmt(&b,
                 "&(const FengGenericParamDescriptor){.kind = FENG_VALUE_MANAGED_POINTER, .descriptor = %s, .witness = %s}",
@@ -23107,7 +23108,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                 free(owned_witness_expr);
                 buf_free(&b);
                 return cg_fail(cg, *tok,
-                    "codegen: aggregate type as generic type argument not yet supported (missing flatten rule) (G6)");
+                    "CE0298", "codegen: aggregate type as generic type argument not yet supported (missing flatten rule) (G6)");
             }
             buf_append_fmt(&b,
                 "&(const FengGenericParamDescriptor){.kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .descriptor = &%s, .witness = %s}",
@@ -23128,7 +23129,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
     if (!cg->cur_return_type || cg->cur_return_type->kind == CG_TYPE_VOID) {
         if (stmt->as.return_value) {
             return cg_fail(cg, stmt->token,
-                "codegen: void function cannot return a value");
+                "CE0264", "codegen: void function cannot return a value");
         }
         cg_release_through(cg, NULL);
         cg_emit_return_control_cleanup(cg);
@@ -23137,7 +23138,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
     }
     if (!stmt->as.return_value) {
         return cg_fail(cg, stmt->token,
-            "codegen: non-void function must return a value");
+            "CE0265", "codegen: non-void function must return a value");
     }
     ExprResult r;
     if (!cg_emit_expr_for_expected_type(cg,
@@ -23200,7 +23201,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         if (!has_rad) {
             er_free(&r);
             return cg_fail(cg, stmt->token,
-                "codegen: tuple return requires reified layout but no "
+                "CE0299", "codegen: tuple return requires reified layout but no "
                 "reified_agg_dep found for '%s'", desc ? desc : "(null)");
         }
         const char *rad_src = cg->generic_type_method_rad_via_desc
@@ -23217,7 +23218,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
             buf_free(&rad_buf);
             er_free(&r);
             return cg_fail(cg, stmt->token,
-                "codegen: out of memory while emitting generic aggregate return");
+                "CE0300", "codegen: out of memory while emitting generic aggregate return");
         }
 
         if (!r.owns_ref) {
@@ -23268,7 +23269,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         if (!desc) {
             er_free(&r);
             return cg_fail(cg, stmt->token,
-                "codegen: missing aggregate descriptor for generic aggregate return");
+                "CE0301", "codegen: missing aggregate descriptor for generic aggregate return");
         }
 
         tmp = cg_fresh_temp(cg, "_ret");
@@ -23278,7 +23279,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
             free(cty);
             er_free(&r);
             return cg_fail(cg, stmt->token,
-                "codegen: out of memory while emitting generic aggregate return");
+                "CE0300", "codegen: out of memory while emitting generic aggregate return");
         }
 
         if (!r.owns_ref) {
@@ -23341,7 +23342,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
     size_t tp_count = sig->type_param_count;
     const char **desc_names = calloc(tp_count, sizeof *desc_names);
     const UserSpec **constraint_specs = NULL;
-    if (!desc_names) return cg_fail(cg, decl->token, "codegen: out of memory");
+    if (!desc_names) return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
     for (size_t i = 0; i < tp_count; i++) {
         Buf b; buf_init(&b);
         buf_append_fmt(&b, "_%s", gfn->type_param_names[i]);
@@ -23349,7 +23350,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         if (!desc_names[i]) {
             for (size_t j = 0; j < i; j++) free((void *)desc_names[j]);
             free(desc_names);
-            return cg_fail(cg, decl->token, "codegen: out of memory");
+            return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
         }
     }
 
@@ -23376,7 +23377,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         }
     } else {
         return_type = cgtype_new(CG_TYPE_VOID);
-        if (!return_type) { cg_fail(cg, decl->token, "codegen: out of memory"); goto cleanup; }
+        if (!return_type) { cg_fail(cg, decl->token, "IE0001", "codegen: out of memory"); goto cleanup; }
     }
     cg->cur_return_type = return_type;
     bool has_out_param = (return_type->kind != CG_TYPE_VOID);
@@ -23388,7 +23389,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
     char  **param_fnames = calloc(param_count + 1, sizeof *param_fnames); /* Feng names */
     if (!param_types || !param_cnames || !param_fnames) {
         free(param_types); free(param_cnames); free(param_fnames);
-        cg_fail(cg, decl->token, "codegen: out of memory");
+        cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     for (size_t i = 0; i < param_count; i++) {
@@ -23415,7 +23416,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                 free(param_fnames[j]);
             }
             free(param_types); free(param_cnames); free(param_fnames);
-            cg_fail(cg, decl->token, "codegen: out of memory");
+            cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
     }
@@ -23482,7 +23483,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
 
         Scope *fn_scope = scope_push(NULL);
         if (!fn_scope) {
-            cg_fail(cg, decl->token, "codegen: out of memory");
+            cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
             goto cleanup_params;
         }
         cg->cur_scope = fn_scope;
@@ -23831,7 +23832,7 @@ static bool cg_collect_inferred_callable_type_args(CG *cg,
             if (type_args[index] == NULL) {
                 type_args[index] = cgtype_clone(actual);
                 if (type_args[index] == NULL) {
-                    return cg_fail(cg, blame, "codegen: out of memory");
+                    return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
                 }
                 return true;
             }
@@ -23919,7 +23920,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
     bool ok = false;
 
     if (ext == NULL) {
-        return cg_fail(cg, e->token, "codegen: generic extern call is missing extern metadata");
+        return cg_fail(cg, e->token, "CE0302", "codegen: generic extern call is missing extern metadata");
     }
     if ((sig->param_count > 0U && param_types == NULL) ||
         (sig->param_count > 0U && param_is_direct_type_param == NULL) ||
@@ -23927,7 +23928,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
         free(param_types);
         free(param_is_direct_type_param);
         free(type_args);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     if (e->as.call.arg_count != sig->param_count) {
         free(param_types);
@@ -23935,7 +23936,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
         free(type_args);
         return cg_fail(cg,
                        e->token,
-                       "codegen: wrong argument count for '%.*s' (expected %zu, got %zu)",
+                       "CE0126", "codegen: wrong argument count for '%.*s' (expected %zu, got %zu)",
                        (int)sig->name.length,
                        sig->name.data,
                        sig->param_count,
@@ -23949,7 +23950,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
             free(type_args);
             return cg_fail(cg,
                            e->token,
-                           "codegen: generic extern type argument count mismatch");
+                           "CE0303", "codegen: generic extern type argument count mismatch");
         }
         for (size_t i = 0; i < sig->type_param_count; ++i) {
             if (!cg_resolve_type(cg,
@@ -23988,7 +23989,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                 }
                 cg_fail(cg,
                         e->token,
-                        "codegen: cannot infer generic extern type arguments for '%.*s' from argument %zu",
+                        "CE0304", "codegen: cannot infer generic extern type arguments for '%.*s' from argument %zu",
                         (int)sig->name.length,
                         sig->name.data,
                         i);
@@ -24001,7 +24002,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
             if (type_args[i] == NULL) {
                 cg_fail(cg,
                         e->token,
-                        "codegen: cannot infer type argument %zu for generic extern '%.*s'",
+                        "CE0305", "codegen: cannot infer type argument %zu for generic extern '%.*s'",
                         i,
                         (int)sig->name.length,
                         sig->name.data);
@@ -24026,7 +24027,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                                                                 sig->type_param_count);
         cgtype_free(pattern);
         if (param_types[i] == NULL) {
-            cg_fail(cg, sig->params[i].token, "codegen: out of memory");
+            cg_fail(cg, sig->params[i].token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
     }
@@ -24047,13 +24048,13 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                                                              sig->type_param_count);
         cgtype_free(pattern);
         if (return_type == NULL) {
-            cg_fail(cg, sig->token, "codegen: out of memory");
+            cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
     } else {
         return_type = cgtype_new(CG_TYPE_VOID);
         if (return_type == NULL) {
-            cg_fail(cg, e->token, "codegen: out of memory");
+            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
     }
@@ -24072,7 +24073,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
         }
         desc_exprs = calloc(sig->type_param_count, sizeof *desc_exprs);
         if (desc_exprs == NULL) {
-            cg_fail(cg, e->token, "codegen: out of memory");
+            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         for (size_t i = 0; i < sig->type_param_count; ++i) {
@@ -24110,7 +24111,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                 if (tmp == NULL) {
                     er_free(&ar);
                     buf_free(&args_buf);
-                    return cg_fail(cg, e->token, "codegen: out of memory");
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
                 if (ar.type != NULL && ar.type->kind == CG_TYPE_GENERIC_PARAM) {
                     buf_append_fmt(cg->cur_body, "    const void *%s = %s;\n", tmp, ar.c_expr);
@@ -24122,7 +24123,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                         free(tmp);
                         er_free(&ar);
                         buf_free(&args_buf);
-                        return cg_fail(cg, e->token, "codegen: out of memory");
+                        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                     }
                     buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, ar.c_expr);
                     if (cgtype_is_managed(ar.type) && ar.owns_ref) {
@@ -24152,7 +24153,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
             if (arg_expr == NULL) {
                 er_free(&ar);
                 buf_free(&args_buf);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             if (sig->type_param_count != 0U || i != 0U) {
                 buf_append_cstr(&args_buf, ", ");
@@ -24170,7 +24171,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                 free(cty);
                 free(ret_cname);
                 buf_free(&args_buf);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
             free(cty);
@@ -24191,7 +24192,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                 out->type = NULL;
                 free(ret_cname);
                 buf_free(&args_buf);
-                return cg_fail(cg, e->token, "codegen: out of memory");
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
             if (out->owns_ref) {
@@ -24271,19 +24272,19 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
 
     /* ---- Step 1: prepare explicit type arguments, then emit arguments. ---- */
     ExprResult *args = calloc(arg_count + 1, sizeof *args);
-    if (!args) return cg_fail(cg, e->token, "codegen: out of memory");
+    if (!args) return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     CGType **type_args = calloc(tp_count + 1, sizeof *type_args);
     if (!type_args) {
         for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
         free(args);
-        return cg_fail(cg, e->token, "codegen: out of memory");
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     bool ok = true;
 
     if (e->as.call.has_explicit_type_args) {
         if (e->as.call.explicit_type_arg_count != tp_count) {
             cg_fail(cg, e->token,
-                "codegen: generic function '%s' expects %zu type argument(s), got %zu",
+                "CE0306", "codegen: generic function '%s' expects %zu type argument(s), got %zu",
                 gfn->feng_name,
                 tp_count,
                 e->as.call.explicit_type_arg_count);
@@ -24318,7 +24319,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
                 cgtype_free(pattern);
                 if (expected_arg_type == NULL) {
                     cg_fail(cg, sig->params[i].token,
-                        "codegen: cannot determine concrete parameter type for generic function '%s'",
+                        "CE0307", "codegen: cannot determine concrete parameter type for generic function '%s'",
                         gfn->feng_name);
                     ok = false;
                 }
@@ -24341,7 +24342,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
             type_args[i] = cg_infer_type_arg(gfn, i, args, arg_count);
             if (!type_args[i]) {
                 cg_fail(cg, e->token,
-                    "codegen: cannot infer type argument %zu for generic function '%s'",
+                    "CE0308", "codegen: cannot infer type argument %zu for generic function '%s'",
                     i, gfn->feng_name);
                 ok = false;
             }
@@ -24351,7 +24352,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
 
     /* ---- Step 3: build descriptor expressions for each type param ---- */
     char **desc_exprs = calloc(tp_count + 1, sizeof *desc_exprs);
-    if (!desc_exprs) { cg_fail(cg, e->token, "codegen: out of memory"); ok = false; goto bail; }
+    if (!desc_exprs) { cg_fail(cg, e->token, "IE0001", "codegen: out of memory"); ok = false; goto bail; }
     bool saved_constraint_in_generic_fn = cg->in_generic_fn;
     size_t saved_constraint_tp_count = cg->generic_fn_type_param_count;
     char **saved_constraint_tp_names = cg->generic_fn_type_param_names;
@@ -24408,7 +24409,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     cg->generic_fn_type_param_descs = NULL;
 
     char **arg_addr_exprs = calloc(arg_count + 1, sizeof *arg_addr_exprs);
-    if (!arg_addr_exprs) { cg_fail(cg, e->token, "codegen: out of memory"); ok = false; }
+    if (!arg_addr_exprs) { cg_fail(cg, e->token, "IE0001", "codegen: out of memory"); ok = false; }
 
     for (size_t i = 0; i < arg_count && ok; i++) {
         /* Resolve the param's type to see if it's a type-param reference. */
@@ -24452,7 +24453,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
             }
             arg_addr_exprs[i] = strdup(args[i].c_expr);
         }
-        if (!arg_addr_exprs[i]) { cg_fail(cg, e->token, "codegen: out of memory"); ok = false; }
+        if (!arg_addr_exprs[i]) { cg_fail(cg, e->token, "IE0001", "codegen: out of memory"); ok = false; }
     }
 
     cg->in_generic_fn = saved_in_generic_fn;
@@ -24508,7 +24509,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
             cgtype_free(rt);
             concrete_return = idx < tp_count ? cgtype_clone(type_args[idx]) : NULL;
             if (!concrete_return) {
-                cg_fail(cg, e->token, "codegen: cannot determine concrete return type");
+                cg_fail(cg, e->token, "CE0309", "codegen: cannot determine concrete return type");
                 for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
                 free(arg_addr_exprs);
                 for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
@@ -24854,7 +24855,7 @@ static bool cg_emit_function(CG *cg,
     if (fn->param_count == 0) buf_append_cstr(body, "void");
     fn_scope = scope_push(NULL);
     if (!fn_scope) {
-        cg_fail(cg, decl->token, "codegen: out of memory");
+        cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     cg->cur_scope = fn_scope;
@@ -24886,7 +24887,7 @@ static bool cg_emit_function(CG *cg,
                                                   &captured_names,
                                                   &captured_name_count,
                                                   &cg->current_callable_captures_self)) {
-        cg_fail(cg, decl->token, "codegen: out of memory");
+        cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     cg->captured_binding_names = captured_names;
@@ -24917,7 +24918,7 @@ static bool cg_emit_function(CG *cg,
         CGType *pt = cgtype_clone(fn->param_types[i]);
         if (!scope_add(fn_scope, pn, pn, pt, true)) {
             cgtype_free(pt);
-            cg_fail(cg, decl->token, "codegen: out of memory");
+            cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         if (!cg_debug_add_variable_record_cstr_type_ref(
@@ -24982,7 +24983,7 @@ static bool cg_emit_module_header(CG *cg, const FengProgram *prog) {
     cg->module_dot_name = cg_module_dot(prog->module_segments,
                                         prog->module_segment_count);
     if (!cg->module_mangle || !cg->module_dot_name) {
-        return cg_fail(cg, prog->module_token, "codegen: out of memory");
+        return cg_fail(cg, prog->module_token, "IE0001", "codegen: out of memory");
     }
     return true;
 }
@@ -25054,7 +25055,7 @@ static bool cg_append_witness_forward_arg(CG *cg,
         impl_type != NULL && impl_type->kind != CG_TYPE_GENERIC_PARAM) {
         char *cty = cg_ctype_dup(impl_type);
         if (cty == NULL) {
-            return cg_fail(cg, blame, "codegen: out of memory");
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(out, "*((%s const *)%s)", cty, param_name);
         free(cty);
@@ -25141,7 +25142,7 @@ static bool cg_emit_scalar_subject_load(CG *cg,
     }
     const char *self_cty = cgtype_to_c(subject_kind);
     if (self_cty == NULL) {
-        return cg_fail(cg, blame, "codegen: invalid scalar subject key");
+        return cg_fail(cg, blame, "CE0310", "codegen: invalid scalar subject key");
     }
     if (storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL) {
         buf_append_fmt(out,
@@ -25154,7 +25155,7 @@ static bool cg_emit_scalar_subject_load(CG *cg,
     if (storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER) {
         const char *field_name = NULL;
         if (!cg_scalar_box_payload_field(subject_kind, &field_name)) {
-            return cg_fail(cg, blame, "codegen: invalid scalar subject key");
+            return cg_fail(cg, blame, "CE0310", "codegen: invalid scalar subject key");
         }
         buf_append_fmt(out,
             "    %s %s = ((const struct FengScalarBox *)_subject)->payload.%s;\n",
@@ -25163,7 +25164,7 @@ static bool cg_emit_scalar_subject_load(CG *cg,
             field_name);
         return true;
     }
-    return cg_fail(cg, blame, "codegen: invalid scalar subject storage kind");
+    return cg_fail(cg, blame, "CE0311", "codegen: invalid scalar subject storage kind");
 }
 
 static bool cg_emit_ref_subject_load(CG *cg,
@@ -25176,7 +25177,7 @@ static bool cg_emit_ref_subject_load(CG *cg,
     }
     char *self_cty = cg_ctype_dup(target_type);
     if (self_cty == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     buf_append_fmt(out,
                    "    %s %s = (%s)_subject;\n",
@@ -25264,7 +25265,7 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
     if (src->form != dst->form) {
         buf_free(&var);
         return cg_fail(cg, blame,
-            "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through mismatched spec forms",
+            "CE0312", "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through mismatched spec forms",
             src->feng_name, dst->feng_name);
     }
 
@@ -25277,14 +25278,14 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
             !cg_types_equal(src->callable_return_type, dst->callable_return_type)) {
             buf_free(&var);
             return cg_fail(cg, blame,
-                "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through callable slot witness adaptation",
+                "CE0313", "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through callable slot witness adaptation",
                 src->feng_name, dst->feng_name);
         }
         for (size_t i = 0; i < dst->callable_param_count; ++i) {
             if (!cg_types_equal(src->callable_param_types[i], dst->callable_param_types[i])) {
                 buf_free(&var);
                 return cg_fail(cg, blame,
-                    "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through callable slot witness adaptation",
+                    "CE0313", "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through callable slot witness adaptation",
                     src->feng_name, dst->feng_name);
             }
         }
@@ -25339,7 +25340,7 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
                 !cg_user_spec_member_compatible(src_member, dst_member)) {
                 buf_free(&var);
                 return cg_fail(cg, blame,
-                    "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through slot witness adaptation",
+                    "CE0314", "codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through slot witness adaptation",
                     src->feng_name, dst->feng_name);
             }
 
@@ -25458,12 +25459,12 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
 
         if (field == NULL) {
             return cg_fail(cg, blame,
-                "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
+                "CE0315", "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
                 t->feng_name, s->feng_name, sm->feng_name);
         }
         if (!cg_types_equal(field->type, sm->type)) {
             return cg_fail(cg, blame,
-                "codegen: field '%s' on type '%s' does not match spec '%s' field type",
+                "CE0316", "codegen: field '%s' on type '%s' does not match spec '%s' field type",
                 sm->feng_name, t->feng_name, s->feng_name);
         }
         out->source_kind = FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD;
@@ -25507,12 +25508,12 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
 
     if (type_match_count + fit_match_count == 0U) {
         return cg_fail(cg, blame,
-            "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
+            "CE0315", "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
             t->feng_name, s->feng_name, sm->feng_name);
     }
     if (type_match_count + fit_match_count > 1U) {
         return cg_fail(cg, blame,
-            "codegen: type '%s' has multiple visible implementations of method '%s' required by spec '%s' (one or more fits and/or the type itself)",
+            "CE0317", "codegen: type '%s' has multiple visible implementations of method '%s' required by spec '%s' (one or more fits and/or the type itself)",
             t->feng_name, sm->feng_name, s->feng_name);
     }
     if (type_match_count == 1U) {
@@ -25557,7 +25558,7 @@ static bool cg_ensure_witness_instance(
 
             s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
             if (s_san == NULL) {
-                return cg_fail(cg, blame, "codegen: out of memory");
+                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
             }
 
             buf_init(&prefix);
@@ -25565,7 +25566,7 @@ static bool cg_ensure_witness_instance(
                            cg->module_mangle, witness_id, cg->module_mangle, s_san);
             if (prefix.data == NULL) {
                 free(s_san);
-                return cg_fail(cg, blame, "codegen: out of memory");
+                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
             }
 
             for (size_t i = 0U; i < s->member_count; ++i) {
@@ -25580,7 +25581,7 @@ static bool cg_ensure_witness_instance(
                         buf_free(&prefix);
                         free(s_san);
                         return cg_fail(cg, blame,
-                            "codegen: internal: witness slot count mismatch for non-type subject");
+                            "CE0318", "codegen: internal: witness slot count mismatch for non-type subject");
                     }
 
                     wm = &witness->members[i];
@@ -25588,7 +25589,7 @@ static bool cg_ensure_witness_instance(
                         buf_free(&prefix);
                         free(s_san);
                         return cg_fail(cg, blame,
-                            "codegen: missing implementation for spec member '%s'", sm->feng_name);
+                            "CE0319", "codegen: missing implementation for spec member '%s'", sm->feng_name);
                     }
                     if (sm->kind != USM_KIND_METHOD ||
                         wm->source_kind != FENG_SPEC_WITNESS_SOURCE_FIT_METHOD ||
@@ -25596,7 +25597,7 @@ static bool cg_ensure_witness_instance(
                         buf_free(&prefix);
                         free(s_san);
                         return cg_fail(cg, blame,
-                            "codegen: non-type subject key currently supports fit-method spec members only");
+                            "CE0320", "codegen: non-type subject key currently supports fit-method spec members only");
                     }
 
                     bf = cg_find_builtin_fit_by_decl(cg, wm->via_fit_decl);
@@ -25640,7 +25641,7 @@ static bool cg_ensure_witness_instance(
                         buf_free(&prefix);
                         free(s_san);
                         return cg_fail(cg, blame,
-                            "codegen: enum '%.*s' cannot satisfy spec field '%s' without field support",
+                            "CE0321", "codegen: enum '%.*s' cannot satisfy spec field '%s' without field support",
                             (int)enum_decl->as.enum_decl.name.length,
                             enum_decl->as.enum_decl.name.data,
                             sm->feng_name);
@@ -25670,7 +25671,7 @@ static bool cg_ensure_witness_instance(
                         buf_free(&prefix);
                         free(s_san);
                         return cg_fail(cg, blame,
-                            "codegen: enum '%.*s' is missing an implementation for spec '%s' member '%s'",
+                            "CE0322", "codegen: enum '%.*s' is missing an implementation for spec '%s' member '%s'",
                             (int)enum_decl->as.enum_decl.name.length,
                             enum_decl->as.enum_decl.name.data,
                             s->feng_name,
@@ -25680,7 +25681,7 @@ static bool cg_ensure_witness_instance(
                         buf_free(&prefix);
                         free(s_san);
                         return cg_fail(cg, blame,
-                            "codegen: enum '%.*s' has multiple visible implementations of method '%s' required by spec '%s'",
+                            "CE0323", "codegen: enum '%.*s' has multiple visible implementations of method '%s' required by spec '%s'",
                             (int)enum_decl->as.enum_decl.name.length,
                             enum_decl->as.enum_decl.name.data,
                             sm->feng_name,
@@ -25692,13 +25693,13 @@ static bool cg_ensure_witness_instance(
                     buf_free(&prefix);
                     free(s_san);
                     return cg_fail(cg, blame,
-                        "codegen: fit implementation does not match object-form spec coercion source");
+                        "CE0324", "codegen: fit implementation does not match object-form spec coercion source");
                 }
                 if (fm == NULL) {
                     buf_free(&prefix);
                     free(s_san);
                     return cg_fail(cg, blame,
-                        "codegen: fit method '%s' was not registered", sm->feng_name);
+                        "CE0325", "codegen: fit method '%s' was not registered", sm->feng_name);
                 }
 
                 if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
@@ -25832,7 +25833,7 @@ static bool cg_ensure_witness_instance(
                 if (var.data == NULL) {
                     buf_free(&prefix);
                     free(s_san);
-                    return cg_fail(cg, blame, "codegen: out of memory");
+                    return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
                 }
 
                 buf_append_fmt(&cg->headers, "static const struct %s %s;\n",
@@ -25858,20 +25859,20 @@ static bool cg_ensure_witness_instance(
 
         if (t == NULL) {
             return cg_fail(cg, blame,
-                "codegen: witness source type is not registered in current module");
+                "CE0326", "codegen: witness source type is not registered in current module");
         }
         return cg_ensure_witness_instance_for_type(cg, t, s, blame, out_var);
     }
     if (subject_key->kind != FENG_SEMANTIC_SUBJECT_KEY_BUILTIN &&
         subject_key->kind != FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
         return cg_fail(cg, blame,
-            "codegen: invalid subject key for object-form spec coercion");
+            "CE0327", "codegen: invalid subject key for object-form spec coercion");
     }
 
     CGTypeKind subject_kind;
     if (!cg_subject_key_to_target_kind(subject_key, &subject_kind)) {
         return cg_fail(cg, blame,
-            "codegen: object-form spec coercion has unknown subject key");
+            "CE0328", "codegen: object-form spec coercion has unknown subject key");
     }
     if (cg_type_kind_is_scalar_builtin(subject_kind) && !cg_emit_scalar_box_support(cg)) {
         return false;
@@ -25881,7 +25882,7 @@ static bool cg_ensure_witness_instance(
         cg->analysis, subject_key, s->decl);
     if (witness == NULL) {
         return cg_fail(cg, blame,
-            "codegen: missing semantic witness for object-form spec coercion");
+            "CE0329", "codegen: missing semantic witness for object-form spec coercion");
     }
 
     const size_t witness_id = cg->subject_witness_counter++;
@@ -25891,7 +25892,7 @@ static bool cg_ensure_witness_instance(
             : s->feng_name;
     char *s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
     if (s_san == NULL) {
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     Buf prefix;
@@ -25900,7 +25901,7 @@ static bool cg_ensure_witness_instance(
                    cg->module_mangle, witness_id, cg->module_mangle, s_san);
     if (prefix.data == NULL) {
         free(s_san);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     for (size_t i = 0U; i < s->member_count; ++i) {
@@ -25910,7 +25911,7 @@ static bool cg_ensure_witness_instance(
             buf_free(&prefix);
             free(s_san);
             return cg_fail(cg, blame,
-                "codegen: internal: witness slot count mismatch for non-type subject");
+                "CE0318", "codegen: internal: witness slot count mismatch for non-type subject");
         }
 
         const FengSpecWitnessMember *wm = &witness->members[i];
@@ -25918,7 +25919,7 @@ static bool cg_ensure_witness_instance(
             buf_free(&prefix);
             free(s_san);
             return cg_fail(cg, blame,
-                "codegen: missing implementation for spec member '%s'",
+                "CE0319", "codegen: missing implementation for spec member '%s'",
                 sm->feng_name);
         }
         if (sm->kind != USM_KIND_METHOD ||
@@ -25927,7 +25928,7 @@ static bool cg_ensure_witness_instance(
             buf_free(&prefix);
             free(s_san);
             return cg_fail(cg, blame,
-                "codegen: non-type subject key currently supports fit-method spec members only");
+                "CE0320", "codegen: non-type subject key currently supports fit-method spec members only");
         }
 
         const BuiltinFit *bf = cg_find_builtin_fit_by_decl(cg, wm->via_fit_decl);
@@ -25968,14 +25969,14 @@ static bool cg_ensure_witness_instance(
             buf_free(&prefix);
             free(s_san);
             return cg_fail(cg, blame,
-                "codegen: fit implementation does not match object-form spec coercion source");
+                "CE0324", "codegen: fit implementation does not match object-form spec coercion source");
         }
 
         if (fm == NULL) {
             buf_free(&prefix);
             free(s_san);
             return cg_fail(cg, blame,
-                "codegen: fit method '%s' was not registered", sm->feng_name);
+                "CE0325", "codegen: fit method '%s' was not registered", sm->feng_name);
         }
         /* D4 contract: witness thunk must forward into the same emitted fit
          * method symbol used by direct-call (fm->c_name). Do not synthesize
@@ -26161,7 +26162,7 @@ static bool cg_ensure_witness_instance(
     if (var.data == NULL) {
         buf_free(&prefix);
         free(s_san);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     buf_append_fmt(&cg->headers, "static const struct %s %s;\n",
@@ -26234,7 +26235,7 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
     if (t_san == NULL || s_san == NULL) {
         free(t_san);
         free(s_san);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     Buf prefix;
@@ -26244,7 +26245,7 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
     if (prefix.data == NULL) {
         free(t_san);
         free(s_san);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     for (size_t i = 0U; i < s->member_count; ++i) {
@@ -26258,14 +26259,14 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
             if (i >= witness->member_count) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: internal: witness slot count mismatch for tuple box (%s, %s)",
+                    "CE0330", "codegen: internal: witness slot count mismatch for tuple box (%s, %s)",
                     t->feng_name, s->feng_name);
             }
             wm = &witness->members[i];
             if (wm->impl_member == NULL) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: tuple type '%s' is missing an implementation for spec '%s' member '%s'",
+                    "CE0331", "codegen: tuple type '%s' is missing an implementation for spec '%s' member '%s'",
                     t->feng_name, s->feng_name, sm->feng_name);
             }
             binding.source_kind = wm->source_kind;
@@ -26277,7 +26278,7 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
                 if (uf == NULL || uf->target != t) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
-                        "codegen: internal: tuple fit decl for spec '%s' member '%s' not registered for type '%s'",
+                        "CE0332", "codegen: internal: tuple fit decl for spec '%s' member '%s' not registered for type '%s'",
                         s->feng_name, sm->feng_name, t->feng_name);
                 }
                 binding.fit = uf;
@@ -26290,7 +26291,7 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
                 if (binding.method == NULL) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
-                        "codegen: internal: tuple fit method '%s' not found in fit body for type '%s'",
+                        "CE0333", "codegen: internal: tuple fit method '%s' not found in fit body for type '%s'",
                         sm->feng_name, t->feng_name);
                 }
             } else if (sm->kind == USM_KIND_FIELD) {
@@ -26300,13 +26301,13 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
                 if (binding.field == NULL) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
-                        "codegen: internal: tuple type '%s' has no field '%s' to satisfy spec '%s'",
+                        "CE0334", "codegen: internal: tuple type '%s' has no field '%s' to satisfy spec '%s'",
                         t->feng_name, sm->feng_name, s->feng_name);
                 }
             } else {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: tuple type '%s' cannot satisfy spec method '%s' without a fit method",
+                    "CE0335", "codegen: tuple type '%s' cannot satisfy spec method '%s' without a fit method",
                     t->feng_name, sm->feng_name);
             }
         } else if (!cg_resolve_witness_binding_fallback(cg, t, s, sm, blame, &binding)) {
@@ -26320,7 +26321,7 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
             if (sm->kind != USM_KIND_METHOD || fm == NULL) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: tuple spec member '%s' must be implemented by a fit method",
+                    "CE0336", "codegen: tuple spec member '%s' must be implemented by a fit method",
                     sm->feng_name);
             }
 
@@ -26425,7 +26426,7 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
             binding.field == NULL) {
             buf_free(&prefix); free(t_san); free(s_san);
             return cg_fail(cg, blame,
-                "codegen: tuple spec field '%s' must be satisfied by a tuple field",
+                "CE0337", "codegen: tuple spec field '%s' must be satisfied by a tuple field",
                 sm->feng_name);
         }
 
@@ -26450,7 +26451,7 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
         if (sm->is_var) {
             buf_free(&prefix); free(t_san); free(s_san);
             return cg_fail(cg, blame,
-                "codegen: tuple fields are immutable and cannot satisfy var spec field '%s'",
+                "CE0338", "codegen: tuple fields are immutable and cannot satisfy var spec field '%s'",
                 sm->feng_name);
         }
     }
@@ -26461,7 +26462,7 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
                    cg->module_mangle, t_san, cg->module_mangle, s_san);
     if (var.data == NULL) {
         buf_free(&prefix); free(t_san); free(s_san);
-        return cg_fail(cg, blame, "codegen: out of memory");
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     buf_append_fmt(&cg->headers, "static const struct %s %s;\n",
@@ -26555,14 +26556,14 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             if (i >= witness->member_count) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: internal: witness slot count mismatch for (%s, %s)",
+                    "CE0339", "codegen: internal: witness slot count mismatch for (%s, %s)",
                     t->feng_name, s->feng_name);
             }
             wm = &witness->members[i];
             if (!wm->impl_member) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
+                    "CE0315", "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
                     t->feng_name, s->feng_name, sm->feng_name);
             }
             binding.source_kind = wm->source_kind;
@@ -26574,7 +26575,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 if (uf == NULL || uf->target != t) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
-                        "codegen: internal: fit decl for spec '%s' member '%s' not registered for type '%s'",
+                        "CE0340", "codegen: internal: fit decl for spec '%s' member '%s' not registered for type '%s'",
                         s->feng_name, sm->feng_name, t->feng_name);
                 }
                 binding.fit = uf;
@@ -26587,7 +26588,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 if (binding.method == NULL) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
-                        "codegen: internal: fit method '%s' not found in fit body for type '%s'",
+                        "CE0341", "codegen: internal: fit method '%s' not found in fit body for type '%s'",
                         sm->feng_name, t->feng_name);
                 }
             } else if (sm->kind == USM_KIND_METHOD) {
@@ -26595,7 +26596,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 if (binding.method == NULL) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
-                        "codegen: internal: type '%s' has no method '%s' to satisfy spec '%s'",
+                        "CE0342", "codegen: internal: type '%s' has no method '%s' to satisfy spec '%s'",
                         t->feng_name, sm->feng_name, s->feng_name);
                 }
             } else if (sm->kind == USM_KIND_FIELD) {
@@ -26605,7 +26606,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 if (binding.field == NULL) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
-                        "codegen: internal: type '%s' has no field '%s' to satisfy spec '%s'",
+                        "CE0343", "codegen: internal: type '%s' has no field '%s' to satisfy spec '%s'",
                         t->feng_name, sm->feng_name, s->feng_name);
                 }
             }
@@ -26622,7 +26623,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             if (sm->kind != USM_KIND_METHOD) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: spec field '%s' cannot be satisfied by a fit method",
+                    "CE0344", "codegen: spec field '%s' cannot be satisfied by a fit method",
                     sm->feng_name);
             }
             const UserFit *uf = binding.fit;
@@ -26631,13 +26632,13 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             if (!uf || uf->target != t) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: internal: fit binding for spec '%s' member '%s' not registered for type '%s'",
+                    "CE0345", "codegen: internal: fit binding for spec '%s' member '%s' not registered for type '%s'",
                     s->feng_name, sm->feng_name, t->feng_name);
             }
             if (!fm) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: internal: fit method '%s' not found in fit body for type '%s'",
+                    "CE0341", "codegen: internal: fit method '%s' not found in fit body for type '%s'",
                     sm->feng_name, t->feng_name);
             }
             if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
@@ -26730,14 +26731,14 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             if (binding.source_kind != FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: spec method '%s' must be implemented by a method on '%s' (Step 4b-α)",
+                    "CE0346", "codegen: spec method '%s' must be implemented by a method on '%s' (Step 4b-α)",
                     sm->feng_name, t->feng_name);
             }
             const UserMethod *um = binding.method;
             if (!um) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: internal: type '%s' has no method '%s' to satisfy spec '%s'",
+                    "CE0342", "codegen: internal: type '%s' has no method '%s' to satisfy spec '%s'",
                     t->feng_name, sm->feng_name, s->feng_name);
             }
             if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
@@ -26832,14 +26833,14 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             if (binding.source_kind != FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: spec field '%s' must be satisfied by a field on '%s'",
+                    "CE0347", "codegen: spec field '%s' must be satisfied by a field on '%s'",
                     sm->feng_name, t->feng_name);
             }
             const UserField *uf = binding.field;
             if (!uf) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "codegen: internal: type '%s' has no field '%s' to satisfy spec '%s'",
+                    "CE0343", "codegen: internal: type '%s' has no field '%s' to satisfy spec '%s'",
                     t->feng_name, sm->feng_name, s->feng_name);
             }
 
@@ -26877,7 +26878,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                     if (agg_desc == NULL) {
                         buf_free(&prefix); free(t_san); free(s_san);
                         return cg_fail(cg, blame,
-                            "codegen: missing aggregate descriptor for spec field write");
+                            "CE0348", "codegen: missing aggregate descriptor for spec field write");
                     }
                     buf_append_fmt(fd,
                         "    feng_aggregate_assign(&((struct %s *)_subject)->%s, &value, &%s);\n",
@@ -27570,12 +27571,12 @@ static bool cg_pass_register_module_bindings(CG *cg,
         if (d->kind != FENG_DECL_GLOBAL_BINDING) continue;
         if (d->is_extern) {
             return cg_fail(cg, d->token,
-                "codegen: extern module-level bindings not supported in Phase 1A");
+                "CE0349", "codegen: extern module-level bindings not supported in Phase 1A");
         }
         if (!cg_register_module_binding(cg, d, target)) return false;
         const ModuleBinding *mb = &cg->module_bindings[cg->module_binding_count - 1];
         char *cty = cg_ctype_dup(mb->type);
-        if (!cty) return cg_fail(cg, d->token, "codegen: out of memory");
+        if (!cty) return cg_fail(cg, d->token, "IE0001", "codegen: out of memory");
         if (cgtype_is_managed(mb->type)) {
             buf_append_fmt(&cg->statics,
                            "%s%s %s = NULL;\n",
@@ -27761,7 +27762,7 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                 for (size_t k = 0; k < cg->user_type_count; k++) {
                     if (cg->user_types[k].decl == d) { ut = &cg->user_types[k]; break; }
                 }
-                if (!ut) return cg_fail(cg, d->token, "codegen: internal: type not registered");
+                if (!ut) return cg_fail(cg, d->token, "CE0350", "codegen: internal: type not registered");
                 for (size_t ci = 0; ci < ut->constructor_count; ci++) {
                     bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
                                           d->visibility == FENG_VISIBILITY_PUBLIC &&
@@ -27942,7 +27943,7 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                     }
                 }
                 if (!emitted_fit) return cg_fail(cg, d->token,
-                    "codegen: internal: fit not registered");
+                    "CE0351", "codegen: internal: fit not registered");
                 break;
             }
             case FENG_DECL_FUNCTION:
@@ -27979,7 +27980,7 @@ static bool cg_emit_all_programs(CG *cg,
     for (size_t p = 0; p < program_count; p++) {
         if (!cg_pass_register_type_shells(cg, programs[p])) {
             if (!cg->failed) cg_fail(cg, programs[p]->module_token,
-                "codegen: internal: type shell registration failed without diagnostic");
+                "CE0352", "codegen: internal: type shell registration failed without diagnostic");
             return false;
         }
     }
@@ -27988,7 +27989,7 @@ static bool cg_emit_all_programs(CG *cg,
     for (size_t p = 0; p < program_count; p++) {
         if (!cg_pass_collect_generic_type_instances(cg, programs[p])) {
             if (!cg->failed) cg_fail(cg, programs[p]->module_token,
-                "codegen: internal: generic instance collection failed without diagnostic");
+                "CE0353", "codegen: internal: generic instance collection failed without diagnostic");
             return false;
         }
     }
@@ -28015,7 +28016,7 @@ static bool cg_emit_all_programs(CG *cg,
         cg->cur_program = NULL;
         if (!ok) {
             if (!cg->failed) cg_fail(cg, cg->user_types[i].decl->token,
-                "codegen: internal: user type member registration failed without diagnostic");
+                "CE0354", "codegen: internal: user type member registration failed without diagnostic");
             return false;
         }
     }
@@ -28377,7 +28378,7 @@ static bool cg_emit_all_programs(CG *cg,
     for (size_t p = 0; p < program_count; p++) {
         if (!cg_pass_pre_register_functions(cg, programs[p], target)) {
             if (!cg->failed) cg_fail(cg, programs[p]->module_token,
-                "codegen: internal: function pre-registration failed without diagnostic");
+                "CE0355", "codegen: internal: function pre-registration failed without diagnostic");
             return false;
         }
     }
@@ -28386,14 +28387,14 @@ static bool cg_emit_all_programs(CG *cg,
     for (size_t p = 0; p < program_count; p++) {
         if (!cg_pass_emit_decls(cg, programs[p], target)) {
             if (!cg->failed) cg_fail(cg, programs[p]->module_token,
-                "codegen: internal: declaration emission failed without diagnostic");
+                "CE0356", "codegen: internal: declaration emission failed without diagnostic");
             return false;
         }
     }
     for (size_t p = 0; p < program_count; p++) {
         if (!cg_pass_emit_module_binding_ensure_inits(cg, programs[p])) {
             if (!cg->failed) cg_fail(cg, programs[p]->module_token,
-                "codegen: internal: module binding ensure-init emission failed without diagnostic");
+                "CE0357", "codegen: internal: module binding ensure-init emission failed without diagnostic");
             return false;
         }
     }
@@ -28401,7 +28402,7 @@ static bool cg_emit_all_programs(CG *cg,
         if (!cg->failed && program_count > 0U) {
             cg_fail(cg,
                     programs[0]->module_token,
-                    "codegen: internal: type static binding ensure-init emission failed without diagnostic");
+                    "CE0358", "codegen: internal: type static binding ensure-init emission failed without diagnostic");
         }
         return false;
     }
@@ -28470,7 +28471,7 @@ static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
             if (!cg_append_aggregate_default_init_call(cg->cur_body, mb->type, mb->c_name)) {
                 return cg_fail(cg,
                                mb->binding->token,
-                               "codegen: missing aggregate default-init rule for module binding");
+                               "CE0359", "codegen: missing aggregate default-init rule for module binding");
             }
             buf_append_cstr(cg->cur_body, ";\n");
             return true;
@@ -28495,7 +28496,7 @@ static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
      * released after the assignment. */
     Scope *fn_scope = scope_push(NULL);
     if (!fn_scope) return cg_fail(cg, mb->binding->token,
-                                  "codegen: out of memory");
+                                  "IE0001", "codegen: out of memory");
     cg->cur_scope = fn_scope;
     /* Caller is responsible for setting cg->cur_body to the destination
      * buffer (typically a side buffer that is later spliced into main()). */
@@ -28526,13 +28527,13 @@ static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
             cg->cur_body = NULL;
             return cg_fail(cg,
                            mb->binding->token,
-                           "codegen: missing aggregate descriptor for module binding");
+                           "CE0360", "codegen: missing aggregate descriptor for module binding");
         }
         if (r.owns_ref && cg_materialize_to_local(cg, &r, "_t") == NULL) {
             er_free(&r);
             cg->cur_scope = NULL; scope_pop_free(fn_scope);
             cg->cur_body = NULL;
-            return cg_fail(cg, mb->binding->token, "codegen: out of memory");
+            return cg_fail(cg, mb->binding->token, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
             "        feng_aggregate_assign(&%s, &%s, &%s);\n",
@@ -28603,7 +28604,7 @@ static bool cg_emit_type_static_binding_init(CG *cg, const TypeStaticBinding *bi
 
             if (cty == NULL) {
                 free(def_expr);
-                return cg_fail(cg, binding->member->token, "codegen: out of memory");
+                return cg_fail(cg, binding->member->token, "IE0001", "codegen: out of memory");
             }
             buf_append_fmt(cg->cur_body,
                            "    %s = (%s)(%s);\n",
@@ -28621,7 +28622,7 @@ static bool cg_emit_type_static_binding_init(CG *cg, const TypeStaticBinding *bi
         ExprResult r;
 
         if (fn_scope == NULL) {
-            return cg_fail(cg, binding->member->token, "codegen: out of memory");
+            return cg_fail(cg, binding->member->token, "IE0001", "codegen: out of memory");
         }
         cg->cur_scope = fn_scope;
         cg->cur_return_type = NULL;
@@ -28652,7 +28653,7 @@ static bool cg_emit_type_static_binding_init(CG *cg, const TypeStaticBinding *bi
                 cg->cur_scope = NULL;
                 scope_pop_free(fn_scope);
                 cg->cur_body = NULL;
-                return cg_fail(cg, binding->member->token, "codegen: out of memory");
+                return cg_fail(cg, binding->member->token, "IE0001", "codegen: out of memory");
             }
             buf_append_fmt(cg->cur_body,
                            "        %s = (%s)(%s);\n",
@@ -28743,7 +28744,7 @@ static bool cg_pass_emit_module_binding_ensure_inits(CG *cg, const FengProgram *
         if (!mb) {
             cg->cur_program = NULL;
             return cg_fail(cg, d->token,
-                "codegen: internal: module binding ensure-init emitted before registration");
+                "CE0361", "codegen: internal: module binding ensure-init emitted before registration");
         }
         if (!cg_emit_module_binding_ensure_init(cg, mb)) {
             cg->cur_program = NULL;
@@ -29197,7 +29198,7 @@ static size_t cg_field_managed_descriptor_count(CG *cg, const CGType *t,
         case CG_VK_AGGREGATE: {
             if (cg_aggregate_desc_name(t) == NULL) {
                 (void)cg_fail(cg, err_token,
-                    "codegen: aggregate field has no descriptor (unknown aggregate kind)");
+                    "CE0362", "codegen: aggregate field has no descriptor (unknown aggregate kind)");
                 return 0U;
             }
             return 1U;
@@ -29242,7 +29243,7 @@ static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
 
             if (aggregate_desc == NULL) {
                 return cg_fail(cg, err_token,
-                    "codegen: aggregate field has no descriptor (unknown aggregate kind)");
+                    "CE0362", "codegen: aggregate field has no descriptor (unknown aggregate kind)");
             }
             buf_append_fmt(td,
                 "    { offsetof(struct %s, %s), NULL, &%s },\n",
@@ -29269,7 +29270,7 @@ static bool cg_emit_field_release(CG *cg, Buf *td,
             const char *desc = cg_aggregate_desc_name(ft);
             if (desc == NULL) {
                 return cg_fail(cg, err_token,
-                    "codegen: aggregate field has no descriptor symbol (unknown aggregate kind)");
+                    "CE0363", "codegen: aggregate field has no descriptor symbol (unknown aggregate kind)");
             }
             buf_append_fmt(td,
                 "    feng_aggregate_release(&_o->%s, &%s);\n",
@@ -29382,7 +29383,7 @@ static bool cg_emit_tuple_equal_function(CG *cg,
     Buf *td = &cg->type_defs;
 
     if (equal_fn_name == NULL) {
-        return cg_fail(cg, t->decl->token, "codegen: missing tuple equality function name");
+        return cg_fail(cg, t->decl->token, "CE0364", "codegen: missing tuple equality function name");
     }
     buf_append_fmt(td,
         "static bool %s(const void *left, const void *right) {\n"
@@ -29439,7 +29440,7 @@ static bool cg_emit_tuple_equal_function(CG *cg,
                 if (descriptor_expr == NULL) {
                     return cg_fail(cg,
                                    t->decl->token,
-                                   "codegen: tuple field '%s' has no managed equality descriptor",
+                                   "CE0365", "codegen: tuple field '%s' has no managed equality descriptor",
                                    field->feng_name);
                 }
                 buf_append_fmt(td,
@@ -29463,7 +29464,7 @@ static bool cg_emit_tuple_equal_function(CG *cg,
                 if (descriptor_name == NULL) {
                     return cg_fail(cg,
                                    t->decl->token,
-                                   "codegen: tuple field '%s' has no aggregate equality descriptor",
+                                   "CE0366", "codegen: tuple field '%s' has no aggregate equality descriptor",
                                    field->feng_name);
                 }
                 buf_append_fmt(td,
@@ -29496,7 +29497,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
     buf_init(&equal_fn_name);
     buf_append_fmt(&equal_fn_name, "%s__equal", t->c_aggregate_desc_name);
     if (equal_fn_name.data == NULL) {
-        (void)cg_fail(cg, t->decl->token, "codegen: out of memory");
+        (void)cg_fail(cg, t->decl->token, "IE0001", "codegen: out of memory");
         return;
     }
     if (!cg_emit_tuple_equal_function(cg, t, equal_fn_name.data)) {
@@ -29524,7 +29525,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
                     if (nested_desc == NULL) {
                         (void)cg_fail(cg,
                                       t->decl->token,
-                                      "codegen: tuple field '%s' has no aggregate descriptor",
+                                      "CE0367", "codegen: tuple field '%s' has no aggregate descriptor",
                                       field->feng_name);
                         buf_free(&equal_fn_name);
                         return;
@@ -29549,7 +29550,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
                        "%s__init",
                        t->c_aggregate_default_name);
         if (init_fn_name.data == NULL) {
-            (void)cg_fail(cg, t->decl->token, "codegen: out of memory");
+            (void)cg_fail(cg, t->decl->token, "IE0001", "codegen: out of memory");
             buf_free(&equal_fn_name);
             return;
         }
@@ -29604,7 +29605,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
                         buf_free(&equal_fn_name);
                         (void)cg_fail(cg,
                                       *blame,
-                                      "codegen: missing tuple field aggregate default initializer");
+                                      "CE0368", "codegen: missing tuple field aggregate default initializer");
                         return;
                     }
                     buf_append_fmt(td, "    %s;\n", init_call.data);
@@ -29747,7 +29748,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
                        "offsetof(struct %s, value)",
                        t->c_tuple_box_struct_name);
         if (value_base.data == NULL) {
-            (void)cg_fail(cg, t->decl->token, "codegen: out of memory");
+            (void)cg_fail(cg, t->decl->token, "IE0001", "codegen: out of memory");
             return;
         }
         buf_append_fmt(td,
@@ -30607,13 +30608,13 @@ static bool cg_generic_type_param_names(CG *cg, const FengDecl *decl,
                                         char ***out_names) {
     size_t count = decl->as.type_decl.type_param_count;
     char **names = count ? calloc(count, sizeof *names) : NULL;
-    if (count && !names) return cg_fail(cg, decl->token, "codegen: out of memory");
+    if (count && !names) return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
     for (size_t i = 0; i < count; ++i) {
         FengSlice name = decl->as.type_decl.type_params[i].name;
         names[i] = strndup(name.data, name.length);
         if (!names[i]) {
             cg_free_cstr_array(names, i);
-            return cg_fail(cg, decl->token, "codegen: out of memory");
+            return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
         }
     }
     *out_names = names;
@@ -30778,7 +30779,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     char *shared_name = shared_name_override
         ? strdup(shared_name_override)
         : cg_generic_type_method_shared_cname(cg, decl, member);
-    if (!shared_name) return cg_fail(cg, member->token, "codegen: out of memory");
+    if (!shared_name) return cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
     bool export_shared = cg_generic_type_member_exports_public_surface(decl, member, target);
     bool is_static_method = member->is_static;
 
@@ -30802,14 +30803,14 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     desc_names = tp_count ? calloc(tp_count, sizeof *desc_names) : NULL;
     if ((tp_count > 0U) &&
         (type_param_names == NULL || constraint_specs == NULL || desc_names == NULL)) {
-        cg_fail(cg, member->token, "codegen: out of memory");
+        cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     for (size_t i = 0; i < outer_tp_count; ++i) {
         FengSlice name = decl->as.type_decl.type_params[i].name;
         type_param_names[i] = strndup(name.data, name.length);
         if (type_param_names[i] == NULL) {
-            cg_fail(cg, member->token, "codegen: out of memory");
+            cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
     }
@@ -30817,7 +30818,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         FengSlice name = sig->type_params[i].name;
         type_param_names[outer_tp_count + i] = strndup(name.data, name.length);
         if (type_param_names[outer_tp_count + i] == NULL) {
-            cg_fail(cg, member->token, "codegen: out of memory");
+            cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
     }
@@ -30827,7 +30828,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         buf_append_fmt(&b, "_%s", type_param_names[i]);
         desc_names[i] = b.data;
         if (desc_names[i] == NULL) {
-            cg_fail(cg, member->token, "codegen: out of memory");
+            cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
     }
@@ -31038,7 +31039,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     param_fnames = param_count ? calloc(param_count, sizeof *param_fnames) : NULL;
     if ((param_count && !param_types) || (param_count && !param_cnames) ||
         (param_count && !param_fnames)) {
-        cg_fail(cg, member->token, "codegen: out of memory");
+        cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     for (size_t i = 0; i < param_count; ++i) {
@@ -31049,7 +31050,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         buf_append_fmt(&c_name, "_p_%.*s", (int)param->name.length, param->name.data);
         param_cnames[i] = c_name.data;
         if (!param_fnames[i] || !param_cnames[i]) {
-            cg_fail(cg, member->token, "codegen: out of memory");
+            cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
     }
@@ -31162,7 +31163,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
 
     fn_scope = scope_push(NULL);
     if (!fn_scope) {
-        cg_fail(cg, member->token, "codegen: out of memory");
+        cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     cg->cur_scope = fn_scope;
@@ -31183,7 +31184,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         CGType *self_type = cgtype_new(CG_TYPE_OBJECT);
         if (!self_type || !scope_add(fn_scope, "self", "_self", self_type, true)) {
             cgtype_free(self_type);
-            cg_fail(cg, member->token, "codegen: out of memory");
+            cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
     }
@@ -31191,7 +31192,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         CGType *pt = cgtype_clone(param_types[i]);
         if (!pt || !scope_add(fn_scope, param_fnames[i], param_cnames[i], pt, true)) {
             cgtype_free(pt);
-            cg_fail(cg, member->token, "codegen: out of memory");
+            cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
     }
@@ -31211,7 +31212,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
 cleanup:
     if (!ok && !cg->failed) {
         cg_fail(cg, member->token,
-            "codegen: internal: failed to emit shared generic method '%.*s'",
+            "CE0369", "codegen: internal: failed to emit shared generic method '%.*s'",
             (int)sig->name.length,
             sig->name.data);
     }
@@ -31247,13 +31248,13 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     bool is_static_method = m != NULL && m->member != NULL && m->member->is_static;
     if (!decl || decl->kind != FENG_DECL_TYPE) {
         return cg_fail(cg, m->member->token,
-            "codegen: internal: generic instance method missing origin type");
+            "CE0370", "codegen: internal: generic instance method missing origin type");
     }
     const FengCallableSignature *sig = &m->member->as.callable;
     char *shared_name = shared_name_override
         ? strdup(shared_name_override)
         : cg_generic_type_method_shared_cname(cg, decl, m->member);
-    if (!shared_name) return cg_fail(cg, m->member->token, "codegen: out of memory");
+    if (!shared_name) return cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
 
     size_t tp_count = decl->as.type_decl.type_param_count;
     size_t method_tp_count = sig->type_param_count;
@@ -31284,20 +31285,20 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         combined_type_param_names = calloc(combined_tp_count,
                                            sizeof *combined_type_param_names);
         if (combined_type_param_names == NULL) {
-            cg_fail(cg, m->member->token, "codegen: out of memory");
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         for (size_t i = 0; i < tp_count; ++i) {
             combined_type_param_names[i] = strdup(type_param_names[i]);
             if (combined_type_param_names[i] == NULL) {
-                cg_fail(cg, m->member->token, "codegen: out of memory");
+                cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
                 goto cleanup;
             }
         }
         for (size_t i = 0; i < method_tp_count; ++i) {
             combined_type_param_names[tp_count + i] = strdup(method_type_param_names[i]);
             if (combined_type_param_names[tp_count + i] == NULL) {
-                cg_fail(cg, m->member->token, "codegen: out of memory");
+                cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
                 goto cleanup;
             }
         }
@@ -31313,7 +31314,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         wrapper_context_desc_names = calloc(t->generic_context_type_param_count,
                                             sizeof *wrapper_context_desc_names);
         if (wrapper_context_desc_names == NULL) {
-            cg_fail(cg, m->member->token, "codegen: out of memory");
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         for (size_t i = 0U; i < t->generic_context_type_param_count; ++i) {
@@ -31323,7 +31324,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             buf_append_fmt(&b, "_type_desc->reified_generic_params[%zu]", i);
             wrapper_context_desc_names[i] = b.data;
             if (wrapper_context_desc_names[i] == NULL) {
-                cg_fail(cg, m->member->token, "codegen: out of memory");
+                cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
                 goto cleanup;
             }
         }
@@ -31331,7 +31332,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     if (method_tp_count > 0U) {
         method_desc_names = calloc(method_tp_count, sizeof *method_desc_names);
         if (method_desc_names == NULL) {
-            cg_fail(cg, m->member->token, "codegen: out of memory");
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         for (size_t i = 0; i < method_tp_count; ++i) {
@@ -31340,7 +31341,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             buf_append_fmt(&b, "_%s", method_type_param_names[i]);
             method_desc_names[i] = b.data;
             if (method_desc_names[i] == NULL) {
-                cg_fail(cg, m->member->token, "codegen: out of memory");
+                cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
                 goto cleanup;
             }
         }
@@ -31349,7 +31350,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     origin_param_types = sig->param_count ? calloc(sig->param_count, sizeof *origin_param_types) : NULL;
     desc_exprs = tp_count ? calloc(tp_count, sizeof *desc_exprs) : NULL;
     if ((sig->param_count && !origin_param_types) || (tp_count && !desc_exprs)) {
-        cg_fail(cg, m->member->token, "codegen: out of memory");
+        cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
 
@@ -31651,7 +31652,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
 cleanup:
     if (!ok && !cg->failed) {
         cg_fail(cg, m->member->token,
-            "codegen: internal: failed to emit generic method wrapper '%s.%s'",
+            "CE0371", "codegen: internal: failed to emit generic method wrapper '%s.%s'",
             t->feng_name,
             m->feng_name);
     }
@@ -31707,7 +31708,7 @@ static bool cg_emit_user_method(CG *cg,
         context_desc_names = calloc(t->generic_context_type_param_count,
                                     sizeof *context_desc_names);
         if (context_desc_names == NULL) {
-            return cg_fail(cg, m->member->token, "codegen: out of memory");
+            return cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
         }
         for (size_t i = 0U; i < t->generic_context_type_param_count; ++i) {
             Buf b;
@@ -31716,7 +31717,7 @@ static bool cg_emit_user_method(CG *cg,
             buf_append_fmt(&b, "_%s", t->generic_context_type_param_names[i]);
             context_desc_names[i] = b.data;
             if (context_desc_names[i] == NULL) {
-                cg_fail(cg, m->member->token, "codegen: out of memory");
+                cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
                 goto cleanup;
             }
         }
@@ -31753,7 +31754,7 @@ static bool cg_emit_user_method(CG *cg,
 
     fn_scope = scope_push(NULL);
     if (!fn_scope) {
-        cg_fail(cg, m->member->token, "codegen: out of memory");
+        cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     cg->cur_scope = fn_scope;
@@ -31811,7 +31812,7 @@ static bool cg_emit_user_method(CG *cg,
                                                   &captured_names,
                                                   &captured_name_count,
                                                   &cg->current_callable_captures_self)) {
-        cg_fail(cg, m->member->token, "codegen: out of memory");
+        cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     cg->captured_binding_names = captured_names;
@@ -31828,7 +31829,7 @@ static bool cg_emit_user_method(CG *cg,
     if (!is_static_method && cg->current_callable_captures_self) {
         CGType *self_t = cgtype_new(CG_TYPE_OBJECT);
         if (!self_t) {
-            cg_fail(cg, m->member->token, "codegen: out of memory");
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         self_t->user = t;
@@ -31849,13 +31850,13 @@ static bool cg_emit_user_method(CG *cg,
     } else if (!is_static_method) {
         CGType *self_t = cgtype_new(CG_TYPE_OBJECT);
         if (!self_t) {
-            cg_fail(cg, m->member->token, "codegen: out of memory");
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         self_t->user = t;
         if (!scope_add(fn_scope, "self", "self", self_t, true)) {
             cgtype_free(self_t);
-            cg_fail(cg, m->member->token, "codegen: out of memory");
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         if (!cg_debug_add_variable_record_cstr_cgtype(cg,
@@ -31889,7 +31890,7 @@ static bool cg_emit_user_method(CG *cg,
         CGType *pt = cgtype_clone(m->param_types[i]);
         if (!scope_add(fn_scope, pn, pn, pt, true)) {
             cgtype_free(pt);
-            cg_fail(cg, m->member->token, "codegen: out of memory");
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         if (!cg_debug_add_variable_record_slice_type_ref(
@@ -32028,7 +32029,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
 
     fn_scope = scope_push(NULL);
     if (!fn_scope) {
-        cg_fail(cg, m->member->token, "codegen: out of memory");
+        cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     cg->cur_scope = fn_scope;
@@ -32090,7 +32091,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
         fit_target_desc_names = calloc(bf->target_type_param_count,
                                        sizeof *fit_target_desc_names);
         if (fit_target_desc_names == NULL) {
-            cg_fail(cg, m->member->token, "codegen: out of memory");
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         for (size_t i = 0U; i < bf->target_type_param_count; ++i) {
@@ -32100,7 +32101,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
             buf_append_fmt(&b, "_%s", fit_target_type_param_names[i]);
             fit_target_desc_names[i] = b.data;
             if (fit_target_desc_names[i] == NULL) {
-                cg_fail(cg, m->member->token, "codegen: out of memory");
+                cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
                 goto cleanup;
             }
         }
@@ -32117,7 +32118,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
             method_desc_names = calloc(sig->type_param_count,
                                        sizeof *method_desc_names);
             if (method_desc_names == NULL) {
-                cg_fail(cg, m->member->token, "codegen: out of memory");
+                cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
                 goto cleanup;
             }
             for (size_t i = 0U; i < sig->type_param_count; ++i) {
@@ -32126,7 +32127,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                 buf_append_fmt(&b, "_%s", method_type_param_names[i]);
                 method_desc_names[i] = b.data;
                 if (method_desc_names[i] == NULL) {
-                    cg_fail(cg, m->member->token, "codegen: out of memory");
+                    cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
                     goto cleanup;
                 }
             }
@@ -32146,7 +32147,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
             combined_desc_names = calloc(total_tp_count,
                                          sizeof *combined_desc_names);
             if (combined_type_param_names == NULL || combined_desc_names == NULL) {
-                cg_fail(cg, m->member->token, "codegen: out of memory");
+                cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
                 goto cleanup;
             }
             for (size_t i = 0; i < fit_tp_count; ++i) {
@@ -32169,7 +32170,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                 const UserSpec **combined_constraints = calloc(
                     total_tp_count, sizeof *combined_constraints);
                 if (combined_constraints == NULL) {
-                    cg_fail(cg, m->member->token, "codegen: out of memory");
+                    cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
                     goto cleanup;
                 }
                 /* fit-target type params: no constraints. */
@@ -32378,7 +32379,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                                                   &captured_names,
                                                   &captured_name_count,
                                                   &cg->current_callable_captures_self)) {
-        cg_fail(cg, m->member->token, "codegen: out of memory");
+        cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
     cg->captured_binding_names = captured_names;
@@ -32408,12 +32409,12 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     } else if (!is_static_method) {
         CGType *self_t = cgtype_clone(bf->target_type);
         if (!self_t) {
-            cg_fail(cg, m->member->token, "codegen: out of memory");
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         if (!scope_add(fn_scope, "self", "self", self_t, true)) {
             cgtype_free(self_t);
-            cg_fail(cg, m->member->token, "codegen: out of memory");
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         if (!cg_debug_add_variable_record_cstr_cgtype(cg,
@@ -32447,7 +32448,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
         CGType *pt = cgtype_clone(m->param_types[i]);
         if (!scope_add(fn_scope, pn, pn, pt, true)) {
             cgtype_free(pt);
-            cg_fail(cg, m->member->token, "codegen: out of memory");
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         if (!cg_debug_add_variable_record_slice_type_ref(
@@ -32542,7 +32543,7 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
 
     cg->cur_body = body;
     CGType *void_t = cgtype_new(CG_TYPE_VOID);
-    if (!void_t) return cg_fail(cg, fm->token, "codegen: out of memory");
+    if (!void_t) return cg_fail(cg, fm->token, "IE0001", "codegen: out of memory");
     cg->cur_return_type = void_t;
     cg->cur_fn_is_main = false;
     cg->tmp_counter = 0;
@@ -32583,7 +32584,7 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
     if (!fn_scope) {
         cgtype_free(void_t);
         cg->cur_body = NULL; cg->cur_return_type = NULL;
-        return cg_fail(cg, fm->token, "codegen: out of memory");
+        return cg_fail(cg, fm->token, "IE0001", "codegen: out of memory");
     }
     cg->cur_scope = fn_scope;
     {
@@ -32964,14 +32965,14 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
     cg.options = options;
     feng_codegen_maping_info_init(&cg.debug_info);
     if (local_program_total == 0) {
-        cg_fail(&cg, (FengToken){0}, "codegen: no programs to compile");
+        cg_fail(&cg, (FengToken){0}, "CE0372", "codegen: no programs to compile");
         cg_dispose(&cg);
         return false;
     }
 
     const FengProgram **programs = calloc(program_total, sizeof(*programs));
     if (!programs) {
-        cg_fail(&cg, (FengToken){0}, "codegen: out of memory collecting programs");
+        cg_fail(&cg, (FengToken){0}, "IE0001", "codegen: out of memory collecting programs");
         cg_dispose(&cg);
         return false;
     }
@@ -32993,7 +32994,7 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
         if (!main_fn) {
             cg_fail(&cg,
                 first_local_program != NULL ? first_local_program->module_token : (FengToken){0},
-                    "codegen: bin target requires `main` function");
+                    "CE0373", "codegen: bin target requires `main` function");
             free(programs);
             cg_dispose(&cg);
             return false;
@@ -33020,7 +33021,7 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
 
     char *src = cg_finalize(&cg);
     if (!src) {
-        cg_fail(&cg, (FengToken){0}, "codegen: out of memory finalizing output");
+        cg_fail(&cg, (FengToken){0}, "IE0001", "codegen: out of memory finalizing output");
         cg_dispose(&cg);
         return false;
     }

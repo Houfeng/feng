@@ -36,7 +36,7 @@ void feng_cli_fprint_token_summary(FILE *stream, const FengToken *token);
 
 void feng_cli_print_diagnostic(FILE *stream,
                                const char *path,
-                               const char *kind,
+                               const char *code,
                                const char *message,
                                const FengToken *token,
                                const char *source,

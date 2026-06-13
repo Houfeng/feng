@@ -177,21 +177,21 @@ void feng_cli_print_diagnostic(FILE *stream,
 - [x] `FengToken` 中 `message` 重命名为 `error_message`，新增 `const char *error_code`（`src/lexer/token.h`），`make_token()` 中初始化为 NULL，所有引用 `token.message` 的代码同步改为 `token.error_message`
 - [x] lexer 的 `make_error()` 增加 `error_code` 参数，所有调用点传入对应的 LE 错误码字面量（`src/lexer/lexer.c`）
 - [x] 三个错误结构体增加 `const char *code` 字段（`src/parser/parser.h`、`src/semantic/semantic.h`、`src/codegen/codegen.h`）
-- [ ] 全量回归测试（结构体变更后）
-- [ ] `parser_tokenize()` 中透传 `token.error_code` → `parser->error.code`；parser 自身错误在 `parser_error_at()` 等函数中设置 SE 错误码（`src/parser/parser.c`）
-- [ ] 核心编译器 semantic、codegen 模块在构造错误时填入错误码字符串字面量（semantic → `"AE..."`、codegen → `"CE..."`）
-- [ ] 梳理所有基础设施错误（OOM、I/O 失败等）调用点，确定全局唯一的 IE 错误码（如 `IE0001`、`IE0002`...），并在对应模块构造错误时填入
-- [ ] 全量回归测试（错误码填入后）
-- [ ] `feng_cli_print_diagnostic` 签名中 `kind` 参数改为 `code`，输出格式调整为两行（`src/cli/common.h`、`src/cli/common.c`）
-- [ ] 全量回归测试（渲染函数变更后）
-- [ ] CLI 层所有 `feng_cli_print_diagnostic` 调用点将硬编码分类标签替换为从结构体取 `code` 字段传入，涉及以下文件（均在 `src/cli/` 下，非核心编译器）：
+- [x] 全量回归测试（结构体变更后）
+- [x] `parser_tokenize()` 中透传 `token.error_code` → `parser->error.code`；parser 自身错误在 `parser_error_at()` 等函数中设置 SE 错误码（`src/parser/parser.c`）
+- [x] 核心编译器 semantic、codegen 模块在构造错误时填入错误码字符串字面量（semantic → `"AE..."`、codegen → `"CE..."`）
+- [x] 梳理所有基础设施错误（OOM、I/O 失败等）调用点，确定全局唯一的 IE 错误码（如 `IE0001`、`IE0002`...），并在对应模块构造错误时填入
+- [x] 全量回归测试（错误码填入后）
+- [x] `feng_cli_print_diagnostic` 签名中 `kind` 参数改为 `code`，输出格式调整为两行（`src/cli/common.h`、`src/cli/common.c`）
+- [x] 全量回归测试（渲染函数变更后）
+- [x] CLI 层所有 `feng_cli_print_diagnostic` 调用点将硬编码分类标签替换为从结构体取 `code` 字段传入，涉及以下文件（均在 `src/cli/` 下，非核心编译器）：
   - `src/cli/compile/direct.c` — 新版编译路径，通过回调处理错误，3 处调用（parse error / semantic error / semantic info）
   - `src/cli/compile/legacy.c` — 旧版单文件编译路径，直接调用 parser/semantic/codegen，3 处调用（parse error / semantic error / codegen error）
   - `src/cli/tool/parse.c` — `feng parse` 子命令，1 处调用（parse error）
   - `src/cli/tool/semantic.c` — `feng semantic` 子命令，3 处调用（parse error / semantic error / info）
   - `src/cli/project/check.c` — `feng check` 子命令，3 处调用（parse error / semantic error / semantic info）
   - 示例：`"parse error"` → `error->code`，`"semantic error"` → `error->code`，`"codegen error"` → `cgerr.code`
-- [ ] 全量回归测试（调用点变更后）
+- [x] 全量回归测试（调用点变更后）
 
 ### 测试阶段
 

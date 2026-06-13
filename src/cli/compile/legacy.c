@@ -31,7 +31,7 @@ static int run_legacy_compile(const FengCliLegacyCompileOptions *opts) {
         FengParseError perr;
         if (!feng_parse_source(src.source, src.source_length, opts->input_path,
                                &src.program, &perr)) {
-            feng_cli_print_diagnostic(stderr, opts->input_path, "parse error", perr.message,
+            feng_cli_print_diagnostic(stderr, opts->input_path, perr.code, perr.message,
                                       &perr.token, src.source, src.source_length);
             exit_code = 1;
             goto cleanup;
@@ -42,7 +42,7 @@ static int run_legacy_compile(const FengCliLegacyCompileOptions *opts) {
                                &analysis, &errors, &error_count)) {
         for (size_t i = 0; i < error_count; ++i) {
             if (i > 0) fputc('\n', stderr);
-            feng_cli_print_diagnostic(stderr, errors[i].path, "semantic error",
+            feng_cli_print_diagnostic(stderr, errors[i].path, errors[i].code,
                                       errors[i].message, &errors[i].token,
                                       src.source, src.source_length);
         }
@@ -50,7 +50,7 @@ static int run_legacy_compile(const FengCliLegacyCompileOptions *opts) {
         goto cleanup;
     }
     if (!feng_codegen_emit_program(analysis, opts->target, NULL, &out, &cgerr)) {
-        feng_cli_print_diagnostic(stderr, opts->input_path, "codegen error",
+        feng_cli_print_diagnostic(stderr, opts->input_path, cgerr.code,
                                   cgerr.message ? cgerr.message : "unknown",
                                   &cgerr.token, src.source, src.source_length);
         exit_code = 1;
