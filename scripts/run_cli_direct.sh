@@ -95,11 +95,11 @@ if expect_ok "help" "$FENG" --help; then
         echo "FAIL[help] help command should not write stderr"
         failures=$((failures + 1))
     fi
-    if ! grep -q '^  feng <files...> \[<options>\]$' "$WORK/help.out"; then
+    if ! grep -q '^  feng <files>\.\.\. \[options\]$' "$WORK/help.out"; then
         echo "FAIL[help] missing direct compile usage line"
         failures=$((failures + 1))
     fi
-    if ! grep -q '^  feng <command>  \[<options>\]$' "$WORK/help.out"; then
+    if ! grep -q '^  feng <command>  \[options\]$' "$WORK/help.out"; then
         echo "FAIL[help] missing command usage line"
         failures=$((failures + 1))
     fi
@@ -111,7 +111,7 @@ if expect_ok "help" "$FENG" --help; then
         echo "FAIL[help] missing Compile section"
         failures=$((failures + 1))
     fi
-    if ! grep -Eq '^  feng <files...> \[--target=<bin\|lib>\][[:space:]]*$' "$WORK/help.out"; then
+    if ! grep -Eq '^  feng <files>\.\.\. \[--target=bin\|lib\][[:space:]]*$' "$WORK/help.out"; then
         echo "FAIL[help] missing wrapped compile header line"
         failures=$((failures + 1))
     fi
@@ -158,8 +158,8 @@ if expect_ok "help" "$FENG" --help; then
     editor_line=$(grep -n '^Protocol:[[:space:]]*$' "$WORK/help.out" | head -n1 | cut -d: -f1)
     if [[ -z "$project_line" || -z "$compile_line" || -z "$global_line" || -z "$editor_line" ]] \
         || (( project_line >= compile_line )) \
-        || (( compile_line >= global_line )) \
-        || (( global_line >= editor_line )); then
+        || (( compile_line >= editor_line )) \
+        || (( editor_line >= global_line )); then
         echo "FAIL[help] usage sections are out of order"
         failures=$((failures + 1))
     fi

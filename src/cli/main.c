@@ -13,38 +13,39 @@ static void feng_cli_print_version(const char *program, FILE *stream) {
 }
 
 void feng_cli_print_usage(const char *program, FILE *stream) {
-    int compile_indent = (int)(2U + strlen(program) + strlen(" <files...> "));
+    int compile_indent = (int)(2U + strlen(program) + strlen(" <files>... "));
 
     fprintf(stream, "Usage:\n");
-    fprintf(stream, "  %s <command>  [<options>]\n", program);
-    fprintf(stream, "  %s <files...> [<options>]\n", program);
+    fprintf(stream, "  %s <command>  [options]\n", program);
+    fprintf(stream, "  %s <files>... [options]\n", program);
     fprintf(stream, "\n");
     fprintf(stream, "Project:\n");
-    fprintf(stream, "  %s init       [<name>] [--target=<bin|lib>]\n", program);
+    fprintf(stream, "  %s init       [<name>] [--target=bin|lib]\n", program);
     fprintf(stream, "  %s build      [<path>] [--release] [--keep-ir]\n", program);
-    fprintf(stream, "  %s check      [<path>] [--format=<text|json>]\n", program);
-    fprintf(stream, "  %s run        [<path>] [--release] [--keep-ir]\n", program);
-    fprintf(stream, "%*s[-- <program-args>...]\n", (int)(2U + strlen(program) + strlen(" run        ")), "");
+    fprintf(stream, "  %s check      [<path>] [--format=text|json]\n", program);
+    fprintf(stream, "  %s run        [<path>] [--release] [--keep-ir] [-- <args>...]\n", program);
     fprintf(stream, "  %s clean      [<path>]\n", program);
     fprintf(stream, "  %s pack       [<path>]\n", program);
-    fprintf(stream, "  %s deps       <add|remove|install> ...\n", program);
+    fprintf(stream, "  %s deps       add      <pkg-name> [<path>]\n", program);
+    fprintf(stream, "  %s deps       remove   <pkg-name> [<path>]\n", program);
+    fprintf(stream, "  %s deps       install  [<path>]   [--force]\n", program);
     fprintf(stream, "\n");
     fprintf(stream, "Compile:\n");
-    fprintf(stream, "  %s <files...> [--target=<bin|lib>]\n", program);
+    fprintf(stream, "  %s <files>... [--target=bin|lib]\n", program);
     fprintf(stream, "%*s[--out=<dir>]\n", compile_indent, "");
     fprintf(stream, "%*s[--name=<artifact>]\n", compile_indent, "");
     fprintf(stream, "%*s[--release]\n", compile_indent, "");
     fprintf(stream, "%*s[--keep-ir]\n", compile_indent, "");
-    fprintf(stream, "%*s[--pkg=<fb-path>...]\n", compile_indent, "");
-    fprintf(stream, "%*s[--lib=<lib-path>...]\n", compile_indent, "");
-    fprintf(stream, "\n");
-    fprintf(stream, "Global:\n");
-    fprintf(stream, "  -h, --help      Display this message.\n");
-    fprintf(stream, "  -v, --version   Display version information.\n");
+    fprintf(stream, "%*s[--pkg=<fb-path>]...\n", compile_indent, "");
+    fprintf(stream, "%*s[--lib=<lib-path>]...\n", compile_indent, "");
     fprintf(stream, "\n");
     fprintf(stream, "Protocol:\n");
     fprintf(stream, "  %s lsp        [--stdio]\n", program);
     fprintf(stream, "  %s dap        [--stdio]\n", program);
+    fprintf(stream, "\n");
+    fprintf(stream, "Global:\n");
+    fprintf(stream, "  -h, --help      Display this message.\n");
+    fprintf(stream, "  -v, --version   Display version information.\n");
     fprintf(stream, "\n");
     // fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     // fprintf(stderr, "  %s tool lex <file>\n", program);
