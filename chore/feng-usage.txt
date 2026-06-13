@@ -1,30 +1,31 @@
 Usage:
-  feng <command>  [<options>]
-  feng <files...> [<options>]
+  feng <command>  [options]
+  feng <files>... [options]
 
 Project:
-  feng init       [<name>] [--target=<bin|lib>]
+  feng init       [<name>] [--target=bin|lib]
   feng build      [<path>] [--release] [--keep-ir]
-  feng check      [<path>] [--format=<text|json>]
-  feng run        [<path>] [--release] [--keep-ir]
-                  [-- <program-args>...]
+  feng check      [<path>] [--format=text|json]
+  feng run        [<path>] [--release] [--keep-ir] [-- <args>...]
   feng clean      [<path>]
   feng pack       [<path>]
-  feng deps       <add|remove|install> ...
+  feng deps       add      <pkg-name> [<path>]
+  feng deps       remove   <pkg-name> [<path>]
+  feng deps       install  [<path>]   [--force]
 
 Compile:
-  feng <files...> [--target=<bin|lib>]
+  feng <files>... [--target=bin|lib]
                   [--out=<dir>]
                   [--name=<artifact>]
                   [--release]
                   [--keep-ir]
-                  [--pkg=<fb-path>...]
-                  [--lib=<lib-path>...]
-
-Global:
-  -h, --help      Display this message.
-  -v, --version   Display version information.
+                  [--pkg=<fb-path>]...
+                  [--lib=<lib-path>]...
 
 Protocol:
   feng lsp        [--stdio]
   feng dap        [--stdio]
+
+Global:
+  -h, --help      Display this message.
+  -v, --version   Display version information.
