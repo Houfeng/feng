@@ -172,9 +172,11 @@ static FengToken make_error(FengLexer *lexer,
                             size_t start_offset,
                             unsigned int start_line,
                             unsigned int start_column,
+                            const char *error_code,
                             const char *message) {
     FengToken token = make_token(lexer, FENG_TOKEN_ERROR, start_offset, start_line, start_column);
 
+    token.error_code = error_code;
     token.error_message = message;
     lexer->last_error = message;
     return token;
@@ -293,6 +295,7 @@ static bool skip_whitespace_and_comments(FengLexer *lexer, FengToken *out_error)
                                         start_offset,
                                         start_line,
                                         start_column,
+                                        "LE0001",
                                         "unterminated block comment");
                 return false;
             }
@@ -345,6 +348,7 @@ static FengToken scan_identifier_or_keyword(FengLexer *lexer,
                           start_offset,
                           start_line,
                           start_column,
+                          "LE0002",
                           "reserved word cannot be used as an identifier in the current language version");
     }
 
@@ -367,6 +371,7 @@ static FengToken scan_annotation(FengLexer *lexer,
                           start_offset,
                           start_line,
                           start_column,
+                          "LE0003",
                           "expected annotation name after '@'");
     }
 
@@ -425,7 +430,7 @@ static FengToken scan_number(FengLexer *lexer,
                     (void)lexer_advance(lexer);
                 }
                 return make_error(lexer, start_offset, start_line, start_column,
-                                  "invalid numeric literal");
+                                  "LE0004", "invalid numeric literal");
             }
             (void)lexer_advance(lexer);
             consume_digit_run(lexer, 16);
@@ -437,7 +442,7 @@ static FengToken scan_number(FengLexer *lexer,
                     (void)lexer_advance(lexer);
                 }
                 return make_error(lexer, start_offset, start_line, start_column,
-                                  "invalid numeric literal");
+                                  "LE0004", "invalid numeric literal");
             }
             (void)lexer_advance(lexer);
             consume_digit_run(lexer, 2);
@@ -449,7 +454,7 @@ static FengToken scan_number(FengLexer *lexer,
                     (void)lexer_advance(lexer);
                 }
                 return make_error(lexer, start_offset, start_line, start_column,
-                                  "invalid numeric literal");
+                                  "LE0004", "invalid numeric literal");
             }
             (void)lexer_advance(lexer);
             consume_digit_run(lexer, 8);
@@ -497,6 +502,7 @@ static FengToken scan_number(FengLexer *lexer,
                           start_offset,
                           start_line,
                           start_column,
+                          "LE0004",
                           "invalid numeric literal");
     }
 
@@ -532,6 +538,7 @@ static FengToken scan_string(FengLexer *lexer,
                               start_offset,
                               start_line,
                               start_column,
+                              "LE0005",
                               "unterminated string literal");
         }
 
@@ -542,6 +549,7 @@ static FengToken scan_string(FengLexer *lexer,
                                   start_offset,
                                   start_line,
                                   start_column,
+                                  "LE0005",
                                   "unterminated string literal");
             }
 
@@ -561,6 +569,7 @@ static FengToken scan_string(FengLexer *lexer,
                                           start_offset,
                                           start_line,
                                           start_column,
+                                          "LE0006",
                                           "invalid \\x escape: expected 2 hex digits");
                     }
                     {
@@ -570,6 +579,7 @@ static FengToken scan_string(FengLexer *lexer,
                                               start_offset,
                                               start_line,
                                               start_column,
+                                              "LE0007",
                                               "invalid \\x escape: expected hex digit");
                         }
                         if (lexer_at_end(lexer)) {
@@ -577,6 +587,7 @@ static FengToken scan_string(FengLexer *lexer,
                                               start_offset,
                                               start_line,
                                               start_column,
+                                              "LE0006",
                                               "invalid \\x escape: expected 2 hex digits");
                         }
                         char h2 = lexer_advance(lexer);
@@ -585,6 +596,7 @@ static FengToken scan_string(FengLexer *lexer,
                                               start_offset,
                                               start_line,
                                               start_column,
+                                              "LE0007",
                                               "invalid \\x escape: expected hex digit");
                         }
                     }
@@ -594,6 +606,7 @@ static FengToken scan_string(FengLexer *lexer,
                                       start_offset,
                                       start_line,
                                       start_column,
+                                      "LE0008",
                                       "invalid string escape");
             }
             continue;
@@ -606,6 +619,7 @@ static FengToken scan_string(FengLexer *lexer,
                       start_offset,
                       start_line,
                       start_column,
+                      "LE0005",
                       "unterminated string literal");
 }
 
@@ -640,6 +654,7 @@ static FengToken scan_raw_string(FengLexer *lexer,
                       start_offset,
                       start_line,
                       start_column,
+                      "LE0009",
                       "unterminated raw string literal");
 }
 
@@ -792,6 +807,7 @@ static FengToken scan_token_internal(FengLexer *lexer) {
                               start_offset,
                               start_line,
                               start_column,
+                              "LE0010",
                               "unexpected character");
     }
 }
