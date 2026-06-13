@@ -209,6 +209,30 @@ function tokenize(source) {
             continue;
         }
 
+        if (current === '`') {
+            let end = index + 1;
+
+            while (end < source.length) {
+                const value = source[end];
+
+                if (value === '`') {
+                    /* Check for escaped backtick `` */
+                    if (end + 1 < source.length && source[end + 1] === '`') {
+                        end += 2;
+                        continue;
+                    }
+                    end += 1;
+                    break;
+                }
+
+                end += 1;
+            }
+
+            tokens.push({ type: 'string', value: source.slice(index, end) });
+            index = end;
+            continue;
+        }
+
         if (current === '@' && isIdentifierStart(next)) {
             let end = index + 2;
 
@@ -593,23 +617,117 @@ function countLeadingClosers(tokens) {
 }
 
 function updateDelimiterStack(delimiterStack, tokens) {
-    for (const token of tokens) {
+    /* Pre-scan: identify () pairs on this line where ) is followed by { or ->.
+     * These are lambda parameter lists or func-call-before-block patterns.
+     * Neither the ( nor the ) should affect the delimiter stack, because only
+     * the { should contribute to indentation of subsequent lines. */
+    const skipIndices = new Set();
+
+    for (let i = 0; i < tokens.length; i += 1) {
+        const token = tokens[i];
+        if (token.type !== 'delimiter' || token.value !== '(') {
+            continue;
+        }
+
+        /* Skip control-flow parens: if(...) for(...) while(...) catch(...) etc. */
+        let prevSig = null;
+        for (let p = i - 1; p >= 0; p -= 1) {
+            if (tokens[p].type !== 'comment') {
+                prevSig = tokens[p];
+                break;
+            }
+        }
+        if (prevSig != null && prevSig.type === 'keyword' && CONTROL_PAREN_KEYWORDS.has(prevSig.value)) {
+            continue;
+        }
+
+        let depth = 1;
+        let closeIdx = -1;
+        let afterClose = null;
+
+        for (let j = i + 1; j < tokens.length; j += 1) {
+            const t = tokens[j];
+            if (t.type === 'comment') {
+                continue;
+            }
+            if (t.type === 'delimiter' && t.value === '(') {
+                depth += 1;
+            } else if (t.type === 'delimiter' && t.value === ')') {
+                depth -= 1;
+                if (depth === 0) {
+                    closeIdx = j;
+                    for (let k = j + 1; k < tokens.length; k += 1) {
+                        const next = tokens[k];
+                        if (next.type === 'comment') {
+                            continue;
+                        }
+                        afterClose = next;
+                        break;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (closeIdx >= 0 && afterClose != null &&
+            ((afterClose.type === 'delimiter' && afterClose.value === '{') ||
+             (afterClose.type === 'operator' && afterClose.value === '->'))) {
+            skipIndices.add(i);
+            skipIndices.add(closeIdx);
+        }
+    }
+
+    for (let i = 0; i < tokens.length; i += 1) {
+        const token = tokens[i];
+
         if (token.type === 'comment') {
             continue;
         }
 
+        if (skipIndices.has(i)) {
+            continue;
+        }
+
         if (isOpeningDelimiter(token, ['(', '[', '{'])) {
-            delimiterStack.push(token.value);
+            /* Mark function-call parens so they don't contribute to indentation.
+             * A function-call ( is preceded by an identifier that is NOT a
+             * declaration name (not preceded by func/type/spec/fit/extern). */
+            let isFuncCall = false;
+            if (token.value === '(') {
+                let prevSig = null;
+                let prevPrevSig = null;
+                for (let p = i - 1; p >= 0; p -= 1) {
+                    if (tokens[p].type === 'comment') { continue; }
+                    if (prevSig == null) { prevSig = tokens[p]; }
+                    else { prevPrevSig = tokens[p]; break; }
+                }
+                if (prevSig != null && prevSig.type === 'identifier') {
+                    const isDecl = prevPrevSig != null && prevPrevSig.type === 'keyword' &&
+                        (prevPrevSig.value === 'func' || prevPrevSig.value === 'type' ||
+                         prevPrevSig.value === 'spec' || prevPrevSig.value === 'fit' ||
+                         prevPrevSig.value === 'extern');
+                    isFuncCall = !isDecl;
+                }
+            }
+            delimiterStack.push({ value: token.value, isFuncCall: isFuncCall });
             continue;
         }
 
         if (isClosingDelimiter(token)) {
             const expected = CLOSE_TO_OPEN[token.value];
 
-            if (delimiterStack.length > 0 && delimiterStack[delimiterStack.length - 1] === expected) {
+            if (delimiterStack.length > 0 && delimiterStack[delimiterStack.length - 1].value === expected) {
                 delimiterStack.pop();
-            } else if (delimiterStack.length > 0) {
-                delimiterStack.pop();
+            } else if (delimiterStack.length > 0 && token.value === ')') {
+                /* Fallback pop for ): only remove ( entries, never { or [.
+                 * This handles unmatched func-call ) without corrupting
+                 * block indentation. */
+                for (let s = delimiterStack.length - 1; s >= 0; s -= 1) {
+                    if (delimiterStack[s].value === '(') {
+                        delimiterStack.splice(s, 1);
+                        break;
+                    }
+                }
             }
         }
     }
@@ -891,7 +1009,43 @@ function formatFengSource(source, options = {}) {
         }
 
         const leadingClosers = countLeadingClosers(tokens);
-        const effectiveIndent = Math.max(delimiterStack.length - leadingClosers, 0);
+        /* Count function-call parens in the stack that shouldn't add indent */
+        let funcCallCount = 0;
+        for (const entry of delimiterStack) {
+            if (entry.isFuncCall) { funcCallCount += 1; }
+        }
+        /* Leading ) that close func-call parens shouldn't reduce indent either.
+         * Count how many leading ) correspond to func-call ( in the stack. */
+        let leadingFuncCallClosers = 0;
+        let tempStack = delimiterStack.slice();
+        for (const token of tokens) {
+            if (token.type === 'comment') { break; }
+            if (!isClosingDelimiter(token)) { break; }
+            if (token.value === ')') {
+                /* Check if this ) would close a func-call ( */
+                for (let s = tempStack.length - 1; s >= 0; s -= 1) {
+                    if (tempStack[s].value === '(' && tempStack[s].isFuncCall) {
+                        leadingFuncCallClosers += 1;
+                        tempStack.splice(s, 1);
+                        break;
+                    } else if (tempStack[s].value === '(') {
+                        /* Non-func-call (, this ) closes it normally */
+                        tempStack.splice(s, 1);
+                        break;
+                    }
+                }
+            } else {
+                /* } or ], pop matching entry */
+                const expected = CLOSE_TO_OPEN[token.value];
+                for (let s = tempStack.length - 1; s >= 0; s -= 1) {
+                    if (tempStack[s].value === expected) {
+                        tempStack.splice(s, 1);
+                        break;
+                    }
+                }
+            }
+        }
+        const effectiveIndent = Math.max(delimiterStack.length - leadingClosers - funcCallCount + leadingFuncCallClosers, 0);
         const formattedLine = formatLineTokens(tokens, previousSignificantToken);
 
         const isBodyCommentLine = tokens.length === 1 &&

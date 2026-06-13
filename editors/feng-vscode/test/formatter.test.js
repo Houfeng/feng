@@ -182,6 +182,24 @@ runCase(
 );
 
 runCase(
+    'formats single-line lambda body with correct indentation',
+    'func main():void {\nlet compute=(x:int){\nlet temp=x+10;\nreturn temp*2;\n};\n}\n',
+    'func main(): void {\n    let compute = (x: int) {\n        let temp = x + 10;\n        return temp * 2;\n    };\n}\n'
+);
+
+runCase(
+    'formats backtick string like double-quoted string',
+    'func main():void {\nlet s=`hello\\nworld`;\nlet r=`regex \\d+`;\n}\n',
+    'func main(): void {\n    let s = `hello\\nworld`;\n    let r = `regex \\d+`;\n}\n'
+);
+
+runCase(
+    'formats multi-line backtick string preserving newlines',
+    'func main():void {\nlet text=`line1\nline2\nline3`;\n}\n',
+    'func main(): void {\n    let text = `line1\nline2\nline3`;\n}\n'
+);
+
+runCase(
     'keeps generic brackets tight in union type variants at end of line',
     'open spec Payload: None\n| List<Payload>\n| Map<string, Payload>;\n',
     'open spec Payload: None\n| List<Payload>\n| Map<string, Payload>;\n'

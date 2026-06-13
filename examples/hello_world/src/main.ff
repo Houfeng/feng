@@ -22,18 +22,20 @@ func main(args: string[]) {
   println("JV_CREATED");
   println("JV: {0}", jv.toString());
 
+  let str = `xxxx`;
+
   describe("JSON Tests", () {
+    test("should create a JSON object", () {
+      assert(true, "JSON object created successfully");
+    });
+    test("should create a JSON object", () {
+      assert(false, "JSON object create");
       test("should create a JSON object", () {
-          assert(true, "JSON object created successfully");
+        assert(false, "JSON object create");
       });
       test("should create a JSON object", () {
-          assert(false, "JSON object create");
-          test("should create a JSON object", () {
-            assert(false, "JSON object create");
-          });
-          test("should create a JSON object", () {
-            assert(false, "JSON object create");
-          });
+        assert(false, "JSON object create");
       });
+    });
   });
 }

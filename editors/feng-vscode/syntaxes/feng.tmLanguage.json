@@ -104,6 +104,17 @@
               "match": "\\\\."
             }
           ]
+        },
+        {
+          "name": "string.quoted.backtick.feng",
+          "begin": "`",
+          "end": "`",
+          "patterns": [
+            {
+              "name": "constant.character.escape.feng",
+              "match": "``"
+            }
+          ]
         }
       ]
     },
