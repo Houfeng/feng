@@ -1,0 +1,5 @@
+module hello_world;
+
+// func test() {
+//   assert(true, "hello world");
+// }

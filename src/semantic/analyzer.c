@@ -17153,7 +17153,8 @@ static bool add_module(FengSemanticAnalysis *analysis, const FengProgram *progra
     return true;
 }
 
-static bool import_public_names(const FengSemanticModule *target_module,
+static bool import_public_names(const FengSemanticModule *current_module,
+                                const FengSemanticModule *target_module,
                                 const FengProgram *program,
                                 const FengUseDecl *use_decl,
                                 VisibleTypeEntry **visible_types,
@@ -17297,14 +17298,24 @@ static bool import_public_names(const FengSemanticModule *target_module,
                             if ((*visible_values)[index].provider_module == target_module) {
                                 should_append_visible_value = false;
                             } else {
+                                /* If the existing symbol is from the current file,
+                                   report the error at the local definition site;
+                                   otherwise (import-vs-import) report at this import. */
+                                bool is_local_conflict = ((*visible_values)[index].provider_module == current_module);
+                                FengToken conflict_token = is_local_conflict
+                                    ? (*visible_values)[index].decl->token
+                                    : use_decl->token;
+                                const char *conflict_message = is_local_conflict
+                                    ? "name '%.*s' is already defined in this file, conflicts with imported name from module '%s'"
+                                    : "imported name '%.*s' from module '%s' conflicts with an existing visible value name";
                                 ok = append_error(
                                     errors,
                                     error_count,
                                     error_capacity,
                                     program->path,
-                                    use_decl->token,
+                                    conflict_token,
                                     "AE0159", format_message(
-                                        "imported name '%.*s' from module '%s' conflicts with an existing visible value name",
+                                        conflict_message,
                                         (int)name.length,
                                         name.data,
                                         module_name != NULL ? module_name : "<unknown>"));
@@ -22106,7 +22117,8 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                 continue;
             }
 
-            ok = import_public_names(&analysis->modules[target_index],
+            ok = import_public_names(module,
+                                     &analysis->modules[target_index],
                                      program,
                                      use_decl,
                                      &visible_types,

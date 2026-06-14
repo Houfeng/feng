@@ -8,34 +8,10 @@ import std.collections;
 import std.json;
 import std.test;
 
+func test() {
+  assert(true, "hello world");
+}
+
 func main(args: string[]) {
 
-  // println("\u001b[32m✓\u001b[0m");
-  println("\x1b[32m✓\x1b[0m");
-
-  println("START");
-  let obj = JsonObject();
-  println("OBJ_CREATED");
-  obj.set("a", (double)1);
-  println("OBJ_SET");
-  let jv = JsonValue(obj);
-  println("JV_CREATED");
-  println("JV: {0}", jv.toString());
-
-  let str = `xxxx`;
-
-  describe("JSON Tests", () {
-    test("should create a JSON object", () {
-      assert(true, "JSON object created successfully");
-    });
-    test("should create a JSON object", () {
-      assert(false, "JSON object create");
-      test("should create a JSON object", () {
-        assert(false, "JSON object create");
-      });
-      test("should create a JSON object", () {
-        assert(false, "JSON object create");
-      });
-    });
-  });
 }

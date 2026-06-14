@@ -6533,8 +6533,8 @@ static void test_imported_value_conflicts_with_local_value(void) {
     ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "main_value_conflict.f") == 0);
-    ASSERT(errors[0].token.line == 2U);
-    ASSERT(strstr(errors[0].message, "imported name 'load'") != NULL);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "already defined") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(base_program);
