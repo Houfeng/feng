@@ -5,7 +5,6 @@
 
 [词法错误](docs/feng-error-codes-le.md)
 
-
 ## SE - 语法错误
 
 | 错误码 | 新错误码 | 用途 | 错误文案 |
