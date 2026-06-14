@@ -8,7 +8,7 @@ import std.collections;
 import std.json;
 import std.test;
 
-func test() {
+func test2() {
   assert(true, "hello world");
 }
 
