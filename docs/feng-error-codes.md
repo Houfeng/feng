@@ -69,8 +69,10 @@
 | **SE0046** | **SE0307** | 语法要求不满足 | type member annotations must be followed immediately by a field or method; remove the trailing ';' |
 | **SE0047** | **SE0001** | 语法要求不满足 | type field declarations must end with ';' |
 | **SE0048** | **SE0306** | 语法要求不满足 | extern type object form only supports fields; methods require a non-extern type |
+| **SE0049** | **SE0002** | 缺少 a finalizer name | expected the type name after 'func ~' to declare a finalizer |
 | **SE0050** | **SE0508** | 语法要求不满足 | finalizer name must match the enclosing type name |
 | **SE0051** | **SE0508** | 语法要求不满足 | finalizer name must match the enclosing type name |
+| **SE0052** | **SE0518** | 语法要求不满足 | type finalizers must provide a body '{...}' |
 | **SE0053** | **SE0506** | 语法要求不满足 | constructor name must match the enclosing type name |
 | **SE0054** | **SE0511** | 语法结构不允许 | finalizers cannot be declared 'static' |
 | **SE0055** | **SE0507** | 语法结构不允许 | constructors cannot be declared 'static' |
@@ -86,6 +88,7 @@
 | **SE0065** | **SE0602** | 语法结构不允许 | spec members cannot be declared 'static' |
 | **SE0066** | **SE0603** | 语法结构不允许 | spec field declarations cannot have an initializer |
 | **SE0067** | **SE0001** | 语法要求不满足 | spec field declarations must end with ';' |
+| **SE0068** | **SE0002** | 缺少 a finalizer name | expected a finalizer name after 'func ~' |
 | **SE0069** | **SE0002** | 缺少 a method name | expected a method name after 'func' |
 | **SE0070** | **SE0605** | 语法结构不允许 | spec method signatures must end with ';' and cannot have a body '{...}' |
 | **SE0071** | **SE0606** | 语法结构不允许 | spec method parameters cannot use 'let' or 'var' modifiers |
@@ -100,7 +103,10 @@
 | **SE0080** | **SE0001** | 语法要求不满足 | union-form spec declarations must end with ';' |
 | **SE0081** | **SE0608** | 语法要求不满足 | spec object declarations require '{...}' after the optional spec list |
 | **SE0082** | **SE0610** | 缺少 '}' | expected '}' to close spec body |
+| **SE0083** | **SE0807** | 语法结构不允许 | fit blocks cannot declare 'static let' or 'static var'; fit only supports methods |
 | **SE0084** | **SE0604** | 语法要求不满足 | spec method signatures must declare a return type |
+| **SE0085** | **SE0808** | 语法要求不满足 | fit static members must be declared with 'func' |
+| **SE0086** | **SE0808** | 语法要求不满足 | fit block members must start with 'func' |
 | **SE0087** | **SE0805** | 语法要求不满足 | fit block methods must provide a body '{...}' |
 | **SE0088** | **SE0801** | 语法结构不允许 | 'extern' cannot be applied to a 'fit' declaration |
 | **SE0089** | **SE0802** | 语法结构不允许 | annotations cannot be applied to 'fit' declarations |
@@ -109,6 +115,8 @@
 | **SE0092** | **SE0001** | 语法要求不满足 | fit declarations without a body must end with ';' |
 | **SE0093** | **SE0804** | 语法要求不满足 | fit declarations must include a spec list, a body block, or both |
 | **SE0094** | **SE0002** | 缺少 a function name | expected a function name after 'func' |
+| **SE0095** | **SE0517** | 语法要求不满足 | extern function declarations must end with ';' and cannot have a body '{...}' |
+| **SE0096** | **SE0518** | 语法要求不满足 | function declarations must provide a body '{...}' |
 | **SE0097** | **SE0503** | 语法结构不允许 | extern function declarations cannot use variadic parameters |
 | **SE0098** | **SE0001** | 语法要求不满足 | top-level bindings must end with ';' |
 | **SE0099** | **SE1301** | 语法要求不满足 | annotation must be followed immediately by a declaration; remove the trailing ';' |
@@ -166,6 +174,8 @@
 | **SE0151** | **SE0902** | 缺少 a module path | expected a module path after 'import' |
 | **SE0152** | **SE0002** | 缺少 an alias name | expected an alias name after 'as' |
 | **SE0153** | **SE0001** | 语法要求不满足 | import declarations must end with ';' |
+| **SE0154** | **SE0202** | 缺少 ']' | expected ']' after '[!' in array type suffix |
+| **SE0155** | **SE0202** | 缺少 ']' | expected ']' to close array type suffix |
 | **SE0156** | **SE0202** | 缺少 ']' | expected ']' to close index expression |
 
 

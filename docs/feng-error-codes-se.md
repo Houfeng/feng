@@ -104,6 +104,8 @@
 | SE0514 | 多行 lambda 必须使用块形式 | multi-line lambda body must omit '->' and use the block form '(params) { ... }' |
 | SE0515 | 函数/参数字符缺失 | expected '(' to start parameter list、expected ')' to close parameter list/argument list |
 | SE0516 | lambda 表达式结构不完整 | expected '(' to start grouped expression, cast, or lambda（lambda 部分） |
+| SE0517 | extern 函数声明形式不合法 | extern function declarations must end with ';' and cannot have a body '{...}' |
+| SE0518 | 函数/finalizer 声明缺少函数体 | function declarations must provide a body '{...}'、type finalizers must provide a body '{...}' |
 
 ## SE06XX - Spec段
 
@@ -130,6 +132,8 @@
 | SE0804 | fit 必须包含 spec 列表或函数体 | fit declarations must include a spec list, a body block, or both |
 | SE0805 | fit 块方法必须提供函数体 | fit block methods must provide a body '{...}' |
 | SE0806 | fit 字符缺失 | expected '}' to close fit body |
+| SE0807 | fit 不能声明字段 | fit blocks cannot declare 'let'/'var' fields（含 static let/static var） |
+| SE0808 | fit 成员必须以 func 开头 | fit static members must be declared with 'func'、fit block members must start with 'func' |
 
 ## SE09XX - 模块/Import段
 
@@ -191,13 +195,13 @@
 | SE02XX 数组 | 2 |
 | SE03XX 类型/元组 | 12 |
 | SE04XX 枚举 | 10 |
-| SE05XX 函数/Lambda | 16 |
+| SE05XX 函数/Lambda | 18 |
 | SE06XX Spec | 10 |
-| SE08XX Fit | 6 |
+| SE08XX Fit | 8 |
 | SE09XX 模块/Import | 2 |
 | SE10XX 表达式 | 2 |
 | SE11XX 分支 | 7 |
 | SE12XX 循环 | 2 |
 | SE13XX 注解 | 2 |
 | SE14XX 异常处理 | 4 |
-| **合计** | **91** |
+| **合计** | **95** |
