@@ -2533,7 +2533,7 @@ static bool validate_runtime_annotation_on_decl(ResolveContext *context, const F
         return resolver_append_error(
             context,
             runtime_annotation->token,
-            "AE0001", format_message("@runtime only applies to top-level extern func declarations")) &&
+            "AE1301", format_message("@runtime only applies to top-level extern func declarations")) &&
                false;
     }
 
@@ -2541,7 +2541,7 @@ static bool validate_runtime_annotation_on_decl(ResolveContext *context, const F
         return resolver_append_error(
             context,
             runtime_annotation->token,
-            "AE0002", format_message(
+            "AE1301", format_message(
                 "function '%.*s' cannot use @runtime unless it is declared extern",
                 (int)decl->as.function_decl.name.length,
                 decl->as.function_decl.name.data));
@@ -2552,7 +2552,7 @@ static bool validate_runtime_annotation_on_decl(ResolveContext *context, const F
         return resolver_append_error(
             context,
             runtime_annotation->token,
-            "AE0003", format_message(
+            "AE1320", format_message(
                 "function '%.*s' cannot combine @runtime with @abi",
                 (int)decl->as.function_decl.name.length,
                 decl->as.function_decl.name.data)) &&
@@ -2563,7 +2563,7 @@ static bool validate_runtime_annotation_on_decl(ResolveContext *context, const F
         return resolver_append_error(
             context,
             runtime_annotation->token,
-            "AE0004", format_message(
+            "AE1320", format_message(
                 "function '%.*s' cannot combine @runtime with C ABI target annotations",
                 (int)decl->as.function_decl.name.length,
                 decl->as.function_decl.name.data)) &&
@@ -2590,7 +2590,7 @@ static bool validate_supported_decl_annotations(ResolveContext *context, const F
         return resolver_append_error(
             context,
             annotation->token,
-            "AE0005", format_message(
+            "AE1302", format_message(
                 "unknown annotation '@%.*s' is not supported",
                 (int)annotation->name.length,
                 annotation->name.data));
@@ -2616,7 +2616,7 @@ static bool validate_runtime_annotation_on_member(ResolveContext *context,
     return resolver_append_error(
         context,
         runtime_annotation->token,
-        "AE0001", format_message("@runtime only applies to top-level extern func declarations")) &&
+        "AE1301", format_message("@runtime only applies to top-level extern func declarations")) &&
            false;
 }
 
@@ -2638,7 +2638,7 @@ static bool validate_supported_member_annotations(ResolveContext *context,
         return resolver_append_error(
             context,
             annotation->token,
-            "AE0005", format_message(
+            "AE1302", format_message(
                 "unknown annotation '@%.*s' is not supported",
                 (int)annotation->name.length,
                 annotation->name.data));
@@ -2686,7 +2686,7 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
         return resolver_append_error(
             context,
             decl->as.function_decl.token,
-            "AE0006", format_message(
+            "AE1303", format_message(
                 "function '%.*s' cannot be marked as @abi because extern functions use target annotations to define external ABI semantics",
                 (int)decl->as.function_decl.name.length,
                 decl->as.function_decl.name.data));
@@ -2706,7 +2706,7 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
         return resolver_append_error(
             context,
             decl->as.function_decl.token,
-            "AE0007", format_message(
+            "AE1307", format_message(
                 "extern function '%.*s' must use exactly one of '@cdecl', '@stdcall', or '@fastcall' with a library argument, an optional C function name, and an optional fixed parameter count",
                 (int)decl->as.function_decl.name.length,
                 decl->as.function_decl.name.data));
@@ -2716,7 +2716,7 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
         return resolver_append_error(
             context,
             calling_convention->token,
-            "AE0008", format_message(
+            "AE1308", format_message(
                 "extern function annotation '@%.*s' library argument must be a string literal or a visible let binding initialized directly with a string literal",
                 (int)calling_convention->name.length,
                 calling_convention->name.data));
@@ -2727,7 +2727,7 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
         return resolver_append_error(
             context,
             calling_convention->token,
-            "AE0009", format_message(
+            "AE1321", format_message(
                 "extern function annotation '@%.*s' C function name argument must be a string literal or a visible let binding initialized directly with a string literal",
                 (int)calling_convention->name.length,
                 calling_convention->name.data));
@@ -2740,7 +2740,7 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
             return resolver_append_error(
                 context,
                 calling_convention->token,
-                "AE0010", format_message(
+                "AE1322", format_message(
                     "extern function annotation '@%.*s' fixed parameter count must be an integer literal",
                     (int)calling_convention->name.length,
                     calling_convention->name.data));
@@ -2752,7 +2752,7 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
                 return resolver_append_error(
                     context,
                     calling_convention->token,
-                    "AE0011", format_message(
+                    "AE1309", format_message(
                         "extern function annotation '@%.*s' fixed parameter count %lld is out of range for function with %zu parameters",
                         (int)calling_convention->name.length,
                         calling_convention->name.data,
@@ -4329,7 +4329,7 @@ static bool collect_normalized_union_member(ResolveContext *context,
             return resolver_append_error(
                 context,
                 member_ref != NULL ? member_ref->token : owner_union_decl->token,
-                "AE0013", format_message("union-form spec '%.*s' forms a cycle through its member list",
+                "AE0601", format_message("union-form spec '%.*s' forms a cycle through its member list",
                                (int)owner_union_decl->as.spec_decl.name.length,
                                owner_union_decl->as.spec_decl.name.data));
         }
@@ -4418,7 +4418,7 @@ static bool record_normalized_union_spec_info(ResolveContext *context, const Fen
             ok = resolver_append_error(
                 context,
                 member_ref != NULL ? member_ref->token : decl->token,
-                "AE0014", format_message("union-form spec members cannot be 'void'"));
+                "AE0602", format_message("union-form spec members cannot be 'void'"));
             break;
         }
         if (!resolve_type_ref(context, member_ref, false)) {
@@ -4446,7 +4446,7 @@ static bool record_normalized_union_spec_info(ResolveContext *context, const Fen
         return resolver_append_error(
             context,
             decl->token,
-            "AE0015", format_message("union-form spec '%.*s' must have at least one member",
+            "AE0603", format_message("union-form spec '%.*s' must have at least one member",
                            (int)decl->as.spec_decl.name.length,
                            decl->as.spec_decl.name.data));
     }
@@ -4927,7 +4927,7 @@ static bool validate_tuple_literal_expr_against_type(ResolveContext *context,
         bool ok = resolver_append_error(
             context,
             expr->token,
-            "AE0016", format_message("tuple literal requires a named tuple target type, got '%s'",
+            "AE0301", format_message("tuple literal requires a named tuple target type, got '%s'",
                            type_name != NULL ? type_name : "<type>"));
 
         free(type_name);
@@ -4938,7 +4938,7 @@ static bool validate_tuple_literal_expr_against_type(ResolveContext *context,
         bool ok = resolver_append_error(
             context,
             expr->token,
-            "AE0017", format_message("tuple literal has %zu element(s) but tuple type '%s' expects %zu",
+            "AE0302", format_message("tuple literal has %zu element(s) but tuple type '%s' expects %zu",
                            expr->as.tuple_literal.count,
                            type_name != NULL ? type_name : "<type>",
                            tuple_decl->as.type_decl.member_count));
@@ -5681,7 +5681,7 @@ static bool validate_division_or_modulo_rhs_zero(ResolveContext *context,
     return resolver_append_error(
         context,
         anchor,
-        "AE0020", format_message("%s by zero in %s '%s' expression",
+        "AE1001", format_message("%s by zero in %s '%s' expression",
                        kind_word,
                        context_label,
                        format_operator_name(op)));
@@ -5699,7 +5699,7 @@ static bool validate_compound_assignment(ResolveContext *context, const FengStmt
     if (binary_op == FENG_TOKEN_ERROR) {
         return resolver_append_error(context,
                                      stmt->token,
-                                     "AE0021", format_message("unsupported compound assignment operator '%s'",
+                                     "AE1002", format_message("unsupported compound assignment operator '%s'",
                                                     operator_name));
     }
 
@@ -5770,7 +5770,7 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
         return resolver_append_error(
             context,
             expr->token,
-            "AE0024", format_message("binary operator '%s' requires union-form operands to be narrowed to a single member first",
+            "AE0604", format_message("binary operator '%s' requires union-form operands to be narrowed to a single member first",
                            operator_name));
     }
 
@@ -5904,7 +5904,7 @@ static bool validate_block_yields_expression(ResolveContext *context,
     return resolver_append_error(
         context,
         anchor,
-        "AE0031", format_message("%s branch block must end with an expression statement", ctx_label));
+        "AE1101", format_message("%s branch block must end with an expression statement", ctx_label));
 }
 
 static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
@@ -5925,7 +5925,7 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
         return resolver_append_error(
             context,
             expr->token,
-            "AE0033", format_message("if expressions require an else branch"));
+            "AE1101", format_message("if expressions require an else branch"));
     }
 
     if (!validate_block_yields_expression(context,
@@ -5991,7 +5991,7 @@ static bool validate_try_expr(ResolveContext *context,
             return resolver_append_error(
                 context,
                 clause->token,
-                "AE0035", format_message("catch clause must end with a result expression, 'return', or 'throw'"));
+                "AE1401", format_message("catch clause must end with a result expression, 'return', or 'throw'"));
         }
 
         result_type = infer_expr_type(context, result_expr);
@@ -6041,7 +6041,7 @@ static bool validate_try_catch_clause_result_type(ResolveContext *context,
         return resolver_append_error(
             context,
             clause->token,
-            "AE0035", format_message("catch clause must end with a result expression, 'return', or 'throw'"));
+            "AE1401", format_message("catch clause must end with a result expression, 'return', or 'throw'"));
     }
 
     result_type = infer_expr_type(context, result_expr);
@@ -6276,19 +6276,19 @@ static bool collect_match_branch_label_records(ResolveContext *context,
                 return resolver_append_error(
                     context,
                     label->token,
-                    "AE0038", format_message("match range label endpoints must be integer literals or 'let' bindings to integer literals"));
+                    "AE1103", format_message("match range label endpoints must be integer literals or 'let' bindings to integer literals"));
             }
             if (lo.kind != MATCH_CONST_INT || hi.kind != MATCH_CONST_INT) {
                 return resolver_append_error(
                     context,
                     label->token,
-                    "AE0039", format_message("match range label endpoints must be integer values"));
+                    "AE1103", format_message("match range label endpoints must be integer values"));
             }
             if (lo.i > hi.i) {
                 return resolver_append_error(
                     context,
                     label->token,
-                    "AE0040", format_message("match range label requires low <= high, got %lld and %lld",
+                    "AE1104", format_message("match range label requires low <= high, got %lld and %lld",
                                    (long long)lo.i,
                                    (long long)hi.i));
             }
@@ -6303,7 +6303,7 @@ static bool collect_match_branch_label_records(ResolveContext *context,
                 return resolver_append_error(
                     context,
                     label->value != NULL ? label->value->token : label->token,
-                    "AE0041", format_message("match label must be a literal or a 'let' binding to a literal"));
+                    "AE1105", format_message("match label must be a literal or a 'let' binding to a literal"));
             }
             record.token = value.token;
             record.kind = value.kind;
@@ -6358,7 +6358,7 @@ static bool validate_match_label_records(ResolveContext *context,
                 return resolver_append_error(
                     context,
                     records[j].token,
-                    "AE0042", format_message("match label overlaps with an earlier label and is unreachable"));
+                    "AE1106", format_message("match label overlaps with an earlier label and is unreachable"));
             }
         }
     }
@@ -6448,7 +6448,7 @@ static bool resolve_union_match_label_index(ResolveContext *context,
         return resolver_append_error(
             context,
             label != NULL ? label->token : context->program->module_token,
-            "AE0043", format_message("union-form match labels must be union member types or 'else'"));
+            "AE0605", format_message("union-form match labels must be union member types or 'else'"));
     }
     if (!resolve_type_ref(context, label->type, false)) {
         return false;
@@ -6475,7 +6475,7 @@ static bool resolve_union_match_label_index(ResolveContext *context,
         bool ok = resolver_append_error(
             context,
             label->token,
-            "AE0044", format_message("type label '%s' is not a member of the target union-form spec",
+            "AE0605", format_message("type label '%s' is not a member of the target union-form spec",
                            label_name != NULL ? label_name : "<type>"));
 
         free(label_name);
@@ -6594,7 +6594,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
     if (info == NULL || info->member_count == 0U) {
         return resolver_append_error(context,
                                      target != NULL ? target->token : anchor,
-                                     "AE0045", format_message("union-form spec metadata is unavailable"));
+                                     "AE0606", format_message("union-form spec metadata is unavailable"));
     }
 
     active_members = (bool *)malloc(info->member_count * sizeof(*active_members));
@@ -6662,14 +6662,14 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                 ok = resolver_append_error(
                     context,
                     label->token,
-                    "AE0046", format_message("union match label overlaps with an earlier label and is unreachable"));
+                    "AE0607", format_message("union match label overlaps with an earlier label and is unreachable"));
                 break;
             }
             if (branch_members[member_index]) {
                 ok = resolver_append_error(
                     context,
                     label->token,
-                    "AE0047", format_message("union match branch lists the same member more than once"));
+                    "AE0607", format_message("union match branch lists the same member more than once"));
                 break;
             }
             branch_members[member_index] = true;
@@ -6735,7 +6735,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
     } else if (ok && is_expression_form) {
         ok = resolver_append_error(context,
                                    anchor,
-                                   "AE0048", format_message("match expressions require an else branch"));
+                                   "AE1108", format_message("match expressions require an else branch"));
     }
 
     free(active_members);
@@ -6770,7 +6770,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                     bool result = resolver_append_error(
                         context,
                         branches[index].token,
-                        "AE0049", format_message("match expression branches must have the same type, got '%s' and '%s'",
+                        "AE1108", format_message("match expression branches must have the same type, got '%s' and '%s'",
                                        expected_name != NULL ? expected_name : "<unknown>",
                                        branch_name != NULL ? branch_name : "<unknown>"));
 
@@ -6920,7 +6920,7 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
         return resolver_append_error(
             context,
             anchor,
-            "AE0048", format_message("match expressions require an else branch"));
+            "AE1108", format_message("match expressions require an else branch"));
     }
 
     if (is_expression_form) {
@@ -6953,7 +6953,7 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
 
                     free(expected_name);
                     free(branch_name);
-                    return resolver_append_error(context, branches[i].token, "AE0049", message);
+                    return resolver_append_error(context, branches[i].token, "AE1108", message);
                 }
             }
         }
@@ -7131,7 +7131,7 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
         return resolver_append_error(
             context,
             stmt->token,
-            "AE0055", format_message("%s body must use 'return;' without a value", member_kind_name));
+            "AE0501", format_message("%s body must use 'return;' without a value", member_kind_name));
     }
 
     if (stmt->as.return_value != NULL &&
@@ -7140,7 +7140,7 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
         if (!resolver_append_error(
                 context,
                 stmt->as.return_value->token,
-                "AE0056", format_message(
+                "AE1314", format_message(
                     "expression '%s' is a borrowed data pointer formed by '&'; borrowed data pointers are only guaranteed valid for the current extern call and cannot be returned; retain the original owner instead of returning the raw pointer",
                     expr_name != NULL ? expr_name : "<expression>"))) {
             free(expr_name);
@@ -7266,7 +7266,7 @@ static bool ensure_enum_decl_info(ResolveContext *context, const FengDecl *enum_
             return resolver_append_error(
                 context,
                 item->token,
-                "AE0059", format_message("enum '%.*s' cannot mix explicit and implicit item values",
+                "AE0401", format_message("enum '%.*s' cannot mix explicit and implicit item values",
                                (int)enum_decl->as.enum_decl.name.length,
                                enum_decl->as.enum_decl.name.data));
         }
@@ -7277,7 +7277,7 @@ static bool ensure_enum_decl_info(ResolveContext *context, const FengDecl *enum_
                 return resolver_append_error(
                     context,
                     item->token,
-                    "AE0060", format_message("enum '%.*s' has duplicate item name '%.*s'",
+                    "AE0402", format_message("enum '%.*s' has duplicate item name '%.*s'",
                                    (int)enum_decl->as.enum_decl.name.length,
                                    enum_decl->as.enum_decl.name.data,
                                    (int)item->name.length,
@@ -7294,7 +7294,7 @@ static bool ensure_enum_decl_info(ResolveContext *context, const FengDecl *enum_
                 return resolver_append_error(
                     context,
                     item->token,
-                    "AE0061", format_message("enum '%.*s' has duplicate item value %lld",
+                    "AE0403", format_message("enum '%.*s' has duplicate item value %lld",
                                    (int)enum_decl->as.enum_decl.name.length,
                                    enum_decl->as.enum_decl.name.data,
                                    (long long)duplicate_value));
@@ -7703,7 +7703,7 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
             return resolver_append_error(
                 context,
                 ann != NULL ? ann->token : member->token,
-                "AE0062", format_message(
+                "AE1315", format_message(
                     "@%s can only be applied to methods",
                     has_iterable ? "iterable" : "iterator")) &&
                    false;
@@ -7728,7 +7728,7 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
         return resolver_append_error(
             context,
             iterable_method->token,
-            "AE0063", format_message(
+            "AE0319", format_message(
                 "type '%.*s' has multiple @iterable methods",
                 (int)decl_typeish_name(type_decl).length,
                 decl_typeish_name(type_decl).data)) &&
@@ -7740,7 +7740,7 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
         return resolver_append_error(
             context,
             iterator_method->token,
-            "AE0064", format_message(
+            "AE0320", format_message(
                 "type '%.*s' has multiple @iterator methods",
                 (int)decl_typeish_name(type_decl).length,
                 decl_typeish_name(type_decl).data)) &&
@@ -7752,7 +7752,7 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
         return resolver_append_error(
             context,
             iterator_method->token,
-            "AE0065", format_message(
+            "AE0321", format_message(
                 "type '%.*s' cannot have both @iterable and @iterator",
                 (int)decl_typeish_name(type_decl).length,
                 decl_typeish_name(type_decl).data)) &&
@@ -7768,7 +7768,7 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
             return resolver_append_error(
                 context,
                 iterable_method->token,
-                "AE0066", format_message("@iterable method must take no parameters")) &&
+                "AE0322", format_message("@iterable method must take no parameters")) &&
                    false;
         }
 
@@ -7779,7 +7779,7 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
             return resolver_append_error(
                 context,
                 iterable_method->token,
-                "AE0067", format_message(
+                "AE0323", format_message(
                     "return type of @iterable method has no @iterator method")) &&
                    false;
         }
@@ -7795,7 +7795,7 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
             return resolver_append_error(
                 context,
                 iterator_method->token,
-                "AE0068", format_message("@iterator method must take no parameters")) &&
+                "AE0324", format_message("@iterator method must take no parameters")) &&
                    false;
         }
 
@@ -7806,7 +7806,7 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
             return resolver_append_error(
                 context,
                 iterator_method->token,
-                "AE0069", format_message(
+                "AE0325", format_message(
                     "@iterator method must return a named tuple type of the form (bool, E)")) &&
                    false;
         }
@@ -7824,7 +7824,7 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
                 return resolver_append_error(
                     context,
                     iterator_method->token,
-                    "AE0069", format_message(
+                    "AE0325", format_message(
                         "@iterator method must return a named tuple type of the form (bool, E)")) &&
                        false;
             }
@@ -7838,7 +7838,7 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
             return resolver_append_error(
                 context,
                 iterator_method->token,
-                "AE0069", format_message(
+                "AE0325", format_message(
                     "@iterator method must return a named tuple type of the form (bool, E)")) &&
                    false;
         }
@@ -7848,7 +7848,7 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
                 return resolver_append_error(
                     context,
                     iterator_method->token,
-                    "AE0069", format_message(
+                    "AE0325", format_message(
                         "@iterator method must return a named tuple type of the form (bool, E)")) &&
                        false;
             }
@@ -7877,7 +7877,7 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
                 return resolver_append_error(
                     context,
                     member->token,
-                    "AE0070", format_message(
+                    "AE0316", format_message(
                         "generic type '%.*s' cannot declare a finalizer",
                         (int)decl_typeish_name(type_decl).length,
                         decl_typeish_name(type_decl).data));
@@ -7901,7 +7901,7 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
             return resolver_append_error(
                 context,
                 member->token,
-                "AE0071", format_message(
+                "AE0317", format_message(
                     "type '%.*s' is marked as @abi and cannot declare a finalizer",
                     (int)decl_typeish_name(type_decl).length,
                     decl_typeish_name(type_decl).data));
@@ -7911,7 +7911,7 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
             return resolver_append_error(
                 context,
                 member->token,
-                "AE0072", format_message(
+                "AE0318", format_message(
                     "type '%.*s' declares more than one finalizer",
                     (int)decl_typeish_name(type_decl).length,
                     decl_typeish_name(type_decl).data));
@@ -8954,7 +8954,7 @@ static bool validate_loop_control_stmt(ResolveContext *context,
         return resolver_append_error(
             context,
             stmt != NULL ? stmt->token : context->program->module_token,
-            "AE0073", format_message("'%s' cannot appear directly inside an 'if' expression block; "
+            "AE1110", format_message("'%s' cannot appear directly inside an 'if' expression block; "
                            "place it inside a loop within the block",
                            keyword));
     }
@@ -8963,7 +8963,7 @@ static bool validate_loop_control_stmt(ResolveContext *context,
         return resolver_append_error(
             context,
             stmt != NULL ? stmt->token : context->program->module_token,
-            "AE0074", format_message("'%s' cannot appear directly inside a catch block; "
+            "AE1405", format_message("'%s' cannot appear directly inside a catch block; "
                            "place it inside a loop within the block",
                            keyword));
     }
@@ -8971,7 +8971,7 @@ static bool validate_loop_control_stmt(ResolveContext *context,
     return resolver_append_error(
         context,
         stmt != NULL ? stmt->token : context->program->module_token,
-        "AE0075", format_message("'%s' statement is only allowed inside a 'while' or 'for' loop",
+        "AE1201", format_message("'%s' statement is only allowed inside a 'while' or 'for' loop",
 
                        keyword));
 }
@@ -9268,7 +9268,7 @@ static bool validate_throw_stmt(ResolveContext *context, const FengStmt *stmt) {
         return resolver_append_error(
             context,
             stmt->token,
-            "AE0077", format_message("throw statement requires a non-void expression"));
+            "AE1402", format_message("throw statement requires a non-void expression"));
     }
 
     if (!inferred_expr_type_is_throwable(context, throw_type, &reason)) {
@@ -10634,7 +10634,7 @@ static bool report_existing_array_rejected_for_variadic_call(ResolveContext *con
     bool ok = resolver_append_error(
         context,
         callee != NULL ? callee->token : (FengToken){0},
-        "AE0078", format_message(
+        "AE0505", format_message(
             "call target '%s' does not accept an existing array at a variadic argument position; pass elements individually",
             target_name != NULL ? target_name : "<expression>"));
 
@@ -10694,7 +10694,7 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
         if (!resolver_append_error(
                 context,
                 callee->token,
-                "AE0079", format_message("call target '%s' has no function type overload accepting %zu argument(s)",
+                "AE0506", format_message("call target '%s' has no function type overload accepting %zu argument(s)",
                                target_name != NULL ? target_name : "<expression>",
                                arg_count))) {
             free(target_name);
@@ -10740,7 +10740,7 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
         if (!resolver_append_error(
                 context,
                 callee->token,
-                "AE0079", format_message("call target '%s' has no function type overload accepting %zu argument(s)",
+                "AE0506", format_message("call target '%s' has no function type overload accepting %zu argument(s)",
                                target_name != NULL ? target_name : "<expression>",
                                arg_count))) {
             free(target_name);
@@ -10758,7 +10758,7 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
     target_name = format_expr_target_name(callee);
     if (!resolver_append_error(context,
                                callee->token,
-                               "AE0080", format_message("expression '%s' is not callable",
+                               "AE0507", format_message("expression '%s' is not callable",
                                               target_name != NULL ? target_name : "<expression>"))) {
         free(target_name);
         return false;
@@ -11491,7 +11491,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                 return resolver_append_error(
                     context,
                     expr->token,
-                    "AE0081", format_message("static member '%.*s' of type '%.*s' is not accessible from the current module",
+                    "AE0305", format_message("static member '%.*s' of type '%.*s' is not accessible from the current module",
                                    static_member->kind == FENG_TYPE_MEMBER_FIELD
                                        ? (int)static_member->as.field.name.length
                                        : (int)static_member->as.callable.name.length,
@@ -11509,7 +11509,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
             return resolver_append_error(
                 context,
                 expr->token,
-                "AE0082", format_message("type '%.*s' has no static member '%.*s'",
+                "AE0309", format_message("type '%.*s' has no static member '%.*s'",
                                (int)type_target.type_decl->as.type_decl.name.length,
                                type_target.type_decl->as.type_decl.name.data,
                                (int)expr->as.member.member.length,
@@ -11533,7 +11533,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
             return resolver_append_error(
                 context,
                 expr->token,
-                "AE0083", format_message("enum '%.*s' has no item '%.*s'",
+                "AE0404", format_message("enum '%.*s' has no item '%.*s'",
                                (int)type_target.type_decl->as.enum_decl.name.length,
                                type_target.type_decl->as.enum_decl.name.data,
                                (int)expr->as.member.member.length,
@@ -11553,7 +11553,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
             return resolver_append_error(
                 context,
                 expr->token,
-                "AE0082", format_message("type '%.*s' has no static member '%.*s'",
+                "AE0309", format_message("type '%.*s' has no static member '%.*s'",
                                (int)type_target.builtin_name.length,
                                type_target.builtin_name.data,
                                (int)expr->as.member.member.length,
@@ -11586,7 +11586,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
             return resolver_append_error(
                 context,
                 expr->token,
-                "AE0084", format_message("static member '%.*s' must be accessed through its type",
+                "AE0310", format_message("static member '%.*s' must be accessed through its type",
                                (int)expr->as.member.member.length,
                                expr->as.member.member.data));
         }
@@ -11603,7 +11603,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                     return resolver_append_error(
                         context,
                         expr->token,
-                        "AE0085", format_message("union-form constrained value must be narrowed to a single member before accessing member '%.*s'",
+                        "AE0604", format_message("union-form constrained value must be narrowed to a single member before accessing member '%.*s'",
                                        (int)expr->as.member.member.length,
                                        expr->as.member.member.data));
                 }
@@ -11617,7 +11617,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                 bool ok = resolver_append_error(
                     context,
                     expr->token,
-                    "AE0086", format_message("type '%s' has no member '%.*s'",
+                    "AE0306", format_message("type '%s' has no member '%.*s'",
                                    owner_name,
                                    (int)expr->as.member.member.length,
                                    expr->as.member.member.data));
@@ -11630,7 +11630,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
         return resolver_append_error(
             context,
             expr->token,
-            "AE0086", format_message("type '%s' has no member '%.*s'",
+            "AE0306", format_message("type '%s' has no member '%.*s'",
                            builtin_name,
                            (int)expr->as.member.member.length,
                            expr->as.member.member.data));
@@ -11644,7 +11644,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                 return resolver_append_error(
                     context,
                     expr->token,
-                    "AE0087", format_message("union-form spec '%.*s' must be narrowed to a single member before accessing member '%.*s'",
+                    "AE0604", format_message("union-form spec '%.*s' must be narrowed to a single member before accessing member '%.*s'",
                                    (int)owner_name.length,
                                    owner_name.data,
                                    (int)expr->as.member.member.length,
@@ -11653,7 +11653,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
             return resolver_append_error(
                 context,
                 expr->token,
-                "AE0088", format_message("spec '%.*s' is callable-form and has no member '%.*s'",
+                "AE1008", format_message("spec '%.*s' is callable-form and has no member '%.*s'",
                                (int)owner_name.length,
                                owner_name.data,
                                (int)expr->as.member.member.length,
@@ -11669,7 +11669,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
         return resolver_append_error(
             context,
             expr->token,
-            "AE0089", format_message("spec '%.*s' has no member '%.*s'",
+            "AE1008", format_message("spec '%.*s' has no member '%.*s'",
                            (int)owner_name.length,
                            owner_name.data,
                            (int)expr->as.member.member.length,
@@ -11690,7 +11690,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                 return resolver_append_error(
                     context,
                     expr->token,
-                    "AE0084", format_message("static member '%.*s' must be accessed through its type",
+                    "AE0310", format_message("static member '%.*s' must be accessed through its type",
                                    (int)expr->as.member.member.length,
                                    expr->as.member.member.data));
             }
@@ -11700,7 +11700,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
             return resolver_append_error(
                 context,
                 expr->token,
-                "AE0090", format_message("type '%.*s' has no member '%.*s'",
+                "AE0306", format_message("type '%.*s' has no member '%.*s'",
                                (int)owner_name.length,
                                owner_name.data,
                                (int)expr->as.member.member.length,
@@ -11723,14 +11723,14 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
             return resolver_append_error(
                 context,
                 expr->token,
-                "AE0084", format_message("static member '%.*s' must be accessed through its type",
+                "AE0310", format_message("static member '%.*s' must be accessed through its type",
                                (int)expr->as.member.member.length,
                                expr->as.member.member.data));
         }
         return resolver_append_error(
             context,
             expr->token,
-            "AE0090", format_message("type '%.*s' has no member '%.*s'",
+            "AE0306", format_message("type '%.*s' has no member '%.*s'",
                            (int)owner_type_decl->as.type_decl.name.length,
                            owner_type_decl->as.type_decl.name.data,
                            (int)expr->as.member.member.length,
@@ -11742,7 +11742,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
             return resolver_append_error(
                 context,
                 expr->token,
-                "AE0091", format_message("fit body cannot access private member '%.*s' of target type '%.*s'",
+                "AE0307", format_message("fit body cannot access private member '%.*s' of target type '%.*s'",
                                member->kind == FENG_TYPE_MEMBER_FIELD ? (int)member->as.field.name.length
                                                                       : (int)member->as.callable.name.length,
                                member->kind == FENG_TYPE_MEMBER_FIELD ? member->as.field.name.data
@@ -11756,7 +11756,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
     return resolver_append_error(
         context,
         expr->token,
-        "AE0092", format_message("member '%.*s' of type '%.*s' is not accessible from the current module",
+        "AE0308", format_message("member '%.*s' of type '%.*s' is not accessible from the current module",
                        member->kind == FENG_TYPE_MEMBER_FIELD ? (int)member->as.field.name.length
                                                               : (int)member->as.callable.name.length,
                        member->kind == FENG_TYPE_MEMBER_FIELD ? member->as.field.name.data
@@ -11902,7 +11902,7 @@ static bool validate_let_field_object_literal_binding(ResolveContext *context,
         return resolver_append_error(
             context,
             field->token,
-            "AE0093", format_message("object literal field '%.*s' repeats final binding of let member '%.*s' already completed by declaration initializer",
+            "AE0102", format_message("object literal field '%.*s' repeats final binding of let member '%.*s' already completed by declaration initializer",
                            (int)field->name.length,
                            field->name.data,
                            (int)field->name.length,
@@ -11940,7 +11940,7 @@ static bool validate_let_field_object_literal_binding(ResolveContext *context,
         return resolver_append_error(
             context,
             field->token,
-            "AE0094", format_message("object literal field '%.*s' repeats final binding of let member '%.*s' already completed by constructor '%.*s'",
+            "AE0102", format_message("object literal field '%.*s' repeats final binding of let member '%.*s' already completed by constructor '%.*s'",
                            (int)field->name.length,
                            field->name.data,
                            (int)field->name.length,
@@ -11969,7 +11969,7 @@ static bool validate_self_let_assignment(ResolveContext *context, const FengStmt
         return resolver_append_error(
             context,
             stmt->as.assign.target->token,
-            "AE0095", format_message("let member '%.*s' cannot be directly assigned outside constructors",
+            "AE0103", format_message("let member '%.*s' cannot be directly assigned outside constructors",
                            (int)field_member->as.field.name.length,
                            field_member->as.field.name.data));
     }
@@ -11978,7 +11978,7 @@ static bool validate_self_let_assignment(ResolveContext *context, const FengStmt
         return resolver_append_error(
             context,
             stmt->as.assign.target->token,
-            "AE0096", format_message("constructor assignment repeats final binding of let member '%.*s' already completed by declaration initializer",
+            "AE0102", format_message("constructor assignment repeats final binding of let member '%.*s' already completed by declaration initializer",
                            (int)field_member->as.field.name.length,
                            field_member->as.field.name.data));
     }
@@ -11987,7 +11987,7 @@ static bool validate_self_let_assignment(ResolveContext *context, const FengStmt
         return resolver_append_error(
             context,
             stmt->as.assign.target->token,
-            "AE0097", format_message("constructor assignment repeats final binding of let member '%.*s' more than once in constructor '%.*s'",
+            "AE0102", format_message("constructor assignment repeats final binding of let member '%.*s' more than once in constructor '%.*s'",
                            (int)field_member->as.field.name.length,
                            field_member->as.field.name.data,
                            (int)context->current_callable_member->as.callable.name.length,
@@ -12071,7 +12071,7 @@ static bool validate_array_literal_expr(ResolveContext *context, const FengExpr 
             bool ok = resolver_append_error(
                 context,
                 expr->as.array_literal.items[item_index]->token,
-                "AE0098", format_message("array literal element at index %zu does not match expected type '%s'",
+                "AE0201", format_message("array literal element at index %zu does not match expected type '%s'",
                                item_index,
                                type_name != NULL ? type_name : "<type>"));
 
@@ -12089,7 +12089,7 @@ static bool append_assignment_target_not_writable_error(ResolveContext *context,
     bool ok = resolver_append_error(
         context,
         target->token,
-        "AE0099", format_message("assignment target '%s' is not writable",
+        "AE0104", format_message("assignment target '%s' is not writable",
                        target_name != NULL ? target_name : "<expression>"));
 
     free(target_name);
@@ -13887,7 +13887,7 @@ static bool report_lambda_requires_callable_spec_target(ResolveContext *context,
     return resolver_append_error(
         context,
         expr != NULL ? expr->token : context->program->module_token,
-        "AE0101", format_message("lambda expression in %s requires an explicit callable-form spec target type",
+        "AE0520", format_message("lambda expression in %s requires an explicit callable-form spec target type",
                        position != NULL ? position : "this position"));
 }
 
@@ -14885,7 +14885,7 @@ static bool validate_borrowed_data_pointer_call_arguments(
         if (!resolver_append_error(
                 context,
                 args[index]->token,
-                "AE0102", format_message(
+                "AE1323", format_message(
                     "argument %zu expression '%s' is a borrowed data pointer formed by '&'; borrowed data pointers are only guaranteed valid for the current extern call and cannot be passed to non-extern callable '%s'; retain the original owner and form the pointer at the extern boundary",
                     index + 1U,
                     expr_name != NULL ? expr_name : "<expression>",
@@ -14917,7 +14917,7 @@ static bool validate_borrowed_data_pointer_object_field(ResolveContext *context,
     if (!resolver_append_error(
             context,
             field->token,
-            "AE0103", format_message(
+            "AE1324", format_message(
                 "object literal field '%.*s' cannot store borrowed data pointer expression '%s'; borrowed data pointers are only guaranteed valid for the current extern call; retain the original owner instead of caching the raw pointer",
                 (int)field->name.length,
                 field->name.data,
@@ -14948,7 +14948,7 @@ static bool validate_borrowed_data_pointer_assignment(ResolveContext *context,
     if (!resolver_append_error(
             context,
             value->token,
-            "AE0104", format_message(
+            "AE1325", format_message(
                 "assignment target '%s' cannot store borrowed data pointer expression '%s'; borrowed data pointers are only guaranteed valid for the current extern call; retain the original owner instead of caching the raw pointer",
                 target_name != NULL ? target_name : "<target>",
                 expr_name != NULL ? expr_name : "<expression>"))) {
@@ -14997,7 +14997,7 @@ static bool validate_expr_against_expected_abi_function_pointer_type(
         bool ok = resolver_append_error(
             context,
             expr->token,
-            "AE0105", format_message(
+            "AE0521", format_message(
                 "expression '%s' has multiple overloads matching expected ABI function pointer type '%s'",
                 expr_name != NULL ? expr_name : "<expression>",
                 type_name != NULL ? type_name : "<type>"));
@@ -15049,7 +15049,7 @@ static bool validate_function_typed_expr(ResolveContext *context,
         bool ok = resolver_append_error(
             context,
             expr->token,
-            "AE0106", format_message("expression '%s' has multiple overloads matching expected function type '%s'",
+            "AE0521", format_message("expression '%s' has multiple overloads matching expected function type '%s'",
                            expr_name != NULL ? expr_name : "<expression>",
                            type_name != NULL ? type_name : "<type>"));
 
@@ -15062,7 +15062,7 @@ static bool validate_function_typed_expr(ResolveContext *context,
         bool ok = resolver_append_error(
             context,
             expr->token,
-            "AE0107", format_message("expression '%s' does not match expected function type '%s'",
+            "AE0522", format_message("expression '%s' does not match expected function type '%s'",
                            expr_name != NULL ? expr_name : "<expression>",
                            type_name != NULL ? type_name : "<type>"));
 
@@ -15130,7 +15130,7 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
                     bool ok = resolver_append_error(
                         context,
                         expr->token,
-                        "AE0108", format_message("expression '%s' matches multiple members of union-form spec '%s'; use an explicit cast to select the target member",
+                        "AE0608", format_message("expression '%s' matches multiple members of union-form spec '%s'; use an explicit cast to select the target member",
                                        expr_name_local != NULL ? expr_name_local : "<expression>",
                                        type_name_local != NULL ? type_name_local : "<type>"));
 
@@ -15160,7 +15160,7 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
         type_name = format_type_ref_name(expected_type_ref);
         if (!resolver_append_error(context,
                                    expr->token,
-                                   "AE0109", format_message("expression '%s' does not match expected type '%s'",
+                                   "AE1003", format_message("expression '%s' does not match expected type '%s'",
                                                   expr_name != NULL ? expr_name : "<expression>",
                                                   type_name != NULL ? type_name : "<type>"))) {
             free(expr_name);
@@ -15177,7 +15177,7 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
     type_name = format_type_ref_name(expected_type_ref);
     if (!resolver_append_error(context,
                                expr->token,
-                               "AE0109", format_message("expression '%s' does not match expected type '%s'",
+                               "AE1003", format_message("expression '%s' does not match expected type '%s'",
                                               expr_name != NULL ? expr_name : "<expression>",
                                               type_name != NULL ? type_name : "<type>"))) {
         free(expr_name);
@@ -15514,7 +15514,7 @@ static bool validate_type_member_overloads(ResolveContext *context, const FengDe
                     ok = resolver_append_error(
                              context,
                              si->token,
-                             "AE0110", format_message(
+                             "AE0508", format_message(
                                  "duplicate method signature '%.*s' in type '%.*s'",
                                  (int)si->name.length, si->name.data,
                                  (int)decl->as.type_decl.name.length,
@@ -15523,7 +15523,7 @@ static bool validate_type_member_overloads(ResolveContext *context, const FengDe
                     ok = resolver_append_error(
                              context,
                              si->token,
-                             "AE0111", format_message(
+                             "AE0509", format_message(
                                  "method overloads in type '%.*s' cannot differ only by return type: '%.*s'",
                                  (int)decl->as.type_decl.name.length,
                                  decl->as.type_decl.name.data,
@@ -15534,7 +15534,7 @@ static bool validate_type_member_overloads(ResolveContext *context, const FengDe
                 ok = resolver_append_error(
                          context,
                          si->token,
-                         "AE0112", format_message(
+                         "AE0510", format_message(
                              "variadic method overload conflicts with existing method '%.*s' in type '%.*s'",
                              (int)si->name.length, si->name.data,
                              (int)decl->as.type_decl.name.length,
@@ -15587,7 +15587,7 @@ static bool validate_fit_member_overloads(ResolveContext *context, const FengDec
                     ok = resolver_append_error(
                              context,
                              si->token,
-                             "AE0113", format_message(
+                             "AE0801", format_message(
                                  "duplicate method signature '%.*s' in fit target '%s'",
                                  (int)si->name.length, si->name.data,
                                  target_name != NULL ? target_name : "<unknown>")) && ok;
@@ -15595,7 +15595,7 @@ static bool validate_fit_member_overloads(ResolveContext *context, const FengDec
                     ok = resolver_append_error(
                              context,
                              si->token,
-                             "AE0114", format_message(
+                             "AE0802", format_message(
                                  "method overloads in fit target '%s' cannot differ only by return type: '%.*s'",
                                  target_name != NULL ? target_name : "<unknown>",
                                  (int)si->name.length, si->name.data)) && ok;
@@ -15605,7 +15605,7 @@ static bool validate_fit_member_overloads(ResolveContext *context, const FengDec
                 ok = resolver_append_error(
                          context,
                          si->token,
-                         "AE0115", format_message(
+                         "AE0803", format_message(
                              "variadic method overload conflicts with existing method '%.*s' in fit target '%s'",
                              (int)si->name.length, si->name.data,
                              target_name != NULL ? target_name : "<unknown>")) && ok;
@@ -15640,7 +15640,7 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
             return resolver_append_error(
                 context,
                 decl->token,
-                "AE0116", format_message(
+                "AE1304", format_message(
                     "object-form spec '%.*s' cannot be marked as @abi; @abi only applies to type declarations and callable-form spec",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
@@ -15649,7 +15649,7 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
             return resolver_append_error(
                 context,
                 decl->token,
-                "AE0117", format_message(
+                "AE1305", format_message(
                     "spec '%.*s' cannot use calling convention annotations",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
@@ -15662,7 +15662,7 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
             return resolver_append_error(
                 context,
                 decl->token,
-                "AE0118", format_message(
+                "AE1304", format_message(
                     "union-form spec '%.*s' cannot be marked as @abi; union values use compiler-managed aggregate layout",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
@@ -15671,7 +15671,7 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
             return resolver_append_error(
                 context,
                 decl->token,
-                "AE0117", format_message(
+                "AE1305", format_message(
                     "spec '%.*s' cannot use calling convention annotations",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
@@ -15684,7 +15684,7 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
             return resolver_append_error(
                 context,
                 decl->token,
-                "AE0119", format_message("type '%.*s' cannot use calling convention annotations",
+                "AE1305", format_message("type '%.*s' cannot use calling convention annotations",
                                (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
         }
@@ -15695,7 +15695,7 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
         return resolver_append_error(
             context,
             decl->token,
-            "AE0120", format_message(
+            "AE1304", format_message(
                 "type '%.*s' cannot be marked as @abi because calling convention annotations do not apply to type declarations",
                 (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data));
@@ -15719,7 +15719,7 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
             ok = resolver_append_error(
                 context,
                 param->token,
-                "AE0121", format_message(
+                "AE1310", format_message(
                     "type '%.*s' cannot be marked as @abi because parameter '%.*s' uses non-ABI-stable type '%s'",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data,
@@ -15738,7 +15738,7 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
             bool ok = resolver_append_error(
                 context,
                 decl->token,
-                "AE0122", format_message(
+                "AE1311", format_message(
                     "type '%.*s' cannot be marked as @abi because return type '%s' is not ABI-stable",
                     (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data,
@@ -15765,7 +15765,7 @@ static bool validate_abi_type_declaration(ResolveContext *context, const FengDec
         ok = resolver_append_error(
             context,
             member->token,
-            "AE0123", format_message(
+            "AE1312", format_message(
                 "type '%.*s' cannot be marked as @abi because field '%.*s' uses non-ABI-stable type '%s'",
                 (int)decl_typeish_name(decl).length,
                     decl_typeish_name(decl).data,
@@ -15811,7 +15811,7 @@ static bool validate_abi_callable_signature(ResolveContext *context,
             return resolver_append_error(
                 context,
                 calling_convention != NULL ? calling_convention->token : token,
-                "AE0124", format_message(
+                "AE1316", format_message(
                     "%s '%.*s' cannot use calling convention annotations unless it is marked as @abi or declared extern",
                     callable_kind,
                     (int)name.length,
@@ -15824,7 +15824,7 @@ static bool validate_abi_callable_signature(ResolveContext *context,
         return resolver_append_error(
             context,
             token,
-            "AE0125", format_message(
+            "AE1303", format_message(
                 "%s '%.*s' cannot be marked as @abi because extern functions declare imported C symbols",
                 callable_kind,
                 (int)name.length,
@@ -15835,7 +15835,7 @@ static bool validate_abi_callable_signature(ResolveContext *context,
         return resolver_append_error(
             context,
             token,
-            "AE0126", format_message(
+            "AE1306", format_message(
                 "%s '%.*s' cannot be marked as @abi because it uses more than one calling convention annotation",
                 callable_kind,
                 (int)name.length,
@@ -15846,7 +15846,7 @@ static bool validate_abi_callable_signature(ResolveContext *context,
         return resolver_append_error(
             context,
             calling_convention->token,
-            "AE0127", format_message(
+            "AE1306", format_message(
                 "%s '%.*s' cannot be marked as @abi because calling convention annotations on @abi declarations must not take library arguments",
                 callable_kind,
                 (int)name.length,
@@ -15867,7 +15867,7 @@ static bool validate_abi_callable_signature(ResolveContext *context,
         ok = resolver_append_error(
             context,
             param->token,
-            "AE0128", format_message(
+            "AE1310", format_message(
                 "%s '%.*s' cannot be marked as @abi because parameter '%.*s' uses non-ABI-stable type '%s'",
                 callable_kind,
                 (int)name.length,
@@ -15891,7 +15891,7 @@ static bool validate_abi_callable_signature(ResolveContext *context,
         bool ok = resolver_append_error(
             context,
             callable->return_type != NULL ? callable->return_type->token : token,
-            "AE0129", format_message(
+            "AE1311", format_message(
                 "%s '%.*s' cannot be marked as @abi because return type '%s' is not ABI-stable",
                 callable_kind,
                 (int)name.length,
@@ -15905,7 +15905,7 @@ static bool validate_abi_callable_signature(ResolveContext *context,
         return resolver_append_error(
             context,
             token,
-            "AE0130", format_message(
+            "AE1313", format_message(
                 "%s '%.*s' cannot be marked as @abi because uncaught exceptions must not cross the @abi ABI boundary",
                 callable_kind,
                 (int)name.length,
@@ -16040,7 +16040,7 @@ static bool validate_extern_function_signature(ResolveContext *context, const Fe
         if (!resolver_append_error(
                 context,
                 param->token,
-                "AE0131", format_message(
+                "AE1318", format_message(
                     "extern function '%.*s' parameter '%.*s' type '%s' is not C ABI-stable",
                     (int)callable->name.length,
                     callable->name.data,
@@ -16060,7 +16060,7 @@ static bool validate_extern_function_signature(ResolveContext *context, const Fe
         bool ok = resolver_append_error(
             context,
             callable->token,
-            "AE0132", format_message("extern function '%.*s' return type '%s' is not C ABI-stable",
+            "AE1319", format_message("extern function '%.*s' return type '%s' is not C ABI-stable",
                            (int)callable->name.length,
                            callable->name.data,
                            type_name != NULL ? type_name : "<type>"));
@@ -16106,7 +16106,7 @@ static bool validate_abi_callable_member(ResolveContext *context, const FengType
         return resolver_append_error(
             context,
             member->token,
-            "AE0133", format_message(
+            "AE1317", format_message(
                 "constructor '%.*s' cannot use ABI annotations",
                 (int)member->as.callable.name.length,
                 member->as.callable.name.data));
@@ -16120,7 +16120,7 @@ static bool validate_abi_callable_member(ResolveContext *context, const FengType
         return resolver_append_error(
             context,
             member->token,
-            "AE0134", format_message(
+            "AE1317", format_message(
                 "finalizer '~%.*s' cannot use ABI annotations",
                 (int)member->as.callable.name.length,
                 member->as.callable.name.data));
@@ -16160,7 +16160,7 @@ static bool validate_expr_against_expected_inferred_type(ResolveContext *context
     type_name = format_inferred_expr_type_name(expected_type);
     if (!resolver_append_error(context,
                                expr->token,
-                               "AE0109", format_message("expression '%s' does not match expected type '%s'",
+                               "AE1003", format_message("expression '%s' does not match expected type '%s'",
                                               expr_name != NULL ? expr_name : "<expression>",
                                               type_name != NULL ? type_name : "<type>"))) {
         free(expr_name);
@@ -16187,7 +16187,7 @@ static bool validate_untyped_callable_value_expr(ResolveContext *context, const 
     expr_name = format_expr_target_name(expr);
     if (!resolver_append_error(context,
                                expr != NULL ? expr->token : context->program->module_token,
-                               "AE0135", format_message("expression '%s' requires an explicit target function type to resolve overloads",
+                               "AE0523", format_message("expression '%s' requires an explicit target function type to resolve overloads",
                                               expr_name != NULL ? expr_name : "<expression>"))) {
         free(expr_name);
         return false;
@@ -16210,7 +16210,7 @@ static bool validate_untyped_address_of_expr(ResolveContext *context, const Feng
         if (!resolver_append_error(
                 context,
                 expr->token,
-                "AE0136", format_message(
+                "AE1010", format_message(
                     "expression '%s' requires an explicit target Foo* type to form an ABI function pointer",
                     expr_name != NULL ? expr_name : "<expression>"))) {
             free(expr_name);
@@ -16230,7 +16230,7 @@ static bool validate_untyped_address_of_expr(ResolveContext *context, const Feng
     if (!resolver_append_error(
             context,
             expr->token,
-            "AE0137", format_message(
+            "AE1010", format_message(
                 "expression '%s' cannot form an ABI function pointer; ABI function pointers can only be formed from top-level @abi functions with an explicit Foo* target type",
                 expr_name != NULL ? expr_name : "<expression>"))) {
         free(expr_name);
@@ -16248,7 +16248,7 @@ static bool validate_untyped_array_literal_expr(ResolveContext *context, const F
 
     return resolver_append_error(context,
                                  expr->token,
-                                 "AE0138", format_message("empty array literal requires an explicit target array type"));
+                                 "AE0203", format_message("empty array literal requires an explicit target array type"));
 }
 
 /* Tuple literals have no anonymous type and therefore need a named target. */
@@ -16260,7 +16260,7 @@ static bool validate_untyped_tuple_literal_expr(ResolveContext *context, const F
     return resolver_append_error(
         context,
         expr->token,
-        "AE0139", format_message("tuple literal requires an explicit named tuple target type"));
+        "AE0301", format_message("tuple literal requires an explicit named tuple target type"));
 }
 
 static bool validate_constructor_invocation(ResolveContext *context,
@@ -16289,7 +16289,7 @@ static bool validate_constructor_invocation(ResolveContext *context,
         bool ok = resolver_append_error(
             context,
             target_expr != NULL ? target_expr->token : context->program->module_token,
-            "AE0140", format_message("%s '%.*s' is not an object type and cannot be constructed",
+            "AE0312", format_message("%s '%.*s' is not an object type and cannot be constructed",
                            kind_label,
                            (int)name.length,
                            name.data));
@@ -16306,7 +16306,7 @@ static bool validate_constructor_invocation(ResolveContext *context,
         return resolver_append_error(
             context,
             target_expr != NULL ? target_expr->token : context->program->module_token,
-            "AE0141", format_message("type '%.*s' has no constructor accepting %zu argument(s)",
+            "AE0313", format_message("type '%.*s' has no constructor accepting %zu argument(s)",
                            (int)type_decl->as.type_decl.name.length,
                            type_decl->as.type_decl.name.data,
                            arg_count));
@@ -16340,7 +16340,7 @@ static bool validate_constructor_invocation(ResolveContext *context,
         return resolver_append_error(
             context,
             target_expr != NULL ? target_expr->token : context->program->module_token,
-            "AE0142", format_message("type '%.*s' has multiple accessible constructors matching %zu argument(s); argument types are ambiguous",
+            "AE0314", format_message("type '%.*s' has multiple accessible constructors matching %zu argument(s); argument types are ambiguous",
                            (int)type_decl->as.type_decl.name.length,
                            type_decl->as.type_decl.name.data,
                            arg_count));
@@ -16349,7 +16349,7 @@ static bool validate_constructor_invocation(ResolveContext *context,
     return resolver_append_error(
         context,
         target_expr != NULL ? target_expr->token : context->program->module_token,
-        "AE0143", format_message("type '%.*s' has no accessible constructor accepting %zu argument(s)",
+        "AE0315", format_message("type '%.*s' has no accessible constructor accepting %zu argument(s)",
                        (int)type_decl->as.type_decl.name.length,
                        type_decl->as.type_decl.name.data,
                        arg_count));
@@ -16498,7 +16498,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     return resolver_append_error(
                         context,
                         callee->token,
-                        "AE0144", format_message("function '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                        "AE0511", format_message("function '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
                                        (int)object->as.identifier.length,
                                        object->as.identifier.data,
                                        (int)callee->as.member.member.length,
@@ -16512,7 +16512,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     return resolver_append_error(
                         context,
                         callee->token,
-                        "AE0145", format_message("function '%.*s.%.*s' has no overload accepting %zu argument(s)",
+                        "AE0512", format_message("function '%.*s.%.*s' has no overload accepting %zu argument(s)",
                                        (int)object->as.identifier.length,
                                        object->as.identifier.data,
                                        (int)callee->as.member.member.length,
@@ -16585,7 +16585,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     return resolver_append_error(
                         context,
                         callee->token,
-                        "AE0146", format_message("static method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                        "AE0511", format_message("static method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
                                        (int)owner_name.length,
                                        owner_name.data,
                                        (int)callee->as.member.member.length,
@@ -16599,7 +16599,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     return resolver_append_error(
                         context,
                         callee->token,
-                        "AE0147", format_message("static method '%.*s.%.*s' has no overload accepting %zu argument(s)",
+                        "AE0512", format_message("static method '%.*s.%.*s' has no overload accepting %zu argument(s)",
                                        (int)owner_name.length,
                                        owner_name.data,
                                        (int)callee->as.member.member.length,
@@ -16698,7 +16698,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 return resolver_append_error(
                     context,
                     callee->token,
-                    "AE0148", format_message("method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                    "AE0511", format_message("method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
                                    (int)owner_name.length,
                                    owner_name.data,
                                    (int)callee->as.member.member.length,
@@ -16712,7 +16712,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 return resolver_append_error(
                     context,
                     callee->token,
-                    "AE0149", format_message("method '%.*s.%.*s' has no overload accepting %zu argument(s)",
+                    "AE0512", format_message("method '%.*s.%.*s' has no overload accepting %zu argument(s)",
                                    (int)owner_name.length,
                                    owner_name.data,
                                    (int)callee->as.member.member.length,
@@ -16776,7 +16776,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 bool ok = resolver_append_error(
                     context,
                     callee->token,
-                    "AE0150", format_message("method '%s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                    "AE0511", format_message("method '%s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
                                    owner_name != NULL ? owner_name : "<type>",
                                    (int)callee->as.member.member.length,
                                    callee->as.member.member.data,
@@ -16846,7 +16846,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     return resolver_append_error(
                         context,
                         callee->token,
-                        "AE0151", format_message("top-level function '%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                        "AE0511", format_message("top-level function '%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
                                        (int)callee->as.identifier.length,
                                        callee->as.identifier.data,
                                        expr->as.call.arg_count));
@@ -16859,7 +16859,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 return resolver_append_error(
                     context,
                     callee->token,
-                    "AE0152", format_message("top-level function '%.*s' has no overload accepting %zu argument(s)",
+                    "AE0512", format_message("top-level function '%.*s' has no overload accepting %zu argument(s)",
                                    (int)callee->as.identifier.length,
                                    callee->as.identifier.data,
                                    expr->as.call.arg_count));
@@ -16893,7 +16893,7 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
         bool ok = resolver_append_error(
             context,
             expr->token,
-            "AE0153", format_message("object literal target '%s' must resolve to an object type",
+            "AE1004", format_message("object literal target '%s' must resolve to an object type",
                            target_name != NULL ? target_name : "<expression>"));
 
         free(target_name);
@@ -16924,7 +16924,7 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
             bool ok = resolver_append_error(
                 context,
                 field->token,
-                "AE0154", format_message("duplicate object literal field '%.*s' for type '%.*s'",
+                "AE1005", format_message("duplicate object literal field '%.*s' for type '%.*s'",
                                (int)field->name.length,
                                field->name.data,
                                (int)target.type_decl->as.type_decl.name.length,
@@ -16945,7 +16945,7 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
             bool ok = resolver_append_error(
                 context,
                 field->token,
-                "AE0155", format_message("object literal field '%.*s' is not a field of type '%.*s'",
+                "AE1006", format_message("object literal field '%.*s' is not a field of type '%.*s'",
                                (int)field->name.length,
                                field->name.data,
                                (int)target.type_decl->as.type_decl.name.length,
@@ -16961,7 +16961,7 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
             bool ok = resolver_append_error(
                 context,
                 field->token,
-                "AE0156", format_message("object literal field '%.*s' is not accessible for type '%.*s'",
+                "AE1007", format_message("object literal field '%.*s' is not accessible for type '%.*s'",
                                (int)field->name.length,
                                field->name.data,
                                (int)target.type_decl->as.type_decl.name.length,
@@ -17025,7 +17025,7 @@ static bool resolve_self_member_expr(ResolveContext *context,
             return resolver_append_error(
                 context,
                 expr->token,
-                "AE0091", format_message("fit body cannot access private member '%.*s' of target type '%.*s'",
+                "AE0307", format_message("fit body cannot access private member '%.*s' of target type '%.*s'",
                                self_member->kind == FENG_TYPE_MEMBER_FIELD
                                    ? (int)self_member->as.field.name.length
                                    : (int)self_member->as.callable.name.length,
@@ -17046,7 +17046,7 @@ static bool resolve_self_member_expr(ResolveContext *context,
     return resolver_append_error(
         context,
         expr->token,
-        "AE0090", format_message("type '%.*s' has no member '%.*s'",
+        "AE0306", format_message("type '%.*s' has no member '%.*s'",
                        context->current_type_decl != NULL ? (int)context->current_type_decl->as.type_decl.name.length
                                                          : 0,
                        context->current_type_decl != NULL ? context->current_type_decl->as.type_decl.name.data : "",
@@ -17223,7 +17223,7 @@ static bool import_public_names(const FengSemanticModule *current_module,
                             error_capacity,
                             program->path,
                             conflict_token,
-                            "AE0157", format_message(
+                            "AE0906", format_message(
                                 conflict_message,
                                 (int)name.length,
                                 name.data,
@@ -17272,7 +17272,7 @@ static bool import_public_names(const FengSemanticModule *current_module,
                             error_capacity,
                             program->path,
                             conflict_token,
-                            "AE0157", format_message(
+                            "AE0906", format_message(
                                 conflict_message,
                                 (int)name.length,
                                 name.data,
@@ -17328,7 +17328,7 @@ static bool import_public_names(const FengSemanticModule *current_module,
                                     error_capacity,
                                     program->path,
                                     conflict_token,
-                                    "AE0157", format_message(
+                                    "AE0906", format_message(
                                         conflict_message,
                                         (int)name.length,
                                         name.data,
@@ -17396,7 +17396,7 @@ static bool import_public_names(const FengSemanticModule *current_module,
                             error_capacity,
                             program->path,
                             conflict_token,
-                            "AE0157", format_message(
+                            "AE0906", format_message(
                                 conflict_message,
                                 (int)name.length,
                                 name.data,
@@ -17497,7 +17497,7 @@ static bool resolve_named_type_ref(ResolveContext *context,
             return resolver_append_error(
                 context,
                 type_ref->token,
-                "AE0160", format_message("type parameter '%.*s' cannot take type arguments",
+                "AE1012", format_message("type parameter '%.*s' cannot take type arguments",
                                (int)name.length, name.data));
         }
         return true;
@@ -17522,7 +17522,7 @@ static bool resolve_named_type_ref(ResolveContext *context,
             ok = resolver_append_error(
                 context,
                 type_ref->token,
-                "AE0161", format_message("unknown type '%s'",
+                "AE1013", format_message("unknown type '%s'",
                                qualified_name != NULL ? qualified_name : "<unknown>"));
             free(qualified_name);
             return ok;
@@ -17540,14 +17540,14 @@ static bool resolve_named_type_ref(ResolveContext *context,
             return resolver_append_error(
                 context,
                 type_ref->token,
-                "AE0162", format_message("'%.*s' is not a generic type and does not take type arguments",
+                "AE1014", format_message("'%.*s' is not a generic type and does not take type arguments",
                                (int)name.length, name.data));
         }
         if (type_arg_count != expected_arity) {
             return resolver_append_error(
                 context,
                 type_ref->token,
-                "AE0163", format_message("'%.*s' expects %zu type argument(s), but %zu were provided",
+                "AE1015", format_message("'%.*s' expects %zu type argument(s), but %zu were provided",
                                (int)name.length, name.data,
                                expected_arity, type_arg_count));
         }
@@ -17582,7 +17582,7 @@ static bool resolve_named_type_ref(ResolveContext *context,
             return resolver_append_error(
                 context,
                 type_ref->token,
-                "AE0164", format_message("type 'unknown' is only valid as a catch clause type"));
+                "AE1403", format_message("type 'unknown' is only valid as a catch clause type"));
         }
 
         if (is_builtin_type_name(name)) {
@@ -17590,7 +17590,7 @@ static bool resolve_named_type_ref(ResolveContext *context,
                 return resolver_append_error(
                     context,
                     type_ref->token,
-                    "AE0165", format_message("type 'void' is only valid as a function return type"));
+                    "AE0502", format_message("type 'void' is only valid as a function return type"));
             }
             return true;
         }
@@ -17603,7 +17603,7 @@ static bool resolve_named_type_ref(ResolveContext *context,
             return resolver_append_error(
                 context,
                 type_ref->token,
-                "AE0166", format_message("module alias '%.*s' cannot be used as a type by itself; use '%.*s.Name'",
+                "AE0901", format_message("module alias '%.*s' cannot be used as a type by itself; use '%.*s.Name'",
                                (int)name.length,
                                name.data,
                                (int)name.length,
@@ -17616,7 +17616,7 @@ static bool resolve_named_type_ref(ResolveContext *context,
     qualified_name = format_module_name(segments, segment_count);
     if (!resolver_append_error(context,
                                type_ref->token,
-                               "AE0161", format_message("unknown type '%s'",
+                               "AE1013", format_message("unknown type '%s'",
                                               qualified_name != NULL ? qualified_name : "<unknown>"))) {
         free(qualified_name);
         return false;
@@ -17672,7 +17672,7 @@ static bool resolve_alias_member_expr(ResolveContext *context, const FengExpr *e
     if (!resolver_append_error(
             context,
             expr->token,
-            "AE0167", format_message("module alias '%.*s' does not export public name '%.*s' from module '%s'",
+            "AE0903", format_message("module alias '%.*s' does not export public name '%.*s' from module '%s'",
                            (int)alias_name.length,
                            alias_name.data,
                            (int)expr->as.member.member.length,
@@ -17882,7 +17882,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                         return resolver_append_error(
                             context,
                             expr->token,
-                            "AE0168", format_message("unknown catch value '%.*s' can only be used in 'throw %.*s'",
+                            "AE1404", format_message("unknown catch value '%.*s' can only be used in 'throw %.*s'",
                                            (int)expr->as.identifier.length,
                                            expr->as.identifier.data,
                                            (int)expr->as.identifier.length,
@@ -17904,7 +17904,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 return resolver_append_error(
                     context,
                     expr->token,
-                    "AE0169", format_message("module alias '%.*s' must be accessed as '%.*s.name'",
+                    "AE0904", format_message("module alias '%.*s' must be accessed as '%.*s.name'",
                                    (int)expr->as.identifier.length,
                                    expr->as.identifier.data,
                                    (int)expr->as.identifier.length,
@@ -17913,7 +17913,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
 
             return resolver_append_error(context,
                                          expr->token,
-                                         "AE0170", format_message("undefined identifier '%.*s'",
+                                         "AE0001", format_message("undefined identifier '%.*s'",
                                                         (int)expr->as.identifier.length,
                                                         expr->as.identifier.data));
 
@@ -17927,7 +17927,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
 
             return resolver_append_error(context,
                                          expr->token,
-                                         "AE0171", format_message("'self' is only available inside type methods and constructors"));
+                                         "AE0003", format_message("'self' is only available inside type methods and constructors"));
 
         case FENG_EXPR_BOOL:
         case FENG_EXPR_INTEGER:
@@ -17963,7 +17963,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             if (inferred_expr_type_is_known(size_type) &&
                 !inferred_expr_type_is_integer(size_type)) {
                 return resolver_append_error(context, expr->as.array_new.size->token,
-                    "AE0172", format_message("array size must be an integer expression"));
+                    "AE0202", format_message("array size must be an integer expression"));
             }
             return true;
         }
@@ -18029,7 +18029,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             appended = resolver_append_error(
                 context,
                 expr->token,
-                "AE0173", format_message("explicit generic target '%s' cannot be used as a value expression",
+                "AE1016", format_message("explicit generic target '%s' cannot be used as a value expression",
                                target_name != NULL ? target_name : "<expression>"));
             free(target_name);
             return appended;
@@ -18193,13 +18193,13 @@ static bool add_destructure_locals_from_tuple_type(ResolveContext *context,
         return resolver_append_error(
             context,
             binding->token,
-            "AE0174", format_message("destructuring binding initializer must be a tuple"));
+            "AE0108", format_message("destructuring binding initializer must be a tuple"));
     }
     if (binding->destructure_count != tuple_decl->as.type_decl.member_count) {
         return resolver_append_error(
             context,
             binding->token,
-            "AE0175", format_message("destructuring binding has %zu position(s) but tuple initializer has %zu",
+            "AE0109", format_message("destructuring binding has %zu position(s) but tuple initializer has %zu",
                            binding->destructure_count,
                            tuple_decl->as.type_decl.member_count));
     }
@@ -18243,7 +18243,7 @@ static bool add_destructure_locals_from_tuple_literal(ResolveContext *context,
         return resolver_append_error(
             context,
             binding->token,
-            "AE0176", format_message("destructuring binding has %zu position(s) but tuple literal has %zu",
+            "AE0109", format_message("destructuring binding has %zu position(s) but tuple literal has %zu",
                            binding->destructure_count,
                            literal->as.tuple_literal.count));
     }
@@ -18290,7 +18290,7 @@ static bool resolve_destructure_binding(ResolveContext *context,
         return resolver_append_error(
             context,
             binding->token,
-            "AE0177", format_message("destructuring bindings cannot use a single type annotation"));
+            "AE0110", format_message("destructuring bindings cannot use a single type annotation"));
     }
     if (!resolve_expr(context, binding->initializer, allow_self)) {
         return false;
@@ -18316,7 +18316,7 @@ static bool resolve_destructure_binding(ResolveContext *context,
         return resolver_append_error(
             context,
             binding->token,
-            "AE0174", format_message("destructuring binding initializer must be a tuple"));
+            "AE0108", format_message("destructuring binding initializer must be a tuple"));
     }
 
     return add_destructure_locals_from_tuple_type(context,
@@ -18447,7 +18447,7 @@ static bool resolve_try_expr(ResolveContext *context,
             return resolver_append_error(
                 context,
                 clause->token,
-                "AE0178", format_message("catch clause matching any exception must be the last catch clause"));
+                "AE1406", format_message("catch clause matching any exception must be the last catch clause"));
         }
         if (!is_anonymous &&
             !type_ref_is_catchable_exception_type(context, clause->type, &catch_reason)) {
@@ -18913,7 +18913,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                             ok = resolver_append_error(
                                 context,
                                 stmt->as.for_stmt.iter_expr->token,
-                                "AE0180", format_message(
+                                "AE0326", format_message(
                                     "type '%s' is not iterable (no @iterable or @iterator method found)",
                                     type_name != NULL ? type_name : "<unknown>"));
                             free(type_name);
@@ -19004,7 +19004,7 @@ static bool resolve_callable(ResolveContext *context,
                 return resolver_append_error(
                     context,
                     callable->type_params[ni].token,
-                    "AE0181", format_message("type parameter '%.*s' shadows an outer type parameter with the same name",
+                    "AE1017", format_message("type parameter '%.*s' shadows an outer type parameter with the same name",
                                    (int)callable->type_params[ni].name.length,
                                    callable->type_params[ni].name.data));
             }
@@ -19263,7 +19263,7 @@ static bool validate_spec_parent_spec_list(ResolveContext *context, const FengDe
             char *target_name = format_type_ref_name(r);
             bool ok = resolver_append_error(
                 context, r->token,
-                "AE0182", format_message(
+                "AE0613", format_message(
                     "spec '%.*s' parent spec list must contain only spec types but found '%s'",
                     (int)spec_decl->as.spec_decl.name.length,
                     spec_decl->as.spec_decl.name.data,
@@ -19276,7 +19276,7 @@ static bool validate_spec_parent_spec_list(ResolveContext *context, const FengDe
             return resolver_append_error(
                 context,
                 r->token,
-                "AE0183", format_message("object-form spec parent list can only contain object-form specs"));
+                "AE0613", format_message("object-form spec parent list can only contain object-form specs"));
         }
         for (j = 0U; j < i; ++j) {
             const FengDecl *prev = resolve_type_ref_decl(context, spec_decl->as.spec_decl.parent_specs[j]);
@@ -19284,7 +19284,7 @@ static bool validate_spec_parent_spec_list(ResolveContext *context, const FengDe
             if (prev == resolved) {
                 return resolver_append_error(
                     context, r->token,
-                    "AE0184", format_message(
+                    "AE0614", format_message(
                         "spec '%.*s' lists '%.*s' more than once in its parent spec list",
                         (int)spec_decl->as.spec_decl.name.length,
                         spec_decl->as.spec_decl.name.data,
@@ -19305,7 +19305,7 @@ static bool validate_spec_parent_spec_list(ResolveContext *context, const FengDe
         if (cycle) {
             return resolver_append_error(
                 context, spec_decl->token,
-                "AE0185", format_message(
+                "AE0614", format_message(
                     "spec '%.*s' forms a cycle through its parent spec list",
                     (int)spec_decl->as.spec_decl.name.length,
                     spec_decl->as.spec_decl.name.data));
@@ -19335,7 +19335,7 @@ static bool validate_object_spec_member_kinds(ResolveContext *context, const Fen
             if (!resolver_append_error(
                     context,
                     member->token,
-                    "AE0186", format_message(
+                    "AE0620", format_message(
                         "object-form spec '%.*s' cannot declare a constructor",
                         (int)spec_decl->as.spec_decl.name.length,
                         spec_decl->as.spec_decl.name.data))) {
@@ -19347,7 +19347,7 @@ static bool validate_object_spec_member_kinds(ResolveContext *context, const Fen
             if (!resolver_append_error(
                     context,
                     member->token,
-                    "AE0187", format_message(
+                    "AE0620", format_message(
                         "object-form spec '%.*s' cannot declare a finalizer",
                         (int)spec_decl->as.spec_decl.name.length,
                         spec_decl->as.spec_decl.name.data))) {
@@ -19632,7 +19632,7 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
             if (t == NULL) {
                 return resolver_append_error(
                     ctx, err_token,
-                    "AE0188", format_message(
+                    "AE0701", format_message(
                         "type '%.*s' is missing field '%.*s' required by spec '%.*s'",
                         (int)decl_typeish_name(type_decl).length,
                         decl_typeish_name(type_decl).data,
@@ -19643,7 +19643,7 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
             if (t->as.field.mutability != spec_m->as.field.mutability) {
                 return resolver_append_error(
                     ctx, err_token,
-                    "AE0189", format_message(
+                    "AE0702", format_message(
                         "type '%.*s' field '%.*s' mutability does not match spec '%.*s' (expected '%s')",
                         (int)decl_typeish_name(type_decl).length,
                         decl_typeish_name(type_decl).data,
@@ -19663,7 +19663,7 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                     char *actual = format_type_ref_name(t->as.field.type);
                     bool ok = resolver_append_error(
                         ctx, err_token,
-                        "AE0190", format_message(
+                        "AE0703", format_message(
                             "type '%.*s' field '%.*s' type '%s' does not match spec '%.*s' field type '%s'",
                             (int)decl_typeish_name(type_decl).length,
                             decl_typeish_name(type_decl).data,
@@ -19711,7 +19711,7 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                 if (named != NULL) {
                     return resolver_append_error(
                         ctx, err_token,
-                        "AE0191", format_message(
+                        "AE0704", format_message(
                             "type '%.*s' method '%.*s' signature does not match spec '%.*s'",
                             (int)decl_typeish_name(type_decl).length,
                             decl_typeish_name(type_decl).data,
@@ -19722,7 +19722,7 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                 }
                 return resolver_append_error(
                     ctx, err_token,
-                    "AE0192", format_message(
+                    "AE0705", format_message(
                         "type '%.*s' is missing method '%.*s' required by spec '%.*s'",
                         (int)decl_typeish_name(type_decl).length,
                         decl_typeish_name(type_decl).data,
@@ -20312,7 +20312,7 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                         (void)resolver_append_error(
                             context,
                             err_token,
-                            "AE0193", format_message(
+                            "AE0804", format_message(
                                 "type '%.*s' has multiple visible implementations of method '%.*s' required by spec '%.*s' (one or more fits and/or the type itself)",
                                 (int)decl_typeish_name(type_decl).length,
                                 decl_typeish_name(type_decl).data,
@@ -20324,7 +20324,7 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                         (void)resolver_append_error(
                             context,
                             err_token,
-                            "AE0194", format_message(
+                            "AE0804", format_message(
                                 "fit target has multiple visible implementations of method '%.*s' required by spec '%.*s'",
                                 (int)name.length,
                                 name.data,
@@ -20556,7 +20556,7 @@ static bool detect_cross_spec_method_conflicts(ResolveContext *ctx,
                                                       mb->as.callable.return_type)) {
                         return resolver_append_error(
                             ctx, err_token,
-                            "AE0195", format_message(
+                            "AE0706", format_message(
                                 "type '%.*s' satisfies specs '%.*s' and '%.*s' which both declare method '%.*s' with the same parameters but different return types",
                                 (int)decl_typeish_name(type_decl).length,
                                 decl_typeish_name(type_decl).data,
@@ -20716,7 +20716,7 @@ static bool validate_type_member_overload_overlap(ResolveContext *context,
                 ok = resolver_append_error(
                          context,
                          si->token,
-                         "AE0196", format_message(
+                         "AE0706", format_message(
                              "method overloads in type '%.*s' may both match the same arguments under visible contract relations: '%.*s'",
                              (int)decl->as.type_decl.name.length,
                              decl->as.type_decl.name.data,
@@ -20775,7 +20775,7 @@ static bool validate_fit_member_overload_overlap(ResolveContext *context,
                 ok = resolver_append_error(
                          context,
                          si->token,
-                         "AE0197", format_message(
+                         "AE0805", format_message(
                              "method overloads in fit target '%s' may both match the same arguments under visible contract relations: '%.*s'",
                              target_name != NULL ? target_name : "<unknown>",
                              (int)si->name.length, si->name.data)) && ok;
@@ -20850,7 +20850,7 @@ static bool validate_top_level_overload_overlap(ResolveContext *context,
                 ok = resolver_append_error(
                          context,
                          current->token,
-                         "AE0198", format_message(
+                         "AE0706", format_message(
                              "function overloads may both match the same arguments under visible contract relations: '%.*s'",
                              (int)current->name.length,
                              current->name.data)) && ok;
@@ -20877,7 +20877,7 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
             char *target_name = format_type_ref_name(r);
             bool result = resolver_append_error(
                 context, r->token,
-                "AE0199", format_message(
+                "AE0615", format_message(
                     "type '%.*s' declared spec list must contain only spec types but found '%s'",
                     (int)type_decl->as.type_decl.name.length,
                     type_decl->as.type_decl.name.data,
@@ -20890,7 +20890,7 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
             return resolver_append_error(
                 context,
                 r->token,
-                "AE0200", format_message("type '%.*s' declared spec list can only contain object-form specs",
+                "AE0615", format_message("type '%.*s' declared spec list can only contain object-form specs",
                                (int)type_decl->as.type_decl.name.length,
                                type_decl->as.type_decl.name.data));
         }
@@ -20900,7 +20900,7 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
             if (prev == resolved) {
                 return resolver_append_error(
                     context, r->token,
-                    "AE0201", format_message(
+                    "AE0616", format_message(
                         "type '%.*s' lists '%.*s' more than once in its declared spec list",
                         (int)type_decl->as.type_decl.name.length,
                         type_decl->as.type_decl.name.data,
@@ -21016,7 +21016,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
             return resolver_append_error(
                 context,
                 fit_decl->token,
-                "AE0202", format_message("fit with spec clause requires a body; "
+                "AE0807", format_message("fit with spec clause requires a body; "
                                "use 'fit %s: %s { ... }' to provide the implementation",
                                fit_target.builtin_canonical_name != NULL
                                    ? fit_target.builtin_canonical_name
@@ -21035,14 +21035,14 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
                 char *sname = format_type_ref_name(sr);
                 spec_ok = resolver_append_error(
                     context, sr != NULL ? sr->token : fit_decl->token,
-                    "AE0203", format_message("fit spec '%s' could not be resolved",
+                    "AE0808", format_message("fit spec '%s' could not be resolved",
                                    sname != NULL ? sname : "<unknown>"));
                 free(sname);
             } else if (sd->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
                 spec_ok = resolver_append_error(
                     context,
                     sr != NULL ? sr->token : fit_decl->token,
-                    "AE0204", format_message("fit specs list can only contain object-form specs"));
+                    "AE0809", format_message("fit specs list can only contain object-form specs"));
             } else if (specs != NULL) {
                 specs[si] = sd;
             }
@@ -21064,7 +21064,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
         char *target_name = format_type_ref_name(fit_decl->as.fit_decl.target);
         bool result = resolver_append_error(
             context, fit_decl->as.fit_decl.target->token,
-            "AE0205", format_message(
+            "AE0811", format_message(
                 "fit target must be a concrete type but found '%s'",
                 target_name != NULL ? target_name : "<unknown>"));
 
@@ -21080,7 +21080,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
             return resolver_append_error(
                 context,
                 fit_decl->token,
-                "AE0206", format_message(
+                "AE0812", format_message(
                     "fit target for generic type '%.*s' must reference all target type parameters directly",
                     (int)target->as.type_decl.name.length,
                     target->as.type_decl.name.data));
@@ -21094,7 +21094,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
                 return resolver_append_error(
                     context,
                     arg != NULL ? arg->token : fit_decl->token,
-                    "AE0207", format_message(
+                    "AE0812", format_message(
                         "fit target for generic type '%.*s' must use target type parameter '%.*s' at position %zu",
                         (int)target->as.type_decl.name.length,
                         target->as.type_decl.name.data,
@@ -21110,7 +21110,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
         return resolver_append_error(
             context,
             fit_decl->as.fit_decl.target->token,
-            "AE0208", format_message("fit target type '%.*s' is not generic",
+            "AE0813", format_message("fit target type '%.*s' is not generic",
                            (int)target_name.length,
                            target_name.data));
     }
@@ -21123,7 +21123,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
             char *spec_name = format_type_ref_name(r);
             bool result = resolver_append_error(
                 context, r->token,
-                "AE0209", format_message(
+                "AE0809", format_message(
                     "fit specs list must contain only spec types but found '%s'",
                     spec_name != NULL ? spec_name : "<unknown>"));
 
@@ -21134,7 +21134,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
             return resolver_append_error(
                 context,
                 r->token,
-                "AE0204", format_message("fit specs list can only contain object-form specs"));
+                "AE0809", format_message("fit specs list can only contain object-form specs"));
         }
         for (j = 0U; j < i; ++j) {
             const FengDecl *prev = resolve_type_ref_decl(context, fit_decl->as.fit_decl.specs[j]);
@@ -21142,7 +21142,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
             if (prev == resolved) {
                 return resolver_append_error(
                     context, r->token,
-                    "AE0210", format_message(
+                    "AE0810", format_message(
                         "fit lists '%.*s' more than once in its specs clause",
                         (int)resolved->as.spec_decl.name.length,
                         resolved->as.spec_decl.name.data));
@@ -21260,7 +21260,7 @@ static bool validate_type_param_constraints(ResolveContext *context,
                 return resolver_append_error(
                     context,
                     type_params[i].token,
-                    "AE0211", format_message("type parameter '%.*s': tuple type cannot be used as a constraint; use a spec constraint",
+                    "AE0304", format_message("type parameter '%.*s': tuple type cannot be used as a constraint; use a spec constraint",
                                    (int)type_params[i].name.length,
                                    type_params[i].name.data));
             }
@@ -21268,7 +21268,7 @@ static bool validate_type_param_constraints(ResolveContext *context,
                 return resolver_append_error(
                     context,
                     type_params[i].token,
-                    "AE0212", format_message("type parameter '%.*s': constraint must be a spec, not a type",
+                    "AE0709", format_message("type parameter '%.*s': constraint must be a spec, not a type",
                                    (int)type_params[i].name.length,
                                    type_params[i].name.data));
             }
@@ -22103,7 +22103,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                           error_capacity,
                                           program->path,
                                           use_decl->token,
-                                          "AE0221", format_message("duplicate import alias '%.*s' in the same file",
+                                          "AE0902", format_message("duplicate import alias '%.*s' in the same file",
                                                          (int)use_decl->alias.length,
                                                          use_decl->alias.data));
                         break;
@@ -22125,7 +22125,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                     error_capacity,
                     program->path,
                     use_decl->token,
-                    "AE0222", format_message("import target module '%s' was not found in current compilation input",
+                    "AE0902", format_message("import target module '%s' was not found in current compilation input",
                                    module_name != NULL ? module_name : "<unknown>"));
                 free(module_name);
                 if (!ok) {
@@ -22302,7 +22302,7 @@ static bool report_uninferred_callable_returns(const FengSemanticAnalysis *analy
                             error_capacity,
                             program->path,
                             decl->as.function_decl.token,
-                            "AE0223", format_message(
+                            "AE0503", format_message(
                                 "function '%.*s' requires an explicit return type because its return type could not be inferred",
                                 (int)decl->as.function_decl.name.length,
                                 decl->as.function_decl.name.data));
@@ -22337,7 +22337,7 @@ static bool report_uninferred_callable_returns(const FengSemanticAnalysis *analy
                             error_capacity,
                             program->path,
                             member->as.callable.token,
-                            "AE0224", format_message(
+                            "AE0503", format_message(
                                 "method '%.*s.%.*s' requires an explicit return type because its return type could not be inferred",
                                 (int)decl->as.type_decl.name.length,
                                 decl->as.type_decl.name.data,
@@ -22414,7 +22414,7 @@ static bool validate_main_entry(const FengSemanticAnalysis *analysis,
                 } else {
                     ok = append_error(errors, error_count, error_capacity,
                                       program->path, sig->token,
-                                      "AE0225", format_message(
+                                      "AE0907", format_message(
                                           "duplicate 'main' entry: target 'bin' requires exactly one 'main(args: string[])' across all programs"));
                     if (!ok) {
                         return false;
@@ -22427,7 +22427,7 @@ static bool validate_main_entry(const FengSemanticAnalysis *analysis,
     if (main_count == 0U) {
         ok = append_error(errors, error_count, error_capacity,
                           NULL, kEmptyToken,
-                          "AE0226", format_message(
+                          "AE0908", format_message(
                               "target 'bin' requires a 'main(args: string[])' entry function but none was found"));
         return ok;
     }
@@ -22441,7 +22441,7 @@ static bool validate_main_entry(const FengSemanticAnalysis *analysis,
             !main_param_type_is_string_array(sig->params[0].type)) {
             ok = append_error(errors, error_count, error_capacity,
                               first_main_path, sig->token,
-                              "AE0227", format_message(
+                              "AE0909", format_message(
                                   "'main' entry must have signature 'main(args: string[])'"));
             if (!ok) {
                 return false;
@@ -22450,7 +22450,7 @@ static bool validate_main_entry(const FengSemanticAnalysis *analysis,
         if (sig->return_type != NULL && !type_ref_is_void(sig->return_type)) {
             ok = append_error(errors, error_count, error_capacity,
                               first_main_path, sig->token,
-                              "AE0228", format_message(
+                              "AE0910", format_message(
                                   "'main' entry must return void"));
             if (!ok) {
                 return false;
