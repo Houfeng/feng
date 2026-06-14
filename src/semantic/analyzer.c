@@ -17210,14 +17210,21 @@ static bool import_public_names(const FengSemanticModule *current_module,
                         if ((*visible_types)[index].provider_module == target_module) {
                             break;
                         }
+                        bool is_local_conflict = ((*visible_types)[index].provider_module == current_module);
+                        FengToken conflict_token = is_local_conflict
+                            ? (*visible_types)[index].decl->token
+                            : use_decl->token;
+                        const char *conflict_message = is_local_conflict
+                            ? "type '%.*s' is already defined in this file, conflicts with imported type from module '%s'"
+                            : "imported type '%.*s' from module '%s' conflicts with an existing visible type name";
                         ok = append_error(
                             errors,
                             error_count,
                             error_capacity,
                             program->path,
-                            use_decl->token,
+                            conflict_token,
                             "AE0157", format_message(
-                                "imported type '%.*s' from module '%s' conflicts with an existing visible type name",
+                                conflict_message,
                                 (int)name.length,
                                 name.data,
                                 module_name != NULL ? module_name : "<unknown>"));
@@ -17252,14 +17259,21 @@ static bool import_public_names(const FengSemanticModule *current_module,
                         if ((*visible_types)[index].provider_module == target_module) {
                             break;
                         }
+                        bool is_local_conflict = ((*visible_types)[index].provider_module == current_module);
+                        FengToken conflict_token = is_local_conflict
+                            ? (*visible_types)[index].decl->token
+                            : use_decl->token;
+                        const char *conflict_message = is_local_conflict
+                            ? "enum '%.*s' is already defined in this file, conflicts with imported enum from module '%s'"
+                            : "imported enum '%.*s' from module '%s' conflicts with an existing visible type name";
                         ok = append_error(
                             errors,
                             error_count,
                             error_capacity,
                             program->path,
-                            use_decl->token,
-                            "AE0158", format_message(
-                                "imported enum '%.*s' from module '%s' conflicts with an existing visible type name",
+                            conflict_token,
+                            "AE0157", format_message(
+                                conflict_message,
                                 (int)name.length,
                                 name.data,
                                 module_name != NULL ? module_name : "<unknown>"));
@@ -17314,7 +17328,7 @@ static bool import_public_names(const FengSemanticModule *current_module,
                                     error_capacity,
                                     program->path,
                                     conflict_token,
-                                    "AE0159", format_message(
+                                    "AE0157", format_message(
                                         conflict_message,
                                         (int)name.length,
                                         name.data,
@@ -17369,14 +17383,21 @@ static bool import_public_names(const FengSemanticModule *current_module,
                         if ((*visible_types)[index].provider_module == target_module) {
                             break;
                         }
+                        bool is_local_conflict = ((*visible_types)[index].provider_module == current_module);
+                        FengToken conflict_token = is_local_conflict
+                            ? (*visible_types)[index].decl->token
+                            : use_decl->token;
+                        const char *conflict_message = is_local_conflict
+                            ? "spec '%.*s' is already defined in this file, conflicts with imported spec from module '%s'"
+                            : "imported spec '%.*s' from module '%s' conflicts with an existing visible type name";
                         ok = append_error(
                             errors,
                             error_count,
                             error_capacity,
                             program->path,
-                            use_decl->token,
+                            conflict_token,
                             "AE0157", format_message(
-                                "imported type '%.*s' from module '%s' conflicts with an existing visible type name",
+                                conflict_message,
                                 (int)name.length,
                                 name.data,
                                 module_name != NULL ? module_name : "<unknown>"));

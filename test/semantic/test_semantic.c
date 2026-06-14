@@ -6503,8 +6503,8 @@ static void test_imported_type_conflicts_with_local_type(void) {
     ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "main_type_conflict.f") == 0);
-    ASSERT(errors[0].token.line == 2U);
-    ASSERT(strstr(errors[0].message, "imported type 'User'") != NULL);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "already defined") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(base_program);
@@ -7199,8 +7199,8 @@ static void test_external_imported_enum_conflicts_with_local_type_name(void) {
                                                &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "external_enum_conflict_main.f") == 0);
-    ASSERT(errors[0].token.line == 2U);
-    ASSERT(strstr(errors[0].message, "imported enum 'HttpStatus'") != NULL);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "already defined") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
