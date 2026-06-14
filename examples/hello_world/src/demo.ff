@@ -5,3 +5,5 @@ import std.test as test_helper;
 func test() {
   test_helper.assert(true, "hello world");
 }
+
+// let test_helper ="";

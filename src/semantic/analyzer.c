@@ -17600,6 +17600,88 @@ static bool build_program_aliases(const FengSemanticAnalysis *analysis,
     return true;
 }
 
+static bool validate_program_alias_conflicts(const FengSemanticModule *current_module,
+                                             const FengProgram *program,
+                                             const VisibleTypeEntry *visible_types,
+                                             size_t visible_type_count,
+                                             const VisibleValueEntry *visible_values,
+                                             size_t visible_value_count,
+                                             FengSemanticError **errors,
+                                             size_t *error_count,
+                                             size_t *error_capacity) {
+    size_t use_index;
+
+    for (use_index = 0U; use_index < program->use_count; ++use_index) {
+        const FengUseDecl *use_decl = &program->uses[use_index];
+        const VisibleValueEntry *value_entry = NULL;
+        const VisibleTypeEntry *type_entry = NULL;
+        const FengDecl *conflict_decl = NULL;
+        const FengProgram *conflict_program = NULL;
+        const FengSemanticModule *conflict_module = NULL;
+        const char *path = program->path;
+        FengToken token;
+        char *module_name;
+        char *message;
+
+        if (!use_decl->has_alias) {
+            continue;
+        }
+
+        value_entry = find_visible_value(visible_values, visible_value_count, use_decl->alias);
+        if (value_entry != NULL) {
+            conflict_decl = value_entry->decl;
+            conflict_program = value_entry->provider_program;
+            conflict_module = value_entry->provider_module;
+        } else {
+            type_entry = find_visible_type(visible_types, visible_type_count, use_decl->alias);
+            if (type_entry == NULL) {
+                continue;
+            }
+            conflict_decl = type_entry->decl;
+            conflict_program = type_entry->provider_program;
+            conflict_module = type_entry->provider_module;
+        }
+
+        module_name = format_module_name(use_decl->segments, use_decl->segment_count);
+        if (conflict_module == current_module && conflict_program == program && conflict_decl != NULL) {
+            path = conflict_program->path;
+            token = *decl_token(conflict_decl);
+            message = format_message(
+                "name '%.*s' is already defined in this file, conflicts with import alias from module '%s'",
+                (int)use_decl->alias.length,
+                use_decl->alias.data,
+                module_name != NULL ? module_name : "<unknown>");
+        } else if (conflict_module == current_module) {
+            token = use_decl->token;
+            message = format_message(
+                "import alias '%.*s' from module '%s' conflicts with a name already defined in the current module",
+                (int)use_decl->alias.length,
+                use_decl->alias.data,
+                module_name != NULL ? module_name : "<unknown>");
+        } else {
+            token = use_decl->token;
+            message = format_message(
+                "import alias '%.*s' from module '%s' conflicts with an imported name already visible in this file",
+                (int)use_decl->alias.length,
+                use_decl->alias.data,
+                module_name != NULL ? module_name : "<unknown>");
+        }
+        free(module_name);
+
+        if (!append_error(errors,
+                          error_count,
+                          error_capacity,
+                          path,
+                          token,
+                          "AE0906",
+                          message)) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
 static bool resolve_type_ref(ResolveContext *context, const FengTypeRef *type_ref, bool allow_void);
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self);
 static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool allow_self);
@@ -22319,6 +22401,18 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                      errors,
                                      error_count,
                                      error_capacity);
+        }
+
+        if (ok) {
+            ok = validate_program_alias_conflicts(module,
+                                                  program,
+                                                  program_visible_types,
+                                                  program_visible_type_count,
+                                                  program_visible_values,
+                                                  program_visible_value_count,
+                                                  errors,
+                                                  error_count,
+                                                  error_capacity);
         }
 
         if (ok) {

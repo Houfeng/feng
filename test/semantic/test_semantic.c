@@ -6682,6 +6682,113 @@ static void test_alias_import_does_not_inject_short_names(void) {
     feng_program_free(main_program);
 }
 
+static void test_import_alias_conflicts_with_same_file_local_value(void) {
+    const char *base_source =
+        "open module demo.base;\n"
+        "open func assert(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.base as helper;\n"
+        "func run(): int {\n"
+        "    return helper.assert();\n"
+        "}\n"
+        "let helper = \"\";\n";
+    FengProgram *base_program = parse_program_or_die("alias_local_value_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("alias_local_value_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "alias_local_value_main.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strcmp(errors[0].code, "AE0906") == 0);
+    ASSERT(strstr(errors[0].message, "helper") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_import_alias_conflicts_with_other_file_local_value(void) {
+    const char *base_source =
+        "open module demo.base;\n"
+        "open func assert(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    const char *importing_source =
+        "module demo.main;\n"
+        "import demo.base as helper;\n"
+        "func run(): int {\n"
+        "    return helper.assert();\n"
+        "}\n";
+    const char *sibling_source =
+        "module demo.main;\n"
+        "let helper = \"\";\n";
+    FengProgram *base_program = parse_program_or_die("alias_other_file_base.f", base_source);
+    FengProgram *importing_program = parse_program_or_die("alias_other_file_main.f", importing_source);
+    FengProgram *sibling_program = parse_program_or_die("alias_other_file_sibling.f", sibling_source);
+    const FengProgram *programs[] = {base_program, importing_program, sibling_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "alias_other_file_main.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strcmp(errors[0].code, "AE0906") == 0);
+    ASSERT(strstr(errors[0].message, "current module") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(importing_program);
+    feng_program_free(sibling_program);
+}
+
+static void test_import_alias_conflicts_with_imported_short_name(void) {
+    const char *source_a =
+        "open module demo.a;\n"
+        "open func helper(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    const char *source_b =
+        "open module demo.b;\n"
+        "open func store(): int {\n"
+        "    return 2;\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.a;\n"
+        "import demo.b as helper;\n"
+        "func run(): int {\n"
+        "    return helper.store();\n"
+        "}\n";
+    FengProgram *program_a = parse_program_or_die("alias_imported_name_a.f", source_a);
+    FengProgram *program_b = parse_program_or_die("alias_imported_name_b.f", source_b);
+    FengProgram *main_program = parse_program_or_die("alias_imported_name_main.f", main_source);
+    const FengProgram *programs[] = {program_a, program_b, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "alias_imported_name_main.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strcmp(errors[0].code, "AE0906") == 0);
+    ASSERT(strstr(errors[0].message, "imported name already visible") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program_a);
+    feng_program_free(program_b);
+    feng_program_free(main_program);
+}
+
 static void test_duplicate_use_alias_in_same_file(void) {
     const char *source_a =
         "open module demo.a;\n"
@@ -15213,6 +15320,9 @@ int main(void) {
     test_import_short_names_do_not_leak_to_other_files();
     test_import_name_conflict_with_other_file_decl_does_not_error();
     test_alias_import_does_not_inject_short_names();
+    test_import_alias_conflicts_with_same_file_local_value();
+    test_import_alias_conflicts_with_other_file_local_value();
+    test_import_alias_conflicts_with_imported_short_name();
     test_duplicate_use_alias_in_same_file();
     test_unknown_use_module_rejected_without_import_query();
     test_external_use_module_accepted_via_import_query();
