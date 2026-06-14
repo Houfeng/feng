@@ -3,18 +3,18 @@
 
 ## LE - 词法错误
 
-| 错误码 | 新错误码 | 用途 | 错误文案 |
-|--------|----------|------|----------|
-| **LE0001** | LE0005 | 块注释未终止 | unterminated block comment |
-| **LE0002** | LE0001 | 无效的标识符 | reserved word cannot be used as an identifier in the current language version |
-| **LE0003** | LE0004 | 词法不完整 | expected annotation name after '@' |
-| **LE0004** | LE0002 | 无效的数字字面量 | invalid numeric literal |
-| **LE0005** | LE0003 | 字符串字面量未终止 | unterminated string literal |
-| **LE0006** | LE0003 | 字符串字面量未终止 | invalid \\x escape: expected 2 hex digits |
-| **LE0007** | LE0003 | 字符串字面量未终止 | invalid \\x escape: expected hex digit |
-| **LE0008** | LE0003 | 字符串字面量未终止 | invalid string escape |
-| **LE0009** | LE0003 | 字符串字面量未终止 | unterminated raw string literal |
-| **LE0010** | LE0006 | 无效字符 | unexpected character |
+| 错误码 | 用途 | 错误文案 |
+|--------|------|----------|
+| **LE0001** | 无效的标识符 | reserved word cannot be used as an identifier in the current language version |
+| **LE0002** | 无效的数字字面量 | invalid numeric literal |
+| **LE0003** | 字符串字面量未终止 | unterminated string literal |
+| **LE0003** | 字符串字面量未终止 | unterminated raw string literal |
+| **LE0004** | 无效的转义序列 | invalid \\x escape: expected 2 hex digits |
+| **LE0004** | 无效的转义序列 | invalid \\x escape: expected hex digit |
+| **LE0004** | 无效的转义序列 | invalid string escape |
+| **LE0005** | 词法不完整 | expected annotation name after '@' |
+| **LE0006** | 块注释未终止 | unterminated block comment |
+| **LE0007** | 无效字符 | unexpected character |
 
 
 ## SE - 语法错误
