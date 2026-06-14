@@ -4,6 +4,7 @@ import std;
 import std.io;
 import std.text;
 import std.numeric;
+import std.collections;
 
 @runtime
 extern func feng_expression_equal<T>(left: T, right: T): bool;

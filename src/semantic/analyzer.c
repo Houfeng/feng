@@ -69,12 +69,14 @@ typedef struct FunctionOverloadSetEntry {
 typedef struct VisibleTypeEntry {
     FengSlice name;
     const FengSemanticModule *provider_module;
+    const FengProgram *provider_program;
     const FengDecl *decl;
 } VisibleTypeEntry;
 
 typedef struct VisibleValueEntry {
     FengSlice name;
     const FengSemanticModule *provider_module;
+    const FengProgram *provider_program;
     const FengDecl *decl;
     FengMutability mutability;
     bool is_function;
@@ -2375,6 +2377,101 @@ static void free_function_overload_sets(FunctionOverloadSetEntry *entries, size_
         free(entries[index].decls);
     }
     free(entries);
+}
+
+static bool copy_visible_type_entries(const VisibleTypeEntry *source,
+                                      size_t source_count,
+                                      VisibleTypeEntry **out_entries,
+                                      size_t *out_count,
+                                      size_t *out_capacity) {
+    VisibleTypeEntry *entries;
+
+    *out_entries = NULL;
+    *out_count = 0U;
+    *out_capacity = 0U;
+    if (source_count == 0U) {
+        return true;
+    }
+
+    entries = (VisibleTypeEntry *)malloc(source_count * sizeof(entries[0]));
+    if (entries == NULL) {
+        return false;
+    }
+    memcpy(entries, source, source_count * sizeof(entries[0]));
+    *out_entries = entries;
+    *out_count = source_count;
+    *out_capacity = source_count;
+    return true;
+}
+
+static bool copy_visible_value_entries(const VisibleValueEntry *source,
+                                       size_t source_count,
+                                       VisibleValueEntry **out_entries,
+                                       size_t *out_count,
+                                       size_t *out_capacity) {
+    VisibleValueEntry *entries;
+
+    *out_entries = NULL;
+    *out_count = 0U;
+    *out_capacity = 0U;
+    if (source_count == 0U) {
+        return true;
+    }
+
+    entries = (VisibleValueEntry *)malloc(source_count * sizeof(entries[0]));
+    if (entries == NULL) {
+        return false;
+    }
+    memcpy(entries, source, source_count * sizeof(entries[0]));
+    *out_entries = entries;
+    *out_count = source_count;
+    *out_capacity = source_count;
+    return true;
+}
+
+static bool copy_function_overload_sets(const FunctionOverloadSetEntry *source,
+                                        size_t source_count,
+                                        FunctionOverloadSetEntry **out_entries,
+                                        size_t *out_count,
+                                        size_t *out_capacity) {
+    FunctionOverloadSetEntry *entries;
+    size_t copied_count = 0U;
+
+    *out_entries = NULL;
+    *out_count = 0U;
+    *out_capacity = 0U;
+    if (source_count == 0U) {
+        return true;
+    }
+
+    entries = (FunctionOverloadSetEntry *)calloc(source_count, sizeof(entries[0]));
+    if (entries == NULL) {
+        return false;
+    }
+
+    for (copied_count = 0U; copied_count < source_count; ++copied_count) {
+        entries[copied_count].name = source[copied_count].name;
+        entries[copied_count].provider_module = source[copied_count].provider_module;
+        entries[copied_count].decl_count = source[copied_count].decl_count;
+        entries[copied_count].decl_capacity = source[copied_count].decl_count;
+        if (source[copied_count].decl_count == 0U) {
+            continue;
+        }
+        entries[copied_count].decls =
+            (const FengDecl **)malloc(source[copied_count].decl_count * sizeof(entries[copied_count].decls[0]));
+        if (entries[copied_count].decls == NULL) {
+            free_function_overload_sets(entries, copied_count);
+            return false;
+        }
+        memcpy(entries[copied_count].decls,
+               source[copied_count].decls,
+               source[copied_count].decl_count * sizeof(entries[copied_count].decls[0]));
+    }
+
+    *out_entries = entries;
+    *out_count = source_count;
+    *out_capacity = source_count;
+    return true;
 }
 
 static size_t find_alias_index(const AliasEntry *entries, size_t count, FengSlice alias) {
@@ -17210,11 +17307,17 @@ static bool import_public_names(const FengSemanticModule *current_module,
                         if ((*visible_types)[index].provider_module == target_module) {
                             break;
                         }
-                        bool is_local_conflict = ((*visible_types)[index].provider_module == current_module);
-                        FengToken conflict_token = is_local_conflict
+                        bool is_current_file_conflict =
+                            ((*visible_types)[index].provider_module == current_module &&
+                             (*visible_types)[index].provider_program == program);
+                        if ((*visible_types)[index].provider_module == current_module &&
+                            !is_current_file_conflict) {
+                            break;
+                        }
+                        FengToken conflict_token = is_current_file_conflict
                             ? (*visible_types)[index].decl->token
                             : use_decl->token;
-                        const char *conflict_message = is_local_conflict
+                        const char *conflict_message = is_current_file_conflict
                             ? "type '%.*s' is already defined in this file, conflicts with imported type from module '%s'"
                             : "imported type '%.*s' from module '%s' conflicts with an existing visible type name";
                         ok = append_error(
@@ -17233,6 +17336,7 @@ static bool import_public_names(const FengSemanticModule *current_module,
 
                     entry.name = name;
                     entry.provider_module = target_module;
+                    entry.provider_program = target_program;
                     entry.decl = decl;
                     ok = append_raw((void **)visible_types,
                                     visible_type_count,
@@ -17259,11 +17363,17 @@ static bool import_public_names(const FengSemanticModule *current_module,
                         if ((*visible_types)[index].provider_module == target_module) {
                             break;
                         }
-                        bool is_local_conflict = ((*visible_types)[index].provider_module == current_module);
-                        FengToken conflict_token = is_local_conflict
+                        bool is_current_file_conflict =
+                            ((*visible_types)[index].provider_module == current_module &&
+                             (*visible_types)[index].provider_program == program);
+                        if ((*visible_types)[index].provider_module == current_module &&
+                            !is_current_file_conflict) {
+                            break;
+                        }
+                        FengToken conflict_token = is_current_file_conflict
                             ? (*visible_types)[index].decl->token
                             : use_decl->token;
-                        const char *conflict_message = is_local_conflict
+                        const char *conflict_message = is_current_file_conflict
                             ? "enum '%.*s' is already defined in this file, conflicts with imported enum from module '%s'"
                             : "imported enum '%.*s' from module '%s' conflicts with an existing visible type name";
                         ok = append_error(
@@ -17282,6 +17392,7 @@ static bool import_public_names(const FengSemanticModule *current_module,
 
                     entry.name = name;
                     entry.provider_module = target_module;
+                    entry.provider_program = target_program;
                     entry.decl = decl;
                     ok = append_raw((void **)visible_types,
                                     visible_type_count,
@@ -17295,6 +17406,7 @@ static bool import_public_names(const FengSemanticModule *current_module,
                 case FENG_DECL_FUNCTION: {
                     VisibleValueEntry entry;
                     bool should_append_visible_value = true;
+                    bool value_is_visible_from_target = false;
 
                     name = (decl->kind == FENG_DECL_FUNCTION) ? decl->as.function_decl.name : decl->as.binding.name;
                     if (find_slice_index(seen_value_names, seen_value_count, name) < seen_value_count) {
@@ -17310,16 +17422,21 @@ static bool import_public_names(const FengSemanticModule *current_module,
                         index = find_visible_value_index(*visible_values, *visible_value_count, name);
                         if (index < *visible_value_count) {
                             if ((*visible_values)[index].provider_module == target_module) {
+                                value_is_visible_from_target = true;
                                 should_append_visible_value = false;
                             } else {
-                                /* If the existing symbol is from the current file,
-                                   report the error at the local definition site;
-                                   otherwise (import-vs-import) report at this import. */
-                                bool is_local_conflict = ((*visible_values)[index].provider_module == current_module);
-                                FengToken conflict_token = is_local_conflict
+                                bool is_current_file_conflict =
+                                    ((*visible_values)[index].provider_module == current_module &&
+                                     (*visible_values)[index].provider_program == program);
+                                if ((*visible_values)[index].provider_module == current_module &&
+                                    !is_current_file_conflict) {
+                                    should_append_visible_value = false;
+                                    break;
+                                }
+                                FengToken conflict_token = is_current_file_conflict
                                     ? (*visible_values)[index].decl->token
                                     : use_decl->token;
-                                const char *conflict_message = is_local_conflict
+                                const char *conflict_message = is_current_file_conflict
                                     ? "name '%.*s' is already defined in this file, conflicts with imported name from module '%s'"
                                     : "imported name '%.*s' from module '%s' conflicts with an existing visible value name";
                                 ok = append_error(
@@ -17338,9 +17455,17 @@ static bool import_public_names(const FengSemanticModule *current_module,
                         }
                     }
 
+                    if (!should_append_visible_value && decl->kind == FENG_DECL_FUNCTION) {
+                        index = find_visible_value_index(*visible_values, *visible_value_count, name);
+                        value_is_visible_from_target =
+                            (index < *visible_value_count &&
+                             (*visible_values)[index].provider_module == target_module);
+                    }
+
                     if (should_append_visible_value) {
                         entry.name = name;
                         entry.provider_module = target_module;
+                        entry.provider_program = target_program;
                         entry.decl = decl;
                         entry.mutability = decl->kind == FENG_DECL_GLOBAL_BINDING
                                                ? decl->as.binding.mutability
@@ -17354,9 +17479,10 @@ static bool import_public_names(const FengSemanticModule *current_module,
                         if (!ok) {
                             break;
                         }
+                        value_is_visible_from_target = true;
                     }
 
-                    if (decl->kind == FENG_DECL_FUNCTION) {
+                    if (decl->kind == FENG_DECL_FUNCTION && value_is_visible_from_target) {
                         ok = append_visible_function_overload(function_sets,
                                                               function_set_count,
                                                               function_set_capacity,
@@ -17383,11 +17509,17 @@ static bool import_public_names(const FengSemanticModule *current_module,
                         if ((*visible_types)[index].provider_module == target_module) {
                             break;
                         }
-                        bool is_local_conflict = ((*visible_types)[index].provider_module == current_module);
-                        FengToken conflict_token = is_local_conflict
+                        bool is_current_file_conflict =
+                            ((*visible_types)[index].provider_module == current_module &&
+                             (*visible_types)[index].provider_program == program);
+                        if ((*visible_types)[index].provider_module == current_module &&
+                            !is_current_file_conflict) {
+                            break;
+                        }
+                        FengToken conflict_token = is_current_file_conflict
                             ? (*visible_types)[index].decl->token
                             : use_decl->token;
-                        const char *conflict_message = is_local_conflict
+                        const char *conflict_message = is_current_file_conflict
                             ? "spec '%.*s' is already defined in this file, conflicts with imported spec from module '%s'"
                             : "imported spec '%.*s' from module '%s' conflicts with an existing visible type name";
                         ok = append_error(
@@ -17406,6 +17538,7 @@ static bool import_public_names(const FengSemanticModule *current_module,
 
                     entry.name = name;
                     entry.provider_module = target_module;
+                    entry.provider_program = target_program;
                     entry.decl = decl;
                     ok = append_raw((void **)visible_types,
                                     visible_type_count,
@@ -21832,6 +21965,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
 
                     entry.name = decl->as.type_decl.name;
                     entry.provider_module = module;
+                    entry.provider_program = program;
                     entry.decl = decl;
                     ok = append_raw((void **)&visible_types,
                                     &visible_type_count,
@@ -21865,6 +21999,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
 
                     entry.name = decl->as.enum_decl.name;
                     entry.provider_module = module;
+                    entry.provider_program = program;
                     entry.decl = decl;
                     ok = append_raw((void **)&visible_types,
                                     &visible_type_count,
@@ -21909,6 +22044,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
 
                     entry.name = decl->as.binding.name;
                     entry.provider_module = module;
+                    entry.provider_program = program;
                     entry.decl = decl;
                     entry.mutability = decl->as.binding.mutability;
                     entry.is_function = false;
@@ -22027,6 +22163,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
 
                         value_entry.name = decl->as.function_decl.name;
                         value_entry.provider_module = module;
+                        value_entry.provider_program = program;
                         value_entry.decl = decl;
                         value_entry.mutability = FENG_MUTABILITY_DEFAULT;
                         value_entry.is_function = true;
@@ -22068,6 +22205,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
 
                     entry.name = decl->as.spec_decl.name;
                     entry.provider_module = module;
+                    entry.provider_program = program;
                     entry.decl = decl;
                     ok = append_raw((void **)&visible_types,
                                     &visible_type_count,
@@ -22087,7 +22225,34 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
 
     for (program_index = 0U; program_index < module->program_count && ok; ++program_index) {
         const FengProgram *program = module->programs[program_index];
+        VisibleTypeEntry *program_visible_types = NULL;
+        VisibleValueEntry *program_visible_values = NULL;
+        FunctionOverloadSetEntry *program_function_sets = NULL;
+        size_t program_visible_type_count = 0U;
+        size_t program_visible_value_count = 0U;
+        size_t program_function_set_count = 0U;
+        size_t program_visible_type_capacity = 0U;
+        size_t program_visible_value_capacity = 0U;
+        size_t program_function_set_capacity = 0U;
         size_t use_index;
+
+        if (!copy_visible_type_entries(visible_types,
+                                       visible_type_count,
+                                       &program_visible_types,
+                                       &program_visible_type_count,
+                                       &program_visible_type_capacity) ||
+            !copy_visible_value_entries(visible_values,
+                                        visible_value_count,
+                                        &program_visible_values,
+                                        &program_visible_value_count,
+                                        &program_visible_value_capacity) ||
+            !copy_function_overload_sets(function_sets,
+                                         function_set_count,
+                                         &program_function_sets,
+                                         &program_function_set_count,
+                                         &program_function_set_capacity)) {
+            ok = false;
+        }
 
         for (use_index = 0U; use_index < program->use_count && ok; ++use_index) {
             const FengUseDecl *use_decl = &program->uses[use_index];
@@ -22142,36 +22307,40 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                      &analysis->modules[target_index],
                                      program,
                                      use_decl,
-                                     &visible_types,
-                                     &visible_type_count,
-                                     &visible_type_capacity,
-                                     &visible_values,
-                                     &visible_value_count,
-                                     &visible_value_capacity,
-                                     &function_sets,
-                                     &function_set_count,
-                                     &function_set_capacity,
+                                     &program_visible_types,
+                                     &program_visible_type_count,
+                                     &program_visible_type_capacity,
+                                     &program_visible_values,
+                                     &program_visible_value_count,
+                                     &program_visible_value_capacity,
+                                     &program_function_sets,
+                                     &program_function_set_count,
+                                     &program_function_set_capacity,
                                      errors,
                                      error_count,
                                      error_capacity);
         }
-    }
 
-    for (program_index = 0U; program_index < module->program_count && ok; ++program_index) {
-        ok = resolve_program_names(analysis,
-                                   module,
-                                   module->programs[program_index],
-                                   visible_types,
-                                   visible_type_count,
-                                   visible_values,
-                                   visible_value_count,
-                                   function_sets,
-                                   function_set_count,
-                                   callable_return_cache,
-                                   callable_exception_escape_cache,
-                                   errors,
-                                   error_count,
-                                   error_capacity);
+        if (ok) {
+            ok = resolve_program_names(analysis,
+                                       module,
+                                       program,
+                                       program_visible_types,
+                                       program_visible_type_count,
+                                       program_visible_values,
+                                       program_visible_value_count,
+                                       program_function_sets,
+                                       program_function_set_count,
+                                       callable_return_cache,
+                                       callable_exception_escape_cache,
+                                       errors,
+                                       error_count,
+                                       error_capacity);
+        }
+
+        free(program_visible_types);
+        free(program_visible_values);
+        free_function_overload_sets(program_function_sets, program_function_set_count);
     }
 
     free(visible_types);

@@ -6577,6 +6577,82 @@ static void test_imported_name_conflicts_between_modules(void) {
     feng_program_free(main_program);
 }
 
+static void test_import_short_names_do_not_leak_to_other_files(void) {
+    const char *base_source =
+        "open module demo.base;\n"
+        "open func load(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    const char *importing_source =
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func from_import(): int {\n"
+        "    return load();\n"
+        "}\n";
+    const char *sibling_source =
+        "module demo.main;\n"
+        "func from_sibling(): int {\n"
+        "    return load();\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("file_scope_base.f", base_source);
+    FengProgram *importing_program = parse_program_or_die("file_scope_importing.f", importing_source);
+    FengProgram *sibling_program = parse_program_or_die("file_scope_sibling.f", sibling_source);
+    const FengProgram *programs[] = {base_program, importing_program, sibling_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "file_scope_sibling.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strstr(errors[0].message, "undefined identifier 'load'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(importing_program);
+    feng_program_free(sibling_program);
+}
+
+static void test_import_name_conflict_with_other_file_decl_does_not_error(void) {
+    const char *base_source =
+        "open module demo.base;\n"
+        "open func helper(): int {\n"
+        "    return 1;\n"
+        "}\n"
+        "open func test(): int {\n"
+        "    return 2;\n"
+        "}\n";
+    const char *importing_source =
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func from_import(): int {\n"
+        "    return helper();\n"
+        "}\n";
+    const char *sibling_source =
+        "module demo.main;\n"
+        "func test(): int {\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("other_file_conflict_base.f", base_source);
+    FengProgram *importing_program = parse_program_or_die("other_file_conflict_importing.f", importing_source);
+    FengProgram *sibling_program = parse_program_or_die("other_file_conflict_sibling.f", sibling_source);
+    const FengProgram *programs[] = {base_program, importing_program, sibling_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(base_program);
+    feng_program_free(importing_program);
+    feng_program_free(sibling_program);
+}
+
 static void test_alias_import_does_not_inject_short_names(void) {
     const char *base_source =
         "open module demo.base;\n"
@@ -15134,6 +15210,8 @@ int main(void) {
     test_imported_type_conflicts_with_local_type();
     test_imported_value_conflicts_with_local_value();
     test_imported_name_conflicts_between_modules();
+    test_import_short_names_do_not_leak_to_other_files();
+    test_import_name_conflict_with_other_file_decl_does_not_error();
     test_alias_import_does_not_inject_short_names();
     test_duplicate_use_alias_in_same_file();
     test_unknown_use_module_rejected_without_import_query();
