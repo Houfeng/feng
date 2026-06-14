@@ -19,154 +19,154 @@
 
 ## SE - 语法错误
 
-| 错误码 | 用途 | 错误文案 |
-|--------|------|----------|
-| **SE0001** | 缺少 an identifier | expected an identifier after '.' in a qualified name |
-| **SE0002** | 缺少 ')' | expected ')' to close annotation argument list |
-| **SE0003** | 缺少 '>' | expected '>' to close type argument list |
-| **SE0004** | 缺少 a type parameter name | expected a type parameter name |
-| **SE0005** | 缺少 '>' | expected '>' to close type parameter list |
-| **SE0006** | 缺少 a type name | expected a type name |
-| **SE0007** | 缺少 '(' | expected '(' to start parameter list |
-| **SE0008** | 缺少 a parameter name | expected a parameter name |
-| **SE0009** | 缺少 ':' | expected ':' after parameter name in parameter list |
-| **SE0010** | 语法要求不满足 | variadic parameter must be the last parameter |
-| **SE0011** | 缺少 ')' | expected ')' to close parameter list |
-| **SE0012** | 缺少 '(' | expected '(' to start destructuring binding |
-| **SE0013** | 语法结构不允许 | nested destructuring bindings are not supported |
-| **SE0014** | 语法要求不满足 | destructuring positions must be identifiers or empty slots |
-| **SE0015** | 语法错误 | destructuring bindings support at most 8 positions |
-| **SE0016** | 缺少 ' | expected ',' between destructuring positions |
-| **SE0017** | 缺少 ')' | expected ')' to close destructuring binding |
-| **SE0018** | 语法要求不满足 | destructuring bindings require 0 or 2 to 8 positions |
-| **SE0019** | 语法错误 | destructuring is not valid in this binding context |
-| **SE0020** | 语法结构不允许 | destructuring bindings cannot use a single type annotation |
-| **SE0021** | 语法要求不满足 | destructuring bindings require an initializer |
-| **SE0022** | 缺少 a binding name | expected a binding name |
-| **SE0023** | 语法要求不满足 | type field declarations require ':' after the field name |
-| **SE0024** | 语法要求不满足 | binding declarations require a type annotation or an initializer |
-| **SE0025** | 语法要求不满足 | enum item initializer must be an integer literal |
-| **SE0026** | 语法结构不允许 | enum declarations cannot be marked 'extern' |
-| **SE0027** | 语法限制 | enum declarations do not support annotations in the current phase |
-| **SE0028** | 缺少 an enum name | expected an enum name |
-| **SE0029** | 语法限制 | enum declarations do not support generic parameters |
-| **SE0030** | 语法结构不允许 | enum declarations cannot declare parent specs |
-| **SE0031** | 语法结构不允许 | enum declarations cannot declare callable signatures |
-| **SE0032** | 语法要求不满足 | enum declarations require '{...}' after the enum name |
-| **SE0033** | 语法要求不满足 | enum declarations must declare at least one item |
-| **SE0034** | 语法限制 | enum declarations only allow item names and optional integer literal initializers |
-| **SE0035** | 语法限制 | enum items do not support annotations |
-| **SE0036** | 缺少 an enum item name | expected an enum item name |
-| **SE0037** | 语法要求不满足 | enum item initializer must be a single integer literal |
-| **SE0038** | 语法限制 | enum declarations do not allow a trailing ',' after the last item |
-| **SE0039** | 缺少 '}' | expected '}' to close enum body |
-| **SE0040** | 语法错误 | tuple type declarations support at most 8 elements |
-| **SE0041** | 缺少 '(' | expected '(' to start tuple type declaration |
-| **SE0042** | 缺少 ')' | expected ')' to close tuple type declaration |
-| **SE0043** | 语法要求不满足 | tuple type declarations require 0 or 2 to 8 elements |
-| **SE0044** | 语法要求不满足 | tuple type declarations must end with ';' |
-| **SE0045** | 语法要求不满足 | type declarations require '{...}' after the optional spec list |
-| **SE0046** | 语法要求不满足 | type member annotations must be followed immediately by a field or method; remove the trailing ';' |
-| **SE0047** | 语法要求不满足 | type field declarations must end with ';' |
-| **SE0048** | 语法要求不满足 | extern type object form only supports fields; methods require a non-extern type |
-| **SE0050** | 语法要求不满足 | finalizer name must match the enclosing type name |
-| **SE0051** | 语法要求不满足 | finalizer name must match the enclosing type name |
-| **SE0053** | 语法要求不满足 | constructor name must match the enclosing type name |
-| **SE0054** | 语法结构不允许 | finalizers cannot be declared 'static' |
-| **SE0055** | 语法结构不允许 | constructors cannot be declared 'static' |
-| **SE0056** | 语法要求不满足 | finalizer must not declare any parameters |
-| **SE0057** | 语法要求不满足 | finalizer return type must be omitted or ': void' |
-| **SE0058** | 语法要求不满足 | constructor must not declare a non-void return type |
-| **SE0059** | 语法要求不满足 | type methods and constructors must start with 'func' |
-| **SE0060** | 语法要求不满足 | type fields must start with 'let' or 'var' |
-| **SE0061** | 语法结构不允许 | type members cannot use 'extern func'; use 'func' for methods or 'let'/'var' for fields |
-| **SE0062** | 缺少 type member declaration: 'let' | expected type member declaration: 'let', 'var', 'func', or 'static' |
-| **SE0063** | 缺少 '}' | expected '}' to close type body |
-| **SE0064** | 语法结构不允许 | spec members cannot declare visibility; remove 'open' or 'seal' |
-| **SE0065** | 语法结构不允许 | spec members cannot be declared 'static' |
-| **SE0066** | 语法结构不允许 | spec field declarations cannot have an initializer |
-| **SE0067** | 语法要求不满足 | spec field declarations must end with ';' |
-| **SE0069** | 缺少 a method name | expected a method name after 'func' |
-| **SE0070** | 语法结构不允许 | spec method signatures must end with ';' and cannot have a body '{...}' |
-| **SE0071** | 语法结构不允许 | spec method parameters cannot use 'let' or 'var' modifiers |
-| **SE0072** | 语法要求不满足 | spec method signatures must declare a return type |
-| **SE0073** | 缺少 spec member declaration: 'let' | expected spec member declaration: 'let', 'var', or 'func' |
-| **SE0074** | 语法结构不允许 | 'extern' cannot be applied to a 'spec' declaration |
-| **SE0075** | 缺少 a spec name | expected a spec name after 'spec' |
-| **SE0076** | 语法结构不允许 | spec callable parameters cannot use 'let' or 'var' modifiers |
-| **SE0077** | 语法要求不满足 | spec callable declarations require ':' before the return type |
-| **SE0078** | 语法要求不满足 | spec callable declarations must end with ';' |
-| **SE0079** | 语法结构不允许 | union-form spec members cannot be 'void' |
-| **SE0080** | 语法要求不满足 | union-form spec declarations must end with ';' |
-| **SE0081** | 语法要求不满足 | spec object declarations require '{...}' after the optional spec list |
-| **SE0082** | 缺少 '}' | expected '}' to close spec body |
-| **SE0084** | 语法要求不满足 | spec method signatures must declare a return type |
-| **SE0087** | 语法要求不满足 | fit block methods must provide a body '{...}' |
-| **SE0088** | 语法结构不允许 | 'extern' cannot be applied to a 'fit' declaration |
-| **SE0089** | 语法结构不允许 | annotations cannot be applied to 'fit' declarations |
-| **SE0090** | 语法结构不允许 | fit declarations cannot use 'seal' |
-| **SE0091** | 缺少 '}' | expected '}' to close fit body |
-| **SE0092** | 语法要求不满足 | fit declarations without a body must end with ';' |
-| **SE0093** | 语法要求不满足 | fit declarations must include a spec list, a body block, or both |
-| **SE0094** | 缺少 a function name | expected a function name after 'func' |
-| **SE0097** | 语法结构不允许 | extern function declarations cannot use variadic parameters |
-| **SE0098** | 语法要求不满足 | top-level bindings must end with ';' |
-| **SE0099** | 语法要求不满足 | annotation must be followed immediately by a declaration; remove the trailing ';' |
-| **SE0100** | 语法限制 | 'extern' can only be applied to top-level 'func' declarations |
-| **SE0101** | 语法要求不满足 | top-level function declarations must start with 'func' |
-| **SE0102** | 语法要求不满足 | top-level bindings must start with 'let' or 'var' |
-| **SE0103** | 缺少 top-level declaration: 'let' | expected top-level declaration: 'let', 'var', 'extern func', 'type', 'spec', 'fit', or 'func' |
-| **SE0104** | 缺少 '{' | expected '{' to start object literal |
-| **SE0105** | 缺少 an object literal field name | expected an object literal field name |
-| **SE0106** | 缺少 ':' | expected ':' after object literal field name |
-| **SE0107** | 缺少 '}' | expected '}' to close object literal |
-| **SE0108** | 缺少 '[' | expected '[' to start array literal |
-| **SE0109** | 缺少 ']' | expected ']' to close array literal |
-| **SE0110** | 语法要求不满足 | lambda expressions must use '->' before a single-expression body or '{' for a block body |
-| **SE0111** | 语法要求不满足 | multi-line lambda body must omit '->' and use the block form '(params) { ... }' |
-| **SE0112** | 语法要求不满足 | tuple literals require an expression after ',' |
-| **SE0113** | 语法错误 | tuple literals support at most 8 elements |
-| **SE0114** | 缺少 ')' | expected ')' to close tuple literal |
-| **SE0115** | 语法要求不满足 | match label must be an integer, string, bool literal or named constant |
-| **SE0116** | 语法结构不允许 | match expression cannot declare more than one 'else' branch |
-| **SE0117** | 缺少 '}' | expected '}' to close match body |
-| **SE0118** | 语法要求不满足 | if expressions must use '{...}' after the condition |
-| **SE0119** | 语法要求不满足 | if-match expressions require an 'else' branch |
-| **SE0120** | 缺少 '}' | expected '}' to close the true branch of if expression |
-| **SE0121** | 语法要求不满足 | if expressions require an 'else' branch |
-| **SE0122** | 语法要求不满足 | catch clauses must bind an exception name |
-| **SE0123** | 语法要求不满足 | catch clauses must include a ': Type' annotation |
-| **SE0124** | 语法要求不满足 | 'try' requires at least one 'catch' clause |
-| **SE0125** | 缺少 '(' | expected '(' to start cast expression |
-| **SE0126** | 缺少 ')' | expected ')' after cast type |
-| **SE0127** | 缺少 '(' | expected '(' to start grouped expression, cast, or lambda |
-| **SE0128** | 缺少 ')' | expected ')' to close grouped expression |
-| **SE0129** | 缺少 expression term: identifier | expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression |
-| **SE0130** | 缺少 ')' | expected ')' to close argument list |
-| **SE0131** | 语法结构不允许 | finalizer cannot be invoked directly via '.~' |
-| **SE0132** | 缺少 an identifier | expected an identifier after '.' in member access |
-| **SE0133** | 语法要求不满足 | array-new segment '[:expr]' requires a type name |
-| **SE0134** | 缺少 ']' | expected ']' after array size in '[:expr]' |
-| **SE0135** | 缺少 '{' | expected '{' to start block |
-| **SE0136** | 缺少 '}' | expected '}' to close block |
-| **SE0137** | 缺少 '{' | expected '{' after if condition or match target |
-| **SE0138** | 缺少 '}' | expected '}' to close if block |
-| **SE0139** | 语法要求不满足 | for statements require ';' after the initializer |
-| **SE0140** | 语法要求不满足 | for statements require ';' after the condition |
-| **SE0141** | 语法要求不满足 | local bindings must start with 'let' or 'var' |
-| **SE0142** | 语法要求不满足 | return statements must end with ';' |
-| **SE0143** | 语法要求不满足 | throw statements must end with ';' |
-| **SE0144** | 语法要求不满足 | break statements must end with ';' |
-| **SE0145** | 语法要求不满足 | continue statements must end with ';' |
-| **SE0146** | 语法要求不满足 | try statements must end with ';' |
-| **SE0147** | 语法要求不满足 | expression statements and local bindings must end with ';' |
-| **SE0148** | 语法要求不满足 | source file must begin with module declaration |
-| **SE0149** | 缺少 a module path | expected a module path after 'module' |
-| **SE0150** | 语法要求不满足 | module declarations must end with ';' |
-| **SE0151** | 缺少 a module path | expected a module path after 'import' |
-| **SE0152** | 缺少 an alias name | expected an alias name after 'as' |
-| **SE0153** | 语法要求不满足 | import declarations must end with ';' |
-| **SE0156** | 缺少 ']' | expected ']' to close index expression |
+| 错误码 | 新错误码 | 用途 | 错误文案 |
+|--------|----------|------|----------|
+| **SE0001** | **SE0002** | 缺少 an identifier | expected an identifier after '.' in a qualified name |
+| **SE0002** | **SE1302** | 缺少 ')' | expected ')' to close annotation argument list |
+| **SE0003** | **SE0610** | 缺少 '>' | expected '>' to close type argument list |
+| **SE0004** | **SE0002** | 缺少 a type parameter name | expected a type parameter name |
+| **SE0005** | **SE0610** | 缺少 '>' | expected '>' to close type parameter list |
+| **SE0006** | **SE0002** | 缺少 a type name | expected a type name |
+| **SE0007** | **SE0515** | 缺少 '(' | expected '(' to start parameter list |
+| **SE0008** | **SE0002** | 缺少 a parameter name | expected a parameter name |
+| **SE0009** | **SE0504** | 缺少 ':' | expected ':' after parameter name in parameter list |
+| **SE0010** | **SE0502** | 语法要求不满足 | variadic parameter must be the last parameter |
+| **SE0011** | **SE0515** | 缺少 ')' | expected ')' to close parameter list |
+| **SE0012** | **SE0110** | 缺少 '(' | expected '(' to start destructuring binding |
+| **SE0013** | **SE0105** | 语法结构不允许 | nested destructuring bindings are not supported |
+| **SE0014** | **SE0106** | 语法要求不满足 | destructuring positions must be identifiers or empty slots |
+| **SE0015** | **SE0104** | 语法错误 | destructuring bindings support at most 8 positions |
+| **SE0016** | **SE0110** | 缺少 ' | expected ',' between destructuring positions |
+| **SE0017** | **SE0110** | 缺少 ')' | expected ')' to close destructuring binding |
+| **SE0018** | **SE0104** | 语法要求不满足 | destructuring bindings require 0 or 2 to 8 positions |
+| **SE0019** | **SE0109** | 语法错误 | destructuring is not valid in this binding context |
+| **SE0020** | **SE0107** | 语法结构不允许 | destructuring bindings cannot use a single type annotation |
+| **SE0021** | **SE0108** | 语法要求不满足 | destructuring bindings require an initializer |
+| **SE0022** | **SE0002** | 缺少 a binding name | expected a binding name |
+| **SE0023** | **SE0302** | 语法要求不满足 | type field declarations require ':' after the field name |
+| **SE0024** | **SE0101** | 语法要求不满足 | binding declarations require a type annotation or an initializer |
+| **SE0025** | **SE0408** | 语法要求不满足 | enum item initializer must be an integer literal |
+| **SE0026** | **SE0401** | 语法结构不允许 | enum declarations cannot be marked 'extern' |
+| **SE0027** | **SE0402** | 语法限制 | enum declarations do not support annotations in the current phase |
+| **SE0028** | **SE0002** | 缺少 an enum name | expected an enum name |
+| **SE0029** | **SE0403** | 语法限制 | enum declarations do not support generic parameters |
+| **SE0030** | **SE0404** | 语法结构不允许 | enum declarations cannot declare parent specs |
+| **SE0031** | **SE0405** | 语法结构不允许 | enum declarations cannot declare callable signatures |
+| **SE0032** | **SE0410** | 语法要求不满足 | enum declarations require '{...}' after the enum name |
+| **SE0033** | **SE0406** | 语法要求不满足 | enum declarations must declare at least one item |
+| **SE0034** | **SE0407** | 语法限制 | enum declarations only allow item names and optional integer literal initializers |
+| **SE0035** | **SE0402** | 语法限制 | enum items do not support annotations |
+| **SE0036** | **SE0002** | 缺少 an enum item name | expected an enum item name |
+| **SE0037** | **SE0408** | 语法要求不满足 | enum item initializer must be a single integer literal |
+| **SE0038** | **SE0409** | 语法限制 | enum declarations do not allow a trailing ',' after the last item |
+| **SE0039** | **SE0410** | 缺少 '}' | expected '}' to close enum body |
+| **SE0040** | **SE0308** | 语法错误 | tuple type declarations support at most 8 elements |
+| **SE0041** | **SE0312** | 缺少 '(' | expected '(' to start tuple type declaration |
+| **SE0042** | **SE0312** | 缺少 ')' | expected ')' to close tuple type declaration |
+| **SE0043** | **SE0308** | 语法要求不满足 | tuple type declarations require 0 or 2 to 8 elements |
+| **SE0044** | **SE0001** | 语法要求不满足 | tuple type declarations must end with ';' |
+| **SE0045** | **SE0301** | 语法要求不满足 | type declarations require '{...}' after the optional spec list |
+| **SE0046** | **SE0307** | 语法要求不满足 | type member annotations must be followed immediately by a field or method; remove the trailing ';' |
+| **SE0047** | **SE0001** | 语法要求不满足 | type field declarations must end with ';' |
+| **SE0048** | **SE0306** | 语法要求不满足 | extern type object form only supports fields; methods require a non-extern type |
+| **SE0050** | **SE0508** | 语法要求不满足 | finalizer name must match the enclosing type name |
+| **SE0051** | **SE0508** | 语法要求不满足 | finalizer name must match the enclosing type name |
+| **SE0053** | **SE0506** | 语法要求不满足 | constructor name must match the enclosing type name |
+| **SE0054** | **SE0511** | 语法结构不允许 | finalizers cannot be declared 'static' |
+| **SE0055** | **SE0507** | 语法结构不允许 | constructors cannot be declared 'static' |
+| **SE0056** | **SE0509** | 语法要求不满足 | finalizer must not declare any parameters |
+| **SE0057** | **SE0510** | 语法要求不满足 | finalizer return type must be omitted or ': void' |
+| **SE0058** | **SE0505** | 语法要求不满足 | constructor must not declare a non-void return type |
+| **SE0059** | **SE0304** | 语法要求不满足 | type methods and constructors must start with 'func' |
+| **SE0060** | **SE0303** | 语法要求不满足 | type fields must start with 'let' or 'var' |
+| **SE0061** | **SE0305** | 语法结构不允许 | type members cannot use 'extern func'; use 'func' for methods or 'let'/'var' for fields |
+| **SE0062** | **SE0003** | 缺少 type member declaration: 'let' | expected type member declaration: 'let', 'var', 'func', or 'static' |
+| **SE0063** | **SE0312** | 缺少 '}' | expected '}' to close type body |
+| **SE0064** | **SE0601** | 语法结构不允许 | spec members cannot declare visibility; remove 'open' or 'seal' |
+| **SE0065** | **SE0602** | 语法结构不允许 | spec members cannot be declared 'static' |
+| **SE0066** | **SE0603** | 语法结构不允许 | spec field declarations cannot have an initializer |
+| **SE0067** | **SE0001** | 语法要求不满足 | spec field declarations must end with ';' |
+| **SE0069** | **SE0002** | 缺少 a method name | expected a method name after 'func' |
+| **SE0070** | **SE0605** | 语法结构不允许 | spec method signatures must end with ';' and cannot have a body '{...}' |
+| **SE0071** | **SE0606** | 语法结构不允许 | spec method parameters cannot use 'let' or 'var' modifiers |
+| **SE0072** | **SE0604** | 语法要求不满足 | spec method signatures must declare a return type |
+| **SE0073** | **SE0003** | 缺少 spec member declaration: 'let' | expected spec member declaration: 'let', 'var', or 'func' |
+| **SE0074** | **SE0003** | 语法结构不允许 | 'extern' cannot be applied to a 'spec' declaration |
+| **SE0075** | **SE0002** | 缺少 a spec name | expected a spec name after 'spec' |
+| **SE0076** | **SE0606** | 语法结构不允许 | spec callable parameters cannot use 'let' or 'var' modifiers |
+| **SE0077** | **SE0607** | 语法要求不满足 | spec callable declarations require ':' before the return type |
+| **SE0078** | **SE0001** | 语法要求不满足 | spec callable declarations must end with ';' |
+| **SE0079** | **SE0609** | 语法结构不允许 | union-form spec members cannot be 'void' |
+| **SE0080** | **SE0001** | 语法要求不满足 | union-form spec declarations must end with ';' |
+| **SE0081** | **SE0608** | 语法要求不满足 | spec object declarations require '{...}' after the optional spec list |
+| **SE0082** | **SE0610** | 缺少 '}' | expected '}' to close spec body |
+| **SE0084** | **SE0604** | 语法要求不满足 | spec method signatures must declare a return type |
+| **SE0087** | **SE0805** | 语法要求不满足 | fit block methods must provide a body '{...}' |
+| **SE0088** | **SE0801** | 语法结构不允许 | 'extern' cannot be applied to a 'fit' declaration |
+| **SE0089** | **SE0802** | 语法结构不允许 | annotations cannot be applied to 'fit' declarations |
+| **SE0090** | **SE0803** | 语法结构不允许 | fit declarations cannot use 'seal' |
+| **SE0091** | **SE0806** | 缺少 '}' | expected '}' to close fit body |
+| **SE0092** | **SE0001** | 语法要求不满足 | fit declarations without a body must end with ';' |
+| **SE0093** | **SE0804** | 语法要求不满足 | fit declarations must include a spec list, a body block, or both |
+| **SE0094** | **SE0002** | 缺少 a function name | expected a function name after 'func' |
+| **SE0097** | **SE0503** | 语法结构不允许 | extern function declarations cannot use variadic parameters |
+| **SE0098** | **SE0001** | 语法要求不满足 | top-level bindings must end with ';' |
+| **SE0099** | **SE1301** | 语法要求不满足 | annotation must be followed immediately by a declaration; remove the trailing ';' |
+| **SE0100** | **SE0003** | 语法限制 | 'extern' can only be applied to top-level 'func' declarations |
+| **SE0101** | **SE0501** | 语法要求不满足 | top-level function declarations must start with 'func' |
+| **SE0102** | **SE0102** | 语法要求不满足 | top-level bindings must start with 'let' or 'var' |
+| **SE0103** | **SE0003** | 缺少 top-level declaration: 'let' | expected top-level declaration: 'let', 'var', 'extern func', 'type', 'spec', 'fit', or 'func' |
+| **SE0104** | **SE1002** | 缺少 '{' | expected '{' to start object literal |
+| **SE0105** | **SE0002** | 缺少 an object literal field name | expected an object literal field name |
+| **SE0106** | **SE1001** | 缺少 ':' | expected ':' after object literal field name |
+| **SE0107** | **SE1002** | 缺少 '}' | expected '}' to close object literal |
+| **SE0108** | **SE0202** | 缺少 '[' | expected '[' to start array literal |
+| **SE0109** | **SE0202** | 缺少 ']' | expected ']' to close array literal |
+| **SE0110** | **SE0513** | 语法要求不满足 | lambda expressions must use '->' before a single-expression body or '{' for a block body |
+| **SE0111** | **SE0514** | 语法要求不满足 | multi-line lambda body must omit '->' and use the block form '(params) { ... }' |
+| **SE0112** | **SE0310** | 语法要求不满足 | tuple literals require an expression after ',' |
+| **SE0113** | **SE0309** | 语法错误 | tuple literals support at most 8 elements |
+| **SE0114** | **SE0312** | 缺少 ')' | expected ')' to close tuple literal |
+| **SE0115** | **SE1105** | 语法要求不满足 | match label must be an integer, string, bool literal or named constant |
+| **SE0116** | **SE1104** | 语法结构不允许 | match expression cannot declare more than one 'else' branch |
+| **SE0117** | **SE1106** | 缺少 '}' | expected '}' to close match body |
+| **SE0118** | **SE1101** | 语法要求不满足 | if expressions must use '{...}' after the condition |
+| **SE0119** | **SE1103** | 语法要求不满足 | if-match expressions require an 'else' branch |
+| **SE0120** | **SE1106** | 缺少 '}' | expected '}' to close the true branch of if expression |
+| **SE0121** | **SE1102** | 语法要求不满足 | if expressions require an 'else' branch |
+| **SE0122** | **SE1402** | 语法要求不满足 | catch clauses must bind an exception name |
+| **SE0123** | **SE1403** | 语法要求不满足 | catch clauses must include a ': Type' annotation |
+| **SE0124** | **SE1401** | 语法要求不满足 | 'try' requires at least one 'catch' clause |
+| **SE0125** | **SE0004** | 缺少 '(' | expected '(' to start cast expression |
+| **SE0126** | **SE0004** | 缺少 ')' | expected ')' after cast type |
+| **SE0127** | **SE0516** | 缺少 '(' | expected '(' to start grouped expression, cast, or lambda |
+| **SE0128** | **SE0005** | 缺少 ')' | expected ')' to close grouped expression |
+| **SE0129** | **SE0006** | 缺少 expression term: identifier | expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression |
+| **SE0130** | **SE0005** | 缺少 ')' | expected ')' to close argument list |
+| **SE0131** | **SE0512** | 语法结构不允许 | finalizer cannot be invoked directly via '.~' |
+| **SE0132** | **SE0002** | 缺少 an identifier | expected an identifier after '.' in member access |
+| **SE0133** | **SE0201** | 语法要求不满足 | array-new segment '[:expr]' requires a type name |
+| **SE0134** | **SE0202** | 缺少 ']' | expected ']' after array size in '[:expr]' |
+| **SE0135** | **SE0005** | 缺少 '{' | expected '{' to start block |
+| **SE0136** | **SE0005** | 缺少 '}' | expected '}' to close block |
+| **SE0137** | **SE1106** | 缺少 '{' | expected '{' after if condition or match target |
+| **SE0138** | **SE1106** | 缺少 '}' | expected '}' to close if block |
+| **SE0139** | **SE1201** | 语法要求不满足 | for statements require ';' after the initializer |
+| **SE0140** | **SE1202** | 语法要求不满足 | for statements require ';' after the condition |
+| **SE0141** | **SE0103** | 语法要求不满足 | local bindings must start with 'let' or 'var' |
+| **SE0142** | **SE0001** | 语法要求不满足 | return statements must end with ';' |
+| **SE0143** | **SE0001** | 语法要求不满足 | throw statements must end with ';' |
+| **SE0144** | **SE0001** | 语法要求不满足 | break statements must end with ';' |
+| **SE0145** | **SE0001** | 语法要求不满足 | continue statements must end with ';' |
+| **SE0146** | **SE0001** | 语法要求不满足 | try statements must end with ';' |
+| **SE0147** | **SE0001** | 语法要求不满足 | expression statements and local bindings must end with ';' |
+| **SE0148** | **SE0901** | 语法要求不满足 | source file must begin with module declaration |
+| **SE0149** | **SE0902** | 缺少 a module path | expected a module path after 'module' |
+| **SE0150** | **SE0001** | 语法要求不满足 | module declarations must end with ';' |
+| **SE0151** | **SE0902** | 缺少 a module path | expected a module path after 'import' |
+| **SE0152** | **SE0002** | 缺少 an alias name | expected an alias name after 'as' |
+| **SE0153** | **SE0001** | 语法要求不满足 | import declarations must end with ';' |
+| **SE0156** | **SE0202** | 缺少 ']' | expected ']' to close index expression |
 
 
 ## AE - 语义错误
