@@ -22865,13 +22865,25 @@ static const FengTypeRef *find_spec_type_ref_in_fit(
     return NULL;
 }
 
-/* Pre-register normalized union-spec info for union-form specs from
- * imported-package modules.  In a local-only build record_normalized_union_spec_info
- * runs during the resolution pass, but imported modules are skipped entirely
- * so their union-spec info is never recorded.  Without it
- * feng_semantic_lookup_union_spec_info returns NULL and cross-module
- * union-variant matching fails. */
-static void precompute_imported_union_spec_infos(FengSemanticAnalysis *analysis) {
+/* Pre-register union-spec member info for all modules (both local and
+ * imported-package) before the per-program resolution pass.
+ *
+ * Source files within a module are processed in alphabetical path order.
+ * Without this pre-registration, if a file that uses a union spec is sorted
+ * before the file that defines it, feng_semantic_lookup_union_spec_info
+ * returns NULL during constructor/method argument matching and a spurious
+ * AE0315 error is reported.
+ *
+ * For imported-package modules the pre-registered info is the final version
+ * (these modules are skipped during the resolution pass).
+ *
+ * For local modules the pre-registered info is a lightweight clone of the
+ * member type refs.  When the resolution pass later reaches the defining
+ * file, record_normalized_union_spec_info replaces it with the fully
+ * normalized version (nested-union expansion, deduplication, validation)
+ * via feng_semantic_record_union_spec_info's built-in replacement
+ * semantics. */
+static void precompute_union_spec_infos(FengSemanticAnalysis *analysis) {
     size_t mi;
 
     if (analysis == NULL) {
@@ -22881,10 +22893,6 @@ static void precompute_imported_union_spec_infos(FengSemanticAnalysis *analysis)
     for (mi = 0U; mi < analysis->module_count; ++mi) {
         const FengSemanticModule *mod = &analysis->modules[mi];
         size_t pi;
-
-        if (mod->origin != FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
-            continue;
-        }
 
         for (pi = 0U; pi < mod->program_count; ++pi) {
             const FengProgram *prog = mod->programs[pi];
@@ -23278,10 +23286,10 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
         }
     }
 
-    /* Pre-register normalized union-spec info for imported-package
-     * union-form specs so cross-module union-variant matching works. */
+    /* Pre-register union-spec member info for all modules so that
+     * cross-file union-variant matching works regardless of file order. */
     if (ok) {
-        precompute_imported_union_spec_infos(analysis);
+        precompute_union_spec_infos(analysis);
     }
 
     /* Phase S1a: spec satisfaction relation sidecar must be available
