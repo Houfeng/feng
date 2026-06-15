@@ -9298,26 +9298,35 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         }
 
         /* Forward declare so other default-zero factories can reference it. */
-        buf_append_fmt(&cg->headers,
-            "struct %s *%s(void);\n",
-            s->c_closure_struct_name,
-            s->c_default_callable_new_name);
+        {
+            bool _imported = cg_program_origin(cg, s->owner_program) ==
+                             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
+            buf_append_fmt(&cg->headers,
+                "%sstruct %s *%s(void);\n",
+                _imported ? "static " : "",
+                s->c_closure_struct_name,
+                s->c_default_callable_new_name);
 
-        /* Default-zero factory — allocates a callable with the noop invoke. */
-        buf_append_fmt(td,
-            "struct %s *%s(void) {\n"
-            "    struct %s *_o = (struct %s *)feng_object_new(&%s);\n"
-            "    _o->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
-            "    _o->_self = NULL;\n"
-            "    _o->invoke = %s;\n"
-            "    return _o;\n"
-            "}\n\n",
-            s->c_closure_struct_name,
-            s->c_default_callable_new_name,
-            s->c_closure_struct_name,
-            s->c_closure_struct_name,
-            s->c_closure_desc_name,
-            s->c_default_callable_noop_name);
+            /* Default-zero factory — allocates a callable with the noop invoke.
+             * For imported specs the factory uses internal linkage so each
+             * consumer has its own copy and avoids duplicate-symbol errors
+             * with the originating library. */
+            buf_append_fmt(td,
+                "%sstruct %s *%s(void) {\n"
+                "    struct %s *_o = (struct %s *)feng_object_new(&%s);\n"
+                "    _o->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
+                "    _o->_self = NULL;\n"
+                "    _o->invoke = %s;\n"
+                "    return _o;\n"
+                "}\n\n",
+                _imported ? "static " : "",
+                s->c_closure_struct_name,
+                s->c_default_callable_new_name,
+                s->c_closure_struct_name,
+                s->c_closure_struct_name,
+                s->c_closure_desc_name,
+                s->c_default_callable_noop_name);
+        }
 
         return;
     }
@@ -28207,9 +28216,14 @@ static bool cg_emit_all_programs(CG *cg,
              * - Union-form specs: the aggregate descriptor (with init fn,
              *   slots, etc.) uses internal linkage in the originating
              *   library and cannot be referenced from the consumer, so we
-             *   must emit our own copy here. */
+             *   must emit our own copy here.
+             * - Callable-form specs: the closure struct definition and
+             *   FengClosureDesc type descriptor both use internal linkage,
+             *   and the consumer needs them to create closure values
+             *   inline, so we must emit our own copy here. */
             if (cg->user_specs[i].generic_context_type_param_count > 0U ||
-                cg->user_specs[i].form == FENG_SPEC_FORM_UNION) {
+                cg->user_specs[i].form == FENG_SPEC_FORM_UNION ||
+                cg->user_specs[i].form == FENG_SPEC_FORM_CALLABLE) {
                 cg->cur_program = cg->user_specs[i].owner_program;
                 cg_emit_user_spec_definition(cg, &cg->user_specs[i]);
                 cg->cur_program = NULL;

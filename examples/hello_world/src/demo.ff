@@ -2,6 +2,6 @@ module hello_world;
 
 import std.io;
 
-func test() {
+func test3() {
   println("Hello, World!");
 }
