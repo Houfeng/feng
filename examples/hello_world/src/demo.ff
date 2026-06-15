@@ -1,9 +1,7 @@
 module hello_world;
 
-import std.test as test_helper;
+import std.io;
 
 func test() {
-  test_helper.assert(true, "hello world");
+  println("Hello, World!");
 }
-
-// let test_helper ="";

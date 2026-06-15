@@ -9453,6 +9453,47 @@ static ConstructorResolution resolve_accessible_constructor_overload(
     return result;
 }
 
+/* Check whether any of the current file's short-name imported modules
+ * exposes a public top-level function with the given name.  Returns the
+ * first matching imported module, or NULL if none.  Used for lazy
+ * collision detection at the call site (analogous to C# CS0104). */
+static const FengSemanticModule *find_imported_module_with_public_function(
+    const ResolveContext *context,
+    FengSlice name) {
+    for (size_t i = 0U; i < context->imported_module_count; ++i) {
+        const FengSemanticModule *target = context->imported_modules[i].target_module;
+        for (size_t p = 0U; p < target->program_count; ++p) {
+            const FengProgram *prog = target->programs[p];
+            for (size_t d = 0U; d < prog->declaration_count; ++d) {
+                const FengDecl *decl = prog->declarations[d];
+                if (decl != NULL && decl->kind == FENG_DECL_FUNCTION &&
+                    decl_is_public(decl) &&
+                    slice_equals(decl->as.function_decl.name, name)) {
+                    return target;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Check whether the current module defines a top-level function with the
+ * given name (across any of its programs / source files). */
+static bool current_module_has_local_function(const ResolveContext *context,
+                                              FengSlice name) {
+    for (size_t p = 0U; p < context->module->program_count; ++p) {
+        const FengProgram *prog = context->module->programs[p];
+        for (size_t d = 0U; d < prog->declaration_count; ++d) {
+            const FengDecl *decl = prog->declarations[d];
+            if (decl != NULL && decl->kind == FENG_DECL_FUNCTION &&
+                slice_equals(decl->as.function_decl.name, name)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 static FunctionCallResolution resolve_top_level_function_overload(
     ResolveContext *context,
     const FunctionOverloadSetEntry *overload_set,
@@ -16907,6 +16948,29 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                            callee->as.identifier);
 
             if (overload_set != NULL) {
+                /* Lazy collision detection (§cs.md): if the bare identifier
+                 * resolves to a local-module function AND also names a public
+                 * function in an imported module, report ambiguity and suggest
+                 * using an import alias. */
+                if (current_module_has_local_function(context, callee->as.identifier)) {
+                    const FengSemanticModule *conflict_module =
+                        find_imported_module_with_public_function(context, callee->as.identifier);
+                    if (conflict_module != NULL) {
+                        char *mod_name = format_module_name(
+                            conflict_module->segments, conflict_module->segment_count);
+                        bool ok = resolver_append_error(
+                            context,
+                            callee->token,
+                            "AE0513", format_message(
+                                "'%.*s' is ambiguous: defined in current module and also imported from '%s'; use an import alias to disambiguate",
+                                (int)callee->as.identifier.length,
+                                callee->as.identifier.data,
+                                mod_name != NULL ? mod_name : "<unknown>"));
+                        free(mod_name);
+                        return ok;
+                    }
+                }
+
                 FunctionCallResolution resolution =
                     resolve_top_level_function_overload(context,
                                                         overload_set,
