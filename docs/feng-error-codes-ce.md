@@ -95,7 +95,7 @@
 | CE0133 | 泛型静态方法具体返回类型确定失败 | CE0149 | codegen: cannot determine generic static method return type | 消解 |
 | CE0134 | 泛型方法调用 object-form spec 约束要求 | CE0155 | codegen: generic method call requires an object-form spec constraint | 回到AE |
 | CE0135 | 泛型 spec 方法返回描述符缺失 | CE0158 | codegen: missing descriptor for generic spec method return | 消解 |
-| CE0136 | builtin fit 泛型描述符发射目标限制 | CE0161 | codegen: builtin fit generic descriptor emission only supports array targets in this phase | 回到AE |
+| CE0136 | builtin fit 泛型描述符发射目标限制 | CE0161 | codegen: builtin fit generic descriptor emission only supports array targets in this phase | 消解 |
 | CE0137 | 泛型类型构造实例注册缺失 | CE0167 | codegen: generic type constructor instance for '%.*s' was not registered | 回到AE |
 | CE0138 | 泛型类型字段不存在约束 | CE0171 | codegen: generic type '%.*s' has no field '%.*s' | 回到AE |
 | CE0139 | 泛型成员访问 object-form spec 约束要求 | CE0172 | codegen: generic member access requires an object-form spec constraint | 回到AE |
@@ -111,7 +111,7 @@
 | CE0149 | 泛型方法字段写入聚合描述符缺失 | CE0251 | codegen: missing aggregate descriptor for generic method field write | 消解 |
 | CE0150 | 泛型成员赋值 object-form spec 约束要求 | CE0252 | codegen: generic member assignment requires an object-form spec constraint | 回到AE |
 | CE0151 | 泛型类型实参转发描述符上下文要求 | CE0292 | codegen: generic type argument forwarding requires an active generic descriptor context | 消解 |
-| CE0152 | 泛型类型实参跨约束面转发 witness 兼容性约束 | CE0293 | codegen: forwarding a generic type argument across a different constraint surface requires a parent-compatible witness surface (G6) | 回到AE |
+| CE0152 | 泛型类型实参跨约束面转发 witness 兼容性约束 | CE0293 | codegen: forwarding a generic type argument across a different constraint surface requires a parent-compatible witness surface (G6) | 消解 |
 | CE0153 | 受约束泛型实参候选范围约束（含 builtin） | CE0294 | codegen: constrained generic type argument currently requires a concrete user type, concrete spec value, matching outer generic parameter, or concrete builtin type | 消解 |
 | CE0154 | 受约束泛型实参候选范围约束（G6） | CE0295 | codegen: constrained generic type argument currently requires a concrete user type, concrete spec value, or matching outer generic parameter (G6) | 消解 |
 | CE0155 | 平凡泛型实参 trivial descriptor 要求 | CE0296 | codegen: trivial generic type argument requires a trivial descriptor | 消解 |
@@ -128,8 +128,8 @@
 | CE0166 | 泛型函数具体参数类型确定失败 | CE0307 | codegen: cannot determine concrete parameter type for generic function '%s' | 消解 |
 | CE0167 | 泛型函数类型实参推断失败 | CE0308 | codegen: cannot infer type argument %zu for generic function '%s' | 回到AE |
 | CE0168 | spec 值满足泛型约束时 spec form 不匹配 | CE0312 | codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through mismatched spec forms | 回到AE |
-| CE0169 | spec 值满足泛型约束时 callable slot witness 适配失败 | CE0313 | codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through callable slot witness adaptation | 回到AE |
-| CE0170 | spec 值满足泛型约束时 slot witness 适配失败 | CE0314 | codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through slot witness adaptation | 回到AE |
+| CE0169 | spec 值满足泛型约束时 callable slot witness 适配失败 | CE0313 | codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through callable slot witness adaptation | 消解 |
+| CE0170 | spec 值满足泛型约束时 slot witness 适配失败 | CE0314 | codegen: spec value '%s' cannot satisfy generic constraint spec '%s' through slot witness adaptation | 消解 |
 | CE0171 | 泛型实例收集无诊断失败 | CE0353 | codegen: internal: generic instance collection failed without diagnostic | 回到IE |
 | CE0172 | 共享泛型方法发射失败 | CE0369 | codegen: internal: failed to emit shared generic method '%.*s' | 回到IE |
 | CE0173 | 泛型实例方法 origin type 缺失 | CE0370 | codegen: internal: generic instance method missing origin type | 回到IE |
@@ -204,7 +204,7 @@
 | CE0314 | spec coercion 源类型缺失 | CE0217 | codegen: spec coercion source type is missing | 回到IE |
 | CE0315 | spec coercion 引用越界当前 codegen scope | CE0218 | codegen: spec coercion references type outside current codegen scope | 回到IE |
 | CE0316 | scalar spec coercion 源 kind 不支持 | CE0219 | codegen: scalar spec coercion has unsupported source kind | 回到IE |
-| CE0317 | object-form spec coercion 源 kind 无效 | CE0220 | codegen: object-form spec coercion source kind is invalid | 回到AE |
+| CE0317 | object-form spec coercion 源 kind 无效 | CE0220 | codegen: object-form spec coercion source kind is invalid | 消解 |
 | CE0318 | spec 字段可写性前置约束 | CE0253 | codegen: spec field '%s' is not declared `var` | 回到AE |
 | CE0319 | spec 字段复合赋值数值类型约束 | CE0254 | codegen: compound spec field assignment requires a numeric field type | 回到AE |
 | CE0320 | spec 字段复合赋值运算符不支持 | CE0255 | codegen: unsupported compound spec field assignment operator | 回到AE |
@@ -223,8 +223,8 @@
 | CE0333 | witness slot 数量不匹配（对象/类型对） | CE0339 | codegen: internal: witness slot count mismatch for (%s, %s) | 回到IE |
 | CE0334 | 内部 type 满足 spec 时方法缺失 | CE0342 | codegen: internal: type '%s' has no method '%s' to satisfy spec '%s' | 回到IE |
 | CE0335 | 内部 type 满足 spec 时字段缺失 | CE0343 | codegen: internal: type '%s' has no field '%s' to satisfy spec '%s' | 回到IE |
-| CE0336 | spec 方法实现载体约束 | CE0346 | codegen: spec method '%s' must be implemented by a method on '%s' (Step 4b-α) | 回到AE |
-| CE0337 | spec 字段满足载体约束 | CE0347 | codegen: spec field '%s' must be satisfied by a field on '%s' | 回到AE |
+| CE0336 | spec 方法实现载体约束 | CE0346 | codegen: spec method '%s' must be implemented by a method on '%s' (Step 4b-α) | 消解 |
+| CE0337 | spec 字段满足载体约束 | CE0347 | codegen: spec field '%s' must be satisfied by a field on '%s' | 消解 |
 
 ## 04 Fit段
 
@@ -239,13 +239,13 @@
 | CE0406 | fit body 仅支持方法成员 | CE0054 | codegen: only methods are supported in fit bodies | 回到AE |
 | CE0407 | builtin/array fit 方法不存在约束 | CE0159 | codegen: builtin/array fit has no method '%.*s' | 回到AE |
 | CE0408 | builtin fit 返回类型实例化失败 | CE0162 | codegen: failed to instantiate builtin fit return type | 消解 |
-| CE0409 | type 对 spec 方法存在多个可见 fit 实现 | CE0317 | codegen: type '%s' has multiple visible implementations of method '%s' required by spec '%s' (one or more fits and/or the type itself) | 回到AE |
+| CE0409 | type 对 spec 方法存在多个可见 fit 实现 | CE0317 | codegen: type '%s' has multiple visible implementations of method '%s' required by spec '%s' (one or more fits and/or the type itself) | 消解 |
 | CE0410 | non-type subject 仅支持 fit-method spec 成员 | CE0320 | codegen: non-type subject key currently supports fit-method spec members only | 消解 |
 | CE0411 | fit 实现与 object-form spec coercion 源不匹配 | CE0324 | codegen: fit implementation does not match object-form spec coercion source | 回到IE |
 | CE0412 | fit 方法注册缺失 | CE0325 | codegen: fit method '%s' was not registered | 回到IE |
 | CE0413 | fit 声明注册缺失 | CE0340 | codegen: internal: fit decl for spec '%s' member '%s' not registered for type '%s' | 回到IE |
 | CE0414 | fit body 中方法缺失 | CE0341 | codegen: internal: fit method '%s' not found in fit body for type '%s' | 回到IE |
-| CE0415 | spec 字段不能由 fit 方法满足 | CE0344 | codegen: spec field '%s' cannot be satisfied by a fit method | 回到AE |
+| CE0415 | spec 字段不能由 fit 方法满足 | CE0344 | codegen: spec field '%s' cannot be satisfied by a fit method | 消解 |
 | CE0416 | fit 绑定注册缺失 | CE0345 | codegen: internal: fit binding for spec '%s' member '%s' not registered for type '%s' | 回到IE |
 | CE0417 | fit 注册缺失 | CE0351 | codegen: internal: fit not registered | 回到IE |
 
@@ -284,8 +284,8 @@
 | CE0602 | extern 注解字符串字面量格式错误 | CE0011 | codegen: malformed extern annotation string literal | 消解 |
 | CE0603 | extern 注解字符串转义无效 | CE0012 | codegen: unknown extern annotation string escape '\%c' | 消解 |
 | CE0604 | extern 注解参数缺失 | CE0013 | codegen: extern annotation %s argument is missing | 回到AE |
-| CE0605 | extern 注解参数可见字符串绑定要求 | CE0014 | codegen: extern annotation %s argument must be a string literal or visible let binding | 回到AE |
-| CE0606 | extern 注解参数直接字符串初始化要求 | CE0015 | codegen: extern annotation %s argument must be a string literal or visible let binding initialized directly with a string literal | 回到AE |
+| CE0605 | extern 注解参数可见字符串绑定要求 | CE0014 | codegen: extern annotation %s argument must be a string literal or visible let binding | 消解 |
+| CE0606 | extern 注解参数直接字符串初始化要求 | CE0015 | codegen: extern annotation %s argument must be a string literal or visible let binding initialized directly with a string literal | 消解 |
 | CE0607 | ABI pointee lowering 不支持 | CE0033 | codegen: this pointee type does not support ABI pointer lowering | 继续CE |
 | CE0608 | @runtime extern 合同声明缺失 | CE0040 | codegen: @runtime extern func '%.*s' is not declared by runtime contract | 继续CE |
 | CE0609 | ABI-compatible array element data-pointer lowering 不支持 | CE0091 | codegen: this ABI-compatible array element type does not support data-pointer lowering | 继续CE |
