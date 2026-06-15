@@ -1,0 +1,22 @@
+open module std.json;
+
+/**
+ * JSON 处理模块
+ */
+open type Json {
+
+  /**
+   * 序列化
+   */
+  static func stringify(value: JsonValue): string {
+    return value.toJsonString();
+  }
+
+  /**
+   * 反序列化
+   */
+  static func parse(json: string): JsonValue {
+    return JsonParser.parse(json);
+  }
+
+}
