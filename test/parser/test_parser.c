@@ -2250,6 +2250,116 @@ static void test_destructuring_binding_errors(void) {
     }
 }
 
+static void test_empty_source_file(void) {
+    const char *source = "";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, 0U, "empty.ff", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->module_segments == NULL);
+    ASSERT(program->module_segment_count == 0U);
+    ASSERT(program->use_count == 0U);
+    ASSERT(program->declaration_count == 0U);
+
+    feng_program_free(program);
+}
+
+static void test_whitespace_only_source_file(void) {
+    const char *source = "   \n\t\n  \r\n  ";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "whitespace.ff", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->module_segments == NULL);
+    ASSERT(program->module_segment_count == 0U);
+    ASSERT(program->use_count == 0U);
+    ASSERT(program->declaration_count == 0U);
+
+    feng_program_free(program);
+}
+
+static void test_line_comment_only_source_file(void) {
+    const char *source = "// this is a comment\n// another comment\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "line_comment.ff", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->module_segments == NULL);
+    ASSERT(program->module_segment_count == 0U);
+    ASSERT(program->use_count == 0U);
+    ASSERT(program->declaration_count == 0U);
+
+    feng_program_free(program);
+}
+
+static void test_block_comment_only_source_file(void) {
+    const char *source = "/* block comment\n   spanning multiple lines */";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "block_comment.ff", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->module_segments == NULL);
+    ASSERT(program->module_segment_count == 0U);
+    ASSERT(program->use_count == 0U);
+    ASSERT(program->declaration_count == 0U);
+
+    feng_program_free(program);
+}
+
+static void test_mixed_comments_only_source_file(void) {
+    const char *source =
+        "// line comment\n"
+        "/* block comment */\n"
+        "   \n"
+        "// another line comment\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "mixed_comments.ff", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->module_segments == NULL);
+    ASSERT(program->module_segment_count == 0U);
+    ASSERT(program->use_count == 0U);
+    ASSERT(program->declaration_count == 0U);
+
+    feng_program_free(program);
+}
+
+static void test_non_empty_source_without_module_is_rejected(void) {
+    static const char *kCases[] = {
+        "fn main() {}\n",
+        "let x = 42;\n",
+        "type Foo { var x: int; }\n",
+        "import std.io;\n",
+    };
+    size_t i;
+
+    for (i = 0; i < sizeof(kCases) / sizeof(kCases[0]); ++i) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        ASSERT(!feng_parse_source(kCases[i], strlen(kCases[i]), "no_module.ff", &program, &error));
+        ASSERT(program == NULL);
+        ASSERT(error.message != NULL);
+        ASSERT(strstr(error.message, "source file must begin with module declaration") != NULL);
+    }
+}
+
+static void test_visibility_without_module_is_rejected(void) {
+    const char *source = "open fn main() {}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "visibility_no_module.ff", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "source file must begin with module declaration") != NULL);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_annotation_accepts_two_arguments();
@@ -2339,6 +2449,13 @@ int main(void) {
     test_tuple_literal_arity_errors();
     test_destructuring_binding_parse();
     test_destructuring_binding_errors();
+    test_empty_source_file();
+    test_whitespace_only_source_file();
+    test_line_comment_only_source_file();
+    test_block_comment_only_source_file();
+    test_mixed_comments_only_source_file();
+    test_non_empty_source_without_module_is_rejected();
+    test_visibility_without_module_is_rejected();
     puts("parser tests passed");
     return 0;
 }
