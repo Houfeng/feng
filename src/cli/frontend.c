@@ -234,6 +234,8 @@ int feng_cli_frontend_run_with_overlays(const FengCliFrontendInput *input,
                                         const FengCliFrontendOutputs *outputs) {
     FengCliLoadedSource *sources = NULL;
     const FengProgram **programs = NULL;
+    const FengProgram **semantic_programs = NULL;
+    size_t semantic_program_count = 0U;
     FengSymbolProvider *provider = NULL;
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -267,6 +269,26 @@ int feng_cli_frontend_run_with_overlays(const FengCliFrontendInput *input,
         goto cleanup;
     }
 
+    /* Filter out empty programs (empty or comment-only source files).
+     * They carry no module or declarations and must not enter semantic
+     * analysis, which would create a meaningless empty module. */
+    {
+        size_t i;
+
+        semantic_programs = (const FengProgram **)calloc(
+            (size_t)input->path_count, sizeof(*semantic_programs));
+        if (semantic_programs == NULL) {
+            fprintf(stderr, "out of memory\n");
+            exit_code = 1;
+            goto cleanup;
+        }
+        for (i = 0; i < (size_t)input->path_count; ++i) {
+            if (programs[i] != NULL && programs[i]->module_segment_count > 0U) {
+                semantic_programs[semantic_program_count++] = programs[i];
+            }
+        }
+    }
+
     exit_code = load_package_sources(input, &provider, &bundle_paths, &bundle_count);
     if (exit_code != 0) {
         goto cleanup;
@@ -284,8 +306,8 @@ int feng_cli_frontend_run_with_overlays(const FengCliFrontendInput *input,
         semantic_options.imported_modules = &imported_query;
     }
 
-    if (!feng_semantic_analyze_with_options(programs,
-                                            (size_t)input->path_count,
+    if (!feng_semantic_analyze_with_options(semantic_programs,
+                                            semantic_program_count,
                                             &semantic_options,
                                             &analysis,
                                             &errors,
@@ -333,6 +355,7 @@ int feng_cli_frontend_run_with_overlays(const FengCliFrontendInput *input,
 cleanup:
     feng_symbol_provider_free(provider);
     feng_semantic_errors_free(errors, error_count);
+    free(semantic_programs);
     free(programs);
 
     if (exit_code == 0 && outputs != NULL) {

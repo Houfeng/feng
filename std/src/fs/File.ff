@@ -1,1 +1,4 @@
-open module std.fs;
+/**
+ * Copyright (c) 2024-present, Facebook, Inc. and its affiliates. 
+ * All rights reserved.
+ */

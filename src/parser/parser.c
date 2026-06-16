@@ -4122,6 +4122,13 @@ static FengProgram *parse_program(Parser *parser) {
     }
     program->path = parser->path;
 
+    /* Empty or comment-only source files produce a single EOF token.
+     * Accept them as valid (empty) programs so that placeholder files
+     * do not block compilation. */
+    if (parser_is_at_end(parser)) {
+        return program;
+    }
+
     program->module_visibility = parse_visibility(parser);
     if (!parser_expect(parser, FENG_TOKEN_KW_MODULE, "SE0901", "source file must begin with module declaration")) {
         feng_program_free(program);
