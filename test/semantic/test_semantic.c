@@ -6492,7 +6492,8 @@ static void test_imported_type_conflicts_with_local_type(void) {
     const char *main_source =
         "module demo.main;\n"
         "import demo.base;\n"
-        "type User {}\n";
+        "type User {}\n"
+        "let x: User = User{};\n";
     FengProgram *base_program = parse_program_or_die("base_type.f", base_source);
     FengProgram *main_program = parse_program_or_die("main_type_conflict.f", main_source);
     const FengProgram *programs[] = {base_program, main_program};
@@ -6503,8 +6504,10 @@ static void test_imported_type_conflicts_with_local_type(void) {
     ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "main_type_conflict.f") == 0);
-    ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "already defined") != NULL);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "User") != NULL);
+    ASSERT(strstr(errors[0].message, "ambiguous") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(base_program);
@@ -6522,6 +6525,9 @@ static void test_imported_value_conflicts_with_local_value(void) {
         "import demo.base;\n"
         "func load(): int {\n"
         "    return 0;\n"
+        "}\n"
+        "func main(): int {\n"
+        "    return load();\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("base_value.f", base_source);
     FengProgram *main_program = parse_program_or_die("main_value_conflict.f", main_source);
@@ -6533,8 +6539,10 @@ static void test_imported_value_conflicts_with_local_value(void) {
     ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "main_value_conflict.f") == 0);
-    ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "already defined") != NULL);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "load") != NULL);
+    ASSERT(strstr(errors[0].message, "ambiguous") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(base_program);
@@ -6556,7 +6564,9 @@ static void test_imported_name_conflicts_between_modules(void) {
         "module demo.main;\n"
         "import demo.a;\n"
         "import demo.b;\n"
-        "func main() {}\n";
+        "func main(): int {\n"
+        "    return load();\n"
+        "}\n";
     FengProgram *program_a = parse_program_or_die("import_a.f", source_a);
     FengProgram *program_b = parse_program_or_die("import_b.f", source_b);
     FengProgram *main_program = parse_program_or_die("import_conflict_main.f", main_source);
@@ -6568,8 +6578,10 @@ static void test_imported_name_conflicts_between_modules(void) {
     ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "import_conflict_main.f") == 0);
-    ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "imported name 'load'") != NULL);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "load") != NULL);
+    ASSERT(strstr(errors[0].message, "ambiguous") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program_a);
@@ -6786,6 +6798,334 @@ static void test_import_alias_conflicts_with_imported_short_name(void) {
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program_a);
     feng_program_free(program_b);
+    feng_program_free(main_program);
+}
+
+static void test_lazy_ambiguity_import_vs_import(void) {
+    const char *source_a =
+        "open module demo.a;\n"
+        "open func compute(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    const char *source_b =
+        "open module demo.b;\n"
+        "open func compute(): int {\n"
+        "    return 2;\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.a;\n"
+        "import demo.b;\n"
+        "func run(): int {\n"
+        "    return compute();\n"
+        "}\n";
+    FengProgram *program_a = parse_program_or_die("lazy_ii_a.f", source_a);
+    FengProgram *program_b = parse_program_or_die("lazy_ii_b.f", source_b);
+    FengProgram *main_program = parse_program_or_die("lazy_ii_main.f", main_source);
+    const FengProgram *programs[] = {program_a, program_b, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "lazy_ii_main.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "compute") != NULL);
+    ASSERT(strstr(errors[0].message, "ambiguous") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program_a);
+    feng_program_free(program_b);
+    feng_program_free(main_program);
+}
+
+static void test_lazy_ambiguity_import_vs_local_type(void) {
+    const char *base_source =
+        "open module demo.base;\n"
+        "open type Item {\n"
+        "    open var id: i32;\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "type Item {\n"
+        "    open var name: string;\n"
+        "}\n"
+        "func create(): Item {\n"
+        "    return Item{};\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("lazy_type_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("lazy_type_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "lazy_type_main.f") == 0);
+    ASSERT(errors[0].token.line == 6U);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "Item") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_lazy_ambiguity_import_vs_local_value(void) {
+    const char *base_source =
+        "open module demo.base;\n"
+        "open func process(): int {\n"
+        "    return 10;\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func process(): int {\n"
+        "    return 20;\n"
+        "}\n"
+        "func run(): int {\n"
+        "    return process();\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("lazy_val_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("lazy_val_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "lazy_val_main.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "process") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_lazy_ambiguity_unused_no_error(void) {
+    const char *source_a =
+        "open module demo.a;\n"
+        "open func unused_func(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    const char *source_b =
+        "open module demo.b;\n"
+        "open func unused_func(): int {\n"
+        "    return 2;\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.a;\n"
+        "import demo.b;\n"
+        "func run(): int {\n"
+        "    return 42;\n"
+        "}\n";
+    FengProgram *program_a = parse_program_or_die("lazy_unused_a.f", source_a);
+    FengProgram *program_b = parse_program_or_die("lazy_unused_b.f", source_b);
+    FengProgram *main_program = parse_program_or_die("lazy_unused_main.f", main_source);
+    const FengProgram *programs[] = {program_a, program_b, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program_a);
+    feng_program_free(program_b);
+    feng_program_free(main_program);
+}
+
+static void test_lazy_ambiguity_resolved_by_qualified_path(void) {
+    const char *source_a =
+        "open module demo.a;\n"
+        "open func compute(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    const char *source_b =
+        "open module demo.b;\n"
+        "open func compute(): int {\n"
+        "    return 2;\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.a as a;\n"
+        "import demo.b as b;\n"
+        "func run(): int {\n"
+        "    return a.compute() + b.compute();\n"
+        "}\n";
+    FengProgram *program_a = parse_program_or_die("lazy_qualified_a.f", source_a);
+    FengProgram *program_b = parse_program_or_die("lazy_qualified_b.f", source_b);
+    FengProgram *main_program = parse_program_or_die("lazy_qualified_main.f", main_source);
+    const FengProgram *programs[] = {program_a, program_b, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    bool ok = feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count);
+    ASSERT(ok);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program_a);
+    feng_program_free(program_b);
+    feng_program_free(main_program);
+}
+
+static void test_lazy_ambiguity_resolved_by_alias(void) {
+    const char *source_a =
+        "open module demo.a;\n"
+        "open func compute(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    const char *source_b =
+        "open module demo.b;\n"
+        "open func compute(): int {\n"
+        "    return 2;\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.a as alpha;\n"
+        "import demo.b;\n"
+        "func run(): int {\n"
+        "    return alpha.compute();\n"
+        "}\n";
+    FengProgram *program_a = parse_program_or_die("lazy_alias_a.f", source_a);
+    FengProgram *program_b = parse_program_or_die("lazy_alias_b.f", source_b);
+    FengProgram *main_program = parse_program_or_die("lazy_alias_main.f", main_source);
+    const FengProgram *programs[] = {program_a, program_b, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program_a);
+    feng_program_free(program_b);
+    feng_program_free(main_program);
+}
+
+static void test_lazy_ambiguity_import_vs_other_file_in_same_module(void) {
+    const char *source_a =
+        "module demo.core;\n"
+        "func local_func(): int {\n"
+        "    return 1;\n"
+        "}\n";
+    const char *source_b =
+        "module demo.core;\n"
+        "import demo.ext;\n"
+        "func run(): int {\n"
+        "    return local_func();\n"
+        "}\n";
+    const char *ext_source =
+        "open module demo.ext;\n"
+        "open func local_func(): int {\n"
+        "    return 2;\n"
+        "}\n";
+    FengProgram *program_a = parse_program_or_die("lazy_same_module_a.f", source_a);
+    FengProgram *program_b = parse_program_or_die("lazy_same_module_b.f", source_b);
+    FengProgram *ext_program = parse_program_or_die("lazy_same_module_ext.f", ext_source);
+    const FengProgram *programs[] = {program_a, program_b, ext_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "lazy_same_module_b.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "local_func") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program_a);
+    feng_program_free(program_b);
+    feng_program_free(ext_program);
+}
+
+static void test_lazy_ambiguity_spec_reference(void) {
+    const char *source_a =
+        "open module demo.a;\n"
+        "open spec Processor {\n"
+        "    func process(): int;\n"
+        "}\n";
+    const char *source_b =
+        "open module demo.b;\n"
+        "open spec Processor {\n"
+        "    func process(): int;\n"
+        "}\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.a;\n"
+        "import demo.b;\n"
+        "func run(p: Processor): int {\n"
+        "    return p.process();\n"
+        "}\n";
+    FengProgram *program_a = parse_program_or_die("lazy_spec_a.f", source_a);
+    FengProgram *program_b = parse_program_or_die("lazy_spec_b.f", source_b);
+    FengProgram *main_program = parse_program_or_die("lazy_spec_main.f", main_source);
+    const FengProgram *programs[] = {program_a, program_b, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "lazy_spec_main.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "Processor") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program_a);
+    feng_program_free(program_b);
+    feng_program_free(main_program);
+}
+
+static void test_lazy_ambiguity_cross_kind_import_func_vs_local_let(void) {
+    const char *base_source =
+        "open module demo.base;\n"
+        "open let config: int = 100;\n";
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "func config(): int {\n"
+        "    return 200;\n"
+        "}\n"
+        "func run(): int {\n"
+        "    return config;\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("lazy_cross_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("lazy_cross_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    bool ok = feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count);
+    ASSERT(!ok);
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].path, "lazy_cross_main.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "config") != NULL);
+    ASSERT(strcmp(errors[0].path, "lazy_cross_main.f") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "config") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
     feng_program_free(main_program);
 }
 
@@ -7357,7 +7697,8 @@ static void test_external_imported_enum_conflicts_with_local_type_name(void) {
     const char *main_source =
         "module demo.main;\n"
         "import vendor.http;\n"
-        "type HttpStatus {}\n";
+        "type HttpStatus {}\n"
+        "let x: HttpStatus = HttpStatus{};\n";
     ImportedSourceFixture fixture;
     FengSemanticImportedModuleQuery query;
     FengSemanticAnalyzeOptions options;
@@ -7382,8 +7723,10 @@ static void test_external_imported_enum_conflicts_with_local_type_name(void) {
                                                &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "external_enum_conflict_main.f") == 0);
-    ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "already defined") != NULL);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "HttpStatus") != NULL);
+    ASSERT(strstr(errors[0].message, "ambiguous") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -15323,6 +15666,15 @@ int main(void) {
     test_import_alias_conflicts_with_same_file_local_value();
     test_import_alias_conflicts_with_other_file_local_value();
     test_import_alias_conflicts_with_imported_short_name();
+    test_lazy_ambiguity_import_vs_import();
+    test_lazy_ambiguity_import_vs_local_type();
+    test_lazy_ambiguity_import_vs_local_value();
+    test_lazy_ambiguity_unused_no_error();
+    test_lazy_ambiguity_resolved_by_qualified_path();
+    test_lazy_ambiguity_resolved_by_alias();
+    test_lazy_ambiguity_import_vs_other_file_in_same_module();
+    test_lazy_ambiguity_spec_reference();
+    test_lazy_ambiguity_cross_kind_import_func_vs_local_let();
     test_duplicate_use_alias_in_same_file();
     test_unknown_use_module_rejected_without_import_query();
     test_external_use_module_accepted_via_import_query();

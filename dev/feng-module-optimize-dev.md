@@ -82,7 +82,7 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
 
 ## 1. 错误码文档更新
 
-- [ ] 1.1 `docs/feng-error-codes-ae.md` 通用段(AE00)新增 AE0005:
+- [x] 1.1 `docs/feng-error-codes-ae.md` 通用段(AE00)新增 AE0005:
     - 用途:import 引入名称的二义/多义冲突(规范第 1/2/3 类)
     - 触发位置:裸名引用时(惰性)
     - 涵盖场景:import vs import / import vs 本模块其他文件 / import vs 本文件
@@ -91,8 +91,8 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
         - import vs import(2 个 import):`'<name>' is ambiguous: imported from '<module1>' and '<module2>'; use a fully-qualified path or import alias to disambiguate`
         - import vs 本模块:`'<name>' is ambiguous: defined in current module and also imported from '<module>'; use a fully-qualified path or import alias to disambiguate`
         - 多 import(≥3 个):`'<name>' is ambiguous: imported from multiple modules (<module1>, <module2>, ...); use a fully-qualified path or import alias to disambiguate`
-- [ ] 1.2 `docs/feng-error-codes-ae.md` AE0906 标记为废弃(本次优化后不再产生新错误,文档保留向后兼容)。
-- [ ] 1.3 ~~`docs/feng-error-codes.md` 同步新增 AE0005 条目。~~ **按人工决策跳过**:`docs/feng-error-codes.md` 索引文档滞后严重(代码已使用分段方案 AE1302/AE1303 等,索引仍写 AE0005/AE0006 等旧编号且与代码不一致),本次不参考该文档,错误码以 `docs/feng-error-codes-ae.md` 分段方案为准。
+- [x] 1.2 `docs/feng-error-codes-ae.md` AE0906 标记为废弃(本次优化后不再产生新错误,文档保留向后兼容)。
+- [x] 1.3 ~~`docs/feng-error-codes.md` 同步新增 AE0005 条目。~~ **按人工决策跳过**:`docs/feng-error-codes.md` 索引文档滞后严重(代码已使用分段方案 AE1302/AE1303 等,索引仍写 AE0005/AE0006 等旧编号且与代码不一致),本次不参考该文档,错误码以 `docs/feng-error-codes-ae.md` 分段方案为准。
 
 预留编号(本次不引入,scope 阶段使用):
 - AE0002:第 4 类合并,同模块符号重复定义(非 func),替代 AE0213 / AE0214 / AE0215 / AE0216。
@@ -111,12 +111,12 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
 - 函数调用点用通用查找替代 AE0513 旧检查,覆盖全部三种场景。
 - 删除非通用的 `current_module_has_local_function` / `find_imported_module_with_public_function`。
 
-- [ ] 2.1 `import_public_names` → `FENG_DECL_FUNCTION` + `FENG_DECL_GLOBAL_BINDING` 合并分支(`analyzer.c:17469`):
+- [x] 2.1 `import_public_names` → `FENG_DECL_FUNCTION` + `FENG_DECL_GLOBAL_BINDING` 合并分支(`analyzer.c:17469`):
     - 删除场景 1/3 的 `append_error` 调用(L17500-17517)。
     - 删除 `is_current_file_conflict` 变量与同模块其他文件特判(L17492-17498)。
     - 简化为:`find_visible_value_index` 发现已存在同名 → `break`(不报错,不重复添加)。
     - 保留同一 import 模块去重(`find_slice_index` 检查 seen_value_names)。
-- [ ] 2.2 函数调用点 `resolve_expr` → `FENG_EXPR_CALL`(callee 为 identifier,`analyzer.c:16936`):
+- [x] 2.2 函数调用点 `resolve_expr` → `FENG_EXPR_CALL`(callee 为 identifier,`analyzer.c:16936`):
     - 删除 `current_module_has_local_function` + `find_imported_module_with_public_function` + AE0513 检查(L16955-16972)。
     - 改用通用查找(见步骤 4.1):`collect_symbol_candidates` + `filter_candidates_by_lookup_kind(VALUE)` + `candidates_form_ambiguity`。
     - 通过歧义检测后才进入 `resolve_top_level_function_overload`(func 重载决议保持不变,处理第 5 类)。
@@ -135,15 +135,15 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
 
 - 简化 `import_public_names` TYPE / ENUM / SPEC 分支:同步骤 2.1。
 
-- [ ] 3.1 `FENG_DECL_TYPE` 分支(`analyzer.c:17357`):
+- [x] 3.1 `FENG_DECL_TYPE` 分支(`analyzer.c:17357`):
     - 删除场景 1/3 的 `append_error` 调用(L17387-17398)。
     - 删除 `is_current_file_conflict` 变量与同模块其他文件特判(L17374-17380)。
     - 简化为:`find_visible_type_index` 发现已存在同名 → `break`(不报错,不重复添加)。
     - 保留同一 import 模块去重(`find_slice_index` 检查 seen_type_names)。
-- [ ] 3.2 `FENG_DECL_ENUM` 分支(`analyzer.c:17413`):同上(L17433-17454)。
-- [ ] 3.3 `FENG_DECL_SPEC` 分支(`analyzer.c:17559`):同上(L17576-17600)。
-- [ ] 3.4 `FENG_DECL_GLOBAL_BINDING` 已在步骤 2.1 处理(与 FUNCTION 合并分支)。
-- [ ] 3.5 `FENG_DECL_FIT` 分支(`analyzer.c:17615`)是空操作,无需修改。
+- [x] 3.2 `FENG_DECL_ENUM` 分支(`analyzer.c:17413`):同上(L17433-17454)。
+- [x] 3.3 `FENG_DECL_SPEC` 分支(`analyzer.c:17559`):同上(L17576-17600)。
+- [x] 3.4 `FENG_DECL_GLOBAL_BINDING` 已在步骤 2.1 处理(与 FUNCTION 合并分支)。
+- [x] 3.5 `FENG_DECL_FIT` 分支(`analyzer.c:17615`)是空操作,无需修改。
 
 验收:
 
@@ -161,7 +161,7 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
 
 ### 4.1 基础设施
 
-- [ ] 4.1.1 定义 `SymbolCandidate` 结构体:
+- [x] 4.1.1 定义 `SymbolCandidate` 结构体:
 
   ```c
   typedef struct {
@@ -171,7 +171,7 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
   } SymbolCandidate;
   ```
 
-- [ ] 4.1.2 实现 `collect_symbol_candidates`:
+- [x] 4.1.2 实现 `collect_symbol_candidates`:
 
   ```c
   /* 收集当前文件作用域中名为 name 的所有候选符号,不分类别。
@@ -188,7 +188,7 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
                                           size_t capacity);
   ```
 
-- [ ] 4.1.3 定义 `SymbolLookupKind` 枚举 + `filter_candidates_by_lookup_kind`:
+- [x] 4.1.3 定义 `SymbolLookupKind` 枚举 + `filter_candidates_by_lookup_kind`:
 
   ```c
   typedef enum {
@@ -201,7 +201,7 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
                                                  SymbolCandidate *out, size_t capacity);
   ```
 
-- [ ] 4.1.4 实现 `candidates_form_ambiguity`:
+- [x] 4.1.4 实现 `candidates_form_ambiguity`:
 
   ```c
   /* 判定候选集是否构成惰性歧义(规范第 1/2/3 类)。
@@ -211,22 +211,22 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
   static bool candidates_form_ambiguity(const SymbolCandidate *candidates, size_t count);
   ```
 
-- [ ] 4.1.5 实现 `format_ambiguity_message`:根据 provider_module 数量与来源类型(import vs import / import vs 本模块 / 多 import ≥3)选择对应 message 模板(见步骤 1.1)。
+- [x] 4.1.5 实现 `format_ambiguity_message`:根据 provider_module 数量与来源类型(import vs import / import vs 本模块 / 多 import ≥3)选择对应 message 模板(见步骤 1.1)。
 
-- [ ] 4.1.6 候选缓冲区大小:调用方提供栈上数组,默认容量 16(实际名字碰撞通常 < 8);超出时截断并在 debug 构建中断言。
+- [x] 4.1.6 候选缓冲区大小:调用方提供栈上数组,默认容量 16(实际名字碰撞通常 < 8);超出时截断并在 debug 构建中断言。
 
 ### 4.2 使用点接入
 
-- [ ] 4.2.0 **使用点位置审计**(前置任务):grep 所有 `find_visible_type` / `find_visible_value` / `find_visible_type_decl` 调用点(6 + 12 + ?处),逐一确认是否需要接入惰性歧义检测。产出清单应覆盖以下位置:
+- [x] 4.2.0 **使用点位置审计**(前置任务):grep 所有 `find_visible_type` / `find_visible_value` / `find_visible_type_decl` 调用点(6 + 12 + ?处),逐一确认是否需要接入惰性歧义检测。产出清单应覆盖以下位置:
     - 类型引用位置:`catch` 类型 / `is`-`as` 类型 / lambda 参数类型 / 构造目标类型 / `let`-`var` 类型标注 / 函数参数与返回类型 / 数组元素类型 等
     - 值引用位置:表达式 identifier / 函数调用入口 / 常量求值 / match 标签 / 赋值左侧 / enum 变体引用 等
     - spec 引用位置:`fit` 关键字后的 spec 引用 / spec 继承列表 等
-- [ ] 4.2.1 `resolve_expr` → `FENG_EXPR_IDENTIFIER` 分支(`analyzer.c:18145` 附近):值引用前先做歧义检测(VALUE 过滤),通过后走原决议。
-- [ ] 4.2.2 `resolve_expr` → `FENG_EXPR_CALL` callee 为 identifier 分支(`analyzer.c:16936` 附近):函数调用前先做歧义检测(VALUE 过滤),通过后进入重载决议。此步骤与 2.2 合并实现。
-- [ ] 4.2.3 `resolve_named_type_ref` 单段名称查找路径(`analyzer.c:17756` 附近):类型引用前先做歧义检测(TYPE 过滤)。
-- [ ] 4.2.4 `evaluate_constant_identifier`(`analyzer.c:13457` 附近):常量上下文值引用前先做歧义检测(VALUE 过滤)。
-- [ ] 4.2.5 `extract_match_label_literal` identifier 分支(`analyzer.c:6223` 附近):match 标签前先做歧义检测(VALUE 过滤)。
-- [ ] 4.2.6 步骤 4.2.0 审计清单中的其他位置:逐一接入。
+- [x] 4.2.1 `resolve_expr` → `FENG_EXPR_IDENTIFIER` 分支(`analyzer.c:18145` 附近):值引用前先做歧义检测(VALUE 过滤),通过后走原决议。
+- [x] 4.2.2 `resolve_expr` → `FENG_EXPR_CALL` callee 为 identifier 分支(`analyzer.c:16936` 附近):函数调用前先做歧义检测(VALUE 过滤),通过后进入重载决议。此步骤与 2.2 合并实现。
+- [x] 4.2.3 `resolve_named_type_ref` 单段名称查找路径(`analyzer.c:17756` 附近):类型引用前先做歧义检测(TYPE 过滤)。
+- [x] 4.2.4 `evaluate_constant_identifier`(`analyzer.c:13457` 附近):常量上下文值引用前先做歧义检测(VALUE 过滤)。
+- [x] 4.2.5 `extract_match_label_literal` identifier 分支(`analyzer.c:6223` 附近):match 标签前先做歧义检测(VALUE 过滤)。
+- [x] 4.2.6 步骤 4.2.0 审计清单中的其他位置:逐一接入。
 
 验收:
 
@@ -244,7 +244,7 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
 - 更新受影响的现有测试(对应场景 1/2/3 的预期改变)。
 - 新增覆盖场景 1/2/3 与交叉类型的测试。
 
-- [ ] 5.1 更新现有测试(4 个):改为期望惰性报错。
+- [x] 5.1 更新现有测试(4 个):改为期望惰性报错。
     - 测试用例中加入裸名引用代码,使惰性检查被触发。
     - 错误码期望从 AE0906 改为 AE0005。
     - 涉及测试:
@@ -252,7 +252,7 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
         - `test_imported_value_conflicts_with_local_value`(`test_semantic.c:6514`)— 场景 3
         - `test_imported_name_conflicts_between_modules`(`test_semantic.c:6544`)— 场景 1
         - `test_external_imported_enum_conflicts_with_local_type_name`(`test_semantic.c:7350`)— 场景 3
-- [ ] 5.2 新增测试(9 个):
+- [x] 5.2 新增测试(9 个):
     - `test_lazy_ambiguity_import_vs_import`:两个 import 同名 func,使用裸名 → AE0005(场景 1)。
     - `test_lazy_ambiguity_import_vs_local_type`:import 同名 type + 本地 type,使用裸名类型标注 → AE0005(场景 3)。
     - `test_lazy_ambiguity_import_vs_local_value`:import 同名 func + 本地 func,调用裸名 → AE0005(场景 3)。
@@ -262,7 +262,7 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
     - `test_lazy_ambiguity_import_vs_other_file_in_same_module`:import + 同模块其他文件同名,使用裸名 → AE0005(场景 2)。
     - `test_lazy_ambiguity_spec_reference`:spec 引用位置的歧义 → AE0005。
     - `test_lazy_ambiguity_cross_kind_import_func_vs_local_let`:import func + 本地 let 同名,调用裸名 → AE0005(交叉类型)。
-- [ ] 5.3 拒绝"临时禁用测试"窗口期:步骤 2/3/4 必须作为紧密一组提交,中间状态不允许存在(否则语义不正确)。
+- [x] 5.3 拒绝"临时禁用测试"窗口期:步骤 2/3/4 必须作为紧密一组提交,中间状态不允许存在(否则语义不正确)。
 
 验收:
 
@@ -270,15 +270,15 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
 
 ## 6. 清理
 
-- [ ] 6.1 删除非通用函数:
+- [x] 6.1 删除非通用函数:
     - `current_module_has_local_function`(`analyzer.c:9482`)
     - `find_imported_module_with_public_function`(`analyzer.c:9460`)
-- [ ] 6.2 确认 `import_public_names` 中已无 `is_current_file_conflict` 变量(步骤 2.1 / 3.1-3.3 已删除)。
-- [ ] 6.3 确认第 4/5/6 类相关函数无需修改:
+- [x] 6.2 确认 `import_public_names` 中已无 `is_current_file_conflict` 变量(步骤 2.1 / 3.1-3.3 已删除)。
+- [x] 6.3 确认第 4/5/6 类相关函数无需修改:
     - 第 4 类:`check_symbol_conflicts` 保持现状(跨种类漏检由 scope 优化处理)。
     - 第 5 类:func 重载决议(`resolve_top_level_function_overload` 等)保持现状。
     - 第 6 类:`validate_program_alias_conflicts`(`analyzer.c:17667`)和 `find_unshadowed_alias`(`analyzer.c:4003`)保持现状。
-- [ ] 6.4 检查并移除不再使用的变量或分支。
+- [x] 6.4 检查并移除不再使用的变量或分支。
 
 验收:
 

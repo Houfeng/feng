@@ -9,12 +9,12 @@ import std.collections;
 import std.json;
 import std.test;
 
-func test2() {
+func test() {
   assert(true, "hello world");
 }
 
 func main(args: string[]) {
-  test("test2", test2);
+  // test("test2", test2);
   let obj = JsonObject();
   obj.set("message", "Hello, World!");
   obj.set("code", (double)200);

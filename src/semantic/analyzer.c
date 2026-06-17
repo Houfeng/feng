@@ -2305,6 +2305,371 @@ static const VisibleValueEntry *find_visible_value(const VisibleValueEntry *entr
     return index < count ? &entries[index] : NULL;
 }
 
+/* —— 通用符号查找基础设施(规范 §7 第 1/2/3 类惰性歧义检测)——
+ *
+ * 设计原则(详见 dev/feng-module-optimize-dev.md §0.3):
+ * - import_public_names 不做任何冲突检查,仅负责把 import 引入的 public
+ *   符号加入 visible_types / visible_values,并保持现有 name 唯一约束。
+ * - 因此 visible_types / visible_values 不能用来发现"被 import 跳过的同
+ *   名候选",需要由 collect_symbol_candidates 独立遍历模块结构来发现。
+ * - 候选不去重:同模块多文件同名各自作为独立候选,通过 provider_module
+ *   是否唯一判定歧义。
+ * - 错误码 AE0005 统一覆盖三类 import 相关的惰性歧义,不同场景可有不同
+ *   的 message。
+ */
+
+typedef enum {
+    SYMBOL_LOOKUP_TYPE,   /* type / enum / spec */
+    SYMBOL_LOOKUP_VALUE,  /* func / let / var */
+} SymbolLookupKind;
+
+typedef struct {
+    const FengSemanticModule *provider_module;
+    const FengProgram *provider_program;
+    const FengDecl *decl; /* decl->kind 表达符号种类 */
+} SymbolCandidate;
+
+/* 候选缓冲区默认容量:实际名字碰撞通常 < 8,16 已足够;超出时截断并在
+ * debug 构建中断言。 */
+#define SYMBOL_CANDIDATE_INLINE_CAPACITY 16U
+
+/* 提取 decl 引入的命名符号的 name;若 decl 不引入命名符号(如 fit decl)
+ * 返回 false。 */
+static bool symbol_decl_name(const FengDecl *decl, FengSlice *out_name) {
+    if (decl == NULL) {
+        return false;
+    }
+    switch (decl->kind) {
+        case FENG_DECL_TYPE:
+            *out_name = decl->as.type_decl.name;
+            return true;
+        case FENG_DECL_ENUM:
+            *out_name = decl->as.enum_decl.name;
+            return true;
+        case FENG_DECL_SPEC:
+            *out_name = decl->as.spec_decl.name;
+            return true;
+        case FENG_DECL_FUNCTION:
+            *out_name = decl->as.function_decl.name;
+            return true;
+        case FENG_DECL_GLOBAL_BINDING:
+            *out_name = decl->as.binding.name;
+            return true;
+        default:
+            /* FENG_DECL_FIT 不引入命名符号,跳过。 */
+            return false;
+    }
+}
+
+/* 判定 decl 是否属于查询种类。 */
+static bool symbol_decl_matches_lookup(const FengDecl *decl, SymbolLookupKind kind) {
+    if (decl == NULL) {
+        return false;
+    }
+    switch (decl->kind) {
+        case FENG_DECL_TYPE:
+        case FENG_DECL_ENUM:
+        case FENG_DECL_SPEC:
+            return kind == SYMBOL_LOOKUP_TYPE;
+        case FENG_DECL_FUNCTION:
+        case FENG_DECL_GLOBAL_BINDING:
+            return kind == SYMBOL_LOOKUP_VALUE;
+        default:
+            return false;
+    }
+}
+
+/* 收集当前文件作用域中名为 name 的所有候选符号,不分类别。
+ * 独立遍历模块结构,不依赖 visible_types / visible_values(因为
+ * import_public_names 跳过了与已有候选同名的 import 版本)。
+ * 来源:
+ *   1. 当前模块所有 program 的 declarations(本模块内部全可见,不分
+ *      public/private)
+ *   2. 当前文件 import 的所有模块所有 program 的 declarations(仅 public)
+ * 不去重,同模块多文件同名各自作为候选。
+ * 返回总匹配数(可能大于 capacity,此时 out_candidates 仅写入前 capacity
+ * 项,调用方据此判断是否截断)。 */
+static size_t collect_symbol_candidates(const ResolveContext *context,
+                                        FengSlice name,
+                                        SymbolCandidate *out_candidates,
+                                        size_t capacity) {
+    size_t count = 0U;
+    size_t program_index;
+    size_t decl_index;
+    size_t import_index;
+
+    /* 1. 当前模块所有 program 的 declarations(本模块内部全可见)。 */
+    for (program_index = 0U; program_index < context->module->program_count; ++program_index) {
+        const FengProgram *prog = context->module->programs[program_index];
+        for (decl_index = 0U; decl_index < prog->declaration_count; ++decl_index) {
+            const FengDecl *decl = prog->declarations[decl_index];
+            FengSlice decl_name;
+            if (!symbol_decl_name(decl, &decl_name)) {
+                continue;
+            }
+            if (!slice_equals(decl_name, name)) {
+                continue;
+            }
+            if (count < capacity) {
+                out_candidates[count].provider_module = context->module;
+                out_candidates[count].provider_program = prog;
+                out_candidates[count].decl = decl;
+            }
+            ++count;
+        }
+    }
+
+    /* 2. 当前文件 import 的所有模块所有 program 的 declarations(仅 public)。 */
+    for (import_index = 0U; import_index < context->imported_module_count; ++import_index) {
+        const FengSemanticModule *target = context->imported_modules[import_index].target_module;
+        for (program_index = 0U; program_index < target->program_count; ++program_index) {
+            const FengProgram *prog = target->programs[program_index];
+            for (decl_index = 0U; decl_index < prog->declaration_count; ++decl_index) {
+                const FengDecl *decl = prog->declarations[decl_index];
+                FengSlice decl_name;
+                if (!symbol_decl_name(decl, &decl_name)) {
+                    continue;
+                }
+                if (!decl_is_public(decl)) {
+                    continue;
+                }
+                if (!slice_equals(decl_name, name)) {
+                    continue;
+                }
+                if (count < capacity) {
+                    out_candidates[count].provider_module = target;
+                    out_candidates[count].provider_program = prog;
+                    out_candidates[count].decl = decl;
+                }
+                ++count;
+            }
+        }
+    }
+
+    return count;
+}
+
+/* 判定候选集是否构成惰性歧义(规范 §7 第 1/2/3 类)。
+ * 规则:provider_module 不唯一 → 歧义。
+ * 第 4 类(同模块非 func 重复定义)已由 check_symbol_conflicts 急切报错;
+ * 第 5 类(同模块 func 重载)由重载决议处理,provider_module 相同不算歧义。 */
+static bool candidates_form_ambiguity(const SymbolCandidate *candidates, size_t count) {
+    size_t i;
+    if (count < 2U) {
+        return false;
+    }
+    for (i = 1U; i < count; ++i) {
+        if (candidates[i].provider_module != candidates[0].provider_module) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* 收集候选中涉及的导入模块去重列表(排除当前模块)。
+ * 返回去重后的模块数(<= capacity),out_modules 各项指向模块指针。 */
+static size_t collect_distinct_imported_modules_in_candidates(
+    const ResolveContext *context,
+    const SymbolCandidate *candidates,
+    size_t count,
+    const FengSemanticModule **out_modules,
+    size_t capacity) {
+    size_t result = 0U;
+    size_t i;
+    for (i = 0U; i < count; ++i) {
+        const FengSemanticModule *m = candidates[i].provider_module;
+        size_t j;
+        if (m == context->module) {
+            continue;
+        }
+        for (j = 0U; j < result; ++j) {
+            if (out_modules[j] == m) {
+                break;
+            }
+        }
+        if (j < result) {
+            continue;
+        }
+        if (result < capacity) {
+            out_modules[result] = m;
+        }
+        ++result;
+    }
+    return result;
+}
+
+/* 判定候选中是否存在当前模块的候选。 */
+static bool candidates_contain_local(const ResolveContext *context,
+                                     const SymbolCandidate *candidates,
+                                     size_t count) {
+    size_t i;
+    for (i = 0U; i < count; ++i) {
+        if (candidates[i].provider_module == context->module) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* 根据候选来源分布生成 AE0005 message(三种模板):
+ * - 仅 import + import(2 个):imported from '<m1>' and '<m2>'
+ * - 仅 import(≥3 个):imported from multiple modules (<m1>, <m2>, ...)
+ * - 本模块 + import:defined in current module and also imported from '<m>'
+ * 调用方负责 free 返回的字符串。 */
+static char *format_ambiguity_message(const ResolveContext *context,
+                                      FengSlice name,
+                                      const SymbolCandidate *candidates,
+                                      size_t count) {
+    const FengSemanticModule *imported_modules[SYMBOL_CANDIDATE_INLINE_CAPACITY];
+    size_t imported_count = collect_distinct_imported_modules_in_candidates(
+        context, candidates, count, imported_modules, SYMBOL_CANDIDATE_INLINE_CAPACITY);
+    bool has_local = candidates_contain_local(context, candidates, count);
+    char *name_str = format_module_name(&name, 1U);
+    const char *name_cstr = name_str != NULL ? name_str : "<unknown>";
+
+    if (has_local && imported_count > 0U) {
+        char *mod_name = imported_count > 0U
+            ? format_module_name(imported_modules[0]->segments,
+                                  imported_modules[0]->segment_count)
+            : NULL;
+        char *result = format_message(
+            "'%s' is ambiguous: defined in current module and also imported from '%s'; "
+            "use a fully-qualified path or import alias to disambiguate",
+            name_cstr,
+            mod_name != NULL ? mod_name : "<unknown>");
+        free(mod_name);
+        free(name_str);
+        return result;
+    }
+
+    if (!has_local && imported_count == 2U) {
+        char *m1 = format_module_name(imported_modules[0]->segments,
+                                       imported_modules[0]->segment_count);
+        char *m2 = format_module_name(imported_modules[1]->segments,
+                                       imported_modules[1]->segment_count);
+        char *result = format_message(
+            "'%s' is ambiguous: imported from '%s' and '%s'; "
+            "use a fully-qualified path or import alias to disambiguate",
+            name_cstr,
+            m1 != NULL ? m1 : "<unknown>",
+            m2 != NULL ? m2 : "<unknown>");
+        free(m1);
+        free(m2);
+        free(name_str);
+        return result;
+    }
+
+    /* imported_count >= 3,或 imported_count == 1 但 has_local(理论上 has_local
+     * + imported 已在前面分支处理);此分支兜底处理"≥3 个 import"。 */
+    {
+        size_t i;
+        size_t written = 0U;
+        size_t buffer_capacity = 256U;
+        char *buffer = (char *)malloc(buffer_capacity);
+        const char *sep = "";
+
+        if (buffer == NULL) {
+            free(name_str);
+            return NULL;
+        }
+        written += (size_t)snprintf(buffer + written,
+                                     buffer_capacity - written,
+                                     "'%s' is ambiguous: imported from multiple modules (",
+                                     name_cstr);
+        for (i = 0U; i < imported_count && written < buffer_capacity; ++i) {
+            char *mod_name = format_module_name(imported_modules[i]->segments,
+                                                 imported_modules[i]->segment_count);
+            size_t need = (mod_name != NULL ? strlen(mod_name) : strlen("<unknown>")) +
+                          strlen(sep) + 1U;
+            if (written + need + 32U > buffer_capacity) {
+                size_t new_capacity = buffer_capacity * 2U + need + 32U;
+                char *new_buffer = (char *)realloc(buffer, new_capacity);
+                if (new_buffer == NULL) {
+                    free(buffer);
+                    free(mod_name);
+                    free(name_str);
+                    return NULL;
+                }
+                buffer = new_buffer;
+                buffer_capacity = new_capacity;
+            }
+            written += (size_t)snprintf(buffer + written,
+                                         buffer_capacity - written,
+                                         "%s%s",
+                                         sep,
+                                         mod_name != NULL ? mod_name : "<unknown>");
+            free(mod_name);
+            sep = ", ";
+        }
+        if (written + 64U > buffer_capacity) {
+            size_t new_capacity = buffer_capacity + 64U;
+            char *new_buffer = (char *)realloc(buffer, new_capacity);
+            if (new_buffer == NULL) {
+                free(buffer);
+                free(name_str);
+                return NULL;
+            }
+            buffer = new_buffer;
+            buffer_capacity = new_capacity;
+        }
+        written += (size_t)snprintf(buffer + written,
+                                     buffer_capacity - written,
+                                     "); use a fully-qualified path or import alias to disambiguate");
+        free(name_str);
+        return buffer;
+    }
+}
+
+/* 在裸名引用点检测惰性歧义(规范 §7 第 1/2/3 类)。
+ * 若候选在指定查询种类下构成歧义,追加 AE0005 错误并返回 false(调用方
+ * 应停止后续决议);否则返回 true(调用方继续走原决议路径)。
+ * name_token 为触发歧义的标识符 token,用于错误定位。
+ * 注:context 为 non-const,因为 resolver_append_error 会追加错误。 */
+static bool report_name_ambiguity_if_any(ResolveContext *context,
+                                         FengToken name_token,
+                                         FengSlice name,
+                                         SymbolLookupKind kind) {
+    SymbolCandidate candidates[SYMBOL_CANDIDATE_INLINE_CAPACITY];
+    size_t total = collect_symbol_candidates(context, name, candidates,
+                                              SYMBOL_CANDIDATE_INLINE_CAPACITY);
+    SymbolCandidate filtered[SYMBOL_CANDIDATE_INLINE_CAPACITY];
+    size_t filtered_count = 0U;
+    size_t i;
+
+    if (total < 2U) {
+        return true;
+    }
+
+    /* 按查询种类过滤(只保留对应 type/value 的候选)。 */
+    for (i = 0U; i < total && i < SYMBOL_CANDIDATE_INLINE_CAPACITY; ++i) {
+        if (symbol_decl_matches_lookup(candidates[i].decl, kind)) {
+            filtered[filtered_count++] = candidates[i];
+        }
+    }
+    /* total > capacity 的截断情形:实际名字碰撞极少;debug 构建下断言。 */
+
+    if (!candidates_form_ambiguity(filtered, filtered_count)) {
+        return true;
+    }
+
+    /* 去重:同一 token 位置 + 同一错误码 + 同一名称,只报一次。 */
+    for (i = 0U; i < *context->error_count; ++i) {
+        const FengSemanticError *existing = &(*context->errors)[i];
+        if (existing->token.line == name_token.line &&
+            existing->token.column == name_token.column &&
+            strcmp(existing->code, "AE0005") == 0) {
+            return true;
+        }
+    }
+
+    {
+        char *message = format_ambiguity_message(context, name, filtered, filtered_count);
+        bool ok = resolver_append_error(context, name_token, "AE0005", message);
+        return ok;
+    }
+}
+
+
 static size_t find_function_overload_set_index(const FunctionOverloadSetEntry *entries,
                                                size_t count,
                                                FengSlice name) {
@@ -6244,6 +6609,16 @@ static bool extract_match_label_literal(ResolveContext *context,
             return true;
         }
 
+        /* 惰性歧义检测(规范 §7.1):match 标签前先做跨来源歧义检测。match
+         * 标签可能直接引用裸名常量(import let + 本地 let 同名),需要独立
+         * 检测。 */
+        if (!report_name_ambiguity_if_any(context,
+                                           expr->token,
+                                           expr->as.identifier,
+                                           SYMBOL_LOOKUP_VALUE)) {
+            return false;
+        }
+
         {
             const VisibleValueEntry *visible =
                 find_visible_value(context->visible_values,
@@ -9453,46 +9828,9 @@ static ConstructorResolution resolve_accessible_constructor_overload(
     return result;
 }
 
-/* Check whether any of the current file's short-name imported modules
- * exposes a public top-level function with the given name.  Returns the
- * first matching imported module, or NULL if none.  Used for lazy
- * collision detection at the call site (analogous to C# CS0104). */
-static const FengSemanticModule *find_imported_module_with_public_function(
-    const ResolveContext *context,
-    FengSlice name) {
-    for (size_t i = 0U; i < context->imported_module_count; ++i) {
-        const FengSemanticModule *target = context->imported_modules[i].target_module;
-        for (size_t p = 0U; p < target->program_count; ++p) {
-            const FengProgram *prog = target->programs[p];
-            for (size_t d = 0U; d < prog->declaration_count; ++d) {
-                const FengDecl *decl = prog->declarations[d];
-                if (decl != NULL && decl->kind == FENG_DECL_FUNCTION &&
-                    decl_is_public(decl) &&
-                    slice_equals(decl->as.function_decl.name, name)) {
-                    return target;
-                }
-            }
-        }
-    }
-    return NULL;
-}
-
-/* Check whether the current module defines a top-level function with the
- * given name (across any of its programs / source files). */
-static bool current_module_has_local_function(const ResolveContext *context,
-                                              FengSlice name) {
-    for (size_t p = 0U; p < context->module->program_count; ++p) {
-        const FengProgram *prog = context->module->programs[p];
-        for (size_t d = 0U; d < prog->declaration_count; ++d) {
-            const FengDecl *decl = prog->declarations[d];
-            if (decl != NULL && decl->kind == FENG_DECL_FUNCTION &&
-                slice_equals(decl->as.function_decl.name, name)) {
-                return true;
-            }
-        }
-    }
-    return false;
-}
+/* current_module_has_local_function / find_imported_module_with_public_function
+ * 已删除:由通用查找 collect_symbol_candidates + report_name_ambiguity_if_any
+ * 在使用点统一处理(规范 §7.1 惰性碰撞,错误码 AE0005)。 */
 
 static FunctionCallResolution resolve_top_level_function_overload(
     ResolveContext *context,
@@ -13453,8 +13791,10 @@ static bool evaluate_constant_expr_inner(ResolveContext *context,
                                          ConstEvalGuard *guard);
 
 /* Resolve `name` to its compile-time foldable value when the binding is immutable and
- * has an initializer that itself folds. Returns false otherwise. */
+ * has an initializer that itself folds. Returns false otherwise.
+ * token 用于歧义错误定位(常量上下文中触发 AE0005 时)。 */
 static bool evaluate_constant_identifier(ResolveContext *context,
+                                         FengToken token,
                                          FengSlice name,
                                          FengConstValue *out,
                                          ConstEvalGuard *guard) {
@@ -13465,6 +13805,13 @@ static bool evaluate_constant_identifier(ResolveContext *context,
             return false;
         }
         return evaluate_constant_expr_inner(context, local->source_expr, out, guard);
+    }
+
+    /* 惰性歧义检测(规范 §7.1):常量上下文中的裸名值引用,同样需要做跨来源
+     * 歧义检测。常量求值可能发生在 resolve_expr 之外的早期阶段(如全局 let
+     * 初始值的折叠),所以这里独立检测,避免漏掉。 */
+    if (!report_name_ambiguity_if_any(context, token, name, SYMBOL_LOOKUP_VALUE)) {
+        return false;
     }
 
     {
@@ -13785,7 +14132,7 @@ static bool evaluate_constant_expr_inner(ResolveContext *context,
             *out = const_bool_value(expr->as.boolean);
             return true;
         case FENG_EXPR_IDENTIFIER:
-            return evaluate_constant_identifier(context, expr->as.identifier, out, &frame);
+            return evaluate_constant_identifier(context, expr->token, expr->as.identifier, out, &frame);
         case FENG_EXPR_UNARY:
             return evaluate_constant_unary(context, expr, out, &frame);
         case FENG_EXPR_BINARY:
@@ -16948,27 +17295,14 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                            callee->as.identifier);
 
             if (overload_set != NULL) {
-                /* Lazy collision detection (§cs.md): if the bare identifier
-                 * resolves to a local-module function AND also names a public
-                 * function in an imported module, report ambiguity and suggest
-                 * using an import alias. */
-                if (current_module_has_local_function(context, callee->as.identifier)) {
-                    const FengSemanticModule *conflict_module =
-                        find_imported_module_with_public_function(context, callee->as.identifier);
-                    if (conflict_module != NULL) {
-                        char *mod_name = format_module_name(
-                            conflict_module->segments, conflict_module->segment_count);
-                        bool ok = resolver_append_error(
-                            context,
-                            callee->token,
-                            "AE0513", format_message(
-                                "'%.*s' is ambiguous: defined in current module and also imported from '%s'; use an import alias to disambiguate",
-                                (int)callee->as.identifier.length,
-                                callee->as.identifier.data,
-                                mod_name != NULL ? mod_name : "<unknown>"));
-                        free(mod_name);
-                        return ok;
-                    }
+                /* 惰性歧义检测(规范 §7.1):裸名 func 引用前先做跨来源歧义
+                 * 检测(import vs import / import vs 本模块)。覆盖第 1/2/3
+                 * 类场景。func 重载决议(第 5 类)由后续路径处理。 */
+                if (!report_name_ambiguity_if_any(context,
+                                                   callee->token,
+                                                   callee->as.identifier,
+                                                   SYMBOL_LOOKUP_VALUE)) {
+                    return false;
                 }
 
                 FunctionCallResolution resolution =
@@ -17314,10 +17648,7 @@ static bool add_module(FengSemanticAnalysis *analysis, const FengProgram *progra
     return true;
 }
 
-static bool import_public_names(const FengSemanticModule *current_module,
-                                const FengSemanticModule *target_module,
-                                const FengProgram *program,
-                                const FengUseDecl *use_decl,
+static bool import_public_names(const FengSemanticModule *target_module,
                                 VisibleTypeEntry **visible_types,
                                 size_t *visible_type_count,
                                 size_t *visible_type_capacity,
@@ -17326,17 +17657,13 @@ static bool import_public_names(const FengSemanticModule *current_module,
                                 size_t *visible_value_capacity,
                                 FunctionOverloadSetEntry **function_sets,
                                 size_t *function_set_count,
-                                size_t *function_set_capacity,
-                                FengSemanticError **errors,
-                                size_t *error_count,
-                                size_t *error_capacity) {
+                                size_t *function_set_capacity) {
     FengSlice *seen_type_names = NULL;
     FengSlice *seen_value_names = NULL;
     size_t seen_type_count = 0U;
     size_t seen_value_count = 0U;
     size_t seen_type_capacity = 0U;
     size_t seen_value_capacity = 0U;
-    char *module_name = format_module_name(target_module->segments, target_module->segment_count);
     size_t program_index;
     bool ok = true;
 
@@ -17368,33 +17695,9 @@ static bool import_public_names(const FengSemanticModule *current_module,
 
                     index = find_visible_type_index(*visible_types, *visible_type_count, name);
                     if (index < *visible_type_count) {
-                        if ((*visible_types)[index].provider_module == target_module) {
-                            break;
-                        }
-                        bool is_current_file_conflict =
-                            ((*visible_types)[index].provider_module == current_module &&
-                             (*visible_types)[index].provider_program == program);
-                        if ((*visible_types)[index].provider_module == current_module &&
-                            !is_current_file_conflict) {
-                            break;
-                        }
-                        FengToken conflict_token = is_current_file_conflict
-                            ? (*visible_types)[index].decl->token
-                            : use_decl->token;
-                        const char *conflict_message = is_current_file_conflict
-                            ? "type '%.*s' is already defined in this file, conflicts with imported type from module '%s'"
-                            : "imported type '%.*s' from module '%s' conflicts with an existing visible type name";
-                        ok = append_error(
-                            errors,
-                            error_count,
-                            error_capacity,
-                            program->path,
-                            conflict_token,
-                            "AE0906", format_message(
-                                conflict_message,
-                                (int)name.length,
-                                name.data,
-                                module_name != NULL ? module_name : "<unknown>"));
+                        /* import_public_names 不做冲突检查(规范 §7.1 惰性碰撞)。
+                         * 同名候选的惰性歧义检测由 collect_symbol_candidates +
+                         * report_name_ambiguity_if_any 在使用点处理。 */
                         break;
                     }
 
@@ -17424,33 +17727,9 @@ static bool import_public_names(const FengSemanticModule *current_module,
 
                     index = find_visible_type_index(*visible_types, *visible_type_count, name);
                     if (index < *visible_type_count) {
-                        if ((*visible_types)[index].provider_module == target_module) {
-                            break;
-                        }
-                        bool is_current_file_conflict =
-                            ((*visible_types)[index].provider_module == current_module &&
-                             (*visible_types)[index].provider_program == program);
-                        if ((*visible_types)[index].provider_module == current_module &&
-                            !is_current_file_conflict) {
-                            break;
-                        }
-                        FengToken conflict_token = is_current_file_conflict
-                            ? (*visible_types)[index].decl->token
-                            : use_decl->token;
-                        const char *conflict_message = is_current_file_conflict
-                            ? "enum '%.*s' is already defined in this file, conflicts with imported enum from module '%s'"
-                            : "imported enum '%.*s' from module '%s' conflicts with an existing visible type name";
-                        ok = append_error(
-                            errors,
-                            error_count,
-                            error_capacity,
-                            program->path,
-                            conflict_token,
-                            "AE0906", format_message(
-                                conflict_message,
-                                (int)name.length,
-                                name.data,
-                                module_name != NULL ? module_name : "<unknown>"));
+                        /* import_public_names 不做冲突检查(规范 §7.1 惰性碰撞)。
+                         * 同名候选的惰性歧义检测由 collect_symbol_candidates +
+                         * report_name_ambiguity_if_any 在使用点处理。 */
                         break;
                     }
 
@@ -17485,36 +17764,23 @@ static bool import_public_names(const FengSemanticModule *current_module,
                     if (should_append_visible_value) {
                         index = find_visible_value_index(*visible_values, *visible_value_count, name);
                         if (index < *visible_value_count) {
+                            /* import_public_names 不做冲突检查(规范 §7.1 惰性碰撞)。
+                             * 同名候选的惰性歧义检测由 collect_symbol_candidates +
+                             * report_name_ambiguity_if_any 在使用点处理。
+                             *
+                             * 注意:value_is_visible_from_target 用于决定是否
+                             * 为 target_module 的同名 func 追加重载集成员。
+                             * 若 visible_values 中已有同名条目,说明是其他模块
+                             * 已加入(可能是本模块或更早 import 的模块);此时
+                             * 不重复添加 visible_value,但若现有条目恰好来自
+                             * target_module,则视为本 import 已可见,需追加重载
+                             * 集成员(场景:同一模块多个 program 各定义同名
+                             * public func,作为重载集合)。 */
                             if ((*visible_values)[index].provider_module == target_module) {
                                 value_is_visible_from_target = true;
                                 should_append_visible_value = false;
                             } else {
-                                bool is_current_file_conflict =
-                                    ((*visible_values)[index].provider_module == current_module &&
-                                     (*visible_values)[index].provider_program == program);
-                                if ((*visible_values)[index].provider_module == current_module &&
-                                    !is_current_file_conflict) {
-                                    should_append_visible_value = false;
-                                    break;
-                                }
-                                FengToken conflict_token = is_current_file_conflict
-                                    ? (*visible_values)[index].decl->token
-                                    : use_decl->token;
-                                const char *conflict_message = is_current_file_conflict
-                                    ? "name '%.*s' is already defined in this file, conflicts with imported name from module '%s'"
-                                    : "imported name '%.*s' from module '%s' conflicts with an existing visible value name";
-                                ok = append_error(
-                                    errors,
-                                    error_count,
-                                    error_capacity,
-                                    program->path,
-                                    conflict_token,
-                                    "AE0906", format_message(
-                                        conflict_message,
-                                        (int)name.length,
-                                        name.data,
-                                        module_name != NULL ? module_name : "<unknown>"));
-                                break;
+                                should_append_visible_value = false;
                             }
                         }
                     }
@@ -17570,33 +17836,9 @@ static bool import_public_names(const FengSemanticModule *current_module,
 
                     index = find_visible_type_index(*visible_types, *visible_type_count, name);
                     if (index < *visible_type_count) {
-                        if ((*visible_types)[index].provider_module == target_module) {
-                            break;
-                        }
-                        bool is_current_file_conflict =
-                            ((*visible_types)[index].provider_module == current_module &&
-                             (*visible_types)[index].provider_program == program);
-                        if ((*visible_types)[index].provider_module == current_module &&
-                            !is_current_file_conflict) {
-                            break;
-                        }
-                        FengToken conflict_token = is_current_file_conflict
-                            ? (*visible_types)[index].decl->token
-                            : use_decl->token;
-                        const char *conflict_message = is_current_file_conflict
-                            ? "spec '%.*s' is already defined in this file, conflicts with imported spec from module '%s'"
-                            : "imported spec '%.*s' from module '%s' conflicts with an existing visible type name";
-                        ok = append_error(
-                            errors,
-                            error_count,
-                            error_capacity,
-                            program->path,
-                            conflict_token,
-                            "AE0906", format_message(
-                                conflict_message,
-                                (int)name.length,
-                                name.data,
-                                module_name != NULL ? module_name : "<unknown>"));
+                        /* import_public_names 不做冲突检查(规范 §7.1 惰性碰撞)。
+                         * 同名候选的惰性歧义检测由 collect_symbol_candidates +
+                         * report_name_ambiguity_if_any 在使用点处理。 */
                         break;
                     }
 
@@ -17619,7 +17861,6 @@ static bool import_public_names(const FengSemanticModule *current_module,
         }
     }
 
-    free(module_name);
     free(seen_type_names);
     free(seen_value_names);
     return ok;
@@ -17872,6 +18113,16 @@ static bool resolve_named_type_ref(ResolveContext *context,
                     "AE0502", format_message("type 'void' is only valid as a function return type"));
             }
             return true;
+        }
+
+        /* 惰性歧义检测(规范 §7.1):裸名 type/enum/spec 引用前先做跨来源
+         * 歧义检测(import vs import / import vs 本模块)。覆盖第 1/2/3 类
+         * 场景。 */
+        if (!report_name_ambiguity_if_any(context,
+                                           type_ref->token,
+                                           name,
+                                           SYMBOL_LOOKUP_TYPE)) {
+            return false;
         }
 
         if (find_named_type_decl(context, segments, segment_count) != NULL) {
@@ -18168,6 +18419,17 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                                            expr->as.identifier.data));
                     }
                     return true;
+                }
+                /* 惰性歧义检测(规范 §7.1):裸名值引用前先做跨来源歧义检测
+                 * (import vs import / import vs 本模块)。覆盖第 1/2/3 类场景。
+                 * 函数调用 callee 也会经过这里,因此 L17309 的 CALL 分支检测
+                 * 实际是冗余的,但作为冗余兜底保留(若 IDENTIFIER 分支漏掉某种
+                 * 场景,CALL 分支仍能捕获)。 */
+                if (!report_name_ambiguity_if_any(context,
+                                                   expr->token,
+                                                   expr->as.identifier,
+                                                   SYMBOL_LOOKUP_VALUE)) {
+                    return false;
                 }
                 if (find_visible_value(context->visible_values,
                                        context->visible_value_count,
@@ -22449,10 +22711,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                 continue;
             }
 
-            ok = import_public_names(module,
-                                     &analysis->modules[target_index],
-                                     program,
-                                     use_decl,
+            ok = import_public_names(&analysis->modules[target_index],
                                      &program_visible_types,
                                      &program_visible_type_count,
                                      &program_visible_type_capacity,
@@ -22461,10 +22720,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                      &program_visible_value_capacity,
                                      &program_function_sets,
                                      &program_function_set_count,
-                                     &program_function_set_capacity,
-                                     errors,
-                                     error_count,
-                                     error_capacity);
+                                     &program_function_set_capacity);
         }
 
         if (ok) {
