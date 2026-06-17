@@ -35,6 +35,9 @@
 | AE0001 | 基础符号与类型存在性 | AE0012 | type '%.*s' is not defined |
 | AE0001 | 基础符号与类型存在性 | AE0170 | undefined identifier '%.*s' |
 | AE0003 | 语义上下文限制 | AE0171 | 'self' is only available inside type methods and constructors |
+| AE0005 | import 引入名称二义/多义(惰性,使用处报错) | (新增) | '<name>' is ambiguous: imported from '<module1>' and '<module2>'; use a fully-qualified path or import alias to disambiguate |
+| AE0005 | import 引入名称二义/多义(惰性,使用处报错) | (新增) | '<name>' is ambiguous: defined in current module and also imported from '<module>'; use a fully-qualified path or import alias to disambiguate |
+| AE0005 | import 引入名称二义/多义(惰性,使用处报错) | (新增) | '<name>' is ambiguous: imported from multiple modules (<module1>, <module2>, ...); use a fully-qualified path or import alias to disambiguate |
 
 ## 01 绑定段
 
@@ -193,7 +196,7 @@
 | AE0904 | 模块别名成员访问语法约束 | AE0169 | module alias '%.*s' must be accessed as '%.*s.name' |
 | AE0902 | import 声明解析约束 | AE0221 | duplicate import alias '%.*s' in the same file |
 | AE0902 | import 声明解析约束 | AE0222 | import target module '%s' was not found in current compilation input |
-| AE0906 | 模块符号唯一性 | AE0157 | duplicate symbol '%.*s' in module '%.*s' |
+| AE0906 | 模块符号唯一性(已废弃,本次优化后不再产生新错误,由 AE0005 在使用处惰性覆盖) | AE0157 | duplicate symbol '%.*s' in module '%.*s' |
 | AE0907 | bin 入口唯一性约束 | AE0225 | duplicate 'main' entry: target 'bin' requires exactly one 'main(args: string[])' across all programs |
 | AE0908 | bin 入口存在性约束 | AE0226 | target 'bin' requires a 'main(args: string[])' entry function but none was found |
 | AE0909 | bin 入口参数签名约束 | AE0227 | 'main' entry must have signature 'main(args: string[])' |
