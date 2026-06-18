@@ -1,0 +1,298 @@
+module std_test;
+
+import std.test;
+import std.text;
+import std.path;
+
+func path_separator() {
+  check(separator == "/", "path/separator");
+}
+
+func path_normalize_empty() {
+  check(normalize("") == ".", "path/normalize-empty");
+}
+
+func path_normalize_dot() {
+  check(normalize(".") == ".", "path/normalize-dot");
+}
+
+func path_normalize_dotdot() {
+  check(normalize("..") == "..", "path/normalize-dotdot");
+}
+
+func path_normalize_single_slash() {
+  check(normalize("/") == "/", "path/normalize-single-slash");
+}
+
+func path_normalize_double_slash() {
+  check(normalize("//") == "/", "path/normalize-double-slash");
+}
+
+func path_normalize_absolute() {
+  check(normalize("/a/b/c") == "/a/b/c", "path/normalize-absolute");
+}
+
+func path_normalize_absolute_dot() {
+  check(normalize("/a/./b") == "/a/b", "path/normalize-absolute-dot");
+}
+
+func path_normalize_absolute_dotdot() {
+  check(normalize("/a/b/../c") == "/a/c", "path/normalize-absolute-dotdot");
+}
+
+func path_normalize_absolute_multi_dotdot() {
+  check(normalize("/a/b/../../c") == "/c", "path/normalize-absolute-multi-dotdot");
+}
+
+func path_normalize_absolute_excess_dotdot() {
+  check(normalize("/../a") == "/a", "path/normalize-absolute-excess-dotdot");
+}
+
+func path_normalize_relative() {
+  check(normalize("a/b/c") == "a/b/c", "path/normalize-relative");
+}
+
+func path_normalize_relative_dot() {
+  check(normalize("a/./b") == "a/b", "path/normalize-relative-dot");
+}
+
+func path_normalize_relative_dotdot() {
+  check(normalize("a/b/../c") == "a/c", "path/normalize-relative-dotdot");
+}
+
+func path_normalize_leading_dotdot() {
+  check(normalize("../a") == "../a", "path/normalize-leading-dotdot");
+}
+
+func path_normalize_multi_leading_dotdot() {
+  check(normalize("../../a") == "../../a", "path/normalize-multi-leading-dotdot");
+}
+
+func path_normalize_mixed_dotdot() {
+  check(normalize("a/../../b") == "../b", "path/normalize-mixed-dotdot");
+}
+
+func path_normalize_trailing_slash() {
+  check(normalize("a/b/") == "a/b/", "path/normalize-trailing-slash");
+}
+
+func path_normalize_trailing_slash_absolute() {
+  check(normalize("/a/b/") == "/a/b/", "path/normalize-trailing-slash-absolute");
+}
+
+func path_normalize_multiple_slashes() {
+  check(normalize("a///b") == "a/b", "path/normalize-multiple-slashes");
+}
+
+func path_join_empty() {
+  check(join() == "", "path/join-empty");
+}
+
+func path_join_single() {
+  check(join("a") == "a", "path/join-single");
+}
+
+func path_join_two() {
+  check(join("a", "b") == "a/b", "path/join-two");
+}
+
+func path_join_three() {
+  check(join("a", "b", "c") == "a/b/c", "path/join-three");
+}
+
+func path_join_absolute_reset() {
+  check(join("a", "/b", "c") == "/b/c", "path/join-absolute-reset");
+}
+
+func path_join_dotdot() {
+  check(join("a", "b", "..") == "a", "path/join-dotdot");
+}
+
+func path_join_normalize() {
+  check(join("a/", "/b/", "c") == "/b/c", "path/join-normalize");
+}
+
+func path_dirname_basic() {
+  check(dirname("/a/b/c") == "/a/b", "path/dirname-basic");
+}
+
+func path_dirname_root_file() {
+  check(dirname("/file") == "/", "path/dirname-root-file");
+}
+
+func path_dirname_bare() {
+  check(dirname("file") == ".", "path/dirname-bare");
+}
+
+func path_dirname_root() {
+  check(dirname("/") == "/", "path/dirname-root");
+}
+
+func path_dirname_empty() {
+  check(dirname("") == ".", "path/dirname-empty");
+}
+
+func path_dirname_trailing_slash() {
+  check(dirname("/a/b/") == "/a", "path/dirname-trailing-slash");
+}
+
+func path_basename_basic() {
+  check(basename("/a/b/c") == "c", "path/basename-basic");
+}
+
+func path_basename_root() {
+  check(basename("/") == "", "path/basename-root");
+}
+
+func path_basename_empty() {
+  check(basename("") == "", "path/basename-empty");
+}
+
+func path_basename_bare() {
+  check(basename("file.txt") == "file.txt", "path/basename-bare");
+}
+
+func path_basename_trailing_slash() {
+  check(basename("/a/b/") == "b", "path/basename-trailing-slash");
+}
+
+func path_extname_html() {
+  check(extname("index.html") == ".html", "path/extname-html");
+}
+
+func path_extname_gitignore() {
+  check(extname(".gitignore") == "", "path/extname-gitignore");
+}
+
+func path_extname_tar_gz() {
+  check(extname("archive.tar.gz") == ".gz", "path/extname-tar-gz");
+}
+
+func path_extname_no_ext() {
+  check(extname("file") == "", "path/extname-no-ext");
+}
+
+func path_extname_with_dir() {
+  check(extname("/a/b/c.txt") == ".txt", "path/extname-with-dir");
+}
+
+func path_extname_empty() {
+  check(extname("") == "", "path/extname-empty");
+}
+
+func path_extname_dot_file() {
+  check(extname("a.") == ".", "path/extname-dot-file");
+}
+
+func path_isAbsolute_true() {
+  check(isAbsolute("/a/b") == true, "path/isAbsolute-true");
+}
+
+func path_isAbsolute_false() {
+  check(isAbsolute("a/b") == false, "path/isAbsolute-false");
+}
+
+func path_isAbsolute_root() {
+  check(isAbsolute("/") == true, "path/isAbsolute-root");
+}
+
+func path_isAbsolute_empty() {
+  check(isAbsolute("") == false, "path/isAbsolute-empty");
+}
+
+func path_isRelative_true() {
+  check(isRelative("a/b") == true, "path/isRelative-true");
+}
+
+func path_isRelative_false() {
+  check(isRelative("/a/b") == false, "path/isRelative-false");
+}
+
+func path_isRelative_empty() {
+  check(isRelative("") == true, "path/isRelative-empty");
+}
+
+func path_resolve_absolute_target() {
+  check(resolve("/a", "/b/c") == "/b/c", "path/resolve-absolute-target");
+}
+
+func path_resolve_relative_target() {
+  check(resolve("/a", "b/c") == "/a/b/c", "path/resolve-relative-target");
+}
+
+func path_resolve_dotdot() {
+  check(resolve("/a/b", "../c") == "/a/c", "path/resolve-dotdot");
+}
+
+func path_resolve_normalize() {
+  check(resolve("/a", "./b") == "/a/b", "path/resolve-normalize");
+}
+
+open func run_path_tests() {
+  describe("path tests", () {
+    test("path_separator()", () { path_separator(); });
+
+    test("path_normalize_empty()", () { path_normalize_empty(); });
+    test("path_normalize_dot()", () { path_normalize_dot(); });
+    test("path_normalize_dotdot()", () { path_normalize_dotdot(); });
+    test("path_normalize_single_slash()", () { path_normalize_single_slash(); });
+    test("path_normalize_double_slash()", () { path_normalize_double_slash(); });
+    test("path_normalize_absolute()", () { path_normalize_absolute(); });
+    test("path_normalize_absolute_dot()", () { path_normalize_absolute_dot(); });
+    test("path_normalize_absolute_dotdot()", () { path_normalize_absolute_dotdot(); });
+    test("path_normalize_absolute_multi_dotdot()", () { path_normalize_absolute_multi_dotdot(); });
+    test("path_normalize_absolute_excess_dotdot()", () { path_normalize_absolute_excess_dotdot(); });
+    test("path_normalize_relative()", () { path_normalize_relative(); });
+    test("path_normalize_relative_dot()", () { path_normalize_relative_dot(); });
+    test("path_normalize_relative_dotdot()", () { path_normalize_relative_dotdot(); });
+    test("path_normalize_leading_dotdot()", () { path_normalize_leading_dotdot(); });
+    test("path_normalize_multi_leading_dotdot()", () { path_normalize_multi_leading_dotdot(); });
+    test("path_normalize_mixed_dotdot()", () { path_normalize_mixed_dotdot(); });
+    test("path_normalize_trailing_slash()", () { path_normalize_trailing_slash(); });
+    test("path_normalize_trailing_slash_absolute()", () { path_normalize_trailing_slash_absolute(); });
+    test("path_normalize_multiple_slashes()", () { path_normalize_multiple_slashes(); });
+
+    test("path_join_empty()", () { path_join_empty(); });
+    test("path_join_single()", () { path_join_single(); });
+    test("path_join_two()", () { path_join_two(); });
+    test("path_join_three()", () { path_join_three(); });
+    test("path_join_absolute_reset()", () { path_join_absolute_reset(); });
+    test("path_join_dotdot()", () { path_join_dotdot(); });
+    test("path_join_normalize()", () { path_join_normalize(); });
+
+    test("path_dirname_basic()", () { path_dirname_basic(); });
+    test("path_dirname_root_file()", () { path_dirname_root_file(); });
+    test("path_dirname_bare()", () { path_dirname_bare(); });
+    test("path_dirname_root()", () { path_dirname_root(); });
+    test("path_dirname_empty()", () { path_dirname_empty(); });
+    test("path_dirname_trailing_slash()", () { path_dirname_trailing_slash(); });
+
+    test("path_basename_basic()", () { path_basename_basic(); });
+    test("path_basename_root()", () { path_basename_root(); });
+    test("path_basename_empty()", () { path_basename_empty(); });
+    test("path_basename_bare()", () { path_basename_bare(); });
+    test("path_basename_trailing_slash()", () { path_basename_trailing_slash(); });
+
+    test("path_extname_html()", () { path_extname_html(); });
+    test("path_extname_gitignore()", () { path_extname_gitignore(); });
+    test("path_extname_tar_gz()", () { path_extname_tar_gz(); });
+    test("path_extname_no_ext()", () { path_extname_no_ext(); });
+    test("path_extname_with_dir()", () { path_extname_with_dir(); });
+    test("path_extname_empty()", () { path_extname_empty(); });
+    test("path_extname_dot_file()", () { path_extname_dot_file(); });
+
+    test("path_isAbsolute_true()", () { path_isAbsolute_true(); });
+    test("path_isAbsolute_false()", () { path_isAbsolute_false(); });
+    test("path_isAbsolute_root()", () { path_isAbsolute_root(); });
+    test("path_isAbsolute_empty()", () { path_isAbsolute_empty(); });
+
+    test("path_isRelative_true()", () { path_isRelative_true(); });
+    test("path_isRelative_false()", () { path_isRelative_false(); });
+    test("path_isRelative_empty()", () { path_isRelative_empty(); });
+
+    test("path_resolve_absolute_target()", () { path_resolve_absolute_target(); });
+    test("path_resolve_relative_target()", () { path_resolve_relative_target(); });
+    test("path_resolve_dotdot()", () { path_resolve_dotdot(); });
+    test("path_resolve_normalize()", () { path_resolve_normalize(); });
+  });
+}

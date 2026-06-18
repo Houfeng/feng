@@ -1,0 +1,219 @@
+open module std.path;
+
+import std.text;
+import std.collections;
+
+/**
+ * Path separator character.
+ */
+open let separator = "/";
+
+/**
+ * Normalizes a path string by resolving `.`, `..` and redundant `/`.
+ * @param path - the path to normalize
+ * @return the normalized path string
+ */
+open func normalize(path: string): string {
+  let len = path.length();
+  if len == (long)0 {
+    return ".";
+  }
+
+  let isAbs = path.at((long)0) == "/";
+  let hasTrailingSlash = len > (long)1 && path.at(len - (long)1) == "/";
+
+  // Split into segments by "/"
+  let segments = path.split("/");
+  let segCount = segments.length();
+
+  // Collect normalized segments
+  let stack = List<string>();
+
+  for var i: long = (long)0; i < segCount; i += (long)1 {
+    let segment = segments[i];
+
+    // Skip empty segments (from "//") and current dir "."
+    if segment == "" || segment == "." {
+      continue;
+    }
+
+    if segment == ".." {
+      // For absolute paths or when stack has real segments (not ".."), pop
+      if isAbs || ((long)stack.size() > (long)0 && stack.get(stack.size() - (i32)1) != "..") {
+        if (long)stack.size() > (long)0 {
+          stack.remove(stack.size() - (i32)1);
+        }
+      } else {
+        // For relative paths with no parent to pop, keep ".."
+        stack.add("..");
+      }
+    } else {
+      stack.add(segment);
+    }
+  }
+
+  // Build result from collected segments
+  let resultParts = stack.entries();
+  let resultLen = resultParts.length();
+
+  var result = "";
+  if isAbs {
+    result = "/";
+  }
+
+  if resultLen > (long)0 {
+    result = result + string.join("/", resultParts);
+  } else if !isAbs {
+    result = ".";
+  }
+
+  // Preserve trailing slash if original had one and result is not just "/" or "."
+  if hasTrailingSlash && result != "/" && result != "." {
+    result = result + "/";
+  }
+
+  return result;
+}
+
+/**
+ * Joins path segments using `/` and normalizes the result.
+ * @param paths - path segments to join
+ * @return joined and normalized path string
+ */
+open func join(paths: string...): string {
+  let count = paths.length();
+  if count == (long)0 {
+    return "";
+  }
+
+  var combined = paths[(long)0];
+  for var i: long = (long)1; i < count; i += (long)1 {
+    if paths[i].length() > (long)0 && paths[i].at((long)0) == "/" {
+      // Absolute segment resets previous parts
+      combined = paths[i];
+    } else {
+      combined = combined + "/" + paths[i];
+    }
+  }
+
+  return normalize(combined);
+}
+
+/**
+ * Returns the directory portion of a path.
+ * @param path - the source path
+ * @return directory part of the path
+ */
+open func dirname(path: string): string {
+  let len = path.length();
+  if len == (long)0 {
+    return ".";
+  }
+
+  // Strip trailing slash (unless path is "/")
+  var effective = path;
+  var effectiveLen = len;
+  if effectiveLen > (long)1 && effective.at(effectiveLen - (long)1) == "/" {
+    effective = effective.clone((long)0, effectiveLen - (long)1);
+    effectiveLen = effective.length();
+  }
+
+  // Find last "/"
+  let lastSlash = effective.lastIndexOf("/");
+
+  if lastSlash < (long)0 {
+    // No "/" found
+    return ".";
+  }
+
+  if lastSlash == (long)0 {
+    // "/" is at position 0, dirname is "/"
+    return "/";
+  }
+
+  return effective.clone((long)0, lastSlash);
+}
+
+/**
+ * Returns the last component of a path (filename or directory name).
+ * @param path - the source path
+ * @return basename of the path
+ */
+open func basename(path: string): string {
+  let len = path.length();
+  if len == (long)0 {
+    return "";
+  }
+
+  // Strip trailing slash (unless path is "/")
+  var effective = path;
+  var effectiveLen = len;
+  if effectiveLen > (long)1 && effective.at(effectiveLen - (long)1) == "/" {
+    effective = effective.clone((long)0, effectiveLen - (long)1);
+    effectiveLen = effective.length();
+  }
+
+  // Find last "/"
+  let lastSlash = effective.lastIndexOf("/");
+
+  if lastSlash < (long)0 {
+    return effective;
+  }
+
+  return effective.clone(lastSlash + (long)1, effectiveLen);
+}
+
+/**
+ * Returns the file extension including the `.`, or `""` if none.
+ * @param path - the source path
+ * @return file extension with leading dot, or empty string
+ */
+open func extname(path: string): string {
+  let base = basename(path);
+  let baseLen = base.length();
+
+  if baseLen == (long)0 {
+    return "";
+  }
+
+  // Find last "." in basename
+  let lastDot = base.lastIndexOf(".");
+
+  // No "." found, "." at position 0 with no other ".", or only "." at start
+  if lastDot <= (long)0 {
+    return "";
+  }
+
+  return base.clone(lastDot, baseLen);
+}
+
+/**
+ * Returns `true` if the path is absolute (starts with `/`).
+ * @param path - the path to test
+ * @return whether the path is absolute
+ */
+open func isAbsolute(path: string): bool {
+  return path.length() > (long)0 && path.at((long)0) == "/";
+}
+
+/**
+ * Returns `true` if the path is relative (does not start with `/`).
+ * @param path - the path to test
+ * @return whether the path is relative
+ */
+open func isRelative(path: string): bool {
+  return !isAbsolute(path);
+}
+
+/**
+ * Resolves `target` against `base` and normalizes the result.
+ * @param base - the base path
+ * @param target - the target path to resolve against base
+ * @return resolved and normalized path string
+ */
+open func resolve(base: string, target: string): string {
+  if isAbsolute(target) {
+    return normalize(target);
+  }
+  return normalize(join(base, target));
+}

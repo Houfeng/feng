@@ -16,6 +16,7 @@ func main(args: string[]) {
     run_slice_tests();
     run_io_tests();
     run_numeric_tests();
+    run_path_tests();
 
     replaceStdin("ABCDE\nFG");
     run_stdio_api_tests();
