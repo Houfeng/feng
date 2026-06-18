@@ -83,8 +83,9 @@
 | --- | --- | --- |
 | `EntryInfo` | `open type EntryInfo` | 目录遍历的轻量条目信息，由 `Dir.read` 或 `Dir` 迭代返回 |
 | `EntryInfo.name` | `let name: string` | 条目名称（不含路径分隔符） |
+| `EntryInfo.path` | `let path: string` | 条目完整路径 |
 | `EntryInfo.kind` | `let kind: EntryKind` | 条目种类 |
-| `EntryInfo.stat` | `open func stat(parentPath: string): StatInfo` | 获取该条目的完整元信息，内部调用 POSIX `stat`（跟踪符号链接） |
+| `EntryInfo.stat` | `open func stat(): StatInfo` | 获取该条目的完整元信息，内部调用 POSIX `stat`（跟踪符号链接） |
 
 ### 2.6 `Dir` 类型
 
@@ -211,10 +212,11 @@
 
 ### 3.7 `EntryInfo`
 
+- `EntryInfo.path` 为条目完整路径，由目录遍历内部拼接父目录路径与条目名称得到。
 - `EntryInfo.name` 仅包含条目名称，不含路径分隔符与父路径前缀。
 - `EntryInfo` 列表中不得包含 `.` 与 `..` 条目。
 - `EntryInfo.kind` 取自 `readdir` / `scandir` 的条目类型信息；当底层返回 `DT_UNKNOWN` 时，`kind` 为 `Other`。
-- `EntryInfo.stat(parentPath)` 拼接 `parentPath` 与 `name` 后调用 POSIX `stat`（跟踪符号链接），返回目标的 `StatInfo`。底层调用失败时抛出异常。
+- `EntryInfo.stat()` 对 `path` 调用 POSIX `stat`（跟踪符号链接），返回目标的 `StatInfo`。底层调用失败时抛出异常。
 
 ### 3.8 目录遍历
 
@@ -245,7 +247,7 @@
 ### 3.9 符号链接处理
 
 - `readdir` / `scandir` 返回的 `EntryInfo.kind` 可以是 `Symlink`，不跟踪链接。
-- `EntryInfo.stat(parentPath)` 调用 POSIX `stat`，跟踪符号链接，返回目标的 `StatInfo`（`kind` 为目标的真实类型）。
+- `EntryInfo.stat()` 调用 POSIX `stat`，跟踪符号链接，返回目标的 `StatInfo`（`kind` 为目标的真实类型）。
 - 顶层 `stat(path)` 调用 POSIX `stat`，跟踪符号链接。
 - 顶层 `exists(path)`、`isFile(path)` 与 `isDir(path)` 均跟踪符号链接。
 - 当前版本不提供 `lstat`（不跟踪链接的 stat）；若未来需要，可新增 `lstat` 顶层函数。
@@ -307,6 +309,7 @@
 - [必须] `StatInfo.kind` 由 `stat`（跟踪符号链接）获取时，不得为 `Symlink`。
 - [必须] `StatInfo.changedAt` 对应 POSIX `st_ctime`（元数据变更时间），不得映射为创建时间。
 - [必须] `EntryInfo.name` 不得包含路径分隔符。
+- [必须] `EntryInfo.path` 必须为条目完整路径。
 - [必须] `EntryInfo` 列表不得包含 `.` 与 `..` 条目。
 - [必须] `EntryInfo.stat` 必须调用 POSIX `stat`（跟踪符号链接），返回 `StatInfo`。
 - [必须] `Dir.read` 的 `batchSize` 参数类型固定为 `long`，返回类型固定为 `EntryInfo[]`。
