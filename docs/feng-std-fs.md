@@ -24,16 +24,16 @@
 | 符号 | POSIX flags | 说明 |
 | --- | --- | --- |
 | `FileMode.Read` | `O_RDONLY` | 只读打开，文件必须已存在 |
-| `FileMode.Write` | `O_WRONLY \| O_CREAT` | 只写打开，不存在则创建，存在则不截断 |
-| `FileMode.WriteTrunc` | `O_WRONLY \| O_CREAT \| O_TRUNC` | 只写打开，不存在则创建，存在则截断 |
-| `FileMode.WriteNew` | `O_WRONLY \| O_CREAT \| O_EXCL` | 只写打开，排他创建，已存在则失败 |
-| `FileMode.WriteAppend` | `O_WRONLY \| O_CREAT \| O_APPEND` | 只写追加打开，不存在则创建 |
-| `FileMode.ReadWrite` | `O_RDWR` | 读写打开，文件必须已存在 |
-| `FileMode.ReadWriteCreate` | `O_RDWR \| O_CREAT` | 读写打开，不存在则创建，存在则不截断 |
-| `FileMode.ReadWriteTrunc` | `O_RDWR \| O_CREAT \| O_TRUNC` | 读写打开，不存在则创建，存在则截断 |
-| `FileMode.ReadWriteNew` | `O_RDWR \| O_CREAT \| O_EXCL` | 读写打开，排他创建，已存在则失败 |
-| `FileMode.ReadWriteAppend` | `O_RDWR \| O_CREAT \| O_APPEND` | 读写追加打开，不存在则创建 |
-| `FileMode.AppendExisting` | `O_RDWR \| O_APPEND` | 读写追加打开，文件必须已存在，不创建 |
+| `FileMode.Write` | `O_WRONLY \| O_CREAT` | 只写打开，不存在则创建，存在则保留原内容，写入从偏移 0 开始覆盖 |
+| `FileMode.WriteTrunc` | `O_WRONLY \| O_CREAT \| O_TRUNC` | 只写打开，不存在则创建，存在则清空原内容，从空文件开始写入 |
+| `FileMode.WriteNew` | `O_WRONLY \| O_CREAT \| O_EXCL` | 只写打开，排他创建，文件已存在则失败，从空文件开始写入 |
+| `FileMode.WriteAppend` | `O_WRONLY \| O_CREAT \| O_APPEND` | 只写打开，不存在则创建，保留原内容，写入始终追加到末尾 |
+| `FileMode.ReadWrite` | `O_RDWR` | 读写打开，文件必须已存在，写入从偏移 0 开始覆盖 |
+| `FileMode.ReadWriteCreate` | `O_RDWR \| O_CREAT` | 读写打开，不存在则创建，存在则保留原内容，写入从偏移 0 开始覆盖 |
+| `FileMode.ReadWriteTrunc` | `O_RDWR \| O_CREAT \| O_TRUNC` | 读写打开，不存在则创建，存在则清空原内容，从空文件开始读写 |
+| `FileMode.ReadWriteNew` | `O_RDWR \| O_CREAT \| O_EXCL` | 读写打开，排他创建，文件已存在则失败，从空文件开始读写 |
+| `FileMode.ReadWriteAppend` | `O_RDWR \| O_CREAT \| O_APPEND` | 读写打开，不存在则创建，保留原内容，写入始终追加到末尾 |
+| `FileMode.AppendExisting` | `O_RDWR \| O_APPEND` | 读写打开，文件必须已存在，保留原内容，写入始终追加到末尾 |
 
 ### 2.2 `EntryKind` 枚举
 
@@ -106,9 +106,9 @@
 | 函数 | 签名 | 说明 |
 | --- | --- | --- |
 | `readText` | `open func readText(path: string): string` | 读取文件全部内容作为 UTF-8 字符串返回 |
-| `writeText` | `open func writeText(path: string, text: string): void` | 将文本以 UTF-8 编码写入文件，不存在则创建，存在则截断 |
+| `writeText` | `open func writeText(path: string, text: string): void` | 将文本以 UTF-8 编码写入文件，不存在则创建，存在则清空 |
 | `readBytes` | `open func readBytes(path: string): byte[]` | 读取文件全部内容作为字节数组返回 |
-| `writeBytes` | `open func writeBytes(path: string, bytes: byte[]): void` | 将字节数组写入文件，不存在则创建，存在则截断 |
+| `writeBytes` | `open func writeBytes(path: string, bytes: byte[]): void` | 将字节数组写入文件，不存在则创建，存在则清空 |
 
 #### 路径查询
 
@@ -158,6 +158,13 @@
 
 - 当前位置：除 `Append` 系列外的所有模式
 - 始终追加到末尾：`WriteAppend`、`ReadWriteAppend`、`AppendExisting`
+
+**打开时对已有内容的处理**：
+
+- 保留原内容，写入从偏移 0 开始覆盖：`Write`、`ReadWrite`、`ReadWriteCreate`
+- 清空原内容，从空文件开始写入：`WriteTrunc`、`ReadWriteTrunc`
+- 保留原内容，写入始终追加到末尾：`WriteAppend`、`ReadWriteAppend`、`AppendExisting`
+- 不涉及：`Read`（只读）、`WriteNew`、`ReadWriteNew`（排他创建，文件不存在）
 
 - `File.open` 的默认文件创建权限为 `0644`（用户读写、组和其他用户只读）。
 - `File.open` 在底层调用失败时抛出异常。
