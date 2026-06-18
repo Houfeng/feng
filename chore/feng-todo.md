@@ -12,3 +12,4 @@
 - [x] import 应该将导入符号到当前文件，而不是当前模块
 - [ ] func 未声明返回值或返回值为 void，时必须无 `return` 语句或只能使用空 `return`
 - [ ] func 在声明返回值，每个分支必须返回相同类型
+- [ ] runtime api: feng_pointer_get_string(char * ptr, len) -1 读取到 \0
