@@ -9,7 +9,7 @@ import std.collections;
 open let separator = "/";
 
 /**
- * Normalizes a path string by resolving `.`, `..` and redundant `/`.
+ * Normalizes a path string by resolving `.`, `..` and redundant separators.
  * @param path - the path to normalize
  * @return the normalized path string
  */
@@ -19,11 +19,11 @@ open func normalize(path: string): string {
     return ".";
   }
 
-  let isAbs = path.at((long)0) == "/";
-  let hasTrailingSlash = len > (long)1 && path.at(len - (long)1) == "/";
+  let isAbs = path.at((long)0) == separator;
+  let hasTrailingSlash = len > (long)1 && path.at(len - (long)1) == separator;
 
-  // Split into segments by "/"
-  let segments = path.split("/");
+  // Split into segments by separator
+  let segments = path.split(separator);
   let segCount = segments.length();
 
   // Collect normalized segments
@@ -32,7 +32,7 @@ open func normalize(path: string): string {
   for var i: long = (long)0; i < segCount; i += (long)1 {
     let segment = segments[i];
 
-    // Skip empty segments (from "//") and current dir "."
+    // Skip empty segments (from consecutive separators) and current dir "."
     if segment == "" || segment == "." {
       continue;
     }
@@ -58,25 +58,25 @@ open func normalize(path: string): string {
 
   var result = "";
   if isAbs {
-    result = "/";
+    result = separator;
   }
 
   if resultLen > (long)0 {
-    result = result + string.join("/", resultParts);
+    result = result + string.join(separator, resultParts);
   } else if !isAbs {
     result = ".";
   }
 
-  // Preserve trailing slash if original had one and result is not just "/" or "."
-  if hasTrailingSlash && result != "/" && result != "." {
-    result = result + "/";
+  // Preserve trailing slash if original had one and result is not just separator or "."
+  if hasTrailingSlash && result != separator && result != "." {
+    result = result + separator;
   }
 
   return result;
 }
 
 /**
- * Joins path segments using `/` and normalizes the result.
+ * Joins path segments using separator and normalizes the result.
  * @param paths - path segments to join
  * @return joined and normalized path string
  */
@@ -88,11 +88,11 @@ open func join(paths: string...): string {
 
   var combined = paths[(long)0];
   for var i: long = (long)1; i < count; i += (long)1 {
-    if paths[i].length() > (long)0 && paths[i].at((long)0) == "/" {
+    if paths[i].length() > (long)0 && paths[i].at((long)0) == separator {
       // Absolute segment resets previous parts
       combined = paths[i];
     } else {
-      combined = combined + "/" + paths[i];
+      combined = combined + separator + paths[i];
     }
   }
 
@@ -110,25 +110,25 @@ open func dirname(path: string): string {
     return ".";
   }
 
-  // Strip trailing slash (unless path is "/")
+  // Strip trailing separator (unless path is just the root separator)
   var effective = path;
   var effectiveLen = len;
-  if effectiveLen > (long)1 && effective.at(effectiveLen - (long)1) == "/" {
+  if effectiveLen > (long)1 && effective.at(effectiveLen - (long)1) == separator {
     effective = effective.clone((long)0, effectiveLen - (long)1);
     effectiveLen = effective.length();
   }
 
-  // Find last "/"
-  let lastSlash = effective.lastIndexOf("/");
+  // Find last separator
+  let lastSlash = effective.lastIndexOf(separator);
 
   if lastSlash < (long)0 {
-    // No "/" found
+    // No separator found
     return ".";
   }
 
   if lastSlash == (long)0 {
-    // "/" is at position 0, dirname is "/"
-    return "/";
+    // Separator at position 0, dirname is root
+    return separator;
   }
 
   return effective.clone((long)0, lastSlash);
@@ -145,16 +145,16 @@ open func basename(path: string): string {
     return "";
   }
 
-  // Strip trailing slash (unless path is "/")
+  // Strip trailing separator (unless path is just the root separator)
   var effective = path;
   var effectiveLen = len;
-  if effectiveLen > (long)1 && effective.at(effectiveLen - (long)1) == "/" {
+  if effectiveLen > (long)1 && effective.at(effectiveLen - (long)1) == separator {
     effective = effective.clone((long)0, effectiveLen - (long)1);
     effectiveLen = effective.length();
   }
 
-  // Find last "/"
-  let lastSlash = effective.lastIndexOf("/");
+  // Find last separator
+  let lastSlash = effective.lastIndexOf(separator);
 
   if lastSlash < (long)0 {
     return effective;
@@ -188,16 +188,16 @@ open func extname(path: string): string {
 }
 
 /**
- * Returns `true` if the path is absolute (starts with `/`).
+ * Returns `true` if the path is absolute (starts with separator).
  * @param path - the path to test
  * @return whether the path is absolute
  */
 open func isAbsolute(path: string): bool {
-  return path.length() > (long)0 && path.at((long)0) == "/";
+  return path.length() > (long)0 && path.at((long)0) == separator;
 }
 
 /**
- * Returns `true` if the path is relative (does not start with `/`).
+ * Returns `true` if the path is relative (does not start with separator).
  * @param path - the path to test
  * @return whether the path is relative
  */
