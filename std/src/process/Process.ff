@@ -9,11 +9,38 @@ extern func feng_string_to_utf8_bytes(value: string): byte[];
 @runtime
 extern func feng_pointer_is_null(ptr: CStream*): bool;
 
+@runtime
+extern func feng_pointer_is_null(ptr: byte*): bool;
+
+@runtime
+extern func feng_pointer_is_null(ptr: string*): bool;
+
+@runtime
+extern func feng_pointer_move(ptr: byte*, offset: long): byte*;
+
+@runtime
+extern func feng_pointer_move(ptr: string*, offset: long): string*;
+
+@runtime
+extern func feng_pointer_get_scalar<T>(ptr: byte*): T;
+
+@runtime
+extern func feng_pointer_get_scalar<T>(ptr: string*): T;
+
 @cdecl("libc", "_exit")
 extern func posix_exit(status: int): void;
 
 @cdecl("libc")
 extern func getpid(): int;
+
+@cdecl("libc")
+extern func getppid(): int;
+
+@cdecl("libc")
+extern func getenv(name: string*): string*;
+
+@cdecl("libc")
+extern func strlen(s: string*): long;
 
 @abi
 seal type CStream {}
@@ -73,10 +100,52 @@ open type Process {
   }
 
   /**
+   * Returns the value of the environment variable with the given key.
+   * Returns an empty string if the variable does not exist.
+   * @param key - the environment variable name
+   */
+  open static func getEnv(key: string): string {
+    let valuePtr = getenv(&key);
+    if feng_pointer_is_null(valuePtr) {
+      return "";
+    }
+    let len = strlen(valuePtr);
+    let result: byte[!] = byte[:len];
+    for var i: long = (long)0; i < len; i += (long)1 {
+      let ptr: string* = feng_pointer_move(valuePtr, i);
+      result[i] = feng_pointer_get_scalar<byte>(ptr);
+    }
+    return string.fromUtf8Bytes((byte[])result);
+  }
+
+  /**
+   * Returns whether the environment variable with the given key exists.
+   * @param key - the environment variable name
+   */
+  open static func hasEnv(key: string): bool {
+    let valuePtr = getenv(&key);
+    return !feng_pointer_is_null(valuePtr);
+  }
+
+  /**
+   * Exits the current process with the given exit code.
+   */
+  open static func exit(code: int): void {
+    posix_exit(code);
+  }
+
+  /**
    * Returns the PID of the current process.
    */
   open static func currentId(): int {
     return getpid();
+  }
+
+  /**
+   * Returns the PID of the parent process.
+   */
+  open static func parentId(): int {
+    return getppid();
   }
 
   let path: string;
@@ -189,13 +258,6 @@ open type Process {
     if !self.finished && self.pid > 0 {
       posix_kill(self.pid, signal);
     }
-  }
-
-  /**
-   * Exits the process with the given exit code.
-   */
-  func exit(code: int): void {
-    posix_exit(code);
   }
 
 }

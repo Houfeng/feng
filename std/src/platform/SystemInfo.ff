@@ -6,14 +6,8 @@ import std.collections;
 @cdecl("feng_std_uv", "uv_os_gethostname")
 extern func uv_os_gethostname(name: byte*, size: long*): int;
 
-@cdecl("feng_std_uv", "uv_os_getpid")
-extern func uv_os_getpid(): long;
-
-@cdecl("feng_std_uv", "uv_os_getppid")
-extern func uv_os_getppid(): long;
-
 /**
- * Provides process and host queries.
+ * Provides host queries.
  */
 open type SystemInfo {
   // The constructor is sealed to prevent instantiation.
@@ -32,19 +26,5 @@ open type SystemInfo {
     }
 
     return string.fromUtf8Bytes(((byte[])nameBytes).clone((long)0, nameSize[0]));
-  }
-
-  /**
-   * Returns the current process identifier.
-   */
-  open static func processId(): int {
-    return (int)uv_os_getpid();
-  }
-
-  /**
-   * Returns the parent process identifier.
-   */
-  open static func parentProcessId(): int {
-    return (int)uv_os_getppid();
   }
 }

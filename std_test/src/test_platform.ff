@@ -6,8 +6,6 @@ import std.platform;
 
 func platform_system_info_tests() {
   let _hostName = SystemInfo.hostName();
-  let _processId = SystemInfo.processId();
-  let _parentProcessId = SystemInfo.parentProcessId();
 
   check(true, "platform/system-info/call");
 }
