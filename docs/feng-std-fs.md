@@ -91,11 +91,11 @@
 | 符号 | 签名 | 说明 |
 | --- | --- | --- |
 | `Dir` | `open type Dir` | 目录遍历对象，封装目录句柄与读取操作 |
+| `Dir.open` | `open static func open(path: string): Dir` | 打开目录，返回 `Dir` 实例 |
 | `Dir.read` | `open func read(batchSize: long): EntryInfo[]` | 读取下一批至多 `batchSize` 个目录条目，遍历结束后返回空数组 |
 | `Dir.next` | `open func next(): IteratorResult<EntryInfo>` | `@iterator` 方法，逐条返回目录条目，支持 `for/in` 迭代 |
 | `Dir.close` | `open func close(): void` | 关闭目录并释放底层目录句柄 |
 | `Dir.isClosed` | `open func isClosed(): bool` | 返回目录是否已关闭 |
-| `openDir` | `open func openDir(path: string): Dir` | 打开目录，返回 `Dir` 实例 |
 
 ### 2.7 顶层便利函数
 
@@ -240,7 +240,7 @@
 - `Dir.close` 关闭目录并释放底层目录句柄，同时将 `isClosed` 设为 `true`。
 - `Dir.close` 在目录已关闭时不抛出错误，行为幂等。
 - `Dir` 不提供隐式自动关闭机制；调用方必须在不再需要时显式调用 `close`。
-- `openDir` 在路径无效、权限不足或路径不是目录时抛出异常。
+- `Dir.open` 在路径无效、权限不足或路径不是目录时抛出异常。
 
 ### 3.9 符号链接处理
 
@@ -316,7 +316,7 @@
 - [必须] `Dir.read` 与 `Dir.next` 共享底层遍历状态，不得混用。
 - [必须] `Dir.close` 必须幂等，重复关闭不抛出错误。
 - [必须] `Dir.isClosed` 返回 `bool`。
-- [必须] `openDir` 的返回类型固定为 `Dir`。
+- [必须] `Dir.open` 的返回类型固定为 `Dir`。
 - [必须] 顶层 `stat` 必须跟踪符号链接。
 - [必须] 顶层 `exists`、`isFile` 与 `isDir` 必须跟踪符号链接。
 - [必须] 顶层便利函数 `readText` 的签名固定为 `readText(path: string): string`。
