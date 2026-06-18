@@ -1,4 +1,372 @@
+open module std.fs;
+
+import std.collections;
+import std.text;
+
+// libc file operations
+@cdecl("libc", "open", 2)
+extern func c_open(path: byte*, flags: int, mode: int): int;
+
+@cdecl("libc", "close")
+extern func c_close(fd: int): int;
+
+@cdecl("libc", "read")
+extern func c_read(fd: int, buf: byte*, count: long): long;
+
+@cdecl("libc", "write")
+extern func c_write(fd: int, buf: byte*, count: long): long;
+
+@cdecl("libc", "access")
+extern func c_access(path: byte*, mode: int): int;
+
+@cdecl("libc", "unlink")
+extern func c_unlink(path: byte*): int;
+
+@cdecl("libc", "rename")
+extern func c_rename(from: byte*, to: byte*): int;
+
+@cdecl("libc", "fstat")
+extern func fs_posix_fstat(fd: int, buf: long*): int;
+
+// Default file creation permission: 0644 = 420
+seal let DEFAULT_FILE_MODE: int = 420;
+
 /**
- * Copyright (c) 2024-present, Feng language. 
- * All rights reserved.
+ * 文件读写对象，封装文件描述符与读写操作。
+ * 底层 bytes-first：read 与 write 直接处理 byte 缓冲或 byte[] 数据。
  */
+open type File {
+  seal var fd: int;
+  seal var closed: bool;
+
+  /**
+   * 打开或创建文件，返回 File 实例。
+   * @param path - 文件路径
+   * @param mode - 文件打开模式
+   */
+  open static func create(path: string, mode: FileMode): File {
+    let pathBytes = makeNullTerminatedPath(path);
+    let fd = c_open(&pathBytes, (int)mode, DEFAULT_FILE_MODE);
+    if fd < 0 {
+      throw "fs/open-failed";
+    }
+    return File { fd: fd, closed: false };
+  }
+
+  /**
+   * 从文件读取至多 buffer.length() 个字节。
+   * @param buffer - 调用方提供的可写字节缓冲
+   * @return 实际读取字节数，EOF 返回 0
+   */
+  open func read(buffer: byte[!]): long {
+    self.ensureOpen();
+    let capacity = buffer.length();
+    if capacity == (long)0 {
+      return (long)0;
+    }
+    let result = c_read(self.fd, &buffer, capacity);
+    if result < (long)0 {
+      throw "fs/read-failed";
+    }
+    return result;
+  }
+
+  /**
+   * 将 bytes 写到文件。
+   * @param bytes - 输出字节序列
+   * @return 实际写入字节数
+   */
+  open func write(bytes: byte[]): long {
+    self.ensureOpen();
+    let length = bytes.length();
+    if length == (long)0 {
+      return (long)0;
+    }
+    let result = c_write(self.fd, &bytes, length);
+    if result < (long)0 {
+      throw "fs/write-failed";
+    }
+    return result;
+  }
+
+  /**
+   * 将 text 的 UTF-8 字节写到文件，语义固定等价于把 text 的 UTF-8 字节序列传给 write。
+   * @param text - 要写入的文本
+   * @return 实际写入字节数
+   */
+  open func writeText(text: string): long {
+    return self.write(feng_string_to_utf8_bytes(text));
+  }
+
+  /**
+   * 从当前偏移读取全部剩余字节并解码为 UTF-8 string。
+   * @return 文件剩余内容的 UTF-8 字符串
+   */
+  open func readText(): string {
+    let bytes = self.readAllBytes();
+    return string.fromUtf8Bytes(bytes);
+  }
+
+  /**
+   * 从当前偏移读取全部剩余内容并按行分割。
+   * 行尾分隔符不属于返回内容，兼容 CRLF。
+   * @return 按行分割的字符串数组
+   */
+  open func readLines(): string[] {
+    let text = self.readText();
+    if text.length() == (long)0 {
+      return string[: (long)0];
+    }
+    let textBytes = feng_string_to_utf8_bytes(text);
+    let lines = List<string>();
+    let lineBytes = List<byte>();
+    let len = textBytes.length();
+    for var i: long = (long)0; i < len; i += (long)1 {
+      let b = textBytes[i];
+      if b == (byte)10 {
+        lines.add(string.fromUtf8Bytes(lineBytes.entries()));
+        lineBytes.clear();
+      } else {
+        if b != (byte)13 {
+          lineBytes.add(b);
+        }
+      }
+    }
+    // 最后一行（无尾部换行时保留）
+    if (long)lineBytes.size() > (long)0 {
+      lines.add(string.fromUtf8Bytes(lineBytes.entries()));
+    }
+    // 如果文本以 \n 结尾，split 会产生尾部空串，需要移除
+    if len > (long)0 && textBytes[len - (long)1] == (byte)10 {
+      if (long)lines.size() > (long)0 {
+        let last = lines.get(lines.size() - 1);
+        if last.length() == (long)0 {
+          lines.remove(lines.size() - 1);
+        }
+      }
+    }
+    return lines.entries();
+  }
+
+  /**
+   * 关闭文件并释放底层文件描述符，行为幂等。
+   */
+  open func close(): void {
+    if self.closed {
+      return;
+    }
+    self.closed = true;
+    try c_close(self.fd) catch {
+      // 幂等：忽略 close 异常
+    };
+  }
+
+  /**
+   * 返回文件是否已关闭。
+   */
+  open func isClosed(): bool {
+    return self.closed;
+  }
+
+  /**
+   * 获取当前文件的元信息。
+   * @return 文件的 StatInfo
+   */
+  open func stat(): StatInfo {
+    self.ensureOpen();
+    let statBuf: long[!] = long[:(long)16];
+    let rc = fs_posix_fstat(self.fd, &statBuf);
+    if rc != 0 {
+      throw "fs/stat-failed";
+    }
+    return readStatInfo(statBuf);
+  }
+
+  /**
+   * 内部：从文件读取全部剩余字节。
+   */
+  seal func readAllBytes(): byte[] {
+    let allBytes = List<byte>();
+    let chunk: byte[!] = byte[:(long)4096];
+    while true {
+      let count = self.read(chunk);
+      if count == (long)0 {
+        break;
+      }
+      for var i: long = (long)0; i < count; i += (long)1 {
+        allBytes.add(chunk[i]);
+      }
+    }
+    return allBytes.entries();
+  }
+
+  /**
+   * 内部：将全部字节写入文件。
+   */
+  seal func writeAllBytes(bytes: byte[]) {
+    let written = self.write(bytes);
+    if written != bytes.length() {
+      throw "fs/write-failed";
+    }
+  }
+
+  /**
+   * 内部：检查文件是否已打开，已关闭时抛出异常。
+   */
+  seal func ensureOpen() {
+    if self.closed {
+      throw "fs/file-closed";
+    }
+  }
+}
+
+// ---- 顶层便捷函数 ----
+
+/**
+ * 读取文件全部内容作为 UTF-8 字符串返回。
+ * 自动管理文件的打开与关闭，即使中途抛出异常也必须关闭已打开的文件。
+ * @param path - 文件路径
+ * @return 文件全部内容
+ */
+open func readText(path: string): string {
+  let file = File.create(path, FileMode.Read);
+  let result = try file.readText() catch ex: string {
+    file.close();
+    throw ex;
+  };
+  file.close();
+  return result;
+}
+
+/**
+ * 将文本以 UTF-8 编码写入文件，不存在则创建，存在则清空。
+ * 自动管理文件的打开与关闭。
+ * @param path - 文件路径
+ * @param text - 要写入的文本
+ */
+open func writeText(path: string, text: string): void {
+  let file = File.create(path, FileMode.WriteTrunc);
+  try file.writeText(text) catch ex: string {
+    file.close();
+    throw ex;
+  };
+  file.close();
+}
+
+/**
+ * 读取文件全部内容作为字节数组返回。
+ * 自动管理文件的打开与关闭。
+ * @param path - 文件路径
+ * @return 文件全部字节
+ */
+open func readBytes(path: string): byte[] {
+  let file = File.create(path, FileMode.Read);
+  let result = try file.readAllBytes() catch ex: string {
+    file.close();
+    throw ex;
+  };
+  file.close();
+  return result;
+}
+
+/**
+ * 将字节数组写入文件，不存在则创建，存在则清空。
+ * 自动管理文件的打开与关闭。
+ * @param path - 文件路径
+ * @param bytes - 要写入的字节数组
+ */
+open func writeBytes(path: string, bytes: byte[]): void {
+  let file = File.create(path, FileMode.WriteTrunc);
+  try file.writeAllBytes(bytes) catch ex: string {
+    file.close();
+    throw ex;
+  };
+  file.close();
+}
+
+/**
+ * 判断路径是否存在（文件或目录），跟踪符号链接。
+ * 不得抛出异常。
+ * @param path - 路径
+ * @return 是否存在
+ */
+open func exists(path: string): bool {
+  let pathBytes = makeNullTerminatedPath(path);
+  let rc = c_access(&pathBytes, 0);
+  return rc == 0;
+}
+
+/**
+ * 判断路径是否为普通文件，跟踪符号链接。
+ * 不得抛出异常。
+ * @param path - 路径
+ * @return 是否为普通文件
+ */
+open func isFile(path: string): bool {
+  let pathBytes = makeNullTerminatedPath(path);
+  let statBuf: long[!] = long[:(long)16];
+  let rc = posix_stat(&pathBytes, &statBuf);
+  if rc != 0 {
+    return false;
+  }
+  let info = readStatInfo(statBuf);
+  return info.kind == EntryKind.File;
+}
+
+/**
+ * 判断路径是否为目录，跟踪符号链接。
+ * 不得抛出异常。
+ * @param path - 路径
+ * @return 是否为目录
+ */
+open func isDir(path: string): bool {
+  let pathBytes = makeNullTerminatedPath(path);
+  let statBuf: long[!] = long[:(long)16];
+  let rc = posix_stat(&pathBytes, &statBuf);
+  if rc != 0 {
+    return false;
+  }
+  let info = readStatInfo(statBuf);
+  return info.kind == EntryKind.Dir;
+}
+
+/**
+ * 获取路径的完整元信息（跟踪符号链接），路径无效或不可访问时抛出异常。
+ * @param path - 路径
+ * @return StatInfo
+ */
+open func stat(path: string): StatInfo {
+  let pathBytes = makeNullTerminatedPath(path);
+  let statBuf: long[!] = long[:(long)16];
+  let rc = posix_stat(&pathBytes, &statBuf);
+  if rc != 0 {
+    throw "fs/stat-failed";
+  }
+  return readStatInfo(statBuf);
+}
+
+/**
+ * 删除文件或符号链接，不得删除目录。路径无效时抛出异常。
+ * @param path - 文件或符号链接路径
+ */
+open func remove(path: string): void {
+  let pathBytes = makeNullTerminatedPath(path);
+  let rc = c_unlink(&pathBytes);
+  if rc != 0 {
+    throw "fs/remove-failed";
+  }
+}
+
+/**
+ * 重命名或移动文件/目录。源路径无效时抛出异常。
+ * @param from - 源路径
+ * @param to - 目标路径
+ */
+open func rename(from: string, to: string): void {
+  let fromBytes = makeNullTerminatedPath(from);
+  let toBytes = makeNullTerminatedPath(to);
+  let rc = c_rename(&fromBytes, &toBytes);
+  if rc != 0 {
+    throw "fs/rename-failed";
+  }
+}

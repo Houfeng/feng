@@ -1,0 +1,542 @@
+module std_test;
+
+import std.test;
+import std.fs;
+import std.text;
+import std.io;
+import std.collections;
+
+let fsTestDir = "/tmp/feng_fs_test";
+
+// ---- setup / cleanup ----
+
+func safeRemove(path: string) {
+  if exists(path) {
+    try remove(path) catch {};
+  }
+}
+
+func setupFsTests() {
+  // Clean any leftover artifacts from a previous failed run, then create fresh dir
+  if isDir(fsTestDir) {
+    let oldEntries = readDir(fsTestDir);
+    for var i: long = (long)0; i < oldEntries.length(); i += (long)1 {
+      if oldEntries[i].kind == EntryKind.Dir {
+        try rmdir(oldEntries[i].path) catch {};
+      } else {
+        try remove(oldEntries[i].path) catch {};
+      }
+    }
+    try rmdir(fsTestDir) catch {};
+  }
+  mkdir(fsTestDir);
+}
+
+func cleanupFsTests() {
+  // Remove every test artifact, ignore errors
+  let entries = readDir(fsTestDir);
+  for var i: long = (long)0; i < entries.length(); i += (long)1 {
+    if entries[i].kind == EntryKind.Dir {
+      try rmdir(entries[i].path) catch {};
+    } else {
+      try remove(entries[i].path) catch {};
+    }
+  }
+  try rmdir(fsTestDir) catch {};
+}
+
+// ---- File basic read/write ----
+
+func fs_file_basic_rw() {
+  let path = fsTestDir + "/basic_rw.txt";
+  let file1 = File.create(path, FileMode.WriteTrunc);
+  let data: byte[] = [(byte)72, (byte)101, (byte)108, (byte)108, (byte)111];
+  let written = file1.write(data);
+  check(written == (long)5, "fs/file-write-bytes");
+  file1.close();
+
+  let file2 = File.create(path, FileMode.Read);
+  let buf: byte[!] = byte[:(long)16];
+  let readCount = file2.read(buf);
+  check(readCount == (long)5, "fs/file-read-bytes-count");
+  check(buf[0] == (byte)72, "fs/file-read-byte0");
+  check(buf[4] == (byte)111, "fs/file-read-byte4");
+  file2.close();
+}
+
+// ---- File writeText / readText ----
+
+func fs_file_writeText_readText() {
+  let path = fsTestDir + "/text_rw.txt";
+  let file1 = File.create(path, FileMode.WriteTrunc);
+  let written = file1.writeText("Hello, Feng!");
+  check(written == (long)12, "fs/file-writeText-length");
+  file1.close();
+
+  let file2 = File.create(path, FileMode.Read);
+  let text = file2.readText();
+  check(text == "Hello, Feng!", "fs/file-readText");
+  file2.close();
+}
+
+// ---- File readLines ----
+
+func fs_file_readLines() {
+  let path = fsTestDir + "/lines.txt";
+  writeText(path, "line1\nline2\nline3");
+
+  let file = File.create(path, FileMode.Read);
+  let lines = file.readLines();
+  check(lines.length() == (long)3, "fs/file-readLines-count");
+  check(lines[0] == "line1", "fs/file-readLines-0");
+  check(lines[1] == "line2", "fs/file-readLines-1");
+  check(lines[2] == "line3", "fs/file-readLines-2");
+  file.close();
+}
+
+func fs_file_readLines_crlf() {
+  let path = fsTestDir + "/lines_crlf.txt";
+  writeText(path, "a\r\nb\r\n");
+
+  let file = File.create(path, FileMode.Read);
+  let lines = file.readLines();
+  check(lines.length() == (long)2, "fs/file-readLines-crlf-count");
+  check(lines[0] == "a", "fs/file-readLines-crlf-0");
+  check(lines[1] == "b", "fs/file-readLines-crlf-1");
+  file.close();
+}
+
+func fs_file_readLines_trailing_newline() {
+  let path = fsTestDir + "/lines_notrail.txt";
+  writeText(path, "x\ny\n");
+
+  let file = File.create(path, FileMode.Read);
+  let lines = file.readLines();
+  check(lines.length() == (long)2, "fs/file-readLines-trailing-count");
+  check(lines[0] == "x", "fs/file-readLines-trailing-0");
+  check(lines[1] == "y", "fs/file-readLines-trailing-1");
+  file.close();
+}
+
+// ---- File stat ----
+
+func fs_file_stat() {
+  let path = fsTestDir + "/stat_test.txt";
+  writeText(path, "hello");
+
+  let file = File.create(path, FileMode.Read);
+  let info = file.stat();
+  check(info.kind == EntryKind.File, "fs/file-stat-kind");
+  check(info.size == (i64)5, "fs/file-stat-size");
+  file.close();
+}
+
+// ---- File close idempotent ----
+
+func fs_close_idempotent() {
+  let path = fsTestDir + "/basic_rw.txt";
+  let file = File.create(path, FileMode.Read);
+  file.close();
+  file.close();
+  file.close();
+  check(file.isClosed() == true, "fs/file-close-idempotent");
+}
+
+// ---- File isClosed ----
+
+func fs_isClosed() {
+  let path = fsTestDir + "/basic_rw.txt";
+  let file = File.create(path, FileMode.Read);
+  check(file.isClosed() == false, "fs/file-isClosed-false");
+  file.close();
+  check(file.isClosed() == true, "fs/file-isClosed-true");
+}
+
+// ---- Operations on closed file throw ----
+
+func fs_read_closed_throws() {
+  let path = fsTestDir + "/basic_rw.txt";
+  let file = File.create(path, FileMode.Read);
+  file.close();
+  var caught = false;
+  let buf: byte[!] = byte[:(long)8];
+  let r = try file.read(buf) catch ex: string { caught = true; (long)-1; };
+  check(caught == true, "fs/file-read-closed-throws");
+}
+
+func fs_write_closed_throws() {
+  let path = fsTestDir + "/basic_rw.txt";
+  let file = File.create(path, FileMode.Read);
+  file.close();
+  var caught = false;
+  let w = try file.write([(byte)65]) catch ex: string { caught = true; (long)-1; };
+  check(caught == true, "fs/file-write-closed-throws");
+}
+
+func fs_stat_closed_throws() {
+  let path = fsTestDir + "/stat_test.txt";
+  let file = File.create(path, FileMode.Read);
+  file.close();
+  var caught = false;
+  let s = try file.stat() catch ex: string {
+    caught = true;
+    StatInfo { kind: EntryKind.Other, size: (i64)0, mode: (u64)0, modifiedAt: (i64)0, accessedAt: (i64)0, changedAt: (i64)0 };
+  };
+  check(caught == true, "fs/file-stat-closed-throws");
+}
+
+// ---- Empty buffer / bytes ----
+
+func fs_empty_buffer() {
+  let path = fsTestDir + "/empty_rw.txt";
+  let file = File.create(path, FileMode.WriteTrunc);
+  let emptyArr: byte[] = [];
+  let written = file.write(emptyArr);
+  check(written == (long)0, "fs/file-write-empty-bytes");
+
+  let emptyBuf: byte[!] = byte[:(long)0];
+  let readCount = file.read(emptyBuf);
+  check(readCount == (long)0, "fs/file-read-empty-buffer");
+  file.close();
+}
+
+// ---- FileMode variants ----
+
+func fs_fileMode_writeTrunc() {
+  let path = fsTestDir + "/trunc_test.txt";
+  writeText(path, "original content here");
+
+  let file = File.create(path, FileMode.WriteTrunc);
+  file.writeText("new");
+  file.close();
+
+  let result = readText(path);
+  check(result == "new", "fs/fileMode-writeTrunc");
+}
+
+func fs_fileMode_writeAppend() {
+  let path = fsTestDir + "/append_test.txt";
+  writeText(path, "hello");
+
+  let file = File.create(path, FileMode.WriteAppend);
+  file.writeText(" world");
+  file.close();
+
+  let result = readText(path);
+  check(result == "hello world", "fs/fileMode-writeAppend");
+}
+
+func fs_fileMode_writeNew() {
+  let path = fsTestDir + "/new_test.txt";
+  writeText(path, "existing");
+
+  // WriteNew must fail when file exists
+  var caught = false;
+  try File.create(path, FileMode.WriteNew) catch ex: string { caught = true; };
+  check(caught == true, "fs/fileMode-writeNew-exists-fails");
+
+  // WriteNew succeeds for new file
+  let newPath = fsTestDir + "/new_test2.txt";
+  let file = File.create(newPath, FileMode.WriteNew);
+  file.writeText("created");
+  file.close();
+
+  let result = readText(newPath);
+  check(result == "created", "fs/fileMode-writeNew-ok");
+}
+
+// ---- Top-level readText / writeText ----
+
+func fs_toplevel_readText_writeText() {
+  let path = fsTestDir + "/toplevel_text.txt";
+  writeText(path, "hello world");
+  let result = readText(path);
+  check(result == "hello world", "fs/toplevel-readText-writeText");
+}
+
+// ---- Top-level readBytes / writeBytes ----
+
+func fs_toplevel_readBytes_writeBytes() {
+  let path = fsTestDir + "/toplevel_bytes.bin";
+  let data: byte[] = [(byte)1, (byte)2, (byte)3, (byte)4, (byte)5];
+  writeBytes(path, data);
+  let result = readBytes(path);
+  check(result.length() == (long)5, "fs/toplevel-readBytes-length");
+  check(result[0] == (byte)1, "fs/toplevel-readBytes-0");
+  check(result[4] == (byte)5, "fs/toplevel-readBytes-4");
+}
+
+// ---- Top-level exists ----
+
+func fs_exists() {
+  let path = fsTestDir + "/exists_test.txt";
+  check(exists(path) == false, "fs/exists-before");
+  writeText(path, "x");
+  check(exists(path) == true, "fs/exists-after");
+}
+
+// ---- Top-level isFile / isDir ----
+
+func fs_isFile() {
+  let path = fsTestDir + "/exists_test.txt";
+  check(isFile(path) == true, "fs/isFile-true");
+  check(isFile(fsTestDir) == false, "fs/isFile-dir-false");
+  check(isFile(fsTestDir + "/nonexistent") == false, "fs/isFile-nonexist-false");
+}
+
+func fs_isDir() {
+  check(isDir(fsTestDir) == true, "fs/isDir-true");
+  let path = fsTestDir + "/exists_test.txt";
+  check(isDir(path) == false, "fs/isDir-file-false");
+  check(isDir(fsTestDir + "/nonexistent") == false, "fs/isDir-nonexist-false");
+}
+
+// ---- Top-level stat ----
+
+func fs_stat_path() {
+  let path = fsTestDir + "/stat_path.txt";
+  writeText(path, "12345");
+  let info = stat(path);
+  check(info.kind == EntryKind.File, "fs/stat-path-kind");
+  check(info.size == (i64)5, "fs/stat-path-size");
+
+  // stat on nonexistent path throws
+  var caught = false;
+  let s = try stat(fsTestDir + "/nonexistent") catch ex: string {
+    caught = true;
+    StatInfo { kind: EntryKind.Other, size: (i64)0, mode: (u64)0, modifiedAt: (i64)0, accessedAt: (i64)0, changedAt: (i64)0 };
+  };
+  check(caught == true, "fs/stat-path-nonexist-throws");
+}
+
+// ---- Top-level mkdir / rmdir ----
+
+func fs_mkdir_rmdir() {
+  let subPath = fsTestDir + "/subdir";
+  mkdir(subPath);
+  check(isDir(subPath) == true, "fs/mkdir-created");
+
+  rmdir(subPath);
+  check(isDir(subPath) == false, "fs/rmdir-removed");
+}
+
+// ---- Top-level remove ----
+
+func fs_remove() {
+  let path = fsTestDir + "/remove_test.txt";
+  writeText(path, "delete me");
+  check(exists(path) == true, "fs/remove-exists-before");
+  remove(path);
+  check(exists(path) == false, "fs/remove-gone-after");
+}
+
+// ---- Top-level rename ----
+
+func fs_rename() {
+  let fromPath = fsTestDir + "/rename_from.txt";
+  let toPath = fsTestDir + "/rename_to.txt";
+  writeText(fromPath, "rename me");
+  rename(fromPath, toPath);
+  check(exists(fromPath) == false, "fs/rename-from-gone");
+  check(exists(toPath) == true, "fs/rename-to-exists");
+  let content = readText(toPath);
+  check(content == "rename me", "fs/rename-content");
+}
+
+// ---- Dir batch read ----
+
+func fs_dir_read() {
+  writeText(fsTestDir + "/dir_a.txt", "a");
+  writeText(fsTestDir + "/dir_b.txt", "b");
+  writeText(fsTestDir + "/dir_c.txt", "c");
+
+  let dir = Dir.create(fsTestDir);
+  let batch = dir.read((long)100);
+  dir.close();
+
+  var foundA = false;
+  var foundB = false;
+  var foundC = false;
+  for var i: long = (long)0; i < batch.length(); i += (long)1 {
+    if batch[i].name == "dir_a.txt" { foundA = true; }
+    if batch[i].name == "dir_b.txt" { foundB = true; }
+    if batch[i].name == "dir_c.txt" { foundC = true; }
+  }
+  check(foundA == true, "fs/dir-read-found-a");
+  check(foundB == true, "fs/dir-read-found-b");
+  check(foundC == true, "fs/dir-read-found-c");
+}
+
+// ---- Dir for/in iteration ----
+
+func fs_dir_iterate() {
+  writeText(fsTestDir + "/iter_a.txt", "a");
+  writeText(fsTestDir + "/iter_b.txt", "b");
+
+  let dir = Dir.create(fsTestDir);
+  var count: long = (long)0;
+  for let entry in dir {
+    count += (long)1;
+  }
+  dir.close();
+  check(count >= (long)2, "fs/dir-iterate-count");
+}
+
+// ---- Dir close idempotent ----
+
+func fs_dir_close_idempotent() {
+  let dir = Dir.create(fsTestDir);
+  dir.close();
+  dir.close();
+  dir.close();
+  check(dir.isClosed() == true, "fs/dir-close-idempotent");
+}
+
+// ---- Dir isClosed ----
+
+func fs_dir_isClosed() {
+  let dir = Dir.create(fsTestDir);
+  check(dir.isClosed() == false, "fs/dir-isClosed-false");
+  dir.close();
+  check(dir.isClosed() == true, "fs/dir-isClosed-true");
+}
+
+// ---- Dir operations on closed dir throw ----
+
+func fs_dir_read_closed_throws() {
+  let dir = Dir.create(fsTestDir);
+  dir.close();
+  var caught = false;
+  let r = try dir.read((long)10) catch ex: string {
+    caught = true;
+    let empty: EntryInfo[] = [];
+    empty;
+  };
+  check(caught == true, "fs/dir-read-closed-throws");
+}
+
+// ---- Top-level readDir ----
+
+func fs_readDir() {
+  writeText(fsTestDir + "/rd_x.txt", "x");
+  writeText(fsTestDir + "/rd_y.txt", "y");
+
+  let entries = readDir(fsTestDir);
+  var foundX = false;
+  var foundY = false;
+  for var i: long = (long)0; i < entries.length(); i += (long)1 {
+    if entries[i].name == "rd_x.txt" { foundX = true; }
+    if entries[i].name == "rd_y.txt" { foundY = true; }
+  }
+  check(foundX == true, "fs/readDir-found-x");
+  check(foundY == true, "fs/readDir-found-y");
+}
+
+// ---- EntryInfo properties ----
+
+func fs_entryInfo_name_no_separator() {
+  writeText(fsTestDir + "/entry_name.txt", "e");
+
+  let entries = readDir(fsTestDir);
+  for var i: long = (long)0; i < entries.length(); i += (long)1 {
+    if entries[i].name == "entry_name.txt" {
+      check(entries[i].name.indexOf("/") < (long)0, "fs/entryInfo-name-no-separator");
+    }
+  }
+}
+
+func fs_entryInfo_path_full() {
+  writeText(fsTestDir + "/entry_path.txt", "e");
+
+  let entries = readDir(fsTestDir);
+  for var i: long = (long)0; i < entries.length(); i += (long)1 {
+    if entries[i].name == "entry_path.txt" {
+      check(entries[i].path == fsTestDir + "/entry_path.txt", "fs/entryInfo-path-full");
+    }
+  }
+}
+
+func fs_entryInfo_no_dot_entries() {
+  writeText(fsTestDir + "/dot_check.txt", "d");
+
+  let entries = readDir(fsTestDir);
+  for var i: long = (long)0; i < entries.length(); i += (long)1 {
+    check(entries[i].name != ".", "fs/entryInfo-no-dot");
+    check(entries[i].name != "..", "fs/entryInfo-no-dotdot");
+  }
+}
+
+// ---- EntryInfo.stat() ----
+
+func fs_entryInfo_stat() {
+  let path = fsTestDir + "/entry_stat.txt";
+  writeText(path, "abcde");
+
+  let entries = readDir(fsTestDir);
+  for var i: long = (long)0; i < entries.length(); i += (long)1 {
+    if entries[i].name == "entry_stat.txt" {
+      let info = entries[i].stat();
+      check(info.kind == EntryKind.File, "fs/entryInfo-stat-kind");
+      check(info.size == (i64)5, "fs/entryInfo-stat-size");
+    }
+  }
+}
+
+// ---- EntryKind enum values match DT_* ----
+
+func fs_entryKind_values() {
+  check(EntryKind.File == EntryKind.File, "fs/entryKind-file-value");
+  check(EntryKind.Dir == EntryKind.Dir, "fs/entryKind-dir-value");
+  check(EntryKind.Symlink == EntryKind.Symlink, "fs/entryKind-symlink-value");
+  check(EntryKind.Fifo == EntryKind.Fifo, "fs/entryKind-fifo-value");
+  check(EntryKind.Socket == EntryKind.Socket, "fs/entryKind-socket-value");
+  check(EntryKind.CharDevice == EntryKind.CharDevice, "fs/entryKind-chardev-value");
+  check(EntryKind.BlockDevice == EntryKind.BlockDevice, "fs/entryKind-blockdev-value");
+  check(EntryKind.Other == EntryKind.Other, "fs/entryKind-other-value");
+}
+
+// ---- Runner ----
+
+open func run_fs_tests() {
+  setupFsTests();
+
+  describe("fs tests", () {
+    test("fs_file_basic_rw()", () { fs_file_basic_rw(); });
+    test("fs_file_writeText_readText()", () { fs_file_writeText_readText(); });
+    test("fs_file_readLines()", () { fs_file_readLines(); });
+    test("fs_file_readLines_crlf()", () { fs_file_readLines_crlf(); });
+    test("fs_file_readLines_trailing_newline()", () { fs_file_readLines_trailing_newline(); });
+    test("fs_file_stat()", () { fs_file_stat(); });
+    test("fs_close_idempotent()", () { fs_close_idempotent(); });
+    test("fs_isClosed()", () { fs_isClosed(); });
+    test("fs_read_closed_throws()", () { fs_read_closed_throws(); });
+    test("fs_write_closed_throws()", () { fs_write_closed_throws(); });
+    test("fs_stat_closed_throws()", () { fs_stat_closed_throws(); });
+    test("fs_empty_buffer()", () { fs_empty_buffer(); });
+    test("fs_fileMode_writeTrunc()", () { fs_fileMode_writeTrunc(); });
+    test("fs_fileMode_writeAppend()", () { fs_fileMode_writeAppend(); });
+    test("fs_fileMode_writeNew()", () { fs_fileMode_writeNew(); });
+    test("fs_toplevel_readText_writeText()", () { fs_toplevel_readText_writeText(); });
+    test("fs_toplevel_readBytes_writeBytes()", () { fs_toplevel_readBytes_writeBytes(); });
+    test("fs_exists()", () { fs_exists(); });
+    test("fs_isFile()", () { fs_isFile(); });
+    test("fs_isDir()", () { fs_isDir(); });
+    test("fs_stat_path()", () { fs_stat_path(); });
+    test("fs_mkdir_rmdir()", () { fs_mkdir_rmdir(); });
+    test("fs_remove()", () { fs_remove(); });
+    test("fs_rename()", () { fs_rename(); });
+    test("fs_dir_read()", () { fs_dir_read(); });
+    test("fs_dir_iterate()", () { fs_dir_iterate(); });
+    test("fs_dir_close_idempotent()", () { fs_dir_close_idempotent(); });
+    test("fs_dir_isClosed()", () { fs_dir_isClosed(); });
+    test("fs_dir_read_closed_throws()", () { fs_dir_read_closed_throws(); });
+    test("fs_readDir()", () { fs_readDir(); });
+    test("fs_entryInfo_name_no_separator()", () { fs_entryInfo_name_no_separator(); });
+    test("fs_entryInfo_path_full()", () { fs_entryInfo_path_full(); });
+    test("fs_entryInfo_no_dot_entries()", () { fs_entryInfo_no_dot_entries(); });
+    test("fs_entryInfo_stat()", () { fs_entryInfo_stat(); });
+    test("fs_entryKind_values()", () { fs_entryKind_values(); });
+  });
+
+  cleanupFsTests();
+}

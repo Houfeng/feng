@@ -1,0 +1,178 @@
+open module std.fs;
+
+import std.collections;
+import std.text;
+
+// libc POSIX stat
+@cdecl("libc", "stat")
+extern func posix_stat(p: byte*, buf: long*): int;
+
+// Runtime helpers
+@runtime
+extern func feng_string_to_utf8_bytes(value: string): byte[];
+
+@runtime
+extern func feng_pointer_move(ptr: long*, offset: long): long*;
+
+@runtime
+extern func feng_pointer_get_scalar<T>(ptr: long*): T;
+
+// POSIX stat struct offsets (macOS aarch64, 64-bit inode)
+seal let STAT_MODE_OFFSET: long = (long)4;
+seal let STAT_SIZE_OFFSET: long = (long)96;
+seal let STAT_ATIME_OFFSET: long = (long)32;
+seal let STAT_MTIME_OFFSET: long = (long)48;
+seal let STAT_CTIME_OFFSET: long = (long)64;
+
+// POSIX S_IF* file type masks
+seal let S_IFMT: long = (long)61440;
+seal let S_IFIFO: long = (long)4096;
+seal let S_IFCHR: long = (long)8192;
+seal let S_IFDIR: long = (long)16384;
+seal let S_IFBLK: long = (long)24576;
+seal let S_IFREG: long = (long)32768;
+seal let S_IFLNK: long = (long)40960;
+seal let S_IFSOCK: long = (long)49152;
+
+/**
+ * 文件系统中的实体类型，替代 isFile/isDir/isSymlink 等布尔标志，杜绝不自治状态。
+ */
+open enum EntryKind {
+  Other = 0,
+  Fifo = 1,
+  CharDevice = 2,
+  Dir = 4,
+  BlockDevice = 6,
+  File = 8,
+  Symlink = 10,
+  Socket = 12
+}
+
+/**
+ * 文件打开模式，覆盖 POSIX open() 全部有意义的标志组合。
+ *
+ * 值对应 macOS POSIX open flags 组合:
+ *   O_RDONLY=0, O_WRONLY=1, O_RDWR=2,
+ *   O_CREAT=512, O_TRUNC=1024, O_EXCL=2048, O_APPEND=8
+ */
+open enum FileMode {
+  Read = 0,
+  Write = 513,
+  WriteTrunc = 1537,
+  WriteNew = 2561,
+  WriteAppend = 521,
+  ReadWrite = 2,
+  ReadWriteCreate = 514,
+  ReadWriteTrunc = 1538,
+  ReadWriteNew = 2562,
+  ReadWriteAppend = 522,
+  AppendExisting = 10
+}
+
+/**
+ * 文件/目录的完整元信息，由 stat 系列操作返回。
+ * 所有字段均为只读。
+ */
+open type StatInfo {
+  let kind: EntryKind;
+  let size: i64;
+  let mode: u64;
+  let modifiedAt: i64;
+  let accessedAt: i64;
+  let changedAt: i64;
+}
+
+/**
+ * 目录遍历的轻量条目信息，由 Dir.read 或 Dir 迭代返回。
+ */
+open type EntryInfo {
+  let name: string;
+  let path: string;
+  let kind: EntryKind;
+  seal var dirPath: byte[];
+
+  /**
+   * 获取该条目的完整元信息，内部调用 POSIX stat（跟踪符号链接）。
+   * @return 条目的 StatInfo
+   */
+  open func stat(): StatInfo {
+    let pathBytes = makeNullTerminatedPath(self.path);
+    let statBuf: long[!] = long[:(long)16];
+    let rc = posix_stat(&pathBytes, &statBuf);
+    if rc != 0 {
+      throw "fs/stat-failed";
+    }
+    return readStatInfo(statBuf);
+  }
+}
+
+/**
+ * 从 st_mode 提取 EntryKind（按 S_IF* 位域匹配）。
+ */
+seal func entryKindFromMode(mode: long): EntryKind {
+  let fileType = mode & S_IFMT;
+  if fileType == S_IFREG { return EntryKind.File; }
+  if fileType == S_IFDIR { return EntryKind.Dir; }
+  if fileType == S_IFLNK { return EntryKind.Symlink; }
+  if fileType == S_IFIFO { return EntryKind.Fifo; }
+  if fileType == S_IFSOCK { return EntryKind.Socket; }
+  if fileType == S_IFCHR { return EntryKind.CharDevice; }
+  if fileType == S_IFBLK { return EntryKind.BlockDevice; }
+  return EntryKind.Other;
+}
+
+/**
+ * 从 dirent d_type 映射到 EntryKind。
+ * d_type 值直接对应 DT_* 常量，与 EntryKind 枚举值一致。
+ */
+seal func entryKindFromDType(dtype: long): EntryKind {
+  if dtype == (long)8 { return EntryKind.File; }
+  if dtype == (long)4 { return EntryKind.Dir; }
+  if dtype == (long)10 { return EntryKind.Symlink; }
+  if dtype == (long)1 { return EntryKind.Fifo; }
+  if dtype == (long)12 { return EntryKind.Socket; }
+  if dtype == (long)2 { return EntryKind.CharDevice; }
+  if dtype == (long)6 { return EntryKind.BlockDevice; }
+  return EntryKind.Other;
+}
+
+/**
+ * 将 Feng string 路径转换为 NUL 终止的 UTF-8 字节数组，用于传递给 POSIX C 函数。
+ */
+seal func makeNullTerminatedPath(path: string): byte[!] {
+  let pathBytes = feng_string_to_utf8_bytes(path);
+  let pathLen = pathBytes.length();
+  let nameBuf: byte[!] = byte[:pathLen + (long)1];
+  for var i: long = (long)0; i < pathLen; i += (long)1 {
+    nameBuf[i] = pathBytes[i];
+  }
+  nameBuf[pathLen] = (byte)0;
+  return nameBuf;
+}
+
+/**
+ * 从 POSIX stat buffer 中提取 StatInfo。
+ * 使用 macOS aarch64 struct stat 的已知字段偏移。
+ */
+seal func readStatInfo(statBuf: long[!]): StatInfo {
+  let modeRaw: long = feng_pointer_get_scalar<long>(feng_pointer_move(&statBuf, STAT_MODE_OFFSET));
+  let modeMasked = modeRaw & S_IFMT;
+  let kind = entryKindFromMode(modeMasked);
+
+  let size: long = feng_pointer_get_scalar<long>(feng_pointer_move(&statBuf, STAT_SIZE_OFFSET));
+
+  let permBits: long = modeRaw & (long)4095;
+
+  let atime: long = feng_pointer_get_scalar<long>(feng_pointer_move(&statBuf, STAT_ATIME_OFFSET));
+  let mtime: long = feng_pointer_get_scalar<long>(feng_pointer_move(&statBuf, STAT_MTIME_OFFSET));
+  let ctime: long = feng_pointer_get_scalar<long>(feng_pointer_move(&statBuf, STAT_CTIME_OFFSET));
+
+  return StatInfo {
+    kind: kind,
+    size: (i64)size,
+    mode: (u64)permBits,
+    modifiedAt: (i64)mtime,
+    accessedAt: (i64)atime,
+    changedAt: (i64)ctime
+  };
+}

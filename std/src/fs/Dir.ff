@@ -1,0 +1,237 @@
+open module std.fs;
+
+import std.collections;
+import std.text;
+
+// 不透明类型：表示 struct dirent 指针
+@abi
+seal type Dirent {}
+
+// libc directory operations
+@cdecl("libc", "opendir")
+extern func c_opendir(path: byte*): long;
+
+@cdecl("libc", "readdir")
+extern func c_readdir(dir: long): Dirent*;
+
+@cdecl("libc", "closedir")
+extern func c_closedir(dir: long): int;
+
+@cdecl("libc", "mkdir")
+extern func c_mkdir(path: byte*, mode: int): int;
+
+@cdecl("libc", "rmdir")
+extern func c_rmdir(path: byte*): int;
+
+// Dirent* 指针操作
+@runtime
+extern func feng_pointer_is_null(ptr: Dirent*): bool;
+
+@runtime
+extern func feng_pointer_move(ptr: Dirent*, offset: long): Dirent*;
+
+@runtime
+extern func feng_pointer_get_scalar<T>(ptr: Dirent*): T;
+
+// dirent struct offsets (macOS aarch64, 64-bit inode, modern SDK)
+// struct dirent { __uint64_t d_ino(0); __uint64_t d_seekoff(8);
+//   __uint16_t d_reclen(16); __uint16_t d_namlen(18);
+//   __uint8_t d_type(20); char d_name[1024](21); }
+seal let DIRENT_DTYPE_OFFSET: long = (long)20;
+seal let DIRENT_DNAMLEN_OFFSET: long = (long)18;
+seal let DIRENT_DNAME_OFFSET: long = (long)21;
+
+// Default directory creation permission: 0755 = 493
+seal let DEFAULT_DIR_MODE: int = 493;
+
+/**
+ * 目录遍历对象，封装目录句柄与读取操作。
+ */
+open type Dir {
+  seal var dir: long;
+  seal var dirPath: string;
+  seal var closed: bool;
+
+  /**
+   * 打开目录，返回 Dir 实例。
+   * @param path - 目录路径
+   */
+  open static func create(path: string): Dir {
+    let pathBytes = makeNullTerminatedPath(path);
+    let dir = c_opendir(&pathBytes);
+    if dir == (long)0 {
+      throw "fs/opendir-failed";
+    }
+    return Dir { dir: dir, dirPath: path, closed: false };
+  }
+
+  /**
+   * 读取下一批至多 batchSize 个目录条目，遍历结束后返回空数组。
+   * @param batchSize - 批次大小，必须大于 0
+   * @return 目录条目数组
+   */
+  open func read(batchSize: long): EntryInfo[] {
+    self.ensureOpen();
+    if batchSize <= (long)0 {
+      throw "fs/readdir-failed";
+    }
+    let entries = List<EntryInfo>();
+    var count: long = (long)0;
+    while count < batchSize {
+      let entry = self.readEntry();
+      if entry.name.length() == (long)0 {
+        break;
+      }
+      entries.add(entry);
+      count += (long)1;
+    }
+    return entries.entries();
+  }
+
+  /**
+   * @iterator 方法，逐条返回目录条目，支持 for/in 迭代。
+   * @return IteratorResult<EntryInfo>，true 表示产出有效条目，false 表示遍历结束
+   */
+  @iterator
+  open func next(): IteratorResult<EntryInfo> {
+    self.ensureOpen();
+    let entry = self.readEntry();
+    if entry.name.length() == (long)0 {
+      return (false, EntryInfo {
+        name: "",
+        path: "",
+        kind: EntryKind.Other,
+        dirPath: byte[:(long)0]
+      });
+    }
+    return (true, entry);
+  }
+
+  /**
+   * 关闭目录并释放底层目录句柄，行为幂等。
+   */
+  open func close(): void {
+    if self.closed {
+      return;
+    }
+    self.closed = true;
+    try c_closedir(self.dir) catch {
+      // 幂等：忽略 closedir 异常
+    };
+  }
+
+  /**
+   * 返回目录是否已关闭。
+   */
+  open func isClosed(): bool {
+    return self.closed;
+  }
+
+  /**
+   * 内部：读取单条目录条目。
+   * 返回 name 为空字符串的 EntryInfo 表示遍历结束。
+   */
+  seal func readEntry(): EntryInfo {
+    let direntPtr = c_readdir(self.dir);
+    if feng_pointer_is_null(direntPtr) {
+      return EntryInfo {
+        name: "",
+        path: "",
+        kind: EntryKind.Other,
+        dirPath: byte[:(long)0]
+      };
+    }
+
+    // 读取 d_type（1 字节，偏移 10）
+    let dtypePtr = feng_pointer_move(direntPtr, DIRENT_DTYPE_OFFSET);
+    let dtypeLong: long = feng_pointer_get_scalar<long>(dtypePtr);
+    let dtype: byte = (byte)(dtypeLong & (long)255);
+
+    // 读取 d_namlen（1 字节，偏移 11）
+    let namlenPtr = feng_pointer_move(direntPtr, DIRENT_DNAMLEN_OFFSET);
+    let namlenLong: long = feng_pointer_get_scalar<long>(namlenPtr);
+    let namlen: long = namlenLong & (long)255;
+
+    // 读取 d_name（偏移 12，长度 d_namlen）
+    let nameBuf: byte[!] = byte[:namlen];
+    let nameDataPtr = feng_pointer_move(direntPtr, DIRENT_DNAME_OFFSET);
+    for var i: long = (long)0; i < namlen; i += (long)1 {
+      let bytePtr = feng_pointer_move(nameDataPtr, i);
+      let b: long = feng_pointer_get_scalar<long>(bytePtr);
+      nameBuf[i] = (byte)(b & (long)255);
+    }
+    let name = string.fromUtf8Bytes((byte[])nameBuf);
+
+    // 过滤 . 和 ..
+    if name == "." || name == ".." {
+      // 递归读取下一个条目
+      return self.readEntry();
+    }
+
+    let kind = entryKindFromDType((long)dtype);
+    let fullPath = self.dirPath + "/" + name;
+
+    return EntryInfo {
+      name: name,
+      path: fullPath,
+      kind: kind,
+      dirPath: feng_string_to_utf8_bytes(self.dirPath)
+    };
+  }
+
+  /**
+   * 内部：检查目录是否已打开，已关闭时抛出异常。
+   */
+  seal func ensureOpen() {
+    if self.closed {
+      throw "fs/dir-closed";
+    }
+  }
+}
+
+// ---- 顶层便捷函数 ----
+
+/**
+ * 创建单个目录，父目录必须存在。
+ * @param path - 目录路径
+ */
+open func mkdir(path: string): void {
+  let pathBytes = makeNullTerminatedPath(path);
+  let rc = c_mkdir(&pathBytes, DEFAULT_DIR_MODE);
+  if rc != 0 {
+    throw "fs/mkdir-failed";
+  }
+}
+
+/**
+ * 删除空目录，目录不存在或非空时抛出异常。
+ * @param path - 目录路径
+ */
+open func rmdir(path: string): void {
+  let pathBytes = makeNullTerminatedPath(path);
+  let rc = c_rmdir(&pathBytes);
+  if rc != 0 {
+    throw "fs/rmdir-failed";
+  }
+}
+
+/**
+ * 一次性读取目录全部条目。
+ * @param path - 目录路径
+ * @return 目录条目数组
+ */
+open func readDir(path: string): EntryInfo[] {
+  let dir = Dir.create(path);
+  let entries = List<EntryInfo>();
+  while true {
+    let batch = dir.read((long)64);
+    if batch.length() == (long)0 {
+      break;
+    }
+    for var i: long = (long)0; i < batch.length(); i += (long)1 {
+      entries.add(batch[i]);
+    }
+  }
+  dir.close();
+  return entries.entries();
+}
