@@ -16,6 +16,8 @@
 
 - `SystemInfo`
   - `hostName(): string`
+  - `os(): string`
+  - `arch(): string`
   - `processId(): int`
   - `parentProcessId(): int`
 - `MemoryInfo`
@@ -32,6 +34,8 @@
 ## 3 行为约定
 
 - `SystemInfo.hostName()` 仅查询主机名。
+- `SystemInfo.os()` 仅查询操作系统名称（小写，如 `linux`、`darwin`）。
+- `SystemInfo.arch()` 仅查询系统架构（小写，如 `x86_64`、`arm64`）。
 - `SystemInfo.processId()` 仅查询当前进程 PID。
 - `SystemInfo.parentProcessId()` 仅查询父进程 PID。
 - `MemoryInfo.totalBytes()` 仅查询总内存。
@@ -42,6 +46,7 @@
 - `CpuInfo.availableParallelism()` 仅查询可并行执行度（available parallelism）。
 - 当底层 `libuv` 调用返回错误码时，API 抛出字符串异常：
   - `platform/system-info/hostname`
+  - `platform/system-info/uname`
   - `platform/memory-info/resident`
 
 ## 4 互操作约束
@@ -49,6 +54,7 @@
 `std.platform` 仅使用如下 C ABI 导入（示意）：
 
 - `@cdecl("feng_std_uv", "uv_os_gethostname")`
+- `@cdecl("feng_std_uv", "uv_os_uname")`
 - `@cdecl("feng_std_uv", "uv_os_getpid")`
 - `@cdecl("feng_std_uv", "uv_os_getppid")`
 - `@cdecl("feng_std_uv", "uv_get_total_memory")`

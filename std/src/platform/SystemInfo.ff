@@ -6,6 +6,9 @@ import std.collections;
 @cdecl("feng_std_uv", "uv_os_gethostname")
 extern func uv_os_gethostname(name: byte*, size: long*): int;
 
+@cdecl("feng_std_uv", "uv_os_uname")
+extern func uv_os_uname(buffer: byte*): int;
+
 /**
  * Provides host queries.
  */
@@ -26,5 +29,38 @@ open type SystemInfo {
     }
 
     return string.fromUtf8Bytes(((byte[])nameBytes).clone((long)0, nameSize[0]));
+  }
+
+  /**
+   * Returns the operating system name in lowercase.
+   */
+  open static func os(): string {
+    // uv_utsname_t: sysname(256) + release(256) + version(256) + machine(256) = 1024 bytes
+    let buf: byte[!] = byte[:(long)1024];
+    let rc = uv_os_uname(&buf);
+    if rc != 0 {
+      throw "platform/system-info/uname";
+    }
+    let arr = (byte[])buf;
+    let nullPos = arr.clone((long)0, (long)256).indexOf((byte)0);
+    let len = if nullPos >= (long)0 { nullPos } else { (long)256 };
+    return string.fromUtf8Bytes(arr, len).toLowerCase();
+  }
+
+  /**
+   * Returns the system architecture name in lowercase.
+   */
+  open static func arch(): string {
+    // uv_utsname_t: sysname(256) + release(256) + version(256) + machine(256) = 1024 bytes
+    let buf: byte[!] = byte[:(long)1024];
+    let rc = uv_os_uname(&buf);
+    if rc != 0 {
+      throw "platform/system-info/uname";
+    }
+    let arr = (byte[])buf;
+    let machine = arr.clone((long)768, (long)1024);
+    let nullPos = machine.indexOf((byte)0);
+    let len = if nullPos >= (long)0 { nullPos } else { (long)256 };
+    return string.fromUtf8Bytes(machine, len).toLowerCase();
   }
 }

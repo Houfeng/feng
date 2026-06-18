@@ -6,6 +6,8 @@ import std.platform;
 
 func platform_system_info_tests() {
   let _hostName = SystemInfo.hostName();
+  let _os = SystemInfo.os();
+  let _arch = SystemInfo.arch();
 
   check(true, "platform/system-info/call");
 }
