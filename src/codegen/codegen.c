@@ -9644,6 +9644,27 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             }
             if (sm->type->kind == CG_TYPE_VOID) {
                 buf_append_cstr(td, "}\n");
+            } else if (cgtype_is_aggregate(sm->type)) {
+                /* Aggregate return type (object-form / union-form spec):
+                 * declare a local, default-init it, and return by value.
+                 * Per docs/feng-spec.md §7 line 215 the default witness
+                 * method thunk must return the spec's default zero. */
+                char *ret_cty = cg_ctype_dup(sm->type);
+                Buf init_call;
+                buf_init(&init_call);
+                if (ret_cty == NULL ||
+                    !cg_append_aggregate_default_init_call(&init_call,
+                                                          sm->type,
+                                                          "_default_ret")) {
+                    free(ret_cty);
+                    buf_free(&init_call);
+                    return;
+                }
+                buf_append_fmt(td, "    %s _default_ret;\n", ret_cty);
+                buf_append_fmt(td, "    %s;\n", init_call.data);
+                buf_append_cstr(td, "    return _default_ret;\n}\n");
+                free(ret_cty);
+                buf_free(&init_call);
             } else {
                 char *expr = NULL;
                 if (!cg_default_value_expr(cg, sm->type, &s->decl->token, &expr)) {
@@ -28606,28 +28627,41 @@ static bool cg_emit_type_static_binding_init(CG *cg, const TypeStaticBinding *bi
     }
     init = binding->member->as.field.initializer;
     if (init == NULL) {
-        char *def_expr = NULL;
-
-        if (!cg_default_value_expr(cg, binding->type, &binding->member->token, &def_expr)) {
-            return false;
-        }
-        if (cgtype_is_managed(binding->type)) {
-            buf_append_fmt(cg->cur_body, "    %s = %s;\n", binding->c_name, def_expr);
-        } else {
-            char *cty = cg_ctype_dup(binding->type);
-
-            if (cty == NULL) {
-                free(def_expr);
-                return cg_fail(cg, binding->member->token, "IE0001", "codegen: out of memory");
+        if (cgtype_is_aggregate(binding->type)) {
+            buf_append_cstr(cg->cur_body, "    ");
+            if (!cg_append_aggregate_default_init_call(cg->cur_body,
+                                                      binding->type,
+                                                      binding->c_name)) {
+                return cg_fail(cg, binding->member->token,
+                    "CE0374", "codegen: missing aggregate default-init rule for type static binding");
             }
-            buf_append_fmt(cg->cur_body,
-                           "    %s = (%s)(%s);\n",
-                           binding->c_name,
-                           cty,
-                           def_expr);
-            free(cty);
+            buf_append_cstr(cg->cur_body, ";\n");
+            return true;
         }
-        free(def_expr);
+        {
+            char *def_expr = NULL;
+
+            if (!cg_default_value_expr(cg, binding->type, &binding->member->token, &def_expr)) {
+                return false;
+            }
+            if (cgtype_is_managed(binding->type)) {
+                buf_append_fmt(cg->cur_body, "    %s = %s;\n", binding->c_name, def_expr);
+            } else {
+                char *cty = cg_ctype_dup(binding->type);
+
+                if (cty == NULL) {
+                    free(def_expr);
+                    return cg_fail(cg, binding->member->token, "IE0001", "codegen: out of memory");
+                }
+                buf_append_fmt(cg->cur_body,
+                               "    %s = (%s)(%s);\n",
+                               binding->c_name,
+                               cty,
+                               def_expr);
+                free(cty);
+            }
+            free(def_expr);
+        }
         return true;
     }
 

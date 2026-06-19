@@ -13,3 +13,7 @@ open spec JsonSerializable {
 open spec JsonDeserializable {
   func fromJson(json: JsonObject): void;
 }
+
+open spec JsonableTest {
+  func toJson(): JsonValue;
+}
