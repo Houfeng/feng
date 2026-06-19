@@ -14,6 +14,20 @@ func test() {
   assert(true, "hello world");
 }
 
+type User: Jsonable {
+  let name: string;
+  let age: int;
+  func toJson(): JsonObject {
+    let obj = JsonObject();
+    obj.set("name", self.name);
+    obj.set("age", self.age);
+    return obj;
+  }
+  func fromJson(value: JsonObject): void {
+
+  }
+}
+
 func main(args: string[]) {
   // test("test2", test2);
   let obj = JsonObject();
@@ -21,5 +35,9 @@ func main(args: string[]) {
   obj.set("code", 200);
   obj.set("detail", none);
   println(Json.stringify(obj));
+  println("------------------------------------");
+  let user = User { name: "alice", age: 20 };
+  println("user: {0}", Json.stringify(user));
+  println("------------------------------------");
   println("{0}:{1}", SystemInfo.os(), SystemInfo.arch());
 }

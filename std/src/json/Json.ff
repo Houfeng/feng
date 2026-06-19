@@ -71,7 +71,7 @@ open type Json {
   }
 
   static func stringify(value: Jsonable): string {
-    return Json.stringify(value.ToJson());
+    return Json.stringify(value.toJson());
   }
 
   /**
