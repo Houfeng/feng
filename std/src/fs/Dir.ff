@@ -2,6 +2,7 @@ open module std.fs;
 
 import std.collections;
 import std.text;
+import std.platform;
 
 // 不透明类型：表示 struct dirent 指针
 @abi
@@ -33,13 +34,50 @@ extern func feng_pointer_move(ptr: Dirent*, offset: long): Dirent*;
 @runtime
 extern func feng_pointer_get_scalar<T>(ptr: Dirent*): T;
 
-// dirent struct offsets (macOS aarch64, 64-bit inode, modern SDK)
-// struct dirent { __uint64_t d_ino(0); __uint64_t d_seekoff(8);
+// dirent struct offsets，根据 SystemInfo.os/arch 惰性初始化
+// macOS: struct dirent { __uint64_t d_ino(0); __uint64_t d_seekoff(8);
 //   __uint16_t d_reclen(16); __uint16_t d_namlen(18);
 //   __uint8_t d_type(20); char d_name[1024](21); }
-seal let DIRENT_DTYPE_OFFSET: long = (long)20;
-seal let DIRENT_DNAMLEN_OFFSET: long = (long)18;
-seal let DIRENT_DNAME_OFFSET: long = (long)21;
+// Linux: struct dirent { unsigned long d_ino(0); unsigned long d_off(8);
+//   unsigned short d_reclen(16); unsigned char d_type(18);
+//   char d_name[256](19); } — 无 d_namlen 字段，DIRENT_DNAMLEN_OFFSET 为 -1
+seal var DIRENT_DTYPE_OFFSET: long = (long)0;
+seal var DIRENT_DNAMLEN_OFFSET: long = (long)0;
+seal var DIRENT_DNAME_OFFSET: long = (long)0;
+seal var direntOffsetsInited: bool = false;
+
+/**
+ * 根据当前 OS 和架构初始化 dirent 结构体偏移量。
+ * macOS (arm64/aarch64/x86_64): d_type=20, d_namlen=18, d_name=21。
+ * Linux (arm64/aarch64/x86_64): d_type=18, d_namlen=-1（不存在）, d_name=19。
+ */
+seal func ensureDirentOffsets(): void {
+  if direntOffsetsInited {
+    return;
+  }
+  let os = SystemInfo.os();
+  let arch = SystemInfo.arch();
+  if os == "darwin" {
+    if arch == "arm64" || arch == "aarch64" || arch == "x86_64" {
+      DIRENT_DTYPE_OFFSET = (long)20;
+      DIRENT_DNAMLEN_OFFSET = (long)18;
+      DIRENT_DNAME_OFFSET = (long)21;
+    } else {
+      throw "fs/unsupported-arch";
+    }
+  } else if os == "linux" {
+    if arch == "arm64" || arch == "aarch64" || arch == "x86_64" {
+      DIRENT_DTYPE_OFFSET = (long)18;
+      DIRENT_DNAMLEN_OFFSET = (long)-1;
+      DIRENT_DNAME_OFFSET = (long)19;
+    } else {
+      throw "fs/unsupported-arch";
+    }
+  } else {
+    throw "fs/unsupported-os";
+  }
+  direntOffsetsInited = true;
+}
 
 // Default directory creation permission: 0755 = 493
 seal let DEFAULT_DIR_MODE: int = 493;
@@ -132,6 +170,7 @@ open type Dir {
    * 返回 name 为空字符串的 EntryInfo 表示遍历结束。
    */
   seal func readEntry(): EntryInfo {
+    ensureDirentOffsets();
     let direntPtr = c_readdir(self.dir);
     if feng_pointer_is_null(direntPtr) {
       return EntryInfo {
@@ -142,20 +181,34 @@ open type Dir {
       };
     }
 
-    // 读取 d_type（1 字节，偏移 10）
+    // 读取 d_type（1 字节）
     let dtypePtr = feng_pointer_move(direntPtr, DIRENT_DTYPE_OFFSET);
     let dtypeLong: long = feng_pointer_get_scalar<long>(dtypePtr);
     let dtype: byte = (byte)(dtypeLong & (long)255);
 
-    // 读取 d_namlen（1 字节，偏移 11）
-    let namlenPtr = feng_pointer_move(direntPtr, DIRENT_DNAMLEN_OFFSET);
-    let namlenLong: long = feng_pointer_get_scalar<long>(namlenPtr);
-    let namlen: long = namlenLong & (long)255;
-
-    // 读取 d_name（偏移 12，长度 d_namlen）
-    let nameBuf: byte[!] = byte[:namlen];
+    // 读取 d_name 并计算 nameLen
     let nameDataPtr = feng_pointer_move(direntPtr, DIRENT_DNAME_OFFSET);
-    for var i: long = (long)0; i < namlen; i += (long)1 {
+    var nameLen: long = (long)0;
+    if DIRENT_DNAMLEN_OFFSET >= (long)0 {
+      // macOS: d_namlen 字段直接提供名称长度
+      let namlenPtr = feng_pointer_move(direntPtr, DIRENT_DNAMLEN_OFFSET);
+      let namlenLong: long = feng_pointer_get_scalar<long>(namlenPtr);
+      nameLen = namlenLong & (long)255;
+    } else {
+      // Linux: 无 d_namlen 字段，扫描 d_name 的 null 终止符计算长度
+      for var i: long = (long)0; i < (long)256; i += (long)1 {
+        let bytePtr = feng_pointer_move(nameDataPtr, i);
+        let b: long = feng_pointer_get_scalar<long>(bytePtr);
+        if b == (long)0 {
+          break;
+        }
+        nameLen += (long)1;
+      }
+    }
+
+    // 拷贝 d_name 字节（长度 nameLen）
+    let nameBuf: byte[!] = byte[:nameLen];
+    for var i: long = (long)0; i < nameLen; i += (long)1 {
       let bytePtr = feng_pointer_move(nameDataPtr, i);
       let b: long = feng_pointer_get_scalar<long>(bytePtr);
       nameBuf[i] = (byte)(b & (long)255);
