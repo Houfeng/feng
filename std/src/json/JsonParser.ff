@@ -72,25 +72,25 @@ open type JsonParser {
     self.skipWhitespace();
     let ch = self.peek();
     if ch == (byte)0x22 {
-      return JsonValue(self.parseString());
+      return self.parseString();
     }
     if ch == (byte)0x7B {
-      return JsonValue(self.parseObject());
+      return self.parseObject();
     }
     if ch == (byte)0x5B {
-      return JsonValue(self.parseArray());
+      return self.parseArray();
     }
     if ch == (byte)0x74 {
-      return JsonValue(self.parseTrue());
+      return self.parseTrue();
     }
     if ch == (byte)0x66 {
-      return JsonValue(self.parseFalse());
+      return self.parseFalse();
     }
     if ch == (byte)0x6E {
-      return JsonValue(self.parseNull());
+      return self.parseNull();
     }
     if ch == (byte)0x2D || (ch >= (byte)0x30 && ch <= (byte)0x39) {
-      return JsonValue(self.parseNumber());
+      return self.parseNumber();
     }
     throw "JSON: unexpected character at position " + self.pos.toString();
   }

@@ -20,6 +20,6 @@ func main(args: string[]) {
   obj.set("message", "Hello, World!");
   obj.set("code", (double)200);
   obj.set("detail", none);
-  println(Json.stringify(JsonValue(obj)));
+  println(Json.stringify(obj));
   println("{0}:{1}", SystemInfo.os(), SystemInfo.arch());
 }

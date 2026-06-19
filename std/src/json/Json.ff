@@ -1,15 +1,77 @@
 open module std.json;
 
+import std;
+
 /**
  * JSON 处理模块
  */
 open type Json {
 
+  seal func Json() {}
+
+  static func isNull(value: JsonValue): bool {
+    return if value {
+      None { true }
+      else { false }
+    };
+  }
+
+  static func isBool(value: JsonValue): bool {
+    return if value {
+      bool { true }
+      else { false }
+    };
+  }
+
+  static func isNumber(value: JsonValue): bool {
+    return if value {
+      int { true }
+      float { true }
+      double { true }
+      else { false }
+    };
+  }
+
+  static func isString(value: JsonValue): bool {
+    return if value {
+      string { true }
+      else { false }
+    };
+  }
+
+  static func isArray(value: JsonValue): bool {
+    return if value {
+      JsonArray { true }
+      else { false }
+    };
+  }
+
+  static func isObject(value: JsonValue): bool {
+    return if value {
+      JsonObject { true }
+      else { false }
+    };
+  }
+
   /**
    * 序列化
    */
   static func stringify(value: JsonValue): string {
-    return value.toJsonString();
+    return if value {
+      None { value.toJsonString() }
+      bool { value.toJsonString() }
+      int { value.toJsonString() }
+      float { value.toJsonString() }
+      double { value.toJsonString() }
+      string { value.toJsonString() }
+      JsonArray { value.toJsonString() }
+      JsonObject { value.toJsonString() }
+      else { "null" }
+    };
+  }
+
+  static func stringify(value: Jsonable): string {
+    return Json.stringify(value.ToJson());
   }
 
   /**

@@ -11,6 +11,18 @@ open fit bool {
   }
 }
 
+open fit int {
+  func toJsonString(): string {
+    return self.toString();
+  }
+}
+
+open fit float {
+  func toJsonString(): string {
+    return self.toString();
+  }
+}
+
 open fit double {
   func toJsonString(): string {
     return self.toString();
@@ -30,19 +42,16 @@ open fit None {
 }
 
 open type JsonArray {
-  seal let payload: List<JsonPayload>;
-  func JsonArray(payload: List<JsonPayload>) {
+  seal let payload: List<JsonValue>;
+  func JsonArray(payload: List<JsonValue>) {
     self.payload = payload;
   }
-  func JsonArray(payload: JsonPayload[]) {
-    self.payload = List<JsonPayload>(payload);
+  func JsonArray(payload: JsonValue[]) {
+    self.payload = List<JsonValue>(payload);
   }
   func JsonArray() {}
-  func add(item: JsonPayload) {
-    self.payload.add(item);
-  }
   func add(item: JsonValue) {
-    self.payload.add(item.payload);
+    self.payload.add(item);
   }
   /**
    * Returns the number of elements in this array.
@@ -56,7 +65,7 @@ open type JsonArray {
    * @return the element as JsonValue
    */
   func get(index: i32): JsonValue {
-    return JsonValue(self.payload.get(index));
+    return self.payload.get(index);
   }
   func toJsonString(): string {
     let size = self.payload.size();
@@ -65,16 +74,16 @@ open type JsonArray {
     }
     let parts: string[!] = string[:size];
     for var i: i32 = 0; i < size; i = i + 1 {
-      let item = JsonValue(self.payload.get(i));
-      parts[i] = item.toJsonString();
+      let item = self.payload.get(i);
+      parts[i] = Json.stringify(item);
     }
     return "[" + string.join(",", (string[])parts) + "]";
   }
 }
 
 open type JsonObject {
-  seal let payload: Map<string, JsonPayload>;
-  func JsonObject(payload: Map<string, JsonPayload>) {
+  seal let payload: Map<string, JsonValue>;
+  func JsonObject(payload: Map<string, JsonValue>) {
     self.payload = payload;
   }
   func JsonObject() {}
@@ -83,16 +92,8 @@ open type JsonObject {
    * @param key - the key to set
    * @param value - the value to associate with the key
    */
-  func set(key: string, value: JsonPayload) {
-    self.payload.set(key, value);
-  }
-  /**
-   * Sets the value for the given key from a JsonValue.
-   * @param key - the key to set
-   * @param value - the JsonValue whose payload to associate with the key
-   */
   func set(key: string, value: JsonValue) {
-    self.payload.set(key, value.payload);
+    self.payload.set(key, value);
   }
   /**
    * Returns the value for the given key as a JsonValue.
@@ -100,7 +101,7 @@ open type JsonObject {
    * @return the associated JsonValue, or an empty JsonValue if not found
    */
   func get(key: string): JsonValue {
-    return JsonValue(self.payload.get(key));
+    return self.payload.get(key);
   }
   /**
    * Returns true if the given key exists in this object.
@@ -120,7 +121,7 @@ open type JsonObject {
     var idx: long = 0;
     for let entry in entries {
       let key = entry.item1.toJsonString();
-      let val = JsonValue(entry.item2).toJsonString();
+      let val = Json.stringify(entry.item2);
       parts[idx] = key + ":" + val;
       idx += (long)1;
     }
@@ -128,120 +129,11 @@ open type JsonObject {
   }
 }
 
-open spec JsonPayload: None
+open spec JsonValue: None
+| int
+| float
 | double
 | bool
 | string
 | JsonArray
 | JsonObject;
-
-open type JsonValue {
-  let payload: JsonPayload;
-
-  func JsonValue(payload: JsonPayload) {
-    self.payload = payload;
-  }
-
-  func JsonValue() {}
-
-  func isNull(): bool {
-    return if self.payload {
-      None { true }
-      else { false }
-    };
-  }
-
-  func isBool(): bool {
-    return if self.payload {
-      bool { true }
-      else { false }
-    };
-  }
-
-  func isNumber(): bool {
-    return if self.payload {
-      double { true }
-      else { false }
-    };
-  }
-
-  func isString(): bool {
-    return if self.payload {
-      string { true }
-      else { false }
-    };
-  }
-
-  func isArray(): bool {
-    return if self.payload {
-      JsonArray { true }
-      else { false }
-    };
-  }
-
-  func isObject(): bool {
-    return if self.payload {
-      JsonObject { true }
-      else { false }
-    };
-  }
-
-  func asNull(): None {
-    return if self.payload {
-      None { self.payload }
-      else { none }
-    };
-  }
-
-  func asBool(): bool {
-    return if self.payload {
-      bool { self.payload }
-      else { false }
-    };
-  }
-
-  func asNumber(): double {
-    return if self.payload {
-      double { self.payload }
-      else { 0.0 }
-    };
-  }
-
-  func asString(): string {
-    return if self.payload {
-      string { self.payload }
-      else { "" }
-    };
-  }
-
-  func asArray(): JsonArray {
-    return if self.payload {
-      JsonArray { self.payload }
-      else { JsonArray() }
-    };
-  }
-
-  func asObject(): JsonObject {
-    return if self.payload {
-      JsonObject { self.payload }
-      else { JsonObject() }
-    };
-  }
-
-  func toJsonString(): string {
-    return if self.payload {
-      None { self.payload.toJsonString() }
-      bool { self.payload.toJsonString() }
-      double { self.payload.toJsonString() }
-      string { self.payload.toJsonString() }
-      JsonArray { self.payload.toJsonString() }
-      JsonObject { self.payload.toJsonString() }
-      else { "null" }
-    };
-  }
-
-  func toString(): string {
-    return self.toJsonString();
-  }
-
-}

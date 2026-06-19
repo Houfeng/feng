@@ -8,6 +8,7 @@
     "fcts",
     "feng",
     "finalizer",
+    "Jsonable",
     "kinded",
     "libc",
     "libm",
