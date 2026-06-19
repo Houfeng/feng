@@ -8,6 +8,7 @@ import std.time;
 import std.collections;
 import std.json;
 import std.test;
+import std.platform;
 
 func test() {
   assert(true, "hello world");
@@ -20,4 +21,5 @@ func main(args: string[]) {
   obj.set("code", (double)200);
   obj.set("detail", none);
   println(Json.stringify(JsonValue(obj)));
+  println(SystemInfo.os(), SystemInfo.arch());
 }
