@@ -494,51 +494,72 @@ typedef struct UserSpecMember {
 } UserSpecMember;
 ```
 
-#### 5.2 spec 成员注册（`cg_ensure_user_spec_members_registered`，第 8448 行）
+#### 5.2 spec 成员注册
 
-设置 `sm->is_static`：
+spec 成员在 codegen 层有**两个独立入口**填充 `UserSpecMember`，必须都设置 `is_static`：
 
-```c
-sm->is_static = (member != NULL && member->is_static);
-```
+**入口 1（spec 自身成员）—— `cg_user_spec_append_decl_member`（第 7470 行）**
 
-`cg_user_spec_clone_inherited_member`（第 7437 行）中同步复制：
+该函数把 `FengTypeMember` 转换为 `UserSpecMember`，是 spec **自身**声明成员的唯一填充点。当前实现只在 FIELD/METHOD 分支里设了 `kind` / `type` / `is_var` / `param_*` / `feng_name` / `c_field_name`，**未设置 `is_static`**。在 `sm->member = m;` 之后立即补一行：
 
 ```c
-dst->is_static = src->is_static;
+sm->member = m;
+sm->is_static = m->is_static;   // ← 新增
 ```
 
-> 此为**必须修复**：当前 `cg_user_spec_clone_inherited_member` 未复制 `is_static`，会导致父 spec 静态成员被 clone 到子 spec 后丢失静态属性，slot 签名生成错误。
+**入口 2（父 spec 继承）—— `cg_user_spec_clone_inherited_member`（第 7437 行）**
+
+复制父 spec 闭包中继承下来的成员时同步复制：
+
+```c
+dst->is_static = src->is_static;   // ← 新增
+```
+
+> **更关键**：若漏改入口 1（`cg_user_spec_append_decl_member`），spec 自身声明的静态成员在 codegen 层 `is_static` 永远为 `false`，所有后续 witness slot 签名、thunk 转发、默认 witness 生成都会错误走实例分支。
+>
+> `cg_ensure_user_spec_members_registered`（第 8448 行）只是注册入口，**不直接填充成员字段**——必须改的是它调用的 `cg_user_spec_append_decl_member`。
+>
+> 当前 `cg_user_spec_clone_inherited_member` 未复制 `is_static` 会导致父 spec 静态成员被 clone 到子 spec 后丢失静态属性，slot 签名生成错误。
 
 #### 5.3 witness struct 生成（`cg_emit_witness_struct_body`，第 9171 行）
 
-为静态成员生成无 `_subject` 的 slot：
+为静态成员生成无 `_subject` 的 slot。**关键：当 METHOD 返回类型为 `CG_TYPE_GENERIC_PARAM`（spec 静态方法返回 spec 类型参数 T，如 `static func make(): T`）时，slot 签名必须与现有实例方法 9188-9200 行对称处理**：
+
+- 返回类型擦除为 `void`
+- 签名末尾追加 `void *_out` 接收聚合返回值
 
 ```c
 for (size_t i = 0; i < s->member_count; i++) {
     const UserSpecMember *sm = &s->members[i];
+    bool returns_generic = (sm->type != NULL &&
+                            sm->type->kind == CG_TYPE_GENERIC_PARAM);
     if (sm->kind == USM_KIND_METHOD) {
         if (sm->is_static) {
-            // 静态方法：无 _subject
-            emit: RetType (*name)(params...);
+            // 静态方法：无 _subject；聚合返回追加 _out
+            emit: <void|RetType> (*name)(params...[, void *_out]);
+            // 返回类型: returns_generic ? "void" : RetType
+            // 末尾:    returns_generic ? ", void *_out" : ""
         } else {
-            // 现有实例方法：有 _subject
-            emit: RetType (*name)(void *_subject, params...);
+            // 现有实例方法（9188-9200）：有 _subject，_out 已处理
+            emit: <void|RetType> (*name)(void *_subject, params...[, void *_out]);
         }
     } else if (sm->kind == USM_KIND_FIELD) {
         if (sm->is_static) {
-            // 静态字段 get：无 _subject
+            // 静态字段 get：无 _subject（与现有实例字段 9203-9215 对称，
+            // 直接 cg_emit_c_type(sm->type)，不处理 _out）
             emit: T (*get_name)(void);
             if (sm->is_var) {
                 // 静态字段 set：无 _subject
                 emit: void (*set_name)(T value);
             }
         } else {
-            // 现有实例字段 get/set：有 _subject
+            // 现有实例字段 get/set：有 _subject（9203-9215）
         }
     }
 }
 ```
+
+> **聚合返回路径必须显式覆盖静态方法**：现有 9188-9200 行已为实例方法处理 `_out`（仅当 `sm->type->kind == CG_TYPE_GENERIC_PARAM`），静态方法路径必须对称实现。否则 `static func make(): T` 在 witness 表中 slot 签名缺 `_out`，会导致 Step 4 泛型 `T.make()` 发码写入未分配栈空间。
 
 #### 5.4 witness thunk 生成（`cg_ensure_witness_instance_for_type`，第 26548 行）
 
@@ -609,21 +630,50 @@ static T DefaultThunk__S__get_field(void) {
 
 #### 5.6 泛型约束中 `T.make()` / `T.field` 发码
 
-复用现有泛型实例成员分派模式（`desc_name->witness`），去掉 `_subject`：
+复用现有泛型实例成员分派模式（`desc_name->witness`），去掉 `_subject`。
 
-**静态方法调用**（参考现有实例方法分派 `codegen.c:14795`）：
+**关键坑点：args_buf 前导逗号**
+
+现有实例方法 args_buf 构造（14815-14837）以 `, ` 前导，用于 `name(subject, arg1, arg2, _out)` 模式。静态方法无 subject，若直接复用会变成 `name(, arg1, arg2, _out)`（多一个前导逗号）。**静态方法路径必须改用"无前导逗号"的 args_buf 构造**（首参数不加 `, ` 前缀）。
+
+**静态方法调用（普通返回类型）**（参考现有实例方法分派 `codegen.c:14795-14892`）：
 
 ```c
 // 现有实例方法:
 //   ((const struct W *)T->witness)->method(subject, args)
-// 新增静态方法:
-//   ((const struct W *)T->witness)->static_method(args)
+// 新增静态方法（无 subject，args 不带前导逗号）:
+//   ((const struct W *)T->witness)->static_method(arg1, arg2)
 buf_append_fmt(&b,
     "((const struct %s *)%s->witness)->%s(%s)",
     us->c_witness_struct_name,
     desc_name,            // T_desc
     sm->c_field_name,     // witness slot 名
-    args_buf.data);       // 无 subject，仅 args
+    args_buf.data);       // 无 subject，args 不带前导逗号
+```
+
+**静态方法调用（聚合返回，`sm->type->kind == CG_TYPE_GENERIC_PARAM`）**
+
+参考现有实例方法聚合返回分派 `codegen.c:14857-14870`。spec 静态方法返回 spec 类型参数（如 `static func make(): T`）时，需分配 `_spec_ret_storage` + `_spec_ret`，slot 签名末尾的 `void *_out` 接收返回值：
+
+```c
+// 现有实例方法聚合返回:
+//   ((const struct W *)T->witness)->method(subject, args..., _out)
+// 新增静态方法聚合返回（无 subject）:
+//   ((const struct W *)T->witness)->static_method(args..., _out)
+const char *ret_desc = cg_generic_param_desc_name(cg, sm->type->generic_param_index);
+char *ret_storage = cg_fresh_temp(cg, "_spec_ret_storage");
+char *ret_slot = cg_fresh_temp(cg, "_spec_ret");
+buf_append_fmt(cg->cur_body,
+    "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
+    "    void *%s = (void *)%s;\n"
+    "    ((const struct %s *)%s->witness)->%s(%s, %s);\n",   // 无 subject
+    ret_storage, ret_desc,
+    ret_slot, ret_storage,
+    us->c_witness_struct_name, desc_name, sm->c_field_name,
+    args_buf.data ? args_buf.data : "",   // args 不带前导逗号
+    ret_slot);
+out->c_expr = strdup(ret_slot);
+out->type = cgtype_clone(sm->type);
 ```
 
 **静态字段读取**（参考现有实例字段分派 `codegen.c:15646`）：
@@ -777,7 +827,7 @@ func main(args: string[]) {
 | `test/semantic/test_semantic.c` | 新增静态成员测试；移除 `test_object_form_spec_rejects_constructor_member`；扩展 AE0620 finalizer 测试 |
 | `src/symbol/export.c` | 验证 is_static 传递 |
 | `src/symbol/imported_module.c` | 验证 is_static 还原 |
-| `src/codegen/codegen.c` | UserSpecMember 新增 is_static；witness struct/thunk/默认 witness/泛型分派/slot witness；修复 `cg_user_spec_clone_inherited_member` 复制 is_static |
+| `src/codegen/codegen.c` | UserSpecMember 新增 is_static；witness struct/thunk/默认 witness/泛型分派/slot witness；**修复两处 is_static 填充**：`cg_user_spec_append_decl_member`（第 7470 行，spec 自身成员）+ `cg_user_spec_clone_inherited_member`（第 7437 行，父 spec 继承）；witness slot 与发码对称处理聚合返回 `_out`（静态方法返回 `CG_TYPE_GENERIC_PARAM`） |
 | `test/codegen/test_codegen.c` | 新增测试 |
 
 ---
@@ -796,6 +846,7 @@ func main(args: string[]) {
 > 拆分原则：每个 Step 是一次"垂直切片"，覆盖 parser → semantic → symbol → codegen → 测试。每完成一个 Step，编译器即可交付一个完整且自洽的能力，并保持现有测试全部通过。
 >
 > **全量回归定义**：每个 Step 完成后需通过以下两项：
+>
 > 1. `make test`
 > 2. `feng run fcts/fcts_bin`
 
@@ -839,9 +890,9 @@ func main(args: string[]) {
 - [ ] `src/symbol/export.c` + `src/symbol/imported_module.c`：验证 `is_static` 在 spec 成员导出/还原时正确传递（预期无代码改动）
 - [ ] `src/codegen/codegen.c`：
   - `UserSpecMember`（第 661 行）：新增 `bool is_static` 字段
-  - `cg_ensure_user_spec_members_registered`（第 8448 行）：设置 `sm->is_static`
-  - `cg_user_spec_clone_inherited_member`（第 7437 行）：**修复** 添加 `dst->is_static = src->is_static`
-  - `cg_emit_witness_struct_body`（第 9171 行）：静态成员 slot 签名无 `_subject`
+  - `cg_user_spec_append_decl_member`（第 7470 行）：**修复** 在 `sm->member = m;` 后设置 `sm->is_static = m->is_static`（spec 自身成员的唯一填充入口）
+  - `cg_user_spec_clone_inherited_member`（第 7437 行）：**修复** 添加 `dst->is_static = src->is_static`（父 spec 继承路径）
+  - `cg_emit_witness_struct_body`（第 9171 行）：静态成员 slot 签名无 `_subject`；静态方法返回 `CG_TYPE_GENERIC_PARAM` 时追加 `void *_out`（与现有实例方法 9188-9200 对称）
   - `cg_ensure_witness_instance_for_type`（第 26548 行）：静态成员 thunk 转发无 `_subject` cast
   - 默认 witness 生成（约第 9686–9711 行）：静态成员默认 thunk
 - [ ] 测试：
@@ -858,7 +909,8 @@ func main(args: string[]) {
   - `resolve_type_target_expr`（第 12839 行）：当 identifier 未命中 visible_types 时，检查当前泛型函数类型参数；命中则填充上述字段
   - `validate_function_call_expr` / `infer_member_expr_type`：当 `is_generic_type_param == true` 时，从 `constraint_spec_decl` 闭包通过 `find_spec_object_member(..., include_static=true)` 查找静态成员；记录 SpecCoercionSite；返回静态成员类型
 - [ ] `src/codegen/codegen.c`：
-  - 泛型 `T.make()` 发码：`((const struct W *)T->witness)->static_method(args)`（无 subject）
+  - 泛型 `T.make()` 发码（普通返回类型）：`((const struct W *)T->witness)->static_method(args)`（无 subject，args 不带前导逗号）
+  - 泛型 `T.make()` 发码（聚合返回 `CG_TYPE_GENERIC_PARAM`，参考 `codegen.c:14857-14870`）：分配 `_spec_ret_storage` + `_spec_ret`，发 `((const struct W *)T->witness)->static_method(args..., _spec_ret)`
   - 泛型 `T.field` 读：`((const struct W *)T->witness)->get_field()`（无 subject）
   - 泛型 `T.field` 写：`((const struct W *)T->witness)->set_field(value)`（无 subject）
   - `cg_ensure_spec_slot_witness`（第 25277 行）：spec-to-spec 适配中处理静态成员 slot（无 subject 转发）
@@ -881,7 +933,7 @@ func main(args: string[]) {
 
 ### 跨 Step 依赖关系
 
-```
+```text
 Step 1（文档） → 不阻塞任何 Step，但应先于代码改动
 Step 2（移除 constructor） → 不阻塞 Step 3，但建议先做（清理干净）
 Step 3（spec 静态成员 + 直接调用） → 阻塞 Step 4（泛型分派依赖 Step 3 的 witness 表基础）
