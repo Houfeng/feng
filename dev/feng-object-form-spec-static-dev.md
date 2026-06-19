@@ -794,6 +794,10 @@ func main(args: string[]) {
 ## 实施步骤（每步可独立交付，独立通过全量回归测试）
 
 > 拆分原则：每个 Step 是一次"垂直切片"，覆盖 parser → semantic → symbol → codegen → 测试。每完成一个 Step，编译器即可交付一个完整且自洽的能力，并保持现有测试全部通过。
+>
+> **全量回归定义**：每个 Step 完成后需通过以下两项：
+> 1. `make test`
+> 2. `feng run fcts/fcts_bin`
 
 ### Step 1 — 文档先行（无代码改动）
 
@@ -808,7 +812,7 @@ func main(args: string[]) {
   - AE0620 描述更新：仅保留 "cannot declare a finalizer"（移除 constructor 部分）
 - [ ] `dev/feng-static-member-dev.md`：移除「spec 中暂不支持声明静态成员」说明
 - **交付**：文档定稿，作为后续代码改动的契约
-- **回归**：纯文档变更，无代码影响 → 全量回归通过
+- **回归**：纯文档变更，无代码影响 → `make test` 与 `feng run fcts/fcts_bin` 均通过
 
 ### Step 2 — 方案 B：移除 spec constructor 概念（关联变更）
 
@@ -820,7 +824,7 @@ func main(args: string[]) {
   - **新增** `test_object_form_spec_allows_method_same_name_as_spec`：验证 spec 实例方法名 == spec 名合法
   - **扩展** `test_object_form_spec_rejects_finalizer_member`：增加 spec 静态方法 `~` 前缀用例（验证 AE0620 自动覆盖静态路径）
 - **交付**：spec 方法（静态和实例）名 == spec 名视为普通方法；spec `~` 前缀仍由 AE0620 拒绝（语义一致）
-- **回归**：全量回归通过。**唯一行为变化**：spec 实例方法名 == spec 名从被拒绝变为合法；不涉及 spec 静态成员声明（仍由 parser 拒绝）
+- **回归**：`make test` 与 `feng run fcts/fcts_bin` 均通过。**唯一行为变化**：spec 实例方法名 == spec 名从被拒绝变为合法；不涉及 spec 静态成员声明（仍由 parser 拒绝）
 
 ### Step 3 — spec 静态成员声明 + type 静态成员满足 + 直接调用
 
@@ -845,7 +849,7 @@ func main(args: string[]) {
   - `test/semantic/test_semantic.c`：type 静态成员满足 spec（含泛型 spec `Factory<T>`）；fit 静态方法满足 spec；不满足场景（缺失、签名不匹配）；通过实例访问 spec 静态成员 → 报错
   - `test/codegen/test_codegen.c`：witness struct 含静态成员 slot（无 `_subject`）；thunk 生成（无 subject cast）；默认 witness 静态成员 slot
 - **交付**：spec 声明静态成员；type/fit 提供静态成员实现；直接调用 `Widget.make()` / `Widget.tag`（零开销）
-- **回归**：全量回归通过。**新增能力**：spec 可声明静态成员，非破坏性
+- **回归**：`make test` 与 `feng run fcts/fcts_bin` 均通过。**新增能力**：spec 可声明静态成员，非破坏性
 
 ### Step 4 — 泛型约束 `T.make()` / `T.field` 通过 witness 分派
 
@@ -863,13 +867,15 @@ func main(args: string[]) {
   - `test/codegen/test_codegen.c`：泛型 `T.make()` 发码（验证 witness 分派）；泛型 `T.field` 发码（验证 witness getter/setter）；spec-to-spec slot witness 静态成员适配转发
 - [ ] Smoke 测试：完整 `spec Factory<T>` / `type Widget: Factory<Widget>` / `func create<T: Factory<T>>()` 调用链
 - **交付**：泛型约束中 `T.make()` / `T.field` 通过 witness 表间接分派；spec-to-spec 闭包传递静态成员
-- **回归**：全量回归通过。**新增能力**：泛型分派，非破坏性
+- **回归**：`make test` 与 `feng run fcts/fcts_bin` 均通过。**新增能力**：泛型分派，非破坏性
 
 ### 验收 Checklist（每 Step 完成后）
 
 - [ ] 该 Step 列出的所有文件改动完成
 - [ ] 该 Step 新增/修改的测试全部通过
-- [ ] **全量回归测试通过**（`ctest` / 项目测试入口无破坏）
+- [ ] **全量回归测试通过**，即以下两项均通过：
+  1. `make test`
+  2. `feng run fcts/fcts_bin`
 - [ ] commit message 给出建议（英文，由开发者自行提交）
 - [ ] 进入下一 Step 前等待开发者确认
 
