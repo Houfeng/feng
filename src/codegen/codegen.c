@@ -671,6 +671,10 @@ typedef struct UserSpecMember {
      * default both record false; only `var` triggers a setter slot in the
      * witness struct (see cg_emit_user_spec_definition). */
     bool     is_var;
+    /* True when the spec declared `static`; static slots omit the implicit
+     * `_subject` parameter and are satisfied by type-level (or fit static)
+     * implementations rather than instance fields/methods. */
+    bool     is_static;
     /* METHOD only: declared parameter types (excluding the implicit subject). */
     CGType **param_types;
     char   **param_names;       /* informational, mirrors signature */
@@ -7445,6 +7449,7 @@ static bool cg_user_spec_clone_inherited_member(UserSpec *s,
     dst->kind = src->kind;
     dst->type = cgtype_clone(src->type);
     dst->is_var = src->is_var;
+    dst->is_static = src->is_static;
     dst->param_count = src->param_count;
     dst->member = src->member;
     dst->feng_name = strdup(src->feng_name);
@@ -7475,6 +7480,7 @@ static bool cg_user_spec_append_decl_member(CG *cg,
     if (m == NULL) return true;
     if (!cg_user_spec_append_member_slot(s, &sm)) return false;
     sm->member = m;
+    sm->is_static = m->is_static;
     if (m->kind == FENG_TYPE_MEMBER_FIELD) {
         sm->kind = USM_KIND_FIELD;
         sm->is_var = (m->as.field.mutability == FENG_MUTABILITY_VAR);
@@ -9184,18 +9190,29 @@ static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
         if (sm->kind == USM_KIND_METHOD) {
+            bool returns_generic = (sm->type != NULL &&
+                                   sm->type->kind == CG_TYPE_GENERIC_PARAM);
             buf_append_cstr(out, "    ");
-            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
-                buf_append_fmt(out, "void (*%s)(void *_subject", sm->c_field_name);
+            if (returns_generic) {
+                /* Aggregate return: outer `void` + trailing `void *_out`. */
+                if (sm->is_static) {
+                    buf_append_fmt(out, "void (*%s)(", sm->c_field_name);
+                } else {
+                    buf_append_fmt(out, "void (*%s)(void *_subject", sm->c_field_name);
+                }
             } else {
                 cg_emit_c_type(out, sm->type);
-                buf_append_fmt(out, " (*%s)(void *_subject", sm->c_field_name);
+                if (sm->is_static) {
+                    buf_append_fmt(out, " (*%s)(", sm->c_field_name);
+                } else {
+                    buf_append_fmt(out, " (*%s)(void *_subject", sm->c_field_name);
+                }
             }
             for (size_t pi = 0; pi < sm->param_count; pi++) {
                 buf_append_cstr(out, ", ");
                 cg_emit_c_type(out, sm->param_types[pi]);
             }
-            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+            if (returns_generic) {
                 buf_append_cstr(out, ", void *_out");
             }
             buf_append_cstr(out, ");\n");
@@ -9203,12 +9220,20 @@ static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
         } else if (sm->kind == USM_KIND_FIELD) {
             buf_append_cstr(out, "    ");
             cg_emit_c_type(out, sm->type);
-            buf_append_fmt(out, " (*get_%s)(void *_subject);\n", sm->c_field_name);
+            if (sm->is_static) {
+                buf_append_fmt(out, " (*get_%s)(void);\n", sm->c_field_name);
+            } else {
+                buf_append_fmt(out, " (*get_%s)(void *_subject);\n", sm->c_field_name);
+            }
             emitted++;
             if (sm->is_var) {
                 buf_append_cstr(out, "    void (*set_");
                 buf_append_cstr(out, sm->c_field_name);
-                buf_append_cstr(out, ")(void *_subject, ");
+                if (sm->is_static) {
+                    buf_append_cstr(out, ")(");
+                } else {
+                    buf_append_cstr(out, ")(void *_subject, ");
+                }
                 cg_emit_c_type(out, sm->type);
                 buf_append_cstr(out, " value);\n");
                 emitted++;
@@ -9591,10 +9616,56 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     /* Default witness thunks. Field getters / setters route through the
      * subject's own field; methods return the default value of their
      * return type. Method thunks ignore arguments (default semantics
-     * cannot inspect them). */
+     * cannot inspect them). Static members omit the _subject parameter —
+     * the default witness has no backing type, so static getters return
+     * default-zero values and static setters are no-ops (no real storage). */
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
         if (sm->kind == USM_KIND_FIELD) {
+            if (sm->is_static) {
+                /* Static field default getter — no _subject, returns the
+                 * type's default-zero value. */
+                buf_append_cstr(td, "static ");
+                cg_emit_c_type(td, sm->type);
+                buf_append_fmt(td, " %s__get_%s(void) {\n",
+                               s->c_default_witness_name, sm->c_field_name);
+                if (cgtype_is_aggregate(sm->type)) {
+                    char *ret_cty = cg_ctype_dup(sm->type);
+                    Buf init_call;
+                    buf_init(&init_call);
+                    if (ret_cty == NULL ||
+                        !cg_append_aggregate_default_init_call(&init_call,
+                                                              sm->type,
+                                                              "_default_ret")) {
+                        free(ret_cty);
+                        buf_free(&init_call);
+                        return;
+                    }
+                    buf_append_fmt(td, "    %s _default_ret;\n", ret_cty);
+                    buf_append_fmt(td, "    %s;\n", init_call.data);
+                    buf_append_cstr(td, "    return _default_ret;\n}\n");
+                    free(ret_cty);
+                    buf_free(&init_call);
+                } else {
+                    char *expr = NULL;
+                    if (!cg_default_value_expr(cg, sm->type, &s->decl->token, &expr)) {
+                        free(expr);
+                        return;
+                    }
+                    buf_append_fmt(td, "    return %s;\n}\n", expr);
+                    free(expr);
+                }
+                if (sm->is_var) {
+                    /* Static field default setter (var) — no _subject; the
+                     * default witness has no backing type storage so writes
+                     * are silently discarded. */
+                    buf_append_fmt(td, "static void %s__set_%s(",
+                                   s->c_default_witness_name, sm->c_field_name);
+                    cg_emit_c_type(td, sm->type);
+                    buf_append_cstr(td, " value) {\n    (void)value;\n}\n");
+                }
+                continue;
+            }
             buf_append_cstr(td, "static ");
             cg_emit_c_type(td, sm->type);
             buf_append_fmt(td, " %s__get_%s(void *_subject) {\n",
@@ -9629,6 +9700,69 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
                 buf_append_cstr(td, "}\n");
             }
         } else if (sm->kind == USM_KIND_METHOD) {
+            if (sm->is_static) {
+                /* Static method default thunk — no _subject, returns the
+                 * default-zero value of the return type. */
+                if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                    buf_append_fmt(td, "static void %s__%s(",
+                                   s->c_default_witness_name, sm->c_field_name);
+                    for (size_t pi = 0; pi < sm->param_count; pi++) {
+                        if (pi > 0) buf_append_cstr(td, ", ");
+                        cg_emit_c_type(td, sm->param_types[pi]);
+                        buf_append_fmt(td, " _p%zu", pi);
+                    }
+                    if (sm->param_count > 0) buf_append_cstr(td, ", ");
+                    buf_append_cstr(td, "void *_out) {\n");
+                    for (size_t pi = 0; pi < sm->param_count; pi++) {
+                        buf_append_fmt(td, "    (void)_p%zu;\n", pi);
+                    }
+                    buf_append_cstr(td, "    (void)_out;\n}\n");
+                    continue;
+                }
+                buf_append_cstr(td, "static ");
+                cg_emit_c_type(td, sm->type);
+                buf_append_fmt(td, " %s__%s(",
+                               s->c_default_witness_name, sm->c_field_name);
+                for (size_t pi = 0; pi < sm->param_count; pi++) {
+                    if (pi > 0) buf_append_cstr(td, ", ");
+                    cg_emit_c_type(td, sm->param_types[pi]);
+                    buf_append_fmt(td, " _p%zu", pi);
+                }
+                if (sm->param_count == 0) buf_append_cstr(td, "void");
+                buf_append_cstr(td, ") {\n");
+                for (size_t pi = 0; pi < sm->param_count; pi++) {
+                    buf_append_fmt(td, "    (void)_p%zu;\n", pi);
+                }
+                if (sm->type->kind == CG_TYPE_VOID) {
+                    buf_append_cstr(td, "}\n");
+                } else if (cgtype_is_aggregate(sm->type)) {
+                    char *ret_cty = cg_ctype_dup(sm->type);
+                    Buf init_call;
+                    buf_init(&init_call);
+                    if (ret_cty == NULL ||
+                        !cg_append_aggregate_default_init_call(&init_call,
+                                                              sm->type,
+                                                              "_default_ret")) {
+                        free(ret_cty);
+                        buf_free(&init_call);
+                        return;
+                    }
+                    buf_append_fmt(td, "    %s _default_ret;\n", ret_cty);
+                    buf_append_fmt(td, "    %s;\n", init_call.data);
+                    buf_append_cstr(td, "    return _default_ret;\n}\n");
+                    free(ret_cty);
+                    buf_free(&init_call);
+                } else {
+                    char *expr = NULL;
+                    if (!cg_default_value_expr(cg, sm->type, &s->decl->token, &expr)) {
+                        free(expr);
+                        return;
+                    }
+                    buf_append_fmt(td, "    return %s;\n}\n", expr);
+                    free(expr);
+                }
+                continue;
+            }
             buf_append_cstr(td, "static ");
             cg_emit_c_type(td, sm->type);
             buf_append_fmt(td, " %s__%s(void *_subject",
@@ -25048,6 +25182,10 @@ typedef struct CGWitnessBinding {
     const UserField *field;
     const UserMethod *method;
     const UserFit *fit;
+    /* For static fields (source_kind == FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD
+     * with sm->is_static), `static_binding` carries the type-level storage
+     * descriptor instead of an instance UserField. */
+    const TypeStaticBinding *static_binding;
 } CGWitnessBinding;
 
 static bool cg_open_spec_type_accepts_impl_type(const CGType *spec_type,
@@ -25484,6 +25622,25 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
 
     memset(out, 0, sizeof *out);
     if (sm->kind == USM_KIND_FIELD) {
+        if (sm->is_static) {
+            /* Static fields are stored as type-level bindings and can only
+             * come from the type itself (fit cannot declare static let/var). */
+            const TypeStaticBinding *sb = cg_user_type_static_binding(
+                t, sm->feng_name, strlen(sm->feng_name));
+            if (sb == NULL) {
+                return cg_fail(cg, blame,
+                    "CE0315", "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
+                    t->feng_name, s->feng_name, sm->feng_name);
+            }
+            if (!cg_types_equal(sb->type, sm->type)) {
+                return cg_fail(cg, blame,
+                    "CE0316", "codegen: field '%s' on type '%s' does not match spec '%s' field type",
+                    sm->feng_name, t->feng_name, s->feng_name);
+            }
+            out->source_kind = FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD;
+            out->static_binding = sb;
+            return true;
+        }
         const UserField *field = cg_user_type_field(t, sm->feng_name,
                                                     strlen(sm->feng_name));
 
@@ -25499,6 +25656,67 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
         }
         out->source_kind = FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_FIELD;
         out->field = field;
+        return true;
+    }
+
+    if (sm->is_static) {
+        /* Static methods: scan the type's static method table and any
+         * visible fits targeting T. */
+        for (size_t i = 0; i < t->static_method_count; ++i) {
+            const UserMethod *candidate = &t->static_methods[i];
+
+            if (strcmp(candidate->feng_name, sm->feng_name) != 0 ||
+                !cg_user_method_matches_spec_member(candidate, sm)) {
+                continue;
+            }
+            out->method = candidate;
+            ++type_match_count;
+        }
+
+        for (size_t fit_index = 0; fit_index < cg->user_fit_count; ++fit_index) {
+            const UserFit *fit = &cg->user_fits[fit_index];
+
+            if (fit->target != t || !cg_user_fit_targets_spec(fit, s)) {
+                continue;
+            }
+            if (cg->cur_program != NULL && fit->owner_program != NULL &&
+                !cg_program_can_see(cg, cg->cur_program, fit->owner_program)) {
+                continue;
+            }
+            for (size_t method_index = 0; method_index < fit->method_count; ++method_index) {
+                const UserMethod *candidate = &fit->methods[method_index];
+
+                /* fit bodies may mix instance and static methods; only static
+                 * methods can satisfy spec static method slots. */
+                if (candidate->member == NULL || !candidate->member->is_static) {
+                    continue;
+                }
+                if (strcmp(candidate->feng_name, sm->feng_name) != 0 ||
+                    !cg_user_method_matches_spec_member(candidate, sm)) {
+                    continue;
+                }
+                out->fit = fit;
+                out->method = candidate;
+                ++fit_match_count;
+            }
+        }
+
+        if (type_match_count + fit_match_count == 0U) {
+            return cg_fail(cg, blame,
+                "CE0315", "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
+                t->feng_name, s->feng_name, sm->feng_name);
+        }
+        if (type_match_count + fit_match_count > 1U) {
+            return cg_fail(cg, blame,
+                "CE0317", "codegen: type '%s' has multiple visible implementations of method '%s' required by spec '%s' (one or more fits and/or the type itself)",
+                t->feng_name, sm->feng_name, s->feng_name);
+        }
+        if (type_match_count == 1U) {
+            out->source_kind = FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD;
+            out->fit = NULL;
+            return true;
+        }
+        out->source_kind = FENG_SPEC_WITNESS_SOURCE_FIT_METHOD;
         return true;
     }
 
@@ -26622,7 +26840,11 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                         sm->feng_name, t->feng_name);
                 }
             } else if (sm->kind == USM_KIND_METHOD) {
-                binding.method = cg_user_type_method_by_member(t, wm->impl_member);
+                if (sm->is_static) {
+                    binding.method = cg_user_type_static_method_by_member(t, wm->impl_member);
+                } else {
+                    binding.method = cg_user_type_method_by_member(t, wm->impl_member);
+                }
                 if (binding.method == NULL) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
@@ -26630,19 +26852,185 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                         t->feng_name, sm->feng_name, s->feng_name);
                 }
             } else if (sm->kind == USM_KIND_FIELD) {
-                binding.field = cg_user_type_field(t,
-                                                   wm->impl_member->as.field.name.data,
-                                                   wm->impl_member->as.field.name.length);
-                if (binding.field == NULL) {
-                    buf_free(&prefix); free(t_san); free(s_san);
-                    return cg_fail(cg, blame,
-                        "CE0343", "codegen: internal: type '%s' has no field '%s' to satisfy spec '%s'",
-                        t->feng_name, sm->feng_name, s->feng_name);
+                if (sm->is_static) {
+                    /* Static fields are stored as type-level bindings, not as
+                     * instance UserFields. fit cannot declare static let/var,
+                     * so TYPE_OWN_FIELD is the only source kind encountered. */
+                    binding.static_binding = cg_user_type_static_binding(t,
+                        wm->impl_member->as.field.name.data,
+                        wm->impl_member->as.field.name.length);
+                    if (binding.static_binding == NULL) {
+                        buf_free(&prefix); free(t_san); free(s_san);
+                        return cg_fail(cg, blame,
+                            "CE0343", "codegen: internal: type '%s' has no static field '%s' to satisfy spec '%s'",
+                            t->feng_name, sm->feng_name, s->feng_name);
+                    }
+                } else {
+                    binding.field = cg_user_type_field(t,
+                                                       wm->impl_member->as.field.name.data,
+                                                       wm->impl_member->as.field.name.length);
+                    if (binding.field == NULL) {
+                        buf_free(&prefix); free(t_san); free(s_san);
+                        return cg_fail(cg, blame,
+                            "CE0343", "codegen: internal: type '%s' has no field '%s' to satisfy spec '%s'",
+                            t->feng_name, sm->feng_name, s->feng_name);
+                    }
                 }
             }
         } else if (!cg_resolve_witness_binding_fallback(cg, t, s, sm, blame, &binding)) {
             buf_free(&prefix); free(t_san); free(s_san);
             return false;
+        }
+
+        if (sm->is_static) {
+            /* Static spec member — witness slot signature has no _subject.
+             * Forward directly to the type's static method or static field
+             * storage; no subject cast needed. */
+            if (sm->kind == USM_KIND_METHOD) {
+                const UserMethod *um = binding.method;
+                if (um == NULL) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return cg_fail(cg, blame,
+                        "CE0342", "codegen: internal: type '%s' has no static method '%s' to satisfy spec '%s'",
+                        t->feng_name, sm->feng_name, s->feng_name);
+                }
+                /* Aggregate return path: spec static method returning a generic
+                 * type parameter (e.g., static func make(): T) writes the
+                 * return through a trailing void *_out. */
+                if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                    Buf *fp = &cg->fn_protos;
+                    buf_append_fmt(fp, "static void %s__%s(", prefix.data, sm->c_field_name);
+                    for (size_t pi = 0; pi < sm->param_count; pi++) {
+                        if (pi > 0) buf_append_cstr(fp, ", ");
+                        cg_emit_c_type(fp, sm->param_types[pi]);
+                        buf_append_fmt(fp, " p%zu", pi);
+                    }
+                    if (sm->param_count > 0) buf_append_cstr(fp, ", ");
+                    buf_append_cstr(fp, "void *_out);\n");
+
+                    Buf *fd = &cg->witness_defs;
+                    buf_append_fmt(fd, "static void %s__%s(", prefix.data, sm->c_field_name);
+                    for (size_t pi = 0; pi < sm->param_count; pi++) {
+                        if (pi > 0) buf_append_cstr(fd, ", ");
+                        cg_emit_c_type(fd, sm->param_types[pi]);
+                        buf_append_fmt(fd, " p%zu", pi);
+                    }
+                    if (sm->param_count > 0) buf_append_cstr(fd, ", ");
+                    buf_append_cstr(fd, "void *_out) {\n    ");
+                    cg_emit_c_type(fd, um->return_type);
+                    buf_append_fmt(fd, " _ret = %s(", um->c_name);
+                    for (size_t pi = 0; pi < sm->param_count; pi++) {
+                        char pname[32];
+                        snprintf(pname, sizeof pname, "p%zu", pi);
+                        if (pi > 0) buf_append_cstr(fd, ", ");
+                        if (!cg_append_witness_forward_arg(cg,
+                                                           fd,
+                                                           sm->param_types[pi],
+                                                           um->param_types[pi],
+                                                           pname,
+                                                           blame)) {
+                            buf_free(&prefix); free(t_san); free(s_san);
+                            return false;
+                        }
+                    }
+                    buf_append_cstr(fd, ");\n    memcpy(_out, &_ret, sizeof _ret);\n}\n\n");
+                    continue;
+                }
+                /* Plain static method thunk. */
+                Buf *fp = &cg->fn_protos;
+                buf_append_cstr(fp, "static ");
+                cg_emit_c_type(fp, sm->type);
+                buf_append_fmt(fp, " %s__%s(", prefix.data, sm->c_field_name);
+                for (size_t pi = 0; pi < sm->param_count; pi++) {
+                    if (pi > 0) buf_append_cstr(fp, ", ");
+                    cg_emit_c_type(fp, sm->param_types[pi]);
+                    buf_append_fmt(fp, " p%zu", pi);
+                }
+                if (sm->param_count == 0) buf_append_cstr(fp, "void");
+                buf_append_cstr(fp, ");\n");
+
+                Buf *fd = &cg->witness_defs;
+                buf_append_cstr(fd, "static ");
+                cg_emit_c_type(fd, sm->type);
+                buf_append_fmt(fd, " %s__%s(", prefix.data, sm->c_field_name);
+                for (size_t pi = 0; pi < sm->param_count; pi++) {
+                    if (pi > 0) buf_append_cstr(fd, ", ");
+                    cg_emit_c_type(fd, sm->param_types[pi]);
+                    buf_append_fmt(fd, " p%zu", pi);
+                }
+                if (sm->param_count == 0) buf_append_cstr(fd, "void");
+                buf_append_cstr(fd, ") {\n");
+                if (sm->type->kind == CG_TYPE_VOID) {
+                    buf_append_fmt(fd, "    %s(", um->c_name);
+                } else {
+                    buf_append_fmt(fd, "    return %s(", um->c_name);
+                }
+                for (size_t pi = 0; pi < sm->param_count; pi++) {
+                    char pname[32];
+                    snprintf(pname, sizeof pname, "p%zu", pi);
+                    if (pi > 0) buf_append_cstr(fd, ", ");
+                    if (!cg_append_witness_forward_arg(cg,
+                                                       fd,
+                                                       sm->param_types[pi],
+                                                       um->param_types[pi],
+                                                       pname,
+                                                       blame)) {
+                        buf_free(&prefix); free(t_san); free(s_san);
+                        return false;
+                    }
+                }
+                buf_append_cstr(fd, ");\n}\n\n");
+                continue;
+            }
+            /* sm->kind == USM_KIND_FIELD — static field accessor thunks. */
+            const TypeStaticBinding *sb = binding.static_binding;
+            if (sb == NULL) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "CE0343", "codegen: internal: type '%s' has no static field '%s' to satisfy spec '%s'",
+                    t->feng_name, sm->feng_name, s->feng_name);
+            }
+            Buf *fp = &cg->fn_protos;
+            Buf *fd = &cg->witness_defs;
+
+            buf_append_cstr(fd, "static ");
+            cg_emit_c_type(fd, sm->type);
+            buf_append_fmt(fd, " %s__get_%s(void) {\n    %s();\n    return %s;\n}\n\n",
+                           prefix.data, sm->c_field_name,
+                           sb->c_ensure_init_name, sb->c_name);
+            buf_append_cstr(fp, "static ");
+            cg_emit_c_type(fp, sm->type);
+            buf_append_fmt(fp, " %s__get_%s(void);\n",
+                           prefix.data, sm->c_field_name);
+            if (sm->is_var) {
+                buf_append_fmt(fd, "static void %s__set_%s(",
+                               prefix.data, sm->c_field_name);
+                cg_emit_c_type(fd, sm->type);
+                buf_append_cstr(fd, " value) {\n    ");
+                buf_append_fmt(fd, "%s();\n", sb->c_ensure_init_name);
+                if (cgtype_is_managed(sm->type)) {
+                    buf_append_fmt(fd,
+                        "    feng_assign((void **)&%s, value);\n",
+                        sb->c_name);
+                } else if (cgtype_is_aggregate(sm->type)) {
+                    const char *agg_desc = cg_aggregate_desc_name(sm->type);
+                    if (agg_desc == NULL) {
+                        buf_free(&prefix); free(t_san); free(s_san);
+                        return cg_fail(cg, blame,
+                            "CE0348", "codegen: missing aggregate descriptor for spec static field write");
+                    }
+                    buf_append_fmt(fd,
+                        "    feng_aggregate_assign(&%s, &value, &%s);\n",
+                        sb->c_name, agg_desc);
+                } else {
+                    buf_append_fmt(fd, "    %s = value;\n", sb->c_name);
+                }
+                buf_append_cstr(fd, "}\n\n");
+                buf_append_fmt(fp, "static void %s__set_%s(", prefix.data, sm->c_field_name);
+                cg_emit_c_type(fp, sm->type);
+                buf_append_cstr(fp, " value);\n");
+            }
+            continue;
         }
 
         if (binding.source_kind == FENG_SPEC_WITNESS_SOURCE_FIT_METHOD) {

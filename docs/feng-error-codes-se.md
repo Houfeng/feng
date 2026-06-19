@@ -112,7 +112,7 @@
 | 新错误码 | 用途 | 涵盖的旧消息 |
 |----------|------|-------------|
 | SE0601 | spec 成员不能声明可见性 | spec members cannot declare visibility; remove 'open' or 'seal' |
-| SE0602 | spec 成员不能声明为 static | spec members cannot be declared 'static' |
+| ~~SE0602~~ | (失效) 原用于禁止 spec 中声明 static 成员;自 spec 静态成员支持后,该错误码失效,后续按需复用 | spec members cannot be declared 'static' |
 | SE0603 | spec 字段不能有初始化器 | spec field declarations cannot have an initializer |
 | SE0604 | spec 方法签名必须有返回类型 | spec method signatures must declare a return type |
 | SE0605 | spec 方法签名不能有函数体 | spec method signatures must end with ';' and cannot have a body '{...}' |

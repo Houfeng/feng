@@ -7919,7 +7919,8 @@ static bool spec_collect_closure(const ResolveContext *ctx,
  * NULL here. */
 static const FengTypeMember *find_spec_object_member(const ResolveContext *context,
                                                      const FengDecl *spec_decl,
-                                                     FengSlice name) {
+                                                     FengSlice name,
+                                                     bool include_static) {
     const FengDecl **closure = NULL;
     size_t closure_count = 0U;
     size_t closure_capacity = 0U;
@@ -7945,6 +7946,9 @@ static const FengTypeMember *find_spec_object_member(const ResolveContext *conte
         for (j = 0U; j < current->as.spec_decl.as.object.member_count; ++j) {
             const FengTypeMember *member = current->as.spec_decl.as.object.members[j];
 
+            if (member->is_static && !include_static) {
+                continue;
+            }
             if (member->kind == FENG_TYPE_MEMBER_FIELD &&
                 slice_equals(member->as.field.name, name)) {
                 result = member;
@@ -7974,7 +7978,7 @@ static const FengTypeMember *find_decl_instance_member(const ResolveContext *con
         return find_instance_member(decl, name);
     }
     if (decl->kind == FENG_DECL_SPEC) {
-        return find_spec_object_member(context, decl, name);
+        return find_spec_object_member(context, decl, name, /*include_static=*/false);
     }
     return NULL;
 }
@@ -9536,7 +9540,7 @@ static bool throw_expr_is_callable_value(ResolveContext *context,
                 }
             }
             if (owner_type_decl != NULL && owner_type_decl->kind == FENG_DECL_SPEC) {
-                member = find_spec_object_member(context, owner_type_decl, expr->as.member.member);
+                member = find_spec_object_member(context, owner_type_decl, expr->as.member.member, /*include_static=*/false);
                 if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD) {
                     if (out_reason != NULL) {
                         *out_reason = "member methods cannot be thrown as exceptions";
@@ -12136,7 +12140,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                                expr->as.member.member.data));
         }
 
-        member = find_spec_object_member(context, owner_type_decl, expr->as.member.member);
+        member = find_spec_object_member(context, owner_type_decl, expr->as.member.member, /*include_static=*/false);
         if (member != NULL) {
             /* Spec members are unconditionally public per spec rules. */
             record_spec_member_access(context, expr, owner_type_decl, member);
@@ -13051,7 +13055,7 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
     field_member = find_type_field_member(owner_type_decl, expr->as.member.member);
     if (field_member == NULL && owner_type_decl->kind == FENG_DECL_SPEC) {
         const FengTypeMember *spec_member =
-            find_spec_object_member(context, owner_type_decl, expr->as.member.member);
+            find_spec_object_member(context, owner_type_decl, expr->as.member.member, /*include_static=*/false);
 
         if (spec_member != NULL && spec_member->kind == FENG_TYPE_MEMBER_FIELD) {
             field_member = spec_member;
@@ -17117,13 +17121,15 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                           callee->as.member.member)
                     : find_spec_object_member(context,
                                               owner_type_decl,
-                                              callee->as.member.member);
+                                              callee->as.member.member,
+                                              /*include_static=*/false);
             const FengTypeMember *field_member =
                 owner_type_decl->kind == FENG_DECL_TYPE
                     ? find_type_field_member(owner_type_decl, callee->as.member.member)
                     : find_spec_object_member(context,
                                               owner_type_decl,
-                                              callee->as.member.member);
+                                              callee->as.member.member,
+                                              /*include_static=*/false);
             const FengTypeMember *accessible_field =
                 owner_type_decl->kind == FENG_DECL_TYPE
                     ? find_accessible_type_field_member(context,
@@ -17132,7 +17138,8 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                         callee->as.member.member)
                     : find_spec_object_member(context,
                                               owner_type_decl,
-                                              callee->as.member.member);
+                                              callee->as.member.member,
+                                              /*include_static=*/false);
 
             if (accessible_method != NULL && accessible_method->kind != FENG_TYPE_MEMBER_METHOD) {
                 accessible_method = NULL;
@@ -19872,18 +19879,6 @@ static bool validate_object_spec_member_kinds(ResolveContext *context, const Fen
         if (member == NULL) {
             continue;
         }
-        if (member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
-            if (!resolver_append_error(
-                    context,
-                    member->token,
-                    "AE0620", format_message(
-                        "object-form spec '%.*s' cannot declare a constructor",
-                        (int)spec_decl->as.spec_decl.name.length,
-                        spec_decl->as.spec_decl.name.data))) {
-                return false;
-            }
-            return false;
-        }
         if (member->kind == FENG_TYPE_MEMBER_FINALIZER) {
             if (!resolver_append_error(
                     context,
@@ -20034,14 +20029,15 @@ static const FengTypeMember *type_find_matching_method_in_spec_ref(
     const FengTypeRef *spec_type_ref,
     const FengCallableSignature *spec_sig,
     const FengTypeMember *const *extra_methods,
-    size_t extra_count) {
+    size_t extra_count,
+    bool require_static) {
     size_t i;
 
     if (type_decl != NULL && type_decl->kind == FENG_DECL_TYPE) {
         for (i = 0U; i < type_decl->as.type_decl.member_count; ++i) {
             const FengTypeMember *m = type_decl->as.type_decl.members[i];
 
-            if (!m->is_static &&
+            if (m->is_static == require_static &&
                 m->kind == FENG_TYPE_MEMBER_METHOD &&
                 slice_eq(m->as.callable.name, spec_sig->name) &&
                 callable_signatures_match_for_satisfaction_in_spec_ref(
@@ -20053,7 +20049,7 @@ static const FengTypeMember *type_find_matching_method_in_spec_ref(
     for (i = 0U; i < extra_count; ++i) {
         const FengTypeMember *m = extra_methods[i];
 
-        if (!m->is_static &&
+        if (m->is_static == require_static &&
             m->kind == FENG_TYPE_MEMBER_METHOD &&
             slice_eq(m->as.callable.name, spec_sig->name) &&
             callable_signatures_match_for_satisfaction_in_spec_ref(
@@ -20127,7 +20123,8 @@ static const FengTypeMember *find_visible_fit_matching_method_in_spec_ref(
     const FengDecl *type_decl,
     const FengDecl *spec_decl,
     const FengTypeRef *spec_type_ref,
-    const FengCallableSignature *spec_sig) {
+    const FengCallableSignature *spec_sig,
+    bool require_static) {
     VisibleFitMethodMatchCtx st;
 
     if (ctx == NULL || !decl_is_named_fit_target(type_decl) ||
@@ -20145,7 +20142,7 @@ static const FengTypeMember *find_visible_fit_matching_method_in_spec_ref(
                                              type_decl,
                                              spec_sig->name,
                                              true,
-                                             false,
+                                             require_static,
                                              visible_fit_matching_method_visitor,
                                              &st);
     return st.match;
@@ -20168,7 +20165,9 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
         const FengTypeMember *spec_m = spec_decl->as.spec_decl.as.object.members[i];
 
         if (spec_m->kind == FENG_TYPE_MEMBER_FIELD) {
-            const FengTypeMember *t = type_find_field(type_decl, spec_m->as.field.name);
+            const FengTypeMember *t = spec_m->is_static
+                ? find_type_static_field_member(type_decl, spec_m->as.field.name)
+                : type_find_field(type_decl, spec_m->as.field.name);
 
             if (t == NULL) {
                 return resolver_append_error(
@@ -20227,7 +20226,8 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                 spec_type_ref,
                 &spec_m->as.callable,
                 extra_methods,
-                extra_count);
+                extra_count,
+                spec_m->is_static);
 
             if (match == NULL) {
                 match = find_visible_fit_matching_method_in_spec_ref(
@@ -20235,14 +20235,22 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                     type_decl,
                     spec_decl,
                     spec_type_ref,
-                    &spec_m->as.callable);
+                    &spec_m->as.callable,
+                    spec_m->is_static);
             }
 
             if (match == NULL) {
-                const FengTypeMember *named = type_find_method_by_name(
-                    type_decl, spec_m->as.callable.name, extra_methods, extra_count);
+                const FengTypeMember *named = spec_m->is_static
+                    ? find_type_static_method_member(type_decl, spec_m->as.callable.name)
+                    : type_find_method_by_name(
+                        type_decl, spec_m->as.callable.name, extra_methods, extra_count);
 
-                if (named == NULL) {
+                if (named == NULL && spec_m->is_static) {
+                    named = find_fit_static_method_member_for_type(
+                        ctx,
+                        type_decl,
+                        spec_m->as.callable.name);
+                } else if (named == NULL) {
                     named = find_fit_method_member_for_type(
                         ctx,
                         type_decl,
@@ -20305,7 +20313,9 @@ static bool type_decl_satisfies_spec_type_ref(const ResolveContext *ctx,
         const FengTypeMember *spec_m = spec_decl->as.spec_decl.as.object.members[i];
 
         if (spec_m->kind == FENG_TYPE_MEMBER_FIELD) {
-            const FengTypeMember *field = type_find_field(type_decl, spec_m->as.field.name);
+            const FengTypeMember *field = spec_m->is_static
+                ? find_type_static_field_member(type_decl, spec_m->as.field.name)
+                : type_find_field(type_decl, spec_m->as.field.name);
             const FengTypeRef *expected_field_type;
 
             if (field == NULL || field->as.field.mutability != spec_m->as.field.mutability) {
@@ -20329,7 +20339,8 @@ static bool type_decl_satisfies_spec_type_ref(const ResolveContext *ctx,
                 spec_type_ref,
                 &spec_m->as.callable,
                 NULL,
-                0U);
+                0U,
+                spec_m->is_static);
 
             if (match == NULL) {
                 match = find_visible_fit_matching_method_in_spec_ref(
@@ -20337,7 +20348,8 @@ static bool type_decl_satisfies_spec_type_ref(const ResolveContext *ctx,
                     type_decl,
                     spec_decl,
                     spec_type_ref,
-                    &spec_m->as.callable);
+                    &spec_m->as.callable,
+                    spec_m->is_static);
             }
             if (match == NULL) {
                 return false;
@@ -20737,8 +20749,16 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
             seen_names[seen_count++] = name;
 
             if (sm->kind == FENG_TYPE_MEMBER_FIELD) {
-                const FengTypeMember *t_field =
-                    (type_decl != NULL) ? type_find_field(type_decl, name) : NULL;
+                const FengTypeMember *t_field;
+
+                if (sm->is_static) {
+                    /* 静态字段:只能由 type 自身提供 (fit 不能声明 static let/var). */
+                    t_field = (type_decl != NULL)
+                        ? find_type_static_field_member(type_decl, name)
+                        : NULL;
+                } else {
+                    t_field = (type_decl != NULL) ? type_find_field(type_decl, name) : NULL;
+                }
 
                 (void)feng_semantic_spec_witness_append_member(
                     witness, sm, t_field,
@@ -20766,7 +20786,8 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                         spec_type_ref,
                         &sm->as.callable,
                         NULL,
-                        0U);
+                        0U,
+                        sm->is_static);
                 }
 
                 const FengTypeRef *cur_spec_type_ref =
@@ -20786,7 +20807,8 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                         cur_spec_type_ref,
                         &sm->as.callable,
                         NULL,
-                        0U);
+                        0U,
+                        sm->is_static);
                 }
 
                 fit_st.ctx = context;
@@ -20801,7 +20823,7 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                 fit_st.oom = false;
                 if (type_decl != NULL) {
                     (void)visit_visible_fit_methods_for_type(
-                        context, type_decl, name, true, false,
+                        context, type_decl, name, true, sm->is_static,
                         witness_fit_collect_visitor, &fit_st);
                 } else {
                     const FengDecl *owner_type_decl = resolve_inferred_expr_type_decl(

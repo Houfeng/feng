@@ -9152,25 +9152,28 @@ static void test_spec_type_satisfaction_succeeds(void) {
     feng_program_free(program);
 }
 
-static void test_object_form_spec_rejects_constructor_member(void) {
+static void test_object_form_spec_allows_method_same_name_as_spec(void) {
+    /* spec 方法名 == spec 名不再视为构造器; 视为普通实例方法 */
     const char *source =
         "module demo.main;\n"
         "spec Shape {\n"
-        "    func Shape();\n"
+        "    func Shape(): int;\n"
+        "}\n"
+        "type Disk: Shape {\n"
+        "    let name: string;\n"
+        "    func Shape(): int { return 1; }\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("object_spec_constructor_error.f", source);
+    FengProgram *program = parse_program_or_die("object_spec_same_name_method.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "object_spec_constructor_error.f") == 0);
-    ASSERT(strstr(errors[0].message,
-                  "object-form spec 'Shape' cannot declare a constructor") != NULL);
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
 
     feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
     feng_program_free(program);
 }
 
@@ -9192,6 +9195,173 @@ static void test_object_form_spec_rejects_finalizer_member(void) {
     ASSERT(strstr(errors[0].message,
                   "object-form spec 'Shape' cannot declare a finalizer") != NULL);
 
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* --- Step 3: object-form spec static members --- */
+
+/* type 自身静态字段 + 静态方法满足 spec 的静态成员约束 (含泛型 spec). */
+static void test_type_satisfies_spec_static_members(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Factory<T> {\n"
+        "    static func make(): T;\n"
+        "    static let tag: string;\n"
+        "}\n"
+        "spec Configurable {\n"
+        "    static var current: int;\n"
+        "    static func reset(): void;\n"
+        "}\n"
+        "type Widget: Factory<Widget> {\n"
+        "    let name: string;\n"
+        "    static func make(): Widget {\n"
+        "        return Widget { name: \"default\" };\n"
+        "    }\n"
+        "    static let tag: string = \"widget\";\n"
+        "}\n"
+        "type Config: Configurable {\n"
+        "    static var current: int = 0;\n"
+        "    static func reset(): void {\n"
+        "        Config.current = 0;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("type_satisfies_spec_static.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* fit 静态方法可以满足 spec 静态方法 (fit 仍不得声明静态字段). */
+static void test_fit_satisfies_spec_static_method(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Factory<T> {\n"
+        "    static func make(): T;\n"
+        "}\n"
+        "type Gadget {\n"
+    "    let id: int;\n"
+        "    static let tag: string = \"gadget\";\n"
+        "}\n"
+        "fit Gadget: Factory<Gadget> {\n"
+        "    static func make(): Gadget {\n"
+        "        return Gadget { id: 0 };\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_satisfies_spec_static.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* type 缺少 spec 要求的静态方法时, 满足检查应失败. */
+static void test_spec_static_member_missing_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Factory<T> {\n"
+        "    static func make(): T;\n"
+        "}\n"
+        "type Widget: Factory<Widget> {\n"
+        "    let name: string;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_static_missing.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "missing method") != NULL ||
+          strstr(errors[0].message, "missing implementation") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* type 静态方法签名与 spec 不匹配时, 满足检查应失败. */
+static void test_spec_static_member_signature_mismatch_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Factory<T> {\n"
+        "    static func make(): T;\n"
+        "}\n"
+        "type Widget: Factory<Widget> {\n"
+        "    let name: string;\n"
+        "    static func make(): int {\n"
+        "        return 0;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_static_sig_mismatch.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* spec 要求静态字段时, type 必须有匹配的静态字段. */
+static void test_spec_static_field_missing_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Named {\n"
+        "    static let tag: string;\n"
+        "}\n"
+        "type Widget: Named {\n"
+        "    let name: string;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_static_field_missing.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "missing field") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* 通过实例访问 spec 静态成员应报错. */
+static void test_instance_access_of_static_member_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Named {\n"
+        "    static let tag: string;\n"
+        "}\n"
+        "type Widget: Named {\n"
+        "    let name: string;\n"
+        "    static let tag: string = \"w\";\n"
+        "    func get_tag(): string {\n"
+        "        return self.tag;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("instance_access_static.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
@@ -15744,8 +15914,14 @@ int main(void) {
     test_object_literal_rejects_inaccessible_private_field();
     test_object_literal_allows_private_field_inside_same_module();
     test_spec_type_satisfaction_succeeds();
-    test_object_form_spec_rejects_constructor_member();
+    test_object_form_spec_allows_method_same_name_as_spec();
     test_object_form_spec_rejects_finalizer_member();
+    test_type_satisfies_spec_static_members();
+    test_fit_satisfies_spec_static_method();
+    test_spec_static_member_missing_rejected();
+    test_spec_static_member_signature_mismatch_rejected();
+    test_spec_static_field_missing_rejected();
+    test_instance_access_of_static_member_rejected();
     test_union_form_spec_records_normalized_members();
     test_union_form_spec_rejects_type_declared_spec_clause();
     test_union_form_spec_rejects_fit_spec_clause();

@@ -1570,10 +1570,11 @@ static FengDecl *parse_type_declaration(Parser *parser,
     return decl;
 }
 
-static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
+static FengTypeMember *parse_spec_member(Parser *parser) {
     FengToken member_start = parser_current_token(parser);
     FengSlice doc_comment = doc_comment_from_token(&member_start);
     FengTypeMember *member = NULL;
+    bool is_static = false;
 
     if (parser_check(parser, FENG_TOKEN_KW_OPEN) || parser_check(parser, FENG_TOKEN_KW_SEAL)) {
         (void)parser_error_current(
@@ -1582,12 +1583,7 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
         return NULL;
     }
 
-    if (parser_check(parser, FENG_TOKEN_KW_STATIC)) {
-        (void)parser_error_current(
-            parser,
-            "SE0602", "spec members cannot be declared 'static'");
-        return NULL;
-    }
+    is_static = parser_match(parser, FENG_TOKEN_KW_STATIC);
 
     if (parser_match(parser, FENG_TOKEN_KW_LET) || parser_match(parser, FENG_TOKEN_KW_VAR)) {
         FengMutability mutability = (parser_previous(parser)->kind == FENG_TOKEN_KW_LET)
@@ -1619,6 +1615,7 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
             return NULL;
         }
         member->visibility = FENG_VISIBILITY_DEFAULT;
+        member->is_static = is_static;
         member->as.field.mutability = binding.mutability;
         member->as.field.name = binding.name;
         member->as.field.type = binding.type;
@@ -1670,8 +1667,6 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
         }
         if (is_finalizer) {
             member_kind = FENG_TYPE_MEMBER_FINALIZER;
-        } else if (slice_equals(name, spec_name)) {
-            member_kind = FENG_TYPE_MEMBER_CONSTRUCTOR;
         }
         if (member_kind == FENG_TYPE_MEMBER_METHOD && callable.return_type == NULL) {
             (void)parser_error_current(parser, "SE0604", "spec method signatures must declare a return type");
@@ -1690,6 +1685,7 @@ static FengTypeMember *parse_spec_member(Parser *parser, FengSlice spec_name) {
             return NULL;
         }
         member->visibility = FENG_VISIBILITY_DEFAULT;
+        member->is_static = is_static;
         member->as.callable = callable;
         return member;
     }
@@ -1883,7 +1879,7 @@ static FengDecl *parse_spec_declaration(Parser *parser,
         size_t member_capacity = 0U;
 
         while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
-            FengTypeMember *member = parse_spec_member(parser, spec_name);
+            FengTypeMember *member = parse_spec_member(parser);
 
             if (member == NULL) {
                 free_decl(decl);

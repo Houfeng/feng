@@ -60,6 +60,35 @@ spec Mapper(x: int): int;
 spec Choice: int | string | User;
 ```
 
+正确语法四,object-form spec 中声明静态成员:
+
+```feng
+// 静态字段与静态方法签名
+spec Configurable {
+  static let defaults: string;
+  static var current: int;
+}
+
+// 泛型 spec 中声明静态成员,返回值与参数可使用 spec 类型参数
+spec Factory<T> {
+  static func make(): T;
+  static let tag: string;
+}
+
+spec Registry<T> {
+  static func all(): T[];
+  static func byId(id: int): T;
+  static let empty: T;
+}
+
+// 静态方法名可以与 spec 名相同,视为普通静态方法
+spec Resource {
+  static func Resource(): Resource;
+}
+```
+
+`spec` 静态成员是对 `type` 静态能力的契约描述。当返回值或参数需要表达"实现类型自身"时,使用 spec 类型参数 `T`,由满足方在 `type Widget: Factory<Widget>` 中绑定。
+
 错语法一,`spec` 中显式可见性修饰:
 
 ```feng
@@ -80,11 +109,12 @@ spec Bad {
 spec BadMapper(let x: int): int;
 ```
 
-错语法三,`spec` 中声明静态成员:
+错语法三,`spec` 静态字段带初始值或静态方法带函数体:
 
 ```feng
 spec Bad {
-  static func make(): Bad;
+  static let zero: int = 0;        // spec 字段不能有初始值
+  static func make(): Bad { ... }  // spec 方法签名不能有函数体
 }
 ```
 
@@ -124,9 +154,9 @@ spec Choice: int | string {}
 - 目前成员顺序的调整,不是兼容变更。未来增加基于编译期计算出稳定的成员 KEY 进行编译期成员重排的方式优化此问题。
 - 可调用形状 `spec` 仅描述函数签名形状,不引入数据布局,因此可在标记 `@abi` 后作为 ABI 函数签名类型使用; 对应的原生函数指针类型写作 `Foo*`,详见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
 - `spec` 中的成员与行为签名默认公开,且不允许显式添加 `open` 或 `seal`。
-- `spec` 中暂不支持声明静态成员; object-form `spec` 体内出现 `static` 时,编译器在 Parser 阶段拒绝。
+- object-form `spec` 支持声明静态成员（`static let`、`static var`、`static func`）,作为 `type` 静态能力的契约描述;静态成员与实例成员采用一致的成员声明顺序。
 - 对象形状中的行为签名使用 `func` 关键字,在 `spec` 中可不写函数体。
-- object-form `spec` 是契约声明,成员面仅包含字段声明与方法签名; 不允许声明构造器或终结器。
+- object-form `spec` 是契约声明,成员面仅包含字段声明与方法签名; spec 一律不允许声明终结器（`~` 前缀的方法）。
 - `spec` 中任何位置的参数均不可使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数; 参数可变性属于实现侧内部约束,不属于 `spec` 契约形状的一部分。
 - `spec` 中的成员类型规则与 `type` 的成员类型引用规则一致: 成员类型必须引用已声明的具名类型,不能在成员类型位置内联匿名类型定义。
 - 可调用形状使用 `spec Name(args): ReturnType;` 形式定义。
@@ -145,6 +175,19 @@ spec Choice: int | string {}
 - 对象形状 `spec` 的显式转换只允许向上建立视角: 具体 `type` 可显式转换到当前可见契约闭包中已证明满足的 object-form `spec`; object-form `spec` 也可显式转换到其当前可见父 `spec` 视角。
 - 对象形状 `spec` 的显式转换资格必须在编译期确定; 运行时不得重新搜索满足关系,也不得依据对象真实具体类型临时决定转换是否成立。
 - 对象形状 `spec` 的显式转换一旦合法,编译器必须直接按目标 `spec` 视角发码; 运行时不得再做候选 `spec` 搜索、试探转换或回退。
+
+### 4.1 spec 静态成员
+
+- object-form `spec` 中允许声明 `static let`、`static var` 与 `static func` 成员,作为 `type` 静态能力的契约描述; spec 不提供任何实现,静态字段声明不带初始值,静态方法签名不带函数体。
+- spec 静态字段声明必须以 `;` 结束,spec 静态方法签名必须以 `;` 结束;静态方法参数不可使用 `let` 或 `var` 修饰符,且必须显式声明返回类型。
+- spec 静态方法支持泛型,规则与 spec 实例方法一致; spec 静态方法支持重载,规则与 `type` 中静态方法一致; spec 静态成员不允许显式 `open` / `seal` 可见性修饰。
+- spec 方法名可以与 spec 名相同（包括静态方法和实例方法）,视为普通方法; spec 一律不允许 `~` 前缀的方法（终结器只允许用于 `type`）。
+- spec 静态字段的满足来源只能是 `type` 自身（`fit` 不得声明 `static let` / `static var`）; spec 静态方法的满足来源可以是 `type` 自身或可见 `fit` 中的静态方法。
+- spec 静态字段匹配采用"名称 + 绑定方式（`let` / `var`） + 类型完全一致"规则; spec 静态方法匹配采用"名称 + 参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致"规则。
+- 泛型 spec 中的类型参数在满足检查时按 `type Widget: Factory<Widget>` 中的实参替换后精确匹配,复用与 spec 实例方法相同的机制。
+- 通过具体类型名访问静态成员（如 `Widget.make()`、`Widget.tag`）为直接调用或直接访问,运行时不引入额外开销。
+- 通过泛型约束中的类型参数访问静态成员（如 `T.make()`、`T.field`,其中 `T: SomeSpec`）通过编译期 witness 表完成静态分派,不开销与现有泛型实例方法分派一致。
+- 不允许通过实例访问静态成员（与 `type` 规则一致）; 不允许通过 spec 值访问静态成员（spec 值是实例级概念）。
 
 ## 5 规则
 
@@ -165,8 +208,9 @@ spec Choice: int | string {}
 - [禁止] 同一声明头中的 `spec` 列表重复列出同一个 `spec`。
 - [禁止] 在 `type` 声明头或契约适配 `fit` 中把 callable-form `spec` 或 union-form `spec` 当作满足目标。
 - [禁止] `spec` 中任何参数位置使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数。
-- [禁止] `spec` 中声明 `static` 成员; 该限制由 Parser 阶段诊断。
-- [禁止] object-form `spec` 声明构造器或终结器; 该限制属于语义规则,由语义分析阶段诊断。
+- [禁止] object-form `spec` 声明终结器（`~` 前缀的方法）; 该限制属于语义规则,由语义分析阶段诊断。
+- [必须] object-form `spec` 中声明的 `static let` / `static var` / `static func` 必须不带初始值或函数体;静态字段声明必须以 `;` 结束,静态方法签名必须以 `;` 结束,静态方法必须显式声明返回类型。
+- [必须] object-form `spec` 的静态字段满足来源只能是 `type` 自身; spec 静态方法满足来源可以是 `type` 自身或可见 `fit` 中的静态方法。
 - [禁止] 对象形状的 `spec` 不得标记 `@abi` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
 - [必须] 未绑定到 callable-form `spec` 的顶层函数、方法值与 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”进行结构匹配。
 - [必须] 静态类型已经是 callable-form `spec` 的值在进入另一 callable-form `spec` 位置时,只允许同一 callable-form `spec` 声明隐式匹配。
@@ -191,12 +235,13 @@ spec Choice: int | string {}
 - 编译器必须检查 object-form `spec` 的父 `spec` 列表中每一项是否均为 object-form `spec`，并拒绝 callable-form `spec` 与 union-form `spec` 出现在父 `spec` 列表中。
 - 编译器必须检查 `type` 声明头与契约适配 `fit` 的右侧是否全部为 object-form `spec`,并拒绝 callable-form `spec` 与 union-form `spec`。
 - 编译器必须检查 `type` 对目标 `spec` 的字段与方法是否满足精确匹配规则。
-- 编译器必须在 Parser 阶段拒绝 object-form `spec` 体内的 `static` 成员声明。
+- 编译器必须在 Parser 阶段接受 object-form `spec` 体内的 `static let` / `static var` / `static func` 声明,并在语义阶段以与 `type` 静态成员一致的规则对签名、可见性、`~` 前缀做检查。
 - 编译器必须检查并拒绝 `spec` 循环声明满足关系。
 - 编译器必须检查并拒绝“同名同参数顺序但返回值不一致”的多 `spec` 方法冲突。
 - 编译器必须在 object-form `spec` 的父子闭包成员收集中对“同名且签名完全一致”的方法按“子 `spec` 优先”去重,避免把继承覆盖关系误判为多重重载歧义。
 - 编译器必须检查并拒绝 `spec` 列表中的重复项。
-- 编译器必须在语义分析阶段检查并拒绝 object-form `spec` 中的构造器与终结器声明。
+- 编译器必须在语义分析阶段检查并拒绝 object-form `spec` 中的终结器声明（`~` 前缀的方法）。
+- 编译器必须在语义分析阶段检查 `type` 是否为 object-form `spec` 中的静态成员提供了实现;静态字段必须由 `type` 自身提供,静态方法可由 `type` 自身或可见 `fit` 提供。
 - 编译器必须检查并拒绝在对象形状 `spec` 上使用 `@abi` 或调用方式注解。
 - 编译器必须区分“未绑定可调用值 → callable-form `spec`”的结构匹配与“callable-form `spec` → callable-form `spec`”的名义匹配。
 - 编译器必须仅在两个 callable-form `spec` 的实例化后签名完全一致时接受显式转换,并在语义分析阶段拒绝其他 callable-form `spec` 转换。
@@ -213,6 +258,7 @@ spec Choice: int | string {}
 - 默认 witness 由编译器自动生成,与对应 `spec` 属于同一模块,但对开发者不可见也不可显式引用; 每个 `spec` 都有对应默认 witness,且必须满足该 `spec` 声明的全部成员与签名要求。
 - 字段成员按各自类型的默认零值初始化。
 - 返回 `void` 的行为签名提供空实现; 返回非 `void` 的行为签名返回其返回类型默认零值; 若返回值是 `spec` 类型,则返回该 `spec` 对应的默认 witness。
+- 通过具体类型名访问 spec 静态成员的运行时开销与访问 `type` 静态成员完全一致; 通过泛型类型参数访问 spec 静态成员时,采用与 spec 实例方法 witness 表一致的间接分派策略,不在运行时引入额外的候选搜索或回退。
 - 每次对 `spec` 类型执行默认初始化时,都会创建该 `spec` 默认 witness 的新实例,不复用共享单例。
 - `spec` 值上的 `==` / `!=` 默认比较引用身份,不执行深度比较。
 - 代码以 `spec` 视角访问成员或发起调用时,运行时可采用分发表、内联缓存、静态去虚化或其他等价策略完成成员映射与分发。

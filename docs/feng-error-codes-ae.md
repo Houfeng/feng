@@ -155,7 +155,6 @@
 | AE0615 | type 声明 spec 列表形态约束 | AE0199 | type '%.*s' declared spec list must contain only spec types but found '%s' |
 | AE0615 | type 声明 spec 列表形态约束 | AE0200 | type '%.*s' declared spec list can only contain object-form specs |
 | AE0616 | type 声明 spec 列表唯一性约束 | AE0201 | type '%.*s' lists '%.*s' more than once in its declared spec list |
-| AE0620 | object-form spec 声明限制 | AE0186 | object-form spec '%.*s' cannot declare a constructor |
 | AE0620 | object-form spec 声明限制 | AE0187 | object-form spec '%.*s' cannot declare a finalizer |
 | AE0701 | spec 字段存在性约束 | AE0188 | type '%.*s' is missing field '%.*s' required by spec '%.*s' |
 | AE0702 | spec 字段可写性一致性约束 | AE0189 | type '%.*s' field '%.*s' mutability does not match spec '%.*s' (expected '%s') |

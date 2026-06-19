@@ -344,7 +344,53 @@ static void test_static_members_parse(void) {
     feng_program_free(program);
 }
 
-static void test_static_member_parse_errors(void) {
+static void test_spec_static_members_parse(void) {
+    const char *source =
+        "module demo.spec_static;\n"
+        "spec Factory<T> {\n"
+        "    static func make(): T;\n"
+        "    static let tag: string;\n"
+        "    static var current: int;\n"
+        "    func name(): string;\n"
+        "}\n"
+        "spec SameName {\n"
+        "    static func SameName(): int;\n"
+        "    func SameName(): int;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *factory;
+    const FengDecl *same_name;
+
+    ASSERT(feng_parse_source(source, strlen(source), "spec_static_members.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 2U);
+
+    factory = program->declarations[0];
+    ASSERT(factory->kind == FENG_DECL_SPEC);
+    ASSERT(factory->as.spec_decl.as.object.member_count == 4U);
+    ASSERT(factory->as.spec_decl.as.object.members[0]->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(factory->as.spec_decl.as.object.members[0]->is_static);
+    ASSERT(factory->as.spec_decl.as.object.members[1]->kind == FENG_TYPE_MEMBER_FIELD);
+    ASSERT(factory->as.spec_decl.as.object.members[1]->is_static);
+    ASSERT(factory->as.spec_decl.as.object.members[2]->kind == FENG_TYPE_MEMBER_FIELD);
+    ASSERT(factory->as.spec_decl.as.object.members[2]->is_static);
+    ASSERT(factory->as.spec_decl.as.object.members[3]->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(!factory->as.spec_decl.as.object.members[3]->is_static);
+
+    same_name = program->declarations[1];
+    ASSERT(same_name->kind == FENG_DECL_SPEC);
+    ASSERT(same_name->as.spec_decl.as.object.member_count == 2U);
+    /* spec 方法名 == spec 名视为普通方法,无构造器概念 */
+    ASSERT(same_name->as.spec_decl.as.object.members[0]->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(same_name->as.spec_decl.as.object.members[0]->is_static);
+    ASSERT(same_name->as.spec_decl.as.object.members[1]->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(!same_name->as.spec_decl.as.object.members[1]->is_static);
+
+    feng_program_free(program);
+}
+
+static void test_spec_static_member_parse_errors(void) {
     static const struct {
         const char *source;
         const char *message;
@@ -352,10 +398,39 @@ static void test_static_member_parse_errors(void) {
         {
             "module demo.bad;\n"
             "spec Factory {\n"
-            "    static func make(): int;\n"
+            "    static let zero: int = 0;\n"
             "}\n",
-            "spec members cannot be declared 'static'"
+            "spec field declarations cannot have an initializer"
         },
+        {
+            "module demo.bad;\n"
+            "spec Factory {\n"
+            "    static func make(): int {}\n"
+            "}\n",
+            "spec method signatures must end with ';' and cannot have a body"
+        }
+    };
+
+    for (size_t i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        ASSERT(!feng_parse_source(cases[i].source,
+                                  strlen(cases[i].source),
+                                  "spec_static_member_error.f",
+                                  &program,
+                                  &error));
+        ASSERT(program == NULL);
+        ASSERT(error.message != NULL);
+        ASSERT(strstr(error.message, cases[i].message) != NULL);
+    }
+}
+
+static void test_static_member_parse_errors(void) {
+    static const struct {
+        const char *source;
+        const char *message;
+    } cases[] = {
         {
             "module demo.bad;\n"
             "type Counter {\n"
@@ -2384,6 +2459,8 @@ int main(void) {
     test_generic_type_brackets_without_colon_parses_as_index();
     test_member_annotations_and_constructors();
     test_static_members_parse();
+    test_spec_static_members_parse();
+    test_spec_static_member_parse_errors();
     test_static_member_parse_errors();
     test_ast_source_tokens();
     test_type_field_inferred_initializers();

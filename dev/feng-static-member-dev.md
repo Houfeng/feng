@@ -11,7 +11,6 @@
 - 静态方法支持泛型，规则与实例方法相同
 - `fit` 的静态方法在 `use` 引入对应模块后，在调用侧可见面可用，规则与 fit 实例方法一致
 - 静态成员（`open` 修饰）可跨 fb 包使用，符号表中记录完整信息
-- `spec` 中暂不支持声明静态成员
 - 静态方法运行时开销 = 普通顶层函数（编译为直接 C 函数调用，无任何间接层）
 - 静态绑定运行时开销 = 普通顶层绑定（采用相同的延迟初始化 pattern，见 `feng-top-binding-optimize.md`）
 - `open`/`seal` 可见性修饰符适用于静态成员，与实例成员一致
@@ -642,11 +641,6 @@ type T { static open let x: int = 0 } // 禁止：static 在 open/seal 之前
 type T { static seal var n: int = 0 } // 禁止：static 在 seal 之前
 
 fit T { static let x: int = 0 }       // 禁止：fit 中不得声明 static let/static var
-
-// 禁止：spec 中声明 static 成员
-spec Foo {
-    static func bar(): int
-}
 ```
 
 ### 语义测试（`test/semantic/`）
@@ -698,4 +692,4 @@ spec Foo {
 
 ## 未包含内容
 
-- `spec` 中暂不支持声明静态成员（本期不实现，待后续决策）
+（本期内容已全部实现，spec 静态成员支持由 `dev/feng-object-form-spec-static-dev.md` 单独规划）

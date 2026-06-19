@@ -730,6 +730,122 @@ static void test_generic_static_methods_codegen(void) {
     feng_program_free(program);
 }
 
+/* Step 3 — spec static member codegen: witness struct slots must omit
+ * _subject for static methods/fields, and thunks forward without a
+ * subject cast. */
+static void test_spec_static_member_witness_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.specstatic;\n"
+        "spec Factory<T> {\n"
+        "    static func make(): T;\n"
+        "    static let tag: string;\n"
+        "}\n"
+        "type Widget: Factory<Widget> {\n"
+        "    let name: string;\n"
+        "    static func make(): Widget {\n"
+        "        return Widget { name: \"default\" };\n"
+        "    }\n"
+        "    static let tag: string = \"widget\";\n"
+        "}\n"
+        "func run_case(): string {\n"
+        "    let factory: Factory<Widget> = Widget();\n"
+        "    return Widget.tag;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "specstatic.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    if (error_count != 0U) {
+        fprintf(stderr, "semantic error (spec static members): %s\n",
+                errors[0].message ? errors[0].message : "(unknown)");
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (spec static members): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    /* The witness thunk for the static method must exist (coercion triggers
+     * witness table materialisation). The static tag field thunk forwards
+     * through the type's static field storage and its ensure_init helper. */
+    ASSERT(strstr(out.c_source, "FengSpecThunk__feng__codegen__specstatic") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__specstatic__Widget__static__tag") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__specstatic__Widget__static__tag__ensure_init") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+/* Step 3 — spec static field (var) witness setter thunk forwards without
+ * a subject. */
+static void test_spec_static_var_witness_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.specstaticvar;\n"
+        "spec Configurable {\n"
+        "    static var current: int;\n"
+        "}\n"
+        "type Config: Configurable {\n"
+        "    static var current: int = 0;\n"
+        "}\n"
+        "func run_case(): int {\n"
+        "    let cfg: Configurable = Config();\n"
+        "    Config.current = 42;\n"
+        "    return Config.current;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "specstaticvar.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    if (error_count != 0U) {
+        fprintf(stderr, "semantic error (spec static var): %s\n",
+                errors[0].message ? errors[0].message : "(unknown)");
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (spec static var): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecThunk__feng__codegen__specstaticvar") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__feng__codegen__specstaticvar__Config__static__current") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_module_binding_default_zero_ensure_init_codegen(void) {
     static const char *kSource =
         "module feng.codegen.topbindzero;\n"
@@ -5640,6 +5756,8 @@ int main(void) {
     test_type_static_members_codegen();
     test_builtin_fit_static_method_codegen();
     test_generic_static_methods_codegen();
+    test_spec_static_member_witness_codegen();
+    test_spec_static_var_witness_codegen();
     test_module_binding_default_zero_ensure_init_codegen();
     test_extern_calling_convention_codegen();
     test_extern_c_symbol_name_codegen();
