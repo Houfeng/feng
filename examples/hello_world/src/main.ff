@@ -18,7 +18,7 @@ func main(args: string[]) {
   // test("test2", test2);
   let obj = JsonObject();
   obj.set("message", "Hello, World!");
-  obj.set("code", (double)200);
+  obj.set("code", 200);
   obj.set("detail", none);
   println(Json.stringify(obj));
   println("{0}:{1}", SystemInfo.os(), SystemInfo.arch());
