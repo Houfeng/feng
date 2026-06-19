@@ -53,6 +53,68 @@ open type Json {
     };
   }
 
+  static func toString(value: JsonValue): string {
+    return if (value) {
+      string { value }
+      else { "" }
+    };
+  }
+
+  static func toNumber(value: JsonValue): double {
+    return if (value) {
+      int {(double)value }
+      float {(double)value }
+      double { value }
+      else {(double)0 }
+    };
+  }
+
+  static func toBool(value: JsonValue): bool {
+    return if (value) {
+      bool { value }
+      else { false }
+    };
+  }
+
+  static func toArray(value: JsonValue): JsonArray {
+    return if (value) {
+      JsonArray { value }
+      else { JsonArray() }
+    };
+  }
+
+  static func toObject(value: JsonValue): JsonObject {
+    return if (value) {
+      JsonObject { value }
+      else { JsonObject() }
+    };
+  }
+
+  static func toStringOrNone(value: JsonValue): Option<string> {
+    if Json.isNull(value) { return none; }
+    return Json.toString(value);
+  }
+
+  static func toNumberOrNone(value: JsonValue): Option<double> {
+    if Json.isNull(value) { return none; }
+    return Json.toNumber(value);
+  }
+
+  static func toBoolOrNone(value: JsonValue): Option<bool> {
+    if Json.isNull(value) { return none; }
+    return Json.toBool(value);
+  }
+
+  static func toArrayOrNone(value: JsonValue): Option<JsonArray> {
+    if Json.isNull(value) { return none; }
+    return Json.toArray(value);
+  }
+
+  static func toObjectOrNone(value: JsonValue): Option<JsonObject> {
+    if Json.isNull(value) { return none; }
+    return Json.toObject(value);
+  }
+
   /**
    * 序列化
    */
@@ -70,7 +132,7 @@ open type Json {
     };
   }
 
-  static func stringify(value: Jsonable): string {
+  static func stringify(value: JsonSerializable): string {
     return Json.stringify(value.toJson());
   }
 

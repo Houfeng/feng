@@ -1,9 +1,15 @@
 open module std.json;
 
 /**
- * JSON 序列化和反序列化契约
+ * JSON 序列化
  */
-open spec Jsonable {
+open spec JsonSerializable {
   func toJson(): JsonObject;
-  func fromJson(value: JsonObject): void;
+}
+
+/**
+ * JSON 反序列化
+ */
+open spec JsonDeserializable {
+  func fromJson(json: JsonObject): void;
 }
