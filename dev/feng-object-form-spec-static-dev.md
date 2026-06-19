@@ -791,11 +791,95 @@ func main(args: string[]) {
 
 ---
 
-## 实施顺序
+## 实施步骤（每步可独立交付，独立通过全量回归测试）
 
-1. **Phase 1**：先修改所有文档（feng-spec.md / feng-fit.md / feng-error-codes-se.md / feng-static-member-dev.md）
-2. **Phase 2**：解析器（最小改动，特判 static + ~ + 构造器跳过）
-3. **Phase 3**：语义分析（复用现有静态查找函数，新增 2 个对称辅助函数）
-4. **Phase 4**：符号表（验证 is_static 传递，预期无改动）
-5. **Phase 5**：代码生成（UserSpecMember 新增 is_static；witness struct/thunk/默认 witness/泛型分派/slot witness；修复 clone_inherited_member）
-6. **Phase 6**：测试与全量回归
+> 拆分原则：每个 Step 是一次"垂直切片"，覆盖 parser → semantic → symbol → codegen → 测试。每完成一个 Step，编译器即可交付一个完整且自洽的能力，并保持现有测试全部通过。
+
+### Step 1 — 文档先行（无代码改动）
+
+- [ ] `docs/feng-spec.md`：
+  - 移除 §3 "错语法三"（spec 静态成员禁止示例）
+  - 在 §4 新增 spec 静态成员（`static let` / `static var` / `static func`）合法语法、语义节
+  - 移除 spec constructor 相关条款（spec 不再有 constructor 概念）
+  - 明确"spec 方法名可以与 spec 名相同（视为普通方法）"
+- [ ] `docs/feng-fit.md`：补充 fit 静态方法可满足 spec 静态方法约束（fit 仍不得声明 static let/var）
+- [ ] `docs/feng-error-codes-se.md`：
+  - SE0602 标记为失效（空闲，未来根据情况决定是否用作他处理）
+  - AE0620 描述更新：仅保留 "cannot declare a finalizer"（移除 constructor 部分）
+- [ ] `dev/feng-static-member-dev.md`：移除「spec 中暂不支持声明静态成员」说明
+- **交付**：文档定稿，作为后续代码改动的契约
+- **回归**：纯文档变更，无代码影响 → 全量回归通过
+
+### Step 2 — 方案 B：移除 spec constructor 概念（关联变更）
+
+- [ ] `src/parser/parser.c`（`parse_spec_member`，第 1671–1675 行）：移除 `else if (slice_equals(name, spec_name)) { member_kind = FENG_TYPE_MEMBER_CONSTRUCTOR; }` 判定
+  - 保留 `if (is_finalizer) { member_kind = FINALIZER; }`（`~` 前缀仍解析为 FINALIZER）
+- [ ] `src/semantic/analyzer.c`（约第 19875–86 行）：移除 spec CONSTRUCTOR 检查分支（`member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR`），保留 FINALIZER 检查
+- [ ] `test/semantic/test_semantic.c`：
+  - **移除** `test_object_form_spec_rejects_constructor_member`（第 9155 行）及其在 `main` 中的注册
+  - **新增** `test_object_form_spec_allows_method_same_name_as_spec`：验证 spec 实例方法名 == spec 名合法
+  - **扩展** `test_object_form_spec_rejects_finalizer_member`：增加 spec 静态方法 `~` 前缀用例（验证 AE0620 自动覆盖静态路径）
+- **交付**：spec 方法（静态和实例）名 == spec 名视为普通方法；spec `~` 前缀仍由 AE0620 拒绝（语义一致）
+- **回归**：全量回归通过。**唯一行为变化**：spec 实例方法名 == spec 名从被拒绝变为合法；不涉及 spec 静态成员声明（仍由 parser 拒绝）
+
+### Step 3 — spec 静态成员声明 + type 静态成员满足 + 直接调用
+
+- [ ] `src/parser/parser.c`（`parse_spec_member`）：
+  - 第 1585 行：从拒绝 `static` 改为接受并消费，设置 `is_static = true`
+  - 静态字段路径（let/var）：复用现有 spec 字段解析，设置 `member->is_static = true`
+  - 静态方法路径（func）：复用现有 spec 方法签名解析，设置 `member->is_static = true`
+- [ ] `src/semantic/analyzer.c`：
+  - `find_spec_object_member`（第 7920 行）：扩展入参 `bool include_static`，循环内增加 `if (member->is_static && !include_static) continue;`
+  - 全部现有调用点适配：传 `false`（实例查找不命中静态）
+  - `compute_spec_witness_if_absent`（第 20621 行）：在 `sm->kind` 分支前增加 `if (sm->is_static)` 分支，调用现有 `find_type_static_field_member` / `find_type_static_method_member` / `find_fit_static_method_member_for_*` 函数；source kind 复用 `TYPE_OWN_FIELD` / `TYPE_OWN_METHOD` / `FIT_METHOD`
+- [ ] `src/symbol/export.c` + `src/symbol/imported_module.c`：验证 `is_static` 在 spec 成员导出/还原时正确传递（预期无代码改动）
+- [ ] `src/codegen/codegen.c`：
+  - `UserSpecMember`（第 661 行）：新增 `bool is_static` 字段
+  - `cg_ensure_user_spec_members_registered`（第 8448 行）：设置 `sm->is_static`
+  - `cg_user_spec_clone_inherited_member`（第 7437 行）：**修复** 添加 `dst->is_static = src->is_static`
+  - `cg_emit_witness_struct_body`（第 9171 行）：静态成员 slot 签名无 `_subject`
+  - `cg_ensure_witness_instance_for_type`（第 26548 行）：静态成员 thunk 转发无 `_subject` cast
+  - 默认 witness 生成（约第 9686–9711 行）：静态成员默认 thunk
+- [ ] 测试：
+  - `test/parser/test_parser.c`：移除 SE0602 "static 禁止"测试；新增 spec `static let` / `static var` / `static func` 解析测试；新增 spec 静态字段初始值禁止（SE0603）、静态方法函数体禁止（SE0605）
+  - `test/semantic/test_semantic.c`：type 静态成员满足 spec（含泛型 spec `Factory<T>`）；fit 静态方法满足 spec；不满足场景（缺失、签名不匹配）；通过实例访问 spec 静态成员 → 报错
+  - `test/codegen/test_codegen.c`：witness struct 含静态成员 slot（无 `_subject`）；thunk 生成（无 subject cast）；默认 witness 静态成员 slot
+- **交付**：spec 声明静态成员；type/fit 提供静态成员实现；直接调用 `Widget.make()` / `Widget.tag`（零开销）
+- **回归**：全量回归通过。**新增能力**：spec 可声明静态成员，非破坏性
+
+### Step 4 — 泛型约束 `T.make()` / `T.field` 通过 witness 分派
+
+- [ ] `src/semantic/analyzer.c`：
+  - `ResolvedTypeTarget`（第 332 行）：新增 `bool is_generic_type_param` / `size_t generic_param_index` / `const FengDecl *constraint_spec_decl`
+  - `resolve_type_target_expr`（第 12839 行）：当 identifier 未命中 visible_types 时，检查当前泛型函数类型参数；命中则填充上述字段
+  - `validate_function_call_expr` / `infer_member_expr_type`：当 `is_generic_type_param == true` 时，从 `constraint_spec_decl` 闭包通过 `find_spec_object_member(..., include_static=true)` 查找静态成员；记录 SpecCoercionSite；返回静态成员类型
+- [ ] `src/codegen/codegen.c`：
+  - 泛型 `T.make()` 发码：`((const struct W *)T->witness)->static_method(args)`（无 subject）
+  - 泛型 `T.field` 读：`((const struct W *)T->witness)->get_field()`（无 subject）
+  - 泛型 `T.field` 写：`((const struct W *)T->witness)->set_field(value)`（无 subject）
+  - `cg_ensure_spec_slot_witness`（第 25277 行）：spec-to-spec 适配中处理静态成员 slot（无 subject 转发）
+- [ ] 测试：
+  - `test/semantic/test_semantic.c`：泛型约束 `T.make()` 类型推断（`T: Factory<T>`）；泛型 `T.field` 读写类型推断；spec 父 spec 静态成员约束传递；不满足场景
+  - `test/codegen/test_codegen.c`：泛型 `T.make()` 发码（验证 witness 分派）；泛型 `T.field` 发码（验证 witness getter/setter）；spec-to-spec slot witness 静态成员适配转发
+- [ ] Smoke 测试：完整 `spec Factory<T>` / `type Widget: Factory<Widget>` / `func create<T: Factory<T>>()` 调用链
+- **交付**：泛型约束中 `T.make()` / `T.field` 通过 witness 表间接分派；spec-to-spec 闭包传递静态成员
+- **回归**：全量回归通过。**新增能力**：泛型分派，非破坏性
+
+### 验收 Checklist（每 Step 完成后）
+
+- [ ] 该 Step 列出的所有文件改动完成
+- [ ] 该 Step 新增/修改的测试全部通过
+- [ ] **全量回归测试通过**（`ctest` / 项目测试入口无破坏）
+- [ ] commit message 给出建议（英文，由开发者自行提交）
+- [ ] 进入下一 Step 前等待开发者确认
+
+### 跨 Step 依赖关系
+
+```
+Step 1（文档） → 不阻塞任何 Step，但应先于代码改动
+Step 2（移除 constructor） → 不阻塞 Step 3，但建议先做（清理干净）
+Step 3（spec 静态成员 + 直接调用） → 阻塞 Step 4（泛型分派依赖 Step 3 的 witness 表基础）
+Step 4（泛型分派） → 完整能力
+```
+
+> **建议执行顺序**：Step 1 → Step 2 → Step 3 → Step 4。每完成一步，向开发者汇报并等待确认后再进入下一步。
