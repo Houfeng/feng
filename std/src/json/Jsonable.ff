@@ -1,14 +1,14 @@
 open module std.json;
 
 /**
- * JSON 序列化
+ * JSON serialization
  */
 open spec JsonSerializable {
   func toJson(): JsonObject;
 }
 
 /**
- * JSON 反序列化
+ * JSON deserialization
  */
 open spec JsonDeserializable {
   func fromJson(json: JsonObject): void;

@@ -32,17 +32,17 @@ extern func fs_posix_fstat(fd: int, buf: long*): int;
 seal let DEFAULT_FILE_MODE: int = 420;
 
 /**
- * 文件读写对象，封装文件描述符与读写操作。
- * 底层 bytes-first：read 与 write 直接处理 byte 缓冲或 byte[] 数据。
+ * File I/O object, wrapping a file descriptor with read/write operations.
+ * Bytes-first: read and write operate directly on byte buffers or byte[] data.
  */
 open type File {
   seal var fd: int;
   seal var closed: bool;
 
   /**
-   * 打开或创建文件，返回 File 实例。
-   * @param path - 文件路径
-   * @param mode - 文件打开模式
+   * Open or create a file and return a File instance.
+   * @param path - File path
+   * @param mode - File open mode
    */
   open static func create(path: string, mode: FileMode): File {
     let pathBytes = makeNullTerminatedPath(path);
@@ -54,9 +54,9 @@ open type File {
   }
 
   /**
-   * 从文件读取至多 buffer.length() 个字节。
-   * @param buffer - 调用方提供的可写字节缓冲
-   * @return 实际读取字节数，EOF 返回 0
+   * Read up to buffer.length() bytes from the file.
+   * @param buffer - Writable byte buffer provided by the caller
+   * @return Number of bytes actually read; 0 on EOF
    */
   open func read(buffer: byte[!]): long {
     self.ensureOpen();
@@ -72,9 +72,9 @@ open type File {
   }
 
   /**
-   * 将 bytes 写到文件。
-   * @param bytes - 输出字节序列
-   * @return 实际写入字节数
+   * Write bytes to the file.
+   * @param bytes - Output byte sequence
+   * @return Number of bytes actually written
    */
   open func write(bytes: byte[]): long {
     self.ensureOpen();
@@ -90,17 +90,18 @@ open type File {
   }
 
   /**
-   * 将 text 的 UTF-8 字节写到文件，语义固定等价于把 text 的 UTF-8 字节序列传给 write。
-   * @param text - 要写入的文本
-   * @return 实际写入字节数
+   * Write the UTF-8 bytes of text to the file.
+   * Semantically equivalent to passing the UTF-8 byte representation of text to write.
+   * @param text - Text to write
+   * @return Number of bytes actually written
    */
   open func writeText(text: string): long {
     return self.write(feng_string_to_utf8_bytes(text));
   }
 
   /**
-   * 从当前偏移读取全部剩余字节并解码为 UTF-8 string。
-   * @return 文件剩余内容的 UTF-8 字符串
+   * Read all remaining bytes from the current offset and decode as a UTF-8 string.
+   * @return UTF-8 string of the remaining file contents
    */
   open func readText(): string {
     let bytes = self.readAllBytes();
@@ -108,9 +109,9 @@ open type File {
   }
 
   /**
-   * 从当前偏移读取全部剩余内容并按行分割。
-   * 行尾分隔符不属于返回内容，兼容 CRLF。
-   * @return 按行分割的字符串数组
+   * Read all remaining content from the current offset and split by line.
+   * Line terminators are not included in the returned content; CRLF is supported.
+   * @return Array of lines as strings
    */
   open func readLines(): string[] {
     let text = self.readText();
@@ -149,7 +150,7 @@ open type File {
   }
 
   /**
-   * 关闭文件并释放底层文件描述符，行为幂等。
+   * Close the file and release the underlying file descriptor. Idempotent.
    */
   open func close(): void {
     if self.closed {
@@ -162,15 +163,15 @@ open type File {
   }
 
   /**
-   * 返回文件是否已关闭。
+   * Return whether the file is closed.
    */
   open func isClosed(): bool {
     return self.closed;
   }
 
   /**
-   * 获取当前文件的元信息。
-   * @return 文件的 StatInfo
+   * Get the metadata of the current file.
+   * @return StatInfo of the file
    */
   open func stat(): StatInfo {
     self.ensureOpen();
@@ -183,7 +184,7 @@ open type File {
   }
 
   /**
-   * 内部：从文件读取全部剩余字节。
+   * Internal: read all remaining bytes from the file.
    */
   seal func readAllBytes(): byte[] {
     let allBytes = List<byte>();
@@ -201,7 +202,7 @@ open type File {
   }
 
   /**
-   * 内部：将全部字节写入文件。
+   * Internal: write all bytes to the file.
    */
   seal func writeAllBytes(bytes: byte[]) {
     let written = self.write(bytes);
@@ -211,7 +212,7 @@ open type File {
   }
 
   /**
-   * 内部：检查文件是否已打开，已关闭时抛出异常。
+   * Internal: check whether the file is open; throws if already closed.
    */
   seal func ensureOpen() {
     if self.closed {
@@ -223,10 +224,10 @@ open type File {
 // ---- 顶层便捷函数 ----
 
 /**
- * 读取文件全部内容作为 UTF-8 字符串返回。
- * 自动管理文件的打开与关闭，即使中途抛出异常也必须关闭已打开的文件。
- * @param path - 文件路径
- * @return 文件全部内容
+ * Read the entire file as a UTF-8 string.
+ * Manages file open/close automatically; the file is always closed even if an exception is thrown.
+ * @param path - File path
+ * @return Full file contents
  */
 open func readText(path: string): string {
   let file = File.create(path, FileMode.Read);
@@ -239,10 +240,10 @@ open func readText(path: string): string {
 }
 
 /**
- * 将文本以 UTF-8 编码写入文件，不存在则创建，存在则清空。
- * 自动管理文件的打开与关闭。
- * @param path - 文件路径
- * @param text - 要写入的文本
+ * Write text to a file as UTF-8; creates the file if it doesn't exist, truncates if it does.
+ * Manages file open/close automatically.
+ * @param path - File path
+ * @param text - Text to write
  */
 open func writeText(path: string, text: string): void {
   let file = File.create(path, FileMode.WriteTrunc);
@@ -254,10 +255,10 @@ open func writeText(path: string, text: string): void {
 }
 
 /**
- * 读取文件全部内容作为字节数组返回。
- * 自动管理文件的打开与关闭。
- * @param path - 文件路径
- * @return 文件全部字节
+ * Read the entire file as a byte array.
+ * Manages file open/close automatically.
+ * @param path - File path
+ * @return Full file bytes
  */
 open func readBytes(path: string): byte[] {
   let file = File.create(path, FileMode.Read);
@@ -270,10 +271,10 @@ open func readBytes(path: string): byte[] {
 }
 
 /**
- * 将字节数组写入文件，不存在则创建，存在则清空。
- * 自动管理文件的打开与关闭。
- * @param path - 文件路径
- * @param bytes - 要写入的字节数组
+ * Write a byte array to a file; creates the file if it doesn't exist, truncates if it does.
+ * Manages file open/close automatically.
+ * @param path - File path
+ * @param bytes - Bytes to write
  */
 open func writeBytes(path: string, bytes: byte[]): void {
   let file = File.create(path, FileMode.WriteTrunc);
@@ -285,10 +286,10 @@ open func writeBytes(path: string, bytes: byte[]): void {
 }
 
 /**
- * 判断路径是否存在（文件或目录），跟踪符号链接。
- * 不得抛出异常。
- * @param path - 路径
- * @return 是否存在
+ * Check whether the path exists (file or directory), following symlinks.
+ * Never throws.
+ * @param path - Path
+ * @return Whether the path exists
  */
 open func exists(path: string): bool {
   let pathBytes = makeNullTerminatedPath(path);
@@ -297,10 +298,10 @@ open func exists(path: string): bool {
 }
 
 /**
- * 判断路径是否为普通文件，跟踪符号链接。
- * 不得抛出异常。
- * @param path - 路径
- * @return 是否为普通文件
+ * Check whether the path is a regular file, following symlinks.
+ * Never throws.
+ * @param path - Path
+ * @return Whether the path is a regular file
  */
 open func isFile(path: string): bool {
   let pathBytes = makeNullTerminatedPath(path);
@@ -314,10 +315,10 @@ open func isFile(path: string): bool {
 }
 
 /**
- * 判断路径是否为目录，跟踪符号链接。
- * 不得抛出异常。
- * @param path - 路径
- * @return 是否为目录
+ * Check whether the path is a directory, following symlinks.
+ * Never throws.
+ * @param path - Path
+ * @return Whether the path is a directory
  */
 open func isDir(path: string): bool {
   let pathBytes = makeNullTerminatedPath(path);
@@ -331,8 +332,8 @@ open func isDir(path: string): bool {
 }
 
 /**
- * 获取路径的完整元信息（跟踪符号链接），路径无效或不可访问时抛出异常。
- * @param path - 路径
+ * Get the full metadata of the path (following symlinks); throws if the path is invalid or inaccessible.
+ * @param path - Path
  * @return StatInfo
  */
 open func stat(path: string): StatInfo {
@@ -346,8 +347,8 @@ open func stat(path: string): StatInfo {
 }
 
 /**
- * 删除文件或符号链接，不得删除目录。路径无效时抛出异常。
- * @param path - 文件或符号链接路径
+ * Remove a file or symlink; directories must not be removed via this function. Throws if the path is invalid.
+ * @param path - File or symlink path
  */
 open func remove(path: string): void {
   let pathBytes = makeNullTerminatedPath(path);
@@ -358,9 +359,9 @@ open func remove(path: string): void {
 }
 
 /**
- * 重命名或移动文件/目录。源路径无效时抛出异常。
- * @param from - 源路径
- * @param to - 目标路径
+ * Rename or move a file/directory. Throws if the source path is invalid.
+ * @param from - Source path
+ * @param to - Destination path
  */
 open func rename(from: string, to: string): void {
   let fromBytes = makeNullTerminatedPath(from);

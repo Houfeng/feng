@@ -35,7 +35,7 @@ seal let S_IFLNK: long = (long)40960;
 seal let S_IFSOCK: long = (long)49152;
 
 /**
- * 文件系统中的实体类型，替代 isFile/isDir/isSymlink 等布尔标志，杜绝不自治状态。
+ * Filesystem entry kind, replacing boolean isFile/isDir/isSymlink flags to prevent inconsistent state.
  */
 open enum EntryKind {
   Other = 0,
@@ -49,9 +49,9 @@ open enum EntryKind {
 }
 
 /**
- * 文件打开模式，覆盖 POSIX open() 全部有意义的标志组合。
+ * File open mode, covering all meaningful POSIX open() flag combinations.
  *
- * 值对应 macOS POSIX open flags 组合:
+ * Values correspond to macOS POSIX open flag combinations:
  *   O_RDONLY=0, O_WRONLY=1, O_RDWR=2,
  *   O_CREAT=512, O_TRUNC=1024, O_EXCL=2048, O_APPEND=8
  */
@@ -70,8 +70,8 @@ open enum FileMode {
 }
 
 /**
- * 文件/目录的完整元信息，由 stat 系列操作返回。
- * 所有字段均为只读。
+ * Full metadata for a file/directory, returned by stat-family operations.
+ * All fields are read-only.
  */
 open type StatInfo {
   let kind: EntryKind;
@@ -83,7 +83,7 @@ open type StatInfo {
 }
 
 /**
- * 目录遍历的轻量条目信息，由 Dir.read 或 Dir 迭代返回。
+ * Lightweight directory entry info, returned by Dir.read or the Dir iterator.
  */
 open type EntryInfo {
   let name: string;
@@ -92,8 +92,8 @@ open type EntryInfo {
   seal var dirPath: byte[];
 
   /**
-   * 获取该条目的完整元信息，内部调用 POSIX stat（跟踪符号链接）。
-   * @return 条目的 StatInfo
+   * Get the full metadata of this entry, calling POSIX stat internally (following symlinks).
+   * @return StatInfo of the entry
    */
   open func stat(): StatInfo {
     let pathBytes = makeNullTerminatedPath(self.path);
@@ -107,7 +107,7 @@ open type EntryInfo {
 }
 
 /**
- * 从 st_mode 提取 EntryKind（按 S_IF* 位域匹配）。
+ * Extract EntryKind from st_mode (by S_IF* bit mask).
  */
 seal func entryKindFromMode(mode: long): EntryKind {
   let fileType = mode & S_IFMT;
@@ -122,8 +122,8 @@ seal func entryKindFromMode(mode: long): EntryKind {
 }
 
 /**
- * 从 dirent d_type 映射到 EntryKind。
- * d_type 值直接对应 DT_* 常量，与 EntryKind 枚举值一致。
+ * Map a dirent d_type value to EntryKind.
+ * d_type values directly correspond to DT_* constants, matching EntryKind enum values.
  */
 seal func entryKindFromDType(dtype: long): EntryKind {
   if dtype == (long)8 { return EntryKind.File; }
@@ -137,7 +137,7 @@ seal func entryKindFromDType(dtype: long): EntryKind {
 }
 
 /**
- * 将 Feng string 路径转换为 NUL 终止的 UTF-8 字节数组，用于传递给 POSIX C 函数。
+ * Convert a Feng string path to a NUL-terminated UTF-8 byte array for passing to POSIX C functions.
  */
 seal func makeNullTerminatedPath(path: string): byte[!] {
   let pathBytes = feng_string_to_utf8_bytes(path);
@@ -151,8 +151,8 @@ seal func makeNullTerminatedPath(path: string): byte[!] {
 }
 
 /**
- * 从 POSIX stat buffer 中提取 StatInfo。
- * 使用 macOS aarch64 struct stat 的已知字段偏移。
+ * Extract StatInfo from a POSIX stat buffer.
+ * Uses known field offsets for macOS aarch64 struct stat.
  */
 seal func readStatInfo(statBuf: long[!]): StatInfo {
   let modeRaw: long = feng_pointer_get_scalar<long>(feng_pointer_move(&statBuf, STAT_MODE_OFFSET));

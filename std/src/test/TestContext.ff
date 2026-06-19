@@ -7,22 +7,22 @@ import std.text;
 import std.numeric;
 
 /**
- * 测试类型
+ * Test kind
  */
 enum TestKind {
   /**
-   * Describe 块用于描述一个测试套件，通常包含多个 Test 块
+   * A Describe block groups related test cases, typically containing multiple Test blocks
    */
   Describe = 0,
 
   /**
-   * Test 块用于描述一个测试用例
+   * A Test block represents a single test case
    */
   Test = 1
 }
 
 /**
- * 测试状态
+ * Test state
  */
 type TestState {
   let name: string;
@@ -32,7 +32,7 @@ type TestState {
 }
 
 /**
- * 测试上下文
+ * Test context
  */
 type TestContext {
 
@@ -44,8 +44,8 @@ type TestContext {
   seal let errors: List<string>;
 
   /**
-   * 测试执行栈
-   * 栈尾为当前正在测试的的测试用例
+   * Test execution stack
+   * The last element is the currently executing test case
    */
   seal let stack: List<TestState>;
 
@@ -83,7 +83,7 @@ type TestContext {
   }
 
   /**
-   * 重置测试上下文
+   * Reset the test context
    */
   func reset() {
     self.total = 0;
@@ -94,7 +94,7 @@ type TestContext {
   }
 
   /**
-   * 获取缩进
+   * Get the current indentation string
    */
   func indent(): string {
     // 根节点不缩进

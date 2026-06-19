@@ -47,9 +47,9 @@ seal var DIRENT_DNAME_OFFSET: long = (long)0;
 seal var direntOffsetsInited: bool = false;
 
 /**
- * 根据当前 OS 和架构初始化 dirent 结构体偏移量。
- * macOS (arm64/aarch64/x86_64): d_type=20, d_namlen=18, d_name=21。
- * Linux (arm64/aarch64/x86_64): d_type=18, d_namlen=-1（不存在）, d_name=19。
+ * Initialize the dirent struct offsets based on the current OS and architecture.
+ * macOS (arm64/aarch64/x86_64): d_type=20, d_namlen=18, d_name=21.
+ * Linux (arm64/aarch64/x86_64): d_type=18, d_namlen=-1 (not present), d_name=19.
  */
 seal func ensureDirentOffsets(): void {
   if direntOffsetsInited {
@@ -83,7 +83,7 @@ seal func ensureDirentOffsets(): void {
 seal let DEFAULT_DIR_MODE: int = 493;
 
 /**
- * 目录遍历对象，封装目录句柄与读取操作。
+ * Directory traversal object, wrapping a directory handle with read operations.
  */
 open type Dir {
   seal var dir: long;
@@ -91,8 +91,8 @@ open type Dir {
   seal var closed: bool;
 
   /**
-   * 打开目录，返回 Dir 实例。
-   * @param path - 目录路径
+   * Open a directory and return a Dir instance.
+   * @param path - Directory path
    */
   open static func create(path: string): Dir {
     let pathBytes = makeNullTerminatedPath(path);
@@ -104,9 +104,9 @@ open type Dir {
   }
 
   /**
-   * 读取下一批至多 batchSize 个目录条目，遍历结束后返回空数组。
-   * @param batchSize - 批次大小，必须大于 0
-   * @return 目录条目数组
+   * Read up to batchSize directory entries; returns an empty array when traversal is complete.
+   * @param batchSize - Batch size, must be greater than 0
+   * @return Array of directory entries
    */
   open func read(batchSize: long): EntryInfo[] {
     self.ensureOpen();
@@ -127,8 +127,8 @@ open type Dir {
   }
 
   /**
-   * @iterator 方法，逐条返回目录条目，支持 for/in 迭代。
-   * @return IteratorResult<EntryInfo>，true 表示产出有效条目，false 表示遍历结束
+   * @iterator method, yields directory entries one by one, supporting for/in iteration.
+   * @return IteratorResult<EntryInfo>; true yields a valid entry, false signals end of traversal
    */
   @iterator
   open func next(): IteratorResult<EntryInfo> {
@@ -146,7 +146,7 @@ open type Dir {
   }
 
   /**
-   * 关闭目录并释放底层目录句柄，行为幂等。
+   * Close the directory and release the underlying directory handle. Idempotent.
    */
   open func close(): void {
     if self.closed {
@@ -159,15 +159,15 @@ open type Dir {
   }
 
   /**
-   * 返回目录是否已关闭。
+   * Return whether the directory is closed.
    */
   open func isClosed(): bool {
     return self.closed;
   }
 
   /**
-   * 内部：读取单条目录条目。
-   * 返回 name 为空字符串的 EntryInfo 表示遍历结束。
+   * Internal: read a single directory entry.
+   * Returns an EntryInfo with an empty name to signal end of traversal.
    */
   seal func readEntry(): EntryInfo {
     ensureDirentOffsets();
@@ -233,7 +233,7 @@ open type Dir {
   }
 
   /**
-   * 内部：检查目录是否已打开，已关闭时抛出异常。
+   * Internal: check whether the directory is open; throws if already closed.
    */
   seal func ensureOpen() {
     if self.closed {
@@ -245,8 +245,8 @@ open type Dir {
 // ---- 顶层便捷函数 ----
 
 /**
- * 创建单个目录，父目录必须存在。
- * @param path - 目录路径
+ * Create a single directory; the parent directory must already exist.
+ * @param path - Directory path
  */
 open func mkdir(path: string): void {
   let pathBytes = makeNullTerminatedPath(path);
@@ -257,8 +257,8 @@ open func mkdir(path: string): void {
 }
 
 /**
- * 删除空目录，目录不存在或非空时抛出异常。
- * @param path - 目录路径
+ * Remove an empty directory; throws if the directory does not exist or is non-empty.
+ * @param path - Directory path
  */
 open func rmdir(path: string): void {
   let pathBytes = makeNullTerminatedPath(path);
@@ -269,9 +269,9 @@ open func rmdir(path: string): void {
 }
 
 /**
- * 一次性读取目录全部条目。
- * @param path - 目录路径
- * @return 目录条目数组
+ * Read all directory entries at once.
+ * @param path - Directory path
+ * @return Array of directory entries
  */
 open func readDir(path: string): EntryInfo[] {
   let dir = Dir.create(path);

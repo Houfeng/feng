@@ -11,21 +11,21 @@ import std.process;
 extern func feng_expression_equal<T>(left: T, right: T): bool;
 
 /**
- * 全局测试上下文
+ * Global test context
  */
 let context = TestContext();
 
 /**
- * 测试函数
+ * Test function signature
  */
 open spec TestFunction(): void;
 
 /**
- * 测试执行
- * @param name 测试名称
- * @param kind 测试类型
- * @param skip 跳过测试
- * @param fn 测试函数
+ * Execute a test
+ * @param name Test name
+ * @param kind Test kind
+ * @param skip Whether to skip the test
+ * @param fn Test function
  */
 func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
   let isTopLevel = context.stack.size() == 0;
@@ -82,48 +82,48 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
 }
 
 /**
- * 测试描述
- * @param name 测试名称
- * @param fn 测试函数
+ * Describe a test suite
+ * @param name Test name
+ * @param fn Test function
  */
 open func describe(name: string, fn: TestFunction): void {
   execute(name, TestKind.Describe, false, fn);
 }
 
 /**
- * 测试描述（可跳过）
- * @param name 测试名称
- * @param skip 是否跳过测试
- * @param fn 测试函数
+ * Describe a test suite (skippable)
+ * @param name Test name
+ * @param skip Whether to skip the test
+ * @param fn Test function
  */
 open func describe(name: string, skip: bool, fn: TestFunction): void {
   execute(name, TestKind.Describe, skip, fn);
 }
 
 /**
- * 测试用例
- * @param name 测试名称
- * @param fn 测试函数
+ * Define a test case
+ * @param name Test name
+ * @param fn Test function
  */
 open func test(name: string, fn: TestFunction): void {
   execute(name, TestKind.Test, false, fn);
 }
 
 /**
- * 测试用例（可跳过）
- * @param name 测试名称
- * @param skip 是否跳过测试
- * @param fn 测试函数
+ * Define a test case (skippable)
+ * @param name Test name
+ * @param skip Whether to skip the test
+ * @param fn Test function
  */
 open func test(name: string, skip: bool, fn: TestFunction): void {
   execute(name, TestKind.Test, skip, fn);
 }
 
 /**
- * 断言辅助函数
- * @param ok 断言结果
- * @param message 错误信息，支持参数占位符
- * @param args 错误信息参数
+ * Assertion helper
+ * @param ok Assertion result
+ * @param message Error message with placeholder support
+ * @param args Error message arguments
  */
 open func assert(ok: bool, message: string, args: string[]): void {
   if ok { return; }
@@ -132,21 +132,21 @@ open func assert(ok: bool, message: string, args: string[]): void {
 }
 
 /**
- * 断言辅助函数
- * @param ok 断言结果
- * @param message 错误信息，支持参数占位符
- * @param args 错误信息参数
+ * Assertion helper (variadic)
+ * @param ok Assertion result
+ * @param message Error message with placeholder support
+ * @param args Error message arguments
  */
 open func assert(ok: bool, message: string, args: string...): void {
   assert(ok, message, args);
 }
 
 /**
- * 断言相等
- * @param actual 实际值
- * @param expected 期望值
- * @param message 错误信息，支持参数占位符
- * @param args 错误信息参数
+ * Assert equality
+ * @param actual Actual value
+ * @param expected Expected value
+ * @param message Error message with placeholder support
+ * @param args Error message arguments
  */
 open func assertEquals<T: Display>(actual: T, expected: T, message: string, args: string[]): void {
   let result = feng_expression_equal(actual, expected);
@@ -158,11 +158,11 @@ open func assertEquals<T: Display>(actual: T, expected: T, message: string, args
 }
 
 /**
- * 断言相等
- * @param actual 实际值
- * @param expected 期望值
- * @param message 错误信息，支持参数占位符
- * @param args 错误信息参数
+ * Assert equality (variadic)
+ * @param actual Actual value
+ * @param expected Expected value
+ * @param message Error message with placeholder support
+ * @param args Error message arguments
  */
 open func assertEquals<T: Display>(actual: T, expected: T, message: string, args: string...): void {
   assertEquals(actual, expected, message, args);
