@@ -5,6 +5,7 @@ import std.io;
 import std.text;
 import std.numeric;
 import std.collections;
+import std.process;
 
 @runtime
 extern func feng_expression_equal<T>(left: T, right: T): bool;
@@ -71,6 +72,12 @@ func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
       context.skipped.toString()
     );
     println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    // 退出时如果有测试失败则返回非零状态码
+    if (context.failed > 0) {
+      Process.exit(1);
+    } else {
+      Process.exit(0);
+    }
   }
 }
 
