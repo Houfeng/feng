@@ -49,6 +49,7 @@ static void free_stmt(FengStmt *stmt);
 static void free_block(FengBlock *block);
 static void free_decl(FengDecl *decl);
 static void free_annotations(FengAnnotation *annotations, size_t count);
+static void convert_trailing_yield_stmt_to_expr(Parser *parser, FengBlock *block);
 static void free_parameters(FengParameter *params, size_t count);
 static void free_type_member(FengTypeMember *member);
 static void free_enum_items(FengEnumItem *items, size_t count);
@@ -2969,6 +2970,7 @@ static bool parse_match_branch(Parser *parser, FengMatchBranch *out_branch) {
         free_match_branch_contents(out_branch);
         return false;
     }
+    convert_trailing_yield_stmt_to_expr(parser, out_branch->body);
     return true;
 }
 
@@ -3015,6 +3017,140 @@ static bool parse_match_body(Parser *parser,
         return false;
     }
     return true;
+}
+
+/* Convert a trailing FENG_STMT_IF in a yield-required block into
+ * FENG_STMT_EXPR(FENG_EXPR_IF).  Multi-clause (else-if chain) forms are
+ * nested from back to front.  Ownership of conditions and blocks is
+ * transferred from the clause array to newly created if-expressions;
+ * only the clause array and old statement shell are freed. */
+static void convert_if_stmt_to_if_expr(Parser *parser, FengBlock *block) {
+    FengStmt *old = block->statements[block->statement_count - 1U];
+    FengExpr *inner_else_block_expr = NULL;
+    FengStmt *expr_stmt;
+
+    /* Build from the innermost clause outward. */
+    for (size_t i = old->as.if_stmt.clause_count; i-- > 0U; ) {
+        FengExpr *if_e = new_expr(parser, FENG_EXPR_IF, old->as.if_stmt.clauses[i].token);
+        if (if_e == NULL) {
+            /* Conversion failed (OOM).  Leave the original statement in
+             * place; the semantic analyser will report AE1101. */
+            return;
+        }
+        if_e->as.if_expr.condition = old->as.if_stmt.clauses[i].condition;
+        if_e->as.if_expr.then_block = old->as.if_stmt.clauses[i].block;
+        if_e->as.if_expr.else_block = (i == old->as.if_stmt.clause_count - 1U)
+                                          ? old->as.if_stmt.else_block
+                                          : NULL;
+        if (inner_else_block_expr != NULL) {
+            FengStmt *wrapper = new_stmt(parser, FENG_STMT_EXPR, inner_else_block_expr->token);
+            if (wrapper == NULL) {
+                /* OOM: free the partial expression and abort conversion. */
+                free_expr(if_e);
+                return;
+            }
+            wrapper->as.expr = inner_else_block_expr;
+            if_e->as.if_expr.else_block = new_block(parser, inner_else_block_expr->token);
+            if (if_e->as.if_expr.else_block == NULL) {
+                free_stmt(wrapper);
+                free_expr(if_e);
+                return;
+            }
+            if_e->as.if_expr.else_block->statements = (FengStmt **)malloc(sizeof(FengStmt *));
+            if (if_e->as.if_expr.else_block->statements == NULL) {
+                free_stmt(wrapper);
+                free_expr(if_e);
+                return;
+            }
+            if_e->as.if_expr.else_block->statements[0] = wrapper;
+            if_e->as.if_expr.else_block->statement_count = 1U;
+        }
+        inner_else_block_expr = if_e;
+    }
+
+    expr_stmt = new_stmt(parser, FENG_STMT_EXPR, old->token);
+    if (expr_stmt == NULL) {
+        return;
+    }
+    expr_stmt->as.expr = inner_else_block_expr;
+
+    /* Replace the old statement.  Free only the clause array and the
+     * statement shell; conditions and blocks have been transferred. */
+    block->statements[block->statement_count - 1U] = expr_stmt;
+    free(old->as.if_stmt.clauses);
+    free(old);
+}
+
+/* Convert a trailing FENG_STMT_MATCH in a yield-required block into
+ * FENG_STMT_EXPR(FENG_EXPR_MATCH).  Target, branches, and else_block
+ * are transferred; only the branches array pointer and old statement
+ * shell are freed. */
+static void convert_match_stmt_to_match_expr(Parser *parser, FengBlock *block) {
+    FengStmt *old = block->statements[block->statement_count - 1U];
+    FengExpr *match_e = new_expr(parser, FENG_EXPR_MATCH, old->token);
+    FengStmt *expr_stmt;
+
+    if (match_e == NULL) {
+        return;
+    }
+    match_e->as.match_expr.target = old->as.match_stmt.target;
+    match_e->as.match_expr.branches = old->as.match_stmt.branches;
+    match_e->as.match_expr.branch_count = old->as.match_stmt.branch_count;
+    match_e->as.match_expr.else_block = old->as.match_stmt.else_block;
+
+    expr_stmt = new_stmt(parser, FENG_STMT_EXPR, old->token);
+    if (expr_stmt == NULL) {
+        /* OOM: free the expression shell but not transferred contents. */
+        free(match_e);
+        return;
+    }
+    expr_stmt->as.expr = match_e;
+
+    block->statements[block->statement_count - 1U] = expr_stmt;
+    /* Branches array and contents are now owned by match_expr; free only
+     * the statement shell (no match_stmt contents to free here). */
+    free(old);
+}
+
+/* Convert a trailing FENG_STMT_TRY into FENG_STMT_EXPR(FENG_EXPR_TRY).
+ * The inner try expression is already built by parse_try_expression and
+ * stored in stmt->as.expr; we just unwrap it. */
+static void convert_try_stmt_to_try_expr(FengBlock *block) {
+    FengStmt *old = block->statements[block->statement_count - 1U];
+    FengExpr *try_e = old->as.expr;
+
+    old->as.expr = NULL;
+    old->kind = FENG_STMT_EXPR;
+    old->as.expr = try_e;
+}
+
+/* Post-process a block whose last statement must yield a value (e.g.
+ * if-expression branches, match branches, catch clauses).  If the
+ * trailing statement is an if-stmt, match-stmt, or try-stmt, convert
+ * it to the expression form so block_yield_expression can extract it. */
+static void convert_trailing_yield_stmt_to_expr(Parser *parser, FengBlock *block) {
+    FengStmt *last;
+
+    if (block == NULL || block->statement_count == 0U) {
+        return;
+    }
+    last = block->statements[block->statement_count - 1U];
+    if (last == NULL) {
+        return;
+    }
+    switch (last->kind) {
+        case FENG_STMT_IF:
+            convert_if_stmt_to_if_expr(parser, block);
+            break;
+        case FENG_STMT_MATCH:
+            convert_match_stmt_to_match_expr(parser, block);
+            break;
+        case FENG_STMT_TRY:
+            convert_try_stmt_to_try_expr(block);
+            break;
+        default:
+            break;
+    }
 }
 
 static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
@@ -3085,6 +3221,7 @@ static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
             }
         }
     }
+    convert_trailing_yield_stmt_to_expr(parser, expr->as.if_expr.then_block);
     if (!parser_expect(parser,
                        FENG_TOKEN_RBRACE,
                        "SE1106", "expected '}' to close the true branch of if expression")) {
@@ -3100,6 +3237,7 @@ static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
         free_expr(expr);
         return NULL;
     }
+    convert_trailing_yield_stmt_to_expr(parser, expr->as.if_expr.else_block);
     return expr;
 }
 
@@ -3149,6 +3287,7 @@ static FengExpr *parse_try_expression(Parser *parser, FengToken try_token) {
             free_expr(expr);
             return NULL;
         }
+        convert_trailing_yield_stmt_to_expr(parser, clause.body);
         if (!APPEND_VALUE(parser,
                           expr->as.try_expr.clauses,
                           expr->as.try_expr.clause_count,
