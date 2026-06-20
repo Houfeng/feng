@@ -2311,12 +2311,24 @@ static bool cg_encode_type_short(const CGType *t, Buf *out) {
  * sufficient (return type is not part of the overload key). The suffix is
  * applied unconditionally — even single, unambiguous declarations gain it —
  * so symbol shape stays predictable and deterministic for every callable.
- * No-arg functions encode as `__from__void`. Returns a malloc'd string;
- * caller frees. */
+ * No-arg functions encode as `__from__void`.
+ *
+ * When is_generic is true, the suffix is prefixed with "_G" (yielding
+ * "_G__from__...") to distinguish a generic callable's shared-body symbol
+ * from a non-generic overload that happens to share the same parameter
+ * types (e.g. parse(json: string) vs parse<T>(json: string)).  In Feng,
+ * generic arity participates in overload resolution, so these are distinct
+ * callables; C however cannot distinguish them without an extra marker.
+ *
+ * Returns a malloc'd string; caller frees. */
 static char *cg_build_param_suffix(CGType *const *param_types, size_t count,
-                                   bool is_variadic) {
+                                   bool is_variadic, bool is_generic) {
     Buf b; buf_init(&b);
-    buf_append_cstr(&b, "__from__");
+    if (is_generic) {
+        buf_append_cstr(&b, "_G__from__");
+    } else {
+        buf_append_cstr(&b, "__from__");
+    }
     if (count == 0) {
         buf_append_cstr(&b, "void");
     } else {
@@ -2333,14 +2345,15 @@ static char *cg_build_param_suffix(CGType *const *param_types, size_t count,
             }
         }
     }
-    return b.data ? b.data : strdup("__from__void");
+    return b.data ? b.data : strdup(is_generic ? "_G__from__void" : "__from__void");
 }
 
 /* Append the param-type suffix to an existing c_name buffer. Frees the old
  * c_name and returns the new heap-owned string. */
 static char *cg_append_param_suffix(char *c_name, CGType *const *param_types,
-                                    size_t count, bool is_variadic) {
-    char *suffix = cg_build_param_suffix(param_types, count, is_variadic);
+                                    size_t count, bool is_variadic,
+                                    bool is_generic) {
+    char *suffix = cg_build_param_suffix(param_types, count, is_variadic, is_generic);
     if (!suffix) { free(c_name); return NULL; }
     Buf b; buf_init(&b);
     buf_append_cstr(&b, c_name);
@@ -4778,7 +4791,8 @@ static bool cg_register_generic_fn(CG *cg, const FengDecl *decl) {
         if (resolve_ok) {
             bool is_variadic = sig->params[sig->param_count - 1U].is_variadic;
             gf->c_name = cg_append_param_suffix(gf->c_name, ptypes,
-                                                sig->param_count, is_variadic);
+                                                sig->param_count, is_variadic,
+                                                true);
         }
         if (ptypes) {
             for (size_t i = 0; i < sig->param_count; i++) {
@@ -4796,7 +4810,7 @@ static bool cg_register_generic_fn(CG *cg, const FengDecl *decl) {
         if (!gf->c_name) return false;
     } else {
         /* No params — append __from__void suffix for consistency. */
-        gf->c_name = cg_append_param_suffix(gf->c_name, NULL, 0U, false);
+        gf->c_name = cg_append_param_suffix(gf->c_name, NULL, 0U, false, true);
         if (!gf->c_name) return false;
     }
 
@@ -7773,7 +7787,7 @@ static bool cg_register_free_fn(CG *cg, const FengDecl *decl) {
     /* Append param-type suffix for overload-aware mangling. Applied
      * unconditionally so the symbol shape is the same regardless of whether
      * the function is part of an overload set today. */
-    surface_name = cg_append_param_suffix(surface_name, f->param_types, f->param_count, f->is_variadic);
+    surface_name = cg_append_param_suffix(surface_name, f->param_types, f->param_count, f->is_variadic, false);
     if (!surface_name) return false;
     if (f->is_abi) {
         Buf impl; buf_init(&impl);
@@ -8055,7 +8069,8 @@ static bool cg_register_user_type_members(CG *cg, UserType *t, FengCompileTarget
             }
             um->c_name = cg_append_param_suffix(um->c_name,
                                                 um->param_types, um->param_count,
-                                                um->is_variadic);
+                                                um->is_variadic,
+                                                sig->type_param_count > 0U);
             if (!um->c_name) return false;
         }
     }
@@ -8966,7 +8981,8 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
                                                  &um->return_type)) return false;
         um->c_name = cg_append_param_suffix(um->c_name,
                                             um->param_types, um->param_count,
-                                            um->is_variadic);
+                                            um->is_variadic,
+                                            sig->type_param_count > 0U);
         if (!um->c_name) return false;
     }
     uf->method_count = mi;
@@ -9040,7 +9056,8 @@ static bool cg_register_builtin_fit_members(CG *cg, BuiltinFit *bf) {
         um->c_name = cg_append_param_suffix(um->c_name,
                                             um->param_types,
                                             um->param_count,
-                                            um->is_variadic);
+                                            um->is_variadic,
+                                            false);
         if (um->c_name == NULL) {
             return false;
         }
@@ -15106,19 +15123,38 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         "CE0158", "codegen: missing descriptor for generic spec method return");
                 }
                 if (is_static_dispatch) {
-                    buf_append_fmt(cg->cur_body,
-                        "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
-                        "    void *%s = (void *)%s;\n"
-                        "    ((const struct %s *)%s->witness)->%s(%s%s);\n",
-                        ret_storage,
-                        ret_desc,
-                        ret_slot,
-                        ret_storage,
-                        us->c_witness_struct_name,
-                        desc_name,
-                        sm->c_field_name,
-                        args_buf.data ? args_buf.data : "",
-                        ret_slot);
+                    /* Static spec method: args_buf has no leading ", ";
+                     * insert a ", " between args and the out-param slot.
+                     * If there are no args (args_buf empty / NULL), emit
+                     * only the out-param to avoid a dangling leading comma. */
+                    if (args_buf.data && args_buf.data[0] != '\0') {
+                        buf_append_fmt(cg->cur_body,
+                            "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
+                            "    void *%s = (void *)%s;\n"
+                            "    ((const struct %s *)%s->witness)->%s(%s, %s);\n",
+                            ret_storage,
+                            ret_desc,
+                            ret_slot,
+                            ret_storage,
+                            us->c_witness_struct_name,
+                            desc_name,
+                            sm->c_field_name,
+                            args_buf.data,
+                            ret_slot);
+                    } else {
+                        buf_append_fmt(cg->cur_body,
+                            "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
+                            "    void *%s = (void *)%s;\n"
+                            "    ((const struct %s *)%s->witness)->%s(%s);\n",
+                            ret_storage,
+                            ret_desc,
+                            ret_slot,
+                            ret_storage,
+                            us->c_witness_struct_name,
+                            desc_name,
+                            sm->c_field_name,
+                            ret_slot);
+                    }
                 } else {
                     buf_append_fmt(cg->cur_body,
                         "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"

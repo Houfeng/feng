@@ -1,6 +1,7 @@
 open module std.json;
 
 import std;
+import std.text;
 
 /**
  * JSON processing module
@@ -241,6 +242,20 @@ open type Json {
   static func stringify<T: JsonSerializable<T>>(value: T): string {
     let jsonValue = T.toJson(value);
     return Json.stringify(jsonValue);
+  }
+
+  /**
+   * Deserialize a JSON string to a value of type T
+   * @param json The JSON string to deserialize
+   * @return The value of type T
+   */
+  static func parse<T: JsonDeserializable<T>>(json: string): T {
+    let jsonValue = Json.parse(json);
+    if (Json.isObject(jsonValue)) {
+      return T.fromJson(Json.toObject(jsonValue));
+    } else {
+      throw "Invalid JSON string";
+    }
   }
 
 }
