@@ -9366,6 +9366,172 @@ static void test_instance_access_of_static_member_rejected(void) {
     feng_program_free(program);
 }
 
+/* Step 4 — 泛型约束 T.make() 类型推断. T: Factory<T> 可调用 T.make(). */
+static void test_generic_param_static_method_call_type_inference(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Factory<T> {\n"
+        "    static func make(): T;\n"
+        "}\n"
+        "type Widget: Factory<Widget> {\n"
+        "    let value: int;\n"
+        "    static func make(): Widget {\n"
+        "        return Widget { value: 0 };\n"
+        "    }\n"
+        "}\n"
+        "func create<T: Factory<T>>(): T {\n"
+        "    return T.make();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_param_static_method.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Step 4 — 泛型约束 T.field 类型推断 (读). */
+static void test_generic_param_static_field_read_type_inference(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Tagged {\n"
+        "    static let tag: int;\n"
+        "}\n"
+        "type Widget: Tagged {\n"
+        "    static let tag: int = 42;\n"
+        "}\n"
+        "func get_tag<T: Tagged>(): int {\n"
+        "    return T.tag;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_param_static_field_read.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Step 4 — 泛型约束 T.field 类型推断 (写 var). */
+static void test_generic_param_static_field_write_type_inference(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Configurable {\n"
+        "    static var current: int;\n"
+        "}\n"
+        "type Config: Configurable {\n"
+        "    static var current: int = 0;\n"
+        "}\n"
+        "func reset<T: Configurable>(value: int): void {\n"
+        "    T.current = value;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_param_static_field_write.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Step 4 — spec 父 spec 静态成员约束传递. 子 spec 继承父 spec 静态成员
+ * 并要求 type 同时满足. */
+static void test_spec_inherits_parent_static_member_constraint(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Factory<T> {\n"
+        "    static func make(): T;\n"
+        "}\n"
+        "spec Extended<T>: Factory<T> {\n"
+        "}\n"
+        "type Widget: Extended<Widget> {\n"
+        "    let value: int;\n"
+        "    static func make(): Widget {\n"
+        "        return Widget { value: 0 };\n"
+        "    }\n"
+        "}\n"
+        "func create<T: Extended<T>>(): T {\n"
+        "    return T.make();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_inherits_static.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Step 4 — 泛型约束 T.field 写入 let 应报错 (let 不可写). */
+static void test_generic_param_static_let_field_write_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Tagged {\n"
+        "    static let tag: int;\n"
+        "}\n"
+        "type Widget: Tagged {\n"
+        "    static let tag: int = 42;\n"
+        "}\n"
+        "func reset<T: Tagged>(value: int): void {\n"
+        "    T.tag = value;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_static_let_write.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Step 4 — 泛型约束 T 调用未声明的静态方法应报错. */
+static void test_generic_param_unknown_static_member_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Factory<T> {\n"
+        "    static func make(): T;\n"
+        "}\n"
+        "type Widget: Factory<Widget> {\n"
+        "    static func make(): Widget {\n"
+        "        return Widget { value: 0 };\n"
+        "    }\n"
+        "    let value: int;\n"
+        "}\n"
+        "func create<T: Factory<T>>(): T {\n"
+        "    return T.unknown();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_static_unknown.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_spec_parent_specs_must_be_spec(void) {
     const char *source =
         "module demo.main;\n"
@@ -15922,6 +16088,12 @@ int main(void) {
     test_spec_static_member_signature_mismatch_rejected();
     test_spec_static_field_missing_rejected();
     test_instance_access_of_static_member_rejected();
+    test_generic_param_static_method_call_type_inference();
+    test_generic_param_static_field_read_type_inference();
+    test_generic_param_static_field_write_type_inference();
+    test_spec_inherits_parent_static_member_constraint();
+    test_generic_param_static_let_field_write_rejected();
+    test_generic_param_unknown_static_member_rejected();
     test_union_form_spec_records_normalized_members();
     test_union_form_spec_rejects_type_declared_spec_clause();
     test_union_form_spec_rejects_fit_spec_clause();

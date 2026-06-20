@@ -335,6 +335,13 @@ typedef struct ResolvedTypeTarget {
     const FengTypeRef *type_ref;
     bool is_builtin_type_name;
     FengSlice builtin_name;
+    /* When the identifier resolves to a generic function type parameter
+     * (e.g., `T` in `func f<T: Factory<T>>() { T.make(); }`), the
+     * following fields record which type parameter is being referenced
+     * and the constraint spec used to find its static members. */
+    bool is_generic_type_param;
+    size_t generic_param_index;
+    const FengDecl *constraint_spec_decl;
 } ResolvedTypeTarget;
 
 typedef struct AbiTrace {
@@ -3640,6 +3647,12 @@ static bool resolver_track_synthetic_type_ref(ResolveContext *context, FengTypeR
                       sizeof(type_ref),
                       &type_ref);
 }
+
+/* Build a fresh named FENG_TYPE_REF_NAMED reference for a generic type
+ * parameter.  The synthesized reference is registered with the resolver
+ * so it is released when the ResolveContext is torn down. */
+static FengTypeRef *synthesize_type_ref_for_type_param(const ResolveContext *context,
+                                                       const TypeParamEntry *tp);
 
 /* Transfer a synthetic type_ref to Analysis-level lifetime management.
  * Synthetic type_refs stored in AST nodes for consumption by post-analysis
@@ -11626,6 +11639,48 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                         return return_type;
                     }
                 }
+            } else if (static_target.is_generic_type_param &&
+                       static_target.constraint_spec_decl != NULL) {
+                /* G4: generic type parameter static method dispatch —
+                 * `T.method(args)` where T: S and S declares `static func
+                 * method(...)`. Resolution uses the spec's static method
+                 * member, substituting the type parameter for any
+                 * self-referential use in the return type. */
+                const FengTypeMember *member =
+                    find_spec_object_member(context,
+                                            static_target.constraint_spec_decl,
+                                            callee->as.member.member,
+                                            /*include_static=*/true);
+
+                if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD) {
+                    const FengCallableSignature *spec_sig = &member->as.callable;
+                    InferredExprType return_type = inferred_expr_type_unknown();
+
+                    if (spec_sig->return_type != NULL) {
+                        const TypeParamEntry *tp =
+                            &context->type_params[static_target.generic_param_index];
+                        FengTypeRef *T = synthesize_type_ref_for_type_param(context, tp);
+                        FengTypeRef *substituted = NULL;
+
+                        if (T != NULL) {
+                            const FengTypeParam *owner_param = tp->type_param;
+                            FengTypeRef *type_args[1] = {T};
+                            size_t type_param_count = 1U;
+
+                            substituted = clone_type_ref_substituting_type_params(
+                                spec_sig->return_type,
+                                owner_param,
+                                type_param_count,
+                                type_args);
+                        }
+                        if (substituted != NULL) {
+                            return_type = inferred_expr_type_from_type_ref(substituted);
+                        }
+                    }
+                    if (inferred_expr_type_is_known(return_type)) {
+                        return return_type;
+                    }
+                }
             }
         }
 
@@ -12625,6 +12680,25 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
                 }
             }
 
+            /* G4: T.field assignment through a generic type parameter's
+             * constraint spec — the field's mutability is taken from the
+             * spec's declared `static var` / `static let` qualifier. */
+            if (static_target.is_generic_type_param &&
+                static_target.constraint_spec_decl != NULL) {
+                const FengTypeMember *spec_member =
+                    find_spec_object_member(context,
+                                            static_target.constraint_spec_decl,
+                                            target->as.member.member,
+                                            /*include_static=*/true);
+
+                if (spec_member != NULL && spec_member->kind == FENG_TYPE_MEMBER_FIELD) {
+                    if (spec_member->as.field.mutability == FENG_MUTABILITY_VAR) {
+                        return true;
+                    }
+                    return append_assignment_target_not_writable_error(context, target);
+                }
+            }
+
             if (decl_is_enum_type(static_target.type_decl)) {
                 return append_assignment_target_not_writable_error(context, target);
             }
@@ -12866,6 +12940,38 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
                 if (builtin_name != NULL) {
                     result.is_builtin_type_name = true;
                     result.builtin_name = slice_from_cstr(builtin_name);
+                } else {
+                    /* G4: generic type parameter. The identifier may name a
+                     * type parameter bound by the enclosing generic function
+                     * (or generic type context). When its constraint is a
+                     * spec, static member access (e.g., T.make()) dispatches
+                     * through the constraint's witness table. */
+                    const TypeParamEntry *tp = find_type_param(context, target_expr->as.identifier);
+
+                    if (tp != NULL) {
+                        result.is_generic_type_param = true;
+                        result.generic_param_index = (size_t)(tp - context->type_params);
+                        if (tp->type_param != NULL && tp->type_param->constraint != NULL) {
+                            const FengDecl *constraint_spec = NULL;
+
+                            if (tp->type_param->constraint->kind == FENG_TYPE_REF_NAMED) {
+                                const FengTypeRef *cref = tp->type_param->constraint;
+                                FengSlice name_slice = cref->as.named.segment_count > 0U
+                                    ? cref->as.named.segments[cref->as.named.segment_count - 1U]
+                                    : slice_from_cstr("");
+                                const VisibleTypeEntry *c_entry =
+                                    find_visible_type(context->visible_types,
+                                                      context->visible_type_count,
+                                                      name_slice);
+
+                                if (c_entry != NULL && c_entry->decl != NULL &&
+                                    c_entry->decl->kind == FENG_DECL_SPEC) {
+                                    constraint_spec = c_entry->decl;
+                                }
+                            }
+                            result.constraint_spec_decl = constraint_spec;
+                        }
+                    }
                 }
             }
             return result;
@@ -12950,6 +13056,37 @@ static InferredExprType resolved_type_target_owner_type(const ResolvedTypeTarget
     return inferred_expr_type_from_decl(target->type_decl);
 }
 
+/* Build a synthetic named type reference for a generic type parameter
+ * (e.g., `T` in `func f<T: Factory<T>>() { T.make(); }`). The single
+ * segment matches the type parameter name so downstream substitution
+ * via `clone_type_ref_substituting_type_params` works. */
+static FengTypeRef *synthesize_type_ref_for_type_param(const ResolveContext *context,
+                                                       const TypeParamEntry *tp) {
+    FengTypeRef *ref;
+
+    if (tp == NULL || context == NULL) {
+        return NULL;
+    }
+    ref = (FengTypeRef *)calloc(1U, sizeof(*ref));
+    if (ref == NULL) {
+        return NULL;
+    }
+    ref->token = tp->type_param != NULL ? tp->type_param->token : (FengToken){0};
+    ref->kind = FENG_TYPE_REF_NAMED;
+    ref->as.named.segments = (FengSlice *)malloc(sizeof(FengSlice));
+    if (ref->as.named.segments == NULL) {
+        free(ref);
+        return NULL;
+    }
+    ref->as.named.segments[0] = tp->name;
+    ref->as.named.segment_count = 1U;
+    if (!resolver_track_synthetic_type_ref((ResolveContext *)context, ref)) {
+        free_synthetic_type_ref(ref);
+        return NULL;
+    }
+    return ref;
+}
+
 /* Returns the semantic type of one module-level binding, including inferred
  * initializer facts recorded for bindings without an explicit type. */
 static InferredExprType infer_global_binding_decl_type(ResolveContext *context,
@@ -12990,6 +13127,41 @@ static InferredExprType infer_identifier_expr_type(ResolveContext *context, Feng
 
 static InferredExprType infer_member_expr_type(ResolveContext *context, const FengExpr *expr) {
     ResolvedTypeTarget type_target = resolve_type_target_expr(context, expr->as.member.object, false);
+
+    /* G4: generic type parameter static field access (T.field where T: S
+     * and S declares `static let field`). The type is the field type with
+     * the type parameter substituted for any self-reference. */
+    if (type_target.is_generic_type_param &&
+        type_target.constraint_spec_decl != NULL) {
+        const FengTypeMember *member =
+            find_spec_object_member(context,
+                                    type_target.constraint_spec_decl,
+                                    expr->as.member.member,
+                                    /*include_static=*/true);
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD) {
+            const TypeParamEntry *tp =
+                &context->type_params[type_target.generic_param_index];
+            FengTypeRef *T = synthesize_type_ref_for_type_param(context, tp);
+            FengTypeRef *substituted = NULL;
+
+            if (T != NULL && member->as.field.type != NULL) {
+                const FengTypeParam *owner_param = tp->type_param;
+                FengTypeRef *type_args[1] = {T};
+                size_t type_param_count = 1U;
+
+                substituted = clone_type_ref_substituting_type_params(
+                    member->as.field.type,
+                    owner_param,
+                    type_param_count,
+                    type_args);
+            }
+            if (substituted != NULL) {
+                return inferred_expr_type_from_type_ref(substituted);
+            }
+            return inferred_expr_type_unknown();
+        }
+    }
 
     if (type_target.type_decl != NULL && type_target.type_decl->kind == FENG_DECL_TYPE) {
         const FengTypeMember *static_field =
@@ -17034,7 +17206,6 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                                            NULL,
                                                                                            static_owner_type,
                                                                                            callee->as.member.member) != NULL;
-
                 resolution = resolve_accessible_static_method_overload(context,
                                                                        static_target.type_decl,
                                                                        static_target.provider_module,
@@ -17100,6 +17271,48 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                          callee,
                                                          expr->as.call.args,
                                                          expr->as.call.arg_count);
+            }
+
+            /* G4: T.method() dispatch via the generic type parameter's
+             * constraint spec. Resolution uses the spec's static method
+             * member; argument count is checked, and on success the call
+             * is recorded so codegen can emit a witness-table dispatch. */
+            if (static_target.is_generic_type_param &&
+                static_target.constraint_spec_decl != NULL) {
+                const FengTypeMember *spec_member =
+                    find_spec_object_member(context,
+                                            static_target.constraint_spec_decl,
+                                            callee->as.member.member,
+                                            /*include_static=*/true);
+
+                if (spec_member != NULL && spec_member->kind == FENG_TYPE_MEMBER_METHOD) {
+                    const FengCallableSignature *spec_sig = &spec_member->as.callable;
+
+                    if (expr->as.call.arg_count != spec_sig->param_count) {
+                        return resolver_append_error(
+                            context,
+                            callee->token,
+                            "AE0512", format_message("static method '%.*s.%.*s' has no overload accepting %zu argument(s)",
+                                                       (int)object->as.identifier.length,
+                                                       object->as.identifier.data,
+                                                       (int)callee->as.member.member.length,
+                                                       callee->as.member.member.data,
+                                                       expr->as.call.arg_count));
+                    }
+                    note_callable_exception_escape(context, spec_sig);
+                    materialize_callable_type_param_constraint_witnesses(context,
+                                                                        expr,
+                                                                        spec_sig);
+                    return true;
+                }
+                return resolver_append_error(
+                    context,
+                    callee->token,
+                    "AE0512", format_message("constraint spec has no static method '%.*s' accessible on type parameter '%.*s'",
+                                   (int)callee->as.member.member.length,
+                                   callee->as.member.member.data,
+                                   (int)object->as.identifier.length,
+                                   object->as.identifier.data));
             }
         }
 
@@ -18444,6 +18657,14 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                     find_visible_type(context->visible_types,
                                       context->visible_type_count,
                                       expr->as.identifier) != NULL) {
+                    return true;
+                }
+                /* G4: a generic type parameter name (e.g., `T` in
+                 * `func f<T: Factory<T>>()`) is admissible when used as a
+                 * type-level identifier; member/call expressions on it
+                 * (T.field / T.method()) are resolved via the constraint
+                 * spec's witness table elsewhere. */
+                if (find_type_param(context, expr->as.identifier) != NULL) {
                     return true;
                 }
             }

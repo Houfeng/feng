@@ -846,6 +846,234 @@ static void test_spec_static_var_witness_codegen(void) {
     feng_program_free(program);
 }
 
+/* Step 4 — generic param T.make() dispatch via witness table (aggregate return
+ * path; T returns a managed type so the slot signature includes void *_out). */
+static void test_generic_param_static_method_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.genstatic;\n"
+        "spec Factory<T> {\n"
+        "    static func make(): T;\n"
+        "}\n"
+        "type Widget: Factory<Widget> {\n"
+        "    let value: int;\n"
+        "    static func make(): Widget {\n"
+        "        return Widget { value: 0 };\n"
+        "    }\n"
+        "}\n"
+        "func make_widget<T: Factory<T>>(): T {\n"
+        "    return T.make();\n"
+        "}\n"
+        "func run_case(): int {\n"
+        "    let factory: Factory<Widget> = Widget();\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "genstatic.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    if (error_count != 0U) {
+        fprintf(stderr, "semantic error (genparam static method): %s\n",
+                errors[0].message ? errors[0].message : "(unknown)");
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (genparam static method): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    /* Witness struct slot signature for static method without subject.
+     * Aggregate return: void (*make)(void *_out); — no _subject. */
+    ASSERT(strstr(out.c_source, "void (*make)(void *_out);") != NULL);
+    /* Dispatch call site inside the generic function body. The witness
+     * dispatch is the static-method slot call without a subject cast. */
+    ASSERT(strstr(out.c_source, "->make(_spec_ret") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+/* Step 4 — generic param T.field dispatch via witness table (read). */
+static void test_generic_param_static_field_read_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.genfieldr;\n"
+        "spec Tagged {\n"
+        "    static let tag: int;\n"
+        "}\n"
+        "type Widget: Tagged {\n"
+        "    static let tag: int = 42;\n"
+        "}\n"
+        "func get_tag<T: Tagged>(): int {\n"
+        "    return T.tag;\n"
+        "}\n"
+        "func run_case(): int {\n"
+        "    let tagged: Tagged = Widget();\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "genfieldr.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    if (error_count != 0U) {
+        fprintf(stderr, "semantic error (genparam field read): %s\n",
+                errors[0].message ? errors[0].message : "(unknown)");
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (genparam field read): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    /* Static field getter slot has no _subject parameter. */
+    ASSERT(strstr(out.c_source, "(*get_tag)(void);") != NULL);
+    /* Dispatch call site uses witness->get_tag() with no subject arg. */
+    ASSERT(strstr(out.c_source, "->get_tag()") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+/* Step 4 — generic param T.field dispatch via witness table (write var). */
+static void test_generic_param_static_field_write_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.genfieldw;\n"
+        "spec Configurable {\n"
+        "    static var current: int;\n"
+        "}\n"
+        "type Config: Configurable {\n"
+        "    static var current: int = 0;\n"
+        "}\n"
+        "func set_current<T: Configurable>(value: int): void {\n"
+        "    T.current = value;\n"
+        "}\n"
+        "func run_case(): int {\n"
+        "    let cfg: Configurable = Config();\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "genfieldw.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    if (error_count != 0U) {
+        fprintf(stderr, "semantic error (genparam field write): %s\n",
+                errors[0].message ? errors[0].message : "(unknown)");
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (genparam field write): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    /* Static var setter slot signature: void (*set_X)(int32_t value); — no subject. */
+    ASSERT(strstr(out.c_source, "void (*set_") != NULL);
+    /* Dispatch call site uses witness->set_current(value) with no subject arg. */
+    ASSERT(strstr(out.c_source, "->set_") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+/* Step 4 — spec-to-spec slot witness for inherited static members. Child spec
+ * inherits Factory's static make(), requiring the slot thunk to forward without
+ * a subject. */
+static void test_spec_inherited_static_slot_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.specinh;\n"
+        "spec Base<T> {\n"
+        "    static func make(): T;\n"
+        "}\n"
+        "spec Derived<T>: Base<T> {\n"
+        "}\n"
+        "type Widget: Derived<Widget> {\n"
+        "    let value: int;\n"
+        "    static func make(): Widget {\n"
+        "        return Widget { value: 0 };\n"
+        "    }\n"
+        "}\n"
+        "func run_case(): int {\n"
+        "    let derived: Derived<Widget> = Widget();\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "specinh.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    if (error_count != 0U) {
+        fprintf(stderr, "semantic error (spec inherited static): %s\n",
+                errors[0].message ? errors[0].message : "(unknown)");
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (spec inherited static): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    /* Both spec witness structs (Base and Derived) exist with a make slot. */
+    ASSERT(strstr(out.c_source, "void (*make)(void *_out);") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_module_binding_default_zero_ensure_init_codegen(void) {
     static const char *kSource =
         "module feng.codegen.topbindzero;\n"
@@ -5758,6 +5986,10 @@ int main(void) {
     test_generic_static_methods_codegen();
     test_spec_static_member_witness_codegen();
     test_spec_static_var_witness_codegen();
+    test_generic_param_static_method_codegen();
+    test_generic_param_static_field_read_codegen();
+    test_generic_param_static_field_write_codegen();
+    test_spec_inherited_static_slot_codegen();
     test_module_binding_default_zero_ensure_init_codegen();
     test_extern_calling_convention_codegen();
     test_extern_c_symbol_name_codegen();

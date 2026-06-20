@@ -9209,11 +9209,19 @@ static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
                 }
             }
             for (size_t pi = 0; pi < sm->param_count; pi++) {
-                buf_append_cstr(out, ", ");
+                if (!sm->is_static || pi > 0U) {
+                    buf_append_cstr(out, ", ");
+                }
                 cg_emit_c_type(out, sm->param_types[pi]);
             }
             if (returns_generic) {
-                buf_append_cstr(out, ", void *_out");
+                /* _out follows either the implicit subject (instance), the
+                 * first user param (static with params), or opens the param
+                 * list (static with no user params and aggregate return). */
+                if (!sm->is_static || sm->param_count > 0U) {
+                    buf_append_cstr(out, ", ");
+                }
+                buf_append_cstr(out, "void *_out");
             }
             buf_append_cstr(out, ");\n");
             emitted++;
@@ -12223,6 +12231,41 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_emit_imported_binding_expr(cg, imported_binding_decl, out);
         }
     }
+    /* G4: generic type parameter used as a value-level identifier (e.g.,
+     * `T` in `func f<T: Factory<T>>() { T.make(); T.tag }`). Resolve to
+     * a synthetic CG_TYPE_GENERIC_PARAM ExprResult whose c_expr is the
+     * C descriptor name. Downstream member/call dispatch recognises the
+     * type and routes through the constraint spec's witness table. */
+    if (cg->generic_fn_type_param_names != NULL) {
+        for (size_t i = 0U; i < cg->generic_fn_type_param_count; ++i) {
+            const char *name = cg->generic_fn_type_param_names[i];
+            if (name == NULL ||
+                strncmp(name, e->as.identifier.data,
+                        e->as.identifier.length) != 0 ||
+                strlen(name) != e->as.identifier.length) {
+                continue;
+            }
+            const char *desc_name =
+                (cg->generic_fn_type_param_descs != NULL &&
+                 i < cg->generic_fn_type_param_count)
+                    ? cg->generic_fn_type_param_descs[i]
+                    : NULL;
+            if (desc_name == NULL) {
+                continue;
+            }
+            CGType *t = cgtype_new(CG_TYPE_GENERIC_PARAM);
+            if (t == NULL) {
+                return cg_fail(cg, e->token,
+                               "IE0001", "codegen: out of memory");
+            }
+            t->generic_param_index = i;
+            t->user_spec = cg_generic_param_constraint_spec(cg, i);
+            out->c_expr = strdup(desc_name);
+            out->type = t;
+            out->owns_ref = false;
+            return out->c_expr != NULL;
+        }
+    }
     return cg_fail(cg, e->token,
         "CE0104", "codegen: identifier '%.*s' not found",
         (int)e->as.identifier.length, e->as.identifier.data);
@@ -14941,10 +14984,16 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     "CE0157", "codegen: wrong argument count for spec method '%s' (expected %zu, got %zu)",
                     sm->feng_name, sm->param_count, e->as.call.arg_count);
             }
-            char *subject_expr = cg_generic_witness_subject_expr(desc_name, recv.c_expr);
-            if (!subject_expr) {
-                er_free(&recv);
-                return false;
+            /* G4: static method dispatch has no _subject parameter and the
+             * args buffer starts without a leading ", " separator. */
+            const bool is_static_dispatch = sm->is_static;
+            char *subject_expr = NULL;
+            if (!is_static_dispatch) {
+                subject_expr = cg_generic_witness_subject_expr(desc_name, recv.c_expr);
+                if (!subject_expr) {
+                    er_free(&recv);
+                    return false;
+                }
             }
             Buf args_buf; buf_init(&args_buf);
             bool ok = true;
@@ -14959,7 +15008,9 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 } else if (cgtype_is_aggregate(ar.type)) {
                     cg_materialize_to_local(cg, &ar, "_t");
                 }
-                buf_append_cstr(&args_buf, ", ");
+                if (!is_static_dispatch || i > 0U) {
+                    buf_append_cstr(&args_buf, ", ");
+                }
                 if (i < sm->param_count &&
                     sm->param_types[i] != NULL &&
                     sm->param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
@@ -14988,20 +15039,36 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     return cg_fail(cg, e->token,
                         "CE0158", "codegen: missing descriptor for generic spec method return");
                 }
-                buf_append_fmt(cg->cur_body,
-                    "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
-                    "    void *%s = (void *)%s;\n"
-                    "    ((const struct %s *)%s->witness)->%s(%s%s, %s);\n",
-                    ret_storage,
-                    ret_desc,
-                    ret_slot,
-                    ret_storage,
-                    us->c_witness_struct_name,
-                    desc_name,
-                    sm->c_field_name,
-                    subject_expr,
-                    args_buf.data ? args_buf.data : "",
-                    ret_slot);
+                if (is_static_dispatch) {
+                    buf_append_fmt(cg->cur_body,
+                        "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
+                        "    void *%s = (void *)%s;\n"
+                        "    ((const struct %s *)%s->witness)->%s(%s%s);\n",
+                        ret_storage,
+                        ret_desc,
+                        ret_slot,
+                        ret_storage,
+                        us->c_witness_struct_name,
+                        desc_name,
+                        sm->c_field_name,
+                        args_buf.data ? args_buf.data : "",
+                        ret_slot);
+                } else {
+                    buf_append_fmt(cg->cur_body,
+                        "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
+                        "    void *%s = (void *)%s;\n"
+                        "    ((const struct %s *)%s->witness)->%s(%s%s, %s);\n",
+                        ret_storage,
+                        ret_desc,
+                        ret_slot,
+                        ret_storage,
+                        us->c_witness_struct_name,
+                        desc_name,
+                        sm->c_field_name,
+                        subject_expr,
+                        args_buf.data ? args_buf.data : "",
+                        ret_slot);
+                }
                 out->c_expr = strdup(ret_slot);
                 out->type = cgtype_clone(sm->type);
                 out->owns_ref = true;
@@ -15013,10 +15080,17 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 return out->c_expr != NULL && out->type != NULL;
             }
             Buf b; buf_init(&b);
-            buf_append_fmt(&b, "((const struct %s *)%s->witness)->%s(%s%s)",
-                           us->c_witness_struct_name, desc_name,
-                           sm->c_field_name, subject_expr,
-                           args_buf.data ? args_buf.data : "");
+            if (is_static_dispatch) {
+                buf_append_fmt(&b, "((const struct %s *)%s->witness)->%s(%s)",
+                               us->c_witness_struct_name, desc_name,
+                               sm->c_field_name,
+                               args_buf.data ? args_buf.data : "");
+            } else {
+                buf_append_fmt(&b, "((const struct %s *)%s->witness)->%s(%s%s)",
+                               us->c_witness_struct_name, desc_name,
+                               sm->c_field_name, subject_expr,
+                               args_buf.data ? args_buf.data : "");
+            }
             free(subject_expr);
             buf_free(&args_buf);
             out->c_expr = b.data;
@@ -15786,15 +15860,24 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
                 us->feng_name,
                 (int)e->as.member.member.length, e->as.member.member.data);
         }
-        char *subject_expr = cg_generic_witness_subject_expr(desc_name, recv.c_expr);
-        if (!subject_expr) {
-            er_free(&recv);
-            return false;
+        char *subject_expr = NULL;
+        if (!sm->is_static) {
+            subject_expr = cg_generic_witness_subject_expr(desc_name, recv.c_expr);
+            if (!subject_expr) {
+                er_free(&recv);
+                return false;
+            }
         }
         Buf b; buf_init(&b);
-        buf_append_fmt(&b, "((const struct %s *)%s->witness)->get_%s(%s)",
-                       us->c_witness_struct_name, desc_name,
-                       sm->c_field_name, subject_expr);
+        if (sm->is_static) {
+            buf_append_fmt(&b, "((const struct %s *)%s->witness)->get_%s()",
+                           us->c_witness_struct_name, desc_name,
+                           sm->c_field_name);
+        } else {
+            buf_append_fmt(&b, "((const struct %s *)%s->witness)->get_%s(%s)",
+                           us->c_witness_struct_name, desc_name,
+                           sm->c_field_name, subject_expr);
+        }
         free(subject_expr);
         out->c_expr = b.data;
         out->type = cgtype_clone(sm->type);
@@ -20051,10 +20134,13 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     "CE0253", "codegen: spec field '%s' is not declared `var`",
                     sm->feng_name);
             }
-            char *subject_expr = cg_generic_witness_subject_expr(desc_name, recv.c_expr);
-            if (!subject_expr) {
-                er_free(&recv);
-                return false;
+            char *subject_expr = NULL;
+            if (!sm->is_static) {
+                subject_expr = cg_generic_witness_subject_expr(desc_name, recv.c_expr);
+                if (!subject_expr) {
+                    er_free(&recv);
+                    return false;
+                }
             }
             if (is_compound) {
                 char *field_cty = cg_ctype_dup(sm->type);
@@ -20078,10 +20164,17 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     return false;
                 }
 
-                buf_append_fmt(cg->cur_body,
-                    "    %s %s = ((const struct %s *)%s->witness)->get_%s(%s);\n",
-                    field_cty, old_tmp, us->c_witness_struct_name,
-                    desc_name, sm->c_field_name, subject_expr);
+                if (sm->is_static) {
+                    buf_append_fmt(cg->cur_body,
+                        "    %s %s = ((const struct %s *)%s->witness)->get_%s();\n",
+                        field_cty, old_tmp, us->c_witness_struct_name,
+                        desc_name, sm->c_field_name);
+                } else {
+                    buf_append_fmt(cg->cur_body,
+                        "    %s %s = ((const struct %s *)%s->witness)->get_%s(%s);\n",
+                        field_cty, old_tmp, us->c_witness_struct_name,
+                        desc_name, sm->c_field_name, subject_expr);
+                }
 
                 if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
                     free(old_tmp);
@@ -20107,10 +20200,17 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                         "CE0255", "codegen: unsupported compound spec field assignment operator");
                 }
 
-                buf_append_fmt(cg->cur_body,
-                    "    ((const struct %s *)%s->witness)->set_%s(%s, (%s)(%s));\n",
-                    us->c_witness_struct_name, desc_name,
-                    sm->c_field_name, subject_expr, field_cty, expr.data);
+                if (sm->is_static) {
+                    buf_append_fmt(cg->cur_body,
+                        "    ((const struct %s *)%s->witness)->set_%s((%s)(%s));\n",
+                        us->c_witness_struct_name, desc_name,
+                        sm->c_field_name, field_cty, expr.data);
+                } else {
+                    buf_append_fmt(cg->cur_body,
+                        "    ((const struct %s *)%s->witness)->set_%s(%s, (%s)(%s));\n",
+                        us->c_witness_struct_name, desc_name,
+                        sm->c_field_name, subject_expr, field_cty, expr.data);
+                }
 
                 buf_free(&expr);
                 er_free(&v);
@@ -20133,15 +20233,29 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 buf_append_fmt(cg->cur_body,
                     "    { ");
                 cg_emit_c_type(cg->cur_body, sm->type);
-                buf_append_fmt(cg->cur_body,
-                    " _v = %s; ((const struct %s *)%s->witness)->set_%s(%s, _v); feng_release(_v); }\n",
-                    v.c_expr, us->c_witness_struct_name, desc_name,
-                    sm->c_field_name, subject_expr);
+                if (sm->is_static) {
+                    buf_append_fmt(cg->cur_body,
+                        " _v = %s; ((const struct %s *)%s->witness)->set_%s(_v); feng_release(_v); }\n",
+                        v.c_expr, us->c_witness_struct_name, desc_name,
+                        sm->c_field_name);
+                } else {
+                    buf_append_fmt(cg->cur_body,
+                        " _v = %s; ((const struct %s *)%s->witness)->set_%s(%s, _v); feng_release(_v); }\n",
+                        v.c_expr, us->c_witness_struct_name, desc_name,
+                        sm->c_field_name, subject_expr);
+                }
             } else {
-                buf_append_fmt(cg->cur_body,
-                    "    ((const struct %s *)%s->witness)->set_%s(%s, %s);\n",
-                    us->c_witness_struct_name, desc_name,
-                    sm->c_field_name, subject_expr, v.c_expr);
+                if (sm->is_static) {
+                    buf_append_fmt(cg->cur_body,
+                        "    ((const struct %s *)%s->witness)->set_%s(%s);\n",
+                        us->c_witness_struct_name, desc_name,
+                        sm->c_field_name, v.c_expr);
+                } else {
+                    buf_append_fmt(cg->cur_body,
+                        "    ((const struct %s *)%s->witness)->set_%s(%s, %s);\n",
+                        us->c_witness_struct_name, desc_name,
+                        sm->c_field_name, subject_expr, v.c_expr);
+                }
             }
             er_free(&v);
             free(subject_expr);
