@@ -25053,13 +25053,15 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
                 free(ret_cname);
                 return false;
             }
-            /* For aggregate (spec fat value) returns: the cleanup chain
-             * now owns the +1 reference.  Callers that create an alias
-             * (let binding, materialize-to-local) must retain before
-             * aliasing, so signal the value as borrowed (owns_ref=false). */
-            if (cgtype_is_aggregate(out->type)) {
-                out->owns_ref = false;
-            }
+            /* For aggregate (spec fat value) and managed (refcounted
+             * heap object) returns: the cleanup chain now owns the +1
+             * reference.  Callers that create an alias (let binding,
+             * materialize-to-local, return) must retain before aliasing,
+             * so signal the value as borrowed (owns_ref=false).  Without
+             * this, a `let w = make<T>();` would copy the borrowed pointer
+             * into a new cleanup-registered local, and both cleanups would
+             * release the same +1 — double-free at scope exit. */
+            out->owns_ref = false;
         }
     } else {
         out->c_expr = strdup("((void)0)");

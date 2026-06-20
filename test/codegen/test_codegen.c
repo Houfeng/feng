@@ -3392,6 +3392,66 @@ static void test_generic_fn_call_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kGenericManagedReturnLetBindingSrc =
+    "module feng.codegen.gf_managed_ret;\n"
+    "type Widget {\n"
+    "    let value: int;\n"
+    "}\n"
+    "func make_widget<T>(): Widget {\n"
+    "    return Widget { value: 7 };\n"
+    "}\n"
+    "var result: int;\n"
+    "func main(args: string[]) {\n"
+    "    let w: Widget = make_widget<int>();\n"
+    "    result = w.value;\n"
+    "}\n";
+
+/* Regression: a generic function returning a managed (refcounted) type and
+ * bound to a `let` local must not double-release the returned object.
+ *
+ * The +1 refcount from the call is owned by the out-param temp (_grN),
+ * which is registered in the cleanup chain.  The `let` binding aliases
+ * that pointer, so it must take its own +1 via feng_retain — otherwise
+ * both the temp's cleanup and the binding's cleanup would release the
+ * same +1, producing a use-after-free at scope exit.
+ *
+ * This invariant mirrors the existing contract for aggregate (spec fat
+ * value) returns from generic calls. */
+static void test_generic_managed_return_let_binding_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericManagedReturnLetBindingSrc,
+                                        "gf_managed_ret.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic managed return): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+
+    /* The let binding must take its own +1 refcount via feng_retain.
+     * Without it, the binding aliases the out-param temp's pointer and
+     * both cleanups release the same +1. */
+    ASSERT(strstr(out.c_source, "feng_retain(_") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericSpecArgSrc =
     "module feng.codegen.gf4;\n"
     "spec Spec1 {}\n"
@@ -6032,6 +6092,7 @@ int main(void) {
     test_generic_fn_codegen();
     test_generic_type_decl_no_crash();
     test_generic_fn_call_codegen();
+    test_generic_managed_return_let_binding_codegen();
     test_generic_spec_arg_codegen();
     test_callable_spec_top_level_fn_codegen();
     test_generic_callable_constraint_codegen();
