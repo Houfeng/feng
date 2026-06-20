@@ -132,15 +132,16 @@ open type Json {
     };
   }
 
-  static func stringify(value: JsonSerializable): string {
-    return Json.stringify(value.toJson());
-  }
-
   /**
    * Deserialize a JSON string to a JsonValue
    */
   static func parse(json: string): JsonValue {
     return JsonParser.parse(json);
+  }
+
+  static func stringify<T: JsonSerializable<T>>(value: T): string {
+    let jsonValue = T.toJson(value);
+    return Json.stringify(jsonValue);
   }
 
 }

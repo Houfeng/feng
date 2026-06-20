@@ -10232,6 +10232,124 @@ static void test_fit_enum_satisfies_generic_constraint(void) {
     feng_program_free(program);
 }
 
+/* Overload resolution rule: a generic candidate whose type argument fails the
+ * declared constraint must be excluded from the candidate set. When a
+ * non-generic overload is applicable, it must win; if no candidate survives,
+ * the call must be rejected as ambiguous (no overload accepting arguments). */
+static void test_generic_overload_constraint_excludes_candidate(void) {
+    /* Non-generic `m(value: Tagged)` accepts the spec view; a second overload
+     * `m<T: Tagged>(value: T)` exists. The call `m(Untagged{})` should fail
+     * because Untagged does not fit Tagged, and the spec view also rejects the
+     * concrete Untagged value at the non-generic overload — so neither
+     * candidate matches. */
+    const char *source =
+        "module demo.main;\n"
+        "spec Tagged {\n"
+        "    func tag(): string;\n"
+        "}\n"
+        "type Untagged {\n"
+        "    let name: string;\n"
+        "}\n"
+        "func m(value: Tagged): string {\n"
+        "    return value.tag();\n"
+        "}\n"
+        "func m<T: Tagged>(value: T): string {\n"
+        "    return value.tag();\n"
+        "}\n"
+        "func run(): string {\n"
+        "    return m(Untagged { name: \"x\" });\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_overload_excluded.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    /* The call must be reported as not matching any overload (the generic
+     * candidate is dropped because the constraint fails; the non-generic
+     * candidate fails because Untagged does not fit Tagged). */
+    ASSERT(errors[0].code != NULL);
+    ASSERT(strcmp(errors[0].code, "AE0512") == 0);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Overload resolution rule: when only a generic overload is applicable and the
+ * inferred type argument satisfies the constraint, the generic candidate must
+ * be selected. */
+static void test_generic_overload_selected_when_only_candidate(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Tagged {\n"
+        "    func tag(): string;\n"
+        "}\n"
+        "type TaggedUser: Tagged {\n"
+        "    let label: string;\n"
+        "    func tag(): string {\n"
+        "        return self.label;\n"
+        "    }\n"
+        "}\n"
+        "func only_generic<T: Tagged>(value: T): string {\n"
+        "    return value.tag();\n"
+        "}\n"
+        "func run(): string {\n"
+        "    return only_generic(TaggedUser { label: \"ok\" });\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_overload_only.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Overload resolution rule: when both a non-generic and a generic overload are
+ * applicable to the same call, the non-generic candidate must win. */
+static void test_non_generic_overload_preferred_over_generic(void) {
+    /* `m(value: TaggedUser)` (non-generic exact) competes with
+     * `m<T: Tagged>(value: T)` (generic, also exact for TaggedUser). The
+     * non-generic candidate must win. */
+    const char *source =
+        "module demo.main;\n"
+        "spec Tagged {\n"
+        "    func tag(): string;\n"
+        "}\n"
+        "type TaggedUser: Tagged {\n"
+        "    let label: string;\n"
+        "    func tag(): string {\n"
+        "        return self.label;\n"
+        "    }\n"
+        "}\n"
+        "func m(value: TaggedUser): string {\n"
+        "    return \"non-generic\";\n"
+        "}\n"
+        "func m<T: Tagged>(value: T): string {\n"
+        "    return \"generic\";\n"
+        "}\n"
+        "func run(): string {\n"
+        "    return m(TaggedUser { label: \"ok\" });\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("non_generic_overload_preferred.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_fit_enum_missing_method_rejected(void) {
     const char *source =
         "module demo.main;\n"
@@ -16134,6 +16252,9 @@ int main(void) {
     test_fit_enum_method_callable_on_item();
     test_fit_enum_satisfies_spec_typed_parameter();
     test_fit_enum_satisfies_generic_constraint();
+    test_generic_overload_constraint_excludes_candidate();
+    test_generic_overload_selected_when_only_candidate();
+    test_non_generic_overload_preferred_over_generic();
     test_fit_enum_missing_method_rejected();
     test_fit_enum_unknown_member_still_rejected();
     test_fit_array_method_callable_on_value();

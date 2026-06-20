@@ -386,6 +386,53 @@ type GHashMiniMap<K: GHashable, V> {
   }
 }
 
+// === 重载决议场景：泛型候选必须先满足约束,非泛型候选优先 ===
+// 见 docs/feng-generics-draft.md §5 规则:类型参数推导+约束验证+非泛型优先分层.
+
+// 约束 spec:只有实现了 GTaggable 的类型才能被泛型重载接受.
+spec GTaggable {
+  func gtag(): string;
+}
+
+// GTaggableUser 实现了 GTaggable:泛型重载对它成立.
+type GTaggableUser: GTaggable {
+  let label: string;
+
+  func gtag(): string {
+    return self.label;
+  }
+}
+
+// GUnrelatedUser 未实现 GTaggable:泛型重载对它不成立.
+type GUnrelatedUser {
+  let name: string;
+}
+
+// 重载集合:1) 非泛型重载接受任意 GTaggable(spec 视图);2) 泛型重载要求 T: GTaggable.
+// 两个签名返回不同的字符串,使运行时可以验证哪个重载被命中.
+func gtag_overload(value: GTaggable): string {
+  return "non-generic";
+}
+
+func gtag_overload<T: GTaggable>(value: T): string {
+  return "generic";
+}
+
+// 重载集合:仅泛型重载,没有非泛型候选.约束满足时泛型必须被选中.
+func gtag_generic_only<T: GTaggable>(value: T): string {
+  return "generic-only";
+}
+
+// 重载集合:1) 非泛型精确匹配(接受 GTaggableUser);2) 泛型重载(也接受 GTaggableUser).
+// 当实参是 GTaggableUser 时,非泛型精确匹配必须胜出.
+func gtag_exact(value: GTaggableUser): string {
+  return "non-generic-exact";
+}
+
+func gtag_exact<T: GTaggable>(value: T): string {
+  return "generic";
+}
+
 /** 泛型测试 */
 open func test_generic() {
   describe("generic", () {
@@ -581,6 +628,33 @@ open func test_generic() {
       map.gput_hash(key, "hash constraint ok");
       assert(map.ghas_hash(same_key), "generic non-self constraint MiniMap has");
       assert(map.gget_hash(key) == "hash constraint ok", "generic non-self constraint MiniMap get");
+    });
+
+    test("overload: generic candidate excluded when constraint unsatisfied", () {
+      // GUnrelatedUser 不满足 GTaggable,泛型重载必须被剔除,只剩非泛型重载可用.
+      // 但 GUnrelatedUser 不接受 GTaggable 形参,所以这里用 GTaggable 视图实参
+      // 间接验证:GTaggable 视图实参同时满足泛型约束与非泛型形参,
+      // 此时非泛型精确(实际为 spec 视图上转,非精确)与泛型精确均匹配.
+      // 预期:非泛型候选胜出.
+      let user = GTaggableUser { label: "tagged" };
+      let taggable: GTaggable = user;
+      let which = gtag_overload(taggable);
+      assert(which == "non-generic", "overload: generic candidate excluded when constraint unsatisfied");
+    });
+
+    test("overload: generic candidate selected when no non-generic fallback", () {
+      // 仅泛型重载,且约束满足:必须命中泛型.
+      let user = GTaggableUser { label: "tagged" };
+      let which = gtag_generic_only(user);
+      assert(which == "generic-only", "overload: generic candidate selected when no non-generic fallback");
+    });
+
+    test("overload: non-generic exact match preferred over generic", () {
+      // GTaggableUser 同时满足 GTaggableUser 精确匹配(非泛型)与泛型重载.
+      // 预期:非泛型精确匹配胜出.
+      let user = GTaggableUser { label: "tagged" };
+      let which = gtag_exact(user);
+      assert(which == "non-generic-exact", "overload: non-generic exact match preferred over generic");
     });
   });
 }

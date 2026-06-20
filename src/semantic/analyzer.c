@@ -4251,6 +4251,10 @@ static bool visible_fit_instantiates_spec_type_ref(const ResolveContext *ctx,
 static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
                                              const FengTypeRef *source_type_ref,
                                              const FengTypeRef *spec_type_ref);
+static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
+                                                   const FengCallableSignature *callable,
+                                                   size_t type_param_index,
+                                                   FengTypeRef *const *type_args);
 static bool fit_target_collect_array_local_type_param(const ResolveContext *context,
                                                       const FengTypeRef *target_ref,
                                                       FengTypeParam *out_type_param);
@@ -9057,6 +9061,28 @@ static bool callable_collect_call_type_args(ResolveContext *context,
     return true;
 }
 
+/* Overload match priority tiers, shared by every resolve_*_overload path.
+ * With explicit type args the existing 0/1/2 ranking is preserved (an explicit
+ * arity match is best). Without explicit type args, a non-generic candidate is
+ * always preferred over a generic one: non-generic exact match (0) beats
+ * non-generic inexact match (1), which in turn beats any generic,
+ * inference-matched candidate (2). */
+static int compute_overload_match_priority(bool has_explicit_type_args,
+                                            size_t explicit_type_arg_count,
+                                            size_t type_param_count,
+                                            bool exactly_match) {
+    if (has_explicit_type_args) {
+        if (type_param_count == explicit_type_arg_count) {
+            return 0;
+        }
+        return type_param_count > 0U ? 1 : 2;
+    }
+    if (type_param_count > 0U) {
+        return 2;
+    }
+    return exactly_match ? 0 : 1;
+}
+
 /* Top-level callable matcher. Ordinary parameters still use the normal
  * expected-type check; only parameter shapes that mention type params may
  * divert into generic argument collection, and only when the caller has opted
@@ -9115,8 +9141,20 @@ static bool callable_parameters_match_args(ResolveContext *context,
             break;
         }
 
-        /* G4-12: a type-parameter position accepts any argument type. */
+        /* G4-12: a type-parameter position accepts any argument type, but the
+         * inferred type argument must still be collected so that the declared
+         * constraint (if any) can be validated after the loop. When inference
+         * fails for this argument we keep the historical accept-by-default
+         * behavior — the type argument stays NULL, the constraint check below
+         * skips it, and the final applicability decision is left to the
+         * post-selection witness materializer. */
         if (arg_index < fixed_count && param_type_is_type_param_ref(callable, param_type)) {
+            (void)callable_collect_type_args_from_arg_expr(context,
+                                                          callable,
+                                                          param_type,
+                                                          args[arg_index],
+                                                          type_args,
+                                                          owned_type_args);
             continue;
         }
 
@@ -9148,6 +9186,27 @@ static bool callable_parameters_match_args(ResolveContext *context,
             }
             ok = false;
             break;
+        }
+    }
+
+    /* A generic candidate is applicable only when every inferred type argument
+     * satisfies its declared constraint; otherwise the candidate is dropped so
+     * it cannot compete with non-generic overloads. */
+    if (ok && callable->type_param_count > 0U) {
+        size_t type_param_index;
+        for (type_param_index = 0U;
+             type_param_index < callable->type_param_count;
+             ++type_param_index) {
+            if (type_args[type_param_index] == NULL) {
+                continue;
+            }
+            if (!generic_type_arg_satisfies_constraint(context,
+                                                       callable,
+                                                       type_param_index,
+                                                       type_args)) {
+                ok = false;
+                break;
+            }
         }
     }
 
@@ -9225,7 +9284,20 @@ static bool callable_parameters_match_args_for_owner_instance(
             break;
         }
 
+        /* G4-12: a type-parameter position accepts any argument type, but the
+         * inferred type argument must still be collected so that the declared
+         * constraint (if any) can be validated after the loop. When inference
+         * fails for this argument we keep the historical accept-by-default
+         * behavior — the type argument stays NULL, the constraint check below
+         * skips it, and the final applicability decision is left to the
+         * post-selection witness materializer. */
         if (arg_index < fixed_count && param_type_is_type_param_ref(callable, param_type)) {
+            (void)callable_collect_type_args_from_arg_expr(context,
+                                                          callable,
+                                                          param_type,
+                                                          args[arg_index],
+                                                          type_args,
+                                                          owned_type_args);
             continue;
         }
 
@@ -9282,6 +9354,27 @@ static bool callable_parameters_match_args_for_owner_instance(
             }
             ok = false;
             break;
+        }
+    }
+
+    /* A generic candidate is applicable only when every inferred type argument
+     * satisfies its declared constraint; otherwise the candidate is dropped so
+     * it cannot compete with non-generic overloads. */
+    if (ok && callable->type_param_count > 0U) {
+        size_t type_param_index;
+        for (type_param_index = 0U;
+             type_param_index < callable->type_param_count;
+             ++type_param_index) {
+            if (type_args[type_param_index] == NULL) {
+                continue;
+            }
+            if (!generic_type_arg_satisfies_constraint(context,
+                                                       callable,
+                                                       type_param_index,
+                                                       type_args)) {
+                ok = false;
+                break;
+            }
         }
     }
 
@@ -9884,16 +9977,14 @@ static FunctionCallResolution resolve_top_level_function_overload(
             continue;
         }
 
-        int priority = has_explicit_type_args
-                           ? (decl->as.function_decl.type_param_count == explicit_type_arg_count
-                                  ? 0
-                                  : (decl->as.function_decl.type_param_count > 0U ? 1 : 2))
-                           : (callable_parameters_exactly_match_args(context,
-                                                                     &decl->as.function_decl,
-                                                                     args,
-                                                                     arg_count)
-                                  ? 0
-                                  : 1);
+        int priority = compute_overload_match_priority(
+            has_explicit_type_args,
+            explicit_type_arg_count,
+            decl->as.function_decl.type_param_count,
+            callable_parameters_exactly_match_args(context,
+                                                   &decl->as.function_decl,
+                                                   args,
+                                                   arg_count));
 
         if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
             priority < result.match_priority) {
@@ -10259,16 +10350,14 @@ static FunctionCallResolution resolve_module_public_function_overload(
                 continue;
             }
 
-            int priority = has_explicit_type_args
-                               ? (decl->as.function_decl.type_param_count == explicit_type_arg_count
-                                      ? 0
-                                      : (decl->as.function_decl.type_param_count > 0U ? 1 : 2))
-                               : (callable_parameters_exactly_match_args(context,
-                                                                         &decl->as.function_decl,
-                                                                         args,
-                                                                         arg_count)
-                                      ? 0
-                                      : 1);
+            int priority = compute_overload_match_priority(
+                has_explicit_type_args,
+                explicit_type_arg_count,
+                decl->as.function_decl.type_param_count,
+                callable_parameters_exactly_match_args(context,
+                                                       &decl->as.function_decl,
+                                                       args,
+                                                       arg_count));
 
             if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
                 priority < result.match_priority) {
@@ -10726,20 +10815,18 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
             return true;
         }
     }
-    int priority = st->has_explicit_type_args
-                       ? (member->as.callable.type_param_count == st->explicit_type_arg_count
-                              ? 0
-                              : (member->as.callable.type_param_count > 0U ? 1 : 2))
-                       : (callable_parameters_exactly_match_args_for_owner_instance(
-                              st->context,
-                              &member->as.callable,
-                              st->owner_type_decl,
-                              fit_decl,
-                              st->owner_type,
-                              st->args,
-                              st->arg_count)
-                              ? 0
-                              : 1);
+    int priority = compute_overload_match_priority(
+        st->has_explicit_type_args,
+        st->explicit_type_arg_count,
+        member->as.callable.type_param_count,
+        callable_parameters_exactly_match_args_for_owner_instance(
+            st->context,
+            &member->as.callable,
+            st->owner_type_decl,
+            fit_decl,
+            st->owner_type,
+            st->args,
+            st->arg_count));
 
     if (st->result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
         priority < st->result.match_priority) {
@@ -10839,20 +10926,18 @@ static FunctionCallResolution resolve_accessible_method_overload(
                     }
                     continue;
                 }
-                int priority = has_explicit_type_args
-                                   ? (member->as.callable.type_param_count == explicit_type_arg_count
-                                          ? 0
-                                          : (member->as.callable.type_param_count > 0U ? 1 : 2))
-                                   : (callable_parameters_exactly_match_args_for_owner_instance(
-                                          context,
-                                          &member->as.callable,
-                                          type_decl,
-                                          NULL,
-                                          owner_type,
-                                          args,
-                                          arg_count)
-                                          ? 0
-                                          : 1);
+                int priority = compute_overload_match_priority(
+                    has_explicit_type_args,
+                    explicit_type_arg_count,
+                    member->as.callable.type_param_count,
+                    callable_parameters_exactly_match_args_for_owner_instance(
+                        context,
+                        &member->as.callable,
+                        type_decl,
+                        NULL,
+                        owner_type,
+                        args,
+                        arg_count));
 
                 if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
                     priority < result.match_priority) {
@@ -10918,20 +11003,18 @@ static FunctionCallResolution resolve_accessible_method_overload(
                 continue;
             }
 
-            int priority = has_explicit_type_args
-                               ? (member->as.callable.type_param_count == explicit_type_arg_count
-                                      ? 0
-                                      : (member->as.callable.type_param_count > 0U ? 1 : 2))
-                               : (callable_parameters_exactly_match_args_for_owner_instance(
-                                      context,
-                                      &member->as.callable,
-                                      type_decl,
-                                      NULL,
-                                      owner_type,
-                                      args,
-                                      arg_count)
-                                      ? 0
-                                      : 1);
+            int priority = compute_overload_match_priority(
+                has_explicit_type_args,
+                explicit_type_arg_count,
+                member->as.callable.type_param_count,
+                callable_parameters_exactly_match_args_for_owner_instance(
+                    context,
+                    &member->as.callable,
+                    type_decl,
+                    NULL,
+                    owner_type,
+                    args,
+                    arg_count));
 
             if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
                 priority < result.match_priority) {
@@ -11030,20 +11113,18 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
             continue;
         }
 
-        int priority = has_explicit_type_args
-                           ? (member->as.callable.type_param_count == explicit_type_arg_count
-                                  ? 0
-                                  : (member->as.callable.type_param_count > 0U ? 1 : 2))
-                           : (callable_parameters_exactly_match_args_for_owner_instance(
-                                  context,
-                                  &member->as.callable,
-                                  type_decl,
-                                  NULL,
-                                  owner_type,
-                                  args,
-                                  arg_count)
-                                  ? 0
-                                  : 1);
+        int priority = compute_overload_match_priority(
+            has_explicit_type_args,
+            explicit_type_arg_count,
+            member->as.callable.type_param_count,
+            callable_parameters_exactly_match_args_for_owner_instance(
+                context,
+                &member->as.callable,
+                type_decl,
+                NULL,
+                owner_type,
+                args,
+                arg_count));
 
         if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
             priority < result.match_priority) {
@@ -14879,6 +14960,112 @@ static void record_object_arg_coercion_sites_for_owner_instance(
                                                        param_type,
                                                        FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
     }
+}
+
+/* Determine whether the inferred type argument at `type_param_index` satisfies
+ * the declared constraint of that type parameter. Used during overload
+ * candidate filtering: a generic candidate whose type argument fails its
+ * constraint is excluded from the candidate set. The check mirrors the
+ * applicability gate already used by the post-selection witness materializer
+ * (see materialize_object_spec_constraint_witness_if_applicable), but performs
+ * the type-parameter substitution itself and answers a plain boolean without
+ * computing any witness. Returns true when there is nothing to validate
+ * (no constraint, or a non-object-form constraint, or an uninferred type
+ * argument); the caller decides how to treat the uninferred case. */
+static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
+                                                   const FengCallableSignature *callable,
+                                                   size_t type_param_index,
+                                                   FengTypeRef *const *type_args) {
+    const FengTypeParam *type_param;
+    const FengTypeRef *actual_type_ref;
+    const FengDecl *actual_type_decl;
+    const FengDecl *constraint_decl;
+    FengTypeRef *substituted = NULL;
+    const FengTypeRef *constraint_ref;
+    bool result = false;
+
+    if (context == NULL || callable == NULL || type_args == NULL ||
+        type_param_index >= callable->type_param_count) {
+        return true;
+    }
+
+    type_param = &callable->type_params[type_param_index];
+    if (type_param->constraint == NULL) {
+        return true;
+    }
+
+    constraint_decl = resolve_type_ref_decl(context, type_param->constraint);
+    if (constraint_decl == NULL || constraint_decl->kind != FENG_DECL_SPEC ||
+        constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        /* callable-form / union-form constraints keep the pre-existing lenient
+         * behavior; only object-form constraints are enforced here. */
+        return true;
+    }
+
+    actual_type_ref = type_args[type_param_index];
+    if (actual_type_ref == NULL) {
+        /* The type argument could not be inferred from the call (e.g. a
+         * parameter-less generic relying on explicit type args). Leave the
+         * decision to the caller / later stages instead of rejecting. */
+        return true;
+    }
+
+    actual_type_decl = resolve_type_ref_decl(context, actual_type_ref);
+
+    /* Substitute type parameters referenced inside the constraint (for example
+     * JsonSerializable<T> -> JsonSerializable<Actual>) before checking. When
+     * substitution cannot complete (some referenced type param has no inferred
+     * value, e.g. an explicit-type-args call where T is bound by the caller but
+     * not by argument inference) we conservatively accept: the constraint
+     * cannot be evaluated here and the post-selection materializer will
+     * finalize. */
+    substituted = clone_type_ref_substituting_type_params(type_param->constraint,
+                                                            callable->type_params,
+                                                            callable->type_param_count,
+                                                            type_args);
+    if (substituted == NULL) {
+        return true;
+    }
+    constraint_ref = substituted;
+
+    /* Reflexive case: when the inferred argument equals the required constraint
+     * structurally (e.g. `rewrite<HasChild>(...)` binds T to the spec HasChild
+     * while the constraint is also HasChild), the constraint is trivially
+     * satisfied. This covers spec-as-argument and any self-referential shape
+     * without needing full spec-implication analysis. */
+    if (type_refs_semantically_equal(context, actual_type_ref, constraint_ref)) {
+        result = true;
+    } else if (actual_type_decl != NULL && decl_is_named_fit_target(actual_type_decl)) {
+        result = type_decl_satisfies_spec_type_ref(context, actual_type_decl, constraint_ref);
+    } else if (actual_type_ref->kind == FENG_TYPE_REF_NAMED &&
+               actual_type_ref->as.named.segment_count == 1U &&
+               actual_type_ref->as.named.type_arg_count == 0U &&
+               is_builtin_type_name(actual_type_ref->as.named.segments[0])) {
+        const char *builtin_name =
+            canonical_builtin_type_name(actual_type_ref->as.named.segments[0]);
+        if (builtin_name != NULL) {
+            FengSemanticSubjectKey subject_key =
+                feng_semantic_subject_key_for_builtin(builtin_name);
+            result = subject_key_satisfies_spec_decl(context, &subject_key, constraint_decl);
+        }
+    } else if (actual_type_ref->kind == FENG_TYPE_REF_NAMED &&
+               actual_type_ref->as.named.segment_count == 1U &&
+               actual_type_ref->as.named.type_arg_count == 0U &&
+               find_type_param(context, actual_type_ref->as.named.segments[0]) != NULL) {
+        /* The inferred argument is itself a reference to an enclosing type
+         * parameter (e.g. inside `assertEquals<T: Display>` we call
+         * `format<U: Display>(first: U)` with `expected: T`). Whether the
+         * candidate's constraint holds for the concrete type eventually bound
+         * to T cannot be decided in isolation; the post-selection witness
+         * materializer will finalize the answer at instantiation. Conservatively
+         * accept so transitive generic call sites remain compilable. */
+        result = true;
+    }
+
+    if (substituted != NULL) {
+        free_synthetic_type_ref(substituted);
+    }
+    return result;
 }
 
 static void materialize_object_spec_constraint_witness_if_applicable(
