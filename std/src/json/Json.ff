@@ -101,7 +101,7 @@ open type Json {
    */
   static func toString(value: JsonValue): string {
     return if (value) {
-      string { value }
+      v: string { v }
       else { "" }
     };
   }
@@ -113,9 +113,9 @@ open type Json {
    */
   static func toNumber(value: JsonValue): double {
     return if (value) {
-      int {(double)value }
-      float {(double)value }
-      double { value }
+      v: int {(double)v }
+      v: float {(double)v }
+      v: double { v }
       else {(double)0 }
     };
   }
@@ -127,7 +127,7 @@ open type Json {
    */
   static func toBool(value: JsonValue): bool {
     return if (value) {
-      bool { value }
+      v: bool { v }
       else { false }
     };
   }
@@ -139,7 +139,7 @@ open type Json {
    */
   static func toArray(value: JsonValue): JsonArray {
     return if (value) {
-      JsonArray { value }
+      v: JsonArray { v }
       else { JsonArray() }
     };
   }
@@ -151,7 +151,7 @@ open type Json {
    */
   static func toObject(value: JsonValue): JsonObject {
     return if (value) {
-      JsonObject { value }
+      v: JsonObject { v }
       else { JsonObject() }
     };
   }
@@ -213,14 +213,14 @@ open type Json {
    */
   static func stringify(value: JsonValue): string {
     return if value {
-      None { value.toJsonString() }
-      bool { value.toJsonString() }
-      int { value.toJsonString() }
-      float { value.toJsonString() }
-      double { value.toJsonString() }
-      string { value.toJsonString() }
-      JsonArray { value.toJsonString() }
-      JsonObject { value.toJsonString() }
+      v: None { v.toJsonString() }
+      v: bool { v.toJsonString() }
+      v: int { v.toJsonString() }
+      v: float { v.toJsonString() }
+      v: double { v.toJsonString() }
+      v: string { v.toJsonString() }
+      v: JsonArray { v.toJsonString() }
+      v: JsonObject { v.toJsonString() }
       else { "null" }
     };
   }

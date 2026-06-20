@@ -1,0 +1,98 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+spec Choice: int | string | bool;
+
+spec Named {
+    func greet(): string;
+}
+
+type User: Named {
+    let name: string;
+
+    func greet(): string {
+        return self.name;
+    }
+}
+
+spec Display: Named | string;
+
+type Holder {
+    let value: Choice;
+}
+
+// Test: bare binding prefix (default let)
+func test_bare_binding(value: Choice) {
+    if value {
+        v: int { puts(&"got-int"); }
+        v: string { puts(&v); }
+        bool { puts(&"bool"); }
+    }
+}
+
+// Test: explicit let/var binding
+func test_let_var_binding(value: Choice) {
+    if value {
+        let v: int { puts(&"let-int"); }
+        var v: string { v = "modified"; puts(&v); }
+        bool { puts(&"bool"); }
+    }
+}
+
+// Test: binding with non-identifier target (member access)
+func test_member_target(holder: Holder) {
+    if holder.value {
+        v: string { puts(&v); }
+        int { puts(&"int"); }
+        bool { puts(&"bool"); }
+    }
+}
+
+// Test: if-match expression with binding
+func test_expr_binding(value: Display): string {
+    return if value {
+        v: Named { v.greet(); }
+        v: string { v; }
+        else { ""; }
+    };
+}
+
+// Test: nested match with bindings
+func test_nested(outer: Choice, inner: Display) {
+    if outer {
+        v: string {
+            if inner {
+                w: Named { puts(&w.greet()); }
+                w: string { puts(&w); }
+            }
+        }
+        int { puts(&"int"); }
+        bool { puts(&"bool"); }
+    }
+}
+
+func main(args: string[]) {
+    let int_val: Choice = 42;
+    let str_val: Choice = "hello";
+    let bool_val: Choice = true;
+
+    test_bare_binding(int_val);
+    test_bare_binding(str_val);
+    test_bare_binding(bool_val);
+
+    test_let_var_binding(int_val);
+    test_let_var_binding(str_val);
+
+    let holder = Holder { value: str_val };
+    test_member_target(holder);
+
+    let user: Named = User { name: "Alice" };
+    let display_named: Display = user;
+    let display_str: Display = "world";
+    puts(&test_expr_binding(display_named));
+    puts(&test_expr_binding(display_str));
+
+    test_nested(str_val, display_named);
+}

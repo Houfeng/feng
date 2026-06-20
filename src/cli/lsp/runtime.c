@@ -2945,6 +2945,16 @@ static bool collect_stmt_locals(const FengStmt *stmt,
             }
             for (index = 0U; index < stmt->as.match_stmt.branch_count; ++index) {
                 if (offset <= block_end(stmt->as.match_stmt.branches[index].body)) {
+                    if (stmt->as.match_stmt.branches[index].has_binding) {
+                        if (!local_list_push(locals,
+                                             FENG_LSP_LOCAL_BINDING,
+                                             stmt->as.match_stmt.branches[index].binding_name,
+                                             NULL,
+                                             NULL,
+                                             NULL)) {
+                            return false;
+                        }
+                    }
                     return collect_block_locals(stmt->as.match_stmt.branches[index].body, offset, locals);
                 }
             }
@@ -3173,6 +3183,16 @@ static bool collect_stmt_locals_for_completion(const char *source,
             }
             for (index = 0U; index < stmt->as.match_stmt.branch_count; ++index) {
                 if (block_contains_offset_for_completion(source, stmt->as.match_stmt.branches[index].body, offset)) {
+                    if (stmt->as.match_stmt.branches[index].has_binding) {
+                        if (!local_list_push(locals,
+                                             FENG_LSP_LOCAL_BINDING,
+                                             stmt->as.match_stmt.branches[index].binding_name,
+                                             NULL,
+                                             NULL,
+                                             NULL)) {
+                            return false;
+                        }
+                    }
                     return collect_block_locals_for_completion(source,
                                                                stmt->as.match_stmt.branches[index].body,
                                                                offset,

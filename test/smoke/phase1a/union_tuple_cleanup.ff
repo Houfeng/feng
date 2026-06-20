@@ -18,7 +18,7 @@ func make_wrapped(name: string, label: string): Wrapped {
 func print_choice(value: Choice) {
     if value {
         int { puts(&"int"); }
-        string { puts(&value); }
+        v: string { puts(&v); }
     }
 }
 

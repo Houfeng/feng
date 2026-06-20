@@ -26,7 +26,7 @@ type Holder {
 func print_choice(value: Choice) {
     if value {
         int { puts(&"int"); }
-        string { puts(&value); }
+        v: string { puts(&v); }
         bool { puts(&"bool"); }
     }
 }
@@ -53,8 +53,8 @@ func make_display(name: string): Display {
 
 func print_display(value: Display) {
     if value {
-        Named { puts(&value.greet()); }
-        string { puts(&value); }
+        v: Named { puts(&v.greet()); }
+        v: string { puts(&v); }
     }
 }
 

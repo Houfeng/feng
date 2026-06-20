@@ -132,8 +132,8 @@ type TestContext {
     let parentOutput = self.getParentOutput();
     let line = string.format(format, args);
     if parentOutput {
-      List<string> {
-        parentOutput.add(line);
+      p: List<string> {
+        p.add(line);
       } else {
         // 没有 Test 块，直接输出到控制台
         println(line);
@@ -150,20 +150,20 @@ type TestContext {
     if (current.kind != TestKind.Test) { return; }
     let selfOutput = current.output;
     if selfOutput {
-      List<string> {
+      output: List<string> {
         let parentOutput = self.getParentOutput();
         if parentOutput {
-          List<string> {
-            for var i = 0; i < selfOutput.size(); i += 1 {
-              parentOutput.add(selfOutput.get(i));
+          p: List<string> {
+            for var i = 0; i < output.size(); i += 1 {
+              p.add(output.get(i));
             }
           } else {
-            for var i = 0; i < selfOutput.size(); i += 1 {
-              println(selfOutput.get(i));
+            for var i = 0; i < output.size(); i += 1 {
+              println(output.get(i));
             }
           }
         }
-        selfOutput.clear();
+        output.clear();
       } else {
         // do nothing
       }

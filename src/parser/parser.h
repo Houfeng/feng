@@ -150,6 +150,13 @@ typedef struct FengMatchBranch {
     FengMatchLabel *labels;
     size_t label_count;
     FengBlock *body;
+    /* Optional binding prefix: `[let|var] name: Type { body }`.
+     * has_binding is true when the branch declares a binding name;
+     * binding_name holds the identifier; binding_mutability defaults
+     * to FENG_MUTABILITY_LET when no explicit let/var keyword is used. */
+    bool has_binding;
+    FengSlice binding_name;
+    FengMutability binding_mutability;
 } FengMatchBranch;
 
 typedef struct FengTryCatchClause {

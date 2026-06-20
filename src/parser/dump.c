@@ -328,6 +328,13 @@ static void dump_match_branch(FILE *stream, const FengMatchBranch *branch, int i
     size_t index;
 
     dump_indent(stream, indent);
+    if (branch->has_binding) {
+        if (branch->binding_mutability == FENG_MUTABILITY_VAR) {
+            fputs("var ", stream);
+        }
+        dump_slice(stream, branch->binding_name);
+        fputs(": ", stream);
+    }
     for (index = 0U; index < branch->label_count; ++index) {
         if (index != 0U) {
             fputs(", ", stream);

@@ -17500,15 +17500,10 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         tgt.type->user_spec != NULL &&
         tgt.type->user_spec->form == FENG_SPEC_FORM_UNION) {
         const UserSpec *union_spec = tgt.type->user_spec;
-        FengSlice target_name = {0};
         bool first_branch = true;
         bool ok = true;
-        bool *covered_members = NULL;
         char *tgt_tmp = cg_materialize_to_local(cg, &tgt, "_umt");
 
-        if (e->as.match_expr.target->kind == FENG_EXPR_IDENTIFIER) {
-            target_name = e->as.match_expr.target->as.identifier;
-        }
         if (tgt_tmp == NULL) {
             free(ifv);
             er_free(&tgt);
@@ -17516,17 +17511,6 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
         er_free(&tgt);
-
-        covered_members = union_spec->union_member_count > 0U
-                              ? (bool *)calloc(union_spec->union_member_count,
-                                               sizeof(*covered_members))
-                              : NULL;
-        if (union_spec->union_member_count > 0U && covered_members == NULL) {
-            free(tgt_tmp);
-            free(ifv);
-            cgtype_free(result_type);
-            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
-        }
 
         for (size_t branch_index = 0U;
              branch_index < e->as.match_expr.branch_count;
@@ -17559,9 +17543,6 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                     buf_append_cstr(&condition, " || ");
                 }
                 buf_append_fmt(&condition, "%s.tag == %zuU", tgt_tmp, member_index);
-                if (covered_members != NULL) {
-                    covered_members[member_index] = true;
-                }
                 if (matched_member_count == 0U) {
                     first_member_index = member_index;
                 }
@@ -17583,13 +17564,18 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
             {
                 Scope *branch_scope = scope_push(cg->cur_scope);
-                size_t narrowing_save = cg->expr_narrowing_count;
+                FengSlice alias_name = {NULL, 0U};
 
                 if (branch_scope == NULL) {
                     ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
                     break;
                 }
                 cg->cur_scope = branch_scope;
+                if (branch->has_binding &&
+                    branch->binding_name.data != NULL &&
+                    branch->binding_name.length > 0U) {
+                    alias_name = branch->binding_name;
+                }
                 if (matched_member_count == 1U) {
                     Buf payload_expr;
                     CGType *alias_type;
@@ -17599,53 +17585,24 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                     cg_append_union_payload_field_name(&payload_expr, first_member_index);
                     alias_type = cgtype_clone(union_spec->union_member_types[first_member_index]);
 
-                    if (target_name.data != NULL && target_name.length > 0U) {
-                        char *alias_name = strndup(target_name.data, target_name.length);
+                    if (alias_name.data != NULL && alias_name.length > 0U) {
+                        char *alias_cstr = strndup(alias_name.data, alias_name.length);
 
-                        if (payload_expr.data == NULL || alias_type == NULL || alias_name == NULL ||
+                        if (payload_expr.data == NULL || alias_type == NULL || alias_cstr == NULL ||
                             !scope_add(branch_scope,
-                                       alias_name,
+                                       alias_cstr,
                                        payload_expr.data,
                                        alias_type,
                                        true)) {
                             cgtype_free(alias_type);
-                            free(alias_name);
+                            free(alias_cstr);
                             buf_free(&payload_expr);
                             cg->cur_scope = branch_scope->parent;
                             scope_pop_free(branch_scope);
                             ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
                             break;
                         }
-                        free(alias_name);
-                    } else if (payload_expr.data != NULL && alias_type != NULL) {
-                        size_t save = cg->expr_narrowing_count;
-                        size_t cap = cg->expr_narrowing_capacity;
-
-                        if (save >= cap) {
-                            size_t new_cap = cap == 0U ? 4U : cap * 2U;
-                            struct CGExprNarrowing *grown = realloc(
-                                cg->expr_narrowings,
-                                new_cap * sizeof(*grown));
-
-                            if (grown == NULL) {
-                                cgtype_free(alias_type);
-                                buf_free(&payload_expr);
-                                cg->cur_scope = branch_scope->parent;
-                                scope_pop_free(branch_scope);
-                                ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
-                                break;
-                            }
-                            cg->expr_narrowings = grown;
-                            cg->expr_narrowing_capacity = new_cap;
-                        }
-                        cg->expr_narrowings[cg->expr_narrowing_count].target_expr =
-                            e->as.match_expr.target;
-                        cg->expr_narrowings[cg->expr_narrowing_count].c_expr =
-                            strdup(payload_expr.data);
-                        cg->expr_narrowings[cg->expr_narrowing_count].type =
-                            alias_type;
-                        cg->expr_narrowing_count++;
-                        alias_type = NULL; /* ownership transferred */
+                        free(alias_cstr);
                     } else {
                         cgtype_free(alias_type);
                     }
@@ -17661,11 +17618,6 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                                               e->token)) {
                     ok = false;
                 }
-                while (cg->expr_narrowing_count > narrowing_save) {
-                    cg->expr_narrowing_count--;
-                    free(cg->expr_narrowings[cg->expr_narrowing_count].c_expr);
-                    cgtype_free(cg->expr_narrowings[cg->expr_narrowing_count].type);
-                }
                 if (ok) {
                     cg_release_scope(cg, branch_scope);
                 }
@@ -17678,23 +17630,6 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         }
 
         if (ok) {
-            bool else_has_single_member = false;
-            size_t else_member_index = 0U;
-
-            if (covered_members != NULL) {
-                size_t remaining_count = 0U;
-
-                for (size_t member_index = 0U;
-                     member_index < union_spec->union_member_count;
-                     ++member_index) {
-                    if (!covered_members[member_index]) {
-                        else_member_index = member_index;
-                        remaining_count++;
-                    }
-                }
-                else_has_single_member = remaining_count == 1U;
-            }
-
             if (first_branch) {
                 buf_append_cstr(cg->cur_body, "    {\n");
             } else {
@@ -17703,70 +17638,11 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
             {
                 Scope *else_scope = scope_push(cg->cur_scope);
-                size_t else_narrowing_save = cg->expr_narrowing_count;
 
                 if (else_scope == NULL) {
                     ok = cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 } else {
                     cg->cur_scope = else_scope;
-                    if (else_has_single_member) {
-                        Buf payload_expr;
-                        CGType *alias_type;
-
-                        buf_init(&payload_expr);
-                        buf_append_fmt(&payload_expr, "%s.payload.", tgt_tmp);
-                        cg_append_union_payload_field_name(&payload_expr, else_member_index);
-                        alias_type = cgtype_clone(union_spec->union_member_types[else_member_index]);
-
-                        if (target_name.data != NULL && target_name.length > 0U) {
-                            char *alias_name = strndup(target_name.data, target_name.length);
-
-                            if (payload_expr.data == NULL || alias_type == NULL || alias_name == NULL ||
-                                !scope_add(else_scope,
-                                           alias_name,
-                                           payload_expr.data,
-                                           alias_type,
-                                           true)) {
-                                cgtype_free(alias_type);
-                                free(alias_name);
-                                buf_free(&payload_expr);
-                                ok = cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
-                            } else {
-                                free(alias_name);
-                            }
-                        } else if (payload_expr.data != NULL && alias_type != NULL) {
-                            size_t cap = cg->expr_narrowing_capacity;
-
-                            if (cg->expr_narrowing_count >= cap) {
-                                size_t new_cap = cap == 0U ? 4U : cap * 2U;
-                                struct CGExprNarrowing *grown = realloc(
-                                    cg->expr_narrowings,
-                                    new_cap * sizeof(*grown));
-
-                                if (grown == NULL) {
-                                    cgtype_free(alias_type);
-                                    buf_free(&payload_expr);
-                                    ok = cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
-                                } else {
-                                    cg->expr_narrowings = grown;
-                                    cg->expr_narrowing_capacity = new_cap;
-                                }
-                            }
-                            if (ok) {
-                                cg->expr_narrowings[cg->expr_narrowing_count].target_expr =
-                                    e->as.match_expr.target;
-                                cg->expr_narrowings[cg->expr_narrowing_count].c_expr =
-                                    strdup(payload_expr.data);
-                                cg->expr_narrowings[cg->expr_narrowing_count].type =
-                                    alias_type;
-                                cg->expr_narrowing_count++;
-                                alias_type = NULL; /* ownership transferred */
-                            }
-                        } else {
-                            cgtype_free(alias_type);
-                        }
-                        buf_free(&payload_expr);
-                    }
 
                     if (ok && !cg_emit_branch_into_slot(cg,
                                                         e->as.match_expr.else_block,
@@ -17776,11 +17652,6 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                                                         aggregate,
                                                         e->token)) {
                         ok = false;
-                    }
-                    while (cg->expr_narrowing_count > else_narrowing_save) {
-                        cg->expr_narrowing_count--;
-                        free(cg->expr_narrowings[cg->expr_narrowing_count].c_expr);
-                        cgtype_free(cg->expr_narrowings[cg->expr_narrowing_count].type);
                     }
                     if (ok) {
                         cg_release_scope(cg, else_scope);
@@ -17797,7 +17668,6 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             buf_append_cstr(cg->cur_body, "    }\n");
         }
 
-        free(covered_members);
         free(tgt_tmp);
         if (!ok) {
             free(ifv);
@@ -21103,42 +20973,48 @@ static bool cg_union_member_index_for_label(CG *cg,
 static bool cg_emit_union_match_stmt_branch(CG *cg,
                                             const FengBlock *block,
                                             FengToken token,
-                                            FengSlice target_name,
+                                            bool has_binding,
+                                            FengSlice binding_name,
                                             bool has_single_member,
                                             const char *target_tmp,
                                             const UserSpec *spec,
                                             size_t member_index) {
     Scope *branch_scope = scope_push(cg->cur_scope);
+    FengSlice alias_name = {NULL, 0U};
     bool ok;
 
     if (branch_scope == NULL) {
         return cg_fail(cg, token, "IE0001", "codegen: out of memory");
     }
     cg->cur_scope = branch_scope;
-    if (target_name.data != NULL && target_name.length > 0U && has_single_member) {
+    /* Use binding name when present; otherwise no alias (auto-narrowing removed). */
+    if (has_binding && binding_name.data != NULL && binding_name.length > 0U) {
+        alias_name = binding_name;
+    }
+    if (alias_name.data != NULL && alias_name.length > 0U && has_single_member) {
         Buf payload_expr;
         CGType *alias_type;
-        char *alias_name;
+        char *alias_cstr;
 
         buf_init(&payload_expr);
         buf_append_fmt(&payload_expr, "%s.payload.", target_tmp);
         cg_append_union_payload_field_name(&payload_expr, member_index);
         alias_type = cgtype_clone(spec->union_member_types[member_index]);
-        alias_name = strndup(target_name.data, target_name.length);
-        if (payload_expr.data == NULL || alias_type == NULL || alias_name == NULL ||
+        alias_cstr = strndup(alias_name.data, alias_name.length);
+        if (payload_expr.data == NULL || alias_type == NULL || alias_cstr == NULL ||
             !scope_add(branch_scope,
-                       alias_name,
+                       alias_cstr,
                        payload_expr.data,
                        alias_type,
                        true)) {
             cgtype_free(alias_type);
-            free(alias_name);
+            free(alias_cstr);
             buf_free(&payload_expr);
             cg->cur_scope = branch_scope->parent;
             scope_pop_free(branch_scope);
             return cg_fail(cg, token, "IE0001", "codegen: out of memory");
         }
-        free(alias_name);
+        free(alias_cstr);
         buf_free(&payload_expr);
     }
 
@@ -21168,15 +21044,11 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
         target.type->user_spec != NULL &&
         target.type->user_spec->form == FENG_SPEC_FORM_UNION) {
         const UserSpec *union_spec = target.type->user_spec;
-        FengSlice target_name = {0};
         char *target_tmp = cg_materialize_to_local(cg, &target, "_umt");
         bool first_branch = true;
         bool ok = true;
         bool *covered_members = NULL;
 
-        if (stmt->as.match_stmt.target->kind == FENG_EXPR_IDENTIFIER) {
-            target_name = stmt->as.match_stmt.target->as.identifier;
-        }
         if (target_tmp == NULL) {
             er_free(&target);
             cg->cur_scope = match_scope->parent;
@@ -21247,7 +21119,8 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
             if (!cg_emit_union_match_stmt_branch(cg,
                                                  branch->body,
                                                  branch->token,
-                                                 target_name,
+                                                 branch->has_binding,
+                                                 branch->binding_name,
                                                  matched_member_count == 1U,
                                                  target_tmp,
                                                  union_spec,
@@ -21282,7 +21155,8 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
             if (!cg_emit_union_match_stmt_branch(cg,
                                                  stmt->as.match_stmt.else_block,
                                                  stmt->token,
-                                                 target_name,
+                                                 false,
+                                                 (FengSlice){NULL, 0U},
                                                  else_has_single_member,
                                                  target_tmp,
                                                  union_spec,

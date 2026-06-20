@@ -1388,6 +1388,97 @@ static void test_match_type_labels_parse(void) {
     feng_program_free(program);
 }
 
+static void test_match_binding_prefix_parse(void) {
+    const char *source =
+        "module demo.union;\n"
+        "func run(value: Value) {\n"
+        "    if value {\n"
+        "        x: int { print(x); }\n"
+        "        let s: string { print(s); }\n"
+        "        var b: bool { b = true; }\n"
+        "        UserType { print(1); }\n"
+        "        else { print(0); }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *stmt;
+    const FengMatchBranch *branch;
+
+    ASSERT(feng_parse_source(source, strlen(source), "match_binding.f", &program, &error));
+    ASSERT(program != NULL);
+    stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_MATCH);
+    ASSERT(stmt->as.match_stmt.branch_count == 4U);
+
+    /* Branch 0: x: int { ... } — bare binding prefix */
+    branch = &stmt->as.match_stmt.branches[0];
+    ASSERT(branch->has_binding);
+    assert_slice_text(branch->binding_name, "x");
+    ASSERT(branch->binding_mutability == FENG_MUTABILITY_LET);
+    ASSERT(branch->label_count == 1U);
+    ASSERT(branch->labels[0].kind == FENG_MATCH_LABEL_TYPE);
+
+    /* Branch 1: let s: string { ... } — explicit let */
+    branch = &stmt->as.match_stmt.branches[1];
+    ASSERT(branch->has_binding);
+    assert_slice_text(branch->binding_name, "s");
+    ASSERT(branch->binding_mutability == FENG_MUTABILITY_LET);
+    ASSERT(branch->label_count == 1U);
+
+    /* Branch 2: var b: bool { ... } — explicit var */
+    branch = &stmt->as.match_stmt.branches[2];
+    ASSERT(branch->has_binding);
+    assert_slice_text(branch->binding_name, "b");
+    ASSERT(branch->binding_mutability == FENG_MUTABILITY_VAR);
+    ASSERT(branch->label_count == 1U);
+
+    /* Branch 3: UserType { ... } — no binding */
+    branch = &stmt->as.match_stmt.branches[3];
+    ASSERT(!branch->has_binding);
+    ASSERT(branch->label_count == 1U);
+    ASSERT(branch->labels[0].kind == FENG_MATCH_LABEL_TYPE);
+
+    /* else block: no binding */
+    ASSERT(stmt->as.match_stmt.else_block != NULL);
+
+    feng_program_free(program);
+}
+
+static void test_match_binding_prefix_expression_form(void) {
+    const char *source =
+        "module demo.union;\n"
+        "func run(value: Value): int {\n"
+        "    return if value {\n"
+        "        v: int { v + 1; }\n"
+        "        string { 0; }\n"
+        "        else { -1; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *return_stmt;
+    const FengExpr *match_expr;
+    const FengMatchBranch *branch;
+
+    ASSERT(feng_parse_source(source, strlen(source), "match_binding_expr.f", &program, &error));
+    ASSERT(program != NULL);
+    return_stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(return_stmt->kind == FENG_STMT_RETURN);
+    match_expr = return_stmt->as.return_value;
+    ASSERT(match_expr->kind == FENG_EXPR_MATCH);
+    ASSERT(match_expr->as.match_expr.branch_count == 2U);
+
+    branch = &match_expr->as.match_expr.branches[0];
+    ASSERT(branch->has_binding);
+    assert_slice_text(branch->binding_name, "v");
+
+    branch = &match_expr->as.match_expr.branches[1];
+    ASSERT(!branch->has_binding);
+
+    feng_program_free(program);
+}
+
 static void test_for_in_loop(void) {
     const char *source =
         "module demo.main;\n"
@@ -2450,6 +2541,8 @@ int main(void) {
     test_union_spec_declaration_parses();
     test_union_spec_rejects_void_member();
     test_match_type_labels_parse();
+    test_match_binding_prefix_parse();
+    test_match_binding_prefix_expression_form();
     test_for_in_loop();
     test_block_yield_omits_trailing_semicolon();
     test_non_generic_array_new_uses_colon_dimension_syntax();

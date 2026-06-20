@@ -3483,21 +3483,6 @@ static bool resolver_add_local_typed_name_with_source(ResolveContext *context,
     return resolver_add_local_entry(context, name, type, mutability, source_expr, NULL);
 }
 
-static bool resolver_add_local_typed_name_with_union_narrowing(
-    ResolveContext *context,
-    FengSlice name,
-    InferredExprType type,
-    FengMutability mutability,
-    const FengExpr *source_expr,
-    const UnionNarrowingSet *union_narrowing) {
-    return resolver_add_local_entry(context,
-                                    name,
-                                    type,
-                                    mutability,
-                                    source_expr,
-                                    union_narrowing);
-}
-
 static bool resolver_add_local_typed_name(ResolveContext *context,
                                           FengSlice name,
                                           InferredExprType type,
@@ -6975,19 +6960,18 @@ static bool resolve_union_match_label_index(ResolveContext *context,
 static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
                                                      const FengBlock *block,
                                                      bool allow_self,
-                                                     FengSlice target_name,
-                                                     bool has_target_name,
-                                                     FengMutability target_mutability,
                                                      const FengExpr *target_expr,
                                                      InferredExprType original_type,
                                                      const FengUnionSpecInfo *info,
                                                      const FengTypeRef *union_spec_type_ref,
                                                      const bool *active_members,
-                                                     InferredExprType *out_yield_type) {
+                                                     InferredExprType *out_yield_type,
+                                                     bool has_binding,
+                                                     FengSlice binding_name,
+                                                     FengMutability binding_mutability) {
     bool ok;
     size_t active_count = union_active_member_count(active_members,
                                                     info != NULL ? info->member_count : 0U);
-    size_t expr_narrowing_save = context->expr_narrowing_count;
 
     if (block == NULL) {
         return true;
@@ -6996,7 +6980,8 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
         return false;
     }
     ok = true;
-    if (has_target_name && info != NULL && active_count > 0U) {
+    /* Only add a narrowed binding when the branch explicitly declares one. */
+    if (has_binding && info != NULL && active_count > 0U) {
         if (active_count == 1U) {
             size_t member_index = union_first_active_member_index(active_members, info->member_count);
             const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
@@ -7005,11 +6990,11 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
                 union_spec_type_ref,
                 info->members[member_index].type_ref);
 
-            ok = resolver_add_local_typed_name_with_union_narrowing(
+            ok = resolver_add_local_entry(
                 context,
-                target_name,
+                binding_name,
                 inferred_expr_type_from_type_ref(member_type_ref),
-                target_mutability,
+                binding_mutability,
                 target_expr,
                 NULL);
         } else {
@@ -7020,29 +7005,13 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
                 info->member_count);
 
             ok = narrowing != NULL &&
-                 resolver_add_local_typed_name_with_union_narrowing(context,
-                                                                    target_name,
-                                                                    original_type,
-                                                                    target_mutability,
-                                                                    target_expr,
-                                                                    narrowing);
+                 resolver_add_local_entry(context,
+                                          binding_name,
+                                          original_type,
+                                          binding_mutability,
+                                          target_expr,
+                                          narrowing);
         }
-    } else if (!has_target_name && target_expr != NULL && info != NULL && active_count == 1U) {
-        size_t member_index = union_first_active_member_index(active_members, info->member_count);
-        const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
-            context,
-            info->spec_decl,
-            union_spec_type_ref,
-            info->members[member_index].type_ref);
-        ExprNarrowingEntry entry;
-
-        entry.target_expr = target_expr;
-        entry.narrowed_type = inferred_expr_type_from_type_ref(member_type_ref);
-        ok = append_raw((void **)&context->expr_narrowings,
-                        &context->expr_narrowing_count,
-                        &context->expr_narrowing_capacity,
-                        sizeof(entry),
-                        &entry);
     }
     if (ok) {
         ok = resolve_block_contents(context, block, allow_self);
@@ -7050,7 +7019,6 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
     if (ok && out_yield_type != NULL) {
         *out_yield_type = block_yield_inferred_type(context, block);
     }
-    context->expr_narrowing_count = expr_narrowing_save;
     resolver_pop_scope(context);
     return ok;
 }
@@ -7074,9 +7042,6 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
     InferredExprType *branch_yield_types = NULL;
     InferredExprType else_yield_type;
     bool ok = true;
-    FengSlice target_name = {NULL, 0U};
-    FengMutability target_mutability = FENG_MUTABILITY_LET;
-    bool has_target_name = false;
 
     memset(&else_yield_type, 0, sizeof(else_yield_type));
 
@@ -7097,19 +7062,17 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
         active_members[index] = true;
     }
 
+    /* Inherit active-member narrowing from an outer binding on the same
+     * union spec so nested match sees only the already-narrowed members. */
     if (target != NULL && target->kind == FENG_EXPR_IDENTIFIER) {
         target_local = resolver_find_local_name_entry(context, target->as.identifier);
-        target_name = target->as.identifier;
-        has_target_name = true;
-        if (target_local != NULL) {
-            target_mutability = target_local->mutability;
-            if (target_local->union_narrowing != NULL &&
-                target_local->union_narrowing->union_decl == union_decl &&
-                target_local->union_narrowing->member_count == info->member_count) {
-                memcpy(active_members,
-                       target_local->union_narrowing->active_members,
-                       info->member_count * sizeof(*active_members));
-            }
+        if (target_local != NULL &&
+            target_local->union_narrowing != NULL &&
+            target_local->union_narrowing->union_decl == union_decl &&
+            target_local->union_narrowing->member_count == info->member_count) {
+            memcpy(active_members,
+                   target_local->union_narrowing->active_members,
+                   info->member_count * sizeof(*active_members));
         }
     }
 
@@ -7172,9 +7135,6 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
             ok = resolve_union_match_block_with_narrowing(context,
                                                           branches[branch_index].body,
                                                           allow_self,
-                                                          target_name,
-                                                          has_target_name,
-                                                          target_mutability,
                                                           target,
                                                           target_type,
                                                           info,
@@ -7182,7 +7142,10 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                           branch_members,
                                                           branch_yield_types != NULL
                                                               ? &branch_yield_types[branch_index]
-                                                              : NULL);
+                                                              : NULL,
+                                                          branches[branch_index].has_binding,
+                                                          branches[branch_index].binding_name,
+                                                          branches[branch_index].binding_mutability);
         }
         if (ok && is_expression_form) {
             ok = validate_block_yields_expression(context,
@@ -7205,9 +7168,6 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
             ok = resolve_union_match_block_with_narrowing(context,
                                                           else_block,
                                                           allow_self,
-                                                          target_name,
-                                                          has_target_name,
-                                                          target_mutability,
                                                           target,
                                                           target_type,
                                                           info,
@@ -7215,7 +7175,10 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                           else_members,
                                                           is_expression_form
                                                               ? &else_yield_type
-                                                              : NULL);
+                                                              : NULL,
+                                                          false,
+                                                          (FengSlice){NULL, 0U},
+                                                          FENG_MUTABILITY_LET);
             free(else_members);
         }
         if (ok && is_expression_form) {

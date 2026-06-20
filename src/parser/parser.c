@@ -18,6 +18,11 @@ typedef struct Parser {
      * nested generic type argument lists, e.g. Map<string, List<int>>.
      * See parser_consume_gt(). */
     int pending_gt;
+    /* When true, parse_postfix skips object literal suffix detection so
+     * that a `{` following an identifier is not consumed as part of an
+     * object literal. Used by if-statement / if-expression condition
+     * parsing to preserve the `{` for the body block. */
+    bool suppress_object_literal_suffix;
 } Parser;
 
 #define APPEND_VALUE(parser, items, count, capacity, value) \
@@ -2752,6 +2757,50 @@ static bool peek_match_body(Parser *parser) {
     if (t->kind == FENG_TOKEN_KW_ELSE) {
         return true;
     }
+
+    /* Binding prefix: [let|var] IDENT : Type { — match branch binding.
+     * After the colon, a type ref followed by `{` or `,` is required to
+     * distinguish from binding statements (`let x: i32 = ...;`). */
+    if (t->kind == FENG_TOKEN_KW_LET || t->kind == FENG_TOKEN_KW_VAR) {
+        ++i;
+        if (parser->tokens[i].kind == FENG_TOKEN_IDENTIFIER) {
+            ++i;
+            if (parser->tokens[i].kind == FENG_TOKEN_COLON) {
+                size_t after_type = i;
+
+                ++i;
+                if (peek_scan_type_ref_label(parser, i, &after_type)) {
+                    const FengToken *after = &parser->tokens[after_type];
+
+                    return after->kind == FENG_TOKEN_COMMA ||
+                           after->kind == FENG_TOKEN_LBRACE;
+                }
+                return false;
+            }
+        }
+        return false;
+    }
+
+    /* Binding prefix: IDENT : Type { (single-segment, not a qualified type).
+     * Same disambiguation: scan past the type and require `{` or `,`. */
+    if (t->kind == FENG_TOKEN_IDENTIFIER) {
+        size_t next = i + 1U;
+        const FengToken *after_ident = &parser->tokens[next];
+
+        if (after_ident->kind == FENG_TOKEN_COLON) {
+            size_t after_type = next;
+
+            next += 1U;
+            if (peek_scan_type_ref_label(parser, next, &after_type)) {
+                const FengToken *after = &parser->tokens[after_type];
+
+                return after->kind == FENG_TOKEN_COMMA ||
+                       after->kind == FENG_TOKEN_LBRACE;
+            }
+            return false;
+        }
+    }
+
     if (t->kind == FENG_TOKEN_MINUS) {
         ++i;
         t = &parser->tokens[i];
@@ -2937,6 +2986,78 @@ static void free_match_branch_contents(FengMatchBranch *branch) {
     free_block(branch->body);
 }
 
+/* Try to parse an optional binding prefix before match branch labels.
+ * Recognised forms:
+ *   [let|var] IDENT :     — explicit mutability + binding name
+ *   IDENT :               — implicit let + binding name
+ *
+ * Returns true on success (binding parsed or no binding found).
+ * On return, *out_has_binding indicates whether a binding was consumed.
+ * When no binding is detected the parser position is restored and the
+ * caller proceeds to parse labels normally. */
+static bool parse_match_branch_binding_prefix(
+    Parser *parser,
+    bool *out_has_binding,
+    FengSlice *out_binding_name,
+    FengMutability *out_mutability) {
+    size_t saved = parser->current;
+    FengMutability mut = FENG_MUTABILITY_LET;
+
+    *out_has_binding = false;
+    *out_binding_name = (FengSlice){NULL, 0U};
+    *out_mutability = FENG_MUTABILITY_LET;
+
+    /* Case 1: explicit let/var keyword. */
+    if (parser_check(parser, FENG_TOKEN_KW_LET) ||
+        parser_check(parser, FENG_TOKEN_KW_VAR)) {
+        if (parser_check(parser, FENG_TOKEN_KW_VAR)) {
+            mut = FENG_MUTABILITY_VAR;
+        }
+        (void)parser_advance(parser);
+        if (!parser_check(parser, FENG_TOKEN_IDENTIFIER)) {
+            parser->current = saved;
+            return true;
+        }
+        *out_binding_name = slice_from_token(parser_current(parser));
+        (void)parser_advance(parser);
+        if (!parser_check(parser, FENG_TOKEN_COLON)) {
+            parser->current = saved;
+            *out_binding_name = (FengSlice){NULL, 0U};
+            return true;
+        }
+        (void)parser_advance(parser);
+        *out_has_binding = true;
+        *out_mutability = mut;
+        return true;
+    }
+
+    /* Case 2: bare IDENT : (no let/var keyword, single-segment only). */
+    if (parser_check(parser, FENG_TOKEN_IDENTIFIER)) {
+        (void)parser_advance(parser);
+        /* Multi-segment name (IDENT . ...) is a qualified type reference. */
+        if (parser_check(parser, FENG_TOKEN_DOT)) {
+            parser->current = saved;
+            return true;
+        }
+        /* Generic type reference (IDENT < ...). */
+        if (parser_check(parser, FENG_TOKEN_LT)) {
+            parser->current = saved;
+            return true;
+        }
+        if (parser_check(parser, FENG_TOKEN_COLON)) {
+            FengSlice name = slice_from_token(parser_previous(parser));
+            (void)parser_advance(parser);
+            *out_has_binding = true;
+            *out_binding_name = name;
+            *out_mutability = FENG_MUTABILITY_LET;
+            return true;
+        }
+        parser->current = saved;
+    }
+
+    return true;
+}
+
 static bool parse_match_branch(Parser *parser, FengMatchBranch *out_branch) {
     size_t label_capacity = 0U;
 
@@ -2944,6 +3065,16 @@ static bool parse_match_branch(Parser *parser, FengMatchBranch *out_branch) {
     out_branch->labels = NULL;
     out_branch->label_count = 0U;
     out_branch->body = NULL;
+    out_branch->has_binding = false;
+    out_branch->binding_name = (FengSlice){NULL, 0U};
+    out_branch->binding_mutability = FENG_MUTABILITY_LET;
+
+    if (!parse_match_branch_binding_prefix(parser,
+                                           &out_branch->has_binding,
+                                           &out_branch->binding_name,
+                                           &out_branch->binding_mutability)) {
+        return false;
+    }
 
     for (;;) {
         FengMatchLabel label;
@@ -3153,8 +3284,13 @@ static void convert_trailing_yield_stmt_to_expr(Parser *parser, FengBlock *block
 }
 
 static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
-    FengExpr *condition = parse_expression(parser);
+    FengExpr *condition;
     FengExpr *expr;
+    bool saved_suppress = parser->suppress_object_literal_suffix;
+
+    parser->suppress_object_literal_suffix = true;
+    condition = parse_expression(parser);
+    parser->suppress_object_literal_suffix = saved_suppress;
 
     if (condition == NULL) {
         return NULL;
@@ -3357,7 +3493,11 @@ static FengExpr *parse_group_or_cast(Parser *parser) {
             return parse_empty_tuple_literal(parser, group_token);
         }
 
-        FengExpr *expr = parse_expression(parser);
+        FengExpr *expr;
+        bool saved_suppress = parser->suppress_object_literal_suffix;
+        parser->suppress_object_literal_suffix = false;
+        expr = parse_expression(parser);
+        parser->suppress_object_literal_suffix = saved_suppress;
 
         if (expr == NULL) {
             return NULL;
@@ -3501,19 +3641,24 @@ static FengExpr *parse_postfix(Parser *parser) {
             }
 
             if (!parser_check(parser, FENG_TOKEN_RPAREN)) {
+                bool saved_suppress = parser->suppress_object_literal_suffix;
+                parser->suppress_object_literal_suffix = false;
                 do {
                     FengExpr *arg = parse_expression(parser);
 
                     if (arg == NULL) {
+                        parser->suppress_object_literal_suffix = saved_suppress;
                         free_expr(call);
                         return NULL;
                     }
                     if (!APPEND_VALUE(parser, call->as.call.args, call->as.call.arg_count, arg_capacity, arg)) {
+                        parser->suppress_object_literal_suffix = saved_suppress;
                         free_expr(arg);
                         free_expr(call);
                         return NULL;
                     }
                 } while (parser_match(parser, FENG_TOKEN_COMMA));
+                parser->suppress_object_literal_suffix = saved_suppress;
             }
 
             if (!parser_expect(parser, FENG_TOKEN_RPAREN, "SE0005", "expected ')' to close argument list")) {
@@ -3577,7 +3722,12 @@ static FengExpr *parse_postfix(Parser *parser) {
                     return NULL;
                 }
 
-                size_expr = parse_expression(parser);
+                {
+                    bool saved_suppress = parser->suppress_object_literal_suffix;
+                    parser->suppress_object_literal_suffix = false;
+                    size_expr = parse_expression(parser);
+                    parser->suppress_object_literal_suffix = saved_suppress;
+                }
                 if (size_expr == NULL) {
                     free_expr(expr);
                     return NULL;
@@ -3630,8 +3780,12 @@ static FengExpr *parse_postfix(Parser *parser) {
 
             /* Ordinary index expression: value[index]. */
             {
-                FengExpr *inner = parse_expression(parser);
+                FengExpr *inner;
                 FengExpr *index;
+                bool saved_suppress = parser->suppress_object_literal_suffix;
+                parser->suppress_object_literal_suffix = false;
+                inner = parse_expression(parser);
+                parser->suppress_object_literal_suffix = saved_suppress;
 
                 if (inner == NULL) {
                     free_expr(expr);
@@ -3662,16 +3816,18 @@ static FengExpr *parse_postfix(Parser *parser) {
         break;
     }
 
-    if (expr->kind == FENG_EXPR_GENERIC_TARGET && looks_like_object_literal(parser)) {
-        expr = new_call_from_explicit_generic_target(parser, expr);
-        if (expr == NULL) {
-            return NULL;
+    if (!parser->suppress_object_literal_suffix) {
+        if (expr->kind == FENG_EXPR_GENERIC_TARGET && looks_like_object_literal(parser)) {
+            expr = new_call_from_explicit_generic_target(parser, expr);
+            if (expr == NULL) {
+                return NULL;
+            }
         }
-    }
 
-    if ((expr->kind == FENG_EXPR_IDENTIFIER || expr->kind == FENG_EXPR_MEMBER || expr->kind == FENG_EXPR_CALL) &&
-        looks_like_object_literal(parser)) {
-        return parse_object_literal_suffix(parser, expr);
+        if ((expr->kind == FENG_EXPR_IDENTIFIER || expr->kind == FENG_EXPR_MEMBER || expr->kind == FENG_EXPR_CALL) &&
+            looks_like_object_literal(parser)) {
+            return parse_object_literal_suffix(parser, expr);
+        }
     }
 
     return expr;
@@ -3830,10 +3986,15 @@ static FengBlock *parse_block(Parser *parser) {
 static FengStmt *parse_if_statement(Parser *parser) {
     FengToken if_token = parser_previous_token(parser);
     FengExpr *first_condition;
+    bool saved_suppress = parser->suppress_object_literal_suffix;
 
     /* Parse the head expression first; it may be either a boolean condition
-     * or the target of the internal if-match statement form. */
+     * or the target of the internal if-match statement form. Suppress
+     * object literal suffix detection so the `{` is preserved for the body. */
+    parser->suppress_object_literal_suffix = true;
     first_condition = parse_expression(parser);
+    parser->suppress_object_literal_suffix = saved_suppress;
+
     if (first_condition == NULL) {
         return NULL;
     }

@@ -15656,7 +15656,7 @@ static void test_union_if_match_narrows_object_spec_member(void) {
         "spec Value: Named | int;\n"
         "func run(value: Value): string {\n"
         "    return if value {\n"
-        "        Named { value.name; }\n"
+        "        v: Named { v.name; }\n"
         "        else { \"\"; }\n"
         "    };\n"
         "}\n";
@@ -15708,7 +15708,7 @@ static void test_generic_union_form_accepts_concrete_member_matching(void) {
         "}\n"
         "func run(value: Result<int>): int {\n"
         "    return if value {\n"
-        "        int { value + 1; }\n"
+        "        v: int { v + 1; }\n"
         "        Error { 0; }\n"
         "        else { 0; }\n"
         "    };\n"
