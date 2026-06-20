@@ -81,22 +81,29 @@ if age {
 规则说明:
 
 - 是否进入 union member 匹配，由目标表达式的静态类型决定；一旦进入该模式，分支标签必须写该 union-form 的归一化 member，不得与字面量、值列表或整数区间标签混用。
-- 每个非 `else` 分支可写一个或多个 member；多个 member 以逗号分隔。
-- 单个 member 分支把目标值收窄到该确定 member；多个 member 分支只把目标值收窄到对应 member 子集；`else` 分支收窄为剩余 member 集合。
+- 每个非 `else` 分支支持两种形式：
+  - **有绑定分支** `[let|var] name: Type { ... }`：匹配的同时把收窄后的值绑定到新的局部变量 `name`；`name` 在分支内以获得的具体 member 类型操作。绑定变量默认为 `let`（不可变），可显式使用 `let` 或 `var`。
+  - **无绑定分支** `Type { ... }`：仅做匹配判别，目标值在分支内保持原始 union 类型，不做自动收窄。
+- 单个 member 的有绑定分支把绑定变量收窄到该确定 member 类型；多个 member 的有绑定分支把绑定变量收窄到对应 member 子集的 union 类型；`else` 分支收窄为剩余 member 集合，不支持绑定。
 - 匹配只按当前 active member 判别；不会在匹配阶段把当前 member 自动向上转换到别的 `spec` 后再尝试命中分支。
-- 若某个分支收窄后仍保留多个 member，则分支内值仍是 union 视角；若要访问、调用或比较，必须继续收窄到单一 member。
+- 无绑定分支内，目标值保持原始 union 类型，不可直接做成员访问或比较；有绑定分支内，若绑定变量收窄后仍包含多个 member，则仍是 union 视角，若要访问、调用或比较，必须继续收窄到单一 member。
+- 允许同一匹配体中混合使用绑定分支和无绑定分支。
 - 该模式的完整语义，包括 active member 的进入站点选择、object-form `spec` member 的视角取得与显式转换限制，见 [feng-union-type.md](./feng-union-type.md)。
 
 ```feng
 if v {
-  UserType {
-    // 此处分支内，v 收窄为 UserType
+  u: UserType {
+    // 有绑定分支，u 的类型为 UserType
   }
-  Named, string {
-    // 此处分支内，v 收窄为 Named | string
+  UserType {
+    // 无绑定分支，仅做匹配判别，v 保持 union 类型
+  }
+  sub: Named, string {
+    // 有绑定分支，sub 的类型为子集 union Named | string
+    // 若要访问或比较，仍需继续收窄到单一 member
   }
   else {
-    // 此处分支内，v 收窄为剩余 member 集合
+    // 无绑定，收窄为剩余 member 集合
   }
 }
 ```

@@ -144,63 +144,76 @@ union-form `spec` 的职责是声明“若干候选类型的其一”。
 
 其中，`if 目标值 { ... }` 作为流程控制语法外壳及其表达式位置规则由 [feng-flow.md](./feng-flow.md) 统一定义；本文只补充 union-form 在该语法下的 member 标签、active member 判别与收窄语义。
 
+union member 匹配分支支持两种形式：
+
+- **无绑定分支** `Type { ... }`：仅做匹配判别，目标值在分支内保持原始 union 类型，不做自动收窄。
+- **有绑定分支** `[let|var] name: Type { ... }`：匹配判别的同时，把收窄后的值绑定到新的局部变量 `name`；`name` 在分支内以获得的具体 member 类型操作。
+
+约束：
+
+- 绑定变量默认为 `let`（不可变），可显式使用 `let` 或 `var`。
+- 无绑定分支不创建任何新变量，目标值保持原始 union 类型，分支内不可直接做成员访问或比较。
+- `else` 分支不支持绑定。
+- 允许同一匹配体中混合使用绑定分支和无绑定分支。
+
 候选形式如下：
 
 ```feng
 spec T: int | string | UserType | Named;
 
 if v {
-  int {
-    // 此处分支内，v 收窄为 int
+  x: int {
+    // x 类型为 int
   }
-  string {
-    // 此处分支内，v 收窄为 string
+  s: string {
+    // s 类型为 string
   }
   UserType {
-    // 此处分支内，v 收窄为 UserType
+    // 无绑定，v 保持 union 类型
   }
-  Named {
-    // 此处分支内，v 收窄为 Named
+  n: Named {
+    // n 类型为 Named
   }
   else {
-    // 若前述分支已排除全部其他 member，则此处分支收窄为剩余 member 集合
+    // 无绑定，收窄为剩余 member 集合
   }
 }
 ```
 
-这里复用的是现有 `if 目标值 { ... }` 的分支外壳，而不是继续引入一个容易被误解为“任意运行时类型/接口判断”的独立 `is` 运算符。
+这里复用的是现有 `if 目标值 { ... }` 的分支外壳，而不是继续引入一个容易被误解为”任意运行时类型/接口判断”的独立 `is` 运算符。
 
 当前已确认的语义要点：
 
-- 单个 member 分支表示“当前 active member 就是该 member”；分支内的值收窄为该确定 member。
+- 单个 member 的有绑定分支表示”当前 active member 就是该 member”；绑定变量以获得的具体 member 类型操作。
 - 当 `if` 的目标表达式静态类型为 union-form 时，该 `if 目标值 { ... }` 的整个匹配体进入 union member 类型匹配模式；只允许 union member 类型标签与 `else`，不允许字面量值标签或区间标签。
 - union-form 未收窄前不具备可直接比较的统一值语义，因此不能在同一次匹配中把 `int { ... }` 这类 member 标签与 `1 { ... }`、`1...5 { ... }` 这类值/区间标签混用。
 - union 值在进入 union-form 的具体站点时，active member 就已经被确定；后续 `if 目标值 { ... }` 条件匹配只针对这个已确定的 active member 做判别，不会先把当前 member 向上转换到别的 `spec` 后再尝试匹配。
-- 多个 member 可在同一分支中以逗号罗列；这类分支只把值收窄到“被列出的 member 子集”，而不是某个单一确定类型。
-- `else` 分支收窄为剩余 member 集合；若剩余集合大小为 1，则该分支收窄到唯一剩余 member，否则仍是更小的 union 子集。
-- 当分支内收窄结果仍包含多个 member 时，值依然处于 union 视角，只是 member 集合变小；此时仍不允许直接做成员访问、方法调用或 `==` / `!=` 比较。
-- 当目标 member 本身是 object-form `spec` 且该分支只命中该单一 member 时，分支内值直接取得该 `spec` 视角，并可按该 `spec` 的既有规则访问成员与发起调用。
-- 收窄到 object-form `spec` member 后，分支内值仍处于该 `spec` 的抽象视角，**不能进一步收窄到具体实现类型**。原因在于 object-form `spec` 是开放类型——任意在当前可见契约闭包中 fit 该 `spec` 的类型均可进入，编译期无法穷举全部候选；因此，该分支内只允许通过该 `spec` 的方法或成员发起调用，不存在继续向下收窄的路径。若程序需要对具体实现类型做进一步判别，应将各具体类型作为独立 union member 直接列出，而不是通过它们共同满足的 object-form `spec` 间接列入。
+- 多个 member 可在同一分支中以逗号罗列；有绑定分支把绑定变量收窄到”被列出的 member 子集”的 union 类型，而不是某个单一确定类型；无绑定分支保持原始 union 类型。
+- `else` 分支收窄为剩余 member 集合；若剩余集合大小为 1，则该分支收窄到唯一剩余 member，否则仍是更小的 union 子集。`else` 分支不支持绑定。
+- 当有绑定分支的绑定变量收窄后仍包含多个 member 时，绑定变量依然处于 union 视角，只是 member 集合变小；此时仍不允许直接做成员访问、方法调用或 `==` / `!=` 比较。
+- 当目标 member 本身是 object-form `spec` 且该分支只命中该单一 member 时，绑定变量直接取得该 `spec` 视角，并可按该 `spec` 的既有规则访问成员与发起调用。
+- 收窄到 object-form `spec` member 后，绑定变量仍处于该 `spec` 的抽象视角，**不能进一步收窄到具体实现类型**。原因在于 object-form `spec` 是开放类型——任意在当前可见契约闭包中 fit 该 `spec` 的类型均可进入，编译期无法穷举全部候选；因此，该分支内只允许通过该 `spec` 的方法或成员发起调用，不存在继续向下收窄的路径。若程序需要对具体实现类型做进一步判别，应将各具体类型作为独立 union member 直接列出，而不是通过它们共同满足的 object-form `spec` 间接列入。
 - 若某个分支先收窄到具体类型，且当前可见契约闭包可证明该具体类型满足某个 object-form `spec`，则允许通过显式转换把该值转换到目标 `spec` 视角；该能力与分支匹配收窄分离。
 - 由于不引入独立 `is` 运算符，因此不存在 `&&` / `||` 中基于 `is` 的短路收窄传播规则。
 
-例如，单 member 分支可直接操作：
+例如，单 member 有绑定分支可直接操作：
 
 ```feng
 if v {
-  Named {
-    return v.display();
+  n: Named {
+    return n.display();
   }
 }
 ```
 
-上例成立的前提是 `Named` 本身就是该 union-form 的归一化 member；这里不是在运行时检查某个 concrete type 是否“也满足 `Named`”，而是在判断当前 active member 是否就是 `Named`。
+上例成立的前提是 `Named` 本身就是该 union-form 的归一化 member；这里不是在运行时检查某个 concrete type 是否”也满足 `Named`”，而是在判断当前 active member 是否就是 `Named`。
 
 同理，若某个值在进入 union-form 时是按 `UserType` member 进入，则后续：
 
 ```feng
 if v {
   Named {
+    // 无绑定分支，仅做匹配判别
     // 不会因为当前 active member `UserType` 恰好满足 `Named` 就自动命中
   }
 }
@@ -208,12 +221,12 @@ if v {
 
 上例中，`Named` 分支只有在 `Named` 本身就是当前 active member 时才会命中；不会因为 `UserType` 可显式向上转换到 `Named`，就在条件匹配阶段自动完成这次转换后再匹配。
 
-若分支一次罗列多个 member，则该分支只得到更小的 union 子集。例如：
+若无绑定分支一次罗列多个 member，则该分支仅做匹配判别，目标值保持原始 union 类型。例如：
 
 ```feng
 if v {
   UserType, Named {
-    // 此处分支内，v 的视角是 UserType | Named
+    // 无绑定分支，v 保持 union 类型（子集为 UserType | Named）
     // 若要访问或比较，仍需继续收窄到单一 member
   }
 }
@@ -223,13 +236,13 @@ if v {
 
 ```feng
 if v {
-  UserType {
-    let named = (Named)v;
+  u: UserType {
+    let named = (Named)u;
   }
 }
 ```
 
-上例中，`UserType` 分支只负责把 `v` 收窄为 `UserType`；后续 `(Named)v` 是否成立，取决于当前可见契约闭包中 `UserType` 是否满足 `Named`。若不满足，则该显式转换应报错。
+上例中，`UserType` 分支通过绑定变量 `u` 把值收窄为 `UserType`；后续 `(Named)u` 是否成立，取决于当前可见契约闭包中 `UserType` 是否满足 `Named`。若不满足，则该显式转换应报错。
 
 需要额外明确的是：当前阶段**不支持**把仍处于 union 视角的值直接投影到一个共同 `spec`，即使该 union 的全部 member 都满足该 `spec`。例如：
 
@@ -364,8 +377,9 @@ func use<V: Value>(v: V): void { ... }
 
 约束细则：
 
-- 在泛型声明体内，被约束参数 `V` 的值处于 union 视角；**未经 `if 目标值 { ... }` 收窄时，不允许对其做成员访问、方法调用或 `==` / `!=` 比较**。
-- 利用 `if 目标值 { ... }` 对参数值进行 member 匹配后，分支内的值按已收窄到的 member 的既有规则操作。
+- 在泛型声明体内，被约束参数 `V` 的值处于 union 视角；**未经 `if 目标值 { ... }` 绑定收窄时，不允许对其做成员访问、方法调用或 `==` / `!=` 比较**。
+- 利用 `if 目标值 { ... }` 对参数值进行 member 匹配时，分支支持有绑定和无绑定两种形式（见 3.6 节）；只有有绑定分支才能通过绑定变量按已收窄的 member 类型做成员访问、方法调用或比较。
+- 无绑定分支不做自动收窄；泛型体内对参数值的任何成员访问或比较，都必须通过有绑定分支的绑定变量完成。
 - union-form 约束不为参数类型物化 witness；调用点只传入值本身，而不是 object-form `spec` 约束所需的「值 + witness」对。
 - 当前阶段每个类型参数至多一个 union-form 约束；不支持 union-form 约束与 object-form `spec` 约束同时修饰同一个类型参数。
 - 在约束链传递中（如子 `spec` 继承父 `spec` 的约束），union-form 约束遵循与 object-form `spec` 约束相同的参数传递规则：向上传递的约束不得比目标约束更宽松。
@@ -491,7 +505,7 @@ func use<V: Value>(v: V): void { ... }
   - 若 member 解析后本身是 union-form，则在编译期拍平、去重并形成保持声明顺序的归一化成员集合；
   - 默认零值取归一化后的第一个 member 的默认零值；
   - 若归一化后的第一个 member 不是合法默认零值目标，则该 union-form 也不是合法默认零值目标；
-  - union-form 的成员收窄仅复用现有 `if 目标值 { ... }` 条件匹配形式，不引入独立 `is` 运算符；
+  - union-form 的成员收窄仅复用现有 `if 目标值 { ... }` 条件匹配形式，不引入独立 `is` 运算符；收窄通过有绑定分支的绑定变量实现，无绑定分支不做自动收窄（绑定语法与约束见 3.6 节）；
   - union 值一旦在进入站点选定 active member，后续条件匹配只按该已选定 member 判别；不会在匹配阶段再依据其可向上转换到的 `spec` 重新解释当前值；
   - 值进入 union-form 时，若源静态类型与某个归一化 member 精确一致，则必须优先按该 member 进入；即使该源类型也满足其他 `spec` member，也不构成歧义；
   - 只有在不存在精确 member 命中，且多个 `spec` member 可通过编译期可证的向上转换同时接纳源值时，才构成进入站点冲突；
@@ -500,8 +514,8 @@ func use<V: Value>(v: V): void { ... }
   - 重叠 member 的最终歧义判定不在 union-form 声明点完成，而应在当前可见契约闭包固定后，于值进入 union-form 的具体站点执行；
   - `==` / `!=` 也必须先收窄到确定 member；
   - 未收窄时禁止成员访问；
-  - 单个 member 分支收窄到确定 member；多个 member 罗列分支只收窄到对应子集，若子集大小大于 1，则分支内仍保持 union 视角；
-  - 当 `spec` 本身是 union member 时，收窄到该 `spec` 后，分支内值直接按该 `spec` 视角操作；
+  - 单个 member 的有绑定分支把绑定变量收窄到确定 member 类型；无绑定分支保持原始 union 类型；多个 member 罗列的有绑定分支把绑定变量收窄到对应子集的 union 类型；
+  - 当 `spec` 本身是 union member 时，有绑定分支收窄到该 `spec` 后，绑定变量直接按该 `spec` 视角操作；
   - 已收窄到具体类型后，若当前可见契约闭包可证明其满足某个 object-form `spec`，则允许显式转换到该 `spec`；
   - 即使某个 union 或 union 子集的全部可能 member 都满足同一个 object-form `spec`，当前阶段也不允许直接把该 union 视角值显式转换到该共同 `spec`；若放开此能力，一般可能需要一次基于 `tag` 的运行时投影，因此应单独设计；
   - 可编译期收窄时优先编译期收窄；
@@ -542,14 +556,14 @@ func use<V: Value>(v: V): void { ... }
 - 基础收窄仅复用现有 `if 目标值 { ... }` 条件匹配形式，不新增独立 `is` 运算符。
 - 当 `if` 的目标静态类型为 union-form 时，匹配体只允许 union member 类型标签与 `else`；字面量值标签与区间标签仅适用于非 union 目标。
 - union 值在进入站点选定 active member 后，后续条件匹配只按该 active member 本身判别；不会在匹配阶段自动向上转换后再命中别的 `spec` branch。
-- union-form 的成员访问必须先收窄到确定 member。
+- union-form 的成员访问必须先收窄到确定 member；收窄通过有绑定分支的绑定变量实现，无绑定分支不做自动收窄（绑定语法与约束见 3.6 节）。
 - 可编译期完成的收窄应优先在编译期完成。
 - 运行时收窄的基本成本应收敛为一次 `tag` 判别，而不是每次成员访问重复判别。
-- 单个 member 分支收窄到该确定 member。
-- 多个 member 可以在同一分支中以逗号罗列；这类分支只收窄到对应 member 子集，而不是单一确定类型。
-- 当某个分支收窄后的 member 子集大小仍大于 1 时，分支内值仍是 union 视角；若要访问、调用或比较，必须继续收窄到单一 member。
-- `else` 分支收窄为剩余 member 集合；若剩余集合可唯一确定，则该分支收窄到唯一剩余 member，否则仍是更小的 union 子集。
-- 当目标 member 本身是 object-form `spec` 且该分支只命中这一个 member 时，分支内值直接按该 `spec` 视角操作。收窄到 object-form `spec` member 后，值仍处于该 `spec` 的抽象视角，不能进一步收窄到具体实现类型；object-form `spec` 是开放类型，编译期无法穷举其全部实现，该分支内只允许调用该 `spec` 本身定义的方法与成员。若需对具体实现类型做判别，应将各具体类型作为独立 union member 直接列出。
+- 单个 member 的有绑定分支把绑定变量收窄到该确定 member 类型；无绑定分支保持目标值的原始 union 类型。
+- 多个 member 可以在同一分支中以逗号罗列；有绑定分支把绑定变量收窄到对应 member 子集的 union 类型，无绑定分支保持原始 union 类型。
+- 当某个有绑定分支收窄后的 member 子集大小仍大于 1 时，绑定变量仍是 union 视角；若要访问、调用或比较，必须继续收窄到单一 member。
+- `else` 分支收窄为剩余 member 集合；若剩余集合可唯一确定，则该分支收窄到唯一剩余 member，否则仍是更小的 union 子集。`else` 分支不支持绑定。
+- 当目标 member 本身是 object-form `spec` 且该分支只命中这一个 member 时，绑定变量直接按该 `spec` 视角操作。收窄到 object-form `spec` member 后，绑定变量仍处于该 `spec` 的抽象视角，不能进一步收窄到具体实现类型；object-form `spec` 是开放类型，编译期无法穷举其全部实现，该分支内只允许调用该 `spec` 本身定义的方法与成员。若需对具体实现类型做判别，应将各具体类型作为独立 union member 直接列出。
 - 已收窄到具体类型后，若当前可见契约闭包能证明其满足某个 object-form `spec`，则应通过显式转换进入该 `spec` 视角。
 - 即使某个 union 视角值的全部可能 member 都满足同一个 object-form `spec`，当前阶段也不支持直接把该 union 视角值显式转换到该共同 `spec`；这类能力一般可能需要一次基于 `tag` 的运行时投影，因此暂不纳入本轮设计。
 - 当前阶段无剩余未决项。
