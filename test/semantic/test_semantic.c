@@ -2700,6 +2700,91 @@ static void test_if_match_trailing_if_else_in_else_branch_accepted(void) {
     feng_program_free(program);
 }
 
+static void test_try_expr_trailing_if_else_in_catch_accepted(void) {
+    /* An if/else at the end of a try-expression catch clause body should
+     * be converted to an if-expression so the catch clause can yield a
+     * value. */
+    const char *source =
+        "module demo.main;\n"
+        "func parse(): i32 { return 1; }\n"
+        "func run() {\n"
+        "    let x: i32 = try parse() catch ex: i32 {\n"
+        "        if true { 10 } else { 20 }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("trailing_if_in_try_catch_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_try_stmt_trailing_if_in_catch_not_converted(void) {
+    /* A try STATEMENT (not expression) with a trailing if/return in the
+     * catch body must NOT be converted to if-expression.  The if is used
+     * for control flow, not value production. */
+    const char *source =
+        "module demo.main;\n"
+        "func parse(): i32 { return 1; }\n"
+        "func run(): i32 {\n"
+        "    try parse() catch ex: i32 {\n"
+        "        if true { return 10; } else { return 20; }\n"
+        "    };\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("try_stmt_trailing_if_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_if_match_stmt_trailing_if_in_branch_not_converted(void) {
+    /* An if-match STATEMENT (not expression) with a trailing if/return
+     * in a branch body must NOT be converted to if-expression. */
+    const char *source =
+        "module demo.main;\n"
+        "func run(): i32 {\n"
+        "    let v: i32 = 1;\n"
+        "    if v {\n"
+        "        1 {\n"
+        "            if true { return 10; } else { return 20; }\n"
+        "        }\n"
+        "        else { return 0; }\n"
+        "    }\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("if_match_stmt_trailing_if_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_break_directly_in_try_expr_catch_block_is_rejected(void) {
     /* break directly inside a catch block of a try expression is invalid
      * because the expression must produce a value on every path. */
@@ -16209,6 +16294,9 @@ int main(void) {
     test_if_expr_trailing_if_without_else_rejected();
     test_if_match_trailing_if_else_in_branch_accepted();
     test_if_match_trailing_if_else_in_else_branch_accepted();
+    test_try_expr_trailing_if_else_in_catch_accepted();
+    test_try_stmt_trailing_if_in_catch_not_converted();
+    test_if_match_stmt_trailing_if_in_branch_not_converted();
     test_break_directly_in_try_expr_catch_block_is_rejected();
     test_continue_directly_in_try_expr_catch_block_is_rejected();
     test_break_inside_loop_inside_try_expr_catch_block_is_accepted();

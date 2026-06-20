@@ -3290,7 +3290,6 @@ static FengExpr *parse_try_expression(Parser *parser, FengToken try_token) {
             free_expr(expr);
             return NULL;
         }
-        convert_trailing_yield_stmt_to_expr(parser, clause.body);
         if (!APPEND_VALUE(parser,
                           expr->as.try_expr.clauses,
                           expr->as.try_expr.clause_count,
@@ -3428,9 +3427,18 @@ static FengExpr *parse_primary(Parser *parser) {
         case FENG_TOKEN_KW_IF:
             (void)parser_advance(parser);
             return parse_if_expression(parser, token);
-        case FENG_TOKEN_KW_TRY:
+        case FENG_TOKEN_KW_TRY: {
+            FengExpr *try_expr;
+
             (void)parser_advance(parser);
-            return parse_try_expression(parser, token);
+            try_expr = parse_try_expression(parser, token);
+            if (try_expr != NULL) {
+                for (size_t ci = 0U; ci < try_expr->as.try_expr.clause_count; ++ci) {
+                    convert_trailing_yield_stmt_to_expr(parser, try_expr->as.try_expr.clauses[ci].body);
+                }
+            }
+            return try_expr;
+        }
         default:
             (void)parser_error_current(
                 parser,
