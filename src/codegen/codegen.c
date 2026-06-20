@@ -13542,6 +13542,24 @@ static bool cg_build_method_type_param_constraints(CG *cg,
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
+    /* Extract method type param names so cg_resolve_type can match open
+     * spec instances (e.g. JsonSerializable<T>) registered with context. */
+    char **method_tp_names = NULL;
+    if (count > 0U) {
+        if (!cg_callable_type_param_names(cg, sig, blame, &method_tp_names)) {
+            free((void *)constraints);
+            return false;
+        }
+    }
+
+    /* Save generic-fn context so we can temporarily activate the method's
+     * type params for constraint resolution, then restore afterwards. */
+    bool saved_in_generic_fn = cg->in_generic_fn;
+    size_t saved_tp_count = cg->generic_fn_type_param_count;
+    char **saved_tp_names = cg->generic_fn_type_param_names;
+    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    const char **saved_tp_descs = cg->generic_fn_type_param_descs;
+
     for (size_t i = 0; i < count; ++i) {
         const FengTypeRef *constraint_ref = sig->type_params[i].constraint;
         FengTypeRef *substituted = NULL;
@@ -13558,16 +13576,33 @@ static bool cg_build_method_type_param_constraints(CG *cg,
                 owner->generic_origin_decl->as.type_decl.type_param_count,
                 owner->generic_type_args);
             if (substituted == NULL) {
+                cg_free_cstr_array(method_tp_names, count);
                 free((void *)constraints);
                 return false;
             }
             constraint_ref = substituted;
         }
 
+        /* Activate method type params so open spec instances resolve. */
+        cg->in_generic_fn = true;
+        cg->generic_fn_type_param_count = count;
+        cg->generic_fn_type_param_names = method_tp_names;
+        cg->generic_fn_type_param_constraints = NULL;
+        cg->generic_fn_type_param_descs = NULL;
+
         ok = cg_resolve_type(cg, constraint_ref, &sig->type_params[i].token,
                              &constraint_type);
+
+        /* Restore saved generic-fn context. */
+        cg->in_generic_fn = saved_in_generic_fn;
+        cg->generic_fn_type_param_count = saved_tp_count;
+        cg->generic_fn_type_param_names = saved_tp_names;
+        cg->generic_fn_type_param_constraints = saved_tp_constraints;
+        cg->generic_fn_type_param_descs = saved_tp_descs;
+
         cg_type_ref_free(substituted);
         if (!ok) {
+            cg_free_cstr_array(method_tp_names, count);
             free((void *)constraints);
             return false;
         }
@@ -13576,6 +13611,7 @@ static bool cg_build_method_type_param_constraints(CG *cg,
              constraint_type->kind != CG_TYPE_CALLABLE) ||
             constraint_type->user_spec == NULL) {
             cgtype_free(constraint_type);
+            cg_free_cstr_array(method_tp_names, count);
             free((void *)constraints);
             return cg_fail(cg, sig->type_params[i].token,
                 "CE0133", "codegen: generic method constraint for '%.*s' must be a spec supported by codegen",
@@ -13586,6 +13622,7 @@ static bool cg_build_method_type_param_constraints(CG *cg,
         cgtype_free(constraint_type);
     }
 
+    cg_free_cstr_array(method_tp_names, count);
     *out_constraints = constraints;
     return true;
 }
@@ -14302,6 +14339,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     size_t emitted_arg_count = 0U;
     CGType *concrete_return = NULL;
     char *ret_cname = NULL;
+    char *dispatch_name = NULL;
     bool ok = true;
 
     er_init(out);
@@ -14610,9 +14648,32 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     }
 
     {
+        /* For imported non-generic types with generic static methods,
+         * call the exported dispatch function instead of the file-local
+         * static function.  Generic type instances already have their
+         * wrappers emitted via cg_emit_generic_type_method_wrapper. */
+        bool method_is_imported = owner_type != NULL &&
+            !owner_type->is_generic_instance &&
+            cg_program_origin(cg, owner_type->owner_program) ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
+        const char *call_name = um->c_name;
+        if (method_is_imported && owner_type->decl != NULL) {
+            dispatch_name = cg_generic_type_method_shared_cname(
+                cg, owner_type->decl, um->member);
+            if (dispatch_name == NULL) {
+                ok = false;
+                goto cleanup;
+            }
+            call_name = dispatch_name;
+        }
+
         bool has_arg = false;
 
-        buf_append_fmt(cg->cur_body, "    %s(", um->c_name);
+        buf_append_fmt(cg->cur_body, "    %s(", call_name);
+        if (method_is_imported && owner_type->c_desc_name != NULL) {
+            buf_append_fmt(cg->cur_body, "&%s", owner_type->c_desc_name);
+            has_arg = true;
+        }
         if (!cg_append_static_owner_context_args(cg,
                                                  cg->cur_body,
                                                  owner_type,
@@ -14675,6 +14736,7 @@ cleanup:
     free((void *)constraint_specs);
     cgtype_free(concrete_return);
     free(ret_cname);
+    free(dispatch_name);
     return ok;
 }
 
@@ -28784,7 +28846,51 @@ static bool cg_emit_all_programs(CG *cg,
             cg_emit_user_method_proto(&cg->fn_protos, t, &t->methods[mi], false);
         }
         for (size_t mi = 0; mi < t->static_method_count; mi++) {
-            cg_emit_user_method_proto(&cg->fn_protos, t, &t->static_methods[mi], false);
+            const UserMethod *sm = &t->static_methods[mi];
+            const FengCallableSignature *sm_sig =
+                sm->member != NULL ? &sm->member->as.callable : NULL;
+            size_t sm_tp_count = sm_sig != NULL ? sm_sig->type_param_count : 0U;
+
+            if (sm_tp_count > 0U && t->decl != NULL) {
+                /* Imported generic static method on a non-generic type:
+                 * emit dispatch-style forward declaration using the
+                 * exported FengGenericMethod__ symbol name. */
+                char *sm_shared = cg_generic_type_method_shared_cname(
+                    cg, t->decl, sm->member);
+                if (sm_shared == NULL) {
+                    return cg_fail(cg, sm->member->token, "IE0001",
+                                   "codegen: out of memory");
+                }
+                bool has_out = sm->return_type != NULL &&
+                               sm->return_type->kind != CG_TYPE_VOID;
+                buf_append_fmt(&cg->fn_protos, "void %s(", sm_shared);
+                buf_append_cstr(&cg->fn_protos,
+                                "const FengTypeDescriptor *_type_desc");
+                for (size_t tpi = 0; tpi < sm_tp_count; ++tpi) {
+                    buf_append_cstr(&cg->fn_protos, ", ");
+                    buf_append_fmt(&cg->fn_protos,
+                                   "const FengGenericParamDescriptor *_%.*s",
+                                   (int)sm_sig->type_params[tpi].name.length,
+                                   sm_sig->type_params[tpi].name.data);
+                }
+                for (size_t pi = 0; pi < sm->param_count; ++pi) {
+                    buf_append_cstr(&cg->fn_protos, ", ");
+                    if (sm->param_types[pi] != NULL &&
+                        sm->param_types[pi]->kind == CG_TYPE_GENERIC_PARAM) {
+                        buf_append_fmt(&cg->fn_protos, "const void *_p%zu", pi);
+                    } else {
+                        cg_emit_c_type(&cg->fn_protos, sm->param_types[pi]);
+                        buf_append_fmt(&cg->fn_protos, " _p%zu", pi);
+                    }
+                }
+                if (has_out) {
+                    buf_append_cstr(&cg->fn_protos, ", void *_out");
+                }
+                buf_append_cstr(&cg->fn_protos, ");\n");
+                free(sm_shared);
+            } else {
+                cg_emit_user_method_proto(&cg->fn_protos, t, sm, false);
+            }
         }
         for (size_t ci = 0; ci < t->constructor_count; ci++) {
             cg_emit_user_method_proto(&cg->fn_protos, t, &t->constructors[ci], false);
@@ -31199,7 +31305,14 @@ static char *cg_generic_type_method_shared_cname(CG *cg,
                                                  const FengDecl *decl,
                                                  const FengTypeMember *member) {
     const GenericTypeDecl *gtd = cg_find_generic_type_decl_by_decl(cg, decl);
-    const FengProgram *owner_program = gtd ? gtd->owner_program : cg->cur_program;
+    const FengProgram *owner_program = gtd ? gtd->owner_program : NULL;
+    if (owner_program == NULL) {
+        /* Non-generic types have no GenericTypeDecl entry; look up the
+         * UserType registry to find the correct owner_program (critical
+         * for imported non-generic types with generic static methods). */
+        const UserType *ut = cg_find_user_type_by_decl(cg, decl);
+        owner_program = ut ? ut->owner_program : cg->cur_program;
+    }
     char *owner_mangle = NULL;
     if (owner_program) {
         owner_mangle = cg_module_mangle(owner_program->module_segments,

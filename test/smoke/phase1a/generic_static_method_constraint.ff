@@ -1,0 +1,41 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+/**
+ * Generic spec with self-referencing constraint (mirrors JsonSerializable<T>).
+ */
+spec GSerialisable<T> {
+    static func serialise(value: T): string;
+}
+
+/**
+ * Concrete type implementing the generic spec.
+ */
+type Item: GSerialisable<Item> {
+    var label: string;
+
+    static func serialise(value: Item): string {
+        return value.label;
+    }
+}
+
+/**
+ * Non-generic type with a generic static method constrained by T: GSerialisable<T>.
+ * This pattern previously triggered CE0031 because the method-level constraint
+ * resolution did not activate the generic function context.
+ */
+type Helper {
+    seal func Helper() {}
+
+    static func process<T: GSerialisable<T>>(value: T): string {
+        return T.serialise(value);
+    }
+}
+
+func main(args: string[]) {
+    let item = Item{label: "generic static method constraint ok"};
+    let result = Helper.process(item);
+    puts(&result);
+}
