@@ -14648,18 +14648,22 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     }
 
     {
-        /* For imported non-generic types with generic static methods,
-         * call the exported dispatch function instead of the file-local
-         * static function.  Generic type instances already have their
-         * wrappers emitted via cg_emit_generic_type_method_wrapper. */
+        /* For imported generic static methods, call the exported dispatch
+         * function (FengGenericMethod__...) instead of the file-local
+         * static function.  This applies uniformly to both generic type
+         * instances and non-generic types with method-level type params. */
         bool method_is_imported = owner_type != NULL &&
-            !owner_type->is_generic_instance &&
             cg_program_origin(cg, owner_type->owner_program) ==
             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
+        const FengDecl *method_origin_decl = owner_type != NULL
+            ? (owner_type->generic_origin_decl != NULL
+                   ? owner_type->generic_origin_decl
+                   : owner_type->decl)
+            : NULL;
         const char *call_name = um->c_name;
-        if (method_is_imported && owner_type->decl != NULL) {
+        if (method_is_imported && method_origin_decl != NULL) {
             dispatch_name = cg_generic_type_method_shared_cname(
-                cg, owner_type->decl, um->member);
+                cg, method_origin_decl, um->member);
             if (dispatch_name == NULL) {
                 ok = false;
                 goto cleanup;
