@@ -2970,7 +2970,6 @@ static bool parse_match_branch(Parser *parser, FengMatchBranch *out_branch) {
         free_match_branch_contents(out_branch);
         return false;
     }
-    convert_trailing_yield_stmt_to_expr(parser, out_branch->body);
     return true;
 }
 
@@ -3182,12 +3181,16 @@ static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
             free_expr(expr);
             return NULL;
         }
+        for (size_t bi = 0U; bi < expr->as.match_expr.branch_count; ++bi) {
+            convert_trailing_yield_stmt_to_expr(parser, expr->as.match_expr.branches[bi].body);
+        }
         if (expr->as.match_expr.else_block == NULL) {
             (void)parser_error_at(parser, &if_token,
                                   "SE1103", "if-match expressions require an 'else' branch");
             free_expr(expr);
             return NULL;
         }
+        convert_trailing_yield_stmt_to_expr(parser, expr->as.match_expr.else_block);
         return expr;
     }
 

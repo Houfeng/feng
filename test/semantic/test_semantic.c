@@ -2642,6 +2642,64 @@ static void test_if_expr_trailing_if_without_else_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_if_match_trailing_if_else_in_branch_accepted(void) {
+    /* An if/else at the end of an if-match branch should be converted
+     * to an if-expression so the branch can yield a value. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let v: i32 = 1;\n"
+        "    let x: i32 = if v {\n"
+        "        1 {\n"
+        "            if true { 10 } else { 20 }\n"
+        "        }\n"
+        "        else { 0 }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("trailing_if_in_match_branch_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_if_match_trailing_if_else_in_else_branch_accepted(void) {
+    /* An if/else at the end of an if-match else branch should also be
+     * converted to an if-expression. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let v: i32 = 1;\n"
+        "    let x: i32 = if v {\n"
+        "        1 { 10 }\n"
+        "        else {\n"
+        "            if true { 20 } else { 30 }\n"
+        "        }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("trailing_if_in_match_else_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_break_directly_in_try_expr_catch_block_is_rejected(void) {
     /* break directly inside a catch block of a try expression is invalid
      * because the expression must produce a value on every path. */
@@ -16149,6 +16207,8 @@ int main(void) {
     test_if_expr_trailing_try_catch_accepted();
     test_if_expr_non_expr_trailing_binding_rejected();
     test_if_expr_trailing_if_without_else_rejected();
+    test_if_match_trailing_if_else_in_branch_accepted();
+    test_if_match_trailing_if_else_in_else_branch_accepted();
     test_break_directly_in_try_expr_catch_block_is_rejected();
     test_continue_directly_in_try_expr_catch_block_is_rejected();
     test_break_inside_loop_inside_try_expr_catch_block_is_accepted();
