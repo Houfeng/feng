@@ -13,3 +13,4 @@
 - [ ] func 未声明返回值或返回值为 void，时必须无 `return` 语句或只能使用空 `return`
 - [ ] func 在声明返回值，每个分支必须返回相同类型
 - [ ] runtime api: feng_pointer_get_string(char * ptr, len) -1 读取到 \0
+- [ ] if-match ，类型匹配优化，比 if v { x:string {} else {} }
