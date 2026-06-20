@@ -11,36 +11,38 @@ import std.test;
 import std.platform;
 
 func test() {
-    assert(true, "hello world");
+  assert(true, "hello world");
 }
 
-type User: JsonSerializable {
-    var name: string;
-    var age: int;
-    func toJson(): JsonObject {
-        let obj = JsonObject();
-        obj.set("name", self.name);
-        obj.set("age", self.age);
-        return obj;
-    }
-    func fromJson(value: JsonObject): void {
-        self.name = Json.toString(value.get("name"));
-        self.age = (int)Json.toNumber(value.get("age"));
-    }
+type User: JsonSerializable<User> {
+  var name: string;
+  var age: int;
+  static func toJson(value: User): JsonObject {
+    let obj = JsonObject();
+    obj.set("name", value.name);
+    obj.set("age", value.age);
+    return obj;
+  }
+  static func fromJson(value: JsonObject): User {
+    return User {
+      name: Json.toString(value.get("name")),
+      age: (int)Json.toNumber(value.get("age"))
+    };
+  }
 }
 
 func main(args: string[]) {
-    // test("test2", test2);
-    let obj = JsonObject();
-    obj.set("message", "Hello, World!");
-    obj.set("code", 200);
-    obj.set("detail", none);
-    println(Json.stringify(obj));
-    println("------------------------------------");
-    let user = User { name: "alice", age: 20 };
-    println("user: {0}", Json.stringify(user));
-    let user2 = Json.parse(Json.stringify(user));
-    println("user2: {0}", Json.stringify(user2));
-    println("------------------------------------");
-    println("{0}:{1}", SystemInfo.os(), SystemInfo.arch());
+  // test("test2", test2);
+  let obj = JsonObject();
+  obj.set("message", "Hello, World!");
+  obj.set("code", 200);
+  obj.set("detail", none);
+  println(Json.stringify(obj));
+  println("------------------------------------");
+  let user = User { name: "alice", age: 20 };
+  println("user: {0}", Json.stringify(user));
+  let user2 = Json.parse(Json.stringify(user));
+  println("user2: {0}", Json.stringify(user2));
+  println("------------------------------------");
+  println("{0}:{1}", SystemInfo.os(), SystemInfo.arch());
 }

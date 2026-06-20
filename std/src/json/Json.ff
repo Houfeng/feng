@@ -4,11 +4,22 @@ import std;
 
 /**
  * JSON processing module
+ * This module provides functions for working with JSON data, including:
+ * - Checking the type of a JsonValue
+ * - Converting a JsonValue to a specific type
+ * - Serializing a JsonValue to a JSON string
+ * - Deserializing a JSON string to a JsonValue
+ * - Serializing a value of type T to a JSON string using the JsonSerializable specification
  */
 open type Json {
 
   seal func Json() {}
 
+  /**
+   * Check if a JsonValue is null
+   * @param value The JsonValue to check
+   * @return true if the value is null, false otherwise
+   */
   static func isNull(value: JsonValue): bool {
     return if value {
       None { true }
@@ -16,6 +27,11 @@ open type Json {
     };
   }
 
+  /**
+   * Check if a JsonValue is a boolean
+   * @param value The JsonValue to check
+   * @return true if the value is a boolean, false otherwise
+   */
   static func isBool(value: JsonValue): bool {
     return if value {
       bool { true }
@@ -23,6 +39,11 @@ open type Json {
     };
   }
 
+  /**
+   * Check if a JsonValue is a number
+   * @param value The JsonValue to check
+   * @return true if the value is a number, false otherwise
+   */
   static func isNumber(value: JsonValue): bool {
     return if value {
       int { true }
@@ -32,6 +53,11 @@ open type Json {
     };
   }
 
+  /**
+   * Check if a JsonValue is a string
+   * @param value The JsonValue to check
+   * @return true if the value is a string, false otherwise
+   */
   static func isString(value: JsonValue): bool {
     return if value {
       string { true }
@@ -39,6 +65,11 @@ open type Json {
     };
   }
 
+  /**
+   * Check if a JsonValue is an array
+   * @param value The JsonValue to check
+   * @return true if the value is an array, false otherwise
+   */
   static func isArray(value: JsonValue): bool {
     return if value {
       JsonArray { true }
@@ -46,6 +77,11 @@ open type Json {
     };
   }
 
+  /**
+   * Check if a JsonValue is an object
+   * @param value The JsonValue to check
+   * @return true if the value is an object, false otherwise
+   */
   static func isObject(value: JsonValue): bool {
     return if value {
       JsonObject { true }
@@ -53,6 +89,11 @@ open type Json {
     };
   }
 
+  /**
+   * Convert a JsonValue to a string
+   * @param value The JsonValue to convert
+   * @return The string
+   */
   static func toString(value: JsonValue): string {
     return if (value) {
       string { value }
@@ -60,6 +101,11 @@ open type Json {
     };
   }
 
+  /**
+   * Convert a JsonValue to a number
+   * @param value The JsonValue to convert
+   * @return The number
+   */
   static func toNumber(value: JsonValue): double {
     return if (value) {
       int {(double)value }
@@ -69,6 +115,11 @@ open type Json {
     };
   }
 
+  /**
+   * Convert a JsonValue to a boolean
+   * @param value The JsonValue to convert
+   * @return The boolean
+   */
   static func toBool(value: JsonValue): bool {
     return if (value) {
       bool { value }
@@ -76,6 +127,11 @@ open type Json {
     };
   }
 
+  /**
+   * Convert a JsonValue to an array
+   * @param value The JsonValue to convert
+   * @return The array
+   */
   static func toArray(value: JsonValue): JsonArray {
     return if (value) {
       JsonArray { value }
@@ -83,6 +139,11 @@ open type Json {
     };
   }
 
+  /**
+   * Convert a JsonValue to an object
+   * @param value The JsonValue to convert
+   * @return The object
+   */
   static func toObject(value: JsonValue): JsonObject {
     return if (value) {
       JsonObject { value }
@@ -90,33 +151,60 @@ open type Json {
     };
   }
 
-  static func toStringOrNone(value: JsonValue): Option<string> {
+  /**
+   * Convert a JsonValue to a string or None
+   * @param value The JsonValue to convert
+   * @return The string or None
+   */
+  static func toStringOrNull(value: JsonValue): Option<string> {
     if Json.isNull(value) { return none; }
     return Json.toString(value);
   }
 
-  static func toNumberOrNone(value: JsonValue): Option<double> {
+  /**
+   * Convert a JsonValue to a number or None
+   * @param value The JsonValue to convert
+   * @return The number or None
+   */
+  static func toNumberOrNull(value: JsonValue): Option<double> {
     if Json.isNull(value) { return none; }
     return Json.toNumber(value);
   }
 
-  static func toBoolOrNone(value: JsonValue): Option<bool> {
+  /**
+   * Convert a JsonValue to a boolean or None
+   * @param value The JsonValue to convert
+   * @return The boolean or None
+   */
+  static func toBoolOrNull(value: JsonValue): Option<bool> {
     if Json.isNull(value) { return none; }
     return Json.toBool(value);
   }
 
-  static func toArrayOrNone(value: JsonValue): Option<JsonArray> {
+  /**
+   * Convert a JsonValue to an array or None
+   * @param value The JsonValue to convert
+   * @return The array or None
+   */
+  static func toArrayOrNull(value: JsonValue): Option<JsonArray> {
     if Json.isNull(value) { return none; }
     return Json.toArray(value);
   }
 
-  static func toObjectOrNone(value: JsonValue): Option<JsonObject> {
+  /**
+   * Convert a JsonValue to an object or None
+   * @param value The JsonValue to convert
+   * @return The object or None
+   */
+  static func toObjectOrNull(value: JsonValue): Option<JsonObject> {
     if Json.isNull(value) { return none; }
     return Json.toObject(value);
   }
 
   /**
    * Serialize a JsonValue to a JSON string
+   * @param value The JsonValue to serialize
+   * @return The JSON string
    */
   static func stringify(value: JsonValue): string {
     return if value {
@@ -134,11 +222,18 @@ open type Json {
 
   /**
    * Deserialize a JSON string to a JsonValue
+   * @param json The JSON string to deserialize
+   * @return The JsonValue
    */
   static func parse(json: string): JsonValue {
     return JsonParser.parse(json);
   }
 
+  /**
+   * Serialize a value of type T to a JSON string
+   * @param value The value to serialize
+   * @return The JSON string
+   */
   static func stringify<T: JsonSerializable<T>>(value: T): string {
     let jsonValue = T.toJson(value);
     return Json.stringify(jsonValue);

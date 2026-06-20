@@ -1,15 +1,31 @@
 open module std.json;
 
 /**
- * JSON serialization
+ * JSON serialization,
+ * Serialize a value of type T into a JSON object,
+ * Implement this spec to use `Json.stringify`.
+ * @param <T> The type of the value to serialize
  */
 open spec JsonSerializable<T> {
+  /**
+   * Serialize a value of type T into a JSON object.
+   * @param value The value to serialize
+   * @return A JSON object
+   */
   static func toJson(value: T): JsonObject;
 }
 
 /**
- * JSON deserialization
+ * JSON deserialization,
+ * Deserialize a JSON object into a value of type T.
+ * Implement this spec to use `Json.parse`.
+ * @param <T> The type of the value to deserialize
  */
 open spec JsonDeserializable<T> {
+  /**
+   * Deserialize a JSON object into a value of type T
+   * @param json The JSON object to deserialize
+   * @return A value of type T
+   */
   static func fromJson(json: JsonObject): T;
 }
