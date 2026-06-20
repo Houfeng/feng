@@ -9,7 +9,7 @@ import std.collections;
  * A recursive-descent JSON parser.
  * Parses a JSON string into a JsonValue according to RFC 8259.
  */
-open type JsonParser {
+type JsonParser {
   seal let input: byte[];
   seal let len: i32;
   seal var pos: i32;

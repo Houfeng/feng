@@ -13,6 +13,10 @@ import std;
  */
 open type Json {
 
+  /**
+   * Seal the Json type to prevent instantiation
+   * This type is not meant to be instantiated, as it only provides static methods for working
+   */
   seal func Json() {}
 
   /**

@@ -6,59 +6,110 @@ import std.text;
 import std.collections;
 
 open fit bool {
+  /**
+   * Serializes this boolean value to a JSON string.
+   * @return the JSON string representation of this boolean
+   */
   func toJsonString(): string {
     return self.toString();
   }
 }
 
 open fit int {
+  /**
+   * Serializes this integer value to a JSON string.
+   * @return the JSON string representation of this integer
+   */
   func toJsonString(): string {
     return self.toString();
   }
 }
 
 open fit float {
+  /**
+   * Serializes this float value to a JSON string.
+   * @return the JSON string representation of this float
+   */
   func toJsonString(): string {
     return self.toString();
   }
 }
 
 open fit double {
+  /**
+   * Serializes this double value to a JSON string.
+   * @return the JSON string representation of this double
+   */
   func toJsonString(): string {
     return self.toString();
   }
 }
 
 open fit string {
+  /**
+   * Serializes this string value to a JSON string.
+   * @return the JSON string representation of this string
+   */
   func toJsonString(): string {
     return "\"" + self.replace("\"", "\\\"") + "\"";
   }
 }
 
 open fit None {
+  /**
+   * Serializes this None value to a JSON string.
+   * @return the JSON string representation of None, which is "null"
+   */
   func toJsonString(): string {
     return "null";
   }
 }
 
+/**
+ * Represents a JSON array.
+ * A JSON array is an ordered collection of values, which can be of any type (string, number, boolean, null, object, or another array).
+ * This type provides methods to manipulate the array and to serialize it to a JSON string.
+ */
 open type JsonArray {
+  // The list of values in this JSON array
   seal let payload: List<JsonValue>;
+
+  /**
+   * Creates a new JSON array with the given values.
+   * @param payload - the initial values
+   */
   func JsonArray(payload: List<JsonValue>) {
     self.payload = payload;
   }
+
+  /**
+   * Creates a new JSON array with the given values.
+   * @param payload - the initial values
+   */
   func JsonArray(payload: JsonValue[]) {
     self.payload = List<JsonValue>(payload);
   }
+
+  /**
+   * Creates a new empty JSON array.
+   */
   func JsonArray() {}
+
+  /**
+   * Adds a value to the end of this array.
+   * @param item - the value to add
+   */
   func add(item: JsonValue) {
     self.payload.add(item);
   }
+
   /**
    * Returns the number of elements in this array.
    */
   func size(): i32 {
     return self.payload.size();
   }
+
   /**
    * Returns the element at the given index as a JsonValue.
    * @param index - zero-based position
@@ -67,6 +118,11 @@ open type JsonArray {
   func get(index: i32): JsonValue {
     return self.payload.get(index);
   }
+
+  /**
+   * Serializes this JSON array to a JSON string.
+   * @return the JSON string
+   */
   func toJsonString(): string {
     let size = self.payload.size();
     if size == 0 {
@@ -81,12 +137,28 @@ open type JsonArray {
   }
 }
 
+/**
+ * Represents a JSON object.
+ * A JSON object is an unordered collection of key-value pairs, where the keys are strings and the values are JSON values.
+ * This type provides methods to manipulate the object and to serialize it to a JSON string.
+ */
 open type JsonObject {
+  // The map of key-value pairs in this JSON object
   seal let payload: Map<string, JsonValue>;
+
+  /**
+   * Creates a new JSON object with the given key-value pairs.
+   * @param payload - the initial key-value pairs
+   */
   func JsonObject(payload: Map<string, JsonValue>) {
     self.payload = payload;
   }
+
+  /**
+   * Creates a new empty JSON object.
+   */
   func JsonObject() {}
+
   /**
    * Sets the value for the given key.
    * @param key - the key to set
@@ -95,6 +167,7 @@ open type JsonObject {
   func set(key: string, value: JsonValue) {
     self.payload.set(key, value);
   }
+
   /**
    * Returns the value for the given key as a JsonValue.
    * @param key - the key to look up
@@ -103,6 +176,7 @@ open type JsonObject {
   func get(key: string): JsonValue {
     return self.payload.get(key);
   }
+
   /**
    * Returns true if the given key exists in this object.
    * @param key - the key to check
@@ -111,6 +185,11 @@ open type JsonObject {
   func has(key: string): bool {
     return self.payload.has(key);
   }
+
+  /**
+   * Serializes this JSON object to a JSON string.
+   * @return the JSON string
+   */
   func toJsonString(): string {
     let entries = self.payload.entries();
     if entries.length() == (long)0 {
@@ -129,6 +208,10 @@ open type JsonObject {
   }
 }
 
+/**
+ * Represents a JSON value, which can be a string, number, boolean, null, object, or array.
+ * This type is used to represent any value that can appear in a JSON document.
+ */
 open spec JsonValue: None
 | int
 | float

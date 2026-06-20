@@ -6561,6 +6561,19 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         *out_type = cgtype_new(CG_TYPE_VOID);
         return *out_type != NULL;
     }
+    if (ref->kind == FENG_TYPE_REF_NAMED && ref->as.named.type_arg_count > 0U) {
+        Buf dbg; buf_init(&dbg);
+        cg_append_type_ref_display(&dbg, ref);
+        if (strstr(dbg.data ? dbg.data : "", "JsonSerializable")) {
+            const FengToken *t = &ref->token;
+            fprintf(stderr, "[DBG cg_resolve_type] ref='%s' in_generic_fn=%d ambient_count=%zu tok={line=%u col=%u off=%zu kind=%d}\n",
+                dbg.data ? dbg.data : "(null)",
+                cg->in_generic_fn,
+                cg->ambient_type_param_count,
+                t->line, t->column, t->offset, (int)t->kind);
+        }
+        free(dbg.data);
+    }
     if (cg->current_user_fit != NULL &&
         cg->current_user_fit->target != NULL &&
         cg->current_user_fit->target->is_generic_instance) {
