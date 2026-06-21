@@ -1,4 +1,6 @@
-open module std;
+open module std.async;
+
+import std;
 
 /**
  * A future represents a value that will be available at some point in the future.
