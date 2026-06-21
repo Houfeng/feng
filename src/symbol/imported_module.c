@@ -1091,8 +1091,21 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                 synthesize_type_members(module,
                                         symbol_decl,
                                         &synth_decl->decl.as.type_decl.member_count);
-            if (symbol_decl->member_count > 0U && synth_decl->decl.as.type_decl.members == NULL) {
-                break;
+            {
+                /* member_count includes TYPE_PARAM entries, but synthesize_type_members
+                 * skips them.  Use the non-TYPE_PARAM count for the failure check so
+                 * that generic types with no real fields/methods (e.g. open type Future<T> {})
+                 * are not misreported as synthesis failures. */
+                size_t real_member_count = 0U;
+                for (size_t mi = 0U; mi < symbol_decl->member_count; ++mi) {
+                    if (symbol_decl->members[mi] != NULL &&
+                        symbol_decl->members[mi]->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+                        ++real_member_count;
+                    }
+                }
+                if (real_member_count > 0U && synth_decl->decl.as.type_decl.members == NULL) {
+                    break;
+                }
             }
             synth_decl->decl.as.type_decl.declared_specs =
                 synthesize_type_ref_list(symbol_decl->declared_specs,
@@ -1204,9 +1217,20 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                 synthesize_type_members(module,
                                         symbol_decl,
                                         &synth_decl->decl.as.fit_decl.member_count);
-            if (symbol_decl->member_count > 0U &&
-                synth_decl->decl.as.fit_decl.members == NULL) {
-                break;
+            {
+                /* Same rationale as the TYPE branch: member_count includes TYPE_PARAM
+                 * entries that synthesize_type_members intentionally skips. */
+                size_t real_member_count = 0U;
+                for (size_t mi = 0U; mi < symbol_decl->member_count; ++mi) {
+                    if (symbol_decl->members[mi] != NULL &&
+                        symbol_decl->members[mi]->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+                        ++real_member_count;
+                    }
+                }
+                if (real_member_count > 0U &&
+                    synth_decl->decl.as.fit_decl.members == NULL) {
+                    break;
+                }
             }
             synth_decl->decl.as.fit_decl.has_body =
                 symbol_decl->member_count > 0U || symbol_decl->declared_spec_count == 0U;
