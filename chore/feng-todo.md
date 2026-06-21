@@ -15,4 +15,8 @@
 - [x] if-match ，类型匹配优化，比 if v { x:string {} else {} }
 - [ ] if-match, 支持匹配 enum
 - [x] if 表达式、match 表达式、try 表达式，最后一句支持 throw
-- [ ] 支持单 case match 语法，if expr match v:int {} 或 if expr match int {}
+- [ ] match 运算符，和 if-match 一样，支持：值、区间、联合类型
+  - let r = x match int     // r 是 bool
+  - let r = x match v: int  // 检查匹配并绑定到 v
+  - if expr match int {}    // 用于 if
+  - if expr match v:int {}  // 用于 if 并绑定
