@@ -1,0 +1,10 @@
+open module std;
+
+open spec Union2<T1, T2>: T1 | T2;
+open spec Union3<T1, T2, T3>: T1 | T2 | T3;
+open spec Union4<T1, T2, T3, T4>: T1 | T2 | T3 | T4;
+open spec Union5<T1, T2, T3, T4, T5>: T1 | T2 | T3 | T4 | T5;
+open spec Union6<T1, T2, T3, T4, T5, T6>: T1 | T2 | T3 | T4 | T5 | T6;
+open spec Union7<T1, T2, T3, T4, T5, T6, T7>: T1 | T2 | T3 | T4 | T5 | T6 | T7;
+open spec Union8<T1, T2, T3, T4, T5, T6, T7, T8>: T1 | T2 | T3 | T4 | T5 | T6 | T7 | T8;
+open spec Union9<T1, T2, T3, T4, T5, T6, T7, T8, T9>: T1 | T2 | T3 | T4 | T5 | T6 | T7 | T8 | T9;

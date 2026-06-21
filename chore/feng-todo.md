@@ -20,3 +20,9 @@
   - let r = x match v: int  // 检查匹配并绑定到 v
   - if expr match int {}    // 用于 if
   - if expr match v:int {}  // 用于 if 并绑定
+- [ ] 泛型，支持同名不同泛形参数个数的重载
+  - 类型 `type User<T1> {}` 、`type User<T1, T2> {}`
+  - 元组 `type User<T1, T2>(T1, T2)` 、`type User<T1, T2, T3>(T1, T2, T3)`
+  - 对象契约 `spec User<T1> {}` 、`spec User<T1, T2> {}`
+  - 函数契约 `spec User<T1>()` 、`spec User<T1, T2>()`
+  - 联合契约 `spec User<T1, T2>: T1 | T2` 、`spec User<T1, T2, T3>: T1 | T2 | T3`
