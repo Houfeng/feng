@@ -2,10 +2,17 @@ open module std;
 
 open fit bool: Display {
 
+  /**
+   * Returns the string representation of this boolean.
+   */
   func toString(): string {
     return if self { "true" } else { "false" };
   }
 
+  /**
+   * Parses a string into a boolean. The string must be either "true" or "false".
+   * Throws an error if the string is not valid.
+   */
   func parse(value: string): bool {
     if value == "true" {
       return true;
@@ -16,42 +23,72 @@ open fit bool: Display {
     }
   }
 
+  /**
+   * Parses a number into a boolean. The number must be non-zero.
+   */
   func parse(value: i8): bool {
     return value != (i8)0;
   }
 
+  /**
+   * Parses a number into a boolean. The number must be non-zero.
+   */
   func parse(value: u8): bool {
     return value != (u8)0;
   }
 
+  /**
+   * Parses a number into a boolean. The number must be non-zero.
+   */
   func parse(value: i16): bool {
     return value != (i16)0;
   }
 
+  /**
+   * Parses a number into a boolean. The number must be non-zero.
+   */
   func parse(value: u16): bool {
     return value != (u16)0;
   }
 
+  /**
+   * Parses a number into a boolean. The number must be non-zero.
+   */
   func parse(value: i32): bool {
     return value != (i32)0;
   }
 
+  /**
+   * Parses a number into a boolean. The number must be non-zero.
+   */
   func parse(value: u32): bool {
     return value != (u32)0;
   }
 
+  /**
+   * Parses a number into a boolean. The number must be non-zero.
+   */
   func parse(value: i64): bool {
     return value != (i64)0;
   }
 
+  /**
+   * Parses a number into a boolean. The number must be non-zero.
+   */
   func parse(value: u64): bool {
     return value != (u64)0;
   }
 
+  /**
+   * Parses a number into a boolean. The number must be non-zero.
+   */
   func parse(value: f32): bool {
     return value != (f32)0;
   }
 
+  /**
+   * Parses a number into a boolean. The number must be non-zero.
+   */
   func parse(value: f64): bool {
     return value != (f64)0;
   }

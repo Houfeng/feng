@@ -1,3 +1,6 @@
 open module std.collections;
 
+/**
+ * An iterator result.
+ */
 open type IteratorResult<T>(bool, T);

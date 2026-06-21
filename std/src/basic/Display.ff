@@ -1,5 +1,11 @@
 open module std;
 
+/**
+ * A displayable object.
+ */
 open spec Display {
+  /**
+   * Converts this object to a string.
+   */
   func toString(): string;
 }

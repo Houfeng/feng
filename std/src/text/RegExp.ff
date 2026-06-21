@@ -62,7 +62,7 @@ extern func feng_pointer_move(ptr: long*, offset: long): long*;
 /* ---------- Constants ---------- */
 
 /* PCRE2_UNSET on 64-bit: ~(size_t)0 = 0xFFFFFFFFFFFFFFFF, read as long = -1 */
-seal let PCRE2_UNSET: long = (long) - 1;
+seal let PCRE2_UNSET: long = (long)-1;
 
 /* ---------- RegExpFlag ---------- */
 
@@ -71,10 +71,32 @@ seal let PCRE2_UNSET: long = (long) - 1;
  * Values correspond to PCRE2 option bits and can be combined with bitwise OR.
  */
 open enum RegExpFlag {
+  /**
+   * Enables UTF-8 mode, treating the pattern and subject as UTF-8 encoded.
+   * This is enabled by default in this implementation.
+   */
   CaseInsensitive = 0x00000008,
+
+  /**
+   * Enables multiline mode, which changes the behavior of ^ and $ to match
+   * at the beginning and end of each line, respectively.
+   */
   Multiline = 0x00000400,
+
+  /**
+   * Enables dotall mode, which makes the dot (.) special character match
+   * any character, including a newline.
+   */
   DotAll = 0x00000020,
+
+  /**
+   * Enables extended mode, which allows whitespace and # comments in the pattern.
+   */
   Extended = 0x00000080,
+
+  /**
+   * Enables ungreeedy mode, which makes quantifiers lazy by default.
+   */
   Ungreedy = 0x00040000
 }
 
@@ -84,9 +106,24 @@ open enum RegExpFlag {
  * Represents a single regex match result, including captured groups.
  */
 open type Match {
+  /**
+   * The substring of the subject that matched the full pattern.
+   */
   open let text: string;
+
+  /**
+   * The starting index of the match in the subject string.
+   */
   open let start: long;
+
+  /**
+   * The ending index of the match in the subject string.
+   */
   open let end: long;
+
+  /**
+   * An array of captured groups, where each group is a substring of the subject.
+   */
   open let groups: string[];
 }
 
@@ -140,8 +177,8 @@ seal func compilePattern(pattern: string, flags: u32): long {
   var errorCode: int = 0;
   var errorOffset: long = 0;
   let compiled = pcre2_compile(
-    &patternBytes, (long)patternBytes.length(),
-    flags, &errorCode, &errorOffset, (long)0
+  &patternBytes, (long)patternBytes.length(),
+  flags, &errorCode, &errorOffset, (long)0
   );
   if compiled == (long)0 {
     let msgLen = pcre2_get_error_message(errorCode, &buf, (long)256);
@@ -194,8 +231,8 @@ open type RegExp {
     let subjectBytes = subject.toBytes();
     let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
     let rc = pcre2_match(
-      self.code, &subjectBytes, (long)subjectBytes.length(),
-      (long)0, (u32)0, md, (long)0
+    self.code, &subjectBytes, (long)subjectBytes.length(),
+    (long)0, (u32)0, md, (long)0
     );
     pcre2_match_data_free(md);
     return rc >= 0;
@@ -211,8 +248,8 @@ open type RegExp {
     let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
     /* PCRE2_ANCHORED (0x80000000) | PCRE2_ENDANCHORED (0x20000000) */
     let rc = pcre2_match(
-      self.code, &subjectBytes, (long)subjectBytes.length(),
-      (long)0, (u32)0x80000000 | (u32)0x20000000, md, (long)0
+    self.code, &subjectBytes, (long)subjectBytes.length(),
+    (long)0, (u32)0x80000000 | (u32)0x20000000, md, (long)0
     );
     pcre2_match_data_free(md);
     return rc >= 0;
@@ -229,8 +266,8 @@ open type RegExp {
     var resultArr: Match[!] = Match[:(long)0];
     let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
     let rc = pcre2_match(
-      self.code, &subjectBytes, (long)subjectBytes.length(),
-      (long)0, (u32)0, md, (long)0
+    self.code, &subjectBytes, (long)subjectBytes.length(),
+    (long)0, (u32)0, md, (long)0
     );
     if rc >= 0 {
       resultArr = Match[:(long)1];
@@ -256,8 +293,8 @@ open type RegExp {
     var offset: long = 0;
     while offset <= subjectLen {
       let rc = pcre2_match(
-        self.code, &subjectBytes, subjectLen,
-        offset, (u32)0, md, (long)0
+      self.code, &subjectBytes, subjectLen,
+      offset, (u32)0, md, (long)0
       );
       if rc < 0 {
         break;
@@ -303,8 +340,8 @@ open type RegExp {
     var pos: long = 0;
     while pos <= subjectLen {
       let rc = pcre2_match(
-        self.code, &subjectBytes, subjectLen,
-        pos, (u32)0, md, (long)0
+      self.code, &subjectBytes, subjectLen,
+      pos, (u32)0, md, (long)0
       );
       if rc < 0 {
         break;
@@ -367,22 +404,22 @@ open type RegExp {
     var actualLen: long = outLen;
     let subOpts = options | (u32)0x00000200 | (u32)0x00001000;
     let rc = pcre2_substitute(
-      self.code, &subjectBytes, (long)subjectBytes.length(),
-      (long)0, subOpts,
-      (long)0, (long)0,
-      &replBytes, (long)replBytes.length(),
-      &outBuf, &actualLen
+    self.code, &subjectBytes, (long)subjectBytes.length(),
+    (long)0, subOpts,
+    (long)0, (long)0,
+    &replBytes, (long)replBytes.length(),
+    &outBuf, &actualLen
     );
     if rc == -48 {
       outLen = actualLen + (long)1;
       outBuf = byte[:outLen];
       actualLen = outLen;
       let rc2 = pcre2_substitute(
-        self.code, &subjectBytes, (long)subjectBytes.length(),
-        (long)0, subOpts,
-        (long)0, (long)0,
-        &replBytes, (long)replBytes.length(),
-        &outBuf, &actualLen
+      self.code, &subjectBytes, (long)subjectBytes.length(),
+      (long)0, subOpts,
+      (long)0, (long)0,
+      &replBytes, (long)replBytes.length(),
+      &outBuf, &actualLen
       );
       if rc2 < 0 {
         throw "RegExp substitute failed";

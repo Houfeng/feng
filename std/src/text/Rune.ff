@@ -33,6 +33,10 @@ open fit string {
 open type RuneView {
   seal let text: string;
 
+  /**
+   * Constructs a new RuneView for the given string.
+   * @param text - the string to view as runes
+   */
   open func RuneView(text: string) {
     self.text = text;
   }
@@ -92,6 +96,10 @@ open type RuneIterator {
   seal let len: long;
   seal var offset: long;
 
+  /**
+   * Constructs a new RuneIterator for the given string.
+   * @param text - the string to iterate as runes
+   */
   open func RuneIterator(text: string) {
     self.text = text;
     self.len = text.length();

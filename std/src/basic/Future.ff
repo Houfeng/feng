@@ -5,17 +5,21 @@ open module std;
  * Feng language does not have built-in support for futures, but this type can be used to represent a future value.
  */
 open type Future<T> {
-   
+
 }
 
-// open type Promise<T> {
-//   /**
-//    * Resolve the promise with the given value.
-//    */
-//   func resolve(value: T): void {}
+/**
+ * A promise represents a future value that can be resolved or rejected.
+ * Feng language does not have built-in support for promises, but this type can be used to represent a promise.
+ */
+open type Promise<T> {
+  /**
+   * Resolve the promise with the given value.
+   */
+  func resolve(value: T): void {}
 
-//   /**
-//    * Reject the promise with the given reason.
-//    */
-//   func reject(error: Error): void {}
-// }
+  /**
+   * Reject the promise with the given reason.
+   */
+  func reject(error: Error): void {}
+}

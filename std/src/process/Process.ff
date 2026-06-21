@@ -148,8 +148,16 @@ open type Process {
     return getppid();
   }
 
+  /**
+   * Returns the command line string used to spawn this process.
+   */
   let path: string;
+
+  /**
+   * Returns the command line arguments used to spawn this process.
+   */
   let args: string[];
+  
   seal var pid: int;
   seal var exitStatus: int;
   seal var finished: bool;

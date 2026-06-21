@@ -27,6 +27,10 @@ open fit string {
 open type GraphemeView {
   seal let text: string;
 
+  /**
+   * Creates a new grapheme view over the given string.
+   * @param text - string to view
+   */
   open func GraphemeView(text: string) {
     self.text = text;
   }
@@ -102,6 +106,10 @@ open type GraphemeIterator {
   seal let len: long;
   seal var offset: long;
 
+  /**
+   * Creates a new grapheme iterator over the given string.
+   * @param text - string to iterate over
+   */
   open func GraphemeIterator(text: string) {
     self.text = text;
     self.len = text.length();

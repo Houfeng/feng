@@ -38,13 +38,44 @@ seal let S_IFSOCK: long = (long)49152;
  * Filesystem entry kind, replacing boolean isFile/isDir/isSymlink flags to prevent inconsistent state.
  */
 open enum EntryKind {
+  /**
+   * Unknown file type.
+   */
   Other = 0,
+
+  /**
+   * Named pipe (FIFO).
+   */
   Fifo = 1,
+
+  /**
+   * Character device.
+   */
   CharDevice = 2,
+
+  /**
+   * Directory.
+   */
   Dir = 4,
+
+  /**
+   * Block device.
+   */
   BlockDevice = 6,
+
+  /**
+   * Regular file.
+   */
   File = 8,
+
+  /**
+   * Symbolic link.
+   */
   Symlink = 10,
+
+  /**
+   * Unix domain socket.
+   */
   Socket = 12
 }
 
@@ -56,16 +87,59 @@ open enum EntryKind {
  *   O_CREAT=512, O_TRUNC=1024, O_EXCL=2048, O_APPEND=8
  */
 open enum FileMode {
+  /**
+   * Open file for reading.
+   */
   Read = 0,
+
+  /**
+   * Open file for writing.
+   */
   Write = 513,
+
+  /**
+   * Open file for writing, truncating it first.
+   */
   WriteTrunc = 1537,
+
+  /**
+   * Open file for writing, creating it first.
+   */
   WriteNew = 2561,
+
+  /**
+   * Open file for writing, appending to it if it exists.
+   */
   WriteAppend = 521,
+
+  /**
+   * Open file for reading and writing.
+   */
   ReadWrite = 2,
+
+  /**
+   * Open file for reading and writing, truncating it first.
+   */
   ReadWriteCreate = 514,
+
+  /**
+   * Open file for reading and writing, truncating it first.
+   */
   ReadWriteTrunc = 1538,
+
+  /**
+   * Open file for reading and writing, creating it first.
+   */
   ReadWriteNew = 2562,
+
+  /**
+   * Open file for reading and writing, appending to it if it exists.
+   */
   ReadWriteAppend = 522,
+
+  /**
+   * Open file for appending.
+   */
   AppendExisting = 10
 }
 
@@ -74,11 +148,34 @@ open enum FileMode {
  * All fields are read-only.
  */
 open type StatInfo {
+  /**
+   * File kind.
+   */
   let kind: EntryKind;
+
+  /**
+   * File size in bytes.
+   */
   let size: i64;
+
+  /**
+   * File mode bits.
+   */
   let mode: u64;
+
+  /**
+   * Last modification time.
+   */
   let modifiedAt: i64;
+
+  /**
+   * Last access time.
+   */
   let accessedAt: i64;
+
+  /**
+   * Last change time.
+   */
   let changedAt: i64;
 }
 
@@ -86,9 +183,24 @@ open type StatInfo {
  * Lightweight directory entry info, returned by Dir.read or the Dir iterator.
  */
 open type EntryInfo {
+  /**
+   * Entry name.
+   */
   let name: string;
+
+  /**
+   * Entry path.
+   */
   let path: string;
+
+  /**
+   * Entry kind.
+   */
   let kind: EntryKind;
+
+  /**
+   * Directory path.
+   */
   seal var dirPath: byte[];
 
   /**
