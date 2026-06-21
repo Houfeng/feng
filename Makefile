@@ -95,7 +95,7 @@ EXTLIB_DIR := extlib/$(HOST_TARGET)
 RUNTIME_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
 LIBUNWIND_LIB := $(EXTLIB_DIR)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC_LIB_EXT)
 
-.PHONY: all cli runtime test smoke cli-tests cli-project-tests std-tests perf-constraints clean
+.PHONY: all cli runtime test smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints clean
 
 all: cli runtime
 
@@ -103,7 +103,7 @@ cli: $(BIN_DIR)/feng
 
 runtime: $(RUNTIME_LIB)
 
-test: $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests perf-constraints
+test: $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -150,6 +150,9 @@ std-tests: cli runtime
 	grep -q '^__LIST_FOR_IN__=abc$$' ./std_test/build/std_test.stdout
 	grep -q '^__STRING_BYTE_FOR_IN__=a\.b\.c\.$$' ./std_test/build/std_test.stdout
 	grep -q '^__STRING_RUNE_FOR_IN__=A中B$$' ./std_test/build/std_test.stdout
+
+fcts-tests: cli runtime
+	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng run ./fcts/fcts_bin
 
 smoke: cli runtime
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_smoke.sh
