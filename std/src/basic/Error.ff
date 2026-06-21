@@ -3,8 +3,64 @@ open module std;
 /**
  * An error.
  */
-open type Error {
+open type Error: Display {
+  /**
+   * The name of the error.
+   */
   let name: string;
+
+  /**
+   * The message of the error.
+   */
   let message: string;
+
+  /**
+   * The origin of the error.
+   */
   let origin: Option<Error>;
+
+  /**
+   * Creates a new error.
+   * @param name The name of the error.
+   * @param message The message of the error.
+   * @param origin The origin of the error.
+   */
+  func Error(name: string, message: string, origin: Option<Error>) {
+    self.name = name;
+    self.message = message;
+    self.origin = origin;
+  }
+
+  /**
+   * Creates a new error without an origin.
+   * @param name The name of the error.
+   * @param message The message of the error.
+   */
+  func Error(name: string, message: string) {
+    self.name = name;
+    self.message = message;
+    self.origin = none;
+  }
+
+  /**
+   * Creates a new error without a message or an origin.
+   * @param name The name of the error.
+   */
+  func Error(name: string) {
+    self.name = name;
+    self.message = "";
+    self.origin = none;
+  }
+
+  /**
+   * Converts the error to a string.
+   * @returns The string representation of the error.
+   */
+  func toString(): string {
+    if (self.message == "") {
+      return self.name;
+    }
+    return self.name + ": " + self.message;
+  }
+
 }

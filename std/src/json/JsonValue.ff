@@ -70,7 +70,7 @@ open fit None {
  * A JSON array is an ordered collection of values, which can be of any type (string, number, boolean, null, object, or another array).
  * This type provides methods to manipulate the array and to serialize it to a JSON string.
  */
-open type JsonArray {
+open type JsonArray: Display {
   // The list of values in this JSON array
   seal let payload: List<JsonValue>;
 
@@ -135,6 +135,14 @@ open type JsonArray {
     }
     return "[" + string.join(",", (string[])parts) + "]";
   }
+
+  /**
+   * Returns a string representation of this JSON array.
+   * @return the JSON string
+   */
+  func toString(): string {
+    return self.toJsonString();
+  }
 }
 
 /**
@@ -142,7 +150,7 @@ open type JsonArray {
  * A JSON object is an unordered collection of key-value pairs, where the keys are strings and the values are JSON values.
  * This type provides methods to manipulate the object and to serialize it to a JSON string.
  */
-open type JsonObject {
+open type JsonObject: Display {
   // The map of key-value pairs in this JSON object
   seal let payload: Map<string, JsonValue>;
 
@@ -205,6 +213,14 @@ open type JsonObject {
       idx += (long)1;
     }
     return "{" + string.join(",", (string[])parts) + "}";
+  }
+
+  /**
+   * Returns a string representation of this JSON object.
+   * @return the JSON string
+   */
+  func toString(): string {
+    return self.toJsonString();
   }
 }
 
