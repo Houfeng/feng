@@ -15,3 +15,4 @@
 - [x] if-match ，类型匹配优化，比 if v { x:string {} else {} }
 - [ ] if-match, 支持匹配 enum
 - [ ] if 表达式、match 表达式、try 表达式，最后一句支持 throw
+- [ ] 支持单 case match 语法，if expr match v:int {} 或 if expr match int {}
