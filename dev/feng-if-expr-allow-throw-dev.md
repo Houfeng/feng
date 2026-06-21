@@ -1,6 +1,6 @@
 # if/if-match/try 表达式分支块允许以 throw 结尾
 
-## 状态: dev
+## 状态: done
 
 ## 背景
 
@@ -123,16 +123,16 @@ let label = if value {
 
 ## Todo
 
-- [ ] **T1. 语义: validate_block_yields_expression** — 增加 `block_terminates_with_throw` 检查，throw 结尾视为合法终止（if/match 共用，改一处全部生效）
-- [ ] **T2. 语义: validate_if_expr** — 类型一致性比较时，跳过以 throw 结尾的分支
-- [ ] **T3. 语义: union match 类型比较** — 获取 expected 和逐分支比较时，跳过 throw 分支
-- [ ] **T4. 语义: general match 类型比较** — 同上
-- [ ] **T5. 语义: infer_expr_type** — FENG_EXPR_IF / FENG_EXPR_MATCH 推导时，throw 分支类型视为 unknown，结果取第一个已知的非 throw 分支类型
-- [ ] **T6. 代码生成: cg_emit_if_expr** — throw 分支走 cg_emit_block 整体发射，非 throw 分支走 cg_emit_branch_into_slot；两个都 throw 时不分配 result slot
-- [ ] **T7. 代码生成: cg_emit_match_expr** — 同上模式，throw 分支走 cg_emit_block
-- [ ] **T8. 文档: docs/feng-flow.md** — 更新 §4 if 表达式规则，补充 throw 允许说明
-- [ ] **T9. 文档: docs/feng-exception.md** — 补充 if/if-match 表达式分支允许 throw
-- [ ] **T10. 全量回归测试** — 编译通过并运行现有测试套件
+- [x] **T1. 语义: validate_block_yields_expression** — 增加 `block_terminates_with_throw` 检查，throw 结尾视为合法终止（if/match 共用，改一处全部生效）
+- [x] **T2. 语义: validate_if_expr** — 类型一致性比较时，跳过以 throw 结尾的分支
+- [x] **T3. 语义: union match 类型比较** — 获取 expected 和逐分支比较时，跳过 throw 分支
+- [x] **T4. 语义: general match 类型比较** — 同上
+- [x] **T5. 语义: infer_expr_type** — FENG_EXPR_IF / FENG_EXPR_MATCH 推导时，throw 分支类型视为 unknown，结果取第一个已知的非 throw 分支类型
+- [x] **T6. 代码生成: cg_emit_if_expr** — throw 分支走 cg_emit_block 整体发射，非 throw 分支走 cg_emit_branch_into_slot；两个都 throw 时不分配 result slot
+- [x] **T7. 代码生成: cg_emit_match_expr** — 同上模式，throw 分支走 cg_emit_block
+- [x] **T8. 文档: docs/feng-flow.md** — 更新 §4 if 表达式规则，补充 throw 允许说明
+- [x] **T9. 文档: docs/feng-exception.md** — 补充 if/if-match 表达式分支允许 throw
+- [x] **T10. 全量回归测试** — 编译通过并运行现有测试套件
 
 ## 验证
 
