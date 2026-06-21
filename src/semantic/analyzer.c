@@ -6365,6 +6365,13 @@ static bool validate_block_yields_expression(ResolveContext *context,
     if (block_yield_expression(block) != NULL) {
         return true;
     }
+    /* A branch block that terminates with 'throw' never yields a value, but
+     * it does terminate the control-flow path so it is a legal ending for
+     * if/if-match expression branches (the same rule already applies to
+     * try-expression catch clauses). */
+    if (block_terminates_with_throw(block)) {
+        return true;
+    }
     return resolver_append_error(
         context,
         anchor,
@@ -6401,6 +6408,17 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
                                           expr->token,
                                           "if expression else")) {
         return false;
+    }
+
+    {
+        bool then_throws = block_terminates_with_throw(expr->as.if_expr.then_block);
+        bool else_throws = block_terminates_with_throw(expr->as.if_expr.else_block);
+
+        /* Throw-terminated branches never produce a result value, so they do
+         * not participate in the type-consistency check. */
+        if (then_throws || else_throws) {
+            return true;
+        }
     }
 
     then_type = block_yield_inferred_type(context, expr->as.if_expr.then_block);
@@ -13567,29 +13585,62 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
 
         case FENG_EXPR_IF: {
             InferredExprType condition_type = infer_expr_type(context, expr->as.if_expr.condition);
-            InferredExprType then_type =
-                block_yield_inferred_type(context, expr->as.if_expr.then_block);
-            InferredExprType else_type =
-                block_yield_inferred_type(context, expr->as.if_expr.else_block);
+            InferredExprType then_type;
+            InferredExprType else_type;
 
-            return inferred_expr_type_is_bool(condition_type) &&
-                       inferred_expr_types_equal(context, then_type, else_type)
-                       ? then_type
-                       : inferred_expr_type_unknown();
+            if (!inferred_expr_type_is_bool(condition_type)) {
+                return inferred_expr_type_unknown();
+            }
+
+            then_type = block_yield_inferred_type(context, expr->as.if_expr.then_block);
+            else_type = block_yield_inferred_type(context, expr->as.if_expr.else_block);
+
+            /* Throw-terminated branches contribute no yield value, so their
+             * inferred type is unknown. Pick the first known branch type;
+             * when both branches throw the result type stays unknown. */
+            if (inferred_expr_type_is_known(then_type)) {
+                return then_type;
+            }
+            return else_type;
         }
 
         case FENG_EXPR_MATCH: {
             InferredExprType result_type =
                 block_yield_inferred_type(context, expr->as.match_expr.else_block);
 
+            /* If the else branch throws (or its type is otherwise unknown),
+             * fall back to the first branch with a known yield type. */
+            if (!inferred_expr_type_is_known(result_type)) {
+                for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                    if (block_terminates_with_throw(expr->as.match_expr.branches[index].body)) {
+                        continue;
+                    }
+                    result_type =
+                        block_yield_inferred_type(context, expr->as.match_expr.branches[index].body);
+                    if (inferred_expr_type_is_known(result_type)) {
+                        break;
+                    }
+                }
+            }
+
             if (!inferred_expr_type_is_known(result_type)) {
                 return result_type;
             }
 
             for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
-                InferredExprType branch_type =
+                InferredExprType branch_type;
+
+                /* Throw-terminated branches do not produce a result value,
+                 * so they do not participate in type consistency checks. */
+                if (block_terminates_with_throw(expr->as.match_expr.branches[index].body)) {
+                    continue;
+                }
+                branch_type =
                     block_yield_inferred_type(context, expr->as.match_expr.branches[index].body);
 
+                if (!inferred_expr_type_is_known(branch_type)) {
+                    continue;
+                }
                 if (!inferred_expr_types_equal(context, result_type, branch_type)) {
                     return inferred_expr_type_unknown();
                 }

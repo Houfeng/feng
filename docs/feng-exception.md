@@ -141,6 +141,28 @@ func startup() {
 }
 ```
 
+### 3.6 `if`/`if-match` 表达式分支中的 `throw`
+
+`if` 表达式和 `if-match`（match）表达式的各分支块允许以 `throw` 结尾，与 `try/catch` 表达式的 `catch` 子句规则一致。
+
+- 以 `throw` 结尾的分支不产生结果值，不参与结果类型推导和一致性比较。
+- 如果一个分支 `throw`、另一个分支有 yield 表达式，则结果类型取有 yield 的分支类型。
+- 如果所有分支都以 `throw` 结尾，则表达式结果类型为 unknown，不可用于需要明确类型的上下文。
+
+```feng
+let x = if cond {
+  throw "error";
+} else {
+  42;
+};
+
+let label = if value {
+  0 { "zero"; }
+  1 { throw "unexpected one"; }
+  else { "other"; }
+};
+```
+
 ## 4 异常传播规则
 
 - 未被当前函数处理的异常会继续向调用方传播。

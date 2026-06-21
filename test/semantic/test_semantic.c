@@ -16150,6 +16150,150 @@ static void test_iterator_self_cursor_ok(void) {
     assert_single_source_semantic_ok("iter_self_cursor_ok.f", source);
 }
 
+/* ===================== if/match expression throw branch tests ===================== */
+
+static void test_if_expr_then_throw_else_value_accepted(void) {
+    /* An if-expression where the then branch terminates with throw and
+     * the else branch yields a value. The result type is taken from the
+     * else branch. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let x: i32 = if true {\n"
+        "        throw \"error\";\n"
+        "    } else {\n"
+        "        42\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("if_then_throw_else_value_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_if_expr_then_value_else_throw_accepted(void) {
+    /* An if-expression where the then branch yields a value and the
+     * else branch terminates with throw. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let x: i32 = if true {\n"
+        "        42\n"
+        "    } else {\n"
+        "        throw \"error\";\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("if_then_value_else_throw_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_if_expr_both_branches_throw_accepted(void) {
+    /* An if-expression where both branches terminate with throw.
+     * When both branches throw, the if construct is still a statement
+     * (not an expression with a value), so it is used without a trailing
+     * semicolon expression wrapper. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    if true {\n"
+        "        throw \"a\";\n"
+        "    } else {\n"
+        "        throw \"b\";\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("if_both_throw_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_match_expr_partial_throw_accepted(void) {
+    /* An if-match expression where some branches throw and the rest
+     * yield values. The result type is taken from the yielding
+     * branches. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let v: i32 = 0;\n"
+        "    let label: string = if v {\n"
+        "        0 { \"zero\"; }\n"
+        "        1 { throw \"unexpected one\"; }\n"
+        "        else { \"other\"; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_partial_throw_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_match_expr_all_branches_throw_accepted(void) {
+    /* An if-match expression where all branches terminate with throw.
+     * When all branches throw, the match construct is used as a
+     * statement (not an expression with a value). */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let v: i32 = 0;\n"
+        "    if v {\n"
+        "        0 { throw \"zero\"; }\n"
+        "        1 { throw \"one\"; }\n"
+        "        else { throw \"other\"; }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_all_throw_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -16726,6 +16870,12 @@ int main(void) {
     test_iterator_for_in_not_iterable_rejected();
     test_iterator_basic_iterable_ok();
     test_iterator_self_cursor_ok();
+
+    test_if_expr_then_throw_else_value_accepted();
+    test_if_expr_then_value_else_throw_accepted();
+    test_if_expr_both_branches_throw_accepted();
+    test_match_expr_partial_throw_accepted();
+    test_match_expr_all_branches_throw_accepted();
 
     puts("semantic tests passed");
     return 0;

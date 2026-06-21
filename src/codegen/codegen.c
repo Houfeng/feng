@@ -17077,6 +17077,15 @@ static const FengExpr *cg_branch_yield_expr(const FengBlock *block) {
     return last->as.expr;
 }
 
+/* A branch block "terminates with throw" when its last statement is a
+ * FENG_STMT_THROW. Such branches never write into the result slot; they
+ * are emitted as plain blocks whose control flow exits via the unwinder. */
+static bool cg_branch_terminates_with_throw(const FengBlock *block) {
+    if (!block || block->statement_count == 0) return false;
+    const FengStmt *last = block->statements[block->statement_count - 1];
+    return last->kind == FENG_STMT_THROW;
+}
+
 static bool cg_emit_branch_into_slot(CG *cg,
                                      const FengBlock *block,
                                      const char *ifv_name,
@@ -17265,14 +17274,63 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
     const FengBlock *then_b = e->as.if_expr.then_block;
     const FengBlock *else_b = e->as.if_expr.else_block;
-    const FengExpr *then_yield = cg_branch_yield_expr(then_b);
-    const FengExpr *else_yield = cg_branch_yield_expr(else_b);
-    if (!then_yield || !else_yield) {
+    bool then_throws = cg_branch_terminates_with_throw(then_b);
+    bool else_throws = cg_branch_terminates_with_throw(else_b);
+    const FengExpr *then_yield = then_throws ? NULL : cg_branch_yield_expr(then_b);
+    const FengExpr *else_yield = else_throws ? NULL : cg_branch_yield_expr(else_b);
+
+    if (!then_yield && !else_yield) {
         return cg_fail(cg, e->token,
-            "CE0199", "codegen: if-expression branches must end with an expression statement");
+            "CE0199", "codegen: if-expression branches must end with an expression statement or throw");
     }
 
-    CGType *result_type = cg_probe_branch_yield_type(cg, then_yield);
+    /* When both branches terminate with throw the expression has no usable
+     * result value. Emit a plain if/else that propagates the exception; the
+     * result slot is unnecessary, so we surface a void-typed ExprResult. */
+    if (then_throws && else_throws) {
+        char *cond_tmp = cg_fresh_temp(cg, "_cond");
+        ExprResult cond;
+        bool ok;
+
+        if (!cond_tmp) {
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+        }
+        if (!cg_emit_expr(cg, e->as.if_expr.condition, &cond)) {
+            free(cond_tmp);
+            return false;
+        }
+        if (cond.type->kind != CG_TYPE_BOOL) {
+            er_free(&cond);
+            free(cond_tmp);
+            return cg_fail(cg, e->token,
+                "CE0201", "codegen: if-expression condition must be bool");
+        }
+        buf_append_fmt(cg->cur_body, "    bool %s = %s;\n", cond_tmp, cond.c_expr);
+        er_free(&cond);
+
+        buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond_tmp);
+        ok = cg_emit_block(cg, then_b);
+        buf_append_cstr(cg->cur_body, "    } else {\n");
+        if (ok) {
+            ok = cg_emit_block(cg, else_b);
+        }
+        buf_append_cstr(cg->cur_body, "    }\n");
+        free(cond_tmp);
+        if (!ok) {
+            return false;
+        }
+
+        out->type = cgtype_new(CG_TYPE_VOID);
+        out->c_expr = strdup("(void)0");
+        out->owns_ref = false;
+        return out->type != NULL && out->c_expr != NULL;
+    }
+
+    /* Exactly one branch throws. Derive the result type from the yielding
+     * branch; the throwing branch is emitted as a plain block (its throw
+     * leaves control flow before the slot would ever be read). */
+    const FengExpr *yield_for_type = then_yield != NULL ? then_yield : else_yield;
+    CGType *result_type = cg_probe_branch_yield_type(cg, yield_for_type);
     if (!result_type) return false;
 
     bool managed = cgtype_is_managed(result_type);
@@ -17343,16 +17401,25 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     free(cty);
 
     buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond_tmp);
-    if (!cg_emit_branch_into_slot(cg, then_b, ifv, result_type, managed, aggregate, e->token)) {
-        free(cond_tmp); free(ifv); cgtype_free(result_type);
-        return false;
+    bool ok = true;
+    if (then_throws) {
+        ok = cg_emit_block(cg, then_b);
+    } else {
+        ok = cg_emit_branch_into_slot(cg, then_b, ifv, result_type, managed, aggregate, e->token);
     }
     buf_append_cstr(cg->cur_body, "    } else {\n");
-    if (!cg_emit_branch_into_slot(cg, else_b, ifv, result_type, managed, aggregate, e->token)) {
+    if (ok) {
+        if (else_throws) {
+            ok = cg_emit_block(cg, else_b);
+        } else {
+            ok = cg_emit_branch_into_slot(cg, else_b, ifv, result_type, managed, aggregate, e->token);
+        }
+    }
+    buf_append_cstr(cg->cur_body, "    }\n");
+    if (!ok) {
         free(cond_tmp); free(ifv); cgtype_free(result_type);
         return false;
     }
-    buf_append_cstr(cg->cur_body, "    }\n");
 
     out->c_expr = strdup(ifv);
     out->type = result_type;
@@ -17414,6 +17481,210 @@ static bool cg_emit_match_label_cond(CG *cg, const char *target_tmp,
     return cg_fail(cg, lab->token, "CE0204", "codegen: unknown match label kind");
 }
 
+/* Emit a match expression where every branch (including else) terminates
+ * with throw. No result slot is needed; each branch is emitted as a plain
+ * block whose throw propagates up through the unwinder. `tgt_tmp` is the
+ * already-materialised target variable name. */
+static bool cg_emit_match_expr_all_throw(CG *cg, const FengExpr *e,
+                                         const char *tgt_tmp, ExprResult *out) {
+    er_init(out);
+
+    /* Check if target is a union spec for the union-match code path. */
+    const FengExpr *target = e->as.match_expr.target;
+    CGType *target_type = cg_probe_expr_type(cg, target);
+    bool is_union = target_type != NULL && target_type->kind == CG_TYPE_SPEC &&
+                    target_type->user_spec != NULL &&
+                    target_type->user_spec->form == FENG_SPEC_FORM_UNION;
+
+    if (is_union) {
+        const UserSpec *union_spec = target_type->user_spec;
+        bool first_branch = true;
+        bool ok = true;
+
+        for (size_t branch_index = 0U;
+             branch_index < e->as.match_expr.branch_count;
+             ++branch_index) {
+            const FengMatchBranch *branch = &e->as.match_expr.branches[branch_index];
+            Buf condition;
+            size_t first_member_index = 0U;
+            size_t matched_member_count = 0U;
+
+            if (branch->label_count == 0U) {
+                ok = cg_fail(cg, branch->token,
+                             "CE0210", "codegen: match branch has no labels");
+                break;
+            }
+
+            buf_init(&condition);
+            for (size_t label_index = 0U;
+                 label_index < branch->label_count;
+                 ++label_index) {
+                size_t member_index = 0U;
+
+                if (!cg_union_member_index_for_label(cg,
+                                                     union_spec,
+                                                     &branch->labels[label_index],
+                                                     &member_index)) {
+                    ok = false;
+                    break;
+                }
+                if (label_index != 0U) {
+                    buf_append_cstr(&condition, " || ");
+                }
+                buf_append_fmt(&condition, "%s.tag == %zuU", tgt_tmp, member_index);
+                if (matched_member_count == 0U) {
+                    first_member_index = member_index;
+                }
+                matched_member_count++;
+            }
+
+            if (!ok) {
+                buf_free(&condition);
+                break;
+            }
+
+            if (first_branch) {
+                buf_append_fmt(cg->cur_body, "    if (%s) {\n", condition.data);
+                first_branch = false;
+            } else {
+                buf_append_fmt(cg->cur_body, "    } else if (%s) {\n", condition.data);
+            }
+            buf_free(&condition);
+
+            {
+                Scope *branch_scope = scope_push(cg->cur_scope);
+
+                if (branch_scope == NULL) {
+                    ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
+                    break;
+                }
+                cg->cur_scope = branch_scope;
+                if (branch->has_binding &&
+                    branch->binding_name.data != NULL &&
+                    branch->binding_name.length > 0U &&
+                    matched_member_count == 1U) {
+                    Buf payload_expr;
+                    CGType *alias_type;
+
+                    buf_init(&payload_expr);
+                    buf_append_fmt(&payload_expr, "%s.payload.", tgt_tmp);
+                    cg_append_union_payload_field_name(&payload_expr, first_member_index);
+                    alias_type = cgtype_clone(union_spec->union_member_types[first_member_index]);
+
+                    char *alias_cstr = strndup(branch->binding_name.data,
+                                               branch->binding_name.length);
+
+                    if (payload_expr.data == NULL || alias_type == NULL || alias_cstr == NULL ||
+                        !scope_add(branch_scope,
+                                   alias_cstr,
+                                   payload_expr.data,
+                                   alias_type,
+                                   true)) {
+                        cgtype_free(alias_type);
+                        free(alias_cstr);
+                        buf_free(&payload_expr);
+                        cg->cur_scope = branch_scope->parent;
+                        scope_pop_free(branch_scope);
+                        ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
+                        break;
+                    }
+                    free(alias_cstr);
+                    cgtype_free(alias_type);
+                    buf_free(&payload_expr);
+                }
+
+                ok = cg_emit_block(cg, branch->body);
+                if (ok) {
+                    cg_release_scope(cg, branch_scope);
+                }
+                cg->cur_scope = branch_scope->parent;
+                scope_pop_free(branch_scope);
+                if (!ok) {
+                    break;
+                }
+            }
+        }
+
+        if (ok) {
+            if (first_branch) {
+                buf_append_cstr(cg->cur_body, "    {\n");
+            } else {
+                buf_append_cstr(cg->cur_body, "    } else {\n");
+            }
+            ok = cg_emit_block(cg, e->as.match_expr.else_block);
+            buf_append_cstr(cg->cur_body, "    }\n");
+        }
+
+        cgtype_free(target_type);
+        if (!ok) {
+            return false;
+        }
+        out->type = cgtype_new(CG_TYPE_VOID);
+        out->c_expr = strdup("(void)0");
+        out->owns_ref = false;
+        return out->type != NULL && out->c_expr != NULL;
+    }
+
+    /* General match path (integer/string/bool target). */
+    CGTypeKind tk;
+    {
+        tk = target_type != NULL ? target_type->kind : CG_TYPE_VOID;
+
+        cgtype_free(target_type);
+
+        if (tk != CG_TYPE_BOOL && tk != CG_TYPE_STRING && !cgtype_is_integer(tk)) {
+            return cg_fail(cg, e->token,
+                "CE0211", "codegen: match target must be integer, bool, or string");
+        }
+    }
+
+    bool first_branch = true;
+    for (size_t i = 0; i < e->as.match_expr.branch_count; i++) {
+        const FengMatchBranch *br = &e->as.match_expr.branches[i];
+        if (br->label_count == 0) {
+            return cg_fail(cg, br->token,
+                "CE0210", "codegen: match branch has no labels");
+        }
+        Buf cond; buf_init(&cond);
+        bool cond_ok = true;
+        for (size_t li = 0; li < br->label_count; li++) {
+            if (li) buf_append_cstr(&cond, " || ");
+            if (!cg_emit_match_label_cond(cg, tgt_tmp, tk, &br->labels[li], &cond)) {
+                cond_ok = false;
+                break;
+            }
+        }
+        if (!cond_ok) {
+            buf_free(&cond);
+            return false;
+        }
+        if (first_branch) {
+            buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond.data);
+            first_branch = false;
+        } else {
+            buf_append_fmt(cg->cur_body, "    } else if (%s) {\n", cond.data);
+        }
+        buf_free(&cond);
+        if (!cg_emit_block(cg, br->body)) {
+            return false;
+        }
+    }
+    if (first_branch) {
+        buf_append_cstr(cg->cur_body, "    {\n");
+    } else {
+        buf_append_cstr(cg->cur_body, "    } else {\n");
+    }
+    if (!cg_emit_block(cg, e->as.match_expr.else_block)) {
+        return false;
+    }
+    buf_append_cstr(cg->cur_body, "    }\n");
+
+    out->type = cgtype_new(CG_TYPE_VOID);
+    out->c_expr = strdup("(void)0");
+    out->owns_ref = false;
+    return out->type != NULL && out->c_expr != NULL;
+}
+
 static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
 
@@ -17421,37 +17692,71 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         return cg_fail(cg, e->token,
             "CE0205", "codegen: match expression requires an else branch");
     }
-    const FengExpr *else_yield =
-        cg_branch_yield_expr(e->as.match_expr.else_block);
-    if (!else_yield) {
+    /* Allow each branch (including else) to end with either an expression
+     * statement or a throw. Branches that terminate with throw never
+     * produce a result value; they are emitted via cg_emit_block. */
+    bool else_throws = cg_branch_terminates_with_throw(e->as.match_expr.else_block);
+    const FengExpr *else_yield = else_throws ? NULL : cg_branch_yield_expr(e->as.match_expr.else_block);
+    if (!else_yield && !else_throws) {
         return cg_fail(cg, e->token,
-            "CE0206", "codegen: match expression else branch must end with an expression statement");
+            "CE0206", "codegen: match expression else branch must end with an expression statement or throw");
     }
     for (size_t i = 0; i < e->as.match_expr.branch_count; i++) {
-        if (!cg_branch_yield_expr(e->as.match_expr.branches[i].body)) {
+        if (!cg_branch_yield_expr(e->as.match_expr.branches[i].body) &&
+            !cg_branch_terminates_with_throw(e->as.match_expr.branches[i].body)) {
             return cg_fail(cg, e->token,
-                "CE0207", "codegen: match branch must end with an expression statement");
+                "CE0207", "codegen: match branch must end with an expression statement or throw");
         }
     }
 
-    CGType *result_type = cg_probe_branch_yield_type(cg, else_yield);
-    if (!result_type) return false;
-    bool managed = cgtype_is_managed(result_type);
-    bool aggregate = cgtype_is_aggregate(result_type);
-    const char *agg_desc = aggregate ? cg_aggregate_desc_name(result_type) : NULL;
-    if (aggregate && agg_desc == NULL) {
-        cgtype_free(result_type);
-        return cg_fail(cg, e->token,
-            "CE0208", "codegen: missing aggregate descriptor for match expression result");
+    /* Derive the result type from the first branch that does not throw.
+     * When every branch (including else) terminates with throw, no result
+     * slot is required and the expression type is void. */
+    const FengExpr *yield_for_type = else_yield;
+    if (yield_for_type == NULL) {
+        for (size_t i = 0; i < e->as.match_expr.branch_count; i++) {
+            if (!cg_branch_terminates_with_throw(e->as.match_expr.branches[i].body)) {
+                yield_for_type = cg_branch_yield_expr(e->as.match_expr.branches[i].body);
+                break;
+            }
+        }
     }
 
     /* Materialise the target so it is evaluated exactly once and (for managed
      * targets like `string`) stays alive across every label comparison. */
     ExprResult tgt;
     if (!cg_emit_expr(cg, e->as.match_expr.target, &tgt)) {
-        cgtype_free(result_type);
         return false;
     }
+
+    if (yield_for_type == NULL) {
+        /* All branches throw — emit without a result slot. */
+        char *tgt_tmp = cg_materialize_to_local(cg, &tgt, "_mt");
+        er_free(&tgt);
+        if (!tgt_tmp) {
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+        }
+        /* Delegate to a helper that emits all branches as plain blocks. */
+        bool ok = cg_emit_match_expr_all_throw(cg, e, tgt_tmp, out);
+        free(tgt_tmp);
+        return ok;
+    }
+
+    CGType *result_type = cg_probe_branch_yield_type(cg, yield_for_type);
+    if (!result_type) {
+        er_free(&tgt);
+        return false;
+    }
+    bool managed = cgtype_is_managed(result_type);
+    bool aggregate = cgtype_is_aggregate(result_type);
+    const char *agg_desc = aggregate ? cg_aggregate_desc_name(result_type) : NULL;
+    if (aggregate && agg_desc == NULL) {
+        er_free(&tgt);
+        cgtype_free(result_type);
+        return cg_fail(cg, e->token,
+            "CE0208", "codegen: missing aggregate descriptor for match expression result");
+    }
+
     char *ifv = cg_fresh_temp(cg, "_ifv");
     if (!ifv) {
         er_free(&tgt);
@@ -17616,7 +17921,11 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                     buf_free(&payload_expr);
                 }
 
-                if (!cg_emit_branch_into_slot(cg,
+                if (cg_branch_terminates_with_throw(branch->body)) {
+                    if (!cg_emit_block(cg, branch->body)) {
+                        ok = false;
+                    }
+                } else if (!cg_emit_branch_into_slot(cg,
                                               branch->body,
                                               ifv,
                                               result_type,
@@ -17651,14 +17960,20 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                 } else {
                     cg->cur_scope = else_scope;
 
-                    if (ok && !cg_emit_branch_into_slot(cg,
-                                                        e->as.match_expr.else_block,
-                                                        ifv,
-                                                        result_type,
-                                                        managed,
-                                                        aggregate,
-                                                        e->token)) {
-                        ok = false;
+                    if (ok) {
+                        if (cg_branch_terminates_with_throw(e->as.match_expr.else_block)) {
+                            if (!cg_emit_block(cg, e->as.match_expr.else_block)) {
+                                ok = false;
+                            }
+                        } else if (!cg_emit_branch_into_slot(cg,
+                                                            e->as.match_expr.else_block,
+                                                            ifv,
+                                                            result_type,
+                                                            managed,
+                                                            aggregate,
+                                                            e->token)) {
+                            ok = false;
+                        }
                     }
                     if (ok) {
                         cg_release_scope(cg, else_scope);
@@ -17744,7 +18059,12 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                 buf_append_fmt(cg->cur_body, "    } else if (%s) {\n", cond.data);
             }
             buf_free(&cond);
-            if (!cg_emit_branch_into_slot(cg, br->body, ifv, result_type, managed, aggregate,
+            if (cg_branch_terminates_with_throw(br->body)) {
+                if (!cg_emit_block(cg, br->body)) {
+                    free(ifv); free(tgt_tmp); cgtype_free(result_type);
+                    return false;
+                }
+            } else if (!cg_emit_branch_into_slot(cg, br->body, ifv, result_type, managed, aggregate,
                                           e->token)) {
                 free(ifv); free(tgt_tmp); cgtype_free(result_type);
                 return false;
@@ -17757,7 +18077,12 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         } else {
             buf_append_cstr(cg->cur_body, "    } else {\n");
         }
-        if (!cg_emit_branch_into_slot(cg, e->as.match_expr.else_block, ifv,
+        if (cg_branch_terminates_with_throw(e->as.match_expr.else_block)) {
+            if (!cg_emit_block(cg, e->as.match_expr.else_block)) {
+                free(ifv); free(tgt_tmp); cgtype_free(result_type);
+                return false;
+            }
+        } else if (!cg_emit_branch_into_slot(cg, e->as.match_expr.else_block, ifv,
                                       result_type, managed, aggregate, e->token)) {
             free(ifv); free(tgt_tmp); cgtype_free(result_type);
             return false;
