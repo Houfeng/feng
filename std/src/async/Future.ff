@@ -8,20 +8,51 @@ import std;
  */
 open type Future<T> {
 
-}
-
-/**
- * A promise represents a future value that can be resolved or rejected.
- * Feng language does not have built-in support for promises, but this type can be used to represent a promise.
- */
-open type Promise<T> {
-  /**
-   * Resolve the promise with the given value.
-   */
-  func resolve(value: T): void {}
+  seal let owner: Option<Promise<T>>;
 
   /**
-   * Reject the promise with the given reason.
+   * Create a new future with the given promise.
    */
-  func reject(error: Error): void {}
+  func Future(owner: Promise<T>) {
+    self.owner = owner;
+  }
+
+  /**
+   * Wait for the future to be resolved and return the value.
+   * This function will block until the future is resolved.
+   */
+  func await(): T {
+    // TODO: Implement waiting for the future to be resolved and returning the value.
+  }
+
+  /**
+   * Get the current state of the future.
+   */
+  func state(): FutureState {
+    return if self.owner {
+      p: Promise<T> { p.state }
+      else { FutureState.Pending }
+    };
+  }
+
+  /**
+   * Check if the future has been resolved.
+   */
+  func isResolved(): bool {
+    return self.state() == FutureState.Resolved;
+  }
+
+  /**
+   * Check if the future has been rejected.
+   */
+  func isRejected(): bool {
+    return self.state() == FutureState.Rejected;
+  }
+
+  /**
+   * Check if the future is pending.
+   */
+  func isPending(): bool {
+    return self.state() == FutureState.Pending;
+  }
 }

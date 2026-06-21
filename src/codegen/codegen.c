@@ -9139,6 +9139,13 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
         cg_emit_callable_abi_function_pointer_typedef(&cg->headers, s);
         buf_append_fmt(&cg->headers, "struct %s;\n", s->c_closure_struct_name);
         cg_emit_witness_struct_body(cg, s, &cg->headers);
+        /* Forward-declare the closure type descriptor so that generic
+         * type instances referencing it (e.g. List<WakerFn>) can compile
+         * even though the full definition is emitted later in the spec
+         * definition pass. */
+        buf_append_fmt(&cg->headers,
+            "static const FengTypeDescriptor %s;\n",
+            s->c_closure_desc_name);
         return;
     }
     if (s->form == FENG_SPEC_FORM_UNION) {

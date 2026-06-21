@@ -1,0 +1,43 @@
+
+open module std.async;
+
+import std;
+
+/**
+ * A promise represents a future value that can be resolved or rejected.
+ * Feng language does not have built-in support for promises, but this type can be used to represent a promise.
+ */
+open type Promise<T> {
+
+  seal let future: Future<T>;
+  seal let state: FutureState;
+
+  seal let value: T;
+  seal let error: Error;
+
+  func Promise() {
+    self.state = FutureState.Pending;
+    self.future = Future<T>(self);
+  }
+
+  /**
+   * Resolve the promise with the given value.
+   */
+  func resolve(value: T): void {}
+
+  /**
+   * Reject the promise with the given reason.
+   */
+  func reject(error: Error): void {}
+
+  func await(): T {
+    if (self.state == FutureState.Resolved) {
+      return self.value;
+    } else if (self.state == FutureState.Rejected) {
+      throw self.error;
+    } else {
+      // TODO: Implement waiting for the promise to be resolved or rejected.
+      throw Error("Promise is still pending");
+    }
+  }
+}

@@ -1,0 +1,23 @@
+open module std.async;
+
+import std;
+
+/**
+ * The state of a future.
+ */
+open enum FutureState {
+  /**
+   * The future is pending.
+   */
+  Pending,
+
+  /**
+   * The future is resolved.
+   */
+  Resolved,
+
+  /**
+   * The future is rejected.
+   */
+  Rejected
+}
