@@ -240,7 +240,7 @@ C 代码各文件改动规模：
 
 | 文件 | 变更内容 |
 | ---- | -------- |
-| `feng-if-expr-allow-throw-dev.md` | 标题 `# if/if-match/try 表达式分支块允许以 throw 结尾` 改为 `# if/match/try 表达式分支块允许以 throw 结尾`；正文 `if-match（match）表达式` 改为 `match 表达式`（第 7 行）；代码示例 `let label = if value {` 改为 `let label = match value {`（第 20 行）；规则与 TODO 项中 `\`if-match\` 表达式` 改为 `\`match\` 表达式`（第 29、117、134、143、144 行） |
+| `feng-if-and-match-expr-allow-throw-dev.md` | 标题 `# if/if-match/try 表达式分支块允许以 throw 结尾` 改为 `# if/match/try 表达式分支块允许以 throw 结尾`；正文 `if-match（match）表达式` 改为 `match 表达式`（第 7 行）；代码示例 `let label = if value {` 改为 `let label = match value {`（第 20 行）；规则与 TODO 项中 `\`if-match\` 表达式` 改为 `\`match\` 表达式`（第 29、117、134、143、144 行）；文件名同步由 `feng-if-expr-allow-throw-dev.md` 重命名为 `feng-if-and-match-expr-allow-throw-dev.md`（反映标题已覆盖 if 与 match 两类表达式） |
 | `feng-exception-dev.md` | 第 5 行交付范围说明中 `\`if-match\` 类型收窄` 改为 `\`match\` 类型收窄` |
 | `feng-expr-block-optimize-dev.md` | 第 234 行 smoke test 列表中 \`if_match_*\` 改为 \`match_*\`（与重命名后的 smoke 目录一致） |
 | `feng-generics-delivered.md` | 第 71 行 A2 项中 `if-match aggregate result` 改为 `match aggregate result` |
