@@ -1,0 +1,38 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+type Inner<T> {
+  var value: T;
+  var count: i32;
+
+  func set(v: T) {
+    self.value = v;
+    self.count = self.count + 1;
+  }
+
+  func get(): T {
+    return self.value;
+  }
+}
+
+type Outer<T> {
+  var inner: Inner<T>;
+
+  func innerSet(v: T) {
+    self.inner.set(v);
+  }
+
+  func innerGet(): T {
+    return self.inner.get();
+  }
+}
+
+func main(args: string[]) {
+  let o: Outer<i32> = Outer<i32>();
+  o.innerSet(42);
+  if o.innerGet() == 42 {
+    puts(&"open instance get ok");
+  }
+}

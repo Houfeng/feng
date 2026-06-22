@@ -15538,6 +15538,166 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             um->member->as.callable.type_param_count > 0U) {
             return cg_emit_generic_type_method_call(cg, e, &recv, ut, um, out);
         }
+        /* Open generic instance: call shared body directly instead of the
+         * per-instance static forwarder (which only exists for concrete
+         * instances like List<int>, not open ones like List<T>). */
+        if (ut->is_generic_instance &&
+            ut->generic_context_type_param_count > 0U &&
+            um->member != NULL) {
+            if (e->as.call.arg_count != um->param_count) {
+                if (!um->is_variadic) {
+                    er_free(&recv);
+                    return cg_fail(cg, e->token,
+                        "CE0160", "codegen: wrong argument count for method '%s' (expected %zu, got %zu)",
+                        um->feng_name, um->param_count, e->as.call.arg_count);
+                }
+                size_t fixed_count = um->param_count - 1U;
+                if (e->as.call.arg_count < fixed_count) {
+                    er_free(&recv);
+                    return cg_fail(cg, e->token,
+                        "CE0165", "codegen: too few arguments for variadic method '%s' (need at least %zu, got %zu)",
+                        um->feng_name, fixed_count, e->as.call.arg_count);
+                }
+            }
+            if (cgtype_is_managed(recv.type) && recv.owns_ref) {
+                cg_materialize_to_local(cg, &recv, "_t");
+            }
+            char *shared_name = cg_generic_type_method_shared_cname(
+                cg, ut->generic_origin_decl, um->member);
+            char *rtd_expr = cg_rtd_expr_for_type(cg, ut, e->token);
+            if (shared_name == NULL || rtd_expr == NULL) {
+                free(shared_name);
+                free(rtd_expr);
+                er_free(&recv);
+                return false;
+            }
+            /* Emit argument expressions. */
+            size_t arg_count = e->as.call.arg_count;
+            ExprResult *args = arg_count
+                ? calloc(arg_count, sizeof *args) : NULL;
+            if (arg_count && args == NULL) {
+                free(shared_name);
+                free(rtd_expr);
+                er_free(&recv);
+                return cg_fail(cg, e->token,
+                    "IE0001", "codegen: out of memory");
+            }
+            bool call_ok = true;
+            for (size_t i = 0; i < arg_count; i++) {
+                if (!cg_emit_expr_for_expected_type(cg,
+                                                    e->as.call.args[i],
+                                                    um->param_types[i],
+                                                    &args[i])) {
+                    call_ok = false;
+                    break;
+                }
+                if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
+                    cg_materialize_to_local(cg, &args[i], "_t");
+                }
+            }
+            if (!call_ok) {
+                for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+                free(args);
+                free(shared_name);
+                free(rtd_expr);
+                er_free(&recv);
+                return false;
+            }
+            /* Determine return handling. */
+            bool has_return = um->return_type != NULL &&
+                              um->return_type->kind != CG_TYPE_VOID;
+            bool ret_is_gp = has_return &&
+                             um->return_type->kind == CG_TYPE_GENERIC_PARAM;
+            char *ret_tmp = NULL;
+            if (has_return) {
+                ret_tmp = cg_fresh_temp(cg, "_osr");
+                if (ret_tmp == NULL) {
+                    for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+                    free(args);
+                    free(shared_name);
+                    free(rtd_expr);
+                    er_free(&recv);
+                    return cg_fail(cg, e->token,
+                        "IE0001", "codegen: out of memory");
+                }
+                if (ret_is_gp) {
+                    /* Generic-param return: use runtime-sized buffer from
+                     * the type descriptor so the shared body has enough
+                     * space regardless of the concrete type. */
+                    buf_append_fmt(cg->cur_body,
+                        "    uint8_t %s[%s->size];\n",
+                        ret_tmp, rtd_expr);
+                } else {
+                    char *cty = cg_ctype_dup(um->return_type);
+                    if (cty == NULL) {
+                        free(ret_tmp);
+                        for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+                        free(args);
+                        free(shared_name);
+                        free(rtd_expr);
+                        er_free(&recv);
+                        return cg_fail(cg, e->token,
+                            "IE0001", "codegen: out of memory");
+                    }
+                    buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_tmp);
+                    free(cty);
+                }
+            }
+            /* Build: shared_name((void *)recv, rtd_expr, args..., [&_out]) */
+            Buf b; buf_init(&b);
+            buf_append_fmt(&b, "%s((void *)%s, %s",
+                           shared_name, recv.c_expr, rtd_expr);
+            for (size_t i = 0; i < arg_count; i++) {
+                bool param_is_gp =
+                    um->param_types[i] != NULL &&
+                    um->param_types[i]->kind == CG_TYPE_GENERIC_PARAM;
+                bool arg_is_gp =
+                    args[i].type != NULL &&
+                    args[i].type->kind == CG_TYPE_GENERIC_PARAM;
+                if (param_is_gp && !arg_is_gp) {
+                    /* Shared body expects const void *; pass address. */
+                    if (cgtype_is_aggregate(args[i].type)) {
+                        buf_append_fmt(&b, ", %s", args[i].c_expr);
+                    } else {
+                        buf_append_fmt(&b, ", &%s", args[i].c_expr);
+                    }
+                } else {
+                    buf_append_fmt(&b, ", %s", args[i].c_expr);
+                }
+            }
+            if (has_return) {
+                if (ret_is_gp) {
+                    /* VLA decays to pointer; pass directly as void *_out. */
+                    buf_append_fmt(&b, ", %s", ret_tmp);
+                } else {
+                    buf_append_fmt(&b, ", &%s", ret_tmp);
+                }
+            }
+            buf_append_cstr(&b, ");\n");
+            buf_append(cg->cur_body, b.data, b.length);
+            buf_free(&b);
+            for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+            free(args);
+            free(shared_name);
+            free(rtd_expr);
+            if (has_return) {
+                /* For generic-param return, the VLA buffer (ret_tmp) decays
+                 * to a pointer in expressions.  The shared body writes the
+                 * value directly into the buffer, and the generic return
+                 * handler (cg_emit_generic_return) reads from it via the
+                 * switch/case pattern using memcpy(_out, <buf>, size). */
+                out->c_expr = strdup(ret_tmp);
+                out->type = cgtype_clone(um->return_type);
+                out->owns_ref = cgtype_is_managed(um->return_type);
+                free(ret_tmp);
+            } else {
+                out->c_expr = strdup("((void)0)");
+                out->type = cgtype_new(CG_TYPE_VOID);
+                out->owns_ref = false;
+            }
+            er_free(&recv);
+            return out->c_expr && out->type;
+        }
         if (e->as.call.arg_count != um->param_count) {
             if (!um->is_variadic) {
                 er_free(&recv);

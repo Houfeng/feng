@@ -1,0 +1,16 @@
+module feng.examples.list;
+
+import std.collections;
+
+type ListExample<T> {
+  let items: List<T>;
+  func count(): i32 {
+    return self.items.size();
+  }
+}
+
+spec Handler(): void;
+
+open func list_example(args: string[]) {
+  let list = ListExample<int>();
+}

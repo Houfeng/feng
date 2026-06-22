@@ -1,0 +1,73 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+type Container<T> {
+  var data: T;
+  var count: i32;
+
+  func setData(v: T) {
+    self.data = v;
+    self.count = self.count + 1;
+  }
+
+  func getData(): T {
+    return self.data;
+  }
+
+  func getCount(): i32 {
+    return self.count;
+  }
+}
+
+type Wrapper<T> {
+  var inner: Container<T>;
+
+  func setInner(v: T) {
+    self.inner.setData(v);
+  }
+
+  func getInner(): T {
+    return self.inner.getData();
+  }
+
+  func getInnerCount(): i32 {
+    return self.inner.getCount();
+  }
+}
+
+type DeepWrapper<T> {
+  var wrapper: Wrapper<T>;
+
+  func deepSet(v: T) {
+    self.wrapper.setInner(v);
+  }
+
+  func deepGet(): T {
+    return self.wrapper.getInner();
+  }
+
+  func deepCount(): i32 {
+    return self.wrapper.getInnerCount();
+  }
+}
+
+func main(args: string[]) {
+  let w: Wrapper<i32> = Wrapper<i32>();
+  w.setInner(10);
+  if w.getInner() == 10 {
+    puts(&"wrapper get ok");
+  }
+  if w.getInnerCount() == 1 {
+    puts(&"wrapper count ok");
+  }
+  let dw: DeepWrapper<i32> = DeepWrapper<i32>();
+  dw.deepSet(42);
+  if dw.deepGet() == 42 {
+    puts(&"deep wrapper get ok");
+  }
+  if dw.deepCount() == 1 {
+    puts(&"deep wrapper count ok");
+  }
+}
