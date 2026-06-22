@@ -205,4 +205,24 @@ runCase(
     'open spec Payload: None\n| List<Payload>\n| Map<string, Payload>;\n'
 );
 
+// --- match expression formatting tests ---
+
+runCase(
+    'formats match statement with constant equality and range patterns',
+    'func classify(age:int):void {\nmatch age{\n0{\nprint("baby");\n}\n1...17{\nprint("minor");\n}\n18,20,22{\nprint("young");\n}\nelse{\nprint("other");\n}\n}\n}\n',
+    'func classify(age: int): void {\n    match age {\n        0 {\n            print("baby");\n        }\n        1...17 {\n            print("minor");\n        }\n        18, 20, 22 {\n            print("young");\n        }\n        else {\n            print("other");\n        }\n    }\n}\n'
+);
+
+runCase(
+    'formats match expression used as value assignment',
+    'func main():void {\nlet label=match age{\n0{\n"baby";\n}\n18{\n"adult";\n}\nelse{\n"other";\n}\n};\n}\n',
+    'func main(): void {\n    let label = match age {\n        0 {\n            "baby";\n        }\n        18 {\n            "adult";\n        }\n        else {\n            "other";\n        }\n    };\n}\n'
+);
+
+runCase(
+    'formats range operator without extra spaces',
+    'func main():void {\nlet r=1...17;\nlet m=0,10...18,100;\n}\n',
+    'func main(): void {\n    let r = 1...17;\n    let m = 0, 10...18, 100;\n}\n'
+);
+
 console.log('formatter tests passed');

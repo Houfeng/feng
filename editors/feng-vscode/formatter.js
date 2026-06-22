@@ -1,11 +1,13 @@
 const KEYWORDS = new Set([
     'type',
+    'enum',
     'spec',
     'fit',
     'extern',
     'func',
     'let',
     'var',
+    'static',
     'open',
     'seal',
     'self',
@@ -14,8 +16,10 @@ const KEYWORDS = new Set([
     'as',
     'if',
     'else',
+    'match',
     'while',
     'for',
+    'in',
     'break',
     'continue',
     'try',
@@ -23,10 +27,11 @@ const KEYWORDS = new Set([
     'finally',
     'throw',
     'return',
-    'void'
+    'void',
+    'unknown'
 ]);
 
-const CONTROL_PAREN_KEYWORDS = new Set(['if', 'while', 'for', 'catch', 'return', 'throw']);
+const CONTROL_PAREN_KEYWORDS = new Set(['if', 'while', 'for', 'match', 'catch', 'return', 'throw']);
 const PREFIX_CONTEXT_KEYWORDS = new Set(['if', 'while', 'return', 'throw']);
 const PREFIX_OPERATORS = new Set(['!', '-', '*', '+', '&']);
 const THREE_CHAR_OPERATORS = new Set(['<<=', '>>=']);
