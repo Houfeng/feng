@@ -1,0 +1,43 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+/* object-form spec used as a generic type argument. Exercises the
+ * codegen path where an object-form spec flows through substitution
+ * into a container's method parameter T — recorded as an object-spec
+ * coercion site whose target_spec_type_ref was previously a borrowed
+ * synthetic type ref freed before codegen. Mirrors the callable-spec
+ * counterpart (generic_callable_spec_arg) for the object-form path. */
+spec Named {
+    func greet(): string;
+}
+
+type User: Named {
+    let name: string;
+
+    func greet(): string {
+        return self.name;
+    }
+}
+
+type Holder<T> {
+  var slot: T;
+
+  func put(value: T) {
+    self.slot = value;
+  }
+
+  func take(): T {
+    return self.slot;
+  }
+}
+
+func main(args: string[]) {
+  let holder = Holder<Named>();
+  let u = User{name: "object-spec generic arg ok"};
+  holder.put(u);
+
+  let recovered: Named = holder.take();
+  puts(&recovered.greet());
+}
