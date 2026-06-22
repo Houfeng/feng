@@ -8,7 +8,17 @@ extern func puts(msg: string*): int;
  * into a container's method parameter T — recorded as an object-spec
  * coercion site whose target_spec_type_ref was previously a borrowed
  * synthetic type ref freed before codegen. Mirrors the callable-spec
- * counterpart (generic_callable_spec_arg) for the object-form path. */
+ * counterpart (generic_callable_spec_arg) for the object-form path.
+ *
+ * Two binding shapes are covered:
+ *   - let u: Named = User{...}; holder.put(u)
+ *       src type == target slot type (Named), no coercion site recorded
+ *       (no (Named, Named) SpecRelation); verifies the trivial-identity
+ *       path still compiles and runs without regressions.
+ *   - let v = User{...}; holder.put(v)
+ *       src type User, target slot Named; triggers the substitute-path
+ *       object-spec coercion site with a synthetic target_spec_type_ref
+ *       — the path Bug 2's deep-clone fix protects. */
 spec Named {
     func greet(): string;
 }
@@ -35,9 +45,13 @@ type Holder<T> {
 
 func main(args: string[]) {
   let holder = Holder<Named>();
-  let u = User{name: "object-spec generic arg ok"};
+  let u: Named = User{name: "object-spec generic arg ok"};
   holder.put(u);
-
   let recovered: Named = holder.take();
   puts(&recovered.greet());
+
+  let v = User{name: "object-spec generic arg ok"};
+  holder.put(v);
+  let recovered2: Named = holder.take();
+  puts(&recovered2.greet());
 }
