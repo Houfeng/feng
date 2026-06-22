@@ -16,6 +16,9 @@ type FlowUser: FlowNamed {
   }
 }
 
+// 用于 infix match union member + binding 测试
+spec FlowIntOrText: int | string;
+
 // return if 表达式 (标量)
 func flow_int_pick(flag: bool): int {
   return if flag {
@@ -224,6 +227,131 @@ open func test_flow() {
       let right: FlowNamed = FlowUser { name: "right" };
       let match_picked = flow_match_pick(0, left, right);
       assert(match_picked.flow_name() == "left", "value match returns aggregate");
+    });
+
+    test("infix match - simple value", () {
+      let x = 5;
+      assert(x match 5, "infix match - simple value (true)");
+      assert(!(x match 6), "infix match - simple value (false)");
+    });
+
+    test("infix match - integer range", () {
+      let x = 5;
+      assert(x match 1...10, "infix match - integer range (true)");
+      assert(!(x match 11...20), "infix match - integer range (false)");
+    });
+
+    test("infix match - multi-label pipe", () {
+      let x = 7;
+      assert(x match 1 | 3 | 5 | 7, "infix match - multi-label (true)");
+      assert(!(x match 2 | 4 | 6), "infix match - multi-label (false)");
+    });
+
+    test("infix match - string", () {
+      let s = "hi";
+      assert(s match "hi" | "hello", "infix match - string (true)");
+      assert(!(s match "bye"), "infix match - string (false)");
+    });
+
+    test("infix match - mixed value and range", () {
+      let x = 100;
+      assert(x match 0 | 1...9 | 100, "infix match - mixed (true)");
+      assert(!(x match 1 | 2 | 3), "infix match - mixed (false)");
+    });
+
+    test("infix match - in if condition", () {
+      let x = 5;
+      if x match 5 {
+        assert(true, "infix match - if condition");
+      } else {
+        assert(false, "infix match - if condition (should be true)");
+      }
+    });
+
+    test("infix match - in if condition with &&", () {
+      let x = 5;
+      if x match 5 && x > 0 {
+        assert(true, "infix match - if condition with &&");
+      } else {
+        assert(false, "infix match - if condition with && (should be true)");
+      }
+    });
+
+    test("infix match - union member type (int)", () {
+      let v: FlowIntOrText = 42;
+      assert(v match int, "infix match - union member type (int)");
+    });
+
+    test("infix match - union member type (string)", () {
+      let s: FlowIntOrText = "hello";
+      assert(s match string, "infix match - union member type (string)");
+    });
+
+    test("infix match - union member type (false)", () {
+      let v: FlowIntOrText = 42;
+      assert(!(v match string), "infix match - union member type (false)");
+    });
+
+    test("infix match - union member type + binding", () {
+      let v: FlowIntOrText = 42;
+      if v match n: int && n > 0 {
+        assert(true, "infix match - binding in &&");
+      } else {
+        assert(false, "infix match - binding in && (should be true)");
+      }
+    });
+
+    test("infix match - union member type + binding (string)", () {
+      let v: FlowIntOrText = "hi";
+      if v match s: string && s == "hi" {
+        assert(true, "infix match - binding string in &&");
+      } else {
+        assert(false, "infix match - binding string in && (should be true)");
+      }
+    });
+
+    test("infix match - union member type + binding (mismatch)", () {
+      let v: FlowIntOrText = 42;
+      if v match n: int && n > 100 {
+        assert(false, "infix match - binding mismatch (should not enter)");
+      } else {
+        assert(true, "infix match - binding mismatch (else path)");
+      }
+    });
+
+    test("infix match - union multi-label type", () {
+      let v: FlowIntOrText = 42;
+      assert(v match int | string, "infix match - union multi-label (int)");
+      let s: FlowIntOrText = "hi";
+      assert(s match int | string, "infix match - union multi-label (string)");
+    });
+
+    test("infix match - while condition with binding", () {
+      let v: FlowIntOrText = 42;
+      var executed = false;
+      while v match n: int && n > 0 {
+        executed = true;
+        break;
+      }
+      assert(executed, "infix match - while condition with binding");
+    });
+
+    test("infix match - while loop counts down", () {
+      var counter: FlowIntOrText = 3;
+      var sum = 0;
+      while counter match n: int && n > 0 {
+        sum += n;
+        counter = n - 1;
+      }
+      assert(sum == 6, "infix match - while loop counts down");
+    });
+
+    test("infix match - binding not visible after statement", () {
+      let v: FlowIntOrText = 42;
+      if v match n: int {
+        assert(n == 42, "infix match - binding visible in body");
+      }
+      // n is not visible here (semantic error if referenced)
     });
   });
 }

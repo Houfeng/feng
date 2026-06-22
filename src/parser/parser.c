@@ -2744,7 +2744,37 @@ static FengExpr *parse_match_label_atom(Parser *parser) {
     }
 }
 
-static bool parse_match_label(Parser *parser, FengMatchLabel *out_label) {
+/* Whether `kind` is a valid terminator for an infix match label (i.e. the
+ * token that may legally follow `expr match pattern` once a single label has
+ * been consumed). Includes label separators (`|`), statement/sequence
+ * terminators (`;`, `,`, `)`, `]`, `}`), block openers (`{`), logical
+ * operators (`&&`, `||`), comparison operators (`==`, `!=`, `<`, `<=`, `>`,
+ * `>=`), assignment (`=`), and end-of-source. */
+static bool infix_match_label_terminator(FengTokenKind kind) {
+    switch (kind) {
+        case FENG_TOKEN_PIPE:
+        case FENG_TOKEN_SEMICOLON:
+        case FENG_TOKEN_COMMA:
+        case FENG_TOKEN_RPAREN:
+        case FENG_TOKEN_RBRACKET:
+        case FENG_TOKEN_RBRACE:
+        case FENG_TOKEN_LBRACE:
+        case FENG_TOKEN_AND_AND:
+        case FENG_TOKEN_OR_OR:
+        case FENG_TOKEN_EQ:
+        case FENG_TOKEN_NE:
+        case FENG_TOKEN_LT:
+        case FENG_TOKEN_LE:
+        case FENG_TOKEN_GT:
+        case FENG_TOKEN_GE:
+        case FENG_TOKEN_EOF:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool parse_match_label(Parser *parser, FengMatchLabel *out_label, bool infix_mode) {
     FengToken token = *parser_current(parser);
     FengExpr *first;
 
@@ -2760,28 +2790,69 @@ static bool parse_match_label(Parser *parser, FengMatchLabel *out_label) {
         FengTypeRef *type_ref = parse_type_ref(parser);
 
         if (type_ref == NULL) {
-            return false;
-        }
-        if (!parser_check(parser, FENG_TOKEN_ELLIPSIS) &&
-            (parser_check(parser, FENG_TOKEN_COMMA) || parser_check(parser, FENG_TOKEN_LBRACE))) {
-            out_label->kind = FENG_MATCH_LABEL_TYPE;
-            out_label->type = type_ref;
-            if (type_ref->kind == FENG_TYPE_REF_NAMED &&
-                type_ref->as.named.segment_count == 1U &&
-                type_ref->as.named.type_arg_count == 0U) {
-                FengExpr *fallback = new_expr(parser, FENG_EXPR_IDENTIFIER, type_ref->token);
-
-                if (fallback == NULL) {
-                    free_type_ref(type_ref);
-                    return false;
+            /* In infix_mode, parse_type_ref may fail when a single-segment
+             * type name is followed by `<` (e.g. `x match T < y`), because
+             * `<` is greedily consumed as a generic type-arg list. Roll back
+             * to the saved position and clear any error so we can fall through
+             * to parse_match_label_atom (which will yield a value label).
+             * Block-form mode (infix_mode == false) preserves the original
+             * behavior of returning false on type_ref failure. */
+            if (infix_mode) {
+                parser->current = before;
+                if (parser->error.message != NULL) {
+                    parser->error.message = NULL;
+                    parser->error.code = NULL;
                 }
-                fallback->as.identifier = type_ref->as.named.segments[0];
-                out_label->value = fallback;
+                /* fall through to parse_match_label_atom below */
+            } else {
+                return false;
             }
-            return true;
+        } else {
+            if (!parser_check(parser, FENG_TOKEN_ELLIPSIS) &&
+                (parser_check(parser, FENG_TOKEN_COMMA) || parser_check(parser, FENG_TOKEN_LBRACE))) {
+                out_label->kind = FENG_MATCH_LABEL_TYPE;
+                out_label->type = type_ref;
+                if (type_ref->kind == FENG_TYPE_REF_NAMED &&
+                    type_ref->as.named.segment_count == 1U &&
+                    type_ref->as.named.type_arg_count == 0U) {
+                    FengExpr *fallback = new_expr(parser, FENG_EXPR_IDENTIFIER, type_ref->token);
+
+                    if (fallback == NULL) {
+                        free_type_ref(type_ref);
+                        return false;
+                    }
+                    fallback->as.identifier = type_ref->as.named.segments[0];
+                    out_label->value = fallback;
+                }
+                return true;
+            }
+            /* infix_mode: also accept the wider set of infix label terminators
+             * (|, ;, ), ], }, &&, ||, ==, !=, <, <=, >, >=, EOF). The range
+             * marker `...` is already excluded above, so any type label followed
+             * by these terminators is recognized as a union member type label;
+             * semantic analysis later validates that the identifier resolves to a
+             * type (or named constant) compatible with the target type. */
+            if (infix_mode &&
+                infix_match_label_terminator(parser_current(parser)->kind)) {
+                out_label->kind = FENG_MATCH_LABEL_TYPE;
+                out_label->type = type_ref;
+                if (type_ref->kind == FENG_TYPE_REF_NAMED &&
+                    type_ref->as.named.segment_count == 1U &&
+                    type_ref->as.named.type_arg_count == 0U) {
+                    FengExpr *fallback = new_expr(parser, FENG_EXPR_IDENTIFIER, type_ref->token);
+
+                    if (fallback == NULL) {
+                        free_type_ref(type_ref);
+                        return false;
+                    }
+                    fallback->as.identifier = type_ref->as.named.segments[0];
+                    out_label->value = fallback;
+                }
+                return true;
+            }
+            free_type_ref(type_ref);
+            parser->current = before;
         }
-        free_type_ref(type_ref);
-        parser->current = before;
     }
 
     first = parse_match_label_atom(parser);
@@ -2822,6 +2893,18 @@ static void free_match_branch_contents(FengMatchBranch *branch) {
     }
     free(branch->labels);
     free_block(branch->body);
+}
+
+/* Free contents of a single FengMatchLabel (used by FENG_EXPR_MATCH_OP
+ * which owns a label array without an enclosing FengMatchBranch). */
+static void free_match_label_contents(FengMatchLabel *label) {
+    if (label == NULL) {
+        return;
+    }
+    free_expr(label->value);
+    free_expr(label->range_low);
+    free_expr(label->range_high);
+    free_type_ref(label->type);
 }
 
 /* Try to parse an optional binding prefix before match branch labels.
@@ -2917,7 +3000,7 @@ static bool parse_match_branch(Parser *parser, FengMatchBranch *out_branch) {
     for (;;) {
         FengMatchLabel label;
 
-        if (!parse_match_label(parser, &label)) {
+        if (!parse_match_label(parser, &label, false)) {
             free_match_branch_contents(out_branch);
             return false;
         }
@@ -2940,6 +3023,63 @@ static bool parse_match_branch(Parser *parser, FengMatchBranch *out_branch) {
         return false;
     }
     return true;
+}
+
+/* Parse the RHS of an infix `expr match pattern` operator (precedence same as
+ * relational operators). The caller has already consumed the `match` keyword
+ * and supplied the LHS in `target`. Returns a new FENG_EXPR_MATCH_OP node or
+ * NULL on failure.
+ *
+ * Pattern syntax reuses parse_match_branch_binding_prefix (for the optional
+ * `[let|var] name:` prefix) and parse_match_label (for each label). Multi-label
+ * patterns use `|` as the separator (not `,`). All `|` tokens at this position
+ * are consumed as label separators; any remaining `|` after the loop is left to
+ * the enclosing parse_bit_or layer. */
+static FengExpr *parse_infix_match_op(Parser *parser, FengToken match_token, FengExpr *target) {
+    FengExpr *expr;
+    size_t label_capacity = 0U;
+
+    expr = new_expr(parser, FENG_EXPR_MATCH_OP, match_token);
+    if (expr == NULL) {
+        free_expr(target);
+        return NULL;
+    }
+    expr->as.match_op.target = target;
+    expr->as.match_op.labels = NULL;
+    expr->as.match_op.label_count = 0U;
+    expr->as.match_op.has_binding = false;
+    expr->as.match_op.binding_name = (FengSlice){NULL, 0U};
+    expr->as.match_op.binding_mutability = FENG_MUTABILITY_LET;
+
+    if (!parse_match_branch_binding_prefix(parser,
+                                           &expr->as.match_op.has_binding,
+                                           &expr->as.match_op.binding_name,
+                                           &expr->as.match_op.binding_mutability)) {
+        free_expr(expr);
+        return NULL;
+    }
+
+    for (;;) {
+        FengMatchLabel label;
+
+        if (!parse_match_label(parser, &label, true)) {
+            free_expr(expr);
+            return NULL;
+        }
+        if (!APPEND_VALUE(parser, expr->as.match_op.labels, expr->as.match_op.label_count, label_capacity, label)) {
+            free_match_label_contents(&label);
+            free_expr(expr);
+            return NULL;
+        }
+        /* infix multi-label uses `|` (not `,`); consume all consecutive labels
+         * separated by `|` here. Remaining `|` after the loop is left to
+         * parse_bit_or (bitwise-or), which is well-defined because
+         * `bool | int` is illegal (AE0030). */
+        if (!parser_match(parser, FENG_TOKEN_PIPE)) {
+            break;
+        }
+    }
+    return expr;
 }
 
 /* Parses a match body's contents from the current token (after the `{` is
@@ -3772,8 +3912,54 @@ static FengExpr *parse_shift(Parser *parser) {
 }
 
 static FengExpr *parse_comparison(Parser *parser) {
-    static const FengTokenKind operators[] = {FENG_TOKEN_LT, FENG_TOKEN_LE, FENG_TOKEN_GT, FENG_TOKEN_GE};
-    return parse_binary_series(parser, parse_shift, operators, sizeof(operators) / sizeof(operators[0]));
+    FengExpr *expr = parse_shift(parser);
+
+    if (expr == NULL) {
+        return NULL;
+    }
+
+    for (;;) {
+        bool matched = false;
+        size_t index;
+        static const FengTokenKind operators[] = {FENG_TOKEN_LT, FENG_TOKEN_LE, FENG_TOKEN_GT, FENG_TOKEN_GE};
+
+        for (index = 0U; index < sizeof(operators) / sizeof(operators[0]); ++index) {
+            if (parser_match(parser, operators[index])) {
+                FengExpr *binary = new_expr(parser, FENG_EXPR_BINARY, parser_previous_token(parser));
+
+                if (binary == NULL) {
+                    free_expr(expr);
+                    return NULL;
+                }
+                binary->as.binary.op = parser_previous(parser)->kind;
+                binary->as.binary.left = expr;
+                binary->as.binary.right = parse_shift(parser);
+                if (binary->as.binary.right == NULL) {
+                    free_expr(binary);
+                    return NULL;
+                }
+                expr = binary;
+                matched = true;
+                break;
+            }
+        }
+        /* infix `match` shares the same precedence level as relational
+         * operators (left-associative, same loop). `match` consumes the
+         * following pattern via parse_infix_match_op rather than a plain
+         * sub-expression. */
+        if (!matched && parser_match(parser, FENG_TOKEN_KW_MATCH)) {
+            FengExpr *match_op = parse_infix_match_op(parser, parser_previous_token(parser), expr);
+
+            if (match_op == NULL) {
+                return NULL;
+            }
+            expr = match_op;
+            matched = true;
+        }
+        if (!matched) {
+            return expr;
+        }
+    }
 }
 
 static FengExpr *parse_equality(Parser *parser) {
@@ -4567,6 +4753,13 @@ static void free_expr(FengExpr *expr) {
             }
             free(expr->as.match_expr.branches);
             free_block(expr->as.match_expr.else_block);
+            break;
+        case FENG_EXPR_MATCH_OP:
+            free_expr(expr->as.match_op.target);
+            for (index = 0U; index < expr->as.match_op.label_count; ++index) {
+                free_match_label_contents(&expr->as.match_op.labels[index]);
+            }
+            free(expr->as.match_op.labels);
             break;
         case FENG_EXPR_TRY:
             free_expr(expr->as.try_expr.body);

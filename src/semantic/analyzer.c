@@ -1739,6 +1739,19 @@ static bool inject_external_modules_from_expr(
                                                      imported_query,
                                                      program,
                                                      expr->as.array_new.size);
+
+        case FENG_EXPR_MATCH_OP:
+            if (!inject_external_modules_from_expr(analysis,
+                                                   imported_query,
+                                                   program,
+                                                   expr->as.match_op.target)) {
+                return false;
+            }
+            return inject_external_modules_from_match_labels(analysis,
+                                                            imported_query,
+                                                            program,
+                                                            expr->as.match_op.labels,
+                                                            expr->as.match_op.label_count);
     }
 
     return true;
@@ -7731,6 +7744,544 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
     return true;
 }
 
+/* Visible match binding record collected from a condition expression.
+ * Each entry remembers the owning match_op expression so that, when the
+ * binding is registered in if/while body scope, the narrowed type can be
+ * recomputed from the match_op's target type and active member subset. */
+typedef struct VisibleMatchBinding {
+    FengSlice name;
+    FengMutability mutability;
+    const FengExpr *match_op;
+} VisibleMatchBinding;
+
+typedef struct VisibleMatchBindingSet {
+    VisibleMatchBinding *items;
+    size_t count;
+    size_t capacity;
+} VisibleMatchBindingSet;
+
+/* Recursively collect match bindings that are visible in if/while body scope.
+ * Per docs/feng-flow.md §3.3:
+ * - `A && B` collects both sides (union of bindings)
+ * - `A || B` subtree yields empty (can't guarantee either side bound)
+ * - `!A` subtree yields empty (negation doesn't preserve binding)
+ * - GROUP transparently passes through (Feng has no GROUP node; grouped
+ *   expressions are returned directly by parse_group_or_cast)
+ * - `match v: T` yields v when has_binding
+ * - all other operators yield empty (no truth propagation) */
+static bool collect_visible_match_bindings(const FengExpr *expr,
+                                           VisibleMatchBindingSet *out) {
+    if (expr == NULL || out == NULL) {
+        return true;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_BINARY:
+            if (expr->as.binary.op == FENG_TOKEN_AND_AND) {
+                return collect_visible_match_bindings(expr->as.binary.left, out) &&
+                       collect_visible_match_bindings(expr->as.binary.right, out);
+            }
+            return true;
+        case FENG_EXPR_UNARY:
+            /* `!` subtree yields empty per visibility rule. */
+            return true;
+        case FENG_EXPR_MATCH_OP:
+            if (expr->as.match_op.has_binding) {
+                VisibleMatchBinding binding;
+                binding.name = expr->as.match_op.binding_name;
+                binding.mutability = expr->as.match_op.binding_mutability;
+                binding.match_op = expr;
+                return append_raw((void **)&out->items,
+                                  &out->count,
+                                  &out->capacity,
+                                  sizeof(binding),
+                                  &binding);
+            }
+            return true;
+        default:
+            return true;
+    }
+}
+
+static void free_visible_match_binding_set(VisibleMatchBindingSet *set) {
+    if (set == NULL) {
+        return;
+    }
+    free(set->items);
+    set->items = NULL;
+    set->count = 0U;
+    set->capacity = 0U;
+}
+
+/* Resolve an infix match operator expression `target match pattern`.
+ * Validates target type, each label's structure, binding constraints, and
+ * label-target compatibility. The result type is always bool (set by
+ * infer_expr_type). The optional binding variable is NOT registered into
+ * scope here; visibility-based scope registration happens at if/while
+ * condition handling via collect_visible_match_bindings. */
+static bool resolve_and_validate_match_op(ResolveContext *context,
+                                          const FengExpr *expr,
+                                          bool allow_self) {
+    const FengExpr *target = expr->as.match_op.target;
+    InferredExprType target_type;
+    const FengDecl *union_decl = NULL;
+    const FengTypeRef *union_spec_type_ref = NULL;
+    const FengUnionSpecInfo *info = NULL;
+    bool has_binding = expr->as.match_op.has_binding;
+    size_t label_index;
+    bool *covered_members = NULL;
+    bool ok = true;
+
+    if (!resolve_expr(context, (FengExpr *)target, allow_self)) {
+        return false;
+    }
+
+    target_type = infer_expr_type(context, target);
+
+    /* Detect union-form target. Same detection logic as
+     * resolve_and_validate_match_common so the binding's narrowed subset
+     * can be computed consistently. */
+    if (inferred_expr_type_is_known(target_type)) {
+        if (target_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+            union_decl = resolve_union_spec_type_ref_decl(context, target_type.type_ref);
+        } else if (target_type.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
+                   target_type.type_decl != NULL &&
+                   target_type.type_decl->kind == FENG_DECL_SPEC &&
+                   target_type.type_decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+            union_decl = target_type.type_decl;
+        }
+        if (union_decl != NULL) {
+            union_spec_type_ref = (target_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF)
+                ? target_type.type_ref : NULL;
+
+            if (union_spec_type_ref == NULL && target->kind == FENG_EXPR_IDENTIFIER) {
+                const LocalNameEntry *target_local =
+                    resolver_find_local_name_entry(context, target->as.identifier);
+                if (target_local != NULL &&
+                    target_local->type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+                    union_spec_type_ref = target_local->type.type_ref;
+                }
+            }
+            if (union_spec_type_ref == NULL && context->analysis != NULL) {
+                const FengSemanticTypeFact *target_fact =
+                    feng_semantic_lookup_type_fact(context->analysis, target);
+                if (target_fact != NULL &&
+                    target_fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                    union_spec_type_ref = target_fact->type_ref;
+                }
+            }
+            if (union_spec_type_ref != NULL &&
+                resolve_union_spec_type_ref_decl(context, union_spec_type_ref) != union_decl) {
+                union_spec_type_ref = NULL;
+            }
+        }
+    }
+
+    /* Binding constraint: only valid when target is union-form spec and all
+     * labels are union member type patterns. AE1009 otherwise. */
+    if (has_binding) {
+        if (union_decl == NULL) {
+            return resolver_append_error(
+                context,
+                expr->token,
+                "AE1009", format_message("infix match binding requires all labels to be union member type patterns"));
+        }
+        for (label_index = 0U; label_index < expr->as.match_op.label_count; ++label_index) {
+            const FengMatchLabel *label = &expr->as.match_op.labels[label_index];
+            if (label->kind != FENG_MATCH_LABEL_TYPE) {
+                return resolver_append_error(
+                    context,
+                    label->token,
+                    "AE1009", format_message("infix match binding requires all labels to be union member type patterns"));
+            }
+        }
+    }
+
+    /* Resolve each label's children (value / range endpoints / type_ref). */
+    for (label_index = 0U; label_index < expr->as.match_op.label_count; ++label_index) {
+        const FengMatchLabel *label = &expr->as.match_op.labels[label_index];
+        switch (label->kind) {
+            case FENG_MATCH_LABEL_VALUE:
+                if (label->value != NULL &&
+                    !resolve_expr(context, label->value, allow_self)) {
+                    return false;
+                }
+                break;
+            case FENG_MATCH_LABEL_RANGE:
+                if (label->range_low != NULL &&
+                    !resolve_expr(context, label->range_low, allow_self)) {
+                    return false;
+                }
+                if (label->range_high != NULL &&
+                    !resolve_expr(context, label->range_high, allow_self)) {
+                    return false;
+                }
+                break;
+            case FENG_MATCH_LABEL_TYPE:
+                if (!resolve_type_ref(context, label->type, false)) {
+                    return false;
+                }
+                break;
+        }
+    }
+
+    if (!inferred_expr_type_is_known(target_type)) {
+        /* Cannot validate further without target type info. */
+        return true;
+    }
+
+    if (union_decl != NULL) {
+        info = feng_semantic_lookup_union_spec_info(context->analysis, union_decl);
+        if (info == NULL || info->member_count == 0U) {
+            return resolver_append_error(
+                context,
+                target != NULL ? target->token : expr->token,
+                "AE0606", format_message("union-form spec metadata is unavailable"));
+        }
+        covered_members = (bool *)calloc(info->member_count, sizeof(*covered_members));
+        if (covered_members == NULL) {
+            return false;
+        }
+        for (label_index = 0U;
+             label_index < expr->as.match_op.label_count && ok;
+             ++label_index) {
+            const FengMatchLabel *label = &expr->as.match_op.labels[label_index];
+            size_t member_index = info->member_count;
+
+            ok = resolve_union_match_label_index(context,
+                                                 info,
+                                                 union_spec_type_ref,
+                                                 label,
+                                                 &member_index);
+            if (!ok) {
+                break;
+            }
+            if (member_index >= info->member_count) {
+                ok = false;
+                break;
+            }
+            if (covered_members[member_index]) {
+                ok = resolver_append_error(
+                    context,
+                    label->token,
+                    "AE0607", format_message("union match label overlaps with an earlier label and is unreachable"));
+                break;
+            }
+            covered_members[member_index] = true;
+        }
+        free(covered_members);
+        if (!ok) {
+            return false;
+        }
+        return true;
+    }
+
+    if (inferred_expr_type_is_enum(context, target_type)) {
+        const FengDecl *enum_decl = target_type.type_decl;
+        MatchLabelRecord *records = NULL;
+        size_t record_count = 0U;
+        size_t record_capacity = 0U;
+
+        if (enum_decl == NULL && target_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+            enum_decl = resolve_type_ref_decl(context, target_type.type_ref);
+        }
+        if (enum_decl == NULL || !decl_is_enum_type(enum_decl)) {
+            char *target_name = format_inferred_expr_type_name(target_type);
+            char *message = format_message(
+                "match target type '%s' is not allowed; allowed types are integers, 'string', 'bool' and enum",
+                target_name != NULL ? target_name : "<unknown>");
+            free(target_name);
+            return resolver_append_error(context, target->token, "AE0050", message);
+        }
+        if (!ensure_enum_decl_info(context, enum_decl)) {
+            return false;
+        }
+
+        /* Enum labels must be `EnumName.ItemName` references; reuse the same
+         * validation as resolve_and_validate_enum_match_common by wrapping
+         * match_op labels into a single branch. */
+        for (label_index = 0U;
+             label_index < expr->as.match_op.label_count && ok;
+             ++label_index) {
+            const FengMatchLabel *label = &expr->as.match_op.labels[label_index];
+            const FengTypeRef *type_ref;
+            MatchLabelRecord record;
+
+            record.branch_index = 0U;
+            record.token = label->token;
+            record.kind = MATCH_CONST_ENUM;
+            record.low = 0;
+            record.high = 0;
+            record.b = false;
+            record.s = (FengSlice){NULL, 0U};
+            record.enum_decl = NULL;
+            record.enum_item_name = (FengSlice){NULL, 0U};
+            record.enum_item_value = 0;
+
+            if (label->kind == FENG_MATCH_LABEL_RANGE) {
+                ok = resolver_append_error(
+                    context,
+                    label->token,
+                    "AE1111", format_message("match enum target does not support range labels"));
+                break;
+            }
+            if (label->kind != FENG_MATCH_LABEL_TYPE || label->type == NULL) {
+                ok = resolver_append_error(
+                    context,
+                    label->token,
+                    "AE1107", format_message("match enum target requires enum item reference label of the form 'EnumName.ItemName'"));
+                break;
+            }
+            type_ref = label->type;
+            if (type_ref->kind != FENG_TYPE_REF_NAMED ||
+                type_ref->as.named.segment_count != 2U ||
+                type_ref->as.named.type_arg_count != 0U) {
+                ok = resolver_append_error(
+                    context,
+                    label->token,
+                    "AE1107", format_message("match enum target requires enum item reference label of the form 'EnumName.ItemName'"));
+                break;
+            } else {
+                FengSlice enum_name = type_ref->as.named.segments[0];
+                FengSlice item_name = type_ref->as.named.segments[1];
+                const FengDecl *label_enum_decl =
+                    find_visible_type_decl(context->visible_types,
+                                           context->visible_type_count,
+                                           enum_name);
+
+                if (label_enum_decl == NULL || !decl_is_enum_type(label_enum_decl)) {
+                    ok = resolver_append_error(
+                        context,
+                        label->token,
+                        "AE1107", format_message("match enum target requires enum item reference label of the form 'EnumName.ItemName'"));
+                    break;
+                }
+                if (label_enum_decl != enum_decl) {
+                    ok = resolver_append_error(
+                        context,
+                        label->token,
+                        "AE1109", format_message("match label references enum '%.*s' but target type is enum '%.*s'",
+                                       (int)label_enum_decl->as.enum_decl.name.length,
+                                       label_enum_decl->as.enum_decl.name.data,
+                                       (int)enum_decl->as.enum_decl.name.length,
+                                       enum_decl->as.enum_decl.name.data));
+                    break;
+                }
+                {
+                    const FengEnumItem *item = find_enum_item_decl(enum_decl, item_name);
+                    const FengSemanticEnumItemInfo *item_info;
+
+                    if (item == NULL) {
+                        ok = resolver_append_error(
+                            context,
+                            label->token,
+                            "AE0404", format_message("enum '%.*s' has no item '%.*s'",
+                                           (int)enum_decl->as.enum_decl.name.length,
+                                           enum_decl->as.enum_decl.name.data,
+                                           (int)item_name.length,
+                                           item_name.data));
+                        break;
+                    }
+                    item_info = feng_semantic_find_enum_item_info(context->analysis,
+                                                                   enum_decl,
+                                                                   item_name);
+                    if (item_info == NULL) {
+                        ok = false;
+                        break;
+                    }
+                    record.enum_decl = enum_decl;
+                    record.enum_item_name = item_name;
+                    record.enum_item_value = item_info->value;
+                }
+            }
+
+            if (record_count == record_capacity) {
+                size_t new_capacity = (record_capacity == 0U) ? 4U : (record_capacity * 2U);
+                MatchLabelRecord *grown =
+                    (MatchLabelRecord *)realloc(records, new_capacity * sizeof(MatchLabelRecord));
+                if (grown == NULL) {
+                    ok = false;
+                    break;
+                }
+                records = grown;
+                record_capacity = new_capacity;
+            }
+            records[record_count] = record;
+            record_count += 1U;
+        }
+
+        if (ok) {
+            ok = validate_match_label_records(context, target_type, records, record_count);
+        }
+        free(records);
+        if (!ok) {
+            return false;
+        }
+        return true;
+    }
+
+    if (match_target_type_is_allowed(context, target_type)) {
+        /* int / bool / string target: reuse MatchLabelRecord collection by
+         * wrapping match_op labels into a single throwaway branch. */
+        FengMatchBranch temp_branch;
+        MatchLabelRecord *records = NULL;
+        size_t record_count = 0U;
+        size_t record_capacity = 0U;
+
+        temp_branch.token = expr->token;
+        temp_branch.labels = expr->as.match_op.labels;
+        temp_branch.label_count = expr->as.match_op.label_count;
+        temp_branch.body = NULL;
+        temp_branch.has_binding = false;
+        temp_branch.binding_name = (FengSlice){NULL, 0U};
+        temp_branch.binding_mutability = FENG_MUTABILITY_LET;
+
+        ok = collect_match_branch_label_records(context,
+                                                 &temp_branch,
+                                                 0U,
+                                                 &records,
+                                                 &record_count,
+                                                 &record_capacity);
+        if (ok) {
+            ok = validate_match_label_records(context, target_type, records, record_count);
+        }
+        free(records);
+        if (!ok) {
+            return false;
+        }
+        return true;
+    }
+
+    {
+        char *target_name = format_inferred_expr_type_name(target_type);
+        char *message = format_message(
+            "match target type '%s' is not allowed; allowed types are integers, 'string', 'bool' and enum",
+            target_name != NULL ? target_name : "<unknown>");
+
+        free(target_name);
+        return resolver_append_error(context, target->token, "AE0050", message);
+    }
+}
+
+/* Register a visible match binding into the current scope. Computes the
+ * narrowed member subset from the match_op's target type and labels; for
+ * single-member subsets binds to that member's type directly, for multi-
+ * member subsets binds to the union's original type with a narrowing set. */
+static bool register_visible_match_binding(ResolveContext *context,
+                                           const VisibleMatchBinding *binding) {
+    const FengExpr *match_op = binding->match_op;
+    const FengExpr *target = match_op->as.match_op.target;
+    InferredExprType target_type;
+    const FengDecl *union_decl = NULL;
+    const FengTypeRef *union_spec_type_ref = NULL;
+    const FengUnionSpecInfo *info = NULL;
+    bool *active_members = NULL;
+    size_t member_index;
+    size_t label_index;
+    bool ok;
+
+    if (match_op == NULL || target == NULL) {
+        return false;
+    }
+    target_type = infer_expr_type(context, target);
+    if (!inferred_expr_type_is_known(target_type)) {
+        return false;
+    }
+    if (target_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        union_decl = resolve_union_spec_type_ref_decl(context, target_type.type_ref);
+        union_spec_type_ref = target_type.type_ref;
+    } else if (target_type.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
+               target_type.type_decl != NULL &&
+               target_type.type_decl->kind == FENG_DECL_SPEC &&
+               target_type.type_decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+        union_decl = target_type.type_decl;
+        if (target->kind == FENG_EXPR_IDENTIFIER) {
+            const LocalNameEntry *target_local =
+                resolver_find_local_name_entry(context, target->as.identifier);
+            if (target_local != NULL &&
+                target_local->type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+                union_spec_type_ref = target_local->type.type_ref;
+            }
+        }
+        if (union_spec_type_ref == NULL && context->analysis != NULL) {
+            const FengSemanticTypeFact *target_fact =
+                feng_semantic_lookup_type_fact(context->analysis, target);
+            if (target_fact != NULL &&
+                target_fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                union_spec_type_ref = target_fact->type_ref;
+            }
+        }
+    }
+    if (union_decl == NULL) {
+        return false;
+    }
+    if (union_spec_type_ref != NULL &&
+        resolve_union_spec_type_ref_decl(context, union_spec_type_ref) != union_decl) {
+        union_spec_type_ref = NULL;
+    }
+    info = feng_semantic_lookup_union_spec_info(context->analysis, union_decl);
+    if (info == NULL || info->member_count == 0U) {
+        return false;
+    }
+    active_members = (bool *)calloc(info->member_count, sizeof(*active_members));
+    if (active_members == NULL) {
+        return false;
+    }
+    for (label_index = 0U; label_index < match_op->as.match_op.label_count; ++label_index) {
+        const FengMatchLabel *label = &match_op->as.match_op.labels[label_index];
+        size_t resolved_index = info->member_count;
+
+        if (!resolve_union_match_label_index(context,
+                                              info,
+                                              union_spec_type_ref,
+                                              label,
+                                              &resolved_index)) {
+            free(active_members);
+            return false;
+        }
+        if (resolved_index >= info->member_count) {
+            free(active_members);
+            return false;
+        }
+        active_members[resolved_index] = true;
+    }
+    {
+        size_t active_count = union_active_member_count(active_members, info->member_count);
+        if (active_count == 0U) {
+            free(active_members);
+            return false;
+        }
+        if (active_count == 1U) {
+            member_index = union_first_active_member_index(active_members, info->member_count);
+            const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
+                context,
+                info->spec_decl,
+                union_spec_type_ref,
+                info->members[member_index].type_ref);
+            ok = resolver_add_local_entry(context,
+                                          binding->name,
+                                          inferred_expr_type_from_type_ref(member_type_ref),
+                                          binding->mutability,
+                                          target,
+                                          NULL);
+        } else {
+            const UnionNarrowingSet *narrowing = resolver_create_union_narrowing(
+                context,
+                info->spec_decl,
+                active_members,
+                info->member_count);
+            ok = narrowing != NULL &&
+                 resolver_add_local_entry(context,
+                                          binding->name,
+                                          target_type,
+                                          binding->mutability,
+                                          target,
+                                          narrowing);
+        }
+    }
+    free(active_members);
+    return ok;
+}
+
 static bool type_ref_is_numeric(const FengTypeRef *type_ref) {
     const char *builtin_name = type_ref_builtin_canonical_name(type_ref);
 
@@ -8921,6 +9472,14 @@ static bool callable_value_expr_may_escape_exception(ResolveContext *context,
         case FENG_EXPR_CAST:
             return callable_value_expr_may_escape_exception(
                 context, expr->as.cast.value, expected_type_ref, depth + 1U);
+
+        case FENG_EXPR_MATCH_OP: {
+            /* infix match operator yields bool, not a callable value; never
+             * escapes exception via the bool result. */
+            (void)expected_type_ref;
+            (void)depth;
+            return false;
+        }
 
         default:
             break;
@@ -12353,6 +12912,10 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
             }
             return false;
 
+        case FENG_EXPR_MATCH_OP:
+            /* infix match operator always yields bool; no pending inference. */
+            return false;
+
         case FENG_EXPR_IDENTIFIER:
         case FENG_EXPR_SELF:
         case FENG_EXPR_BOOL:
@@ -13950,6 +14513,11 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
 
         case FENG_EXPR_TRY: {
             return infer_expr_type(context, expr->as.try_expr.body);
+        }
+
+        case FENG_EXPR_MATCH_OP: {
+            /* infix match operator always yields bool */
+            return inferred_expr_type_builtin("bool");
         }
 
         default:
@@ -19396,10 +19964,66 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                    validate_unary_expr(context, expr);
 
         case FENG_EXPR_BINARY:
-            if (!resolve_expr(context, expr->as.binary.left, allow_self) ||
-                !resolve_expr(context, expr->as.binary.right, allow_self) ||
-                !validate_binary_expr(context, expr)) {
+            if (!resolve_expr(context, expr->as.binary.left, allow_self)) {
                 return false;
+            }
+            /* For `A && B`, B can see match bindings introduced by A (per
+             * docs/feng-flow.md §3.3). Collect them from A's subtree and
+             * register into a fresh scope so B's resolution finds them.
+             * `||` / other operators don't propagate bindings. */
+            if (expr->as.binary.op == FENG_TOKEN_AND_AND) {
+                VisibleMatchBindingSet left_bindings;
+                bool pushed_scope = false;
+                size_t binding_index;
+
+                left_bindings.items = NULL;
+                left_bindings.count = 0U;
+                left_bindings.capacity = 0U;
+                if (!collect_visible_match_bindings(expr->as.binary.left, &left_bindings)) {
+                    free_visible_match_binding_set(&left_bindings);
+                    return false;
+                }
+                if (left_bindings.count > 0U) {
+                    if (!resolver_push_scope(context)) {
+                        free_visible_match_binding_set(&left_bindings);
+                        return false;
+                    }
+                    pushed_scope = true;
+                    for (binding_index = 0U; binding_index < left_bindings.count; ++binding_index) {
+                        if (!register_visible_match_binding(context, &left_bindings.items[binding_index])) {
+                            free_visible_match_binding_set(&left_bindings);
+                            resolver_pop_scope(context);
+                            return false;
+                        }
+                    }
+                }
+                free_visible_match_binding_set(&left_bindings);
+
+                if (!resolve_expr(context, expr->as.binary.right, allow_self)) {
+                    if (pushed_scope) {
+                        resolver_pop_scope(context);
+                    }
+                    return false;
+                }
+                /* validate_binary_expr runs while the binding scope is still
+                 * active so infer_expr_type on the right operand can resolve
+                 * the binding introduced by the left side. */
+                if (!validate_binary_expr(context, expr)) {
+                    if (pushed_scope) {
+                        resolver_pop_scope(context);
+                    }
+                    return false;
+                }
+                if (pushed_scope) {
+                    resolver_pop_scope(context);
+                }
+            } else {
+                if (!resolve_expr(context, expr->as.binary.right, allow_self)) {
+                    return false;
+                }
+                if (!validate_binary_expr(context, expr)) {
+                    return false;
+                }
             }
             record_spec_equality_if_applicable(context, expr);
             return true;
@@ -19442,6 +20066,9 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                                                      expr->token,
                                                      true,
                                                      allow_self);
+
+        case FENG_EXPR_MATCH_OP:
+            return resolve_and_validate_match_op(context, expr, allow_self);
 
         case FENG_EXPR_TRY:
             return resolve_try_expr(context, expr, allow_self, true);
@@ -19895,15 +20522,68 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
 
         case FENG_STMT_IF:
             for (clause_index = 0U; clause_index < stmt->as.if_stmt.clause_count; ++clause_index) {
-                if (!resolve_expr(context, stmt->as.if_stmt.clauses[clause_index].condition, allow_self) ||
-                    !validate_stmt_condition_expr(context,
-                                                  stmt->token,
-                                                  stmt->as.if_stmt.clauses[clause_index].condition,
-                                                  "if statement") ||
-                    !resolve_block(context, stmt->as.if_stmt.clauses[clause_index].block, allow_self)) {
+                VisibleMatchBindingSet bindings;
+                bool pushed_binding_scope = false;
+                size_t binding_index;
+
+                bindings.items = NULL;
+                bindings.count = 0U;
+                bindings.capacity = 0U;
+
+                if (!resolve_expr(context, stmt->as.if_stmt.clauses[clause_index].condition, allow_self)) {
+                    free_visible_match_binding_set(&bindings);
                     return false;
                 }
+
+                /* Collect visible match bindings from this clause's condition.
+                 * They become visible in the if body scope (parent of the
+                 * body block's own scope). Per docs/feng-flow.md §3.3, only
+                 * `&&` chains propagate bindings; `||` / `!` subtrees yield
+                 * empty. Register BEFORE validating the condition so the
+                 * binding's type is available to infer_expr_type. */
+                if (!collect_visible_match_bindings(stmt->as.if_stmt.clauses[clause_index].condition,
+                                                     &bindings)) {
+                    free_visible_match_binding_set(&bindings);
+                    return false;
+                }
+                if (bindings.count > 0U) {
+                    if (!resolver_push_scope(context)) {
+                        free_visible_match_binding_set(&bindings);
+                        return false;
+                    }
+                    pushed_binding_scope = true;
+                    for (binding_index = 0U; binding_index < bindings.count; ++binding_index) {
+                        if (!register_visible_match_binding(context, &bindings.items[binding_index])) {
+                            free_visible_match_binding_set(&bindings);
+                            resolver_pop_scope(context);
+                            return false;
+                        }
+                    }
+                }
+                free_visible_match_binding_set(&bindings);
+
+                if (!validate_stmt_condition_expr(context,
+                                                   stmt->token,
+                                                   stmt->as.if_stmt.clauses[clause_index].condition,
+                                                   "if statement")) {
+                    if (pushed_binding_scope) {
+                        resolver_pop_scope(context);
+                    }
+                    return false;
+                }
+
+                if (!resolve_block(context, stmt->as.if_stmt.clauses[clause_index].block, allow_self)) {
+                    if (pushed_binding_scope) {
+                        resolver_pop_scope(context);
+                    }
+                    return false;
+                }
+                if (pushed_binding_scope) {
+                    resolver_pop_scope(context);
+                }
             }
+            /* else body: per §3.3, all match bindings are NOT visible in
+             * else body; resolve normally without registering bindings. */
             return resolve_block(context, stmt->as.if_stmt.else_block, allow_self);
 
         case FENG_STMT_MATCH:
@@ -19918,15 +20598,57 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
 
         case FENG_STMT_WHILE: {
             bool ok;
+            VisibleMatchBindingSet bindings;
+            bool pushed_binding_scope = false;
+            size_t binding_index;
 
-            if (!resolve_expr(context, stmt->as.while_stmt.condition, allow_self) ||
-                !validate_stmt_condition_expr(
-                    context, stmt->token, stmt->as.while_stmt.condition, "while statement")) {
+            bindings.items = NULL;
+            bindings.count = 0U;
+            bindings.capacity = 0U;
+
+            if (!resolve_expr(context, stmt->as.while_stmt.condition, allow_self)) {
+                free_visible_match_binding_set(&bindings);
                 return false;
             }
+            /* Collect visible match bindings from while condition. The
+             * binding is semantically registered once; codegen re-emits the
+             * binding on each iteration when re-evaluating the condition.
+             * Register BEFORE validating the condition so the binding's type
+             * is available to infer_expr_type. */
+            if (!collect_visible_match_bindings(stmt->as.while_stmt.condition, &bindings)) {
+                free_visible_match_binding_set(&bindings);
+                return false;
+            }
+            if (bindings.count > 0U) {
+                if (!resolver_push_scope(context)) {
+                    free_visible_match_binding_set(&bindings);
+                    return false;
+                }
+                pushed_binding_scope = true;
+                for (binding_index = 0U; binding_index < bindings.count; ++binding_index) {
+                    if (!register_visible_match_binding(context, &bindings.items[binding_index])) {
+                        free_visible_match_binding_set(&bindings);
+                        resolver_pop_scope(context);
+                        return false;
+                    }
+                }
+            }
+            free_visible_match_binding_set(&bindings);
+
+            if (!validate_stmt_condition_expr(
+                    context, stmt->token, stmt->as.while_stmt.condition, "while statement")) {
+                if (pushed_binding_scope) {
+                    resolver_pop_scope(context);
+                }
+                return false;
+            }
+
             context->loop_depth += 1U;
             ok = resolve_block(context, stmt->as.while_stmt.body, allow_self);
             context->loop_depth -= 1U;
+            if (pushed_binding_scope) {
+                resolver_pop_scope(context);
+            }
             return ok;
         }
 

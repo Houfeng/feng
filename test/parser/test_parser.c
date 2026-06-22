@@ -2576,6 +2576,347 @@ static void test_visibility_without_module_is_rejected(void) {
     ASSERT(strstr(error.message, "source file must begin with module declaration") != NULL);
 }
 
+static void test_infix_match_op_simple_value_parses(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(x: int): bool {\n"
+        "    return x match 0;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *return_stmt;
+    const FengExpr *match_op;
+
+    ASSERT(feng_parse_source(source, strlen(source), "infix_match_value.f", &program, &error));
+    ASSERT(program != NULL);
+    return_stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(return_stmt->kind == FENG_STMT_RETURN);
+    match_op = return_stmt->as.return_value;
+    ASSERT(match_op->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(match_op->as.match_op.label_count == 1U);
+    ASSERT(match_op->as.match_op.labels[0].kind == FENG_MATCH_LABEL_VALUE);
+    ASSERT(match_op->as.match_op.has_binding == false);
+
+    feng_program_free(program);
+}
+
+static void test_infix_match_op_range_and_type_parses(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run_int(x: int): bool {\n"
+        "    return x match 1...10;\n"
+        "}\n"
+        "func run_union(v: Value): bool {\n"
+        "    return v match UserType;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *func;
+    const FengStmt *return_stmt;
+    const FengExpr *match_op;
+
+    ASSERT(feng_parse_source(source, strlen(source), "infix_match_range_type.f", &program, &error));
+    ASSERT(program != NULL);
+
+    /* decl[0] = spec Value; decl[1] = run_int; decl[2] = run_union */
+
+    /* First function: range label */
+    func = program->declarations[1];
+    ASSERT(func->kind == FENG_DECL_FUNCTION);
+    return_stmt = func->as.function_decl.body->statements[0];
+    ASSERT(return_stmt->kind == FENG_STMT_RETURN);
+    match_op = return_stmt->as.return_value;
+    ASSERT(match_op->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(match_op->as.match_op.label_count == 1U);
+    ASSERT(match_op->as.match_op.labels[0].kind == FENG_MATCH_LABEL_RANGE);
+
+    /* Second function: type label */
+    func = program->declarations[2];
+    ASSERT(func->kind == FENG_DECL_FUNCTION);
+    return_stmt = func->as.function_decl.body->statements[0];
+    ASSERT(return_stmt->kind == FENG_STMT_RETURN);
+    match_op = return_stmt->as.return_value;
+    ASSERT(match_op->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(match_op->as.match_op.label_count == 1U);
+    ASSERT(match_op->as.match_op.labels[0].kind == FENG_MATCH_LABEL_TYPE);
+
+    feng_program_free(program);
+}
+
+static void test_infix_match_op_multi_label_pipe_parses(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run_int(x: int): bool {\n"
+        "    return x match 0 | 1 | 2;\n"
+        "}\n"
+        "func run_int_mix(x: int): bool {\n"
+        "    return x match 0 | 1...10 | 100;\n"
+        "}\n"
+        "func run_union(v: Value): bool {\n"
+        "    return v match Type1 | Type2;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *func;
+    const FengStmt *return_stmt;
+    const FengExpr *match_op;
+
+    ASSERT(feng_parse_source(source, strlen(source), "infix_match_pipe.f", &program, &error));
+    ASSERT(program != NULL);
+
+    /* decl[0]=spec; decl[1]=run_int; decl[2]=run_int_mix; decl[3]=run_union */
+
+    /* Function 1: x match 0 | 1 | 2 (3 value labels) */
+    func = program->declarations[1];
+    return_stmt = func->as.function_decl.body->statements[0];
+    match_op = return_stmt->as.return_value;
+    ASSERT(match_op->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(match_op->as.match_op.label_count == 3U);
+    ASSERT(match_op->as.match_op.labels[0].kind == FENG_MATCH_LABEL_VALUE);
+    ASSERT(match_op->as.match_op.labels[1].kind == FENG_MATCH_LABEL_VALUE);
+    ASSERT(match_op->as.match_op.labels[2].kind == FENG_MATCH_LABEL_VALUE);
+
+    /* Function 2: x match 0 | 1...10 | 100 (3 mixed labels) */
+    func = program->declarations[2];
+    return_stmt = func->as.function_decl.body->statements[0];
+    match_op = return_stmt->as.return_value;
+    ASSERT(match_op->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(match_op->as.match_op.label_count == 3U);
+    ASSERT(match_op->as.match_op.labels[0].kind == FENG_MATCH_LABEL_VALUE);
+    ASSERT(match_op->as.match_op.labels[1].kind == FENG_MATCH_LABEL_RANGE);
+    ASSERT(match_op->as.match_op.labels[2].kind == FENG_MATCH_LABEL_VALUE);
+
+    /* Function 3: v match Type1 | Type2 (2 type labels) */
+    func = program->declarations[3];
+    return_stmt = func->as.function_decl.body->statements[0];
+    match_op = return_stmt->as.return_value;
+    ASSERT(match_op->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(match_op->as.match_op.label_count == 2U);
+    ASSERT(match_op->as.match_op.labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(match_op->as.match_op.labels[1].kind == FENG_MATCH_LABEL_TYPE);
+
+    feng_program_free(program);
+}
+
+static void test_infix_match_op_binding_parses(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run_implicit(v: Value): bool {\n"
+        "    return v match x: UserType;\n"
+        "}\n"
+        "func run_let(v: Value): bool {\n"
+        "    return v match let x: UserType;\n"
+        "}\n"
+        "func run_var(v: Value): bool {\n"
+        "    return v match var x: UserType;\n"
+        "}\n"
+        "func run_multi(v: Value): bool {\n"
+        "    return v match x: Type1 | Type2;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *func;
+    const FengStmt *return_stmt;
+    const FengExpr *match_op;
+
+    ASSERT(feng_parse_source(source, strlen(source), "infix_match_binding.f", &program, &error));
+    ASSERT(program != NULL);
+
+    /* decl[0]=spec; decl[1..4]=functions in order */
+
+    /* Implicit let: v match x: UserType */
+    func = program->declarations[1];
+    return_stmt = func->as.function_decl.body->statements[0];
+    match_op = return_stmt->as.return_value;
+    ASSERT(match_op->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(match_op->as.match_op.has_binding == true);
+    assert_slice_text(match_op->as.match_op.binding_name, "x");
+    ASSERT(match_op->as.match_op.binding_mutability == FENG_MUTABILITY_LET);
+    ASSERT(match_op->as.match_op.label_count == 1U);
+
+    /* Explicit let: v match let x: UserType */
+    func = program->declarations[2];
+    return_stmt = func->as.function_decl.body->statements[0];
+    match_op = return_stmt->as.return_value;
+    ASSERT(match_op->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(match_op->as.match_op.has_binding == true);
+    ASSERT(match_op->as.match_op.binding_mutability == FENG_MUTABILITY_LET);
+
+    /* Explicit var: v match var x: UserType */
+    func = program->declarations[3];
+    return_stmt = func->as.function_decl.body->statements[0];
+    match_op = return_stmt->as.return_value;
+    ASSERT(match_op->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(match_op->as.match_op.has_binding == true);
+    ASSERT(match_op->as.match_op.binding_mutability == FENG_MUTABILITY_VAR);
+
+    /* Multi-label binding: v match x: Type1 | Type2 */
+    func = program->declarations[4];
+    return_stmt = func->as.function_decl.body->statements[0];
+    match_op = return_stmt->as.return_value;
+    ASSERT(match_op->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(match_op->as.match_op.has_binding == true);
+    ASSERT(match_op->as.match_op.label_count == 2U);
+    ASSERT(match_op->as.match_op.labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(match_op->as.match_op.labels[1].kind == FENG_MATCH_LABEL_TYPE);
+
+    feng_program_free(program);
+}
+
+static void test_infix_match_op_in_if_while_condition_parses(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run_if(v: Value) {\n"
+        "    if v match UserType { print(1); }\n"
+        "}\n"
+        "func run_while(v: Value) {\n"
+        "    while v match UserType { print(1); }\n"
+        "}\n"
+        "func run_combined(v: Value, w: Value) {\n"
+        "    if v match UserType && w match OtherType { print(1); }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *func;
+    const FengStmt *stmt;
+    const FengExpr *cond;
+
+    ASSERT(feng_parse_source(source, strlen(source), "infix_match_if_while.f", &program, &error));
+    ASSERT(program != NULL);
+
+    /* decl[0]=spec; decl[1..3]=functions */
+
+    /* if condition is match_op */
+    func = program->declarations[1];
+    stmt = func->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_IF);
+    cond = stmt->as.if_stmt.clauses[0].condition;
+    ASSERT(cond->kind == FENG_EXPR_MATCH_OP);
+
+    /* while condition is match_op */
+    func = program->declarations[2];
+    stmt = func->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_WHILE);
+    cond = stmt->as.while_stmt.condition;
+    ASSERT(cond->kind == FENG_EXPR_MATCH_OP);
+
+    /* if condition is && of two match_op */
+    func = program->declarations[3];
+    stmt = func->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_IF);
+    cond = stmt->as.if_stmt.clauses[0].condition;
+    ASSERT(cond->kind == FENG_EXPR_BINARY);
+    ASSERT(cond->as.binary.op == FENG_TOKEN_AND_AND);
+    ASSERT(cond->as.binary.left->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(cond->as.binary.right->kind == FENG_EXPR_MATCH_OP);
+
+    feng_program_free(program);
+}
+
+static void test_infix_match_op_pipe_does_not_become_bit_or(void) {
+    /* `x match 0 | 1` must parse as infix match with 2 labels, NOT as
+     * `(x match 0) | 1` (bitwise-or). bool | int is illegal (AE0030) so the
+     * bitwise-or interpretation would be meaningless. */
+    const char *source =
+        "module demo.main;\n"
+        "func run(x: int): bool {\n"
+        "    return x match 0 | 1;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *return_stmt;
+    const FengExpr *match_op;
+
+    ASSERT(feng_parse_source(source, strlen(source), "infix_match_pipe_not_bitor.f", &program, &error));
+    ASSERT(program != NULL);
+    return_stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(return_stmt->kind == FENG_STMT_RETURN);
+    match_op = return_stmt->as.return_value;
+    ASSERT(match_op->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(match_op->as.match_op.label_count == 2U);
+
+    feng_program_free(program);
+}
+
+static void test_infix_match_op_left_associative_chains(void) {
+    /* `x match a match b` is parsed as `(x match a) match b`. `b` as a value
+     * pattern (true/false) is semantically legal; non-value `b` is rejected by
+     * the type checker. */
+    const char *source =
+        "module demo.main;\n"
+        "func run(x: int): bool {\n"
+        "    return x match 0 match true;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *return_stmt;
+    const FengExpr *outer, *inner;
+
+    ASSERT(feng_parse_source(source, strlen(source), "infix_match_chain.f", &program, &error));
+    ASSERT(program != NULL);
+    return_stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(return_stmt->kind == FENG_STMT_RETURN);
+    outer = return_stmt->as.return_value;
+    ASSERT(outer->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(outer->as.match_op.label_count == 1U);
+    ASSERT(outer->as.match_op.labels[0].kind == FENG_MATCH_LABEL_VALUE);
+    /* outer.target should itself be an inner match_op */
+    inner = outer->as.match_op.target;
+    ASSERT(inner->kind == FENG_EXPR_MATCH_OP);
+    ASSERT(inner->as.match_op.label_count == 1U);
+
+    feng_program_free(program);
+}
+
+static void test_infix_match_op_mixed_with_relational_and_equality(void) {
+    /* match is same-precedence as relational, left-associative:
+     *   `x match T < y` parses as `(x match T) < y` (binary < )
+     *   `x match T == y` parses as `(x match T) == y` (binary == ) */
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run_lt(v: Value, y: int): bool {\n"
+        "    return v match UserType < y;\n"
+        "}\n"
+        "func run_eq(v: Value, y: bool): bool {\n"
+        "    return v match UserType == y;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *func;
+    const FengStmt *return_stmt;
+    const FengExpr *bin, *left;
+
+    ASSERT(feng_parse_source(source, strlen(source), "infix_match_rel_eq.f", &program, &error));
+    ASSERT(program != NULL);
+
+    /* decl[0]=spec; decl[1]=run_lt; decl[2]=run_eq */
+
+    /* v match UserType < y -> binary < with left=match_op */
+    func = program->declarations[1];
+    return_stmt = func->as.function_decl.body->statements[0];
+    bin = return_stmt->as.return_value;
+    ASSERT(bin->kind == FENG_EXPR_BINARY);
+    ASSERT(bin->as.binary.op == FENG_TOKEN_LT);
+    left = bin->as.binary.left;
+    ASSERT(left->kind == FENG_EXPR_MATCH_OP);
+
+    /* v match UserType == y -> binary == with left=match_op */
+    func = program->declarations[2];
+    return_stmt = func->as.function_decl.body->statements[0];
+    bin = return_stmt->as.return_value;
+    ASSERT(bin->kind == FENG_EXPR_BINARY);
+    ASSERT(bin->as.binary.op == FENG_TOKEN_EQ);
+    left = bin->as.binary.left;
+    ASSERT(left->kind == FENG_EXPR_MATCH_OP);
+
+    feng_program_free(program);
+}
+
 int main(void) {
     test_top_level_declarations();
     test_annotation_accepts_two_arguments();
@@ -2677,6 +3018,14 @@ int main(void) {
     test_mixed_comments_only_source_file();
     test_non_empty_source_without_module_is_rejected();
     test_visibility_without_module_is_rejected();
+    test_infix_match_op_simple_value_parses();
+    test_infix_match_op_range_and_type_parses();
+    test_infix_match_op_multi_label_pipe_parses();
+    test_infix_match_op_binding_parses();
+    test_infix_match_op_in_if_while_condition_parses();
+    test_infix_match_op_pipe_does_not_become_bit_or();
+    test_infix_match_op_left_associative_chains();
+    test_infix_match_op_mixed_with_relational_and_equality();
     puts("parser tests passed");
     return 0;
 }

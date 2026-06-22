@@ -835,6 +835,25 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
             collect_from_block(ctx, expr->as.match_expr.else_block);
             return;
 
+        case FENG_EXPR_MATCH_OP:
+            collect_from_expr(ctx, expr->as.match_op.target);
+            for (i = 0U; i < expr->as.match_op.label_count; ++i) {
+                const FengMatchLabel *label = &expr->as.match_op.labels[i];
+                switch (label->kind) {
+                    case FENG_MATCH_LABEL_VALUE:
+                        collect_from_expr(ctx, label->value);
+                        break;
+                    case FENG_MATCH_LABEL_RANGE:
+                        collect_from_expr(ctx, label->range_low);
+                        collect_from_expr(ctx, label->range_high);
+                        break;
+                    case FENG_MATCH_LABEL_TYPE:
+                        try_collect_type_ref(ctx, label->type);
+                        break;
+                }
+            }
+            return;
+
         case FENG_EXPR_TRY:
             collect_from_expr(ctx, expr->as.try_expr.body);
             for (i = 0U; i < expr->as.try_expr.clause_count; ++i) {

@@ -289,6 +289,34 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
             dump_indent(stream, indent);
             fputc('}', stream);
             break;
+        case FENG_EXPR_MATCH_OP: {
+            size_t li;
+
+            dump_expr(stream, expr->as.match_op.target, 0);
+            fputs(" match ", stream);
+            if (expr->as.match_op.has_binding) {
+                if (expr->as.match_op.binding_mutability == FENG_MUTABILITY_VAR) {
+                    fputs("var ", stream);
+                }
+                dump_slice(stream, expr->as.match_op.binding_name);
+                fputs(": ", stream);
+            }
+            for (li = 0U; li < expr->as.match_op.label_count; ++li) {
+                if (li != 0U) {
+                    fputs(" | ", stream);
+                }
+                if (expr->as.match_op.labels[li].kind == FENG_MATCH_LABEL_RANGE) {
+                    dump_expr(stream, expr->as.match_op.labels[li].range_low, 0);
+                    fputs("...", stream);
+                    dump_expr(stream, expr->as.match_op.labels[li].range_high, 0);
+                } else if (expr->as.match_op.labels[li].kind == FENG_MATCH_LABEL_TYPE) {
+                    dump_type_ref(stream, expr->as.match_op.labels[li].type);
+                } else {
+                    dump_expr(stream, expr->as.match_op.labels[li].value, 0);
+                }
+            }
+            break;
+        }
         case FENG_EXPR_TRY:
             fputs("try ", stream);
             dump_expr(stream, expr->as.try_expr.body, 0);

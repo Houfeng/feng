@@ -439,24 +439,24 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 - 前置依赖：无
 - 范围：仅文档变更，无代码改动
 
-- [ ] 更新 [docs/feng-flow.md](../docs/feng-flow.md) §3：新增「infix match 运算」子节，描述语法、pattern 形式、绑定作用域、优先级；既有标签形式说明中追加 infix 用法引用
-- [ ] 更新 [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md)：新增 AE1009 条目（binding 用于非 union member pattern、多 label pattern 中 binding 与非 type label 混用）；不可见位置使用 binding 变量复用 AE0001，不引入新错误码；错误码编号与文案最终口径由人工审定
-- [ ] 全量回归点：`make test` 通过（仅文档变更，无代码行为变化）
+- [x] 更新 [docs/feng-flow.md](../docs/feng-flow.md) §3：新增「infix match 运算」子节，描述语法、pattern 形式、绑定作用域、优先级；既有标签形式说明中追加 infix 用法引用
+- [x] 更新 [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md)：新增 AE1009 条目（binding 用于非 union member pattern、多 label pattern 中 binding 与非 type label 混用）；不可见位置使用 binding 变量复用 AE0001，不引入新错误码；错误码编号与文案最终口径由人工审定
+- [x] 全量回归点：`make test` 通过（仅文档变更，无代码行为变化）
 
 ### 8.2 步骤 2：AST 节点与 Parser 支持 infix match 运算符
 
 - 前置依赖：步骤 1
 - 范围：parser 新增 infix match 识别与 pattern 解析；AST 新增 `FENG_EXPR_MATCH_OP` 节点；dump 同步输出
 
-- [ ] 在 `src/parser/parser.h` 新增 `FengExprMatchOp` 结构与 `FENG_EXPR_MATCH_OP` 枚举
-- [ ] 在 `src/parser/parser.c` 的 `parse_comparison` 内识别 `FENG_TOKEN_KW_MATCH` 作为同级 infix 运算符（与 `<` / `<=` / `>` / `>=` 共用同一左结合循环，不新增独立 parser 层）；链式与同级混用统一走左结合路径，不做出口特殊检查
-- [ ] 复用 `parse_match_branch_binding_prefix` 解析可选 binding（先于 label 解析）
-- [ ] 复用 `parse_match_label_atom` 解析首个 label；若下一个 token 是 `FENG_TOKEN_PIPE`，循环消费 `|` 并解析后续 label，构造 `FengMatchLabel` 数组（与块形式 `FengMatchBranch.labels` 结构一致）
-- [ ] `|` 在 pattern 解析循环内作为 label 分隔符消费，退出循环后剩余 `|` 才按按位或处理；由于 `bool | int` 非法（AE0030），此「吃尽」行为无歧义
-- [ ] 构造 `FENG_EXPR_MATCH_OP` AST 节点（`labels` 数组 + `label_count`）；同步 `free_expr` / `copy_expr` 路径
-- [ ] 在 `src/parser/dump.c` 新增 `FENG_EXPR_MATCH_OP` case
-- [ ] 在 `test/parser/test_parser.c` 新增用例
-- [ ] 全量回归点：`make build/bin/test_parser && build/bin/test_parser` 通过；`make test` 全量回归通过
+- [x] 在 `src/parser/parser.h` 新增 `FengExprMatchOp` 结构与 `FENG_EXPR_MATCH_OP` 枚举
+- [x] 在 `src/parser/parser.c` 的 `parse_comparison` 内识别 `FENG_TOKEN_KW_MATCH` 作为同级 infix 运算符（与 `<` / `<=` / `>` / `>=` 共用同一左结合循环，不新增独立 parser 层）；链式与同级混用统一走左结合路径，不做出口特殊检查
+- [x] 复用 `parse_match_branch_binding_prefix` 解析可选 binding（先于 label 解析）
+- [x] 复用 `parse_match_label_atom` 解析首个 label；若下一个 token 是 `FENG_TOKEN_PIPE`，循环消费 `|` 并解析后续 label，构造 `FengMatchLabel` 数组（与块形式 `FengMatchBranch.labels` 结构一致）
+- [x] `|` 在 pattern 解析循环内作为 label 分隔符消费，退出循环后剩余 `|` 才按按位或处理；由于 `bool | int` 非法（AE0030），此「吃尽」行为无歧义
+- [x] 构造 `FENG_EXPR_MATCH_OP` AST 节点（`labels` 数组 + `label_count`）；同步 `free_expr` / `copy_expr` 路径
+- [x] 在 `src/parser/dump.c` 新增 `FENG_EXPR_MATCH_OP` case
+- [x] 在 `test/parser/test_parser.c` 新增用例
+- [x] 全量回归点：`make build/bin/test_parser && build/bin/test_parser` 通过；`make test` 全量回归通过
 
 ### 8.3 步骤 3：Semantic 扩展支持 infix match
 
@@ -464,56 +464,56 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 - 范围：semantic 新增 `FENG_EXPR_MATCH_OP` resolve 分支；绑定变量作用域登记
 - 行为变化：原 `x match int` 形式无既有语义（`match` 关键字此前不在 infix 位置出现），无既有测试回归
 
-- [ ] 复用 `match_target_type_is_allowed` 校验 target
-- [ ] 复用既有 label 解析路径校验 pattern
-- [ ] 对 union member pattern + binding，复用 union match 单分支子集
-- [ ] 对值 / 区间 / enum item 引用 pattern，禁止 binding
-- [ ] 结果类型为 bool
-- [ ] 绑定变量在 `if` / `while` 体作用域内登记
-- [ ] 在 `src/semantic/reifiable_deps.c` 新增 `FENG_EXPR_MATCH_OP` case
+- [x] 复用 `match_target_type_is_allowed` 校验 target
+- [x] 复用既有 label 解析路径校验 pattern
+- [x] 对 union member pattern + binding，复用 union match 单分支子集
+- [x] 对值 / 区间 / enum item 引用 pattern，禁止 binding
+- [x] 结果类型为 bool
+- [x] 绑定变量在 `if` / `while` 体作用域内登记
+- [x] 在 `src/semantic/reifiable_deps.c` 新增 `FENG_EXPR_MATCH_OP` case
 - [ ] 在 `test/semantic/test_semantic.c` 新增用例
-- [ ] 全量回归点：`make build/bin/test_semantic && build/bin/test_semantic` 通过；`make test` 全量回归通过
+- [x] 全量回归点：`make build/bin/test_semantic && build/bin/test_semantic` 通过；`make test` 全量回归通过
 
 ### 8.4 步骤 4：Codegen 发码扩展
 
 - 前置依赖：步骤 3
 - 范围：codegen 新增 `FENG_EXPR_MATCH_OP` 发码分支；`if` / `while` 条件位置 binding 作用域处理
 
-- [ ] 求值 target 到临时变量
-- [ ] 复用 `cg_emit_match_label_cond` 单 label 发码
-- [ ] union member pattern + binding 在命中分支中绑定
-- [ ] `if` / `while` 条件位置识别并处理 binding 作用域
-- [ ] `while` 每轮迭代重新求值与绑定
+- [x] 求值 target 到临时变量
+- [x] 复用 `cg_emit_match_label_cond` 单 label 发码
+- [x] union member pattern + binding 在命中分支中绑定
+- [x] `if` / `while` 条件位置识别并处理 binding 作用域
+- [x] `while` 每轮迭代重新求值与绑定
 - [ ] 在 `test/codegen/test_codegen.c` 新增用例
-- [ ] 全量回归点：`make build/bin/test_codegen && build/bin/test_codegen` 通过；`make test` 全量回归通过
+- [x] 全量回归点：`make build/bin/test_codegen && build/bin/test_codegen` 通过；`make test` 全量回归通过
 
 ### 8.5 步骤 5：Symbol Export / LSP 支持
 
 - 前置依赖：步骤 4
 - 范围：`symbol/export.c` 与 `cli/lsp/runtime.c` 新增 `FENG_EXPR_MATCH_OP` case
 
-- [ ] 在 `src/symbol/export.c` 新增 `FENG_EXPR_MATCH_OP` case
-- [ ] 在 `src/cli/lsp/runtime.c` 新增 `FENG_EXPR_MATCH_OP` case（completion / hover / definition 行为复用既有 match 表达式路径）
-- [ ] 全量回归点：`make test` 全量回归通过
+- [ ] 在 `src/symbol/export.c` 新增 `FENG_EXPR_MATCH_OP` case（经核查 export.c 无 expr-kind 通用分发 switch，仅在特定路径按需检查 expr kind；infix match 无 symbol 导出需求，待人工确认是否标记 N/A）
+- [x] 在 `src/cli/lsp/runtime.c` 新增 `FENG_EXPR_MATCH_OP` case（completion / hover / definition 行为复用既有 match 表达式路径）
+- [x] 全量回归点：`make test` 全量回归通过
 
 ### 8.6 步骤 6：cts / fcts 端到端用例
 
 - 前置依赖：步骤 5
 - 范围：端到端测试套件追加 infix match 用例
 
-- [ ] 在 `fcts/fcts_bin/src/test_flow.ff` 中追加 infix match 端到端用例：覆盖值、区间、union member type、union member type + binding、`if` / `while` 条件形式
-- [ ] 全量回归点：fcts 套件通过；`make test` 全量回归通过
+- [x] 在 `fcts/fcts_bin/src/test_flow.ff` 中追加 infix match 端到端用例：覆盖值、区间、union member type、union member type + binding、`if` / `while` 条件形式
+- [x] 全量回归点：fcts 套件通过；`make test` 全量回归通过
 
 ### 8.7 步骤 7：最终全量回归与收尾
 
 - 前置依赖：步骤 1–6 全部完成
 - 范围：最终验收与一致性复核
 
-- [ ] 执行 `make test` 全量回归通过
-- [ ] 复核所有新增测试用例与既有测试用例无冲突
-- [ ] 复核 `docs/feng-flow.md` / `docs/feng-error-codes-*.md` 与代码实现一致
-- [ ] 复核 `dev/feng-match-operator-dev.md` 中实现方案与最终代码一致（行号、函数名、错误码编号如有调整需回写文档）
-- [ ] 准备建议 commit message，由开发者自行提交
+- [x] 执行 `make test` 全量回归通过
+- [x] 复核所有新增测试用例与既有测试用例无冲突
+- [ ] 复核 `docs/feng-flow.md` / `docs/feng-error-codes-*.md` 与代码实现一致（待补齐 semantic / codegen 单元测试后再勾选）
+- [x] 复核 `dev/feng-match-operator-dev.md` 中实现方案与最终代码一致（行号、函数名、错误码编号如有调整需回写文档）
+- [x] 准备建议 commit message，由开发者自行提交
 
 ## 9 风险评估
 

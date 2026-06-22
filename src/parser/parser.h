@@ -187,7 +187,8 @@ typedef enum FengExprKind {
     FENG_EXPR_IF,
     FENG_EXPR_MATCH,
     FENG_EXPR_TRY,
-    FENG_EXPR_ARRAY_NEW
+    FENG_EXPR_ARRAY_NEW,
+    FENG_EXPR_MATCH_OP
 } FengExprKind;
 
 struct FengExpr {
@@ -268,6 +269,14 @@ struct FengExpr {
             size_t branch_count;
             FengBlock *else_block;
         } match_expr;
+        struct {
+            FengExpr *target;          /* LHS: expression being matched */
+            FengMatchLabel *labels;    /* RHS: label array (single or |-separated multi-label, reuses FengMatchLabel) */
+            size_t label_count;        /* label count, >= 1 */
+            bool has_binding;          /* whether the binding prefix was consumed */
+            FengSlice binding_name;    /* binding variable name (valid when has_binding) */
+            FengMutability binding_mutability;  /* let / var, defaults to let */
+        } match_op;
         struct {
             FengExpr *body;
             FengTryCatchClause *clauses;

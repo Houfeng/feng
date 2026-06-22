@@ -1314,6 +1314,7 @@ static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_try_expr(CG *cg,
                              const FengExpr *e,
                              ExprResult *out,
@@ -2814,6 +2815,35 @@ static bool cg_collect_capture_requirements_in_expr(const FengExpr *expr,
                                                            out_count,
                                                            out_capacity,
                                                            out_captures_self);
+        case FENG_EXPR_MATCH_OP:
+            if (!cg_collect_capture_requirements_in_expr(expr->as.match_op.target,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0; i < expr->as.match_op.label_count; ++i) {
+                const FengMatchLabel *label = &expr->as.match_op.labels[i];
+                if (!cg_collect_capture_requirements_in_expr(label->value,
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             out_captures_self) ||
+                    !cg_collect_capture_requirements_in_expr(label->range_low,
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             out_captures_self) ||
+                    !cg_collect_capture_requirements_in_expr(label->range_high,
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
         case FENG_EXPR_IDENTIFIER:
         case FENG_EXPR_SELF:
         case FENG_EXPR_BOOL:
@@ -11678,7 +11708,11 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
         return cg_fail(cg, e->token, "CE0096", "codegen: unary +/- requires numeric operand");
     }
     Buf b; buf_init(&b);
-    buf_append_fmt(&b, "(%s%s)", op, inner.c_expr);
+    /* Parenthesize the operand so composite c_expr (e.g. infix match's
+     * `_mt.tag == 1U || _mt.tag == 2U`) is treated atomically under
+     * C operator precedence. Without parens, `!_mt.tag == 1U` parses as
+     * `(!_mt.tag) == 1U`, not `!(_mt.tag == 1U)`. */
+    buf_append_fmt(&b, "(%s(%s))", op, inner.c_expr);
     out->c_expr = b.data;
     out->type = inner.type;
     inner.type = NULL;
@@ -12789,6 +12823,7 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
         case FENG_EXPR_CAST:          ok = cg_emit_cast(cg, e, out); break;
         case FENG_EXPR_IF:            ok = cg_emit_if_expr(cg, e, out); break;
         case FENG_EXPR_MATCH:         ok = cg_emit_match_expr(cg, e, out); break;
+        case FENG_EXPR_MATCH_OP:      ok = cg_emit_match_op(cg, e, out); break;
         case FENG_EXPR_TRY:           ok = cg_emit_try_expr(cg, e, out, true); break;
         default:
             return cg_fail(cg, e->token,
@@ -18314,6 +18349,181 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     return out->c_expr != NULL;
 }
 
+/* Emit codegen for infix match operator `target match pattern`.
+ *
+ * Materialises the target into a local `_mt`, then emits the OR of each
+ * label's match condition. The result is always bool. When `has_binding`
+ * is true (union-form target with binding), the binding variable is
+ * registered in the current scope as an alias to either `_mt.payload.mX`
+ * (single-member subset) or `_mt` (multi-member subset), so it is visible
+ * to subsequent `&&` right operands and to if/while body scopes. The
+ * alias is only safe to dereference when the match condition is true;
+ * `&&` short-circuit and if/while control flow guarantee that. */
+static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out) {
+    er_init(out);
+
+    ExprResult tgt;
+    if (!cg_emit_expr(cg, e->as.match_op.target, &tgt)) {
+        return false;
+    }
+    if (tgt.type == NULL) {
+        er_free(&tgt);
+        return cg_fail(cg, e->token,
+            "CE0272", "codegen: infix match target has no resolved type");
+    }
+
+    /* Capture target type info before cg_materialize_to_local transfers
+     * ownership of tgt.type into the scope. */
+    bool is_union = tgt.type->kind == CG_TYPE_SPEC &&
+                    tgt.type->user_spec != NULL &&
+                    tgt.type->user_spec->form == FENG_SPEC_FORM_UNION;
+    const UserSpec *union_spec = is_union ? tgt.type->user_spec : NULL;
+    CGTypeKind target_kind = tgt.type->kind;
+
+    char *tgt_tmp = cg_materialize_to_local(cg, &tgt, "_mt");
+    if (tgt_tmp == NULL) {
+        er_free(&tgt);
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+    }
+    er_free(&tgt);
+
+    Buf cond;
+    buf_init(&cond);
+    bool ok = true;
+    size_t first_member_index = 0U;
+    size_t matched_member_count = 0U;
+
+    if (is_union) {
+        for (size_t i = 0U; i < e->as.match_op.label_count; ++i) {
+            size_t member_index = 0U;
+            if (!cg_union_member_index_for_label(cg,
+                                                  union_spec,
+                                                  &e->as.match_op.labels[i],
+                                                  &member_index)) {
+                ok = false;
+                break;
+            }
+            if (i != 0U) {
+                buf_append_cstr(&cond, " || ");
+            }
+            buf_append_fmt(&cond, "%s.tag == %zuU", tgt_tmp, member_index);
+            if (matched_member_count == 0U) {
+                first_member_index = member_index;
+            }
+            ++matched_member_count;
+        }
+    } else {
+        if (target_kind != CG_TYPE_BOOL &&
+            target_kind != CG_TYPE_STRING &&
+            !cgtype_is_integer(target_kind)) {
+            buf_free(&cond);
+            free(tgt_tmp);
+            return cg_fail(cg, e->token,
+                "CE0270", "codegen: match target must be integer, bool, string, or enum");
+        }
+        for (size_t i = 0U; i < e->as.match_op.label_count; ++i) {
+            if (i != 0U) {
+                buf_append_cstr(&cond, " || ");
+            }
+            if (!cg_emit_match_label_cond(cg,
+                                           tgt_tmp,
+                                           target_kind,
+                                           &e->as.match_op.labels[i],
+                                           &cond)) {
+                ok = false;
+                break;
+            }
+        }
+    }
+
+    if (!ok) {
+        buf_free(&cond);
+        free(tgt_tmp);
+        return false;
+    }
+
+    /* If has_binding (guaranteed union-form by semantic), register the
+     * binding variable as an alias in the current scope. Single-member
+     * subsets alias to the member payload; multi-member subsets alias
+     * to the target tmp itself (the union value). The alias is read
+     * only when the match condition is true (enforced by `&&` short-
+     * circuit and if/while control flow), so the alias access is safe. */
+    if (e->as.match_op.has_binding &&
+        e->as.match_op.binding_name.data != NULL &&
+        e->as.match_op.binding_name.length > 0U) {
+        FengSlice alias_name = e->as.match_op.binding_name;
+        char *alias_cstr = strndup(alias_name.data, alias_name.length);
+
+        if (alias_cstr == NULL) {
+            buf_free(&cond);
+            free(tgt_tmp);
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+        }
+        if (matched_member_count == 1U) {
+            Buf payload_expr;
+            CGType *alias_type;
+
+            buf_init(&payload_expr);
+            buf_append_fmt(&payload_expr, "%s.payload.", tgt_tmp);
+            cg_append_union_payload_field_name(&payload_expr, first_member_index);
+            alias_type = cgtype_clone(union_spec->union_member_types[first_member_index]);
+            if (payload_expr.data == NULL || alias_type == NULL ||
+                !scope_add(cg->cur_scope,
+                           alias_cstr,
+                           payload_expr.data,
+                           alias_type,
+                           true)) {
+                cgtype_free(alias_type);
+                free(alias_cstr);
+                buf_free(&payload_expr);
+                buf_free(&cond);
+                free(tgt_tmp);
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+            }
+            buf_free(&payload_expr);
+            free(alias_cstr);
+        } else {
+            /* Multi-member subset: alias to the target tmp (the union
+             * value). Semantic narrowing guarantees type safety at the
+             * source level; at codegen the binding just refers to the
+             * whole union value. */
+            const Local *tgt_local = scope_lookup(cg->cur_scope,
+                                                    tgt_tmp,
+                                                    strlen(tgt_tmp));
+            CGType *alias_type;
+            if (tgt_local == NULL) {
+                free(alias_cstr);
+                buf_free(&cond);
+                free(tgt_tmp);
+                return cg_fail(cg, e->token,
+                    "CE0273", "codegen: infix match target tmp not in scope");
+            }
+            alias_type = cgtype_clone(tgt_local->type);
+            if (alias_type == NULL ||
+                !scope_add(cg->cur_scope,
+                           alias_cstr,
+                           tgt_tmp,
+                           alias_type,
+                           true)) {
+                cgtype_free(alias_type);
+                free(alias_cstr);
+                buf_free(&cond);
+                free(tgt_tmp);
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+            }
+            free(alias_cstr);
+        }
+    }
+
+    out->c_expr = strndup(cond.data, cond.length);
+    out->type = cgtype_new(CG_TYPE_BOOL);
+    out->owns_ref = false;
+
+    buf_free(&cond);
+    free(tgt_tmp);
+    return out->c_expr != NULL && out->type != NULL;
+}
+
 static bool cg_type_ref_is_unknown_catch_type(const FengTypeRef *ref) {
     if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
         ref->as.named.segment_count != 1U) {
@@ -21821,29 +22031,105 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
     return ok;
 }
 
+/* Returns true if `expr` is or contains a match_op node with a binding.
+ * Used by if/while codegen to decide whether to keep condition temporaries
+ * alive across the body (the binding alias references the materialized
+ * target tmp). Only `&&` chains propagate bindings (per docs/feng-flow.md
+ * §3.3); `||` / `!` subtrees do not. */
+static bool cg_expr_has_visible_match_binding(const FengExpr *expr) {
+    if (expr == NULL) return false;
+    switch (expr->kind) {
+        case FENG_EXPR_BINARY:
+            if (expr->as.binary.op == FENG_TOKEN_AND_AND) {
+                return cg_expr_has_visible_match_binding(expr->as.binary.left) ||
+                       cg_expr_has_visible_match_binding(expr->as.binary.right);
+            }
+            return false;
+        case FENG_EXPR_UNARY:
+            return false;
+        case FENG_EXPR_MATCH_OP:
+            return expr->as.match_op.has_binding;
+        default:
+            return false;
+    }
+}
+
 static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
     /* Emit as `for (;;)` so we can re-evaluate the condition each iter
      * inside a scope that releases temporaries from condition eval. */
+    bool has_match_binding = cg_expr_has_visible_match_binding(stmt->as.while_stmt.condition);
     buf_append_cstr(cg->cur_body, "    for (;;) {\n");
-    /* Condition scope: any temporaries from cond eval get released here. */
+    /* Condition scope: any temporaries from cond eval get released here.
+     * When the condition contains a match_op with binding, the materialized
+     * target tmp must survive across the body (the binding alias references
+     * it), so we keep the condition scope alive until after the body and
+     * mark it as the loop scope so break/continue release it on exit. */
     Scope *cond_scope = scope_push(cg->cur_scope);
     if (!cond_scope) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
+    if (has_match_binding) {
+        cond_scope->is_loop = true;
+        cond_scope->try_depth_at_entry = cg->try_depth;
+        cg->loop_depth++;
+    }
     cg->cur_scope = cond_scope;
     ExprResult cond;
     if (!cg_emit_expr(cg, stmt->as.while_stmt.condition, &cond)) {
         cg->cur_scope = cond_scope->parent;
+        if (has_match_binding) cg->loop_depth--;
         scope_pop_free(cond_scope);
         return false;
     }
     if (cond.type->kind != CG_TYPE_BOOL) {
         er_free(&cond);
         cg->cur_scope = cond_scope->parent;
+        if (has_match_binding) cg->loop_depth--;
         scope_pop_free(cond_scope);
         return cg_fail(cg, stmt->token, "CE0271", "codegen: while condition must be bool");
     }
     char *cond_tmp = cg_fresh_temp(cg, "_cond");
     buf_append_fmt(cg->cur_body, "        bool %s = %s;\n", cond_tmp, cond.c_expr);
     er_free(&cond);
+
+    if (has_match_binding) {
+        /* Restructured control flow: body is inside `if (_cond)`, and the
+         * condition scope (holding the materialized target tmp and the
+         * binding alias) is released after the body on every path. The
+         * trailing `if (!_cond) break;` only runs when the body was skipped,
+         * after the cleanup, so the tmp is released exactly once. */
+        buf_append_fmt(cg->cur_body, "        if (%s) {\n", cond_tmp);
+        Scope *body_scope = scope_push(cg->cur_scope);
+        if (!body_scope) {
+            free(cond_tmp);
+            cg->cur_scope = cond_scope->parent;
+            cg->loop_depth--;
+            scope_pop_free(cond_scope);
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
+        }
+        body_scope->is_loop = false;
+        cg->cur_scope = body_scope;
+        if (!cg_emit_block(cg, stmt->as.while_stmt.body)) {
+            cg->cur_scope = body_scope->parent;
+            scope_pop_free(body_scope);
+            free(cond_tmp);
+            cg->cur_scope = cond_scope->parent;
+            cg->loop_depth--;
+            scope_pop_free(cond_scope);
+            return false;
+        }
+        cg_release_scope(cg, body_scope);
+        cg->cur_scope = body_scope->parent;
+        scope_pop_free(body_scope);
+        buf_append_cstr(cg->cur_body, "        }\n");
+        cg_release_scope(cg, cond_scope);
+        buf_append_fmt(cg->cur_body, "        if (!%s) break;\n", cond_tmp);
+        free(cond_tmp);
+        cg->cur_scope = cond_scope->parent;
+        cg->loop_depth--;
+        scope_pop_free(cond_scope);
+        buf_append_cstr(cg->cur_body, "    }\n");
+        return true;
+    }
+
     cg_release_scope(cg, cond_scope);
     cg->cur_scope = cond_scope->parent;
     scope_pop_free(cond_scope);
@@ -28365,6 +28651,23 @@ static bool cg_collect_generic_instances_from_expr(CG *cg, const FengExpr *expr,
                                                              expr->as.array_new.element_type,
                                                              scope) &&
                    cg_collect_generic_instances_from_expr(cg, expr->as.array_new.size, scope);
+        case FENG_EXPR_MATCH_OP:
+            if (!cg_collect_generic_instances_from_expr(cg, expr->as.match_op.target, scope)) {
+                return false;
+            }
+            for (size_t i = 0; i < expr->as.match_op.label_count; ++i) {
+                const FengMatchLabel *label = &expr->as.match_op.labels[i];
+                if (!cg_collect_generic_instances_from_expr(cg, label->value, scope) ||
+                    !cg_collect_generic_instances_from_expr(cg, label->range_low, scope) ||
+                    !cg_collect_generic_instances_from_expr(cg, label->range_high, scope)) {
+                    return false;
+                }
+                if (label->type != NULL &&
+                    !cg_collect_generic_instances_from_type_ref(cg, label->type, scope)) {
+                    return false;
+                }
+            }
+            return true;
     }
     return true;
 }

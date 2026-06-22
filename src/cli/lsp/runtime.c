@@ -8016,6 +8016,13 @@ static bool resolve_object_field_target_expr(const FengLspAnalysisSession *sessi
                                                     offset,
                                                     locals,
                                                     target);
+        case FENG_EXPR_MATCH_OP:
+            return resolve_object_field_target_expr(session,
+                                                    program,
+                                                    expr->as.match_op.target,
+                                                    offset,
+                                                    locals,
+                                                    target);
         case FENG_EXPR_TRY:
             if (resolve_object_field_target_expr(session,
                                                  program,
@@ -8725,6 +8732,61 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                                                false,
                                                target,
                                                references);
+        case FENG_EXPR_MATCH_OP:
+            if (!collect_references_in_expr(session,
+                                            program,
+                                            source,
+                                            owner_decl,
+                                            owner_member,
+                                            expr->as.match_op.target,
+                                            target,
+                                            references)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.match_op.label_count; ++index) {
+                const FengMatchLabel *label = &expr->as.match_op.labels[index];
+                if (label->kind == FENG_MATCH_LABEL_VALUE) {
+                    if (!collect_references_in_expr(session,
+                                                    program,
+                                                    source,
+                                                    owner_decl,
+                                                    owner_member,
+                                                    label->value,
+                                                    target,
+                                                    references)) {
+                        return false;
+                    }
+                } else if (label->kind == FENG_MATCH_LABEL_RANGE) {
+                    if (!collect_references_in_expr(session,
+                                                    program,
+                                                    source,
+                                                    owner_decl,
+                                                    owner_member,
+                                                    label->range_low,
+                                                    target,
+                                                    references) ||
+                        !collect_references_in_expr(session,
+                                                    program,
+                                                    source,
+                                                    owner_decl,
+                                                    owner_member,
+                                                    label->range_high,
+                                                    target,
+                                                    references)) {
+                        return false;
+                    }
+                } else if (label->kind == FENG_MATCH_LABEL_TYPE) {
+                    if (!collect_references_in_type_ref(session,
+                                                        program,
+                                                        source,
+                                                        label->type,
+                                                        target,
+                                                        references)) {
+                        return false;
+                    }
+                }
+            }
+            return true;
         case FENG_EXPR_TRY:
             if (!collect_references_in_expr(session,
                                             program,

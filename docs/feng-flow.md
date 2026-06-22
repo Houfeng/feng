@@ -53,6 +53,7 @@ union-form 的成员归一化、active member 判别、收窄与显式转换边�
 - 分支按书写顺序匹配，命中第一个覆盖目标值的分支后返回对应结果。
 - 编译器对所有分支标签进行交叉检测：单值重复、值列表元素与其他分支重叠、区间与单值重叠、区间与区间重叠，均视为不可达死代码，编译期报错。对 `enum` 目标类型，同一 enum item 在多个分支重复出现视为不可达死代码；不同 `enum` 的同底层 `int` 值不视为重叠。
 - `else` 分支可省略，省略时表示条件全部不满足则直接离开整个分支结构。
+- 本节的三种标签形式（单值、值列表、整数闭区间）同时作为 §3.3 infix match 运算的 pattern 使用；块形式的多 label 用 `,` 分隔，infix 形式的多 label 用 `|` 分隔（区别见 §3.3）。
 
 ```feng
 match age {
@@ -89,6 +90,7 @@ match age {
 - 无绑定分支内，目标值保持原始 union 类型，不可直接做成员访问或比较；有绑定分支内，若绑定变量收窄后仍包含多个 member，则仍是 union 视角，若要访问、调用或比较，必须继续收窄到单一 member。
 - 允许同一匹配体中混合使用绑定分支和无绑定分支。
 - 该模式的完整语义，包括 active member 的进入站点选择、object-form `spec` member 的视角取得与显式转换限制，见 [feng-union-type.md](./feng-union-type.md)。
+- union member type 标签同时作为 §3.3 infix match 运算的 pattern 使用；infix 形式的 union member pattern 支持可选绑定 `[let|var] name: Type`，绑定作用域与 `if` / `while` 体绑定一致（详见 §3.3）。
 
 ```feng
 match v {
@@ -106,6 +108,74 @@ match v {
     // 无绑定，收窄为剩余 member 集合
   }
 }
+```
+
+### 3.3 infix match 运算
+
+除了块形式的 `match 目标值 { ... }`，Feng 还支持 infix 形式的 `expr match pattern`，返回 `bool`，表示 `expr` 是否匹配 `pattern`。infix 形式把单分支 match 表达为可嵌入条件、可参与逻辑组合的 bool 表达式。
+
+规则说明:
+
+- 语法形式：`expr match pattern`，其中 `pattern` 复用 §3.1 / §3.2 既有标签形式（单值、整数闭区间、union member type、enum item 引用），多 label 用 `|` 分隔（区别于块形式的 `,`）。
+- 运算结果为 `bool`：命中 pattern 返回 `true`，未命中返回 `false`。
+- target 类型仍按 §3.1 / §3.2 的允许集合校验：常量相等性匹配支持 `所有整型`、`string`、`bool`、`enum`；union member 匹配支持 union-form `spec`。
+- 可选绑定：`expr match [let|var] name: Type` 仅对 union member type pattern 有效，把收窄后的值绑定到 `name`；默认 `let`，可显式 `let` 或 `var`；多 member 子集绑定时 `name` 收窄为对应 member 子集的 union 类型。
+- binding 仅在全部 label 为 type pattern 时有效；与非 type label 混用报 AE1009。
+- pattern 形式与 target 类型兼容性如下：
+
+| pattern 形式 | 适用 target 类型 | 是否支持绑定 |
+| ----------- | --------------- | ----------- |
+| 单值字面量 `0` / `"abc"` / `true` / `EnumName.Item` | 整型 / string / bool / enum | 否 |
+| 整数闭区间 `m...n` | 整型 | 否 |
+| union member type `Type` | union-form spec | 是 |
+| 多 label `label1 \| label2 \| ...` | 各 label 须与 target 类型兼容 | 仅当全部为 type 时支持绑定 |
+
+- `|` 在 pattern 位置作为 label 分隔符，**不是按位或运算符**；parser 在 pattern 解析循环内消费 `|`，退出循环后剩余 `|` 才按按位或处理。`bool | int` 本身非法（AE0030），故 `(x match 0) | 1` 这种解读天然无意义。
+- 不用 `,` 作为 infix 多 label 分隔符：`,` 在函数参数、元组、数组等容器上下文已是分隔符，混用会歧义；块形式在 `{ ... }` 内无此歧义，继续用 `,`。
+- 运算优先级与关系运算 `<` / `<=` / `>` / `>=` 同级、高于相等运算（`==` / `!=`）、低于算术与移位、高于逻辑 `&&` / `||`、高于赋值 `=`；同级左结合。链式 `x match a match b` 按左结合解析为 `(x match a) match b`，语义合法性由类型检查器捕获。
+
+**绑定作用域**（可见性分析的 AST 级静态推导）：
+
+- 从条件根递归向下收集可见的 match 绑定变量：`&&` 合并两侧；`||` / `!` 子树内全部丢弃；分组 `(A)` 透明穿透；`match v: T` 收集 v；其他运算符（`==` / `!=` / `^` / `?:` / 位运算 / 函数调用 / 类型转换等）不传播，返回空。
+- `if` / `while` 条件中，body 内可见的 match 绑定变量 = `collect_visible_match_bindings(条件根)` 的结果集合，登记到体作用域。
+- `A && B` 中 B 求值时可见 A 的 match 变量（`&&` 短路保证 A 为 true）。
+- `||` 或 `!` 只在其子树内丢弃 match 变量；作为 match 的侄子（位于兄弟子树内）不影响 match 自身的可见性。
+- `else` body 内所有 match 绑定变量一律不可见（不做 when-false 反向推导）。
+- 语句后不可见：`let r = x match v: T;` 后即使写 `if r { use(v); }` 也不允许；编译器不跟踪 `r` 真值与 `v` 绑定状态的关联。
+- 函数边界外不可见：`f(x match v: T)` 中 `v` 仅在 match 表达式内可见，不跨函数体传播。
+- `while` 每轮迭代重新求值条件并重新绑定；上一轮的 `v` 与本轮无关。
+- `!` 不做递归等价变换：`!!(x match v: T)` 中 v 不可见（外层 `!` 子树返回空）；用户应把 `!!cond` 改写为正向形式 `cond`。
+- 不可见位置使用 binding 变量复用 AE0001（undefined identifier），不引入新错误码。
+- 本设计是 C# `is` 模式匹配的保守简化版：不做 `!!` 等价变换、不做 else body 反向推导、不识别 `==` / `!=` 等运算符的语义等价。用户应把 match 表达式直接写在条件正向位置。
+
+```feng
+// 无绑定：返回 bool
+let r = x match 0                // 值匹配
+let r = x match 1...10           // 整数闭区间匹配
+let r = x match UserType         // union member 匹配
+let r = x match 0 | 1 | 2        // 值列表匹配（| 分隔）
+let r = x match 0 | 1...10 | 100 // 值与区间混合
+let r = x match Type1 | Type2    // 多 member type 匹配
+
+// 有绑定（仅 union member 模式）
+let r = x match v: UserType       // 默认 let 绑定
+let r = x match let v: UserType   // 显式 let 绑定
+let r = x match var v: UserType   // 显式 var 绑定
+let r = x match v: Type1 | Type2 // 多 member 绑定，v 收窄为 Type1 | Type2 子集
+
+// 用于 if 条件
+if x match 0 { ... }
+if x match 1...10 { ... }
+if x match v: UserType { ... }       // v 在 if 体内可见
+if x match var v: UserType { ... }   // v 在 if 体内可见且可变
+if x match 0 | 1 | 2 { ... }         // 值列表作为 if 条件
+
+// 用于 while 条件（每轮迭代重新求值并重新绑定）
+while x match v: UserType { ... }
+
+// 与逻辑运算符组合
+if x match UserType && y match OtherType { ... }
+if x match v: UserType && v.age > 10 { ... }   // v 在 v.age > 10 与 if 体内可见
 ```
 
 ## 4 `if` 表达式
