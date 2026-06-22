@@ -429,14 +429,14 @@
 | CE1036 | match 表达式 else 分支结果语句约束 | CE0206 | codegen: match expression else branch must end with an expression statement | 回到AE |
 | CE1037 | match 分支结果语句约束 | CE0207 | codegen: match branch must end with an expression statement | 回到AE |
 | CE1038 | match 分支标签存在性约束 | CE0210 | codegen: match branch has no labels | 回到AE |
-| CE1039 | match 目标类型约束 | CE0211 | codegen: match target must be integer, bool, or string | 回到AE |
+| CE1039 | match 目标类型约束 | CE0211 | codegen: match target must be integer, bool, string, or enum | 回到AE |
 | CE1040 | catch 块结果值约束 | CE0215 | codegen: catch block must produce a try-expression value | 回到AE |
 | CE1041 | void 函数返回值禁用 | CE0264 | codegen: void function cannot return a value | 回到AE |
 | CE1042 | non-void 函数返回值必需 | CE0265 | codegen: non-void function must return a value | 回到AE |
 | CE1043 | if 语句条件 bool 约束 | CE0266 | codegen: if condition must be bool | 回到AE |
 | CE1044 | else-if 包装层级过深 | CE0267 | codegen: too many nested else-if wrappers | 消解 |
 | CE1045 | match 分支标签存在性约束 | CE0269 | codegen: match branch has no labels | 回到AE |
-| CE1046 | match 目标类型约束 | CE0270 | codegen: match target must be integer, bool, or string | 回到AE |
+| CE1046 | match 目标类型约束 | CE0270 | codegen: match target must be integer, bool, string, or enum | 回到AE |
 | CE1047 | while 条件 bool 约束 | CE0271 | codegen: while condition must be bool | 回到AE |
 | CE1048 | for 条件 bool 约束 | CE0272 | codegen: for condition must be bool | 回到AE |
 | CE1049 | for/in 源类型 @iterable 方法缺失 | CE0273 | codegen: @iterable method not found on source type | 回到AE |

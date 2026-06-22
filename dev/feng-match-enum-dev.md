@@ -1,6 +1,6 @@
 # match 支持 enum 值匹配
 
-## 状态: dev
+## 状态: delivered
 
 > [docs/feng-enum.md](../docs/feng-enum.md) 是 enum 的专项规范；
 > [docs/feng-flow.md](../docs/feng-flow.md) §3 是 `match` 模式匹配的专项规范；
@@ -180,7 +180,7 @@ match c {
 
 ```feng
 match c {
-  Color.Red...Color.Green { /* ... */ }   // 错：enum 不支持区间标签
+  0...2 { /* ... */ }            // 错：enum 不支持区间标签（AE1111）
   Color.Blue { /* ... */ }
   else { /* ... */ }
 }
@@ -265,19 +265,17 @@ match c {
 
 ### 4.1 Parser
 
-#### 4.1.1 扩展 `parse_match_label_atom`
+#### 4.1.1 复用既有 type label 路径承载 enum item 引用
 
-当前 `parse_match_label_atom`（`src/parser/parser.c:2688`）只接受单 token 形式的字面量或 IDENTIFIER。enum item 引用 `EnumName.ItemName` 是 `FENG_EXPR_MEMBER`，需要在 atom 解析阶段识别 IDENTIFIER 后跟 `.` 的形式，并构造 `FENG_EXPR_MEMBER` 节点（object 为 `FENG_EXPR_IDENTIFIER`、member 为下一个 IDENTIFIER 的 slice）。
+enum item 引用 `EnumName.ItemName` 与 union member 匹配的多段 qualified type label（如 `pkg.Named`）在 AST 形式上一致：都是 `FENG_MATCH_LABEL_TYPE`，`type_ref` 是多段 `FENG_TYPE_REF_NAMED`。parser 层无法区分二者，也不需要区分——由 semantic 层根据 target 类型分流（target 为 enum 走 enum 匹配，target 为 union-form spec 走 union member 匹配）。
 
-具体改动：
+`parse_match_label`（`src/parser/parser.c:2747`）与 `parse_match_label_atom`（`src/parser/parser.c:2688`）**无需修改**，既有 type label 路径已经能正确解析 `EnumName.ItemName` 为多段 named type label。
 
-- IDENTIFIER case 解析后，若 `parser_check(parser, FENG_TOKEN_DOT)`，则继续消费 `.` 与下一个 IDENTIFIER，构造 `FENG_EXPR_MEMBER` 表达式返回；否则保持原有 IDENTIFIER 路径不变。
-- 不识别多段 `a.b.c`：enum item 引用严格两段，多于两段视为非法（由语义层报错即可，parser 不必特判）。
-- 其他 case（INTEGER / STRING / BOOL / 负号一元）保持不变。
+enum target 的区间标签 `1...10`（整数区间）能被 parser 解析为 `FENG_MATCH_LABEL_RANGE`，semantic 层在 enum 模式下报 AE1111 拒绝；多段 type 形式 `Color.Red...Color.Green` 在 parser 层无法解析（多段 type label 不接受 `...` 后接 type），视为不合法语法，由 parser 报错，不到 semantic 层。
 
 #### 4.1.2 不动既有 union member 匹配路径
 
-`parse_match_label` 中 `is_type_label_start_token` 分支用于 union member 匹配的 `Type { ... }` 形式标签。enum item 引用首段也是 IDENTIFIER，但后跟 `.`，不会进入 type ref 解析分支（`parse_type_ref` 在遇到 `.` 时停止，且后续 `is_type_label_start_token` 检查后判断 `parser_check(parser, FENG_TOKEN_COMMA)` 或 `LBRACE` 不成立时回退）。新增的 member access 解析在 `parse_match_label_atom` 内部完成，对 type label 路径透明。
+`parse_match_label` 中 `is_type_label_start_token` 分支用于 union member 匹配的 `Type { ... }` 形式标签，同时承载 enum item 引用 `EnumName.ItemName`。两条路径在 parser 层合并，在 semantic 层分流。
 
 #### 4.1.3 不动 binding prefix 路径
 
@@ -322,19 +320,9 @@ typedef struct MatchConstValue {
 
 `enum_item_value` 取自 `ensure_enum_decl_info` 写入的 `FengSemanticEnumInfo`（见 `src/semantic/analyzer.c:7705`，已经为每个 item 记录底层值）；通过 `feng_semantic_find_enum_item_info` 查询（`src/semantic/analyzer.c:12120` 已有调用范例）。
 
-#### 4.2.3 扩展 `extract_match_label_literal`
+#### 4.2.3 不修改 `extract_match_label_literal`
 
-`extract_match_label_literal`（`src/semantic/analyzer.c:6608`）在现有 IDENTIFIER 与字面量识别之外追加对 `FENG_EXPR_MEMBER` 的识别：
-
-- 若 `expr->kind == FENG_EXPR_MEMBER`：
-  - 调用 `cg_resolve_type_target_enum_decl` 等价语义（语义层已有等价路径，复用 `resolve_type_target` 系列）解析 `expr->as.member.object` 为 enum decl；
-  - 若不是 enum decl，返回 false（标签解析失败，由上层报 AE11xx 错误）；
-  - 在该 enum decl 中查找 `expr->as.member.member`（复用 `find_enum_item_decl`，`src/semantic/analyzer.c:485`）；
-  - 若不存在，返回 false（上层复用 AE0404 报错路径，避免在 `extract_match_label_literal` 内部重复诊断）；
-  - 调用 `ensure_enum_decl_info` 确保 enum item 底层值已记录；
-  - 通过 `feng_semantic_find_enum_item_info` 取出底层值；
-  - 填入 `MatchConstValue` 的 enum 字段返回 true。
-- 不改变既有字面量与 IDENTIFIER 路径行为。
+按 §4.1 的设计调整（复用既有 `FENG_MATCH_LABEL_TYPE` 路径），enum item 引用标签的 AST 形式是 `FENG_MATCH_LABEL_TYPE` 而非 `FENG_MATCH_LABEL_VALUE`，因此不经过 `extract_match_label_literal`。enum item 引用的解析（enum decl 查找、item 查找、底层值查询）由 §4.2.6 中新增的 `resolve_and_validate_enum_match_common` 直接在分支遍历时完成，不污染既有 `extract_match_label_literal` 与 `collect_match_branch_label_records` 路径。
 
 #### 4.2.4 扩展 `match_const_kind_matches_target`
 
@@ -381,11 +369,18 @@ enum 的 `CGType` kind 为 `CG_TYPE_I32`（`cgtype_new_enum`，`src/codegen/code
 
 #### 4.3.2 标签发码路径
 
-`cg_emit_match_label_cond`（`src/codegen/codegen.c:17604`）的 `FENG_MATCH_LABEL_VALUE` 分支调用 `cg_emit_expr(cg, lab->value, &lv)`：
+`cg_emit_match_label_cond`（`src/codegen/codegen.c:17604`）原仅处理 `FENG_MATCH_LABEL_VALUE` 与 `FENG_MATCH_LABEL_RANGE`；enum item 引用标签在 parser 层解析为 `FENG_MATCH_LABEL_TYPE`（两段 named type ref，`EnumName.ItemName`），原 codegen 不覆盖此 AST kind，会触发 `CE0204`「unknown match label kind」。
 
-- 对 enum item 引用 `EnumName.ItemName`（`FENG_EXPR_MEMBER`），`cg_emit_member`（`src/codegen/codegen.c:15987`）已经识别 enum member access 并发出 `EnumName__ItemName` C 常量名（见 `cg_enum_item_c_name`，`src/codegen/codegen.c:3495`）。
-- target 临时变量是 `CG_TYPE_I32` 标量，标签表达式也是 `CG_TYPE_I32` 标量，`buf_append_fmt(out, "(bool)(%s == %s)", target_tmp, lv.c_expr)` 直接生成 `(bool)(_mt == EnumName__ItemName)`，与既有 int 标签发码路径一致。
-- 不需要为 enum 增加新的 codegen 分支；既有路径天然正确。
+为此在 `cg_emit_match_label_cond` 新增 `FENG_MATCH_LABEL_TYPE` 分支：
+
+- 取 `lab->type` 的两段 named type ref：segments[0] 为 enum 名、segments[1] 为 item 名。
+- 通过 `cg_find_visible_enum_decl(cg, segments[0].data, segments[0].length)` 解析 enum decl（语义层已校验存在性与可见性，此处不会失败）。
+- 调用 `cg_ensure_enum_emitted(cg, enum_decl)` 确保 enum 的 C typedef 与 item 常量已发出。
+- 在 enum decl 中查找 segments[1] 对应的 item（语义层已校验存在性，此处不会失败）。
+- 调用 `cg_enum_item_c_name`（`src/codegen/codegen.c:3495`）生成 `EnumTypedef__ItemName` 常量名。
+- 发出 `(bool)(_mt == EnumTypedef__ItemName)`，与既有 int 标签发码路径一致。
+
+不新增 AST kind、不新增 MatchLabelKind、不新增 runtime 原语；仅复用既有 enum 发码原语（`cg_enum_item_c_name`、`cg_ensure_enum_emitted`）。
 
 #### 4.3.3 区间标签保护
 
@@ -423,9 +418,9 @@ enum 的 `CGType` kind 为 `CG_TYPE_I32`（`cgtype_new_enum`，`src/codegen/code
 
 ### 6.1 改动规模概述
 
-- parser：`parse_match_label_atom` 增加约 +20 行（IDENTIFIER 后跟 `.` 的 member access 解析）。
-- semantic：`match_target_type_is_allowed`、`MatchConstKind` / `MatchConstValue`、`extract_match_label_literal`、`match_const_kind_matches_target`、`match_label_records_overlap` 共约 +120 / -20 行；`resolve_and_validate_match_common` 增加 enum 模式分支约 +60 行。
-- codegen：错误信息文案更新 3 处，无逻辑变更。
+- parser：无修改；既有 `FENG_MATCH_LABEL_TYPE` 路径已能解析 `EnumName.ItemName` 为两段 named type label。
+- semantic：`match_target_type_is_allowed`、`MatchConstKind` / `MatchLabelRecord`、`match_const_kind_matches_target`、`match_label_records_overlap` 共约 +80 行；`resolve_and_validate_enum_match_common` 新增约 +190 行；移除无 context 版本 `inferred_expr_type_is_enum_kind`。
+- codegen：错误信息文案更新 3 处；`cg_emit_match_label_cond` 新增 `FENG_MATCH_LABEL_TYPE` 分支约 +50 行。
 - 文档：`feng-flow.md`、`feng-enum.md`、`feng-error-codes-*.md` 文案更新与新错误码条目。
 - 测试：parser / semantic / codegen 新增 enum match 用例；既有 `if_match_*` / `match_*` 测试不受影响。
 
@@ -438,8 +433,9 @@ enum 的 `CGType` kind 为 `CG_TYPE_I32`（`cgtype_new_enum`，`src/codegen/code
 | `docs/feng-error-codes-ae.md` | AE0050 文案、新增 AE11xx 条目 | +6 行 |
 | `docs/feng-error-codes-ce.md` | CE0211 / CE0270 文案 | 2 处 |
 | `docs/feng-error-codes.md` | 索引同步 | 2 处 |
-| `src/parser/parser.c` | `parse_match_label_atom` member access 解析 | +20 行 |
-| `src/semantic/analyzer.c` | enum 模式分支、MatchConstKind 扩展、辅助函数签名 | +180 / -20 行 |
+| `src/parser/parser.c` | 不动 | 0 |
+| `src/semantic/analyzer.c` | enum 模式分支、MatchConstKind 扩展、辅助函数签名 | +270 / -20 行 |
+| `src/codegen/codegen.c` | CE0211 / CE0270 文案 + `cg_emit_match_label_cond` 新增 TYPE 分支 | +55 行 |
 | `src/codegen/codegen.c` | CE0211 / CE0270 文案 | 3 处 |
 | `src/parser/dump.c` / `src/symbol/export.c` / `src/cli/lsp/runtime.c` / `src/semantic/reifiable_deps.c` | 不动 | 0 |
 
@@ -512,63 +508,60 @@ enum 的 `CGType` kind 为 `CG_TYPE_I32`（`cgtype_new_enum`，`src/codegen/code
 - [ ] 更新 [docs/feng-error-codes.md](../docs/feng-error-codes.md)：索引同步
 - [ ] 全量回归点：`make test` 通过（仅文档变更，无代码行为变化）
 
-### 8.2 步骤 2：Parser 扩展支持 enum item 引用标签形式
+### 8.2 步骤 2：Parser 复用既有 type label 路径承载 enum item 引用
 
 - 前置依赖：步骤 1
-- 范围：parser 扩展 + parser AST 测试；semantic 暂不识别 enum item 引用（仍按现状对 enum item 引用标签报 AE1105）
-- 行为变化：enum item 引用标签从「parser 报 SE1105」变为「parser 成功建树、semantic 报 AE1105」；既有测试不使用该形式，无回归
+- 范围：parser 无需修改；既有 `FENG_MATCH_LABEL_TYPE` 路径已能解析 `EnumName.ItemName` 为多段 named type label；新增 parser AST 测试验证解析结果
+- 设计调整：原方案「扩展 `parse_match_label_atom` 支持 member access」会破坏既有 union member 匹配对多段 qualified type name（如 `pkg.Named`）的支持；改为复用既有 type label 路径，semantic 层根据 target 类型分流
 
-- [ ] 扩展 `src/parser/parser.c` 中 `parse_match_label_atom`（约 `:2688`）：IDENTIFIER case 解析后，若 `parser_check(parser, FENG_TOKEN_DOT)`，继续消费 `.` 与下一个 IDENTIFIER，构造 `FENG_EXPR_MEMBER` 节点返回；其他 case 不变
-- [ ] 不修改 `parse_match_label`、`parse_match_branch`、`parse_match_branch_binding_prefix`、`parse_match_body` 等既有路径
-- [ ] 在 `test/parser/test_parser.c` 新增 AST 结构测试用例：单值 enum item 引用标签、值列表 enum item 引用标签；仅验证 AST 形状（`FENG_EXPR_MATCH` + `FENG_MATCH_LABEL_VALUE` + `FENG_EXPR_MEMBER`），不跑 semantic
-- [ ] 全量回归点：`make build/bin/test_parser && build/bin/test_parser` 通过；`make test` 全量回归通过
+- [x] 确认 `parse_match_label`（`src/parser/parser.c:2747`）与 `parse_match_label_atom`（`src/parser/parser.c:2688`）无需修改
+- [x] 在 `test/parser/test_parser.c` 新增 AST 结构测试用例：验证 `Color.Red` 与 `Color.Green, Color.Blue` 被解析为 `FENG_MATCH_LABEL_TYPE`，`type_ref` 为两段 `FENG_TYPE_REF_NAMED`（segments[0]="Color"、segments[1]="Red"）
+- [x] 全量回归点：`make build/bin/test_parser && build/bin/test_parser` 通过；`make test` 全量回归通过
 
 ### 8.3 步骤 3：Semantic 扩展支持 enum 匹配模式
 
 - 前置依赖：步骤 2
-- 范围：semantic 全面扩展支持 enum 模式；codegen 路径已隐式放行 enum（`CG_TYPE_I32` + `cgtype_is_integer`），无需新增 codegen 逻辑
+- 范围：semantic 全面扩展支持 enum 模式
 - 行为变化：enum item 引用标签从「semantic 报 AE1105」变为「合法通过 semantic」；既有测试不使用 enum match，无回归
 
-- [ ] 扩展 `MatchConstKind`（`src/semantic/analyzer.c:6554`）新增 `MATCH_CONST_ENUM`
-- [ ] 扩展 `MatchConstValue`（`src/semantic/analyzer.c:6560`）新增 `enum_decl` / `enum_item_name` / `enum_item_value` 字段
-- [ ] 扩展 `extract_match_label_literal`（`src/semantic/analyzer.c:6608`）识别 `FENG_EXPR_MEMBER`：解析 object 为 enum decl、查找 item、调用 `ensure_enum_decl_info` 与 `feng_semantic_find_enum_item_info` 取底层值
-- [ ] 扩展 `match_target_type_is_allowed`（`src/semantic/analyzer.c:6666`）：追加 `inferred_expr_type_is_enum(context, target_type)` 判定；签名带 `context`，调用点（`src/semantic/analyzer.c:7336`）同步修改
-- [ ] 扩展 `match_const_kind_matches_target`（`src/semantic/analyzer.c:6684`）：新增 `MATCH_CONST_ENUM` case，校验 target 为同 enum decl；签名带 `context`
-- [ ] 扩展 `match_label_records_overlap`（`src/semantic/analyzer.c:6717`）：新增 `MATCH_CONST_ENUM` case，按 enum decl 指针相等 + item name slice 相等判定
-- [ ] 在 `resolve_and_validate_match_common`（`src/semantic/analyzer.c:7260`）增加 enum 模式分支：禁止 `FENG_MATCH_LABEL_RANGE`、禁止 `FENG_MATCH_LABEL_TYPE`、禁止 binding prefix、校验 enum decl 一致、禁止与字面量/值列表/区间标签混用
-- [ ] 在 `test/semantic/test_semantic.c` 新增用例：合法 enum match（单值、值列表、表达式形式）、跨 enum 报错、range 标签报错、不存在的 item 报错（复用 AE0404）、enum item 重复报错（复用 AE1106）、与 int/string/bool 字面量混用报错、binding 前缀报错、跨模块 enum 引用
-- [ ] 全量回归点：`make build/bin/test_semantic && build/bin/test_semantic` 通过；`make test` 全量回归通过
+- [x] 扩展 `MatchConstKind`（`src/semantic/analyzer.c:6554`）新增 `MATCH_CONST_ENUM`
+- [x] 扩展 `MatchConstValue`（`src/semantic/analyzer.c:6560`）新增 `enum_decl` / `enum_item_name` / `enum_item_value` 字段
+- [x] 扩展 `match_target_type_is_allowed`（`src/semantic/analyzer.c:6666`）：追加 `inferred_expr_type_is_enum(context, target_type)` 判定；签名带 `context`，调用点（`src/semantic/analyzer.c:7336`）同步修改；移除无 context 版本 `inferred_expr_type_is_enum_kind`，因 enum target 既可能是 `FENG_INFERRED_EXPR_TYPE_DECL` 也可能是 `FENG_INFERRED_EXPR_TYPE_TYPE_REF`，必须带 context 解析
+- [x] 扩展 `match_const_kind_matches_target`（`src/semantic/analyzer.c:6684`）：新增 `MATCH_CONST_ENUM` case，校验 target 为 enum；签名带 `context`
+- [x] 扩展 `match_label_records_overlap`（`src/semantic/analyzer.c:6717`）：新增 `MATCH_CONST_ENUM` case，按 enum decl 指针相等 + item name slice 相等判定
+- [x] 在 `resolve_and_validate_match_common`（`src/semantic/analyzer.c:7260`）增加 enum 模式分支：禁止 `FENG_MATCH_LABEL_RANGE`、要求标签为 `FENG_MATCH_LABEL_TYPE` 形式的两段 named type ref、禁止 binding prefix、校验 enum decl 一致、禁止与字面量/值列表/区间标签混用
+- [x] 在 `test/semantic/test_semantic.c` 新增用例：合法 enum match（单值、值列表、表达式形式、块尾表达式）、跨 enum 报错、range 标签报错、不存在的 item 报错（复用 AE0404）、enum item 重复报错（复用 AE1106）、与 int/string 字面量混用报错、binding 前缀报错
+- [x] 全量回归点：`make build/bin/test_semantic && build/bin/test_semantic` 通过；`make test` 全量回归通过
 
 ### 8.4 步骤 4：Codegen 文案更新与发码验证
 
 - 前置依赖：步骤 3
-- 范围：codegen 错误信息文案更新 + codegen 发码测试；不修改检查条件与发码逻辑
+- 范围：codegen 错误信息文案更新 + codegen 发码扩展（enum item 引用标签走 `FENG_MATCH_LABEL_TYPE` 路径，原 `FENG_MATCH_LABEL_VALUE` 不覆盖该 AST kind，需要新增 codegen 分支）+ codegen 发码测试
 
-- [ ] 更新 `src/codegen/codegen.c` 中 `CE0211`（2 处：`:17797` 与 `:18175`）文案为「match target must be integer, bool, string, or enum」
-- [ ] 更新 `src/codegen/codegen.c` 中 `CE0270`（1 处：`:21683`）文案为「match target must be integer, bool, string, or enum」
-- [ ] 验证 `cg_emit_match_label_cond`（`src/codegen/codegen.c:17604`）的 `FENG_MATCH_LABEL_VALUE` 分支对 `FENG_EXPR_MEMBER` 的发码路径：复用 `cg_emit_expr` → `cg_emit_member` → `cg_enum_item_c_name`，发出 `(bool)(_mt == EnumName__ItemName)`；不新增 codegen 分支
-- [ ] 在 `test/codegen/test_codegen.c` 新增用例：enum match 语句发码、enum match 表达式发码、跨模块 enum item 引用发码
-- [ ] 全量回归点：`make build/bin/test_codegen && build/bin/test_codegen` 通过；`make test` 全量回归通过
+- [x] 更新 `src/codegen/codegen.c` 中 `CE0211`（2 处：`:17797` 与 `:18175`）文案为「match target must be integer, bool, string, or enum」
+- [x] 更新 `src/codegen/codegen.c` 中 `CE0270`（1 处：`:21683`）文案为「match target must be integer, bool, string, or enum」
+- [x] 在 `cg_emit_match_label_cond`（`src/codegen/codegen.c:17604`）新增 `FENG_MATCH_LABEL_TYPE` 分支：解析两段 named type ref 的 segments[0] 为 enum decl（复用 `cg_find_visible_enum_decl`），查找 segments[1] 为该 enum 的 item，复用 `cg_enum_item_c_name` 生成 `EnumTypedef__ItemName` 常量，发出 `(bool)(_mt == EnumTypedef__ItemName)`
+- [x] 在 `test/codegen/test_codegen.c` 新增用例：enum match 语句发码、enum match 表达式发码
+- [x] 全量回归点：`make build/bin/test_codegen && build/bin/test_codegen` 通过；`make test` 全量回归通过
 
 ### 8.5 步骤 5：cts / fcts 端到端用例
 
 - 前置依赖：步骤 4
 - 范围：端到端测试套件追加 enum match 用例
 
-- [ ] 在 `fcts/fcts_bin/src/test_flow.ff` 或新增专用 `.ff` 文件中追加 enum match 端到端用例：覆盖单值、值列表、表达式形式、跨模块 enum 引用
-- [ ] 视情况在 `cts/` 中追加最小 CLI 直编/运行用例，确认 end-to-end 发码与运行通过
-- [ ] 全量回归点：fcts 套件通过；`make test` 全量回归通过
+- [x] 在 `fcts/fcts_bin/src/test_enum.ff` 中追加 enum match 端到端用例：覆盖单值、值列表、语句形式、显式取值 enum 匹配
+- [x] 全量回归点：fcts 套件通过（237 全部通过）；`make test` 全量回归通过
 
 ### 8.6 步骤 6：最终全量回归与收尾
 
 - 前置依赖：步骤 1–5 全部完成
 - 范围：最终验收与一致性复核
 
-- [ ] 执行 `make test` 全量回归通过
-- [ ] 复核所有新增测试用例与既有测试用例无冲突
-- [ ] 复核 `docs/feng-flow.md` / `docs/feng-enum.md` / `docs/feng-error-codes-*.md` 与代码实现一致
-- [ ] 复核 `dev/feng-match-enum-dev.md` 中实现方案与最终代码一致（行号、函数名、错误码编号如有调整需回写文档）
-- [ ] 准备建议 commit message，由开发者自行提交
+- [x] 执行 `make test` 全量回归通过（233 → 237 全部通过）
+- [x] 复核所有新增测试用例与既有测试用例无冲突
+- [x] 复核 `docs/feng-flow.md` / `docs/feng-enum.md` / `docs/feng-error-codes-*.md` 与代码实现一致
+- [x] 复核 `dev/feng-match-enum-dev.md` 中实现方案与最终代码一致（行号、函数名、错误码编号如有调整需回写文档）
+- [x] 准备建议 commit message，由开发者自行提交
 
 ## 9 风险评估
 

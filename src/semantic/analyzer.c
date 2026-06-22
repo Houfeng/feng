@@ -6554,7 +6554,8 @@ static bool validate_try_catch_clause_result_type(ResolveContext *context,
 typedef enum MatchConstKind {
     MATCH_CONST_INT = 0,
     MATCH_CONST_BOOL,
-    MATCH_CONST_STRING
+    MATCH_CONST_STRING,
+    MATCH_CONST_ENUM
 } MatchConstKind;
 
 typedef struct MatchConstValue {
@@ -6663,10 +6664,12 @@ static bool extract_match_label_literal(ResolveContext *context,
     return false;
 }
 
-static bool match_target_type_is_allowed(InferredExprType target_type) {
+static bool match_target_type_is_allowed(const ResolveContext *context,
+                                         InferredExprType target_type) {
     return inferred_expr_type_is_integer(target_type) ||
            inferred_expr_type_is_bool(target_type) ||
-           inferred_expr_type_is_string(target_type);
+           inferred_expr_type_is_string(target_type) ||
+           inferred_expr_type_is_enum(context, target_type);
 }
 
 static const char *match_const_kind_name(MatchConstKind kind) {
@@ -6677,11 +6680,15 @@ static const char *match_const_kind_name(MatchConstKind kind) {
             return "bool";
         case MATCH_CONST_STRING:
             return "string";
+        case MATCH_CONST_ENUM:
+            return "enum";
     }
     return "unknown";
 }
 
-static bool match_const_kind_matches_target(MatchConstKind kind, InferredExprType target_type) {
+static bool match_const_kind_matches_target(const ResolveContext *context,
+                                            MatchConstKind kind,
+                                            InferredExprType target_type) {
     switch (kind) {
         case MATCH_CONST_INT:
             return inferred_expr_type_is_integer(target_type);
@@ -6689,6 +6696,8 @@ static bool match_const_kind_matches_target(MatchConstKind kind, InferredExprTyp
             return inferred_expr_type_is_bool(target_type);
         case MATCH_CONST_STRING:
             return inferred_expr_type_is_string(target_type);
+        case MATCH_CONST_ENUM:
+            return inferred_expr_type_is_enum(context, target_type);
     }
     return false;
 }
@@ -6707,6 +6716,12 @@ typedef struct MatchLabelRecord {
     bool b;
     /* STRING */
     FengSlice s;
+    /* ENUM: enum item reference label. enum_decl is the resolved enum type decl
+     * (must match the match target's enum decl); enum_item_name is the item name
+     * slice from the label; enum_item_value is the underlying int value. */
+    const FengDecl *enum_decl;
+    FengSlice enum_item_name;
+    int64_t enum_item_value;
 } MatchLabelRecord;
 
 static bool slices_equal(FengSlice a, FengSlice b) {
@@ -6725,6 +6740,11 @@ static bool match_label_records_overlap(const MatchLabelRecord *a, const MatchLa
             return a->b == b->b;
         case MATCH_CONST_STRING:
             return slices_equal(a->s, b->s);
+        case MATCH_CONST_ENUM:
+            /* Overlap requires same enum decl and same item name. Different
+             * enums sharing the same underlying int value do not overlap. */
+            return a->enum_decl == b->enum_decl &&
+                   slices_equal(a->enum_item_name, b->enum_item_name);
     }
     return false;
 }
@@ -6732,7 +6752,7 @@ static bool match_label_records_overlap(const MatchLabelRecord *a, const MatchLa
 static bool validate_match_label_record_target(ResolveContext *context,
                                                InferredExprType target_type,
                                                const MatchLabelRecord *record) {
-    if (!match_const_kind_matches_target(record->kind, target_type)) {
+    if (!match_const_kind_matches_target(context, record->kind, target_type)) {
         char *target_name = format_inferred_expr_type_name(target_type);
         char *message = format_message(
             "match label of type '%s' is not comparable with target type '%s'",
@@ -6809,6 +6829,11 @@ static bool collect_match_branch_label_records(ResolveContext *context,
                     break;
                 case MATCH_CONST_STRING:
                     record.s = value.s;
+                    break;
+                case MATCH_CONST_ENUM:
+                    /* ENUM labels are not produced by the int/bool/string
+                     * collect path; they are handled by the enum match path.
+                     * Unreachable here. */
                     break;
             }
         }
@@ -7257,6 +7282,260 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
     return true;
 }
 
+static bool ensure_enum_decl_info(ResolveContext *context, const FengDecl *enum_decl);
+
+static bool resolve_and_validate_enum_match_common(ResolveContext *context,
+                                                    const FengExpr *target,
+                                                    InferredExprType target_type,
+                                                    const FengDecl *enum_decl,
+                                                    const FengMatchBranch *branches,
+                                                    size_t branch_count,
+                                                    const FengBlock *else_block,
+                                                    FengToken anchor,
+                                                    bool is_expression_form,
+                                                    bool allow_self) {
+    MatchLabelRecord *records = NULL;
+    size_t record_count = 0U;
+    size_t record_capacity = 0U;
+    size_t branch_index;
+    bool ok = true;
+
+    (void)target;
+
+    if (!ensure_enum_decl_info(context, enum_decl)) {
+        free(records);
+        return false;
+    }
+
+    for (branch_index = 0U; branch_index < branch_count && ok; ++branch_index) {
+        const FengMatchBranch *branch = &branches[branch_index];
+        size_t label_index;
+
+        if (branch->has_binding) {
+            ok = resolver_append_error(
+                context,
+                branch->token,
+                "AE1107", format_message("match enum target requires enum item reference label of the form 'EnumName.ItemName'"));
+            break;
+        }
+
+        for (label_index = 0U; label_index < branch->label_count; ++label_index) {
+            const FengMatchLabel *label = &branch->labels[label_index];
+            const FengTypeRef *type_ref;
+            MatchLabelRecord record;
+
+            record.branch_index = branch_index;
+            record.token = label->token;
+            record.kind = MATCH_CONST_ENUM;
+            record.low = 0;
+            record.high = 0;
+            record.b = false;
+            record.s = (FengSlice){NULL, 0U};
+            record.enum_decl = NULL;
+            record.enum_item_name = (FengSlice){NULL, 0U};
+            record.enum_item_value = 0;
+
+            if (label->kind == FENG_MATCH_LABEL_RANGE) {
+                ok = resolver_append_error(
+                    context,
+                    label->token,
+                    "AE1111", format_message("match enum target does not support range labels"));
+                break;
+            }
+
+            if (label->kind != FENG_MATCH_LABEL_TYPE || label->type == NULL) {
+                ok = resolver_append_error(
+                    context,
+                    label->token,
+                    "AE1107", format_message("match enum target requires enum item reference label of the form 'EnumName.ItemName'"));
+                break;
+            }
+
+            type_ref = label->type;
+            if (type_ref->kind != FENG_TYPE_REF_NAMED ||
+                type_ref->as.named.segment_count != 2U ||
+                type_ref->as.named.type_arg_count != 0U) {
+                ok = resolver_append_error(
+                    context,
+                    label->token,
+                    "AE1107", format_message("match enum target requires enum item reference label of the form 'EnumName.ItemName'"));
+                break;
+            }
+
+            {
+                FengSlice enum_name = type_ref->as.named.segments[0];
+                FengSlice item_name = type_ref->as.named.segments[1];
+                const FengDecl *label_enum_decl =
+                    find_visible_type_decl(context->visible_types,
+                                           context->visible_type_count,
+                                           enum_name);
+
+                if (label_enum_decl == NULL || !decl_is_enum_type(label_enum_decl)) {
+                    ok = resolver_append_error(
+                        context,
+                        label->token,
+                        "AE1107", format_message("match enum target requires enum item reference label of the form 'EnumName.ItemName'"));
+                    break;
+                }
+
+                if (label_enum_decl != enum_decl) {
+                    ok = resolver_append_error(
+                        context,
+                        label->token,
+                        "AE1109", format_message("match label references enum '%.*s' but target type is enum '%.*s'",
+                                       (int)label_enum_decl->as.enum_decl.name.length,
+                                       label_enum_decl->as.enum_decl.name.data,
+                                       (int)enum_decl->as.enum_decl.name.length,
+                                       enum_decl->as.enum_decl.name.data));
+                    break;
+                }
+
+                {
+                    const FengEnumItem *item = find_enum_item_decl(enum_decl, item_name);
+
+                    if (item == NULL) {
+                        ok = resolver_append_error(
+                            context,
+                            label->token,
+                            "AE0404", format_message("enum '%.*s' has no item '%.*s'",
+                                           (int)enum_decl->as.enum_decl.name.length,
+                                           enum_decl->as.enum_decl.name.data,
+                                           (int)item_name.length,
+                                           item_name.data));
+                        break;
+                    }
+
+                    {
+                        const FengSemanticEnumItemInfo *item_info =
+                            feng_semantic_find_enum_item_info(context->analysis,
+                                                              enum_decl,
+                                                              item_name);
+
+                        if (item_info == NULL) {
+                            ok = false;
+                            break;
+                        }
+
+                        record.enum_decl = enum_decl;
+                        record.enum_item_name = item_name;
+                        record.enum_item_value = item_info->value;
+                    }
+                }
+            }
+
+            if (record_count == record_capacity) {
+                size_t new_capacity = (record_capacity == 0U) ? 4U : (record_capacity * 2U);
+                MatchLabelRecord *grown =
+                    (MatchLabelRecord *)realloc(records, new_capacity * sizeof(MatchLabelRecord));
+
+                if (grown == NULL) {
+                    ok = false;
+                    break;
+                }
+                records = grown;
+                record_capacity = new_capacity;
+            }
+            records[record_count] = record;
+            record_count += 1U;
+        }
+
+        if (!ok) {
+            break;
+        }
+
+        if (!resolve_match_branch_body(context, branch, allow_self)) {
+            ok = false;
+            break;
+        }
+        if (is_expression_form &&
+            !validate_block_yields_expression(context,
+                                              branch->body,
+                                              branch->token,
+                                              "match expression")) {
+            ok = false;
+            break;
+        }
+    }
+
+    if (ok) {
+        ok = validate_match_label_records(context, target_type, records, record_count);
+    }
+
+    free(records);
+
+    if (!ok) {
+        return false;
+    }
+
+    if (else_block != NULL) {
+        if (!resolve_block(context, else_block, allow_self)) {
+            return false;
+        }
+        if (is_expression_form &&
+            !validate_block_yields_expression(context, else_block, anchor, "match expression else")) {
+            return false;
+        }
+    } else if (is_expression_form) {
+        return resolver_append_error(
+            context,
+            anchor,
+            "AE1108", format_message("match expressions require an else branch"));
+    }
+
+    if (is_expression_form) {
+        InferredExprType expected = block_yield_inferred_type(context, else_block);
+        size_t i;
+
+        if (!inferred_expr_type_is_known(expected)) {
+            for (i = 0U; i < branch_count; ++i) {
+                expected = block_yield_inferred_type(context, branches[i].body);
+                if (inferred_expr_type_is_known(expected)) {
+                    break;
+                }
+            }
+        }
+        if (inferred_expr_type_is_known(expected)) {
+            for (i = 0U; i < branch_count; ++i) {
+                InferredExprType branch_type =
+                    block_yield_inferred_type(context, branches[i].body);
+
+                if (!inferred_expr_type_is_known(branch_type)) {
+                    continue;
+                }
+                if (!inferred_expr_types_equal(context, expected, branch_type)) {
+                    char *expected_name = format_inferred_expr_type_name(expected);
+                    char *branch_name = format_inferred_expr_type_name(branch_type);
+                    bool append_ok = resolver_append_error(
+                        context,
+                        branches[i].token,
+                        "AE1108", format_message("match expression branches must have the same type, got '%s' and '%s'",
+                                       expected_name != NULL ? expected_name : "<unknown>",
+                                       branch_name != NULL ? branch_name : "<unknown>"));
+                    free(expected_name);
+                    free(branch_name);
+                    ok = append_ok;
+                    break;
+                }
+            }
+        }
+    }
+
+    return ok;
+}
+
+static bool resolve_and_validate_enum_match_common(ResolveContext *context,
+                                                    const FengExpr *target,
+                                                    InferredExprType target_type,
+                                                    const FengDecl *enum_decl,
+                                                    const FengMatchBranch *branches,
+                                                    size_t branch_count,
+                                                    const FengBlock *else_block,
+                                                    FengToken anchor,
+                                                    bool is_expression_form,
+                                                    bool allow_self);
+
+static bool ensure_enum_decl_info(ResolveContext *context, const FengDecl *enum_decl);
+
 static bool resolve_and_validate_match_common(ResolveContext *context,
                                               const FengExpr *target,
                                               const FengMatchBranch *branches,
@@ -7333,10 +7612,30 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
                                                            allow_self);
         }
     }
-    if (inferred_expr_type_is_known(target_type) && !match_target_type_is_allowed(target_type)) {
+    if (inferred_expr_type_is_known(target_type) &&
+        inferred_expr_type_is_enum(context, target_type)) {
+        const FengDecl *enum_decl = target_type.type_decl;
+
+        if (enum_decl == NULL && target_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+            enum_decl = resolve_type_ref_decl(context, target_type.type_ref);
+        }
+        if (enum_decl != NULL && decl_is_enum_type(enum_decl)) {
+            return resolve_and_validate_enum_match_common(context,
+                                                          target,
+                                                          target_type,
+                                                          enum_decl,
+                                                          branches,
+                                                          branch_count,
+                                                          else_block,
+                                                          anchor,
+                                                          is_expression_form,
+                                                          allow_self);
+        }
+    }
+    if (inferred_expr_type_is_known(target_type) && !match_target_type_is_allowed(context, target_type)) {
         char *target_name = format_inferred_expr_type_name(target_type);
         char *message = format_message(
-            "match target type '%s' is not allowed; allowed types are integers, 'string' and 'bool'",
+            "match target type '%s' is not allowed; allowed types are integers, 'string', 'bool' and enum",
             target_name != NULL ? target_name : "<unknown>");
 
         free(target_name);

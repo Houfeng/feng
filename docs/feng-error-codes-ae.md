@@ -234,6 +234,9 @@
 | AE1104 | match 区间标签顺序约束 | AE0040 | match range label requires low <= high, got %lld and %lld |
 | AE1105 | match 单值标签字面量约束 | AE0041 | match label must be a literal or a 'let' binding to a literal |
 | AE1106 | match 标签重叠不可达约束 | AE0042 | match label overlaps with an earlier label and is unreachable |
+| AE1107 | match enum 目标标签形式约束 | (新增) | match enum target requires enum item reference label of the form 'EnumName.ItemName' |
+| AE1109 | match enum 目标标签类型一致性约束 | (新增) | match label references enum '%.*s' but target type is enum '%.*s' |
+| AE1111 | match enum 目标区间标签禁用约束 | (新增) | match enum target does not support range labels |
 | AE1108 | match 结果一致性 | AE0048 | match expressions require an else branch |
 | AE1108 | match 结果一致性 | AE0049 | match expression branches must have the same type, got '%s' and '%s' |
 | AE1110 | 分支上下文语义限制 | AE0073 | '%s' cannot appear directly inside an 'if' expression block; |

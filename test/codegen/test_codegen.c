@@ -4654,6 +4654,100 @@ static void test_match_statement_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kEnumMatchStatementCodegenSrc =
+    "module feng.codegen.enummatchstmt;\n"
+    "enum Color { Red, Green, Blue }\n"
+    "func classify(c: Color): i32 {\n"
+    "    var result = 0;\n"
+    "    match c {\n"
+    "        Color.Red { result = 10; }\n"
+    "        Color.Green, Color.Blue { result = 20; }\n"
+    "        else { result = 30; }\n"
+    "    }\n"
+    "    return result;\n"
+    "}\n";
+
+static void test_enum_match_statement_codegen(void) {
+    FengProgram *program = parse_or_die(kEnumMatchStatementCodegenSrc, "enummatchstmt.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (enum match statement): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    /* The enum item reference label lowers to a C constant comparison
+     * against `EnumTypedef__ItemName`. Both branches must reference the
+     * same enum typedef prefix. */
+    ASSERT(strstr(out.c_source, "Color__Red") != NULL);
+    ASSERT(strstr(out.c_source, "Color__Green") != NULL);
+    ASSERT(strstr(out.c_source, "Color__Blue") != NULL);
+    ASSERT(strstr(out.c_source, "(bool)(_mt") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kEnumMatchExprCodegenSrc =
+    "module feng.codegen.enummatchexpr;\n"
+    "enum Color { Red, Green, Blue }\n"
+    "func classify(c: Color): i32 {\n"
+    "    return match c {\n"
+    "        Color.Red { 10; }\n"
+    "        Color.Green { 20; }\n"
+    "        else { 30; }\n"
+    "    };\n"
+    "}\n";
+
+static void test_enum_match_expression_codegen(void) {
+    FengProgram *program = parse_or_die(kEnumMatchExprCodegenSrc, "enummatchexpr.ff");
+    const FengProgram *programs[1] = {program};
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (enum match expression): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "Color__Red") != NULL);
+    ASSERT(strstr(out.c_source, "Color__Green") != NULL);
+    ASSERT(strstr(out.c_source, "(bool)(_mt") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericAggregateReturnSrc =
     "module feng.codegen.gf6;\n"
     "spec Named {\n"
@@ -6116,6 +6210,8 @@ int main(void) {
     test_if_expr_aggregate_result_codegen();
     test_match_expr_aggregate_result_codegen();
     test_match_statement_codegen();
+    test_enum_match_statement_codegen();
+    test_enum_match_expression_codegen();
     test_generic_aggregate_return_codegen();
     test_generic_type_generic_method_codegen();
     test_generic_scalar_instance_direct_call_codegen();

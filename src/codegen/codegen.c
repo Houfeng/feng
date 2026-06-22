@@ -17638,6 +17638,61 @@ static bool cg_emit_match_label_cond(CG *cg, const char *target_tmp,
         er_free(&hi);
         return true;
     }
+    if (lab->kind == FENG_MATCH_LABEL_TYPE) {
+        /* Enum item reference label of the form `EnumName.ItemName` (a
+         * 2-segment named type ref). Semantic validation guarantees the
+         * first segment resolves to an enum decl visible from the current
+         * program, and the second segment is a valid item name in that
+         * enum. We emit the canonical C constant `EnumTypedef__ItemName`
+         * and lower the comparison to `(bool)(_mt == EnumTypedef__ItemName)`,
+         * matching the existing integer-label lowering path. */
+        const FengTypeRef *ref = lab->type;
+        const FengDecl *enum_decl;
+        char *item_c_name;
+        bool found = false;
+        size_t ei;
+
+        if (ref == NULL ||
+            ref->kind != FENG_TYPE_REF_NAMED ||
+            ref->as.named.segment_count != 2U) {
+            return cg_fail(cg, lab->token,
+                "CE0204", "codegen: enum item reference label must be 'EnumName.ItemName'");
+        }
+        enum_decl = cg_find_visible_enum_decl(cg,
+            ref->as.named.segments[0].data,
+            ref->as.named.segments[0].length);
+        if (enum_decl == NULL) {
+            return cg_fail(cg, lab->token,
+                "CE0171", "codegen: enum '%.*s' is not visible from this program",
+                (int)ref->as.named.segments[0].length,
+                ref->as.named.segments[0].data);
+        }
+        if (!cg_ensure_enum_emitted(cg, enum_decl)) return false;
+
+        for (ei = 0U; ei < enum_decl->as.enum_decl.item_count; ++ei) {
+            if (cg_slice_equals(enum_decl->as.enum_decl.items[ei].name,
+                                ref->as.named.segments[1])) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return cg_fail(cg,
+                lab->token,
+                "CE0170", "codegen: enum '%.*s' has no item '%.*s'",
+                (int)enum_decl->as.enum_decl.name.length,
+                enum_decl->as.enum_decl.name.data,
+                (int)ref->as.named.segments[1].length,
+                ref->as.named.segments[1].data);
+        }
+        item_c_name = cg_enum_item_c_name(cg, enum_decl, ref->as.named.segments[1]);
+        if (item_c_name == NULL) {
+            return cg_fail(cg, lab->token, "IE0001", "codegen: out of memory referencing enum item constant");
+        }
+        buf_append_fmt(out, "(bool)(%s == %s)", target_tmp, item_c_name);
+        free(item_c_name);
+        return true;
+    }
     return cg_fail(cg, lab->token, "CE0204", "codegen: unknown match label kind");
 }
 
@@ -17794,7 +17849,7 @@ static bool cg_emit_match_expr_all_throw(CG *cg, const FengExpr *e,
 
         if (tk != CG_TYPE_BOOL && tk != CG_TYPE_STRING && !cgtype_is_integer(tk)) {
             return cg_fail(cg, e->token,
-                "CE0211", "codegen: match target must be integer, bool, or string");
+                "CE0211", "codegen: match target must be integer, bool, string, or enum");
         }
     }
 
@@ -21680,7 +21735,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
         cg->cur_scope = match_scope->parent;
         scope_pop_free(match_scope);
         return cg_fail(cg, stmt->token,
-            "CE0270", "codegen: match target must be integer, bool, or string");
+            "CE0270", "codegen: match target must be integer, bool, string, or enum");
     }
 
     char *target_tmp = cg_materialize_to_local(cg, &target, "_mt");

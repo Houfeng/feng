@@ -12069,6 +12069,364 @@ static void test_match_let_bound_label_accepted(void) {
     feng_program_free(program);
 }
 
+static void test_match_enum_single_label_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "func run(c: Color) {\n"
+        "    match c {\n"
+        "        Color.Red { print(1); }\n"
+        "        Color.Green { print(2); }\n"
+        "        Color.Blue { print(3); }\n"
+        "        else { print(0); }\n"
+        "    }\n"
+        "}\n"
+        "func print(value: int) {}\n";
+    FengProgram *program = parse_program_or_die("match_enum_single.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_match_enum_value_list_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404,\n"
+        "    InternalError = 500\n"
+        "}\n"
+        "func run(status: HttpStatus) {\n"
+        "    match status {\n"
+        "        HttpStatus.Ok { print(200); }\n"
+        "        HttpStatus.NotFound, HttpStatus.InternalError { print(500); }\n"
+        "        else { print(0); }\n"
+        "    }\n"
+        "}\n"
+        "func print(value: int) {}\n";
+    FengProgram *program = parse_program_or_die("match_enum_value_list.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_match_enum_expression_form_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "func describe(c: Color): int {\n"
+        "    return match c {\n"
+        "        Color.Red { 1; }\n"
+        "        Color.Green { 2; }\n"
+        "        else { 3; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_enum_expr.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_match_enum_block_tail_return_value_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "func describe(c: Color): int {\n"
+        "    match c {\n"
+        "        Color.Red { 1; }\n"
+        "        Color.Green { 2; }\n"
+        "        else { 3; }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_enum_block_tail.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_match_enum_cross_enum_reference_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "enum Shape {\n"
+        "    Circle,\n"
+        "    Square\n"
+        "}\n"
+        "func run(c: Color) {\n"
+        "    match c {\n"
+        "        Shape.Circle { print(0); }\n"
+        "        Color.Red { print(1); }\n"
+        "        else { print(2); }\n"
+        "    }\n"
+        "}\n"
+        "func print(value: int) {}\n";
+    FengProgram *program = parse_program_or_die("match_enum_cross.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "match label references enum") != NULL);
+    ASSERT(strstr(errors[0].message, "but target type is enum") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_enum_range_label_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "func run(c: Color) {\n"
+        "    match c {\n"
+        "        0...2 { print(0); }\n"
+        "        Color.Blue { print(2); }\n"
+        "        else { print(3); }\n"
+        "    }\n"
+        "}\n"
+        "func print(value: int) {}\n";
+    FengProgram *program = parse_program_or_die("match_enum_range.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "match enum target does not support range labels") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_enum_nonexistent_item_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "func run(c: Color) {\n"
+        "    match c {\n"
+        "        Color.Purple { print(0); }\n"
+        "        else { print(1); }\n"
+        "    }\n"
+        "}\n"
+        "func print(value: int) {}\n";
+    FengProgram *program = parse_program_or_die("match_enum_missing_item.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "has no item") != NULL);
+    ASSERT(strstr(errors[0].message, "Purple") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_enum_item_duplicate_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "func run(c: Color) {\n"
+        "    match c {\n"
+        "        Color.Red { print(1); }\n"
+        "        Color.Red { print(2); }\n"
+        "        else { print(0); }\n"
+        "    }\n"
+        "}\n"
+        "func print(value: int) {}\n";
+    FengProgram *program = parse_program_or_die("match_enum_dup.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "overlaps with an earlier label") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_enum_mixed_with_int_literal_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "func run(c: Color) {\n"
+        "    match c {\n"
+        "        0 { print(0); }\n"
+        "        Color.Red { print(1); }\n"
+        "        else { print(2); }\n"
+        "    }\n"
+        "}\n"
+        "func print(value: int) {}\n";
+    FengProgram *program = parse_program_or_die("match_enum_mixed_int.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "match enum target requires enum item reference label") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_enum_mixed_with_string_literal_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "func run(c: Color) {\n"
+        "    match c {\n"
+        "        \"red\" { print(0); }\n"
+        "        Color.Red { print(1); }\n"
+        "        else { print(2); }\n"
+        "    }\n"
+        "}\n"
+        "func print(value: int) {}\n";
+    FengProgram *program = parse_program_or_die("match_enum_mixed_str.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "match enum target requires enum item reference label") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_enum_binding_prefix_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "func run(c: Color) {\n"
+        "    match c {\n"
+        "        x: Color { print(0); }\n"
+        "        Color.Red { print(1); }\n"
+        "        else { print(2); }\n"
+        "    }\n"
+        "}\n"
+        "func print(value: int) {}\n";
+    FengProgram *program = parse_program_or_die("match_enum_binding.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "match enum target requires enum item reference label") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_enum_explicit_values_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404,\n"
+        "    InternalError = 500\n"
+        "}\n"
+        "func run(status: HttpStatus): int {\n"
+        "    return match status {\n"
+        "        HttpStatus.Ok { 200; }\n"
+        "        HttpStatus.NotFound { 404; }\n"
+        "        else { 500; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_enum_explicit.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_for_in_loop_array_accepted(void) {
     const char *source =
         "module demo.main;\n"
@@ -16300,6 +16658,18 @@ int main(void) {
     test_match_range_invalid_bounds_rejected();
     test_match_target_type_disallowed();
     test_match_let_bound_label_accepted();
+    test_match_enum_single_label_accepted();
+    test_match_enum_value_list_accepted();
+    test_match_enum_expression_form_accepted();
+    test_match_enum_block_tail_return_value_accepted();
+    test_match_enum_explicit_values_accepted();
+    test_match_enum_cross_enum_reference_rejected();
+    test_match_enum_range_label_rejected();
+    test_match_enum_nonexistent_item_rejected();
+    test_match_enum_item_duplicate_rejected();
+    test_match_enum_mixed_with_int_literal_rejected();
+    test_match_enum_mixed_with_string_literal_rejected();
+    test_match_enum_binding_prefix_rejected();
     test_for_in_loop_array_accepted();
     test_for_in_loop_non_array_rejected();
     test_cyclicity_acyclic_chain_marks_none();

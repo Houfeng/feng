@@ -423,7 +423,7 @@
 | **CE0208** | 聚合描述符缺失 | codegen: missing aggregate descriptor for match expression result |
 | **CE0209** | 聚合描述符缺失 | codegen: missing aggregate default-init rule for match expression result |
 | **CE0210** | 代码生成 | codegen: match branch has no labels |
-| **CE0211** | 模块/程序 | codegen: match target must be integer, bool, or string |
+| **CE0211** | 模块/程序 | codegen: match target must be integer, bool, string, or enum |
 | **CE0212** | 赋值/绑定 | codegen: failed to register unknown catch binding |
 | **CE0213** | 赋值/绑定 | codegen: missing catch binding type |
 | **CE0214** | 赋值/绑定 | codegen: missing scalar catch binding payload field |
@@ -482,7 +482,7 @@
 | **CE0267** | 代码生成 | codegen: too many nested else-if wrappers |
 | **CE0268** | 联合类型处理 | codegen: union-form match label is not a normalized member |
 | **CE0269** | 代码生成 | codegen: match branch has no labels |
-| **CE0270** | 模块/程序 | codegen: match target must be integer, bool, or string |
+| **CE0270** | 模块/程序 | codegen: match target must be integer, bool, string, or enum |
 | **CE0271** | 代码生成 | codegen: while condition must be bool |
 | **CE0272** | 代码生成 | codegen: for condition must be bool |
 | **CE0273** | 代码生成 | codegen: @iterable method not found on source type |

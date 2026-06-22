@@ -1313,6 +1313,56 @@ static void test_match_statement_form(void) {
     feng_program_free(program);
 }
 
+static void test_match_enum_item_reference_labels_parse(void) {
+    /* `EnumName.ItemName` is parsed as a FENG_MATCH_LABEL_TYPE whose type_ref
+     * is a multi-segment named type. The semantic layer distinguishes enum
+     * item references from union member type labels based on the target type
+     * (enum vs union-form spec); the parser does not need to decide. */
+    const char *source =
+        "module demo.main;\n"
+        "func run(c: Color) {\n"
+        "    match c {\n"
+        "        Color.Red { print(\"red\"); }\n"
+        "        Color.Green, Color.Blue { print(\"other\"); }\n"
+        "        else { print(\"unknown\"); }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *match_stmt;
+    const FengMatchBranch *branch0;
+    const FengMatchBranch *branch1;
+
+    ASSERT(feng_parse_source(source, strlen(source), "match_enum.f", &program, &error));
+    ASSERT(program != NULL);
+    match_stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(match_stmt->kind == FENG_STMT_MATCH);
+    ASSERT(match_stmt->as.match_stmt.branch_count == 2U);
+    ASSERT(match_stmt->as.match_stmt.else_block != NULL);
+
+    /* Branch 0: single enum item reference Color.Red */
+    branch0 = &match_stmt->as.match_stmt.branches[0];
+    ASSERT(branch0->label_count == 1U);
+    ASSERT(branch0->labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(branch0->labels[0].type != NULL);
+    ASSERT(branch0->labels[0].type->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(branch0->labels[0].type->as.named.segment_count == 2U);
+    assert_slice_text(branch0->labels[0].type->as.named.segments[0], "Color");
+    assert_slice_text(branch0->labels[0].type->as.named.segments[1], "Red");
+
+    /* Branch 1: value list Color.Green, Color.Blue */
+    branch1 = &match_stmt->as.match_stmt.branches[1];
+    ASSERT(branch1->label_count == 2U);
+    ASSERT(branch1->labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(branch1->labels[0].type->as.named.segment_count == 2U);
+    assert_slice_text(branch1->labels[0].type->as.named.segments[1], "Green");
+    ASSERT(branch1->labels[1].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(branch1->labels[1].type->as.named.segment_count == 2U);
+    assert_slice_text(branch1->labels[1].type->as.named.segments[1], "Blue");
+
+    feng_program_free(program);
+}
+
 static void test_union_spec_declaration_parses(void) {
     const char *source =
         "module demo.union;\n"
@@ -2538,6 +2588,7 @@ int main(void) {
     test_enum_declarations_parse();
     test_match_with_range_and_list_labels();
     test_match_statement_form();
+    test_match_enum_item_reference_labels_parse();
     test_union_spec_declaration_parses();
     test_union_spec_rejects_void_member();
     test_match_type_labels_parse();

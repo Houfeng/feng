@@ -59,5 +59,48 @@ open func test_enum() {
       let code = (int)HttpStatus.ServerError;
       assert(code == 500, "enum to int explicit cast");
     });
+
+    test("enum match - single value", () {
+      let d = Direction.East;
+      let label = match d {
+        Direction.North { "N" }
+        Direction.East { "E" }
+        Direction.South { "S" }
+        Direction.West { "W" }
+        else { "?" }
+      };
+      assert(label == "E", "enum match - single value");
+    });
+
+    test("enum match - value list", () {
+      let s = HttpStatus.NotFound;
+      let kind = match s {
+        HttpStatus.Ok { "ok" }
+        HttpStatus.NotFound, HttpStatus.ServerError { "error" }
+        else { "?" }
+      };
+      assert(kind == "error", "enum match - value list");
+    });
+
+    test("enum match - statement form", () {
+      let d = Direction.South;
+      var label = "unknown";
+      match d {
+        Direction.North { label = "N"; }
+        Direction.South { label = "S"; }
+        else { label = "other"; }
+      }
+      assert(label == "S", "enum match - statement form");
+    });
+
+    test("enum match - explicit values", () {
+      let s = HttpStatus.Ok;
+      let code = match s {
+        HttpStatus.Ok { 200 }
+        HttpStatus.NotFound { 404 }
+        else { 500 }
+      };
+      assert(code == 200, "enum match - explicit values");
+    });
   });
 }

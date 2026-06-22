@@ -87,6 +87,7 @@ enum Bad {
 - 不允许从 `int` 显式转换到 `enum`，包括整数字面量、常量表达式与一般运行时 `int` 值的 cast；也不允许 `enum` 与 `int` 之间的隐式转换。
 - 仅允许同一 `enum` 类型之间直接做 `==` / `!=` 比较；若需要数值比较或算术运算，必须先显式转换为 `int`。
 - `enum` 可以作为 `fit` 的目标类型；相关适配与扩展规则统一遵循 [Feng 语言 `fit` 规范](./feng-fit.md)。
+- `enum` 可以作为 `match` 常量相等性匹配的目标类型；分支标签必须为该 `enum` 的 item 引用，具体规则与限制见 [Feng 语言流程控制规范](./feng-flow.md) §3.1。
 - `enum` 在 C ABI 边界上视为与 `int` 相同的 ABI 标量；具体 ABI 资格与传递规则统一遵循 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
 
 ## 4 规则
@@ -139,4 +140,5 @@ enum Bad {
 - [Feng 语言模块规范](./feng-module.md)：模块级声明、公开可见性与导入规则。
 - [Feng 语言变量绑定与作用域规范](./feng-binding.md)：无初始值绑定的默认值规则。
 - [Feng 语言表达式与运算规范](./feng-expression.md)：显式转换与比较运算通用规则。
+- [Feng 语言流程控制规范](./feng-flow.md)：`match` 模式匹配与 `enum` 作为匹配目标的规则。
 - [Feng 语言 ABI 互操作规范](./feng-interop.md)：ABI 边界总规则。
