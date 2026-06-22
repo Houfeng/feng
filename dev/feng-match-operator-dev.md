@@ -106,12 +106,13 @@ if x match UserType && y match OtherType { ... }
 
 ### 3.6 运算优先级与结合性
 
-- `match` 优先级**低于算术运算**（乘 `/` 除 `%`、加 `-` 等），**与关系运算一致**（即 `<` / `<=` / `>` / `>=` / `==` / `!=` 同级）。
-- 同级运算**左结合**，不强制加括号；同级相邻混用按从左到右顺序解析，语义合法性由类型检查器捕获：
-  - `x match T == y`   → `(x match T) == y`   → 语义上 `bool == y`，若 `y` 非 `bool` 则类型检查报错。
+- `match` 优先级**低于算术运算**（乘 `/` 除 `%`、加 `-` 等），**与关系运算一致**（即与 `<` / `<=` / `>` / `>=` 同级），**高于相等运算**（`==` / `!=`）。参考 C# `is` 运算符归类为 relational and type-testing，与本设计一致。
+- 同级运算（match 与 `<` / `<=` / `>` / `>=`）**左结合**，不强制加括号；同级相邻混用按从左到右顺序解析，语义合法性由类型检查器捕获：
   - `x match T < y`    → `(x match T) < y`    → 语义上 `bool < y`，类型检查报错。
   - `a < b match T`    → `(a < b) match T`    → 语义上对 `bool` 做 pattern 匹配，类型检查报错（除非 `T` 是 `true` / `false` 值 pattern）。
-  - 如需改变顺序，使用括号：`(x match T) == y` 与 `x match (T == y)`（后者 `T == y` 不是合法 pattern，会报语法错误）。
+- match **高于** equality（`==` / `!=`）：
+  - `x match T == y`   → `(x match T) == y`   → 语义上 `bool == y`，若 `y` 非 `bool` 则类型检查报错。
+- 如需改变顺序，使用括号：`(x match T) == y` 与 `x match (T == y)`（后者 `T == y` 不是合法 pattern，会报语法错误）。
 - `match` 优先级**高于**逻辑 `&&` / `||`：`a match T && b` 解析为 `(a match T) && b`，`a match T || b match U` 解析为 `(a match T) || (b match U)`。
 - `match` 优先级**高于**赋值 `=`：`let r = x match T` 解析为 `let r = (x match T)`。
 - 链式 `x match a match b` 按左结合解析为 `(x match a) match b`：`x match a` 返回 `bool`，`bool` 是常量相等性匹配的合法目标类型（见 [docs/feng-flow.md](../docs/feng-flow.md) §3.1），因此 `(x match a) match true` / `match false` 语义合法（虽然通常冗余，等价于 `x match a` 或 `!(x match a)`）；若 `b` 是类型 pattern 或区间 pattern，则由类型检查器报错（target 类型不匹配）。parser 不对链式做特殊检查，统一走左结合路径。
@@ -145,9 +146,8 @@ typedef struct FengExprMatchOp {
 
 ### 4.3 Parser
 
-- 在 `parse_comparison` 与 `parse_shift` 之间新增一层 `parse_match_op`（即 `match` 优先级与关系运算同级、低于算术与移位），识别 `FENG_TOKEN_KW_MATCH` 作为 infix 运算符。
-- 解析 pattern 时复用 `parse_match_label_atom`（单 label），不允许逗号分隔的多 label 列表。
-- 解析可选 binding 时复用 `parse_match_branch_binding_prefix`（`[let|var] name :`），限制为单 label + 单 binding。
+- 在 `parse_comparison` 内识别 `FENG_TOKEN_KW_MATCH` 作为同级 infix 运算符（与 `<` / `<=` / `>` / `>=` 共用同一左结合循环，不新增独立 parser 层）；match 优先级与关系运算同级、高于 equality、低于算术与移位。
+- 解析顺序：先调用 `parse_match_branch_binding_prefix`（`[let|var] name :` 或裸 `name :`）解析可选 binding 前缀，再调用 `parse_match_label_atom` 解析单 label pattern（不允许逗号分隔的多 label 列表）；binding 与 label 各至多一个。
 - 解析后构造 `FENG_EXPR_MATCH_OP` AST 节点。
 - 链式 `x match a match b` 不做特殊检查，按左结合自然解析为 `(x match a) match b`，语义合法性由类型检查器捕获（与同级关系运算符相邻混用处理方式一致）。
 - `parse_primary` 中 `FENG_TOKEN_KW_MATCH` 仍优先识别为 match 语句/表达式起始；infix 识别发生在二元运算层，位置不重叠。
@@ -317,7 +317,7 @@ typedef struct FengExprMatchOp {
 - 范围：parser 新增 infix match 识别与 pattern 解析；AST 新增 `FENG_EXPR_MATCH_OP` 节点；dump 同步输出
 
 - [ ] 在 `src/parser/parser.h` 新增 `FengExprMatchOp` 结构与 `FENG_EXPR_MATCH_OP` 枚举
-- [ ] 在 `src/parser/parser.c` 新增 `parse_match_op` 层（位于 `parse_comparison` 与 `parse_shift` 之间，与关系运算同级、低于算术与移位），识别 `FENG_TOKEN_KW_MATCH` 作为 infix 运算符；链式与同级混用统一走左结合路径，不做出口特殊检查
+- [ ] 在 `src/parser/parser.c` 的 `parse_comparison` 内识别 `FENG_TOKEN_KW_MATCH` 作为同级 infix 运算符（与 `<` / `<=` / `>` / `>=` 共用同一左结合循环，不新增独立 parser 层）；链式与同级混用统一走左结合路径，不做出口特殊检查
 - [ ] 复用 `parse_match_label_atom` 解析 pattern（限制为单 label）
 - [ ] 复用 `parse_match_branch_binding_prefix` 解析可选 binding
 - [ ] 构造 `FENG_EXPR_MATCH_OP` AST 节点；同步 `free_expr` / `copy_expr` 路径
@@ -389,7 +389,7 @@ typedef struct FengExprMatchOp {
 | `match` 关键字作为 infix 运算符与既有 match 语句/表达式起始关键字冲突 | 中 | parser 在 `parse_primary` 中优先识别 match 语句/表达式起始；infix 识别发生在二元运算层，位置不重叠 |
 | 值列表 pattern 与逗号表达式歧义 | 中 | 默认禁止值列表作为 infix pattern，仅允许单值/单区间/单 type；多值匹配请使用块形式 |
 | 绑定可见性流分析实现复杂度 | 中 | 由短路语义统一决定：沿逻辑与链传播「已绑定」状态，遇逻辑或、逻辑非、函数边界停止；`if` / `while` 体可见性要求 match 命中是条件为真的必要条件；语句后不可见。复用既有 match branch binding 的作用域登记路径 |
-| `match` 运算符优先级与既有运算符交互 | 中 | 与关系运算同级、低于算术；同级相邻混用与链式均走既有左结合路径，语义合法性由类型检查器捕获，parser 不做出口特殊检查 |
+| `match` 运算符优先级与既有运算符交互 | 中 | 与关系运算 `<` / `<=` / `>` / `>=` 同级、高于 equality、低于算术；同级相邻混用与链式均走既有左结合路径，语义合法性由类型检查器捕获，parser 不做出口特殊检查 |
 | `if` / `while` 条件位置的 binding 作用域处理与既有 match 表达式分支 binding 不一致 | 低 | 复用既有 union match binding 的作用域处理路径 |
 | 既有 `match_*` 测试受影响 | 低 | 仅新增 infix 形式，既有块形式不变 |
 | `match` 关键字与用户代码标识符冲突 | 低 | `match` 已是关键字，行为与其他关键字一致；既有代码已不能以 `match` 为标识符 |
