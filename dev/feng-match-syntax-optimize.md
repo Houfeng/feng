@@ -232,6 +232,7 @@ C 代码各文件改动规模：
 | `feng-error-codes-ce.md` | CE1045、CE1046 描述中 "if-match" 改为 "match"（第 438、439 行） |
 | `feng-error-codes.md` | CE0269、CE0270 描述中 "if-match" 改为 "match"（第 484、485 行）；CE0196 描述保留 "if/match" 不动（第 411 行） |
 | `feng-error-codes-ae.md` | 第 11 节标题 "if/match 分支完备性与标签约束" 改为 "match 分支完备性与标签约束"（第 26 行） |
+| `feng-generics-draft.md` | `if 目标值 { ... }` 引用改为 `match 目标值 { ... }`（第 282、283 行） |
 
 ### 6.2 开发文档（dev/）
 
@@ -273,6 +274,10 @@ C 代码各文件改动规模：
 | `union_form.ff` | 3 处 `if value { ... }` union member 匹配 |
 | `union_form_generic.ff` | 1 处 `if value { ... }` union member 匹配 |
 | `union_tuple_cleanup.ff` | 1 处 `if value { ... }` union member 匹配 |
+| `test/parser/test_parser.c` | 内嵌 Feng 源码字符串中 5 处 match 语句/表达式（第 125、1257、1296、1359、1395、1452 行） |
+| `test/codegen/test_codegen.c` | 内嵌 Feng 源码字符串中 6 处 match 语句/表达式（第 4565、4613、4619、5706、5722、5730、5799、5860、5917 行） |
+| `test/semantic/test_semantic.c` | 内嵌 Feng 源码字符串中多处 match 语句/表达式（含 union member 匹配、值匹配、区间匹配测试用例） |
+| `test/lexer/test_lexer.c` | `feng_keyword_count() == 28U` 断言更新为 `29U`（第 46 行） |
 
 ### 7.3 不需要修改的测试文件
 
@@ -292,12 +297,22 @@ C 代码各文件改动规模：
 | 文件 | 变更内容 |
 | ---- | -------- |
 | `std/src/basic/Option.ff` | 文档注释中 `if value { ... }` 改为 `match value { ... }`（2 处） |
+| `std/src/async/Future.ff` | `return if self.owner { ... }` 改为 `return match self.owner { ... }`（第 32 行） |
+| `std/src/json/Json.ff` | 12 处 `return if value { ... }` 改为 `return match value { ... }`（第 29、41、53、67、79、91、103、115、129、141、153、215 行） |
+| `std/src/test/TestContext.ff` | 3 处 `if parentOutput/selfOutput { ... }` 改为 `match ... { ... }`（第 134、152、155 行） |
 
 ### 8.2 示例
 
 | 文件 | 变更内容 |
 | ---- | -------- |
 | `examples/std_demo/src/debug.ff` | `let y = if message { ... }` 改为 `let y = match message { ... }` |
+
+### 8.3 fcts 测试套件
+
+| 文件 | 变更内容 |
+| ---- | -------- |
+| `fcts/fcts_bin/src/test_flow.ff` | 多处 match 语义 `if` 改为 `match`：值匹配（single value、value list、integer range、mixed range、string）的 `if age/code/score/val/word/word2 {` → `match ... {`；`flow_match_pick` 中 `return if tag {` → `return match tag {` |
+| `fcts/fcts_bin/src/test_union.ff` | 多处 union member 匹配 `if` 改为 `match`：`print_display_union` 的 `return if value {`、`test_union` 各子用例中 `if v1/v2 {`、`if v3/v4/v5/v6 {`、`if default_choice {`、`if ok_val/err_val {` 等 |
 
 ## 9 实施步骤
 
@@ -331,7 +346,7 @@ C 代码各文件改动规模：
 
 ## 建议 commit message
 
-```
+```text
 feat: introduce dedicated match keyword for pattern matching
 
 Replace the overloaded `if` keyword for pattern matching with a

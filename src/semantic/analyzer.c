@@ -6367,7 +6367,7 @@ static bool validate_block_yields_expression(ResolveContext *context,
     }
     /* A branch block that terminates with 'throw' never yields a value, but
      * it does terminate the control-flow path so it is a legal ending for
-     * if/if-match expression branches (the same rule already applies to
+     * if/match expression branches (the same rule already applies to
      * try-expression catch clauses). */
     if (block_terminates_with_throw(block)) {
         return true;

@@ -164,7 +164,7 @@ spec Choice: int | string {}
 - union-form member 可引用基础类型、用户定义类型与其他 `spec`; `void` 不允许作为 union-form member。
 - union-form member 在语义层按声明顺序拍平嵌套 union-form、去重并形成归一化 member 集合; union-form 默认零值取归一化后的第一个 member 的默认零值。
 - union-form 值在进入 union-form 的赋值、初始化、传参与返回等站点确定 active member; 若源静态类型与某个归一化 member 精确一致,必须优先按该 member 进入。
-- union-form 未收窄前不允许直接做成员访问、方法调用或 `==` / `!=` 比较; 收窄通过 `if 目标值 { ... }` 的 union member 类型匹配完成,其详细规则见 [feng-union-type.md](./feng-union-type.md)。
+- union-form 未收窄前不允许直接做成员访问、方法调用或 `==` / `!=` 比较; 收窄通过 `match 目标值 { ... }` 的 union member 类型匹配完成,其详细规则见 [feng-union-type.md](./feng-union-type.md)。
 - 具体 `type` 可在声明头上直接写出其满足的一个或多个 object-form `spec`; 同一关系也可通过可见的 `fit A: SpecB` 或 `fit A: SpecB, SpecC` 显式建立。
 - callable-form `spec` 只描述可调用签名形状,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标。
 - callable-form `spec` 的隐式匹配采用两段规则: 未绑定到 `spec` 的顶层函数、方法值与 lambda 进入 callable-form `spec` 位置时继续按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”做结构匹配; 一旦值的静态类型已经是某个 callable-form `spec`,后续赋值、参数传递与返回匹配只允许同一 callable-form `spec` 声明。
@@ -248,7 +248,7 @@ spec Choice: int | string {}
 - 编译器必须把实例化后签名完全一致的 callable-form `spec` 显式转换 lower 为零转发的目标视角重解释; 不得为该转换生成新的 wrapper/closure,也不得让转换后的每次调用比转换前多一层 invoke forwarding。
 - 编译器必须在语义分析阶段根据当前可见契约关系判定对象形状 `spec` 的显式转换是否属于允许的向上转换,并拒绝父到子、无关 `spec` 或依赖运行时对象具体类型的转换。
 - 编译器必须在 union-form 进入站点按精确 member 优先、可证向上转换候选与歧义诊断规则确定 active member。
-- 编译器必须在 union-form `if 目标值 { ... }` 中只接受 union member 类型标签与 `else`,拒绝字面量标签和区间标签。
+- 编译器必须在 union-form `match 目标值 { ... }` 中只接受 union member 类型标签与 `else`,拒绝字面量标签和区间标签。
 - 编译器必须按 [Feng 语言 ABI 互操作规范](./feng-interop.md) 校验可调用形状的 `@abi spec` 的参数类型与返回类型是否满足 ABI 函数签名兼容规则。
 - 编译器必须在语义分析阶段对以上违规报错并阻止通过。
 

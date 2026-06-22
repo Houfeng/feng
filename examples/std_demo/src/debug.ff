@@ -11,7 +11,7 @@ type User {
 
   func commit(message: i32): int {
     let x = if message > 0 { 1 } else { 2 };
-    let y = if message {
+    let y = match message {
       1 { "ok" }
       2 { "error" }
       else { "unknown" }

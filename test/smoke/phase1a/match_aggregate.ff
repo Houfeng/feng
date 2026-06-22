@@ -16,7 +16,7 @@ type User: Named {
 }
 
 func pick(tag: i32, left: Named, right: Named): Named {
-    return if tag {
+    return match tag {
         0 {
             left;
         }

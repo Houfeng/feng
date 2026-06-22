@@ -157,10 +157,10 @@
 |----------|------|-------------|
 | SE1101 | if 条件后必须使用块 | if expressions must use '{...}' after the condition |
 | SE1102 | if 表达式需要 else 分支 | if expressions require an 'else' branch |
-| SE1103 | if-match 表达式需要 else 分支 | if-match expressions require an 'else' branch |
+| SE1103 | match 表达式需要 else 分支 | match expressions require an 'else' branch |
 | SE1104 | match 不能有多个 else 分支 | match expression cannot declare more than one 'else' branch |
 | SE1105 | match 标签必须是字面量或命名常量 | match label must be an integer, string, bool literal or named constant |
-| SE1106 | 分支字符缺失 | expected '{' after if condition or match target、expected '}' to close if block/match body/the true branch of if expression |
+| SE1106 | 分支字符缺失 | expected '{' after if condition、expected '}' to close if block/match body/the true branch of if expression |
 | SE1107 | if 表达式结构不完整 | expected expression term 中 if-expression 部分 |
 
 ## SE12XX - 循环段 (for/while)

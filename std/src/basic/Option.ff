@@ -10,7 +10,7 @@ open module std;
  * ```
  * spec OptionType: None | Type;
  * let value: OptionType = ...;
- * if value {
+ * match value {
  *   Type { ... }
  *   None { ... }
  * }
@@ -29,7 +29,7 @@ open let none: None = ();
  * Example:
  * ```
  * let value: Option<Type> = ...;
- * if value {
+ * match value {
  *   Type { ... }
  *   None { ... }
  * }

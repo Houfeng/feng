@@ -4,7 +4,7 @@ module feng.smoke;
 extern func puts(msg: string*): int;
 
 func translate(word: string): string {
-    let r = if word {
+    let r = match word {
         "hi", "hello" { "greeting"; }
         "bye", "goodbye" { "farewell"; }
         else { "unknown"; }

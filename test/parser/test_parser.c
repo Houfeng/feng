@@ -122,7 +122,7 @@ static void test_statements_and_expressions(void) {
         "module demo.main;\n"
         "func main(args: string[]) {\n"
         "    let label = if age >= 18 { \"adult\"; } else { \"minor\"; };\n"
-        "    let stage = if age { 0 { \"婴儿\"; } 18 { \"成年\"; } else { \"青年\"; } };\n"
+        "    let stage = match age { 0 { \"婴儿\"; } 18 { \"成年\"; } else { \"青年\"; } };\n"
         "    for var i = 0; i < 3; i = i + 1 {\n"
         "        if i == 1 {\n"
         "            continue;\n"
@@ -1254,7 +1254,7 @@ static void test_match_with_range_and_list_labels(void) {
     const char *source =
         "module demo.main;\n"
         "func run(age: int): string {\n"
-        "    return if age {\n"
+        "    return match age {\n"
         "        0 { \"婴儿\"; }\n"
         "        1...17 { \"未成年\"; }\n"
         "        18, 20, 22 { \"青年\"; }\n"
@@ -1293,7 +1293,7 @@ static void test_match_statement_form(void) {
     const char *source =
         "module demo.main;\n"
         "func run(age: int) {\n"
-        "    if age {\n"
+        "    match age {\n"
         "        0 { print(\"zero\"); }\n"
         "        1...10 { print(\"small\"); }\n"
         "        else { print(\"other\"); }\n"
@@ -1356,7 +1356,7 @@ static void test_match_type_labels_parse(void) {
     const char *source =
         "module demo.union;\n"
         "func run(value: Value) {\n"
-        "    if value {\n"
+        "    match value {\n"
         "        int { print(1); }\n"
         "        UserType, pkg.Named { print(2); }\n"
         "        Box<int>[] { print(3); }\n"
@@ -1392,7 +1392,7 @@ static void test_match_binding_prefix_parse(void) {
     const char *source =
         "module demo.union;\n"
         "func run(value: Value) {\n"
-        "    if value {\n"
+        "    match value {\n"
         "        x: int { print(x); }\n"
         "        let s: string { print(s); }\n"
         "        var b: bool { b = true; }\n"
@@ -1449,7 +1449,7 @@ static void test_match_binding_prefix_expression_form(void) {
     const char *source =
         "module demo.union;\n"
         "func run(value: Value): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        v: int { v + 1; }\n"
         "        string { 0; }\n"
         "        else { -1; }\n"

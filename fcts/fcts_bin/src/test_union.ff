@@ -42,7 +42,7 @@ func make_display_named(name: string): DisplayUnion {
 }
 
 func print_display_union(value: DisplayUnion): string {
-  return if value {
+  return match value {
     v: UnionGreetable { v.ugreet() }
     v: string { v }
     else { "else" }
@@ -54,7 +54,7 @@ open func test_union() {
   describe("union", () {
     test("union entry with int", () {
       let v1: IntOrString = 42;
-      if v1 {
+      match v1 {
         v: int {
           assert(v == 42, "union entry with int");
         }
@@ -64,7 +64,7 @@ open func test_union() {
 
     test("union entry with string", () {
       let v2: IntOrString = "hello";
-      if v2 {
+      match v2 {
         v: string {
           assert(v == "hello", "union entry with string");
         }
@@ -74,7 +74,7 @@ open func test_union() {
 
     test("union match narrowing", () {
       let v3: IntOrString = 100;
-      let result = if v3 {
+      let result = match v3 {
         int { "is int" }
         string { "is string" }
         else { "else" }
@@ -84,7 +84,7 @@ open func test_union() {
 
     test("union match string branch", () {
       let v4: IntOrString = "world";
-      let result2 = if v4 {
+      let result2 = match v4 {
         int { "int" }
         string { "string" }
         else { "else" }
@@ -94,7 +94,7 @@ open func test_union() {
 
     test("union with custom type", () {
       let v5: TagOrInt = UnionTag { tag: "x" };
-      let result3 = if v5 {
+      let result3 = match v5 {
         UnionTag { "tag" }
         int { "int" }
         else { "else" }
@@ -104,7 +104,7 @@ open func test_union() {
 
     test("union with custom type (int branch)", () {
       let v6: TagOrInt = 99;
-      let result4 = if v6 {
+      let result4 = match v6 {
         UnionTag { "tag" }
         int { "int" }
         else { "else" }
@@ -114,7 +114,7 @@ open func test_union() {
 
     test("union default zero value", () {
       let default_choice: IntOrString;
-      let default_result = if default_choice {
+      let default_result = match default_choice {
         int { "int" }
         string { "string" }
         else { "else" }
@@ -134,7 +134,7 @@ open func test_union() {
 
     test("generic union (value branch)", () {
       let ok_val: UnionResult < int > = 42;
-      let ok_result = if ok_val {
+      let ok_result = match ok_val {
         int { "int-ok" }
         UnionError { "error" }
         else { "else" }
@@ -144,7 +144,7 @@ open func test_union() {
 
     test("generic union (error branch)", () {
       let err_val: UnionResult < int > = UnionError { code: 7 };
-      let err_result = if err_val {
+      let err_result = match err_val {
         int { "int" }
         UnionError { "error-ok" }
         else { "else" }

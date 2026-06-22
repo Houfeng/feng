@@ -2528,15 +2528,15 @@ static void test_if_expr_trailing_if_else_chain_accepted(void) {
     feng_program_free(program);
 }
 
-static void test_if_expr_trailing_if_match_accepted(void) {
-    /* An if-match at the end of a branch should be treated as a
+static void test_if_expr_trailing_match_accepted(void) {
+    /* A match at the end of a branch should be treated as a
      * match expression. */
     const char *source =
         "module demo.main;\n"
         "func run() {\n"
         "    let v: i32 = 1;\n"
         "    let x: i32 = if true {\n"
-        "        if v {\n"
+        "        match v {\n"
         "            1 { 10 }\n"
         "            2 { 20 }\n"
         "            else { 30 }\n"
@@ -2545,7 +2545,7 @@ static void test_if_expr_trailing_if_match_accepted(void) {
         "        0\n"
         "    };\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("trailing_if_match_ok.f", source);
+    FengProgram *program = parse_program_or_die("trailing_match_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -2642,14 +2642,14 @@ static void test_if_expr_trailing_if_without_else_rejected(void) {
     feng_program_free(program);
 }
 
-static void test_if_match_trailing_if_else_in_branch_accepted(void) {
-    /* An if/else at the end of an if-match branch should be converted
+static void test_match_trailing_if_else_in_branch_accepted(void) {
+    /* An if/else at the end of a match branch should be converted
      * to an if-expression so the branch can yield a value. */
     const char *source =
         "module demo.main;\n"
         "func run() {\n"
         "    let v: i32 = 1;\n"
-        "    let x: i32 = if v {\n"
+        "    let x: i32 = match v {\n"
         "        1 {\n"
         "            if true { 10 } else { 20 }\n"
         "        }\n"
@@ -2671,14 +2671,14 @@ static void test_if_match_trailing_if_else_in_branch_accepted(void) {
     feng_program_free(program);
 }
 
-static void test_if_match_trailing_if_else_in_else_branch_accepted(void) {
-    /* An if/else at the end of an if-match else branch should also be
+static void test_match_trailing_if_else_in_else_branch_accepted(void) {
+    /* An if/else at the end of a match else branch should also be
      * converted to an if-expression. */
     const char *source =
         "module demo.main;\n"
         "func run() {\n"
         "    let v: i32 = 1;\n"
-        "    let x: i32 = if v {\n"
+        "    let x: i32 = match v {\n"
         "        1 { 10 }\n"
         "        else {\n"
         "            if true { 20 } else { 30 }\n"
@@ -2755,14 +2755,14 @@ static void test_try_stmt_trailing_if_in_catch_not_converted(void) {
     feng_program_free(program);
 }
 
-static void test_if_match_stmt_trailing_if_in_branch_not_converted(void) {
-    /* An if-match STATEMENT (not expression) with a trailing if/return
+static void test_match_stmt_trailing_if_in_branch_not_converted(void) {
+    /* A match STATEMENT (not expression) with a trailing if/return
      * in a branch body must NOT be converted to if-expression. */
     const char *source =
         "module demo.main;\n"
         "func run(): i32 {\n"
         "    let v: i32 = 1;\n"
-        "    if v {\n"
+        "    match v {\n"
         "        1 {\n"
         "            if true { return 10; } else { return 20; }\n"
         "        }\n"
@@ -2770,7 +2770,7 @@ static void test_if_match_stmt_trailing_if_in_branch_not_converted(void) {
         "    }\n"
         "    return 0;\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("if_match_stmt_trailing_if_ok.f", source);
+    FengProgram *program = parse_program_or_die("match_stmt_trailing_if_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -3432,7 +3432,7 @@ static void test_match_expression_rejects_non_constant_label(void) {
         "module demo.main;\n"
         "func run(value: int, other: int): int {\n"
         "    let pivot = other + 1;\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        pivot { 1; }\n"
         "        else { 0; }\n"
         "    };\n"
@@ -3457,7 +3457,7 @@ static void test_match_expression_rejects_incomparable_label_type(void) {
     const char *source =
         "module demo.main;\n"
         "func run(value: int): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        \"one\" { 1; }\n"
         "        else { 0; }\n"
         "    };\n"
@@ -3482,7 +3482,7 @@ static void test_match_expression_rejects_inconsistent_result_types(void) {
     const char *source =
         "module demo.main;\n"
         "func run(value: int): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        1 { 1; }\n"
         "        else { \"zero\"; }\n"
         "    };\n"
@@ -11957,7 +11957,7 @@ static void test_match_range_label_overlap_rejected(void) {
     const char *source =
         "module demo.main;\n"
         "func run(value: int): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        1...10 { 1; }\n"
         "        5...15 { 2; }\n"
         "        else { 0; }\n"
@@ -11981,7 +11981,7 @@ static void test_match_single_label_overlap_rejected(void) {
     const char *source =
         "module demo.main;\n"
         "func run(value: int): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        1, 2, 3 { 1; }\n"
         "        2 { 2; }\n"
         "        else { 0; }\n"
@@ -12005,7 +12005,7 @@ static void test_match_range_invalid_bounds_rejected(void) {
     const char *source =
         "module demo.main;\n"
         "func run(value: int): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        10...1 { 1; }\n"
         "        else { 0; }\n"
         "    };\n"
@@ -12027,7 +12027,7 @@ static void test_match_target_type_disallowed(void) {
     const char *source =
         "module demo.main;\n"
         "func run(value: f64): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        1 { 1; }\n"
         "        else { 0; }\n"
         "    };\n"
@@ -12051,7 +12051,7 @@ static void test_match_let_bound_label_accepted(void) {
         "module demo.main;\n"
         "func run(value: int): int {\n"
         "    let one = 1;\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        one { 100; }\n"
         "        else { 0; }\n"
         "    };\n"
@@ -15595,56 +15595,56 @@ static void test_union_entry_explicit_cast_selects_spec_member(void) {
     assert_single_source_semantic_ok("union_explicit_spec_member_cast.f", source);
 }
 
-static void test_union_if_match_accepts_type_labels(void) {
+static void test_union_match_accepts_type_labels(void) {
     const char *source =
         "module demo.main;\n"
         "spec Value: int | string;\n"
         "func run(value: Value): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        int { 1; }\n"
         "        string { 2; }\n"
         "        else { 3; }\n"
         "    };\n"
         "}\n";
 
-    assert_single_source_semantic_ok("union_if_match_type_labels.f", source);
+    assert_single_source_semantic_ok("union_match_type_labels.f", source);
 }
 
-static void test_union_if_match_rejects_literal_label(void) {
+static void test_union_match_rejects_literal_label(void) {
     const char *source =
         "module demo.main;\n"
         "spec Value: int | string;\n"
         "func run(value: Value): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        1 { 1; }\n"
         "        else { 0; }\n"
         "    };\n"
         "}\n";
 
     assert_single_source_semantic_error_contains(
-        "union_if_match_literal_label.f",
+        "union_match_literal_label.f",
         source,
         "union-form match labels must be union member types or 'else'");
 }
 
-static void test_union_if_match_rejects_range_label(void) {
+static void test_union_match_rejects_range_label(void) {
     const char *source =
         "module demo.main;\n"
         "spec Value: int | string;\n"
         "func run(value: Value): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        1...2 { 1; }\n"
         "        else { 0; }\n"
         "    };\n"
         "}\n";
 
     assert_single_source_semantic_error_contains(
-        "union_if_match_range_label.f",
+        "union_match_range_label.f",
         source,
         "union-form match labels must be union member types or 'else'");
 }
 
-static void test_union_if_match_narrows_object_spec_member(void) {
+static void test_union_match_narrows_object_spec_member(void) {
     const char *source =
         "module demo.main;\n"
         "spec Named {\n"
@@ -15655,13 +15655,13 @@ static void test_union_if_match_narrows_object_spec_member(void) {
         "}\n"
         "spec Value: Named | int;\n"
         "func run(value: Value): string {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        v: Named { v.name; }\n"
         "        else { \"\"; }\n"
         "    };\n"
         "}\n";
 
-    assert_single_source_semantic_ok("union_if_match_narrowed_member_access.f", source);
+    assert_single_source_semantic_ok("union_match_narrowed_member_access.f", source);
 }
 
 static void test_union_member_access_requires_narrowing(void) {
@@ -15707,7 +15707,7 @@ static void test_generic_union_form_accepts_concrete_member_matching(void) {
         "    return value;\n"
         "}\n"
         "func run(value: Result<int>): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        v: int { v + 1; }\n"
         "        Error { 0; }\n"
         "        else { 0; }\n"
@@ -16237,14 +16237,14 @@ static void test_if_expr_both_branches_throw_accepted(void) {
 }
 
 static void test_match_expr_partial_throw_accepted(void) {
-    /* An if-match expression where some branches throw and the rest
+    /* A match expression where some branches throw and the rest
      * yield values. The result type is taken from the yielding
      * branches. */
     const char *source =
         "module demo.main;\n"
         "func run() {\n"
         "    let v: i32 = 0;\n"
-        "    let label: string = if v {\n"
+        "    let label: string = match v {\n"
         "        0 { \"zero\"; }\n"
         "        1 { throw \"unexpected one\"; }\n"
         "        else { \"other\"; }\n"
@@ -16266,14 +16266,14 @@ static void test_match_expr_partial_throw_accepted(void) {
 }
 
 static void test_match_expr_all_branches_throw_accepted(void) {
-    /* An if-match expression where all branches terminate with throw.
+    /* A match expression where all branches terminate with throw.
      * When all branches throw, the match construct is used as a
      * statement (not an expression with a value). */
     const char *source =
         "module demo.main;\n"
         "func run() {\n"
         "    let v: i32 = 0;\n"
-        "    if v {\n"
+        "    match v {\n"
         "        0 { throw \"zero\"; }\n"
         "        1 { throw \"one\"; }\n"
         "        else { throw \"other\"; }\n"
@@ -16432,15 +16432,15 @@ int main(void) {
     test_if_expr_trailing_if_else_in_then_branch_accepted();
     test_if_expr_trailing_if_else_in_else_branch_accepted();
     test_if_expr_trailing_if_else_chain_accepted();
-    test_if_expr_trailing_if_match_accepted();
+    test_if_expr_trailing_match_accepted();
     test_if_expr_trailing_try_catch_accepted();
     test_if_expr_non_expr_trailing_binding_rejected();
     test_if_expr_trailing_if_without_else_rejected();
-    test_if_match_trailing_if_else_in_branch_accepted();
-    test_if_match_trailing_if_else_in_else_branch_accepted();
+    test_match_trailing_if_else_in_branch_accepted();
+    test_match_trailing_if_else_in_else_branch_accepted();
     test_try_expr_trailing_if_else_in_catch_accepted();
     test_try_stmt_trailing_if_in_catch_not_converted();
-    test_if_match_stmt_trailing_if_in_branch_not_converted();
+    test_match_stmt_trailing_if_in_branch_not_converted();
     test_break_directly_in_try_expr_catch_block_is_rejected();
     test_continue_directly_in_try_expr_catch_block_is_rejected();
     test_break_inside_loop_inside_try_expr_catch_block_is_accepted();
@@ -16712,10 +16712,10 @@ int main(void) {
     test_union_entry_records_exact_member_site();
     test_union_entry_ambiguous_spec_member_requires_explicit_cast();
     test_union_entry_explicit_cast_selects_spec_member();
-    test_union_if_match_accepts_type_labels();
-    test_union_if_match_rejects_literal_label();
-    test_union_if_match_rejects_range_label();
-    test_union_if_match_narrows_object_spec_member();
+    test_union_match_accepts_type_labels();
+    test_union_match_rejects_literal_label();
+    test_union_match_rejects_range_label();
+    test_union_match_narrows_object_spec_member();
     test_union_member_access_requires_narrowing();
     test_union_equality_requires_narrowing();
     test_generic_union_form_accepts_concrete_member_matching();

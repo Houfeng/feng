@@ -28,16 +28,16 @@ if a > b {
 }
 ```
 
-## 3 条件匹配形式
+## 3 模式匹配形式
 
-Feng 额外支持以 `if 目标值 { ... }` 形式书写的条件匹配表达式。
+Feng 额外支持以 `match 目标值 { ... }` 形式书写的模式匹配表达式。
 
 该语法按目标值静态类型分为两类：
 
 - 常量相等性匹配：目标值静态类型为 `所有整型`、`string`、`bool`。
 - union member 匹配：目标值静态类型为 union-form `spec`，分支标签写该 union-form 的归一化 member。
 
-union-form 的成员归一化、active member 判别、收窄与显式转换边界由 [feng-union-type.md](./feng-union-type.md) 定义；本节只说明它与 `if 目标值 { ... }` 这层流程控制语法外壳的关系。
+union-form 的成员归一化、active member 判别、收窄与显式转换边界由 [feng-union-type.md](./feng-union-type.md) 定义；本节只说明它与 `match 目标值 { ... }` 这层流程控制语法外壳的关系。
 
 ### 3.1 常量相等性匹配
 
@@ -55,7 +55,7 @@ union-form 的成员归一化、active member 判别、收窄与显式转换边�
 - `else` 分支可省略，省略时表示条件全部不满足则直接离开整个分支结构。
 
 ```feng
-if age {
+match age {
   0 { 
     // 逻辑代码
   }
@@ -76,7 +76,7 @@ if age {
 
 ### 3.2 union-form member 匹配
 
-当匹配目标表达式的静态类型是 union-form `spec` 时，`if 目标值 { ... }` 进入 union member 匹配模式。
+当匹配目标表达式的静态类型是 union-form `spec` 时，`match 目标值 { ... }` 进入 union member 匹配模式。
 
 规则说明:
 
@@ -91,7 +91,7 @@ if age {
 - 该模式的完整语义，包括 active member 的进入站点选择、object-form `spec` member 的视角取得与显式转换限制，见 [feng-union-type.md](./feng-union-type.md)。
 
 ```feng
-if v {
+match v {
   u: UserType {
     // 有绑定分支，u 的类型为 UserType
   }
@@ -117,7 +117,7 @@ if v {
 - `if` 表达式，支持上述 2 种 `if` 形式。
 - `if` 表达式，必须有返回值，各分支的返回值类型必须一致，且不可省略 `else` 分支。
 - 各分支块中，最后一条语句行（非自然行）必须是一个表达式；编译器始终取该表达式的值作为该分支的结果。末尾分号可加可不加，不影响块值提取。
-- 各分支块的最后一条语句如果是 `if/else`、`if-match` 或 `try/catch`，编译器自动将其视为表达式参与块值提取。如果最后一条语句不是表达式且不属于上述可转换形式，则报 AE1101 错误。
+- 各分支块的最后一条语句如果是 `if/else`、`match` 或 `try/catch`，编译器自动将其视为表达式参与块值提取。如果最后一条语句不是表达式且不属于上述可转换形式，则报 AE1101 错误。
 - 各分支块的最后一条语句也允许是 `throw`，此时该分支不产生结果值，不参与结果类型推导和一致性比较。如果所有分支都以 `throw` 结尾，则表达式结果类型为 unknown，不可用于需要明确类型的上下文。
 
 ```feng
@@ -129,7 +129,7 @@ let label = if age >= 18 {
 ```
 
 ```feng
-let label = if age {
+let label = match age {
   0 { "婴儿"; }
   18 { "成年"; }
   60 { "老年"; }

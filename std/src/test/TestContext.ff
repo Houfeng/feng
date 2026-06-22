@@ -131,7 +131,7 @@ type TestContext {
   func println(format: string, args: string...) {
     let parentOutput = self.getParentOutput();
     let line = string.format(format, args);
-    if parentOutput {
+    match parentOutput {
       p: List<string> {
         p.add(line);
       } else {
@@ -149,10 +149,10 @@ type TestContext {
     let current = self.current();
     if (current.kind != TestKind.Test) { return; }
     let selfOutput = current.output;
-    if selfOutput {
+    match selfOutput {
       output: List<string> {
         let parentOutput = self.getParentOutput();
-        if parentOutput {
+        match parentOutput {
           p: List<string> {
             for var i = 0; i < output.size(); i += 1 {
               p.add(output.get(i));

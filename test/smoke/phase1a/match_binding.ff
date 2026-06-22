@@ -25,7 +25,7 @@ type Holder {
 
 // Test: bare binding prefix (default let)
 func test_bare_binding(value: Choice) {
-    if value {
+    match value {
         v: int { puts(&"got-int"); }
         v: string { puts(&v); }
         bool { puts(&"bool"); }
@@ -34,7 +34,7 @@ func test_bare_binding(value: Choice) {
 
 // Test: explicit let/var binding
 func test_let_var_binding(value: Choice) {
-    if value {
+    match value {
         let v: int { puts(&"let-int"); }
         var v: string { v = "modified"; puts(&v); }
         bool { puts(&"bool"); }
@@ -43,16 +43,16 @@ func test_let_var_binding(value: Choice) {
 
 // Test: binding with non-identifier target (member access)
 func test_member_target(holder: Holder) {
-    if holder.value {
+    match holder.value {
         v: string { puts(&v); }
         int { puts(&"int"); }
         bool { puts(&"bool"); }
     }
 }
 
-// Test: if-match expression with binding
+// Test: match expression with binding
 func test_expr_binding(value: Display): string {
-    return if value {
+    return match value {
         v: Named { v.greet(); }
         v: string { v; }
         else { ""; }
@@ -61,9 +61,9 @@ func test_expr_binding(value: Display): string {
 
 // Test: nested match with bindings
 func test_nested(outer: Choice, inner: Display) {
-    if outer {
+    match outer {
         v: string {
-            if inner {
+            match inner {
                 w: Named { puts(&w.greet()); }
                 w: string { puts(&w); }
             }

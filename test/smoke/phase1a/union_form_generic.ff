@@ -10,7 +10,7 @@ type Error {
 spec Result<T>: Error | T;
 
 func print_result(value: Result<int>) {
-    if value {
+    match value {
         int { puts(&"int"); }
         Error { puts(&"error"); }
     }

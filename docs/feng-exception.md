@@ -141,9 +141,9 @@ func startup() {
 }
 ```
 
-### 3.6 `if`/`if-match` 表达式分支中的 `throw`
+### 3.6 `if`/`match` 表达式分支中的 `throw`
 
-`if` 表达式和 `if-match`（match）表达式的各分支块允许以 `throw` 结尾，与 `try/catch` 表达式的 `catch` 子句规则一致。
+`if` 表达式和 `match` 表达式的各分支块允许以 `throw` 结尾，与 `try/catch` 表达式的 `catch` 子句规则一致。
 
 - 以 `throw` 结尾的分支不产生结果值，不参与结果类型推导和一致性比较。
 - 如果一个分支 `throw`、另一个分支有 yield 表达式，则结果类型取有 yield 的分支类型。

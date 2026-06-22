@@ -34,9 +34,9 @@ func flow_pick(flag: bool, a: FlowNamed, b: FlowNamed): FlowNamed {
   };
 }
 
-// return if 值匹配 (聚合)
+// return match 值匹配 (聚合)
 func flow_match_pick(tag: int, a: FlowNamed, b: FlowNamed): FlowNamed {
-  return if tag {
+  return match tag {
     0 { a }
     else { b }
   };
@@ -58,7 +58,7 @@ open func test_flow() {
 
     test("value match - single value", () {
       let age = 18;
-      let result = if age {
+      let result = match age {
         0 { "baby" }
         18 { "adult" }
         60 { "senior" }
@@ -69,7 +69,7 @@ open func test_flow() {
 
     test("value match - value list", () {
       let code = 20;
-      let tag = if code {
+      let tag = match code {
         10, 20, 30 { "tens" }
         else { "other" }
       };
@@ -78,7 +78,7 @@ open func test_flow() {
 
     test("value match - integer range", () {
       let score = 85;
-      let grade = if score {
+      let grade = match score {
         0...59 { "F" }
         60...69 { "D" }
         70...79 { "C" }
@@ -153,7 +153,7 @@ open func test_flow() {
 
     test("value match - mixed range and values", () {
       let val = 100;
-      let category = if val {
+      let category = match val {
         0 { "zero" }
         1...9 { "single" }
         10, 20, 30 { "special" }
@@ -165,7 +165,7 @@ open func test_flow() {
 
     test("value match - string", () {
       let word = "hello";
-      let translated = if word {
+      let translated = match word {
         "hi", "hello" { "greeting" }
         "bye", "goodbye" { "farewell" }
         else { "unknown" }
@@ -175,7 +175,7 @@ open func test_flow() {
 
     test("value match - string (second branch)", () {
       let word2 = "bye";
-      let translated2 = if word2 {
+      let translated2 = match word2 {
         "hi", "hello" { "greeting" }
         "bye", "goodbye" { "farewell" }
         else { "unknown" }

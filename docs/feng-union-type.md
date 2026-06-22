@@ -2,7 +2,7 @@
 
 > **状态**: 已实现，作为 union-form 专项规范维护。
 > `spec` 三种 form 的总入口见 [feng-spec.md](./feng-spec.md)；本文档只收敛 Feng 联合类型在当前阶段的专项语义、实现边界与运行时布局细则。
-> `if 目标值 { ... }` 的通用流程控制语法外壳见 [feng-flow.md](./feng-flow.md)。
+> `match 目标值 { ... }` 的通用流程控制语法外壳见 [feng-flow.md](./feng-flow.md)。
 
 ## 1 目标
 
@@ -140,9 +140,9 @@ union-form `spec` 的职责是声明“若干候选类型的其一”。
 
 ### 3.6 union-form 的基础收窄语法复用现有 `if` 条件匹配，不引入独立 `is`
 
-本次讨论已确认：union-form 的成员判别与类型收窄不引入独立 `is` 运算符，而是复用现有 `if 目标值 { ... }` 条件匹配形式，并在该语法下扩展 union member 匹配能力。
+本次讨论已确认：union-form 的成员判别与类型收窄不引入独立 `is` 运算符，而是复用现有 `match 目标值 { ... }` 条件匹配形式，并在该语法下扩展 union member 匹配能力。
 
-其中，`if 目标值 { ... }` 作为流程控制语法外壳及其表达式位置规则由 [feng-flow.md](./feng-flow.md) 统一定义；本文只补充 union-form 在该语法下的 member 标签、active member 判别与收窄语义。
+其中，`match 目标值 { ... }` 作为流程控制语法外壳及其表达式位置规则由 [feng-flow.md](./feng-flow.md) 统一定义；本文只补充 union-form 在该语法下的 member 标签、active member 判别与收窄语义。
 
 union member 匹配分支支持两种形式：
 
@@ -161,7 +161,7 @@ union member 匹配分支支持两种形式：
 ```feng
 spec T: int | string | UserType | Named;
 
-if v {
+match v {
   x: int {
     // x 类型为 int
   }
@@ -180,14 +180,14 @@ if v {
 }
 ```
 
-这里复用的是现有 `if 目标值 { ... }` 的分支外壳，而不是继续引入一个容易被误解为”任意运行时类型/接口判断”的独立 `is` 运算符。
+这里复用的是现有 `match 目标值 { ... }` 的分支外壳，而不是继续引入一个容易被误解为”任意运行时类型/接口判断”的独立 `is` 运算符。
 
 当前已确认的语义要点：
 
 - 单个 member 的有绑定分支表示”当前 active member 就是该 member”；绑定变量以获得的具体 member 类型操作。
-- 当 `if` 的目标表达式静态类型为 union-form 时，该 `if 目标值 { ... }` 的整个匹配体进入 union member 类型匹配模式；只允许 union member 类型标签与 `else`，不允许字面量值标签或区间标签。
+- 当 `match` 的目标表达式静态类型为 union-form 时，该 `match 目标值 { ... }` 的整个匹配体进入 union member 类型匹配模式；只允许 union member 类型标签与 `else`，不允许字面量值标签或区间标签。
 - union-form 未收窄前不具备可直接比较的统一值语义，因此不能在同一次匹配中把 `int { ... }` 这类 member 标签与 `1 { ... }`、`1...5 { ... }` 这类值/区间标签混用。
-- union 值在进入 union-form 的具体站点时，active member 就已经被确定；后续 `if 目标值 { ... }` 条件匹配只针对这个已确定的 active member 做判别，不会先把当前 member 向上转换到别的 `spec` 后再尝试匹配。
+- union 值在进入 union-form 的具体站点时，active member 就已经被确定；后续 `match 目标值 { ... }` 条件匹配只针对这个已确定的 active member 做判别，不会先把当前 member 向上转换到别的 `spec` 后再尝试匹配。
 - 多个 member 可在同一分支中以逗号罗列；有绑定分支把绑定变量收窄到”被列出的 member 子集”的 union 类型，而不是某个单一确定类型；无绑定分支保持原始 union 类型。
 - `else` 分支收窄为剩余 member 集合；若剩余集合大小为 1，则该分支收窄到唯一剩余 member，否则仍是更小的 union 子集。`else` 分支不支持绑定。
 - 当有绑定分支的绑定变量收窄后仍包含多个 member 时，绑定变量依然处于 union 视角，只是 member 集合变小；此时仍不允许直接做成员访问、方法调用或 `==` / `!=` 比较。
@@ -199,7 +199,7 @@ if v {
 例如，单 member 有绑定分支可直接操作：
 
 ```feng
-if v {
+match v {
   n: Named {
     return n.display();
   }
@@ -211,7 +211,7 @@ if v {
 同理，若某个值在进入 union-form 时是按 `UserType` member 进入，则后续：
 
 ```feng
-if v {
+match v {
   Named {
     // 无绑定分支，仅做匹配判别
     // 不会因为当前 active member `UserType` 恰好满足 `Named` 就自动命中
@@ -224,7 +224,7 @@ if v {
 若无绑定分支一次罗列多个 member，则该分支仅做匹配判别，目标值保持原始 union 类型。例如：
 
 ```feng
-if v {
+match v {
   UserType, Named {
     // 无绑定分支，v 保持 union 类型（子集为 UserType | Named）
     // 若要访问或比较，仍需继续收窄到单一 member
@@ -235,7 +235,7 @@ if v {
 若需要把已收窄到具体类型的值转成其所满足的 object-form `spec`，应显式写出转换，而不是由分支匹配隐式完成。例如：
 
 ```feng
-if v {
+match v {
   u: UserType {
     let named = (Named)u;
   }
@@ -377,8 +377,8 @@ func use<V: Value>(v: V): void { ... }
 
 约束细则：
 
-- 在泛型声明体内，被约束参数 `V` 的值处于 union 视角；**未经 `if 目标值 { ... }` 绑定收窄时，不允许对其做成员访问、方法调用或 `==` / `!=` 比较**。
-- 利用 `if 目标值 { ... }` 对参数值进行 member 匹配时，分支支持有绑定和无绑定两种形式（见 3.6 节）；只有有绑定分支才能通过绑定变量按已收窄的 member 类型做成员访问、方法调用或比较。
+- 在泛型声明体内，被约束参数 `V` 的值处于 union 视角；**未经 `match 目标值 { ... }` 绑定收窄时，不允许对其做成员访问、方法调用或 `==` / `!=` 比较**。
+- 利用 `match 目标值 { ... }` 对参数值进行 member 匹配时，分支支持有绑定和无绑定两种形式（见 3.6 节）；只有有绑定分支才能通过绑定变量按已收窄的 member 类型做成员访问、方法调用或比较。
 - 无绑定分支不做自动收窄；泛型体内对参数值的任何成员访问或比较，都必须通过有绑定分支的绑定变量完成。
 - union-form 约束不为参数类型物化 witness；调用点只传入值本身，而不是 object-form `spec` 约束所需的「值 + witness」对。
 - 当前阶段每个类型参数至多一个 union-form 约束；不支持 union-form 约束与 object-form `spec` 约束同时修饰同一个类型参数。
@@ -505,7 +505,7 @@ func use<V: Value>(v: V): void { ... }
   - 若 member 解析后本身是 union-form，则在编译期拍平、去重并形成保持声明顺序的归一化成员集合；
   - 默认零值取归一化后的第一个 member 的默认零值；
   - 若归一化后的第一个 member 不是合法默认零值目标，则该 union-form 也不是合法默认零值目标；
-  - union-form 的成员收窄仅复用现有 `if 目标值 { ... }` 条件匹配形式，不引入独立 `is` 运算符；收窄通过有绑定分支的绑定变量实现，无绑定分支不做自动收窄（绑定语法与约束见 3.6 节）；
+  - union-form 的成员收窄仅复用现有 `match 目标值 { ... }` 条件匹配形式，不引入独立 `is` 运算符；收窄通过有绑定分支的绑定变量实现，无绑定分支不做自动收窄（绑定语法与约束见 3.6 节）；
   - union 值一旦在进入站点选定 active member，后续条件匹配只按该已选定 member 判别；不会在匹配阶段再依据其可向上转换到的 `spec` 重新解释当前值；
   - 值进入 union-form 时，若源静态类型与某个归一化 member 精确一致，则必须优先按该 member 进入；即使该源类型也满足其他 `spec` member，也不构成歧义；
   - 只有在不存在精确 member 命中，且多个 `spec` member 可通过编译期可证的向上转换同时接纳源值时，才构成进入站点冲突；
@@ -553,7 +553,7 @@ func use<V: Value>(v: V): void { ... }
 
 当前讨论已确认基础收窄语义：
 
-- 基础收窄仅复用现有 `if 目标值 { ... }` 条件匹配形式，不新增独立 `is` 运算符。
+- 基础收窄仅复用现有 `match 目标值 { ... }` 条件匹配形式，不新增独立 `is` 运算符。
 - 当 `if` 的目标静态类型为 union-form 时，匹配体只允许 union member 类型标签与 `else`；字面量值标签与区间标签仅适用于非 union 目标。
 - union 值在进入站点选定 active member 后，后续条件匹配只按该 active member 本身判别；不会在匹配阶段自动向上转换后再命中别的 `spec` branch。
 - union-form 的成员访问必须先收窄到确定 member；收窄通过有绑定分支的绑定变量实现，无绑定分支不做自动收窄（绑定语法与约束见 3.6 节）。
@@ -642,7 +642,7 @@ let t: Display = s;
 - `feng-spec.md` 应成为 union-form `spec` 的主规范归属。
 - `feng-language.md` 只负责总览性说明，不应重复细则。
 - `feng-type.md` 只负责类型系统总览与引用，不应重复 union-form 的主定义。
-- `feng-flow.md` 只负责 `if 目标值 { ... }` 的流程控制语法外壳与其对 union member 匹配的入口说明；union member 的归一化、收窄、active member 判别与转换边界仍由本文定义。
+- `feng-flow.md` 只负责 `match 目标值 { ... }` 的流程控制语法外壳与其对 union member 匹配的入口说明；union member 的归一化、收窄、active member 判别与转换边界仍由本文定义。
 
 ## 9 当前建议的实现顺序
 

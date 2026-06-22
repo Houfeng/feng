@@ -26,7 +26,7 @@ open type Json {
    * @return true if the value is null, false otherwise
    */
   static func isNull(value: JsonValue): bool {
-    return if value {
+    return match value {
       None { true }
       else { false }
     };
@@ -38,7 +38,7 @@ open type Json {
    * @return true if the value is a boolean, false otherwise
    */
   static func isBool(value: JsonValue): bool {
-    return if value {
+    return match value {
       bool { true }
       else { false }
     };
@@ -50,7 +50,7 @@ open type Json {
    * @return true if the value is a number, false otherwise
    */
   static func isNumber(value: JsonValue): bool {
-    return if value {
+    return match value {
       int { true }
       float { true }
       double { true }
@@ -64,7 +64,7 @@ open type Json {
    * @return true if the value is a string, false otherwise
    */
   static func isString(value: JsonValue): bool {
-    return if value {
+    return match value {
       string { true }
       else { false }
     };
@@ -76,7 +76,7 @@ open type Json {
    * @return true if the value is an array, false otherwise
    */
   static func isArray(value: JsonValue): bool {
-    return if value {
+    return match value {
       JsonArray { true }
       else { false }
     };
@@ -88,7 +88,7 @@ open type Json {
    * @return true if the value is an object, false otherwise
    */
   static func isObject(value: JsonValue): bool {
-    return if value {
+    return match value {
       JsonObject { true }
       else { false }
     };
@@ -100,7 +100,7 @@ open type Json {
    * @return The string
    */
   static func toString(value: JsonValue): string {
-    return if (value) {
+    return match (value) {
       v: string { v }
       else { "" }
     };
@@ -112,7 +112,7 @@ open type Json {
    * @return The number
    */
   static func toNumber(value: JsonValue): double {
-    return if (value) {
+    return match (value) {
       v: int {(double)v }
       v: float {(double)v }
       v: double { v }
@@ -126,7 +126,7 @@ open type Json {
    * @return The boolean
    */
   static func toBool(value: JsonValue): bool {
-    return if (value) {
+    return match (value) {
       v: bool { v }
       else { false }
     };
@@ -138,7 +138,7 @@ open type Json {
    * @return The array
    */
   static func toArray(value: JsonValue): JsonArray {
-    return if (value) {
+    return match (value) {
       v: JsonArray { v }
       else { JsonArray() }
     };
@@ -150,7 +150,7 @@ open type Json {
    * @return The object
    */
   static func toObject(value: JsonValue): JsonObject {
-    return if (value) {
+    return match (value) {
       v: JsonObject { v }
       else { JsonObject() }
     };
@@ -212,7 +212,7 @@ open type Json {
    * @return The JSON string
    */
   static func stringify(value: JsonValue): string {
-    return if value {
+    return match value {
       v: None { v.toJsonString() }
       v: bool { v.toJsonString() }
       v: int { v.toJsonString() }

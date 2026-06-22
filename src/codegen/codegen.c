@@ -21569,7 +21569,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
 
             if (branch->label_count == 0U) {
                 ok = cg_fail(cg, branch->token,
-                             "CE0269", "codegen: if-match branch has no labels");
+                             "CE0269", "codegen: match branch has no labels");
                 break;
             }
             buf_init(&condition);
@@ -21680,7 +21680,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
         cg->cur_scope = match_scope->parent;
         scope_pop_free(match_scope);
         return cg_fail(cg, stmt->token,
-            "CE0270", "codegen: if-match target must be integer, bool, or string");
+            "CE0270", "codegen: match target must be integer, bool, or string");
     }
 
     char *target_tmp = cg_materialize_to_local(cg, &target, "_mt");
@@ -21701,7 +21701,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
 
         if (branch->label_count == 0) {
             ok = cg_fail(cg, branch->token,
-                "CE0269", "codegen: if-match branch has no labels");
+                "CE0269", "codegen: match branch has no labels");
             break;
         }
 

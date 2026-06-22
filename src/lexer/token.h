@@ -27,6 +27,7 @@ extern "C" {
     X(AS, "as") \
     X(IF, "if") \
     X(ELSE, "else") \
+    X(MATCH, "match") \
     X(WHILE, "while") \
     X(FOR, "for") \
     X(IN, "in") \

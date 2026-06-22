@@ -29,7 +29,7 @@ open type Future<T> {
    * Get the current state of the future.
    */
   func state(): FutureState {
-    return if self.owner {
+    return match self.owner {
       p: Promise<T> { p.state }
       else { FutureState.Pending }
     };

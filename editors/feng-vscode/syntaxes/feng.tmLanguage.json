@@ -318,7 +318,7 @@
       "patterns": [
         {
           "name": "keyword.control.feng",
-          "match": "\\b(?:extern|let|var|open|seal|module|import|as|if|else|while|for|break|continue|try|catch|finally|throw|return)\\b"
+          "match": "\\b(?:extern|let|var|open|seal|module|import|as|if|else|match|while|for|break|continue|try|catch|finally|throw|return)\\b"
         }
       ]
     },

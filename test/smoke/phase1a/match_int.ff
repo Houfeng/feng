@@ -4,7 +4,7 @@ module feng.smoke;
 extern func puts(msg: string*): int;
 
 func classify(age: i32): string {
-    let label = if age {
+    let label = match age {
         0 { "infant"; }
         1...17 { "minor"; }
         18...59 { "adult"; }

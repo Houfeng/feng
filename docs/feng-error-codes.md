@@ -481,8 +481,8 @@
 | **CE0266** | 代码生成 | codegen: if condition must be bool |
 | **CE0267** | 代码生成 | codegen: too many nested else-if wrappers |
 | **CE0268** | 联合类型处理 | codegen: union-form match label is not a normalized member |
-| **CE0269** | 代码生成 | codegen: if-match branch has no labels |
-| **CE0270** | 模块/程序 | codegen: if-match target must be integer, bool, or string |
+| **CE0269** | 代码生成 | codegen: match branch has no labels |
+| **CE0270** | 模块/程序 | codegen: match target must be integer, bool, or string |
 | **CE0271** | 代码生成 | codegen: while condition must be bool |
 | **CE0272** | 代码生成 | codegen: for condition must be bool |
 | **CE0273** | 代码生成 | codegen: @iterable method not found on source type |

@@ -4562,7 +4562,7 @@ static const char *kMatchExprAggregateResultSrc =
     "    }\n"
     "}\n"
     "func pick(tag: i32, left: Named, right: Named): Named {\n"
-    "    return if tag {\n"
+    "    return match tag {\n"
     "        0 { left; }\n"
     "        else { right; }\n"
     "    };\n"
@@ -4610,20 +4610,20 @@ static const char *kIfMatchStatementCodegenSrc =
     "module feng.codegen.matchstmt1;\n"
     "func classify(age: i32, label: string): i32 {\n"
     "    var result = 0;\n"
-    "    if age {\n"
+    "    match age {\n"
     "        0 { result = 10; }\n"
     "        1...3 { result = 20; }\n"
     "        4, 5 { result = 30; }\n"
     "        else { result = 40; }\n"
     "    }\n"
-    "    if label {\n"
+    "    match label {\n"
     "        \"ok\" { result = result + 1; }\n"
     "        else { result = result + 2; }\n"
     "    }\n"
     "    return result;\n"
     "}\n";
 
-static void test_if_match_statement_codegen(void) {
+static void test_match_statement_codegen(void) {
     FengProgram *program = parse_or_die(kIfMatchStatementCodegenSrc, "matchstmt1.ff");
     const FengProgram *programs[1] = {program};
 
@@ -4639,7 +4639,7 @@ static void test_if_match_statement_codegen(void) {
     bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
                                            NULL, &out, &cgerr);
     if (!cg_ok) {
-        fprintf(stderr, "codegen error (if-match statement): %s\n",
+        fprintf(stderr, "codegen error (match statement): %s\n",
                 cgerr.message ? cgerr.message : "(unknown)");
         ASSERT(cg_ok);
     }
@@ -5703,7 +5703,7 @@ static void test_union_form_spec_codegen(void) {
         "    return name;\n"
         "}\n"
         "func choose(v: Value): int {\n"
-        "    if v {\n"
+        "    match v {\n"
         "        x: int { return x + 1; }\n"
         "        string { return 2; }\n"
         "        bool { return 3; }\n"
@@ -5719,7 +5719,7 @@ static void test_union_form_spec_codegen(void) {
         "    return named;\n"
         "}\n"
         "func display_text(value: Display): string {\n"
-        "    if value {\n"
+        "    match value {\n"
         "        v: Named { return v.greet(); }\n"
         "        v: string { return v; }\n"
         "    }\n"
@@ -5727,7 +5727,7 @@ static void test_union_form_spec_codegen(void) {
         "}\n"
         "func use_local(name: string): int {\n"
         "    let local: Value = name;\n"
-        "    if local {\n"
+        "    match local {\n"
         "        string { return 7; }\n"
         "        else { return 0; }\n"
         "    }\n"
@@ -5796,7 +5796,7 @@ static void test_generic_union_form_spec_codegen(void) {
         "    return value;\n"
         "}\n"
         "func score(value: Result<int>): int {\n"
-        "    if value {\n"
+        "    match value {\n"
         "        v: int { return v + 1; }\n"
         "        Error { return 0; }\n"
         "    }\n"
@@ -5857,7 +5857,7 @@ static void test_generic_union_form_match_expr_codegen(void) {
         "    return value;\n"
         "}\n"
         "func score(value: Result<int>): int {\n"
-        "    return if value {\n"
+        "    return match value {\n"
         "        v: int { v + 1; }\n"
         "        Error { 0; }\n"
         "        else { 0; }\n"
@@ -5914,7 +5914,7 @@ static void test_tuple_union_cleanup_codegen(void) {
         "    return name;\n"
         "}\n"
         "func score(value: Choice): int {\n"
-        "    if value {\n"
+        "    match value {\n"
         "        v: int { return v + 1; }\n"
         "        string { return 2; }\n"
         "    }\n"
@@ -6115,7 +6115,7 @@ int main(void) {
     test_generic_constrained_aggregate_spec_value_codegen();
     test_if_expr_aggregate_result_codegen();
     test_match_expr_aggregate_result_codegen();
-    test_if_match_statement_codegen();
+    test_match_statement_codegen();
     test_generic_aggregate_return_codegen();
     test_generic_type_generic_method_codegen();
     test_generic_scalar_instance_direct_call_codegen();
