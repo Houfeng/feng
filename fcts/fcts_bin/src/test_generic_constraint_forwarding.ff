@@ -1,5 +1,6 @@
 module fcts_bin;
 
+import std;
 import fcts_lib.test;
 
 func generic_constraint_forwarding_cross_package(): bool {
@@ -13,4 +14,29 @@ func generic_constraint_forwarding_cross_package(): bool {
   let outer = LibGenericOuter<LibGenericDisplayPayload> { inner: inner };
   let copied = outer.getInner();
   return copied.displayPayload2() == "lib-generic-display-payload" && outer.displayInner() == "lib-generic-display-payload";
+}
+
+/** 跨包开放泛型实例方法调用 + 泛型返回值的 wrapper。
+ *  LibGenericInner<T, T> 来自 fcts_lib 包, T 是 CrossPkgWrapper 的类型级参数,
+ *  调用 getPayload1(): T1 时走开放实例路径且返回泛型类型。 */
+type CrossPkgWrapper<T: Display> {
+  var inner: LibGenericInner<T, T>;
+
+  func getPayload(): T {
+    return self.inner.getPayload1();
+  }
+}
+
+func cross_pkg_open_instance_generic_return(): bool {
+  let payload = LibGenericDisplayPayload { value: 99 };
+  let inner = LibGenericInner<LibGenericDisplayPayload, LibGenericDisplayPayload> {
+    name: "cross-pkg",
+    payload1: payload,
+    payload2: payload,
+    value: 2
+  };
+  let w: CrossPkgWrapper<LibGenericDisplayPayload> = CrossPkgWrapper<LibGenericDisplayPayload>();
+  w.inner = inner;
+  let got = w.getPayload();
+  return got.value == 99;
 }

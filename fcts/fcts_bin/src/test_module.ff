@@ -44,5 +44,9 @@ open func test_module() {
     test("cross-package open generic constraint forwarding", () {
       assert(generic_constraint_forwarding_cross_package(), "cross-package open generic constraint forwarding");
     });
+
+    test("cross-package open instance generic return", () {
+      assert(cross_pkg_open_instance_generic_return(), "cross-package open instance generic return");
+    });
   });
 }
