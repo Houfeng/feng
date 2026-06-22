@@ -13,7 +13,7 @@
 - [ ] func 未声明返回值或返回值为 void，时必须无 `return` 语句或只能使用空 `return`，func 声明返回值，每个分支必须返回相同类型
 - [ ] runtime api: feng_pointer_get_string(char * ptr, len) -1 读取到 \0
 - [x] match ，类型匹配优化，比如 match v { x:string {} else {} }
-- [ ] match, 支持匹配 enum
+- [x] match, 支持匹配 enum
 - [x] if 表达式、match 表达式、try 表达式，最后一句支持 throw
 - [ ] match 运算符，和 match 语句表达式类似，支持：值、区间、联合类型
   - let r = x match int     // r 是 bool
