@@ -278,7 +278,7 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
   - **函数边界外不可见**：`f(x match v: T)` 中 `v` 仅在 match 表达式内可见。
 - 只识别 `&&` / `||` / `!` 三种逻辑运算符；其他运算符（`==` / `!=` / `^` / `?:` / 位运算 / 函数调用 / 类型转换等）不传播真值约束，binding 变量不可见。
 - `!` 不做递归等价变换：`!!(match v: T)` 中 `v` 不可见。
-- 超范围使用 binding 变量报「未绑定」错误（AE1011）。
+- 超范围使用 binding 变量时，标识符查找失败，复用 AE0001（undefined identifier），不引入新的可见性专用错误码；与 C# pattern 变量在语句外不可见、使用时报 CS0103 的策略一致。
 - 不引入新的 `MatchConstKind`、不维护 when-true / when-false 两态集合、不做跨语句流分析。
 
 ### 4.5 Codegen
@@ -315,7 +315,6 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 | AE1105 | 标签非字面量或 const 绑定 | 已支持 | 复用 |
 | AE0030 | 按位运算符操作数类型不匹配 | 已支持 | 复用（覆盖 infix 中 `\|` 被误作按位或的场景，如 `(x match 0) \| 1`） |
 | AE1009 (新) | infix match 出现 binding 但 pattern 非 union member type | 不存在 | 新增 |
-| AE1011 (新) | 绑定变量在不可见范围使用（逻辑或、逻辑非、函数边界外、语句后） | 不存在 | 新增 |
 
 具体错误码编号、文案，先在 [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md) 中确定后再落到代码。
 
@@ -336,7 +335,7 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 | 文件 | 改动类型 | 规模 |
 | ---- | ------- | ---- |
 | `docs/feng-flow.md` | §3 新增 infix 运算子节 | +30 行 |
-| `docs/feng-error-codes-ae.md` | 新增 AE1009、AE1011 条目 | +6 行 |
+| `docs/feng-error-codes-ae.md` | 新增 AE1009 条目 | +3 行 |
 | `src/parser/parser.h` | 新增 `FengExprMatchOp` 与 `FENG_EXPR_MATCH_OP` | +15 行 |
 | `src/parser/parser.c` | infix match 运算符识别 + pattern 解析 | +120 行 |
 | `src/semantic/analyzer.c` | `FENG_EXPR_MATCH_OP` resolve 分支 | +100 行 |
@@ -382,7 +381,7 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 - target 类型不允许（如 `float`）报 AE0050。
 - binding 用于非 union member type pattern 报 AE1009（如 `x match v: 0`、`x match v: 1...10`）。
 - 多 label pattern 中 binding 与非 type label 混用报 AE1009（如 `x match v: 0 | 1`、`x match v: T | 0`）。
-- 绑定变量在不可见范围使用报 AE1011（`||` / `!` / 函数边界外、语句后）。
+- 绑定变量在不可见范围使用报 AE0001（`||` / `!` / 函数边界外、语句后，标识符查找失败复用既有未定义错误码）。
 - 链式 `x match a match b` 解析为 `(x match a) match b`；`b` 为 `true` / `false` 时合法（冗余），`b` 为类型 / 区间 pattern 时由类型检查器报 target 类型不匹配。
 - 绑定变量作用域正确（if 体内可见，体外不可见）。
 - 绑定变量在 if 体中类型为收窄后的 member 类型。
@@ -441,7 +440,7 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 - 范围：仅文档变更，无代码改动
 
 - [ ] 更新 [docs/feng-flow.md](../docs/feng-flow.md) §3：新增「infix match 运算」子节，描述语法、pattern 形式、绑定作用域、优先级；既有标签形式说明中追加 infix 用法引用
-- [ ] 更新 [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md)：新增 AE1009、AE1011 条目（binding 用于非 union member pattern、多 label pattern 中 binding 与非 type label 混用、绑定变量在不可见范围使用）；错误码编号与文案最终口径由人工审定
+- [ ] 更新 [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md)：新增 AE1009 条目（binding 用于非 union member pattern、多 label pattern 中 binding 与非 type label 混用）；不可见位置使用 binding 变量复用 AE0001，不引入新错误码；错误码编号与文案最终口径由人工审定
 - [ ] 全量回归点：`make test` 通过（仅文档变更，无代码行为变化）
 
 ### 8.2 步骤 2：AST 节点与 Parser 支持 infix match 运算符

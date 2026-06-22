@@ -217,7 +217,6 @@
 | AE1009 | infix match binding pattern 类型约束 | (新增) | infix match binding requires all labels to be union member type patterns |
 | AE1010 | ABI 函数指针形成 | AE0136 | expression '%s' requires an explicit target Foo* type to form an ABI function pointer |
 | AE1010 | ABI 函数指针形成 | AE0137 | expression '%s' cannot form an ABI function pointer; ABI function pointers can only be formed from top-level @abi functions with an explicit Foo* target type |
-| AE1011 | match 绑定变量可见性约束 | (新增) | match binding '%.*s' is not visible in this context |
 | AE1012 | 类型参数类型实参使用约束 | AE0160 | type parameter '%.*s' cannot take type arguments |
 | AE1013 | 泛型目标类型可解析性约束 | AE0161 | unknown type '%s' |
 | AE1014 | 非泛型类型实参误用约束 | AE0162 | '%.*s' is not a generic type and does not take type arguments |
