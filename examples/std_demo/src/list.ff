@@ -12,5 +12,7 @@ type ListExample<T> {
 spec Handler(): void;
 
 open func list_example(args: string[]) {
-  let list = ListExample<int>();
+  let list = ListExample<Handler>();
+  let handler: Handler = () {};
+  list.items.add(handler);
 }

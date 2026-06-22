@@ -217,9 +217,12 @@ typedef struct FengSpecCoercionSite {
     const FengDecl *target_spec_decl;
     /* The concrete target spec type ref at the coercion site. For generic
      * spec instances this preserves the instantiated surface (e.g.
-     * `Box<int>` rather than only the open `Box` decl). The pointer is
-     * borrowed from the AST or from the resolver-owned synthetic type-ref
-     * set, so it remains stable until analysis teardown. */
+     * `Box<int>` rather than only the open `Box` decl). Owned by the
+     * analysis: record_* clones the incoming type ref into
+     * analysis->coercion_owned_type_refs (which is freed recursively by
+     * feng_semantic_analysis_free after codegen), so the pointer remains
+     * stable across the entire compile regardless of whether the original
+     * was an AST-owned ref or a resolver synthetic ref. */
     const FengTypeRef *target_spec_type_ref;
     /* OBJECT form only: the SpecRelation entry that justifies this coercion.
      * Always non-NULL for FORM_OBJECT (analyzer asserts the lookup succeeds
@@ -346,6 +349,14 @@ typedef struct FengSemanticAnalysis {
     FengTypeRef **synthesized_type_refs;
     size_t synthesized_type_ref_count;
     size_t synthesized_type_ref_capacity;
+    /* Coercion site 拥有的 type ref 克隆（堆分配，递归包含 type_args / inner）。
+     * target_spec_type_ref 可能来自 resolver 的 per-program synthetic type-ref
+     * 池（在 resolver_free_scopes 中释放，先于 codegen），因此 record_* 入口将
+     * 其深拷贝到此数组，由 analysis 持有，在 feng_semantic_analysis_free
+     * （codegen 之后）统一递归释放。coercion site 只持有这些克隆的借用指针。 */
+    FengTypeRef **coercion_owned_type_refs;
+    size_t coercion_owned_type_ref_count;
+    size_t coercion_owned_type_ref_capacity;
 } FengSemanticAnalysis;
 
 typedef enum FengCompileTarget {

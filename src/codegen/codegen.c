@@ -28502,6 +28502,14 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                 break;
             case FENG_DECL_FIT:
                 {
+                    /* When the fit target is a builtin array (e.g. `fit T[]`),
+                     * cg_builtin_fit_target_local_type_param writes a synthetic
+                     * FengTypeParam into local_type_param and stores its
+                     * address into scope.first. The subsequent calls to
+                     * cg_collect_generic_instances_from_type_ref / _callable
+                     * read through scope.first, so they must run while
+                     * local_type_param is still alive — keeping every use of
+                     * `scope` inside this same block guarantees that. */
                     const GenericTypeDecl *generic_target = cg_find_generic_type_decl(cg,
                                                                                      decl->as.fit_decl.target);
                     const FengDecl *target_decl = generic_target != NULL ? generic_target->decl : NULL;
@@ -28515,23 +28523,23 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                         scope.first = &local_type_param;
                         scope.first_count = 1U;
                     }
-                }
-                if (!cg_collect_generic_instances_from_type_ref(cg, decl->as.fit_decl.target, scope)) {
-                    cg->cur_program = NULL;
-                    return false;
-                }
-                for (size_t spec_index = 0; spec_index < decl->as.fit_decl.spec_count; ++spec_index) {
-                    if (!cg_collect_generic_instances_from_type_ref(cg, decl->as.fit_decl.specs[spec_index], scope)) {
+                    if (!cg_collect_generic_instances_from_type_ref(cg, decl->as.fit_decl.target, scope)) {
                         cg->cur_program = NULL;
                         return false;
                     }
-                }
-                for (size_t member_index = 0; member_index < decl->as.fit_decl.member_count; ++member_index) {
-                    const FengTypeMember *member = decl->as.fit_decl.members[member_index];
-                    if (member->kind == FENG_TYPE_MEMBER_METHOD &&
-                        !cg_collect_generic_instances_from_callable(cg, &member->as.callable, scope)) {
-                        cg->cur_program = NULL;
-                        return false;
+                    for (size_t spec_index = 0; spec_index < decl->as.fit_decl.spec_count; ++spec_index) {
+                        if (!cg_collect_generic_instances_from_type_ref(cg, decl->as.fit_decl.specs[spec_index], scope)) {
+                            cg->cur_program = NULL;
+                            return false;
+                        }
+                    }
+                    for (size_t member_index = 0; member_index < decl->as.fit_decl.member_count; ++member_index) {
+                        const FengTypeMember *member = decl->as.fit_decl.members[member_index];
+                        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+                            !cg_collect_generic_instances_from_callable(cg, &member->as.callable, scope)) {
+                            cg->cur_program = NULL;
+                            return false;
+                        }
                     }
                 }
                 break;

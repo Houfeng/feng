@@ -1,0 +1,34 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+/* callable-form spec used as a generic type argument. Exercises the
+ * codegen path where a callable spec flows through substitution into
+ * List<T> and method parameter T — recorded as a callable coercion site
+ * whose target_spec_type_ref was previously a borrowed synthetic type ref
+ * freed before codegen. */
+spec Handler(): void;
+
+type Holder<T> {
+  var slot: T;
+
+  func put(value: T) {
+    self.slot = value;
+  }
+
+  func take(): T {
+    return self.slot;
+  }
+}
+
+func main(args: string[]) {
+  let holder = Holder<Handler>();
+  let h: Handler = () {
+    puts(&"handler-invoked");
+  };
+  holder.put(h);
+
+  let recovered: Handler = holder.take();
+  recovered();
+}

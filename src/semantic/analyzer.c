@@ -24164,6 +24164,13 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
         free(analysis->synthesized_type_refs[index]);
     }
     free(analysis->synthesized_type_refs);
+    /* coercion_owned_type_refs holds deep clones (with owned type_args / inner)
+     * produced by spec_coercion_sites.c record_* entry points. Free them
+     * recursively so nested type_args / inner don't leak. */
+    for (index = 0U; index < analysis->coercion_owned_type_ref_count; ++index) {
+        free_synthetic_type_ref(analysis->coercion_owned_type_refs[index]);
+    }
+    free(analysis->coercion_owned_type_refs);
     feng_semantic_infos_free(analysis->infos, analysis->info_count);
     free(analysis);
 }
