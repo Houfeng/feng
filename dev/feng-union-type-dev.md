@@ -6,15 +6,15 @@
 ## 1. 当前前提
 
 - union-form 语法已确定为 `spec Name: A | B | C;`，不引入新关键字，不允许 `{}` 块体。
-- union-form 的成员收窄已确定复用 `if 目标值 { ... }` 条件匹配语法，不引入独立 `is`。
+- union-form 的成员收窄已确定复用 `match 目标值 { ... }` 条件匹配语法，不引入独立 `is`。
 - union-form 的值级基线表示已确定为：一个 `tag`、一个运行时转发槽 `_fwd`、一个 inline payload 区域。
 - 当前阶段不支持 `union -> common spec` 投影，即使全部 member 都满足同一个 object-form `spec`。
 - 首版不为 `all-trivial union` 或 `all-managed-pointer union` 再开顶层值模型特例；统一走 `aggregate-with-managed-slots`。
-- **已确认**：union-form 的 if-match 类型匹配与 union-form 主体必须在同一轮交付；若 union-form 可声明但 if-match 类型匹配未落地，则 union 值在收窄前完全不可操作，不得作为独立里程碑先行完成。
+- **已确认**：union-form 的 match 类型匹配与 union-form 主体必须在同一轮交付；若 union-form 可声明但 match 类型匹配未落地，则 union 值在收窄前完全不可操作，不得作为独立里程碑先行完成。
 - **已确认**：union-form 必须进入 `.ft` 符号表；writer、reader 与 imported-module 三段须在同一轮完成，不得延迟。
-- **已确认**：union-form 可作为泛型类型参数约束（`T: UnionSpec`）；在泛型声明体内，未经 if-match 收窄的参数值不允许做成员访问、方法调用或 `==` / `!=` 比较；收窄后按 narrowed member 的规则操作；union-form 约束不产生额外的 witness 物化，与 object-form `spec` 约束不同。
+- **已确认**：union-form 可作为泛型类型参数约束（`T: UnionSpec`）；在泛型声明体内，未经 match 收窄的参数值不允许做成员访问、方法调用或 `==` / `!=` 比较；收窄后按 narrowed member 的规则操作；union-form 约束不产生额外的 witness 物化，与 object-form `spec` 约束不同。
 - **已确认**：union-form 默认零值取归一化后第一个 member 的默认零值；若该 member 无合法默认零值，则该 union-form 亦无合法默认零值。
-- **已确认**：当 `if` 目标表达式静态类型为 union-form 时，整个 match body 只能使用 union member 类型匹配与 `else`，不得混入字面量值匹配或区间匹配。
+- **已确认**：当 `match` 目标表达式静态类型为 union-form 时，整个 match body 只能使用 union member 类型匹配与 `else`，不得混入字面量值匹配或区间匹配。
 
 ## 2. 分步 TODO
 
@@ -24,7 +24,7 @@
 - [x] 在 `docs/feng-language.md` 中补 union-form 的总览入口，只做摘要与引用，不重复细则。
 - [x] 在 `docs/feng-type.md` 中补 union-form 的类型系统位置与引用。
 - [x] 在 `docs/feng-expression.md` 中补 union-form 显式转换边界的引用关系。
-- [x] 复核 `docs/` 中涉及 `if 目标值 { ... }`、`spec`、显式转换的交叉引用，避免重复定义与冲突措辞。
+- [x] 复核 `docs/` 中涉及 `match 目标值 { ... }`、`spec`、显式转换的交叉引用，避免重复定义与冲突措辞。
 
 验收口径：
 
@@ -73,12 +73,12 @@
 - `UserType | Named` 这类组合在精确命中时不误报冲突。
 - 两个重叠 `spec` 同时接纳同一源值时，诊断稳定且不发生隐式 member 选择。
 
-### 2.5 `if` 收窄与条件匹配
+### 2.5 `match` 收窄与条件匹配
 
-> **交付阻断依赖**：本节与 §2.2 Parser/AST 扩展、§2.3 成员归一化属于同一轮交付。若 union-form 已可声明但 if-match 类型匹配未落地，则 union 值在收窄前完全不可操作，不得作为独立里程碑先行完成。
+> **交付阻断依赖**：本节与 §2.2 Parser/AST 扩展、§2.3 成员归一化属于同一轮交付。若 union-form 已可声明但 match 类型匹配未落地，则 union 值在收窄前完全不可操作，不得作为独立里程碑先行完成。
 
-- [x] 扩展 `if 目标值 { ... }` 的语义分析，使其支持 union member 标签。
-- [x] 当 `if` 目标表达式静态类型为 union-form 时，强制整个 match body 进入 union member 类型匹配模式，只允许 union member 类型标签与 `else`。
+- [x] 扩展 `match 目标值 { ... }` 的语义分析，使其支持 union member 标签。
+- [x] 当 `match` 目标表达式静态类型为 union-form 时，强制整个 match body 进入 union member 类型匹配模式，只允许 union member 类型标签与 `else`。
 - [x] 在 union member 类型匹配模式中拒绝字面量值标签与区间标签；value/range match 仅保留给非 union 目标值。
 - [x] 实现单 member 分支、多个 member 分支与 `else` 分支的收窄结果计算。
 - [x] 实现“匹配只检查当前 active member，不自动向上转换后再命中”的规则。
@@ -106,7 +106,7 @@ typedef struct {
 ```
 
 布局不变量：
-- `tag` 是语言层 active member identity；if-match 的类型分支只依据 `tag` 判别。
+- `tag` 是语言层 active member identity；match 的类型分支只依据 `tag` 判别。
 - `_fwd` 是 runtime 生命周期描述，不参与语言层 member 判别；它只告诉 aggregate walker 当前应如何 retain / release / assign / take / 扫描 payload。
 - `_fwd.offset` 始终相对当前 union aggregate 值的基地址，通常指向 `payload` 内当前 active member 的起始偏移。
 - payload 必须 inline 容纳归一化 member 中最大的值表示；aggregate member 首版不装箱。
@@ -183,7 +183,7 @@ static const FengAggregateDescriptor kUnionSpecName_desc = {
 ### 2.7 Codegen
 
 - [x] 为 union 进入站点发出固定布局构造代码。
-- [x] 为 `if` 收窄发出 `tag` 判别与分支内直接访问代码。
+- [x] 为 `match` 收窄发出 `tag` 判别与分支内直接访问代码。
 - [x] 为默认零值发出“首个归一化 member 的零值”构造代码。
 - [x] 处理 object-form `spec` 作为 union member 时的 payload / witness 发码。
 - [x] 明确拒绝当前阶段不支持的 `union -> common spec` 投影路径。
@@ -224,13 +224,13 @@ static const FengAggregateDescriptor kUnionSpecName_desc = {
 
 - [ ] 在语义层保留 `FengUnionSpecInfo` 的声明态 member（允许 `T` 这类 type param 引用），并在 usage site 基于具体 type args 做成员替换后再匹配。
 - [ ] 保持无泛型 union-form 的既有匹配路径不变；仅在目标 union spec 含 type param 且调用点提供 type args 时启用替换。
-- [ ] 在 union `if` 类型标签匹配路径中应用同一替换规则，确保 `Result<int>` 可用 `int` 标签命中而非 `T`。
+- [ ] 在 union `match` 类型标签匹配路径中应用同一替换规则，确保 `Result<int>` 可用 `int` 标签命中而非 `T`。
 - [ ] 在单 member 收窄时写入替换后的具体类型，避免分支内局部变量仍保留为未替换 type param。
 - [ ] 在 codegen 的 generic spec instance 路径中为 union-form 构建具体 `union_member_types`，保证 `Result<int>` 与 `Result<string>` 各自持有具体 member 映射。
 
 验收口径：
 
-- `spec Result<T>: Error | T;` 在 `Result<int>`、`Result<string>` 场景下的赋值、参数匹配、`if` 收窄均按具体类型工作。
+- `spec Result<T>: Error | T;` 在 `Result<int>`、`Result<string>` 场景下的赋值、参数匹配、`match` 收窄均按具体类型工作。
 - 无泛型 union-form 行为与现有测试结果保持一致。
 - 全量回归通过。
 
@@ -243,8 +243,8 @@ static const FengAggregateDescriptor kUnionSpecName_desc = {
 ## 4. 建议执行顺序
 
 1. 先更新文档（`dev/`、`docs/`），把已确认的 4 条边界写实后再动代码。
-2. 补 parser / AST：扩展 `FengSpecForm` + union member 存储 + if-match 类型 member 标签承载，三者**必须同一 PR/步骤** 完成（相互依赖）。
-3. 补语义层成员归一化、进入站点与 if-match 类型收窄（同一步骤，不可分离）。
+2. 补 parser / AST：扩展 `FengSpecForm` + union member 存储 + match 类型 member 标签承载，三者**必须同一 PR/步骤** 完成（相互依赖）。
+3. 补语义层成员归一化、进入站点与 match 类型收窄（同一步骤，不可分离）。
 4. 补泛型约束支持：union-form 可作为约束、收窄前禁止操作。
 5. 补 `.ft` 符号表接入：writer、reader、imported-module 三段同步完成。
 6. 补 codegen 与 runtime 布局接入。

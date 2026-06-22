@@ -1,10 +1,10 @@
-# if/if-match/try 表达式分支块允许以 throw 结尾
+# if/match/try 表达式分支块允许以 throw 结尾
 
 ## 状态: done
 
 ## 背景
 
-当前 `if` 表达式、`if-match`（match）表达式的分支块要求最后一条语句必须是表达式（`FENG_STMT_EXPR`）或可转换为表达式的 if/match/try 语句。`try` 表达式的 catch 子句已经支持以 `throw` 结尾，但 `if` 和 `if-match` 表达式尚未支持。
+当前 `if` 表达式、`match` 表达式的分支块要求最后一条语句必须是表达式（`FENG_STMT_EXPR`）或可转换为表达式的 if/match/try 语句。`try` 表达式的 catch 子句已经支持以 `throw` 结尾，但 `if` 和 `match` 表达式尚未支持。
 
 `throw` 会终止当前执行路径，语义上不需要提供结果值，因此应允许分支块以 `throw` 结尾。
 
@@ -17,7 +17,7 @@ let x = if cond {
   42;
 };
 
-let label = if value {
+let label = match value {
   0 { "zero"; }
   1 { throw "unexpected one"; }
   else { "other"; }
@@ -26,7 +26,7 @@ let label = if value {
 
 ## 规则
 
-- `if` 表达式的 then/else 分支块、`if-match` 表达式的各分支块（含 else），最后一条语句允许为 `throw`。
+- `if` 表达式的 then/else 分支块、`match` 表达式的各分支块（含 else），最后一条语句允许为 `throw`。
 - 以 `throw` 结尾的分支不参与结果类型推导和一致性比较。
 - 如果所有分支都以 `throw` 结尾，则表达式结果类型为 unknown（不可用于需要明确类型的上下文）。
 - 如果一个分支 throw、另一个有 yield 表达式，则结果类型取有 yield 的分支类型。
@@ -114,7 +114,7 @@ let label = if value {
 
 #### 3.2 docs/feng-exception.md
 
-补充说明 `if`/`if-match` 表达式分支中也允许以 `throw` 结尾。
+补充说明 `if`/`match` 表达式分支中也允许以 `throw` 结尾。
 
 ## 不需要修改的部分
 
@@ -131,7 +131,7 @@ let label = if value {
 - [x] **T6. 代码生成: cg_emit_if_expr** — throw 分支走 cg_emit_block 整体发射，非 throw 分支走 cg_emit_branch_into_slot；两个都 throw 时不分配 result slot
 - [x] **T7. 代码生成: cg_emit_match_expr** — 同上模式，throw 分支走 cg_emit_block
 - [x] **T8. 文档: docs/feng-flow.md** — 更新 §4 if 表达式规则，补充 throw 允许说明
-- [x] **T9. 文档: docs/feng-exception.md** — 补充 if/if-match 表达式分支允许 throw
+- [x] **T9. 文档: docs/feng-exception.md** — 补充 if/match 表达式分支允许 throw
 - [x] **T10. 全量回归测试** — 编译通过并运行现有测试套件
 
 ## 验证
@@ -140,6 +140,6 @@ let label = if value {
    - `if` 表达式: then throw / else 有值
    - `if` 表达式: then 有值 / else throw
    - `if` 表达式: 两个分支都 throw
-   - `if-match` 表达式: 部分分支 throw，其余有值
-   - `if-match` 表达式: 所有分支都 throw
+   - `match` 表达式: 部分分支 throw，其余有值
+   - `match` 表达式: 所有分支都 throw
 2. 全量回归测试

@@ -231,6 +231,6 @@ make test    # unit tests + smoke tests + cli tests + std tests
 
 关注：
 - 新增 smoke test 通过
-- 已有 `if_expr_*`、`if_match_*`、`exception_try_expr` smoke test 不受影响
+- 已有 `if_expr_*`、`match_*`、`exception_try_expr` smoke test 不受影响
 - `test_semantic` 单元测试全部通过
 - `std-tests` 通过

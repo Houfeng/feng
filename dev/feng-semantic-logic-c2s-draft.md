@@ -219,8 +219,8 @@ AE 已有符号表和类型成员信息，查找操作直接复用。
 | CE0264 | void 函数不能返回值 | `resolve_stmt` return 分支 |
 | CE0265 | non-void 函数必须返回值 | `resolve_block` 尾部检查 |
 | CE0266 | if 语句条件必须为 bool | `resolve_stmt` if 分支 |
-| CE0269 | if-match 分支必须有标签 | `resolve_stmt` if_match 分支 |
-| CE0270 | if-match 目标类型约束 | 同上 |
+| CE0269 | match 分支必须有标签 | `resolve_stmt` match 分支 |
+| CE0270 | match 目标类型约束 | 同上 |
 | CE0271 | while 条件必须为 bool | `resolve_stmt` while 分支 |
 | CE0272 | for 条件必须为 bool | `resolve_stmt` for 分支 |
 
@@ -735,8 +735,8 @@ CE0083 属于"**AE 已覆盖，仅需删除 CE 冗余**"类别。类似的还有
 | CE1041 | void 函数返回值禁用 |
 | CE1042 | non-void 函数返回值必需 |
 | CE1043 | if 语句条件 bool 约束 |
-| CE1045 | if-match 分支标签存在性约束 |
-| CE1046 | if-match 目标类型约束 |
+| CE1045 | match 分支标签存在性约束 |
+| CE1046 | match 目标类型约束 |
 | CE1047 | while 条件 bool 约束 |
 | CE1048 | for 条件 bool 约束 |
 | CE1049 | for/in 源类型 @iterable 方法缺失 |

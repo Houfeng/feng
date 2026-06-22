@@ -2,7 +2,7 @@
 
 > 规范来源：[docs/feng-exception.md](../docs/feng-exception.md)  
 > 本文记录运行时机制、实现原理与待办任务。  
-> **交付范围**：仅覆盖 `throw` / `try` / `catch` / `unknown` 的完整实现。`if-match` 类型收窄与 `defer` 另立文档单独交付，本文不涉及。
+> **交付范围**：仅覆盖 `throw` / `try` / `catch` / `unknown` 的完整实现。`match` 类型收窄与 `defer` 另立文档单独交付，本文不涉及。
 
 ---
 

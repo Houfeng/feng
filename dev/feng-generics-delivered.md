@@ -68,7 +68,7 @@
 #### Phase A. 文档与验收口径收口
 
 - [x] A1. 在本文件锁定四项缺口的最终完成定义：aggregate spec field、if/match aggregate result、callable OTHER coercion、aggregate generic arg。
-- [x] A2. 如 aggregate spec field / if-match aggregate result 的值语义与现有权威文档不一致，先更新主规范，再继续编码。
+- [x] A2. 如 aggregate spec field / match aggregate result 的值语义与现有权威文档不一致，先更新主规范，再继续编码。
 - [x] A3. 明确本轮只覆盖当前既有语言形态；future tuple / value-struct / union carrier 继续留在后续阶段。
 
 #### Phase B. 全局 codegen：aggregate spec field

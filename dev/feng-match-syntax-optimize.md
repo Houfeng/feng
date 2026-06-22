@@ -236,15 +236,17 @@ C 代码各文件改动规模：
 
 ### 6.2 开发文档（dev/）
 
-以下为已交付的历史文档，仅记录设计过程，不做回溯修改：
+历史文档中的旧 `if-match` 术语同步更新为 `match`，但以下文档作为例外保留不动：
 
-- `feng-if-match-optimize-dev.md`
-- `feng-if-expr-allow-throw-dev.md`
-- `feng-exception-dev.md`
-- `feng-expr-block-optimize-dev.md`
-- `feng-generics-delivered-dev.md`
-- `feng-semantic-logic-c2s-draft.md`
-- `feng-union-type-dev.md`
+| 文件 | 变更内容 |
+| ---- | -------- |
+| `feng-if-expr-allow-throw-dev.md` | 标题 `# if/if-match/try 表达式分支块允许以 throw 结尾` 改为 `# if/match/try 表达式分支块允许以 throw 结尾`；正文 `if-match（match）表达式` 改为 `match 表达式`（第 7 行）；代码示例 `let label = if value {` 改为 `let label = match value {`（第 20 行）；规则与 TODO 项中 `\`if-match\` 表达式` 改为 `\`match\` 表达式`（第 29、117、134、143、144 行） |
+| `feng-exception-dev.md` | 第 5 行交付范围说明中 `\`if-match\` 类型收窄` 改为 `\`match\` 类型收窄` |
+| `feng-expr-block-optimize-dev.md` | 第 234 行 smoke test 列表中 \`if_match_*\` 改为 \`match_*\`（与重命名后的 smoke 目录一致） |
+| `feng-generics-delivered.md` | 第 71 行 A2 项中 `if-match aggregate result` 改为 `match aggregate result` |
+| `feng-semantic-logic-c2s-draft.md` | CE0269、CE0270、CE1045、CE1046 描述中 `if-match` 改为 `match`；AE 挂载点 `if_match` 改为 `match`（第 222、223、738、739 行） |
+| `feng-union-type-dev.md` | 全文 `if-match` 改为 `match`、`if 目标值 { ... }` 改为 `match 目标值 { ... }`、`\`if\` 收窄` 改为 `\`match\` 收窄`、`\`if\` 目标表达式` 改为 `\`match\` 目标表达式`、`union \`if\` 类型标签匹配` 改为 `union \`match\` 类型标签匹配`（第 9、13、15、17、27、76、78、80、81、109、186、227、233、246、247 行） |
+| `feng-if-match-optimize-dev.md` | 不修改：该文档本身即 "if-match 优化" 的历史设计记录，标题与主题均为 if-match，保留作为历史记录 |
 
 ### 6.3 编辑器（editors/feng-vscode/syntaxes/）
 
@@ -341,7 +343,7 @@ C 代码各文件改动规模：
 | if 解析移除 match 分支后正确性 | 低 | AST 层面 `FENG_STMT_IF` / `FENG_EXPR_IF` 与 `FENG_STMT_MATCH` / `FENG_EXPR_MATCH` 早已独立，semantic/codegen/dump/export/lsp 的 case 分支完全分开，parser 入口分发调整后下游零影响 |
 | `match` 关键字与用户代码标识符冲突 | 低 | Feng 已有关键字保护机制，`match` 作为新关键字的行为与其他关键字一致 |
 | 测试文件重命名导致 CI 脚本路径失效 | 低 | 测试运行器按目录扫描，不依赖硬编码文件名 |
-| 历史 dev 文档中 "if-match" 术语与现行语法不一致 | 低 | 历史文档记录设计过程，不做回溯修改，不影响用户 |
+| 历史 dev 文档中 "if-match" 术语与现行语法不一致 | 低 | 除 `dev/feng-if-match-optimize-dev.md`（标题与主题即 if-match 优化，作为历史设计记录保留不动）外，其余 dev 文档已统一更新为 `match` 术语 |
 | CE0196 错误信息保留 "if/match" 是否引起混淆 | 低 | 该错误由 if 与 match 共用的 `cg_emit_branch_into_slot` 路径触发，"if/match" 合并写法准确反映实际触发场景，保留比强行改为 "match" 更准确 |
 
 ## 建议 commit message
