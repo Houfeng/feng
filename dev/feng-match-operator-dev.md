@@ -245,22 +245,22 @@ typedef struct FengExprMatchOp {
 - 复用 `match_target_type_is_allowed` 校验 target 类型（整型 / string / bool / enum / union-form spec）。
 - 复用 `extract_match_label_literal` 与 union member 解析路径校验每个 label 合法性；遍历 `labels` 数组逐个校验，逻辑与块形式 `FengMatchBranch.labels` 一致。
 - 复用块形式的 overlap 检测路径（块形式已对 branch 内多 label 做交叉检测，infix 的 label 数组结构相同，可直接套用）。
-- 对 union member pattern + binding，复用 `resolve_and_validate_union_match_common` 的单分支逻辑（支持单 member 与多 member 子集）；binding 仅在全部 label 为 type pattern 时有效，否则报 AE11xx。
+- 对 union member pattern + binding，复用 `resolve_and_validate_union_match_common` 的单分支逻辑（支持单 member 与多 member 子集）；binding 仅在全部 label 为 type pattern 时有效，否则报 AE1009。
 - 对值 / 区间 / enum item 引用 pattern，禁止 binding（binding 仅对 union member type 有效）。
 - 结果类型为 `bool`。
-- **可见性分析（从根向下递归收集）**：实现为单一递归函数 `collect_visible_bindings`，从条件根递归向下遍历：
+- **可见性分析（从根向下递归收集）**：实现为单一递归函数 `collect_visible_match_bindings`，从条件根递归向下遍历：
 
 ```c
-BindingSet collect_visible_bindings(FengExpr *expr) {
+BindingSet collect_visible_match_bindings(FengExpr *expr) {
     switch (expr->kind) {
     case FENG_EXPR_AND:  /* && 合并两侧 */
-        return merge(collect_visible_bindings(expr->binary.left),
-                     collect_visible_bindings(expr->binary.right));
+        return merge(collect_visible_match_bindings(expr->binary.left),
+                     collect_visible_match_bindings(expr->binary.right));
     case FENG_EXPR_OR:   /* || 子树全部丢弃 */
     case FENG_EXPR_NOT:  /* ! 子树全部丢弃 */
         return EMPTY_SET;
     case FENG_EXPR_GROUP:  /* 分组透明穿透 */
-        return collect_visible_bindings(expr->group.inner);
+        return collect_visible_match_bindings(expr->group.inner);
     case FENG_EXPR_MATCH_OP:  /* match v: T 收集 v */
         return expr->match_op.has_binding
             ? single_set(expr->match_op.binding_name)
@@ -271,14 +271,14 @@ BindingSet collect_visible_bindings(FengExpr *expr) {
 }
 ```
 
-  - **body 可见性**：`collect_visible_bindings(条件根)` 的结果集合即 body 内可见的 match 绑定变量，登记到 `if` / `while` 体作用域。
+  - **body 可见性**：`collect_visible_match_bindings(条件根)` 的结果集合即 body 内可见的 match 绑定变量，登记到 `if` / `while` 体作用域。
   - **`&&` 链右侧可见性**：在 `A && B` 中，B 求值时可见 A 的 match 变量。实现上分两步：先递归收集整个条件的可见 match 变量（用于 body），再递归传播 `&&` 左侧的收集结果到右侧作用域（用于表达式内可见性）。
   - **else body**：不做反向推导，所有 match 绑定变量一律不可见。
   - **语句后不可见**：`let r = x match v: T;` 后 `v` 不可见（不跟踪 `r` 真值与 `v` 绑定状态关联）。
   - **函数边界外不可见**：`f(x match v: T)` 中 `v` 仅在 match 表达式内可见。
 - 只识别 `&&` / `||` / `!` 三种逻辑运算符；其他运算符（`==` / `!=` / `^` / `?:` / 位运算 / 函数调用 / 类型转换等）不传播真值约束，binding 变量不可见。
 - `!` 不做递归等价变换：`!!(match v: T)` 中 `v` 不可见。
-- 超范围使用 binding 变量报「未绑定」错误（AE11xx）。
+- 超范围使用 binding 变量报「未绑定」错误（AE1011）。
 - 不引入新的 `MatchConstKind`、不维护 when-true / when-false 两态集合、不做跨语句流分析。
 
 ### 4.5 Codegen
@@ -288,17 +288,17 @@ BindingSet collect_visible_bindings(FengExpr *expr) {
 - 求值 target 到临时变量 `_mt`（与块形式 match 共用临时变量命名）。
 - 遍历 `labels` 数组，复用 `cg_emit_match_label_cond` 的单 label 发码逻辑逐个发出判定；任一 label 命中即结果为 `true`，全部未命中则为 `false`（与块形式 branch 内多 label 的「或」语义一致）。
 - 对 union member pattern + binding，在判定为 true 的分支中绑定 `name` 到收窄后的值（复用既有 union match 的绑定发码路径）；多 member 子集绑定的发码与块形式一致。
-- **可见范围内的发码**：当 `FENG_EXPR_MATCH_OP` 的 binding 变量在 `&&` 右操作数或 `if` / `while` body 内可见时（由 §4.4 流分析判定），在命中分支中初始化绑定变量，再求值右操作数或进入体；未命中则短路跳过。
-- **不可见位置的发码**：`||` / `!` 祖先隔断的位置，binding 变量不初始化（语义层已保证不可见，无需发码绑定）；按普通 bool 求值即可。
+- **可见范围内的发码**：当 `FENG_EXPR_MATCH_OP` 的 binding 变量在 `&&` 右操作数或 `if` / `while` body 内可见时（由 §4.4 `collect_visible_match_bindings` 判定），在命中分支中初始化绑定变量，再求值右操作数或进入体；未命中则短路跳过。
+- **不可见位置的发码**：`||` / `!` 子树内（收集返回空）的位置，binding 变量不初始化（语义层已保证不可见，无需发码绑定）；按普通 bool 求值即可。
 - **else body 发码**：else body 内 binding 变量不可见，无需初始化。
 - 不引入新的 runtime 原语。
 
 ### 4.6 if / while 条件位置处理
 
 - `if` / `while` 条件位置识别 `FENG_EXPR_MATCH_OP`：
-  - 生成「计算 match → if true 则进入体」的代码结构。
-  - 在体作用域中登记绑定变量。
-- 复用既有 `if` / `while` 条件发码路径（条件求值为 bool 后跳转至体）；条件为 `FENG_EXPR_MATCH_OP` 时，在命中分支内追加 binding 作用域登记。
+  - 生成「计算条件 → if true 则进入体」的代码结构。
+  - 调用 `collect_visible_match_bindings(条件根)` 收集可见的 match 绑定变量，登记到体作用域。
+- 复用既有 `if` / `while` 条件发码路径（条件求值为 bool 后跳转至体）；条件含 `FENG_EXPR_MATCH_OP` 时，在命中分支内对可见的 binding 变量追加初始化与作用域登记。
 - `while` 每轮迭代重新求值条件并重新绑定。
 
 ### 4.7 dump / export / lsp / reifiable_deps
@@ -314,8 +314,8 @@ BindingSet collect_visible_bindings(FengExpr *expr) {
 | AE0404 | enum item 引用不存在 | 已支持 | 复用 |
 | AE1105 | 标签非字面量或 const 绑定 | 已支持 | 复用 |
 | AE0030 | 按位运算符操作数类型不匹配 | 已支持 | 复用（覆盖 infix 中 `\|` 被误作按位或的场景，如 `(x match 0) \| 1`） |
-| AE11xx (新) | infix match 出现 binding 但 pattern 非 union member type | 不存在 | 新增 |
-| AE11xx (新) | 绑定变量在不可见范围使用（逻辑或、逻辑非、函数边界外、语句后） | 不存在 | 新增 |
+| AE1009 (新) | infix match 出现 binding 但 pattern 非 union member type | 不存在 | 新增 |
+| AE1011 (新) | 绑定变量在不可见范围使用（逻辑或、逻辑非、函数边界外、语句后） | 不存在 | 新增 |
 
 具体错误码编号、文案，先在 [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md) 中确定后再落到代码。
 
@@ -336,7 +336,7 @@ BindingSet collect_visible_bindings(FengExpr *expr) {
 | 文件 | 改动类型 | 规模 |
 | ---- | ------- | ---- |
 | `docs/feng-flow.md` | §3 新增 infix 运算子节 | +30 行 |
-| `docs/feng-error-codes-ae.md` | 新增 AE11xx 条目 | +6 行 |
+| `docs/feng-error-codes-ae.md` | 新增 AE1009、AE1011 条目 | +6 行 |
 | `src/parser/parser.h` | 新增 `FengExprMatchOp` 与 `FENG_EXPR_MATCH_OP` | +15 行 |
 | `src/parser/parser.c` | infix match 运算符识别 + pattern 解析 | +120 行 |
 | `src/semantic/analyzer.c` | `FENG_EXPR_MATCH_OP` resolve 分支 | +100 行 |
@@ -380,34 +380,34 @@ BindingSet collect_visible_bindings(FengExpr *expr) {
 - 合法 infix match：值、区间、union member type、union member type + binding。
 - 合法多 label infix match：`x match 0 | 1 | 2`、`x match 0 | 1...10 | 100`、`x match Type1 | Type2`、`x match v: Type1 | Type2`（`v` 收窄为 `Type1 | Type2` 子集）。
 - target 类型不允许（如 `float`）报 AE0050。
-- binding 用于非 union member type pattern 报 AE11xx（如 `x match v: 0`、`x match v: 1...10`）。
-- 多 label pattern 中 binding 与非 type label 混用报 AE11xx（如 `x match v: 0 | 1`、`x match v: T | 0`）。
-- 绑定变量在不可见范围使用报 AE11xx（`||` / `!` / 函数边界外、语句后）。
+- binding 用于非 union member type pattern 报 AE1009（如 `x match v: 0`、`x match v: 1...10`）。
+- 多 label pattern 中 binding 与非 type label 混用报 AE1009（如 `x match v: 0 | 1`、`x match v: T | 0`）。
+- 绑定变量在不可见范围使用报 AE1011（`||` / `!` / 函数边界外、语句后）。
 - 链式 `x match a match b` 解析为 `(x match a) match b`；`b` 为 `true` / `false` 时合法（冗余），`b` 为类型 / 区间 pattern 时由类型检查器报 target 类型不匹配。
 - 绑定变量作用域正确（if 体内可见，体外不可见）。
 - 绑定变量在 if 体中类型为收窄后的 member 类型。
 - 绑定变量在 while 体中每轮迭代重新绑定。
 - **`let r = ...` 形式**：
   - `let r = x match v: T && v.foo > 0;` 合法，`v` 在 `v.foo > 0` 内可见，语句后不可见。
-  - `let r = x match v: T || v.foo > 0;` 中 `v` 在 `v.foo > 0` 内**不可见**（`||` 是 v 祖先，隔断）。
+  - `let r = x match v: T || v.foo > 0;` 中 `v` 在 `v.foo > 0` 内**不可见**（`||` 子树返回空）。
   - `let r = x match v: T;` 后访问 `v` 报未绑定错误（语句后不可见）。
   - `let r = x match v: T; if r { v.foo }` 报未绑定错误（编译器不跟踪 `r` 真值与 `v` 绑定状态关联）。
-- **条件内可见性（祖先隔断规则）**：
+- **条件内可见性（递归收集规则）**：
   - `if x match v: T && v.foo > 0 { ... }` 中 `v` 在 `v.foo > 0` 与 if 体内可见。
   - `if x match v: T && v.foo > 0 && v.bar < 10 { ... }` 中 `v` 在后续所有 `&&` 子表达式与 if 体内可见。
   - `if x match v: T1 && y match w: T2 && v.foo + w.bar > 0 { ... }` 中 `v` 与 `w` 均在后续条件与 if 体内可见。
-  - `if x match v: T || v.foo > 0 { ... }` 中 `v` 在 `v.foo > 0` 与 if 体内**不可见**（`||` 是 v 祖先）。
-  - `if !(x match v: T) { ... }` 中 `v` 在 if 体内**不可见**（`!` 是 v 祖先）。
-  - `if !!(x match v: T) { ... }` 中 `v` 在 if 体内**不可见**（`!` 是 v 祖先，不做 `!!` 等价变换）。
+  - `if x match v: T || v.foo > 0 { ... }` 中 `v` 在 `v.foo > 0` 与 if 体内**不可见**（`||` 返回空）。
+  - `if !(x match v: T) { ... }` 中 `v` 在 if 体内**不可见**（`!` 返回空）。
+  - `if !!(x match v: T) { ... }` 中 `v` 在 if 体内**不可见**（外层 `!` 返回空，不做 `!!` 等价变换）。
   - `if x match v: T || y { ... } else { v.foo }` 中 `v` 在 else 体内**不可见**（else 一律不可见）。
-- **侄子不隔断**：
-  - `if x match v: T && (cond || other) { ... }` 中 `v` 在 `(cond || other)` 与 if 体内可见（`||` 是 v 侄子）。
-  - `if x match v: T && (match w: U || other) { ... }` 中 `v` 在 `(match w: U || other)` 整体及 `match w: U` / `other` 内可见（`||` 是 v 侄子，是 w 祖先）。
-  - `if x match v: T && !(cond) { ... }` 中 `v` 在 `!(cond)` 与 if 体内可见（`!` 是 v 侄子）。
+- **`||` / `!` 作为侄子不影响 v 可见性**：
+  - `if x match v: T && (cond || other) { ... }` 中 `v` 在 `(cond || other)` 与 if 体内可见（`||` 在侄子位置，只丢弃其内部 match 变量）。
+  - `if x match v: T && (match w: U || other) { ... }` 中 `v` 在 `(match w: U || other)` 整体及 `match w: U` / `other` 内可见（`||` 是 v 侄子，但 w 被 `||` 丢弃）。
+  - `if x match v: T && !(cond) { ... }` 中 `v` 在 `!(cond)` 与 if 体内可见（`!` 在侄子位置）。
 - **嵌套场景**：
-  - `if !(x match v: T && (match w: U || other)) { ... }` 中 `v` 在 body 内**不可见**（`!` 是 v 祖先）；`w` 在 body 内**不可见**（`!` 与 `||` 都是 w 祖先）；但 `v` 在 `(match w: U || other)` 整体内可见（`&&` 短路保证 v 已绑定）。
-  - `if (x match v: T && a) || b { ... }` 中 `v` 在 `a` 内可见，在 `b` 与 if body 内**不可见**（顶层 `||` 是 v 祖先）。
-  - `if (x match v: T || a) && b { ... }` 中 `v` 在 `a` / `b` / if body 内均**不可见**（分组内 `||` 是 v 祖先）。
+  - `if !(x match v: T && (match w: U || other)) { ... }` 中 `v` 在 body 内**不可见**（根 `!` 返回空）；`w` 在 body 内**不可见**（同上）；但 `v` 在 `(match w: U || other)` 整体内可见（表达式内，`&&` 短路保证 v 已绑定）。
+  - `if (x match v: T && a) || b { ... }` 中 `v` 在 `a` 内可见（分组内 `&&` 求值时），在 `b` 与 if body 内**不可见**（顶层 `||` 返回空）。
+  - `if (x match v: T || a) && b { ... }` 中 `v` 在 `a` / `b` / if body 内均**不可见**（分组内 `||` 返回空，`&&` 合并空 + 空）。
 - **不识别的运算符**：
   - `if (x match v: T) == true { v.foo }` 中 `v` 在 body 内**不可见**（`==` 不传播真值约束）。
   - `if (x match v: T) != false { v.foo }` 中 `v` 在 body 内**不可见**（`!=` 不传播）。
@@ -441,7 +441,7 @@ BindingSet collect_visible_bindings(FengExpr *expr) {
 - 范围：仅文档变更，无代码改动
 
 - [ ] 更新 [docs/feng-flow.md](../docs/feng-flow.md) §3：新增「infix match 运算」子节，描述语法、pattern 形式、绑定作用域、优先级；既有标签形式说明中追加 infix 用法引用
-- [ ] 更新 [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md)：新增 AE11xx 条目（binding 用于非 union member pattern、多 label pattern 中 binding 与非 type label 混用、绑定变量在不可见范围使用）；错误码编号与文案最终口径由人工审定
+- [ ] 更新 [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md)：新增 AE1009、AE1011 条目（binding 用于非 union member pattern、多 label pattern 中 binding 与非 type label 混用、绑定变量在不可见范围使用）；错误码编号与文案最终口径由人工审定
 - [ ] 全量回归点：`make test` 通过（仅文档变更，无代码行为变化）
 
 ### 8.2 步骤 2：AST 节点与 Parser 支持 infix match 运算符
@@ -522,7 +522,7 @@ BindingSet collect_visible_bindings(FengExpr *expr) {
 | ---- | ---- | -------- |
 | `match` 关键字作为 infix 运算符与既有 match 语句/表达式起始关键字冲突 | 中 | parser 在 `parse_primary` 中优先识别 match 语句/表达式起始；infix 识别发生在二元运算层，位置不重叠 |
 | `\|` 作为 infix 多 label 分隔符与既有用法（按位或、union-form spec 分隔符）冲突 | 中 | `\|` 在 pattern 解析循环内被消费为 label 分隔符，退出循环后剩余 `\|` 才按按位或处理；`bool \| int` 本身非法（AE0030），`(x match 0) \| 1` 这种写法无意义；union-form spec 的 `\|` 仅出现在 `spec U: T1 \| T2` 声明位置，与 infix pattern 位置不重叠。块形式继续用 `,` 不变 |
-| 绑定可见性分析实现复杂度 | 低 | 单一递归函数 `collect_visible_bindings` 从条件根向下收集：`&&` 合并两侧、`||` / `!` 子树返回空、分组透明穿透、`match v: T` 收集 v。只识别 `&&` / `\|\|` / `!`，不维护两态集合，不做 `!!` 等价变换，不做跨语句跟踪。规则保守可预测，实现简洁。复用既有 match branch binding 的作用域登记路径 |
+| 绑定可见性分析实现复杂度 | 低 | 单一递归函数 `collect_visible_match_bindings` 从条件根向下收集：`&&` 合并两侧、`||` / `!` 子树返回空、分组透明穿透、`match v: T` 收集 v。只识别 `&&` / `\|\|` / `!`，不维护两态集合，不做 `!!` 等价变换，不做跨语句跟踪。规则保守可预测，实现简洁。复用既有 match branch binding 的作用域登记路径 |
 | `match` 运算符优先级与既有运算符交互 | 中 | 与关系运算 `<` / `<=` / `>` / `>=` 同级、高于 equality、低于算术；同级相邻混用与链式均走既有左结合路径，语义合法性由类型检查器捕获，parser 不做出口特殊检查 |
 | `if` / `while` 条件位置的 binding 作用域处理与既有 match 表达式分支 binding 不一致 | 低 | 复用既有 union match binding 的作用域处理路径 |
 | 既有 `match_*` 测试受影响 | 低 | 仅新增 infix 形式，既有块形式不变 |
@@ -534,7 +534,7 @@ BindingSet collect_visible_bindings(FengExpr *expr) {
 - 不修改既有 `match 目标值 { ... }` 块形式的语义与发码，包括块形式继续用 `,` 作为多 label 分隔符（infix 形式用 `|`，块形式不变；后续是否统一或同时支持 `,` 和 `|`，由人工决策后另行评估）。
 - 不引入新的 `FengMatchLabelKind`。
 - 不修改既有标签形式（单值、值列表、区间、union member type、enum item 引用）的语义。
-- **不做 `!!` 等价变换**：`!!(match v: T)` 中 v 不可见（`!` 是 v 祖先，隔断）；用户应改写为正向形式 `match v: T`。
+- **不做 `!!` 等价变换**：`!!(match v: T)` 中 v 不可见（`!` 子树返回空）；用户应改写为正向形式 `match v: T`。
 - **不做 else body 反向推导**：else body 内所有 match 绑定变量一律不可见，即使语义上 match 必定为 true（如 `if (!cond) { } else { use(v); }`）；用户应改写为 `if (cond) { use(v); }`。
 - **不跨语句跟踪绑定状态**：`let r = x match v: T; if r { use(v); }` 中 v 不可见；用户应把 match 表达式直接写在条件位置。
 - **不识别非 `&&` / `||` / `!` 运算符的真值传播**：`==` / `!=` / `^` / `?:` / 位运算 / 函数调用 / 类型转换等不传播 match 表达式的真值约束。
