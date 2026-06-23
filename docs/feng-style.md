@@ -154,7 +154,7 @@ func main(args: string[]) {
 ### 4.2 花括号位置
 
 - 花括号块建议采用“前括号跟在上一行之后”的写法。
-- 适用于 `func`、`type`、`if`、`else`、`for`、`while`、`try`、`catch`、`finally` 等块结构。
+- 适用于 `func`、`type`、`if`、`else`、`for`、`while`、`try`、`catch`、`defer` 等块结构。
 
 推荐示例:
 

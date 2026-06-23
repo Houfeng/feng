@@ -171,7 +171,7 @@ Feng 支持条件分支、`if` 表达式、`match` 模式匹配与多种循环�
 
 ## 10 异常模型
 
-Feng 用 `throw` 显式抛出异常，用 `try`/`catch`/`finally` 捕获与收尾。详细规则见 [Feng 语言异常模型规范](./feng-exception.md)。
+Feng 用 `throw` 显式抛出异常，用 `try`/`catch` 捕获，清理需要使用单独的 defer 语句。详细规则见 [Feng 语言异常模型规范](./feng-exception.md)；`defer` 语句块规则见 [Feng 语言 defer 规范](./feng-defer.md)。
 
 ## 11 自动内存管理
 

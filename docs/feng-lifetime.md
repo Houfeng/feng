@@ -81,7 +81,7 @@
 
 - 异常传播不破坏 ARC 正确性；异常展开阶段中，仍持有强引用的对象保持存活。
 - 异常展开过程中，离开作用域的局部变量会正常触发 release；ARC 的 retain/release 计数在异常路径与正常路径上语义一致。
-- `finally` 中执行的清理逻辑负责业务资源收尾，不影响 ARC 的引用计数模型。
+- `defer` 中执行的清理逻辑负责业务资源收尾，不影响 ARC 的引用计数模型。
 - 未捕获异常导致程序终止时，运行时不保证按业务语义执行外部资源回收。
 
 ## 10 规则
@@ -207,4 +207,4 @@ C 代码持有 Feng 对象时，retain/release 约定的详细接口文档与规
 - [Feng 内建类型规范](./feng-builtin-type.md): `string` 与数组的默认零值及核心语义说明。
 - [Feng 标准库数组扩展规范](./feng-std-array.md): 数组上的 `clone()`、`slice()` 与 `Span<T>` 视图规则。
 - [Feng 语言 ABI 互操作规范](./feng-interop.md): `@abi` ABI 边界上的借用、原始指针与 ABI 约束。
-- [Feng 语言异常规范](./feng-exception.md): 异常传播与 `finally` 清理语义。
+- [Feng 语言异常规范](./feng-exception.md): 异常传播与 `defer` 清理语义。
