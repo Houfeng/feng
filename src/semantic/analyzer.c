@@ -7917,27 +7917,33 @@ static bool resolve_and_validate_match_op(ResolveContext *context,
                 }
                 break;
             case FENG_MATCH_LABEL_TYPE:
-                /* Dispatch based on the target's static type:
-                 *  - union-form target: type label is a union member type,
+                /* Dispatch based on the target's static type, mirroring the
+                 * block-form match paths:
+                 *  - union-form target: type label is a union member type;
                  *    resolve as a normal type ref (covers single-segment
-                 *    `int` / `UserType` and qualified `Alias.Type` /
-                 *    `std.Error`). The union-specific validation below
-                 *    (resolve_union_match_label_index) verifies membership.
+                 *    `int` / `UserType` and qualified `b.Error` /
+                 *    `demo.base.Error`). The union-specific validation
+                 *    below (resolve_union_match_label_index) verifies
+                 *    membership. This path mirrors the block-form
+                 *    resolve_and_validate_union_match_common.
                  *  - enum target: type label is an enum item reference of
                  *    the form `EnumName.ItemName`. Calling resolve_type_ref
-                 *    here would reject it as `unknown type` (the second
-                 *    segment is an item name, not a type); skip and let the
+                 *    would reject it as `unknown type` (the second segment
+                 *    is an item name, not a type); skip and let the
                  *    enum-specific validation below read enum/item names
-                 *    directly from segments — mirroring the block-form enum
-                 *    match path in resolve_and_validate_enum_match_common.
-                 *  - other targets: type labels are not legal here; fall
-                 *    through to resolve_type_ref so a precise diagnostic is
-                 *    emitted (the subsequent union/enum paths will not run). */
-                if (inferred_expr_type_is_enum(context, target_type)) {
-                    break;
-                }
-                if (!resolve_type_ref(context, label->type, false)) {
-                    return false;
+                 *    directly from segments — mirroring the block-form
+                 *    resolve_and_validate_enum_match_common.
+                 *  - other targets (int / string / bool): type labels are
+                 *    not legal here. Skip resolve_type_ref and let the
+                 *    shared collect_match_branch_label_records path reject
+                 *    the label with AE1105 (same diagnostic the block form
+                 *    emits), instead of the misleading AE1013 `unknown
+                 *    type` that resolve_type_ref would produce for a
+                 *    2-segment `EnumName.ItemName` form. */
+                if (union_decl != NULL) {
+                    if (!resolve_type_ref(context, label->type, false)) {
+                        return false;
+                    }
                 }
                 break;
         }
