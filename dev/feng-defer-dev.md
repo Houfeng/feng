@@ -121,9 +121,58 @@ static void feng_cleanup_release_node(FengCleanupNode *node) {
 }
 ```
 
-### 2.5 feng_cleanup_release_to_frame_marker 变更
+### 2.5 边界检查更新：marker 判别从字段 NULL 改为 kind（必须）
 
-现有 `feng_cleanup_release_to_frame_marker`(feng_exception.c:43) 通过 `node->slot == NULL && node->aggregate_desc == NULL` 判别帧标记。引入显式 kind 后可改为 `node->kind == FENG_NODE_MARKER`，更清晰。**此变更属于附带清理，可与本次 defer 交付一起完成，也可后续独立完成。**
+引入 `FENG_NODE_DEFER` 后，原有依赖 `slot == NULL && aggregate_desc == NULL` 判别 marker 的不变量被破坏：DEFER 节点同样满足此条件（slot=NULL, aggregate_desc=NULL, defer_fn!=NULL）。两个使用此判别的函数必须改为 `kind == FENG_NODE_MARKER`，**此变更必须随本次 defer 交付一起完成，不是可选附带清理**。
+
+#### 2.5.1 feng_cleanup_release_to_frame_marker (feng_exception.c:43)
+
+```c
+static void feng_cleanup_release_to_frame_marker(void) {
+    while (g_cleanup_top != NULL) {
+        FengCleanupNode *node = g_cleanup_top;
+        g_cleanup_top = node->prev;
+        if (node->kind == FENG_NODE_MARKER) {
+            FengFrameMarker *marker = (FengFrameMarker *)((char *)node - offsetof(FengFrameMarker, node));
+            if (marker->is_function_boundary) {
+                return;
+            }
+            continue;
+        }
+        feng_cleanup_release_node(node);
+    }
+}
+```
+
+边界检查语义：仅当 `kind == FENG_NODE_MARKER` 时才 cast 到 `FengFrameMarker` 读取 `is_function_boundary`，决定停止（function boundary）或跳过（try boundary）；其他节点（DEFER / RELEASE）一律交给 `feng_cleanup_release_node` 处理。
+
+未改时的失败模式（DEFER 节点命中此分支）：
+
+- cast 到 `FengFrameMarker` 是 UB：DEFER 节点是独立栈分配的 `FengCleanupNode`（§5.5），未嵌入 `FengFrameMarker`，`is_function_boundary` 读到节点之前的栈垃圾。
+- 栈垃圾非零 → `return` 提前结束 cleanup，该帧上层所有 DEFER 与托管局部全部泄漏。
+- 栈垃圾为零 → `continue` 跳过该节点，defer_fn 永不调用，personality §6.1 声称的"自动执行 defer 体"不成立。
+
+#### 2.5.2 feng_frame_pop (feng_exception.c:202)
+
+```c
+void feng_frame_pop(void) {
+    if (g_cleanup_top == NULL) {
+        feng_panic("feng_frame_pop: chain underflow");
+    }
+    if (g_cleanup_top->kind != FENG_NODE_MARKER) {
+        feng_panic("feng_frame_pop: top cleanup node is not a frame marker");
+    }
+    g_cleanup_top = g_cleanup_top->prev;
+}
+```
+
+边界检查语义：栈顶必须是 `FENG_NODE_MARKER`，否则 panic。原字段判别 `slot != NULL || aggregate_desc != NULL` 会让 DEFER 节点（slot=NULL, aggregate_desc=NULL）通过校验，frame_pop 误把 DEFER 当 marker 弹出（不调用 defer_fn），chain 错位，后续 `feng_frame_release_to` / `feng_cleanup_release_to_frame_marker` 的指针/位置假设失效。
+
+#### 2.5.3 不受影响的函数
+
+- `feng_frame_release_to`(feng_exception.c:212)：按指针身份匹配目标 marker，遍历中间节点统一调用 `feng_cleanup_release_node`（已按 kind 分派），无需 marker 判别。
+- `feng_cleanup_release_all`(feng_exception.c:58)：遍历到空，每个节点调用 `feng_cleanup_release_node`（MARKER 分支为 no-op），无需 marker 判别。
+- `feng_cleanup_pop`(feng_exception.c:171)：仅弹栈顶不调用 release_node，由 codegen 保证 push/pop 配对，无需 kind 校验。
 
 ### 2.6 FengFrameMarker 适配
 
@@ -289,7 +338,7 @@ case FENG_STMT_DEFER: ok = cg_emit_defer(cg, stmt); break;
 
 personality 函数 `__feng_personality_v0`(feng_exception.c:292)在 CLEANUP_PHASE 调用 `feng_cleanup_release_to_frame_marker()`(feng_exception.c:43)，从 TLS chain 顶逐个 pop + 释放节点。DEFER 节点的 `feng_cleanup_release_node` 分支调用 `defer_fn(defer_closure)`，自动执行 defer 体。
 
-**无需额外处理**：现有 personality 遍历逻辑已覆盖 DEFER 节点。
+**personality 函数本身无需修改**：现有遍历逻辑覆盖 DEFER 节点。但其调用的 `feng_cleanup_release_to_frame_marker` 必须按 §2.5.1 更新 marker 判别为 `kind == FENG_NODE_MARKER`，否则 DEFER 节点会被误判为 marker 而跳过 defer_fn 调用。
 
 ### 6.2 landing pad
 
@@ -352,11 +401,13 @@ defer 相关的语义限制需要新增错误码（具体编号由人工决策�
 
 - [ ] `FengCleanupNode` 加 `kind` 字段(`FengChainNodeKind`)
 - [ ] `FengCleanupNode` 加 `defer_fn` / `defer_closure` 字段
-- [ ] `feng_defer_push` API 实现
+- [ ] `feng_defer_push` API 实现（runtime 私有 ABI 扩展，需人工决策）
+- [ ] `feng_defer_push` 声明添加到 `feng_runtime.h`（与 `feng_cleanup_push` 同位置）
 - [ ] `feng_cleanup_release_node` 增加 `FENG_NODE_DEFER` 分支
 - [ ] `feng_cleanup_push` / `feng_cleanup_push_aggregate` 内部设 `kind = FENG_NODE_RELEASE`
 - [ ] `feng_frame_push` / `feng_try_frame_push` 内部设 `kind = FENG_NODE_MARKER`
-- [ ] 可选：`feng_cleanup_release_to_frame_marker` 判别改为 `node->kind == FENG_NODE_MARKER`
+- [ ] `feng_cleanup_release_to_frame_marker` marker 判别改为 `node->kind == FENG_NODE_MARKER`（必须，见 §2.5.1）
+- [ ] `feng_frame_pop` 校验改为 `node->kind == FENG_NODE_MARKER`（必须，见 §2.5.2）
 - [ ] 全量回归测试（异常路径 + 正常路径）
 
 ### 10.2 Lexer
