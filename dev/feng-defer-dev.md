@@ -42,7 +42,7 @@
 
 现有 `FengCleanupNode` 通过字段 NULL 判别节点类型（slot != NULL → SLOT，aggregate_desc != NULL → AGGREGATE，全 NULL → MARKER）。新增 DEFER 后引入显式 `kind` 字段，顶层分三类：
 
-```
+```bash
 FengCleanupNode (cleanup chain 节点)
 ├─ FENG_NODE_MARKER     帧边界(函数/try)
 ├─ FENG_NODE_RELEASE    托管局部释放
@@ -178,6 +178,7 @@ defer 仅可出现在函数体或函数体内嵌套的块作用域中。出现�
 defer 体生成**静态 C 函数** + **栈上 closure 结构体**，注册到 TLS cleanup chain。
 
 选择理由：
+
 - 异常路径由 runtime personality 函数遍历 cleanup chain 调用 defer 体——必须能被 runtime 通过函数指针调用，只能是静态函数。
 - 正常路径（codegen emit `feng_cleanup_pop(); fn(closure);`）与异常路径调用同一份底层函数，语义保证一致。
 - 静态函数 + C 编译器内联优化：短 defer 体（如 `file.close()`）通常被 C 编译器在 -O2 下内联，性能不输内联方案；长 defer 体不被内联，避免代码膨胀。
@@ -212,6 +213,7 @@ struct __defer_closure_<func_name>_<seq> {
 ```
 
 特点：
+
 - **栈上分配**：closure 结构本身在 defer 注册位置所在的作用域栈上声明，生命周期不超过该作用域。defer 不逃逸，栈上分配安全。注意：closure 字段持有的是外层 var 的地址，该 var 的实际存储位置由其类型决定——标量直接在栈上，托管指针变量本身也在栈上（指向的堆内存由 ARC 管理），closure 不关心指向内容的位置，只持有 var 的地址。
 - **引用捕获**：所有捕获字段都是外层 var 的指针（`<type> *`），直接持有外层 var 的地址。defer 执行时通过指针读写外层 var 的当前运行时值，而非注册时的快照。defer 块**允许修改外层 var**（与 Swift / Go / Zig 一致）——通过指针写即可。`let` 绑定也通过地址访问，但 `let` 不可变，语义上等价只读。
 - **不参与 ARC**：closure 对象不是托管对象，无 `FengManagedHeader`，不参与引用计数。这是与 lambda closure 的核心区别：lambda 可逃逸（返回、存字段、异步调用），需要托管堆分配 + ARC；defer 不逃逸，栈上即可。
@@ -272,6 +274,7 @@ case FENG_STMT_DEFER: ok = cg_emit_defer(cg, stmt); break;
 ```
 
 `cg_emit_defer` 负责：
+
 1. 分析 defer 体的捕获需求
 2. 生成 closure 结构体定义（追加到 type_defs buffer）
 3. 生成 defer 静态函数（追加到 defer 函数 buffer，函数体生成结束后合并到输出）
