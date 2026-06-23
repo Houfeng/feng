@@ -2,6 +2,7 @@
 *.log
 .DS_Store
 .venv/
+.smoke
 node_modules/
 build/
 temp/

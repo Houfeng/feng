@@ -2281,6 +2281,7 @@ static bool collect_ctor_bound_names_from_stmt(const FengDecl *type_decl,
         case FENG_STMT_THROW:
         case FENG_STMT_BREAK:
         case FENG_STMT_CONTINUE:
+        case FENG_STMT_DEFER:
             return true;
     }
 

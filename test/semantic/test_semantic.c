@@ -2312,6 +2312,192 @@ static void test_continue_outside_loop_is_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_defer_inside_function_is_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(): int {\n"
+        "    var x = 1;\n"
+        "    defer {\n"
+        "        x = x + 1;\n"
+        "    }\n"
+        "    return x;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("defer_in_function.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_defer_with_return_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(): int {\n"
+        "    defer {\n"
+        "        return 1;\n"
+        "    }\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("defer_return_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "defer_return_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strcmp(errors[0].code, "AE1501") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "defer block cannot contain 'return'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_defer_with_throw_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    defer {\n"
+        "        throw \"boom\";\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("defer_throw_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "defer_throw_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strcmp(errors[0].code, "AE1502") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "defer block cannot contain 'throw'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_defer_with_nested_defer_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    defer {\n"
+        "        defer {\n"
+        "            1;\n"
+        "        }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("defer_nested_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "defer_nested_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strcmp(errors[0].code, "AE1503") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "defer block cannot contain nested 'defer'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_defer_with_break_at_top_level_of_defer_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    while true {\n"
+        "        defer {\n"
+        "            break;\n"
+        "        }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("defer_break_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "defer_break_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strcmp(errors[0].code, "AE1504") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "defer block cannot contain 'break'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_defer_with_continue_at_top_level_of_defer_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    while true {\n"
+        "        defer {\n"
+        "            continue;\n"
+        "        }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("defer_continue_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "defer_continue_error.f") == 0);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(strcmp(errors[0].code, "AE1505") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "defer block cannot contain 'continue'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_defer_with_break_inside_nested_loop_is_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    while true {\n"
+        "        defer {\n"
+        "            while true {\n"
+        "                break;\n"
+        "            }\n"
+        "        }\n"
+        "        break;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("defer_break_in_nested_loop.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_break_inside_lambda_in_loop_is_rejected(void) {
     const char *source =
         "module demo.main;\n"
@@ -17157,6 +17343,13 @@ int main(void) {
     test_throw_rejects_void_expression();
     test_break_outside_loop_is_rejected();
     test_continue_outside_loop_is_rejected();
+    test_defer_inside_function_is_accepted();
+    test_defer_with_return_is_rejected();
+    test_defer_with_throw_is_rejected();
+    test_defer_with_nested_defer_is_rejected();
+    test_defer_with_break_at_top_level_of_defer_is_rejected();
+    test_defer_with_continue_at_top_level_of_defer_is_rejected();
+    test_defer_with_break_inside_nested_loop_is_accepted();
     test_break_inside_lambda_in_loop_is_rejected();
     test_break_and_continue_inside_for_loop_are_accepted();
     test_break_directly_in_if_expr_block_is_rejected();

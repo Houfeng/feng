@@ -38,6 +38,7 @@ extern "C" {
     X(UNKNOWN, "unknown") \
     X(THROW, "throw") \
     X(RETURN, "return") \
+    X(DEFER, "defer") \
     X(VOID, "void")
 
 #define FENG_RESERVED_WORD_LIST(X) \

@@ -319,7 +319,8 @@ typedef enum FengStmtKind {
     FENG_STMT_RETURN,
     FENG_STMT_THROW,
     FENG_STMT_BREAK,
-    FENG_STMT_CONTINUE
+    FENG_STMT_CONTINUE,
+    FENG_STMT_DEFER
 } FengStmtKind;
 
 struct FengBlock {
@@ -380,6 +381,7 @@ struct FengStmt {
         } for_stmt;
         FengExpr *return_value;
         FengExpr *throw_value;
+        FengBlock *defer_block;  /* defer { ... } 体；复用 FengBlock 结构 */
     } as;
 };
 

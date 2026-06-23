@@ -43,7 +43,7 @@ static void test_keyword_and_annotation_counts(void) {
     FengTokenKind keyword_kind;
     FengAnnotationKind annotation_kind;
 
-    ASSERT(feng_keyword_count() == 29U);
+    ASSERT(feng_keyword_count() == 30U);
     ASSERT(feng_reserved_word_count() == 5U);
     ASSERT(feng_builtin_annotation_count() == 7U);
     ASSERT(feng_lookup_keyword("enum", 4U, &keyword_kind));

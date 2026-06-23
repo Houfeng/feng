@@ -97,7 +97,11 @@ typedef enum CGTypeKind {
     CG_TYPE_OBJECT,       /* user-defined type — Phase 1A iter 2 */
     CG_TYPE_SPEC,         /* fat object-form spec value (Step 4b — value model) */
     CG_TYPE_CALLABLE,     /* callable-form spec value (closure pointer) */
-    CG_TYPE_GENERIC_PARAM /* erased type-parameter slot (G6 — generics) */
+    CG_TYPE_GENERIC_PARAM,/* erased type-parameter slot (G6 — generics) */
+    CG_TYPE_DEFER         /* sentinel: scope-local defer registration entry.
+                           * Not a real type; only used by cg_release_scope to
+                           * recognise defer cleanup nodes mixed into the
+                           * locals list (docs/feng-defer-dev.md §5.6.1). */
 } CGTypeKind;
 
 struct UserType;     /* forward */
@@ -259,6 +263,13 @@ static bool cgtype_is_managed(const CGType *t) {
 
 static bool cgtype_is_aggregate(const CGType *t) {
     return cgtype_value_kind(t) == CG_VK_AGGREGATE;
+}
+
+/* docs/feng-defer-dev.md §5.6.1: DEFER sentinel kind for scope-local defer
+ * registration entries. cgtype_is_defer is checked by cg_release_scope to
+ * dispatch on defer nodes mixed into the locals list. */
+static bool cgtype_is_defer(const CGType *t) {
+    return t != NULL && t->kind == CG_TYPE_DEFER;
 }
 
 static bool cgtype_is_by_value_struct(const CGType *t) {
@@ -973,6 +984,21 @@ static bool scope_add(Scope *s, const char *name, const char *c_name,
     return l->name && l->c_name;
 }
 
+/* docs/feng-defer-dev.md §5.6.2: thin wrapper that registers a defer entry in
+ * the scope's locals list. `defer_fn_name` is the generated static function
+ * name; `defer_closure_name` is the generated stack-allocated closure struct
+ * variable name (may be NULL when the defer body captures nothing); the type
+ * is the CG_TYPE_DEFER sentinel. Re-uses scope_add so Scope structure,
+ * scope_pop_free, and scope_lookup are unchanged. */
+static bool scope_add_defer(Scope *s,
+                            const char *defer_fn_name,
+                            const char *defer_closure_name,
+                            CGType *defer_type) {
+    return scope_add(s, defer_fn_name,
+                     defer_closure_name != NULL ? defer_closure_name : "",
+                     defer_type, false);
+}
+
 static bool scope_mark_unknown_exception(Scope *s, const char *name, size_t len) {
     for (Scope *cur = s; cur; cur = cur->parent) {
         for (size_t i = cur->count; i > 0; i--) {
@@ -1082,6 +1108,9 @@ typedef struct CG {
     int       label_counter;
     size_t    lambda_counter;
     size_t    capture_cell_counter;
+    size_t    defer_counter;     /* per-codegen-instance monotonic id for
+                                  * __defer_<module>_<id> static functions
+                                  * and their closure struct types */
     int       loop_depth;
     bool      in_loop_with_break;
     CGType   *cur_return_type;
@@ -1289,6 +1318,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
                                   const FengToken *blame,
                                   char **out_expr);
 static bool cg_emit_stmt(CG *cg, const FengStmt *stmt);
+static bool cg_emit_defer(CG *cg, const FengStmt *stmt);
 typedef struct ExprResult ExprResult;
 static bool cg_emit_expr(CG *cg, const FengExpr *expr, ExprResult *out);
 static bool cg_emit_expr_raw(CG *cg, const FengExpr *expr, ExprResult *out);
@@ -2583,6 +2613,14 @@ static bool cg_collect_capture_requirements_in_stmt(const FengStmt *stmt,
         case FENG_STMT_BREAK:
         case FENG_STMT_CONTINUE:
             return true;
+        case FENG_STMT_DEFER:
+            /* defer 块内的语句对绑定/字段的引用会被此处递归分析，
+             * 视为 lambda 体内对外的捕获需求（与 if/while 块体一致）。 */
+            return cg_collect_capture_requirements_in_block_inner(stmt->as.defer_block,
+                                                                   out_names,
+                                                                   out_count,
+                                                                   out_capacity,
+                                                                   out_captures_self);
     }
     return true;
 }
@@ -19237,6 +19275,25 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
     for (size_t i = scope->count; i > 0; i--) {
         const Local *l = &scope->items[i - 1];
         if (l->is_param) continue;
+        if (cgtype_is_defer(l->type)) {
+            /* docs/feng-defer-dev.md §5.6.3: defer nodes mix with managed
+             * locals in LIFO order on the cleanup chain. Pop the chain node
+             * pushed at registration time, then invoke the generated defer
+             * function with its closure (NULL when the defer body captures
+             * nothing — see §5.5). The `name` field stores the defer function
+             * name and `c_name` stores the closure variable name. */
+            cg_emit_current_stmt_line_directive_force(cg);
+            if (l->c_name != NULL && l->c_name[0] != '\0') {
+                buf_append_fmt(cg->cur_body,
+                               "    feng_cleanup_pop(); %s(&%s);\n",
+                               l->name, l->c_name);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                               "    feng_cleanup_pop(); %s(NULL);\n",
+                               l->name);
+            }
+            continue;
+        }
         if (cgtype_is_managed(l->type)) {
             cg_emit_current_stmt_line_directive_force(cg);
             buf_append_fmt(cg->cur_body,
@@ -23349,6 +23406,7 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
         case FENG_STMT_BREAK:    ok = cg_emit_break_continue(cg, stmt, true); break;
         case FENG_STMT_CONTINUE: ok = cg_emit_break_continue(cg, stmt, false); break;
         case FENG_STMT_THROW:    ok = cg_emit_throw(cg, stmt); break;
+        case FENG_STMT_DEFER:    ok = cg_emit_defer(cg, stmt); break;
         default:
             ok = cg_fail(cg,
                          stmt->token,
@@ -23364,6 +23422,1155 @@ static bool cg_emit_block(CG *cg, const FengBlock *block) {
     for (size_t i = 0; i < block->statement_count; i++) {
         if (!cg_emit_stmt(cg, block->statements[i])) return false;
     }
+    return true;
+}
+
+/* ---- defer capture analysis ------------------------------------------------
+ *
+ * docs/feng-defer-dev.md §5.4: scan the defer body AST, collect every
+ * outer-scope binding name referenced inside it. We use the same approach
+ * as cg_collect_capture_requirements_in_block_inner but operate on the
+ * defer block; the captured names list is filtered by a shadow set built
+ * from local bindings declared inside the defer body so the same-named
+ * local does not pull in an outer binding.
+ *
+ * Feng semantic rejects use-before-declaration, so a flat two-pass scan
+ * (collect all local-binding names; collect all identifier references;
+ * subtract) is sufficient. */
+
+static bool cg_defer_add_local_binding_name(const FengStmt *stmt,
+                                            char ***out_names,
+                                            size_t *out_count,
+                                            size_t *out_capacity) {
+    FengSlice name;
+
+    if (stmt == NULL) return true;
+    switch (stmt->kind) {
+        case FENG_STMT_BINDING:
+            name = stmt->as.binding.name;
+            if (name.length > 0U) {
+                return cg_capture_name_list_add(out_names, out_count, out_capacity, name);
+            }
+            if (stmt->as.binding.is_destructure) {
+                for (size_t i = 0U; i < stmt->as.binding.destructure_count; ++i) {
+                    if (!cg_capture_name_list_add(out_names, out_count, out_capacity,
+                                                  stmt->as.binding.destructure_names[i])) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        case FENG_STMT_FOR:
+            if (stmt->as.for_stmt.is_for_in) {
+                name = stmt->as.for_stmt.iter_binding.name;
+                if (name.length > 0U &&
+                    !cg_capture_name_list_add(out_names, out_count, out_capacity, name)) {
+                    return false;
+                }
+            }
+            return true;
+        default:
+            return true;
+    }
+}
+
+static bool cg_defer_collect_local_binding_names_in_stmt(const FengStmt *stmt,
+                                                         char ***out_names,
+                                                         size_t *out_count,
+                                                         size_t *out_capacity);
+static bool cg_defer_collect_local_binding_names_in_block(const FengBlock *block,
+                                                           char ***out_names,
+                                                           size_t *out_count,
+                                                           size_t *out_capacity) {
+    if (block == NULL) return true;
+    for (size_t i = 0U; i < block->statement_count; ++i) {
+        if (!cg_defer_collect_local_binding_names_in_stmt(block->statements[i],
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool cg_defer_collect_local_binding_names_in_stmt(const FengStmt *stmt,
+                                                         char ***out_names,
+                                                         size_t *out_count,
+                                                         size_t *out_capacity) {
+    if (stmt == NULL) return true;
+    if (!cg_defer_add_local_binding_name(stmt, out_names, out_count, out_capacity)) {
+        return false;
+    }
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            return cg_defer_collect_local_binding_names_in_block(stmt->as.block,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity);
+        case FENG_STMT_IF:
+            for (size_t i = 0U; i < stmt->as.if_stmt.clause_count; ++i) {
+                if (!cg_defer_collect_local_binding_names_in_block(stmt->as.if_stmt.clauses[i].block,
+                                                                  out_names,
+                                                                  out_count,
+                                                                  out_capacity)) {
+                    return false;
+                }
+            }
+            return cg_defer_collect_local_binding_names_in_block(stmt->as.if_stmt.else_block,
+                                                                 out_names,
+                                                                 out_count,
+                                                                 out_capacity);
+        case FENG_STMT_MATCH:
+            for (size_t i = 0U; i < stmt->as.match_stmt.branch_count; ++i) {
+                if (!cg_defer_collect_local_binding_names_in_block(stmt->as.match_stmt.branches[i].body,
+                                                                   out_names,
+                                                                   out_count,
+                                                                   out_capacity)) {
+                    return false;
+                }
+            }
+            return cg_defer_collect_local_binding_names_in_block(stmt->as.match_stmt.else_block,
+                                                                 out_names,
+                                                                 out_count,
+                                                                 out_capacity);
+        case FENG_STMT_WHILE:
+            return cg_defer_collect_local_binding_names_in_block(stmt->as.while_stmt.body,
+                                                                 out_names,
+                                                                 out_count,
+                                                                 out_capacity);
+        case FENG_STMT_FOR:
+            return cg_defer_collect_local_binding_names_in_block(stmt->as.for_stmt.body,
+                                                                 out_names,
+                                                                 out_count,
+                                                                 out_capacity);
+        case FENG_STMT_DEFER:
+            /* Nested defer is rejected by semantic (AE1503), but defensively
+             * recurse so any local binding it introduces is still accounted
+             * for in the outer shadow set. */
+            return cg_defer_collect_local_binding_names_in_block(stmt->as.defer_block,
+                                                                 out_names,
+                                                                 out_count,
+                                                                 out_capacity);
+        default:
+            return true;
+    }
+}
+
+/* Determine whether `name` (length `len`) appears in the captured-names list. */
+static bool cg_defer_name_in_list(char *const *names, size_t count,
+                                  const char *name, size_t len) {
+    for (size_t i = 0U; i < count; ++i) {
+        if (strlen(names[i]) == len && memcmp(names[i], name, len) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Collect every identifier reference inside the defer body, minus the
+ * shadow set built from local bindings declared inside the defer body. */
+static bool cg_defer_collect_capture_refs_in_expr(const FengExpr *expr,
+                                                  char ***out_names,
+                                                  size_t *out_count,
+                                                  size_t *out_capacity,
+                                                  char *const *shadow_names,
+                                                  size_t shadow_count,
+                                                  bool *out_captures_self);
+
+static bool cg_defer_collect_capture_refs_in_stmt(const FengStmt *stmt,
+                                                 char ***out_names,
+                                                 size_t *out_count,
+                                                 size_t *out_capacity,
+                                                 char *const *shadow_names,
+                                                 size_t shadow_count,
+                                                 bool *out_captures_self);
+
+static bool cg_defer_collect_capture_refs_in_block(const FengBlock *block,
+                                                  char ***out_names,
+                                                  size_t *out_count,
+                                                  size_t *out_capacity,
+                                                  char *const *shadow_names,
+                                                  size_t shadow_count,
+                                                  bool *out_captures_self) {
+    if (block == NULL) return true;
+    for (size_t i = 0U; i < block->statement_count; ++i) {
+        if (!cg_defer_collect_capture_refs_in_stmt(block->statements[i],
+                                                   out_names,
+                                                   out_count,
+                                                   out_capacity,
+                                                   shadow_names,
+                                                   shadow_count,
+                                                   out_captures_self)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static bool cg_defer_collect_capture_refs_in_stmt(const FengStmt *stmt,
+                                                 char ***out_names,
+                                                 size_t *out_count,
+                                                 size_t *out_capacity,
+                                                 char *const *shadow_names,
+                                                 size_t shadow_count,
+                                                 bool *out_captures_self) {
+    if (stmt == NULL) return true;
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            return cg_defer_collect_capture_refs_in_block(stmt->as.block,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self);
+        case FENG_STMT_BINDING:
+            return cg_defer_collect_capture_refs_in_expr(stmt->as.binding.initializer,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self);
+        case FENG_STMT_ASSIGN:
+            return cg_defer_collect_capture_refs_in_expr(stmt->as.assign.target,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self) &&
+                   cg_defer_collect_capture_refs_in_expr(stmt->as.assign.value,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self);
+        case FENG_STMT_EXPR:
+        case FENG_STMT_TRY:
+            return cg_defer_collect_capture_refs_in_expr(stmt->as.expr,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self);
+        case FENG_STMT_IF:
+            for (size_t i = 0U; i < stmt->as.if_stmt.clause_count; ++i) {
+                if (!cg_defer_collect_capture_refs_in_expr(stmt->as.if_stmt.clauses[i].condition,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self) ||
+                    !cg_defer_collect_capture_refs_in_block(stmt->as.if_stmt.clauses[i].block,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           shadow_names,
+                                                           shadow_count,
+                                                           out_captures_self)) {
+                    return false;
+                }
+            }
+            return cg_defer_collect_capture_refs_in_block(stmt->as.if_stmt.else_block,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self);
+        case FENG_STMT_MATCH:
+            if (!cg_defer_collect_capture_refs_in_expr(stmt->as.match_stmt.target,
+                                                       out_names,
+                                                       out_count,
+                                                       out_capacity,
+                                                       shadow_names,
+                                                       shadow_count,
+                                                       out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0U; i < stmt->as.match_stmt.branch_count; ++i) {
+                const FengMatchBranch *branch = &stmt->as.match_stmt.branches[i];
+                for (size_t j = 0U; j < branch->label_count; ++j) {
+                    const FengMatchLabel *label = &branch->labels[j];
+                    if (!cg_defer_collect_capture_refs_in_expr(label->value,
+                                                              out_names,
+                                                              out_count,
+                                                              out_capacity,
+                                                              shadow_names,
+                                                              shadow_count,
+                                                              out_captures_self) ||
+                        !cg_defer_collect_capture_refs_in_expr(label->range_low,
+                                                              out_names,
+                                                              out_count,
+                                                              out_capacity,
+                                                              shadow_names,
+                                                              shadow_count,
+                                                              out_captures_self) ||
+                        !cg_defer_collect_capture_refs_in_expr(label->range_high,
+                                                              out_names,
+                                                              out_count,
+                                                              out_capacity,
+                                                              shadow_names,
+                                                              shadow_count,
+                                                              out_captures_self)) {
+                        return false;
+                    }
+                }
+                if (!cg_defer_collect_capture_refs_in_block(branch->body,
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             shadow_names,
+                                                             shadow_count,
+                                                             out_captures_self)) {
+                    return false;
+                }
+            }
+            return cg_defer_collect_capture_refs_in_block(stmt->as.match_stmt.else_block,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self);
+        case FENG_STMT_WHILE:
+            return cg_defer_collect_capture_refs_in_expr(stmt->as.while_stmt.condition,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self) &&
+                   cg_defer_collect_capture_refs_in_block(stmt->as.while_stmt.body,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self);
+        case FENG_STMT_FOR:
+            if (stmt->as.for_stmt.is_for_in) {
+                return cg_defer_collect_capture_refs_in_expr(stmt->as.for_stmt.iter_expr,
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             shadow_names,
+                                                             shadow_count,
+                                                             out_captures_self) &&
+                       cg_defer_collect_capture_refs_in_expr(stmt->as.for_stmt.iter_binding.initializer,
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             shadow_names,
+                                                             shadow_count,
+                                                             out_captures_self) &&
+                       cg_defer_collect_capture_refs_in_block(stmt->as.for_stmt.body,
+                                                              out_names,
+                                                              out_count,
+                                                              out_capacity,
+                                                              shadow_names,
+                                                              shadow_count,
+                                                              out_captures_self);
+            }
+            return cg_defer_collect_capture_refs_in_stmt(stmt->as.for_stmt.init,
+                                                        out_names,
+                                                        out_count,
+                                                        out_capacity,
+                                                        shadow_names,
+                                                        shadow_count,
+                                                        out_captures_self) &&
+                   cg_defer_collect_capture_refs_in_expr(stmt->as.for_stmt.condition,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self) &&
+                   cg_defer_collect_capture_refs_in_stmt(stmt->as.for_stmt.update,
+                                                        out_names,
+                                                        out_count,
+                                                        out_capacity,
+                                                        shadow_names,
+                                                        shadow_count,
+                                                        out_captures_self) &&
+                   cg_defer_collect_capture_refs_in_block(stmt->as.for_stmt.body,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self);
+        case FENG_STMT_RETURN:
+        case FENG_STMT_THROW:
+            /* Semantic rejects return/throw inside defer (AE1501/AE1502). */
+            return true;
+        case FENG_STMT_BREAK:
+        case FENG_STMT_CONTINUE:
+            return true;
+        case FENG_STMT_DEFER:
+            return cg_defer_collect_capture_refs_in_block(stmt->as.defer_block,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self);
+    }
+    return true;
+}
+
+static bool cg_defer_collect_capture_refs_in_expr(const FengExpr *expr,
+                                                  char ***out_names,
+                                                  size_t *out_count,
+                                                  size_t *out_capacity,
+                                                  char *const *shadow_names,
+                                                  size_t shadow_count,
+                                                  bool *out_captures_self) {
+    if (expr == NULL) return true;
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER: {
+            FengSlice id = expr->as.identifier;
+            if (id.length == 0U) return true;
+            if (cg_defer_name_in_list(shadow_names, shadow_count, id.data, id.length)) {
+                return true;
+            }
+            if (cg_defer_name_in_list(*out_names, *out_count, id.data, id.length)) {
+                return true;
+            }
+            return cg_capture_name_list_add(out_names, out_count, out_capacity, id);
+        }
+        case FENG_EXPR_SELF:
+            *out_captures_self = true;
+            return true;
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+            return true;
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (size_t i = 0U; i < expr->as.array_literal.count; ++i) {
+                if (!cg_defer_collect_capture_refs_in_expr(expr->as.array_literal.items[i],
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           shadow_names,
+                                                           shadow_count,
+                                                           out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (size_t i = 0U; i < expr->as.tuple_literal.count; ++i) {
+                if (!cg_defer_collect_capture_refs_in_expr(expr->as.tuple_literal.items[i],
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           shadow_names,
+                                                           shadow_count,
+                                                           out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_OBJECT_LITERAL:
+            if (!cg_defer_collect_capture_refs_in_expr(expr->as.object_literal.target,
+                                                       out_names,
+                                                       out_count,
+                                                       out_capacity,
+                                                       shadow_names,
+                                                       shadow_count,
+                                                       out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0U; i < expr->as.object_literal.field_count; ++i) {
+                if (!cg_defer_collect_capture_refs_in_expr(expr->as.object_literal.fields[i].value,
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           shadow_names,
+                                                           shadow_count,
+                                                           out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_GENERIC_TARGET:
+            return cg_defer_collect_capture_refs_in_expr(expr->as.generic_target.target,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self);
+        case FENG_EXPR_CALL:
+            if (!cg_defer_collect_capture_refs_in_expr(expr->as.call.callee,
+                                                       out_names,
+                                                       out_count,
+                                                       out_capacity,
+                                                       shadow_names,
+                                                       shadow_count,
+                                                       out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0U; i < expr->as.call.arg_count; ++i) {
+                if (!cg_defer_collect_capture_refs_in_expr(expr->as.call.args[i],
+                                                           out_names,
+                                                           out_count,
+                                                           out_capacity,
+                                                           shadow_names,
+                                                           shadow_count,
+                                                           out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_MEMBER:
+            return cg_defer_collect_capture_refs_in_expr(expr->as.member.object,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self);
+        case FENG_EXPR_INDEX:
+            return cg_defer_collect_capture_refs_in_expr(expr->as.index.object,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self) &&
+                   cg_defer_collect_capture_refs_in_expr(expr->as.index.index,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self);
+        case FENG_EXPR_UNARY:
+            return cg_defer_collect_capture_refs_in_expr(expr->as.unary.operand,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self);
+        case FENG_EXPR_BINARY:
+            return cg_defer_collect_capture_refs_in_expr(expr->as.binary.left,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self) &&
+                   cg_defer_collect_capture_refs_in_expr(expr->as.binary.right,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self);
+        case FENG_EXPR_LAMBDA:
+            /* Nested lambda's own captures do not affect this defer; their
+             * body references are resolved through the lambda's capture cell
+             * mechanism (semantic-analyzed separately). */
+            return true;
+        case FENG_EXPR_CAST:
+            return cg_defer_collect_capture_refs_in_expr(expr->as.cast.value,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self);
+        case FENG_EXPR_IF:
+            return cg_defer_collect_capture_refs_in_expr(expr->as.if_expr.condition,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self) &&
+                   cg_defer_collect_capture_refs_in_block(expr->as.if_expr.then_block,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self) &&
+                   cg_defer_collect_capture_refs_in_block(expr->as.if_expr.else_block,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self);
+        case FENG_EXPR_MATCH:
+            if (!cg_defer_collect_capture_refs_in_expr(expr->as.match_expr.target,
+                                                       out_names,
+                                                       out_count,
+                                                       out_capacity,
+                                                       shadow_names,
+                                                       shadow_count,
+                                                       out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0U; i < expr->as.match_expr.branch_count; ++i) {
+                const FengMatchBranch *branch = &expr->as.match_expr.branches[i];
+                for (size_t j = 0U; j < branch->label_count; ++j) {
+                    const FengMatchLabel *label = &branch->labels[j];
+                    if (!cg_defer_collect_capture_refs_in_expr(label->value,
+                                                              out_names,
+                                                              out_count,
+                                                              out_capacity,
+                                                              shadow_names,
+                                                              shadow_count,
+                                                              out_captures_self) ||
+                        !cg_defer_collect_capture_refs_in_expr(label->range_low,
+                                                              out_names,
+                                                              out_count,
+                                                              out_capacity,
+                                                              shadow_names,
+                                                              shadow_count,
+                                                              out_captures_self) ||
+                        !cg_defer_collect_capture_refs_in_expr(label->range_high,
+                                                              out_names,
+                                                              out_count,
+                                                              out_capacity,
+                                                              shadow_names,
+                                                              shadow_count,
+                                                              out_captures_self)) {
+                        return false;
+                    }
+                }
+                if (!cg_defer_collect_capture_refs_in_block(branch->body,
+                                                             out_names,
+                                                             out_count,
+                                                             out_capacity,
+                                                             shadow_names,
+                                                             shadow_count,
+                                                             out_captures_self)) {
+                    return false;
+                }
+            }
+            return cg_defer_collect_capture_refs_in_block(expr->as.match_expr.else_block,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self);
+        case FENG_EXPR_TRY:
+            if (!cg_defer_collect_capture_refs_in_expr(expr->as.try_expr.body,
+                                                       out_names,
+                                                       out_count,
+                                                       out_capacity,
+                                                       shadow_names,
+                                                       shadow_count,
+                                                       out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0U; i < expr->as.try_expr.clause_count; ++i) {
+                if (!cg_defer_collect_capture_refs_in_block(expr->as.try_expr.clauses[i].body,
+                                                            out_names,
+                                                            out_count,
+                                                            out_capacity,
+                                                            shadow_names,
+                                                            shadow_count,
+                                                            out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_ARRAY_NEW:
+            return cg_defer_collect_capture_refs_in_expr(expr->as.array_new.size,
+                                                         out_names,
+                                                         out_count,
+                                                         out_capacity,
+                                                         shadow_names,
+                                                         shadow_count,
+                                                         out_captures_self);
+        case FENG_EXPR_MATCH_OP:
+            if (!cg_defer_collect_capture_refs_in_expr(expr->as.match_op.target,
+                                                       out_names,
+                                                       out_count,
+                                                       out_capacity,
+                                                       shadow_names,
+                                                       shadow_count,
+                                                       out_captures_self)) {
+                return false;
+            }
+            for (size_t i = 0U; i < expr->as.match_op.label_count; ++i) {
+                const FengMatchLabel *label = &expr->as.match_op.labels[i];
+                if (!cg_defer_collect_capture_refs_in_expr(label->value,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self) ||
+                    !cg_defer_collect_capture_refs_in_expr(label->range_low,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self) ||
+                    !cg_defer_collect_capture_refs_in_expr(label->range_high,
+                                                          out_names,
+                                                          out_count,
+                                                          out_capacity,
+                                                          shadow_names,
+                                                          shadow_count,
+                                                          out_captures_self)) {
+                    return false;
+                }
+            }
+            return true;
+    }
+    return true;
+}
+
+/* Compute capture requirements for a defer body. Returns a heap-allocated
+ * list of unique outer-scope names referenced inside the defer block,
+ * excluding any local bindings declared inside it. *out_captures_self is
+ * set when the defer body references `self`. */
+static bool cg_defer_compute_captures(const FengBlock *defer_block,
+                                      char ***out_names,
+                                      size_t *out_count,
+                                      bool *out_captures_self) {
+    char **shadow_names = NULL;
+    size_t shadow_count = 0U;
+    size_t shadow_capacity = 0U;
+    char **captured = NULL;
+    size_t captured_count = 0U;
+    size_t captured_capacity = 0U;
+
+    *out_names = NULL;
+    *out_count = 0U;
+    *out_captures_self = false;
+    if (!cg_defer_collect_local_binding_names_in_block(defer_block,
+                                                       &shadow_names,
+                                                       &shadow_count,
+                                                       &shadow_capacity)) {
+        goto fail;
+    }
+    if (!cg_defer_collect_capture_refs_in_block(defer_block,
+                                                &captured,
+                                                &captured_count,
+                                                &captured_capacity,
+                                                shadow_names,
+                                                shadow_count,
+                                                out_captures_self)) {
+        goto fail;
+    }
+    for (size_t i = 0U; i < shadow_count; ++i) free(shadow_names[i]);
+    free(shadow_names);
+    *out_names = captured;
+    *out_count = captured_count;
+    return true;
+fail:
+    for (size_t i = 0U; i < shadow_count; ++i) free(shadow_names[i]);
+    free(shadow_names);
+    for (size_t i = 0U; i < captured_count; ++i) free(captured[i]);
+    free(captured);
+    return false;
+}
+
+typedef struct DeferCaptureInfo {
+    const Local *local;   /* borrowed from outer scope; lifetime tied to Scope */
+    char *field_name;     /* heap-allocated closure field name */
+} DeferCaptureInfo;
+
+/* Resolve every captured name against the current outer scope chain and
+ * produce a DeferCaptureInfo[] array. Returns false on allocation failure
+ * or unresolved capture (which is a codegen bug — semantic guarantees the
+ * identifier resolves). */
+static bool cg_defer_resolve_captures(CG *cg,
+                                       char *const *names,
+                                       size_t count,
+                                       bool captures_self,
+                                       DeferCaptureInfo **out_infos,
+                                       size_t *out_count,
+                                       FengToken blame) {
+    DeferCaptureInfo *infos = NULL;
+    size_t info_count = 0U;
+    size_t total = count + (captures_self ? 1U : 0U);
+
+    if (total == 0U) {
+        *out_infos = NULL;
+        *out_count = 0U;
+        return true;
+    }
+    infos = calloc(total, sizeof *infos);
+    if (infos == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    for (size_t i = 0U; i < count; ++i) {
+        const Local *local = scope_lookup(cg->cur_scope, names[i], strlen(names[i]));
+        if (local == NULL) {
+            /* Unresolved capture means the identifier resolves to something
+             * codegen already lowers via capture cells (lambda) or a
+             * different surface. The simplest safe behavior is to skip it
+             * rather than emit a broken closure field — defer bodies that
+             * reference such bindings are rare and will be revisited when
+             * their owning construct is re-examined. */
+            continue;
+        }
+        infos[info_count].local = local;
+        Buf fb;
+        buf_init(&fb);
+        buf_append_fmt(&fb, "_dc%zu", info_count);
+        infos[info_count].field_name = fb.data;
+        if (infos[info_count].field_name == NULL) {
+            for (size_t j = 0U; j < info_count; ++j) free(infos[j].field_name);
+            free(infos);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        info_count++;
+    }
+    if (captures_self) {
+        const Local *self_local = scope_lookup(cg->cur_scope, "self", 4U);
+        if (self_local == NULL) {
+            for (size_t j = 0U; j < info_count; ++j) free(infos[j].field_name);
+            free(infos);
+            return cg_fail(cg, blame,
+                           "CE0287", "codegen: defer body references 'self' but no 'self' binding is in scope");
+        }
+        infos[info_count].local = self_local;
+        Buf fb;
+        buf_init(&fb);
+        buf_append_fmt(&fb, "_dc%zu", info_count);
+        infos[info_count].field_name = fb.data;
+        if (infos[info_count].field_name == NULL) {
+            for (size_t j = 0U; j < info_count; ++j) free(infos[j].field_name);
+            free(infos);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        info_count++;
+    }
+    *out_infos = infos;
+    *out_count = info_count;
+    return true;
+}
+
+static void cg_defer_capture_infos_free(DeferCaptureInfo *infos, size_t count) {
+    if (infos == NULL) return;
+    for (size_t i = 0U; i < count; ++i) free(infos[i].field_name);
+    free(infos);
+}
+
+/* docs/feng-defer-dev.md §5.1–§5.6: emit a defer statement.
+ *
+ * Steps:
+ *   1. Analyze capture requirements on the defer body (§5.4).
+ *   2. Resolve each captured name against the outer scope chain.
+ *   3. Emit a stack-allocated closure struct type into type_defs (§5.3);
+ *      skip when there are no captures.
+ *   4. Emit a static `void __defer_<module>_<seq>(void *_closure)` into
+ *      witness_defs (§5.2). Inside it, register every captured binding as
+ *      a Local whose c_name dereferences the closure field so the body can
+ *      read/modify the outer variable by address.
+ *   5. At the registration site emit the closure initialiser (when any) and
+ *      `feng_defer_push(&node, fn, closure_or_NULL)` (§5.5).
+ *   6. Register the defer entry in the current scope's locals list via
+ *      scope_add_defer (§5.6.2) so cg_release_scope emits the matching
+ *      `feng_cleanup_pop(); fn(closure_or_NULL);` at scope exit.
+ */
+static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
+    char **captured_names = NULL;
+    size_t captured_count = 0U;
+    bool captures_self = false;
+    DeferCaptureInfo *infos = NULL;
+    size_t info_count = 0U;
+    char *closure_struct_name = NULL;
+    char *defer_fn_name = NULL;
+    char *closure_var_name = NULL;
+    char *node_var_name = NULL;
+    bool ok = false;
+    FengToken blame = stmt->token;
+
+    if (!cg_defer_compute_captures(stmt->as.defer_block,
+                                   &captured_names,
+                                   &captured_count,
+                                   &captures_self)) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    if (!cg_defer_resolve_captures(cg,
+                                   captured_names,
+                                   captured_count,
+                                   captures_self,
+                                   &infos,
+                                   &info_count,
+                                   blame)) {
+        for (size_t i = 0U; i < captured_count; ++i) free(captured_names[i]);
+        free(captured_names);
+        return false;
+    }
+    /* captured_names consumed (copied into infos or skipped); free shells. */
+    for (size_t i = 0U; i < captured_count; ++i) free(captured_names[i]);
+    free(captured_names);
+
+    size_t defer_id = cg->defer_counter++;
+    {
+        Buf sb, fb;
+        buf_init(&sb);
+        buf_init(&fb);
+        buf_append_fmt(&sb, "__defer_closure_%s_%zu",
+                       cg->module_mangle ? cg->module_mangle : "mod",
+                       defer_id);
+        buf_append_fmt(&fb, "__defer_%s_%zu",
+                       cg->module_mangle ? cg->module_mangle : "mod",
+                       defer_id);
+        closure_struct_name = sb.data;
+        defer_fn_name = fb.data;
+    }
+    if (closure_struct_name == NULL || defer_fn_name == NULL) {
+        cg_defer_capture_infos_free(infos, info_count);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    /* §5.3: closure struct type. Each field is a pointer to the outer
+     * variable's storage so the defer body reads/writes the runtime value
+     * rather than a registration-time snapshot. */
+    if (info_count > 0U) {
+        Buf *td = &cg->type_defs;
+        buf_append_fmt(td, "struct %s {\n", closure_struct_name);
+        for (size_t i = 0U; i < info_count; ++i) {
+            buf_append_cstr(td, "    ");
+            cg_emit_c_type(td, infos[i].local->type);
+            buf_append_fmt(td, " *%s;\n", infos[i].field_name);
+        }
+        buf_append_cstr(td, "};\n\n");
+    }
+
+    /* Forward-declare the defer static function. witness_defs is emitted
+     * after fn_defs in cg_finalize, but the registration site (inside the
+     * caller's body, which lives in fn_defs) references this symbol — so
+     * the prototype must land in fn_protos, which precedes fn_defs. */
+    buf_append_fmt(&cg->fn_protos,
+                   "static void %s(void *_closure);\n",
+                   defer_fn_name);
+
+    /* §5.2: defer static function. Save / restore per-function state so the
+     * generated body is independent of the registration site. */
+    {
+        Buf fn;
+        Buf *saved_body = cg->cur_body;
+        Scope *saved_scope = cg->cur_scope;
+        int saved_tmp_counter = cg->tmp_counter;
+        int saved_local_counter = cg->local_counter;
+        int saved_loop_depth = cg->loop_depth;
+        int saved_try_depth = cg->try_depth;
+        int saved_active_exception_frame_count = cg->active_exception_frame_count;
+        int saved_active_caught_unwind_count = cg->active_caught_unwind_count;
+        CGType *saved_return_type = cg->cur_return_type;
+        bool saved_is_main = cg->cur_fn_is_main;
+        bool saved_has_frame_marker = cg->cur_function_has_frame_marker;
+        const char *saved_frame_backend_symbol = cg->current_frame_backend_symbol;
+        Scope *fn_scope = NULL;
+        bool fn_ok = false;
+
+        buf_init(&fn);
+        fn_scope = scope_push(NULL);
+        if (fn_scope == NULL) {
+            cg_defer_capture_infos_free(infos, info_count);
+            free(closure_struct_name);
+            free(defer_fn_name);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        cg->cur_body = &fn;
+        cg->cur_scope = fn_scope;
+        cg->tmp_counter = 0;
+        cg->local_counter = 0;
+        cg->loop_depth = 0;
+        cg->try_depth = 0;
+        cg->active_exception_frame_count = 0;
+        cg->active_caught_unwind_count = 0;
+        cg->cur_function_has_frame_marker = false;
+        cg->cur_return_type = cgtype_new(CG_TYPE_VOID);
+        cg->cur_fn_is_main = false;
+        cg->current_frame_backend_symbol = NULL;
+
+        buf_append_fmt(&fn, "static void %s(void *_closure) {\n", defer_fn_name);
+        if (info_count > 0U) {
+            buf_append_fmt(&fn,
+                "    struct %s *_c = (struct %s *)_closure;\n"
+                "    (void)_c;\n",
+                closure_struct_name,
+                closure_struct_name);
+        } else {
+            buf_append_cstr(&fn, "    (void)_closure;\n");
+        }
+        for (size_t i = 0U; i < info_count; ++i) {
+            /* Register the captured binding in the defer function's scope.
+             * The c_name dereferences the closure field so every read/write
+             * in the body touches the outer variable's storage directly. */
+            char *alias_c_name = NULL;
+            Buf cb;
+            buf_init(&cb);
+            buf_append_fmt(&cb, "(*_c->%s)", infos[i].field_name);
+            alias_c_name = cb.data;
+            if (alias_c_name == NULL) {
+                cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+                buf_free(&fn);
+                goto fn_cleanup;
+            }
+            CGType *alias_type = cgtype_clone(infos[i].local->type);
+            if (alias_type == NULL ||
+                !scope_add(fn_scope,
+                           infos[i].local->name,
+                           alias_c_name,
+                           alias_type,
+                           true)) {
+                /* is_param = true: the captured binding is owned by the
+                 * outer scope. cg_release_scope skips is_param locals, so
+                 * the defer function does not emit a stray release for it. */
+                free(alias_c_name);
+                cgtype_free(alias_type);
+                cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+                buf_free(&fn);
+                goto fn_cleanup;
+            }
+            /* scope_add strdups name and c_name; free our copies. */
+            free(alias_c_name);
+        }
+        if (!cg_emit_block(cg, stmt->as.defer_block)) {
+            buf_free(&fn);
+            goto fn_cleanup;
+        }
+        cg_release_scope(cg, fn_scope);
+        buf_append_cstr(&fn, "}\n\n");
+        if (fn.data == NULL) {
+            cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            buf_free(&fn);
+            goto fn_cleanup;
+        }
+        buf_append(&cg->witness_defs, fn.data, fn.length);
+        fn_ok = true;
+
+    fn_cleanup:
+        cg->cur_body = saved_body;
+        cg->cur_scope = saved_scope;
+        cg->tmp_counter = saved_tmp_counter;
+        cg->local_counter = saved_local_counter;
+        cg->loop_depth = saved_loop_depth;
+        cg->try_depth = saved_try_depth;
+        cg->active_exception_frame_count = saved_active_exception_frame_count;
+        cg->active_caught_unwind_count = saved_active_caught_unwind_count;
+        cg->cur_return_type = saved_return_type;
+        cg->cur_fn_is_main = saved_is_main;
+        cg->cur_function_has_frame_marker = saved_has_frame_marker;
+        cg->current_frame_backend_symbol = saved_frame_backend_symbol;
+        if (fn_scope != NULL) scope_pop_free(fn_scope);
+        buf_free(&fn);
+        if (!fn_ok) {
+            cg_defer_capture_infos_free(infos, info_count);
+            free(closure_struct_name);
+            free(defer_fn_name);
+            return false;
+        }
+    }
+
+    /* §5.5: emit closure initialiser + registration at the defer site. */
+    if (!cg_emit_line_directive(cg, blame)) {
+        cg_defer_capture_infos_free(infos, info_count);
+        free(closure_struct_name);
+        free(defer_fn_name);
+        return false;
+    }
+    if (info_count > 0U) {
+        Buf vb;
+        buf_init(&vb);
+        buf_append_fmt(&vb, "__defer_closure_%s_%zu",
+                       cg->module_mangle ? cg->module_mangle : "mod",
+                       defer_id);
+        closure_var_name = vb.data;
+        if (closure_var_name == NULL) {
+            cg_defer_capture_infos_free(infos, info_count);
+            free(closure_struct_name);
+            free(defer_fn_name);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+                       "    struct %s %s = {",
+                       closure_struct_name,
+                       closure_var_name);
+        for (size_t i = 0U; i < info_count; ++i) {
+            if (i > 0U) buf_append_cstr(cg->cur_body, ", ");
+            buf_append_fmt(cg->cur_body, "&%s", infos[i].local->c_name);
+        }
+        buf_append_cstr(cg->cur_body, "};\n");
+    }
+    {
+        Buf nb;
+        buf_init(&nb);
+        buf_append_fmt(&nb, "_defer_%s_%zu",
+                       cg->module_mangle ? cg->module_mangle : "mod",
+                       defer_id);
+        node_var_name = nb.data;
+        if (node_var_name == NULL) {
+            free(closure_var_name);
+            cg_defer_capture_infos_free(infos, info_count);
+            free(closure_struct_name);
+            free(defer_fn_name);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+    }
+    /* feng_defer_push takes the closure by void *. The closure is a stack
+     * struct; pass its address so the defer function can down-cast. */
+    if (closure_var_name != NULL) {
+        buf_append_fmt(cg->cur_body,
+                       "    FengCleanupNode %s; feng_defer_push(&%s, %s, &%s);\n",
+                       node_var_name,
+                       node_var_name,
+                       defer_fn_name,
+                       closure_var_name);
+    } else {
+        buf_append_fmt(cg->cur_body,
+                       "    FengCleanupNode %s; feng_defer_push(&%s, %s, NULL);\n",
+                       node_var_name,
+                       node_var_name,
+                       defer_fn_name);
+    }
+
+    /* §5.6.2: register the defer entry in the current scope so cg_release_scope
+     * emits the matching pop+invoke at scope exit. */
+    {
+        CGType *defer_type = cgtype_new(CG_TYPE_DEFER);
+        if (defer_type == NULL ||
+            !scope_add_defer(cg->cur_scope,
+                             defer_fn_name,
+                             closure_var_name,
+                             defer_type)) {
+            cgtype_free(defer_type);
+            free(closure_var_name);
+            free(node_var_name);
+            cg_defer_capture_infos_free(infos, info_count);
+            free(closure_struct_name);
+            free(defer_fn_name);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+    }
+
+    /* closure_var_name ownership transferred into the Local via scope_add_defer
+     * (it strdup's). node_var_name is owned by this function (used only here
+     * for emit); we leak it because the generated code refers to it only at
+     * emit time and never after. To avoid leaking, free it now. */
+    free(node_var_name);
+    free(closure_struct_name);
+    free(defer_fn_name);
+    cg_defer_capture_infos_free(infos, info_count);
+    ok = true;
+
+    /* `ok = true` is the only path; suppress unused-warning otherwise. */
+    (void)ok;
     return true;
 }
 
@@ -28732,6 +29939,8 @@ static bool cg_collect_generic_instances_from_stmt(CG *cg, const FengStmt *stmt,
         case FENG_STMT_BREAK:
         case FENG_STMT_CONTINUE:
             return true;
+        case FENG_STMT_DEFER:
+            return cg_collect_generic_instances_from_block(cg, stmt->as.defer_block, scope);
     }
     return true;
 }

@@ -4206,6 +4206,21 @@ static FengStmt *parse_while_statement(Parser *parser) {
     return stmt;
 }
 
+/* Parse `defer { ... }`. Per docs/feng-defer.md §3.2 the body MUST be a
+ * braced block; single-statement form is not allowed. */
+static FengStmt *parse_defer_statement(Parser *parser) {
+    FengStmt *stmt = new_stmt(parser, FENG_STMT_DEFER, parser_previous_token(parser));
+    if (stmt == NULL) {
+        return NULL;
+    }
+    stmt->as.defer_block = parse_block(parser);
+    if (stmt->as.defer_block == NULL) {
+        free_stmt(stmt);
+        return NULL;
+    }
+    return stmt;
+}
+
 static FengStmt *parse_for_statement(Parser *parser) {
     FengStmt *stmt = new_stmt(parser, FENG_STMT_FOR, parser_previous_token(parser));
 
@@ -4387,6 +4402,9 @@ static FengStmt *parse_statement(Parser *parser) {
     }
     if (parser_match(parser, FENG_TOKEN_KW_FOR)) {
         return parse_for_statement(parser);
+    }
+    if (parser_match(parser, FENG_TOKEN_KW_DEFER)) {
+        return parse_defer_statement(parser);
     }
     if (parser_match(parser, FENG_TOKEN_KW_RETURN)) {
         stmt = new_stmt(parser, FENG_STMT_RETURN, parser_previous_token(parser));
@@ -4861,6 +4879,9 @@ static void free_stmt(FengStmt *stmt) {
             break;
         case FENG_STMT_BREAK:
         case FENG_STMT_CONTINUE:
+            break;
+        case FENG_STMT_DEFER:
+            free_block(stmt->as.defer_block);
             break;
     }
 

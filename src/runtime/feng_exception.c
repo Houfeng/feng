@@ -26,17 +26,29 @@ static void feng_cleanup_release_node(FengCleanupNode *node) {
     if (node == NULL) {
         return;
     }
-    if (node->aggregate_desc != NULL) {
-        if (node->aggregate_value != NULL) {
-            feng_aggregate_release(node->aggregate_value, node->aggregate_desc);
-            node->aggregate_value = NULL;
+    switch (node->kind) {
+    case FENG_NODE_DEFER:
+        if (node->defer_fn != NULL) {
+            node->defer_fn(node->defer_closure);
         }
         return;
-    }
-    slot = node->slot;
-    if (slot != NULL && *slot != NULL) {
-        feng_release(*slot);
-        *slot = NULL;
+    case FENG_NODE_RELEASE:
+        if (node->aggregate_desc != NULL) {
+            if (node->aggregate_value != NULL) {
+                feng_aggregate_release(node->aggregate_value, node->aggregate_desc);
+                node->aggregate_value = NULL;
+            }
+            return;
+        }
+        slot = node->slot;
+        if (slot != NULL && *slot != NULL) {
+            feng_release(*slot);
+            *slot = NULL;
+        }
+        return;
+    case FENG_NODE_MARKER:
+        /* 帧标记不释放资源，由 feng_cleanup_release_to_frame_marker 处理 */
+        return;
     }
 }
 
@@ -44,7 +56,7 @@ static void feng_cleanup_release_to_frame_marker(void) {
     while (g_cleanup_top != NULL) {
         FengCleanupNode *node = g_cleanup_top;
         g_cleanup_top = node->prev;
-        if (node->slot == NULL && node->aggregate_desc == NULL) {
+        if (node->kind == FENG_NODE_MARKER) {
             FengFrameMarker *marker = (FengFrameMarker *)((char *)node - offsetof(FengFrameMarker, node));
             if (marker->is_function_boundary) {
                 return;
@@ -142,9 +154,12 @@ void feng_cleanup_push(FengCleanupNode *node, void **slot) {
     if (slot == NULL) {
         feng_panic("feng_cleanup_push: NULL slot");
     }
+    node->kind = FENG_NODE_RELEASE;
     node->slot = slot;
     node->aggregate_value = NULL;
     node->aggregate_desc = NULL;
+    node->defer_fn = NULL;
+    node->defer_closure = NULL;
     node->prev = g_cleanup_top;
     g_cleanup_top = node;
 }
@@ -161,9 +176,31 @@ void feng_cleanup_push_aggregate(FengCleanupNode *node,
     if (desc == NULL) {
         feng_panic("feng_cleanup_push_aggregate: NULL descriptor");
     }
+    node->kind = FENG_NODE_RELEASE;
     node->slot = NULL;
     node->aggregate_value = value;
     node->aggregate_desc = desc;
+    node->defer_fn = NULL;
+    node->defer_closure = NULL;
+    node->prev = g_cleanup_top;
+    g_cleanup_top = node;
+}
+
+void feng_defer_push(FengCleanupNode *node,
+                     void (*fn)(void *),
+                     void *closure) {
+    if (node == NULL) {
+        feng_panic("feng_defer_push: NULL node");
+    }
+    if (fn == NULL) {
+        feng_panic("feng_defer_push: NULL fn");
+    }
+    node->kind = FENG_NODE_DEFER;
+    node->slot = NULL;
+    node->aggregate_value = NULL;
+    node->aggregate_desc = NULL;
+    node->defer_fn = fn;
+    node->defer_closure = closure;
     node->prev = g_cleanup_top;
     g_cleanup_top = node;
 }
@@ -179,9 +216,12 @@ void feng_frame_push(FengFrameMarker *marker) {
     if (marker == NULL) {
         feng_panic("feng_frame_push: NULL marker");
     }
+    marker->node.kind = FENG_NODE_MARKER;
     marker->node.slot = NULL;
     marker->node.aggregate_value = NULL;
     marker->node.aggregate_desc = NULL;
+    marker->node.defer_fn = NULL;
+    marker->node.defer_closure = NULL;
     marker->node.prev = g_cleanup_top;
     marker->is_function_boundary = true;
     g_cleanup_top = &marker->node;
@@ -191,9 +231,12 @@ void feng_try_frame_push(FengFrameMarker *marker) {
     if (marker == NULL) {
         feng_panic("feng_try_frame_push: NULL marker");
     }
+    marker->node.kind = FENG_NODE_MARKER;
     marker->node.slot = NULL;
     marker->node.aggregate_value = NULL;
     marker->node.aggregate_desc = NULL;
+    marker->node.defer_fn = NULL;
+    marker->node.defer_closure = NULL;
     marker->node.prev = g_cleanup_top;
     marker->is_function_boundary = false;
     g_cleanup_top = &marker->node;
@@ -203,7 +246,7 @@ void feng_frame_pop(void) {
     if (g_cleanup_top == NULL) {
         feng_panic("feng_frame_pop: chain underflow");
     }
-    if (g_cleanup_top->slot != NULL || g_cleanup_top->aggregate_desc != NULL) {
+    if (g_cleanup_top->kind != FENG_NODE_MARKER) {
         feng_panic("feng_frame_pop: top cleanup node is not a frame marker");
     }
     g_cleanup_top = g_cleanup_top->prev;

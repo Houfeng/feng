@@ -235,6 +235,55 @@ static void test_try_without_catch_is_rejected(void) {
     ASSERT(error.message != NULL);
 }
 
+static void test_defer_block_parses(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(): int {\n"
+        "    var x = 1;\n"
+        "    defer {\n"
+        "        x = x + 1;\n"
+        "    }\n"
+        "    return x;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    const FengStmt *defer_stmt;
+    const FengBlock *defer_body;
+
+    ASSERT(feng_parse_source(source, strlen(source), "defer_block.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+
+    body = program->declarations[0]->as.function_decl.body;
+    /* var x = 1; defer { ... }; return x; */
+    ASSERT(body->statement_count == 3U);
+    ASSERT(body->statements[0]->kind == FENG_STMT_BINDING);
+    defer_stmt = body->statements[1];
+    ASSERT(defer_stmt->kind == FENG_STMT_DEFER);
+    defer_body = defer_stmt->as.defer_block;
+    ASSERT(defer_body != NULL);
+    ASSERT(defer_body->statement_count == 1U);
+    ASSERT(defer_body->statements[0]->kind == FENG_STMT_ASSIGN);
+    ASSERT(body->statements[2]->kind == FENG_STMT_RETURN);
+
+    feng_program_free(program);
+}
+
+static void test_defer_without_block_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    defer cleanup();\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "defer_no_block.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.message != NULL);
+}
+
 static void test_runtime_annotation_on_extern_function(void) {
     const char *source =
         "module demo.main;\n"
@@ -2925,6 +2974,8 @@ int main(void) {
     test_try_block_form_is_rejected();
     test_try_expression_with_typed_catches();
     test_try_without_catch_is_rejected();
+    test_defer_block_parses();
+    test_defer_without_block_is_rejected();
     test_runtime_annotation_on_extern_function();
     test_enum_declarations_parse();
     test_match_with_range_and_list_labels();

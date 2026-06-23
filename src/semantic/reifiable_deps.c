@@ -951,6 +951,9 @@ static void collect_from_stmt(CollectContext *ctx, const FengStmt *stmt) {
         case FENG_STMT_BREAK:
         case FENG_STMT_CONTINUE:
             return;
+        case FENG_STMT_DEFER:
+            collect_from_block(ctx, stmt->as.defer_block);
+            return;
     }
 }
 

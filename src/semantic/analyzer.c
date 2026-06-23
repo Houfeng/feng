@@ -306,6 +306,16 @@ typedef struct ResolveContext {
      * expression must produce a value.  Reset to 0 across callable / lambda
      * boundaries. */
     size_t catch_expr_depth;
+    /* Number of nested `defer { ... }` blocks currently being resolved.
+     * Used to enforce the §4 semantic restrictions on control flow inside
+     * defer bodies: `return`/`throw`/nested `defer` are forbidden at any
+     * depth (strong), and `break`/`continue` are forbidden only when the
+     * defer block is their direct lexical location (i.e. when loop_depth is
+     * still 0 inside the defer body — a nested `for`/`while` resets loop_depth
+     * at entry, so break/continue inside that nested loop remains legal).
+     * Reset to 0 across callable / lambda boundaries because a defer block
+     * never escapes its enclosing function scope. */
+    size_t defer_depth;
     /* When true, a lambda body resolved in this context may capture `self`
      * from the enclosing type. Set inside type method/constructor bodies and
      * inside callable-spec field initializers. */
@@ -1886,6 +1896,11 @@ static bool inject_external_modules_from_stmt(
         case FENG_STMT_BREAK:
         case FENG_STMT_CONTINUE:
             return true;
+        case FENG_STMT_DEFER:
+            return inject_external_modules_from_block(analysis,
+                                                     imported_query,
+                                                     program,
+                                                     stmt->as.defer_block);
     }
 
     return true;
@@ -13339,6 +13354,7 @@ static bool constructor_stmt_binds_let_field(const FengDecl *type_decl,
         case FENG_STMT_THROW:
         case FENG_STMT_BREAK:
         case FENG_STMT_CONTINUE:
+        case FENG_STMT_DEFER:
             return false;
     }
     return false;
@@ -19540,7 +19556,8 @@ static void lambda_save_callable_context(ResolveContext *context,
                                          size_t *out_prev_exception_capture,
                                          size_t *out_prev_loop,
                                          size_t *out_prev_if_expr_depth,
-                                         size_t *out_prev_catch_expr_depth) {
+                                         size_t *out_prev_catch_expr_depth,
+                                         size_t *out_prev_defer_depth) {
     *out_prev_sig = context->current_callable_signature;
     *out_prev_inferred_return = context->current_callable_inferred_return_type;
     *out_prev_saw_return = context->current_callable_saw_return;
@@ -19549,6 +19566,7 @@ static void lambda_save_callable_context(ResolveContext *context,
     *out_prev_loop = context->loop_depth;
     *out_prev_if_expr_depth = context->if_expr_depth;
     *out_prev_catch_expr_depth = context->catch_expr_depth;
+    *out_prev_defer_depth = context->defer_depth;
 }
 
 static void lambda_restore_callable_context(ResolveContext *context,
@@ -19559,7 +19577,8 @@ static void lambda_restore_callable_context(ResolveContext *context,
                                             size_t prev_exception_capture,
                                             size_t prev_loop,
                                             size_t prev_if_expr_depth,
-                                            size_t prev_catch_expr_depth) {
+                                            size_t prev_catch_expr_depth,
+                                            size_t prev_defer_depth) {
     context->current_callable_signature = prev_sig;
     context->current_callable_inferred_return_type = prev_inferred_return;
     context->current_callable_saw_return = prev_saw_return;
@@ -19568,6 +19587,7 @@ static void lambda_restore_callable_context(ResolveContext *context,
     context->loop_depth = prev_loop;
     context->if_expr_depth = prev_if_expr_depth;
     context->catch_expr_depth = prev_catch_expr_depth;
+    context->defer_depth = prev_defer_depth;
 }
 
 static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
@@ -19580,6 +19600,7 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     size_t prev_loop;
     size_t prev_if_expr_depth;
     size_t prev_catch_expr_depth;
+    size_t prev_defer_depth;
     bool prev_self_capturable;
     bool effective_allow_self;
     LambdaCaptureFrame frame;
@@ -19620,7 +19641,8 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
                                  &prev_exception_capture,
                                  &prev_loop,
                                  &prev_if_expr_depth,
-                                 &prev_catch_expr_depth);
+                                 &prev_catch_expr_depth,
+                                 &prev_defer_depth);
     prev_self_capturable = context->self_capturable;
 
     /* Inside the lambda body, `self` is available iff the enclosing context
@@ -19636,6 +19658,7 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     context->loop_depth = 0U;
     context->if_expr_depth = 0U;
     context->catch_expr_depth = 0U;
+    context->defer_depth = 0U;
     /* self_capturable stays the same: if the lambda body could see self, so
      * can a lambda nested inside it. */
     context->self_capturable = effective_allow_self;
@@ -19674,7 +19697,8 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
                                     prev_exception_capture,
                                     prev_loop,
                                     prev_if_expr_depth,
-                                    prev_catch_expr_depth);
+                                    prev_catch_expr_depth,
+                                    prev_defer_depth);
     context->self_capturable = prev_self_capturable;
 
     resolver_pop_scope(context);
@@ -20964,12 +20988,24 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
         }
 
         case FENG_STMT_RETURN:
+            if (context->defer_depth > 0U) {
+                return resolver_append_error(
+                    context,
+                    stmt->token,
+                    "AE1501", duplicate_cstr("defer block cannot contain 'return'"));
+            }
             if (!resolve_expr(context, stmt->as.return_value, allow_self)) {
                 return false;
             }
             return validate_return_stmt(context, stmt);
 
         case FENG_STMT_THROW:
+            if (context->defer_depth > 0U) {
+                return resolver_append_error(
+                    context,
+                    stmt->token,
+                    "AE1502", duplicate_cstr("defer block cannot contain 'throw'"));
+            }
             if (!resolve_throw_value_expr(context, stmt->as.throw_value, allow_self)) {
                 return false;
             }
@@ -20980,10 +21016,59 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             return true;
 
         case FENG_STMT_BREAK:
+            /* docs/feng-defer.md §4.2 弱限制：defer 块直接位置禁止 break。
+             * 当 defer_depth > 0 且 loop_depth == 0 时，break 处于 defer 块
+             * 直接位置（不在嵌套 for/while 内）。 */
+            if (context->defer_depth > 0U && context->loop_depth == 0U) {
+                return resolver_append_error(
+                    context,
+                    stmt->token,
+                    "AE1504", duplicate_cstr("defer block cannot contain 'break'"));
+            }
             return validate_loop_control_stmt(context, stmt, "break");
 
         case FENG_STMT_CONTINUE:
+            if (context->defer_depth > 0U && context->loop_depth == 0U) {
+                return resolver_append_error(
+                    context,
+                    stmt->token,
+                    "AE1505", duplicate_cstr("defer block cannot contain 'continue'"));
+            }
             return validate_loop_control_stmt(context, stmt, "continue");
+
+        case FENG_STMT_DEFER: {
+            /* docs/feng-defer.md §4.2 强禁止：defer 块内任何位置禁止嵌套 defer。
+             * defer_depth > 0 表示当前已在 defer 块内（含嵌套子块）。 */
+            bool ok;
+            size_t saved_loop_depth;
+            if (context->defer_depth > 0U) {
+                return resolver_append_error(
+                    context,
+                    stmt->token,
+                    "AE1503", duplicate_cstr("defer block cannot contain nested 'defer'"));
+            }
+            /* docs/feng-defer.md §4.3: defer 仅在函数体或函数体内嵌套的块作用域
+             * 中合法。current_callable_signature != NULL 是”当前处于函数体或
+             * lambda 函数体作用域内”的判据——resolve_callable / lambda 进入
+             * 函数体时会设置此字段并在退出时还原。 */
+            if (context->current_callable_signature == NULL) {
+                return resolver_append_error(
+                    context,
+                    stmt->token,
+                    "AE1506", duplicate_cstr("'defer' is only allowed inside function blocks"));
+            }
+            /* docs/feng-defer.md §4.2：defer 块内 loop_depth 相对于 defer 块本身
+             * 计算。进入 defer 块时保存外层 loop_depth 并重置为 0，使直接位置的
+             * break/continue 被检测到（defer_depth>0 && loop_depth==0）；嵌套
+             * for/while 会自行递增 loop_depth，其中 break/continue 合法。 */
+            context->defer_depth += 1U;
+            saved_loop_depth = context->loop_depth;
+            context->loop_depth = 0U;
+            ok = resolve_block(context, stmt->as.defer_block, allow_self);
+            context->loop_depth = saved_loop_depth;
+            context->defer_depth -= 1U;
+            return ok;
+        }
     }
 
     return true;
@@ -21006,6 +21091,7 @@ static bool resolve_callable(ResolveContext *context,
     size_t previous_loop_depth = context->loop_depth;
     size_t previous_if_expr_depth = context->if_expr_depth;
     size_t previous_catch_expr_depth = context->catch_expr_depth;
+    size_t previous_defer_depth = context->defer_depth;
     bool previous_self_capturable = context->self_capturable;
     /* G4-1/G4-14: push callable-level type params (method generics). */
     const TypeParamEntry *previous_type_params = context->type_params;
@@ -21053,6 +21139,7 @@ static bool resolve_callable(ResolveContext *context,
     context->loop_depth = 0U;
     context->if_expr_depth = 0U;
     context->catch_expr_depth = 0U;
+    context->defer_depth = 0U;
     /* Inside a member method or constructor body, lambdas may capture self. */
     if (allow_self && context->current_type_decl != NULL) {
         context->self_capturable = true;
@@ -21067,6 +21154,7 @@ static bool resolve_callable(ResolveContext *context,
         context->loop_depth = previous_loop_depth;
         context->if_expr_depth = previous_if_expr_depth;
         context->catch_expr_depth = previous_catch_expr_depth;
+        context->defer_depth = previous_defer_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
         return false;
@@ -21082,6 +21170,7 @@ static bool resolve_callable(ResolveContext *context,
             context->loop_depth = previous_loop_depth;
             context->if_expr_depth = previous_if_expr_depth;
             context->catch_expr_depth = previous_catch_expr_depth;
+            context->defer_depth = previous_defer_depth;
             context->current_callable_signature = previous_callable_signature;
             context->self_capturable = previous_self_capturable;
             return false;
@@ -21097,6 +21186,7 @@ static bool resolve_callable(ResolveContext *context,
         context->loop_depth = previous_loop_depth;
         context->if_expr_depth = previous_if_expr_depth;
         context->catch_expr_depth = previous_catch_expr_depth;
+        context->defer_depth = previous_defer_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
         return true;
@@ -21118,6 +21208,7 @@ static bool resolve_callable(ResolveContext *context,
         context->loop_depth = previous_loop_depth;
         context->if_expr_depth = previous_if_expr_depth;
         context->catch_expr_depth = previous_catch_expr_depth;
+        context->defer_depth = previous_defer_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
         return false;
@@ -21174,6 +21265,7 @@ static bool resolve_callable(ResolveContext *context,
     context->loop_depth = previous_loop_depth;
     context->if_expr_depth = previous_if_expr_depth;
     context->catch_expr_depth = previous_catch_expr_depth;
+    context->defer_depth = previous_defer_depth;
     context->current_callable_signature = previous_callable_signature;
     context->self_capturable = previous_self_capturable;
     return ok;

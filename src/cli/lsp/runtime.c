@@ -2295,6 +2295,8 @@ static size_t stmt_end(const FengStmt *stmt) {
     switch (stmt->kind) {
         case FENG_STMT_BLOCK:
             return block_end(stmt->as.block);
+        case FENG_STMT_DEFER:
+            return block_end(stmt->as.defer_block);
         case FENG_STMT_BINDING:
             if (stmt->as.binding.type != NULL) {
                 size_t type_end = type_ref_end(stmt->as.binding.type);
@@ -5461,6 +5463,8 @@ static bool find_stmt_type_ref_hit(const FengStmt *stmt,
         }
         case FENG_STMT_BLOCK:
             return find_block_type_ref_hit(stmt->as.block, program, session, offset, target);
+        case FENG_STMT_DEFER:
+            return find_block_type_ref_hit(stmt->as.defer_block, program, session, offset, target);
         case FENG_STMT_IF:
             for (index = 0U; index < stmt->as.if_stmt.clause_count; ++index) {
                 if (find_block_type_ref_hit(stmt->as.if_stmt.clauses[index].block,
@@ -5814,6 +5818,9 @@ static const FengExpr *find_expr_hit_in_block(const FengBlock *block, size_t off
                 break;
             case FENG_STMT_BLOCK:
                 hit = find_expr_hit_in_block(stmt->as.block, offset);
+                break;
+            case FENG_STMT_DEFER:
+                hit = find_expr_hit_in_block(stmt->as.defer_block, offset);
                 break;
             case FENG_STMT_IF:
                 hit = stmt->as.if_stmt.clause_count > 0
@@ -7263,6 +7270,9 @@ static const FengExpr *find_call_hit_in_block(const FengBlock *block, size_t off
             case FENG_STMT_BLOCK:
                 hit = find_call_hit_in_block(stmt->as.block, offset);
                 break;
+            case FENG_STMT_DEFER:
+                hit = find_call_hit_in_block(stmt->as.defer_block, offset);
+                break;
             case FENG_STMT_IF: {
                 size_t clause_index;
                 for (clause_index = 0U; clause_index < stmt->as.if_stmt.clause_count && hit == NULL; ++clause_index) {
@@ -8104,6 +8114,13 @@ static bool resolve_object_field_target_stmt(const FengLspAnalysisSession *sessi
                                                      offset,
                                                      locals,
                                                      target);
+        case FENG_STMT_DEFER:
+            return resolve_object_field_target_block(session,
+                                                     program,
+                                                     stmt->as.defer_block,
+                                                     offset,
+                                                     locals,
+                                                     target);
         case FENG_STMT_BINDING:
             return resolve_object_field_target_expr(session,
                                                     program,
@@ -8904,6 +8921,16 @@ static bool collect_references_in_stmt(const FengLspAnalysisSession *session,
                                                owner_decl,
                                                owner_member,
                                                stmt->as.block,
+                                               include_declaration,
+                                               target,
+                                               references);
+        case FENG_STMT_DEFER:
+            return collect_references_in_block(session,
+                                               program,
+                                               source,
+                                               owner_decl,
+                                               owner_member,
+                                               stmt->as.defer_block,
                                                include_declaration,
                                                target,
                                                references);
@@ -9716,6 +9743,8 @@ static bool find_symbol_stmt_type_ref_hit(const FengLspCacheQueryContext *contex
         }
         case FENG_STMT_BLOCK:
             return find_symbol_block_type_ref_hit(context, stmt->as.block, offset, target);
+        case FENG_STMT_DEFER:
+            return find_symbol_block_type_ref_hit(context, stmt->as.defer_block, offset, target);
         case FENG_STMT_IF:
             for (index = 0U; index < stmt->as.if_stmt.clause_count; ++index) {
                 if (find_symbol_block_type_ref_hit(context,

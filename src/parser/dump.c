@@ -512,6 +512,10 @@ static void dump_stmt(FILE *stream, const FengStmt *stmt, int indent) {
         case FENG_STMT_CONTINUE:
             fputs("continue;\n", stream);
             break;
+        case FENG_STMT_DEFER:
+            fputs("defer ", stream);
+            dump_block(stream, stmt->as.defer_block, 0);
+            break;
     }
 }
 
