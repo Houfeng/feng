@@ -205,6 +205,26 @@ runCase(
     'open spec Payload: None\n| List<Payload>\n| Map<string, Payload>;\n'
 );
 
+// --- defer statement formatting tests ---
+
+runCase(
+    'formats basic defer block with proper spacing',
+    'func main():void {\nlet file=open("test.txt");\ndefer{\nfile.close();\n}\n}\n',
+    'func main(): void {\n    let file = open("test.txt");\n    defer {\n        file.close();\n    }\n}\n'
+);
+
+runCase(
+    'formats multiple defer blocks in correct order',
+    'func main():void {\nlet a=open("a");\ndefer{\na.close();\n}\nlet b=open("b");\ndefer{\nb.close();\n}\n}\n',
+    'func main(): void {\n    let a = open("a");\n    defer {\n        a.close();\n    }\n    let b = open("b");\n    defer {\n        b.close();\n    }\n}\n'
+);
+
+runCase(
+    'formats defer inside nested block',
+    'func main():void {\nif true {\ndefer{\ncleanup();\n}\ndoWork();\n}\n}\n',
+    'func main(): void {\n    if true {\n        defer {\n            cleanup();\n        }\n        doWork();\n    }\n}\n'
+);
+
 // --- match expression formatting tests ---
 
 runCase(

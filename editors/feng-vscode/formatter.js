@@ -22,6 +22,7 @@ const KEYWORDS = new Set([
     'in',
     'break',
     'continue',
+    'defer',
     'try',
     'catch',
     'finally',

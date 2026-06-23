@@ -163,4 +163,20 @@ const hasExplicitGenericCallInclude = topPatterns.some(
 );
 assert(hasExplicitGenericCallInclude, 'top-level patterns should include #explicitGenericCall');
 
+// --- defer keyword grammar test ---
+
+function findKeywordsPattern() {
+    const kw = grammar.repository && grammar.repository.keywords;
+    const patterns = kw && Array.isArray(kw.patterns) ? kw.patterns : [];
+    return patterns.find(p => p.name === 'keyword.control.feng');
+}
+
+const keywordsPattern = findKeywordsPattern();
+assert(keywordsPattern, 'expected keyword.control.feng pattern in keywords');
+const keywordsRegex = new RegExp(keywordsPattern.match);
+assert(keywordsRegex.test('defer'), 'keywords pattern should match defer');
+assert(keywordsRegex.test('return'), 'keywords pattern should still match return');
+assert(keywordsRegex.test('break'), 'keywords pattern should still match break');
+assert(keywordsRegex.test('continue'), 'keywords pattern should still match continue');
+
 console.log('syntax tests passed');
