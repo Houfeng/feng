@@ -15,7 +15,7 @@
 - [x] match ，类型匹配优化，比如 match v { x:string {} else {} }
 - [x] match, 支持匹配 enum
 - [x] if 表达式、match 表达式、try 表达式，最后一句支持 throw
-- [ ] match 运算符，和 match 语句表达式类似，支持：值、区间、联合类型
+- [x] match 运算符，和 match 语句表达式类似，支持：值、区间、联合类型
   - dev/feng-match-operator-dev.md
 - [ ] 泛型，支持同名不同泛形参数个数的重载
   - 类型 `type User<T1> {}` 、`type User<T1, T2> {}`
@@ -23,3 +23,4 @@
   - 对象契约 `spec User<T1> {}` 、`spec User<T1, T2> {}`
   - 函数契约 `spec User<T1>()` 、`spec User<T1, T2>()`
   - 联合契约 `spec User<T1, T2>: T1 | T2` 、`spec User<T1, T2, T3>: T1 | T2 | T3`
+- [ ] 支持 defer 语句
