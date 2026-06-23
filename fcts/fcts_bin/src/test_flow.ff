@@ -353,5 +353,54 @@ open func test_flow() {
       }
       // n is not visible here (semantic error if referenced)
     });
+
+    test("infix match - unary not over multi-label value", () {
+      let x = 4;
+      // Without correct precedence, `!x match 1 | 2 | 3` would parse as
+      // `(!x) match ...` and never enter the branch. The fix wraps the
+      // match expression atomically, so this asserts the logical-not
+      // applies to the whole match result.
+      assert(!(x match 1 | 2 | 3), "infix match - unary not over multi-label (false)");
+      let y = 2;
+      assert(!(y match 1 | 2 | 3) == false, "infix match - unary not over multi-label (true)");
+    });
+
+    test("infix match - unary not over range", () {
+      let x = 50;
+      assert(!(x match 1...10), "infix match - unary not over range (false)");
+      let y = 5;
+      assert(!(y match 1...10) == false, "infix match - unary not over range (true)");
+    });
+
+    test("infix match - unary not in if condition", () {
+      let x = 7;
+      if !(x match 1 | 2 | 3) {
+        assert(true, "infix match - unary not in if condition");
+      } else {
+        assert(false, "infix match - unary not in if condition (should be true)");
+      }
+    });
+
+    test("infix match - nested conjunction of match expressions", () {
+      let x = 5;
+      // Both subexpressions must evaluate as booleans; the conjunction
+      // verifies the match operator yields bool under parentheses.
+      if (x match 5) && (x match 1...10) {
+        assert(true, "infix match - nested conjunction");
+      } else {
+        assert(false, "infix match - nested conjunction (should be true)");
+      }
+    });
+
+    test("infix match - disjunction without binding", () {
+      let v: FlowIntOrText = 42;
+      // `||` does not propagate match bindings; using the union member
+      // type form (no binding) keeps the condition well-formed.
+      if (v match int) || (v match string) {
+        assert(true, "infix match - disjunction without binding");
+      } else {
+        assert(false, "infix match - disjunction without binding (should be true)");
+      }
+    });
   });
 }

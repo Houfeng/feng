@@ -1,0 +1,9 @@
+open module fcts_lib.test;
+
+/** 跨包测试用 type, 作为 union-form spec 的成员之一. */
+open type LibTag {
+  open let label: string;
+}
+
+/** 跨包测试用 union-form spec, 供 fcts_bin 验证跨包 union member type 标签. */
+open spec LibChoice: LibTag | int | string;

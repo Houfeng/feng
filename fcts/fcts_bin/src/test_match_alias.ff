@@ -1,0 +1,53 @@
+module fcts_bin;
+
+import std.io;
+import std.test;
+import fcts_lib.helper;
+import fcts_lib.test as b;
+
+/** 跨包 union-form match 用别名 (alias) 引用类型标签 */
+open func test_match_alias() {
+  describe("match-alias", () {
+    test("cross-package union match - alias (type branch)", () {
+      let v: b.LibChoice = b.LibTag { label: "tagged" };
+      let result = match v {
+        b.LibTag { "tag" }
+        int { "int" }
+        string { "str" }
+        else { "else" }
+      };
+      assert(result == "tag", "cross-package union match - alias (type branch)");
+    });
+
+    test("cross-package union match - alias (int branch)", () {
+      let v: b.LibChoice = 7;
+      let result = match v {
+        b.LibTag { "tag" }
+        int { "int" }
+        string { "str" }
+        else { "else" }
+      };
+      assert(result == "int", "cross-package union match - alias (int branch)");
+    });
+
+    test("cross-package union match - alias + binding", () {
+      let v: b.LibChoice = "world";
+      let result = match v {
+        b.LibTag { "tag" }
+        n: int { "int" }
+        s: string { s }
+        else { "else" }
+      };
+      assert(result == "world", "cross-package union match - alias + binding");
+    });
+
+    test("cross-package union match - alias infix union member type", () {
+      let v: b.LibChoice = b.LibTag { label: "x" };
+      assert(v match b.LibTag, "cross-package union match - alias infix (type)");
+      let n: b.LibChoice = 42;
+      assert(n match int, "cross-package union match - alias infix (int)");
+      let s: b.LibChoice = "hi";
+      assert(s match string, "cross-package union match - alias infix (string)");
+    });
+  });
+}

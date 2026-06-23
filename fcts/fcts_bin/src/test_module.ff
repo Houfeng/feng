@@ -48,5 +48,38 @@ open func test_module() {
     test("cross-package open instance generic return", () {
       assert(cross_pkg_open_instance_generic_return(), "cross-package open instance generic return");
     });
+
+    test("cross-package union match - short name (type branch)", () {
+      let v: LibChoice = LibTag { label: "tagged" };
+      let result = match v {
+        LibTag { "tag" }
+        int { "int" }
+        string { "str" }
+        else { "else" }
+      };
+      assert(result == "tag", "cross-package union match - short name (type branch)");
+    });
+
+    test("cross-package union match - short name (int branch)", () {
+      let v: LibChoice = 42;
+      let result = match v {
+        LibTag { "tag" }
+        int { "int" }
+        string { "str" }
+        else { "else" }
+      };
+      assert(result == "int", "cross-package union match - short name (int branch)");
+    });
+
+    test("cross-package union match - short name + binding", () {
+      let v: LibChoice = "hello";
+      let result = match v {
+        LibTag { "tag" }
+        n: int { "int" }
+        s: string { s }
+        else { "else" }
+      };
+      assert(result == "hello", "cross-package union match - short name + binding");
+    });
   });
 }
