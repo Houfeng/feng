@@ -1,0 +1,311 @@
+module fcts_bin;
+
+import std.io;
+import std.test;
+
+// 模块级追踪变量，用于验证 defer 执行（不受 return 求值时序影响）
+var g_defer_log = "";
+
+func reset_defer_log() { g_defer_log = ""; }
+
+// --- 辅助函数（try/catch 不能在 lambda 内，须提取为独立函数） ---
+
+// 基本 defer + LIFO 顺序（通过自然块退出观察）
+func defer_basic_lifo(): string {
+  var result = "";
+  {
+    defer { result = result + "d1;"; }
+    defer { result = result + "d2;"; }
+    result = result + "body;";
+  }
+  return result;
+}
+
+// 多 defer LIFO（3 个，通过自然块退出观察）
+func defer_three_lifo(): string {
+  var result = "";
+  {
+    defer { result = result + "first;"; }
+    defer { result = result + "second;"; }
+    defer { result = result + "third;"; }
+    result = result + "body;";
+  }
+  return result;
+}
+
+// defer 在 return 前执行（通过自然块退出观察副作用）
+func defer_before_return(): string {
+  var result = "";
+  {
+    defer { result = result + "deferred;"; }
+    result = "body;";
+  }
+  return result;
+}
+
+// defer 在 break 前执行
+func defer_before_break(): string {
+  var result = "";
+  while true {
+    defer { result = result + "deferred;"; }
+    result = result + "iter;";
+    break;
+  }
+  return result;
+}
+
+// defer 在 continue 前执行
+func defer_before_continue(): string {
+  var result = "";
+  var i = 0;
+  while i < 2 {
+    i = i + 1;
+    defer { result = result + "d;"; }
+    result = result + "i;";
+    continue;
+  }
+  return result;
+}
+
+// defer + throw：defer 在异常传播前执行
+func defer_throw_helper() {
+  reset_defer_log();
+  defer { g_defer_log = g_defer_log + "deferred;"; }
+  throw "boom";
+}
+
+func test_defer_on_throw(): bool {
+  reset_defer_log();
+  try defer_throw_helper() catch ex: string {};
+  return g_defer_log == "deferred;";
+}
+
+// defer + try/catch：try 体抛异常，defer 在 landing pad 执行
+func defer_try_catch_helper(): string {
+  var result = "";
+  {
+    defer { result = result + "dOuter;"; }
+    try throw_ex_for_defer() catch ex: string {
+      result = result + "catch:" + ex + ";";
+    };
+    result = result + "after;";
+  }
+  return result;
+}
+
+func throw_ex_for_defer(): string {
+  throw "err";
+  return "unreachable";
+}
+
+// defer + for 循环内每轮迭代注册
+func defer_in_for_loop(): string {
+  var result = "";
+  for var i = 0; i < 3; i = i + 1 {
+    defer { result = result + "d;"; }
+    result = result + "i;";
+  }
+  return result;
+}
+
+// defer 捕获当前值（而非注册时快照，通过自然块退出观察）
+func defer_capture_current_value(): string {
+  var result = "";
+  {
+    var x = "old";
+    defer { result = result + "x=" + x + ";"; }
+    x = "new";
+  }
+  return result;
+}
+
+// defer 修改外层 var（通过自然块退出观察）
+func defer_modify_outer_var(): int {
+  var x = 0;
+  {
+    defer { x = 100; }
+    x = 1;
+  }
+  return x;
+}
+
+// defer 无捕获（访问模块级变量）
+func defer_no_capture() {
+  reset_defer_log();
+  defer { g_defer_log = "no_cap;"; }
+  g_defer_log = "body;";
+}
+
+func defer_no_capture_wrapper(): string {
+  defer_no_capture();
+  return g_defer_log;
+}
+
+// defer 在嵌套块作用域（自然退出）
+func defer_in_nested_block(): string {
+  var result = "";
+  {
+    defer { result = result + "inner;"; }
+    result = result + "in;";
+  }
+  result = result + "out;";
+  return result;
+}
+
+// defer + return 从嵌套块：return 表达式在 defer 之前求值
+func defer_return_from_nested_block(): string {
+  var result = "";
+  defer { result = result + "outer_defer;"; }
+  {
+    defer { result = result + "inner_defer;"; }
+    result = "body;";
+    return result;
+  }
+  return "unreachable";
+}
+
+// 多层嵌套作用域各有 defer（内层自然退出，外层 return 退出）
+func defer_multiple_scopes(): string {
+  var result = "";
+  defer { result = result + "A;"; }
+  {
+    defer { result = result + "B;"; }
+    result = result + "in;";
+  }
+  result = result + "mid;";
+  return result;
+}
+
+// defer 块内嵌套 for + break（合法，通过自然块退出观察）
+func defer_nested_loop_break(): string {
+  var result = "";
+  {
+    defer {
+      for var i = 0; i < 10; i = i + 1 {
+        if i == 3 { break; }
+        result = result + "x;";
+      }
+    }
+    result = "body;";
+  }
+  return result;
+}
+
+// defer 块内嵌套 while + continue（合法，通过自然块退出观察）
+func defer_nested_loop_continue(): int {
+  var count = 0;
+  {
+    defer {
+      var i = 0;
+      while i < 5 {
+        i = i + 1;
+        if i == 3 { continue; }
+        count = count + 1;
+      }
+    }
+  }
+  return count;
+}
+
+// for 循环内每轮多个 defer（LIFO）
+func defer_multiple_per_iteration(): string {
+  var result = "";
+  for var i = 0; i < 2; i = i + 1 {
+    defer { result = result + "a;"; }
+    defer { result = result + "b;"; }
+    result = result + "i;";
+  }
+  return result;
+}
+
+/** defer 测试 */
+open func test_defer() {
+  describe("defer", () {
+    test("basic defer executes at scope exit", () {
+      assert(defer_basic_lifo() == "body;d2;d1;",
+             "basic defer executes at scope exit");
+    });
+
+    test("multiple defer LIFO order", () {
+      assert(defer_three_lifo() == "body;third;second;first;",
+             "multiple defer LIFO order");
+    });
+
+    test("defer executes before return", () {
+      assert(defer_before_return() == "body;deferred;",
+             "defer executes before return");
+    });
+
+    test("defer executes before break", () {
+      assert(defer_before_break() == "iter;deferred;",
+             "defer executes before break");
+    });
+
+    test("defer executes before continue", () {
+      assert(defer_before_continue() == "i;d;i;d;",
+             "defer executes before continue");
+    });
+
+    test("defer executes on throw path", () {
+      assert(test_defer_on_throw(),
+             "defer executes on throw path");
+    });
+
+    test("defer with try/catch", () {
+      assert(defer_try_catch_helper() == "catch:err;after;dOuter;",
+             "defer with try/catch");
+    });
+
+    test("defer captures current value not snapshot", () {
+      assert(defer_capture_current_value() == "x=new;",
+             "defer captures current value not snapshot");
+    });
+
+    test("defer modifies outer var", () {
+      assert(defer_modify_outer_var() == 100,
+             "defer modifies outer var");
+    });
+
+    test("defer in for loop per iteration", () {
+      assert(defer_in_for_loop() == "i;d;i;d;i;d;",
+             "defer in for loop per iteration");
+    });
+
+    test("defer nested loop break is legal", () {
+      assert(defer_nested_loop_break() == "body;x;x;x;",
+             "defer nested loop break is legal");
+    });
+
+    test("defer nested loop continue is legal", () {
+      assert(defer_nested_loop_continue() == 4,
+             "defer nested loop continue is legal");
+    });
+
+    test("defer without capture", () {
+      assert(defer_no_capture_wrapper() == "no_cap;",
+             "defer without capture");
+    });
+
+    test("defer in nested block scope", () {
+      assert(defer_in_nested_block() == "in;inner;out;",
+             "defer in nested block scope");
+    });
+
+    test("defer with return from nested block", () {
+      // return 表达式在 defer 之前求值，返回 "body;"
+      assert(defer_return_from_nested_block() == "body;",
+             "defer with return from nested block");
+    });
+
+    test("defer across multiple scopes", () {
+      // 内层 B 自然退出可见，外层 A 在 return 之后执行不可见
+      assert(defer_multiple_scopes() == "in;B;mid;",
+             "defer across multiple scopes");
+    });
+
+    test("multiple defer per loop iteration", () {
+      assert(defer_multiple_per_iteration() == "i;b;a;i;b;a;",
+             "multiple defer per loop iteration");
+    });
+  });
+}

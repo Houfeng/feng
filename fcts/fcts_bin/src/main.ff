@@ -27,5 +27,6 @@ func main(args: string[]) {
       test_iterator();
       test_module();
       test_match_alias();
+      test_defer();
   });
 }
