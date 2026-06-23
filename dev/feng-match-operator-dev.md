@@ -471,7 +471,7 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 - [x] 结果类型为 bool
 - [x] 绑定变量在 `if` / `while` 体作用域内登记
 - [x] 在 `src/semantic/reifiable_deps.c` 新增 `FENG_EXPR_MATCH_OP` case
-- [ ] 在 `test/semantic/test_semantic.c` 新增用例
+- [x] 在 `test/semantic/test_semantic.c` 新增用例
 - [x] 全量回归点：`make build/bin/test_semantic && build/bin/test_semantic` 通过；`make test` 全量回归通过
 
 ### 8.4 步骤 4：Codegen 发码扩展
@@ -484,7 +484,7 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 - [x] union member pattern + binding 在命中分支中绑定
 - [x] `if` / `while` 条件位置识别并处理 binding 作用域
 - [x] `while` 每轮迭代重新求值与绑定
-- [ ] 在 `test/codegen/test_codegen.c` 新增用例
+- [x] 在 `test/codegen/test_codegen.c` 新增用例
 - [x] 全量回归点：`make build/bin/test_codegen && build/bin/test_codegen` 通过；`make test` 全量回归通过
 
 ### 8.5 步骤 5：Symbol Export / LSP 支持
@@ -511,7 +511,7 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 
 - [x] 执行 `make test` 全量回归通过
 - [x] 复核所有新增测试用例与既有测试用例无冲突
-- [ ] 复核 `docs/feng-flow.md` / `docs/feng-error-codes-*.md` 与代码实现一致（待补齐 semantic / codegen 单元测试后再勾选）
+- [x] 复核 `docs/feng-flow.md` / `docs/feng-error-codes-*.md` 与代码实现一致
 - [x] 复核 `dev/feng-match-operator-dev.md` 中实现方案与最终代码一致（行号、函数名、错误码编号如有调整需回写文档）
 - [x] 准备建议 commit message，由开发者自行提交
 

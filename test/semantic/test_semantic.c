@@ -15829,6 +15829,203 @@ static void assert_single_source_semantic_error_contains(const char *path,
     feng_program_free(program);
 }
 
+/* ===== infix match operator tests ===== */
+
+static void test_infix_match_value_pattern_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(x: int): bool {\n"
+        "    return x match 0;\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_value_pattern.f", source);
+}
+
+static void test_infix_match_range_pattern_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(x: int): bool {\n"
+        "    return x match 1...10;\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_range_pattern.f", source);
+}
+
+static void test_infix_match_multi_label_pipe_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(x: int): bool {\n"
+        "    return x match 0 | 1 | 2;\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_multi_label_pipe.f", source);
+}
+
+static void test_infix_match_mixed_value_and_range_pipe_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(x: int): bool {\n"
+        "    return x match 0 | 1...9 | 100;\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_mixed_value_range_pipe.f", source);
+}
+
+static void test_infix_match_string_pattern_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(s: string): bool {\n"
+        "    return s match \"hi\" | \"hello\";\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_string_pattern.f", source);
+}
+
+static void test_infix_match_union_member_type_pattern_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(v: Value): bool {\n"
+        "    return v match int;\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_union_member_type.f", source);
+}
+
+static void test_infix_match_union_multi_label_type_pattern_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(v: Value): bool {\n"
+        "    return v match int | string;\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_union_multi_label_type.f", source);
+}
+
+static void test_infix_match_union_member_binding_in_if_body_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(v: Value): int {\n"
+        "    if v match n: int {\n"
+        "        return n;\n"
+        "    }\n"
+        "    return 0;\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_union_binding_if_body.f", source);
+}
+
+static void test_infix_match_union_member_binding_in_while_body_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(v: Value): int {\n"
+        "    var counter: Value = v;\n"
+        "    var sum = 0;\n"
+        "    while counter match n: int && n > 0 {\n"
+        "        sum = sum + n;\n"
+        "        counter = n - 1;\n"
+        "    }\n"
+        "    return sum;\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_union_binding_while_body.f", source);
+}
+
+static void test_infix_match_union_member_binding_visible_in_rhs_of_and(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(v: Value): bool {\n"
+        "    return v match n: int && n > 0;\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_union_binding_rhs_and.f", source);
+}
+
+static void test_infix_match_union_member_binding_invisible_after_statement(void) {
+    /* Binding n is only visible inside the if body; referencing it after
+     * the if statement should fail with AE0001 (undefined identifier). */
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(v: Value): int {\n"
+        "    if v match n: int {\n"
+        "        return n;\n"
+        "    }\n"
+        "    return n;\n"
+        "}\n";
+    assert_single_source_semantic_error_contains(
+        "infix_match_union_binding_invisible_after_stmt.f",
+        source,
+        "undefined identifier");
+}
+
+static void test_infix_match_union_member_binding_invisible_in_or_operand(void) {
+    /* `||` nephew does not propagate match bindings. */
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(v: Value): bool {\n"
+        "    return (v match n: int) || n > 0;\n"
+        "}\n";
+    assert_single_source_semantic_error_contains(
+        "infix_match_union_binding_invisible_in_or.f",
+        source,
+        "undefined identifier");
+}
+
+static void test_infix_match_rejects_binding_on_value_pattern(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(x: int): bool {\n"
+        "    return x match n: 0;\n"
+        "}\n";
+    assert_single_source_semantic_error_contains(
+        "infix_match_binding_on_value_pattern.f",
+        source,
+        "infix match binding requires all labels to be union member type patterns");
+}
+
+static void test_infix_match_rejects_binding_on_range_pattern(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(x: int): bool {\n"
+        "    return x match n: 1...10;\n"
+        "}\n";
+    assert_single_source_semantic_error_contains(
+        "infix_match_binding_on_range_pattern.f",
+        source,
+        "infix match binding requires all labels to be union member type patterns");
+}
+
+static void test_infix_match_rejects_binding_with_mixed_type_and_value_labels(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Value: int | string;\n"
+        "func run(v: Value): bool {\n"
+        "    return v match n: int | 0;\n"
+        "}\n";
+    assert_single_source_semantic_error_contains(
+        "infix_match_binding_mixed_type_value.f",
+        source,
+        "infix match binding requires all labels to be union member type patterns");
+}
+
+static void test_infix_match_target_type_disallowed(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(x: f64): bool {\n"
+        "    return x match 0;\n"
+        "}\n";
+    assert_single_source_semantic_error_contains(
+        "infix_match_target_type_disallowed.f",
+        source,
+        "match target type");
+}
+
+static void test_infix_match_result_type_is_bool(void) {
+    /* If result type were not bool, the && with a bool literal would fail. */
+    const char *source =
+        "module demo.main;\n"
+        "func run(x: int): bool {\n"
+        "    return (x match 0) && true;\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_result_type_bool.f", source);
+}
+
 static bool type_ref_named_single_is(const FengTypeRef *type_ref, const char *name) {
     size_t length = strlen(name);
 
@@ -16670,6 +16867,23 @@ int main(void) {
     test_match_enum_mixed_with_int_literal_rejected();
     test_match_enum_mixed_with_string_literal_rejected();
     test_match_enum_binding_prefix_rejected();
+    test_infix_match_value_pattern_accepted();
+    test_infix_match_range_pattern_accepted();
+    test_infix_match_multi_label_pipe_accepted();
+    test_infix_match_mixed_value_and_range_pipe_accepted();
+    test_infix_match_string_pattern_accepted();
+    test_infix_match_union_member_type_pattern_accepted();
+    test_infix_match_union_multi_label_type_pattern_accepted();
+    test_infix_match_union_member_binding_in_if_body_accepted();
+    test_infix_match_union_member_binding_in_while_body_accepted();
+    test_infix_match_union_member_binding_visible_in_rhs_of_and();
+    test_infix_match_union_member_binding_invisible_after_statement();
+    test_infix_match_union_member_binding_invisible_in_or_operand();
+    test_infix_match_rejects_binding_on_value_pattern();
+    test_infix_match_rejects_binding_on_range_pattern();
+    test_infix_match_rejects_binding_with_mixed_type_and_value_labels();
+    test_infix_match_target_type_disallowed();
+    test_infix_match_result_type_is_bool();
     test_for_in_loop_array_accepted();
     test_for_in_loop_non_array_rejected();
     test_cyclicity_acyclic_chain_marks_none();

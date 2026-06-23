@@ -6125,6 +6125,289 @@ static void test_tuple_fit_codegen(void) {
     feng_program_free(program);
 }
 
+/* ===== infix match operator codegen tests ===== */
+
+static void test_infix_match_value_pattern_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.infixmatchval;\n"
+        "func pick(x: int): bool {\n"
+        "    return x match 0 | 1 | 2;\n"
+        "}\n"
+        "func pick_range(x: int): bool {\n"
+        "    return x match 1...10;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/infix_match_value_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (infix match value): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    /* infix match lowers the target to a tmp and emits equality tests.
+     * Integer literals are emitted as INT64_C() casts. */
+    ASSERT(strstr(out.c_source, "INT64_C(0)") != NULL);
+    ASSERT(strstr(out.c_source, "INT64_C(1)") != NULL);
+    ASSERT(strstr(out.c_source, "INT64_C(2)") != NULL);
+    ASSERT(strstr(out.c_source, "INT64_C(10)") != NULL);
+    ASSERT(strstr(out.c_source, " <= ") != NULL);
+    ASSERT(strstr(out.c_source, " >= ") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_infix_match_union_member_type_pattern_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.infixmatchunion;\n"
+        "spec Value: int | string;\n"
+        "func is_int(v: Value): bool {\n"
+        "    return v match int;\n"
+        "}\n"
+        "func is_text(v: Value): bool {\n"
+        "    return v match int | string;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/infix_match_union_type_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (infix match union type): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    /* union member type pattern lowers to .tag equality against the
+     * member's tag index. */
+    ASSERT(strstr(out.c_source, ".tag == 0U") != NULL);
+    ASSERT(strstr(out.c_source, ".tag == 1U") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_infix_match_union_member_binding_in_if_cond_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.infixmatchbinding;\n"
+        "spec Value: int | string;\n"
+        "func consume(v: Value): int {\n"
+        "    if v match n: int && n > 0 {\n"
+        "        return n;\n"
+        "    }\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/infix_match_binding_if_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (infix match binding if): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    /* The binding alias `n` resolves to the active member payload field.
+     * Single-member subset aliases to payload.m0 directly. */
+    ASSERT(strstr(out.c_source, "payload.m0") != NULL);
+    /* Condition lowers to .tag == 0U (int member index). */
+    ASSERT(strstr(out.c_source, ".tag == 0U") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_infix_match_union_member_binding_in_while_cond_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.infixmatchwhile;\n"
+        "spec Value: int | string;\n"
+        "func countdown(v: Value): int {\n"
+        "    var counter: Value = v;\n"
+        "    var sum: int = 0;\n"
+        "    while counter match n: int && n > 0 {\n"
+        "        sum = sum + n;\n"
+        "        counter = n - 1;\n"
+        "    }\n"
+        "    return sum;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/infix_match_binding_while_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (infix match binding while): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    /* While loop re-evaluates and re-binds each iteration: the binding
+     * tmp and alias must be alive across the body. */
+    ASSERT(strstr(out.c_source, ".tag == 0U") != NULL);
+    ASSERT(strstr(out.c_source, "payload.m0") != NULL);
+    /* while body must use `break` to exit on condition false. */
+    ASSERT(strstr(out.c_source, "break;") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_infix_match_unary_not_preserves_precedence_codegen(void) {
+    /* Regression: `!(v match string)` must lower to `!(_mt.tag == 1U)`,
+     * not `(!_mt.tag) == 1U`. Without inner parentheses on the operand,
+     * C parses `!_mt.tag == 1U` as `(!_mt.tag) == 1U` due to precedence. */
+    static const char *kSource =
+        "module feng.codegen.infixmatchnot;\n"
+        "spec Value: int | string;\n"
+        "func is_not_text(v: Value): bool {\n"
+        "    return !(v match string);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/infix_match_unary_not_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (infix match unary not): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    /* The unary `!` must wrap the tag comparison atomically:
+     * `(!(_mt.tag == 1U))` — verify the inner parenthesized form exists. */
+    ASSERT(strstr(out.c_source, "!(_mt") != NULL);
+    ASSERT(strstr(out.c_source, ".tag == 1U") != NULL);
+    /* And the wrong form `(!_mt.tag == 1U)` must NOT appear. */
+    ASSERT(strstr(out.c_source, "!_mt") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -6233,6 +6516,11 @@ int main(void) {
     test_generic_union_form_match_expr_codegen();
     test_tuple_union_cleanup_codegen();
     test_tuple_fit_codegen();
+    test_infix_match_value_pattern_codegen();
+    test_infix_match_union_member_type_pattern_codegen();
+    test_infix_match_union_member_binding_in_if_cond_codegen();
+    test_infix_match_union_member_binding_in_while_cond_codegen();
+    test_infix_match_unary_not_preserves_precedence_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }
