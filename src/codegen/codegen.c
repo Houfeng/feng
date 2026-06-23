@@ -24411,6 +24411,33 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
         } else {
             buf_append_cstr(&fn, "    (void)_closure;\n");
         }
+        /* Register the defer function's frame record so the DAP proxy can
+         * rewrite the stack trace and map captured variables. HIDDEN policy:
+         * defer is scope cleanup (like Swift/Zig), not a user-visible call
+         * frame. The frame record is still needed for variable mapping. */
+        {
+            Buf frame_name;
+            buf_init(&frame_name);
+            if (stmt->token.line > 0U) {
+                buf_append_fmt(&frame_name, "defer@%u", stmt->token.line);
+            } else {
+                buf_append_cstr(&frame_name, "defer");
+            }
+            if (frame_name.data == NULL ||
+                !cg_debug_set_current_frame(cg,
+                                            defer_fn_name,
+                                            frame_name.data,
+                                            FENG_CODEGEN_MAPING_FRAME_HIDDEN,
+                                            blame) ||
+                !cg_debug_add_current_frame_module_binding_records(cg, blame)) {
+                buf_free(&frame_name);
+                cg_fail(cg, blame, "IE0001",
+                        "codegen: out of memory recording defer debug frame");
+                buf_free(&fn);
+                goto fn_cleanup;
+            }
+            buf_free(&frame_name);
+        }
         for (size_t i = 0U; i < info_count; ++i) {
             /* Register the captured binding in the defer function's scope.
              * The c_name dereferences the closure field so every read/write
@@ -24443,6 +24470,33 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
             }
             /* scope_add strdups name and c_name; free our copies. */
             free(alias_c_name);
+            /* Register a variable record so the DAP proxy can display the
+             * captured binding's original name and value when stopped inside
+             * the defer body. The read expression dereferences the closure
+             * field pointer to reach the outer variable's live storage. */
+            {
+                Buf read_expr;
+                buf_init(&read_expr);
+                buf_append_fmt(&read_expr, "(*_c->%s)", infos[i].field_name);
+                if (read_expr.data == NULL ||
+                    !cg_debug_add_variable_record_cstr_cgtype(
+                        cg,
+                        NULL,
+                        infos[i].local->name,
+                        read_expr.data,
+                        infos[i].local->type,
+                        strcmp(infos[i].local->name, "self") == 0
+                            ? FENG_CODEGEN_MAPING_VARIABLE_SELF
+                            : FENG_CODEGEN_MAPING_VARIABLE_CAPTURE,
+                        blame)) {
+                    buf_free(&read_expr);
+                    cg_fail(cg, blame, "IE0001",
+                            "codegen: out of memory recording defer capture");
+                    buf_free(&fn);
+                    goto fn_cleanup;
+                }
+                buf_free(&read_expr);
+            }
         }
         if (!cg_emit_block(cg, stmt->as.defer_block)) {
             buf_free(&fn);
