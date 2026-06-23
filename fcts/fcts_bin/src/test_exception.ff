@@ -81,7 +81,113 @@ func throw_ex_text(): string {
   return "unreachable";
 }
 
-/** 异常处理测试 - 辅助函数（try/catch 须在普通函数中执行，不能在 lambda 闭包内） */
+/** 异常处理测试 - lambda 中的 try/catch 辅助函数 */
+
+func run_action(f: Action) {
+  f();
+}
+
+func lambda_throw_error(): string {
+  throw "lambda-error";
+  return "unreachable";
+}
+
+func lambda_throw_int() {
+  let v: i32 = 99;
+  throw v;
+}
+
+func test_lambda_basic_try_catch(): bool {
+  var caught = false;
+  run_action(() {
+    try lambda_throw_error() catch ex: string {
+      if ex == "lambda-error" {
+        caught = true;
+      }
+    };
+  });
+  return caught;
+}
+
+func test_lambda_try_catch_expression(): bool {
+  var value: int = 0;
+  let fallback: int = -1;
+  run_action(() {
+    value = try parse_int("bad") catch ex: string {
+      fallback;
+    };
+  });
+  return value == -1;
+}
+
+func test_lambda_multiple_catch(): bool {
+  var catch_type = "";
+  run_action(() {
+    try lambda_throw_int() catch ex: string {
+      catch_type = "string";
+    } catch ex: i32 {
+      catch_type = "int";
+    };
+  });
+  return catch_type == "int";
+}
+
+func test_lambda_anonymous_catch(): bool {
+  var anon_caught = false;
+  run_action(() {
+    try lambda_throw_error() catch {
+      anon_caught = true;
+    };
+  });
+  return anon_caught;
+}
+
+func test_lambda_auto_propagation(): bool {
+  var propagated = false;
+  try run_action(() {
+    lambda_throw_error();
+  }) catch ex: string {
+    if ex == "lambda-error" {
+      propagated = true;
+    }
+  };
+  return propagated;
+}
+
+func test_lambda_rethrow_in_catch(): bool {
+  var rethrown = false;
+  try run_action(() {
+    try lambda_throw_error() catch ex: string {
+      throw "rethrown: " + ex;
+    };
+  }) catch ex: string {
+    if ex == "rethrown: lambda-error" {
+      rethrown = true;
+    }
+  };
+  return rethrown;
+}
+
+func test_lambda_try_catch_normal_path(): bool {
+  var value: int = 0;
+  let fallback: int = -1;
+  run_action(() {
+    value = try parse_int("ok") catch ex: string {
+      fallback;
+    };
+  });
+  return value == 42;
+}
+
+func test_lambda_try_catch_string_result(): bool {
+  var value = "";
+  run_action(() {
+    value = try lambda_throw_error() catch ex: string {
+      "caught: " + ex;
+    };
+  });
+  return value == "caught: lambda-error";
+}
 
 func test_basic_try_catch(): bool {
   var caught = false;
@@ -240,6 +346,38 @@ open func test_exception() {
 
     test("throw/catch spec value via concrete type", () {
       assert(test_throw_catch_spec_value(), "throw/catch spec value via concrete type");
+    });
+
+    test("lambda basic try/catch", () {
+      assert(test_lambda_basic_try_catch(), "lambda basic try/catch");
+    });
+
+    test("lambda try/catch expression", () {
+      assert(test_lambda_try_catch_expression(), "lambda try/catch expression");
+    });
+
+    test("lambda multiple catch clauses", () {
+      assert(test_lambda_multiple_catch(), "lambda multiple catch clauses");
+    });
+
+    test("lambda anonymous catch", () {
+      assert(test_lambda_anonymous_catch(), "lambda anonymous catch");
+    });
+
+    test("lambda auto-propagation", () {
+      assert(test_lambda_auto_propagation(), "lambda auto-propagation");
+    });
+
+    test("lambda rethrow in catch", () {
+      assert(test_lambda_rethrow_in_catch(), "lambda rethrow in catch");
+    });
+
+    test("lambda try/catch normal path", () {
+      assert(test_lambda_try_catch_normal_path(), "lambda try/catch normal path");
+    });
+
+    test("lambda try/catch string result", () {
+      assert(test_lambda_try_catch_string_result(), "lambda try/catch string result");
     });
   });
 }
