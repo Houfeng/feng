@@ -480,55 +480,55 @@ defer 相关的语义限制需要新增错误码（具体编号由人工决策�
 
 ### 10.1 Runtime
 
-- [ ] `FengCleanupNode` 加 `kind` 字段(`FengChainNodeKind`)
-- [ ] `FengCleanupNode` 加 `defer_fn` / `defer_closure` 字段
-- [ ] `feng_defer_push` API 实现（runtime 私有 ABI 扩展，需人工决策）
-- [ ] `feng_defer_push` 声明添加到 `feng_runtime.h`（与 `feng_cleanup_push` 同位置）
-- [ ] `feng_cleanup_release_node` 增加 `FENG_NODE_DEFER` 分支
-- [ ] `feng_cleanup_push` / `feng_cleanup_push_aggregate` 内部设 `kind = FENG_NODE_RELEASE`
-- [ ] `feng_frame_push` / `feng_try_frame_push` 内部设 `kind = FENG_NODE_MARKER`
-- [ ] `feng_cleanup_release_to_frame_marker` marker 判别改为 `node->kind == FENG_NODE_MARKER`（必须，见 §2.5.1）
-- [ ] `feng_frame_pop` 校验改为 `node->kind == FENG_NODE_MARKER`（必须，见 §2.5.2）
-- [ ] 全量回归测试（异常路径 + 正常路径）
+- [x] `FengCleanupNode` 加 `kind` 字段(`FengChainNodeKind`)
+- [x] `FengCleanupNode` 加 `defer_fn` / `defer_closure` 字段
+- [x] `feng_defer_push` API 实现（runtime 私有 ABI 扩展，需人工决策）
+- [x] `feng_defer_push` 声明添加到 `feng_runtime.h`（与 `feng_cleanup_push` 同位置）
+- [x] `feng_cleanup_release_node` 增加 `FENG_NODE_DEFER` 分支
+- [x] `feng_cleanup_push` / `feng_cleanup_push_aggregate` 内部设 `kind = FENG_NODE_RELEASE`
+- [x] `feng_frame_push` / `feng_try_frame_push` 内部设 `kind = FENG_NODE_MARKER`
+- [x] `feng_cleanup_release_to_frame_marker` marker 判别改为 `node->kind == FENG_NODE_MARKER`（必须，见 §2.5.1）
+- [x] `feng_frame_pop` 校验改为 `node->kind == FENG_NODE_MARKER`（必须，见 §2.5.2）
+- [x] 全量回归测试（异常路径 + 正常路径）
 
 ### 10.2 Lexer
 
-- [ ] `token.h` 关键字列表新增 `DEFER`
+- [x] `token.h` 关键字列表新增 `DEFER`
 
 ### 10.3 Parser
 
-- [ ] 新增 `FENG_STMT_DEFER` AST 节点类型
-- [ ] `defer { ... }` 语法解析（必须花括号块）
-- [ ] defer 块 body 复用 `FengBlock`
+- [x] 新增 `FENG_STMT_DEFER` AST 节点类型
+- [x] `defer { ... }` 语法解析（必须花括号块）
+- [x] defer 块 body 复用 `FengBlock`
 
 ### 10.4 Semantic
 
-- [ ] defer 块作为普通块作用域处理
-- [ ] 强禁止检查：defer 块内任何位置的 `return` / `throw` / `defer`
-- [ ] 弱限制检查：defer 块直接位置的 `break` / `continue`
-- [ ] 位置限制检查：defer 仅在函数体/嵌套块作用域内合法
-- [ ] 新增错误码
+- [x] defer 块作为普通块作用域处理
+- [x] 强禁止检查：defer 块内任何位置的 `return` / `throw` / `defer`
+- [x] 弱限制检查：defer 块直接位置的 `break` / `continue`
+- [x] 位置限制检查：defer 仅在函数体/嵌套块作用域内合法
+- [x] 新增错误码
 
 ### 10.5 Codegen
 
-- [ ] `cg_emit_stmt` 新增 `FENG_STMT_DEFER` 分支
-- [ ] defer 体静态函数生成（参考 lambda invoke 函数生成模式，追加到 `witness_defs`，见 §5.8.1）
-- [ ] closure 结构体定义生成（栈上，引用捕获，追加到 `type_defs`；无捕获时跳过）
-- [ ] 捕获需求分析（参考 lambda 的 capture requirements 分析思路，不复用 capture cell）
-- [ ] defer 注册 emit（有捕获：closure 初始化 + `feng_defer_push(&node, fn, &closure)`；无捕获：`feng_defer_push(&node, fn, NULL)`，见 §5.5）
-- [ ] 新增 `CG_TYPE_DEFER` CGType kind + `cgtype_is_defer` helper（见 §5.6.1）
-- [ ] `scope_add_defer` 薄包装新增（转调 `scope_add` 填 name=defer_fn_name / c_name=closure_name / type=CG_TYPE_DEFER，见 §5.6.2）
-- [ ] `cg_release_scope` 新增 DEFER 分派分支（`cgtype_is_defer` 检测，见 §5.6.3）
-- [ ] defer 静态函数在函数体生成结束后追加到输出
-- [ ] 全量回归测试
+- [x] `cg_emit_stmt` 新增 `FENG_STMT_DEFER` 分支
+- [x] defer 体静态函数生成（参考 lambda invoke 函数生成模式，追加到 `witness_defs`，见 §5.8.1）
+- [x] closure 结构体定义生成（栈上，引用捕获，追加到 `type_defs`；无捕获时跳过）
+- [x] 捕获需求分析（参考 lambda 的 capture requirements 分析思路，不复用 capture cell）
+- [x] defer 注册 emit（有捕获：closure 初始化 + `feng_defer_push(&node, fn, &closure)`；无捕获：`feng_defer_push(&node, fn, NULL)`，见 §5.5）
+- [x] 新增 `CG_TYPE_DEFER` CGType kind + `cgtype_is_defer` helper（见 §5.6.1）
+- [x] `scope_add_defer` 薄包装新增（转调 `scope_add` 填 name=defer_fn_name / c_name=closure_name / type=CG_TYPE_DEFER，见 §5.6.2）
+- [x] `cg_release_scope` 新增 DEFER 分派分支（`cgtype_is_defer` 检测，见 §5.6.3）
+- [x] defer 静态函数在函数体生成结束后追加到输出
+- [x] 全量回归测试
 
 ### 10.6 测试
 
-- [ ] 编译器测试(test/)：defer 语法解析、语义限制报错（return/throw/defer/break/continue）
-- [ ] 兼容性测试(fcts/)：defer 基本行为（正常退出执行、LIFO 顺序）
-- [ ] 兼容性测试(fcts/)：defer + 控制转移（return/break/continue 前 defer 执行）
-- [ ] 兼容性测试(fcts/)：defer + 异常路径（throw 后 defer 执行）
-- [ ] 兼容性测试(fcts/)：defer + try/catch（landing pad 内 defer 执行）
-- [ ] 兼容性测试(fcts/)：defer 块内嵌套 for/while 中 break/continue 合法
-- [ ] 兼容性测试(fcts/)：defer 捕获外层 var 的执行时当前值（而非注册时快照）
-- [ ] 兼容性测试(fcts/)：多 defer LIFO 顺序
+- [x] 编译器测试(test/)：defer 语法解析、语义限制报错（return/throw/defer/break/continue）
+- [x] 兼容性测试(fcts/)：defer 基本行为（正常退出执行、LIFO 顺序）
+- [x] 兼容性测试(fcts/)：defer + 控制转移（return/break/continue 前 defer 执行）
+- [x] 兼容性测试(fcts/)：defer + 异常路径（throw 后 defer 执行）
+- [x] 兼容性测试(fcts/)：defer + try/catch（landing pad 内 defer 执行）
+- [x] 兼容性测试(fcts/)：defer 块内嵌套 for/while 中 break/continue 合法
+- [x] 兼容性测试(fcts/)：defer 捕获外层 var 的执行时当前值（而非注册时快照）
+- [x] 兼容性测试(fcts/)：多 defer LIFO 顺序
