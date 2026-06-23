@@ -278,7 +278,9 @@ defer 捕获需求分析参考 lambda 的 `cg_compute_capture_requirements_in_la
 
 ### 5.5 defer 注册 emit
 
-在 defer 语句的 codegen 位置 emit：
+在 defer 语句的 codegen 位置 emit。
+
+**有捕获时**（defer 体引用至少一个外层绑定）：
 
 ```c
 /* closure 结构体初始化(栈上) */
@@ -293,24 +295,92 @@ feng_defer_push(&_defer_<func_name>_<seq>,
                 &__defer_closure_<func_name>_<seq>);
 ```
 
+**无捕获时**（defer 体不引用任何外层绑定，见 §5.4）：
+
+```c
+FengCleanupNode _defer_<func_name>_<seq>;
+feng_defer_push(&_defer_<func_name>_<seq>,
+                __defer_<func_name>_<seq>,
+                NULL);
+```
+
+无捕获时不生成 closure 结构体变量，`feng_defer_push` 第三参数传 NULL。defer 函数签名仍为 `void fn(void *closure)`，函数体内不读 `_closure`。
+
 ### 5.6 scope 内 defer 注册管理
 
-defer 注册追加到 scope 的 locals 列表（类似 `Local`，加 `is_defer` 标志），在 `cg_release_scope`(codegen.c:19232)按 LIFO 与托管局部混合释放。
+defer 注册追加到 scope 的 locals 列表，**复用 `Local`(codegen.c:901-910) 现有字段承载**，不加 Local 字段、不动 Scope、不动 `scope_add` / `scope_pop_free` / `scope_lookup`。在 `cg_release_scope`(codegen.c:19232)按 LIFO 与托管局部混合释放。
 
-`cg_release_scope` 遍历 locals 时，对 `is_defer` 类型的 local emit：
+#### 5.6.1 Local 字段复用（零新增）
+
+defer 条目是一个 `Local`，复用现有三字段：
+
+| Local 字段 | 现有语义 | defer 条目复用为 |
+| --- | --- | --- |
+| `name` | Feng 标识符 / 合成名（如 `__capture_alias__`） | defer 函数名 `__defer_<func_c_name>_<seq>` |
+| `c_name` | mangled C 标识符 | defer closure 变量名 `__defer_closure_<func_c_name>_<seq>`，无捕获时 NULL |
+| `type` | CGType | `CG_TYPE_DEFER` 哨兵（新增 CGType kind） |
+| `is_param` | 参数标记 | false |
+| `is_unknown_exception` | catch unknown 标记 | false |
+| `capture_cell_*` | lambda 捕获元数据 | NULL |
+
+`name` 存 defer 函数名沿用现有 `__capture_alias__` / `__capture_cell__` 的合成名先例——`name` 的实际语义已是"scope_lookup 的查找 key"，非严格 Feng 标识符。
+
+**碰撞安全性**：`<func_c_name>` 取当前函数的 C 名（`cg_fn_mangle` 生成，形如 `feng__<module>__<name>`），defer 函数名 = `__defer_feng__<module>__<name>_<seq>` 包含 C mangle 前缀 `feng__<module>__`。Feng 标识符是单个名字，不含 `__` 分隔的模块路径，不会自然产生这种字符串。碰撞在实践中不可能，且风险低于已接受的 `__capture_alias__` 固定字符串。
+
+#### 5.6.2 scope_add_defer 新增
+
+`scope_add`(codegen.c:955) 签名匹配 defer（有 name / c_name / type），新增薄包装：
 
 ```c
-feng_cleanup_pop();
-__defer_<func_name>_<seq>(&__defer_closure_<func_name>_<seq>);
+static bool scope_add_defer(Scope *s,
+                            const char *defer_fn_name,
+                            const char *defer_closure_name /* 可为 NULL */,
+                            CGType *defer_type /* CG_TYPE_DEFER */);
 ```
 
-而非现有的：
+实现转调 `scope_add(s, defer_fn_name, defer_closure_name, defer_type, false)`。`scope_add` 内部行为零改动。
+
+#### 5.6.3 cg_release_scope 分派
+
+`cg_release_scope`(codegen.c:19232) 遍历 locals 逆序，在现有 `is_param` 跳过之后、`cgtype_is_managed` / `cgtype_is_aggregate` 分派之前新增 DEFER 分支：
 
 ```c
-feng_cleanup_pop(); feng_release(x); x = NULL;
+for (size_t i = scope->count; i > 0; i--) {
+    const Local *l = &scope->items[i - 1];
+    if (l->is_param) continue;
+    if (cgtype_is_defer(l->type)) {                    /* 新增分支 */
+        cg_emit_current_stmt_line_directive_force(cg);
+        if (l->c_name != NULL) {
+            buf_append_fmt(cg->cur_body,
+                           "    feng_cleanup_pop(); %s(&%s);\n",
+                           l->name, l->c_name);
+        } else {
+            /* 无捕获时 closure 参数传 NULL */
+            buf_append_fmt(cg->cur_body,
+                           "    feng_cleanup_pop(); %s(NULL);\n",
+                           l->name);
+        }
+        continue;
+    }
+    if (cgtype_is_managed(l->type)) {
+        /* 原有 managed 释放逻辑不变 */
+    } else if (cgtype_is_aggregate(l->type)) {
+        /* 原有 aggregate 释放逻辑不变 */
+    }
+}
 ```
 
-defer 节点的 `feng_cleanup_pop()` 与托管局部的 `feng_cleanup_pop()` 操作同一个 TLS chain，LIFO 顺序由注册顺序决定——先注册的节点（托管局部）在 chain 底部，后注册的（defer）在顶部。`cg_release_scope` 按 locals 逆序遍历，先 pop + 执行 defer，再 pop + 释放托管局部，或反之——取决于注册顺序。
+defer 节点的 `feng_cleanup_pop()` 与托管局部的 `feng_cleanup_pop()` 操作同一个 TLS chain，LIFO 顺序由注册顺序决定——先注册的节点在 chain 底部，后注册的在顶部。`cg_release_scope` 按 locals 逆序遍历，先 pop + 执行 defer，再 pop + 释放托管局部，或反之——取决于注册顺序。
+
+#### 5.6.4 不受影响的现有逻辑
+
+| 函数 | 是否改动 | 原因 |
+| --- | --- | --- |
+| `scope_add`(codegen.c:955) | 不改动 | defer 条目通过 `scope_add_defer` 转调，填 name/c_name/type 三字段 |
+| `scope_pop_free`(codegen.c:941) | 不改动 | 照常 free name/c_name/type；defer 条目三字段都是有效分配，free 安全 |
+| `scope_lookup`(codegen.c:989) | 不改动 | defer 条目 name 含 C mangle 前缀，Feng 标识符查询不会匹配 |
+| `scope_push`(codegen.c:933) | 不改动 | Scope 结构不变 |
+| 所有 `&scope->items[i]` 访问点（9 处） | 不改动 | items 仍是 `Local*` |
 
 ### 5.7 cg_release_through 覆盖
 
@@ -324,11 +394,22 @@ case FENG_STMT_DEFER: ok = cg_emit_defer(cg, stmt); break;
 
 `cg_emit_defer` 负责：
 
-1. 分析 defer 体的捕获需求
-2. 生成 closure 结构体定义（追加到 type_defs buffer）
-3. 生成 defer 静态函数（追加到 defer 函数 buffer，函数体生成结束后合并到输出）
-4. 在当前作用域 emit closure 初始化 + feng_defer_push
-5. 在当前 scope 注册 defer（追加到 locals 列表，标记 is_defer）
+1. 分析 defer 体的捕获需求（参考 `cg_compute_capture_requirements_in_lambda_body`(codegen.c:10993) 思路，不复用 capture cell 机制，见 §5.4）
+2. 生成 closure 结构体定义（追加到 `type_defs` buffer，codegen.c:1066；无捕获时跳过）
+3. 生成 defer 静态函数（追加到 `witness_defs` buffer，codegen.c:1071；与 lambda invoke 函数同路径，见 §5.8.1）
+4. 在当前作用域 emit closure 初始化 + `feng_defer_push`（无捕获时 closure 参数传 NULL，见 §5.5）
+5. 在当前 scope 注册 defer（`scope_add_defer` 追加到 locals 列表，见 §5.6.2）
+
+#### 5.8.1 buffer 选择：复用 witness_defs
+
+defer 静态函数追加到 `witness_defs`(codegen.c:1071)，与 `cg_emit_lambda_invoke_function`(codegen.c:12028) 同路径。理由：
+
+- `witness_defs` 的本质特征是"body 生成期间收集、不能插入当前函数体、需在 `fn_defs` 之后统一拼接的 static 函数"（codegen.c:1071-1075 注释），defer 静态函数完全符合。
+- lambda invoke 函数（非 spec 相关）已先例使用 `witness_defs`，defer 与之特征一致，复用避免路径分裂。
+- `cg_finalize`(codegen.c:34116) 已在 `fn_defs` 之后拼接 `witness_defs`，defer 函数前向引用安全。
+- 零新 buffer，零新拼接点。
+
+closure 结构体定义追加到 `type_defs`（与现有 struct/enum 定义同路径，codegen.c:34107 在 `fn_defs` 之前拼接，保证 defer 函数体引用 closure 类型时类型已可见）。
 
 ---
 
@@ -431,12 +512,13 @@ defer 相关的语义限制需要新增错误码（具体编号由人工决策�
 ### 10.5 Codegen
 
 - [ ] `cg_emit_stmt` 新增 `FENG_STMT_DEFER` 分支
-- [ ] defer 体静态函数生成（参考 lambda invoke 函数生成模式）
-- [ ] closure 结构体定义生成（栈上，引用捕获）
-- [ ] 捕获需求分析（参考 lambda 的 capture requirements 分析思路）
-- [ ] defer 注册 emit（closure 初始化 + `feng_defer_push`）
-- [ ] scope locals 列表追加 defer 注册（`is_defer` 标志）
-- [ ] `cg_release_scope` 对 defer local emit `feng_cleanup_pop(); fn(closure);`
+- [ ] defer 体静态函数生成（参考 lambda invoke 函数生成模式，追加到 `witness_defs`，见 §5.8.1）
+- [ ] closure 结构体定义生成（栈上，引用捕获，追加到 `type_defs`；无捕获时跳过）
+- [ ] 捕获需求分析（参考 lambda 的 capture requirements 分析思路，不复用 capture cell）
+- [ ] defer 注册 emit（有捕获：closure 初始化 + `feng_defer_push(&node, fn, &closure)`；无捕获：`feng_defer_push(&node, fn, NULL)`，见 §5.5）
+- [ ] 新增 `CG_TYPE_DEFER` CGType kind + `cgtype_is_defer` helper（见 §5.6.1）
+- [ ] `scope_add_defer` 薄包装新增（转调 `scope_add` 填 name=defer_fn_name / c_name=closure_name / type=CG_TYPE_DEFER，见 §5.6.2）
+- [ ] `cg_release_scope` 新增 DEFER 分派分支（`cgtype_is_defer` 检测，见 §5.6.3）
 - [ ] defer 静态函数在函数体生成结束后追加到输出
 - [ ] 全量回归测试
 
