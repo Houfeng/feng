@@ -25,7 +25,6 @@ const KEYWORDS = new Set([
     'defer',
     'try',
     'catch',
-    'finally',
     'throw',
     'return',
     'void',
