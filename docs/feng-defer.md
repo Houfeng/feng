@@ -87,26 +87,19 @@ func nested() {
 }
 ```
 
-## 5 作用域与可见性
-
-- `defer` 块可以访问声明位置外层作用域中可见的绑定,包括 `var` 绑定的当前值。
-- `defer` 块不能在声明位置之后才引入的绑定中使用;可见性以 `defer` 注册时所在的静态作用域为准。
-- `defer` 块内引入的绑定仅在该块内可见,不外泄到外层作用域。
-- `defer` 块不在外层作用域产生结果值,不可作为表达式参与赋值或返回。
-
-## 6 与流程控制的关系
+## 5 与流程控制的关系
 
 - `return` / `break` / `continue` 的语义本身不变,`defer` 仅在控制转移生效前追加一次清理执行。
 - `defer` 不改变 `break` / `continue` 的作用对象;`break` / `continue` 始终作用于最近一层循环,见 [Feng 语言流程控制规范](./feng-flow.md)。
 - `defer` 不可作为表达式使用,不参与 `if` / `match` / `try/catch` 表达式的块值提取。
 
-## 7 与异常模型的关系
+## 6 与异常模型的关系
 
 - `defer` 在异常路径上的执行与托管局部释放共享同一套清理基础设施,不引入额外的运行时机制。
 - `defer` 块内禁止 `throw`,异常路径上仍可由块内调用的外部函数抛出异常,传播规则见 [Feng 语言异常模型规范](./feng-exception.md)。
 - 异常不得穿越 C ABI 边界,`@abi` 顶层函数内的 `defer` 同样受 ABI 边界约束。
 
-## 8 与主规范的关系
+## 7 与主规范的关系
 
 - [feng-language.md](./feng-language.md): 语言总体规范,提供资源清理概要并引用本文档。
 - [feng-flow.md](./feng-flow.md): `return` / `break` / `continue` 的控制转移语义。
