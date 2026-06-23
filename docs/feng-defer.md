@@ -39,14 +39,13 @@ func test() {
 - 控制转移退出:`return` / `break` / `continue` 触发块退出时,该块的 `defer` 在控制转移生效之前执行。
 - 异常路径退出:块内抛出异常或异常经此传播时,该块的 `defer` 在托管局部释放过程中一并执行,具体顺序见 [Feng 语言异常模型规范](./feng-exception.md)。
 - 同一作用域内注册的多个 `defer` 按注册的逆序执行(LIFO)。
-- `defer` 块自身抛出的异常按 [Feng 语言异常模型规范](./feng-exception.md) 的传播规则向上传播。
+- `defer` 块内调用的外部函数抛出异常时,传播规则见 [Feng 语言异常模型规范](./feng-exception.md)。
 
 ## 4 defer 块内的语句限制
 
-为避免清理动作改写当前块已确立的控制流,`defer` 块内的语句存在以下限制:
+为避免清理动作改写当前块已确立的控制流或注册新的清理动作,`defer` 块内的语句存在以下限制:
 
-- `defer` 块中不能包含 `return` 语句。
-- `defer` 块中不能包含 `throw` 语句。
+- `defer` 块中任何位置都不能包含 `return` / `throw` / `defer` 语句,包括嵌套的子块内。
 - `defer` 块中不能直接包含 `break` / `continue` 语句。
 - `defer` 块内嵌套的 `for` / `while` 循环体中可以使用 `break` / `continue`,其作用域仅限该循环体,不作用于 `defer` 所在的外层块。
 
@@ -64,8 +63,18 @@ func bad() {
   defer {
     return 1;        // 非法:defer 块中不能使用 return
     throw "err";      // 非法:defer 块中不能使用 throw
+    defer {}          // 非法:defer 块中不能再写 defer
     break;            // 非法:defer 块中不能直接使用 break
     continue;         // 非法:defer 块中不能直接使用 continue
+  }
+}
+
+func bad_nested() {
+  defer {
+    if cond {
+      return 1;       // 非法:嵌套子块内同样不能使用 return
+      defer {}         // 非法:嵌套子块内同样不能再写 defer
+    }
   }
 }
 
