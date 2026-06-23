@@ -16026,6 +16026,149 @@ static void test_infix_match_result_type_is_bool(void) {
     assert_single_source_semantic_ok("infix_match_result_type_bool.f", source);
 }
 
+static void test_infix_match_enum_item_reference_pattern_accepted(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "func run(c: Color): bool {\n"
+        "    return c match Color.Red | Color.Green;\n"
+        "}\n";
+    assert_single_source_semantic_ok("infix_match_enum_item_reference.f", source);
+}
+
+static void test_infix_match_enum_item_reference_rejects_cross_enum(void) {
+    /* Match labels must reference the same enum as the target. */
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green\n"
+        "}\n"
+        "enum HttpStatus {\n"
+        "    Ok = 200,\n"
+        "    NotFound = 404\n"
+        "}\n"
+        "func run(c: Color): bool {\n"
+        "    return c match HttpStatus.Ok;\n"
+        "}\n";
+    assert_single_source_semantic_error_contains(
+        "infix_match_enum_item_reference_cross_enum.f",
+        source,
+        "match label references enum");
+}
+
+static void test_infix_match_enum_item_reference_rejects_unknown_item(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green\n"
+        "}\n"
+        "func run(c: Color): bool {\n"
+        "    return c match Color.Magenta;\n"
+        "}\n";
+    assert_single_source_semantic_error_contains(
+        "infix_match_enum_item_reference_unknown_item.f",
+        source,
+        "has no item");
+}
+
+static void test_infix_match_enum_item_reference_rejects_binding(void) {
+    /* enum item reference pattern does not support binding (AE1009). */
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green\n"
+        "}\n"
+        "func run(c: Color): bool {\n"
+        "    return c match n: Color.Red;\n"
+        "}\n";
+    assert_single_source_semantic_error_contains(
+        "infix_match_enum_item_reference_binding.f",
+        source,
+        "infix match binding requires all labels to be union member type patterns");
+}
+
+static void test_infix_match_union_member_type_qualified_across_modules_accepted(void) {
+    /* Regression: a qualified 2-segment type ref like `b.Error` is a
+     * legitimate union member type when the target is a union-form spec
+     * whose member is `b.Error`. The dispatch must NOT treat 2-segment
+     * type refs as enum item references — it must consult the target's
+     * static type (union vs enum), not the segment count. */
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.base as b;\n"
+        "spec Result: b.Error | int;\n"
+        "func is_error(v: Result): bool {\n"
+        "    return v match b.Error;\n"
+        "}\n";
+    const char *base_source =
+        "open module demo.base;\n"
+        "open type Error {}\n";
+    FengProgram *main_program = parse_program_or_die("infix_match_union_qualified_main.f", main_source);
+    FengProgram *base_program = parse_program_or_die("infix_match_union_qualified_base.f", base_source);
+    const FengProgram *programs[] = {main_program, base_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    bool ok = feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    if (!ok || error_count != 0U) {
+        fprintf(stderr, "infix_match_union_qualified_main.f:\n");
+        for (size_t i = 0U; i < error_count; ++i) {
+            fprintf(stderr, "  err: %s\n", errors[i].message);
+        }
+    }
+    ASSERT(ok);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(main_program);
+    feng_program_free(base_program);
+}
+
+static void test_infix_match_union_member_type_aliased_across_modules_accepted(void) {
+    /* Fully-qualified type ref `demo.base.Error` as union member. Same
+     * dispatch check: target is union, so resolve_type_ref must run. */
+    const char *main_source =
+        "module demo.main;\n"
+        "import demo.base;\n"
+        "spec Result: demo.base.Error | int;\n"
+        "func is_error(v: Result): bool {\n"
+        "    return v match demo.base.Error;\n"
+        "}\n";
+    const char *base_source =
+        "open module demo.base;\n"
+        "open type Error {}\n";
+    FengProgram *main_program = parse_program_or_die("infix_match_union_aliased_main.f", main_source);
+    FengProgram *base_program = parse_program_or_die("infix_match_union_aliased_base.f", base_source);
+    const FengProgram *programs[] = {main_program, base_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    bool ok = feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    if (!ok || error_count != 0U) {
+        fprintf(stderr, "infix_match_union_aliased_main.f:\n");
+        for (size_t i = 0U; i < error_count; ++i) {
+            fprintf(stderr, "  err: %s\n", errors[i].message);
+        }
+    }
+    ASSERT(ok);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(main_program);
+    feng_program_free(base_program);
+}
+
 static bool type_ref_named_single_is(const FengTypeRef *type_ref, const char *name) {
     size_t length = strlen(name);
 
@@ -16884,6 +17027,12 @@ int main(void) {
     test_infix_match_rejects_binding_with_mixed_type_and_value_labels();
     test_infix_match_target_type_disallowed();
     test_infix_match_result_type_is_bool();
+    test_infix_match_enum_item_reference_pattern_accepted();
+    test_infix_match_enum_item_reference_rejects_cross_enum();
+    test_infix_match_enum_item_reference_rejects_unknown_item();
+    test_infix_match_enum_item_reference_rejects_binding();
+    test_infix_match_union_member_type_qualified_across_modules_accepted();
+    test_infix_match_union_member_type_aliased_across_modules_accepted();
     test_for_in_loop_array_accepted();
     test_for_in_loop_non_array_rejected();
     test_cyclicity_acyclic_chain_marks_none();
