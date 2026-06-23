@@ -11927,6 +11927,9 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
         "    (void)_lambda;\n",
         closure_struct_name,
         closure_struct_name);
+    if (!cg_emit_function_eh_prologue(cg, lambda_expr->token)) {
+        goto cleanup;
+    }
     {
         Buf frame_name;
         buf_init(&frame_name);
