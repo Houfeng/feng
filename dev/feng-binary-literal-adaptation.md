@@ -413,15 +413,15 @@ let x = 12.5;       // double x = (double)(12.5);            ← 正确
 
 新增二元运算中的字面量贴合逻辑。codegen 尚不读取，行为不变。
 
-- [ ] 新增辅助函数 `numeric_literal_fits_inferred_target()`：求值字面量常量，检查是否适配目标 `InferredExprType`（参考已有的 `numeric_literal_adapts_to_target()` 15405 行，核心逻辑相同但目标类型来源不同）
-- [ ] 为 `expr_is_pure_numeric_literal_expr_for_target_adaptation()` 和 `integer_literal_fits_canonical_target()` 添加前向声明（两者定义在 `infer_expr_type` 之后）
-- [ ] `infer_expr_type()` 的 `FENG_EXPR_BINARY` 分支：在 `inferred_expr_types_equal` 之前插入字面量贴合步骤
-  - [ ] 右操作数为纯数值字面量且左操作数类型为已确定标量时，贴合右操作数类型到左操作数类型，并通过 `create_type_ref_from_inferred_type` + `resolver_track_synthetic_type_ref` 合成 `FengTypeRef` 挂到右操作数节点的 `type`
-  - [ ] 左操作数为纯数值字面量且右操作数类型为已确定标量时，贴合左操作数类型到右操作数类型，同理合成 `FengTypeRef` 挂到左操作数节点的 `type`
-  - [ ] 两侧均为字面量时不触发贴合，各自默认推导
-  - [ ] 贴合时通过 `evaluate_constant_expr` 求值、`integer_literal_fits_canonical_target` 检查范围，不适配时保持默认推导类型
-- [ ] 位移运算符（`<<`/`>>`）：确认贴合后 `validate_integer_shift_rhs_range` 正常工作（预期无冲突）
-- [ ] 全量回归测试，确认无新增失败
+- [x] 新增辅助函数 `numeric_literal_fits_inferred_target()`：求值字面量常量，检查是否适配目标 `InferredExprType`（参考已有的 `numeric_literal_adapts_to_target()` 15405 行，核心逻辑相同但目标类型来源不同）
+- [x] 为 `expr_is_pure_numeric_literal_expr_for_target_adaptation()` 和 `integer_literal_fits_canonical_target()` 添加前向声明（两者定义在 `infer_expr_type` 之后）
+- [x] `infer_expr_type()` 的 `FENG_EXPR_BINARY` 分支：在 `inferred_expr_types_equal` 之前插入字面量贴合步骤
+  - [x] 右操作数为纯数值字面量且左操作数类型为已确定标量时，贴合右操作数类型到左操作数类型，并通过 `create_type_ref_from_inferred_type` + `resolver_track_synthetic_type_ref` 合成 `FengTypeRef` 挂到右操作数节点的 `type`
+  - [x] 左操作数为纯数值字面量且右操作数类型为已确定标量时，贴合左操作数类型到右操作数类型，同理合成 `FengTypeRef` 挂到左操作数节点的 `type`
+  - [x] 两侧均为字面量时不触发贴合，各自默认推导
+  - [x] 贴合时通过 `evaluate_constant_expr` 求值、`integer_literal_fits_canonical_target` 检查范围，不适配时保持默认推导类型
+- [x] 位移运算符（`<<`/`>>`）：确认贴合后 `validate_integer_shift_rhs_range` 正常工作（预期无冲突）
+- [x] 全量回归测试，确认无新增失败
 
 ### 8.5 步骤 4：按类型正确发码 + 测试
 

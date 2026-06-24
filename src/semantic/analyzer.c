@@ -4202,6 +4202,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
 static bool evaluate_constant_expr(ResolveContext *context,
                                    const FengExpr *expr,
                                    FengConstValue *out);
+static bool integer_literal_fits_canonical_target(int64_t value,
+                                                   const char *canonical_target);
+static bool expr_is_pure_numeric_literal_expr_for_target_adaptation(const FengExpr *expr);
 static bool validate_expr_against_expected_type(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 const FengTypeRef *expected_type);
@@ -14299,6 +14302,29 @@ static InferredExprType lookup_expr_narrowing(const ResolveContext *context,
     return inferred_expr_type_unknown();
 }
 
+/* Check whether a pure numeric literal expression fits a target type
+ * described by InferredExprType (as opposed to FengTypeRef).  Used by
+ * the binary-operation literal adaptation path in infer_expr_type. */
+static bool numeric_literal_fits_inferred_target(ResolveContext *context,
+                                                 const FengExpr *literal_expr,
+                                                 InferredExprType target_type) {
+    const char *canonical = inferred_expr_type_builtin_canonical_name(
+        target_type, context->pointer_size);
+    FengConstValue value;
+    bool target_is_float;
+
+    if (canonical == NULL) return false;
+    target_is_float = strcmp(canonical, "f32") == 0 || strcmp(canonical, "f64") == 0;
+    if (!evaluate_constant_expr(context, literal_expr, &value)) return false;
+    if (value.kind == FENG_CONST_INT) {
+        return target_is_float || integer_literal_fits_canonical_target(value.i, canonical);
+    }
+    if (value.kind == FENG_CONST_FLOAT) {
+        return target_is_float;
+    }
+    return false;
+}
+
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr) {
     size_t index;
 
@@ -14449,6 +14475,38 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
         case FENG_EXPR_BINARY: {
             InferredExprType left_type = infer_expr_type(context, expr->as.binary.left);
             InferredExprType right_type = infer_expr_type(context, expr->as.binary.right);
+
+            /* Binary-operation literal adaptation: when one operand is a
+             * pure numeric literal and the other side has a resolved scalar
+             * type, adapt the literal to that type.  The result is hung on
+             * the literal node's type field for codegen to read directly.
+             * When both sides are literals, no adaptation is triggered —
+             * each keeps its default inferred type. */
+            if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr->as.binary.right) &&
+                !expr_is_pure_numeric_literal_expr_for_target_adaptation(expr->as.binary.left) &&
+                inferred_expr_type_is_numeric(left_type)) {
+                if (numeric_literal_fits_inferred_target(context, expr->as.binary.right, left_type)) {
+                    FengTypeRef *synth = create_type_ref_from_inferred_type(&left_type,
+                                                                            expr->token);
+                    if (synth != NULL) {
+                        resolver_track_synthetic_type_ref(context, synth);
+                        ((FengExpr *)expr->as.binary.right)->type = synth;
+                    }
+                    right_type = left_type;
+                }
+            } else if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr->as.binary.left) &&
+                       !expr_is_pure_numeric_literal_expr_for_target_adaptation(expr->as.binary.right) &&
+                       inferred_expr_type_is_numeric(right_type)) {
+                if (numeric_literal_fits_inferred_target(context, expr->as.binary.left, right_type)) {
+                    FengTypeRef *synth = create_type_ref_from_inferred_type(&right_type,
+                                                                            expr->token);
+                    if (synth != NULL) {
+                        resolver_track_synthetic_type_ref(context, synth);
+                        ((FengExpr *)expr->as.binary.left)->type = synth;
+                    }
+                    left_type = right_type;
+                }
+            }
 
             switch (expr->as.binary.op) {
                 case FENG_TOKEN_PLUS:
