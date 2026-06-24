@@ -192,7 +192,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 这些 `builtin_name` 后续通过 `canonical_builtin_type_name()` 归一为标准名。保留别名是正确的：
 
 - 规范要求"整数字面量默认推导为 `int`"，而非"推导为 `i32`"
-- Task 4 使 `int` 平台相关后，`canonical_builtin_type_name("int", platform)` 自然返回平台匹配的 `i32` 或 `i64`，字面量类型自动跟随平台
+- Task 7 使 `int` 平台相关后，`canonical_builtin_type_name("int", platform)` 自然返回平台匹配的 `i32` 或 `i64`，字面量类型自动跟随平台
 - `"double"` 和 `"byte"` 为固定别名，归一结果始终为 `f64` 和 `u8`，不受平台影响
 
 因此，AST 预遍历归一仅处理用户书写的 type_ref，语义分析内部构造的 `InferredExprType` 保持别名不变。
@@ -227,7 +227,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 ### Task 2：规范文档更新
 
 - [ ] 更新 `docs/feng-language.md`：别名表（移除 `long`，新增 `uint`，`int` 平台相关说明）
-- [ ] 更新 `docs/feng-builtin-type.md`：别名表与映射规则，正文中引用 `long` 的描述（如 `string.length()` 返回类型改为 `i64`），以及整数字面量默认类型规则（当前为"推导为 `int`（即 `i32`）"，Task 4 后 `int` 平台相关，需同步更新描述）
+- [ ] 更新 `docs/feng-builtin-type.md`：别名表与映射规则，正文中引用 `long` 的描述（如 `string.length()` 返回类型改为 `i64`），以及整数字面量默认类型规则（当前为"推导为 `int`（即 `i32`）"，Task 7 后 `int` 平台相关，需同步更新描述）
 - [ ] 更新本文件状态为"已实施"
 
 ### Task 3：移除 `long` 别名
@@ -238,7 +238,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [ ] 从集中别名表中移除 `long` → `i64` 条目
 - [ ] 全量回归测试
 
-### Task 4a：编译器平台位宽映射能力（无行为变更）
+### Task 4：编译器平台位宽映射能力（无行为变更）
 
 > 为 `canonical_builtin_type_name()` 增加平台参数，但当前阶段 `int` 仍固定映射为 `i32`，行为不变。此步骤仅建立基础设施。
 
@@ -248,35 +248,35 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [ ] `inferred_expr_type_builtin_canonical_name()` 内部调用 `canonical_builtin_type_name()` 时同步传入平台信息
 - [ ] 全量回归测试（`int` 仍固定映射 `i32`，应无行为变更）
 
-### Task 4b：新增 `uint` 平台相关别名（验证 4a 基础设施）
+### Task 5：新增 `uint` 平台相关别名（验证 Task 4 基础设施）
 
-> `uint` 是全新别名，无现有代码依赖，正好验证 4a 的平台位宽映射是否正确。
+> `uint` 是全新别名，无现有代码依赖，正好验证 Task 4 的平台位宽映射是否正确。
 
 - [ ] 集中别名表新增 `uint` → `u32`（32 位）或 `u64`（64 位）；仅需修改 `canonical_builtin_type_name()`，codegen 等下游阶段无需变更
 - [ ] 全量回归测试
 
-### Task 4c：迁移现有 `int` 用法为 `i32`（纯代码迁移，无行为变更）
+### Task 6：迁移现有 `int` 用法为 `i32`（纯代码迁移，无行为变更）
 
-> 消除代码对 `int` 当前语义（固定 32 位）的依赖。Task 4d 改变 `int` 含义后，已有代码不受影响。
+> 消除代码对 `int` 当前语义（固定 32 位）的依赖。Task 7 改变 `int` 含义后，已有代码不受影响。
 
 - [ ] 迁移标准库（`std/`）中使用 `int` 的代码为 `i32`
 - [ ] 迁移兼容性测试（`fcts/`）中使用 `int` 的代码为 `i32`
 - [ ] 迁移编译器测试（`test/`）中使用 `int` 的代码为 `i32`
 - [ ] 全量回归测试
 
-### Task 4d：`int` 改为平台相关别名
+### Task 7：`int` 改为平台相关别名
 
-> 4c 已将所有 `int` 迁移为 `i32`，此时切换 `int` 的映射不影响已有代码。
+> Task 6 已将所有 `int` 迁移为 `i32`，此时切换 `int` 的映射不影响已有代码。
 
 - [ ] `canonical_builtin_type_name()` 中 `int` 映射从固定 `i32` 改为平台相关：32 位 → `i32`，64 位 → `i64`
 - [ ] 全量回归测试
 
-### Task 4e：语义优化——识别应使用平台相关 `int` 的 `i32` 用法
+### Task 8：语义优化——识别应使用平台相关 `int` 的 `i32` 用法
 
-> Task 4c 将所有 `int` 迁移为 `i32`，其中一部分语义上应跟随平台（如通用计数、数组索引、与 `size_t`/`intptr_t` 对接等），需识别并改回 `int`。此任务为语义优化，不影响正确性。
+> Task 6 将所有 `int` 迁移为 `i32`，其中一部分语义上应跟随平台（如通用计数、数组索引、与 `size_t`/`intptr_t` 对接等），需识别并改回 `int`。此任务为语义优化，不影响正确性。
 
-- [ ] 审计 `std/` 中 Task 4c 迁移的 `i32`，将应平台相关的改回 `int`
-- [ ] 审计 `fcts/` 中 Task 4c 迁移的 `i32`，将应平台相关的改回 `int`
+- [ ] 审计 `std/` 中 Task 6 迁移的 `i32`，将应平台相关的改回 `int`
+- [ ] 审计 `fcts/` 中 Task 6 迁移的 `i32`，将应平台相关的改回 `int`
 - [ ] 全量回归测试
 
 ## 9. 决策记录
@@ -287,9 +287,9 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - **2026-06-24**：决策——AST 归一后仅保留标准名，不保留用户书写的原始别名；编译器诊断统一使用标准名
 - **2026-06-24**：决策——移除 `long` 后按"未知类型名"处理，不添加专门的迁移提示（避免临时 workaround）
 - **2026-06-24**：发现 codegen `k_builtin_types[]` 自 2026-04-28 初始提交即含有 `uint → CG_TYPE_U32` 预留条目（codegen 创建时提前写入，semantic 层从未识别，为不可达死代码）；`cg_is_builtin_named_fit_target()`（2026-05-11 添加）已刻意排除 `uint`。归一收敛后 codegen 不感知任何别名，该条目及所有别名条目均从 `k_builtin_types[]` 中彻底删除
-- **2026-06-24**：决策——规范文档更新前置至 Task 2，在行为变更任务（Task 3~5）之前完成，符合"先规范再实现"原则
+- **2026-06-24**：决策——规范文档更新前置至 Task 2，在行为变更任务（Task 3~8）之前完成，符合"先规范再实现"原则
 - **2026-06-24**：决策——语义分析内部的 `InferredExprType.builtin_name` 保留别名（`"int"`、`"double"`、`"byte"`），不归一为标准名；AST 预遍历归一仅处理用户书写的 type_ref，字面量类型通过 `canonical_builtin_type_name()` 延迟归一，自然跟随平台
 - **2026-06-24**：发现 LSP `runtime.c` 两处硬编码（3717-3720 行、4120-4123 行）仅检查别名（`int`/`long`/`byte`/`float`/`double`/`bool`/`string`/`void`），未包含标准名（`i8`~`i64`/`u8`~`u64`/`f32`/`f64`），存在标准名未被识别为内建类型的遗漏。归一收敛时替换为调用 `is_builtin_type_name()`，统一覆盖所有内建名，同时修复该遗漏
 - **2026-06-24**：决策——平台位宽信息通过 `FengSemanticAnalyzeOptions.pointer_size` 传入，语义分析入口存入 `ResolveContext`，`canonical_builtin_type_name()` 及 `inferred_expr_type_builtin_canonical_name()` 通过 `ResolveContext` 获取平台信息，保持核心编译器不直接依赖 CLI 参数
 - **2026-06-24**：决策——Task 3 迁移顺序调整：先迁移所有 `long` 用法为 `i64`，最后才移除别名表条目。迁移期间 `long` 仍为合法别名，编译器可正常编译和验证，避免中间状态不可编译
-- **2026-06-24**：决策——Task 4 拆分为 4a~4e 五步：先建平台位宽映射基础设施（4a），用新增 `uint` 验证（4b，原 Task 5 合并至此），再迁移所有 `int` → `i32`（4c），然后切换 `int` 为平台相关（4d），最后审计识别应平台相关的 `i32` 改回 `int`（4e）。Feng 的字面量贴合策略（`integer_literal_fits_canonical_target`）保证有目标类型注解的字面量不受默认推导变化影响
+- **2026-06-24**：决策——Task 4~8 五步拆分：先建平台位宽映射基础设施（Task 4），用新增 `uint` 验证（Task 5，原 Task 5 合并至此），再迁移所有 `int` → `i32`（Task 6），然后切换 `int` 为平台相关（Task 7），最后审计识别应平台相关的 `i32` 改回 `int`（Task 8）。Feng 的字面量贴合策略（`integer_literal_fits_canonical_target`）保证有目标类型注解的字面量不受默认推导变化影响
