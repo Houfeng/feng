@@ -106,12 +106,12 @@ Go、Swift 的设计模式一致：默认整数类型（`int`/`Int`）匹配机�
 | `semantic/analyzer.c` | `is_builtin_type_name()` / `canonical_builtin_type_name()` |
 | `semantic/spec_relations.c` | `rel_builtin_canonical_name()` |
 | `semantic/spec_witnesses.c` | 同类 if/else 链 |
-| `codegen/codegen.c` | `k_builtin_types[]` / `cg_is_builtin_named_fit_target()`（注：`k_builtin_types[]` 中有 `uint → CG_TYPE_U32` 残留条目，但语义层不识别 `uint`，该条目为不可达死代码；`cg_is_builtin_named_fit_target()` 中不含 `uint`，两处不一致） |
+| `codegen/codegen.c` | `k_builtin_types[]` / `cg_is_builtin_named_fit_target()`（注：`k_builtin_types[]` 自 2026-04-28 初始创建起即含有 `uint → CG_TYPE_U32` 条目，系 codegen 创建时的预留；但 2026-05-11 添加 `cg_is_builtin_named_fit_target()` 时已刻意排除 `uint`，且 semantic 层从未识别 `uint`，因此该条目为不可达死代码） |
 | `cli/lsp/runtime.c` | 多处硬编码别名判断 |
 
 ### 6.2 目标
 
-在语义分析入口处统一归一所有 type_ref 中的别名为标准名，后续阶段（codegen、symbol export、LSP）只看到 `i32`/`i64`/`u8`/`f32`/`f64` 等标准名，不再各自处理别名。
+在语义分析入口处统一归一所有 type_ref 中的别名为标准名，后续阶段（codegen、symbol export、LSP）只看到 `i32`/`i64`/`u32`/`u64`/`u8`/`f32`/`f64` 等标准名，不再各自处理别名。codegen 不感知 `int`/`uint`/`byte`/`float`/`double` 等别名，其 `k_builtin_types[]` 仅保留标准名条目。
 
 ### 6.3 为什么放在语义分析阶段而非语法分析阶段
 
@@ -155,7 +155,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 - `semantic/spec_relations.c`：`rel_builtin_canonical_name()` 中的别名分支
 - `semantic/spec_witnesses.c`：同类别名 if/else 链
-- `codegen/codegen.c`：`k_builtin_types[]` 中的别名字段、`cg_is_builtin_named_fit_target()` 中的别名项
+- `codegen/codegen.c`：`k_builtin_types[]` 中的别名字段（含 `uint` 死代码条目）及 `cg_is_builtin_named_fit_target()` 中的别名项。归一后 codegen 不再感知任何别名，`k_builtin_types[]` 仅保留标准名（`i32`/`i64`/`u32`/`u64` 等）
 - `symbol/export.c`：`canonical_builtin_name()` 中的别名条目
 - `cli/lsp/runtime.c`：多处 `name == "int" || name == "i32"` 硬编码
 - LSP hover 显示标准名称，无需回溯原始别名
@@ -179,11 +179,11 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 ## 7. 影响范围
 
 - 规范文档：`docs/feng-language.md`（别名表与关键字说明）、`docs/feng-builtin-type.md`（别名表、映射规则，以及正文中引用 `long` 的描述如 `string.length()` 返回类型）
-- 编译器：语义分析入口新增统一别名归一逻辑，下游 6 个文件的别名代码移除
+- 编译器：语义分析入口新增统一别名归一逻辑，下游 6 个文件的别名代码移除；codegen `k_builtin_types[]` 仅保留标准名条目，不再感知别名
 - 标准库（`std/`）：约 639 处 `long` 使用需迁移为 `i64`，涉及 `stdio.ff`、`SystemInfo.ff`、`MemoryInfo.ff`、`TestContext.ff` 等文件
 - 兼容性测试（`fcts/`）：约 23 处 `long` 使用需迁移
 - 编译器测试（`test/`）：3 处 `.ff` 文件中的 `long` 使用需迁移；C 测试代码（`test_lexer.c`、`test_cli.c` 等）中的 `long` 为 C 语言类型，不受影响
-- 清理 codegen 中 `k_builtin_types[]` 的 `uint` 残留死代码（归一收敛时一并处理）
+- 清理 codegen `k_builtin_types[]` 中自初始提交即存在的 `uint → CG_TYPE_U32` 预留死代码（归一收敛时一并处理）
 
 ## 8. 分步任务
 
@@ -195,7 +195,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [ ] 在语义分析开始时遍历 AST，将所有 type_ref 中的别名替换为标准名（归一后 AST 仅保留标准名，不保留原始别名）
 - [ ] 移除 `semantic/spec_relations.c` 中 `rel_builtin_canonical_name()` 的别名分支
 - [ ] 移除 `semantic/spec_witnesses.c` 中同类别名 if/else 链
-- [ ] 移除 `codegen/codegen.c` 中 `k_builtin_types[]` 的别名字段、`cg_is_builtin_named_fit_target()` 的别名项，以及 `k_builtin_types[]` 中 `uint` 的残留死代码条目
+- [ ] 移除 `codegen/codegen.c` 中 `k_builtin_types[]` 的别名字段（含 `uint` 死代码条目）及 `cg_is_builtin_named_fit_target()` 的别名项；归一后 codegen 仅感知标准名，不再包含任何别名
 - [ ] 移除 `symbol/export.c` 中 `canonical_builtin_name()` 的别名条目
 - [ ] 移除 `cli/lsp/runtime.c` 中多处硬编码别名判断
 - [ ] 全量回归测试，确认无行为变更
@@ -222,7 +222,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ### Task 5：新增 `uint` 平台相关别名
 
-- [ ] 集中别名表新增 `uint` → `u32`（32 位）或 `u64`（64 位）
+- [ ] 集中别名表新增 `uint` → `u32`（32 位）或 `u64`（64 位）；仅需修改 `canonical_builtin_type_name()`，codegen 等下游阶段无需变更
 - [ ] 全量回归测试
 
 ## 9. 决策记录
@@ -232,5 +232,5 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - **2026-06-24**：决策——别名归一收至语义分析入口，Parser 不感知别名，后续阶段只看到标准名
 - **2026-06-24**：决策——AST 归一后仅保留标准名，不保留用户书写的原始别名；编译器诊断统一使用标准名
 - **2026-06-24**：决策——移除 `long` 后按"未知类型名"处理，不添加专门的迁移提示（避免临时 workaround）
-- **2026-06-24**：发现 codegen `k_builtin_types[]` 中已有 `uint → CG_TYPE_U32` 残留死代码（语义层不识别，永远不可达），Task 1 归一收敛时一并清理
+- **2026-06-24**：发现 codegen `k_builtin_types[]` 自 2026-04-28 初始提交即含有 `uint → CG_TYPE_U32` 预留条目（codegen 创建时提前写入，semantic 层从未识别，为不可达死代码）；`cg_is_builtin_named_fit_target()`（2026-05-11 添加）已刻意排除 `uint`。归一收敛后 codegen 不感知任何别名，该条目及所有别名条目均从 `k_builtin_types[]` 中彻底删除
 - **2026-06-24**：决策——规范文档更新前置至 Task 2，在行为变更任务（Task 3~5）之前完成，符合"先规范再实现"原则
