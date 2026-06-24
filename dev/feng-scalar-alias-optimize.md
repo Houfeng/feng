@@ -102,12 +102,12 @@ Go、Swift 的设计模式一致：默认整数类型（`int`/`Int`）匹配机�
 
 | 文件 | 函数/表 |
 | --- | --- |
-| `symbol/export.c` | `canonical_builtin_name()` |
-| `semantic/analyzer.c` | `is_builtin_type_name()` / `canonical_builtin_type_name()` |
-| `semantic/spec_relations.c` | `rel_builtin_canonical_name()` |
-| `semantic/spec_witnesses.c` | 同类 if/else 链 |
-| `codegen/codegen.c` | `k_builtin_types[]` / `cg_is_builtin_named_fit_target()`（注：`k_builtin_types[]` 自 2026-04-28 初始创建起即含有 `uint → CG_TYPE_U32` 条目，系 codegen 创建时的预留；但 2026-05-11 添加 `cg_is_builtin_named_fit_target()` 时已刻意排除 `uint`，且 semantic 层从未识别 `uint`，因此该条目为不可达死代码） |
-| `cli/lsp/runtime.c` | 多处硬编码别名判断 |
+| `src/semantic/analyzer.c` | `is_builtin_type_name()` / `canonical_builtin_type_name()` |
+| `src/semantic/spec_relations.c` | `rel_builtin_canonical_name()` |
+| `src/semantic/spec_witnesses.c` | `canonical_builtin_type_name_local()` |
+| `src/codegen/codegen.c` | `k_builtin_types[]` / `cg_is_builtin_named_fit_target()`（注：`k_builtin_types[]` 自 2026-04-28 初始创建起即含有 `uint → CG_TYPE_U32` 条目，系 codegen 创建时的预留；但 2026-05-11 添加 `cg_is_builtin_named_fit_target()` 时已刻意排除 `uint`，且 semantic 层从未识别 `uint`，因此该条目为不可达死代码） |
+| `src/symbol/export.c` | `canonical_builtin_name()` |
+| `src/cli/lsp/runtime.c` | 多处硬编码别名判断 |
 
 ### 6.2 目标
 
@@ -153,11 +153,12 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 归一收敛后，以下别名相关逻辑可移除：
 
-- `semantic/spec_relations.c`：`rel_builtin_canonical_name()` 中的别名分支
-- `semantic/spec_witnesses.c`：同类别名 if/else 链
-- `codegen/codegen.c`：`k_builtin_types[]` 中的别名字段（含 `uint` 死代码条目）及 `cg_is_builtin_named_fit_target()` 中的别名项。归一后 codegen 不再感知任何别名，`k_builtin_types[]` 仅保留标准名（`i32`/`i64`/`u32`/`u64` 等）
-- `symbol/export.c`：`canonical_builtin_name()` 中的别名条目
-- `cli/lsp/runtime.c`：多处 `name == "int" || name == "i32"` 硬编码
+- `src/semantic/spec_relations.c`：`rel_builtin_canonical_name()` 中的别名分支
+- `src/semantic/spec_witnesses.c`：`canonical_builtin_type_name_local()` 中的别名分支
+- `src/semantic/analyzer.c`：`is_builtin_type_name()` 的 `builtin_names[]` 中的别名条目（归一后只看到标准名，别名条目为死代码）
+- `src/codegen/codegen.c`：`k_builtin_types[]` 中的别名字段（含 `uint` 死代码条目）及 `cg_is_builtin_named_fit_target()` 中的别名项。归一后 codegen 不再感知任何别名，`k_builtin_types[]` 仅保留标准名（`i32`/`i64`/`u32`/`u64` 等）
+- `src/symbol/export.c`：`canonical_builtin_name()` 中的别名条目
+- `src/cli/lsp/runtime.c`：多处 `name == "int" || name == "i32"` 硬编码
 - LSP hover 显示标准名称，无需回溯原始别名
 
 ### 6.6 已决问题：AST 归一后原始名称不保留
@@ -191,19 +192,20 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ### Task 1：别名归一收敛（基础，纯重构，无行为变更）
 
-- [ ] 确认 `semantic/analyzer.c` 中 `canonical_builtin_type_name()` 为唯一归一入口
+- [ ] 确认 `src/semantic/analyzer.c` 中 `canonical_builtin_type_name()` 为唯一归一入口
 - [ ] 在语义分析开始时遍历 AST，将所有 type_ref 中的别名替换为标准名（归一后 AST 仅保留标准名，不保留原始别名）
-- [ ] 移除 `semantic/spec_relations.c` 中 `rel_builtin_canonical_name()` 的别名分支
-- [ ] 移除 `semantic/spec_witnesses.c` 中同类别名 if/else 链
-- [ ] 移除 `codegen/codegen.c` 中 `k_builtin_types[]` 的别名字段（含 `uint` 死代码条目）及 `cg_is_builtin_named_fit_target()` 的别名项；归一后 codegen 仅感知标准名，不再包含任何别名
-- [ ] 移除 `symbol/export.c` 中 `canonical_builtin_name()` 的别名条目
-- [ ] 移除 `cli/lsp/runtime.c` 中多处硬编码别名判断
+- [ ] 移除 `src/semantic/analyzer.c` 中 `is_builtin_type_name()` 的 `builtin_names[]` 中的别名条目（归一后只看到标准名，别名条目为死代码）
+- [ ] 移除 `src/semantic/spec_relations.c` 中 `rel_builtin_canonical_name()` 的别名分支
+- [ ] 移除 `src/semantic/spec_witnesses.c` 中 `canonical_builtin_type_name_local()` 的别名分支
+- [ ] 移除 `src/codegen/codegen.c` 中 `k_builtin_types[]` 的别名字段（含 `uint` 死代码条目）及 `cg_is_builtin_named_fit_target()` 的别名项；归一后 codegen 仅感知标准名，不再包含任何别名
+- [ ] 移除 `src/symbol/export.c` 中 `canonical_builtin_name()` 的别名条目
+- [ ] 移除 `src/cli/lsp/runtime.c` 中多处硬编码别名判断
 - [ ] 全量回归测试，确认无行为变更
 
 ### Task 2：规范文档更新
 
 - [ ] 更新 `docs/feng-language.md`：别名表（移除 `long`，新增 `uint`，`int` 平台相关说明）
-- [ ] 更新 `docs/feng-builtin-type.md`：别名表与映射规则，以及正文中引用 `long` 的描述（如 `string.length()` 返回类型改为 `i64`）
+- [ ] 更新 `docs/feng-builtin-type.md`：别名表与映射规则，正文中引用 `long` 的描述（如 `string.length()` 返回类型改为 `i64`），以及整数字面量默认类型规则（当前为"推导为 `int`（即 `i32`）"，Task 4 后 `int` 平台相关，需同步更新描述）
 - [ ] 更新本文件状态为"已实施"
 
 ### Task 3：移除 `long` 别名
@@ -217,7 +219,8 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 ### Task 4：`int` 改为平台相关别名
 
 - [ ] `canonical_builtin_type_name()` 新增平台参数，`int` 映射为 `i32`（32 位）或 `i64`（64 位）
-- [ ] 编译上下文传入目标平台信息
+- [ ] 实现平台位宽检测函数（如 `feng_get_host_pointer_size()`），根据当前宿主机返回指针位宽（`sizeof(void *)`），并注释：未来支持交叉编译时，需要通过编译选项传入目标平台位宽（核心编译器不直接读取 CLI 参数，已有 `FengSemanticAnalyzeOptions` 机制）
+- [ ] 将平台位宽信息接入 `FengSemanticAnalyzeOptions`，语义分析入口传入
 - [ ] 全量回归测试
 
 ### Task 5：新增 `uint` 平台相关别名
