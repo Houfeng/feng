@@ -177,6 +177,26 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - `long` 移除后变为普通标识符，可用于变量或类型命名，专门报错反而限制了标识符空间
 - 迁移期由人工完成标准库与测试代码的批量替换，不依赖编译器诊断引导
 
+### 6.8 已决问题：字面量类型推导保留别名
+
+**结论：语义分析内部构造的 `InferredExprType.builtin_name` 保留别名（如 `"int"`、`"double"`、`"byte"`），不归一为标准名。**
+
+语义分析在推导字面量类型时硬编码使用别名：
+
+| 表达式类型 | 代码 | 含义 |
+| --- | --- | --- |
+| 整数字面量 | `inferred_expr_type_builtin("int")` | 默认类型为 `int` |
+| 浮点字面量 | `inferred_expr_type_builtin("double")` | 默认类型为 `double` |
+| `&string` 指针元素 | `inferred_expr_type_builtin("byte")` | 元素类型为 `byte` |
+
+这些 `builtin_name` 后续通过 `canonical_builtin_type_name()` 归一为标准名。保留别名是正确的：
+
+- 规范要求"整数字面量默认推导为 `int`"，而非"推导为 `i32`"
+- Task 4 使 `int` 平台相关后，`canonical_builtin_type_name("int", platform)` 自然返回平台匹配的 `i32` 或 `i64`，字面量类型自动跟随平台
+- `"double"` 和 `"byte"` 为固定别名，归一结果始终为 `f64` 和 `u8`，不受平台影响
+
+因此，AST 预遍历归一仅处理用户书写的 type_ref，语义分析内部构造的 `InferredExprType` 保持别名不变。
+
 ## 7. 影响范围
 
 - 规范文档：`docs/feng-language.md`（别名表与关键字说明）、`docs/feng-builtin-type.md`（别名表、映射规则，以及正文中引用 `long` 的描述如 `string.length()` 返回类型）
@@ -237,3 +257,4 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - **2026-06-24**：决策——移除 `long` 后按"未知类型名"处理，不添加专门的迁移提示（避免临时 workaround）
 - **2026-06-24**：发现 codegen `k_builtin_types[]` 自 2026-04-28 初始提交即含有 `uint → CG_TYPE_U32` 预留条目（codegen 创建时提前写入，semantic 层从未识别，为不可达死代码）；`cg_is_builtin_named_fit_target()`（2026-05-11 添加）已刻意排除 `uint`。归一收敛后 codegen 不感知任何别名，该条目及所有别名条目均从 `k_builtin_types[]` 中彻底删除
 - **2026-06-24**：决策——规范文档更新前置至 Task 2，在行为变更任务（Task 3~5）之前完成，符合"先规范再实现"原则
+- **2026-06-24**：决策——语义分析内部的 `InferredExprType.builtin_name` 保留别名（`"int"`、`"double"`、`"byte"`），不归一为标准名；AST 预遍历归一仅处理用户书写的 type_ref，字面量类型通过 `canonical_builtin_type_name()` 延迟归一，自然跟随平台
