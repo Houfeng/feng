@@ -91,30 +91,9 @@ if a == b { }         // ❌ i32 != i64，不贴合，需显式转换
 
 ### 4.1 语义分析层改动
 
-#### 4.1.1 AST 节点增加 `inferred_type` 字段
+#### 4.1.1 AST 节点增加 `type` 字段
 
 **改动文件**：`src/parser/parser.h`
-
-将 `InferredExprType`（当前定义在 `analyzer.c` 107 行）移至 `parser.h`，并在 `FengExpr` 顶层增加字段：
-
-```c
-// parser.h — 在 FengResolvedCallable 定义之后，FengExprKind 之前
-typedef enum InferredExprTypeKind {
-    FENG_INFERRED_EXPR_TYPE_UNKNOWN = 0,
-    FENG_INFERRED_EXPR_TYPE_BUILTIN,
-    FENG_INFERRED_EXPR_TYPE_TYPE_REF,
-    FENG_INFERRED_EXPR_TYPE_DECL,
-    FENG_INFERRED_EXPR_TYPE_LAMBDA
-} InferredExprTypeKind;
-
-typedef struct InferredExprType {
-    InferredExprTypeKind kind;
-    FengSlice builtin_name;
-    const FengTypeRef *type_ref;
-    const FengDecl *type_decl;
-    const FengExpr *lambda_expr;
-} InferredExprType;
-```
 
 `FengExpr` 结构体增加字段：
 
@@ -122,20 +101,84 @@ typedef struct InferredExprType {
 struct FengExpr {
     FengToken token;
     FengExprKind kind;
-    InferredExprType inferred_type;  /* 语义层填充，kind=UNKNOWN 表示未推导 */
+    const FengTypeRef *type;  /* 语义层填充，NULL 表示未推导 */
     union { ... } as;
 };
 ```
 
-**依赖关系**：`InferredExprType` 使用的 `FengSlice`（17 行已定义）、`FengTypeRef`（40 行已前向声明）、`FengDecl`（44 行已前向声明）、`FengExpr`（41 行已前向声明）在 `parser.h` 中均可用。
+**设计要点**：
+- 直接使用已有的 `FengTypeRef` 作为表达式类型表示，不引入新类型
+- `FengTypeRef` 已能表达所有类型：内建标量（`FENG_TYPE_REF_NAMED` 单段，如 `"i32"`）、用户类型（多段 + 泛型参数）、数组（`FENG_TYPE_REF_ARRAY`）、指针（`FENG_TYPE_REF_POINTER`）
+- 语义层完成贴合/推导后，将已有的或合成的 `FengTypeRef *` 挂到节点上
+- codegen 直接用现有的 `cg_resolve_type(cg, expr->type, ...)` 解析为 `CGType`，无需新增辅助函数
+- 生命周期：来自声明的 `FengTypeRef *`（如绑定类型注解、函数参数类型）借用 AST 生命周期；合成的 `FengTypeRef *` 由 `analysis_track_synthetic_type_ref` 管理，与 `FengSemanticAnalysis` 同生命周期
 
-**先例**：`FengResolvedCallable`（59 行）已是语义分析结果存储在 AST 节点上的先例；`lambda.captures` 注释为 "filled by the semantic analyzer"。
+**先例**：`FengResolvedCallable`（59 行）已是语义分析结果存储在 AST 节点上的先例；`lambda.captures` 注释为 "filled by the semantic analyzer"；`for_stmt.iter_result_type_ref` 注释为 "Synthesized by the analyzer; lifetime managed by FengSemanticAnalysis.synthesized_type_refs"。
 
-**生命周期**：`InferredExprType` 按值存储。内部指针（`type_ref`、`type_decl`）指向 AST/语义分析持有的对象，codegen 阶段仍存活（parse → semantic → codegen → free）。`builtin_name` 来自 C 字符串字面量（静态内存），永久有效。
+#### 4.1.2 所有贴合场景写入 `type`
 
-`analyzer.c` 中删除 `InferredExprType` 和 `InferredExprTypeKind` 的本地定义，改为 `#include "parser.h"`（已有）。
+语义层在所有字面量贴合成功时，将目标类型的 `FengTypeRef *` 挂到字面量 AST 节点的 `type`。codegen 统一读取，不再自行推导。
 
-#### 4.1.2 二元运算贴合逻辑
+**写入点 1**：`expr_matches_expected_type_ref()`（15479 行）—— 覆盖绑定、参数、返回值
+
+所有现有贴合场景（赋值/绑定、函数参数、返回值、数组元素、成员赋值）都经过此函数。在 `numeric_literal_adapts_to_target` 返回 true 时写入：
+
+```c
+// 现有代码（15479 行）
+if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr) &&
+    evaluate_constant_expr(context, expr, &value) &&
+    (value.kind == FENG_CONST_INT || value.kind == FENG_CONST_FLOAT)) {
+    if (numeric_literal_adapts_to_target(context, expr, expected_type_ref)) {
+        // [新增] 贴合成功，将目标类型直接挂到字面量节点
+        // expected_type_ref 来自声明（AST 生命周期），借用即可
+        ((FengExpr *)expr)->type = expected_type_ref;
+        return true;
+    }
+    return false;
+}
+```
+
+覆盖的场景：
+
+| 场景 | 调用链 |
+|---|---|
+| `let x: u32 = 1;` | `resolve_binding` → `expr_matches_expected_type_ref(1, u32)` |
+| `f(10)` (`f(n: i32)`) | `resolve_call` → `expr_matches_expected_type_ref(10, i32)` |
+| `return 123;`（返回 `i64`） | `validate_return_stmt` → `expr_matches_expected_type_ref(123, i64)` |
+| `let a: i32[] = [1, 2];` | `expr_matches_expected_type_ref_when_inference_unknown` → 逐元素 `expr_matches_expected_type_ref` |
+| `obj.value = 1;`（`value: i32`） | 成员赋值验证 → `expr_matches_expected_type_ref(1, i32)` |
+
+**写入点 2**：`infer_expr_type()` 的 `FENG_EXPR_BINARY` 分支 —— 覆盖二元运算
+
+二元运算不经过 `expr_matches_expected_type_ref`（无目标类型概念），贴合逻辑在 `infer_expr_type` 中独立处理（见下方 §4.1.3 伪代码）。
+
+**无类型标注绑定**：`let x = 123;`
+
+语义层将 `int` 解析为平台相关的规范名（`i32` 或 `i64`），合成 `FengTypeRef` 挂到字面量节点：
+
+```c
+// 在 resolve_binding 或 infer_expr_type 的绑定路径中
+// 无类型标注时，字面量默认推导为 int，解析为平台规范名
+if (binding->type == NULL && expr->kind == FENG_EXPR_INTEGER) {
+    InferredExprType inferred = inferred_expr_type_builtin("int");
+    FengTypeRef *synth = create_type_ref_from_inferred_type(&inferred, expr->token);
+    if (synth != NULL) {
+        resolver_track_synthetic_type_ref(context, synth);
+        ((FengExpr *)expr)->type = synth;
+    }
+}
+// 浮点字面量同理，默认推导为 double → f64
+if (binding->type == NULL && expr->kind == FENG_EXPR_FLOAT) {
+    InferredExprType inferred = inferred_expr_type_builtin("double");
+    FengTypeRef *synth = create_type_ref_from_inferred_type(&inferred, expr->token);
+    if (synth != NULL) {
+        resolver_track_synthetic_type_ref(context, synth);
+        ((FengExpr *)expr)->type = synth;
+    }
+}
+```
+
+#### 4.1.3 二元运算贴合逻辑
 
 **改动文件**：`src/semantic/analyzer.c`
 
@@ -150,11 +193,11 @@ infer_expr_type → FENG_EXPR_BINARY:
   3. [新增] 如果 right 是纯数值字面量且 left_type 是已确定的标量类型：
      求值字面量，检查是否适配 left_type，适配则：
      a. 以 left_type 替换 right_type
-     b. 将 left_type 写入 right 节点的 inferred_type 字段
+     b. 将 left_type 对应的 FengTypeRef 挂到 right 节点的 type 字段
   4. [新增] 否则如果 left 是纯数值字面量且 right_type 是已确定的标量类型：
      求值字面量，检查是否适配 right_type，适配则：
      a. 以 right_type 替换 left_type
-     b. 将 right_type 写入 left 节点的 inferred_type 字段
+     b. 将 right_type 对应的 FengTypeRef 挂到 left 节点的 type 字段
   5. [现有] inferred_expr_types_equal(left_type, right_type) → 返回结果类型
 ```
 
@@ -162,19 +205,27 @@ infer_expr_type → FENG_EXPR_BINARY:
 
 ```c
 /* 二元运算字面量贴合：一侧为纯数值字面量，对侧为已确定标量类型时，
- * 字面量贴合到对侧类型。贴合结果写入字面量节点的 inferred_type，
+ * 字面量贴合到对侧类型。贴合结果挂到字面量节点的 type 字段，
  * 供 codegen 直接读取，codegen 无需任何分析逻辑。 */
 if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr->as.binary.right) &&
     inferred_expr_type_is_numeric(left_type)) {
     if (numeric_literal_fits_inferred_target(context, expr->as.binary.right, left_type)) {
         right_type = left_type;
-        ((FengExpr *)expr->as.binary.right)->inferred_type = left_type;
+        FengTypeRef *synth = create_type_ref_from_inferred_type(&left_type, expr->token);
+        if (synth != NULL) {
+            resolver_track_synthetic_type_ref(context, synth);
+            ((FengExpr *)expr->as.binary.right)->type = synth;
+        }
     }
 } else if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr->as.binary.left) &&
            inferred_expr_type_is_numeric(right_type)) {
     if (numeric_literal_fits_inferred_target(context, expr->as.binary.left, right_type)) {
         left_type = right_type;
-        ((FengExpr *)expr->as.binary.left)->inferred_type = right_type;
+        FengTypeRef *synth = create_type_ref_from_inferred_type(&right_type, expr->token);
+        if (synth != NULL) {
+            resolver_track_synthetic_type_ref(context, synth);
+            ((FengExpr *)expr->as.binary.left)->type = synth;
+        }
     }
 }
 ```
@@ -232,96 +283,77 @@ static bool numeric_literal_fits_inferred_target(ResolveContext *context,
 
 **改动文件**：`src/codegen/codegen.c`
 
-**背景**：当前标量字面量在所有场景均固定发射为 `int64_t`/`f64`（11073 行 `cg_emit_literal`），不感知语义层确定的类型。绑定时靠 C 编译器隐式截断（`int8_t x = (int64_t)5;`），函数参数靠 C 隐式转换，二元运算靠 `cg_unify_numeric`（11288 行）提升。能运行但发码不干净，且二元运算贴合后两侧 CG 类型不一致会导致不必要的类型提升。
+**背景**：当前标量字面量在所有场景均固定发射为 `int64_t`/`f64`（11073 行 `cg_emit_literal`），不感知语义层确定的类型。绑定时靠 C 编译器隐式截断（`int8_t x = (int64_t)5;`），函数参数靠 C 隐式转换，二元运算靠 `cg_unify_numeric`（11288 行）提升。能运行但发码不干净。
 
-**原则**：codegen 只负责发码，不做任何分析。语义层的贴合结论已存储在 AST 节点的 `inferred_type` 字段中，codegen 直接读取。
+**原则**：codegen 只负责发码，不做任何分析。语义层已将贴合结论以 `FengTypeRef *` 挂到 AST 节点的 `type` 字段，codegen 统一读取。不引入新的辅助函数——codegen 已有的 `cg_resolve_type()`（6636 行）直接将 `FengTypeRef *` 解析为 `CGType`，完全复用。
 
-**改动 1**：`cg_emit_expr_for_expected_type()`（19634 行）增加数值字面量分支
-
-当 `expected_type` 为标量 CG 类型且 `expr` 为整型/浮点字面量时，按 `expected_type` 发射对应宽度的 C 类型：
+**改动**：`cg_emit_literal()`（11066 行）读取 `type`
 
 ```c
-// 新增分支（在现有的 array/tuple 分支之后，fallthrough 之前）
-if (expected_type != NULL && expr != NULL && expr->kind == FENG_EXPR_INTEGER &&
-    cgtype_is_integer(expected_type->kind)) {
-    // 按 expected_type 的宽度和符号发射，例如 (int32_t)INT32_C(5)
-    ...
-}
-if (expected_type != NULL && expr != NULL && expr->kind == FENG_EXPR_FLOAT &&
-    cgtype_is_float(expected_type->kind)) {
-    // 按 expected_type 发射，例如 (float)3.14f
-    ...
-}
-```
-
-此改动是通用的，所有已有的 `cg_emit_expr_for_expected_type` 调用点（绑定初始化、函数参数、数组元素等）统一受益，不再依赖 C 编译器隐式转换。
-
-**改动 2**：`cg_emit_binary()`（11306 行）读取 `inferred_type` 发射字面量
-
-codegen 不做分析，只读取语义层写入的 `inferred_type`，转换为 CG 类型后传给 `cg_emit_expr_for_expected_type`：
-
-```c
-static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
+static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
-    ExprResult lr; ExprResult rr;
 
-    /* 读取语义层已写入的 inferred_type，转为 CG 类型引导字面量发射。
-     * codegen 不做任何类型判断或分析，仅查表转换。 */
-    CGType *left_expected = cg_inferred_type_to_cg(cg, &e->as.binary.left->inferred_type);
-    CGType *right_expected = cg_inferred_type_to_cg(cg, &e->as.binary.right->inferred_type);
-
-    if (!cg_emit_expr_for_expected_type(cg, e->as.binary.left, left_expected, &lr)) return false;
-    if (!cg_emit_expr_for_expected_type(cg, e->as.binary.right, right_expected, &rr)) {
-        er_free(&lr); return false;
-    }
-
-    // ... 后续逻辑不变（spec equality、string、logical、numeric 等分支）
-```
-
-**新增辅助函数** `cg_inferred_type_to_cg`：
-
-```c
-/* 将语义层的 InferredExprType 转为 codegen 的 CGType。
- * 仅做查表转换，不做任何分析。inferred_type 为 UNKNOWN 时返回 NULL，
- * cg_emit_expr_for_expected_type 对 NULL expected_type 保持现有行为。 */
-static CGType *cg_inferred_type_to_cg(CG *cg, const InferredExprType *type) {
-    const char *canonical;
-
-    if (type == NULL || type->kind == FENG_INFERRED_EXPR_TYPE_UNKNOWN) {
-        return NULL;
-    }
-    canonical = inferred_expr_type_builtin_canonical_name(*type, cg->analysis->pointer_size);
-    if (canonical == NULL) return NULL;
-
-    for (size_t i = 0; i < sizeof k_builtin_types / sizeof k_builtin_types[0]; i++) {
-        if (strcmp(k_builtin_types[i].name, canonical) == 0) {
-            return cgtype_new(k_builtin_types[i].kind);
+    if (e->kind == FENG_EXPR_INTEGER) {
+        if (e->type != NULL) {
+            CGType *target = NULL;
+            if (cg_resolve_type(cg, e->type, &e->token, &target) &&
+                target != NULL && cgtype_is_integer(target->kind)) {
+                // 按 type 的宽度和符号发射
+                // 例如 type=i32 → (int32_t)INT32_C(5)
+                // 例如 type=u32 → (uint32_t)UINT32_C(1)
+                ...
+                return true;
+            }
         }
+        // type 为 NULL（未推导）时，保持现有默认行为
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "(int64_t)INT64_C(%" PRId64 ")", e->as.integer);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_I64);
+        return out->c_expr && out->type;
     }
-    return NULL;
-}
+    if (e->kind == FENG_EXPR_FLOAT) {
+        if (e->type != NULL) {
+            CGType *target = NULL;
+            if (cg_resolve_type(cg, e->type, &e->token, &target) &&
+                target != NULL && cgtype_is_float(target->kind)) {
+                // 按 type 发射
+                // 例如 type=f32 → (float)3.14f
+                // 例如 type=f64 → 保持现有 (%a)
+                ...
+                return true;
+            }
+        }
+        Buf b; buf_init(&b);
+        buf_append_fmt(&b, "(%a)", e->as.floating);
+        out->c_expr = b.data;
+        out->type = cgtype_new(CG_TYPE_F64);
+        return out->c_expr && out->type;
+    }
+    // ... bool, string 等不变
 ```
 
-**需要前向声明**：`cg_emit_expr_for_expected_type`（19634 行）在 `cg_emit_binary`（11306 行）之后定义，需在文件头部添加前向声明。
+**无需新增辅助函数**：`cg_resolve_type`（6636 行）已完整实现 `FengTypeRef *` → `CGType *` 的解析，覆盖所有内建标量类型（通过 `k_builtin_types` 查表）。
 
-**可见性问题**：`cg_inferred_type_to_cg` 调用 `inferred_expr_type_builtin_canonical_name`（analyzer.c 5701 行，当前为 `static`）。需将该函数（及其依赖的 `canonical_builtin_type_name`，2231 行）改为非 static 并在共享头文件中声明，或将其移至 `parser.h` / 新建共享头文件。
+**`cg_emit_binary()` 无需修改**：`cg_emit_binary`（11306 行）调用 `cg_emit_expr` 发射两侧操作数，`cg_emit_expr` → `cg_emit_literal` 读取 `type`。二元运算自然受益。
 
 **效果对比**：
 
 ```c
-// 改动前：n: i32, n + 1
-((int64_t)n + (int64_t)INT64_C(1))    // 盲目 i64，靠 C 编译器优化
+// 改动前：所有场景
+let x: u32 = 1;     // uint32_t x = (int64_t)INT64_C(1);     ← 靠 C 隐式截断
+f(10);              // f((int64_t)INT64_C(10));              ← 靠 C 隐式截断
+return 123;         // return (int64_t)INT64_C(123);         ← 靠 C 隐式截断
+n + 1;              // ((int64_t)n + (int64_t)INT64_C(1))    ← 靠 C 优化
 
-// 改动后：语义层已将 1 的 inferred_type 设为 i32
-((int32_t)n + (int32_t)INT32_C(1))    // codegen 读取 inferred_type，直接按 i32 发射
+// 改动后：语义层写入 type，codegen 通过 cg_resolve_type 读取
+let x: u32 = 1;     // uint32_t x = (uint32_t)UINT32_C(1);   ← 正确
+f(10);              // f((int32_t)INT32_C(10));              ← 正确
+return 123;         // return (int64_t)INT64_C(123);         ← 正确（返回 i64）
+n + 1;              // ((int32_t)n + (int32_t)INT32_C(1))    ← 正确
+let x = 123;        // int32_t x = (int32_t)INT32_C(123);    ← 正确（32 位平台）
+let x = 12.5;       // double x = (double)(12.5);            ← 正确
 ```
-
-**递归自然覆盖嵌套二元表达式**：对于 `n + 1 > 3`（`n: i32`），语义层逐层贴合，逐层写入 `inferred_type`：
-- 内层 `n + 1`：`1` 的 `inferred_type = i32`
-- 外层 `> 3`：`3` 的 `inferred_type = i32`
-- codegen 逐层读取，逐层按 `i32` 发射，全程类型一致
-
-**覆盖嵌套纯字面量子表达式**：对于 `(1 + 2) + n`（`n: i32`），语义层识别 `(1 + 2)` 为纯字面量并贴合到 `i32`，将 `inferred_type = i32` 写入 `(1 + 2)` 节点。但 codegen 的 `cg_emit_expr_for_expected_type` 当前只匹配直接字面量（`FENG_EXPR_INTEGER`/`FENG_EXPR_FLOAT`），不匹配 `FENG_EXPR_BINARY`。后续可扩展 `cg_emit_expr_for_expected_type` 处理带 `inferred_type` 的嵌套纯字面量表达式。
 
 ### 4.3 规范文档改动
 
@@ -334,21 +366,25 @@ static CGType *cg_inferred_type_to_cg(CG *cg, const InferredExprType *type) {
 ## 5. 影响范围
 
 - 规范文档：`docs/feng-builtin-type.md`（贴合定义扩展）
-- AST 节点：`src/parser/parser.h`（`InferredExprType` 移至 `parser.h`，`FengExpr` 增加 `inferred_type` 字段）
-- 编译器语义层：`src/semantic/analyzer.c`（删除本地 `InferredExprType` 定义，`infer_expr_type` 二元分支增加贴合及 `inferred_type` 写入，新增 `numeric_literal_fits_inferred_target` 辅助函数）
-- 编译器 codegen 层：`src/codegen/codegen.c`（`cg_emit_expr_for_expected_type` 增加数值字面量分支，`cg_emit_binary` 读取 `inferred_type` 引导发射，新增 `cg_inferred_type_to_cg` 辅助函数，添加 `cg_emit_expr_for_expected_type` 前向声明）
-- 测试：现有 45 个 smoke 测试失败预期全部恢复；可能需要新增专门测试二元运算字面量贴合的用例
+- AST 节点：`src/parser/parser.h`（`FengExpr` 增加 `const FengTypeRef *type` 字段）
+- 编译器语义层：`src/semantic/analyzer.c`（`expr_matches_expected_type_ref` 贴合成功时写入 `type`；`infer_expr_type` 二元分支增加贴合及 `type` 写入；无类型标注绑定写入合成 `FengTypeRef`；新增 `numeric_literal_fits_inferred_target` 辅助函数）
+- 编译器 codegen 层：`src/codegen/codegen.c`（`cg_emit_literal` 读取 `type`，通过现有 `cg_resolve_type` 解析为 `CGType`，按目标类型发射；无新增辅助函数）
+- 测试：现有 45 个 smoke 测试失败预期全部恢复；可能需要新增专门测试用例
 
 ## 6. 已决问题
 
-（待决策后补充）
+- **表达式类型用 `const FengTypeRef *` 而非自定义结构体**：`FengTypeRef` 已能表达所有类型（内建标量、用户类型、数组、指针），无需引入 `FengExprType` 等新类型。复用已有类型系统和 `cg_resolve_type` 函数，codegen 无需新增辅助函数
+- **AST 是 parser 和 semantic 共用的单一数据结构**：parser 创建，semantic 补齐语义字段（`type`、`resolved_callable`、`captures` 等）。这是已有模式，本次遵循
+- **贴合结果内联写入 AST 节点**：与 `resolved_callable`、`captures` 一致，一一对应且 codegen 必读的信息放 AST 节点上，不放 sidecar 表
 
 ## 7. 待决问题
 
 - 二元运算字面量贴合是否应同步覆盖 if/match/try 表达式内部分支的字面量贴合？（本次不处理，后续评估）
-- `FengExpr` 增加 `inferred_type` 字段（48 字节/节点，64 位平台）的内存开销是否可接受？若需优化，可改为指针（`InferredExprType *inferred_type`，NULL 表示未推导）
+- `FengExpr` 增加 `const FengTypeRef *type` 字段（8 字节/节点，64 位平台）的内存开销是否可接受？
 
 ## 8. 开发 TODO
+
+> 分为 4 个独立步骤，每步完成后全量回归通过。步骤 1-3 仅影响语义层（codegen 不读 `type`，行为不变）；步骤 4 改 codegen + 新增测试。
 
 ### 8.1 规范文档（docs/feng-builtin-type.md）
 
@@ -356,35 +392,56 @@ static CGType *cg_inferred_type_to_cg(CG *cg, const InferredExprType *type) {
 - [ ] §6 规则：新增一条 [必须] 规则，明确二元运算中字面量贴合的条件（一侧为纯数值字面量、对侧为已确定标量类型）与范围检查要求
 - [ ] §7 编译期：新增一条编译器要求，明确二元运算字面量贴合的实现义务
 
-### 8.2 AST 节点（src/parser/parser.h）
+### 8.2 步骤 1：AST 增加 `type` 字段
 
-- [ ] 将 `InferredExprTypeKind` 枚举和 `InferredExprType` 结构体从 `analyzer.c`（107 行）移至 `parser.h`
-- [ ] `FengExpr` 结构体增加 `InferredExprType inferred_type` 字段（顶层，`kind=UNKNOWN` 表示未推导）
-- [ ] `analyzer.c` 删除本地 `InferredExprType`/`InferredExprTypeKind` 定义
+仅增加字段，不填充、不读取，行为无变化。
 
-### 8.3 语义分析（src/semantic/analyzer.c）
+- [ ] `src/parser/parser.h`：`FengExpr` 结构体增加 `const FengTypeRef *type` 字段（顶层，NULL 表示未推导）
+- [ ] `src/parser/parser.c`：确认 `calloc` 创建的 `FengExpr` 节点 `type` 默认值为 NULL（`calloc` 置零，指针为 NULL，无需显式初始化）
+- [ ] 全量回归测试，确认无新增失败
 
-- [ ] 新增 `numeric_literal_fits_inferred_target()` 辅助函数：求值字面量常量，检查是否适配目标 `InferredExprType`（参考已有的 `numeric_literal_adapts_to_target()` 15405 行，核心逻辑相同但目标类型来源不同）
+### 8.3 步骤 2：现有贴合场景填充 `type`
+
+语义层在已有的贴合路径上写入 `type`。codegen 尚不读取，行为不变。
+
+- [ ] `expr_matches_expected_type_ref()`（15479 行）：`numeric_literal_adapts_to_target` 返回 true 时，将 `expected_type_ref`（已有 `FengTypeRef *`，借用 AST 生命周期）直接挂到字面量节点的 `type`（覆盖绑定、参数、返回值、数组元素、成员赋值等所有现有贴合场景）
+- [ ] 无类型标注绑定（`let x = 123;`）：语义层通过 `inferred_expr_type_builtin("int")` + `create_type_ref_from_inferred_type` + `resolver_track_synthetic_type_ref` 合成 `FengTypeRef`，挂到字面量节点的 `type`
+- [ ] 无类型标注浮点（`let x = 12.5;`）：同理，通过 `inferred_expr_type_builtin("double")` 合成 `FengTypeRef`，挂到字面量节点的 `type`
+- [ ] 全量回归测试，确认无新增失败
+
+### 8.4 步骤 3：二元运算贴合
+
+新增二元运算中的字面量贴合逻辑。codegen 尚不读取，行为不变。
+
+- [ ] 新增辅助函数 `numeric_literal_fits_inferred_target()`：求值字面量常量，检查是否适配目标 `InferredExprType`（参考已有的 `numeric_literal_adapts_to_target()` 15405 行，核心逻辑相同但目标类型来源不同）
 - [ ] 为 `expr_is_pure_numeric_literal_expr_for_target_adaptation()` 和 `integer_literal_fits_canonical_target()` 添加前向声明（两者定义在 `infer_expr_type` 之后）
 - [ ] `infer_expr_type()` 的 `FENG_EXPR_BINARY` 分支：在 `inferred_expr_types_equal` 之前插入字面量贴合步骤
-  - [ ] 右操作数为纯数值字面量且左操作数类型为已确定标量时，贴合右操作数类型到左操作数类型，并将 `left_type` 写入右操作数节点的 `inferred_type`
-  - [ ] 左操作数为纯数值字面量且右操作数类型为已确定标量时，贴合左操作数类型到右操作数类型，并将 `right_type` 写入左操作数节点的 `inferred_type`
+  - [ ] 右操作数为纯数值字面量且左操作数类型为已确定标量时，贴合右操作数类型到左操作数类型，并通过 `create_type_ref_from_inferred_type` + `resolver_track_synthetic_type_ref` 合成 `FengTypeRef` 挂到右操作数节点的 `type`
+  - [ ] 左操作数为纯数值字面量且右操作数类型为已确定标量时，贴合左操作数类型到右操作数类型，同理合成 `FengTypeRef` 挂到左操作数节点的 `type`
   - [ ] 两侧均为字面量时不触发贴合，各自默认推导
   - [ ] 贴合时通过 `evaluate_constant_expr` 求值、`integer_literal_fits_canonical_target` 检查范围，不适配时保持默认推导类型
 - [ ] 位移运算符（`<<`/`>>`）：确认贴合后 `validate_integer_shift_rhs_range` 正常工作（预期无冲突）
+- [ ] 全量回归测试，确认无新增失败
 
-### 8.4 codegen（src/codegen/codegen.c）
+### 8.5 步骤 4：按类型正确发码 + 测试
 
-- [ ] `cg_emit_expr_for_expected_type()`：增加整型字面量分支——当 `expected_type` 为整数 CG 类型时，按 `expected_type` 的宽度和符号发射对应 C 类型（如 `int32_t`/`INT32_C`）
-- [ ] `cg_emit_expr_for_expected_type()`：增加浮点字面量分支——当 `expected_type` 为 `f32` 时发射 `(float)`，`f64` 时保持现有行为
-- [ ] 新增 `cg_inferred_type_to_cg()` 辅助函数：将 `InferredExprType` 查表转换为 `CGType *`（UNKNOWN 返回 NULL，通过 `inferred_expr_type_builtin_canonical_name` + `k_builtin_types` 查表）
-- [ ] 将 `inferred_expr_type_builtin_canonical_name`（analyzer.c 5701 行）和 `canonical_builtin_type_name`（2231 行）从 `static` 改为可见，在共享头文件中声明
-- [ ] 添加 `cg_emit_expr_for_expected_type()` 的前向声明（定义在 19634 行，`cg_emit_binary` 在 11306 行需调用）
-- [ ] `cg_emit_binary()`：读取两侧操作数的 `inferred_type`，通过 `cg_inferred_type_to_cg` 转为 CG 类型，传入 `cg_emit_expr_for_expected_type` 发射（UNKNOWN 时 `expected_type` 为 NULL，保持现有默认行为）
+codegen 读取 `type` 按实际类型发射，新增专项测试验证。
 
-### 8.5 测试
-
-- [ ] 新增二元运算字面量贴合专项测试用例（覆盖：算术运算、比较运算、位运算、范围越界报错、两侧均为字面量不贴合）
-- [ ] 运行全量回归测试，确认无新增失败
+- [ ] `cg_emit_literal()` 整型字面量分支：`expr->type != NULL` 时，通过现有 `cg_resolve_type(cg, e->type, &e->token, &target)` 解析为 `CGType`，按目标宽度和符号发射（如 `(int32_t)INT32_C(5)`、`(uint32_t)UINT32_C(1)`）；`type == NULL` 时保持现有 `(int64_t)INT64_C(...)` 默认行为
+- [ ] `cg_emit_literal()` 浮点字面量分支：`expr->type != NULL` 时，通过 `cg_resolve_type` 解析，按目标类型发射（`f32` → `(float)`，`f64` → 保持现有 `(%a)`）；`type == NULL` 时保持现有默认行为
+- [ ] 新增贴合发码专项测试（覆盖所有场景的正确发码）：
+  - [ ] 绑定（有类型注解）：`let x: u32 = 1;` → `(uint32_t)UINT32_C(1)`
+  - [ ] 绑定（有类型注解）：`let x: i8 = 5;` → `(int8_t)INT8_C(5)`
+  - [ ] 绑定（无类型标注）：`let x = 123;` → 按平台 `int` 宽度发射
+  - [ ] 绑定（无类型标注）：`let x = 12.5;` → `f64` 发射
+  - [ ] 函数参数：`f(10)` (`f(n: i32)`) → `(int32_t)INT32_C(10)`
+  - [ ] 返回值：`return 123;`（返回 `i64`）→ `(int64_t)INT64_C(123)`
+  - [ ] 成员赋值：`obj.value = 1;`（`value: i32`）→ `(int32_t)INT32_C(1)`
+  - [ ] 数组元素：`let a: i32[] = [1, 2];` → 各元素按 `i32` 发射
+  - [ ] 二元运算：`n + 1` (`n: i32`) → `(int32_t)INT32_C(1)`
+  - [ ] 二元运算嵌套：`n + 1 > 3` → 逐层按 `i32` 发射
+  - [ ] 范围越界：`let x: u8 = 256;` → 编译期报错
+  - [ ] 两侧均为字面量：`10 == 20` → 不贴合，各自默认推导
+- [ ] 全量回归测试，确认无新增失败
 
 > **备注**：本次完成后，重新实施 `feng-scalar-alias-optimize.md` Task 6（`int` → 平台相关）时，原 §1.1 提到的 45 个 smoke 失败用例预期全部恢复通过。该验证属于 Task 6 的回归范围，不作为本文档的交付项。
