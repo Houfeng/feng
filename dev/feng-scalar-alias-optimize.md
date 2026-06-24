@@ -80,7 +80,7 @@ Go、Swift 的设计模式一致：默认整数类型（`int`/`Int`）匹配机�
 | `float` | `f32` | 固定（不变） |
 | `double` | `f64` | 固定（不变） |
 
-> 内建类型数量：从 `12` 个类型名 + `5` 个别名，变更为 `12` 个类型名 + `4` 个别名（移除 `long`，新增 `uint`）。
+> 内建类型数量：从 `12` 个类型名 + `5` 个别名，变更为 `12` 个类型名 + `5` 个别名（移除 `long`，新增 `uint`，总量不变）。
 
 ## 5. 已决问题：`float` / `double` 是否平台相关
 
@@ -106,7 +106,7 @@ Go、Swift 的设计模式一致：默认整数类型（`int`/`Int`）匹配机�
 | `semantic/analyzer.c` | `is_builtin_type_name()` / `canonical_builtin_type_name()` |
 | `semantic/spec_relations.c` | `rel_builtin_canonical_name()` |
 | `semantic/spec_witnesses.c` | 同类 if/else 链 |
-| `codegen/codegen.c` | `k_builtin_types[]` / `cg_is_builtin_named_fit_target()` |
+| `codegen/codegen.c` | `k_builtin_types[]` / `cg_is_builtin_named_fit_target()`（注：`k_builtin_types[]` 中有 `uint → CG_TYPE_U32` 残留条目，但语义层不识别 `uint`，该条目为不可达死代码；`cg_is_builtin_named_fit_target()` 中不含 `uint`，两处不一致） |
 | `cli/lsp/runtime.c` | 多处硬编码别名判断 |
 
 ### 6.2 目标
@@ -160,53 +160,77 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - `cli/lsp/runtime.c`：多处 `name == "int" || name == "i32"` 硬编码
 - LSP hover 显示标准名称，无需回溯原始别名
 
+### 6.6 已决问题：AST 归一后原始名称不保留
+
+**结论：归一后 AST 中 type_ref 仅保留标准名，不保留用户书写的原始别名。**
+
+影响：编译器错误诊断（如类型不匹配）将显示标准名（如 `i64`），而非用户写的别名（如 `long`）。这是可接受的取舍，Go、Rust 等语言在类型推断中也采用同一策略——别名在编译早期归一，诊断统一使用标准名。
+
+### 6.7 已决问题：移除 `long` 后的错误处理策略
+
+**结论：移除 `long` 后，编译器按"未知类型名"处理，不添加专门的迁移提示。**
+
+理由：
+
+- 添加专门的 `long` 迁移提示属于临时 workaround，违反"不做特殊处理"原则
+- `long` 移除后变为普通标识符，可用于变量或类型命名，专门报错反而限制了标识符空间
+- 迁移期由人工完成标准库与测试代码的批量替换，不依赖编译器诊断引导
+
 ## 7. 影响范围
 
-- 规范文档：`docs/feng-language.md`（别名表与关键字说明）、`docs/feng-builtin-type.md`
+- 规范文档：`docs/feng-language.md`（别名表与关键字说明）、`docs/feng-builtin-type.md`（别名表、映射规则，以及正文中引用 `long` 的描述如 `string.length()` 返回类型）
 - 编译器：语义分析入口新增统一别名归一逻辑，下游 6 个文件的别名代码移除
-- 现有代码：使用 `long` 的源码需迁移为 `i64`
-- 测试：全量回归，重点关注使用 `long` 别名的测试用例
+- 标准库（`std/`）：约 639 处 `long` 使用需迁移为 `i64`，涉及 `stdio.ff`、`SystemInfo.ff`、`MemoryInfo.ff`、`TestContext.ff` 等文件
+- 兼容性测试（`fcts/`）：约 23 处 `long` 使用需迁移
+- 编译器测试（`test/`）：3 处 `.ff` 文件中的 `long` 使用需迁移；C 测试代码（`test_lexer.c`、`test_cli.c` 等）中的 `long` 为 C 语言类型，不受影响
+- 清理 codegen 中 `k_builtin_types[]` 的 `uint` 残留死代码（归一收敛时一并处理）
 
 ## 8. 分步任务
 
-> 别名归一收敛为基础任务，完成后别名的增删改只需修改一处，后续任务均为简单变更。
+> 别名归一收敛为基础任务，完成后别名的增删改只需修改一处。规范文档更新前置，符合"先规范再实现"原则。
 
 ### Task 1：别名归一收敛（基础，纯重构，无行为变更）
 
 - [ ] 确认 `semantic/analyzer.c` 中 `canonical_builtin_type_name()` 为唯一归一入口
-- [ ] 在语义分析开始时遍历 AST，将所有 type_ref 中的别名替换为标准名
+- [ ] 在语义分析开始时遍历 AST，将所有 type_ref 中的别名替换为标准名（归一后 AST 仅保留标准名，不保留原始别名）
 - [ ] 移除 `semantic/spec_relations.c` 中 `rel_builtin_canonical_name()` 的别名分支
 - [ ] 移除 `semantic/spec_witnesses.c` 中同类别名 if/else 链
-- [ ] 移除 `codegen/codegen.c` 中 `k_builtin_types[]` 的别名字段及 `cg_is_builtin_named_fit_target()` 的别名项
+- [ ] 移除 `codegen/codegen.c` 中 `k_builtin_types[]` 的别名字段、`cg_is_builtin_named_fit_target()` 的别名项，以及 `k_builtin_types[]` 中 `uint` 的残留死代码条目
 - [ ] 移除 `symbol/export.c` 中 `canonical_builtin_name()` 的别名条目
 - [ ] 移除 `cli/lsp/runtime.c` 中多处硬编码别名判断
 - [ ] 全量回归测试，确认无行为变更
 
-### Task 2：移除 `long` 别名
+### Task 2：规范文档更新
+
+- [ ] 更新 `docs/feng-language.md`：别名表（移除 `long`，新增 `uint`，`int` 平台相关说明）
+- [ ] 更新 `docs/feng-builtin-type.md`：别名表与映射规则，以及正文中引用 `long` 的描述（如 `string.length()` 返回类型改为 `i64`）
+- [ ] 更新本文件状态为"已实施"
+
+### Task 3：移除 `long` 别名
 
 - [ ] 从集中别名表中移除 `long` → `i64` 条目
-- [ ] 迁移标准库及测试中使用 `long` 的代码为 `i64`
+- [ ] 迁移标准库（`std/`，约 639 处）中使用 `long` 的代码为 `i64`
+- [ ] 迁移兼容性测试（`fcts/`，约 23 处）中使用 `long` 的代码为 `i64`
+- [ ] 迁移编译器测试（`test/`，3 处 `.ff` 文件）中使用 `long` 的代码为 `i64`
 - [ ] 全量回归测试
 
-### Task 3：`int` 改为平台相关别名
+### Task 4：`int` 改为平台相关别名
 
 - [ ] `canonical_builtin_type_name()` 新增平台参数，`int` 映射为 `i32`（32 位）或 `i64`（64 位）
 - [ ] 编译上下文传入目标平台信息
 - [ ] 全量回归测试
 
-### Task 4：新增 `uint` 平台相关别名
+### Task 5：新增 `uint` 平台相关别名
 
 - [ ] 集中别名表新增 `uint` → `u32`（32 位）或 `u64`（64 位）
 - [ ] 全量回归测试
-
-### Task 5：规范文档更新
-
-- [ ] 更新 `docs/feng-language.md`：别名表（移除 `long`，新增 `uint`，`int` 平台相关说明）
-- [ ] 更新 `docs/feng-builtin-type.md`：别名表与映射规则
-- [ ] 更新本文件状态为"已实施"
 
 ## 9. 决策记录
 
 - **2026-06-24**：草案提出
 - **2026-06-24**：决策——`float`/`double` 保持固定宽度，仅移除 `long`，新增 `uint`，`int` 改为平台相关
 - **2026-06-24**：决策——别名归一收至语义分析入口，Parser 不感知别名，后续阶段只看到标准名
+- **2026-06-24**：决策——AST 归一后仅保留标准名，不保留用户书写的原始别名；编译器诊断统一使用标准名
+- **2026-06-24**：决策——移除 `long` 后按"未知类型名"处理，不添加专门的迁移提示（避免临时 workaround）
+- **2026-06-24**：发现 codegen `k_builtin_types[]` 中已有 `uint → CG_TYPE_U32` 残留死代码（语义层不识别，永远不可达），Task 1 归一收敛时一并清理
+- **2026-06-24**：决策——规范文档更新前置至 Task 2，在行为变更任务（Task 3~5）之前完成，符合"先规范再实现"原则
