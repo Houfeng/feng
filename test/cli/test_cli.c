@@ -11878,7 +11878,7 @@ static void test_lsp_hover_and_definition_local_var_rhs(void) {
      * function parameter.  Before the fix, find_expr_hit skipped if-expression
      * bodies, so the result was null. */
     ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
-    ASSERT(strstr(output, "let n: int") != NULL || strstr(output, "var n: int") != NULL);
+    ASSERT(strstr(output, "let n: i32") != NULL || strstr(output, "var n: i32") != NULL);
 
     /* Hover on `i` in `i += 1` (for-loop update) must resolve to the for-init
      * binding.  Before the fix, find_expr_hit_in_block skipped the update

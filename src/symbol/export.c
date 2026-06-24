@@ -60,6 +60,8 @@ static const FengAnnotation *find_calling_convention_annotation(const FengAnnota
 }
 
 static const char *canonical_builtin_name(FengSlice name) {
+    /* After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
+     * only canonical width-explicit names reach this function. */
     static const struct {
         const char *alias;
         const char *canonical;
@@ -67,18 +69,13 @@ static const char *canonical_builtin_name(FengSlice name) {
         {"i8", "i8"},
         {"i16", "i16"},
         {"i32", "i32"},
-        {"int", "i32"},
         {"i64", "i64"},
-        {"long", "i64"},
         {"u8", "u8"},
-        {"byte", "u8"},
         {"u16", "u16"},
         {"u32", "u32"},
         {"u64", "u64"},
         {"f32", "f32"},
-        {"float", "f32"},
         {"f64", "f64"},
-        {"double", "f64"},
         {"bool", "bool"},
         {"string", "string"},
         {"void", "void"},

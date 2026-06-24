@@ -37,26 +37,22 @@ static bool slice_equals_cstr_local(FengSlice slice, const char *text) {
 }
 
 static const char *canonical_builtin_type_name_local(FengSlice name) {
-    if (slice_equals_cstr_local(name, "int") || slice_equals_cstr_local(name, "i32")) {
-        return "i32";
-    }
-    if (slice_equals_cstr_local(name, "long") || slice_equals_cstr_local(name, "i64")) {
-        return "i64";
-    }
-    if (slice_equals_cstr_local(name, "byte") || slice_equals_cstr_local(name, "u8")) {
-        return "u8";
-    }
-    if (slice_equals_cstr_local(name, "float") || slice_equals_cstr_local(name, "f32")) {
-        return "f32";
-    }
-    if (slice_equals_cstr_local(name, "double") || slice_equals_cstr_local(name, "f64")) {
-        return "f64";
-    }
+    /* After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
+     * only canonical width-explicit names reach this function. */
     if (slice_equals_cstr_local(name, "i8")) {
         return "i8";
     }
     if (slice_equals_cstr_local(name, "i16")) {
         return "i16";
+    }
+    if (slice_equals_cstr_local(name, "i32")) {
+        return "i32";
+    }
+    if (slice_equals_cstr_local(name, "i64")) {
+        return "i64";
+    }
+    if (slice_equals_cstr_local(name, "u8")) {
+        return "u8";
     }
     if (slice_equals_cstr_local(name, "u16")) {
         return "u16";
@@ -66,6 +62,12 @@ static const char *canonical_builtin_type_name_local(FengSlice name) {
     }
     if (slice_equals_cstr_local(name, "u64")) {
         return "u64";
+    }
+    if (slice_equals_cstr_local(name, "f32")) {
+        return "f32";
+    }
+    if (slice_equals_cstr_local(name, "f64")) {
+        return "f64";
     }
     if (slice_equals_cstr_local(name, "bool")) {
         return "bool";

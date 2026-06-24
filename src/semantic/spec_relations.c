@@ -34,16 +34,18 @@ static bool rel_slice_eq_cstr_local(FengSlice s, const char *text, size_t tlen) 
 #define REL_SEQ(s, lit) rel_slice_eq_cstr_local((s), (lit), sizeof(lit) - 1U)
 
 static const char *rel_builtin_canonical_name(FengSlice name) {
-    if (REL_SEQ(name, "int")    || REL_SEQ(name, "i32"))    { return "i32"; }
-    if (REL_SEQ(name, "long")   || REL_SEQ(name, "i64"))    { return "i64"; }
-    if (REL_SEQ(name, "byte")   || REL_SEQ(name, "u8"))     { return "u8"; }
-    if (REL_SEQ(name, "float")  || REL_SEQ(name, "f32"))    { return "f32"; }
-    if (REL_SEQ(name, "double") || REL_SEQ(name, "f64"))    { return "f64"; }
+    /* After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
+     * only canonical width-explicit names reach this function. */
     if (REL_SEQ(name, "i8"))                                 { return "i8"; }
     if (REL_SEQ(name, "i16"))                                { return "i16"; }
+    if (REL_SEQ(name, "i32"))                                { return "i32"; }
+    if (REL_SEQ(name, "i64"))                                { return "i64"; }
+    if (REL_SEQ(name, "u8"))                                 { return "u8"; }
     if (REL_SEQ(name, "u16"))                                { return "u16"; }
     if (REL_SEQ(name, "u32"))                                { return "u32"; }
     if (REL_SEQ(name, "u64"))                                { return "u64"; }
+    if (REL_SEQ(name, "f32"))                                { return "f32"; }
+    if (REL_SEQ(name, "f64"))                                { return "f64"; }
     if (REL_SEQ(name, "bool"))                               { return "bool"; }
     if (REL_SEQ(name, "string"))                             { return "string"; }
     if (REL_SEQ(name, "void"))                               { return "void"; }

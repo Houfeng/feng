@@ -3257,10 +3257,7 @@ static const BuiltinTypeMap k_builtin_types[] = {
     {"i32",    CG_TYPE_I32},  {"i64", CG_TYPE_I64},
     {"u8",     CG_TYPE_U8},   {"u16", CG_TYPE_U16},
     {"u32",    CG_TYPE_U32},  {"u64", CG_TYPE_U64},
-    {"int",    CG_TYPE_I32},  {"long", CG_TYPE_I64},
-    {"uint",   CG_TYPE_U32},  {"byte", CG_TYPE_U8},
     {"f32",    CG_TYPE_F32},  {"f64", CG_TYPE_F64},
-    {"float",  CG_TYPE_F32},  {"double", CG_TYPE_F64},
     {"string", CG_TYPE_STRING},
 };
 
@@ -8825,12 +8822,13 @@ static bool cg_register_builtin_fit_shell(CG *cg,
 }
 
 static bool cg_is_builtin_named_fit_target(FengSlice name) {
+    /* After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
+     * only canonical width-explicit names reach codegen. */
     static const char *kBuiltinNames[] = {
         "i8", "i16", "i32", "i64",
         "u8", "u16", "u32", "u64",
         "f32", "f64",
-        "bool", "string",
-        "int", "long", "byte", "float", "double"
+        "bool", "string"
     };
     for (size_t i = 0; i < sizeof(kBuiltinNames) / sizeof(kBuiltinNames[0]); ++i) {
         size_t len = strlen(kBuiltinNames[i]);

@@ -2190,13 +2190,13 @@ static bool append_slice(FengSlice **items, size_t *count, size_t *capacity, Fen
 
 static bool is_builtin_type_name(FengSlice name) {
     /* Built-in type names per docs/feng-builtin-type.md §2.
-     * Aliases are: int ≡ i32, long ≡ i64, byte ≡ u8, float ≡ f32, double ≡ f64.
-     * Aliases are first-class spellings — both forms are recognized as built-ins. */
+     * After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
+     * only canonical (width-explicit) names appear in type_ref nodes, so
+     * aliases are no longer listed here. */
     static const char *builtin_names[] = {
         "i8",   "i16",  "i32",  "i64",
         "u8",   "u16",  "u32",  "u64",
         "f32",  "f64",
-        "int",  "long", "byte", "float", "double",
         "bool", "string", "void"};
     size_t index;
 
@@ -2207,6 +2207,10 @@ static bool is_builtin_type_name(FengSlice name) {
     }
 
     return false;
+}
+
+bool feng_semantic_is_builtin_type_name(FengSlice name) {
+    return is_builtin_type_name(name);
 }
 
 static const char *canonical_builtin_type_name(FengSlice name) {
@@ -25000,6 +25004,397 @@ static void precompute_imported_builtin_spec_witnesses(
     free(imported_modules);
 }
 
+/* ==================== AST builtin alias normalization ====================
+ *
+ * Per dev/feng-scalar-alias-optimize.md §6: normalize all user-written alias
+ * names (int, long, byte, float, double) in type_ref nodes to their canonical
+ * width-explicit spelling (i32, i64, u8, f32, f64).  Runs once at the start of
+ * semantic analysis so that downstream phases (codegen, symbol export, LSP)
+ * only ever see canonical names and need not handle aliases.
+ *
+ * The AST is mutated in-place: each alias slice in a NAMED type_ref's first
+ * segment is replaced with a pointer to a static canonical string.  Only
+ * single-segment NAMED refs are candidates (multi-segment refs are qualified
+ * module paths, never builtin aliases). */
+
+static void normalize_type_ref(FengTypeRef *type_ref);
+static void normalize_expr(FengExpr *expr);
+static void normalize_stmt(FengStmt *stmt);
+static void normalize_block(FengBlock *block);
+static void normalize_decl(FengDecl *decl);
+
+static void normalize_type_ref(FengTypeRef *type_ref) {
+    size_t i;
+
+    if (type_ref == NULL) {
+        return;
+    }
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            if (type_ref->as.named.segment_count == 1U) {
+                const char *canonical = canonical_builtin_type_name(
+                    type_ref->as.named.segments[0]);
+                if (canonical != NULL &&
+                    (canonical != type_ref->as.named.segments[0].data ||
+                     strlen(canonical) != type_ref->as.named.segments[0].length)) {
+                    type_ref->as.named.segments[0].data = canonical;
+                    type_ref->as.named.segments[0].length = strlen(canonical);
+                }
+            }
+            for (i = 0; i < type_ref->as.named.type_arg_count; ++i) {
+                normalize_type_ref(type_ref->as.named.type_args[i]);
+            }
+            break;
+        case FENG_TYPE_REF_POINTER:
+            normalize_type_ref(type_ref->as.inner);
+            break;
+        case FENG_TYPE_REF_ARRAY:
+            normalize_type_ref(type_ref->as.inner);
+            break;
+    }
+}
+
+static void normalize_callable_signature(FengCallableSignature *sig) {
+    size_t i;
+
+    if (sig == NULL) {
+        return;
+    }
+    for (i = 0; i < sig->type_param_count; ++i) {
+        normalize_type_ref(sig->type_params[i].constraint);
+    }
+    for (i = 0; i < sig->param_count; ++i) {
+        normalize_type_ref(sig->params[i].type);
+    }
+    normalize_type_ref(sig->return_type);
+}
+
+static void normalize_block(FengBlock *block) {
+    size_t i;
+
+    if (block == NULL) {
+        return;
+    }
+    for (i = 0; i < block->statement_count; ++i) {
+        normalize_stmt(block->statements[i]);
+    }
+}
+
+static void normalize_expr(FengExpr *expr) {
+    size_t i;
+
+    if (expr == NULL) {
+        return;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (i = 0; i < expr->as.array_literal.count; ++i) {
+                normalize_expr(expr->as.array_literal.items[i]);
+            }
+            break;
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (i = 0; i < expr->as.tuple_literal.count; ++i) {
+                normalize_expr(expr->as.tuple_literal.items[i]);
+            }
+            break;
+        case FENG_EXPR_OBJECT_LITERAL:
+            normalize_expr(expr->as.object_literal.target);
+            for (i = 0; i < expr->as.object_literal.field_count; ++i) {
+                normalize_expr(expr->as.object_literal.fields[i].value);
+            }
+            break;
+        case FENG_EXPR_GENERIC_TARGET:
+            normalize_expr(expr->as.generic_target.target);
+            for (i = 0; i < expr->as.generic_target.type_arg_count; ++i) {
+                normalize_type_ref(expr->as.generic_target.type_args[i]);
+            }
+            break;
+        case FENG_EXPR_CALL:
+            normalize_expr(expr->as.call.callee);
+            for (i = 0; i < expr->as.call.arg_count; ++i) {
+                normalize_expr(expr->as.call.args[i]);
+            }
+            if (expr->as.call.has_explicit_type_args) {
+                for (i = 0; i < expr->as.call.explicit_type_arg_count; ++i) {
+                    normalize_type_ref(expr->as.call.explicit_type_args[i]);
+                }
+            }
+            break;
+        case FENG_EXPR_MEMBER:
+            normalize_expr(expr->as.member.object);
+            break;
+        case FENG_EXPR_INDEX:
+            normalize_expr(expr->as.index.object);
+            normalize_expr(expr->as.index.index);
+            break;
+        case FENG_EXPR_UNARY:
+            normalize_expr(expr->as.unary.operand);
+            break;
+        case FENG_EXPR_BINARY:
+            normalize_expr(expr->as.binary.left);
+            normalize_expr(expr->as.binary.right);
+            break;
+        case FENG_EXPR_LAMBDA:
+            for (i = 0; i < expr->as.lambda.param_count; ++i) {
+                normalize_type_ref(expr->as.lambda.params[i].type);
+            }
+            if (expr->as.lambda.is_block_body) {
+                normalize_block(expr->as.lambda.body_block);
+            } else {
+                normalize_expr(expr->as.lambda.body);
+            }
+            break;
+        case FENG_EXPR_CAST:
+            normalize_type_ref(expr->as.cast.type);
+            normalize_expr(expr->as.cast.value);
+            break;
+        case FENG_EXPR_IF:
+            normalize_expr(expr->as.if_expr.condition);
+            normalize_block(expr->as.if_expr.then_block);
+            normalize_block(expr->as.if_expr.else_block);
+            break;
+        case FENG_EXPR_MATCH:
+            normalize_expr(expr->as.match_expr.target);
+            for (i = 0; i < expr->as.match_expr.branch_count; ++i) {
+                FengMatchBranch *branch = &expr->as.match_expr.branches[i];
+                size_t j;
+                for (j = 0; j < branch->label_count; ++j) {
+                    if (branch->labels[j].kind == FENG_MATCH_LABEL_TYPE) {
+                        normalize_type_ref(branch->labels[j].type);
+                    } else if (branch->labels[j].kind == FENG_MATCH_LABEL_VALUE) {
+                        normalize_expr(branch->labels[j].value);
+                    }
+                }
+                normalize_block(branch->body);
+            }
+            normalize_block(expr->as.match_expr.else_block);
+            break;
+        case FENG_EXPR_MATCH_OP:
+            normalize_expr(expr->as.match_op.target);
+            for (i = 0; i < expr->as.match_op.label_count; ++i) {
+                if (expr->as.match_op.labels[i].kind == FENG_MATCH_LABEL_TYPE) {
+                    normalize_type_ref(expr->as.match_op.labels[i].type);
+                } else if (expr->as.match_op.labels[i].kind == FENG_MATCH_LABEL_VALUE) {
+                    normalize_expr(expr->as.match_op.labels[i].value);
+                }
+            }
+            break;
+        case FENG_EXPR_TRY:
+            normalize_expr(expr->as.try_expr.body);
+            for (i = 0; i < expr->as.try_expr.clause_count; ++i) {
+                normalize_type_ref(expr->as.try_expr.clauses[i].type);
+                normalize_block(expr->as.try_expr.clauses[i].body);
+            }
+            break;
+        case FENG_EXPR_ARRAY_NEW:
+            normalize_type_ref(expr->as.array_new.element_type);
+            normalize_expr(expr->as.array_new.size);
+            break;
+        default:
+            break;
+    }
+}
+
+static void normalize_stmt(FengStmt *stmt) {
+    size_t i;
+
+    if (stmt == NULL) {
+        return;
+    }
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            normalize_block(stmt->as.block);
+            break;
+        case FENG_STMT_BINDING:
+            normalize_type_ref(stmt->as.binding.type);
+            normalize_expr(stmt->as.binding.initializer);
+            break;
+        case FENG_STMT_ASSIGN:
+            normalize_expr(stmt->as.assign.target);
+            normalize_expr(stmt->as.assign.value);
+            break;
+        case FENG_STMT_EXPR:
+            normalize_expr(stmt->as.expr);
+            break;
+        case FENG_STMT_IF:
+            for (i = 0; i < stmt->as.if_stmt.clause_count; ++i) {
+                normalize_expr(stmt->as.if_stmt.clauses[i].condition);
+                normalize_block(stmt->as.if_stmt.clauses[i].block);
+            }
+            normalize_block(stmt->as.if_stmt.else_block);
+            break;
+        case FENG_STMT_MATCH:
+            normalize_expr(stmt->as.match_stmt.target);
+            for (i = 0; i < stmt->as.match_stmt.branch_count; ++i) {
+                FengMatchBranch *branch = &stmt->as.match_stmt.branches[i];
+                size_t j;
+                for (j = 0; j < branch->label_count; ++j) {
+                    if (branch->labels[j].kind == FENG_MATCH_LABEL_TYPE) {
+                        normalize_type_ref(branch->labels[j].type);
+                    } else if (branch->labels[j].kind == FENG_MATCH_LABEL_VALUE) {
+                        normalize_expr(branch->labels[j].value);
+                    }
+                }
+                normalize_block(branch->body);
+            }
+            normalize_block(stmt->as.match_stmt.else_block);
+            break;
+        case FENG_STMT_WHILE:
+            normalize_expr(stmt->as.while_stmt.condition);
+            normalize_block(stmt->as.while_stmt.body);
+            break;
+        case FENG_STMT_FOR:
+            if (stmt->as.for_stmt.is_for_in) {
+                normalize_type_ref(stmt->as.for_stmt.iter_binding.type);
+                normalize_expr(stmt->as.for_stmt.iter_expr);
+            } else {
+                normalize_stmt(stmt->as.for_stmt.init);
+                normalize_expr(stmt->as.for_stmt.condition);
+                normalize_stmt(stmt->as.for_stmt.update);
+            }
+            normalize_block(stmt->as.for_stmt.body);
+            break;
+        case FENG_STMT_RETURN:
+            normalize_expr(stmt->as.return_value);
+            break;
+        case FENG_STMT_THROW:
+            normalize_expr(stmt->as.throw_value);
+            break;
+        case FENG_STMT_DEFER:
+            normalize_block(stmt->as.defer_block);
+            break;
+        case FENG_STMT_TRY:
+            normalize_expr(stmt->as.expr);
+            break;
+        case FENG_STMT_BREAK:
+        case FENG_STMT_CONTINUE:
+            break;
+    }
+}
+
+static void normalize_decl(FengDecl *decl) {
+    size_t i;
+
+    if (decl == NULL) {
+        return;
+    }
+    switch (decl->kind) {
+        case FENG_DECL_GLOBAL_BINDING:
+            normalize_type_ref(decl->as.binding.type);
+            normalize_expr(decl->as.binding.initializer);
+            break;
+        case FENG_DECL_FUNCTION:
+            normalize_callable_signature(&decl->as.function_decl);
+            normalize_block(decl->as.function_decl.body);
+            break;
+        case FENG_DECL_TYPE:
+            for (i = 0; i < decl->as.type_decl.type_param_count; ++i) {
+                normalize_type_ref(decl->as.type_decl.type_params[i].constraint);
+            }
+            for (i = 0; i < decl->as.type_decl.member_count; ++i) {
+                FengTypeMember *member = decl->as.type_decl.members[i];
+                if (member == NULL) {
+                    continue;
+                }
+                switch (member->kind) {
+                    case FENG_TYPE_MEMBER_FIELD:
+                        normalize_type_ref(member->as.field.type);
+                        normalize_expr(member->as.field.initializer);
+                        break;
+                    case FENG_TYPE_MEMBER_METHOD:
+                    case FENG_TYPE_MEMBER_CONSTRUCTOR:
+                    case FENG_TYPE_MEMBER_FINALIZER:
+                        normalize_callable_signature(&member->as.callable);
+                        normalize_block(member->as.callable.body);
+                        break;
+                }
+            }
+            for (i = 0; i < decl->as.type_decl.declared_spec_count; ++i) {
+                normalize_type_ref(decl->as.type_decl.declared_specs[i]);
+            }
+            break;
+        case FENG_DECL_ENUM:
+            /* No type_refs in enum declarations. */
+            break;
+        case FENG_DECL_SPEC:
+            for (i = 0; i < decl->as.spec_decl.type_param_count; ++i) {
+                normalize_type_ref(decl->as.spec_decl.type_params[i].constraint);
+            }
+            for (i = 0; i < decl->as.spec_decl.parent_spec_count; ++i) {
+                normalize_type_ref(decl->as.spec_decl.parent_specs[i]);
+            }
+            switch (decl->as.spec_decl.form) {
+                case FENG_SPEC_FORM_OBJECT:
+                    for (i = 0; i < decl->as.spec_decl.as.object.member_count; ++i) {
+                        FengTypeMember *member = decl->as.spec_decl.as.object.members[i];
+                        if (member == NULL) {
+                            continue;
+                        }
+                        switch (member->kind) {
+                            case FENG_TYPE_MEMBER_FIELD:
+                                normalize_type_ref(member->as.field.type);
+                                normalize_expr(member->as.field.initializer);
+                                break;
+                            case FENG_TYPE_MEMBER_METHOD:
+                            case FENG_TYPE_MEMBER_CONSTRUCTOR:
+                            case FENG_TYPE_MEMBER_FINALIZER:
+                                normalize_callable_signature(&member->as.callable);
+                                normalize_block(member->as.callable.body);
+                                break;
+                        }
+                    }
+                    break;
+                case FENG_SPEC_FORM_CALLABLE:
+                    for (i = 0; i < decl->as.spec_decl.as.callable.param_count; ++i) {
+                        normalize_type_ref(decl->as.spec_decl.as.callable.params[i].type);
+                    }
+                    normalize_type_ref(decl->as.spec_decl.as.callable.return_type);
+                    break;
+                case FENG_SPEC_FORM_UNION:
+                    for (i = 0; i < decl->as.spec_decl.as.union_form.member_count; ++i) {
+                        normalize_type_ref(decl->as.spec_decl.as.union_form.members[i]);
+                    }
+                    break;
+            }
+            break;
+        case FENG_DECL_FIT:
+            normalize_type_ref(decl->as.fit_decl.target);
+            for (i = 0; i < decl->as.fit_decl.spec_count; ++i) {
+                normalize_type_ref(decl->as.fit_decl.specs[i]);
+            }
+            for (i = 0; i < decl->as.fit_decl.member_count; ++i) {
+                FengTypeMember *member = decl->as.fit_decl.members[i];
+                if (member == NULL) {
+                    continue;
+                }
+                switch (member->kind) {
+                    case FENG_TYPE_MEMBER_FIELD:
+                        normalize_type_ref(member->as.field.type);
+                        normalize_expr(member->as.field.initializer);
+                        break;
+                    case FENG_TYPE_MEMBER_METHOD:
+                    case FENG_TYPE_MEMBER_CONSTRUCTOR:
+                    case FENG_TYPE_MEMBER_FINALIZER:
+                        normalize_callable_signature(&member->as.callable);
+                        normalize_block(member->as.callable.body);
+                        break;
+                }
+            }
+            break;
+    }
+}
+
+static void feng_program_normalize_builtin_aliases(FengProgram *program) {
+    size_t i;
+
+    if (program == NULL) {
+        return;
+    }
+    for (i = 0; i < program->declaration_count; ++i) {
+        normalize_decl(program->declarations[i]);
+    }
+}
+
 bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                         size_t program_count,
                                         const FengSemanticAnalyzeOptions *options,
@@ -25027,6 +25422,14 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
     if (analysis == NULL) {
         ok = false;
         goto finish;
+    }
+
+    /* Phase 0: normalize builtin alias names in all type_ref nodes across
+     * every program.  After this pass, only canonical width-explicit names
+     * (i32, i64, u8, f32, f64, ...) appear in the AST; downstream phases
+     * need not handle aliases.  See dev/feng-scalar-alias-optimize.md §6. */
+    for (program_index = 0U; program_index < program_count; ++program_index) {
+        feng_program_normalize_builtin_aliases((FengProgram *)programs[program_index]);
     }
 
     for (program_index = 0U; program_index < program_count && ok; ++program_index) {

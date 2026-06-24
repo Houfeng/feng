@@ -3714,10 +3714,7 @@ static const FengSymbolDeclView *resolve_symbol_named_type_ref(const FengSymbolP
     }
     name = type_ref->as.named.segments[type_ref->as.named.segment_count - 1U];
     if (type_ref->as.named.segment_count == 1U) {
-        if (slice_equals_cstr(name, "int") || slice_equals_cstr(name, "long") ||
-            slice_equals_cstr(name, "byte") || slice_equals_cstr(name, "float") ||
-            slice_equals_cstr(name, "double") || slice_equals_cstr(name, "bool") ||
-            slice_equals_cstr(name, "string") || slice_equals_cstr(name, "void")) {
+        if (feng_semantic_is_builtin_type_name(name)) {
             return NULL;
         }
         if (current_module != NULL) {
@@ -4117,10 +4114,7 @@ static const FengDecl *resolve_named_type_ref(const FengLspAnalysisSession *sess
     }
     name = type_ref->as.named.segments[type_ref->as.named.segment_count - 1U];
     if (type_ref->as.named.segment_count == 1U) {
-        if (slice_equals_cstr(name, "int") || slice_equals_cstr(name, "long") ||
-            slice_equals_cstr(name, "byte") || slice_equals_cstr(name, "float") ||
-            slice_equals_cstr(name, "double") || slice_equals_cstr(name, "bool") ||
-            slice_equals_cstr(name, "string") || slice_equals_cstr(name, "void")) {
+        if (feng_semantic_is_builtin_type_name(name)) {
             return NULL;
         }
         program_module = find_program_module(session, program);

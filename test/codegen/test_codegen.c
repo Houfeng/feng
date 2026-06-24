@@ -719,7 +719,7 @@ static void test_generic_static_methods_codegen(void) {
     ASSERT(strstr(out.c_source,
                   "FengGenericMethod__feng__codegen__staticgen__Box__i0__make") != NULL);
     ASSERT(strstr(out.c_source,
-                  "Feng__feng__codegen__staticgen__Box__G__int__static__make") != NULL);
+                  "Feng__feng__codegen__staticgen__Box__G__i32__static__make") != NULL);
     ASSERT(strstr(out.c_source, "__of__from__i32") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -3892,7 +3892,7 @@ static void test_generic_object_spec_instance_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "FengSpecValue__feng__codegen__gs1__Box__G__int") != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecValue__feng__codegen__gs1__Box__G__i32") != NULL);
     ASSERT(strstr(out.c_source, "->fetch(") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -3931,7 +3931,7 @@ static void test_generic_callable_spec_instance_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__gs2__Mapper__G__int") != NULL);
+    ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__gs2__Mapper__G__i32") != NULL);
     ASSERT(strstr(out.c_source, "->invoke(") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -3978,9 +3978,9 @@ static void test_generic_object_spec_coercion_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "FengSpecValue__feng__codegen__gs3__Box__G__int") != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecValue__feng__codegen__gs3__Box__G__i32") != NULL);
     ASSERT(strstr(out.c_source,
-                  "FengWitness__feng__codegen__gs3__IntBox__as__feng__codegen__gs3__Box_int_") != NULL);
+                  "FengWitness__feng__codegen__gs3__IntBox__as__feng__codegen__gs3__Box_i32_") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -4022,8 +4022,8 @@ static void test_generic_callable_spec_coercion_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__gs4__Mapper__G__int") != NULL);
-    ASSERT(strstr(out.c_source, "FengCallableValue__FengClosure__feng__codegen__gs4__Mapper__G__int") != NULL);
+    ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__gs4__Mapper__G__i32") != NULL);
+    ASSERT(strstr(out.c_source, "FengCallableValue__FengClosure__feng__codegen__gs4__Mapper__G__i32") != NULL);
     ASSERT(strstr(out.c_source, "->invoke(") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -4069,8 +4069,8 @@ static void test_callable_spec_method_coercion_codegen(void) {
     }
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "FengCallableBind__FengClosure__feng__codegen__gs5__Mapper__G__int") != NULL);
-    ASSERT(strstr(out.c_source, "feng_object_new(&FengClosureDesc__feng__codegen__gs5__Mapper__G__int)") != NULL);
+                  "FengCallableBind__FengClosure__feng__codegen__gs5__Mapper__G__i32") != NULL);
+    ASSERT(strstr(out.c_source, "feng_object_new(&FengClosureDesc__feng__codegen__gs5__Mapper__G__i32)") != NULL);
     ASSERT(strstr(out.c_source, "feng_assign(&_o->_self, (void *)_self)") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -4897,9 +4897,9 @@ static void test_generic_scalar_instance_direct_call_codegen(void) {
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "FengGenericMethod__feng__codegen__gd13__Set__i0__put") != NULL);
     ASSERT(strstr(out.c_source, "const void *_p_next") != NULL);
-    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__int__put__from__i32") != NULL);
-    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__int__put__from__i32(_l_set_0") != NULL);
-    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__int__get__from__void(_l_set_0") != NULL);
+    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__i32__put__from__i32") != NULL);
+    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__i32__put__from__i32(_l_set_0") != NULL);
+    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__i32__get__from__void(_l_set_0") != NULL);
     ASSERT(strstr(out.c_source, "feng_scalar_box_new_") == NULL);
     ASSERT(strstr(out.c_source, "struct FengScalarBox *_sb") == NULL);
     ASSERT(strstr(out.c_source, "FengSpecThunk__") == NULL);
@@ -5691,7 +5691,7 @@ static void test_tuple_value_codegen_core(void) {
     ASSERT(strstr(out.c_source, "struct Feng__feng__codegen__tuplecore__Point {") != NULL);
     ASSERT(strstr(out.c_source, "Feng__feng__codegen__tuplecore__Point__aggregate_desc") != NULL);
     ASSERT(strstr(out.c_source, ".item1") != NULL);
-    ASSERT(strstr(out.c_source, "Feng__feng__codegen__tuplecore__Pair__G__int__int") != NULL);
+    ASSERT(strstr(out.c_source, "Feng__feng__codegen__tuplecore__Pair__G__i32__i32") != NULL);
     ASSERT(strstr(out.c_source, "feng_object_new(&FengTypeDesc__feng__codegen__tuplecore__Point") == NULL);
     compile_generated_c_or_die(out.c_source);
 

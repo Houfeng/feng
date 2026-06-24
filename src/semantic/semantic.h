@@ -400,6 +400,12 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis);
 void feng_semantic_errors_free(FengSemanticError *errors, size_t error_count);
 void feng_semantic_infos_free(FengSemanticInfo *infos, size_t info_count);
 
+/* Returns true if `name` is a builtin type name (standard name such as
+ * i8..i64, u8..u64, f32, f64, bool, string, void).  After AST alias
+ * normalization (dev/feng-scalar-alias-optimize.md §6), alias names are no
+ * longer recognized because they have already been replaced in the AST. */
+bool feng_semantic_is_builtin_type_name(FengSlice name);
+
 /* Returns true iff `type_decl` is a `type` declaration that the static
  * managed-reference graph places in a non-trivial SCC. Returns false for any
  * unknown decl (including non-type decls and out-of-analysis decls). */

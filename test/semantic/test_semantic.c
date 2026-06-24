@@ -1253,7 +1253,7 @@ static void test_abi_type_rejects_direct_array_field_type(void) {
     ASSERT(strcmp(errors[0].path, "abi_type_array_field_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
     ASSERT(strstr(errors[0].message,
-                  "field 'values' uses non-ABI-stable type 'int[]'") != NULL);
+                  "field 'values' uses non-ABI-stable type 'i32[]'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -3607,7 +3607,7 @@ static void test_explicit_non_void_return_rejects_empty_return(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "explicit_non_void_empty_return_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "does not match expected type 'int'") != NULL);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'i32'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5039,7 +5039,7 @@ static void test_index_assignment_rejects_non_matching_array_element_type(void) 
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "index_assign_type_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "does not match expected type 'int'") != NULL);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'i32'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5383,7 +5383,7 @@ static void test_cast_rejects_bool_to_numeric(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "cast_bool_to_numeric_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "cast from 'bool' to 'int' is not allowed") != NULL);
+    ASSERT(strstr(errors[0].message, "cast from 'bool' to 'i32' is not allowed") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5427,7 +5427,7 @@ static void test_cast_rejects_string_to_numeric(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "cast_string_to_numeric_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "cast from 'string' to 'int' is not allowed") != NULL);
+    ASSERT(strstr(errors[0].message, "cast from 'string' to 'i32' is not allowed") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5450,7 +5450,7 @@ static void test_cast_rejects_array_to_numeric(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "cast_array_to_numeric_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "cast from 'int[]' to 'int' is not allowed") != NULL);
+    ASSERT(strstr(errors[0].message, "cast from 'i32[]' to 'i32' is not allowed") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5490,7 +5490,7 @@ static void test_cast_rejects_numeric_to_array(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message, "cast from 'i32' to 'int[]' is not allowed") != NULL);
+    ASSERT(strstr(errors[0].message, "cast from 'i32' to 'i32[]' is not allowed") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5572,7 +5572,7 @@ static void test_cast_rejects_object_to_numeric(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message, "cast from 'Point' to 'int' is not allowed") != NULL);
+    ASSERT(strstr(errors[0].message, "cast from 'Point' to 'i32' is not allowed") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -6025,7 +6025,7 @@ static void test_unary_address_of_rejects_string_to_byte_pointer_binding(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "unary_address_of_string_to_byte_pointer_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "byte*") != NULL);
+    ASSERT(strstr(errors[0].message, "u8*") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -7894,7 +7894,7 @@ static void test_external_imported_field_type_participates_in_typecheck(void) {
                                                &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "external_field_type_main.f") == 0);
-    ASSERT(strstr(errors[0].message, "does not match expected type 'int'") != NULL);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'i32'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -8800,7 +8800,7 @@ static void test_numeric_float_literal_to_integer_target_is_rejected(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "does not match expected type 'int'") != NULL);
+    ASSERT(strstr(errors[0].message, "does not match expected type 'i32'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -16386,7 +16386,7 @@ static void test_union_form_spec_records_normalized_members(void) {
     ASSERT(info != NULL);
     ASSERT(info->member_count == 3U);
     ASSERT(type_ref_named_single_is(info->members[0].type_ref, "string"));
-    ASSERT(type_ref_named_single_is(info->members[1].type_ref, "int"));
+    ASSERT(type_ref_named_single_is(info->members[1].type_ref, "i32"));
     ASSERT(type_ref_named_single_is(info->members[2].type_ref, "bool"));
 
     feng_semantic_analysis_free(analysis);
@@ -16442,7 +16442,7 @@ static void test_union_entry_records_exact_member_site(void) {
     ASSERT(site != NULL);
     ASSERT(site->target_union_decl == program->declarations[0]);
     ASSERT(site->member_index == 0U);
-    ASSERT(type_ref_named_single_is(site->member_type_ref, "int"));
+    ASSERT(type_ref_named_single_is(site->member_type_ref, "i32"));
 
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
@@ -16611,7 +16611,7 @@ static void test_generic_union_form_rejects_mismatched_member(void) {
     assert_single_source_semantic_error_contains(
         "generic_union_mismatched_member.f",
         source,
-        "does not match expected type 'Result<int>'");
+        "does not match expected type 'Result<i32>'");
 }
 
 static void test_tuple_literal_expected_contexts_pass(void) {
