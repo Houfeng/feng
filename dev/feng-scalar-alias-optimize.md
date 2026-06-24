@@ -167,7 +167,45 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - 现有代码：使用 `long` 的源码需迁移为 `i64`
 - 测试：全量回归，重点关注使用 `long` 别名的测试用例
 
-## 8. 决策记录
+## 8. 分步任务
+
+> 别名归一收敛为基础任务，完成后别名的增删改只需修改一处，后续任务均为简单变更。
+
+### Task 1：别名归一收敛（基础，纯重构，无行为变更）
+
+- [ ] 确认 `semantic/analyzer.c` 中 `canonical_builtin_type_name()` 为唯一归一入口
+- [ ] 在语义分析开始时遍历 AST，将所有 type_ref 中的别名替换为标准名
+- [ ] 移除 `semantic/spec_relations.c` 中 `rel_builtin_canonical_name()` 的别名分支
+- [ ] 移除 `semantic/spec_witnesses.c` 中同类别名 if/else 链
+- [ ] 移除 `codegen/codegen.c` 中 `k_builtin_types[]` 的别名字段及 `cg_is_builtin_named_fit_target()` 的别名项
+- [ ] 移除 `symbol/export.c` 中 `canonical_builtin_name()` 的别名条目
+- [ ] 移除 `cli/lsp/runtime.c` 中多处硬编码别名判断
+- [ ] 全量回归测试，确认无行为变更
+
+### Task 2：移除 `long` 别名
+
+- [ ] 从集中别名表中移除 `long` → `i64` 条目
+- [ ] 迁移标准库及测试中使用 `long` 的代码为 `i64`
+- [ ] 全量回归测试
+
+### Task 3：`int` 改为平台相关别名
+
+- [ ] `canonical_builtin_type_name()` 新增平台参数，`int` 映射为 `i32`（32 位）或 `i64`（64 位）
+- [ ] 编译上下文传入目标平台信息
+- [ ] 全量回归测试
+
+### Task 4：新增 `uint` 平台相关别名
+
+- [ ] 集中别名表新增 `uint` → `u32`（32 位）或 `u64`（64 位）
+- [ ] 全量回归测试
+
+### Task 5：规范文档更新
+
+- [ ] 更新 `docs/feng-language.md`：别名表（移除 `long`，新增 `uint`，`int` 平台相关说明）
+- [ ] 更新 `docs/feng-builtin-type.md`：别名表与映射规则
+- [ ] 更新本文件状态为"已实施"
+
+## 9. 决策记录
 
 - **2026-06-24**：草案提出
 - **2026-06-24**：决策——`float`/`double` 保持固定宽度，仅移除 `long`，新增 `uint`，`int` 改为平台相关
