@@ -404,10 +404,10 @@ let x = 12.5;       // double x = (double)(12.5);            ← 正确
 
 语义层在已有的贴合路径上写入 `type`。codegen 尚不读取，行为不变。
 
-- [ ] `expr_matches_expected_type_ref()`（15479 行）：`numeric_literal_adapts_to_target` 返回 true 时，将 `expected_type_ref`（已有 `FengTypeRef *`，借用 AST 生命周期）直接挂到字面量节点的 `type`（覆盖绑定、参数、返回值、数组元素、成员赋值等所有现有贴合场景）
-- [ ] 无类型标注绑定（`let x = 123;`）：语义层通过 `inferred_expr_type_builtin("int")` + `create_type_ref_from_inferred_type` + `resolver_track_synthetic_type_ref` 合成 `FengTypeRef`，挂到字面量节点的 `type`
-- [ ] 无类型标注浮点（`let x = 12.5;`）：同理，通过 `inferred_expr_type_builtin("double")` 合成 `FengTypeRef`，挂到字面量节点的 `type`
-- [ ] 全量回归测试，确认无新增失败
+- [x] `expr_matches_expected_type_ref()`（15479 行）：`numeric_literal_adapts_to_target` 返回 true 时，将 `expected_type_ref`（已有 `FengTypeRef *`，借用 AST 生命周期）直接挂到字面量节点的 `type`（覆盖绑定、参数、返回值、数组元素、成员赋值等所有现有贴合场景）
+- [x] 无类型标注绑定（`let x = 123;`）：语义层通过 `inferred_expr_type_builtin("int")` + `create_type_ref_from_inferred_type` + `resolver_track_synthetic_type_ref` 合成 `FengTypeRef`，挂到字面量节点的 `type`
+- [x] 无类型标注浮点（`let x = 12.5;`）：同理，通过 `inferred_expr_type_builtin("double")` 合成 `FengTypeRef`，挂到字面量节点的 `type`
+- [x] 全量回归测试，确认无新增失败
 
 ### 8.4 步骤 3：二元运算贴合
 

@@ -15479,7 +15479,14 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
         if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr) &&
             evaluate_constant_expr(context, expr, &value) &&
             (value.kind == FENG_CONST_INT || value.kind == FENG_CONST_FLOAT)) {
-            return numeric_literal_adapts_to_target(context, expr, expected_type_ref);
+            if (numeric_literal_adapts_to_target(context, expr, expected_type_ref)) {
+                /* Adaptation succeeded: hang the target type on the literal node
+                 * so that codegen can read it directly.  expected_type_ref comes
+                 * from a declaration and borrows the AST lifetime. */
+                ((FengExpr *)expr)->type = expected_type_ref;
+                return true;
+            }
+            return false;
         }
         /* If the constant evaluator reported a compile-time error (e.g., division by zero,
          * overflow), the binding is already known invalid; treat as matched to suppress a
@@ -20352,6 +20359,29 @@ static bool resolve_binding(ResolveContext *context,
         }
         if (!validate_untyped_tuple_literal_expr(context, binding->initializer)) {
             return false;
+        }
+        /* Untyped numeric binding (let x = 123; / let x = 12.5;):
+         * synthesize a FengTypeRef for the default inferred type and hang
+         * it on the literal node so codegen can emit the correct width. */
+        if (binding->initializer != NULL &&
+            binding->initializer->kind == FENG_EXPR_INTEGER) {
+            InferredExprType inferred = inferred_expr_type_builtin("int");
+            FengTypeRef *synth = create_type_ref_from_inferred_type(&inferred,
+                                                                    binding->initializer->token);
+            if (synth != NULL) {
+                resolver_track_synthetic_type_ref(context, synth);
+                ((FengExpr *)binding->initializer)->type = synth;
+            }
+        }
+        if (binding->initializer != NULL &&
+            binding->initializer->kind == FENG_EXPR_FLOAT) {
+            InferredExprType inferred = inferred_expr_type_builtin("double");
+            FengTypeRef *synth = create_type_ref_from_inferred_type(&inferred,
+                                                                    binding->initializer->token);
+            if (synth != NULL) {
+                resolver_track_synthetic_type_ref(context, synth);
+                ((FengExpr *)binding->initializer)->type = synth;
+            }
         }
     }
     binding_type = binding->type != NULL ? inferred_expr_type_from_type_ref(binding->type)
