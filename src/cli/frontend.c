@@ -295,6 +295,7 @@ int feng_cli_frontend_run_with_overlays(const FengCliFrontendInput *input,
     }
 
     semantic_options.target = input->target;
+    semantic_options.pointer_size = feng_get_host_pointer_size();
     if (provider != NULL) {
         imported_module_cache = feng_symbol_imported_module_cache_create(provider);
         if (imported_module_cache == NULL) {

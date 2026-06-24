@@ -303,6 +303,11 @@ typedef struct FengSemanticAnalysis {
     FengSemanticModule *modules;
     size_t module_count;
     size_t module_capacity;
+    /* Host pointer size in bytes (sizeof(void *)).  Propagated from
+     * FengSemanticAnalyzeOptions.pointer_size at analysis entry.  Used by
+     * canonical_builtin_type_name() through ResolveContext to resolve
+     * platform-dependent aliases.  See dev/feng-scalar-alias-optimize.md §6. */
+    size_t pointer_size;
     FengSemanticInfo *infos;
     size_t info_count;
     size_t info_capacity;
@@ -380,6 +385,13 @@ typedef struct FengSemanticImportedModuleQuery {
 typedef struct FengSemanticAnalyzeOptions {
     FengCompileTarget target;
     const FengSemanticImportedModuleQuery *imported_modules;
+    /* Host pointer size in bytes (sizeof(void *)).  Drives platform-dependent
+     * alias resolution (e.g. `int` → `i32` on 32-bit, `i64` on 64-bit).
+     * Caller (CLI layer) fills this from the host machine; a zero value
+     * defaults to the host's sizeof(void *) inside the semantic entry.
+     * Future: when cross-compilation is supported, pass target pointer size
+     * via a dedicated compile option instead of host sizeof(void *). */
+    size_t pointer_size;
 } FengSemanticAnalyzeOptions;
 
 bool feng_semantic_analyze(const FengProgram *const *programs,
@@ -405,6 +417,10 @@ void feng_semantic_infos_free(FengSemanticInfo *infos, size_t info_count);
  * normalization (dev/feng-scalar-alias-optimize.md §6), alias names are no
  * longer recognized because they have already been replaced in the AST. */
 bool feng_semantic_is_builtin_type_name(FengSlice name);
+
+/* Returns the host machine's pointer size in bytes (sizeof(void *)).
+ * Used by the CLI layer to fill FengSemanticAnalyzeOptions.pointer_size. */
+size_t feng_get_host_pointer_size(void);
 
 /* Returns true iff `type_decl` is a `type` declaration that the static
  * managed-reference graph places in a non-trivial SCC. Returns false for any

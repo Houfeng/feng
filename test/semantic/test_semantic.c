@@ -7755,7 +7755,7 @@ static void test_external_use_module_accepted_via_import_query(void) {
     const char *segments[] = {"vendor", "math"};
     ExternalModuleQueryFixture fixture = {segments, 2U, 0U, {0}};
     FengSemanticImportedModuleQuery query = {&fixture, external_module_query_get_module};
-    FengSemanticAnalyzeOptions options = {FENG_COMPILE_TARGET_LIB, &query};
+    FengSemanticAnalyzeOptions options = {FENG_COMPILE_TARGET_LIB, &query, sizeof(void *)};
     FengProgram *program = parse_program_or_die("known_use_external.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;

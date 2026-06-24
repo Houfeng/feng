@@ -238,11 +238,11 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 > 为 `canonical_builtin_type_name()` 增加平台参数，但当前阶段 `int` 仍固定映射为 `i32`，行为不变。此步骤仅建立基础设施。
 
-- [ ] `canonical_builtin_type_name()` 新增平台参数（通过 `ResolveContext` 或显式参数）
-- [ ] 实现平台位宽检测函数（如 `feng_get_host_pointer_size()`），根据当前宿主机返回指针位宽（`sizeof(void *)`），并注释：未来支持交叉编译时，需要通过编译选项传入目标平台位宽（核心编译器不直接读取 CLI 参数，已有 `FengSemanticAnalyzeOptions` 机制）
-- [ ] `FengSemanticAnalyzeOptions` 新增 `size_t pointer_size` 字段，语义分析入口由调用方（CLI 层）填入宿主机位宽；`pointer_size` 在语义分析入口存入 `ResolveContext`
-- [ ] `inferred_expr_type_builtin_canonical_name()` 内部调用 `canonical_builtin_type_name()` 时同步传入平台信息
-- [ ] 全量回归测试（`int` 仍固定映射 `i32`，应无行为变更）
+- [x] `canonical_builtin_type_name()` 新增平台参数（通过 `ResolveContext` 或显式参数）
+- [x] 实现平台位宽检测函数（如 `feng_get_host_pointer_size()`），根据当前宿主机返回指针位宽（`sizeof(void *)`），并注释：未来支持交叉编译时，需要通过编译选项传入目标平台位宽（核心编译器不直接读取 CLI 参数，已有 `FengSemanticAnalyzeOptions` 机制）
+- [x] `FengSemanticAnalyzeOptions` 新增 `size_t pointer_size` 字段，语义分析入口由调用方（CLI 层）填入宿主机位宽；`pointer_size` 在语义分析入口存入 `ResolveContext`
+- [x] `inferred_expr_type_builtin_canonical_name()` 内部调用 `canonical_builtin_type_name()` 时同步传入平台信息
+- [x] 全量回归测试（`int` 仍固定映射 `i32`，应无行为变更）
 
 ### Task 4：新增 `uint` 平台相关别名（验证 Task 3 基础设施）
 

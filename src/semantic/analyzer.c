@@ -335,6 +335,11 @@ typedef struct ResolveContext {
     ExprNarrowingEntry *expr_narrowings;
     size_t expr_narrowing_count;
     size_t expr_narrowing_capacity;
+    /* Host pointer size in bytes (sizeof(void *)).  Used by
+     * canonical_builtin_type_name() to resolve platform-dependent aliases
+     * (e.g. `int` → `i32` on 32-bit, `i64` on 64-bit).  Propagated from
+     * FengSemanticAnalyzeOptions.pointer_size through the analysis entry. */
+    size_t pointer_size;
 } ResolveContext;
 
 static bool resolver_append_error(ResolveContext *context, FengToken token, const char *code, char *message);
@@ -2213,9 +2218,23 @@ bool feng_semantic_is_builtin_type_name(FengSlice name) {
     return is_builtin_type_name(name);
 }
 
-static const char *canonical_builtin_type_name(FengSlice name) {
+/* Returns the host machine's pointer size in bytes (sizeof(void *)).
+ * Used by the CLI layer to fill FengSemanticAnalyzeOptions.pointer_size.
+ * Future: when cross-compilation is supported, the target pointer size
+ * should be passed via a dedicated compile option instead of querying
+ * the host.  The core compiler does not read CLI arguments directly;
+ * it receives pointer_size through FengSemanticAnalyzeOptions. */
+size_t feng_get_host_pointer_size(void) {
+    return sizeof(void *);
+}
+
+static const char *canonical_builtin_type_name(FengSlice name, size_t pointer_size) {
     /* Canonical (width-explicit) names per docs/feng-builtin-type.md §2 alias table.
-     * Aliases collapse to their canonical width-explicit spelling for type identity checks. */
+     * Aliases collapse to their canonical width-explicit spelling for type identity checks.
+     * `pointer_size` drives platform-dependent alias resolution (e.g. `int`, `uint`).
+     * Task 3: infrastructure only — `int` stays fixed at i32 regardless of pointer_size;
+     * Task 6 will switch `int` to platform-dependent (32-bit → i32, 64-bit → i64). */
+    (void)pointer_size; /* Reserved for Task 6 platform-dependent mapping. */
     if (slice_equals_cstr(name, "int") || slice_equals_cstr(name, "i32")) {
         return "i32";
     }
@@ -2260,14 +2279,18 @@ static const char *canonical_builtin_type_name(FengSlice name) {
 }
 
 static bool builtin_type_name_is_numeric(FengSlice name) {
-    const char *canonical_name = canonical_builtin_type_name(name);
+    /* Input is always already canonical (from inferred_expr_type_builtin_canonical_name
+     * or canonical_builtin_type_name), so pointer_size=0 is safe here — the
+     * canonical_builtin_type_name call is a defensive no-op for canonical input. */
+    const char *canonical_name = canonical_builtin_type_name(name, 0U);
 
     return canonical_name != NULL && strcmp(canonical_name, "bool") != 0 &&
            strcmp(canonical_name, "string") != 0 && strcmp(canonical_name, "void") != 0;
 }
 
 static bool builtin_type_name_is_integer(FengSlice name) {
-    const char *canonical_name = canonical_builtin_type_name(name);
+    /* Input is always already canonical — see builtin_type_name_is_numeric. */
+    const char *canonical_name = canonical_builtin_type_name(name, 0U);
 
     return canonical_name != NULL &&
            (strcmp(canonical_name, "i8") == 0 || strcmp(canonical_name, "i16") == 0 ||
@@ -4453,7 +4476,10 @@ static const char *type_ref_builtin_canonical_name(const FengTypeRef *type_ref) 
         return NULL;
     }
 
-    return canonical_builtin_type_name(type_ref->as.named.segments[0]);
+    /* After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
+     * only canonical width-explicit names reach this function.  pointer_size=0
+     * is safe because canonical names map to themselves regardless of platform. */
+    return canonical_builtin_type_name(type_ref->as.named.segments[0], 0U);
 }
 
 typedef enum FitTargetKind {
@@ -4637,7 +4663,7 @@ static bool fit_decl_target_matches_owner_type(const ResolveContext *context,
     }
 
     if (owner_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
-        const char *owner_builtin = canonical_builtin_type_name(owner_type.builtin_name);
+        const char *owner_builtin = canonical_builtin_type_name(owner_type.builtin_name, context->pointer_size);
 
         return fit_target.kind == FIT_TARGET_KIND_BUILTIN &&
                fit_target.builtin_canonical_name != NULL &&
@@ -4980,7 +5006,7 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
 
     switch (expr_type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
-            expr_builtin = canonical_builtin_type_name(expr_type.builtin_name);
+            expr_builtin = canonical_builtin_type_name(expr_type.builtin_name, context->pointer_size);
             target_builtin = type_ref_builtin_canonical_name(type_ref);
             if (expr_builtin != NULL && target_builtin != NULL &&
                 strcmp(expr_builtin, target_builtin) == 0) {
@@ -5089,7 +5115,7 @@ static bool inferred_expr_type_exactly_matches_type_ref(const ResolveContext *co
 
     switch (expr_type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
-            expr_builtin = canonical_builtin_type_name(expr_type.builtin_name);
+            expr_builtin = canonical_builtin_type_name(expr_type.builtin_name, context->pointer_size);
             target_builtin = type_ref_builtin_canonical_name(type_ref);
             return expr_builtin != NULL && target_builtin != NULL &&
                    strcmp(expr_builtin, target_builtin) == 0;
@@ -5194,8 +5220,8 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
     }
     if (left.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN &&
         right.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
-        return strcmp(canonical_builtin_type_name(left.builtin_name),
-                      canonical_builtin_type_name(right.builtin_name)) == 0;
+        return strcmp(canonical_builtin_type_name(left.builtin_name, context->pointer_size),
+                      canonical_builtin_type_name(right.builtin_name, context->pointer_size)) == 0;
     }
     if (left.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
         right.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
@@ -5666,10 +5692,14 @@ static bool function_type_decl_matches_callable_signature_or_is_pending(
     return callable_return_inference_is_pending(context, callable);
 }
 
-static const char *inferred_expr_type_builtin_canonical_name(InferredExprType expr_type) {
+/* Returns the canonical builtin name for an inferred expression type.
+ * `pointer_size` is forwarded to canonical_builtin_type_name() so that
+ * platform-dependent aliases (e.g. `int`) resolve to the correct width.
+ * See dev/feng-scalar-alias-optimize.md §6.8. */
+static const char *inferred_expr_type_builtin_canonical_name(InferredExprType expr_type, size_t pointer_size) {
     switch (expr_type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
-            return canonical_builtin_type_name(expr_type.builtin_name);
+            return canonical_builtin_type_name(expr_type.builtin_name, pointer_size);
 
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
             return type_ref_builtin_canonical_name(expr_type.type_ref);
@@ -5684,7 +5714,8 @@ static const char *inferred_expr_type_builtin_canonical_name(InferredExprType ex
 }
 
 static bool inferred_expr_type_is_numeric(InferredExprType expr_type) {
-    const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type);
+    /* pointer_size=0: Task 3 keeps int→i32 regardless; Task 6 will thread pointer_size. */
+    const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type, 0U);
 
     return builtin_name != NULL && builtin_type_name_is_numeric(slice_from_cstr(builtin_name));
 }
@@ -5710,7 +5741,8 @@ static bool inferred_expr_type_is_enum(const ResolveContext *context, InferredEx
 }
 
 static bool inferred_expr_type_is_integer(InferredExprType expr_type) {
-    const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type);
+    /* pointer_size=0: see inferred_expr_type_is_numeric. */
+    const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type, 0U);
 
     return builtin_name != NULL && builtin_type_name_is_integer(slice_from_cstr(builtin_name));
 }
@@ -5721,13 +5753,15 @@ static bool inferred_expr_type_is_float(InferredExprType expr_type) {
 }
 
 static bool inferred_expr_type_is_bool(InferredExprType expr_type) {
-    const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type);
+    /* pointer_size=0: see inferred_expr_type_is_numeric. */
+    const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type, 0U);
 
     return builtin_name != NULL && strcmp(builtin_name, "bool") == 0;
 }
 
 static bool inferred_expr_type_is_string(InferredExprType expr_type) {
-    const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type);
+    /* pointer_size=0: see inferred_expr_type_is_numeric. */
+    const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type, 0U);
 
     return builtin_name != NULL && strcmp(builtin_name, "string") == 0;
 }
@@ -5757,7 +5791,7 @@ static bool inferred_expr_type_is_data_addressable_abi_value(const ResolveContex
 
     switch (expr_type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
-            builtin_name = canonical_builtin_type_name(expr_type.builtin_name);
+            builtin_name = canonical_builtin_type_name(expr_type.builtin_name, context->pointer_size);
             return builtin_name != NULL && strcmp(builtin_name, "string") != 0 &&
                    strcmp(builtin_name, "void") != 0;
 
@@ -6123,7 +6157,7 @@ static bool validate_integer_shift_rhs_range(ResolveContext *context,
 
     int64_t shift_amount = shift_value.i;
     int bit_width = canonical_integer_bit_width(
-        inferred_expr_type_builtin_canonical_name(left_type));
+        inferred_expr_type_builtin_canonical_name(left_type, context->pointer_size));
 
     if (bit_width <= 0 ||
         (shift_amount >= 0 && shift_amount < (int64_t)bit_width)) {
@@ -13094,7 +13128,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                                expr->as.member.member.data));
         }
 
-        builtin_name = inferred_expr_type_builtin_canonical_name(owner_type);
+        builtin_name = inferred_expr_type_builtin_canonical_name(owner_type, context->pointer_size);
         if (builtin_name == NULL) {
             if (owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
                 owner_type.type_ref != NULL &&
@@ -13904,7 +13938,7 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
                 result.type_decl = entry->decl;
                 result.provider_module = entry->provider_module;
             } else {
-                const char *builtin_name = canonical_builtin_type_name(target_expr->as.identifier);
+                const char *builtin_name = canonical_builtin_type_name(target_expr->as.identifier, context->pointer_size);
 
                 if (builtin_name != NULL) {
                     result.is_builtin_type_name = true;
@@ -15740,7 +15774,7 @@ static void record_object_spec_coercion_site_if_applicable(
                 return;
             }
         } else if (expr_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
-            const char *builtin_name = canonical_builtin_type_name(expr_type.builtin_name);
+            const char *builtin_name = canonical_builtin_type_name(expr_type.builtin_name, context->pointer_size);
 
             if (builtin_name == NULL) {
                 return;
@@ -15968,7 +16002,7 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
                actual_type_ref->as.named.type_arg_count == 0U &&
                is_builtin_type_name(actual_type_ref->as.named.segments[0])) {
         const char *builtin_name =
-            canonical_builtin_type_name(actual_type_ref->as.named.segments[0]);
+            canonical_builtin_type_name(actual_type_ref->as.named.segments[0], context->pointer_size);
         if (builtin_name != NULL) {
             FengSemanticSubjectKey subject_key =
                 feng_semantic_subject_key_for_builtin(builtin_name);
@@ -16034,7 +16068,7 @@ static void materialize_object_spec_constraint_witness_if_applicable(
         actual_type_ref->as.named.segment_count == 1U &&
         is_builtin_type_name(actual_type_ref->as.named.segments[0])) {
         const char *builtin_name =
-            canonical_builtin_type_name(actual_type_ref->as.named.segments[0]);
+            canonical_builtin_type_name(actual_type_ref->as.named.segments[0], context->pointer_size);
         if (builtin_name != NULL) {
             FengSemanticSubjectKey subject_key =
                 feng_semantic_subject_key_for_builtin(builtin_name);
@@ -16967,7 +17001,8 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
 static char *format_inferred_expr_type_name(InferredExprType type) {
     switch (type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN: {
-            const char *builtin_name = canonical_builtin_type_name(type.builtin_name);
+            /* pointer_size=0: no ResolveContext available; used for diagnostics only. */
+            const char *builtin_name = canonical_builtin_type_name(type.builtin_name, 0U);
 
             return duplicate_cstr(builtin_name != NULL ? builtin_name : "<type>");
         }
@@ -17119,7 +17154,7 @@ static bool type_ref_is_abi_stable(const ResolveContext *context,
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
             if (type_ref->as.named.segment_count == 1U) {
-                builtin_name = canonical_builtin_type_name(type_ref->as.named.segments[0]);
+                builtin_name = canonical_builtin_type_name(type_ref->as.named.segments[0], context->pointer_size);
                 if (builtin_name != NULL) {
                     if (strcmp(builtin_name, "void") == 0) {
                         return allow_void;
@@ -17149,7 +17184,7 @@ static bool inferred_expr_type_is_abi_stable(const ResolveContext *context,
 
     switch (type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
-            builtin_name = canonical_builtin_type_name(type.builtin_name);
+            builtin_name = canonical_builtin_type_name(type.builtin_name, context->pointer_size);
             if (builtin_name == NULL) {
                 return false;
             }
@@ -17760,7 +17795,7 @@ static bool inferred_expr_type_uses_c_boundary_compatible_named_types(
 
     switch (type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
-            builtin_name = canonical_builtin_type_name(type.builtin_name);
+            builtin_name = canonical_builtin_type_name(type.builtin_name, context->pointer_size);
             return builtin_name != NULL && (strcmp(builtin_name, "void") != 0 || allow_void);
 
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
@@ -22233,7 +22268,7 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
             return;
         }
     } else if (source_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
-        const char *builtin_name = canonical_builtin_type_name(source_type.builtin_name);
+        const char *builtin_name = canonical_builtin_type_name(source_type.builtin_name, context->pointer_size);
         if (builtin_name == NULL) {
             return;
         }
@@ -23836,6 +23871,7 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
     context.analysis = analysis;
     context.module = module;
     context.program = program;
+    context.pointer_size = analysis->pointer_size;
     context.visible_types = visible_types;
     context.visible_type_count = visible_type_count;
     context.visible_values = visible_values;
@@ -24883,6 +24919,7 @@ static void precompute_imported_builtin_spec_witnesses(
     memset(&ctx, 0, sizeof(ctx));
     ctx.analysis = analysis;
     ctx.module = first_local_module;
+    ctx.pointer_size = analysis->pointer_size;
     ctx.imported_modules = imported_modules;
     ctx.imported_module_count = imported_module_count;
 
@@ -25017,13 +25054,13 @@ static void precompute_imported_builtin_spec_witnesses(
  * single-segment NAMED refs are candidates (multi-segment refs are qualified
  * module paths, never builtin aliases). */
 
-static void normalize_type_ref(FengTypeRef *type_ref);
-static void normalize_expr(FengExpr *expr);
-static void normalize_stmt(FengStmt *stmt);
-static void normalize_block(FengBlock *block);
-static void normalize_decl(FengDecl *decl);
+static void normalize_type_ref(FengTypeRef *type_ref, size_t pointer_size);
+static void normalize_expr(FengExpr *expr, size_t pointer_size);
+static void normalize_stmt(FengStmt *stmt, size_t pointer_size);
+static void normalize_block(FengBlock *block, size_t pointer_size);
+static void normalize_decl(FengDecl *decl, size_t pointer_size);
 
-static void normalize_type_ref(FengTypeRef *type_ref) {
+static void normalize_type_ref(FengTypeRef *type_ref, size_t pointer_size) {
     size_t i;
 
     if (type_ref == NULL) {
@@ -25033,7 +25070,7 @@ static void normalize_type_ref(FengTypeRef *type_ref) {
         case FENG_TYPE_REF_NAMED:
             if (type_ref->as.named.segment_count == 1U) {
                 const char *canonical = canonical_builtin_type_name(
-                    type_ref->as.named.segments[0]);
+                    type_ref->as.named.segments[0], pointer_size);
                 if (canonical != NULL &&
                     (canonical != type_ref->as.named.segments[0].data ||
                      strlen(canonical) != type_ref->as.named.segments[0].length)) {
@@ -25042,45 +25079,45 @@ static void normalize_type_ref(FengTypeRef *type_ref) {
                 }
             }
             for (i = 0; i < type_ref->as.named.type_arg_count; ++i) {
-                normalize_type_ref(type_ref->as.named.type_args[i]);
+                normalize_type_ref(type_ref->as.named.type_args[i], pointer_size);
             }
             break;
         case FENG_TYPE_REF_POINTER:
-            normalize_type_ref(type_ref->as.inner);
+            normalize_type_ref(type_ref->as.inner, pointer_size);
             break;
         case FENG_TYPE_REF_ARRAY:
-            normalize_type_ref(type_ref->as.inner);
+            normalize_type_ref(type_ref->as.inner, pointer_size);
             break;
     }
 }
 
-static void normalize_callable_signature(FengCallableSignature *sig) {
+static void normalize_callable_signature(FengCallableSignature *sig, size_t pointer_size) {
     size_t i;
 
     if (sig == NULL) {
         return;
     }
     for (i = 0; i < sig->type_param_count; ++i) {
-        normalize_type_ref(sig->type_params[i].constraint);
+        normalize_type_ref(sig->type_params[i].constraint, pointer_size);
     }
     for (i = 0; i < sig->param_count; ++i) {
-        normalize_type_ref(sig->params[i].type);
+        normalize_type_ref(sig->params[i].type, pointer_size);
     }
-    normalize_type_ref(sig->return_type);
+    normalize_type_ref(sig->return_type, pointer_size);
 }
 
-static void normalize_block(FengBlock *block) {
+static void normalize_block(FengBlock *block, size_t pointer_size) {
     size_t i;
 
     if (block == NULL) {
         return;
     }
     for (i = 0; i < block->statement_count; ++i) {
-        normalize_stmt(block->statements[i]);
+        normalize_stmt(block->statements[i], pointer_size);
     }
 }
 
-static void normalize_expr(FengExpr *expr) {
+static void normalize_expr(FengExpr *expr, size_t pointer_size) {
     size_t i;
 
     if (expr == NULL) {
@@ -25089,113 +25126,113 @@ static void normalize_expr(FengExpr *expr) {
     switch (expr->kind) {
         case FENG_EXPR_ARRAY_LITERAL:
             for (i = 0; i < expr->as.array_literal.count; ++i) {
-                normalize_expr(expr->as.array_literal.items[i]);
+                normalize_expr(expr->as.array_literal.items[i], pointer_size);
             }
             break;
         case FENG_EXPR_TUPLE_LITERAL:
             for (i = 0; i < expr->as.tuple_literal.count; ++i) {
-                normalize_expr(expr->as.tuple_literal.items[i]);
+                normalize_expr(expr->as.tuple_literal.items[i], pointer_size);
             }
             break;
         case FENG_EXPR_OBJECT_LITERAL:
-            normalize_expr(expr->as.object_literal.target);
+            normalize_expr(expr->as.object_literal.target, pointer_size);
             for (i = 0; i < expr->as.object_literal.field_count; ++i) {
-                normalize_expr(expr->as.object_literal.fields[i].value);
+                normalize_expr(expr->as.object_literal.fields[i].value, pointer_size);
             }
             break;
         case FENG_EXPR_GENERIC_TARGET:
-            normalize_expr(expr->as.generic_target.target);
+            normalize_expr(expr->as.generic_target.target, pointer_size);
             for (i = 0; i < expr->as.generic_target.type_arg_count; ++i) {
-                normalize_type_ref(expr->as.generic_target.type_args[i]);
+                normalize_type_ref(expr->as.generic_target.type_args[i], pointer_size);
             }
             break;
         case FENG_EXPR_CALL:
-            normalize_expr(expr->as.call.callee);
+            normalize_expr(expr->as.call.callee, pointer_size);
             for (i = 0; i < expr->as.call.arg_count; ++i) {
-                normalize_expr(expr->as.call.args[i]);
+                normalize_expr(expr->as.call.args[i], pointer_size);
             }
             if (expr->as.call.has_explicit_type_args) {
                 for (i = 0; i < expr->as.call.explicit_type_arg_count; ++i) {
-                    normalize_type_ref(expr->as.call.explicit_type_args[i]);
+                    normalize_type_ref(expr->as.call.explicit_type_args[i], pointer_size);
                 }
             }
             break;
         case FENG_EXPR_MEMBER:
-            normalize_expr(expr->as.member.object);
+            normalize_expr(expr->as.member.object, pointer_size);
             break;
         case FENG_EXPR_INDEX:
-            normalize_expr(expr->as.index.object);
-            normalize_expr(expr->as.index.index);
+            normalize_expr(expr->as.index.object, pointer_size);
+            normalize_expr(expr->as.index.index, pointer_size);
             break;
         case FENG_EXPR_UNARY:
-            normalize_expr(expr->as.unary.operand);
+            normalize_expr(expr->as.unary.operand, pointer_size);
             break;
         case FENG_EXPR_BINARY:
-            normalize_expr(expr->as.binary.left);
-            normalize_expr(expr->as.binary.right);
+            normalize_expr(expr->as.binary.left, pointer_size);
+            normalize_expr(expr->as.binary.right, pointer_size);
             break;
         case FENG_EXPR_LAMBDA:
             for (i = 0; i < expr->as.lambda.param_count; ++i) {
-                normalize_type_ref(expr->as.lambda.params[i].type);
+                normalize_type_ref(expr->as.lambda.params[i].type, pointer_size);
             }
             if (expr->as.lambda.is_block_body) {
-                normalize_block(expr->as.lambda.body_block);
+                normalize_block(expr->as.lambda.body_block, pointer_size);
             } else {
-                normalize_expr(expr->as.lambda.body);
+                normalize_expr(expr->as.lambda.body, pointer_size);
             }
             break;
         case FENG_EXPR_CAST:
-            normalize_type_ref(expr->as.cast.type);
-            normalize_expr(expr->as.cast.value);
+            normalize_type_ref(expr->as.cast.type, pointer_size);
+            normalize_expr(expr->as.cast.value, pointer_size);
             break;
         case FENG_EXPR_IF:
-            normalize_expr(expr->as.if_expr.condition);
-            normalize_block(expr->as.if_expr.then_block);
-            normalize_block(expr->as.if_expr.else_block);
+            normalize_expr(expr->as.if_expr.condition, pointer_size);
+            normalize_block(expr->as.if_expr.then_block, pointer_size);
+            normalize_block(expr->as.if_expr.else_block, pointer_size);
             break;
         case FENG_EXPR_MATCH:
-            normalize_expr(expr->as.match_expr.target);
+            normalize_expr(expr->as.match_expr.target, pointer_size);
             for (i = 0; i < expr->as.match_expr.branch_count; ++i) {
                 FengMatchBranch *branch = &expr->as.match_expr.branches[i];
                 size_t j;
                 for (j = 0; j < branch->label_count; ++j) {
                     if (branch->labels[j].kind == FENG_MATCH_LABEL_TYPE) {
-                        normalize_type_ref(branch->labels[j].type);
+                        normalize_type_ref(branch->labels[j].type, pointer_size);
                     } else if (branch->labels[j].kind == FENG_MATCH_LABEL_VALUE) {
-                        normalize_expr(branch->labels[j].value);
+                        normalize_expr(branch->labels[j].value, pointer_size);
                     }
                 }
-                normalize_block(branch->body);
+                normalize_block(branch->body, pointer_size);
             }
-            normalize_block(expr->as.match_expr.else_block);
+            normalize_block(expr->as.match_expr.else_block, pointer_size);
             break;
         case FENG_EXPR_MATCH_OP:
-            normalize_expr(expr->as.match_op.target);
+            normalize_expr(expr->as.match_op.target, pointer_size);
             for (i = 0; i < expr->as.match_op.label_count; ++i) {
                 if (expr->as.match_op.labels[i].kind == FENG_MATCH_LABEL_TYPE) {
-                    normalize_type_ref(expr->as.match_op.labels[i].type);
+                    normalize_type_ref(expr->as.match_op.labels[i].type, pointer_size);
                 } else if (expr->as.match_op.labels[i].kind == FENG_MATCH_LABEL_VALUE) {
-                    normalize_expr(expr->as.match_op.labels[i].value);
+                    normalize_expr(expr->as.match_op.labels[i].value, pointer_size);
                 }
             }
             break;
         case FENG_EXPR_TRY:
-            normalize_expr(expr->as.try_expr.body);
+            normalize_expr(expr->as.try_expr.body, pointer_size);
             for (i = 0; i < expr->as.try_expr.clause_count; ++i) {
-                normalize_type_ref(expr->as.try_expr.clauses[i].type);
-                normalize_block(expr->as.try_expr.clauses[i].body);
+                normalize_type_ref(expr->as.try_expr.clauses[i].type, pointer_size);
+                normalize_block(expr->as.try_expr.clauses[i].body, pointer_size);
             }
             break;
         case FENG_EXPR_ARRAY_NEW:
-            normalize_type_ref(expr->as.array_new.element_type);
-            normalize_expr(expr->as.array_new.size);
+            normalize_type_ref(expr->as.array_new.element_type, pointer_size);
+            normalize_expr(expr->as.array_new.size, pointer_size);
             break;
         default:
             break;
     }
 }
 
-static void normalize_stmt(FengStmt *stmt) {
+static void normalize_stmt(FengStmt *stmt, size_t pointer_size) {
     size_t i;
 
     if (stmt == NULL) {
@@ -25203,68 +25240,68 @@ static void normalize_stmt(FengStmt *stmt) {
     }
     switch (stmt->kind) {
         case FENG_STMT_BLOCK:
-            normalize_block(stmt->as.block);
+            normalize_block(stmt->as.block, pointer_size);
             break;
         case FENG_STMT_BINDING:
-            normalize_type_ref(stmt->as.binding.type);
-            normalize_expr(stmt->as.binding.initializer);
+            normalize_type_ref(stmt->as.binding.type, pointer_size);
+            normalize_expr(stmt->as.binding.initializer, pointer_size);
             break;
         case FENG_STMT_ASSIGN:
-            normalize_expr(stmt->as.assign.target);
-            normalize_expr(stmt->as.assign.value);
+            normalize_expr(stmt->as.assign.target, pointer_size);
+            normalize_expr(stmt->as.assign.value, pointer_size);
             break;
         case FENG_STMT_EXPR:
-            normalize_expr(stmt->as.expr);
+            normalize_expr(stmt->as.expr, pointer_size);
             break;
         case FENG_STMT_IF:
             for (i = 0; i < stmt->as.if_stmt.clause_count; ++i) {
-                normalize_expr(stmt->as.if_stmt.clauses[i].condition);
-                normalize_block(stmt->as.if_stmt.clauses[i].block);
+                normalize_expr(stmt->as.if_stmt.clauses[i].condition, pointer_size);
+                normalize_block(stmt->as.if_stmt.clauses[i].block, pointer_size);
             }
-            normalize_block(stmt->as.if_stmt.else_block);
+            normalize_block(stmt->as.if_stmt.else_block, pointer_size);
             break;
         case FENG_STMT_MATCH:
-            normalize_expr(stmt->as.match_stmt.target);
+            normalize_expr(stmt->as.match_stmt.target, pointer_size);
             for (i = 0; i < stmt->as.match_stmt.branch_count; ++i) {
                 FengMatchBranch *branch = &stmt->as.match_stmt.branches[i];
                 size_t j;
                 for (j = 0; j < branch->label_count; ++j) {
                     if (branch->labels[j].kind == FENG_MATCH_LABEL_TYPE) {
-                        normalize_type_ref(branch->labels[j].type);
+                        normalize_type_ref(branch->labels[j].type, pointer_size);
                     } else if (branch->labels[j].kind == FENG_MATCH_LABEL_VALUE) {
-                        normalize_expr(branch->labels[j].value);
+                        normalize_expr(branch->labels[j].value, pointer_size);
                     }
                 }
-                normalize_block(branch->body);
+                normalize_block(branch->body, pointer_size);
             }
-            normalize_block(stmt->as.match_stmt.else_block);
+            normalize_block(stmt->as.match_stmt.else_block, pointer_size);
             break;
         case FENG_STMT_WHILE:
-            normalize_expr(stmt->as.while_stmt.condition);
-            normalize_block(stmt->as.while_stmt.body);
+            normalize_expr(stmt->as.while_stmt.condition, pointer_size);
+            normalize_block(stmt->as.while_stmt.body, pointer_size);
             break;
         case FENG_STMT_FOR:
             if (stmt->as.for_stmt.is_for_in) {
-                normalize_type_ref(stmt->as.for_stmt.iter_binding.type);
-                normalize_expr(stmt->as.for_stmt.iter_expr);
+                normalize_type_ref(stmt->as.for_stmt.iter_binding.type, pointer_size);
+                normalize_expr(stmt->as.for_stmt.iter_expr, pointer_size);
             } else {
-                normalize_stmt(stmt->as.for_stmt.init);
-                normalize_expr(stmt->as.for_stmt.condition);
-                normalize_stmt(stmt->as.for_stmt.update);
+                normalize_stmt(stmt->as.for_stmt.init, pointer_size);
+                normalize_expr(stmt->as.for_stmt.condition, pointer_size);
+                normalize_stmt(stmt->as.for_stmt.update, pointer_size);
             }
-            normalize_block(stmt->as.for_stmt.body);
+            normalize_block(stmt->as.for_stmt.body, pointer_size);
             break;
         case FENG_STMT_RETURN:
-            normalize_expr(stmt->as.return_value);
+            normalize_expr(stmt->as.return_value, pointer_size);
             break;
         case FENG_STMT_THROW:
-            normalize_expr(stmt->as.throw_value);
+            normalize_expr(stmt->as.throw_value, pointer_size);
             break;
         case FENG_STMT_DEFER:
-            normalize_block(stmt->as.defer_block);
+            normalize_block(stmt->as.defer_block, pointer_size);
             break;
         case FENG_STMT_TRY:
-            normalize_expr(stmt->as.expr);
+            normalize_expr(stmt->as.expr, pointer_size);
             break;
         case FENG_STMT_BREAK:
         case FENG_STMT_CONTINUE:
@@ -25272,7 +25309,7 @@ static void normalize_stmt(FengStmt *stmt) {
     }
 }
 
-static void normalize_decl(FengDecl *decl) {
+static void normalize_decl(FengDecl *decl, size_t pointer_size) {
     size_t i;
 
     if (decl == NULL) {
@@ -25280,16 +25317,16 @@ static void normalize_decl(FengDecl *decl) {
     }
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
-            normalize_type_ref(decl->as.binding.type);
-            normalize_expr(decl->as.binding.initializer);
+            normalize_type_ref(decl->as.binding.type, pointer_size);
+            normalize_expr(decl->as.binding.initializer, pointer_size);
             break;
         case FENG_DECL_FUNCTION:
-            normalize_callable_signature(&decl->as.function_decl);
-            normalize_block(decl->as.function_decl.body);
+            normalize_callable_signature(&decl->as.function_decl, pointer_size);
+            normalize_block(decl->as.function_decl.body, pointer_size);
             break;
         case FENG_DECL_TYPE:
             for (i = 0; i < decl->as.type_decl.type_param_count; ++i) {
-                normalize_type_ref(decl->as.type_decl.type_params[i].constraint);
+                normalize_type_ref(decl->as.type_decl.type_params[i].constraint, pointer_size);
             }
             for (i = 0; i < decl->as.type_decl.member_count; ++i) {
                 FengTypeMember *member = decl->as.type_decl.members[i];
@@ -25298,19 +25335,19 @@ static void normalize_decl(FengDecl *decl) {
                 }
                 switch (member->kind) {
                     case FENG_TYPE_MEMBER_FIELD:
-                        normalize_type_ref(member->as.field.type);
-                        normalize_expr(member->as.field.initializer);
+                        normalize_type_ref(member->as.field.type, pointer_size);
+                        normalize_expr(member->as.field.initializer, pointer_size);
                         break;
                     case FENG_TYPE_MEMBER_METHOD:
                     case FENG_TYPE_MEMBER_CONSTRUCTOR:
                     case FENG_TYPE_MEMBER_FINALIZER:
-                        normalize_callable_signature(&member->as.callable);
-                        normalize_block(member->as.callable.body);
+                        normalize_callable_signature(&member->as.callable, pointer_size);
+                        normalize_block(member->as.callable.body, pointer_size);
                         break;
                 }
             }
             for (i = 0; i < decl->as.type_decl.declared_spec_count; ++i) {
-                normalize_type_ref(decl->as.type_decl.declared_specs[i]);
+                normalize_type_ref(decl->as.type_decl.declared_specs[i], pointer_size);
             }
             break;
         case FENG_DECL_ENUM:
@@ -25318,10 +25355,10 @@ static void normalize_decl(FengDecl *decl) {
             break;
         case FENG_DECL_SPEC:
             for (i = 0; i < decl->as.spec_decl.type_param_count; ++i) {
-                normalize_type_ref(decl->as.spec_decl.type_params[i].constraint);
+                normalize_type_ref(decl->as.spec_decl.type_params[i].constraint, pointer_size);
             }
             for (i = 0; i < decl->as.spec_decl.parent_spec_count; ++i) {
-                normalize_type_ref(decl->as.spec_decl.parent_specs[i]);
+                normalize_type_ref(decl->as.spec_decl.parent_specs[i], pointer_size);
             }
             switch (decl->as.spec_decl.form) {
                 case FENG_SPEC_FORM_OBJECT:
@@ -25332,35 +25369,35 @@ static void normalize_decl(FengDecl *decl) {
                         }
                         switch (member->kind) {
                             case FENG_TYPE_MEMBER_FIELD:
-                                normalize_type_ref(member->as.field.type);
-                                normalize_expr(member->as.field.initializer);
+                                normalize_type_ref(member->as.field.type, pointer_size);
+                                normalize_expr(member->as.field.initializer, pointer_size);
                                 break;
                             case FENG_TYPE_MEMBER_METHOD:
                             case FENG_TYPE_MEMBER_CONSTRUCTOR:
                             case FENG_TYPE_MEMBER_FINALIZER:
-                                normalize_callable_signature(&member->as.callable);
-                                normalize_block(member->as.callable.body);
+                                normalize_callable_signature(&member->as.callable, pointer_size);
+                                normalize_block(member->as.callable.body, pointer_size);
                                 break;
                         }
                     }
                     break;
                 case FENG_SPEC_FORM_CALLABLE:
                     for (i = 0; i < decl->as.spec_decl.as.callable.param_count; ++i) {
-                        normalize_type_ref(decl->as.spec_decl.as.callable.params[i].type);
+                        normalize_type_ref(decl->as.spec_decl.as.callable.params[i].type, pointer_size);
                     }
-                    normalize_type_ref(decl->as.spec_decl.as.callable.return_type);
+                    normalize_type_ref(decl->as.spec_decl.as.callable.return_type, pointer_size);
                     break;
                 case FENG_SPEC_FORM_UNION:
                     for (i = 0; i < decl->as.spec_decl.as.union_form.member_count; ++i) {
-                        normalize_type_ref(decl->as.spec_decl.as.union_form.members[i]);
+                        normalize_type_ref(decl->as.spec_decl.as.union_form.members[i], pointer_size);
                     }
                     break;
             }
             break;
         case FENG_DECL_FIT:
-            normalize_type_ref(decl->as.fit_decl.target);
+            normalize_type_ref(decl->as.fit_decl.target, pointer_size);
             for (i = 0; i < decl->as.fit_decl.spec_count; ++i) {
-                normalize_type_ref(decl->as.fit_decl.specs[i]);
+                normalize_type_ref(decl->as.fit_decl.specs[i], pointer_size);
             }
             for (i = 0; i < decl->as.fit_decl.member_count; ++i) {
                 FengTypeMember *member = decl->as.fit_decl.members[i];
@@ -25369,14 +25406,14 @@ static void normalize_decl(FengDecl *decl) {
                 }
                 switch (member->kind) {
                     case FENG_TYPE_MEMBER_FIELD:
-                        normalize_type_ref(member->as.field.type);
-                        normalize_expr(member->as.field.initializer);
+                        normalize_type_ref(member->as.field.type, pointer_size);
+                        normalize_expr(member->as.field.initializer, pointer_size);
                         break;
                     case FENG_TYPE_MEMBER_METHOD:
                     case FENG_TYPE_MEMBER_CONSTRUCTOR:
                     case FENG_TYPE_MEMBER_FINALIZER:
-                        normalize_callable_signature(&member->as.callable);
-                        normalize_block(member->as.callable.body);
+                        normalize_callable_signature(&member->as.callable, pointer_size);
+                        normalize_block(member->as.callable.body, pointer_size);
                         break;
                 }
             }
@@ -25384,14 +25421,14 @@ static void normalize_decl(FengDecl *decl) {
     }
 }
 
-static void feng_program_normalize_builtin_aliases(FengProgram *program) {
+static void feng_program_normalize_builtin_aliases(FengProgram *program, size_t pointer_size) {
     size_t i;
 
     if (program == NULL) {
         return;
     }
     for (i = 0; i < program->declaration_count; ++i) {
-        normalize_decl(program->declarations[i]);
+        normalize_decl(program->declarations[i], pointer_size);
     }
 }
 
@@ -25414,6 +25451,13 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
     FengCompileTarget target = options != NULL ? options->target : FENG_COMPILE_TARGET_BIN;
     const FengSemanticImportedModuleQuery *imported_query =
         options != NULL ? options->imported_modules : NULL;
+    /* pointer_size drives platform-dependent alias resolution (int → i32/i64).
+     * Caller fills options->pointer_size from sizeof(void *); a zero value
+     * defaults to the host's sizeof(void *).  See §6.4 and Task 3 in
+     * dev/feng-scalar-alias-optimize.md. */
+    size_t pointer_size = (options != NULL && options->pointer_size != 0U)
+                              ? options->pointer_size
+                              : sizeof(void *);
 
     memset(&callable_return_cache, 0, sizeof(callable_return_cache));
     memset(&callable_exception_escape_cache, 0, sizeof(callable_exception_escape_cache));
@@ -25423,13 +25467,14 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
         ok = false;
         goto finish;
     }
+    analysis->pointer_size = pointer_size;
 
     /* Phase 0: normalize builtin alias names in all type_ref nodes across
      * every program.  After this pass, only canonical width-explicit names
      * (i32, i64, u8, f32, f64, ...) appear in the AST; downstream phases
      * need not handle aliases.  See dev/feng-scalar-alias-optimize.md §6. */
     for (program_index = 0U; program_index < program_count; ++program_index) {
-        feng_program_normalize_builtin_aliases((FengProgram *)programs[program_index]);
+        feng_program_normalize_builtin_aliases((FengProgram *)programs[program_index], pointer_size);
     }
 
     for (program_index = 0U; program_index < program_count && ok; ++program_index) {
@@ -25661,6 +25706,7 @@ bool feng_semantic_analyze(const FengProgram *const *programs,
 
     memset(&options, 0, sizeof(options));
     options.target = target;
+    options.pointer_size = sizeof(void *);
     return feng_semantic_analyze_with_options(programs,
                                               program_count,
                                               &options,
