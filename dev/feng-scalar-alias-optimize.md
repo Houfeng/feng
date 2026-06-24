@@ -232,10 +232,10 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ### Task 3：移除 `long` 别名
 
-- [ ] 从集中别名表中移除 `long` → `i64` 条目
 - [ ] 迁移标准库（`std/`，约 639 处）中使用 `long` 的代码为 `i64`
 - [ ] 迁移兼容性测试（`fcts/`，约 23 处）中使用 `long` 的代码为 `i64`
 - [ ] 迁移编译器测试（`test/`，3 处 `.ff` 文件）中使用 `long` 的代码为 `i64`
+- [ ] 从集中别名表中移除 `long` → `i64` 条目
 - [ ] 全量回归测试
 
 ### Task 4：`int` 改为平台相关别名
