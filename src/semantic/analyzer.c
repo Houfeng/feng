@@ -2232,9 +2232,11 @@ static const char *canonical_builtin_type_name(FengSlice name, size_t pointer_si
     /* Canonical (width-explicit) names per docs/feng-builtin-type.md §2 alias table.
      * Aliases collapse to their canonical width-explicit spelling for type identity checks.
      * `pointer_size` drives platform-dependent alias resolution (e.g. `int`, `uint`).
-     * Task 3: infrastructure only — `int` stays fixed at i32 regardless of pointer_size;
-     * Task 6 will switch `int` to platform-dependent (32-bit → i32, 64-bit → i64). */
-    (void)pointer_size; /* Reserved for Task 6 platform-dependent mapping. */
+     * Task 4: `uint` maps to u32 (32-bit) or u64 (64-bit) based on pointer_size.
+     * Task 6 (pending): `int` will switch to platform-dependent (32-bit → i32, 64-bit → i64). */
+    if (slice_equals_cstr(name, "uint")) {
+        return pointer_size >= 8U ? "u64" : "u32";
+    }
     if (slice_equals_cstr(name, "int") || slice_equals_cstr(name, "i32")) {
         return "i32";
     }

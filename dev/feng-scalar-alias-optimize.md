@@ -248,10 +248,10 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 > `uint` 是全新别名，无现有代码依赖，正好验证 Task 3 的平台位宽映射是否正确。
 
-- [ ] 更新 `docs/feng-language.md`：别名表新增 `uint`（平台相关说明）
-- [ ] 更新 `docs/feng-builtin-type.md`：别名表与映射规则新增 `uint`
-- [ ] 集中别名表新增 `uint` → `u32`（32 位）或 `u64`（64 位）；仅需修改 `canonical_builtin_type_name()`，codegen 等下游阶段无需变更
-- [ ] 全量回归测试
+- [x] 更新 `docs/feng-language.md`：别名表新增 `uint`（平台相关说明）
+- [x] 更新 `docs/feng-builtin-type.md`：别名表与映射规则新增 `uint`
+- [x] 集中别名表新增 `uint` → `u32`（32 位）或 `u64`（64 位）；仅需修改 `canonical_builtin_type_name()`，codegen 等下游阶段无需变更
+- [x] 全量回归测试
 
 ### Task 5：迁移现有 `int` 用法为 `i32`（纯代码迁移，无行为变更）
 
