@@ -54,7 +54,7 @@ open type MemoryInfo {
    * Returns resident set size in bytes.
    */
   open static func residentBytes(): u64 {
-    let rss: u64[!] = u64[:(long)1];
+    let rss: u64[!] = u64[:(i64)1];
     let rssRc = uv_resident_set_memory(&rss);
     if rssRc != 0 {
       throw "platform/memory-info/resident";

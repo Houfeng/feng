@@ -604,7 +604,7 @@ open func test_generic() {
     });
 
     test("generic array creation", () {
-      let pairs: GPair<int, int>[!] = GPair<int, int>[: (long)2];
+      let pairs: GPair<int, int>[!] = GPair<int, int>[: (i64)2];
       pairs[0].left = 10;
       pairs[0].right = 20;
       assert(pairs[0].left == 10 && pairs[0].right == 20, "generic array creation");

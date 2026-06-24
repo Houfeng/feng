@@ -210,39 +210,39 @@ func i32_parse_error_tests() {
   check(caught, "i32.parse/invalid-throws");
 }
 
-/* ---------- i64 (long) ---------- */
+/* ---------- i64 (i64) ---------- */
 
 func i64_toString_tests() {
-  var v0: long = (long)0;
+  var v0: i64 = (i64)0;
   check(v0.toString() == "0", "i64.toString/zero");
-  var v1: long = (long)9223372036854775807;
+  var v1: i64 = (i64)9223372036854775807;
   check(v1.toString() == "9223372036854775807", "i64.toString/max");
-  var v2: long = (long)-1;
+  var v2: i64 = (i64)-1;
   check(v2.toString() == "-1", "i64.toString/negative");
-  var v3: long = (long)123456789;
+  var v3: i64 = (i64)123456789;
   check(v3.toString() == "123456789", "i64.toString/positive");
 }
 
 func i64_parse_tests() {
-  check(long.parse("0") == (long)0, "i64.parse/zero");
-  check(long.parse("9223372036854775807") == (long)9223372036854775807, "i64.parse/max");
-  check(long.parse("+100") == (long)100, "i64.parse/positive-sign");
-  check(long.parse("-1") == (long)-1, "i64.parse/negative");
+  check(i64.parse("0") == (i64)0, "i64.parse/zero");
+  check(i64.parse("9223372036854775807") == (i64)9223372036854775807, "i64.parse/max");
+  check(i64.parse("+100") == (i64)100, "i64.parse/positive-sign");
+  check(i64.parse("-1") == (i64)-1, "i64.parse/negative");
 }
 
 func i64_parse_error_tests() {
   var caught: bool = false;
 
   caught = false;
-  let r1 = try long.parse("") catch ex: string { caught = true; (long)0; };
+  let r1 = try i64.parse("") catch ex: string { caught = true; (i64)0; };
   check(caught, "i64.parse/empty-throws");
 
   caught = false;
-  let r2 = try long.parse("9223372036854775808") catch ex: string { caught = true; (long)0; };
+  let r2 = try i64.parse("9223372036854775808") catch ex: string { caught = true; (i64)0; };
   check(caught, "i64.parse/overflow-throws");
 
   caught = false;
-  let r3 = try long.parse("abc") catch ex: string { caught = true; (long)0; };
+  let r3 = try i64.parse("abc") catch ex: string { caught = true; (i64)0; };
   check(caught, "i64.parse/invalid-throws");
 }
 

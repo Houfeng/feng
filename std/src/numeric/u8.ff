@@ -17,15 +17,15 @@ open fit u8: Display {
       return "0";
     }
     var v: i32 = (i32)self;
-    let digits: byte[!] = byte[:(long)3];
+    let digits: byte[!] = byte[:(i64)3];
     var pos: i32 = 2;
     while v > 0 {
       digits[pos] = (byte)((v % 10) + 48);
       v = v / 10;
       pos = pos - 1;
     }
-    let start = (long)(pos + 1);
-    let result: byte[] = ((byte[])digits).clone(start, (long)3);
+    let start = (i64)(pos + 1);
+    let result: byte[] = ((byte[])digits).clone(start, (i64)3);
     return string.fromUtf8Bytes(result);
   }
 
@@ -39,29 +39,29 @@ open fit u8: Display {
   open static func parse(text: string): byte {
     let bytes = text.toBytes();
     let len = bytes.length();
-    if len == (long)0 {
+    if len == (i64)0 {
       throw "Invalid u8 string: empty";
     }
-    var pos: long = 0;
-    let first = bytes[(long)0];
+    var pos: i64 = 0;
+    let first = bytes[(i64)0];
     if first == (byte)45 {
       throw "Invalid u8 string: negative not allowed";
     } else if first == (byte)43 {
-      pos = (long)1;
+      pos = (i64)1;
     }
     if pos == len {
       throw "Invalid u8 string: no digits";
     }
-    var result: long = 0;
+    var result: i64 = 0;
     while pos < len {
       let b = bytes[pos];
       if b < (byte)48 || b > (byte)57 {
         throw "Invalid u8 string: invalid character";
       }
-      result = result * (long)10 + (long)(b - (byte)48);
-      pos = pos + (long)1;
+      result = result * (i64)10 + (i64)(b - (byte)48);
+      pos = pos + (i64)1;
     }
-    if result > (long)255 {
+    if result > (i64)255 {
       throw "Invalid u8 string: overflow";
     }
     return (byte)result;

@@ -10,7 +10,7 @@ open func test_array() {
   describe("array", () {
     test("array literal", () {
       let nums = [1, 2, 3];
-      assert(nums.length() == (long)3, "array literal");
+      assert(nums.length() == (i64)3, "array literal");
     });
 
     test("array index access", () {
@@ -25,13 +25,13 @@ open func test_array() {
     });
 
     test("array creation expression Type[:n]", () {
-      let buf: int[!] = int[: (long)5];
-      assert(buf.length() == (long)5 && buf[0] == 0, "array creation expression Type[:n]");
+      let buf: int[!] = int[: (i64)5];
+      assert(buf.length() == (i64)5 && buf[0] == 0, "array creation expression Type[:n]");
     });
 
     test("empty array", () {
       let empty: int[] = [];
-      assert(empty.length() == (long)0, "empty array");
+      assert(empty.length() == (i64)0, "empty array");
     });
 
     test("multi-dimensional array", () {
@@ -81,7 +81,7 @@ open func test_array() {
 
     test("array default zero value (empty)", () {
       let default_arr: int[];
-      assert(default_arr.length() == (long)0, "array default zero value (empty)");
+      assert(default_arr.length() == (i64)0, "array default zero value (empty)");
     });
   });
 }

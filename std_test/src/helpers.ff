@@ -4,7 +4,7 @@ import std.test;
 import std.text;
 
 @cdecl("libc")
-extern func write(fd: int, buf: string*, count: long): long;
+extern func write(fd: int, buf: string*, count: i64): i64;
 
 @cdecl("libc")
 extern func pipe(fds: int*): int;
@@ -35,7 +35,7 @@ open func check(cond: bool, name: string) {
 }
 
 open func replaceStdin(text: string) {
-  let fds: int[!] = int[: (long)2];
+  let fds: int[!] = int[: (i64)2];
 
   if pipe(&fds) != 0 {
     failNow("harness/stdin-pipe");

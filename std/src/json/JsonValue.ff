@@ -200,17 +200,17 @@ open type JsonObject: Display {
    */
   func toJsonString(): string {
     let entries = self.payload.entries();
-    if entries.length() == (long)0 {
+    if entries.length() == (i64)0 {
       return "{}";
     }
     let len = entries.length();
     let parts: string[!] = string[:len];
-    var idx: long = 0;
+    var idx: i64 = 0;
     for let entry in entries {
       let key = entry.item1.toJsonString();
       let val = Json.stringify(entry.item2);
       parts[idx] = key + ":" + val;
-      idx += (long)1;
+      idx += (i64)1;
     }
     return "{" + string.join(",", (string[])parts) + "}";
   }

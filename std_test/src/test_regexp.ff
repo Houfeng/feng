@@ -43,21 +43,21 @@ func regexp_test_case_insensitive() {
 func regexp_test_find() {
   let re1 = RegExp("\\d+");
   let r1 = re1.find("abc123def");
-  check(r1.length() == (long)1, "regexp/find-found");
+  check(r1.length() == (i64)1, "regexp/find-found");
   check(r1[0].text == "123", "regexp/find-text");
-  check(r1[0].start == (long)3, "regexp/find-start");
-  check(r1[0].end == (long)6, "regexp/find-end");
+  check(r1[0].start == (i64)3, "regexp/find-start");
+  check(r1[0].end == (i64)6, "regexp/find-end");
   re1.destroy();
 
   let re2 = RegExp("\\d+");
   let r2 = re2.find("abcdef");
-  check(r2.length() == (long)0, "regexp/find-none");
+  check(r2.length() == (i64)0, "regexp/find-none");
   re2.destroy();
 
   let re3 = RegExp("(\\w+)@(\\w+)");
   let r3 = re3.find("user@host");
-  check(r3.length() == (long)1, "regexp/find-groups-found");
-  check(r3[0].groups.length() == (long)3, "regexp/find-groups-count");
+  check(r3.length() == (i64)1, "regexp/find-groups-found");
+  check(r3[0].groups.length() == (i64)3, "regexp/find-groups-count");
   check(r3[0].groups[0] == "user@host", "regexp/find-groups-0");
   check(r3[0].groups[1] == "user", "regexp/find-groups-1");
   check(r3[0].groups[2] == "host", "regexp/find-groups-2");
@@ -71,7 +71,7 @@ func regexp_test_find() {
 func regexp_test_findAll() {
   let re1 = RegExp("\\d+");
   let r1 = re1.findAll("a1b22c333");
-  check(r1.length() == (long)3, "regexp/findAll-count");
+  check(r1.length() == (i64)3, "regexp/findAll-count");
   check(r1[0].text == "1", "regexp/findAll-first");
   check(r1[1].text == "22", "regexp/findAll-second");
   check(r1[2].text == "333", "regexp/findAll-third");
@@ -79,7 +79,7 @@ func regexp_test_findAll() {
 
   let re2 = RegExp("\\d+");
   let r2 = re2.findAll("abc");
-  check(r2.length() == (long)0, "regexp/findAll-none");
+  check(r2.length() == (i64)0, "regexp/findAll-none");
   re2.destroy();
 
   writeLine("__REGEXP_FIND_ALL__=ok");
@@ -90,7 +90,7 @@ func regexp_test_findAll() {
 func regexp_test_split() {
   let re1 = RegExp("[,;]");
   let r1 = re1.split("a,b;c");
-  check(r1.length() == (long)3, "regexp/split-count");
+  check(r1.length() == (i64)3, "regexp/split-count");
   check(r1[0] == "a", "regexp/split-first");
   check(r1[1] == "b", "regexp/split-mid");
   check(r1[2] == "c", "regexp/split-last");
@@ -98,14 +98,14 @@ func regexp_test_split() {
 
   let re2 = RegExp("\\s+");
   let r2 = re2.split("hello  world");
-  check(r2.length() == (long)2, "regexp/split-ws-count");
+  check(r2.length() == (i64)2, "regexp/split-ws-count");
   check(r2[0] == "hello", "regexp/split-ws-first");
   check(r2[1] == "world", "regexp/split-ws-last");
   re2.destroy();
 
   let re3 = RegExp("\\d+");
   let r3 = re3.split("abc");
-  check(r3.length() == (long)1, "regexp/split-no-match");
+  check(r3.length() == (i64)1, "regexp/split-no-match");
   check(r3[0] == "abc", "regexp/split-no-match-val");
   re3.destroy();
 
@@ -132,19 +132,19 @@ func regexp_test_replace() {
 func regexp_test_unicode() {
   let re1 = RegExp("\\p{L}+");
   let r1 = re1.find("abc123");
-  check(r1.length() == (long)1, "regexp/unicode-pL-found");
+  check(r1.length() == (i64)1, "regexp/unicode-pL-found");
   check(r1[0].text == "abc", "regexp/unicode-pL");
   re1.destroy();
 
   let re2 = RegExp("中.");
   let r2 = re2.find("中文abc");
-  check(r2.length() == (long)1, "regexp/unicode-cjk-found");
+  check(r2.length() == (i64)1, "regexp/unicode-cjk-found");
   check(r2[0].text == "中文", "regexp/unicode-cjk");
   re2.destroy();
 
   let re3 = RegExp("\\p{Han}+");
   let r3 = re3.findAll("hello中文world你好");
-  check(r3.length() == (long)2, "regexp/unicode-han-count");
+  check(r3.length() == (i64)2, "regexp/unicode-han-count");
   check(r3[0].text == "中文", "regexp/unicode-han-first");
   check(r3[1].text == "你好", "regexp/unicode-han-second");
   re3.destroy();
@@ -172,7 +172,7 @@ func regexp_test_string_methods() {
   check("a1b2c3".replacePattern("\\d+", "X") == "aXbXcX", "regexp/string-replacePattern");
 
   let parts = "a,b;c".splitPattern("[,;]");
-  check(parts.length() == (long)3, "regexp/string-splitPattern-count");
+  check(parts.length() == (i64)3, "regexp/string-splitPattern-count");
   check(parts[0] == "a", "regexp/string-splitPattern-first");
   check(parts[1] == "b", "regexp/string-splitPattern-mid");
   check(parts[2] == "c", "regexp/string-splitPattern-last");
@@ -187,9 +187,9 @@ func regexp_test_multiline() {
   check(re.test("world\nhello") == true, "regexp/multiline-test");
   check(re.isMatch("world\nhello") == false, "regexp/multiline-isMatch-false");
   let r = re.find("first\nhello there");
-  check(r.length() == (long)1, "regexp/multiline-find-found");
+  check(r.length() == (i64)1, "regexp/multiline-find-found");
   check(r[0].text == "hello", "regexp/multiline-find-text");
-  check(r[0].start == (long)6, "regexp/multiline-find-start");
+  check(r[0].start == (i64)6, "regexp/multiline-find-start");
   re.destroy();
 
   writeLine("__REGEXP_MULTILINE__=ok");
@@ -215,13 +215,13 @@ func regexp_test_dotall() {
 func regexp_test_findAll_positions() {
   let re = RegExp("\\d+");
   let r = re.findAll("a1b22c333");
-  check(r.length() == (long)3, "regexp/findAll-pos-count");
-  check(r[0].start == (long)1, "regexp/findAll-pos-0-start");
-  check(r[0].end == (long)2, "regexp/findAll-pos-0-end");
-  check(r[1].start == (long)3, "regexp/findAll-pos-1-start");
-  check(r[1].end == (long)5, "regexp/findAll-pos-1-end");
-  check(r[2].start == (long)6, "regexp/findAll-pos-2-start");
-  check(r[2].end == (long)9, "regexp/findAll-pos-2-end");
+  check(r.length() == (i64)3, "regexp/findAll-pos-count");
+  check(r[0].start == (i64)1, "regexp/findAll-pos-0-start");
+  check(r[0].end == (i64)2, "regexp/findAll-pos-0-end");
+  check(r[1].start == (i64)3, "regexp/findAll-pos-1-start");
+  check(r[1].end == (i64)5, "regexp/findAll-pos-1-end");
+  check(r[2].start == (i64)6, "regexp/findAll-pos-2-start");
+  check(r[2].end == (i64)9, "regexp/findAll-pos-2-end");
   re.destroy();
 
   writeLine("__REGEXP_FINDALL_POS__=ok");
@@ -232,7 +232,7 @@ func regexp_test_findAll_positions() {
 func regexp_test_findAll_groups() {
   let re = RegExp("(\\w+)=(\\w+)");
   let r = re.findAll("a=1 b=2");
-  check(r.length() == (long)2, "regexp/findAll-groups-count");
+  check(r.length() == (i64)2, "regexp/findAll-groups-count");
   check(r[0].groups[1] == "a", "regexp/findAll-groups-0-1");
   check(r[0].groups[2] == "1", "regexp/findAll-groups-0-2");
   check(r[1].groups[1] == "b", "regexp/findAll-groups-1-1");
@@ -287,10 +287,10 @@ func regexp_test_empty_subject() {
 func regexp_test_find_utf8() {
   let re = RegExp("\\p{Han}+");
   let r = re.find("hello中文world");
-  check(r.length() == (long)1, "regexp/find-utf8-found");
+  check(r.length() == (i64)1, "regexp/find-utf8-found");
   check(r[0].text == "中文", "regexp/find-utf8-text");
-  check(r[0].start == (long)5, "regexp/find-utf8-start");
-  check(r[0].end == (long)11, "regexp/find-utf8-end");
+  check(r[0].start == (i64)5, "regexp/find-utf8-start");
+  check(r[0].end == (i64)11, "regexp/find-utf8-end");
   re.destroy();
 
   writeLine("__REGEXP_FIND_UTF8__=ok");
@@ -301,7 +301,7 @@ func regexp_test_find_utf8() {
 func regexp_test_split_edges() {
   let re = RegExp(",");
   let r1 = re.split(",a,b,");
-  check(r1.length() == (long)4, "regexp/split-leading-trailing-count");
+  check(r1.length() == (i64)4, "regexp/split-leading-trailing-count");
   check(r1[0] == "", "regexp/split-leading-empty");
   check(r1[1] == "a", "regexp/split-mid-a");
   check(r1[2] == "b", "regexp/split-mid-b");
@@ -320,7 +320,7 @@ func regexp_test_string_methods_edge() {
   check("".replacePattern("\\d+", "X") == "", "regexp/string-replacePattern-empty");
 
   let parts = "abc".splitPattern("xyz");
-  check(parts.length() == (long)1, "regexp/string-splitPattern-no-match-count");
+  check(parts.length() == (i64)1, "regexp/string-splitPattern-no-match-count");
   check(parts[0] == "abc", "regexp/string-splitPattern-no-match-val");
 
   writeLine("__REGEXP_STRING_METHODS_EDGE__=ok");
@@ -335,12 +335,12 @@ func regexp_test_edge_cases() {
 
   let re2 = RegExp("");
   let r2 = re2.findAll("abc");
-  check(r2.length() == (long)4, "regexp/empty-pattern-findAll");
+  check(r2.length() == (i64)4, "regexp/empty-pattern-findAll");
   re2.destroy();
 
   let re3 = RegExp("\\d+");
   let r3 = re3.split("");
-  check(r3.length() == (long)1, "regexp/split-empty-subject");
+  check(r3.length() == (i64)1, "regexp/split-empty-subject");
   check(r3[0] == "", "regexp/split-empty-subject-val");
   re3.destroy();
 

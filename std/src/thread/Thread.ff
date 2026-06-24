@@ -3,19 +3,19 @@ open module std.thread;
 open spec ThreadFn(): void;
 
 @runtime
-extern func feng_alloc(size: long): long;
+extern func feng_alloc(size: i64): i64;
 
 @runtime
-extern func feng_free(ptr: long): void;
+extern func feng_free(ptr: i64): void;
 
 @cdecl("feng_std_uv", "uv_thread_create")
-extern func uv_thread_create(tid: long*, entry: ThreadAbiEntry*, arg: long): int;
+extern func uv_thread_create(tid: i64*, entry: ThreadAbiEntry*, arg: i64): int;
 
 @cdecl("feng_std_uv", "uv_thread_join")
-extern func uv_thread_join(tid: long*): int;
+extern func uv_thread_join(tid: i64*): int;
 
 @cdecl("feng_std_uv", "uv_thread_self")
-extern func uv_thread_self(): long;
+extern func uv_thread_self(): i64;
 
 @cdecl("feng_std_uv", "uv_thread_getcpu")
 extern func uv_thread_getcpu(): int;
@@ -27,25 +27,25 @@ extern func usleep(usec: u32): int;
 extern func posix_sleep(seconds: u32): u32;
 
 @abi
-spec ThreadAbiEntry(arg: long): void;
+spec ThreadAbiEntry(arg: i64): void;
 
-seal var spawnLock: long = (long)0;
-seal var spawnCond: long = (long)0;
+seal var spawnLock: i64 = (i64)0;
+seal var spawnCond: i64 = (i64)0;
 seal var spawnFn: ThreadFn;
 seal var spawnReady: bool = false;
 
 seal func ensureSpawnInit(): void {
-  if spawnLock != (long)0 {
+  if spawnLock != (i64)0 {
     return;
   }
-  spawnLock = feng_alloc((long)64);
-  spawnCond = feng_alloc((long)48);
+  spawnLock = feng_alloc((i64)64);
+  spawnCond = feng_alloc((i64)48);
   uv_mutex_init(spawnLock);
   uv_cond_init(spawnCond);
 }
 
 @abi
-func threadTrampoline(arg: long): void {
+func threadTrampoline(arg: i64): void {
   let fn = spawnFn;
   spawnReady = true;
   uv_cond_signal(spawnCond);
@@ -57,10 +57,10 @@ func threadTrampoline(arg: long): void {
  */
 open type Thread {
 
-  seal var handle: long;
+  seal var handle: i64;
   seal var joined: bool;
 
-  seal func Thread(handle: long) {
+  seal func Thread(handle: i64) {
     self.handle = handle;
     self.joined = false;
   }
@@ -73,8 +73,8 @@ open type Thread {
     uv_mutex_lock(spawnLock);
     spawnFn = fn;
     spawnReady = false;
-    let tidBuf: long[!] = long[:(long)1];
-    let result = uv_thread_create(&tidBuf, &threadTrampoline, (long)0);
+    let tidBuf: i64[!] = i64[:(i64)1];
+    let result = uv_thread_create(&tidBuf, &threadTrampoline, (i64)0);
     if result != 0 {
       uv_mutex_unlock(spawnLock);
       throw "thread/spawn-failed";
@@ -89,7 +89,7 @@ open type Thread {
   /**
    * Returns the thread ID of the current thread.
    */
-  open static func currentId(): long {
+  open static func currentId(): i64 {
     return uv_thread_self();
   }
 
@@ -107,7 +107,7 @@ open type Thread {
     if self.joined {
       return;
     }
-    let tidBuf: long[!] = long[:(long)1];
+    let tidBuf: i64[!] = i64[:(i64)1];
     tidBuf[0] = self.handle;
     let result = uv_thread_join(&tidBuf);
     if result != 0 {

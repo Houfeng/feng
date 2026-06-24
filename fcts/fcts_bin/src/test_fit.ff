@@ -122,8 +122,8 @@ open func test_fit() {
     });
 
     test("fit builtin string methods (cross-module)", () {
-      assert("hello".length() == (long)5, "fit builtin string.length (cross-module)");
-      assert("hello".indexOf("ll") == (long)2, "fit builtin string.indexOf (cross-module)");
+      assert("hello".length() == (i64)5, "fit builtin string.length (cross-module)");
+      assert("hello".indexOf("ll") == (i64)2, "fit builtin string.indexOf (cross-module)");
     });
 
     test("fit builtin string.join (cross-module)", () {

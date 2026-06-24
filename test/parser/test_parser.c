@@ -288,7 +288,7 @@ static void test_runtime_annotation_on_extern_function(void) {
     const char *source =
         "module demo.main;\n"
         "@runtime\n"
-        "extern func feng_string_length(value: string): long;\n";
+        "extern func feng_string_length(value: string): i64;\n";
     FengProgram *program = NULL;
     FengParseError error;
 

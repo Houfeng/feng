@@ -12,17 +12,17 @@ seal type Pcre2MatchData {}
 
 @cdecl("feng_std_pcre2", "pcre2_compile_8")
 extern func pcre2_compile(
-  pattern: byte*, length: long, options: u32,
-  errorCode: int*, errorOffset: long*,
-  cContext: long
-): long;
+  pattern: byte*, length: i64, options: u32,
+  errorCode: int*, errorOffset: i64*,
+  cContext: i64
+): i64;
 
 @cdecl("feng_std_pcre2", "pcre2_code_free_8")
-extern func pcre2_code_free(code: long): void;
+extern func pcre2_code_free(code: i64): void;
 
 @cdecl("feng_std_pcre2", "pcre2_match_data_create_from_pattern_8")
 extern func pcre2_match_data_create_from_pattern(
-  code: long, gContext: long
+  code: i64, gContext: i64
 ): Pcre2MatchData*;
 
 @cdecl("feng_std_pcre2", "pcre2_match_data_free_8")
@@ -30,39 +30,39 @@ extern func pcre2_match_data_free(match_data: Pcre2MatchData*): void;
 
 @cdecl("feng_std_pcre2", "pcre2_match_8")
 extern func pcre2_match(
-  code: long, subject: byte*, length: long, startOffset: long,
-  options: u32, match_data: Pcre2MatchData*, mContext: long
+  code: i64, subject: byte*, length: i64, startOffset: i64,
+  options: u32, match_data: Pcre2MatchData*, mContext: i64
 ): int;
 
 @cdecl("feng_std_pcre2", "pcre2_get_ovector_pointer_8")
-extern func pcre2_get_ovector_pointer(match_data: Pcre2MatchData*): long*;
+extern func pcre2_get_ovector_pointer(match_data: Pcre2MatchData*): i64*;
 
 @cdecl("feng_std_pcre2", "pcre2_get_ovector_count_8")
 extern func pcre2_get_ovector_count(match_data: Pcre2MatchData*): u32;
 
 @cdecl("feng_std_pcre2", "pcre2_get_error_message_8")
-extern func pcre2_get_error_message(errorcode: int, buffer: byte*, buffer_size: long): int;
+extern func pcre2_get_error_message(errorcode: int, buffer: byte*, buffer_size: i64): int;
 
 @cdecl("feng_std_pcre2", "pcre2_substitute_8")
 extern func pcre2_substitute(
-  code: long, subject: byte*, length: long, startoffset: long,
-  options: u32, match_data: long, mcontext: long,
-  replacement: byte*, rlength: long,
-  outputbuffer: byte*, outlengthptr: long*
+  code: i64, subject: byte*, length: i64, startoffset: i64,
+  options: u32, match_data: i64, mcontext: i64,
+  replacement: byte*, rlength: i64,
+  outputbuffer: byte*, outlengthptr: i64*
 ): int;
 
 /* ---------- Runtime pointer primitives ---------- */
 
 @runtime
-extern func feng_pointer_get_scalar<T>(ptr: long*): T;
+extern func feng_pointer_get_scalar<T>(ptr: i64*): T;
 
 @runtime
-extern func feng_pointer_move(ptr: long*, offset: long): long*;
+extern func feng_pointer_move(ptr: i64*, offset: i64): i64*;
 
 /* ---------- Constants ---------- */
 
-/* PCRE2_UNSET on 64-bit: ~(size_t)0 = 0xFFFFFFFFFFFFFFFF, read as long = -1 */
-seal let PCRE2_UNSET: long = (long)-1;
+/* PCRE2_UNSET on 64-bit: ~(size_t)0 = 0xFFFFFFFFFFFFFFFF, read as i64 = -1 */
+seal let PCRE2_UNSET: i64 = (i64)-1;
 
 /* ---------- RegExpFlag ---------- */
 
@@ -114,12 +114,12 @@ open type Match {
   /**
    * The starting index of the match in the subject string.
    */
-  open let start: long;
+  open let start: i64;
 
   /**
    * The ending index of the match in the subject string.
    */
-  open let end: long;
+  open let end: i64;
 
   /**
    * An array of captured groups, where each group is a substring of the subject.
@@ -129,15 +129,15 @@ open type Match {
 
 /* ---------- ovector helpers ---------- */
 
-seal func ovectorStart(ovector: long*, index: u32): long {
-  return feng_pointer_get_scalar<long>(
-    feng_pointer_move(ovector, (long)index * (long)16)
+seal func ovectorStart(ovector: i64*, index: u32): i64 {
+  return feng_pointer_get_scalar<i64>(
+    feng_pointer_move(ovector, (i64)index * (i64)16)
   );
 }
 
-seal func ovectorEnd(ovector: long*, index: u32): long {
-  return feng_pointer_get_scalar<long>(
-    feng_pointer_move(ovector, (long)index * (long)16 + (long)8)
+seal func ovectorEnd(ovector: i64*, index: u32): i64 {
+  return feng_pointer_get_scalar<i64>(
+    feng_pointer_move(ovector, (i64)index * (i64)16 + (i64)8)
   );
 }
 
@@ -146,15 +146,15 @@ seal func ovectorEnd(ovector: long*, index: u32): long {
 seal func buildMatch(subject: string, md: Pcre2MatchData*): Match {
   let ovector = pcre2_get_ovector_pointer(md);
   let ovCount = pcre2_get_ovector_count(md);
-  let groupArr: string[!] = string[:(long)ovCount];
+  let groupArr: string[!] = string[:(i64)ovCount];
   var i: u32 = 0;
   while i < ovCount {
     let s = ovectorStart(ovector, i);
     let e = ovectorEnd(ovector, i);
     if s == PCRE2_UNSET || e == PCRE2_UNSET {
-      groupArr[(long)i] = "";
+      groupArr[(i64)i] = "";
     } else {
-      groupArr[(long)i] = subject.clone(s, e);
+      groupArr[(i64)i] = subject.clone(s, e);
     }
     i += (u32)1;
   }
@@ -171,18 +171,18 @@ seal func buildMatch(subject: string, md: Pcre2MatchData*): Match {
 
 /* ---------- compilePattern ---------- */
 
-seal func compilePattern(pattern: string, flags: u32): long {
+seal func compilePattern(pattern: string, flags: u32): i64 {
   let patternBytes = pattern.toBytes();
-  let buf: byte[!] = byte[:(long)256];
+  let buf: byte[!] = byte[:(i64)256];
   var errorCode: int = 0;
-  var errorOffset: long = 0;
+  var errorOffset: i64 = 0;
   let compiled = pcre2_compile(
-  &patternBytes, (long)patternBytes.length(),
-  flags, &errorCode, &errorOffset, (long)0
+  &patternBytes, (i64)patternBytes.length(),
+  flags, &errorCode, &errorOffset, (i64)0
   );
-  if compiled == (long)0 {
-    let msgLen = pcre2_get_error_message(errorCode, &buf, (long)256);
-    throw "RegExp compile error: " + string.fromUtf8Bytes((byte[])buf, (long)msgLen);
+  if compiled == (i64)0 {
+    let msgLen = pcre2_get_error_message(errorCode, &buf, (i64)256);
+    throw "RegExp compile error: " + string.fromUtf8Bytes((byte[])buf, (i64)msgLen);
   }
   return compiled;
 }
@@ -194,7 +194,7 @@ seal func compilePattern(pattern: string, flags: u32): long {
  * Instances are immutable and thread-safe after construction.
  */
 open type RegExp {
-  seal let code: long;
+  seal let code: i64;
   seal let pattern: string;
   seal let flagBits: u32;
 
@@ -229,10 +229,10 @@ open type RegExp {
    */
   open func test(subject: string): bool {
     let subjectBytes = subject.toBytes();
-    let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
+    let md = pcre2_match_data_create_from_pattern(self.code, (i64)0);
     let rc = pcre2_match(
-    self.code, &subjectBytes, (long)subjectBytes.length(),
-    (long)0, (u32)0, md, (long)0
+    self.code, &subjectBytes, (i64)subjectBytes.length(),
+    (i64)0, (u32)0, md, (i64)0
     );
     pcre2_match_data_free(md);
     return rc >= 0;
@@ -245,11 +245,11 @@ open type RegExp {
    */
   open func isMatch(subject: string): bool {
     let subjectBytes = subject.toBytes();
-    let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
+    let md = pcre2_match_data_create_from_pattern(self.code, (i64)0);
     /* PCRE2_ANCHORED (0x80000000) | PCRE2_ENDANCHORED (0x20000000) */
     let rc = pcre2_match(
-    self.code, &subjectBytes, (long)subjectBytes.length(),
-    (long)0, (u32)0x80000000 | (u32)0x20000000, md, (long)0
+    self.code, &subjectBytes, (i64)subjectBytes.length(),
+    (i64)0, (u32)0x80000000 | (u32)0x20000000, md, (i64)0
     );
     pcre2_match_data_free(md);
     return rc >= 0;
@@ -263,14 +263,14 @@ open type RegExp {
    */
   open func find(subject: string): Match[] {
     let subjectBytes = subject.toBytes();
-    var resultArr: Match[!] = Match[:(long)0];
-    let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
+    var resultArr: Match[!] = Match[:(i64)0];
+    let md = pcre2_match_data_create_from_pattern(self.code, (i64)0);
     let rc = pcre2_match(
-    self.code, &subjectBytes, (long)subjectBytes.length(),
-    (long)0, (u32)0, md, (long)0
+    self.code, &subjectBytes, (i64)subjectBytes.length(),
+    (i64)0, (u32)0, md, (i64)0
     );
     if rc >= 0 {
-      resultArr = Match[:(long)1];
+      resultArr = Match[:(i64)1];
       resultArr[0] = buildMatch(subject, md);
     }
     pcre2_match_data_free(md);
@@ -284,45 +284,45 @@ open type RegExp {
    */
   open func findAll(subject: string): Match[] {
     let subjectBytes = subject.toBytes();
-    let subjectLen = (long)subjectBytes.length();
-    var capacity: long = 8;
+    let subjectLen = (i64)subjectBytes.length();
+    var capacity: i64 = 8;
     var items: Match[!] = Match[:capacity];
-    var count: long = 0;
+    var count: i64 = 0;
     var scratch: Match[!] = items;
-    let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
-    var offset: long = 0;
+    let md = pcre2_match_data_create_from_pattern(self.code, (i64)0);
+    var offset: i64 = 0;
     while offset <= subjectLen {
       let rc = pcre2_match(
       self.code, &subjectBytes, subjectLen,
-      offset, (u32)0, md, (long)0
+      offset, (u32)0, md, (i64)0
       );
       if rc < 0 {
         break;
       }
       if count >= capacity {
-        capacity = capacity * (long)2;
+        capacity = capacity * (i64)2;
         scratch = Match[:capacity];
-        var j: long = 0;
+        var j: i64 = 0;
         while j < count {
           scratch[j] = items[j];
-          j += (long)1;
+          j += (i64)1;
         }
         items = scratch;
       }
       items[count] = buildMatch(subject, md);
-      count += (long)1;
-      if items[count - (long)1].end == offset {
-        offset += (long)1;
+      count += (i64)1;
+      if items[count - (i64)1].end == offset {
+        offset += (i64)1;
       } else {
-        offset = items[count - (long)1].end;
+        offset = items[count - (i64)1].end;
       }
     }
     pcre2_match_data_free(md);
     var result: Match[!] = Match[:count];
-    var k: long = 0;
+    var k: i64 = 0;
     while k < count {
       result[k] = items[k];
-      k += (long)1;
+      k += (i64)1;
     }
     return (Match[])result;
   }
@@ -334,14 +334,14 @@ open type RegExp {
    */
   open func split(subject: string): string[] {
     let subjectBytes = subject.toBytes();
-    let subjectLen = (long)subjectBytes.length();
+    let subjectLen = (i64)subjectBytes.length();
     let parts = List<string>();
-    let md = pcre2_match_data_create_from_pattern(self.code, (long)0);
-    var pos: long = 0;
+    let md = pcre2_match_data_create_from_pattern(self.code, (i64)0);
+    var pos: i64 = 0;
     while pos <= subjectLen {
       let rc = pcre2_match(
       self.code, &subjectBytes, subjectLen,
-      pos, (u32)0, md, (long)0
+      pos, (u32)0, md, (i64)0
       );
       if rc < 0 {
         break;
@@ -355,7 +355,7 @@ open type RegExp {
         parts.add("");
       }
       if matchEnd == pos {
-        pos += (long)1;
+        pos += (i64)1;
       } else {
         pos = matchEnd;
       }
@@ -396,29 +396,29 @@ open type RegExp {
   seal func substituteInternal(subject: string, replacement: string, options: u32): string {
     let subjectBytes = subject.toBytes();
     let replBytes = replacement.toBytes();
-    var outLen: long = subjectBytes.length() * (long)2;
-    if outLen < (long)256 {
-      outLen = (long)256;
+    var outLen: i64 = subjectBytes.length() * (i64)2;
+    if outLen < (i64)256 {
+      outLen = (i64)256;
     }
     var outBuf: byte[!] = byte[:outLen];
-    var actualLen: long = outLen;
+    var actualLen: i64 = outLen;
     let subOpts = options | (u32)0x00000200 | (u32)0x00001000;
     let rc = pcre2_substitute(
-    self.code, &subjectBytes, (long)subjectBytes.length(),
-    (long)0, subOpts,
-    (long)0, (long)0,
-    &replBytes, (long)replBytes.length(),
+    self.code, &subjectBytes, (i64)subjectBytes.length(),
+    (i64)0, subOpts,
+    (i64)0, (i64)0,
+    &replBytes, (i64)replBytes.length(),
     &outBuf, &actualLen
     );
     if rc == -48 {
-      outLen = actualLen + (long)1;
+      outLen = actualLen + (i64)1;
       outBuf = byte[:outLen];
       actualLen = outLen;
       let rc2 = pcre2_substitute(
-      self.code, &subjectBytes, (long)subjectBytes.length(),
-      (long)0, subOpts,
-      (long)0, (long)0,
-      &replBytes, (long)replBytes.length(),
+      self.code, &subjectBytes, (i64)subjectBytes.length(),
+      (i64)0, subOpts,
+      (i64)0, (i64)0,
+      &replBytes, (i64)replBytes.length(),
       &outBuf, &actualLen
       );
       if rc2 < 0 {
@@ -438,7 +438,7 @@ open type RegExp {
    * Must be called when the RegExp is no longer needed.
    */
   open func destroy(): void {
-    if self.code != (long)0 {
+    if self.code != (i64)0 {
       pcre2_code_free(self.code);
     }
   }

@@ -11,10 +11,10 @@ extern func c_open(path: byte*, flags: int, mode: int): int;
 extern func c_close(fd: int): int;
 
 @cdecl("libc", "read")
-extern func c_read(fd: int, buf: byte*, count: long): long;
+extern func c_read(fd: int, buf: byte*, count: i64): i64;
 
 @cdecl("libc", "write")
-extern func c_write(fd: int, buf: byte*, count: long): long;
+extern func c_write(fd: int, buf: byte*, count: i64): i64;
 
 @cdecl("libc", "access")
 extern func c_access(path: byte*, mode: int): int;
@@ -26,7 +26,7 @@ extern func c_unlink(path: byte*): int;
 extern func c_rename(from: byte*, to: byte*): int;
 
 @cdecl("libc", "fstat")
-extern func fs_posix_fstat(fd: int, buf: long*): int;
+extern func fs_posix_fstat(fd: int, buf: i64*): int;
 
 // Default file creation permission: 0644 = 420
 seal let DEFAULT_FILE_MODE: int = 420;
@@ -58,14 +58,14 @@ open type File {
    * @param buffer - Writable byte buffer provided by the caller
    * @return Number of bytes actually read; 0 on EOF
    */
-  open func read(buffer: byte[!]): long {
+  open func read(buffer: byte[!]): i64 {
     self.ensureOpen();
     let capacity = buffer.length();
-    if capacity == (long)0 {
-      return (long)0;
+    if capacity == (i64)0 {
+      return (i64)0;
     }
     let result = c_read(self.fd, &buffer, capacity);
-    if result < (long)0 {
+    if result < (i64)0 {
       throw "fs/read-failed";
     }
     return result;
@@ -76,14 +76,14 @@ open type File {
    * @param bytes - Output byte sequence
    * @return Number of bytes actually written
    */
-  open func write(bytes: byte[]): long {
+  open func write(bytes: byte[]): i64 {
     self.ensureOpen();
     let length = bytes.length();
-    if length == (long)0 {
-      return (long)0;
+    if length == (i64)0 {
+      return (i64)0;
     }
     let result = c_write(self.fd, &bytes, length);
-    if result < (long)0 {
+    if result < (i64)0 {
       throw "fs/write-failed";
     }
     return result;
@@ -95,7 +95,7 @@ open type File {
    * @param text - Text to write
    * @return Number of bytes actually written
    */
-  open func writeText(text: string): long {
+  open func writeText(text: string): i64 {
     return self.write(feng_string_to_utf8_bytes(text));
   }
 
@@ -115,14 +115,14 @@ open type File {
    */
   open func readLines(): string[] {
     let text = self.readText();
-    if text.length() == (long)0 {
-      return string[: (long)0];
+    if text.length() == (i64)0 {
+      return string[: (i64)0];
     }
     let textBytes = feng_string_to_utf8_bytes(text);
     let lines = List<string>();
     let lineBytes = List<byte>();
     let len = textBytes.length();
-    for var i: long = (long)0; i < len; i += (long)1 {
+    for var i: i64 = (i64)0; i < len; i += (i64)1 {
       let b = textBytes[i];
       if b == (byte)10 {
         lines.add(string.fromUtf8Bytes(lineBytes.entries()));
@@ -134,14 +134,14 @@ open type File {
       }
     }
     // 最后一行（无尾部换行时保留）
-    if (long)lineBytes.size() > (long)0 {
+    if (i64)lineBytes.size() > (i64)0 {
       lines.add(string.fromUtf8Bytes(lineBytes.entries()));
     }
     // 如果文本以 \n 结尾，split 会产生尾部空串，需要移除
-    if len > (long)0 && textBytes[len - (long)1] == (byte)10 {
-      if (long)lines.size() > (long)0 {
+    if len > (i64)0 && textBytes[len - (i64)1] == (byte)10 {
+      if (i64)lines.size() > (i64)0 {
         let last = lines.get(lines.size() - 1);
-        if last.length() == (long)0 {
+        if last.length() == (i64)0 {
           lines.remove(lines.size() - 1);
         }
       }
@@ -175,7 +175,7 @@ open type File {
    */
   open func stat(): StatInfo {
     self.ensureOpen();
-    let statBuf: long[!] = long[:(long)16];
+    let statBuf: i64[!] = i64[:(i64)16];
     let rc = fs_posix_fstat(self.fd, &statBuf);
     if rc != 0 {
       throw "fs/stat-failed";
@@ -188,13 +188,13 @@ open type File {
    */
   seal func readAllBytes(): byte[] {
     let allBytes = List<byte>();
-    let chunk: byte[!] = byte[:(long)4096];
+    let chunk: byte[!] = byte[:(i64)4096];
     while true {
       let count = self.read(chunk);
-      if count == (long)0 {
+      if count == (i64)0 {
         break;
       }
-      for var i: long = (long)0; i < count; i += (long)1 {
+      for var i: i64 = (i64)0; i < count; i += (i64)1 {
         allBytes.add(chunk[i]);
       }
     }
@@ -305,7 +305,7 @@ open func exists(path: string): bool {
  */
 open func isFile(path: string): bool {
   let pathBytes = makeNullTerminatedPath(path);
-  let statBuf: long[!] = long[:(long)16];
+  let statBuf: i64[!] = i64[:(i64)16];
   let rc = posix_stat(&pathBytes, &statBuf);
   if rc != 0 {
     return false;
@@ -322,7 +322,7 @@ open func isFile(path: string): bool {
  */
 open func isDir(path: string): bool {
   let pathBytes = makeNullTerminatedPath(path);
-  let statBuf: long[!] = long[:(long)16];
+  let statBuf: i64[!] = i64[:(i64)16];
   let rc = posix_stat(&pathBytes, &statBuf);
   if rc != 0 {
     return false;
@@ -338,7 +338,7 @@ open func isDir(path: string): bool {
  */
 open func stat(path: string): StatInfo {
   let pathBytes = makeNullTerminatedPath(path);
-  let statBuf: long[!] = long[:(long)16];
+  let statBuf: i64[!] = i64[:(i64)16];
   let rc = posix_stat(&pathBytes, &statBuf);
   if rc != 0 {
     throw "fs/stat-failed";

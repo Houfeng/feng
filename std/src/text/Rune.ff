@@ -3,7 +3,7 @@ open module std.text;
 import std.collections;
 
 @cdecl("feng_std_unistring", "u8_mbsnlen")
-extern func u8_mbsnlen(s: string*, n: long): long;
+extern func u8_mbsnlen(s: string*, n: i64): i64;
 
 @cdecl("feng_std_unistring", "u8_next")
 extern func u8_next(puc: u32*, s: string*): string*;
@@ -45,7 +45,7 @@ open type RuneView {
    * Returns the number of runes in this string.
    * @return rune count
    */
-  open func length(): long {
+  open func length(): i64 {
     return u8_mbsnlen(&self.text, self.text.length());
   }
 
@@ -54,20 +54,20 @@ open type RuneView {
    * @param index - zero-based rune index
    * @return substring containing the single rune
    */
-  open func at(index: long): string {
-    if index < (long)0 {
+  open func at(index: i64): string {
+    if index < (i64)0 {
       throw "RuneView index out of bounds";
     }
     let data: string* = &self.text;
     var cursor: string* = data;
     var uc: u32 = 0;
-    var i: long = 0;
+    var i: i64 = 0;
     while i < index {
       cursor = u8_next(&uc, cursor);
       if feng_pointer_is_null(cursor) {
         throw "RuneView index out of bounds";
       }
-      i += (long)1;
+      i += (i64)1;
     }
     let next: string* = u8_next(&uc, cursor);
     if feng_pointer_is_null(next) {
@@ -93,8 +93,8 @@ open type RuneView {
  */
 open type RuneIterator {
   seal let text: string;
-  seal let len: long;
-  seal var offset: long;
+  seal let len: i64;
+  seal var offset: i64;
 
   /**
    * Constructs a new RuneIterator for the given string.

@@ -43,7 +43,7 @@ open func test_builtin_type() {
 
     test("u64 type", () {
       let a_u64: u64 = 200;
-      assert((long)a_u64 == (long)200, "u64 type");
+      assert((i64)a_u64 == (i64)200, "u64 type");
     });
 
     test("int alias for i32", () {
@@ -51,9 +51,9 @@ open func test_builtin_type() {
       assert(alias_int == 42, "int alias for i32");
     });
 
-    test("long alias for i64", () {
-      let alias_long: long = 42;
-      assert(alias_long == (long)42, "long alias for i64");
+    test("i64 type alias check", () {
+      let alias_long: i64 = 42;
+      assert(alias_long == (i64)42, "i64 type alias check");
     });
 
     test("byte alias for u8", () {
@@ -84,11 +84,11 @@ open func test_builtin_type() {
 
     test("default zero values", () {
       let zi: int;
-      let zl: long;
+      let zl: i64;
       let zb: bool;
       let zs: string;
       let zf: double;
-      assert(zi == 0 && zl == (long)0 && zb == false && zs == "" && zf == 0.0, "default zero values");
+      assert(zi == 0 && zl == (i64)0 && zb == false && zs == "" && zf == 0.0, "default zero values");
     });
   });
 }

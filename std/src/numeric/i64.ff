@@ -5,7 +5,7 @@ import std.text;
 import std.collections;
 
 /**
- * Extends i64 (long) with conversion operations.
+ * Extends i64 (i64) with conversion operations.
  */
 open fit i64: Display {
   /**
@@ -14,76 +14,76 @@ open fit i64: Display {
    * @return decimal string
    */
   open func toString(): string {
-    if self == (long)0 {
+    if self == (i64)0 {
       return "0";
     }
-    var v: long = self;
+    var v: i64 = self;
     var negative = false;
-    if v > (long)0 {
+    if v > (i64)0 {
       v = -v;
     } else {
       negative = true;
     }
-    let digits: byte[!] = byte[:(long)20];
+    let digits: byte[!] = byte[:(i64)20];
     var pos: i32 = 19;
-    while v < (long)0 {
-      let digit: i32 = (i32)(-(v % (long)10));
+    while v < (i64)0 {
+      let digit: i32 = (i32)(-(v % (i64)10));
       digits[pos] = (byte)(digit + 48);
-      v = v / (long)10;
+      v = v / (i64)10;
       pos = pos - 1;
     }
     if negative {
       digits[pos] = (byte)45;
       pos = pos - 1;
     }
-    let start = (long)(pos + 1);
-    let result: byte[] = ((byte[])digits).clone(start, (long)20);
+    let start = (i64)(pos + 1);
+    let result: byte[] = ((byte[])digits).clone(start, (i64)20);
     return string.fromUtf8Bytes(result);
   }
 
   /**
-   * Parses a decimal string into a long (i64) value.
+   * Parses a decimal string into a i64 (i64) value.
    * Accepts an optional leading '+' or '-' sign followed by one or more digits.
    * Uses negative accumulation to correctly handle the full i64 range
    * including the minimum value -9223372036854775808.
    * @param text - decimal string to parse
-   * @return parsed long value
+   * @return parsed i64 value
    * @throws if text is empty, contains non-digit characters, or overflows i64 range
    */
-  open static func parse(text: string): long {
+  open static func parse(text: string): i64 {
     let bytes = text.toBytes();
     let len = bytes.length();
-    if len == (long)0 {
+    if len == (i64)0 {
       throw "Invalid i64 string: empty";
     }
-    var pos: long = 0;
+    var pos: i64 = 0;
     var negative = false;
-    let first = bytes[(long)0];
+    let first = bytes[(i64)0];
     if first == (byte)45 {
       negative = true;
-      pos = (long)1;
+      pos = (i64)1;
     } else if first == (byte)43 {
-      pos = (long)1;
+      pos = (i64)1;
     }
     if pos == len {
       throw "Invalid i64 string: no digits";
     }
-    let minDiv10: long = (long)-922337203685477580;
-    var result: long = 0;
+    let minDiv10: i64 = (i64)-922337203685477580;
+    var result: i64 = 0;
     while pos < len {
       let b = bytes[pos];
       if b < (byte)48 || b > (byte)57 {
         throw "Invalid i64 string: invalid character";
       }
-      let digit: long = (long)(b - (byte)48);
-      if result < minDiv10 || (result == minDiv10 && digit > (long)8) {
+      let digit: i64 = (i64)(b - (byte)48);
+      if result < minDiv10 || (result == minDiv10 && digit > (i64)8) {
         throw "Invalid i64 string: overflow";
       }
-      result = result * (long)10 - digit;
-      pos = pos + (long)1;
+      result = result * (i64)10 - digit;
+      pos = pos + (i64)1;
     }
     if !negative {
-      if result < (long)-9223372036854775807 {
+      if result < (i64)-9223372036854775807 {
         throw "Invalid i64 string: overflow";
       }
       result = -result;

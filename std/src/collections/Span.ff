@@ -11,7 +11,7 @@ open fit T[] {
 	 * @param end - zero-based exclusive end offset of the view
 	 * @return view over the specified range
 	 */
-	open func slice(start: long, end: long): Span<T> {
+	open func slice(start: i64, end: i64): Span<T> {
 		return Span<T>(self, start, end);
 	}
 
@@ -20,7 +20,7 @@ open fit T[] {
 	 * @param start - zero-based index of the first element in the view
 	 * @return view over the specified range
 	 */
-	open func slice(start: long): Span<T> {
+	open func slice(start: i64): Span<T> {
 		return self.slice(start, self.length());
 	}
 }
@@ -36,7 +36,7 @@ open fit T[!] {
 	 * @param end - zero-based exclusive end offset of the view
 	 * @return view over the specified range
 	 */
-	open func slice(start: long, end: long): Span<T> {
+	open func slice(start: i64, end: i64): Span<T> {
 		return Span<T>((T[])self, start, end);
 	}
 
@@ -45,7 +45,7 @@ open fit T[!] {
 	 * @param start - zero-based index of the first element in the view
 	 * @return view over the specified range
 	 */
-	open func slice(start: long): Span<T> {
+	open func slice(start: i64): Span<T> {
 		return self.slice(start, self.length());
 	}
 }
@@ -56,8 +56,8 @@ open fit T[!] {
  */
 open type Span<T> {
 	seal let origin: T[];
-	seal let start: long;
-	seal let end: long;
+	seal let start: i64;
+	seal let end: i64;
 
 	/**
 	 * Creates a span covering the right-open range `[start, end)`.
@@ -66,8 +66,8 @@ open type Span<T> {
 	 * @param end - zero-based exclusive end offset
 	 * @throws IllegalArgumentException if `start` or `end` are out of bounds
 	 */
-	open func Span(origin: T[], start: long, end: long) {
-		if start < (long)0 {
+	open func Span(origin: T[], start: i64, end: i64) {
+		if start < (i64)0 {
 			throw "Span start out of bounds";
 		}
 		if end < start {
@@ -85,7 +85,7 @@ open type Span<T> {
 	 * Returns the number of elements covered by this span.
 	 * @return element count inside the view
 	 */
-	open func length(): long {
+	open func length(): i64 {
 		return self.end - self.start;
 	}
 
@@ -94,8 +94,8 @@ open type Span<T> {
 	 * @param index - zero-based index relative to the span start
 	 * @return element at the specified position
 	 */
-	open func at(index: long): T {
-		if index < (long)0 {
+	open func at(index: i64): T {
+		if index < (i64)0 {
 			throw "Span index out of bounds";
 		}
 		if index >= self.length() {
@@ -111,8 +111,8 @@ open type Span<T> {
 	 * @param end - zero-based exclusive end offset relative to this span
 	 * @return view over the specified range
 	 */
-	open func slice(start: long, end: long): Span<T> {
-		if start < (long)0 {
+	open func slice(start: i64, end: i64): Span<T> {
+		if start < (i64)0 {
 			throw "Span slice start out of bounds";
 		}
 		if end < start {
@@ -129,7 +129,7 @@ open type Span<T> {
 	 * @param start - zero-based start offset relative to this span
 	 * @return view over the specified range
 	 */
-	open func slice(start: long): Span<T> {
+	open func slice(start: i64): Span<T> {
 		return self.slice(start, self.length());
 	}
 
@@ -146,7 +146,7 @@ open type Span<T> {
 	 * @param index - zero-based index relative to the span start
 	 * @return element at the specified position
 	 */
-	open func get(index: long): T {
+	open func get(index: i64): T {
 		return self.at(index);
 	}
 

@@ -1,10 +1,10 @@
 open module std.collections;
 
 @runtime
-extern func feng_array_length_i64<T>(value: T[]): long;
+extern func feng_array_length_i64<T>(value: T[]): i64;
 
 @runtime
-extern func feng_array_slice<T>(value: T[], start: long, length: long): T[];
+extern func feng_array_slice<T>(value: T[], start: i64, length: i64): T[];
 
 @runtime
 extern func feng_expression_equal<T>(left: T, right: T): bool;
@@ -18,7 +18,7 @@ open fit T[] {
    * Returns the number of elements in this array.
    * @return element count of this array
    */
-  open func length(): long {
+  open func length(): i64 {
     return feng_array_length_i64(self);
   }
 
@@ -27,8 +27,8 @@ open fit T[] {
    * @param index - zero-based index of the element to return
    * @return element at the specified index
    */
-  open func at(index: long): T {
-    if index < (long)0 {
+  open func at(index: i64): T {
+    if index < (i64)0 {
       throw "Array index out of bounds";
     }
     if index >= self.length() {
@@ -42,9 +42,9 @@ open fit T[] {
    * @param value - the value to search for
    * @return zero-based index of the first occurrence of `value`, or -1 if not found
    */
-  open func indexOf(value: T): long {
+  open func indexOf(value: T): i64 {
     let len = self.length();
-    for var i: long = 0; i < len; i += (long)1 {
+    for var i: i64 = 0; i < len; i += (i64)1 {
       if feng_expression_equal(self[i], value) { return i; }
     }
     return -1;
@@ -55,7 +55,7 @@ open fit T[] {
    * @return copied array containing all elements
    */
   open func clone(): T[] {
-    return self.clone((long)0, self.length());
+    return self.clone((i64)0, self.length());
   }
 
   /**
@@ -64,8 +64,8 @@ open fit T[] {
    * @param end - zero-based exclusive end offset of the copied range
    * @return copied array containing all elements from `start` to `end`
    */
-  open func clone(start: long, end: long): T[] {
-    if start < (long)0 {
+  open func clone(start: i64, end: i64): T[] {
+    if start < (i64)0 {
       throw "Array clone start out of bounds";
     }
     if end < start {
@@ -82,7 +82,7 @@ open fit T[] {
    * @param start - zero-based start offset of the copied range
    * @return copied array containing all elements from `start` to the end of this array
    */
-  open func clone(start: long): T[] {
+  open func clone(start: i64): T[] {
     return self.clone(start, self.length());
   }
 }
@@ -96,7 +96,7 @@ open fit T[!] {
    * Returns the number of elements in this array.
    * @return element count of this array
    */
-  open func length(): long {
+  open func length(): i64 {
     return feng_array_length_i64((T[])self);
   }
 
@@ -105,7 +105,7 @@ open fit T[!] {
    * @param index - zero-based index of the element to return
    * @return element at the specified index
    */
-  open func at(index: long): T {
+  open func at(index: i64): T {
     return ((T[])self).at(index);
   }
 
@@ -114,7 +114,7 @@ open fit T[!] {
    * @param value - the value to search for
    * @return zero-based index of the first occurrence of `value`, or -1 if not found
    */
-  open func indexOf(value: T): long {
+  open func indexOf(value: T): i64 {
     return ((T[])self).indexOf(value);
   }
 
@@ -132,7 +132,7 @@ open fit T[!] {
    * @param end - zero-based exclusive end offset of the copied range
    * @return copied array containing all elements from `start` to `end`
    */
-  open func clone(start: long, end: long): T[] {
+  open func clone(start: i64, end: i64): T[] {
     return ((T[])self).clone(start, end);
   }
 
@@ -141,7 +141,7 @@ open fit T[!] {
    * @param start - zero-based start offset of the copied range
    * @return copied array containing all elements from `start` to the end of this array
    */
-  open func clone(start: long): T[] {
+  open func clone(start: i64): T[] {
     return ((T[])self).clone(start);
   }
 

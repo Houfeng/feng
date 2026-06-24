@@ -1,33 +1,33 @@
 open module std.thread;
 
 @cdecl("feng_std_uv", "uv_mutex_init")
-extern func uv_mutex_init(handle: long): int;
+extern func uv_mutex_init(handle: i64): int;
 
 @cdecl("feng_std_uv", "uv_mutex_destroy")
-extern func uv_mutex_destroy(handle: long): void;
+extern func uv_mutex_destroy(handle: i64): void;
 
 @cdecl("feng_std_uv", "uv_mutex_lock")
-extern func uv_mutex_lock(handle: long): void;
+extern func uv_mutex_lock(handle: i64): void;
 
 @cdecl("feng_std_uv", "uv_mutex_trylock")
-extern func uv_mutex_trylock(handle: long): int;
+extern func uv_mutex_trylock(handle: i64): int;
 
 @cdecl("feng_std_uv", "uv_mutex_unlock")
-extern func uv_mutex_unlock(handle: long): void;
+extern func uv_mutex_unlock(handle: i64): void;
 
 /**
  * A mutual exclusion lock for synchronizing access to shared data.
  */
 open type Mutex {
 
-  seal let handle: long;
+  seal let handle: i64;
 
   /**
    * Creates a new mutex.
    */
   open func Mutex() {
-    self.handle = feng_alloc((long)64);
-    if self.handle == (long)0 {
+    self.handle = feng_alloc((i64)64);
+    if self.handle == (i64)0 {
       throw "mutex/alloc-failed";
     }
     let result = uv_mutex_init(self.handle);

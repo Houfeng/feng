@@ -1624,8 +1624,8 @@ static void test_runtime_extern_codegen_uses_feng_surface_types(void) {
     static const char *kSource =
         "module feng.codegen.runtimeextern;\n"
         "@runtime\n"
-        "extern func feng_string_utf8_length(value: string): long;\n"
-        "func run(value: string): long {\n"
+        "extern func feng_string_utf8_length(value: string): i64;\n"
+        "func run(value: string): i64 {\n"
         "    return feng_string_utf8_length(value);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "runtimeextern.ff");
@@ -1665,8 +1665,8 @@ static void test_generic_runtime_extern_call_infers_type_args(void) {
     static const char *kSource =
         "module feng.codegen.genericruntimeextern;\n"
         "@runtime\n"
-        "extern func feng_array_length_i64<T>(value: T[]): long;\n"
-        "func run(values: int[]): long {\n"
+        "extern func feng_array_length_i64<T>(value: T[]): i64;\n"
+        "func run(values: int[]): i64 {\n"
         "    return feng_array_length_i64(values);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "genericruntimeextern.ff");
@@ -1705,8 +1705,8 @@ static void test_generic_runtime_extern_call_accepts_explicit_type_args(void) {
     static const char *kSource =
         "module feng.codegen.genericruntimeexternexplicit;\n"
         "@runtime\n"
-        "extern func feng_array_length_i64<T>(value: T[]): long;\n"
-        "func run(values: int[]): long {\n"
+        "extern func feng_array_length_i64<T>(value: T[]): i64;\n"
+        "func run(values: int[]): i64 {\n"
         "    return feng_array_length_i64<int>(values);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "genericruntimeexternexplicit.ff");
@@ -1829,8 +1829,8 @@ static void test_runtime_extern_codegen_rejects_non_contract_symbol(void) {
     static const char *kSource =
         "module feng.codegen.runtimeexternreject;\n"
         "@runtime\n"
-        "extern func feng_not_contract(value: string): long;\n"
-        "func run(value: string): long {\n"
+        "extern func feng_not_contract(value: string): i64;\n"
+        "func run(value: string): i64 {\n"
         "    return feng_not_contract(value);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "runtimeexternreject.ff");
@@ -2971,33 +2971,33 @@ static void test_fit_builtin_array_open_generic_return_codegen(void) {
         "module feng.codegen.fit_builtin_generic_array;\n"
         "type Span<T> {\n"
         "    let origin: T[];\n"
-        "    let start: long;\n"
-        "    let end: long;\n"
-        "    func Span(origin: T[], start: long, end: long) {\n"
+        "    let start: i64;\n"
+        "    let end: i64;\n"
+        "    func Span(origin: T[], start: i64, end: i64) {\n"
         "        self.origin = origin;\n"
         "        self.start = start;\n"
         "        self.end = end;\n"
         "    }\n"
-        "    func length(): long {\n"
+        "    func length(): i64 {\n"
         "        return self.end - self.start;\n"
         "    }\n"
-        "    func get(index: long): T {\n"
+        "    func get(index: i64): T {\n"
         "        return self.origin[self.start + index];\n"
         "    }\n"
         "}\n"
         "fit T[] {\n"
-        "    func slice(start: long, end: long): Span<T> {\n"
+        "    func slice(start: i64, end: i64): Span<T> {\n"
         "        return Span<T>(self, start, end);\n"
         "    }\n"
-        "    func slice(start: long): Span<T> {\n"
-        "        return self.slice(start, (long)4);\n"
+        "    func slice(start: i64): Span<T> {\n"
+        "        return self.slice(start, (i64)4);\n"
         "    }\n"
         "}\n"
         "func run(): int {\n"
         "    let values: int[] = [1, 2, 3, 4];\n"
-        "    let middle = values.slice((long)1, (long)3);\n"
-        "    let tail = values.slice((long)1);\n"
-        "    return middle.get((long)0) + (int)middle.length() + tail.get((long)0) + (int)tail.length();\n"
+        "    let middle = values.slice((i64)1, (i64)3);\n"
+        "    let tail = values.slice((i64)1);\n"
+        "    return middle.get((i64)0) + (int)middle.length() + tail.get((i64)0) + (int)tail.length();\n"
         "}\n";
 
     FengProgram *program = parse_or_die(kSource,

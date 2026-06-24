@@ -257,7 +257,7 @@ type JsonParser {
         }
       }
     }
-    let numBytes = self.input.clone((long)start, (long)self.pos);
+    let numBytes = self.input.clone((i64)start, (i64)self.pos);
     let numStr = string.fromUtf8Bytes(numBytes);
     return f64.parse(numStr);
   }

@@ -8,8 +8,8 @@ import std.collections;
 func join_strings(sep: string, parts: string...): string {
   var result = "";
   let length = parts.length();
-  for var i: long = (long)0; i < length; i += (long)1 {
-    if i > (long)0 {
+  for var i: i64 = (i64)0; i < length; i += (i64)1 {
+    if i > (i64)0 {
       result = result + sep;
     }
     result = result + parts[i];

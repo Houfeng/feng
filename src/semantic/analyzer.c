@@ -2219,7 +2219,7 @@ static const char *canonical_builtin_type_name(FengSlice name) {
     if (slice_equals_cstr(name, "int") || slice_equals_cstr(name, "i32")) {
         return "i32";
     }
-    if (slice_equals_cstr(name, "long") || slice_equals_cstr(name, "i64")) {
+    if (slice_equals_cstr(name, "i64")) {
         return "i64";
     }
     if (slice_equals_cstr(name, "byte") || slice_equals_cstr(name, "u8")) {
@@ -25007,7 +25007,7 @@ static void precompute_imported_builtin_spec_witnesses(
 /* ==================== AST builtin alias normalization ====================
  *
  * Per dev/feng-scalar-alias-optimize.md §6: normalize all user-written alias
- * names (int, long, byte, float, double) in type_ref nodes to their canonical
+ * names (int, byte, float, double) in type_ref nodes to their canonical
  * width-explicit spelling (i32, i64, u8, f32, f64).  Runs once at the start of
  * semantic analysis so that downstream phases (codegen, symbol export, LSP)
  * only ever see canonical names and need not handle aliases.

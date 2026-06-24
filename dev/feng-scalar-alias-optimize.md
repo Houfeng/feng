@@ -226,13 +226,13 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ### Task 2：移除 `long` 别名
 
-- [ ] 更新 `docs/feng-language.md`：别名表移除 `long`
-- [ ] 更新 `docs/feng-builtin-type.md`：别名表与映射规则移除 `long`，正文中引用 `long` 的描述改为 `i64`（如 `string.length()` 返回类型）
-- [ ] 迁移标准库（`std/`，约 639 处）中使用 `long` 的代码为 `i64`
-- [ ] 迁移兼容性测试（`fcts/`，约 23 处）中使用 `long` 的代码为 `i64`
-- [ ] 迁移编译器测试（`test/`，3 处 `.ff` 文件）中使用 `long` 的代码为 `i64`
-- [ ] 从集中别名表中移除 `long` → `i64` 条目
-- [ ] 全量回归测试
+- [x] 更新 `docs/feng-language.md`：别名表移除 `long`
+- [x] 更新 `docs/feng-builtin-type.md`：别名表与映射规则移除 `long`，正文中引用 `long` 的描述改为 `i64`（如 `string.length()` 返回类型）
+- [x] 迁移标准库（`std/`，约 639 处）中使用 `long` 的代码为 `i64`
+- [x] 迁移兼容性测试（`fcts/`，约 23 处）中使用 `long` 的代码为 `i64`
+- [x] 迁移编译器测试（`test/`，3 处 `.ff` 文件）中使用 `long` 的代码为 `i64`
+- [x] 从集中别名表中移除 `long` → `i64` 条目
+- [x] 全量回归测试
 
 ### Task 3：编译器平台位宽映射能力（无行为变更）
 

@@ -5,34 +5,34 @@ import std.text;
 
 // libc POSIX stat
 @cdecl("libc", "stat")
-extern func posix_stat(p: byte*, buf: long*): int;
+extern func posix_stat(p: byte*, buf: i64*): int;
 
 // Runtime helpers
 @runtime
 extern func feng_string_to_utf8_bytes(value: string): byte[];
 
 @runtime
-extern func feng_pointer_move(ptr: long*, offset: long): long*;
+extern func feng_pointer_move(ptr: i64*, offset: i64): i64*;
 
 @runtime
-extern func feng_pointer_get_scalar<T>(ptr: long*): T;
+extern func feng_pointer_get_scalar<T>(ptr: i64*): T;
 
 // POSIX stat struct offsets (macOS aarch64, 64-bit inode)
-seal let STAT_MODE_OFFSET: long = (long)4;
-seal let STAT_SIZE_OFFSET: long = (long)96;
-seal let STAT_ATIME_OFFSET: long = (long)32;
-seal let STAT_MTIME_OFFSET: long = (long)48;
-seal let STAT_CTIME_OFFSET: long = (long)64;
+seal let STAT_MODE_OFFSET: i64 = (i64)4;
+seal let STAT_SIZE_OFFSET: i64 = (i64)96;
+seal let STAT_ATIME_OFFSET: i64 = (i64)32;
+seal let STAT_MTIME_OFFSET: i64 = (i64)48;
+seal let STAT_CTIME_OFFSET: i64 = (i64)64;
 
 // POSIX S_IF* file type masks
-seal let S_IFMT: long = (long)61440;
-seal let S_IFIFO: long = (long)4096;
-seal let S_IFCHR: long = (long)8192;
-seal let S_IFDIR: long = (long)16384;
-seal let S_IFBLK: long = (long)24576;
-seal let S_IFREG: long = (long)32768;
-seal let S_IFLNK: long = (long)40960;
-seal let S_IFSOCK: long = (long)49152;
+seal let S_IFMT: i64 = (i64)61440;
+seal let S_IFIFO: i64 = (i64)4096;
+seal let S_IFCHR: i64 = (i64)8192;
+seal let S_IFDIR: i64 = (i64)16384;
+seal let S_IFBLK: i64 = (i64)24576;
+seal let S_IFREG: i64 = (i64)32768;
+seal let S_IFLNK: i64 = (i64)40960;
+seal let S_IFSOCK: i64 = (i64)49152;
 
 /**
  * Filesystem entry kind, replacing boolean isFile/isDir/isSymlink flags to prevent inconsistent state.
@@ -209,7 +209,7 @@ open type EntryInfo {
    */
   open func stat(): StatInfo {
     let pathBytes = makeNullTerminatedPath(self.path);
-    let statBuf: long[!] = long[:(long)16];
+    let statBuf: i64[!] = i64[:(i64)16];
     let rc = posix_stat(&pathBytes, &statBuf);
     if rc != 0 {
       throw "fs/stat-failed";
@@ -221,7 +221,7 @@ open type EntryInfo {
 /**
  * Extract EntryKind from st_mode (by S_IF* bit mask).
  */
-seal func entryKindFromMode(mode: long): EntryKind {
+seal func entryKindFromMode(mode: i64): EntryKind {
   let fileType = mode & S_IFMT;
   if fileType == S_IFREG { return EntryKind.File; }
   if fileType == S_IFDIR { return EntryKind.Dir; }
@@ -237,14 +237,14 @@ seal func entryKindFromMode(mode: long): EntryKind {
  * Map a dirent d_type value to EntryKind.
  * d_type values directly correspond to DT_* constants, matching EntryKind enum values.
  */
-seal func entryKindFromDType(dtype: long): EntryKind {
-  if dtype == (long)8 { return EntryKind.File; }
-  if dtype == (long)4 { return EntryKind.Dir; }
-  if dtype == (long)10 { return EntryKind.Symlink; }
-  if dtype == (long)1 { return EntryKind.Fifo; }
-  if dtype == (long)12 { return EntryKind.Socket; }
-  if dtype == (long)2 { return EntryKind.CharDevice; }
-  if dtype == (long)6 { return EntryKind.BlockDevice; }
+seal func entryKindFromDType(dtype: i64): EntryKind {
+  if dtype == (i64)8 { return EntryKind.File; }
+  if dtype == (i64)4 { return EntryKind.Dir; }
+  if dtype == (i64)10 { return EntryKind.Symlink; }
+  if dtype == (i64)1 { return EntryKind.Fifo; }
+  if dtype == (i64)12 { return EntryKind.Socket; }
+  if dtype == (i64)2 { return EntryKind.CharDevice; }
+  if dtype == (i64)6 { return EntryKind.BlockDevice; }
   return EntryKind.Other;
 }
 
@@ -254,8 +254,8 @@ seal func entryKindFromDType(dtype: long): EntryKind {
 seal func makeNullTerminatedPath(path: string): byte[!] {
   let pathBytes = feng_string_to_utf8_bytes(path);
   let pathLen = pathBytes.length();
-  let nameBuf: byte[!] = byte[:pathLen + (long)1];
-  for var i: long = (long)0; i < pathLen; i += (long)1 {
+  let nameBuf: byte[!] = byte[:pathLen + (i64)1];
+  for var i: i64 = (i64)0; i < pathLen; i += (i64)1 {
     nameBuf[i] = pathBytes[i];
   }
   nameBuf[pathLen] = (byte)0;
@@ -266,18 +266,18 @@ seal func makeNullTerminatedPath(path: string): byte[!] {
  * Extract StatInfo from a POSIX stat buffer.
  * Uses known field offsets for macOS aarch64 struct stat.
  */
-seal func readStatInfo(statBuf: long[!]): StatInfo {
-  let modeRaw: long = feng_pointer_get_scalar<long>(feng_pointer_move(&statBuf, STAT_MODE_OFFSET));
+seal func readStatInfo(statBuf: i64[!]): StatInfo {
+  let modeRaw: i64 = feng_pointer_get_scalar<i64>(feng_pointer_move(&statBuf, STAT_MODE_OFFSET));
   let modeMasked = modeRaw & S_IFMT;
   let kind = entryKindFromMode(modeMasked);
 
-  let size: long = feng_pointer_get_scalar<long>(feng_pointer_move(&statBuf, STAT_SIZE_OFFSET));
+  let size: i64 = feng_pointer_get_scalar<i64>(feng_pointer_move(&statBuf, STAT_SIZE_OFFSET));
 
-  let permBits: long = modeRaw & (long)4095;
+  let permBits: i64 = modeRaw & (i64)4095;
 
-  let atime: long = feng_pointer_get_scalar<long>(feng_pointer_move(&statBuf, STAT_ATIME_OFFSET));
-  let mtime: long = feng_pointer_get_scalar<long>(feng_pointer_move(&statBuf, STAT_MTIME_OFFSET));
-  let ctime: long = feng_pointer_get_scalar<long>(feng_pointer_move(&statBuf, STAT_CTIME_OFFSET));
+  let atime: i64 = feng_pointer_get_scalar<i64>(feng_pointer_move(&statBuf, STAT_ATIME_OFFSET));
+  let mtime: i64 = feng_pointer_get_scalar<i64>(feng_pointer_move(&statBuf, STAT_MTIME_OFFSET));
+  let ctime: i64 = feng_pointer_get_scalar<i64>(feng_pointer_move(&statBuf, STAT_CTIME_OFFSET));
 
   return StatInfo {
     kind: kind,

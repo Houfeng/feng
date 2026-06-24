@@ -123,7 +123,7 @@ static void test_reserved_words_rejected(void) {
 
 static void test_new_keywords_and_builtin_type_names(void) {
     const char *source =
-        "enum spec fit func module import unknown bool string int long byte float double i32 u8 f64\n";
+        "enum spec fit func module import unknown bool string int byte float double i32 u8 f64\n";
     FengLexer lexer;
     FengToken token;
 
@@ -150,8 +150,6 @@ static void test_new_keywords_and_builtin_type_names(void) {
     assert_lexeme(&token, "string");
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
     assert_lexeme(&token, "int");
-    token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
-    assert_lexeme(&token, "long");
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
     assert_lexeme(&token, "byte");
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
@@ -236,7 +234,7 @@ static void test_basic_module_tokens(void) {
 static void test_runtime_annotation_token(void) {
     const char *source =
         "@runtime\n"
-        "extern func feng_string_length(value: string): long;\n";
+        "extern func feng_string_length(value: string): i64;\n";
     FengLexer lexer;
     FengToken token;
 
@@ -259,7 +257,7 @@ static void test_runtime_annotation_token(void) {
     token = next_token(&lexer, FENG_TOKEN_RPAREN);
     token = next_token(&lexer, FENG_TOKEN_COLON);
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
-    assert_lexeme(&token, "long");
+    assert_lexeme(&token, "i64");
     token = next_token(&lexer, FENG_TOKEN_SEMICOLON);
     token = next_token(&lexer, FENG_TOKEN_EOF);
 }

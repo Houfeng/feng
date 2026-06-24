@@ -16,7 +16,7 @@ open type List<T> {
   seal var missing: T;
 
   seal func grow() {
-    if self.items.length() == (long)0 {
+    if self.items.length() == (i64)0 {
       self.items = T[:8];
       return;
     }
@@ -29,10 +29,10 @@ open type List<T> {
   }
 
   seal func shrink() {
-    if self.items.length() <= (long)8 {
+    if self.items.length() <= (i64)8 {
       return;
     }
-    if (long)self.count * (long)4 > self.items.length() {
+    if (i64)self.count * (i64)4 > self.items.length() {
       return;
     }
     var newCapacity: i32 = (i32)self.items.length() / 2;
@@ -67,7 +67,7 @@ open type List<T> {
    * @param item - the element to append
    */
   open func add(item: T) {
-    if (long)self.count >= self.items.length() {
+    if (i64)self.count >= self.items.length() {
       self.grow();
     }
     self.items[self.count] = item;

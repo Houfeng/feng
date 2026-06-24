@@ -10,13 +10,13 @@ seal type Dirent {}
 
 // libc directory operations
 @cdecl("libc", "opendir")
-extern func c_opendir(path: byte*): long;
+extern func c_opendir(path: byte*): i64;
 
 @cdecl("libc", "readdir")
-extern func c_readdir(dir: long): Dirent*;
+extern func c_readdir(dir: i64): Dirent*;
 
 @cdecl("libc", "closedir")
-extern func c_closedir(dir: long): int;
+extern func c_closedir(dir: i64): int;
 
 @cdecl("libc", "mkdir")
 extern func c_mkdir(path: byte*, mode: int): int;
@@ -29,7 +29,7 @@ extern func c_rmdir(path: byte*): int;
 extern func feng_pointer_is_null(ptr: Dirent*): bool;
 
 @runtime
-extern func feng_pointer_move(ptr: Dirent*, offset: long): Dirent*;
+extern func feng_pointer_move(ptr: Dirent*, offset: i64): Dirent*;
 
 @runtime
 extern func feng_pointer_get_scalar<T>(ptr: Dirent*): T;
@@ -38,12 +38,12 @@ extern func feng_pointer_get_scalar<T>(ptr: Dirent*): T;
 // macOS: struct dirent { __uint64_t d_ino(0); __uint64_t d_seekoff(8);
 //   __uint16_t d_reclen(16); __uint16_t d_namlen(18);
 //   __uint8_t d_type(20); char d_name[1024](21); }
-// Linux: struct dirent { unsigned long d_ino(0); unsigned long d_off(8);
+// Linux: struct dirent { unsigned i64 d_ino(0); unsigned i64 d_off(8);
 //   unsigned short d_reclen(16); unsigned char d_type(18);
 //   char d_name[256](19); } — 无 d_namlen 字段，DIRENT_DNAMLEN_OFFSET 为 -1
-seal var DIRENT_DTYPE_OFFSET: long = (long)0;
-seal var DIRENT_DNAMLEN_OFFSET: long = (long)0;
-seal var DIRENT_DNAME_OFFSET: long = (long)0;
+seal var DIRENT_DTYPE_OFFSET: i64 = (i64)0;
+seal var DIRENT_DNAMLEN_OFFSET: i64 = (i64)0;
+seal var DIRENT_DNAME_OFFSET: i64 = (i64)0;
 seal var direntOffsetsInited: bool = false;
 
 /**
@@ -59,17 +59,17 @@ seal func ensureDirentOffsets(): void {
   let arch = SystemInfo.arch();
   if os == "darwin" {
     if arch == "arm64" || arch == "aarch64" || arch == "x86_64" {
-      DIRENT_DTYPE_OFFSET = (long)20;
-      DIRENT_DNAMLEN_OFFSET = (long)18;
-      DIRENT_DNAME_OFFSET = (long)21;
+      DIRENT_DTYPE_OFFSET = (i64)20;
+      DIRENT_DNAMLEN_OFFSET = (i64)18;
+      DIRENT_DNAME_OFFSET = (i64)21;
     } else {
       throw "fs/unsupported-arch";
     }
   } else if os == "linux" {
     if arch == "arm64" || arch == "aarch64" || arch == "x86_64" {
-      DIRENT_DTYPE_OFFSET = (long)18;
-      DIRENT_DNAMLEN_OFFSET = (long)-1;
-      DIRENT_DNAME_OFFSET = (long)19;
+      DIRENT_DTYPE_OFFSET = (i64)18;
+      DIRENT_DNAMLEN_OFFSET = (i64)-1;
+      DIRENT_DNAME_OFFSET = (i64)19;
     } else {
       throw "fs/unsupported-arch";
     }
@@ -86,7 +86,7 @@ seal let DEFAULT_DIR_MODE: int = 493;
  * Directory traversal object, wrapping a directory handle with read operations.
  */
 open type Dir {
-  seal var dir: long;
+  seal var dir: i64;
   seal var dirPath: string;
   seal var closed: bool;
 
@@ -97,7 +97,7 @@ open type Dir {
   open static func create(path: string): Dir {
     let pathBytes = makeNullTerminatedPath(path);
     let dir = c_opendir(&pathBytes);
-    if dir == (long)0 {
+    if dir == (i64)0 {
       throw "fs/opendir-failed";
     }
     return Dir { dir: dir, dirPath: path, closed: false };
@@ -108,20 +108,20 @@ open type Dir {
    * @param batchSize - Batch size, must be greater than 0
    * @return Array of directory entries
    */
-  open func read(batchSize: long): EntryInfo[] {
+  open func read(batchSize: i64): EntryInfo[] {
     self.ensureOpen();
-    if batchSize <= (long)0 {
+    if batchSize <= (i64)0 {
       throw "fs/readdir-failed";
     }
     let entries = List<EntryInfo>();
-    var count: long = (long)0;
+    var count: i64 = (i64)0;
     while count < batchSize {
       let entry = self.readEntry();
-      if entry.name.length() == (long)0 {
+      if entry.name.length() == (i64)0 {
         break;
       }
       entries.add(entry);
-      count += (long)1;
+      count += (i64)1;
     }
     return entries.entries();
   }
@@ -134,12 +134,12 @@ open type Dir {
   open func next(): IteratorResult<EntryInfo> {
     self.ensureOpen();
     let entry = self.readEntry();
-    if entry.name.length() == (long)0 {
+    if entry.name.length() == (i64)0 {
       return (false, EntryInfo {
         name: "",
         path: "",
         kind: EntryKind.Other,
-        dirPath: byte[:(long)0]
+        dirPath: byte[:(i64)0]
       });
     }
     return (true, entry);
@@ -177,41 +177,41 @@ open type Dir {
         name: "",
         path: "",
         kind: EntryKind.Other,
-        dirPath: byte[:(long)0]
+        dirPath: byte[:(i64)0]
       };
     }
 
     // 读取 d_type（1 字节）
     let dtypePtr = feng_pointer_move(direntPtr, DIRENT_DTYPE_OFFSET);
-    let dtypeLong: long = feng_pointer_get_scalar<long>(dtypePtr);
-    let dtype: byte = (byte)(dtypeLong & (long)255);
+    let dtypeLong: i64 = feng_pointer_get_scalar<i64>(dtypePtr);
+    let dtype: byte = (byte)(dtypeLong & (i64)255);
 
     // 读取 d_name 并计算 nameLen
     let nameDataPtr = feng_pointer_move(direntPtr, DIRENT_DNAME_OFFSET);
-    var nameLen: long = (long)0;
-    if DIRENT_DNAMLEN_OFFSET >= (long)0 {
+    var nameLen: i64 = (i64)0;
+    if DIRENT_DNAMLEN_OFFSET >= (i64)0 {
       // macOS: d_namlen 字段直接提供名称长度
       let namlenPtr = feng_pointer_move(direntPtr, DIRENT_DNAMLEN_OFFSET);
-      let namlenLong: long = feng_pointer_get_scalar<long>(namlenPtr);
-      nameLen = namlenLong & (long)255;
+      let namlenLong: i64 = feng_pointer_get_scalar<i64>(namlenPtr);
+      nameLen = namlenLong & (i64)255;
     } else {
       // Linux: 无 d_namlen 字段，扫描 d_name 的 null 终止符计算长度
-      for var i: long = (long)0; i < (long)256; i += (long)1 {
+      for var i: i64 = (i64)0; i < (i64)256; i += (i64)1 {
         let bytePtr = feng_pointer_move(nameDataPtr, i);
-        let b: long = feng_pointer_get_scalar<long>(bytePtr);
-        if b == (long)0 {
+        let b: i64 = feng_pointer_get_scalar<i64>(bytePtr);
+        if b == (i64)0 {
           break;
         }
-        nameLen += (long)1;
+        nameLen += (i64)1;
       }
     }
 
     // 拷贝 d_name 字节（长度 nameLen）
     let nameBuf: byte[!] = byte[:nameLen];
-    for var i: long = (long)0; i < nameLen; i += (long)1 {
+    for var i: i64 = (i64)0; i < nameLen; i += (i64)1 {
       let bytePtr = feng_pointer_move(nameDataPtr, i);
-      let b: long = feng_pointer_get_scalar<long>(bytePtr);
-      nameBuf[i] = (byte)(b & (long)255);
+      let b: i64 = feng_pointer_get_scalar<i64>(bytePtr);
+      nameBuf[i] = (byte)(b & (i64)255);
     }
     let name = string.fromUtf8Bytes((byte[])nameBuf);
 
@@ -221,7 +221,7 @@ open type Dir {
       return self.readEntry();
     }
 
-    let kind = entryKindFromDType((long)dtype);
+    let kind = entryKindFromDType((i64)dtype);
     let fullPath = self.dirPath + "/" + name;
 
     return EntryInfo {
@@ -277,11 +277,11 @@ open func readDir(path: string): EntryInfo[] {
   let dir = Dir.create(path);
   let entries = List<EntryInfo>();
   while true {
-    let batch = dir.read((long)64);
-    if batch.length() == (long)0 {
+    let batch = dir.read((i64)64);
+    if batch.length() == (i64)0 {
       break;
     }
-    for var i: long = (long)0; i < batch.length(); i += (long)1 {
+    for var i: i64 = (i64)0; i < batch.length(); i += (i64)1 {
       entries.add(batch[i]);
     }
   }

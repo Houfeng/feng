@@ -6,10 +6,10 @@ import std.io;
 import std.text;
 
 func read_reads_into_buffer() {
-  let head: byte[!] = byte[: (long)3];
+  let head: byte[!] = byte[: (i64)3];
   let readCount = stdio.read(head);
 
-  check(readCount == (long)3, "stdio/read-head-count");
+  check(readCount == (i64)3, "stdio/read-head-count");
   check(head[0] == (byte)65, "stdio/read-head-0");
   check(head[1] == (byte)66, "stdio/read-head-1");
   check(head[2] == (byte)67, "stdio/read-head-2");
@@ -19,14 +19,14 @@ func readLine_uses_remaining_input() {
   let first = stdio.readLine();
   let second = stdio.readLine();
   let third = stdio.readLine();
-  let eofBuffer: byte[!] = byte[: (long)2];
-  let emptyBuffer: byte[!] = byte[: (long)0];
+  let eofBuffer: byte[!] = byte[: (i64)2];
+  let emptyBuffer: byte[!] = byte[: (i64)0];
 
-  check(first.length() == (long)2, "stdio/readLine-first-length");
-  check(second.length() == (long)2, "stdio/readLine-second-length");
-  check(third.length() == (long)0, "stdio/readLine-eof-length");
-  check(stdio.read(eofBuffer) == (long)0, "stdio/read-eof-count");
-  check(stdio.read(emptyBuffer) == (long)0, "stdio/read-empty-buffer");
+  check(first.length() == (i64)2, "stdio/readLine-first-length");
+  check(second.length() == (i64)2, "stdio/readLine-second-length");
+  check(third.length() == (i64)0, "stdio/readLine-eof-length");
+  check(stdio.read(eofBuffer) == (i64)0, "stdio/read-eof-count");
+  check(stdio.read(emptyBuffer) == (i64)0, "stdio/read-empty-buffer");
 
   writeLine("__STDIO_READLINE1__=" + first);
   writeLine("__STDIO_READLINE2__=" + second);
@@ -37,7 +37,7 @@ func write_writes_stdout() {
   let marker: byte[] = [95, 95, 83, 84, 68, 73, 79, 95, 87, 82, 73, 84, 69, 95, 95, 10];
   let written = stdio.write(marker);
 
-  check(written == (long)16, "stdio/write-return");
+  check(written == (i64)16, "stdio/write-return");
 }
 
 func write_text_writes_stdout() {
@@ -51,14 +51,14 @@ func writeLine_writes_stdout() {
   let marker = "__STDIO_LINE__";
   let written = stdio.writeLine(marker);
 
-  check(written == (long)15, "stdio/writeLine-return");
+  check(written == (i64)15, "stdio/writeLine-return");
 }
 
 func writeError_writes_stderr() {
   let marker: byte[] = [95, 95, 83, 84, 68, 73, 79, 95, 69, 82, 82, 79, 82, 95, 95, 10];
   let written = stdio.writeError(marker);
 
-  check(written == (long)16, "stdio/writeError-return");
+  check(written == (i64)16, "stdio/writeError-return");
 }
 
 func writeError_text_writes_stderr() {
@@ -69,13 +69,13 @@ func writeError_text_writes_stderr() {
 }
 
 func writeErrorLine_writes_stderr() {
-  let empty: byte[!] = byte[: (long)0];
+  let empty: byte[!] = byte[: (i64)0];
   let text = "__STDIO_ERROR_LINE_TEXT__";
   let bytesWritten = stdio.writeErrorLine((byte[])empty);
   let textWritten = stdio.writeErrorLine(text);
 
-  check(bytesWritten == (long)1, "stdio/writeErrorLine-bytes-return");
-  check(textWritten == text.length() + (long)1, "stdio/writeErrorLine-text-return");
+  check(bytesWritten == (i64)1, "stdio/writeErrorLine-bytes-return");
+  check(textWritten == text.length() + (i64)1, "stdio/writeErrorLine-text-return");
 }
 
 func print_formats_output() {
@@ -85,7 +85,7 @@ func print_formats_output() {
 
   check(topWritten == "__STDIO_TOP_PRINT__ left/right\n".length(), "stdio/top-print-return");
   check(literalWritten == "__STDIO_LITERAL__ {2}\n".length(), "stdio/literal-print-return");
-  check(printlnWritten == "__STDIO_PRINTLN__ left/right".length() + (long)1, "stdio/println-return");
+  check(printlnWritten == "__STDIO_PRINTLN__ left/right".length() + (i64)1, "stdio/println-return");
 }
 
 open func run_stdio_api_tests() {

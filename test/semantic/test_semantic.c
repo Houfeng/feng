@@ -696,7 +696,7 @@ static void test_runtime_annotation_accepts_top_level_extern_function(void) {
     const char *source =
         "module demo.main;\n"
         "@runtime\n"
-        "extern func feng_string_length(value: string): long;\n";
+        "extern func feng_string_length(value: string): i64;\n";
     FengProgram *program = parse_program_or_die("runtime_extern_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -716,7 +716,7 @@ static void test_runtime_annotation_rejects_non_extern_function(void) {
     const char *source =
         "module demo.main;\n"
         "@runtime\n"
-        "func feng_string_length(value: string): long {\n"
+        "func feng_string_length(value: string): i64 {\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("runtime_non_extern_error.f", source);
@@ -740,7 +740,7 @@ static void test_runtime_annotation_rejects_c_abi_target_annotation(void) {
         "module demo.main;\n"
         "@runtime\n"
         "@cdecl(\"m\")\n"
-        "extern func feng_string_length(value: string): long;\n";
+        "extern func feng_string_length(value: string): i64;\n";
     FengProgram *program = parse_program_or_die("runtime_callconv_conflict_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -762,7 +762,7 @@ static void test_runtime_annotation_rejects_abi_annotation(void) {
         "module demo.main;\n"
         "@runtime\n"
         "@abi\n"
-        "extern func feng_string_length(value: string): long;\n";
+        "extern func feng_string_length(value: string): i64;\n";
     FengProgram *program = parse_program_or_die("runtime_abi_conflict_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -3897,8 +3897,8 @@ static void test_generic_extern_call_accepts_wrapped_array_inference(void) {
     const char *source =
         "module demo.main;\n"
         "@runtime\n"
-        "extern func feng_array_length_i64<T>(value: T[]): long;\n"
-        "func run(values: int[]): long {\n"
+        "extern func feng_array_length_i64<T>(value: T[]): i64;\n"
+        "func run(values: int[]): i64 {\n"
         "    return feng_array_length_i64(values);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("generic_extern_wrapped_ok.f", source);
@@ -3969,11 +3969,11 @@ static void test_fit_method_accepts_fit_type_param_argument(void) {
     const char *source =
         "module demo.main;\n"
         "fit T[!] {\n"
-        "    func pick(value: T): long {\n"
-        "        return (long)1;\n"
+        "    func pick(value: T): i64 {\n"
+        "        return (i64)1;\n"
         "    }\n"
         "}\n"
-        "func run(values: int[!]): long {\n"
+        "func run(values: int[!]): i64 {\n"
         "    return values.pick(1);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_method_type_param_arg_ok.f", source);
@@ -3996,8 +3996,8 @@ static void test_generic_extern_call_rejects_conflicting_wrapped_array_inference
     const char *source =
         "module demo.main;\n"
         "@runtime\n"
-        "extern func same<T>(left: T[], right: T[]): long;\n"
-        "func run(left: int[], right: string[]): long {\n"
+        "extern func same<T>(left: T[], right: T[]): i64;\n"
+        "func run(left: int[], right: string[]): i64 {\n"
         "    return same(left, right);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("generic_extern_wrapped_conflict.f", source);
@@ -4077,11 +4077,11 @@ static void test_imported_generic_extern_call_accepts_wrapped_array_inference(vo
     const char *base_source =
         "open module demo.base;\n"
         "@runtime\n"
-        "open extern func feng_array_length_i64<T>(value: T[]): long;\n";
+        "open extern func feng_array_length_i64<T>(value: T[]): i64;\n";
     const char *main_source =
         "module demo.main;\n"
         "import demo.base as base;\n"
-        "func run(values: int[]): long {\n"
+        "func run(values: int[]): i64 {\n"
         "    return base.feng_array_length_i64(values);\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("imported_generic_extern_base.f", base_source);
@@ -8678,7 +8678,7 @@ static void test_numeric_literal_adapts_to_explicit_alias_targets(void) {
         "module demo.main;\n"
         "func run(): void {\n"
         "    let a: int = 1;\n"
-        "    let b: long = 1;\n"
+        "    let b: i64 = 1;\n"
         "    let c: byte = 0;\n"
         "    let d: float = 1.5;\n"
         "    let e: double = 1.5;\n"
@@ -15019,7 +15019,7 @@ static void test_value_kind_builtin_classifies_numerics_and_bool_as_trivial(void
         "i8",  "i16",  "i32",  "i64",
         "u8",  "u16",  "u32",  "u64",
         "f32", "f64",
-        "int", "long", "byte", "float", "double",
+        "int", "byte", "float", "double",
         "bool"
     };
     for (size_t i = 0U; i < sizeof(names) / sizeof(names[0]); ++i) {
@@ -15033,14 +15033,14 @@ static void test_value_kind_builtin_classifies_numerics_and_bool_as_trivial(void
         const char *src_adapter =
             "open module demo.adapter;\n"
             "open fit string {\n"
-            "    open func length(): long {\n"
+            "    open func length(): i64 {\n"
             "        return 7;\n"
             "    }\n"
             "}\n";
         const char *src_consumer =
             "open module demo.consumer;\n"
             "import demo.adapter;\n"
-            "func run(): long {\n"
+            "func run(): i64 {\n"
             "    return \"abc\".length();\n"
             "}\n";
         FengProgram *p1 = parse_program_or_die("builtin_fit_adapter.f", src_adapter);
@@ -15063,14 +15063,14 @@ static void test_value_kind_builtin_classifies_numerics_and_bool_as_trivial(void
         const char *external_source =
             "open module vendor.text;\n"
             "open fit string {\n"
-            "    open func length(): long {\n"
+            "    open func length(): i64 {\n"
             "        return 7;\n"
             "    }\n"
             "}\n";
         const char *main_source =
             "module demo.main;\n"
             "import vendor.text;\n"
-            "func run(): long {\n"
+            "func run(): i64 {\n"
             "    return \"abc\".length();\n"
             "}\n";
         ImportedSourceFixture fixture;
@@ -15108,23 +15108,23 @@ static void test_value_kind_builtin_classifies_numerics_and_bool_as_trivial(void
         const char *external_source =
             "open module vendor.text;\n"
             "open fit T[] {\n"
-            "    open func length(): long {\n"
+            "    open func length(): i64 {\n"
             "        return 7;\n"
             "    }\n"
             "}\n"
             "open fit T[!] {\n"
-            "    open func length(): long {\n"
+            "    open func length(): i64 {\n"
             "        return 9;\n"
             "    }\n"
             "}\n";
         const char *main_source =
             "module demo.main;\n"
             "import vendor.text;\n"
-            "func mutable_len(): long {\n"
+            "func mutable_len(): i64 {\n"
             "    let values: int[] = [1, 2, 3];\n"
             "    return values.length();\n"
             "}\n"
-            "func readonly_len(): long {\n"
+            "func readonly_len(): i64 {\n"
             "    let values: int[!] = [1, 2, 3];\n"
             "    return values.length();\n"
             "}\n";

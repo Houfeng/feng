@@ -10,7 +10,7 @@ open fit string {
 	 * @param end - zero-based exclusive end byte offset of the view
 	 * @return view over the specified range
 	 */
-	open func slice(start: long, end: long): StringSpan {
+	open func slice(start: i64, end: i64): StringSpan {
 		return StringSpan(self, start, end);
 	}
 
@@ -19,7 +19,7 @@ open fit string {
 	 * @param start - zero-based byte offset of the first byte in the view
 	 * @return view over the specified range
 	 */
-	open func slice(start: long): StringSpan {
+	open func slice(start: i64): StringSpan {
 		return self.slice(start, self.length());
 	}
 }
@@ -29,8 +29,8 @@ open fit string {
  */
 open type StringSpan {
 	seal let origin: string;
-	seal let start: long;
-	seal let end: long;
+	seal let start: i64;
+	seal let end: i64;
 
 	/**
 	 * Creates a span covering the right-open byte range `[start, end)`.
@@ -39,8 +39,8 @@ open type StringSpan {
 	 * @param end - zero-based exclusive end byte offset
 	 * @throws IllegalArgumentException if `start` or `end` are out of bounds
 	 */
-	open func StringSpan(origin: string, start: long, end: long) {
-		if start < (long)0 {
+	open func StringSpan(origin: string, start: i64, end: i64) {
+		if start < (i64)0 {
 			throw "StringSpan start out of bounds";
 		}
 		if end < start {
@@ -58,7 +58,7 @@ open type StringSpan {
 	 * Returns the number of bytes covered by this span.
 	 * @return byte count inside the view
 	 */
-	open func length(): long {
+	open func length(): i64 {
 		return self.end - self.start;
 	}
 
@@ -67,14 +67,14 @@ open type StringSpan {
 	 * @param index - zero-based byte index relative to the span start
 	 * @return single-byte substring at the specified position
 	 */
-	open func at(index: long): string {
-		if index < (long)0 {
+	open func at(index: i64): string {
+		if index < (i64)0 {
 			throw "StringSpan index out of bounds";
 		}
 		if index >= self.length() {
 			throw "StringSpan index out of bounds";
 		}
-		return feng_string_slice(self.origin, self.start + index, (long)1);
+		return feng_string_slice(self.origin, self.start + index, (i64)1);
 	}
 
 	/**
@@ -83,8 +83,8 @@ open type StringSpan {
 	 * @param end - zero-based exclusive end byte offset relative to this span
 	 * @return view over the specified range
 	 */
-	open func slice(start: long, end: long): StringSpan {
-		if start < (long)0 {
+	open func slice(start: i64, end: i64): StringSpan {
+		if start < (i64)0 {
 			throw "StringSpan slice start out of bounds";
 		}
 		if end < start {
@@ -101,7 +101,7 @@ open type StringSpan {
 	 * @param start - zero-based start byte offset relative to this span
 	 * @return view over the specified range
 	 */
-	open func slice(start: long): StringSpan {
+	open func slice(start: i64): StringSpan {
 		return self.slice(start, self.length());
 	}
 
@@ -118,7 +118,7 @@ open type StringSpan {
 	 * @param index - zero-based byte index relative to the span start
 	 * @return single-byte substring at the specified position
 	 */
-	open func get(index: long): string {
+	open func get(index: i64): string {
 		return self.at(index);
 	}
 

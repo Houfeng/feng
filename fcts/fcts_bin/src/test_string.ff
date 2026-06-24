@@ -15,16 +15,16 @@ open func test_string() {
 
     test("string escape sequences", () {
       let escaped = "line1\nline2";
-      assert(escaped.length() > (long)10, "string escape \\n");
+      assert(escaped.length() > (i64)10, "string escape \\n");
 
       let tab = "a\tb";
-      assert(tab.length() == (long)3, "string escape \\t");
+      assert(tab.length() == (i64)3, "string escape \\t");
 
       let quote = "say: \"hi\"";
-      assert(quote.length() == (long)9, "string escape \\\"");
+      assert(quote.length() == (i64)9, "string escape \\\"");
 
       let backslash = "path\\file";
-      assert(backslash.length() == (long)9, "string escape \\\\");
+      assert(backslash.length() == (i64)9, "string escape \\\\");
     });
 
     test("string concatenation", () {
@@ -44,17 +44,17 @@ open func test_string() {
 
     test("empty string", () {
       let empty = "";
-      assert(empty == "" && empty.length() == (long)0, "empty string");
+      assert(empty == "" && empty.length() == (i64)0, "empty string");
     });
 
     test("string length()", () {
       let msg = "Hello";
-      assert(msg.length() == (long)5, "string length()");
+      assert(msg.length() == (i64)5, "string length()");
     });
 
     test("string UTF-8 length (Chinese chars)", () {
       let chinese = "你好";
-      assert(chinese.length() == (long)6, "string UTF-8 length (Chinese chars)");
+      assert(chinese.length() == (i64)6, "string UTF-8 length (Chinese chars)");
     });
 
     test("string default zero value", () {

@@ -39,17 +39,17 @@ open type GraphemeView {
    * Returns the number of grapheme clusters in this string.
    * @return grapheme cluster count
    */
-  open func length(): long {
+  open func length(): i64 {
     let data: string* = &self.text;
     let end: string* = feng_pointer_move(data, self.text.length());
     var cursor: string* = data;
-    var count: long = 0;
+    var count: i64 = 0;
     while !feng_pointer_equal(cursor, end) {
       cursor = u8_grapheme_next(cursor, end);
       if feng_pointer_is_null(cursor) {
         break;
       }
-      count += (long)1;
+      count += (i64)1;
     }
     return count;
   }
@@ -68,27 +68,27 @@ open type GraphemeView {
    * @param index - zero-based grapheme index
    * @return substring containing the single grapheme cluster
    */
-  open func at(index: long): string {
-    if index < (long)0 {
+  open func at(index: i64): string {
+    if index < (i64)0 {
       throw "GraphemeView index out of bounds";
     }
     let data: string* = &self.text;
     let end: string* = feng_pointer_move(data, self.text.length());
     var cursor: string* = data;
-    var i: long = 0;
+    var i: i64 = 0;
     while i < index {
       cursor = u8_grapheme_next(cursor, end);
       if feng_pointer_is_null(cursor) {
         throw "GraphemeView index out of bounds";
       }
-      i += (long)1;
+      i += (i64)1;
     }
     if feng_pointer_equal(cursor, end) {
       throw "GraphemeView index out of bounds";
     }
     let next: string* = u8_grapheme_next(cursor, end);
     let start = feng_pointer_diff(cursor, data);
-    var cluster_end: long = 0;
+    var cluster_end: i64 = 0;
     if feng_pointer_is_null(next) {
       cluster_end = self.text.length();
     } else {
@@ -103,8 +103,8 @@ open type GraphemeView {
  */
 open type GraphemeIterator {
   seal let text: string;
-  seal let len: long;
-  seal var offset: long;
+  seal let len: i64;
+  seal var offset: i64;
 
   /**
    * Creates a new grapheme iterator over the given string.

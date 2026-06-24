@@ -4,7 +4,7 @@ module feng.smoke.abi_pointers;
 extern func puts(msg: string*): int;
 
 @cdecl("libc")
-extern func write(fd: int, buf: byte*, count: long): long;
+extern func write(fd: int, buf: byte*, count: i64): i64;
 
 @abi
 spec Cmp(a: int, b: int): int;
@@ -24,8 +24,8 @@ func main(args: string[]) {
     let text: string = "phase6 abi ok";
     let values: byte[] = [111, 107, 10];
     let holder: Holder = Holder{cb: &cmp, tag: 7};
-    let expected: long = 3;
-    let written: long = write(1, &values, expected);
+    let expected: i64 = 3;
+    let written: i64 = write(1, &values, expected);
 
     if holder.tag == 7 && written == expected {
         puts(&text);
