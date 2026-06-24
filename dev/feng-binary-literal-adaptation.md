@@ -93,37 +93,129 @@ if a == b { }         // ❌ i32 != i64，不贴合，需显式转换
 
 **改动文件**：`src/semantic/analyzer.c`
 
-**改动位置**：`validate_binary_expr()`
+**改动位置**：`infer_expr_type()` 的 `FENG_EXPR_BINARY` 分支（约 14449 行）
 
-在现有的 `infer_expr_type` 推导两侧类型后、`binary_expr_types_are_valid` 验证前，增加字面量贴合步骤：
+在现有的 `inferred_expr_types_equal` 类型相等性检查**之前**，增加字面量贴合步骤：
 
 ```
-validate_binary_expr:
-  1. infer_expr_type(left) → left_type
-  2. infer_expr_type(right) → right_type
-  3. [新增] 如果 left 是纯数值字面量且 right_type 是标量：
-     尝试将 left 贴合到 right_type，成功则以 right_type 作为 left_type
-  4. [新增] 如果 right 是纯数值字面量且 left_type 是标量：
-     尝试将 right 贴合到 left_type，成功则以 left_type 作为 right_type
-  5. binary_expr_types_are_valid(op, left_type, right_type)
+infer_expr_type → FENG_EXPR_BINARY:
+  1. infer_expr_type(left) → left_type       // 递归推导
+  2. infer_expr_type(right) → right_type      // 递归推导
+  3. [新增] 如果 right 是纯数值字面量且 left_type 是已确定的标量类型：
+     求值字面量，检查是否适配 left_type，适配则以 left_type 替换 right_type
+  4. [新增] 否则如果 left 是纯数值字面量且 right_type 是已确定的标量类型：
+     求值字面量，检查是否适配 right_type，适配则以 right_type 替换 left_type
+  5. [现有] inferred_expr_types_equal(left_type, right_type) → 返回结果类型
 ```
+
+**伪代码**（插入在步骤 1-2 之后、步骤 5 之前）：
+
+```c
+/* 二元运算字面量贴合：一侧为纯数值字面量，对侧为已确定标量类型时，
+ * 字面量贴合到对侧类型。递归自然生效，支持任意嵌套深度。 */
+if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr->as.binary.right) &&
+    inferred_expr_type_is_numeric(left_type)) {
+    if (numeric_literal_fits_inferred_target(context, expr->as.binary.right, left_type)) {
+        right_type = left_type;
+    }
+} else if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr->as.binary.left) &&
+           inferred_expr_type_is_numeric(right_type)) {
+    if (numeric_literal_fits_inferred_target(context, expr->as.binary.left, right_type)) {
+        left_type = right_type;
+    }
+}
+```
+
+**新增辅助函数** `numeric_literal_fits_inferred_target`：
+
+```c
+static bool numeric_literal_fits_inferred_target(ResolveContext *context,
+                                                 const FengExpr *literal_expr,
+                                                 InferredExprType target_type) {
+    const char *canonical = inferred_expr_type_builtin_canonical_name(
+        target_type, context->pointer_size);
+    FengConstValue value;
+    bool target_is_float;
+
+    if (canonical == NULL) return false;
+    target_is_float = strcmp(canonical, "f32") == 0 || strcmp(canonical, "f64") == 0;
+    if (!evaluate_constant_expr(context, literal_expr, &value)) return false;
+    if (value.kind == FENG_CONST_INT) {
+        return target_is_float || integer_literal_fits_canonical_target(value.i, canonical);
+    }
+    if (value.kind == FENG_CONST_FLOAT) {
+        return target_is_float;
+    }
+    return false;
+}
+```
+
+**设计要点**：
+
+- **改动位置选择 `infer_expr_type` 而非 `validate_binary_expr`**：`infer_expr_type` 是递归函数，贴合逻辑在类型推导阶段生效，任意嵌套深度的二元表达式（如 `n + 1 > 3`）逐层自然贴合；`validate_binary_expr` 内部依赖 `infer_expr_type` 获取子表达式类型，若贴合仅在验证阶段，内层推导返回 unknown 将导致外层无法贴合
+- **贴合是单向的**：字面量贴合到对侧，不是两侧互相贴合
+- **两侧均为字面量时不触发贴合**：各自默认推导，类型一致即通过
+- **贴合失败（超出范围）时**：保持默认推导类型，后续 `binary_expr_types_are_valid` 按类型不匹配报错，不新增错误码
+- **位移运算符（`<<`/`>>`）**：类型推导阶段贴合后，右操作数获得与左操作数相同的标量类型；验证阶段 `validate_integer_shift_rhs_range` 正常工作，无需额外协调
 
 **复用现有基础设施**：
 
-- `expr_is_pure_numeric_literal_expr_for_target_adaptation()`：判断表达式是否为纯数值字面量
-- `inferred_expr_type_is_numeric()` / `inferred_expr_type_is_integer()`：判断对侧是否为标量/整数类型
-- `numeric_literal_adapts_to_target()`：执行贴合与范围检查
-- `type_ref_builtin_canonical_name()`：从 `InferredExprType` 中提取标准名用于构造贴合目标
+- `expr_is_pure_numeric_literal_expr_for_target_adaptation()`：判断表达式是否为纯数值字面量（定义在 15372 行，需添加前向声明）
+- `inferred_expr_type_is_numeric()`：判断对侧是否为数值类型
+- `inferred_expr_type_builtin_canonical_name()`：从 `InferredExprType` 中提取标准名
+- `evaluate_constant_expr()`：求值字面量的编译期值（已有前向声明，4202 行）
+- `integer_literal_fits_canonical_target()`：纯函数，检查整数值是否在目标类型范围内（定义在 14892 行，需添加前向声明）
 
-**注意事项**：
+### 4.2 codegen 层改动
 
-- 贴合是单向的：字面量贴合到对侧，不是两侧互相贴合
-- 两侧均为字面量时不触发贴合（各自默认推导，类型一致即通过）
-- 贴合失败（如超出范围）时，仍走原有的类型不匹配报错路径，不新增错误码
+**改动文件**：`src/codegen/codegen.c`
 
-### 4.2 codegen 层无改动
+**背景**：当前标量字面量在所有场景均固定发射为 `int64_t`/`f64`（11073 行），不感知语义层确定的类型。绑定时靠 C 编译器隐式截断（`int8_t x = (int64_t)5;`），函数参数靠 C 隐式转换，二元运算靠 `cg_unify_numeric` 提升。能运行但发码不干净，且二元运算贴合后两侧 CG 类型不一致会导致不必要的类型提升。
 
-`cg_emit_binary` 中的 `cg_unify_numeric` 在语义层贴合后看到的两侧类型已经一致，codegen 无需额外处理。
+**改动 1**：`cg_emit_expr_for_expected_type()`（19634 行）增加数值字面量分支
+
+当 `expected_type` 为标量 CG 类型且 `expr` 为整型/浮点字面量时，按 `expected_type` 发射对应宽度的 C 类型：
+
+```c
+// 新增分支（在现有的 array/tuple 分支之后，fallthrough 之前）
+if (expected_type != NULL && expr != NULL && expr->kind == FENG_EXPR_INTEGER &&
+    cgtype_is_integer(expected_type->kind)) {
+    // 按 expected_type 的宽度和符号发射，例如 (int32_t)INT32_C(5)
+    ...
+}
+if (expected_type != NULL && expr != NULL && expr->kind == FENG_EXPR_FLOAT &&
+    cgtype_is_float(expected_type->kind)) {
+    // 按 expected_type 发射，例如 (float)3.14f
+    ...
+}
+```
+
+此改动是通用的，所有已有的 `cg_emit_expr_for_expected_type` 调用点（绑定初始化、函数参数、数组元素等）统一受益，不再依赖 C 编译器隐式转换。
+
+**改动 2**：`cg_emit_binary()`（11306 行）使用语义类型编译子表达式
+
+```c
+// 现有：
+cg_emit_expr(cg, e->as.binary.left, &lr);
+cg_emit_expr(cg, e->as.binary.right, &rr);
+
+// 改为：通过 infer_expr_type 获取语义类型，按类型发射
+CGType *common = cg_semantic_type_to_cg(cg, infer_expr_type(cg->context, e));
+cg_emit_expr_for_expected_type(cg, e->as.binary.left, common, &lr);
+cg_emit_expr_for_expected_type(cg, e->as.binary.right, common, &rr);
+```
+
+语义层贴合后，两侧类型已一致（如 `n + 1` 均为 `i32`），`cg_emit_expr_for_expected_type` 将字面量按 `i32` 发射，`cg_unify_numeric` 看到的两侧 CG 类型一致，无需提升。
+
+**效果对比**：
+
+```c
+// 改动前：n: i32, n + 1
+((int64_t)n + (int64_t)INT64_C(1))    // 盲目 i64，靠 C 编译器优化
+
+// 改动后：
+((int32_t)n + (int32_t)INT32_C(1))    // 按语义类型发码，干净正确
+```
 
 ### 4.3 规范文档改动
 
@@ -136,7 +228,8 @@ validate_binary_expr:
 ## 5. 影响范围
 
 - 规范文档：`docs/feng-builtin-type.md`（贴合定义扩展）
-- 编译器：`src/semantic/analyzer.c`（`validate_binary_expr` 增加贴合步骤）
+- 编译器语义层：`src/semantic/analyzer.c`（`infer_expr_type` 二元分支增加贴合，新增 `numeric_literal_fits_inferred_target` 辅助函数）
+- 编译器 codegen 层：`src/codegen/codegen.c`（`cg_emit_expr_for_expected_type` 增加数值字面量分支，`cg_emit_binary` 按语义类型编译子表达式）
 - 测试：现有 45 个 smoke 测试失败预期全部恢复；可能需要新增专门测试二元运算字面量贴合的用例
 
 ## 6. 已决问题
@@ -157,14 +250,22 @@ validate_binary_expr:
 
 ### 8.2 语义分析（src/semantic/analyzer.c）
 
-- [ ] `validate_binary_expr()`：在 `infer_expr_type` 之后、`binary_expr_types_are_valid` 之前，插入字面量贴合步骤
-  - [ ] 左操作数为纯数值字面量且右操作数类型为标量时，将左操作数贴合到右操作数类型
-  - [ ] 右操作数为纯数值字面量且左操作数类型为标量时，将右操作数贴合到左操作数类型
+- [ ] 新增 `numeric_literal_fits_inferred_target()` 辅助函数：求值字面量常量，检查是否适配目标 `InferredExprType`
+- [ ] 为 `expr_is_pure_numeric_literal_expr_for_target_adaptation()` 和 `integer_literal_fits_canonical_target()` 添加前向声明（两者定义在 `infer_expr_type` 之后）
+- [ ] `infer_expr_type()` 的 `FENG_EXPR_BINARY` 分支：在 `inferred_expr_types_equal` 之前插入字面量贴合步骤
+  - [ ] 右操作数为纯数值字面量且左操作数类型为已确定标量时，贴合右操作数类型到左操作数类型
+  - [ ] 左操作数为纯数值字面量且右操作数类型为已确定标量时，贴合左操作数类型到右操作数类型
   - [ ] 两侧均为字面量时不触发贴合，各自默认推导
-- [ ] 复用现有函数：`expr_is_pure_numeric_literal_expr_for_target_adaptation()`、`numeric_literal_adapts_to_target()`、`inferred_expr_type_is_numeric()` / `inferred_expr_type_is_integer()`、`type_ref_builtin_canonical_name()`
-- [ ] 位移运算符（`<<`/`>>`）：右操作数字面量贴合需与现有 `validate_integer_shift_rhs_range` 逻辑协调，避免重复或冲突
+  - [ ] 贴合时通过 `evaluate_constant_expr` 求值、`integer_literal_fits_canonical_target` 检查范围，不适配时保持默认推导类型
+- [ ] 位移运算符（`<<`/`>>`）：确认贴合后 `validate_integer_shift_rhs_range` 正常工作（预期无冲突）
 
-### 8.3 测试
+### 8.3 codegen（src/codegen/codegen.c）
+
+- [ ] `cg_emit_expr_for_expected_type()`：增加整型字面量分支——当 `expected_type` 为整数 CG 类型时，按 `expected_type` 的宽度和符号发射对应 C 类型（如 `int32_t`/`INT32_C`）
+- [ ] `cg_emit_expr_for_expected_type()`：增加浮点字面量分支——当 `expected_type` 为 `f32` 时发射 `(float)`，`f64` 时保持现有行为
+- [ ] `cg_emit_binary()`：通过 `infer_expr_type` 获取二元表达式的语义类型，使用 `cg_emit_expr_for_expected_type` 编译两侧子表达式，替代当前的 `cg_emit_expr`
+
+### 8.4 测试
 
 - [ ] 新增二元运算字面量贴合专项测试用例（覆盖：算术运算、比较运算、位运算、范围越界报错、两侧均为字面量不贴合）
 - [ ] 运行全量回归测试，确认无新增失败
