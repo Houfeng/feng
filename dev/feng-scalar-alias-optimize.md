@@ -214,15 +214,15 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ### Task 1：别名归一收敛（基础，纯重构，无行为变更）
 
-- [ ] 确认 `src/semantic/analyzer.c` 中 `canonical_builtin_type_name()` 为唯一归一入口
-- [ ] 在语义分析开始时遍历 AST，将所有 type_ref 中的别名替换为标准名（归一后 AST 仅保留标准名，不保留原始别名）。需覆盖的位置：函数签名（参数类型、返回类型）、变量/常量声明的类型注解、struct/enum/type_decl 中的字段类型、spec 声明与 impl 中的类型引用、泛型实参（type_args）、extern 声明的类型签名、强转表达式的目标类型
-- [ ] 移除 `src/semantic/analyzer.c` 中 `is_builtin_type_name()` 的 `builtin_names[]` 中的别名条目（归一后只看到标准名，别名条目为死代码）
-- [ ] 移除 `src/semantic/spec_relations.c` 中 `rel_builtin_canonical_name()` 的别名分支
-- [ ] 移除 `src/semantic/spec_witnesses.c` 中 `canonical_builtin_type_name_local()` 的别名分支
-- [ ] 移除 `src/codegen/codegen.c` 中 `k_builtin_types[]` 的别名字段（含 `uint` 死代码条目）及 `cg_is_builtin_named_fit_target()` 的别名项；归一后 codegen 仅感知标准名，不再包含任何别名
-- [ ] 移除 `src/symbol/export.c` 中 `canonical_builtin_name()` 的别名条目
-- [ ] 将 `src/cli/lsp/runtime.c` 中两处硬编码别名判断（3717-3720 行、4120-4123 行）替换为调用 `is_builtin_type_name()`（或提供等价导出函数），归一并移除别名条目后自然只匹配标准名；同时修复现状中标准名未被识别为内建类型的遗漏
-- [ ] 全量回归测试，确认无行为变更
+- [x] 确认 `src/semantic/analyzer.c` 中 `canonical_builtin_type_name()` 为唯一归一入口
+- [x] 在语义分析开始时遍历 AST，将所有 type_ref 中的别名替换为标准名（归一后 AST 仅保留标准名，不保留原始别名）。需覆盖的位置：函数签名（参数类型、返回类型）、变量/常量声明的类型注解、struct/enum/type_decl 中的字段类型、spec 声明与 impl 中的类型引用、泛型实参（type_args）、extern 声明的类型签名、强转表达式的目标类型
+- [x] 移除 `src/semantic/analyzer.c` 中 `is_builtin_type_name()` 的 `builtin_names[]` 中的别名条目（归一后只看到标准名，别名条目为死代码）
+- [x] 移除 `src/semantic/spec_relations.c` 中 `rel_builtin_canonical_name()` 的别名分支
+- [x] 移除 `src/semantic/spec_witnesses.c` 中 `canonical_builtin_type_name_local()` 的别名分支
+- [x] 移除 `src/codegen/codegen.c` 中 `k_builtin_types[]` 的别名字段（含 `uint` 死代码条目）及 `cg_is_builtin_named_fit_target()` 的别名项；归一后 codegen 仅感知标准名，不再包含任何别名
+- [x] 移除 `src/symbol/export.c` 中 `canonical_builtin_name()` 的别名条目
+- [x] 将 `src/cli/lsp/runtime.c` 中两处硬编码别名判断（3717-3720 行、4120-4123 行）替换为调用 `is_builtin_type_name()`（或提供等价导出函数），归一并移除别名条目后自然只匹配标准名；同时修复现状中标准名未被识别为内建类型的遗漏
+- [x] 全量回归测试，确认无行为变更
 
 ### Task 2：规范文档更新
 
