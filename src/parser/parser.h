@@ -194,6 +194,7 @@ typedef enum FengExprKind {
 struct FengExpr {
     FengToken token;
     FengExprKind kind;
+    const FengTypeRef *type;  /* filled by the semantic analyzer; NULL means not inferred */
     union {
         FengSlice identifier;
         bool boolean;
