@@ -4,27 +4,27 @@ import std.io;
 import std.test;
 
 // 基本 tuple type
-type TPoint(int, int);
+type TPoint(i32, i32);
 
 // 三元素 tuple
-type TTriple(int, string, bool);
+type TTriple(i32, string, bool);
 
 // Unit type
 type TUnit();
 
 // Tuple 满足 spec
 spec TSummable {
-  func tsum(): int;
+  func tsum(): i32;
 }
 
 fit TPoint: TSummable {
-  func tsum(): int {
+  func tsum(): i32 {
     return self.item1 + self.item2;
   }
 }
 
 // 接受 spec 参数
-func consume_tsummable(value: TSummable): int {
+func consume_tsummable(value: TSummable): i32 {
   return value.tsum();
 }
 

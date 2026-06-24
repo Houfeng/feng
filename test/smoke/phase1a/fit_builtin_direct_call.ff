@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): int;
+extern func puts(msg: string*): i32;
 
 fit i32 {
   func double(): i32 {
@@ -9,8 +9,8 @@ fit i32 {
   }
 }
 
-fit int[] {
-  func head(): int {
+fit i32[] {
+  func head(): i32 {
     return self[0];
   }
 }
@@ -21,7 +21,7 @@ func main(args: string[]) {
     return;
   }
 
-  let xs: int[] = [7, 9];
+  let xs: i32[] = [7, 9];
   if xs.head() != 7 {
     puts(&"fit array fail");
     return;

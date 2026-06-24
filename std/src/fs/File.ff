@@ -5,38 +5,38 @@ import std.text;
 
 // libc file operations
 @cdecl("libc", "open", 2)
-extern func c_open(path: byte*, flags: int, mode: int): int;
+extern func c_open(path: byte*, flags: i32, mode: i32): i32;
 
 @cdecl("libc", "close")
-extern func c_close(fd: int): int;
+extern func c_close(fd: i32): i32;
 
 @cdecl("libc", "read")
-extern func c_read(fd: int, buf: byte*, count: i64): i64;
+extern func c_read(fd: i32, buf: byte*, count: i64): i64;
 
 @cdecl("libc", "write")
-extern func c_write(fd: int, buf: byte*, count: i64): i64;
+extern func c_write(fd: i32, buf: byte*, count: i64): i64;
 
 @cdecl("libc", "access")
-extern func c_access(path: byte*, mode: int): int;
+extern func c_access(path: byte*, mode: i32): i32;
 
 @cdecl("libc", "unlink")
-extern func c_unlink(path: byte*): int;
+extern func c_unlink(path: byte*): i32;
 
 @cdecl("libc", "rename")
-extern func c_rename(from: byte*, to: byte*): int;
+extern func c_rename(from: byte*, to: byte*): i32;
 
 @cdecl("libc", "fstat")
-extern func fs_posix_fstat(fd: int, buf: i64*): int;
+extern func fs_posix_fstat(fd: i32, buf: i64*): i32;
 
 // Default file creation permission: 0644 = 420
-seal let DEFAULT_FILE_MODE: int = 420;
+seal let DEFAULT_FILE_MODE: i32 = 420;
 
 /**
  * File I/O object, wrapping a file descriptor with read/write operations.
  * Bytes-first: read and write operate directly on byte buffers or byte[] data.
  */
 open type File {
-  seal var fd: int;
+  seal var fd: i32;
   seal var closed: bool;
 
   /**
@@ -46,7 +46,7 @@ open type File {
    */
   open static func create(path: string, mode: FileMode): File {
     let pathBytes = makeNullTerminatedPath(path);
-    let fd = c_open(&pathBytes, (int)mode, DEFAULT_FILE_MODE);
+    let fd = c_open(&pathBytes, (i32)mode, DEFAULT_FILE_MODE);
     if fd < 0 {
       throw "fs/open-failed";
     }

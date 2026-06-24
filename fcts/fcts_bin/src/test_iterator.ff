@@ -4,12 +4,12 @@ import std.io;
 import std.test;
 
 // 迭代结果 tuple
-type IterPair(bool, int);
+type IterPair(bool, i32);
 
 // 自定义 Cursor
 type RCursor {
-  var current: int;
-  let end: int;
+  var current: i32;
+  let end: i32;
 
   @iterator
   func next(): IterPair {
@@ -24,8 +24,8 @@ type RCursor {
 
 // 可迭代类型
 type IRange {
-  let start: int;
-  let end: int;
+  let start: i32;
+  let end: i32;
 
   @iterable
   func iter(): RCursor {
@@ -35,8 +35,8 @@ type IRange {
 
 // 自迭代 Cursor (直接 @iterator, 无需 @iterable)
 type SelfCursor {
-  var current: int;
-  let limit: int;
+  var current: i32;
+  let limit: i32;
 
   @iterator
   func next(): IterPair {
@@ -82,7 +82,7 @@ open func test_iterator() {
     });
 
     test("array and iterator coexist", () {
-      let nums: int[] = [10, 20];
+      let nums: i32[] = [10, 20];
       var arr_sum = 0;
       for let n in nums {
         arr_sum += n;

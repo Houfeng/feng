@@ -6,4 +6,4 @@ open type LibTag {
 }
 
 /** 跨包测试用 union-form spec, 供 fcts_bin 验证跨包 union member type 标签. */
-open spec LibChoice: LibTag | int | string;
+open spec LibChoice: LibTag | i32 | string;

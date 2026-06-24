@@ -15,7 +15,7 @@ open fit bool {
   }
 }
 
-open fit int {
+open fit i32 {
   /**
    * Serializes this integer value to a JSON string.
    * @return the JSON string representation of this integer
@@ -229,7 +229,7 @@ open type JsonObject: Display {
  * This type is used to represent any value that can appear in a JSON document.
  */
 open spec JsonValue: None
-| int
+| i32
 | float
 | double
 | bool

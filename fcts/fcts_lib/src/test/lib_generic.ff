@@ -3,7 +3,7 @@ open module fcts_lib.test;
 import std;
 
 open type LibGenericDisplayPayload: Display {
-  let value: int;
+  let value: i32;
   func toString(): string {
     return "lib-generic-display-payload";
   }
@@ -13,7 +13,7 @@ open type LibGenericInner<T1, T2: Display> {
   let name: string;
   let payload1: T1;
   let payload2: T2;
-  let value: int;
+  let value: i32;
   func getPayload1(): T1 {
     return self.payload1;
   }

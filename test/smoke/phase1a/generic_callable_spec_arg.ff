@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): int;
+extern func puts(msg: string*): i32;
 
 /* callable-form spec used as a generic type argument. Exercises the
  * codegen path where a callable spec flows through substitution into

@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): int;
+extern func puts(msg: string*): i32;
 
 func main(args: string[]) {
     for var i: i32 = 0; i < 10; i = i + 1 {

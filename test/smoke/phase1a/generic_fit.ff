@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): int;
+extern func puts(msg: string*): i32;
 
 spec Reader<T> {
     func read(): T;
@@ -17,12 +17,12 @@ fit Box<T>: Reader<T> {
     }
 }
 
-func readInt(reader: Reader<int>): int {
+func readInt(reader: Reader<i32>): i32 {
     return reader.read();
 }
 
 func main(args: string[]) {
-    let box: Box<int> = Box<int>();
+    let box: Box<i32> = Box<i32>();
     box.value = 42;
     if readInt(box) == 42 {
         puts(&"generic fit ok");

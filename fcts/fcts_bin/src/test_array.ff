@@ -19,18 +19,18 @@ open func test_array() {
     });
 
     test("writable array T[!]", () {
-      let writable: int[!] = [10, 20, 30];
+      let writable: i32[!] = [10, 20, 30];
       writable[0] = 99;
       assert(writable[0] == 99, "writable array T[!]");
     });
 
     test("array creation expression Type[:n]", () {
-      let buf: int[!] = int[: (i64)5];
+      let buf: i32[!] = i32[: (i64)5];
       assert(buf.length() == (i64)5 && buf[0] == 0, "array creation expression Type[:n]");
     });
 
     test("empty array", () {
-      let empty: int[] = [];
+      let empty: i32[] = [];
       assert(empty.length() == (i64)0, "empty array");
     });
 
@@ -40,21 +40,21 @@ open func test_array() {
     });
 
     test("writable outer array int[][!]", () {
-      let w_matrix: int[][!] = [[1, 2], [3, 4]];
+      let w_matrix: i32[][!] = [[1, 2], [3, 4]];
       w_matrix[0] = [5, 6];
       assert(w_matrix[0][0] == 5, "writable outer array int[][!]");
     });
 
     test("writable inner array int[!][]", () {
-      let iw_matrix: int[!][] = [[1, 2], [3, 4]];
+      let iw_matrix: i32[!][] = [[1, 2], [3, 4]];
       iw_matrix[0][0] = 99;
       assert(iw_matrix[0][0] == 99, "writable inner array int[!][]");
     });
 
     test("explicit cast T[!] to T[]", () {
-      let writable: int[!] = [10, 20, 30];
+      let writable: i32[!] = [10, 20, 30];
       writable[0] = 99;
-      let ro = (int[])writable;
+      let ro = (i32[])writable;
       assert(ro[0] == 99, "explicit cast T[!] to T[]");
     });
 
@@ -68,7 +68,7 @@ open func test_array() {
     });
 
     test("array reference semantics", () {
-      let arr1: int[!] = [1, 2, 3];
+      let arr1: i32[!] = [1, 2, 3];
       let arr2 = arr1;
       arr2[0] = 100;
       assert(arr1[0] == 100, "array reference semantics");
@@ -80,7 +80,7 @@ open func test_array() {
     });
 
     test("array default zero value (empty)", () {
-      let default_arr: int[];
+      let default_arr: i32[];
       assert(default_arr.length() == (i64)0, "array default zero value (empty)");
     });
   });

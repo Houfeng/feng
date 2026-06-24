@@ -3,7 +3,7 @@ module test.cli.localdepapp;
 import test.cli.localdep;
 
 @cdecl("libc")
-extern func puts(msg: string*): int;
+extern func puts(msg: string*): i32;
 
 func main(args: string[]) {
   if dep_value() == 7 {

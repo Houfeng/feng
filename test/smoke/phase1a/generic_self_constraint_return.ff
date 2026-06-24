@@ -1,14 +1,14 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): int;
+extern func puts(msg: string*): i32;
 
 spec Cloneable<T> {
     func cloneValue(): T;
 }
 
 type Key: Cloneable<Key> {
-    var id: int;
+    var id: i32;
 
     func cloneValue(): Key {
         return Key{id: self.id};

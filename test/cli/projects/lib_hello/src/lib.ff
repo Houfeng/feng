@@ -1,5 +1,5 @@
 open module feng.cli.project.lib;
 
-open func helper(): int {
+open func helper(): i32 {
     return 42;
 }

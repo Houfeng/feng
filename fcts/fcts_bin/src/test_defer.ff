@@ -120,7 +120,7 @@ func defer_capture_current_value(): string {
 }
 
 // defer 修改外层 var（通过自然块退出观察）
-func defer_modify_outer_var(): int {
+func defer_modify_outer_var(): i32 {
   var x = 0;
   {
     defer { x = 100; }
@@ -192,7 +192,7 @@ func defer_nested_loop_break(): string {
 }
 
 // defer 块内嵌套 while + continue（合法，通过自然块退出观察）
-func defer_nested_loop_continue(): int {
+func defer_nested_loop_continue(): i32 {
   var count = 0;
   {
     defer {

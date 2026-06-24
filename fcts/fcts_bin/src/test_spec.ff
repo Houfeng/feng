@@ -14,7 +14,7 @@ spec DetailPrintable: Printable {
 }
 
 // callable-form spec
-spec Transformer(x: int): int;
+spec Transformer(x: i32): i32;
 
 // type 声明头满足 spec
 type SpecItem: Printable {
@@ -107,7 +107,7 @@ open func test_spec() {
     });
 
     test("callable-form spec", () {
-      let t: Transformer = (x: int) -> x * 2;
+      let t: Transformer = (x: i32) -> x * 2;
       assert(t(5) == 10, "callable-form spec");
     });
 
@@ -162,6 +162,6 @@ open func test_spec() {
   });
 }
 
-func double_it(x: int): int {
+func double_it(x: i32): i32 {
   return x * 2;
 }

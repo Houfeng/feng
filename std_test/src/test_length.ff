@@ -18,28 +18,28 @@ func string_length_empty() {
 }
 
 func array_length_readonly() {
-  let values: int[] = [1, 2, 3, 4];
+  let values: i32[] = [1, 2, 3, 4];
   check(values.length() == (i64)4, "length/array-readonly");
 }
 
 func array_length_writable() {
-  let values: int[!] = [10, 20];
+  let values: i32[!] = [10, 20];
   check(values.length() == (i64)2, "length/array-writable");
 }
 
 func array_length_empty() {
-  let values: int[];
+  let values: i32[];
   check(values.length() == (i64)0, "length/array-empty");
 }
 
 func array_length_nested() {
-  let matrix: int[][!] = [[1, 2, 3], [4]];
+  let matrix: i32[][!] = [[1, 2, 3], [4]];
   check(matrix.length() == (i64)2, "length/array-nested-outer");
   check(matrix[0].length() == (i64)3, "length/array-nested-inner");
 }
 
 func array_index_of_int() {
-  let values: int[!] = [10, 20, 30, 20];
+  let values: i32[!] = [10, 20, 30, 20];
 
   check(values.indexOf(20) == (i64)1, "length/array-index-of-int-hit");
   check(values.indexOf(99) == (i64)-1, "length/array-index-of-int-miss");
@@ -54,14 +54,14 @@ func array_index_of_string() {
 }
 
 func span_length_readonly() {
-  let values: int[] = [1, 2, 3, 4];
+  let values: i32[] = [1, 2, 3, 4];
   let middle = values.slice((i64)1, (i64)3);
 
   check(middle.length() == (i64)2, "length/span-length-readonly");
 }
 
 func span_get_readonly() {
-  let values: int[] = [1, 2, 3, 4];
+  let values: i32[] = [1, 2, 3, 4];
   let middle = values.slice((i64)1, (i64)3);
 
   check(middle.get((i64)0) == 2, "length/span-get-readonly-0");
@@ -69,7 +69,7 @@ func span_get_readonly() {
 }
 
 func span_slice_writable_source() {
-  let values: int[!] = [10, 20, 30];
+  let values: i32[!] = [10, 20, 30];
   let tail = values.slice((i64)1, (i64)3);
 
   check(tail.length() == (i64)2, "length/span-writable-source-length");
@@ -78,7 +78,7 @@ func span_slice_writable_source() {
 }
 
 func span_slice_invalid_range() {
-  let values: int[] = [1, 2, 3];
+  let values: i32[] = [1, 2, 3];
   let fallback = values.slice((i64)0, (i64)1);
   var caught: bool = false;
 
@@ -91,7 +91,7 @@ func span_slice_invalid_range() {
 }
 
 func span_slice_negative_start() {
-  let values: int[] = [1, 2, 3];
+  let values: i32[] = [1, 2, 3];
   let fallback = values.slice((i64)0, (i64)1);
   var caught: bool = false;
 
@@ -104,26 +104,26 @@ func span_slice_negative_start() {
 }
 
 func span_get_invalid_index() {
-  let values: int[] = [1, 2, 3];
+  let values: i32[] = [1, 2, 3];
   let middle = values.slice((i64)1, (i64)3);
   var caught: bool = false;
 
   let ignored = try middle.get((i64)2) catch ex: string {
     caught = true;
-    (int)0;
+    (i32)0;
   };
 
   check(caught, "length/span-get-invalid-index");
 }
 
 func span_get_negative_index() {
-  let values: int[] = [1, 2, 3];
+  let values: i32[] = [1, 2, 3];
   let middle = values.slice((i64)1, (i64)3);
   var caught: bool = false;
 
   let ignored = try middle.get((i64)-1) catch ex: string {
     caught = true;
-    (int)0;
+    (i32)0;
   };
 
   check(caught, "length/span-get-negative-index");

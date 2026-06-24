@@ -1,16 +1,16 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): int;
+extern func puts(msg: string*): i32;
 
-spec MapperA(x: int): int;
-spec MapperB(x: int): int;
+spec MapperA(x: i32): i32;
+spec MapperB(x: i32): i32;
 
-func add1(x: int): int {
+func add1(x: i32): i32 {
     return x + 1;
 }
 
-func use_mapper(input: MapperA): int {
+func use_mapper(input: MapperA): i32 {
     let local: MapperA = input;
     let remapped: MapperB = (MapperB)local;
     return remapped(41);

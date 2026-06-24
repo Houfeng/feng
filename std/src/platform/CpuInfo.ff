@@ -1,7 +1,7 @@
 open module std.platform;
 
 @cdecl("feng_std_uv", "uv_available_parallelism")
-extern func uv_available_parallelism(): int;
+extern func uv_available_parallelism(): i32;
 
 /**
  * Provides CPU topology queries.

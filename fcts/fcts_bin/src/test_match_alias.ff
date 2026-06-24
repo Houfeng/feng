@@ -12,7 +12,7 @@ open func test_match_alias() {
       let v: b.LibChoice = b.LibTag { label: "tagged" };
       let result = match v {
         b.LibTag { "tag" }
-        int { "int" }
+        i32 { "int" }
         string { "str" }
         else { "else" }
       };
@@ -23,7 +23,7 @@ open func test_match_alias() {
       let v: b.LibChoice = 7;
       let result = match v {
         b.LibTag { "tag" }
-        int { "int" }
+        i32 { "int" }
         string { "str" }
         else { "else" }
       };
@@ -34,7 +34,7 @@ open func test_match_alias() {
       let v: b.LibChoice = "world";
       let result = match v {
         b.LibTag { "tag" }
-        n: int { "int" }
+        n: i32 { "int" }
         s: string { s }
         else { "else" }
       };
@@ -45,7 +45,7 @@ open func test_match_alias() {
       let v: b.LibChoice = b.LibTag { label: "x" };
       assert(v match b.LibTag, "cross-package union match - alias infix (type)");
       let n: b.LibChoice = 42;
-      assert(n match int, "cross-package union match - alias infix (int)");
+      assert(n match i32, "cross-package union match - alias infix (int)");
       let s: b.LibChoice = "hi";
       assert(s match string, "cross-package union match - alias infix (string)");
     });

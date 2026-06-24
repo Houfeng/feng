@@ -78,7 +78,7 @@ open func test_numeric_literal() {
 
     test("numeric literal fitting to u8", () {
       let w: u8 = 200;
-      assert((int)w == 200, "numeric literal fitting to u8");
+      assert((i32)w == 200, "numeric literal fitting to u8");
     });
 
     test("literal expression fitting to f64", () {

@@ -5,29 +5,29 @@ import std.test;
 import std.collections;
 
 func array_clone_all_readonly() {
-  let values: int[] = [1, 2, 3];
+  let values: i32[] = [1, 2, 3];
   let copied = values.clone();
 
   check(copied.length() == (i64)3, "slice/array-clone-all-length");
-  check(copied[(int)0] == 1, "slice/array-clone-all-0");
-  check(copied[(int)1] == 2, "slice/array-clone-all-1");
-  check(copied[(int)2] == 3, "slice/array-clone-all-2");
+  check(copied[(i32)0] == 1, "slice/array-clone-all-0");
+  check(copied[(i32)1] == 2, "slice/array-clone-all-1");
+  check(copied[(i32)2] == 3, "slice/array-clone-all-2");
 }
 
 func array_clone_range_is_independent() {
-  let values: int[!] = [10, 20, 30, 40];
+  let values: i32[!] = [10, 20, 30, 40];
   let copied = values.clone((i64)1, (i64)3);
 
-  values[(int)1] = 99;
-  values[(int)2] = 88;
+  values[(i32)1] = 99;
+  values[(i32)2] = 88;
 
   check(copied.length() == (i64)2, "slice/array-clone-range-length");
-  check(copied[(int)0] == 20, "slice/array-clone-range-0");
-  check(copied[(int)1] == 30, "slice/array-clone-range-1");
+  check(copied[(i32)0] == 20, "slice/array-clone-range-0");
+  check(copied[(i32)1] == 30, "slice/array-clone-range-1");
 }
 
 func array_clone_invalid_range() {
-  let values: int[] = [1, 2, 3];
+  let values: i32[] = [1, 2, 3];
   var caught: bool = false;
 
   let ignored = try values.clone((i64)2, (i64)4) catch ex: string {
@@ -39,7 +39,7 @@ func array_clone_invalid_range() {
 }
 
 func array_clone_negative_end() {
-  let values: int[] = [1, 2, 3];
+  let values: i32[] = [1, 2, 3];
   var caught: bool = false;
 
   let ignored = try values.clone((i64)0, (i64)-1) catch ex: string {
@@ -51,7 +51,7 @@ func array_clone_negative_end() {
 }
 
 func array_slice_to_end_readonly() {
-  let values: int[] = [1, 2, 3, 4];
+  let values: i32[] = [1, 2, 3, 4];
   let tail = values.slice((i64)1);
 
   check(tail.length() == (i64)3, "slice/array-tail-readonly-length");
@@ -61,7 +61,7 @@ func array_slice_to_end_readonly() {
 }
 
 func array_slice_to_end_writable() {
-  let values: int[!] = [10, 20, 30, 40];
+  let values: i32[!] = [10, 20, 30, 40];
   let tail = values.slice((i64)2);
 
   check(tail.length() == (i64)2, "slice/array-tail-writable-length");
@@ -70,7 +70,7 @@ func array_slice_to_end_writable() {
 }
 
 func span_slice_relative_range() {
-  let values: int[] = [1, 2, 3, 4, 5];
+  let values: i32[] = [1, 2, 3, 4, 5];
   let middle = values.slice((i64)1, (i64)4);
   let tail = middle.slice((i64)1, (i64)3);
 
@@ -80,7 +80,7 @@ func span_slice_relative_range() {
 }
 
 func span_slice_relative_tail() {
-  let values: int[] = [1, 2, 3, 4, 5];
+  let values: i32[] = [1, 2, 3, 4, 5];
   let middle = values.slice((i64)1, (i64)4);
   let tail = middle.slice((i64)1);
 
@@ -90,7 +90,7 @@ func span_slice_relative_tail() {
 }
 
 func span_slice_invalid_relative_range() {
-  let values: int[] = [1, 2, 3, 4];
+  let values: i32[] = [1, 2, 3, 4];
   let middle = values.slice((i64)1, (i64)3);
   var caught: bool = false;
 
@@ -103,20 +103,20 @@ func span_slice_invalid_relative_range() {
 }
 
 func span_to_array_is_independent() {
-  let values: int[!] = [7, 8, 9, 10];
+  let values: i32[!] = [7, 8, 9, 10];
   let middle = values.slice((i64)1, (i64)3);
   let copied = middle.toArray();
 
-  values[(int)1] = 99;
-  values[(int)2] = 88;
+  values[(i32)1] = 99;
+  values[(i32)2] = 88;
 
   check(copied.length() == (i64)2, "slice/span-to-array-length");
-  check(copied[(int)0] == 8, "slice/span-to-array-0");
-  check(copied[(int)1] == 9, "slice/span-to-array-1");
+  check(copied[(i32)0] == 8, "slice/span-to-array-0");
+  check(copied[(i32)1] == 9, "slice/span-to-array-1");
 }
 
 func span_to_array_empty() {
-  let values: int[] = [1, 2, 3];
+  let values: i32[] = [1, 2, 3];
   let empty = values.slice((i64)1, (i64)1).toArray();
 
   check(empty.length() == (i64)0, "slice/span-to-array-empty");

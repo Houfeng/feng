@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): int;
+extern func puts(msg: string*): i32;
 
 // Nested for: inner break must only exit the inner loop. Outer iteration
 // continues past the inner break. Also verifies the init binding's scope

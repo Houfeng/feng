@@ -23,19 +23,19 @@ open func test_enum() {
   describe("enum", () {
     test("enum implicit value (first = 0)", () {
       let d = Direction.North;
-      assert((int)d == 0, "enum implicit value (first = 0)");
+      assert((i32)d == 0, "enum implicit value (first = 0)");
     });
 
     test("enum implicit value (sequential)", () {
       let d2 = Direction.West;
-      assert((int)d2 == 3, "enum implicit value (sequential)");
+      assert((i32)d2 == 3, "enum implicit value (sequential)");
     });
 
     test("enum explicit value", () {
       let s = HttpStatus.Ok;
-      assert((int)s == 200, "enum explicit value");
+      assert((i32)s == 200, "enum explicit value");
       let s2 = HttpStatus.NotFound;
-      assert((int)s2 == 404, "enum explicit value (404)");
+      assert((i32)s2 == 404, "enum explicit value (404)");
     });
 
     test("enum == comparison", () {
@@ -56,7 +56,7 @@ open func test_enum() {
     });
 
     test("enum to int explicit cast", () {
-      let code = (int)HttpStatus.ServerError;
+      let code = (i32)HttpStatus.ServerError;
       assert(code == 500, "enum to int explicit cast");
     });
 

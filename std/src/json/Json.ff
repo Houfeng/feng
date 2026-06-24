@@ -51,7 +51,7 @@ open type Json {
    */
   static func isNumber(value: JsonValue): bool {
     return match value {
-      int { true }
+      i32 { true }
       float { true }
       double { true }
       else { false }
@@ -113,7 +113,7 @@ open type Json {
    */
   static func toNumber(value: JsonValue): double {
     return match (value) {
-      v: int {(double)v }
+      v: i32 {(double)v }
       v: float {(double)v }
       v: double { v }
       else {(double)0 }
@@ -215,7 +215,7 @@ open type Json {
     return match value {
       v: None { v.toJsonString() }
       v: bool { v.toJsonString() }
-      v: int { v.toJsonString() }
+      v: i32 { v.toJsonString() }
       v: float { v.toJsonString() }
       v: double { v.toJsonString() }
       v: string { v.toJsonString() }

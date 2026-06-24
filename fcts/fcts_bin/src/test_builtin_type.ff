@@ -8,12 +8,12 @@ open func test_builtin_type() {
   describe("builtin_type", () {
     test("i8 type", () {
       let a_i8: i8 = 127;
-      assert((int)a_i8 == 127, "i8 type");
+      assert((i32)a_i8 == 127, "i8 type");
     });
 
     test("i16 type", () {
       let a_i16: i16 = 32767;
-      assert((int)a_i16 == 32767, "i16 type");
+      assert((i32)a_i16 == 32767, "i16 type");
     });
 
     test("i32 type", () {
@@ -28,17 +28,17 @@ open func test_builtin_type() {
 
     test("u8 type", () {
       let a_u8: u8 = 255;
-      assert((int)a_u8 == 255, "u8 type");
+      assert((i32)a_u8 == 255, "u8 type");
     });
 
     test("u16 type", () {
       let a_u16: u16 = 65535;
-      assert((int)a_u16 == 65535, "u16 type");
+      assert((i32)a_u16 == 65535, "u16 type");
     });
 
     test("u32 type", () {
       let a_u32: u32 = 100;
-      assert((int)a_u32 == 100, "u32 type");
+      assert((i32)a_u32 == 100, "u32 type");
     });
 
     test("u64 type", () {
@@ -47,7 +47,7 @@ open func test_builtin_type() {
     });
 
     test("int alias for i32", () {
-      let alias_int: int = 42;
+      let alias_int: i32 = 42;
       assert(alias_int == 42, "int alias for i32");
     });
 
@@ -58,7 +58,7 @@ open func test_builtin_type() {
 
     test("byte alias for u8", () {
       let alias_byte: byte = 42;
-      assert((int)alias_byte == 42, "byte alias for u8");
+      assert((i32)alias_byte == 42, "byte alias for u8");
     });
 
     test("f32 type", () {
@@ -83,7 +83,7 @@ open func test_builtin_type() {
     });
 
     test("default zero values", () {
-      let zi: int;
+      let zi: i32;
       let zl: i64;
       let zb: bool;
       let zs: string;

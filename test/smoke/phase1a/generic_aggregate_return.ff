@@ -1,7 +1,7 @@
 module feng.smoke.phase1a.generic_aggregate_return;
 
 @cdecl("libc")
-extern func puts(value: string*): int;
+extern func puts(value: string*): i32;
 
 spec Named {
     func greet(): string;
@@ -29,12 +29,12 @@ func reboundNamed<T>(name: string): Named {
 }
 
 func main(args: string[]) {
-    let created: Named = makeNamed<int>("generic aggregate return ok");
+    let created: Named = makeNamed<i32>("generic aggregate return ok");
     puts(&created.greet());
 
-    let forwarded: Named = forwardNamed<int>(created);
+    let forwarded: Named = forwardNamed<i32>(created);
     puts(&forwarded.greet());
 
-    let rebound: Named = reboundNamed<int>("generic aggregate return ok");
+    let rebound: Named = reboundNamed<i32>("generic aggregate return ok");
     puts(&rebound.greet());
 }

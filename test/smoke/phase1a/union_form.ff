@@ -1,9 +1,9 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): int;
+extern func puts(msg: string*): i32;
 
-spec Choice: int | string | bool;
+spec Choice: i32 | string | bool;
 
 spec Named {
     func greet(): string;
@@ -25,7 +25,7 @@ type Holder {
 
 func print_choice(value: Choice) {
     match value {
-        int { puts(&"int"); }
+        i32 { puts(&"int"); }
         v: string { puts(&v); }
         bool { puts(&"bool"); }
     }
@@ -33,7 +33,7 @@ func print_choice(value: Choice) {
 
 func print_else(value: Choice) {
     match value {
-        int { puts(&"else-int"); }
+        i32 { puts(&"else-int"); }
         else { puts(&"else-other"); }
     }
 }

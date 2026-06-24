@@ -5,7 +5,7 @@ import std.text;
 
 // libc POSIX stat
 @cdecl("libc", "stat")
-extern func posix_stat(p: byte*, buf: i64*): int;
+extern func posix_stat(p: byte*, buf: i64*): i32;
 
 // Runtime helpers
 @runtime

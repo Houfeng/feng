@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): int;
+extern func puts(msg: string*): i32;
 
 /* Generic void function with two type params. */
 func swap_discard<T, U>(a: T, b: U) {}

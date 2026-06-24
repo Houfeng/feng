@@ -1,5 +1,5 @@
 open module test.cli.localdep;
 
-open func dep_value(): int {
+open func dep_value(): i32 {
   return 7;
 }

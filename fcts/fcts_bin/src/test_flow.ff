@@ -17,10 +17,10 @@ type FlowUser: FlowNamed {
 }
 
 // 用于 infix match union member + binding 测试
-spec FlowIntOrText: int | string;
+spec FlowIntOrText: i32 | string;
 
 // return if 表达式 (标量)
-func flow_int_pick(flag: bool): int {
+func flow_int_pick(flag: bool): i32 {
   return if flag {
     100;
   } else {
@@ -38,7 +38,7 @@ func flow_pick(flag: bool, a: FlowNamed, b: FlowNamed): FlowNamed {
 }
 
 // return match 值匹配 (聚合)
-func flow_match_pick(tag: int, a: FlowNamed, b: FlowNamed): FlowNamed {
+func flow_match_pick(tag: i32, a: FlowNamed, b: FlowNamed): FlowNamed {
   return match tag {
     0 { a }
     else { b }
@@ -279,7 +279,7 @@ open func test_flow() {
 
     test("infix match - union member type (int)", () {
       let v: FlowIntOrText = 42;
-      assert(v match int, "infix match - union member type (int)");
+      assert(v match i32, "infix match - union member type (int)");
     });
 
     test("infix match - union member type (string)", () {
@@ -294,7 +294,7 @@ open func test_flow() {
 
     test("infix match - union member type + binding", () {
       let v: FlowIntOrText = 42;
-      if v match n: int && n > 0 {
+      if v match n: i32 && n > 0 {
         assert(true, "infix match - binding in &&");
       } else {
         assert(false, "infix match - binding in && (should be true)");
@@ -312,7 +312,7 @@ open func test_flow() {
 
     test("infix match - union member type + binding (mismatch)", () {
       let v: FlowIntOrText = 42;
-      if v match n: int && n > 100 {
+      if v match n: i32 && n > 100 {
         assert(false, "infix match - binding mismatch (should not enter)");
       } else {
         assert(true, "infix match - binding mismatch (else path)");
@@ -321,15 +321,15 @@ open func test_flow() {
 
     test("infix match - union multi-label type", () {
       let v: FlowIntOrText = 42;
-      assert(v match int | string, "infix match - union multi-label (int)");
+      assert(v match i32 | string, "infix match - union multi-label (int)");
       let s: FlowIntOrText = "hi";
-      assert(s match int | string, "infix match - union multi-label (string)");
+      assert(s match i32 | string, "infix match - union multi-label (string)");
     });
 
     test("infix match - while condition with binding", () {
       let v: FlowIntOrText = 42;
       var executed = false;
-      while v match n: int && n > 0 {
+      while v match n: i32 && n > 0 {
         executed = true;
         break;
       }
@@ -339,7 +339,7 @@ open func test_flow() {
     test("infix match - while loop counts down", () {
       var counter: FlowIntOrText = 3;
       var sum = 0;
-      while counter match n: int && n > 0 {
+      while counter match n: i32 && n > 0 {
         sum += n;
         counter = n - 1;
       }
@@ -348,7 +348,7 @@ open func test_flow() {
 
     test("infix match - binding not visible after statement", () {
       let v: FlowIntOrText = 42;
-      if v match n: int {
+      if v match n: i32 {
         assert(n == 42, "infix match - binding visible in body");
       }
       // n is not visible here (semantic error if referenced)
@@ -396,7 +396,7 @@ open func test_flow() {
       let v: FlowIntOrText = 42;
       // `||` does not propagate match bindings; using the union member
       // type form (no binding) keeps the condition well-formed.
-      if (v match int) || (v match string) {
+      if (v match i32) || (v match string) {
         assert(true, "infix match - disjunction without binding");
       } else {
         assert(false, "infix match - disjunction without binding (should be true)");

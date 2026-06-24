@@ -1,24 +1,24 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): int;
+extern func puts(msg: string*): i32;
 
 type Error {
-    let code: int;
+    let code: i32;
 }
 
 spec Result<T>: Error | T;
 
-func print_result(value: Result<int>) {
+func print_result(value: Result<i32>) {
     match value {
-        int { puts(&"int"); }
+        i32 { puts(&"int"); }
         Error { puts(&"error"); }
     }
 }
 
 func main(args: string[]) {
-    let ok: Result<int> = 1;
-    let err: Result<int> = Error { code: 7 };
+    let ok: Result<i32> = 1;
+    let err: Result<i32> = Error { code: 7 };
     print_result(ok);
     print_result(err);
 }

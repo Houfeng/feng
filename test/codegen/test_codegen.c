@@ -31,9 +31,9 @@ static const char *kSourceA =
     "module feng.codegen.mfa;\n"
     "\n"
     "@cdecl(\"libc\")\n"
-    "extern func c_puts(msg: string*): int;\n"
+    "extern func c_puts(msg: string*): i32;\n"
     "\n"
-    "func helper(): int {\n"
+    "func helper(): i32 {\n"
     "    return 42;\n"
     "}\n";
 
@@ -41,7 +41,7 @@ static const char *kSourceB =
     "module feng.codegen.mfb;\n"
     "\n"
     "@cdecl(\"libc\")\n"
-    "extern func c_puts(msg: string*): int;\n"
+    "extern func c_puts(msg: string*): i32;\n"
     "\n"
     "func main(args: string[]) {\n"
     "    c_puts(&\"multi-file ok\");\n"
@@ -296,7 +296,7 @@ static void test_multi_file_lib(void) {
     static const char *kSourceC =
         "module feng.codegen.mfc;\n"
         "\n"
-        "func other(): int { return 7; }\n";
+        "func other(): i32 { return 7; }\n";
     FengProgram *prog_c = parse_or_die(kSourceC, "tests/mfc.ff");
 
     const FengProgram *programs[2] = { prog_a, prog_c };
@@ -341,16 +341,16 @@ static void test_multi_file_lib(void) {
 static void test_module_binding_lazy_ensure_init_codegen(void) {
     static const char *kSource =
         "module feng.codegen.topbind;\n"
-        "let first: int = compute();\n"
-        "let second: int = 41;\n"
-        "func compute(): int {\n"
+        "let first: i32 = compute();\n"
+        "let second: i32 = 41;\n"
+        "func compute(): i32 {\n"
         "    return second + 1;\n"
         "}\n"
-        "func helper(): int {\n"
+        "func helper(): i32 {\n"
         "    return first;\n"
         "}\n"
         "func main(args: string[]) {\n"
-        "    let result: int = helper();\n"
+        "    let result: i32 = helper();\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "topbind.ff");
     const FengProgram *programs[1] = { program };
@@ -411,8 +411,8 @@ static void test_address_of_module_binding_uses_storage_slot_codegen(void) {
     static const char *kSource =
         "module feng.codegen.topbindaddr;\n"
         "@cdecl(\"c\")\n"
-        "extern func c_use_int_ptr(p: int*): void;\n"
-        "let value: int = (int)7;\n"
+        "extern func c_use_int_ptr(p: i32*): void;\n"
+        "let value: i32 = (i32)7;\n"
         "func run_case() {\n"
         "    c_use_int_ptr(&value);\n"
         "}\n";
@@ -455,9 +455,9 @@ static void test_address_of_module_binding_uses_storage_slot_codegen(void) {
 static void test_module_scalar_var_assignment_marks_initialized_codegen(void) {
     static const char *kSource =
         "module feng.codegen.topbindassign;\n"
-        "var current: int = (int)1;\n"
+        "var current: i32 = (i32)1;\n"
         "func run_case() {\n"
-        "    current = (int)7;\n"
+        "    current = (i32)7;\n"
         "    current += 1;\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "topbindassign.ff");
@@ -498,9 +498,9 @@ static void test_module_managed_var_assignment_marks_initialized_codegen(void) {
     static const char *kSource =
         "module feng.codegen.topbindobj;\n"
         "type Box {\n"
-        "    let value: int;\n"
+        "    let value: i32;\n"
         "}\n"
-        "var current: Box = Box { value: (int)1 };\n"
+        "var current: Box = Box { value: (i32)1 };\n"
         "func reset(next: Box) {\n"
         "    current = next;\n"
         "}\n";
@@ -543,17 +543,17 @@ static void test_module_managed_var_assignment_marks_initialized_codegen(void) {
 static void test_type_static_members_codegen(void) {
     static const char *kSource =
         "module feng.codegen.staticm;\n"
-        "func base(): int {\n"
+        "func base(): i32 {\n"
         "    return 41;\n"
         "}\n"
         "type Counter {\n"
-        "    static let seed: int = base();\n"
-        "    static var current: int = 0;\n"
-        "    static func make(value: int): int {\n"
+        "    static let seed: i32 = base();\n"
+        "    static var current: i32 = 0;\n"
+        "    static func make(value: i32): i32 {\n"
         "        return value + Counter.seed;\n"
         "    }\n"
         "}\n"
-        "func run_case(): int {\n"
+        "func run_case(): i32 {\n"
         "    Counter.current = Counter.make(1);\n"
         "    Counter.current += 1;\n"
         "    return Counter.current;\n"
@@ -613,11 +613,11 @@ static void test_builtin_fit_static_method_codegen(void) {
     static const char *kSource =
         "module feng.codegen.fitstatic;\n"
         "fit string {\n"
-        "    static func marker(): int {\n"
+        "    static func marker(): i32 {\n"
         "        return 5;\n"
         "    }\n"
         "}\n"
-        "func run_case(): int {\n"
+        "func run_case(): i32 {\n"
         "    return string.marker();\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "fitstatic.ff");
@@ -681,10 +681,10 @@ static void test_generic_static_methods_codegen(void) {
         "        return Box<T> { value: value };\n"
         "    }\n"
         "}\n"
-        "func run_case(): int {\n"
-        "    let direct: int = Util.id<int>(41);\n"
-        "    let boxed: Box<int> = Box<int>.make(1);\n"
-        "    let via_fit: Box<int> = Box<int>.of(2);\n"
+        "func run_case(): i32 {\n"
+        "    let direct: i32 = Util.id<i32>(41);\n"
+        "    let boxed: Box<i32> = Box<i32>.make(1);\n"
+        "    let via_fit: Box<i32> = Box<i32>.of(2);\n"
         "    return direct + boxed.value + via_fit.value;\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "staticgen.ff");
@@ -799,12 +799,12 @@ static void test_spec_static_var_witness_codegen(void) {
     static const char *kSource =
         "module feng.codegen.specstaticvar;\n"
         "spec Configurable {\n"
-        "    static var current: int;\n"
+        "    static var current: i32;\n"
         "}\n"
         "type Config: Configurable {\n"
-        "    static var current: int = 0;\n"
+        "    static var current: i32 = 0;\n"
         "}\n"
-        "func run_case(): int {\n"
+        "func run_case(): i32 {\n"
         "    let cfg: Configurable = Config();\n"
         "    Config.current = 42;\n"
         "    return Config.current;\n"
@@ -855,7 +855,7 @@ static void test_generic_param_static_method_codegen(void) {
         "    static func make(): T;\n"
         "}\n"
         "type Widget: Factory<Widget> {\n"
-        "    let value: int;\n"
+        "    let value: i32;\n"
         "    static func make(): Widget {\n"
         "        return Widget { value: 0 };\n"
         "    }\n"
@@ -863,7 +863,7 @@ static void test_generic_param_static_method_codegen(void) {
         "func make_widget<T: Factory<T>>(): T {\n"
         "    return T.make();\n"
         "}\n"
-        "func run_case(): int {\n"
+        "func run_case(): i32 {\n"
         "    let factory: Factory<Widget> = Widget();\n"
         "    return 0;\n"
         "}\n";
@@ -912,15 +912,15 @@ static void test_generic_param_static_field_read_codegen(void) {
     static const char *kSource =
         "module feng.codegen.genfieldr;\n"
         "spec Tagged {\n"
-        "    static let tag: int;\n"
+        "    static let tag: i32;\n"
         "}\n"
         "type Widget: Tagged {\n"
-        "    static let tag: int = 42;\n"
+        "    static let tag: i32 = 42;\n"
         "}\n"
-        "func get_tag<T: Tagged>(): int {\n"
+        "func get_tag<T: Tagged>(): i32 {\n"
         "    return T.tag;\n"
         "}\n"
-        "func run_case(): int {\n"
+        "func run_case(): i32 {\n"
         "    let tagged: Tagged = Widget();\n"
         "    return 0;\n"
         "}\n";
@@ -967,15 +967,15 @@ static void test_generic_param_static_field_write_codegen(void) {
     static const char *kSource =
         "module feng.codegen.genfieldw;\n"
         "spec Configurable {\n"
-        "    static var current: int;\n"
+        "    static var current: i32;\n"
         "}\n"
         "type Config: Configurable {\n"
-        "    static var current: int = 0;\n"
+        "    static var current: i32 = 0;\n"
         "}\n"
-        "func set_current<T: Configurable>(value: int): void {\n"
+        "func set_current<T: Configurable>(value: i32): void {\n"
         "    T.current = value;\n"
         "}\n"
-        "func run_case(): int {\n"
+        "func run_case(): i32 {\n"
         "    let cfg: Configurable = Config();\n"
         "    return 0;\n"
         "}\n";
@@ -1029,12 +1029,12 @@ static void test_spec_inherited_static_slot_codegen(void) {
         "spec Derived<T>: Base<T> {\n"
         "}\n"
         "type Widget: Derived<Widget> {\n"
-        "    let value: int;\n"
+        "    let value: i32;\n"
         "    static func make(): Widget {\n"
         "        return Widget { value: 0 };\n"
         "    }\n"
         "}\n"
-        "func run_case(): int {\n"
+        "func run_case(): i32 {\n"
         "    let derived: Derived<Widget> = Widget();\n"
         "    return 0;\n"
         "}\n";
@@ -1078,10 +1078,10 @@ static void test_module_binding_default_zero_ensure_init_codegen(void) {
     static const char *kSource =
         "module feng.codegen.topbindzero;\n"
         "type User {\n"
-        "    let id: int;\n"
+        "    let id: i32;\n"
         "}\n"
         "let current: User;\n"
-        "func read_id(): int {\n"
+        "func read_id(): i32 {\n"
         "    return current.id;\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "topbindzero.ff");
@@ -1124,9 +1124,9 @@ static void test_extern_calling_convention_codegen(void) {
     static const char *kSource =
         "module feng.codegen.callconv;\n"
         "@stdcall(\"user32\")\n"
-        "extern func stdcall_value(value: int): int;\n"
+        "extern func stdcall_value(value: i32): i32;\n"
         "@fastcall(\"helper\")\n"
-        "extern func fastcall_value(value: int): int;\n"
+        "extern func fastcall_value(value: i32): i32;\n"
         "func run() {\n"
         "    let value = stdcall_value(1);\n"
         "    fastcall_value(value);\n"
@@ -1216,10 +1216,10 @@ static void test_address_of_scalar_and_array_codegen(void) {
         "@cdecl(\"c\")\n"
         "extern func c_use_i32_ptr(p: i32*): void;\n"
         "@cdecl(\"c\")\n"
-        "extern func c_use_array_ptr(p: int*): void;\n"
+        "extern func c_use_array_ptr(p: i32*): void;\n"
         "func run() {\n"
         "    let value: i32 = 7;\n"
-        "    let values: int[] = [1, 2, 3];\n"
+        "    let values: i32[] = [1, 2, 3];\n"
         "    c_use_i32_ptr(&value);\n"
         "    c_use_array_ptr(&values);\n"
         "}\n";
@@ -1258,13 +1258,13 @@ static void test_abi_function_pointer_codegen(void) {
     static const char *kSource =
         "module feng.codegen.abifn;\n"
         "@abi\n"
-        "spec Cmp(a: int, b: int): int;\n"
+        "spec Cmp(a: i32, b: i32): i32;\n"
         "@abi\n"
         "type Holder {\n"
         "    var cb: Cmp*;\n"
         "}\n"
         "@abi\n"
-        "func cmp(a: int, b: int): int {\n"
+        "func cmp(a: i32, b: i32): i32 {\n"
         "    return a - b;\n"
         "}\n"
         "@cdecl(\"c\")\n"
@@ -1327,7 +1327,7 @@ static void test_abi_value_pointer_codegen(void) {
         "@abi\n"
         "type Point {\n"
         "    var x: i32;\n"
-        "    var y: int;\n"
+        "    var y: i32;\n"
         "}\n"
         "@cdecl(\"c\")\n"
         "extern func c_use_point_ptr(p: Point*): void;\n"
@@ -1388,17 +1388,17 @@ static void test_abi_array_pointee_codegen(void) {
         "module feng.codegen.arraypointee;\n"
         "@abi\n"
         "type Point {\n"
-        "    var x: int;\n"
+        "    var x: i32;\n"
         "}\n"
         "@abi\n"
         "type ByteSpan {\n"
         "    var data: byte[]*;\n"
-        "    var len: int;\n"
+        "    var len: i32;\n"
         "}\n"
         "@abi\n"
         "type PointSpan {\n"
         "    var data: Point[]*;\n"
-        "    var len: int;\n"
+        "    var len: i32;\n"
         "}\n"
         "@cdecl(\"c\")\n"
         "extern func c_load_bytes(): byte[]*;\n"
@@ -1571,16 +1571,16 @@ static void test_abi_value_extern_codegen(void) {
         "module feng.codegen.abivalueextern;\n"
         "@abi\n"
         "type Point {\n"
-        "    var x: int;\n"
-        "    var y: int;\n"
+        "    var x: i32;\n"
+        "    var y: i32;\n"
         "}\n"
         "@cdecl(\"c\")\n"
-        "extern func create_point(x: int, y: int): Point;\n"
+        "extern func create_point(x: i32, y: i32): Point;\n"
         "@cdecl(\"c\")\n"
-        "extern func point_sum(p: Point): int;\n"
+        "extern func point_sum(p: Point): i32;\n"
         "func run() {\n"
         "    let point: Point = create_point(1, 2);\n"
-        "    let total: int = point_sum(point);\n"
+        "    let total: i32 = point_sum(point);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "abivalueextern.ff");
     const FengProgram *programs[1] = {program};
@@ -1666,7 +1666,7 @@ static void test_generic_runtime_extern_call_infers_type_args(void) {
         "module feng.codegen.genericruntimeextern;\n"
         "@runtime\n"
         "extern func feng_array_length_i64<T>(value: T[]): i64;\n"
-        "func run(values: int[]): i64 {\n"
+        "func run(values: i32[]): i64 {\n"
         "    return feng_array_length_i64(values);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "genericruntimeextern.ff");
@@ -1706,8 +1706,8 @@ static void test_generic_runtime_extern_call_accepts_explicit_type_args(void) {
         "module feng.codegen.genericruntimeexternexplicit;\n"
         "@runtime\n"
         "extern func feng_array_length_i64<T>(value: T[]): i64;\n"
-        "func run(values: int[]): i64 {\n"
-        "    return feng_array_length_i64<int>(values);\n"
+        "func run(values: i32[]): i64 {\n"
+        "    return feng_array_length_i64<i32>(values);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "genericruntimeexternexplicit.ff");
     const FengProgram *programs[1] = {program};
@@ -1746,7 +1746,7 @@ static void test_generic_runtime_extern_expression_equal_codegen(void) {
         "module feng.codegen.genericruntimeexprequal;\n"
         "@runtime\n"
         "extern func feng_expression_equal<T>(left: T, right: T): bool;\n"
-        "func run(left: int, right: int): bool {\n"
+        "func run(left: i32, right: i32): bool {\n"
         "    return feng_expression_equal(left, right);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "genericruntimeexprequal.ff");
@@ -1787,7 +1787,7 @@ static void test_generic_runtime_extern_direct_type_param_return_codegen(void) {
         "module feng.codegen.genericruntimeidentityreturn;\n"
         "@runtime\n"
         "extern func __test_value_identity<T>(value: T): T;\n"
-        "func run(value: int): int {\n"
+        "func run(value: i32): i32 {\n"
         "    return __test_value_identity(value);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "genericruntimeidentityreturn.ff");
@@ -1902,8 +1902,8 @@ static void test_abi_value_function_pointer_codegen(void) {
         "module feng.codegen.abivaluefn;\n"
         "@abi\n"
         "type Point {\n"
-        "    var x: int;\n"
-        "    var y: int;\n"
+        "    var x: i32;\n"
+        "    var y: i32;\n"
         "}\n"
         "@abi\n"
         "spec PointMapper(p: Point): Point;\n"
@@ -2080,7 +2080,7 @@ static void test_imported_alias_qualified_type_annotations_codegen_compile(void)
         "func keep(user: api.User): api.User {\n"
         "    return user;\n"
         "}\n"
-        "func count(users: api.User[]): int {\n"
+        "func count(users: api.User[]): i32 {\n"
         "    return 0;\n"
         "}\n";
     ImportedSourceFixture fixture;
@@ -2133,7 +2133,7 @@ static void test_imported_full_path_type_annotations_codegen_compile_without_use
         "func keep(user: vendor.api.User): vendor.api.User {\n"
         "    return user;\n"
         "}\n"
-        "func count(users: vendor.api.User[]): int {\n"
+        "func count(users: vendor.api.User[]): i32 {\n"
         "    return 0;\n"
         "}\n";
     ImportedSourceFixture fixture;
@@ -2178,11 +2178,11 @@ static void test_imported_full_path_type_annotations_codegen_compile_without_use
 static void test_imported_public_let_binding_codegen_compiles(void) {
     static const char *kImportedSource =
         "open module vendor.values;\n"
-        "open let count: int = 7;\n";
+        "open let count: i32 = 7;\n";
     static const char *kConsumerSource =
         "module demo.main;\n"
         "import vendor.values as values;\n"
-        "func project(): int {\n"
+        "func project(): i32 {\n"
         "    return values.count;\n"
         "}\n";
     ImportedSourceFixture fixture;
@@ -2237,16 +2237,16 @@ static void test_imported_public_static_members_codegen_compiles(void) {
     static const char *kImportedSource =
         "open module vendor.static_values;\n"
         "open type Counter {\n"
-        "    open static let seed: int = 7;\n"
-        "    open static var current: int = 1;\n"
-        "    open static func make(): int {\n"
+        "    open static let seed: i32 = 7;\n"
+        "    open static var current: i32 = 1;\n"
+        "    open static func make(): i32 {\n"
         "        return 2;\n"
         "    }\n"
         "}\n";
     static const char *kConsumerSource =
         "module demo.main;\n"
         "import vendor.static_values as values;\n"
-        "func project(next: int): int {\n"
+        "func project(next: i32): i32 {\n"
         "    values.Counter.current = next;\n"
         "    return values.Counter.seed + values.Counter.make() + values.Counter.current;\n"
         "}\n";
@@ -2305,12 +2305,12 @@ static void test_imported_public_static_members_codegen_compiles(void) {
 static void test_imported_public_var_binding_read_write_codegen_compiles(void) {
     static const char *kImportedSource =
         "open module vendor.state;\n"
-        "open var count: int = 1;\n";
+        "open var count: i32 = 1;\n";
     static const char *kConsumerSource =
         "module demo.main;\n"
         "import vendor.state as state;\n"
-        "func project(next: int): int {\n"
-        "    let before: int = state.count;\n"
+        "func project(next: i32): i32 {\n"
+        "    let before: i32 = state.count;\n"
         "    state.count = next;\n"
         "    return state.count + before;\n"
         "}\n";
@@ -2365,12 +2365,12 @@ static void test_imported_public_var_binding_read_write_codegen_compiles(void) {
 static void test_imported_public_binding_address_of_codegen_compiles(void) {
     static const char *kImportedSource =
         "open module vendor.values;\n"
-        "open let count: int = 7;\n";
+        "open let count: i32 = 7;\n";
     static const char *kConsumerSource =
         "module demo.main;\n"
         "import vendor.values as values;\n"
         "@cdecl(\"c\")\n"
-        "extern func c_use_int_ptr(p: int*): void;\n"
+        "extern func c_use_int_ptr(p: i32*): void;\n"
         "func run_case() {\n"
         "    c_use_int_ptr(&values.count);\n"
         "}\n";
@@ -2425,9 +2425,9 @@ static void test_imported_public_binding_address_of_codegen_compiles(void) {
 static void test_public_binding_lib_exports_slot_and_ensure_init_codegen(void) {
     static const char *kSource =
         "open module vendor.values;\n"
-        "open let count: int = 3 + 4;\n"
-        "open var total: int = 1;\n"
-        "open func read(): int {\n"
+        "open let count: i32 = 3 + 4;\n"
+        "open var total: i32 = 1;\n"
+        "open func read(): i32 {\n"
         "    return count + total;\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "public_binding_export.ff");
@@ -2520,7 +2520,7 @@ static void test_imported_public_binding_inferred_type_codegen_compiles(void) {
     static const char *kConsumerSource =
         "module demo.main;\n"
         "import vendor.math as m;\n"
-        "func project(): int {\n"
+        "func project(): i32 {\n"
         "    let first = m.math;\n"
         "    return 1;\n"
         "}\n";
@@ -2613,9 +2613,9 @@ static void test_enum_codegen_emits_stable_symbols(void) {
         "    }\n"
         "    return current;\n"
         "}\n"
-        "func selected(): int {\n"
+        "func selected(): i32 {\n"
         "    let response: Response = Response { status: HttpStatus.NotFound };\n"
-        "    return (int)response.status;\n"
+        "    return (i32)response.status;\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "tests/enum_codegen.ff");
     const FengProgram *programs[1] = {program};
@@ -2668,8 +2668,8 @@ static void test_imported_enum_codegen_emits_visible_symbols(void) {
     static const char *kConsumerSource =
         "module demo.enumconsumer;\n"
         "import vendor.http as http;\n"
-        "func selected(): int {\n"
-        "    return (int)http.HttpStatus.NotFound;\n"
+        "func selected(): i32 {\n"
+        "    return (i32)http.HttpStatus.NotFound;\n"
         "}\n";
     ImportedSourceFixture fixture;
     FengSemanticImportedModuleQuery query;
@@ -2914,13 +2914,13 @@ static void test_fit_builtin_direct_call_codegen_shape(void) {
         "        return self * 2;\n"
         "    }\n"
         "}\n"
-        "fit int[] {\n"
-        "    func head(): int {\n"
+        "fit i32[] {\n"
+        "    func head(): i32 {\n"
         "        return self[0];\n"
         "    }\n"
         "}\n"
-        "func run(): int {\n"
-        "    let xs: int[] = [7, 9];\n"
+        "func run(): i32 {\n"
+        "    let xs: i32[] = [7, 9];\n"
         "    return 21.double() + xs.head();\n"
         "}\n";
 
@@ -2993,11 +2993,11 @@ static void test_fit_builtin_array_open_generic_return_codegen(void) {
         "        return self.slice(start, (i64)4);\n"
         "    }\n"
         "}\n"
-        "func run(): int {\n"
-        "    let values: int[] = [1, 2, 3, 4];\n"
+        "func run(): i32 {\n"
+        "    let values: i32[] = [1, 2, 3, 4];\n"
         "    let middle = values.slice((i64)1, (i64)3);\n"
         "    let tail = values.slice((i64)1);\n"
-        "    return middle.get((i64)0) + (int)middle.length() + tail.get((i64)0) + (int)tail.length();\n"
+        "    return middle.get((i64)0) + (i32)middle.length() + tail.get((i64)0) + (i32)tail.length();\n"
         "}\n";
 
     FengProgram *program = parse_or_die(kSource,
@@ -3046,7 +3046,7 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     static const char *kSource =
         "module feng.codegen.fit_builtin_spec;\n"
         "spec Named { func name(): string; }\n"
-        "spec ScalarTwice { func twice_only_scalar(): int; }\n"
+        "spec ScalarTwice { func twice_only_scalar(): i32; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
         "    func name(): string { return self.n; }\n"
@@ -3057,7 +3057,7 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "    }\n"
         "}\n"
         "fit i32: ScalarTwice {\n"
-        "    func twice_only_scalar(): int {\n"
+        "    func twice_only_scalar(): i32 {\n"
         "        return self + self;\n"
         "    }\n"
         "}\n"
@@ -3066,7 +3066,7 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "        return self;\n"
         "    }\n"
         "}\n"
-        "fit int[]: Named {\n"
+        "fit i32[]: Named {\n"
         "    func name(): string {\n"
         "        return \"arr\";\n"
         "    }\n"
@@ -3074,17 +3074,17 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "func call_name(v: Named): string {\n"
         "    return v.name();\n"
         "}\n"
-        "func call_twice_direct(v: int): int {\n"
+        "func call_twice_direct(v: i32): i32 {\n"
         "    return v.twice_only_scalar();\n"
         "}\n"
-        "func call_twice_spec(v: ScalarTwice): int {\n"
+        "func call_twice_spec(v: ScalarTwice): i32 {\n"
         "    return v.twice_only_scalar();\n"
         "}\n"
         "func make_scalar_named(): Named {\n"
         "    return (8);\n"
         "}\n"
-        "func run(): int {\n"
-        "    let xs: int[] = [1, 2];\n"
+        "func run(): i32 {\n"
+        "    let xs: i32[] = [1, 2];\n"
         "    let u: User = User{n: \"u\"};\n"
         "    let s1: Named = (7);\n"
         "    let s2: Named = xs;\n"
@@ -3100,8 +3100,8 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "    let d: string = call_name(s2);\n"
         "    let g: string = call_name((\"inline\"));\n"
         "    let f: string = call_name((9));\n"
-        "    let t1: int = call_twice_direct(5);\n"
-        "    let t2: int = call_twice_spec((5));\n"
+        "    let t1: i32 = call_twice_direct(5);\n"
+        "    let t2: i32 = call_twice_spec((5));\n"
         "    return t1 + t2;\n"
         "}\n";
 
@@ -3167,20 +3167,20 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
 static void test_fit_enum_object_spec_coercion_codegen(void) {
     static const char *kSource =
         "module feng.codegen.fit_enum_spec;\n"
-        "spec Named { func code(): int; }\n"
+        "spec Named { func code(): i32; }\n"
         "enum Status {\n"
         "    Ok,\n"
         "    Failed\n"
         "}\n"
         "fit Status: Named {\n"
-        "    func code(): int {\n"
-        "        return (int)self;\n"
+        "    func code(): i32 {\n"
+        "        return (i32)self;\n"
         "    }\n"
         "}\n"
-        "func call_named(value: Named): int {\n"
+        "func call_named(value: Named): i32 {\n"
         "    return value.code();\n"
         "}\n"
-        "func run(): int {\n"
+        "func run(): i32 {\n"
         "    let first: Named = Status.Ok;\n"
         "    return first.code() + call_named(Status.Failed);\n"
         "}\n";
@@ -3326,7 +3326,7 @@ static void test_generic_fn_codegen(void) {
 
 static const char *kGenericTypeSrc =
     "module feng.codegen.gf2;\n"
-    "open type Box<T> { open let value: int; }\n";
+    "open type Box<T> { open let value: i32; }\n";
 
 static void test_generic_type_decl_no_crash(void) {
     FengProgram *program = parse_or_die(kGenericTypeSrc, "gf2.ff");
@@ -3395,14 +3395,14 @@ static void test_generic_fn_call_codegen(void) {
 static const char *kGenericManagedReturnLetBindingSrc =
     "module feng.codegen.gf_managed_ret;\n"
     "type Widget {\n"
-    "    let value: int;\n"
+    "    let value: i32;\n"
     "}\n"
     "func make_widget<T>(): Widget {\n"
     "    return Widget { value: 7 };\n"
     "}\n"
-    "var result: int;\n"
+    "var result: i32;\n"
     "func main(args: string[]) {\n"
-    "    let w: Widget = make_widget<int>();\n"
+    "    let w: Widget = make_widget<i32>();\n"
     "    result = w.value;\n"
     "}\n";
 
@@ -3466,7 +3466,7 @@ static const char *kGenericSpecArgSrc =
     "\n"
     "func use_it() {\n"
     "    let s: Spec1 = User();\n"
-    "    let x = MyType<Spec1, int>();\n"
+    "    let x = MyType<Spec1, i32>();\n"
     "    x.test(s);\n"
     "}\n";
 
@@ -3559,7 +3559,7 @@ static const char *kGenericRuntimeTypeKindSrc =
     "spec Named {\n"
     "    func name(): string;\n"
     "}\n"
-    "spec Mapper(x: int): int;\n"
+    "spec Mapper(x: i32): i32;\n"
     "enum Status {\n"
     "    Ok = 200,\n"
     "    Failed = 500\n"
@@ -3569,13 +3569,13 @@ static const char *kGenericRuntimeTypeKindSrc =
     "        return \"user\";\n"
     "    }\n"
     "}\n"
-    "func add1(x: int): int {\n"
+    "func add1(x: i32): i32 {\n"
     "    return x + 1;\n"
     "}\n"
     "func identity<T>(value: T): T {\n"
     "    return value;\n"
     "}\n"
-    "func use_it(values: int[]): int {\n"
+    "func use_it(values: i32[]): i32 {\n"
     "    let ok = identity(true);\n"
     "    let text = identity(\"hi\");\n"
     "    let arr = identity(values);\n"
@@ -3664,7 +3664,7 @@ static const char *kGenericAggregateFactsShapeSrc =
     "func identity<T>(value: T): T {\n"
     "    return value;\n"
     "}\n"
-    "func use_it(value: int, text: string): int {\n"
+    "func use_it(value: i32, text: string): i32 {\n"
     "    let n = identity(value);\n"
     "    let s = identity(text);\n"
     "    let named: Named = User();\n"
@@ -3712,7 +3712,7 @@ static void test_fit_enum_generic_constraint_codegen(void) {
     static const char *kSource =
         "module feng.codegen.fit_enum_generic;\n"
         "spec Hashable<T> {\n"
-        "    func hash(): int;\n"
+        "    func hash(): i32;\n"
         "    func same(other: T): bool;\n"
         "}\n"
         "enum Status {\n"
@@ -3720,20 +3720,20 @@ static void test_fit_enum_generic_constraint_codegen(void) {
         "    Failed\n"
         "}\n"
         "fit Status: Hashable<Status> {\n"
-        "    func hash(): int {\n"
-        "        return (int)self;\n"
+        "    func hash(): i32 {\n"
+        "        return (i32)self;\n"
         "    }\n"
         "    func same(other: Status): bool {\n"
         "        return self == other;\n"
         "    }\n"
         "}\n"
-        "func use_hash<K: Hashable<K>>(value: K): int {\n"
+        "func use_hash<K: Hashable<K>>(value: K): i32 {\n"
         "    return value.hash();\n"
         "}\n"
         "func use_same<K: Hashable<K>>(left: K, right: K): bool {\n"
         "    return left.same(right);\n"
         "}\n"
-        "func run(): int {\n"
+        "func run(): i32 {\n"
         "    let _same: bool = use_same(Status.Failed, Status.Ok);\n"
         "    return use_hash(Status.Failed);\n"
         "}\n";
@@ -3774,11 +3774,11 @@ static void test_fit_enum_generic_constraint_codegen(void) {
 
 static const char *kCallableSpecTopLevelFnSrc =
     "module feng.codegen.cb1;\n"
-    "spec Mapper(x: int): int;\n"
-    "func add1(x: int): int {\n"
+    "spec Mapper(x: i32): i32;\n"
+    "func add1(x: i32): i32 {\n"
     "    return x + 1;\n"
     "}\n"
-    "func use_it(): int {\n"
+    "func use_it(): i32 {\n"
     "    let mapper: Mapper = add1;\n"
     "    return mapper(41);\n"
     "}\n";
@@ -3817,14 +3817,14 @@ static void test_callable_spec_top_level_fn_codegen(void) {
 
 static const char *kGenericCallableConstraintSrc =
     "module feng.codegen.cb2;\n"
-    "spec Mapper(x: int): int;\n"
-    "func add1(x: int): int {\n"
+    "spec Mapper(x: i32): i32;\n"
+    "func add1(x: i32): i32 {\n"
     "    return x + 1;\n"
     "}\n"
-    "func apply<T: Mapper>(mapper: T, value: int): int {\n"
+    "func apply<T: Mapper>(mapper: T, value: i32): i32 {\n"
     "    return mapper(value);\n"
     "}\n"
-    "func use_it(): int {\n"
+    "func use_it(): i32 {\n"
     "    let mapper: Mapper = add1;\n"
     "    return apply<Mapper>(mapper, 41);\n"
     "}\n";
@@ -3867,7 +3867,7 @@ static const char *kGenericObjectSpecInstanceSrc =
     "spec Box<T> {\n"
     "    func fetch(): T;\n"
     "}\n"
-    "func read_it(box: Box<int>): int {\n"
+    "func read_it(box: Box<i32>): i32 {\n"
     "    return box.fetch();\n"
     "}\n";
 
@@ -3906,7 +3906,7 @@ static void test_generic_object_spec_instance_codegen(void) {
 static const char *kGenericCallableSpecInstanceSrc =
     "module feng.codegen.gs2;\n"
     "spec Mapper<T>(x: T): T;\n"
-    "func apply(mapper: Mapper<int>): int {\n"
+    "func apply(mapper: Mapper<i32>): i32 {\n"
     "    return mapper(41);\n"
     "}\n";
 
@@ -3947,13 +3947,13 @@ static const char *kGenericObjectSpecCoercionSrc =
     "spec Box<T> {\n"
     "    func fetch(): T;\n"
     "}\n"
-    "type IntBox: Box<int> {\n"
-    "    func fetch(): int {\n"
+    "type IntBox: Box<i32> {\n"
+    "    func fetch(): i32 {\n"
     "        return 7;\n"
     "    }\n"
     "}\n"
-    "func use_it(): int {\n"
-    "    let box: Box<int> = IntBox();\n"
+    "func use_it(): i32 {\n"
+    "    let box: Box<i32> = IntBox();\n"
     "    return box.fetch();\n"
     "}\n";
 
@@ -3993,11 +3993,11 @@ static void test_generic_object_spec_coercion_codegen(void) {
 static const char *kGenericCallableSpecCoercionSrc =
     "module feng.codegen.gs4;\n"
     "spec Mapper<T>(x: T): T;\n"
-    "func add1(x: int): int {\n"
+    "func add1(x: i32): i32 {\n"
     "    return x + 1;\n"
     "}\n"
-    "func use_it(): int {\n"
-    "    let mapper: Mapper<int> = add1;\n"
+    "func use_it(): i32 {\n"
+    "    let mapper: Mapper<i32> = add1;\n"
     "    return mapper(41);\n"
     "}\n";
 
@@ -4038,12 +4038,12 @@ static const char *kCallableSpecMethodCoercionSrc =
     "module feng.codegen.gs5;\n"
     "spec Mapper<T>(x: T): T;\n"
     "type Adder {\n"
-    "    func add1(x: int): int {\n"
+    "    func add1(x: i32): i32 {\n"
     "        return x + 1;\n"
     "    }\n"
     "}\n"
-    "func use_it(): int {\n"
-    "    let mapper: Mapper<int> = Adder().add1;\n"
+    "func use_it(): i32 {\n"
+    "    let mapper: Mapper<i32> = Adder().add1;\n"
     "    return mapper(41);\n"
     "}\n";
 
@@ -4083,10 +4083,10 @@ static void test_callable_spec_method_coercion_codegen(void) {
 
 static const char *kCallableSpecLambdaLocalCaptureSrc =
     "module feng.codegen.gs6;\n"
-    "spec Mapper(x: int): int;\n"
-    "func use_it(): int {\n"
-    "    var base: int = 1;\n"
-    "    let mapper: Mapper = (x: int) -> x + base;\n"
+    "spec Mapper(x: i32): i32;\n"
+    "func use_it(): i32 {\n"
+    "    var base: i32 = 1;\n"
+    "    let mapper: Mapper = (x: i32) -> x + base;\n"
     "    base = 2;\n"
     "    return mapper(40);\n"
     "}\n";
@@ -4127,15 +4127,15 @@ static void test_callable_spec_lambda_local_capture_codegen(void) {
 
 static const char *kCallableSpecLambdaSelfCaptureSrc =
     "module feng.codegen.gs7;\n"
-    "spec Reader(): int;\n"
+    "spec Reader(): i32;\n"
     "type Box {\n"
-    "    var n: int;\n"
-    "    func read(): int {\n"
+    "    var n: i32;\n"
+    "    func read(): i32 {\n"
     "        let reader: Reader = () -> self.n;\n"
     "        return reader();\n"
     "    }\n"
     "}\n"
-    "func use_it(): int {\n"
+    "func use_it(): i32 {\n"
     "    return Box().read();\n"
     "}\n";
 
@@ -4174,12 +4174,12 @@ static void test_callable_spec_lambda_self_capture_codegen(void) {
 
 static const char *kCallableSpecLambdaArgumentSrc =
     "module feng.codegen.gs8;\n"
-    "spec Mapper(x: int): int;\n"
-    "func apply(mapper: Mapper): int {\n"
+    "spec Mapper(x: i32): i32;\n"
+    "func apply(mapper: Mapper): i32 {\n"
     "    return mapper(41);\n"
     "}\n"
-    "func use_it(): int {\n"
-    "    return apply((x: int) -> x + 1);\n"
+    "func use_it(): i32 {\n"
+    "    return apply((x: i32) -> x + 1);\n"
     "}\n";
 
 static void test_callable_spec_lambda_argument_codegen(void) {
@@ -4216,17 +4216,17 @@ static void test_callable_spec_lambda_argument_codegen(void) {
 
 static const char *kCallableSpecOtherCoercionSrc =
     "module feng.codegen.gs8;\n"
-    "spec MapperA(x: int): int;\n"
-    "spec MapperB(x: int): int;\n"
-    "func add1(x: int): int {\n"
+    "spec MapperA(x: i32): i32;\n"
+    "spec MapperB(x: i32): i32;\n"
+    "func add1(x: i32): i32 {\n"
     "    return x + 1;\n"
     "}\n"
-    "func use_it(input: MapperA): int {\n"
+    "func use_it(input: MapperA): i32 {\n"
     "    let local: MapperA = input;\n"
     "    let remapped: MapperB = (MapperB)local;\n"
     "    return remapped(41);\n"
     "}\n"
-    "func entry(): int {\n"
+    "func entry(): i32 {\n"
     "    let start: MapperA = add1;\n"
     "    return use_it(start);\n"
     "}\n";
@@ -4265,22 +4265,22 @@ static void test_callable_spec_other_coercion_codegen(void) {
 
 static const char *kCallableSpecOtherFieldReadCoercionSrc =
     "module feng.codegen.gs9;\n"
-    "spec MapperA(x: int): int;\n"
-    "spec MapperB(x: int): int;\n"
-    "func add1(x: int): int {\n"
+    "spec MapperA(x: i32): i32;\n"
+    "spec MapperB(x: i32): i32;\n"
+    "func add1(x: i32): i32 {\n"
     "    return x + 1;\n"
     "}\n"
     "type Holder {\n"
     "    let mapper: MapperA;\n"
     "}\n"
-    "func use_it(input: MapperA): int {\n"
+    "func use_it(input: MapperA): i32 {\n"
     "    let local: MapperA = input;\n"
     "    let holder: Holder = Holder{mapper: local};\n"
     "    let from_field: MapperA = holder.mapper;\n"
     "    let remapped: MapperB = (MapperB)from_field;\n"
     "    return remapped(41);\n"
     "}\n"
-    "func entry(): int {\n"
+    "func entry(): i32 {\n"
     "    let start: MapperA = add1;\n"
     "    return use_it(start);\n"
     "}\n";
@@ -4816,10 +4816,10 @@ static const char *kGenericTypeGenericMethodSrc =
     "        return self.value;\n"
     "    }\n"
     "}\n"
-    "func use_it(): int {\n"
-    "    let box = Box<int>();\n"
-    "    let first: int = box.echo(20);\n"
-    "    let second: int = box.replace<int>(22, first);\n"
+    "func use_it(): i32 {\n"
+    "    let box = Box<i32>();\n"
+    "    let first: i32 = box.echo(20);\n"
+    "    let second: i32 = box.replace<i32>(22, first);\n"
     "    return box.current() + second;\n"
     "}\n";
 
@@ -4867,8 +4867,8 @@ static const char *kGenericScalarInstanceDirectCallSrc =
     "        return self.value;\n"
     "    }\n"
     "}\n"
-    "func use_it(): int {\n"
-    "    let set: Set<int> = Set<int>();\n"
+    "func use_it(): i32 {\n"
+    "    let set: Set<i32> = Set<i32>();\n"
     "    set.put(7);\n"
     "    return set.get();\n"
     "}\n";
@@ -4985,16 +4985,16 @@ static void test_phase_e_aggregate_generic_arg_three_entrances_codegen(void) {
 static const char *kUserConstructorFormsSrc =
     "module feng.codegen.ctor1;\n"
     "type UserType {\n"
-    "    var id: int;\n"
+    "    var id: i32;\n"
     "    let name: string;\n"
     "    func UserType() {\n"
     "        self.id = 1;\n"
     "    }\n"
-    "    func UserType(next: int) {\n"
+    "    func UserType(next: i32) {\n"
     "        self.id = next;\n"
     "    }\n"
     "}\n"
-    "func use_all(): int {\n"
+    "func use_all(): i32 {\n"
     "    let a: UserType = UserType() { id: 11 };\n"
     "    let b: UserType = UserType { id: 12 };\n"
     "    let c: UserType = UserType();\n"
@@ -5007,23 +5007,23 @@ static void test_empty_array_literal_codegen_uses_target_contexts(void) {
     static const char *kSource =
         "module feng.codegen.emptyarray;\n"
         "type InitializedHolder {\n"
-        "    let values: int[] = [];\n"
+        "    let values: i32[] = [];\n"
         "}\n"
         "type LiteralHolder {\n"
-        "    var values: int[];\n"
+        "    var values: i32[];\n"
         "}\n"
-        "func take(values: int[]): int {\n"
+        "func take(values: i32[]): i32 {\n"
         "    return 1;\n"
         "}\n"
-        "func generic_take<T>(values: T[]): int {\n"
+        "func generic_take<T>(values: T[]): i32 {\n"
         "    return 1;\n"
         "}\n"
-        "func run(): int {\n"
-        "    let local: int[] = [];\n"
+        "func run(): i32 {\n"
+        "    let local: i32[] = [];\n"
         "    let initialized = InitializedHolder();\n"
         "    let literal = LiteralHolder { values: [] };\n"
         "    return take([]) + take(local) + take(initialized.values) +\n"
-        "        take(literal.values) + generic_take<int>([]);\n"
+        "        take(literal.values) + generic_take<i32>([]);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "tests/empty_array_literal_codegen.ff");
     const FengProgram *programs[1] = {program};
@@ -5100,15 +5100,15 @@ static void test_type_field_initializers_codegen(void) {
     static const char *kSource =
         "module feng.codegen.fieldinit;\n"
         "type UserType {\n"
-        "    let id: int = 7;\n"
+        "    let id: i32 = 7;\n"
         "}\n"
         "type User {\n"
-        "    let id: int = 0;\n"
+        "    let id: i32 = 0;\n"
         "    let x: UserType;\n"
         "    let y = UserType();\n"
         "    let z = UserType {};\n"
         "}\n"
-        "func total(): int {\n"
+        "func total(): i32 {\n"
         "    let user = User();\n"
         "    return user.id + user.x.id + user.y.id + user.z.id;\n"
         "}\n";
@@ -5168,12 +5168,12 @@ static void test_type_field_initializers_codegen(void) {
 static void test_type_field_callable_lambda_initializer_codegen(void) {
     static const char *kSource =
         "module feng.codegen.fieldlambda;\n"
-        "spec Reader(): int;\n"
+        "spec Reader(): i32;\n"
         "type Box {\n"
-        "    var n: int;\n"
+        "    var n: i32;\n"
         "    let read: Reader = () -> self.n;\n"
         "}\n"
-        "func use_it(): int {\n"
+        "func use_it(): i32 {\n"
         "    let box = Box{n: 7};\n"
         "    return box.read();\n"
         "}\n";
@@ -5389,10 +5389,10 @@ static void test_try_catch_return_codegen(void) {
 static void test_variadic_zero_args_codegen(void) {
     static const char *kSource =
         "module feng.codegen.variadic_zero;\n"
-        "func sum(values: int...): int {\n"
+        "func sum(values: i32...): i32 {\n"
         "    return 0;\n"
         "}\n"
-        "func run(): int {\n"
+        "func run(): i32 {\n"
         "    return sum();\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "tests/variadic_zero.ff");
@@ -5442,10 +5442,10 @@ static void test_variadic_zero_args_codegen(void) {
 static void test_variadic_multi_args_codegen(void) {
     static const char *kSource =
         "module feng.codegen.variadic_multi;\n"
-        "func sum(values: int...): int {\n"
+        "func sum(values: i32...): i32 {\n"
         "    return 0;\n"
         "}\n"
-        "func run(): int {\n"
+        "func run(): i32 {\n"
         "    return sum(1, 2, 3);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "tests/variadic_multi.ff");
@@ -5494,10 +5494,10 @@ static void test_variadic_multi_args_codegen(void) {
 static void test_variadic_fixed_prefix_codegen(void) {
     static const char *kSource =
         "module feng.codegen.variadic_fixed_prefix;\n"
-        "func log(level: int, args: string...): int {\n"
+        "func log(level: i32, args: string...): i32 {\n"
         "    return level;\n"
         "}\n"
-        "func run(): int {\n"
+        "func run(): i32 {\n"
         "    return log(1, \"a\", \"b\");\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "tests/variadic_fixed_prefix.ff");
@@ -5545,9 +5545,9 @@ static void test_variadic_fixed_prefix_codegen(void) {
 static void test_variadic_callable_spec_lambda_codegen(void) {
     static const char *kSource =
         "module feng.codegen.variadic_spec_lambda;\n"
-        "spec Mapper(args: int...): int;\n"
-        "func run(): int {\n"
-        "    let mapper: Mapper = (args: int...) {\n"
+        "spec Mapper(args: i32...): i32;\n"
+        "func run(): i32 {\n"
+        "    let mapper: Mapper = (args: i32...) {\n"
         "        return 0;\n"
         "    };\n"
         "    return mapper(1, 2);\n"
@@ -5600,8 +5600,8 @@ static void test_tuple_value_codegen_core(void) {
         "module feng.codegen.tuplecore;\n"
         "type Unit();\n"
         "type OtherUnit();\n"
-        "type Point(int, int);\n"
-        "type Coord(int, int);\n"
+        "type Point(i32, i32);\n"
+        "type Coord(i32, i32);\n"
         "type Pair<T, U>(T, U);\n"
         "type Holder {\n"
         "    let point: Point;\n"
@@ -5610,51 +5610,51 @@ static void test_tuple_value_codegen_core(void) {
         "func make_unit(): Unit {\n"
         "    return ();\n"
         "}\n"
-        "func unit_score(value: Unit): int {\n"
+        "func unit_score(value: Unit): i32 {\n"
         "    let () = value;\n"
         "    return 1;\n"
         "}\n"
         "func cast_unit(value: Unit): OtherUnit {\n"
         "    return (OtherUnit)value;\n"
         "}\n"
-        "func make_point(x: int, y: int): Point {\n"
+        "func make_point(x: i32, y: i32): Point {\n"
         "    return (x, y);\n"
         "}\n"
-        "func sum(point: Point): int {\n"
+        "func sum(point: Point): i32 {\n"
         "    return point.item1 + point.item2;\n"
         "}\n"
-        "func cast_sum(point: Point): int {\n"
+        "func cast_sum(point: Point): i32 {\n"
         "    let coord: Coord = (Coord)point;\n"
         "    return coord.item1 + coord.item2;\n"
         "}\n"
-        "func destruct_literal(): int {\n"
+        "func destruct_literal(): i32 {\n"
         "    let (x, , z) = (1, 2, 3);\n"
         "    return x + z;\n"
         "}\n"
-        "func destruct_call(): int {\n"
+        "func destruct_call(): i32 {\n"
         "    let (x, y) = make_point(3, 4);\n"
         "    return x + y;\n"
         "}\n"
-        "func holder_sum(): int {\n"
+        "func holder_sum(): i32 {\n"
         "    let holder = Holder { point: (5, 6), unit: () };\n"
         "    return holder.point.item1 + holder.point.item2;\n"
         "}\n"
-        "func generic_pair(): int {\n"
-        "    let pair: Pair<int, int> = (7, 8);\n"
+        "func generic_pair(): i32 {\n"
+        "    let pair: Pair<i32, i32> = (7, 8);\n"
         "    return pair.item1 + pair.item2;\n"
         "}\n"
-        "func replace_whole(): int {\n"
+        "func replace_whole(): i32 {\n"
         "    var point: Point = (1, 2);\n"
         "    point = (3, 4);\n"
         "    return point.item1 + point.item2;\n"
         "}\n"
-        "func unit_core(): int {\n"
+        "func unit_core(): i32 {\n"
         "    let unit: Unit = ();\n"
         "    let () = ();\n"
         "    let other = cast_unit(unit);\n"
         "    return unit_score(unit) + unit_score(make_unit()) + unit_score((Unit)other);\n"
         "}\n"
-        "func run(): int {\n"
+        "func run(): i32 {\n"
         "    return unit_core() + sum((1, 2)) + sum(make_point(3, 4)) + cast_sum((9, 10)) + destruct_literal() + destruct_call() + holder_sum() + generic_pair() + replace_whole();\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "tests/tuple_core_codegen.ff");
@@ -5705,26 +5705,26 @@ static void test_tuple_value_codegen_core(void) {
 static void test_tuple_managed_slots_codegen(void) {
     static const char *kSource =
         "module feng.codegen.tuplemanaged;\n"
-        "type Label(string, int);\n"
+        "type Label(string, i32);\n"
         "type Holder {\n"
         "    let label: Label;\n"
         "}\n"
         "func make_label(name: string): Label {\n"
         "    return (name, 7);\n"
         "}\n"
-        "func number(label: Label): int {\n"
+        "func number(label: Label): i32 {\n"
         "    return label.item2;\n"
         "}\n"
-        "func from_holder(name: string): int {\n"
+        "func from_holder(name: string): i32 {\n"
         "    let holder = Holder { label: (name, 9) };\n"
         "    let (text, value) = holder.label;\n"
         "    return value;\n"
         "}\n"
-        "func default_label(): int {\n"
+        "func default_label(): i32 {\n"
         "    let label: Label;\n"
         "    return label.item2;\n"
         "}\n"
-        "func run(name: string): int {\n"
+        "func run(name: string): i32 {\n"
         "    let label = make_label(name);\n"
         "    return number(label) + from_holder(name) + default_label();\n"
         "}\n";
@@ -5776,7 +5776,7 @@ static void test_tuple_managed_slots_codegen(void) {
 static void test_union_form_spec_codegen(void) {
     static const char *kSource =
         "module feng.codegen.unionbasic;\n"
-        "spec Value: int | string | bool;\n"
+        "spec Value: i32 | string | bool;\n"
         "type Holder {\n"
         "    let value: Value;\n"
         "}\n"
@@ -5796,15 +5796,15 @@ static void test_union_form_spec_codegen(void) {
         "func make_string(name: string): Value {\n"
         "    return name;\n"
         "}\n"
-        "func choose(v: Value): int {\n"
+        "func choose(v: Value): i32 {\n"
         "    match v {\n"
-        "        x: int { return x + 1; }\n"
+        "        x: i32 { return x + 1; }\n"
         "        string { return 2; }\n"
         "        bool { return 3; }\n"
         "    }\n"
         "    return 0;\n"
         "}\n"
-        "func from_holder(v: Value): int {\n"
+        "func from_holder(v: Value): i32 {\n"
         "    let holder = Holder { value: v };\n"
         "    return choose(holder.value);\n"
         "}\n"
@@ -5819,7 +5819,7 @@ static void test_union_form_spec_codegen(void) {
         "    }\n"
         "    return \"\";\n"
         "}\n"
-        "func use_local(name: string): int {\n"
+        "func use_local(name: string): i32 {\n"
         "    let local: Value = name;\n"
         "    match local {\n"
         "        string { return 7; }\n"
@@ -5883,15 +5883,15 @@ static void test_generic_union_form_spec_codegen(void) {
         "module feng.codegen.uniongeneric;\n"
         "type Error {}\n"
         "spec Result<T>: Error | T;\n"
-        "func wrap_int(value: int): Result<int> {\n"
+        "func wrap_int(value: i32): Result<i32> {\n"
         "    return value;\n"
         "}\n"
-        "func wrap_error(value: Error): Result<int> {\n"
+        "func wrap_error(value: Error): Result<i32> {\n"
         "    return value;\n"
         "}\n"
-        "func score(value: Result<int>): int {\n"
+        "func score(value: Result<i32>): i32 {\n"
         "    match value {\n"
-        "        v: int { return v + 1; }\n"
+        "        v: i32 { return v + 1; }\n"
         "        Error { return 0; }\n"
         "    }\n"
         "    return 0;\n"
@@ -5944,15 +5944,15 @@ static void test_generic_union_form_match_expr_codegen(void) {
         "module feng.codegen.uniongenericexpr;\n"
         "type Error {}\n"
         "spec Result<T>: Error | T;\n"
-        "func wrap_int(value: int): Result<int> {\n"
+        "func wrap_int(value: i32): Result<i32> {\n"
         "    return value;\n"
         "}\n"
-        "func wrap_error(value: Error): Result<int> {\n"
+        "func wrap_error(value: Error): Result<i32> {\n"
         "    return value;\n"
         "}\n"
-        "func score(value: Result<int>): int {\n"
+        "func score(value: Result<i32>): i32 {\n"
         "    return match value {\n"
-        "        v: int { v + 1; }\n"
+        "        v: i32 { v + 1; }\n"
         "        Error { 0; }\n"
         "        else { 0; }\n"
         "    };\n"
@@ -6002,19 +6002,19 @@ static void test_generic_union_form_match_expr_codegen(void) {
 static void test_tuple_union_cleanup_codegen(void) {
     static const char *kSource =
         "module feng.codegen.tupleunion;\n"
-        "spec Choice: int | string;\n"
+        "spec Choice: i32 | string;\n"
         "type Wrapped(Choice, string);\n"
         "func make_choice(name: string): Choice {\n"
         "    return name;\n"
         "}\n"
-        "func score(value: Choice): int {\n"
+        "func score(value: Choice): i32 {\n"
         "    match value {\n"
-        "        v: int { return v + 1; }\n"
+        "        v: i32 { return v + 1; }\n"
         "        string { return 2; }\n"
         "    }\n"
         "    return 0;\n"
         "}\n"
-        "func run(name: string): int {\n"
+        "func run(name: string): i32 {\n"
         "    let wrapped: Wrapped = (make_choice(name), \"fallback\");\n"
         "    return score(wrapped.item1);\n"
         "}\n";
@@ -6065,18 +6065,18 @@ static void test_tuple_fit_codegen(void) {
     static const char *kSource =
         "module feng.codegen.tuplefit;\n"
         "spec Summable {\n"
-        "    func sum(): int;\n"
+        "    func sum(): i32;\n"
         "}\n"
-        "type Point(int, int);\n"
+        "type Point(i32, i32);\n"
         "fit Point: Summable {\n"
-        "    func sum(): int {\n"
+        "    func sum(): i32 {\n"
         "        return self.item1 + self.item2;\n"
         "    }\n"
         "}\n"
-        "func consume(value: Summable): int {\n"
+        "func consume(value: Summable): i32 {\n"
         "    return value.sum();\n"
         "}\n"
-        "func run(): int {\n"
+        "func run(): i32 {\n"
         "    let point: Point = (5, 6);\n"
         "    let value: Summable = point;\n"
         "    return point.sum() + consume(point) + value.sum();\n"
@@ -6130,10 +6130,10 @@ static void test_tuple_fit_codegen(void) {
 static void test_infix_match_value_pattern_codegen(void) {
     static const char *kSource =
         "module feng.codegen.infixmatchval;\n"
-        "func pick(x: int): bool {\n"
+        "func pick(x: i32): bool {\n"
         "    return x match 0 | 1 | 2;\n"
         "}\n"
-        "func pick_range(x: int): bool {\n"
+        "func pick_range(x: i32): bool {\n"
         "    return x match 1...10;\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "tests/infix_match_value_codegen.ff");
@@ -6187,12 +6187,12 @@ static void test_infix_match_value_pattern_codegen(void) {
 static void test_infix_match_union_member_type_pattern_codegen(void) {
     static const char *kSource =
         "module feng.codegen.infixmatchunion;\n"
-        "spec Value: int | string;\n"
+        "spec Value: i32 | string;\n"
         "func is_int(v: Value): bool {\n"
-        "    return v match int;\n"
+        "    return v match i32;\n"
         "}\n"
         "func is_text(v: Value): bool {\n"
-        "    return v match int | string;\n"
+        "    return v match i32 | string;\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "tests/infix_match_union_type_codegen.ff");
     const FengProgram *programs[1] = {program};
@@ -6241,9 +6241,9 @@ static void test_infix_match_union_member_type_pattern_codegen(void) {
 static void test_infix_match_union_member_binding_in_if_cond_codegen(void) {
     static const char *kSource =
         "module feng.codegen.infixmatchbinding;\n"
-        "spec Value: int | string;\n"
-        "func consume(v: Value): int {\n"
-        "    if v match n: int && n > 0 {\n"
+        "spec Value: i32 | string;\n"
+        "func consume(v: Value): i32 {\n"
+        "    if v match n: i32 && n > 0 {\n"
         "        return n;\n"
         "    }\n"
         "    return 0;\n"
@@ -6296,11 +6296,11 @@ static void test_infix_match_union_member_binding_in_if_cond_codegen(void) {
 static void test_infix_match_union_member_binding_in_while_cond_codegen(void) {
     static const char *kSource =
         "module feng.codegen.infixmatchwhile;\n"
-        "spec Value: int | string;\n"
-        "func countdown(v: Value): int {\n"
+        "spec Value: i32 | string;\n"
+        "func countdown(v: Value): i32 {\n"
         "    var counter: Value = v;\n"
-        "    var sum: int = 0;\n"
-        "    while counter match n: int && n > 0 {\n"
+        "    var sum: i32 = 0;\n"
+        "    while counter match n: i32 && n > 0 {\n"
         "        sum = sum + n;\n"
         "        counter = n - 1;\n"
         "    }\n"
@@ -6358,7 +6358,7 @@ static void test_infix_match_unary_not_preserves_precedence_codegen(void) {
      * C parses `!_mt.tag == 1U` as `(!_mt.tag) == 1U` due to precedence. */
     static const char *kSource =
         "module feng.codegen.infixmatchnot;\n"
-        "spec Value: int | string;\n"
+        "spec Value: i32 | string;\n"
         "func is_not_text(v: Value): bool {\n"
         "    return !(v match string);\n"
         "}\n";

@@ -5,10 +5,10 @@ import std.collections;
 import std.text;
 
 @cdecl("libc")
-extern func read(fd: int, buf: byte*, count: i64): i64;
+extern func read(fd: i32, buf: byte*, count: i64): i64;
 
 @cdecl("libc")
-extern func write(fd: int, buf: byte*, count: i64): i64;
+extern func write(fd: i32, buf: byte*, count: i64): i64;
 
 @runtime
 extern func feng_string_to_utf8_bytes(value: string): byte[];
@@ -50,9 +50,9 @@ seal func appendTrailingNewline(bytes: byte[]): byte[] {
  * Standard input/output object backed by libc standard streams.
  */
 open type Stdio {
-	seal let inputFd: int;
-	seal let outputFd: int;
-	seal let errorFd: int;
+	seal let inputFd: i32;
+	seal let outputFd: i32;
+	seal let errorFd: i32;
 	seal var pending: byte[];
 	seal var pendingOffset: i64;
 

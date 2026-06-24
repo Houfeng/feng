@@ -266,7 +266,7 @@ static void test_literals_and_arrow(void) {
     const char *source =
         "let ok = true && false;\n"
         "let flag: bool;\n"
-        "let callable = (x: int) -> x * 2;\n"
+        "let callable = (x: i32) -> x * 2;\n"
         "let ratio = 3.14;\n"
         "let nums = [1, 2];\n";
     FengLexer lexer;
@@ -302,7 +302,7 @@ static void test_literals_and_arrow(void) {
     assert_lexeme(&token, "x");
     token = next_token(&lexer, FENG_TOKEN_COLON);
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
-    assert_lexeme(&token, "int");
+    assert_lexeme(&token, "i32");
     token = next_token(&lexer, FENG_TOKEN_RPAREN);
     token = next_token(&lexer, FENG_TOKEN_ARROW);
     token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
@@ -395,10 +395,10 @@ static void test_doc_comment_binding_breaks_on_blank_line_and_normal_comment(voi
     const char *source =
         "/** lost by blank line */\n"
         "\n"
-        "let a: int;\n"
+        "let a: i32;\n"
         "/** lost by normal comment */\n"
         "// separator\n"
-        "let b: int;\n";
+        "let b: i32;\n";
     FengLexer lexer;
     FengToken token;
 

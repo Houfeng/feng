@@ -35,8 +35,8 @@ static void test_top_level_declarations(void) {
         "extern func point_distance(p1: Point, p2: Point): float;\n"
         "@abi\n"
         "type Point {\n"
-        "    var x: int;\n"
-        "    var y: int;\n"
+        "    var x: i32;\n"
+        "    var y: i32;\n"
         "}\n"
         "@abi\n"
         "spec PointCallback(p: Point): void;\n";
@@ -98,8 +98,8 @@ static void test_annotation_accepts_two_arguments(void) {
 
 static void test_extern_rejects_non_function_top_level_declarations(void) {
     static const char *kCases[] = {
-        "module demo.main;\nextern let value: int;\n",
-        "module demo.main;\nextern type Point {\n    var x: int;\n}\n",
+        "module demo.main;\nextern let value: i32;\n",
+        "module demo.main;\nextern type Point {\n    var x: i32;\n}\n",
         "module demo.main;\nextern enum Status {\n    ok = 0;\n}\n",
         "module demo.main;\nextern spec Reader {\n}\n",
         "module demo.main;\nextern fit User: Named {\n}\n"
@@ -132,8 +132,8 @@ static void test_statements_and_expressions(void) {
         "    }\n"
         "    return (i32)1;\n"
         "}\n"
-        "func make_adder(base: int): IntToInt {\n"
-        "    return (x: int) -> base + x;\n"
+        "func make_adder(base: i32): IntToInt {\n"
+        "    return (x: i32) -> base + x;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -186,7 +186,7 @@ static void test_try_block_form_is_rejected(void) {
 static void test_try_expression_with_typed_catches(void) {
     const char *source =
         "module demo.main;\n"
-        "func run(): int {\n"
+        "func run(): i32 {\n"
         "    let value = try parse() catch err: ParseError { 8080; } catch problem: unknown { 9090; };\n"
         "    return value;\n"
         "}\n";
@@ -238,7 +238,7 @@ static void test_try_without_catch_is_rejected(void) {
 static void test_defer_block_parses(void) {
     const char *source =
         "module demo.main;\n"
-        "func run(): int {\n"
+        "func run(): i32 {\n"
         "    var x = 1;\n"
         "    defer {\n"
         "        x = x + 1;\n"
@@ -311,10 +311,10 @@ static void test_member_annotations_and_constructors(void) {
         "type User {\n"
         "    open var name: string;\n"
         "    @memo\n"
-        "    open let id: int = 1;\n"
-        "    open let created_at: int;\n"
+        "    open let id: i32 = 1;\n"
+        "    open let created_at: i32;\n"
         "    @memo(created_at)\n"
-        "    func User(ts: int) {\n"
+        "    func User(ts: i32) {\n"
         "        self.created_at = ts;\n"
         "    }\n"
         "    open func info(): string {\n"
@@ -347,12 +347,12 @@ static void test_static_members_parse(void) {
     const char *source =
         "module demo.static_members;\n"
         "type Counter {\n"
-        "    static let seed: int = 1;\n"
-        "    open static var count: int = 0;\n"
+        "    static let seed: i32 = 1;\n"
+        "    open static var count: i32 = 0;\n"
         "    open static func create(): Counter {\n"
         "        return Counter();\n"
         "    }\n"
-        "    func value(): int {\n"
+        "    func value(): i32 {\n"
         "        return 1;\n"
         "    }\n"
         "}\n"
@@ -399,12 +399,12 @@ static void test_spec_static_members_parse(void) {
         "spec Factory<T> {\n"
         "    static func make(): T;\n"
         "    static let tag: string;\n"
-        "    static var current: int;\n"
+        "    static var current: i32;\n"
         "    func name(): string;\n"
         "}\n"
         "spec SameName {\n"
-        "    static func SameName(): int;\n"
-        "    func SameName(): int;\n"
+        "    static func SameName(): i32;\n"
+        "    func SameName(): i32;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -447,14 +447,14 @@ static void test_spec_static_member_parse_errors(void) {
         {
             "module demo.bad;\n"
             "spec Factory {\n"
-            "    static let zero: int = 0;\n"
+            "    static let zero: i32 = 0;\n"
             "}\n",
             "spec field declarations cannot have an initializer"
         },
         {
             "module demo.bad;\n"
             "spec Factory {\n"
-            "    static func make(): int {}\n"
+            "    static func make(): i32 {}\n"
             "}\n",
             "spec method signatures must end with ';' and cannot have a body"
         }
@@ -497,7 +497,7 @@ static void test_static_member_parse_errors(void) {
         {
             "module demo.bad;\n"
             "type Counter {\n"
-            "    static open let value: int = 0;\n"
+            "    static open let value: i32 = 0;\n"
             "}\n",
             "expected type member declaration"
         },
@@ -505,7 +505,7 @@ static void test_static_member_parse_errors(void) {
             "module demo.bad;\n"
             "type Counter {}\n"
             "fit Counter {\n"
-            "    static let value: int = 0;\n"
+            "    static let value: i32 = 0;\n"
             "}\n",
             "fit blocks cannot declare 'static let' or 'static var'"
         },
@@ -513,7 +513,7 @@ static void test_static_member_parse_errors(void) {
             "module demo.bad;\n"
             "type Counter {}\n"
             "fit Counter {\n"
-            "    static var value: int = 0;\n"
+            "    static var value: i32 = 0;\n"
             "}\n",
             "fit blocks cannot declare 'static let' or 'static var'"
         }
@@ -577,13 +577,13 @@ static void test_ast_source_tokens(void) {
         "open module demo.main;\n"
         "import demo.base;\n"
         "@memo\n"
-        "func main(arg: int) {\n"
-        "    let answer: int = 42;\n"
+        "func main(arg: i32) {\n"
+        "    let answer: i32 = 42;\n"
         "    return answer;\n"
         "}\n"
         "type User {\n"
-        "    open let id: int = 1;\n"
-        "    func User(value: int) {\n"
+        "    open let id: i32 = 1;\n"
+        "    func User(value: i32) {\n"
         "        self.id = value;\n"
         "    }\n"
         "}\n";
@@ -616,7 +616,7 @@ static void test_type_field_inferred_initializers(void) {
         "module demo.fields;\n"
         "type UserType {}\n"
         "type User {\n"
-        "    let id: int = 0;\n"
+        "    let id: i32 = 0;\n"
         "    let x: UserType;\n"
         "    let y = UserType();\n"
         "    let z = UserType {};\n"
@@ -655,19 +655,19 @@ static void test_doc_comments_bind_to_declarations_and_members(void) {
         "type User {\n"
         "    /** field doc */\n"
         "    @memo\n"
-        "    open let id: int;\n"
+        "    open let id: i32;\n"
         "    /** method doc */\n"
-        "    open func info(): int {\n"
+        "    open func info(): i32 {\n"
         "        return self.id;\n"
         "    }\n"
         "}\n"
         "spec Named {\n"
         "    /** spec member doc */\n"
-        "    func name(): int;\n"
+        "    func name(): i32;\n"
         "}\n"
         "fit User {\n"
         "    /** fit member doc */\n"
-        "    func extra(): int {\n"
+        "    func extra(): i32 {\n"
         "        return 1;\n"
         "    }\n"
         "}\n";
@@ -741,7 +741,7 @@ static void test_parse_error_after_annotation_semicolon(void) {
 static void test_parse_error_top_level_fn_missing_body(void) {
     const char *source =
         "module demo.main;\n"
-        "func point_sum(a: int, b: int): int;\n";
+        "func point_sum(a: i32, b: i32): i32;\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -783,7 +783,7 @@ static void test_parse_error_top_level_fn_missing_body_with_void_return(void) {
 static void test_parse_error_extern_fn_with_body(void) {
     const char *source =
         "module demo.main;\n"
-        "extern func point_sum(a: int, b: int): int {\n"
+        "extern func point_sum(a: i32, b: i32): i32 {\n"
         "    return a + b;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -833,7 +833,7 @@ static void test_parse_error_enum_member_declaration(void) {
     const char *source =
         "module demo.enums;\n"
         "enum Bad {\n"
-        "    let code: int;\n"
+        "    let code: i32;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -971,8 +971,8 @@ static void test_finalizer_declaration(void) {
     const char *source =
         "module demo.user;\n"
         "type Buffer {\n"
-        "    open var size: int;\n"
-        "    func Buffer(s: int) {}\n"
+        "    open var size: i32;\n"
+        "    func Buffer(s: i32) {}\n"
         "    func ~Buffer() {}\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1024,7 +1024,7 @@ static void test_parse_error_constructor_with_non_void_return(void) {
     const char *source =
         "module demo.user;\n"
         "type Box {\n"
-        "    func Box(): int { return 0; }\n"
+        "    func Box(): i32 { return 0; }\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1039,7 +1039,7 @@ static void test_parse_error_finalizer_with_params(void) {
     const char *source =
         "module demo.user;\n"
         "type Box {\n"
-        "    func ~Box(x: int) {}\n"
+        "    func ~Box(x: i32) {}\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1054,7 +1054,7 @@ static void test_parse_error_finalizer_with_non_void_return(void) {
     const char *source =
         "module demo.user;\n"
         "type Box {\n"
-        "    func ~Box(): int { return 0; }\n"
+        "    func ~Box(): i32 { return 0; }\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1255,8 +1255,8 @@ static void test_compound_assignment_parsing(void) {
 static void test_lambda_block_body_parses(void) {
     const char *source =
         "module demo.main;\n"
-        "func run(): int {\n"
-        "    let f = (a: int) {\n"
+        "func run(): i32 {\n"
+        "    let f = (a: i32) {\n"
         "        let b = a + 1;\n"
         "        return b;\n"
         "    };\n"
@@ -1285,8 +1285,8 @@ static void test_lambda_block_body_parses(void) {
 static void test_lambda_block_body_with_arrow_is_rejected(void) {
     const char *source =
         "module demo.main;\n"
-        "func run(): int {\n"
-        "    let f = (a: int) -> {\n"
+        "func run(): i32 {\n"
+        "    let f = (a: i32) -> {\n"
         "        return a;\n"
         "    };\n"
         "    return f(0);\n"
@@ -1302,7 +1302,7 @@ static void test_lambda_block_body_with_arrow_is_rejected(void) {
 static void test_match_with_range_and_list_labels(void) {
     const char *source =
         "module demo.main;\n"
-        "func run(age: int): string {\n"
+        "func run(age: i32): string {\n"
         "    return match age {\n"
         "        0 { \"婴儿\"; }\n"
         "        1...17 { \"未成年\"; }\n"
@@ -1341,7 +1341,7 @@ static void test_match_with_range_and_list_labels(void) {
 static void test_match_statement_form(void) {
     const char *source =
         "module demo.main;\n"
-        "func run(age: int) {\n"
+        "func run(age: i32) {\n"
         "    match age {\n"
         "        0 { print(\"zero\"); }\n"
         "        1...10 { print(\"small\"); }\n"
@@ -1415,7 +1415,7 @@ static void test_match_enum_item_reference_labels_parse(void) {
 static void test_union_spec_declaration_parses(void) {
     const char *source =
         "module demo.union;\n"
-        "spec Value: int | string | Pair<int, int>[];\n";
+        "spec Value: i32 | string | Pair<i32, i32>[];\n";
     FengProgram *program = NULL;
     FengParseError error;
     const FengDecl *decl;
@@ -1428,7 +1428,7 @@ static void test_union_spec_declaration_parses(void) {
     ASSERT(decl->as.spec_decl.form == FENG_SPEC_FORM_UNION);
     ASSERT(decl->as.spec_decl.as.union_form.member_count == 3U);
     ASSERT(decl->as.spec_decl.as.union_form.members[0]->kind == FENG_TYPE_REF_NAMED);
-    assert_slice_text(decl->as.spec_decl.as.union_form.members[0]->as.named.segments[0], "int");
+    assert_slice_text(decl->as.spec_decl.as.union_form.members[0]->as.named.segments[0], "i32");
     ASSERT(decl->as.spec_decl.as.union_form.members[1]->kind == FENG_TYPE_REF_NAMED);
     assert_slice_text(decl->as.spec_decl.as.union_form.members[1]->as.named.segments[0], "string");
     ASSERT(decl->as.spec_decl.as.union_form.members[2]->kind == FENG_TYPE_REF_ARRAY);
@@ -1441,7 +1441,7 @@ static void test_union_spec_declaration_parses(void) {
 static void test_union_spec_rejects_void_member(void) {
     const char *source =
         "module demo.union;\n"
-        "spec Bad: int | void;\n";
+        "spec Bad: i32 | void;\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -1456,9 +1456,9 @@ static void test_match_type_labels_parse(void) {
         "module demo.union;\n"
         "func run(value: Value) {\n"
         "    match value {\n"
-        "        int { print(1); }\n"
+        "        i32 { print(1); }\n"
         "        UserType, pkg.Named { print(2); }\n"
-        "        Box<int>[] { print(3); }\n"
+        "        Box<i32>[] { print(3); }\n"
         "        else { print(4); }\n"
         "    }\n"
         "}\n";
@@ -1473,7 +1473,7 @@ static void test_match_type_labels_parse(void) {
     ASSERT(stmt->kind == FENG_STMT_MATCH);
     ASSERT(stmt->as.match_stmt.branch_count == 3U);
     ASSERT(stmt->as.match_stmt.branches[0].labels[0].kind == FENG_MATCH_LABEL_TYPE);
-    assert_slice_text(stmt->as.match_stmt.branches[0].labels[0].type->as.named.segments[0], "int");
+    assert_slice_text(stmt->as.match_stmt.branches[0].labels[0].type->as.named.segments[0], "i32");
     branch = &stmt->as.match_stmt.branches[1];
     ASSERT(branch->label_count == 2U);
     ASSERT(branch->labels[0].kind == FENG_MATCH_LABEL_TYPE);
@@ -1492,7 +1492,7 @@ static void test_match_binding_prefix_parse(void) {
         "module demo.union;\n"
         "func run(value: Value) {\n"
         "    match value {\n"
-        "        x: int { print(x); }\n"
+        "        x: i32 { print(x); }\n"
         "        let s: string { print(s); }\n"
         "        var b: bool { b = true; }\n"
         "        UserType { print(1); }\n"
@@ -1547,9 +1547,9 @@ static void test_match_binding_prefix_parse(void) {
 static void test_match_binding_prefix_expression_form(void) {
     const char *source =
         "module demo.union;\n"
-        "func run(value: Value): int {\n"
+        "func run(value: Value): i32 {\n"
         "    return match value {\n"
-        "        v: int { v + 1; }\n"
+        "        v: i32 { v + 1; }\n"
         "        string { 0; }\n"
         "        else { -1; }\n"
         "    };\n"
@@ -1581,7 +1581,7 @@ static void test_match_binding_prefix_expression_form(void) {
 static void test_for_in_loop(void) {
     const char *source =
         "module demo.main;\n"
-        "func run(items: int[]) {\n"
+        "func run(items: i32[]) {\n"
         "    for let it in items {\n"
         "        print(it);\n"
         "    }\n"
@@ -1606,7 +1606,7 @@ static void test_block_yield_omits_trailing_semicolon(void) {
      * of a block may be omitted. */
     const char *source =
         "module demo.main;\n"
-        "func run(value: int): int {\n"
+        "func run(value: i32): i32 {\n"
         "    let x = if value > 0 { 1 } else { 2 };\n"
         "    return x;\n"
         "}\n";
@@ -1623,11 +1623,11 @@ static void test_non_generic_array_new_uses_colon_dimension_syntax(void) {
     const char *source =
         "module demo.main;\n"
         "type Counter {\n"
-        "    var value: int;\n"
+        "    var value: i32;\n"
         "}\n"
-        "func run(n: int) {\n"
+        "func run(n: i32) {\n"
         "    let a: Counter[!] = Counter[:3];\n"
-        "    let b: int[!] = int[:n];\n"
+        "    let b: i32[!] = i32[:n];\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1659,7 +1659,7 @@ static void test_generic_array_new_uses_colon_dimension_syntax(void) {
         "    var right: B;\n"
         "}\n"
         "func run() {\n"
-        "    let pairs: Pair<int, int>[!] = Pair<int, int>[:2];\n"
+        "    let pairs: Pair<i32, i32>[!] = Pair<i32, i32>[:2];\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1683,7 +1683,7 @@ static void test_generic_array_new_uses_colon_dimension_syntax(void) {
 static void test_index_expression_is_unambiguous_and_remains_value_brackets(void) {
     const char *source =
         "module demo.main;\n"
-        "func run(items: int[]): int {\n"
+        "func run(items: i32[]): i32 {\n"
         "    return items[0];\n"
         "}\n";
     FengProgram *program = NULL;
@@ -1702,7 +1702,7 @@ static void test_non_generic_type_brackets_without_colon_parses_as_index(void) {
     const char *source =
         "module demo.main;\n"
         "type Counter {\n"
-        "    var value: int;\n"
+        "    var value: i32;\n"
         "}\n"
         "func run() {\n"
         "    let x: Counter[!] = Counter[3];\n"
@@ -1731,7 +1731,7 @@ static void test_generic_type_brackets_without_colon_parses_as_index(void) {
         "    var right: B;\n"
         "}\n"
         "func run() {\n"
-        "    let pairs: Pair<int, int>[!] = Pair<int, int>[2];\n"
+        "    let pairs: Pair<i32, i32>[!] = Pair<i32, i32>[2];\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1866,7 +1866,7 @@ static void test_generic_type_ref_with_args(void) {
     const char *source =
         "module demo.main;\n"
         "func run(): void {\n"
-        "    let x: Map<string, int>;\n"
+        "    let x: Map<string, i32>;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1894,7 +1894,7 @@ static void test_generic_type_ref_nested(void) {
     const char *source =
         "module demo.main;\n"
         "func run(): void {\n"
-        "    let x: Map<string, List<int>>;\n"
+        "    let x: Map<string, List<i32>>;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -1955,7 +1955,7 @@ static void test_explicit_generic_call(void) {
     const char *source =
         "module demo.main;\n"
         "func run(): void {\n"
-        "    callee<int>(42);\n"
+        "    callee<i32>(42);\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -2010,7 +2010,7 @@ static void test_explicit_generic_type_constructor_call(void) {
     const char *source =
         "module demo.main;\n"
         "func run(): void {\n"
-        "    Map<string, int>();\n"
+        "    Map<string, i32>();\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -2035,7 +2035,7 @@ static void test_explicit_generic_type_constructor_call(void) {
 static void test_postfix_pointer_type_refs(void) {
     const char *source =
         "module demo.main;\n"
-        "func run(a: Point*[], b: int[]*, c: byte*) {}\n";
+        "func run(a: Point*[], b: i32[]*, c: byte*) {}\n";
     FengProgram *program = NULL;
     FengParseError error;
     const FengDecl *fn_decl;
@@ -2067,7 +2067,7 @@ static void test_postfix_pointer_type_refs(void) {
     ASSERT(type_b->as.inner->kind == FENG_TYPE_REF_ARRAY);
     ASSERT(type_b->as.inner->as.inner != NULL);
     ASSERT(type_b->as.inner->as.inner->kind == FENG_TYPE_REF_NAMED);
-    assert_slice_text(type_b->as.inner->as.inner->as.named.segments[0], "int");
+    assert_slice_text(type_b->as.inner->as.inner->as.named.segments[0], "i32");
 
     type_c = callable->params[2].type;
     ASSERT(type_c != NULL);
@@ -2113,7 +2113,7 @@ static void test_generic_parse_error_colon_angle_in_type_position(void) {
     const char *source =
         "module demo.main;\n"
         "type Box:<T> {\n"
-        "    open let value: int;\n"
+        "    open let value: i32;\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -2128,7 +2128,7 @@ static void test_generic_parse_error_nested_colon_angle_in_type_arg(void) {
     const char *source =
         "module demo.main;\n"
         "func run(): void {\n"
-        "    foo<Map:<int>>(x);\n"
+        "    foo<Map:<i32>>(x);\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -2197,7 +2197,7 @@ static void test_generic_type_target_member_parses(void) {
     const char *source =
         "module demo.main;\n"
         "func run(): void {\n"
-        "    Box<int>.make(1);\n"
+        "    Box<i32>.make(1);\n"
         "}\n";
     FengProgram *program = NULL;
     FengParseError error;
@@ -2226,7 +2226,7 @@ static void test_generic_type_target_member_parses(void) {
 static void test_variadic_parameter_parses(void) {
     const char *source =
         "module demo.main;\n"
-        "func sum(values: int...): int {\n"
+        "func sum(values: i32...): i32 {\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -2250,7 +2250,7 @@ static void test_variadic_parameter_parses(void) {
     ASSERT(param->type->as.inner != NULL);
     ASSERT(param->type->as.inner->kind == FENG_TYPE_REF_NAMED);
     ASSERT(param->type->as.inner->as.named.segment_count == 1U);
-    assert_slice_text(param->type->as.inner->as.named.segments[0], "int");
+    assert_slice_text(param->type->as.inner->as.named.segments[0], "i32");
 
     feng_program_free(program);
 }
@@ -2259,7 +2259,7 @@ static void test_variadic_parameter_parses(void) {
 static void test_parse_error_variadic_not_last(void) {
     const char *source =
         "module demo.main;\n"
-        "func bad(x: int..., y: int): int {\n"
+        "func bad(x: i32..., y: i32): i32 {\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -2275,7 +2275,7 @@ static void test_parse_error_variadic_not_last(void) {
 static void test_parse_error_extern_fn_variadic(void) {
     const char *source =
         "module demo.main;\n"
-        "extern func bad(x: int...): int;\n";
+        "extern func bad(x: i32...): i32;\n";
     FengProgram *program = NULL;
     FengParseError error;
 
@@ -2334,12 +2334,12 @@ static void test_tuple_type_arity_errors(void) {
     } cases[] = {
         {
             "module demo.tuple;\n"
-            "type Single(int);\n",
+            "type Single(i32);\n",
             "tuple type declarations require 0 or 2 to 8 elements"
         },
         {
             "module demo.tuple;\n"
-            "type TooMany(int, int, int, int, int, int, int, int, int);\n",
+            "type TooMany(i32, i32, i32, i32, i32, i32, i32, i32, i32);\n",
             "tuple type declarations support at most 8 elements"
         }
     };
@@ -2362,7 +2362,7 @@ static void test_tuple_type_arity_errors(void) {
 static void test_tuple_literal_and_grouped_expression_parse(void) {
     const char *source =
         "module demo.tuple;\n"
-        "type Point(int, int);\n"
+        "type Point(i32, i32);\n"
         "func run() {\n"
         "    let grouped = (1);\n"
         "    let tupled: Point = (1, 2);\n"
@@ -2598,7 +2598,7 @@ static void test_non_empty_source_without_module_is_rejected(void) {
     static const char *kCases[] = {
         "fn main() {}\n",
         "let x = 42;\n",
-        "type Foo { var x: int; }\n",
+        "type Foo { var x: i32; }\n",
         "import std.io;\n",
     };
     size_t i;
@@ -2628,7 +2628,7 @@ static void test_visibility_without_module_is_rejected(void) {
 static void test_infix_match_op_simple_value_parses(void) {
     const char *source =
         "module demo.main;\n"
-        "func run(x: int): bool {\n"
+        "func run(x: i32): bool {\n"
         "    return x match 0;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -2652,8 +2652,8 @@ static void test_infix_match_op_simple_value_parses(void) {
 static void test_infix_match_op_range_and_type_parses(void) {
     const char *source =
         "module demo.main;\n"
-        "spec Value: int | string;\n"
-        "func run_int(x: int): bool {\n"
+        "spec Value: i32 | string;\n"
+        "func run_int(x: i32): bool {\n"
         "    return x match 1...10;\n"
         "}\n"
         "func run_union(v: Value): bool {\n"
@@ -2696,11 +2696,11 @@ static void test_infix_match_op_range_and_type_parses(void) {
 static void test_infix_match_op_multi_label_pipe_parses(void) {
     const char *source =
         "module demo.main;\n"
-        "spec Value: int | string;\n"
-        "func run_int(x: int): bool {\n"
+        "spec Value: i32 | string;\n"
+        "func run_int(x: i32): bool {\n"
         "    return x match 0 | 1 | 2;\n"
         "}\n"
-        "func run_int_mix(x: int): bool {\n"
+        "func run_int_mix(x: i32): bool {\n"
         "    return x match 0 | 1...10 | 100;\n"
         "}\n"
         "func run_union(v: Value): bool {\n"
@@ -2752,7 +2752,7 @@ static void test_infix_match_op_multi_label_pipe_parses(void) {
 static void test_infix_match_op_binding_parses(void) {
     const char *source =
         "module demo.main;\n"
-        "spec Value: int | string;\n"
+        "spec Value: i32 | string;\n"
         "func run_implicit(v: Value): bool {\n"
         "    return v match x: UserType;\n"
         "}\n"
@@ -2818,7 +2818,7 @@ static void test_infix_match_op_binding_parses(void) {
 static void test_infix_match_op_in_if_while_condition_parses(void) {
     const char *source =
         "module demo.main;\n"
-        "spec Value: int | string;\n"
+        "spec Value: i32 | string;\n"
         "func run_if(v: Value) {\n"
         "    if v match UserType { print(1); }\n"
         "}\n"
@@ -2872,7 +2872,7 @@ static void test_infix_match_op_pipe_does_not_become_bit_or(void) {
      * bitwise-or interpretation would be meaningless. */
     const char *source =
         "module demo.main;\n"
-        "func run(x: int): bool {\n"
+        "func run(x: i32): bool {\n"
         "    return x match 0 | 1;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -2897,7 +2897,7 @@ static void test_infix_match_op_left_associative_chains(void) {
      * the type checker. */
     const char *source =
         "module demo.main;\n"
-        "func run(x: int): bool {\n"
+        "func run(x: i32): bool {\n"
         "    return x match 0 match true;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -2927,8 +2927,8 @@ static void test_infix_match_op_mixed_with_relational_and_equality(void) {
      *   `x match T == y` parses as `(x match T) == y` (binary == ) */
     const char *source =
         "module demo.main;\n"
-        "spec Value: int | string;\n"
-        "func run_lt(v: Value, y: int): bool {\n"
+        "spec Value: i32 | string;\n"
+        "func run_lt(v: Value, y: i32): bool {\n"
         "    return v match UserType < y;\n"
         "}\n"
         "func run_eq(v: Value, y: bool): bool {\n"

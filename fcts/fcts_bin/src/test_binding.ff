@@ -18,12 +18,12 @@ open func test_binding() {
     });
 
     test("explicit type annotation", () {
-      let c: int = 100;
+      let c: i32 = 100;
       assert(c == 100, "explicit type annotation");
     });
 
     test("default zero value for int", () {
-      let d: int;
+      let d: i32;
       assert(d == 0, "default zero value for int");
     });
 
