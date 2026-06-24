@@ -107,7 +107,7 @@ Go、Swift 的设计模式一致：默认整数类型（`int`/`Int`）匹配机�
 | `src/semantic/spec_witnesses.c` | `canonical_builtin_type_name_local()` |
 | `src/codegen/codegen.c` | `k_builtin_types[]` / `cg_is_builtin_named_fit_target()`（注：`k_builtin_types[]` 自 2026-04-28 初始创建起即含有 `uint → CG_TYPE_U32` 条目，系 codegen 创建时的预留；但 2026-05-11 添加 `cg_is_builtin_named_fit_target()` 时已刻意排除 `uint`，且 semantic 层从未识别 `uint`，因此该条目为不可达死代码） |
 | `src/symbol/export.c` | `canonical_builtin_name()` |
-| `src/cli/lsp/runtime.c` | 多处硬编码别名判断 |
+| `src/cli/lsp/runtime.c` | 两处硬编码别名判断（3717-3720 行、4120-4123 行），仅检查别名（`int`/`long`/`byte`/`float`/`double`/`bool`/`string`/`void`），未包含标准名（`i8`~`i64`/`u8`~`u64`/`f32`/`f64`），归一后别名检查变为死代码，标准名检查仍缺失 |
 
 ### 6.2 目标
 
@@ -158,7 +158,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - `src/semantic/analyzer.c`：`is_builtin_type_name()` 的 `builtin_names[]` 中的别名条目（归一后只看到标准名，别名条目为死代码）
 - `src/codegen/codegen.c`：`k_builtin_types[]` 中的别名字段（含 `uint` 死代码条目）及 `cg_is_builtin_named_fit_target()` 中的别名项。归一后 codegen 不再感知任何别名，`k_builtin_types[]` 仅保留标准名（`i32`/`i64`/`u32`/`u64` 等）
 - `src/symbol/export.c`：`canonical_builtin_name()` 中的别名条目
-- `src/cli/lsp/runtime.c`：多处 `name == "int" || name == "i32"` 硬编码
+- `src/cli/lsp/runtime.c`：两处硬编码（3717-3720 行、4120-4123 行）替换为调用 `is_builtin_type_name()`（或提供等价导出函数），统一覆盖所有内建名（标准名 + 别名）；归一并移除别名条目后，该调用自然只匹配标准名。此举同时修复现状中标准名（`i8`~`i64`/`u8`~`u64`/`f32`/`f64`）未被识别为内建类型的遗漏
 - LSP hover 显示标准名称，无需回溯原始别名
 
 ### 6.6 已决问题：AST 归一后原始名称不保留
@@ -197,10 +197,12 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 因此，AST 预遍历归一仅处理用户书写的 type_ref，语义分析内部构造的 `InferredExprType` 保持别名不变。
 
+> **实现注意**：`inferred_expr_type_builtin_canonical_name()` 内部调用 `canonical_builtin_type_name()`（analyzer.c:5668），Task 4 后需同步获取平台信息（通过 `ResolveContext` 或显式参数），确保 `"int"` 等别名的归一结果跟随平台。
+
 ## 7. 影响范围
 
 - 规范文档：`docs/feng-language.md`（别名表与关键字说明）、`docs/feng-builtin-type.md`（别名表、映射规则，以及正文中引用 `long` 的描述如 `string.length()` 返回类型）
-- 编译器：语义分析入口新增统一别名归一逻辑，下游 6 个文件的别名代码移除；codegen `k_builtin_types[]` 仅保留标准名条目，不再感知别名
+- 编译器：语义分析入口新增统一别名归一逻辑，下游 6 个文件的别名代码移除；codegen `k_builtin_types[]` 仅保留标准名条目，不再感知别名；LSP `runtime.c` 两处硬编码替换为 `is_builtin_type_name()` 调用，同时修复标准名未被识别为内建类型的现有遗漏
 - 标准库（`std/`）：约 639 处 `long` 使用需迁移为 `i64`，涉及 `stdio.ff`、`SystemInfo.ff`、`MemoryInfo.ff`、`TestContext.ff` 等文件
 - 兼容性测试（`fcts/`）：约 23 处 `long` 使用需迁移
 - 编译器测试（`test/`）：3 处 `.ff` 文件中的 `long` 使用需迁移；C 测试代码（`test_lexer.c`、`test_cli.c` 等）中的 `long` 为 C 语言类型，不受影响
@@ -213,13 +215,13 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 ### Task 1：别名归一收敛（基础，纯重构，无行为变更）
 
 - [ ] 确认 `src/semantic/analyzer.c` 中 `canonical_builtin_type_name()` 为唯一归一入口
-- [ ] 在语义分析开始时遍历 AST，将所有 type_ref 中的别名替换为标准名（归一后 AST 仅保留标准名，不保留原始别名）
+- [ ] 在语义分析开始时遍历 AST，将所有 type_ref 中的别名替换为标准名（归一后 AST 仅保留标准名，不保留原始别名）。需覆盖的位置：函数签名（参数类型、返回类型）、变量/常量声明的类型注解、struct/enum/type_decl 中的字段类型、spec 声明与 impl 中的类型引用、泛型实参（type_args）、extern 声明的类型签名、强转表达式的目标类型
 - [ ] 移除 `src/semantic/analyzer.c` 中 `is_builtin_type_name()` 的 `builtin_names[]` 中的别名条目（归一后只看到标准名，别名条目为死代码）
 - [ ] 移除 `src/semantic/spec_relations.c` 中 `rel_builtin_canonical_name()` 的别名分支
 - [ ] 移除 `src/semantic/spec_witnesses.c` 中 `canonical_builtin_type_name_local()` 的别名分支
 - [ ] 移除 `src/codegen/codegen.c` 中 `k_builtin_types[]` 的别名字段（含 `uint` 死代码条目）及 `cg_is_builtin_named_fit_target()` 的别名项；归一后 codegen 仅感知标准名，不再包含任何别名
 - [ ] 移除 `src/symbol/export.c` 中 `canonical_builtin_name()` 的别名条目
-- [ ] 移除 `src/cli/lsp/runtime.c` 中多处硬编码别名判断
+- [ ] 将 `src/cli/lsp/runtime.c` 中两处硬编码别名判断（3717-3720 行、4120-4123 行）替换为调用 `is_builtin_type_name()`（或提供等价导出函数），归一并移除别名条目后自然只匹配标准名；同时修复现状中标准名未被识别为内建类型的遗漏
 - [ ] 全量回归测试，确认无行为变更
 
 ### Task 2：规范文档更新
@@ -240,7 +242,8 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 - [ ] `canonical_builtin_type_name()` 新增平台参数，`int` 映射为 `i32`（32 位）或 `i64`（64 位）
 - [ ] 实现平台位宽检测函数（如 `feng_get_host_pointer_size()`），根据当前宿主机返回指针位宽（`sizeof(void *)`），并注释：未来支持交叉编译时，需要通过编译选项传入目标平台位宽（核心编译器不直接读取 CLI 参数，已有 `FengSemanticAnalyzeOptions` 机制）
-- [ ] 将平台位宽信息接入 `FengSemanticAnalyzeOptions`，语义分析入口传入
+- [ ] `FengSemanticAnalyzeOptions` 新增 `size_t pointer_size` 字段，语义分析入口由调用方（CLI 层）填入宿主机位宽；`pointer_size` 在语义分析入口存入 `ResolveContext`，`canonical_builtin_type_name()` 通过 `ResolveContext` 获取平台信息
+- [ ] `inferred_expr_type_builtin_canonical_name()` 内部调用 `canonical_builtin_type_name()`，需同步传入平台信息（通过 `ResolveContext` 或显式参数），确保 `"int"` 等别名归一结果跟随平台
 - [ ] 全量回归测试
 
 ### Task 5：新增 `uint` 平台相关别名
@@ -258,3 +261,5 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - **2026-06-24**：发现 codegen `k_builtin_types[]` 自 2026-04-28 初始提交即含有 `uint → CG_TYPE_U32` 预留条目（codegen 创建时提前写入，semantic 层从未识别，为不可达死代码）；`cg_is_builtin_named_fit_target()`（2026-05-11 添加）已刻意排除 `uint`。归一收敛后 codegen 不感知任何别名，该条目及所有别名条目均从 `k_builtin_types[]` 中彻底删除
 - **2026-06-24**：决策——规范文档更新前置至 Task 2，在行为变更任务（Task 3~5）之前完成，符合"先规范再实现"原则
 - **2026-06-24**：决策——语义分析内部的 `InferredExprType.builtin_name` 保留别名（`"int"`、`"double"`、`"byte"`），不归一为标准名；AST 预遍历归一仅处理用户书写的 type_ref，字面量类型通过 `canonical_builtin_type_name()` 延迟归一，自然跟随平台
+- **2026-06-24**：发现 LSP `runtime.c` 两处硬编码（3717-3720 行、4120-4123 行）仅检查别名（`int`/`long`/`byte`/`float`/`double`/`bool`/`string`/`void`），未包含标准名（`i8`~`i64`/`u8`~`u64`/`f32`/`f64`），存在标准名未被识别为内建类型的遗漏。归一收敛时替换为调用 `is_builtin_type_name()`，统一覆盖所有内建名，同时修复该遗漏
+- **2026-06-24**：决策——平台位宽信息通过 `FengSemanticAnalyzeOptions.pointer_size` 传入，语义分析入口存入 `ResolveContext`，`canonical_builtin_type_name()` 及 `inferred_expr_type_builtin_canonical_name()` 通过 `ResolveContext` 获取平台信息，保持核心编译器不直接依赖 CLI 参数
