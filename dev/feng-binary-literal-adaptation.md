@@ -616,9 +616,9 @@ typedef struct InferredExprType {
 
 #### 9.8.2 步骤 1：`infer_expr_type` 填 `expr->type`
 
-- [ ] 新增 `fill_expr_type_from_inferred` 辅助函数（复用 `create_type_ref_from_inferred_type` + `analysis_track_synthetic_type_ref`）
-- [ ] `FENG_EXPR_BINARY` 分支：在确定结果类型后，填 `left->type`、`right->type`、`expr->type`
-- [ ] 全量回归测试
+- [x] 新增 `fill_expr_type_from_inferred` 辅助函数（复用 `create_type_ref_from_inferred_type` + `analysis_track_synthetic_type_ref`）
+- [x] `FENG_EXPR_BINARY` 分支：在确定结果类型后，填 `left->type`、`right->type`、`expr->type`
+- [x] 全量回归测试
 
 #### 9.8.3 步骤 2：`validate_binary_expr` 改为纯验证
 

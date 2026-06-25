@@ -14325,6 +14325,35 @@ static bool numeric_literal_fits_inferred_target(ResolveContext *context,
     return false;
 }
 
+/* Fill expr->type from an InferredExprType, storing the derivation result on
+ * the AST node so validation can read it directly without re-invoking
+ * infer_expr_type.  BUILTIN synthesizes a named FengTypeRef (analysis-
+ * tracked); TYPE_REF borrows via clone; DECL/LAMBDA/UNKNOWN leave expr->type
+ * unchanged (such operands are invalid in binary operations anyway).  Does
+ * not overwrite a non-NULL expr->type (e.g., already set by adaptation). */
+static void fill_expr_type_from_inferred(ResolveContext *context,
+                                         FengExpr *expr,
+                                         const InferredExprType *type) {
+    FengTypeRef *synth;
+    FengTypeRef *clone;
+
+    if (expr == NULL || expr->type != NULL || type == NULL) {
+        return;
+    }
+    synth = create_type_ref_from_inferred_type(type, expr->token);
+    if (synth == NULL) {
+        return;
+    }
+    clone = clone_type_ref_for_inference(synth);
+    free_synthetic_type_ref(synth);
+    if (clone != NULL &&
+        analysis_track_synthetic_type_ref(context->analysis, clone)) {
+        expr->type = clone;
+    } else {
+        free_synthetic_type_ref(clone);
+    }
+}
+
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr) {
     size_t index;
 
@@ -14475,6 +14504,7 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
         case FENG_EXPR_BINARY: {
             InferredExprType left_type = infer_expr_type(context, expr->as.binary.left);
             InferredExprType right_type = infer_expr_type(context, expr->as.binary.right);
+            InferredExprType result_type = inferred_expr_type_unknown();
 
             /* Binary-operation literal adaptation: when one operand is a
              * pure numeric literal and the other side has a resolved scalar
@@ -14529,9 +14559,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                     if (inferred_expr_types_equal(context, left_type, right_type) &&
                         (inferred_expr_type_is_numeric(left_type) ||
                          inferred_expr_type_is_string(left_type))) {
-                        return left_type;
+                        result_type = left_type;
                     }
-                    return inferred_expr_type_unknown();
+                    break;
 
                 case FENG_TOKEN_MINUS:
                 case FENG_TOKEN_STAR:
@@ -14539,9 +14569,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                 case FENG_TOKEN_PERCENT:
                     if (inferred_expr_types_equal(context, left_type, right_type) &&
                         inferred_expr_type_is_numeric(left_type)) {
-                        return left_type;
+                        result_type = left_type;
                     }
-                    return inferred_expr_type_unknown();
+                    break;
 
                 case FENG_TOKEN_LT:
                 case FENG_TOKEN_LE:
@@ -14549,26 +14579,26 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                 case FENG_TOKEN_GE:
                     if (inferred_expr_types_equal(context, left_type, right_type) &&
                         inferred_expr_type_is_numeric(left_type)) {
-                        return inferred_expr_type_builtin("bool");
+                        result_type = inferred_expr_type_builtin("bool");
                     }
-                    return inferred_expr_type_unknown();
+                    break;
 
                 case FENG_TOKEN_EQ:
                 case FENG_TOKEN_NE:
                     if (inferred_expr_type_is_known(left_type) &&
                         inferred_expr_type_is_known(right_type) &&
                         inferred_expr_types_equal(context, left_type, right_type)) {
-                        return inferred_expr_type_builtin("bool");
+                        result_type = inferred_expr_type_builtin("bool");
                     }
-                    return inferred_expr_type_unknown();
+                    break;
 
                 case FENG_TOKEN_AND_AND:
                 case FENG_TOKEN_OR_OR:
                     if (inferred_expr_type_is_bool(left_type) &&
                         inferred_expr_type_is_bool(right_type)) {
-                        return inferred_expr_type_builtin("bool");
+                        result_type = inferred_expr_type_builtin("bool");
                     }
-                    return inferred_expr_type_unknown();
+                    break;
 
                 case FENG_TOKEN_AMP:
                 case FENG_TOKEN_PIPE:
@@ -14577,13 +14607,23 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                 case FENG_TOKEN_SHR:
                     if (inferred_expr_types_equal(context, left_type, right_type) &&
                         inferred_expr_type_is_integer(left_type)) {
-                        return left_type;
+                        result_type = left_type;
                     }
-                    return inferred_expr_type_unknown();
+                    break;
 
                 default:
-                    return inferred_expr_type_unknown();
+                    break;
             }
+
+            /* Fill derivation results onto the AST nodes so validation can
+             * read them directly without re-invoking infer_expr_type.  The
+             * outer binary reads the inner binary's expr->type; the operands
+             * carry their post-adaptation type.  fill_expr_type_from_inferred
+             * skips nodes already filled (e.g., by adaptation above). */
+            fill_expr_type_from_inferred(context, (FengExpr *)expr->as.binary.left, &left_type);
+            fill_expr_type_from_inferred(context, (FengExpr *)expr->as.binary.right, &right_type);
+            fill_expr_type_from_inferred(context, (FengExpr *)expr, &result_type);
+            return result_type;
         }
 
         case FENG_EXPR_CAST:
