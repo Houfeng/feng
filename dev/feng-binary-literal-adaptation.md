@@ -405,8 +405,8 @@ let x = 12.5;       // double x = (double)(12.5);            ← 正确
 语义层在已有的贴合路径上写入 `type`。codegen 尚不读取，行为不变。
 
 - [x] `expr_matches_expected_type_ref()`（15479 行）：`numeric_literal_adapts_to_target` 返回 true 时，将 `expected_type_ref`（已有 `FengTypeRef *`，借用 AST 生命周期）直接挂到字面量节点的 `type`（覆盖绑定、参数、返回值、数组元素、成员赋值等所有现有贴合场景）
-- [x] 无类型标注绑定（`let x = 123;`）：语义层通过 `inferred_expr_type_builtin("int")` + `create_type_ref_from_inferred_type` + `resolver_track_synthetic_type_ref` 合成 `FengTypeRef`，挂到字面量节点的 `type`
-- [x] 无类型标注浮点（`let x = 12.5;`）：同理，通过 `inferred_expr_type_builtin("double")` 合成 `FengTypeRef`，挂到字面量节点的 `type`
+- [x] 无类型标注绑定（`let x = 123;`）：语义层通过 `inferred_expr_type_builtin("int")` + `create_type_ref_from_inferred_type` 合成 `FengTypeRef`，clone 后通过 `analysis_track_synthetic_type_ref` 管理生命周期（确保 ResolveContext 释放后仍存活），挂到字面量节点的 `type`
+- [x] 无类型标注浮点（`let x = 12.5;`）：同理，通过 `inferred_expr_type_builtin("double")` 合成 `FengTypeRef`，clone + analysis_track 挂到字面量节点的 `type`
 - [x] 全量回归测试，确认无新增失败
 
 ### 8.4 步骤 3：二元运算贴合
@@ -416,7 +416,7 @@ let x = 12.5;       // double x = (double)(12.5);            ← 正确
 - [x] 新增辅助函数 `numeric_literal_fits_inferred_target()`：求值字面量常量，检查是否适配目标 `InferredExprType`（参考已有的 `numeric_literal_adapts_to_target()` 15405 行，核心逻辑相同但目标类型来源不同）
 - [x] 为 `expr_is_pure_numeric_literal_expr_for_target_adaptation()` 和 `integer_literal_fits_canonical_target()` 添加前向声明（两者定义在 `infer_expr_type` 之后）
 - [x] `infer_expr_type()` 的 `FENG_EXPR_BINARY` 分支：在 `inferred_expr_types_equal` 之前插入字面量贴合步骤
-  - [x] 右操作数为纯数值字面量且左操作数类型为已确定标量时，贴合右操作数类型到左操作数类型，并通过 `create_type_ref_from_inferred_type` + `resolver_track_synthetic_type_ref` 合成 `FengTypeRef` 挂到右操作数节点的 `type`
+  - [x] 右操作数为纯数值字面量且左操作数类型为已确定标量时，贴合右操作数类型到左操作数类型，并通过 `create_type_ref_from_inferred_type` + clone + `analysis_track_synthetic_type_ref` 合成 `FengTypeRef` 挂到右操作数节点的 `type`
   - [x] 左操作数为纯数值字面量且右操作数类型为已确定标量时，贴合左操作数类型到右操作数类型，同理合成 `FengTypeRef` 挂到左操作数节点的 `type`
   - [x] 两侧均为字面量时不触发贴合，各自默认推导
   - [x] 贴合时通过 `evaluate_constant_expr` 求值、`integer_literal_fits_canonical_target` 检查范围，不适配时保持默认推导类型
@@ -427,21 +427,21 @@ let x = 12.5;       // double x = (double)(12.5);            ← 正确
 
 codegen 读取 `type` 按实际类型发射，新增专项测试验证。
 
-- [ ] `cg_emit_literal()` 整型字面量分支：`expr->type != NULL` 时，通过现有 `cg_resolve_type(cg, e->type, &e->token, &target)` 解析为 `CGType`，按目标宽度和符号发射（如 `(int32_t)INT32_C(5)`、`(uint32_t)UINT32_C(1)`）；`type == NULL` 时保持现有 `(int64_t)INT64_C(...)` 默认行为
-- [ ] `cg_emit_literal()` 浮点字面量分支：`expr->type != NULL` 时，通过 `cg_resolve_type` 解析，按目标类型发射（`f32` → `(float)`，`f64` → 保持现有 `(%a)`）；`type == NULL` 时保持现有默认行为
-- [ ] 新增贴合发码专项测试（覆盖所有场景的正确发码）：
-  - [ ] 绑定（有类型注解）：`let x: u32 = 1;` → `(uint32_t)UINT32_C(1)`
-  - [ ] 绑定（有类型注解）：`let x: i8 = 5;` → `(int8_t)INT8_C(5)`
-  - [ ] 绑定（无类型标注）：`let x = 123;` → 按平台 `int` 宽度发射
-  - [ ] 绑定（无类型标注）：`let x = 12.5;` → `f64` 发射
-  - [ ] 函数参数：`f(10)` (`f(n: i32)`) → `(int32_t)INT32_C(10)`
-  - [ ] 返回值：`return 123;`（返回 `i64`）→ `(int64_t)INT64_C(123)`
-  - [ ] 成员赋值：`obj.value = 1;`（`value: i32`）→ `(int32_t)INT32_C(1)`
-  - [ ] 数组元素：`let a: i32[] = [1, 2];` → 各元素按 `i32` 发射
-  - [ ] 二元运算：`n + 1` (`n: i32`) → `(int32_t)INT32_C(1)`
-  - [ ] 二元运算嵌套：`n + 1 > 3` → 逐层按 `i32` 发射
-  - [ ] 范围越界：`let x: u8 = 256;` → 编译期报错
-  - [ ] 两侧均为字面量：`10 == 20` → 不贴合，各自默认推导
-- [ ] 全量回归测试，确认无新增失败
+- [x] `cg_emit_literal()` 整型字面量分支：`expr->type != NULL` 时，通过 `cg_builtin_scalar_kind_from_type_ref` 直接查找内建标量类型（避免 `cg_resolve_type` 的副作用），按目标宽度和符号发射（如 `(int32_t)INT32_C(5)`、`(uint32_t)UINT32_C(1)`）；`type == NULL` 时保持现有 `(int64_t)INT64_C(...)` 默认行为
+- [x] `cg_emit_literal()` 浮点字面量分支：`expr->type != NULL` 时，通过 `cg_builtin_scalar_kind_from_type_ref` 直接查找，按目标类型发射（`f32` → `(float)`，`f64` → 保持现有 `(%a)`）；`type == NULL` 时保持现有默认行为
+- [x] 新增贴合发码专项测试（覆盖所有场景的正确发码）：
+  - [x] 绑定（有类型注解）：`let x: u32 = 1;` → `(uint32_t)UINT32_C(1)`
+  - [x] 绑定（有类型注解）：`let x: i8 = 5;` → `(int8_t)INT8_C(5)`
+  - [x] 绑定（无类型标注）：`let x = 123;` → 按平台 `int` 宽度发射
+  - [x] 绑定（无类型标注）：`let x = 12.5;` → `f64` 发射
+  - [x] 函数参数：`f(10)` (`f(n: i32)`) → `(int32_t)INT32_C(10)`
+  - [x] 返回值：`return 123;`（返回 `i64`）→ `(int64_t)INT64_C(123)`
+  - [x] 成员赋值：`obj.value = 1;`（`value: i32`）→ `(int32_t)INT32_C(1)`
+  - [x] 数组元素：`let a: i32[] = [1, 2];` → 各元素按 `i32` 发射
+  - [x] 二元运算：`n + 1` (`n: i32`) → `(int32_t)INT32_C(1)`
+  - [x] 二元运算嵌套：`n + 1 > 3` → 逐层按 `i32` 发射
+  - [x] 范围越界：`let x: u8 = 256;` → 编译期报错
+  - [x] 两侧均为字面量：`10 == 20` → 不贴合，各自默认推导
+- [x] 全量回归测试，确认无新增失败
 
 > **备注**：本次完成后，重新实施 `feng-scalar-alias-optimize.md` Task 6（`int` → 平台相关）时，原 §1.1 提到的 45 个 smoke 失败用例预期全部恢复通过。该验证属于 Task 6 的回归范围，不作为本文档的交付项。

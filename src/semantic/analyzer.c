@@ -14489,8 +14489,16 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                     FengTypeRef *synth = create_type_ref_from_inferred_type(&left_type,
                                                                             expr->token);
                     if (synth != NULL) {
-                        resolver_track_synthetic_type_ref(context, synth);
-                        ((FengExpr *)expr->as.binary.right)->type = synth;
+                        /* Clone and transfer to Analysis lifetime so the type
+                         * survives ResolveContext teardown for codegen. */
+                        FengTypeRef *clone = clone_type_ref_for_inference(synth);
+                        free_synthetic_type_ref(synth);
+                        if (clone != NULL &&
+                            analysis_track_synthetic_type_ref(context->analysis, clone)) {
+                            ((FengExpr *)expr->as.binary.right)->type = clone;
+                        } else {
+                            free_synthetic_type_ref(clone);
+                        }
                     }
                     right_type = left_type;
                 }
@@ -14501,8 +14509,16 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                     FengTypeRef *synth = create_type_ref_from_inferred_type(&right_type,
                                                                             expr->token);
                     if (synth != NULL) {
-                        resolver_track_synthetic_type_ref(context, synth);
-                        ((FengExpr *)expr->as.binary.left)->type = synth;
+                        /* Clone and transfer to Analysis lifetime so the type
+                         * survives ResolveContext teardown for codegen. */
+                        FengTypeRef *clone = clone_type_ref_for_inference(synth);
+                        free_synthetic_type_ref(synth);
+                        if (clone != NULL &&
+                            analysis_track_synthetic_type_ref(context->analysis, clone)) {
+                            ((FengExpr *)expr->as.binary.left)->type = clone;
+                        } else {
+                            free_synthetic_type_ref(clone);
+                        }
                     }
                     left_type = right_type;
                 }
@@ -20420,25 +20436,52 @@ static bool resolve_binding(ResolveContext *context,
         }
         /* Untyped numeric binding (let x = 123; / let x = 12.5;):
          * synthesize a FengTypeRef for the default inferred type and hang
-         * it on the literal node so codegen can emit the correct width. */
+         * it on the literal node so codegen can emit the correct width.
+         * Use canonical_builtin_type_name to get the width-explicit name
+         * (e.g. "int" → "i32", "double" → "f64") since the AST alias
+         * normalization pass has already run by this point. */
         if (binding->initializer != NULL &&
             binding->initializer->kind == FENG_EXPR_INTEGER) {
-            InferredExprType inferred = inferred_expr_type_builtin("int");
-            FengTypeRef *synth = create_type_ref_from_inferred_type(&inferred,
-                                                                    binding->initializer->token);
-            if (synth != NULL) {
-                resolver_track_synthetic_type_ref(context, synth);
-                ((FengExpr *)binding->initializer)->type = synth;
+            const char *canonical = canonical_builtin_type_name(
+                slice_from_cstr("int"), context->pointer_size);
+            if (canonical != NULL) {
+                InferredExprType inferred = inferred_expr_type_builtin(canonical);
+                FengTypeRef *synth = create_type_ref_from_inferred_type(&inferred,
+                                                                        binding->initializer->token);
+                if (synth != NULL) {
+                    /* Clone and transfer to Analysis lifetime so the type
+                     * survives ResolveContext teardown for codegen to read. */
+                    FengTypeRef *clone = clone_type_ref_for_inference(synth);
+                    free_synthetic_type_ref(synth);
+                    if (clone != NULL &&
+                        analysis_track_synthetic_type_ref(context->analysis, clone)) {
+                        ((FengExpr *)binding->initializer)->type = clone;
+                    } else {
+                        free_synthetic_type_ref(clone);
+                    }
+                }
             }
         }
         if (binding->initializer != NULL &&
             binding->initializer->kind == FENG_EXPR_FLOAT) {
-            InferredExprType inferred = inferred_expr_type_builtin("double");
-            FengTypeRef *synth = create_type_ref_from_inferred_type(&inferred,
-                                                                    binding->initializer->token);
-            if (synth != NULL) {
-                resolver_track_synthetic_type_ref(context, synth);
-                ((FengExpr *)binding->initializer)->type = synth;
+            const char *canonical = canonical_builtin_type_name(
+                slice_from_cstr("double"), context->pointer_size);
+            if (canonical != NULL) {
+                InferredExprType inferred = inferred_expr_type_builtin(canonical);
+                FengTypeRef *synth = create_type_ref_from_inferred_type(&inferred,
+                                                                        binding->initializer->token);
+                if (synth != NULL) {
+                    /* Clone and transfer to Analysis lifetime so the type
+                     * survives ResolveContext teardown for codegen to read. */
+                    FengTypeRef *clone = clone_type_ref_for_inference(synth);
+                    free_synthetic_type_ref(synth);
+                    if (clone != NULL &&
+                        analysis_track_synthetic_type_ref(context->analysis, clone)) {
+                        ((FengExpr *)binding->initializer)->type = clone;
+                    } else {
+                        free_synthetic_type_ref(clone);
+                    }
+                }
             }
         }
     }

@@ -11063,6 +11063,38 @@ static bool cg_compute_capture_requirements_in_lambda_body(const FengExpr *lambd
     return true;
 }
 
+/* Direct lookup from a single-segment type_ref name to a builtin scalar
+ * CGTypeKind.  Avoids calling cg_resolve_type (which can report errors
+ * for non-builtin names such as generic type parameters), making it safe
+ * for use in literal emission where the type might not be resolvable in
+ * the current codegen context. */
+static bool cg_builtin_scalar_kind_from_type_ref(const FengTypeRef *ref,
+                                                  CGTypeKind *out_kind) {
+    static const struct { const char *name; CGTypeKind kind; } map[] = {
+        {"i8", CG_TYPE_I8}, {"i16", CG_TYPE_I16},
+        {"i32", CG_TYPE_I32}, {"i64", CG_TYPE_I64},
+        {"u8", CG_TYPE_U8}, {"u16", CG_TYPE_U16},
+        {"u32", CG_TYPE_U32}, {"u64", CG_TYPE_U64},
+        {"f32", CG_TYPE_F32}, {"f64", CG_TYPE_F64},
+    };
+    FengSlice seg;
+    size_t i;
+
+    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
+        ref->as.named.segment_count != 1U) {
+        return false;
+    }
+    seg = ref->as.named.segments[0];
+    for (i = 0; i < sizeof map / sizeof map[0]; i++) {
+        if (strlen(map[i].name) == seg.length &&
+            memcmp(map[i].name, seg.data, seg.length) == 0) {
+            *out_kind = map[i].kind;
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     if (e->kind == FENG_EXPR_BOOL) {
@@ -11071,6 +11103,54 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         return out->c_expr && out->type;
     }
     if (e->kind == FENG_EXPR_INTEGER) {
+        /* Read the semantic-resolved type (if any) to emit the correct
+         * width and signedness.  Uses direct builtin-name lookup rather
+         * than cg_resolve_type to avoid side effects (error reporting,
+         * generic-context interaction).  Falls back to int64_t when type
+         * is NULL or not a recognized builtin scalar. */
+        CGTypeKind scalar_kind;
+        if (cg_builtin_scalar_kind_from_type_ref(e->type, &scalar_kind) &&
+            cgtype_is_integer(scalar_kind)) {
+            Buf b; buf_init(&b);
+            switch (scalar_kind) {
+                case CG_TYPE_I8:
+                    buf_append_fmt(&b, "(int8_t)INT8_C(%" PRId64 ")",
+                                   (int64_t)(int8_t)e->as.integer);
+                    break;
+                case CG_TYPE_I16:
+                    buf_append_fmt(&b, "(int16_t)INT16_C(%" PRId64 ")",
+                                   (int64_t)(int16_t)e->as.integer);
+                    break;
+                case CG_TYPE_I32:
+                    buf_append_fmt(&b, "(int32_t)INT32_C(%" PRId64 ")",
+                                   (int64_t)(int32_t)e->as.integer);
+                    break;
+                case CG_TYPE_I64:
+                    buf_append_fmt(&b, "(int64_t)INT64_C(%" PRId64 ")",
+                                   e->as.integer);
+                    break;
+                case CG_TYPE_U8:
+                    buf_append_fmt(&b, "(uint8_t)UINT8_C(%" PRIu64 ")",
+                                   (uint64_t)(uint8_t)e->as.integer);
+                    break;
+                case CG_TYPE_U16:
+                    buf_append_fmt(&b, "(uint16_t)UINT16_C(%" PRIu64 ")",
+                                   (uint64_t)(uint16_t)e->as.integer);
+                    break;
+                case CG_TYPE_U32:
+                    buf_append_fmt(&b, "(uint32_t)UINT32_C(%" PRIu64 ")",
+                                   (uint64_t)(uint32_t)e->as.integer);
+                    break;
+                case CG_TYPE_U64:
+                    buf_append_fmt(&b, "(uint64_t)UINT64_C(%" PRIu64 ")",
+                                   (uint64_t)e->as.integer);
+                    break;
+                default: break;
+            }
+            out->c_expr = b.data;
+            out->type = cgtype_new(scalar_kind);
+            return out->c_expr && out->type;
+        }
         Buf b; buf_init(&b);
         buf_append_fmt(&b, "(int64_t)INT64_C(%" PRId64 ")", e->as.integer);
         out->c_expr = b.data;
@@ -11078,6 +11158,21 @@ static bool cg_emit_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         return out->c_expr && out->type;
     }
     if (e->kind == FENG_EXPR_FLOAT) {
+        /* Read the semantic-resolved type (if any) to emit f32 vs f64.
+         * Falls back to f64 when type is NULL or not a recognized scalar. */
+        CGTypeKind scalar_kind;
+        if (cg_builtin_scalar_kind_from_type_ref(e->type, &scalar_kind) &&
+            cgtype_is_float(scalar_kind)) {
+            Buf b; buf_init(&b);
+            if (scalar_kind == CG_TYPE_F32) {
+                buf_append_fmt(&b, "(float)(%af)", e->as.floating);
+            } else {
+                buf_append_fmt(&b, "(%a)", e->as.floating);
+            }
+            out->c_expr = b.data;
+            out->type = cgtype_new(scalar_kind);
+            return out->c_expr && out->type;
+        }
         Buf b; buf_init(&b);
         buf_append_fmt(&b, "(%a)", e->as.floating);
         out->c_expr = b.data;
@@ -17343,7 +17438,9 @@ static bool cg_emit_branch_into_slot(CG *cg,
         ExprResult r;
         if (!cg_emit_expr(cg, yield, &r)) {
             ok = false;
-        } else if (!cg_types_equal(result_type, r.type)) {
+        } else if (!cg_types_equal(result_type, r.type) &&
+                   !(cgtype_is_numeric(result_type->kind) &&
+                     cgtype_is_numeric(r.type->kind))) {
             cg_fail(cg, err_token,
                 "CE0195", "codegen: if-expression branches yield mismatched types");
             er_free(&r);
@@ -17438,7 +17535,9 @@ static bool cg_assign_expr_result_to_slot(CG *cg,
                                           bool aggregate,
                                           ExprResult *r,
                                           FengToken err_token) {
-    if (!cg_types_equal(result_type, r->type)) {
+    if (!cg_types_equal(result_type, r->type) &&
+        !(cgtype_is_numeric(result_type->kind) &&
+          cgtype_is_numeric(r->type->kind))) {
         return cg_fail(cg, err_token,
                        "CE0197", "codegen: try/catch branches yield mismatched types");
     }

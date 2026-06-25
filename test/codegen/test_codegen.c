@@ -6408,6 +6408,168 @@ static void test_infix_match_unary_not_preserves_precedence_codegen(void) {
     feng_program_free(program);
 }
 
+/* ==================== Literal adaptation codegen tests ==================== */
+
+static FengSemanticAnalysis *literal_adapt_analyze(const char *source,
+                                                    const char *path) {
+    FengProgram *program = parse_or_die(source, path);
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    if (!ok) {
+        for (size_t i = 0U; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line,
+                    errors[i].token.column, errors[i].message);
+        }
+    }
+    ASSERT(ok);
+    ASSERT(error_count == 0U);
+    free(errors);
+    /* program intentionally leaked — analysis borrows its AST; the test
+     * runner is a short-lived process so the leak is harmless. */
+    return analysis;
+}
+
+static char *literal_adapt_codegen(FengSemanticAnalysis *analysis) {
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                        NULL, &out, &cgerr);
+    if (!ok) {
+        fprintf(stderr, "codegen error: %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+    }
+    ASSERT(ok);
+    ASSERT(out.c_source != NULL);
+    return out.c_source;
+}
+
+static void test_literal_adaptation_binding_typed(void) {
+    static const char *kSource =
+        "module feng.codegen.litadapt.bind;\n"
+        "func f() {\n"
+        "    let a: u32 = 1;\n"
+        "    let b: i8 = 5;\n"
+        "    let c: i64 = 42;\n"
+        "    let d: u8 = 255;\n"
+        "    let e: f32 = 1;\n"
+        "}\n";
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_bind.ff");
+    char *c = literal_adapt_codegen(analysis);
+
+    ASSERT(strstr(c, "(uint32_t)UINT32_C(1)") != NULL);
+    ASSERT(strstr(c, "(int8_t)INT8_C(5)") != NULL);
+    ASSERT(strstr(c, "(int64_t)INT64_C(42)") != NULL);
+    ASSERT(strstr(c, "(uint8_t)UINT8_C(255)") != NULL);
+    ASSERT(strstr(c, "(float)") != NULL);
+    compile_generated_c_or_die(c);
+
+    feng_semantic_analysis_free(analysis);
+}
+
+static void test_literal_adaptation_binding_untyped(void) {
+    static const char *kSource =
+        "module feng.codegen.litadapt.untyped;\n"
+        "func f() {\n"
+        "    let x = 123;\n"
+        "    let y = 12.5;\n"
+        "}\n";
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_untyped.ff");
+    char *c = literal_adapt_codegen(analysis);
+
+    /* int is currently i32; untyped integer → (int32_t)INT32_C(123). */
+    ASSERT(strstr(c, "(int32_t)INT32_C(123)") != NULL);
+    /* double is f64; untyped float → hex-float literal (e.g. 0x1.9p+3). */
+    ASSERT(strstr(c, "0x1.9p+3") != NULL);
+    compile_generated_c_or_die(c);
+
+    feng_semantic_analysis_free(analysis);
+}
+
+static void test_literal_adaptation_param_and_return(void) {
+    static const char *kSource =
+        "module feng.codegen.litadapt.param;\n"
+        "func g(n: i32): i32 { return n; }\n"
+        "func h(): i64 { return 123; }\n"
+        "func f(): i32 {\n"
+        "    let r = g(10);\n"
+        "    return r;\n"
+        "}\n";
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_param.ff");
+    char *c = literal_adapt_codegen(analysis);
+
+    /* g(10) → parameter i32 → (int32_t)INT32_C(10). */
+    ASSERT(strstr(c, "(int32_t)INT32_C(10)") != NULL);
+    /* return 123 in h() which returns i64 → (int64_t)INT64_C(123). */
+    ASSERT(strstr(c, "(int64_t)INT64_C(123)") != NULL);
+    compile_generated_c_or_die(c);
+
+    feng_semantic_analysis_free(analysis);
+}
+
+static void test_literal_adaptation_binary(void) {
+    static const char *kSource =
+        "module feng.codegen.litadapt.binary;\n"
+        "func f(): bool {\n"
+        "    let n: i32 = 5;\n"
+        "    let r = n + 1;\n"
+        "    let cmp = n + 1 > 3;\n"
+        "    return cmp;\n"
+        "}\n";
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_binary.ff");
+    char *c = literal_adapt_codegen(analysis);
+
+    /* n + 1 where n: i32 → literal 1 adapts to i32. */
+    ASSERT(strstr(c, "(int32_t)INT32_C(1)") != NULL);
+    /* n + 1 > 3 → literal 3 also adapts to i32. */
+    ASSERT(strstr(c, "(int32_t)INT32_C(3)") != NULL);
+    compile_generated_c_or_die(c);
+
+    feng_semantic_analysis_free(analysis);
+}
+
+static void test_literal_adaptation_member_and_array(void) {
+    static const char *kSource =
+        "module feng.codegen.litadapt.memarr;\n"
+        "type Box { var value: i32; }\n"
+        "func f() {\n"
+        "    let b = Box{value: 0};\n"
+        "    b.value = 1;\n"
+        "    let a: i32[] = [1, 2];\n"
+        "}\n";
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_memarr.ff");
+    char *c = literal_adapt_codegen(analysis);
+
+    /* b.value = 1 (value: i32) → (int32_t)INT32_C(1). */
+    ASSERT(strstr(c, "(int32_t)INT32_C(1)") != NULL);
+    /* let a: i32[] = [1, 2] → each element as i32. */
+    ASSERT(strstr(c, "(int32_t)INT32_C(2)") != NULL);
+    compile_generated_c_or_die(c);
+
+    feng_semantic_analysis_free(analysis);
+}
+
+static void test_literal_adaptation_both_literals(void) {
+    static const char *kSource =
+        "module feng.codegen.litadapt.bothlit;\n"
+        "func f(): bool {\n"
+        "    return 10 == 20;\n"
+        "}\n";
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_bothlit.ff");
+    char *c = literal_adapt_codegen(analysis);
+
+    /* Both sides are literals → no adaptation; default int64_t emission. */
+    ASSERT(strstr(c, "(int64_t)INT64_C(10)") != NULL);
+    ASSERT(strstr(c, "(int64_t)INT64_C(20)") != NULL);
+    compile_generated_c_or_die(c);
+
+    feng_semantic_analysis_free(analysis);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -6521,6 +6683,12 @@ int main(void) {
     test_infix_match_union_member_binding_in_if_cond_codegen();
     test_infix_match_union_member_binding_in_while_cond_codegen();
     test_infix_match_unary_not_preserves_precedence_codegen();
+    test_literal_adaptation_binding_typed();
+    test_literal_adaptation_binding_untyped();
+    test_literal_adaptation_param_and_return();
+    test_literal_adaptation_binary();
+    test_literal_adaptation_member_and_array();
+    test_literal_adaptation_both_literals();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }
