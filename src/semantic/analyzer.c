@@ -20216,9 +20216,12 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                     }
                     return false;
                 }
-                /* validate_binary_expr runs while the binding scope is still
-                 * active so infer_expr_type on the right operand can resolve
-                 * the binding introduced by the left side. */
+                /* infer_expr_type and validate_binary_expr both run while the
+                 * binding scope is still active so the right operand can be
+                 * resolved through the binding introduced by the left side.
+                 * The derive pass fills expr->type (and operands' type) so
+                 * validate_binary_expr can read them directly. */
+                (void)infer_expr_type(context, expr);
                 if (!validate_binary_expr(context, expr)) {
                     if (pushed_scope) {
                         resolver_pop_scope(context);
@@ -20232,6 +20235,10 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 if (!resolve_expr(context, expr->as.binary.right, allow_self)) {
                     return false;
                 }
+                /* Derive first (fills expr->type via the binary branch's
+                 * fill_expr_type_from_inferred calls), then validate — which
+                 * reads the derivation result directly. */
+                (void)infer_expr_type(context, expr);
                 if (!validate_binary_expr(context, expr)) {
                     return false;
                 }

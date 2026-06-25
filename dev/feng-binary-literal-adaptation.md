@@ -514,7 +514,23 @@ case FENG_EXPR_BINARY: {
 
 可复用现有的 `create_type_ref_from_inferred_type` + `clone_type_ref_for_inference` + `analysis_track_synthetic_type_ref` 路径（与 §4.1.2 无类型标注绑定的合成路径一致）。
 
-#### 9.4.2 `validate_binary_expr`：纯验证，直接读 `expr->type`
+#### 9.4.2 `resolve_expr` 二元分支：先推后验，显式两步
+
+analyzer.c:20137-20200，在 `validate_binary_expr` 之前补一次 `infer_expr_type`：
+
+```c
+/* 两条路径（&& 和其他）都在验证前加推导 */
+infer_expr_type(context, expr);              /* 步骤1：推导（含贴合，填 expr->type） */
+if (!validate_binary_expr(context, expr)) {  /* 步骤2：验证（读 expr->type） */
+    ...
+}
+```
+
+`&&` 路径在 binding scope 内调用，与现有 `validate_binary_expr` 同作用域，不影响绑定可见性。
+
+**实现顺序**：本步必须在 §9.4.3 之前完成——`validate_binary_expr` 改为读 `expr->type` 后，若未先经 `infer_expr_type` 填充，操作数 `expr->type` 仍为 NULL，验证会全部失败。详见 §9.8 实现顺序。
+
+#### 9.4.3 `validate_binary_expr`：纯验证，直接读 `expr->type`
 
 analyzer.c:6294-6296，不再调 `infer_expr_type`：
 
@@ -532,20 +548,6 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
 ```
 
 `validate_binary_expr` 零 `infer_expr_type` 调用，纯验证。`inferred_expr_type_from_type_ref` 把 `FengTypeRef *` 转回 `InferredExprType`，复用现有 `binary_expr_types_are_valid` 等比较函数。
-
-#### 9.4.3 `resolve_expr` 二元分支：先推后验，显式两步
-
-analyzer.c:20137-20200，在 `validate_binary_expr` 之前补一次 `infer_expr_type`：
-
-```c
-/* 两条路径（&& 和其他）都在验证前加推导 */
-infer_expr_type(context, expr);              /* 步骤1：推导（含贴合，填 expr->type） */
-if (!validate_binary_expr(context, expr)) {  /* 步骤2：验证（读 expr->type） */
-    ...
-}
-```
-
-`&&` 路径在 binding scope 内调用，与现有 `validate_binary_expr` 同作用域，不影响绑定可见性。
 
 #### 9.4.4 `InferredExprType` 增加重构方向注释
 
@@ -612,7 +614,8 @@ typedef struct InferredExprType {
 
 #### 9.8.1 文档修订
 
-- [x] §4.1.3 补充说明：`resolve_expr` 中先推后验的调用顺序（本文 §9.4.3 已记述）
+- [x] §4.1.3 补充说明：`resolve_expr` 中先推后验的调用顺序（本文 §9.4.2 已记述）
+- [x] §9.4 与 §9.8 调整实现顺序：先 `resolve_expr` 先推后验（§9.4.2 / §9.8.3），再 `validate_binary_expr` 纯验证（§9.4.3 / §9.8.4），保证每步独立通过全量回归
 
 #### 9.8.2 步骤 1：`infer_expr_type` 填 `expr->type`
 
@@ -620,14 +623,14 @@ typedef struct InferredExprType {
 - [x] `FENG_EXPR_BINARY` 分支：在确定结果类型后，填 `left->type`、`right->type`、`expr->type`
 - [x] 全量回归测试
 
-#### 9.8.3 步骤 2：`validate_binary_expr` 改为纯验证
+#### 9.8.3 步骤 2：`resolve_expr` 先推后验
+
+- [x] `FENG_EXPR_BINARY` 分支两条路径（`&&` 和其他）：在 `validate_binary_expr` 前加 `infer_expr_type(context, expr)`
+- [x] 全量回归测试
+
+#### 9.8.4 步骤 3：`validate_binary_expr` 改为纯验证
 
 - [ ] `validate_binary_expr`：移除 `infer_expr_type(left/right)` 调用，改为直接读 `expr->as.binary.left->type` / `right->type`，通过 `inferred_expr_type_from_type_ref` 转换
-- [ ] 全量回归测试
-
-#### 9.8.4 步骤 3：`resolve_expr` 先推后验
-
-- [ ] `FENG_EXPR_BINARY` 分支两条路径（`&&` 和其他）：在 `validate_binary_expr` 前加 `infer_expr_type(context, expr)`
 - [ ] 全量回归测试
 
 #### 9.8.5 步骤 4：`InferredExprType` 注释
