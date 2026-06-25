@@ -96,6 +96,19 @@ typedef struct ImportedModuleEntry {
     const FengSemanticModule *target_module;
 } ImportedModuleEntry;
 
+/* InferredExprType represents the type of an expression during semantic
+ * analysis. It exists as a separate structure from FengTypeRef for historical
+ * implementation reasons: it carries direct pointers to FengDecl/FengExpr
+ * (avoiding name resolution) and uses string slices for builtin types
+ * (avoiding FengTypeRef synthesis).
+ *
+ * Future refactoring direction: unify with FengTypeRef. A type is a type,
+ * regardless of how it was determined (annotated, declared, or inferred).
+ * "Inferred" should describe the provenance, not be a separate type structure.
+ * When unified, infer_expr_type will return const FengTypeRef *, expr->type
+ * will be the single source of truth, and the BUILTIN/DECL/LAMBDA kinds will
+ * be representable as FENG_TYPE_REF_NAMED (with an intern table for builtins
+ * and function type declarations for lambdas). */
 typedef enum InferredExprTypeKind {
     FENG_INFERRED_EXPR_TYPE_UNKNOWN = 0,
     FENG_INFERRED_EXPR_TYPE_BUILTIN,
@@ -4037,7 +4050,16 @@ static FengTypeRef *create_type_ref_from_inferred_type(const InferredExprType *t
             return clone_type_ref_for_inference(type->type_ref);
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
-            if (type->type_decl == NULL || type->type_decl->kind != FENG_DECL_TYPE) {
+            /* Accept both type and enum decls — both are typeish and carry a
+             * single-segment name that can populate a NAMED FengTypeRef.
+             * SPEC decls (function types) and other kinds are rejected: they
+             * don't have a name that round-trips back to the same decl via
+             * resolve_type_ref_decl.  This matters for fill_expr_type_from_inferred
+             * on enum member access (e.g., FutureState.Resolved), where
+             * infer_member_expr_type returns DECL(enum_decl). */
+            if (type->type_decl == NULL ||
+                (type->type_decl->kind != FENG_DECL_TYPE &&
+                 type->type_decl->kind != FENG_DECL_ENUM)) {
                 return NULL;
             }
 
@@ -4045,7 +4067,7 @@ static FengTypeRef *create_type_ref_from_inferred_type(const InferredExprType *t
             if (segments == NULL) {
                 return NULL;
             }
-            segments[0] = type->type_decl->as.type_decl.name;
+            segments[0] = decl_typeish_name(type->type_decl);
             type_ref = create_named_type_ref_for_inference(token, segments, 1U);
             if (type_ref == NULL) {
                 free(segments);
@@ -6292,8 +6314,19 @@ static bool validate_compound_assignment(ResolveContext *context, const FengStmt
 }
 
 static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) {
-    InferredExprType left_type = infer_expr_type(context, expr->as.binary.left);
-    InferredExprType right_type = infer_expr_type(context, expr->as.binary.right);
+    /* Read the derivation result filled by the prior infer_expr_type pass in
+     * resolve_expr's binary branch.  This keeps validate_binary_expr pure —
+     * no infer_expr_type calls — so derivation and validation are two
+     * independent functions, each doing one job.  NULL operands or NULL
+     * expr->type yield UNKNOWN, which binary_expr_types_are_valid rejects. */
+    InferredExprType left_type =
+        (expr->as.binary.left != NULL && expr->as.binary.left->type != NULL)
+            ? inferred_expr_type_from_type_ref(expr->as.binary.left->type)
+            : inferred_expr_type_unknown();
+    InferredExprType right_type =
+        (expr->as.binary.right != NULL && expr->as.binary.right->type != NULL)
+            ? inferred_expr_type_from_type_ref(expr->as.binary.right->type)
+            : inferred_expr_type_unknown();
     const char *operator_name = format_operator_name(expr->as.binary.op);
     char *left_type_name;
     char *right_type_name;

@@ -510,9 +510,12 @@ case FENG_EXPR_BINARY: {
 |---|---|
 | `BUILTIN` | 合成命名 `FengTypeRef`（单段），`analysis_track_synthetic_type_ref` 管理生命周期 |
 | `TYPE_REF` | 借用已有 `type_ref`（AST 生命周期） |
-| `DECL` / `LAMBDA` / `UNKNOWN` | 留 `expr->type = NULL`（二元运算中本就非法，验证自然失败） |
+| `DECL`（`FENG_DECL_TYPE` / `FENG_DECL_ENUM`） | 合成命名 `FengTypeRef`（单段，取 `decl_typeish_name`），`analysis_track_synthetic_type_ref` 管理生命周期 |
+| `DECL`（`FENG_DECL_SPEC` 等非 typeish）/ `LAMBDA` / `UNKNOWN` | 留 `expr->type = NULL`（二元运算中本就非法，验证自然失败） |
 
 可复用现有的 `create_type_ref_from_inferred_type` + `clone_type_ref_for_inference` + `analysis_track_synthetic_type_ref` 路径（与 §4.1.2 无类型标注绑定的合成路径一致）。
+
+**`create_type_ref_from_inferred_type` 同步扩展**：现有实现（analyzer.c:4039-4053）在 `DECL` 分支仅接受 `FENG_DECL_TYPE`，对 `FENG_DECL_ENUM` 返回 NULL。步骤 3（§9.4.3）让 `validate_binary_expr` 读 `expr->type` 后，枚举成员访问（如 `FutureState.Resolved`，`infer_member_expr_type` 返回 `DECL(enum_decl)`）的 `expr->type` 不会被填，验证失败。需扩展 `DECL` 分支也接受 `FENG_DECL_ENUM`，用 `decl_typeish_name` 取名（与 `format_inferred_expr_type_name` 的 DECL 展示一致）。此扩展对其他调用方（`synthesize_array_type_ref` 等）是行为增强而非破坏——此前枚举元素类型会返回 NULL，现在能正确合成。
 
 #### 9.4.2 `resolve_expr` 二元分支：先推后验，显式两步
 
@@ -630,10 +633,11 @@ typedef struct InferredExprType {
 
 #### 9.8.4 步骤 3：`validate_binary_expr` 改为纯验证
 
-- [ ] `validate_binary_expr`：移除 `infer_expr_type(left/right)` 调用，改为直接读 `expr->as.binary.left->type` / `right->type`，通过 `inferred_expr_type_from_type_ref` 转换
-- [ ] 全量回归测试
+- [x] `validate_binary_expr`：移除 `infer_expr_type(left/right)` 调用，改为直接读 `expr->as.binary.left->type` / `right->type`，通过 `inferred_expr_type_from_type_ref` 转换
+- [x] `create_type_ref_from_inferred_type` 的 `FENG_INFERRED_EXPR_TYPE_DECL` 分支扩展接受 `FENG_DECL_ENUM`（与 `FENG_DECL_TYPE` 并列），用于枚举成员访问（如 `FutureState.Resolved`）经 `infer_member_expr_type` 返回 `DECL(enum_decl)` 后能合成 NAMED `FengTypeRef`，避免 `expr->type = NULL` 导致验证失败
+- [x] 全量回归测试
 
 #### 9.8.5 步骤 4：`InferredExprType` 注释
 
-- [ ] analyzer.c:99-113 `InferredExprType` 定义上方加重构方向注释
-- [ ] 全量回归测试
+- [x] analyzer.c:99-113 `InferredExprType` 定义上方加重构方向注释
+- [x] 全量回归测试
