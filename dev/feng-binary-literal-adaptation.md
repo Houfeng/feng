@@ -445,3 +445,192 @@ codegen 读取 `type` 按实际类型发射，新增专项测试验证。
 - [x] 全量回归测试，确认无新增失败
 
 > **备注**：本次完成后，重新实施 `feng-scalar-alias-optimize.md` Task 6（`int` → 平台相关）时，原 §1.1 提到的 45 个 smoke 失败用例预期全部恢复通过。该验证属于 Task 6 的回归范围，不作为本文档的交付项。
+
+## 9. 贴合类型推导优化
+
+> 状态：草案  
+> 日期：2026-06-25  
+> 目标：修正 §4.1.3 实现中"验证在推导之前"的顺序缺陷，使推导与验证真正各司其职
+
+### 9.1 问题
+
+§4.1.3 把贴合逻辑放在 `infer_expr_type` 的 `FENG_EXPR_BINARY` 分支，但 `validate_binary_expr`（analyzer.c:6294）验证时调的是 `infer_expr_type(left/right)`——对**操作数**推导，不是对**二元表达式整体**推导，因此贴合永远不会在验证前触发。
+
+以 `if n == 10 { }`（`n: i32`，64 位平台 `int = i64`）为例：
+
+| 步骤 | 调用 | 结果 |
+|---|---|---|
+| 1·验证 | `validate_binary_expr` → `infer_expr_type(n)` / `infer_expr_type(10)` | `i32` / `i64`（默认，未贴合） |
+| 2·验证 | `binary_expr_types_are_valid(i32, i64)` | false，报"类型不匹配" |
+| 3·推导 | `validate_stmt_condition_expr` → `infer_expr_type(n == 10)` | 触发贴合，但错误已报 |
+
+**验证在推导之前，验证会失败**。当前测试在 `int = i32` 下通过纯属巧合（字面量默认 `i32` 与 `n: i32` 恰好一致），Task 6 重新应用后 45 个 smoke 用例会继续失败。
+
+### 9.2 设计原则
+
+- **贴合是推导**：字面量适配对侧类型属于类型推导，不是验证
+- **推导和验证各司其职**：两个独立函数，见名知意，不让一个函数隐含干另一个的事
+- **先推导后验证**：验证必须基于"推导完成后的类型"，顺序不可颠倒
+- **复用已有 `expr->type`**：`FengExpr` 已有 `type` 字段（注释"filled by the semantic analyzer; NULL means not inferred"），设计意图本来就是承载推导结果，不需新增字段
+
+### 9.3 职责划分
+
+| 函数 | 职责 | 不做 |
+|---|---|---|
+| `infer_expr_type` | 推导（含贴合），填 `expr->type` | 不报错 |
+| `validate_binary_expr` | 验证，读 `expr->type` | 不调 `infer_expr_type` |
+
+`resolve_expr` 二元分支显式两步：先推导后验证。若多处需要"先推后验"模式，可再包装 `infer_and_validate_binary`，但不让验证函数内部隐含调推导。
+
+### 9.4 实现方案
+
+#### 9.4.1 `infer_expr_type` 二元分支：推导时填 `expr->type`
+
+analyzer.c:14475 `FENG_EXPR_BINARY` 分支，在确定结果类型后，把推导结果写入 AST 节点：
+
+```c
+case FENG_EXPR_BINARY: {
+    InferredExprType left_type = infer_expr_type(context, expr->as.binary.left);
+    InferredExprType right_type = infer_expr_type(context, expr->as.binary.right);
+    /* ... 现有贴合逻辑（保留）... */
+
+    /* [新增] 推导结果写入 AST，供验证阶段直接读 */
+    fill_expr_type_from_inferred(context, expr->as.binary.left, left_type);
+    fill_expr_type_from_inferred(context, expr->as.binary.right, right_type);
+    /* 结果类型也写入，供外层二元读内层结果 */
+    InferredExprType result_type = <switch 确定的结果>;
+    fill_expr_type_from_inferred(context, expr, result_type);
+    return result_type;
+}
+```
+
+**新增辅助函数 `fill_expr_type_from_inferred`**：把 `InferredExprType` 转成 `const FengTypeRef *` 写入 `expr->type`。
+
+| `InferredExprType` kind | 转换方式 |
+|---|---|
+| `BUILTIN` | 合成命名 `FengTypeRef`（单段），`analysis_track_synthetic_type_ref` 管理生命周期 |
+| `TYPE_REF` | 借用已有 `type_ref`（AST 生命周期） |
+| `DECL` / `LAMBDA` / `UNKNOWN` | 留 `expr->type = NULL`（二元运算中本就非法，验证自然失败） |
+
+可复用现有的 `create_type_ref_from_inferred_type` + `clone_type_ref_for_inference` + `analysis_track_synthetic_type_ref` 路径（与 §4.1.2 无类型标注绑定的合成路径一致）。
+
+#### 9.4.2 `validate_binary_expr`：纯验证，直接读 `expr->type`
+
+analyzer.c:6294-6296，不再调 `infer_expr_type`：
+
+```c
+static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) {
+    /* [改] 直接读推导阶段填的结果，不调 infer_expr_type */
+    InferredExprType left_type  = expr->as.binary.left->type != NULL
+        ? inferred_expr_type_from_type_ref(expr->as.binary.left->type)
+        : inferred_expr_type_unknown();
+    InferredExprType right_type = expr->as.binary.right->type != NULL
+        ? inferred_expr_type_from_type_ref(expr->as.binary.right->type)
+        : inferred_expr_type_unknown();
+    /* ... 后续 binary_expr_types_are_valid 等验证逻辑不变 ... */
+}
+```
+
+`validate_binary_expr` 零 `infer_expr_type` 调用，纯验证。`inferred_expr_type_from_type_ref` 把 `FengTypeRef *` 转回 `InferredExprType`，复用现有 `binary_expr_types_are_valid` 等比较函数。
+
+#### 9.4.3 `resolve_expr` 二元分支：先推后验，显式两步
+
+analyzer.c:20137-20200，在 `validate_binary_expr` 之前补一次 `infer_expr_type`：
+
+```c
+/* 两条路径（&& 和其他）都在验证前加推导 */
+infer_expr_type(context, expr);              /* 步骤1：推导（含贴合，填 expr->type） */
+if (!validate_binary_expr(context, expr)) {  /* 步骤2：验证（读 expr->type） */
+    ...
+}
+```
+
+`&&` 路径在 binding scope 内调用，与现有 `validate_binary_expr` 同作用域，不影响绑定可见性。
+
+#### 9.4.4 `InferredExprType` 增加重构方向注释
+
+analyzer.c:99-113，在 `InferredExprType` 定义上方加注释：
+
+```c
+/* InferredExprType represents the type of an expression during semantic
+ * analysis. It exists as a separate structure from FengTypeRef for historical
+ * implementation reasons: it carries direct pointers to FengDecl/FengExpr
+ * (avoiding name resolution) and uses string slices for builtin types
+ * (avoiding FengTypeRef synthesis).
+ *
+ * Future refactoring direction: unify with FengTypeRef. A type is a type,
+ * regardless of how it was determined (annotated, declared, or inferred).
+ * "Inferred" should describe the provenance, not be a separate type structure.
+ * When unified, infer_expr_type will return const FengTypeRef *, expr->type
+ * will be the single source of truth, and the BUILTIN/DECL/LAMBDA kinds will
+ * be representable as FENG_TYPE_REF_NAMED (with an intern table for builtins
+ * and function type declarations for lambdas). */
+typedef struct InferredExprType {
+    ...
+} InferredExprType;
+```
+
+### 9.5 验证流程（修复后）
+
+`if n == 10 { }`（`n: i32`，64 位 `int = i64`）：
+
+| 步骤 | 函数 | 动作 | 结果 |
+|---|---|---|---|
+| 推导 | `infer_expr_type(n == 10)` | 贴合 `10→i32`，填 `n->type=i32`、`10->type=i32`、`(n==10)->type=bool` | 返回 `bool` |
+| 验证 | `validate_binary_expr` | 读 `n->type`/`10->type` → `i32`/`i32` | 通过 |
+
+嵌套场景 `n + 1 > 3`：内层 `infer_expr_type(n + 1)` 填 `(n+1)->type=i32`，外层 `validate_binary_expr(n+1 > 3)` 读 `(n+1)->type` 拿到贴合后的 `i32`，逐层自然成立。
+
+越界场景 `n == 9999999999`（超出 `i32`）：贴合失败（范围检查不通过），`10->type` 未填，`validate_binary_expr` 读到 `i32`/`i64`（默认），报类型不匹配——与"贴合失败则按不贴合推导"的设计一致。
+
+### 9.6 不改的部分
+
+- `infer_expr_type` 二元分支的贴合逻辑（analyzer.c:14485-14525）保留，在新的推导调用中生效
+- `binary_expr_types_are_valid` 接口不变（仍用 `InferredExprType`），待 `InferredExprType` 统一后一并改
+- `expr_matches_expected_type_ref` 等绑定/参数/返回值路径不受影响（这些路径已通过 `expected_type_ref` 直接贴合）
+
+### 9.7 未来重构方向：`InferredExprType` 统一
+
+`InferredExprType`（5 种 kind）与 `FengTypeRef`（3 种 kind）存在类型模型二分，是设计气味：
+
+| `InferredExprType` kind | `FengTypeRef` 对应 |
+|---|---|
+| `UNKNOWN` | `NULL` |
+| `BUILTIN` | `NAMED`（单段，需 intern 表） |
+| `TYPE_REF` | 直接 |
+| `DECL` | `NAMED`（decl 名字，需解析回 decl） |
+| `LAMBDA` | `NAMED`（函数类型 decl） |
+
+统一后：
+- `infer_expr_type` 返回 `const FengTypeRef *`，`expr->type` 成为唯一真源
+- 消除 `InferredExprType` ↔ `FengTypeRef *` 转换摩擦
+- `validate_binary_expr` 直接用 `FengTypeRef` 比较，不需 `inferred_expr_type_from_type_ref` 转回
+
+本次只在 `InferredExprType` 上加注释说明方向，不执行统一。统一作为独立重构，需评估 `analyzer.c` 中几百处 `InferredExprType` 使用的迁移。
+
+### 9.8 开发 TODO
+
+#### 9.8.1 文档修订
+
+- [x] §4.1.3 补充说明：`resolve_expr` 中先推后验的调用顺序（本文 §9.4.3 已记述）
+
+#### 9.8.2 步骤 1：`infer_expr_type` 填 `expr->type`
+
+- [ ] 新增 `fill_expr_type_from_inferred` 辅助函数（复用 `create_type_ref_from_inferred_type` + `analysis_track_synthetic_type_ref`）
+- [ ] `FENG_EXPR_BINARY` 分支：在确定结果类型后，填 `left->type`、`right->type`、`expr->type`
+- [ ] 全量回归测试
+
+#### 9.8.3 步骤 2：`validate_binary_expr` 改为纯验证
+
+- [ ] `validate_binary_expr`：移除 `infer_expr_type(left/right)` 调用，改为直接读 `expr->as.binary.left->type` / `right->type`，通过 `inferred_expr_type_from_type_ref` 转换
+- [ ] 全量回归测试
+
+#### 9.8.4 步骤 3：`resolve_expr` 先推后验
+
+- [ ] `FENG_EXPR_BINARY` 分支两条路径（`&&` 和其他）：在 `validate_binary_expr` 前加 `infer_expr_type(context, expr)`
+- [ ] 全量回归测试
+
+#### 9.8.5 步骤 4：`InferredExprType` 注释
+
+- [ ] analyzer.c:99-113 `InferredExprType` 定义上方加重构方向注释
+- [ ] 全量回归测试
