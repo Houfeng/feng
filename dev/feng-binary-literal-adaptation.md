@@ -379,7 +379,7 @@ let x = 12.5;       // double x = (double)(12.5);            ← 正确
 
 ## 7. 待决问题
 
-- 二元运算字面量贴合是否应同步覆盖 if/match/try 表达式内部分支的字面量贴合？（本次不处理，后续评估）
+- ~~二元运算字面量贴合是否应同步覆盖 if/match/try 表达式内部分支的字面量贴合？~~ **已决策**：见 §10.2.2 贴合原则，TODO 见 §10.3.2
 - `FengExpr` 增加 `const FengTypeRef *type` 字段（8 字节/节点，64 位平台）的内存开销是否可接受？
 
 ## 8. 开发 TODO
@@ -641,3 +641,235 @@ typedef struct InferredExprType {
 
 - [x] analyzer.c:99-113 `InferredExprType` 定义上方加重构方向注释
 - [x] 全量回归测试
+
+## 10. 全场景贴合补齐
+
+> 状态：草案  
+> 日期：2026-06-26  
+> 目标：排查并补齐 §4/§9 未覆盖的所有字面量贴合场景
+
+### 10.1 问题排查
+
+§4/§9 的贴合实现覆盖两类路径：
+
+1. **有目标类型声明**（`expr_matches_expected_type_ref`）：绑定、函数参数、返回值、数组元素（有目标类型时）、成员赋值、对象字面量字段、元组字面量元素
+2. **二元表达式**（`infer_expr_type` 的 `FENG_EXPR_BINARY` 分支）：`n == 10`、`n + 1 > 3` 等
+
+通过系统遍历 `analyzer.c` 中所有 `infer_expr_type` + `inferred_expr_types_equal` 调用对，发现以下场景存在相同贴合缺口——一侧为纯数值字面量、另一侧为已确定标量类型时，字面量不会贴合，导致 Task 6（`int` → 平台相关）后编译失败。另外元组字面量（#6）已覆盖，列入总览仅为完整性。
+
+| # | 场景 | 代码路径 | 示例 | 当前错误 |
+|---|---|---|---|---|
+| 1 | 复合赋值 | `validate_compound_assignment`（6247） | `n += 1`（`n: i32`） | AE0023 |
+| 2 | if 表达式分支结果 | `validate_if_expr`（6528） | `if c { x } else { 10 }`（`x: i32`） | AE0033 |
+| 3 | try 表达式 body/result | try 验证（6586/6636） | `try x catch { 10 }`（`x: i32`） | — |
+| 4 | match 表达式分支结果 | match 验证（7366/7609/7819） | `match x { _ => 1 }` 与其他分支类型不一致 | — |
+| 5 | 无目标类型数组字面量 | `validate_array_literal_expr`（13625）、`infer_array_literal_expr_type`（13595） | `let a = [x, 10]`（`x: i32`） | AE0201 |
+| 6 | 元组字面量 | `validate_tuple_literal_expr_against_type`（5465） | `let p: Point = (1, 2)` | ✅ 已覆盖 |
+
+场景 2-4 在 §7「待决问题」中已提及但未列入 TODO；场景 1、5 此前未识别。
+
+### 10.2 场景明细
+
+#### 10.2.1 场景 1：复合赋值
+
+**代码路径**：`validate_compound_assignment`（analyzer.c:6247）
+
+```c
+InferredExprType left_type  = infer_expr_type(context, stmt->as.assign.target);
+InferredExprType right_type = infer_expr_type(context, stmt->as.assign.value);
+// → 直接 inferred_expr_types_equal(left_type, right_type)，无贴合步骤
+```
+
+**影响范围**：`+=`、`-=`、`*=`、`/=`、`%=`、`<<=`、`>>=`、`&=`、`|=`、`^=`
+
+**示例**：
+
+```feng
+let n: i32 = 5;
+n += 1;      // ❌ AE0023: left=i32, right=i64（默认推导）
+n -= 2;      // ❌ 同上
+n *= 3;      // ❌ 同上
+
+let x: u8 = 10;
+x += 1;      // ❌ AE0023: left=u8, right=i64
+x += 256;    // ❌ AE0023（贴合后应为范围越界，但当前直接类型不匹配）
+```
+
+**根因**：与 §1.1 描述的 §二元运算问题完全相同。`validate_compound_assignment` 对左右操作数独立调用 `infer_expr_type`，字面量按默认类型推导，无贴合机会。
+
+**与二元表达式的类比**：复合赋值本质上是 `n = n + 1` 的语法糖，但走的是语句级路径（`FENG_STMT_ASSIGN`），不经过 `FENG_EXPR_BINARY` 分支的贴合逻辑。
+
+#### 10.2.2 场景 2-4：if/match/try 表达式分支结果
+
+**代码路径**：
+
+- `validate_if_expr`（analyzer.c:6528）：`inferred_expr_types_equal(then_type, else_type)`
+- try 验证（analyzer.c:6586/6636）：`inferred_expr_types_equal(body_type, result_type)`
+- match 验证（analyzer.c:7366/7609/7819）：分支 yield 类型逐个比较
+
+**示例**：
+
+```feng
+let x: i32 = 5;
+
+// 场景 A：无明确目标类型，首非字面量块定目标类型
+let y = if cond { x } else { 10 };     // ✅ then 非字面量 → 目标 i32；else 的 10 贴合到 i32
+
+// 场景 B：有明确目标类型
+let z: i64 = if cond { 1 } else { 2 }; // ✅ 目标 i64，两个块都贴合到 i64
+
+// 场景 B2：返回值提供明确目标类型
+func f() -> i32 {
+    return if cond { 1 } else { 2 };    // ✅ 返回类型 i32，两个块都贴合到 i32
+}
+
+// 场景 C：全字面量且无明确目标类型
+let w = if cond { 1 } else { 2 };      // ✅ 各自默认推导为 i64，类型一致
+
+// match 表达式
+let m = match val {
+    0 => x,                             // 非字面量 → 目标 i32
+    _ => 10,                            // ✅ 字面量贴合到 i32
+};
+
+// 联合类型目标
+type Result = i32 | Error;
+let x: i32 = 5;
+let r1: Result = if cond { x } else { Error.Fail };    // ✅ 目标 Result；x 的类型 i32 是成员，合法
+let r2: Result = if cond { 10 } else { Error.Fail };   // ✅ 目标 Result；10 能贴合到 i32（成员），合法
+
+// try 表达式：body 定目标类型，catch 贴合（try 后是单个表达式，不是块）
+let v = try x catch { 10 };    // ✅ body=x(i32) → 目标 i32；catch 的 10 贴合到 i32
+let u = try 10 catch { x };    // ❌ body=10(i64 默认) → 目标 i64；catch x(i32) 非字面量，不匹配 i64
+```
+
+**贴合原则**（已决策）：
+
+1. **有明确目标类型时**，以明确目标类型为基准——绑定类型注解（`let x: i64 = if ...`）、函数/方法参数、返回值（函数声明了返回类型时 `return if ...`）、成员赋值（`obj.field = if ...`）等，都提供明确的目标类型
+2. **无明确目标类型时（if/match）**，以第一个非字面量块（即 yield 值不是纯数值字面量的分支）的推导类型为目标类型
+3. **无明确目标类型时（try）**，始终以 try body 表达式的推导类型为目标类型，catch 块尝试向 body 类型贴合（try body 是主路径，catch 是从路径，方向固定）
+4. **确定目标类型后**，字面量块尝试向目标类型贴合。若目标类型是联合类型：非字面量块的推导类型是联合类型成员即合法；字面量块能贴合到某个成员时即合法
+5. **所有块均为字面量且无明确目标类型时**，无法确定目标类型，各块各自默认推导，类型一致则通过（try 表达式不适用此条——body 始终定目标类型，即使 body 是字面量）
+
+**§7 待决问题已决策**：从「后续评估」落地为上述贴合原则。
+
+#### 10.2.3 场景 5：无目标类型数组字面量
+
+**代码路径**：
+
+- `infer_array_literal_expr_type`（analyzer.c:13595）：首元素推导为 element_type，后续元素 `inferred_expr_types_equal`
+- `validate_array_literal_expr`（analyzer.c:13625）：同上
+
+```c
+element_type = infer_expr_type(context, expr->as.array_literal.items[0]);
+for (...) {
+    item_type = infer_expr_type(context, ...);
+    if (!inferred_expr_types_equal(context, element_type, item_type)) { ... }
+}
+```
+
+**示例**：
+
+```feng
+let x: i32 = 5;
+let a = [x, 10];        // ✅ 首非字面量 x(i32) → 目标 i32；10 贴合到 i32
+let b = [10, x];        // ✅ 首元素 10 是字面量，跳过；首非字面量 x(i32) → 目标 i32；10 贴合到 i32
+let c = [1, 2, 3];      // ✅ 全字面量，各自默认推导为 i64，一致
+let d = [x, y];         // ❌ x(i32) 和 y(i64) 都是非字面量，类型不一致
+```
+
+**贴合原则**（已决策，选项 A）：
+
+1. **有明确目标类型时**（如 `let a: i32[] = [1, 2]`），沿用现有 `expr_matches_expected_type_ref` 路径，各元素向目标元素类型贴合
+2. **无明确目标类型时**，以第一个非字面量元素的推导类型为目标类型，字面量元素尝试向目标类型贴合
+3. **所有元素均为字面量时**，无法确定目标类型，各元素各自默认推导，类型一致则通过
+
+**难点**：无声明目标类型时，"目标类型"来自首个非字面量元素的推导结果，贴合方向取决于元素顺序。
+
+#### 10.2.4 元组字面量
+
+**代码路径**：`validate_tuple_literal_expr_against_type`（analyzer.c:5465）→ 逐元素 `validate_expr_against_expected_type` → `expr_matches_expected_type_ref`
+
+**现状**：元组字面量始终要求明确目标类型（命名元组类型），否则报 AE0301。有目标类型时，各元素已通过现有 `expr_matches_expected_type_ref` 路径按位贴合，**无实现缺口**。
+
+**示例**：
+
+```feng
+type Point = (i32, i32);
+
+let p: Point = (1, 2);              // ✅ 按位贴合：1→i32, 2→i32
+f((1, 2));                           // ✅ f(p: Point) 参数位置提供目标类型，按位贴合
+let q: Point = (1, 256);             // ❌ 256 超出 i32 范围
+let t = (1, 2);                      // ❌ AE0301：元组字面量要求明确目标类型
+```
+
+**贴合原则**：
+
+1. **有明确目标类型时**（绑定注解、函数参数、返回值、成员赋值等），各元素按位分别向目标元组对应位置的字段类型贴合，沿用现有 `expr_matches_expected_type_ref` 路径
+2. **无明确目标类型时**，元组字面量不合法（AE0301），各元素各自推导不适用
+
+### 10.3 开发 TODO
+
+#### 10.3.1 场景 1：复合赋值贴合
+
+- [ ] 方案设计：确定贴合策略——是在 `validate_compound_assignment` 中增加贴合步骤，还是重构为"先推导后验证"模式（与 §9 的二元表达式改造一致）
+- [ ] 实现贴合：右操作数为纯数值字面量且左操作数为已确定标量时，字面量贴合到左操作数类型
+- [ ] 贴合结果写入 AST：字面量节点 `type` 填充，codegen 直接受益
+- [ ] 范围检查：贴合时复用 `integer_literal_fits_canonical_target` 进行范围验证
+- [ ] 位移复合赋值（`<<=`、`>>=`）：确认贴合后 `validate_integer_shift_rhs_range` 正常工作
+- [ ] 新增测试用例：覆盖 `+=`、`-=`、`*=`、`/=`、`%=`、`<<=`、`>>=`、`&=`、`|=`、`^=` 各运算符
+- [ ] 全量回归测试，通过后将本任务所有 TODO 标记为完成，等后续指令
+
+#### 10.3.2 if 表达式分支贴合
+
+> 贴合原则见 §10.2.2（原则 1/2/4/5，已决策）。
+
+- [ ] 实现目标类型确定逻辑：优先取外层明确目标类型（绑定注解、函数/方法参数、返回值、成员赋值）；无明确目标类型时取第一个非字面量块的推导类型
+- [ ] 实现字面量块向目标类型的贴合：通过 `numeric_literal_fits_inferred_target` 或等价函数进行范围检查，贴合结果写入 AST 节点 `type`
+- [ ] 实现联合类型特殊处理：目标类型为联合类型时，非字面量块的推导类型是联合类型成员即合法；字面量块能贴合到某个成员时即合法
+- [ ] 实现"全字面量"兜底：所有块均为字面量且无明确目标类型时，各块各自默认推导，沿用 `inferred_expr_types_equal` 比较
+- [ ] 改造 `validate_if_expr`（analyzer.c:6528）及调用链
+- [ ] 新增测试用例：覆盖有明确目标类型、无目标类型（首块非字面量）、无目标类型（全字面量）、联合类型目标等场景
+- [ ] 全量回归测试，通过后将本任务所有 TODO 标记为完成，等后续指令
+
+#### 10.3.3 match 表达式分支贴合
+
+> 贴合原则见 §10.2.2（原则 1/2/4/5，已决策）。
+
+- [ ] 实现目标类型确定逻辑：优先取外层明确目标类型（绑定注解、函数/方法参数、返回值、成员赋值）；无明确目标类型时取第一个非字面量分支的推导类型
+- [ ] 实现字面量分支向目标类型的贴合：范围检查 + 贴合结果写入 AST 节点 `type`
+- [ ] 实现联合类型特殊处理：目标类型为联合类型时，非字面量分支的推导类型是联合类型成员即合法；字面量分支能贴合到某个成员时即合法
+- [ ] 实现"全字面量"兜底：所有分支均为字面量且无明确目标类型时，各分支各自默认推导
+- [ ] 改造 match 分支验证（analyzer.c:7366/7609/7819）及调用链
+- [ ] 新增测试用例
+- [ ] 全量回归测试，通过后将本任务所有 TODO 标记为完成，等后续指令
+
+#### 10.3.4 try 表达式分支贴合
+
+> 贴合原则见 §10.2.2（原则 1/3/4，已决策）。try 后是单个表达式，不是块；catch 后是块。
+
+- [ ] 实现目标类型确定逻辑：优先取外层明确目标类型（绑定注解、函数/方法参数、返回值、成员赋值）；无明确目标类型时始终取 body 表达式的推导类型（body 是主路径，方向固定）
+- [ ] 实现 catch 块向 body 类型的贴合：catch 块 yield 值为纯数值字面量时，向 body 类型贴合，范围检查 + 写入 AST 节点 `type`
+- [ ] 实现联合类型特殊处理：目标类型为联合类型时，非字面量 catch 块的推导类型是联合类型成员即合法；字面量 catch 块能贴合到某个成员时即合法
+- [ ] 改造 try 验证（analyzer.c:6586/6636）及调用链
+- [ ] 新增测试用例：覆盖 body 字面量 / body 非字面量、catch 字面量贴合 / catch 非字面量不匹配、有明确目标类型等场景
+- [ ] 全量回归测试，通过后将本任务所有 TODO 标记为完成，等后续指令
+
+#### 10.3.5 无目标类型数组字面量贴合
+
+> 贴合原则见 §10.2.3（已决策，选项 A）。
+
+- [ ] 实现目标类型确定逻辑：有明确目标类型时沿用现有路径；无明确目标类型时取第一个非字面量元素的推导类型
+- [ ] 实现字面量元素向目标类型的贴合：范围检查 + 贴合结果写入 AST 节点 `type`
+- [ ] 实现"全字面量"兜底：所有元素均为字面量时，各元素各自默认推导，沿用 `inferred_expr_types_equal` 比较
+- [ ] 改造 `infer_array_literal_expr_type`（analyzer.c:13595）和 `validate_array_literal_expr`（analyzer.c:13625）
+- [ ] 新增测试用例：覆盖首元素非字面量、首元素字面量（次元素非字面量）、全字面量、非字面量类型不一致等场景
+- [ ] 全量回归测试，通过后将本任务所有 TODO 标记为完成，等后续指令
+
+#### 10.3.6 元组字面量贴合
+
+> 贴合原则见 §10.2.4（已决策）。
+
+- [x] 有明确目标类型时按位贴合：已由 `validate_tuple_literal_expr_against_type` → `expr_matches_expected_type_ref` 覆盖，无需新增实现
+- [ ] 确认现有测试覆盖元组字面量元素贴合场景（如 `let p: Point = (1, 2)` 各元素按位贴合）；若不足则补充
+- [ ] 全量回归测试，通过后将本任务所有 TODO 标记为完成，等后续指令
