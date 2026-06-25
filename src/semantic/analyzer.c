@@ -4227,6 +4227,9 @@ static bool evaluate_constant_expr(ResolveContext *context,
 static bool integer_literal_fits_canonical_target(int64_t value,
                                                    const char *canonical_target);
 static bool expr_is_pure_numeric_literal_expr_for_target_adaptation(const FengExpr *expr);
+static bool numeric_literal_fits_inferred_target(ResolveContext *context,
+                                                 const FengExpr *literal_expr,
+                                                 InferredExprType target_type);
 static bool validate_expr_against_expected_type(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 const FengTypeRef *expected_type);
@@ -6258,6 +6261,31 @@ static bool validate_compound_assignment(ResolveContext *context, const FengStmt
                                      stmt->token,
                                      "AE1002", format_message("unsupported compound assignment operator '%s'",
                                                     operator_name));
+    }
+
+    /* Compound-assignment literal adaptation: when the right-hand side is a
+     * pure numeric literal and the left-hand side has a resolved scalar type,
+     * adapt the literal to that type.  The result is hung on the literal
+     * node's type field for codegen to read directly.  Adaptation failure
+     * (out-of-range) keeps the default inferred type, so the subsequent
+     * equality check reports a type-mismatch error as designed. */
+    if (expr_is_pure_numeric_literal_expr_for_target_adaptation(stmt->as.assign.value) &&
+        inferred_expr_type_is_numeric(left_type)) {
+        if (numeric_literal_fits_inferred_target(context, stmt->as.assign.value, left_type)) {
+            FengTypeRef *synth = create_type_ref_from_inferred_type(&left_type,
+                                                                    stmt->as.assign.value->token);
+            if (synth != NULL) {
+                FengTypeRef *clone = clone_type_ref_for_inference(synth);
+                free_synthetic_type_ref(synth);
+                if (clone != NULL &&
+                    analysis_track_synthetic_type_ref(context->analysis, clone)) {
+                    ((FengExpr *)stmt->as.assign.value)->type = clone;
+                } else {
+                    free_synthetic_type_ref(clone);
+                }
+            }
+            right_type = left_type;
+        }
     }
 
     if (assignment_operator_is_numeric_compound(stmt->as.assign.op) &&

@@ -5092,6 +5092,73 @@ static void test_compound_assignment_rejects_string_plus_equal(void) {
     feng_program_free(program);
 }
 
+static void test_compound_assignment_literal_adapts_to_target_type(void) {
+    /* Covers numeric (+=, -=, *=, /=, %=) and bitwise (&=, |=, ^=, <<=, >>=)
+     * compound operators with integer and float targets.  Each literal adapts
+     * to the left-hand side scalar type — without adaptation the literal
+     * defaults to int (i64 on 64-bit platforms) and the type check fails. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    var n: i32 = 5;\n"
+        "    n += 1;\n"
+        "    n -= 2;\n"
+        "    n *= 3;\n"
+        "    n /= 4;\n"
+        "    n %= 5;\n"
+        "    var mask: i32 = 0;\n"
+        "    mask &= 1;\n"
+        "    mask |= 2;\n"
+        "    mask ^= 4;\n"
+        "    mask <<= 1;\n"
+        "    mask >>= 1;\n"
+        "    var x: u8 = 10;\n"
+        "    x += 1;\n"
+        "    x *= 255;\n"
+        "    var f: f32 = 1.0;\n"
+        "    f += 0.5;\n"
+        "    f -= 0.25;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("compound_assign_adapt_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_compound_assignment_literal_out_of_range_reports_type_mismatch(void) {
+    /* 256 does not fit u8, so adaptation fails and the literal keeps its
+     * default int (i64) type — the type equality check then rejects it. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    var x: u8 = 10;\n"
+        "    x += 256;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("compound_assign_adapt_range.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "compound_assign_adapt_range.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message, "compound assignment operator '+=' requires operands of the same numeric type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_inferred_array_literal_binding_rejects_index_write_without_writable_layer(void) {
     const char *source =
         "module demo.main;\n"
@@ -17449,6 +17516,8 @@ int main(void) {
     test_index_assignment_rejects_non_matching_array_element_type();
     test_compound_assignment_accepts_numeric_and_bitwise_targets();
     test_compound_assignment_rejects_string_plus_equal();
+    test_compound_assignment_literal_adapts_to_target_type();
+    test_compound_assignment_literal_out_of_range_reports_type_mismatch();
     test_inferred_array_literal_binding_rejects_index_write_without_writable_layer();
     test_inferred_array_literal_binding_rejects_non_matching_index_assignment();
     test_inferred_array_literal_rejects_mixed_element_types();

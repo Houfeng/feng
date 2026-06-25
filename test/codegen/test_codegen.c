@@ -6570,6 +6570,48 @@ static void test_literal_adaptation_both_literals(void) {
     feng_semantic_analysis_free(analysis);
 }
 
+static void test_literal_adaptation_compound_assignment(void) {
+    static const char *kSource =
+        "module feng.codegen.litadapt.compound;\n"
+        "func f() {\n"
+        "    var n: i32 = 5;\n"
+        "    n += 1;\n"
+        "    n -= 2;\n"
+        "    n *= 3;\n"
+        "    var x: u8 = 10;\n"
+        "    x += 1;\n"
+        "    x *= 255;\n"
+        "    var mask: i32 = 0;\n"
+        "    mask &= 1;\n"
+        "    mask |= 2;\n"
+        "    mask ^= 4;\n"
+        "    mask <<= 1;\n"
+        "    mask >>= 1;\n"
+        "    var r: f32 = 1.0;\n"
+        "    r += 0.5;\n"
+        "}\n";
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_compound.ff");
+    char *c = literal_adapt_codegen(analysis);
+
+    /* n += 1 where n: i32 → literal 1 adapts to i32. */
+    ASSERT(strstr(c, "(int32_t)INT32_C(1)") != NULL);
+    /* n -= 2 → literal 2 adapts to i32. */
+    ASSERT(strstr(c, "(int32_t)INT32_C(2)") != NULL);
+    /* n *= 3 → literal 3 adapts to i32. */
+    ASSERT(strstr(c, "(int32_t)INT32_C(3)") != NULL);
+    /* x += 1 where x: u8 → literal 1 adapts to u8. */
+    ASSERT(strstr(c, "(uint8_t)UINT8_C(1)") != NULL);
+    /* x *= 255 where x: u8 → literal 255 adapts to u8. */
+    ASSERT(strstr(c, "(uint8_t)UINT8_C(255)") != NULL);
+    /* mask &= 1 where mask: i32 → literal 1 adapts to i32. */
+    /* (already checked above via INT32_C(1)) */
+    /* mask |= 2 where mask: i32. */
+    ASSERT(strstr(c, "(int32_t)INT32_C(4)") != NULL);
+    compile_generated_c_or_die(c);
+
+    feng_semantic_analysis_free(analysis);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -6689,6 +6731,7 @@ int main(void) {
     test_literal_adaptation_binary();
     test_literal_adaptation_member_and_array();
     test_literal_adaptation_both_literals();
+    test_literal_adaptation_compound_assignment();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

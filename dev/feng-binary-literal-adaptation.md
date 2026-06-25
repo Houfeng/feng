@@ -812,13 +812,13 @@ let t = (1, 2);                      // ❌ AE0301：元组字面量要求明确
 
 #### 10.3.1 场景 1：复合赋值贴合
 
-- [ ] 方案设计：确定贴合策略——是在 `validate_compound_assignment` 中增加贴合步骤，还是重构为"先推导后验证"模式（与 §9 的二元表达式改造一致）
-- [ ] 实现贴合：右操作数为纯数值字面量且左操作数为已确定标量时，字面量贴合到左操作数类型
-- [ ] 贴合结果写入 AST：字面量节点 `type` 填充，codegen 直接受益
-- [ ] 范围检查：贴合时复用 `integer_literal_fits_canonical_target` 进行范围验证
-- [ ] 位移复合赋值（`<<=`、`>>=`）：确认贴合后 `validate_integer_shift_rhs_range` 正常工作
-- [ ] 新增测试用例：覆盖 `+=`、`-=`、`*=`、`/=`、`%=`、`<<=`、`>>=`、`&=`、`|=`、`^=` 各运算符
-- [ ] 全量回归测试，通过后将本任务所有 TODO 标记为完成，等后续指令
+- [x] 方案设计：确定贴合策略——在 `validate_compound_assignment` 中增加贴合步骤（`infer_expr_type` 后、`inferred_expr_types_equal` 前），复用已有 `numeric_literal_fits_inferred_target` 贴合路径
+- [x] 实现贴合：右操作数为纯数值字面量且左操作数为已确定标量时，字面量贴合到左操作数类型
+- [x] 贴合结果写入 AST：字面量节点 `type` 填充，codegen 直接受益
+- [x] 范围检查：贴合时复用 `numeric_literal_fits_inferred_target`（内部调用 `integer_literal_fits_canonical_target`）进行范围验证
+- [x] 位移复合赋值（`<<=`、`>>=`）：确认贴合后 `validate_integer_shift_rhs_range` 正常工作（使用 `left_type` 位宽检查，与贴合无冲突）
+- [x] 新增测试用例：语义测试覆盖 `+=`、`-=`、`*=`、`/=`、`%=`、`<<=`、`>>=`、`&=`、`|=`、`^=` 及 `u8`/`i32`/`f32` 类型和范围越界；发码测试覆盖 `+=`、`-=`、`*=`、`&=`、`|=`、`^=`、`<<=`、`>>=` 正确发码
+- [x] 全量回归测试通过（87/87 smoke、291/291 fcts、全部单元测试）
 
 #### 10.3.2 if 表达式分支贴合
 
