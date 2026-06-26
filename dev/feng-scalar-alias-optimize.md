@@ -295,7 +295,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [x] `canonical_builtin_type_name()` 中 `int` 映射从固定 `i32` 改为平台相关：32 位 → `i32`，64 位 → `i64`
 - [x] 核心编译器回归测试通过，无论是否通过，都停下等待 Review 和下一步指令
 
-### Task 7：语义优化——识别应使用平台相关 `int` 的 `i32` 用法
+### Task 7：分析是否有用法错误或非最佳用法
 
 - [ ] 分析 std 中所有应该明确使用平台位宽的地方，列出清单由人工决策
 - [ ] 根据人工决策，进行代码变更
