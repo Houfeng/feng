@@ -6745,6 +6745,12 @@ static bool validate_try_expr(ResolveContext *context,
     }
 
     body_type = infer_expr_type(context, expr->as.try_expr.body);
+
+    /* Body literal adaptation is already applied by resolve_try_expr before
+     * catch clause validation, so the body type is already adapted here.
+     * Catch clause literal adaptation is also already applied by
+     * validate_try_catch_clause_result_type during resolve_try_expr. */
+
     for (size_t clause_index = 0U;
          clause_index < expr->as.try_expr.clause_count;
          ++clause_index) {
@@ -6763,10 +6769,11 @@ static bool validate_try_expr(ResolveContext *context,
                 inferred_expr_type_is_void(body_type)) {
                 continue;
             }
-            return resolver_append_error(
+            (void)resolver_append_error(
                 context,
                 clause->token,
                 "AE1401", format_message("catch clause must end with a result expression, 'return', or 'throw'"));
+            return false;
         }
 
         result_type = infer_expr_type(context, result_expr);
@@ -6782,7 +6789,8 @@ static bool validate_try_expr(ResolveContext *context,
 
             free(body_type_name);
             free(result_type_name);
-            return resolver_append_error(context, clause->token, "AE0036", message);
+            (void)resolver_append_error(context, clause->token, "AE0036", message);
+            return false;
         }
     }
 
@@ -6813,10 +6821,49 @@ static bool validate_try_catch_clause_result_type(ResolveContext *context,
             inferred_expr_type_is_void(body_type)) {
             return true;
         }
-        return resolver_append_error(
+        (void)resolver_append_error(
             context,
             clause->token,
             "AE1401", format_message("catch clause must end with a result expression, 'return', or 'throw'"));
+        return false;
+    }
+
+    /* Catch clause literal adaptation: adapt pure numeric literal catch
+     * results to the target type.  Two cases:
+     *
+     * 1. Explicit target type (from binding annotation, return type, etc.):
+     *    - Union target: adapt literal to a numeric union member
+     *    - Numeric target: adapt literal directly
+     *
+     * 2. No explicit target: the body expression determines the target type
+     *    (try body is always the main path).  Adapt literal catch results to
+     *    the body's inferred type.
+     *
+     * The adapted type is hung on the literal node's type field; the
+     * subsequent infer_expr_type call picks it up automatically. */
+    if (context->current_expr_expected_type_ref != NULL &&
+        expr_is_pure_numeric_literal_expr_for_target_adaptation(result_expr)) {
+        const FengTypeRef *expected = context->current_expr_expected_type_ref;
+        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(context, expected);
+
+        if (union_decl != NULL) {
+            (void)adapt_literal_expr_to_union_member(context,
+                                                      (FengExpr *)result_expr,
+                                                      union_decl,
+                                                      expected);
+        } else if (type_ref_builtin_canonical_name(expected) != NULL) {
+            InferredExprType target = inferred_expr_type_from_type_ref(expected);
+
+            if (numeric_literal_fits_inferred_target(context, result_expr, target)) {
+                fill_expr_type_from_inferred(context, (FengExpr *)result_expr, &target);
+            }
+        }
+    } else if (expr_is_pure_numeric_literal_expr_for_target_adaptation(result_expr) &&
+               inferred_expr_type_is_known(body_type) &&
+               inferred_expr_type_is_numeric(body_type)) {
+        if (numeric_literal_fits_inferred_target(context, result_expr, body_type)) {
+            fill_expr_type_from_inferred(context, (FengExpr *)result_expr, &body_type);
+        }
     }
 
     result_type = infer_expr_type(context, result_expr);
@@ -6832,7 +6879,8 @@ static bool validate_try_catch_clause_result_type(ResolveContext *context,
 
         free(body_type_name);
         free(result_type_name);
-        return resolver_append_error(context, clause->token, "AE0036", message);
+        (void)resolver_append_error(context, clause->token, "AE0036", message);
+        return false;
     }
 
     return true;
@@ -21225,6 +21273,29 @@ static bool resolve_try_expr(ResolveContext *context,
         return false;
     }
     body_type = infer_expr_type(context, expr->as.try_expr.body);
+
+    /* Body literal adaptation: when the body is a pure numeric literal and
+     * there is an explicit target type, adapt the body literal before catch
+     * clause validation so the adapted body type is used consistently. */
+    if (context->current_expr_expected_type_ref != NULL &&
+        expr_is_pure_numeric_literal_expr_for_target_adaptation(expr->as.try_expr.body)) {
+        const FengTypeRef *expected = context->current_expr_expected_type_ref;
+        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(context, expected);
+
+        if (union_decl != NULL) {
+            (void)adapt_literal_expr_to_union_member(context,
+                                                      (FengExpr *)expr->as.try_expr.body,
+                                                      union_decl,
+                                                      expected);
+        } else if (type_ref_builtin_canonical_name(expected) != NULL) {
+            InferredExprType target = inferred_expr_type_from_type_ref(expected);
+
+            if (numeric_literal_fits_inferred_target(context, expr->as.try_expr.body, target)) {
+                fill_expr_type_from_inferred(context, (FengExpr *)expr->as.try_expr.body, &target);
+            }
+        }
+        body_type = infer_expr_type(context, expr->as.try_expr.body);
+    }
 
     for (size_t clause_index = 0U;
          clause_index < expr->as.try_expr.clause_count;

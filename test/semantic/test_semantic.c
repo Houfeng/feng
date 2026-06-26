@@ -17566,6 +17566,172 @@ static void test_match_expr_branch_literal_return_value_adapts(void) {
     feng_program_free(program);
 }
 
+static void test_try_expr_catch_literal_adapts_to_body_type(void) {
+    /* No explicit target type: the body expression determines the target.
+     * The catch literal adapts to the body's inferred type.  Without
+     * adaptation the literal defaults to int (i64 on 64-bit platforms)
+     * and the type check fails. */
+    const char *source =
+        "module demo.main;\n"
+        "func throw_i32(): i32 {\n"
+        "    let v: i32 = 7;\n"
+        "    throw v;\n"
+        "    return 0;\n"
+        "}\n"
+        "func run(): i32 {\n"
+        "    let y = try throw_i32() catch ex: i32 { 10 };\n"
+        "    return y;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("try_expr_adapt_body_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_try_expr_body_literal_adapts_to_explicit_target(void) {
+    /* Explicit target type from binding annotation: both body literal and
+     * catch literal adapt to the target type. */
+    const char *source =
+        "module demo.main;\n"
+        "func run(): i32 {\n"
+        "    let a: i32 = try 10 catch ex: bool { 5 };\n"
+        "    let b: u8 = try 10 catch ex: bool { 20 };\n"
+        "    return a;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("try_expr_adapt_explicit_target_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_try_expr_catch_literal_adapts_to_explicit_target(void) {
+    /* Explicit target type from binding annotation: catch literal adapts
+     * to the target type even when the body is a function call. */
+    const char *source =
+        "module demo.main;\n"
+        "func f(): i32 {\n"
+        "    throw 1;\n"
+        "    return 0;\n"
+        "}\n"
+        "func run(): i32 {\n"
+        "    let x: i32 = try f() catch ex: i32 { 10 };\n"
+        "    return x;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("try_expr_adapt_catch_explicit_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_try_expr_catch_literal_out_of_range_rejected(void) {
+    /* 256 does not fit u8, so adaptation fails and the literal keeps its
+     * default int (i64) type — the type equality check then rejects it. */
+    const char *source =
+        "module demo.main;\n"
+        "func throw_u8(): u8 {\n"
+        "    let v: u8 = 7;\n"
+        "    throw v;\n"
+        "    return 0;\n"
+        "}\n"
+        "func run() {\n"
+        "    let y = try throw_u8() catch ex: u8 { 256 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("try_expr_adapt_range_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "try_expr_adapt_range_error.f") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_try_expr_catch_literal_adapts_to_union_member(void) {
+    /* Union target type: literal catch result adapts to a numeric union
+     * member; non-literal body is a valid union member. */
+    const char *source =
+        "module demo.main;\n"
+        "spec Result: i32 | string;\n"
+        "func f(): i32 {\n"
+        "    throw 1;\n"
+        "    return 0;\n"
+        "}\n"
+        "func run(): Result {\n"
+        "    let r: Result = try f() catch ex: i32 { 10 };\n"
+        "    return r;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("try_expr_adapt_union_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_try_expr_catch_literal_return_value_adapts(void) {
+    /* Return value provides explicit target type: catch literal adapts. */
+    const char *source =
+        "module demo.main;\n"
+        "func f(): i32 {\n"
+        "    throw 1;\n"
+        "    return 0;\n"
+        "}\n"
+        "func run(): i32 {\n"
+        "    return try f() catch ex: i32 { 10 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("try_expr_adapt_return_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -18206,6 +18372,13 @@ int main(void) {
     test_match_expr_branch_all_literals_no_target_accepted();
     test_match_expr_branch_literal_adapts_to_union_member();
     test_match_expr_branch_literal_return_value_adapts();
+
+    test_try_expr_catch_literal_adapts_to_body_type();
+    test_try_expr_body_literal_adapts_to_explicit_target();
+    test_try_expr_catch_literal_adapts_to_explicit_target();
+    test_try_expr_catch_literal_out_of_range_rejected();
+    test_try_expr_catch_literal_adapts_to_union_member();
+    test_try_expr_catch_literal_return_value_adapts();
 
     puts("semantic tests passed");
     return 0;
