@@ -17392,6 +17392,180 @@ static void test_if_expr_branch_literal_return_value_adapts(void) {
     feng_program_free(program);
 }
 
+static void test_match_expr_branch_literal_adapts_to_non_literal_branch(void) {
+    /* No explicit target type: the non-literal branch determines the target.
+     * The literal branch adapts to it.  Without adaptation the literal
+     * defaults to int (i64 on 64-bit platforms) and the type check fails. */
+    const char *source =
+        "module demo.main;\n"
+        "func run(): i32 {\n"
+        "    let x: i32 = 5;\n"
+        "    let y = match 1 {\n"
+        "        1 { x; }\n"
+        "        else { 10; }\n"
+        "    };\n"
+        "    let z = match 1 {\n"
+        "        1 { 10; }\n"
+        "        else { x; }\n"
+        "    };\n"
+        "    return y + z;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_expr_adapt_no_target_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_match_expr_branch_literal_adapts_to_explicit_target(void) {
+    /* Explicit target type from binding annotation: all literal branches
+     * adapt to the target type. */
+    const char *source =
+        "module demo.main;\n"
+        "func run(): i32 {\n"
+        "    let a: i32 = match 1 {\n"
+        "        1 { 1; }\n"
+        "        else { 2; }\n"
+        "    };\n"
+        "    let b: u8 = match 1 {\n"
+        "        1 { 10; }\n"
+        "        else { 20; }\n"
+        "    };\n"
+        "    let c: f32 = match 1 {\n"
+        "        1 { 1.5; }\n"
+        "        else { 2.5; }\n"
+        "    };\n"
+        "    return a;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_expr_adapt_explicit_target_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_match_expr_branch_literal_out_of_range_rejected(void) {
+    /* 256 does not fit u8, so adaptation fails and the literal keeps its
+     * default int (i64) type — the type equality check then rejects it. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let x: u8 = 10;\n"
+        "    let y = match 1 {\n"
+        "        1 { x; }\n"
+        "        else { 256; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_expr_adapt_range_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "match_expr_adapt_range_error.f") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_match_expr_branch_all_literals_no_target_accepted(void) {
+    /* All branches are literals with no explicit target: each defaults to
+     * int (i64), types match, accepted. */
+    const char *source =
+        "module demo.main;\n"
+        "func run(): i32 {\n"
+        "    let y = match 1 {\n"
+        "        1 { 1; }\n"
+        "        else { 2; }\n"
+        "    };\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_expr_all_literals_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_match_expr_branch_literal_adapts_to_union_member(void) {
+    /* Union target type: literal branch adapts to a numeric union member;
+     * non-literal branch is a valid union member. */
+    const char *source =
+        "module demo.main;\n"
+        "spec Result: i32 | string;\n"
+        "func run(): Result {\n"
+        "    let r: Result = match 1 {\n"
+        "        1 { 10; }\n"
+        "        else { \"error\"; }\n"
+        "    };\n"
+        "    return r;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_expr_adapt_union_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_match_expr_branch_literal_return_value_adapts(void) {
+    /* Return value provides explicit target type: literal branches adapt. */
+    const char *source =
+        "module demo.main;\n"
+        "func run(cond: i32): i32 {\n"
+        "    return match cond {\n"
+        "        1 { 1; }\n"
+        "        else { 2; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("match_expr_adapt_return_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -18025,6 +18199,13 @@ int main(void) {
     test_if_expr_branch_both_literals_no_target_accepted();
     test_if_expr_branch_literal_adapts_to_union_member();
     test_if_expr_branch_literal_return_value_adapts();
+
+    test_match_expr_branch_literal_adapts_to_non_literal_branch();
+    test_match_expr_branch_literal_adapts_to_explicit_target();
+    test_match_expr_branch_literal_out_of_range_rejected();
+    test_match_expr_branch_all_literals_no_target_accepted();
+    test_match_expr_branch_literal_adapts_to_union_member();
+    test_match_expr_branch_literal_return_value_adapts();
 
     puts("semantic tests passed");
     return 0;
