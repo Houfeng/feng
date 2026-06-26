@@ -62,7 +62,7 @@ func main(args: string[]) {
     let as_spec: Summable = point;
     var replacement: Point = (1, 2);
     replacement = (3, 4);
-    let (x, , z) = (7, 8, 9);
+    let (x, , z) = ((i32)7, (i32)8, (i32)9);
 
     if unitScore(unit) + unitScore(()) + unitScore(makeUnit()) + point.sum() + consume(point) + as_spec.sum() + replacement.item1 + replacement.item2 + x + z == 59 {
         puts(&"tuple-int-ok");

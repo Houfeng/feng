@@ -118,8 +118,8 @@ func use_it(): int {
 compile_inline_case "generic_set_int_direct" "$GENERIC_SRC" || true
 if [[ -f "$OUT_ROOT/generic_set_int_direct/ir/c/feng.c" ]]; then
     cfile="$OUT_ROOT/generic_set_int_direct/ir/c/feng.c"
-    assert_contains "generic_set_int_direct" "$cfile" "Set__G__i32__put__from__i32"
-    assert_contains "generic_set_int_direct" "$cfile" "Set__G__i32__get__from__void"
+    assert_contains "generic_set_int_direct" "$cfile" "Set__G__i64__put__from__i64"
+    assert_contains "generic_set_int_direct" "$cfile" "Set__G__i64__get__from__void"
     assert_not_contains "generic_set_int_direct" "$cfile" "feng_scalar_box_new_"
     assert_not_contains "generic_set_int_direct" "$cfile" "FengSpecThunk__"
     assert_not_contains "generic_set_int_direct" "$cfile" "FengSpecSlotWitness__"

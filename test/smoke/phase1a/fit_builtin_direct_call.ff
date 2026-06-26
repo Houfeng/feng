@@ -3,8 +3,8 @@ module feng.smoke;
 @cdecl("libc")
 extern func puts(msg: string*): int;
 
-fit i32 {
-  func double(): i32 {
+fit int {
+  func double(): int {
     return self * 2;
   }
 }
