@@ -277,16 +277,16 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [x] 更新涉及到 feng_runtime_contract 的 C 测试代码，保障测试和实现对应一致
 - [x] 等待人工 Review，并等待下一步指令
 - [x] 先将 Task 6 实施完成，并等待下一步指令
-- [ ] Array 的 `length()`、`at()`、`indexOf()`、`clone()` 等方法的 `i64` 改为 `int`（含 `feng_array_slice` 的 `start`/`length` 参数），及所有级联调用代码更新
-- [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
-- [ ] String 的 `length()` 等方法的 `i64` 改为 `int`（含 `feng_string_*` 系列参数），及所有级联调用代码更新
-- [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
-- [ ] Map 的 size 改为 int 类型，及所有级联代码更新
-- [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
-- [ ] List 的 size 改为 int 类型，及所有级联代码更新
-- [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
-- [ ] Set 的 size 改为 int 类型，及所有级联代码更新
-- [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
+- [x] Array 的 `length()`、`at()`、`indexOf()`、`clone()` 等方法的 `i64` 改为 `int`（含 `feng_array_slice` 的 `start`/`length` 参数），及所有级联调用代码更新
+- [x] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
+- [x] String 的 `length()` 等方法的 `i64` 改为 `int`（含 `feng_string_*` 系列参数），及所有级联调用代码更新
+- [x] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
+- [x] Map 的 size 改为 int 类型，及所有级联代码更新
+- [x] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
+- [x] List 的 size 改为 int 类型，及所有级联代码更新
+- [x] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
+- [x] Set 的 size 改为 int 类型，及所有级联代码更新
+- [x] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
 
 ### Task 6：`int` 改为平台相关别名
 

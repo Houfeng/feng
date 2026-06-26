@@ -4,7 +4,7 @@ import std.collections;
 
 type ListExample<T> {
   let items: List<T>;
-  func count(): i32 {
+  func count(): int {
     return self.items.size();
   }
 }
