@@ -253,7 +253,12 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [x] 集中别名表新增 `uint` → `u32`（32 位）或 `u64`（64 位）；仅需修改 `canonical_builtin_type_name()`，codegen 等下游阶段无需变更
 - [x] 全量回归测试
 
-### Task 5：迁移现有 `int` 用法为 `i32`（纯代码迁移，无行为变更）
+### 已废弃任务
+
+此为 旧 Task 5，已废弃（原本的处理也已 Revert）
+
+```md
+### 旧 Task 5：迁移现有 `int` 用法为 `i32`（纯代码迁移，无行为变更）
 
 > 消除代码对 `int` 当前语义（固定 32 位）的依赖。Task 6 改变 `int` 含义后，已有代码不受影响。
 
@@ -261,6 +266,23 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [ ] 迁移兼容性测试（`fcts/`）中使用 `int` 的代码为 `i32`
 - [ ] 迁移编译器测试（`test/`）中使用 `int` 的代码为 `i32`
 - [ ] 全量回归测试
+```
+
+### Task 5：std 中的数组长度、字符串长度、容器 size 改为 `int` (后续将和平台位宽一致)
+
+- [ ] feng_runtime_contract.inc 中 Array/String 相关 API 的 `int64_t` 改为 `intptr_t`（含 `feng_array_length_i64`、`feng_array_slice`、`feng_string_utf8_length`、`feng_string_from_utf8_bytes`、`feng_string_slice`、`feng_string_slice_bytes`、`feng_string_range_equal`）
+- [ ] 更新受 feng_runtime_contract.inc 变更影响的 c 实现
+- [ ] feng_array_length_i64 改名为 feng_array_get_length
+- [ ] Array 的 `length()`、`at()`、`indexOf()`、`clone()` 等方法的 `i64` 改为 `int`（含 `feng_array_slice` 的 `start`/`length` 参数），及所有级联调用代码更新
+- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等下一步指令
+- [ ] String 的 `length()` 等方法的 `i64` 改为 `int`（含 `feng_string_*` 系列参数），及所有级联调用代码更新
+- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等下一步指令
+- [ ] Map 的 size 改为 int 类型，及所有级联代码更新
+- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等下一步指令
+- [ ] List 的 size 改为 int 类型，及所有级联代码更新
+- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等下一步指令
+- [ ] Set 的 size 改为 int 类型，及所有级联代码更新
+- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等下一步指令
 
 ### Task 6：`int` 改为平台相关别名
 
@@ -270,7 +292,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [ ] 更新 `docs/feng-builtin-type.md`：`int` 映射规则改为平台相关，整数字面量默认类型描述更新（当前为"推导为 `int`（即 `i32`）"，`int` 平台相关后需同步更新描述）
 - [ ] `canonical_builtin_type_name()` 中 `int` 映射从固定 `i32` 改为平台相关：32 位 → `i32`，64 位 → `i64`
 - [ ] 全量回归测试
-- [ ] 通过后将当前任务 TODO 标记为完成
+- [ ] 通过后将当前任务 TODO 标记为完成，等下一步指令
 
 ### Task 7：语义优化——识别应使用平台相关 `int` 的 `i32` 用法
 
@@ -279,7 +301,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [ ] 审计 `std/` 中 Task 5 迁移的 `i32`，将应平台相关的改回 `int`
 - [ ] 审计 `fcts/` 中 Task 5 迁移的 `i32`，将应平台相关的改回 `int`
 - [ ] 全量回归测试
-- [ ] 更新本文件状态为"已实施"
+- [ ] 更新本文件状态为"已实施"，等下一步指令
 
 ## 9. 决策记录
 
