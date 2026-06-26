@@ -262,10 +262,10 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 > 消除代码对 `int` 当前语义（固定 32 位）的依赖。Task 6 改变 `int` 含义后，已有代码不受影响。
 
-- [ ] 迁移标准库（`std/`）中使用 `int` 的代码为 `i32`
-- [ ] 迁移兼容性测试（`fcts/`）中使用 `int` 的代码为 `i32`
-- [ ] 迁移编译器测试（`test/`）中使用 `int` 的代码为 `i32`
-- [ ] 全量回归测试
+- 迁移标准库（`std/`）中使用 `int` 的代码为 `i32`
+- 迁移兼容性测试（`fcts/`）中使用 `int` 的代码为 `i32`
+- 迁移编译器测试（`test/`）中使用 `int` 的代码为 `i32`
+- 全量回归测试
 ```
 
 ### Task 5：std 中的数组长度、字符串长度、容器 size 改为 `int` (后续将和平台位宽一致)
