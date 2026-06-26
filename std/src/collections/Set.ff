@@ -14,26 +14,26 @@ open type Set<K: Hashable<K >> {
 	seal var states: i32[!];
 	seal var hashes: u64[!];
 	seal var keys: K[!];
-	seal var size: i32;
-	seal var used: i32;
-	seal var capacity: i32;
+	seal var size: int;
+	seal var used: int;
+	seal var capacity: int;
 	seal var missingKey: K;
 
-	seal func nextSlot(slot: i32): i32 {
-		let next: i32 = slot + 1;
+	seal func nextSlot(slot: int): int {
+		let next: int = slot + 1;
 		if next >= self.capacity {
 			return 0;
 		}
 		return next;
 	}
 
-	seal func slotForHash(hash: u64): i32 {
-		return (i32)(hash % (u64)self.capacity);
+	seal func slotForHash(hash: u64): int {
+		return (int)(hash % (u64)self.capacity);
 	}
 
 	seal func insertRehashed(hash: u64, key: K) {
-		var slot: i32 = self.slotForHash(hash);
-		for var step: i32 = 0; step < self.capacity; step = step + 1 {
+		var slot: int = self.slotForHash(hash);
+		for var step: int = 0; step < self.capacity; step = step + 1 {
 			if self.states[slot] != 1 {
 				self.states[slot] = 1;
 				self.hashes[slot] = hash;
@@ -46,18 +46,18 @@ open type Set<K: Hashable<K >> {
 		}
 	}
 
-	seal func rehash(newCapacity: i32) {
+	seal func rehash(newCapacity: int) {
 		let oldStates: i32[!] = self.states;
 		let oldHashes: u64[!] = self.hashes;
 		let oldKeys: K[!] = self.keys;
-		let oldCapacity: i32 = self.capacity;
+		let oldCapacity: int = self.capacity;
 		self.states = i32[: newCapacity];
 		self.hashes = u64[: newCapacity];
 		self.keys = K[: newCapacity];
 		self.capacity = newCapacity;
 		self.size = 0;
 		self.used = 0;
-		for var i: i32 = 0; i < oldCapacity; i = i + 1 {
+		for var i: int = 0; i < oldCapacity; i = i + 1 {
 			if oldStates[i] == 1 {
 				self.insertRehashed(oldHashes[i], oldKeys[i]);
 			}
@@ -83,7 +83,7 @@ open type Set<K: Hashable<K >> {
 			return;
 		}
 		if self.size * 10 <= self.capacity * 2 {
-			var newCapacity: i32 = self.capacity / 2;
+			var newCapacity: int = self.capacity / 2;
 			if newCapacity < 8 {
 				newCapacity = 8;
 			}
@@ -95,12 +95,12 @@ open type Set<K: Hashable<K >> {
 		}
 	}
 
-	seal func findSlot(key: K, keyHash: u64): i32 {
+	seal func findSlot(key: K, keyHash: u64): int {
 		if self.capacity == 0 {
 			return -1;
 		}
-		var slot: i32 = self.slotForHash(keyHash);
-		for var step: i32 = 0; step < self.capacity; step = step + 1 {
+		var slot: int = self.slotForHash(keyHash);
+		for var step: int = 0; step < self.capacity; step = step + 1 {
 			let state: i32 = self.states[slot];
 			if state == 0 {
 				return -1;
@@ -125,12 +125,12 @@ open type Set<K: Hashable<K >> {
 	open func add(key: K) {
 		self.ensureWritableForInsert();
 		let keyHash: u64 = key.hash();
-		var slot: i32 = self.slotForHash(keyHash);
-		var firstDeleted: i32 = -1;
-		for var step: i32 = 0; step < self.capacity; step = step + 1 {
+		var slot: int = self.slotForHash(keyHash);
+		var firstDeleted: int = -1;
+		for var step: int = 0; step < self.capacity; step = step + 1 {
 			let state: i32 = self.states[slot];
 			if state == 0 {
-				var target: i32 = slot;
+				var target: int = slot;
 				if firstDeleted >= 0 {
 					target = firstDeleted;
 				} else {
@@ -168,7 +168,7 @@ open type Set<K: Hashable<K >> {
 	 */
 	open func remove(key: K) {
 		let keyHash: u64 = key.hash();
-		let slot: i32 = self.findSlot(key, keyHash);
+		let slot: int = self.findSlot(key, keyHash);
 		if slot < 0 {
 			return;
 		}
@@ -193,7 +193,7 @@ open type Set<K: Hashable<K >> {
 	 * Returns the number of occupied elements in the set.
 	 * @return number of elements
 	 */
-	open func count(): i32 {
+	open func count(): int {
 		return self.size;
 	}
 
@@ -203,8 +203,8 @@ open type Set<K: Hashable<K >> {
 	 */
 	open func entries(): K[] {
 		let items: K[!] = K[: self.size];
-		var outputIndex: i32 = 0;
-		for var i: i32 = 0; i < self.capacity; i = i + 1 {
+		var outputIndex: int = 0;
+		for var i: int = 0; i < self.capacity; i = i + 1 {
 			if self.states[i] == 1 {
 				items[outputIndex] = self.keys[i];
 				outputIndex = outputIndex + 1;

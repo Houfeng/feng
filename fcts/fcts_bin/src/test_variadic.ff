@@ -8,8 +8,8 @@ import std.collections;
 func join_strings(sep: string, parts: string...): string {
   var result = "";
   let length = parts.length();
-  for var i: i64 = (i64)0; i < length; i += (i64)1 {
-    if i > (i64)0 {
+  for var i: int = (int)0; i < length; i += (int)1 {
+    if i > (int)0 {
       result = result + sep;
     }
     result = result + parts[i];
@@ -19,7 +19,7 @@ func join_strings(sep: string, parts: string...): string {
 
 // 仅变长参数
 func count_args(items: int...): int {
-  return (int)items.length();
+  return items.length();
 }
 
 // callable-form spec 中的变长参数

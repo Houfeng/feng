@@ -12,35 +12,35 @@ open module std.collections;
  */
 open type List<T> {
   seal var items: T[!];
-  seal var count: i32;
+  seal var count: int;
   seal var missing: T;
 
   seal func grow() {
-    if self.items.length() == (i64)0 {
+    if self.items.length() == (int)0 {
       self.items = T[:8];
       return;
     }
-    let newCapacity: i32 = (i32)self.items.length() * 2;
+    let newCapacity: int = self.items.length() * 2;
     let newItems: T[!] = T[:newCapacity];
-    for var i: i32 = 0; i < self.count; i = i + 1 {
+    for var i: int = 0; i < self.count; i = i + 1 {
       newItems[i] = self.items[i];
     }
     self.items = newItems;
   }
 
   seal func shrink() {
-    if self.items.length() <= (i64)8 {
+    if self.items.length() <= (int)8 {
       return;
     }
-    if (i64)self.count * (i64)4 > self.items.length() {
+    if self.count * 4 > self.items.length() {
       return;
     }
-    var newCapacity: i32 = (i32)self.items.length() / 2;
+    var newCapacity: int = self.items.length() / 2;
     if newCapacity < 8 {
       newCapacity = 8;
     }
     let newItems: T[!] = T[:newCapacity];
-    for var i: i32 = 0; i < self.count; i = i + 1 {
+    for var i: int = 0; i < self.count; i = i + 1 {
       newItems[i] = self.items[i];
     }
     self.items = newItems;
@@ -50,13 +50,13 @@ open type List<T> {
 
   open func List(items: T[!]) {
     self.items = items;
-    self.count = (i32)(items.length());
+    self.count = items.length();
   }
 
   open func List(items: T[]) {
-    let length = (i32)items.length();
+    let length = items.length();
     self.items = T[:length];
-    for var i: i32 = 0; i < length; i = i + 1 {
+    for var i: int = 0; i < length; i = i + 1 {
       self.items[i] = items[i];
     }
     self.count = length;
@@ -67,7 +67,7 @@ open type List<T> {
    * @param item - the element to append
    */
   open func add(item: T) {
-    if (i64)self.count >= self.items.length() {
+    if self.count >= self.items.length() {
       self.grow();
     }
     self.items[self.count] = item;
@@ -78,7 +78,7 @@ open type List<T> {
    * Returns the element at position `index`.
    * @param index - zero-based position
    */
-  open func get(index: i32): T {
+  open func get(index: int): T {
     return self.items[index];
   }
 
@@ -87,7 +87,7 @@ open type List<T> {
    * @param index - zero-based position
    * @param item - new value to store
    */
-  open func set(index: i32, item: T) {
+  open func set(index: int, item: T) {
     self.items[index] = item;
   }
 
@@ -95,8 +95,8 @@ open type List<T> {
    * Removes the element at position `index`, shifting subsequent elements left.
    * @param index - zero-based position of the element to remove
    */
-  open func remove(index: i32) {
-    for var i: i32 = index; i < self.count - 1; i = i + 1 {
+  open func remove(index: int) {
+    for var i: int = index; i < self.count - 1; i = i + 1 {
       self.items[i] = self.items[i + 1];
     }
     self.items[self.count - 1] = self.missing;
@@ -115,7 +115,7 @@ open type List<T> {
   /**
    * Returns the number of elements in the list.
    */
-  open func size(): i32 {
+  open func size(): int {
     return self.count;
   }
 
@@ -125,7 +125,7 @@ open type List<T> {
    */
   open func entries(): T[] {
     let result: T[!] = T[:self.count];
-    for var i: i32 = 0; i < self.count; i = i + 1 {
+    for var i: int = 0; i < self.count; i = i + 1 {
       result[i] = self.items[i];
     }
     return (T[])result;
@@ -147,11 +147,11 @@ open type List<T> {
  */
 open type ListIterator<T> {
   seal let items: T[!];
-  seal let size: i32;
+  seal let size: int;
   seal let missing: T;
-  seal var index: i32;
+  seal var index: int;
 
-  open func ListIterator(items: T[!], size: i32, missing: T) {
+  open func ListIterator(items: T[!], size: int, missing: T) {
     self.items = items;
     self.size = size;
     self.missing = missing;

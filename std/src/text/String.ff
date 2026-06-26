@@ -10,19 +10,19 @@ extern func uc_toupper(uc: u32): u32;
 extern func uc_tolower(uc: u32): u32;
 
 @runtime
-extern func feng_string_utf8_length(value: string): i64;
+extern func feng_string_utf8_length(value: string): int;
 
 @runtime
 extern func feng_string_to_utf8_bytes(value: string): byte[];
 
 @runtime
-extern func feng_string_from_utf8_bytes(value: byte[], length: i64): string;
+extern func feng_string_from_utf8_bytes(value: byte[], length: int): string;
 
 @runtime
-extern func feng_string_slice(value: string, start: i64, length: i64): string;
+extern func feng_string_slice(value: string, start: int, length: int): string;
 
 @runtime
-extern func feng_string_slice_bytes(value: string, start: i64, length: i64): byte[];
+extern func feng_string_slice_bytes(value: string, start: int, length: int): byte[];
 
 @runtime
 extern func feng_pointer_is_null(ptr: string*): bool;
@@ -31,10 +31,10 @@ extern func feng_pointer_is_null(ptr: string*): bool;
 extern func feng_pointer_equal(a: string*, b: string*): bool;
 
 @runtime
-extern func feng_pointer_move(ptr: string*, offset: i64): string*;
+extern func feng_pointer_move(ptr: string*, offset: int): string*;
 
 @runtime
-extern func feng_pointer_diff(a: string*, b: string*): i64;
+extern func feng_pointer_diff(a: string*, b: string*): int;
 
 /**
  * Extends `string` with standard UTF-8 operations.
@@ -63,7 +63,7 @@ open fit string: Display {
    * @param length - number of bytes to copy
    * @return string containing the copied bytes
    */
-  open static func fromUtf8Bytes(bytes: byte[], length: i64): string {
+  open static func fromUtf8Bytes(bytes: byte[], length: int): string {
     return feng_string_from_utf8_bytes(bytes, length);
   }
 
@@ -71,7 +71,7 @@ open fit string: Display {
    * Returns the UTF-8 byte length of this string.
    * @return number of bytes in this string
    */
-  open func length(): i64 {
+  open func length(): int {
     return feng_string_utf8_length(self);
   }
 
@@ -81,14 +81,14 @@ open fit string: Display {
    * @param index - zero-based byte offset
    * @return length-1 substring containing the byte at `index`
    */
-  open func at(index: i64): string {
-    if index < (i64)0 {
+  open func at(index: int): string {
+    if index < (int)0 {
       throw "String index out of bounds";
     }
     if index >= self.length() {
       throw "String index out of bounds";
     }
-    return feng_string_slice(self, index, (i64)1);
+    return feng_string_slice(self, index, (int)1);
   }
 
   /**
@@ -96,7 +96,7 @@ open fit string: Display {
    * @return new string containing all bytes of this string
    */
   open func clone(): string {
-    return self.clone((i64)0, self.length());
+    return self.clone((int)0, self.length());
   }
 
   /**
@@ -105,8 +105,8 @@ open fit string: Display {
    * @param end - zero-based exclusive end byte offset
    * @return new string containing bytes from `start` to `end`
    */
-  open func clone(start: i64, end: i64): string {
-    if start < (i64)0 {
+  open func clone(start: int, end: int): string {
+    if start < (int)0 {
       throw "String clone start out of bounds";
     }
     if end < start {
@@ -122,8 +122,8 @@ open fit string: Display {
 
 @runtime
 extern func feng_string_range_equal(
-  a: string, a_start: i64, a_end: i64,
-  b: string, b_start: i64, b_end: i64
+  a: string, a_start: int, a_end: int,
+  b: string, b_start: int, b_end: int
 ): bool;
 
 /**
@@ -162,8 +162,8 @@ open fit string {
    * @param target - substring to search for
    * @return byte offset or -1
    */
-  open func indexOf(target: string): i64 {
-    return self.indexOf(target, (i64)0);
+  open func indexOf(target: string): int {
+    return self.indexOf(target, (int)0);
   }
 
   /**
@@ -172,27 +172,27 @@ open fit string {
    * @param from - byte offset to start searching from
    * @return byte offset or -1
    */
-  open func indexOf(target: string, from: i64): i64 {
+  open func indexOf(target: string, from: int): int {
     let tlen = target.length();
-    if tlen == (i64)0 {
+    if tlen == (int)0 {
       return from;
     }
     let slen = self.length();
-    if from < (i64)0 {
+    if from < (int)0 {
       throw "String indexOf from out of bounds";
     }
     if from + tlen > slen {
-      return (i64)-1;
+      return (int)-1;
     }
     let limit = slen - tlen;
     var i = from;
     while i <= limit {
-      if feng_string_range_equal(self, i, i + tlen, target, (i64)0, tlen) {
+      if feng_string_range_equal(self, i, i + tlen, target, (int)0, tlen) {
         return i;
       }
-      i += (i64)1;
+      i += (int)1;
     }
-    return (i64)-1;
+    return (int)-1;
   }
 
   /**
@@ -200,23 +200,23 @@ open fit string {
    * @param target - substring to search for
    * @return byte offset or -1
    */
-  open func lastIndexOf(target: string): i64 {
+  open func lastIndexOf(target: string): int {
     let tlen = target.length();
-    if tlen == (i64)0 {
+    if tlen == (int)0 {
       return self.length();
     }
     let slen = self.length();
     if tlen > slen {
-      return (i64)-1;
+      return (int)-1;
     }
     var i = slen - tlen;
-    while i >= (i64)0 {
-      if feng_string_range_equal(self, i, i + tlen, target, (i64)0, tlen) {
+    while i >= (int)0 {
+      if feng_string_range_equal(self, i, i + tlen, target, (int)0, tlen) {
         return i;
       }
-      i -= (i64)1;
+      i -= (int)1;
     }
-    return (i64)-1;
+    return (int)-1;
   }
 
   /**
@@ -225,7 +225,7 @@ open fit string {
    * @return true if found
    */
   open func contains(target: string): bool {
-    return self.indexOf(target) >= (i64)0;
+    return self.indexOf(target) >= (int)0;
   }
 
   /**
@@ -235,13 +235,13 @@ open fit string {
    */
   open func startsWith(prefix: string): bool {
     let plen = prefix.length();
-    if plen == (i64)0 {
+    if plen == (int)0 {
       return true;
     }
     if plen > self.length() {
       return false;
     }
-    return feng_string_range_equal(self, (i64)0, plen, prefix, (i64)0, plen);
+    return feng_string_range_equal(self, (int)0, plen, prefix, (int)0, plen);
   }
 
   /**
@@ -251,14 +251,14 @@ open fit string {
    */
   open func endsWith(suffix: string): bool {
     let slen = suffix.length();
-    if slen == (i64)0 {
+    if slen == (int)0 {
       return true;
     }
     let len = self.length();
     if slen > len {
       return false;
     }
-    return feng_string_range_equal(self, len - slen, len, suffix, (i64)0, slen);
+    return feng_string_range_equal(self, len - slen, len, suffix, (int)0, slen);
   }
 
   /**
@@ -269,14 +269,14 @@ open fit string {
    */
   open func replace(old: string, replacement: string): string {
     let olen = old.length();
-    if olen == (i64)0 {
+    if olen == (int)0 {
       return self.clone();
     }
     let slen = self.length();
     var result = "";
-    var pos: i64 = 0;
+    var pos: int = 0;
     var found = self.indexOf(old, pos);
-    while found >= (i64)0 {
+    while found >= (int)0 {
       if found > pos {
         result = result + self.clone(pos, found);
       }
@@ -284,7 +284,7 @@ open fit string {
       pos = found + olen;
       found = self.indexOf(old, pos);
     }
-    if pos == (i64)0 {
+    if pos == (int)0 {
       return self.clone();
     }
     if pos < slen {
@@ -299,7 +299,7 @@ open fit string {
    */
   open func trimStart(): string {
     let len = self.length();
-    if len == (i64)0 {
+    if len == (int)0 {
       return "";
     }
     let data: string* = &self;
@@ -329,7 +329,7 @@ open fit string {
    */
   open func trimEnd(): string {
     let len = self.length();
-    if len == (i64)0 {
+    if len == (int)0 {
       return "";
     }
     let data: string* = &self;
@@ -346,10 +346,10 @@ open fit string {
       cursor = prev;
     }
     let trimmed = feng_pointer_diff(cursor, data);
-    if trimmed == (i64)0 {
+    if trimmed == (int)0 {
       return "";
     }
-    return self.clone((i64)0, trimmed);
+    return self.clone((int)0, trimmed);
   }
 
   /**
@@ -393,7 +393,7 @@ open fit string {
    * @return true if length is 0
    */
   open func isEmpty(): bool {
-    return self.length() == (i64)0;
+    return self.length() == (int)0;
   }
 
   /**
@@ -409,18 +409,18 @@ open fit string {
    * @param count - number of repetitions (must be >= 0)
    * @return repeated string
    */
-  open func repeat(count: i64): string {
-    if count < (i64)0 {
+  open func repeat(count: int): string {
+    if count < (int)0 {
       throw "String repeat count must be non-negative";
     }
-    if count == (i64)0 || self.length() == (i64)0 {
+    if count == (int)0 || self.length() == (int)0 {
       return "";
     }
     var result = "";
-    var i: i64 = 0;
+    var i: int = 0;
     while i < count {
       result = result + self;
-      i += (i64)1;
+      i += (int)1;
     }
     return result;
   }
@@ -433,14 +433,14 @@ open fit string {
   open func split(separator: string): string[] {
     let parts = List<string>();
     let sepLen = separator.length();
-    if sepLen == (i64)0 {
+    if sepLen == (int)0 {
       parts.add(self.clone());
       return parts.entries();
     }
     let slen = self.length();
-    var pos: i64 = 0;
+    var pos: int = 0;
     var found = self.indexOf(separator, pos);
-    while found >= (i64)0 {
+    while found >= (int)0 {
       if found > pos {
         parts.add(self.clone(pos, found));
       } else {
@@ -467,14 +467,14 @@ open fit string {
    */
   open static func join(separator: string, parts: string[]): string {
     let len = parts.length();
-    if len == (i64)0 {
+    if len == (int)0 {
       return "";
     }
     var result = parts[0];
-    var i: i64 = 1;
+    var i: int = 1;
     while i < len {
       result = result + separator + parts[i];
-      i += (i64)1;
+      i += (int)1;
     }
     return result;
   }
@@ -485,7 +485,7 @@ open fit string {
    */
   open func toUpperCase(): string {
     let len = self.length();
-    if len == (i64)0 {
+    if len == (int)0 {
       return "";
     }
     let data: string* = &self;
@@ -511,7 +511,7 @@ open fit string {
    */
   open func toLowerCase(): string {
     let len = self.length();
-    if len == (i64)0 {
+    if len == (int)0 {
       return "";
     }
     let data: string* = &self;
@@ -538,21 +538,21 @@ open fit string {
    * @param pad - string used for padding (repeated/truncated as needed)
    * @return padded string
    */
-  open func padStart(targetLength: i64, pad: string): string {
+  open func padStart(targetLength: int, pad: string): string {
     let len = self.length();
     if len >= targetLength {
       return self.clone();
     }
     let padLen = pad.length();
-    if padLen == (i64)0 {
+    if padLen == (int)0 {
       return self.clone();
     }
     let needed = targetLength - len;
     let fullRepeats = needed / padLen;
     let remainder = needed - fullRepeats * padLen;
     var padding = pad.repeat(fullRepeats);
-    if remainder > (i64)0 {
-      padding = padding + pad.clone((i64)0, remainder);
+    if remainder > (int)0 {
+      padding = padding + pad.clone((int)0, remainder);
     }
     return padding + self;
   }
@@ -564,21 +564,21 @@ open fit string {
    * @param pad - string used for padding (repeated/truncated as needed)
    * @return padded string
    */
-  open func padEnd(targetLength: i64, pad: string): string {
+  open func padEnd(targetLength: int, pad: string): string {
     let len = self.length();
     if len >= targetLength {
       return self.clone();
     }
     let padLen = pad.length();
-    if padLen == (i64)0 {
+    if padLen == (int)0 {
       return self.clone();
     }
     let needed = targetLength - len;
     let fullRepeats = needed / padLen;
     let remainder = needed - fullRepeats * padLen;
     var padding = pad.repeat(fullRepeats);
-    if remainder > (i64)0 {
-      padding = padding + pad.clone((i64)0, remainder);
+    if remainder > (int)0 {
+      padding = padding + pad.clone((int)0, remainder);
     }
     return self + padding;
   }
@@ -590,8 +590,8 @@ open fit string {
  */
 open type StringByteIterator {
   seal let text: string;
-  seal let len: i64;
-  seal var offset: i64;
+  seal let len: int;
+  seal var offset: int;
 
   open func StringByteIterator(text: string) {
     self.text = text;
@@ -609,7 +609,7 @@ open type StringByteIterator {
       return (false, "");
     }
     let ch = self.text.at(self.offset);
-    self.offset += (i64)1;
+    self.offset += (int)1;
     return (true, ch);
   }
 }
@@ -644,10 +644,10 @@ open fit string: Hashable<string> {
     let bytes = self.toBytes();
     var h: u64 = (u64)5381;
     let len = bytes.length();
-    var i: i64 = 0;
+    var i: int = 0;
     while i < len {
-      h = h * (u64)33 + (u64)bytes[(i32)i];
-      i += (i64)1;
+      h = h * (u64)33 + (u64)bytes[i];
+      i += (int)1;
     }
     return h;
   }

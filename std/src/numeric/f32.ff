@@ -20,13 +20,13 @@ open fit f32: Display {
    * @return decimal string
    */
   open func toString(): string {
-    let buf: byte[!] = byte[:(i64)32];
-    let fmt: byte[!] = byte[:(i64)3];
+    let buf: byte[!] = byte[:(int)32];
+    let fmt: byte[!] = byte[:(int)3];
     fmt[0] = (byte)37;  // '%'
     fmt[1] = (byte)103; // 'g'
     fmt[2] = (byte)0;   // '\0'
     let len = snprintf_f32(&buf, (i64)32, &fmt, self);
-    let result: byte[] = ((byte[])buf).clone((i64)0, (i64)len);
+    let result: byte[] = ((byte[])buf).clone((int)0, (int)len);
     return string.fromUtf8Bytes(result);
   }
 
@@ -40,7 +40,7 @@ open fit f32: Display {
    */
   open static func parse(text: string): f32 {
     let len = text.length();
-    if len == (i64)0 {
+    if len == (int)0 {
       throw "Invalid f32 string: empty";
     }
     var endRaw: i64 = 0;

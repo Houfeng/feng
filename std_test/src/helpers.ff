@@ -4,16 +4,16 @@ import std.test;
 import std.text;
 
 @cdecl("libc")
-extern func write(fd: int, buf: string*, count: i64): i64;
+extern func write(fd: i32, buf: string*, count: int): int;
 
 @cdecl("libc")
-extern func pipe(fds: int*): int;
+extern func pipe(fds: i32*): i32;
 
 @cdecl("libc")
-extern func dup2(from: int, to: int): int;
+extern func dup2(from: i32, to: i32): i32;
 
 @cdecl("libc")
-extern func close(fd: int): int;
+extern func close(fd: i32): i32;
 
 @cdecl("libc")
 extern func exit(code: int): void;
@@ -21,8 +21,8 @@ extern func exit(code: int): void;
 func logLine(text: string) {
   let newline = "\n";
 
-  write(2, &text, text.length());
-  write(2, &newline, newline.length());
+  write((i32)2, &text, text.length());
+  write((i32)2, &newline, newline.length());
 }
 
 func failNow(name: string) {
@@ -35,9 +35,9 @@ open func check(cond: bool, name: string) {
 }
 
 open func replaceStdin(text: string) {
-  let fds: int[!] = int[: (i64)2];
+  let fds: i32[!] = i32[: (int)2];
 
-  if pipe(&fds) != 0 {
+  if pipe(&fds) != (i32)0 {
     failNow("harness/stdin-pipe");
   }
   if write(fds[1], &text, text.length()) != text.length() {
@@ -45,15 +45,15 @@ open func replaceStdin(text: string) {
     close(fds[1]);
     failNow("harness/stdin-write");
   }
-  if close(fds[1]) != 0 {
+  if close(fds[1]) != (i32)0 {
     close(fds[0]);
     failNow("harness/stdin-close-write");
   }
-  if dup2(fds[0], 0) < 0 {
+  if dup2(fds[0], (i32)0) < (i32)0 {
     close(fds[0]);
     failNow("harness/stdin-dup2");
   }
-  if close(fds[0]) != 0 {
+  if close(fds[0]) != (i32)0 {
     failNow("harness/stdin-close-read");
   }
 }

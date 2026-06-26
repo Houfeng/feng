@@ -106,7 +106,7 @@ open type JsonArray: Display {
   /**
    * Returns the number of elements in this array.
    */
-  func size(): i32 {
+  func size(): int {
     return self.payload.size();
   }
 
@@ -115,7 +115,7 @@ open type JsonArray: Display {
    * @param index - zero-based position
    * @return the element as JsonValue
    */
-  func get(index: i32): JsonValue {
+  func get(index: int): JsonValue {
     return self.payload.get(index);
   }
 
@@ -129,7 +129,7 @@ open type JsonArray: Display {
       return "[]";
     }
     let parts: string[!] = string[:size];
-    for var i: i32 = 0; i < size; i = i + 1 {
+    for var i: int = 0; i < size; i = i + 1 {
       let item = self.payload.get(i);
       parts[i] = Json.stringify(item);
     }
@@ -200,17 +200,17 @@ open type JsonObject: Display {
    */
   func toJsonString(): string {
     let entries = self.payload.entries();
-    if entries.length() == (i64)0 {
+    if entries.length() == (int)0 {
       return "{}";
     }
     let len = entries.length();
     let parts: string[!] = string[:len];
-    var idx: i64 = 0;
+    var idx: int = 0;
     for let entry in entries {
       let key = entry.item1.toJsonString();
       let val = Json.stringify(entry.item2);
       parts[idx] = key + ":" + val;
-      idx += (i64)1;
+      idx += (int)1;
     }
     return "{" + string.join(",", (string[])parts) + "}";
   }

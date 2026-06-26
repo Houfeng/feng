@@ -15,12 +15,12 @@ open let separator = "/";
  */
 open func normalize(path: string): string {
   let len = path.length();
-  if len == (i64)0 {
+  if len == (int)0 {
     return ".";
   }
 
-  let isAbs = path.at((i64)0) == separator;
-  let hasTrailingSlash = len > (i64)1 && path.at(len - (i64)1) == separator;
+  let isAbs = path.at((int)0) == separator;
+  let hasTrailingSlash = len > (int)1 && path.at(len - (int)1) == separator;
 
   // Split into segments by separator
   let segments = path.split(separator);
@@ -29,7 +29,7 @@ open func normalize(path: string): string {
   // Collect normalized segments
   let stack = List<string>();
 
-  for var i: i64 = (i64)0; i < segCount; i += (i64)1 {
+  for var i: int = 0; i < segCount; i += (int)1 {
     let segment = segments[i];
 
     // Skip empty segments (from consecutive separators) and current dir "."
@@ -39,9 +39,9 @@ open func normalize(path: string): string {
 
     if segment == ".." {
       // For absolute paths or when stack has real segments (not ".."), pop
-      if isAbs || ((i64)stack.size() > (i64)0 && stack.get(stack.size() - (i32)1) != "..") {
-        if (i64)stack.size() > (i64)0 {
-          stack.remove(stack.size() - (i32)1);
+      if isAbs || (stack.size() > (int)0 && stack.get(stack.size() - (int)1) != "..") {
+        if stack.size() > (int)0 {
+          stack.remove(stack.size() - (int)1);
         }
       } else {
         // For relative paths with no parent to pop, keep ".."
@@ -61,7 +61,7 @@ open func normalize(path: string): string {
     result = separator;
   }
 
-  if resultLen > (i64)0 {
+  if resultLen > (int)0 {
     result = result + string.join(separator, resultParts);
   } else if !isAbs {
     result = ".";
@@ -82,13 +82,13 @@ open func normalize(path: string): string {
  */
 open func join(paths: string...): string {
   let count = paths.length();
-  if count == (i64)0 {
+  if count == (int)0 {
     return "";
   }
 
-  var combined = paths[(i64)0];
-  for var i: i64 = (i64)1; i < count; i += (i64)1 {
-    if paths[i].length() > (i64)0 && paths[i].at((i64)0) == separator {
+  var combined = paths[(int)0];
+  for var i: int = (int)1; i < count; i += (int)1 {
+    if paths[i].length() > (int)0 && paths[i].at((int)0) == separator {
       // Absolute segment resets previous parts
       combined = paths[i];
     } else {
@@ -102,36 +102,36 @@ open func join(paths: string...): string {
 /**
  * Returns the directory portion of a path.
  * @param path - the source path
- * @return directory part of the path
+ * @return directory part of the string
  */
 open func dirname(path: string): string {
   let len = path.length();
-  if len == (i64)0 {
+  if len == (int)0 {
     return ".";
   }
 
   // Strip trailing separator (unless path is just the root separator)
   var effective = path;
   var effectiveLen = len;
-  if effectiveLen > (i64)1 && effective.at(effectiveLen - (i64)1) == separator {
-    effective = effective.clone((i64)0, effectiveLen - (i64)1);
+  if effectiveLen > (int)1 && effective.at(effectiveLen - (int)1) == separator {
+    effective = effective.clone((int)0, effectiveLen - (int)1);
     effectiveLen = effective.length();
   }
 
   // Find last separator
   let lastSlash = effective.lastIndexOf(separator);
 
-  if lastSlash < (i64)0 {
+  if lastSlash < (int)0 {
     // No separator found
     return ".";
   }
 
-  if lastSlash == (i64)0 {
+  if lastSlash == (int)0 {
     // Separator at position 0, dirname is root
     return separator;
   }
 
-  return effective.clone((i64)0, lastSlash);
+  return effective.clone((int)0, lastSlash);
 }
 
 /**
@@ -141,26 +141,26 @@ open func dirname(path: string): string {
  */
 open func basename(path: string): string {
   let len = path.length();
-  if len == (i64)0 {
+  if len == (int)0 {
     return "";
   }
 
   // Strip trailing separator (unless path is just the root separator)
   var effective = path;
   var effectiveLen = len;
-  if effectiveLen > (i64)1 && effective.at(effectiveLen - (i64)1) == separator {
-    effective = effective.clone((i64)0, effectiveLen - (i64)1);
+  if effectiveLen > (int)1 && effective.at(effectiveLen - (int)1) == separator {
+    effective = effective.clone((int)0, effectiveLen - (int)1);
     effectiveLen = effective.length();
   }
 
   // Find last separator
   let lastSlash = effective.lastIndexOf(separator);
 
-  if lastSlash < (i64)0 {
+  if lastSlash < (int)0 {
     return effective;
   }
 
-  return effective.clone(lastSlash + (i64)1, effectiveLen);
+  return effective.clone(lastSlash + (int)1, effectiveLen);
 }
 
 /**
@@ -172,7 +172,7 @@ open func extname(path: string): string {
   let base = basename(path);
   let baseLen = base.length();
 
-  if baseLen == (i64)0 {
+  if baseLen == (int)0 {
     return "";
   }
 
@@ -180,7 +180,7 @@ open func extname(path: string): string {
   let lastDot = base.lastIndexOf(".");
 
   // No "." found, "." at position 0 with no other ".", or only "." at start
-  if lastDot <= (i64)0 {
+  if lastDot <= (int)0 {
     return "";
   }
 
@@ -193,7 +193,7 @@ open func extname(path: string): string {
  * @return whether the path is absolute
  */
 open func isAbsolute(path: string): bool {
-  return path.length() > (i64)0 && path.at((i64)0) == separator;
+  return path.length() > (int)0 && path.at((int)0) == separator;
 }
 
 /**

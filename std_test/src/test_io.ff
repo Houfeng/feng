@@ -11,9 +11,9 @@ func readLine_reads_one_line_per_call() {
   let second = readLine();
   let third = readLine();
 
-  check(first.length() == (i64)5, "io/readLine-first-line-length");
-  check(second.length() == (i64)2, "io/readLine-second-line-length");
-  check(third.length() == (i64)0, "io/readLine-eof-empty-length");
+  check(first.length() == (int)5, "io/readLine-first-line-length");
+  check(second.length() == (int)2, "io/readLine-second-line-length");
+  check(third.length() == (int)0, "io/readLine-eof-empty-length");
 
   writeLine("__STD_IO_READLINE1__=" + first);
   writeLine("__STD_IO_READLINE2__=" + second);
@@ -24,7 +24,7 @@ func writeLine_writes_stdout_with_newline() {
   let marker = "__STD_IO_WRITELINE__";
   let written = writeLine(marker);
 
-  check(written == marker.length() + (i64)1, "io/writeLine-return");
+  check(written == (i64)marker.length() + (i64)1, "io/writeLine-return");
 }
 
 func format_returns_text() {
@@ -49,7 +49,7 @@ func println_writes_stdout_with_newline() {
   let marker = "__STD_IO_PRINTLN__";
   let written = println(marker);
 
-  check(written == marker.length() + (i64)1, "io/println-return");
+  check(written == (i64)marker.length() + (i64)1, "io/println-return");
 }
 
 open func run_io_tests() {

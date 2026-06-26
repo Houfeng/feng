@@ -17,15 +17,15 @@ open fit u32: Display {
       return "0";
     }
     var v: i64 = (i64)self;
-    let digits: byte[!] = byte[:(i64)10];
-    var pos: i32 = 9;
+    let digits: byte[!] = byte[:(int)10];
+    var pos: int = 9;
     while v > (i64)0 {
       digits[pos] = (byte)((i32)(v % (i64)10) + 48);
       v = v / (i64)10;
-      pos = pos - 1;
+      pos = pos - (int)1;
     }
-    let start = (i64)(pos + 1);
-    let result: byte[] = ((byte[])digits).clone(start, (i64)10);
+    let start = pos + (int)1;
+    let result: byte[] = ((byte[])digits).clone(start, (int)10);
     return string.fromUtf8Bytes(result);
   }
 
@@ -39,15 +39,15 @@ open fit u32: Display {
   open static func parse(text: string): u32 {
     let bytes = text.toBytes();
     let len = bytes.length();
-    if len == (i64)0 {
+    if len == (int)0 {
       throw "Invalid u32 string: empty";
     }
-    var pos: i64 = 0;
-    let first = bytes[(i64)0];
+    var pos: int = 0;
+    let first = bytes[(int)0];
     if first == (byte)45 {
       throw "Invalid u32 string: negative not allowed";
     } else if first == (byte)43 {
-      pos = (i64)1;
+      pos = (int)1;
     }
     if pos == len {
       throw "Invalid u32 string: no digits";
@@ -59,7 +59,7 @@ open fit u32: Display {
         throw "Invalid u32 string: invalid character";
       }
       result = result * (i64)10 + (i64)(b - (byte)48);
-      pos = pos + (i64)1;
+      pos = pos + (int)1;
     }
     if result > (i64)4294967295 {
       throw "Invalid u32 string: overflow";

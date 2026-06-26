@@ -11,10 +11,10 @@ import std.collections;
  */
 type JsonParser {
   seal let input: byte[];
-  seal let len: i32;
-  seal var pos: i32;
+  seal let len: int;
+  seal var pos: int;
 
-  seal func JsonParser(input: byte[], len: i32) {
+  seal func JsonParser(input: byte[], len: int) {
     self.input = input;
     self.len = len;
     self.pos = 0;
@@ -28,7 +28,7 @@ type JsonParser {
    */
   open static func parse(text: string): JsonValue {
     let bytes = text.toBytes();
-    let parser = JsonParser(bytes, (i32)bytes.length());
+    let parser = JsonParser(bytes, bytes.length());
     let value = parser.parseValue();
     parser.skipWhitespace();
     if parser.pos < parser.len {
@@ -124,12 +124,12 @@ type JsonParser {
         } else if esc == (byte)0x75 {
           let cp = self.parseUnicodeEscape();
           // Handle surrogate pairs
-          if cp >= (i32)0xD800 && cp <= (i32)0xDBFF {
+          if cp >= (int)0xD800 && cp <= (int)0xDBFF {
             if self.pos + 1 < self.len && self.input[self.pos] == (byte)0x5C && self.input[self.pos + 1] == (byte)0x75 {
               self.pos = self.pos + 2;
               let low = self.parseUnicodeEscape();
-              if low >= (i32)0xDC00 && low <= (i32)0xDFFF {
-                let full = (i32)0x10000 + ((cp - (i32)0xD800) * (i32)0x400) + (low - (i32)0xDC00);
+              if low >= (int)0xDC00 && low <= (int)0xDFFF {
+                let full = (int)0x10000 + ((cp - (int)0xD800) * (int)0x400) + (low - (int)0xDC00);
                 self.encodeUtf8(full, buf);
               } else {
                 throw "JSON: invalid low surrogate at position " + self.pos.toString();
@@ -150,12 +150,12 @@ type JsonParser {
     throw "JSON: unterminated string";
   }
 
-  seal func parseUnicodeEscape(): i32 {
+  seal func parseUnicodeEscape(): int {
     if self.pos + 4 > self.len {
       throw "JSON: incomplete unicode escape at position " + self.pos.toString();
     }
-    var result: i32 = 0;
-    for var i: i32 = 0; i < 4; i = i + 1 {
+    var result: int = 0;
+    for var i: int = 0; i < 4; i = i + 1 {
       let ch = self.advance();
       let digit = self.hexDigit(ch);
       if digit < 0 {
@@ -166,34 +166,34 @@ type JsonParser {
     return result;
   }
 
-  seal func hexDigit(ch: byte): i32 {
+  seal func hexDigit(ch: byte): int {
     if ch >= (byte)0x30 && ch <= (byte)0x39 {
-      return (i32)ch - (i32)0x30;
+      return (int)ch - (int)0x30;
     }
     if ch >= (byte)0x41 && ch <= (byte)0x46 {
-      return (i32)ch - (i32)0x41 + 10;
+      return (int)ch - (int)0x41 + 10;
     }
     if ch >= (byte)0x61 && ch <= (byte)0x66 {
-      return (i32)ch - (i32)0x61 + 10;
+      return (int)ch - (int)0x61 + 10;
     }
     return -1;
   }
 
-  seal func encodeUtf8(cp: i32, buf: List<byte>) {
-    if cp < (i32)0x80 {
+  seal func encodeUtf8(cp: int, buf: List<byte>) {
+    if cp < (int)0x80 {
       buf.add((byte)cp);
-    } else if cp < (i32)0x800 {
-      buf.add((byte)((i32)0xC0 | (cp >> 6)));
-      buf.add((byte)((i32)0x80 | (cp & (i32)0x3F)));
-    } else if cp < (i32)0x10000 {
-      buf.add((byte)((i32)0xE0 | (cp >> 12)));
-      buf.add((byte)((i32)0x80 | ((cp >> 6) & (i32)0x3F)));
-      buf.add((byte)((i32)0x80 | (cp & (i32)0x3F)));
+    } else if cp < (int)0x800 {
+      buf.add((byte)((int)0xC0 | (cp >> 6)));
+      buf.add((byte)((int)0x80 | (cp & (int)0x3F)));
+    } else if cp < (int)0x10000 {
+      buf.add((byte)((int)0xE0 | (cp >> 12)));
+      buf.add((byte)((int)0x80 | ((cp >> 6) & (int)0x3F)));
+      buf.add((byte)((int)0x80 | (cp & (int)0x3F)));
     } else {
-      buf.add((byte)((i32)0xF0 | (cp >> 18)));
-      buf.add((byte)((i32)0x80 | ((cp >> 12) & (i32)0x3F)));
-      buf.add((byte)((i32)0x80 | ((cp >> 6) & (i32)0x3F)));
-      buf.add((byte)((i32)0x80 | (cp & (i32)0x3F)));
+      buf.add((byte)((int)0xF0 | (cp >> 18)));
+      buf.add((byte)((int)0x80 | ((cp >> 12) & (int)0x3F)));
+      buf.add((byte)((int)0x80 | ((cp >> 6) & (int)0x3F)));
+      buf.add((byte)((int)0x80 | (cp & (int)0x3F)));
     }
   }
 
@@ -257,7 +257,7 @@ type JsonParser {
         }
       }
     }
-    let numBytes = self.input.clone((i64)start, (i64)self.pos);
+    let numBytes = self.input.clone(start, self.pos);
     let numStr = string.fromUtf8Bytes(numBytes);
     return f64.parse(numStr);
   }

@@ -10,7 +10,7 @@ func string_from_utf8_bytes_ascii() {
   let bytes: byte[] = [(byte)104, (byte)101, (byte)108, (byte)108, (byte)111];
   let text = string.fromUtf8Bytes(bytes);
 
-  check(text.length() == (i64)5, "string/fromUtf8Bytes-ascii-length");
+  check(text.length() == (int)5, "string/fromUtf8Bytes-ascii-length");
   writeLine("__STRING_FROM_UTF8_ASCII__=" + text);
 }
 
@@ -18,15 +18,15 @@ func string_from_utf8_bytes_utf8() {
   let bytes: byte[] = [(byte)228, (byte)189, (byte)160, (byte)229, (byte)165, (byte)189];
   let text = string.fromUtf8Bytes(bytes);
 
-  check(text.length() == (i64)6, "string/fromUtf8Bytes-utf8-length");
+  check(text.length() == (int)6, "string/fromUtf8Bytes-utf8-length");
   writeLine("__STRING_FROM_UTF8_UTF8__=" + text);
 }
 
 func string_from_utf8_bytes_empty() {
-  let bytes: byte[!] = byte[: (i64)0];
+  let bytes: byte[!] = byte[: (int)0];
   let text = string.fromUtf8Bytes((byte[])bytes);
 
-  check(text.length() == (i64)0, "string/fromUtf8Bytes-empty-length");
+  check(text.length() == (int)0, "string/fromUtf8Bytes-empty-length");
   writeLine("__STRING_FROM_UTF8_EMPTY__=" + text);
 }
 
@@ -34,25 +34,25 @@ func string_clone_full() {
   let text = "hello";
   let cloned = text.clone();
 
-  check(cloned.length() == (i64)5, "string/clone-full-length");
+  check(cloned.length() == (int)5, "string/clone-full-length");
   check(cloned == "hello", "string/clone-full-eq");
   writeLine("__STRING_CLONE_FULL__=" + cloned);
 }
 
 func string_clone_range() {
   let text = "hello world";
-  let cloned = text.clone((i64)6, (i64)11);
+  let cloned = text.clone((int)6, (int)11);
 
-  check(cloned.length() == (i64)5, "string/clone-range-length");
+  check(cloned.length() == (int)5, "string/clone-range-length");
   check(cloned == "world", "string/clone-range-eq");
   writeLine("__STRING_CLONE_RANGE__=" + cloned);
 }
 
 func string_clone_empty() {
   let text = "hello";
-  let cloned = text.clone((i64)0, (i64)0);
+  let cloned = text.clone((int)0, (int)0);
 
-  check(cloned.length() == (i64)0, "string/clone-empty-length");
+  check(cloned.length() == (int)0, "string/clone-empty-length");
   check(cloned == "", "string/clone-empty-eq");
   writeLine("__STRING_CLONE_EMPTY__=" + cloned);
 }
@@ -61,16 +61,16 @@ func string_clone_utf8() {
   let text = "你好世界";
   let cloned = text.clone();
 
-  check(cloned.length() == (i64)12, "string/clone-utf8-length");
+  check(cloned.length() == (int)12, "string/clone-utf8-length");
   check(cloned == "你好世界", "string/clone-utf8-eq");
   writeLine("__STRING_CLONE_UTF8__=" + cloned);
 }
 
 func string_clone_utf8_range() {
   let text = "你好世界";
-  let cloned = text.clone((i64)6, (i64)12);
+  let cloned = text.clone((int)6, (int)12);
 
-  check(cloned.length() == (i64)6, "string/clone-utf8-range-length");
+  check(cloned.length() == (int)6, "string/clone-utf8-range-length");
   check(cloned == "世界", "string/clone-utf8-range-eq");
   writeLine("__STRING_CLONE_UTF8_RANGE__=" + cloned);
 }
@@ -80,7 +80,7 @@ func string_at_ascii() {
   let ch = text.at(1);
 
   check(ch == "e", "string/at-ascii");
-  check(ch.length() == (i64)1, "string/at-ascii-length");
+  check(ch.length() == (int)1, "string/at-ascii-length");
   writeLine("__STRING_AT_ASCII__=" + ch);
 }
 
@@ -96,19 +96,19 @@ func string_at_utf8_byte() {
   let text = "你好";
   let b = text.at(0);
 
-  check(b.length() == (i64)1, "string/at-utf8-byte-length");
+  check(b.length() == (int)1, "string/at-utf8-byte-length");
   writeLine("__STRING_AT_UTF8_BYTE__=ok");
 }
 
 func string_rune_length_ascii() {
   let text = "hello";
-  check(text.runes().length() == (i64)5, "string/rune-length-ascii");
+  check(text.runes().length() == (int)5, "string/rune-length-ascii");
   writeLine("__STRING_RUNE_LENGTH_ASCII__=ok");
 }
 
 func string_rune_length_utf8() {
   let text = "你好世界";
-  check(text.runes().length() == (i64)4, "string/rune-length-utf8");
+  check(text.runes().length() == (int)4, "string/rune-length-utf8");
   writeLine("__STRING_RUNE_LENGTH_UTF8__=ok");
 }
 
@@ -122,20 +122,20 @@ func string_rune_at() {
 
 func string_grapheme_length_ascii() {
   let text = "abc";
-  check(text.graphemes().length() == (i64)3, "string/grapheme-length-ascii");
+  check(text.graphemes().length() == (int)3, "string/grapheme-length-ascii");
   writeLine("__STRING_GRAPHEME_LENGTH_ASCII__=ok");
 }
 
 func string_grapheme_length_utf8() {
   let text = "你好";
-  check(text.graphemes().length() == (i64)2, "string/grapheme-length-utf8");
+  check(text.graphemes().length() == (int)2, "string/grapheme-length-utf8");
   writeLine("__STRING_GRAPHEME_LENGTH_UTF8__=ok");
 }
 
 func string_grapheme_length_emoji() {
   let family = "👨‍👩‍👧‍👦";
-  check(family.graphemes().length() == (i64)1, "string/grapheme-length-emoji");
-  check(family.runes().length() == (i64)7, "string/grapheme-emoji-rune-count");
+  check(family.graphemes().length() == (int)1, "string/grapheme-length-emoji");
+  check(family.runes().length() == (int)7, "string/grapheme-emoji-rune-count");
   writeLine("__STRING_GRAPHEME_LENGTH_EMOJI__=ok");
 }
 
@@ -161,24 +161,24 @@ func string_equality() {
 }
 
 func string_indexOf() {
-  check("hello world".indexOf("world") == (i64)6, "string/indexOf-found");
-  check("hello world".indexOf("xyz") == (i64)-1, "string/indexOf-not-found");
-  check("hello".indexOf("") == (i64)0, "string/indexOf-empty-target");
-  check("".indexOf("a") == (i64)-1, "string/indexOf-empty-self");
-  check("hello".indexOf("hello") == (i64)0, "string/indexOf-full-match");
-  check("aabaa".indexOf("a", (i64)2) == (i64)3, "string/indexOf-from");
-  check("aabaa".indexOf("a", (i64)4) == (i64)4, "string/indexOf-from-last");
-  check("aabaa".indexOf("a", (i64)5) == (i64)-1, "string/indexOf-from-past");
-  check("你好世界".indexOf("世界") == (i64)6, "string/indexOf-utf8");
+  check("hello world".indexOf("world") == (int)6, "string/indexOf-found");
+  check("hello world".indexOf("xyz") == (int)-1, "string/indexOf-not-found");
+  check("hello".indexOf("") == (int)0, "string/indexOf-empty-target");
+  check("".indexOf("a") == (int)-1, "string/indexOf-empty-self");
+  check("hello".indexOf("hello") == (int)0, "string/indexOf-full-match");
+  check("aabaa".indexOf("a", (int)2) == (int)3, "string/indexOf-from");
+  check("aabaa".indexOf("a", (int)4) == (int)4, "string/indexOf-from-last");
+  check("aabaa".indexOf("a", (int)5) == (int)-1, "string/indexOf-from-past");
+  check("你好世界".indexOf("世界") == (int)6, "string/indexOf-utf8");
   writeLine("__STRING_INDEX_OF__=ok");
 }
 
 func string_lastIndexOf() {
-  check("aabaa".lastIndexOf("a") == (i64)4, "string/lastIndexOf-last");
-  check("aabaa".lastIndexOf("b") == (i64)2, "string/lastIndexOf-mid");
-  check("hello".lastIndexOf("xyz") == (i64)-1, "string/lastIndexOf-not-found");
-  check("hello".lastIndexOf("") == (i64)5, "string/lastIndexOf-empty");
-  check("你好你好".lastIndexOf("你好") == (i64)6, "string/lastIndexOf-utf8");
+  check("aabaa".lastIndexOf("a") == (int)4, "string/lastIndexOf-last");
+  check("aabaa".lastIndexOf("b") == (int)2, "string/lastIndexOf-mid");
+  check("hello".lastIndexOf("xyz") == (int)-1, "string/lastIndexOf-not-found");
+  check("hello".lastIndexOf("") == (int)5, "string/lastIndexOf-empty");
+  check("你好你好".lastIndexOf("你好") == (int)6, "string/lastIndexOf-utf8");
   writeLine("__STRING_LAST_INDEX_OF__=ok");
 }
 
@@ -257,48 +257,48 @@ func string_isEmpty() {
 }
 
 func string_toBytes() {
-  check("hello".toBytes().length() == (i64)5, "string/toBytes-ascii");
-  check("你好".toBytes().length() == (i64)6, "string/toBytes-utf8");
-  check("".toBytes().length() == (i64)0, "string/toBytes-empty");
+  check("hello".toBytes().length() == (int)5, "string/toBytes-ascii");
+  check("你好".toBytes().length() == (int)6, "string/toBytes-utf8");
+  check("".toBytes().length() == (int)0, "string/toBytes-empty");
   writeLine("__STRING_TO_BYTES__=ok");
 }
 
 func string_repeat() {
-  check("ab".repeat((i64)3) == "ababab", "string/repeat-3");
-  check("x".repeat((i64)0) == "", "string/repeat-0");
-  check("".repeat((i64)5) == "", "string/repeat-empty");
-  check("hi".repeat((i64)1) == "hi", "string/repeat-1");
-  check("你".repeat((i64)2) == "你你", "string/repeat-utf8");
+  check("ab".repeat((int)3) == "ababab", "string/repeat-3");
+  check("x".repeat((int)0) == "", "string/repeat-0");
+  check("".repeat((int)5) == "", "string/repeat-empty");
+  check("hi".repeat((int)1) == "hi", "string/repeat-1");
+  check("你".repeat((int)2) == "你你", "string/repeat-utf8");
   writeLine("__STRING_REPEAT__=ok");
 }
 
 func string_split() {
   let r1 = "a,b,c".split(",");
-  check(r1.length() == (i64)3, "string/split-count");
+  check(r1.length() == (int)3, "string/split-count");
   check(r1[0] == "a", "string/split-first");
   check(r1[1] == "b", "string/split-mid");
   check(r1[2] == "c", "string/split-last");
 
   let r2 = "hello".split(",");
-  check(r2.length() == (i64)1, "string/split-no-match");
+  check(r2.length() == (int)1, "string/split-no-match");
   check(r2[0] == "hello", "string/split-no-match-val");
 
   let r3 = ",,".split(",");
-  check(r3.length() == (i64)3, "string/split-empty-parts-count");
+  check(r3.length() == (int)3, "string/split-empty-parts-count");
   check(r3[0] == "", "string/split-empty-first");
   check(r3[1] == "", "string/split-empty-mid");
   check(r3[2] == "", "string/split-empty-last");
 
   let r4 = "".split(",");
-  check(r4.length() == (i64)1, "string/split-empty-str");
+  check(r4.length() == (int)1, "string/split-empty-str");
   check(r4[0] == "", "string/split-empty-str-val");
 
   let r5 = "a".split("");
-  check(r5.length() == (i64)1, "string/split-empty-sep");
+  check(r5.length() == (int)1, "string/split-empty-sep");
   check(r5[0] == "a", "string/split-empty-sep-val");
 
   let r6 = "你好,世界".split(",");
-  check(r6.length() == (i64)2, "string/split-utf8-count");
+  check(r6.length() == (int)2, "string/split-utf8-count");
   check(r6[0] == "你好", "string/split-utf8-first");
   check(r6[1] == "世界", "string/split-utf8-last");
 
@@ -338,20 +338,20 @@ func string_toLowerCase() {
 }
 
 func string_padStart() {
-  check("hi".padStart((i64)5, "0") == "000hi", "string/padStart-basic");
-  check("hello".padStart((i64)3, "0") == "hello", "string/padStart-no-pad");
-  check("hi".padStart((i64)5, "ab") == "abahi", "string/padStart-multi-char");
-  check("".padStart((i64)3, "x") == "xxx", "string/padStart-empty-str");
-  check("hi".padStart((i64)2, "0") == "hi", "string/padStart-exact");
+  check("hi".padStart((int)5, "0") == "000hi", "string/padStart-basic");
+  check("hello".padStart((int)3, "0") == "hello", "string/padStart-no-pad");
+  check("hi".padStart((int)5, "ab") == "abahi", "string/padStart-multi-char");
+  check("".padStart((int)3, "x") == "xxx", "string/padStart-empty-str");
+  check("hi".padStart((int)2, "0") == "hi", "string/padStart-exact");
   writeLine("__STRING_PAD_START__=ok");
 }
 
 func string_padEnd() {
-  check("hi".padEnd((i64)5, "0") == "hi000", "string/padEnd-basic");
-  check("hello".padEnd((i64)3, "0") == "hello", "string/padEnd-no-pad");
-  check("hi".padEnd((i64)5, "ab") == "hiaba", "string/padEnd-multi-char");
-  check("".padEnd((i64)3, "x") == "xxx", "string/padEnd-empty-str");
-  check("hi".padEnd((i64)2, "0") == "hi", "string/padEnd-exact");
+  check("hi".padEnd((int)5, "0") == "hi000", "string/padEnd-basic");
+  check("hello".padEnd((int)3, "0") == "hello", "string/padEnd-no-pad");
+  check("hi".padEnd((int)5, "ab") == "hiaba", "string/padEnd-multi-char");
+  check("".padEnd((int)3, "x") == "xxx", "string/padEnd-empty-str");
+  check("hi".padEnd((int)2, "0") == "hi", "string/padEnd-exact");
   writeLine("__STRING_PAD_END__=ok");
 }
 
@@ -368,7 +368,7 @@ func string_byte_for_in() {
 func string_rune_for_in() {
   let text = "A中B";
   var result = "";
-  var count: i32 = 0;
+  var count: int = 0;
   for let r in text.runes() {
     result = result + r;
     count = count + 1;
@@ -379,7 +379,7 @@ func string_rune_for_in() {
 }
 
 func string_rune_for_in_empty() {
-  var count: i32 = 0;
+  var count: int = 0;
   for let r in "".runes() {
     count = count + 1;
   }
@@ -390,7 +390,7 @@ func string_rune_for_in_empty() {
 func string_rune_for_in_emoji() {
   let text = "A😀B";
   var result = "";
-  var count: i32 = 0;
+  var count: int = 0;
   for let r in text.runes() {
     result = result + "[" + r + "]";
     count = count + 1;
@@ -400,7 +400,7 @@ func string_rune_for_in_emoji() {
 }
 
 func string_byte_for_in_empty() {
-  var count: i32 = 0;
+  var count: int = 0;
   for let ch in "" {
     count = count + 1;
   }
@@ -420,7 +420,7 @@ func string_byte_for_in_single() {
 func string_grapheme_for_in_ascii() {
   let text = "abc";
   var result = "";
-  var count: i32 = 0;
+  var count: int = 0;
   for let g in text.graphemes() {
     result = result + g + ".";
     count = count + 1;
@@ -433,7 +433,7 @@ func string_grapheme_for_in_ascii() {
 func string_grapheme_for_in_utf8() {
   let text = "你好世界";
   var result = "";
-  var count: i32 = 0;
+  var count: int = 0;
   for let g in text.graphemes() {
     result = result + "[" + g + "]";
     count = count + 1;
@@ -445,7 +445,7 @@ func string_grapheme_for_in_utf8() {
 
 func string_grapheme_for_in_emoji() {
   let family = "👨‍👩‍👧‍👦";
-  var count: i32 = 0;
+  var count: int = 0;
   var cluster = "";
   for let g in family.graphemes() {
     cluster = g;
@@ -459,7 +459,7 @@ func string_grapheme_for_in_emoji() {
 func string_grapheme_for_in_mixed() {
   let text = "A中😀";
   var result = "";
-  var count: i32 = 0;
+  var count: int = 0;
   for let g in text.graphemes() {
     result = result + "[" + g + "]";
     count = count + 1;
@@ -470,7 +470,7 @@ func string_grapheme_for_in_mixed() {
 }
 
 func string_grapheme_for_in_empty() {
-  var count: i32 = 0;
+  var count: int = 0;
   for let g in "".graphemes() {
     count = count + 1;
   }

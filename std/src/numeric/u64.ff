@@ -17,16 +17,16 @@ open fit u64: Display {
       return "0";
     }
     var v: u64 = self;
-    let digits: byte[!] = byte[:(i64)20];
-    var pos: i32 = 19;
+    let digits: byte[!] = byte[:(int)20];
+    var pos: int = 19;
     while v > (u64)0 {
       let digit: i32 = (i32)(v % (u64)10);
       digits[pos] = (byte)(digit + 48);
       v = v / (u64)10;
-      pos = pos - 1;
+      pos = pos - (int)1;
     }
-    let start = (i64)(pos + 1);
-    let result: byte[] = ((byte[])digits).clone(start, (i64)20);
+    let start = pos + (int)1;
+    let result: byte[] = ((byte[])digits).clone(start, (int)20);
     return string.fromUtf8Bytes(result);
   }
 
@@ -40,15 +40,15 @@ open fit u64: Display {
   open static func parse(text: string): u64 {
     let bytes = text.toBytes();
     let len = bytes.length();
-    if len == (i64)0 {
+    if len == (int)0 {
       throw "Invalid u64 string: empty";
     }
-    var pos: i64 = 0;
-    let first = bytes[(i64)0];
+    var pos: int = 0;
+    let first = bytes[(int)0];
     if first == (byte)45 {
       throw "Invalid u64 string: negative not allowed";
     } else if first == (byte)43 {
-      pos = (i64)1;
+      pos = (int)1;
     }
     if pos == len {
       throw "Invalid u64 string: no digits";
@@ -66,7 +66,7 @@ open fit u64: Display {
         throw "Invalid u64 string: overflow";
       }
       result = result * (u64)10 + digit;
-      pos = pos + (i64)1;
+      pos = pos + (int)1;
     }
     return result;
   }

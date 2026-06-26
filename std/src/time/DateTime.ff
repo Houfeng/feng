@@ -10,9 +10,9 @@ extern func uv_gettimeofday(tv: i64*): i32;
 /**
  * Left-pads an integer with zeros to the specified width.
  */
-seal func padZero(value: i32, width: i32): string {
+seal func padZero(value: i32, width: int): string {
   let s = value.toString();
-  return s.padStart((i64)width, "0");
+  return s.padStart(width, "0");
 }
 
 /**

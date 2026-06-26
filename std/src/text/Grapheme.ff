@@ -13,7 +13,7 @@ open fit string {
 
   /**
    * Returns a view of this string as a sequence of grapheme clusters.
-   * @return grapheme view of this string
+   * @return grapheme view
    */
   open func graphemes(): GraphemeView {
     return GraphemeView(self);
@@ -39,17 +39,17 @@ open type GraphemeView {
    * Returns the number of grapheme clusters in this string.
    * @return grapheme cluster count
    */
-  open func length(): i64 {
+  open func length(): int {
     let data: string* = &self.text;
     let end: string* = feng_pointer_move(data, self.text.length());
     var cursor: string* = data;
-    var count: i64 = 0;
+    var count: int = 0;
     while !feng_pointer_equal(cursor, end) {
       cursor = u8_grapheme_next(cursor, end);
       if feng_pointer_is_null(cursor) {
         break;
       }
-      count += (i64)1;
+      count += (int)1;
     }
     return count;
   }
@@ -68,27 +68,27 @@ open type GraphemeView {
    * @param index - zero-based grapheme index
    * @return substring containing the single grapheme cluster
    */
-  open func at(index: i64): string {
-    if index < (i64)0 {
+  open func at(index: int): string {
+    if index < (int)0 {
       throw "GraphemeView index out of bounds";
     }
     let data: string* = &self.text;
     let end: string* = feng_pointer_move(data, self.text.length());
     var cursor: string* = data;
-    var i: i64 = 0;
+    var i: int = 0;
     while i < index {
       cursor = u8_grapheme_next(cursor, end);
       if feng_pointer_is_null(cursor) {
         throw "GraphemeView index out of bounds";
       }
-      i += (i64)1;
+      i += (int)1;
     }
     if feng_pointer_equal(cursor, end) {
       throw "GraphemeView index out of bounds";
     }
     let next: string* = u8_grapheme_next(cursor, end);
     let start = feng_pointer_diff(cursor, data);
-    var cluster_end: i64 = 0;
+    var cluster_end: int = 0;
     if feng_pointer_is_null(next) {
       cluster_end = self.text.length();
     } else {
@@ -103,8 +103,8 @@ open type GraphemeView {
  */
 open type GraphemeIterator {
   seal let text: string;
-  seal let len: i64;
-  seal var offset: i64;
+  seal let len: int;
+  seal var offset: int;
 
   /**
    * Creates a new grapheme iterator over the given string.

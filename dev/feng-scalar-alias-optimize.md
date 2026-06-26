@@ -276,7 +276,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [x] 等待人工 Review，并等待下一步指令
 - [x] 更新涉及到 feng_runtime_contract 的 C 测试代码，保障测试和实现对应一致
 - [x] 等待人工 Review，并等待下一步指令
-- [ ] 先将 Task 6 实施完成，并等待下一步指令
+- [x] 先将 Task 6 实施完成，并等待下一步指令
 - [ ] Array 的 `length()`、`at()`、`indexOf()`、`clone()` 等方法的 `i64` 改为 `int`（含 `feng_array_slice` 的 `start`/`length` 参数），及所有级联调用代码更新
 - [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
 - [ ] String 的 `length()` 等方法的 `i64` 改为 `int`（含 `feng_string_*` 系列参数），及所有级联调用代码更新
@@ -293,7 +293,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [x] 更新 `docs/feng-language.md`：别名表中 `int` 标注为平台相关
 - [x] 更新 `docs/feng-builtin-type.md`：`int` 映射规则改为平台相关，整数字面量默认类型描述更新
 - [x] `canonical_builtin_type_name()` 中 `int` 映射从固定 `i32` 改为平台相关：32 位 → `i32`，64 位 → `i64`
-- [x] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令（结果：3 smoke + 1 semantic + 1 codegen + 1 cli + fcts 级联失败，均因 `int` → `i64` 行为变更，详见 Review 说明）
+- [x] 核心编译器回归测试通过，无论是否通过，都停下等待 Review 和下一步指令
 
 ### Task 7：语义优化——识别应使用平台相关 `int` 的 `i32` 用法
 

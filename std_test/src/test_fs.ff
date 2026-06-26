@@ -20,7 +20,7 @@ func setupFsTests() {
   // Clean any leftover artifacts from a previous failed run, then create fresh dir
   if isDir(fsTestDir) {
     let oldEntries = readDir(fsTestDir);
-    for var i: i64 = (i64)0; i < oldEntries.length(); i += (i64)1 {
+    for var i: int = 0; i < oldEntries.length(); i += (int)1 {
       if oldEntries[i].kind == EntryKind.Dir {
         try rmdir(oldEntries[i].path) catch {};
       } else {
@@ -35,7 +35,7 @@ func setupFsTests() {
 func cleanupFsTests() {
   // Remove every test artifact, ignore errors
   let entries = readDir(fsTestDir);
-  for var i: i64 = (i64)0; i < entries.length(); i += (i64)1 {
+  for var i: int = 0; i < entries.length(); i += (int)1 {
     if entries[i].kind == EntryKind.Dir {
       try rmdir(entries[i].path) catch {};
     } else {
@@ -56,7 +56,7 @@ func fs_file_basic_rw() {
   file1.close();
 
   let file2 = File.create(path, FileMode.Read);
-  let buf: byte[!] = byte[:(i64)16];
+  let buf: byte[!] = byte[:(int)16];
   let readCount = file2.read(buf);
   check(readCount == (i64)5, "fs/file-read-bytes-count");
   check(buf[0] == (byte)72, "fs/file-read-byte0");
@@ -87,7 +87,7 @@ func fs_file_readLines() {
 
   let file = File.create(path, FileMode.Read);
   let lines = file.readLines();
-  check(lines.length() == (i64)3, "fs/file-readLines-count");
+  check(lines.length() == (int)3, "fs/file-readLines-count");
   check(lines[0] == "line1", "fs/file-readLines-0");
   check(lines[1] == "line2", "fs/file-readLines-1");
   check(lines[2] == "line3", "fs/file-readLines-2");
@@ -100,7 +100,7 @@ func fs_file_readLines_crlf() {
 
   let file = File.create(path, FileMode.Read);
   let lines = file.readLines();
-  check(lines.length() == (i64)2, "fs/file-readLines-crlf-count");
+  check(lines.length() == (int)2, "fs/file-readLines-crlf-count");
   check(lines[0] == "a", "fs/file-readLines-crlf-0");
   check(lines[1] == "b", "fs/file-readLines-crlf-1");
   file.close();
@@ -112,7 +112,7 @@ func fs_file_readLines_trailing_newline() {
 
   let file = File.create(path, FileMode.Read);
   let lines = file.readLines();
-  check(lines.length() == (i64)2, "fs/file-readLines-trailing-count");
+  check(lines.length() == (int)2, "fs/file-readLines-trailing-count");
   check(lines[0] == "x", "fs/file-readLines-trailing-0");
   check(lines[1] == "y", "fs/file-readLines-trailing-1");
   file.close();
@@ -159,7 +159,7 @@ func fs_read_closed_throws() {
   let file = File.create(path, FileMode.Read);
   file.close();
   var caught = false;
-  let buf: byte[!] = byte[:(i64)8];
+  let buf: byte[!] = byte[:(int)8];
   let r = try file.read(buf) catch ex: string { caught = true; (i64)-1; };
   check(caught == true, "fs/file-read-closed-throws");
 }
@@ -194,7 +194,7 @@ func fs_empty_buffer() {
   let written = file.write(emptyArr);
   check(written == (i64)0, "fs/file-write-empty-bytes");
 
-  let emptyBuf: byte[!] = byte[:(i64)0];
+  let emptyBuf: byte[!] = byte[:(int)0];
   let readCount = file.read(emptyBuf);
   check(readCount == (i64)0, "fs/file-read-empty-buffer");
   file.close();
@@ -261,7 +261,7 @@ func fs_toplevel_readBytes_writeBytes() {
   let data: byte[] = [(byte)1, (byte)2, (byte)3, (byte)4, (byte)5];
   writeBytes(path, data);
   let result = readBytes(path);
-  check(result.length() == (i64)5, "fs/toplevel-readBytes-length");
+  check(result.length() == (int)5, "fs/toplevel-readBytes-length");
   check(result[0] == (byte)1, "fs/toplevel-readBytes-0");
   check(result[4] == (byte)5, "fs/toplevel-readBytes-4");
 }
@@ -357,7 +357,7 @@ func fs_dir_read() {
   var foundA = false;
   var foundB = false;
   var foundC = false;
-  for var i: i64 = (i64)0; i < batch.length(); i += (i64)1 {
+  for var i: int = 0; i < batch.length(); i += (int)1 {
     if batch[i].name == "dir_a.txt" { foundA = true; }
     if batch[i].name == "dir_b.txt" { foundB = true; }
     if batch[i].name == "dir_c.txt" { foundC = true; }
@@ -374,12 +374,12 @@ func fs_dir_iterate() {
   writeText(fsTestDir + "/iter_b.txt", "b");
 
   let dir = Dir.create(fsTestDir);
-  var count: i64 = (i64)0;
+  var count: int = 0;
   for let entry in dir {
-    count += (i64)1;
+    count += (int)1;
   }
   dir.close();
-  check(count >= (i64)2, "fs/dir-iterate-count");
+  check(count >= (int)2, "fs/dir-iterate-count");
 }
 
 // ---- Dir close idempotent ----
@@ -424,7 +424,7 @@ func fs_readDir() {
   let entries = readDir(fsTestDir);
   var foundX = false;
   var foundY = false;
-  for var i: i64 = (i64)0; i < entries.length(); i += (i64)1 {
+  for var i: int = 0; i < entries.length(); i += (int)1 {
     if entries[i].name == "rd_x.txt" { foundX = true; }
     if entries[i].name == "rd_y.txt" { foundY = true; }
   }
@@ -438,9 +438,9 @@ func fs_entryInfo_name_no_separator() {
   writeText(fsTestDir + "/entry_name.txt", "e");
 
   let entries = readDir(fsTestDir);
-  for var i: i64 = (i64)0; i < entries.length(); i += (i64)1 {
+  for var i: int = 0; i < entries.length(); i += (int)1 {
     if entries[i].name == "entry_name.txt" {
-      check(entries[i].name.indexOf("/") < (i64)0, "fs/entryInfo-name-no-separator");
+      check(entries[i].name.indexOf("/") < (int)0, "fs/entryInfo-name-no-separator");
     }
   }
 }
@@ -449,7 +449,7 @@ func fs_entryInfo_path_full() {
   writeText(fsTestDir + "/entry_path.txt", "e");
 
   let entries = readDir(fsTestDir);
-  for var i: i64 = (i64)0; i < entries.length(); i += (i64)1 {
+  for var i: int = 0; i < entries.length(); i += (int)1 {
     if entries[i].name == "entry_path.txt" {
       check(entries[i].path == fsTestDir + "/entry_path.txt", "fs/entryInfo-path-full");
     }
@@ -460,7 +460,7 @@ func fs_entryInfo_no_dot_entries() {
   writeText(fsTestDir + "/dot_check.txt", "d");
 
   let entries = readDir(fsTestDir);
-  for var i: i64 = (i64)0; i < entries.length(); i += (i64)1 {
+  for var i: int = 0; i < entries.length(); i += (int)1 {
     check(entries[i].name != ".", "fs/entryInfo-no-dot");
     check(entries[i].name != "..", "fs/entryInfo-no-dotdot");
   }
@@ -473,7 +473,7 @@ func fs_entryInfo_stat() {
   writeText(path, "abcde");
 
   let entries = readDir(fsTestDir);
-  for var i: i64 = (i64)0; i < entries.length(); i += (i64)1 {
+  for var i: int = 0; i < entries.length(); i += (int)1 {
     if entries[i].name == "entry_stat.txt" {
       let info = entries[i].stat();
       check(info.kind == EntryKind.File, "fs/entryInfo-stat-kind");

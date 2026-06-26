@@ -67,13 +67,13 @@ func list_size_after_remove() {
 
 func list_multiple_elements() {
   let l = List<i32>();
-  for var i: i32 = 0; i < 20; i = i + 1 {
-    l.add(i);
+  for var i: int = 0; i < 20; i = i + 1 {
+    l.add((i32)i);
   }
   check(l.size() == 20, "list/multiple-size");
   var allOk: bool = true;
-  for var i: i32 = 0; i < 20; i = i + 1 {
-    if l.get(i) != i {
+  for var i: int = 0; i < 20; i = i + 1 {
+    if l.get(i) != (i32)i {
       allOk = false;
     }
   }

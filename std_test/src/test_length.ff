@@ -6,83 +6,83 @@ import std.collections;
 import std.text;
 
 func string_length_ascii() {
-  check("abc".length() == (i64)3, "length/string-ascii");
+  check("abc".length() == (int)3, "length/string-ascii");
 }
 
 func string_length_utf8_bytes() {
-  check("你好".length() == (i64)6, "length/string-utf8-bytes");
+  check("你好".length() == (int)6, "length/string-utf8-bytes");
 }
 
 func string_length_empty() {
-  check("".length() == (i64)0, "length/string-empty");
+  check("".length() == (int)0, "length/string-empty");
 }
 
 func array_length_readonly() {
   let values: int[] = [1, 2, 3, 4];
-  check(values.length() == (i64)4, "length/array-readonly");
+  check(values.length() == (int)4, "length/array-readonly");
 }
 
 func array_length_writable() {
   let values: int[!] = [10, 20];
-  check(values.length() == (i64)2, "length/array-writable");
+  check(values.length() == (int)2, "length/array-writable");
 }
 
 func array_length_empty() {
   let values: int[];
-  check(values.length() == (i64)0, "length/array-empty");
+  check(values.length() == (int)0, "length/array-empty");
 }
 
 func array_length_nested() {
   let matrix: int[][!] = [[1, 2, 3], [4]];
-  check(matrix.length() == (i64)2, "length/array-nested-outer");
-  check(matrix[0].length() == (i64)3, "length/array-nested-inner");
+  check(matrix.length() == (int)2, "length/array-nested-outer");
+  check(matrix[0].length() == (int)3, "length/array-nested-inner");
 }
 
 func array_index_of_int() {
   let values: int[!] = [10, 20, 30, 20];
 
-  check(values.indexOf(20) == (i64)1, "length/array-index-of-int-hit");
-  check(values.indexOf(99) == (i64)-1, "length/array-index-of-int-miss");
+  check(values.indexOf(20) == (int)1, "length/array-index-of-int-hit");
+  check(values.indexOf(99) == (int)-1, "length/array-index-of-int-miss");
 }
 
 func array_index_of_string() {
   let values: string[!] = ["zero", "hello", "world"];
   let joined = "he" + "llo";
 
-  check(values.indexOf(joined) == (i64)1, "length/array-index-of-string-hit");
-  check(values.indexOf("missing") == (i64)-1, "length/array-index-of-string-miss");
+  check(values.indexOf(joined) == (int)1, "length/array-index-of-string-hit");
+  check(values.indexOf("missing") == (int)-1, "length/array-index-of-string-miss");
 }
 
 func span_length_readonly() {
   let values: int[] = [1, 2, 3, 4];
-  let middle = values.slice((i64)1, (i64)3);
+  let middle = values.slice((int)1, (int)3);
 
-  check(middle.length() == (i64)2, "length/span-length-readonly");
+  check(middle.length() == (int)2, "length/span-length-readonly");
 }
 
 func span_get_readonly() {
   let values: int[] = [1, 2, 3, 4];
-  let middle = values.slice((i64)1, (i64)3);
+  let middle = values.slice((int)1, (int)3);
 
-  check(middle.get((i64)0) == 2, "length/span-get-readonly-0");
-  check(middle.get((i64)1) == 3, "length/span-get-readonly-1");
+  check(middle.get((int)0) == 2, "length/span-get-readonly-0");
+  check(middle.get((int)1) == 3, "length/span-get-readonly-1");
 }
 
 func span_slice_writable_source() {
   let values: int[!] = [10, 20, 30];
-  let tail = values.slice((i64)1, (i64)3);
+  let tail = values.slice((int)1, (int)3);
 
-  check(tail.length() == (i64)2, "length/span-writable-source-length");
-  check(tail.get((i64)0) == 20, "length/span-writable-source-0");
-  check(tail.get((i64)1) == 30, "length/span-writable-source-1");
+  check(tail.length() == (int)2, "length/span-writable-source-length");
+  check(tail.get((int)0) == 20, "length/span-writable-source-0");
+  check(tail.get((int)1) == 30, "length/span-writable-source-1");
 }
 
 func span_slice_invalid_range() {
   let values: int[] = [1, 2, 3];
-  let fallback = values.slice((i64)0, (i64)1);
+  let fallback = values.slice((int)0, (int)1);
   var caught: bool = false;
 
-  let ignored = try values.slice((i64)2, (i64)4) catch ex: string {
+  let ignored = try values.slice((int)2, (int)4) catch ex: string {
     caught = true;
     fallback;
   };
@@ -92,10 +92,10 @@ func span_slice_invalid_range() {
 
 func span_slice_negative_start() {
   let values: int[] = [1, 2, 3];
-  let fallback = values.slice((i64)0, (i64)1);
+  let fallback = values.slice((int)0, (int)1);
   var caught: bool = false;
 
-  let ignored = try values.slice((i64)-1, (i64)1) catch ex: string {
+  let ignored = try values.slice((int)-1, (int)1) catch ex: string {
     caught = true;
     fallback;
   };
@@ -105,10 +105,10 @@ func span_slice_negative_start() {
 
 func span_get_invalid_index() {
   let values: int[] = [1, 2, 3];
-  let middle = values.slice((i64)1, (i64)3);
+  let middle = values.slice((int)1, (int)3);
   var caught: bool = false;
 
-  let ignored = try middle.get((i64)2) catch ex: string {
+  let ignored = try middle.get((int)2) catch ex: string {
     caught = true;
     (int)0;
   };
@@ -118,10 +118,10 @@ func span_get_invalid_index() {
 
 func span_get_negative_index() {
   let values: int[] = [1, 2, 3];
-  let middle = values.slice((i64)1, (i64)3);
+  let middle = values.slice((int)1, (int)3);
   var caught: bool = false;
 
-  let ignored = try middle.get((i64)-1) catch ex: string {
+  let ignored = try middle.get((int)-1) catch ex: string {
     caught = true;
     (int)0;
   };

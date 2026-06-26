@@ -17,7 +17,7 @@ extern func feng_string_to_utf8_bytes(value: string): byte[];
  * Returns a new empty immutable byte array.
  */
 seal func emptyByteArray(): byte[] {
-	let items: byte[!] = byte[:(i64)0];
+	let items: byte[!] = byte[:(int)0];
 	return (byte[])items;
 }
 
@@ -39,7 +39,7 @@ seal func lineBytesToString(line: List<byte>): string {
 seal func appendTrailingNewline(bytes: byte[]): byte[] {
 	let output = List<byte>();
 	let length = bytes.length();
-	for var index: i64 = (i64)0; index < length; index += (i64)1 {
+	for var index: int = (int)0; index < length; index += (int)1 {
 		output.add(bytes[index]);
 	}
 	output.add((byte)10);
@@ -54,7 +54,7 @@ open type Stdio {
 	seal let outputFd: int;
 	seal let errorFd: int;
 	seal var pending: byte[];
-	seal var pendingOffset: i64;
+	seal var pendingOffset: int;
 
 	/**
 	 * Creates a stdio object bound to the process standard streams.
@@ -64,7 +64,7 @@ open type Stdio {
 		self.outputFd = 1;
 		self.errorFd = 2;
 		self.pending = emptyByteArray();
-		self.pendingOffset = (i64)0;
+		self.pendingOffset = (int)0;
 	}
 
 	/**
@@ -72,7 +72,7 @@ open type Stdio {
 	 */
 	seal func clearPending() {
 		self.pending = emptyByteArray();
-		self.pendingOffset = (i64)0;
+		self.pendingOffset = (int)0;
 	}
 
 	/**
@@ -80,23 +80,23 @@ open type Stdio {
 	 * @param buffer - writable destination buffer
 	 * @return number of bytes copied from the pending segment
 	 */
-	seal func consumePending(buffer: byte[!]): i64 {
+	seal func consumePending(buffer: byte[!]): int {
 		let capacity = buffer.length();
-		if capacity == (i64)0 {
-			return (i64)0;
+		if capacity == (int)0 {
+			return (int)0;
 		}
 
 		let pendingLength = self.pending.length();
 		if self.pendingOffset >= pendingLength {
 			self.clearPending();
-			return (i64)0;
+			return (int)0;
 		}
 
-		var written: i64 = (i64)0;
+		var written: int = (int)0;
 		while written < capacity && self.pendingOffset < pendingLength {
 			buffer[written] = self.pending[self.pendingOffset];
-			written += (i64)1;
-			self.pendingOffset += (i64)1;
+			written += (int)1;
+			self.pendingOffset += (int)1;
 		}
 
 		if self.pendingOffset >= pendingLength {
@@ -112,14 +112,14 @@ open type Stdio {
 	 * @param start - zero-based inclusive start index of the unread suffix
 	 * @param end - zero-based exclusive end index of the unread suffix
 	 */
-	seal func savePending(buffer: byte[!], start: i64, end: i64) {
+	seal func savePending(buffer: byte[!], start: int, end: int) {
 		if start >= end {
 			self.clearPending();
 			return;
 		}
 
 		self.pending = ((byte[])buffer).clone(start, end);
-		self.pendingOffset = (i64)0;
+		self.pendingOffset = (int)0;
 	}
 
 	/**
@@ -129,7 +129,7 @@ open type Stdio {
 	 */
 	open func read(buffer: byte[!]): i64 {
 		let capacity = buffer.length();
-		if capacity == (i64)0 {
+		if capacity == (int)0 {
 			return (i64)0;
 		}
 
@@ -138,7 +138,7 @@ open type Stdio {
 			return pendingWritten;
 		}
 
-		if pendingWritten == (i64)0 {
+		if pendingWritten == (int)0 {
 			let libcRead = read(self.inputFd, &buffer, capacity);
 			if libcRead < (i64)0 {
 				return libcRead;
@@ -150,13 +150,13 @@ open type Stdio {
 		let tail: byte[!] = byte[:remaining];
 		let libcRead = read(self.inputFd, &tail, remaining);
 		if libcRead < (i64)0 {
-			if pendingWritten > (i64)0 {
+			if pendingWritten > (int)0 {
 				return pendingWritten;
 			}
 			return libcRead;
 		}
 
-		for var index: i64 = (i64)0; index < libcRead; index += (i64)1 {
+		for var index: int = (int)0; index < libcRead; index += (int)1 {
 			buffer[pendingWritten + index] = tail[index];
 		}
 
@@ -170,7 +170,7 @@ open type Stdio {
 	 */
 	open func write(bytes: byte[]): i64 {
 		let length = bytes.length();
-		if length == (i64)0 {
+		if length == (int)0 {
 			return (i64)0;
 		}
 		return write(self.outputFd, &bytes, length);
@@ -203,7 +203,7 @@ open type Stdio {
 	 */
 	open func writeError(bytes: byte[]): i64 {
 		let length = bytes.length();
-		if length == (i64)0 {
+		if length == (int)0 {
 			return (i64)0;
 		}
 		return write(self.errorFd, &bytes, length);
@@ -244,7 +244,7 @@ open type Stdio {
 	 */
 	open func readLine(): string {
 		let line = List<byte>();
-		let chunk: byte[!] = byte[:(i64)4096];
+		let chunk: byte[!] = byte[:(int)4096];
 		var foundNewline = false;
 
 		while !foundNewline {
@@ -260,7 +260,7 @@ open type Stdio {
 			while index < count {
 				let current = chunk[index];
 				if current == (byte)10 {
-					self.savePending(chunk, index + (i64)1, count);
+					self.savePending(chunk, (int)(index + (i64)1), (int)count);
 					foundNewline = true;
 					break;
 				}
@@ -328,10 +328,10 @@ open func println(fmt: string, args: string...): i64 {
  * @return total bytes written
  */
 open func print<T: Display>(fmt: string, first: T, args: T...): i64 {
-	let stringArgs: string[!] = string[:args.length() + (i64)1];
+	let stringArgs: string[!] = string[:args.length() + (int)1];
 	stringArgs[0] = first.toString();
-	for var index: i64 = (i64)0; index < args.length(); index += (i64)1 {
-		stringArgs[index + (i64)1] = args[index].toString();
+	for var index: int = (int)0; index < args.length(); index += (int)1 {
+		stringArgs[index + (int)1] = args[index].toString();
 	}
 	let rendered = renderFormattedBytes(fmt, (string[])stringArgs);
 	return stdio.write(rendered);
@@ -344,10 +344,10 @@ open func print<T: Display>(fmt: string, first: T, args: T...): i64 {
  * @return total bytes written, including the trailing newline
  */
 open func println<T: Display>(fmt: string, first: T, args: T...): i64 {
-	let stringArgs: string[!] = string[:args.length() + (i64)1];
+	let stringArgs: string[!] = string[:args.length() + (int)1];
 	stringArgs[0] = first.toString();
-	for var index: i64 = (i64)0; index < args.length(); index += (i64)1 {
-		stringArgs[index + (i64)1] = args[index].toString();
+	for var index: int = (int)0; index < args.length(); index += (int)1 {
+		stringArgs[index + (int)1] = args[index].toString();
 	}
 	let text = renderFormattedString(fmt, (string[])stringArgs);
 	return stdio.writeLine(text);

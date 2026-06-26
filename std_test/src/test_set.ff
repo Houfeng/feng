@@ -84,17 +84,17 @@ func set_entities_two() {
 }
 
 func set_int_direct_call() {
-  let h: Hashable<i32> = 7;
-  check(h.same(7), "set/int-hashable-same");
-  let s = Set<int>();
-  s.add(7);
-  s.add(13);
+  let h: Hashable<i32> = (i32)7;
+  check(h.same((i32)7), "set/int-hashable-same");
+  let s = Set<i32>();
+  s.add((i32)7);
+  s.add((i32)13);
   check(s.count() == 2, "set/int-count-2");
   let ents = s.entries();
   let a = ents[0];
   let b = ents[1];
-  check((a == 7) || (b == 7), "set/int-entries-has-7");
-  check((a == 13) || (b == 13), "set/int-entries-has-13");
+  check((a == (i32)7) || (b == (i32)7), "set/int-entries-has-7");
+  check((a == (i32)13) || (b == (i32)13), "set/int-entries-has-13");
 }
 
 open func run_set_tests() {
