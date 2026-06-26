@@ -6634,6 +6634,39 @@ static void test_literal_adaptation_array_literal(void) {
     feng_semantic_analysis_free(analysis);
 }
 
+static void test_literal_adaptation_tuple_literal(void) {
+    static const char *kSource =
+        "module feng.codegen.litadapt.tuple;\n"
+        "type Point(i32, i32);\n"
+        "type BytePair(u8, u8);\n"
+        "type SmallPair(i8, i8);\n"
+        "type MixedPair(i32, f32);\n"
+        "func f() {\n"
+        "    let p: Point = (1, 2);\n"
+        "    let b: BytePair = (10, 255);\n"
+        "    let s: SmallPair = (5, 6);\n"
+        "    let m: MixedPair = (42, 1);\n"
+        "}\n";
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_tuple.ff");
+    char *c = literal_adapt_codegen(analysis);
+
+    /* Point(i32, i32) → literals as int32_t. */
+    ASSERT(strstr(c, "(int32_t)INT32_C(1)") != NULL);
+    ASSERT(strstr(c, "(int32_t)INT32_C(2)") != NULL);
+    /* BytePair(u8, u8) → literals as uint8_t. */
+    ASSERT(strstr(c, "(uint8_t)UINT8_C(10)") != NULL);
+    ASSERT(strstr(c, "(uint8_t)UINT8_C(255)") != NULL);
+    /* SmallPair(i8, i8) → literals as int8_t. */
+    ASSERT(strstr(c, "(int8_t)INT8_C(5)") != NULL);
+    ASSERT(strstr(c, "(int8_t)INT8_C(6)") != NULL);
+    /* MixedPair(i32, f32) → integer as int32_t, float as (float). */
+    ASSERT(strstr(c, "(int32_t)INT32_C(42)") != NULL);
+    ASSERT(strstr(c, "(float)") != NULL);
+    compile_generated_c_or_die(c);
+
+    feng_semantic_analysis_free(analysis);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -6755,6 +6788,7 @@ int main(void) {
     test_literal_adaptation_both_literals();
     test_literal_adaptation_compound_assignment();
     test_literal_adaptation_array_literal();
+    test_literal_adaptation_tuple_literal();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

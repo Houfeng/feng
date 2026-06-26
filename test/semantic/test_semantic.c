@@ -17861,6 +17861,44 @@ static void test_array_literal_out_of_range_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_tuple_literal_element_adapts_to_field_type(void) {
+    /* Binding: small integer fields (u8, i8). */
+    const char *ok_source =
+        "module demo.main;\n"
+        "type BytePair(u8, u8);\n"
+        "type SmallPair(i8, i8);\n"
+        "type MixedPair(i32, f32);\n"
+        "func take(p: BytePair): u8 { return p.item1; }\n"
+        "func make(): SmallPair { return (1, 2); }\n"
+        "func run(): void {\n"
+        "    let a: BytePair = (10, 20);\n"
+        "    let b: SmallPair = (5, 6);\n"
+        "    let c: MixedPair = (42, 1);\n"
+        "    let d = take((1, 2));\n"
+        "    let e = make();\n"
+        "}\n";
+    assert_single_source_semantic_ok("tuple_adapt_fields.f", ok_source);
+
+    /* Range: 256 does not fit u8. */
+    const char *range_source =
+        "module demo.main;\n"
+        "type BytePair(u8, u8);\n"
+        "func run(): void {\n"
+        "    let p: BytePair = (10, 256);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("tuple_adapt_range.f", range_source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -18514,6 +18552,8 @@ int main(void) {
     test_array_literal_all_literals_no_target_accepted();
     test_array_literal_non_literal_type_mismatch_rejected();
     test_array_literal_out_of_range_rejected();
+
+    test_tuple_literal_element_adapts_to_field_type();
 
     puts("semantic tests passed");
     return 0;
