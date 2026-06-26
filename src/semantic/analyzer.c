@@ -318,6 +318,12 @@ typedef struct ResolveContext {
      * return value, member assignment).  Used by validate_if_expr to adapt
      * branch literals to the target type (including union types). */
     const FengTypeRef *current_expr_expected_type_ref;
+    /* When true, expr_matches_expected_type_ref must NOT set expr->type as a
+     * side effect.  Set during overload-resolution candidate probing so that
+     * rejected or non-winning candidates cannot corrupt the literal node's
+     * type field — the correct type is committed after resolution picks the
+     * unique winner (see commit_literal_arg_adaptations_for_resolved_call). */
+    bool suppress_literal_type_commit;
     /* Number of catch blocks belonging to a try expression currently being
      * resolved.  When non-zero, `break` and `continue` from an outer loop
      * cannot escape into a catch block because every path through the
@@ -10238,6 +10244,10 @@ static bool callable_parameters_match_args(ResolveContext *context,
     bool is_variadic = callable->param_count > 0U &&
                        callable->params[callable->param_count - 1U].is_variadic;
     size_t fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
+    /* Suppress literal type commit during overload candidate probing so that
+     * each candidate test does not overwrite the literal node's type field. */
+    bool saved_suppress = context->suppress_literal_type_commit;
+    context->suppress_literal_type_commit = true;
 
     if (out_rejected_existing_array_for_variadic != NULL) {
         *out_rejected_existing_array_for_variadic = false;
@@ -10245,10 +10255,12 @@ static bool callable_parameters_match_args(ResolveContext *context,
 
     if (is_variadic) {
         if (arg_count < fixed_count) {
+            context->suppress_literal_type_commit = saved_suppress;
             return false;
         }
     } else {
         if (callable->param_count != arg_count) {
+            context->suppress_literal_type_commit = saved_suppress;
             return false;
         }
     }
@@ -10258,6 +10270,7 @@ static bool callable_parameters_match_args(ResolveContext *context,
         if (type_args == NULL || owned_type_args == NULL) {
             free(type_args);
             free(owned_type_args);
+            context->suppress_literal_type_commit = saved_suppress;
             return false;
         }
     }
@@ -10357,6 +10370,7 @@ static bool callable_parameters_match_args(ResolveContext *context,
     }
     free(type_args);
     free(owned_type_args);
+    context->suppress_literal_type_commit = saved_suppress;
     return ok;
 }
 
@@ -10381,6 +10395,10 @@ static bool callable_parameters_match_args_for_owner_instance(
     bool is_variadic = callable->param_count > 0U &&
                        callable->params[callable->param_count - 1U].is_variadic;
     size_t fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
+    /* Suppress literal type commit during overload candidate probing so that
+     * each candidate test does not overwrite the literal node's type field. */
+    bool saved_suppress = context->suppress_literal_type_commit;
+    context->suppress_literal_type_commit = true;
 
     if (out_rejected_existing_array_for_variadic != NULL) {
         *out_rejected_existing_array_for_variadic = false;
@@ -10388,10 +10406,12 @@ static bool callable_parameters_match_args_for_owner_instance(
 
     if (is_variadic) {
         if (arg_count < fixed_count) {
+            context->suppress_literal_type_commit = saved_suppress;
             return false;
         }
     } else {
         if (callable->param_count != arg_count) {
+            context->suppress_literal_type_commit = saved_suppress;
             return false;
         }
     }
@@ -10401,6 +10421,7 @@ static bool callable_parameters_match_args_for_owner_instance(
         if (type_args == NULL || owned_type_args == NULL) {
             free(type_args);
             free(owned_type_args);
+            context->suppress_literal_type_commit = saved_suppress;
             return false;
         }
     }
@@ -10525,6 +10546,7 @@ static bool callable_parameters_match_args_for_owner_instance(
     }
     free(type_args);
     free(owned_type_args);
+    context->suppress_literal_type_commit = saved_suppress;
     return ok;
 }
 
@@ -15821,8 +15843,17 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
             if (numeric_literal_adapts_to_target(context, expr, expected_type_ref)) {
                 /* Adaptation succeeded: hang the target type on the literal node
                  * so that codegen can read it directly.  expected_type_ref comes
-                 * from a declaration and borrows the AST lifetime. */
-                ((FengExpr *)expr)->type = expected_type_ref;
+                 * from a declaration and borrows the AST lifetime.
+                 *
+                 * When called during overload-resolution candidate probing
+                 * (suppress_literal_type_commit is true), the type must NOT
+                 * be set here — each probing call carries a different candidate
+                 * parameter type and the last write would win non-deterministically.
+                 * The correct type is committed after resolution picks the unique
+                 * winner (see commit_literal_arg_adaptations_for_resolved_call). */
+                if (!context->suppress_literal_type_commit) {
+                    ((FengExpr *)expr)->type = expected_type_ref;
+                }
                 return true;
             }
             return false;
@@ -18601,6 +18632,99 @@ static void record_resolved_callable_from_resolution(
     }
 }
 
+/* After overload resolution picks the unique winner, commit the literal
+ * argument types based on the winning candidate's parameter shapes.
+ *
+ * During overload-resolution candidate probing, expr_matches_expected_type_ref
+ * is called multiple times per literal (once per candidate) with different
+ * parameter types, and suppress_literal_type_commit prevents it from writing
+ * to expr->type.  This function fills in the correct type using the winning
+ * candidate's substituted parameter types, with analysis-lifetime tracking so
+ * codegen can read the type after the resolve context is torn down. */
+static void commit_literal_arg_adaptations_for_resolved_call(
+    ResolveContext *context,
+    FengExpr *const *args,
+    size_t arg_count,
+    const FengCallableSignature *callable,
+    const FengDecl *owner_type_decl,
+    const FengDecl *fit_decl,
+    InferredExprType owner_type) {
+    size_t i;
+    bool is_variadic;
+    size_t fixed_count;
+
+    if (args == NULL || callable == NULL) {
+        return;
+    }
+    is_variadic = callable->param_count > 0U &&
+                  callable->params[callable->param_count - 1U].is_variadic;
+    fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
+    if (!is_variadic && callable->param_count != arg_count) {
+        return;
+    }
+    if (is_variadic && arg_count < fixed_count) {
+        return;
+    }
+
+    for (i = 0U; i < arg_count; ++i) {
+        const FengTypeRef *declared_param_type;
+        const FengTypeRef *param_type;
+
+        if (args[i] == NULL) {
+            continue;
+        }
+        /* Only commit for pure numeric literals that need adaptation. */
+        if (!expr_is_pure_numeric_literal_expr_for_target_adaptation(args[i])) {
+            continue;
+        }
+        /* Skip type-parameter positions: the argument drives the inferred type
+         * argument, not the other way around — no literal adaptation needed. */
+        if (i < fixed_count &&
+            param_type_is_type_param_ref(callable, callable->params[i].type)) {
+            continue;
+        }
+
+        if (i < fixed_count) {
+            declared_param_type = callable->params[i].type;
+        } else {
+            /* Variadic position: match against element type T. */
+            declared_param_type = callable->params[fixed_count].type->as.inner;
+        }
+
+        param_type = substitute_type_ref_for_owner_instance(
+            context, owner_type_decl, owner_type, declared_param_type);
+        param_type = substitute_type_ref_for_fit_instance(
+            context, fit_decl, owner_type, param_type);
+
+        if (!numeric_literal_adapts_to_target(context, args[i], param_type)) {
+            continue;
+        }
+
+        /* Adaptation succeeded.  Clone the substituted parameter type to the
+         * analysis lifetime so codegen can read it after ResolveContext
+         * teardown.  When substitution returned the original declaration
+         * type_ref unchanged (pointer equality), it already has AST lifetime
+         * and can be used directly. */
+        if (param_type != declared_param_type) {
+            InferredExprType adapted = inferred_expr_type_from_type_ref(param_type);
+            FengTypeRef *synth = create_type_ref_from_inferred_type(&adapted,
+                                                                     args[i]->token);
+            if (synth != NULL) {
+                FengTypeRef *clone = clone_type_ref_for_inference(synth);
+                free_synthetic_type_ref(synth);
+                if (clone != NULL &&
+                    analysis_track_synthetic_type_ref(context->analysis, clone)) {
+                    ((FengExpr *)args[i])->type = clone;
+                } else {
+                    free_synthetic_type_ref(clone);
+                }
+            }
+        } else {
+            ((FengExpr *)args[i])->type = param_type;
+        }
+    }
+}
+
 static bool validate_function_call_expr(ResolveContext *context, const FengExpr *expr) {
     const FengExpr *callee = expr->as.call.callee;
 
@@ -18649,6 +18773,14 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                      resolution.callable->params,
                                                      resolution.callable->param_count,
                                                      FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
+                    commit_literal_arg_adaptations_for_resolved_call(
+                        context,
+                        expr->as.call.args,
+                        expr->as.call.arg_count,
+                        resolution.callable,
+                        NULL,
+                        NULL,
+                        inferred_expr_type_unknown());
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -18735,6 +18867,14 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                         resolution.callable->param_count,
                                                                         static_target.type_decl,
                                                                         static_owner_type);
+                    commit_literal_arg_adaptations_for_resolved_call(
+                        context,
+                        expr->as.call.args,
+                        expr->as.call.arg_count,
+                        resolution.callable,
+                        static_target.type_decl,
+                        resolution.fit_decl,
+                        static_owner_type);
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -18893,6 +19033,14 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                     resolution.callable->param_count,
                                                                     owner_type_decl,
                                                                     owner_type);
+                commit_literal_arg_adaptations_for_resolved_call(
+                    context,
+                    expr->as.call.args,
+                    expr->as.call.arg_count,
+                    resolution.callable,
+                    owner_type_decl,
+                    resolution.fit_decl,
+                    owner_type);
                 return true;
             }
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -18970,6 +19118,14 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                     resolution.callable->param_count,
                                                                     NULL,
                                                                     owner_type);
+                commit_literal_arg_adaptations_for_resolved_call(
+                    context,
+                    expr->as.call.args,
+                    expr->as.call.arg_count,
+                    resolution.callable,
+                    NULL,
+                    resolution.fit_decl,
+                    owner_type);
                 return true;
             }
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
@@ -19051,6 +19207,14 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                      resolution.callable->params,
                                                      resolution.callable->param_count,
                                                      FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
+                    commit_literal_arg_adaptations_for_resolved_call(
+                        context,
+                        expr->as.call.args,
+                        expr->as.call.arg_count,
+                        resolution.callable,
+                        NULL,
+                        NULL,
+                        inferred_expr_type_unknown());
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
