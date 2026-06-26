@@ -11878,7 +11878,12 @@ static void test_lsp_hover_and_definition_local_var_rhs(void) {
      * function parameter.  Before the fix, find_expr_hit skipped if-expression
      * bodies, so the result was null. */
     ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
-    ASSERT(strstr(output, "let n: i64") != NULL || strstr(output, "var n: i64") != NULL);
+    /* int maps to i64 on 64-bit, i32 on 32-bit — assert the platform-correct name. */
+    if (sizeof(void *) >= 8) {
+        ASSERT(strstr(output, "let n: i64") != NULL || strstr(output, "var n: i64") != NULL);
+    } else {
+        ASSERT(strstr(output, "let n: i32") != NULL || strstr(output, "var n: i32") != NULL);
+    }
 
     /* Hover on `i` in `i += 1` (for-loop update) must resolve to the for-init
      * binding.  Before the fix, find_expr_hit_in_block skipped the update
@@ -12844,7 +12849,11 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     ASSERT(strstr(hover_type_output, "type Map<K, V>") != NULL);
     ASSERT(strstr(hover_type_output, "Package map docs.") != NULL);
     ASSERT(strstr(hover_member_output, "\"id\":2,\"result\":null") == NULL);
-    ASSERT(strstr(hover_member_output, "let count: i64") != NULL);
+    if (sizeof(void *) >= 8) {
+        ASSERT(strstr(hover_member_output, "let count: i64") != NULL);
+    } else {
+        ASSERT(strstr(hover_member_output, "let count: i32") != NULL);
+    }
     ASSERT(strstr(hover_member_output, "Number of stored entries.") != NULL);
     ASSERT(strstr(hover_function_output, "\"id\":2,\"result\":null") == NULL);
     ASSERT(strstr(hover_function_output, "func join(prefix: string, parts: string...): string") != NULL);

@@ -98,7 +98,7 @@ if [[ -f "$OUT_ROOT/spec_call_witness/ir/c/feng.c" ]]; then
     assert_not_contains "spec_call_witness" "$cfile" "witness->witness->"
 fi
 
-# 3) generic Set<int> direct-call path must stay monomorphized and no boxing/lookup.
+# 3) generic Set<i64> direct-call path must stay monomorphized and no boxing/lookup.
 GENERIC_SRC='module feng.perf.g16;
 type Set<T> {
     var value: T;
@@ -109,8 +109,8 @@ type Set<T> {
         return self.value;
     }
 }
-func use_it(): int {
-    let set: Set<int> = Set<int>();
+func use_it(): i64 {
+    let set: Set<i64> = Set<i64>();
     set.put(7);
     return set.get();
 }
