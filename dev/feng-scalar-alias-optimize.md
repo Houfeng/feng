@@ -270,6 +270,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [ ] 更新 `docs/feng-builtin-type.md`：`int` 映射规则改为平台相关，整数字面量默认类型描述更新（当前为"推导为 `int`（即 `i32`）"，`int` 平台相关后需同步更新描述）
 - [ ] `canonical_builtin_type_name()` 中 `int` 映射从固定 `i32` 改为平台相关：32 位 → `i32`，64 位 → `i64`
 - [ ] 全量回归测试
+- [ ] 通过后将当前任务 TODO 标记为完成
 
 ### Task 7：语义优化——识别应使用平台相关 `int` 的 `i32` 用法
 
