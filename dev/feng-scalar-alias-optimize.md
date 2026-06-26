@@ -126,7 +126,7 @@ Go、Swift 的设计模式一致：默认整数类型（`int`/`Int`）匹配机�
 
 ### 6.4 实现方案
 
-```
+```text
 Parser → AST（type_ref 中保留用户写的原始名称，如 int、byte）
   ↓
 Semantic 入口 → 统一遍历 AST，将所有 type_ref 中的别名替换为标准名（一次性归一）
@@ -286,8 +286,6 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ### Task 6：`int` 改为平台相关别名
 
-> Task 5 已将所有 `int` 迁移为 `i32`，此时切换 `int` 的映射不影响已有代码。
-
 - [ ] 更新 `docs/feng-language.md`：别名表中 `int` 标注为平台相关
 - [ ] 更新 `docs/feng-builtin-type.md`：`int` 映射规则改为平台相关，整数字面量默认类型描述更新（当前为"推导为 `int`（即 `i32`）"，`int` 平台相关后需同步更新描述）
 - [ ] `canonical_builtin_type_name()` 中 `int` 映射从固定 `i32` 改为平台相关：32 位 → `i32`，64 位 → `i64`
@@ -296,12 +294,10 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ### Task 7：语义优化——识别应使用平台相关 `int` 的 `i32` 用法
 
-> Task 5 将所有 `int` 迁移为 `i32`，其中一部分语义上应跟随平台（如通用计数、数组索引、与 `size_t`/`intptr_t` 对接等），需识别并改回 `int`。此任务为语义优化，不影响正确性。
-
-- [ ] 审计 `std/` 中 Task 5 迁移的 `i32`，将应平台相关的改回 `int`
-- [ ] 审计 `fcts/` 中 Task 5 迁移的 `i32`，将应平台相关的改回 `int`
+- [ ] 分析 std 中所有应该明确使用平台位宽的地方，列出清单由人工决策
+- [ ] 根据人工决策，进行代码变更
 - [ ] 全量回归测试
-- [ ] 更新本文件状态为"已实施"，等下一步指令
+- [ ] 通过后将当前任务 TODO 标记为完成，等下一步指令
 
 ## 9. 决策记录
 
@@ -317,3 +313,4 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - **2026-06-24**：决策——平台位宽信息通过 `FengSemanticAnalyzeOptions.pointer_size` 传入，语义分析入口存入 `ResolveContext`，`canonical_builtin_type_name()` 及 `inferred_expr_type_builtin_canonical_name()` 通过 `ResolveContext` 获取平台信息，保持核心编译器不直接依赖 CLI 参数
 - **2026-06-24**：决策——Task 2 迁移顺序调整：先迁移所有 `long` 用法为 `i64`，最后才移除别名表条目。迁移期间 `long` 仍为合法别名，编译器可正常编译和验证，避免中间状态不可编译
 - **2026-06-24**：决策——Task 3~7 五步拆分：先建平台位宽映射基础设施（Task 3），用新增 `uint` 验证（Task 4），再迁移所有 `int` → `i32`（Task 5），然后切换 `int` 为平台相关（Task 6），最后审计识别应平台相关的 `i32` 改回 `int`（Task 7）。Feng 的字面量贴合策略（`integer_literal_fits_canonical_target`）保证有目标类型注解的字面量不受默认推导变化影响
+- **2026-06-26**：决策——Task 5/6/7 重构：旧 Task 5（迁移所有 `int` → `i32`）废弃。新 Task 5 将 std 中数组长度、字符串长度、容器 size 从 `i64`/`i32` 改为 `int`，runtime contract 对应 `int64_t` 改为 `intptr_t`，每种类型独立"改代码→回归测试"循环推进。Task 6 移除旧 Task 5 前提，仅保留切换 `int` 为平台相关的核心步骤。Task 7 从"审计旧 Task 5 迁移的 `i32`"调整为"分析 std 中所有应使用平台位宽的地方"，由人工决策后实施
