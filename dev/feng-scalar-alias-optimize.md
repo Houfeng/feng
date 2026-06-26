@@ -270,19 +270,20 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ### Task 5：std 中的数组长度、字符串长度、容器 size 改为 `int` (后续将和平台位宽一致)
 
-- [ ] feng_runtime_contract.inc 中 Array/String 相关 API 的 `int64_t` 改为 `intptr_t`（含 `feng_array_length_i64`、`feng_array_slice`、`feng_string_utf8_length`、`feng_string_from_utf8_bytes`、`feng_string_slice`、`feng_string_slice_bytes`、`feng_string_range_equal`）
+- [ ] feng_runtime_contract.inc 中 Array/String 相关 API 的 `int64_t` 改为 `intptr_t`（含所有 feng_runtime_contract 中声明的函数）
 - [ ] 更新受 feng_runtime_contract.inc 变更影响的 c 实现
 - [ ] feng_array_length_i64 改名为 feng_array_get_length
+- [ ] 等待人工 Review，
 - [ ] Array 的 `length()`、`at()`、`indexOf()`、`clone()` 等方法的 `i64` 改为 `int`（含 `feng_array_slice` 的 `start`/`length` 参数），及所有级联调用代码更新
-- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等下一步指令
+- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等待下一步指令
 - [ ] String 的 `length()` 等方法的 `i64` 改为 `int`（含 `feng_string_*` 系列参数），及所有级联调用代码更新
-- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等下一步指令
+- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等待下一步指令
 - [ ] Map 的 size 改为 int 类型，及所有级联代码更新
-- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等下一步指令
+- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等待下一步指令
 - [ ] List 的 size 改为 int 类型，及所有级联代码更新
-- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等下一步指令
+- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等待下一步指令
 - [ ] Set 的 size 改为 int 类型，及所有级联代码更新
-- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等下一步指令
+- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等待下一步指令
 
 ### Task 6：`int` 改为平台相关别名
 
@@ -290,14 +291,14 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - [ ] 更新 `docs/feng-builtin-type.md`：`int` 映射规则改为平台相关，整数字面量默认类型描述更新（当前为"推导为 `int`（即 `i32`）"，`int` 平台相关后需同步更新描述）
 - [ ] `canonical_builtin_type_name()` 中 `int` 映射从固定 `i32` 改为平台相关：32 位 → `i32`，64 位 → `i64`
 - [ ] 全量回归测试
-- [ ] 通过后将当前任务 TODO 标记为完成，等下一步指令
+- [ ] 通过后将当前任务 TODO 标记为完成，等待下一步指令
 
 ### Task 7：语义优化——识别应使用平台相关 `int` 的 `i32` 用法
 
 - [ ] 分析 std 中所有应该明确使用平台位宽的地方，列出清单由人工决策
 - [ ] 根据人工决策，进行代码变更
 - [ ] 全量回归测试
-- [ ] 通过后将当前任务 TODO 标记为完成，等下一步指令
+- [ ] 通过后将当前任务 TODO 标记为完成，等待下一步指令
 
 ## 9. 决策记录
 
