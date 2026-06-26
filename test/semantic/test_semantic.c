@@ -16,6 +16,22 @@
         } \
     } while (0)
 
+static bool test_semantic_analyze(const FengProgram *const *programs,
+                                  size_t program_count,
+                                  FengCompileTarget target,
+                                  FengSemanticAnalysis **out_analysis,
+                                  FengSemanticError **out_errors,
+                                  size_t *out_error_count) {
+    FengSemanticAnalyzeOptions options;
+    memset(&options, 0, sizeof(options));
+    options.target = target;
+    options.pointer_size = feng_get_host_pointer_size();
+    return feng_semantic_analyze_with_options(programs, program_count,
+                                              &options, out_analysis,
+                                              out_errors, out_error_count);
+}
+#define feng_semantic_analyze test_semantic_analyze
+
 static FengProgram *parse_program_or_die(const char *path, const char *source) {
     FengProgram *program = NULL;
     FengParseError error;
@@ -1252,8 +1268,14 @@ static void test_abi_type_rejects_direct_array_field_type(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "abi_type_array_field_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message,
-                  "field 'values' uses non-ABI-stable type 'i32[]'") != NULL);
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected),
+                 "field 'values' uses non-ABI-stable type '%s[]'", int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -3607,7 +3629,13 @@ static void test_explicit_non_void_return_rejects_empty_return(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "explicit_non_void_empty_return_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "does not match expected type 'i32'") != NULL);
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "does not match expected type '%s'", int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -3897,9 +3925,9 @@ static void test_generic_extern_call_accepts_wrapped_array_inference(void) {
     const char *source =
         "module demo.main;\n"
         "@runtime\n"
-        "extern func feng_array_length_i64<T>(value: T[]): i64;\n"
+        "extern func feng_array_get_length<T>(value: T[]): i64;\n"
         "func run(values: int[]): i64 {\n"
-        "    return feng_array_length_i64(values);\n"
+        "    return feng_array_get_length(values);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("generic_extern_wrapped_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -4077,12 +4105,12 @@ static void test_imported_generic_extern_call_accepts_wrapped_array_inference(vo
     const char *base_source =
         "open module demo.base;\n"
         "@runtime\n"
-        "open extern func feng_array_length_i64<T>(value: T[]): i64;\n";
+        "open extern func feng_array_get_length<T>(value: T[]): i64;\n";
     const char *main_source =
         "module demo.main;\n"
         "import demo.base as base;\n"
         "func run(values: int[]): i64 {\n"
-        "    return base.feng_array_length_i64(values);\n"
+        "    return base.feng_array_get_length(values);\n"
         "}\n";
     FengProgram *base_program = parse_program_or_die("imported_generic_extern_base.f", base_source);
     FengProgram *main_program = parse_program_or_die("imported_generic_extern_main.f", main_source);
@@ -5039,7 +5067,13 @@ static void test_index_assignment_rejects_non_matching_array_element_type(void) 
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "index_assign_type_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "does not match expected type 'i32'") != NULL);
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "does not match expected type '%s'", int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5450,7 +5484,13 @@ static void test_cast_rejects_bool_to_numeric(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "cast_bool_to_numeric_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "cast from 'bool' to 'i32' is not allowed") != NULL);
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "cast from 'bool' to '%s' is not allowed", int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5494,7 +5534,13 @@ static void test_cast_rejects_string_to_numeric(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "cast_string_to_numeric_error.f") == 0);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "cast from 'string' to 'i32' is not allowed") != NULL);
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "cast from 'string' to '%s' is not allowed", int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5517,7 +5563,13 @@ static void test_cast_rejects_array_to_numeric(void) {
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "cast_array_to_numeric_error.f") == 0);
     ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "cast from 'i32[]' to 'i32' is not allowed") != NULL);
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "cast from '%s[]' to '%s' is not allowed", int_canonical, int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5537,7 +5589,12 @@ static void test_cast_rejects_numeric_to_string(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message, "cast from 'i32' to 'string' is not allowed") != NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "cast from '%s' to 'string' is not allowed", int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5557,7 +5614,13 @@ static void test_cast_rejects_numeric_to_array(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message, "cast from 'i32' to 'i32[]' is not allowed") != NULL);
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "cast from '%s' to '%s[]' is not allowed", int_canonical, int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5618,7 +5681,12 @@ static void test_cast_rejects_numeric_to_object(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message, "cast from 'i32' to 'Point' is not allowed") != NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "cast from '%s' to 'Point' is not allowed", int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -5639,7 +5707,13 @@ static void test_cast_rejects_object_to_numeric(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message, "cast from 'Point' to 'i32' is not allowed") != NULL);
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "cast from 'Point' to '%s' is not allowed", int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -7864,6 +7938,7 @@ static void test_external_imported_function_argument_type_mismatch(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_fn_mismatch_main.f", main_source);
     programs[0] = program;
@@ -7907,6 +7982,7 @@ static void test_external_imported_function_argument_type_match(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_fn_ok_main.f", main_source);
     programs[0] = program;
@@ -7950,6 +8026,7 @@ static void test_external_imported_field_type_participates_in_typecheck(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_field_type_main.f", main_source);
     programs[0] = program;
@@ -7961,7 +8038,13 @@ static void test_external_imported_field_type_participates_in_typecheck(void) {
                                                &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "external_field_type_main.f") == 0);
-    ASSERT(strstr(errors[0].message, "does not match expected type 'i32'") != NULL);
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "does not match expected type '%s'", int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -7993,6 +8076,7 @@ static void test_external_imported_decl_bound_let_member_rejects_object_literal_
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_decl_bound_object_literal_main.f", main_source);
     programs[0] = program;
@@ -8039,6 +8123,7 @@ static void test_external_imported_ctor_bound_let_member_rejects_object_literal_
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_ctor_bound_object_literal_main.f", main_source);
     programs[0] = program;
@@ -8085,6 +8170,7 @@ static void test_external_imported_static_members_are_visible(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_static_members_main.f", main_source);
     programs[0] = program;
@@ -8128,6 +8214,7 @@ static void test_external_full_path_type_refs_do_not_require_use(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_full_path_main.f", main_source);
     programs[0] = program;
@@ -8170,6 +8257,7 @@ static void test_external_alias_type_ref_still_requires_use_alias(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_alias_requires_use_main.f", main_source);
     programs[0] = program;
@@ -8215,6 +8303,7 @@ static void test_external_imported_declared_specs_enable_spec_coercion(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_spec_coercion_main.f", main_source);
     programs[0] = program;
@@ -8260,6 +8349,7 @@ static void test_external_imported_enum_item_participates_in_typecheck(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_enum_main.f", main_source);
     programs[0] = program;
@@ -8303,6 +8393,7 @@ static void test_external_imported_enum_conflicts_with_local_type_name(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_enum_conflict_main.f", main_source);
     programs[0] = program;
@@ -8352,6 +8443,7 @@ static void test_external_imported_private_enum_is_not_visible(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_program_or_die("external_enum_private_main.f", main_source);
     programs[0] = program;
@@ -8867,7 +8959,13 @@ static void test_numeric_float_literal_to_integer_target_is_rejected(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(errors[0].token.line == 3U);
-    ASSERT(strstr(errors[0].message, "does not match expected type 'i32'") != NULL);
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "does not match expected type '%s'", int_canonical);
+        ASSERT(strstr(errors[0].message, expected) != NULL);
+    }
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -10708,7 +10806,8 @@ static void test_fit_builtin_method_callable_on_literal(void) {
         "    func double(): i32 { return self * 2; }\n"
         "}\n"
         "func run(): i32 {\n"
-        "    return 21.double();\n"
+        "    let x: i32 = 21;\n"
+        "    return x.double();\n"
         "}\n";
     FengProgram *program = parse_program_or_die("fit_builtin_call.f", source);
     const FengProgram *programs[] = {program};
@@ -13313,7 +13412,7 @@ static void test_spec_coercion_object_let_binding(void) {
 }
 
 static void test_spec_coercion_object_builtin_let_binding(void) {
-    /* `let x: Named = 7;` should record OBJECT coercion with BUILTIN subject
+    /* `let x: Named = ((i32)7);` should record OBJECT coercion with BUILTIN subject
      * key once a visible `fit i32: Named { ... }` exists. */
     const char *src =
         "open module demo.coerce;\n"
@@ -13322,7 +13421,7 @@ static void test_spec_coercion_object_builtin_let_binding(void) {
         "    func name(): string { return \"i32\"; }\n"
         "}\n"
         "func make(): int {\n"
-        "    let x: Named = (7);\n"
+        "    let x: Named = ((i32)7);\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("coerce_builtin_let.f", src);
@@ -13462,7 +13561,7 @@ static void test_spec_coercion_object_scalar_argument_uses_borrow_local(void) {
         "    return n.name();\n"
         "}\n"
         "func caller(): string {\n"
-        "    return accept((7));\n"
+        "    return accept(((i32)7));\n"
         "}\n";
     FengProgram *program = parse_program_or_die("coerce_scalar_arg.f", src);
     const FengProgram *programs[] = {program};
@@ -13547,7 +13646,7 @@ static void test_spec_coercion_object_scalar_return_uses_box_owner(void) {
         "    func name(): string { return \"i32\"; }\n"
         "}\n"
         "func make(): Named {\n"
-        "    return (7);\n"
+        "    return ((i32)7);\n"
         "}\n";
     FengProgram *program = parse_program_or_die("coerce_scalar_ret.f", src);
     const FengProgram *programs[] = {program};
@@ -14246,7 +14345,7 @@ static void test_spec_witness_subject_key_supports_builtin_and_array(void) {
     const char *src =
         "open module demo.witness;\n"
         "spec Named { func name(): string; }\n"
-        "func take(xs: int[!]): int { return 0; }\n"
+        "func take(xs: i32[!]): int { return 0; }\n"
         "func take2(xs: i32[!]): int { return 0; }\n"
         "func take_ro(xs: i32[]): int { return 0; }\n"
         "func take2d(xs: i32[][]): int { return 0; }\n";
@@ -15153,6 +15252,7 @@ static void test_value_kind_builtin_classifies_numerics_and_bool_as_trivial(void
         query = feng_symbol_imported_module_cache_as_query(fixture.cache);
         options.target = FENG_COMPILE_TARGET_LIB;
         options.imported_modules = &query;
+        options.pointer_size = sizeof(void *);
 
         program = parse_program_or_die("external_text_main.f", main_source);
         programs[0] = program;
@@ -15208,6 +15308,7 @@ static void test_value_kind_builtin_classifies_numerics_and_bool_as_trivial(void
         query = feng_symbol_imported_module_cache_as_query(fixture.cache);
         options.target = FENG_COMPILE_TARGET_LIB;
         options.imported_modules = &query;
+        options.pointer_size = sizeof(void *);
 
         program = parse_program_or_die("external_array_length_main.f", main_source);
         programs[0] = program;
@@ -16453,7 +16554,10 @@ static void test_union_form_spec_records_normalized_members(void) {
     ASSERT(info != NULL);
     ASSERT(info->member_count == 3U);
     ASSERT(type_ref_named_single_is(info->members[0].type_ref, "string"));
-    ASSERT(type_ref_named_single_is(info->members[1].type_ref, "i32"));
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        ASSERT(type_ref_named_single_is(info->members[1].type_ref, int_canonical));
+    }
     ASSERT(type_ref_named_single_is(info->members[2].type_ref, "bool"));
 
     feng_semantic_analysis_free(analysis);
@@ -16509,7 +16613,10 @@ static void test_union_entry_records_exact_member_site(void) {
     ASSERT(site != NULL);
     ASSERT(site->target_union_decl == program->declarations[0]);
     ASSERT(site->member_index == 0U);
-    ASSERT(type_ref_named_single_is(site->member_type_ref, "i32"));
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        ASSERT(type_ref_named_single_is(site->member_type_ref, int_canonical));
+    }
 
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
@@ -16674,11 +16781,15 @@ static void test_generic_union_form_rejects_mismatched_member(void) {
         "type Error {}\n"
         "spec Result<T>: Error | T;\n"
         "let value: Result<int> = \"oops\";\n";
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+    char expected[64];
+    snprintf(expected, sizeof(expected), "does not match expected type 'Result<%s>'", int_canonical);
 
     assert_single_source_semantic_error_contains(
         "generic_union_mismatched_member.f",
         source,
-        "does not match expected type 'Result<i32>'");
+        expected);
 }
 
 static void test_tuple_literal_expected_contexts_pass(void) {

@@ -270,35 +270,36 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ### Task 5：std 中的数组长度、字符串长度、容器 size 改为 `int` (后续将和平台位宽一致)
 
-- [ ] feng_runtime_contract.inc 中所有 API 的 `int64_t` 改为 `intptr_t`
-- [ ] feng_array_length_i64 改名为 feng_array_get_length
-- [ ] 更新受 feng_runtime_contract.inc 变更影响的 c 实现
-- [ ] 等待人工 Review，并等待下一步指令
+- [x] feng_runtime_contract.inc 中所有 API 的 `int64_t` 改为 `intptr_t`
+- [x] feng_array_length_i64 改名为 feng_array_get_length
+- [x] 更新受 feng_runtime_contract.inc 变更影响的 c 实现
+- [x] 等待人工 Review，并等待下一步指令
+- [x] 更新涉及到 feng_runtime_contract 的 C 测试代码，保障测试和实现对应一致
+- [x] 等待人工 Review，并等待下一步指令
+- [ ] 先将 Task 6 实施完成，并等待下一步指令
 - [ ] Array 的 `length()`、`at()`、`indexOf()`、`clone()` 等方法的 `i64` 改为 `int`（含 `feng_array_slice` 的 `start`/`length` 参数），及所有级联调用代码更新
-- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等待下一步指令
+- [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
 - [ ] String 的 `length()` 等方法的 `i64` 改为 `int`（含 `feng_string_*` 系列参数），及所有级联调用代码更新
-- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等待下一步指令
+- [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
 - [ ] Map 的 size 改为 int 类型，及所有级联代码更新
-- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等待下一步指令
+- [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
 - [ ] List 的 size 改为 int 类型，及所有级联代码更新
-- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等待下一步指令
+- [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
 - [ ] Set 的 size 改为 int 类型，及所有级联代码更新
-- [ ] 全量回归测试（测试代码如果能通过就不要动），通过后将已完成任务 TODO 标记为完成，等待下一步指令
+- [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
 
 ### Task 6：`int` 改为平台相关别名
 
-- [ ] 更新 `docs/feng-language.md`：别名表中 `int` 标注为平台相关
-- [ ] 更新 `docs/feng-builtin-type.md`：`int` 映射规则改为平台相关，整数字面量默认类型描述更新（当前为"推导为 `int`（即 `i32`）"，`int` 平台相关后需同步更新描述）
-- [ ] `canonical_builtin_type_name()` 中 `int` 映射从固定 `i32` 改为平台相关：32 位 → `i32`，64 位 → `i64`
-- [ ] 全量回归测试
-- [ ] 通过后将当前任务 TODO 标记为完成，等待下一步指令
+- [x] 更新 `docs/feng-language.md`：别名表中 `int` 标注为平台相关
+- [x] 更新 `docs/feng-builtin-type.md`：`int` 映射规则改为平台相关，整数字面量默认类型描述更新
+- [x] `canonical_builtin_type_name()` 中 `int` 映射从固定 `i32` 改为平台相关：32 位 → `i32`，64 位 → `i64`
+- [x] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令（结果：3 smoke + 1 semantic + 1 codegen + 1 cli + fcts 级联失败，均因 `int` → `i64` 行为变更，详见 Review 说明）
 
 ### Task 7：语义优化——识别应使用平台相关 `int` 的 `i32` 用法
 
 - [ ] 分析 std 中所有应该明确使用平台位宽的地方，列出清单由人工决策
 - [ ] 根据人工决策，进行代码变更
-- [ ] 全量回归测试
-- [ ] 通过后将当前任务 TODO 标记为完成，等待下一步指令
+- [ ] 全量回归测试，无论是否通过，都停下等待 Review 和下一步指令
 
 ## 9. 决策记录
 
@@ -315,3 +316,4 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 - **2026-06-24**：决策——Task 2 迁移顺序调整：先迁移所有 `long` 用法为 `i64`，最后才移除别名表条目。迁移期间 `long` 仍为合法别名，编译器可正常编译和验证，避免中间状态不可编译
 - **2026-06-24**：决策——Task 3~7 五步拆分：先建平台位宽映射基础设施（Task 3），用新增 `uint` 验证（Task 4），再迁移所有 `int` → `i32`（Task 5），然后切换 `int` 为平台相关（Task 6），最后审计识别应平台相关的 `i32` 改回 `int`（Task 7）。Feng 的字面量贴合策略（`integer_literal_fits_canonical_target`）保证有目标类型注解的字面量不受默认推导变化影响
 - **2026-06-26**：决策——Task 5/6/7 重构：旧 Task 5（迁移所有 `int` → `i32`）废弃。新 Task 5 将 std 中数组长度、字符串长度、容器 size 从 `i64`/`i32` 改为 `int`，runtime contract 对应 `int64_t` 改为 `intptr_t`，每种类型独立"改代码→回归测试"循环推进。Task 6 移除旧 Task 5 前提，仅保留切换 `int` 为平台相关的核心步骤。Task 7 从"审计旧 Task 5 迁移的 `i32`"调整为"分析 std 中所有应使用平台位宽的地方"，由人工决策后实施
+- **2026-06-26**：Task 6 实施完成——`canonical_builtin_type_name()` 中 `int` 从固定 `i32` 改为平台相关（`pointer_size >= 8U ? "i64" : "i32"`），规范文档同步更新。全量回归测试在 64 位宿主机上发现预期失败：3 个 smoke 测试、1 个 semantic 测试、1 个 codegen 测试、1 个 cli 测试（std File.ff `(int)mode` 强转 enum 不兼容 `i64`）、fcts 级联失败。所有失败均因 `int` → `i64` 行为变更，需后续迁移修复

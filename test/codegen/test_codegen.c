@@ -27,6 +27,22 @@
         }                                                                             \
     } while (0)
 
+static bool test_semantic_analyze(const FengProgram *const *programs,
+                                  size_t program_count,
+                                  FengCompileTarget target,
+                                  FengSemanticAnalysis **out_analysis,
+                                  FengSemanticError **out_errors,
+                                  size_t *out_error_count) {
+    FengSemanticAnalyzeOptions options;
+    memset(&options, 0, sizeof(options));
+    options.target = target;
+    options.pointer_size = feng_get_host_pointer_size();
+    return feng_semantic_analyze_with_options(programs, program_count,
+                                              &options, out_analysis,
+                                              out_errors, out_error_count);
+}
+#define feng_semantic_analyze test_semantic_analyze
+
 static const char *kSourceA =
     "module feng.codegen.mfa;\n"
     "\n"
@@ -681,10 +697,10 @@ static void test_generic_static_methods_codegen(void) {
         "        return Box<T> { value: value };\n"
         "    }\n"
         "}\n"
-        "func run_case(): int {\n"
-        "    let direct: int = Util.id<int>(41);\n"
-        "    let boxed: Box<int> = Box<int>.make(1);\n"
-        "    let via_fit: Box<int> = Box<int>.of(2);\n"
+        "func run_case(): i32 {\n"
+        "    let direct: i32 = Util.id<i32>(41);\n"
+        "    let boxed: Box<i32> = Box<i32>.make(1);\n"
+        "    let via_fit: Box<i32> = Box<i32>.of(2);\n"
         "    return direct + boxed.value + via_fit.value;\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "staticgen.ff");
@@ -695,10 +711,6 @@ static void test_generic_static_methods_codegen(void) {
 
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                  &analysis, &errors, &error_count));
-    if (error_count != 0U) {
-        fprintf(stderr, "semantic error (generic static methods): %s\n",
-                errors[0].message ? errors[0].message : "(unknown)");
-    }
     ASSERT(error_count == 0U);
 
     FengCodegenOutput out = {0};
@@ -1605,8 +1617,15 @@ static void test_abi_value_extern_codegen(void) {
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
                   "extern struct Feng__feng__codegen__abivalueextern__Point__AbiLayout create_point(") != NULL);
-    ASSERT(strstr(out.c_source,
-                  "extern int32_t point_sum(struct Feng__feng__codegen__abivalueextern__Point__AbiLayout") != NULL);
+    /* int is platform-dependent: i32 (int32_t) on 32-bit, i64 (int64_t) on 64-bit. */
+    {
+        const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+        char expected[128];
+        snprintf(expected, sizeof(expected),
+                 "extern %s point_sum(struct Feng__feng__codegen__abivalueextern__Point__AbiLayout",
+                 int_c_type);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+    }
     ASSERT(strstr(out.c_source,
                   "Feng__feng__codegen__abivalueextern__Point__abi_box(") != NULL);
     ASSERT(strstr(out.c_source,
@@ -1665,9 +1684,9 @@ static void test_generic_runtime_extern_call_infers_type_args(void) {
     static const char *kSource =
         "module feng.codegen.genericruntimeextern;\n"
         "@runtime\n"
-        "extern func feng_array_length_i64<T>(value: T[]): i64;\n"
+        "extern func feng_array_get_length<T>(value: T[]): i64;\n"
         "func run(values: int[]): i64 {\n"
-        "    return feng_array_length_i64(values);\n"
+        "    return feng_array_get_length(values);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "genericruntimeextern.ff");
     const FengProgram *programs[1] = {program};
@@ -1690,8 +1709,15 @@ static void test_generic_runtime_extern_call_infers_type_args(void) {
     }
 
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
-                  "feng_array_length_i64(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_i32_descriptor, .witness = NULL}, values)") != NULL);
+    {
+        /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+        const char *int_descriptor = sizeof(void *) >= 8U ? "feng_i64_descriptor" : "feng_i32_descriptor";
+        char expected[256];
+        snprintf(expected, sizeof(expected),
+                 "feng_array_get_length(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL}, values)",
+                 int_descriptor);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+    }
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -1705,9 +1731,9 @@ static void test_generic_runtime_extern_call_accepts_explicit_type_args(void) {
     static const char *kSource =
         "module feng.codegen.genericruntimeexternexplicit;\n"
         "@runtime\n"
-        "extern func feng_array_length_i64<T>(value: T[]): i64;\n"
+        "extern func feng_array_get_length<T>(value: T[]): i64;\n"
         "func run(values: int[]): i64 {\n"
-        "    return feng_array_length_i64<int>(values);\n"
+        "    return feng_array_get_length<int>(values);\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "genericruntimeexternexplicit.ff");
     const FengProgram *programs[1] = {program};
@@ -1730,8 +1756,15 @@ static void test_generic_runtime_extern_call_accepts_explicit_type_args(void) {
     }
 
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
-                  "feng_array_length_i64(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_i32_descriptor, .witness = NULL}, values)") != NULL);
+    {
+        /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+        const char *int_descriptor = sizeof(void *) >= 8U ? "feng_i64_descriptor" : "feng_i32_descriptor";
+        char expected[256];
+        snprintf(expected, sizeof(expected),
+                 "feng_array_get_length(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL}, values)",
+                 int_descriptor);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+    }
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -1770,9 +1803,19 @@ static void test_generic_runtime_extern_expression_equal_codegen(void) {
     }
 
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
-                  "feng_expression_equal(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_i32_descriptor, .witness = NULL}, &_rga") != NULL);
-    ASSERT(count_substr(out.c_source, "int32_t _rga") == 2U);
+    {
+        /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+        const char *int_descriptor = sizeof(void *) >= 8U ? "feng_i64_descriptor" : "feng_i32_descriptor";
+        const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+        char expected[256];
+        char rga_pattern[64];
+        snprintf(expected, sizeof(expected),
+                 "feng_expression_equal(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL}, &_rga",
+                 int_descriptor);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+        snprintf(rga_pattern, sizeof(rga_pattern), "%s _rga", int_c_type);
+        ASSERT(count_substr(out.c_source, rga_pattern) == 2U);
+    }
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -1811,11 +1854,23 @@ static void test_generic_runtime_extern_direct_type_param_return_codegen(void) {
     }
 
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
-                  "__test_value_identity(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_i32_descriptor, .witness = NULL}, &_rga") != NULL);
-    ASSERT(strstr(out.c_source, ", &_rgr") != NULL);
-    ASSERT(count_substr(out.c_source, "int32_t _rga") == 1U);
-    ASSERT(count_substr(out.c_source, "int32_t _rgr") == 1U);
+    {
+        /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+        const char *int_descriptor = sizeof(void *) >= 8U ? "feng_i64_descriptor" : "feng_i32_descriptor";
+        const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+        char expected[256];
+        char rga_pattern[64];
+        char rgr_pattern[64];
+        snprintf(expected, sizeof(expected),
+                 "__test_value_identity(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL}, &_rga",
+                 int_descriptor);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+        ASSERT(strstr(out.c_source, ", &_rgr") != NULL);
+        snprintf(rga_pattern, sizeof(rga_pattern), "%s _rga", int_c_type);
+        snprintf(rgr_pattern, sizeof(rgr_pattern), "%s _rgr", int_c_type);
+        ASSERT(count_substr(out.c_source, rga_pattern) == 1U);
+        ASSERT(count_substr(out.c_source, rgr_pattern) == 1U);
+    }
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -2034,6 +2089,7 @@ static void test_imported_feng_function_prototypes_compile(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_or_die(kConsumerSource, "tests/imported_consumer.ff");
     programs[0] = program;
@@ -2098,6 +2154,7 @@ static void test_imported_alias_qualified_type_annotations_codegen_compile(void)
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_or_die(kConsumerSource, "tests/imported_alias_type_consumer.ff");
     programs[0] = program;
@@ -2151,6 +2208,7 @@ static void test_imported_full_path_type_annotations_codegen_compile_without_use
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_or_die(kConsumerSource, "tests/imported_full_path_type_consumer.ff");
     programs[0] = program;
@@ -2200,6 +2258,7 @@ static void test_imported_public_let_binding_codegen_compiles(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_or_die(kConsumerSource, "tests/imported_binding_consumer.ff");
     programs[0] = program;
@@ -2215,8 +2274,13 @@ static void test_imported_public_let_binding_codegen_compiles(void) {
     ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
                                      NULL, &out, &cgerr));
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
-                  "extern int32_t feng__vendor__values__count;") != NULL);
+    {
+        const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+        char expected[128];
+        snprintf(expected, sizeof(expected),
+                 "extern %s feng__vendor__values__count;", int_c_type);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+    }
     ASSERT(strstr(out.c_source,
                   "extern void feng__vendor__values__count__ensure_init__from__void(void);") != NULL);
     ASSERT(count_substr(out.c_source,
@@ -2267,6 +2331,7 @@ static void test_imported_public_static_members_codegen_compiles(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_or_die(kConsumerSource, "tests/imported_static_members_consumer.ff");
     programs[0] = program;
@@ -2282,12 +2347,20 @@ static void test_imported_public_static_members_codegen_compiles(void) {
     ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
                                      NULL, &out, &cgerr));
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
-                  "extern int32_t Feng__vendor__static_values__Counter__static__seed;") != NULL);
-    ASSERT(strstr(out.c_source,
-                  "extern void Feng__vendor__static_values__Counter__static__seed__ensure_init(void);") != NULL);
-    ASSERT(strstr(out.c_source,
-                  "extern int32_t Feng__vendor__static_values__Counter__static__current;") != NULL);
+    {
+        const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+        char expected[128];
+        snprintf(expected, sizeof(expected),
+                 "extern %s Feng__vendor__static_values__Counter__static__seed;",
+                 int_c_type);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+        ASSERT(strstr(out.c_source,
+                      "extern void Feng__vendor__static_values__Counter__static__seed__ensure_init(void);") != NULL);
+        snprintf(expected, sizeof(expected),
+                 "extern %s Feng__vendor__static_values__Counter__static__current;",
+                 int_c_type);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+    }
     ASSERT(strstr(out.c_source,
                   "Feng__vendor__static_values__Counter__static__make") != NULL);
     ASSERT(strstr(out.c_source,
@@ -2329,6 +2402,7 @@ static void test_imported_public_var_binding_read_write_codegen_compiles(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_or_die(kConsumerSource, "tests/imported_var_binding_consumer.ff");
     programs[0] = program;
@@ -2344,14 +2418,20 @@ static void test_imported_public_var_binding_read_write_codegen_compiles(void) {
     ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
                                      NULL, &out, &cgerr));
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
-                  "extern int32_t feng__vendor__state__count;") != NULL);
-    ASSERT(strstr(out.c_source,
-                  "extern void feng__vendor__state__count__ensure_init__from__void(void);") != NULL);
-    ASSERT(count_substr(out.c_source,
-                        "feng__vendor__state__count__ensure_init__from__void();") == 3U);
-    ASSERT(strstr(out.c_source,
-                  "feng__vendor__state__count = (int32_t)(next);") != NULL);
+    {
+        const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+        char expected[128];
+        snprintf(expected, sizeof(expected),
+                 "extern %s feng__vendor__state__count;", int_c_type);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+        ASSERT(strstr(out.c_source,
+                      "extern void feng__vendor__state__count__ensure_init__from__void(void);") != NULL);
+        ASSERT(count_substr(out.c_source,
+                            "feng__vendor__state__count__ensure_init__from__void();") == 3U);
+        snprintf(expected, sizeof(expected),
+                 "feng__vendor__state__count = (%s)(next);", int_c_type);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+    }
 
     compile_generated_c_or_die(out.c_source);
 
@@ -2389,6 +2469,7 @@ static void test_imported_public_binding_address_of_codegen_compiles(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_or_die(kConsumerSource, "tests/imported_binding_addr_consumer.ff");
     programs[0] = program;
@@ -2404,8 +2485,13 @@ static void test_imported_public_binding_address_of_codegen_compiles(void) {
     ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
                                      NULL, &out, &cgerr));
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
-                  "extern int32_t feng__vendor__values__count;") != NULL);
+    {
+        const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+        char expected[128];
+        snprintf(expected, sizeof(expected),
+                 "extern %s feng__vendor__values__count;", int_c_type);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+    }
     ASSERT(strstr(out.c_source,
                   "extern void feng__vendor__values__count__ensure_init__from__void(void);") != NULL);
     ASSERT(strstr(out.c_source,
@@ -2452,18 +2538,25 @@ static void test_public_binding_lib_exports_slot_and_ensure_init_codegen(void) {
         }
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
-                  "int32_t feng__vendor__values__count = 0;") != NULL);
-    ASSERT(strstr(out.c_source,
-                  "int32_t feng__vendor__values__total = 0;") != NULL);
-    ASSERT(strstr(out.c_source,
-                  "void feng__vendor__values__count__ensure_init__from__void(void);") != NULL);
-    ASSERT(strstr(out.c_source,
-                  "void feng__vendor__values__total__ensure_init__from__void(void);") != NULL);
-    ASSERT(strstr(out.c_source,
-                  "static int32_t feng__vendor__values__count = 0;") == NULL);
-    ASSERT(strstr(out.c_source,
-                  "static void feng__vendor__values__count__ensure_init__from__void(void)") == NULL);
+    {
+        const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+        char expected[128];
+        snprintf(expected, sizeof(expected),
+                 "%s feng__vendor__values__count = 0;", int_c_type);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+        snprintf(expected, sizeof(expected),
+                 "%s feng__vendor__values__total = 0;", int_c_type);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+        ASSERT(strstr(out.c_source,
+                      "void feng__vendor__values__count__ensure_init__from__void(void);") != NULL);
+        ASSERT(strstr(out.c_source,
+                      "void feng__vendor__values__total__ensure_init__from__void(void);") != NULL);
+        snprintf(expected, sizeof(expected),
+                 "static %s feng__vendor__values__count = 0;", int_c_type);
+        ASSERT(strstr(out.c_source, expected) == NULL);
+        ASSERT(strstr(out.c_source,
+                      "static void feng__vendor__values__count__ensure_init__from__void(void)") == NULL);
+    }
 
     compile_generated_c_or_die(out.c_source);
 
@@ -2541,6 +2634,7 @@ static void test_imported_public_binding_inferred_type_codegen_compiles(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_or_die(kConsumerSource, "tests/imported_inferred_binding_consumer.ff");
     programs[0] = program;
@@ -2650,7 +2744,12 @@ static void test_enum_codegen_emits_stable_symbols(void) {
     ASSERT(strstr(out.c_source,
                   "FengEnum__feng__codegen__enumvalue__HttpStatus__Ok") != NULL);
     ASSERT(strstr(out.c_source, "use_status_ptr") != NULL);
-    ASSERT(strstr(out.c_source, "feng_scalar_box_new_i32") == NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char pattern[128];
+        snprintf(pattern, sizeof(pattern), "feng_scalar_box_new_%s", int_canonical);
+        ASSERT(strstr(out.c_source, pattern) == NULL);
+    }
 
     compile_generated_c_or_die(out.c_source);
 
@@ -2686,6 +2785,7 @@ static void test_imported_enum_codegen_emits_visible_symbols(void) {
     query = feng_symbol_imported_module_cache_as_query(fixture.cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_or_die(kConsumerSource, "tests/imported_enum_consumer.ff");
     programs[0] = program;
@@ -2909,8 +3009,8 @@ static void test_float_modulo_codegen_uses_math_runtime(void) {
 static void test_fit_builtin_direct_call_codegen_shape(void) {
     static const char *kFitBuiltinSource =
         "module feng.codegen.fitbuiltin;\n"
-        "fit i32 {\n"
-        "    func double(): i32 {\n"
+        "fit int {\n"
+        "    func double(): int {\n"
         "        return self * 2;\n"
         "    }\n"
         "}\n"
@@ -3030,7 +3130,12 @@ static void test_fit_builtin_array_open_generic_return_codegen(void) {
     }
 
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "Span__G__i32") != NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char span_pattern[64];
+        snprintf(span_pattern, sizeof(span_pattern), "Span__G__%s", int_canonical);
+        ASSERT(strstr(out.c_source, span_pattern) != NULL);
+    }
     ASSERT(strstr(out.c_source, "Span__G__T") != NULL);
     ASSERT(strstr(out.c_source, "__slice__from__i64__i64") != NULL);
     compile_generated_c_or_die(out.c_source);
@@ -3046,7 +3151,7 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     static const char *kSource =
         "module feng.codegen.fit_builtin_spec;\n"
         "spec Named { func name(): string; }\n"
-        "spec ScalarTwice { func twice_only_scalar(): int; }\n"
+        "spec ScalarTwice { func twice_only_scalar(): i32; }\n"
         "type User: Named {\n"
         "    var n: string;\n"
         "    func name(): string { return self.n; }\n"
@@ -3057,7 +3162,7 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "    }\n"
         "}\n"
         "fit i32: ScalarTwice {\n"
-        "    func twice_only_scalar(): int {\n"
+        "    func twice_only_scalar(): i32 {\n"
         "        return self + self;\n"
         "    }\n"
         "}\n"
@@ -3074,19 +3179,19 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "func call_name(v: Named): string {\n"
         "    return v.name();\n"
         "}\n"
-        "func call_twice_direct(v: int): int {\n"
+        "func call_twice_direct(v: i32): i32 {\n"
         "    return v.twice_only_scalar();\n"
         "}\n"
-        "func call_twice_spec(v: ScalarTwice): int {\n"
+        "func call_twice_spec(v: ScalarTwice): i32 {\n"
         "    return v.twice_only_scalar();\n"
         "}\n"
         "func make_scalar_named(): Named {\n"
-        "    return (8);\n"
+        "    return ((i32)8);\n"
         "}\n"
         "func run(): int {\n"
         "    let xs: int[] = [1, 2];\n"
         "    let u: User = User{n: \"u\"};\n"
-        "    let s1: Named = (7);\n"
+        "    let s1: Named = ((i32)7);\n"
         "    let s2: Named = xs;\n"
         "    let s4: Named = u;\n"
         "    let s5: Named = \"str\";\n"
@@ -3099,10 +3204,10 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
         "    let c: string = call_name(s1);\n"
         "    let d: string = call_name(s2);\n"
         "    let g: string = call_name((\"inline\"));\n"
-        "    let f: string = call_name((9));\n"
-        "    let t1: int = call_twice_direct(5);\n"
-        "    let t2: int = call_twice_spec((5));\n"
-        "    return t1 + t2;\n"
+        "    let f: string = call_name(((i32)9));\n"
+        "    let t1: i32 = call_twice_direct(5);\n"
+        "    let t2: i32 = call_twice_spec(((i32)5));\n"
+        "    return (int)(t1 + t2);\n"
         "}\n";
 
     FengProgram *program = parse_or_die(kSource, "tests/fit_builtin_spec_codegen.ff");
@@ -3693,8 +3798,14 @@ static void test_generic_aggregate_facts_shape_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
-                  ".kind = FENG_VALUE_TRIVIAL, .descriptor = &feng_i32_descriptor") != NULL);
+    {
+        /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+        const char *int_descriptor = sizeof(void *) >= 8U ? "feng_i64_descriptor" : "feng_i32_descriptor";
+        char expected[128];
+        snprintf(expected, sizeof(expected),
+                 ".kind = FENG_VALUE_TRIVIAL, .descriptor = &%s", int_descriptor);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+    }
     ASSERT(strstr(out.c_source,
                   ".kind = FENG_VALUE_MANAGED_POINTER, .descriptor = &feng_string_descriptor") != NULL);
     ASSERT(strstr(out.c_source,
@@ -3892,7 +4003,13 @@ static void test_generic_object_spec_instance_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "FengSpecValue__feng__codegen__gs1__Box__G__i32") != NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char box_pattern[128];
+        snprintf(box_pattern, sizeof(box_pattern),
+                 "FengSpecValue__feng__codegen__gs1__Box__G__%s", int_canonical);
+        ASSERT(strstr(out.c_source, box_pattern) != NULL);
+    }
     ASSERT(strstr(out.c_source, "->fetch(") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -3931,7 +4048,13 @@ static void test_generic_callable_spec_instance_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__gs2__Mapper__G__i32") != NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char pattern[128];
+        snprintf(pattern, sizeof(pattern),
+                 "FengClosure__feng__codegen__gs2__Mapper__G__%s", int_canonical);
+        ASSERT(strstr(out.c_source, pattern) != NULL);
+    }
     ASSERT(strstr(out.c_source, "->invoke(") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -3978,9 +4101,17 @@ static void test_generic_object_spec_coercion_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "FengSpecValue__feng__codegen__gs3__Box__G__i32") != NULL);
-    ASSERT(strstr(out.c_source,
-                  "FengWitness__feng__codegen__gs3__IntBox__as__feng__codegen__gs3__Box_i32_") != NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern),
+                 "FengSpecValue__feng__codegen__gs3__Box__G__%s", int_canonical);
+        ASSERT(strstr(out.c_source, pattern) != NULL);
+        snprintf(pattern, sizeof(pattern),
+                 "FengWitness__feng__codegen__gs3__IntBox__as__feng__codegen__gs3__Box_%s_",
+                 int_canonical);
+        ASSERT(strstr(out.c_source, pattern) != NULL);
+    }
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -4022,8 +4153,17 @@ static void test_generic_callable_spec_coercion_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "FengClosure__feng__codegen__gs4__Mapper__G__i32") != NULL);
-    ASSERT(strstr(out.c_source, "FengCallableValue__FengClosure__feng__codegen__gs4__Mapper__G__i32") != NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern),
+                 "FengClosure__feng__codegen__gs4__Mapper__G__%s", int_canonical);
+        ASSERT(strstr(out.c_source, pattern) != NULL);
+        snprintf(pattern, sizeof(pattern),
+                 "FengCallableValue__FengClosure__feng__codegen__gs4__Mapper__G__%s",
+                 int_canonical);
+        ASSERT(strstr(out.c_source, pattern) != NULL);
+    }
     ASSERT(strstr(out.c_source, "->invoke(") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -4068,9 +4208,18 @@ static void test_callable_spec_method_coercion_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
-                  "FengCallableBind__FengClosure__feng__codegen__gs5__Mapper__G__i32") != NULL);
-    ASSERT(strstr(out.c_source, "feng_object_new(&FengClosureDesc__feng__codegen__gs5__Mapper__G__i32)") != NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern),
+                 "FengCallableBind__FengClosure__feng__codegen__gs5__Mapper__G__%s",
+                 int_canonical);
+        ASSERT(strstr(out.c_source, pattern) != NULL);
+        snprintf(pattern, sizeof(pattern),
+                 "feng_object_new(&FengClosureDesc__feng__codegen__gs5__Mapper__G__%s)",
+                 int_canonical);
+        ASSERT(strstr(out.c_source, pattern) != NULL);
+    }
     ASSERT(strstr(out.c_source, "feng_assign(&_o->_self, (void *)_self)") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -4609,7 +4758,7 @@ static void test_match_expr_aggregate_result_codegen(void) {
 static const char *kIfMatchStatementCodegenSrc =
     "module feng.codegen.matchstmt1;\n"
     "func classify(age: i32, label: string): i32 {\n"
-    "    var result = 0;\n"
+    "    var result: i32 = 0;\n"
     "    match age {\n"
     "        0 { result = 10; }\n"
     "        1...3 { result = 20; }\n"
@@ -4658,7 +4807,7 @@ static const char *kEnumMatchStatementCodegenSrc =
     "module feng.codegen.enummatchstmt;\n"
     "enum Color { Red, Green, Blue }\n"
     "func classify(c: Color): i32 {\n"
-    "    var result = 0;\n"
+    "    var result: i32 = 0;\n"
     "    match c {\n"
     "        Color.Red { result = 10; }\n"
     "        Color.Green, Color.Blue { result = 20; }\n"
@@ -4897,9 +5046,22 @@ static void test_generic_scalar_instance_direct_call_codegen(void) {
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "FengGenericMethod__feng__codegen__gd13__Set__i0__put") != NULL);
     ASSERT(strstr(out.c_source, "const void *_p_next") != NULL);
-    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__i32__put__from__i32") != NULL);
-    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__i32__put__from__i32(_l_set_0") != NULL);
-    ASSERT(strstr(out.c_source, "Feng__feng__codegen__gd13__Set__G__i32__get__from__void(_l_set_0") != NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char pattern[256];
+        snprintf(pattern, sizeof(pattern),
+                 "Feng__feng__codegen__gd13__Set__G__%s__put__from__%s",
+                 int_canonical, int_canonical);
+        ASSERT(strstr(out.c_source, pattern) != NULL);
+        snprintf(pattern, sizeof(pattern),
+                 "Feng__feng__codegen__gd13__Set__G__%s__put__from__%s(_l_set_0",
+                 int_canonical, int_canonical);
+        ASSERT(strstr(out.c_source, pattern) != NULL);
+        snprintf(pattern, sizeof(pattern),
+                 "Feng__feng__codegen__gd13__Set__G__%s__get__from__void(_l_set_0",
+                 int_canonical);
+        ASSERT(strstr(out.c_source, pattern) != NULL);
+    }
     ASSERT(strstr(out.c_source, "feng_scalar_box_new_") == NULL);
     ASSERT(strstr(out.c_source, "struct FengScalarBox *_sb") == NULL);
     ASSERT(strstr(out.c_source, "FengSpecThunk__") == NULL);
@@ -5053,8 +5215,13 @@ static void test_empty_array_literal_codegen_uses_target_contexts(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(count_substr(out.c_source,
-                        "feng_array_new(NULL, sizeof(int32_t), false, (size_t)0)") >= 4U);
+    {
+        const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+        char expected[128];
+        snprintf(expected, sizeof(expected),
+                 "feng_array_new(NULL, sizeof(%s), false, (size_t)0)", int_c_type);
+        ASSERT(count_substr(out.c_source, expected) >= 4U);
+    }
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -5691,7 +5858,14 @@ static void test_tuple_value_codegen_core(void) {
     ASSERT(strstr(out.c_source, "struct Feng__feng__codegen__tuplecore__Point {") != NULL);
     ASSERT(strstr(out.c_source, "Feng__feng__codegen__tuplecore__Point__aggregate_desc") != NULL);
     ASSERT(strstr(out.c_source, ".item1") != NULL);
-    ASSERT(strstr(out.c_source, "Feng__feng__codegen__tuplecore__Pair__G__i32__i32") != NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char pattern[128];
+        snprintf(pattern, sizeof(pattern),
+                 "Feng__feng__codegen__tuplecore__Pair__G__%s__%s",
+                 int_canonical, int_canonical);
+        ASSERT(strstr(out.c_source, pattern) != NULL);
+    }
     ASSERT(strstr(out.c_source, "feng_object_new(&FengTypeDesc__feng__codegen__tuplecore__Point") == NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -6481,8 +6655,14 @@ static void test_literal_adaptation_binding_untyped(void) {
     FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_untyped.ff");
     char *c = literal_adapt_codegen(analysis);
 
-    /* int is currently i32; untyped integer → (int32_t)INT32_C(123). */
-    ASSERT(strstr(c, "(int32_t)INT32_C(123)") != NULL);
+    /* Untyped integer defaults to int (i64 on 64-bit, i32 on 32-bit). */
+    {
+        const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+        const char *int_c_macro = sizeof(void *) >= 8U ? "INT64_C" : "INT32_C";
+        char expected[64];
+        snprintf(expected, sizeof(expected), "(%s)%s(123)", int_c_type, int_c_macro);
+        ASSERT(strstr(c, expected) != NULL);
+    }
     /* double is f64; untyped float → hex-float literal (e.g. 0x1.9p+3). */
     ASSERT(strstr(c, "0x1.9p+3") != NULL);
     compile_generated_c_or_die(c);

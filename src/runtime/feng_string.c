@@ -91,7 +91,7 @@ FengString *feng_string_default(void) {
     return feng_string_default_singleton;
 }
 
-FengString *feng_string_from_utf8_bytes(FengArray *value, int64_t length) {
+FengString *feng_string_from_utf8_bytes(FengArray *value, intptr_t length) {
     size_t available = feng_array_length(value);
     size_t copy_length;
     const unsigned char *data;
@@ -153,7 +153,7 @@ FengArray *feng_string_to_utf8_bytes(FengString *value) {
 }
 
 /* Copies the byte range [start, start+length) into a fresh +1 string. */
-FengString *feng_string_slice(FengString *value, int64_t start, int64_t length) {
+FengString *feng_string_slice(FengString *value, intptr_t start, intptr_t length) {
     const struct FengString *src = (const struct FengString *)value;
     size_t slice_start;
     size_t slice_length;
@@ -163,10 +163,10 @@ FengString *feng_string_slice(FengString *value, int64_t start, int64_t length) 
         feng_panic("feng_string_slice: string must not be NULL");
     }
     if (start < 0) {
-        feng_panic("feng_string_slice: start must be non-negative, got %" PRId64, start);
+        feng_panic("feng_string_slice: start must be non-negative, got %" PRIdPTR, start);
     }
     if (length < 0) {
-        feng_panic("feng_string_slice: length must be non-negative, got %" PRId64, length);
+        feng_panic("feng_string_slice: length must be non-negative, got %" PRIdPTR, length);
     }
 
     slice_start = (size_t)start;
@@ -174,7 +174,7 @@ FengString *feng_string_slice(FengString *value, int64_t start, int64_t length) 
 
     if (slice_start > src->length ||
         slice_length > src->length - slice_start) {
-        feng_panic("feng_string_slice: range [start=%" PRId64 ", length=%" PRId64 "] out of range (length=%zu)",
+        feng_panic("feng_string_slice: range [start=%" PRIdPTR ", length=%" PRIdPTR "] out of range (length=%zu)",
                    start, length, src->length);
     }
 
@@ -190,7 +190,7 @@ FengString *feng_string_slice(FengString *value, int64_t start, int64_t length) 
 }
 
 /* Copies the byte range [start, start+length) into a fresh +1 byte array. */
-FengArray *feng_string_slice_bytes(FengString *value, int64_t start, int64_t length) {
+FengArray *feng_string_slice_bytes(FengString *value, intptr_t start, intptr_t length) {
     const struct FengString *src = (const struct FengString *)value;
     size_t slice_start;
     size_t slice_length;
@@ -201,10 +201,10 @@ FengArray *feng_string_slice_bytes(FengString *value, int64_t start, int64_t len
         feng_panic("feng_string_slice_bytes: string must not be NULL");
     }
     if (start < 0) {
-        feng_panic("feng_string_slice_bytes: start must be non-negative, got %" PRId64, start);
+        feng_panic("feng_string_slice_bytes: start must be non-negative, got %" PRIdPTR, start);
     }
     if (length < 0) {
-        feng_panic("feng_string_slice_bytes: length must be non-negative, got %" PRId64, length);
+        feng_panic("feng_string_slice_bytes: length must be non-negative, got %" PRIdPTR, length);
     }
 
     slice_start = (size_t)start;
@@ -212,7 +212,7 @@ FengArray *feng_string_slice_bytes(FengString *value, int64_t start, int64_t len
 
     if (slice_start > src->length ||
         slice_length > src->length - slice_start) {
-        feng_panic("feng_string_slice_bytes: range [start=%" PRId64 ", length=%" PRId64 "] out of range (length=%zu)",
+        feng_panic("feng_string_slice_bytes: range [start=%" PRIdPTR ", length=%" PRIdPTR "] out of range (length=%zu)",
                    start, length, src->length);
     }
 

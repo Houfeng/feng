@@ -47,32 +47,32 @@ static void runtime_contract_copy_value_to_out(const char *name,
     feng_panic("%s: unknown value kind=%d", name, (int)type->kind);
 }
 
-/* Returns the UTF-8 byte length of a Feng string as a stable i64 contract
+/* Returns the UTF-8 byte length of a Feng string as a stable intptr_t contract
  * result, trapping if the runtime size exceeds the contract range. */
-int64_t feng_string_utf8_length(FengString *value) {
+intptr_t feng_string_utf8_length(FengString *value) {
     size_t length = feng_string_length(value);
 
-    if (length > (size_t)INT64_MAX) {
+    if (length > (size_t)INTPTR_MAX) {
         feng_panic("feng_string_utf8_length: length overflow");
     }
 
-    return (int64_t)length;
+    return (intptr_t)length;
 }
 
-/* Returns the logical element count of an array as a stable i64 contract
+/* Returns the logical element count of an array as a stable intptr_t contract
  * result. The generic descriptor is accepted for ABI uniformity but is not
  * consulted by this helper. */
-int64_t feng_array_length_i64(const FengGenericParamDescriptor *type,
+intptr_t feng_array_get_length(const FengGenericParamDescriptor *type,
                               const FengArray *value) {
     size_t length = feng_array_length(value);
 
     (void)type;
 
-    if (length > (size_t)INT64_MAX) {
-        feng_panic("feng_array_length_i64: length overflow");
+    if (length > (size_t)INTPTR_MAX) {
+        feng_panic("feng_array_get_length: length overflow");
     }
 
-    return (int64_t)length;
+    return (intptr_t)length;
 }
 
 /* Copies the right-open range [start, start + length) into a fresh array while
@@ -80,8 +80,8 @@ int64_t feng_array_length_i64(const FengGenericParamDescriptor *type,
  * generic descriptor is currently carried only to match the runtime generic ABI. */
 FengArray *feng_array_slice(const FengGenericParamDescriptor *type,
                             const FengArray *value,
-                            int64_t start,
-                            int64_t length) {
+                            intptr_t start,
+                            intptr_t length) {
     const struct FengArray *src = (const struct FengArray *)value;
     size_t slice_start;
     size_t slice_length;
@@ -94,17 +94,17 @@ FengArray *feng_array_slice(const FengGenericParamDescriptor *type,
     }
 
     if (start < 0) {
-        feng_panic("feng_array_slice: start must be non-negative, got %" PRId64,
+        feng_panic("feng_array_slice: start must be non-negative, got %" PRIdPTR,
                    start);
     }
-    if ((uint64_t)start > (uint64_t)SIZE_MAX) {
+    if ((uintptr_t)start > (uintptr_t)SIZE_MAX) {
         feng_panic("feng_array_slice: start exceeds runtime size range");
     }
     if (length < 0) {
-        feng_panic("feng_array_slice: length must be non-negative, got %" PRId64,
+        feng_panic("feng_array_slice: length must be non-negative, got %" PRIdPTR,
                    length);
     }
-    if ((uint64_t)length > (uint64_t)SIZE_MAX) {
+    if ((uintptr_t)length > (uintptr_t)SIZE_MAX) {
         feng_panic("feng_array_slice: length exceeds runtime size range");
     }
 
@@ -113,7 +113,7 @@ FengArray *feng_array_slice(const FengGenericParamDescriptor *type,
 
     if (slice_start > src->length ||
         slice_length > src->length - slice_start) {
-        feng_panic("feng_array_slice: range [start=%" PRId64 ", length=%" PRId64 "] out of range (length=%zu)",
+        feng_panic("feng_array_slice: range [start=%" PRIdPTR ", length=%" PRIdPTR "] out of range (length=%zu)",
                    start,
                    length,
                    src->length);
@@ -131,13 +131,13 @@ FengArray *feng_array_slice(const FengGenericParamDescriptor *type,
     return result;
 }
 
-/* Thin wrappers around libc malloc/free that bridge Feng's int64_t
+/* Thin wrappers around libc malloc/free that bridge Feng's intptr_t
  * pointer representation to the system-header pointer/size_t types. */
-int64_t feng_alloc(int64_t size) {
-    return (int64_t)(intptr_t)malloc((size_t)size);
+intptr_t feng_alloc(intptr_t size) {
+    return (intptr_t)malloc((size_t)size);
 }
 
-void feng_free(int64_t ptr) {
+void feng_free(intptr_t ptr) {
     free((void *)(intptr_t)ptr);
 }
 
@@ -152,13 +152,13 @@ bool feng_pointer_equal(void *left, void *right) {
 }
 
 /* Returns a pointer advanced by `offset` bytes from `ptr`. */
-void *feng_pointer_move(void *ptr, int64_t offset) {
+void *feng_pointer_move(void *ptr, intptr_t offset) {
     return (char *)ptr + offset;
 }
 
 /* Returns the signed byte distance between two pointers (a - b). */
-int64_t feng_pointer_diff(void *a, void *b) {
-    return (int64_t)((char *)a - (char *)b);
+intptr_t feng_pointer_diff(void *a, void *b) {
+    return (intptr_t)((char *)a - (char *)b);
 }
 
 /* Reads a scalar value of size determined by the generic type descriptor from
@@ -196,18 +196,18 @@ void *feng_pointer_get_pointer(void *ptr) {
 
 /* Compares the byte sub-ranges [a_start, a_end) and [b_start, b_end) of two
  * Feng strings for equality without any intermediate allocation. */
-bool feng_string_range_equal(FengString *a, int64_t a_start, int64_t a_end,
-                             FengString *b, int64_t b_start, int64_t b_end) {
+bool feng_string_range_equal(FengString *a, intptr_t a_start, intptr_t a_end,
+                             FengString *b, intptr_t b_start, intptr_t b_end) {
     size_t a_total = feng_string_length(a);
     size_t b_total = feng_string_length(b);
     size_t a_len, b_len, range_len;
 
     if (a_start < 0 || a_end < a_start || (size_t)a_end > a_total) {
-        feng_panic("feng_string_range_equal: a range [%" PRId64 ", %" PRId64 ") "
+        feng_panic("feng_string_range_equal: a range [%" PRIdPTR ", %" PRIdPTR ") "
                    "out of bounds (length=%zu)", a_start, a_end, a_total);
     }
     if (b_start < 0 || b_end < b_start || (size_t)b_end > b_total) {
-        feng_panic("feng_string_range_equal: b range [%" PRId64 ", %" PRId64 ") "
+        feng_panic("feng_string_range_equal: b range [%" PRIdPTR ", %" PRIdPTR ") "
                    "out of bounds (length=%zu)", b_start, b_end, b_total);
     }
 

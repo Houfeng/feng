@@ -303,8 +303,8 @@ static void test_array_payload_alignment(void) {
 static void test_array_length_contract_uses_descriptor(void) {
     FengArray *array = feng_array_new(&i32_element_descriptor, sizeof(int32_t), false, 4U);
 
-    ASSERT(feng_array_length_i64(&i32_runtime_generic_descriptor, array) == 4);
-    ASSERT(feng_array_length_i64(&i32_runtime_generic_descriptor, NULL) == 0);
+    ASSERT(feng_array_get_length(&i32_runtime_generic_descriptor, array) == 4);
+    ASSERT(feng_array_get_length(&i32_runtime_generic_descriptor, NULL) == 0);
 
     feng_release(array);
 }

@@ -18,6 +18,22 @@
         }                                                                             \
     } while (0)
 
+static bool test_semantic_analyze(const FengProgram *const *programs,
+                                  size_t program_count,
+                                  FengCompileTarget target,
+                                  FengSemanticAnalysis **out_analysis,
+                                  FengSemanticError **out_errors,
+                                  size_t *out_error_count) {
+    FengSemanticAnalyzeOptions options;
+    memset(&options, 0, sizeof(options));
+    options.target = target;
+    options.pointer_size = feng_get_host_pointer_size();
+    return feng_semantic_analyze_with_options(programs, program_count,
+                                              &options, out_analysis,
+                                              out_errors, out_error_count);
+}
+#define feng_semantic_analyze test_semantic_analyze
+
 static const char *kLineSource =
     "module feng.debug.demo;\n"
     "func main(args: string[]) {\n"

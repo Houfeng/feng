@@ -1,7 +1,7 @@
 open module std.collections;
 
 @runtime
-extern func feng_array_length_i64<T>(value: T[]): i64;
+extern func feng_array_get_length<T>(value: T[]): i64;
 
 @runtime
 extern func feng_array_slice<T>(value: T[], start: i64, length: i64): T[];
@@ -19,7 +19,7 @@ open fit T[] {
    * @return element count of this array
    */
   open func length(): i64 {
-    return feng_array_length_i64(self);
+    return feng_array_get_length(self);
   }
 
   /**
@@ -97,7 +97,7 @@ open fit T[!] {
    * @return element count of this array
    */
   open func length(): i64 {
-    return feng_array_length_i64((T[])self);
+    return feng_array_get_length((T[])self);
   }
 
   /**

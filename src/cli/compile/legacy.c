@@ -38,16 +38,22 @@ static int run_legacy_compile(const FengCliLegacyCompileOptions *opts) {
         }
     }
     prog_ptr = src.program;
-    if (!feng_semantic_analyze(&prog_ptr, 1U, opts->target,
-                               &analysis, &errors, &error_count)) {
-        for (size_t i = 0; i < error_count; ++i) {
-            if (i > 0) fputc('\n', stderr);
-            feng_cli_print_diagnostic(stderr, errors[i].path, errors[i].code,
-                                      errors[i].message, &errors[i].token,
-                                      src.source, src.source_length);
+    {
+        FengSemanticAnalyzeOptions sem_opts;
+        memset(&sem_opts, 0, sizeof(sem_opts));
+        sem_opts.target = opts->target;
+        sem_opts.pointer_size = feng_get_host_pointer_size();
+        if (!feng_semantic_analyze_with_options(&prog_ptr, 1U, &sem_opts,
+                                                &analysis, &errors, &error_count)) {
+            for (size_t i = 0; i < error_count; ++i) {
+                if (i > 0) fputc('\n', stderr);
+                feng_cli_print_diagnostic(stderr, errors[i].path, errors[i].code,
+                                          errors[i].message, &errors[i].token,
+                                          src.source, src.source_length);
+            }
+            exit_code = 1;
+            goto cleanup;
         }
-        exit_code = 1;
-        goto cleanup;
     }
     if (!feng_codegen_emit_program(analysis, opts->target, NULL, &out, &cgerr)) {
         feng_cli_print_diagnostic(stderr, opts->input_path, cgerr.code,

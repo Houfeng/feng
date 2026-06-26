@@ -22,6 +22,22 @@
         } \
     } while (0)
 
+static bool test_semantic_analyze(const FengProgram *const *programs,
+                                  size_t program_count,
+                                  FengCompileTarget target,
+                                  FengSemanticAnalysis **out_analysis,
+                                  FengSemanticError **out_errors,
+                                  size_t *out_error_count) {
+    FengSemanticAnalyzeOptions options;
+    memset(&options, 0, sizeof(options));
+    options.target = target;
+    options.pointer_size = feng_get_host_pointer_size();
+    return feng_semantic_analyze_with_options(programs, program_count,
+                                              &options, out_analysis,
+                                              out_errors, out_error_count);
+}
+#define feng_semantic_analyze test_semantic_analyze
+
 static FengSlice slice_from_cstr(const char *text) {
     FengSlice slice;
 
@@ -304,12 +320,19 @@ static void test_roundtrip_public_module(void) {
     param_type = feng_symbol_decl_param_type(add_decl, 0U);
     ASSERT(param_type != NULL);
     ASSERT(feng_symbol_type_kind(param_type) == FENG_SYMBOL_TYPE_KIND_BUILTIN);
-    ASSERT(slice_equals_cstr(feng_symbol_type_builtin_name(param_type), "i32"));
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        ASSERT(slice_equals_cstr(feng_symbol_type_builtin_name(param_type), int_canonical));
+    }
 
     return_type = feng_symbol_decl_return_type(add_decl);
     ASSERT(return_type != NULL);
     ASSERT(feng_symbol_type_kind(return_type) == FENG_SYMBOL_TYPE_KIND_BUILTIN);
-    ASSERT(slice_equals_cstr(feng_symbol_type_builtin_name(return_type), "i32"));
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        ASSERT(slice_equals_cstr(feng_symbol_type_builtin_name(return_type), int_canonical));
+    }
 
     greet_decl = feng_symbol_module_find_public_value(module, slice_from_cstr("greet"));
     ASSERT(greet_decl != NULL);
@@ -370,7 +393,11 @@ static void test_union_spec_ft_roundtrip_preserves_normalized_members(void) {
     ASSERT(feng_symbol_decl_kind(value_decl) == FENG_SYMBOL_DECL_KIND_SPEC);
     ASSERT(feng_symbol_decl_union_member_count(value_decl) == 3U);
     assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 0U), "string");
-    assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 1U), "i32");
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 1U), int_canonical);
+    }
     assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 2U), "bool");
 
     cache = feng_symbol_imported_module_cache_create(provider);
@@ -657,7 +684,11 @@ static void test_provider_loads_bundle_public_module(void) {
     ASSERT(answer_decl != NULL);
     ASSERT(feng_symbol_decl_kind(answer_decl) == FENG_SYMBOL_DECL_KIND_FUNCTION);
     ASSERT(feng_symbol_decl_param_count(answer_decl) == 0U);
-    ASSERT(slice_equals_cstr(feng_symbol_type_builtin_name(feng_symbol_decl_return_type(answer_decl)), "i32"));
+    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        ASSERT(slice_equals_cstr(feng_symbol_type_builtin_name(feng_symbol_decl_return_type(answer_decl)), int_canonical));
+    }
 
     feng_symbol_provider_free(provider);
     feng_symbol_error_free(&error);
@@ -1058,6 +1089,7 @@ static void test_imported_enum_value_participates_in_semantic_analysis(void) {
     query = feng_symbol_imported_module_cache_as_query(cache);
     options.target = FENG_COMPILE_TARGET_LIB;
     options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
 
     program = parse_or_die("imported_enum_main.ff", kMainSource);
     programs[0] = program;
@@ -1597,7 +1629,9 @@ static void test_fit_builtin_and_array_target_nodes_ft_roundtrip(void) {
 
         if (feng_symbol_type_kind(target_type) == FENG_SYMBOL_TYPE_KIND_BUILTIN) {
             FengSlice builtin = feng_symbol_type_builtin_name(target_type);
-            if (slice_equals_cstr(builtin, "i32")) {
+            /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+            const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+            if (slice_equals_cstr(builtin, int_canonical)) {
                 saw_i32++;
             } else if (slice_equals_cstr(builtin, "string")) {
                 saw_string++;
@@ -1610,10 +1644,13 @@ static void test_fit_builtin_and_array_target_nodes_ft_roundtrip(void) {
         ASSERT(feng_symbol_type_kind(target_type) == FENG_SYMBOL_TYPE_KIND_ARRAY);
         ASSERT(feng_symbol_type_array_rank(target_type) == 1U);
         {
+            FengSlice builtin;
             const FengSymbolTypeView *elem = feng_symbol_type_inner(target_type);
+            const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
             ASSERT(elem != NULL);
             ASSERT(feng_symbol_type_kind(elem) == FENG_SYMBOL_TYPE_KIND_BUILTIN);
-            ASSERT(slice_equals_cstr(feng_symbol_type_builtin_name(elem), "i32"));
+            builtin = feng_symbol_type_builtin_name(elem);
+            ASSERT(slice_equals_cstr(builtin, int_canonical));
         }
         if (feng_symbol_type_array_layer_writable(target_type, 0U)) {
             saw_arr_rw++;

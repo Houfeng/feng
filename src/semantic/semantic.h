@@ -387,19 +387,12 @@ typedef struct FengSemanticAnalyzeOptions {
     const FengSemanticImportedModuleQuery *imported_modules;
     /* Host pointer size in bytes (sizeof(void *)).  Drives platform-dependent
      * alias resolution (e.g. `int` → `i32` on 32-bit, `i64` on 64-bit).
-     * Caller (CLI layer) fills this from the host machine; a zero value
-     * defaults to the host's sizeof(void *) inside the semantic entry.
+     * Caller (CLI layer) fills this from feng_get_host_pointer_size().
+     * Must be non-zero.
      * Future: when cross-compilation is supported, pass target pointer size
      * via a dedicated compile option instead of host sizeof(void *). */
     size_t pointer_size;
 } FengSemanticAnalyzeOptions;
-
-bool feng_semantic_analyze(const FengProgram *const *programs,
-                           size_t program_count,
-                           FengCompileTarget target,
-                           FengSemanticAnalysis **out_analysis,
-                           FengSemanticError **out_errors,
-                           size_t *out_error_count);
 
 bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                         size_t program_count,
@@ -454,13 +447,13 @@ const FengSemanticEnumItemInfo *feng_semantic_find_enum_item_info(
 
 /* Internal post-pass entry — populates analysis->type_markers. Idempotent.
  * Implemented in cyclic.c; declared here so analyzer.c can call it on the
- * success path of feng_semantic_analyze. */
+ * success path of feng_semantic_analyze_with_options. */
 bool feng_semantic_compute_type_cyclicity(FengSemanticAnalysis *analysis);
 
 /* Internal post-pass entry — populates analysis->spec_relations with one
  * entry per (type_decl, spec_decl) pair that has at least one source in the
  * analysis. Idempotent. Implemented in spec_relations.c. Called on the
- * success path of feng_semantic_analyze. */
+ * success path of feng_semantic_analyze_with_options. */
 bool feng_semantic_compute_spec_relations(FengSemanticAnalysis *analysis);
 
 /* Look up the relation entry for (subject_key, spec_decl). Returns NULL if no

@@ -35,6 +35,7 @@ static inline bool decl_is_tuple_type(const FengDecl *decl) {
  * materialisation helpers. */
 static bool init_spec_witness_subject_key(const FengDecl *type_decl,
                                           const FengTypeRef *source_type_ref,
+                                          size_t pointer_size,
                                           FengSemanticSubjectKey *out_key);
 
 static inline FengSlice decl_typeish_name(const FengDecl *decl) {
@@ -2255,13 +2256,14 @@ size_t feng_get_host_pointer_size(void) {
 static const char *canonical_builtin_type_name(FengSlice name, size_t pointer_size) {
     /* Canonical (width-explicit) names per docs/feng-builtin-type.md §2 alias table.
      * Aliases collapse to their canonical width-explicit spelling for type identity checks.
-     * `pointer_size` drives platform-dependent alias resolution (e.g. `int`, `uint`).
-     * Task 4: `uint` maps to u32 (32-bit) or u64 (64-bit) based on pointer_size.
-     * Task 6 (pending): `int` will switch to platform-dependent (32-bit → i32, 64-bit → i64). */
+     * `pointer_size` drives platform-dependent alias resolution (`int`, `uint`). */
     if (slice_equals_cstr(name, "uint")) {
         return pointer_size >= 8U ? "u64" : "u32";
     }
-    if (slice_equals_cstr(name, "int") || slice_equals_cstr(name, "i32")) {
+    if (slice_equals_cstr(name, "int")) {
+        return pointer_size >= 8U ? "i64" : "i32";
+    }
+    if (slice_equals_cstr(name, "i32")) {
         return "i32";
     }
     if (slice_equals_cstr(name, "i64")) {
@@ -2305,9 +2307,7 @@ static const char *canonical_builtin_type_name(FengSlice name, size_t pointer_si
 }
 
 static bool builtin_type_name_is_numeric(FengSlice name) {
-    /* Input is always already canonical (from inferred_expr_type_builtin_canonical_name
-     * or canonical_builtin_type_name), so pointer_size=0 is safe here — the
-     * canonical_builtin_type_name call is a defensive no-op for canonical input. */
+    /* 位宽无关，传入 0 各平台均逻辑正常，性能无损 */
     const char *canonical_name = canonical_builtin_type_name(name, 0U);
 
     return canonical_name != NULL && strcmp(canonical_name, "bool") != 0 &&
@@ -2315,7 +2315,7 @@ static bool builtin_type_name_is_numeric(FengSlice name) {
 }
 
 static bool builtin_type_name_is_integer(FengSlice name) {
-    /* Input is always already canonical — see builtin_type_name_is_numeric. */
+    /* 位宽无关，传入 0 各平台均逻辑正常，性能无损 */
     const char *canonical_name = canonical_builtin_type_name(name, 0U);
 
     return canonical_name != NULL &&
@@ -4300,7 +4300,7 @@ static bool report_lambda_requires_callable_spec_target(ResolveContext *context,
 static char *format_expr_target_name(const FengExpr *expr);
 static const FengTypeRef *resolve_indexed_array_element_type_ref(ResolveContext *context,
                                                                  const FengExpr *object_expr);
-static char *format_inferred_expr_type_name(InferredExprType type);
+static char *format_inferred_expr_type_name(InferredExprType type, size_t pointer_size);
 static bool expr_matches_expected_type_ref(ResolveContext *context,
                                            const FengExpr *expr,
                                            const FengTypeRef *expected_type_ref);
@@ -4514,16 +4514,13 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
     return NULL;
 }
 
-static const char *type_ref_builtin_canonical_name(const FengTypeRef *type_ref) {
+static const char *type_ref_builtin_canonical_name(const FengTypeRef *type_ref, size_t pointer_size) {
     if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED ||
         type_ref->as.named.segment_count != 1U) {
         return NULL;
     }
 
-    /* After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
-     * only canonical width-explicit names reach this function.  pointer_size=0
-     * is safe because canonical names map to themselves regardless of platform. */
-    return canonical_builtin_type_name(type_ref->as.named.segments[0], 0U);
+    return canonical_builtin_type_name(type_ref->as.named.segments[0], pointer_size);
 }
 
 typedef enum FitTargetKind {
@@ -4560,7 +4557,7 @@ static FitTargetResolution resolve_fit_target(const ResolveContext *context,
         result.kind = FIT_TARGET_KIND_ARRAY;
         return result;
     }
-    result.builtin_canonical_name = type_ref_builtin_canonical_name(target_ref);
+    result.builtin_canonical_name = type_ref_builtin_canonical_name(target_ref, context->pointer_size);
     if (result.builtin_canonical_name != NULL) {
         result.kind = FIT_TARGET_KIND_BUILTIN;
         return result;
@@ -4747,8 +4744,8 @@ static bool type_refs_semantically_equal(const ResolveContext *context,
 
     switch (left->kind) {
         case FENG_TYPE_REF_NAMED: {
-            const char *left_builtin = type_ref_builtin_canonical_name(left);
-            const char *right_builtin = type_ref_builtin_canonical_name(right);
+            const char *left_builtin = type_ref_builtin_canonical_name(left, context->pointer_size);
+            const char *right_builtin = type_ref_builtin_canonical_name(right, context->pointer_size);
             bool base_matches = false;
 
             if (left_builtin != NULL || right_builtin != NULL) {
@@ -5051,7 +5048,7 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
     switch (expr_type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
             expr_builtin = canonical_builtin_type_name(expr_type.builtin_name, context->pointer_size);
-            target_builtin = type_ref_builtin_canonical_name(type_ref);
+            target_builtin = type_ref_builtin_canonical_name(type_ref, context->pointer_size);
             if (expr_builtin != NULL && target_builtin != NULL &&
                 strcmp(expr_builtin, target_builtin) == 0) {
                 return true;
@@ -5160,7 +5157,7 @@ static bool inferred_expr_type_exactly_matches_type_ref(const ResolveContext *co
     switch (expr_type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
             expr_builtin = canonical_builtin_type_name(expr_type.builtin_name, context->pointer_size);
-            target_builtin = type_ref_builtin_canonical_name(type_ref);
+            target_builtin = type_ref_builtin_canonical_name(type_ref, context->pointer_size);
             return expr_builtin != NULL && target_builtin != NULL &&
                    strcmp(expr_builtin, target_builtin) == 0;
 
@@ -5746,7 +5743,7 @@ static const char *inferred_expr_type_builtin_canonical_name(InferredExprType ex
             return canonical_builtin_type_name(expr_type.builtin_name, pointer_size);
 
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
-            return type_ref_builtin_canonical_name(expr_type.type_ref);
+            return type_ref_builtin_canonical_name(expr_type.type_ref, pointer_size);
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
         case FENG_INFERRED_EXPR_TYPE_LAMBDA:
@@ -5758,7 +5755,7 @@ static const char *inferred_expr_type_builtin_canonical_name(InferredExprType ex
 }
 
 static bool inferred_expr_type_is_numeric(InferredExprType expr_type) {
-    /* pointer_size=0: Task 3 keeps int→i32 regardless; Task 6 will thread pointer_size. */
+    /* 位宽无关，传入 0 各平台均逻辑正常，性能无损 */
     const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type, 0U);
 
     return builtin_name != NULL && builtin_type_name_is_numeric(slice_from_cstr(builtin_name));
@@ -5785,7 +5782,7 @@ static bool inferred_expr_type_is_enum(const ResolveContext *context, InferredEx
 }
 
 static bool inferred_expr_type_is_integer(InferredExprType expr_type) {
-    /* pointer_size=0: see inferred_expr_type_is_numeric. */
+    /* 位宽无关，传入 0 各平台均逻辑正常，性能无损 */
     const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type, 0U);
 
     return builtin_name != NULL && builtin_type_name_is_integer(slice_from_cstr(builtin_name));
@@ -5797,14 +5794,14 @@ static bool inferred_expr_type_is_float(InferredExprType expr_type) {
 }
 
 static bool inferred_expr_type_is_bool(InferredExprType expr_type) {
-    /* pointer_size=0: see inferred_expr_type_is_numeric. */
+    /* 位宽无关，传入 0 各平台均逻辑正常，性能无损 */
     const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type, 0U);
 
     return builtin_name != NULL && strcmp(builtin_name, "bool") == 0;
 }
 
 static bool inferred_expr_type_is_string(InferredExprType expr_type) {
-    /* pointer_size=0: see inferred_expr_type_is_numeric. */
+    /* 位宽无关，传入 0 各平台均逻辑正常，性能无损 */
     const char *builtin_name = inferred_expr_type_builtin_canonical_name(expr_type, 0U);
 
     return builtin_name != NULL && strcmp(builtin_name, "string") == 0;
@@ -5843,7 +5840,7 @@ static bool inferred_expr_type_is_data_addressable_abi_value(const ResolveContex
             if (expr_type.type_ref == NULL) {
                 return false;
             }
-            builtin_name = type_ref_builtin_canonical_name(expr_type.type_ref);
+            builtin_name = type_ref_builtin_canonical_name(expr_type.type_ref, context->pointer_size);
             if (builtin_name != NULL) {
                 return strcmp(builtin_name, "string") != 0 && strcmp(builtin_name, "void") != 0;
             }
@@ -6128,7 +6125,7 @@ static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
             return true;
         }
 
-        operand_type_name = format_inferred_expr_type_name(operand_type);
+        operand_type_name = format_inferred_expr_type_name(operand_type, context->pointer_size);
         message = format_message(
             "unary operator '&' requires an ABI-compatible scalar or @abi value, a string, an ABI-compatible array, or a top-level @abi function, got '%s'",
             operand_type_name != NULL ? operand_type_name : "<unknown>");
@@ -6142,7 +6139,7 @@ static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
     }
 
     operator_name = format_operator_name(expr->as.unary.op);
-    operand_type_name = format_inferred_expr_type_name(operand_type);
+    operand_type_name = format_inferred_expr_type_name(operand_type, context->pointer_size);
     {
         const char *fmt;
 
@@ -6208,7 +6205,7 @@ static bool validate_integer_shift_rhs_range(ResolveContext *context,
         return true;
     }
 
-    char *lt_name = format_inferred_expr_type_name(left_type);
+    char *lt_name = format_inferred_expr_type_name(left_type, context->pointer_size);
     char *msg = format_message(
         "shift amount %lld is out of range for type '%s' (must be in [0, %d))",
         (long long)shift_amount,
@@ -6333,8 +6330,8 @@ static bool validate_compound_assignment(ResolveContext *context, const FengStmt
         return true;
     }
 
-    left_type_name = format_inferred_expr_type_name(left_type);
-    right_type_name = format_inferred_expr_type_name(right_type);
+    left_type_name = format_inferred_expr_type_name(left_type, context->pointer_size);
+    right_type_name = format_inferred_expr_type_name(right_type, context->pointer_size);
 
     if (assignment_operator_is_numeric_compound(stmt->as.assign.op)) {
         message = format_message(
@@ -6400,8 +6397,8 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
                                                     "compile-time");
     }
 
-    left_type_name = format_inferred_expr_type_name(left_type);
-    right_type_name = format_inferred_expr_type_name(right_type);
+    left_type_name = format_inferred_expr_type_name(left_type, context->pointer_size);
+    right_type_name = format_inferred_expr_type_name(right_type, context->pointer_size);
 
     switch (expr->as.binary.op) {
         case FENG_TOKEN_PLUS:
@@ -6549,7 +6546,7 @@ static bool adapt_literal_expr_to_union_member(ResolveContext *context,
     for (size_t index = 0U; index < info->member_count; ++index) {
         const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
             context, union_decl, union_type_ref, info->members[index].type_ref);
-        const char *canonical = type_ref_builtin_canonical_name(member_type_ref);
+        const char *canonical = type_ref_builtin_canonical_name(member_type_ref, context->pointer_size);
         bool member_is_float;
 
         if (canonical == NULL) {
@@ -6573,7 +6570,7 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
     InferredExprType else_type;
 
     if (!inferred_expr_type_is_bool(condition_type)) {
-        char *condition_type_name = format_inferred_expr_type_name(condition_type);
+        char *condition_type_name = format_inferred_expr_type_name(condition_type, context->pointer_size);
         char *message = format_message("if expression condition must have type 'bool', got '%s'",
                                        condition_type_name != NULL ? condition_type_name : "<unknown>");
 
@@ -6599,17 +6596,6 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
         return false;
     }
 
-    {
-        bool then_throws = block_terminates_with_throw(expr->as.if_expr.then_block);
-        bool else_throws = block_terminates_with_throw(expr->as.if_expr.else_block);
-
-        /* Throw-terminated branches never produce a result value, so they do
-         * not participate in the type-consistency check. */
-        if (then_throws || else_throws) {
-            return true;
-        }
-    }
-
     /* Branch literal adaptation: determine the target type and adapt literal
      * branches to it.  Three cases:
      *
@@ -6625,7 +6611,10 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
      *
      * The adapted type is hung on the literal node's type field; infer_expr_type
      * for INTEGER/FLOAT checks expr->type and returns the adapted type, so the
-     * subsequent block_yield_inferred_type calls pick it up automatically. */
+     * subsequent block_yield_inferred_type calls pick it up automatically.
+     *
+     * This must run before the throw-termination check below so that the
+     * surviving (non-throw) branch's literal is adapted to the target type. */
     if (context->current_expr_expected_type_ref != NULL) {
         const FengTypeRef *expected = context->current_expr_expected_type_ref;
         const FengDecl *union_decl = resolve_union_spec_type_ref_decl(context, expected);
@@ -6650,7 +6639,7 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
                                                           union_decl,
                                                           expected);
             }
-        } else if (type_ref_builtin_canonical_name(expected) != NULL) {
+        } else if (type_ref_builtin_canonical_name(expected, context->pointer_size) != NULL) {
             /* Numeric target: adapt literal branches directly. */
             InferredExprType target = inferred_expr_type_from_type_ref(expected);
 
@@ -6689,6 +6678,17 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
         /* Both literals or both non-literals: no adaptation needed. */
     }
 
+    {
+        bool then_throws = block_terminates_with_throw(expr->as.if_expr.then_block);
+        bool else_throws = block_terminates_with_throw(expr->as.if_expr.else_block);
+
+        /* Throw-terminated branches never produce a result value, so they do
+         * not participate in the type-consistency check. */
+        if (then_throws || else_throws) {
+            return true;
+        }
+    }
+
     then_type = block_yield_inferred_type(context, expr->as.if_expr.then_block);
     else_type = block_yield_inferred_type(context, expr->as.if_expr.else_block);
 
@@ -6722,8 +6722,8 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
     }
 
     {
-        char *then_type_name = format_inferred_expr_type_name(then_type);
-        char *else_type_name = format_inferred_expr_type_name(else_type);
+        char *then_type_name = format_inferred_expr_type_name(then_type, context->pointer_size);
+        char *else_type_name = format_inferred_expr_type_name(else_type, context->pointer_size);
         char *message = format_message("if expression branches must have the same type, got '%s' and '%s'",
                                        then_type_name != NULL ? then_type_name : "<unknown>",
                                        else_type_name != NULL ? else_type_name : "<unknown>");
@@ -6780,8 +6780,8 @@ static bool validate_try_expr(ResolveContext *context,
         if (inferred_expr_type_is_known(body_type) &&
             inferred_expr_type_is_known(result_type) &&
             !inferred_expr_types_equal(context, body_type, result_type)) {
-            char *body_type_name = format_inferred_expr_type_name(body_type);
-            char *result_type_name = format_inferred_expr_type_name(result_type);
+            char *body_type_name = format_inferred_expr_type_name(body_type, context->pointer_size);
+            char *result_type_name = format_inferred_expr_type_name(result_type, context->pointer_size);
             char *message = format_message(
                 "catch clause result type '%s' does not match try expression type '%s'",
                 result_type_name != NULL ? result_type_name : "<unknown>",
@@ -6851,7 +6851,7 @@ static bool validate_try_catch_clause_result_type(ResolveContext *context,
                                                       (FengExpr *)result_expr,
                                                       union_decl,
                                                       expected);
-        } else if (type_ref_builtin_canonical_name(expected) != NULL) {
+        } else if (type_ref_builtin_canonical_name(expected, context->pointer_size) != NULL) {
             InferredExprType target = inferred_expr_type_from_type_ref(expected);
 
             if (numeric_literal_fits_inferred_target(context, result_expr, target)) {
@@ -6870,8 +6870,8 @@ static bool validate_try_catch_clause_result_type(ResolveContext *context,
     if (inferred_expr_type_is_known(body_type) &&
         inferred_expr_type_is_known(result_type) &&
         !inferred_expr_types_equal(context, body_type, result_type)) {
-        char *body_type_name = format_inferred_expr_type_name(body_type);
-        char *result_type_name = format_inferred_expr_type_name(result_type);
+        char *body_type_name = format_inferred_expr_type_name(body_type, context->pointer_size);
+        char *result_type_name = format_inferred_expr_type_name(result_type, context->pointer_size);
         char *message = format_message(
             "catch clause result type '%s' does not match try expression type '%s'",
             result_type_name != NULL ? result_type_name : "<unknown>",
@@ -7094,7 +7094,7 @@ static bool validate_match_label_record_target(ResolveContext *context,
                                                InferredExprType target_type,
                                                const MatchLabelRecord *record) {
     if (!match_const_kind_matches_target(context, record->kind, target_type)) {
-        char *target_name = format_inferred_expr_type_name(target_type);
+        char *target_name = format_inferred_expr_type_name(target_type, context->pointer_size);
         char *message = format_message(
             "match label of type '%s' is not comparable with target type '%s'",
             match_const_kind_name(record->kind),
@@ -7464,7 +7464,7 @@ static bool adapt_match_literal_branch_yields(ResolveContext *context,
                     }
                 }
             }
-        } else if (type_ref_builtin_canonical_name(expected) != NULL) {
+        } else if (type_ref_builtin_canonical_name(expected, context->pointer_size) != NULL) {
             /* Numeric target: adapt literal branch yields directly. */
             InferredExprType target = inferred_expr_type_from_type_ref(expected);
 
@@ -7793,8 +7793,8 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                             }
                         }
                     }
-                    char *expected_name = format_inferred_expr_type_name(expected);
-                    char *branch_name = format_inferred_expr_type_name(branch_type);
+                    char *expected_name = format_inferred_expr_type_name(expected, context->pointer_size);
+                    char *branch_name = format_inferred_expr_type_name(branch_type, context->pointer_size);
                     bool result = resolver_append_error(
                         context,
                         branches[index].token,
@@ -8055,8 +8055,8 @@ static bool resolve_and_validate_enum_match_common(ResolveContext *context,
                             }
                         }
                     }
-                    char *expected_name = format_inferred_expr_type_name(expected);
-                    char *branch_name = format_inferred_expr_type_name(branch_type);
+                    char *expected_name = format_inferred_expr_type_name(expected, context->pointer_size);
+                    char *branch_name = format_inferred_expr_type_name(branch_type, context->pointer_size);
                     bool append_ok = resolver_append_error(
                         context,
                         branches[i].token,
@@ -8185,7 +8185,7 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
         }
     }
     if (inferred_expr_type_is_known(target_type) && !match_target_type_is_allowed(context, target_type)) {
-        char *target_name = format_inferred_expr_type_name(target_type);
+        char *target_name = format_inferred_expr_type_name(target_type, context->pointer_size);
         char *message = format_message(
             "match target type '%s' is not allowed; allowed types are integers, 'string', 'bool' and enum",
             target_name != NULL ? target_name : "<unknown>");
@@ -8286,8 +8286,8 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
                             }
                         }
                     }
-                    char *expected_name = format_inferred_expr_type_name(expected);
-                    char *branch_name = format_inferred_expr_type_name(branch_type);
+                    char *expected_name = format_inferred_expr_type_name(expected, context->pointer_size);
+                    char *branch_name = format_inferred_expr_type_name(branch_type, context->pointer_size);
                     char *message = format_message(
                         "match expression branches must have the same type, got '%s' and '%s'",
                         expected_name != NULL ? expected_name : "<unknown>",
@@ -8570,7 +8570,7 @@ static bool resolve_and_validate_match_op(ResolveContext *context,
             enum_decl = resolve_type_ref_decl(context, target_type.type_ref);
         }
         if (enum_decl == NULL || !decl_is_enum_type(enum_decl)) {
-            char *target_name = format_inferred_expr_type_name(target_type);
+            char *target_name = format_inferred_expr_type_name(target_type, context->pointer_size);
             char *message = format_message(
                 "match target type '%s' is not allowed; allowed types are integers, 'string', 'bool' and enum",
                 target_name != NULL ? target_name : "<unknown>");
@@ -8737,7 +8737,7 @@ static bool resolve_and_validate_match_op(ResolveContext *context,
     }
 
     {
-        char *target_name = format_inferred_expr_type_name(target_type);
+        char *target_name = format_inferred_expr_type_name(target_type, context->pointer_size);
         char *message = format_message(
             "match target type '%s' is not allowed; allowed types are integers, 'string', 'bool' and enum",
             target_name != NULL ? target_name : "<unknown>");
@@ -8867,8 +8867,8 @@ static bool register_visible_match_binding(ResolveContext *context,
     return ok;
 }
 
-static bool type_ref_is_numeric(const FengTypeRef *type_ref) {
-    const char *builtin_name = type_ref_builtin_canonical_name(type_ref);
+static bool type_ref_is_numeric(const FengTypeRef *type_ref, size_t pointer_size) {
+    const char *builtin_name = type_ref_builtin_canonical_name(type_ref, pointer_size);
 
     return builtin_name != NULL && builtin_type_name_is_numeric(slice_from_cstr(builtin_name));
 }
@@ -8896,7 +8896,7 @@ static bool array_cast_writability_subset(const FengTypeRef *source,
 static bool cast_expr_types_are_valid(ResolveContext *context,
                                       InferredExprType value_type,
                                       const FengTypeRef *target_type) {
-    const char *target_builtin = type_ref_builtin_canonical_name(target_type);
+    const char *target_builtin = type_ref_builtin_canonical_name(target_type, context->pointer_size);
     const FengDecl *source_callable_spec = NULL;
     const FengDecl *target_callable_spec = NULL;
 
@@ -8915,10 +8915,10 @@ static bool cast_expr_types_are_valid(ResolveContext *context,
         return true;
     }
     if (inferred_expr_type_is_enum(context, value_type) && target_builtin != NULL &&
-        strcmp(target_builtin, "i32") == 0) {
+        builtin_type_name_is_integer(slice_from_cstr(target_builtin))) {
         return true;
     }
-    if (inferred_expr_type_is_numeric(value_type) && type_ref_is_numeric(target_type)) {
+    if (inferred_expr_type_is_numeric(value_type) && type_ref_is_numeric(target_type, context->pointer_size)) {
         return true;
     }
     /* Array writability strip: source is a known array type, target is also
@@ -8950,7 +8950,7 @@ static bool validate_cast_expr(ResolveContext *context, const FengExpr *expr) {
         return true;
     }
 
-    value_type_name = format_inferred_expr_type_name(value_type);
+    value_type_name = format_inferred_expr_type_name(value_type, context->pointer_size);
     target_type_name = format_type_ref_name(expr->as.cast.type);
     message = format_message("cast from '%s' to '%s' is not allowed",
                              value_type_name != NULL ? value_type_name : "<unknown>",
@@ -8969,7 +8969,7 @@ static bool validate_index_expr(ResolveContext *context, const FengExpr *expr) {
 
     if (resolve_indexed_array_element_type_ref(context, expr->as.index.object) == NULL) {
         object_type = infer_expr_type(context, expr->as.index.object);
-        object_type_name = format_inferred_expr_type_name(object_type);
+        object_type_name = format_inferred_expr_type_name(object_type, context->pointer_size);
         message = format_message("index expression target must have array type, got '%s'",
                                  object_type_name != NULL ? object_type_name : "<unknown>");
         free(object_type_name);
@@ -8981,7 +8981,7 @@ static bool validate_index_expr(ResolveContext *context, const FengExpr *expr) {
         return true;
     }
 
-    index_type_name = format_inferred_expr_type_name(index_type);
+    index_type_name = format_inferred_expr_type_name(index_type, context->pointer_size);
     message = format_message("index expression requires an integer operand, got '%s'",
                              index_type_name != NULL ? index_type_name : "<unknown>");
     free(index_type_name);
@@ -9005,7 +9005,7 @@ static bool validate_stmt_condition_expr(ResolveContext *context,
         return true;
     }
 
-    condition_type_name = format_inferred_expr_type_name(condition_type);
+    condition_type_name = format_inferred_expr_type_name(condition_type, context->pointer_size);
     message = format_message("%s condition must have type 'bool', got '%s'",
                              statement_kind,
                              condition_type_name != NULL ? condition_type_name : "<unknown>");
@@ -9107,8 +9107,8 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
     }
 
     existing_type_name =
-        format_inferred_expr_type_name(context->current_callable_inferred_return_type);
-    return_type_name = format_inferred_expr_type_name(return_type);
+        format_inferred_expr_type_name(context->current_callable_inferred_return_type, context->pointer_size);
+    return_type_name = format_inferred_expr_type_name(return_type, context->pointer_size);
     message = format_message("callable '%.*s' has conflicting inferred return types '%s' and '%s'",
                              (int)context->current_callable_signature->name.length,
                              context->current_callable_signature->name.data,
@@ -10455,6 +10455,27 @@ static bool callable_collect_call_type_args(ResolveContext *context,
         const FengTypeRef *param_type = callable->params[arg_index].type;
 
         if (param_type_is_type_param_ref(callable, param_type)) {
+            /* When explicit type args are provided, the type param already
+             * has a concrete binding.  Adapt numeric literal args to the
+             * explicit type so that e.g. Util.id<i32>(41) works on 64-bit
+             * where the literal's default type `int` resolves to `i64`. */
+            if (call_expr->as.call.has_explicit_type_args &&
+                call_expr->as.call.args[arg_index] != NULL &&
+                expr_is_pure_numeric_literal_expr_for_target_adaptation(
+                    call_expr->as.call.args[arg_index])) {
+                size_t tp_index = 0U;
+                if (callable_find_type_param_index(
+                        callable,
+                        param_type->as.named.segments[0],
+                        &tp_index) &&
+                    tp_index < call_expr->as.call.explicit_type_arg_count &&
+                    type_args[tp_index] != NULL) {
+                    (void)expr_matches_expected_type_ref(
+                        context,
+                        call_expr->as.call.args[arg_index],
+                        type_args[tp_index]);
+                }
+            }
             if (!callable_collect_type_args_from_arg_expr(context,
                                                           callable,
                                                           param_type,
@@ -11184,7 +11205,7 @@ static bool type_ref_is_catchable_exception_type(ResolveContext *context,
                 }
                 return false;
             }
-            if (type_ref_builtin_canonical_name(type_ref) != NULL) {
+            if (type_ref_builtin_canonical_name(type_ref, context->pointer_size) != NULL) {
                 return true;
             }
             if (type_ref->as.named.segment_count == 1U &&
@@ -11276,7 +11297,7 @@ static bool validate_throw_stmt(ResolveContext *context, const FengStmt *stmt) {
     throw_type = infer_expr_type(context, stmt != NULL ? stmt->as.throw_value : NULL);
 
     if (throw_expr_is_callable_value(context, stmt != NULL ? stmt->as.throw_value : NULL, &reason)) {
-        char *type_name = format_inferred_expr_type_name(throw_type);
+        char *type_name = format_inferred_expr_type_name(throw_type, context->pointer_size);
         char *message = format_message(
             "throw expression of type '%s' is not throwable: %s",
             type_name != NULL ? type_name : "<unknown>",
@@ -11294,7 +11315,7 @@ static bool validate_throw_stmt(ResolveContext *context, const FengStmt *stmt) {
     }
 
     if (!inferred_expr_type_is_throwable(context, throw_type, &reason)) {
-        char *type_name = format_inferred_expr_type_name(throw_type);
+        char *type_name = format_inferred_expr_type_name(throw_type, context->pointer_size);
         char *message = format_message(
             "throw expression of type '%s' is not throwable: %s",
             type_name != NULL ? type_name : "<unknown>",
@@ -13669,7 +13690,7 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                 }
                 return true;
             }
-            owner_name = format_inferred_expr_type_name(owner_type);
+            owner_name = format_inferred_expr_type_name(owner_type, context->pointer_size);
             if (owner_name == NULL) {
                 return true;
             }
@@ -14227,7 +14248,7 @@ static bool validate_array_literal_expr(ResolveContext *context, const FengExpr 
         }
 
         if (!inferred_expr_types_equal(context, element_type, item_type)) {
-            char *type_name = format_inferred_expr_type_name(element_type);
+            char *type_name = format_inferred_expr_type_name(element_type, context->pointer_size);
             bool ok = resolver_append_error(
                 context,
                 expr->as.array_literal.items[item_index]->token,
@@ -16032,7 +16053,7 @@ static bool evaluate_constant_cast(ResolveContext *context,
     if (!evaluate_constant_expr_inner(context, expr->as.cast.value, &inner, guard)) {
         return false;
     }
-    target = type_ref_builtin_canonical_name(expr->as.cast.type);
+    target = type_ref_builtin_canonical_name(expr->as.cast.type, context->pointer_size);
     if (target == NULL) {
         return false;
     }
@@ -16145,7 +16166,7 @@ static bool expr_is_pure_numeric_literal_expr_for_target_adaptation(const FengEx
 static bool numeric_literal_adapts_to_target(ResolveContext *context,
                                              const FengExpr *expr,
                                              const FengTypeRef *target) {
-    const char *canonical_target = type_ref_builtin_canonical_name(target);
+    const char *canonical_target = type_ref_builtin_canonical_name(target, context->pointer_size);
     FengConstValue value;
     bool target_is_float;
 
@@ -16212,7 +16233,7 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
      * authority — falling through to the default-inferred-type path would let oversized
      * literals like `let c: i32 = 9999999999;` slip past because the literal's *default*
      * inferred type happens to match the target's canonical name. */
-    if (type_ref_builtin_canonical_name(expected_type_ref) != NULL) {
+    if (type_ref_builtin_canonical_name(expected_type_ref, context->pointer_size) != NULL) {
         FengConstValue value;
         size_t errors_before = *context->error_count;
 
@@ -16528,6 +16549,7 @@ static void record_object_spec_coercion_site_if_applicable(
         if (src_type_decl != NULL || src_type_ref != NULL) {
             if (!init_spec_witness_subject_key(src_type_decl,
                                                src_type_ref,
+                                               context->pointer_size,
                                                &subject_key_for_coercion)) {
                 return;
             }
@@ -17329,7 +17351,7 @@ static bool expr_matches_expected_address_of_data_pointer_type(
 
     operand_type = infer_expr_type(context, expr->as.unary.operand);
     if (inferred_expr_type_is_string(operand_type)) {
-        const char *builtin_name = type_ref_builtin_canonical_name(expected_type_ref->as.inner);
+        const char *builtin_name = type_ref_builtin_canonical_name(expected_type_ref->as.inner, context->pointer_size);
 
         return builtin_name != NULL && strcmp(builtin_name, "string") == 0;
     }
@@ -17756,11 +17778,10 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
     return true;
 }
 
-static char *format_inferred_expr_type_name(InferredExprType type) {
+static char *format_inferred_expr_type_name(InferredExprType type, size_t pointer_size) {
     switch (type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN: {
-            /* pointer_size=0: no ResolveContext available; used for diagnostics only. */
-            const char *builtin_name = canonical_builtin_type_name(type.builtin_name, 0U);
+            const char *builtin_name = canonical_builtin_type_name(type.builtin_name, pointer_size);
 
             return duplicate_cstr(builtin_name != NULL ? builtin_name : "<type>");
         }
@@ -17820,7 +17841,7 @@ static bool type_ref_is_abi_field_pointer_target(const ResolveContext *context,
         return false;
     }
 
-    builtin_name = type_ref_builtin_canonical_name(type_ref);
+    builtin_name = type_ref_builtin_canonical_name(type_ref, context->pointer_size);
     if (builtin_name != NULL) {
         return true;
     }
@@ -17856,7 +17877,7 @@ static bool type_ref_is_abi_field_type(const ResolveContext *context,
         return false;
     }
 
-    builtin_name = type_ref_builtin_canonical_name(type_ref);
+    builtin_name = type_ref_builtin_canonical_name(type_ref, context->pointer_size);
     if (builtin_name != NULL) {
         return strcmp(builtin_name, "void") != 0 && strcmp(builtin_name, "string") != 0;
     }
@@ -17881,7 +17902,7 @@ static bool type_ref_is_abi_compatible_array(const ResolveContext *context,
         return false;
     }
 
-    builtin_name = type_ref_builtin_canonical_name(type_ref->as.inner);
+    builtin_name = type_ref_builtin_canonical_name(type_ref->as.inner, context->pointer_size);
     if (builtin_name != NULL) {
         return strcmp(builtin_name, "void") != 0 && strcmp(builtin_name, "string") != 0;
     }
@@ -18454,7 +18475,7 @@ static bool validate_abi_callable_signature(ResolveContext *context,
             context, callable_effective_return_type(context, callable), true, NULL) ||
         !inferred_expr_type_uses_c_boundary_compatible_named_types(
             context, callable_effective_return_type(context, callable), true, false)) {
-        char *type_name = format_inferred_expr_type_name(callable_effective_return_type(context, callable));
+        char *type_name = format_inferred_expr_type_name(callable_effective_return_type(context, callable), context->pointer_size);
         bool ok = resolver_append_error(
             context,
             callable->return_type != NULL ? callable->return_type->token : token,
@@ -18495,7 +18516,7 @@ static bool type_ref_uses_c_boundary_compatible_named_types(const ResolveContext
 
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
-            builtin_name = type_ref_builtin_canonical_name(type_ref);
+            builtin_name = type_ref_builtin_canonical_name(type_ref, context->pointer_size);
             if (builtin_name != NULL) {
                 return strcmp(builtin_name, "void") != 0 || allow_void;
             }
@@ -18724,7 +18745,7 @@ static bool validate_expr_against_expected_inferred_type(ResolveContext *context
     }
 
     expr_name = format_expr_target_name(expr);
-    type_name = format_inferred_expr_type_name(expected_type);
+    type_name = format_inferred_expr_type_name(expected_type, context->pointer_size);
     if (!resolver_append_error(context,
                                expr->token,
                                "AE1003", format_message("expression '%s' does not match expected type '%s'",
@@ -19508,7 +19529,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 return true;
             }
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
-                char *owner_name = format_inferred_expr_type_name(owner_type);
+                char *owner_name = format_inferred_expr_type_name(owner_type, context->pointer_size);
                 bool ok = resolver_append_error(
                     context,
                     callee->token,
@@ -21386,7 +21407,7 @@ static bool resolve_try_expr(ResolveContext *context,
                                                       (FengExpr *)expr->as.try_expr.body,
                                                       union_decl,
                                                       expected);
-        } else if (type_ref_builtin_canonical_name(expected) != NULL) {
+        } else if (type_ref_builtin_canonical_name(expected, context->pointer_size) != NULL) {
             InferredExprType target = inferred_expr_type_from_type_ref(expected);
 
             if (numeric_literal_fits_inferred_target(context, expr->as.try_expr.body, target)) {
@@ -21969,7 +21990,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                         }
 
                         if (!iter_protocol_resolved) {
-                            char *type_name = format_inferred_expr_type_name(iter_type);
+                            char *type_name = format_inferred_expr_type_name(iter_type, context->pointer_size);
                             ok = resolver_append_error(
                                 context,
                                 stmt->as.for_stmt.iter_expr->token,
@@ -23100,7 +23121,7 @@ static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
                 return false;
             }
         } else if (decl_is_enum_type(source_type_decl)) {
-            if (!init_spec_witness_subject_key(source_type_decl, NULL, &subject_key) ||
+            if (!init_spec_witness_subject_key(source_type_decl, NULL, ctx->pointer_size, &subject_key) ||
                 !subject_key_satisfies_spec_decl(ctx, &subject_key, spec_decl)) {
                 return false;
             }
@@ -23108,7 +23129,7 @@ static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
             return false;
         }
     } else {
-        if (!init_spec_witness_subject_key(NULL, source_type_ref, &subject_key) ||
+        if (!init_spec_witness_subject_key(NULL, source_type_ref, ctx->pointer_size, &subject_key) ||
             !subject_key_satisfies_spec_decl(ctx, &subject_key, spec_decl)) {
             return false;
         }
@@ -23202,6 +23223,7 @@ static bool witness_fit_collect_visitor(const FengTypeMember *member,
 
 static bool init_spec_witness_subject_key(const FengDecl *type_decl,
                                           const FengTypeRef *source_type_ref,
+                                          size_t pointer_size,
                                           FengSemanticSubjectKey *out_key) {
     const char *builtin_name;
 
@@ -23212,7 +23234,7 @@ static bool init_spec_witness_subject_key(const FengDecl *type_decl,
         *out_key = feng_semantic_subject_key_for_type_decl(type_decl);
         return true;
     }
-    builtin_name = type_ref_builtin_canonical_name(source_type_ref);
+    builtin_name = type_ref_builtin_canonical_name(source_type_ref, pointer_size);
     if (builtin_name != NULL) {
         *out_key = feng_semantic_subject_key_for_builtin(builtin_name);
         return true;
@@ -23256,7 +23278,7 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
     }
 
     if (type_decl != NULL) {
-        if (!init_spec_witness_subject_key(type_decl, source_type_ref, &subject_key)) {
+        if (!init_spec_witness_subject_key(type_decl, source_type_ref, context->pointer_size, &subject_key)) {
             return;
         }
     } else if (source_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
@@ -23266,7 +23288,7 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
         }
         subject_key = feng_semantic_subject_key_for_builtin(builtin_name);
     } else if (source_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
-        if (!init_spec_witness_subject_key(NULL, source_type.type_ref, &subject_key)) {
+        if (!init_spec_witness_subject_key(NULL, source_type.type_ref, context->pointer_size, &subject_key)) {
             return;
         }
     } else {
@@ -26440,16 +26462,15 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
     bool ok = true;
     CallableReturnCache callable_return_cache;
     CallableExceptionEscapeCache callable_exception_escape_cache;
-    FengCompileTarget target = options != NULL ? options->target : FENG_COMPILE_TARGET_BIN;
-    const FengSemanticImportedModuleQuery *imported_query =
-        options != NULL ? options->imported_modules : NULL;
     /* pointer_size drives platform-dependent alias resolution (int → i32/i64).
-     * Caller fills options->pointer_size from sizeof(void *); a zero value
-     * defaults to the host's sizeof(void *).  See §6.4 and Task 3 in
-     * dev/feng-scalar-alias-optimize.md. */
-    size_t pointer_size = (options != NULL && options->pointer_size != 0U)
-                              ? options->pointer_size
-                              : sizeof(void *);
+     * Caller (CLI layer) fills options->pointer_size from feng_get_host_pointer_size().
+     * Must be non-zero; see dev/feng-binary-literal-adaptation-bugfix.md §3. */
+    if (options == NULL || options->pointer_size == 0U) {
+        return false;
+    }
+    FengCompileTarget target = options->target;
+    const FengSemanticImportedModuleQuery *imported_query = options->imported_modules;
+    size_t pointer_size = options->pointer_size;
 
     memset(&callable_return_cache, 0, sizeof(callable_return_cache));
     memset(&callable_exception_escape_cache, 0, sizeof(callable_exception_escape_cache));
@@ -26686,25 +26707,6 @@ finish:
         }
     }
     return true;
-}
-
-bool feng_semantic_analyze(const FengProgram *const *programs,
-                           size_t program_count,
-                           FengCompileTarget target,
-                           FengSemanticAnalysis **out_analysis,
-                           FengSemanticError **out_errors,
-                           size_t *out_error_count) {
-    FengSemanticAnalyzeOptions options;
-
-    memset(&options, 0, sizeof(options));
-    options.target = target;
-    options.pointer_size = sizeof(void *);
-    return feng_semantic_analyze_with_options(programs,
-                                              program_count,
-                                              &options,
-                                              out_analysis,
-                                              out_errors,
-                                              out_error_count);
 }
 
 void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
