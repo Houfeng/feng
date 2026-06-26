@@ -313,6 +313,11 @@ typedef struct ResolveContext {
      * into one of these blocks because every path through the expression must
      * produce a value.  Reset to 0 across callable / lambda boundaries. */
     size_t if_expr_depth;
+    /* When non-NULL, the resolver is currently resolving an expression that
+     * has an explicit target type (binding annotation, function argument,
+     * return value, member assignment).  Used by validate_if_expr to adapt
+     * branch literals to the target type (including union types). */
+    const FengTypeRef *current_expr_expected_type_ref;
     /* Number of catch blocks belonging to a try expression currently being
      * resolved.  When non-zero, `break` and `continue` from an outer loop
      * cannot escape into a catch block because every path through the
@@ -4230,6 +4235,9 @@ static bool expr_is_pure_numeric_literal_expr_for_target_adaptation(const FengEx
 static bool numeric_literal_fits_inferred_target(ResolveContext *context,
                                                  const FengExpr *literal_expr,
                                                  InferredExprType target_type);
+static void fill_expr_type_from_inferred(ResolveContext *context,
+                                          FengExpr *expr,
+                                          const InferredExprType *type);
 static bool validate_expr_against_expected_type(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 const FengTypeRef *expected_type);
@@ -6510,6 +6518,49 @@ static bool validate_block_yields_expression(ResolveContext *context,
         "AE1101", format_message("%s branch block must end with an expression statement", ctx_label));
 }
 
+/* Try to adapt a pure numeric literal expression to a numeric member of the
+ * given union type.  Iterates over union members; for each member whose type
+ * ref resolves to a built-in numeric canonical name, checks whether the
+ * literal fits.  On success, sets literal_expr->type to the member's type
+ * ref (borrowing the AST lifetime) and returns true.  Returns false if no
+ * numeric member can accommodate the literal. */
+static bool adapt_literal_expr_to_union_member(ResolveContext *context,
+                                               FengExpr *literal_expr,
+                                               const FengDecl *union_decl,
+                                               const FengTypeRef *union_type_ref) {
+    const FengUnionSpecInfo *info = feng_semantic_lookup_union_spec_info(context->analysis,
+                                                                         union_decl);
+    FengConstValue value;
+    bool evaluated;
+
+    if (info == NULL || literal_expr == NULL) {
+        return false;
+    }
+    evaluated = evaluate_constant_expr(context, literal_expr, &value);
+    if (!evaluated || (value.kind != FENG_CONST_INT && value.kind != FENG_CONST_FLOAT)) {
+        return false;
+    }
+    for (size_t index = 0U; index < info->member_count; ++index) {
+        const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
+            context, union_decl, union_type_ref, info->members[index].type_ref);
+        const char *canonical = type_ref_builtin_canonical_name(member_type_ref);
+        bool member_is_float;
+
+        if (canonical == NULL) {
+            continue;
+        }
+        member_is_float = strcmp(canonical, "f32") == 0 || strcmp(canonical, "f64") == 0;
+        if (value.kind == FENG_CONST_INT && !member_is_float &&
+            !integer_literal_fits_canonical_target(value.i, canonical)) {
+            continue;
+        }
+        /* Literal fits this numeric union member. */
+        literal_expr->type = member_type_ref;
+        return true;
+    }
+    return false;
+}
+
 static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
     InferredExprType condition_type = infer_expr_type(context, expr->as.if_expr.condition);
     InferredExprType then_type;
@@ -6553,11 +6604,115 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
         }
     }
 
+    /* Branch literal adaptation: determine the target type and adapt literal
+     * branches to it.  Three cases:
+     *
+     * 1. Explicit target type (from binding annotation, return type, etc.):
+     *    - Numeric target: adapt literal branches to the target type
+     *    - Union target: adapt literal branches to a numeric union member;
+     *      non-literal branches must be a valid union member
+     *
+     * 2. No explicit target, one branch is a literal and the other is not:
+     *    adapt the literal to the non-literal branch's type.
+     *
+     * 3. Both branches are literals or both non-literals: no adaptation.
+     *
+     * The adapted type is hung on the literal node's type field; infer_expr_type
+     * for INTEGER/FLOAT checks expr->type and returns the adapted type, so the
+     * subsequent block_yield_inferred_type calls pick it up automatically. */
+    if (context->current_expr_expected_type_ref != NULL) {
+        const FengTypeRef *expected = context->current_expr_expected_type_ref;
+        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(context, expected);
+        const FengExpr *then_yield = block_yield_expression(expr->as.if_expr.then_block);
+        const FengExpr *else_yield = block_yield_expression(expr->as.if_expr.else_block);
+
+        if (union_decl != NULL) {
+            /* Union target: adapt literal branches to a numeric member;
+             * non-literal branches are checked by expr_matches_expected_type_ref
+             * later (they must be a valid union member). */
+            if (then_yield != NULL &&
+                expr_is_pure_numeric_literal_expr_for_target_adaptation(then_yield)) {
+                (void)adapt_literal_expr_to_union_member(context,
+                                                          (FengExpr *)then_yield,
+                                                          union_decl,
+                                                          expected);
+            }
+            if (else_yield != NULL &&
+                expr_is_pure_numeric_literal_expr_for_target_adaptation(else_yield)) {
+                (void)adapt_literal_expr_to_union_member(context,
+                                                          (FengExpr *)else_yield,
+                                                          union_decl,
+                                                          expected);
+            }
+        } else if (type_ref_builtin_canonical_name(expected) != NULL) {
+            /* Numeric target: adapt literal branches directly. */
+            InferredExprType target = inferred_expr_type_from_type_ref(expected);
+
+            if (then_yield != NULL &&
+                expr_is_pure_numeric_literal_expr_for_target_adaptation(then_yield) &&
+                numeric_literal_fits_inferred_target(context, then_yield, target)) {
+                fill_expr_type_from_inferred(context, (FengExpr *)then_yield, &target);
+            }
+            if (else_yield != NULL &&
+                expr_is_pure_numeric_literal_expr_for_target_adaptation(else_yield) &&
+                numeric_literal_fits_inferred_target(context, else_yield, target)) {
+                fill_expr_type_from_inferred(context, (FengExpr *)else_yield, &target);
+            }
+        }
+    } else {
+        const FengExpr *then_yield = block_yield_expression(expr->as.if_expr.then_block);
+        const FengExpr *else_yield = block_yield_expression(expr->as.if_expr.else_block);
+        bool then_is_literal =
+            expr_is_pure_numeric_literal_expr_for_target_adaptation(then_yield);
+        bool else_is_literal =
+            expr_is_pure_numeric_literal_expr_for_target_adaptation(else_yield);
+
+        if (then_is_literal && !else_is_literal && else_yield != NULL) {
+            InferredExprType target = infer_expr_type(context, else_yield);
+            if (inferred_expr_type_is_numeric(target) &&
+                numeric_literal_fits_inferred_target(context, then_yield, target)) {
+                fill_expr_type_from_inferred(context, (FengExpr *)then_yield, &target);
+            }
+        } else if (!then_is_literal && else_is_literal && then_yield != NULL) {
+            InferredExprType target = infer_expr_type(context, then_yield);
+            if (inferred_expr_type_is_numeric(target) &&
+                numeric_literal_fits_inferred_target(context, else_yield, target)) {
+                fill_expr_type_from_inferred(context, (FengExpr *)else_yield, &target);
+            }
+        }
+        /* Both literals or both non-literals: no adaptation needed. */
+    }
+
     then_type = block_yield_inferred_type(context, expr->as.if_expr.then_block);
     else_type = block_yield_inferred_type(context, expr->as.if_expr.else_block);
 
     if (inferred_expr_types_equal(context, then_type, else_type)) {
         return true;
+    }
+
+    /* When the explicit target is a union type, branches may have different
+     * types as long as each is a valid union member.  Check this before
+     * reporting a branch-type-mismatch error. */
+    if (context->current_expr_expected_type_ref != NULL) {
+        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(
+            context, context->current_expr_expected_type_ref);
+
+        if (union_decl != NULL) {
+            UnionMemberSelection then_sel;
+            UnionMemberSelection else_sel;
+
+            then_sel = select_union_member_for_expr_type(context,
+                                                          then_type,
+                                                          union_decl,
+                                                          context->current_expr_expected_type_ref);
+            else_sel = select_union_member_for_expr_type(context,
+                                                          else_type,
+                                                          union_decl,
+                                                          context->current_expr_expected_type_ref);
+            if (then_sel.matched && else_sel.matched) {
+                return true;
+            }
+        }
     }
 
     {
@@ -14446,9 +14601,18 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             return inferred_expr_type_builtin("bool");
 
         case FENG_EXPR_INTEGER:
+            /* If adaptation has already set expr->type (e.g., by binary-expr
+             * adaptation, compound-assignment adaptation, or if-expr branch
+             * adaptation), return the adapted type instead of the default. */
+            if (expr->type != NULL) {
+                return inferred_expr_type_from_type_ref(expr->type);
+            }
             return inferred_expr_type_builtin("int");
 
         case FENG_EXPR_FLOAT:
+            if (expr->type != NULL) {
+                return inferred_expr_type_from_type_ref(expr->type);
+            }
             return inferred_expr_type_builtin("double");
 
         case FENG_EXPR_STRING:
@@ -20513,8 +20677,18 @@ static bool resolve_binding(ResolveContext *context,
     if (!resolve_type_ref(context, binding->type, false)) {
         return false;
     }
-    if (!resolve_expr(context, binding->initializer, allow_self)) {
-        return false;
+    /* When the binding has a type annotation, make the expected type visible
+     * to nested expression resolution (e.g., if-expr branch adaptation). */
+    {
+        const FengTypeRef *prev_expected_type_ref = context->current_expr_expected_type_ref;
+        bool ok;
+
+        context->current_expr_expected_type_ref = binding->type;
+        ok = resolve_expr(context, binding->initializer, allow_self);
+        context->current_expr_expected_type_ref = prev_expected_type_ref;
+        if (!ok) {
+            return false;
+        }
     }
     if (binding->type != NULL) {
         if (!validate_expr_against_expected_type(context, binding->initializer, binding->type)) {
@@ -21274,8 +21448,19 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                     stmt->token,
                     "AE1501", duplicate_cstr("defer block cannot contain 'return'"));
             }
-            if (!resolve_expr(context, stmt->as.return_value, allow_self)) {
-                return false;
+            {
+                const FengTypeRef *prev_expected_type_ref = context->current_expr_expected_type_ref;
+                bool ok;
+
+                context->current_expr_expected_type_ref =
+                    context->current_callable_signature != NULL
+                        ? context->current_callable_signature->return_type
+                        : NULL;
+                ok = resolve_expr(context, stmt->as.return_value, allow_self);
+                context->current_expr_expected_type_ref = prev_expected_type_ref;
+                if (!ok) {
+                    return false;
+                }
             }
             return validate_return_stmt(context, stmt);
 

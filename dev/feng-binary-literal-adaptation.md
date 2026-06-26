@@ -10,7 +10,7 @@
 Feng 的数值字面量贴合策略（docs/feng-builtin-type.md §2）当前覆盖以下场景：
 
 | 场景 | 贴合 | 示例 |
-|---|---|---|
+| --- | --- | --- |
 | 赋值/绑定（有类型注解） | ✅ | `let x: i32 = 10;` |
 | 函数/方法参数传递 | ✅ | `func f(n: i32); f(10)` |
 | 返回值（有返回类型声明） | ✅ | `return 10;`（函数返回 `i32`） |
@@ -29,7 +29,7 @@ smoke 测试中 45/87 个用例因此失败，全部是二元运算中字面量�
 ## 2. 主流语言对比
 
 | 语言 | 二元运算字面量处理 | 机制 |
-|---|---|---|
+| --- | --- | --- |
 | **Go** | ✅ 贴合 | untyped constant，字面量无固定类型，在任何数值上下文无形贴合 |
 | **Swift** | ✅ 贴合 | integer literal 通过 `ExpressibleByIntegerLiteral` 协议贴合到对侧类型 |
 | **Rust** | ✅ 贴合 | integer literal 默认 `{integer}`（占位类型），在二元运算中贴合到对侧具体类型 |
@@ -107,6 +107,7 @@ struct FengExpr {
 ```
 
 **设计要点**：
+
 - 直接使用已有的 `FengTypeRef` 作为表达式类型表示，不引入新类型
 - `FengTypeRef` 已能表达所有类型：内建标量（`FENG_TYPE_REF_NAMED` 单段，如 `"i32"`）、用户类型（多段 + 泛型参数）、数组（`FENG_TYPE_REF_ARRAY`）、指针（`FENG_TYPE_REF_POINTER`）
 - 语义层完成贴合/推导后，将已有的或合成的 `FengTypeRef *` 挂到节点上
@@ -141,7 +142,7 @@ if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr) &&
 覆盖的场景：
 
 | 场景 | 调用链 |
-|---|---|
+| --- | --- |
 | `let x: u32 = 1;` | `resolve_binding` → `expr_matches_expected_type_ref(1, u32)` |
 | `f(10)` (`f(n: i32)`) | `resolve_call` → `expr_matches_expected_type_ref(10, i32)` |
 | `return 123;`（返回 `i64`） | `validate_return_stmt` → `expr_matches_expected_type_ref(123, i64)` |
@@ -186,7 +187,7 @@ if (binding->type == NULL && expr->kind == FENG_EXPR_FLOAT) {
 
 在现有的 `inferred_expr_types_equal` 类型相等性检查**之前**，增加字面量贴合步骤：
 
-```
+```text
 infer_expr_type → FENG_EXPR_BINARY:
   1. infer_expr_type(left) → left_type       // 递归推导
   2. infer_expr_type(right) → right_type      // 递归推导
@@ -459,7 +460,7 @@ codegen 读取 `type` 按实际类型发射，新增专项测试验证。
 以 `if n == 10 { }`（`n: i32`，64 位平台 `int = i64`）为例：
 
 | 步骤 | 调用 | 结果 |
-|---|---|---|
+| --- | --- | --- |
 | 1·验证 | `validate_binary_expr` → `infer_expr_type(n)` / `infer_expr_type(10)` | `i32` / `i64`（默认，未贴合） |
 | 2·验证 | `binary_expr_types_are_valid(i32, i64)` | false，报"类型不匹配" |
 | 3·推导 | `validate_stmt_condition_expr` → `infer_expr_type(n == 10)` | 触发贴合，但错误已报 |
@@ -476,7 +477,7 @@ codegen 读取 `type` 按实际类型发射，新增专项测试验证。
 ### 9.3 职责划分
 
 | 函数 | 职责 | 不做 |
-|---|---|---|
+| --- | --- | --- |
 | `infer_expr_type` | 推导（含贴合），填 `expr->type` | 不报错 |
 | `validate_binary_expr` | 验证，读 `expr->type` | 不调 `infer_expr_type` |
 
@@ -507,7 +508,7 @@ case FENG_EXPR_BINARY: {
 **新增辅助函数 `fill_expr_type_from_inferred`**：把 `InferredExprType` 转成 `const FengTypeRef *` 写入 `expr->type`。
 
 | `InferredExprType` kind | 转换方式 |
-|---|---|
+| --- | --- |
 | `BUILTIN` | 合成命名 `FengTypeRef`（单段），`analysis_track_synthetic_type_ref` 管理生命周期 |
 | `TYPE_REF` | 借用已有 `type_ref`（AST 生命周期） |
 | `DECL`（`FENG_DECL_TYPE` / `FENG_DECL_ENUM`） | 合成命名 `FengTypeRef`（单段，取 `decl_typeish_name`），`analysis_track_synthetic_type_ref` 管理生命周期 |
@@ -580,7 +581,7 @@ typedef struct InferredExprType {
 `if n == 10 { }`（`n: i32`，64 位 `int = i64`）：
 
 | 步骤 | 函数 | 动作 | 结果 |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | 推导 | `infer_expr_type(n == 10)` | 贴合 `10→i32`，填 `n->type=i32`、`10->type=i32`、`(n==10)->type=bool` | 返回 `bool` |
 | 验证 | `validate_binary_expr` | 读 `n->type`/`10->type` → `i32`/`i32` | 通过 |
 
@@ -599,7 +600,7 @@ typedef struct InferredExprType {
 `InferredExprType`（5 种 kind）与 `FengTypeRef`（3 种 kind）存在类型模型二分，是设计气味：
 
 | `InferredExprType` kind | `FengTypeRef` 对应 |
-|---|---|
+| --- | --- |
 | `UNKNOWN` | `NULL` |
 | `BUILTIN` | `NAMED`（单段，需 intern 表） |
 | `TYPE_REF` | 直接 |
@@ -607,6 +608,7 @@ typedef struct InferredExprType {
 | `LAMBDA` | `NAMED`（函数类型 decl） |
 
 统一后：
+
 - `infer_expr_type` 返回 `const FengTypeRef *`，`expr->type` 成为唯一真源
 - 消除 `InferredExprType` ↔ `FengTypeRef *` 转换摩擦
 - `validate_binary_expr` 直接用 `FengTypeRef` 比较，不需 `inferred_expr_type_from_type_ref` 转回
@@ -658,7 +660,7 @@ typedef struct InferredExprType {
 通过系统遍历 `analyzer.c` 中所有 `infer_expr_type` + `inferred_expr_types_equal` 调用对，发现以下场景存在相同贴合缺口——一侧为纯数值字面量、另一侧为已确定标量类型时，字面量不会贴合，导致 Task 6（`int` → 平台相关）后编译失败。另外元组字面量（#6）已覆盖，列入总览仅为完整性。
 
 | # | 场景 | 代码路径 | 示例 | 当前错误 |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | 1 | 复合赋值 | `validate_compound_assignment`（6247） | `n += 1`（`n: i32`） | AE0023 |
 | 2 | if 表达式分支结果 | `validate_if_expr`（6528） | `if c { x } else { 10 }`（`x: i32`） | AE0033 |
 | 3 | try 表达式 body/result | try 验证（6586/6636） | `try x catch { 10 }`（`x: i32`） | — |
@@ -719,7 +721,7 @@ let y = if cond { x } else { 10 };     // ✅ then 非字面量 → 目标 i32�
 let z: i64 = if cond { 1 } else { 2 }; // ✅ 目标 i64，两个块都贴合到 i64
 
 // 场景 B2：返回值提供明确目标类型
-func f() -> i32 {
+func f(): i32 {
     return if cond { 1 } else { 2 };    // ✅ 返回类型 i32，两个块都贴合到 i32
 }
 
@@ -728,12 +730,12 @@ let w = if cond { 1 } else { 2 };      // ✅ 各自默认推导为 i64，类型
 
 // match 表达式
 let m = match val {
-    0 => x,                             // 非字面量 → 目标 i32
-    _ => 10,                            // ✅ 字面量贴合到 i32
+    0 { x }                             // 非字面量 → 目标 i32
+    else { 10 }                         // ✅ 字面量贴合到 i32
 };
 
 // 联合类型目标
-type Result = i32 | Error;
+spec Result: i32 | Error;
 let x: i32 = 5;
 let r1: Result = if cond { x } else { Error.Fail };    // ✅ 目标 Result；x 的类型 i32 是成员，合法
 let r2: Result = if cond { 10 } else { Error.Fail };   // ✅ 目标 Result；10 能贴合到 i32（成员），合法
@@ -795,9 +797,9 @@ let d = [x, y];         // ❌ x(i32) 和 y(i64) 都是非字面量，类型不�
 **示例**：
 
 ```feng
-type Point = (i32, i32);
+type Point(i32, i32);
 
-let p: Point = (1, 2);              // ✅ 按位贴合：1→i32, 2→i32
+let p: Point = (1, 2);               // ✅ 按位贴合：1→i32, 2→i32
 f((1, 2));                           // ✅ f(p: Point) 参数位置提供目标类型，按位贴合
 let q: Point = (1, 256);             // ❌ 256 超出 i32 范围
 let t = (1, 2);                      // ❌ AE0301：元组字面量要求明确目标类型
@@ -824,13 +826,13 @@ let t = (1, 2);                      // ❌ AE0301：元组字面量要求明确
 
 > 贴合原则见 §10.2.2（原则 1/2/4/5，已决策）。
 
-- [ ] 实现目标类型确定逻辑：优先取外层明确目标类型（绑定注解、函数/方法参数、返回值、成员赋值）；无明确目标类型时取第一个非字面量块的推导类型
-- [ ] 实现字面量块向目标类型的贴合：通过 `numeric_literal_fits_inferred_target` 或等价函数进行范围检查，贴合结果写入 AST 节点 `type`
-- [ ] 实现联合类型特殊处理：目标类型为联合类型时，非字面量块的推导类型是联合类型成员即合法；字面量块能贴合到某个成员时即合法
-- [ ] 实现"全字面量"兜底：所有块均为字面量且无明确目标类型时，各块各自默认推导，沿用 `inferred_expr_types_equal` 比较
-- [ ] 改造 `validate_if_expr`（analyzer.c:6528）及调用链
-- [ ] 新增测试用例：覆盖有明确目标类型、无目标类型（首块非字面量）、无目标类型（全字面量）、联合类型目标等场景
-- [ ] 全量回归测试，通过后将本任务所有 TODO 标记为完成，等后续指令
+- [x] 实现目标类型确定逻辑：优先取外层明确目标类型（绑定注解、函数/方法参数、返回值、成员赋值）；无明确目标类型时取第一个非字面量块的推导类型
+- [x] 实现字面量块向目标类型的贴合：通过 `numeric_literal_fits_inferred_target` 或等价函数进行范围检查，贴合结果写入 AST 节点 `type`
+- [x] 实现联合类型特殊处理：目标类型为联合类型时，非字面量块的推导类型是联合类型成员即合法；字面量块能贴合到某个成员时即合法
+- [x] 实现"全字面量"兜底：所有块均为字面量且无明确目标类型时，各块各自默认推导，沿用 `inferred_expr_types_equal` 比较
+- [x] 改造 `validate_if_expr`（analyzer.c:6528）及调用链
+- [x] 新增测试用例：覆盖有明确目标类型、无目标类型（首块非字面量）、无目标类型（全字面量）、联合类型目标等场景
+- [x] 全量回归测试，通过后将本任务所有 TODO 标记为完成，等后续指令
 
 #### 10.3.3 match 表达式分支贴合
 
