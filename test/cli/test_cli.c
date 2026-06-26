@@ -1497,7 +1497,7 @@ static void test_direct_build_emits_symbol_tables(void) {
     mkdir_p(src_dir);
     write_text_file(source_path,
                     "open module test.cli.symbols;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n"
                     "func main(args: string[]) {}\n");
@@ -1560,7 +1560,7 @@ static void test_direct_build_accepts_package_bundle(void) {
     mkdir_p(main_src_dir);
     write_text_file(dep_source_path,
                     "open module test.cli.pkgdep;\n"
-                    "open func dep_value(): i32 {\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n");
     write_text_file(main_source_path,
@@ -1649,14 +1649,14 @@ static void test_direct_build_links_library_from_package_bundle(void) {
     mkdir_p(main_src_dir);
     write_text_file(dep_source_path,
                     "open module test.cli.pkgdep;\n"
-                    "open func dep_value(): i32 {\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n");
     write_text_file(main_source_path,
                     "module test.cli.pkgmain;\n"
                     "import test.cli.pkgdep;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern func puts(msg: string*): i32;\n"
+                    "extern func puts(msg: string*): int;\n"
                     "func main(args: string[]) {\n"
                     "  if dep_value() == 7 { puts(&\"ok\"); } else { puts(&\"bad\"); }\n"
                     "}\n");
@@ -1762,20 +1762,20 @@ static void test_direct_build_sorts_package_libraries_by_dependency(void) {
     mkdir_p(main_src_dir);
     write_text_file(b_source_path,
                     "open module test.cli.pkgb;\n"
-                    "open func b_value(): i32 {\n"
+                    "open func b_value(): int {\n"
                     "  return 11;\n"
                     "}\n");
     write_text_file(a_source_path,
                     "open module test.cli.pkga;\n"
                     "import test.cli.pkgb as b;\n"
-                    "open func a_value(): i32 {\n"
+                    "open func a_value(): int {\n"
                     "  return b.b_value();\n"
                     "}\n");
     write_text_file(main_source_path,
                     "module test.cli.pkgconsumer;\n"
                     "import test.cli.pkga as a;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern func puts(msg: string*): i32;\n"
+                    "extern func puts(msg: string*): int;\n"
                     "func main(args: string[]) {\n"
                     "  if a.a_value() == 11 { puts(&\"ok\"); } else { puts(&\"bad\"); }\n"
                     "}\n");
@@ -1901,14 +1901,14 @@ static void test_project_pack_bundle_can_be_consumed(void) {
                     "out: \"build/\"\n");
     write_text_file(lib_source_path,
                     "open module test.cli.packdep;\n"
-                    "open func dep_value(): i32 {\n"
+                    "open func dep_value(): int {\n"
                     "  return 9;\n"
                     "}\n");
     write_text_file(consumer_source_path,
                     "module test.cli.packconsumer;\n"
                     "import test.cli.packdep;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern func puts(msg: string*): i32;\n"
+                    "extern func puts(msg: string*): int;\n"
                     "func main(args: string[]) {\n"
                     "  if dep_value() == 9 { puts(&\"ok\"); } else { puts(&\"bad\"); }\n"
                     "}\n");
@@ -2199,7 +2199,7 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
     write_text_file(dep_source_path,
                     "open module test.cli.pkgextlib;\n"
                     "@fastcall(\"helper\")\n"
-                    "open extern func helper_value(): i32;\n");
+                    "open extern func helper_value(): int;\n");
     {
         char *out_opt = make_out_option(dep_out_dir);
         char *name_opt = dup_printf("--name=%s", "pkgextlib");
@@ -2241,7 +2241,7 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
                     "module test.cli.pkgextlibmain;\n"
                     "import test.cli.pkgextlib;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern func puts(msg: string*): i32;\n"
+                    "extern func puts(msg: string*): int;\n"
                     "func main(args: string[]) {\n"
                     "  if helper_value() == 7 {\n"
                     "    puts(&\"ok\");\n"
@@ -2369,7 +2369,7 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
     write_text_file(dep_source_path,
                     "open module test.cli.pkgextlibstatic;\n"
                     "@stdcall(\"helper\")\n"
-                    "open extern func helper_value(): i32;\n");
+                    "open extern func helper_value(): int;\n");
     {
         char *out_opt = make_out_option(dep_out_dir);
         char *name_opt = dup_printf("--name=%s", "pkgextlibstatic");
@@ -2413,7 +2413,7 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
                     "module test.cli.pkgextlibstaticconsumer;\n"
                     "import test.cli.pkgextlibstatic;\n"
                     "@cdecl(\"libc\")\n"
-                    "extern func puts(msg: string*): i32;\n"
+                    "extern func puts(msg: string*): int;\n"
                     "func main(args: string[]) {\n"
                     "  if helper_value() == 41 {\n"
                     "    puts(&\"ok\");\n"
@@ -2661,7 +2661,7 @@ static void test_direct_build_consumes_package_generic_function(void) {
         "module test.cli.pkggenericfnmain;\n"
         "import test.cli.pkggenericfn;\n"
         "@cdecl(\"libc\")\n"
-        "extern func puts(msg: string*): i32;\n"
+        "extern func puts(msg: string*): int;\n"
         "func main(args: string[]) {\n"
         "  if identity(7) == 7 { puts(&\"generic fn ok\"); }\n"
         "}\n",
@@ -2702,9 +2702,9 @@ static void test_direct_build_consumes_package_generic_type(void) {
         "module test.cli.pkggenerictypemain;\n"
         "import test.cli.pkggenerictype;\n"
         "@cdecl(\"libc\")\n"
-        "extern func puts(msg: string*): i32;\n"
+        "extern func puts(msg: string*): int;\n"
         "func main(args: string[]) {\n"
-        "  let box: Box<i32> = Box<i32>();\n"
+        "  let box: Box<int> = Box<int>();\n"
         "  box.setValue(11);\n"
         "  if box.readValue() == 11 { puts(&\"generic type ok\"); }\n"
         "}\n",
@@ -2740,7 +2740,7 @@ static void test_direct_build_consumes_package_enum(void) {
         "module test.cli.pkgenummain;\n"
         "import test.cli.pkgenum;\n"
         "@cdecl(\"libc\")\n"
-        "extern func puts(msg: string*): i32;\n"
+        "extern func puts(msg: string*): int;\n"
         "func main(args: string[]) {\n"
         "  let status: HttpStatus;\n"
         "  if status == HttpStatus.Ok { puts(&\"enum package ok\"); }\n"
@@ -2776,9 +2776,9 @@ static void test_direct_build_consumes_package_generic_spec_constraint(void) {
         "module test.cli.pkggenericspecmain;\n"
         "import test.cli.pkggenericspec;\n"
         "@cdecl(\"libc\")\n"
-        "extern func puts(msg: string*): i32;\n"
+        "extern func puts(msg: string*): int;\n"
         "type Key: Eq<Key> {\n"
-        "  var id: i32;\n"
+        "  var id: int;\n"
         "  func same(other: Key): bool {\n"
         "    return self.id == other.id;\n"
         "  }\n"
@@ -2825,9 +2825,9 @@ static void test_direct_build_consumes_package_constrained_generic_function(void
         "module test.cli.pkgconstrainedgenericfnmain;\n"
         "import test.cli.pkgconstrainedgenericfn;\n"
         "@cdecl(\"libc\")\n"
-        "extern func puts(msg: string*): i32;\n"
+        "extern func puts(msg: string*): int;\n"
         "type Key: Eq<Key> {\n"
-        "  var id: i32;\n"
+        "  var id: int;\n"
         "  func same(other: Key): bool {\n"
         "    return self.id == other.id;\n"
         "  }\n"
@@ -2879,9 +2879,9 @@ static void test_direct_build_consumes_package_constrained_generic_type(void) {
         "module test.cli.pkgconstrainedgenerictypemain;\n"
         "import test.cli.pkgconstrainedgenerictype;\n"
         "@cdecl(\"libc\")\n"
-        "extern func puts(msg: string*): i32;\n"
+        "extern func puts(msg: string*): int;\n"
         "type Key: Eq<Key> {\n"
-        "  var id: i32;\n"
+        "  var id: int;\n"
         "  func same(other: Key): bool {\n"
         "    return self.id == other.id;\n"
         "  }\n"
@@ -2944,7 +2944,7 @@ static void test_pack_bundle_manifest_rewrites_local_dependency_versions(void) {
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
                     "open module local.dep;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
     write_text_file(root_manifest_path,
@@ -2959,7 +2959,7 @@ static void test_pack_bundle_manifest_rewrites_local_dependency_versions(void) {
                     "local_dep: \"../dep\"\n");
     write_text_file(root_source_path,
                     "open module root.lib;\n"
-                    "open func root_value(): i32 {\n"
+                    "open func root_value(): int {\n"
                     "  return 2;\n"
                     "}\n");
 
@@ -3030,7 +3030,7 @@ static void test_project_check_accepts_source_file_path_and_local_dependencies(v
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
                     "open module test.cli.localdep;\n"
-                    "open func dep_value(): i32 {\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n");
     write_text_file(root_manifest_path,
@@ -3162,7 +3162,7 @@ static void test_frontend_outputs_absolute_bundle_paths(void) {
     mkdir_p(main_src_dir);
     write_text_file(dep_source_path,
                     "open module test.cli.pkgdep;\n"
-                    "open func dep_value(): i32 {\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n"
                     "func main(args: string[]) {}\n");
@@ -3492,7 +3492,7 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
     src_dir = path_join(project_dir, "src");
     lib_path = path_join(src_dir, "lib.ff");
     expected_manifest = dup_printf("[package]\nname: \"_9_demo_lib\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
-    expected_lib_text = dup_printf("module _9_demo_lib;\n\nfunc helper(): i32 {\n  return 0;\n}\n");
+    expected_lib_text = dup_printf("module _9_demo_lib;\n\nfunc helper(): int {\n  return 0;\n}\n");
     ASSERT(expected_manifest != NULL);
     ASSERT(expected_lib_text != NULL);
 
@@ -4924,7 +4924,7 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
                                                                    "backend_local",
                                                                    "answer",
                                                                    NULL,
-                                                                   "i32",
+                                                                   "int",
                                                                    FENG_CODEGEN_MAPING_VARIABLE_BINDING));
     ASSERT(feng_debug_write_fd(fd_path,
                                binary_path,
@@ -4940,7 +4940,7 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
     backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
     backend_scopes_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"scopes\",\"body\":{\"scopes\":[{\"name\":\"Locals\",\"variablesReference\":101,\"expensive\":false}]}}");
     backend_scopes_text = build_dap_message_text(backend_scopes_json);
-    backend_variables_json = dup_printf("{\"seq\":4,\"type\":\"response\",\"request_seq\":5,\"success\":true,\"command\":\"variables\",\"body\":{\"variables\":[{\"name\":\"backend_param\",\"evaluateName\":\"backend_param\",\"value\":\"[]\",\"type\":\"string[]\",\"variablesReference\":0},{\"name\":\"backend_local\",\"evaluateName\":\"backend_local\",\"value\":\"42\",\"type\":\"i32\",\"variablesReference\":0}]}}");
+    backend_variables_json = dup_printf("{\"seq\":4,\"type\":\"response\",\"request_seq\":5,\"success\":true,\"command\":\"variables\",\"body\":{\"variables\":[{\"name\":\"backend_param\",\"evaluateName\":\"backend_param\",\"value\":\"[]\",\"type\":\"string[]\",\"variablesReference\":0},{\"name\":\"backend_local\",\"evaluateName\":\"backend_local\",\"value\":\"42\",\"type\":\"int\",\"variablesReference\":0}]}}");
     backend_variables_text = build_dap_message_text(backend_variables_json);
     escaped_backend_initialize_text = json_escape_text(backend_initialize_text);
     escaped_backend_stack_trace_text = json_escape_text(backend_stack_trace_text);
@@ -4984,7 +4984,7 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
                                 "      const expression = message.arguments && message.arguments.expression;\n"
                                 "      let body = null;\n"
                                 "      if (expression === 'backend_param') body = { result: '[]', type: 'string[]', variablesReference: 0 };\n"
-                                "      if (expression === 'backend_local') body = { result: '42', type: 'i32', variablesReference: 0 };\n"
+                                "      if (expression === 'backend_local') body = { result: '42', type: 'int', variablesReference: 0 };\n"
                                 "      if (body !== null) {\n"
                                 "        process.stdout.write(frame(JSON.stringify({ seq: nextSeq++, type: 'response', request_seq: message.seq, success: true, command: 'evaluate', body })));\n"
                                 "      }\n"
@@ -5176,7 +5176,7 @@ static void test_dap_filters_backend_variables_and_rewrites_user_values(void) {
                                                                    "backend_local",
                                                                    "i",
                                                                    NULL,
-                                                                   "i32",
+                                                                   "int",
                                                                    FENG_CODEGEN_MAPING_VARIABLE_BINDING));
     ASSERT(feng_debug_write_fd(fd_path,
                                binary_path,
@@ -5192,7 +5192,7 @@ static void test_dap_filters_backend_variables_and_rewrites_user_values(void) {
     backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
     backend_scopes_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"scopes\",\"body\":{\"scopes\":[{\"name\":\"Locals\",\"variablesReference\":101,\"expensive\":false}]}}");
     backend_scopes_text = build_dap_message_text(backend_scopes_json);
-    backend_variables_json = dup_printf("{\"seq\":4,\"type\":\"response\",\"request_seq\":5,\"success\":true,\"command\":\"variables\",\"body\":{\"variables\":[{\"name\":\"backend_param\",\"evaluateName\":\"backend_param\",\"value\":\"0x1000\",\"type\":\"FengArray *\",\"variablesReference\":23},{\"name\":\"capture_cell\",\"evaluateName\":\"capture_cell\",\"value\":\"0x2000\",\"type\":\"FengCaptureCell *\",\"variablesReference\":24},{\"name\":\"backend_local\",\"evaluateName\":\"backend_local\",\"value\":\"8593820128\",\"type\":\"i32\",\"variablesReference\":0},{\"name\":\"_old4\",\"evaluateName\":\"_old4\",\"value\":\"22\",\"type\":\"i32\",\"variablesReference\":0}]}}");
+    backend_variables_json = dup_printf("{\"seq\":4,\"type\":\"response\",\"request_seq\":5,\"success\":true,\"command\":\"variables\",\"body\":{\"variables\":[{\"name\":\"backend_param\",\"evaluateName\":\"backend_param\",\"value\":\"0x1000\",\"type\":\"FengArray *\",\"variablesReference\":23},{\"name\":\"capture_cell\",\"evaluateName\":\"capture_cell\",\"value\":\"0x2000\",\"type\":\"FengCaptureCell *\",\"variablesReference\":24},{\"name\":\"backend_local\",\"evaluateName\":\"backend_local\",\"value\":\"8593820128\",\"type\":\"int\",\"variablesReference\":0},{\"name\":\"_old4\",\"evaluateName\":\"_old4\",\"value\":\"22\",\"type\":\"int\",\"variablesReference\":0}]}}");
     backend_variables_text = build_dap_message_text(backend_variables_json);
     escaped_backend_initialize_text = json_escape_text(backend_initialize_text);
     escaped_backend_stack_trace_text = json_escape_text(backend_stack_trace_text);
@@ -5233,11 +5233,11 @@ static void test_dap_filters_backend_variables_and_rewrites_user_values(void) {
                                 "    if (message.command === 'scopes') process.stdout.write(responses.scopes);\n"
                                 "    if (message.command === 'variables') process.stdout.write(responses.variables);\n"
                                 "    if (message.command === 'evaluate') {\n"
-                                "      let body = { result: '0', type: 'i32', variablesReference: 0 };\n"
+                                "      let body = { result: '0', type: 'int', variablesReference: 0 };\n"
                                 "      if (message.arguments.expression === '(capture_cell->value)') {\n"
                                 "        body = { result: 'captured-value', type: 'string', variablesReference: 0 };\n"
                                 "      } else if (message.arguments.expression === 'backend_local') {\n"
-                                "        body = { result: '1', type: 'i32', variablesReference: 0 };\n"
+                                "        body = { result: '1', type: 'int', variablesReference: 0 };\n"
                                 "      } else if (message.arguments.expression === 'backend_param') {\n"
                                 "        body = { result: '0x1000', type: 'FengArray *', variablesReference: 23 };\n"
                                 "      } else if (message.arguments.expression === '(size_t)feng_array_length((const FengArray *)(backend_param))') {\n"
@@ -5546,7 +5546,7 @@ static void test_project_build_rewrites_module_binding_in_dap_globals(void) {
                                 "      }\n"
                                 "    }\n"
                                 "    if (message.command === 'evaluate') {\n"
-                                "      let body = { result: '0', type: 'i32', variablesReference: 0 };\n"
+                                "      let body = { result: '0', type: 'int', variablesReference: 0 };\n"
                                 "      if (message.arguments.expression === '%s') {\n"
                                 "        body = { result: '0x1000', type: 'FengString *', variablesReference: 23 };\n"
                                 "      } else if (message.arguments.expression === '%s') {\n"
@@ -5824,7 +5824,7 @@ static void test_dap_uses_array_element_type_name_in_value_summary(void) {
                                 "    if (message.command === 'scopes') process.stdout.write(responses.scopes);\n"
                                 "    if (message.command === 'variables') process.stdout.write(responses.variables);\n"
                                 "    if (message.command === 'evaluate') {\n"
-                                "      let body = { result: '0', type: 'i32', variablesReference: 0 };\n"
+                                "      let body = { result: '0', type: 'int', variablesReference: 0 };\n"
                                 "      if (message.arguments.expression === 'backend_param') {\n"
                                 "        body = { result: '0x1000', type: 'FengArray *', variablesReference: 23 };\n"
                                 "      } else if (message.arguments.expression === 'backend_nums') {\n"
@@ -6209,7 +6209,7 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
                                 requests_path,
                                 escaped_backend_initialize_text);
     backend_script_tail = dup_printf("      const expression = message.arguments && message.arguments.expression;\n"
-                                     "      let body = { result: '0', type: 'i32', variablesReference: 0 };\n"
+                                     "      let body = { result: '0', type: 'int', variablesReference: 0 };\n"
                                      "      if (expression === 'backend_param') {\n"
                                      "        body = { result: '0x1000', type: 'FengArray *', variablesReference: 23 };\n"
                                      "      } else if (expression === 'backend_global') {\n"
@@ -6515,11 +6515,11 @@ static void test_dap_expands_user_type_fields_with_synthetic_reference(void) {
                                 "    if (message.command === 'scopes') process.stdout.write(responses.scopes);\n"
                                 "    if (message.command === 'variables') process.stdout.write(responses.variables);\n"
                                 "    if (message.command === 'evaluate') {\n"
-                                "      let body = { result: '0', type: 'i32', variablesReference: 0 };\n"
+                                "      let body = { result: '0', type: 'int', variablesReference: 0 };\n"
                                 "      if (message.arguments.expression === 'backend_point') {\n"
                                 "        body = { result: '0x1000', type: 'struct Point *', variablesReference: 88 };\n"
                                 "      } else if (message.arguments.expression === '(backend_point)->x') {\n"
-                                "        body = { result: '7', type: 'i32', variablesReference: 0 };\n"
+                                "        body = { result: '7', type: 'int', variablesReference: 0 };\n"
                                 "      } else if (message.arguments.expression === '(backend_point)->label') {\n"
                                 "        body = { result: '0x2000', type: 'FengString *', variablesReference: 0 };\n"
                                 "      } else if (message.arguments.expression === '(const char *)feng_string_data((const FengString *)((backend_point)->label))') {\n"
@@ -6875,7 +6875,7 @@ static void test_dap_rewrites_identifier_evaluate_expression(void) {
                                                                    "backend_local",
                                                                    "answer",
                                                                    NULL,
-                                                                   "i32",
+                                                                   "int",
                                                                    FENG_CODEGEN_MAPING_VARIABLE_BINDING));
     ASSERT(feng_debug_write_fd(fd_path,
                                binary_path,
@@ -6889,7 +6889,7 @@ static void test_dap_rewrites_identifier_evaluate_expression(void) {
     backend_initialize_text = build_dap_message_text(backend_initialize_json);
     backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo_pkg_main_backend\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":3,\"column\":1}],\"totalFrames\":1}}");
     backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
-    backend_evaluate_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"evaluate\",\"body\":{\"result\":\"42\",\"type\":\"i32\",\"variablesReference\":0}}");
+    backend_evaluate_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"evaluate\",\"body\":{\"result\":\"42\",\"type\":\"int\",\"variablesReference\":0}}");
     backend_evaluate_text = build_dap_message_text(backend_evaluate_json);
     escaped_backend_initialize_text = json_escape_text(backend_initialize_text);
     escaped_backend_stack_trace_text = json_escape_text(backend_stack_trace_text);
@@ -7095,7 +7095,7 @@ static void run_dap_evaluate_session(FengCodegenMapingInfo *info,
     backend_initialize_text = build_dap_message_text(backend_initialize_json);
     backend_stack_trace_json = dup_printf("{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,\"command\":\"stackTrace\",\"body\":{\"stackFrames\":[{\"id\":7,\"name\":\"demo_pkg_main_backend\",\"source\":{\"name\":\"main.ff\",\"path\":\"demo.pkg://main.ff\"},\"line\":3,\"column\":1}],\"totalFrames\":1}}");
     backend_stack_trace_text = build_dap_message_text(backend_stack_trace_json);
-    backend_evaluate_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"evaluate\",\"body\":{\"result\":\"42\",\"type\":\"i32\",\"variablesReference\":0}}");
+    backend_evaluate_json = dup_printf("{\"seq\":3,\"type\":\"response\",\"request_seq\":4,\"success\":true,\"command\":\"evaluate\",\"body\":{\"result\":\"42\",\"type\":\"int\",\"variablesReference\":0}}");
     backend_evaluate_text = build_dap_message_text(backend_evaluate_json);
     escaped_backend_initialize_text = json_escape_text(backend_initialize_text);
     escaped_backend_stack_trace_text = json_escape_text(backend_stack_trace_text);
@@ -7230,14 +7230,14 @@ static void test_dap_rewrites_phase5_evaluate_expression(void) {
                                                                    "backend_local",
                                                                    "answer",
                                                                    NULL,
-                                                                   "i32",
+                                                                   "int",
                                                                    FENG_CODEGEN_MAPING_VARIABLE_BINDING));
     ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
                                                                    "demo_pkg_main_backend",
                                                                    "backend_items",
                                                                    "items",
                                                                    NULL,
-                                                                   "i32[]",
+                                                                   "int[]",
                                                                    FENG_CODEGEN_MAPING_VARIABLE_BINDING));
 
     run_dap_evaluate_session(&info,
@@ -7278,14 +7278,14 @@ static void test_dap_rejects_nonconstant_index_evaluate_expression(void) {
                                                                    "backend_local",
                                                                    "answer",
                                                                    NULL,
-                                                                   "i32",
+                                                                   "int",
                                                                    FENG_CODEGEN_MAPING_VARIABLE_BINDING));
     ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
                                                                    "demo_pkg_main_backend",
                                                                    "backend_items",
                                                                    "items",
                                                                    NULL,
-                                                                   "i32[]",
+                                                                   "int[]",
                                                                    FENG_CODEGEN_MAPING_VARIABLE_BINDING));
 
     run_dap_evaluate_session(&info,
@@ -7325,7 +7325,7 @@ static void test_dap_rejects_function_call_evaluate_expression(void) {
                                                                    "backend_local",
                                                                    "answer",
                                                                    NULL,
-                                                                   "i32",
+                                                                   "int",
                                                                    FENG_CODEGEN_MAPING_VARIABLE_BINDING));
 
     run_dap_evaluate_session(&info,
@@ -7365,7 +7365,7 @@ static void test_dap_rejects_assignment_evaluate_expression(void) {
                                                                    "backend_local",
                                                                    "answer",
                                                                    NULL,
-                                                                   "i32",
+                                                                   "int",
                                                                    FENG_CODEGEN_MAPING_VARIABLE_BINDING));
 
     run_dap_evaluate_session(&info,
@@ -8185,7 +8185,7 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
     static const char *kMemberBeforeNextStmt =
         "module test.lsp.completioneditmember;\n"
         "\n"
-        "extern func puts(msg: string*): i32;\n"
+        "extern func puts(msg: string*): int;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
@@ -8207,7 +8207,7 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
     static const char *kScopeBeforeClose =
         "module test.lsp.completioneditscope;\n"
         "\n"
-        "extern func puts(msg: string*): i32;\n"
+        "extern func puts(msg: string*): int;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
@@ -8229,7 +8229,7 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
     static const char *kScopePrefixBeforeNextStmt =
         "module test.lsp.completioneditprefix;\n"
         "\n"
-        "extern func puts(msg: string*): i32;\n"
+        "extern func puts(msg: string*): int;\n"
         "\n"
         "type User {\n"
         "    let name: string;\n"
@@ -8244,7 +8244,7 @@ static void test_lsp_completion_uses_source_scoped_edit_context(void) {
         "module test.lsp.completionmainprefix;\n"
         "\n"
         "@cdecl(\"libc\")\n"
-        "extern func puts(msg: string*): i32;\n"
+        "extern func puts(msg: string*): int;\n"
         "\n"
         "func main(args: string[]) {\n"
         "    puts(&\"hello, examples\");\n"
@@ -8290,7 +8290,7 @@ static void test_lsp_member_completion_infers_constructor_call_overloads(void) {
         "        options.message = 1;\n"
         "    }\n"
         "\n"
-        "    func commit(message: i32): i32 {\n"
+        "    func commit(message: i32): int {\n"
         "        return message;\n"
         "    }\n"
         "}\n"
@@ -8456,7 +8456,7 @@ static void test_lsp_function_decl_site_definition_references_and_rename(void) {
     static const char *kSource =
         "module test.lsp.declsite;\n"
         "\n"
-        "func helper(x: i32): i32 {\n"
+        "func helper(x: int): int {\n"
         "    return x + 1;\n"
         "}\n"
         "\n"
@@ -8499,7 +8499,7 @@ static void test_lsp_function_decl_site_definition_references_and_rename(void) {
 
     /* Cursor is in the middle of the `helper` name token at its declaration. */
     find_line_character(kSource,
-                        "func helper(x: i32): i32 {",
+                        "func helper(x: int): int {",
                         5U,
                         &decl_line,
                         &decl_character);
@@ -8747,7 +8747,7 @@ static void test_lsp_definition_references_rename_with_broken_code(void) {
     static const char *kSource =
         "module test.lsp.broken;\n"
         "\n"
-        "func helper(x: i32): i32 {\n"
+        "func helper(x: int): int {\n"
         "    return x + 1;\n"
         "}\n"
         "\n"
@@ -8788,7 +8788,7 @@ static void test_lsp_definition_references_rename_with_broken_code(void) {
     write_text_file(source_path, kSource);
 
     find_line_character(kSource,
-                        "func helper(x: i32): i32 {",
+                        "func helper(x: int): int {",
                         5U,
                         &decl_line,
                         &decl_character);
@@ -8902,9 +8902,9 @@ static void test_lsp_no_crash_on_library_file_without_main(void) {
         "/** A counter type with no main function. */\n"
         "open type Counter {\n"
         "    /** The count field. */\n"
-        "    open let count: i32;\n"
+        "    open let count: int;\n"
         "    /** Returns double the count. */\n"
-        "    open func double(): i32 {\n"
+        "    open func double(): int {\n"
         "        return self.count * 2;\n"
         "    }\n"
         "}\n";
@@ -8929,7 +8929,7 @@ static void test_lsp_no_crash_on_library_file_without_main(void) {
     source_path = path_join(workspace_dir, "counter.ff");
     write_text_file(source_path, kSource);
 
-    find_line_character(kSource, "    open let count: i32;", 11U,
+    find_line_character(kSource, "    open let count: int;", 11U,
                         &field_line, &field_character);
 
     uri = file_uri_from_path(source_path);
@@ -9438,7 +9438,7 @@ static void test_project_open_collects_sources(void) {
                     "[dependencies]\n"
                     "base: \"1.0.0\"\n");
     write_text_file(main_path, "module demo.main;\nfunc main(args: string[]) {}\n");
-    write_text_file(helper_path, "module demo.main;\nfunc helper(): i32 { return 1; }\n");
+    write_text_file(helper_path, "module demo.main;\nfunc helper(): int { return 1; }\n");
 
     ASSERT(feng_cli_project_open(project_dir, &context, &error));
     ASSERT(strcmp(context.manifest.name, "demo") == 0);
@@ -9681,7 +9681,7 @@ static void test_deps_resolve_builds_local_library_dependency(void) {
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
                     "module local.dep;\n"
-                    "open func value(): i32 { return 1; }\n");
+                    "open func value(): int { return 1; }\n");
     write_text_file(project_manifest_path,
                     "[package]\n"
                     "name: \"app\"\n"
@@ -10013,12 +10013,12 @@ static void test_deps_resolve_reports_local_dependency_cycle(void) {
                     "dep_a: \"../dep_a\"\n");
     write_text_file(dep_a_source_path,
                     "open module test.cli.cyclea;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
     write_text_file(dep_b_source_path,
                     "open module test.cli.cycleb;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 2;\n"
                     "}\n");
 
@@ -10155,7 +10155,7 @@ static void test_deps_add_local_validates_then_writes_manifest(void) {
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
                     "open module test.cli.addlocal;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
 
@@ -10219,7 +10219,7 @@ static void test_deps_add_local_rejects_name_mismatch_before_write(void) {
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
                     "open module test.cli.addlocalname;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
 
@@ -10961,7 +10961,7 @@ static void test_project_build_release_propagates_to_local_dependencies(void) {
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
                     "open module test.cli.releasedep;\n"
-                    "open func dep_value(): i32 {\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n");
     write_text_file(root_manifest_path,
@@ -11170,7 +11170,7 @@ static void test_project_build_lib_stages_assets_under_output_root(void) {
                     "runtime: \"bundle_assets/\"\n");
     write_text_file(source_path,
                     "open module test.cli.assets.lib;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
     write_text_file(asset_source_path, "alpha\n");
@@ -11277,7 +11277,7 @@ static void test_project_build_lib_stages_extlib_assets_without_assets_layer(voi
                     "extlib: \"vendor_extlib/\"\n");
     write_text_file(source_path,
                     "open module test.cli.assets.extlibstage;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 5;\n"
                     "}\n");
     write_text_file(asset_source_path, "alpha\n");
@@ -11367,7 +11367,7 @@ static void test_project_run_release_reuses_build_pipeline(void) {
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
                     "open module test.cli.rundep;\n"
-                    "open func dep_value(): i32 {\n"
+                    "open func dep_value(): int {\n"
                     "  return 7;\n"
                     "}\n");
     write_text_file(root_manifest_path,
@@ -11478,7 +11478,7 @@ static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(vo
                     "out: \"build/\"\n");
     write_text_file(dep_source_path,
                     "open module local.dep;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
     write_text_file(root_manifest_path,
@@ -11493,7 +11493,7 @@ static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(vo
                     "local_dep: \"../dep\"\n");
     write_text_file(root_source_path,
                     "open module test.cli.packroot;\n"
-                    "open func root_value(): i32 {\n"
+                    "open func root_value(): int {\n"
                     "  return 2;\n"
                     "}\n");
 
@@ -11596,7 +11596,7 @@ static void test_project_pack_includes_staged_assets_in_bundle(void) {
                     "runtime: \"bundle_assets/\"\n");
     write_text_file(source_path,
                     "open module test.cli.assetpack;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 3;\n"
                     "}\n");
     write_text_file(asset_config_path, "config\n");
@@ -11693,7 +11693,7 @@ static void test_project_pack_includes_extlib_assets_without_assets_layer(void) 
                     "extlib: \"vendor_extlib/\"\n");
     write_text_file(source_path,
                     "open module test.cli.assetextlibpack;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 9;\n"
                     "}\n");
     write_text_file(asset_source_path, "dynamic\n");
@@ -11762,7 +11762,7 @@ static void test_project_pack_rejects_release_flag(void) {
                     "out: \"build/\"\n");
     write_text_file(source_path,
                     "open module test.cli.packnorelease;\n"
-                    "open func value(): i32 {\n"
+                    "open func value(): int {\n"
                     "  return 1;\n"
                     "}\n");
 
@@ -11787,13 +11787,13 @@ static void test_lsp_hover_and_definition_local_var_rhs(void) {
     static const char *kSource =
         "module test.lsp.localrhs;\n"
         "\n"
-        "func check(n: i32): i32 {\n"
+        "func check(n: int): int {\n"
         "    let doubled = if n > 0 { n + n; } else { 0; };\n"
         "    return doubled;\n"
         "}\n"
         "\n"
-        "func loop_sum(n: i32): i32 {\n"
-        "    var acc: i32 = 0;\n"
+        "func loop_sum(n: int): int {\n"
+        "    var acc: int = 0;\n"
         "    for var i = 0; i < n; i += 1 {\n"
         "        acc = acc + i;\n"
         "    }\n"
@@ -11946,7 +11946,7 @@ static void test_lsp_use_path_completion(void) {
     static const char *kLibSource =
         "open module test.lsp.usepath.lib;\n"
         "\n"
-        "open func value(): i32 {\n"
+        "open func value(): int {\n"
         "    return 1;\n"
         "}\n";
     /* Main source ends with an incomplete `import` path — the cursor is placed
@@ -12163,19 +12163,19 @@ static void test_lsp_use_path_completion_deduplicates_segments_in_project_scan(v
     static const char *kASource =
         "open module foo.bar.a;\n"
         "\n"
-        "open func alpha(): i32 {\n"
+        "open func alpha(): int {\n"
         "    return 1;\n"
         "}\n";
     static const char *kBSource =
         "open module foo.bar.b;\n"
         "\n"
-        "open func beta(): i32 {\n"
+        "open func beta(): int {\n"
         "    return 2;\n"
         "}\n";
     static const char *kCSource =
         "open module foo.bar.c;\n"
         "\n"
-        "open func gamma(): i32 {\n"
+        "open func gamma(): int {\n"
         "    return 3;\n"
         "}\n";
     static const char *kMainSource =
@@ -12290,7 +12290,7 @@ static void test_lsp_imported_type_completion_after_use(void) {
         "open module test.lsp.imptypes;\n"
         "\n"
         "open type Widget {\n"
-        "    let id: i32;\n"
+        "    let id: int;\n"
         "}\n"
         "\n"
         "open func make_widget(): Widget {\n"
@@ -12300,7 +12300,7 @@ static void test_lsp_imported_type_completion_after_use(void) {
         "module test.lsp.impcomp.main;\n"
         "import test.lsp.imptypes;\n"
         "\n"
-        "func run(): i32 {\n"
+        "func run(): int {\n"
         "    return 0;\n"
         "}\n";
     char template_path[] = "temp/feng_lsp_impcomp_XXXXXX";
@@ -12412,7 +12412,7 @@ static void test_lsp_imported_type_completion_survives_project_semantic_failure(
         "open module other.lib;\n"
         "\n"
         "open type Widget {\n"
-        "    let id: i32;\n"
+        "    let id: int;\n"
         "}\n"
         "\n"
         "open func make_widget(): Widget {\n"
@@ -12422,7 +12422,7 @@ static void test_lsp_imported_type_completion_survives_project_semantic_failure(
         "module app.main;\n"
         "import other.lib;\n"
         "\n"
-        "func helper(): i32 {\n"
+        "func helper(): int {\n"
         "    return 0;\n"
         "}\n";
     char template_path[] = "temp/feng_lsp_impcomp_degraded_XXXXXX";
@@ -12529,14 +12529,14 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
     static const char *kLoopSource =
         "open module test.lsp.alias.loop;\n"
         "\n"
-        "open func loop_example(): i32 {\n"
+        "open func loop_example(): int {\n"
         "    return 1;\n"
         "}\n";
     static const char *kMainSource =
         "module test.lsp.alias.main;\n"
         "import test.lsp.alias.loop as lp;\n"
         "\n"
-        "func run(): i32 {\n"
+        "func run(): int {\n"
         "    lp.\n"
         "    return 0;\n"
         "}\n";
@@ -12607,7 +12607,7 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
     ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(output, "\"label\":\"loop_example\"") != NULL);
     ASSERT(strstr(output,
-                  "\"label\":\"loop_example\",\"kind\":3,\"detail\":\"func loop_example(): i32\"") != NULL);
+                  "\"label\":\"loop_example\",\"kind\":3,\"detail\":\"func loop_example(): int\"") != NULL);
 
     free(output);
     free(shutdown);
@@ -12636,7 +12636,7 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
         "    /**\n"
         "     * Number of stored entries.\n"
         "     */\n"
-        "    open let count: i32;\n"
+        "    open let count: int;\n"
         "}\n"
         "\n"
         "/**\n"
@@ -12649,7 +12649,7 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
         "module test.lsp.pkgconsumer.main;\n"
         "import test.lsp.pkg.collections;\n"
         "\n"
-        "func consume(map: Map<string, i32>): i32 {\n"
+        "func consume(map: Map<string, int>): int {\n"
         "    return map.count;\n"
         "}\n"
         "\n"
@@ -12686,7 +12686,7 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
         "module test.lsp.pkgconsumer.memberedit;\n"
         "import test.lsp.pkg.collections;\n"
         "\n"
-        "func consume(map: Map<string, i32>): i32 {\n"
+        "func consume(map: Map<string, int>): int {\n"
         "    return map.;\n"
         "}\n";
     static const char *kFunctionCompletionSource =
@@ -12767,7 +12767,7 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
                                                               kHoverSource,
                                                               kInitialize,
                                                               "textDocument/hover",
-                                                              "func consume(map: Map<string, i32>): i32 {",
+                                                              "func consume(map: Map<string, int>): int {",
                                                               strlen("func consume(map: "));
     hover_member_output = capture_lsp_position_response_at_path(main_path,
                                                                 kHoverSource,

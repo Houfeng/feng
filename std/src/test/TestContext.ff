@@ -36,10 +36,10 @@ type TestState {
  */
 type TestContext {
 
-  var total: i32;
-  var passed: i32;
-  var failed: i32;
-  var skipped: i32;
+  var total: int;
+  var passed: int;
+  var failed: int;
+  var skipped: int;
 
   seal let errors: List<string>;
 

@@ -1,7 +1,7 @@
 module feng.cli.project;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 func main(args: string[]) {
     puts(&"hello, project");

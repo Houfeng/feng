@@ -1,9 +1,9 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
-spec Choice: i32 | string | bool;
+spec Choice: int | string | bool;
 
 spec Named {
     func greet(): string;
@@ -26,7 +26,7 @@ type Holder {
 // Test: bare binding prefix (default let)
 func test_bare_binding(value: Choice) {
     match value {
-        v: i32 { puts(&"got-int"); }
+        v: int { puts(&"got-int"); }
         v: string { puts(&v); }
         bool { puts(&"bool"); }
     }
@@ -35,7 +35,7 @@ func test_bare_binding(value: Choice) {
 // Test: explicit let/var binding
 func test_let_var_binding(value: Choice) {
     match value {
-        let v: i32 { puts(&"let-int"); }
+        let v: int { puts(&"let-int"); }
         var v: string { v = "modified"; puts(&v); }
         bool { puts(&"bool"); }
     }
@@ -45,7 +45,7 @@ func test_let_var_binding(value: Choice) {
 func test_member_target(holder: Holder) {
     match holder.value {
         v: string { puts(&v); }
-        i32 { puts(&"int"); }
+        int { puts(&"int"); }
         bool { puts(&"bool"); }
     }
 }
@@ -68,7 +68,7 @@ func test_nested(outer: Choice, inner: Display) {
                 w: string { puts(&w); }
             }
         }
-        i32 { puts(&"int"); }
+        int { puts(&"int"); }
         bool { puts(&"bool"); }
     }
 }

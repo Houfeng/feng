@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 type AppError {
     let code: i32;

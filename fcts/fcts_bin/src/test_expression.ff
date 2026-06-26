@@ -47,13 +47,13 @@ open func test_expression() {
     });
 
     test("bitwise operators", () {
-      let x: i32 = 0b1010;
-      let y: i32 = 0b1100;
+      let x: int = 0b1010;
+      let y: int = 0b1100;
       assert((x & y) == 0b1000, "bitwise AND");
       assert((x | y) == 0b1110, "bitwise OR");
       assert((x ^ y) == 0b0110, "bitwise XOR");
-      let bitmask: i32 = 0xFF;
-      let inverted: i32 = ~bitmask;
+      let bitmask: int = 0xFF;
+      let inverted: int = ~bitmask;
       assert((inverted & 0xFF) == 0, "bitwise NOT");
       assert((1 << 3) == 8, "left shift");
       assert((8 >> 2) == 2, "right shift");
@@ -74,7 +74,7 @@ open func test_expression() {
     });
 
     test("bitwise compound assignment", () {
-      var m: i32 = 0xFF;
+      var m: int = 0xFF;
       m &= 0x0F;
       assert(m == 0x0F, "compound &= ");
       m |= 0xF0;
@@ -82,7 +82,7 @@ open func test_expression() {
       m ^= 0x0F;
       assert(m == 0xF0, "compound ^= ");
 
-      var sh: i32 = 1;
+      var sh: int = 1;
       sh <<= 4;
       assert(sh == 16, "compound <<= ");
       sh >>= 2;
@@ -100,7 +100,7 @@ open func test_expression() {
       assert(small == 1000, "explicit cast i64 to i32");
 
       let fi = 3.7;
-      let ti = (i32)fi;
+      let ti = (int)fi;
       assert(ti == 3, "explicit cast double to int (truncate)");
     });
 

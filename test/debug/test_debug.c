@@ -27,10 +27,10 @@ static const char *kLineSource =
 
 static const char *kCaptureSource =
     "module feng.debug.capture;\n"
-    "spec Mapper(x: i32): i32;\n"
-    "func use_it(): i32 {\n"
-    "    var base: i32 = 1;\n"
-    "    let mapper: Mapper = (x: i32) -> x + base;\n"
+    "spec Mapper(x: int): int;\n"
+    "func use_it(): int {\n"
+    "    var base: int = 1;\n"
+    "    let mapper: Mapper = (x: int) -> x + base;\n"
     "    base = 2;\n"
     "    return mapper(40);\n"
     "}\n";
@@ -419,7 +419,7 @@ static void test_debug_fd_round_trip(void) {
                                                            NULL,
                                                            "captured",
                                                            "(_lambda->capture->value)",
-                                                           "i32",
+                                                           "int",
                                                            FENG_CODEGEN_MAPING_VARIABLE_CAPTURE));
     ASSERT(feng_codegen_maping_info_add_variable_with_parent_display_type(
         &info,
@@ -497,7 +497,7 @@ static void test_debug_fd_matches_golden_bytes(void) {
         0x65, 0x64, 0x19, 0x00, 0x00, 0x00, 0x28, 0x5f, 0x6c, 0x61, 0x6d, 0x62,
         0x64, 0x61, 0x2d, 0x3e, 0x63, 0x61, 0x70, 0x74, 0x75, 0x72, 0x65, 0x2d,
         0x3e, 0x76, 0x61, 0x6c, 0x75, 0x65, 0x29, 0x03, 0x00, 0x00, 0x00, 0x69,
-        0x33, 0x32, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00,
+        0x6e, 0x74, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00, 0x04, 0x00,
         0x00, 0x00, 0x05, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x07, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x07, 0x00,
         0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x06, 0x00, 0x00, 0x00, 0x08, 0x00,
@@ -552,7 +552,7 @@ static void test_debug_fd_matches_golden_bytes(void) {
                                                            NULL,
                                                            "captured",
                                                            "(_lambda->capture->value)",
-                                                           "i32",
+                                                           "int",
                                                            FENG_CODEGEN_MAPING_VARIABLE_CAPTURE));
     ASSERT(feng_debug_write_fd(kFdPath,
                                kBinaryPath,
@@ -660,7 +660,7 @@ static void test_debug_fd_merge_dependencies(void) {
                                                            "value",
                                                            "value",
                                                            NULL,
-                                                           "i32",
+                                                           "int",
                                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM));
 
     write_fd_or_die(dep_one_fd_path,
@@ -863,14 +863,14 @@ static void test_debug_fd_merge_rejects_conflicting_variable_mappings(void) {
                                                            "slot",
                                                            "value",
                                                            NULL,
-                                                           "i32",
+                                                           "int",
                                                            FENG_CODEGEN_MAPING_VARIABLE_BINDING));
     ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&dep_two_info,
                                                            "feng__dep__helper",
                                                            "slot",
                                                            "other",
                                                            NULL,
-                                                           "i32",
+                                                           "int",
                                                            FENG_CODEGEN_MAPING_VARIABLE_BINDING));
 
     write_fd_or_die(dep_one_fd_path,

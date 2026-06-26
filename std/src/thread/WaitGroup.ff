@@ -9,7 +9,7 @@ open type WaitGroup {
 
   seal let mutex: Mutex;
   seal let cond: CondVar;
-  seal var counter: i32;
+  seal var counter: int;
 
   /**
    * Creates a new WaitGroup with a zero counter.
@@ -23,7 +23,7 @@ open type WaitGroup {
   /**
    * Increments the counter by the given delta.
    */
-  open func add(delta: i32): void {
+  open func add(delta: int): void {
     self.mutex.lock();
     self.counter = self.counter + delta;
     if self.counter < 0 {

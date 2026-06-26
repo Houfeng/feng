@@ -34,7 +34,7 @@ static const char *kBinTemplate =
 static const char *kLibTemplate =
     "module %s;\n"
     "\n"
-    "func helper(): i32 {\n"
+    "func helper(): int {\n"
     "  return 0;\n"
     "}\n";
 

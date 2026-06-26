@@ -18,8 +18,8 @@ func join_strings(sep: string, parts: string...): string {
 }
 
 // 仅变长参数
-func count_args(items: i32...): i32 {
-  return (i32)items.length();
+func count_args(items: int...): int {
+  return (int)items.length();
 }
 
 // callable-form spec 中的变长参数

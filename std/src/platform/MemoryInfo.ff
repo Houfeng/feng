@@ -13,7 +13,7 @@ extern func uv_get_available_memory(): u64;
 extern func uv_get_constrained_memory(): u64;
 
 @cdecl("feng_std_uv", "uv_resident_set_memory")
-extern func uv_resident_set_memory(rss: u64*): i32;
+extern func uv_resident_set_memory(rss: u64*): int;
 
 /**
  * Provides memory queries.

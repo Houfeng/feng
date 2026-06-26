@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 func add(a: i32, b: i32): i32 {
     return a + b;

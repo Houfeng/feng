@@ -1,12 +1,12 @@
 module feng.smoke.type_field_callable_lambda;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
-spec Reader(): i32;
+spec Reader(): int;
 
 type Box {
-    var n: i32;
+    var n: int;
     let read: Reader = () -> self.n;
 }
 

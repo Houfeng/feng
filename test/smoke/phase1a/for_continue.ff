@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 // Verifies that `continue` inside a three-clause `for` still runs the
 // update step (i++) before re-evaluating the condition. If the update were

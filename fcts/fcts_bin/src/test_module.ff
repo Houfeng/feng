@@ -31,11 +31,11 @@ open func test_module() {
 
     test("cross-package enum", () {
       let color = LibColor.Green;
-      assert((i32)color == 1, "cross-package enum");
+      assert((int)color == 1, "cross-package enum");
     });
 
     test("cross-package generic type", () {
-      let box: LibBox<i32> = LibBox<i32> { value: 123 };
+      let box: LibBox<int> = LibBox<int> { value: 123 };
       assert(box.value == 123, "cross-package generic type");
       let sbox: LibBox<string> = LibBox<string> { value: "pkg" };
       assert(sbox.value == "pkg", "cross-package generic type (string)");
@@ -53,7 +53,7 @@ open func test_module() {
       let v: LibChoice = LibTag { label: "tagged" };
       let result = match v {
         LibTag { "tag" }
-        i32 { "int" }
+        int { "int" }
         string { "str" }
         else { "else" }
       };
@@ -64,7 +64,7 @@ open func test_module() {
       let v: LibChoice = 42;
       let result = match v {
         LibTag { "tag" }
-        i32 { "int" }
+        int { "int" }
         string { "str" }
         else { "else" }
       };
@@ -75,7 +75,7 @@ open func test_module() {
       let v: LibChoice = "hello";
       let result = match v {
         LibTag { "tag" }
-        n: i32 { "int" }
+        n: int { "int" }
         s: string { s }
         else { "else" }
       };

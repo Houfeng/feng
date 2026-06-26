@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 /* object-form spec used as a generic type argument. Exercises the
  * codegen path where an object-form spec flows through substitution

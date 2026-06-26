@@ -4,19 +4,19 @@ import std.test;
 import std.text;
 
 @cdecl("libc")
-extern func write(fd: i32, buf: string*, count: i64): i64;
+extern func write(fd: int, buf: string*, count: i64): i64;
 
 @cdecl("libc")
-extern func pipe(fds: i32*): i32;
+extern func pipe(fds: int*): int;
 
 @cdecl("libc")
-extern func dup2(from: i32, to: i32): i32;
+extern func dup2(from: int, to: int): int;
 
 @cdecl("libc")
-extern func close(fd: i32): i32;
+extern func close(fd: int): int;
 
 @cdecl("libc")
-extern func exit(code: i32): void;
+extern func exit(code: int): void;
 
 func logLine(text: string) {
   let newline = "\n";
@@ -35,7 +35,7 @@ open func check(cond: bool, name: string) {
 }
 
 open func replaceStdin(text: string) {
-  let fds: i32[!] = i32[: (i64)2];
+  let fds: int[!] = int[: (i64)2];
 
   if pipe(&fds) != 0 {
     failNow("harness/stdin-pipe");

@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 // Exercises codegen for user-defined finalizers (`func ~T()`):
 // the runtime invokes the finalizer through descriptor.finalizer when

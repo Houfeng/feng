@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 spec Sequence<T> {
     func first(): T;
@@ -10,13 +10,13 @@ spec Sequence<T> {
 spec Collection<T>: Sequence<T> {
 }
 
-type IntBag: Collection<i32> {
-    func first(): i32 {
+type IntBag: Collection<int> {
+    func first(): int {
         return 7;
     }
 }
 
-func head(seq: Sequence<i32>): i32 {
+func head(seq: Sequence<int>): int {
     return seq.first();
 }
 

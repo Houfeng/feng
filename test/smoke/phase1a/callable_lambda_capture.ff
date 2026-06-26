@@ -1,13 +1,13 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
-spec Mapper(x: i32): i32;
-spec Reader(): i32;
+spec Mapper(x: int): int;
+spec Reader(): int;
 
 type Box {
-    var n: i32;
+    var n: int;
 
     func makeReader(): Reader {
         return () -> self.n;
@@ -15,8 +15,8 @@ type Box {
 }
 
 func main(args: string[]) {
-    var base: i32 = 1;
-    let mapper: Mapper = (x: i32) -> x + base;
+    var base: int = 1;
+    let mapper: Mapper = (x: int) -> x + base;
     base = 2;
     if mapper(40) == 42 {
         puts(&"local-ok");

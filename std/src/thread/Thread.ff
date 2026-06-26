@@ -9,19 +9,19 @@ extern func feng_alloc(size: i64): i64;
 extern func feng_free(ptr: i64): void;
 
 @cdecl("feng_std_uv", "uv_thread_create")
-extern func uv_thread_create(tid: i64*, entry: ThreadAbiEntry*, arg: i64): i32;
+extern func uv_thread_create(tid: i64*, entry: ThreadAbiEntry*, arg: i64): int;
 
 @cdecl("feng_std_uv", "uv_thread_join")
-extern func uv_thread_join(tid: i64*): i32;
+extern func uv_thread_join(tid: i64*): int;
 
 @cdecl("feng_std_uv", "uv_thread_self")
 extern func uv_thread_self(): i64;
 
 @cdecl("feng_std_uv", "uv_thread_getcpu")
-extern func uv_thread_getcpu(): i32;
+extern func uv_thread_getcpu(): int;
 
 @cdecl("libc")
-extern func usleep(usec: u32): i32;
+extern func usleep(usec: u32): int;
 
 @cdecl("libc", "sleep")
 extern func posix_sleep(seconds: u32): u32;
@@ -96,7 +96,7 @@ open type Thread {
   /**
    * Returns the CPU core number that the current thread is running on.
    */
-  open static func currentCpu(): i32 {
+  open static func currentCpu(): int {
     return uv_thread_getcpu();
   }
 

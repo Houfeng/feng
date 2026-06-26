@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 // A function that allocates a managed local (writable array) and then throws.
 // The cleanup chain must release `tmp` before exception unwinding reaches catch.

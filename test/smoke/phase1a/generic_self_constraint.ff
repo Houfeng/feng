@@ -1,14 +1,14 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 spec Eq<T> {
     func same(other: T): bool;
 }
 
 type Key: Eq<Key> {
-    var id: i32;
+    var id: int;
 
     func same(other: Key): bool {
         return self.id == other.id;

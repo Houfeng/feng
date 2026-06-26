@@ -16,13 +16,13 @@ extern func c_opendir(path: byte*): i64;
 extern func c_readdir(dir: i64): Dirent*;
 
 @cdecl("libc", "closedir")
-extern func c_closedir(dir: i64): i32;
+extern func c_closedir(dir: i64): int;
 
 @cdecl("libc", "mkdir")
-extern func c_mkdir(path: byte*, mode: i32): i32;
+extern func c_mkdir(path: byte*, mode: int): int;
 
 @cdecl("libc", "rmdir")
-extern func c_rmdir(path: byte*): i32;
+extern func c_rmdir(path: byte*): int;
 
 // Dirent* 指针操作
 @runtime
@@ -80,7 +80,7 @@ seal func ensureDirentOffsets(): void {
 }
 
 // Default directory creation permission: 0755 = 493
-seal let DEFAULT_DIR_MODE: i32 = 493;
+seal let DEFAULT_DIR_MODE: int = 493;
 
 /**
  * Directory traversal object, wrapping a directory handle with read operations.

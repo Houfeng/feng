@@ -5,16 +5,16 @@ import std.test;
 
 // 基本 type 定义
 type Point {
-  var x: i32;
-  var y: i32;
+  var x: int;
+  var y: int;
 }
 
 // 带构造函数的 type
 type Person {
   let name: string;
-  var age: i32;
+  var age: int;
 
-  func Person(name: string, age: i32) {
+  func Person(name: string, age: int) {
     self.name = name;
     self.age = age;
   }
@@ -26,29 +26,29 @@ type Person {
 
 // 带静态成员的 type
 type Counter {
-  open static var count: i32 = 0;
+  open static var count: int = 0;
 
-  open static func create(value: i32): Counter {
+  open static func create(value: int): Counter {
     Counter.count += 1;
     return Counter { value: value };
   }
 
-  open static func get_count(): i32 {
+  open static func get_count(): int {
     return Counter.count;
   }
 
-  var value: i32;
+  var value: int;
 
-  func get_value(): i32 {
+  func get_value(): int {
     return self.value;
   }
 }
 
 // 带终结器的 type
 type Resource {
-  var id: i32;
+  var id: int;
 
-  func Resource(id: i32) {
+  func Resource(id: int) {
     self.id = id;
   }
 

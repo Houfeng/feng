@@ -1,7 +1,7 @@
 open module std.thread;
 
 @cdecl("feng_std_uv", "uv_cond_init")
-extern func uv_cond_init(handle: i64): i32;
+extern func uv_cond_init(handle: i64): int;
 
 @cdecl("feng_std_uv", "uv_cond_destroy")
 extern func uv_cond_destroy(handle: i64): void;
@@ -16,7 +16,7 @@ extern func uv_cond_broadcast(handle: i64): void;
 extern func uv_cond_wait(cond: i64, mutex: i64): void;
 
 @cdecl("feng_std_uv", "uv_cond_timedwait")
-extern func uv_cond_timedwait(cond: i64, mutex: i64, timeout: u64): i32;
+extern func uv_cond_timedwait(cond: i64, mutex: i64, timeout: u64): int;
 
 /**
  * A condition variable for thread synchronization.

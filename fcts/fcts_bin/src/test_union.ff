@@ -4,14 +4,14 @@ import std.io;
 import std.test;
 
 // union-form spec
-spec IntOrString: i32 | string;
+spec IntOrString: int | string;
 
 // 用于 union 的自定义 type
 type UnionTag {
   let tag: string;
 }
 
-spec TagOrInt: UnionTag | i32;
+spec TagOrInt: UnionTag | int;
 
 // union 含 spec 类型
 spec UnionGreetable {
@@ -30,7 +30,7 @@ spec DisplayUnion: UnionGreetable | string;
 
 // 泛型 union
 type UnionError {
-  let code: i32;
+  let code: int;
 }
 
 spec UnionResult<T>: UnionError | T;
@@ -55,7 +55,7 @@ open func test_union() {
     test("union entry with int", () {
       let v1: IntOrString = 42;
       match v1 {
-        v: i32 {
+        v: int {
           assert(v == 42, "union entry with int");
         }
         else {}
@@ -75,7 +75,7 @@ open func test_union() {
     test("union match narrowing", () {
       let v3: IntOrString = 100;
       let result = match v3 {
-        i32 { "is int" }
+        int { "is int" }
         string { "is string" }
         else { "else" }
       };
@@ -85,7 +85,7 @@ open func test_union() {
     test("union match string branch", () {
       let v4: IntOrString = "world";
       let result2 = match v4 {
-        i32 { "int" }
+        int { "int" }
         string { "string" }
         else { "else" }
       };
@@ -96,7 +96,7 @@ open func test_union() {
       let v5: TagOrInt = UnionTag { tag: "x" };
       let result3 = match v5 {
         UnionTag { "tag" }
-        i32 { "int" }
+        int { "int" }
         else { "else" }
       };
       assert(result3 == "tag", "union with custom type");
@@ -106,7 +106,7 @@ open func test_union() {
       let v6: TagOrInt = 99;
       let result4 = match v6 {
         UnionTag { "tag" }
-        i32 { "int" }
+        int { "int" }
         else { "else" }
       };
       assert(result4 == "int", "union with custom type (int branch)");
@@ -115,7 +115,7 @@ open func test_union() {
     test("union default zero value", () {
       let default_choice: IntOrString;
       let default_result = match default_choice {
-        i32 { "int" }
+        int { "int" }
         string { "string" }
         else { "else" }
       };
@@ -133,9 +133,9 @@ open func test_union() {
     });
 
     test("generic union (value branch)", () {
-      let ok_val: UnionResult < i32 > = 42;
+      let ok_val: UnionResult < int > = 42;
       let ok_result = match ok_val {
-        i32 { "int-ok" }
+        int { "int-ok" }
         UnionError { "error" }
         else { "else" }
       };
@@ -143,9 +143,9 @@ open func test_union() {
     });
 
     test("generic union (error branch)", () {
-      let err_val: UnionResult < i32 > = UnionError { code: 7 };
+      let err_val: UnionResult < int > = UnionError { code: 7 };
       let err_result = match err_val {
-        i32 { "int" }
+        int { "int" }
         UnionError { "error-ok" }
         else { "else" }
       };

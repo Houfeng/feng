@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 // All three clauses optional. The empty condition means "always true";
 // the loop must terminate via `break`.

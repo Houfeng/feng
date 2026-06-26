@@ -1,6 +1,6 @@
 module feng.smoke;
 
-@cdecl("libc") extern func puts(msg: string*): i32;
+@cdecl("libc") extern func puts(msg: string*): int;
 
 spec Named {
     func greet(): string;

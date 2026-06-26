@@ -4,16 +4,16 @@ import std.io;
 import std.test;
 
 // 可调用形状
-spec IntMapper(x: i32): i32;
-spec IntProducer(): i32;
+spec IntMapper(x: int): int;
+spec IntProducer(): int;
 spec Action(): void;
 
 // 兼容 callable spec (用于强转测试)
-spec IntMapper2(x: i32): i32;
+spec IntMapper2(x: int): int;
 
 // lambda 捕获 self 的 type
 type SelfCapBox {
-  var n: i32;
+  var n: int;
 
   func make_reader(): IntProducer {
     return () -> self.n;
@@ -22,7 +22,7 @@ type SelfCapBox {
 
 // type 字段 callable lambda 默认值
 type FieldLambdaBox {
-  var n: i32;
+  var n: int;
   let read: IntProducer = () -> self.n;
 }
 
@@ -30,12 +30,12 @@ type FieldLambdaBox {
 open func test_lambda() {
   describe("lambda", () {
     test("single-expression lambda", () {
-      let double: IntMapper = (x: i32) -> x * 2;
+      let double: IntMapper = (x: int) -> x * 2;
       assert(double(5) == 10, "single-expression lambda");
     });
 
     test("multi-line lambda", () {
-      let compute: IntMapper = (x: i32) {
+      let compute: IntMapper = (x: int) {
         let temp = x + 10;
         return temp * 2;
       };
@@ -44,7 +44,7 @@ open func test_lambda() {
 
     test("closure captures let binding", () {
       let base = 100;
-      let add_base: IntMapper = (x: i32) -> x + base;
+      let add_base: IntMapper = (x: int) -> x + base;
       assert(add_base(5) == 105, "closure captures let binding");
     });
 
@@ -60,7 +60,7 @@ open func test_lambda() {
     });
 
     test("lambda as argument", () {
-      let result = apply_mapper(10, (x: i32) -> x * 3);
+      let result = apply_mapper(10, (x: int) -> x * 3);
       assert(result == 30, "lambda as argument");
     });
 
@@ -76,7 +76,7 @@ open func test_lambda() {
     });
 
     test("callable spec cast", () {
-      let mapper_a: IntMapper = (x: i32) -> x + 1;
+      let mapper_a: IntMapper = (x: int) -> x + 1;
       let mapper_b: IntMapper2 = (IntMapper2)mapper_a;
       assert(mapper_b(41) == 42, "callable spec cast");
     });
@@ -95,18 +95,18 @@ open func test_lambda() {
   });
 }
 
-func apply_mapper(x: i32, f: IntMapper): i32 {
+func apply_mapper(x: int, f: IntMapper): int {
   return f(x);
 }
 
-func make_adder(base: i32): IntMapper {
-  return (x: i32) -> x + base;
+func make_adder(base: int): IntMapper {
+  return (x: int) -> x + base;
 }
 
 type LambdaTestObj {
-  let value: i32;
+  let value: int;
 
-  func get_value(): i32 {
+  func get_value(): int {
     return self.value;
   }
 }

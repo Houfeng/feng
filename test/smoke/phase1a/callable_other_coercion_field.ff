@@ -1,12 +1,12 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
-spec MapperA(x: i32): i32;
-spec MapperB(x: i32): i32;
+spec MapperA(x: int): int;
+spec MapperB(x: int): int;
 
-func add1(x: i32): i32 {
+func add1(x: int): int {
     return x + 1;
 }
 
@@ -14,7 +14,7 @@ type Holder {
     let mapper: MapperA;
 }
 
-func use_mapper(input: MapperA): i32 {
+func use_mapper(input: MapperA): int {
     let local: MapperA = input;
     let holder: Holder = Holder{mapper: local};
     let fromField: MapperA = holder.mapper;

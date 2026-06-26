@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 func fail_void() {
     throw "boom";
@@ -17,8 +17,8 @@ func break_from_catch(): string {
 }
 
 func continue_from_catch(): string {
-    var index: i32 = 0;
-    var skipped: i32 = 0;
+    var index: int = 0;
+    var skipped: int = 0;
 
     while index < 3 {
         index += 1;

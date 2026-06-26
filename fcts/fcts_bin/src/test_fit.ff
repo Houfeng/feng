@@ -23,12 +23,12 @@ fit FitAnimal: Describable {
 
 // 用于自扩展测试的 type
 type FitBox {
-  var value: i32;
+  var value: int;
 }
 
 // 自扩展
 fit FitBox {
-  func doubled(): i32 {
+  func doubled(): int {
     return self.value * 2;
   }
 
@@ -39,7 +39,7 @@ fit FitBox {
 
 // 静态扩展方法
 fit FitBox {
-  open static func of(v: i32): FitBox {
+  open static func of(v: int): FitBox {
     return FitBox { value: v };
   }
 }
@@ -51,9 +51,9 @@ fit i32 {
   }
 }
 
-// fit 内建类型 i32[]
-fit i32[] {
-  func fit_head(): i32 {
+// fit 内建类型 int[]
+fit int[] {
+  func fit_head(): int {
     return self[0];
   }
 }
@@ -76,7 +76,7 @@ fit FitGenBox<T>: FitReadable<T> {
 }
 
 // 泛型 fit 辅助函数
-func read_fit_int(reader: FitReadable<i32>): i32 {
+func read_fit_int(reader: FitReadable<int>): int {
   return reader.fit_read();
 }
 
@@ -111,12 +111,12 @@ open func test_fit() {
     });
 
     test("fit builtin int[] method", () {
-      let xs: i32[] = [7, 9];
+      let xs: int[] = [7, 9];
       assert(xs.fit_head() == 7, "fit builtin int[] method");
     });
 
     test("generic fit", () {
-      let gbox: FitGenBox<i32> = FitGenBox<i32>();
+      let gbox: FitGenBox<int> = FitGenBox<int>();
       gbox.value = 42;
       assert(read_fit_int(gbox) == 42, "generic fit");
     });

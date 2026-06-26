@@ -1,21 +1,21 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 spec Hashable {
-    func hash(): i32;
-    func sameHash(hash: i32): bool;
+    func hash(): int;
+    func sameHash(hash: int): bool;
 }
 
 type Key: Hashable {
-    var id: i32;
+    var id: int;
 
-    func hash(): i32 {
+    func hash(): int {
         return self.id + 1;
     }
 
-    func sameHash(hash: i32): bool {
+    func sameHash(hash: int): bool {
         return self.hash() == hash;
     }
 }

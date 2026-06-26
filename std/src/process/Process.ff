@@ -28,13 +28,13 @@ extern func feng_pointer_get_scalar<T>(ptr: byte*): T;
 extern func feng_pointer_get_scalar<T>(ptr: string*): T;
 
 @cdecl("libc", "_exit")
-extern func posix_exit(status: i32): void;
+extern func posix_exit(status: int): void;
 
 @cdecl("libc")
-extern func getpid(): i32;
+extern func getpid(): int;
 
 @cdecl("libc")
-extern func getppid(): i32;
+extern func getppid(): int;
 
 @cdecl("libc")
 extern func getenv(name: string*): string*;
@@ -52,10 +52,10 @@ extern func popen(command: byte*, mode: byte*): CStream*;
 extern func fread(ptr: byte*, size: i64, nmemb: i64, stream: CStream*): i64;
 
 @cdecl("libc")
-extern func pclose(stream: CStream*): i32;
+extern func pclose(stream: CStream*): int;
 
 @cdecl("libc", "kill")
-extern func posix_kill(pid: i32, sig: i32): i32;
+extern func posix_kill(pid: int, sig: int): int;
 
 seal func emptyBytes(): byte[] {
   let items: byte[!] = byte[:(i64)0];
@@ -130,21 +130,21 @@ open type Process {
   /**
    * Exits the current process with the given exit code.
    */
-  open static func exit(code: i32): void {
+  open static func exit(code: int): void {
     posix_exit(code);
   }
 
   /**
    * Returns the PID of the current process.
    */
-  open static func currentId(): i32 {
+  open static func currentId(): int {
     return getpid();
   }
 
   /**
    * Returns the PID of the parent process.
    */
-  open static func parentId(): i32 {
+  open static func parentId(): int {
     return getppid();
   }
 
@@ -158,8 +158,8 @@ open type Process {
    */
   let args: string[];
   
-  seal var pid: i32;
-  seal var exitStatus: i32;
+  seal var pid: int;
+  seal var exitStatus: int;
   seal var finished: bool;
   seal var stdoutData: byte[];
 
@@ -218,14 +218,14 @@ open type Process {
   /**
    * Returns the process ID of the spawned process.
    */
-  open func id(): i32 {
+  open func id(): int {
     return self.pid;
   }
 
   /**
    * Returns the exit code. Only meaningful after the process has finished.
    */
-  open func exitCode(): i32 {
+  open func exitCode(): int {
     return self.exitStatus;
   }
 
@@ -262,7 +262,7 @@ open type Process {
   /**
    * Sends the specified signal to the process.
    */
-  open func kill(signal: i32): void {
+  open func kill(signal: int): void {
     if !self.finished && self.pid > 0 {
       posix_kill(self.pid, signal);
     }

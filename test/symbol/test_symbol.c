@@ -224,7 +224,7 @@ static void test_roundtrip_public_module(void) {
     static const char *kSource =
         "open module feng.test.symbol.roundtrip;\n"
         "\n"
-        "open func add(a: i32, b: i32): i32 { return a + b; }\n"
+        "open func add(a: int, b: int): int { return a + b; }\n"
         "open func greet(name: string): string { return name; }\n";
 
     FengProgram *program = parse_or_die("roundtrip.ff", kSource);
@@ -335,8 +335,8 @@ static void test_roundtrip_public_module(void) {
 static void test_union_spec_ft_roundtrip_preserves_normalized_members(void) {
     static const char *kSource =
         "open module feng.test.symbol.union_roundtrip;\n"
-        "open spec Maybe: string | i32 | string;\n"
-        "open spec Value: Maybe | bool | i32;\n";
+        "open spec Maybe: string | int | string;\n"
+        "open spec Value: Maybe | bool | int;\n";
     char *tmp_dir = make_temp_dir();
     char public_root[1024];
     FengSymbolProvider *provider = NULL;
@@ -395,12 +395,12 @@ static void test_union_spec_ft_roundtrip_preserves_normalized_members(void) {
 static void test_bounded_decl_ft_roundtrip_uses_inferred_initializer(void) {
     static const char *kSource =
         "open module feng.test.symbol.bounded;\n"
-        "open let module_id: i32 = 9;\n"
+        "open let module_id: int = 9;\n"
         "open type User {\n"
-        "    open let id: i32 = 1;\n"
-        "    open let created_at: i32;\n"
-        "    open static let version: i32 = 2;\n"
-        "    func User(ts: i32) {\n"
+        "    open let id: int = 1;\n"
+        "    open let created_at: int;\n"
+        "    open static let version: int = 2;\n"
+        "    func User(ts: int) {\n"
         "        self.created_at = ts;\n"
         "    }\n"
         "}\n";
@@ -464,13 +464,13 @@ static void test_roundtrip_public_module_docs(void) {
         " * Adds two integers.\n"
         " * Keeps Feng doc newlines.\n"
         " */\n"
-        "open func add(a: i32, b: i32): i32 { return a + b; }\n"
+        "open func add(a: int, b: int): int { return a + b; }\n"
         "/** User record */\n"
         "open type User {\n"
         "    /** Stable identifier */\n"
-        "    open let id: i32;\n"
+        "    open let id: int;\n"
         "    /** Static version */\n"
-        "    open static let version: i32 = 1;\n"
+        "    open static let version: int = 1;\n"
         "}\n";
 
     FengProgram *program = parse_or_die("docs_roundtrip.ff", kSource);
@@ -536,7 +536,7 @@ static void test_roundtrip_public_module_docs(void) {
 static void test_private_module_skipped(void) {
     static const char *kSource =
         "module feng.test.symbol.private_only;\n"
-        "func local(): i32 { return 0; }\n";
+        "func local(): int { return 0; }\n";
 
     FengProgram *program = parse_or_die("private.ff", kSource);
     FengSemanticAnalysis *analysis = analyze_or_die(program);
@@ -607,7 +607,7 @@ static void test_reader_rejects_bad_magic(void) {
 static void test_provider_loads_bundle_public_module(void) {
     static const char *kSource =
         "open module feng.test.symbol.bundle;\n"
-        "open func answer(): i32 { return 42; }\n";
+        "open func answer(): int { return 42; }\n";
 
     char *tmp_dir = make_temp_dir();
     char public_root[1024];
@@ -730,7 +730,7 @@ static void test_enum_ft_roundtrip_exports_items_and_values(void) {
 static void test_provider_rejects_duplicate_bundle_module(void) {
     static const char *kSource =
         "open module feng.test.symbol.conflict;\n"
-        "open func marker(): i32 { return 1; }\n";
+        "open func marker(): int { return 1; }\n";
 
     char *tmp_dir = make_temp_dir();
     char public_root[1024];
@@ -803,7 +803,7 @@ static void test_provider_rejects_bad_bundle_symbol_entry(void) {
 static void test_imported_module_cache_keeps_synthesized_modules_alive(void) {
     static const char *kSource =
         "open module feng.test.symbol.imported_cache;\n"
-        "open func answer(): i32 { return 42; }\n";
+        "open func answer(): int { return 42; }\n";
 
     char *tmp_dir = make_temp_dir();
     char public_root[1024];
@@ -1020,9 +1020,9 @@ static void test_imported_enum_value_participates_in_semantic_analysis(void) {
     static const char *kMainSource =
         "module demo.main;\n"
         "import vendor.status as status;\n"
-        "func run(): i32 {\n"
+        "func run(): int {\n"
         "    let value: status.HttpStatus = status.HttpStatus.NotFound;\n"
-        "    return (i32)value;\n"
+        "    return (int)value;\n"
         "}\n";
 
     char *tmp_dir = make_temp_dir();
@@ -1534,16 +1534,16 @@ static void test_fit_builtin_and_array_target_nodes_ft_roundtrip(void) {
         "open module feng.test.symbol.fit_target_nodes;\n"
         "\n"
         "open spec Label { func label(): string; }\n"
-        "open fit i32: Label {\n"
+        "open fit int: Label {\n"
         "    open func label(): string { return \"i32\"; }\n"
         "}\n"
         "open fit string: Label {\n"
         "    open func label(): string { return self; }\n"
         "}\n"
-        "open fit i32[]: Label {\n"
+        "open fit int[]: Label {\n"
         "    open func label(): string { return \"arr_ro\"; }\n"
         "}\n"
-        "open fit i32[!]: Label {\n"
+        "open fit int[!]: Label {\n"
         "    open func label(): string { return \"arr_rw\"; }\n"
         "}\n";
 
@@ -1637,9 +1637,9 @@ static void test_fit_array_type_param_target_ft_roundtrip(void) {
     static const char *kSource =
         "open module feng.test.symbol.fit_array_type_param_target;\n"
         "\n"
-        "open spec ArrTag<T> { func count(): i32; }\n"
+        "open spec ArrTag<T> { func count(): int; }\n"
         "open fit T[!]: ArrTag<T> {\n"
-        "    open func count(): i32 { return 0; }\n"
+        "    open func count(): int { return 0; }\n"
         "}\n";
 
     FengProgram *program = parse_or_die("fit_array_type_param_target.ff", kSource);

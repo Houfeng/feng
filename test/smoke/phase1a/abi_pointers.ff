@@ -1,22 +1,22 @@
 module feng.smoke.abi_pointers;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 @cdecl("libc")
-extern func write(fd: i32, buf: byte*, count: i64): i64;
+extern func write(fd: int, buf: byte*, count: i64): i64;
 
 @abi
-spec Cmp(a: i32, b: i32): i32;
+spec Cmp(a: int, b: int): int;
 
 @abi
 type Holder {
     var cb: Cmp*;
-    var tag: i32;
+    var tag: int;
 }
 
 @abi
-func cmp(a: i32, b: i32): i32 {
+func cmp(a: int, b: int): int {
     return a - b;
 }
 

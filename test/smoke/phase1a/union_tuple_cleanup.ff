@@ -1,9 +1,9 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
-spec Choice: i32 | string;
+spec Choice: int | string;
 
 type Wrapped(Choice, string);
 
@@ -17,7 +17,7 @@ func make_wrapped(name: string, label: string): Wrapped {
 
 func print_choice(value: Choice) {
     match value {
-        i32 { puts(&"int"); }
+        int { puts(&"int"); }
         v: string { puts(&v); }
     }
 }

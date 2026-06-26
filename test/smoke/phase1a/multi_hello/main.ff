@@ -1,7 +1,7 @@
 module feng.smoke.multi_hello;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 func main(args: string[]) {
     puts(&helper());

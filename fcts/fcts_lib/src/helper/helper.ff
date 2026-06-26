@@ -4,7 +4,7 @@ import std.io;
 import std.text;
 
 /** 跨包辅助函数 */
-open func lib_helper(): i32 {
+open func lib_helper(): int {
   return 42;
 }
 

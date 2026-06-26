@@ -10,18 +10,18 @@ func gidentity<T>(value: T): T {
 
 // 泛型约束
 spec GSizeable {
-  func gsize(): i32;
+  func gsize(): int;
 }
 
 type GSizedList: GSizeable {
-  let count: i32;
+  let count: int;
 
-  func gsize(): i32 {
+  func gsize(): int {
     return self.count;
   }
 }
 
-func get_gsize<T: GSizeable>(item: T): i32 {
+func get_gsize<T: GSizeable>(item: T): int {
   return item.gsize();
 }
 
@@ -30,10 +30,10 @@ spec GReader<T> {
   func read_val(): T;
 }
 
-type IntReader: GReader<i32> {
-  let value: i32;
+type IntReader: GReader<int> {
+  let value: int;
 
-  func read_val(): i32 {
+  func read_val(): int {
     return self.value;
   }
 }
@@ -47,8 +47,8 @@ type StringReader: GReader<string> {
 }
 
 // 泛型 type 用于接受值
-func wrap_int(v: i32): i32 {
-  return gidentity<i32>(v);
+func wrap_int(v: int): int {
+  return gidentity<int>(v);
 }
 
 func wrap_string(v: string): string {
@@ -100,7 +100,7 @@ spec GEq<T> {
 }
 
 type GKey: GEq<GKey> {
-  var id: i32;
+  var id: int;
 
   func gsame(other: GKey): bool {
     return self.id == other.id;
@@ -137,7 +137,7 @@ spec GCloneable<T> {
 }
 
 type GCloneKey: GCloneable<GCloneKey> {
-  var id: i32;
+  var id: int;
 
   func gclone_val(): GCloneKey {
     return GCloneKey { id: self.id };
@@ -156,18 +156,18 @@ spec GSequence<T> {
 }
 
 spec GCollection<T>: GSequence<T> {
-  func gcount(): i32;
+  func gcount(): int;
 }
 
-type GIntList: GCollection<i32> {
-  let head: i32;
-  let len: i32;
+type GIntList: GCollection<int> {
+  let head: int;
+  let len: int;
 
-  func gfirst(): i32 {
+  func gfirst(): int {
     return self.head;
   }
 
-  func gcount(): i32 {
+  func gcount(): int {
     return self.len;
   }
 }
@@ -304,35 +304,35 @@ func use_glabelled<U: GLabelled>(value: U): string {
 
 // 具体化父泛型 spec。
 spec GCountSequence<T> {
-  func gsize_value(): i32;
+  func gsize_value(): int;
 }
 
 // 具体化父泛型 spec 的子 spec。
-spec GIntCountSequence: GCountSequence<i32> {
+spec GIntCountSequence: GCountSequence<int> {
 }
 
 // 具体化父泛型 spec 的实现类型。
 type GCounter: GIntCountSequence {
-  var n: i32;
+  var n: int;
 
-  func gsize_value(): i32 {
+  func gsize_value(): int {
     return self.n;
   }
 }
 
 // 通过具体化子 spec 视图调用继承成员。
-func check_gint_sequence(seq: GIntCountSequence): i32 {
+func check_gint_sequence(seq: GIntCountSequence): int {
   return seq.gsize_value();
 }
 
 // 重新声明父泛型 spec 成员的具体化子 spec。
-spec GIntSequenceOverride: GCountSequence<i32> {
-  func gsize_value(): i32;
+spec GIntSequenceOverride: GCountSequence<int> {
+  func gsize_value(): int;
 }
 
 // 实现重新声明成员的具体化子 spec。
 type GOverrideCounter: GIntSequenceOverride {
-  func gsize_value(): i32 {
+  func gsize_value(): int {
     return 1;
   }
 }
@@ -350,19 +350,19 @@ type GNestedHolder<T> {
 
 // 非自约束泛型映射用 spec。
 spec GHashable {
-  func ghash(): i32;
-  func gsame_hash(hash: i32): bool;
+  func ghash(): int;
+  func gsame_hash(hash: int): bool;
 }
 
 // 非自约束泛型映射用 key。
 type GHashKey: GHashable {
-  var code: i32;
+  var code: int;
 
-  func ghash(): i32 {
+  func ghash(): int {
     return self.code;
   }
 
-  func gsame_hash(hash: i32): bool {
+  func gsame_hash(hash: int): bool {
     return self.ghash() == hash;
   }
 }
@@ -437,7 +437,7 @@ func gtag_exact<T: GTaggable>(value: T): string {
 open func test_generic() {
   describe("generic", () {
     test("generic function (explicit type arg)", () {
-      let r1 = gidentity<i32>(100);
+      let r1 = gidentity<int>(100);
       assert(r1 == 100, "generic function (explicit type arg)");
     });
 
@@ -460,7 +460,7 @@ open func test_generic() {
 
     test("generic spec (int reader)", () {
       let ir = IntReader { value: 77 };
-      let reader: GReader<i32> = ir;
+      let reader: GReader<int> = ir;
       let rv = reader.read_val();
       assert(rv == 77, "generic spec (int reader)");
     });
@@ -473,7 +473,7 @@ open func test_generic() {
     });
 
     test("generic type method (int)", () {
-      let gbox: GBox<i32> = GBox<i32>();
+      let gbox: GBox<int> = GBox<int>();
       gbox.set_val(7);
       assert(gbox.get_val() == 7, "generic type method (int)");
     });
@@ -485,7 +485,7 @@ open func test_generic() {
     });
 
     test("generic type constructor", () {
-      let cbox: GBox<i32> = GBox<i32>();
+      let cbox: GBox<int> = GBox<int>();
       cbox.value = 99;
       assert(cbox.value == 99, "generic type constructor");
     });
@@ -504,9 +504,9 @@ open func test_generic() {
     });
 
     test("generic type with generic method", () {
-      let mbox: GMethodBox<i32> = GMethodBox<i32>();
-      let echo_val: i32 = mbox.echo(20);
-      let replace_val: i32 = mbox.replace<i32>(22, echo_val);
+      let mbox: GMethodBox<int> = GMethodBox<int>();
+      let echo_val: int = mbox.echo(20);
+      let replace_val: int = mbox.replace<int>(22, echo_val);
       assert(mbox.current() + replace_val + mbox.echo(1) == 43, "generic type with generic method");
     });
 
@@ -537,24 +537,24 @@ open func test_generic() {
 
     test("generic spec inheritance", () {
       let glist = GIntList { head: 10, len: 3 };
-      let gcol: GCollection<i32> = glist;
+      let gcol: GCollection<int> = glist;
       assert(gcol.gfirst() == 10, "generic spec inheritance (first)");
       assert(gcol.gcount() == 3, "generic spec inheritance (count)");
-      let gseq: GSequence<i32> = glist;
+      let gseq: GSequence<int> = glist;
       assert(gseq.gfirst() == 10, "generic spec inheritance (parent view)");
     });
 
     test("generic constraint forwarding", () {
       let glist = GIntList { head: 10, len: 3 };
-      assert(gfirst_of<i32, GIntList>(glist) == 10, "generic constraint forwarding");
+      assert(gfirst_of<int, GIntList>(glist) == 10, "generic constraint forwarding");
     });
 
     test("generic aggregate return", () {
-      let created: GNamed = make_gnamed<i32>("generic aggregate return ok");
+      let created: GNamed = make_gnamed<int>("generic aggregate return ok");
       assert(created.ggreet() == "generic aggregate return ok", "generic aggregate return created");
-      let forwarded: GNamed = forward_gnamed<i32>(created);
+      let forwarded: GNamed = forward_gnamed<int>(created);
       assert(forwarded.ggreet() == "generic aggregate return ok", "generic aggregate return forwarded");
-      let rebound: GNamed = rebound_gnamed<i32>("generic aggregate return ok");
+      let rebound: GNamed = rebound_gnamed<int>("generic aggregate return ok");
       assert(rebound.ggreet() == "generic aggregate return ok", "generic aggregate return rebound");
     });
 
@@ -604,20 +604,20 @@ open func test_generic() {
     });
 
     test("generic array creation", () {
-      let pairs: GPair<i32, i32>[!] = GPair<i32, i32>[: (i64)2];
+      let pairs: GPair<int, int>[!] = GPair<int, int>[: (i64)2];
       pairs[0].left = 10;
       pairs[0].right = 20;
       assert(pairs[0].left == 10 && pairs[0].right == 20, "generic array creation");
     });
 
     test("generic nested default", () {
-      let holder: GNestedHolder<i32> = GNestedHolder<i32>();
+      let holder: GNestedHolder<int> = GNestedHolder<int>();
       holder.inner.value = 11;
       assert(holder.inner.value == 11, "generic nested default");
     });
 
     test("generic object literal", () {
-      let box: GBox<i32> = GBox<i32>() { value: 7 };
+      let box: GBox<int> = GBox<int>() { value: 7 };
       assert(box.value == 7, "generic object literal");
     });
 

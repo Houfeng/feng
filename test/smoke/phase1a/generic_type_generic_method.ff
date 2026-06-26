@@ -1,7 +1,7 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 type Box<T> {
     var value: T;
@@ -23,15 +23,15 @@ type Box<T> {
         return self.current();
     }
 
-    func echoInt(value: i32): i32 {
+    func echoInt(value: int): int {
         return self.echo(value);
     }
 }
 
 func main(args: string[]) {
-    let box = Box<i32>();
-    let first: i32 = box.echo(20);
-    let second: i32 = box.replace<i32>(22, first);
+    let box = Box<int>();
+    let first: int = box.echo(20);
+    let second: int = box.replace<int>(22, first);
     if box.currentAgain() + second + box.echoInt(1) == 43 {
         puts(&"ok");
     } else {

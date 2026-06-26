@@ -1,24 +1,24 @@
 module feng.smoke;
 
 @cdecl("libc")
-extern func puts(msg: string*): i32;
+extern func puts(msg: string*): int;
 
 spec Sequence<T> {
-    func size(): i32;
+    func size(): int;
 }
 
-spec IntSequence: Sequence<i32> {
+spec IntSequence: Sequence<int> {
 }
 
 type Counter: IntSequence {
-    var n: i32;
+    var n: int;
 
-    func size(): i32 {
+    func size(): int {
         return self.n;
     }
 }
 
-func check(seq: IntSequence): i32 {
+func check(seq: IntSequence): int {
     return seq.size();
 }
 
