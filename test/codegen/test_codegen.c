@@ -6612,6 +6612,28 @@ static void test_literal_adaptation_compound_assignment(void) {
     feng_semantic_analysis_free(analysis);
 }
 
+static void test_literal_adaptation_array_literal(void) {
+    static const char *kSource =
+        "module feng.codegen.litadapt.array;\n"
+        "func f() {\n"
+        "    let x: i32 = 5;\n"
+        "    let a = [x, 10];\n"
+        "    let b = [10, x];\n"
+        "    var y: u8 = 1;\n"
+        "    let c = [y, 255];\n"
+        "}\n";
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_array.ff");
+    char *c = literal_adapt_codegen(analysis);
+
+    /* [x, 10] where x: i32 → literal 10 adapts to i32. */
+    ASSERT(strstr(c, "(int32_t)INT32_C(10)") != NULL);
+    /* [y, 255] where y: u8 → literal 255 adapts to u8. */
+    ASSERT(strstr(c, "(uint8_t)UINT8_C(255)") != NULL);
+    compile_generated_c_or_die(c);
+
+    feng_semantic_analysis_free(analysis);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -6732,6 +6754,7 @@ int main(void) {
     test_literal_adaptation_member_and_array();
     test_literal_adaptation_both_literals();
     test_literal_adaptation_compound_assignment();
+    test_literal_adaptation_array_literal();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

@@ -14086,6 +14086,52 @@ static InferredExprType infer_array_literal_expr_type(ResolveContext *context, c
         return inferred_expr_type_unknown();
     }
 
+    /* Array literal element adaptation (§10.3.5): same strategy as
+     * validate_array_literal_expr.  Nested arrays only reach this function
+     * (inner arrays are not individually passed through resolve_expr →
+     * validate_array_literal_expr), so the adaptation must be self-contained
+     * here. */
+    if (context->current_expr_expected_type_ref != NULL &&
+        context->current_expr_expected_type_ref->kind == FENG_TYPE_REF_ARRAY &&
+        context->current_expr_expected_type_ref->as.inner != NULL) {
+        InferredExprType target =
+            inferred_expr_type_from_type_ref(context->current_expr_expected_type_ref->as.inner);
+        if (inferred_expr_type_is_numeric(target)) {
+            for (item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {
+                const FengExpr *item = expr->as.array_literal.items[item_index];
+                if (expr_is_pure_numeric_literal_expr_for_target_adaptation(item) &&
+                    numeric_literal_fits_inferred_target(context, item, target)) {
+                    fill_expr_type_from_inferred(context, (FengExpr *)item, &target);
+                }
+            }
+        }
+    } else {
+        InferredExprType target;
+        bool found_target = false;
+
+        memset(&target, 0, sizeof(target));
+        for (item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {
+            const FengExpr *item = expr->as.array_literal.items[item_index];
+            if (!expr_is_pure_numeric_literal_expr_for_target_adaptation(item)) {
+                target = infer_expr_type(context, item);
+                if (inferred_expr_type_is_known(target) &&
+                    inferred_expr_type_is_numeric(target)) {
+                    found_target = true;
+                }
+                break;
+            }
+        }
+        if (found_target) {
+            for (item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {
+                const FengExpr *item = expr->as.array_literal.items[item_index];
+                if (expr_is_pure_numeric_literal_expr_for_target_adaptation(item) &&
+                    numeric_literal_fits_inferred_target(context, item, target)) {
+                    fill_expr_type_from_inferred(context, (FengExpr *)item, &target);
+                }
+            }
+        }
+    }
+
     element_type = infer_expr_type(context, expr->as.array_literal.items[0]);
     if (!inferred_expr_type_is_known(element_type)) {
         return inferred_expr_type_unknown();
@@ -14113,6 +14159,59 @@ static bool validate_array_literal_expr(ResolveContext *context, const FengExpr 
 
     if (expr == NULL || expr->kind != FENG_EXPR_ARRAY_LITERAL) {
         return true;
+    }
+
+    /* Array literal element adaptation (§10.3.5):
+     *
+     * 1. Explicit array target type (from current_expr_expected_type_ref):
+     *    adapt literal elements to the target element type.
+     *
+     * 2. No explicit target: find the first non-literal element's inferred
+     *    type and use it as the target; adapt literal elements to it.
+     *
+     * 3. All elements are literals: no adaptation, each defaults.
+     *
+     * After adaptation the existing loop reads expr->type via
+     * infer_expr_type (which returns the adapted type for INTEGER/FLOAT). */
+    if (context->current_expr_expected_type_ref != NULL &&
+        context->current_expr_expected_type_ref->kind == FENG_TYPE_REF_ARRAY &&
+        context->current_expr_expected_type_ref->as.inner != NULL) {
+        InferredExprType target =
+            inferred_expr_type_from_type_ref(context->current_expr_expected_type_ref->as.inner);
+        if (inferred_expr_type_is_numeric(target)) {
+            for (item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {
+                const FengExpr *item = expr->as.array_literal.items[item_index];
+                if (expr_is_pure_numeric_literal_expr_for_target_adaptation(item) &&
+                    numeric_literal_fits_inferred_target(context, item, target)) {
+                    fill_expr_type_from_inferred(context, (FengExpr *)item, &target);
+                }
+            }
+        }
+    } else {
+        InferredExprType target;
+        bool found_target = false;
+
+        memset(&target, 0, sizeof(target));
+        for (item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {
+            const FengExpr *item = expr->as.array_literal.items[item_index];
+            if (!expr_is_pure_numeric_literal_expr_for_target_adaptation(item)) {
+                target = infer_expr_type(context, item);
+                if (inferred_expr_type_is_known(target) &&
+                    inferred_expr_type_is_numeric(target)) {
+                    found_target = true;
+                }
+                break;
+            }
+        }
+        if (found_target) {
+            for (item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {
+                const FengExpr *item = expr->as.array_literal.items[item_index];
+                if (expr_is_pure_numeric_literal_expr_for_target_adaptation(item) &&
+                    numeric_literal_fits_inferred_target(context, item, target)) {
+                    fill_expr_type_from_inferred(context, (FengExpr *)item, &target);
+                }
+            }
+        }
     }
 
     for (item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {

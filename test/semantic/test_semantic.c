@@ -17732,6 +17732,135 @@ static void test_try_expr_catch_literal_return_value_adapts(void) {
     feng_program_free(program);
 }
 
+static void test_array_literal_adapts_first_non_literal(void) {
+    /* No explicit target: the first non-literal element determines the target
+     * type.  Subsequent literal elements adapt to it.  Without adaptation the
+     * literal defaults to int (i64 on 64-bit platforms) and AE0201 fires. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let x: i32 = 5;\n"
+        "    let a = [x, 10];\n"
+        "    let b = [x, 1, 2, 3];\n"
+        "    var y: u8 = 10;\n"
+        "    let c = [y, 255];\n"
+        "    let d: i32 = a[0];\n"
+        "    let e: i32 = b[1];\n"
+        "    let f: u8 = c[1];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("array_adapt_first_nonlit.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_array_literal_adapts_first_element_literal(void) {
+    /* First element is a literal; scan skips it to find the first non-literal
+     * element.  All literal elements adapt to the non-literal's type. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let x: i32 = 5;\n"
+        "    let a = [10, x];\n"
+        "    let b = [1, 2, x, 3];\n"
+        "    let c: i32 = a[0];\n"
+        "    let d: i32 = b[0];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("array_adapt_first_lit.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_array_literal_all_literals_no_target_accepted(void) {
+    /* All elements are literals with no explicit target: each defaults to
+     * int (i64), types match, accepted. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let a = [1, 2, 3];\n"
+        "    let b = [1.0, 2.5, 3.14];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("array_adapt_all_lit.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_array_literal_non_literal_type_mismatch_rejected(void) {
+    /* Two non-literal elements with different types: no adaptation applies,
+     * the type equality check rejects. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let x: i32 = 1;\n"
+        "    let y: i64 = 2;\n"
+        "    let a = [x, y];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("array_adapt_mismatch.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "array_adapt_mismatch.f") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_array_literal_out_of_range_rejected(void) {
+    /* 256 does not fit u8, so adaptation fails and the literal keeps its
+     * default int (i64) type — the type equality check then rejects. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let x: u8 = 10;\n"
+        "    let a = [x, 256];\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("array_adapt_range.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "array_adapt_range.f") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -18379,6 +18508,12 @@ int main(void) {
     test_try_expr_catch_literal_out_of_range_rejected();
     test_try_expr_catch_literal_adapts_to_union_member();
     test_try_expr_catch_literal_return_value_adapts();
+
+    test_array_literal_adapts_first_non_literal();
+    test_array_literal_adapts_first_element_literal();
+    test_array_literal_all_literals_no_target_accepted();
+    test_array_literal_non_literal_type_mismatch_rejected();
+    test_array_literal_out_of_range_rejected();
 
     puts("semantic tests passed");
     return 0;
