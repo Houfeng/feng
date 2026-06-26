@@ -10456,24 +10456,33 @@ static bool callable_collect_call_type_args(ResolveContext *context,
 
         if (param_type_is_type_param_ref(callable, param_type)) {
             /* When explicit type args are provided, the type param already
-             * has a concrete binding.  Adapt numeric literal args to the
-             * explicit type so that e.g. Util.id<i32>(41) works on 64-bit
-             * where the literal's default type `int` resolves to `i64`. */
+             * has a concrete binding.  Try to adapt literal / untyped args to
+             * the explicit type so that e.g. Util.id<i32>(41),
+             * Util.id<Pair>((1, 2)), or onclick<Func>((id: int) -> foo())
+             * works regardless of the literal's default inference.
+             * expr_matches_expected_type_ref dispatches by expression kind
+             * (numeric, tuple, lambda, array) and safely returns false for
+             * expressions that cannot be adapted.
+             *
+             * If adaptation succeeds, skip inference to avoid spurious
+             * failures (e.g. tuple literal against bare type param T).
+             * If adaptation fails, fall through to inference so that genuine
+             * type mismatches (e.g. string arg against explicit i32) are
+             * caught by the normal type-argument conflict check. */
             if (call_expr->as.call.has_explicit_type_args &&
-                call_expr->as.call.args[arg_index] != NULL &&
-                expr_is_pure_numeric_literal_expr_for_target_adaptation(
-                    call_expr->as.call.args[arg_index])) {
+                call_expr->as.call.args[arg_index] != NULL) {
                 size_t tp_index = 0U;
                 if (callable_find_type_param_index(
                         callable,
                         param_type->as.named.segments[0],
                         &tp_index) &&
                     tp_index < call_expr->as.call.explicit_type_arg_count &&
-                    type_args[tp_index] != NULL) {
-                    (void)expr_matches_expected_type_ref(
+                    type_args[tp_index] != NULL &&
+                    expr_matches_expected_type_ref(
                         context,
                         call_expr->as.call.args[arg_index],
-                        type_args[tp_index]);
+                        type_args[tp_index])) {
+                    continue;
                 }
             }
             if (!callable_collect_type_args_from_arg_expr(context,
@@ -10586,8 +10595,13 @@ static bool callable_parameters_match_args(ResolveContext *context,
             param_type = callable->params[fixed_count].type->as.inner;
         }
 
+        /* When the param type is a bare type parameter (e.g., T), skip the
+         * lambda guard — the concrete type is not yet known at probing time
+         * and the explicit type arg (if any) will drive adaptation later in
+         * callable_collect_call_type_args. */
         if (args[arg_index] != NULL &&
             args[arg_index]->kind == FENG_EXPR_LAMBDA &&
+            !param_type_is_type_param_ref(callable, param_type) &&
             resolve_function_type_decl(context, param_type) == NULL) {
             ok = false;
             break;
@@ -10737,8 +10751,13 @@ static bool callable_parameters_match_args_for_owner_instance(
             param_type = callable->params[fixed_count].type->as.inner;
         }
 
+        /* When the param type is a bare type parameter (e.g., T), skip the
+         * lambda guard — the concrete type is not yet known at probing time
+         * and the explicit type arg (if any) will drive adaptation later in
+         * callable_collect_call_type_args. */
         if (args[arg_index] != NULL &&
             args[arg_index]->kind == FENG_EXPR_LAMBDA &&
+            !param_type_is_type_param_ref(callable, param_type) &&
             resolve_function_type_decl(context, param_type) == NULL) {
             ok = false;
             break;

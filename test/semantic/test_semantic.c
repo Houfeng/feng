@@ -15722,6 +15722,59 @@ static void test_generic_type_with_finalizer_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_generic_explicit_type_args_adapts_tuple_literal(void) {
+    /* Tuple literal arg must be adapted to the explicit type arg when
+     * the type param position receives a named tuple type. */
+    const char *source =
+        "module demo.main;\n"
+        "type Pair(i32, i32);\n"
+        "func identity<T>(x: T): T {\n"
+        "    return x;\n"
+        "}\n"
+        "func run(): Pair {\n"
+        "    return identity<Pair>((1, 2));\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_tuple_adapt.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_generic_explicit_type_args_adapts_lambda_literal(void) {
+    /* Lambda literal arg must be adapted to the explicit type arg when
+     * the type param position receives a callable spec type. */
+    const char *source =
+        "module demo.main;\n"
+        "spec Handler(id: int): void;\n"
+        "func invoke<H>(handler: H): void {\n"
+        "}\n"
+        "func noop(): void {\n"
+        "}\n"
+        "func check(): void {\n"
+        "    invoke<Handler>((id: int) -> noop());\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_lambda_adapt.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_generic_explicit_type_args_arity_mismatch(void) {
     /* Providing the wrong number of explicit type arguments must be rejected
      * (G4-13 arity check). */
@@ -18589,6 +18642,8 @@ int main(void) {
     test_generic_spec_decl_ok();
     test_generic_function_call_wildcard_ok();
     test_generic_explicit_type_args_ok();
+    test_generic_explicit_type_args_adapts_tuple_literal();
+    test_generic_explicit_type_args_adapts_lambda_literal();
     test_generic_exact_non_generic_overload_is_preferred();
     test_generic_type_param_constraint_must_be_spec();
     test_generic_type_ref_arity_too_many();
