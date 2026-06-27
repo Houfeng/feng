@@ -88,67 +88,69 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 
 #### 2.1.3 不透明指针/句柄类 [待优化]
 
-> C API 返回或接收不透明指针（`DIR*`、`uv_mutex_t*`、`pcre2_code*`、`pthread_t` 等），本质为指针地址，应为平台位宽。
+> C API 返回或接收不透明指针（`DIR*`、`uv_mutex_t*`、`pcre2_code*`、`pthread_t` 等），本质为指针地址，应为平台位宽。Feng 中有两种表示方式：
+> 1. **空结构体指针**（如 `Pcre2MatchData*`、`Dirent*`、`CStream*`）— 已正确，无需改动
+> 2. **用 `i64` 存储指针地址** — 应改为 `int`（平台位宽）
 
-| # | 文件 | 行 | 当前声明 | C 实际类型 | 不对齐项 |
+| # | 文件 | 行 | 当前声明 | C 实际类型 | 优化方案 |
 |---|------|----|---------|-----------|---------|
-| 1 | `thread/Thread.ff` | 12 | `uv_thread_create(tid: i64*, entry: ThreadAbiEntry*, arg: i64): int` | `int uv_thread_create(uv_thread_t*, uv_thread_cb, void*)` | `tid`→`int*`，`arg`→`int` |
-| 2 | `thread/Thread.ff` | 15 | `uv_thread_join(tid: i64*): int` | `int uv_thread_join(uv_thread_t*)` | `tid`→`int*` |
+| 1 | `thread/Thread.ff` | 12 | `uv_thread_create(tid: i64*, entry: ThreadAbiEntry*, arg: i64): int` | `int uv_thread_create(uv_thread_t*, uv_thread_cb, void*)` | `tid: int*`，`arg: int` |
+| 2 | `thread/Thread.ff` | 15 | `uv_thread_join(tid: i64*): int` | `int uv_thread_join(uv_thread_t*)` | `tid: int*` |
 | 3 | `thread/Thread.ff` | 18 | `uv_thread_self(): i64` | 返回 `uv_thread_t` | 返回值→`int` |
-| 4 | `thread/Thread.ff` | 30 | `spec ThreadAbiEntry(arg: i64): void` | `uv_thread_cb` 签名为 `void (*)(void *arg)` | `arg`→`int` |
+| 4 | `thread/Thread.ff` | 30 | `spec ThreadAbiEntry(arg: i64): void` | `uv_thread_cb` 签名为 `void (*)(void *arg)` | `arg: int` |
 | 5 | `fs/Dir.ff` | 13 | `c_opendir(path: byte*): i64` | 返回 `DIR*` | 返回值→`int` |
-| 6 | `fs/Dir.ff` | 16 | `c_readdir(dir: i64): Dirent*` | `DIR*` 参数 | `dir`→`int` |
-| 7 | `fs/Dir.ff` | 19 | `c_closedir(dir: i64): int` | `DIR*` 参数 | `dir`→`int` |
-| 8 | `thread/Mutex.ff` | 4 | `uv_mutex_init(handle: i64): int` | `uv_mutex_t*` | `handle`→`int` |
-| 9 | `thread/Mutex.ff` | 7 | `uv_mutex_destroy(handle: i64): void` | `uv_mutex_t*` | `handle`→`int` |
-| 10 | `thread/Mutex.ff` | 10 | `uv_mutex_lock(handle: i64): void` | `uv_mutex_t*` | `handle`→`int` |
-| 11 | `thread/Mutex.ff` | 13 | `uv_mutex_trylock(handle: i64): int` | `uv_mutex_t*` | `handle`→`int` |
-| 12 | `thread/Mutex.ff` | 16 | `uv_mutex_unlock(handle: i64): void` | `uv_mutex_t*` | `handle`→`int` |
-| 13 | `thread/CondVar.ff` | 4 | `uv_cond_init(handle: i64): int` | `uv_cond_t*` | `handle`→`int` |
-| 14 | `thread/CondVar.ff` | 7 | `uv_cond_destroy(handle: i64): void` | `uv_cond_t*` | `handle`→`int` |
-| 15 | `thread/CondVar.ff` | 10 | `uv_cond_signal(handle: i64): void` | `uv_cond_t*` | `handle`→`int` |
-| 16 | `thread/CondVar.ff` | 13 | `uv_cond_broadcast(handle: i64): void` | `uv_cond_t*` | `handle`→`int` |
-| 17 | `thread/CondVar.ff` | 16 | `uv_cond_wait(cond: i64, mutex: i64): void` | `uv_cond_t*`, `uv_mutex_t*` | `cond`/`mutex`→`int` |
-| 18 | `thread/CondVar.ff` | 19 | `uv_cond_timedwait(cond: i64, mutex: i64, timeout: u64): int` | `uv_cond_t*`, `uv_mutex_t*`, `uint64_t` | `cond`/`mutex`→`int`（`timeout` 为 `u64` 正确） |
-| 19 | `text/RegExp.ff` | 18 | `pcre2_compile(..., cContext: i64): i64` | `pcre2_compile_context*`→`pcre2_code*` | `cContext`/返回值→`int` |
-| 20 | `text/RegExp.ff` | 21 | `pcre2_code_free(code: i64): void` | `pcre2_code*` | `code`→`int` |
-| 21 | `text/RegExp.ff` | 25 | `pcre2_match_data_create_from_pattern(code: i64, gContext: i64)` | `pcre2_code*`, `pcre2_general_context*` | `code`/`gContext`→`int` |
+| 6 | `fs/Dir.ff` | 16 | `c_readdir(dir: i64): Dirent*` | `DIR*` 参数 | `dir: int` |
+| 7 | `fs/Dir.ff` | 19 | `c_closedir(dir: i64): int` | `DIR*` 参数 | `dir: int` |
+| 8 | `thread/Mutex.ff` | 4 | `uv_mutex_init(handle: i64): int` | `uv_mutex_t*` | `handle: int` |
+| 9 | `thread/Mutex.ff` | 7 | `uv_mutex_destroy(handle: i64): void` | `uv_mutex_t*` | `handle: int` |
+| 10 | `thread/Mutex.ff` | 10 | `uv_mutex_lock(handle: i64): void` | `uv_mutex_t*` | `handle: int` |
+| 11 | `thread/Mutex.ff` | 13 | `uv_mutex_trylock(handle: i64): int` | `uv_mutex_t*` | `handle: int` |
+| 12 | `thread/Mutex.ff` | 16 | `uv_mutex_unlock(handle: i64): void` | `uv_mutex_t*` | `handle: int` |
+| 13 | `thread/CondVar.ff` | 4 | `uv_cond_init(handle: i64): int` | `uv_cond_t*` | `handle: int` |
+| 14 | `thread/CondVar.ff` | 7 | `uv_cond_destroy(handle: i64): void` | `uv_cond_t*` | `handle: int` |
+| 15 | `thread/CondVar.ff` | 10 | `uv_cond_signal(handle: i64): void` | `uv_cond_t*` | `handle: int` |
+| 16 | `thread/CondVar.ff` | 13 | `uv_cond_broadcast(handle: i64): void` | `uv_cond_t*` | `handle: int` |
+| 17 | `thread/CondVar.ff` | 16 | `uv_cond_wait(cond: i64, mutex: i64): void` | `uv_cond_t*`, `uv_mutex_t*` | `cond: int`，`mutex: int` |
+| 18 | `thread/CondVar.ff` | 19 | `uv_cond_timedwait(cond: i64, mutex: i64, timeout: u64): int` | `uv_cond_t*`, `uv_mutex_t*`, `uint64_t` | `cond: int`，`mutex: int`（`timeout: u64` 正确） |
+| 19 | `text/RegExp.ff` | 18 | `pcre2_compile(..., cContext: i64): i64` | `pcre2_compile_context*`→`pcre2_code*` | `cContext: int`，返回值→`int` |
+| 20 | `text/RegExp.ff` | 21 | `pcre2_code_free(code: i64): void` | `pcre2_code*` | `code: int` |
+| 21 | `text/RegExp.ff` | 25 | `pcre2_match_data_create_from_pattern(code: i64, gContext: i64)` | `pcre2_code*`, `pcre2_general_context*` | `code: int`，`gContext: int` |
 | 22 | `text/RegExp.ff` | 38 | `pcre2_get_ovector_pointer(...): i64*` | 返回 `PCRE2_SIZE*` | 返回值→`uint*` |
 
 #### 2.1.4 char** (endptr) 类 [待优化]
 
-> `strtod`/`strtof` 的 endptr 参数为 `char**`（指针的指针），不是 `i64*`。
+> `strtod`/`strtof` 的 endptr 参数为 `char**`（指针的指针）。Feng 不支持指针的指针，endptr 存储的是指针地址（平台位宽），将 `i64*` 优化为 `int*` 即可与平台位宽对齐。
 
-| # | 文件 | 行 | 当前声明 | C 实际签名 | 不对齐项 |
+| # | 文件 | 行 | 当前声明 | C 实际签名 | 优化方案 |
 |---|------|----|---------|-----------|---------|
-| 1 | `numeric/f64.ff` | 8 | `strtod(text: string*, end: i64*): f64` | `double strtod(const char*, char**)` | `end` 应为指针类型 |
-| 2 | `numeric/f32.ff` | 8 | `strtof(text: string*, end: i64*): f32` | `float strtof(const char*, char**)` | `end` 应为指针类型 |
+| 1 | `numeric/f64.ff` | 8 | `strtod(text: string*, end: i64*): f64` | `double strtod(const char*, char**)` | `end: i64*` → `end: int*` |
+| 2 | `numeric/f32.ff` | 8 | `strtof(text: string*, end: i64*): f32` | `float strtof(const char*, char**)` | `end: i64*` → `end: int*` |
 
 #### 2.1.5 Feng `int` ≠ C `int` 问题 [待优化]
 
-> Task 6 使 Feng 的 `int` 在 64 位平台上为 `i64`（64 位），但 C 的 `int` 始终为 32 位。以下 std extern 声明中参数或返回值的 C 类型为 32 位 `int`，但 Feng 声明为 `int`（64 位），存在 ABI 宽度不匹配。**此问题是否实际影响取决于 codegen 对 C ABI 边界的宽度转换处理**，需人工确认。
+> C 的 `int` 始终为 32 位，但 Feng 的 `int` 在 64 位平台上为 `i64`（64 位），存在 ABI 宽度不匹配。C ABI 明确为 32 位宽的 `int`，应使用 `i32`。
 
-| # | 文件 | 函数 | C 参数/返回值为 `int` (32 位) 的位置 |
-|---|------|------|-----------------------------------|
-| 1 | `io/stdio.ff` | `read`/`write` | `fd: int` |
-| 2 | `fs/File.ff` | `c_open` | `flags: int, mode: int` 和返回值 `int` |
-| 3 | `fs/File.ff` | `c_close` | `fd: int` 和返回值 `int` |
-| 4 | `fs/File.ff` | `c_access` | `mode: int` 和返回值 `int` |
-| 5 | `fs/File.ff` | `c_unlink`/`c_rename` | 返回值 `int` |
-| 6 | `fs/File.ff` | `fs_posix_fstat` | 返回值 `int` |
-| 7 | `fs/EntryInfo.ff` | `posix_stat` | 返回值 `int` |
-| 8 | `fs/Dir.ff` | `c_closedir`/`c_mkdir`/`c_rmdir` | 返回值 `int` |
-| 9 | `process/Process.ff` | `posix_exit` | `status: int` |
-| 10 | `process/Process.ff` | `getpid`/`getppid` | 返回值 `int` |
-| 11 | `process/Process.ff` | `pclose` | 返回值 `int` |
-| 12 | `process/Process.ff` | `posix_kill` | `pid: int, sig: int` 和返回值 `int` |
-| 13 | `time/TimeZone.ff` | `setenv` | `overwrite: int` 和返回值 `int` |
-| 14 | `time/TimeZone.ff` | `unsetenv` | 返回值 `int` |
-| 15 | `thread/Thread.ff` | `uv_thread_create`/`uv_thread_join`/`uv_mutex_init` 等 | 返回值 `int`（libuv 返回码） |
-| 16 | `thread/Thread.ff` | `uv_thread_getcpu` | 返回值 `int` |
-| 17 | `platform/SystemInfo.ff` | `uv_os_gethostname`/`uv_os_uname` | 返回值 `int` |
-| 18 | `platform/MemoryInfo.ff` | `uv_resident_set_memory` | 返回值 `int` |
-| 19 | `platform/CpuInfo.ff` | `uv_available_parallelism` | 返回值 `int` |
+| # | 文件 | 函数 | C 参数/返回值为 `int` (32 位) 的位置 | 优化方案 |
+|---|------|------|-----------------------------------|---------|
+| 1 | `io/stdio.ff` | `read`/`write` | `fd: int` | `fd: i32` |
+| 2 | `fs/File.ff` | `c_open` | `flags: int, mode: int` 和返回值 `int` | → `i32` |
+| 3 | `fs/File.ff` | `c_close` | `fd: int` 和返回值 `int` | → `i32` |
+| 4 | `fs/File.ff` | `c_access` | `mode: int` 和返回值 `int` | → `i32` |
+| 5 | `fs/File.ff` | `c_unlink`/`c_rename` | 返回值 `int` | → `i32` |
+| 6 | `fs/File.ff` | `fs_posix_fstat` | 返回值 `int` | → `i32` |
+| 7 | `fs/EntryInfo.ff` | `posix_stat` | 返回值 `int` | → `i32` |
+| 8 | `fs/Dir.ff` | `c_closedir`/`c_mkdir`/`c_rmdir` | 返回值 `int` | → `i32` |
+| 9 | `process/Process.ff` | `posix_exit` | `status: int` | `status: i32` |
+| 10 | `process/Process.ff` | `getpid`/`getppid` | 返回值 `int` | → `i32` |
+| 11 | `process/Process.ff` | `pclose` | 返回值 `int` | → `i32` |
+| 12 | `process/Process.ff` | `posix_kill` | `pid: int, sig: int` 和返回值 `int` | → `i32` |
+| 13 | `time/TimeZone.ff` | `setenv` | `overwrite: int` 和返回值 `int` | → `i32` |
+| 14 | `time/TimeZone.ff` | `unsetenv` | 返回值 `int` | → `i32` |
+| 15 | `thread/Thread.ff` | `uv_thread_create`/`uv_thread_join`/`uv_mutex_init` 等 | 返回值 `int`（libuv 返回码） | → `i32` |
+| 16 | `thread/Thread.ff` | `uv_thread_getcpu` | 返回值 `int` | → `i32` |
+| 17 | `platform/SystemInfo.ff` | `uv_os_gethostname`/`uv_os_uname` | 返回值 `int` | → `i32` |
+| 18 | `platform/MemoryInfo.ff` | `uv_resident_set_memory` | 返回值 `int` | → `i32` |
+| 19 | `platform/CpuInfo.ff` | `uv_available_parallelism` | 返回值 `int` | → `i32` |
 
 ### 2.2 语义不合理 [待优化]
 
@@ -156,17 +158,17 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 
 | # | 文件 | 位置 | 描述 |
 |---|------|------|------|
-| 1 | `thread/Thread.ff:60` | `seal var handle: i64` (Thread) | 存储 `uv_thread_t`（libuv opaque handle） |
-| 2 | `thread/Thread.ff:63` | `seal func Thread(handle: i64)` | 构造参数，同上 |
-| 3 | `thread/Thread.ff:76,110` | `tidBuf: i64[!]` | 存储 `uv_thread_t` |
-| 4 | `thread/Mutex.ff:23` | `seal let handle: i64` (Mutex) | 存储 `uv_mutex_t*` handle |
-| 5 | `thread/CondVar.ff:27` | `seal let handle: i64` (CondVar) | 存储 `uv_cond_t*` handle |
+| 1 | `thread/Thread.ff:60` | `seal var handle: i64` (Thread) | 存储 `uv_thread_t`（opaque handle），应为 `int` |
+| 2 | `thread/Thread.ff:63` | `seal func Thread(handle: i64)` | 构造参数，同上，应为 `int` |
+| 3 | `thread/Thread.ff:76,110` | `tidBuf: i64[!]` | 存储 `uv_thread_t`，应为 `int[!]` |
+| 4 | `thread/Mutex.ff:23` | `seal let handle: i64` (Mutex) | 存储 `uv_mutex_t*` handle，应为 `int` |
+| 5 | `thread/CondVar.ff:27` | `seal let handle: i64` (CondVar) | 存储 `uv_cond_t*` handle，应为 `int` |
 | 6 | `time/TimeZone.ff:41` | `gmtoff: i64` | 从 struct tm 读取的 `tm_gmtoff`（POSIX `long`，平台位宽） |
 | 7 | `time/TimeZone.ff:49` | `t: i64[!]` | `time_t` buffer（`time_t` 为平台位宽有符号整数） |
 | 8 | `text/RegExp.ff:65` | `PCRE2_UNSET: i64` | `~(size_t)0`，应为 `uint`（`PCRE2_SIZE` = `size_t`） |
-| 9 | `numeric/f64.ff:52` | `endRaw: i64` | `strtod` 的 `char**` endptr 存储（指针地址） |
-| 10 | `numeric/f32.ff:46` | `endRaw: i64` | `strtof` 的 `char**` endptr 存储（指针地址） |
-| 11 | `fs/Dir.ff:89` | `Dir.dir: i64` | 存储 `DIR*` 句柄 |
+| 9 | `numeric/f64.ff:52` | `endRaw: i64` | `strtod` 的 endptr 存储（指针地址），应为 `int` |
+| 10 | `numeric/f32.ff:46` | `endRaw: i64` | `strtof` 的 endptr 存储（指针地址），应为 `int` |
+| 11 | `fs/Dir.ff:89` | `Dir.dir: i64` | 存储 `DIR*` 句柄，应为 `int` |
 | 12 | `fs/Dir.ff:111` | `read(batchSize: i64)` | 批量读取数量参数 |
 | 13 | `fs/Dir.ff:117` | `count: i64` | 已读条目计数 |
 | 14 | `fs/Dir.ff:191,199,211` | `nameLen: i64`、`i: i64` | dirent 名称长度和循环变量 |
