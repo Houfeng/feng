@@ -17,7 +17,7 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 
 > runtime contract 定义于 `src/runtime/feng_runtime_contract.inc`，使用 `intptr_t` 表示平台位宽整数。std 中 `@runtime` extern 声明若使用 `i64`，在 32 位平台上 `int`→`i32` 而 `i64` 仍为 64 位，将导致 ABI 不匹配。
 
-### 1.1 ABI 声明不对齐 [待优化]
+### 1.1 ABI 声明不对齐 [已优化]
 
 | # | 文件 | 行 | 当前声明 | runtime contract 实际签名 | 不对齐的参数/返回值 |
 |---|------|----|---------|------------------------|-------------------|
@@ -38,7 +38,7 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 | 15 | `process/Process.ff` | 25 | `feng_pointer_get_scalar<T>(ptr: byte*): T` | 同 #4 | `ptr` |
 | 16 | `process/Process.ff` | 28 | `feng_pointer_get_scalar<T>(ptr: string*): T` | 同 #4 | `ptr` |
 
-### 1.2 语义不合理 [待优化]
+### 1.2 语义不合理 [已优化]
 
 > 以下变量/常量使用 `i64`，但语义上应与 runtime contract 的 `intptr_t` 对齐（平台位宽）。
 
