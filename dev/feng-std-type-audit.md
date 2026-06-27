@@ -77,14 +77,9 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 | 13 | `text/RegExp.ff` | 44 | `pcre2_get_error_message(..., buffer_size: i64): i32` | `int ...(PCRE2_SIZE)` | `buffer_size`→`uint` |
 | 14 | `text/RegExp.ff` | 48 | `pcre2_substitute(..., length: i64, startoffset: i64, ..., rlength: i64, ..., outlengthptr: i64*)` | 多个 `PCRE2_SIZE` | 所有 size 参数→`uint` |
 
-#### 2.1.2 time_t 类 [待优化]
+#### 2.1.2 time_t 类 [无需变更]
 
-> C 的 `time_t` 在现代 64 位系统上为 64 位有符号整数，与平台位宽一致。
-
-| # | 文件 | 行 | 当前声明 | C 实际签名 | 不对齐项 |
-|---|------|----|---------|-----------|---------|
-| 1 | `time/TimeZone.ff` | 7 | `time(tloc: i64*): i64` | `time_t time(time_t*)` | `tloc`→`int*`，返回值→`int` |
-| 2 | `time/TimeZone.ff` | 10 | `localtime_r(timep: i64*, result: i64*): i64*` | `struct tm* localtime_r(const time_t*, struct tm*)` | `timep`→`int*`，`result`/返回值为 opaque struct 指针 |
+> 已移至第三节「当前正确、无需变更的用法」。
 
 #### 2.1.3 不透明指针/句柄类 [待优化]
 
@@ -164,40 +159,38 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 | 4 | `thread/Mutex.ff:23` | `seal let handle: i64` (Mutex) | 存储 `uv_mutex_t*` handle，应为 `int` |
 | 5 | `thread/CondVar.ff:27` | `seal let handle: i64` (CondVar) | 存储 `uv_cond_t*` handle，应为 `int` |
 | 6 | `time/TimeZone.ff:41` | `gmtoff: i64` | 从 struct tm 读取的 `tm_gmtoff`（POSIX `long`，平台位宽） |
-| 7 | `time/TimeZone.ff:49` | `t: i64[!]` | `time_t` buffer（`time_t` 为平台位宽有符号整数） |
-| 8 | `text/RegExp.ff:65` | `PCRE2_UNSET: i64` | `~(size_t)0`，应为 `uint`（`PCRE2_SIZE` = `size_t`） |
-| 9 | `numeric/f64.ff:52` | `endRaw: i64` | `strtod` 的 endptr 存储（指针地址），应为 `int` |
-| 10 | `numeric/f32.ff:46` | `endRaw: i64` | `strtof` 的 endptr 存储（指针地址），应为 `int` |
-| 11 | `fs/Dir.ff:89` | `Dir.dir: i64` | 存储 `DIR*` 句柄，应为 `int` |
-| 12 | `fs/Dir.ff:111` | `read(batchSize: i64)` | 批量读取数量参数 |
-| 13 | `fs/Dir.ff:117` | `count: i64` | 已读条目计数 |
-| 14 | `fs/Dir.ff:191,199,211` | `nameLen: i64`、`i: i64` | dirent 名称长度和循环变量 |
-| 15 | `fs/Dir.ff:280-284` | `readDir()` 内部 | `i: i64` 循环、`batch.length()` 比较用 `(i64)0` |
-| 16 | `fs/File.ff:64,82` | `capacity == (i64)0`、`length == (i64)0` | `buffer.length()` 返回 `int`，却与 `(i64)0` 比较 |
-| 17 | `fs/File.ff:118-148` | `readLines()` 内部 | `i: i64` 循环、`(i64)lineBytes.size()` 强转、`(i64)lines.size()` 强转 |
-| 18 | `fs/File.ff:191-197` | `readAllBytes()` 内部 | `chunk: byte[:(i64)4096]`、`i: i64` 循环 |
-| 19 | `fs/EntryInfo.ff:254-262` | `makeNullTerminatedPath()` | `pathLen` 用 `i64`（`bytes.length()` 返回 `int`）、`i: i64` 循环 |
-| 20 | `time/TimeZone.ff:58-88` | `readSystemZoneId()` 内部 | `buf: byte[:(i64)256]`、`len`/`found`/`i`/`k`/`markerLen`/`idLen` 均为 `i64` |
-| 21 | `time/TimeZone.ff:112` | `tmBuf: i64[!] = i64[:TM_BUF_LONGS]` | tm buffer 声明 |
-| 22 | `time/DateTime.ff:178` | `tv: i64[!] = i64[:(i64)2]` | gettimeofday buffer |
-| 23 | `time/DateTime.ff:160,186` | `components: i32[:(i64)6]` | 字面量 `(i64)6` 应为 `(int)6` |
-| 24 | `time/DateTime.ff:828` | `components: i32[:(i64)6]` | 同上 |
-| 25 | `process/Process.ff:61` | `byte[:(i64)0]` | 字面量类型 |
-| 26 | `process/Process.ff:67,76` | `i: i64` 循环 | 遍历 `source.length()` / `arg.length()`（返回 `int`） |
-| 27 | `process/Process.ff:114` | `i: i64` 循环 | 遍历 `strlen` 返回值 |
-| 28 | `process/Process.ff:180` | `i: i64` 循环 | 遍历 `args.length()`（返回 `int`） |
-| 29 | `process/Process.ff:191,201` | `byte[:(i64)2]`、`byte[:(i64)4096]` | 字面量类型 |
-| 30 | `process/Process.ff:203-207` | `fread` 参数和循环 | `(i64)1`、`(i64)4096`、`j: i64` |
-| 31 | `io/stdio.ff:247` | `chunk: byte[:(int)4096]` → 后续 `count` 为 `i64` | `read()` 返回 `i64` 导致级联 |
-| 32 | `io/stdio.ff:259-270` | `readLine()` 内部 | `index: i64`、`(i64)1`、`(int)(index + (i64)1)` 强转 |
-| 33 | `text/RegExp.ff:149` | `groupArr: string[:(i64)ovCount]` | `ovCount` 为 `u32`，强转 `i64` |
-| 34 | `text/RegExp.ff:176` | `buf: byte[:(i64)256]` | 字面量类型 |
-| 35 | `text/RegExp.ff:288-327` | `findAll()` 内部 | `capacity: i64`、`count: i64`、`offset: i64`、`j: i64`、`k: i64` |
-| 36 | `text/RegExp.ff:337-369` | `split()` 内部 | `pos: i64` |
-| 37 | `text/RegExp.ff:399-433` | `substituteInternal()` 内部 | `outLen: i64`、`actualLen: i64` |
-| 38 | `text/RegExp.ff:117,122` | `Match.start: i64`、`Match.end: i64` | 匹配位置索引，语义为平台位宽 |
-| 39 | `platform/SystemInfo.ff:24-25` | `nameSize: i64[!] = i64[:(int)1]` | `size_t*` 参数，应为 `uint[!]` |
-| 40 | `platform/SystemInfo.ff:31` | `(int)nameSize[0]` | 需从 `i64` 强转为 `int` |
+| 7 | `text/RegExp.ff:65` | `PCRE2_UNSET: i64` | `~(size_t)0`，应为 `uint`（`PCRE2_SIZE` = `size_t`） |
+| 8 | `numeric/f64.ff:52` | `endRaw: i64` | `strtod` 的 endptr 存储（指针地址），应为 `int` |
+| 9 | `numeric/f32.ff:46` | `endRaw: i64` | `strtof` 的 endptr 存储（指针地址），应为 `int` |
+| 10 | `fs/Dir.ff:89` | `Dir.dir: i64` | 存储 `DIR*` 句柄，应为 `int` |
+| 11 | `fs/Dir.ff:111` | `read(batchSize: i64)` | 批量读取数量参数 |
+| 12 | `fs/Dir.ff:117` | `count: i64` | 已读条目计数 |
+| 13 | `fs/Dir.ff:191,199,211` | `nameLen: i64`、`i: i64` | dirent 名称长度和循环变量 |
+| 14 | `fs/Dir.ff:280-284` | `readDir()` 内部 | `i: i64` 循环、`batch.length()` 比较用 `(i64)0` |
+| 15 | `fs/File.ff:64,82` | `capacity == (i64)0`、`length == (i64)0` | `buffer.length()` 返回 `int`，却与 `(i64)0` 比较 |
+| 16 | `fs/File.ff:118-148` | `readLines()` 内部 | `i: i64` 循环、`(i64)lineBytes.size()` 强转、`(i64)lines.size()` 强转 |
+| 17 | `fs/File.ff:191-197` | `readAllBytes()` 内部 | `chunk: byte[:(i64)4096]`、`i: i64` 循环 |
+| 18 | `fs/EntryInfo.ff:254-262` | `makeNullTerminatedPath()` | `pathLen` 用 `i64`（`bytes.length()` 返回 `int`）、`i: i64` 循环 |
+| 19 | `time/TimeZone.ff:58-88` | `readSystemZoneId()` 内部 | `buf: byte[:(i64)256]`、`len`/`found`/`i`/`k`/`markerLen`/`idLen` 均为 `i64` |
+| 20 | `time/DateTime.ff:178` | `tv: i64[!] = i64[:(i64)2]` | gettimeofday buffer |
+| 21 | `time/DateTime.ff:160,186` | `components: i32[:(i64)6]` | 字面量 `(i64)6` 应为 `(int)6` |
+| 22 | `time/DateTime.ff:828` | `components: i32[:(i64)6]` | 同上 |
+| 23 | `process/Process.ff:61` | `byte[:(i64)0]` | 字面量类型 |
+| 24 | `process/Process.ff:67,76` | `i: i64` 循环 | 遍历 `source.length()` / `arg.length()`（返回 `int`） |
+| 25 | `process/Process.ff:114` | `i: i64` 循环 | 遍历 `strlen` 返回值 |
+| 26 | `process/Process.ff:180` | `i: i64` 循环 | 遍历 `args.length()`（返回 `int`） |
+| 27 | `process/Process.ff:191,201` | `byte[:(i64)2]`、`byte[:(i64)4096]` | 字面量类型 |
+| 28 | `process/Process.ff:203-207` | `fread` 参数和循环 | `(i64)1`、`(i64)4096`、`j: i64` |
+| 29 | `io/stdio.ff:247` | `chunk: byte[:(int)4096]` → 后续 `count` 为 `i64` | `read()` 返回 `i64` 导致级联 |
+| 30 | `io/stdio.ff:259-270` | `readLine()` 内部 | `index: i64`、`(i64)1`、`(int)(index + (i64)1)` 强转 |
+| 31 | `text/RegExp.ff:149` | `groupArr: string[:(i64)ovCount]` | `ovCount` 为 `u32`，强转 `i64` |
+| 32 | `text/RegExp.ff:176` | `buf: byte[:(i64)256]` | 字面量类型 |
+| 33 | `text/RegExp.ff:288-327` | `findAll()` 内部 | `capacity: i64`、`count: i64`、`offset: i64`、`j: i64`、`k: i64` |
+| 34 | `text/RegExp.ff:337-369` | `split()` 内部 | `pos: i64` |
+| 35 | `text/RegExp.ff:399-433` | `substituteInternal()` 内部 | `outLen: i64`、`actualLen: i64` |
+| 36 | `text/RegExp.ff:117,122` | `Match.start: i64`、`Match.end: i64` | 匹配位置索引，语义为平台位宽 |
+| 37 | `platform/SystemInfo.ff:24-25` | `nameSize: i64[!] = i64[:(int)1]` | `size_t*` 参数，应为 `uint[!]` |
+| 38 | `platform/SystemInfo.ff:31` | `(int)nameSize[0]` | 需从 `i64` 强转为 `int` |
 
 ---
 
@@ -219,3 +212,10 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 | struct stat buffer | `EntryInfo.ff`、`File.ff` | `statBuf: i64[!]` — 读取 struct stat 的 64 位字段，buffer 元素类型为 `i64` 正确 |
 | POSIX 文件类型掩码 | `EntryInfo.ff` | `S_IFMT`/`S_IFREG`/`S_IFDIR` 等 `i64` 常量 — 与 stat buffer 中读取的 `i64` 值比较，正确 |
 | stat 字段值 | `EntryInfo.ff` | `readStatInfo()` 中 `modeRaw`/`size`/`atime`/`mtime`/`ctime` 等 `i64` — struct stat 字段为 64 位，正确 |
+| time_t（C ABI 边界） | `TimeZone.ff` | `time()`/`localtime_r()` extern 声明保持 `i64` — C ABI 边界固定为 `i64`，与 `time_t` 在 64 位平台一致；std 内部代码使用 `int`，在 ABI 边界做 `i64` ↔ `int` 转换。64 位平台天然对齐；32 位平台 `time_t` 实际值恰好为安全 32 位，截断后值正确 |
+| time_t 中转缓冲区 | `TimeZone.ff` | `t: i64[!]`、`tmBuf: i64[!]` — 传给 extern `i64*` 参数的中转缓冲区，必须为 `i64[!]` 以匹配 C ABI 的 8 字节写入；读出后立即 `(int)` 转换 |
+
+> **time_t 代码注释要求**：优化实施时，涉及 `time_t` 的代码必须以注释说明清楚：
+> - extern 声明处：注释说明 `i64` 对应 C 的 `time_t`，是 C ABI 边界的固定宽度表示
+> - `i64` ↔ `int` 转换处：注释说明转换理由（C ABI 用 `i64`，std 语义用 `int` 平台位宽）
+> - `i64[!]` 缓冲区声明处：注释说明缓冲区为 `i64` 是为了匹配 extern `i64*` 参数，非语义类型
