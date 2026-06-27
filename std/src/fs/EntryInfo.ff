@@ -5,7 +5,7 @@ import std.text;
 
 // libc POSIX stat
 @cdecl("libc", "stat")
-extern func posix_stat(p: byte*, buf: i64*): int;
+extern func posix_stat(p: byte*, buf: i64*): i32;
 
 // Runtime helpers
 @runtime
@@ -209,9 +209,9 @@ open type EntryInfo {
    */
   open func stat(): StatInfo {
     let pathBytes = makeNullTerminatedPath(self.path);
-    let statBuf: i64[!] = i64[:(i64)16];
+    let statBuf: i64[!] = i64[:(int)16];
     let rc = posix_stat(&pathBytes, &statBuf);
-    if rc != 0 {
+    if rc != (i32)0 {
       throw "fs/stat-failed";
     }
     return readStatInfo(statBuf);
@@ -254,8 +254,8 @@ seal func entryKindFromDType(dtype: i64): EntryKind {
 seal func makeNullTerminatedPath(path: string): byte[!] {
   let pathBytes = feng_string_to_utf8_bytes(path);
   let pathLen = pathBytes.length();
-  let nameBuf: byte[!] = byte[:pathLen + (i64)1];
-  for var i: i64 = (i64)0; i < pathLen; i += (i64)1 {
+  let nameBuf: byte[!] = byte[:pathLen + (int)1];
+  for var i: int = (int)0; i < pathLen; i += (int)1 {
     nameBuf[i] = pathBytes[i];
   }
   nameBuf[pathLen] = (byte)0;

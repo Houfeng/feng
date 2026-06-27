@@ -10,16 +10,16 @@ extern func time(tloc: i64*): i64;
 extern func localtime_r(timep: i64*, result: i64*): i64*;
 
 @cdecl("libc")
-extern func setenv(name: string*, value: string*, overwrite: int): int;
+extern func setenv(name: string*, value: string*, overwrite: i32): i32;
 
 @cdecl("libc")
-extern func unsetenv(name: string*): int;
+extern func unsetenv(name: string*): i32;
 
 @cdecl("libc")
 extern func tzset(): void;
 
 @cdecl("libc")
-extern func readlink(path: string*, buf: byte*, bufsiz: i64): i64;
+extern func readlink(path: string*, buf: byte*, bufsiz: uint): int;
 
 // Runtime pointer primitives
 @runtime
@@ -38,7 +38,7 @@ seal let TM_GMTOFF_OFFSET: int = (int)40;
  */
 seal func readGmtOffset(tmBuf: i64[!]): i32 {
   let gmtoffPtr = feng_pointer_move(&tmBuf, TM_GMTOFF_OFFSET);
-  let gmtoff: i64 = feng_pointer_get_scalar<i64>(gmtoffPtr);
+  let gmtoff: int = (int)feng_pointer_get_scalar<i64>(gmtoffPtr);
   return (i32)gmtoff;
 }
 
@@ -57,32 +57,32 @@ seal func fillLocalTm(tmBuf: i64[!]) {
  */
 seal func readSystemZoneId(): string {
   let path = "/etc/localtime";
-  let buf: byte[!] = byte[:(i64)256];
-  let len = readlink(&path, &buf, (i64)256);
-  if len <= (i64)0 {
+  let buf: byte[!] = byte[:(int)256];
+  let len = readlink(&path, &buf, (uint)256);
+  if len <= (int)0 {
     throw "time/timezone/readlink-failed";
   }
   // "zoneinfo/" = [122, 111, 110, 101, 105, 110, 102, 111, 47], length = 9
-  let markerLen: i64 = (i64)9;
-  var found: i64 = (i64) - 1;
-  var i: i64 = (i64)0;
+  let markerLen: int = (int)9;
+  var found: int = (int)-1;
+  var i: int = (int)0;
   while i <= len - markerLen {
-    if buf[i] == (byte)122 && buf[i + (i64)1] == (byte)111
-    && buf[i + (i64)2] == (byte)110 && buf[i + (i64)3] == (byte)101
-    && buf[i + (i64)4] == (byte)105 && buf[i + (i64)5] == (byte)110
-    && buf[i + (i64)6] == (byte)102 && buf[i + (i64)7] == (byte)111
-    && buf[i + (i64)8] == (byte)47 {
+    if buf[i] == (byte)122 && buf[i + (int)1] == (byte)111
+    && buf[i + (int)2] == (byte)110 && buf[i + (int)3] == (byte)101
+    && buf[i + (int)4] == (byte)105 && buf[i + (int)5] == (byte)110
+    && buf[i + (int)6] == (byte)102 && buf[i + (int)7] == (byte)111
+    && buf[i + (int)8] == (byte)47 {
       found = i + markerLen;
       break;
     }
-    i += (i64)1;
+    i += (int)1;
   }
-  if found < (i64)0 {
+  if found < (int)0 {
     throw "time/timezone/invalid-symlink";
   }
   let idLen = len - found;
   let idBytes: byte[!] = byte[:idLen];
-  for var k: i64 = (i64)0; k < idLen; k += (i64)1 {
+  for var k: int = (int)0; k < idLen; k += (int)1 {
     idBytes[k] = buf[found + k];
   }
   return string.fromUtf8Bytes((byte[])idBytes);

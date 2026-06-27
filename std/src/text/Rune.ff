@@ -3,7 +3,7 @@ open module std.text;
 import std.collections;
 
 @cdecl("feng_std_unistring", "u8_mbsnlen")
-extern func u8_mbsnlen(s: string*, n: int): int;
+extern func u8_mbsnlen(s: string*, n: uint): uint;
 
 @cdecl("feng_std_unistring", "u8_next")
 extern func u8_next(puc: u32*, s: string*): string*;
@@ -46,7 +46,7 @@ open type RuneView {
    * @return rune count
    */
   open func length(): int {
-    return u8_mbsnlen(&self.text, self.text.length());
+    return (int)u8_mbsnlen(&self.text, (uint)self.text.length());
   }
 
   /**

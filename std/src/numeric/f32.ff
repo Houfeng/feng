@@ -5,10 +5,10 @@ import std.text;
 import std.collections;
 
 @cdecl("libc")
-extern func strtof(text: string*, end: i64*): f32;
+extern func strtof(text: string*, end: int*): f32;
 
 @cdecl("libc", "snprintf", 3)
-extern func snprintf_f32(buf: byte*, size: i64, fmt: byte*, value: f32): i32;
+extern func snprintf_f32(buf: byte*, size: uint, fmt: byte*, value: f32): i32;
 
 /**
  * Extends f32 with conversion operations.
@@ -25,7 +25,7 @@ open fit f32: Display {
     fmt[0] = (byte)37;  // '%'
     fmt[1] = (byte)103; // 'g'
     fmt[2] = (byte)0;   // '\0'
-    let len = snprintf_f32(&buf, (i64)32, &fmt, self);
+    let len = snprintf_f32(&buf, (uint)32, &fmt, self);
     let result: byte[] = ((byte[])buf).clone((int)0, (int)len);
     return string.fromUtf8Bytes(result);
   }
@@ -43,9 +43,9 @@ open fit f32: Display {
     if len == (int)0 {
       throw "Invalid f32 string: empty";
     }
-    var endRaw: i64 = 0;
+    var endRaw: int = 0;
     let result = strtof(&text, &endRaw);
-    let endPos: i64* = feng_pointer_get_pointer(&endRaw);
+    let endPos: int* = feng_pointer_get_pointer(&endRaw);
     let endByte: byte = feng_pointer_get_scalar<byte>(endPos);
     if endByte != (byte)0 {
       throw "Invalid f32 string: invalid character";

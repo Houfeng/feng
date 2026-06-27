@@ -58,7 +58,7 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 
 ### 2.1 ABI 声明不对齐
 
-#### 2.1.1 size_t / ssize_t / PCRE2_SIZE 类 [待优化]
+#### 2.1.1 size_t / ssize_t / PCRE2_SIZE 类 [已优化]
 
 > C 的 `size_t` 为无符号平台位宽（Feng `uint`），`ssize_t` 为有符号平台位宽（Feng `int`），`PCRE2_SIZE` 等同于 `size_t`。当前均声明为 `i64`（有符号固定 64 位），在符号性和平台位宽上均不对齐。
 
@@ -82,7 +82,7 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 
 > **time_t 说明**：`time()`/`localtime_r()` 的 extern 声明固定使用 `i64`，无需变更。原因：C 的 `time_t` 是独立于 `intptr_t` 的 C 类型，编译器无法将 Feng 的 `int`（平台位宽）自动映射到 C 的 `time_t`，因此 extern 声明必须用显式固定宽度类型精确匹配 C ABI。64 位平台 `time_t` = 64 位，与 `i64` 完全对齐。32 位平台存在 Y2038 问题：传统 32 位 `time_t`（有符号 i32）在 2038-01-19 溢出，现代 32 位 Linux 已逐步迁移到 64 位 `time_t`。因此 extern 声明统一使用 `i64`：对于已迁移到 64 位 `time_t` 的 32 位系统 ABI 天然对齐；对于仍使用 32 位 `time_t` 的旧系统存在 ABI 宽度不匹配，但当前时间戳值仍在 i32 安全范围内，截断后值正确，Y2038 之前不构成实际风险。上层 std 代码按语义使用 `int`（平台位宽），仅在 ABI 边界做 `i64` ↔ `int` 转换。实施时相关代码须添加注释说明：extern 声明处注释 `i64` 对应 C `time_t`；`i64` ↔ `int` 转换处注释转换理由；`i64[!]` 中转缓冲区处注释其为匹配 extern `i64*` 参数，非语义类型。
 
-#### 2.1.2 不透明指针/句柄类 [待优化]
+#### 2.1.2 不透明指针/句柄类 [已优化]
 
 > C API 返回或接收不透明指针（`DIR*`、`uv_mutex_t*`、`pcre2_code*`、`pthread_t` 等），本质为指针地址，应为平台位宽。Feng 中有两种表示方式：
 > 1. **空结构体指针**（如 `Pcre2MatchData*`、`Dirent*`、`CStream*`）— 已正确，无需改动
@@ -111,9 +111,9 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 | 19 | `text/RegExp.ff` | 18 | `pcre2_compile(..., cContext: i64): i64` | `pcre2_compile_context*`→`pcre2_code*` | `cContext: int`，返回值→`int` |
 | 20 | `text/RegExp.ff` | 21 | `pcre2_code_free(code: i64): void` | `pcre2_code*` | `code: int` |
 | 21 | `text/RegExp.ff` | 25 | `pcre2_match_data_create_from_pattern(code: i64, gContext: i64)` | `pcre2_code*`, `pcre2_general_context*` | `code: int`，`gContext: int` |
-| 22 | `text/RegExp.ff` | 38 | `pcre2_get_ovector_pointer(...): i64*` | 返回 `PCRE2_SIZE*` | 返回值→`uint*` |
+| 22 | `text/RegExp.ff` | 38 | `pcre2_get_ovector_pointer(...): i64*` | 返回 `PCRE2_SIZE*` | 返回值→`int*`（`int` = `intptr_t` 与 `i64` 同宽，ABI 兼容；runtime `feng_pointer_move` 无 `uint*` 重载，且 Feng 不允许指针类型转换） |
 
-#### 2.1.3 char** (endptr) 类 [待优化]
+#### 2.1.3 char** (endptr) 类 [已优化]
 
 > `strtod`/`strtof` 的 endptr 参数为 `char**`（指针的指针）。Feng 不支持指针的指针，endptr 存储的是指针地址（平台位宽），将 `i64*` 优化为 `int*` 即可与平台位宽对齐。
 
@@ -122,7 +122,7 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 | 1 | `numeric/f64.ff` | 8 | `strtod(text: string*, end: i64*): f64` | `double strtod(const char*, char**)` | `end: i64*` → `end: int*` |
 | 2 | `numeric/f32.ff` | 8 | `strtof(text: string*, end: i64*): f32` | `float strtof(const char*, char**)` | `end: i64*` → `end: int*` |
 
-#### 2.1.4 Feng `int` ≠ C `int` 问题 [待优化]
+#### 2.1.4 Feng `int` ≠ C `int` 问题 [已优化]
 
 > C 的 `int` 始终为 32 位，但 Feng 的 `int` 在 64 位平台上为 `i64`（64 位），存在 ABI 宽度不匹配。C ABI 明确为 32 位宽的 `int`，应使用 `i32`。
 
@@ -148,7 +148,7 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 | 18 | `platform/MemoryInfo.ff` | `uv_resident_set_memory` | 返回值 `int` | → `i32` |
 | 19 | `platform/CpuInfo.ff` | `uv_available_parallelism` | 返回值 `int` | → `i32` |
 
-### 2.2 语义不合理 [待优化]
+### 2.2 语义不合理 [已优化]
 
 > 以下为非 extern 的内部代码，使用 `i64` 作为 size/length/count/index/offset/handle，语义上应为平台位宽。在 64 位平台上无行为差异，但不符合 `int` 平台相关的定位。
 
@@ -160,7 +160,7 @@ Task 6 完成后，`int` 在 64 位平台上映射为 `i64`。本审计检查 st
 | 4 | `thread/Mutex.ff:23` | `seal let handle: i64` (Mutex) | 存储 `uv_mutex_t*` handle，应为 `int` |
 | 5 | `thread/CondVar.ff:27` | `seal let handle: i64` (CondVar) | 存储 `uv_cond_t*` handle，应为 `int` |
 | 6 | `time/TimeZone.ff:41` | `gmtoff: i64` | 从 struct tm 读取的 `tm_gmtoff`（POSIX `long`，平台位宽） |
-| 7 | `text/RegExp.ff:65` | `PCRE2_UNSET: i64` | `~(size_t)0`，应为 `uint`（`PCRE2_SIZE` = `size_t`） |
+| 7 | `text/RegExp.ff:65` | `PCRE2_UNSET: i64` | `~(size_t)0`，改为 `int = (int)-1`（位模式全 1，与 `PCRE2_UNSET` 一致；Feng 编译器不接受 `(uint)-1` 字面量表达式） |
 | 8 | `numeric/f64.ff:52` | `endRaw: i64` | `strtod` 的 endptr 存储（指针地址），应为 `int` |
 | 9 | `numeric/f32.ff:46` | `endRaw: i64` | `strtof` 的 endptr 存储（指针地址），应为 `int` |
 | 10 | `fs/Dir.ff:89` | `Dir.dir: i64` | 存储 `DIR*` 句柄，应为 `int` |

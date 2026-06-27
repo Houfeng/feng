@@ -157,7 +157,7 @@ open type DateTime {
     };
     var remainingMs: i32 = (i32)(milliseconds - seconds * (i64)1000);
 
-    let components: i32[!] = i32[:(i64)6];
+    let components: i32[!] = i32[:(int)6];
     secondsToComponents(seconds, components);
 
     self.year = components[0];
@@ -175,7 +175,7 @@ open type DateTime {
    * Construct a DateTime using the current time (UTC)
    */
   func DateTime() {
-    let tv: i64[!] = i64[:(i64)2];
+    let tv: i64[!] = i64[:(int)2];
     let rc = uv_gettimeofday(&tv);
     if rc != 0 {
       throw "time/datetime/gettimeofday";
@@ -183,7 +183,7 @@ open type DateTime {
     let seconds: i64 = tv[0];
     let microseconds: i32 = (i32)tv[1];
 
-    let components: i32[!] = i32[:(i64)6];
+    let components: i32[!] = i32[:(int)6];
     secondsToComponents(seconds, components);
 
     self.year = components[0];
@@ -825,7 +825,7 @@ open type DateTime {
     };
     let remainingMillisecond: i32 = (i32)(milliseconds - seconds * (i64)1000);
 
-    let components: i32[!] = i32[:(i64)6];
+    let components: i32[!] = i32[:(int)6];
     secondsToComponents(seconds, components);
 
     return DateTime(true) {

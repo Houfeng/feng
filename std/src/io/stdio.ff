@@ -5,10 +5,10 @@ import std.collections;
 import std.text;
 
 @cdecl("libc")
-extern func read(fd: int, buf: byte*, count: i64): i64;
+extern func read(fd: i32, buf: byte*, count: uint): int;
 
 @cdecl("libc")
-extern func write(fd: int, buf: byte*, count: i64): i64;
+extern func write(fd: i32, buf: byte*, count: uint): int;
 
 @runtime
 extern func feng_string_to_utf8_bytes(value: string): byte[];
@@ -127,10 +127,10 @@ open type Stdio {
 	 * @param buffer - writable destination buffer
 	 * @return actual bytes read, `0` on EOF, or a negative value on error
 	 */
-	open func read(buffer: byte[!]): i64 {
+	open func read(buffer: byte[!]): int {
 		let capacity = buffer.length();
 		if capacity == (int)0 {
-			return (i64)0;
+			return (int)0;
 		}
 
 		let pendingWritten = self.consumePending(buffer);
@@ -139,8 +139,8 @@ open type Stdio {
 		}
 
 		if pendingWritten == (int)0 {
-			let libcRead = read(self.inputFd, &buffer, capacity);
-			if libcRead < (i64)0 {
+			let libcRead = read((i32)self.inputFd, &buffer, (uint)capacity);
+			if libcRead < (int)0 {
 				return libcRead;
 			}
 			return libcRead;
@@ -148,8 +148,8 @@ open type Stdio {
 
 		let remaining = capacity - pendingWritten;
 		let tail: byte[!] = byte[:remaining];
-		let libcRead = read(self.inputFd, &tail, remaining);
-		if libcRead < (i64)0 {
+		let libcRead = read((i32)self.inputFd, &tail, (uint)remaining);
+		if libcRead < (int)0 {
 			if pendingWritten > (int)0 {
 				return pendingWritten;
 			}
@@ -168,12 +168,12 @@ open type Stdio {
 	 * @param bytes - bytes to write
 	 * @return actual bytes written, or a negative value on error
 	 */
-	open func write(bytes: byte[]): i64 {
+	open func write(bytes: byte[]): int {
 		let length = bytes.length();
 		if length == (int)0 {
-			return (i64)0;
+			return (int)0;
 		}
-		return write(self.outputFd, &bytes, length);
+		return write((i32)self.outputFd, &bytes, (uint)length);
 	}
 
 	/**
@@ -181,7 +181,7 @@ open type Stdio {
 	 * @param text - UTF-8 text to write
 	 * @return actual bytes written, or a negative value on error
 	 */
-	open func write(text: string): i64 {
+	open func write(text: string): int {
 		return self.write(feng_string_to_utf8_bytes(text));
 	}
 
@@ -190,7 +190,7 @@ open type Stdio {
 	 * @param text - UTF-8 text written before the trailing newline
 	 * @return actual bytes written, including the trailing newline, or a negative value on error
 	 */
-	open func writeLine(text: string): i64 {
+	open func writeLine(text: string): int {
 		let bytes = feng_string_to_utf8_bytes(text);
 		let line = appendTrailingNewline(bytes);
 		return self.write(line);
@@ -201,12 +201,12 @@ open type Stdio {
 	 * @param bytes - bytes to write
 	 * @return actual bytes written, or a negative value on error
 	 */
-	open func writeError(bytes: byte[]): i64 {
+	open func writeError(bytes: byte[]): int {
 		let length = bytes.length();
 		if length == (int)0 {
-			return (i64)0;
+			return (int)0;
 		}
-		return write(self.errorFd, &bytes, length);
+		return write((i32)self.errorFd, &bytes, (uint)length);
 	}
 
 	/**
@@ -214,7 +214,7 @@ open type Stdio {
 	 * @param text - UTF-8 text to write
 	 * @return actual bytes written, or a negative value on error
 	 */
-	open func writeError(text: string): i64 {
+	open func writeError(text: string): int {
 		return self.writeError(feng_string_to_utf8_bytes(text));
 	}
 
@@ -223,7 +223,7 @@ open type Stdio {
 	 * @param bytes - bytes to write before the trailing newline
 	 * @return actual bytes written, including the trailing newline, or a negative value on error
 	 */
-	open func writeErrorLine(bytes: byte[]): i64 {
+	open func writeErrorLine(bytes: byte[]): int {
 		let line = appendTrailingNewline(bytes);
 		return self.writeError(line);
 	}
@@ -233,7 +233,7 @@ open type Stdio {
 	 * @param text - UTF-8 text written before the trailing newline
 	 * @return actual bytes written, including the trailing newline, or a negative value on error
 	 */
-	open func writeErrorLine(text: string): i64 {
+	open func writeErrorLine(text: string): int {
 		return self.writeErrorLine(feng_string_to_utf8_bytes(text));
 	}
 
@@ -249,25 +249,25 @@ open type Stdio {
 
 		while !foundNewline {
 			let count = self.read(chunk);
-			if count < (i64)0 {
+			if count < (int)0 {
 				throw "Stdio read failed";
 			}
-			if count == (i64)0 {
+			if count == (int)0 {
 				break;
 			}
 
-			var index: i64 = (i64)0;
+			var index: int = (int)0;
 			while index < count {
 				let current = chunk[index];
 				if current == (byte)10 {
-					self.savePending(chunk, (int)(index + (i64)1), (int)count);
+					self.savePending(chunk, index + (int)1, count);
 					foundNewline = true;
 					break;
 				}
 				if current != (byte)13 {
 					line.add(current);
 				}
-				index += (i64)1;
+				index += (int)1;
 			}
 		}
 
@@ -295,7 +295,7 @@ open func readLine(): string {
  * @param text - UTF-8 text written before the trailing newline
  * @return actual bytes written, including the trailing newline, or a negative value on error
  */
-open func writeLine(text: string): i64 {
+open func writeLine(text: string): int {
 	return stdio.writeLine(text);
 }
 
@@ -305,7 +305,7 @@ open func writeLine(text: string): i64 {
  * @param args - zero-based interpolation arguments
  * @return total bytes written
  */
-open func print(fmt: string, args: string...): i64 {
+open func print(fmt: string, args: string...): int {
 	let rendered = renderFormattedBytes(fmt, args);
 	return stdio.write(rendered);
 }
@@ -316,7 +316,7 @@ open func print(fmt: string, args: string...): i64 {
  * @param args - zero-based interpolation arguments
  * @return total bytes written, including the trailing newline
  */
-open func println(fmt: string, args: string...): i64 {
+open func println(fmt: string, args: string...): int {
 	let text = renderFormattedString(fmt, args);
 	return stdio.writeLine(text);
 }
@@ -327,7 +327,7 @@ open func println(fmt: string, args: string...): i64 {
  * @param args - zero-based Display interpolation arguments
  * @return total bytes written
  */
-open func print<T: Display>(fmt: string, first: T, args: T...): i64 {
+open func print<T: Display>(fmt: string, first: T, args: T...): int {
 	let stringArgs: string[!] = string[:args.length() + (int)1];
 	stringArgs[0] = first.toString();
 	for var index: int = (int)0; index < args.length(); index += (int)1 {
@@ -343,7 +343,7 @@ open func print<T: Display>(fmt: string, first: T, args: T...): i64 {
  * @param args - zero-based Display interpolation arguments
  * @return total bytes written, including the trailing newline
  */
-open func println<T: Display>(fmt: string, first: T, args: T...): i64 {
+open func println<T: Display>(fmt: string, first: T, args: T...): int {
 	let stringArgs: string[!] = string[:args.length() + (int)1];
 	stringArgs[0] = first.toString();
 	for var index: int = (int)0; index < args.length(); index += (int)1 {

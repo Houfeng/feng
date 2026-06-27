@@ -10,7 +10,7 @@ import std.collections;
  */
 seal func appendFormatBytes(target: List<byte>, values: byte[]) {
 	let length = values.length();
-	for var index: i64 = (i64)0; index < length; index += (i64)1 {
+	for var index: int = (int)0; index < length; index += (int)1 {
 		target.add(values[index]);
 	}
 }
@@ -27,24 +27,24 @@ open func renderFormattedBytes(format: string, args: string[]): byte[] {
 	let encodedArgList = List<byte[]>();
 	let argsLength = args.length();
 
-	for var argIndex: i64 = (i64)0; argIndex < argsLength; argIndex += (i64)1 {
+	for var argIndex: int = (int)0; argIndex < argsLength; argIndex += (int)1 {
 		encodedArgList.add(feng_string_to_utf8_bytes(args[argIndex]));
 	}
 
 	let encodedArgs = encodedArgList.entries();
 	let formatLength = formatBytes.length();
-	var index: i64 = (i64)0;
+	var index: int = (int)0;
 
 	while index < formatLength {
 		let current = formatBytes[index];
 		if current != (byte)123 {
 			output.add(current);
-			index += (i64)1;
+			index += (int)1;
 			continue;
 		}
 
-		var closing: i64 = index + (i64)1;
-		var placeholderIndex: i64 = (i64)0;
+		var closing: int = index + (int)1;
+		var placeholderIndex: int = (int)0;
 		var hasDigits = false;
 		var isValid = true;
 
@@ -58,18 +58,18 @@ open func renderFormattedBytes(format: string, args: string[]): byte[] {
 				break;
 			}
 			hasDigits = true;
-			placeholderIndex = placeholderIndex * (i64)10 + ((i64)token - (i64)48);
-			closing += (i64)1;
+			placeholderIndex = placeholderIndex * (int)10 + ((int)token - (int)48);
+			closing += (int)1;
 		}
 
 		if isValid && hasDigits && closing < formatLength && formatBytes[closing] == (byte)125 && placeholderIndex < encodedArgs.length() {
 			appendFormatBytes(output, encodedArgs[placeholderIndex]);
-			index = closing + (i64)1;
+			index = closing + (int)1;
 			continue;
 		}
 
 		output.add(current);
-		index += (i64)1;
+		index += (int)1;
 	}
 
 	return output.entries();
@@ -119,7 +119,7 @@ open fit string {
 	 */
 	open static func format<T: Display>(format: string, args: T[]): string {
 		let stringArgs: string[!] = string[:args.length()];
-		for var i: i64 = (i64)0; i < args.length(); i += (i64)1 {
+		for var i: int = (int)0; i < args.length(); i += (int)1 {
 			stringArgs[i] = args[i].toString();
 		}
 		return renderFormattedString(format, (string[])stringArgs);
@@ -133,10 +133,10 @@ open fit string {
 	 * @return formatted text without any implicit trailing newline
 	 */
 	open static func format<T: Display>(format: string, first: T, args: T...): string {
-		let stringArgs: string[!] = string[:args.length() + (i64)1];
+		let stringArgs: string[!] = string[:args.length() + (int)1];
 		stringArgs[0] = first.toString();
-		for var i: i64 = (i64)0; i < args.length(); i += (i64)1 {
-			stringArgs[i + (i64)1] = args[i].toString();
+		for var i: int = (int)0; i < args.length(); i += (int)1 {
+			stringArgs[i + (int)1] = args[i].toString();
 		}
 		return string.format(format, (string[])stringArgs);
 	}

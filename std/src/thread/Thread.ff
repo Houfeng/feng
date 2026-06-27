@@ -9,25 +9,25 @@ extern func feng_alloc(size: int): int;
 extern func feng_free(ptr: int): void;
 
 @cdecl("feng_std_uv", "uv_thread_create")
-extern func uv_thread_create(tid: i64*, entry: ThreadAbiEntry*, arg: i64): int;
+extern func uv_thread_create(tid: int*, entry: ThreadAbiEntry*, arg: int): i32;
 
 @cdecl("feng_std_uv", "uv_thread_join")
-extern func uv_thread_join(tid: i64*): int;
+extern func uv_thread_join(tid: int*): i32;
 
 @cdecl("feng_std_uv", "uv_thread_self")
-extern func uv_thread_self(): i64;
+extern func uv_thread_self(): int;
 
 @cdecl("feng_std_uv", "uv_thread_getcpu")
-extern func uv_thread_getcpu(): int;
+extern func uv_thread_getcpu(): i32;
 
 @cdecl("libc")
-extern func usleep(usec: u32): int;
+extern func usleep(usec: u32): i32;
 
 @cdecl("libc", "sleep")
 extern func posix_sleep(seconds: u32): u32;
 
 @abi
-spec ThreadAbiEntry(arg: i64): void;
+spec ThreadAbiEntry(arg: int): void;
 
 seal var spawnLock: int = (int)0;
 seal var spawnCond: int = (int)0;
@@ -45,7 +45,7 @@ seal func ensureSpawnInit(): void {
 }
 
 @abi
-func threadTrampoline(arg: i64): void {
+func threadTrampoline(arg: int): void {
   let fn = spawnFn;
   spawnReady = true;
   uv_cond_signal(spawnCond);
@@ -57,10 +57,10 @@ func threadTrampoline(arg: i64): void {
  */
 open type Thread {
 
-  seal var handle: i64;
+  seal var handle: int;
   seal var joined: bool;
 
-  seal func Thread(handle: i64) {
+  seal func Thread(handle: int) {
     self.handle = handle;
     self.joined = false;
   }
@@ -73,8 +73,8 @@ open type Thread {
     uv_mutex_lock(spawnLock);
     spawnFn = fn;
     spawnReady = false;
-    let tidBuf: i64[!] = i64[:(i64)1];
-    let result = uv_thread_create(&tidBuf, &threadTrampoline, (i64)0);
+    let tidBuf: int[!] = int[:(int)1];
+    let result = uv_thread_create(&tidBuf, &threadTrampoline, (int)0);
     if result != 0 {
       uv_mutex_unlock(spawnLock);
       throw "thread/spawn-failed";
@@ -89,7 +89,7 @@ open type Thread {
   /**
    * Returns the thread ID of the current thread.
    */
-  open static func currentId(): i64 {
+  open static func currentId(): int {
     return uv_thread_self();
   }
 
@@ -97,7 +97,7 @@ open type Thread {
    * Returns the CPU core number that the current thread is running on.
    */
   open static func currentCpu(): int {
-    return uv_thread_getcpu();
+    return (int)uv_thread_getcpu();
   }
 
   /**
@@ -107,7 +107,7 @@ open type Thread {
     if self.joined {
       return;
     }
-    let tidBuf: i64[!] = i64[:(i64)1];
+    let tidBuf: int[!] = int[:(int)1];
     tidBuf[0] = self.handle;
     let result = uv_thread_join(&tidBuf);
     if result != 0 {

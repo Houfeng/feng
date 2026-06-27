@@ -1,22 +1,22 @@
 open module std.thread;
 
 @cdecl("feng_std_uv", "uv_cond_init")
-extern func uv_cond_init(handle: i64): int;
+extern func uv_cond_init(handle: int): i32;
 
 @cdecl("feng_std_uv", "uv_cond_destroy")
-extern func uv_cond_destroy(handle: i64): void;
+extern func uv_cond_destroy(handle: int): void;
 
 @cdecl("feng_std_uv", "uv_cond_signal")
-extern func uv_cond_signal(handle: i64): void;
+extern func uv_cond_signal(handle: int): void;
 
 @cdecl("feng_std_uv", "uv_cond_broadcast")
-extern func uv_cond_broadcast(handle: i64): void;
+extern func uv_cond_broadcast(handle: int): void;
 
 @cdecl("feng_std_uv", "uv_cond_wait")
-extern func uv_cond_wait(cond: i64, mutex: i64): void;
+extern func uv_cond_wait(cond: int, mutex: int): void;
 
 @cdecl("feng_std_uv", "uv_cond_timedwait")
-extern func uv_cond_timedwait(cond: i64, mutex: i64, timeout: u64): int;
+extern func uv_cond_timedwait(cond: int, mutex: int, timeout: u64): i32;
 
 /**
  * A condition variable for thread synchronization.
@@ -24,14 +24,14 @@ extern func uv_cond_timedwait(cond: i64, mutex: i64, timeout: u64): int;
  */
 open type CondVar {
 
-  seal let handle: i64;
+  seal let handle: int;
 
   /**
    * Creates a new condition variable.
    */
   open func CondVar() {
-    self.handle = feng_alloc((i64)48);
-    if self.handle == (i64)0 {
+    self.handle = feng_alloc((int)48);
+    if self.handle == (int)0 {
       throw "condvar/alloc-failed";
     }
     let result = uv_cond_init(self.handle);

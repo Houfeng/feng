@@ -28,19 +28,19 @@ extern func feng_pointer_get_scalar<T>(ptr: byte*): T;
 extern func feng_pointer_get_scalar<T>(ptr: string*): T;
 
 @cdecl("libc", "_exit")
-extern func posix_exit(status: int): void;
+extern func posix_exit(status: i32): void;
 
 @cdecl("libc")
-extern func getpid(): int;
+extern func getpid(): i32;
 
 @cdecl("libc")
-extern func getppid(): int;
+extern func getppid(): i32;
 
 @cdecl("libc")
 extern func getenv(name: string*): string*;
 
 @cdecl("libc")
-extern func strlen(s: string*): i64;
+extern func strlen(s: string*): uint;
 
 @abi
 seal type CStream {}
@@ -49,22 +49,22 @@ seal type CStream {}
 extern func popen(command: byte*, mode: byte*): CStream*;
 
 @cdecl("libc")
-extern func fread(ptr: byte*, size: i64, nmemb: i64, stream: CStream*): i64;
+extern func fread(ptr: byte*, size: uint, nmemb: uint, stream: CStream*): uint;
 
 @cdecl("libc")
-extern func pclose(stream: CStream*): int;
+extern func pclose(stream: CStream*): i32;
 
 @cdecl("libc", "kill")
-extern func posix_kill(pid: int, sig: int): int;
+extern func posix_kill(pid: i32, sig: i32): i32;
 
 seal func emptyBytes(): byte[] {
-  let items: byte[!] = byte[:(i64)0];
+  let items: byte[!] = byte[:(int)0];
   return (byte[])items;
 }
 
 seal func appendToList(target: List<byte>, source: byte[]) {
   let len = source.length();
-  for var i: i64 = (i64)0; i < len; i += (i64)1 {
+  for var i: int = (int)0; i < len; i += (int)1 {
     target.add(source[i]);
   }
 }
@@ -73,7 +73,7 @@ seal func shellEscape(arg: byte[]): byte[] {
   let result = List<byte>();
   result.add((byte)39);
   let len = arg.length();
-  for var i: i64 = (i64)0; i < len; i += (i64)1 {
+  for var i: int = (int)0; i < len; i += (int)1 {
     let b = arg[i];
     if b == (byte)39 {
       result.add((byte)39);
@@ -111,8 +111,8 @@ open type Process {
     }
     let len = strlen(valuePtr);
     let result: byte[!] = byte[:len];
-    for var i: i64 = (i64)0; i < len; i += (i64)1 {
-      let ptr: string* = feng_pointer_move(valuePtr, i);
+    for var i: uint = (uint)0; i < len; i += (uint)1 {
+      let ptr: string* = feng_pointer_move(valuePtr, (int)i);
       result[i] = feng_pointer_get_scalar<byte>(ptr);
     }
     return string.fromUtf8Bytes((byte[])result);
@@ -131,21 +131,21 @@ open type Process {
    * Exits the current process with the given exit code.
    */
   open static func exit(code: int): void {
-    posix_exit(code);
+    posix_exit((i32)code);
   }
 
   /**
    * Returns the PID of the current process.
    */
   open static func currentId(): int {
-    return getpid();
+    return (int)getpid();
   }
 
   /**
    * Returns the PID of the parent process.
    */
   open static func parentId(): int {
-    return getppid();
+    return (int)getppid();
   }
 
   /**
@@ -166,8 +166,8 @@ open type Process {
   seal func Process(path: string, args: string[]) {
     self.path = path;
     self.args = args;
-    self.pid = -1;
-    self.exitStatus = -1;
+    self.pid = (int)-1;
+    self.exitStatus = (int)-1;
     self.finished = false;
     self.stdoutData = emptyBytes();
   }
@@ -177,7 +177,7 @@ open type Process {
     let pathBytes = feng_string_to_utf8_bytes(self.path);
     appendToList(cmd, shellEscape(pathBytes));
     let argsLen = self.args.length();
-    for var i: i64 = (i64)0; i < argsLen; i += (i64)1 {
+    for var i: int = (int)0; i < argsLen; i += (int)1 {
       cmd.add((byte)32);
       let argBytes = feng_string_to_utf8_bytes(self.args[i]);
       appendToList(cmd, shellEscape(argBytes));
@@ -188,7 +188,7 @@ open type Process {
 
   seal func run(): void {
     let cmdBytes = self.buildCommand();
-    let mode: byte[!] = byte[:(i64)2];
+    let mode: byte[!] = byte[:(int)2];
     mode[0] = (byte)114;
     mode[1] = (byte)0;
 
@@ -198,19 +198,19 @@ open type Process {
     }
 
     let outputBuf = List<byte>();
-    let chunk: byte[!] = byte[:(i64)4096];
+    let chunk: byte[!] = byte[:(int)4096];
     while true {
-      let n = fread(&chunk, (i64)1, (i64)4096, fp);
-      if n <= (i64)0 {
+      let n = fread(&chunk, (uint)1, (uint)4096, fp);
+      if n <= (uint)0 {
         break;
       }
-      for var j: i64 = (i64)0; j < n; j += (i64)1 {
+      for var j: uint = (uint)0; j < n; j += (uint)1 {
         outputBuf.add(chunk[j]);
       }
     }
     self.stdoutData = outputBuf.entries();
 
-    let rawStatus = pclose(fp);
+    let rawStatus = (int)pclose(fp);
     self.exitStatus = (rawStatus >> 8) & 255;
     self.finished = true;
   }
@@ -255,7 +255,7 @@ open type Process {
    */
   open func kill(): void {
     if !self.finished && self.pid > 0 {
-      posix_kill(self.pid, 15);
+      posix_kill((i32)self.pid, (i32)15);
     }
   }
 
@@ -264,7 +264,7 @@ open type Process {
    */
   open func kill(signal: int): void {
     if !self.finished && self.pid > 0 {
-      posix_kill(self.pid, signal);
+      posix_kill((i32)self.pid, (i32)signal);
     }
   }
 

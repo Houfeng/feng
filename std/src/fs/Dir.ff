@@ -10,19 +10,19 @@ seal type Dirent {}
 
 // libc directory operations
 @cdecl("libc", "opendir")
-extern func c_opendir(path: byte*): i64;
+extern func c_opendir(path: byte*): int;
 
 @cdecl("libc", "readdir")
-extern func c_readdir(dir: i64): Dirent*;
+extern func c_readdir(dir: int): Dirent*;
 
 @cdecl("libc", "closedir")
-extern func c_closedir(dir: i64): int;
+extern func c_closedir(dir: int): i32;
 
 @cdecl("libc", "mkdir")
-extern func c_mkdir(path: byte*, mode: int): int;
+extern func c_mkdir(path: byte*, mode: i32): i32;
 
 @cdecl("libc", "rmdir")
-extern func c_rmdir(path: byte*): int;
+extern func c_rmdir(path: byte*): i32;
 
 // Dirent* 指针操作
 @runtime
@@ -86,7 +86,7 @@ seal let DEFAULT_DIR_MODE: int = 493;
  * Directory traversal object, wrapping a directory handle with read operations.
  */
 open type Dir {
-  seal var dir: i64;
+  seal var dir: int;
   seal var dirPath: string;
   seal var closed: bool;
 
@@ -97,7 +97,7 @@ open type Dir {
   open static func create(path: string): Dir {
     let pathBytes = makeNullTerminatedPath(path);
     let dir = c_opendir(&pathBytes);
-    if dir == (i64)0 {
+    if dir == (int)0 {
       throw "fs/opendir-failed";
     }
     return Dir { dir: dir, dirPath: path, closed: false };
@@ -108,20 +108,20 @@ open type Dir {
    * @param batchSize - Batch size, must be greater than 0
    * @return Array of directory entries
    */
-  open func read(batchSize: i64): EntryInfo[] {
+  open func read(batchSize: int): EntryInfo[] {
     self.ensureOpen();
-    if batchSize <= (i64)0 {
+    if batchSize <= (int)0 {
       throw "fs/readdir-failed";
     }
     let entries = List<EntryInfo>();
-    var count: i64 = (i64)0;
+    var count: int = (int)0;
     while count < batchSize {
       let entry = self.readEntry();
-      if entry.name.length() == (i64)0 {
+      if entry.name.length() == (int)0 {
         break;
       }
       entries.add(entry);
-      count += (i64)1;
+      count += (int)1;
     }
     return entries.entries();
   }
@@ -134,12 +134,12 @@ open type Dir {
   open func next(): IteratorResult<EntryInfo> {
     self.ensureOpen();
     let entry = self.readEntry();
-    if entry.name.length() == (i64)0 {
+    if entry.name.length() == (int)0 {
       return (false, EntryInfo {
         name: "",
         path: "",
         kind: EntryKind.Other,
-        dirPath: byte[:(i64)0]
+        dirPath: byte[:(int)0]
       });
     }
     return (true, entry);
@@ -177,7 +177,7 @@ open type Dir {
         name: "",
         path: "",
         kind: EntryKind.Other,
-        dirPath: byte[:(i64)0]
+        dirPath: byte[:(int)0]
       };
     }
 
@@ -188,27 +188,27 @@ open type Dir {
 
     // 读取 d_name 并计算 nameLen
     let nameDataPtr = feng_pointer_move(direntPtr, DIRENT_DNAME_OFFSET);
-    var nameLen: i64 = (i64)0;
-    if DIRENT_DNAMLEN_OFFSET >= (i64)0 {
+    var nameLen: int = (int)0;
+    if DIRENT_DNAMLEN_OFFSET >= (int)0 {
       // macOS: d_namlen 字段直接提供名称长度
       let namlenPtr = feng_pointer_move(direntPtr, DIRENT_DNAMLEN_OFFSET);
       let namlenLong: i64 = feng_pointer_get_scalar<i64>(namlenPtr);
-      nameLen = namlenLong & (i64)255;
+      nameLen = (int)(namlenLong & (i64)255);
     } else {
       // Linux: 无 d_namlen 字段，扫描 d_name 的 null 终止符计算长度
-      for var i: i64 = (i64)0; i < (i64)256; i += (i64)1 {
+      for var i: int = (int)0; i < (int)256; i += (int)1 {
         let bytePtr = feng_pointer_move(nameDataPtr, i);
         let b: i64 = feng_pointer_get_scalar<i64>(bytePtr);
         if b == (i64)0 {
           break;
         }
-        nameLen += (i64)1;
+        nameLen += (int)1;
       }
     }
 
     // 拷贝 d_name 字节（长度 nameLen）
     let nameBuf: byte[!] = byte[:nameLen];
-    for var i: i64 = (i64)0; i < nameLen; i += (i64)1 {
+    for var i: int = (int)0; i < nameLen; i += (int)1 {
       let bytePtr = feng_pointer_move(nameDataPtr, i);
       let b: i64 = feng_pointer_get_scalar<i64>(bytePtr);
       nameBuf[i] = (byte)(b & (i64)255);
@@ -250,7 +250,7 @@ open type Dir {
  */
 open func mkdir(path: string): void {
   let pathBytes = makeNullTerminatedPath(path);
-  let rc = c_mkdir(&pathBytes, DEFAULT_DIR_MODE);
+  let rc = c_mkdir(&pathBytes, (i32)DEFAULT_DIR_MODE);
   if rc != 0 {
     throw "fs/mkdir-failed";
   }
@@ -277,11 +277,11 @@ open func readDir(path: string): EntryInfo[] {
   let dir = Dir.create(path);
   let entries = List<EntryInfo>();
   while true {
-    let batch = dir.read((i64)64);
-    if batch.length() == (i64)0 {
+    let batch = dir.read((int)64);
+    if batch.length() == (int)0 {
       break;
     }
-    for var i: i64 = (i64)0; i < batch.length(); i += (i64)1 {
+    for var i: int = (int)0; i < batch.length(); i += (int)1 {
       entries.add(batch[i]);
     }
   }
