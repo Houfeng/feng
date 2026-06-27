@@ -12,17 +12,17 @@ extern func posix_stat(p: byte*, buf: i64*): int;
 extern func feng_string_to_utf8_bytes(value: string): byte[];
 
 @runtime
-extern func feng_pointer_move(ptr: i64*, offset: i64): i64*;
+extern func feng_pointer_move(ptr: int*, offset: int): int*;
 
 @runtime
-extern func feng_pointer_get_scalar<T>(ptr: i64*): T;
+extern func feng_pointer_get_scalar<T>(ptr: int*): T;
 
 // POSIX stat struct offsets (macOS aarch64, 64-bit inode)
-seal let STAT_MODE_OFFSET: i64 = (i64)4;
-seal let STAT_SIZE_OFFSET: i64 = (i64)96;
-seal let STAT_ATIME_OFFSET: i64 = (i64)32;
-seal let STAT_MTIME_OFFSET: i64 = (i64)48;
-seal let STAT_CTIME_OFFSET: i64 = (i64)64;
+seal let STAT_MODE_OFFSET: int = (int)4;
+seal let STAT_SIZE_OFFSET: int = (int)96;
+seal let STAT_ATIME_OFFSET: int = (int)32;
+seal let STAT_MTIME_OFFSET: int = (int)48;
+seal let STAT_CTIME_OFFSET: int = (int)64;
 
 // POSIX S_IF* file type masks
 seal let S_IFMT: i64 = (i64)61440;

@@ -11,10 +11,10 @@ extern func strtod(text: string*, end: i64*): f64;
 extern func snprintf_f64(buf: byte*, size: i64, fmt: byte*, value: f64): i32;
 
 @runtime
-extern func feng_pointer_get_pointer(ptr: i64*): i64*;
+extern func feng_pointer_get_pointer(ptr: int*): int*;
 
 @runtime
-extern func feng_pointer_get_scalar<T>(ptr: i64*): T;
+extern func feng_pointer_get_scalar<T>(ptr: int*): T;
 
 /**
  * Extends f64 with conversion operations.

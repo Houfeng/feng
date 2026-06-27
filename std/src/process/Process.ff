@@ -16,10 +16,10 @@ extern func feng_pointer_is_null(ptr: byte*): bool;
 extern func feng_pointer_is_null(ptr: string*): bool;
 
 @runtime
-extern func feng_pointer_move(ptr: byte*, offset: i64): byte*;
+extern func feng_pointer_move(ptr: byte*, offset: int): byte*;
 
 @runtime
-extern func feng_pointer_move(ptr: string*, offset: i64): string*;
+extern func feng_pointer_move(ptr: string*, offset: int): string*;
 
 @runtime
 extern func feng_pointer_get_scalar<T>(ptr: byte*): T;

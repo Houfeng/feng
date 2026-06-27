@@ -29,7 +29,7 @@ extern func c_rmdir(path: byte*): int;
 extern func feng_pointer_is_null(ptr: Dirent*): bool;
 
 @runtime
-extern func feng_pointer_move(ptr: Dirent*, offset: i64): Dirent*;
+extern func feng_pointer_move(ptr: Dirent*, offset: int): Dirent*;
 
 @runtime
 extern func feng_pointer_get_scalar<T>(ptr: Dirent*): T;
@@ -41,9 +41,9 @@ extern func feng_pointer_get_scalar<T>(ptr: Dirent*): T;
 // Linux: struct dirent { unsigned i64 d_ino(0); unsigned i64 d_off(8);
 //   unsigned short d_reclen(16); unsigned char d_type(18);
 //   char d_name[256](19); } — 无 d_namlen 字段，DIRENT_DNAMLEN_OFFSET 为 -1
-seal var DIRENT_DTYPE_OFFSET: i64 = (i64)0;
-seal var DIRENT_DNAMLEN_OFFSET: i64 = (i64)0;
-seal var DIRENT_DNAME_OFFSET: i64 = (i64)0;
+seal var DIRENT_DTYPE_OFFSET: int = (int)0;
+seal var DIRENT_DNAMLEN_OFFSET: int = (int)0;
+seal var DIRENT_DNAME_OFFSET: int = (int)0;
 seal var direntOffsetsInited: bool = false;
 
 /**
@@ -59,17 +59,17 @@ seal func ensureDirentOffsets(): void {
   let arch = SystemInfo.arch();
   if os == "darwin" {
     if arch == "arm64" || arch == "aarch64" || arch == "x86_64" {
-      DIRENT_DTYPE_OFFSET = (i64)20;
-      DIRENT_DNAMLEN_OFFSET = (i64)18;
-      DIRENT_DNAME_OFFSET = (i64)21;
+      DIRENT_DTYPE_OFFSET = (int)20;
+      DIRENT_DNAMLEN_OFFSET = (int)18;
+      DIRENT_DNAME_OFFSET = (int)21;
     } else {
       throw "fs/unsupported-arch";
     }
   } else if os == "linux" {
     if arch == "arm64" || arch == "aarch64" || arch == "x86_64" {
-      DIRENT_DTYPE_OFFSET = (i64)18;
-      DIRENT_DNAMLEN_OFFSET = (i64)-1;
-      DIRENT_DNAME_OFFSET = (i64)19;
+      DIRENT_DTYPE_OFFSET = (int)18;
+      DIRENT_DNAMLEN_OFFSET = (int)-1;
+      DIRENT_DNAME_OFFSET = (int)19;
     } else {
       throw "fs/unsupported-arch";
     }

@@ -3,10 +3,10 @@ open module std.thread;
 open spec ThreadFn(): void;
 
 @runtime
-extern func feng_alloc(size: i64): i64;
+extern func feng_alloc(size: int): int;
 
 @runtime
-extern func feng_free(ptr: i64): void;
+extern func feng_free(ptr: int): void;
 
 @cdecl("feng_std_uv", "uv_thread_create")
 extern func uv_thread_create(tid: i64*, entry: ThreadAbiEntry*, arg: i64): int;
@@ -29,17 +29,17 @@ extern func posix_sleep(seconds: u32): u32;
 @abi
 spec ThreadAbiEntry(arg: i64): void;
 
-seal var spawnLock: i64 = (i64)0;
-seal var spawnCond: i64 = (i64)0;
+seal var spawnLock: int = (int)0;
+seal var spawnCond: int = (int)0;
 seal var spawnFn: ThreadFn;
 seal var spawnReady: bool = false;
 
 seal func ensureSpawnInit(): void {
-  if spawnLock != (i64)0 {
+  if spawnLock != (int)0 {
     return;
   }
-  spawnLock = feng_alloc((i64)64);
-  spawnCond = feng_alloc((i64)48);
+  spawnLock = feng_alloc((int)64);
+  spawnCond = feng_alloc((int)48);
   uv_mutex_init(spawnLock);
   uv_cond_init(spawnCond);
 }

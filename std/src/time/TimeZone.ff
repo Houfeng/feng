@@ -23,15 +23,15 @@ extern func readlink(path: string*, buf: byte*, bufsiz: i64): i64;
 
 // Runtime pointer primitives
 @runtime
-extern func feng_pointer_move(ptr: i64*, offset: i64): i64*;
+extern func feng_pointer_move(ptr: int*, offset: int): int*;
 
 @runtime
-extern func feng_pointer_get_scalar<T>(ptr: i64*): T;
+extern func feng_pointer_get_scalar<T>(ptr: int*): T;
 
 // struct tm layout on 64-bit macOS/Linux:
 // 9 x int32 fields (36 bytes) + 4 bytes padding + i64 tm_gmtoff + char* tm_zone = 56 bytes
-seal let TM_BUF_LONGS: i64 = (i64)8;
-seal let TM_GMTOFF_OFFSET: i64 = (i64)40;
+seal let TM_BUF_LONGS: int = (int)8;
+seal let TM_GMTOFF_OFFSET: int = (int)40;
 
 /**
  * Read the tm_gmtoff field (UTC offset in seconds) from a struct tm buffer
