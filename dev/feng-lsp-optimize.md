@@ -652,49 +652,14 @@ static bool append_completion_item_snippet(FengLspString *json,
 
 ---
 
-## 8. 参考实现：其他语言服务器的关键字上下文
+## 8. 参考实现
 
-### 8.1 TypeScript Language Service
+TypeScript / rust-analyzer / gopls 均采用统一 Context 结构，将语法位置作为字段，AST 优先、文本回退兜底。
 
-TypeScript 在 `services/completions.ts` 中实现关键字补全，核心机制：
+| 服务器 | 位置字段 | 位置分类 |
+|---|---|---|
+| TypeScript | `CompletionContext.syntacticPosition` | Expression / Statement / Type / Modifier / Declaration |
+| rust-analyzer | `CompletionContext.position` | Expr / Item / Type / Name |
+| gopls | `CompletionContext.Position` | topLevel / funcBody / structField / interfaceMethod |
 
-- **统一 Context 结构**：`CompletionContext` 包含 `syntacticPosition`、`isTypeLocation`、`isNamespaceLocation` 等字段，同时服务成员补全和关键字过滤。
-- **AST 节点祖先链**：通过 `getAncestor(node, kind)` 向上遍历 AST，判断当前节点是否在 `ClassDeclaration`、`FunctionBody`、`TypeNode` 等内部。
-- **位置分类**：
-  - `Expression`：`if`、`while`、`new`、`typeof`
-  - `Statement`：`let`、`const`、`return`、`break`
-  - `Type`：`typeof`、`keyof`、`infer`
-  - `Modifier`：`public`、`private`、`static`、`readonly`
-  - `Declaration`：`function`、`class`、`interface`
-- **关键字过滤**：`isKeywordKindValidInContext(kind, context)` 按位置过滤，不在合法位置的关键字不提供。
-
-**与 Feng 方案对比**：
-
-TypeScript 使用单一 `CompletionContext` 结构，Feng 采用相同思路——将 `FengLspPosition` 作为 `FengLspCompletionContext` 的字段，与 TypeScript 的统一结构方向一致。
-
-### 8.2 rust-analyzer
-
-- **`CompletionContext`**：包含 `position` 字段，类型为 `CompletionLocation`，枚举了 `ExprLocation`、`TypeLocation`、`ItemLocation`、`NameContext` 等位置类型。
-- **关键字过滤**：`complete_keywords.rs` 根据 `position` 提供不同关键字集合：
-  - `ExprLocation`：`if`、`match`、`loop`、`return`
-  - `ItemLocation`：`fn`、`struct`、`enum`、`impl`
-  - `TypeLocation`：`dyn`、`impl`、`fn`（函数类型）
-
-### 8.3 gopls（Go 语言服务器）
-
-- **`CompletionContext`**：基于 token 位置分析，字段包括 `Position`、`ExpectedType`、`Enclosing`。
-- **位置分类**：`topLevel`、`funcBody`、`structField`、`interfaceMethod`，与 Feng 的 TOP_DECL / BODY / MEMBER 对应。
-- **特点**：gopls 更依赖词法（token）分析而非完整 AST，脏代码鲁棒性更好，与 Feng 的文本回退路径（`completion_context_from_text` 中 `position` 赋值）思路相似。
-
-### 8.4 共同模式
-
-| 模式 | 说明 |
-|---|---|
-| 单一 Context 结构 | 所有位置信息集中在一个结构，同时服务多种补全 |
-| AST 祖先链优先 | 优先用 AST 判断位置，脏代码时回退到词法/文本分析 |
-| 类型位置单独区分 | `TypeLocation` 与 `ExprLocation` 分开，关键字集合不同 |
-| 修饰符单独区分 | `public`、`static` 等修饰符有独立的 `ModifierContext` |
-
-> Feng 当前方案覆盖了"AST 祖先链优先"和"位置分类"两个核心模式。
-> 类型位置和修饰符位置暂不区分（`void`、`unknown` 已从关键字表移除），
-> 后续可参考 TypeScript 的 `isTypeLocation` 扩展。
+Feng 的 `FengLspPosition` 作为 `FengLspCompletionContext.position` 字段，与上述方向一致。当前覆盖位置分类和 AST 优先两个核心模式，类型位置和修饰符位置暂不区分。
