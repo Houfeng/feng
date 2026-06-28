@@ -104,10 +104,12 @@ typedef enum {
 当 `build_completion_json` 或 `build_cached_completion_json` 能获取到有效 AST 时，使用以下规则：
 
 ```text
-输入：enclosing_decl, enclosing_member, is_member, is_use_path
+输入：enclosing_decl, enclosing_member
 
-if is_member → NONE（成员访问，不需要关键字）
-if is_use_path → NONE（import 路径，不需要关键字）
+前置条件：调用方已在进入此函数前排除了成员访问（is_member）和 import 路径
+（is_use_path）上下文——前者走成员分支，后者已由 extract_use_path_context
+提前返回，均不会到达关键字分类逻辑。
+
 if enclosing_decl == NULL → TOP_LEVEL
 if enclosing_member != NULL:
     if enclosing_member 是 callable（method/constructor/finalizer）:
@@ -115,9 +117,13 @@ if enclosing_member != NULL:
     else:
         → MEMBER（field 内部或声明位置）
 else:
-    if enclosing_decl->kind == FENG_DECL_FUNCTION → BODY
+    if enclosing_decl->kind == FENG_DECL_FUNCTION
+        || enclosing_decl->kind == FENG_DECL_GLOBAL_BINDING → BODY
     else → MEMBER（type/enum/spec/fit 体内，但不在具体成员内）
 ```
+
+> 说明：`GLOBAL_BINDING`（`let` / `var`）在顶层和函数体内均合法，其初始化表达式
+> 位于语句级上下文，因此与 `FUNCTION` 一样归类为 `BODY`。
 
 对应调用点（`build_completion_json` 的 `else` 分支 ~12044 行，非成员 `else` 分支）：
 
@@ -270,17 +276,26 @@ VSCode 原生支持 LSP Snippet 语法，无需额外适配。
 
 **TOP_LEVEL Snippet**：
 
-| 关键字   | insertText                                           | 说明     |
-| -------- | ---------------------------------------------------- | -------- |
-| `module` | `module ${1:name}`                                   | 模块声明 |
-| `import` | `import ${1:path}`                                   | 导入声明 |
-| `func`   | `func ${1:name}(${2:params}): ${3:void} {\n\t$0\n}`  | 函数声明 |
-| `type`   | `type ${1:Name} {\n\t$0\n}`                          | 类型声明 |
-| `enum`   | `enum ${1:Name} {\n\t$0\n}`                          | 枚举声明 |
-| `spec`   | `spec ${1:Name} {\n\t$0\n}`                          | 规约声明 |
-| `fit`    | `fit ${1:Name} {\n\t$0\n}`                           | 适配声明 |
-| `let`    | `let ${1:name}: ${2:type} = ${0:value}`               | 全局绑定 |
-| `var`    | `var ${1:name}: ${2:type} = ${0:value}`               | 全局绑定 |
+| label           | insertText                                           | 说明              |
+| --------------- | ---------------------------------------------------- | ----------------- |
+| `module`        | `module ${1:name}`                                   | 模块声明          |
+| `import`        | `import ${1:path}`                                   | 导入声明          |
+| `func`          | `func ${1:name}(${2:params}): ${3:void} {\n\t$0\n}`  | 函数声明          |
+| `type`          | `type ${1:Name} {\n\t$0\n}`                          | 对象类型声明      |
+| `type-tuple`    | `type ${1:Name}(${2:types});`                        | 元组类型声明      |
+| `enum`          | `enum ${1:Name} {\n\t$0\n}`                          | 枚举声明          |
+| `spec`          | `spec ${1:Name} {\n\t$0\n}`                          | object-form 规约  |
+| `spec-callable` | `spec ${1:Name}(${2:params}): ${3:void};`            | callable-form 规约 |
+| `spec-union`    | `spec ${1:Name}: ${2:T1} \| ${0:T2};`               | union-form 规约   |
+| `fit`           | `fit ${1:Name} {\n\t$0\n}`                           | 适配声明          |
+| `let`           | `let ${1:name}: ${2:type} = ${0:value}`               | 全局绑定          |
+| `var`           | `var ${1:name}: ${2:type} = ${0:value}`               | 全局绑定          |
+
+> 说明：
+> - `extern` 不提供独立 Snippet，因为 `extern` 总是修饰后续声明关键字
+>   （如 `extern func`），用户选择 `func` 的 Snippet 后手动添加 `extern` 即可。
+> - `type` 与 `type-tuple`、`spec` / `spec-callable` / `spec-union` 均为独立项，
+>   label 不同，用户输入关键字前缀时由 VSCode 同时展示，按需选择。
 
 **MEMBER Snippet**：
 
@@ -292,15 +307,22 @@ VSCode 原生支持 LSP Snippet 语法，无需额外适配。
 
 **BODY Snippet**：
 
-| 关键字  | insertText                                               | 说明                                 |
-| ------- | -------------------------------------------------------- | ------------------------------------ |
-| `if`    | `if ${1:condition} {\n\t$0\n}`                           | 条件语句                             |
-| `if`    | `if ${1:condition} {\n\t$2\n} else {\n\t$0\n}`           | 条件+else（通过 label 区分或仅一个） |
-| `match` | `match ${1:target} {\n\t$0\n}`                           | 模式匹配                             |
-| `while` | `while ${1:condition} {\n\t$0\n}`                        | 循环                                 |
-| `for`   | `for ${1:i} in ${2:iterable} {\n\t$0\n}`                 | for/in 循环                          |
-| `try`   | `try {\n\t$1\n} catch ${2:err} {\n\t$0\n}`               | 异常捕获                             |
-| `defer` | `defer {\n\t$0\n}`                                       | 延迟执行                             |
+| label     | insertText                                               | 说明                                 |
+| --------- | -------------------------------------------------------- | ------------------------------------ |
+| `if`      | `if ${1:condition} {\n\t$0\n}`                           | 条件语句                             |
+| `if-else` | `if ${1:condition} {\n\t$2\n} else {\n\t$0\n}`           | 条件+else                            |
+| `match`   | `match ${1:target} {\n\t$0\n}`                           | 模式匹配                             |
+| `while`   | `while ${1:condition} {\n\t$0\n}`                        | 循环                                 |
+| `for`     | `for ${1:var i = 0}; ${2:i < n}; ${3:i = i + 1} {\n\t$0\n}` | 三段式循环                       |
+| `for-in`  | `for ${1:let it} in ${2:iterable} {\n\t$0\n}`            | for/in 迭代循环                      |
+| `try`     | `try {\n\t$1\n} catch ${2:err} {\n\t$0\n}`               | 异常捕获                             |
+| `defer`   | `defer {\n\t$0\n}`                                       | 延迟执行                             |
+
+> 说明：
+> - `if` 和 `if-else` 作为两个独立项，label 分别为 `if` 和 `if-else`，
+>   两者的 `insertText` 均以 `if` 开头，输入 `if` 时 VSCode 同时展示两项。
+> - `for` 和 `for-in` 同理，`insertText` 均以 `for` 开头，输入 `for` 时
+>   同时展示三段式与 for/in 两种模板。
 
 ### 5.3 新增 append 函数
 
@@ -329,9 +351,9 @@ static bool append_completion_item_snippet(FengLspString *json,
 
 ### 5.4 Snippet 与纯关键字共存
 
-同一个关键字可以同时提供纯文本项和 Snippet 项（VSCode 会按 label 去重，保留更丰富的一项）。或者只提供 Snippet 项（Snippets 展开前与纯文本效果一致）。
-
-建议：**有 Snippet 模板的关键字只提供 Snippet 项**，其余关键字仍用纯文本项。
+有 Snippet 模板的关键字**同时提供纯文本项和 Snippet 项**，两者 label 相同，
+VSCode 并列展示，用户可选择直接插入关键字或展开模板。无 Snippet 模板的关键字
+仅提供纯文本项。
 
 ---
 
