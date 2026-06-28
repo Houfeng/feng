@@ -18,6 +18,7 @@
 - **上下文感知**：根据光标所在位置（顶层 / 类型体 / 函数体）提供合适的关键字子集，不做全量堆砌。
 - **复用现有基础设施**：利用 `feng_keywords()`、`feng_builtin_annotations()` 等已有 API，不重新发明关键字表。
 - **最小侵入**：在现有 completion 流程的非成员分支末尾追加关键字项，不改变现有补全逻辑。
+- **禁止改动核心编译器**：所有变更仅限 `src/cli/lsp/` 目录，不得修改 `src/lexer/`、`src/parser/`、`src/semantic/`、`src/codegen/`、`src/symbol/` 等核心编译器模块，仅通过已有公开 API 消费编译器能力。
 
 ---
 
@@ -36,7 +37,7 @@ typedef enum {
 
 ### 2.2 各上下文关键字集合
 
-**TOP_LEVEL**（13 个）：
+**TOP_LEVEL**（14 个）：
 
 | 关键字   | 说明           |
 | -------- | -------------- |
@@ -53,6 +54,7 @@ typedef enum {
 | `static` | 静态修饰       |
 | `let`    | 全局不可变绑定 |
 | `var`    | 全局可变绑定   |
+| `as`     | 导入别名       |
 
 **MEMBER**（6 个）：
 
@@ -65,7 +67,7 @@ typedef enum {
 | `open`   | 可见性修饰 |
 | `seal`   | 可见性修饰 |
 
-**BODY**（16 个）：
+**BODY**（17 个）：
 
 | 关键字     | 说明             |
 | ---------- | ---------------- |
@@ -85,6 +87,7 @@ typedef enum {
 | `catch`    | 异常处理         |
 | `defer`    | 延迟执行         |
 | `unknown`  | 未知值           |
+| `void`     | 空类型           |
 
 ### 2.3 排除项
 
@@ -116,7 +119,7 @@ else:
     else → MEMBER（type/enum/spec/fit 体内，但不在具体成员内）
 ```
 
-对应调用点（`build_completion_json` ~12044 行，非成员 `else` 分支）：
+对应调用点（`build_completion_json` 的 `else` 分支 ~12044 行，非成员 `else` 分支）：
 
 ```c
 /* 已有的 locals + module + imports 补全之后，追加关键字 */
@@ -132,7 +135,7 @@ else:
 }
 ```
 
-`build_cached_completion_json`（~12338 行，非成员 `else` 分支）使用相同逻辑。
+`build_cached_completion_json`（`else` 分支 ~12338 行，非成员 `else` 分支）使用相同逻辑。
 
 ### 3.2 文本回退路径（脏代码场景）
 
@@ -263,7 +266,31 @@ VSCode 原生支持 LSP Snippet 语法，无需额外适配。
 
 ### 5.2 Snippet 模板定义
 
-仅在 **BODY** 上下文中提供 Snippet 模板，**TOP_LEVEL** 和 **MEMBER** 上下文仅提供纯关键字补全（因为顶层/成员位置的模板变体较多，不适合固定 Snippet）。
+各上下文中，适合提供 Snippet 模板的关键字应附带 `insertText`，不适合的关键字仅提供纯文本补全。
+
+**TOP_LEVEL Snippet**：
+
+| 关键字   | insertText                                           | 说明     |
+| -------- | ---------------------------------------------------- | -------- |
+| `module` | `module ${1:name}`                                   | 模块声明 |
+| `import` | `import ${1:path}`                                   | 导入声明 |
+| `func`   | `func ${1:name}(${2:params}): ${3:void} {\n\t$0\n}`  | 函数声明 |
+| `type`   | `type ${1:Name} {\n\t$0\n}`                          | 类型声明 |
+| `enum`   | `enum ${1:Name} {\n\t$0\n}`                          | 枚举声明 |
+| `spec`   | `spec ${1:Name} {\n\t$0\n}`                          | 规约声明 |
+| `fit`    | `fit ${1:Name} {\n\t$0\n}`                           | 适配声明 |
+| `let`    | `let ${1:name}: ${2:type} = ${0:value}`               | 全局绑定 |
+| `var`    | `var ${1:name}: ${2:type} = ${0:value}`               | 全局绑定 |
+
+**MEMBER Snippet**：
+
+| 关键字 | insertText                                           | 说明     |
+| ------ | ---------------------------------------------------- | -------- |
+| `func` | `func ${1:name}(${2:params}): ${3:void} {\n\t$0\n}`  | 方法声明 |
+| `let`  | `let ${1:name}: ${2:type}`                            | 字段声明 |
+| `var`  | `var ${1:name}: ${2:type}`                            | 字段声明 |
+
+**BODY Snippet**：
 
 | 关键字  | insertText                                               | 说明                                 |
 | ------- | -------------------------------------------------------- | ------------------------------------ |
@@ -274,7 +301,6 @@ VSCode 原生支持 LSP Snippet 语法，无需额外适配。
 | `for`   | `for ${1:i} in ${2:iterable} {\n\t$0\n}`                 | for/in 循环                          |
 | `try`   | `try {\n\t$1\n} catch ${2:err} {\n\t$0\n}`               | 异常捕获                             |
 | `defer` | `defer {\n\t$0\n}`                                       | 延迟执行                             |
-| `func`  | `func ${1:name}(${2:params}): ${3:void} {\n\t$0\n}`      | 函数声明（TOP_LEVEL / MEMBER）       |
 
 ### 5.3 新增 append 函数
 
@@ -305,7 +331,7 @@ static bool append_completion_item_snippet(FengLspString *json,
 
 同一个关键字可以同时提供纯文本项和 Snippet 项（VSCode 会按 label 去重，保留更丰富的一项）。或者只提供 Snippet 项（Snippets 展开前与纯文本效果一致）。
 
-建议：**BODY 上下文中只提供 Snippet 项**（有 Snippet 模板的关键字），其余关键字仍用纯文本项。
+建议：**有 Snippet 模板的关键字只提供 Snippet 项**，其余关键字仍用纯文本项。
 
 ---
 
@@ -319,15 +345,15 @@ static bool append_completion_item_snippet(FengLspString *json,
 | 新增 `classify_keyword_context`                           | AST 路径上下文判定                             | 1    |
 | 新增 `classify_keyword_context_from_text`                 | 文本回退路径上下文判定                         | 1    |
 | 新增 `append_context_keyword_items`                       | 按上下文追加关键字补全项                       | 1    |
-| `build_completion_json` ~12044 行 `else` 分支末尾         | 调用 `append_context_keyword_items`            | 1    |
-| `build_cached_completion_json` ~12338 行 `else` 分支末尾  | 调用 `append_context_keyword_items`            | 1    |
+| `build_completion_json` 的 `else` 分支 ~12044 行末尾      | 调用 `append_context_keyword_items`            | 1    |
+| `build_cached_completion_json` 的 `else` 分支 ~12338 行末尾 | 调用 `append_context_keyword_items`            | 1    |
 | `handle_completion_request` 返回 `"[]"` 之前              | 文本回退兜底关键字                             | 1    |
 | 新增 `completion_context_is_annotation`                    | 注解上下文检测                                 | 2    |
 | 新增 `build_annotation_completion_json`                    | 构建注解补全响应                               | 2    |
 | `handle_completion_request` 参数解析后                     | 注解上下文优先检测                             | 2    |
 | `initialize` 响应 ~14382 行                               | `triggerCharacters` 添加 `"@"`                 | 2    |
 | 新增 `append_completion_item_snippet`                      | Snippet 补全项构建                             | 3    |
-| `append_context_keyword_items`                            | BODY 上下文关键字附带 Snippet insertText       | 3    |
+| `append_context_keyword_items`                            | 各上下文适合 Snippet 的关键字附带 insertText   | 3    |
 
 ### 6.2 `editors/feng-vscode/`
 
@@ -367,5 +393,5 @@ static bool append_completion_item_snippet(FengLspString *json,
 **交付内容**：
 
 - 实现 `append_completion_item_snippet`。
-- 修改 `append_context_keyword_items`，为 BODY 上下文中具有模板的关键字附加 `insertText` + `insertTextFormat: 2`。
-- 补充回归测试：BODY 上下文中的 `if` 补全项应包含 `insertText` 字段且 `insertTextFormat` 为 2。
+- 修改 `append_context_keyword_items`，为各上下文中具有模板的关键字附加 `insertText` + `insertTextFormat: 2`。
+- 补充回归测试：BODY 上下文中的 `if` 补全项应包含 `insertText` 字段且 `insertTextFormat` 为 2；TOP_LEVEL 中的 `func` 补全项应包含 Snippet 模板。
