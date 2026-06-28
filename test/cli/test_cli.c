@@ -12911,6 +12911,86 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     free(remove_error);
 }
 
+/* §1.8 keyword completion regression tests.
+ * Each test verifies that context-aware keywords appear (or do not
+ * appear) at the expected grammar position. */
+static void test_lsp_keyword_completion_top_decl_position(void) {
+    static const char *kSource =
+        "module test.lsp.kw.topdecl;\n"
+        "\n"
+        "\n";
+    /* Cursor on the empty line after `module` declaration → TOP_DECL. */
+    const char *labels[] = {"func", "type", "enum", "spec", "fit", "import"};
+
+    assert_lsp_completion_contains_labels(kSource, "\n\n", 1U, labels, 6U);
+}
+
+static void test_lsp_keyword_completion_body_position(void) {
+    static const char *kSource =
+        "module test.lsp.kw.body;\n"
+        "\n"
+        "func run(): void {\n"
+        "    \n"
+        "}\n";
+    /* Cursor inside function body → BODY keywords. */
+    const char *labels[] = {"let", "var", "if", "while", "for", "return", "break", "defer"};
+
+    assert_lsp_completion_contains_labels(kSource, "    \n}", 4U, labels, 8U);
+}
+
+static void test_lsp_keyword_completion_member_position(void) {
+    static const char *kSource =
+        "module test.lsp.kw.member;\n"
+        "\n"
+        "type User {\n"
+        "    \n"
+        "}\n";
+    /* Cursor inside type body → MEMBER keywords. */
+    const char *labels[] = {"func", "let", "var", "static"};
+
+    assert_lsp_completion_contains_labels(kSource, "    \n}", 4U, labels, 4U);
+}
+
+static void test_lsp_keyword_completion_enum_body_no_keywords(void) {
+    static const char *kSource =
+        "module test.lsp.kw.enumbody;\n"
+        "\n"
+        "enum Color {\n"
+        "    \n"
+        "}\n";
+    /* Cursor inside enum body → OTHER position, no keyword items. */
+    char *output = capture_lsp_completion_response(kSource, "    \n}", 4U);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
+    /* Enum body should not contain `func` or `let` keyword items. */
+    ASSERT(strstr(output, "\"label\":\"func\"") == NULL);
+    ASSERT(strstr(output, "\"label\":\"let\"") == NULL);
+    free(output);
+}
+
+static void test_lsp_keyword_completion_member_access_no_keywords(void) {
+    static const char *kSource =
+        "module test.lsp.kw.memberaccess;\n"
+        "\n"
+        "type User {\n"
+        "    let name: string;\n"
+        "}\n"
+        "\n"
+        "func main(args: string[]) {\n"
+        "    let u: User = User { name: \"x\" };\n"
+        "    let n = u.;\n"
+        "}\n";
+    /* Cursor after `u.` is a member access → no keyword items. */
+    char *output = capture_lsp_completion_response(kSource, "u.;", 2U);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
+    ASSERT(strstr(output, "\"label\":\"name\"") != NULL);
+    /* Keywords should not appear in member access completion. */
+    ASSERT(strstr(output, "\"label\":\"return\"") == NULL);
+    ASSERT(strstr(output, "\"label\":\"while\"") == NULL);
+    free(output);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -13008,6 +13088,11 @@ int main(void) {
     test_lsp_imported_type_completion_survives_project_semantic_failure();
     test_lsp_alias_module_completion_survives_incomplete_member_access();
     test_lsp_external_package_hover_docs_and_completion();
+    test_lsp_keyword_completion_top_decl_position();
+    test_lsp_keyword_completion_body_position();
+    test_lsp_keyword_completion_member_position();
+    test_lsp_keyword_completion_enum_body_no_keywords();
+    test_lsp_keyword_completion_member_access_no_keywords();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
     test_direct_build_accepts_package_bundle();

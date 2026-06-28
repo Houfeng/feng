@@ -10,6 +10,8 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "cli/lsp/lsp_keywords.h"
+
 #include "cli/common.h"
 #include "cli/deps/manager.h"
 #include "cli/frontend.h"
@@ -10335,6 +10337,7 @@ typedef struct FengLspCompletionContext {
     FengSlice object;
     FengSlice prefix;
     FengSlice literal_builtin_name;
+    FengLspPosition position;   /* grammar position for keyword completion */
 } FengLspCompletionContext;
 
 static bool completion_identifier_start(char ch) {
@@ -10387,6 +10390,147 @@ static const char *builtin_name_for_type_identifier(FengSlice name) {
     return NULL;
 }
 
+/* Classify the grammar position of `offset` within `text` using a
+ * brace-matching heuristic.  Only used when AST analysis is unavailable
+ * (dirty code).  Does not handle braces inside string literals or
+ * comments — a known tradeoff documented in the design spec (§3.2). */
+static FengLspPosition completion_position_from_text(const char *text,
+                                                     size_t offset) {
+    size_t depth;
+    size_t cursor;
+    size_t brace_pos;
+    size_t ident_end;
+    size_t ident_start;
+    size_t ident_len;
+
+    if (text == NULL || offset == 0U) {
+        return FENG_LSP_POS_TOP_DECL;
+    }
+
+    /* Scan backward from offset, tracking brace nesting.  Find the
+     * nearest `{` that is not closed by a matching `}`. */
+    depth = 0U;
+    brace_pos = (size_t)-1;
+    cursor = offset;
+    while (cursor > 0U) {
+        --cursor;
+        if (text[cursor] == '}') {
+            ++depth;
+        } else if (text[cursor] == '{') {
+            if (depth == 0U) {
+                brace_pos = cursor;
+                break;
+            }
+            --depth;
+        }
+    }
+    if (brace_pos == (size_t)-1) {
+        /* No unclosed `{` found: we are at the module top level. */
+        return FENG_LSP_POS_TOP_DECL;
+    }
+
+    /* Skip whitespace before the `{` to find the preceding token. */
+    cursor = brace_pos;
+    while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
+        --cursor;
+    }
+    if (cursor == 0U) {
+        return FENG_LSP_POS_BODY;
+    }
+
+    /* Check for `)` immediately before `{` (function signature end). */
+    if (text[cursor - 1U] == ')') {
+        return FENG_LSP_POS_BODY;
+    }
+
+    /* Read the identifier before `{`.  For declarations like
+     * `type Foo {`, `enum Color {`, `spec Bar {`, `fit Baz {`,
+     * this is the declaration NAME, not the keyword. */
+    ident_end = cursor;
+    while (cursor > 0U && completion_identifier_continue(text[cursor - 1U])) {
+        --cursor;
+    }
+    ident_start = cursor;
+    ident_len = ident_end - ident_start;
+    if (ident_len == 0U) {
+        return FENG_LSP_POS_BODY;
+    }
+
+    /* First, check if the identifier IS a keyword itself (e.g. bare
+     * `let {` or `func {` during editing). */
+    if (ident_len == 4U && memcmp(text + ident_start, "func", 4U) == 0) {
+        return FENG_LSP_POS_BODY;
+    }
+    if (ident_len == 3U && memcmp(text + ident_start, "let", 3U) == 0) {
+        return FENG_LSP_POS_TOP_BIND;
+    }
+    if (ident_len == 3U && memcmp(text + ident_start, "var", 3U) == 0) {
+        return FENG_LSP_POS_TOP_BIND;
+    }
+
+    /* The identifier is likely a declaration name.  Look further back
+     * past whitespace for the declaration keyword. */
+    while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
+        --cursor;
+    }
+    {
+        size_t kw_end = cursor;
+        size_t kw_start = cursor;
+
+        while (kw_start > 0U && completion_identifier_continue(text[kw_start - 1U])) {
+            --kw_start;
+        }
+        {
+            size_t kw_len = kw_end - kw_start;
+
+            if (kw_len == 4U && memcmp(text + kw_start, "type", 4U) == 0) {
+                return FENG_LSP_POS_MEMBER;
+            }
+            if (kw_len == 4U && memcmp(text + kw_start, "spec", 4U) == 0) {
+                return FENG_LSP_POS_MEMBER;
+            }
+            if (kw_len == 3U && memcmp(text + kw_start, "fit", 3U) == 0) {
+                return FENG_LSP_POS_MEMBER;
+            }
+            if (kw_len == 4U && memcmp(text + kw_start, "enum", 4U) == 0) {
+                return FENG_LSP_POS_OTHER;
+            }
+            if (kw_len == 4U && memcmp(text + kw_start, "func", 4U) == 0) {
+                return FENG_LSP_POS_BODY;
+            }
+        }
+    }
+    /* Inside `{}` but no recognised keyword — assume function body. */
+    return FENG_LSP_POS_BODY;
+}
+
+/* Compute the grammar position from AST data.  Takes precedence over
+ * the text-based heuristic when a valid AST is available.  The rules
+ * are documented in the design spec (§3.1). */
+static FengLspPosition completion_position_from_ast(const FengDecl *enclosing_decl,
+                                                    const FengTypeMember *enclosing_member) {
+    if (enclosing_decl == NULL) {
+        return FENG_LSP_POS_TOP_DECL;
+    }
+    if (enclosing_member != NULL) {
+        if (enclosing_member->kind != FENG_TYPE_MEMBER_FIELD) {
+            return FENG_LSP_POS_BODY;
+        }
+        return FENG_LSP_POS_MEMBER;
+    }
+    if (enclosing_decl->kind == FENG_DECL_FUNCTION) {
+        return FENG_LSP_POS_BODY;
+    }
+    if (enclosing_decl->kind == FENG_DECL_GLOBAL_BINDING) {
+        return FENG_LSP_POS_TOP_BIND;
+    }
+    if (enclosing_decl->kind == FENG_DECL_ENUM) {
+        return FENG_LSP_POS_OTHER;
+    }
+    /* type / spec / fit body without a specific member hit. */
+    return FENG_LSP_POS_MEMBER;
+}
+
 static bool completion_context_from_text(const char *text,
                                          size_t offset,
                                          FengLspCompletionContext *context) {
@@ -10411,6 +10555,7 @@ static bool completion_context_from_text(const char *text,
         --prefix_start;
     }
     if (prefix_start == 0U || text[prefix_start - 1U] != '.') {
+        context->position = completion_position_from_text(text, offset);
         return true;
     }
     object_end = prefix_start - 1U;
@@ -10497,6 +10642,39 @@ static bool append_completion_item(FengLspString *json,
         }
     }
     return string_append_cstr(json, "}");
+}
+
+/* Append keyword completion items for the given grammar position.
+ * Iterates KW_TABLE[position] and emits one item per entry.
+ * In Phase 1 all items are plain-text (snippet == NULL); Phase 3
+ * will split into snippet vs. plain-text based on the snippet field.
+ * Returns true on success, false on allocation failure. */
+static bool append_context_keyword_items(FengLspString *json,
+                                         bool *first,
+                                         FengLspPosition position) {
+    const LspKwTable *table;
+    size_t index;
+
+    if (position <= FENG_LSP_POS_OTHER ||
+        (size_t)position >= sizeof(KW_TABLE) / sizeof(KW_TABLE[0])) {
+        return true;
+    }
+    table = &KW_TABLE[(size_t)position];
+    if (table->items == NULL || table->count == 0U) {
+        return true;
+    }
+    for (index = 0U; index < table->count; ++index) {
+        const LspKwItem *item = &table->items[index];
+
+        if (!append_completion_item(json,
+                                    first,
+                                    slice_from_cstr(item->label),
+                                    item->detail,
+                                    14)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* Append a completion item with a resolve data payload.  The data object
@@ -11897,6 +12075,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
     }
     (void)completion_context_from_text(source_text, offset, &completion_context);
     enclosing_decl = find_enclosing_decl_for_completion(source_text, program, offset, &enclosing_member);
+    completion_context.position = completion_position_from_ast(enclosing_decl, enclosing_member);
     if (enclosing_decl != NULL && !collect_visible_locals_for_completion(source_text,
                                                                          enclosing_decl,
                                                                          enclosing_member,
@@ -12106,6 +12285,12 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
             local_list_dispose(&locals);
             return false;
         }
+        if (completion_context.position != FENG_LSP_POS_OTHER) {
+            if (!append_context_keyword_items(json, &first, completion_context.position)) {
+                local_list_dispose(&locals);
+                return false;
+            }
+        }
     }
     local_list_dispose(&locals);
     return string_append_cstr(json, "]");
@@ -12119,6 +12304,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
     const FengTypeMember *enclosing_member;
     FengLspLocalList locals = {0};
     const FengExpr *expr;
+    FengLspPosition position;
     bool first = true;
     size_t item_count = 0U;
     size_t index;
@@ -12131,6 +12317,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                                                         context->program,
                                                         offset,
                                                         &enclosing_member);
+    position = completion_position_from_ast(enclosing_decl, enclosing_member);
     if (enclosing_decl != NULL && !collect_visible_locals_for_completion(context->source_text,
                                                                          enclosing_decl,
                                                                          enclosing_member,
@@ -12390,6 +12577,12 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                     }
                     ++item_count;
                 }
+            }
+        }
+        if (position != FENG_LSP_POS_OTHER) {
+            if (!append_context_keyword_items(json, &first, position)) {
+                local_list_dispose(&locals);
+                return false;
             }
         }
     }
@@ -12977,6 +13170,29 @@ static bool handle_completion_request(FengLspRuntime *runtime,
             return ok;
         }
         string_dispose(&json);
+    }
+    /* Last-resort keyword fallback: when every other path produced no
+     * items, offer position-aware keywords based on text analysis.
+     * This ensures the user always sees relevant keywords even when the
+     * document is too dirty for AST or cache analysis. */
+    {
+        FengLspPosition kw_position = completion_position_from_text(document->text, offset);
+
+        if (kw_position != FENG_LSP_POS_OTHER) {
+            bool first = true;
+
+            if (string_append_cstr(&json, "[") &&
+                append_context_keyword_items(&json, &first, kw_position) &&
+                string_append_cstr(&json, "]") &&
+                completion_json_has_items(&json)) {
+                g_completion_uri = NULL;
+                free(uri);
+                ok = send_json_response(output, id, json.data);
+                string_dispose(&json);
+                return ok;
+            }
+            string_dispose(&json);
+        }
     }
     g_completion_uri = NULL;
     free(uri);
