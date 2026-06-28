@@ -16,9 +16,9 @@
 本方案分阶段交付上述能力，核心原则：
 
 - **上下文感知**：根据光标所在位置（顶层 / 类型体 / 函数体）提供合适的关键字子集，不做全量堆砌。
-- **复用现有基础设施**：利用 `feng_keywords()`、`feng_builtin_annotations()` 等已有 API，不重新发明关键字表。
+- **复用现有基础设施**：利用 `feng_keywords()` 等已有 API 辅助词法识别，不重新发明基础能力；补全专用的关键字表和注解表在独立头文件中声明，与编译器内部表有意独立。
 - **最小侵入**：在现有 completion 流程的非成员分支末尾追加关键字项，不改变现有补全逻辑。
-- **数据与逻辑分离**：关键字集合、snippet 模板声明在独立头文件 `lsp_keywords.h` 中，C 逻辑仅遍历表结构，新增或调整关键字/snippet 时只改数据文件，不改逻辑代码。
+- **数据与逻辑分离**：关键字集合、注解集合、snippet 模板声明在独立头文件（`lsp_keywords.h`、`lsp_annotations.h`）中，C 逻辑仅遍历表结构，新增或调整关键字/注解/snippet 时只改数据文件，不改逻辑代码。
 - **禁止改动核心编译器**：所有变更仅限 `src/cli/lsp/` 目录，不得修改 `src/lexer/`、`src/parser/`、`src/semantic/`、`src/codegen/`、`src/symbol/` 等核心编译器模块，仅通过已有公开 API 消费编译器能力。
 
 ---
@@ -435,7 +435,41 @@ static bool completion_context_is_annotation(const char *text,
 
 ### 4.2 注解项
 
-使用 `feng_builtin_annotations()` 和 `feng_builtin_annotation_count()` 获取内置注解列表：
+内建注解与关键字遵循相同的"数据与逻辑分离"原则，定义在独立头文件 `lsp_annotations.h` 中，
+C 逻辑仅遍历表结构，新增或调整注解时只改数据文件，不改逻辑代码。
+
+**文件路径**：`src/cli/lsp/lsp_annotations.h`
+
+**数据结构**：
+
+```c
+/* 单个注解项 */
+typedef struct {
+    const char *label;      /* 注解文本，如 "abi" */
+    const char *detail;     /* 说明文本，如 "ABI annotation" */
+} LspAnnotationItem;
+```
+
+**注解表**（内容对应 §4.2 注解列表）：
+
+```c
+static const LspAnnotationItem BUILTIN_ANNOTATIONS[] = {
+    { "abi",      "ABI annotation" },
+    { "cdecl",    "C calling convention" },
+    { "stdcall",  "StdCall calling convention" },
+    { "fastcall", "FastCall calling convention" },
+    { "runtime",  "runtime annotation" },
+    { "iterable", "iterable annotation" },
+    { "iterator", "iterator annotation" },
+};
+
+static const size_t BUILTIN_ANNOTATION_COUNT =
+    sizeof(BUILTIN_ANNOTATIONS) / sizeof(BUILTIN_ANNOTATIONS[0]);
+```
+
+> 说明：`lsp_annotations.h` 与编译器内部注解表（`feng_builtin_annotations()`）内容一致，
+> 但属于有意独立声明——两者职责不同：编译器注解表用于语义分析，LSP 注解表用于补全。
+> 独立声明避免 LSP 对编译器内部 API 的耦合，后续 LSP 可提供额外的补全辅助信息（如 detail、snippet 等）。
 
 | 注解         | 说明              | CompletionItemKind |
 | ------------ | ----------------- | ------------------ |
@@ -612,7 +646,15 @@ static bool append_completion_item_snippet(FengLspString *json,
 | `KW_TABLE`   | 按 `FengLspPosition` 索引的总表          | 1    |
 | 各表项填充 `snippet` 字段 | 阶段三启用 Snippet 模板       | 3    |
 
-### 6.2 `src/cli/lsp/runtime.c`
+### 6.2 `src/cli/lsp/lsp_annotations.h`（新增）
+
+| 内容                       | 说明                                       | 阶段 |
+| -------------------------- | ------------------------------------------ | ---- |
+| `LspAnnotationItem`        | 注解项结构（label、detail）                | 2    |
+| `BUILTIN_ANNOTATIONS`      | 内建注解表（abi、cdecl、stdcall 等）       | 2    |
+| `BUILTIN_ANNOTATION_COUNT` | 注解数量常量                               | 2    |
+
+### 6.3 `src/cli/lsp/runtime.c`
 
 | 位置                                                      | 变更                                           | 阶段 |
 | --------------------------------------------------------- | ---------------------------------------------- | ---- |
@@ -625,13 +667,13 @@ static bool append_completion_item_snippet(FengLspString *json,
 | `build_cached_completion_json` 的 `else` 分支 ~12338 行末尾 | 调用 `append_context_keyword_items`            | 1    |
 | `handle_completion_request` 返回 `"[]"` 之前              | 文本回退兜底关键字                             | 1    |
 | 新增 `completion_context_is_annotation`                    | 注解上下文检测                                 | 2    |
-| 新增 `build_annotation_completion_json`                    | 构建注解补全响应                               | 2    |
+| 新增 `build_annotation_completion_json`                    | 构建注解补全响应（遍历 `BUILTIN_ANNOTATIONS`） | 2    |
 | `handle_completion_request` 参数解析后                     | 注解上下文优先检测                             | 2    |
 | `initialize` 响应 ~14382 行                               | `triggerCharacters` 添加 `"@"`                 | 2    |
 | 新增 `append_completion_item_snippet`                      | Snippet 补全项构建                             | 3    |
 | `append_context_keyword_items`                            | 各位置适合 Snippet 的关键字附带 insertText     | 3    |
 
-### 6.3 `editors/feng-vscode/`
+### 6.4 `editors/feng-vscode/`
 
 无需变更。`package.json` 已配置 `editor.quickSuggestions` 和 `suggestOnTriggerCharacters`，LSP 的 `completionProvider` 声明变更后 VSCode 自动适配。
 
@@ -655,11 +697,12 @@ static bool append_completion_item_snippet(FengLspString *json,
 
 ### 阶段二：注解补全
 
-- [ ] **2.1** 实现 `completion_context_is_annotation`：检测 `@` 前缀（§4.1）
-- [ ] **2.2** 实现 `build_annotation_completion_json`：使用 `feng_builtin_annotations()` 构建注解项（§4.2）
-- [ ] **2.3** 在 `handle_completion_request` 中 offset 计算后、`is_member` 计算前，插入注解优先检测并提前返回（§4.3）
-- [ ] **2.4** `initialize` 响应 `triggerCharacters` 添加 `"@"`（§4.4）
-- [ ] **2.5** 补充注解补全回归测试（输入 `@` 返回全部注解；输入 `@a` 过滤出 `abi`），运行全量回归验证
+- [ ] **2.1** 新建 `src/cli/lsp/lsp_annotations.h`，声明 `LspAnnotationItem`、`BUILTIN_ANNOTATIONS` 表及 `BUILTIN_ANNOTATION_COUNT`（§4.2）
+- [ ] **2.2** 实现 `completion_context_is_annotation`：检测 `@` 前缀（§4.1）
+- [ ] **2.3** 实现 `build_annotation_completion_json`：遍历 `BUILTIN_ANNOTATIONS` 构建注解项（§4.2）
+- [ ] **2.4** 在 `handle_completion_request` 中 offset 计算后、`is_member` 计算前，插入注解优先检测并提前返回（§4.3）
+- [ ] **2.5** `initialize` 响应 `triggerCharacters` 添加 `"@"`（§4.4）
+- [ ] **2.6** 补充注解补全回归测试（输入 `@` 返回全部注解；输入 `@a` 过滤出 `abi`），运行全量回归验证
 
 ### 阶段三：Snippet 支持
 
