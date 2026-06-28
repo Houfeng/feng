@@ -28,8 +28,9 @@
 
 ```c
 typedef enum {
-    FENG_LSP_KW_CTX_NONE,       /* 无需关键字（成员访问、import 路径等） */
-    FENG_LSP_KW_CTX_TOP_LEVEL,  /* 模块顶层（declaration 之外） */
+    FENG_LSP_KW_CTX_NONE,       /* 无需关键字（成员访问、import 路径、enum 体等） */
+    FENG_LSP_KW_CTX_TOP_DECL,   /* 模块顶层（声明位置） */
+    FENG_LSP_KW_CTX_TOP_BIND,   /* 顶层绑定位置（全局 let/var 声明及初始化表达式） */
     FENG_LSP_KW_CTX_MEMBER,     /* type / spec / fit 声明体内部（成员声明位置） */
     FENG_LSP_KW_CTX_BODY        /* 函数 / 方法体内部（语句位置） */
 } FengLspKeywordContext;
@@ -37,26 +38,52 @@ typedef enum {
 
 ### 2.2 各上下文关键字集合
 
-**TOP_LEVEL**（14 个）：
+**TOP_DECL**（11 个）：
 
-| 关键字   | 说明           |
-| -------- | -------------- |
-| `module` | 模块声明       |
-| `import` | 导入声明       |
-| `func`   | 函数声明       |
-| `type`   | 类型声明       |
-| `enum`   | 枚举声明       |
-| `spec`   | 规约声明       |
-| `fit`    | 适配声明       |
-| `extern` | 外部声明       |
-| `open`   | 可见性修饰     |
-| `seal`   | 可见性修饰     |
-| `static` | 静态修饰       |
-| `let`    | 全局不可变绑定 |
-| `var`    | 全局可变绑定   |
-| `as`     | 导入别名       |
+| 关键字   | 说明       |
+| -------- | ---------- |
+| `module` | 模块声明   |
+| `import` | 导入声明   |
+| `func`   | 函数声明   |
+| `type`   | 类型声明   |
+| `enum`   | 枚举声明   |
+| `spec`   | 规约声明   |
+| `fit`    | 适配声明   |
+| `extern` | 外部声明   |
+| `open`   | 可见性修饰 |
+| `seal`   | 可见性修饰 |
+| `as`     | 导入别名   |
+
+**TOP_BIND**（15 个）：
+
+| 关键字     | 说明             |
+| ---------- | ---------------- |
+| `let`      | 全局不可变绑定   |
+| `var`      | 全局可变绑定     |
+| `open`     | 可见性修饰       |
+| `seal`     | 可见性修饰       |
+| `extern`   | 外部声明         |
+| `if`       | 条件表达式       |
+| `else`     | 条件分支         |
+| `match`    | 模式匹配         |
+| `while`    | 循环             |
+| `for`      | 循环             |
+| `in`       | for/in 迭代      |
+| `try`      | 异常捕获         |
+| `catch`    | 异常处理         |
+| `unknown`  | 未知值           |
+| `void`     | 空类型           |
+
+> 说明：`let x = ...` 初始化表达式支持所有合法表达式，
+> 因此 TOP_BIND 包含表达式关键字（`if`、`match`、`while` 等）。
+> 与 BODY 的区别：不包含语句级关键字（`return`、`break`、`continue`、`throw`、`defer`），
+> 这些仅在函数体内合法。
 
 **MEMBER**（6 个）：
+
+> 适用于 `type`、`spec`（object form）、`fit` 声明体内部。
+> `enum` 体内部不使用关键字（enum item 为纯标识符），
+> 分类为 `NONE`（见 §3.1）。
 
 | 关键字   | 说明       |
 | -------- | ---------- |
@@ -94,6 +121,7 @@ typedef enum {
 - **保留字**（`class`、`struct`、`const`、`export`、`prop`）不纳入补全，当前不使用。
 - **`self`** 已由 `collect_visible_locals_for_completion` 作为局部变量提供，在 BODY 上下文中不再重复添加。
 - **`true` / `false` / `none`** 不属于关键字（分别是 `FENG_TOKEN_BOOL` 和标准库函数），不通过关键字补全提供。
+- **`enum` 体内部**不提供关键字补全（enum item 为纯标识符，如 `enum Color { Red, Green, Blue }`），上下文分类为 `NONE`。
 
 ---
 
@@ -110,20 +138,25 @@ typedef enum {
 （is_use_path）上下文——前者走成员分支，后者已由 extract_use_path_context
 提前返回，均不会到达关键字分类逻辑。
 
-if enclosing_decl == NULL → TOP_LEVEL
+if enclosing_decl == NULL → TOP_DECL
 if enclosing_member != NULL:
     if enclosing_member 是 callable（method/constructor/finalizer）:
         → BODY
     else:
         → MEMBER（field 内部或声明位置）
 else:
-    if enclosing_decl->kind == FENG_DECL_FUNCTION
-        || enclosing_decl->kind == FENG_DECL_GLOBAL_BINDING → BODY
-    else → MEMBER（type/enum/spec/fit 体内，但不在具体成员内）
+    if enclosing_decl->kind == FENG_DECL_FUNCTION → BODY
+    if enclosing_decl->kind == FENG_DECL_GLOBAL_BINDING → TOP_BIND
+    if enclosing_decl->kind == FENG_DECL_ENUM → NONE
+        （enum item 为纯标识符，不使用关键字）
+    else → MEMBER（type/spec/fit 体内，但不在具体成员内）
 ```
 
-> 说明：`GLOBAL_BINDING`（`let` / `var`）在顶层和函数体内均合法，其初始化表达式
-> 位于语句级上下文，因此与 `FUNCTION` 一样归类为 `BODY`。
+> 说明：
+> - `GLOBAL_BINDING`（`let` / `var`）归类为 `TOP_BIND`，
+>   提供绑定关键字与修饰符，不包含语句级关键字（`if`、`while`、`return` 等）。
+> - `FENG_DECL_ENUM` 归类为 `NONE`，因为 enum item 是纯标识符
+>   （如 `enum Color { Red, Green, Blue }`），不需要关键字补全。
 
 对应调用点（`build_completion_json` 的 `else` 分支 ~12044 行，非成员 `else` 分支）：
 
@@ -158,11 +191,17 @@ static FengLspKeywordContext classify_keyword_context_from_text(
 
 1. 先检测是否为成员访问（复用 `completion_context_is_member_access`）→ `NONE`。
 2. 从 offset 向前扫描，查找最近的未闭合 `{`。
-3. 若找不到 `{` → `TOP_LEVEL`。
+3. 若找不到 `{` → `TOP_DECL`。
 4. 若找到 `{`，继续向前跳过空白，读取 `{` 前的标识符：
    - 若标识符是 `type` / `spec` / `fit` → `MEMBER`。
+   - 若标识符是 `enum` → `NONE`（enum item 为纯标识符）。
    - 若标识符是 `func` 或 `}` 前紧跟 `)` → `BODY`。
+   - 若标识符是 `let` / `var` → `TOP_BIND`。
    - 否则默认 `BODY`（在 `{}` 内部大概率是函数体）。
+
+> 说明：此 heuristic 不处理字符串字面量和注释中的 `{`，
+> 可能在极端场景下误判上下文。这是已知 tradeoff，
+> 脏代码场景下优先保证常见路径正确。
 
 此函数在 `handle_completion_request` 的以下回退路径中使用：
 
@@ -230,16 +269,22 @@ static bool completion_context_is_annotation(const char *text,
 
 ### 4.3 注入位置
 
-在 `handle_completion_request` 中，解析参数后、调用 `build_completion_json` 之前，先检测注解上下文：
+在 `handle_completion_request` 中，解析参数并计算 `offset` 后、
+计算 `is_member_completion` 之前，先检测注解上下文：
 
 ```c
+/* offset 计算完成后，立即检测注解 */
 FengSlice annotation_prefix = {0};
 if (completion_context_is_annotation(document->text, offset, &annotation_prefix)) {
     /* 直接构建注解补全 JSON 并返回 */
     ok = build_annotation_completion_json(annotation_prefix, &json);
     /* ... send response and return ... */
 }
+/* 之后才计算 is_member_completion 等 */
 ```
+
+> 说明：注解检测必须在 `is_member_completion` 计算之前执行并提前返回，
+> 确保注解上下文与成员访问等其他上下文完全互斥，避免干扰。
 
 注解补全是互斥的：如果光标在 `@` 后，只返回注解项，不返回其他补全。
 
@@ -274,7 +319,7 @@ VSCode 原生支持 LSP Snippet 语法，无需额外适配。
 
 各上下文中，适合提供 Snippet 模板的关键字应附带 `insertText`，不适合的关键字仅提供纯文本补全。
 
-**TOP_LEVEL Snippet**：
+**TOP_DECL Snippet**：
 
 | label           | insertText                                           | 说明              |
 | --------------- | ---------------------------------------------------- | ----------------- |
@@ -288,14 +333,19 @@ VSCode 原生支持 LSP Snippet 语法，无需额外适配。
 | `spec-callable` | `spec ${1:Name}(${2:params}): ${3:void};`            | callable-form 规约 |
 | `spec-union`    | `spec ${1:Name}: ${2:T1} \| ${0:T2};`               | union-form 规约   |
 | `fit`           | `fit ${1:Name} {\n\t$0\n}`                           | 适配声明          |
-| `let`           | `let ${1:name}: ${2:type} = ${0:value}`               | 全局绑定          |
-| `var`           | `var ${1:name}: ${2:type} = ${0:value}`               | 全局绑定          |
 
 > 说明：
 > - `extern` 不提供独立 Snippet，因为 `extern` 总是修饰后续声明关键字
 >   （如 `extern func`），用户选择 `func` 的 Snippet 后手动添加 `extern` 即可。
 > - `type` 与 `type-tuple`、`spec` / `spec-callable` / `spec-union` 均为独立项，
 >   label 不同，用户输入关键字前缀时由 VSCode 同时展示，按需选择。
+
+**TOP_BIND Snippet**：
+
+| 关键字 | insertText                              | 说明     |
+| ------ | --------------------------------------- | -------- |
+| `let`  | `let ${1:name}: ${2:type} = ${0:value}` | 全局绑定 |
+| `var`  | `var ${1:name}: ${2:type} = ${0:value}` | 全局绑定 |
 
 **MEMBER Snippet**：
 
@@ -349,11 +399,19 @@ static bool append_completion_item_snippet(FengLspString *json,
 }
 ```
 
-### 5.4 Snippet 与纯关键字共存
+### 5.4 Snippet 与纯关键字策略
 
-有 Snippet 模板的关键字**同时提供纯文本项和 Snippet 项**，两者 label 相同，
-VSCode 并列展示，用户可选择直接插入关键字或展开模板。无 Snippet 模板的关键字
-仅提供纯文本项。
+遵循主流语言服务器做法（rust-analyzer、gopls、TypeScript），
+每个关键字**仅提供一个补全项**：
+
+- 有 Snippet 模板的关键字：仅提供 Snippet 项（`insertTextFormat: 2`）。
+  用户选择后展开模板，通过 Tab 键在占位符间跳转。
+- 无 Snippet 模板的关键字：仅提供纯文本项（`insertTextFormat: 1` 或省略）。
+  用户选择后直接插入关键字文本。
+
+> 说明：不提供重复项（同一关键字同时出现纯文本和 Snippet 两个项），
+> 避免补全列表中出现相同 label 的项导致用户困惑。
+> 这是 rust-analyzer、gopls 等生产级语言服务器的统一做法。
 
 ---
 
@@ -389,12 +447,21 @@ VSCode 并列展示，用户可选择直接插入关键字或展开模板。无 
 
 **交付内容**：
 
-- 实现 `FengLspKeywordContext` 枚举与 `classify_keyword_context`。
-- 实现 `classify_keyword_context_from_text` 文本回退。
-- 实现 `append_context_keyword_items`。
+- 实现 `FengLspKeywordContext` 枚举（含 `TOP_DECL`、`TOP_BIND`）。
+- 实现 `classify_keyword_context`：
+  - `FENG_DECL_GLOBAL_BINDING` → `TOP_BIND`
+  - `FENG_DECL_ENUM` → `NONE`
+- 实现 `classify_keyword_context_from_text` 文本回退（含 `enum` 体识别和 `let`/`var` 绑定识别）。
+- 实现 `append_context_keyword_items`，覆盖全部五种上下文。
 - 在 `build_completion_json`、`build_cached_completion_json` 的非成员分支末尾调用。
 - 在 `handle_completion_request` 兜底路径中调用。
-- 补充 LSP 协议级回归测试：顶层输入 `f` 应包含 `func`；函数体内输入 `l` 应包含 `let`；成员访问时不应出现关键字。
+- 补充 LSP 协议级回归测试：
+  - 顶层输入 `f` 应包含 `func`，不包含 `let`。
+  - 顶层 `let` 绑定位置输入 `i` 应包含 `if`。
+  - 顶层 `let` 绑定位置输入 `r` 不应包含 `return`。
+  - 函数体内输入 `l` 应包含 `let`。
+  - `enum` 体内不应出现关键字。
+  - 成员访问时不应出现关键字。
 
 ### 任务 2：注解补全
 
@@ -415,5 +482,8 @@ VSCode 并列展示，用户可选择直接插入关键字或展开模板。无 
 **交付内容**：
 
 - 实现 `append_completion_item_snippet`。
-- 修改 `append_context_keyword_items`，为各上下文中具有模板的关键字附加 `insertText` + `insertTextFormat: 2`。
-- 补充回归测试：BODY 上下文中的 `if` 补全项应包含 `insertText` 字段且 `insertTextFormat` 为 2；TOP_LEVEL 中的 `func` 补全项应包含 Snippet 模板。
+- 修改 `append_context_keyword_items`，为各上下文中具有模板的关键字使用 Snippet 项（`insertText` + `insertTextFormat: 2`），无模板的关键字使用纯文本项。每个关键字仅提供一个项，不提供重复项。
+- 补充回归测试：
+  - BODY 上下文中的 `if` 补全项应包含 `insertText` 字段且 `insertTextFormat` 为 2。
+  - TOP_DECL 中的 `func` 补全项应包含 Snippet 模板。
+  - 同一关键字不应出现两个补全项。
