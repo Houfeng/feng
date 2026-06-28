@@ -686,14 +686,14 @@ static bool append_completion_item_snippet(FengLspString *json,
 
 ### 阶段一：上下文感知关键字补全
 
-- [ ] **1.1** 新建 `src/cli/lsp/lsp_keywords.h`，声明 `FengLspPosition` 枚举、`LspKwItem`、`LspKwTable`、`KW_TABLE` 及四张位置表（§2.1、§2.4），此阶段 `snippet` 字段全部为 `NULL`
-- [ ] **1.2** 在 `FengLspCompletionContext` 中新增 `position` 字段（`FengLspPosition` 类型）（§3.0）
-- [ ] **1.3** 在 `completion_context_from_text` 中增加文本路径的 `position` 赋值逻辑（§3.2）
-- [ ] **1.4** 在 `build_completion_json` / `build_cached_completion_json` 中增加 AST 路径的 `position` 精确覆盖逻辑（§3.1）
-- [ ] **1.5** 实现 `append_context_keyword_items`：遍历 `KW_TABLE[position]`，调用已有 `append_completion_item`（§2.4）
-- [ ] **1.6** 在 `build_completion_json` 和 `build_cached_completion_json` 非成员分支末尾，`position != OTHER` 时调用 `append_context_keyword_items`（§3.1）
-- [ ] **1.7** 在 `handle_completion_request` 兜底路径（返回 `"[]"` 前）注入文本回退关键字（§3.3 路径 8）
-- [ ] **1.8** 补充回归测试（§2.2 各表 + §3 判定规则），运行全量回归验证
+- [x] **1.1** 新建 `src/cli/lsp/lsp_keywords.h`，声明 `FengLspPosition` 枚举、`LspKwItem`、`LspKwTable`、`KW_TABLE` 及四张位置表（§2.1、§2.4），此阶段 `snippet` 字段全部为 `NULL`
+- [x] **1.2** 在 `FengLspCompletionContext` 中新增 `position` 字段（`FengLspPosition` 类型）（§3.0）
+- [x] **1.3** 在 `completion_context_from_text` 中增加文本路径的 `position` 赋值逻辑（§3.2）
+- [x] **1.4** 在 `build_completion_json` / `build_cached_completion_json` 中增加 AST 路径的 `position` 精确覆盖逻辑（§3.1）
+- [x] **1.5** 实现 `append_context_keyword_items`：遍历 `KW_TABLE[position]`，调用已有 `append_completion_item`（§2.4）
+- [x] **1.6** 在 `build_completion_json` 和 `build_cached_completion_json` 非成员分支末尾，`position != OTHER` 时调用 `append_context_keyword_items`（§3.1）
+- [x] **1.7** 在 `handle_completion_request` 兜底路径（返回 `"[]"` 前）注入文本回退关键字（§3.3 路径 8）
+- [x] **1.8** 补充回归测试（§2.2 各表 + §3 判定规则），运行全量回归验证
 
 ### 阶段二：注解补全
 
