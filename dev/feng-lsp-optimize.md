@@ -23,7 +23,7 @@
 
 ---
 
-## 2. 关键字上下文分类
+## 2. 关键字位置分类
 
 ### 2.1 语法位置枚举 `FengLspPosition`
 
@@ -45,7 +45,7 @@ typedef enum {
 覆盖成员访问、import 路径、enum 体等未归入已分类位置的场景。
 消费方在 `position == OTHER` 时不追加关键字。
 
-### 2.2 各上下文关键字集合
+### 2.2 各位置关键字集合
 
 **TOP_DECL**（11 个）：
 
@@ -92,7 +92,7 @@ typedef enum {
 
 > 适用于 `type`、`spec`（object form）、`fit` 声明体内部。
 > `enum` 体内部不使用关键字（enum item 为纯标识符），
-> 分类为 `NONE`（见 §3.1）。
+> 分类为 `OTHER`（见 §3.1）。
 
 | 关键字   | 说明       |
 | -------- | ---------- |
@@ -128,9 +128,9 @@ typedef enum {
 ### 2.3 排除项
 
 - **保留字**（`class`、`struct`、`const`、`export`、`prop`）不纳入补全，当前不使用。
-- **`self`** 已由 `collect_visible_locals_for_completion` 作为局部变量提供，在 BODY 上下文中不再重复添加。
+- **`self`** 已由 `collect_visible_locals_for_completion` 作为局部变量提供，在 BODY 位置中不再重复添加。
 - **`true` / `false` / `none`** 不属于关键字（分别是 `FENG_TOKEN_BOOL` 和标准库函数），不通过关键字补全提供。
-- **`enum` 体内部**不提供关键字补全（enum item 为纯标识符，如 `enum Color { Red, Green, Blue }`），上下文分类为 `NONE`。
+- **`enum` 体内部**不提供关键字补全（enum item 为纯标识符，如 `enum Color { Red, Green, Blue }`），位置分类为 `OTHER`。
 
 ### 2.4 声明式头文件 `lsp_keywords.h`
 
@@ -149,14 +149,14 @@ typedef struct {
     const char *snippet;    /* Snippet 模板，NULL 表示纯文本项 */
 } LspKwItem;
 
-/* 上下文关键字表 */
+/* 位置关键字表 */
 typedef struct {
     const LspKwItem *items;
     size_t count;
 } LspKwTable;
 ```
 
-**各上下文表声明**（内容对应 §2.2 各表）：
+**各位置表声明**（内容对应 §2.2 各表）：
 
 ```c
 /* TOP_DECL (§2.2) */
@@ -230,7 +230,7 @@ static const LspKwItem BODY_KWS[] = {
 };
 ```
 
-**上下文索引表**：
+**位置索引表**：
 
 ```c
 static const LspKwTable KW_TABLE[] = {
@@ -255,8 +255,8 @@ static const LspKwTable KW_TABLE[] = {
 
 | 维度 | `token.h`（`FENG_KEYWORD_LIST`） | `lsp_keywords.h`（`KW_TABLE`） |
 |---|---|---|
-| 职责 | 词法分析器识别关键字 | LSP 补全提供上下文感知的关键字列表 |
-| 内容 | 关键字文本 + token kind | 关键字文本 + 上下文分组 + detail + snippet |
+| 职责 | 词法分析器识别关键字 | LSP 补全提供位置感知的关键字列表 |
+| 内容 | 关键字文本 + token kind | 关键字文本 + 位置分组 + detail + snippet |
 | 变体项 | 无（`if-else`、`for-in` 不是真正关键字） | 有（作为独立补全项） |
 
 `lsp_keywords.h` 不依赖 `token.h` 的 API，保持独立声明，
@@ -264,7 +264,7 @@ static const LspKwTable KW_TABLE[] = {
 
 ---
 
-## 3. 上下文判定
+## 3. 位置判定
 
 ### 3.0 `FengLspCompletionContext` 与 `position` 字段
 
@@ -350,7 +350,7 @@ if (completion_context.position != FENG_LSP_POS_OTHER) {
 
 ### 3.2 文本回退路径（脏代码场景）
 
-当 AST 分析失败（脏代码无法解析）时，`handle_completion_request` 中的各回退路径可能产生空结果或仅含少量项。此时需要基于文本的上下文判定。
+当 AST 分析失败（脏代码无法解析）时，`handle_completion_request` 中的各回退路径可能产生空结果或仅含少量项。此时需要基于文本的位置判定。
 
 在 `completion_context_from_text` 中增加 `position` 字段的赋值逻辑：
 
@@ -367,7 +367,7 @@ if (completion_context.position != FENG_LSP_POS_OTHER) {
    - 否则默认 `BODY`（在 `{}` 内部大概率是函数体）。
 
 > 说明：此 heuristic 不处理字符串字面量和注释中的 `{`，
-> 可能在极端场景下误判上下文。这是已知 tradeoff，
+> 可能在极端场景下误判位置。这是已知 tradeoff，
 > 脏代码场景下优先保证常见路径正确。
 
 此逻辑在 `handle_completion_request` 的以下回退路径中使用：
@@ -484,7 +484,7 @@ VSCode 原生支持 LSP Snippet 语法，无需额外适配。
 
 ### 5.2 Snippet 模板定义
 
-各上下文中，适合提供 Snippet 模板的关键字应附带 `insertText`，不适合的关键字仅提供纯文本补全。
+各位置中，适合提供 Snippet 模板的关键字应附带 `insertText`，不适合的关键字仅提供纯文本补全。
 
 **TOP_DECL Snippet**：
 
@@ -589,8 +589,8 @@ static bool append_completion_item_snippet(FengLspString *json,
 | 内容         | 说明                                     | 阶段 |
 | ------------ | ---------------------------------------- | ---- |
 | `LspKwItem`  | 关键字项结构（label、detail、snippet）   | 1    |
-| `LspKwTable` | 上下文表结构（items + count）            | 1    |
-| 四张上下文表 | `TOP_DECL_KWS`、`TOP_BIND_KWS`、`MEMBER_KWS`、`BODY_KWS` | 1 |
+| `LspKwTable` | 位置表结构（items + count）              | 1    |
+| 四张位置表 | `TOP_DECL_KWS`、`TOP_BIND_KWS`、`MEMBER_KWS`、`BODY_KWS` | 1 |
 | `KW_TABLE`   | 按 `FengLspPosition` 索引的总表          | 1    |
 | 各表项填充 `snippet` 字段 | 阶段三启用 Snippet 模板       | 3    |
 
