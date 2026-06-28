@@ -697,12 +697,12 @@ static bool append_completion_item_snippet(FengLspString *json,
 
 ### 阶段二：注解补全
 
-- [ ] **2.1** 新建 `src/cli/lsp/lsp_annotations.h`，声明 `LspAnnotationItem`、`BUILTIN_ANNOTATIONS` 表及 `BUILTIN_ANNOTATION_COUNT`（§4.2）
-- [ ] **2.2** 实现 `completion_context_is_annotation`：检测 `@` 前缀（§4.1）
-- [ ] **2.3** 实现 `build_annotation_completion_json`：遍历 `BUILTIN_ANNOTATIONS` 构建注解项（§4.2）
-- [ ] **2.4** 在 `handle_completion_request` 中 offset 计算后、`is_member` 计算前，插入注解优先检测并提前返回（§4.3）
-- [ ] **2.5** `initialize` 响应 `triggerCharacters` 添加 `"@"`（§4.4）
-- [ ] **2.6** 补充注解补全回归测试（输入 `@` 返回全部注解；输入 `@a` 过滤出 `abi`），运行全量回归验证
+- [x] **2.1** 新建 `src/cli/lsp/lsp_annotations.h`，声明 `LspAnnotationItem`、`BUILTIN_ANNOTATIONS` 表及 `BUILTIN_ANNOTATION_COUNT`（§4.2）
+- [x] **2.2** 实现 `completion_context_is_annotation`：检测 `@` 前缀（§4.1）
+- [x] **2.3** 实现 `build_annotation_completion_json`：遍历 `BUILTIN_ANNOTATIONS` 构建注解项（§4.2）
+- [x] **2.4** 在 `handle_completion_request` 中 offset 计算后、`is_member` 计算前，插入注解优先检测并提前返回（§4.3）
+- [x] **2.5** `initialize` 响应 `triggerCharacters` 添加 `"@"`（§4.4）
+- [x] **2.6** 补充注解补全回归测试（输入 `@` 返回全部注解；输入 `@a` 过滤出 `abi`），运行全量回归验证
 
 ### 阶段三：Snippet 支持
 

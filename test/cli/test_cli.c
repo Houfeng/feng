@@ -7574,7 +7574,7 @@ static void test_lsp_hover_definition_and_completion(void) {
     ASSERT(strstr(output, "\"referencesProvider\":true") != NULL);
     ASSERT(strstr(output, "\"renameProvider\":{\"prepareProvider\":true}") != NULL);
     ASSERT(strstr(output, "\"completionProvider\"") != NULL);
-    ASSERT(strstr(output, "\"triggerCharacters\":[\".\",\"_\",\"a\"") != NULL);
+    ASSERT(strstr(output, "\"triggerCharacters\":[\".\",\"_\",\"@\",\"a\"") != NULL);
     ASSERT(strstr(output, "\"Z\"") != NULL);
     ASSERT(strstr(output, "\"kind\":\"plaintext\"") != NULL);
     ASSERT(strstr(output, "Formats a user label.") != NULL);
@@ -12991,6 +12991,36 @@ static void test_lsp_keyword_completion_member_access_no_keywords(void) {
     free(output);
 }
 
+/* §2.6 annotation completion regression tests.
+ * Verifies that '@' triggers annotation completion and that prefix
+ * filtering returns only matching items. */
+static void test_lsp_annotation_completion_all(void) {
+    static const char *kSource =
+        "module test.lsp.annotation.all;\n"
+        "\n"
+        "@\n";
+    /* Cursor right after '@' → all 7 annotations. */
+    const char *labels[] = {"abi", "cdecl", "stdcall", "fastcall", "runtime", "iterable", "iterator"};
+
+    assert_lsp_completion_contains_labels(kSource, "@\n", 1U, labels, 7U);
+}
+
+static void test_lsp_annotation_completion_filter_prefix(void) {
+    static const char *kSource =
+        "module test.lsp.annotation.filter;\n"
+        "\n"
+        "@a\n";
+    /* Cursor after '@a' → only 'abi' matches. */
+    char *output = capture_lsp_completion_response(kSource, "@a\n", 2U);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
+    ASSERT(strstr(output, "\"label\":\"abi\"") != NULL);
+    /* Non-matching annotations must not appear. */
+    ASSERT(strstr(output, "\"label\":\"cdecl\"") == NULL);
+    ASSERT(strstr(output, "\"label\":\"runtime\"") == NULL);
+    free(output);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -13093,6 +13123,8 @@ int main(void) {
     test_lsp_keyword_completion_member_position();
     test_lsp_keyword_completion_enum_body_no_keywords();
     test_lsp_keyword_completion_member_access_no_keywords();
+    test_lsp_annotation_completion_all();
+    test_lsp_annotation_completion_filter_prefix();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
     test_direct_build_accepts_package_bundle();

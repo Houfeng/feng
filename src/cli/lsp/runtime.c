@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 
 #include "cli/lsp/lsp_keywords.h"
+#include "cli/lsp/lsp_annotations.h"
 
 #include "cli/common.h"
 #include "cli/deps/manager.h"
@@ -10677,6 +10678,40 @@ static bool append_context_keyword_items(FengLspString *json,
     return true;
 }
 
+/* Build a complete annotation completion JSON response.
+ * Iterates BUILTIN_ANNOTATIONS and emits one item per entry.
+ * When prefix is non-empty, only items whose label starts with the
+ * prefix are included (server-side filtering for reliable behaviour).
+ * Returns true on success, false on allocation failure. */
+static bool build_annotation_completion_json(FengSlice prefix,
+                                             FengLspString *json) {
+    bool first = true;
+    size_t index;
+
+    if (!string_append_cstr(json, "[")) {
+        return false;
+    }
+    for (index = 0U; index < BUILTIN_ANNOTATION_COUNT; ++index) {
+        const LspAnnotationItem *item = &BUILTIN_ANNOTATIONS[index];
+
+        /* Filter by prefix when the user has typed characters after '@'. */
+        if (prefix.length > 0U) {
+            if (strlen(item->label) < prefix.length ||
+                strncmp(item->label, prefix.data, prefix.length) != 0) {
+                continue;
+            }
+        }
+        if (!append_completion_item(json,
+                                    &first,
+                                    slice_from_cstr(item->label),
+                                    item->detail,
+                                    14)) {
+            return false;
+        }
+    }
+    return string_append_cstr(json, "]");
+}
+
 /* Append a completion item with a resolve data payload.  The data object
  * carries the document URI and an optional owner type name so that
  * completionItem/resolve can locate the doc comment without re-analysing
@@ -12630,6 +12665,48 @@ static bool completion_context_is_member_access(const char *text, size_t offset)
            completion_context_is_member_dot(text, offset);
 }
 
+/* Detect whether the cursor is in an annotation context (@prefix).
+ * Scans backwards from offset for identifier characters, then checks
+ * whether the character immediately before the identifier is '@'.
+ * The '@' must be at the start of the file or preceded by whitespace
+ * to avoid false positives (e.g. email addresses).
+ * Returns true and sets *out_prefix to the typed identifier part
+ * (empty when only '@' has been typed). */
+static bool completion_context_is_annotation(const char *text,
+                                             size_t offset,
+                                             FengSlice *out_prefix) {
+    size_t length;
+    size_t prefix_end;
+    size_t prefix_start;
+    size_t at_pos;
+
+    if (text == NULL || out_prefix == NULL) {
+        return false;
+    }
+    length = strlen(text);
+    if (offset > length || offset == 0U) {
+        return false;
+    }
+    /* Scan backwards for identifier characters after '@'. */
+    prefix_end = offset;
+    prefix_start = offset;
+    while (prefix_start > 0U && completion_identifier_continue(text[prefix_start - 1U])) {
+        --prefix_start;
+    }
+    /* The character before the identifier must be '@'. */
+    if (prefix_start == 0U || text[prefix_start - 1U] != '@') {
+        return false;
+    }
+    at_pos = prefix_start - 1U;
+    /* '@' must be at start of file or preceded by whitespace. */
+    if (at_pos > 0U && !isspace((unsigned char)text[at_pos - 1U])) {
+        return false;
+    }
+    out_prefix->data = text + prefix_start;
+    out_prefix->length = prefix_end - prefix_start;
+    return true;
+}
+
 static bool completion_repair_has_expression_tail(const char *text, size_t offset) {
     size_t cursor;
     char ch;
@@ -13034,6 +13111,24 @@ static bool handle_completion_request(FengLspRuntime *runtime,
         return send_json_response(output, id, "[]");
     }
     offset = offset_from_position(document->text, line, character);
+    /* Annotation context takes priority over all other completion paths.
+     * When the cursor follows '@', return only annotation items and skip
+     * member, keyword, and identifier completion entirely. */
+    {
+        FengSlice annotation_prefix = {0};
+
+        if (completion_context_is_annotation(document->text, offset, &annotation_prefix)) {
+            if (build_annotation_completion_json(annotation_prefix, &json)) {
+                free(uri);
+                ok = send_json_response(output, id, json.data);
+                string_dispose(&json);
+                return ok;
+            }
+            string_dispose(&json);
+            free(uri);
+            return send_json_response(output, id, "[]");
+        }
+    }
     is_member_completion = completion_context_is_member_access(document->text, offset);
     can_repair_completion = is_member_completion || completion_repair_needs_semicolon(document->text, offset);
     g_completion_uri = uri;
@@ -14595,7 +14690,7 @@ static bool handle_initialize(FengLspRuntime *runtime,
     }
     return send_json_response(output,
                               id,
-                              "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"renameProvider\":{\"prepareProvider\":true},\"completionProvider\":{\"resolveProvider\":true,\"triggerCharacters\":[\".\",\"_\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\",\"p\",\"q\",\"r\",\"s\",\"t\",\"u\",\"v\",\"w\",\"x\",\"y\",\"z\",\"A\",\"B\",\"C\",\"D\",\"E\",\"F\",\"G\",\"H\",\"I\",\"J\",\"K\",\"L\",\"M\",\"N\",\"O\",\"P\",\"Q\",\"R\",\"S\",\"T\",\"U\",\"V\",\"W\",\"X\",\"Y\",\"Z\"]},\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}},\"serverInfo\":{\"name\":\"feng\"}}");
+                              "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":1,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"renameProvider\":{\"prepareProvider\":true},\"completionProvider\":{\"resolveProvider\":true,\"triggerCharacters\":[\".\",\"_\",\"@\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\",\"p\",\"q\",\"r\",\"s\",\"t\",\"u\",\"v\",\"w\",\"x\",\"y\",\"z\",\"A\",\"B\",\"C\",\"D\",\"E\",\"F\",\"G\",\"H\",\"I\",\"J\",\"K\",\"L\",\"M\",\"N\",\"O\",\"P\",\"Q\",\"R\",\"S\",\"T\",\"U\",\"V\",\"W\",\"X\",\"Y\",\"Z\"]},\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}},\"serverInfo\":{\"name\":\"feng\"}}");
 }
 
 bool feng_lsp_runtime_handle_payload(FengLspRuntime *runtime,
