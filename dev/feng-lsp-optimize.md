@@ -25,17 +25,25 @@
 
 ## 2. 关键字上下文分类
 
-### 2.1 上下文枚举
+### 2.1 语法位置枚举 `FengLspPosition`
 
 ```c
 typedef enum {
-    FENG_LSP_KW_CTX_NONE,       /* 无需关键字（成员访问、import 路径、enum 体等） */
-    FENG_LSP_KW_CTX_TOP_DECL,   /* 模块顶层（声明位置） */
-    FENG_LSP_KW_CTX_TOP_BIND,   /* 顶层绑定位置（全局 let/var 声明及初始化表达式） */
-    FENG_LSP_KW_CTX_MEMBER,     /* type / spec / fit 声明体内部（成员声明位置） */
-    FENG_LSP_KW_CTX_BODY        /* 函数 / 方法体内部（语句位置） */
-} FengLspKeywordContext;
+    FENG_LSP_POS_OTHER,    /* 未分类位置（零初始化默认值） */
+    FENG_LSP_POS_TOP_DECL, /* 模块顶层（声明位置） */
+    FENG_LSP_POS_TOP_BIND, /* 顶层绑定（全局 let/var 初始化表达式） */
+    FENG_LSP_POS_MEMBER,   /* type/spec/fit 声明体内部（成员声明位置） */
+    FENG_LSP_POS_BODY      /* 函数/方法体内部（语句位置） */
+} FengLspPosition;
 ```
+
+> `FengLspPosition` 是 `FengLspCompletionContext` 的字段，描述光标在文档中的语法位置，
+> 与现有字段（`is_member`、`prefix` 等描述正在输入的状态）正交，互不冲突。
+> 关键字补全是第一个消费方，未来类型补全、修饰符补全等也可消费此字段。
+
+`OTHER` 为零初始化默认值（C 结构体 `{0}` 时 `position == 0 == OTHER`），
+覆盖成员访问、import 路径、enum 体等未归入已分类位置的场景。
+消费方在 `position == OTHER` 时不追加关键字。
 
 ### 2.2 各上下文关键字集合
 
@@ -226,11 +234,11 @@ static const LspKwItem BODY_KWS[] = {
 
 ```c
 static const LspKwTable KW_TABLE[] = {
-    [FENG_LSP_KW_CTX_NONE]      = { NULL, 0 },
-    [FENG_LSP_KW_CTX_TOP_DECL]  = { TOP_DECL_KWS,  sizeof(TOP_DECL_KWS)  / sizeof(TOP_DECL_KWS[0])  },
-    [FENG_LSP_KW_CTX_TOP_BIND]  = { TOP_BIND_KWS,  sizeof(TOP_BIND_KWS)  / sizeof(TOP_BIND_KWS[0])  },
-    [FENG_LSP_KW_CTX_MEMBER]    = { MEMBER_KWS,    sizeof(MEMBER_KWS)    / sizeof(MEMBER_KWS[0])    },
-    [FENG_LSP_KW_CTX_BODY]      = { BODY_KWS,      sizeof(BODY_KWS)      / sizeof(BODY_KWS[0])      },
+    [FENG_LSP_POS_OTHER]    = { NULL, 0 },
+    [FENG_LSP_POS_TOP_DECL] = { TOP_DECL_KWS,  sizeof(TOP_DECL_KWS)  / sizeof(TOP_DECL_KWS[0])  },
+    [FENG_LSP_POS_TOP_BIND] = { TOP_BIND_KWS,  sizeof(TOP_BIND_KWS)  / sizeof(TOP_BIND_KWS[0])  },
+    [FENG_LSP_POS_MEMBER]   = { MEMBER_KWS,    sizeof(MEMBER_KWS)    / sizeof(MEMBER_KWS[0])    },
+    [FENG_LSP_POS_BODY]     = { BODY_KWS,      sizeof(BODY_KWS)      / sizeof(BODY_KWS[0])      },
 };
 ```
 
@@ -238,6 +246,7 @@ static const LspKwTable KW_TABLE[] = {
 > `snippet != NULL` 的项使用 `append_completion_item_snippet`，
 > `snippet == NULL` 的项使用 `append_completion_item`（纯文本）。
 > 阶段一、二（纯关键字、无 Snippet）暂不使用 `snippet` 字段，所有项以纯文本方式追加。
+> `position == FENG_LSP_POS_OTHER` 时 `KW_TABLE[OTHER]` 为 `{NULL, 0}`，不追加任何项。
 
 **与 `token.h` 的关系**：
 
@@ -257,27 +266,42 @@ static const LspKwTable KW_TABLE[] = {
 
 ## 3. 上下文判定
 
-### 3.0 两个 Context 结构的关系
+### 3.0 `FengLspCompletionContext` 与 `position` 字段
 
-`runtime.c` 中已有 `FengLspCompletionContext`（成员访问上下文），本文档新增 `FengLspKeywordContext`（关键字上下文）。两者职责不同，互不干扰：
+`FengLspCompletionContext` 现有字段描述**正在输入的状态**，新增 `position` 字段描述**光标所在的语法位置**，两者正交，互不冲突：
 
-| 结构 | 来源 | 职责 | 作用范围 |
-|---|---|---|---|
-| `FengLspCompletionContext` | 文本分析（`completion_context_from_text`） | 检测成员访问（`is_member`、`is_static_access`）、提取 `prefix` 和 `object` | 整个补全流程 |
-| `FengLspKeywordContext` | AST 路径优先，文本回退兜底 | 过滤关键字子集（TOP_DECL / TOP_BIND / MEMBER / BODY） | 仅非成员分支 |
+| 字段类别 | 字段 | 描述 |
+|---|---|---|
+| 正在输入的状态 | `is_member`、`is_static_access`、`object`、`prefix`、`literal_builtin_name` | 用户正在输入什么 |
+| 所在位置 | `position`（新增） | 光标在文档中的语法位置 |
 
-协作关系：
+更新后的结构：
+
+```c
+typedef struct FengLspCompletionContext {
+    bool is_member;
+    bool is_static_access;
+    FengSlice object;
+    FengSlice prefix;
+    FengSlice literal_builtin_name;
+    FengLspPosition position;   /* 新增：语法位置 */
+} FengLspCompletionContext;
+```
+
+`position` 由两阶段填充：
+
+1. `completion_context_from_text`（文本路径）：设置初步位置
+2. `build_completion_json` 内部（AST 路径）：用 `enclosing_decl`/`enclosing_member` 精确覆盖
+
+关键字补全消费 `position`：非成员分支末尾根据 `completion_context.position` 从 `KW_TABLE` 取出对应关键字子集追加。`position == OTHER` 时不追加。
 
 ```text
 build_completion_json 入口
-  ├── completion_context.is_member == true  → 成员补全分支（无关键字）
+  ├── completion_context.is_member == true  → 成员补全分支（不消费 position）
   └── completion_context.is_member == false → 非成员分支
         ├── locals + module members + imports（已有）
-        └── classify_keyword_context(enclosing_decl, enclosing_member)
-              → append_context_keyword_items(kw_ctx)（新增）
+        └── append_context_keyword_items(completion_context.position)（新增）
 ```
-
-`FengLspKeywordContext` 依赖 `enclosing_decl` 和 `enclosing_member`，这两个指针已由现有代码计算并传入，无需额外 AST 遍历。
 
 ### 3.1 AST 路径（优先）
 
@@ -299,29 +323,25 @@ if enclosing_member != NULL:
 else:
     if enclosing_decl->kind == FENG_DECL_FUNCTION → BODY
     if enclosing_decl->kind == FENG_DECL_GLOBAL_BINDING → TOP_BIND
-    if enclosing_decl->kind == FENG_DECL_ENUM → NONE
-        （enum item 为纯标识符，不使用关键字）
+    if enclosing_decl->kind == FENG_DECL_ENUM → OTHER
+        （enum item 为纯标识符，不提供关键字补全）
     else → MEMBER（type/spec/fit 体内，但不在具体成员内）
 ```
 
 > 说明：
 > - `GLOBAL_BINDING`（`let` / `var`）归类为 `TOP_BIND`，
 >   提供绑定关键字与修饰符，不包含语句级关键字（`if`、`while`、`return` 等）。
-> - `FENG_DECL_ENUM` 归类为 `NONE`，因为 enum item 是纯标识符
->   （如 `enum Color { Red, Green, Blue }`），不需要关键字补全。
+> - `FENG_DECL_ENUM` 归类为 `OTHER`，因为 enum item 是纯标识符
+>   （如 `enum Color { Red, Green, Blue }`），不提供关键字补全。
 
 对应调用点（`build_completion_json` 的 `else` 分支 ~12044 行，非成员 `else` 分支）：
 
 ```c
 /* 已有的 locals + module + imports 补全之后，追加关键字 */
-{
-    FengLspKeywordContext kw_ctx = classify_keyword_context(
-        enclosing_decl, enclosing_member);
-    if (kw_ctx != FENG_LSP_KW_CTX_NONE) {
-        if (!append_context_keyword_items(json, &first, kw_ctx)) {
-            local_list_dispose(&locals);
-            return false;
-        }
+if (completion_context.position != FENG_LSP_POS_OTHER) {
+    if (!append_context_keyword_items(json, &first, completion_context.position)) {
+        local_list_dispose(&locals);
+        return false;
     }
 }
 ```
@@ -332,21 +352,16 @@ else:
 
 当 AST 分析失败（脏代码无法解析）时，`handle_completion_request` 中的各回退路径可能产生空结果或仅含少量项。此时需要基于文本的上下文判定。
 
-新增函数 `classify_keyword_context_from_text`：
-
-```c
-static FengLspKeywordContext classify_keyword_context_from_text(
-    const char *text, size_t offset);
-```
+在 `completion_context_from_text` 中增加 `position` 字段的赋值逻辑：
 
 判定逻辑：
 
-1. 先检测是否为成员访问（复用 `completion_context_is_member_access`）→ `NONE`。
+1. 先检测是否为成员访问（复用 `completion_context_is_member_access`）→ `OTHER`。
 2. 从 offset 向前扫描，查找最近的未闭合 `{`。
 3. 若找不到 `{` → `TOP_DECL`。
 4. 若找到 `{`，继续向前跳过空白，读取 `{` 前的标识符：
    - 若标识符是 `type` / `spec` / `fit` → `MEMBER`。
-   - 若标识符是 `enum` → `NONE`（enum item 为纯标识符）。
+   - 若标识符是 `enum` → `OTHER`（enum item 为纯标识符）。
    - 若标识符是 `func` 或 `}` 前紧跟 `)` → `BODY`。
    - 若标识符是 `let` / `var` → `TOP_BIND`。
    - 否则默认 `BODY`（在 `{}` 内部大概率是函数体）。
@@ -355,7 +370,7 @@ static FengLspKeywordContext classify_keyword_context_from_text(
 > 可能在极端场景下误判上下文。这是已知 tradeoff，
 > 脏代码场景下优先保证常见路径正确。
 
-此函数在 `handle_completion_request` 的以下回退路径中使用：
+此逻辑在 `handle_completion_request` 的以下回退路径中使用：
 
 - `build_use_path_fallback_completion_json` 之后
 - `build_repaired_completion_json` 之后
@@ -382,9 +397,9 @@ static FengLspKeywordContext classify_keyword_context_from_text(
 - **路径 2、4**：repaired 路径仍调用 `build_completion_json`，关键字已在内部追加。
 - **路径 6**（use path fallback）：import 路径上下文，不追加关键字。
 - **路径 7**（literal builtin）：成员访问上下文，不追加关键字。
-- **路径 8**（返回空）：若文本回退判定上下文不是 `NONE`，将关键字项作为最终兜底返回。
+- **路径 8**（返回空）：若文本回退判定 `position != OTHER`，将关键字项作为最终兜底返回。
 
-为确保所有非成员路径都能提供关键字，新增一个统一的兜底逻辑：在 `handle_completion_request` 返回 `"[]"` 之前，若 `classify_keyword_context_from_text` 返回非 `NONE`，则返回关键字项。
+为确保所有非成员路径都能提供关键字，新增一个统一的兜底逻辑：在 `handle_completion_request` 返回 `"[]"` 之前，若 `completion_context.position != FENG_LSP_POS_OTHER`，则返回关键字项。
 
 ---
 
@@ -576,17 +591,18 @@ static bool append_completion_item_snippet(FengLspString *json,
 | `LspKwItem`  | 关键字项结构（label、detail、snippet）   | 1    |
 | `LspKwTable` | 上下文表结构（items + count）            | 1    |
 | 四张上下文表 | `TOP_DECL_KWS`、`TOP_BIND_KWS`、`MEMBER_KWS`、`BODY_KWS` | 1 |
-| `KW_TABLE`   | 按 `FengLspKeywordContext` 索引的总表    | 1    |
+| `KW_TABLE`   | 按 `FengLspPosition` 索引的总表          | 1    |
 | 各表项填充 `snippet` 字段 | 阶段三启用 Snippet 模板       | 3    |
 
 ### 6.2 `src/cli/lsp/runtime.c`
 
 | 位置                                                      | 变更                                           | 阶段 |
 | --------------------------------------------------------- | ---------------------------------------------- | ---- |
-| 新增 `FengLspKeywordContext` 枚举                         | 定义上下文类型                                 | 1    |
-| 新增 `classify_keyword_context`                           | AST 路径上下文判定                             | 1    |
-| 新增 `classify_keyword_context_from_text`                 | 文本回退路径上下文判定                         | 1    |
-| 新增 `append_context_keyword_items`                       | 按上下文追加关键字补全项                       | 1    |
+| 新增 `FengLspPosition` 枚举                               | 定义语法位置类型                               | 1    |
+| `FengLspCompletionContext` 新增 `position` 字段           | 语法位置字段（`FengLspPosition`）              | 1    |
+| `completion_context_from_text`                            | 文本路径填充 `position` 字段                   | 1    |
+| `build_completion_json` / `build_cached_completion_json`  | AST 路径精确覆盖 `position` 字段               | 1    |
+| 新增 `append_context_keyword_items`                       | 按 `position` 追加关键字补全项                 | 1    |
 | `build_completion_json` 的 `else` 分支 ~12044 行末尾      | 调用 `append_context_keyword_items`            | 1    |
 | `build_cached_completion_json` 的 `else` 分支 ~12338 行末尾 | 调用 `append_context_keyword_items`            | 1    |
 | `handle_completion_request` 返回 `"[]"` 之前              | 文本回退兜底关键字                             | 1    |
@@ -595,7 +611,7 @@ static bool append_completion_item_snippet(FengLspString *json,
 | `handle_completion_request` 参数解析后                     | 注解上下文优先检测                             | 2    |
 | `initialize` 响应 ~14382 行                               | `triggerCharacters` 添加 `"@"`                 | 2    |
 | 新增 `append_completion_item_snippet`                      | Snippet 补全项构建                             | 3    |
-| `append_context_keyword_items`                            | 各上下文适合 Snippet 的关键字附带 insertText   | 3    |
+| `append_context_keyword_items`                            | 各位置适合 Snippet 的关键字附带 insertText     | 3    |
 
 ### 6.3 `editors/feng-vscode/`
 
@@ -610,12 +626,12 @@ static bool append_completion_item_snippet(FengLspString *json,
 
 ### 阶段一：上下文感知关键字补全
 
-- [ ] **1.1** 新建 `src/cli/lsp/lsp_keywords.h`，声明 `LspKwItem`、`LspKwTable`、`KW_TABLE` 及四张上下文表（§2.4），此阶段 `snippet` 字段全部为 `NULL`
-- [ ] **1.2** 在 `runtime.c` 新增 `FengLspKeywordContext` 枚举（§2.1）
-- [ ] **1.3** 实现 `classify_keyword_context`：AST 路径判定（§3.1）
-- [ ] **1.4** 实现 `append_context_keyword_items`：遍历 `KW_TABLE[ctx]`，调用已有 `append_completion_item`（§2.4）
-- [ ] **1.5** 在 `build_completion_json` 和 `build_cached_completion_json` 非成员分支末尾调用 `append_context_keyword_items`（§3.1）
-- [ ] **1.6** 实现 `classify_keyword_context_from_text` 文本回退判定（§3.2）
+- [ ] **1.1** 新建 `src/cli/lsp/lsp_keywords.h`，声明 `FengLspPosition` 枚举、`LspKwItem`、`LspKwTable`、`KW_TABLE` 及四张位置表（§2.1、§2.4），此阶段 `snippet` 字段全部为 `NULL`
+- [ ] **1.2** 在 `FengLspCompletionContext` 中新增 `position` 字段（`FengLspPosition` 类型）（§3.0）
+- [ ] **1.3** 在 `completion_context_from_text` 中增加文本路径的 `position` 赋值逻辑（§3.2）
+- [ ] **1.4** 在 `build_completion_json` / `build_cached_completion_json` 中增加 AST 路径的 `position` 精确覆盖逻辑（§3.1）
+- [ ] **1.5** 实现 `append_context_keyword_items`：遍历 `KW_TABLE[position]`，调用已有 `append_completion_item`（§2.4）
+- [ ] **1.6** 在 `build_completion_json` 和 `build_cached_completion_json` 非成员分支末尾，`position != OTHER` 时调用 `append_context_keyword_items`（§3.1）
 - [ ] **1.7** 在 `handle_completion_request` 兜底路径（返回 `"[]"` 前）注入文本回退关键字（§3.3 路径 8）
 - [ ] **1.8** 补充回归测试（§2.2 各表 + §3 判定规则），运行全量回归验证
 
@@ -654,7 +670,7 @@ TypeScript 在 `services/completions.ts` 中实现关键字补全，核心机制
 
 **与 Feng 方案对比**：
 
-TypeScript 使用单一 Context 结构，Feng 分为 `FengLspCompletionContext`（成员访问）和 `FengLspKeywordContext`（关键字）两个结构。原因是 TypeScript 的实现成熟度高，统一结构更灵活；Feng 当前方案是增量演进，两个结构各司其职更清晰，未来可考虑统一。
+TypeScript 使用单一 `CompletionContext` 结构，Feng 采用相同思路——将 `FengLspPosition` 作为 `FengLspCompletionContext` 的字段，与 TypeScript 的统一结构方向一致。
 
 ### 8.2 rust-analyzer
 
@@ -668,7 +684,7 @@ TypeScript 使用单一 Context 结构，Feng 分为 `FengLspCompletionContext`�
 
 - **`CompletionContext`**：基于 token 位置分析，字段包括 `Position`、`ExpectedType`、`Enclosing`。
 - **位置分类**：`topLevel`、`funcBody`、`structField`、`interfaceMethod`，与 Feng 的 TOP_DECL / BODY / MEMBER 对应。
-- **特点**：gopls 更依赖词法（token）分析而非完整 AST，脏代码鲁棒性更好，与 Feng 的文本回退路径（`classify_keyword_context_from_text`）思路相似。
+- **特点**：gopls 更依赖词法（token）分析而非完整 AST，脏代码鲁棒性更好，与 Feng 的文本回退路径（`completion_context_from_text` 中 `position` 赋值）思路相似。
 
 ### 8.4 共同模式
 
