@@ -9239,13 +9239,30 @@ static bool record_type_fact_for_site(ResolveContext *context,
                                                   NULL,
                                                   NULL);
 
-        case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
+        case FENG_INFERRED_EXPR_TYPE_TYPE_REF: {
+            /* The type_ref carried by InferredExprType may be a synthetic
+             * type_ref owned by the ResolveContext (e.g., the instance_ref
+             * built by infer_call_expr_type for constructor calls with
+             * explicit generic arguments).  Type facts outlive the
+             * ResolveContext (they live in the Analysis), so we must clone
+             * the type_ref and transfer ownership to Analysis-level
+             * lifetime before storing the pointer in the fact. */
+            FengTypeRef *clone = clone_type_ref_for_inference(expr_type.type_ref);
+
+            if (clone == NULL) {
+                return false;
+            }
+            if (!analysis_track_synthetic_type_ref(context->analysis, clone)) {
+                free_synthetic_type_ref(clone);
+                return false;
+            }
             return feng_semantic_record_type_fact(context->analysis,
                                                   site,
                                                   FENG_SEMANTIC_TYPE_FACT_TYPE_REF,
                                                   (FengSlice){0},
-                                                  expr_type.type_ref,
+                                                  clone,
                                                   NULL);
+        }
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
             return feng_semantic_record_type_fact(context->analysis,
