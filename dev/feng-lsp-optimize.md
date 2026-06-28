@@ -47,41 +47,50 @@ typedef enum {
 
 ### 2.2 各位置关键字集合
 
-**TOP_DECL**（11 个）：
+> 下表中标注 `(变体)` 的项是同一关键字的不同 Snippet 模板形式，
+> 不是独立关键字。在 §2.4 补全项表中作为独立补全项列出。
+> 各位置计数为补全项总数（含变体）。
 
-| 关键字   | 说明       |
-| -------- | ---------- |
-| `module` | 模块声明   |
-| `import` | 导入声明   |
-| `func`   | 函数声明   |
-| `type`   | 类型声明   |
-| `enum`   | 枚举声明   |
-| `spec`   | 规约声明   |
-| `fit`    | 适配声明   |
-| `extern` | 外部声明   |
-| `open`   | 可见性修饰 |
-| `seal`   | 可见性修饰 |
-| `as`     | 导入别名   |
+**TOP_DECL**（14 个）：
 
-**TOP_BIND**（15 个）：
+| 关键字          | 说明           |
+| --------------- | -------------- |
+| `module`        | 模块声明       |
+| `import`        | 导入声明       |
+| `func`          | 函数声明       |
+| `type`          | 对象类型声明   |
+| `type` *(变体)* | 元组类型声明   |
+| `enum`          | 枚举声明       |
+| `spec`          | 规约声明       |
+| `spec` *(变体)* | callable 规约  |
+| `spec` *(变体)* | union 规约     |
+| `fit`           | 适配声明       |
+| `extern`        | 外部声明       |
+| `open`          | 可见性修饰     |
+| `seal`          | 可见性修饰     |
+| `as`            | 导入别名       |
 
-| 关键字     | 说明             |
-| ---------- | ---------------- |
-| `let`      | 全局不可变绑定   |
-| `var`      | 全局可变绑定     |
-| `open`     | 可见性修饰       |
-| `seal`     | 可见性修饰       |
-| `extern`   | 外部声明         |
-| `if`       | 条件表达式       |
-| `else`     | 条件分支         |
-| `match`    | 模式匹配         |
-| `while`    | 循环             |
-| `for`      | 循环             |
-| `in`       | for/in 迭代      |
-| `try`      | 异常捕获         |
-| `catch`    | 异常处理         |
-| `unknown`  | 未知值           |
-| `void`     | 空类型           |
+**TOP_BIND**（17 个）：
+
+| 关键字        | 说明             |
+| ------------- | ---------------- |
+| `let`         | 全局不可变绑定   |
+| `var`         | 全局可变绑定     |
+| `open`        | 可见性修饰       |
+| `seal`        | 可见性修饰       |
+| `extern`      | 外部声明         |
+| `if`          | 条件表达式       |
+| `if` *(变体)* | 条件+else 表达式 |
+| `else`        | 条件分支         |
+| `match`       | 模式匹配         |
+| `while`       | 循环             |
+| `for`         | 循环             |
+| `for` *(变体)*| for/in 迭代      |
+| `in`          | for/in 迭代      |
+| `try`         | 异常捕获         |
+| `catch`       | 异常处理         |
+| `unknown`     | 未知值           |
+| `void`        | 空类型           |
 
 > 说明：`let x = ...` 初始化表达式支持所有合法表达式，
 > 因此 TOP_BIND 包含表达式关键字（`if`、`match`、`while` 等）。
@@ -103,27 +112,29 @@ typedef enum {
 | `open`   | 可见性修饰 |
 | `seal`   | 可见性修饰 |
 
-**BODY**（17 个）：
+**BODY**（19 个）：
 
-| 关键字     | 说明             |
-| ---------- | ---------------- |
-| `let`      | 局部不可变绑定   |
-| `var`      | 局部可变绑定     |
-| `if`       | 条件语句/表达式  |
-| `else`     | 条件分支         |
-| `match`    | 模式匹配         |
-| `while`    | 循环             |
-| `for`      | 循环             |
-| `in`       | for/in 迭代      |
-| `break`    | 跳出循环         |
-| `continue` | 继续循环         |
-| `return`   | 返回             |
-| `throw`    | 抛出异常         |
-| `try`      | 异常捕获         |
-| `catch`    | 异常处理         |
-| `defer`    | 延迟执行         |
-| `unknown`  | 未知值           |
-| `void`     | 空类型           |
+| 关键字        | 说明             |
+| ------------- | ---------------- |
+| `let`         | 局部不可变绑定   |
+| `var`         | 局部可变绑定     |
+| `if`          | 条件语句/表达式  |
+| `if` *(变体)* | 条件+else        |
+| `else`        | 条件分支         |
+| `match`       | 模式匹配         |
+| `while`       | 循环             |
+| `for`         | 循环             |
+| `for` *(变体)*| for/in 迭代      |
+| `in`          | for/in 迭代      |
+| `break`       | 跳出循环         |
+| `continue`    | 继续循环         |
+| `return`      | 返回             |
+| `throw`       | 抛出异常         |
+| `try`         | 异常捕获         |
+| `catch`       | 异常处理         |
+| `defer`       | 延迟执行         |
+| `unknown`     | 未知值           |
+| `void`        | 空类型           |
 
 ### 2.3 排除项
 
@@ -186,6 +197,7 @@ static const LspKwItem TOP_BIND_KWS[] = {
     { "extern",  "external declaration",NULL },
     { "if",      "conditional",         "if ${1:condition} {\n\t$0\n}" },
     { "if-else", "conditional+else",    "if ${1:condition} {\n\t$2\n} else {\n\t$0\n}" },
+    { "else",    "else branch",         NULL },
     { "match",   "pattern matching",    "match ${1:target} {\n\t$0\n}" },
     { "while",   "while loop",          "while ${1:condition} {\n\t$0\n}" },
     { "for",     "for loop",            "for ${1:var i = 0}; ${2:i < n}; ${3:i = i + 1} {\n\t$0\n}" },
@@ -213,6 +225,7 @@ static const LspKwItem BODY_KWS[] = {
     { "var",      "local mutable binding",   "var ${1:name}: ${2:type} = ${0:value}" },
     { "if",       "conditional",             "if ${1:condition} {\n\t$0\n}" },
     { "if-else",  "conditional+else",        "if ${1:condition} {\n\t$2\n} else {\n\t$0\n}" },
+    { "else",     "else branch",             NULL },
     { "match",    "pattern matching",        "match ${1:target} {\n\t$0\n}" },
     { "while",    "while loop",              "while ${1:condition} {\n\t$0\n}" },
     { "for",      "for loop",                "for ${1:var i = 0}; ${2:i < n}; ${3:i = i + 1} {\n\t$0\n}" },
@@ -565,6 +578,11 @@ static bool append_completion_item_snippet(FengLspString *json,
   "insertTextFormat": 2
 }
 ```
+
+> **JSON 转义**：`insertText` 值包含换行符（`\n`）和制表符（`\t`）等特殊字符，
+> 写入 JSON 时必须通过 `string_append_json_string` 进行 JSON 转义
+> （与 `label` 和 `detail` 字段的处理方式相同）。
+> 直接拼接原始字符串会导致 JSON 格式错误。
 
 ### 5.4 Snippet 与纯关键字策略
 
