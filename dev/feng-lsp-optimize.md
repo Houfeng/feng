@@ -18,6 +18,7 @@
 - **上下文感知**：根据光标所在位置（顶层 / 类型体 / 函数体）提供合适的关键字子集，不做全量堆砌。
 - **复用现有基础设施**：利用 `feng_keywords()`、`feng_builtin_annotations()` 等已有 API，不重新发明关键字表。
 - **最小侵入**：在现有 completion 流程的非成员分支末尾追加关键字项，不改变现有补全逻辑。
+- **数据与逻辑分离**：关键字集合、snippet 模板声明在独立头文件 `lsp_keywords.h` 中，C 逻辑仅遍历表结构，新增或调整关键字/snippet 时只改数据文件，不改逻辑代码。
 - **禁止改动核心编译器**：所有变更仅限 `src/cli/lsp/` 目录，不得修改 `src/lexer/`、`src/parser/`、`src/semantic/`、`src/codegen/`、`src/symbol/` 等核心编译器模块，仅通过已有公开 API 消费编译器能力。
 
 ---
@@ -123,9 +124,160 @@ typedef enum {
 - **`true` / `false` / `none`** 不属于关键字（分别是 `FENG_TOKEN_BOOL` 和标准库函数），不通过关键字补全提供。
 - **`enum` 体内部**不提供关键字补全（enum item 为纯标识符，如 `enum Color { Red, Green, Blue }`），上下文分类为 `NONE`。
 
+### 2.4 声明式头文件 `lsp_keywords.h`
+
+> 关键字集合与 snippet 模板统一定义在独立头文件中，C 逻辑仅遍历表结构。
+> 新增或调整关键字/snippet 时只改此文件，不改逻辑代码。
+
+**文件路径**：`src/cli/lsp/lsp_keywords.h`
+
+**数据结构**：
+
+```c
+/* 单个关键字/ snippet 项 */
+typedef struct {
+    const char *label;      /* 关键字文本，如 "func" */
+    const char *detail;     /* 说明文本，如 "function declaration" */
+    const char *snippet;    /* Snippet 模板，NULL 表示纯文本项 */
+} LspKwItem;
+
+/* 上下文关键字表 */
+typedef struct {
+    const LspKwItem *items;
+    size_t count;
+} LspKwTable;
+```
+
+**各上下文表声明**（内容对应 §2.2 各表）：
+
+```c
+/* TOP_DECL (§2.2) */
+static const LspKwItem TOP_DECL_KWS[] = {
+    { "module", "module declaration",     "module ${1:name}" },
+    { "import", "import declaration",     "import ${1:path}" },
+    { "func",   "function declaration",   "func ${1:name}(${2:params}): ${3:void} {\n\t$0\n}" },
+    { "type",   "object type declaration","type ${1:Name} {\n\t$0\n}" },
+    { "type-tuple", "tuple type declaration", "type ${1:Name}(${2:types});" },
+    { "enum",   "enum declaration",       "enum ${1:Name} {\n\t$0\n}" },
+    { "spec",   "spec declaration",       "spec ${1:Name} {\n\t$0\n}" },
+    { "spec-callable", "callable spec",   "spec ${1:Name}(${2:params}): ${3:void};" },
+    { "spec-union", "union spec",         "spec ${1:Name}: ${2:T1} | ${0:T2};" },
+    { "fit",    "fit declaration",        "fit ${1:Name} {\n\t$0\n}" },
+    { "extern", "external declaration",   NULL },
+    { "open",   "visibility modifier",    NULL },
+    { "seal",   "visibility modifier",    NULL },
+    { "as",     "import alias",           NULL },
+};
+
+/* TOP_BIND (§2.2) */
+static const LspKwItem TOP_BIND_KWS[] = {
+    { "let",     "immutable binding",  "let ${1:name}: ${2:type} = ${0:value}" },
+    { "var",     "mutable binding",    "var ${1:name}: ${2:type} = ${0:value}" },
+    { "open",    "visibility modifier", NULL },
+    { "seal",    "visibility modifier", NULL },
+    { "extern",  "external declaration",NULL },
+    { "if",      "conditional",         "if ${1:condition} {\n\t$0\n}" },
+    { "if-else", "conditional+else",    "if ${1:condition} {\n\t$2\n} else {\n\t$0\n}" },
+    { "match",   "pattern matching",    "match ${1:target} {\n\t$0\n}" },
+    { "while",   "while loop",          "while ${1:condition} {\n\t$0\n}" },
+    { "for",     "for loop",            "for ${1:var i = 0}; ${2:i < n}; ${3:i = i + 1} {\n\t$0\n}" },
+    { "for-in",  "for/in iteration",    "for ${1:let it} in ${2:iterable} {\n\t$0\n}" },
+    { "in",      "for/in keyword",      NULL },
+    { "try",     "exception handling",  "try {\n\t$1\n} catch ${2:err} {\n\t$0\n}" },
+    { "catch",   "exception handler",   NULL },
+    { "unknown", "unknown value",       NULL },
+    { "void",    "void type",           NULL },
+};
+
+/* MEMBER (§2.2) */
+static const LspKwItem MEMBER_KWS[] = {
+    { "func",   "method declaration",  "func ${1:name}(${2:params}): ${3:void} {\n\t$0\n}" },
+    { "let",    "immutable field",     "let ${1:name}: ${2:type}" },
+    { "var",    "mutable field",       "var ${1:name}: ${2:type}" },
+    { "static", "static modifier",     NULL },
+    { "open",   "visibility modifier", NULL },
+    { "seal",   "visibility modifier", NULL },
+};
+
+/* BODY (§2.2) */
+static const LspKwItem BODY_KWS[] = {
+    { "let",      "local immutable binding", "let ${1:name}: ${2:type} = ${0:value}" },
+    { "var",      "local mutable binding",   "var ${1:name}: ${2:type} = ${0:value}" },
+    { "if",       "conditional",             "if ${1:condition} {\n\t$0\n}" },
+    { "if-else",  "conditional+else",        "if ${1:condition} {\n\t$2\n} else {\n\t$0\n}" },
+    { "match",    "pattern matching",        "match ${1:target} {\n\t$0\n}" },
+    { "while",    "while loop",              "while ${1:condition} {\n\t$0\n}" },
+    { "for",      "for loop",                "for ${1:var i = 0}; ${2:i < n}; ${3:i = i + 1} {\n\t$0\n}" },
+    { "for-in",   "for/in iteration",        "for ${1:let it} in ${2:iterable} {\n\t$0\n}" },
+    { "in",       "for/in keyword",          NULL },
+    { "break",    "break loop",              NULL },
+    { "continue", "continue loop",           NULL },
+    { "return",   "return from function",    NULL },
+    { "throw",    "throw exception",         NULL },
+    { "try",      "exception handling",      "try {\n\t$1\n} catch ${2:err} {\n\t$0\n}" },
+    { "catch",    "exception handler",       NULL },
+    { "defer",    "deferred execution",      "defer {\n\t$0\n}" },
+    { "unknown",  "unknown value",           NULL },
+    { "void",     "void type",               NULL },
+};
+```
+
+**上下文索引表**：
+
+```c
+static const LspKwTable KW_TABLE[] = {
+    [FENG_LSP_KW_CTX_NONE]      = { NULL, 0 },
+    [FENG_LSP_KW_CTX_TOP_DECL]  = { TOP_DECL_KWS,  sizeof(TOP_DECL_KWS)  / sizeof(TOP_DECL_KWS[0])  },
+    [FENG_LSP_KW_CTX_TOP_BIND]  = { TOP_BIND_KWS,  sizeof(TOP_BIND_KWS)  / sizeof(TOP_BIND_KWS[0])  },
+    [FENG_LSP_KW_CTX_MEMBER]    = { MEMBER_KWS,    sizeof(MEMBER_KWS)    / sizeof(MEMBER_KWS[0])    },
+    [FENG_LSP_KW_CTX_BODY]      = { BODY_KWS,      sizeof(BODY_KWS)      / sizeof(BODY_KWS[0])      },
+};
+```
+
+> 阶段三（Snippet）启用后，`append_context_keyword_items` 统一遍历此表：
+> `snippet != NULL` 的项使用 `append_completion_item_snippet`，
+> `snippet == NULL` 的项使用 `append_completion_item`（纯文本）。
+> 阶段一、二（纯关键字、无 Snippet）暂不使用 `snippet` 字段，所有项以纯文本方式追加。
+
+**与 `token.h` 的关系**：
+
+`lsp_keywords.h` 中的 `label` 字符串与 `token.h` 的 `FENG_KEYWORD_LIST` 文本一致，
+但属于有意重复——两者职责不同：
+
+| 维度 | `token.h`（`FENG_KEYWORD_LIST`） | `lsp_keywords.h`（`KW_TABLE`） |
+|---|---|---|
+| 职责 | 词法分析器识别关键字 | LSP 补全提供上下文感知的关键字列表 |
+| 内容 | 关键字文本 + token kind | 关键字文本 + 上下文分组 + detail + snippet |
+| 变体项 | 无（`if-else`、`for-in` 不是真正关键字） | 有（作为独立补全项） |
+
+`lsp_keywords.h` 不依赖 `token.h` 的 API，保持独立声明，
+避免因补全需求变更而引入对词法分析器内部的依赖。
+
 ---
 
 ## 3. 上下文判定
+
+### 3.0 两个 Context 结构的关系
+
+`runtime.c` 中已有 `FengLspCompletionContext`（成员访问上下文），本文档新增 `FengLspKeywordContext`（关键字上下文）。两者职责不同，互不干扰：
+
+| 结构 | 来源 | 职责 | 作用范围 |
+|---|---|---|---|
+| `FengLspCompletionContext` | 文本分析（`completion_context_from_text`） | 检测成员访问（`is_member`、`is_static_access`）、提取 `prefix` 和 `object` | 整个补全流程 |
+| `FengLspKeywordContext` | AST 路径优先，文本回退兜底 | 过滤关键字子集（TOP_DECL / TOP_BIND / MEMBER / BODY） | 仅非成员分支 |
+
+协作关系：
+
+```text
+build_completion_json 入口
+  ├── completion_context.is_member == true  → 成员补全分支（无关键字）
+  └── completion_context.is_member == false → 非成员分支
+        ├── locals + module members + imports（已有）
+        └── classify_keyword_context(enclosing_decl, enclosing_member)
+              → append_context_keyword_items(kw_ctx)（新增）
+```
+
+`FengLspKeywordContext` 依赖 `enclosing_decl` 和 `enclosing_member`，这两个指针已由现有代码计算并传入，无需额外 AST 遍历。
 
 ### 3.1 AST 路径（优先）
 
@@ -417,7 +569,17 @@ static bool append_completion_item_snippet(FengLspString *json,
 
 ## 6. 变更点汇总
 
-### 6.1 `src/cli/lsp/runtime.c`
+### 6.1 `src/cli/lsp/lsp_keywords.h`（新增）
+
+| 内容         | 说明                                     | 阶段 |
+| ------------ | ---------------------------------------- | ---- |
+| `LspKwItem`  | 关键字项结构（label、detail、snippet）   | 1    |
+| `LspKwTable` | 上下文表结构（items + count）            | 1    |
+| 四张上下文表 | `TOP_DECL_KWS`、`TOP_BIND_KWS`、`MEMBER_KWS`、`BODY_KWS` | 1 |
+| `KW_TABLE`   | 按 `FengLspKeywordContext` 索引的总表    | 1    |
+| 各表项填充 `snippet` 字段 | 阶段三启用 Snippet 模板       | 3    |
+
+### 6.2 `src/cli/lsp/runtime.c`
 
 | 位置                                                      | 变更                                           | 阶段 |
 | --------------------------------------------------------- | ---------------------------------------------- | ---- |
@@ -435,55 +597,88 @@ static bool append_completion_item_snippet(FengLspString *json,
 | 新增 `append_completion_item_snippet`                      | Snippet 补全项构建                             | 3    |
 | `append_context_keyword_items`                            | 各上下文适合 Snippet 的关键字附带 insertText   | 3    |
 
-### 6.2 `editors/feng-vscode/`
+### 6.3 `editors/feng-vscode/`
 
 无需变更。`package.json` 已配置 `editor.quickSuggestions` 和 `suggestOnTriggerCharacters`，LSP 的 `completionProvider` 声明变更后 VSCode 自动适配。
 
 ---
 
-## 7. 任务拆分
+## 7. 分步 TODO
 
-### 任务 1：上下文感知关键字补全
+> 每个步骤完成后可独立运行全量回归测试并单独交付。
+> 各步骤引用 §2–§5 中的详细设计。
 
-**交付内容**：
+### 阶段一：上下文感知关键字补全
 
-- 实现 `FengLspKeywordContext` 枚举（含 `TOP_DECL`、`TOP_BIND`）。
-- 实现 `classify_keyword_context`：
-  - `FENG_DECL_GLOBAL_BINDING` → `TOP_BIND`
-  - `FENG_DECL_ENUM` → `NONE`
-- 实现 `classify_keyword_context_from_text` 文本回退（含 `enum` 体识别和 `let`/`var` 绑定识别）。
-- 实现 `append_context_keyword_items`，覆盖全部五种上下文。
-- 在 `build_completion_json`、`build_cached_completion_json` 的非成员分支末尾调用。
-- 在 `handle_completion_request` 兜底路径中调用。
-- 补充 LSP 协议级回归测试：
-  - 顶层输入 `f` 应包含 `func`，不包含 `let`。
-  - 顶层 `let` 绑定位置输入 `i` 应包含 `if`。
-  - 顶层 `let` 绑定位置输入 `r` 不应包含 `return`。
-  - 函数体内输入 `l` 应包含 `let`。
-  - `enum` 体内不应出现关键字。
-  - 成员访问时不应出现关键字。
+- [ ] **1.1** 新建 `src/cli/lsp/lsp_keywords.h`，声明 `LspKwItem`、`LspKwTable`、`KW_TABLE` 及四张上下文表（§2.4），此阶段 `snippet` 字段全部为 `NULL`
+- [ ] **1.2** 在 `runtime.c` 新增 `FengLspKeywordContext` 枚举（§2.1）
+- [ ] **1.3** 实现 `classify_keyword_context`：AST 路径判定（§3.1）
+- [ ] **1.4** 实现 `append_context_keyword_items`：遍历 `KW_TABLE[ctx]`，调用已有 `append_completion_item`（§2.4）
+- [ ] **1.5** 在 `build_completion_json` 和 `build_cached_completion_json` 非成员分支末尾调用 `append_context_keyword_items`（§3.1）
+- [ ] **1.6** 实现 `classify_keyword_context_from_text` 文本回退判定（§3.2）
+- [ ] **1.7** 在 `handle_completion_request` 兜底路径（返回 `"[]"` 前）注入文本回退关键字（§3.3 路径 8）
+- [ ] **1.8** 补充回归测试（§2.2 各表 + §3 判定规则），运行全量回归验证
 
-### 任务 2：注解补全
+### 阶段二：注解补全
 
-**前置**：任务 1 完成。
+- [ ] **2.1** 实现 `completion_context_is_annotation`：检测 `@` 前缀（§4.1）
+- [ ] **2.2** 实现 `build_annotation_completion_json`：使用 `feng_builtin_annotations()` 构建注解项（§4.2）
+- [ ] **2.3** 在 `handle_completion_request` 中 offset 计算后、`is_member` 计算前，插入注解优先检测并提前返回（§4.3）
+- [ ] **2.4** `initialize` 响应 `triggerCharacters` 添加 `"@"`（§4.4）
+- [ ] **2.5** 补充注解补全回归测试（输入 `@` 返回全部注解；输入 `@a` 过滤出 `abi`），运行全量回归验证
 
-**交付内容**：
+### 阶段三：Snippet 支持
 
-- 实现 `completion_context_is_annotation`。
-- 实现 `build_annotation_completion_json`。
-- 在 `handle_completion_request` 中添加注解上下文优先检测。
-- `initialize` 响应的 `triggerCharacters` 添加 `"@"`。
-- 补充回归测试：输入 `@` 应返回 `abi`、`runtime` 等；输入 `@a` 应过滤出 `abi`。
+- [ ] **3.1** 实现 `append_completion_item_snippet`：支持 `insertText` + `insertTextFormat: 2`（§5.3）
+- [ ] **3.2** 在 `lsp_keywords.h` 中填充各表项的 `snippet` 字段（§2.4、§5.2）
+- [ ] **3.3** 修改 `append_context_keyword_items`：`snippet != NULL` 的项调用 `append_completion_item_snippet`，`snippet == NULL` 的项保持纯文本（§5.4）
+- [ ] **3.4** 补充 Snippet 回归测试（`if` 项含 `insertText` + `insertTextFormat: 2`；同一关键字无重复项），运行全量回归验证
 
-### 任务 3：Snippet 支持
+---
 
-**前置**：任务 2 完成。
+## 8. 参考实现：其他语言服务器的关键字上下文
 
-**交付内容**：
+### 8.1 TypeScript Language Service
 
-- 实现 `append_completion_item_snippet`。
-- 修改 `append_context_keyword_items`，为各上下文中具有模板的关键字使用 Snippet 项（`insertText` + `insertTextFormat: 2`），无模板的关键字使用纯文本项。每个关键字仅提供一个项，不提供重复项。
-- 补充回归测试：
-  - BODY 上下文中的 `if` 补全项应包含 `insertText` 字段且 `insertTextFormat` 为 2。
-  - TOP_DECL 中的 `func` 补全项应包含 Snippet 模板。
-  - 同一关键字不应出现两个补全项。
+TypeScript 在 `services/completions.ts` 中实现关键字补全，核心机制：
+
+- **统一 Context 结构**：`CompletionContext` 包含 `syntacticPosition`、`isTypeLocation`、`isNamespaceLocation` 等字段，同时服务成员补全和关键字过滤。
+- **AST 节点祖先链**：通过 `getAncestor(node, kind)` 向上遍历 AST，判断当前节点是否在 `ClassDeclaration`、`FunctionBody`、`TypeNode` 等内部。
+- **位置分类**：
+  - `Expression`：`if`、`while`、`new`、`typeof`
+  - `Statement`：`let`、`const`、`return`、`break`
+  - `Type`：`typeof`、`keyof`、`infer`
+  - `Modifier`：`public`、`private`、`static`、`readonly`
+  - `Declaration`：`function`、`class`、`interface`
+- **关键字过滤**：`isKeywordKindValidInContext(kind, context)` 按位置过滤，不在合法位置的关键字不提供。
+
+**与 Feng 方案对比**：
+
+TypeScript 使用单一 Context 结构，Feng 分为 `FengLspCompletionContext`（成员访问）和 `FengLspKeywordContext`（关键字）两个结构。原因是 TypeScript 的实现成熟度高，统一结构更灵活；Feng 当前方案是增量演进，两个结构各司其职更清晰，未来可考虑统一。
+
+### 8.2 rust-analyzer
+
+- **`CompletionContext`**：包含 `position` 字段，类型为 `CompletionLocation`，枚举了 `ExprLocation`、`TypeLocation`、`ItemLocation`、`NameContext` 等位置类型。
+- **关键字过滤**：`complete_keywords.rs` 根据 `position` 提供不同关键字集合：
+  - `ExprLocation`：`if`、`match`、`loop`、`return`
+  - `ItemLocation`：`fn`、`struct`、`enum`、`impl`
+  - `TypeLocation`：`dyn`、`impl`、`fn`（函数类型）
+
+### 8.3 gopls（Go 语言服务器）
+
+- **`CompletionContext`**：基于 token 位置分析，字段包括 `Position`、`ExpectedType`、`Enclosing`。
+- **位置分类**：`topLevel`、`funcBody`、`structField`、`interfaceMethod`，与 Feng 的 TOP_DECL / BODY / MEMBER 对应。
+- **特点**：gopls 更依赖词法（token）分析而非完整 AST，脏代码鲁棒性更好，与 Feng 的文本回退路径（`classify_keyword_context_from_text`）思路相似。
+
+### 8.4 共同模式
+
+| 模式 | 说明 |
+|---|---|
+| 单一 Context 结构 | 所有位置信息集中在一个结构，同时服务多种补全 |
+| AST 祖先链优先 | 优先用 AST 判断位置，脏代码时回退到词法/文本分析 |
+| 类型位置单独区分 | `TypeLocation` 与 `ExprLocation` 分开，关键字集合不同 |
+| 修饰符单独区分 | `public`、`static` 等修饰符有独立的 `ModifierContext` |
+
+> Feng 当前方案覆盖了"AST 祖先链优先"和"位置分类"两个核心模式。
+> 类型位置和修饰符位置暂不区分（`void`、`unknown` 已从关键字表移除），
+> 后续可参考 TypeScript 的 `isTypeLocation` 扩展。
