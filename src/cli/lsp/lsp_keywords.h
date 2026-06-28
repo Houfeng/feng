@@ -4,8 +4,9 @@
  * Each FengLspPosition maps to a table of LspKwItem entries; the engine
  * iterates the table without hard-coding any keyword text in C logic.
  *
- * In Phase 1 the `snippet` field is NULL for all items (plain-text
- * completion).  Phase 3 fills `snippet` to enable Snippet templates.
+ * The `snippet` field provides Snippet templates (Phase 3): items with
+ * snippet != NULL use append_completion_item_snippet (insertTextFormat: 2),
+ * items with snippet == NULL use append_completion_item (plain-text).
  *
  * The label strings intentionally duplicate token.h FENG_KEYWORD_LIST
  * text: the two tables serve different purposes (lexer recognition vs.
@@ -42,16 +43,16 @@ typedef struct {
 
 /* TOP_DECL: module top-level declaration position (14 items). */
 static const LspKwItem TOP_DECL_KWS[] = {
-    { "module",        "module declaration",      NULL },
-    { "import",        "import declaration",      NULL },
-    { "func",          "function declaration",    NULL },
-    { "type",          "object type declaration", NULL },
-    { "type-tuple",    "tuple type declaration",  NULL },
-    { "enum",          "enum declaration",        NULL },
-    { "spec",          "spec declaration",        NULL },
-    { "spec-callable", "callable spec",           NULL },
-    { "spec-union",    "union spec",              NULL },
-    { "fit",           "fit declaration",         NULL },
+    { "module",        "module declaration",      "module ${1:name}" },
+    { "import",        "import declaration",      "import ${1:path}" },
+    { "func",          "function declaration",    "func ${1:name}(${2:params}): ${3:void} {\n\t$0\n}" },
+    { "type",          "object type declaration", "type ${1:Name} {\n\t$0\n}" },
+    { "type-tuple",    "tuple type declaration",  "type ${1:Name}(${2:types});" },
+    { "enum",          "enum declaration",        "enum ${1:Name} {\n\t$0\n}" },
+    { "spec",          "spec declaration",        "spec ${1:Name} {\n\t$0\n}" },
+    { "spec-callable", "callable spec",           "spec ${1:Name}(${2:params}): ${3:void};" },
+    { "spec-union",    "union spec",              "spec ${1:Name}: ${2:T1} | ${0:T2};" },
+    { "fit",           "fit declaration",         "fit ${1:Name} {\n\t$0\n}" },
     { "extern",        "external declaration",    NULL },
     { "open",          "visibility modifier",     NULL },
     { "seal",          "visibility modifier",     NULL },
@@ -60,8 +61,8 @@ static const LspKwItem TOP_DECL_KWS[] = {
 
 /* TOP_BIND: top-level binding init expression (17 items). */
 static const LspKwItem TOP_BIND_KWS[] = {
-    { "let",     "immutable binding",   NULL },
-    { "var",     "mutable binding",     NULL },
+    { "let",     "immutable binding",   "let ${1:name}: ${2:type} = ${0:value}" },
+    { "var",     "mutable binding",     "var ${1:name}: ${2:type} = ${0:value}" },
     { "open",    "visibility modifier", NULL },
     { "seal",    "visibility modifier", NULL },
     { "extern",  "external declaration",NULL },
@@ -81,9 +82,9 @@ static const LspKwItem TOP_BIND_KWS[] = {
 
 /* MEMBER: inside type/spec/fit body, member declaration position (6 items). */
 static const LspKwItem MEMBER_KWS[] = {
-    { "func",   "method declaration",  NULL },
-    { "let",    "immutable field",     NULL },
-    { "var",    "mutable field",       NULL },
+    { "func",   "method declaration",  "func ${1:name}(${2:params}): ${3:void} {\n\t$0\n}" },
+    { "let",    "immutable field",     "let ${1:name}: ${2:type}" },
+    { "var",    "mutable field",       "var ${1:name}: ${2:type}" },
     { "static", "static modifier",     NULL },
     { "open",   "visibility modifier", NULL },
     { "seal",   "visibility modifier", NULL },
@@ -91,23 +92,23 @@ static const LspKwItem MEMBER_KWS[] = {
 
 /* BODY: inside function/method body, statement position (19 items). */
 static const LspKwItem BODY_KWS[] = {
-    { "let",      "local immutable binding", NULL },
-    { "var",      "local mutable binding",   NULL },
-    { "if",       "conditional",             NULL },
-    { "if-else",  "conditional+else",        NULL },
+    { "let",      "local immutable binding", "let ${1:name}: ${2:type} = ${0:value}" },
+    { "var",      "local mutable binding",   "var ${1:name}: ${2:type} = ${0:value}" },
+    { "if",       "conditional",             "if ${1:condition} {\n\t$0\n}" },
+    { "if-else",  "conditional+else",        "if ${1:condition} {\n\t$2\n} else {\n\t$0\n}" },
     { "else",     "else branch",             NULL },
-    { "match",    "pattern matching",        NULL },
-    { "while",    "while loop",              NULL },
-    { "for",      "for loop",                NULL },
-    { "for-in",   "for/in iteration",        NULL },
+    { "match",    "pattern matching",        "match ${1:target} {\n\t$0\n}" },
+    { "while",    "while loop",              "while ${1:condition} {\n\t$0\n}" },
+    { "for",      "for loop",                "for ${1:var i = 0}; ${2:i < n}; ${3:i = i + 1} {\n\t$0\n}" },
+    { "for-in",   "for/in iteration",        "for ${1:let it} in ${2:iterable} {\n\t$0\n}" },
     { "in",       "for/in keyword",          NULL },
     { "break",    "break loop",              NULL },
     { "continue", "continue loop",           NULL },
     { "return",   "return from function",    NULL },
     { "throw",    "throw exception",         NULL },
-    { "try",      "exception handling",      NULL },
+    { "try",      "exception handling",      "try {\n\t$1\n} catch ${2:err} {\n\t$0\n}" },
     { "catch",    "exception handler",       NULL },
-    { "defer",    "deferred execution",      NULL },
+    { "defer",    "deferred execution",      "defer {\n\t$0\n}" },
     { "unknown",  "unknown value",           NULL },
     { "void",     "void type",               NULL },
 };

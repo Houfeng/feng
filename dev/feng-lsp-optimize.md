@@ -706,10 +706,10 @@ static bool append_completion_item_snippet(FengLspString *json,
 
 ### 阶段三：Snippet 支持
 
-- [ ] **3.1** 实现 `append_completion_item_snippet`：支持 `insertText` + `insertTextFormat: 2`（§5.3）
-- [ ] **3.2** 在 `lsp_keywords.h` 中填充各表项的 `snippet` 字段（§2.4、§5.2）
-- [ ] **3.3** 修改 `append_context_keyword_items`：`snippet != NULL` 的项调用 `append_completion_item_snippet`，`snippet == NULL` 的项保持纯文本（§5.4）
-- [ ] **3.4** 补充 Snippet 回归测试（`if` 项含 `insertText` + `insertTextFormat: 2`；同一关键字无重复项），运行全量回归验证
+- [x] **3.1** 实现 `append_completion_item_snippet`：支持 `insertText` + `insertTextFormat: 2`（§5.3）
+- [x] **3.2** 在 `lsp_keywords.h` 中填充各表项的 `snippet` 字段（§2.4、§5.2）
+- [x] **3.3** 修改 `append_context_keyword_items`：`snippet != NULL` 的项调用 `append_completion_item_snippet`，`snippet == NULL` 的项保持纯文本（§5.4）
+- [x] **3.4** 补充 Snippet 回归测试（`if` 项含 `insertText` + `insertTextFormat: 2`；同一关键字无重复项），运行全量回归验证
 
 ---
 

@@ -12991,6 +12991,55 @@ static void test_lsp_keyword_completion_member_access_no_keywords(void) {
     free(output);
 }
 
+/* §3.4 Snippet completion regression tests.
+ * Verifies that keyword items with snippet templates include insertText
+ * and insertTextFormat: 2, and that keywords don't have duplicate items. */
+static void test_lsp_snippet_completion_body_if_insert_text(void) {
+    static const char *kSource =
+        "module test.lsp.snippet.if;\n"
+        "\n"
+        "func run(): void {\n"
+        "    \n"
+        "}\n";
+    /* Cursor inside function body → BODY position.
+     * The `if` item should have insertText and insertTextFormat: 2. */
+    char *output = capture_lsp_completion_response(kSource, "    \n}", 4U);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
+    /* Verify `if` item contains insertText with snippet template. */
+    ASSERT(strstr(output, "\"label\":\"if\"") != NULL);
+    ASSERT(strstr(output, "\"insertText\":\"if ${1:condition} {\\n\\t$0\\n}\"") != NULL);
+    ASSERT(strstr(output, "\"insertTextFormat\":2") != NULL);
+    free(output);
+}
+
+static void test_lsp_snippet_completion_no_duplicate_items(void) {
+    static const char *kSource =
+        "module test.lsp.snippet.nodup;\n"
+        "\n"
+        "func run(): void {\n"
+        "    \n"
+        "}\n";
+    /* Cursor inside function body → BODY position.
+     * Each keyword should appear exactly once (no duplicate plain-text + snippet). */
+    char *output = capture_lsp_completion_response(kSource, "    \n}", 4U);
+    char *first_occurrence;
+    char *second_occurrence;
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
+    /* Verify `if` appears only once (as snippet, not as both plain-text and snippet). */
+    first_occurrence = strstr(output, "\"label\":\"if\"");
+    ASSERT(first_occurrence != NULL);
+    second_occurrence = strstr(first_occurrence + 1, "\"label\":\"if\"");
+    ASSERT(second_occurrence == NULL);
+    /* Verify `let` appears only once (as snippet). */
+    first_occurrence = strstr(output, "\"label\":\"let\"");
+    ASSERT(first_occurrence != NULL);
+    second_occurrence = strstr(first_occurrence + 1, "\"label\":\"let\"");
+    ASSERT(second_occurrence == NULL);
+    free(output);
+}
+
 /* §2.6 annotation completion regression tests.
  * Verifies that '@' triggers annotation completion and that prefix
  * filtering returns only matching items. */
@@ -13123,6 +13172,8 @@ int main(void) {
     test_lsp_keyword_completion_member_position();
     test_lsp_keyword_completion_enum_body_no_keywords();
     test_lsp_keyword_completion_member_access_no_keywords();
+    test_lsp_snippet_completion_body_if_insert_text();
+    test_lsp_snippet_completion_no_duplicate_items();
     test_lsp_annotation_completion_all();
     test_lsp_annotation_completion_filter_prefix();
     test_direct_build_cleans_stale_ir_on_frontend_failure();

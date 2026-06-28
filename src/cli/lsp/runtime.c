@@ -10645,10 +10645,53 @@ static bool append_completion_item(FengLspString *json,
     return string_append_cstr(json, "}");
 }
 
+/* Append a completion item with Snippet support (Phase 3).
+ * Generates a CompletionItem with insertText and insertTextFormat: 2.
+ * The insert_text string is JSON-escaped via string_append_json_string.
+ * Returns true on success, false on allocation failure. */
+static bool append_completion_item_snippet(FengLspString *json,
+                                            bool *first,
+                                            FengSlice label,
+                                            const char *detail,
+                                            int kind,
+                                            const char *insert_text) {
+    char *label_text;
+    bool ok;
+
+    if (!*first && !string_append_cstr(json, ",")) {
+        return false;
+    }
+    *first = false;
+    label_text = dup_range(label.data, label.data + label.length);
+    if (label_text == NULL) {
+        return false;
+    }
+    ok = string_append_cstr(json, "{\"label\":") &&
+         string_append_json_string(json, label_text) &&
+         string_append_format(json, ",\"kind\":%d", kind);
+    free(label_text);
+    if (!ok) {
+        return false;
+    }
+    if (detail != NULL) {
+        if (!string_append_cstr(json, ",\"detail\":") || !string_append_json_string(json, detail)) {
+            return false;
+        }
+    }
+    if (insert_text != NULL) {
+        if (!string_append_cstr(json, ",\"insertText\":") ||
+            !string_append_json_string(json, insert_text) ||
+            !string_append_cstr(json, ",\"insertTextFormat\":2")) {
+            return false;
+        }
+    }
+    return string_append_cstr(json, "}");
+}
+
 /* Append keyword completion items for the given grammar position.
  * Iterates KW_TABLE[position] and emits one item per entry.
- * In Phase 1 all items are plain-text (snippet == NULL); Phase 3
- * will split into snippet vs. plain-text based on the snippet field.
+ * Items with snippet != NULL use append_completion_item_snippet (Phase 3),
+ * items with snippet == NULL use append_completion_item (plain-text).
  * Returns true on success, false on allocation failure. */
 static bool append_context_keyword_items(FengLspString *json,
                                          bool *first,
@@ -10666,12 +10709,23 @@ static bool append_context_keyword_items(FengLspString *json,
     }
     for (index = 0U; index < table->count; ++index) {
         const LspKwItem *item = &table->items[index];
+        bool ok;
 
-        if (!append_completion_item(json,
-                                    first,
-                                    slice_from_cstr(item->label),
-                                    item->detail,
-                                    14)) {
+        if (item->snippet != NULL) {
+            ok = append_completion_item_snippet(json,
+                                                first,
+                                                slice_from_cstr(item->label),
+                                                item->detail,
+                                                14,
+                                                item->snippet);
+        } else {
+            ok = append_completion_item(json,
+                                        first,
+                                        slice_from_cstr(item->label),
+                                        item->detail,
+                                        14);
+        }
+        if (!ok) {
             return false;
         }
     }
