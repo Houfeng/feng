@@ -52,9 +52,11 @@ type Point {
 
 ### 1.1 与 tuple 的关系
 
-`@value type` 的生命周期处理与 tuple **一致**：编译器与运行时的处理逻辑基本相同，都走聚合值模型（`FengAggregateDescriptor` + 五类聚合 API）。
+`@value type` 的**运行时处理**与 tuple **一致**：作为其他 type 成员时的内联布局、生命周期处理（retain/release/assign/take/default_init）、相等性处理（`equal_fn`）、box 结构——全部复用 tuple 路径，走聚合值模型（`FengAggregateDescriptor` + 五类聚合 API）。
 
-两者的差别本质上是**成员访问方式**：
+`@value type` 的**语法与用法**与普通 `type` **一致**：构造器、终结器、泛型、方法、spec 声明头满足、fit 扩展、可见性修饰、witness 路径等全部复用普通 `type` 的处理路径。
+
+两者的差别本质上是**成员访问方式**与**语法/用法的扩展点**：
 
 | 维度 | tuple | `@value type` |
 |------|-------|---------------|
@@ -62,11 +64,12 @@ type Point {
 | 成员访问 | 位置（`item1`、`item2`） | 命名（`x`、`y`） |
 | 元素数量 | 0 或 2~8 | 无限制 |
 | 成员可变性 | 元素始终不可变 | 支持 `let`/`var` |
-| 构造器 | 无（字面量贴合） | 支持 |
-| 终结器 | 无 | 支持 |
-| 声明头满足 spec | 不支持 | 支持 |
-| `fit` 扩展 | 支持 | 支持 |
-| 泛型 | 支持 | 支持 |
+| 构造器 | 无（字面量贴合） | 支持（同普通 `type`） |
+| 终结器 | 无 | 支持（同普通 `type`；调用时机见 §3.8） |
+| 声明头满足 spec | 不支持 | 支持（同普通 `type`） |
+| `fit` 扩展 | 支持 | 支持（同普通 `type`） |
+| 泛型 | 支持 | 支持（同普通 `type`） |
+| 取地址（`&`） | 不支持 | 支持（需 `@abi`，见 §3.7） |
 
 ### 1.2 与普通 type 的关系
 
@@ -83,10 +86,11 @@ type Point {
 
 ### 1.3 设计原则
 
-1. **生命周期与 tuple 一致**：编译器/运行时处理路径复用 tuple 已有基础设施。
-2. **语法与用法与 type 一致**：用户心智模型连续，不因 `@value` 引入新的使用限制（除自引用禁止外）。
+1. **运行时处理与 tuple 一致**：作为其他 type 成员时的内联布局、生命周期处理、相等性处理、box 结构——全部复用 tuple 路径。
+2. **语法与用法与普通 type 一致**：构造器、终结器、泛型、方法、spec 满足、fit 扩展、witness 路径等全部复用普通 type 路径；唯一差别是取地址操作（见 §3.7）。
 3. **runtime 零修改**：符合 OCP——新增 aggregate 类型仅需新增描述符，runtime walker/API 不动。
-4. **codegen 最小改动**：泛化 tuple 的 per-type box 生成路径，入口条件从「仅 tuple」扩展为「tuple 或 @value」。
+4. **codegen 最小改动**：泛化 tuple 的 per-type box 生成路径与普通 type 的 witness 路径，入口条件从「仅 tuple」/「仅普通 type」扩展为含 `@value`。
+5. **值类型循环引用编译期拒绝**：`@value type` 与 tuple 同属值类型，直接或间接循环引用必须编译期报错（见 §3.5）。
 
 ---
 
@@ -146,9 +150,9 @@ type Buffer {
 }
 ```
 
-`@value type` 支持终结器。终结器在值生命周期结束时调用（作用域退出、aggregate release 路径等）。终结器的调用时机与 tuple 不同——tuple 没有终结器；`@value type` 的终结器由 codegen 在适当的清理站点 emit 调用。
+`@value type` 支持终结器（语法与普通 `type` 一致）。终结器在值生命周期结束时调用（作用域退出、异常清理等清理站点）。tuple 没有终结器——终结器调用是 `@value type` 独有的额外步骤，**独立于值分类**（trivial 与 aggregate 均调用，详见 §3.8）：codegen 在清理站点先 emit 终结器调用，再按值分类走 trivial 无操作 / aggregate release。
 
-终结器与普通 `type` 的终结器语义一致：负责释放值持有的非托管资源。托管字段的生命周期仍由聚合值模型管理（`feng_aggregate_release`），终结器只处理托管模型无法覆盖的资源（如 C 指针指向的内存）。
+终结器与普通 `type` 的终结器语义一致：负责释放值持有的非托管资源。托管字段的生命周期仍由聚合值模型管理（`feng_aggregate_release`），终结器只处理托管模型无法覆盖的资源（如 C 指针指向的内存）。`FengTrivialDescriptor`/`FengAggregateDescriptor` 均无 finalizer 字段，`feng_aggregate_release` 也不调用终结器——故终结器调用由 codegen 从 `UserType.c_finalizer_name` 获取符号后在清理站点直接 emit。
 
 ### 2.4 泛型
 
@@ -194,6 +198,8 @@ type Point {
 | 至少一个托管字段（string、对象引用、spec） | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | `FengAggregateDescriptor` |
 | 泛型实例（无论字段类型） | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | `FengAggregateDescriptor` |
 
+**值分类只看字段是否含托管成员，不看是否有终结器**——与 tuple 的判定逻辑完全一致。trivial `@value type` + 终结器是合法组合（分类仍为 trivial），终结器调用独立于值分类，详见 §3.8。
+
 ### 3.2 赋值与传参
 
 ```feng
@@ -233,18 +239,27 @@ type User {
 
 这与 tuple、`string` 的值语义比较一致，与普通 `type` 的引用身份比较不同。
 
-### 3.5 自引用禁止
+### 3.5 自引用禁止（编译期报错）
 
-`@value type` 不允许直接或间接自引用：
+`@value type` 不允许直接或间接自引用——与 tuple 同属值类型，统一在 semantic 层做编译期检测：
 
 ```feng
 @value
 type A {
   var a: A;     // ❌ 编译错误：值类型不可直接包含自身
 }
+
+@value
+type B { var a: C; }
+@value
+type C { var b: B; }   // ❌ 编译错误：值类型间接循环引用
 ```
 
-理由：栈上值的类型大小必须编译期确定；自引用会导致无限大小。
+**检测范围**：值类型（tuple + `@value type`）的字段类型若直接或间接形成循环（含自身），semantic 阶段报错。普通 `type`（堆对象，引用语义）通过指针引用，大小固定，不受此约束。
+
+**理由**：值类型按值内联布局，类型大小必须编译期确定；自引用会导致无限大小。
+
+**现状修正**：tuple 当前对自引用无编译期检测，codegen 阶段会段错误（exit 139）。实现 `@value type` 时，在 semantic 层新增**值类型循环引用编译期检测**，覆盖 tuple 与 `@value type`——两者同属值类型（按值内联布局，大小须编译期确定），检测逻辑完全一致，一并修正 tuple 的已有崩溃。
 
 ### 3.6 内联布局
 
@@ -271,8 +286,8 @@ codegen 的 `cg_emit_c_type` 对 aggregate 类型（tuple、@value type）emit `
 
 | 类型 | `&` 语义 | C 层表达 |
 |------|---------|---------|
-| `@abi type`（堆对象） | payload 地址（跳过 `FengManagedHeader`） | `c_abi_ptr_name` 转换 |
-| `@value @abi type` | 结构体本身的地址（无托管头，直接取值地址，**非 payload 地址**） | `&value`（栈上/内联值的地址） |
+| `@abi type`（堆对象） | payload 地址（跳过 `FengManagedHeader`） | `c_abi_ptr_name(expr)`，`expr` 是堆对象指针 |
+| `@value @abi type` | 结构体本身的地址（无托管头，直接取值地址） | `c_abi_ptr_name(&expr)`，`expr` 是值本身，需先取地址 |
 | 普通 `type` / `@value type`（未标 `@abi`） | 不支持 | 编译错误 |
 
 ```feng
@@ -286,15 +301,22 @@ var p = Point { x: 1.0, y: 2.0 };
 let addr = &p;   // 类型: Point*，指向 p 的结构体本身（无托管头偏移）
 ```
 
-`@value @abi type` 无 `FengManagedHeader`，`&` 直接取到结构体地址；这与 `@abi type`（堆对象）跳过 header 取 payload 地址不同。codegen 复用 `@abi` 的 `c_abi_ptr_name` 分派路径，但 `@value @abi type` 的 `c_abi_ptr_name` 定义取结构体地址（非 payload 地址）。
+**实现细节**（这是 `@value` 与普通 `type` 在语法用法层面的**唯一差别**）：
+
+- `c_abi_ptr_name` 是 codegen 按类型生成的 inline 函数（`struct <abi_layout> *(struct <struct> *self)`），堆 `@abi type` 与 `@value @abi type` 共用此符号。
+- 堆 `@abi type`：`self` 指向堆对象（含 `FengManagedHeader`），函数体 `(char*)self + offsetof(first_field)` 跳过 header 返回 payload 地址；`&` 站点 `expr` 已是指针，直接 `c_abi_ptr_name(expr)`。
+- `@value @abi type`：无 header，`offsetof(first_field) == 0`，函数体等价于 `(struct <abi_layout> *)self` 直接返回结构体地址；`&` 站点 `expr` 是值表达式（栈上/内联值），需 emit `c_abi_ptr_name(&expr)`。
+- codegen 在 `&` 站点按 `@value` 标志区分：`@value` 值 emit 取地址 `&expr` 后传入；堆对象直接传 `expr`。`c_abi_ptr_name` 函数体本身无需分支（`offsetof` 自然为 0）。
 
 ### 3.8 作用域与生命周期
 
-`@value type` 值在栈上布局，作用域退出时自动清理：
+`@value type` 值在栈上布局，作用域退出时自动清理。**生命周期处理与 tuple 一致**（trivial 无操作 / aggregate release），**终结器调用独立于值分类**（@value type 独有，tuple 无终结器）：
 
-- trivial：无清理操作
-- aggregate：`feng_aggregate_release`（逐槽位 release 托管字段）
-- 有终结器时：先调终结器，再 aggregate release
+- 终结器调用（如有）：codegen 在清理站点 emit `c_finalizer_name(&value)` 调用，**与值分类无关**——trivial 与 aggregate 均调用
+- trivial（无托管字段）：终结器调用后无额外操作（与 tuple trivial 一致）
+- aggregate（有托管字段）：终结器调用后再 `feng_aggregate_release`（与 tuple aggregate 一致）
+
+**关键点**：值分类（trivial/aggregate）**只看字段是否含托管成员**，不看是否有终结器。trivial `@value type` + 终结器是合法组合——清理站点 emit 终结器调用，无需 aggregate release（因无托管槽位）。终结器符号从 `UserType.c_finalizer_name` 获取（`FengTrivialDescriptor`/`FengAggregateDescriptor` 均无 finalizer 字段，`feng_aggregate_release` 也不调用终结器，故由 codegen 在清理站点直接 emit）。
 
 对象字段为 `@value type` 时：
 
@@ -381,16 +403,29 @@ print(p);   // ✅ p 装箱为 spec subject 后传入
 
 ### 5.1 Trivial @value type
 
-全字段 trivial 的 `@value type` 生成 `FengTrivialDescriptor`：
+全字段 trivial 的 `@value type` 生成 `FengTrivialDescriptor`（与 tuple trivial 路径一致）：
 
 ```c
 // @value type Point { var x: float; var y: float; }
+static bool Feng__demo__Point__equal(const void *left, const void *right) {
+    const struct Feng__demo__Point *_left = (const struct Feng__demo__Point *)left;
+    const struct Feng__demo__Point *_right = (const struct Feng__demo__Point *)right;
+    if (_left == _right) return true;
+    if (_left == NULL || _right == NULL) return false;
+    // 逐字段 ==：trivial 字段走 descriptor->equal_fn 或 memcmp fallback
+    if (!(&feng_f32_descriptor)->equal_fn(&_left->x, &_right->x)) return false;
+    if (!(&feng_f32_descriptor)->equal_fn(&_left->y, &_right->y)) return false;
+    return true;
+}
+
 static const FengTrivialDescriptor Feng__demo__Point__trivial_desc = {
     .name = "demo.Point",
     .size = sizeof(struct Feng__demo__Point),
-    .equal_fn = NULL,   // NULL => memcmp
+    .equal_fn = &Feng__demo__Point__equal,   // 非 NULL，逐字段比较（与 tuple 一致）
 };
 ```
+
+**关键点**：`equal_fn` **非 NULL**，指向 codegen 生成的逐字段比较函数（复用 tuple 的 `cg_emit_tuple_equal_function` 路径）。这与 §3.4「不用 `memcmp`」一致——`NULL` 会 fallback 到 `memcmp`，对含浮点字段的类型会给出错误的等值语义（NaN、符号零）。
 
 codegen 的 `cg_trivial_descriptor_expr` 已处理 `CG_TYPE_OBJECT` 且 `facts.value_kind == CG_VK_TRIVIAL` 的情况——返回 `facts.descriptor_name`。@value type 只需在 `cg_aggregate_facts` 中扩展判定即可。
 
@@ -400,6 +435,11 @@ codegen 的 `cg_trivial_descriptor_expr` 已处理 `CG_TYPE_OBJECT` 且 `facts.v
 
 ```c
 // @value type User { let id: int; let name: string; }
+static bool Feng__demo__User__equal(const void *left, const void *right) {
+    /* 逐字段比较：trivial 走 descriptor->equal_fn，托管走各自 == */
+    /* ... */
+}
+
 static const FengManagedSlotDescriptor Feng__demo__User__aggregate_slots[] = {
     { offsetof(struct Feng__demo__User, name), FENG_SLOT_POINTER, NULL },
 };
@@ -409,9 +449,12 @@ static const FengAggregateDescriptor Feng__demo__User__aggregate_desc = {
     .size = sizeof(struct Feng__demo__User),
     .managed_slot_count = 1,
     .managed_slots = Feng__demo__User__aggregate_slots,
+    .equal_fn = &Feng__demo__User__equal,   // 非 NULL，逐字段比较（与 tuple 一致）
     ...
 };
 ```
+
+`equal_fn` 同样**非 NULL**，复用 tuple 的 `cg_emit_tuple_equal_function` 生成路径。`FengAggregateDescriptor.equal_fn` 为 NULL 时表示「不支持 aggregate 等值」，`@value type` 必须生成非 NULL 值以满足 §3.4 的默认值比较语义。
 
 ### 5.3 Value Box 描述符
 
@@ -431,6 +474,7 @@ static void Feng__demo__User__spec_box_release_children(void *_self) {
 const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
     .name = "demo.User.__value_box",
     .size = sizeof(struct Feng__demo__User__spec_box),
+    .finalizer = NULL,   // @value type 无终结器时为 NULL；有终结器时指向 thunk（先调值终结器，release_children 再走 aggregate release）
     .release_children = Feng__demo__User__spec_box_release_children,
     .is_potentially_cyclic = true,   // 含托管字段时
     .managed_field_count = 1,
@@ -439,7 +483,11 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 };
 ```
 
-@value type 的 box 复用 tuple 已有的 per-type codegen 生成模式（`header + embedded value struct`），两者 C 结构完全相同，codegen 仅需将入口条件从「仅 tuple」扩展为「tuple 或 @value」。`FengScalarBox`（runtime 预编译的固定 union，服务 11 种标量）保持不变——标量 box 与 per-type box 在 payload 布局、构造函数、descriptor 策略上本质不同，强行合并无收益。
+@value type 的 box 复用 tuple 已有的 per-type codegen 生成模式（`header + embedded value struct`），两者 C 结构完全相同，codegen 仅需将入口条件从「仅 tuple」扩展为「tuple 或 @value」。
+
+**每个值类型的 box 是单独生成的**（per-type codegen，tuple 与 `@value type` 均如此）。因此 box 的 `finalizer` 字段也是 per-type 生成——按该值类型是否有终结器决定：无终结器时 `finalizer = NULL`（tuple 即如此）；有终结器时 `finalizer` 指向 codegen 生成的 thunk，调用值的 `c_finalizer_name(&box->value)`，随后由 runtime 框架自动调用 `release_children` 走 `feng_aggregate_release`。这与 §3.8「清理站点先调终结器再 aggregate release」一致——box 释放是清理站点之一。这是 per-type 生成的自然结果，不构成新的 box 结构或新路径。
+
+`FengScalarBox`（runtime 预编译的固定 union，服务 11 种标量）保持不变——标量 box 与 per-type box 在 payload 布局、构造函数、descriptor 策略上本质不同，强行合并无收益。
 
 **Non-escape 优化**：当 `@value` 值仅在调用栈帧内消费时（临时 coercion），可借用栈上地址作为 subject，不分配 box。逃逸到局部绑定、返回值或字段存储时才分配 box。口径沿用现有定义（`feng-fit-builtin-type.md` §6.3）。
 
@@ -498,15 +546,15 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 | 变更项 | 工作量 | 说明 |
 |--------|--------|------|
-| `UserType` 字段重命名 | 小 | `c_tuple_box_*` → `c_value_box_*` |
-| box 符号初始化函数重命名与入口扩展 | 小 | 条件从 tuple 扩展为 tuple \|\| value |
-| `cg_aggregate_facts` 扩展 | 小 | `CG_TYPE_OBJECT` 分支条件扩展 |
-| box struct/desc/release emit 函数重命名 | 小 | 生成逻辑不变 |
+| `UserType` 字段重命名 | 小 | `c_tuple_box_*` → `c_value_box_*`（或保留现名，仅扩入口） |
+| box 符号初始化函数入口扩展 | 小 | 条件从 tuple 扩展为 tuple \|\| value |
+| `cg_aggregate_facts` 扩展 | 小 | `CG_TYPE_OBJECT` 分支条件扩展（见下方示意） |
+| box struct/desc/release emit | 小 | 复用 tuple 生成逻辑，函数内部零修改 |
 | `cg_emit_value_spec_box_subject` 入口扩展 | 小 | 函数内部逻辑不变 |
-| witness thunk 生成路径扩展 | 中 | 需要处理 @value type 的声明头满足（tuple 不支持） |
-| trivial descriptor emit | 小 | 已有路径支撑 |
-| `&` 取地址（`@value @abi` 组合） | 小 | 复用 `@abi` 的 `c_abi_ptr_name` 分派路径；`@value @abi type` 无 header，`c_abi_ptr_name` 定义取结构体地址（非 payload 地址），与堆 `@abi type` 跳过 header 不同；语义层补注解组合校验 |
-| 终结器 emit | 中 | 新增清理站点：作用域退出时先调终结器再 aggregate release |
+| witness 生成路径 | 小 | 按原则 1，复用普通 type 的 `cg_ensure_witness_instance_for_type` 路径；仅需让该路径接受 `@value` subject（声明头满足 + fit 扩展均走此路径，**不走** tuple 的 `tuple_box_witness_tables`） |
+| trivial/aggregate descriptor emit | 小 | 复用 tuple 的 `cg_emit_tuple_equal_function` 生成 `equal_fn`（非 NULL） |
+| `&` 取地址（`@value @abi` 组合） | 小 | `c_abi_ptr_name` 函数体无需分支（`offsetof` 自然为 0）；`&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`）；语义层补 `@value @abi` 注解组合校验 |
+| 终结器清理站点 emit | 中 | 作用域退出/异常清理站点：有终结器时 emit `c_finalizer_name(&value)`，再按值分类走 trivial 无操作 / aggregate release。trivial + 终结器是合法组合，需 trivial 路径也 emit 终结器调用 |
 
 入口条件扩展示意：
 
@@ -518,18 +566,18 @@ if (!cg_type_is_tuple_user(t)) { return false; }
 if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 ```
 
-生成逻辑本身零修改——box struct 布局、descriptor 生成、release_children 生成对 tuple 和 @value type 完全一致。
+生成逻辑本身零修改——box struct 布局、descriptor 生成、release_children 生成、equal_fn 生成对 tuple 和 @value type 完全一致。
 
 ### 7.3 Semantic
 
 | 变更项 | 工作量 | 说明 |
 |--------|--------|------|
 | `@value` 注解解析 | 小 | 与 `@abi` 类似的注解识别 |
-| 值分类判定 | 小 | 复用 `feng_semantic_value_kind_of_decl`，扩展判定逻辑 |
-| 自引用检测 | 小 | 类型大小检查时检测循环引用 |
-| 等值运算符 | 中 | `@value type` 的 `==`/`!=` 重载为值比较 |
-| spec 满足性检查 | 小 | 声明头满足与普通 type 一致；`fit` 路径一致 |
-| 构造器/终结器语义 | 小 | 与普通 type 一致，`self` 语义略有不同 |
+| 值分类判定 | 小 | codegen 层 `cg_aggregate_facts` 扩展入口即可（trivial/aggregate 细分复用 tuple 逻辑）；semantic 层 `feng_semantic_value_kind_of_decl` 对 `FENG_DECL_TYPE` 一律返回 `MANAGED_POINTER`（视 type 引用为托管指针），与 tuple 处理一致，**无需扩展** |
+| 值类型循环引用检测 | 中 | **新增值类型循环引用编译期检测**，覆盖 tuple + `@value type`（一并修正 tuple 现有崩溃 bug）；直接自引用 + 间接循环均报错；普通 `type`（堆对象，引用语义，大小固定）不受约束。详见 §3.5 |
+| 等值运算符 | 小 | `@value type` 的 `==`/`!=` 走 codegen 生成的 `equal_fn`（复用 tuple 路径），semantic 层仅识别 `@value` 类型允许默认值比较 |
+| spec 满足性检查 | 小 | 声明头满足与普通 type 一致（复用普通 type 路径）；`fit` 路径一致 |
+| 构造器/终结器语义 | 小 | 与普通 type 一致，`self` 指向栈上值地址（普通 type 的 `self` 指向堆对象） |
 
 ---
 
@@ -537,10 +585,11 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 
 | # | 问题 | 建议 | 状态 |
 |---|------|------|------|
-| 1 | `@value` 与 `@abi` 是否兼容 | 可组合（`@value` 管值语义，`@abi` 管 ABI 兼容；`@value @abi type` `&` 取结构体地址） | 已决策 |
+| 1 | `@value` 与 `@abi` 是否兼容 | 可组合（`@value` 管值语义，`@abi` 管 ABI 兼容；`@value @abi type` `&` 取结构体地址，实现细节见 §3.7） | 已决策 |
 | 2 | `let` 绑定下 `var` 字段是否可修改 | 与普通 type 一致（`let` 阻止重新绑定，不阻止 `var` 字段原地修改） | 已决策 |
-| 3 | 终结器的确切调用时机 | 离开作用域前调用（和 C 结构体释放一致），先终结器后 aggregate release | 已决策 |
-| 4 | trivial @value 的等值比较实现 | 和元组一致：逐字段 `==`（通过 codegen 生成的 `equal_fn`，不用 `memcmp`） | 已决策 |
+| 3 | 终结器的确切调用时机与值分类的关系 | 终结器调用独立于值分类：清理站点先调终结器（如有），再按值分类走 trivial 无操作 / aggregate release。trivial + 终结器是合法组合（详见 §3.8） | 已决策 |
+| 4 | trivial @value 的等值比较实现 | 和元组一致：逐字段 `==`（通过 codegen 生成的 `equal_fn`，**非 NULL**，不用 `memcmp`）。`FengTrivialDescriptor.equal_fn = NULL` 会 fallback 到 `memcmp`，对浮点字段给出错误语义，必须生成非 NULL 函数 | 已决策 |
+| 5 | 值类型循环引用检测 | `@value type` 与 tuple 同属值类型，统一在 semantic 层做循环引用编译期检测，直接/间接循环均报错；一并修正 tuple 现有崩溃 bug（详见 §3.5） | 已决策 |
 
 ---
 
