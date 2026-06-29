@@ -261,7 +261,7 @@ type C { var b: B; }   // ❌ 编译错误：值类型间接循环引用
 
 **理由**：值类型按值内联布局，类型大小必须编译期确定；自引用会导致无限大小。
 
-**现状修正**：tuple 当前对自引用无编译期检测，codegen 阶段会段错误（exit 139）。实现 `@value type` 时，在 semantic 层新增**值类型循环引用编译期检测**，覆盖 tuple 与 `@value type`——两者同属值类型（按值内联布局，大小须编译期确定），检测逻辑完全一致，一并修正 tuple 的已有崩溃。
+**现状修正**：tuple 当前对自引用无编译期检测，codegen 静默吞过（无 C 产出、exit 0、无诊断）。实现 `@value type` 时，在 semantic 层新增**值类型循环引用编译期检测**，覆盖 tuple 与 `@value type`——两者同属值类型（按值内联布局，大小须编译期确定），检测逻辑完全一致，一并修正 tuple 的已有静默失败。
 
 ### 3.6 内联布局
 
@@ -592,8 +592,8 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 | 变更项 | 工作量 | 说明 |
 |--------|--------|------|
 | `@value` 注解解析 | 小 | 与 `@abi` 类似的注解识别 |
-| 值分类判定 | 小 | codegen 层 `cg_aggregate_facts` 扩展入口即可（trivial/aggregate 细分复用 tuple 逻辑）；semantic 层 `feng_semantic_value_kind_of_decl` 对 `FENG_DECL_TYPE` 一律返回 `MANAGED_POINTER`（视 type 引用为托管指针），与 tuple 处理一致，**无需扩展** |
-| 值类型循环引用检测 | 中 | **新增值类型循环引用编译期检测**，覆盖 tuple + `@value type`（一并修正 tuple 现有崩溃 bug）；直接自引用 + 间接循环均报错；普通 `type`（堆对象，引用语义，大小固定）不受约束。详见 §3.5 |
+| 值分类判定 | 小 | codegen 层 `cg_aggregate_facts` 扩展入口即可（trivial/aggregate 细分复用 tuple 逻辑）；semantic 层 `feng_semantic_value_kind_of_decl` 对 `FENG_DECL_TYPE` 一律返回 `MANAGED_POINTER`（视 type 引用为托管指针），与 tuple 处理一致，**无需修改函数本身；需审计调用点确认无『MANAGED_POINTER ⇒ 堆对象+header』假设（tuple 已沿此路径，风险低）** |
+| 值类型循环引用检测 | 中 | **新增值类型循环引用编译期检测**，覆盖 tuple + `@value type`（一并修正 tuple 现有静默失败 bug）；直接自引用 + 间接循环均报错；普通 `type`（堆对象，引用语义，大小固定）不受约束。详见 §3.5 |
 | 等值运算符 | 小 | `@value type` 的 `==`/`!=` 走 codegen 生成的 `equal_fn`（复用 tuple 路径），semantic 层仅识别 `@value` 类型允许默认值比较 |
 | spec 满足性检查 | 小 | 声明头满足与普通 type 一致（复用普通 type 路径）；`fit` 路径一致 |
 | 构造器/终结器语义 | 小 | 与普通 type 一致，`self` 指向栈上值地址（普通 type 的 `self` 指向堆对象） |
@@ -641,10 +641,10 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] Semantic 层新增值类型循环引用检测（直接自引用 + 间接循环均报错）
 - [ ] 检测覆盖 tuple 与 `@value type`（两者同属值类型，检测逻辑一致）
 - [ ] 普通 `type`（堆对象，引用语义，大小固定）不受约束
-- [ ] 一并修正 tuple 现有段错误（exit 139）
+- [ ] 一并修正 tuple 现有静默失败（无 C 产出、exit 0、无诊断）
 
 **测试**：
-- [ ] tuple 自引用/间接循环：报编译错误，不再段错误（fcts/）
+- [ ] tuple 自引用/间接循环：报编译错误，不再静默吞过（fcts/）
 - [ ] `@value type` 自引用/间接循环：报编译错误
 - [ ] 普通 `type` 自引用：允许
 - [ ] 全量回归
@@ -655,6 +655,7 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 
 **变更**：
 - [ ] Semantic 层值分类判定（trivial 分支：全字段 trivial，§3.1）
+- [ ] 审计 `feng_semantic_value_kind_of_decl` 调用点（确认无『MANAGED_POINTER ⇒ 堆对象+header』假设，§7.3）
 - [ ] Codegen 层 `cg_aggregate_facts` 扩展入口（`tuple || value`，§7.2）
 - [ ] `cg_emit_user_type_definition` 新增 `@value` 分支：无 `_hdr`（同 tuple）+ 值语义描述符（§7.2）
 - [ ] Trivial descriptor 生成（`equal_fn` 非 NULL，逐字段比较，§5.1）
