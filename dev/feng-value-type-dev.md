@@ -309,6 +309,7 @@ let addr = &p;   // 类型: Point*，指向 p 的结构体本身（无托管头�
 - 堆 `@abi type`：`self` 指向堆对象（含 `FengManagedHeader`），函数体 `(char*)self + offsetof(first_field)` 跳过 header 返回 payload 地址；`&` 站点 `expr` 已是指针，直接 `c_abi_ptr_name(expr)`。
 - `@value @abi type`：无 header，`offsetof(first_field) == 0`，函数体等价于 `(struct <abi_layout> *)self` 直接返回结构体地址；`&` 站点 `expr` 是值表达式（栈上/内联值），需 emit `c_abi_ptr_name(&expr)`。
 - codegen 在 `&` 站点按 `@value` 标志区分：`@value` 值 emit 取地址 `&expr` 后传入；堆对象直接传 `expr`。`c_abi_ptr_name` 函数体本身无需分支（`offsetof` 自然为 0）。
+- `c_abi_box_name`/`c_abi_value_name`（用于 `@abi func` 形参/返回值 ABI 互操作）在 `@value @abi` 下的行为见 §6.1。
 
 ### 3.8 作用域与生命周期
 
@@ -316,7 +317,7 @@ let addr = &p;   // 类型: Point*，指向 p 的结构体本身（无托管头�
 
 - 终结器调用（如有）：codegen 通过 `FENG_NODE_DEFER` 节点注册——`FENG_NODE_DEFER` 是 runtime 的通用 scope-exit 回调机制（最典型场景 `defer` 关键字，但节点种类不独占 `defer`，见 §7.1 注释更新）；`c_finalizer_name`（签名 `void(void*)`，与 `defer_fn` 完全一致）直接作为 `defer_fn`，`&value` 作为 `defer_closure`。正常退出时 `cg_release_scope` pop 节点并显式调用；异常展开时 personality function 遍历 chain 调用。**与值分类无关**——trivial 与 aggregate 均调用
 - trivial（无托管字段）：仅注册 defer 节点（终结器），无 aggregate 节点
-- aggregate（有托管字段）：先 push aggregate 节点（`feng_aggregate_release`），再 push defer 节点（终结器）；LIFO pop 保证终结器先于 release 调用
+- aggregate（有托管字段）：先 push aggregate 节点（`feng_aggregate_release`），再 push defer 节点（终结器）；LIFO pop 保证终结器先于 release 调用。`cg_release_scope` 为此类 local emit 两段清理代码——先 `feng_cleanup_pop(); c_finalizer_name(&value);`（pop defer 调终结器），再 `feng_cleanup_pop(); feng_aggregate_release(&value, &desc); memset(...);`（pop aggregate 调 release）。现有 `cg_release_scope` 按 `cgtype_is_defer`/`is_managed`/`is_aggregate` 三选一为每个 local emit 一段清理代码，需新增 combined 路径覆盖此场景；异常展开时 personality function 遍历 chain，节点自身携带 kind 区分，逐节点调用，无需 combined 逻辑
 
 **关键点**：值分类（trivial/aggregate）**只看字段是否含托管成员**，不看是否有终结器。trivial `@value type` + 终结器是合法组合——仅注册 defer 节点，无 aggregate release（因无托管槽位）。`FengTrivialDescriptor`/`FengAggregateDescriptor` 均无 finalizer 字段，`feng_aggregate_release` 也不调用终结器，故栈值的终结器由 codegen 通过 `FENG_NODE_DEFER` 注册（通用 scope-exit 机制，非 `defer` 专属）；其 runtime 注释须说明通用性——最典型场景是 `defer` 关键字，但节点种类不独占 `defer`（见 §7.1）。
 
@@ -510,6 +511,11 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 **终结器约束**：`@abi` 禁止终结器的现有规则（AE0317）对 `@value @abi type` 同样生效；`@value` 不放宽此约束。需终结器的 `@value type` 不可同时标 `@abi`。
 
+**ABI 互操作（`@abi func` 形参/返回值）**：`@value @abi type` 作为 `@abi func` 形参或返回值时，按 ABI 结构体值语义直接传递，不经 `feng_object_new` 堆分配：
+
+- **形参**：`c_abi_value_name` 从 Feng 值提取 ABI 结构体。对 `@value @abi type`，Feng 值本身即 ABI 结构（无 header 偏移），提取为平凡字段拷贝；现有 `c_abi_value_name` 实现按字段逐个拷贝，对 `@value @abi` 语义正确。
+- **返回值**：`c_abi_box_name` 将 ABI 结构体装箱为 Feng 堆对象（`feng_object_new(&<c_desc_name>)`）。对 `@value @abi type` **不适用**——`@value type` 无 `c_desc_name`（值类型不生成 `FengTypeDescriptor`，仅有 trivial/aggregate 值描述符与 box 描述符），且 `@value` 值不堆分配。codegen 需在 `@abi func` 返回站点按 `@value` 标志跳过 `c_abi_box_name` 调用，直接按值返回 ABI 结构体给调用方绑定；`c_abi_box_name` 符号本身对 `@value @abi type` 不生成。
+
 ### 6.2 异常
 
 `@value type` 可作为异常抛出类型。装箱路径与现有标量/tuple 异常一致——异常 payload 需要堆承载。
@@ -557,12 +563,14 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | `UserType` 字段重命名 | 小 | `c_tuple_box_*` → `c_value_box_*`（或保留现名，仅扩入口） |
 | box 符号初始化函数入口扩展 | 小 | 条件从 tuple 扩展为 tuple \|\| value |
 | `cg_aggregate_facts` 扩展 | 小 | `CG_TYPE_OBJECT` 分支条件扩展（见下方示意） |
-| box struct/desc/release emit | 小 | 复用 tuple 生成逻辑，函数内部零修改 |
+| 主结构体 emit + `c_finalizer_name` thunk | 中 | `@value type` 既不走 tuple 路径（tuple 无终结器），也不走普通 type 路径（普通 type 有 `FengManagedHeader _hdr`）；需第三条路径：无 `_hdr`（同 tuple）+ finalizer thunk emit（同普通 type，但 `self` 指向栈上值地址，非堆对象）+ 值语义描述符。现有 `cg_emit_user_type_definition` 在 tuple 与普通 type 之间二选一分发，需新增 `@value` 分支 |
+| box struct/desc/release emit | 小 | box struct（`_hdr + value`）复用 tuple 生成逻辑；box descriptor 的 `finalizer` 字段需 per-type 处理：无终结器时 `NULL`（同 tuple），有终结器时指向 codegen 生成的 thunk 调用 `c_finalizer_name(&box->value)`（见 §5.3）。`release_children` 复用 tuple 路径（`feng_aggregate_release`） |
 | `cg_emit_value_spec_box_subject` 新增 | 小 | 新增独立函数，复用 tuple 生成逻辑，不动 `cg_emit_tuple_spec_box_subject` |
 | witness 生成路径 | 小 | 按原则 1，复用普通 type 的 `cg_ensure_witness_instance_for_type` 路径；仅需让该路径接受 `@value` subject（声明头满足 + fit 扩展均走此路径，**不走** tuple 的 `tuple_box_witness_tables`） |
 | trivial/aggregate descriptor emit | 小 | 复用 tuple 的 `cg_emit_tuple_equal_function` 生成 `equal_fn`（非 NULL） |
 | `&` 取地址（`@value @abi` 组合） | 小 | `c_abi_ptr_name` 函数体无需分支（`offsetof` 自然为 0）；`&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`）；语义层补 `@value @abi` 注解组合校验 |
-| 终结器注册 `FENG_NODE_DEFER` | 中 | 有终结器时，codegen 通过 `FENG_NODE_DEFER` 节点注册（通用 scope-exit 机制；`c_finalizer_name` 作 `defer_fn`，`&value` 作 closure）；aggregate 先 push aggregate 节点再 push defer 节点，LIFO 保证终结器先于 release。trivial + 终结器仅注册 defer 节点。`cg_release_scope` 与 personality function 两条路径均覆盖 |
+| `@abi func` 形参/返回的 ABI 互操作 | 小 | `@value @abi type` 作 `@abi func` 形参/返回值时按 ABI 结构体值语义直接传递，不经 `feng_object_new`。`c_abi_value_name` 对 `@value @abi` 是平凡拷贝（值本身即 ABI 结构）；`c_abi_box_name` 不适用（`@value` 不堆分配），codegen 需在返回站点按 `@value` 标志跳过 box 调用，直接按值返回（见 §6.1） |
+| 终结器注册 `FENG_NODE_DEFER` | 中 | 有终结器时，codegen 通过 `FENG_NODE_DEFER` 节点注册（通用 scope-exit 机制；`c_finalizer_name` 作 `defer_fn`，`&value` 作 closure）；aggregate 先 push aggregate 节点再 push defer 节点，LIFO 保证终结器先于 release。trivial + 终结器仅注册 defer 节点。**`cg_release_scope` 需新增 combined 路径**：现有实现按 `cgtype_is_defer`/`is_managed`/`is_aggregate` 三选一为每个 local emit 一段清理代码；`@value type`（aggregate + 终结器）需在同一 local 上 emit 两段——先 `feng_cleanup_pop(); c_finalizer_name(&value);`（pop defer 调终结器），再 `feng_cleanup_pop(); feng_aggregate_release(&value, &desc); memset(...);`（pop aggregate 调 release）。personality function 异常展开路径通过 `feng_cleanup_release_node` 遍历 chain，节点自身已携带 kind 区分，无需 combined 逻辑 |
 
 入口条件扩展示意：
 
@@ -574,7 +582,7 @@ if (!cg_type_is_tuple_user(t)) { return false; }
 if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 ```
 
-生成逻辑本身零修改——box struct 布局、descriptor 生成、release_children 生成、equal_fn 生成对 tuple 和 @value type 完全一致。
+生成逻辑本身零修改——box struct 布局、release_children 生成、equal_fn 生成对 tuple 和 @value type 完全一致；唯一差异是 box descriptor 的 `finalizer` 字段：tuple 一律 `NULL`，`@value type` 按是否有终结器 per-type 决定（见 §5.3）。
 
 ### 7.3 Semantic
 
