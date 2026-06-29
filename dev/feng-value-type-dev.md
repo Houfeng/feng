@@ -313,13 +313,16 @@ let addr = &p;   // 类型: Point*，指向 p 的结构体本身（无托管头�
 
 ### 3.8 作用域与生命周期
 
-`@value type` 值在栈上布局，作用域退出时自动清理。**生命周期处理与 tuple 一致**（trivial 无操作 / aggregate release），**终结器调用独立于值分类**（@value type 独有，tuple 无终结器）：
+`@value type` 值在栈上布局，作用域退出时自动清理。**生命周期处理与 tuple 一致**（trivial 无操作 / aggregate release），**终结器调用独立于值分类**——仅在 `@value type` 声明了终结器时触发（tuple 无终结器，故 tuple 永不触发）。
 
-- 终结器调用（如有）：codegen 通过 `FENG_NODE_DEFER` 节点注册——`FENG_NODE_DEFER` 是 runtime 的通用 scope-exit 回调机制（最典型场景 `defer` 关键字，但节点种类不独占 `defer`，见 §7.1 注释更新）；`c_finalizer_name`（签名 `void(void*)`，与 `defer_fn` 完全一致）直接作为 `defer_fn`，`&value` 作为 `defer_closure`。正常退出时 `cg_release_scope` pop 节点并显式调用；异常展开时 personality function 遍历 chain 调用。**与值分类无关**——trivial 与 aggregate 均调用
-- trivial（无托管字段）：仅注册 defer 节点（终结器），无 aggregate 节点
-- aggregate（有托管字段）：先 push aggregate 节点（`feng_aggregate_release`），再 push defer 节点（终结器）；LIFO pop 保证终结器先于 release 调用。`cg_release_scope` 为此类 local emit 两段清理代码——先 `feng_cleanup_pop(); c_finalizer_name(&value);`（pop defer 调终结器），再 `feng_cleanup_pop(); feng_aggregate_release(&value, &desc); memset(...);`（pop aggregate 调 release）。现有 `cg_release_scope` 按 `cgtype_is_defer`/`is_managed`/`is_aggregate` 三选一为每个 local emit 一段清理代码，需新增 combined 路径覆盖此场景；异常展开时 personality function 遍历 chain，节点自身携带 kind 区分，逐节点调用，无需 combined 逻辑
+**无终结器时不 push defer 节点**：无终结器的 `@value type` 在运行时层面与 tuple 完全一致——trivial 无清理，aggregate 仅 push aggregate 节点（`feng_aggregate_release`）。codegen 不 emit `FENG_NODE_DEFER` push，避免无意义运行时开销。这与 §1.3 原则 1「运行时处理与 tuple 一致」契合：无终结器的 `@value type` 在运行时层面与 tuple 不可区分。
 
-**关键点**：值分类（trivial/aggregate）**只看字段是否含托管成员**，不看是否有终结器。trivial `@value type` + 终结器是合法组合——仅注册 defer 节点，无 aggregate release（因无托管槽位）。`FengTrivialDescriptor`/`FengAggregateDescriptor` 均无 finalizer 字段，`feng_aggregate_release` 也不调用终结器，故栈值的终结器由 codegen 通过 `FENG_NODE_DEFER` 注册（通用 scope-exit 机制，非 `defer` 专属）；其 runtime 注释须说明通用性——最典型场景是 `defer` 关键字，但节点种类不独占 `defer`（见 §7.1）。
+**有终结器时**：codegen 通过 `FENG_NODE_DEFER` 节点注册终结器调用——`FENG_NODE_DEFER` 是 runtime 的通用 scope-exit 回调机制（最典型场景 `defer` 关键字，但节点种类不独占 `defer`，见 §7.1 注释更新）；`c_finalizer_name`（签名 `void(void*)`，与 `defer_fn` 完全一致）直接作为 `defer_fn`，`&value` 作为 `defer_closure`。正常退出时 `cg_release_scope` pop 节点并显式调用；异常展开时 personality function 遍历 chain 调用。**与值分类无关**——trivial 与 aggregate 均适用：
+
+- trivial + 终结器：仅 push defer 节点（终结器），无 aggregate 节点
+- aggregate + 终结器：先 push aggregate 节点（`feng_aggregate_release`），再 push defer 节点（终结器）；LIFO pop 保证终结器先于 release 调用。`cg_release_scope` 为此类 local emit 两段清理代码——先 `feng_cleanup_pop(); c_finalizer_name(&value);`（pop defer 调终结器），再 `feng_cleanup_pop(); feng_aggregate_release(&value, &desc); memset(...);`（pop aggregate 调 release）。现有 `cg_release_scope` 按 `cgtype_is_defer`/`is_managed`/`is_aggregate` 三选一为每个 local emit 一段清理代码，需新增 combined 路径覆盖此场景；异常展开时 personality function 遍历 chain，节点自身携带 kind 区分，逐节点调用，无需 combined 逻辑
+
+**关键点**：值分类（trivial/aggregate）**只看字段是否含托管成员**，不看是否有终结器；defer 节点 push **仅取决于是否有终结器**——无终结器则不 push，与值分类无关。trivial `@value type` + 终结器是合法组合——仅 push defer 节点，无 aggregate release（因无托管槽位）。`FengTrivialDescriptor`/`FengAggregateDescriptor` 均无 finalizer 字段，`feng_aggregate_release` 也不调用终结器，故栈值的终结器由 codegen 通过 `FENG_NODE_DEFER` 注册（通用 scope-exit 机制，非 `defer` 专属）；其 runtime 注释须说明通用性——最典型场景是 `defer` 关键字，但节点种类不独占 `defer`（见 §7.1）。
 
 对象字段为 `@value type` 时：
 
@@ -570,7 +573,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | trivial/aggregate descriptor emit | 小 | 复用 tuple 的 `cg_emit_tuple_equal_function` 生成 `equal_fn`（非 NULL） |
 | `&` 取地址（`@value @abi` 组合） | 小 | `c_abi_ptr_name` 函数体无需分支（`offsetof` 自然为 0）；`&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`）；语义层补 `@value @abi` 注解组合校验 |
 | `@abi func` 形参/返回的 ABI 互操作 | 小 | `@value @abi type` 作 `@abi func` 形参/返回值时按 ABI 结构体值语义直接传递，不经 `feng_object_new`。`c_abi_value_name` 对 `@value @abi` 是平凡拷贝（值本身即 ABI 结构）；`c_abi_box_name` 不适用（`@value` 不堆分配），codegen 需在返回站点按 `@value` 标志跳过 box 调用，直接按值返回（见 §6.1） |
-| 终结器注册 `FENG_NODE_DEFER` | 中 | 有终结器时，codegen 通过 `FENG_NODE_DEFER` 节点注册（通用 scope-exit 机制；`c_finalizer_name` 作 `defer_fn`，`&value` 作 closure）；aggregate 先 push aggregate 节点再 push defer 节点，LIFO 保证终结器先于 release。trivial + 终结器仅注册 defer 节点。**`cg_release_scope` 需新增 combined 路径**：现有实现按 `cgtype_is_defer`/`is_managed`/`is_aggregate` 三选一为每个 local emit 一段清理代码；`@value type`（aggregate + 终结器）需在同一 local 上 emit 两段——先 `feng_cleanup_pop(); c_finalizer_name(&value);`（pop defer 调终结器），再 `feng_cleanup_pop(); feng_aggregate_release(&value, &desc); memset(...);`（pop aggregate 调 release）。personality function 异常展开路径通过 `feng_cleanup_release_node` 遍历 chain，节点自身已携带 kind 区分，无需 combined 逻辑 |
+| 终结器注册 `FENG_NODE_DEFER` | 中 | **仅当 `@value type` 声明了终结器时** push defer 节点；**无终结器时不 push**，运行时与 tuple 不可区分，避免无意义开销。有终结器时：codegen 通过 `FENG_NODE_DEFER` 节点注册（通用 scope-exit 机制；`c_finalizer_name` 作 `defer_fn`，`&value` 作 closure）；aggregate 先 push aggregate 节点再 push defer 节点，LIFO 保证终结器先于 release。trivial + 终结器仅注册 defer 节点。**`cg_release_scope` 需新增 combined 路径**：现有实现按 `cgtype_is_defer`/`is_managed`/`is_aggregate` 三选一为每个 local emit 一段清理代码；`@value type`（aggregate + 终结器）需在同一 local 上 emit 两段——先 `feng_cleanup_pop(); c_finalizer_name(&value);`（pop defer 调终结器），再 `feng_cleanup_pop(); feng_aggregate_release(&value, &desc); memset(...);`（pop aggregate 调 release）。personality function 异常展开路径通过 `feng_cleanup_release_node` 遍历 chain，节点自身已携带 kind 区分，无需 combined 逻辑 |
 
 入口条件扩展示意：
 
