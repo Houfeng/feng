@@ -23,7 +23,7 @@ Feng 当前有两种具名类型声明形式：
 > Phase 3：值语义 struct（未来特性）
 > 同 Phase 2，仅当语言规范引入后启动；runtime 同样应零修改。
 
-现有的 `FengAggregateValueDescriptor`、五类聚合 API（`feng_aggregate_retain/release/assign/take/default_init`）、三分类 walker、数组元素分类——全部已为新增 aggregate 类型做好 OCP 准备。
+现有的 `FengAggregateDescriptor`、五类聚合 API（`feng_aggregate_retain/release/assign/take/default_init`）、三分类 walker、数组元素分类——全部已为新增 aggregate 类型做好 OCP 准备。
 
 ### 直接目标
 
@@ -52,7 +52,7 @@ type Point {
 
 ### 1.1 与 tuple 的关系
 
-`@value type` 的生命周期处理与 tuple **一致**：编译器与运行时的处理逻辑基本相同，都走聚合值模型（`FengAggregateValueDescriptor` + 五类聚合 API）。
+`@value type` 的生命周期处理与 tuple **一致**：编译器与运行时的处理逻辑基本相同，都走聚合值模型（`FengAggregateDescriptor` + 五类聚合 API）。
 
 两者的差别本质上是**成员访问方式**：
 
@@ -191,8 +191,8 @@ type Point {
 | 条件 | 分类 | 描述符 |
 |------|------|--------|
 | 全字段 trivial（标量、bool） | `FENG_VALUE_TRIVIAL` | `FengTrivialDescriptor`（与标量一致，连 trivial 值也有描述符） |
-| 至少一个托管字段（string、对象引用、spec） | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | `FengAggregateValueDescriptor` |
-| 泛型实例（无论字段类型） | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | `FengAggregateValueDescriptor` |
+| 至少一个托管字段（string、对象引用、spec） | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | `FengAggregateDescriptor` |
+| 泛型实例（无论字段类型） | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | `FengAggregateDescriptor` |
 
 ### 3.2 赋值与传参
 
@@ -447,7 +447,7 @@ codegen 的 `cg_trivial_descriptor_expr` 已处理 `CG_TYPE_OBJECT` 且 `facts.v
 
 ### 6.2 Aggregate @value type
 
-含托管字段的 `@value type` 生成 `FengAggregateValueDescriptor`（与 tuple 路径一致）：
+含托管字段的 `@value type` 生成 `FengAggregateDescriptor`（与 tuple 路径一致）：
 
 ```c
 // @value type User { let id: int; let name: string; }
@@ -455,7 +455,7 @@ static const FengManagedSlotDescriptor Feng__demo__User__aggregate_slots[] = {
     { offsetof(struct Feng__demo__User, name), FENG_SLOT_POINTER, NULL },
 };
 
-static const FengAggregateValueDescriptor Feng__demo__User__aggregate_desc = {
+static const FengAggregateDescriptor Feng__demo__User__aggregate_desc = {
     .name = "demo.User",
     .size = sizeof(struct Feng__demo__User),
     .managed_slot_count = 1,

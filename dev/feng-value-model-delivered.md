@@ -90,10 +90,10 @@ typedef struct FengManagedSlotDescriptor {
     FengManagedSlotKind kind;
     /* 仅当 kind == FENG_SLOT_NESTED_AGGREGATE 时使用，指向嵌套聚合值的描述符。
      * 其他 kind 必须为 NULL。 */
-    const struct FengAggregateValueDescriptor *nested;
+    const struct FengAggregateDescriptor *nested;
 } FengManagedSlotDescriptor;
 
-typedef struct FengAggregateValueDescriptor {
+typedef struct FengAggregateDescriptor {
     /* 调试用，全限定名。 */
     const char *name;
     /* 聚合值整体大小（字节）。 */
@@ -103,7 +103,18 @@ typedef struct FengAggregateValueDescriptor {
     /* 按声明顺序排列的托管槽位表（仅托管槽位，不含平凡字段）。 */
     size_t managed_slot_count;
     const FengManagedSlotDescriptor *managed_slots;
-} FengAggregateValueDescriptor;
+    /* 等值比较函数。NULL 表示不支持 aggregate 等值。 */
+    FengValueEqualFn equal_fn;
+    /* 泛型具体化元数据（非泛型 aggregate 全为 0/NULL）。 */
+    size_t reified_generic_params_count;
+    const struct FengGenericParamDescriptor *const *reified_generic_params;
+    size_t reified_field_offset_count;
+    const size_t *reified_field_offsets;
+    size_t reified_agg_deps_count;
+    const struct FengAggregateDescriptor *const *reified_agg_deps;
+    size_t reified_type_deps_count;
+    const struct FengTypeDescriptor *const *reified_type_deps;
+} FengAggregateDescriptor;
 ```
 
 ### 3.2 设计要点
@@ -126,7 +137,7 @@ Trivial 值（`bool` / 整数 / 浮点 / 全部字段都是 trivial 的未来 tu
 
 ### 3.4 与现有 `FengTypeDescriptor` 体系的关系
 
-runtime 现有体系里已经存在两个相关结构：`FengTypeDescriptor`（描述堆托管对象整体）与 `FengManagedFieldEntry`（描述堆托管对象内部的某一根托管指针字段，详见 [src/runtime/feng_runtime.h](../src/runtime/feng_runtime.h)）。
+runtime 现有体系里已经存在两个相关结构：`FengTypeDescriptor`（描述堆托管对象整体）与 `FengManagedFieldDescriptor`（原 `FengManagedFieldEntry`，描述堆托管对象内部的某一根托管指针字段，详见 [src/runtime/feng_runtime.h](../src/runtime/feng_runtime.h)）。
 
 本草案新增的两个结构与之**职责相同、应用对象不同**。为避免命名漂移，做以下两件事：
 
@@ -139,7 +150,7 @@ runtime 现有体系里已经存在两个相关结构：`FengTypeDescriptor`（�
 | --- | --- | --- | --- |
 | `FengTypeDescriptor` | 堆托管对象（含 header） | 整体 | ARC / cycle collector / 终结器 |
 | `FengManagedFieldDescriptor`（原 `FengManagedFieldEntry`） | 堆托管对象内部的一根托管指针字段 | 单槽 | cycle collector |
-| `FengAggregateValueDescriptor` | 按值聚合值（无 header） | 整体 | §5 五个聚合 API |
+| `FengAggregateDescriptor` | 按值聚合值（无 header） | 整体 | §5 五个聚合 API |
 | `FengManagedSlotDescriptor` | 按值聚合值内部的一个托管槽位 | 单槽 | §5 walker |
 
 #### 3.4.2 单槽描述符差异对比
@@ -152,7 +163,7 @@ runtime 现有体系里已经存在两个相关结构：`FengTypeDescriptor`（�
 | `offset` 起点 | 对象 base | 聚合值 base |
 | 是否带 `kind` | 不带（隐含 = 托管指针） | 带（指针 / 嵌套聚合） |
 | 是否支持嵌套 | 不需要（堆对象不嵌套堆对象） | 需要（聚合可嵌套聚合） |
-| 是否带目标类型字段 | 带 `static_desc`（CC 提示） | 不带 |
+| 是否带目标类型字段 | 带 `static_desc`（CC 提示）与 `aggregate_desc`（aggregate 字段展平） | 不带 |
 | 主要消费者 | cycle collector | §5 walker |
 
 #### 3.4.3 不合并的理由
@@ -203,12 +214,12 @@ typedef struct FengAggregateDefaultInitDescriptor {
 /* 对聚合值的每个 FENG_SLOT_POINTER 槽位调用 feng_retain；对每个
  * FENG_SLOT_NESTED_AGGREGATE 槽位递归调用 feng_aggregate_retain。
  * 对 NULL 指针槽位是安全的。 */
-void feng_aggregate_retain(void *value, const FengAggregateValueDescriptor *desc);
+void feng_aggregate_retain(void *value, const FengAggregateDescriptor *desc);
 
 /* 对称的 release。语义保证：调用后 value 中的托管槽位仍是当前字节，但
  * 其托管引用已被释放，调用方负责确保此后不再读取这些槽位（通常紧接
  * memcpy 覆盖或栈帧弹出）。 */
-void feng_aggregate_release(void *value, const FengAggregateValueDescriptor *desc);
+void feng_aggregate_release(void *value, const FengAggregateDescriptor *desc);
 
 /* 语义等价于 *dst = src，且对托管槽位执行正确的 retain/release。
  * 实现保证：
@@ -216,19 +227,19 @@ void feng_aggregate_release(void *value, const FengAggregateValueDescriptor *des
  *   - 中途异常不会导致泄露或重复释放。
  * 内部实现通过逐槽调用 feng_assign 完成；非托管字节通过 memcpy 复制。 */
 void feng_aggregate_assign(void *dst, const void *src,
-                           const FengAggregateValueDescriptor *desc);
+                           const FengAggregateDescriptor *desc);
 
 /* 移动语义：把 src 的所有权搬移到 dst，src 对应字节被覆盖为"已被搬走"
  * 的合法状态（托管槽位置 NULL，平凡字段保持原值或清零，由 walker 行为
  * 决定）。dst 原内容被释放（按 release 语义）。
  * 用于返回值优化、临时值落入命名变量等场景。 */
 void feng_aggregate_take(void *dst, void *src,
-                         const FengAggregateValueDescriptor *desc);
+                         const FengAggregateDescriptor *desc);
 
 /* 把 value_out 初始化为该类型的默认值。
  * 内部根据 desc->default_init 选择 memset 或调用 init_fn。 */
 void feng_aggregate_default_init(void *value_out,
-                                 const FengAggregateValueDescriptor *desc);
+                                 const FengAggregateDescriptor *desc);
 ```
 
 ### 5.2 实现策略：完全复用单指针原语
@@ -255,7 +266,7 @@ typedef void (*FengManagedSlotVisitor)(void *slot_base,
 
 static void feng_visit_aggregate_managed_slots(
     void *value,
-    const FengAggregateValueDescriptor *desc,
+    const FengAggregateDescriptor *desc,
     FengManagedSlotVisitor visitor,
     void *ctx);
 ```
@@ -264,7 +275,7 @@ static void feng_visit_aggregate_managed_slots(
 
 ### 5.4 OCP 体现
 
-- 新增按值聚合类型 → 仅生成新的 `FengAggregateValueDescriptor` 实例。
+- 新增按值聚合类型 → 仅生成新的 `FengAggregateDescriptor` 实例。
 - runtime 的五个 API、walker、单指针原语 → 全部不动。
 - codegen 公共 helper（"对一个 aggregate 槽位 emit retain/release/assign/take/default-init"）→ 全部不动。
 
@@ -287,7 +298,7 @@ semantic 对 `spec` 的契约规则推导继续按 [feng-spec-semantic-delivered
 
 codegen 负责：
 
-- 把 semantic 的抽象描述 emit 成 C `static const FengAggregateValueDescriptor`。
+- 把 semantic 的抽象描述 emit 成 C `static const FengAggregateDescriptor`。
 - 在每个值处理站点（局部变量声明、参数传递、返回值、字段赋值、数组元素读写、作用域退出清理、异常清理路径）按值类别选择对应的 emit 路径：
   - trivial → 直接 C 赋值 / `memcpy`。
   - managed-pointer → 调用现有单指针原语（保持当前行为）。
@@ -350,7 +361,7 @@ static const FengManagedFieldDescriptor Feng__demo__Holder__managed_fields[] = {
 };
 ```
 
-这是新旧两套描述符之间**唯一的**桥接点：codegen 在生成对象 `FengTypeDescriptor` 时读取该对象每个字段的 `FengAggregateValueDescriptor`，把其中每个 `FENG_SLOT_POINTER` 槽位翻译成一条 `FengManagedFieldDescriptor`。CC 看到的仍是平铺的托管指针表，不感知"这条来自一个聚合字段"。
+这是新旧两套描述符之间**唯一的**桥接点：codegen 在生成对象 `FengTypeDescriptor` 时读取该对象每个字段的 `FengAggregateDescriptor`，把其中每个 `FENG_SLOT_POINTER` 槽位翻译成一条 `FengManagedFieldDescriptor`。CC 看到的仍是平铺的托管指针表，不感知"这条来自一个聚合字段"。
 
 #### 7.2.2 收益
 
@@ -365,7 +376,7 @@ static const FengManagedFieldDescriptor Feng__demo__Holder__managed_fields[] = {
 具体规则：
 
 - 数组创建处需要传入元素分类信息（trivial / managed-pointer / aggregate）。
-- 对 aggregate 元素，数组内部存储其按值布局；元素 size 取自 `FengAggregateValueDescriptor.size`。
+- 对 aggregate 元素，数组内部存储其按值布局；元素 size 取自 `FengAggregateDescriptor.size`。
 - 数组元素的 retain / release / assign / 数组销毁逐元素清理 → 对 aggregate 元素调用 §5 API。
 - 数组的 `managed_fields` 等价物（运行时遍历入口）按元素分类做对应分派。
 
@@ -410,7 +421,7 @@ static const FengAggregateDefaultInitDescriptor FengSpec__demo__Named__default =
     .init_fn = FengSpec__demo__Named__default_init,
 };
 
-static const FengAggregateValueDescriptor FengSpecAgg__demo__Named = {
+static const FengAggregateDescriptor FengSpecAgg__demo__Named = {
     .name = "demo.Named",
     .size = sizeof(FengSpecValue__demo__Named),
     .default_init = &FengSpec__demo__Named__default,
@@ -446,7 +457,7 @@ fat spec 作为参数 / 返回值时，使用**具名 C struct 按值传递**。
 任务（建议按以下顺序执行，便于每一步独立通过回归）：
 
 1. **重命名预备**：把现有 `FengManagedFieldEntry` 重命名为 `FengManagedFieldDescriptor`。涉及 [src/runtime/feng_runtime.h](../src/runtime/feng_runtime.h)、[src/codegen/codegen.c](../src/codegen/codegen.c)、[test/runtime/test_runtime.c](../test/runtime/test_runtime.c)。**已交付**。
-2. runtime：新增 `FengManagedSlotKind` / `FengManagedSlotDescriptor` / `FengAggregateValueDescriptor` / `FengAggregateDefaultInitDescriptor` 类型与五个公共 API；内部实现 walker。**已交付**（src/runtime/feng_aggregate.c + VM-1 单测）。
+2. runtime：新增 `FengManagedSlotKind` / `FengManagedSlotDescriptor` / `FengAggregateDescriptor` / `FengAggregateDefaultInitDescriptor` 类型与五个公共 API；内部实现 walker。**已交付**（src/runtime/feng_aggregate.c + VM-1 单测）。
 3. runtime：单指针原语零修改；`FengManagedHeader` / `FengTypeTag` 零修改；cycle collector 数组分派按 §7.3 升级（属于本模型范围内的必要扩面，对外仍是描述符驱动）。**已交付**（VM-3）。
 4. codegen：增加值类别分派 helper；为 aggregate 类型生成描述符与 init 函数；按 §7.2 展平规则生成对象 `managed_fields`；按 §7.4 生成对象字段 release 调用。**已交付**（VM-4 / VM-5；object-form spec 自动 emit `FengSpecAgg__M__S` + slot table + 默认 init stub；helpers 已就位待引用站点接入）。
 5. codegen + runtime：数组元素分类升级（§7.3）。**已交付**（`feng_array_new_kinded` + 三分类 finalize + cycle collector 三分支）。
@@ -483,7 +494,7 @@ fat spec 作为参数 / 返回值时，使用**具名 C struct 按值传递**。
 - `FengManagedHeader` / `FengTypeTag` 零修改 ✅。
 - cycle collector **数组元素遍历**升级为按元素三分类（trivial / managed-pointer / aggregate）分派；其余 CC 路径（phase15 BFS 主框架、phase 2 free 路径、对象 `managed_fields` 通用展平）零修改 ✅。理由：数组元素的物理布局是数组本身固有信息，无法通过 §7.2 对象 `managed_fields` 方式承载，因此元素层的描述符分派必须写在 CC 数组分支里；该扩面是描述符驱动而非按 spec 写死的特殊路径，对未来新增 aggregate 元素类型零修改。
 - runtime 中**没有任何**专门为 fat spec 写的代码路径；全部通过描述符驱动 ✅。
-- 新增按值聚合类型（tuple / 值语义 struct）经纸面推演，仅需新增 `FengAggregateValueDescriptor` + 必要时新增 `FengAggregateDefaultInitFn`，无需修改 §5 API、walker、CC 数组分派、对象字段展平 ✅。
+- 新增按值聚合类型（tuple / 值语义 struct）经纸面推演，仅需新增 `FengAggregateDescriptor` + 必要时新增 `FengAggregateDefaultInitFn`，无需修改 §5 API、walker、CC 数组分派、对象字段展平 ✅。
 - fat spec 默认零值机制（§6.5）：layer 已提供 `feng_aggregate_default_init` API；spec 端默认 init 实体由 [feng-spec-codegen-delivered.md](./feng-spec-codegen-delivered.md) §6 跟踪生成（4b-β 范围）。当前 codegen 为每个 object-form spec emit panic stub init func，作为安全栅栏直至 4b-β 提供真实实现。
 - fat spec 数组、含 spec 字段的对象、嵌套 spec 调用链路：layer 已提供 `feng_array_new_kinded` + `feng_aggregate_release` + 对象字段展平 helper；端到端站点接入由 spec-codegen-pending §13.2 / §13.3 跟踪。
 - 所有现有 smoke 与单测零回归 ✅（11/11 smokes + 4 单元套件）。
@@ -521,7 +532,7 @@ layer 已覆盖：
 
 允许且仅允许的新增工作：
 
-- [x] 新生成一个 `FengAggregateValueDescriptor`
+- [x] 新生成一个 `FengAggregateDescriptor`
 - [x] 必要时新生成一个 `FengAggregateDefaultInitFn`
 - [x] 在该类型的引用站点 emit 已有 helper 的调用
 
