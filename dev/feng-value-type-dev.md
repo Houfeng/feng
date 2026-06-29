@@ -425,6 +425,8 @@ static const FengTrivialDescriptor Feng__demo__Point__trivial_desc = {
 };
 ```
 
+**命名约定**：@value type 描述符符号按 C 类型直名——trivial 用 `<struct>__trivial_desc`，aggregate 用 `<struct>__aggregate_desc`，比 tuple 现有命名（trivial/aggregate 统一用 `__aggregate_desc`，仅 C 类型不同）更清晰。tuple 是否同步重命名不影响正确性，由后续决定。
+
 **关键点**：`equal_fn` **非 NULL**，指向 codegen 生成的逐字段比较函数（复用 tuple 的 `cg_emit_tuple_equal_function` 路径）。这与 §3.4「不用 `memcmp`」一致——`NULL` 会 fallback 到 `memcmp`，对含浮点字段的类型会给出错误的等值语义（NaN、符号零）。
 
 codegen 的 `cg_trivial_descriptor_expr` 已处理 `CG_TYPE_OBJECT` 且 `facts.value_kind == CG_VK_TRIVIAL` 的情况——返回 `facts.descriptor_name`。@value type 只需在 `cg_aggregate_facts` 中扩展判定即可。
@@ -504,6 +506,8 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 两者正交：`@value @abi type` 是「值语义 + ABI 兼容」的类型，无托管头但成员均 ABI 兼容，`&` 取结构体地址（非 payload 地址，因无 header 可跳过）。参见 §3.7。
 
+**终结器约束**：`@abi` 禁止终结器的现有规则（AE0317）对 `@value @abi type` 同样生效；`@value` 不放宽此约束。需终结器的 `@value type` 不可同时标 `@abi`。
+
 ### 6.2 异常
 
 `@value type` 可作为异常抛出类型。装箱路径与现有标量/tuple 异常一致——异常 payload 需要堆承载。
@@ -550,7 +554,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | box 符号初始化函数入口扩展 | 小 | 条件从 tuple 扩展为 tuple \|\| value |
 | `cg_aggregate_facts` 扩展 | 小 | `CG_TYPE_OBJECT` 分支条件扩展（见下方示意） |
 | box struct/desc/release emit | 小 | 复用 tuple 生成逻辑，函数内部零修改 |
-| `cg_emit_value_spec_box_subject` 入口扩展 | 小 | 函数内部逻辑不变 |
+| `cg_emit_value_spec_box_subject` 新增 | 小 | 新增独立函数，复用 tuple 生成逻辑，不动 `cg_emit_tuple_spec_box_subject` |
 | witness 生成路径 | 小 | 按原则 1，复用普通 type 的 `cg_ensure_witness_instance_for_type` 路径；仅需让该路径接受 `@value` subject（声明头满足 + fit 扩展均走此路径，**不走** tuple 的 `tuple_box_witness_tables`） |
 | trivial/aggregate descriptor emit | 小 | 复用 tuple 的 `cg_emit_tuple_equal_function` 生成 `equal_fn`（非 NULL） |
 | `&` 取地址（`@value @abi` 组合） | 小 | `c_abi_ptr_name` 函数体无需分支（`offsetof` 自然为 0）；`&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`）；语义层补 `@value @abi` 注解组合校验 |
