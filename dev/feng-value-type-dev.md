@@ -52,7 +52,7 @@ type Point {
 
 ### 1.1 与 tuple 的关系
 
-`@value type` 的**运行时处理**与 tuple **一致**：作为其他 type 成员时的内联布局、生命周期处理（retain/release/assign/take/default_init）、相等性处理（`equal_fn`）、box 结构——全部复用 tuple 路径，走聚合值模型（`FengAggregateDescriptor` + 五类聚合 API）。
+`@value type` 的**运行时处理**与 tuple **一致**：作为其他 type 成员时的内联布局、生命周期处理（retain/release/assign/take/default_init）、相等性处理（`equal_fn`）、box 结构——全部参考 tuple 路径（借鉴 tuple 的生成模式与聚合 API，per-type 生成描述符/equal_fn/box，生命周期走同一套聚合 API），走聚合值模型（`FengAggregateDescriptor` + 五类聚合 API）。
 
 `@value type` 的**语法与用法**与普通 `type` **一致**：构造器、泛型、方法、spec 声明头满足、fit 扩展、可见性修饰、witness 路径等全部复用普通 `type` 的处理路径（**例外：禁止终结器**，见 §2.3）。
 
@@ -87,8 +87,8 @@ type Point {
 
 ### 1.3 设计原则
 
-1. **运行时处理与 tuple 一致**：作为其他 type 成员时的内联布局、生命周期处理、相等性处理、box 结构——全部复用 tuple 路径。
-2. **语法与用法与普通 type 一致**：构造器、泛型、方法、spec 满足、fit 扩展、witness 路径等全部复用普通 type 路径；两处差别：禁止终结器（见 §2.3）、取地址操作（见 §3.7）。
+1. **运行时处理与 tuple 一致**：作为其他 type 成员时的内联布局、生命周期处理、相等性处理、box 结构——全部参考 tuple 路径（详见 §9「复用与参考分类」的「参考元组」三项）。
+2. **语法与用法与普通 type 一致**：构造器、泛型、方法、spec 满足、fit 扩展、witness 路径等全部复用普通 type 路径。**语法用法层面两处差别**：禁止终结器（见 §2.3）、取地址操作（见 §3.7）。**codegen 发码层面三处差别**（`self`/spec subject/witness subject）见 §9「复用与参考分类」。
 3. **runtime 零修改**：符合 OCP——新增 aggregate 类型仅需新增描述符，runtime walker/API 不动。
 4. **codegen 最小改动**：泛化 tuple 的 per-type box 生成路径与普通 type 的 witness 路径，入口条件从「仅 tuple」/「仅普通 type」扩展为含 `@value`。
 5. **值类型循环引用编译期拒绝**：`@value type` 与 tuple 同属值类型，直接或间接循环引用必须编译期报错（见 §3.5）。
@@ -555,10 +555,10 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | `UserType` 字段重命名 | 小 | `c_tuple_box_*` → `c_value_box_*`（或保留现名，仅扩入口） |
 | box 符号初始化函数入口扩展 | 小 | 条件从 tuple 扩展为 tuple \|\| value |
 | `cg_aggregate_facts` 扩展 | 小 | `CG_TYPE_OBJECT` 分支条件扩展（见下方示意） |
-| 主结构体 emit | 中 | 复用普通 type 的方法/构造器 emit 路径，两处区别：① 无 `_hdr`（同 tuple，普通 type 有 `FengManagedHeader _hdr`）；② `self` 指向栈上值地址（普通 type 的 `self` 指向堆对象）；描述符生成走值语义描述符（trivial/aggregate）。现有 `cg_emit_user_type_definition` 在 tuple 与普通 type 之间二选一分发，需新增 `@value` 分支。`@value type` 禁止终结器（见 §2.3），不 emit `c_finalizer_name` |
+| 主结构体 emit | 中 | 复用普通 type 的方法/构造器 emit 路径，发码区别：① 无 `_hdr`（普通 type 有 `FengManagedHeader _hdr`）；② `self` 指向栈上值地址（普通 type 的 `self` 指向堆对象）。描述符生成（参考元组）：走值语义描述符（trivial/aggregate）。现有 `cg_emit_user_type_definition` 在 tuple 与普通 type 之间二选一分发，需新增 `@value` 分支。`@value type` 禁止终结器（见 §2.3），不 emit `c_finalizer_name` |
 | box struct/desc/release emit | 小 | box struct（`_hdr + value`）复用 tuple 生成逻辑；box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，见 §2.3、§5.3）。`release_children` 复用 tuple 路径（`feng_aggregate_release`） |
 | `cg_emit_value_spec_box_subject` 新增 | 小 | 新增独立函数，复用 tuple 生成逻辑，不动 `cg_emit_tuple_spec_box_subject` |
-| witness 生成路径 | 小 | 按原则 1，复用普通 type 的 `cg_ensure_witness_instance_for_type` 路径；仅需让该路径接受 `@value` subject（声明头满足 + fit 扩展均走此路径，**不走** tuple 的 `tuple_box_witness_tables`） |
+| witness 生成路径 | 小 | 按原则 2，复用普通 type 的 `cg_ensure_witness_instance_for_type` 路径；仅需让该路径接受 `@value` subject（声明头满足 + fit 扩展均走此路径，**不走** tuple 的 `tuple_box_witness_tables`）。发码区别：subject 是值/box（普通 type 的 subject 是堆对象，见 §9「复用与参考分类」） |
 | trivial/aggregate descriptor emit | 小 | 复用 tuple 的 `cg_emit_tuple_equal_function` 生成 `equal_fn`（非 NULL） |
 | `&` 取地址（`@value @abi` 组合） | 小 | `c_abi_ptr_name` 函数体无需分支（`offsetof` 自然为 0）；`&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`）；语义层补 `@value @abi` 注解组合校验 |
 | `@abi func` 形参/返回的 ABI 互操作 | 小 | `@value @abi type` 作 `@abi func` 形参/返回值时按 ABI 结构体值语义直接传递，不经 `feng_object_new`。`c_abi_value_name` 对 `@value @abi` 是平凡拷贝（值本身即 ABI 结构）；`c_abi_box_name` 不适用（`@value` 不堆分配），codegen 需在返回站点按 `@value` 标志跳过 box 调用，直接按值返回（见 §6.1） |
@@ -611,18 +611,25 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 
 ### 复用与参考分类
 
-每个步骤标题标注复用/参考对象，区分四类：
+每个步骤标题标注复用/参考对象，区分三类：
 
 | 分类 | 含义 | 工作量 |
 |------|------|--------|
-| **复用元组** | runtime 路径/API 完全复用，codegen 仅泛化入口条件 | 最小 |
-| **复用普通 type** | semantic + codegen 处理路径复用普通 type，仅在描述符生成与发码（`_hdr`/`self`）两处做区别 | 小 |
-| **参考元组** | per-type codegen 生成，借鉴元组的生成模式，新增独立函数 | 小~中 |
+| **复用普通 type** | 主路径（semantic + codegen）复用普通 type，发码区别点做分支 | 小 |
+| **参考元组** | 描述符生成 + 生命周期 + 装箱，借鉴元组的生成模式/API | 小~中 |
 | **新增** | 无参考对象，从零实现 | 中 |
 
-**复用普通 type 的区别收敛到两处**：
-- 描述符生成：@value type 生成值描述符（trivial/aggregate）而非 `FengTypeDescriptor`
-- 发码：主结构体无 `_hdr`；`self` 指向栈上值地址而非堆对象
+**复用普通 type 的发码区别点**（三处分支）：
+- `self`：方法/构造器/direct-call 中，`self` 指向栈上值地址（无 header）vs 堆对象
+- spec：spec 视角调用时，subject 是值/box vs 堆对象
+- witness：witness 生成时，subject 是值/box vs 堆对象
+
+**参考元组的三项**：
+- 描述符生成：值描述符（trivial/aggregate）+ box descriptor，per-type 生成
+- 生命周期：聚合 API（`feng_aggregate_retain/release/assign/take/default_init`）
+- 装箱：box 结构（`_hdr + value`），per-type 生成
+
+> 「参考」指 per-type 生成模式与聚合 API 借鉴元组；codegen 函数本身（如 `cg_emit_tuple_equal_function`、box 生成入口）可复用同一逻辑，见 §5.3、§7.2。
 
 ### 9.1 `@value` 注解解析与 AST 扩展【新增】
 
@@ -667,19 +674,19 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] 普通 `type` 定义终结器：允许（回归）
 - [ ] 全量回归
 
-### 9.4 值语义（trivial + aggregate）【复用元组 runtime + 参考元组 codegen】
+### 9.4 值语义（trivial + aggregate）【复用普通 type + 参考元组】
 
 **状态**：未开始 ｜ **依赖**：9.1、9.2 ｜ **范围**：§3.1、§3.2、§3.3、§3.4、§3.6、§5.1、§5.2、§7.2
 
 **变更**：
-- [ ] Semantic 层值分类判定（复用元组三分类：trivial / aggregate，§3.1）
+- [ ] Semantic 层值分类判定（参考元组三分类：trivial / aggregate，§3.1）
 - [ ] 审计 `feng_semantic_value_kind_of_decl` 调用点（确认无『MANAGED_POINTER ⇒ 堆对象+header』假设，§7.3）
-- [ ] Codegen 层 `cg_aggregate_facts` 扩展入口（`tuple || value`，复用元组 runtime 路径，§7.2）
-- [ ] `cg_emit_user_type_definition` 新增 `@value` 分支：无 `_hdr`（同 tuple）+ 值语义描述符（§7.2）
-- [ ] Trivial/Aggregate descriptor 实例生成（参考元组生成逻辑，per-type，§5.1、§5.2）
+- [ ] Codegen 层 `cg_aggregate_facts` 扩展入口（`tuple || value`，§7.2）
+- [ ] `cg_emit_user_type_definition` 新增 `@value` 分支（复用普通 type 主结构体 emit，无 `_hdr` 区别，§7.2）
+- [ ] Trivial/Aggregate descriptor 实例生成（参考元组，per-type，§5.1、§5.2）
 - [ ] `equal_fn` 函数生成（参考元组 `cg_emit_tuple_equal_function`，per-type，§5.1、§5.2）
-- [ ] 基本值语义：赋值、传参、内联布局（复用元组 runtime 路径，§3.2、§3.6）
-- [ ] 等值比较（`==`/`!=` 走 `equal_fn`，复用元组 runtime 路径，§3.4）
+- [ ] 基本值语义：赋值、传参、内联布局（参考元组，聚合 API，§3.2、§3.6）
+- [ ] 等值比较（`==`/`!=` 走 `equal_fn`，参考元组，§3.4）
 - [ ] 成员可变性（`let`/`var`，§3.3）
 
 **测试**：
@@ -690,13 +697,13 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] 字段 retain/release 正确性（aggregate）
 - [ ] 全量回归
 
-### 9.5 构造器【复用普通 type，发码区别】
+### 9.5 构造器【复用普通 type，self 区别】
 
 **状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§2.2
 
 **变更**：
 - [ ] 复用普通 type 构造器 emit 路径
-- [ ] 发码区别：`self` 指向栈上值地址（普通 type 的 `self` 指向堆对象）
+- [ ] self 区别：`self` 指向栈上值地址（普通 type 的 `self` 指向堆对象）
 - [ ] 字面量贴合（`Counter {}`）+ 参数构造（`Counter(10)`）
 
 **测试**：
@@ -705,13 +712,13 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] 多构造器重载
 - [ ] 全量回归
 
-### 9.6 方法（含 direct-call）【复用普通 type，发码区别】
+### 9.6 方法（含 direct-call）【复用普通 type，self 区别】
 
 **状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§2.5、§4.3
 
 **变更**：
 - [ ] 复用普通 type 方法 emit + direct-call 路径（静态分派，不装箱）
-- [ ] 发码区别：`self` 指向栈上/内联值地址（普通 type 的 `self` 指向堆对象）
+- [ ] self 区别：`self` 指向栈上/内联值地址（普通 type 的 `self` 指向堆对象）
 
 **测试**：
 - [ ] 方法调用（fcts/）
@@ -719,27 +726,27 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] direct-call 不装箱（无 box 分配）
 - [ ] 全量回归
 
-### 9.7 Spec 声明头满足【复用普通 type，subject 区别】
+### 9.7 Spec 声明头满足【复用普通 type，spec/witness 区别】
 
 **状态**：未开始 ｜ **依赖**：9.4、9.6 ｜ **范围**：§4.1、§7.2
 
 **变更**：
 - [ ] 复用普通 type 声明头满足 spec 路径
 - [ ] 复用普通 type witness 生成路径（`cg_ensure_witness_instance_for_type`，不走 `tuple_box_witness_tables`，§7.2）
-- [ ] subject 区别：`@value type` 的 subject 是值/box（普通 type 的 subject 是堆对象）
+- [ ] spec/witness 区别：`@value type` 的 subject 是值/box（普通 type 的 subject 是堆对象）
 
 **测试**：
 - [ ] 声明头满足 spec（fcts/）
 - [ ] witness 路径正确性
 - [ ] 全量回归
 
-### 9.8 fit 扩展【复用普通 type，subject 区别】
+### 9.8 fit 扩展【复用普通 type，spec/witness 区别】
 
 **状态**：未开始 ｜ **依赖**：9.4、9.6 ｜ **范围**：§4.2
 
 **变更**：
 - [ ] 复用普通 type fit 扩展路径
-- [ ] subject 区别：`@value type` 的 subject 是值/box
+- [ ] spec/witness 区别：`@value type` 的 subject 是值/box
 
 **测试**：
 - [ ] fit 扩展声明与方法实现（fcts/）
@@ -763,13 +770,13 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] non-escape 优化（临时 coercion 不分配 box）
 - [ ] 全量回归
 
-### 9.10 泛型【复用普通 type，描述符区别】
+### 9.10 泛型【复用普通 type + 参考元组】
 
 **状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§2.4
 
 **变更**：
 - [ ] 复用普通 type 泛型实例化路径（含泛型方法/共享体）
-- [ ] 描述符区别：泛型 `@value type` 总是 aggregate（即使实例化后全字段 trivial），生成 `FengAggregateDescriptor`（§2.4）
+- [ ] 描述符生成（参考元组）：泛型 `@value type` 总是 aggregate（即使实例化后全字段 trivial），生成 `FengAggregateDescriptor`（§2.4）
 
 **测试**：
 - [ ] 泛型 `@value type` 实例化（fcts/）
