@@ -608,3 +608,242 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [feng-spec.md](../docs/feng-spec.md)：`spec` 规范
 - [feng-fit.md](../docs/feng-fit.md)：`fit` 扩展规范
 - [feng-fit-builtin-type.md](../docs/feng-fit-builtin-type.md)：内建类型 fit 与装箱约束
+
+---
+
+## 9 开发任务拆解
+
+> 本节将 `@value` 内建注解的开发任务拆解为 15 个可分步交付的 TODO，每步可独立通过全量回归测试并独立交付。
+> 每步遵循 CLAUDE.md 基础原则：「先文档 → 后代码 → 后测试 → 全量回归」。
+> 步骤间存在依赖关系（见每步「依赖」字段），按编号顺序交付；每步本身可独立交付并通过全量回归。
+> 完成状态：**状态**字段标记「未开始 / 进行中 / 已完成」，子项用 `- [ ]` / `- [x]` 标记。
+> Runtime 在全流程中零修改（§7.1），仅 9.7 含非功能性注释更新。
+
+### 9.1 `@value` 注解解析与 AST 扩展
+
+**状态**：未开始 ｜ **依赖**：无 ｜ **范围**：§7.3
+
+**变更**：
+- [ ] Semantic 层识别 `@value` 注解（与 `@abi` 类似的注解识别）
+- [ ] AST 增加 `@value` 标志位
+- [ ] 注解语义校验：仅可用于 `type` 声明，用于 `spec`/`fit`/函数/变量时报错
+- [ ] `@value type` 暂按普通 `type` 处理，不改变现有行为
+
+**测试**：
+- [ ] 注解错误使用的诊断码（test/）
+- [ ] 正常使用不影响现有 fcts/ 行为（全量回归）
+
+### 9.2 值类型循环引用编译期检测（覆盖 tuple + @value type）
+
+**状态**：未开始 ｜ **依赖**：9.1 ｜ **范围**：§3.5、§7.3
+
+**变更**：
+- [ ] Semantic 层新增值类型循环引用检测（直接自引用 + 间接循环均报错）
+- [ ] 检测覆盖 tuple 与 `@value type`（两者同属值类型，检测逻辑一致）
+- [ ] 普通 `type`（堆对象，引用语义，大小固定）不受约束
+- [ ] 一并修正 tuple 现有段错误（exit 139）
+
+**测试**：
+- [ ] tuple 自引用/间接循环：报编译错误，不再段错误（fcts/）
+- [ ] `@value type` 自引用/间接循环：报编译错误
+- [ ] 普通 `type` 自引用：允许
+- [ ] 全量回归
+
+### 9.3 trivial `@value type` 值语义（无方法/构造器/终结器/spec/泛型）
+
+**状态**：未开始 ｜ **依赖**：9.1、9.2 ｜ **范围**：§3.1、§3.2、§3.3、§3.4、§3.6、§5.1、§7.2
+
+**变更**：
+- [ ] Semantic 层值分类判定（trivial 分支：全字段 trivial，§3.1）
+- [ ] Codegen 层 `cg_aggregate_facts` 扩展入口（`tuple || value`，§7.2）
+- [ ] `cg_emit_user_type_definition` 新增 `@value` 分支：无 `_hdr`（同 tuple）+ 值语义描述符（§7.2）
+- [ ] Trivial descriptor 生成（`equal_fn` 非 NULL，逐字段比较，§5.1）
+- [ ] 基本值语义：赋值（memcpy）、传参、内联布局（作为其他 type 字段，§3.2、§3.6）
+- [ ] 等值比较（`==`/`!=` 走 `equal_fn`，§3.4）
+- [ ] 成员可变性（`let`/`var`，§3.3）
+
+**测试**：
+- [ ] trivial `@value type` 声明/赋值/传参/字段内联（fcts/）
+- [ ] `==`/`!=` 值比较
+- [ ] `let`/`var` 字段可变性
+- [ ] 全量回归
+
+### 9.4 aggregate `@value type` 值语义（含托管字段）
+
+**状态**：未开始 ｜ **依赖**：9.3 ｜ **范围**：§3.1、§3.2、§3.4、§5.2
+
+**变更**：
+- [ ] Aggregate descriptor 生成（`managed_slots`、`equal_fn` 非 NULL，§5.2）
+- [ ] Aggregate assign/retain/release 路径（§3.2）
+- [ ] 等值比较（trivial 字段走 `==`，托管字段走各自 `==`，§3.4）
+- [ ] 值分类：至少一个托管字段 → aggregate（§3.1）
+
+**测试**：
+- [ ] 含 `string`/对象引用字段的 `@value type` 声明/赋值/传参（fcts/）
+- [ ] aggregate `==`/`!=`
+- [ ] 字段 retain/release 正确性
+- [ ] 全量回归
+
+### 9.5 构造器
+
+**状态**：未开始 ｜ **依赖**：9.3、9.4 ｜ **范围**：§2.2
+
+**变更**：
+- [ ] 构造器在栈上初始化值
+- [ ] `self` 指向栈上值地址
+- [ ] 字面量贴合（`Counter {}`）+ 参数构造（`Counter(10)`）
+
+**测试**：
+- [ ] 构造器调用（fcts/）
+- [ ] `self` 语义（修改字段生效）
+- [ ] 多构造器重载
+- [ ] 全量回归
+
+### 9.6 方法（含 direct-call）
+
+**状态**：未开始 ｜ **依赖**：9.3、9.4 ｜ **范围**：§2.5、§4.3
+
+**变更**：
+- [ ] 方法直接调用走静态分派，不装箱（§4.3）
+- [ ] `self` 指向栈上/内联值地址
+
+**测试**：
+- [ ] 方法调用（fcts/）
+- [ ] `self` 语义
+- [ ] direct-call 不装箱（无 box 分配）
+- [ ] 全量回归
+
+### 9.7 终结器（`FENG_NODE_DEFER` 注册 + `cg_release_scope` combined 路径）
+
+**状态**：未开始 ｜ **依赖**：9.3、9.4 ｜ **范围**：§2.3、§3.8、§7.1、§7.2
+
+**变更**：
+- [ ] `@value type` 终结器声明（语法同普通 `type`，§2.3）
+- [ ] Codegen 通过 `FENG_NODE_DEFER` 节点注册（`c_finalizer_name` 作 `defer_fn`，`&value` 作 closure，§3.8）
+- [ ] `cg_release_scope` 新增 combined 路径（aggregate + 终结器：两段清理，§3.8、§7.2）
+- [ ] 异常展开路径覆盖（personality function 遍历 chain，节点自身携带 kind 区分）
+- [ ] trivial + 终结器：仅 push defer 节点
+- [ ] aggregate + 终结器：先 push aggregate 节点，再 push defer 节点（LIFO 保证终结器先于 release）
+- [ ] 无终结器时不 push defer 节点（默认行为，避免无意义开销）
+- [ ] Runtime 注释更新：`FENG_NODE_DEFER` 通用性说明（非功能性，§7.1）
+
+**测试**：
+- [ ] 终结器调用时机（作用域退出，fcts/）
+- [ ] 异常清理路径
+- [ ] trivial + 终结器 / aggregate + 终结器 两种组合
+- [ ] 无终结器时不 push（性能验证）
+- [ ] 全量回归
+
+### 9.8 Spec 声明头满足
+
+**状态**：未开始 ｜ **依赖**：9.3、9.4、9.6 ｜ **范围**：§4.1、§7.2
+
+**变更**：
+- [ ] `@value type` 声明头满足 spec（§4.1）
+- [ ] Witness 生成路径：复用普通 type 的 `cg_ensure_witness_instance_for_type` 路径，不走 `tuple_box_witness_tables`（§7.2）
+
+**测试**：
+- [ ] 声明头满足 spec（fcts/）
+- [ ] witness 路径正确性
+- [ ] 全量回归
+
+### 9.9 fit 扩展
+
+**状态**：未开始 ｜ **依赖**：9.3、9.4、9.6 ｜ **范围**：§4.2
+
+**变更**：
+- [ ] `fit Value: Spec` 路径（与普通 type 一致，§4.2）
+
+**测试**：
+- [ ] fit 扩展声明与方法实现（fcts/）
+- [ ] 全量回归
+
+### 9.10 值装箱（spec subject）
+
+**状态**：未开始 ｜ **依赖**：9.3、9.4、9.7 ｜ **范围**：§4.4、§5.3、§7.2
+
+**变更**：
+- [ ] Box struct/desc/release 生成（`_hdr + value`，复用 tuple 生成逻辑，§5.3）
+- [ ] `cg_emit_value_spec_box_subject` 新增（独立函数，不动 tuple 路径，§7.2）
+- [ ] Box descriptor 的 `finalizer` 字段 per-type 处理（无终结器 `NULL`，有终结器指向 thunk 调 `c_finalizer_name(&box->value)`，§5.3）
+- [ ] Spec 视角调用装箱（§4.4）
+- [ ] Non-escape 优化（栈上地址作为 subject，不分配 box，§5.3）
+- [ ] `UserType` 字段重命名 `c_tuple_box_*` → `c_value_box_*`（可选，或保留现名仅扩入口，§7.2）
+
+**测试**：
+- [ ] 装箱后 spec 视角调用（fcts/）
+- [ ] box 终结器调用（含托管字段 release）
+- [ ] non-escape 优化（临时 coercion 不分配 box）
+- [ ] 全量回归
+
+### 9.11 泛型
+
+**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§2.4
+
+**变更**：
+- [ ] 泛型 `@value type` 总是 aggregate（即使实例化后全字段 trivial，§2.4）
+- [ ] 泛型实例化路径
+
+**测试**：
+- [ ] 泛型 `@value type` 实例化（fcts/）
+- [ ] 始终走 aggregate 路径（即使全字段 trivial）
+- [ ] 全量回归
+
+### 9.12 取地址 `&`（`@value @abi` 组合）
+
+**状态**：未开始 ｜ **依赖**：9.3、9.4 ｜ **范围**：§3.7、§6.1、§7.2
+
+**变更**：
+- [ ] `c_abi_ptr_name` 函数体（`offsetof(first_field) == 0`，无需分支，§3.7）
+- [ ] `&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`，§3.7）
+- [ ] 语义层 `@value @abi` 注解组合校验
+- [ ] `@abi` 终结器禁止约束（AE0317）对 `@value @abi type` 生效（§6.1）
+
+**测试**：
+- [ ] `&p` 取地址（fcts/）
+- [ ] 注解组合校验（`@value @abi` 允许，`@value` 无 `@abi` 时 `&` 报错）
+- [ ] `@value @abi type` 不可声明终结器
+- [ ] 全量回归
+
+### 9.13 `@abi func` 形参/返回的 ABI 互操作
+
+**状态**：未开始 ｜ **依赖**：9.12 ｜ **范围**：§6.1、§7.2
+
+**变更**：
+- [ ] `c_abi_value_name` 对 `@value @abi type` 平凡拷贝（值本身即 ABI 结构，§6.1）
+- [ ] `c_abi_box_name` 对 `@value @abi type` 不生成（不堆分配）
+- [ ] Codegen 在 `@abi func` 返回站点按 `@value` 标志跳过 box 调用，直接按值返回
+
+**测试**：
+- [ ] `@abi func` 形参为 `@value @abi type`（fcts/）
+- [ ] `@abi func` 返回 `@value @abi type`
+- [ ] 全量回归
+
+### 9.14 数组元素
+
+**状态**：未开始 ｜ **依赖**：9.3、9.4 ｜ **范围**：§6.4
+
+**变更**：
+- [ ] trivial `@value` 数组：元素按值存储，memcpy 复制（§6.4）
+- [ ] aggregate `@value` 数组：逐元素调用聚合 API
+
+**测试**：
+- [ ] trivial `@value type` 数组（fcts/）
+- [ ] aggregate `@value type` 数组
+- [ ] 全量回归
+
+### 9.15 异常
+
+**状态**：未开始 ｜ **依赖**：9.10 ｜ **范围**：§6.2
+
+**变更**：
+- [ ] `@value type` 作为异常抛出类型（装箱路径，§6.2）
+- [ ] catch 端按值取出
+
+**测试**：
+- [ ] throw `@value type`（fcts/）
+- [ ] catch `@value type`
+- [ ] 异常展开触发终结器（与 9.7 协同）
+- [ ] 全量回归
+
+> **后续**：全量交付并通过回归后，将本草案迁入语言权威规范（`docs/`），按 CLAUDE.md「先文档」原则启动；迁入前本草案为唯一设计来源。
