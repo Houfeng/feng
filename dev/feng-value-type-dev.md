@@ -150,9 +150,11 @@ type Buffer {
 }
 ```
 
-`@value type` 支持终结器（语法与普通 `type` 一致）。终结器在值生命周期结束时调用（作用域退出、异常清理等清理站点）。tuple 没有终结器——终结器调用是 `@value type` 独有的额外步骤，**独立于值分类**（trivial 与 aggregate 均调用，详见 §3.8）：codegen 在清理站点先 emit 终结器调用，再按值分类走 trivial 无操作 / aggregate release。
+`@value type` 支持终结器（语法与普通 `type` 一致）。终结器在值生命周期结束时调用（作用域退出、异常清理等清理站点）。tuple 没有终结器——终结器调用是 `@value type` 独有的额外步骤，**独立于值分类**（trivial 与 aggregate 均调用，详见 §3.8）：codegen 通过 `FENG_NODE_DEFER` 节点注册终结器调用（`FENG_NODE_DEFER` 是 runtime 通用 scope-exit 回调机制，非 `defer` 专属，详见 §3.8/§7.1；`c_finalizer_name` 签名 `void(void*)`，与 `defer_fn` 一致，直接复用；`&value` 作为 closure），正常退出与异常展开两条路径均覆盖；aggregate 情况下终结器先于 `feng_aggregate_release` 调用（push 顺序与 LIFO 见 §3.8）。
 
-终结器与普通 `type` 的终结器语义一致：负责释放值持有的非托管资源。托管字段的生命周期仍由聚合值模型管理（`feng_aggregate_release`），终结器只处理托管模型无法覆盖的资源（如 C 指针指向的内存）。`FengTrivialDescriptor`/`FengAggregateDescriptor` 均无 finalizer 字段，`feng_aggregate_release` 也不调用终结器——故终结器调用由 codegen 从 `UserType.c_finalizer_name` 获取符号后在清理站点直接 emit。
+终结器与普通 `type` 的终结器语义一致：负责释放值持有的非托管资源。托管字段的生命周期仍由聚合值模型管理（`feng_aggregate_release`），终结器只处理托管模型无法覆盖的资源（如 C 指针指向的内存）。`FengTrivialDescriptor`/`FengAggregateDescriptor` 均无 finalizer 字段，`feng_aggregate_release` 也不调用终结器——故栈上 `@value type` 值的终结器由 codegen 通过 `FENG_NODE_DEFER` 节点注册（通用 scope-exit 机制，详见 §3.8），不引入新 runtime 节点种类。
+
+> **box 路径不同**：当 `@value type` 值装箱为 spec subject 时，box 是堆对象，其终结器走 `FengTypeDescriptor.finalizer`（由 `feng_release` 触发，详见 §5.3），不通过 `FENG_NODE_DEFER`。栈值用 `FENG_NODE_DEFER` 节点，box 值用 descriptor finalizer——两条路径分别覆盖。
 
 ### 2.4 泛型
 
@@ -312,11 +314,11 @@ let addr = &p;   // 类型: Point*，指向 p 的结构体本身（无托管头�
 
 `@value type` 值在栈上布局，作用域退出时自动清理。**生命周期处理与 tuple 一致**（trivial 无操作 / aggregate release），**终结器调用独立于值分类**（@value type 独有，tuple 无终结器）：
 
-- 终结器调用（如有）：codegen 在清理站点 emit `c_finalizer_name(&value)` 调用，**与值分类无关**——trivial 与 aggregate 均调用
-- trivial（无托管字段）：终结器调用后无额外操作（与 tuple trivial 一致）
-- aggregate（有托管字段）：终结器调用后再 `feng_aggregate_release`（与 tuple aggregate 一致）
+- 终结器调用（如有）：codegen 通过 `FENG_NODE_DEFER` 节点注册——`FENG_NODE_DEFER` 是 runtime 的通用 scope-exit 回调机制（最典型场景 `defer` 关键字，但节点种类不独占 `defer`，见 §7.1 注释更新）；`c_finalizer_name`（签名 `void(void*)`，与 `defer_fn` 完全一致）直接作为 `defer_fn`，`&value` 作为 `defer_closure`。正常退出时 `cg_release_scope` pop 节点并显式调用；异常展开时 personality function 遍历 chain 调用。**与值分类无关**——trivial 与 aggregate 均调用
+- trivial（无托管字段）：仅注册 defer 节点（终结器），无 aggregate 节点
+- aggregate（有托管字段）：先 push aggregate 节点（`feng_aggregate_release`），再 push defer 节点（终结器）；LIFO pop 保证终结器先于 release 调用
 
-**关键点**：值分类（trivial/aggregate）**只看字段是否含托管成员**，不看是否有终结器。trivial `@value type` + 终结器是合法组合——清理站点 emit 终结器调用，无需 aggregate release（因无托管槽位）。终结器符号从 `UserType.c_finalizer_name` 获取（`FengTrivialDescriptor`/`FengAggregateDescriptor` 均无 finalizer 字段，`feng_aggregate_release` 也不调用终结器，故由 codegen 在清理站点直接 emit）。
+**关键点**：值分类（trivial/aggregate）**只看字段是否含托管成员**，不看是否有终结器。trivial `@value type` + 终结器是合法组合——仅注册 defer 节点，无 aggregate release（因无托管槽位）。`FengTrivialDescriptor`/`FengAggregateDescriptor` 均无 finalizer 字段，`feng_aggregate_release` 也不调用终结器，故栈值的终结器由 codegen 通过 `FENG_NODE_DEFER` 注册（通用 scope-exit 机制，非 `defer` 专属）；其 runtime 注释须说明通用性——最典型场景是 `defer` 关键字，但节点种类不独占 `defer`（见 §7.1）。
 
 对象字段为 `@value type` 时：
 
@@ -491,7 +493,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 `FengScalarBox`（runtime 预编译的固定 union，服务 11 种标量）保持不变——标量 box 与 per-type box 在 payload 布局、构造函数、descriptor 策略上本质不同，强行合并无收益。
 
-**Non-escape 优化**：当 `@value` 值仅在调用栈帧内消费时（临时 coercion），可借用栈上地址作为 subject，不分配 box。逃逸到局部绑定、返回值或字段存储时才分配 box。口径沿用现有定义（`feng-fit-builtin-type.md` §6.3）。
+**Non-escape 优化**：当 `@value` 值仅在调用栈帧内消费时（临时 coercion），可直接使用栈上地址作为 subject，不分配 box。逃逸到局部绑定、返回值或字段存储时才分配 box。口径沿用现有定义（`feng-fit-builtin-type.md` §6.3）。
 
 ---
 
@@ -544,6 +546,8 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 - Cycle collector：不变（box 走现有 `FengTypeDescriptor` 路径）
 - 数组元素分类：不变（已支持三分类）
 
+**注释更新（非功能性）**：`FengCleanupNode` 的 `FENG_NODE_DEFER` 注释扩展说明其通用性——`FENG_NODE_DEFER` 是 runtime 的通用 scope-exit 回调机制，最典型场景是 `defer` 关键字，但节点种类不独占 `defer`；@value type 栈值终结器亦使用此节点（`c_finalizer_name` 签名与 `defer_fn` 一致，直接复用）。无新增节点种类、无新增 runtime 函数。
+
 ### 7.2 Codegen
 
 **最小改动**，核心是泛化 tuple box 路径：
@@ -558,7 +562,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | witness 生成路径 | 小 | 按原则 1，复用普通 type 的 `cg_ensure_witness_instance_for_type` 路径；仅需让该路径接受 `@value` subject（声明头满足 + fit 扩展均走此路径，**不走** tuple 的 `tuple_box_witness_tables`） |
 | trivial/aggregate descriptor emit | 小 | 复用 tuple 的 `cg_emit_tuple_equal_function` 生成 `equal_fn`（非 NULL） |
 | `&` 取地址（`@value @abi` 组合） | 小 | `c_abi_ptr_name` 函数体无需分支（`offsetof` 自然为 0）；`&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`）；语义层补 `@value @abi` 注解组合校验 |
-| 终结器清理站点 emit | 中 | 作用域退出/异常清理站点：有终结器时 emit `c_finalizer_name(&value)`，再按值分类走 trivial 无操作 / aggregate release。trivial + 终结器是合法组合，需 trivial 路径也 emit 终结器调用 |
+| 终结器注册 `FENG_NODE_DEFER` | 中 | 有终结器时，codegen 通过 `FENG_NODE_DEFER` 节点注册（通用 scope-exit 机制；`c_finalizer_name` 作 `defer_fn`，`&value` 作 closure）；aggregate 先 push aggregate 节点再 push defer 节点，LIFO 保证终结器先于 release。trivial + 终结器仅注册 defer 节点。`cg_release_scope` 与 personality function 两条路径均覆盖 |
 
 入口条件扩展示意：
 
@@ -591,7 +595,7 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 |---|------|------|------|
 | 1 | `@value` 与 `@abi` 是否兼容 | 可组合（`@value` 管值语义，`@abi` 管 ABI 兼容；`@value @abi type` `&` 取结构体地址，实现细节见 §3.7） | 已决策 |
 | 2 | `let` 绑定下 `var` 字段是否可修改 | 与普通 type 一致（`let` 阻止重新绑定，不阻止 `var` 字段原地修改） | 已决策 |
-| 3 | 终结器的确切调用时机与值分类的关系 | 终结器调用独立于值分类：清理站点先调终结器（如有），再按值分类走 trivial 无操作 / aggregate release。trivial + 终结器是合法组合（详见 §3.8） | 已决策 |
+| 3 | 终结器的确切调用时机与值分类的关系 | 终结器调用独立于值分类：codegen 通过 `FENG_NODE_DEFER` 节点注册（通用 scope-exit 机制，非 `defer` 专属；`c_finalizer_name` 签名 `void(void*)` 与 `defer_fn` 一致，直接复用；`&value` 作 closure），正常退出与异常展开均覆盖；aggregate 先 push aggregate 节点再 push defer 节点，LIFO 保证终结器先于 release。trivial + 终结器是合法组合（详见 §3.8） | 已决策 |
 | 4 | trivial @value 的等值比较实现 | 和元组一致：逐字段 `==`（通过 codegen 生成的 `equal_fn`，**非 NULL**，不用 `memcmp`）。`FengTrivialDescriptor.equal_fn = NULL` 会 fallback 到 `memcmp`，对浮点字段给出错误语义，必须生成非 NULL 函数 | 已决策 |
 | 5 | 值类型循环引用检测 | `@value type` 与 tuple 同属值类型，统一在 semantic 层做循环引用编译期检测，直接/间接循环均报错；一并修正 tuple 现有崩溃 bug（详见 §3.5） | 已决策 |
 
