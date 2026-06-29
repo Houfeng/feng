@@ -228,7 +228,7 @@ type User {
 
 `@value type` 的 `==`/`!=` 默认为**值比较**（逐字段比较），而非引用身份比较：
 
-- trivial `@value`：`memcmp` 或逐字段 `==`
+- trivial `@value`：逐字段 `==`（和元组一致，通过 codegen 生成的 `equal_fn`，不用 `memcmp`）
 - aggregate `@value`：逐字段比较（trivial 字段走 `==`，托管字段走各自的 `==`）
 
 这与 tuple、`string` 的值语义比较一致，与普通 `type` 的引用身份比较不同。
@@ -538,9 +538,9 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 | # | 问题 | 建议 | 状态 |
 |---|------|------|------|
 | 1 | `@value` 与 `@abi` 是否兼容 | 可组合（`@value` 管值语义，`@abi` 管 ABI 兼容；`@value @abi type` `&` 取结构体地址） | 已决策 |
-| 2 | `let` 绑定下 `var` 字段是否可修改 | 建议可修改（与普通 type 一致） | 待决策 |
-| 3 | 终结器的确切调用时机 | 作用域退出时，先终结器后 aggregate release | 待决策 |
-| 4 | trivial @value 的等值比较实现 | memcmp 还是逐字段 `==` | 待决策 |
+| 2 | `let` 绑定下 `var` 字段是否可修改 | 与普通 type 一致（`let` 阻止重新绑定，不阻止 `var` 字段原地修改） | 已决策 |
+| 3 | 终结器的确切调用时机 | 离开作用域前调用（和 C 结构体释放一致），先终结器后 aggregate release | 已决策 |
+| 4 | trivial @value 的等值比较实现 | 和元组一致：逐字段 `==`（通过 codegen 生成的 `equal_fn`，不用 `memcmp`） | 已决策 |
 
 ---
 
