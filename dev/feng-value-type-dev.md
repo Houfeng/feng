@@ -331,106 +331,13 @@ let p = Point { x: 1.0, y: 2.0 };
 print(p);   // ✅ p 装箱为 spec subject 后传入
 ```
 
-装箱方案见 §5。
+装箱方案见 §5.3。
 
 ---
 
-## 5 装箱方案
+## 5 描述符生成
 
-### 5.1 现状：三套独立的装箱机制
-
-当前存在三套装箱/承载机制：
-
-| 机制 | 载体 | 生成方式 | 适用场景 |
-|------|------|---------|---------|
-| `FengScalarBox` | 单一 struct，union 装 11 种标量 | runtime 预编译 | 标量逃逸到 spec |
-| Tuple Box | 每个 tuple 类型一个 struct | codegen 按类型生成 | tuple 逃逸到 spec |
-| （未来）@value type Box | 每个 @value 类型一个 struct | codegen 按类型生成 | @value 逃逸到 spec |
-
-**Tuple Box 和 @value type Box 的 C 结构完全相同**：
-
-```c
-// tuple box（codegen 生成）
-struct Feng__demo__Point__spec_box {
-    FengManagedHeader _hdr;
-    struct Feng__demo__Point value;     // 嵌入按值 tuple
-};
-
-// @value type box（codegen 生成，结构相同）
-struct Feng__demo__Color__spec_box {
-    FengManagedHeader _hdr;
-    struct Feng__demo__Color value;     // 嵌入按值 @value type
-};
-```
-
-### 5.2 FengScalarBox 不泛化
-
-`FengScalarBox` 保持现状不变，理由：
-
-| 维度 | `FengScalarBox` | Tuple/Value Box |
-|------|------|------|
-| 生成时机 | runtime 预编译，1 个 struct | codegen 按类型，N 个 struct |
-| payload 布局 | 固定 union（8 字节） | 嵌入具体类型的 C struct（大小不定） |
-| 类型识别 | `kind` 枚举 | C struct 类型 + 独立 descriptor |
-| 构造函数 | 11 个类型化 C 函数 | codegen inline（`feng_object_new` + 赋值） |
-| managed fields | 无 | 可能有（含 string 等） |
-| release_children | NULL | 可能有 |
-
-强行合并（如 flexible array member 方案）会：
-
-1. 丢失类型化构造函数，所有标量装箱站点要改
-2. 引入对齐问题（`char payload[]` 需要 `alignas(max_align_t)`）
-3. 需要为每种标量生成独立 box descriptor（当前共享一个），增加 codegen emit 量
-4. 无运行时收益（标量装箱是低频路径，当前固定 union 方案简单高效）
-
-### 5.3 泛化 Tuple Box 为 Value Box（推荐）
-
-**核心思路**：Tuple Box 和 @value type Box 的 C 结构完全相同，泛化的是 codegen 层的 per-type box 生成模式。
-
-codegen 层变更：
-
-| 现有命名 | 泛化后命名 | 说明 |
-|---------|-----------|------|
-| `c_tuple_box_struct_name` | `c_value_box_struct_name` | box struct 符号名 |
-| `c_tuple_box_desc_name` | `c_value_box_desc_name` | box descriptor 符号名 |
-| `c_tuple_box_release_children_name` | `c_value_box_release_children_name` | box release_children 符号名 |
-| `cg_init_user_type_tuple_symbols` | `cg_init_user_type_value_box_symbols` | 符号初始化函数 |
-| `cg_emit_tuple_spec_box_subject` | `cg_emit_value_spec_box_subject` | 装箱 emit 函数 |
-| `cg_ensure_tuple_box_witness_instance` | `cg_ensure_value_box_witness_instance` | witness 实例管理 |
-
-入口条件扩展：
-
-```c
-// 现有：仅 tuple
-if (!cg_user_type_is_tuple(t)) { return true; }
-
-// 泛化：tuple 或 @value
-if (!cg_user_type_is_tuple(t) && !cg_user_type_is_value(t)) { return true; }
-```
-
-`cg_aggregate_facts` 的 `CG_TYPE_OBJECT` 分支同理扩展：
-
-```c
-// 现有
-if (!cg_type_is_tuple_user(t)) { return false; }
-
-// 泛化
-if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
-```
-
-生成逻辑本身零修改——因为 box struct 的布局、descriptor 生成、release_children 生成对 tuple 和 @value type 完全一致。
-
-### 5.4 Non-escape 优化
-
-与标量保持一致：当 `@value` 值仅在调用栈帧内消费时（临时 coercion），可借用栈上地址作为 subject，不分配 box。逃逸到局部绑定、返回值或字段存储时才分配 box。
-
-当前"非逃逸"的口径沿用现有定义（`feng-fit-builtin-type.md` §6.3）：标量到 object-form spec 的调用实参临时 coercion 点只在当前调用栈帧内消费 subject，不进入局部绑定、返回值或聚合字段/元素存储。
-
----
-
-## 6 描述符生成
-
-### 6.1 Trivial @value type
+### 5.1 Trivial @value type
 
 全字段 trivial 的 `@value type` 生成 `FengTrivialDescriptor`：
 
@@ -445,7 +352,7 @@ static const FengTrivialDescriptor Feng__demo__Point__trivial_desc = {
 
 codegen 的 `cg_trivial_descriptor_expr` 已处理 `CG_TYPE_OBJECT` 且 `facts.value_kind == CG_VK_TRIVIAL` 的情况——返回 `facts.descriptor_name`。@value type 只需在 `cg_aggregate_facts` 中扩展判定即可。
 
-### 6.2 Aggregate @value type
+### 5.2 Aggregate @value type
 
 含托管字段的 `@value type` 生成 `FengAggregateDescriptor`（与 tuple 路径一致）：
 
@@ -464,7 +371,7 @@ static const FengAggregateDescriptor Feng__demo__User__aggregate_desc = {
 };
 ```
 
-### 6.3 Value Box 描述符
+### 5.3 Value Box 描述符
 
 每个 `@value type`（同 tuple）生成独立的 box 描述符，用于装箱后的 spec subject：
 
@@ -490,29 +397,33 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 };
 ```
 
+@value type 的 box 复用 tuple 已有的 per-type codegen 生成模式（`header + embedded value struct`），两者 C 结构完全相同，codegen 仅需将入口条件从「仅 tuple」扩展为「tuple 或 @value」。`FengScalarBox`（runtime 预编译的固定 union，服务 11 种标量）保持不变——标量 box 与 per-type box 在 payload 布局、构造函数、descriptor 策略上本质不同，强行合并无收益。
+
+**Non-escape 优化**：当 `@value` 值仅在调用栈帧内消费时（临时 coercion），可借用栈上地址作为 subject，不分配 box。逃逸到局部绑定、返回值或字段存储时才分配 box。口径沿用现有定义（`feng-fit-builtin-type.md` §6.3）。
+
 ---
 
-## 7 与现有机制的交互
+## 6 与现有机制的交互
 
-### 7.1 `@value` 与 `@abi`
+### 6.1 `@value` 与 `@abi`
 
 建议 `@value` 与 `@abi` **互斥**，不可同时标注。
 
 理由：`@abi` 当前面向堆对象模型（`FengManagedHeader` + ABI payload 抽取/装箱），与 `@value` 的无头值语义模型冲突。如果未来有需求再开放兼容路径。
 
-### 7.2 异常
+### 6.2 异常
 
 `@value type` 可作为异常抛出类型。装箱路径与现有标量/tuple 异常一致——异常 payload 需要堆承载。
 
-### 7.3 Cycle Collector
+### 6.3 Cycle Collector
 
 `@value type` 值本身在栈上，不参与 cycle collector。
 
-当 `@value type` 值被装箱为 spec subject 时，box 是托管堆对象，按现有 `FengTypeDescriptor` 路径参与 CC。box 的 `managed_fields` 由 codegen 按 §6.3 展平规则生成。
+当 `@value type` 值被装箱为 spec subject 时，box 是托管堆对象，按现有 `FengTypeDescriptor` 路径参与 CC。box 的 `managed_fields` 由 codegen 按 `feng-value-model-delivered.md` §7.2 展平规则生成。
 
 `@value type` 作为对象字段时：对象的 `managed_fields` 按现有展平规则生成（`feng-value-model-delivered.md` §7.2），CC 不感知"这条来自一个 @value 聚合字段"。
 
-### 7.4 数组
+### 6.4 数组
 
 `@value type` 作为数组元素时：
 
@@ -523,9 +434,9 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 ---
 
-## 8 实现影响评估
+## 7 实现影响评估
 
-### 8.1 Runtime
+### 7.1 Runtime
 
 **零修改**。
 
@@ -536,7 +447,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 - Cycle collector：不变（box 走现有 `FengTypeDescriptor` 路径）
 - 数组元素分类：不变（已支持三分类）
 
-### 8.2 Codegen
+### 7.2 Codegen
 
 **最小改动**，核心是泛化 tuple box 路径：
 
@@ -551,7 +462,19 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | trivial descriptor emit | 小 | 已有路径支撑 |
 | 终结器 emit | 中 | 新增清理站点：作用域退出时先调终结器再 aggregate release |
 
-### 8.3 Semantic
+入口条件扩展示意：
+
+```c
+// cg_aggregate_facts: 现有
+if (!cg_type_is_tuple_user(t)) { return false; }
+
+// cg_aggregate_facts: 泛化
+if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
+```
+
+生成逻辑本身零修改——box struct 布局、descriptor 生成、release_children 生成对 tuple 和 @value type 完全一致。
+
+### 7.3 Semantic
 
 | 变更项 | 工作量 | 说明 |
 |--------|--------|------|
@@ -564,7 +487,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 ---
 
-## 9 开放问题
+## 8 开放问题
 
 | # | 问题 | 建议 | 状态 |
 |---|------|------|------|
@@ -575,7 +498,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 ---
 
-## 10 关联文档
+## 9 关联文档
 
 - [feng-value-model-delivered.md](./feng-value-model-delivered.md)：值模型基础设施（Phase 3 的基座）
 - [feng-type.md](../docs/feng-type.md)：`type` 类型规范
