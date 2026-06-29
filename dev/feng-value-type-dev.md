@@ -589,19 +589,7 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 
 ---
 
-## 8 开放问题
-
-| # | 问题 | 建议 | 状态 |
-|---|------|------|------|
-| 1 | `@value` 与 `@abi` 是否兼容 | 可组合（`@value` 管值语义，`@abi` 管 ABI 兼容；`@value @abi type` `&` 取结构体地址，实现细节见 §3.7） | 已决策 |
-| 2 | `let` 绑定下 `var` 字段是否可修改 | 与普通 type 一致（`let` 阻止重新绑定，不阻止 `var` 字段原地修改） | 已决策 |
-| 3 | 终结器的确切调用时机与值分类的关系 | 终结器调用独立于值分类：codegen 通过 `FENG_NODE_DEFER` 节点注册（通用 scope-exit 机制，非 `defer` 专属；`c_finalizer_name` 签名 `void(void*)` 与 `defer_fn` 一致，直接复用；`&value` 作 closure），正常退出与异常展开均覆盖；aggregate 先 push aggregate 节点再 push defer 节点，LIFO 保证终结器先于 release。trivial + 终结器是合法组合（详见 §3.8） | 已决策 |
-| 4 | trivial @value 的等值比较实现 | 和元组一致：逐字段 `==`（通过 codegen 生成的 `equal_fn`，**非 NULL**，不用 `memcmp`）。`FengTrivialDescriptor.equal_fn = NULL` 会 fallback 到 `memcmp`，对浮点字段给出错误语义，必须生成非 NULL 函数 | 已决策 |
-| 5 | 值类型循环引用检测 | `@value type` 与 tuple 同属值类型，统一在 semantic 层做循环引用编译期检测，直接/间接循环均报错；一并修正 tuple 现有崩溃 bug（详见 §3.5） | 已决策 |
-
----
-
-## 9 关联文档
+## 8 关联文档
 
 - [feng-value-model-delivered.md](./feng-value-model-delivered.md)：值模型基础设施（Phase 3 的基座）
 - [feng-type.md](../docs/feng-type.md)：`type` 类型规范
