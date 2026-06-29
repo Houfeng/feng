@@ -192,9 +192,9 @@ type Point {
 
 | 条件 | 分类 | 描述符 |
 |------|------|--------|
-| 全字段 trivial（标量、bool） | `FENG_VALUE_TRIVIAL` | `FengTrivialDescriptor`（与标量一致，连 trivial 值也有描述符） |
-| 至少一个托管字段（string、对象引用、spec） | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | `FengAggregateDescriptor` |
-| 泛型实例（无论字段类型） | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | `FengAggregateDescriptor` |
+| 全字段 trivial（标量、bool） | `CG_VK_TRIVIAL` | `FengTrivialDescriptor`（与标量一致，连 trivial 值也有描述符） |
+| 至少一个托管字段（string、对象引用、spec） | `CG_VK_AGGREGATE` | `FengAggregateDescriptor` |
+| 泛型实例（无论字段类型） | `CG_VK_AGGREGATE` | `FengAggregateDescriptor` |
 
 **值分类只看字段是否含托管成员**——与 tuple 的判定逻辑完全一致。`@value type` 禁止终结器（见 §2.3），故不存在「终结器 + 值分类」的组合问题。
 
@@ -555,13 +555,15 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | `UserType` 字段重命名 | 小 | `c_tuple_box_*` → `c_value_box_*`（或保留现名，仅扩入口） |
 | box 符号初始化函数入口扩展 | 小 | 条件从 tuple 扩展为 tuple \|\| value |
 | `cg_aggregate_facts` 扩展 | 小 | `CG_TYPE_OBJECT` 分支条件扩展（见下方示意） |
-| 主结构体 emit | 中 | 复用普通 type 的方法/构造器 emit 路径，发码区别：① 无 `_hdr`（普通 type 有 `FengManagedHeader _hdr`）；② `self` 指向栈上值地址（普通 type 的 `self` 指向堆对象）。描述符生成（参考元组）：走值语义描述符（trivial/aggregate）。现有 `cg_emit_user_type_definition` 在 tuple 与普通 type 之间二选一分发，需新增 `@value` 分支。`@value type` 禁止终结器（见 §2.3），不 emit `c_finalizer_name` |
+| 主结构体 emit | 中 | `cg_emit_user_type_definition`/`cg_emit_user_type_forward` 入口新增 `@value` 分支（各 +3 行），分发至独立函数 `cg_emit_value_type_definition`（参考元组 `cg_emit_tuple_type_definition` 模式，无 `_hdr`，走值语义描述符）。`@value type` 禁止终结器（见 §2.3），不 emit `c_finalizer_name`。详见 §7.4 |
+| 构造器 emit | 中 | 现有构造器路径硬编码 `feng_object_new` 堆分配，无法直接复用。新增独立函数 `cg_emit_value_type_construction`（栈分配 + `.field` 字段初始化 + `&_val` 传 self），在 `cg_emit_call` 与 `FENG_EXPR_OBJECT_LITERAL` 入口加早期分支分发。原构造器路径零修改。详见 §7.4 |
+| 方法调用 self 传递 | 小 | 调用站（`cg_emit_call` 方法分发处）按 `cg_user_type_is_value(ut)` 判断：@value emit `&_val`，普通 type 直接传指针。每个调用站 +1 行，详见 §7.4 |
 | box struct/desc/release emit | 小 | box struct（`_hdr + value`）复用 tuple 生成逻辑；box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，见 §2.3、§5.3）。`release_children` 复用 tuple 路径（`feng_aggregate_release`） |
-| `cg_emit_value_spec_box_subject` 新增 | 小 | 新增独立函数，复用 tuple 生成逻辑，不动 `cg_emit_tuple_spec_box_subject` |
+| `cg_emit_value_spec_box_subject` 新增 | 小 | 新增独立函数，复用 tuple 生成逻辑，不动 `cg_emit_tuple_spec_box_subject`。spec 强制转换分发点（`cg_emit_call` spec coercion 处）在 tuple 分支与普通 type 分支之间新增 `@value` 分支（+6 行），原路径零修改 |
 | witness 生成路径 | 小 | 按原则 2，复用普通 type 的 `cg_ensure_witness_instance_for_type` 路径；仅需让该路径接受 `@value` subject（声明头满足 + fit 扩展均走此路径，**不走** tuple 的 `tuple_box_witness_tables`）。发码区别：subject 是值/box（普通 type 的 subject 是堆对象，见 §9「复用与参考分类」） |
 | trivial/aggregate descriptor emit | 小 | 复用 tuple 的 `cg_emit_tuple_equal_function` 生成 `equal_fn`（非 NULL） |
 | `&` 取地址（`@value @abi` 组合） | 小 | `c_abi_ptr_name` 函数体无需分支（`offsetof` 自然为 0）；`&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`）；语义层补 `@value @abi` 注解组合校验 |
-| `@abi func` 形参/返回的 ABI 互操作 | 小 | `@value @abi type` 作 `@abi func` 形参/返回值时按 ABI 结构体值语义直接传递，不经 `feng_object_new`。`c_abi_value_name` 对 `@value @abi` 是平凡拷贝（值本身即 ABI 结构）；`c_abi_box_name` 不适用（`@value` 不堆分配），codegen 需在返回站点按 `@value` 标志跳过 box 调用，直接按值返回（见 §6.1） |
+| `@abi func` 形参/返回的 ABI 互操作 | 小 | `cg_emit_user_type_abi_surface` 入口新增 `@value` 早期分支，分发至独立函数 `cg_emit_value_type_abi_surface`（仅生成 `c_abi_ptr_name` + `c_abi_value_name`，不生成 `c_abi_box_name`）。`c_abi_value_name` 对 `@value @abi` 是平凡拷贝（值本身即 ABI 结构）；codegen 在 `@abi func` 返回站点按 `@value` 标志跳过 box 调用，直接按值返回（见 §6.1）。原 ABI surface 函数零修改 |
 | 终结器禁止诊断 | 小 | `@value type` 定义终结器时编译期报错（见 §2.3、§9.3），不 emit `c_finalizer_name`，不 push `FENG_NODE_DEFER`，无需 `cg_release_scope` combined 路径 |
 
 入口条件扩展示意：
@@ -581,12 +583,51 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 | 变更项 | 工作量 | 说明 |
 |--------|--------|------|
 | `@value` 注解解析 | 小 | 与 `@abi` 类似的注解识别 |
-| 值分类判定 | 小 | codegen 层 `cg_aggregate_facts` 扩展入口即可（trivial/aggregate 细分复用 tuple 逻辑）；semantic 层 `feng_semantic_value_kind_of_decl` 对 `FENG_DECL_TYPE` 一律返回 `MANAGED_POINTER`（视 type 引用为托管指针），与 tuple 处理一致，**无需修改函数本身；需审计调用点确认无『MANAGED_POINTER ⇒ 堆对象+header』假设（tuple 已沿此路径，风险低）** |
+| 值分类判定 | 小 | codegen 层 `cg_aggregate_facts` 扩展入口即可（trivial/aggregate 细分复用 tuple 逻辑）；semantic 层 `feng_semantic_value_kind_of_decl` 对 `FENG_DECL_TYPE` 一律返回 `MANAGED_POINTER`（视 type 引用为托管指针），与 tuple 处理一致，**无需修改函数本身**。审计范围见 §7.4 |
 | 值类型循环引用检测 | 中 | **新增值类型循环引用编译期检测**，覆盖 tuple + `@value type`（一并修正 tuple 现有静默失败 bug）；直接自引用 + 间接循环均报错；普通 `type`（堆对象，引用语义，大小固定）不受约束。详见 §3.5 |
 | 等值运算符 | 小 | `@value type` 的 `==`/`!=` 走 codegen 生成的 `equal_fn`（复用 tuple 路径），semantic 层仅识别 `@value` 类型允许默认值比较 |
 | spec 满足性检查 | 小 | 声明头满足与普通 type 一致（复用普通 type 路径）；`fit` 路径一致 |
-| 构造器语义 | 小 | 与普通 type 一致，`self` 指向栈上值地址（普通 type 的 `self` 指向堆对象） |
+| 构造器语义 | 小 | 与普通 type 一致，`self` 指向栈上值地址（普通 type 的 `self` 指向堆对象）。codegen 层由独立函数 `cg_emit_value_type_construction` 处理（见 §7.2、§7.4） |
 | 终结器禁止诊断 | 小 | `@value type` 定义终结器时编译期报错（见 §2.3） |
+
+### 7.4 风险分析与隔离策略
+
+> 本节基于代码审计（codegen.c ~35000 行），识别实施风险并确定隔离策略。
+> 核心原则：**每个 @value 关注点有独立函数，原函数仅在分发入口加最小分支**。这与 tuple 的处理模式一致（`cg_emit_tuple_type_definition`、`cg_emit_tuple_spec_box_subject` 等都是独立函数，入口通过 `cg_user_type_is_tuple` 分发）。
+
+#### 7.4.1 `cg_aggregate_facts` 级联效应
+
+`cg_aggregate_facts` 是 codegen 层值分类的核心入口。一旦对 `@value type` 返回 true，以下函数**自动正确处理**，无需逐一修改：
+
+| 函数 | 自动行为 | 正确性 |
+|------|---------|--------|
+| `cgtype_value_kind` | 从 `MANAGED_POINTER` 变为 `TRIVIAL`/`AGGREGATE` | ✅ 正确 |
+| `cgtype_is_managed` | 返回 false | ✅ 正确（@value 非托管指针） |
+| `cgtype_is_aggregate` | aggregate 时返回 true | ✅ 正确 |
+| `cg_emit_c_type` | emit `struct X`（非 `struct X *`） | ✅ 正确（值语义内联布局） |
+| `cg_release_scope` | 走 aggregate release 路径 | ✅ 正确（与 tuple 一致） |
+| `cg_trivial_descriptor_expr` | `CG_TYPE_OBJECT` 分支走 aggregate facts | ✅ 正确 |
+| 字段赋值/清理等 71 处 | `cgtype_is_managed` 返回 false 后自动跳过 ARC | ✅ 正确 |
+
+#### 7.4.2 需隔离的风险点
+
+以下 6 项无法通过级联自动处理，需新增独立函数 + 入口分支：
+
+| # | 风险点 | 现状 | 隔离策略 | 原函数改动 |
+|---|--------|------|---------|-----------|
+| 1 | **构造器分配** | 两个入口（`cg_emit_call` 构造路径、`FENG_EXPR_OBJECT_LITERAL`）硬编码 `feng_object_new` 堆分配 + `->` 字段初始化 + 构造器传堆指针 | 新增 `cg_emit_value_type_construction`：栈声明 `struct X _val = {0}` + `.field` 初始化 + `&_val` 传 self | 各入口 +1 行 `if (cg_user_type_is_value(ut))` 早期分支 |
+| 2 | **描述符生成** | `cg_emit_user_type_definition` 非 tuple 分支硬编码 `FengManagedHeader _hdr` + `FengTypeDescriptor` + `c_desc_name` | 新增 `cg_emit_value_type_definition`：无 `_hdr`，生成 `FengTrivialDescriptor`/`FengAggregateDescriptor` + `equal_fn` + box（参考元组模式） | `cg_emit_user_type_definition`/`cg_emit_user_type_forward` 各 +3 行分支（与 tuple 分发模式一致） |
+| 3 | **方法调用 self 传递** | 调用站 `buf_append_fmt(&b, "%s(%s", um->c_name, recv.c_expr)` 直接传指针 | 调用站按 `cg_user_type_is_value(ut)` 判断：@value emit `&_val`，普通 type 直接传 | ~2 处各 +1 行三元判断 |
+| 4 | **ABI surface** | `cg_emit_user_type_abi_surface` 生成 `c_abi_box_name`，函数体硬编码 `feng_object_new(&c_desc_name)` | 新增 `cg_emit_value_type_abi_surface`：仅生成 `c_abi_ptr_name`（offset=0）+ `c_abi_value_name`，不生成 `c_abi_box_name` | `cg_emit_user_type_abi_surface` 入口 +1 行早期返回 |
+| 5 | **Spec 强制转换** | 分发点仅区分 tuple（走 box + tuple_box_witness）与普通 type（subject = 堆指针，不装箱） | 新增 `cg_emit_value_spec_box_subject`（参考 tuple box），在 tuple 分支与普通 type 分支之间新增 @value 分支：先 box，再走普通 type witness 路径 | 分发点 +6 行 `else if` 分支 |
+| 6 | **`CG_TYPE_OBJECT` 堆假设审计** | codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部分站点直接假设堆对象语义 | 级联自动处理大部分（见 §7.4.1）。仅需审计**不走级联、直接检查 `CG_TYPE_OBJECT` 并假设堆对象**的站点：`feng_object_new`（风险 1 已隔离）、`c_desc_name` 引用（风险 2 已隔离）、`feng_assign`/`feng_retain`/`feng_release` 直接调用（`cgtype_is_managed` 返回 false 后自动跳过） | 无需逐一修改，仅确认级联覆盖完整 |
+
+#### 7.4.3 无风险项（文档假设已验证正确）
+
+- `feng_semantic_value_kind_of_decl`：仅测试文件调用，无生产依赖，确认无需修改。
+- `c_abi_ptr_name` 函数体：`(char *)self + offset`，@value 时 `offsetof(first_field) == 0`，函数体无需分支。
+- Witness thunk `_subject` 转型：`(struct X *)_subject`，对 box（`_hdr + value`）同样适用。
+- `cg_emit_tuple_equal_function`：按字段遍历生成比较代码，可直接复用。
 
 ---
 
@@ -636,9 +677,9 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 **状态**：未开始 ｜ **依赖**：无 ｜ **范围**：§7.3
 
 **变更**：
-- [ ] Semantic 层识别 `@value` 注解（与 `@abi` 类似的注解识别）
-- [ ] AST 增加 `@value` 标志位
-- [ ] 注解语义校验：仅可用于 `type` 声明，用于 `spec`/`fit`/函数/变量时报错
+- [ ] Lexer 层新增 `FENG_ANNOTATION_VALUE`（`FengAnnotationKind` 枚举，参考 `FENG_ANNOTATION_ABI`）
+- [ ] Parser 层识别 `@value` 注解，设置 AST `is_value` 标志位
+- [ ] Semantic 层校验：仅可用于 `type` 声明，用于 `spec`/`fit`/函数/变量时报错
 - [ ] `@value type` 暂按普通 `type` 处理，不改变现有行为
 
 **测试**：
@@ -680,11 +721,12 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 
 **变更**：
 - [ ] Semantic 层值分类判定（参考元组三分类：trivial / aggregate，§3.1）
-- [ ] 审计 `feng_semantic_value_kind_of_decl` 调用点（确认无『MANAGED_POINTER ⇒ 堆对象+header』假设，§7.3）
+- [ ] 审计 codegen `CG_TYPE_OBJECT` 堆假设站点（确认级联覆盖完整，§7.4.2 第 6 项）
 - [ ] Codegen 层 `cg_aggregate_facts` 扩展入口（`tuple || value`，§7.2）
-- [ ] `cg_emit_user_type_definition` 新增 `@value` 分支（复用普通 type 主结构体 emit，无 `_hdr` 区别，§7.2）
+- [ ] `cg_emit_user_type_definition`/`cg_emit_user_type_forward` 新增 `@value` 分支，分发至独立函数 `cg_emit_value_type_definition`（§7.4.2 第 2 项）
 - [ ] Trivial/Aggregate descriptor 实例生成（参考元组，per-type，§5.1、§5.2）
 - [ ] `equal_fn` 函数生成（参考元组 `cg_emit_tuple_equal_function`，per-type，§5.1、§5.2）
+- [ ] `FengAggregateDefaultInitDescriptor` 生成（参考元组 aggregate default_init 路径，per-type）
 - [ ] 基本值语义：赋值、传参、内联布局（参考元组，聚合 API，§3.2、§3.6）
 - [ ] 等值比较（`==`/`!=` 走 `equal_fn`，参考元组，§3.4）
 - [ ] 成员可变性（`let`/`var`，§3.3）
@@ -697,14 +739,16 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] 字段 retain/release 正确性（aggregate）
 - [ ] 全量回归
 
-### 9.5 构造器【复用普通 type，self 区别】
+### 9.5 构造器【新增独立函数，参考普通 type 构造器】
 
-**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§2.2
+**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§2.2、§7.2、§7.4
 
 **变更**：
-- [ ] 复用普通 type 构造器 emit 路径
+- [ ] 新增独立函数 `cg_emit_value_type_construction`：栈分配 + `.field` 字段初始化 + `&_val` 传 self（§7.4.2 第 1 项）
+- [ ] `cg_emit_call` 构造器路径入口 + `FENG_EXPR_OBJECT_LITERAL` 入口各加 1 行 `@value` 早期分支
 - [ ] self 区别：`self` 指向栈上值地址（普通 type 的 `self` 指向堆对象）
 - [ ] 字面量贴合（`Counter {}`）+ 参数构造（`Counter(10)`）
+- [ ] 原构造器路径零修改
 
 **测试**：
 - [ ] 构造器调用（fcts/）
@@ -712,13 +756,14 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] 多构造器重载
 - [ ] 全量回归
 
-### 9.6 方法（含 direct-call）【复用普通 type，self 区别】
+### 9.6 方法（含 direct-call）【复用普通 type，self 传递分支】
 
-**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§2.5、§4.3
+**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§2.5、§4.3、§7.4
 
 **变更**：
 - [ ] 复用普通 type 方法 emit + direct-call 路径（静态分派，不装箱）
-- [ ] self 区别：`self` 指向栈上/内联值地址（普通 type 的 `self` 指向堆对象）
+- [ ] self 传递分支：调用站按 `cg_user_type_is_value(ut)` 判断，@value emit `&_val`，普通 type 直接传指针（每处 +1 行，§7.4.2 第 3 项）
+- [ ] self 语义：`self` 指向栈上/内联值地址（普通 type 的 `self` 指向堆对象）
 
 **测试**：
 - [ ] 方法调用（fcts/）
@@ -754,11 +799,12 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 
 ### 9.9 值装箱（spec subject）【参考元组】
 
-**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§4.4、§5.3、§7.2
+**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§4.4、§5.3、§7.2、§7.4
 
 **变更**：
 - [ ] Box struct/desc/release 生成（参考元组 box 生成逻辑，per-type，§5.3）
 - [ ] `cg_emit_value_spec_box_subject` 新增（参考元组 `cg_emit_tuple_spec_box_subject`，独立函数，不动元组路径，§7.2）
+- [ ] Spec 强制转换分发点新增 `@value` 分支（tuple 分支与普通 type 分支之间，+6 行，§7.4.2 第 5 项）
 - [ ] Box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，§2.3、§5.3）
 - [ ] Spec 视角调用装箱（§4.4）
 - [ ] Non-escape 优化（栈上地址作为 subject，不分配 box，§5.3）
@@ -786,17 +832,19 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 
 ### 9.11 取地址 `&`（`@value @abi` 组合）【新增】
 
-**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§3.7、§6.1、§7.2
+**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§3.7、§6.1、§7.2、§7.4
 
 **变更**：
 - [ ] `c_abi_ptr_name` 函数体（`offsetof(first_field) == 0`，无需分支，§3.7）
 - [ ] `&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`，§3.7）
-- [ ] 语义层 `@value @abi` 注解组合校验
+- [ ] Semantic 层 `&` 操作符校验扩展：接受 `@value @abi type`（当前仅接受标量/`@abi` 值/字符串/ABI 数组，需新增 `@value @abi` 分支）
+- [ ] `cg_emit_user_type_abi_surface` 入口新增 `@value` 早期分支，分发至 `cg_emit_value_type_abi_surface`（§7.4.2 第 4 项）
 - [ ] `@value @abi type` 终结器禁止：由 `@value` 本身禁止（§2.3），`@abi` 的 AE0317 自然满足，无需额外实现（§6.1）
 
 **测试**：
 - [ ] `&p` 取地址（fcts/）
-- [ ] 注解组合校验（`@value @abi` 允许，`@value` 无 `@abi` 时 `&` 报错）
+- [ ] `@value` 无 `@abi` 时 `&` 报错（语义层校验）
+- [ ] `@value @abi` 时 `&` 允许
 - [ ] `@value @abi type` 不可声明终结器
 - [ ] 全量回归
 
