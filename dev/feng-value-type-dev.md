@@ -481,7 +481,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 };
 ```
 
-@value type 的 box 复用 tuple 已有的 per-type codegen 生成模式（`header + embedded value struct`），两者 C 结构完全相同，codegen 仅需将入口条件从「仅 tuple」扩展为「tuple 或 @value」。
+@value type 的 box 结构与 tuple 完全相同（`_hdr + embedded value struct`），codegen 可复用同一生成模式。**复用依据**：box 相关的所有生成逻辑——slot 描述符、`equal_fn`、`release_children`、`default_init`、spec coercion——均遍历 `t->fields[]`，通过 `field->c_name`（C 层字段名）和 `offsetof` 访问字段。tuple 的位置访问（`item1`、`item2`）与 `@value type` 的命名访问（`x`、`y`）仅在 Feng 源码层面不同，C struct 层面均为 `field->c_name`，不影响生成逻辑。`cg_emit_tuple_spec_box_subject` 的 spec coercion 发码（`feng_object_new` + `feng_aggregate_assign`/直接赋值）同样不逐个访问成员，将 value 作为整体处理。因此，按隔离策略（§7.4），`@value` 使用独立函数、复用同一生成模式，不需要修改 tuple 路径。`UserType` 中 `c_tuple_box_*` 字段重命名为 `c_value_box_*`，tuple 与 `@value` 共用（详见 §7.2）。
 
 **每个值类型的 box 是单独生成的**（per-type codegen，tuple 与 `@value type` 均如此）。`@value type` 禁止定义终结器（见 §2.3），故 box 的 `finalizer` 字段统一为 `NULL`（与 tuple 完全一致）。box 释放时仅由 runtime 框架调用 `release_children` 走 `feng_aggregate_release`。
 
@@ -552,14 +552,14 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 | 变更项 | 工作量 | 说明 |
 |--------|--------|------|
-| `UserType` 字段重命名 | 小 | `c_tuple_box_*` → `c_value_box_*`（或保留现名，仅扩入口） |
+| `UserType` 字段重命名 | 小 | `c_tuple_box_*` → `c_value_box_*`（tuple 与 `@value` box 符号共用，命名需与实际用途一致） |
 | box 符号初始化函数入口扩展 | 小 | 条件从 tuple 扩展为 tuple \|\| value |
 | `cg_aggregate_facts` 扩展 | 小 | `CG_TYPE_OBJECT` 分支条件扩展（见下方示意） |
 | 主结构体 emit | 中 | `cg_emit_user_type_definition`/`cg_emit_user_type_forward` 入口新增 `@value` 分支（各 +3 行），分发至独立函数 `cg_emit_value_type_definition`（参考元组 `cg_emit_tuple_type_definition` 模式，无 `_hdr`，走值语义描述符）。`@value type` 禁止终结器（见 §2.3），不 emit `c_finalizer_name`。详见 §7.4 |
 | 构造器 emit | 中 | 现有构造器路径硬编码 `feng_object_new` 堆分配，无法直接复用。新增独立函数 `cg_emit_value_type_construction`（栈分配 + `.field` 字段初始化 + `&_val` 传 self），在 `cg_emit_call` 与 `FENG_EXPR_OBJECT_LITERAL` 入口加早期分支分发。原构造器路径零修改。详见 §7.4 |
 | 方法调用 self 传递 | 小 | 调用站（`cg_emit_call` 方法分发处）按 `cg_user_type_is_value(ut)` 判断：@value emit `&_val`，普通 type 直接传指针。每个调用站 +1 行，详见 §7.4 |
-| box struct/desc/release emit | 小 | box struct（`_hdr + value`）复用 tuple 生成逻辑；box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，见 §2.3、§5.3）。`release_children` 复用 tuple 路径（`feng_aggregate_release`） |
-| `cg_emit_value_spec_box_subject` 新增 | 小 | 新增独立函数，复用 tuple 生成逻辑，不动 `cg_emit_tuple_spec_box_subject`。spec 强制转换分发点（`cg_emit_call` spec coercion 处）在 tuple 分支与普通 type 分支之间新增 `@value` 分支（+6 行），原路径零修改 |
+| box struct/desc/release emit | 小 | 新增 `cg_emit_value_box_artifacts` 独立函数，按 §5.3 同一生成模式（遍历 `t->fields[]`，`field->c_name` + `offsetof`，与成员访问方式无关）生成 box struct/desc/release。tuple 路径 `cg_emit_tuple_type_definition` 不动。box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，见 §2.3、§5.3）。`release_children` 走 `feng_aggregate_release`（与 tuple 一致） |
+| `cg_emit_value_spec_box_subject` 新增 | 小 | 新增独立函数，spec coercion 发码逻辑与 `cg_emit_tuple_spec_box_subject` 相同（`feng_object_new` + `feng_aggregate_assign`/直接赋值，将 value 作为整体处理，不逐个访问成员，详见 §5.3），不动 `cg_emit_tuple_spec_box_subject`。spec 强制转换分发点（`cg_emit_call` spec coercion 处）在 tuple 分支与普通 type 分支之间新增 `@value` 分支（+6 行），原路径零修改 |
 | witness 生成路径 | 小 | 按原则 2，复用普通 type 的 `cg_ensure_witness_instance_for_type` 路径；仅需让该路径接受 `@value` subject（声明头满足 + fit 扩展均走此路径，**不走** tuple 的 `tuple_box_witness_tables`）。发码区别：subject 是值/box（普通 type 的 subject 是堆对象，见 §9「复用与参考分类」） |
 | trivial/aggregate descriptor emit | 小 | 复用 tuple 的 `cg_emit_tuple_equal_function` 生成 `equal_fn`（非 NULL） |
 | `&` 取地址（`@value @abi` 组合） | 小 | `c_abi_ptr_name` 函数体无需分支（`offsetof` 自然为 0）；`&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`）；语义层补 `@value @abi` 注解组合校验 |
@@ -808,7 +808,7 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] Box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，§2.3、§5.3）
 - [ ] Spec 视角调用装箱（§4.4）
 - [ ] Non-escape 优化（栈上地址作为 subject，不分配 box，§5.3）
-- [ ] `UserType` 字段重命名 `c_tuple_box_*` → `c_value_box_*`（可选，或保留现名仅扩入口，§7.2）
+- [ ] `UserType` 字段重命名 `c_tuple_box_*` → `c_value_box_*`（tuple 与 `@value` box 符号共用，命名需与实际用途一致，§7.2）
 
 **测试**：
 - [ ] 装箱后 spec 视角调用（fcts/）
