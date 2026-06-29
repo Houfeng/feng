@@ -267,24 +267,26 @@ codegen 的 `cg_emit_c_type` 对 aggregate 类型（tuple、@value type）emit `
 
 ### 3.7 取地址（`&`）
 
-`@value type` 没有托管头（`FengManagedHeader`），`&` 操作符直接取到值本身的地址：
+`&` 操作符要求类型满足 ABI 兼容性（由 `@abi` 注解保障成员的 ABI 兼容）。`@value` 只管值语义，不保障 ABI 兼容；因此 `&` 的支持取决于是否标注 `@abi`：
 
 | 类型 | `&` 语义 | C 层表达 |
 |------|---------|---------|
-| 普通 `type` | payload 地址（跳过 `FengManagedHeader`） | 托管指针强转为 payload 类型指针 |
-| `@value type` | 结构体本身的地址 | `&value`（栈上/内联值的地址） |
-| `@abi type` | ABI payload 地址 | `c_abi_ptr_name` 转换 |
+| `@abi type`（堆对象） | payload 地址（跳过 `FengManagedHeader`） | `c_abi_ptr_name` 转换 |
+| `@value @abi type` | 结构体本身的地址（无托管头，直接取值地址，**非 payload 地址**） | `&value`（栈上/内联值的地址） |
+| 普通 `type` / `@value type`（未标 `@abi`） | 不支持 | 编译错误 |
 
 ```feng
-@value
+@value @abi
 type Point {
   var x: float;
   var y: float;
 }
 
 var p = Point { x: 1.0, y: 2.0 };
-let addr = &p;   // 类型: Point*，指向 p 的值本身（无托管头偏移）
+let addr = &p;   // 类型: Point*，指向 p 的结构体本身（无托管头偏移）
 ```
+
+`@value @abi type` 无 `FengManagedHeader`，`&` 直接取到结构体地址；这与 `@abi type`（堆对象）跳过 header 取 payload 地址不同。codegen 复用 `@abi` 的 `c_abi_ptr_name` 分派路径，但 `@value @abi type` 的 `c_abi_ptr_name` 定义取结构体地址（非 payload 地址）。
 
 ### 3.8 作用域与生命周期
 
@@ -447,9 +449,12 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 ### 6.1 `@value` 与 `@abi`
 
-建议 `@value` 与 `@abi` **互斥**，不可同时标注。
+`@value` 与 `@abi` **可组合**，各管各的职责：
 
-理由：`@abi` 当前面向堆对象模型（`FengManagedHeader` + ABI payload 抽取/装箱），与 `@value` 的无头值语义模型冲突。如果未来有需求再开放兼容路径。
+- `@value`：值语义（无托管头、栈/内联分配、赋值复制值）。
+- `@abi`：ABI 兼容性（成员类型满足 C ABI 要求，支持 `&` 取地址、C ABI 互操作）。
+
+两者正交：`@value @abi type` 是「值语义 + ABI 兼容」的类型，无托管头但成员均 ABI 兼容，`&` 取结构体地址（非 payload 地址，因无 header 可跳过）。参见 §3.7。
 
 ### 6.2 异常
 
@@ -500,6 +505,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | `cg_emit_value_spec_box_subject` 入口扩展 | 小 | 函数内部逻辑不变 |
 | witness thunk 生成路径扩展 | 中 | 需要处理 @value type 的声明头满足（tuple 不支持） |
 | trivial descriptor emit | 小 | 已有路径支撑 |
+| `&` 取地址（`@value @abi` 组合） | 小 | 复用 `@abi` 的 `c_abi_ptr_name` 分派路径；`@value @abi type` 无 header，`c_abi_ptr_name` 定义取结构体地址（非 payload 地址），与堆 `@abi type` 跳过 header 不同；语义层补注解组合校验 |
 | 终结器 emit | 中 | 新增清理站点：作用域退出时先调终结器再 aggregate release |
 
 入口条件扩展示意：
@@ -531,7 +537,7 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 
 | # | 问题 | 建议 | 状态 |
 |---|------|------|------|
-| 1 | `@value` 与 `@abi` 是否兼容 | 先互斥 | 待决策 |
+| 1 | `@value` 与 `@abi` 是否兼容 | 可组合（`@value` 管值语义，`@abi` 管 ABI 兼容；`@value @abi type` `&` 取结构体地址） | 已决策 |
 | 2 | `let` 绑定下 `var` 字段是否可修改 | 建议可修改（与普通 type 一致） | 待决策 |
 | 3 | 终结器的确切调用时机 | 作用域退出时，先终结器后 aggregate release | 待决策 |
 | 4 | trivial @value 的等值比较实现 | memcmp 还是逐字段 `==` | 待决策 |

@@ -125,15 +125,17 @@ typedef struct FengAggregateDescriptor {
 - `name` 仅用于调试与诊断，不参与任何决策。
 - 静态描述符是 `static const`，由 codegen 生成；`FENG_SLOT_FORWARD` 指向的运行时描述符位于值本身内部，由 codegen 在值构造或 active 状态切换时写入。
 
-### 3.3 trivial 值不生成任何描述符
+### 3.3 trivial 值不生成 `FengAggregateDescriptor`
 
-Trivial 值（`bool` / 整数 / 浮点 / 全部字段都是 trivial 的未来 tuple 与值语义 struct）**不生成本草案的任何描述符**：
+Trivial 值（`bool` / 整数 / 浮点 / 全部字段都是 trivial 的 tuple 与值语义 struct）**不生成 `FengAggregateDescriptor`**：
 
 - 没有托管槽位需要被 walker 访问。
 - 大小、对齐、复制语义由 C 编译器直接承担。
 - runtime 与 codegen 的所有按值聚合 helper（§5）不应在 trivial 值上调用；codegen 在站点分派时直接走 C 原生路径（赋值 / `memcpy`）。
 
-这条规则保证 §1.3 第 3 条原则成立：trivial 值不承担任何额外空间与运行时成本。
+但 trivial 值**仍生成 `FengTrivialDescriptor`**：标量使用 runtime 内建描述符（`feng_bool_descriptor` / `feng_i8_descriptor` / ... / `feng_pointer_descriptor`），trivial 用户类型（如全平凡字段的 tuple）由 codegen 生成。`FengTrivialDescriptor` 承载 `name` / `size` / `equal_fn`（`NULL` 时 fallback 到 `memcmp`），服务于等值比较与调试；它不进入 §5 的聚合 walker 路径，不承担托管槽位遍历成本。
+
+这条规则保证 §1.3 第 3 条原则成立：trivial 值不承担任何额外空间与**托管槽位遍历**运行时成本（`FengTrivialDescriptor` 仅用于等值与调试，不影响 ARC 路径）。
 
 ### 3.4 与现有 `FengTypeDescriptor` 体系的关系
 
