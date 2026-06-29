@@ -37,7 +37,7 @@ type Point {
 }
 ```
 
-`@value type` 是值类型：无托管头，栈/内联分配，赋值与传参复制值。语法与用法与普通 `type` 基本一致（支持构造器、终结器、泛型、方法、spec 满足），差别仅在存储模型与传递语义。
+`@value type` 是值类型：无托管头，栈/内联分配，赋值与传参复制值。语法与用法与普通 `type` 基本一致（支持构造器、泛型、方法、spec 满足；**禁止终结器**，见 §2.3），差别仅在存储模型与传递语义。
 
 ### 非目标
 
@@ -54,7 +54,7 @@ type Point {
 
 `@value type` 的**运行时处理**与 tuple **一致**：作为其他 type 成员时的内联布局、生命周期处理（retain/release/assign/take/default_init）、相等性处理（`equal_fn`）、box 结构——全部复用 tuple 路径，走聚合值模型（`FengAggregateDescriptor` + 五类聚合 API）。
 
-`@value type` 的**语法与用法**与普通 `type` **一致**：构造器、终结器、泛型、方法、spec 声明头满足、fit 扩展、可见性修饰、witness 路径等全部复用普通 `type` 的处理路径。
+`@value type` 的**语法与用法**与普通 `type` **一致**：构造器、泛型、方法、spec 声明头满足、fit 扩展、可见性修饰、witness 路径等全部复用普通 `type` 的处理路径（**例外：禁止终结器**，见 §2.3）。
 
 两者的差别本质上是**成员访问方式**与**语法/用法的扩展点**：
 
@@ -65,7 +65,7 @@ type Point {
 | 元素数量 | 0 或 2~8 | 无限制 |
 | 成员可变性 | 元素始终不可变 | 支持 `let`/`var` |
 | 构造器 | 无（字面量贴合） | 支持（同普通 `type`） |
-| 终结器 | 无 | 支持（同普通 `type`；调用时机见 §3.8） |
+| 终结器 | 不支持 | 不支持（编译期报错，见 §2.3） |
 | 声明头满足 spec | 不支持 | 支持（同普通 `type`） |
 | `fit` 扩展 | 支持 | 支持（同普通 `type`） |
 | 泛型 | 支持 | 支持（同普通 `type`） |
@@ -73,7 +73,7 @@ type Point {
 
 ### 1.2 与普通 type 的关系
 
-`@value type` 的用法与普通 `type` 基本一致：支持构造器、终结器、泛型、方法、静态成员、可见性修饰。差别仅在底层存储与传递模型：
+`@value type` 的用法与普通 `type` 基本一致：支持构造器、泛型、方法、静态成员、可见性修饰（**禁止终结器**，见 §2.3）。差别仅在底层存储与传递模型：
 
 | 维度 | `type`（普通对象） | `@value type`（值类型） |
 |------|---|---|
@@ -83,11 +83,12 @@ type Point {
 | 值分类 | `managed-pointer` | `trivial` 或 `aggregate` |
 | spec 装箱 | 不需要（自身即托管对象） | 需要（逃逸时装箱） |
 | 自引用 | 允许 | 不允许（编译错误） |
+| 终结器 | 支持 | 不支持（编译错误，见 §2.3） |
 
 ### 1.3 设计原则
 
 1. **运行时处理与 tuple 一致**：作为其他 type 成员时的内联布局、生命周期处理、相等性处理、box 结构——全部复用 tuple 路径。
-2. **语法与用法与普通 type 一致**：构造器、终结器、泛型、方法、spec 满足、fit 扩展、witness 路径等全部复用普通 type 路径；唯一差别是取地址操作（见 §3.7）。
+2. **语法与用法与普通 type 一致**：构造器、泛型、方法、spec 满足、fit 扩展、witness 路径等全部复用普通 type 路径；两处差别：禁止终结器（见 §2.3）、取地址操作（见 §3.7）。
 3. **runtime 零修改**：符合 OCP——新增 aggregate 类型仅需新增描述符，runtime walker/API 不动。
 4. **codegen 最小改动**：泛化 tuple 的 per-type box 生成路径与普通 type 的 witness 路径，入口条件从「仅 tuple」/「仅普通 type」扩展为含 `@value`。
 5. **值类型循环引用编译期拒绝**：`@value type` 与 tuple 同属值类型，直接或间接循环引用必须编译期报错（见 §3.5）。
@@ -131,7 +132,9 @@ let c3 = Counter(10);
 
 构造器在栈上初始化值，完成后按值语义返回。`self` 指向正在初始化的栈上值地址。
 
-### 2.3 终结器
+### 2.3 终结器（禁止）
+
+`@value type` **禁止定义终结器**，编译期报错。
 
 ```feng
 @value
@@ -139,22 +142,15 @@ type Buffer {
   var data: byte*;
   var size: int;
 
-  func Buffer(size: int) {
-    self.data = feng_alloc(size);
-    self.size = size;
-  }
-
-  func ~Buffer() {
+  func ~Buffer() {   // ❌ 编译错误：@value type 不允许定义终结器
     feng_free(self.data);
   }
 }
 ```
 
-`@value type` 支持终结器（语法与普通 `type` 一致）。终结器在值生命周期结束时调用（作用域退出、异常清理等清理站点）。tuple 没有终结器——终结器调用是 `@value type` 独有的额外步骤，**独立于值分类**（trivial 与 aggregate 均调用，详见 §3.8）：codegen 通过 `FENG_NODE_DEFER` 节点注册终结器调用（`FENG_NODE_DEFER` 是 runtime 通用 scope-exit 回调机制，非 `defer` 专属，详见 §3.8/§7.1；`c_finalizer_name` 签名 `void(void*)`，与 `defer_fn` 一致，直接复用；`&value` 作为 closure），正常退出与异常展开两条路径均覆盖；aggregate 情况下终结器先于 `feng_aggregate_release` 调用（push 顺序与 LIFO 见 §3.8）。
+**理由**：`@value type` 是值语义，赋值与传参复制值。若允许终结器，开发者会用于释放资源（如 C 指针指向的内存），但值复制会导致同一资源被多个副本持有，终结器在副本生命周期结束时各自调用，极易出现多次释放。参考 C# 与 Swift 的结构体均不允许定义终结器。需要释放资源的类型应使用普通 `type`（堆对象，引用语义，单次释放）。
 
-终结器与普通 `type` 的终结器语义一致：负责释放值持有的非托管资源。托管字段的生命周期仍由聚合值模型管理（`feng_aggregate_release`），终结器只处理托管模型无法覆盖的资源（如 C 指针指向的内存）。`FengTrivialDescriptor`/`FengAggregateDescriptor` 均无 finalizer 字段，`feng_aggregate_release` 也不调用终结器——故栈上 `@value type` 值的终结器由 codegen 通过 `FENG_NODE_DEFER` 节点注册（通用 scope-exit 机制，详见 §3.8），不引入新 runtime 节点种类。
-
-> **box 路径不同**：当 `@value type` 值装箱为 spec subject 时，box 是堆对象，其终结器走 `FengTypeDescriptor.finalizer`（由 `feng_release` 触发，详见 §5.3），不通过 `FENG_NODE_DEFER`。栈值用 `FENG_NODE_DEFER` 节点，box 值用 descriptor finalizer——两条路径分别覆盖。
+**影响**：`@value type` 的运行时处理与 tuple 完全一致——无终结器调用路径，不通过 `FENG_NODE_DEFER` 注册，box descriptor 的 `finalizer` 字段统一为 `NULL`。详见 §3.8、§5.3、§7.2。
 
 ### 2.4 泛型
 
@@ -200,7 +196,7 @@ type Point {
 | 至少一个托管字段（string、对象引用、spec） | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | `FengAggregateDescriptor` |
 | 泛型实例（无论字段类型） | `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | `FengAggregateDescriptor` |
 
-**值分类只看字段是否含托管成员，不看是否有终结器**——与 tuple 的判定逻辑完全一致。trivial `@value type` + 终结器是合法组合（分类仍为 trivial），终结器调用独立于值分类，详见 §3.8。
+**值分类只看字段是否含托管成员**——与 tuple 的判定逻辑完全一致。`@value type` 禁止终结器（见 §2.3），故不存在「终结器 + 值分类」的组合问题。
 
 ### 3.2 赋值与传参
 
@@ -313,16 +309,10 @@ let addr = &p;   // 类型: Point*，指向 p 的结构体本身（无托管头�
 
 ### 3.8 作用域与生命周期
 
-`@value type` 值在栈上布局，作用域退出时自动清理。**生命周期处理与 tuple 一致**（trivial 无操作 / aggregate release），**终结器调用独立于值分类**——仅在 `@value type` 声明了终结器时触发（tuple 无终结器，故 tuple 永不触发）。
+`@value type` 值在栈上布局，作用域退出时自动清理。**生命周期处理与 tuple 完全一致**（trivial 无操作 / aggregate release），无终结器调用路径（`@value type` 禁止定义终结器，见 §2.3）。
 
-**无终结器时不 push defer 节点**：无终结器的 `@value type` 在运行时层面与 tuple 完全一致——trivial 无清理，aggregate 仅 push aggregate 节点（`feng_aggregate_release`）。codegen 不 emit `FENG_NODE_DEFER` push，避免无意义运行时开销。这与 §1.3 原则 1「运行时处理与 tuple 一致」契合：无终结器的 `@value type` 在运行时层面与 tuple 不可区分。
-
-**有终结器时**：codegen 通过 `FENG_NODE_DEFER` 节点注册终结器调用——`FENG_NODE_DEFER` 是 runtime 的通用 scope-exit 回调机制（最典型场景 `defer` 关键字，但节点种类不独占 `defer`，见 §7.1 注释更新）；`c_finalizer_name`（签名 `void(void*)`，与 `defer_fn` 完全一致）直接作为 `defer_fn`，`&value` 作为 `defer_closure`。正常退出时 `cg_release_scope` pop 节点并显式调用；异常展开时 personality function 遍历 chain 调用。**与值分类无关**——trivial 与 aggregate 均适用：
-
-- trivial + 终结器：仅 push defer 节点（终结器），无 aggregate 节点
-- aggregate + 终结器：先 push aggregate 节点（`feng_aggregate_release`），再 push defer 节点（终结器）；LIFO pop 保证终结器先于 release 调用。`cg_release_scope` 为此类 local emit 两段清理代码——先 `feng_cleanup_pop(); c_finalizer_name(&value);`（pop defer 调终结器），再 `feng_cleanup_pop(); feng_aggregate_release(&value, &desc); memset(...);`（pop aggregate 调 release）。现有 `cg_release_scope` 按 `cgtype_is_defer`/`is_managed`/`is_aggregate` 三选一为每个 local emit 一段清理代码，需新增 combined 路径覆盖此场景；异常展开时 personality function 遍历 chain，节点自身携带 kind 区分，逐节点调用，无需 combined 逻辑
-
-**关键点**：值分类（trivial/aggregate）**只看字段是否含托管成员**，不看是否有终结器；defer 节点 push **仅取决于是否有终结器**——无终结器则不 push，与值分类无关。trivial `@value type` + 终结器是合法组合——仅 push defer 节点，无 aggregate release（因无托管槽位）。`FengTrivialDescriptor`/`FengAggregateDescriptor` 均无 finalizer 字段，`feng_aggregate_release` 也不调用终结器，故栈值的终结器由 codegen 通过 `FENG_NODE_DEFER` 注册（通用 scope-exit 机制，非 `defer` 专属）；其 runtime 注释须说明通用性——最典型场景是 `defer` 关键字，但节点种类不独占 `defer`（见 §7.1）。
+- trivial `@value`：无清理操作
+- aggregate `@value`：push aggregate 节点（`feng_aggregate_release`），作用域退出时 pop 并调用
 
 对象字段为 `@value type` 时：
 
@@ -482,7 +472,7 @@ static void Feng__demo__User__spec_box_release_children(void *_self) {
 const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
     .name = "demo.User.__value_box",
     .size = sizeof(struct Feng__demo__User__spec_box),
-    .finalizer = NULL,   // @value type 无终结器时为 NULL；有终结器时指向 thunk（先调值终结器，release_children 再走 aggregate release）
+    .finalizer = NULL,   // @value type 禁止定义终结器（见 §2.3），finalizer 统一为 NULL（与 tuple 一致）
     .release_children = Feng__demo__User__spec_box_release_children,
     .is_potentially_cyclic = true,   // 含托管字段时
     .managed_field_count = 1,
@@ -493,7 +483,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 @value type 的 box 复用 tuple 已有的 per-type codegen 生成模式（`header + embedded value struct`），两者 C 结构完全相同，codegen 仅需将入口条件从「仅 tuple」扩展为「tuple 或 @value」。
 
-**每个值类型的 box 是单独生成的**（per-type codegen，tuple 与 `@value type` 均如此）。因此 box 的 `finalizer` 字段也是 per-type 生成——按该值类型是否有终结器决定：无终结器时 `finalizer = NULL`（tuple 即如此）；有终结器时 `finalizer` 指向 codegen 生成的 thunk，调用值的 `c_finalizer_name(&box->value)`，随后由 runtime 框架自动调用 `release_children` 走 `feng_aggregate_release`。这与 §3.8「清理站点先调终结器再 aggregate release」一致——box 释放是清理站点之一。这是 per-type 生成的自然结果，不构成新的 box 结构或新路径。
+**每个值类型的 box 是单独生成的**（per-type codegen，tuple 与 `@value type` 均如此）。`@value type` 禁止定义终结器（见 §2.3），故 box 的 `finalizer` 字段统一为 `NULL`（与 tuple 完全一致）。box 释放时仅由 runtime 框架调用 `release_children` 走 `feng_aggregate_release`。
 
 `FengScalarBox`（runtime 预编译的固定 union，服务 11 种标量）保持不变——标量 box 与 per-type box 在 payload 布局、构造函数、descriptor 策略上本质不同，强行合并无收益。
 
@@ -512,7 +502,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 两者正交：`@value @abi type` 是「值语义 + ABI 兼容」的类型，无托管头但成员均 ABI 兼容，`&` 取结构体地址（非 payload 地址，因无 header 可跳过）。参见 §3.7。
 
-**终结器约束**：`@abi` 禁止终结器的现有规则（AE0317）对 `@value @abi type` 同样生效；`@value` 不放宽此约束。需终结器的 `@value type` 不可同时标 `@abi`。
+**终结器约束**：`@value type` 本身禁止定义终结器（见 §2.3），`@abi` 的终结器禁止规则（AE0317）对此自然满足，无需额外约束。
 
 **ABI 互操作（`@abi func` 形参/返回值）**：`@value @abi type` 作为 `@abi func` 形参或返回值时，按 ABI 结构体值语义直接传递，不经 `feng_object_new` 堆分配：
 
@@ -554,8 +544,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 - `FengScalarBox`：不变
 - Cycle collector：不变（box 走现有 `FengTypeDescriptor` 路径）
 - 数组元素分类：不变（已支持三分类）
-
-**注释更新（非功能性）**：`FengCleanupNode` 的 `FENG_NODE_DEFER` 注释扩展说明其通用性——`FENG_NODE_DEFER` 是 runtime 的通用 scope-exit 回调机制，最典型场景是 `defer` 关键字，但节点种类不独占 `defer`；@value type 栈值终结器亦使用此节点（`c_finalizer_name` 签名与 `defer_fn` 一致，直接复用）。无新增节点种类、无新增 runtime 函数。
+- `FENG_NODE_DEFER`：不变（`@value type` 禁止终结器，见 §2.3，不使用此节点注册栈值终结器）
 
 ### 7.2 Codegen
 
@@ -566,14 +555,14 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | `UserType` 字段重命名 | 小 | `c_tuple_box_*` → `c_value_box_*`（或保留现名，仅扩入口） |
 | box 符号初始化函数入口扩展 | 小 | 条件从 tuple 扩展为 tuple \|\| value |
 | `cg_aggregate_facts` 扩展 | 小 | `CG_TYPE_OBJECT` 分支条件扩展（见下方示意） |
-| 主结构体 emit + `c_finalizer_name` thunk | 中 | `@value type` 既不走 tuple 路径（tuple 无终结器），也不走普通 type 路径（普通 type 有 `FengManagedHeader _hdr`）；需第三条路径：无 `_hdr`（同 tuple）+ finalizer thunk emit（同普通 type，但 `self` 指向栈上值地址，非堆对象）+ 值语义描述符。现有 `cg_emit_user_type_definition` 在 tuple 与普通 type 之间二选一分发，需新增 `@value` 分支 |
-| box struct/desc/release emit | 小 | box struct（`_hdr + value`）复用 tuple 生成逻辑；box descriptor 的 `finalizer` 字段需 per-type 处理：无终结器时 `NULL`（同 tuple），有终结器时指向 codegen 生成的 thunk 调用 `c_finalizer_name(&box->value)`（见 §5.3）。`release_children` 复用 tuple 路径（`feng_aggregate_release`） |
+| 主结构体 emit | 中 | `@value type` 既不走 tuple 路径（tuple 无方法/构造器），也不走普通 type 路径（普通 type 有 `FengManagedHeader _hdr`）；需第三条路径：无 `_hdr`（同 tuple）+ 方法/构造器 emit（同普通 type，但 `self` 指向栈上值地址，非堆对象）+ 值语义描述符。现有 `cg_emit_user_type_definition` 在 tuple 与普通 type 之间二选一分发，需新增 `@value` 分支。`@value type` 禁止终结器（见 §2.3），不 emit `c_finalizer_name` |
+| box struct/desc/release emit | 小 | box struct（`_hdr + value`）复用 tuple 生成逻辑；box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，见 §2.3、§5.3）。`release_children` 复用 tuple 路径（`feng_aggregate_release`） |
 | `cg_emit_value_spec_box_subject` 新增 | 小 | 新增独立函数，复用 tuple 生成逻辑，不动 `cg_emit_tuple_spec_box_subject` |
 | witness 生成路径 | 小 | 按原则 1，复用普通 type 的 `cg_ensure_witness_instance_for_type` 路径；仅需让该路径接受 `@value` subject（声明头满足 + fit 扩展均走此路径，**不走** tuple 的 `tuple_box_witness_tables`） |
 | trivial/aggregate descriptor emit | 小 | 复用 tuple 的 `cg_emit_tuple_equal_function` 生成 `equal_fn`（非 NULL） |
 | `&` 取地址（`@value @abi` 组合） | 小 | `c_abi_ptr_name` 函数体无需分支（`offsetof` 自然为 0）；`&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`）；语义层补 `@value @abi` 注解组合校验 |
 | `@abi func` 形参/返回的 ABI 互操作 | 小 | `@value @abi type` 作 `@abi func` 形参/返回值时按 ABI 结构体值语义直接传递，不经 `feng_object_new`。`c_abi_value_name` 对 `@value @abi` 是平凡拷贝（值本身即 ABI 结构）；`c_abi_box_name` 不适用（`@value` 不堆分配），codegen 需在返回站点按 `@value` 标志跳过 box 调用，直接按值返回（见 §6.1） |
-| 终结器注册 `FENG_NODE_DEFER` | 中 | **仅当 `@value type` 声明了终结器时** push defer 节点；**无终结器时不 push**，运行时与 tuple 不可区分，避免无意义开销。有终结器时：codegen 通过 `FENG_NODE_DEFER` 节点注册（通用 scope-exit 机制；`c_finalizer_name` 作 `defer_fn`，`&value` 作 closure）；aggregate 先 push aggregate 节点再 push defer 节点，LIFO 保证终结器先于 release。trivial + 终结器仅注册 defer 节点。**`cg_release_scope` 需新增 combined 路径**：现有实现按 `cgtype_is_defer`/`is_managed`/`is_aggregate` 三选一为每个 local emit 一段清理代码；`@value type`（aggregate + 终结器）需在同一 local 上 emit 两段——先 `feng_cleanup_pop(); c_finalizer_name(&value);`（pop defer 调终结器），再 `feng_cleanup_pop(); feng_aggregate_release(&value, &desc); memset(...);`（pop aggregate 调 release）。personality function 异常展开路径通过 `feng_cleanup_release_node` 遍历 chain，节点自身已携带 kind 区分，无需 combined 逻辑 |
+| 终结器禁止诊断 | 小 | `@value type` 定义终结器时编译期报错（见 §2.3、§9.7），不 emit `c_finalizer_name`，不 push `FENG_NODE_DEFER`，无需 `cg_release_scope` combined 路径 |
 
 入口条件扩展示意：
 
@@ -585,7 +574,7 @@ if (!cg_type_is_tuple_user(t)) { return false; }
 if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 ```
 
-生成逻辑本身零修改——box struct 布局、release_children 生成、equal_fn 生成对 tuple 和 @value type 完全一致；唯一差异是 box descriptor 的 `finalizer` 字段：tuple 一律 `NULL`，`@value type` 按是否有终结器 per-type 决定（见 §5.3）。
+生成逻辑本身零修改——box struct 布局、release_children 生成、equal_fn 生成对 tuple 和 @value type 完全一致；box descriptor 的 `finalizer` 字段：tuple 与 `@value type` 均一律 `NULL`（`@value type` 禁止终结器，见 §2.3、§5.3）。
 
 ### 7.3 Semantic
 
@@ -596,7 +585,8 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 | 值类型循环引用检测 | 中 | **新增值类型循环引用编译期检测**，覆盖 tuple + `@value type`（一并修正 tuple 现有静默失败 bug）；直接自引用 + 间接循环均报错；普通 `type`（堆对象，引用语义，大小固定）不受约束。详见 §3.5 |
 | 等值运算符 | 小 | `@value type` 的 `==`/`!=` 走 codegen 生成的 `equal_fn`（复用 tuple 路径），semantic 层仅识别 `@value` 类型允许默认值比较 |
 | spec 满足性检查 | 小 | 声明头满足与普通 type 一致（复用普通 type 路径）；`fit` 路径一致 |
-| 构造器/终结器语义 | 小 | 与普通 type 一致，`self` 指向栈上值地址（普通 type 的 `self` 指向堆对象） |
+| 构造器语义 | 小 | 与普通 type 一致，`self` 指向栈上值地址（普通 type 的 `self` 指向堆对象） |
+| 终结器禁止诊断 | 小 | `@value type` 定义终结器时编译期报错（见 §2.3） |
 
 ---
 
@@ -617,7 +607,7 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 > 每步遵循 CLAUDE.md 基础原则：「先文档 → 后代码 → 后测试 → 全量回归」。
 > 步骤间存在依赖关系（见每步「依赖」字段），按编号顺序交付；每步本身可独立交付并通过全量回归。
 > 完成状态：**状态**字段标记「未开始 / 进行中 / 已完成」，子项用 `- [ ]` / `- [x]` 标记。
-> Runtime 在全流程中零修改（§7.1），仅 9.7 含非功能性注释更新。
+> Runtime 在全流程中零修改（§7.1）。
 
 ### 9.1 `@value` 注解解析与 AST 扩展
 
@@ -649,7 +639,7 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] 普通 `type` 自引用：允许
 - [ ] 全量回归
 
-### 9.3 trivial `@value type` 值语义（无方法/构造器/终结器/spec/泛型）
+### 9.3 trivial `@value type` 值语义（无方法/构造器/spec/泛型）
 
 **状态**：未开始 ｜ **依赖**：9.1、9.2 ｜ **范围**：§3.1、§3.2、§3.3、§3.4、§3.6、§5.1、§7.2
 
@@ -714,25 +704,17 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] direct-call 不装箱（无 box 分配）
 - [ ] 全量回归
 
-### 9.7 终结器（`FENG_NODE_DEFER` 注册 + `cg_release_scope` combined 路径）
+### 9.7 终结器禁止诊断
 
-**状态**：未开始 ｜ **依赖**：9.3、9.4 ｜ **范围**：§2.3、§3.8、§7.1、§7.2
+**状态**：未开始 ｜ **依赖**：9.1 ｜ **范围**：§2.3、§7.3
 
 **变更**：
-- [ ] `@value type` 终结器声明（语法同普通 `type`，§2.3）
-- [ ] Codegen 通过 `FENG_NODE_DEFER` 节点注册（`c_finalizer_name` 作 `defer_fn`，`&value` 作 closure，§3.8）
-- [ ] `cg_release_scope` 新增 combined 路径（aggregate + 终结器：两段清理，§3.8、§7.2）
-- [ ] 异常展开路径覆盖（personality function 遍历 chain，节点自身携带 kind 区分）
-- [ ] trivial + 终结器：仅 push defer 节点
-- [ ] aggregate + 终结器：先 push aggregate 节点，再 push defer 节点（LIFO 保证终结器先于 release）
-- [ ] 无终结器时不 push defer 节点（默认行为，避免无意义开销）
-- [ ] Runtime 注释更新：`FENG_NODE_DEFER` 通用性说明（非功能性，§7.1）
+- [ ] Semantic 层检测 `@value type` 定义终结器，编译期报错（§2.3）
+- [ ] 诊断码定义（test/）
 
 **测试**：
-- [ ] 终结器调用时机（作用域退出，fcts/）
-- [ ] 异常清理路径
-- [ ] trivial + 终结器 / aggregate + 终结器 两种组合
-- [ ] 无终结器时不 push（性能验证）
+- [ ] `@value type` 定义终结器：报编译错误（test/）
+- [ ] 普通 `type` 定义终结器：允许（回归）
 - [ ] 全量回归
 
 ### 9.8 Spec 声明头满足
@@ -761,19 +743,19 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 
 ### 9.10 值装箱（spec subject）
 
-**状态**：未开始 ｜ **依赖**：9.3、9.4、9.7 ｜ **范围**：§4.4、§5.3、§7.2
+**状态**：未开始 ｜ **依赖**：9.3、9.4 ｜ **范围**：§4.4、§5.3、§7.2
 
 **变更**：
 - [ ] Box struct/desc/release 生成（`_hdr + value`，复用 tuple 生成逻辑，§5.3）
 - [ ] `cg_emit_value_spec_box_subject` 新增（独立函数，不动 tuple 路径，§7.2）
-- [ ] Box descriptor 的 `finalizer` 字段 per-type 处理（无终结器 `NULL`，有终结器指向 thunk 调 `c_finalizer_name(&box->value)`，§5.3）
+- [ ] Box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，§2.3、§5.3）
 - [ ] Spec 视角调用装箱（§4.4）
 - [ ] Non-escape 优化（栈上地址作为 subject，不分配 box，§5.3）
 - [ ] `UserType` 字段重命名 `c_tuple_box_*` → `c_value_box_*`（可选，或保留现名仅扩入口，§7.2）
 
 **测试**：
 - [ ] 装箱后 spec 视角调用（fcts/）
-- [ ] box 终结器调用（含托管字段 release）
+- [ ] box 释放时托管字段 release（无终结器路径）
 - [ ] non-escape 优化（临时 coercion 不分配 box）
 - [ ] 全量回归
 
@@ -798,7 +780,7 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 - [ ] `c_abi_ptr_name` 函数体（`offsetof(first_field) == 0`，无需分支，§3.7）
 - [ ] `&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`，§3.7）
 - [ ] 语义层 `@value @abi` 注解组合校验
-- [ ] `@abi` 终结器禁止约束（AE0317）对 `@value @abi type` 生效（§6.1）
+- [ ] `@value @abi type` 终结器禁止：由 `@value` 本身禁止（§2.3），`@abi` 的 AE0317 自然满足，无需额外实现（§6.1）
 
 **测试**：
 - [ ] `&p` 取地址（fcts/）
@@ -844,7 +826,6 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 **测试**：
 - [ ] throw `@value type`（fcts/）
 - [ ] catch `@value type`
-- [ ] 异常展开触发终结器（与 9.7 协同）
 - [ ] 全量回归
 
 > **后续**：全量交付并通过回归后，将本草案迁入语言权威规范（`docs/`），按 CLAUDE.md「先文档」原则启动；迁入前本草案为唯一设计来源。
