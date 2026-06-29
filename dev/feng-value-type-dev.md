@@ -246,7 +246,47 @@ type A {
 
 理由：栈上值的类型大小必须编译期确定；自引用会导致无限大小。
 
-### 3.6 作用域与生命周期
+### 3.6 内联布局
+
+`@value type` 作为其他 `type` 的成员字段时，按值内联布局（与 tuple 一致），不经过指针引用：
+
+```feng
+@value
+type Point {
+  var x: float;
+  var y: float;
+}
+
+type Rect {
+  var origin: Point;   // 内联 8 字节（两个 float），不是 Point*
+  var size: Point;     // 内联 8 字节
+}
+```
+
+codegen 的 `cg_emit_c_type` 对 aggregate 类型（tuple、@value type）emit `struct <name>`（按值），对普通对象类型 emit `struct <name> *`（指针）。@value type 走与 tuple 相同的 aggregate 路径。
+
+### 3.7 取地址（`&`）
+
+`@value type` 没有托管头（`FengManagedHeader`），`&` 操作符直接取到值本身的地址：
+
+| 类型 | `&` 语义 | C 层表达 |
+|------|---------|---------|
+| 普通 `type` | payload 地址（跳过 `FengManagedHeader`） | 托管指针强转为 payload 类型指针 |
+| `@value type` | 结构体本身的地址 | `&value`（栈上/内联值的地址） |
+| `@abi type` | ABI payload 地址 | `c_abi_ptr_name` 转换 |
+
+```feng
+@value
+type Point {
+  var x: float;
+  var y: float;
+}
+
+var p = Point { x: 1.0, y: 2.0 };
+let addr = &p;   // 类型: Point*，指向 p 的值本身（无托管头偏移）
+```
+
+### 3.8 作用域与生命周期
 
 `@value type` 值在栈上布局，作用域退出时自动清理：
 
