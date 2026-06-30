@@ -185,6 +185,9 @@ static char *cg_enum_trivial_descriptor_name(const CG *cg,
                                              const FengDecl *enum_decl);
 static char *cg_managed_pointer_descriptor_expr(const CGType *t);
 static bool cg_type_is_tuple_user(const CGType *t);
+static bool cg_type_is_value_user(const CGType *t);
+static bool cg_type_is_value_semantics(const CGType *t);
+static bool cg_user_type_is_value_semantics(const struct UserType *t);
 
 static CGType *cgtype_new(CGTypeKind k) {
     CGType *t = calloc(1, sizeof *t);
@@ -572,9 +575,9 @@ struct UserType {
     char   *c_aggregate_slots_name;
     char   *c_aggregate_default_name;
     char   *c_aggregate_desc_name;
-    char   *c_tuple_box_struct_name;
-    char   *c_tuple_box_desc_name;
-    char   *c_tuple_box_release_children_name;
+    char   *c_value_box_struct_name;
+    char   *c_value_box_desc_name;
+    char   *c_value_box_release_children_name;
     bool    is_abi_type;
     char   *c_abi_layout_name;
     char   *c_abi_ptr_name;
@@ -622,10 +625,34 @@ static bool cg_type_is_tuple_user(const CGType *t) {
     return t != NULL && t->kind == CG_TYPE_OBJECT && cg_user_type_is_tuple(t->user);
 }
 
-/* Initialise generated symbols owned by tuple lowering. The aggregate
- * descriptor represents the by-value tuple; the tuple box descriptor is used
- * only when a tuple value becomes an object-form spec subject. */
-static bool cg_init_user_type_tuple_symbols(UserType *t) {
+/* @value type check: true when the UserType represents a `@value type` decl. */
+static bool cg_user_type_is_value(const struct UserType *t) {
+    return t != NULL &&
+           t->decl != NULL &&
+           t->decl->kind == FENG_DECL_TYPE &&
+           t->decl->as.type_decl.is_value;
+}
+
+static bool cg_type_is_value_user(const CGType *t) {
+    return t != NULL && t->kind == CG_TYPE_OBJECT && cg_user_type_is_value(t->user);
+}
+
+/* Convenience: true for any value-semantics aggregate (tuple or @value).
+ * Both share the same codegen path: inline struct layout, aggregate
+ * descriptors, field-wise equality, no FengManagedHeader. */
+static bool cg_type_is_value_semantics(const CGType *t) {
+    return cg_type_is_tuple_user(t) || cg_type_is_value_user(t);
+}
+
+static bool cg_user_type_is_value_semantics(const struct UserType *t) {
+    return cg_user_type_is_tuple(t) || cg_user_type_is_value(t);
+}
+
+/* Initialise generated symbols owned by value-type lowering. The aggregate
+ * descriptor represents the by-value struct; the box descriptor is used
+ * only when a value-type value becomes an object-form spec subject.
+ * Serves both tuple and @value type decls. */
+static bool cg_init_user_type_value_symbols(UserType *t) {
     Buf slots_name;
     Buf aggregate_default_name;
     Buf aggregate_desc_name;
@@ -633,7 +660,7 @@ static bool cg_init_user_type_tuple_symbols(UserType *t) {
     Buf box_desc_name;
     Buf box_release_name;
 
-    if (!cg_user_type_is_tuple(t)) {
+    if (!cg_user_type_is_value_semantics(t)) {
         return true;
     }
 
@@ -654,16 +681,16 @@ static bool cg_init_user_type_tuple_symbols(UserType *t) {
     t->c_aggregate_slots_name = slots_name.data;
     t->c_aggregate_default_name = aggregate_default_name.data;
     t->c_aggregate_desc_name = aggregate_desc_name.data;
-    t->c_tuple_box_struct_name = box_struct_name.data;
-    t->c_tuple_box_desc_name = box_desc_name.data;
-    t->c_tuple_box_release_children_name = box_release_name.data;
+    t->c_value_box_struct_name = box_struct_name.data;
+    t->c_value_box_desc_name = box_desc_name.data;
+    t->c_value_box_release_children_name = box_release_name.data;
 
     return t->c_aggregate_slots_name != NULL &&
            t->c_aggregate_default_name != NULL &&
            t->c_aggregate_desc_name != NULL &&
-           t->c_tuple_box_struct_name != NULL &&
-           t->c_tuple_box_desc_name != NULL &&
-           t->c_tuple_box_release_children_name != NULL;
+           t->c_value_box_struct_name != NULL &&
+           t->c_value_box_desc_name != NULL &&
+           t->c_value_box_release_children_name != NULL;
 }
 
 /* Spec registry. Object-form specs lower to by-value fat structs; callable-
@@ -798,7 +825,7 @@ static char *cg_managed_pointer_descriptor_expr(const CGType *t) {
             symbol_name = "feng_array_descriptor";
             break;
         case CG_TYPE_OBJECT:
-            if (t->user != NULL && !cg_type_is_tuple_user(t) &&
+            if (t->user != NULL && !cg_type_is_value_semantics(t) &&
                 t->user->c_desc_name != NULL) {
                 symbol_name = t->user->c_desc_name;
             }
@@ -1302,9 +1329,9 @@ typedef struct CG {
     size_t           expr_narrowing_capacity;
 } CG;
 
-/* 判断元组类型是否依赖未特化泛型参数（即共享体中的布局不可靠）。 */
-static bool cg_tuple_needs_reified_layout(const CG *cg, const CGType *type) {
-    return cg_type_is_tuple_user(type) &&
+/* 判断值语义类型（tuple 或 @value）是否依赖未特化泛型参数（即共享体中的布局不可靠）。 */
+static bool cg_value_needs_reified_layout(const CG *cg, const CGType *type) {
+    return cg_type_is_value_semantics(type) &&
            type->user != NULL &&
            type->user->generic_context_type_param_count > 0U &&
            (cg->in_generic_type_method || cg->in_generic_fn);
@@ -1462,7 +1489,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg,
                                                 const UserSpec *s,
                                                 FengToken blame,
                                                 const char **out_var);
-static bool cg_ensure_tuple_box_witness_instance(CG *cg,
+static bool cg_ensure_value_box_witness_instance(CG *cg,
                                                  const UserType *t,
                                                  const UserSpec *s,
                                                  FengToken blame,
@@ -6080,7 +6107,7 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     Buf zero_name; buf_init(&zero_name);
     buf_append_fmt(&zero_name, "%s__default_zero", t->c_struct_name);
     t->c_default_zero_name = zero_name.data;
-    if (!cg_init_user_type_tuple_symbols(t)) {
+    if (!cg_init_user_type_value_symbols(t)) {
         free(owner_mangle);
         free(base_san);
         buf_free(&symbol);
@@ -6100,10 +6127,10 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     free(base_san);
     buf_free(&symbol);
     if (!t->feng_name || !t->c_struct_name || !t->c_desc_name || !t->c_default_zero_name ||
-        (cg_user_type_is_tuple(t) &&
+        (cg_user_type_is_value_semantics(t) &&
          (!t->c_aggregate_slots_name || !t->c_aggregate_default_name ||
-          !t->c_aggregate_desc_name || !t->c_tuple_box_struct_name ||
-          !t->c_tuple_box_desc_name || !t->c_tuple_box_release_children_name))) {
+          !t->c_aggregate_desc_name || !t->c_value_box_struct_name ||
+          !t->c_value_box_desc_name || !t->c_value_box_release_children_name))) {
         return false;
     }
 
@@ -7921,7 +7948,7 @@ static bool cg_register_user_type_shell(CG *cg, const FengDecl *decl) {
     buf_append_fmt(&d, "FengTypeDesc__%s__%s", cg->module_mangle, san);
     t->c_desc_name = d.data;
 
-    if (!cg_init_user_type_tuple_symbols(t)) {
+    if (!cg_init_user_type_value_symbols(t)) {
         free(san);
         return false;
     }
@@ -10384,7 +10411,7 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
     }
 
     /* VLA path for tuples that depend on generic parameters in shared bodies. */
-    if (cg_tuple_needs_reified_layout(cg, expected_type)) {
+    if (cg_value_needs_reified_layout(cg, expected_type)) {
         const char *agg_desc = cg_aggregate_desc_name(expected_type);
         size_t rad_idx;
         bool has_rad = agg_desc != NULL &&
@@ -10486,42 +10513,43 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
     return out->c_expr != NULL && out->type != NULL;
 }
 
-/* Box a by-value tuple when it is coerced to an object-form spec value. The
- * returned subject is a managed object reference owned by the spec fat value. */
-static bool cg_emit_tuple_spec_box_subject(CG *cg,
+/* Box a by-value type (tuple or @value) when it is coerced to an object-form
+ * spec value. The returned subject is a managed object reference owned by
+ * the spec fat value. */
+static bool cg_emit_spec_box_subject(CG *cg,
                                            ExprResult *source,
-                                           const UserType *tuple_type,
+                                           const UserType *value_type,
                                            FengToken blame,
                                            char **out_subject_expr) {
     char *box_tmp;
 
-    if (source == NULL || tuple_type == NULL || out_subject_expr == NULL ||
-        !cg_user_type_is_tuple(tuple_type) || tuple_type->c_tuple_box_struct_name == NULL ||
-        tuple_type->c_tuple_box_desc_name == NULL) {
-        return cg_fail(cg, blame, "CE0067", "codegen: tuple spec coercion is missing box metadata");
+    if (source == NULL || value_type == NULL || out_subject_expr == NULL ||
+        !cg_user_type_is_value_semantics(value_type) || value_type->c_value_box_struct_name == NULL ||
+        value_type->c_value_box_desc_name == NULL) {
+        return cg_fail(cg, blame, "CE0067", "codegen: value-type spec coercion is missing box metadata");
     }
 
-    if (cg_materialize_to_local(cg, source, "_tuple_subject") == NULL) {
+    if (cg_materialize_to_local(cg, source, "_value_subject") == NULL) {
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
-    box_tmp = cg_fresh_temp(cg, "_tuple_box");
+    box_tmp = cg_fresh_temp(cg, "_value_box");
     if (box_tmp == NULL) {
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     buf_append_fmt(cg->cur_body,
                    "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n",
-                   tuple_type->c_tuple_box_struct_name,
+                   value_type->c_value_box_struct_name,
                    box_tmp,
-                   tuple_type->c_tuple_box_struct_name,
-                   tuple_type->c_tuple_box_desc_name);
+                   value_type->c_value_box_struct_name,
+                   value_type->c_value_box_desc_name);
 
     if (cgtype_is_aggregate(source->type)) {
         const char *desc = cg_aggregate_desc_name(source->type);
 
         if (desc == NULL) {
             free(box_tmp);
-            return cg_fail(cg, blame, "CE0068", "codegen: missing tuple aggregate descriptor for spec coercion");
+            return cg_fail(cg, blame, "CE0068", "codegen: missing value-type aggregate descriptor for spec coercion");
         }
         buf_append_fmt(cg->cur_body,
                        "    feng_aggregate_assign(&%s->value, &%s, &%s);\n",
@@ -10847,7 +10875,7 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
          *   source's subject pointer without incrementing its refcount, so
          *   retain here to give the copy an independent +1. */
         if (!r->owns_ref) {
-            if (cg_tuple_needs_reified_layout(cg, r->type)) {
+            if (cg_value_needs_reified_layout(cg, r->type)) {
                 const char *agg_desc = cg_aggregate_desc_name(r->type);
                 size_t rad_idx;
                 if (agg_desc &&
@@ -11463,11 +11491,12 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
         return out->c_expr && out->type;
     }
 
-    /* Object/Array equality: reference identity (pointer comparison). */
+    /* Object/Array equality: reference identity (pointer comparison).
+     * Excludes value-semantics types (tuple, @value) which use equal_fn. */
     if ((e->as.binary.op == FENG_TOKEN_EQ || e->as.binary.op == FENG_TOKEN_NE) &&
         (lr.type->kind == CG_TYPE_OBJECT || lr.type->kind == CG_TYPE_ARRAY) &&
         lr.type->kind == rr.type->kind &&
-        !cg_type_is_tuple_user(lr.type)) {
+        !cg_type_is_value_semantics(lr.type)) {
         const char *cop2 = (e->as.binary.op == FENG_TOKEN_EQ) ? "==" : "!=";
         Buf b; buf_init(&b);
         buf_append_fmt(&b, "(bool)((void *)%s %s (void *)%s)", lr.c_expr, cop2, rr.c_expr);
@@ -11477,13 +11506,14 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
         return out->c_expr && out->type;
     }
 
-    /* Tuple equality: value semantics via generated aggregate equal_fn. */
+    /* Value-type equality (tuple or @value): value semantics via generated
+     * aggregate equal_fn. */
     if ((e->as.binary.op == FENG_TOKEN_EQ || e->as.binary.op == FENG_TOKEN_NE) &&
-        cg_type_is_tuple_user(lr.type) && cg_type_is_tuple_user(rr.type)) {
+        cg_type_is_value_semantics(lr.type) && cg_type_is_value_semantics(rr.type)) {
         const char *desc_name = lr.type->user->c_aggregate_desc_name;
         if (desc_name == NULL) {
             er_free(&lr); er_free(&rr);
-            return cg_fail(cg, e->token, "CE0085", "codegen: tuple type has no aggregate descriptor for equality");
+            return cg_fail(cg, e->token, "CE0085", "codegen: value type has no aggregate descriptor for equality");
         }
         Buf b; buf_init(&b);
         if (e->as.binary.op == FENG_TOKEN_EQ) {
@@ -16346,25 +16376,25 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         er_free(&recv);
         return out->c_expr && out->type;
     }
-    if (cg_type_is_tuple_user(recv.type)) {
+    if (cg_type_is_value_semantics(recv.type)) {
         const UserType *ut = recv.type->user;
         const UserField *uf = cg_user_type_field(ut,
             e->as.member.member.data, e->as.member.member.length);
         if (!uf) {
             er_free(&recv);
             return cg_fail(cg, e->token,
-                "CE0174", "codegen: tuple type '%s' has no field '%.*s'",
+                "CE0174", "codegen: value type '%s' has no field '%.*s'",
                 ut->feng_name,
                 (int)e->as.member.member.length,
                 e->as.member.member.data);
         }
         if (cgtype_is_aggregate(recv.type) && recv.owns_ref &&
-            cg_materialize_to_local(cg, &recv, "_tuple") == NULL) {
+            cg_materialize_to_local(cg, &recv, "_value") == NULL) {
             er_free(&recv);
             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
 
-        if (cg_tuple_needs_reified_layout(cg, recv.type)) {
+        if (cg_value_needs_reified_layout(cg, recv.type)) {
             const char *agg_desc = cg_aggregate_desc_name(recv.type);
             size_t rad_idx;
             bool has_rad = agg_desc != NULL &&
@@ -16829,7 +16859,7 @@ static char *cg_array_element_descriptor(const CGType *elem) {
         case CG_TYPE_STRING: buf_append_cstr(&b, "&feng_string_descriptor"); break;
         case CG_TYPE_ARRAY:  buf_append_cstr(&b, "&feng_array_descriptor"); break;
         case CG_TYPE_OBJECT:
-            if (cg_type_is_tuple_user(elem)) {
+            if (cg_type_is_value_semantics(elem)) {
                 buf_append_cstr(&b, "NULL");
             } else if (elem->user) {
                 buf_append_fmt(&b, "&%s", elem->user->c_desc_name);
@@ -17135,7 +17165,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
 
     bool elem_managed   = cgtype_is_managed(elem);
     bool elem_aggregate = cgtype_is_aggregate(elem);
-    if (!elem_aggregate && cg_tuple_needs_reified_layout(cg, elem)) {
+    if (!elem_aggregate && cg_value_needs_reified_layout(cg, elem)) {
         elem_aggregate = true;
     }
     const char *agg_desc = elem_aggregate ? cg_aggregate_desc_name(elem) : NULL;
@@ -19246,15 +19276,15 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             }
             if (out->type->kind == CG_TYPE_OBJECT && out->type->user != NULL) {
                 src_t = out->type->user;
-                if (cg_user_type_is_tuple(src_t)) {
-                    if (!cg_ensure_tuple_box_witness_instance(cg,
+                if (cg_user_type_is_value_semantics(src_t)) {
+                    if (!cg_ensure_value_box_witness_instance(cg,
                                                               src_t,
                                                               tgt_s,
                                                               e->token,
                                                               &witness_var)) {
                         return false;
                     }
-                    if (!cg_emit_tuple_spec_box_subject(cg,
+                    if (!cg_emit_spec_box_subject(cg,
                                                         out,
                                                         src_t,
                                                         e->token,
@@ -19400,7 +19430,7 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
                            "    feng_cleanup_pop(); feng_release(%s); %s = NULL;\n",
                            l->c_name, l->c_name);
         } else if (cgtype_is_aggregate(l->type)) {
-            if (cg_tuple_needs_reified_layout(cg, l->type)) {
+            if (cg_value_needs_reified_layout(cg, l->type)) {
                 /* Reified tuple: single cleanup node (pushed by RAD path in
                  * cg_emit_cleanup_push_for_aggregate_local), pop 1, release
                  * via RAD, zero entire struct. */
@@ -19514,7 +19544,7 @@ static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
     /* Reified tuple: use RAD to push a single aggregate cleanup node that
      * covers the entire struct, rather than per-field nodes (which would skip
      * CG_TYPE_GENERIC_PARAM fields classified as CG_VK_TRIVIAL). */
-    if (cg_tuple_needs_reified_layout(cg, type)) {
+    if (cg_value_needs_reified_layout(cg, type)) {
         const char *agg_desc = cg_aggregate_desc_name(type);
         size_t rad_idx;
         if (agg_desc &&
@@ -19708,7 +19738,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
                 return cg_fail(cg, blame ? *blame : (FengToken){0},
                     "CE0225", "codegen: cannot default-zero an unresolved object type");
             }
-            if (cg_user_type_is_tuple(type->user)) {
+            if (cg_user_type_is_value_semantics(type->user)) {
                 buf_append_fmt(&b, "(struct %s){0}", type->user->c_struct_name);
                 break;
             }
@@ -20306,7 +20336,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
         } else if (cgtype_is_aggregate(decl_type)) {
             if (init.owns_ref) {
                 buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, init.c_expr);
-            } else if (cg_tuple_needs_reified_layout(cg, decl_type)) {
+            } else if (cg_value_needs_reified_layout(cg, decl_type)) {
                 /* Reified tuple: retain via RAD. */
                 const char *agg_desc = cg_aggregate_desc_name(decl_type);
                 size_t rad_idx;
@@ -20594,7 +20624,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             er_free(&recv);
             return true;
         }
-        if (cg_tuple_needs_reified_layout(cg, recv.type->element)) {
+        if (cg_value_needs_reified_layout(cg, recv.type->element)) {
             const char *agg_desc = cg_aggregate_desc_name(recv.type->element);
             size_t rad_idx;
             bool has_rad = agg_desc != NULL &&
@@ -21270,6 +21300,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 (int)target->as.member.member.length,
                 target->as.member.member.data);
         }
+        /* @value types use `.` (value), regular objects use `->` (pointer). */
+        const char *acc = cg_type_is_value_user(recv.type) ? "." : "->";
         if (cgtype_is_managed(recv.type) && recv.owns_ref) {
             cg_materialize_to_local(cg, &recv, "_t");
         }
@@ -21294,8 +21326,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             }
 
             buf_append_fmt(cg->cur_body,
-                "    %s %s = (%s)->%s;\n",
-                field_cty, old_tmp, recv.c_expr, uf->c_name);
+                "    %s %s = (%s)%s%s;\n",
+                field_cty, old_tmp, recv.c_expr, acc, uf->c_name);
 
             if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
                 free(old_tmp);
@@ -21320,8 +21352,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             }
 
             buf_append_fmt(cg->cur_body,
-                "    (%s)->%s = (%s)(%s);\n",
-                recv.c_expr, uf->c_name, field_cty, expr.data);
+                "    (%s)%s%s = (%s)(%s);\n",
+                recv.c_expr, acc, uf->c_name, field_cty, expr.data);
 
             buf_free(&expr);
             er_free(&v);
@@ -21340,12 +21372,12 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         if (cgtype_is_managed(uf->type)) {
             if (v.owns_ref) {
                 buf_append_fmt(cg->cur_body,
-                    "    { void *_old = (%s)->%s; (%s)->%s = %s; feng_release(_old); }\n",
-                    recv.c_expr, uf->c_name, recv.c_expr, uf->c_name, v.c_expr);
+                    "    { void *_old = (%s)%s%s; (%s)%s%s = %s; feng_release(_old); }\n",
+                    recv.c_expr, acc, uf->c_name, recv.c_expr, acc, uf->c_name, v.c_expr);
             } else {
                 buf_append_fmt(cg->cur_body,
-                    "    feng_assign((void**)&(%s)->%s, %s);\n",
-                    recv.c_expr, uf->c_name, v.c_expr);
+                    "    feng_assign((void**)&(%s)%s%s, %s);\n",
+                    recv.c_expr, acc, uf->c_name, v.c_expr);
             }
         } else if (cgtype_is_aggregate(uf->type)) {
             const char *desc = cg_aggregate_desc_name(uf->type);
@@ -21361,16 +21393,16 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
             }
             buf_append_fmt(cg->cur_body,
-                "    feng_aggregate_assign(&(%s)->%s, &%s, &%s);\n",
-                recv.c_expr, uf->c_name, v.c_expr, desc);
+                "    feng_aggregate_assign(&(%s)%s%s, &%s, &%s);\n",
+                recv.c_expr, acc, uf->c_name, v.c_expr, desc);
         } else {
             char *cty = cg_ctype_dup(uf->type);
             if (cgtype_is_by_value_struct(uf->type)) {
-                buf_append_fmt(cg->cur_body, "    (%s)->%s = %s;\n",
-                               recv.c_expr, uf->c_name, v.c_expr);
+                buf_append_fmt(cg->cur_body, "    (%s)%s%s = %s;\n",
+                               recv.c_expr, acc, uf->c_name, v.c_expr);
             } else {
-                buf_append_fmt(cg->cur_body, "    (%s)->%s = (%s)(%s);\n",
-                               recv.c_expr, uf->c_name, cty, v.c_expr);
+                buf_append_fmt(cg->cur_body, "    (%s)%s%s = (%s)(%s);\n",
+                               recv.c_expr, acc, uf->c_name, cty, v.c_expr);
             }
             free(cty);
         }
@@ -22873,7 +22905,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
     /* Check termination: if (!result.item1) { release + pop + break; } */
     buf_append_fmt(cg->cur_body, "        if (!%s.%s) { ",
                    result_var, bool_field->c_name);
-    if (cg_tuple_needs_reified_layout(cg, result_type)) {
+    if (cg_value_needs_reified_layout(cg, result_type)) {
         /* Reified tuple: single cleanup node, release via RAD, zero. */
         const char *agg_desc = cg_aggregate_desc_name(result_type);
         size_t rad_idx;
@@ -25641,7 +25673,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
     }
     /* Concrete return type inside a generic function: compute result and
      * memcpy into _out. */
-    if (cg_tuple_needs_reified_layout(cg, r.type)) {
+    if (cg_value_needs_reified_layout(cg, r.type)) {
         const char *desc = cg_aggregate_desc_name(r.type);
         size_t rad_idx;
         bool has_rad = desc != NULL &&
@@ -28736,14 +28768,14 @@ static bool cg_ensure_witness_instance_for_subject_key(
 /* Tuple object-form spec coercion stores the subject in a managed box, while
  * generic constraint dispatch still passes an address of the by-value tuple.
  * This separate witness table reads `box->value` before forwarding to the
- * normal fit method body. */
-static bool cg_ensure_tuple_box_witness_instance(CG *cg,
+ * normal fit method body. Serves both tuple and @value type decls. */
+static bool cg_ensure_value_box_witness_instance(CG *cg,
                                                  const UserType *t,
                                                  const UserSpec *s,
                                                  FengToken blame,
                                                  const char **out_var) {
     if (cg == NULL || t == NULL || s == NULL || out_var == NULL ||
-        !cg_user_type_is_tuple(t) || t->c_tuple_box_struct_name == NULL) {
+        !cg_user_type_is_value_semantics(t) || t->c_value_box_struct_name == NULL) {
         return false;
     }
     for (size_t cached_index = 0U;
@@ -28884,7 +28916,7 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
                 buf_append_fmt(fd,
                                " _ret = %s(((struct %s *)_subject)->value",
                                fm->c_name,
-                               t->c_tuple_box_struct_name);
+                               t->c_value_box_struct_name);
                 for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                     char pname[32];
 
@@ -28929,12 +28961,12 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
                 buf_append_fmt(fd,
                                "    %s(((struct %s *)_subject)->value",
                                fm->c_name,
-                               t->c_tuple_box_struct_name);
+                               t->c_value_box_struct_name);
             } else {
                 buf_append_fmt(fd,
                                "    return %s(((struct %s *)_subject)->value",
                                fm->c_name,
-                               t->c_tuple_box_struct_name);
+                               t->c_value_box_struct_name);
             }
             for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                 char pname[32];
@@ -28972,7 +29004,7 @@ static bool cg_ensure_tuple_box_witness_instance(CG *cg,
                        prefix.data, sm->c_field_name);
         buf_append_fmt(fd,
                        "    return ((struct %s *)_subject)->value.%s;\n",
-                       t->c_tuple_box_struct_name,
+                       t->c_value_box_struct_name,
                        field->c_name);
         buf_append_cstr(fd, "}\n\n");
 
@@ -30816,7 +30848,7 @@ static bool cg_emit_all_programs(CG *cg,
      * emitted in cg_emit_user_type_forward above. */
     for (size_t i = 0; i < cg->user_type_count; i++) {
         const UserType *t = &cg->user_types[i];
-        if (!cg_user_type_is_tuple(t) || t->field_count == 0U) continue;
+        if (!cg_user_type_is_value_semantics(t) || t->field_count == 0U) continue;
         const UserType *tup_open = t->is_generic_instance
             ? cg_find_open_generic_instance(cg, t) : NULL;
         buf_append_fmt(&cg->headers, "struct %s {\n", t->c_struct_name);
@@ -30864,7 +30896,7 @@ static bool cg_emit_all_programs(CG *cg,
              * All type forward declarations have been appended to headers
              * before this loop runs, so field type references are safe. */
             UserType *t = &cg->user_types[i];
-            if (!cg_user_type_is_tuple(t)) {
+            if (!cg_user_type_is_value_semantics(t)) {
                 Buf *td = &cg->type_defs;
                 const UserType *imp_open = t->is_generic_instance
                     ? cg_find_open_generic_instance(cg, t) : NULL;
@@ -31656,24 +31688,24 @@ static void cg_spec_aggregate_emit_cleanup_zero(Buf *out,
     buf_append_fmt(out, "memset(&%s, 0, sizeof %s);", cname, cname);
 }
 
-static void cg_tuple_aggregate_emit_pointer_slot_rows(Buf *out,
+static void cg_value_aggregate_emit_pointer_slot_rows(Buf *out,
                                                       const char *field_base_offsetof_expr,
                                                       const CGType *type);
-static void cg_tuple_aggregate_emit_cleanup_push(Buf *out,
+static void cg_value_aggregate_emit_cleanup_push(Buf *out,
                                                  const char *cname,
                                                  const CGType *type);
-static void cg_tuple_aggregate_emit_cleanup_zero(Buf *out,
+static void cg_value_aggregate_emit_cleanup_zero(Buf *out,
                                                  const char *cname,
                                                  const CGType *type);
 
-static size_t cg_tuple_aggregate_flattened_pointer_slot_count(const UserType *tuple_type) {
+static size_t cg_value_aggregate_flattened_pointer_slot_count(const UserType *value_type) {
     size_t count = 0U;
 
-    if (!cg_user_type_is_tuple(tuple_type)) {
+    if (!cg_user_type_is_value_semantics(value_type)) {
         return 0U;
     }
-    for (size_t i = 0; i < tuple_type->field_count; ++i) {
-        const CGType *field_type = tuple_type->fields[i].type;
+    for (size_t i = 0; i < value_type->field_count; ++i) {
+        const CGType *field_type = value_type->fields[i].type;
         /* CG_TYPE_GENERIC_PARAM is CG_VK_TRIVIAL in cgtype_value_kind (ARC is
          * dispatch'd at call-site via descriptor), but inside a tuple it is a
          * potential managed slot — at runtime T may be string/array/object.
@@ -31727,26 +31759,26 @@ static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
             facts.emit_cleanup_zero = cg_spec_aggregate_emit_cleanup_zero;
             break;
         case CG_TYPE_OBJECT:
-            if (!cg_type_is_tuple_user(t)) {
+            if (!cg_type_is_value_semantics(t)) {
                 return false;
             }
             {
-                size_t tuple_slot_count = cg_tuple_aggregate_flattened_pointer_slot_count(t->user);
+                size_t value_slot_count = cg_value_aggregate_flattened_pointer_slot_count(t->user);
 
-                facts.value_kind = tuple_slot_count > 0U
+                facts.value_kind = value_slot_count > 0U
                                        ? CG_VK_AGGREGATE
                                        : CG_VK_TRIVIAL;
                 facts.descriptor_name = t->user->c_aggregate_desc_name;
                 facts.value_struct_name = t->user->c_struct_name;
-                facts.pointer_slot_count = tuple_slot_count;
-                facts.default_init_kind = tuple_slot_count > 0U
+                facts.pointer_slot_count = value_slot_count;
+                facts.default_init_kind = value_slot_count > 0U
                                               ? CG_AGGREGATE_DEFAULT_INIT_DESCRIPTOR
                                               : CG_AGGREGATE_DEFAULT_INIT_ZERO_BYTES;
                 if (facts.value_struct_name != NULL) {
-                    facts.emit_pointer_slot_rows = cg_tuple_aggregate_emit_pointer_slot_rows;
+                    facts.emit_pointer_slot_rows = cg_value_aggregate_emit_pointer_slot_rows;
                 }
-                facts.emit_cleanup_push = cg_tuple_aggregate_emit_cleanup_push;
-                facts.emit_cleanup_zero = cg_tuple_aggregate_emit_cleanup_zero;
+                facts.emit_cleanup_push = cg_value_aggregate_emit_cleanup_push;
+                facts.emit_cleanup_zero = cg_value_aggregate_emit_cleanup_zero;
             }
             break;
         default:
@@ -31825,7 +31857,7 @@ static const char *cg_managed_pointer_static_desc_expr(const CGType *type) {
         case CG_TYPE_ARRAY:
             return "&feng_array_descriptor";
         case CG_TYPE_OBJECT:
-            if (cg_type_is_tuple_user(type)) {
+            if (cg_type_is_value_semantics(type)) {
                 return "NULL";
             }
             if (type->user != NULL && type->user->c_desc_name != NULL) {
@@ -31837,15 +31869,15 @@ static const char *cg_managed_pointer_static_desc_expr(const CGType *type) {
     }
 }
 
-static void cg_tuple_aggregate_emit_pointer_slot_rows(Buf *out,
+static void cg_value_aggregate_emit_pointer_slot_rows(Buf *out,
                                                       const char *field_base_offsetof_expr,
                                                       const CGType *type) {
-    if (!cg_type_is_tuple_user(type)) {
+    if (!cg_type_is_value_semantics(type)) {
         return;
     }
-    const UserType *tuple_type = type->user;
-    for (size_t i = 0; i < tuple_type->field_count; ++i) {
-        const UserField *field = &tuple_type->fields[i];
+    const UserType *value_type = type->user;
+    for (size_t i = 0; i < value_type->field_count; ++i) {
+        const UserField *field = &value_type->fields[i];
         switch (cgtype_value_kind(field->type)) {
             case CG_VK_TRIVIAL:
                 break;
@@ -31855,21 +31887,21 @@ static void cg_tuple_aggregate_emit_pointer_slot_rows(Buf *out,
                     buf_append_fmt(out,
                         "    { %s + offsetof(struct %s, %s), %s, NULL },\n",
                         field_base_offsetof_expr,
-                        tuple_type->c_struct_name,
+                        value_type->c_struct_name,
                         field->c_name,
                         static_desc);
                 } else if (static_desc != NULL && strcmp(static_desc, "NULL") != 0) {
                     buf_append_fmt(out,
                         "    { %s + offsetof(struct %s, %s), &%s, NULL },\n",
                         field_base_offsetof_expr,
-                        tuple_type->c_struct_name,
+                        value_type->c_struct_name,
                         field->c_name,
                         static_desc);
                 } else {
                     buf_append_fmt(out,
                         "    { %s + offsetof(struct %s, %s), NULL, NULL },\n",
                         field_base_offsetof_expr,
-                        tuple_type->c_struct_name,
+                        value_type->c_struct_name,
                         field->c_name);
                 }
                 break;
@@ -31880,7 +31912,7 @@ static void cg_tuple_aggregate_emit_pointer_slot_rows(Buf *out,
                 buf_append_fmt(&nested_base,
                                "%s + offsetof(struct %s, %s)",
                                field_base_offsetof_expr,
-                               tuple_type->c_struct_name,
+                               value_type->c_struct_name,
                                field->c_name);
                 if (nested_base.data != NULL) {
                     cg_emit_aggregate_pointer_slot_rows(out, nested_base.data, field->type);
@@ -31892,7 +31924,7 @@ static void cg_tuple_aggregate_emit_pointer_slot_rows(Buf *out,
     }
 }
 
-static void cg_tuple_emit_cleanup_push_slots(Buf *out,
+static void cg_value_emit_cleanup_push_slots(Buf *out,
                                              const char *node_prefix,
                                              const char *lvalue_expr,
                                              const CGType *type) {
@@ -31916,20 +31948,20 @@ static void cg_tuple_emit_cleanup_push_slots(Buf *out,
                                type->user_spec->c_aggregate_desc_name);
                 return;
             }
-            if (cg_type_is_tuple_user(type)) {
-                const UserType *tuple_type = type->user;
-                for (size_t i = 0; i < tuple_type->field_count; ++i) {
+            if (cg_type_is_value_semantics(type)) {
+                const UserType *value_type = type->user;
+                for (size_t i = 0; i < value_type->field_count; ++i) {
                     Buf child_prefix;
                     Buf child_lvalue;
                     buf_init(&child_prefix);
                     buf_init(&child_lvalue);
                     buf_append_fmt(&child_prefix, "%s_%zu", node_prefix, i);
-                    buf_append_fmt(&child_lvalue, "%s.%s", lvalue_expr, tuple_type->fields[i].c_name);
+                    buf_append_fmt(&child_lvalue, "%s.%s", lvalue_expr, value_type->fields[i].c_name);
                     if (child_prefix.data != NULL && child_lvalue.data != NULL) {
-                        cg_tuple_emit_cleanup_push_slots(out,
+                        cg_value_emit_cleanup_push_slots(out,
                                                          child_prefix.data,
                                                          child_lvalue.data,
-                                                         tuple_type->fields[i].type);
+                                                         value_type->fields[i].type);
                     }
                     buf_free(&child_prefix);
                     buf_free(&child_lvalue);
@@ -31939,7 +31971,7 @@ static void cg_tuple_emit_cleanup_push_slots(Buf *out,
     }
 }
 
-static void cg_tuple_emit_cleanup_zero_slots(Buf *out,
+static void cg_value_emit_cleanup_zero_slots(Buf *out,
                                              const char *lvalue_expr,
                                              const CGType *type) {
     switch (cgtype_value_kind(type)) {
@@ -31953,16 +31985,16 @@ static void cg_tuple_emit_cleanup_zero_slots(Buf *out,
                 buf_append_fmt(out, "memset(&%s, 0, sizeof %s); ", lvalue_expr, lvalue_expr);
                 return;
             }
-            if (cg_type_is_tuple_user(type)) {
-                const UserType *tuple_type = type->user;
-                for (size_t i = 0; i < tuple_type->field_count; ++i) {
+            if (cg_type_is_value_semantics(type)) {
+                const UserType *value_type = type->user;
+                for (size_t i = 0; i < value_type->field_count; ++i) {
                     Buf child_lvalue;
                     buf_init(&child_lvalue);
-                    buf_append_fmt(&child_lvalue, "%s.%s", lvalue_expr, tuple_type->fields[i].c_name);
+                    buf_append_fmt(&child_lvalue, "%s.%s", lvalue_expr, value_type->fields[i].c_name);
                     if (child_lvalue.data != NULL) {
-                        cg_tuple_emit_cleanup_zero_slots(out,
+                        cg_value_emit_cleanup_zero_slots(out,
                                                          child_lvalue.data,
-                                                         tuple_type->fields[i].type);
+                                                         value_type->fields[i].type);
                     }
                     buf_free(&child_lvalue);
                 }
@@ -31971,16 +32003,16 @@ static void cg_tuple_emit_cleanup_zero_slots(Buf *out,
     }
 }
 
-static void cg_tuple_aggregate_emit_cleanup_push(Buf *out,
+static void cg_value_aggregate_emit_cleanup_push(Buf *out,
                                                  const char *cname,
                                                  const CGType *type) {
-    cg_tuple_emit_cleanup_push_slots(out, cname, cname, type);
+    cg_value_emit_cleanup_push_slots(out, cname, cname, type);
 }
 
-static void cg_tuple_aggregate_emit_cleanup_zero(Buf *out,
+static void cg_value_aggregate_emit_cleanup_zero(Buf *out,
                                                  const char *cname,
                                                  const CGType *type) {
-    cg_tuple_emit_cleanup_zero_slots(out, cname, type);
+    cg_value_emit_cleanup_zero_slots(out, cname, type);
 }
 
 static size_t cg_field_managed_descriptor_count(CG *cg, const CGType *t,
@@ -32153,10 +32185,10 @@ static bool cg_emit_user_type_abi_surface(CG *cg, const UserType *t) {
     return true;
 }
 
-static size_t cg_tuple_aggregate_top_level_slot_count(const UserType *t) {
+static size_t cg_aggregate_top_level_slot_count(const UserType *t) {
     size_t count = 0U;
 
-    if (!cg_user_type_is_tuple(t)) {
+    if (!cg_user_type_is_value_semantics(t)) {
         return 0U;
     }
     for (size_t i = 0; i < t->field_count; ++i) {
@@ -32167,16 +32199,16 @@ static size_t cg_tuple_aggregate_top_level_slot_count(const UserType *t) {
     return count;
 }
 
-/* Emit field-wise tuple equality used by both trivial and aggregate tuple
- * descriptors. Field descriptors preserve string, float, and nested aggregate
- * semantics without changing non-generic call sites. */
-static bool cg_emit_tuple_equal_function(CG *cg,
+/* Emit field-wise value-type equality used by both trivial and aggregate
+ * descriptors (tuple and @value type). Field descriptors preserve string,
+ * float, and nested aggregate semantics without changing non-generic call sites. */
+static bool cg_emit_equal_function(CG *cg,
                                          UserType *t,
                                          const char *equal_fn_name) {
     Buf *td = &cg->type_defs;
 
     if (equal_fn_name == NULL) {
-        return cg_fail(cg, t->decl->token, "CE0364", "codegen: missing tuple equality function name");
+        return cg_fail(cg, t->decl->token, "CE0364", "codegen: missing value-type equality function name");
     }
     buf_append_fmt(td,
         "static bool %s(const void *left, const void *right) {\n"
@@ -32233,7 +32265,7 @@ static bool cg_emit_tuple_equal_function(CG *cg,
                 if (descriptor_expr == NULL) {
                     return cg_fail(cg,
                                    t->decl->token,
-                                   "CE0365", "codegen: tuple field '%s' has no managed equality descriptor",
+                                   "CE0365", "codegen: value-type field '%s' has no managed equality descriptor",
                                    field->feng_name);
                 }
                 buf_append_fmt(td,
@@ -32257,12 +32289,12 @@ static bool cg_emit_tuple_equal_function(CG *cg,
                 if (descriptor_name == NULL) {
                     return cg_fail(cg,
                                    t->decl->token,
-                                   "CE0366", "codegen: tuple field '%s' has no aggregate equality descriptor",
+                                   "CE0366", "codegen: value-type field '%s' has no aggregate equality descriptor",
                                    field->feng_name);
                 }
                 buf_append_fmt(td,
                     "    if ((&%s)->equal_fn == NULL) {\n"
-                    "        feng_panic(\"tuple equality: aggregate field '%s' has no equality descriptor\");\n"
+                    "        feng_panic(\"value-type equality: aggregate field '%s' has no equality descriptor\");\n"
                     "    }\n"
                     "    if (!(&%s)->equal_fn(&_left->%s, &_right->%s)) return false;\n",
                     descriptor_name,
@@ -32278,9 +32310,9 @@ static bool cg_emit_tuple_equal_function(CG *cg,
     return true;
 }
 
-static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
+static void cg_emit_value_type_definition(CG *cg, UserType *t) {
     Buf *td = &cg->type_defs;
-    size_t slot_count = cg_tuple_aggregate_top_level_slot_count(t);
+    size_t slot_count = cg_aggregate_top_level_slot_count(t);
     bool needs_agg_desc = slot_count > 0U ||
         (t->is_generic_instance && t->generic_context_type_param_count == 0U);
     Buf equal_fn_name;
@@ -32293,7 +32325,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
         (void)cg_fail(cg, t->decl->token, "IE0001", "codegen: out of memory");
         return;
     }
-    if (!cg_emit_tuple_equal_function(cg, t, equal_fn_name.data)) {
+    if (!cg_emit_equal_function(cg, t, equal_fn_name.data)) {
         buf_free(&equal_fn_name);
         return;
     }
@@ -32531,7 +32563,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
                    "    FengManagedHeader _hdr;\n"
                    "    struct %s value;\n"
                    "};\n\n",
-                   t->c_tuple_box_struct_name,
+                   t->c_value_box_struct_name,
                    t->c_struct_name);
     if (box_pointer_slot_count > 0U) {
         Buf value_base;
@@ -32539,7 +32571,7 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
         buf_init(&value_base);
         buf_append_fmt(&value_base,
                        "offsetof(struct %s, value)",
-                       t->c_tuple_box_struct_name);
+                       t->c_value_box_struct_name);
         if (value_base.data == NULL) {
             (void)cg_fail(cg, t->decl->token, "IE0001", "codegen: out of memory");
             return;
@@ -32549,39 +32581,43 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
                        "    struct %s *_box = (struct %s *)_self;\n"
                        "    feng_aggregate_release(&_box->value, &%s);\n"
                        "}\n\n",
-                       t->c_tuple_box_release_children_name,
-                       t->c_tuple_box_struct_name,
-                       t->c_tuple_box_struct_name,
+                       t->c_value_box_release_children_name,
+                       t->c_value_box_struct_name,
+                       t->c_value_box_struct_name,
                        t->c_aggregate_desc_name);
         buf_append_fmt(td,
                        "static const FengManagedFieldDescriptor %s__managed_fields[] = {\n",
-                       t->c_tuple_box_desc_name);
+                       t->c_value_box_desc_name);
         cg_emit_aggregate_pointer_slot_rows(td,
                                             value_base.data,
                                             &tuple_value_type);
         buf_append_cstr(td, "};\n\n");
         buf_free(&value_base);
     }
-    buf_append_fmt(td,
-        "%sconst FengTypeDescriptor %s = {\n"
-        "    .name = \"%s.%s.__tuple_box\",\n"
-        "    .size = sizeof(struct %s),\n"
-        "    .finalizer = NULL,\n"
-        "    .release_children = %s,\n"
-        "    .is_potentially_cyclic = %s,\n"
-        "    .managed_field_count = %zu,\n",
-        t->is_generic_instance ? "__attribute__((weak)) " : "",
-        t->c_tuple_box_desc_name,
-        cg->module_dot_name,
-        t->feng_name,
-        t->c_tuple_box_struct_name,
-        box_pointer_slot_count > 0U ? t->c_tuple_box_release_children_name : "NULL",
-        box_pointer_slot_count > 0U ? "true" : "false",
-        box_pointer_slot_count);
+    {
+        const char *box_kind = cg_user_type_is_tuple(t) ? "__tuple_box" : "__value_box";
+        buf_append_fmt(td,
+            "%sconst FengTypeDescriptor %s = {\n"
+            "    .name = \"%s.%s.%s\",\n"
+            "    .size = sizeof(struct %s),\n"
+            "    .finalizer = NULL,\n"
+            "    .release_children = %s,\n"
+            "    .is_potentially_cyclic = %s,\n"
+            "    .managed_field_count = %zu,\n",
+            t->is_generic_instance ? "__attribute__((weak)) " : "",
+            t->c_value_box_desc_name,
+            cg->module_dot_name,
+            t->feng_name,
+            box_kind,
+            t->c_value_box_struct_name,
+            box_pointer_slot_count > 0U ? t->c_value_box_release_children_name : "NULL",
+            box_pointer_slot_count > 0U ? "true" : "false",
+            box_pointer_slot_count);
+    }
     if (box_pointer_slot_count > 0U) {
         buf_append_fmt(td,
                        "    .managed_fields = %s__managed_fields,\n",
-                       t->c_tuple_box_desc_name);
+                       t->c_value_box_desc_name);
     } else {
         buf_append_cstr(td, "    .managed_fields = NULL,\n");
     }
@@ -32591,9 +32627,9 @@ static void cg_emit_tuple_type_definition(CG *cg, UserType *t) {
 }
 
 static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
-    if (cg_user_type_is_tuple(t)) {
+    if (cg_user_type_is_value_semantics(t)) {
         if (t->field_count == 0U) {
-            /* Zero-field tuples (e.g. None()) have no type dependencies and
+            /* Zero-field value types (e.g. None()) have no type dependencies and
              * may be embedded by value in union spec value structs emitted
              * later in the same headers section. Emit the full definition
              * here so the type is complete when needed. */
@@ -32601,15 +32637,15 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
             buf_append_cstr(&cg->headers, "    unsigned char _unit;\n");
             buf_append_cstr(&cg->headers, "};\n");
         } else {
-            /* Non-empty tuples may reference spec value types in their
+            /* Non-empty value types may reference spec value types in their
              * fields, so only forward-declare here. The full body is
-             * emitted after spec forwards (see cg_emit_tuple_type_body). */
+             * emitted after spec forwards. */
             buf_append_fmt(&cg->headers, "struct %s;\n", t->c_struct_name);
         }
 
-        bool tuple_needs_agg = cg_tuple_aggregate_top_level_slot_count(t) > 0U ||
+        bool value_needs_agg = cg_aggregate_top_level_slot_count(t) > 0U ||
             (t->is_generic_instance && t->generic_context_type_param_count == 0U);
-        const char *descriptor_type = tuple_needs_agg
+        const char *descriptor_type = value_needs_agg
                                           ? "FengAggregateDescriptor"
                                           : "FengTrivialDescriptor";
 
@@ -32619,8 +32655,8 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
                        t->c_aggregate_desc_name);
         buf_append_fmt(&cg->headers,
                        "struct %s;\nextern const FengTypeDescriptor %s;\n",
-                       t->c_tuple_box_struct_name,
-                       t->c_tuple_box_desc_name);
+                       t->c_value_box_struct_name,
+                       t->c_value_box_desc_name);
         return;
     }
     buf_append_fmt(&cg->headers, "struct %s;\n", t->c_struct_name);
@@ -32634,8 +32670,8 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
 /* Emit struct body, finalizer, and descriptor into `type_defs`. */
 static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     Buf *td = &cg->type_defs;
-    if (cg_user_type_is_tuple(t)) {
-        cg_emit_tuple_type_definition(cg, t);
+    if (cg_user_type_is_value_semantics(t)) {
+        cg_emit_value_type_definition(cg, t);
         return;
     }
     buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
@@ -33350,7 +33386,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                     break;
                 case CG_TYPE_OBJECT:
                     if (ft->user) {
-                        if (cg_user_type_is_tuple(ft->user)) {
+                        if (cg_user_type_is_value_semantics(ft->user)) {
                             char lvalue[512];
                             Buf init;
 
@@ -35525,9 +35561,9 @@ static void cg_dispose(CG *cg) {
         free(ut->c_aggregate_slots_name);
         free(ut->c_aggregate_default_name);
         free(ut->c_aggregate_desc_name);
-        free(ut->c_tuple_box_struct_name);
-        free(ut->c_tuple_box_desc_name);
-        free(ut->c_tuple_box_release_children_name);
+        free(ut->c_value_box_struct_name);
+        free(ut->c_value_box_desc_name);
+        free(ut->c_value_box_release_children_name);
         free(ut->c_abi_layout_name);
         free(ut->c_abi_ptr_name);
         free(ut->c_abi_base_offset_name);

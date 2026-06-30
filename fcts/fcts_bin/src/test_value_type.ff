@@ -1,0 +1,131 @@
+module fcts_bin;
+
+import std.io;
+import std.test;
+
+// trivial @value type (all scalar fields)
+@value
+type VPoint {
+  var x: int;
+  var y: int;
+}
+
+// aggregate @value type (contains managed field)
+@value
+type VPerson {
+  var name: string;
+  var age: int;
+}
+
+// nested @value type
+@value
+type VRect {
+  var origin: VPoint;
+  var width: int;
+  var height: int;
+}
+
+// function taking @value type parameter
+func vpoint_sum(p: VPoint): int {
+  return p.x + p.y;
+}
+
+// function returning @value type
+func make_vpoint(x: int, y: int): VPoint {
+  var p: VPoint;
+  p.x = x;
+  p.y = y;
+  return p;
+}
+
+/** @value type 测试 */
+open func test_value_type() {
+  describe("value-type", () {
+    test("trivial @value type default init", () {
+      var p: VPoint;
+      assert(p.x == 0 && p.y == 0, "trivial @value type default init");
+    });
+
+    test("trivial @value type field mutation", () {
+      var p: VPoint;
+      p.x = 10;
+      p.y = 20;
+      assert(p.x == 10 && p.y == 20, "trivial @value type field mutation");
+    });
+
+    test("trivial @value type value copy", () {
+      var p1: VPoint;
+      p1.x = 1;
+      p1.y = 2;
+      var p2: VPoint = p1;
+      p2.x = 99;
+      assert(p1.x == 1 && p1.y == 2, "original unchanged after value copy");
+      assert(p2.x == 99 && p2.y == 2, "copy has new value");
+    });
+
+    test("trivial @value type as function parameter", () {
+      var p: VPoint;
+      p.x = 3;
+      p.y = 4;
+      assert(vpoint_sum(p) == 7, "trivial @value type as function parameter");
+    });
+
+    test("trivial @value type returned from function", () {
+      let p = make_vpoint(5, 6);
+      assert(p.x == 5 && p.y == 6, "trivial @value type returned from function");
+    });
+
+    test("trivial @value type equality", () {
+      var p1: VPoint;
+      p1.x = 1;
+      p1.y = 2;
+      var p2: VPoint;
+      p2.x = 1;
+      p2.y = 2;
+      var p3: VPoint;
+      p3.x = 1;
+      p3.y = 3;
+      assert(p1 == p2, "equal @value types");
+      assert(p1 != p3, "unequal @value types");
+    });
+
+    test("aggregate @value type with string field", () {
+      var person: VPerson;
+      person.name = "Alice";
+      person.age = 25;
+      assert(person.name == "Alice" && person.age == 25,
+             "aggregate @value type with string field");
+    });
+
+    test("aggregate @value type value copy", () {
+      var p1: VPerson;
+      p1.name = "Bob";
+      p1.age = 30;
+      var p2: VPerson = p1;
+      p2.name = "Charlie";
+      assert(p1.name == "Bob", "original string unchanged after value copy");
+      assert(p2.name == "Charlie", "copy has new string");
+    });
+
+    test("nested @value type field access", () {
+      var rect: VRect;
+      rect.origin.x = 10;
+      rect.origin.y = 20;
+      rect.width = 100;
+      rect.height = 200;
+      assert(rect.origin.x == 10 && rect.origin.y == 20,
+             "nested @value type field access");
+      assert(rect.width == 100 && rect.height == 200,
+             "outer @value type field access");
+    });
+
+    test("let @value type field immutability", () {
+      var p: VPoint;
+      p.x = 5;
+      p.y = 10;
+      let q: VPoint = p;
+      // q.x and q.y should not be mutable
+      assert(q.x == 5 && q.y == 10, "let @value type preserves values");
+    });
+  });
+}
