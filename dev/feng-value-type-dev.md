@@ -984,4 +984,9 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 - [ ] tuple 方法调用站 materialize 正确性
 - [ ] 全量回归（tuple 方法 ABI 变更，需重点验证 tuple fit 相关用例）
 
+**注意**
+
+- 每项任务完成并全量回归通过后，输出 commit message，并停下来等人工 Review 和下一下指令
+- 如果遇到不确认的问题由人工决策
+
 > **后续**：全量交付并通过回归后，将本草案迁入语言权威规范（`docs/`），按 CLAUDE.md「先文档」原则启动；迁入前本草案为唯一设计来源。
