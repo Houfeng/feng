@@ -1209,9 +1209,9 @@ typedef struct CG {
         const struct UserType *type;
         const struct UserSpec *spec;
         char *c_var;
-    } *tuple_box_witness_tables;
-    size_t tuple_box_witness_table_count;
-    size_t tuple_box_witness_table_capacity;
+    } *value_box_witness_tables;
+    size_t value_box_witness_table_count;
+    size_t value_box_witness_table_capacity;
     bool scalar_box_support_emitted;
     size_t subject_witness_counter;
     ModuleBinding *module_bindings;
@@ -29044,10 +29044,10 @@ static bool cg_ensure_witness_instance_for_subject_key(
                                       out_var);
 }
 
-/* Tuple object-form spec coercion stores the subject in a managed box, while
- * generic constraint dispatch still passes an address of the by-value tuple.
- * This separate witness table reads `box->value` before forwarding to the
- * normal fit method body. Serves both tuple and @value type decls. */
+/* Value-semantics (tuple or @value) spec coercion stores the subject in a
+ * managed box, while generic constraint dispatch still passes an address of
+ * the by-value struct. This separate witness table reads `box->value` before
+ * forwarding to the normal fit method body. Serves both tuple and @value. */
 static bool cg_ensure_value_box_witness_instance(CG *cg,
                                                  const UserType *t,
                                                  const UserSpec *s,
@@ -29058,11 +29058,11 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
         return false;
     }
     for (size_t cached_index = 0U;
-         cached_index < cg->tuple_box_witness_table_count;
+         cached_index < cg->value_box_witness_table_count;
          ++cached_index) {
-        if (cg->tuple_box_witness_tables[cached_index].type == t &&
-            cg->tuple_box_witness_tables[cached_index].spec == s) {
-            *out_var = cg->tuple_box_witness_tables[cached_index].c_var;
+        if (cg->value_box_witness_tables[cached_index].type == t &&
+            cg->value_box_witness_tables[cached_index].spec == s) {
+            *out_var = cg->value_box_witness_tables[cached_index].c_var;
             return true;
         }
     }
@@ -29083,10 +29083,12 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
+    const char *box_kind = cg_user_type_is_tuple(t) ? "tuple_box" : "value_box";
+
     Buf prefix;
     buf_init(&prefix);
-    buf_append_fmt(&prefix, "FengSpecThunk__%s__%s__tuple_box__as__%s__%s",
-                   cg->module_mangle, t_san, cg->module_mangle, s_san);
+    buf_append_fmt(&prefix, "FengSpecThunk__%s__%s__%s__as__%s__%s",
+                   cg->module_mangle, t_san, box_kind, cg->module_mangle, s_san);
     if (prefix.data == NULL) {
         free(t_san);
         free(s_san);
@@ -29104,14 +29106,14 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
             if (i >= witness->member_count) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "CE0330", "codegen: internal: witness slot count mismatch for tuple box (%s, %s)",
+                    "CE0330", "codegen: internal: witness slot count mismatch for value box (%s, %s)",
                     t->feng_name, s->feng_name);
             }
             wm = &witness->members[i];
             if (wm->impl_member == NULL) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "CE0331", "codegen: tuple type '%s' is missing an implementation for spec '%s' member '%s'",
+                    "CE0331", "codegen: value type '%s' is missing an implementation for spec '%s' member '%s'",
                     t->feng_name, s->feng_name, sm->feng_name);
             }
             binding.source_kind = wm->source_kind;
@@ -29123,7 +29125,7 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                 if (uf == NULL || uf->target != t) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
-                        "CE0332", "codegen: internal: tuple fit decl for spec '%s' member '%s' not registered for type '%s'",
+                        "CE0332", "codegen: internal: value type fit decl for spec '%s' member '%s' not registered for type '%s'",
                         s->feng_name, sm->feng_name, t->feng_name);
                 }
                 binding.fit = uf;
@@ -29136,7 +29138,7 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                 if (binding.method == NULL) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
-                        "CE0333", "codegen: internal: tuple fit method '%s' not found in fit body for type '%s'",
+                        "CE0333", "codegen: internal: value type fit method '%s' not found in fit body for type '%s'",
                         sm->feng_name, t->feng_name);
                 }
             } else if (sm->kind == USM_KIND_METHOD) {
@@ -29182,7 +29184,7 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
             if (sm->kind != USM_KIND_METHOD || fm == NULL) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "CE0336", "codegen: tuple spec member '%s' must be implemented by a fit method",
+                    "CE0336", "codegen: value type spec member '%s' must be implemented by a fit method",
                     sm->feng_name);
             }
 
@@ -29399,7 +29401,7 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
             binding.field == NULL) {
             buf_free(&prefix); free(t_san); free(s_san);
             return cg_fail(cg, blame,
-                "CE0337", "codegen: tuple spec field '%s' must be satisfied by a tuple field",
+                "CE0337", "codegen: value type spec field '%s' must be satisfied by a value type field",
                 sm->feng_name);
         }
 
@@ -29424,15 +29426,15 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
         if (sm->is_var) {
             buf_free(&prefix); free(t_san); free(s_san);
             return cg_fail(cg, blame,
-                "CE0338", "codegen: tuple fields are immutable and cannot satisfy var spec field '%s'",
+                "CE0338", "codegen: value type field is immutable and cannot satisfy var spec field '%s'",
                 sm->feng_name);
         }
     }
 
     Buf var;
     buf_init(&var);
-    buf_append_fmt(&var, "FengWitness__%s__%s__tuple_box__as__%s__%s",
-                   cg->module_mangle, t_san, cg->module_mangle, s_san);
+    buf_append_fmt(&var, "FengWitness__%s__%s__%s__as__%s__%s",
+                   cg->module_mangle, t_san, box_kind, cg->module_mangle, s_san);
     if (var.data == NULL) {
         buf_free(&prefix); free(t_san); free(s_san);
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
@@ -29457,25 +29459,25 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
     }
     buf_append_cstr(fd, "};\n\n");
 
-    if (cg->tuple_box_witness_table_count + 1U > cg->tuple_box_witness_table_capacity) {
-        size_t cap = cg->tuple_box_witness_table_capacity
-                         ? cg->tuple_box_witness_table_capacity * 2U
+    if (cg->value_box_witness_table_count + 1U > cg->value_box_witness_table_capacity) {
+        size_t cap = cg->value_box_witness_table_capacity
+                         ? cg->value_box_witness_table_capacity * 2U
                          : 4U;
-        void *p = realloc(cg->tuple_box_witness_tables,
-                          cap * sizeof *cg->tuple_box_witness_tables);
+        void *p = realloc(cg->value_box_witness_tables,
+                          cap * sizeof *cg->value_box_witness_tables);
 
         if (p == NULL) {
             buf_free(&prefix); buf_free(&var); free(t_san); free(s_san);
             return false;
         }
-        cg->tuple_box_witness_tables = p;
-        cg->tuple_box_witness_table_capacity = cap;
+        cg->value_box_witness_tables = p;
+        cg->value_box_witness_table_capacity = cap;
     }
-    cg->tuple_box_witness_tables[cg->tuple_box_witness_table_count].type = t;
-    cg->tuple_box_witness_tables[cg->tuple_box_witness_table_count].spec = s;
-    cg->tuple_box_witness_tables[cg->tuple_box_witness_table_count].c_var = var.data;
+    cg->value_box_witness_tables[cg->value_box_witness_table_count].type = t;
+    cg->value_box_witness_tables[cg->value_box_witness_table_count].spec = s;
+    cg->value_box_witness_tables[cg->value_box_witness_table_count].c_var = var.data;
     *out_var = var.data;
-    cg->tuple_box_witness_table_count++;
+    cg->value_box_witness_table_count++;
 
     buf_free(&prefix);
     free(t_san);
@@ -31249,21 +31251,21 @@ static bool cg_emit_all_programs(CG *cg,
     for (size_t i = 0; i < cg->user_spec_count; i++) {
         cg_emit_user_spec_forward(cg, &cg->user_specs[i]);
     }
-    /* Emit full struct bodies for non-empty tuple types into headers.
-     * These come after spec_forward so that tuple fields referencing spec
-     * value types find them complete. Zero-field tuples were already
-     * emitted in cg_emit_user_type_forward above. */
+    /* Emit full struct bodies for non-empty value-semantics types (tuple or
+     * @value) into headers. These come after spec_forward so that fields
+     * referencing spec value types find them complete. Zero-field types were
+     * already emitted in cg_emit_user_type_forward above. */
     for (size_t i = 0; i < cg->user_type_count; i++) {
         const UserType *t = &cg->user_types[i];
         if (!cg_user_type_is_value_semantics(t) || t->field_count == 0U) continue;
-        const UserType *tup_open = t->is_generic_instance
+        const UserType *open_inst = t->is_generic_instance
             ? cg_find_open_generic_instance(cg, t) : NULL;
         buf_append_fmt(&cg->headers, "struct %s {\n", t->c_struct_name);
         for (size_t fi = 0; fi < t->field_count; fi++) {
             bool needs_pad = false;
-            if (tup_open != NULL && fi < tup_open->field_count &&
-                tup_open->fields[fi].type != NULL &&
-                tup_open->fields[fi].type->kind == CG_TYPE_GENERIC_PARAM) {
+            if (open_inst != NULL && fi < open_inst->field_count &&
+                open_inst->fields[fi].type != NULL &&
+                open_inst->fields[fi].type->kind == CG_TYPE_GENERIC_PARAM) {
                 switch (t->fields[fi].type->kind) {
                     case CG_TYPE_BOOL:
                     case CG_TYPE_I8:  case CG_TYPE_U8:
@@ -36157,10 +36159,10 @@ static void cg_dispose(CG *cg) {
         free(cg->spec_slot_witness_tables[i].c_var);
     }
     free(cg->spec_slot_witness_tables);
-    for (size_t i = 0; i < cg->tuple_box_witness_table_count; ++i) {
-        free(cg->tuple_box_witness_tables[i].c_var);
+    for (size_t i = 0; i < cg->value_box_witness_table_count; ++i) {
+        free(cg->value_box_witness_tables[i].c_var);
     }
-    free(cg->tuple_box_witness_tables);
+    free(cg->value_box_witness_tables);
     for (size_t i = 0; i < cg->module_binding_count; i++) {
         free(cg->module_bindings[i].feng_name);
         free(cg->module_bindings[i].c_name);
