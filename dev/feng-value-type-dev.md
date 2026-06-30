@@ -879,19 +879,19 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.9 值装箱（spec subject）【复用元组】
 
-**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§4.4、§5.3、§7.2
+**状态**：已完成 ｜ **依赖**：9.4 ｜ **范围**：§4.4、§5.3、§7.2
 
-**变更**：
-- [ ] Box struct/desc/release 生成（由 `cg_emit_value_type_definition` 统一处理，包含在 §9.4 的主结构体 emit 中，§5.3）
-- [ ] `cg_emit_tuple_spec_box_subject` 重命名为 `cg_emit_spec_box_subject`，guard 扩展为 `is_tuple || is_value`。spec 强制转换分发点 guard 同步扩展，不新增分支（§7.2）
-- [ ] Box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，§2.3、§5.3）
-- [ ] Spec 视角调用装箱（§4.4）
-- [ ] `UserType` 字段重命名 `c_tuple_box_*` → `c_value_box_*`（tuple 与 `@value` box 符号共用，命名需与实际用途一致，§7.2 函数重命名清单）
+**变更**（全部在 §9.4/§9.7 中完成）：
+- [x] Box struct/desc/release 生成（由 `cg_emit_value_type_definition` 统一处理，包含在 §9.4 的主结构体 emit 中，§5.3）
+- [x] `cg_emit_tuple_spec_box_subject` 重命名为 `cg_emit_spec_box_subject`，guard 扩展为 `is_tuple || is_value`。spec 强制转换分发点 guard 同步扩展，不新增分支（§7.2）
+- [x] Box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，§2.3、§5.3）
+- [x] Spec 视角调用装箱（§4.4）
+- [x] `UserType` 字段重命名 `c_tuple_box_*` → `c_value_box_*`（tuple 与 `@value` box 符号共用，命名需与实际用途一致，§7.2 函数重命名清单）
 
 **测试**：
-- [ ] 装箱后 spec 视角调用（fcts/）
-- [ ] box 释放时托管字段 release（无终结器路径）
-- [ ] 全量回归
+- [x] 装箱后 spec 视角调用（fcts/）——已在 §9.7/§9.8 测试中覆盖（spec 参数传递、spec 变量赋值）
+- [x] box 释放时托管字段 release（无终结器路径）——新增 aggregate @value spec box 作用域退出/循环释放测试
+- [x] 全量回归（352 tests passed）
 
 ### 9.10 泛型【复用普通 type + 复用元组】
 

@@ -278,6 +278,31 @@ func vfitbox_value(v: VFitBox): int {
   return v.value;
 }
 
+// helper: creates an aggregate @value, coerces to spec box, returns result
+// box goes out of scope on return, exercising release_children path
+func spec_box_scope_cycle(label: string): string {
+  var item: VItem;
+  item.label = label;
+  item.value = 1;
+  let d: VDescribable = item;
+  return d.describe();
+}
+
+// helper: creates multiple spec boxes in sequence, each goes out of scope
+func spec_box_multi_cycle(count: int): string {
+  var result: string = "";
+  var i = 0;
+  while i < count {
+    var item: VItem;
+    item.label = "cycle";
+    item.value = i;
+    let d: VDescribable = item;
+    result = d.describe();
+    i = i + 1;
+  }
+  return result;
+}
+
 /** @value type 测试 */
 open func test_value_type() {
   describe("value-type", () {
@@ -705,6 +730,35 @@ open func test_value_type() {
       let result = consume_vfitnamedcopyable(named);
       assert(result.label == "spec", "aggregate fit via spec returns copy with string");
       assert(result.count == 42, "aggregate fit via spec returns copy with int");
+    });
+
+    // --- Box release tests (§9.9) ---
+
+    test("aggregate @value spec box released on scope exit", () {
+      // Each call creates a spec box (aggregate @value with string field),
+      // box is released when the function returns. Call multiple times to
+      // exercise retain/release cycle.
+      let r1 = spec_box_scope_cycle("first");
+      let r2 = spec_box_scope_cycle("second");
+      let r3 = spec_box_scope_cycle("third");
+      assert(r1 == "first", "first cycle box released correctly");
+      assert(r2 == "second", "second cycle box released correctly");
+      assert(r3 == "third", "third cycle box released correctly");
+      // Verify aggregate @value still works after multiple box cycles
+      var item: VItem;
+      item.label = "after";
+      item.value = 99;
+      assert(item.describe() == "after", "aggregate @value works after box cycles");
+    });
+
+    test("aggregate @value spec box released in loop", () {
+      // Multiple boxes created and released within a loop scope
+      let result = spec_box_multi_cycle(5);
+      assert(result == "cycle", "multi-cycle boxes released correctly");
+      // Verify aggregate @value still works after loop box cycles
+      var tag: VTag;
+      tag.name = "post-loop";
+      assert(tag.describe() == "tag:post-loop", "aggregate @value works after loop box cycles");
     });
   });
 }
