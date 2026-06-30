@@ -842,16 +842,23 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.7 Spec 声明头满足【复用普通 type，witness 复用元组】
 
-**状态**：未开始 ｜ **依赖**：9.4、9.6 ｜ **范围**：§4.1、§7.2
+**状态**：已完成 ｜ **依赖**：9.4、9.6 ｜ **范围**：§4.1、§7.2
 
 **变更**：
-- [ ] 复用普通 type 声明头满足 spec 路径
-- [ ] witness 生成：复用元组路径（`cg_ensure_value_box_witness_instance`，由原 `cg_ensure_tuple_box_witness_instance` 重命名 + guard 扩展）。@value 逃逸为 spec subject 时是 box（`_hdr + value`），需要与 tuple 相同的解包逻辑，**不走**普通 type 的 `cg_ensure_witness_instance_for_type`
+- [x] 复用普通 type 声明头满足 spec 路径
+- [x] witness 生成：复用元组路径（`cg_ensure_value_box_witness_instance`，由原 `cg_ensure_tuple_box_witness_instance` 重命名 + guard 扩展）。@value 逃逸为 spec subject 时是 box（`_hdr + value`），需要与 tuple 相同的解包逻辑，**不走**普通 type 的 `cg_ensure_witness_instance_for_type`
+- [x] 绑定解析扩展：新增 TYPE_OWN_METHOD 分支（@value type 自己的方法满足 spec 方法），tuple 保持 CE0335 拒绝
+- [x] TYPE_OWN_METHOD thunk emit：@value thunk 传 `&box->value`（指针），调用 `um->c_name`
+- [x] FIT_METHOD thunk self 传参修正：@value thunk 传 `&box->value`（指针），tuple 保持 `box->value`（值）
+- [x] TYPE_OWN_FIELD getter 支持：@value type `let` 字段满足 spec `let` 字段
 
 **测试**：
-- [ ] 声明头满足 spec（fcts/）
-- [ ] witness 路径正确性
-- [ ] 全量回归
+- [x] 声明头满足 spec（fcts/）：VItem: VDescribable（TYPE_OWN_METHOD）
+- [x] witness 路径正确性：spec 参数传递（装箱 + thunk）、spec 变量赋值
+- [x] fit 方法通过 spec 调用（FIT_METHOD）：VTag fit VDescribable
+- [x] let 字段通过 spec 访问（TYPE_OWN_FIELD + TYPE_OWN_METHOD）：VWidget: VNamed
+- [x] 值语义保持：spec box 持有独立副本，原值可独立修改
+- [x] 全量回归
 
 ### 9.8 fit 扩展【复用普通 type，witness 复用元组】
 

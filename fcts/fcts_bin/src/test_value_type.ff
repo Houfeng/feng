@@ -138,6 +138,72 @@ func vpoint_method_sum(p: VPoint): int {
   return p.sum();
 }
 
+// --- Spec satisfaction types (§9.7) ---
+
+// spec for @value type declaration-head satisfaction (TYPE_OWN_METHOD)
+spec VDescribable {
+  func describe(): string;
+}
+
+// @value type satisfies spec via declaration head (own method)
+@value
+type VItem: VDescribable {
+  var label: string;
+  var value: int;
+
+  func describe(): string {
+    return self.label;
+  }
+
+  func getValue(): int {
+    return self.value;
+  }
+}
+
+// @value type satisfies spec via fit (FIT_METHOD)
+@value
+type VTag {
+  var name: string;
+}
+
+fit VTag: VDescribable {
+  func describe(): string {
+    return "tag:" + self.name;
+  }
+}
+
+// spec with let field for @value type
+spec VNamed {
+  let name: string;
+  func displayName(): string;
+}
+
+// @value type satisfies spec with let field + own method
+@value
+type VWidget: VNamed {
+  let name: string;
+  var id: int;
+
+  func VWidget(name: string, id: int) {
+    self.name = name;
+    self.id = id;
+  }
+
+  func displayName(): string {
+    return "[" + self.name + "]";
+  }
+}
+
+// function accepting spec parameter
+func consume_vdescribable(item: VDescribable): string {
+  return item.describe();
+}
+
+// function accepting VNamed spec parameter
+func consume_vnamed(item: VNamed): string {
+  return item.displayName();
+}
+
 /** @value type 测试 */
 open func test_value_type() {
   describe("value-type", () {
@@ -395,6 +461,70 @@ open func test_value_type() {
       // Test method call on param
       let s = vpoint_method_sum(p);
       assert(s == 30, "method call on function parameter works");
+    });
+
+    // --- Spec satisfaction tests (§9.7) ---
+
+    test("@value type declaration-head spec satisfaction (direct-call)", () {
+      var item: VItem;
+      item.label = "widget";
+      item.value = 42;
+      assert(item.describe() == "widget", "direct-call on @value type satisfying spec");
+    });
+
+    test("@value type passed as spec parameter (TYPE_OWN_METHOD)", () {
+      var item: VItem;
+      item.label = "test";
+      item.value = 7;
+      let result = consume_vdescribable(item);
+      assert(result == "test", "@value type coerced to spec parameter via own method");
+    });
+
+    test("@value type assigned to spec variable (TYPE_OWN_METHOD)", () {
+      var item: VItem;
+      item.label = "assigned";
+      item.value = 99;
+      let d: VDescribable = item;
+      assert(d.describe() == "assigned", "@value type assigned to spec variable");
+    });
+
+    test("@value type fit method via spec (FIT_METHOD)", () {
+      var tag: VTag;
+      tag.name = "important";
+      assert(tag.describe() == "tag:important", "fit method direct-call on @value type");
+    });
+
+    test("@value type fit passed as spec parameter (FIT_METHOD)", () {
+      var tag: VTag;
+      tag.name = "urgent";
+      let result = consume_vdescribable(tag);
+      assert(result == "tag:urgent", "@value type coerced to spec via fit method");
+    });
+
+    test("@value type fit assigned to spec variable (FIT_METHOD)", () {
+      var tag: VTag;
+      tag.name = "low";
+      let d: VDescribable = tag;
+      assert(d.describe() == "tag:low", "@value type with fit assigned to spec variable");
+    });
+
+    test("@value type spec with let field (TYPE_OWN_FIELD + TYPE_OWN_METHOD)", () {
+      let w = VWidget("Button", 1);
+      assert(w.displayName() == "[Button]", "direct-call on @value with let field");
+      let result = consume_vnamed(w);
+      assert(result == "[Button]", "@value with let field passed as spec parameter");
+    });
+
+    test("@value type spec value semantics preserved after coercion", () {
+      var item: VItem;
+      item.label = "original";
+      item.value = 1;
+      let d: VDescribable = item;
+      item.label = "modified";
+      item.value = 2;
+      // spec box holds a copy, so it should still show original
+      assert(d.describe() == "original", "spec box holds independent copy");
+      assert(item.describe() == "modified", "original value mutated independently");
     });
   });
 }

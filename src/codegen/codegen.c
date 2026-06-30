@@ -29139,6 +29139,22 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                         "CE0333", "codegen: internal: tuple fit method '%s' not found in fit body for type '%s'",
                         sm->feng_name, t->feng_name);
                 }
+            } else if (sm->kind == USM_KIND_METHOD) {
+                /* TYPE_OWN_METHOD: @value type's own method satisfies the spec.
+                 * Tuples have no methods of their own, so reject them here. */
+                if (!cg_user_type_is_value(t)) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return cg_fail(cg, blame,
+                        "CE0335", "codegen: tuple type '%s' cannot satisfy spec method '%s' without a fit method",
+                        t->feng_name, sm->feng_name);
+                }
+                binding.method = cg_user_type_method_by_member(t, wm->impl_member);
+                if (binding.method == NULL) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return cg_fail(cg, blame,
+                        "CE0342", "codegen: internal: type '%s' has no method '%s' to satisfy spec '%s'",
+                        t->feng_name, sm->feng_name, s->feng_name);
+                }
             } else if (sm->kind == USM_KIND_FIELD) {
                 binding.field = cg_user_type_field(t,
                                                    wm->impl_member->as.field.name.data,
@@ -29146,13 +29162,13 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                 if (binding.field == NULL) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
-                        "CE0334", "codegen: internal: tuple type '%s' has no field '%s' to satisfy spec '%s'",
+                        "CE0334", "codegen: internal: value type '%s' has no field '%s' to satisfy spec '%s'",
                         t->feng_name, sm->feng_name, s->feng_name);
                 }
             } else {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "CE0335", "codegen: tuple type '%s' cannot satisfy spec method '%s' without a fit method",
+                    "CE0335", "codegen: value type '%s' cannot satisfy spec member '%s' (unsupported source kind)",
                     t->feng_name, sm->feng_name);
             }
         } else if (!cg_resolve_witness_binding_fallback(cg, t, s, sm, blame, &binding)) {
@@ -29193,8 +29209,9 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                 buf_append_cstr(fd, ", void *_out) {\n    ");
                 cg_emit_c_type(fd, fm->return_type);
                 buf_append_fmt(fd,
-                               " _ret = %s(((struct %s *)_subject)->value",
+                               " _ret = %s(%s((struct %s *)_subject)->value",
                                fm->c_name,
+                               cg_user_type_is_value(t) ? "&" : "",
                                t->c_value_box_struct_name);
                 for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                     char pname[32];
@@ -29238,13 +29255,15 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
             buf_append_cstr(fd, ") {\n");
             if (sm->type->kind == CG_TYPE_VOID) {
                 buf_append_fmt(fd,
-                               "    %s(((struct %s *)_subject)->value",
+                               "    %s(%s((struct %s *)_subject)->value",
                                fm->c_name,
+                               cg_user_type_is_value(t) ? "&" : "",
                                t->c_value_box_struct_name);
             } else {
                 buf_append_fmt(fd,
-                               "    return %s(((struct %s *)_subject)->value",
+                               "    return %s(%s((struct %s *)_subject)->value",
                                fm->c_name,
+                               cg_user_type_is_value(t) ? "&" : "",
                                t->c_value_box_struct_name);
             }
             for (size_t pi = 0U; pi < sm->param_count; ++pi) {
@@ -29256,6 +29275,115 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                                                    fd,
                                                    sm->param_types[pi],
                                                    fm->param_types[pi],
+                                                   pname,
+                                                   blame)) {
+                    buf_free(&prefix); free(t_san); free(s_san);
+                    return false;
+                }
+            }
+            buf_append_cstr(fd, ");\n}\n\n");
+            continue;
+        }
+
+        /* TYPE_OWN_METHOD: @value type's own method satisfies the spec.
+         * Thunk passes &box->value (pointer) since @value methods take
+         * struct T *self. */
+        if (binding.source_kind == FENG_SPEC_WITNESS_SOURCE_TYPE_OWN_METHOD) {
+            const UserMethod *um = binding.method;
+
+            if (sm->kind != USM_KIND_METHOD || um == NULL) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return cg_fail(cg, blame,
+                    "CE0346", "codegen: spec method '%s' must be implemented by a method on '%s'",
+                    sm->feng_name, t->feng_name);
+            }
+
+            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                Buf *fp = &cg->fn_protos;
+                Buf *fd = &cg->witness_defs;
+
+                buf_append_fmt(fp, "static void %s__%s(void *_subject",
+                               prefix.data, sm->c_field_name);
+                for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                    buf_append_cstr(fp, ", ");
+                    cg_emit_c_type(fp, sm->param_types[pi]);
+                    buf_append_fmt(fp, " p%zu", pi);
+                }
+                buf_append_cstr(fp, ", void *_out);\n");
+
+                buf_append_fmt(fd, "static void %s__%s(void *_subject",
+                               prefix.data, sm->c_field_name);
+                for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                    buf_append_cstr(fd, ", ");
+                    cg_emit_c_type(fd, sm->param_types[pi]);
+                    buf_append_fmt(fd, " p%zu", pi);
+                }
+                buf_append_cstr(fd, ", void *_out) {\n    ");
+                cg_emit_c_type(fd, um->return_type);
+                buf_append_fmt(fd,
+                               " _ret = %s(&((struct %s *)_subject)->value",
+                               um->c_name,
+                               t->c_value_box_struct_name);
+                for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                    char pname[32];
+
+                    snprintf(pname, sizeof pname, "p%zu", pi);
+                    buf_append_cstr(fd, ", ");
+                    if (!cg_append_witness_forward_arg(cg,
+                                                       fd,
+                                                       sm->param_types[pi],
+                                                       um->param_types[pi],
+                                                       pname,
+                                                       blame)) {
+                        buf_free(&prefix); free(t_san); free(s_san);
+                        return false;
+                    }
+                }
+                buf_append_cstr(fd, ");\n    memcpy(_out, &_ret, sizeof _ret);\n}\n\n");
+                continue;
+            }
+
+            Buf *fp = &cg->fn_protos;
+            buf_append_cstr(fp, "static ");
+            cg_emit_c_type(fp, sm->type);
+            buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+            for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                buf_append_cstr(fp, ", ");
+                cg_emit_c_type(fp, sm->param_types[pi]);
+                buf_append_fmt(fp, " p%zu", pi);
+            }
+            buf_append_cstr(fp, ");\n");
+
+            Buf *fd = &cg->witness_defs;
+            buf_append_cstr(fd, "static ");
+            cg_emit_c_type(fd, sm->type);
+            buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
+            for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                buf_append_cstr(fd, ", ");
+                cg_emit_c_type(fd, sm->param_types[pi]);
+                buf_append_fmt(fd, " p%zu", pi);
+            }
+            buf_append_cstr(fd, ") {\n");
+            if (sm->type->kind == CG_TYPE_VOID) {
+                buf_append_fmt(fd,
+                               "    %s(&((struct %s *)_subject)->value",
+                               um->c_name,
+                               t->c_value_box_struct_name);
+            } else {
+                buf_append_fmt(fd,
+                               "    return %s(&((struct %s *)_subject)->value",
+                               um->c_name,
+                               t->c_value_box_struct_name);
+            }
+            for (size_t pi = 0U; pi < sm->param_count; ++pi) {
+                char pname[32];
+
+                snprintf(pname, sizeof pname, "p%zu", pi);
+                buf_append_cstr(fd, ", ");
+                if (!cg_append_witness_forward_arg(cg,
+                                                   fd,
+                                                   sm->param_types[pi],
+                                                   um->param_types[pi],
                                                    pname,
                                                    blame)) {
                     buf_free(&prefix); free(t_san); free(s_san);
