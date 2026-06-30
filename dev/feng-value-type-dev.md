@@ -886,13 +886,11 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 - [ ] `cg_emit_tuple_spec_box_subject` 重命名为 `cg_emit_spec_box_subject`，guard 扩展为 `is_tuple || is_value`。spec 强制转换分发点 guard 同步扩展，不新增分支（§7.2）
 - [ ] Box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，§2.3、§5.3）
 - [ ] Spec 视角调用装箱（§4.4）
-- [ ] Non-escape 优化（栈上地址作为 subject，不分配 box，§5.3）
 - [ ] `UserType` 字段重命名 `c_tuple_box_*` → `c_value_box_*`（tuple 与 `@value` box 符号共用，命名需与实际用途一致，§7.2 函数重命名清单）
 
 **测试**：
 - [ ] 装箱后 spec 视角调用（fcts/）
 - [ ] box 释放时托管字段 release（无终结器路径）
-- [ ] non-escape 优化（临时 coercion 不分配 box）
 - [ ] 全量回归
 
 ### 9.10 泛型【复用普通 type + 复用元组】
