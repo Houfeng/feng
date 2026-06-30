@@ -509,7 +509,9 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 **ABI 互操作（`@abi func` 形参/返回值）**：`@value @abi type` 作为 `@abi func` 形参或返回值时，按 ABI 结构体值语义直接传递，不经 `feng_object_new` 堆分配：
 
 - **形参**：`c_abi_value_name` 从 Feng 值提取 ABI 结构体。对 `@value @abi type`，Feng 值本身即 ABI 结构（无 header 偏移），提取为平凡字段拷贝；现有 `c_abi_value_name` 实现按字段逐个拷贝，对 `@value @abi` 语义正确。
-- **返回值**：`c_abi_box_name` 将 ABI 结构体装箱为 Feng 堆对象（`feng_object_new(&<c_desc_name>)`）。对 `@value @abi type` **不适用**——`@value type` 无 `c_desc_name`（值类型不生成 `FengTypeDescriptor`，仅有 trivial/aggregate 值描述符与 box 描述符），且 `@value` 值不堆分配。codegen 需在 `@abi func` 返回站点按 `@value` 标志跳过 `c_abi_box_name` 调用，直接按值返回 ABI 结构体给调用方绑定；`c_abi_box_name` 符号本身对 `@value @abi type` 不生成。
+- **返回值**：`c_abi_box_name` 将 ABI 结构体装箱为 Feng 堆对象（`feng_object_new(&<c_desc_name>)`）。对 `@value @abi type` **不适用**——`@value type` 不生成 `FengTypeDescriptor` 定义（`c_desc_name` 字段虽有值，但对应的 C 符号不会被 emit；值类型仅有 trivial/aggregate 值描述符 `c_aggregate_desc_name` 与 spec box 描述符 `c_value_box_desc_name`），且 `@value` 值不堆分配。codegen 需在 `@abi func` 返回站点按 `@value` 标志跳过 `c_abi_box_name` 调用，直接按值返回 ABI 结构体给调用方绑定；`c_abi_box_name` 符号本身对 `@value @abi type` 不生成。
+
+**普通 Feng 函数形参/返回值**：`@value type` 作为普通 Feng 函数形参时按值传递（`cg_aggregate_facts` 级联，`cg_emit_c_type` emit `struct X`），无需特殊处理；返回值同理（`cg_emit_return` 的 aggregate/trivial 分支级联自动处理）。仅 `@abi func` 需要上述额外互操作处理。
 
 ### 6.2 异常
 
@@ -599,6 +601,8 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 
 生成逻辑本身零修改——box struct 布局、release_children 生成、equal_fn 生成、witness thunk 生成对 tuple 和 @value type 完全一致；box descriptor 的 `finalizer` 字段：tuple 与 `@value type` 均一律 `NULL`（`@value type` 禁止终结器，见 §2.3、§5.3）。
 
+**后续优化：描述符名称统一**——当前 `UserType` 中 `c_desc_name`（`FengTypeDescriptor`，堆对象）与 `c_aggregate_desc_name`（`FengAggregateDescriptor`/`FengTrivialDescriptor`，值类型）是独立字段，每新增一种 `value_kind` 需增加字段，不符合 OCP。更好的设计是 `c_desc_name` 作为统一的描述符名称字段，`value_kind` 仅决定描述符 C 类型与后缀（`MANAGED_POINTER` → `FengTypeDesc__...`，`TRIVIAL` → `...__trivial_desc`，`AGGREGATE` → `...__aggregate_desc`）。本次实现先保持现有字段结构不变，后续单独重构。
+
 ### 7.3 Semantic
 
 | 变更项 | 工作量 | 说明 |
@@ -638,8 +642,8 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 |---|--------|------|---------|-----------|
 | 1 | **构造器分配** | 两个入口（`cg_emit_call` 构造路径、`FENG_EXPR_OBJECT_LITERAL`）硬编码 `feng_object_new` 堆分配 + `->` 字段初始化 + 构造器传堆指针。tuple 无构造器（字面量贴合），无可复用路径 | 新增 `cg_emit_value_type_construction`：栈声明 `struct X _val = {0}` + `&_val` 传 self（构造器签名与普通 type 一致，`struct X *self`） | 各入口 +1 行 `if (cg_user_type_is_value(ut))` 早期分支 |
 | 2 | **ABI surface** | `cg_emit_user_type_abi_surface` 生成 `c_abi_box_name`，函数体硬编码 `feng_object_new(&c_desc_name)`。tuple 不走此路径，无可复用函数 | 新增 `cg_emit_value_type_abi_surface`：仅生成 `c_abi_ptr_name`（offset=0）+ `c_abi_value_name`，不生成 `c_abi_box_name` | `cg_emit_user_type_abi_surface` 入口 +1 行早期返回 |
-| 3 | **成员访问与赋值** | `cg_emit_assign` 中 user type 字段赋值全部硬编码 `(recv)->field`（`->` 访问）。@value 变量是值（非指针），`->` 导致 C 编译错误。成员读取路径（`cg_emit_member`）已有 tuple `.` 分支，赋值路径缺失 | 在 `cg_emit_assign` 成员赋值路径（trivial/compound/aggregate/managed 四个分支）新增 @value 分发：`cg_type_is_value_user(recv.type)` 时使用 `(recv).field` 替代 `(recv)->field`。嵌套 @value 字段（如 `obj.value_field.x`）由成员访问递归自然处理 | `cg_emit_assign` 成员赋值段新增 @value 条件分支 |
-| 4 | **方法调用站 recv 取地址** | `cg_emit_call` 直接方法调用路径 emit `um->c_name(recv.c_expr, ...)`。普通 type recv 是指针，直传正确。@value recv 是值表达式（可能是 rvalue），方法签名要求 `struct X *self`，需传地址 | @value recv 先 `cg_materialize_to_local`（确保 lvalue），再 emit `um->c_name(&local, ...)`。aggregate rvalue 必须先 materialize 才能取地址 | `cg_emit_call` 方法调用段新增 @value 条件分支 |
+| 3 | **成员访问与赋值** | 赋值路径：`cg_emit_assign` 中 user type 字段赋值全部硬编码 `(recv)->field`（`->` 访问）。读取路径：`cg_emit_member` 普通对象分支（行 16433）emit `(%s)->%s`。@value 变量是值（非指针），两路径的 `->` 均导致 C 编译错误。tuple 读取路径已有 `.` 分支（行 16349），赋值路径缺失 | 赋值：`cg_emit_assign` 成员赋值路径（trivial/compound/aggregate/managed 四分支）新增 @value 分发，`cg_type_is_value_user(recv.type)` 时使用 `(recv).field` 替代 `(recv)->field`。读取：`cg_emit_member` 普通对象分支新增 @value guard，emit `(recv).field` 替代 `(recv)->field`。嵌套 @value 字段（如 `obj.value_field.x`）由成员访问递归自然处理。两者同步实现 | `cg_emit_assign` 成员赋值段 + `cg_emit_member` 普通对象分支各新增 @value 条件分支 |
+| 4 | **方法调用站 recv 取地址** | `cg_emit_call` 直接方法调用路径 emit `um->c_name(recv.c_expr, ...)`。泛型共享体方法路径 emit `shared_name((void *)recv, ...)`。普通 type recv 是指针，直传正确。@value recv 是值表达式（可能是 rvalue），方法签名要求 `struct X *self`，需传地址 | @value recv 先 `cg_materialize_to_local`（确保 lvalue），再 emit `um->c_name(&local, ...)`。泛型共享体路径同理，emit `shared_name((void *)&local, ...)`。aggregate rvalue 必须先 materialize 才能取地址 | `cg_emit_call` 方法调用段（含泛型共享体路径）新增 @value 条件分支 |
 
 #### 7.4.3 `CG_TYPE_OBJECT` 堆假设审计
 
@@ -647,7 +651,7 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 - 级联自动处理大部分（见 §7.4.1）
 - `feng_object_new`（风险点 1 已隔离）
-- `c_desc_name` 引用（guard 扩展后 @value 走 `cg_emit_value_type_definition`，不引用 `c_desc_name`）
+- `c_desc_name` 引用（`c_desc_name` 字段对所有类型均有值，但 `@value type` 不 emit 对应的 `FengTypeDescriptor` C 符号；guard 扩展后 @value 走 `cg_emit_value_type_definition`，该函数使用 `c_aggregate_desc_name` 而非 `c_desc_name`，不会引用未定义符号）
 - `feng_assign`/`feng_retain`/`feng_release` 直接调用（`cgtype_is_managed` 返回 false 后自动跳过）
 - `->` 字段访问（风险点 3、4 已隔离）
 
@@ -657,6 +661,7 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 - `feng_semantic_value_kind_of_decl`：仅测试文件调用，无生产依赖，确认无需修改。
 - `c_abi_ptr_name` 函数体：`(char *)self + offset`，@value 时 `offsetof(first_field) == 0`，函数体无需分支。
+- `c_abi_value_name` 函数体：`_abi.field = self->field`（`self` 是指针，`->` 访问）。函数体本身无需变更；调用约定由调用方适配——对 `@value @abi`，调用方 emit `&val` 传入（值取地址），与风险点 2（§7.4.2）联动处理。
 - Witness thunk `_subject` 转型：`(struct X *)_subject`，对 box（`_hdr + value`）同样适用。
 - `cg_emit_equal_function`（原 `cg_emit_tuple_equal_function`）：按字段遍历生成比较代码，guard 扩展后直接复用。
 - `cg_emit_user_method_proto` / `cg_emit_user_method`：@value 方法走 else 分支（`struct X *self`），与普通 type 一致，无需修改。构造器同理。
@@ -862,6 +867,7 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 **变更**：
 - [ ] 复用普通 type 泛型实例化路径（含泛型方法/共享体）
 - [ ] 描述符生成（复用元组）：泛型 `@value type` 总是 aggregate（即使实例化后全字段 trivial），生成 `FengAggregateDescriptor`（§2.4）。理由：泛型类型参数在声明时大小未知、是否托管也未知，声明阶段无法计算准确的 `value_kind`，统一走 aggregate 路径（与 tuple 处理一致：全具体化实例 `is_generic_instance && generic_context_type_param_count == 0` 时一律生成 `FengAggregateDescriptor`）
+- [ ] 泛型共享体方法路径 `@value` recv 处理：共享体 emit `shared_name((void *)recv, ...)`，`@value` recv 是值表达式（非指针），需 materialize 后传 `&local`（§7.4.2 第 4 项）
 
 **测试**：
 - [ ] 泛型 `@value type` 实例化（fcts/）
