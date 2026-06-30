@@ -8,6 +8,26 @@ import std.test;
 type VPoint {
   var x: int;
   var y: int;
+
+  func sum(): int {
+    return self.x + self.y;
+  }
+
+  func scaleBy(factor: int): VPoint {
+    var result: VPoint;
+    result.x = self.x * factor;
+    result.y = self.y * factor;
+    return result;
+  }
+
+  func reset() {
+    self.x = 0;
+    self.y = 0;
+  }
+
+  func copy(): VPoint {
+    return self;
+  }
 }
 
 // aggregate @value type (contains managed field)
@@ -37,6 +57,22 @@ type VCounter {
   func VCounter(initial: int) {
     self.count = initial;
   }
+
+  func increment() {
+    self.count = self.count + 1;
+  }
+
+  func incrementBy(amount: int) {
+    self.count = self.count + amount;
+  }
+
+  func getCount(): int {
+    return self.count;
+  }
+
+  func copy(): VCounter {
+    return self;
+  }
 }
 
 // aggregate @value type with constructors
@@ -53,6 +89,29 @@ type VTagged {
   func VTagged(label: string, value: int) {
     self.label = label;
     self.value = value;
+  }
+
+  func describe(): string {
+    return self.label;
+  }
+
+  func copy(): VTagged {
+    return self;
+  }
+}
+
+// @value type with let (immutable) fields
+@value
+type VImmutable {
+  let id: int;
+  var name: string;
+
+  func getId(): int {
+    return self.id;
+  }
+
+  func setName(newName: string) {
+    self.name = newName;
   }
 }
 
@@ -72,6 +131,11 @@ func make_vpoint(x: int, y: int): VPoint {
 // function returning @value type via constructor
 func make_counter(n: int): VCounter {
   return VCounter(n);
+}
+
+// function calling method on @value parameter
+func vpoint_method_sum(p: VPoint): int {
+  return p.sum();
 }
 
 /** @value type 测试 */
@@ -226,6 +290,111 @@ open func test_value_type() {
     test("@value type constructor returned from function", () {
       let c = make_counter(77);
       assert(c.count == 77, "@value type constructor returned from function");
+    });
+
+    // --- Method tests (§9.6) ---
+
+    test("trivial @value type method call (read-only)", () {
+      var p: VPoint;
+      p.x = 3;
+      p.y = 4;
+      assert(p.sum() == 7, "method reads self fields correctly");
+    });
+
+    test("trivial @value type method with parameter", () {
+      var p: VPoint;
+      p.x = 2;
+      p.y = 3;
+      let scaled = p.scaleBy(10);
+      assert(scaled.x == 20 && scaled.y == 30, "method with parameter returns correct value");
+      assert(p.x == 2 && p.y == 3, "original unchanged after method call");
+    });
+
+    test("trivial @value type method mutates var field via self", () {
+      var p: VPoint;
+      p.x = 5;
+      p.y = 10;
+      p.reset();
+      assert(p.x == 0 && p.y == 0, "method mutates var fields via self");
+    });
+
+    test("trivial @value type method self escape (copy returns value)", () {
+      var p: VPoint;
+      p.x = 1;
+      p.y = 2;
+      let q = p.copy();
+      assert(q.x == 1 && q.y == 2, "self escape via return produces value copy");
+    });
+
+    test("trivial @value type method self escape (let binding)", () {
+      var c = VCounter(5);
+      let snapshot = c.copy();
+      c.incrementBy(10);
+      assert(snapshot.getCount() == 5, "self escape copy is independent");
+      assert(c.getCount() == 15, "original mutated independently");
+    });
+
+    test("trivial @value type method increment", () {
+      var c = VCounter(0);
+      c.increment();
+      c.increment();
+      c.increment();
+      assert(c.count == 3, "method increments var field correctly");
+    });
+
+    test("trivial @value type method incrementBy", () {
+      var c = VCounter(10);
+      c.incrementBy(5);
+      assert(c.getCount() == 15, "method with parameter mutates var field");
+    });
+
+    test("trivial @value type chained method calls", () {
+      var p: VPoint;
+      p.x = 1;
+      p.y = 2;
+      let result = p.scaleBy(3).sum();
+      assert(result == 9, "chained method calls work correctly");
+    });
+
+    test("aggregate @value type method call", () {
+      let t = VTagged("hello", 42);
+      assert(t.describe() == "hello", "aggregate @value method reads string field");
+    });
+
+    test("aggregate @value type method self escape", () {
+      var t = VTagged("original", 1);
+      let copy = t.copy();
+      t.label = "modified";
+      assert(copy.describe() == "original", "aggregate self escape produces independent copy");
+      assert(t.describe() == "modified", "original can be mutated independently");
+    });
+
+    test("@value type let field accessible via method", () {
+      var v: VImmutable;
+      v.name = "test";
+      assert(v.getId() == 0, "let field readable via method");
+    });
+
+    test("@value type var field mutable via method", () {
+      var v: VImmutable;
+      v.name = "initial";
+      v.setName("updated");
+      assert(v.name == "updated", "var field mutable via method");
+    });
+
+    test("@value type let binding method call", () {
+      let p: VPoint = VPoint { x: 7, y: 8 };
+      assert(p.sum() == 15, "method call on let-bound @value works");
+    });
+
+    test("@value type method on function parameter", () {
+      var p: VPoint;
+      p.x = 10;
+      p.y = 20;
+      assert(vpoint_sum(p) == 30, "function param method not needed here");
+      // Test method call on param
+      let s = vpoint_method_sum(p);
+      assert(s == 30, "method call on function parameter works");
     });
   });
 }

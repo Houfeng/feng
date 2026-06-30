@@ -649,7 +649,7 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 | 1 | **构造器分配** | 两个入口（`cg_emit_call` 构造路径、`FENG_EXPR_OBJECT_LITERAL`）硬编码 `feng_object_new` 堆分配 + `->` 字段初始化 + 构造器传堆指针。tuple 无构造器（字面量贴合），无可复用路径 | 新增 `cg_emit_value_type_construction`：栈声明 `struct X _val = {0}` + `&_val` 传 self（构造器签名与普通 type 一致，`struct X *self`） | 各入口 +1 行 `if (cg_user_type_is_value(ut))` 早期分支 |
 | 2 | **ABI surface** | `cg_emit_user_type_abi_surface` 生成 `c_abi_box_name`，函数体硬编码 `feng_object_new(&c_desc_name)`。tuple 不走此路径，无可复用函数 | 新增 `cg_emit_value_type_abi_surface`：仅生成 `c_abi_ptr_name`（offset=0）+ `c_abi_value_name`，不生成 `c_abi_box_name` | `cg_emit_user_type_abi_surface` 入口 +1 行早期返回 |
 | 3 | **成员访问与赋值** | 赋值路径：`cg_emit_assign` 中 user type 字段赋值全部硬编码 `(recv)->field`（`->` 访问）。读取路径：`cg_emit_member` 普通对象分支（行 16433）emit `(%s)->%s`。@value 变量是值（非指针），两路径的 `->` 均导致 C 编译错误。tuple 读取路径已有 `.` 分支（行 16349），赋值路径缺失 | 赋值：`cg_emit_assign` 成员赋值路径（trivial/compound/aggregate/managed 四分支）新增 @value 分发，`cg_type_is_value_user(recv.type)` 时使用 `(recv).field` 替代 `(recv)->field`。读取：`cg_emit_member` 普通对象分支新增 @value guard，emit `(recv).field` 替代 `(recv)->field`。嵌套 @value 字段（如 `obj.value_field.x`）由成员访问递归自然处理。两者同步实现 | `cg_emit_assign` 成员赋值段 + `cg_emit_member` 普通对象分支各新增 @value 条件分支 |
-| 4 | **方法调用站 recv 取地址** | `cg_emit_call` 直接方法调用路径 emit `um->c_name(recv.c_expr, ...)`。泛型共享体方法路径 emit `shared_name((void *)recv, ...)`。普通 type recv 是指针，直传正确。@value recv 是值表达式（可能是 rvalue），方法签名要求 `struct X *self`，需传地址 | @value recv 先 `cg_materialize_to_local`（确保 lvalue），再 emit `um->c_name(&local, ...)`。泛型共享体路径同理，emit `shared_name((void *)&local, ...)`。aggregate rvalue 必须先 materialize 才能取地址 | `cg_emit_call` 方法调用段（含泛型共享体路径）新增 @value 条件分支 |
+| 4 | **方法调用站 recv 取地址** | `cg_emit_call` 直接方法调用路径 emit `um->c_name(recv.c_expr, ...)`。泛型共享体方法路径 emit `shared_name((void *)recv, ...)`。普通 type recv 是指针，直传正确。@value recv 是值表达式（可能是 rvalue），方法签名要求 `struct X *self`，需传地址 | @value recv 按 lvalue/rvalue 分发：lvalue recv（AST 为 IDENTIFIER/SELF/MEMBER/INDEX）直接传 `&recv.c_expr`（mutations 传播回原值）；rvalue recv（函数返回/字面量）先 `cg_materialize_to_local` 后传 `&local`。泛型共享体路径同理。aggregate rvalue 必须先 materialize 才能取地址 | `cg_emit_call` 方法调用段（含泛型共享体路径）+ `cg_emit_generic_type_method_call` + `cg_emit_generic_type_self_method_call` 新增 @value 条件分支 |
 | 5 | **@value self 逃逸语义（含 lambda 捕获）** | @value 方法的 C 参数是 `struct X *self`（指针，因 `var` 成员需原地修改），当前 self 绑定 c_name = `"self"`（指针本身）。但 self 一旦逃逸（绑定到其他变量/返回/作为入参/lambda 捕获），直接 emit 指针会破坏值语义且可能悬空。普通 type self 是堆指针，retain/release 保证生命周期，无需复制 | **@value self 语义**（用户决策）：方法体内 self 用指针（`var` 成员可原地修改），逃逸时复制。实现：@value 方法的 self 为 `struct X *self`（指针），绑定时 c_name 设为 `(*self)`。效果：`self.field` → `((*self)).field` = `self->field`（修改原值，满足 `var` 成员原地修改，不逃逸）；`let y = self` → `struct X y = (*self)`（值复制，逃逸）；`return self` → `return (*self)`（返回值，逃逸）；`foo(self)` → `foo((*self))`（传值，逃逸）；`self.length()` → `method(&(*self))` = `method(self)`（传地址，不逃逸）；lambda 捕获 → `cg_scope_bind_capture_cell` 的 source_expr 传 `(*self)`，cell->value 存值副本（闭包生命周期独立于栈帧，逃逸）。`(*self)` 是 C lvalue，赋值/取地址/字段访问全部自然工作。普通 type self 保持 `"self"`（指针 + retain）不变。**tuple self 指针化作为独立 TODO（见 §9.16）** | `cg_emit_user_method` 中 @value 的 self 绑定路径（`scope_add` c_name 改为 `(*self)`；`cg_scope_bind_capture_cell` source_expr 改为 `(*self)`）新增分支 |
 
 #### 7.4.3 `CG_TYPE_OBJECT` 堆假设审计
@@ -823,22 +823,22 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.6 方法（含 direct-call）【复用普通 type】
 
-**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§2.5、§4.3、§7.2
+**状态**：已完成 ｜ **依赖**：9.4 ｜ **范围**：§2.5、§4.3、§7.2
 
 **变更**：
-- [ ] 复用普通 type 方法 emit + direct-call 路径（静态分派，不装箱）——方法 C 签名复用普通 type 路径（`struct X *self`），self 绑定策略需独立处理（见下方）
-- [ ] self 参数：与普通 type **一致**——`struct X *self`（指针），C 签名无需修改。不需要扩展 tuple guard（@value 走 else 分支，与普通 type 一致）
-- [ ] self 绑定策略（§7.4.2 第 5 项）——**@value self 语义**（用户决策）：方法体内 self 用指针（`var` 成员可原地修改），逃逸时复制。实现：@value 方法的 self 为 `struct X *self`（指针），绑定时 c_name 改为 `(*self)`。效果：`self.field` → `((*self)).field`（修改原值，满足 `var` 成员原地修改，不逃逸）；`let y = self` → `struct X y = (*self)`（值复制，逃逸）；`return self` → `return (*self)`（返回值，逃逸）；`foo(self)` → `foo((*self))`（传值，逃逸）；`self.length()` → `method(&(*self))` = `method(self)`（传地址，不逃逸）；lambda 捕获 self → `cg_scope_bind_capture_cell` source_expr 传 `(*self)`，cell 存值副本（闭包生命周期独立于栈帧，逃逸）。普通 type self 保持 `"self"`（指针 + retain）不变。**tuple self 指针化作为独立 TODO（见 §9.16）**
-- [ ] 方法调用站：@value recv 需 `cg_materialize_to_local` 后传 `&local`（§7.4.2 第 4 项）
-- [ ] self 语义：`self` 指向调用方的值地址（普通 type 的 `self` 指向堆对象），`self.field` 的可变性遵循 `let`/`var` 规则，与普通 type 100% 一致
+- [x] 复用普通 type 方法 emit + direct-call 路径（静态分派，不装箱）——方法 C 签名复用普通 type 路径（`struct X *self`），self 绑定策略需独立处理（见下方）
+- [x] self 参数：与普通 type **一致**——`struct X *self`（指针），C 签名无需修改。不需要扩展 tuple guard（@value 走 else 分支，与普通 type 一致）
+- [x] self 绑定策略（§7.4.2 第 5 项）——**@value self 语义**（用户决策）：方法体内 self 用指针（`var` 成员可原地修改），逃逸时复制。实现：@value 方法的 self 为 `struct X *self`（指针），绑定时 c_name 改为 `(*self)`。效果：`self.field` → `((*self)).field`（修改原值，满足 `var` 成员原地修改，不逃逸）；`let y = self` → `struct X y = (*self)`（值复制，逃逸）；`return self` → `return (*self)`（返回值，逃逸）；`foo(self)` → `foo((*self))`（传值，逃逸）；`self.length()` → `method(&(*self))` = `method(self)`（传地址，不逃逸）；lambda 捕获 self → `cg_scope_bind_capture_cell` source_expr 传 `(*self)`，cell 存值副本（闭包生命周期独立于栈帧，逃逸）。普通 type self 保持 `"self"`（指针 + retain）不变。**tuple self 指针化作为独立 TODO（见 §9.16）**
+- [x] 方法调用站：@value recv 按 lvalue/rvalue 分发（§7.4.2 第 4 项）——lvalue recv（IDENTIFIER/SELF/MEMBER/INDEX）直接传 `&recv.c_expr`（方法 mutations 传播回原值）；rvalue recv（函数返回/字面量）先 materialize 后传 `&local`
+- [x] self 语义：`self` 指向调用方的值地址（普通 type 的 `self` 指向堆对象），`self.field` 的可变性遵循 `let`/`var` 规则，与普通 type 100% 一致
 
 **测试**：
-- [ ] 方法调用（fcts/）
-- [ ] `self` 语义（修改 `var` 字段对调用方可见，与普通 type 行为一致）
-- [ ] `let` 字段不可修改（编译期报错，与普通 type 一致）
-- [ ] self 逃逸：`let y = self`（值复制，y 独立于原值）、`return self`（返回值）、`foo(self)`（传值）、lambda 捕获 self（值复制进 cell，闭包生命周期独立于栈帧）
-- [ ] direct-call 不装箱（无 box 分配）
-- [ ] 全量回归
+- [x] 方法调用（fcts/）
+- [x] `self` 语义（修改 `var` 字段对调用方可见，与普通 type 行为一致）
+- [x] `let` 字段不可修改（编译期报错，与普通 type 一致）
+- [x] self 逃逸：`let y = self`（值复制，y 独立于原值）、`return self`（返回值）、`foo(self)`（传值）、lambda 捕获 self（值复制进 cell，闭包生命周期独立于栈帧）
+- [x] direct-call 不装箱（无 box 分配）
+- [x] 全量回归
 
 ### 9.7 Spec 声明头满足【复用普通 type，witness 复用元组】
 

@@ -14070,6 +14070,24 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     if (cgtype_is_managed(recv->type) && recv->owns_ref) {
         cg_materialize_to_local(cg, recv, "_t");
     }
+    /* @value type: method takes struct X *self; pass &recv directly
+     * for lvalues, materialize for rvalues. */
+    if (cg_type_is_value_user(recv->type)) {
+        const FengExpr *recv_obj = (e != NULL && e->kind == FENG_EXPR_CALL &&
+                                    e->as.call.callee != NULL &&
+                                    e->as.call.callee->kind == FENG_EXPR_MEMBER)
+                                       ? e->as.call.callee->as.member.object
+                                       : NULL;
+        bool recv_is_lvalue =
+            recv_obj != NULL &&
+            (recv_obj->kind == FENG_EXPR_IDENTIFIER ||
+             recv_obj->kind == FENG_EXPR_SELF ||
+             recv_obj->kind == FENG_EXPR_MEMBER ||
+             recv_obj->kind == FENG_EXPR_INDEX);
+        if (!recv_is_lvalue) {
+            cg_materialize_to_local(cg, recv, "_vrecv");
+        }
+    }
 
     args = arg_count ? calloc(arg_count, sizeof *args) : NULL;
     type_args = method_tp_count ? calloc(method_tp_count, sizeof *type_args) : NULL;
@@ -14214,7 +14232,10 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         free(cty);
     }
 
-    buf_append_fmt(cg->cur_body, "    %s(%s", um->c_name, recv->c_expr);
+    /* @value recv: pass &local (value materialized above). */
+    buf_append_fmt(cg->cur_body, "    %s(%s%s", um->c_name,
+                   cg_type_is_value_user(recv->type) ? "&" : "",
+                   recv->c_expr);
     for (size_t i = 0; i < method_tp_count; ++i) {
         buf_append_fmt(cg->cur_body, ", %s", desc_exprs[i]);
     }
@@ -14546,8 +14567,10 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
 
     /* §6.7: shared body self-call — recv + _td + method-level descs;
      * type-level params are obtained from _type_desc inside shared body. */
-    buf_append_fmt(cg->cur_body, "    %s(%s, _td",
+    /* @value self is always an lvalue ((*self)); pass &recv directly. */
+    buf_append_fmt(cg->cur_body, "    %s(%s%s, _td",
                    shared_name,
+                   cg_type_is_value_user(recv->type) ? "&" : "",
                    recv->c_expr);
     for (size_t i = 0; i < method_tp_count; ++i) {
         buf_append_fmt(cg->cur_body, ", %s", desc_exprs[i]);
@@ -15786,9 +15809,12 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 }
                 er_init(&callee);
                 buf_init(&field_expr);
+                /* @value recv: use . instead of -> for field access. */
+                const char *acc = cg_type_is_value_user(recv.type) ? "." : "->";
                 buf_append_fmt(&field_expr,
-                               "(%s)->%s",
+                               "(%s)%s%s",
                                recv.c_expr,
+                               acc,
                                callable_field->c_name);
                 callee.c_expr = field_expr.data;
                 callee.type = cgtype_clone(callable_field->type);
@@ -15869,6 +15895,18 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             }
             if (cgtype_is_managed(recv.type) && recv.owns_ref) {
                 cg_materialize_to_local(cg, &recv, "_t");
+            }
+            /* @value type: shared body takes void *self (pointer to value);
+             * pass &recv directly for lvalues, materialize for rvalues. */
+            if (cg_type_is_value_user(recv.type)) {
+                bool recv_is_lvalue =
+                    ma->as.member.object->kind == FENG_EXPR_IDENTIFIER ||
+                    ma->as.member.object->kind == FENG_EXPR_SELF ||
+                    ma->as.member.object->kind == FENG_EXPR_MEMBER ||
+                    ma->as.member.object->kind == FENG_EXPR_INDEX;
+                if (!recv_is_lvalue) {
+                    cg_materialize_to_local(cg, &recv, "_vrecv");
+                }
             }
             char *shared_name = cg_generic_type_method_shared_cname(
                 cg, ut->generic_origin_decl, um->member);
@@ -15953,8 +15991,14 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             }
             /* Build: shared_name((void *)recv, rtd_expr, args..., [&_out]) */
             Buf b; buf_init(&b);
-            buf_append_fmt(&b, "%s((void *)%s, %s",
-                           shared_name, recv.c_expr, rtd_expr);
+            /* @value recv: pass &local (value materialized above). */
+            if (cg_type_is_value_user(recv.type)) {
+                buf_append_fmt(&b, "%s((void *)&%s, %s",
+                               shared_name, recv.c_expr, rtd_expr);
+            } else {
+                buf_append_fmt(&b, "%s((void *)%s, %s",
+                               shared_name, recv.c_expr, rtd_expr);
+            }
             for (size_t i = 0; i < arg_count; i++) {
                 bool param_is_gp =
                     um->param_types[i] != NULL &&
@@ -16025,6 +16069,21 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         if (cgtype_is_managed(recv.type) && recv.owns_ref) {
             cg_materialize_to_local(cg, &recv, "_t");
         }
+        /* @value type: method signature takes struct X *self (pointer),
+         * but recv is a value expression.  For lvalue recv (local var,
+         * field access, self), pass &recv directly so method mutations
+         * propagate back.  For rvalue recv (function return, literal),
+         * materialize to local first. */
+        if (cg_type_is_value_user(recv.type)) {
+            bool recv_is_lvalue =
+                ma->as.member.object->kind == FENG_EXPR_IDENTIFIER ||
+                ma->as.member.object->kind == FENG_EXPR_SELF ||
+                ma->as.member.object->kind == FENG_EXPR_MEMBER ||
+                ma->as.member.object->kind == FENG_EXPR_INDEX;
+            if (!recv_is_lvalue) {
+                cg_materialize_to_local(cg, &recv, "_vrecv");
+            }
+        }
         Buf args_buf; buf_init(&args_buf);
         size_t fixed_arg_limit = um->is_variadic ? um->param_count - 1U : e->as.call.arg_count;
         for (size_t i = 0; i < fixed_arg_limit; i++) {
@@ -16061,7 +16120,12 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             er_free(&varr);
         }
         Buf b; buf_init(&b);
-        buf_append_fmt(&b, "%s(%s", um->c_name, recv.c_expr);
+        /* @value recv: method takes struct X *self; pass &local. */
+        if (cg_type_is_value_user(recv.type)) {
+            buf_append_fmt(&b, "%s(&%s", um->c_name, recv.c_expr);
+        } else {
+            buf_append_fmt(&b, "%s(%s", um->c_name, recv.c_expr);
+        }
         if (!cg_append_user_type_context_descriptor_args(cg, &b, ut, e->token)) {
             buf_free(&args_buf);
             buf_free(&b);
