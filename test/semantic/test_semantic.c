@@ -1145,6 +1145,111 @@ static void test_mixed_tuple_and_value_type_cycle_rejected(void) {
     feng_program_free(program);
 }
 
+/* Generic type arguments can create value-type cycles that are not visible
+ * from the generic declaration alone. For example, `@value type Box<T>` is
+ * acyclic by itself, but `@value type Node { var box: Box<Node>; }` creates
+ * a cycle because Box<Node> inlines Node which inlines Box<Node>... */
+
+static void test_value_type_generic_arg_cycle_rejected(void) {
+    /* @value type Box<T> { var value: T; } + @value type Node { var box: Box<Node>; }
+     * Box<Node>.value is Node, Node.box is Box<Node> → infinite size. */
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "type Box<T> {\n"
+        "    var value: T;\n"
+        "}\n"
+        "@value\n"
+        "type Node {\n"
+        "    var box: Box<Node>;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_arg_cycle.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    /* Node has edges: Node→Box (base type), Node→Node (type arg). Self-loop detected. */
+    bool found_node_cycle = false;
+    for (size_t i = 0U; i < error_count; ++i) {
+        if (strcmp(errors[i].code, "AE1327") == 0 &&
+            strstr(errors[i].message, "Node") != NULL) {
+            found_node_cycle = true;
+        }
+    }
+    ASSERT(found_node_cycle);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_value_type_generic_nested_arg_cycle_rejected(void) {
+    /* @value type W<T> { var inner: T; } + @value type Node { var w: W<W<Node>>; }
+     * W<W<Node>>.inner is W<Node>, W<Node>.inner is Node → cycle. */
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "type W<T> {\n"
+        "    var inner: T;\n"
+        "}\n"
+        "@value\n"
+        "type Node {\n"
+        "    var w: W<W<Node>>;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_nested_arg_cycle.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    bool found_node_cycle = false;
+    for (size_t i = 0U; i < error_count; ++i) {
+        if (strcmp(errors[i].code, "AE1327") == 0 &&
+            strstr(errors[i].message, "Node") != NULL) {
+            found_node_cycle = true;
+        }
+    }
+    ASSERT(found_node_cycle);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_value_type_generic_no_cycle_allowed(void) {
+    /* @value type Pair<A, B> { var first: A; var second: B; }
+     * @value type Point { var x: int; var y: int; }
+     * var p: Pair<Point, int>; — no cycle, Pair and Point are acyclic. */
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "type Pair<A, B> {\n"
+        "    var first: A;\n"
+        "    var second: B;\n"
+        "}\n"
+        "@value\n"
+        "type Point {\n"
+        "    var x: int;\n"
+        "    var y: int;\n"
+        "}\n"
+        "@value\n"
+        "type Container {\n"
+        "    var p: Pair<Point, int>;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_no_cycle.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_extern_function_rejects_multiple_calling_convention_annotations(void) {
     const char *source =
         "module demo.main;\n"
@@ -18488,6 +18593,9 @@ int main(void) {
     test_value_type_holding_managed_pointer_allowed();
     test_tuple_array_of_self_rejected();
     test_mixed_tuple_and_value_type_cycle_rejected();
+    test_value_type_generic_arg_cycle_rejected();
+    test_value_type_generic_nested_arg_cycle_rejected();
+    test_value_type_generic_no_cycle_allowed();
     test_extern_function_accepts_abi_array_parameter_type();
     test_extern_function_accepts_abi_array_return_type();
     test_extern_function_rejects_bare_string_parameter_type();

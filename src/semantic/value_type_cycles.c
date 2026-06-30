@@ -425,6 +425,67 @@ static bool vtc_collect_nodes(VtcGraph *g, const FengSemanticAnalysis *analysis)
     return true;
 }
 
+/* Add an edge from `node_index` to `target` if not already present.
+ * Suppresses duplicates so Tarjan's lowlink stays minimal. */
+static bool vtc_add_edge(VtcGraph *g, size_t node_index, size_t target) {
+    VtcNode *node = &g->nodes[node_index];
+    /* Suppress duplicate edges T->U so Tarjan's lowlink stays
+     * minimal and the SCC result is unaffected. */
+    for (size_t e = node->edge_begin; e < g->edge_count; ++e) {
+        if (g->edges[e] == target) {
+            return true;
+        }
+    }
+    if (!vtc_edges_reserve(g, 1U)) {
+        return false;
+    }
+    g->edges[g->edge_count++] = target;
+    return true;
+}
+
+/* Recursively collect edges from a TypeRef. Unwraps arrays, resolves the
+ * base type, and recursively processes type_args. This handles generic
+ * value types like `Box<Node>` where `Node` is a value type passed as a
+ * type argument — without this, cycles through generic instantiation
+ * would be missed. */
+static bool vtc_collect_type_ref_edges(VtcGraph *g,
+                                       const FengSemanticAnalysis *analysis,
+                                       const FengProgram *owner_program,
+                                       size_t node_index,
+                                       const FengTypeRef *ref) {
+    if (ref == NULL) {
+        return true;
+    }
+
+    /* Unwrap array layers — `T[]` still requires T to have finite size.
+     * Pointer types (`*T`) are not unwrapped: a pointer has fixed size
+     * regardless of its referent. */
+    const FengTypeRef *unwrapped = vtc_unwrap_array(ref);
+
+    /* Resolve the base type and add edge if it's a value-type node. */
+    size_t target = vtc_resolve_named(g, analysis, owner_program, unwrapped);
+    if (target != SIZE_MAX) {
+        if (!vtc_add_edge(g, node_index, target)) {
+            return false;
+        }
+    }
+
+    /* Recursively process type_args. For `Box<Node>`, this adds an edge
+     * to `Node` if it's a value type. For nested generics like
+     * `Box<Wrapper<Node>>`, recursion handles the inner type_args. */
+    if (unwrapped->kind == FENG_TYPE_REF_NAMED) {
+        for (size_t i = 0U; i < unwrapped->as.named.type_arg_count; ++i) {
+            if (!vtc_collect_type_ref_edges(g, analysis, owner_program,
+                                            node_index,
+                                            unwrapped->as.named.type_args[i])) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 static bool vtc_collect_edges(VtcGraph *g, const FengSemanticAnalysis *analysis) {
     for (size_t i = 0U; i < g->node_count; ++i) {
         VtcNode *node = &g->nodes[i];
@@ -437,30 +498,10 @@ static bool vtc_collect_edges(VtcGraph *g, const FengSemanticAnalysis *analysis)
             if (m->kind != FENG_TYPE_MEMBER_FIELD) {
                 continue;
             }
-            /* Unwrap array layers — `T[]` still requires T to have finite
-             * size. Pointer types (`*T`) are not unwrapped: a pointer has
-             * fixed size regardless of its referent. */
-            const FengTypeRef *fref = vtc_unwrap_array(m->as.field.type);
-            size_t target = vtc_resolve_named(g, analysis, node->owner_program, fref);
-            if (target == SIZE_MAX) {
-                continue;
-            }
-            /* Suppress duplicate edges T->U so Tarjan's lowlink stays
-             * minimal and the SCC result is unaffected. */
-            bool dup = false;
-            for (size_t e = node->edge_begin; e < g->edge_count; ++e) {
-                if (g->edges[e] == target) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (dup) {
-                continue;
-            }
-            if (!vtc_edges_reserve(g, 1U)) {
+            if (!vtc_collect_type_ref_edges(g, analysis, node->owner_program,
+                                            i, m->as.field.type)) {
                 return false;
             }
-            g->edges[g->edge_count++] = target;
         }
 
         node->edge_end = g->edge_count;
