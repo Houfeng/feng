@@ -25,6 +25,37 @@ type VRect {
   var height: int;
 }
 
+// trivial @value type with constructors
+@value
+type VCounter {
+  var count: int;
+
+  func VCounter() {
+    self.count = 0;
+  }
+
+  func VCounter(initial: int) {
+    self.count = initial;
+  }
+}
+
+// aggregate @value type with constructors
+@value
+type VTagged {
+  var label: string;
+  var value: int;
+
+  func VTagged() {
+    self.label = "";
+    self.value = 0;
+  }
+
+  func VTagged(label: string, value: int) {
+    self.label = label;
+    self.value = value;
+  }
+}
+
 // function taking @value type parameter
 func vpoint_sum(p: VPoint): int {
   return p.x + p.y;
@@ -36,6 +67,11 @@ func make_vpoint(x: int, y: int): VPoint {
   p.x = x;
   p.y = y;
   return p;
+}
+
+// function returning @value type via constructor
+func make_counter(n: int): VCounter {
+  return VCounter(n);
 }
 
 /** @value type 测试 */
@@ -126,6 +162,70 @@ open func test_value_type() {
       let q: VPoint = p;
       // q.x and q.y should not be mutable
       assert(q.x == 5 && q.y == 10, "let @value type preserves values");
+    });
+
+    test("trivial @value type constructor call", () {
+      let c = VCounter(10);
+      assert(c.count == 10, "trivial @value type constructor call");
+    });
+
+    test("trivial @value type default constructor", () {
+      let c = VCounter();
+      assert(c.count == 0, "trivial @value type default constructor");
+    });
+
+    test("trivial @value type object literal with constructor", () {
+      let c = VCounter { count: 42 };
+      assert(c.count == 42, "trivial @value type object literal");
+    });
+
+    test("trivial @value type empty object literal", () {
+      let c = VCounter {};
+      assert(c.count == 0, "trivial @value type empty object literal");
+    });
+
+    test("trivial @value type constructor value semantics", () {
+      let c1 = VCounter(5);
+      var c2 = c1;
+      c2.count = 99;
+      assert(c1.count == 5, "original unchanged after value copy");
+      assert(c2.count == 99, "copy has new value");
+    });
+
+    test("aggregate @value type constructor call", () {
+      let t = VTagged("hello", 42);
+      assert(t.label == "hello" && t.value == 42,
+             "aggregate @value type constructor call");
+    });
+
+    test("aggregate @value type default constructor", () {
+      let t = VTagged();
+      assert(t.label == "" && t.value == 0,
+             "aggregate @value type default constructor");
+    });
+
+    test("aggregate @value type object literal with constructor", () {
+      let t = VTagged { label: "world", value: 7 };
+      assert(t.label == "world" && t.value == 7,
+             "aggregate @value type object literal");
+    });
+
+    test("aggregate @value type constructor value semantics", () {
+      let t1 = VTagged("abc", 1);
+      var t2 = t1;
+      t2.label = "xyz";
+      assert(t1.label == "abc", "original string unchanged after value copy");
+      assert(t2.label == "xyz", "copy has new string");
+    });
+
+    test("trivial @value type constructor self mutation", () {
+      let c = VCounter(100);
+      assert(c.count == 100, "constructor self mutation via parameter");
+    });
+
+    test("@value type constructor returned from function", () {
+      let c = make_counter(77);
+      assert(c.count == 77, "@value type constructor returned from function");
     });
   });
 }

@@ -1571,6 +1571,19 @@ static bool cg_emit_constructor_invoke(CG *cg,
                                        const char *self_expr,
                                        FengToken blame);
 
+/* Emit @value type construction: stack allocation + member initialisers +
+ * user constructor invoke.  The result is an owned stack value (not a heap
+ * pointer).  Follows the same "owned by expression result" pattern as
+ * cg_emit_tuple_literal_typed — the temporary is NOT registered for scope
+ * cleanup; the consumer (binding / materialize) takes ownership. */
+static bool cg_emit_value_type_construction(CG *cg,
+                                            const UserType *ut,
+                                            const UserMethod *ctor,
+                                            FengExpr *const *args,
+                                            size_t arg_count,
+                                            FengToken blame,
+                                            ExprResult *out);
+
 static const char *cg_builtin_canonical_name_for_kind(CGTypeKind kind) {
     switch (kind) {
         case CG_TYPE_BOOL: return "bool";
@@ -11054,6 +11067,102 @@ static bool cg_emit_constructor_invoke(CG *cg,
     return true;
 }
 
+/* Emit @value type construction: stack-allocate, run field default-init /
+ * member initialisers, then invoke the user constructor (if any).
+ *
+ * The pattern mirrors cg_emit_tuple_literal_typed: a fresh stack local
+ * (_val) is declared and zero-initialised; field initialisers and the
+ * constructor populate it through a pointer (&_val); the result is returned
+ * as an owned expression (owns_ref=true).  The temporary is NOT registered
+ * for scope cleanup — the consumer (binding / materialize) takes ownership
+ * of managed fields via struct copy (trivial) or feng_aggregate_assign
+ * (aggregate).  This matches the "owned by expression result" convention
+ * used by tuple literals and spec returns. */
+static bool cg_emit_value_type_construction(CG *cg,
+                                            const UserType *ut,
+                                            const UserMethod *ctor,
+                                            FengExpr *const *args,
+                                            size_t arg_count,
+                                            FengToken blame,
+                                            ExprResult *out) {
+    char *val_name = NULL;
+    CGType *val_type = NULL;
+
+    er_init(out);
+    if (cg == NULL || ut == NULL) {
+        return false;
+    }
+
+    val_name = cg_fresh_temp(cg, "_val");
+    if (val_name == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    /* Step 1 — stack-allocate and zero-initialise.
+     * struct X _val = {0}; */
+    if (!cg_emit_line_directive_force(cg, blame)) {
+        free(val_name);
+        return false;
+    }
+    buf_append_fmt(cg->cur_body,
+                   "    struct %s %s = {0};\n",
+                   ut->c_struct_name, val_name);
+
+    /* Step 2 — run field default-init / member initialisers.
+     * Pass (&_val) as object_expr (pointer); cg_emit_user_type_member_initializers
+     * and its helpers use -> access through the pointer, so this works
+     * identically to the normal-type heap path.  Parentheses are required
+     * because &_val->field parses as &(_val->field), not (&_val)->field. */
+    {
+        Buf addr;
+        buf_init(&addr);
+        buf_append_fmt(&addr, "(&%s)", val_name);
+        if (addr.data == NULL) {
+            free(val_name);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        bool ok = cg_emit_user_type_member_initializers(cg, ut, addr.data, blame);
+        buf_free(&addr);
+        if (!ok) {
+            free(val_name);
+            return false;
+        }
+    }
+
+    /* Step 3 — invoke the user constructor (if any).
+     * ctor->c_name(&_val, ...args...); */
+    {
+        Buf addr;
+        buf_init(&addr);
+        buf_append_fmt(&addr, "&%s", val_name);
+        if (addr.data == NULL) {
+            free(val_name);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        bool ok = cg_emit_constructor_invoke(cg, args, arg_count,
+                                             ut, ctor, addr.data, blame);
+        buf_free(&addr);
+        if (!ok) {
+            free(val_name);
+            return false;
+        }
+    }
+
+    /* Step 4 — build the owned result.
+     * type is CG_TYPE_OBJECT with the @value UserType attached;
+     * cg_aggregate_facts will route it to trivial/aggregate as needed. */
+    val_type = cgtype_new(CG_TYPE_OBJECT);
+    if (val_type == NULL) {
+        free(val_name);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    val_type->user = (UserType *)ut;
+    out->c_expr = val_name;       /* transfer ownership of val_name */
+    out->type = val_type;
+    out->owns_ref = true;
+    return true;
+}
+
 static bool cg_compute_capture_requirements_in_lambda_body(const FengExpr *lambda_expr,
                                                            char ***out_names,
                                                            size_t *out_count,
@@ -16093,6 +16202,14 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             }
         }
 
+        /* @value type: stack-allocate, member-init, constructor-invoke. */
+        if (cg_user_type_is_value(ut)) {
+            return cg_emit_value_type_construction(cg, ut, ctor,
+                                                   e->as.call.args,
+                                                   e->as.call.arg_count,
+                                                   e->token, out);
+        }
+
         obj_name = cg_fresh_temp(cg, "_obj");
 
         /* 共享体内创建依赖泛型的托管对象时，直接用具体描述符
@@ -16740,6 +16857,87 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                 "CE0076", "codegen: constructor arguments require a resolved user-defined constructor");
         }
     }
+    /* @value type: stack-allocate + member init + constructor invoke. */
+    if (cg_user_type_is_value(ut)) {
+        char *obj_ptr_expr = NULL;
+        ExprResult ctor_result;
+
+        if (!cg_emit_value_type_construction(cg, ut, ctor,
+                                             target_call != NULL
+                                                 ? target_call->as.call.args : NULL,
+                                             target_call != NULL
+                                                 ? target_call->as.call.arg_count : 0U,
+                                             e->token,
+                                             &ctor_result)) {
+            return false;
+        }
+        /* obj_ptr_expr = "(&_val)" for field assignment through pointer.
+         * Parentheses required: &_val->field parses as &(_val->field). */
+        {
+            Buf pe;
+            buf_init(&pe);
+            buf_append_fmt(&pe, "(&%s)", ctor_result.c_expr);
+            obj_ptr_expr = pe.data;
+        }
+        if (obj_ptr_expr == NULL) {
+            er_free(&ctor_result);
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+        }
+
+        /* Track which fields are assigned so we can detect missing initialisers. */
+        bool *assigned = ut->field_count
+                             ? calloc(ut->field_count, sizeof *assigned)
+                             : NULL;
+        if (ut->field_count && !assigned) {
+            free(obj_ptr_expr);
+            er_free(&ctor_result);
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+        }
+        for (size_t i = 0; i < e->as.object_literal.field_count; i++) {
+            const FengObjectFieldInit *fi = &e->as.object_literal.fields[i];
+            size_t idx = (size_t)-1;
+            for (size_t k = 0; k < ut->field_count; k++) {
+                if (strlen(ut->fields[k].feng_name) == fi->name.length &&
+                    memcmp(ut->fields[k].feng_name, fi->name.data, fi->name.length) == 0) {
+                    idx = k; break;
+                }
+            }
+            if (idx == (size_t)-1) {
+                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
+                return cg_fail(cg, fi->token,
+                    "CE0176", "codegen: type '%s' has no field '%.*s'",
+                    ut->feng_name, (int)fi->name.length, fi->name.data);
+            }
+            if (assigned[idx]) {
+                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
+                return cg_fail(cg, fi->token,
+                    "CE0181", "codegen: duplicate field '%s' in object literal",
+                    ut->fields[idx].feng_name);
+            }
+            assigned[idx] = true;
+            ExprResult v;
+            const UserField *uf = &ut->fields[idx];
+            if (!cg_emit_expr_for_expected_type(cg, fi->value, uf->type, &v)) {
+                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
+                return false;
+            }
+            if (!cg_emit_user_field_value_store(cg, obj_ptr_expr, uf,
+                                                &v, fi->token, true)) {
+                er_free(&v);
+                free(assigned); free(obj_ptr_expr); er_free(&ctor_result);
+                return false;
+            }
+            er_free(&v);
+        }
+        free(assigned);
+        free(obj_ptr_expr);
+
+        out->c_expr = ctor_result.c_expr;   /* transfer ownership */
+        out->type = ctor_result.type;
+        out->owns_ref = true;
+        return true;
+    }
+
     /* Allocate, then assign each field. We open an inline statement block in
      * the body to compute argument expressions and then reference the result.
      * Since we need a single C expression for ExprResult, we hoist the alloc
@@ -20196,20 +20394,37 @@ static bool cg_emit_user_type_member_initializers(CG *cg,
         }
         self_t->user = (UserType *)ut;
         cg->cur_scope = initializer_scope;
+        /* For @value types the object_expr is a pointer (e.g. "(&_val)");
+         * dereference so the capture cell stores the value itself. */
+        const char *self_source = object_expr;
+        Buf self_deref;
+        buf_init(&self_deref);
+        if (cg_user_type_is_value(ut)) {
+            buf_append_fmt(&self_deref, "(*%s)", object_expr);
+            if (self_deref.data == NULL) {
+                cgtype_free(self_t);
+                scope_pop_free(initializer_scope);
+                cg->cur_scope = saved_scope;
+                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            }
+            self_source = self_deref.data;
+        }
         if (!cg_scope_bind_capture_cell(cg,
                                         initializer_scope,
                                         self_name,
                                         self_t,
                                         blame,
-                                        object_expr,
+                                        self_source,
                                         true,
                                         false,
                                         false,
                                         FENG_CODEGEN_MAPING_VARIABLE_SELF)) {
             cgtype_free(self_t);
+            buf_free(&self_deref);
             goto cleanup;
         }
         cgtype_free(self_t);
+        buf_free(&self_deref);
     }
 
     for (size_t i = 0; i < ut->field_count; ++i) {
@@ -34669,12 +34884,16 @@ static bool cg_emit_user_method(CG *cg,
             goto cleanup;
         }
         self_t->user = t;
+        /* @value type: C parameter is struct X *self (pointer).  Bind the
+         * capture cell from (*self) so the cell stores the value (not the
+         * pointer), and member access through the cell uses `.`. */
+        const char *self_src = cg_user_type_is_value(t) ? "(*self)" : "self";
         if (!cg_scope_bind_capture_cell(cg,
                                         fn_scope,
                                         self_name,
                                         self_t,
                                         m->member->token,
-                                        "self",
+                                        self_src,
                                         true,
                                         false,
                                         true,
@@ -34690,14 +34909,18 @@ static bool cg_emit_user_method(CG *cg,
             goto cleanup;
         }
         self_t->user = t;
-        if (!scope_add(fn_scope, "self", "self", self_t, true)) {
+        /* @value type: C parameter is struct X *self (pointer).  Bind the
+         * Feng name "self" to the C expression "(*self)" so that member
+         * access generates (*self).field ≡ self->field. */
+        const char *self_cname = cg_user_type_is_value(t) ? "(*self)" : "self";
+        if (!scope_add(fn_scope, "self", self_cname, self_t, true)) {
             cgtype_free(self_t);
             cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
         if (!cg_debug_add_variable_record_cstr_cgtype(cg,
                                                       "self",
-                                                      "self",
+                                                      self_cname,
                                                       NULL,
                                                       self_t,
                                                       FENG_CODEGEN_MAPING_VARIABLE_SELF,

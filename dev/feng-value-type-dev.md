@@ -801,20 +801,25 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.5 构造器【新增独立函数，参考普通 type 构造器】
 
-**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§2.2、§7.2、§7.4
+**状态**：已完成 ｜ **依赖**：9.4 ｜ **范围**：§2.2、§7.2、§7.4
 
 **变更**：
-- [ ] 新增独立函数 `cg_emit_value_type_construction`：栈分配 `struct X _val = {0}` + `&_val` 传 self（§7.4.2 第 1 项）
-- [ ] `cg_emit_call` 构造器路径入口 + `FENG_EXPR_OBJECT_LITERAL` 入口各加 1 行 `@value` 早期分支
-- [ ] 构造器签名与普通 type **一致**：`struct X *self`（指针指向栈上值），`self->field = value` 修改正在初始化的值
-- [ ] 字面量贴合（`Counter {}`）+ 参数构造（`Counter(10)`）
-- [ ] 原构造器路径零修改
+- [x] 新增独立函数 `cg_emit_value_type_construction`：栈分配 `struct X _val = {0}` + `(&_val)` 传 self（§7.4.2 第 1 项）
+- [x] `cg_emit_call` 构造器路径入口 + `FENG_EXPR_OBJECT_LITERAL` 入口各加 1 行 `@value` 早期分支
+- [x] 构造器签名与普通 type **一致**：`struct X *self`（指针指向栈上值），`self->field = value` 修改正在初始化的值
+- [x] 字面量贴合（`Counter {}`）+ 参数构造（`Counter(10)`）
+- [x] 原构造器路径零修改
+- [x] 构造器 self 绑定：@value 构造器的 C 参数为 `struct X *self`（指针），绑定 Feng name `"self"` 到 C 表达式 `"(*self)"`，使构造器体内 `self.field` 生成 `((*self)).field` ≡ `self->field`（同时适用于 `cg_emit_user_method` 非捕获/捕获路径和 `cg_emit_user_type_member_initializers` 字段初始化器捕获路径）
 
 **测试**：
-- [ ] 构造器调用（fcts/）
-- [ ] `self` 语义（修改字段生效，与普通 type 行为一致）
-- [ ] 多构造器重载
-- [ ] 全量回归
+- [x] 构造器调用（fcts/）
+- [x] `self` 语义（修改字段生效，与普通 type 行为一致）
+- [x] 多构造器重载
+- [x] trivial/aggregate @value type 构造器（含默认构造器与参数构造器）
+- [x] 对象字面量 + 构造器组合（`VCounter {}`、`VCounter { count: 42 }`、`VCounter(10)`）
+- [x] 构造器返回值语义（复制后独立）
+- [x] 构造器从函数返回
+- [x] 全量回归
 
 ### 9.6 方法（含 direct-call）【复用普通 type】
 
