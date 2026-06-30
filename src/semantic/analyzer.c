@@ -3123,6 +3123,34 @@ static bool validate_runtime_annotation_on_decl(ResolveContext *context, const F
     return true;
 }
 
+/* Validate that @value is only applied to type declarations.
+ * @value introduces value semantics (stack/inline allocation, copy-on-assign)
+ * and is restricted to type declarations; it does not apply to spec, fit,
+ * function, or binding declarations. */
+static bool validate_value_annotation_on_decl(ResolveContext *context, const FengDecl *decl) {
+    const FengAnnotation *value_annotation;
+
+    if (context == NULL || decl == NULL) {
+        return true;
+    }
+
+    value_annotation = find_annotation_of_kind(
+        decl->annotations, decl->annotation_count, FENG_ANNOTATION_VALUE);
+    if (value_annotation == NULL) {
+        return true;
+    }
+
+    if (decl->kind != FENG_DECL_TYPE) {
+        return resolver_append_error(
+            context,
+            value_annotation->token,
+            "AE1326", format_message("@value only applies to type declarations")) &&
+               false;
+    }
+
+    return true;
+}
+
 static bool validate_supported_decl_annotations(ResolveContext *context, const FengDecl *decl) {
     size_t annotation_index;
 
@@ -24497,6 +24525,10 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
     }
 
     if (!validate_runtime_annotation_on_decl(context, decl)) {
+        return false;
+    }
+
+    if (!validate_value_annotation_on_decl(context, decl)) {
         return false;
     }
 

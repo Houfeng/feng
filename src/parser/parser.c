@@ -1287,6 +1287,17 @@ static FengDecl *parse_type_declaration(Parser *parser,
     decl->annotations = annotations;
     decl->annotation_count = annotation_count;
 
+    /* Detect @value annotation on type declarations (value semantics). */
+    {
+        size_t annot_index;
+        for (annot_index = 0U; annot_index < annotation_count; ++annot_index) {
+            if (annotations[annot_index].builtin_kind == FENG_ANNOTATION_VALUE) {
+                decl->as.type_decl.is_value = true;
+                break;
+            }
+        }
+    }
+
     if (!parser_expect_identifier_like(parser, &type_name, false, "SE0002", "expected a type name")) {
         free_decl(decl);
         return NULL;

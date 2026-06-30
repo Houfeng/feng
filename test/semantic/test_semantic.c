@@ -843,6 +843,93 @@ static void test_runtime_annotation_rejects_member_method(void) {
     feng_program_free(program);
 }
 
+static void test_value_annotation_accepts_type_declaration(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "type Point {\n"
+        "    var x: float;\n"
+        "    var y: float;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("value_type_accepted.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_value_annotation_rejects_spec_declaration(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "spec Describable {\n"
+        "    func describe(): string;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("value_spec_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "value_spec_error.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strstr(errors[0].message, "@value only applies to type declarations") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_value_annotation_rejects_function_declaration(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "func greet(): void {\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("value_func_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "value_func_error.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strstr(errors[0].message, "@value only applies to type declarations") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_value_annotation_rejects_binding(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "let x: int = 1;\n";
+    FengProgram *program = parse_program_or_die("value_binding_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "value_binding_error.f") == 0);
+    ASSERT(errors[0].token.line == 2U);
+    ASSERT(strstr(errors[0].message, "@value only applies to type declarations") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_extern_function_rejects_multiple_calling_convention_annotations(void) {
     const char *source =
         "module demo.main;\n"
@@ -18174,6 +18261,10 @@ int main(void) {
     test_runtime_annotation_rejects_abi_annotation();
     test_runtime_annotation_rejects_type_declaration();
     test_runtime_annotation_rejects_member_method();
+    test_value_annotation_accepts_type_declaration();
+    test_value_annotation_rejects_spec_declaration();
+    test_value_annotation_rejects_function_declaration();
+    test_value_annotation_rejects_binding();
     test_extern_function_accepts_abi_array_parameter_type();
     test_extern_function_accepts_abi_array_return_type();
     test_extern_function_rejects_bare_string_parameter_type();

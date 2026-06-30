@@ -722,17 +722,17 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.1 `@value` 注解解析与 AST 扩展【新增】
 
-**状态**：未开始 ｜ **依赖**：无 ｜ **范围**：§7.3
+**状态**：已完成 ｜ **依赖**：无 ｜ **范围**：§7.3
 
 **变更**：
-- [ ] Lexer 层新增 `FENG_ANNOTATION_VALUE`（`FengAnnotationKind` 枚举，参考 `FENG_ANNOTATION_ABI`）
-- [ ] Parser 层识别 `@value` 注解，设置 AST `is_value` 标志位
-- [ ] Semantic 层校验：仅可用于 `type` 声明，用于 `spec`/`fit`/函数/变量时报错
-- [ ] `@value type` 暂按普通 `type` 处理，不改变现有行为
+- [x] Lexer 层新增 `FENG_ANNOTATION_VALUE`（`FengAnnotationKind` 枚举，参考 `FENG_ANNOTATION_ABI`）
+- [x] Parser 层识别 `@value` 注解，设置 AST `is_value` 标志位
+- [x] Semantic 层校验：仅可用于 `type` 声明，用于 `spec`/`fit`/函数/变量时报错
+- [x] `@value type` 暂按普通 `type` 处理，不改变现有行为
 
 **测试**：
-- [ ] 注解错误使用的诊断码（test/）
-- [ ] 正常使用不影响现有 fcts/ 行为（全量回归）
+- [x] 注解错误使用的诊断码（test/）
+- [x] 正常使用不影响现有 fcts/ 行为（全量回归）
 
 ### 9.2 值类型循环引用编译期检测【新增】
 

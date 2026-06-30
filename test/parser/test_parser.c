@@ -2327,6 +2327,40 @@ static void test_tuple_type_declaration_parses(void) {
     feng_program_free(program);
 }
 
+static void test_value_type_declaration_parses(void) {
+    const char *source =
+        "module demo.value;\n"
+        "@value\n"
+        "type Point {\n"
+        "    var x: float;\n"
+        "    var y: float;\n"
+        "}\n"
+        "type Plain {\n"
+        "    var z: float;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *value_type;
+    const FengDecl *plain_type;
+
+    ASSERT(feng_parse_source(source, strlen(source), "value_type.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 2U);
+
+    value_type = program->declarations[0];
+    ASSERT(value_type->kind == FENG_DECL_TYPE);
+    ASSERT(value_type->as.type_decl.is_value);
+    ASSERT(!value_type->as.type_decl.is_tuple);
+    ASSERT(value_type->as.type_decl.member_count == 2U);
+
+    plain_type = program->declarations[1];
+    ASSERT(plain_type->kind == FENG_DECL_TYPE);
+    ASSERT(!plain_type->as.type_decl.is_value);
+    ASSERT(!plain_type->as.type_decl.is_tuple);
+
+    feng_program_free(program);
+}
+
 static void test_tuple_type_arity_errors(void) {
     static const struct {
         const char *source;
@@ -3057,6 +3091,7 @@ int main(void) {
     test_parse_error_variadic_not_last();
     test_parse_error_extern_fn_variadic();
     test_tuple_type_declaration_parses();
+    test_value_type_declaration_parses();
     test_tuple_type_arity_errors();
     test_tuple_literal_and_grouped_expression_parse();
     test_tuple_literal_arity_errors();

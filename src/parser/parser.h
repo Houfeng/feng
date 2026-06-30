@@ -475,6 +475,7 @@ struct FengDecl {
             FengTypeRef **declared_specs;
             size_t declared_spec_count;
             bool is_tuple;
+            bool is_value;
         } type_decl;
         struct {
             FengSlice name;
