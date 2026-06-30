@@ -28,6 +28,28 @@ func consume_tsummable(value: TSummable): int {
   return value.tsum();
 }
 
+// tuple fit self regression tests (§9.8)
+spec TCopyable {
+  func tcopy(): TFitTuple;
+  func tget_sum(): int;
+}
+
+type TFitTuple(int, int);
+
+fit TFitTuple: TCopyable {
+  func tcopy(): TFitTuple {
+    return self;
+  }
+
+  func tget_sum(): int {
+    return self.item1 + self.item2;
+  }
+}
+
+func consume_tcopyable(value: TCopyable): TFitTuple {
+  return value.tcopy();
+}
+
 // 返回 unit
 func make_tunit(): TUnit {
   return ();
@@ -82,6 +104,33 @@ open func test_tuple() {
       assert(triple.item1 == 42, "triple tuple item1");
       assert(triple.item2 == "hello", "triple tuple item2");
       assert(triple.item3, "triple tuple item3");
+    });
+
+    // --- Tuple fit self regression tests (§9.8) ---
+
+    test("tuple fit method self access regression", () {
+      let t: TFitTuple = (3, 7);
+      assert(t.tget_sum() == 10, "tuple fit method reads self fields correctly");
+    });
+
+    test("tuple fit method self return regression", () {
+      let t: TFitTuple = (5, 8);
+      let copy = t.tcopy();
+      assert(copy.item1 == 5 && copy.item2 == 8, "tuple fit return self produces correct value");
+    });
+
+    test("tuple fit method self return via spec regression", () {
+      let t: TFitTuple = (2, 9);
+      let copy = consume_tcopyable(t);
+      assert(copy.item1 == 2 && copy.item2 == 9, "tuple fit via spec return self produces correct value");
+    });
+
+    test("tuple fit method assigned to spec regression", () {
+      let t: TFitTuple = (4, 6);
+      let s: TCopyable = t;
+      assert(s.tget_sum() == 10, "tuple assigned to spec, fit method works");
+      let copy = s.tcopy();
+      assert(copy.item1 == 4 && copy.item2 == 6, "tuple spec variable fit return self works");
     });
   });
 }

@@ -864,18 +864,18 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.8 fit 扩展【复用普通 type，witness 复用元组】
 
-**状态**：未开始 ｜ **依赖**：9.4、9.6 ｜ **范围**：§4.2
+**状态**：已完成 ｜ **依赖**：9.4、9.6 ｜ **范围**：§4.2
 
 **变更**：
-- [ ] 复用普通 type fit 扩展路径
-- [ ] witness 生成：同 §9.7（`cg_ensure_value_box_witness_instance`，复用元组路径）
-- [ ] **@value box thunk 传参**：@value box thunk 传 `fm->c_name(&box->value, ...)`（传地址，因 @value 方法 self 为指针，§7.4.2 第 5 项）。tuple box thunk 传值保持不变（tuple self 指针化作为独立 TODO，见 §9.16）
+- [x] 复用普通 type fit 扩展路径（代码变更已在 §9.7 中完成：FIT_METHOD thunk 传参、self 绑定、witness 生成均已支持 @value）
+- [x] witness 生成：同 §9.7（`cg_ensure_value_box_witness_instance`，复用元组路径，已在 §9.7 完成）
+- [x] **@value box thunk 传参**：@value box thunk 传 `fm->c_name(&box->value, ...)`（传地址，因 @value 方法 self 为指针，§7.4.2 第 5 项）。tuple box thunk 传值保持不变（tuple self 指针化作为独立 TODO，见 §9.16）。已在 §9.7 完成
 
 **测试**：
-- [ ] fit 扩展声明与方法实现（fcts/）
-- [ ] @value fit 方法 self 访问与逃逸正确性（`var` 成员原地修改、`let y = self` 值复制、`return self` 返回值、`foo(self)` 传值、lambda 捕获值复制）
-- [ ] tuple fit 方法 self 回归（保持现状，tuple self 指针化在 §9.16 独立交付）
-- [ ] 全量回归
+- [x] fit 扩展声明与方法实现（fcts/）：VFitBox fit VFitCopyable（trivial）、VFitNamed fit VFitNamedCopyable（aggregate）
+- [x] @value fit 方法 self 访问与逃逸正确性（`var` 成员原地修改、`let y = self` 值复制、`return self` 返回值、`foo(self)` 传值、spec 参数传递、spec 变量赋值）
+- [x] tuple fit 方法 self 回归（TFitTuple fit TCopyable：self 字段访问、self 返回、spec 参数、spec 变量赋值，保持现状，tuple self 指针化在 §9.16 独立交付）
+- [x] 全量回归
 
 ### 9.9 值装箱（spec subject）【复用元组】
 

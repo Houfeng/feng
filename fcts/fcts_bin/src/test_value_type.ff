@@ -204,6 +204,80 @@ func consume_vnamed(item: VNamed): string {
   return item.displayName();
 }
 
+// --- Fit extension self access/escape tests (§9.8) ---
+
+// spec for fit self access tests (trivial @value)
+spec VFitCopyable {
+  func fit_copy(): VFitBox;
+  func fit_get_value(): int;
+}
+
+// trivial @value type for fit self access tests
+@value
+type VFitBox {
+  var value: int;
+}
+
+// fit extension with self access patterns (trivial @value)
+fit VFitBox: VFitCopyable {
+  func fit_copy(): VFitBox {
+    return self;
+  }
+
+  func fit_get_value(): int {
+    return self.value;
+  }
+}
+
+// aggregate @value type for fit self escape tests
+@value
+type VFitNamed {
+  var label: string;
+  var count: int;
+}
+
+// spec for aggregate fit self tests
+spec VFitNamedCopyable {
+  func fit_copy(): VFitNamed;
+  func fit_get_label(): string;
+  func fit_get_count(): int;
+  func fit_mutate_count(): void;
+}
+
+// fit extension with self access patterns (aggregate @value)
+fit VFitNamed: VFitNamedCopyable {
+  func fit_copy(): VFitNamed {
+    return self;
+  }
+
+  func fit_get_label(): string {
+    return self.label;
+  }
+
+  func fit_get_count(): int {
+    return self.count;
+  }
+
+  func fit_mutate_count(): void {
+    self.count = self.count + 1;
+  }
+}
+
+// function accepting spec parameter for fit tests
+func consume_vfitcopyable(item: VFitCopyable): VFitBox {
+  return item.fit_copy();
+}
+
+// function accepting VFitNamedCopyable spec parameter
+func consume_vfitnamedcopyable(item: VFitNamedCopyable): VFitNamed {
+  return item.fit_copy();
+}
+
+// function that takes @value by value (for foo(self) test)
+func vfitbox_value(v: VFitBox): int {
+  return v.value;
+}
+
 /** @value type 测试 */
 open func test_value_type() {
   describe("value-type", () {
@@ -525,6 +599,112 @@ open func test_value_type() {
       // spec box holds a copy, so it should still show original
       assert(d.describe() == "original", "spec box holds independent copy");
       assert(item.describe() == "modified", "original value mutated independently");
+    });
+
+    // --- Fit extension self access/escape tests (§9.8) ---
+
+    test("@value fit method self field access (trivial)", () {
+      var box: VFitBox;
+      box.value = 42;
+      assert(box.fit_get_value() == 42, "fit method reads self.value correctly");
+    });
+
+    test("@value fit method self escape via return (trivial)", () {
+      var box: VFitBox;
+      box.value = 10;
+      let copy = box.fit_copy();
+      assert(copy.value == 10, "fit method return self produces value copy");
+    });
+
+    test("@value fit method self escape via return is independent (trivial)", () {
+      var box: VFitBox;
+      box.value = 20;
+      let copy = box.fit_copy();
+      copy.value = 99;
+      assert(box.value == 20, "original unchanged after fit copy mutation");
+      assert(copy.value == 99, "fit copy has new value");
+    });
+
+    test("@value fit method self escape via let binding (trivial)", () {
+      var box: VFitBox;
+      box.value = 30;
+      // fit_copy returns self, exercises let y = self path in fit body
+      let snapshot = box.fit_copy();
+      box.value = 50;
+      assert(snapshot.value == 30, "fit let binding captures independent copy");
+      assert(box.value == 50, "original mutated independently");
+    });
+
+    test("@value fit method self escape via function call (trivial)", () {
+      var box: VFitBox;
+      box.value = 77;
+      // fit_copy passes self as argument (escape via foo(self))
+      let result = vfitbox_value(box.fit_copy());
+      assert(result == 77, "fit method foo(self) passes value copy");
+    });
+
+    test("@value fit method self escape via spec parameter (trivial)", () {
+      var box: VFitBox;
+      box.value = 55;
+      let result = consume_vfitcopyable(box);
+      assert(result.value == 55, "fit method via spec returns value copy");
+    });
+
+    test("@value fit method self escape via assigned spec variable (trivial)", () {
+      var box: VFitBox;
+      box.value = 88;
+      let s: VFitCopyable = box;
+      box.value = 0;
+      assert(s.fit_get_value() == 88, "spec box holds independent copy via fit");
+    });
+
+    test("@value fit method self access (aggregate, string field)", () {
+      var named: VFitNamed;
+      named.label = "hello";
+      named.count = 5;
+      assert(named.fit_get_label() == "hello", "fit method reads aggregate self.label");
+      assert(named.fit_get_count() == 5, "fit method reads aggregate self.count");
+    });
+
+    test("@value fit method self escape via return (aggregate)", () {
+      var named: VFitNamed;
+      named.label = "world";
+      named.count = 10;
+      let copy = named.fit_copy();
+      assert(copy.label == "world", "aggregate fit copy preserves string field");
+      assert(copy.count == 10, "aggregate fit copy preserves int field");
+    });
+
+    test("@value fit method self escape via return is independent (aggregate)", () {
+      var named: VFitNamed;
+      named.label = "original";
+      named.count = 1;
+      let copy = named.fit_copy();
+      copy.label = "modified";
+      copy.count = 99;
+      assert(named.label == "original", "original string unchanged after aggregate fit copy");
+      assert(named.count == 1, "original count unchanged after aggregate fit copy");
+      assert(copy.label == "modified", "aggregate fit copy has new string");
+      assert(copy.count == 99, "aggregate fit copy has new count");
+    });
+
+    test("@value fit method self mutation via var field (aggregate)", () {
+      var named: VFitNamed;
+      named.label = "test";
+      named.count = 0;
+      named.fit_mutate_count();
+      assert(named.count == 1, "fit method mutates var field via self");
+      named.fit_mutate_count();
+      assert(named.count == 2, "fit method mutates var field via self (second call)");
+    });
+
+    test("@value fit method self escape via spec parameter (aggregate)", () {
+      var named: VFitNamed;
+      named.label = "spec";
+      named.count = 42;
+      let result = consume_vfitnamedcopyable(named);
+      assert(result.label == "spec", "aggregate fit via spec returns copy with string");
+      assert(result.count == 42, "aggregate fit via spec returns copy with int");
     });
   });
 }
