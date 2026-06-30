@@ -1250,6 +1250,245 @@ static void test_value_type_generic_no_cycle_allowed(void) {
     feng_program_free(program);
 }
 
+static void test_deep_indirect_cycle_rejected(void) {
+    /* Length-4 indirect cycle A→B→C→D→A. Tarjan SCC must detect cycles of
+     * any length, not just self-loops and length-2 cycles. */
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "type A {\n"
+        "    var b: B;\n"
+        "}\n"
+        "@value\n"
+        "type B {\n"
+        "    var c: C;\n"
+        "}\n"
+        "@value\n"
+        "type C {\n"
+        "    var d: D;\n"
+        "}\n"
+        "@value\n"
+        "type D {\n"
+        "    var a: A;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("deep_indirect_cycle.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    /* All four participants A, B, C, D must be reported. */
+    size_t cycle_errors = 0U;
+    for (size_t i = 0U; i < error_count; ++i) {
+        if (strcmp(errors[i].code, "AE1327") == 0) {
+            ++cycle_errors;
+        }
+    }
+    ASSERT(cycle_errors == 4U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_cross_file_value_type_cycle_rejected(void) {
+    /* Two files in the same module may declare value types that form a
+     * cycle — the detector must see across file boundaries. */
+    const char *source_a =
+        "open module demo.main;\n"
+        "@value\n"
+        "type X {\n"
+        "    var y: Y;\n"
+        "}\n";
+    const char *source_b =
+        "open module demo.main;\n"
+        "@value\n"
+        "type Y {\n"
+        "    var x: X;\n"
+        "}\n";
+    FengProgram *program_a = parse_program_or_die("cross_file_cycle_a.f", source_a);
+    FengProgram *program_b = parse_program_or_die("cross_file_cycle_b.f", source_b);
+    const FengProgram *programs[] = {program_a, program_b};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    size_t cycle_errors = 0U;
+    for (size_t i = 0U; i < error_count; ++i) {
+        if (strcmp(errors[i].code, "AE1327") == 0) {
+            ++cycle_errors;
+        }
+    }
+    ASSERT(cycle_errors == 2U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program_a);
+    feng_program_free(program_b);
+}
+
+static void test_cross_module_value_type_cycle_rejected(void) {
+    /* Two modules with mutual value-type references via full-qualified
+     * names form a cycle that must be detected. Both modules and types
+     * must be `open` so they are visible to each other. */
+    const char *base_source =
+        "open module demo.base;\n"
+        "@value\n"
+        "open type Base {\n"
+        "    var m: demo.main.Main;\n"
+        "}\n";
+    const char *main_source =
+        "open module demo.main;\n"
+        "import demo.base;\n"
+        "@value\n"
+        "open type Main {\n"
+        "    var b: demo.base.Base;\n"
+        "}\n";
+    FengProgram *base_program = parse_program_or_die("cross_module_cycle_base.f", base_source);
+    FengProgram *main_program = parse_program_or_die("cross_module_cycle_main.f", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    size_t cycle_errors = 0U;
+    for (size_t i = 0U; i < error_count; ++i) {
+        if (strcmp(errors[i].code, "AE1327") == 0) {
+            ++cycle_errors;
+        }
+    }
+    ASSERT(cycle_errors == 2U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
+static void test_pointer_to_self_allowed(void) {
+    /* A @value type holding a raw pointer to itself is NOT cyclic —
+     * raw pointers (`*T`) are fixed-size regardless of the referent. */
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "type Node {\n"
+        "    var next: Node*;\n"
+        "    var value: int;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("pointer_self_ref.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_value_type_spec_field_allowed(void) {
+    /* A @value type holding an object-form spec field does not create
+     * a value-type edge — spec fields are fat values (subject+witness). */
+    const char *source =
+        "module demo.main;\n"
+        "spec Describable {\n"
+        "    func describe(): string;\n"
+        "}\n"
+        "@value\n"
+        "type Wrapper {\n"
+        "    var d: Describable;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("value_spec_field.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_value_type_union_spec_field_allowed(void) {
+    /* A @value type holding a union-form spec field does not create
+     * a value-type cycle — union specs are tag+payload values, not
+     * value-type decls. */
+    const char *source =
+        "module demo.main;\n"
+        "spec Result: int | string;\n"
+        "@value\n"
+        "type Wrapper {\n"
+        "    var r: Result;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("value_union_spec_field.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_value_type_callable_spec_field_allowed(void) {
+    /* A @value type holding a callable spec field does not create a
+     * value-type cycle — callable specs are closure pointers. */
+    const char *source =
+        "module demo.main;\n"
+        "spec Callback(x: int): int;\n"
+        "@value\n"
+        "type Handler {\n"
+        "    var cb: Callback;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("value_callable_spec_field.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_value_type_enum_field_allowed(void) {
+    /* A @value type holding an enum field does not create a value-type
+     * cycle — enum decls are not value-type decls. */
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    Red,\n"
+        "    Green,\n"
+        "    Blue\n"
+        "}\n"
+        "@value\n"
+        "type Pixel {\n"
+        "    var color: Color;\n"
+        "    var x: int;\n"
+        "    var y: int;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("value_enum_field.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_extern_function_rejects_multiple_calling_convention_annotations(void) {
     const char *source =
         "module demo.main;\n"
@@ -18596,6 +18835,14 @@ int main(void) {
     test_value_type_generic_arg_cycle_rejected();
     test_value_type_generic_nested_arg_cycle_rejected();
     test_value_type_generic_no_cycle_allowed();
+    test_deep_indirect_cycle_rejected();
+    test_cross_file_value_type_cycle_rejected();
+    test_cross_module_value_type_cycle_rejected();
+    test_pointer_to_self_allowed();
+    test_value_type_spec_field_allowed();
+    test_value_type_union_spec_field_allowed();
+    test_value_type_callable_spec_field_allowed();
+    test_value_type_enum_field_allowed();
     test_extern_function_accepts_abi_array_parameter_type();
     test_extern_function_accepts_abi_array_return_type();
     test_extern_function_rejects_bare_string_parameter_type();

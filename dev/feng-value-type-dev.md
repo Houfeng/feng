@@ -748,6 +748,14 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 - [x] tuple 自引用/间接循环：报编译错误，不再静默吞过（test/）
 - [x] `@value type` 自引用/间接循环：报编译错误（test/）
 - [x] 普通 `type` 自引用：允许（test/）
+- [x] 深度间接循环（A→B→C→D→A）：报编译错误（test/）
+- [x] 跨文件同模块值类型循环：报编译错误（test/）
+- [x] 跨模块值类型循环（全限定名）：报编译错误（test/）
+- [x] 泛型实参产生的循环（直接/嵌套 type_args）：报编译错误（test/）
+- [x] tuple ↔ @value 混合循环：报编译错误（test/）
+- [x] 数组包装（T[]）自引用：报编译错误（test/）
+- [x] 指针 `*T` 自引用：允许（指针固定大小）（test/）
+- [x] spec / union spec / callable spec / enum 字段：不产生值类型边（test/）
 - [x] 全量回归
 
 ### 9.3 终结器禁止诊断【新增】
