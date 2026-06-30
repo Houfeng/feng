@@ -26724,6 +26724,20 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                  &error_capacity);
     }
 
+    /* Post-pass: value-type cycle detection (dev/feng-value-type-dev.md
+     * §3.5, §9.2). Rejects value types (tuples and `@value type` decls)
+     * that directly or indirectly contain themselves as fields. Ordinary
+     * (heap-allocated) type decls are not subject to this check. Runs
+     * before `finish:` so the reported errors flow through the normal
+     * error-reporting path. Also fixes the prior silent-failure bug for
+     * self-referential tuples (no C output, exit 0, no diagnostic). */
+    if (ok && error_count == 0U) {
+        ok = feng_semantic_detect_value_type_cycles(analysis,
+                                                    &errors,
+                                                    &error_count,
+                                                    &error_capacity);
+    }
+
 finish:
     if (out_error_count != NULL) {
         *out_error_count = error_count;

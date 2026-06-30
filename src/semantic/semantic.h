@@ -450,6 +450,20 @@ const FengSemanticEnumItemInfo *feng_semantic_find_enum_item_info(
  * success path of feng_semantic_analyze_with_options. */
 bool feng_semantic_compute_type_cyclicity(FengSemanticAnalysis *analysis);
 
+/* Internal post-pass entry — detects value-type cycles (dev/feng-value-
+ * type-dev.md §3.5, §9.2). Value types (tuples and `@value type` decls)
+ * must have a finite size; a value type that directly or indirectly
+ * contains itself as a field is rejected at compile time (AE1327).
+ * Ordinary (non-value) type decls are heap objects referenced through a
+ * managed pointer and are not subject to this check.
+ * Appends one error per cyclic decl to the shared errors buffer. Idempotent.
+ * Implemented in value_type_cycles.c. Called on the success path of
+ * feng_semantic_analyze_with_options, before the `finish:` label. */
+bool feng_semantic_detect_value_type_cycles(FengSemanticAnalysis *analysis,
+                                            FengSemanticError **errors,
+                                            size_t *error_count,
+                                            size_t *error_capacity);
+
 /* Internal post-pass entry — populates analysis->spec_relations with one
  * entry per (type_decl, spec_decl) pair that has at least one source in the
  * analysis. Idempotent. Implemented in spec_relations.c. Called on the

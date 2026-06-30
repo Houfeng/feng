@@ -930,6 +930,221 @@ static void test_value_annotation_rejects_binding(void) {
     feng_program_free(program);
 }
 
+/* --- §9.2 value-type cycle detection ---------------------------------- */
+
+static void test_tuple_direct_self_reference_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type A(A, int);\n";
+    FengProgram *program = parse_program_or_die("tuple_self_ref.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    bool found_cycle_error = false;
+    for (size_t i = 0U; i < error_count; ++i) {
+        if (strcmp(errors[i].code, "AE1327") == 0) {
+            found_cycle_error = true;
+            ASSERT(strcmp(errors[i].path, "tuple_self_ref.f") == 0);
+            ASSERT(strstr(errors[i].message, "value-type cycle") != NULL);
+            ASSERT(strstr(errors[i].message, "tuple") != NULL);
+        }
+    }
+    ASSERT(found_cycle_error);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_tuple_indirect_cycle_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type B(C, int);\n"
+        "type C(B, int);\n";
+    FengProgram *program = parse_program_or_die("tuple_indirect_cycle.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    /* Both B and C participate in the cycle, so we expect two AE1327 errors. */
+    size_t cycle_errors = 0U;
+    for (size_t i = 0U; i < error_count; ++i) {
+        if (strcmp(errors[i].code, "AE1327") == 0) {
+            ++cycle_errors;
+            ASSERT(strstr(errors[i].message, "value-type cycle") != NULL);
+        }
+    }
+    ASSERT(cycle_errors == 2U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_value_type_direct_self_reference_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "type A {\n"
+        "    var inner: A;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("value_self_ref.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    bool found_cycle_error = false;
+    for (size_t i = 0U; i < error_count; ++i) {
+        if (strcmp(errors[i].code, "AE1327") == 0) {
+            found_cycle_error = true;
+            ASSERT(strstr(errors[i].message, "value-type cycle") != NULL);
+            ASSERT(strstr(errors[i].message, "@value type") != NULL);
+        }
+    }
+    ASSERT(found_cycle_error);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_value_type_indirect_cycle_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "type B {\n"
+        "    var c: C;\n"
+        "}\n"
+        "@value\n"
+        "type C {\n"
+        "    var b: B;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("value_indirect_cycle.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    size_t cycle_errors = 0U;
+    for (size_t i = 0U; i < error_count; ++i) {
+        if (strcmp(errors[i].code, "AE1327") == 0) {
+            ++cycle_errors;
+        }
+    }
+    ASSERT(cycle_errors == 2U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_ordinary_type_self_reference_allowed(void) {
+    /* Ordinary (heap-allocated) type decls may reference themselves —
+     * managed-pointer fields have fixed size regardless of the referent. */
+    const char *source =
+        "module demo.main;\n"
+        "type Node {\n"
+        "    var next: Node;\n"
+        "    var value: int;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ordinary_self_ref.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_value_type_holding_managed_pointer_allowed(void) {
+    /* A @value type holding a managed-pointer field to an ordinary type
+     * is not cyclic — the edge model only considers value-type targets. */
+    const char *source =
+        "module demo.main;\n"
+        "type Node {\n"
+        "    var value: int;\n"
+        "}\n"
+        "@value\n"
+        "type Wrapper {\n"
+        "    var node: Node;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("value_holds_managed.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_tuple_array_of_self_rejected(void) {
+    /* `type A(A[], int)` still requires A to have finite inline size —
+     * array unwrapping reaches the leaf element type, which is A itself. */
+    const char *source =
+        "module demo.main;\n"
+        "type A(A[], int);\n";
+    FengProgram *program = parse_program_or_die("tuple_array_self_ref.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    bool found_cycle_error = false;
+    for (size_t i = 0U; i < error_count; ++i) {
+        if (strcmp(errors[i].code, "AE1327") == 0) {
+            found_cycle_error = true;
+        }
+    }
+    ASSERT(found_cycle_error);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_mixed_tuple_and_value_type_cycle_rejected(void) {
+    /* A tuple and a @value type referencing each other form a cycle
+     * among value types, regardless of which flavour each node is. */
+    const char *source =
+        "module demo.main;\n"
+        "type T(V, int);\n"
+        "@value\n"
+        "type V {\n"
+        "    var t: T;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("mixed_cycle.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    size_t cycle_errors = 0U;
+    for (size_t i = 0U; i < error_count; ++i) {
+        if (strcmp(errors[i].code, "AE1327") == 0) {
+            ++cycle_errors;
+        }
+    }
+    ASSERT(cycle_errors == 2U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_extern_function_rejects_multiple_calling_convention_annotations(void) {
     const char *source =
         "module demo.main;\n"
@@ -18265,6 +18480,14 @@ int main(void) {
     test_value_annotation_rejects_spec_declaration();
     test_value_annotation_rejects_function_declaration();
     test_value_annotation_rejects_binding();
+    test_tuple_direct_self_reference_rejected();
+    test_tuple_indirect_cycle_rejected();
+    test_value_type_direct_self_reference_rejected();
+    test_value_type_indirect_cycle_rejected();
+    test_ordinary_type_self_reference_allowed();
+    test_value_type_holding_managed_pointer_allowed();
+    test_tuple_array_of_self_rejected();
+    test_mixed_tuple_and_value_type_cycle_rejected();
     test_extern_function_accepts_abi_array_parameter_type();
     test_extern_function_accepts_abi_array_return_type();
     test_extern_function_rejects_bare_string_parameter_type();
