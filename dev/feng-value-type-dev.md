@@ -860,6 +860,8 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 - [x] 值语义保持：spec box 持有独立副本，原值可独立修改
 - [x] 全量回归
 
+> PS. 本次 9.7 的 FIT_METHOD thunk 修正同时也覆盖了 9.8（fit 扩展）中提到的「@value box thunk 传参」要求（fm->c_name(&box->value, ...)）。9.8 的 fit 路径测试也已包含在 9.7 的测试中（VTag fit VDescribable）。后续执行 9.8 时，核心工作可能仅剩验证 fit 扩展的 self 访问/逃逸语义。
+
 ### 9.8 fit 扩展【复用普通 type，witness 复用元组】
 
 **状态**：未开始 ｜ **依赖**：9.4、9.6 ｜ **范围**：§4.2
