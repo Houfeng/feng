@@ -1489,6 +1489,54 @@ static void test_value_type_enum_field_allowed(void) {
     feng_program_free(program);
 }
 
+/* --- §9.3 @value type finalizer prohibition --------------------------- */
+
+/* @value types use value semantics (copy-on-assign); a finalizer would run
+ * on every copy and risk double-free. Verify that AE1328 is reported. */
+static void test_value_type_finalizer_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "type Buffer {\n"
+        "    var size: int;\n"
+        "    func ~Buffer() {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("value_fin_rejected.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "@value") != NULL);
+    ASSERT(strstr(errors[0].message, "finalizer") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Ordinary (non-@value) types may still declare a finalizer. */
+static void test_ordinary_type_finalizer_allowed(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Buffer {\n"
+        "    var size: int;\n"
+        "    func ~Buffer() {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("ordinary_fin_allowed.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_extern_function_rejects_multiple_calling_convention_annotations(void) {
     const char *source =
         "module demo.main;\n"
@@ -18843,6 +18891,8 @@ int main(void) {
     test_value_type_union_spec_field_allowed();
     test_value_type_callable_spec_field_allowed();
     test_value_type_enum_field_allowed();
+    test_value_type_finalizer_rejected();
+    test_ordinary_type_finalizer_allowed();
     test_extern_function_accepts_abi_array_parameter_type();
     test_extern_function_accepts_abi_array_return_type();
     test_extern_function_rejects_bare_string_parameter_type();

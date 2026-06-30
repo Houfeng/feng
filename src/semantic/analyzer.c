@@ -9816,6 +9816,7 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
     size_t member_index;
     const FengTypeMember *first_finalizer = NULL;
     bool type_has_abi;
+    bool type_has_value;
 
     if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
         return true;
@@ -9843,6 +9844,9 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
     type_has_abi = annotations_contain_kind(type_decl->annotations,
                                             type_decl->annotation_count,
                                             FENG_ANNOTATION_ABI);
+    type_has_value = annotations_contain_kind(type_decl->annotations,
+                                              type_decl->annotation_count,
+                                              FENG_ANNOTATION_VALUE);
 
     for (member_index = 0U; member_index < type_decl->as.type_decl.member_count; ++member_index) {
         const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
@@ -9857,6 +9861,20 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
                 member->token,
                 "AE0317", format_message(
                     "type '%.*s' is marked as @abi and cannot declare a finalizer",
+                    (int)decl_typeish_name(type_decl).length,
+                    decl_typeish_name(type_decl).data));
+        }
+
+        /* @value types use value semantics (copy-on-assign); a finalizer
+         * would run on every copy and risk double-free of shared resources.
+         * Types that need cleanup should use ordinary `type` (heap object,
+         * reference semantics, single release). See §2.3. */
+        if (type_has_value) {
+            return resolver_append_error(
+                context,
+                member->token,
+                "AE1328", format_message(
+                    "type '%.*s' is marked as @value and cannot declare a finalizer",
                     (int)decl_typeish_name(type_decl).length,
                     decl_typeish_name(type_decl).data));
         }
