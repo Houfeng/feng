@@ -14244,7 +14244,7 @@ static void test_spec_coercion_object_argument(void) {
     feng_program_free(program);
 }
 
-static void test_spec_coercion_object_scalar_argument_uses_borrow_local(void) {
+static void test_spec_coercion_object_scalar_argument_uses_box_owner(void) {
     const char *src =
         "open module demo.coerce;\n"
         "spec Named { func name(): string; }\n"
@@ -14283,7 +14283,7 @@ static void test_spec_coercion_object_scalar_argument_uses_borrow_local(void) {
     ASSERT(site->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_BUILTIN);
     ASSERT(site->src_subject_key.as.builtin_canonical_name != NULL);
     ASSERT(strcmp(site->src_subject_key.as.builtin_canonical_name, "i32") == 0);
-    ASSERT(site->object_subject_storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL);
+    ASSERT(site->object_subject_storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
 
     feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);
@@ -18815,7 +18815,7 @@ int main(void) {
     test_spec_coercion_object_builtin_let_binding();
     test_spec_coercion_object_array_let_binding();
     test_spec_coercion_object_argument();
-    test_spec_coercion_object_scalar_argument_uses_borrow_local();
+    test_spec_coercion_object_scalar_argument_uses_box_owner();
     test_spec_coercion_object_return();
     test_spec_coercion_object_scalar_return_uses_box_owner();
     test_spec_coercion_callable_top_level_fn();
