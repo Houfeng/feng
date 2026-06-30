@@ -421,9 +421,15 @@ static const FengTrivialDescriptor Feng__demo__Point__trivial_desc = {
 };
 ```
 
-**命名约定**：@value type 描述符符号按 `value_kind` 动态选择——trivial 用 `<struct>__trivial_desc`，aggregate 用 `<struct>__aggregate_desc`。tuple 现有命名（trivial/aggregate 统一用 `__aggregate_desc`，仅 C 类型不同）保持不变；tuple 是否同步重命名由后续决定。
+**命名约定**：@value type 描述符符号按 `value_kind` 动态选择——trivial 用 `<struct>__trivial_desc`，aggregate 用 `<struct>__aggregate_desc`。tuple 现有命名（trivial/aggregate 统一用 `__aggregate_desc`，仅 C 类型不同）在 @value 实现阶段保持不变；**tuple 同步重命名为 `value_kind` 动态命名作为独立 TODO（见 §9.15）**，在 @value 全量交付后启动。
 
 **不增加 `UserType` 字段**：描述符符号名由 `cg_init_user_type_value_symbols`（由原 `cg_init_user_type_tuple_symbols` 重命名）根据 `is_tuple`/`is_value` 与 `value_kind` 动态计算。`cg_aggregate_facts` 返回的 `CGAggregateFacts.descriptor_name` 即为正确符号名——codegen 各处通过 `facts.descriptor_name` 访问，天然按 `value_kind` 区分 trivial/aggregate 后缀。泛型全具体化实例一律用 `__aggregate_desc`（与 §2.4「泛型 @value type 总是 aggregate」一致）。
+
+**实施时机**（关键约束）：`cg_init_user_type_value_symbols` 当前在 `cg_register_user_type`（行 7924）与泛型实例注册（行 6083）处被调用，**早于** `cg_register_user_type_members`（字段注册）。此时 `t->fields[]` 为空，`value_kind` 无法从字段计算。实施策略：
+
+- 非泛型 @value type：在字段注册完成后（后置 pass，可在 `cg_register_user_type_members` 末尾或独立 pass）根据 `value_kind` 计算并设置 `c_aggregate_desc_name`（trivial → `__trivial_desc`，aggregate → `__aggregate_desc`）
+- 泛型 @value type 具体实例：一律 `__aggregate_desc`（§2.4），无需 `value_kind` 计算
+- 泛型 @value type 定义（开放参数）：不 emit 描述符，名称无关
 
 **关键点**：`equal_fn` **非 NULL**，指向 codegen 生成的逐字段比较函数（`cg_emit_equal_function`，由原 `cg_emit_tuple_equal_function` 重命名 + guard 扩展）。这与 §3.4「不用 `memcmp`」一致——`NULL` 会 fallback 到 `memcmp`，对含浮点字段的类型会给出错误的等值语义（NaN、符号零）。
 
@@ -561,10 +567,10 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | `cg_aggregate_facts` 扩展 | 小 | `CG_TYPE_OBJECT` 分支条件扩展（见下方示意） |
 | 主结构体 emit | 小 | `cg_emit_tuple_type_definition` 重命名为 `cg_emit_value_type_definition`，guard 从 `is_tuple` 扩展为 `is_tuple \|\| is_value`（`@value type` 禁止终结器，见 §2.3，不 emit `c_finalizer_name`）。**`cg_emit_user_type_forward`**：@value 新增独立分支（与 tuple 分支并列），struct body emit 走普通 type 路径（花括号字段，已有逻辑），guard 扩展**仅针对描述符/box/equal_fn 前向声明**——描述符类型由 `value_kind` 决定（trivial → `FengTrivialDescriptor`，aggregate → `FengAggregateDescriptor`），描述符符号名取自 `t->c_aggregate_desc_name`（由 `cg_init_user_type_value_symbols` 按 §5.1 命名约定计算）。box descriptor `.name` 中 `__tuple_box` 改为动态选择（tuple/`@value`） |
 | 构造器 emit | 中 | 现有构造器路径硬编码 `feng_object_new` 堆分配，无法直接复用。新增独立函数 `cg_emit_value_type_construction`（栈分配 `struct X _val = {0}` + `&_val` 传 self，构造器签名与普通 type 一致），在 `cg_emit_call` 与 `FENG_EXPR_OBJECT_LITERAL` 入口加早期分支分发。原构造器路径零修改。详见 §7.4 |
-| 方法签名与 self | 小 | @value 方法签名与普通 type **一致**——`struct X *self`（指针），`cg_emit_user_method_proto` 与 `cg_emit_user_method` 的 else 分支直接适用。**self 绑定策略**：@value 方法（及 tuple fit 改 pointer self 后）的 self 绑定 c_name 改为 `(*self)`，确保 self 在值上下文（绑定/返回/传参）自动解引用为值复制，字段访问与 mutation 保持 lvalue 语义（详见 §7.4.2 第 5 项）。方法调用站：@value recv 需 materialize 后传 `&local`（见 §7.4.2 第 4 项） |
+| 方法签名与 self | 小 | @value 方法签名与普通 type **一致**——`struct X *self`（指针，因 `var` 成员需原地修改），`cg_emit_user_method_proto` 与 `cg_emit_user_method` 的 else 分支直接适用。**self 绑定策略**（用户决策）：@value 方法 self 用指针（方法体内可修改 `var` 成员），逃逸时复制——self 绑定 c_name 改为 `(*self)`，确保 self 在值上下文（绑定/返回/传参/lambda 捕获）自动解引用为值复制，字段访问与 mutation 保持 lvalue 语义（详见 §7.4.2 第 5 项）。方法调用站：@value recv 需 materialize 后传 `&local`（见 §7.4.2 第 4 项）。**tuple self 指针化作为独立 TODO（见 §9.16）** |
 | box struct/desc/release emit | 小 | 包含在主结构体 emit 中（`cg_emit_value_type_definition`，由原 `cg_emit_tuple_type_definition` 重命名 + guard 扩展）。box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，见 §2.3、§5.3）。`release_children` 走 `feng_aggregate_release`（与 tuple 一致） |
 | spec box subject | 小 | `cg_emit_tuple_spec_box_subject` 重命名为 `cg_emit_spec_box_subject`，guard 从 `is_tuple` 扩展为 `is_tuple \|\| is_value`。spec 强制转换分发点的 tuple 分支 guard 同步扩展，不新增分支。发码逻辑将 value 作为整体处理（`feng_object_new` + `feng_aggregate_assign`/直接赋值），不逐个访问成员（详见 §5.3） |
-| witness 生成路径 | 中 | `cg_ensure_tuple_box_witness_instance` 重命名为 `cg_ensure_value_box_witness_instance`，guard 扩展为 `is_tuple \|\| is_value`。@value 逃逸为 spec subject 时是 box（`_hdr + value`），需要与 tuple 相同的解包逻辑（`((struct box *)_subject)->value`），**不走**普通 type 的 `cg_ensure_witness_instance_for_type`（后者 subject 是堆指针，无解包）。**thunk 传参**：tuple fit self 从 value 改为 pointer 后（§7.4.2 第 5 项），thunk 统一传 `&box->value`（取地址）而非 `box->value`（传值）。缓存表与命名前缀同步泛化 |
+| witness 生成路径 | 中 | `cg_ensure_tuple_box_witness_instance` 重命名为 `cg_ensure_value_box_witness_instance`，guard 扩展为 `is_tuple \|\| is_value`。@value 逃逸为 spec subject 时是 box（`_hdr + value`），需要与 tuple 相同的解包逻辑（`((struct box *)_subject)->value`），**不走**普通 type 的 `cg_ensure_witness_instance_for_type`（后者 subject 是堆指针，无解包）。**thunk 传参**：@value box thunk 传 `&box->value`（取地址，因 @value 方法 self 为指针，§7.4.2 第 5 项）；tuple box thunk 传值保持不变（tuple self 指针化作为独立 TODO，见 §9.16）。缓存表与命名前缀同步泛化 |
 | trivial/aggregate descriptor emit | 小 | `cg_emit_tuple_equal_function` 重命名为 `cg_emit_equal_function`，由 `cg_emit_value_type_definition` 调用（guard 扩展后自动覆盖）。错误消息中 "tuple" 文本泛化。`equal_fn` 非 NULL（见 §3.4） |
 | `&` 取地址（`@value @abi` 组合） | 小 | `c_abi_ptr_name` 函数体无需分支（`offsetof` 自然为 0）；`&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`）；语义层补 `@value @abi` 注解组合校验 |
 | `@abi func` 形参/返回的 ABI 互操作 | 小 | `cg_emit_user_type_abi_surface` 入口新增 `@value` 早期分支，分发至独立函数 `cg_emit_value_type_abi_surface`（仅生成 `c_abi_ptr_name` + `c_abi_value_name`，不生成 `c_abi_box_name`）。`c_abi_value_name` 对 `@value @abi` 是平凡拷贝（值本身即 ABI 结构）；codegen 在 `@abi func` 返回站点按 `@value` 标志跳过 box 调用，直接按值返回（见 §6.1）。原 ABI surface 函数零修改 |
@@ -644,7 +650,7 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 | 2 | **ABI surface** | `cg_emit_user_type_abi_surface` 生成 `c_abi_box_name`，函数体硬编码 `feng_object_new(&c_desc_name)`。tuple 不走此路径，无可复用函数 | 新增 `cg_emit_value_type_abi_surface`：仅生成 `c_abi_ptr_name`（offset=0）+ `c_abi_value_name`，不生成 `c_abi_box_name` | `cg_emit_user_type_abi_surface` 入口 +1 行早期返回 |
 | 3 | **成员访问与赋值** | 赋值路径：`cg_emit_assign` 中 user type 字段赋值全部硬编码 `(recv)->field`（`->` 访问）。读取路径：`cg_emit_member` 普通对象分支（行 16433）emit `(%s)->%s`。@value 变量是值（非指针），两路径的 `->` 均导致 C 编译错误。tuple 读取路径已有 `.` 分支（行 16349），赋值路径缺失 | 赋值：`cg_emit_assign` 成员赋值路径（trivial/compound/aggregate/managed 四分支）新增 @value 分发，`cg_type_is_value_user(recv.type)` 时使用 `(recv).field` 替代 `(recv)->field`。读取：`cg_emit_member` 普通对象分支新增 @value guard，emit `(recv).field` 替代 `(recv)->field`。嵌套 @value 字段（如 `obj.value_field.x`）由成员访问递归自然处理。两者同步实现 | `cg_emit_assign` 成员赋值段 + `cg_emit_member` 普通对象分支各新增 @value 条件分支 |
 | 4 | **方法调用站 recv 取地址** | `cg_emit_call` 直接方法调用路径 emit `um->c_name(recv.c_expr, ...)`。泛型共享体方法路径 emit `shared_name((void *)recv, ...)`。普通 type recv 是指针，直传正确。@value recv 是值表达式（可能是 rvalue），方法签名要求 `struct X *self`，需传地址 | @value recv 先 `cg_materialize_to_local`（确保 lvalue），再 emit `um->c_name(&local, ...)`。泛型共享体路径同理，emit `shared_name((void *)&local, ...)`。aggregate rvalue 必须先 materialize 才能取地址 | `cg_emit_call` 方法调用段（含泛型共享体路径）新增 @value 条件分支 |
-| 5 | **self 逃逸语义（含 lambda 捕获）** | @value/tuple 方法的 C 参数是 `struct X *self`（指针），当前 self 绑定 c_name = `"self"`（指针本身）。若 self 作为值表达式出现（绑定/返回/传参/lambda 捕获），直接 emit 指针而非值，破坏值语义且可能悬空。普通 type self 是堆指针，retain/release 保证生命周期，无需复制 | **统一方案**：@value/tuple 方法的 self 均为 pointer self（`struct X *self`），绑定时 c_name 设为 `(*self)`。效果：`self.field` → `((*self)).field` = `self->field`（修改原值）；`let y = self` → `struct X y = (*self)`（值复制）；`return self` → `return (*self)`（返回值）；`foo(self)` → `foo((*self))`（传值）；`self.length()` → `method(&(*self))` = `method(self)`（传地址）；lambda 捕获 → `cg_scope_bind_capture_cell` 的 source_expr 传 `(*self)`，cell->value 存值副本（闭包生命周期独立于栈帧）。`(*self)` 是 C lvalue，赋值/取地址/字段访问全部自然工作。普通 type self 保持 `"self"`（指针 + retain）不变 | `cg_emit_user_method` 中 @value/tuple 的 self 绑定路径（`scope_add` c_name 改为 `(*self)`；`cg_scope_bind_capture_cell` source_expr 改为 `(*self)`）新增分支 |
+| 5 | **@value self 逃逸语义（含 lambda 捕获）** | @value 方法的 C 参数是 `struct X *self`（指针，因 `var` 成员需原地修改），当前 self 绑定 c_name = `"self"`（指针本身）。但 self 一旦逃逸（绑定到其他变量/返回/作为入参/lambda 捕获），直接 emit 指针会破坏值语义且可能悬空。普通 type self 是堆指针，retain/release 保证生命周期，无需复制 | **@value self 语义**（用户决策）：方法体内 self 用指针（`var` 成员可原地修改），逃逸时复制。实现：@value 方法的 self 为 `struct X *self`（指针），绑定时 c_name 设为 `(*self)`。效果：`self.field` → `((*self)).field` = `self->field`（修改原值，满足 `var` 成员原地修改，不逃逸）；`let y = self` → `struct X y = (*self)`（值复制，逃逸）；`return self` → `return (*self)`（返回值，逃逸）；`foo(self)` → `foo((*self))`（传值，逃逸）；`self.length()` → `method(&(*self))` = `method(self)`（传地址，不逃逸）；lambda 捕获 → `cg_scope_bind_capture_cell` 的 source_expr 传 `(*self)`，cell->value 存值副本（闭包生命周期独立于栈帧，逃逸）。`(*self)` 是 C lvalue，赋值/取地址/字段访问全部自然工作。普通 type self 保持 `"self"`（指针 + retain）不变。**tuple self 指针化作为独立 TODO（见 §9.16）** | `cg_emit_user_method` 中 @value 的 self 绑定路径（`scope_add` c_name 改为 `(*self)`；`cg_scope_bind_capture_cell` source_expr 改为 `(*self)`）新增分支 |
 
 #### 7.4.3 `CG_TYPE_OBJECT` 堆假设审计
 
@@ -684,7 +690,7 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ## 9 开发任务拆解
 
-> 本节将 `@value` 内建注解的开发任务拆解为 14 个可分步交付的 TODO，每步可独立通过全量回归测试并独立交付。
+> 本节将 `@value` 内建注解的开发任务拆解为 14 个可分步交付的 TODO（§9.1-§9.14，@value 主体）+ 2 个独立后续 TODO（§9.15 tuple 描述符命名统一、§9.16 tuple self 指针化），每步可独立通过全量回归测试并独立交付。
 > 每步遵循 CLAUDE.md 基础原则：「先文档 → 后代码 → 后测试 → 全量回归」。
 > 步骤间存在依赖关系（见每步「依赖」字段），按编号顺序交付；每步本身可独立交付并通过全量回归。
 > 完成状态：**状态**字段标记「未开始 / 进行中 / 已完成」，子项用 `- [ ]` / `- [x]` 标记。
@@ -809,7 +815,7 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 **变更**：
 - [ ] 复用普通 type 方法 emit + direct-call 路径（静态分派，不装箱）——方法 C 签名复用普通 type 路径（`struct X *self`），self 绑定策略需独立处理（见下方）
 - [ ] self 参数：与普通 type **一致**——`struct X *self`（指针），C 签名无需修改。不需要扩展 tuple guard（@value 走 else 分支，与普通 type 一致）
-- [ ] self 绑定策略（§7.4.2 第 5 项）：@value/tuple 方法的 self 绑定 c_name 改为 `(*self)`，确保 self 在值上下文（绑定/返回/传参/lambda 捕获）自动解引用为值复制。效果：`self.field` → `((*self)).field`（修改原值）；`let y = self` → `struct X y = (*self)`（值复制）；`return self` → `return (*self)`（返回值）；`foo(self)` → `foo((*self))`（传值）；`self.length()` → `method(&(*self))` = `method(self)`（传地址）；lambda 捕获 self → `cg_scope_bind_capture_cell` source_expr 传 `(*self)`，cell 存值副本（闭包生命周期独立于栈帧，无悬垂风险）。普通 type self 保持 `"self"`（指针 + retain）不变
+- [ ] self 绑定策略（§7.4.2 第 5 项）——**@value self 语义**（用户决策）：方法体内 self 用指针（`var` 成员可原地修改），逃逸时复制。实现：@value 方法的 self 为 `struct X *self`（指针），绑定时 c_name 改为 `(*self)`。效果：`self.field` → `((*self)).field`（修改原值，满足 `var` 成员原地修改，不逃逸）；`let y = self` → `struct X y = (*self)`（值复制，逃逸）；`return self` → `return (*self)`（返回值，逃逸）；`foo(self)` → `foo((*self))`（传值，逃逸）；`self.length()` → `method(&(*self))` = `method(self)`（传地址，不逃逸）；lambda 捕获 self → `cg_scope_bind_capture_cell` source_expr 传 `(*self)`，cell 存值副本（闭包生命周期独立于栈帧，逃逸）。普通 type self 保持 `"self"`（指针 + retain）不变。**tuple self 指针化作为独立 TODO（见 §9.16）**
 - [ ] 方法调用站：@value recv 需 `cg_materialize_to_local` 后传 `&local`（§7.4.2 第 4 项）
 - [ ] self 语义：`self` 指向调用方的值地址（普通 type 的 `self` 指向堆对象），`self.field` 的可变性遵循 `let`/`var` 规则，与普通 type 100% 一致
 
@@ -841,13 +847,12 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 **变更**：
 - [ ] 复用普通 type fit 扩展路径
 - [ ] witness 生成：同 §9.7（`cg_ensure_value_box_witness_instance`，复用元组路径）
-- [ ] **tuple fit self 优化**：tuple fit 方法 self 从 `struct X self`（值拷贝）改为 `struct X *self`（指针），self 绑定 c_name 改为 `(*self)`（§7.4.2 第 5 项）。性能提升（避免大 tuple 整体拷贝），与 @value 统一
-- [ ] **thunk 传参适配**：tuple box thunk 从 `fm->c_name(box->value, ...)`（传值）改为 `fm->c_name(&box->value, ...)`（传地址）；@value box thunk 同理传 `&box->value`。两者统一
+- [ ] **@value box thunk 传参**：@value box thunk 传 `fm->c_name(&box->value, ...)`（传地址，因 @value 方法 self 为指针，§7.4.2 第 5 项）。tuple box thunk 传值保持不变（tuple self 指针化作为独立 TODO，见 §9.16）
 
 **测试**：
 - [ ] fit 扩展声明与方法实现（fcts/）
-- [ ] tuple fit 方法 self 访问正确性（改 pointer 后回归）
-- [ ] @value fit 方法 self 访问与逃逸正确性
+- [ ] @value fit 方法 self 访问与逃逸正确性（`var` 成员原地修改、`let y = self` 值复制、`return self` 返回值、`foo(self)` 传值、lambda 捕获值复制）
+- [ ] tuple fit 方法 self 回归（保持现状，tuple self 指针化在 §9.16 独立交付）
 - [ ] 全量回归
 
 ### 9.9 值装箱（spec subject）【复用元组】
@@ -942,5 +947,41 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 - [ ] throw `@value type`（fcts/）
 - [ ] catch `@value type`
 - [ ] 全量回归
+
+### 9.15 tuple 描述符命名统一【独立后续 TODO】
+
+**状态**：未开始 ｜ **依赖**：§9.4 完成（@value 描述符命名落地后） ｜ **范围**：§5.1
+
+**背景**：§5.1 为 @value type 引入按 `value_kind` 动态命名（trivial → `__trivial_desc`，aggregate → `__aggregate_desc`）。tuple 现有命名保持 `__aggregate_desc`（trivial/aggregate 统一），两者不一致。本 TODO 将 tuple 命名同步为 `value_kind` 动态命名，与 @value 统一。
+
+**变更**：
+- [ ] `cg_init_user_type_value_symbols` 对 tuple 也按 `value_kind` 计算描述符符号名（trivial → `__trivial_desc`，aggregate → `__aggregate_desc`）
+- [ ] 实施时机同 §5.1「实施时机」：非泛型 tuple 在字段注册完成后（后置 pass）计算，泛型具体实例一律 `__aggregate_desc`
+- [ ] 所有引用 `c_aggregate_desc_name` 的站点通过 `cg_aggregate_facts`/`facts.descriptor_name` 访问（已天然支持，无需逐站修改）
+- [ ] 错误消息中 "tuple" 文本泛化（若未在 §9.4 完成）
+
+**测试**：
+- [ ] tuple trivial/aggregate 描述符符号名正确性（test/）
+- [ ] 全量回归（tuple 描述符符号变更仅影响 C 产出符号名，行为应不变）
+
+### 9.16 tuple self 指针化【独立后续 TODO】
+
+**状态**：未开始 ｜ **依赖**：§9.6 完成（@value self 指针化落地后） ｜ **范围**：§7.4.2 第 5 项
+
+**背景**：§7.4.2 第 5 项为 @value 引入 pointer self + `(*self)` 绑定（方法体内指针，逃逸复制）。tuple 现有方法 self 为 `struct X self`（值拷贝），与 @value 不一致。本 TODO 将 tuple 方法 self 同步改为 `struct X *self`（指针）+ `(*self)` 绑定，与 @value 统一，并避免大 tuple 整体拷贝的性能开销。
+
+**变更**：
+- [ ] `cg_emit_user_method_proto` tuple 分支：emit `struct X *self` 替代 `struct X self`（行 24822-24826）
+- [ ] `cg_emit_user_method` tuple 分支：emit `struct X *self` 替代 `struct X self`（行 34538-34542）
+- [ ] tuple 方法 self 绑定 c_name 改为 `(*self)`（`scope_add` + `cg_scope_bind_capture_cell` source_expr）
+- [ ] tuple 方法调用站：recv 传 `&local` 替代 `local`（需 materialize）
+- [ ] tuple box thunk 传参：`fm->c_name(&box->value, ...)` 替代 `fm->c_name(box->value, ...)`（@value 已在 §9.8 完成，tuple 同步）
+- [ ] 普通 type self 保持 `"self"`（指针 + retain）不变
+
+**测试**：
+- [ ] tuple fit 方法 self 访问正确性（tuple 字段不可变，但语义应一致）
+- [ ] tuple self 逃逸：`let y = self`（值复制）、`return self`（返回值）、`foo(self)`（传值）、lambda 捕获（值复制进 cell）
+- [ ] tuple 方法调用站 materialize 正确性
+- [ ] 全量回归（tuple 方法 ABI 变更，需重点验证 tuple fit 相关用例）
 
 > **后续**：全量交付并通过回归后，将本草案迁入语言权威规范（`docs/`），按 CLAUDE.md「先文档」原则启动；迁入前本草案为唯一设计来源。
