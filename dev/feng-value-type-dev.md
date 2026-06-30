@@ -421,7 +421,9 @@ static const FengTrivialDescriptor Feng__demo__Point__trivial_desc = {
 };
 ```
 
-**命名约定**：@value type 描述符符号按 C 类型直名——trivial 用 `<struct>__trivial_desc`，aggregate 用 `<struct>__aggregate_desc`，比 tuple 现有命名（trivial/aggregate 统一用 `__aggregate_desc`，仅 C 类型不同）更清晰。tuple 是否同步重命名不影响正确性，由后续决定。
+**命名约定**：@value type 描述符符号按 `value_kind` 动态选择——trivial 用 `<struct>__trivial_desc`，aggregate 用 `<struct>__aggregate_desc`。tuple 现有命名（trivial/aggregate 统一用 `__aggregate_desc`，仅 C 类型不同）保持不变；tuple 是否同步重命名由后续决定。
+
+**不增加 `UserType` 字段**：描述符符号名由 `cg_init_user_type_value_symbols`（由原 `cg_init_user_type_tuple_symbols` 重命名）根据 `is_tuple`/`is_value` 与 `value_kind` 动态计算。`cg_aggregate_facts` 返回的 `CGAggregateFacts.descriptor_name` 即为正确符号名——codegen 各处通过 `facts.descriptor_name` 访问，天然按 `value_kind` 区分 trivial/aggregate 后缀。泛型全具体化实例一律用 `__aggregate_desc`（与 §2.4「泛型 @value type 总是 aggregate」一致）。
 
 **关键点**：`equal_fn` **非 NULL**，指向 codegen 生成的逐字段比较函数（`cg_emit_equal_function`，由原 `cg_emit_tuple_equal_function` 重命名 + guard 扩展）。这与 §3.4「不用 `memcmp`」一致——`NULL` 会 fallback 到 `memcmp`，对含浮点字段的类型会给出错误的等值语义（NaN、符号零）。
 
@@ -555,7 +557,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | `UserType` 字段重命名 | 小 | `c_tuple_box_*` → `c_value_box_*`（tuple 与 `@value` box 符号共用，命名需与实际用途一致） |
 | box 符号初始化函数入口扩展 | 小 | 条件从 tuple 扩展为 tuple \|\| value |
 | `cg_aggregate_facts` 扩展 | 小 | `CG_TYPE_OBJECT` 分支条件扩展（见下方示意） |
-| 主结构体 emit | 小 | `cg_emit_tuple_type_definition` 重命名为 `cg_emit_value_type_definition`，guard 从 `is_tuple` 扩展为 `is_tuple \|\| is_value`（`@value type` 禁止终结器，见 §2.3，不 emit `c_finalizer_name`）。`cg_emit_user_type_forward` 分发 guard 同步扩展。box descriptor `.name` 中 `__tuple_box` 改为动态选择（tuple/`@value`） |
+| 主结构体 emit | 小 | `cg_emit_tuple_type_definition` 重命名为 `cg_emit_value_type_definition`，guard 从 `is_tuple` 扩展为 `is_tuple \|\| is_value`（`@value type` 禁止终结器，见 §2.3，不 emit `c_finalizer_name`）。**`cg_emit_user_type_forward`**：@value 新增独立分支（与 tuple 分支并列），struct body emit 走普通 type 路径（花括号字段，已有逻辑），guard 扩展**仅针对描述符/box/equal_fn 前向声明**——描述符类型由 `value_kind` 决定（trivial → `FengTrivialDescriptor`，aggregate → `FengAggregateDescriptor`），描述符符号名取自 `t->c_aggregate_desc_name`（由 `cg_init_user_type_value_symbols` 按 §5.1 命名约定计算）。box descriptor `.name` 中 `__tuple_box` 改为动态选择（tuple/`@value`） |
 | 构造器 emit | 中 | 现有构造器路径硬编码 `feng_object_new` 堆分配，无法直接复用。新增独立函数 `cg_emit_value_type_construction`（栈分配 `struct X _val = {0}` + `&_val` 传 self，构造器签名与普通 type 一致），在 `cg_emit_call` 与 `FENG_EXPR_OBJECT_LITERAL` 入口加早期分支分发。原构造器路径零修改。详见 §7.4 |
 | 方法签名与 self | 无 | @value 方法签名与普通 type **完全一致**——`struct X *self`（指针）。`cg_emit_user_method_proto` 与 `cg_emit_user_method` 的 else 分支直接适用，无需 guard 扩展。方法体中 `self->field` 访问与普通 type 一致。方法调用站：@value recv 需 materialize 后传 `&local`（见 §7.4.2 第 4 项） |
 | box struct/desc/release emit | 小 | 包含在主结构体 emit 中（`cg_emit_value_type_definition`，由原 `cg_emit_tuple_type_definition` 重命名 + guard 扩展）。box descriptor 的 `finalizer` 字段统一为 `NULL`（`@value type` 禁止终结器，见 §2.3、§5.3）。`release_children` 走 `feng_aggregate_release`（与 tuple 一致） |
@@ -571,7 +573,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 | 现有名称 | 重命名为 | 说明 |
 |---------|---------|------|
 | `cg_emit_tuple_type_definition` | `cg_emit_value_type_definition` | 值类型描述符 + box 生成 |
-| `cg_emit_tuple_type_forward`（前向声明部分） | 合并至 `cg_emit_value_type_forward` 或保留在 `cg_emit_user_type_forward` 内 | 前向声明分发 |
+| （`cg_emit_user_type_forward` 内新增 @value 分支） | — | tuple 分支已有，新增 @value 分支（struct body 走普通 type 路径，描述符/box/equal_fn 前向声明 guard 扩展，见 §7.2 主结构体 emit 行） |
 | `cg_emit_tuple_equal_function` | `cg_emit_equal_function` | 逐字段比较函数生成 |
 | `cg_emit_tuple_spec_box_subject` | `cg_emit_spec_box_subject` | spec coercion 装箱 |
 | `cg_ensure_tuple_box_witness_instance` | `cg_ensure_value_box_witness_instance` | box witness thunk 生成 + 缓存 |
@@ -636,7 +638,7 @@ if (!cg_type_is_tuple_user(t) && !cg_type_is_value_user(t)) { return false; }
 |---|--------|------|---------|-----------|
 | 1 | **构造器分配** | 两个入口（`cg_emit_call` 构造路径、`FENG_EXPR_OBJECT_LITERAL`）硬编码 `feng_object_new` 堆分配 + `->` 字段初始化 + 构造器传堆指针。tuple 无构造器（字面量贴合），无可复用路径 | 新增 `cg_emit_value_type_construction`：栈声明 `struct X _val = {0}` + `&_val` 传 self（构造器签名与普通 type 一致，`struct X *self`） | 各入口 +1 行 `if (cg_user_type_is_value(ut))` 早期分支 |
 | 2 | **ABI surface** | `cg_emit_user_type_abi_surface` 生成 `c_abi_box_name`，函数体硬编码 `feng_object_new(&c_desc_name)`。tuple 不走此路径，无可复用函数 | 新增 `cg_emit_value_type_abi_surface`：仅生成 `c_abi_ptr_name`（offset=0）+ `c_abi_value_name`，不生成 `c_abi_box_name` | `cg_emit_user_type_abi_surface` 入口 +1 行早期返回 |
-| 3 | **成员访问与赋值** | `cg_emit_assign` 中 user type 字段赋值全部硬编码 `(recv)->field`（`->` 访问）。@value 变量是值（非指针），`->` 导致 C 编译错误。成员读取路径（`cg_emit_member_access`）已有 tuple `.` 分支，赋值路径缺失 | 在 `cg_emit_assign` 成员赋值路径（trivial/compound/aggregate/managed 四个分支）新增 @value 分发：`cg_type_is_value_user(recv.type)` 时使用 `(recv).field` 替代 `(recv)->field`。嵌套 @value 字段（如 `obj.value_field.x`）由成员访问递归自然处理 | `cg_emit_assign` 成员赋值段新增 @value 条件分支 |
+| 3 | **成员访问与赋值** | `cg_emit_assign` 中 user type 字段赋值全部硬编码 `(recv)->field`（`->` 访问）。@value 变量是值（非指针），`->` 导致 C 编译错误。成员读取路径（`cg_emit_member`）已有 tuple `.` 分支，赋值路径缺失 | 在 `cg_emit_assign` 成员赋值路径（trivial/compound/aggregate/managed 四个分支）新增 @value 分发：`cg_type_is_value_user(recv.type)` 时使用 `(recv).field` 替代 `(recv)->field`。嵌套 @value 字段（如 `obj.value_field.x`）由成员访问递归自然处理 | `cg_emit_assign` 成员赋值段新增 @value 条件分支 |
 | 4 | **方法调用站 recv 取地址** | `cg_emit_call` 直接方法调用路径 emit `um->c_name(recv.c_expr, ...)`。普通 type recv 是指针，直传正确。@value recv 是值表达式（可能是 rvalue），方法签名要求 `struct X *self`，需传地址 | @value recv 先 `cg_materialize_to_local`（确保 lvalue），再 emit `um->c_name(&local, ...)`。aggregate rvalue 必须先 materialize 才能取地址 | `cg_emit_call` 方法调用段新增 @value 条件分支 |
 
 #### 7.4.3 `CG_TYPE_OBJECT` 堆假设审计
@@ -757,11 +759,11 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 - [ ] 审计 codegen `CG_TYPE_OBJECT` 堆假设站点（确认级联覆盖完整，§7.4.3）
 - [ ] Codegen 层 `cg_aggregate_facts` guard 扩展（`tuple || value`，§7.2）
 - [ ] `cg_emit_tuple_type_definition` 重命名为 `cg_emit_value_type_definition`，guard 扩展为 `is_tuple || is_value`；`cg_emit_user_type_forward` 分发 guard 同步扩展（§7.2 函数重命名清单）
-- [ ] Trivial/Aggregate descriptor 实例生成（由 `cg_emit_value_type_definition` 统一处理，per-type，§5.1、§5.2）
+- [ ] Trivial/Aggregate descriptor 实例生成（由 `cg_emit_value_type_definition` 统一处理，per-type，描述符类型由 `value_kind` 决定：trivial → `FengTrivialDescriptor`，aggregate → `FengAggregateDescriptor`，§5.1、§5.2）
 - [ ] `equal_fn` 函数生成（`cg_emit_equal_function`，由原 `cg_emit_tuple_equal_function` 重命名 + guard 扩展，per-type，§5.1、§5.2）
 - [ ] `FengAggregateDefaultInitDescriptor` 生成（由 `cg_emit_value_type_definition` 统一处理，per-type）
 - [ ] 基本值语义：赋值、传参、内联布局（`cg_aggregate_facts` 级联 + 聚合 API，§3.2、§3.6）
-- [ ] 成员访问：`cg_emit_member_access` tuple `.` 分支 guard 扩展为 `is_tuple || is_value`（变量/字段读取 `p.x`，§7.4.2 第 3 项关联）
+- [ ] 成员访问：`cg_emit_member` tuple `.` 分支 guard 扩展为 `cg_type_is_tuple_user(t) || cg_type_is_value_user(t)`（变量/字段读取 `p.x`，§7.4.2 第 3 项关联）
 - [ ] 成员赋值：`cg_emit_assign` 成员赋值路径新增 @value 分发（trivial/compound/aggregate/managed 四分支，`(recv).field` 替代 `(recv)->field`，§7.4.2 第 3 项）
 - [ ] 等值比较（`==`/`!=` 走 `equal_fn`，§3.4）
 - [ ] 成员可变性（`let`/`var`，§3.3）
@@ -859,7 +861,7 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 **变更**：
 - [ ] 复用普通 type 泛型实例化路径（含泛型方法/共享体）
-- [ ] 描述符生成（复用元组）：泛型 `@value type` 总是 aggregate（即使实例化后全字段 trivial），生成 `FengAggregateDescriptor`（§2.4）
+- [ ] 描述符生成（复用元组）：泛型 `@value type` 总是 aggregate（即使实例化后全字段 trivial），生成 `FengAggregateDescriptor`（§2.4）。理由：泛型类型参数在声明时大小未知、是否托管也未知，声明阶段无法计算准确的 `value_kind`，统一走 aggregate 路径（与 tuple 处理一致：全具体化实例 `is_generic_instance && generic_context_type_param_count == 0` 时一律生成 `FengAggregateDescriptor`）
 
 **测试**：
 - [ ] 泛型 `@value type` 实例化（fcts/）
