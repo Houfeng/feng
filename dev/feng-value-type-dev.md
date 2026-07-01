@@ -993,21 +993,21 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 - [x] tuple 方法调用站 materialize 正确性
 - [x] 全量回归（402 tests passed）
 
-### 9.16 tuple 描述符命名统一【独立后续 TODO】
+### 9.16 值类型描述符命名统一【独立后续 TODO】
 
-**状态**：未开始 ｜ **依赖**：§9.4 完成（@value 描述符命名落地后） ｜ **范围**：§5.1
+**状态**：已完成 ｜ **依赖**：§9.4 完成（@value 描述符命名落地后） ｜ **范围**：§5.1
 
-**背景**：§5.1 为 @value type 引入按 `value_kind` 动态命名（trivial → `__trivial_desc`，aggregate → `__aggregate_desc`）。tuple 现有命名保持 `__aggregate_desc`（trivial/aggregate 统一），两者不一致。本 TODO 将 tuple 命名同步为 `value_kind` 动态命名，与 @value 统一。
+**背景**：§5.1 为 @value type 引入按 `value_kind` 动态命名（trivial → `__trivial_desc`，aggregate → `__aggregate_desc`）。当前 `cg_init_user_type_value_symbols` 对 tuple 与 @value 统一使用 `__aggregate_desc`（trivial/aggregate 不区分），两者均未实现动态命名。本 TODO 将 tuple 与 @value 的命名同步为 `value_kind` 动态命名。
 
 **变更**：
-- [ ] `cg_init_user_type_value_symbols` 对 tuple 也按 `value_kind` 计算描述符符号名（trivial → `__trivial_desc`，aggregate → `__aggregate_desc`）
-- [ ] 实施时机同 §5.1「实施时机」：非泛型 tuple 在字段注册完成后（后置 pass）计算，泛型具体实例一律 `__aggregate_desc`
-- [ ] 所有引用 `c_aggregate_desc_name` 的站点通过 `cg_aggregate_facts`/`facts.descriptor_name` 访问（已天然支持，无需逐站修改）
-- [ ] 错误消息中 "tuple" 文本泛化（若未在 §9.4 完成）
+- [x] 新增后置 pass 函数 `cg_update_value_type_descriptor_names`：字段注册完成后，对非泛型值类型（tuple 与 @value）按 `value_kind` 计算描述符符号名（trivial → `__trivial_desc`，aggregate → `__aggregate_desc`）
+- [x] 实施时机同 §5.1「实施时机」：非泛型 tuple / @value 在字段注册完成后（后置 pass）计算，泛型具体实例一律 `__aggregate_desc`
+- [x] 所有引用 `c_aggregate_desc_name` 的站点通过 `cg_aggregate_facts`/`facts.descriptor_name` 访问（已天然支持，无需逐站修改）
+- [x] 错误消息中 "tuple" 文本泛化（CE0367/CE0368：`tuple field` → `value-type field`）
 
 **测试**：
-- [ ] tuple trivial/aggregate 描述符符号名正确性（test/）
-- [ ] 全量回归（tuple 描述符符号变更仅影响 C 产出符号名，行为应不变）
+- [x] tuple / @value trivial/aggregate 描述符符号名正确性（test/codegen/test_codegen.c 已更新）
+- [x] 全量回归（402 fcts 测试 + 所有单元测试全部通过）
 
 **注意**
 

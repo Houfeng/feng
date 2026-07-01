@@ -188,6 +188,7 @@ static bool cg_type_is_tuple_user(const CGType *t);
 static bool cg_type_is_value_user(const CGType *t);
 static bool cg_type_is_value_semantics(const CGType *t);
 static bool cg_user_type_is_value_semantics(const struct UserType *t);
+static bool cg_update_value_type_descriptor_names(CG *cg);
 
 static CGType *cgtype_new(CGTypeKind k) {
     CGType *t = calloc(1, sizeof *t);
@@ -31492,6 +31493,11 @@ static bool cg_emit_all_programs(CG *cg,
     for (size_t p = 0; p < program_count; p++) {
         if (!cg_pass_register_module_bindings(cg, programs[p], target)) return false;
     }
+    /* Pass 2c (§9.16): update value-type descriptor symbol names based on
+     * the computed value_kind. Must run after Pass 2 (field registration)
+     * so field types are resolved, and before Pass 3 (type forward emit)
+     * which references c_aggregate_desc_name in forward declarations. */
+    if (!cg_update_value_type_descriptor_names(cg)) return false;
     /* Pass 3 + 3.5a/3.5b: emit type forwards/defs and spec forwards/defs.
      * These walk the global cg shell arrays. cur_program is pinned per
      * element so any diagnostic raised mid-emission reports the correct
@@ -32945,6 +32951,50 @@ static size_t cg_aggregate_top_level_slot_count(const UserType *t) {
     return count;
 }
 
+/* §9.16: Post-pass after field registration — update the aggregate descriptor
+ * symbol name based on the computed value_kind for non-generic value-semantics
+ * types (tuple and @value).
+ *
+ * cg_init_user_type_value_symbols runs before fields are registered and always
+ * sets c_aggregate_desc_name to <struct>__aggregate_desc. After field types
+ * are resolved we can distinguish trivial (all fields bit-copyable) from
+ * aggregate (at least one managed slot) and rename the symbol accordingly:
+ *   - trivial   → <struct>__trivial_desc
+ *   - aggregate → <struct>__aggregate_desc   (unchanged)
+ *
+ * Generic concrete instances always use __aggregate_desc (§2.4: generic value
+ * types uniformly walk the aggregate path regardless of reified field kinds).
+ * Open generic instances (context_type_param_count > 0) are also skipped —
+ * they never emit a descriptor definition. */
+static bool cg_update_value_type_descriptor_names(CG *cg) {
+    for (size_t i = 0; i < cg->user_type_count; i++) {
+        UserType *t = &cg->user_types[i];
+
+        if (!cg_user_type_is_value_semantics(t)) continue;
+        /* 泛型具体实例一律 __aggregate_desc（§2.4），无需重命名。 */
+        if (t->is_generic_instance) continue;
+
+        size_t slot_count = cg_value_aggregate_flattened_pointer_slot_count(t);
+        const char *suffix = (slot_count > 0U) ? "__aggregate_desc"
+                                               : "__trivial_desc";
+        Buf new_name;
+        buf_init(&new_name);
+        buf_append_fmt(&new_name, "%s%s", t->c_struct_name, suffix);
+        if (new_name.data == NULL) {
+            return cg_fail(cg, t->decl->token, "IE0001",
+                           "codegen: out of memory");
+        }
+        /* 仅在 suffix 变更时替换（aggregate 沿用初始值，无需 free/realloc）。 */
+        if (slot_count == 0U) {
+            free(t->c_aggregate_desc_name);
+            t->c_aggregate_desc_name = new_name.data;
+        } else {
+            buf_free(&new_name);
+        }
+    }
+    return true;
+}
+
 /* Emit field-wise value-type equality used by both trivial and aggregate
  * descriptors (tuple and @value type). Field descriptors preserve string,
  * float, and nested aggregate semantics without changing non-generic call sites. */
@@ -33103,7 +33153,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
                     if (nested_desc == NULL) {
                         (void)cg_fail(cg,
                                       t->decl->token,
-                                      "CE0367", "codegen: tuple field '%s' has no aggregate descriptor",
+                                      "CE0367", "codegen: value-type field '%s' has no aggregate descriptor",
                                       field->feng_name);
                         buf_free(&equal_fn_name);
                         return;
@@ -33183,7 +33233,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
                         buf_free(&equal_fn_name);
                         (void)cg_fail(cg,
                                       *blame,
-                                      "CE0368", "codegen: missing tuple field aggregate default initializer");
+                                      "CE0368", "codegen: missing value-type field aggregate default initializer");
                         return;
                     }
                     buf_append_fmt(td, "    %s;\n", init_call.data);

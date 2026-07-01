@@ -5856,7 +5856,7 @@ static void test_tuple_value_codegen_core(void) {
     }
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "struct Feng__feng__codegen__tuplecore__Point {") != NULL);
-    ASSERT(strstr(out.c_source, "Feng__feng__codegen__tuplecore__Point__aggregate_desc") != NULL);
+    ASSERT(strstr(out.c_source, "Feng__feng__codegen__tuplecore__Point__trivial_desc") != NULL);
     ASSERT(strstr(out.c_source, ".item1") != NULL);
     {
         const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
