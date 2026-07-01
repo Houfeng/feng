@@ -379,6 +379,26 @@ open func test_exception() {
     test("lambda try/catch string result", () {
       assert(test_lambda_try_catch_string_result(), "lambda try/catch string result");
     });
+
+    test("throw/catch trivial @value type", () {
+      assert(test_throw_catch_value_point(), "throw/catch trivial @value type");
+    });
+
+    test("throw/catch aggregate @value type", () {
+      assert(test_throw_catch_value_error(), "throw/catch aggregate @value type");
+    });
+
+    test("@value type exception value semantics", () {
+      assert(test_value_exception_independence(), "@value type exception value semantics");
+    });
+
+    test("multiple catch clauses with @value types", () {
+      assert(test_multiple_catch_value_types(), "multiple catch clauses with @value types");
+    });
+
+    test("@value type exception rethrow", () {
+      assert(test_value_exception_rethrow(), "@value type exception rethrow");
+    });
   });
 }
 
@@ -421,4 +441,102 @@ func call_rethrow() {
   try throw_error() catch ex: string {
     throw "rethrown: " + ex;
   };
+}
+
+// ============================================================================
+// @value type exception tests (§9.14)
+// ============================================================================
+
+// Trivial @value type for exception testing
+@value
+type ExValuePoint {
+  var x: float;
+  var y: float;
+}
+
+// Aggregate @value type for exception testing (has managed field)
+@value
+type ExValueError {
+  let code: int;
+  let message: string;
+}
+
+// Throw trivial @value type
+func throw_value_point(x: float, y: float): float {
+  let p = ExValuePoint { x: x, y: y };
+  throw p;
+  return 0.0;
+}
+
+// Throw aggregate @value type
+func throw_value_error(code: int, msg: string): string {
+  let e = ExValueError { code: code, message: msg };
+  throw e;
+  return "unreachable";
+}
+
+// Test throw/catch trivial @value type
+func test_throw_catch_value_point(): bool {
+  var caught_x: float = 0.0;
+  var caught_y: float = 0.0;
+  try throw_value_point(3.0, 4.0) catch ex: ExValuePoint {
+    caught_x = ex.x;
+    caught_y = ex.y;
+  };
+  return caught_x == 3.0 && caught_y == 4.0;
+}
+
+// Test throw/catch aggregate @value type
+func test_throw_catch_value_error(): bool {
+  var caught_code: int = 0;
+  var caught_msg = "";
+  try throw_value_error(404, "not found") catch ex: ExValueError {
+    caught_code = ex.code;
+    caught_msg = ex.message;
+  };
+  return caught_code == 404 && caught_msg == "not found";
+}
+
+// Test value semantics: caught @value is independent copy
+func throw_value_point_direct() {
+  let original = ExValuePoint { x: 1.0, y: 2.0 };
+  throw original;
+}
+
+func test_value_exception_independence(): bool {
+  var original = ExValuePoint { x: 1.0, y: 2.0 };
+  var caught_x: float = 0.0;
+  try throw_value_point_direct() catch ex: ExValuePoint {
+    caught_x = ex.x;
+    // Modify caught value should not affect original
+    ex.x = 999.0;
+  };
+  // Original should still be 1.0 (value semantics)
+  return caught_x == 1.0 && original.x == 1.0;
+}
+
+// Test multiple catch clauses with @value types
+func test_multiple_catch_value_types(): bool {
+  var catch_type = "";
+  try throw_value_error(500, "error") catch ex: ExValuePoint {
+    catch_type = "point";
+  } catch ex: ExValueError {
+    catch_type = "error";
+  };
+  return catch_type == "error";
+}
+
+// Test @value type exception with rethrow
+func throw_rethrown_value_error() {
+  try throw_value_error(100, "first") catch ex: ExValueError {
+    throw ExValueError { code: ex.code + 1, message: "rethrown" };
+  };
+}
+
+func test_value_exception_rethrow(): bool {
+  var rethrown_code: int = 0;
+  try throw_rethrown_value_error() catch ex: ExValueError {
+    rethrown_code = ex.code;
+  };
+  return rethrown_code == 101;
 }

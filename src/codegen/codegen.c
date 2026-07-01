@@ -19128,6 +19128,75 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
         free(feng_name);
         return cg_fail(cg, err_token, "CE0213", "codegen: missing catch binding type");
     }
+    /* Value-semantics types (tuple / @value): extract value from spec box.
+     * The caught value is a box pointer; we extract and copy the value,
+     * registering for cleanup as a regular local (not param). */
+    if (cg_type_is_value_semantics(catch_type)) {
+        const UserType *ut = catch_type->user;
+        char *cty = cg_ctype_dup(catch_type);
+
+        if (ut == NULL || ut->c_value_box_struct_name == NULL || cty == NULL) {
+            free(cty);
+            free(c_name);
+            free(feng_name);
+            return cg_fail(cg, err_token,
+                           "CE0214", "codegen: missing value-type box metadata for catch binding");
+        }
+
+        /* Declare local and extract value from box. */
+        if (cgtype_is_aggregate(catch_type)) {
+            /* Aggregate: declare, initialize to zero, then use feng_aggregate_assign
+             * to copy with retain. */
+            buf_append_fmt(cg->cur_body,
+                           "        %s %s;\n"
+                           "        memset(&%s, 0, sizeof %s);\n",
+                           cty,
+                           c_name,
+                           c_name,
+                           c_name);
+
+            const char *agg_desc = cg_aggregate_desc_name(catch_type);
+            if (agg_desc == NULL) {
+                free(cty);
+                free(c_name);
+                free(feng_name);
+                return cg_fail(cg, err_token,
+                               "CE0214", "codegen: missing aggregate descriptor for value-type catch binding");
+            }
+            buf_append_fmt(cg->cur_body,
+                           "        feng_aggregate_assign(&%s, "
+                           "&((struct %s *)feng_caught_value())->value, &%s);\n",
+                           c_name,
+                           ut->c_value_box_struct_name,
+                           agg_desc);
+        } else {
+            /* Trivial: declare and direct struct copy. */
+            buf_append_fmt(cg->cur_body,
+                           "        %s %s = ((struct %s *)feng_caught_value())->value;\n",
+                           cty,
+                           c_name,
+                           ut->c_value_box_struct_name);
+        }
+        free(cty);
+
+        /* Register for cleanup as regular local (is_param = false) so the
+         * extracted value gets released when the catch scope exits. */
+        if (!scope_add(cg->cur_scope,
+                       feng_name,
+                       c_name,
+                       cgtype_clone(catch_type),
+                       false)) {
+            free(c_name);
+            free(feng_name);
+            return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
+        }
+        if (cgtype_is_aggregate(catch_type)) {
+            cg_emit_cleanup_push_for_aggregate_local(cg, c_name, catch_type);
+        }
+        free(c_name);
+        free(feng_name);
+        return true;
+    }
     if (cg_type_kind_is_scalar_builtin(catch_type->kind)) {
         const char *field_name = cg_scalar_box_payload_field_name(catch_type->kind);
         char *cty = cg_ctype_dup(catch_type);
@@ -23760,6 +23829,18 @@ static bool cg_exception_descriptor_expr_for_type(CG *cg,
             *out_expr = strdup("&feng_array_descriptor");
             return *out_expr != NULL;
         case CG_TYPE_OBJECT:
+            /* Value-semantics types (tuple / @value) use their spec box
+             * descriptor for exception identity. */
+            if (cg_type_is_value_semantics(type)) {
+                if (type->user == NULL || type->user->c_value_box_desc_name == NULL) {
+                    return cg_fail(cg, token,
+                                   "CE0281", "codegen: value-type exception payload is missing a box descriptor");
+                }
+                buf_init(&b);
+                buf_append_fmt(&b, "&%s", type->user->c_value_box_desc_name);
+                *out_expr = b.data;
+                return *out_expr != NULL;
+            }
             if (type->user == NULL || type->user->c_desc_name == NULL) {
                 return cg_fail(cg, token,
                                "CE0281", "codegen: object exception payload is missing a descriptor");
@@ -23828,6 +23909,71 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
                        tmp_subj, tmp_subj);
         free(tmp_sv);
         free(tmp_subj);
+        er_free(&r);
+        return true;
+    }
+
+    /* Value-semantics types (tuple / @value): box into spec box for exception
+     * identity. Pattern mirrors cg_emit_spec_box_subject — materialize source,
+     * allocate box, copy value, throw box pointer. */
+    if (cg_type_is_value_semantics(r.type)) {
+        const UserType *ut = r.type->user;
+        if (ut == NULL || ut->c_value_box_struct_name == NULL ||
+            ut->c_value_box_desc_name == NULL) {
+            er_free(&r);
+            return cg_fail(cg, stmt->token,
+                           "CE0281", "codegen: value-type exception payload is missing box metadata");
+        }
+
+        /* Materialize source to local (handles ownership: retains if borrowed,
+         * registers for cleanup). */
+        if (cg_materialize_to_local(cg, &r, "_thr_val") == NULL) {
+            er_free(&r);
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
+        }
+
+        char *box_tmp = cg_fresh_temp(cg, "_thr_box");
+        if (box_tmp == NULL) {
+            er_free(&r);
+            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
+        }
+
+        /* Allocate box with feng_object_new using box descriptor. */
+        buf_append_fmt(cg->cur_body,
+                       "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n",
+                       ut->c_value_box_struct_name,
+                       box_tmp,
+                       ut->c_value_box_struct_name,
+                       ut->c_value_box_desc_name);
+
+        /* Copy value into box: aggregate uses feng_aggregate_assign (retains
+         * managed fields), trivial uses direct assignment. */
+        if (cgtype_is_aggregate(r.type)) {
+            const char *agg_desc = cg_aggregate_desc_name(r.type);
+            if (agg_desc == NULL) {
+                free(box_tmp);
+                er_free(&r);
+                return cg_fail(cg, stmt->token,
+                               "CE0281", "codegen: missing aggregate descriptor for value-type exception");
+            }
+            buf_append_fmt(cg->cur_body,
+                           "    feng_aggregate_assign(&%s->value, &%s, &%s);\n",
+                           box_tmp,
+                           r.c_expr,
+                           agg_desc);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "    %s->value = %s;\n",
+                           box_tmp,
+                           r.c_expr);
+        }
+
+        /* Throw the box pointer. */
+        buf_append_fmt(cg->cur_body,
+                       "    feng_throw((void *)%s, &%s);\n",
+                       box_tmp,
+                       ut->c_value_box_desc_name);
+        free(box_tmp);
         er_free(&r);
         return true;
     }

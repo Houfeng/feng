@@ -961,17 +961,17 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.14 异常【复用元组】
 
-**状态**：未开始 ｜ **依赖**：9.9 ｜ **范围**：§6.2
+**状态**：已完成 ｜ **依赖**：9.9 ｜ **范围**：§6.2
 
 **变更**：
-- [ ] 异常 payload 装箱 emit（复用元组装箱路径，per-type 生成）
-- [ ] `@value type` 作为异常抛出类型（装箱路径，§6.2）
-- [ ] catch 端按值取出
+- [x] 异常 payload 装箱 emit（复用元组装箱路径，per-type 生成）
+- [x] `@value type` 作为异常抛出类型（装箱路径，§6.2）
+- [x] catch 端按值取出
 
 **测试**：
-- [ ] throw `@value type`（fcts/）
-- [ ] catch `@value type`
-- [ ] 全量回归
+- [x] throw `@value type`（fcts/）
+- [x] catch `@value type`
+- [x] 全量回归（397 tests passed）
 
 ### 9.15 tuple 描述符命名统一【独立后续 TODO】
 
