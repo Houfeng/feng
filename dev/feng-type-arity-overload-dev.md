@@ -210,15 +210,17 @@ static FengOverloadCategory decl_overload_category(const FengDecl *decl) {
 
 | 规则 | 场景 | 触发时机（不变） | 判定维度（本次改） | 改造内容 |
 |------|------|------------------|---------------------|----------|
-| 规则 1 | 跨模块（涉及 import） | 惰性（使用点 AE0005） | name → **(name, arity)** | import 去重 key 改 (name, arity)；`collect_symbol_candidates` 按 arity 精确收集 type/spec 候选 |
+| 规则 1 | 跨模块（涉及 import） | 惰性（使用点 AE0005） | name-only（不变） | 不同模块间 name-only 同名即冲突（与顶层函数一致）；`collect_symbol_candidates` 不按 arity 筛选，`candidates_form_ambiguity` 按 `provider_module` 判定歧义；同模块重载面内 arity 精确匹配由下游 `find_named_type_decl` 负责（§4） |
 | 规则 2 | 同模块，不同 category | 急切（定义处） | name（不变） | 补充 function/binding 与 type/spec/enum 跨数组 name-only 检查（当前缺失，§3.3） |
 | 规则 3 | 同模块，相同 category | 急切（定义处） | name → **(name, arity)**（仅 5 类 type/spec） | 5 类 type/spec 同名不同 arity 允许共存；FUNCTION 仍走多维重载（不变）；NO_OVERLOADING 仍 name（不变） |
 
 - **规则 1 影响**（惰性，不改触发时机）：
   - `import_public_names` 中 `seen_type_names` 去重 key 从 `name` 改为 `(name, arity)`（L20052/L20084/L20193），支持同名不同 arity 同时导入
   - `import_public_names` 中 `find_visible_type_index` "已存在则 break" 判断从 name 改为 (name, arity)（L20060/L20092/L20201）
-  - 使用点 `collect_symbol_candidates`（L2480）增加 `type_param_count` 参数，对 type/spec 候选按 arity 筛选——否则模块A `type Box<T>` 与模块B `type Box<T, U>` 在使用点 `Box<int>` 会被误收集为两个候选，误报 AE0005 歧义
-  - `report_name_ambiguity_if_any`（L2716）透传 arity，类型上下文传 `type_ref->as.named.type_arg_count`，值上下文传 0（function/binding 无 arity 维度，由 lookup kind 过滤）
+  - **跨模块歧义检测保持 name-only**（`collect_symbol_candidates` + `candidates_form_ambiguity`，L2480/L2547）：候选收集不按 arity 筛选，模块A `Box<T>` + 模块B `Box<T,U>` 在使用方同时 import 时，`candidates_form_ambiguity` 因 `provider_module` 不同直接报 AE0005（与"跨模块 name-only 同名即冲突"一致）
+  - **同模块重载面内按 arity 精确匹配**：跨模块歧义检测通过后（`report_name_ambiguity_if_any` 返回 true），类型引用解析走 `find_named_type_decl(name, arity)` 按 (name, arity) 精确匹配同模块重载面内的目标声明（§4）。`collect_symbol_candidates` **不增加 arity 参数**——arity 精确匹配由下游 `find_named_type_decl` 负责，不在候选收集阶段做
+  - `report_name_ambiguity_if_any`（L2716）**不透传 arity**：歧义检测是 name-only 的，与 arity 无关
+- **跨模块规则（本次不改动触发时机，仅澄清语义）**：不同模块间一律 name-only 同名即冲突（与顶层函数重载一致——同模块才构成同一重载面，跨模块 name-only 判定）。模块A `type Box<T>` 与模块B `type Box<T, U>` 在使用方同时 import 时，**不论 arity 都报 AE0005**（lazy，使用点触发）。`collect_symbol_candidates` 不按 arity 筛选，`candidates_form_ambiguity` 按 `provider_module` 判定歧义
 - **规则 2 影响**（急切，不改触发时机）：`check_symbol_conflicts` 中跨 category 冲突检查按 name 判定。当前实现中，type/spec/enum 三者共享 `visible_types` 数组（已通过 `find_visible_type_index` name 查找间接实现 name-only 冲突，L25080/L25113/L25323），function/binding 共享 `visible_values` 数组（同理已实现，L25147/L25193）；但 **function/binding 与 type/spec/enum 之间无跨数组检查**，需新增 `has_name_only_conflict_across_arrays` 遍历两个数组按 name 判定（§3.3）
 - **规则 3 影响**（急切，不改触发时机）：`check_symbol_conflicts` 中同 category 冲突检查：5 类 type/spec category 改为按 `(name, arity)` 判定（**核心改动点**）；FUNCTION 仍走现有 `FunctionOverloadSetEntry` / `compute_overload_match_priority` 多维重载机制（**不改动**）；NO_OVERLOADING 仍按 name 判定（现有行为，不变）
 
@@ -464,7 +466,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 | 冲突检查 | `src/semantic/analyzer.c` | `check_symbol_conflicts` 中 `FENG_DECL_TYPE` / `FENG_DECL_SPEC` / `FENG_DECL_ENUM` / `FENG_DECL_FUNCTION` / `FENG_DECL_GLOBAL_BINDING` 五分支 + 新增 `has_cross_category_conflict` / `has_name_only_conflict_across_arrays` |
 | 类型解析 | `src/semantic/analyzer.c` | `resolve_type_ref`（L20391–20457 arity 验证重构）/ `resolve_type_ref_decl` 及所有调用点 |
 | 存在性检查 | `src/semantic/analyzer.c` | `find_unshadowed_alias`（L4500）/ `resolve_type_target_expr`（L14658）/ `use` 声明冲突检查（L20305）/ 标识符解析（L20809）改用 `find_visible_type_any_arity` |
-| 模块导入 | `src/semantic/analyzer.c` | `import_public_names` 中 `seen_type_names` 改为 (name, arity) 去重（规则 1，惰性不改触发时机）；`collect_symbol_candidates`（L2480）+ `report_name_ambiguity_if_any`（L2716）感知 arity |
+| 模块导入 | `src/semantic/analyzer.c` | `import_public_names` 中 `seen_type_names` 改为 (name, arity) 去重（规则 1，惰性不改触发时机）；`collect_symbol_candidates`（L2480）+ `report_name_ambiguity_if_any`（L2716）**保持 name-only**，不感知 arity（跨模块歧义按 name 判定，同模块 arity 精确匹配由下游 `find_named_type_decl` 负责） |
 | 跨模块查找 | `src/semantic/analyzer.c` | `find_module_public_type_decl`（L2948）改为按 (name, arity) 查找 + 新增 `find_module_public_type_decl_any_arity`（存在性检查）；6 处调用点改造（§6.4） |
 | 模块导出 | `src/symbol/export.c` | 导出时需携带 arity 信息 |
 | 符号提供 | `src/symbol/provider.c` | 导入时按 `(name, arity)` 注册 |
@@ -559,9 +561,9 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
   - `find_visible_type_index` "已存在则 break" 判断改为 (name, arity)（L20060/L20092/L20201）
   - `FENG_DECL_SPEC` 分支（L20189）同理
   - **不改触发时机**：import 阶段仍不做冲突检查（惰性，§3.0 规则 1），仅做去重 + 候选收集
-- [ ] 改造 `collect_symbol_candidates`（L2480）：增加 `type_param_count` 参数，对 type/spec 候选按 arity 筛选（不同 arity 不算歧义候选）
-- [ ] 改造 `report_name_ambiguity_if_any`（L2716）：透传 arity，类型上下文传 `type_ref->as.named.type_arg_count`，值上下文传 0
-- [ ] 改造 `report_name_ambiguity_if_any` 各调用点（L7005/L15875/L19657/L20485/L20800）：类型上下文传使用点 arity
+- [ ] 改造 `collect_symbol_candidates`（L2480）：**不增加 arity 参数**——跨模块歧义检测保持 name-only，arity 精确匹配由下游 `find_named_type_decl` 负责（§4）。仅需验证现有 name-only 收集逻辑在 arity 重载下面行为不变
+- [ ] 改造 `report_name_ambiguity_if_any`（L2716）：**不透传 arity**，歧义检测是 name-only 的
+- [ ] ~~改造 `report_name_ambiguity_if_any` 各调用点（L7005/L15875/L19657/L20485/L20800）~~：因 `report_name_ambiguity_if_any` 不透传 arity，各调用点无需改造
 - [ ] 改造 `src/symbol/export.c`，导出时携带 arity
 - [ ] 改造 `src/symbol/ft_write.c` / `ft_read.c`，序列化支持 arity
 
@@ -712,8 +714,8 @@ func main() {
 - [ ] 改造 enum 专用调用点（L7930 / L8660，arity = 0）
 - [ ] 改造 `find_module_public_type_decl`（L2948）及 6 处调用点（§6.4，跨模块 (name, arity) 查找）+ 新增 `find_module_public_type_decl_any_arity`
 - [ ] 改造 `import_public_names`：`seen_type_names` 改 (name, arity) 去重 + `find_visible_type_index` "已存在则 break" 改 (name, arity)（规则 1，惰性不改触发时机）
-- [ ] 改造 `collect_symbol_candidates`（L2480）：增加 `type_param_count` 参数，对 type/spec 候选按 arity 筛选
-- [ ] 改造 `report_name_ambiguity_if_any`（L2716）及各调用点（L7005/L15875/L19657/L20485/L20800）：透传 arity
+- [ ] 改造 `collect_symbol_candidates`（L2480）：**不增加 arity 参数**，跨模块歧义检测保持 name-only
+- [ ] ~~改造 `report_name_ambiguity_if_any`（L2716）及各调用点~~：歧义检测 name-only，不透传 arity，无需改造
 - [ ] 改造 `src/symbol/export.c` / `ft_write.c` / `ft_read.c`
 - [ ] 改造 `src/codegen/codegen.c` mangling
 - [ ] 改造 `src/cli/lsp/runtime.c`
