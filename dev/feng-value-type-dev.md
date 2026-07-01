@@ -933,17 +933,17 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.12 `@abi func` 形参/返回的 ABI 互操作【新增】
 
-**状态**：未开始 ｜ **依赖**：9.11 ｜ **范围**：§6.1、§7.2
+**状态**：已完成 ｜ **依赖**：9.11 ｜ **范围**：§6.1、§7.2
 
 **变更**：
-- [ ] `c_abi_value_name` 对 `@value @abi type` 平凡拷贝（值本身即 ABI 结构，§6.1）
-- [ ] `c_abi_box_name` 对 `@value @abi type` 不生成（不堆分配）
-- [ ] Codegen 在 `@abi func` 返回站点按 `@value` 标志跳过 box 调用，直接按值返回
+- [x] `c_abi_value_name` 对 `@value @abi type` 平凡拷贝（值本身即 ABI 结构，§6.1）——extern 调用形参：materialize @value 为 lvalue 后传 `&local` 给 `c_abi_value_name`
+- [x] `c_abi_box_name` 对 `@value @abi type` 不生成（不堆分配）——已在 §9.11 完成
+- [x] Codegen 在 `@abi func` 返回站点按 `@value` 标志跳过 box 调用，直接按值返回——wrapper 返回：存入临时变量后 `*(struct abi_layout *)&ret` 类型转换；extern 返回：`c_abi_box_name` 为 NULL 自然走直接调用路径
 
 **测试**：
-- [ ] `@abi func` 形参为 `@value @abi type`（fcts/）
-- [ ] `@abi func` 返回 `@value @abi type`
-- [ ] 全量回归
+- [x] `@abi func` 形参为 `@value @abi type`（fcts/）
+- [x] `@abi func` 返回 `@value @abi type`
+- [x] 全量回归
 
 ### 9.13 数组元素【复用元组】
 

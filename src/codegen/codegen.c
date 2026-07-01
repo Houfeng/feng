@@ -13384,14 +13384,28 @@ static bool cg_emit_registered_call(CG *cg,
         const UserType *expected_abi_user =
             (ext != NULL && !ext->uses_runtime_contract) ? cg_abi_value_user_type(expected_ty)
                                                          : NULL;
-        if (i) buf_append_cstr(&args_buf, ", ");
         if (cgtype_is_managed(ar.type) && ar.owns_ref) {
             cg_materialize_to_local(cg, &ar, "_t");
         } else if (cgtype_is_aggregate(ar.type)) {
             cg_materialize_to_local(cg, &ar, "_t");
+        } else if (expected_abi_user != NULL &&
+                   cg_user_type_is_value(expected_abi_user)) {
+            /* §9.12: @value @abi type is a value expression (rvalue).
+             * Materialize to an lvalue so we can pass &local to
+             * c_abi_value_name (which expects a const pointer). */
+            cg_materialize_to_local(cg, &ar, "_t");
         }
+        if (i) buf_append_cstr(&args_buf, ", ");
         if (expected_abi_user != NULL && expected_abi_user->c_abi_value_name != NULL) {
-            buf_append_fmt(&args_buf, "%s(%s)", expected_abi_user->c_abi_value_name, ar.c_expr);
+            if (cg_user_type_is_value(expected_abi_user)) {
+                /* §9.12: @value @abi — pass address of the materialized
+                 * local (c_abi_value_name expects const struct X *). */
+                buf_append_fmt(&args_buf, "%s(&%s)",
+                               expected_abi_user->c_abi_value_name, ar.c_expr);
+            } else {
+                buf_append_fmt(&args_buf, "%s(%s)",
+                               expected_abi_user->c_abi_value_name, ar.c_expr);
+            }
         } else {
             buf_append_cstr(&args_buf, ar.c_expr);
         }
@@ -13515,7 +13529,21 @@ static bool cg_emit_free_fn_abi_wrapper(CG *cg,
         const UserType *abi_user = cg_abi_value_user_type(fn->param_types[i]);
         const char *param_name = fn->param_names[i] ? fn->param_names[i] : "_p";
 
-        if (abi_user != NULL && abi_user->c_abi_box_name != NULL) {
+        if (abi_user != NULL && cg_user_type_is_value(abi_user)) {
+            /* §9.12: @value @abi — wrapper param is struct <abi_layout>
+             * by value; _impl function expects struct <feng_struct> by
+             * value (not a pointer).  Reinterpret via type-punning cast:
+             * *(struct Feng__mod__T *)&param.  Layout guaranteed
+             * identical by _Static_assert in
+             * cg_emit_value_type_abi_surface.  @value @abi types are
+             * always trivial (no managed fields), so no cleanup is
+             * needed for the wrapper parameter. */
+            Buf addr_buf;
+            buf_init(&addr_buf);
+            buf_append_fmt(&addr_buf, "*(struct %s *)&%s",
+                           abi_user->c_struct_name, param_name);
+            call_args[i] = addr_buf.data;
+        } else if (abi_user != NULL && abi_user->c_abi_box_name != NULL) {
             boxed_params[i] = cg_fresh_temp(cg, "_abi_arg");
             if (boxed_params[i] == NULL) {
                 ok = false;
@@ -13549,7 +13577,45 @@ static bool cg_emit_free_fn_abi_wrapper(CG *cg,
     }
 
     const UserType *return_abi_user = cg_abi_value_user_type(fn->return_type);
-    if (return_abi_user != NULL && return_abi_user->c_abi_value_name != NULL) {
+    if (return_abi_user != NULL && cg_user_type_is_value(return_abi_user)) {
+        /* §9.12: @value @abi return — Feng function returns struct by
+         * value (not a heap pointer).  The C ABI wrapper returns the
+         * same struct layout directly, no c_abi_value_name conversion
+         * or feng_release needed.  @value @abi types are always trivial
+         * (no managed fields), so no aggregate cleanup is needed.
+         * Cast to ABI layout type (different C name, identical layout,
+         * guaranteed by _Static_assert). */
+        if (fn->return_type != NULL && fn->return_type->kind != CG_TYPE_VOID) {
+            char *ret_tmp = cg_fresh_temp(cg, "_abi_ret");
+            if (ret_tmp == NULL) {
+                ok = false;
+            } else {
+                buf_append_cstr(body, "    ");
+                cg_emit_c_type(body, fn->return_type);
+                buf_append_fmt(body, " %s = %s(", ret_tmp, fn->c_name);
+                for (size_t i = 0; i < fn->param_count; ++i) {
+                    if (i != 0U) {
+                        buf_append_cstr(body, ", ");
+                    }
+                    buf_append_cstr(body, call_args[i]);
+                }
+                buf_append_fmt(body, ");\n");
+                buf_append_fmt(body,
+                    "    return *(struct %s *)&%s;\n",
+                    return_abi_user->c_abi_layout_name, ret_tmp);
+                free(ret_tmp);
+            }
+        } else {
+            buf_append_fmt(body, "    %s(", fn->c_name);
+            for (size_t i = 0; i < fn->param_count; ++i) {
+                if (i != 0U) {
+                    buf_append_cstr(body, ", ");
+                }
+                buf_append_cstr(body, call_args[i]);
+            }
+            buf_append_cstr(body, ");\n");
+        }
+    } else if (return_abi_user != NULL && return_abi_user->c_abi_value_name != NULL) {
         char *ret_obj = cg_fresh_temp(cg, "_abi_ret_obj");
         char *ret_value = cg_fresh_temp(cg, "_abi_ret");
         if (ret_obj == NULL || ret_value == NULL) {

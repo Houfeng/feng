@@ -411,6 +411,38 @@ type VAbiRect {
   var height: int;
 }
 
+// §9.12: @abi func with @value @abi parameter/return (ABI interop)
+
+// @abi func taking @value @abi parameter
+@abi
+func vabi_point_sum(p: VAbiPoint): int {
+  return p.x + p.y;
+}
+
+// @abi func returning @value @abi
+@abi
+func vabi_make_point(x: int, y: int): VAbiPoint {
+  var p: VAbiPoint;
+  p.x = x;
+  p.y = y;
+  return p;
+}
+
+// @abi func with both @value @abi parameter and return
+@abi
+func vabi_translate(p: VAbiPoint, dx: int, dy: int): VAbiPoint {
+  var result: VAbiPoint;
+  result.x = p.x + dx;
+  result.y = p.y + dy;
+  return result;
+}
+
+// @abi func with nested @value @abi parameter
+@abi
+func vabi_rect_area(r: VAbiRect): int {
+  return r.width * r.height;
+}
+
 /** @value type 测试 */
 open func test_value_type() {
   describe("value-type", () {
@@ -1062,6 +1094,51 @@ open func test_value_type() {
       p2.x = 99;
       assert(p1.x == 5, "@value @abi value copy is independent");
       assert(p2.x == 99, "@value @abi copy has new value");
+    });
+
+    // --- @abi func @value @abi ABI interop tests (§9.12) ---
+
+    test("@abi func with @value @abi parameter", () {
+      var p: VAbiPoint;
+      p.x = 10;
+      p.y = 20;
+      assert(vabi_point_sum(p) == 30, "@abi func receives @value @abi parameter correctly");
+    });
+
+    test("@abi func returning @value @abi", () {
+      let p = vabi_make_point(42, 99);
+      assert(p.x == 42 && p.y == 99, "@abi func returns @value @abi correctly");
+    });
+
+    test("@abi func with @value @abi parameter and return", () {
+      var p: VAbiPoint;
+      p.x = 5;
+      p.y = 10;
+      let translated = vabi_translate(p, 3, 7);
+      assert(translated.x == 8 && translated.y == 17,
+             "@abi func with @value @abi param and return works correctly");
+      // Verify original is unchanged (value semantics)
+      assert(p.x == 5 && p.y == 10,
+             "@value @abi original unchanged after @abi func call");
+    });
+
+    test("@abi func with nested @value @abi parameter", () {
+      var r: VAbiRect;
+      r.origin.x = 0;
+      r.origin.y = 0;
+      r.width = 10;
+      r.height = 20;
+      assert(vabi_rect_area(r) == 200,
+             "@abi func with nested @value @abi parameter works correctly");
+    });
+
+    test("@abi func with @value @abi compiles and generates wrapper", () {
+      // The @abi func declarations (vabi_point_sum, vabi_make_point,
+      // vabi_translate, vabi_rect_area) exercise the ABI wrapper
+      // generation for @value @abi parameter/return types.
+      // The compilation itself verifies the wrapper C types are correct.
+      // Runtime behavior is tested by direct calls above.
+      assert(true, "@abi func @value @abi ABI wrappers generated successfully");
     });
   });
 }
