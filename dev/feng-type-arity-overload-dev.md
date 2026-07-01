@@ -91,7 +91,46 @@ static size_t find_visible_type_index(const VisibleTypeEntry *entries,
 
 查找逻辑：同时匹配 `name` 和从 `decl` 提取的 `type_param_count`。
 
-**辅助函数**：从 `FengDecl` 提取 `type_param_count`：
+### 2.3 find_visible_type 改造
+
+`find_visible_type`（`src/semantic/analyzer.c:2372`）当前仅按名称查找，有 **6 个调用点**。改造后需区分两类场景：
+
+**精确匹配场景**（知道 arity，需要匹配特定声明）：
+
+| 行号 | 上下文 | arity 来源 |
+|------|--------|------------|
+| L2383 | `find_visible_type_decl` 内部 | 从参数透传 |
+| L14658 | 泛型目标类型推断 | 需从调用上下文获取 `type_arg_count` |
+| L14691 | 约束 spec 查找 | `cref->as.named.type_arg_count` |
+
+**存在性检查场景**（只需判断是否存在任意 arity 的同名类型）：
+
+| 行号 | 上下文 | 说明 |
+|------|--------|------|
+| L4500 | `find_unshadowed_alias` — alias 是否被类型遮蔽 | 只需知道是否存在同名类型 |
+| L20305 | `use` 声明别名冲突检查 | 只需知道是否存在同名类型（冲突检查不关心 arity） |
+| L20809 | 标识符解析 — 判断标识符是否为类型名 | 只需知道是否存在同名类型 |
+
+**方案**：新增 `find_visible_type_any_arity` 辅助函数，用于存在性检查：
+
+```c
+static const VisibleTypeEntry *find_visible_type_any_arity(const VisibleTypeEntry *entries,
+                                                           size_t count,
+                                                           FengSlice name) {
+    for (size_t i = 0U; i < count; ++i) {
+        if (slice_equals(entries[i].name, name)) {
+            return &entries[i];
+        }
+    }
+    return NULL;
+}
+```
+
+`find_visible_type` 本身改为接受 `type_param_count`，仅用于精确匹配场景。
+
+### 2.4 辅助函数
+
+从 `FengDecl` 提取 `type_param_count`：
 
 ```c
 static size_t decl_type_param_count(const FengDecl *decl) {
@@ -116,10 +155,22 @@ static size_t decl_type_param_count(const FengDecl *decl) {
 ```c
 case FENG_DECL_TYPE: {
     size_t arity = decl->as.type_decl.type_param_count;
+
+    // 先检查跨 kind 冲突
+    if (has_cross_kind_conflict(visible_types, visible_type_count,
+                                decl->as.type_decl.name, FENG_DECL_TYPE)) {
+        char *message = format_message("type declaration '%.*s' conflicts with an existing visible type name",
+                                       (int)decl->as.type_decl.name.length,
+                                       decl->as.type_decl.name.data);
+        ok = append_error(errors, error_count, error_capacity,
+                          program->path, *decl_token(decl), "AE0213", message);
+        break;
+    }
+
+    // 再检查同 kind 冲突（按 name + arity）
     index = find_visible_type_index(visible_types, visible_type_count,
                                     decl->as.type_decl.name, arity);
     if (index < visible_type_count) {
-        // 同名同 arity → AE0213 冲突
         char *message = format_message("duplicate type declaration '%.*s'",
                                        (int)decl->as.type_decl.name.length,
                                        decl->as.type_decl.name.data);
@@ -147,17 +198,24 @@ case FENG_DECL_TYPE: {
 - 同 kind（type vs type, spec vs spec）：按 `(name, arity)` 判定，同名不同 arity 允许
 - 不同 kind（type vs spec, type vs enum, spec vs enum）：仍按 `name` 判定，同名即冲突（规范说"同 kind"才按 arity 区分）
 
-**实现**：`find_visible_type_index` 只匹配同 kind，跨 kind 冲突需额外检查：
+**实现**：提取辅助函数 `has_cross_kind_conflict`：
 
 ```c
-// 注册前检查是否存在不同 kind 的同名 entry
-for (size_t i = 0U; i < visible_type_count; ++i) {
-    if (slice_equals(visible_types[i].name, new_name) &&
-        visible_types[i].decl->kind != new_decl->kind) {
-        // 跨 kind 冲突，报错
+static bool has_cross_kind_conflict(const VisibleTypeEntry *entries,
+                                    size_t count,
+                                    FengSlice name,
+                                    FengDeclKind new_kind) {
+    for (size_t i = 0U; i < count; ++i) {
+        if (slice_equals(entries[i].name, name) &&
+            entries[i].decl->kind != new_kind) {
+            return true;
+        }
     }
+    return false;
 }
 ```
+
+注册前调用检查，若返回 true 则报跨 kind 冲突。
 
 ---
 
@@ -182,6 +240,14 @@ static const FengDecl *find_visible_type_decl(const VisibleTypeEntry *entries,
                                               size_t type_param_count);
 ```
 
+**调用点**（3 处）：
+
+| 行号 | 上下文 | arity 说明 |
+|------|--------|------------|
+| L4522 | `find_named_type_decl` 内部 | 从参数透传 |
+| L7930 | match enum target 解析 | 查找 enum 名，enum 无泛型，arity = 0 |
+| L8660 | match label 中 enum 引用 | 查找 enum 名，enum 无泛型，arity = 0 |
+
 ### 4.3 find_named_type_decl 改造
 
 `find_named_type_decl`（`src/semantic/analyzer.c:4507`）改为接受并传递 `type_param_count`：
@@ -195,23 +261,47 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 ### 4.4 调用点改造
 
-所有调用 `find_named_type_decl` / `find_visible_type_decl` 的地方需传入 arity：
+#### 4.4.1 find_named_type_decl 调用点（4 处）
 
-- `resolve_type_ref_decl`（`src/semantic/analyzer.c:4746`）：从 `type_ref->as.named.type_arg_count` 提取
-- `resolve_type_ref`（`src/semantic/analyzer.c:431`）：同上
-- 其他调用点：根据上下文确定 arity
+| 行号 | 上下文 | arity 来源 | 说明 |
+|------|--------|------------|------|
+| L4756 | `resolve_type_ref_decl` 内部 | `type_ref->as.named.type_arg_count` | 主要类型引用解析入口 |
+| L20403 | `resolve_type_ref` 中 `type_arg_count > 0` 分支 | 局部变量 `type_arg_count` | 带类型参数的引用 |
+| L20492 | `resolve_type_ref` 中 `segment_count == 1` 无类型参数分支 | 0 | 裸名引用，无 `<...>` |
+| L20506 | `resolve_type_ref` 中多段路径分支 | 0 | 模块限定路径，无 `<...>` |
 
-### 4.5 错误处理
+#### 4.4.2 resolve_type_ref_decl 调用点（多处）
 
-解析找不到精确匹配时，按"找不到声明"报错（AE1013 或新错误码），**不能 fallback** 到其他 arity：
+`resolve_type_ref_decl`（`src/semantic/analyzer.c:4746`）改造后内部通过 `type_ref->as.named.type_arg_count` 确定 arity 并传递给 `find_named_type_decl`。其调用者不需要修改，arity 由 type_ref 自身确定。
 
-```c
-base_decl = find_named_type_decl(context, segments, segment_count, type_arg_count);
-if (base_decl == NULL) {
-    // AE1013: unknown type '%s'
-    // 或新错误码：unknown type '%s' with %zu type argument(s)
-}
+### 4.5 错误处理与 arity 验证重构
+
+**当前流程**（`resolve_type_ref` L20391–20457，`type_arg_count > 0` 分支）：
+
 ```
+1. find_named_type_decl(name)          → 按名称找到 decl
+2. 计算 expected_arity                  → 从 decl 提取
+3. 验证 expected_arity != 0             → 否则报 AE1014 "not a generic type"
+4. 验证 type_arg_count == expected_arity → 否则报 AE1015 "expects N but got M"
+5. materialize constraint witnesses
+```
+
+**改造后流程**：`find_named_type_decl` 按 `(name, type_arg_count)` 精确匹配，步骤 2–4 的验证变为冗余。需重构为：
+
+```
+1. find_named_type_decl(name, type_arg_count) → 按 (name, arity) 精确查找
+2. 若返回 NULL：
+   a. 先按名称查找（不传 arity）判断是否存在同名类型
+   b. 存在同名但 arity 不匹配 → 报专用错误（如 "type 'Box' with N type argument(s) not found"）
+   c. 不存在 → 报 AE1013 "unknown type"
+3. 若返回非 NULL → materialize constraint witnesses
+```
+
+**错误信息质量**：不能简单报 "unknown type"，需区分：
+- 同名不同 arity 的类型存在 → 给出更精确的提示
+- 完全不存在 → 报 AE1013
+
+**实现要点**：步骤 2a 可复用 `find_visible_type_any_arity`（§2.3）。
 
 ---
 
@@ -221,10 +311,11 @@ if (base_decl == NULL) {
 
 | 模块 | 文件 | 改动点 |
 | ------ | ------ | -------- |
-| 冲突检查 | `src/semantic/analyzer.c` | `check_symbol_conflicts` 中 `FENG_DECL_TYPE` / `FENG_DECL_SPEC` 分支 |
-| 查找函数 | `src/semantic/analyzer.c` | `find_visible_type_index` / `find_visible_type_decl` / `find_named_type_decl` |
-| 类型解析 | `src/semantic/analyzer.c` | `resolve_type_ref` / `resolve_type_ref_decl` 及所有调用点 |
-| 模块导入 | `src/semantic/analyzer.c` | `import_public_names` 中类型注册逻辑 |
+| 查找函数 | `src/semantic/analyzer.c` | `find_visible_type_index` / `find_visible_type` / `find_visible_type_decl` / `find_named_type_decl` + 新增 `find_visible_type_any_arity` / `decl_type_param_count` |
+| 冲突检查 | `src/semantic/analyzer.c` | `check_symbol_conflicts` 中 `FENG_DECL_TYPE` / `FENG_DECL_SPEC` 分支 + 新增 `has_cross_kind_conflict` |
+| 类型解析 | `src/semantic/analyzer.c` | `resolve_type_ref`（L20391–20457 arity 验证重构）/ `resolve_type_ref_decl` 及所有调用点 |
+| 存在性检查 | `src/semantic/analyzer.c` | `find_unshadowed_alias`（L4500）/ `use` 声明冲突检查（L20305）/ 标识符解析（L20809）改用 `find_visible_type_any_arity` |
+| 模块导入 | `src/semantic/analyzer.c` | `import_public_names` 中类型注册逻辑 + `seen_type_names` 去重机制 |
 | 模块导出 | `src/symbol/export.c` | 导出时需携带 arity 信息 |
 | 符号提供 | `src/symbol/provider.c` | 导入时按 `(name, arity)` 注册 |
 
@@ -232,6 +323,7 @@ if (base_decl == NULL) {
 
 | 模块 | 文件 | 说明 |
 | ------ | ------ | ------ |
+| 可见类型复制 | `src/semantic/analyzer.c` | `copy_visible_type_entries`（L2835）是纯 memcpy，结构不变则无需改动 |
 | 代码生成 | `src/codegen/codegen.c` | mangling 需包含 arity 信息，避免同名不同 arity 的类型符号冲突 |
 | 符号表序列化 | `src/symbol/ft_write.c` / `ft_read.c` | `.ft` 文件格式需支持同名不同 arity 的类型条目 |
 | LSP | `src/cli/lsp/runtime.c` | 补全、跳转、hover 需感知多 arity，按使用点 arity 精确匹配 |
@@ -261,24 +353,44 @@ if (base_decl == NULL) {
 
 - [ ] 实现 `decl_type_param_count` 辅助函数
 - [ ] 改造 `find_visible_type_index` 接受 `type_param_count` 参数
+- [ ] 新增 `find_visible_type_any_arity` 辅助函数（存在性检查）
+- [ ] 改造 `find_visible_type` 接受 `type_param_count` 参数（精确匹配）
 - [ ] 改造 `find_visible_type_decl` 接受 `type_param_count` 参数
 - [ ] 改造 `find_named_type_decl` 接受并传递 `type_param_count` 参数
+- [ ] 验证 `copy_visible_type_entries`（L2835）无需改动（纯 memcpy，结构不变）
 
 ### 6.3 冲突检查
 
+- [ ] 新增 `has_cross_kind_conflict` 辅助函数
 - [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_TYPE` 分支
 - [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_SPEC` 分支
-- [ ] 添加跨 kind 冲突检查逻辑
+- [ ] 添加跨 kind 冲突检查逻辑（调用 `has_cross_kind_conflict`）
 
 ### 6.4 类型引用解析
 
-- [ ] 改造 `resolve_type_ref` 及调用点，传递 arity
-- [ ] 改造 `resolve_type_ref_decl` 及调用点，传递 arity
-- [ ] 添加错误处理：arity 不匹配时报错，不 fallback
+- [ ] 改造 `resolve_type_ref_decl`（L4746）：从 `type_ref->as.named.type_arg_count` 提取 arity 传递给 `find_named_type_decl`
+- [ ] 改造 `resolve_type_ref`（L20391–20457）arity 验证逻辑：
+  - 有类型参数分支（L20403）：`find_named_type_decl` 传入 `type_arg_count`
+  - 无类型参数裸名分支（L20492）：`find_named_type_decl` 传入 arity = 0
+  - 多段路径分支（L20506）：`find_named_type_decl` 传入 arity = 0
+- [ ] 重构 arity 验证：原 L20415–20437 的 AE1014/AE1015 验证改为「查找失败后区分同名不同 arity vs 完全不存在」
+- [ ] 改造存在性检查调用点：
+  - `find_unshadowed_alias`（L4500）：改用 `find_visible_type_any_arity`
+  - `use` 声明别名冲突检查（L20305）：改用 `find_visible_type_any_arity`
+  - 标识符解析（L20809）：改用 `find_visible_type_any_arity`
+- [ ] 改造精确匹配调用点：
+  - 泛型目标类型推断（L14658）：传递上下文 arity
+  - 约束 spec 查找（L14691）：传递 `cref->as.named.type_arg_count`
+- [ ] 改造 enum 专用调用点（arity = 0）：
+  - match enum target（L7930）
+  - match label enum 引用（L8660）
 
 ### 6.5 模块导入导出
 
-- [ ] 改造 `import_public_names`，按 `(name, arity)` 注册导入类型
+- [ ] 改造 `import_public_names`（L20015）：
+  - `find_visible_type_index` 调用传入 arity（L20060/L20092/L20201）
+  - `seen_type_names` 去重机制（L20052/L20084/L20193）改为 `(name, arity)` 复合去重（将 `FengSlice *` 改为结构体数组或直接用 `find_visible_type_index` 替代去重）
+  - `FENG_DECL_SPEC` 分支（L20189）同理改造
 - [ ] 改造 `src/symbol/export.c`，导出时携带 arity
 - [ ] 改造 `src/symbol/ft_write.c` / `ft_read.c`，序列化支持 arity
 
@@ -403,10 +515,16 @@ func main() {
 
 - [ ] 确认规范完整性，必要时补充 `docs/feng-generics-draft.md`
 - [ ] 实现 `decl_type_param_count` 辅助函数
-- [ ] 改造 `find_visible_type_index` / `find_visible_type_decl` / `find_named_type_decl`
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_TYPE` / `FENG_DECL_SPEC` 分支
-- [ ] 改造 `resolve_type_ref` / `resolve_type_ref_decl` 及调用点
-- [ ] 改造 `import_public_names` 类型注册逻辑
+- [ ] 新增 `find_visible_type_any_arity` 辅助函数
+- [ ] 新增 `has_cross_kind_conflict` 辅助函数
+- [ ] 改造 `find_visible_type_index` / `find_visible_type` / `find_visible_type_decl` / `find_named_type_decl`
+- [ ] 验证 `copy_visible_type_entries` 无需改动
+- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_TYPE` / `FENG_DECL_SPEC` 分支 + 跨 kind 冲突检查
+- [ ] 改造 `resolve_type_ref_decl` 及 `resolve_type_ref` 中的 arity 验证逻辑（含 AE1014/AE1015 重构）
+- [ ] 改造存在性检查调用点（`find_unshadowed_alias` L4500 / `use` 声明冲突 L20305 / 标识符解析 L20809）
+- [ ] 改造精确匹配调用点（L14658 泛型目标推断 / L14691 约束 spec 查找）
+- [ ] 改造 enum 专用调用点（L7930 / L8660，arity = 0）
+- [ ] 改造 `import_public_names` 类型注册逻辑 + `seen_type_names` 去重机制
 - [ ] 改造 `src/symbol/export.c` / `ft_write.c` / `ft_read.c`
 - [ ] 改造 `src/codegen/codegen.c` mangling
 - [ ] 改造 `src/cli/lsp/runtime.c`
