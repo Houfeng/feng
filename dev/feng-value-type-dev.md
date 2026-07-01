@@ -895,18 +895,18 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.10 泛型【复用普通 type + 复用元组】
 
-**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§2.4
+**状态**：已完成 ｜ **依赖**：9.4 ｜ **范围**：§2.4
 
 **变更**：
-- [ ] 复用普通 type 泛型实例化路径（含泛型方法/共享体）
-- [ ] 描述符生成（复用元组）：泛型 `@value type` 总是 aggregate（即使实例化后全字段 trivial），生成 `FengAggregateDescriptor`（§2.4）。理由：泛型类型参数在声明时大小未知、是否托管也未知，声明阶段无法计算准确的 `value_kind`，统一走 aggregate 路径（与 tuple 处理一致：全具体化实例 `is_generic_instance && generic_context_type_param_count == 0` 时一律生成 `FengAggregateDescriptor`）
-- [ ] 泛型共享体方法路径 `@value` recv 处理：共享体 emit `shared_name((void *)recv, ...)`，`@value` recv 是值表达式（非指针），需 materialize 后传 `&local`（§7.4.2 第 4 项）
+- [x] 复用普通 type 泛型实例化路径（含泛型方法/共享体）
+- [x] 描述符生成（复用元组）：泛型 `@value type` 总是 aggregate（即使实例化后全字段 trivial），生成 `FengAggregateDescriptor`（§2.4）。理由：泛型类型参数在声明时大小未知、是否托管也未知，声明阶段无法计算准确的 `value_kind`，统一走 aggregate 路径（与 tuple 处理一致：全具体化实例 `is_generic_instance && generic_context_type_param_count == 0` 时一律生成 `FengAggregateDescriptor`）
+- [x] 泛型共享体方法路径 `@value` recv 处理：共享体 emit `shared_name((void *)recv, ...)`，`@value` recv 是值表达式（非指针），需 materialize 后传 `&local`（§7.4.2 第 4 项）
 
 **测试**：
-- [ ] 泛型 `@value type` 实例化（fcts/）
-- [ ] 始终走 aggregate 路径（即使全字段 trivial）
-- [ ] 泛型方法
-- [ ] 全量回归
+- [x] 泛型 `@value type` 实例化（fcts/）
+- [x] 始终走 aggregate 路径（即使全字段 trivial）
+- [x] 泛型方法
+- [x] 全量回归
 
 ### 9.11 取地址 `&`（`@value @abi` 组合）【新增】
 

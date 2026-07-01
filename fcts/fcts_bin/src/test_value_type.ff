@@ -303,6 +303,78 @@ func spec_box_multi_cycle(count: int): string {
   return result;
 }
 
+// --- Generic @value type (§9.10) ---
+
+// 泛型 @value type（trivial 实例：全字段 trivial 也走 aggregate 路径）
+@value
+type VGPair<A, B> {
+  var left: A;
+  var right: B;
+
+  func get_left(): A {
+    return self.left;
+  }
+
+  func get_right(): B {
+    return self.right;
+  }
+
+  func set_left(value: A) {
+    self.left = value;
+  }
+
+  func set_right(value: B) {
+    self.right = value;
+  }
+}
+
+// 泛型 @value type 带泛型方法
+@value
+type VGBox<T> {
+  var value: T;
+
+  func get(): T {
+    return self.value;
+  }
+
+  func set(next: T) {
+    self.value = next;
+  }
+
+  func echo<U>(item: U): U {
+    return item;
+  }
+
+  func replace<U>(next: T, result: U): U {
+    self.value = next;
+    return result;
+  }
+}
+
+// 泛型 @value type（aggregate 实例：含 string 字段）
+@value
+type VGTagged<T> {
+  var label: string;
+  var value: T;
+
+  func describe(): string {
+    return self.label;
+  }
+}
+
+// 接受泛型 @value type 参数的函数
+func vgpair_sum_left(p: VGPair<int, int>): int {
+  return p.get_left();
+}
+
+// 返回泛型 @value type 的函数
+func make_vgpair(a: int, b: string): VGPair<int, string> {
+  var p: VGPair<int, string>;
+  p.left = a;
+  p.right = b;
+  return p;
+}
+
 /** @value type 测试 */
 open func test_value_type() {
   describe("value-type", () {
@@ -759,6 +831,112 @@ open func test_value_type() {
       var tag: VTag;
       tag.name = "post-loop";
       assert(tag.describe() == "tag:post-loop", "aggregate @value works after loop box cycles");
+    });
+
+    // --- Generic @value type tests (§9.10) ---
+
+    test("generic @value type instantiation (trivial fields)", () {
+      var p: VGPair<int, int>;
+      p.left = 10;
+      p.right = 20;
+      assert(p.left == 10 && p.right == 20, "generic @value type with trivial fields");
+    });
+
+    test("generic @value type instantiation (mixed fields)", () {
+      var p: VGPair<int, string>;
+      p.left = 42;
+      p.right = "hello";
+      assert(p.left == 42 && p.right == "hello", "generic @value type with mixed fields");
+    });
+
+    test("generic @value type method call", () {
+      var p: VGPair<int, int>;
+      p.left = 3;
+      p.right = 7;
+      assert(p.get_left() == 3, "generic @value method get_left");
+      assert(p.get_right() == 7, "generic @value method get_right");
+    });
+
+    test("generic @value type method mutation", () {
+      var p: VGPair<int, int>;
+      p.left = 1;
+      p.right = 2;
+      p.set_left(100);
+      p.set_right(200);
+      assert(p.left == 100 && p.right == 200, "generic @value method mutates fields");
+    });
+
+    test("generic @value type value semantics", () {
+      var p1: VGPair<int, int>;
+      p1.left = 5;
+      p1.right = 10;
+      var p2: VGPair<int, int> = p1;
+      p2.left = 99;
+      assert(p1.left == 5 && p1.right == 10, "original unchanged after value copy");
+      assert(p2.left == 99 && p2.right == 10, "copy has new value");
+    });
+
+    test("generic @value type as function parameter", () {
+      var p: VGPair<int, int>;
+      p.left = 15;
+      p.right = 25;
+      assert(vgpair_sum_left(p) == 15, "generic @value type as function parameter");
+    });
+
+    test("generic @value type returned from function", () {
+      let p = make_vgpair(7, "world");
+      assert(p.left == 7 && p.right == "world", "generic @value type returned from function");
+    });
+
+    test("generic @value type aggregate instance (string field)", () {
+      var t: VGTagged<int>;
+      t.label = "tag1";
+      t.value = 42;
+      assert(t.describe() == "tag1", "generic @value aggregate method call");
+      assert(t.value == 42, "generic @value aggregate field access");
+    });
+
+    test("generic @value type aggregate value semantics", () {
+      var t1: VGTagged<int>;
+      t1.label = "original";
+      t1.value = 1;
+      var t2: VGTagged<int> = t1;
+      t2.label = "modified";
+      t2.value = 99;
+      assert(t1.label == "original" && t1.value == 1, "original unchanged after aggregate value copy");
+      assert(t2.label == "modified" && t2.value == 99, "aggregate copy has new values");
+    });
+
+    test("generic @value type with generic method (echo)", () {
+      var box: VGBox<int>;
+      box.value = 10;
+      let echoed: int = box.echo(42);
+      assert(echoed == 42, "generic @value type generic method echo");
+      assert(box.value == 10, "box value unchanged after echo");
+    });
+
+    test("generic @value type with generic method (replace)", () {
+      var box: VGBox<int>;
+      box.value = 5;
+      let result: string = box.replace(20, "replaced");
+      assert(result == "replaced", "generic @value generic method replace returns U");
+      assert(box.value == 20, "generic @value generic method replace updates T");
+    });
+
+    test("generic @value type get/set methods", () {
+      var box: VGBox<string>;
+      box.set("hello");
+      assert(box.get() == "hello", "generic @value type get/set with string");
+      box.set("world");
+      assert(box.get() == "world", "generic @value type get/set updates value");
+    });
+
+    test("generic @value type aggregate instance (string value)", () {
+      var t: VGTagged<string>;
+      t.label = "str-tag";
+      t.value = "inner";
+      assert(t.describe() == "str-tag", "generic @value aggregate with string value");
+      assert(t.value == "inner", "generic @value aggregate string value access");
     });
   });
 }
