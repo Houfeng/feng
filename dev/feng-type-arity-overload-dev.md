@@ -468,7 +468,6 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 | 存在性检查 | `src/semantic/analyzer.c` | `find_unshadowed_alias`（L4500）/ `resolve_type_target_expr`（L14658）/ `use` 声明冲突检查（L20305）/ 标识符解析（L20809）改用 `find_visible_type_any_arity` |
 | 模块导入 | `src/semantic/analyzer.c` | `import_public_names` 中 `seen_type_names` 改为 (name, arity) 去重（规则 1，惰性不改触发时机）；`collect_symbol_candidates`（L2480）+ `report_name_ambiguity_if_any`（L2716）**保持 name-only**，不感知 arity（跨模块歧义按 name 判定，同模块 arity 精确匹配由下游 `find_named_type_decl` 负责） |
 | 跨模块查找 | `src/semantic/analyzer.c` | `find_module_public_type_decl`（L2948）改为按 (name, arity) 查找 + 新增 `find_module_public_type_decl_any_arity`（存在性检查）；6 处调用点改造（§6.4） |
-| 模块导出 | `src/symbol/export.c` | 导出时需携带 arity 信息 |
 | 符号提供 | `src/symbol/provider.c` | 导入时按 `(name, arity)` 注册 |
 
 ### 5.2 关联影响
@@ -476,8 +475,8 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 | 模块 | 文件 | 说明 |
 | ------ | ------ | ------ |
 | 可见类型复制 | `src/semantic/analyzer.c` | `copy_visible_type_entries`（L2835）是纯 memcpy，结构不变则无需改动 |
-| 代码生成 | `src/codegen/codegen.c` | mangling 需包含 arity 信息，避免同名不同 arity 的类型符号冲突 |
-| 符号表序列化 | `src/symbol/ft_write.c` / `ft_read.c` | `.ft` 文件格式需支持同名不同 arity 的类型条目 |
+| ~~代码生成~~ | ~~`src/codegen/codegen.c`~~ | **无需改动**：现有泛型实例 mangling 已包含完整类型参数信息（`__G__<arg1>__<arg2>`），同名不同 arity 的类型生成符号天然不冲突（详见 §5.3） |
+| ~~符号表序列化~~ | ~~`src/symbol/ft_write.c` / `ft_read.c`~~ | **无需改动**：`.ft` 文件按 decl 独立写入（decl-by-decl），同名不同 arity 的 type/spec 是两个独立 decl，不会冲突；泛型函数重载已能正确写入 `.ft`，同理适用于 type/spec（详见 §5.3） |
 | LSP | `src/cli/lsp/runtime.c` | 补全、跳转、hover 需感知多 arity，按使用点 arity 精确匹配 |
 | 约束见证 | `src/semantic/analyzer.c` | `materialize_named_type_param_constraint_witnesses` 每种 arity 独立实例化 |
 | 测试 | `test/` / `fcts/` | 新增诊断测试和行为兼容测试 |
@@ -488,6 +487,9 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 - 方法泛型重载：已实现，逻辑独立
 - 非泛型类型：arity = 0，走现有逻辑
 - 运行时：泛型在编译期完成实例化，运行时不涉及 arity 判定
+- **代码生成（codegen）无需改动**：现有泛型实例的 mangling 已包含完整类型参数信息。例如 `Box<int>` 生成符号 `Feng__module__Box__G__int`，`Box<int, string>` 生成 `Feng__module__Box__G__int__string`。同名不同 arity 的类型是不同的 `FengDecl`，各自的实例通过 `generic_origin_decl` 指向不同 origin，符号天然不冲突（详见 `src/codegen/codegen.c` L6080-6200 的泛型实例符号生成逻辑）
+- **符号表序列化（ft_write/ft_read）无需改动**：`.ft` 文件按 decl 独立写入（decl-by-decl），同名不同 arity 的 type/spec 是两个独立 decl，不会冲突。泛型函数的重载已能正确写入 `.ft`（详见 `src/symbol/ft_write.c` L1130-1200 的 `writer_collect_decl`），同理适用于 type/spec 的 arity 重载
+- **符号导出（export.c）无需改动**：`export.c` 处理的是泛型实例的符号导出，而泛型实例的符号名已包含完整类型参数信息，同名不同 arity 的类型导出时天然区分
 
 ---
 
@@ -564,13 +566,13 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 - [ ] 改造 `collect_symbol_candidates`（L2480）：**不增加 arity 参数**——跨模块歧义检测保持 name-only，arity 精确匹配由下游 `find_named_type_decl` 负责（§4）。仅需验证现有 name-only 收集逻辑在 arity 重载下面行为不变
 - [ ] 改造 `report_name_ambiguity_if_any`（L2716）：**不透传 arity**，歧义检测是 name-only 的
 - [ ] ~~改造 `report_name_ambiguity_if_any` 各调用点（L7005/L15875/L19657/L20485/L20800）~~：因 `report_name_ambiguity_if_any` 不透传 arity，各调用点无需改造
-- [ ] 改造 `src/symbol/export.c`，导出时携带 arity
-- [ ] 改造 `src/symbol/ft_write.c` / `ft_read.c`，序列化支持 arity
+- [x] ~~改造 `src/symbol/export.c`，导出时携带 arity~~ — 无需改动（详见 §5.3）
+- [x] ~~改造 `src/symbol/ft_write.c` / `ft_read.c`，序列化支持 arity~~ — 无需改动：`.ft` 按 decl 独立写入，同名不同 arity 的 type/spec 是两个独立 decl，不会冲突（详见 §5.3）
 
 ### 6.6 代码生成
 
-- [ ] 改造 `src/codegen/codegen.c`，mangling 包含 arity 信息
-- [ ] 验证同名不同 arity 的类型生成符号不冲突
+- [x] ~~改造 `src/codegen/codegen.c`，mangling 包含 arity 信息~~ — 无需改动：现有泛型实例 mangling 已包含完整类型参数信息（如 `Feng__module__Box__G__int` vs `Feng__module__Box__G__int__string`），同名不同 arity 的符号天然不冲突（详见 §5.3）
+- [x] ~~验证同名不同 arity 的类型生成符号不冲突~~ — 已确认天然不冲突：同名不同 arity 的类型是不同的 `FengDecl`，各自实例通过 `generic_origin_decl` 指向不同 origin，符号生成路径完全分离
 
 ### 6.7 LSP
 
@@ -716,8 +718,8 @@ func main() {
 - [ ] 改造 `import_public_names`：`seen_type_names` 改 (name, arity) 去重 + `find_visible_type_index` "已存在则 break" 改 (name, arity)（规则 1，惰性不改触发时机）
 - [ ] 改造 `collect_symbol_candidates`（L2480）：**不增加 arity 参数**，跨模块歧义检测保持 name-only
 - [ ] ~~改造 `report_name_ambiguity_if_any`（L2716）及各调用点~~：歧义检测 name-only，不透传 arity，无需改造
-- [ ] 改造 `src/symbol/export.c` / `ft_write.c` / `ft_read.c`
-- [ ] 改造 `src/codegen/codegen.c` mangling
+- [x] ~~改造 `src/symbol/export.c` / `ft_write.c` / `ft_read.c`~~ — 无需改动：泛型实例 mangling 已含完整类型参数，`.ft` 按 decl 独立写入，天然支持同名不同 arity（详见 §5.3）
+- [x] ~~改造 `src/codegen/codegen.c` mangling~~ — 无需改动：泛型实例符号名格式为 `Feng__module__Name__G__<arg1>__<arg2>`，同名不同 arity 的类型是不同的 `FengDecl`，符号天然不冲突（详见 §5.3）
 - [ ] 改造 `src/cli/lsp/runtime.c`
 - [ ] 新增 `test/` 诊断测试
 - [ ] 新增 `test/` 解析测试
