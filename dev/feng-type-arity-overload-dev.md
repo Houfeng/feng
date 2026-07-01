@@ -24,6 +24,20 @@
 - [必须] "同一作用域内,同 kind 的具名泛型 type 与具名泛型 spec 的声明 identity 按'名称 + 泛型参数数量'确定"
 - [必须] "所有具名泛型 type / spec 的使用位置都必须按'名称 + 泛型参数数量'精确解析到已存在声明"
 
+### 0.3 支持 arity 重载的声明形式（完整清单）
+
+所有带泛型参数的 type / spec 子形式均按 `(name, arity)` 做 identity 判定：
+
+| 声明形式 | 语法示例 | AST 字段 |
+| -------- | -------- | -------- |
+| 对象类型 | `type User<T> {}` / `type User<T1, T2> {}` | `FENG_DECL_TYPE`, `is_tuple == false` |
+| 元组类型 | `type User<T1, T2>(T1, T2)` / `type User<T1, T2, T3>(T1, T2, T3)` | `FENG_DECL_TYPE`, `is_tuple == true` |
+| 对象契约 | `spec User<T> {}` / `spec User<T1, T2> {}` | `FENG_DECL_SPEC`, `form == FENG_SPEC_FORM_OBJECT` |
+| 函数契约 | `spec User<T>()` / `spec User<T1, T2>()` | `FENG_DECL_SPEC`, `form == FENG_SPEC_FORM_CALLABLE` |
+| 联合契约 | `spec User<T1, T2>: T1 \| T2` / `spec User<T1, T2, T3>: T1 \| T2 \| T3` | `FENG_DECL_SPEC`, `form == FENG_SPEC_FORM_UNION` |
+
+> **注**：跨子形式（如对象类型 `User<T>` 与元组类型 `User<T, U>`）是否构成冲突，仍按"同 kind"规则判定——它们同属 `FENG_DECL_TYPE`，因此按 `(name, arity)` 区分，不同 arity 允许共存，相同 arity 冲突。`FENG_DECL_SPEC` 的三个子形式同理。
+
 **当前实现缺陷**：
 
 - `VisibleTypeEntry`（`src/semantic/analyzer.c:70`）每个名称只存单个 decl，无法容纳同名不同 arity 的多个声明
