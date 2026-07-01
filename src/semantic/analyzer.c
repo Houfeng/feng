@@ -17960,6 +17960,17 @@ static bool type_ref_is_abi_field_type(const ResolveContext *context,
         return true;
     }
 
+    /* @value type: no managed header, inline layout is plain C data.
+     * Allow as @abi field when the @value type is also @abi (its fields
+     * are already validated as ABI-compatible). */
+    if (type_ref->kind == FENG_TYPE_REF_NAMED &&
+        type_decl != NULL && type_decl->kind == FENG_DECL_TYPE &&
+        type_decl->as.type_decl.is_value) {
+        return annotations_contain_kind(type_decl->annotations,
+                                        type_decl->annotation_count,
+                                        FENG_ANNOTATION_ABI);
+    }
+
     return type_ref->kind == FENG_TYPE_REF_POINTER &&
            type_ref_is_abi_field_pointer_target(context, type_ref->as.inner, trace);
 }

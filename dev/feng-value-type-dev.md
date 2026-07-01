@@ -911,23 +911,25 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.11 取地址 `&`（`@value @abi` 组合）【新增】
 
-**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§3.7、§6.1、§7.2、§7.4
+**状态**：已完成 ｜ **依赖**：9.4 ｜ **范围**：§3.7、§6.1、§7.2、§7.4
 
 **变更**：
-- [ ] `c_abi_ptr_name` 函数体（`offsetof(first_field) == 0`，无需分支，§3.7）
-- [ ] `&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`，§3.7）
-- [ ] Semantic 层 `&` 操作符校验扩展：接受 `@value @abi type`（当前仅接受标量/`@abi` 值/字符串/ABI 数组，需新增 `@value @abi` 分支）
-- [ ] `cg_emit_user_type_abi_surface` 入口新增 `@value` 早期分支，分发至 `cg_emit_value_type_abi_surface`（§7.4.2 第 2 项）
-- [ ] `@value @abi type` 终结器禁止：由 `@value` 本身禁止（§2.3），`@abi` 的 AE0317 自然满足，无需额外实现（§6.1）
+- [x] `c_abi_ptr_name` 函数体（`offsetof(first_field) == 0`，无需分支，§3.7）
+- [x] `&` 站点按 `@value` 标志 emit 取地址 `&expr`（堆对象直接传 `expr`，§3.7）
+- [x] Semantic 层 `&` 操作符校验扩展：接受 `@value @abi type`（当前仅接受标量/`@abi` 值/字符串/ABI 数组，需新增 `@value @abi` 分支）
+- [x] `cg_emit_user_type_abi_surface` 入口新增 `@value` 早期分支，分发至 `cg_emit_value_type_abi_surface`（§7.4.2 第 2 项）
+- [x] `@value @abi type` 终结器禁止：由 `@value` 本身禁止（§2.3），`@abi` 的 AE0317 自然满足，无需额外实现（§6.1）
+- [x] `cg_emit_user_type_forward` 新增 `@value @abi` ABI layout 前向声明
+- [x] `type_ref_is_abi_field_type` 允许 `@value @abi` 作为 `@abi` 字段（@value 无托管头）
 
 > 注意: @value 和 @abi 应该是正交的, 互不感知, 各自独立负责自已的语义职责.
 
 **测试**：
-- [ ] `&p` 取地址（fcts/）
-- [ ] `@value` 无 `@abi` 时 `&` 报错（语义层校验）
-- [ ] `@value @abi` 时 `&` 允许
-- [ ] `@value @abi type` 不可声明终结器
-- [ ] 全量回归
+- [x] `&p` 取地址（fcts/）
+- [x] `@value` 无 `@abi` 时 `&` 报错（语义层校验）
+- [x] `@value @abi` 时 `&` 允许
+- [x] `@value @abi type` 不可声明终结器
+- [x] 全量回归
 
 ### 9.12 `@abi func` 形参/返回的 ABI 互操作【新增】
 

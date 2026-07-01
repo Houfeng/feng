@@ -11771,6 +11771,49 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
 
         if (inner.type->kind == CG_TYPE_OBJECT &&
             inner.type->user != NULL &&
+            inner.type->user->is_abi_type &&
+            cg_type_is_value_user(inner.type)) {
+            /* @value @abi: value expression (not pointer), take address
+             * before passing to c_abi_ptr_name. lvalue recv: &expr
+             * directly. rvalue recv (owns_ref): materialize first so
+             * the temporary has a stable address. */
+            Buf b;
+
+            if (inner.owns_ref) {
+                if (cg_materialize_to_local(cg, &inner, "_addr") == NULL) {
+                    er_free(&inner);
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                }
+            }
+
+            buf_init(&b);
+            buf_append_fmt(&b, "%s(&%s)",
+                           inner.type->user->c_abi_ptr_name,
+                           inner.c_expr);
+            out->c_expr = b.data;
+            out->type = cgtype_new(CG_TYPE_POINTER);
+            if (out->type == NULL) {
+                er_free(&inner);
+                free(out->c_expr);
+                out->c_expr = NULL;
+                return false;
+            }
+            out->type->element = cgtype_clone(inner.type);
+            if (out->type->element == NULL) {
+                er_free(&inner);
+                cgtype_free(out->type);
+                out->type = NULL;
+                free(out->c_expr);
+                out->c_expr = NULL;
+                return false;
+            }
+            er_free(&inner);
+            out->owns_ref = false;
+            return out->c_expr != NULL;
+        }
+
+        if (inner.type->kind == CG_TYPE_OBJECT &&
+            inner.type->user != NULL &&
             inner.type->user->is_abi_type) {
             Buf b;
 
@@ -32517,6 +32560,76 @@ static bool cg_emit_field_release(CG *cg, Buf *td,
     return true;
 }
 
+/* Emit ABI surface for @value @abi types: layout struct, c_abi_ptr_name,
+ * c_abi_value_name, and c_abi_base_offset. Does NOT emit c_abi_box_name
+ * (@value types have no heap object; boxing belongs to §9.12).
+ * The function bodies are identical to the regular @abi surface because
+ * @value and @abi are orthogonal — @abi handles ABI layout independently
+ * of whether the type is heap-allocated or value-semantic. */
+static bool cg_emit_value_type_abi_surface(CG *cg, const UserType *t) {
+    Buf *td = &cg->type_defs;
+
+    if (!t->is_abi_type || t->c_abi_layout_name == NULL) {
+        return true;
+    }
+
+    buf_append_fmt(td, "struct %s {\n", t->c_abi_layout_name);
+    for (size_t i = 0; i < t->field_count; ++i) {
+        buf_append_cstr(td, "    ");
+        cg_emit_c_type(td, t->fields[i].type);
+        buf_append_fmt(td, " %s;\n", t->fields[i].c_name);
+    }
+    buf_append_cstr(td, "};\n\n");
+
+    buf_append_fmt(td,
+        "enum { %s = offsetof(struct %s, %s) };\n",
+        t->c_abi_base_offset_name,
+        t->c_struct_name,
+        t->fields[0].c_name);
+    for (size_t i = 0; i < t->field_count; ++i) {
+        buf_append_fmt(td,
+            "_Static_assert(offsetof(struct %s, %s) - %s == "
+            "offsetof(struct %s, %s), "
+            "\"abi offset mismatch: %s.%s\");\n",
+            t->c_struct_name,
+            t->fields[i].c_name,
+            t->c_abi_base_offset_name,
+            t->c_abi_layout_name,
+            t->fields[i].c_name,
+            t->feng_name,
+            t->fields[i].feng_name);
+    }
+    buf_append_fmt(td,
+        "static inline struct %s *%s(struct %s *self) {\n"
+        "    return (struct %s *)((char *)self + %s);\n"
+        "}\n\n",
+        t->c_abi_layout_name,
+        t->c_abi_ptr_name,
+        t->c_struct_name,
+        t->c_abi_layout_name,
+        t->c_abi_base_offset_name);
+
+    buf_append_fmt(td,
+        "static inline struct %s %s(const struct %s *self) {\n"
+        "    struct %s _abi;\n",
+        t->c_abi_layout_name,
+        t->c_abi_value_name,
+        t->c_struct_name,
+        t->c_abi_layout_name);
+    for (size_t i = 0; i < t->field_count; ++i) {
+        buf_append_fmt(td,
+            "    _abi.%s = self->%s;\n",
+            t->fields[i].c_name,
+            t->fields[i].c_name);
+    }
+    buf_append_cstr(td, "    return _abi;\n}\n\n");
+
+    /* c_abi_box_name is NOT emitted here: @value types have no heap object
+     * and no FengTypeDescriptor. Boxing for @abi func interop belongs to
+     * §9.12 which handles @abi func parameter/return ABI interop. */
+    return true;
+}
+
 /* Emit `struct Feng__mod__T;` and the descriptor extern into `headers` so
  * cross references compile in any order. */
 static bool cg_emit_user_type_abi_surface(CG *cg, const UserType *t) {
@@ -32524,6 +32637,14 @@ static bool cg_emit_user_type_abi_surface(CG *cg, const UserType *t) {
 
     if (!t->is_abi_type || t->c_abi_layout_name == NULL) {
         return true;
+    }
+
+    /* @value @abi: delegate to the value-specific ABI surface emitter.
+     * @value and @abi are orthogonal — each handles its own semantics
+     * independently. @value types have no heap object, so c_abi_box_name
+     * must not be emitted. */
+    if (cg_user_type_is_value(t)) {
+        return cg_emit_value_type_abi_surface(cg, t);
     }
 
     buf_append_fmt(td, "struct %s {\n", t->c_abi_layout_name);
@@ -32729,6 +32850,13 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
     Buf equal_fn_name;
 
     /* Struct body already emitted in cg_emit_user_type_forward (headers). */
+
+    /* @value @abi: emit ABI surface (layout struct, c_abi_ptr_name,
+     * c_abi_value_name). Dispatches to cg_emit_value_type_abi_surface
+     * via cg_emit_user_type_abi_surface's @value guard. */
+    if (!cg_emit_user_type_abi_surface(cg, t)) {
+        return;
+    }
 
     buf_init(&equal_fn_name);
     buf_append_fmt(&equal_fn_name, "%s__equal", t->c_aggregate_desc_name);
@@ -33098,6 +33226,9 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
                        "struct %s;\nextern const FengTypeDescriptor %s;\n",
                        t->c_value_box_struct_name,
                        t->c_value_box_desc_name);
+        if (t->is_abi_type && t->c_abi_layout_name != NULL) {
+            buf_append_fmt(&cg->headers, "struct %s;\n", t->c_abi_layout_name);
+        }
         return;
     }
     buf_append_fmt(&cg->headers, "struct %s;\n", t->c_struct_name);

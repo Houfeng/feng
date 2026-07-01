@@ -6844,6 +6844,68 @@ static void test_unary_address_of_rejects_fieldless_abi_type_pointer_binding(voi
     feng_program_free(program);
 }
 
+/* @value type without @abi: & should be rejected (not ABI-compatible). */
+static void test_unary_address_of_rejects_value_type_without_abi(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@value\n"
+        "type Point {\n"
+        "    var x: int;\n"
+        "    var y: int;\n"
+        "}\n"
+        "func run() {\n"
+        "    var p: Point;\n"
+        "    p.x = 1;\n"
+        "    p.y = 2;\n"
+        "    let ptr: Point* = &p;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_address_of_value_type_no_abi_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unary_address_of_value_type_no_abi_error.f") == 0);
+    ASSERT(errors[0].token.line == 11U);
+    ASSERT(strstr(errors[0].message,
+                  "unary operator '&' requires an ABI-compatible scalar or @abi value") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* @value @abi type: & should be accepted (ABI-compatible + value semantics). */
+static void test_unary_address_of_allows_value_abi_type(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@value @abi\n"
+        "type Point {\n"
+        "    var x: int;\n"
+        "    var y: int;\n"
+        "}\n"
+        "func run() {\n"
+        "    var p: Point;\n"
+        "    p.x = 1;\n"
+        "    p.y = 2;\n"
+        "    let ptr: Point* = &p;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_address_of_value_abi_type_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_unary_address_of_rejects_string_to_byte_pointer_binding(void) {
     const char *source =
         "module demo.main;\n"
@@ -19095,6 +19157,8 @@ int main(void) {
     test_unary_address_of_allows_extern_call_borrowed_data_pointer();
     test_unary_address_of_allows_fielded_abi_type_pointer_binding();
     test_unary_address_of_rejects_fieldless_abi_type_pointer_binding();
+    test_unary_address_of_rejects_value_type_without_abi();
+    test_unary_address_of_allows_value_abi_type();
     test_unary_address_of_rejects_string_to_byte_pointer_binding();
     test_unary_address_of_rejects_non_extern_forwarding_via_assignment_alias();
     test_unary_address_of_rejects_object_field_storage();

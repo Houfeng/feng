@@ -1,0 +1,35 @@
+module feng.smoke.value_abi_address;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+@cdecl("libc")
+extern func write(fd: int, buf: byte*, count: i64): i64;
+
+@value @abi
+type Point {
+    var x: int;
+    var y: int;
+}
+
+func main(args: string[]) {
+    // Write "ok\n" first (matching smoke test convention)
+    let ok_bytes: byte[] = [111, 107, 10];
+    let _: i64 = write(1, &ok_bytes, 3);
+
+    // §9.11: & on @value @abi type — takes address of value-semantic struct.
+    // Pointers in Feng are opaque (cannot dereference in user code).
+    // This test verifies that & compiles and produces a valid pointer.
+    var p: Point;
+    p.x = 42;
+    p.y = 99;
+    let addr: Point* = &p;
+
+    // Verify pointer identity: & on the same variable produces equal pointers
+    let addr2: Point* = &p;
+    if addr == addr2 {
+        puts(&"value abi address ok");
+    } else {
+        puts(&"value abi address FAIL");
+    }
+}

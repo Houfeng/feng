@@ -396,6 +396,21 @@ func make_vgpair(a: int, b: string): VGPair<int, string> {
   return p;
 }
 
+// §9.11: @value @abi type (值语义 + ABI 兼容，支持 & 取地址)
+@value @abi
+type VAbiPoint {
+  var x: int;
+  var y: int;
+}
+
+// @value @abi type with nested @value @abi field (allowed: @value has no managed header)
+@value @abi
+type VAbiRect {
+  var origin: VAbiPoint;
+  var width: int;
+  var height: int;
+}
+
 /** @value type 测试 */
 open func test_value_type() {
   describe("value-type", () {
@@ -984,6 +999,69 @@ open func test_value_type() {
       box.value = 7;
       let r: TBoxReader<int> = box;
       assert(r.read() == 7, "generic @value fit method dispatched via spec parameter");
+    });
+
+    // --- @value @abi type tests (§9.11) ---
+
+    test("@value @abi type declaration and basic usage", () {
+      var p: VAbiPoint;
+      p.x = 10;
+      p.y = 20;
+      assert(p.x == 10 && p.y == 20, "@value @abi type basic field access");
+    });
+
+    test("@value @abi type & takes address of lvalue", () {
+      var p: VAbiPoint;
+      p.x = 3;
+      p.y = 7;
+      let addr: VAbiPoint* = &p;
+      let addr2: VAbiPoint* = &p;
+      // Pointers are opaque in Feng; verify identity via ==
+      assert(addr == addr2, "@value @abi & on same variable produces equal pointers");
+    });
+
+    test("@value @abi type & produces distinct pointers for distinct vars", () {
+      var p1: VAbiPoint;
+      p1.x = 1;
+      p1.y = 2;
+      var p2: VAbiPoint;
+      p2.x = 3;
+      p2.y = 4;
+      let a1: VAbiPoint* = &p1;
+      let a2: VAbiPoint* = &p2;
+      assert(a1 != a2, "@value @abi & on different variables produces distinct pointers");
+    });
+
+    test("@value @abi nested type & takes address", () {
+      var r: VAbiRect;
+      r.origin.x = 5;
+      r.origin.y = 10;
+      r.width = 200;
+      r.height = 100;
+      let addr: VAbiRect* = &r;
+      let addr2: VAbiRect* = &r;
+      assert(addr == addr2, "@value @abi nested type & produces valid pointer");
+    });
+
+    test("@value @abi & on member field", () {
+      var r: VAbiRect;
+      r.origin.x = 42;
+      r.origin.y = 99;
+      r.width = 10;
+      r.height = 20;
+      let originAddr: VAbiPoint* = &r.origin;
+      let originAddr2: VAbiPoint* = &r.origin;
+      assert(originAddr == originAddr2, "@value @abi & on member field produces valid pointer");
+    });
+
+    test("@value @abi type value semantics preserved", () {
+      var p1: VAbiPoint;
+      p1.x = 5;
+      p1.y = 10;
+      var p2: VAbiPoint = p1;
+      p2.x = 99;
+      assert(p1.x == 5, "@value @abi value copy is independent");
+      assert(p2.x == 99, "@value @abi copy has new value");
     });
   });
 }
