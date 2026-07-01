@@ -28,7 +28,7 @@
 
 ### 0.3 支持 arity 重载的声明形式（完整清单）
 
-所有带泛型参数的 type / spec 子形式均按 `(name, arity)` 做 identity 判定。共 7 类 category（§0.3 表），由 `kind + is_tuple + form` 派生；其中 6 类支持 arity 重载，不支持泛型的声明（enum / fit / global_binding 等）统一归 `NO_OVERLOADING`：
+所有带泛型参数的 type / spec 子形式均按 `(name, arity)` 做 identity 判定。共 7 类 category（§0.3 表），由 `kind + is_tuple + form` 派生；其中 6 类支持 arity 重载，不支持泛型的声明（enum / global_binding 等）统一归 `NO_OVERLOADING`：
 
 | category | 声明形式 | 语法示例 | 派生条件 | 支持 arity 重载 |
 | -------- | -------- | -------- | -------- | --------------- |
@@ -38,16 +38,16 @@
 | 4. SPEC_OBJECT | 对象契约 | `spec User<T> {}` | `kind == FENG_DECL_SPEC && form == FENG_SPEC_FORM_OBJECT` | ✅（仅 arity） |
 | 5. SPEC_CALLABLE | 函数契约 | `spec User<T>()` | `kind == FENG_DECL_SPEC && form == FENG_SPEC_FORM_CALLABLE` | ✅（仅 arity） |
 | 6. SPEC_UNION | 联合契约 | `spec User<T1, T2>: T1 \| T2` | `kind == FENG_DECL_SPEC && form == FENG_SPEC_FORM_UNION` | ✅（仅 arity） |
-| 7. NO_OVERLOADING | enum / fit / global_binding 等 | `enum Color { ... }` / `fit Foo` | 其他（不支持泛型） | ❌（同名即冲突） |
+| 7. NO_OVERLOADING | enum / global_binding 等 | `enum Color { ... }` | 其他（不支持泛型） | ❌（同名即冲突） |
 
 > **FUNCTION 与 type/spec 重载维度不同**：函数的重载是多维的——泛型 arity + 参数个数 + 参数类型，由现有 `FunctionOverloadSetEntry` / `compute_overload_match_priority`（`src/semantic/analyzer.c:10587`）处理，已实现。本次优化**不改动函数重载逻辑**，FUNCTION 列入 category 体系仅为：(a) 参与 §3.0 规则 2 的跨 category name-only 冲突检测（函数名与 type/spec/enum 同名即冲突）；(b) 表明 FUNCTION 同 category 内不适用本次新增的 (name, arity) 单维重载规则。规则 3 的 (name, arity) 仅适用于 5 类 type/spec category。
 
-> **category 划分理由**：当前 `FengDeclKind`（`src/parser/parser.h:436`）粒度太粗——普通 type 和元组都归 `FENG_DECL_TYPE`，三种 spec form 都归 `FENG_DECL_SPEC`。但语义上它们是不同重载面，跨子形式同名即应冲突（详见 §3.0 规则 2）。仅普通 type 与 @value type 语义同构（`is_value` 不参与 category 区分），归为同类。enum / fit / global_binding 等不支持泛型的声明统一归 `NO_OVERLOADING`——命名 `FengOverloadCategory` 本身体现"按重载能力分类"，不支持重载的归一类更自洽。
+> **category 划分理由**：当前 `FengDeclKind`（`src/parser/parser.h:436`）粒度太粗——普通 type 和元组都归 `FENG_DECL_TYPE`，三种 spec form 都归 `FENG_DECL_SPEC`。但语义上它们是不同重载面，跨子形式同名即应冲突（详见 §3.0 规则 2）。仅普通 type 与 @value type 语义同构（`is_value` 不参与 category 区分），归为同类。enum / global_binding 等不支持泛型的声明统一归 `NO_OVERLOADING`——命名 `FengOverloadCategory` 本身体现"按重载能力分类"，不支持重载的归一类更自洽。
 
 > **子形式冲突规则（已决策）**：按 category 区分冲突面。
 > - **FUNCTION**：同 category 内的重载是**多维**的（泛型 arity + 参数个数 + 参数类型），由现有 `FunctionOverloadSetEntry` / `compute_overload_match_priority` 处理，**本次不改动**；跨 category name-only 冲突（函数名与 type/spec/enum 同名即冲突）。
 > - **5 类 type/spec category**（TYPE / TUPLE / SPEC_OBJECT / SPEC_CALLABLE / SPEC_UNION）：**同 category 内**按 `(name, arity)` 区分（同名同 arity 冲突、同名不同 arity 允许共存）；**跨 category** name-only 冲突（同名即冲突，不看 arity）。这是本次新增的重载规则。
-> - **NO_OVERLOADING**（enum / fit / global_binding 等）：**无论同 category 还是跨 category，一律 name-only 判定冲突**（同名即冲突，不看 arity）。这类不支持泛型，无 arity 维度。
+> - **NO_OVERLOADING**（enum / global_binding 等）：**无论同 category 还是跨 category，一律 name-only 判定冲突**（同名即冲突，不看 arity）。这类不支持泛型，无 arity 维度。
 >
 > 示例：
 > - `type Box<T> {}`（普通 type）与 `type Box<T, U>(T, U)`（元组）→ 跨 category → **冲突**（不看 arity）
@@ -59,8 +59,6 @@
 > - `type Box<T> {}` 与 `@value type Box<T> {}`（同类，`is_value` 不参与）→ 同 category，同 arity → **冲突**
 > - `func foo<T>()` 与 `func foo<T, U>(x: int)` → 同 category（FUNCTION），走现有函数重载机制（多维决议），**不在本次 (name, arity) 规则范围内**
 > - `enum Color { ... }` 与 `enum Color { ... }` → 同 category（NO_OVERLOADING），name-only → **冲突**
-> - `enum Foo` 与 `fit Foo` → 同 category（NO_OVERLOADING），name-only → **冲突**
-> - `fit Foo` 与 `fit Foo` → 同 category（NO_OVERLOADING），name-only → **冲突**
 
 **当前实现缺陷**：
 
@@ -174,7 +172,7 @@ typedef enum {
     FENG_OVERLOAD_CATEGORY_SPEC_OBJECT,
     FENG_OVERLOAD_CATEGORY_SPEC_CALLABLE,
     FENG_OVERLOAD_CATEGORY_SPEC_UNION,
-    FENG_OVERLOAD_CATEGORY_NO_OVERLOADING     // enum / fit / global_binding 等（不支持泛型，始终 name-only）
+    FENG_OVERLOAD_CATEGORY_NO_OVERLOADING     // enum / global_binding 等（不支持泛型，始终 name-only）
 } FengOverloadCategory;
 
 static FengOverloadCategory decl_overload_category(const FengDecl *decl) {
@@ -193,12 +191,12 @@ static FengOverloadCategory decl_overload_category(const FengDecl *decl) {
             }
             return FENG_OVERLOAD_CATEGORY_NO_OVERLOADING;
         default:
-            return FENG_OVERLOAD_CATEGORY_NO_OVERLOADING;  // enum / fit / global_binding
+            return FENG_OVERLOAD_CATEGORY_NO_OVERLOADING;  // enum / global_binding
     }
 }
 ```
 
-`is_value` 不参与 category 派生——普通 type 与 @value type 同属 `FENG_OVERLOAD_CATEGORY_TYPE`（语义同构，详见 §0.3）。enum / fit / global_binding 等不支持泛型的声明统一归 `FENG_OVERLOAD_CATEGORY_NO_OVERLOADING`：无 arity 维度，**无论同 category 还是跨 category 都走 name-only 冲突**（同名即冲突）。命名 `FengOverloadCategory` 本身体现"按重载能力分类"，不支持重载的归一类更自洽。
+`is_value` 不参与 category 派生——普通 type 与 @value type 同属 `FENG_OVERLOAD_CATEGORY_TYPE`（语义同构，详见 §0.3）。enum / global_binding 等不支持泛型的声明统一归 `FENG_OVERLOAD_CATEGORY_NO_OVERLOADING`：无 arity 维度，**无论同 category 还是跨 category 都走 name-only 冲突**（同名即冲突）。命名 `FengOverloadCategory` 本身体现"按重载能力分类"，不支持重载的归一类更自洽。
 
 ---
 
@@ -215,12 +213,12 @@ static FengOverloadCategory decl_overload_category(const FengDecl *decl) {
 | 规则 3 | 相同模块，相同 category | 5 类 type/spec category 按 **(name, arity)**；FUNCTION 按现有函数重载机制（多维，不变）；NO_OVERLOADING 按 **name** | **本次新增**：5 类 type/spec 同名不同 arity 允许共存 |
 
 - 规则 1 影响：`import_public_names` 中 `seen_type_names` 去重保持 name-only，跨模块冲突检查改用 `find_visible_type_any_arity`（§2.3），**行为不变**
-- 规则 2 影响：`check_symbol_conflicts` 中跨 category 冲突检查按 name 判定；相比原 kind 维度，category 更细——同 `FENG_DECL_TYPE` 的普通 type 与元组、同 `FENG_DECL_SPEC` 的三种 form、enum/fit 与其他 category 现在分属不同 category，同名即冲突
+- 规则 2 影响：`check_symbol_conflicts` 中跨 category 冲突检查按 name 判定；相比原 kind 维度，category 更细——同 `FENG_DECL_TYPE` 的普通 type 与元组、同 `FENG_DECL_SPEC` 的三种 form、enum 与其他 category 现在分属不同 category，同名即冲突
 - 规则 3 影响：`check_symbol_conflicts` 中同 category 冲突检查：5 类 type/spec category 改为按 `(name, arity)` 判定（**核心改动点**）；FUNCTION 仍走现有 `FunctionOverloadSetEntry` / `compute_overload_match_priority` 多维重载机制（**不改动**）；NO_OVERLOADING 仍按 name 判定（现有行为，不变）
 
 > **规则 2 与规则 3 的关系**：规则 2 在 category 维度判定"跨面冲突"（一律 name-only）；规则 3 在 category 维度判定"同面重载"——5 类 type/spec 按 (name, arity)，FUNCTION 按现有函数多维重载，NO_OVERLOADING 按 name（即同面也是 name-only，等价于规则 2 的行为）。两者均以 category 为边界，取代原文档的 kind 维度判定。
 > **FUNCTION 的特殊性**：函数重载维度多于 type/spec（泛型 arity + 参数个数 + 参数类型），已由现有机制实现，本次不改动。FUNCTION 列入 category 体系仅为参与规则 2 的跨 category name-only 冲突检测。
-> **NO_OVERLOADING 的特殊性**：这类（enum / fit / global_binding 等）不支持泛型，无 arity 维度，因此无论同面还是跨面都走 name-only。可理解为"规则 3 对它退化为 name-only"。
+> **NO_OVERLOADING 的特殊性**：这类（enum / global_binding 等）不支持泛型，无 arity 维度，因此无论同面还是跨面都走 name-only。可理解为"规则 3 对它退化为 name-only"。
 
 ### 3.1 check_symbol_conflicts 分支改造
 
