@@ -32,7 +32,12 @@ func consume_tsummable(value: TSummable): int {
 spec TCopyable {
   func tcopy(): TFitTuple;
   func tget_sum(): int;
+  func tget_sum_lambda(): int;
+  func tlet_self(): TFitTuple;
 }
+
+// callable spec for lambda self capture test
+spec TIntProducer(): int;
 
 type TFitTuple(int, int);
 
@@ -43,6 +48,18 @@ fit TFitTuple: TCopyable {
 
   func tget_sum(): int {
     return self.item1 + self.item2;
+  }
+
+  // lambda 捕获 self（§9.15 tuple self 指针化回归）
+  func tget_sum_lambda(): int {
+    let fn: TIntProducer = () -> self.item1 + self.item2;
+    return fn();
+  }
+
+  // let y = self 逃逸（§9.15 tuple self 指针化回归）
+  func tlet_self(): TFitTuple {
+    let y = self;
+    return y;
   }
 }
 
@@ -131,6 +148,32 @@ open func test_tuple() {
       assert(s.tget_sum() == 10, "tuple assigned to spec, fit method works");
       let copy = s.tcopy();
       assert(copy.item1 == 4 && copy.item2 == 6, "tuple spec variable fit return self works");
+    });
+
+    // --- Tuple self 指针化回归测试 (§9.15) ---
+
+    test("tuple fit self lambda capture", () {
+      let t: TFitTuple = (3, 7);
+      assert(t.tget_sum_lambda() == 10, "tuple fit lambda capture self reads fields correctly");
+    });
+
+    test("tuple fit self lambda capture via spec", () {
+      let t: TFitTuple = (5, 8);
+      let s: TCopyable = t;
+      assert(s.tget_sum_lambda() == 13, "tuple fit lambda capture self via spec");
+    });
+
+    test("tuple fit self let binding escape", () {
+      let t: TFitTuple = (2, 9);
+      let copy = t.tlet_self();
+      assert(copy.item1 == 2 && copy.item2 == 9, "tuple fit let y = self produces independent copy");
+    });
+
+    test("tuple fit self let binding via spec", () {
+      let t: TFitTuple = (6, 3);
+      let s: TCopyable = t;
+      let copy = s.tlet_self();
+      assert(copy.item1 == 6 && copy.item2 == 3, "tuple fit let y = self via spec");
     });
   });
 }

@@ -14179,9 +14179,9 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     if (cgtype_is_managed(recv->type) && recv->owns_ref) {
         cg_materialize_to_local(cg, recv, "_t");
     }
-    /* @value type: method takes struct X *self; pass &recv directly
-     * for lvalues, materialize for rvalues. */
-    if (cg_type_is_value_user(recv->type)) {
+    /* §9.15: value-semantics (tuple/@value) method takes struct X *self; pass
+     * &recv directly for lvalues, materialize for rvalues. */
+    if (cg_type_is_value_semantics(recv->type)) {
         const FengExpr *recv_obj = (e != NULL && e->kind == FENG_EXPR_CALL &&
                                     e->as.call.callee != NULL &&
                                     e->as.call.callee->kind == FENG_EXPR_MEMBER)
@@ -14341,9 +14341,9 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         free(cty);
     }
 
-    /* @value recv: pass &local (value materialized above). */
+    /* §9.15: value-semantics recv: pass &local (value materialized above). */
     buf_append_fmt(cg->cur_body, "    %s(%s%s", um->c_name,
-                   cg_type_is_value_user(recv->type) ? "&" : "",
+                   cg_type_is_value_semantics(recv->type) ? "&" : "",
                    recv->c_expr);
     for (size_t i = 0; i < method_tp_count; ++i) {
         buf_append_fmt(cg->cur_body, ", %s", desc_exprs[i]);
@@ -14676,10 +14676,11 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
 
     /* §6.7: shared body self-call — recv + _td + method-level descs;
      * type-level params are obtained from _type_desc inside shared body. */
-    /* @value self is always an lvalue ((*self)); pass &recv directly. */
+    /* §9.15: value-semantics self is always an lvalue ((*self)); pass &recv
+     * directly. */
     buf_append_fmt(cg->cur_body, "    %s(%s%s, _td",
                    shared_name,
-                   cg_type_is_value_user(recv->type) ? "&" : "",
+                   cg_type_is_value_semantics(recv->type) ? "&" : "",
                    recv->c_expr);
     for (size_t i = 0; i < method_tp_count; ++i) {
         buf_append_fmt(cg->cur_body, ", %s", desc_exprs[i]);
@@ -16005,9 +16006,10 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             if (cgtype_is_managed(recv.type) && recv.owns_ref) {
                 cg_materialize_to_local(cg, &recv, "_t");
             }
-            /* @value type: shared body takes void *self (pointer to value);
-             * pass &recv directly for lvalues, materialize for rvalues. */
-            if (cg_type_is_value_user(recv.type)) {
+            /* §9.15: value-semantics (tuple/@value) shared body takes void *self
+             * (pointer to value); pass &recv directly for lvalues, materialize
+             * for rvalues. */
+            if (cg_type_is_value_semantics(recv.type)) {
                 bool recv_is_lvalue =
                     ma->as.member.object->kind == FENG_EXPR_IDENTIFIER ||
                     ma->as.member.object->kind == FENG_EXPR_SELF ||
@@ -16100,8 +16102,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             }
             /* Build: shared_name((void *)recv, rtd_expr, args..., [&_out]) */
             Buf b; buf_init(&b);
-            /* @value recv: pass &local (value materialized above). */
-            if (cg_type_is_value_user(recv.type)) {
+            /* §9.15: value-semantics recv: pass &local (value materialized above). */
+            if (cg_type_is_value_semantics(recv.type)) {
                 buf_append_fmt(&b, "%s((void *)&%s, %s",
                                shared_name, recv.c_expr, rtd_expr);
             } else {
@@ -16178,12 +16180,12 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         if (cgtype_is_managed(recv.type) && recv.owns_ref) {
             cg_materialize_to_local(cg, &recv, "_t");
         }
-        /* @value type: method signature takes struct X *self (pointer),
-         * but recv is a value expression.  For lvalue recv (local var,
-         * field access, self), pass &recv directly so method mutations
-         * propagate back.  For rvalue recv (function return, literal),
-         * materialize to local first. */
-        if (cg_type_is_value_user(recv.type)) {
+        /* §9.15: value-semantics (tuple/@value) method signature takes
+         * struct X *self (pointer), but recv is a value expression.  For
+         * lvalue recv (local var, field access, self), pass &recv directly
+         * so method mutations propagate back.  For rvalue recv (function
+         * return, literal), materialize to local first. */
+        if (cg_type_is_value_semantics(recv.type)) {
             bool recv_is_lvalue =
                 ma->as.member.object->kind == FENG_EXPR_IDENTIFIER ||
                 ma->as.member.object->kind == FENG_EXPR_SELF ||
@@ -16229,8 +16231,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             er_free(&varr);
         }
         Buf b; buf_init(&b);
-        /* @value recv: method takes struct X *self; pass &local. */
-        if (cg_type_is_value_user(recv.type)) {
+        /* §9.15: value-semantics recv: method takes struct X *self; pass &local. */
+        if (cg_type_is_value_semantics(recv.type)) {
             buf_append_fmt(&b, "%s(&%s", um->c_name, recv.c_expr);
         } else {
             buf_append_fmt(&b, "%s(%s", um->c_name, recv.c_expr);
@@ -25377,11 +25379,11 @@ static void cg_emit_user_method_proto(Buf *out,
     cg_emit_c_type(out, m->return_type);
     buf_append_fmt(out, " %s(", m->c_name);
     if (!is_static_method) {
-        if (cg_user_type_is_tuple(t)) {
-            buf_append_fmt(out, "struct %s self", t->c_struct_name);
-        } else {
-            buf_append_fmt(out, "struct %s *self", t->c_struct_name);
-        }
+        /* §9.15: all types (heap objects, @value, and tuple) pass struct X *self
+         * (pointer).  Self-binding c_name differs: value-semantics types bind
+         * "(*self)" so field access emits (*self).field ≡ self->field; heap
+         * objects bind "self" directly. */
+        buf_append_fmt(out, "struct %s *self", t->c_struct_name);
         has_param = true;
     }
     if (t->generic_context_type_param_count > 0U) {
@@ -29462,7 +29464,7 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                 buf_append_fmt(fd,
                                " _ret = %s(%s((struct %s *)_subject)->value",
                                fm->c_name,
-                               cg_user_type_is_value(t) ? "&" : "",
+                               cg_user_type_is_value_semantics(t) ? "&" : "",
                                t->c_value_box_struct_name);
                 for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                     char pname[32];
@@ -29508,13 +29510,13 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                 buf_append_fmt(fd,
                                "    %s(%s((struct %s *)_subject)->value",
                                fm->c_name,
-                               cg_user_type_is_value(t) ? "&" : "",
+                               cg_user_type_is_value_semantics(t) ? "&" : "",
                                t->c_value_box_struct_name);
             } else {
                 buf_append_fmt(fd,
                                "    return %s(%s((struct %s *)_subject)->value",
                                fm->c_name,
-                               cg_user_type_is_value(t) ? "&" : "",
+                               cg_user_type_is_value_semantics(t) ? "&" : "",
                                t->c_value_box_struct_name);
             }
             for (size_t pi = 0U; pi < sm->param_count; ++pi) {
@@ -35368,11 +35370,9 @@ static bool cg_emit_user_method(CG *cg,
     cg_emit_c_type(body, m->return_type);
     buf_append_fmt(body, " %s(", m->c_name);
     if (!is_static_method) {
-        if (cg_user_type_is_tuple(t)) {
-            buf_append_fmt(body, "struct %s self", t->c_struct_name);
-        } else {
-            buf_append_fmt(body, "struct %s *self", t->c_struct_name);
-        }
+        /* §9.15: all types pass struct X *self (pointer); tuple self
+         * pointerified to match @value and heap objects. */
+        buf_append_fmt(body, "struct %s *self", t->c_struct_name);
         has_param = true;
     }
     for (size_t i = 0U; i < t->generic_context_type_param_count; ++i) {
@@ -35466,10 +35466,11 @@ static bool cg_emit_user_method(CG *cg,
             goto cleanup;
         }
         self_t->user = t;
-        /* @value type: C parameter is struct X *self (pointer).  Bind the
-         * capture cell from (*self) so the cell stores the value (not the
-         * pointer), and member access through the cell uses `.`. */
-        const char *self_src = cg_user_type_is_value(t) ? "(*self)" : "self";
+        /* §9.15: value-semantics (tuple/@value) C parameter is struct X *self
+         * (pointer).  Bind the capture cell from (*self) so the cell stores
+         * the value (not the pointer), and member access through the cell
+         * uses `.`. */
+        const char *self_src = cg_user_type_is_value_semantics(t) ? "(*self)" : "self";
         if (!cg_scope_bind_capture_cell(cg,
                                         fn_scope,
                                         self_name,
@@ -35491,10 +35492,10 @@ static bool cg_emit_user_method(CG *cg,
             goto cleanup;
         }
         self_t->user = t;
-        /* @value type: C parameter is struct X *self (pointer).  Bind the
-         * Feng name "self" to the C expression "(*self)" so that member
-         * access generates (*self).field ≡ self->field. */
-        const char *self_cname = cg_user_type_is_value(t) ? "(*self)" : "self";
+        /* §9.15: value-semantics (tuple/@value) C parameter is struct X *self
+         * (pointer).  Bind the Feng name "self" to the C expression "(*self)"
+         * so that member access generates (*self).field ≡ self->field. */
+        const char *self_cname = cg_user_type_is_value_semantics(t) ? "(*self)" : "self";
         if (!scope_add(fn_scope, "self", self_cname, self_t, true)) {
             cgtype_free(self_t);
             cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");

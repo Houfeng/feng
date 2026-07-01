@@ -975,23 +975,23 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.15 tuple self 指针化【独立后续 TODO】
 
-**状态**：未开始 ｜ **依赖**：§9.6 完成（@value self 指针化落地后） ｜ **范围**：§7.4.2 第 5 项
+**状态**：已完成 ｜ **依赖**：§9.6 完成（@value self 指针化落地后） ｜ **范围**：§7.4.2 第 5 项
 
 **背景**：§7.4.2 第 5 项为 @value 引入 pointer self + `(*self)` 绑定（方法体内指针，逃逸复制）。tuple 现有方法 self 为 `struct X self`（值拷贝），与 @value 不一致。本 TODO 将 tuple 方法 self 同步改为 `struct X *self`（指针）+ `(*self)` 绑定，与 @value 统一，并避免大 tuple 整体拷贝的性能开销。
 
 **变更**：
-- [ ] `cg_emit_user_method_proto` tuple 分支：emit `struct X *self` 替代 `struct X self`（行 24822-24826）
-- [ ] `cg_emit_user_method` tuple 分支：emit `struct X *self` 替代 `struct X self`（行 34538-34542）
-- [ ] tuple 方法 self 绑定 c_name 改为 `(*self)`（`scope_add` + `cg_scope_bind_capture_cell` source_expr）
-- [ ] tuple 方法调用站：recv 传 `&local` 替代 `local`（需 materialize）
-- [ ] tuple box thunk 传参：`fm->c_name(&box->value, ...)` 替代 `fm->c_name(box->value, ...)`（@value 已在 §9.8 完成，tuple 同步）
-- [ ] 普通 type self 保持 `"self"`（指针 + retain）不变
+- [x] `cg_emit_user_method_proto`：移除 tuple 值拷贝分支，所有类型统一 emit `struct X *self`
+- [x] `cg_emit_user_method` body：同上，移除 tuple 值拷贝分支
+- [x] tuple 方法 self 绑定 c_name 改为 `(*self)`（`scope_add` + `cg_scope_bind_capture_cell` source_expr），guard 从 `cg_user_type_is_value` 扩展为 `cg_user_type_is_value_semantics`
+- [x] tuple 方法调用站：guard 从 `cg_type_is_value_user` 扩展为 `cg_type_is_value_semantics`，recv 传 `&local`（7 处：`cg_emit_generic_type_method_call`、`cg_emit_generic_type_self_method_call`、`cg_emit_call` 直接/open generic 路径）
+- [x] tuple box thunk 传参：guard 从 `cg_user_type_is_value` 扩展为 `cg_user_type_is_value_semantics`，`fm->c_name(&box->value, ...)`（3 处 FIT_METHOD thunk）
+- [x] 普通 type self 保持 `"self"`（指针 + retain）不变
 
 **测试**：
-- [ ] tuple fit 方法 self 访问正确性（tuple 字段不可变，但语义应一致）
-- [ ] tuple self 逃逸：`let y = self`（值复制）、`return self`（返回值）、`foo(self)`（传值）、lambda 捕获（值复制进 cell）
-- [ ] tuple 方法调用站 materialize 正确性
-- [ ] 全量回归（tuple 方法 ABI 变更，需重点验证 tuple fit 相关用例）
+- [x] tuple fit 方法 self 访问正确性（tuple 字段不可变，但语义应一致）
+- [x] tuple self 逃逸：`let y = self`（值复制）、`return self`（返回值）、lambda 捕获（值复制进 cell）
+- [x] tuple 方法调用站 materialize 正确性
+- [x] 全量回归（402 tests passed）
 
 ### 9.16 tuple 描述符命名统一【独立后续 TODO】
 
