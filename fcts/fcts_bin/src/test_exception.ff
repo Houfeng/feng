@@ -380,6 +380,10 @@ open func test_exception() {
       assert(test_lambda_try_catch_string_result(), "lambda try/catch string result");
     });
 
+    test("throw/catch tuple type", () {
+      assert(test_throw_catch_tuple_point(), "throw/catch tuple type");
+    });
+
     test("throw/catch trivial @value type", () {
       assert(test_throw_catch_value_point(), "throw/catch trivial @value type");
     });
@@ -446,6 +450,25 @@ func call_rethrow() {
 // ============================================================================
 // @value type exception tests (§9.14)
 // ============================================================================
+
+// Tuple type for exception testing (also exercises the value-semantics path)
+type ExTuplePoint(float, float);
+
+func throw_tuple_point(x: float, y: float): float {
+  let p: ExTuplePoint = (x, y);
+  throw p;
+  return 0.0;
+}
+
+func test_throw_catch_tuple_point(): bool {
+  var caught_x: float = 0.0;
+  var caught_y: float = 0.0;
+  try throw_tuple_point(5.0, 6.0) catch ex: ExTuplePoint {
+    caught_x = ex.item1;
+    caught_y = ex.item2;
+  };
+  return caught_x == 5.0 && caught_y == 6.0;
+}
 
 // Trivial @value type for exception testing
 @value
