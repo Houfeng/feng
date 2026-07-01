@@ -920,6 +920,8 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 - [ ] `cg_emit_user_type_abi_surface` 入口新增 `@value` 早期分支，分发至 `cg_emit_value_type_abi_surface`（§7.4.2 第 2 项）
 - [ ] `@value @abi type` 终结器禁止：由 `@value` 本身禁止（§2.3），`@abi` 的 AE0317 自然满足，无需额外实现（§6.1）
 
+> 注意: @value 和 @abi 应该是正交的, 互不感知, 各自独立负责自已的语义职责.
+
 **测试**：
 - [ ] `&p` 取地址（fcts/）
 - [ ] `@value` 无 `@abi` 时 `&` 报错（语义层校验）
