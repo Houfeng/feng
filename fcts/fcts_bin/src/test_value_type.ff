@@ -351,6 +351,27 @@ type VGBox<T> {
   }
 }
 
+// 泛型 @value type + fit + spec dispatch (§9.10 补充)
+spec TBoxReader<T> {
+  func read(): T;
+}
+
+spec TBoxWriter<T> {
+  func write(val: T): void;
+}
+
+fit VGBox<T>: TBoxReader<T> {
+  func read(): T {
+    return self.value;
+  }
+}
+
+fit VGBox<T>: TBoxWriter<T> {
+  func write(val: T): void {
+    self.value = val;
+  }
+}
+
 // 泛型 @value type（aggregate 实例：含 string 字段）
 @value
 type VGTagged<T> {
@@ -937,6 +958,32 @@ open func test_value_type() {
       t.value = "inner";
       assert(t.describe() == "str-tag", "generic @value aggregate with string value");
       assert(t.value == "inner", "generic @value aggregate string value access");
+    });
+
+    // §9.10 补充：泛型 @value type + fit + spec dispatch
+
+    test("generic @value type fit method via spec (member, direct)", () {
+      var box: VGBox<int>;
+      box.value = 42;
+      let reader: TBoxReader<int> = box;
+      assert(reader.read() == 42, "generic @value fit read via spec");
+    });
+
+    test("generic @value type fit method via spec (member, mutate)", () {
+      var box: VGBox<int>;
+      box.value = 0;
+      let writer: TBoxWriter<int> = box;
+      writer.write(100);
+      // @value types have value semantics: spec coercion creates a boxed copy,
+      // so mutations through the spec variable don't affect the original.
+      assert(box.value == 0, "generic @value fit write via spec preserves original (value semantics)");
+    });
+
+    test("generic @value type fit method via spec parameter", () {
+      var box: VGBox<int>;
+      box.value = 7;
+      let r: TBoxReader<int> = box;
+      assert(r.read() == 7, "generic @value fit method dispatched via spec parameter");
     });
   });
 }

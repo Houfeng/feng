@@ -25131,7 +25131,9 @@ static void cg_emit_user_method_proto(Buf *out,
     }
     if (t->generic_context_type_param_count > 0U) {
         if (has_param) buf_append_cstr(out, ", ");
-        buf_append_cstr(out, "const FengTypeDescriptor *_type_desc");
+        const char *td_type = cg_user_type_is_value(t)
+            ? "FengAggregateDescriptor" : "FengTypeDescriptor";
+        buf_append_fmt(out, "const %s *_type_desc", td_type);
         has_param = true;
     }
     for (size_t i = 0; i < m->param_count; i++) {
@@ -31432,8 +31434,10 @@ static bool cg_emit_all_programs(CG *cg,
                 bool has_out = sm->return_type != NULL &&
                                sm->return_type->kind != CG_TYPE_VOID;
                 buf_append_fmt(&cg->fn_protos, "void %s(", sm_shared);
-                buf_append_cstr(&cg->fn_protos,
-                                "const FengTypeDescriptor *_type_desc");
+                const char *sm_td_type = cg_user_type_is_value(t)
+                    ? "FengAggregateDescriptor" : "FengTypeDescriptor";
+                buf_append_fmt(&cg->fn_protos,
+                                "const %s *_type_desc", sm_td_type);
                 for (size_t tpi = 0; tpi < sm_tp_count; ++tpi) {
                     buf_append_cstr(&cg->fn_protos, ", ");
                     buf_append_fmt(&cg->fn_protos,
