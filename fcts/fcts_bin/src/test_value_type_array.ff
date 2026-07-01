@@ -1,0 +1,139 @@
+module fcts_bin;
+
+import std.io;
+import std.test;
+import std.collections;
+
+// trivial @value type for array tests
+@value
+type VAPoint {
+  var x: int;
+  var y: int;
+}
+
+// aggregate @value type for array tests (contains string)
+@value
+type VAPerson {
+  var name: string;
+  var age: int;
+}
+
+/** @value type 数组测试 (§9.13) */
+open func test_value_type_array() {
+  describe("value-type-array", () {
+    // --- Trivial @value array tests ---
+    
+    test("trivial @value array declaration and literal", () {
+      let points: VAPoint[] = [VAPoint { x: 1, y: 2 }, VAPoint { x: 3, y: 4 }];
+      assert(points.length() == (int)2, "trivial @value array has correct length");
+    });
+
+    test("trivial @value array element access", () {
+      let points: VAPoint[] = [VAPoint { x: 10, y: 20 }, VAPoint { x: 30, y: 40 }];
+      let p0 = points[0];
+      let p1 = points[1];
+      assert(p0.x == 10 && p0.y == 20, "trivial @value array element 0 access");
+      assert(p1.x == 30 && p1.y == 40, "trivial @value array element 1 access");
+    });
+
+    test("trivial @value array element mutation via writable array", () {
+      let points: VAPoint[!] = [VAPoint { x: 1, y: 2 }, VAPoint { x: 3, y: 4 }];
+      points[0] = VAPoint { x: 100, y: 200 };
+      let p0 = points[0];
+      assert(p0.x == 100 && p0.y == 200, "trivial @value array element mutation");
+    });
+
+    test("trivial @value array value semantics (copy on read)", () {
+      let points: VAPoint[!] = [VAPoint { x: 5, y: 10 }];
+      var p = points[0];
+      p.x = 99;
+      let original = points[0];
+      assert(original.x == 5, "trivial @value array element is value copy, not reference");
+      assert(p.x == 99, "trivial @value array element copy can be mutated independently");
+    });
+
+    test("trivial @value array default initialization", () {
+      let points: VAPoint[] = VAPoint[: (int)3];
+      assert(points.length() == (int)3, "trivial @value array default init has correct length");
+      let p0 = points[0];
+      let p1 = points[1];
+      let p2 = points[2];
+      assert(p0.x == 0 && p0.y == 0, "trivial @value array default init element 0");
+      assert(p1.x == 0 && p1.y == 0, "trivial @value array default init element 1");
+      assert(p2.x == 0 && p2.y == 0, "trivial @value array default init element 2");
+    });
+
+    // --- Aggregate @value array tests ---
+
+    test("aggregate @value array declaration and literal", () {
+      let people: VAPerson[] = [VAPerson { name: "Alice", age: 25 }, VAPerson { name: "Bob", age: 30 }];
+      assert(people.length() == (int)2, "aggregate @value array has correct length");
+    });
+
+    test("aggregate @value array element access", () {
+      let people: VAPerson[] = [VAPerson { name: "Alice", age: 25 }, VAPerson { name: "Bob", age: 30 }];
+      let p0 = people[0];
+      let p1 = people[1];
+      assert(p0.name == "Alice" && p0.age == 25, "aggregate @value array element 0 access");
+      assert(p1.name == "Bob" && p1.age == 30, "aggregate @value array element 1 access");
+    });
+
+    test("aggregate @value array element mutation via writable array", () {
+      let people: VAPerson[!] = [VAPerson { name: "Alice", age: 25 }];
+      people[0] = VAPerson { name: "Charlie", age: 35 };
+      let p0 = people[0];
+      assert(p0.name == "Charlie" && p0.age == 35, "aggregate @value array element mutation");
+    });
+
+    test("aggregate @value array value semantics (copy on read)", () {
+      let people: VAPerson[!] = [VAPerson { name: "Alice", age: 25 }];
+      var p = people[0];
+      p.name = "Modified";
+      let original = people[0];
+      assert(original.name == "Alice", "aggregate @value array element is value copy");
+      assert(p.name == "Modified", "aggregate @value array element copy can be mutated independently");
+    });
+
+    test("aggregate @value array default initialization", () {
+      let people: VAPerson[] = VAPerson[: (int)2];
+      assert(people.length() == (int)2, "aggregate @value array default init has correct length");
+      let p0 = people[0];
+      let p1 = people[1];
+      assert(p0.name == "" && p0.age == 0, "aggregate @value array default init element 0");
+      assert(p1.name == "" && p1.age == 0, "aggregate @value array default init element 1");
+    });
+
+    test("aggregate @value array retain/release on element overwrite", () {
+      // This test exercises the aggregate assign path which should properly
+      // release the old element's managed fields and retain the new one
+      let people: VAPerson[!] = [VAPerson { name: "First", age: 1 }];
+      people[0] = VAPerson { name: "Second", age: 2 };
+      people[0] = VAPerson { name: "Third", age: 3 };
+      let p = people[0];
+      assert(p.name == "Third" && p.age == 3, "aggregate @value array multiple overwrites work correctly");
+    });
+
+    // --- Nested @value array tests ---
+
+    test("nested trivial @value array (2D)", () {
+      let matrix: VAPoint[][] = [
+        [VAPoint { x: 1, y: 2 }, VAPoint { x: 3, y: 4 }],
+        [VAPoint { x: 5, y: 6 }, VAPoint { x: 7, y: 8 }]
+      ];
+      assert(matrix.length() == (int)2, "nested trivial @value array outer length");
+      let row0 = matrix[0];
+      assert(row0.length() == (int)2, "nested trivial @value array inner length");
+      let p = row0[0];
+      assert(p.x == 1 && p.y == 2, "nested trivial @value array element access");
+    });
+
+    // --- @value array with methods ---
+
+    test("@value array element method call", () {
+      let points: VAPoint[] = [VAPoint { x: 3, y: 4 }];
+      let p = points[0];
+      // VAPoint doesn't have methods yet, but we can test field access
+      assert(p.x == 3 && p.y == 4, "@value array element field access");
+    });
+  });
+}

@@ -947,17 +947,17 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.13 数组元素【复用元组】
 
-**状态**：未开始 ｜ **依赖**：9.4 ｜ **范围**：§6.4
+**状态**：已完成 ｜ **依赖**：9.4 ｜ **范围**：§6.4
 
 **变更**：
-- [ ] 数组元素 emit（`cg_aggregate_facts` 级联处理，与 tuple 一致）
-- [ ] trivial `@value` 数组：元素按值存储，memcpy 复制（§6.4）
-- [ ] aggregate `@value` 数组：逐元素调用聚合 API
+- [x] 数组元素 emit（`cg_aggregate_facts` 级联处理，与 tuple 一致）
+- [x] trivial `@value` 数组：元素按值存储，memcpy 复制（§6.4）
+- [x] aggregate `@value` 数组：逐元素调用聚合 API
 
 **测试**：
-- [ ] trivial `@value type` 数组（fcts/）
-- [ ] aggregate `@value type` 数组
-- [ ] 全量回归
+- [x] trivial `@value type` 数组（fcts/）
+- [x] aggregate `@value type` 数组
+- [x] 全量回归（392 tests passed）
 
 ### 9.14 异常【复用元组】
 

@@ -29,5 +29,6 @@ func main(args: string[]) {
       test_match_alias();
       test_defer();
       test_value_type();
+      test_value_type_array();
   });
 }
