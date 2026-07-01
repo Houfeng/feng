@@ -225,6 +225,7 @@ static FengOverloadCategory decl_overload_category(const FengDecl *decl) {
 > **规则 2 与规则 3 的关系**：规则 2 在 category 维度判定"跨面冲突"（一律 name-only）；规则 3 在 category 维度判定"同面重载"——5 类 type/spec 按 (name, arity)，FUNCTION 按现有函数多维重载，NO_OVERLOADING 按 name（即同面也是 name-only，等价于规则 2 的行为）。两者均以 category 为边界，取代原文档的 kind 维度判定。
 > **FUNCTION 的特殊性**：函数重载维度多于 type/spec（泛型 arity + 参数个数 + 参数类型），已由现有机制实现，本次不改动。FUNCTION 列入 category 体系仅为参与规则 2 的跨 category name-only 冲突检测。
 > **NO_OVERLOADING 的特殊性**：这类（enum / fit / global_binding 等）不支持泛型，无 arity 维度，因此无论同面还是跨面都走 name-only。可理解为"规则 3 对它退化为 name-only"。
+> **设计取舍（C# vs Rust 之间选中间道路）**：考虑过两种极端——① C# 方向：类型标识为 (name, arity)，kind 不参与，跨类别允许 arity 重载（CLR 用 `Foo`1` / `Foo`2` 反引号记法区分）。灵活但易混淆：可能写出 `Foo<T>()` 是函数、`Foo<T1,T2>` 是类型/元组，使用者难从语法直接判断实体类别。② Rust 方向：纯 name-only（E0428 同名即冲突），清晰但失去灵活性，像 `Func<R>` / `Func<R,T1>` / `Func<R,T1,T2>` 这样的同形函数族定义不出来。Feng 选中间道路：同 category 内按 (name, arity) 重载（规则 3），跨 category name-only 冲突（规则 2）——既保留同形实体族（不同 arity 的元组/spec）的扩展性，又避免跨形歧义。
 
 ### 3.1 check_symbol_conflicts 分支改造
 
