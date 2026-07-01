@@ -32864,17 +32864,13 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
             t->c_aggregate_default_name);
     }
 
-    /* Reified metadata counts for fully-concrete generic instances. */
-    size_t tuple_rgp_count = 0U;
-    size_t tuple_rfo_count = 0U;
-
     if (needs_agg_desc) {
         /* Reified generic params for fully-concrete generic value-type
          * instances (tuple / @value). Resolves the actual generic type args
          * so @value types whose fields do not 1:1 correspond to type
          * parameters (e.g. VGTagged<T> { label: string; value: T; }) emit
          * the correct descriptor table. */
-        tuple_rgp_count = 0U;
+        size_t tuple_rgp_count = 0U;
         if (t->is_generic_instance &&
             t->generic_context_type_param_count == 0U &&
             t->generic_type_arg_count > 0U) {
@@ -32929,7 +32925,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
         }
 
         /* Reified field offsets for fully-concrete generic tuple instances. */
-        tuple_rfo_count = 0U;
+        size_t tuple_rfo_count = 0U;
         if (t->is_generic_instance &&
             t->generic_context_type_param_count == 0U &&
             t->field_count > 0U) {
@@ -32992,230 +32988,6 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
             equal_fn_name.data);
     }
     buf_free(&equal_fn_name);
-
-    /* §9.10: 泛型值类型（tuple / @value type）全具体化实例需要额外生成
-     * FengTypeDescriptor，供泛型共享体方法的 _type_desc 参数使用。
-     * 该描述符仅包含泛型具体化元数据（rgp/rfo），不包含托管字段信息
-     * （值类型的生命周期由 FengAggregateDescriptor 管理）。 */
-    if (t->is_generic_instance &&
-        t->generic_context_type_param_count == 0U &&
-        t->generic_origin_decl != NULL) {
-        const FengReifiableDepSet *dep_set =
-            feng_semantic_lookup_reifiable_dep_set(
-                cg->analysis, t->generic_origin_decl);
-        const FengProgram *saved_program = cg->cur_program;
-        if (t->instantiation_program != NULL) {
-            cg->cur_program = t->instantiation_program;
-        }
-
-        /* Reified field offsets (shared with aggregate descriptor). */
-        size_t type_rfo_count = t->field_count;
-        if (type_rfo_count > 0U && tuple_rfo_count == 0U) {
-            /* rfo not yet emitted (trivial desc path); emit here. */
-            buf_append_fmt(td,
-                "static const size_t %s__rfo[] = {\n",
-                t->c_aggregate_desc_name);
-            for (size_t rfi = 0; rfi < t->field_count; ++rfi) {
-                buf_append_fmt(td, "    offsetof(struct %s, %s),\n",
-                               t->c_struct_name, t->fields[rfi].c_name);
-            }
-            buf_append_cstr(td, "};\n\n");
-            tuple_rfo_count = type_rfo_count;
-        }
-
-        /* Reified agg deps. */
-        size_t type_rad_count = 0U;
-        size_t type_rtd_count = 0U;
-        if (dep_set != NULL && dep_set->dep_count > 0U) {
-            const FengDecl *origin = t->generic_origin_decl;
-            const FengTypeParam *owner_tparams =
-                origin->as.type_decl.type_params;
-            size_t owner_tparam_count =
-                origin->as.type_decl.type_param_count;
-            FengSlice *owner_tparam_names = (FengSlice *)calloc(
-                owner_tparam_count, sizeof(FengSlice));
-            if (owner_tparam_names != NULL) {
-                for (size_t i = 0; i < owner_tparam_count; ++i) {
-                    owner_tparam_names[i] = owner_tparams[i].name;
-                }
-                typedef struct { size_t dep_index; char *sort_key; } VSortedDep;
-                size_t agg_count = 0U;
-                size_t type_count = 0U;
-                for (size_t i = 0; i < dep_set->dep_count; ++i) {
-                    if (dep_set->deps[i].kind ==
-                        FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
-                        agg_count++;
-                    } else {
-                        type_count++;
-                    }
-                }
-                VSortedDep *agg_sorted = agg_count > 0U
-                    ? (VSortedDep *)calloc(agg_count, sizeof(VSortedDep)) : NULL;
-                VSortedDep *type_sorted = type_count > 0U
-                    ? (VSortedDep *)calloc(type_count, sizeof(VSortedDep)) : NULL;
-                size_t ai = 0U;
-                size_t ti = 0U;
-                for (size_t i = 0; i < dep_set->dep_count; ++i) {
-                    char *key = cg_reifiable_sort_key(
-                        dep_set->deps[i].type_ref,
-                        owner_tparam_names, owner_tparam_count, true);
-                    if (dep_set->deps[i].kind ==
-                        FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
-                        if (agg_sorted != NULL) {
-                            agg_sorted[ai].dep_index = i;
-                            agg_sorted[ai].sort_key = key;
-                            ai++;
-                        } else { free(key); }
-                    } else {
-                        if (type_sorted != NULL) {
-                            type_sorted[ti].dep_index = i;
-                            type_sorted[ti].sort_key = key;
-                            ti++;
-                        } else { free(key); }
-                    }
-                }
-                /* Sort by key. */
-                for (size_t i = 1; i < agg_count; ++i) {
-                    VSortedDep tmp = agg_sorted[i];
-                    size_t j = i;
-                    while (j > 0 &&
-                           strcmp(agg_sorted[j - 1].sort_key, tmp.sort_key) > 0) {
-                        agg_sorted[j] = agg_sorted[j - 1];
-                        j--;
-                    }
-                    agg_sorted[j] = tmp;
-                }
-                for (size_t i = 1; i < type_count; ++i) {
-                    VSortedDep tmp = type_sorted[i];
-                    size_t j = i;
-                    while (j > 0 &&
-                           strcmp(type_sorted[j - 1].sort_key, tmp.sort_key) > 0) {
-                        type_sorted[j] = type_sorted[j - 1];
-                        j--;
-                    }
-                    type_sorted[j] = tmp;
-                }
-                /* Emit rad array. */
-                if (agg_count > 0U && agg_sorted != NULL) {
-                    type_rad_count = agg_count;
-                    buf_append_fmt(td,
-                        "static const FengAggregateDescriptor *%s__rad[] = {\n",
-                        t->c_desc_name);
-                    for (size_t i = 0; i < agg_count; ++i) {
-                        const FengReifiableDep *dep =
-                            &dep_set->deps[agg_sorted[i].dep_index];
-                        char *desc_name = cg_resolve_dep_descriptor_name(
-                            cg, dep->type_ref,
-                            owner_tparams, owner_tparam_count,
-                            t->generic_type_args,
-                            FENG_REIFIABLE_DEP_KIND_AGGREGATE,
-                            &t->decl->token);
-                        if (desc_name == NULL) {
-                            for (size_t k = 0; k < agg_count; ++k) {
-                                free(agg_sorted[k].sort_key);
-                            }
-                            for (size_t k = 0; k < type_count; ++k) {
-                                free(type_sorted[k].sort_key);
-                            }
-                            free(agg_sorted);
-                            free(type_sorted);
-                            free(owner_tparam_names);
-                            cg->cur_program = saved_program;
-                            return;
-                        }
-                        buf_append_fmt(td, "    &%s,\n", desc_name);
-                        free(desc_name);
-                    }
-                    buf_append_cstr(td, "};\n\n");
-                }
-                /* Emit rtd array. */
-                if (type_count > 0U && type_sorted != NULL) {
-                    type_rtd_count = type_count;
-                    buf_append_fmt(td,
-                        "static const FengTypeDescriptor *%s__rtd[] = {\n",
-                        t->c_desc_name);
-                    for (size_t i = 0; i < type_count; ++i) {
-                        const FengReifiableDep *dep =
-                            &dep_set->deps[type_sorted[i].dep_index];
-                        char *desc_name = cg_resolve_dep_descriptor_name(
-                            cg, dep->type_ref,
-                            owner_tparams, owner_tparam_count,
-                            t->generic_type_args,
-                            FENG_REIFIABLE_DEP_KIND_MANAGED,
-                            &t->decl->token);
-                        if (desc_name == NULL) {
-                            for (size_t k = 0; k < agg_count; ++k) {
-                                free(agg_sorted[k].sort_key);
-                            }
-                            for (size_t k = 0; k < type_count; ++k) {
-                                free(type_sorted[k].sort_key);
-                            }
-                            free(agg_sorted);
-                            free(type_sorted);
-                            free(owner_tparam_names);
-                            cg->cur_program = saved_program;
-                            return;
-                        }
-                        buf_append_fmt(td, "    &%s,\n", desc_name);
-                        free(desc_name);
-                    }
-                    buf_append_cstr(td, "};\n\n");
-                }
-                for (size_t i = 0; i < agg_count; ++i) {
-                    free(agg_sorted[i].sort_key);
-                }
-                for (size_t i = 0; i < type_count; ++i) {
-                    free(type_sorted[i].sort_key);
-                }
-                free(agg_sorted);
-                free(type_sorted);
-                free(owner_tparam_names);
-            }
-        }
-
-        /* Emit the FengTypeDescriptor for generic shared body dispatch. */
-        buf_append_fmt(td,
-            "%sconst FengTypeDescriptor %s = {\n"
-            "    .name = \"%s.%s\",\n"
-            "    .size = sizeof(struct %s),\n"
-            "    .finalizer = NULL,\n"
-            "    .release_children = NULL,\n"
-            "    .is_potentially_cyclic = false,\n"
-            "    .managed_field_count = 0,\n"
-            "    .managed_fields = NULL,\n"
-            "    .equal_fn = NULL,\n",
-            "__attribute__((weak)) ",
-            t->c_desc_name,
-            cg->module_dot_name, t->feng_name,
-            t->c_struct_name);
-        if (tuple_rgp_count > 0U) {
-            buf_append_fmt(td,
-                "    .reified_generic_params_count = %zu,\n"
-                "    .reified_generic_params = %s__rgp,\n",
-                tuple_rgp_count, t->c_aggregate_desc_name);
-        }
-        if (tuple_rfo_count > 0U) {
-            buf_append_fmt(td,
-                "    .reified_field_offset_count = %zu,\n"
-                "    .reified_field_offsets = %s__rfo,\n",
-                tuple_rfo_count, t->c_aggregate_desc_name);
-        }
-        if (type_rad_count > 0U) {
-            buf_append_fmt(td,
-                "    .reified_agg_deps_count = %zu,\n"
-                "    .reified_agg_deps = %s__rad,\n",
-                type_rad_count, t->c_desc_name);
-        }
-        if (type_rtd_count > 0U) {
-            buf_append_fmt(td,
-                "    .reified_type_deps_count = %zu,\n"
-                "    .reified_type_deps = %s__rtd,\n",
-                type_rtd_count, t->c_desc_name);
-        }
-        buf_append_cstr(td, "};\n\n");
-
-        cg->cur_program = saved_program;
-    }
 
     CGType tuple_value_type;
     memset(&tuple_value_type, 0, sizeof tuple_value_type);
@@ -34567,17 +34339,22 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
      * Static method:   void shared(const FengTypeDescriptor *_type_desc,
      *                              [method-level _U, ...],
      *                              <params>, [void *_out]);
-     *   — type-level _K/_V extracted from _type_desc in prologue */
+     *   — type-level _K/_V extracted from _type_desc in prologue
+     *
+     * @value type: _type_desc is FengAggregateDescriptor (值类型没有
+     * FengTypeDescriptor，reified_generic_params 在聚合描述符上)。 */
+    const char *type_desc_c_type = decl->as.type_decl.is_value
+        ? "FengAggregateDescriptor" : "FengTypeDescriptor";
 
     /* Helper: emit the parameter list for proto or body. */
     #define EMIT_SHARED_PARAMS(buf_ptr, has_param_ptr)                            \
     do {                                                                            \
         if (!is_static_method) {                                                   \
-            buf_append_cstr((buf_ptr),                                             \
-                "void *_self, const FengTypeDescriptor *_type_desc");              \
+            buf_append_fmt((buf_ptr),                                              \
+                "void *_self, const %s *_type_desc", type_desc_c_type);            \
             *(has_param_ptr) = true;                                               \
         } else {                                                                   \
-            buf_append_cstr((buf_ptr), "const FengTypeDescriptor *_type_desc");    \
+            buf_append_fmt((buf_ptr), "const %s *_type_desc", type_desc_c_type);   \
             *(has_param_ptr) = true;                                               \
         }                                                                          \
         if (has_func_desc) {                                                       \
@@ -34636,9 +34413,9 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     buf_append_cstr(body, ") {\n");
 
     /* §2.5 prologue: extract _td and type-level generic params from descriptor. */
-    buf_append_cstr(body,
-        "    const FengTypeDescriptor *_td = _type_desc;\n"
-        "    (void)_type_desc; (void)_td;\n");
+    buf_append_fmt(body,
+        "    const %s *_td = _type_desc;\n"
+        "    (void)_type_desc; (void)_td;\n", type_desc_c_type);
     if (!is_static_method) {
         buf_append_cstr(body, "    (void)_self;\n");
     }
@@ -34756,6 +34533,14 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         ? strdup(shared_name_override)
         : cg_generic_type_method_shared_cname(cg, decl, m->member);
     if (!shared_name) return cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
+
+    /* @value type: wrapper 的 _type_desc 参数和传给共享体的描述符
+     * 使用 FengAggregateDescriptor（值类型没有 FengTypeDescriptor）。 */
+    bool is_value_type = cg_user_type_is_value(t);
+    const char *type_desc_c_type = is_value_type
+        ? "FengAggregateDescriptor" : "FengTypeDescriptor";
+    const char *desc_name = is_value_type
+        ? t->c_aggregate_desc_name : t->c_desc_name;
 
     size_t tp_count = decl->as.type_decl.type_param_count;
     size_t method_tp_count = sig->type_param_count;
@@ -34904,11 +34689,11 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         buf_append_fmt(&cg->fn_protos, "void %s(", shared_name);
         bool proto_has_param = false;
         if (!is_static_method) {
-            buf_append_cstr(&cg->fn_protos,
-                "void *_self, const FengTypeDescriptor *_type_desc");
+            buf_append_fmt(&cg->fn_protos,
+                "void *_self, const %s *_type_desc", type_desc_c_type);
             proto_has_param = true;
         } else {
-            buf_append_cstr(&cg->fn_protos, "const FengTypeDescriptor *_type_desc");
+            buf_append_fmt(&cg->fn_protos, "const %s *_type_desc", type_desc_c_type);
             proto_has_param = true;
         }
         if (func_desc_expr != NULL) {
@@ -34961,7 +34746,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         }
         if (t->generic_context_type_param_count > 0U) {
             if (body_has_param) buf_append_cstr(body, ", ");
-            buf_append_cstr(body, "const FengTypeDescriptor *_type_desc");
+            buf_append_fmt(body, "const %s *_type_desc", type_desc_c_type);
             body_has_param = true;
         }
         for (size_t i = 0; i < m->param_count; ++i) {
@@ -34990,7 +34775,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         }
         if (t->generic_context_type_param_count > 0U) {
             if (proto_has_param) buf_append_cstr(proto, ", ");
-            buf_append_cstr(proto, "const FengTypeDescriptor *_type_desc");
+            buf_append_fmt(proto, "const %s *_type_desc", type_desc_c_type);
             proto_has_param = true;
         }
         for (size_t i = 0; i < method_tp_count; ++i) {
@@ -35030,7 +34815,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         }
         if (t->generic_context_type_param_count > 0U) {
             if (wrapper_body_has_param) buf_append_cstr(body, ", ");
-            buf_append_cstr(body, "const FengTypeDescriptor *_type_desc");
+            buf_append_fmt(body, "const %s *_type_desc", type_desc_c_type);
             wrapper_body_has_param = true;
         }
         for (size_t i = 0; i < method_tp_count; ++i) {
@@ -35094,11 +34879,11 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         if (t->generic_context_type_param_count > 0U) {
             buf_append_cstr(body, "(void *)self, _type_desc");
         } else {
-            buf_append_fmt(body, "(void *)self, &%s", t->c_desc_name);
+            buf_append_fmt(body, "(void *)self, &%s", desc_name);
         }
         call_has_arg = true;
     } else {
-        buf_append_fmt(body, "&%s", t->c_desc_name);
+        buf_append_fmt(body, "&%s", desc_name);
         call_has_arg = true;
     }
     if (func_desc_expr != NULL) {
