@@ -367,7 +367,7 @@ static const FengDecl *find_visible_type_decl(const VisibleTypeEntry *entries,
                                               size_t type_param_count);
 ```
 
-**调用点**（3 处）：
+**调用点**（3 处，不含 `find_visible_type` 内部调用）：
 
 | 行号 | 上下文 | arity 说明 |
 |------|--------|------------|
@@ -467,7 +467,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 | 类型解析 | `src/semantic/analyzer.c` | `resolve_type_ref`（L20391–20457 arity 验证重构）/ `resolve_type_ref_decl` 及所有调用点 |
 | 存在性检查 | `src/semantic/analyzer.c` | `find_unshadowed_alias`（L4500）/ `resolve_type_target_expr`（L14658）/ `use` 声明冲突检查（L20305）/ 标识符解析（L20809）改用 `find_visible_type_any_arity` |
 | 模块导入 | `src/semantic/analyzer.c` | `import_public_names` 中 `seen_type_names` 改为 (name, arity) 去重（规则 1，惰性不改触发时机）；`collect_symbol_candidates`（L2480）+ `report_name_ambiguity_if_any`（L2716）**保持 name-only**，不感知 arity（跨模块歧义按 name 判定，同模块 arity 精确匹配由下游 `find_named_type_decl` 负责） |
-| 跨模块查找 | `src/semantic/analyzer.c` | `find_module_public_type_decl`（L2948）改为按 (name, arity) 查找 + 新增 `find_module_public_type_decl_any_arity`（存在性检查）；6 处调用点改造（§6.4） |
+| 跨模块查找 | `src/semantic/analyzer.c` | `find_module_public_type_decl`（L2948）改为按 (name, arity) 查找 + 新增 `find_module_public_type_decl_any_arity`（存在性检查）；7 处调用点改造（§6.4） |
 | 符号提供 | `src/symbol/provider.c` | 导入时按 `(name, arity)` 注册 |
 
 ### 5.2 关联影响
@@ -514,7 +514,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 - [ ] 改造 `find_visible_type` 接受 `type_param_count` 参数（精确匹配）
 - [ ] 改造 `find_visible_type_decl` 接受 `type_param_count` 参数
 - [ ] 改造 `find_named_type_decl` 接受并传递 `type_param_count` 参数
-- [ ] 验证 `copy_visible_type_entries`（L2835）无需改动（纯 memcpy，结构不变）
+- [x] ~~验证 `copy_visible_type_entries`（L2835）无需改动~~ — 已确认：纯 memcpy 操作，结构不变则无需改动
 
 ### 6.3 冲突检查
 
@@ -545,7 +545,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 - [ ] 改造 enum 专用调用点（arity = 0）：
   - match enum target（L7930）
   - match label enum 引用（L8660）
-- [ ] 改造跨模块类型查找 `find_module_public_type_decl`（L2948）：改为接受 `type_param_count` 参数，按 (name, arity) 查找；新增 `find_module_public_type_decl_any_arity` 用于存在性检查。6 处调用点：
+- [ ] 改造跨模块类型查找 `find_module_public_type_decl`（L2948）：改为接受 `type_param_count` 参数，按 (name, arity) 查找；新增 `find_module_public_type_decl_any_arity` 用于存在性检查。7 处调用点：
 
   | 行号 | 上下文 | arity 来源 | 改造方式 |
   |------|--------|----------|---------|
@@ -554,7 +554,8 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
   | L4538 | `find_named_type_decl` 多段路径 | `type_param_count` 透传 | 透传 |
   | L14716 | `resolve_type_target_expr` alias 路径 | 裸标识符，不带 arity | 改用 `_any_arity` 版本 |
   | L14733 | `resolve_type_target_expr` 多段路径 | 裸标识符，不带 arity | 改用 `_any_arity` 版本 |
-  | L25807/L25814 | `analysis_resolve_named_type_ref` 辅助查找 | `ref->as.named.type_arg_count` | 透传 |
+  | L25807 | `analysis_resolve_named_type_ref` 单段查找 | `ref->as.named.type_arg_count` | 透传 |
+  | L25814 | `analysis_resolve_named_type_ref` 多段查找 | `ref->as.named.type_arg_count` | 透传 |
 
 ### 6.5 模块导入导出（规则 1，惰性，不改触发时机）
 
@@ -563,9 +564,9 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
   - `find_visible_type_index` "已存在则 break" 判断改为 (name, arity)（L20060/L20092/L20201）
   - `FENG_DECL_SPEC` 分支（L20189）同理
   - **不改触发时机**：import 阶段仍不做冲突检查（惰性，§3.0 规则 1），仅做去重 + 候选收集
-- [ ] 改造 `collect_symbol_candidates`（L2480）：**不增加 arity 参数**——跨模块歧义检测保持 name-only，arity 精确匹配由下游 `find_named_type_decl` 负责（§4）。仅需验证现有 name-only 收集逻辑在 arity 重载下面行为不变
-- [ ] 改造 `report_name_ambiguity_if_any`（L2716）：**不透传 arity**，歧义检测是 name-only 的
-- [ ] ~~改造 `report_name_ambiguity_if_any` 各调用点（L7005/L15875/L19657/L20485/L20800）~~：因 `report_name_ambiguity_if_any` 不透传 arity，各调用点无需改造
+- [x] ~~改造 `collect_symbol_candidates`（L2480）~~ — 无需改动：跨模块歧义检测已按 name-only 实现，不感知 arity，arity 精确匹配由下游 `find_named_type_decl` 负责（§4）
+- [x] ~~改造 `report_name_ambiguity_if_any`（L2716）~~ — 无需改动：歧义检测已按 name-only 实现，不透传 arity
+- [x] ~~改造 `report_name_ambiguity_if_any` 各调用点（L7005/L15875/L19657/L20485/L20800）~~ — 无需改动：因 `report_name_ambiguity_if_any` 不透传 arity，各调用点无需改造
 - [x] ~~改造 `src/symbol/export.c`，导出时携带 arity~~ — 无需改动（详见 §5.3）
 - [x] ~~改造 `src/symbol/ft_write.c` / `ft_read.c`，序列化支持 arity~~ — 无需改动：`.ft` 按 decl 独立写入，同名不同 arity 的 type/spec 是两个独立 decl，不会冲突（详见 §5.3）
 
@@ -714,17 +715,20 @@ func main() {
 - [ ] 改造存在性检查调用点（`find_unshadowed_alias` L4500 / `resolve_type_target_expr` L14658 / `use` 声明冲突 L20305 / 标识符解析 L20809）改用 `find_visible_type_any_arity`
 - [ ] 改造精确匹配调用点（L14691 约束 spec 查找）
 - [ ] 改造 enum 专用调用点（L7930 / L8660，arity = 0）
-- [ ] 改造 `find_module_public_type_decl`（L2948）及 6 处调用点（§6.4，跨模块 (name, arity) 查找）+ 新增 `find_module_public_type_decl_any_arity`
+- [ ] 改造 `find_module_public_type_decl`（L2948）及 7 处调用点（§6.4，跨模块 (name, arity) 查找）+ 新增 `find_module_public_type_decl_any_arity`
 - [ ] 改造 `import_public_names`：`seen_type_names` 改 (name, arity) 去重 + `find_visible_type_index` "已存在则 break" 改 (name, arity)（规则 1，惰性不改触发时机）
-- [ ] 改造 `collect_symbol_candidates`（L2480）：**不增加 arity 参数**，跨模块歧义检测保持 name-only
-- [ ] ~~改造 `report_name_ambiguity_if_any`（L2716）及各调用点~~：歧义检测 name-only，不透传 arity，无需改造
-- [x] ~~改造 `src/symbol/export.c` / `ft_write.c` / `ft_read.c`~~ — 无需改动：泛型实例 mangling 已含完整类型参数，`.ft` 按 decl 独立写入，天然支持同名不同 arity（详见 §5.3）
-- [x] ~~改造 `src/codegen/codegen.c` mangling~~ — 无需改动：泛型实例符号名格式为 `Feng__module__Name__G__<arg1>__<arg2>`，同名不同 arity 的类型是不同的 `FengDecl`，符号天然不冲突（详见 §5.3）
 - [ ] 改造 `src/cli/lsp/runtime.c`
 - [ ] 新增 `test/` 诊断测试
 - [ ] 新增 `test/` 解析测试
 - [ ] 新增 `fcts/` 行为测试
 - [ ] 全量回归测试
+
+### 已确认无需改动的模块
+
+- [x] `collect_symbol_candidates`（L2480）— 已按 name-only 实现，不感知 arity
+- [x] `report_name_ambiguity_if_any`（L2716）及各调用点 — 已按 name-only 实现，不透传 arity
+- [x] `src/symbol/export.c` / `ft_write.c` / `ft_read.c` — 泛型实例 mangling 已含完整类型参数，`.ft` 按 decl 独立写入，天然支持同名不同 arity（详见 §5.3）
+- [x] `src/codegen/codegen.c` mangling — 泛型实例符号名格式为 `Feng__module__Name__G__<arg1>__<arg2>`，同名不同 arity 的类型是不同的 `FengDecl`，符号天然不冲突（详见 §5.3）
 
 ---
 
