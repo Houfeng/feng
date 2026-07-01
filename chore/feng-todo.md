@@ -23,4 +23,4 @@
   - 对象契约 `spec User<T1> {}` 、`spec User<T1, T2> {}`
   - 函数契约 `spec User<T1>()` 、`spec User<T1, T2>()`
   - 联合契约 `spec User<T1, T2>: T1 | T2` 、`spec User<T1, T2, T3>: T1 | T2 | T3`
-- [ ] 支持 defer 语句
+- [x] 支持 defer 语句
