@@ -7829,6 +7829,61 @@ static void test_lsp_hover_falls_back_to_plaintext_without_markdown_capability(v
     free(output);
 }
 
+static void test_lsp_hover_type_param(void) {
+    static const char *kSource =
+        "module test.lsp.type_param_hover;\n"
+        "\n"
+        "spec Hashable<T> {\n"
+        "    func hash(): u64;\n"
+        "}\n"
+        "\n"
+        "type Map<K: Hashable<K>, V> {\n"
+        "    var count: u64;\n"
+        "}\n"
+        "\n"
+        "type Box<T> {\n"
+        "    var size: u64;\n"
+        "}\n"
+        "\n"
+        "func main(args: string[]) {\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *output;
+
+    /* Hover on T in type Box<T>: should show "type parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "type Box<T> {",
+                                        strlen("type Box<"));
+    ASSERT(strstr(output, "type parameter T") != NULL);
+    free(output);
+
+    /* Hover on K in type Map<K: Hashable<K>, V>: should show "type parameter K: Hashable<K>" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "type Map<K: Hashable<K>, V> {",
+                                        strlen("type Map<"));
+    ASSERT(strstr(output, "type parameter K: Hashable<K>") != NULL);
+    free(output);
+
+    /* Hover on Hashable in K: Hashable<K>: should show Hashable spec signature */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "type Map<K: Hashable<K>, V> {",
+                                        strlen("type Map<K: "));
+    ASSERT(strstr(output, "spec Hashable<T>") != NULL);
+    free(output);
+
+    /* Hover on K inside Hashable<K> constraint: should show "type parameter K" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "type Map<K: Hashable<K>, V> {",
+                                        strlen("type Map<K: Hashable<"));
+    ASSERT(strstr(output, "type parameter K") != NULL);
+    free(output);
+}
+
 static void test_lsp_signature_displays_variadic_parameter_syntax(void) {
     static const char *kHoverSource =
         "module test.lsp.variadic_signature_hover;\n"
@@ -13145,6 +13200,7 @@ int main(void) {
     test_lsp_hover_definition_and_completion();
     test_lsp_hover_uses_markdown_when_supported();
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
+    test_lsp_hover_type_param();
     test_lsp_hover_uses_inferred_top_level_binding_type();
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();

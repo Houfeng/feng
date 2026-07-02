@@ -1,1 +1,7 @@
 open module std.io;
+
+/**
+ * Represents a stream of data that can be read from or written to.
+ */
+open type Stream {
+}
