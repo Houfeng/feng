@@ -2,9 +2,13 @@
   "plugins": {
     "cSpell": {
       "diagnostics": false
+    },
+    "markdownlint": {
+      "diagnostics": false
     }
   },
   "ignoreSources": [
-    "cSpell"
+    "cSpell",
+    "markdownlint"
   ]
 }

@@ -562,11 +562,13 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 - [ ] 确认 `docs/feng-generics-draft.md` 中相关规范是否完整
 - [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目（"跨 category name-only 冲突"），message 形如 "'%.*s' conflicts with an existing visible name in a different category"
 - [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0006 条目（"使用点裸名引用泛型"），message 形如 "'%.*s' is a generic type and requires type arguments"
-- [x] 错误码决策：跨 category name-only 冲突用 AE0004（§3.3）；使用点裸名引用泛型用 AE0006（§4.6，对 type/spec 都适用，按"不跨结构但通用"先例归通用段）；同 category 重复仍用 AE0213（type/spec）/ AE0214（enum）/ AE0215-AE0220（function/binding）；arity 不匹配保留 AE1013/AE1014/AE1015，仅重构触发逻辑（§4.5）
-- [x] AE0004/AE0006 码位可用性已查证：代码中完全未被引用（`grep -rn "AE0004\|AE0006" src/` 无结果），错误码文档中作为"原错误码"出现（旧语义已迁至 AE1320/AE1303），码位实际处于释放可用状态
-- [x] ~~确认跨 kind 冲突规则~~ — 已决策：规则 2，同模块不同 category 按 name 判定冲突（补充 function/binding 与 type/spec/enum 跨数组检查，§3.3）
-- [x] ~~确认触发时机约束~~ — 已决策：本次只改判定规则，不改触发时机（急切的仍急切，惰性的仍惰性，遵循 `dev/feng-module-optimize-dev.md` §0 六类规则）
-- [x] ~~与 scope 优化的关系~~ — 已澄清：`dev/feng-scope-optimize-dev.md` 是 AST 多级作用域链统一（模块→文件→类型→函数→块）的优化，与顶层符号冲突检测是不同层面，且该优化尚未实施；本次在双表架构上独立修复跨数组漏检，不依赖 scope 优化，不与 scope 优化冲突
+
+> **备注（已决策/已查证/已澄清，无需进一步改动）**：
+> - **错误码决策**：跨 category name-only 冲突用 AE0004（§3.3）；使用点裸名引用泛型用 AE0006（§4.6，对 type/spec 都适用，按"不跨结构但通用"先例归通用段）；同 category 重复仍用 AE0213（type/spec）/ AE0214（enum）/ AE0215-AE0220（function/binding）；arity 不匹配保留 AE1013/AE1014/AE1015，仅重构触发逻辑（§4.5）
+> - **AE0004/AE0006 码位可用性已查证**：代码中完全未被引用（`grep -rn "AE0004\|AE0006" src/` 无结果），错误码文档中作为"原错误码"出现（旧语义已迁至 AE1320/AE1303），码位实际处于释放可用状态
+> - **跨 kind 冲突规则已决策**：规则 2，同模块不同 category 按 name 判定冲突（补充 function/binding 与 type/spec/enum 跨数组检查，§3.3）
+> - **触发时机约束已决策**：本次只改判定规则，不改触发时机（急切的仍急切，惰性的仍惰性，遵循 `dev/feng-module-optimize-dev.md` §0 六类规则）
+> - **与 scope 优化的关系已澄清**：`dev/feng-scope-optimize-dev.md` 是 AST 多级作用域链统一（模块→文件→类型→函数→块）的优化，与顶层符号冲突检测是不同层面，且该优化尚未实施；本次在双表架构上独立修复跨数组漏检，不依赖 scope 优化，不与 scope 优化冲突
 
 ### 6.2 数据结构与查找函数
 
