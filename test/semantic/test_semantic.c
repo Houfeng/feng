@@ -16606,6 +16606,40 @@ static void test_generic_type_constructor_explicit_type_args_arity_mismatch(void
     feng_program_free(program);
 }
 
+static void test_generic_type_bare_constructor_call_rejected(void) {
+    /* Bare generic type name in constructor call (no explicit type args) is
+     * rejected — Feng does not infer type arguments from constructor params.
+     * The compiler treats the bare name as a non-generic type lookup; with
+     * T uninstantiated, no constructor matches the argument shape.
+     * Mirrors C# CS0305 behavior. See dev/feng-type-arity-overload-dev.md §0.2
+     * for the design rationale. */
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    var value: T;\n"
+        "    seal func Box(init: T) {\n"
+        "        self.value = init;\n"
+        "    }\n"
+        "}\n"
+        "func run(): void {\n"
+        "    let b = Box(42);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_ctor_bare.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0315") == 0);
+    ASSERT(strstr(errors[0].message, "no accessible constructor") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_generic_method_type_param_collides_with_type_param(void) {
     /* A method may not reuse the same type parameter name as its enclosing
      * type (G4-14 collision check). */
@@ -19435,6 +19469,7 @@ int main(void) {
     test_generic_explicit_type_args_arity_mismatch();
     test_generic_type_constructor_explicit_type_args_ok();
     test_generic_type_constructor_explicit_type_args_arity_mismatch();
+    test_generic_type_bare_constructor_call_rejected();
     test_generic_method_type_param_collides_with_type_param();
     test_generic_function_two_type_params_ok();
     test_generic_spec_generic_parent_forwarding_ok();

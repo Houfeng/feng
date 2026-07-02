@@ -1914,6 +1914,51 @@ static void test_runtime_extern_codegen_rejects_non_contract_symbol(void) {
     feng_program_free(program);
 }
 
+static void test_generic_function_call_no_infer_rejected(void) {
+    /* A generic function called without explicit type args and without any
+     * argument from which T can be inferred must be rejected (规范 §326
+     * 错语法九).
+     *
+     * TODO: 当前实现在 codegen 阶段报 CE0308，与规范期望的 semantic 阶段
+     * AE 码不符（错误码文档 docs/feng-error-codes-ce.md:129 标注
+     * CE0167→CE0308 "回到AE"，但实际未回到 AE 段；src/codegen/codegen.c
+     * :27356 仍用旧码 CE0308）。此处先按实际错误码断言，后续修正实现
+     * （让 semantic 阶段在调用点推导失败时报 AE 码）后将此测试迁移至
+     * test/semantic/test_semantic.c 并改用 AE 码断言。 */
+    static const char *kSource =
+        "module feng.codegen.genfninfer;\n"
+        "func make<T>(): T {\n"
+        "}\n"
+        "func run(): void {\n"
+        "    let b = make();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "genfninfer.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    /* TODO: semantic 阶段当前不报错；修正后应改为 ASSERT(!ok) 并检查 AE 码。 */
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    ASSERT(!cg_ok);
+    ASSERT(cgerr.code != NULL);
+    ASSERT(strcmp(cgerr.code, "CE0308") == 0);
+    ASSERT(strstr(cgerr.message, "cannot infer type argument") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_unsupported_pointer_pointee_reports_explicit_error(void) {
     static const char *kSource =
         "module feng.codegen.badpointee;\n"
@@ -6882,6 +6927,7 @@ int main(void) {
     test_generic_runtime_extern_expression_equal_codegen();
     test_generic_runtime_extern_direct_type_param_return_codegen();
     test_runtime_extern_codegen_rejects_non_contract_symbol();
+    test_generic_function_call_no_infer_rejected();
     test_unsupported_pointer_pointee_reports_explicit_error();
     test_abi_value_function_pointer_codegen();
     test_lib_public_functions_are_exported();
