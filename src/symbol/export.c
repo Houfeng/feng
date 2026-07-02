@@ -2550,6 +2550,7 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                 return NULL;
             }
             decl->is_tuple = source_decl->as.type_decl.is_tuple;
+            decl->is_value = source_decl->as.type_decl.is_value;
             if (!fill_declared_specs(ctx, decl,
                                      (const FengTypeRef *const *)source_decl->as.type_decl.declared_specs,
                                      source_decl->as.type_decl.declared_spec_count,

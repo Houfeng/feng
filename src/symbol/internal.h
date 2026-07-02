@@ -101,6 +101,7 @@ struct FengSymbolDeclView {
     bool has_enum_item_value;
     size_t type_param_count;  /* number of generic type parameters (TYPE_PARAM children) */
     bool is_tuple;
+    bool is_value;   /* @value type annotation; only meaningful when kind == TYPE */
     FengSymbolTypeView **reifiable_agg_deps;
     size_t reifiable_agg_dep_count;
     FengSymbolTypeView **reifiable_type_deps;

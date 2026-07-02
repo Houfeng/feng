@@ -717,6 +717,9 @@ static uint16_t writer_symbol_flags(const FengSymbolDeclView *decl) {
     if (decl->kind == FENG_SYMBOL_DECL_KIND_TYPE && decl->is_tuple) {
         flags |= FENG_SYMBOL_FT_SYM_FLAG_TUPLE_DECL;
     }
+    if (decl->kind == FENG_SYMBOL_DECL_KIND_TYPE && decl->is_value) {
+        flags |= FENG_SYMBOL_FT_SYM_FLAG_IS_VALUE;
+    }
     if (decl->kind == FENG_SYMBOL_DECL_KIND_SPEC) {
         if (decl->spec_form == FENG_SPEC_FORM_CALLABLE) {
             flags |= FENG_SYMBOL_FT_SYM_FLAG_SPEC_FORM_CALLABLE;
