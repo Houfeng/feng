@@ -5350,6 +5350,11 @@ static bool find_type_ref_hit(const FengDecl *decl,
                               const FengLspAnalysisSession *session,
                               size_t offset,
                               FengLspResolvedTarget *target);
+static bool resolve_type_ref_at_offset(const FengLspAnalysisSession *session,
+                                       const FengProgram *program,
+                                       const FengTypeRef *type_ref,
+                                       size_t offset,
+                                       FengLspResolvedTarget *target);
 static FengSlice member_name_slice(const FengTypeMember *member);
 static const FengExpr *find_expr_hit(const FengExpr *expr, size_t offset);
 static const FengExpr *find_expr_hit_in_block(const FengBlock *block, size_t offset);
@@ -5462,8 +5467,44 @@ static bool find_decl_token_hit(const char *source_text,
     return false;
 }
 
-static bool type_ref_contains_offset(const FengTypeRef *type_ref, size_t offset) {
-    return type_ref != NULL && offset >= type_ref->token.offset && offset <= type_ref_end(type_ref);
+/* Recursively check whether offset falls within type_ref (including generic
+ * type arguments, pointer inner, and array inner).  When a hit is found the
+ * named type is resolved and target is populated. */
+static bool resolve_type_ref_at_offset(const FengLspAnalysisSession *session,
+                                       const FengProgram *program,
+                                       const FengTypeRef *type_ref,
+                                       size_t offset,
+                                       FengLspResolvedTarget *target) {
+    size_t index;
+
+    if (type_ref == NULL) {
+        return false;
+    }
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            if (offset >= type_ref->token.offset && offset <= named_type_ref_end(type_ref)) {
+                const FengDecl *decl = resolve_named_type_ref(session, program, type_ref);
+                if (decl != NULL) {
+                    target->kind = FENG_LSP_RESOLVED_DECL;
+                    target->decl = decl;
+                    return true;
+                }
+            }
+            for (index = 0U; index < type_ref->as.named.type_arg_count; ++index) {
+                if (resolve_type_ref_at_offset(session,
+                                               program,
+                                               type_ref->as.named.type_args[index],
+                                               offset,
+                                               target)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            return resolve_type_ref_at_offset(session, program, type_ref->as.inner, offset, target);
+    }
+    return false;
 }
 
 static bool find_type_ref_in_member(const FengDecl *owner_decl,
@@ -5476,39 +5517,22 @@ static bool find_type_ref_in_member(const FengDecl *owner_decl,
     (void)owner_decl;
 
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
-        if (type_ref_contains_offset(member->as.field.type, offset)) {
-            const FengDecl *decl = resolve_named_type_ref(session, program, member->as.field.type);
-            if (decl != NULL) {
-                target->kind = FENG_LSP_RESOLVED_DECL;
-                target->decl = decl;
-                return true;
-            }
-        }
-        return false;
+        return resolve_type_ref_at_offset(session, program, member->as.field.type, offset, target);
     }
     for (index = 0U; index < member->as.callable.param_count; ++index) {
-        if (type_ref_contains_offset(member->as.callable.params[index].type, offset)) {
-            const FengDecl *decl = resolve_named_type_ref(session,
-                                                          program,
-                                                          member->as.callable.params[index].type);
-            if (decl != NULL) {
-                target->kind = FENG_LSP_RESOLVED_DECL;
-                target->decl = decl;
-                return true;
-            }
-        }
-    }
-    if (type_ref_contains_offset(member->as.callable.return_type, offset)) {
-        const FengDecl *decl = resolve_named_type_ref(session,
-                                                      program,
-                                                      member->as.callable.return_type);
-        if (decl != NULL) {
-            target->kind = FENG_LSP_RESOLVED_DECL;
-            target->decl = decl;
+        if (resolve_type_ref_at_offset(session,
+                                       program,
+                                       member->as.callable.params[index].type,
+                                       offset,
+                                       target)) {
             return true;
         }
     }
-    return false;
+    return resolve_type_ref_at_offset(session,
+                                      program,
+                                      member->as.callable.return_type,
+                                      offset,
+                                      target);
 }
 
 static bool find_block_type_ref_hit(const FengBlock *block,
@@ -5528,20 +5552,8 @@ static bool find_stmt_type_ref_hit(const FengStmt *stmt,
         return false;
     }
     switch (stmt->kind) {
-        case FENG_STMT_BINDING: {
-            const FengDecl *resolved;
-
-            if (!type_ref_contains_offset(stmt->as.binding.type, offset)) {
-                return false;
-            }
-            resolved = resolve_named_type_ref(session, program, stmt->as.binding.type);
-            if (resolved == NULL) {
-                return false;
-            }
-            target->kind = FENG_LSP_RESOLVED_DECL;
-            target->decl = resolved;
-            return true;
-        }
+        case FENG_STMT_BINDING:
+            return resolve_type_ref_at_offset(session, program, stmt->as.binding.type, offset, target);
         case FENG_STMT_BLOCK:
             return find_block_type_ref_hit(stmt->as.block, program, session, offset, target);
         case FENG_STMT_DEFER:
@@ -5584,17 +5596,12 @@ static bool find_stmt_type_ref_hit(const FengStmt *stmt,
                                            target);
         case FENG_STMT_FOR:
             if (stmt->as.for_stmt.is_for_in) {
-                const FengDecl *resolved;
-
-                if (type_ref_contains_offset(stmt->as.for_stmt.iter_binding.type, offset)) {
-                    resolved = resolve_named_type_ref(session,
-                                                      program,
-                                                      stmt->as.for_stmt.iter_binding.type);
-                    if (resolved != NULL) {
-                        target->kind = FENG_LSP_RESOLVED_DECL;
-                        target->decl = resolved;
-                        return true;
-                    }
+                if (resolve_type_ref_at_offset(session,
+                                               program,
+                                               stmt->as.for_stmt.iter_binding.type,
+                                               offset,
+                                               target)) {
+                    return true;
                 }
             } else {
                 if (find_stmt_type_ref_hit(stmt->as.for_stmt.init,
@@ -5660,39 +5667,25 @@ static bool find_type_ref_hit(const FengDecl *decl,
 
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
-            if (type_ref_contains_offset(decl->as.binding.type, offset)) {
-                const FengDecl *resolved = resolve_named_type_ref(session, program, decl->as.binding.type);
-                if (resolved != NULL) {
-                    target->kind = FENG_LSP_RESOLVED_DECL;
-                    target->decl = resolved;
-                    return true;
-                }
-            }
-            break;
+            return resolve_type_ref_at_offset(session, program, decl->as.binding.type, offset, target);
         case FENG_DECL_ENUM:
             break;
         case FENG_DECL_FUNCTION:
             for (index = 0U; index < decl->as.function_decl.param_count; ++index) {
-                if (type_ref_contains_offset(decl->as.function_decl.params[index].type, offset)) {
-                    const FengDecl *resolved = resolve_named_type_ref(session,
-                                                                      program,
-                                                                      decl->as.function_decl.params[index].type);
-                    if (resolved != NULL) {
-                        target->kind = FENG_LSP_RESOLVED_DECL;
-                        target->decl = resolved;
-                        return true;
-                    }
-                }
-            }
-            if (type_ref_contains_offset(decl->as.function_decl.return_type, offset)) {
-                const FengDecl *resolved = resolve_named_type_ref(session,
-                                                                  program,
-                                                                  decl->as.function_decl.return_type);
-                if (resolved != NULL) {
-                    target->kind = FENG_LSP_RESOLVED_DECL;
-                    target->decl = resolved;
+                if (resolve_type_ref_at_offset(session,
+                                               program,
+                                               decl->as.function_decl.params[index].type,
+                                               offset,
+                                               target)) {
                     return true;
                 }
+            }
+            if (resolve_type_ref_at_offset(session,
+                                           program,
+                                           decl->as.function_decl.return_type,
+                                           offset,
+                                           target)) {
+                return true;
             }
             if (find_block_type_ref_hit(decl->as.function_decl.body,
                                         program,
@@ -5703,6 +5696,15 @@ static bool find_type_ref_hit(const FengDecl *decl,
             }
             break;
         case FENG_DECL_TYPE:
+            for (index = 0U; index < decl->as.type_decl.declared_spec_count; ++index) {
+                if (resolve_type_ref_at_offset(session,
+                                               program,
+                                               decl->as.type_decl.declared_specs[index],
+                                               offset,
+                                               target)) {
+                    return true;
+                }
+            }
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
                 if (find_type_ref_in_member(decl,
                                             decl->as.type_decl.members[index],
@@ -5715,6 +5717,15 @@ static bool find_type_ref_hit(const FengDecl *decl,
             }
             break;
         case FENG_DECL_SPEC:
+            for (index = 0U; index < decl->as.spec_decl.parent_spec_count; ++index) {
+                if (resolve_type_ref_at_offset(session,
+                                               program,
+                                               decl->as.spec_decl.parent_specs[index],
+                                               offset,
+                                               target)) {
+                    return true;
+                }
+            }
             if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
                 for (index = 0U; index < decl->as.spec_decl.as.object.member_count; ++index) {
                     if (find_type_ref_in_member(decl,
@@ -5729,6 +5740,15 @@ static bool find_type_ref_hit(const FengDecl *decl,
             }
             break;
         case FENG_DECL_FIT:
+            for (index = 0U; index < decl->as.fit_decl.spec_count; ++index) {
+                if (resolve_type_ref_at_offset(session,
+                                               program,
+                                               decl->as.fit_decl.specs[index],
+                                               offset,
+                                               target)) {
+                    return true;
+                }
+            }
             for (index = 0U; index < decl->as.fit_decl.member_count; ++index) {
                 if (find_type_ref_in_member(decl,
                                             decl->as.fit_decl.members[index],
@@ -9743,6 +9763,46 @@ static bool find_symbol_decl_token_hit(const FengLspCacheQueryContext *context,
     return false;
 }
 
+/* Recursively check whether offset falls within type_ref (including generic
+ * type arguments, pointer inner, and array inner) for the symbol/cache path. */
+static bool resolve_symbol_type_ref_at_offset(const FengLspCacheQueryContext *context,
+                                              const FengTypeRef *type_ref,
+                                              size_t offset,
+                                              FengLspCacheResolvedTarget *target) {
+    size_t index;
+
+    if (type_ref == NULL) {
+        return false;
+    }
+    switch (type_ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            if (offset >= type_ref->token.offset && offset <= named_type_ref_end(type_ref)) {
+                const FengSymbolDeclView *decl = resolve_symbol_named_type_ref(context->provider,
+                                                                               context->current_module,
+                                                                               context->program,
+                                                                               type_ref);
+                if (decl != NULL) {
+                    target->kind = FENG_LSP_RESOLVED_DECL;
+                    target->decl = decl;
+                    return true;
+                }
+            }
+            for (index = 0U; index < type_ref->as.named.type_arg_count; ++index) {
+                if (resolve_symbol_type_ref_at_offset(context,
+                                                      type_ref->as.named.type_args[index],
+                                                      offset,
+                                                      target)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            return resolve_symbol_type_ref_at_offset(context, type_ref->as.inner, offset, target);
+    }
+    return false;
+}
+
 static bool find_symbol_type_ref_in_member(const FengLspCacheQueryContext *context,
                                            const FengTypeMember *member,
                                            size_t offset,
@@ -9750,44 +9810,20 @@ static bool find_symbol_type_ref_in_member(const FengLspCacheQueryContext *conte
     size_t index;
 
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
-        if (type_ref_contains_offset(member->as.field.type, offset)) {
-            const FengSymbolDeclView *decl = resolve_symbol_named_type_ref(context->provider,
-                                                                           context->current_module,
-                                                                           context->program,
-                                                                           member->as.field.type);
-            if (decl != NULL) {
-                target->kind = FENG_LSP_RESOLVED_DECL;
-                target->decl = decl;
-                return true;
-            }
-        }
-        return false;
+        return resolve_symbol_type_ref_at_offset(context, member->as.field.type, offset, target);
     }
     for (index = 0U; index < member->as.callable.param_count; ++index) {
-        if (type_ref_contains_offset(member->as.callable.params[index].type, offset)) {
-            const FengSymbolDeclView *decl = resolve_symbol_named_type_ref(context->provider,
-                                                                           context->current_module,
-                                                                           context->program,
-                                                                           member->as.callable.params[index].type);
-            if (decl != NULL) {
-                target->kind = FENG_LSP_RESOLVED_DECL;
-                target->decl = decl;
-                return true;
-            }
-        }
-    }
-    if (type_ref_contains_offset(member->as.callable.return_type, offset)) {
-        const FengSymbolDeclView *decl = resolve_symbol_named_type_ref(context->provider,
-                                                                       context->current_module,
-                                                                       context->program,
-                                                                       member->as.callable.return_type);
-        if (decl != NULL) {
-            target->kind = FENG_LSP_RESOLVED_DECL;
-            target->decl = decl;
+        if (resolve_symbol_type_ref_at_offset(context,
+                                              member->as.callable.params[index].type,
+                                              offset,
+                                              target)) {
             return true;
         }
     }
-    return false;
+    return resolve_symbol_type_ref_at_offset(context,
+                                             member->as.callable.return_type,
+                                             offset,
+                                             target);
 }
 
 static bool find_symbol_block_type_ref_hit(const FengLspCacheQueryContext *context,
@@ -9805,23 +9841,8 @@ static bool find_symbol_stmt_type_ref_hit(const FengLspCacheQueryContext *contex
         return false;
     }
     switch (stmt->kind) {
-        case FENG_STMT_BINDING: {
-            const FengSymbolDeclView *resolved;
-
-            if (!type_ref_contains_offset(stmt->as.binding.type, offset)) {
-                return false;
-            }
-            resolved = resolve_symbol_named_type_ref(context->provider,
-                                                     context->current_module,
-                                                     context->program,
-                                                     stmt->as.binding.type);
-            if (resolved == NULL) {
-                return false;
-            }
-            target->kind = FENG_LSP_RESOLVED_DECL;
-            target->decl = resolved;
-            return true;
-        }
+        case FENG_STMT_BINDING:
+            return resolve_symbol_type_ref_at_offset(context, stmt->as.binding.type, offset, target);
         case FENG_STMT_BLOCK:
             return find_symbol_block_type_ref_hit(context, stmt->as.block, offset, target);
         case FENG_STMT_DEFER:
@@ -9859,18 +9880,11 @@ static bool find_symbol_stmt_type_ref_hit(const FengLspCacheQueryContext *contex
                                                   target);
         case FENG_STMT_FOR:
             if (stmt->as.for_stmt.is_for_in) {
-                const FengSymbolDeclView *resolved;
-
-                if (type_ref_contains_offset(stmt->as.for_stmt.iter_binding.type, offset)) {
-                    resolved = resolve_symbol_named_type_ref(context->provider,
-                                                             context->current_module,
-                                                             context->program,
-                                                             stmt->as.for_stmt.iter_binding.type);
-                    if (resolved != NULL) {
-                        target->kind = FENG_LSP_RESOLVED_DECL;
-                        target->decl = resolved;
-                        return true;
-                    }
+                if (resolve_symbol_type_ref_at_offset(context,
+                                                      stmt->as.for_stmt.iter_binding.type,
+                                                      offset,
+                                                      target)) {
+                    return true;
                 }
             } else {
                 if (find_symbol_stmt_type_ref_hit(context,
@@ -9930,44 +9944,23 @@ static bool find_symbol_type_ref_hit(const FengLspCacheQueryContext *context,
 
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
-            if (type_ref_contains_offset(decl->as.binding.type, offset)) {
-                const FengSymbolDeclView *resolved = resolve_symbol_named_type_ref(context->provider,
-                                                                                   context->current_module,
-                                                                                   context->program,
-                                                                                   decl->as.binding.type);
-                if (resolved != NULL) {
-                    target->kind = FENG_LSP_RESOLVED_DECL;
-                    target->decl = resolved;
-                    return true;
-                }
-            }
-            break;
+            return resolve_symbol_type_ref_at_offset(context, decl->as.binding.type, offset, target);
         case FENG_DECL_ENUM:
             break;
         case FENG_DECL_FUNCTION:
             for (index = 0U; index < decl->as.function_decl.param_count; ++index) {
-                if (type_ref_contains_offset(decl->as.function_decl.params[index].type, offset)) {
-                    const FengSymbolDeclView *resolved = resolve_symbol_named_type_ref(context->provider,
-                                                                                       context->current_module,
-                                                                                       context->program,
-                                                                                       decl->as.function_decl.params[index].type);
-                    if (resolved != NULL) {
-                        target->kind = FENG_LSP_RESOLVED_DECL;
-                        target->decl = resolved;
-                        return true;
-                    }
-                }
-            }
-            if (type_ref_contains_offset(decl->as.function_decl.return_type, offset)) {
-                const FengSymbolDeclView *resolved = resolve_symbol_named_type_ref(context->provider,
-                                                                                   context->current_module,
-                                                                                   context->program,
-                                                                                   decl->as.function_decl.return_type);
-                if (resolved != NULL) {
-                    target->kind = FENG_LSP_RESOLVED_DECL;
-                    target->decl = resolved;
+                if (resolve_symbol_type_ref_at_offset(context,
+                                                      decl->as.function_decl.params[index].type,
+                                                      offset,
+                                                      target)) {
                     return true;
                 }
+            }
+            if (resolve_symbol_type_ref_at_offset(context,
+                                                  decl->as.function_decl.return_type,
+                                                  offset,
+                                                  target)) {
+                return true;
             }
             if (find_symbol_block_type_ref_hit(context,
                                                decl->as.function_decl.body,
@@ -9977,6 +9970,14 @@ static bool find_symbol_type_ref_hit(const FengLspCacheQueryContext *context,
             }
             break;
         case FENG_DECL_TYPE:
+            for (index = 0U; index < decl->as.type_decl.declared_spec_count; ++index) {
+                if (resolve_symbol_type_ref_at_offset(context,
+                                                      decl->as.type_decl.declared_specs[index],
+                                                      offset,
+                                                      target)) {
+                    return true;
+                }
+            }
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
                 if (find_symbol_type_ref_in_member(context,
                                                    decl->as.type_decl.members[index],
@@ -9987,6 +9988,14 @@ static bool find_symbol_type_ref_hit(const FengLspCacheQueryContext *context,
             }
             break;
         case FENG_DECL_SPEC:
+            for (index = 0U; index < decl->as.spec_decl.parent_spec_count; ++index) {
+                if (resolve_symbol_type_ref_at_offset(context,
+                                                      decl->as.spec_decl.parent_specs[index],
+                                                      offset,
+                                                      target)) {
+                    return true;
+                }
+            }
             if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
                 for (index = 0U; index < decl->as.spec_decl.as.object.member_count; ++index) {
                     if (find_symbol_type_ref_in_member(context,
@@ -9999,6 +10008,14 @@ static bool find_symbol_type_ref_hit(const FengLspCacheQueryContext *context,
             }
             break;
         case FENG_DECL_FIT:
+            for (index = 0U; index < decl->as.fit_decl.spec_count; ++index) {
+                if (resolve_symbol_type_ref_at_offset(context,
+                                                      decl->as.fit_decl.specs[index],
+                                                      offset,
+                                                      target)) {
+                    return true;
+                }
+            }
             for (index = 0U; index < decl->as.fit_decl.member_count; ++index) {
                 if (find_symbol_type_ref_in_member(context,
                                                    decl->as.fit_decl.members[index],
