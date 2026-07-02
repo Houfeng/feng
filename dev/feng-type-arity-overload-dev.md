@@ -631,11 +631,11 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 本步骤改造 3 个 static 函数签名 + 所有精确匹配调用点 + arity 验证重构 + 错误处理改进。**必须同步交付**（find_named_type_decl 签名改造后，arity 验证逻辑必须同步重构，否则 arity 不匹配场景行为变更）。
 
-- [ ] 改造 `find_visible_type` 接受 `type_param_count` 参数（§2.3，精确匹配场景）
-- [ ] 改造 `find_visible_type_decl` 接受 `type_param_count` 参数（§4.2）
-- [ ] 改造 `find_named_type_decl` 接受并传递 `type_param_count` 参数（§4.3）
-- [ ] 改造 `resolve_type_ref_decl`（L4746）：从 `type_ref->as.named.type_arg_count` 提取 arity 传递给 `find_named_type_decl`
-- [ ] 改造精确匹配调用点：
+- [x] 改造 `find_visible_type` 接受 `type_param_count` 参数（§2.3，精确匹配场景）
+- [x] 改造 `find_visible_type_decl` 接受 `type_param_count` 参数（§4.2）
+- [x] 改造 `find_named_type_decl` 接受并传递 `type_param_count` 参数（§4.3）
+- [x] 改造 `resolve_type_ref_decl`（L4746）：从 `type_ref->as.named.type_arg_count` 提取 arity 传递给 `find_named_type_decl`
+- [x] 改造精确匹配调用点：
   - L2383 `find_visible_type_decl` 内部：从参数透传
   - L14691 约束 spec 查找：传递 `cref->as.named.type_arg_count`
   - L4522 `find_named_type_decl` 内部：从参数透传
@@ -645,11 +645,11 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
   - L20403 `resolve_named_type_ref` 中 `type_arg_count > 0` 分支：局部变量 `type_arg_count`
   - L20492 `resolve_named_type_ref` 中 `segment_count == 1` 无类型参数分支：arity = 0
   - L20506 `resolve_named_type_ref` 中多段路径分支：arity = 0
-- [ ] 重构 `resolve_named_type_ref` 有类型参数分支（L20403-L20457，§4.5）：
+- [x] 重构 `resolve_named_type_ref` 有类型参数分支（L20403-L20457，§4.5）：
   - `find_named_type_decl(name, type_arg_count)` 按 (name, arity) 精确查找
   - 返回 NULL 时用 `find_visible_type_any_arity` 区分：同名但 arity=0（非泛型）→ AE1014 "not a generic type"；同名但 arity≠0 且不匹配 → AE1015 "expects N type argument(s), but M were provided"；完全不存在 → AE1013 "unknown type"
   - 移除冗余的 expected_arity 计算与验证（原 L20415-L20437 的 AE1014/AE1015 验证）
-- [ ] 重构 `resolve_named_type_ref` 裸名无类型参数分支（L20460-L20508，§4.6）：
+- [x] 重构 `resolve_named_type_ref` 裸名无类型参数分支（L20460-L20508，§4.6）：
   - `find_named_type_decl(name, 0)` 按 (name, arity=0) 精确查找
   - 返回 NULL 时用 `find_visible_type_any_arity` 区分：同名但 arity≠0 → AE0006 "'%.*s' is a generic type and requires type arguments"；完全不存在 → 继续后续查找（alias 等）
 
@@ -657,6 +657,13 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 > **为何签名改造与 arity 验证重构必须同步交付**：`find_named_type_decl` 改签名后按 (name, arity) 精确查找，找不到返回 NULL。原 L20415-L20437 的 expected_arity 验证逻辑（从 decl 提取 arity）会因 decl 为 NULL 而 crash 或报错不正确。必须同步重构为"查找失败后用 `find_visible_type_any_arity` 区分场景"的新逻辑。
 > **存在性检查调用点已在 6.2 改造完成**：L4500/L14658/L20305/L20809 已改用 `find_visible_type_any_arity`，本步骤只需关注精确匹配调用点。
 > **备注（无需改动）**：`copy_visible_type_entries`（L2835）是纯 memcpy 操作，结构不变则无需改动。
+
+**实现说明**：
+
+- `find_visible_type` 改为按 (name, arity) 精确匹配，category 从每个 entry 的 decl 派生（同 (name, arity) 跨 category 已被冲突检查拒绝，无需显式传 category 参数）
+- `find_named_type_decl` 的单段路径（segment_count == 1）走 `find_visible_type_decl` 精确匹配；多段路径（segment_count >= 2）仍走 `find_module_public_type_decl` 的 name-only 查找（该函数签名将在 §6.5 改造），多段路径的 arity 精确匹配依赖 §6.5
+- type-args 分支（§4.5）：精确查找失败时，用 `find_visible_type_any_arity`（单段）或 `find_named_type_decl(..., 0U)`（多段，跨模块 name-only）做 fallback 区分 AE1013/AE1014/AE1015
+- 裸名分支（§4.6）：AE0006 仅在单段路径触发（`find_visible_type_any_arity` 只查本模块 visible_types）；多段路径的 AE0006 依赖 §6.5 的跨模块 any-arity 查找
 
 ### 6.5 `find_module_public_type_decl` 签名改造 + `_any_arity` 版本 + 7 处调用点
 

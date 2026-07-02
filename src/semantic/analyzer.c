@@ -2433,15 +2433,19 @@ static bool module_is_full_path_visible_from(const ResolveContext *ctx,
     return target->visibility == FENG_VISIBILITY_PUBLIC;
 }
 
+/* Precise lookup: find entry matching (name, arity).
+ * Category is derived from each entry's decl (same (name, arity) across
+ * different categories would have been rejected as cross-category conflict).
+ * Used by type reference resolution where arity is known from the use site. */
 static const VisibleTypeEntry *find_visible_type(const VisibleTypeEntry *entries,
                                                  size_t count,
-                                                 FengSlice name) {
-    /* Temporary name-only lookup; will be replaced by (category, arity)
-     * precise lookup in §6.4 when find_visible_type gets new signature. */
+                                                 FengSlice name,
+                                                 size_t type_param_count) {
     size_t i;
 
     for (i = 0U; i < count; ++i) {
-        if (slice_equals(entries[i].name, name)) {
+        if (slice_equals(entries[i].name, name) &&
+            decl_type_param_count(entries[i].decl) == type_param_count) {
             return &entries[i];
         }
     }
@@ -2466,8 +2470,9 @@ static const VisibleTypeEntry *find_visible_type_any_arity(const VisibleTypeEntr
 
 static const FengDecl *find_visible_type_decl(const VisibleTypeEntry *entries,
                                               size_t count,
-                                              FengSlice name) {
-    const VisibleTypeEntry *entry = find_visible_type(entries, count, name);
+                                              FengSlice name,
+                                              size_t type_param_count) {
+    const VisibleTypeEntry *entry = find_visible_type(entries, count, name, type_param_count);
 
     return entry != NULL ? entry->decl : NULL;
 }
@@ -4593,7 +4598,8 @@ static const AliasEntry *find_unshadowed_alias(const ResolveContext *context, Fe
 
 static const FengDecl *find_named_type_decl(const ResolveContext *context,
                                             const FengSlice *segments,
-                                            size_t segment_count) {
+                                            size_t segment_count,
+                                            size_t type_param_count) {
     FengSlice name;
 
     if (segment_count == 0U) {
@@ -4606,13 +4612,15 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
             return NULL;
         }
 
-        return find_visible_type_decl(context->visible_types, context->visible_type_count, name);
+        return find_visible_type_decl(context->visible_types, context->visible_type_count,
+                                      name, type_param_count);
     }
 
     if (segment_count == 2U) {
         const AliasEntry *alias = find_alias(context->aliases, context->alias_count, segments[0]);
 
         if (alias != NULL) {
+            /* Cross-module: find_module_public_type_decl will gain arity in §6.5 */
             return find_module_public_type_decl(alias->target_module, segments[1]);
         }
     }
@@ -4622,6 +4630,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
         if (module_index < context->analysis->module_count &&
             module_is_full_path_visible_from(context, &context->analysis->modules[module_index])) {
+            /* Cross-module: find_module_public_type_decl will gain arity in §6.5 */
             return find_module_public_type_decl(&context->analysis->modules[module_index], name);
         }
     }
@@ -4841,7 +4850,8 @@ static const FengDecl *resolve_type_ref_decl(const ResolveContext *context,
     }
 
     return find_named_type_decl(
-        context, type_ref->as.named.segments, type_ref->as.named.segment_count);
+        context, type_ref->as.named.segments, type_ref->as.named.segment_count,
+        type_ref->as.named.type_arg_count);
 }
 
 static bool type_refs_semantically_equal(const ResolveContext *context,
@@ -8013,10 +8023,11 @@ static bool resolve_and_validate_enum_match_common(ResolveContext *context,
             {
                 FengSlice enum_name = type_ref->as.named.segments[0];
                 FengSlice item_name = type_ref->as.named.segments[1];
+                /* Enum has no generic params; arity = 0 for precise lookup */
                 const FengDecl *label_enum_decl =
                     find_visible_type_decl(context->visible_types,
                                            context->visible_type_count,
-                                           enum_name);
+                                           enum_name, 0U);
 
                 if (label_enum_decl == NULL || !decl_is_enum_type(label_enum_decl)) {
                     ok = resolver_append_error(
@@ -8743,10 +8754,11 @@ static bool resolve_and_validate_match_op(ResolveContext *context,
             } else {
                 FengSlice enum_name = type_ref->as.named.segments[0];
                 FengSlice item_name = type_ref->as.named.segments[1];
+                /* Enum has no generic params; arity = 0 for precise lookup */
                 const FengDecl *label_enum_decl =
                     find_visible_type_decl(context->visible_types,
                                            context->visible_type_count,
-                                           enum_name);
+                                           enum_name, 0U);
 
                 if (label_enum_decl == NULL || !decl_is_enum_type(label_enum_decl)) {
                     ok = resolver_append_error(
@@ -14774,10 +14786,12 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
                                 FengSlice name_slice = cref->as.named.segment_count > 0U
                                     ? cref->as.named.segments[cref->as.named.segment_count - 1U]
                                     : slice_from_cstr("");
+                                /* Precise lookup: arity from constraint's type_arg_count */
                                 const VisibleTypeEntry *c_entry =
                                     find_visible_type(context->visible_types,
                                                       context->visible_type_count,
-                                                      name_slice);
+                                                      name_slice,
+                                                      cref->as.named.type_arg_count);
 
                                 if (c_entry != NULL && c_entry->decl != NULL &&
                                     c_entry->decl->kind == FENG_DECL_SPEC) {
@@ -20457,10 +20471,10 @@ static bool resolve_named_type_ref(ResolveContext *context,
         return true;
     }
 
-    /* G4-7: Type arguments present — resolve each arg and validate arity. */
+    /* G4-7: Type arguments present — resolve each arg and validate arity.
+     * §6.4: Precise (name, arity) lookup; fallback distinguishes AE1013/1014/1015. */
     if (type_arg_count > 0U) {
         const FengDecl *base_decl;
-        size_t expected_arity;
         size_t i;
         bool ok;
 
@@ -20470,40 +20484,56 @@ static bool resolve_named_type_ref(ResolveContext *context,
             }
         }
 
-        base_decl = find_named_type_decl(context, segments, segment_count);
+        /* Precise lookup: (name, type_arg_count) */
+        base_decl = find_named_type_decl(context, segments, segment_count, type_arg_count);
         if (base_decl == NULL) {
+            const VisibleTypeEntry *any_entry = NULL;
+            const FengDecl *any_decl = NULL;
+            size_t expected_arity = 0U;
+
+            /* Fallback: check if same-name type exists at any arity */
+            if (segment_count == 1U) {
+                any_entry = find_visible_type_any_arity(
+                    context->visible_types, context->visible_type_count, name);
+                if (any_entry != NULL) {
+                    any_decl = any_entry->decl;
+                }
+            } else {
+                /* Cross-module: find_module_public_type_decl is still name-only (§6.5) */
+                any_decl = find_named_type_decl(context, segments, segment_count, 0U);
+            }
+
             qualified_name = format_module_name(segments, segment_count);
-            ok = resolver_append_error(
-                context,
-                type_ref->token,
-                "AE1013", format_message("unknown type '%s'",
-                               qualified_name != NULL ? qualified_name : "<unknown>"));
+            if (any_decl == NULL) {
+                /* No same-name type exists → AE1013 "unknown type" */
+                ok = resolver_append_error(
+                    context,
+                    type_ref->token,
+                    "AE1013", format_message("unknown type '%s'",
+                                   qualified_name != NULL ? qualified_name : "<unknown>"));
+                free(qualified_name);
+                return ok;
+            }
+
+            expected_arity = decl_type_param_count(any_decl);
+            if (expected_arity == 0U) {
+                /* Same-name type exists but is not generic → AE1014 */
+                ok = resolver_append_error(
+                    context,
+                    type_ref->token,
+                    "AE1014", format_message("'%.*s' is not a generic type and does not take type arguments",
+                                   (int)name.length, name.data));
+            } else {
+                /* Same-name generic type exists but arity mismatch → AE1015 */
+                ok = resolver_append_error(
+                    context,
+                    type_ref->token,
+                    "AE1015", format_message("'%.*s' expects %zu type argument(s), but %zu were provided",
+                                   (int)name.length, name.data,
+                                   expected_arity, type_arg_count));
+            }
             free(qualified_name);
             return ok;
-        }
-
-        if (base_decl->kind == FENG_DECL_TYPE) {
-            expected_arity = base_decl->as.type_decl.type_param_count;
-        } else if (base_decl->kind == FENG_DECL_SPEC) {
-            expected_arity = base_decl->as.spec_decl.type_param_count;
-        } else {
-            expected_arity = 0U;
-        }
-
-        if (expected_arity == 0U) {
-            return resolver_append_error(
-                context,
-                type_ref->token,
-                "AE1014", format_message("'%.*s' is not a generic type and does not take type arguments",
-                               (int)name.length, name.data));
-        }
-        if (type_arg_count != expected_arity) {
-            return resolver_append_error(
-                context,
-                type_ref->token,
-                "AE1015", format_message("'%.*s' expects %zu type argument(s), but %zu were provided",
-                               (int)name.length, name.data,
-                               expected_arity, type_arg_count));
         }
 
         if (base_decl->kind == FENG_DECL_TYPE) {
@@ -20527,7 +20557,8 @@ static bool resolve_named_type_ref(ResolveContext *context,
         return true;
     }
 
-    /* Normal named type reference (no type arguments). */
+    /* Normal named type reference (no type arguments).
+     * §6.4: Precise (name, arity=0) lookup; AE0006 if generic target exists. */
     if (segment_count == 1U) {
         if (type_ref_is_unknown(type_ref)) {
             if (context->unknown_type_depth > 0U) {
@@ -20559,8 +20590,23 @@ static bool resolve_named_type_ref(ResolveContext *context,
             return false;
         }
 
-        if (find_named_type_decl(context, segments, segment_count) != NULL) {
+        /* Precise lookup: (name, arity=0) */
+        if (find_named_type_decl(context, segments, segment_count, 0U) != NULL) {
             return true;
+        }
+
+        /* Bare name references a generic type (arity ≠ 0) → AE0006 */
+        {
+            const VisibleTypeEntry *any_entry = find_visible_type_any_arity(
+                context->visible_types, context->visible_type_count, name);
+
+            if (any_entry != NULL && decl_type_param_count(any_entry->decl) > 0U) {
+                return resolver_append_error(
+                    context,
+                    type_ref->token,
+                    "AE0006", format_message("'%.*s' is a generic type and requires type arguments",
+                                   (int)name.length, name.data));
+            }
         }
 
         if (find_alias(context->aliases, context->alias_count, name) != NULL) {
@@ -20573,7 +20619,7 @@ static bool resolve_named_type_ref(ResolveContext *context,
                                (int)name.length,
                                name.data));
         }
-    } else if (find_named_type_decl(context, segments, segment_count) != NULL) {
+    } else if (find_named_type_decl(context, segments, segment_count, 0U) != NULL) {
         return true;
     }
 
