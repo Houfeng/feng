@@ -10389,6 +10389,50 @@ static char *hover_text_for_builtin_type(const char *text, size_t offset) {
     return NULL;
 }
 
+/* Scan the source with the lexer to find the token at `offset`.  If it is
+ * a literal (integer, float, or string), return a strdup'd label string.
+ * Returns NULL when the cursor is not on a literal token. */
+static char *hover_text_for_literal(const char *text, size_t offset) {
+    FengLexer lexer;
+    FengToken token;
+    size_t length;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    length = strlen(text);
+    if (offset > length) {
+        return NULL;
+    }
+    feng_lexer_init(&lexer, text, length, "<hover>");
+    for (;;) {
+        token = feng_lexer_next(&lexer);
+        if (token.kind == FENG_TOKEN_EOF || token.kind == FENG_TOKEN_ERROR) {
+            break;
+        }
+        /* Skip tokens before the cursor. */
+        if (token.offset + token.length <= offset) {
+            continue;
+        }
+        /* Token starts after the cursor — no match. */
+        if (token.offset > offset) {
+            break;
+        }
+        /* Token spans the cursor offset. */
+        switch (token.kind) {
+            case FENG_TOKEN_INTEGER:
+                return dup_cstr("integer literal");
+            case FENG_TOKEN_FLOAT:
+                return dup_cstr("float literal");
+            case FENG_TOKEN_STRING:
+                return dup_cstr("string literal");
+            default:
+                return NULL;
+        }
+    }
+    return NULL;
+}
+
 static bool handle_hover_request(FengLspRuntime *runtime,
                                  FILE *output,
                                  FengLspJsonValue id,
@@ -10526,6 +10570,25 @@ static bool handle_hover_request(FengLspRuntime *runtime,
         if (!ok) {
             if (runtime->errors != NULL) {
                 fprintf(runtime->errors, "lsp: textDocument/hover: out of memory building builtin type response\n");
+            }
+            string_dispose(&result);
+            return send_json_response(output, id, "null");
+        }
+        ok = send_json_response(output, id, result.data);
+        string_dispose(&result);
+        return ok;
+    }
+    /* Literal fallback: show label when cursor is on a numeric or string literal. */
+    hover_text = hover_text_for_literal(document->text, offset);
+    if (hover_text != NULL) {
+        ok = build_hover_result_json(&result,
+                                     runtime->hover_markup_kind,
+                                     hover_text);
+        free(hover_text);
+        free(uri);
+        if (!ok) {
+            if (runtime->errors != NULL) {
+                fprintf(runtime->errors, "lsp: textDocument/hover: out of memory building literal response\n");
             }
             string_dispose(&result);
             return send_json_response(output, id, "null");

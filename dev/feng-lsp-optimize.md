@@ -796,13 +796,13 @@ typedef struct {
 
 - 从 offset 展开提取标识符
 - 在 `BUILTIN_TYPES` 表中查找 → 返回 `"i32\n\n32-bit signed integer"`
-- 在 `BUILTIN_TYPE_ALIASES` 表中查找 → 返回 `"int → i32\n\nplatform-dependent integer alias (i32 or i64)"`
+- 在 `BUILTIN_TYPE_ALIASES` 表中查找 → 返回 `"int → i64\n\nplatform-dependent integer alias (i32 or i64)"`（`canonical == NULL` 时根据 `sizeof(void *)` 动态解析为 i32 或 i64）
 
 注入位置：在 `handle_hover_request` 的 annotation fallback 之后、返回 `null` 之前。
 
 Hover fallback 链：
 ```text
-analysis path → cache path → keyword fallback → annotation fallback → builtin type fallback → null
+analysis path → cache path → keyword fallback → annotation fallback → builtin type fallback → literal fallback → null
 ```
 
 ### 9.5 补全支持
@@ -834,9 +834,27 @@ analysis path → cache path → keyword fallback → annotation fallback → bu
 | `build_cached_completion_json` 非成员分支末尾 | 缓存路径，关键字追加之后 |
 | `handle_completion_request` 兜底路径 | literal builtin fallback 之后、keyword fallback 之前 |
 
-### 9.6 变更文件清单
+### 9.6 字面量 Hover 支持
+
+新增 `hover_text_for_literal(const char *text, size_t offset)` 函数，使用 `FengLexer` 扫描源码，定位光标所在 token，若为字面量则返回类型标签。
+
+**实现逻辑**：
+1. 初始化 `FengLexer`，逐 token 扫描
+2. 找到包含 `offset` 的 token（`token.offset <= offset < token.offset + token.length`）
+3. 按 token kind 返回标签：
+
+| Token Kind | 返回标签 |
+| --- | --- |
+| `FENG_TOKEN_INTEGER` | `"integer literal"` |
+| `FENG_TOKEN_FLOAT` | `"float literal"` |
+| `FENG_TOKEN_STRING` | `"string literal"` |
+| 其他 | `NULL`（不显示 hover） |
+
+**注入位置**：在 `handle_hover_request` 的 builtin type fallback 之后、返回 `null` 之前。
+
+### 9.7 变更文件清单
 
 | 文件 | 变更 |
 | --- | --- |
 | `src/cli/lsp/lsp_builtin_types.h`（新增） | 内建类型和别名数据表 |
-| `src/cli/lsp/runtime.c` | include、hover 函数、补全函数、3 处注入点 |
+| `src/cli/lsp/runtime.c` | include、hover 函数（builtin type + literal）、补全函数、注入点 |
