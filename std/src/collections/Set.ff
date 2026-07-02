@@ -9,7 +9,7 @@ open module std.collections;
  * - Set stores keys only (no value payload).
  * - `entities` returns an immutable dense array of keys.
  */
-open type Set<K: Hashable<K >> {
+open type Set<K: Hashable<K>> {
 	// Slot states: 0 = never used, 1 = occupied, 2 = tombstone.
 	seal var states: i32[!];
 	seal var hashes: u64[!];
@@ -51,9 +51,9 @@ open type Set<K: Hashable<K >> {
 		let oldHashes: u64[!] = self.hashes;
 		let oldKeys: K[!] = self.keys;
 		let oldCapacity: int = self.capacity;
-		self.states = i32[: newCapacity];
-		self.hashes = u64[: newCapacity];
-		self.keys = K[: newCapacity];
+		self.states = i32[:newCapacity];
+		self.hashes = u64[:newCapacity];
+		self.keys = K[:newCapacity];
 		self.capacity = newCapacity;
 		self.size = 0;
 		self.used = 0;
@@ -202,7 +202,7 @@ open type Set<K: Hashable<K >> {
 	 * @return immutable array of keys
 	 */
 	open func entries(): K[] {
-		let items: K[!] = K[: self.size];
+		let items: K[!] = K[:self.size];
 		var outputIndex: int = 0;
 		for var i: int = 0; i < self.capacity; i = i + 1 {
 			if self.states[i] == 1 {
