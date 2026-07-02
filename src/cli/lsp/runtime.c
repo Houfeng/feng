@@ -12,6 +12,7 @@
 
 #include "cli/lsp/lsp_keywords.h"
 #include "cli/lsp/lsp_annotations.h"
+#include "cli/lsp/lsp_builtin_types.h"
 
 #include "cli/common.h"
 #include "cli/deps/manager.h"
@@ -10174,6 +10175,15 @@ static bool resolve_symbol_target_at(const FengLspCacheQueryContext *context,
 static bool completion_identifier_start(char ch);
 static bool completion_identifier_continue(char ch);
 
+/* Forward declarations for builtin type completion helpers defined later
+ * in the completion engine. */
+static bool completion_context_is_type_position(const char *text,
+                                                 size_t offset,
+                                                 FengSlice *out_prefix);
+static bool append_builtin_type_items(FengLspString *json,
+                                       bool *first,
+                                       FengSlice prefix);
+
 /* Extract the identifier at `offset` in `text`, verify it is a keyword,
  * and look it up in the LspKwItem tables.  Returns a strdup'd hover
  * string ("keyword\n\ndetail") on match, or NULL when the cursor is not
@@ -10303,6 +10313,76 @@ static char *hover_text_for_annotation(const char *text, size_t offset) {
     return NULL;
 }
 
+/* Extract the identifier at `offset` in `text`, then look it up in the
+ * BUILTIN_TYPES and BUILTIN_TYPE_ALIASES tables.  Returns a strdup'd hover
+ * string on match, or NULL when the cursor is not on a builtin type name.
+ * Caller must free the returned string. */
+static char *hover_text_for_builtin_type(const char *text, size_t offset) {
+    size_t start;
+    size_t end;
+    size_t length;
+    size_t index;
+    FengLspString hover = {0};
+
+    if (text == NULL || offset > strlen(text)) {
+        return NULL;
+    }
+    /* Expand backward from offset to find identifier start. */
+    start = offset;
+    while (start > 0U && completion_identifier_continue(text[start - 1U])) {
+        --start;
+    }
+    /* Expand forward from offset to find identifier end. */
+    end = offset;
+    length = strlen(text);
+    while (end < length && completion_identifier_continue(text[end])) {
+        ++end;
+    }
+    if (start == end) {
+        return NULL;
+    }
+    /* Reject if the first character is not a valid identifier start. */
+    if (!completion_identifier_start(text[start])) {
+        return NULL;
+    }
+    /* Search builtin type table for a matching label. */
+    for (index = 0U; index < BUILTIN_TYPE_COUNT; ++index) {
+        const LspBuiltinTypeItem *item = &BUILTIN_TYPES[index];
+        size_t label_len = strlen(item->label);
+
+        if (label_len == end - start &&
+            memcmp(item->label, text + start, label_len) == 0) {
+            if (!string_append_bytes(&hover, text + start, end - start) ||
+                !string_append_cstr(&hover, "\n\n") ||
+                !string_append_cstr(&hover, item->detail)) {
+                string_dispose(&hover);
+                return NULL;
+            }
+            return hover.data;
+        }
+    }
+    /* Search builtin type alias table for a matching label. */
+    for (index = 0U; index < BUILTIN_TYPE_ALIAS_COUNT; ++index) {
+        const LspBuiltinTypeAliasItem *alias = &BUILTIN_TYPE_ALIASES[index];
+        size_t label_len = strlen(alias->label);
+
+        if (label_len == end - start &&
+            memcmp(alias->label, text + start, label_len) == 0) {
+            if (!string_append_bytes(&hover, text + start, end - start) ||
+                !string_append_cstr(&hover, " \xe2\x86\x92 ") ||
+                !string_append_cstr(&hover, alias->canonical) ||
+                !string_append_cstr(&hover, "\n\n") ||
+                !string_append_cstr(&hover, alias->detail)) {
+                string_dispose(&hover);
+                return NULL;
+            }
+            return hover.data;
+        }
+    }
+    string_dispose(&hover);
+    return NULL;
+}
+
 static bool handle_hover_request(FengLspRuntime *runtime,
                                  FILE *output,
                                  FengLspJsonValue id,
@@ -10421,6 +10501,25 @@ static bool handle_hover_request(FengLspRuntime *runtime,
         if (!ok) {
             if (runtime->errors != NULL) {
                 fprintf(runtime->errors, "lsp: textDocument/hover: out of memory building annotation response\n");
+            }
+            string_dispose(&result);
+            return send_json_response(output, id, "null");
+        }
+        ok = send_json_response(output, id, result.data);
+        string_dispose(&result);
+        return ok;
+    }
+    /* Builtin type fallback: show detail when cursor is on a builtin type name. */
+    hover_text = hover_text_for_builtin_type(document->text, offset);
+    if (hover_text != NULL) {
+        ok = build_hover_result_json(&result,
+                                     runtime->hover_markup_kind,
+                                     hover_text);
+        free(hover_text);
+        free(uri);
+        if (!ok) {
+            if (runtime->errors != NULL) {
+                fprintf(runtime->errors, "lsp: textDocument/hover: out of memory building builtin type response\n");
             }
             string_dispose(&result);
             return send_json_response(output, id, "null");
@@ -12738,6 +12837,18 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                 return false;
             }
         }
+        /* Builtin type completion: offer builtin types and aliases in type
+         * annotation positions (after ':'). */
+        {
+            FengSlice type_prefix = {0};
+
+            if (completion_context_is_type_position(source_text, offset, &type_prefix)) {
+                if (!append_builtin_type_items(json, &first, type_prefix)) {
+                    local_list_dispose(&locals);
+                    return false;
+                }
+            }
+        }
     }
     local_list_dispose(&locals);
     return string_append_cstr(json, "]");
@@ -13056,6 +13167,18 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                 return false;
             }
         }
+        /* Builtin type completion: offer builtin types and aliases in type
+         * annotation positions (after ':'). */
+        {
+            FengSlice type_prefix = {0};
+
+            if (completion_context_is_type_position(context->source_text, offset, &type_prefix)) {
+                if (!append_builtin_type_items(json, &first, type_prefix)) {
+                    local_list_dispose(&locals);
+                    return false;
+                }
+            }
+        }
     }
     local_list_dispose(&locals);
     *out_item_count = item_count;
@@ -13140,6 +13263,98 @@ static bool completion_context_is_annotation(const char *text,
     }
     out_prefix->data = text + prefix_start;
     out_prefix->length = prefix_end - prefix_start;
+    return true;
+}
+
+/* Detect whether `offset` in `text` is in a type annotation position
+ * (immediately after ':' in a type annotation context like `let x: `,
+ * `func foo(): `, `var field: `).  Returns true and sets `out_prefix`
+ * to the partially-typed identifier when the cursor follows ':'.
+ * The ':' must not be part of '::' (scope resolution). */
+static bool completion_context_is_type_position(const char *text,
+                                                 size_t offset,
+                                                 FengSlice *out_prefix) {
+    size_t length;
+    size_t prefix_end;
+    size_t prefix_start;
+    size_t colon_pos;
+
+    if (text == NULL || out_prefix == NULL) {
+        return false;
+    }
+    length = strlen(text);
+    if (offset > length) {
+        return false;
+    }
+    /* Scan backwards from offset to find the end of any identifier. */
+    prefix_end = offset;
+    prefix_start = offset;
+    while (prefix_start > 0U && completion_identifier_continue(text[prefix_start - 1U])) {
+        --prefix_start;
+    }
+    /* Skip whitespace between the identifier and the preceding token. */
+    colon_pos = prefix_start;
+    while (colon_pos > 0U && isspace((unsigned char)text[colon_pos - 1U])) {
+        --colon_pos;
+    }
+    /* The character before whitespace must be ':'. */
+    if (colon_pos == 0U || text[colon_pos - 1U] != ':') {
+        return false;
+    }
+    /* Reject '::' (scope resolution, not type annotation). */
+    if (colon_pos >= 2U && text[colon_pos - 2U] == ':') {
+        return false;
+    }
+    out_prefix->data = text + prefix_start;
+    out_prefix->length = prefix_end - prefix_start;
+    return true;
+}
+
+/* Append builtin type and type alias completion items filtered by `prefix`.
+ * When prefix is non-empty, only items whose label starts with the prefix
+ * are included.  Uses CompletionItemKind 14 (Keyword) for consistency with
+ * keyword and annotation items.  Returns true on success. */
+static bool append_builtin_type_items(FengLspString *json,
+                                       bool *first,
+                                       FengSlice prefix) {
+    size_t index;
+
+    /* Builtin types. */
+    for (index = 0U; index < BUILTIN_TYPE_COUNT; ++index) {
+        const LspBuiltinTypeItem *item = &BUILTIN_TYPES[index];
+
+        if (prefix.length > 0U) {
+            if (strlen(item->label) < prefix.length ||
+                strncmp(item->label, prefix.data, prefix.length) != 0) {
+                continue;
+            }
+        }
+        if (!append_completion_item(json,
+                                    first,
+                                    slice_from_cstr(item->label),
+                                    item->detail,
+                                    14)) {
+            return false;
+        }
+    }
+    /* Type aliases. */
+    for (index = 0U; index < BUILTIN_TYPE_ALIAS_COUNT; ++index) {
+        const LspBuiltinTypeAliasItem *alias = &BUILTIN_TYPE_ALIASES[index];
+
+        if (prefix.length > 0U) {
+            if (strlen(alias->label) < prefix.length ||
+                strncmp(alias->label, prefix.data, prefix.length) != 0) {
+                continue;
+            }
+        }
+        if (!append_completion_item(json,
+                                    first,
+                                    slice_from_cstr(alias->label),
+                                    alias->detail,
+                                    14)) {
+            return false;
+        }
+    }
     return true;
 }
 
@@ -13701,6 +13916,27 @@ static bool handle_completion_request(FengLspRuntime *runtime,
             return ok;
         }
         string_dispose(&json);
+    }
+    /* Builtin type annotation fallback: when in a type position (after ':')
+     * and no other path produced results, offer builtin types and aliases. */
+    {
+        FengSlice type_prefix = {0};
+
+        if (completion_context_is_type_position(document->text, offset, &type_prefix)) {
+            bool first = true;
+
+            if (string_append_cstr(&json, "[") &&
+                append_builtin_type_items(&json, &first, type_prefix) &&
+                string_append_cstr(&json, "]") &&
+                completion_json_has_items(&json)) {
+                g_completion_uri = NULL;
+                free(uri);
+                ok = send_json_response(output, id, json.data);
+                string_dispose(&json);
+                return ok;
+            }
+            string_dispose(&json);
+        }
     }
     /* Last-resort keyword fallback: when every other path produced no
      * items, offer position-aware keywords based on text analysis.

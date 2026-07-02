@@ -724,3 +724,118 @@ TypeScript / rust-analyzer / gopls 均采用统一 Context 结构，将语法位
 | gopls | `CompletionContext.Position` | topLevel / funcBody / structField / interfaceMethod |
 
 Feng 的 `FengLspPosition` 作为 `FengLspCompletionContext.position` 字段，与上述方向一致。当前覆盖位置分类和 AST 优先两个核心模式，类型位置和修饰符位置暂不区分。
+
+---
+
+## 9. 内建类型及别名补全与 Hover
+
+> 本章节记录内建类型（`i32`、`string` 等）及平台别名（`int`、`byte` 等）的 LSP 补全与 Hover 支持。
+
+### 9.1 目标
+
+当前 LSP 已支持关键字和内建注解的自动完成和 Hover 提示，但内建类型及其别名尚无专门支持：
+
+1. **Hover**：光标悬停在 `i32`、`string`、`int` 等内建类型名上时，不显示类型说明。
+2. **补全**：在类型注解位置（`:` 后）不提示内建类型和别名。
+
+### 9.2 内建类型与别名清单
+
+**内建类型（13 个）**：
+
+| 类型名   | 说明                  |
+| -------- | --------------------- |
+| `bool`   | 布尔类型              |
+| `i8`     | 8 位有符号整数        |
+| `i16`    | 16 位有符号整数       |
+| `i32`    | 32 位有符号整数       |
+| `i64`    | 64 位有符号整数       |
+| `u8`     | 8 位无符号整数        |
+| `u16`    | 16 位无符号整数       |
+| `u32`    | 32 位无符号整数       |
+| `u64`    | 64 位无符号整数       |
+| `f32`    | 32 位浮点数           |
+| `f64`    | 64 位浮点数           |
+| `string` | 字符串类型            |
+| `void`   | 无值类型              |
+
+**类型别名（5 个）**：
+
+| 别名     | 目标类型 | 说明                        |
+| -------- | -------- | --------------------------- |
+| `int`    | `i32`    | 平台相关别名，映射到 i32    |
+| `long`   | `i64`    | 平台相关别名，映射到 i64    |
+| `byte`   | `u8`     | 平台相关别名，映射到 u8     |
+| `float`  | `f32`    | 平台相关别名，映射到 f32    |
+| `double` | `f64`    | 平台相关别名，映射到 f64    |
+
+### 9.3 数据头文件 `lsp_builtin_types.h`
+
+遵循 `lsp_keywords.h` / `lsp_annotations.h` 的"数据与逻辑分离"原则，内建类型数据定义在独立头文件 `src/cli/lsp/lsp_builtin_types.h`，C 逻辑仅遍历表结构。
+
+**数据结构**：
+
+```c
+typedef struct {
+    const char *label;   /* 类型名，如 "i32" */
+    const char *detail;  /* 说明，如 "32-bit signed integer" */
+} LspBuiltinTypeItem;
+
+typedef struct {
+    const char *label;     /* 别名，如 "int" */
+    const char *canonical; /* 目标类型名，如 "i32" */
+    const char *detail;    /* 说明 */
+} LspBuiltinTypeAliasItem;
+```
+
+> 与编译器内部类型表（`codegen.c` 的 `k_builtin_types`、`runtime.c` 的 `builtin_name_for_type_identifier()`）内容一致，但有意独立声明——职责不同：编译器表用于代码生成和语义分析，LSP 表用于补全和 Hover。
+
+### 9.4 Hover 支持
+
+新增 `hover_text_for_builtin_type(const char *text, size_t offset)` 函数，遵循 `hover_text_for_keyword` 和 `hover_text_for_annotation` 的 fallback 模式：
+
+- 从 offset 展开提取标识符
+- 在 `BUILTIN_TYPES` 表中查找 → 返回 `"i32\n\n32-bit signed integer"`
+- 在 `BUILTIN_TYPE_ALIASES` 表中查找 → 返回 `"int → i32\n\nplatform-dependent alias for i32"`
+
+注入位置：在 `handle_hover_request` 的 annotation fallback 之后、返回 `null` 之前。
+
+Hover fallback 链：
+```text
+analysis path → cache path → keyword fallback → annotation fallback → builtin type fallback → null
+```
+
+### 9.5 补全支持
+
+采用与关键字补全相同的**追加策略**（非互斥），因为类型位置除内建类型外还可能有用户自定义类型需要补全。
+
+#### 9.5.1 类型位置检测
+
+新增 `completion_context_is_type_position(const char *text, size_t offset, FengSlice *out_prefix)`：
+
+1. 从 offset 向前跳过标识符字符，得到 prefix
+2. 从 prefix_start 向前跳过空白
+3. 检查前一个字符是否为 `:`（且不是 `::` 的一部分）
+4. 若是则返回 true，设置 out_prefix
+
+> 覆盖最常见场景：`let x: i32`、`func foo(): void`、`var field: string`。泛型参数 `<T>` 等暂不处理，与现有 heuristic 风格一致。
+
+#### 9.5.2 补全项追加
+
+新增 `append_builtin_type_items(FengLspString *json, bool *first, FengSlice prefix)`：
+- 遍历 `BUILTIN_TYPES` 和 `BUILTIN_TYPE_ALIASES`，按 prefix 过滤
+- 使用 `CompletionItemKind` 14（Keyword），与关键字/注解保持一致
+
+#### 9.5.3 注入位置
+
+| 注入位置 | 说明 |
+| --- | --- |
+| `build_completion_json` 非成员分支末尾 | AST 路径，关键字追加之后 |
+| `build_cached_completion_json` 非成员分支末尾 | 缓存路径，关键字追加之后 |
+| `handle_completion_request` 兜底路径 | literal builtin fallback 之后、keyword fallback 之前 |
+
+### 9.6 变更文件清单
+
+| 文件 | 变更 |
+| --- | --- |
+| `src/cli/lsp/lsp_builtin_types.h`（新增） | 内建类型和别名数据表 |
+| `src/cli/lsp/runtime.c` | include、hover 函数、补全函数、3 处注入点 |
