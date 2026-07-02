@@ -800,6 +800,15 @@ static bool parse_symbols(ReadContext *ctx,
                             kind == FENG_SYMBOL_FT_SYM_KIND_DTOR ||
                             kind == FENG_SYMBOL_FT_SYM_KIND_SPEC);
         if (kind == FENG_SYMBOL_FT_SYM_KIND_SPEC) {
+            uint16_t form_bits = flags & FENG_SYMBOL_FT_SYM_FLAG_SPEC_FORM_MASK;
+
+            if (form_bits == FENG_SYMBOL_FT_SYM_FLAG_SPEC_FORM_UNION) {
+                decl->spec_form = FENG_SPEC_FORM_UNION;
+            } else if (form_bits == FENG_SYMBOL_FT_SYM_FLAG_SPEC_FORM_CALLABLE) {
+                decl->spec_form = FENG_SPEC_FORM_CALLABLE;
+            } else {
+                decl->spec_form = FENG_SPEC_FORM_OBJECT;
+            }
             if (!parse_spec_from_type_ref(ctx, type_ref, decl, path, out_error)) {
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);

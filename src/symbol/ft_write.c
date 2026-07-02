@@ -717,6 +717,13 @@ static uint16_t writer_symbol_flags(const FengSymbolDeclView *decl) {
     if (decl->kind == FENG_SYMBOL_DECL_KIND_TYPE && decl->is_tuple) {
         flags |= FENG_SYMBOL_FT_SYM_FLAG_TUPLE_DECL;
     }
+    if (decl->kind == FENG_SYMBOL_DECL_KIND_SPEC) {
+        if (decl->spec_form == FENG_SPEC_FORM_CALLABLE) {
+            flags |= FENG_SYMBOL_FT_SYM_FLAG_SPEC_FORM_CALLABLE;
+        } else if (decl->spec_form == FENG_SPEC_FORM_UNION) {
+            flags |= FENG_SYMBOL_FT_SYM_FLAG_SPEC_FORM_UNION;
+        }
+    }
     return flags;
 }
 
@@ -1055,7 +1062,7 @@ static bool writer_collect_decl(WriterContext *ctx,
             break;
 
         case FENG_SYMBOL_DECL_KIND_SPEC:
-            if (decl->union_member_count > 0U) {
+            if (decl->spec_form == FENG_SPEC_FORM_UNION) {
                 record.type_ref = writer_serialize_spec_union_type(ctx,
                                                                    decl,
                                                                    symbol_id,
@@ -1065,7 +1072,7 @@ static bool writer_collect_decl(WriterContext *ctx,
                 if (record.type_ref == 0U) {
                     return false;
                 }
-            } else if (decl->param_count > 0U || decl->return_type != NULL) {
+            } else if (decl->spec_form == FENG_SPEC_FORM_CALLABLE) {
                 record.type_ref = writer_serialize_callable_type(ctx,
                                                                  decl,
                                                                  FENG_SYMBOL_FT_TYPE_KIND_SPEC_CALLABLE,

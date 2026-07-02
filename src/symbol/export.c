@@ -2638,6 +2638,7 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
             if (decl == NULL) {
                 return NULL;
             }
+            decl->spec_form = source_decl->as.spec_decl.form;
             if (!apply_decl_doc_comment(decl, source_decl->doc_comment, path, source_decl->token, out_error)) {
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);

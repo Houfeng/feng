@@ -67,6 +67,7 @@ struct FengSymbolTypeView {
 
 struct FengSymbolDeclView {
     FengSymbolDeclKind kind;
+    FengSpecForm spec_form;  /* only meaningful when kind == FENG_SYMBOL_DECL_KIND_SPEC */
     FengVisibility visibility;
     FengMutability mutability;
     bool is_extern;
