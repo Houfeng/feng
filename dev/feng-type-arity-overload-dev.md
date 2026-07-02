@@ -698,7 +698,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 - `src/symbol/export.c`：泛型实例 mangling 已含完整类型参数（详见 §5.3）
 - `src/symbol/ft_write.c` / `ft_read.c`：`.ft` 按 decl 独立写入，同名不同 arity 的 type/spec 是两个独立 decl，不会冲突（详见 §5.3）
 
-### 6.6 代码生成
+### 6.6 代码生成（已确认无需改动）
 
 > **备注（无需改动）**：`src/codegen/codegen.c` 现有泛型实例 mangling 已包含完整类型参数信息（如 `Feng__module__Box__G__int` vs `Feng__module__Box__G__int__string`），同名不同 arity 的类型是不同的 `FengDecl`，各自实例通过 `generic_origin_decl` 指向不同 origin，符号生成路径完全分离，天然不冲突（详见 §5.3）
 
