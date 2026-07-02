@@ -35,9 +35,11 @@
 | AE0001 | 基础符号与类型存在性 | AE0012 | type '%.*s' is not defined |
 | AE0001 | 基础符号与类型存在性 | AE0170 | undefined identifier '%.*s' |
 | AE0003 | 语义上下文限制 | AE0171 | 'self' is only available inside type methods and constructors |
+| AE0004 | 跨 category name-only 冲突 | (新增) | '%.*s' conflicts with an existing visible name in a different category |
 | AE0005 | import 引入名称二义/多义(惰性,使用处报错) | (新增) | '<name>' is ambiguous: imported from '<module1>' and '<module2>'; use a fully-qualified path or import alias to disambiguate |
 | AE0005 | import 引入名称二义/多义(惰性,使用处报错) | (新增) | '<name>' is ambiguous: defined in current module and also imported from '<module>'; use a fully-qualified path or import alias to disambiguate |
 | AE0005 | import 引入名称二义/多义(惰性,使用处报错) | (新增) | '<name>' is ambiguous: imported from multiple modules (<module1>, <module2>, ...); use a fully-qualified path or import alias to disambiguate |
+| AE0006 | 使用点裸名引用泛型 | (新增) | '%.*s' is a generic type and requires type arguments |
 
 ## 01 绑定段
 
