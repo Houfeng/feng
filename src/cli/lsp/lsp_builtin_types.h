@@ -27,7 +27,7 @@ typedef struct {
     const char *detail;    /* human-readable description */
 } LspBuiltinTypeAliasItem;
 
-/* Builtin type table (13 items). */
+/* Builtin type table (12 items). */
 static const LspBuiltinTypeItem BUILTIN_TYPES[] = {
     { "bool",   "boolean type" },
     { "i8",     "8-bit signed integer" },
@@ -41,20 +41,20 @@ static const LspBuiltinTypeItem BUILTIN_TYPES[] = {
     { "f32",    "32-bit floating point" },
     { "f64",    "64-bit floating point" },
     { "string", "string type" },
-    { "void",   "void type" },
 };
 
 static const size_t BUILTIN_TYPE_COUNT =
     sizeof(BUILTIN_TYPES) / sizeof(BUILTIN_TYPES[0]);
 
 /* Builtin type alias table (5 items).
- * Each alias maps to a canonical builtin type. */
+ * int is platform-dependent (i32 on 32-bit, i64 on 64-bit platforms).
+ * long, byte, float, double are fixed aliases. */
 static const LspBuiltinTypeAliasItem BUILTIN_TYPE_ALIASES[] = {
-    { "int",    "i32", "platform-dependent alias for i32" },
-    { "long",   "i64", "platform-dependent alias for i64" },
-    { "byte",   "u8",  "platform-dependent alias for u8" },
-    { "float",  "f32", "platform-dependent alias for f32" },
-    { "double", "f64", "platform-dependent alias for f64" },
+    { "int",    "i32", "platform-dependent integer alias (i32 or i64)" },
+    { "long",   "i64", "alias for i64" },
+    { "byte",   "u8",  "alias for u8" },
+    { "float",  "f32", "alias for f32" },
+    { "double", "f64", "alias for f64" },
 };
 
 static const size_t BUILTIN_TYPE_ALIAS_COUNT =

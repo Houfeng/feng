@@ -740,7 +740,7 @@ Feng 的 `FengLspPosition` 作为 `FengLspCompletionContext.position` 字段，�
 
 ### 9.2 内建类型与别名清单
 
-**内建类型（13 个）**：
+**内建类型（12 个）**：
 
 | 类型名   | 说明                  |
 | -------- | --------------------- |
@@ -756,17 +756,18 @@ Feng 的 `FengLspPosition` 作为 `FengLspCompletionContext.position` 字段，�
 | `f32`    | 32 位浮点数           |
 | `f64`    | 64 位浮点数           |
 | `string` | 字符串类型            |
-| `void`   | 无值类型              |
+
+> 注：`void` 是表示空无的关键字（已在关键字表中提供），不是类型。
 
 **类型别名（5 个）**：
 
-| 别名     | 目标类型 | 说明                        |
-| -------- | -------- | --------------------------- |
-| `int`    | `i32`    | 平台相关别名，映射到 i32    |
-| `long`   | `i64`    | 平台相关别名，映射到 i64    |
-| `byte`   | `u8`     | 平台相关别名，映射到 u8     |
-| `float`  | `f32`    | 平台相关别名，映射到 f32    |
-| `double` | `f64`    | 平台相关别名，映射到 f64    |
+| 别名     | 目标类型 | 说明                                     |
+| -------- | -------- | ---------------------------------------- |
+| `int`    | `i32`    | 平台位宽相关别名（32 位 → i32，64 位 → i64） |
+| `long`   | `i64`    | 固定别名，映射到 i64                     |
+| `byte`   | `u8`     | 固定别名，映射到 u8                      |
+| `float`  | `f32`    | 固定别名，映射到 f32                     |
+| `double` | `f64`    | 固定别名，映射到 f64                     |
 
 ### 9.3 数据头文件 `lsp_builtin_types.h`
 
@@ -795,7 +796,7 @@ typedef struct {
 
 - 从 offset 展开提取标识符
 - 在 `BUILTIN_TYPES` 表中查找 → 返回 `"i32\n\n32-bit signed integer"`
-- 在 `BUILTIN_TYPE_ALIASES` 表中查找 → 返回 `"int → i32\n\nplatform-dependent alias for i32"`
+- 在 `BUILTIN_TYPE_ALIASES` 表中查找 → 返回 `"int → i32\n\nplatform-dependent integer alias (i32 or i64)"`
 
 注入位置：在 `handle_hover_request` 的 annotation fallback 之后、返回 `null` 之前。
 
