@@ -577,7 +577,8 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 - [ ] 改造 `find_visible_type` 接受 `type_param_count` 参数（精确匹配）
 - [ ] 改造 `find_visible_type_decl` 接受 `type_param_count` 参数
 - [ ] 改造 `find_named_type_decl` 接受并传递 `type_param_count` 参数
-- [x] ~~验证 `copy_visible_type_entries`（L2835）无需改动~~ — 已确认：纯 memcpy 操作，结构不变则无需改动
+
+> **备注（无需改动）**：`copy_visible_type_entries`（L2835）是纯 memcpy 操作，结构不变则无需改动
 
 ### 6.3 冲突检查
 
@@ -628,20 +629,21 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
   - `find_visible_type_index` "已存在则 break" 判断改为 (name, arity)（L20060/L20092/L20201）
   - `FENG_DECL_SPEC` 分支（L20189）同理
   - **不改触发时机**：import 阶段仍不做冲突检查（惰性，§3.0 规则 1），仅做去重 + 候选收集
-- [x] ~~改造 `collect_symbol_candidates`（L2480）~~ — 无需改动：跨模块歧义检测已按 name-only 实现，不感知 arity，arity 精确匹配由下游 `find_named_type_decl` 负责（§4）
-- [x] ~~改造 `report_name_ambiguity_if_any`（L2716）~~ — 无需改动：歧义检测已按 name-only 实现，不透传 arity
-- [x] ~~改造 `report_name_ambiguity_if_any` 各调用点（L7005/L15875/L19657/L20485/L20800）~~ — 无需改动：因 `report_name_ambiguity_if_any` 不透传 arity，各调用点无需改造
-- [x] ~~改造 `src/symbol/export.c`，导出时携带 arity~~ — 无需改动（详见 §5.3）
-- [x] ~~改造 `src/symbol/ft_write.c` / `ft_read.c`，序列化支持 arity~~ — 无需改动：`.ft` 按 decl 独立写入，同名不同 arity 的 type/spec 是两个独立 decl，不会冲突（详见 §5.3）
+
+> **备注（无需改动）**：
+> - `collect_symbol_candidates`（L2480）：跨模块歧义检测已按 name-only 实现，不感知 arity，arity 精确匹配由下游 `find_named_type_decl` 负责（§4）
+> - `report_name_ambiguity_if_any`（L2716）及各调用点（L7005/L15875/L19657/L20485/L20800）：歧义检测已按 name-only 实现，不透传 arity
+> - `src/symbol/export.c`：泛型实例 mangling 已含完整类型参数（详见 §5.3）
+> - `src/symbol/ft_write.c` / `ft_read.c`：`.ft` 按 decl 独立写入，同名不同 arity 的 type/spec 是两个独立 decl，不会冲突（详见 §5.3）
 
 ### 6.6 代码生成
 
-- [x] ~~改造 `src/codegen/codegen.c`，mangling 包含 arity 信息~~ — 无需改动：现有泛型实例 mangling 已包含完整类型参数信息（如 `Feng__module__Box__G__int` vs `Feng__module__Box__G__int__string`），同名不同 arity 的符号天然不冲突（详见 §5.3）
-- [x] ~~验证同名不同 arity 的类型生成符号不冲突~~ — 已确认天然不冲突：同名不同 arity 的类型是不同的 `FengDecl`，各自实例通过 `generic_origin_decl` 指向不同 origin，符号生成路径完全分离
+> **备注（无需改动）**：`src/codegen/codegen.c` 现有泛型实例 mangling 已包含完整类型参数信息（如 `Feng__module__Box__G__int` vs `Feng__module__Box__G__int__string`），同名不同 arity 的类型是不同的 `FengDecl`，各自实例通过 `generic_origin_decl` 指向不同 origin，符号生成路径完全分离，天然不冲突（详见 §5.3）
 
 ### 6.7 LSP
 
 LSP 不直接调用 `find_visible_type` 等 static 函数，而是通过两类入口访问符号信息：
+
 1. `feng_semantic_*` 公共 API（`feng_semantic_lookup_type_fact` 等，`semantic.h`）
 2. `feng_symbol_*` 符号表 API（`feng_symbol_module_find_public_type` / `feng_symbol_module_public_decl_at` / `feng_symbol_decl_type_param_count` 等，`src/symbol/provider.h`）
 
