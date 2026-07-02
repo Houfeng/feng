@@ -558,13 +558,14 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 - 辅助函数实现与存在性检查调用点改造可独立交付（不改签名，行为不变）
 - `find_named_type_decl` 签名改造与 arity 验证重构必须同步交付（否则 arity 不匹配场景行为变更）
 - 步骤顺序：6.1 → 6.2 → 6.3 → 6.4 → 6.5 → 6.6（无需改动）→ 6.7 → 6.8
+- 重要提示：每步完成并通过全量测试后，将相应任务标记为完成，然后等人工 Review 和下一步指令
 
 ### 6.1 规范确认
 
-- [ ] 同步更新 `docs/feng-generics-draft.md`：将"同 kind"措辞改为"同 category"（§0.3 的 7 类），定义 7 类 category 划分及派生规则
-- [ ] 确认 `docs/feng-generics-draft.md` 中相关规范是否完整
-- [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目（"跨 category name-only 冲突"），message 形如 "'%.*s' conflicts with an existing visible name in a different category"
-- [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0006 条目（"使用点裸名引用泛型"），message 形如 "'%.*s' is a generic type and requires type arguments"
+- [x] 同步更新 `docs/feng-generics-draft.md`：将"同 kind"措辞改为"同 category"（§0.3 的 7 类），定义 7 类 category 划分及派生规则
+- [x] 确认 `docs/feng-generics-draft.md` 中相关规范是否完整
+- [x] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目（"跨 category name-only 冲突"），message 形如 "'%.*s' conflicts with an existing visible name in a different category"
+- [x] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0006 条目（"使用点裸名引用泛型"），message 形如 "'%.*s' is a generic type and requires type arguments"
 
 **备注（已决策/已查证/已澄清，无需进一步改动）**：
 
@@ -575,21 +576,23 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 - **与 scope 优化的关系已澄清**：`dev/feng-scope-optimize-dev.md` 是 AST 多级作用域链统一（模块→文件→类型→函数→块）的优化，与顶层符号冲突检测是不同层面，且该优化尚未实施；本次在双表架构上独立修复跨数组漏检，不依赖 scope 优化，不与 scope 优化冲突
 - **独立性**：仅文档变更，可独立交付。无代码变更，回归测试行为不变。
 
-### 6.2 辅助函数实现 + 存在性检查调用点改造
+### 6.2 辅助函数实现 + 存在性检查调用点改造（已与 §6.3 合并交付）
 
 本步骤仅新增辅助函数 + 改造存在性检查调用点，**不改造任何现有函数签名**，不改造任何精确匹配调用点。
 
-- [ ] 实现 `decl_type_param_count`（§2.4，从 FengDecl 提取 type_param_count）
-- [ ] 实现 `decl_overload_category`（§2.4，派生 7 类 category）
-- [ ] 新增 `find_visible_type_any_arity`（§2.3，存在性检查辅助函数，**不替换** `find_visible_type`）
-- [ ] 新增 `has_cross_category_conflict`（§3.2，本岸 visible_types 内跨 category name-only 检查）
-- [ ] 新增 `has_value_name_only_conflict`（§3.3，type/spec/enum 注册前查对岸 visible_values）
-- [ ] 新增 `has_type_name_only_conflict`（§3.3，function/binding 注册前查对岸 visible_types）
-- [ ] 改造存在性检查调用点（改用 `find_visible_type_any_arity`，行为与原 `find_visible_type` name-only 查找一致）：
+- [x] 实现 `decl_type_param_count`（§2.4，从 FengDecl 提取 type_param_count）
+- [x] 实现 `decl_overload_category`（§2.4，派生 7 类 category）
+- [x] 新增 `find_visible_type_any_arity`（§2.3，存在性检查辅助函数，**不替换** `find_visible_type`）
+- [x] 新增 `has_cross_category_conflict`（§3.2，本岸 visible_types 内跨 category name-only 检查）
+- [x] 新增 `has_value_name_only_conflict`（§3.3，type/spec/enum 注册前查对岸 visible_values）
+- [x] 新增 `has_type_name_only_conflict`（§3.3，function/binding 注册前查对岸 visible_types）
+- [x] 改造存在性检查调用点（改用 `find_visible_type_any_arity`，行为与原 `find_visible_type` name-only 查找一致）：
   - L4500 `find_unshadowed_alias` — alias 是否被类型遮蔽
   - L14658 `resolve_type_target_expr` — 裸标识符解析类型目标
   - L20305 `use` 声明别名冲突检查
   - L20809 标识符解析 — 判断标识符是否为类型名
+
+**合并说明**：原计划独立交付，但 4 个新增辅助函数在本步骤内无调用者（§6.3 才使用），`-Werror` 下无法编译通过。经人工决策，与 §6.3 合并为一个交付步骤。
 
 **独立性**：仅新增辅助函数 + 改造存在性检查调用点（不改任何现有函数签名）。新增辅助函数暂未被调用（除存在性检查场景改用 `find_visible_type_any_arity`，行为与原 name-only 查找一致）。编译通过，回归测试行为不变，可独立交付。
 
@@ -599,15 +602,17 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 本步骤改造 `find_visible_type_index` 签名 + 所有调用点（check_symbol_conflicts 五分支 + import_public_names）。
 
-- [ ] 改造 `find_visible_type_index` 接受 `category` + `type_param_count` 参数（§2.2，同面精确匹配）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_TYPE` 分支（§3.1）：注册前查对岸 visible_values（`has_value_name_only_conflict`）+ 本岸跨 category（`has_cross_category_conflict`）+ 同 category 按 (name, arity)（`find_visible_type_index` 新签名）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_SPEC` 分支（§3.1，同理，category 由 `decl_overload_category` 按 `form` 派生）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_ENUM` 分支（§3.1，派生 `FENG_OVERLOAD_CATEGORY_NO_OVERLOADING`，注册前查对岸 visible_values + 本岸 name-only 不变）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_FUNCTION` 分支（§3.1，注册前查对岸 visible_types，本岸走现有重载机制不变）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_GLOBAL_BINDING` 分支（§3.1，注册前查对岸 visible_types，本岸 name-only 不变）
-- [ ] 改造 `import_public_names` 中 `find_visible_type_index` 调用（L20060/L20092/L20201）：传入 (name, category, arity)
-- [ ] 改造 `import_public_names` 中 `seen_type_names` 去重 key（L20052/L20084/L20193）：从 name 改为 (name, arity)
-- [ ] 改造 `import_public_names` 中 `FENG_DECL_SPEC` 分支（L20189，同理）
+- [x] 改造 `find_visible_type_index` 接受 `category` + `type_param_count` 参数（§2.2，同面精确匹配）
+- [x] 改造 `check_symbol_conflicts` 中 `FENG_DECL_TYPE` 分支（§3.1）：注册前查对岸 visible_values（`has_value_name_only_conflict`）+ 本岸跨 category（`has_cross_category_conflict`）+ 同 category 按 (name, arity)（`find_visible_type_index` 新签名）
+- [x] 改造 `check_symbol_conflicts` 中 `FENG_DECL_SPEC` 分支（§3.1，同理，category 由 `decl_overload_category` 按 `form` 派生）
+- [x] 改造 `check_symbol_conflicts` 中 `FENG_DECL_ENUM` 分支（§3.1，派生 `FENG_OVERLOAD_CATEGORY_NO_OVERLOADING`，注册前查对岸 visible_values + 本岸 name-only 不变）
+- [x] 改造 `check_symbol_conflicts` 中 `FENG_DECL_FUNCTION` 分支（§3.1，注册前查对岸 visible_types，本岸走现有重载机制不变）
+- [x] 改造 `check_symbol_conflicts` 中 `FENG_DECL_GLOBAL_BINDING` 分支（§3.1，注册前查对岸 visible_types，本岸 name-only 不变）
+- [x] 改造 `import_public_names` 中 `find_visible_type_index` 调用（L20060/L20092/L20201）：传入 (name, category, arity)
+- [x] 改造 `import_public_names` 中 `seen_type_names` 去重 key（L20052/L20084/L20193）：从 name 改为 (name, arity)
+- [x] 改造 `import_public_names` 中 `FENG_DECL_SPEC` 分支（L20189，同理）
+
+**实现说明**：`import_public_names` 中 `seen_type_names` 去重数组已移除——改用 `find_visible_type_index` 直接查 `visible_types` 实现 (name, category, arity) 去重（注册后立即生效，无需独立去重数组），代码更简洁。`find_visible_type` 临时使用内联 name-only 查找（保持行为不变），待 §6.4 改造签名时替换为精确匹配。
 
 **独立性**：
 

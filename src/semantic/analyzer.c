@@ -83,6 +83,57 @@ typedef struct VisibleValueEntry {
     bool is_function;
 } VisibleValueEntry;
 
+/* Overload category for symbol conflict detection.
+ *
+ * Derived from FengDeclKind + sub-form (is_tuple / spec form). Finer than
+ * FengDeclKind: plain type vs tuple and the three spec forms are separate
+ * overload faces — same name across sub-forms is a conflict.
+ *
+ * See dev/feng-type-arity-overload-dev.md §0.3 for the full design. */
+typedef enum {
+    FENG_OVERLOAD_CATEGORY_FUNCTION = 0,
+    FENG_OVERLOAD_CATEGORY_TYPE,              /* plain type + @value type */
+    FENG_OVERLOAD_CATEGORY_TUPLE,             /* tuple type */
+    FENG_OVERLOAD_CATEGORY_SPEC_OBJECT,
+    FENG_OVERLOAD_CATEGORY_SPEC_CALLABLE,
+    FENG_OVERLOAD_CATEGORY_SPEC_UNION,
+    FENG_OVERLOAD_CATEGORY_NO_OVERLOADING     /* enum / global_binding (no generic params) */
+} FengOverloadCategory;
+
+/* Extract type_param_count from a decl. Returns 0 for non-generic decls. */
+static size_t decl_type_param_count(const FengDecl *decl) {
+    if (decl->kind == FENG_DECL_TYPE) {
+        return decl->as.type_decl.type_param_count;
+    }
+    if (decl->kind == FENG_DECL_SPEC) {
+        return decl->as.spec_decl.type_param_count;
+    }
+    return 0U;
+}
+
+/* Derive overload category from a decl. is_value does not participate in
+ * category derivation — plain type and @value type share TYPE (semantically
+ * isomorphic). enum / global_binding / fit etc. all map to NO_OVERLOADING. */
+static FengOverloadCategory decl_overload_category(const FengDecl *decl) {
+    switch (decl->kind) {
+        case FENG_DECL_FUNCTION:
+            return FENG_OVERLOAD_CATEGORY_FUNCTION;
+        case FENG_DECL_TYPE:
+            return decl->as.type_decl.is_tuple
+                ? FENG_OVERLOAD_CATEGORY_TUPLE
+                : FENG_OVERLOAD_CATEGORY_TYPE;
+        case FENG_DECL_SPEC:
+            switch (decl->as.spec_decl.form) {
+                case FENG_SPEC_FORM_OBJECT:   return FENG_OVERLOAD_CATEGORY_SPEC_OBJECT;
+                case FENG_SPEC_FORM_CALLABLE: return FENG_OVERLOAD_CATEGORY_SPEC_CALLABLE;
+                case FENG_SPEC_FORM_UNION:    return FENG_OVERLOAD_CATEGORY_SPEC_UNION;
+            }
+            return FENG_OVERLOAD_CATEGORY_NO_OVERLOADING;
+        default:
+            return FENG_OVERLOAD_CATEGORY_NO_OVERLOADING;
+    }
+}
+
 typedef struct AliasEntry {
     FengSlice alias;
     const FengSemanticModule *target_module;
@@ -2178,11 +2229,24 @@ static const FengSemanticModule *find_decl_provider_module(const FengSemanticAna
     return NULL;
 }
 
-static size_t find_visible_type_index(const VisibleTypeEntry *entries, size_t count, FengSlice name) {
+/* Find a visible type entry matching (name, category, arity).
+ * Used for same-category conflict detection and import deduplication.
+ * NO_OVERLOADING category has no arity dimension (always 0). */
+static size_t find_visible_type_index(const VisibleTypeEntry *entries,
+                                      size_t count,
+                                      FengSlice name,
+                                      FengOverloadCategory category,
+                                      size_t type_param_count) {
     size_t index;
 
     for (index = 0U; index < count; ++index) {
-        if (slice_equals(entries[index].name, name)) {
+        if (!slice_equals(entries[index].name, name)) {
+            continue;
+        }
+        if (decl_overload_category(entries[index].decl) != category) {
+            continue;
+        }
+        if (decl_type_param_count(entries[index].decl) == type_param_count) {
             return index;
         }
     }
@@ -2372,9 +2436,32 @@ static bool module_is_full_path_visible_from(const ResolveContext *ctx,
 static const VisibleTypeEntry *find_visible_type(const VisibleTypeEntry *entries,
                                                  size_t count,
                                                  FengSlice name) {
-    size_t index = find_visible_type_index(entries, count, name);
+    /* Temporary name-only lookup; will be replaced by (category, arity)
+     * precise lookup in §6.4 when find_visible_type gets new signature. */
+    size_t i;
 
-    return index < count ? &entries[index] : NULL;
+    for (i = 0U; i < count; ++i) {
+        if (slice_equals(entries[i].name, name)) {
+            return &entries[i];
+        }
+    }
+    return NULL;
+}
+
+/* Existence check: find any entry matching name regardless of arity.
+ * Used by shadowing / alias / identifier-resolution paths that only need
+ * to know whether a type with this name exists, not which arity. */
+static const VisibleTypeEntry *find_visible_type_any_arity(const VisibleTypeEntry *entries,
+                                                           size_t count,
+                                                           FengSlice name) {
+    size_t i;
+
+    for (i = 0U; i < count; ++i) {
+        if (slice_equals(entries[i].name, name)) {
+            return &entries[i];
+        }
+    }
+    return NULL;
 }
 
 static const FengDecl *find_visible_type_decl(const VisibleTypeEntry *entries,
@@ -4497,7 +4584,7 @@ cleanup:
 static const AliasEntry *find_unshadowed_alias(const ResolveContext *context, FengSlice alias_name) {
     if (resolver_has_local_name(context, alias_name) ||
         find_visible_value(context->visible_values, context->visible_value_count, alias_name) != NULL ||
-        find_visible_type(context->visible_types, context->visible_type_count, alias_name) != NULL) {
+        find_visible_type_any_arity(context->visible_types, context->visible_type_count, alias_name) != NULL) {
         return NULL;
     }
 
@@ -14655,7 +14742,7 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
     switch (target_expr->kind) {
         case FENG_EXPR_IDENTIFIER: {
             const VisibleTypeEntry *entry =
-                find_visible_type(context->visible_types,
+                find_visible_type_any_arity(context->visible_types,
                                   context->visible_type_count,
                                   target_expr->as.identifier);
 
@@ -20022,11 +20109,8 @@ static bool import_public_names(const FengSemanticModule *target_module,
                                 FunctionOverloadSetEntry **function_sets,
                                 size_t *function_set_count,
                                 size_t *function_set_capacity) {
-    FengSlice *seen_type_names = NULL;
     FengSlice *seen_value_names = NULL;
-    size_t seen_type_count = 0U;
     size_t seen_value_count = 0U;
-    size_t seen_type_capacity = 0U;
     size_t seen_value_capacity = 0U;
     size_t program_index;
     bool ok = true;
@@ -20047,17 +20131,15 @@ static bool import_public_names(const FengSemanticModule *target_module,
             switch (decl->kind) {
                 case FENG_DECL_TYPE: {
                     VisibleTypeEntry entry;
+                    FengOverloadCategory category = decl_overload_category(decl);
+                    size_t arity = decl->as.type_decl.type_param_count;
 
                     name = decl->as.type_decl.name;
-                    if (find_slice_index(seen_type_names, seen_type_count, name) < seen_type_count) {
-                        break;
-                    }
-                    if (!append_slice(&seen_type_names, &seen_type_count, &seen_type_capacity, name)) {
-                        ok = false;
-                        break;
-                    }
-
-                    index = find_visible_type_index(*visible_types, *visible_type_count, name);
+                    /* Dedup: find_visible_type_index checks (name, category, arity)
+                     * in visible_types — already-registered entries are found immediately,
+                     * replacing the separate seen_type_names dedup array. */
+                    index = find_visible_type_index(*visible_types, *visible_type_count,
+                                                    name, category, arity);
                     if (index < *visible_type_count) {
                         /* import_public_names 不做冲突检查(规范 §7.1 惰性碰撞)。
                          * 同名候选的惰性歧义检测由 collect_symbol_candidates +
@@ -20081,15 +20163,9 @@ static bool import_public_names(const FengSemanticModule *target_module,
                     VisibleTypeEntry entry;
 
                     name = decl->as.enum_decl.name;
-                    if (find_slice_index(seen_type_names, seen_type_count, name) < seen_type_count) {
-                        break;
-                    }
-                    if (!append_slice(&seen_type_names, &seen_type_count, &seen_type_capacity, name)) {
-                        ok = false;
-                        break;
-                    }
-
-                    index = find_visible_type_index(*visible_types, *visible_type_count, name);
+                    /* NO_OVERLOADING: arity=0, name-only dedup via find_visible_type_index */
+                    index = find_visible_type_index(*visible_types, *visible_type_count,
+                                                    name, FENG_OVERLOAD_CATEGORY_NO_OVERLOADING, 0U);
                     if (index < *visible_type_count) {
                         /* import_public_names 不做冲突检查(规范 §7.1 惰性碰撞)。
                          * 同名候选的惰性歧义检测由 collect_symbol_candidates +
@@ -20188,17 +20264,12 @@ static bool import_public_names(const FengSemanticModule *target_module,
 
                 case FENG_DECL_SPEC: {
                     VisibleTypeEntry entry;
+                    FengOverloadCategory category = decl_overload_category(decl);
+                    size_t arity = decl->as.spec_decl.type_param_count;
 
                     name = decl->as.spec_decl.name;
-                    if (find_slice_index(seen_type_names, seen_type_count, name) < seen_type_count) {
-                        break;
-                    }
-                    if (!append_slice(&seen_type_names, &seen_type_count, &seen_type_capacity, name)) {
-                        ok = false;
-                        break;
-                    }
-
-                    index = find_visible_type_index(*visible_types, *visible_type_count, name);
+                    index = find_visible_type_index(*visible_types, *visible_type_count,
+                                                    name, category, arity);
                     if (index < *visible_type_count) {
                         /* import_public_names 不做冲突检查(规范 §7.1 惰性碰撞)。
                          * 同名候选的惰性歧义检测由 collect_symbol_candidates +
@@ -20225,7 +20296,6 @@ static bool import_public_names(const FengSemanticModule *target_module,
         }
     }
 
-    free(seen_type_names);
     free(seen_value_names);
     return ok;
 }
@@ -20302,7 +20372,7 @@ static bool validate_program_alias_conflicts(const FengSemanticModule *current_m
             conflict_program = value_entry->provider_program;
             conflict_module = value_entry->provider_module;
         } else {
-            type_entry = find_visible_type(visible_types, visible_type_count, use_decl->alias);
+            type_entry = find_visible_type_any_arity(visible_types, visible_type_count, use_decl->alias);
             if (type_entry == NULL) {
                 continue;
             }
@@ -20806,7 +20876,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 if (find_visible_value(context->visible_values,
                                        context->visible_value_count,
                                        expr->as.identifier) != NULL ||
-                    find_visible_type(context->visible_types,
+                    find_visible_type_any_arity(context->visible_types,
                                       context->visible_type_count,
                                       expr->as.identifier) != NULL) {
                     return true;
@@ -25046,6 +25116,99 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
     return ok;
 }
 
+/* —— Overload-category conflict helpers (dev/feng-type-arity-overload-dev.md §3.2/§3.3) ——
+ *
+ * Symbol conflict detection uses two arrays: visible_types (type/spec/enum)
+ * and visible_values (function/binding). Within each array, entries from
+ * different overload categories must not share a name (cross-category,
+ * name-only). Across the two arrays, the same rule applies.
+ *
+ * These three helpers each check ONE array for cross-category name
+ * collisions, keeping same-array and cross-array checks separate to
+ * avoid double-reporting. */
+
+/* Same-array cross-category check (visible_types). Called by type/spec/enum
+ * branches before registration to detect name collisions with entries in
+ * a different overload category within the same array. */
+static bool has_cross_category_conflict(const VisibleTypeEntry *entries,
+                                        size_t count,
+                                        FengSlice name,
+                                        FengOverloadCategory new_category) {
+    size_t i;
+
+    for (i = 0U; i < count; ++i) {
+        FengOverloadCategory existing_category;
+
+        if (!slice_equals(entries[i].name, name)) {
+            continue;
+        }
+        existing_category = decl_overload_category(entries[i].decl);
+        /* Overload-capability semantics:
+         * - NO_OVERLOADING: no arity dimension, same name is always a conflict
+         * - 5 type/spec categories: (name, arity) within same category;
+         *   cross-category same name is a conflict
+         * - FUNCTION: multi-dimensional overloading within same category;
+         *   cross-category same name is a conflict
+         * Conflict when either side is NO_OVERLOADING or categories differ. */
+        if (new_category == FENG_OVERLOAD_CATEGORY_NO_OVERLOADING ||
+            existing_category == FENG_OVERLOAD_CATEGORY_NO_OVERLOADING ||
+            existing_category != new_category) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Cross-array check: visible_values. Called by type/spec/enum branches
+ * before registration to detect name collisions with entries in the
+ * opposite array (function/binding). */
+static bool has_value_name_only_conflict(const VisibleValueEntry *values,
+                                         size_t value_count,
+                                         FengSlice name,
+                                         FengOverloadCategory new_category) {
+    size_t i;
+
+    for (i = 0U; i < value_count; ++i) {
+        FengOverloadCategory existing_category;
+
+        if (!slice_equals(values[i].name, name)) {
+            continue;
+        }
+        existing_category = decl_overload_category(values[i].decl);
+        if (new_category == FENG_OVERLOAD_CATEGORY_NO_OVERLOADING ||
+            existing_category == FENG_OVERLOAD_CATEGORY_NO_OVERLOADING ||
+            existing_category != new_category) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Cross-array check: visible_types. Called by function/binding branches
+ * before registration to detect name collisions with entries in the
+ * opposite array (type/spec/enum). */
+static bool has_type_name_only_conflict(const VisibleTypeEntry *types,
+                                        size_t type_count,
+                                        FengSlice name,
+                                        FengOverloadCategory new_category) {
+    size_t i;
+
+    for (i = 0U; i < type_count; ++i) {
+        FengOverloadCategory existing_category;
+
+        if (!slice_equals(types[i].name, name)) {
+            continue;
+        }
+        existing_category = decl_overload_category(types[i].decl);
+        if (new_category == FENG_OVERLOAD_CATEGORY_NO_OVERLOADING ||
+            existing_category == FENG_OVERLOAD_CATEGORY_NO_OVERLOADING ||
+            existing_category != new_category) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                    const FengSemanticModule *module,
                                    CallableReturnCache *callable_return_cache,
@@ -25076,8 +25239,36 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
             switch (decl->kind) {
                 case FENG_DECL_TYPE: {
                     VisibleTypeEntry entry;
+                    FengOverloadCategory category = decl_overload_category(decl);
+                    size_t arity = decl->as.type_decl.type_param_count;
 
-                    index = find_visible_type_index(visible_types, visible_type_count, decl->as.type_decl.name);
+                    /* Cross-array name-only conflict (rule 2, visible_values) */
+                    if (has_value_name_only_conflict(visible_values, visible_value_count,
+                                                     decl->as.type_decl.name, category)) {
+                        char *message = format_message(
+                            "'%.*s' conflicts with an existing visible name in a different category",
+                            (int)decl->as.type_decl.name.length,
+                            decl->as.type_decl.name.data);
+                        ok = append_error(errors, error_count, error_capacity,
+                                          program->path, *decl_token(decl), "AE0004", message);
+                        break;
+                    }
+
+                    /* Same-array cross-category conflict (rule 2, visible_types) */
+                    if (has_cross_category_conflict(visible_types, visible_type_count,
+                                                    decl->as.type_decl.name, category)) {
+                        char *message = format_message(
+                            "'%.*s' conflicts with an existing visible name in a different category",
+                            (int)decl->as.type_decl.name.length,
+                            decl->as.type_decl.name.data);
+                        ok = append_error(errors, error_count, error_capacity,
+                                          program->path, *decl_token(decl), "AE0004", message);
+                        break;
+                    }
+
+                    /* Same-category conflict (rule 3, by name + arity) */
+                    index = find_visible_type_index(visible_types, visible_type_count,
+                                                    decl->as.type_decl.name, category, arity);
                     if (index < visible_type_count) {
                         char *message = format_message("duplicate type declaration '%.*s'",
                                                        (int)decl->as.type_decl.name.length,
@@ -25109,8 +25300,35 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
 
                 case FENG_DECL_ENUM: {
                     VisibleTypeEntry entry;
+                    FengOverloadCategory category = decl_overload_category(decl);
 
-                    index = find_visible_type_index(visible_types, visible_type_count, decl->as.enum_decl.name);
+                    /* Cross-array name-only conflict (rule 2, visible_values) */
+                    if (has_value_name_only_conflict(visible_values, visible_value_count,
+                                                     decl->as.enum_decl.name, category)) {
+                        char *message = format_message(
+                            "'%.*s' conflicts with an existing visible name in a different category",
+                            (int)decl->as.enum_decl.name.length,
+                            decl->as.enum_decl.name.data);
+                        ok = append_error(errors, error_count, error_capacity,
+                                          program->path, *decl_token(decl), "AE0004", message);
+                        break;
+                    }
+
+                    /* Same-array cross-category conflict (rule 2, visible_types) */
+                    if (has_cross_category_conflict(visible_types, visible_type_count,
+                                                    decl->as.enum_decl.name, category)) {
+                        char *message = format_message(
+                            "'%.*s' conflicts with an existing visible name in a different category",
+                            (int)decl->as.enum_decl.name.length,
+                            decl->as.enum_decl.name.data);
+                        ok = append_error(errors, error_count, error_capacity,
+                                          program->path, *decl_token(decl), "AE0004", message);
+                        break;
+                    }
+
+                    /* Same-category conflict (rule 3, NO_OVERLOADING is name-only, arity=0) */
+                    index = find_visible_type_index(visible_types, visible_type_count,
+                                                    decl->as.enum_decl.name, category, 0U);
                     if (index < visible_type_count) {
                         char *message = format_message(
                             "enum declaration '%.*s' conflicts with an existing visible type name",
@@ -25143,6 +25361,19 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
 
                 case FENG_DECL_GLOBAL_BINDING: {
                     VisibleValueEntry entry;
+                    FengOverloadCategory category = decl_overload_category(decl);
+
+                    /* Cross-array name-only conflict (rule 2, visible_types) */
+                    if (has_type_name_only_conflict(visible_types, visible_type_count,
+                                                    decl->as.binding.name, category)) {
+                        char *message = format_message(
+                            "'%.*s' conflicts with an existing visible name in a different category",
+                            (int)decl->as.binding.name.length,
+                            decl->as.binding.name.data);
+                        ok = append_error(errors, error_count, error_capacity,
+                                          program->path, decl->as.binding.token, "AE0004", message);
+                        break;
+                    }
 
                     index = find_visible_value_index(visible_values, visible_value_count, decl->as.binding.name);
                     if (index < visible_value_count) {
@@ -25189,9 +25420,25 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                 }
 
                 case FENG_DECL_FUNCTION: {
-                    size_t value_index =
+                    FengOverloadCategory category = decl_overload_category(decl);
+                    size_t value_index;
+                    size_t function_set_index;
+
+                    /* Cross-array name-only conflict (rule 2, visible_types) */
+                    if (has_type_name_only_conflict(visible_types, visible_type_count,
+                                                    decl->as.function_decl.name, category)) {
+                        char *message = format_message(
+                            "'%.*s' conflicts with an existing visible name in a different category",
+                            (int)decl->as.function_decl.name.length,
+                            decl->as.function_decl.name.data);
+                        ok = append_error(errors, error_count, error_capacity,
+                                          program->path, decl->as.function_decl.token, "AE0004", message);
+                        break;
+                    }
+
+                    value_index =
                         find_visible_value_index(visible_values, visible_value_count, decl->as.function_decl.name);
-                    size_t function_set_index = find_function_overload_set_index(
+                    function_set_index = find_function_overload_set_index(
                         function_sets, function_set_count, decl->as.function_decl.name);
 
                     if (value_index < visible_value_count && !visible_values[value_index].is_function) {
@@ -25319,8 +25566,36 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
 
                 case FENG_DECL_SPEC: {
                     VisibleTypeEntry entry;
+                    FengOverloadCategory category = decl_overload_category(decl);
+                    size_t arity = decl->as.spec_decl.type_param_count;
 
-                    index = find_visible_type_index(visible_types, visible_type_count, decl->as.spec_decl.name);
+                    /* Cross-array name-only conflict (rule 2, visible_values) */
+                    if (has_value_name_only_conflict(visible_values, visible_value_count,
+                                                     decl->as.spec_decl.name, category)) {
+                        char *message = format_message(
+                            "'%.*s' conflicts with an existing visible name in a different category",
+                            (int)decl->as.spec_decl.name.length,
+                            decl->as.spec_decl.name.data);
+                        ok = append_error(errors, error_count, error_capacity,
+                                          program->path, *decl_token(decl), "AE0004", message);
+                        break;
+                    }
+
+                    /* Same-array cross-category conflict (rule 2, visible_types) */
+                    if (has_cross_category_conflict(visible_types, visible_type_count,
+                                                    decl->as.spec_decl.name, category)) {
+                        char *message = format_message(
+                            "'%.*s' conflicts with an existing visible name in a different category",
+                            (int)decl->as.spec_decl.name.length,
+                            decl->as.spec_decl.name.data);
+                        ok = append_error(errors, error_count, error_capacity,
+                                          program->path, *decl_token(decl), "AE0004", message);
+                        break;
+                    }
+
+                    /* Same-category conflict (rule 3, by name + arity) */
+                    index = find_visible_type_index(visible_types, visible_type_count,
+                                                    decl->as.spec_decl.name, category, arity);
                     if (index < visible_type_count) {
                         char *message = format_message("duplicate type declaration '%.*s'",
                                                        (int)decl->as.spec_decl.name.length,
@@ -25332,6 +25607,9 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                           program->path,
                                           *decl_token(decl),
                                           "AE0213", message);
+                        break;
+                    }
+                    if (!ok) {
                         break;
                     }
 
