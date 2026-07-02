@@ -522,7 +522,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 | 类型解析 | `src/semantic/analyzer.c` | `resolve_type_ref`（L20391–20457 arity 验证重构）/ `resolve_type_ref_decl` 及所有调用点 |
 | 存在性检查 | `src/semantic/analyzer.c` | `find_unshadowed_alias`（L4500）/ `resolve_type_target_expr`（L14658）/ `use` 声明冲突检查（L20305）/ 标识符解析（L20809）改用 `find_visible_type_any_arity` |
 | 模块导入 | `src/semantic/analyzer.c` | `import_public_names` 中 `seen_type_names` 改为 (name, arity) 去重（规则 1，惰性不改触发时机）；`collect_symbol_candidates`（L2480）+ `report_name_ambiguity_if_any`（L2716）**保持 name-only**，不感知 arity（跨模块歧义按 name 判定，同模块 arity 精确匹配由下游 `find_named_type_decl` 负责） |
-| 跨模块查找 | `src/semantic/analyzer.c` | `find_module_public_type_decl`（L2948）改为按 (name, arity) 查找 + 新增 `find_module_public_type_decl_any_arity`（存在性检查）；7 处调用点改造（§6.4） |
+| 跨模块查找 | `src/semantic/analyzer.c` | `find_module_public_type_decl`（L2948）改为按 (name, arity) 查找 + 新增 `find_module_public_type_decl_any_arity`（存在性检查）；7 处调用点改造（§6.5） |
 | 符号提供 | `src/symbol/provider.c` | 导入时按 `(name, arity)` 注册 |
 
 ### 5.2 关联影响
