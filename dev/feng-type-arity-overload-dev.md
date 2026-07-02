@@ -725,12 +725,35 @@ LSP 不直接调用 `find_visible_type` 等 static 函数，而是通过两类�
 
 ### 6.8 测试
 
-- [ ] `test/` 新增诊断测试：同名同 arity 冲突（AE0213）、同名不同 arity 允许、跨 category 冲突（AE0004）
-- [ ] `test/` 新增解析测试：使用点 arity 精确匹配、arity 不匹配报错（AE1013/AE1014/AE1015）、裸名引用泛型（AE0006）
-- [ ] `fcts/` 新增行为测试：同名不同 arity 的类型独立使用、泛型实例化正确
-- [ ] 全量回归测试（`make test`），确保非泛型场景行为不变
+- [x] `test/` 新增诊断测试：同名同 arity 冲突（AE0213）、同名不同 arity 允许、跨 category 冲突（AE0004）
+- [x] `test/` 新增解析测试：使用点 arity 精确匹配、arity 不匹配报错（AE1013/AE1014/AE1015）、裸名引用泛型（AE0006）
+- [x] `fcts/` 新增行为测试：同名不同 arity 的类型独立使用、泛型实例化正确
+- [x] 全量回归测试（`make test`），确保非泛型场景行为不变
 
 > **独立性**：必须在所有代码改造完成后进行。不独立交付，作为整体交付的验证步骤。
+
+**实现说明**：
+
+- **诊断测试**（12 个新增，`test/semantic/test_semantic.c`）：
+  - `test_generic_type_same_name_different_arity_allowed` — Box<T> + Box<T,U> 共存
+  - `test_generic_spec_same_name_different_arity_allowed` — Reader<T> + Reader<T,U> 共存
+  - `test_generic_type_same_name_same_arity_rejected` — Box<T> + Box<U> → AE0213
+  - `test_cross_category_type_vs_spec_conflict` — type Box + spec Box → AE0004
+  - `test_cross_category_type_vs_tuple_conflict` — type Pair<T> + type Pair<T,U>(T,U) → AE0004
+  - `test_cross_category_spec_object_vs_callable_conflict` — spec Callback<T>{} + spec Callback<T>() → AE0004
+  - `test_cross_category_type_vs_enum_conflict` — type Box + enum Box → AE0004
+  - `test_cross_category_type_vs_function_conflict` — type Box + func Box → AE0004
+  - `test_cross_category_enum_vs_binding_conflict` — enum Color + let Color → AE0004
+  - `test_generic_arity_precise_resolution` — Box<int> 和 Box<int,string> 精确解析
+  - `test_generic_arity_mismatch_with_overloads` — Box<int,string,bool> 无匹配 → AE1015
+  - `test_generic_bare_name_reference_rejected` — Box 裸名引用泛型 → AE0006
+- **行为测试**（1 个新增，`fcts/fcts_bin/src/test_generic.ff`）：
+  - `arity overload: same-name types with different arity used independently` — Container<int> 和 Container<int,string> 独立使用
+- **额外修复**（测试过程中发现的 arity 感知缺陷）：
+  - `validate_constructor_call_expr`（`analyzer.c:19168`）：构造函数调用 `Container<int,string>()` 使用 `resolve_type_target_expr` 的 name-only 查找，返回首个匹配（arity=1），导致 AE0232 误报。新增 arity-aware 修正：当 call 携带 explicit type args 时，用 `find_visible_type` 按精确 arity 重新解析
+  - `resolve_type_target_expr` 的 `FENG_EXPR_CALL` 分支（`analyzer.c:14883`）：当 `follow_call_callee=true` 且 call 有 explicit type args 时，用 `find_visible_type` 按精确 arity 解析，确保 object literal `{ first: ..., second: ... }` 的字段验证命中正确 arity 的类型
+  - `infer_call_expr_type`（`analyzer.c:13223`）：构造函数调用的返回类型推断使用 name-only 查找，导致泛型实例化使用错误的 arity decl。新增 arity-aware 修正
+  - `cg_find_generic_type_decl`（`codegen.c:5642`）：代码生成按 name 查找泛型 decl，同名不同 arity 返回首个匹配。新增 `type_param_count == type_arg_count` 匹配条件
 
 ---
 

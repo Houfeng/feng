@@ -18962,6 +18962,313 @@ static void test_tuple_literal_element_adapts_to_field_type(void) {
     feng_program_free(program);
 }
 
+/* === 6.8 诊断测试：arity 重载与跨 category 冲突 === */
+
+/* Same-name types with different arity must coexist within the same category. */
+static void test_generic_type_same_name_different_arity_allowed(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    open let value: T;\n"
+        "}\n"
+        "type Box<T, U> {\n"
+        "    open let first: T;\n"
+        "    open let second: U;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_arity_overload_type_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Same-name specs with different arity must coexist within the same category. */
+static void test_generic_spec_same_name_different_arity_allowed(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Reader<T> {\n"
+        "    func read(): T;\n"
+        "}\n"
+        "spec Reader<T, U> {\n"
+        "    func read(): T;\n"
+        "    func write(value: U): void;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_arity_overload_spec_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Same-name, same-arity types within the same category must conflict (AE0213). */
+static void test_generic_type_same_name_same_arity_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    open let value: T;\n"
+        "}\n"
+        "type Box<U> {\n"
+        "    open let data: U;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_arity_dup_type.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0213") == 0);
+    ASSERT(strstr(errors[0].message, "duplicate type declaration 'Box'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Cross-category conflict: type vs spec (AE0004). */
+static void test_cross_category_type_vs_spec_conflict(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    open let value: T;\n"
+        "}\n"
+        "spec Box<T> {\n"
+        "    func get(): T;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cross_cat_type_spec.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0004") == 0);
+    ASSERT(strstr(errors[0].message, "conflicts with an existing visible name in a different category") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Cross-category conflict: ordinary type vs tuple (AE0004, even with different arity). */
+static void test_cross_category_type_vs_tuple_conflict(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Pair<T> {\n"
+        "    open let value: T;\n"
+        "}\n"
+        "type Pair<T, U>(T, U);\n";
+    FengProgram *program = parse_program_or_die("cross_cat_type_tuple.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0004") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Cross-category conflict: object spec vs callable spec (AE0004). */
+static void test_cross_category_spec_object_vs_callable_conflict(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Callback<T> {\n"
+        "    func invoke(): T;\n"
+        "}\n"
+        "spec Callback<T>(value: T): T;\n";
+    FengProgram *program = parse_program_or_die("cross_cat_spec_obj_call.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0004") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Cross-category conflict: type vs enum (AE0004). */
+static void test_cross_category_type_vs_enum_conflict(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    open let value: T;\n"
+        "}\n"
+        "enum Box {\n"
+        "    A, B\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("cross_cat_type_enum.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0004") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Cross-category conflict: type vs function (AE0004). */
+static void test_cross_category_type_vs_function_conflict(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    open let value: T;\n"
+        "}\n"
+        "func Box<T>(): void {}\n";
+    FengProgram *program = parse_program_or_die("cross_cat_type_func.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0004") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Cross-category conflict: enum vs global_binding (NO_OVERLOADING, AE0004). */
+static void test_cross_category_enum_vs_binding_conflict(void) {
+    const char *source =
+        "module demo.main;\n"
+        "enum Color {\n"
+        "    A, B\n"
+        "}\n"
+        "let Color = 1;\n";
+    FengProgram *program = parse_program_or_die("cross_cat_enum_bind.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0004") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* === 6.8 解析测试：arity 精确匹配与错误码 === */
+
+/* Same-name types with different arity must resolve precisely at use sites. */
+static void test_generic_arity_precise_resolution(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    open let value: T;\n"
+        "}\n"
+        "type Box<T, U> {\n"
+        "    open let first: T;\n"
+        "    open let second: U;\n"
+        "}\n"
+        "func run(): void {\n"
+        "    let a: Box<int> = Box<int>() { value: 1 };\n"
+        "    let b: Box<int, string> = Box<int, string>() { first: 1, second: \"hi\" };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_arity_resolve_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Arity mismatch with same-name overloads: no overload matches → AE1015. */
+static void test_generic_arity_mismatch_with_overloads(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    open let value: T;\n"
+        "}\n"
+        "type Box<T, U> {\n"
+        "    open let first: T;\n"
+        "    open let second: U;\n"
+        "}\n"
+        "func run(): void {\n"
+        "    let c: Box<int, string, bool> = Box<int, string, bool>();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_arity_mismatch_overload.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "type argument") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Bare name reference to a generic type without type arguments → AE0006. */
+static void test_generic_bare_name_reference_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    open let value: T;\n"
+        "}\n"
+        "func run(): void {\n"
+        "    let a: Box = Box();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_bare_name_ref.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0006") == 0);
+    ASSERT(strstr(errors[0].message, "is a generic type and requires type arguments") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -19649,6 +19956,19 @@ int main(void) {
     test_array_literal_out_of_range_rejected();
 
     test_tuple_literal_element_adapts_to_field_type();
+
+    test_generic_type_same_name_different_arity_allowed();
+    test_generic_spec_same_name_different_arity_allowed();
+    test_generic_type_same_name_same_arity_rejected();
+    test_cross_category_type_vs_spec_conflict();
+    test_cross_category_type_vs_tuple_conflict();
+    test_cross_category_spec_object_vs_callable_conflict();
+    test_cross_category_type_vs_enum_conflict();
+    test_cross_category_type_vs_function_conflict();
+    test_cross_category_enum_vs_binding_conflict();
+    test_generic_arity_precise_resolution();
+    test_generic_arity_mismatch_with_overloads();
+    test_generic_bare_name_reference_rejected();
 
     puts("semantic tests passed");
     return 0;

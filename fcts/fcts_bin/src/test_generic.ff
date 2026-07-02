@@ -433,6 +433,34 @@ func gtag_exact<T: GTaggable>(value: T): string {
   return "generic";
 }
 
+// === arity 重载场景:同名不同 arity 的类型独立使用 ===
+// type Container<T> (arity=1) 和 type Container<T,U> (arity=2) 按 (name, arity) 共存.
+
+type Container<T> {
+  var value: T;
+
+  func get(): T {
+    return self.value;
+  }
+
+  func set(next: T) {
+    self.value = next;
+  }
+}
+
+type Container<T, U> {
+  var first: T;
+  var second: U;
+
+  func get_first(): T {
+    return self.first;
+  }
+
+  func get_second(): U {
+    return self.second;
+  }
+}
+
 /** 泛型测试 */
 open func test_generic() {
   describe("generic", () {
@@ -655,6 +683,18 @@ open func test_generic() {
       let user = GTaggableUser { label: "tagged" };
       let which = gtag_exact(user);
       assert(which == "non-generic-exact", "overload: non-generic exact match preferred over generic");
+    });
+
+    test("arity overload: same-name types with different arity used independently", () {
+      // Container<T> (arity=1) and Container<T,U> (arity=2) coexist by (name, arity).
+      let c1: Container<int> = Container<int>() { value: 42 };
+      assert(c1.get() == 42, "arity overload: Container<int> get");
+      c1.set(99);
+      assert(c1.get() == 99, "arity overload: Container<int> set");
+
+      let c2: Container<int, string> = Container<int, string>() { first: 1, second: "hello" };
+      assert(c2.get_first() == 1, "arity overload: Container<int, string> get_first");
+      assert(c2.get_second() == "hello", "arity overload: Container<int, string> get_second");
     });
   });
 }

@@ -13232,6 +13232,27 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
     callee = expr->as.call.callee;
     target = resolve_type_target_expr(context, callee, false);
+
+    /* Arity-aware correction for constructor calls: when the callee is a bare
+     * identifier and the call carries explicit type args, the initial name-only
+     * lookup may land on a same-name type with mismatched arity. Re-resolve
+     * with the exact arity to support arity overloading. */
+    if (target.type_decl != NULL &&
+        expr->as.call.has_explicit_type_args &&
+        target.type_decl->kind == FENG_DECL_TYPE &&
+        target.type_decl->as.type_decl.type_param_count != expr->as.call.explicit_type_arg_count &&
+        callee != NULL && callee->kind == FENG_EXPR_IDENTIFIER) {
+        const VisibleTypeEntry *precise =
+            find_visible_type(context->visible_types,
+                              context->visible_type_count,
+                              callee->as.identifier,
+                              expr->as.call.explicit_type_arg_count);
+        if (precise != NULL && precise->decl != NULL) {
+            target.type_decl = precise->decl;
+            target.provider_module = precise->provider_module;
+        }
+    }
+
     if (target.type_decl != NULL) {
         if (target.type_decl->kind == FENG_DECL_TYPE &&
             target.type_decl->as.type_decl.type_param_count > 0U &&
@@ -14882,6 +14903,24 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
 
         case FENG_EXPR_CALL:
             if (follow_call_callee) {
+                /* When the call has explicit type args (e.g., Container<int, string>()),
+                 * use the type arg count as arity for precise type resolution instead
+                 * of the name-only lookup on the bare callee identifier. */
+                if (target_expr->as.call.has_explicit_type_args &&
+                    target_expr->as.call.callee != NULL &&
+                    target_expr->as.call.callee->kind == FENG_EXPR_IDENTIFIER) {
+                    size_t wanted_arity = target_expr->as.call.explicit_type_arg_count;
+                    const VisibleTypeEntry *precise =
+                        find_visible_type(context->visible_types,
+                                          context->visible_type_count,
+                                          target_expr->as.call.callee->as.identifier,
+                                          wanted_arity);
+                    if (precise != NULL && precise->decl != NULL) {
+                        result.type_decl = precise->decl;
+                        result.provider_module = precise->provider_module;
+                        return result;
+                    }
+                }
                 return resolve_type_target_expr(context, target_expr->as.call.callee, true);
             }
             return result;
@@ -19168,6 +19207,77 @@ static bool validate_constructor_invocation(ResolveContext *context,
 static bool validate_constructor_call_expr(ResolveContext *context, const FengExpr *expr) {
     ResolvedTypeTarget target = resolve_type_target_expr(context, expr->as.call.callee, false);
     const FengTypeMember *constructor_member = NULL;
+
+    /* Arity-aware correction: resolve_type_target_expr uses name-only lookup
+     * (find_visible_type_any_arity). When the call carries explicit type args,
+     * the arity is known (explicit_type_arg_count). If the initial resolution
+     * landed on a type with mismatched arity, re-resolve with the exact arity
+     * to support same-name types with different arity (arity overloading). */
+    if (target.type_decl != NULL &&
+        expr->as.call.has_explicit_type_args &&
+        target.type_decl->kind == FENG_DECL_TYPE &&
+        target.type_decl->as.type_decl.type_param_count != expr->as.call.explicit_type_arg_count) {
+        size_t wanted_arity = expr->as.call.explicit_type_arg_count;
+
+        if (expr->as.call.callee->kind == FENG_EXPR_IDENTIFIER) {
+            const VisibleTypeEntry *precise =
+                find_visible_type(context->visible_types,
+                                  context->visible_type_count,
+                                  expr->as.call.callee->as.identifier,
+                                  wanted_arity);
+            if (precise != NULL && precise->decl != NULL) {
+                target.type_decl = precise->decl;
+                target.provider_module = precise->provider_module;
+            }
+        } else if (expr->as.call.callee->kind == FENG_EXPR_MEMBER &&
+                   expr->as.call.callee->as.member.object != NULL &&
+                   expr->as.call.callee->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
+            /* Module-qualified constructor call: Module.Type<T1, T2>() */
+            const AliasEntry *alias =
+                find_unshadowed_alias(context,
+                                      expr->as.call.callee->as.member.object->as.identifier);
+            if (alias != NULL && alias->target_module != NULL) {
+                const FengDecl *precise =
+                    find_module_public_type_decl(alias->target_module,
+                                                 expr->as.call.callee->as.member.member,
+                                                 wanted_arity);
+                if (precise != NULL) {
+                    target.type_decl = precise;
+                    target.provider_module = alias->target_module;
+                }
+            }
+
+            /* Fallback: multi-segment module path (a.b.Type<...>()) */
+            if (target.type_decl == NULL ||
+                (target.type_decl->kind == FENG_DECL_TYPE &&
+                 target.type_decl->as.type_decl.type_param_count != wanted_arity)) {
+                size_t path_segment_count = 0U;
+                FengSlice *path_segments =
+                    expr_path_segments_alloc(expr->as.call.callee, &path_segment_count);
+
+                if (path_segments != NULL && path_segment_count > 1U) {
+                    size_t module_index = find_module_index_by_path(context->analysis,
+                                                                    path_segments,
+                                                                    path_segment_count - 1U);
+                    if (module_index < context->analysis->module_count &&
+                        module_is_full_path_visible_from(context,
+                                                         &context->analysis->modules[module_index])) {
+                        const FengDecl *precise =
+                            find_module_public_type_decl(
+                                &context->analysis->modules[module_index],
+                                path_segments[path_segment_count - 1U],
+                                wanted_arity);
+                        if (precise != NULL) {
+                            target.type_decl = precise;
+                            target.provider_module =
+                                &context->analysis->modules[module_index];
+                        }
+                    }
+                }
+                free(path_segments);
+            }
+        }
+    }
 
     if (target.type_decl == NULL) {
         return true;

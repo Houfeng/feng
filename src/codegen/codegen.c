@@ -5660,6 +5660,11 @@ static const GenericTypeDecl *cg_find_generic_type_decl(CG *cg,
                                                      decl->as.type_decl.name)) {
             continue;
         }
+        /* Arity-aware matching: same-name types with different arity are
+         * distinct generic declarations. Match by type_param_count. */
+        if (decl->as.type_decl.type_param_count != ref->as.named.type_arg_count) {
+            continue;
+        }
         if (cg->cur_program != NULL && entry->owner_program == cg->cur_program) {
             return entry;
         }
