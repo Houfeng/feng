@@ -47,10 +47,11 @@ static const size_t BUILTIN_TYPE_COUNT =
     sizeof(BUILTIN_TYPES) / sizeof(BUILTIN_TYPES[0]);
 
 /* Builtin type alias table (5 items).
- * int is platform-dependent (i32 on 32-bit, i64 on 64-bit platforms).
- * long, byte, float, double are fixed aliases. */
+ * int is platform-dependent: canonical == NULL signals runtime resolution
+ * based on sizeof(void *) (i32 on 32-bit, i64 on 64-bit platforms).
+ * long, byte, float, double are fixed aliases with static canonical names. */
 static const LspBuiltinTypeAliasItem BUILTIN_TYPE_ALIASES[] = {
-    { "int",    "i32", "platform-dependent integer alias (i32 or i64)" },
+    { "int",    NULL,   "platform-dependent integer alias (i32 or i64)" },
     { "long",   "i64", "alias for i64" },
     { "byte",   "u8",  "alias for u8" },
     { "float",  "f32", "alias for f32" },

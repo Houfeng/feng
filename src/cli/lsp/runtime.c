@@ -10368,9 +10368,15 @@ static char *hover_text_for_builtin_type(const char *text, size_t offset) {
 
         if (label_len == end - start &&
             memcmp(alias->label, text + start, label_len) == 0) {
+            /* Resolve platform-dependent canonical (NULL → i32/i64 by pointer size). */
+            const char *resolved = alias->canonical;
+
+            if (resolved == NULL) {
+                resolved = (sizeof(void *) == 4U) ? "i32" : "i64";
+            }
             if (!string_append_bytes(&hover, text + start, end - start) ||
                 !string_append_cstr(&hover, " \xe2\x86\x92 ") ||
-                !string_append_cstr(&hover, alias->canonical) ||
+                !string_append_cstr(&hover, resolved) ||
                 !string_append_cstr(&hover, "\n\n") ||
                 !string_append_cstr(&hover, alias->detail)) {
                 string_dispose(&hover);
