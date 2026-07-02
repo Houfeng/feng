@@ -32,13 +32,15 @@
 
 | category | 声明形式 | 语法示例 | 派生条件 | 支持 arity 重载 |
 | -------- | -------- | -------- | -------- | --------------- |
-| 1. FUNCTION | 函数声明 | `func foo<T>()` | `kind == FENG_DECL_FUNCTION` | ✅（多维：arity + 参数个数 + 参数类型） |
+| 1. FUNCTION | 函数声明 | `func foo<T>()` | `kind == FENG_DECL_FUNCTION` | ✅（多维：arity + 参数个数 + 参数类型；**已实现，本次不动**） |
 | 2. TYPE | 普通 type + @value type | `type User<T> {}` / `@value type User<T> {}` | `kind == FENG_DECL_TYPE && is_tuple == false` | ✅（仅 arity） |
 | 3. TUPLE | 元组类型 | `type User<T1, T2>(T1, T2)` | `kind == FENG_DECL_TYPE && is_tuple == true` | ✅（仅 arity） |
 | 4. SPEC_OBJECT | 对象契约 | `spec User<T> {}` | `kind == FENG_DECL_SPEC && form == FENG_SPEC_FORM_OBJECT` | ✅（仅 arity） |
 | 5. SPEC_CALLABLE | 函数契约 | `spec User<T>()` | `kind == FENG_DECL_SPEC && form == FENG_SPEC_FORM_CALLABLE` | ✅（仅 arity） |
 | 6. SPEC_UNION | 联合契约 | `spec User<T1, T2>: T1 \| T2` | `kind == FENG_DECL_SPEC && form == FENG_SPEC_FORM_UNION` | ✅（仅 arity） |
 | 7. NO_OVERLOADING | enum / global_binding 等 | `enum Color { ... }` | 其他（不支持泛型） | ❌（同名即冲突） |
+
+> 表中"支持 arity 重载"列反映该 category 的**固有重载能力**，不代表本次改造范围。FUNCTION 的多维重载已实现（`FunctionOverloadSetEntry` / `compute_overload_match_priority`，`analyzer.c:10587`），本次**不动**；本次新增的 (name, arity) 单维重载仅适用于 5 类 type/spec category（TYPE / TUPLE / SPEC_OBJECT / SPEC_CALLABLE / SPEC_UNION）。
 
 > **FUNCTION 与 type/spec 重载维度不同**：函数的重载是多维的——泛型 arity + 参数个数 + 参数类型，由现有 `FunctionOverloadSetEntry` / `compute_overload_match_priority`（`src/semantic/analyzer.c:10587`）处理，已实现。本次优化**不改动函数重载逻辑**，FUNCTION 列入 category 体系仅为：(a) 参与 §3.0 规则 2 的跨 category name-only 冲突检测（函数名与 type/spec/enum 同名即冲突）；(b) 表明 FUNCTION 同 category 内不适用本次新增的 (name, arity) 单维重载规则。规则 3 的 (name, arity) 仅适用于 5 类 type/spec category。
 
@@ -205,6 +207,11 @@ static FengOverloadCategory decl_overload_category(const FengDecl *decl) {
 ### 3.0 冲突判定规则总览
 
 **触发时机约束（本次不改动）**：冲突检测的触发时机遵循 [`dev/feng-module-optimize-dev.md`](./feng-module-optimize-dev.md) §0 六类规则的定义——涉及 import 的总是惰性（规则 1/2/3，使用点报 AE0005），纯本地的非 func 总是急切（规则 4，定义处报 AE0213-AE0216），func 同模块允许重载、仅重载冲突急切报错（规则 5，AE0217-AE0220）。**本次优化只改冲突"判定规则"（引入 category 维度 + arity 维度），不改"触发时机"**——急切的仍急切，惰性的仍惰性。
+
+> **术语澄清——本文规则编号 vs module-optimize-dev.md §0 规则编号**：两者同名不同义，不要混淆。
+> - module-optimize-dev.md §0 的"规则 1/2/3"指**涉及 import 的三类惰性冲突**（import vs import / import vs 本模块其他文件 / import vs 本文件），"规则 4"指同模块非 func 急切冲突，"规则 5"指 func 重载冲突急切，"规则 6"指别名急切。
+> - 本文下表的"规则 1/2/3"是**按 category 维度重新划分的判定规则**：规则 1 对应 module 规则 1/2/3 的合并（跨模块 name-only），规则 2/3 是 module 规则 4 按 category 维度的拆分（规则 2 = 跨 category name-only，规则 3 = 同 category 按 (name, arity)）。
+> - 两套规则的对应关系：本文规则 1 = module 规则 1/2/3（触发时机不变，都是惰性）；本文规则 2 + 规则 3 = module 规则 4 + 规则 5（触发时机不变，都是急切）。
 
 本次判定规则改造涉及三条：
 
@@ -420,9 +427,11 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 | 行号 | 上下文 | arity 来源 | 说明 |
 |------|--------|------------|------|
 | L4756 | `resolve_type_ref_decl` 内部 | `type_ref->as.named.type_arg_count` | 主要类型引用解析入口 |
-| L20403 | `resolve_type_ref` 中 `type_arg_count > 0` 分支 | 局部变量 `type_arg_count` | 带类型参数的引用 |
-| L20492 | `resolve_type_ref` 中 `segment_count == 1` 无类型参数分支 | 0 | 裸名引用，无 `<...>` |
-| L20506 | `resolve_type_ref` 中多段路径分支 | 0 | 模块限定路径，无 `<...>` |
+| L20403 | `resolve_named_type_ref` 中 `type_arg_count > 0` 分支 | 局部变量 `type_arg_count` | 带类型参数的引用 |
+| L20492 | `resolve_named_type_ref` 中 `segment_count == 1` 无类型参数分支 | 0 | 裸名引用，无 `<...>` |
+| L20506 | `resolve_named_type_ref` 中多段路径分支 | 0 | 模块限定路径，无 `<...>` |
+
+> 注：上述 L20403/L20492/L20506 位于 `resolve_named_type_ref`（`analyzer.c:20361` 定义）内，不是 `resolve_type_ref`（`analyzer.c:20523` 定义，仅做 switch 分发到 `resolve_named_type_ref` 等子函数）。实施时按 `resolve_named_type_ref` 定位分支。
 
 #### 4.4.2 resolve_type_ref_decl 调用点（多处）
 
@@ -430,7 +439,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 ### 4.5 错误处理与 arity 验证重构
 
-**当前流程**（`resolve_type_ref` L20391–20457，`type_arg_count > 0` 分支）：
+**当前流程**（`resolve_named_type_ref` L20391–20457，`type_arg_count > 0` 分支）：
 
 ```
 1. find_named_type_decl(name)          → 按名称找到 decl
@@ -446,7 +455,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 1. find_named_type_decl(name, type_arg_count) → 按 (name, arity) 精确查找
 2. 若返回 NULL：
    a. 先按名称查找（不传 arity）判断是否存在同名类型
-   b. 存在同名但 arity 不匹配 → 报专用错误（如 "type 'Box' with N type argument(s) not found"）
+   b. 存在同名但 arity 不匹配 → 报 AE1015 "expects N type argument(s), but M were provided"
    c. 不存在 → 报 AE1013 "unknown type"
 3. 若返回非 NULL → materialize constraint witnesses
 ```
@@ -460,7 +469,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 ### 4.6 裸名分支错误信息改进
 
-**当前流程**（`resolve_type_ref` L20460–20508，裸名无类型参数分支）：
+**当前流程**（`resolve_named_type_ref` L20460–20508，裸名无类型参数分支）：
 
 ```
 1. find_named_type_decl(name) → 按名称找到 decl（当前实现）
@@ -475,9 +484,11 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 2. 若返回非 NULL → return true
 3. 若返回 NULL：
    a. 用 find_visible_type_any_arity 判断是否存在同名类型
-   b. 存在同名但 arity ≠ 0 → 报专用错误（如 "'Box' requires type arguments"）
+   b. 存在同名但 arity ≠ 0 → 报 AE0006 "'%.*s' is a generic type and requires type arguments"
    c. 不存在 → 继续后续查找（alias 等）
 ```
+
+**错误码决策（已定）**：使用点裸名引用泛型（目标 arity≠0 但使用点不带 `<...>`）报 **AE0006**（00 通用段）。理由：该错误对 type 和 spec 都适用（不局限于单一类别），本质是"类型引用不完整"的通用问题，与 AE0001 "基础符号与类型存在性" 同属"不跨结构但通用"的先例；按类别分 03+06 两个码位会造成碎片化，统一用 AE0006 更合理。与 §4.5 的 AE1013/AE1015（10 表达式段，"带类型参数的泛型目标"）形成对比——§4.5 使用点是带 `<...>` 的泛型目标（表达式段），§4.6 使用点是裸名普通类型引用（通用段，因不局限于单一类别）。
 
 **实现要点**：与 §4.5 共享 `find_visible_type_any_arity` 辅助函数和错误信息模式。
 
@@ -504,8 +515,8 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 | 可见类型复制 | `src/semantic/analyzer.c` | `copy_visible_type_entries`（L2835）是纯 memcpy，结构不变则无需改动 |
 | ~~代码生成~~ | ~~`src/codegen/codegen.c`~~ | **无需改动**：现有泛型实例 mangling 已包含完整类型参数信息（`__G__<arg1>__<arg2>`），同名不同 arity 的类型生成符号天然不冲突（详见 §5.3） |
 | ~~符号表序列化~~ | ~~`src/symbol/ft_write.c` / `ft_read.c`~~ | **无需改动**：`.ft` 文件按 decl 独立写入（decl-by-decl），同名不同 arity 的 type/spec 是两个独立 decl，不会冲突；泛型函数重载已能正确写入 `.ft`，同理适用于 type/spec（详见 §5.3） |
-| LSP | `src/cli/lsp/runtime.c` | 补全、跳转、hover 需感知多 arity，按使用点 arity 精确匹配 |
-| 约束见证 | `src/semantic/analyzer.c` | `materialize_named_type_param_constraint_witnesses` 每种 arity 独立实例化 |
+| LSP | `src/cli/lsp/runtime.c` | 补全、跳转、hover 需感知多 arity，按使用点 arity 精确匹配（详见 §6.7） |
+| 约束见证 | `src/semantic/analyzer.c` | `materialize_named_type_param_constraint_witnesses` 通过 `resolve_type_ref_decl` 间接获得正确 arity 的 decl，**自然受益，无需主动改造** |
 | 测试 | `test/` / `fcts/` | 新增诊断测试和行为兼容测试 |
 
 ### 5.3 不受影响
@@ -529,7 +540,8 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 - [ ] 同步更新 `docs/feng-generics-draft.md`：将"同 kind"措辞改为"同 category"（§0.3 的 7 类）
 - [ ] 确认 `docs/feng-generics-draft.md` 中相关规范是否完整
 - [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目（"跨 category name-only 冲突"），message 形如 "'%.*s' conflicts with an existing visible name in a different category"
-- [x] 错误码决策：跨 category name-only 冲突用 AE0004（§3.3）；同 category 重复仍用 AE0213（type/spec）/ AE0214（enum）/ AE0215-AE0220（function/binding）；arity 不匹配保留 AE1013/AE1014/AE1015，仅重构触发逻辑（§4.5）
+- [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0006 条目（"使用点裸名引用泛型"），message 形如 "'%.*s' is a generic type and requires type arguments"
+- [x] 错误码决策：跨 category name-only 冲突用 AE0004（§3.3）；使用点裸名引用泛型用 AE0006（§4.6，对 type/spec 都适用，按"不跨结构但通用"先例归通用段）；同 category 重复仍用 AE0213（type/spec）/ AE0214（enum）/ AE0215-AE0220（function/binding）；arity 不匹配保留 AE1013/AE1014/AE1015，仅重构触发逻辑（§4.5）
 - [x] ~~确认跨 kind 冲突规则~~ — 已决策：规则 2，同模块不同 category 按 name 判定冲突（补充 function/binding 与 type/spec/enum 跨数组检查，§3.3）
 - [x] ~~确认触发时机约束~~ — 已决策：本次只改判定规则，不改触发时机（急切的仍急切，惰性的仍惰性，遵循 `dev/feng-module-optimize-dev.md` §0 六类规则）
 
@@ -582,8 +594,8 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
   | L4538 | `find_named_type_decl` 多段路径 | `type_param_count` 透传 | 透传 |
   | L14716 | `resolve_type_target_expr` alias 路径 | 裸标识符，不带 arity | 改用 `_any_arity` 版本 |
   | L14733 | `resolve_type_target_expr` 多段路径 | 裸标识符，不带 arity | 改用 `_any_arity` 版本 |
-  | L25807 | `analysis_resolve_named_type_ref` 单段查找 | `ref->as.named.type_arg_count` | 透传 |
-  | L25814 | `analysis_resolve_named_type_ref` 多段查找 | `ref->as.named.type_arg_count` | 透传 |
+  | L25807 | `analysis_resolve_named_type_ref` 多段路径分支 | `ref->as.named.type_arg_count` | 透传 |
+  | L25814 | `analysis_resolve_named_type_ref` 单段查找（遍历所有模块） | `ref->as.named.type_arg_count` | 透传 |
 
 ### 6.5 模块导入导出（规则 1，惰性，不改触发时机）
 
@@ -605,8 +617,21 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 ### 6.7 LSP
 
-- [ ] 改造 `src/cli/lsp/runtime.c`，补全/跳转/hover 感知多 arity
-- [ ] 按使用点 arity 精确匹配，不展示所有 arity 候选
+LSP 不直接调用 `find_visible_type` 等 static 函数，而是通过两类入口访问符号信息：
+1. `feng_semantic_*` 公共 API（`feng_semantic_lookup_type_fact` 等，`semantic.h`）
+2. `feng_symbol_*` 符号表 API（`feng_symbol_module_find_public_type` / `feng_symbol_module_public_decl_at` / `feng_symbol_decl_type_param_count` 等，`src/symbol/provider.h`）
+
+当前 `feng_symbol_module_find_public_type(module, name)` 按 name 查找，只返回首个匹配 decl；同名不同 arity 共存时只能拿到第一个。需改造的 LSP 行为：
+
+- **补全**：用户输入 `Box` 时，应展示所有 arity 的 Box 候选（多个 completion item），而非只展示第一个 arity。改造方式：用 `feng_symbol_module_public_decl_count` + `feng_symbol_module_public_decl_at` 遍历模块 public decl，按 `feng_symbol_decl_name` 筛选同名、按 `feng_symbol_decl_type_param_count` 区分 arity，逐个发出 completion item（label 形如 `Box<T>` / `Box<T, U>`）。
+- **跳转/hover**：用户在 `Box<int>` 上跳转/hover 时，应跳到 arity=1 的 Box。改造方式：从使用点的 type_ref 提取 `type_arg_count`（arity），遍历同名候选按 `feng_symbol_decl_type_param_count == arity` 精确匹配；找不到时回退到 name-only 查找（保持当前行为，避免回归）。
+
+待办：
+
+- [ ] 改造 `src/cli/lsp/runtime.c` 补全路径：替换 `find_symbol_module_decl_by_name`（L3548）等按 name 查找单个 decl 的调用，改为遍历 + 按 (name, arity) 区分多 arity 候选
+- [ ] 改造 `src/cli/lsp/runtime.c` 跳转/hover 路径：从使用点 type_ref 提取 `type_arg_count`，按 (name, arity) 精确匹配 decl
+- [ ] 验证 `feng_symbol_module_find_public_type` 等 name-only API 是否需要新增按 arity 查找的对应版本；若 LSP 内部遍历已够用，则公共 API 可不动（待实施时确认）
+- [ ] 全量回归 LSP 现有补全/跳转/hover 测试，确保非泛型场景行为不变
 
 ### 6.8 测试
 
@@ -738,6 +763,7 @@ func main() {
 
 - [ ] 同步更新 `docs/feng-generics-draft.md`：将"同 kind"措辞改为"同 category"，定义 7 类 category 划分
 - [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目（"跨 category name-only 冲突"）
+- [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0006 条目（"使用点裸名引用泛型"）
 - [ ] 实现 `decl_type_param_count` 辅助函数
 - [ ] 实现 `decl_overload_category` 辅助函数（§2.4，派生 7 类 category）
 - [ ] 新增 `find_visible_type_any_arity` 辅助函数
@@ -746,7 +772,7 @@ func main() {
 - [ ] 改造 `find_visible_type_index`（接受 `category` + `type_param_count`）/ `find_visible_type` / `find_visible_type_decl` / `find_named_type_decl`
 - [ ] 验证 `copy_visible_type_entries` 无需改动
 - [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_TYPE` / `FENG_DECL_SPEC` / `FENG_DECL_ENUM` / `FENG_DECL_FUNCTION` / `FENG_DECL_GLOBAL_BINDING` 五分支 + 跨 category 冲突检查（含跨数组检查 §3.3，规则 2/3 急切不改触发时机；跨 category 冲突报 AE0004，同 category 重复仍用 AE0213/AE0214/AE0215-AE0220）
-- [ ] 改造 `resolve_type_ref_decl` 及 `resolve_named_type_ref` 中的 arity 验证逻辑（AE1013/AE1014/AE1015 保留，重构触发逻辑 + 裸名分支错误改进）
+- [ ] 改造 `resolve_type_ref_decl` 及 `resolve_named_type_ref` 中的 arity 验证逻辑（§4.5 AE1013/AE1014/AE1015 保留重构触发逻辑；§4.6 使用点裸名引用泛型报 AE0006）
 - [ ] 改造存在性检查调用点（`find_unshadowed_alias` L4500 / `resolve_type_target_expr` L14658 / `use` 声明冲突 L20305 / 标识符解析 L20809）改用 `find_visible_type_any_arity`
 - [ ] 改造精确匹配调用点（L14691 约束 spec 查找）
 - [ ] 改造 enum 专用调用点（L7930 / L8660，arity = 0）
