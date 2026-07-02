@@ -228,7 +228,7 @@ static FengOverloadCategory decl_overload_category(const FengDecl *decl) {
   - **同模块重载面内按 arity 精确匹配**：跨模块歧义检测通过后（`report_name_ambiguity_if_any` 返回 true），类型引用解析走 `find_named_type_decl(name, arity)` 按 (name, arity) 精确匹配同模块重载面内的目标声明（§4）。`collect_symbol_candidates` **不增加 arity 参数**——arity 精确匹配由下游 `find_named_type_decl` 负责，不在候选收集阶段做
   - `report_name_ambiguity_if_any`（L2716）**不透传 arity**：歧义检测是 name-only 的，与 arity 无关
 - **跨模块规则（本次不改动触发时机，仅澄清语义）**：不同模块间一律 name-only 同名即冲突（与顶层函数重载一致——同模块才构成同一重载面，跨模块 name-only 判定）。模块A `type Box<T>` 与模块B `type Box<T, U>` 在使用方同时 import 时，**不论 arity 都报 AE0005**（lazy，使用点触发）。`collect_symbol_candidates` 不按 arity 筛选，`candidates_form_ambiguity` 按 `provider_module` 判定歧义
-- **规则 2 影响**（急切，不改触发时机）：`check_symbol_conflicts` 中跨 category 冲突检查按 name 判定。当前实现中，type/spec/enum 三者共享 `visible_types` 数组（已通过 `find_visible_type_index` name 查找间接实现 name-only 冲突，L25080/L25113/L25323），function/binding 共享 `visible_values` 数组（同理已实现，L25147/L25193）；但 **function/binding 与 type/spec/enum 之间无跨数组检查**，需新增 `has_name_only_conflict_across_arrays` 遍历两个数组按 name 判定（§3.3）
+- **规则 2 影响**（急切，不改触发时机）：`check_symbol_conflicts` 中跨 category 冲突检查按 name 判定。当前实现中，type/spec/enum 三者共享 `visible_types` 数组（已通过 `find_visible_type_index` name 查找间接实现 name-only 冲突，L25080/L25113/L25323），function/binding 共享 `visible_values` 数组（同理已实现，L25144/L25191）；但 **function/binding 与 type/spec/enum 之间无跨数组检查**（既有缺陷，非泛型也存在，如 `type Box{}` 与 `func Box()` 同名当前不报错），本次新增 `has_value_name_only_conflict` / `has_type_name_only_conflict` 分别在注册前查**对岸数组**按 name + category 判定（§3.3）。**本次修复不依赖 scope 优化**——`dev/feng-scope-optimize-dev.md` 是 AST 多级作用域链统一（模块→文件→类型→函数→块）的优化，与顶层符号冲突检测是不同层面，且该优化尚未实施；本次在双表架构上独立修复跨数组漏检
 - **规则 3 影响**（急切，不改触发时机）：`check_symbol_conflicts` 中同 category 冲突检查：5 类 type/spec category 改为按 `(name, arity)` 判定（**核心改动点**）；FUNCTION 仍走现有 `FunctionOverloadSetEntry` / `compute_overload_match_priority` 多维重载机制（**不改动**）；NO_OVERLOADING 仍按 name 判定（现有行为，不变）
 
 > **规则 2 与规则 3 的关系**：规则 2 在 category 维度判定"跨面冲突"（一律 name-only）；规则 3 在 category 维度判定"同面重载"——5 类 type/spec 按 (name, arity)，FUNCTION 按现有函数多维重载，NO_OVERLOADING 按 name（即同面也是 name-only，等价于规则 2 的行为）。两者均以 category 为边界，取代原文档的 kind 维度判定。
@@ -244,7 +244,18 @@ case FENG_DECL_TYPE: {
     size_t arity = decl->as.type_decl.type_param_count;
     FengOverloadCategory category = decl_overload_category(decl);
 
-    // 先检查跨 category 冲突（规则 2，name-only）
+    // 先检查跨数组 name-only 冲突（规则 2，查对岸 visible_values）
+    if (has_value_name_only_conflict(visible_values, visible_value_count,
+                                     decl->as.type_decl.name, category)) {
+        char *message = format_message("type declaration '%.*s' conflicts with an existing visible name in a different category",
+                                       (int)decl->as.type_decl.name.length,
+                                       decl->as.type_decl.name.data);
+        ok = append_error(errors, error_count, error_capacity,
+                          program->path, *decl_token(decl), "AE0004", message);
+        break;
+    }
+
+    // 再检查同数组跨 category 冲突（规则 2，查本岸 visible_types）
     if (has_cross_category_conflict(visible_types, visible_type_count,
                                     decl->as.type_decl.name, category)) {
         char *message = format_message("type declaration '%.*s' conflicts with an existing visible name in a different category",
@@ -255,7 +266,7 @@ case FENG_DECL_TYPE: {
         break;
     }
 
-    // 再检查同 category 冲突（规则 3，按 name + arity）
+    // 最后检查同 category 冲突（规则 3，按 name + arity）
     index = find_visible_type_index(visible_types, visible_type_count,
                                     decl->as.type_decl.name, category, arity);
     if (index < visible_type_count) {
@@ -277,13 +288,13 @@ case FENG_DECL_TYPE: {
 }
 ```
 
-**FENG_DECL_SPEC 分支**（`src/semantic/analyzer.c:25320`）：同理改造，category 由 `decl_overload_category` 按 `form` 派生（OBJECT / CALLABLE / UNION 分属不同 category）。
+**FENG_DECL_SPEC 分支**（`src/semantic/analyzer.c:25320`）：同理改造，category 由 `decl_overload_category` 按 `form` 派生（OBJECT / CALLABLE / UNION 分属不同 category）。注册前依次调用 `has_value_name_only_conflict`（对岸 visible_values）→ `has_cross_category_conflict`（本岸 visible_types 跨 category）→ `find_visible_type_index`（本岸同 category 按 (name, arity)）。
 
-**FENG_DECL_ENUM 分支**（`src/semantic/analyzer.c:25110`）：enum 派生为 `FENG_OVERLOAD_CATEGORY_NO_OVERLOADING`，arity 固定为 0。无 arity 维度——跨 category 冲突按 name 判定（与 type/spec 同名即冲突，报 AE0004）；同 category 内也按 name 判定（同名即冲突，报 AE0214）。**当前 enum 分支只检查 `visible_types` 内冲突，不检查 `visible_values`（与 function/binding 同名当前不报错），需像 FUNCTION/GLOBAL_BINDING 分支一样补充 `has_name_only_conflict_across_arrays` 跨数组检查**（规则 2，急切，不改触发时机，报 AE0004）。
+**FENG_DECL_ENUM 分支**（`src/semantic/analyzer.c:25110`）：enum 派生为 `FENG_OVERLOAD_CATEGORY_NO_OVERLOADING`，arity 固定为 0。无 arity 维度——跨 category 冲突按 name 判定（与 type/spec 同名即冲突，报 AE0004）；同 category 内也按 name 判定（同名即冲突，报 AE0214）。**当前 enum 分支只检查 `visible_types` 内冲突，不检查 `visible_values`（与 function/binding 同名当前不报错，既有缺陷），需补充 `has_value_name_only_conflict` 查对岸 `visible_values`**（规则 2，急切，不改触发时机，报 AE0004）。
 
-**FENG_DECL_FUNCTION 分支**（`src/semantic/analyzer.c:25191`）：当前只检查 `visible_values` 内的 binding/function 同名冲突（AE0215/7/8/9/20），**不检查 `visible_types`**。改造后注册前需调用 `has_name_only_conflict_across_arrays` 检查与 type/spec/enum 同名冲突（规则 2），报 AE0004 跨 category 冲突错误码（§3.3）。同 category 内仍走现有 `FunctionOverloadSetEntry` / `compute_overload_match_priority` 多维重载机制（不改动）。
+**FENG_DECL_FUNCTION 分支**（`src/semantic/analyzer.c:25191`）：当前只检查 `visible_values` 内的 binding/function 同名冲突（AE0215/7/8/9/20），**不检查 `visible_types`**（既有缺陷，`func Box()` 与 `type Box{}` 同名当前不报错）。改造后注册前先调用 `has_type_name_only_conflict` 查对岸 `visible_types` 按 name + category 判定（§3.3），有冲突报 AE0004 并 break；否则继续走现有 `visible_values` 内检查（AE0215/7/8/9/20）与 `FunctionOverloadSetEntry` / `compute_overload_match_priority` 多维重载机制（不改动）。
 
-**FENG_DECL_GLOBAL_BINDING 分支**（`src/semantic/analyzer.c:25144`）：同理，当前只检查 `visible_values` 内冲突（AE0215/6），**不检查 `visible_types`**。改造后同样需调用 `has_name_only_conflict_across_arrays` 检查与 type/spec/enum 同名冲突（规则 2，报 AE0004）。
+**FENG_DECL_GLOBAL_BINDING 分支**（`src/semantic/analyzer.c:25144`）：同理，当前只检查 `visible_values` 内冲突（AE0215/6），**不检查 `visible_types`**（既有缺陷）。改造后注册前先调用 `has_type_name_only_conflict` 查对岸 `visible_types`（§3.3），有冲突报 AE0004 并 break；否则继续走现有 `visible_values` 内检查（AE0215/6）。
 
 > **FENG_DECL_FIT**：fit 声明不注册到 `visible_types` / `visible_values`（仅注册 adapter 关系，`analyzer.c:25350` 空分支），不参与 name-only 冲突检测，无需改造。
 
@@ -325,35 +336,42 @@ static bool has_cross_category_conflict(const VisibleTypeEntry *entries,
 > - (a) 改造后同一 `visible_types` 数组需容纳同名不同 arity 的多 entry，单纯 name 查找会误报冲突，必须引入显式 category 判定；
 > - (b) function/binding 与 type/spec/enum 分属不同数组，当前**完全没有**跨数组 name 检查——`type Box<T>{}` 与 `func Box<T>()` 同名当前不报错，与 §0.3 示例矛盾（见 §3.3）。
 >
-> 新增 `has_cross_category_conflict` 显式按 `decl_overload_category(decl) != new_category` 判定，在 type/spec/enum 分支注册前调用（同数组内跨 category 检查）；新增 `has_name_only_conflict_across_arrays` 遍历 `visible_types` + `visible_values` 按 name 判定，在所有分支注册前调用（跨数组 name-only 检查，§3.3）。
+> 新增 `has_cross_category_conflict` 显式按 `decl_overload_category(decl) != new_category` 判定，在 type/spec/enum 分支注册前调用（同数组内跨 category 检查）；新增 `has_value_name_only_conflict` / `has_type_name_only_conflict` 分别查对岸 `visible_values` / `visible_types` 按 name + category 判定，在所有分支注册前调用（跨数组 name-only 检查，§3.3）。
 
 ### 3.3 跨数组 name-only 冲突检查（规则 2 补充）
 
-当前实现中，function/binding 注册到 `visible_values`（`analyzer.c:25144/25191`），type/spec/enum 注册到 `visible_types`（`analyzer.c:25077/25110/25320`），两个数组不交叉。因此 `type Box<T>{}` 与 `func Box<T>()` 同名当前**不报错**——与 §0.3 示例第 57 行矛盾。
+当前实现中，function/binding 注册到 `visible_values`（`analyzer.c:25144/25191`），type/spec/enum 注册到 `visible_types`（`analyzer.c:25077/25110/25320`），两个数组不交叉。因此 `type Box{}` 与 `func Box()` 同名当前**不报错**——这是既有缺陷（非泛型也存在），与 §0.3 示例矛盾。
 
-**实现**：新增 `has_name_only_conflict_across_arrays`，遍历两个数组按 name 判定。判定与 §3.2 一致——任一是 NO_OVERLOADING、或两者 category 不同，即冲突：
+**实现**：新增两个辅助函数，**各自只查对岸数组**（避免与本岸检查职责重叠/双重报错）：
 
 ```c
-static bool has_name_only_conflict_across_arrays(
-    const VisibleTypeEntry *types, size_t type_count,
+/* type/spec/enum 注册前调用：查对岸 visible_values 按 name + category 判定 */
+static bool has_value_name_only_conflict(
     const VisibleValueEntry *values, size_t value_count,
     FengSlice name, FengOverloadCategory new_category) {
-    for (size_t i = 0U; i < type_count; ++i) {
-        if (!slice_equals(types[i].name, name)) {
+    for (size_t i = 0U; i < value_count; ++i) {
+        if (!slice_equals(values[i].name, name)) {
             continue;
         }
-        FengOverloadCategory existing_category = decl_overload_category(types[i].decl);
+        FengOverloadCategory existing_category = decl_overload_category(values[i].decl);
         if (new_category == FENG_OVERLOAD_CATEGORY_NO_OVERLOADING ||
             existing_category == FENG_OVERLOAD_CATEGORY_NO_OVERLOADING ||
             existing_category != new_category) {
             return true;
         }
     }
-    for (size_t i = 0U; i < value_count; ++i) {
-        if (!slice_equals(values[i].name, name)) {
+    return false;
+}
+
+/* function/binding 注册前调用：查对岸 visible_types 按 name + category 判定 */
+static bool has_type_name_only_conflict(
+    const VisibleTypeEntry *types, size_t type_count,
+    FengSlice name, FengOverloadCategory new_category) {
+    for (size_t i = 0U; i < type_count; ++i) {
+        if (!slice_equals(types[i].name, name)) {
             continue;
         }
-        FengOverloadCategory existing_category = decl_overload_category(values[i].decl);
+        FengOverloadCategory existing_category = decl_overload_category(types[i].decl);
         if (new_category == FENG_OVERLOAD_CATEGORY_NO_OVERLOADING ||
             existing_category == FENG_OVERLOAD_CATEGORY_NO_OVERLOADING ||
             existing_category != new_category) {
@@ -368,13 +386,16 @@ static bool has_name_only_conflict_across_arrays(
 
 **调用点**：
 
-- type/spec/enum 分支注册前：检查 `visible_values` 中是否有同名 function/binding
-- function/binding 分支注册前：检查 `visible_types` 中是否有同名 type/spec/enum
+- type/spec/enum 分支注册前：调用 `has_value_name_only_conflict` 查对岸 `visible_values`
+- function/binding 分支注册前：调用 `has_type_name_only_conflict` 查对岸 `visible_types`
+
+**为何拆为两个函数而非单个函数遍历两个数组**：单个函数同时遍历两个数组会与本岸检查职责重叠——type/spec/enum 分支本岸由 `has_cross_category_conflict`（§3.2）检查 visible_types 内跨 category，function/binding 分支本岸由现有 AE0215-AE0220 检查 visible_values 内冲突；若单函数同时遍历两个数组，会重复检查本岸，导致双重报错（如 type vs type 同 category 同名会同时触发 AE0004 + AE0213）。拆为两个函数各自只查对岸数组，职责清晰，与本岸检查不重叠——检查到对岸冲突就报 AE0004 并 break，不再走本岸检查。
 
 **错误码决策（已定）**：跨数组 name-only 冲突（即跨 category 冲突）统一使用通用段 **AE0004**（"跨结构或跨类型冲突"）。理由：
 
 - 00 通用段定义即"跨结构的基础语义约束"（`docs/feng-error-codes-ae.md` §00），与"function/binding 与 type/spec/enum 跨数组冲突"语义对齐
 - AE0002 旧语义为 @runtime 相关（已迁移至 AE1301），码位虽释放但语义易混，避开
+- AE0004/AE0006 旧语义为 @runtime/@abi 相关（已迁至 AE1320/AE1303），码位释放且**代码中完全未被引用**（`grep -rn "AE0004\|AE0006" src/` 无结果），本次复用为通用段新错误码
 - 同 category 内重复仍用 AE0213（type/spec）/ AE0214（enum）/ AE0215-AE0220（function/binding），按 decl kind 选码；跨 category 冲突用 AE0004，message 区分"跨 category 冲突"
 - 实施时需同步在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目
 
@@ -501,7 +522,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 | 模块 | 文件 | 改动点 |
 | ------ | ------ | -------- |
 | 查找函数 | `src/semantic/analyzer.c` | `find_visible_type_index` / `find_visible_type` / `find_visible_type_decl` / `find_named_type_decl` + 新增 `find_visible_type_any_arity` / `decl_type_param_count` / `decl_overload_category` |
-| 冲突检查 | `src/semantic/analyzer.c` | `check_symbol_conflicts` 中 `FENG_DECL_TYPE` / `FENG_DECL_SPEC` / `FENG_DECL_ENUM` / `FENG_DECL_FUNCTION` / `FENG_DECL_GLOBAL_BINDING` 五分支 + 新增 `has_cross_category_conflict` / `has_name_only_conflict_across_arrays` |
+| 冲突检查 | `src/semantic/analyzer.c` | `check_symbol_conflicts` 中 `FENG_DECL_TYPE` / `FENG_DECL_SPEC` / `FENG_DECL_ENUM` / `FENG_DECL_FUNCTION` / `FENG_DECL_GLOBAL_BINDING` 五分支 + 新增 `has_cross_category_conflict` / `has_value_name_only_conflict` / `has_type_name_only_conflict` |
 | 类型解析 | `src/semantic/analyzer.c` | `resolve_type_ref`（L20391–20457 arity 验证重构）/ `resolve_type_ref_decl` 及所有调用点 |
 | 存在性检查 | `src/semantic/analyzer.c` | `find_unshadowed_alias`（L4500）/ `resolve_type_target_expr`（L14658）/ `use` 声明冲突检查（L20305）/ 标识符解析（L20809）改用 `find_visible_type_any_arity` |
 | 模块导入 | `src/semantic/analyzer.c` | `import_public_names` 中 `seen_type_names` 改为 (name, arity) 去重（规则 1，惰性不改触发时机）；`collect_symbol_candidates`（L2480）+ `report_name_ambiguity_if_any`（L2716）**保持 name-only**，不感知 arity（跨模块歧义按 name 判定，同模块 arity 精确匹配由下游 `find_named_type_decl` 负责） |
@@ -525,8 +546,8 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 - 方法泛型重载：已实现，逻辑独立
 - 非泛型类型：arity = 0，走现有逻辑
 - 运行时：泛型在编译期完成实例化，运行时不涉及 arity 判定
-- **代码生成（codegen）无需改动**：现有泛型实例的 mangling 已包含完整类型参数信息。例如 `Box<int>` 生成符号 `Feng__module__Box__G__int`，`Box<int, string>` 生成 `Feng__module__Box__G__int__string`。同名不同 arity 的类型是不同的 `FengDecl`，各自的实例通过 `generic_origin_decl` 指向不同 origin，符号天然不冲突（详见 `src/codegen/codegen.c` L6080-6200 的泛型实例符号生成逻辑）
-- **符号表序列化（ft_write/ft_read）无需改动**：`.ft` 文件按 decl 独立写入（decl-by-decl），同名不同 arity 的 type/spec 是两个独立 decl，不会冲突。泛型函数的重载已能正确写入 `.ft`（详见 `src/symbol/ft_write.c` L1130-1200 的 `writer_collect_decl`），同理适用于 type/spec 的 arity 重载
+- **代码生成（codegen）无需改动**：现有泛型实例的 mangling 已包含完整类型参数信息。例如 `Box<int>` 生成符号 `Feng__module__Box__G__int`，`Box<int, string>` 生成 `Feng__module__Box__G__int__string`。同名不同 arity 的类型是不同的 `FengDecl`，各自的实例通过 `generic_origin_decl` 指向不同 origin，符号天然不冲突（`generic_origin_decl` 定义于 `src/codegen/codegen.c` L600/L764，使用点 L4186/L5722/L5775/L5797）
+- **符号表序列化（ft_write/ft_read）无需改动**：`.ft` 文件按 decl 独立写入（decl-by-decl），同名不同 arity 的 type/spec 是两个独立 decl，不会冲突。泛型函数的重载已能正确写入 `.ft`（`writer_collect_decl` 定义于 `src/symbol/ft_write.c` L1011，调用点 L1168），同理适用于 type/spec 的 arity 重载
 - **符号导出（export.c）无需改动**：`export.c` 处理的是泛型实例的符号导出，而泛型实例的符号名已包含完整类型参数信息，同名不同 arity 的类型导出时天然区分
 
 ---
@@ -537,13 +558,15 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 ### 6.1 规范确认
 
-- [ ] 同步更新 `docs/feng-generics-draft.md`：将"同 kind"措辞改为"同 category"（§0.3 的 7 类）
+- [ ] 同步更新 `docs/feng-generics-draft.md`：将"同 kind"措辞改为"同 category"（§0.3 的 7 类），定义 7 类 category 划分及派生规则
 - [ ] 确认 `docs/feng-generics-draft.md` 中相关规范是否完整
 - [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目（"跨 category name-only 冲突"），message 形如 "'%.*s' conflicts with an existing visible name in a different category"
 - [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0006 条目（"使用点裸名引用泛型"），message 形如 "'%.*s' is a generic type and requires type arguments"
 - [x] 错误码决策：跨 category name-only 冲突用 AE0004（§3.3）；使用点裸名引用泛型用 AE0006（§4.6，对 type/spec 都适用，按"不跨结构但通用"先例归通用段）；同 category 重复仍用 AE0213（type/spec）/ AE0214（enum）/ AE0215-AE0220（function/binding）；arity 不匹配保留 AE1013/AE1014/AE1015，仅重构触发逻辑（§4.5）
+- [x] AE0004/AE0006 码位可用性已查证：代码中完全未被引用（`grep -rn "AE0004\|AE0006" src/` 无结果），错误码文档中作为"原错误码"出现（旧语义已迁至 AE1320/AE1303），码位实际处于释放可用状态
 - [x] ~~确认跨 kind 冲突规则~~ — 已决策：规则 2，同模块不同 category 按 name 判定冲突（补充 function/binding 与 type/spec/enum 跨数组检查，§3.3）
 - [x] ~~确认触发时机约束~~ — 已决策：本次只改判定规则，不改触发时机（急切的仍急切，惰性的仍惰性，遵循 `dev/feng-module-optimize-dev.md` §0 六类规则）
+- [x] ~~与 scope 优化的关系~~ — 已澄清：`dev/feng-scope-optimize-dev.md` 是 AST 多级作用域链统一（模块→文件→类型→函数→块）的优化，与顶层符号冲突检测是不同层面，且该优化尚未实施；本次在双表架构上独立修复跨数组漏检，不依赖 scope 优化，不与 scope 优化冲突
 
 ### 6.2 数据结构与查找函数
 
@@ -558,13 +581,14 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 ### 6.3 冲突检查
 
-- [ ] 新增 `has_cross_category_conflict` 辅助函数（规则 2，同数组内跨 category name-only 检查）
-- [ ] 新增 `has_name_only_conflict_across_arrays` 辅助函数（§3.3，跨 visible_types/visible_values 数组 name-only 检查）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_TYPE` 分支（规则 2 + 规则 3，按 category 判定 + 跨数组检查）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_SPEC` 分支（规则 2 + 规则 3，按 category 判定 + 跨数组检查）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_ENUM` 分支（派生 `FENG_OVERLOAD_CATEGORY_NO_OVERLOADING`，同 category name-only 不变 + 补充跨数组 name-only 检查，§3.1）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_FUNCTION` 分支（补充跨数组 name-only 检查，§3.1）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_GLOBAL_BINDING` 分支（补充跨数组 name-only 检查，§3.1）
+- [ ] 新增 `has_cross_category_conflict` 辅助函数（规则 2，本岸 visible_types 内跨 category name-only 检查）
+- [ ] 新增 `has_value_name_only_conflict` 辅助函数（§3.3，type/spec/enum 注册前查对岸 visible_values）
+- [ ] 新增 `has_type_name_only_conflict` 辅助函数（§3.3，function/binding 注册前查对岸 visible_types）
+- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_TYPE` 分支（注册前查对岸 visible_values + 本岸跨 category + 同 category 按 (name, arity)，§3.1）
+- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_SPEC` 分支（同上，§3.1）
+- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_ENUM` 分支（派生 `FENG_OVERLOAD_CATEGORY_NO_OVERLOADING`，注册前查对岸 visible_values + 本岸 name-only 不变，§3.1）
+- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_FUNCTION` 分支（注册前查对岸 visible_types，本岸走现有重载机制不变，§3.1）
+- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_GLOBAL_BINDING` 分支（注册前查对岸 visible_types，本岸 name-only 不变，§3.1）
 
 ### 6.4 类型引用解析
 
@@ -638,6 +662,7 @@ LSP 不直接调用 `find_visible_type` 等 static 函数，而是通过两类�
 - [ ] `test/` 新增诊断测试：同名同 arity 冲突（AE0213）、同名不同 arity 允许、跨 category 冲突
 - [ ] `test/` 新增解析测试：使用点 arity 精确匹配、arity 不匹配报错
 - [ ] `fcts/` 新增行为测试：同名不同 arity 的类型独立使用、泛型实例化正确
+- [ ] 全量回归测试（`make test`），确保非泛型场景行为不变
 
 ---
 
@@ -687,7 +712,7 @@ type Box<T> { value: T }
 func Box<T>() {}  // AE0004: type vs function 跨 category 同名冲突
 
 enum Color { A, B }
-let Color = 1  // AE0004: enum vs global_binding 跨 category 同名冲突（NO_OVERLOADING vs NO_OVERLOADING，不同 kind）
+let Color = 1  // AE0004: enum vs global_binding 同 category（NO_OVERLOADING）name-only 冲突（不同 kind 但同 category，NO_OVERLOADING 固有语义即同名冲突）
 ```
 
 ### 7.2 解析测试（`test/`）
@@ -759,41 +784,7 @@ func main() {
 
 ---
 
-## 9 待办任务
-
-- [ ] 同步更新 `docs/feng-generics-draft.md`：将"同 kind"措辞改为"同 category"，定义 7 类 category 划分
-- [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目（"跨 category name-only 冲突"）
-- [ ] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0006 条目（"使用点裸名引用泛型"）
-- [ ] 实现 `decl_type_param_count` 辅助函数
-- [ ] 实现 `decl_overload_category` 辅助函数（§2.4，派生 7 类 category）
-- [ ] 新增 `find_visible_type_any_arity` 辅助函数
-- [ ] 新增 `has_cross_category_conflict` 辅助函数（规则 2，同数组内跨 category name-only 检查，NO_OVERLOADING 固有语义）
-- [ ] 新增 `has_name_only_conflict_across_arrays` 辅助函数（§3.3，跨 visible_types/visible_values 数组 name-only 检查，NO_OVERLOADING 固有语义）
-- [ ] 改造 `find_visible_type_index`（接受 `category` + `type_param_count`）/ `find_visible_type` / `find_visible_type_decl` / `find_named_type_decl`
-- [ ] 验证 `copy_visible_type_entries` 无需改动
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_TYPE` / `FENG_DECL_SPEC` / `FENG_DECL_ENUM` / `FENG_DECL_FUNCTION` / `FENG_DECL_GLOBAL_BINDING` 五分支 + 跨 category 冲突检查（含跨数组检查 §3.3，规则 2/3 急切不改触发时机；跨 category 冲突报 AE0004，同 category 重复仍用 AE0213/AE0214/AE0215-AE0220）
-- [ ] 改造 `resolve_type_ref_decl` 及 `resolve_named_type_ref` 中的 arity 验证逻辑（§4.5 AE1013/AE1014/AE1015 保留重构触发逻辑；§4.6 使用点裸名引用泛型报 AE0006）
-- [ ] 改造存在性检查调用点（`find_unshadowed_alias` L4500 / `resolve_type_target_expr` L14658 / `use` 声明冲突 L20305 / 标识符解析 L20809）改用 `find_visible_type_any_arity`
-- [ ] 改造精确匹配调用点（L14691 约束 spec 查找）
-- [ ] 改造 enum 专用调用点（L7930 / L8660，arity = 0）
-- [ ] 改造 `find_module_public_type_decl`（L2948）及 7 处调用点（§6.4，跨模块 (name, arity) 查找）+ 新增 `find_module_public_type_decl_any_arity`
-- [ ] 改造 `import_public_names`：`seen_type_names` 改 (name, arity) 去重 + `find_visible_type_index` "已存在则 break" 改 (name, arity)（规则 1，惰性不改触发时机）
-- [ ] 改造 `src/cli/lsp/runtime.c`
-- [ ] 新增 `test/` 诊断测试
-- [ ] 新增 `test/` 解析测试
-- [ ] 新增 `fcts/` 行为测试
-- [ ] 全量回归测试
-
-### 已确认无需改动的模块
-
-- [x] `collect_symbol_candidates`（L2480）— 已按 name-only 实现，不感知 arity
-- [x] `report_name_ambiguity_if_any`（L2716）及各调用点 — 已按 name-only 实现，不透传 arity
-- [x] `src/symbol/export.c` / `ft_write.c` / `ft_read.c` — 泛型实例 mangling 已含完整类型参数，`.ft` 按 decl 独立写入，天然支持同名不同 arity（详见 §5.3）
-- [x] `src/codegen/codegen.c` mangling — 泛型实例符号名格式为 `Feng__module__Name__G__<arg1>__<arg2>`，同名不同 arity 的类型是不同的 `FengDecl`，符号天然不冲突（详见 §5.3）
-
----
-
-## 10 关联文档
+## 9 关联文档
 
 - [docs/feng-generics-draft.md](../docs/feng-generics-draft.md)：泛型规范与语法定义
 - [docs/feng-type.md](../docs/feng-type.md)：类型系统规范
