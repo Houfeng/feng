@@ -554,7 +554,13 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 ## 6 实施步骤
 
-按 CLAUDE.md "先规范，再实现，后测试"原则：
+按 CLAUDE.md "先规范，再实现，后测试"原则，重新组织为以下子步骤，每个子步骤可独立编译通过、回归测试通过、独立交付：
+
+> **拆分原则**：
+> - 签名改造必须与所有调用点改造同步交付（否则编译失败）
+> - 辅助函数实现与存在性检查调用点改造可独立交付（不改签名，行为不变）
+> - `find_named_type_decl` 签名改造与 arity 验证重构必须同步交付（否则 arity 不匹配场景行为变更）
+> - 步骤顺序：6.1 → 6.2 → 6.3 → 6.4 → 6.5 → 6.6（无需改动）→ 6.7 → 6.8
 
 ### 6.1 规范确认
 
@@ -569,72 +575,108 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 > - **跨 kind 冲突规则已决策**：规则 2，同模块不同 category 按 name 判定冲突（补充 function/binding 与 type/spec/enum 跨数组检查，§3.3）
 > - **触发时机约束已决策**：本次只改判定规则，不改触发时机（急切的仍急切，惰性的仍惰性，遵循 `dev/feng-module-optimize-dev.md` §0 六类规则）
 > - **与 scope 优化的关系已澄清**：`dev/feng-scope-optimize-dev.md` 是 AST 多级作用域链统一（模块→文件→类型→函数→块）的优化，与顶层符号冲突检测是不同层面，且该优化尚未实施；本次在双表架构上独立修复跨数组漏检，不依赖 scope 优化，不与 scope 优化冲突
+>
+> **独立性**：仅文档变更，可独立交付。无代码变更，回归测试行为不变。
 
-### 6.2 数据结构与查找函数
+### 6.2 辅助函数实现 + 存在性检查调用点改造
 
-- [ ] 实现 `decl_type_param_count` 辅助函数
-- [ ] 实现 `decl_overload_category` 辅助函数（§2.4，派生 7 类 category）
-- [ ] 改造 `find_visible_type_index` 接受 `category` + `type_param_count` 参数（同面精确匹配）
-- [ ] 新增 `find_visible_type_any_arity` 辅助函数（存在性检查，name-only）
-- [ ] 改造 `find_visible_type` 接受 `type_param_count` 参数（精确匹配）
-- [ ] 改造 `find_visible_type_decl` 接受 `type_param_count` 参数
-- [ ] 改造 `find_named_type_decl` 接受并传递 `type_param_count` 参数
+本步骤仅新增辅助函数 + 改造存在性检查调用点，**不改造任何现有函数签名**，不改造任何精确匹配调用点。
 
-> **备注（无需改动）**：`copy_visible_type_entries`（L2835）是纯 memcpy 操作，结构不变则无需改动
+- [ ] 实现 `decl_type_param_count`（§2.4，从 FengDecl 提取 type_param_count）
+- [ ] 实现 `decl_overload_category`（§2.4，派生 7 类 category）
+- [ ] 新增 `find_visible_type_any_arity`（§2.3，存在性检查辅助函数，**不替换** `find_visible_type`）
+- [ ] 新增 `has_cross_category_conflict`（§3.2，本岸 visible_types 内跨 category name-only 检查）
+- [ ] 新增 `has_value_name_only_conflict`（§3.3，type/spec/enum 注册前查对岸 visible_values）
+- [ ] 新增 `has_type_name_only_conflict`（§3.3，function/binding 注册前查对岸 visible_types）
+- [ ] 改造存在性检查调用点（改用 `find_visible_type_any_arity`，行为与原 `find_visible_type` name-only 查找一致）：
+  - L4500 `find_unshadowed_alias` — alias 是否被类型遮蔽
+  - L14658 `resolve_type_target_expr` — 裸标识符解析类型目标
+  - L20305 `use` 声明别名冲突检查
+  - L20809 标识符解析 — 判断标识符是否为类型名
 
-### 6.3 冲突检查
+> **独立性**：仅新增辅助函数 + 改造存在性检查调用点（不改任何现有函数签名）。新增辅助函数暂未被调用（除存在性检查场景改用 `find_visible_type_any_arity`，行为与原 name-only 查找一致）。编译通过，回归测试行为不变，可独立交付。
+>
+> **为何将存在性检查调用点改造纳入本步骤**：存在性检查场景改用 `find_visible_type_any_arity` 是为了后续 6.4 改造 `find_visible_type` 签名时这些场景不受影响。本步骤完成后，6.4 改造 `find_visible_type` 签名时只需关注精确匹配调用点，存在性检查调用点已用 `find_visible_type_any_arity` 不受影响。
 
-- [ ] 新增 `has_cross_category_conflict` 辅助函数（规则 2，本岸 visible_types 内跨 category name-only 检查）
-- [ ] 新增 `has_value_name_only_conflict` 辅助函数（§3.3，type/spec/enum 注册前查对岸 visible_values）
-- [ ] 新增 `has_type_name_only_conflict` 辅助函数（§3.3，function/binding 注册前查对岸 visible_types）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_TYPE` 分支（注册前查对岸 visible_values + 本岸跨 category + 同 category 按 (name, arity)，§3.1）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_SPEC` 分支（同上，§3.1）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_ENUM` 分支（派生 `FENG_OVERLOAD_CATEGORY_NO_OVERLOADING`，注册前查对岸 visible_values + 本岸 name-only 不变，§3.1）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_FUNCTION` 分支（注册前查对岸 visible_types，本岸走现有重载机制不变，§3.1）
-- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_GLOBAL_BINDING` 分支（注册前查对岸 visible_types，本岸 name-only 不变，§3.1）
+### 6.3 `find_visible_type_index` 签名改造 + 所有调用点
 
-### 6.4 类型引用解析
+本步骤改造 `find_visible_type_index` 签名 + 所有调用点（check_symbol_conflicts 五分支 + import_public_names）。
 
+- [ ] 改造 `find_visible_type_index` 接受 `category` + `type_param_count` 参数（§2.2，同面精确匹配）
+- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_TYPE` 分支（§3.1）：注册前查对岸 visible_values（`has_value_name_only_conflict`）+ 本岸跨 category（`has_cross_category_conflict`）+ 同 category 按 (name, arity)（`find_visible_type_index` 新签名）
+- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_SPEC` 分支（§3.1，同理，category 由 `decl_overload_category` 按 `form` 派生）
+- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_ENUM` 分支（§3.1，派生 `FENG_OVERLOAD_CATEGORY_NO_OVERLOADING`，注册前查对岸 visible_values + 本岸 name-only 不变）
+- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_FUNCTION` 分支（§3.1，注册前查对岸 visible_types，本岸走现有重载机制不变）
+- [ ] 改造 `check_symbol_conflicts` 中 `FENG_DECL_GLOBAL_BINDING` 分支（§3.1，注册前查对岸 visible_types，本岸 name-only 不变）
+- [ ] 改造 `import_public_names` 中 `find_visible_type_index` 调用（L20060/L20092/L20201）：传入 (name, category, arity)
+- [ ] 改造 `import_public_names` 中 `seen_type_names` 去重 key（L20052/L20084/L20193）：从 name 改为 (name, arity)
+- [ ] 改造 `import_public_names` 中 `FENG_DECL_SPEC` 分支（L20189，同理）
+
+> **独立性**：改造 `find_visible_type_index` 签名 + 所有调用点（check_symbol_conflicts 五分支 + import_public_names）。完成后，编译通过，回归测试通过（非泛型场景行为不变）。新增 arity 重载能力（type/spec 同名不同 arity 允许共存、可同时导入），但使用点解析尚未改造（6.4 完成），同名不同 arity 类型的引用暂不可靠（取决于注册顺序）。不破坏现有行为，可独立交付。
+>
+> **不改动触发时机**：import 阶段仍不做冲突检查（惰性，§3.0 规则 1），仅做去重 + 候选收集；check_symbol_conflicts 中急切/惰性的触发时机遵循 `dev/feng-module-optimize-dev.md` §0 六类规则，本次只改判定规则不改触发时机。
+>
+> **备注（无需改动）**：
+> - `collect_symbol_candidates`（L2480）：跨模块歧义检测已按 name-only 实现，不感知 arity，arity 精确匹配由下游 `find_named_type_decl` 负责（§4）
+> - `report_name_ambiguity_if_any`（L2716）及各调用点（L7005/L15875/L19657/L20485/L20800）：歧义检测已按 name-only 实现，不透传 arity
+
+### 6.4 `find_visible_type` / `find_visible_type_decl` / `find_named_type_decl` 签名改造 + 精确匹配调用点 + arity 验证重构
+
+本步骤改造 3 个 static 函数签名 + 所有精确匹配调用点 + arity 验证重构 + 错误处理改进。**必须同步交付**（find_named_type_decl 签名改造后，arity 验证逻辑必须同步重构，否则 arity 不匹配场景行为变更）。
+
+- [ ] 改造 `find_visible_type` 接受 `type_param_count` 参数（§2.3，精确匹配场景）
+- [ ] 改造 `find_visible_type_decl` 接受 `type_param_count` 参数（§4.2）
+- [ ] 改造 `find_named_type_decl` 接受并传递 `type_param_count` 参数（§4.3）
 - [ ] 改造 `resolve_type_ref_decl`（L4746）：从 `type_ref->as.named.type_arg_count` 提取 arity 传递给 `find_named_type_decl`
-- [ ] 改造 `resolve_type_ref`（L20391–20457）arity 验证逻辑：
-  - 有类型参数分支（L20403）：`find_named_type_decl` 传入 `type_arg_count`
-  - 无类型参数裸名分支（L20492）：`find_named_type_decl` 传入 arity = 0
-  - 多段路径分支（L20506）：`find_named_type_decl` 传入 arity = 0
-- [ ] 重构 arity 验证：原 L20415–20437 的 AE1014/AE1015 验证改为「查找失败后区分同名不同 arity vs 完全不存在」
-- [ ] 改造裸名分支错误信息（L20492/L20506）：`find_named_type_decl(name, 0)` 返回 NULL 时，用 `find_visible_type_any_arity` 区分「同名但需泛型参数」vs「完全不存在」
-- [ ] 改造存在性检查调用点：
-  - `find_unshadowed_alias`（L4500）：改用 `find_visible_type_any_arity`
-  - `resolve_type_target_expr`（L14658）：裸标识符不携带 arity，改用 `find_visible_type_any_arity`
-  - `use` 声明别名冲突检查（L20305）：改用 `find_visible_type_any_arity`
-  - 标识符解析（L20809）：改用 `find_visible_type_any_arity`
 - [ ] 改造精确匹配调用点：
-  - 约束 spec 查找（L14691）：传递 `cref->as.named.type_arg_count`
-- [ ] 改造 enum 专用调用点（arity = 0）：
-  - match enum target（L7930）
-  - match label enum 引用（L8660）
-- [ ] 改造跨模块类型查找 `find_module_public_type_decl`（L2948）：改为接受 `type_param_count` 参数，按 (name, arity) 查找；新增 `find_module_public_type_decl_any_arity` 用于存在性检查。7 处调用点：
+  - L2383 `find_visible_type_decl` 内部：从参数透传
+  - L14691 约束 spec 查找：传递 `cref->as.named.type_arg_count`
+  - L4522 `find_named_type_decl` 内部：从参数透传
+  - L7930 match enum target：arity = 0（enum 无泛型）
+  - L8660 match label enum 引用：arity = 0（enum 无泛型）
+  - L4756 `resolve_type_ref_decl` 内部：`type_ref->as.named.type_arg_count`
+  - L20403 `resolve_named_type_ref` 中 `type_arg_count > 0` 分支：局部变量 `type_arg_count`
+  - L20492 `resolve_named_type_ref` 中 `segment_count == 1` 无类型参数分支：arity = 0
+  - L20506 `resolve_named_type_ref` 中多段路径分支：arity = 0
+- [ ] 重构 `resolve_named_type_ref` 有类型参数分支（L20403-L20457，§4.5）：
+  - `find_named_type_decl(name, type_arg_count)` 按 (name, arity) 精确查找
+  - 返回 NULL 时用 `find_visible_type_any_arity` 区分：同名但 arity=0（非泛型）→ AE1014 "not a generic type"；同名但 arity≠0 且不匹配 → AE1015 "expects N type argument(s), but M were provided"；完全不存在 → AE1013 "unknown type"
+  - 移除冗余的 expected_arity 计算与验证（原 L20415-L20437 的 AE1014/AE1015 验证）
+- [ ] 重构 `resolve_named_type_ref` 裸名无类型参数分支（L20460-L20508，§4.6）：
+  - `find_named_type_decl(name, 0)` 按 (name, arity=0) 精确查找
+  - 返回 NULL 时用 `find_visible_type_any_arity` 区分：同名但 arity≠0 → AE0006 "'%.*s' is a generic type and requires type arguments"；完全不存在 → 继续后续查找（alias 等）
+
+> **独立性**：改造 3 个 static 函数签名 + 所有精确匹配调用点 + arity 验证重构。完成后，编译通过，回归测试通过（行为改进：同名不同 arity 类型可精确解析，arity 不匹配错误码触发逻辑更精确，新增 AE0006）。可独立交付。
+>
+> **为何签名改造与 arity 验证重构必须同步交付**：`find_named_type_decl` 改签名后按 (name, arity) 精确查找，找不到返回 NULL。原 L20415-L20437 的 expected_arity 验证逻辑（从 decl 提取 arity）会因 decl 为 NULL 而 crash 或报错不正确。必须同步重构为"查找失败后用 `find_visible_type_any_arity` 区分场景"的新逻辑。
+>
+> **存在性检查调用点已在 6.2 改造完成**：L4500/L14658/L20305/L20809 已改用 `find_visible_type_any_arity`，本步骤只需关注精确匹配调用点。
+>
+> **备注（无需改动）**：`copy_visible_type_entries`（L2835）是纯 memcpy 操作，结构不变则无需改动。
+
+### 6.5 `find_module_public_type_decl` 签名改造 + `_any_arity` 版本 + 7 处调用点
+
+本步骤改造跨模块类型查找。**依赖 6.4 完成**（L4529/L4538 透传 `type_param_count` 依赖 `find_named_type_decl` 已改签名）。
+
+- [ ] 改造 `find_module_public_type_decl`（L2948）：接受 `type_param_count` 参数，按 (name, arity) 查找
+- [ ] 新增 `find_module_public_type_decl_any_arity`：存在性检查
+- [ ] 改造 7 处调用点：
 
   | 行号 | 上下文 | arity 来源 | 改造方式 |
   |------|--------|----------|---------|
   | L3393 | `module_exports_public_type` 存在性检查 | 不需要 | 改用 `find_module_public_type_decl_any_arity` |
-  | L4529 | `find_named_type_decl` segment_count==2 alias 路径 | `type_param_count` 透传 | 透传 |
-  | L4538 | `find_named_type_decl` 多段路径 | `type_param_count` 透传 | 透传 |
+  | L4529 | `find_named_type_decl` segment_count==2 alias 路径 | `type_param_count` 透传 | 透传（依赖 6.4） |
+  | L4538 | `find_named_type_decl` 多段路径 | `type_param_count` 透传 | 透传（依赖 6.4） |
   | L14716 | `resolve_type_target_expr` alias 路径 | 裸标识符，不带 arity | 改用 `_any_arity` 版本 |
   | L14733 | `resolve_type_target_expr` 多段路径 | 裸标识符，不带 arity | 改用 `_any_arity` 版本 |
   | L25807 | `analysis_resolve_named_type_ref` 多段路径分支 | `ref->as.named.type_arg_count` | 透传 |
   | L25814 | `analysis_resolve_named_type_ref` 单段查找（遍历所有模块） | `ref->as.named.type_arg_count` | 透传 |
 
-### 6.5 模块导入导出（规则 1，惰性，不改触发时机）
-
-- [ ] 改造 `import_public_names`（L20015）：
-  - `seen_type_names` 去重 key 改为 **(name, arity)**（L20052/L20084/L20193，支持同名不同 arity 同时导入）
-  - `find_visible_type_index` "已存在则 break" 判断改为 (name, arity)（L20060/L20092/L20201）
-  - `FENG_DECL_SPEC` 分支（L20189）同理
-  - **不改触发时机**：import 阶段仍不做冲突检查（惰性，§3.0 规则 1），仅做去重 + 候选收集
-
+> **独立性**：改造跨模块类型查找。完成后，编译通过，回归测试通过（跨模块同名不同 arity 类型可精确解析，存在性检查场景行为不变）。可独立交付。
+>
+> **依赖 6.4**：L4529/L4538 是 `find_named_type_decl` 内部的 alias/多段路径分支，透传 `type_param_count` 依赖 `find_named_type_decl` 已改签名（6.4 完成）。其他调用点不依赖 6.4，但为保持步骤内聚，统一在 6.5 完成。
+>
 > **备注（无需改动）**：
-> - `collect_symbol_candidates`（L2480）：跨模块歧义检测已按 name-only 实现，不感知 arity，arity 精确匹配由下游 `find_named_type_decl` 负责（§4）
-> - `report_name_ambiguity_if_any`（L2716）及各调用点（L7005/L15875/L19657/L20485/L20800）：歧义检测已按 name-only 实现，不透传 arity
 > - `src/symbol/export.c`：泛型实例 mangling 已含完整类型参数（详见 §5.3）
 > - `src/symbol/ft_write.c` / `ft_read.c`：`.ft` 按 decl 独立写入，同名不同 arity 的 type/spec 是两个独立 decl，不会冲突（详见 §5.3）
 
@@ -661,12 +703,16 @@ LSP 不直接调用 `find_visible_type` 等 static 函数，而是通过两类�
 - [ ] 验证 `feng_symbol_module_find_public_type` 等 name-only API 是否需要新增按 arity 查找的对应版本；若 LSP 内部遍历已够用，则公共 API 可不动（待实施时确认）
 - [ ] 全量回归 LSP 现有补全/跳转/hover 测试，确保非泛型场景行为不变
 
+> **独立性**：LSP 通过公共 API 访问符号信息，不直接调用 static 函数。依赖前面步骤完成（符号表已支持同名不同 arity 共存）。可独立交付，但需先确认公共 API 是否需要扩展。
+
 ### 6.8 测试
 
-- [ ] `test/` 新增诊断测试：同名同 arity 冲突（AE0213）、同名不同 arity 允许、跨 category 冲突
-- [ ] `test/` 新增解析测试：使用点 arity 精确匹配、arity 不匹配报错
+- [ ] `test/` 新增诊断测试：同名同 arity 冲突（AE0213）、同名不同 arity 允许、跨 category 冲突（AE0004）
+- [ ] `test/` 新增解析测试：使用点 arity 精确匹配、arity 不匹配报错（AE1013/AE1014/AE1015）、裸名引用泛型（AE0006）
 - [ ] `fcts/` 新增行为测试：同名不同 arity 的类型独立使用、泛型实例化正确
 - [ ] 全量回归测试（`make test`），确保非泛型场景行为不变
+
+> **独立性**：必须在所有代码改造完成后进行。不独立交付，作为整体交付的验证步骤。
 
 ---
 
