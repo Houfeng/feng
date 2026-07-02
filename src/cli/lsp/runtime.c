@@ -10169,6 +10169,76 @@ static bool resolve_symbol_target_at(const FengLspCacheQueryContext *context,
     return target->kind != FENG_LSP_RESOLVED_NONE;
 }
 
+/* Forward declarations for identifier character classification helpers
+ * defined later in the completion engine. */
+static bool completion_identifier_start(char ch);
+static bool completion_identifier_continue(char ch);
+
+/* Extract the identifier at `offset` in `text`, verify it is a keyword,
+ * and look it up in the LspKwItem tables.  Returns a strdup'd hover
+ * string ("keyword\n\ndetail") on match, or NULL when the cursor is not
+ * on a keyword token.  Caller must free the returned string. */
+static char *hover_text_for_keyword(const char *text, size_t offset) {
+    size_t start;
+    size_t end;
+    size_t length;
+    size_t pos;
+    size_t index;
+    FengLspString hover = {0};
+
+    if (text == NULL || offset > strlen(text)) {
+        return NULL;
+    }
+    /* Expand backward from offset to find identifier start. */
+    start = offset;
+    while (start > 0U && completion_identifier_continue(text[start - 1U])) {
+        --start;
+    }
+    /* Expand forward from offset to find identifier end. */
+    end = offset;
+    length = strlen(text);
+    while (end < length && completion_identifier_continue(text[end])) {
+        ++end;
+    }
+    if (start == end) {
+        return NULL;
+    }
+    /* Reject if the first character is not a valid identifier start. */
+    if (!completion_identifier_start(text[start])) {
+        return NULL;
+    }
+    /* Verify the word is actually a keyword (not a plain identifier). */
+    if (!feng_lookup_keyword(text + start, end - start, NULL)) {
+        return NULL;
+    }
+    /* Search all keyword tables for a matching LspKwItem label. */
+    for (pos = FENG_LSP_POS_TOP_DECL;
+         pos <= FENG_LSP_POS_BODY;
+         pos = (FengLspPosition)((size_t)pos + 1U)) {
+        const LspKwTable *table = &KW_TABLE[(size_t)pos];
+        if (table->items == NULL || table->count == 0U) {
+            continue;
+        }
+        for (index = 0U; index < table->count; ++index) {
+            const LspKwItem *item = &table->items[index];
+            size_t label_len = strlen(item->label);
+
+            if (label_len == end - start &&
+                memcmp(item->label, text + start, label_len) == 0) {
+                if (!string_append_bytes(&hover, text + start, end - start) ||
+                    !string_append_cstr(&hover, "\n\n") ||
+                    !string_append_cstr(&hover, item->detail)) {
+                    string_dispose(&hover);
+                    return NULL;
+                }
+                return hover.data;
+            }
+        }
+    }
+    string_dispose(&hover);
+    return NULL;
+}
+
 static bool handle_hover_request(FengLspRuntime *runtime,
                                  FILE *output,
                                  FengLspJsonValue id,
@@ -10257,6 +10327,25 @@ static bool handle_hover_request(FengLspRuntime *runtime,
         return ok;
     }
     cache_query_context_dispose(&cache);
+    /* Keyword fallback: show detail when cursor is on a keyword token. */
+    hover_text = hover_text_for_keyword(document->text, offset);
+    if (hover_text != NULL) {
+        ok = build_hover_result_json(&result,
+                                     runtime->hover_markup_kind,
+                                     hover_text);
+        free(hover_text);
+        free(uri);
+        if (!ok) {
+            if (runtime->errors != NULL) {
+                fprintf(runtime->errors, "lsp: textDocument/hover: out of memory building keyword response\n");
+            }
+            string_dispose(&result);
+            return send_json_response(output, id, "null");
+        }
+        ok = send_json_response(output, id, result.data);
+        string_dispose(&result);
+        return ok;
+    }
     free(uri);
     return send_json_response(output, id, "null");
 }

@@ -8020,7 +8020,8 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
     output = run_lsp_server_capture(input);
     fclose(input);
 
-    ASSERT(strstr(output, "\"id\":2,\"result\":null") != NULL);
+    ASSERT(strstr(output, "\"id\":2,\"result\":") != NULL);
+    ASSERT(strstr(output, "function declaration") != NULL);
     ASSERT(strstr(output, "\"id\":3,\"result\":") != NULL);
     ASSERT(strstr(output, "func tag(prefix: string): User") != NULL);
     ASSERT(strstr(output, expected_method_definition) != NULL);
