@@ -19,7 +19,7 @@ typedef struct {
     const char *detail;  /* human-readable description, e.g. "ABI annotation" */
 } LspAnnotationItem;
 
-/* Builtin annotation table (7 items). */
+/* Builtin annotation table (8 items). */
 static const LspAnnotationItem BUILTIN_ANNOTATIONS[] = {
     { "abi",      "ABI annotation" },
     { "cdecl",    "C calling convention" },
@@ -28,6 +28,7 @@ static const LspAnnotationItem BUILTIN_ANNOTATIONS[] = {
     { "runtime",  "runtime annotation" },
     { "iterable", "iterable annotation" },
     { "iterator", "iterator annotation" },
+    { "value",    "value type annotation" },
 };
 
 static const size_t BUILTIN_ANNOTATION_COUNT =

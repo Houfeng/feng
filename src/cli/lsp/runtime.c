@@ -10239,6 +10239,70 @@ static char *hover_text_for_keyword(const char *text, size_t offset) {
     return NULL;
 }
 
+/* Extract the identifier at `offset` in `text`, check whether it is
+ * preceded by '@' (annotation context), and look it up in the builtin
+ * annotation table.  Returns a strdup'd hover string ("@label\n\ndetail")
+ * on match, or NULL when the cursor is not on a builtin annotation.
+ * Caller must free the returned string. */
+static char *hover_text_for_annotation(const char *text, size_t offset) {
+    size_t start;
+    size_t end;
+    size_t length;
+    size_t at_pos;
+    size_t index;
+    FengLspString hover = {0};
+
+    if (text == NULL || offset > strlen(text)) {
+        return NULL;
+    }
+    /* Expand backward from offset to find identifier start. */
+    start = offset;
+    while (start > 0U && completion_identifier_continue(text[start - 1U])) {
+        --start;
+    }
+    /* Expand forward from offset to find identifier end. */
+    end = offset;
+    length = strlen(text);
+    while (end < length && completion_identifier_continue(text[end])) {
+        ++end;
+    }
+    if (start == end) {
+        return NULL;
+    }
+    /* Reject if the first character is not a valid identifier start. */
+    if (!completion_identifier_start(text[start])) {
+        return NULL;
+    }
+    /* The character before the identifier must be '@'. */
+    if (start == 0U || text[start - 1U] != '@') {
+        return NULL;
+    }
+    at_pos = start - 1U;
+    /* '@' must be at start of file or preceded by whitespace. */
+    if (at_pos > 0U && !isspace((unsigned char)text[at_pos - 1U])) {
+        return NULL;
+    }
+    /* Search the builtin annotation table for a matching label. */
+    for (index = 0U; index < BUILTIN_ANNOTATION_COUNT; ++index) {
+        const LspAnnotationItem *item = &BUILTIN_ANNOTATIONS[index];
+        size_t label_len = strlen(item->label);
+
+        if (label_len == end - start &&
+            memcmp(item->label, text + start, label_len) == 0) {
+            if (!string_append_cstr(&hover, "@") ||
+                !string_append_bytes(&hover, text + start, end - start) ||
+                !string_append_cstr(&hover, "\n\n") ||
+                !string_append_cstr(&hover, item->detail)) {
+                string_dispose(&hover);
+                return NULL;
+            }
+            return hover.data;
+        }
+    }
+    string_dispose(&hover);
+    return NULL;
+}
+
 static bool handle_hover_request(FengLspRuntime *runtime,
                                  FILE *output,
                                  FengLspJsonValue id,
@@ -10338,6 +10402,25 @@ static bool handle_hover_request(FengLspRuntime *runtime,
         if (!ok) {
             if (runtime->errors != NULL) {
                 fprintf(runtime->errors, "lsp: textDocument/hover: out of memory building keyword response\n");
+            }
+            string_dispose(&result);
+            return send_json_response(output, id, "null");
+        }
+        ok = send_json_response(output, id, result.data);
+        string_dispose(&result);
+        return ok;
+    }
+    /* Annotation fallback: show detail when cursor is on a builtin @annotation. */
+    hover_text = hover_text_for_annotation(document->text, offset);
+    if (hover_text != NULL) {
+        ok = build_hover_result_json(&result,
+                                     runtime->hover_markup_kind,
+                                     hover_text);
+        free(hover_text);
+        free(uri);
+        if (!ok) {
+            if (runtime->errors != NULL) {
+                fprintf(runtime->errors, "lsp: textDocument/hover: out of memory building annotation response\n");
             }
             string_dispose(&result);
             return send_json_response(output, id, "null");
