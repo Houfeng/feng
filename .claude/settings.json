@@ -1,0 +1,10 @@
+{
+  "plugins": {
+    "cSpell": {
+      "diagnostics": false
+    }
+  },
+  "ignoreSources": [
+    "cSpell"
+  ]
+}

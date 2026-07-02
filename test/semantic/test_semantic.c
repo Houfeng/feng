@@ -16640,6 +16640,115 @@ static void test_generic_type_bare_constructor_call_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_generic_type_bare_static_method_call_rejected(void) {
+    /* Calling a static method on a generic type via the BARE type name (no
+     * explicit type arguments) is rejected — Feng does not infer the outer
+     * type's type parameters from a static method's arguments. The compiler
+     * treats `Box` as a non-generic lookup; with T uninstantiated, the static
+     * method signature cannot be matched, so the call falls back to the
+     * overload-mismatch path. Mirrors C# CS0305 behavior. See
+     * dev/feng-type-arity-overload-dev.md §0.2 for the design rationale. */
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    var value: T;\n"
+        "    seal func Box(init: T) {\n"
+        "        self.value = init;\n"
+        "    }\n"
+        "    static func make(value: T): Box<T> {\n"
+        "        return Box<T>(value);\n"
+        "    }\n"
+        "}\n"
+        "func run(): void {\n"
+        "    let b = Box.make(42);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_static_bare.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0512") == 0);
+    ASSERT(strstr(errors[0].message, "static method 'Box.make'") != NULL);
+    ASSERT(strstr(errors[0].message, "no overload accepting") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_generic_type_explicit_type_args_static_field_access(void) {
+    /* Accessing a static field on a generic type via the EXPLICIT type-args
+     * form (`Box<i32>.tag`) is accepted — the type is fully instantiated
+     * (T=i32), the static field's type is non-generic (i64), so the member
+     * access resolves cleanly to an i64-typed binding. This complements the
+     * static-METHOD coverage in test_generic_static_members_semantic_resolution
+     * by exercising the static-FIELD path. We assert via the type-fact table
+     * (analyzer-internal derivation result) rather than expr->type, because
+     * untyped local bindings do not hang a synthetic FengTypeRef on the
+     * initializer AST node — the derivation lives in the type-fact table. */
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    var value: T;\n"
+        "    static let tag: i64 = 100;\n"
+        "    seal func Box(init: T) {\n"
+        "        self.value = init;\n"
+        "    }\n"
+        "}\n"
+        "func run(): i64 {\n"
+        "    let t = Box<i32>.tag;\n"
+        "    return t;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_static_field.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *run_decl;
+    const FengStmt *binding_stmt;
+    const FengSemanticTypeFact *fact;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    if (error_count != 0U) {
+        fprintf(stderr, "semantic error (generic static field): %s\n",
+                errors[0].message ? errors[0].message : "(unknown)");
+    }
+    ASSERT(error_count == 0U);
+
+    run_decl = find_function_decl_by_name(program, "run");
+    ASSERT(run_decl != NULL);
+    /* Locate the `let t = ...` binding statement inside run's body. */
+    binding_stmt = NULL;
+    for (size_t i = 0U; i < run_decl->as.function_decl.body->statement_count; ++i) {
+        const FengStmt *s = run_decl->as.function_decl.body->statements[i];
+        if (s->kind == FENG_STMT_BINDING) {
+            binding_stmt = s;
+            break;
+        }
+    }
+    ASSERT(binding_stmt != NULL);
+
+    /* The binding's type fact is the analyzer's record of `t`'s derived type.
+     * For `Box<i32>.tag` (tag: i64, non-generic), it must be a TYPE_REF pointing
+     * at the single-segment named type "i64". */
+    fact = feng_semantic_lookup_type_fact(analysis, &binding_stmt->as.binding);
+    ASSERT(fact != NULL);
+    ASSERT(fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF);
+    ASSERT(fact->type_ref != NULL);
+    ASSERT(fact->type_ref->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(fact->type_ref->as.named.segment_count == 1U);
+    ASSERT(fact->type_ref->as.named.segments[0].length == 3U);
+    ASSERT(memcmp(fact->type_ref->as.named.segments[0].data, "i64", 3U) == 0);
+
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_generic_method_type_param_collides_with_type_param(void) {
     /* A method may not reuse the same type parameter name as its enclosing
      * type (G4-14 collision check). */
@@ -19470,6 +19579,8 @@ int main(void) {
     test_generic_type_constructor_explicit_type_args_ok();
     test_generic_type_constructor_explicit_type_args_arity_mismatch();
     test_generic_type_bare_constructor_call_rejected();
+    test_generic_type_bare_static_method_call_rejected();
+    test_generic_type_explicit_type_args_static_field_access();
     test_generic_method_type_param_collides_with_type_param();
     test_generic_function_two_type_params_ok();
     test_generic_spec_generic_parent_forwarding_ok();

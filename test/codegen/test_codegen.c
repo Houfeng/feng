@@ -742,6 +742,62 @@ static void test_generic_static_methods_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_generic_type_static_field_codegen(void) {
+    /* Codegen coverage for accessing a static FIELD on a generic type with
+     * explicit type arguments (`Box<i32>.tag`). The static-METHOD path is
+     * covered by test_generic_static_methods_codegen; this case exercises the
+     * field-read path through semantic + codegen and verifies the generated
+     * C compiles. */
+    static const char *kSource =
+        "module feng.codegen.staticfield;\n"
+        "type Box<T> {\n"
+        "    var value: T;\n"
+        "    static let tag: i64 = 100;\n"
+        "    seal func Box(init: T) {\n"
+        "        self.value = init;\n"
+        "    }\n"
+        "}\n"
+        "func run_case(): i64 {\n"
+        "    let t: i64 = Box<i32>.tag;\n"
+        "    return t;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "staticfield.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic static field): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    /* The static field `tag` is a non-generic i64 on Box<T>; with T=i32
+     * instantiated, the generated C must expose the type's static field slot
+     * and the read expression must compile. We assert the type-instance
+     * symbol fragment to ensure the static field is emitted under the
+     * instantiated generic context. */
+    ASSERT(strstr(out.c_source, "Box") != NULL);
+    ASSERT(strstr(out.c_source, "tag") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 /* Step 3 — spec static member codegen: witness struct slots must omit
  * _subject for static methods/fields, and thunks forward without a
  * subject cast. */
@@ -6905,6 +6961,7 @@ int main(void) {
     test_type_static_members_codegen();
     test_builtin_fit_static_method_codegen();
     test_generic_static_methods_codegen();
+    test_generic_type_static_field_codegen();
     test_spec_static_member_witness_codegen();
     test_spec_static_var_witness_codegen();
     test_generic_param_static_method_codegen();
