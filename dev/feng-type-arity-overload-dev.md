@@ -669,9 +669,9 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 本步骤改造跨模块类型查找。**依赖 6.4 完成**（L4529/L4538 透传 `type_param_count` 依赖 `find_named_type_decl` 已改签名）。
 
-- [ ] 改造 `find_module_public_type_decl`（L2948）：接受 `type_param_count` 参数，按 (name, arity) 查找
-- [ ] 新增 `find_module_public_type_decl_any_arity`：存在性检查
-- [ ] 改造 7 处调用点：
+- [x] 改造 `find_module_public_type_decl`（L2948）：接受 `type_param_count` 参数，按 (name, arity) 查找
+- [x] 新增 `find_module_public_type_decl_any_arity`：存在性检查
+- [x] 改造 7 处调用点：
 
   | 行号 | 上下文 | arity 来源 | 改造方式 |
   | ------ | -------- | ---------- | --------- |
@@ -685,6 +685,13 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 > **独立性**：改造跨模块类型查找。完成后，编译通过，回归测试通过（跨模块同名不同 arity 类型可精确解析，存在性检查场景行为不变）。可独立交付。
 > **依赖 6.4**：L4529/L4538 是 `find_named_type_decl` 内部的 alias/多段路径分支，透传 `type_param_count` 依赖 `find_named_type_decl` 已改签名（6.4 完成）。其他调用点不依赖 6.4，但为保持步骤内聚，统一在 6.5 完成。
+
+**实现说明**：
+
+- `find_module_public_type_decl` 改为接受 `type_param_count` 参数，type/spec 通过 `decl_type_param_count(decl) == type_param_count` 精确匹配，enum 仅在 `type_param_count == 0` 时匹配（enum 无泛型）
+- `find_module_public_type_decl_any_arity` 保留原函数的 name-only 查找逻辑，用于存在性检查场景
+- 错误路径改进：`resolve_named_type_ref` type-args 分支（§4.5）的 cross-module fallback 从 `find_named_type_decl(..., 0U)` 改为直接使用 `find_module_public_type_decl_any_arity`，确保跨模块 arity 不匹配时能正确区分 AE1013/AE1014/AE1015
+- 裸名分支（§4.6）多段路径 AE0006 补齐：6.4 实现说明指出"多段路径的 AE0006 依赖 §6.5 的跨模块 any-arity 查找"，本步骤在裸名多段路径精确查找失败后，新增 `find_module_public_type_decl_any_arity` 检查，若存在同名泛型类型则报 AE0006（与单段路径行为一致）
 
 **备注（无需改动）**：
 

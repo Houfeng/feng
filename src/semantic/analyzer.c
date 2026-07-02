@@ -3037,7 +3037,44 @@ static const AliasEntry *find_alias(const AliasEntry *entries, size_t count, Fen
     return index < count ? &entries[index] : NULL;
 }
 
-static const FengDecl *find_module_public_type_decl(const FengSemanticModule *module, FengSlice name) {
+/* Find a public type/spec/enum decl in a module by (name, arity).
+ * Only type/spec decls carry type_param_count; enum arity is always 0. */
+static const FengDecl *find_module_public_type_decl(const FengSemanticModule *module,
+                                                    FengSlice name,
+                                                    size_t type_param_count) {
+    size_t program_index;
+
+    for (program_index = 0U; program_index < module->program_count; ++program_index) {
+        const FengProgram *program = module->programs[program_index];
+        size_t decl_index;
+
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            const FengDecl *decl = program->declarations[decl_index];
+
+            if (decl->kind == FENG_DECL_TYPE && decl_is_public(decl) &&
+                slice_equals(decl->as.type_decl.name, name) &&
+                decl_type_param_count(decl) == type_param_count) {
+                return decl;
+            }
+            if (decl->kind == FENG_DECL_ENUM && decl_is_public(decl) &&
+                slice_equals(decl->as.enum_decl.name, name) &&
+                type_param_count == 0U) {
+                return decl;
+            }
+            if (decl->kind == FENG_DECL_SPEC && decl_is_public(decl) &&
+                slice_equals(decl->as.spec_decl.name, name) &&
+                decl_type_param_count(decl) == type_param_count) {
+                return decl;
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/* Existence check: find any public type/spec/enum decl by name regardless of arity. */
+static const FengDecl *find_module_public_type_decl_any_arity(const FengSemanticModule *module,
+                                                              FengSlice name) {
     size_t program_index;
 
     for (program_index = 0U; program_index < module->program_count; ++program_index) {
@@ -3482,7 +3519,7 @@ static size_t count_module_public_function_overloads(const FengSemanticModule *m
 }
 
 static bool module_exports_public_type(const FengSemanticModule *module, FengSlice name) {
-    return find_module_public_type_decl(module, name) != NULL;
+    return find_module_public_type_decl_any_arity(module, name) != NULL;
 }
 
 static bool module_exports_public_value(const FengSemanticModule *module, FengSlice name) {
@@ -4620,8 +4657,8 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
         const AliasEntry *alias = find_alias(context->aliases, context->alias_count, segments[0]);
 
         if (alias != NULL) {
-            /* Cross-module: find_module_public_type_decl will gain arity in §6.5 */
-            return find_module_public_type_decl(alias->target_module, segments[1]);
+            return find_module_public_type_decl(alias->target_module, segments[1],
+                                                type_param_count);
         }
     }
 
@@ -4630,8 +4667,8 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
         if (module_index < context->analysis->module_count &&
             module_is_full_path_visible_from(context, &context->analysis->modules[module_index])) {
-            /* Cross-module: find_module_public_type_decl will gain arity in §6.5 */
-            return find_module_public_type_decl(&context->analysis->modules[module_index], name);
+            return find_module_public_type_decl(&context->analysis->modules[module_index],
+                                                name, type_param_count);
         }
     }
 
@@ -14814,7 +14851,7 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
 
                 if (alias != NULL) {
                     result.type_decl =
-                        find_module_public_type_decl(alias->target_module, target_expr->as.member.member);
+                        find_module_public_type_decl_any_arity(alias->target_module, target_expr->as.member.member);
                     result.provider_module = result.type_decl != NULL ? alias->target_module : NULL;
                 }
             }
@@ -14831,7 +14868,7 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
                     if (module_index < context->analysis->module_count &&
                         module_is_full_path_visible_from(context,
                                                          &context->analysis->modules[module_index])) {
-                        result.type_decl = find_module_public_type_decl(
+                        result.type_decl = find_module_public_type_decl_any_arity(
                             &context->analysis->modules[module_index],
                             path_segments[path_segment_count - 1U]);
                         result.provider_module = result.type_decl != NULL
@@ -20499,8 +20536,27 @@ static bool resolve_named_type_ref(ResolveContext *context,
                     any_decl = any_entry->decl;
                 }
             } else {
-                /* Cross-module: find_module_public_type_decl is still name-only (§6.5) */
-                any_decl = find_named_type_decl(context, segments, segment_count, 0U);
+                /* Cross-module: any-arity existence check for error reporting */
+                const FengSemanticModule *target_module = NULL;
+
+                if (segment_count == 2U) {
+                    const AliasEntry *mod_alias =
+                        find_alias(context->aliases, context->alias_count, segments[0]);
+                    if (mod_alias != NULL) {
+                        target_module = mod_alias->target_module;
+                    }
+                }
+                if (target_module == NULL) {
+                    size_t mod_idx = find_module_index_by_path(
+                        context->analysis, segments, segment_count - 1U);
+                    if (mod_idx < context->analysis->module_count) {
+                        target_module = &context->analysis->modules[mod_idx];
+                    }
+                }
+                if (target_module != NULL) {
+                    any_decl = find_module_public_type_decl_any_arity(
+                        target_module, name);
+                }
             }
 
             qualified_name = format_module_name(segments, segment_count);
@@ -20619,8 +20675,42 @@ static bool resolve_named_type_ref(ResolveContext *context,
                                (int)name.length,
                                name.data));
         }
-    } else if (find_named_type_decl(context, segments, segment_count, 0U) != NULL) {
-        return true;
+    } else {
+        /* Multi-segment bare name (no type arguments) */
+        if (find_named_type_decl(context, segments, segment_count, 0U) != NULL) {
+            return true;
+        }
+
+        /* Cross-module: check if a generic type with this name exists → AE0006 */
+        {
+            const FengSemanticModule *target_module = NULL;
+
+            if (segment_count == 2U) {
+                const AliasEntry *mod_alias =
+                    find_alias(context->aliases, context->alias_count, segments[0]);
+                if (mod_alias != NULL) {
+                    target_module = mod_alias->target_module;
+                }
+            }
+            if (target_module == NULL) {
+                size_t mod_idx = find_module_index_by_path(
+                    context->analysis, segments, segment_count - 1U);
+                if (mod_idx < context->analysis->module_count) {
+                    target_module = &context->analysis->modules[mod_idx];
+                }
+            }
+            if (target_module != NULL) {
+                const FengDecl *any_decl = find_module_public_type_decl_any_arity(
+                    target_module, name);
+                if (any_decl != NULL && decl_type_param_count(any_decl) > 0U) {
+                    return resolver_append_error(
+                        context,
+                        type_ref->token,
+                        "AE0006", format_message("'%.*s' is a generic type and requires type arguments",
+                                       (int)name.length, name.data));
+                }
+            }
+        }
     }
 
     qualified_name = format_module_name(segments, segment_count);
@@ -26130,13 +26220,15 @@ static const FengDecl *analysis_resolve_named_type_ref(
         if (mod_index < analysis->module_count) {
             return find_module_public_type_decl(
                 &analysis->modules[mod_index],
-                ref->as.named.segments[ref->as.named.segment_count - 1U]);
+                ref->as.named.segments[ref->as.named.segment_count - 1U],
+                ref->as.named.type_arg_count);
         }
         return NULL;
     }
     for (mi = 0U; mi < analysis->module_count; ++mi) {
         const FengDecl *d = find_module_public_type_decl(
-            &analysis->modules[mi], ref->as.named.segments[0]);
+            &analysis->modules[mi], ref->as.named.segments[0],
+            ref->as.named.type_arg_count);
 
         if (d != NULL) {
             return d;
