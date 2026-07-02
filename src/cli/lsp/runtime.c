@@ -3582,6 +3582,44 @@ static const FengSymbolDeclView *find_symbol_module_decl_by_name(const FengSymbo
     return NULL;
 }
 
+/* Find a type/spec decl by name AND type parameter count (arity).
+ * Only matches type/spec kinds; falls through for enums and values.
+ * Returns NULL if no match or module is NULL. */
+static const FengSymbolDeclView *find_symbol_module_decl_by_name_and_arity(
+    const FengSymbolImportedModule *module,
+    FengSlice name,
+    size_t type_param_count,
+    bool public_only) {
+    size_t count;
+    size_t index;
+
+    if (module == NULL) {
+        return NULL;
+    }
+    count = public_only ? feng_symbol_module_public_decl_count(module)
+                        : feng_symbol_module_decl_count(module);
+    for (index = 0U; index < count; ++index) {
+        const FengSymbolDeclView *decl = public_only
+                                             ? feng_symbol_module_public_decl_at(module, index)
+                                             : feng_symbol_module_decl_at(module, index);
+
+        if (decl == NULL || feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_FIT) {
+            continue;
+        }
+        if (public_only && feng_symbol_decl_visibility(decl) != FENG_VISIBILITY_PUBLIC) {
+            continue;
+        }
+        if (!symbol_decl_is_type(decl)) {
+            continue;
+        }
+        if (slice_equals(feng_symbol_decl_name(decl), name) &&
+            feng_symbol_decl_type_param_count(decl) == type_param_count) {
+            return decl;
+        }
+    }
+    return NULL;
+}
+
 static const FengSymbolDeclView *find_symbol_decl_member_by_name(const FengSymbolDeclView *owner,
                                                                  FengSlice name,
                                                                  bool public_only) {
@@ -3710,22 +3748,29 @@ static const FengSymbolDeclView *resolve_symbol_named_type_ref(const FengSymbolP
                                                                const FengTypeRef *type_ref) {
     size_t index;
     FengSlice name;
+    size_t arity;
 
     if (provider == NULL || program == NULL || type_ref == NULL ||
         type_ref->kind != FENG_TYPE_REF_NAMED || type_ref->as.named.segment_count == 0U) {
         return NULL;
     }
     name = type_ref->as.named.segments[type_ref->as.named.segment_count - 1U];
+    arity = type_ref->as.named.type_arg_count;
     if (type_ref->as.named.segment_count == 1U) {
         if (feng_semantic_is_builtin_type_name(name)) {
             return NULL;
         }
         if (current_module != NULL) {
-            const FengSymbolDeclView *decl = find_symbol_module_decl_by_name(current_module,
-                                                                             name,
-                                                                             false,
-                                                                             true,
-                                                                             false);
+            const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
+                current_module, name, arity, false);
+            if (decl != NULL) {
+                return decl;
+            }
+            decl = find_symbol_module_decl_by_name(current_module,
+                                                   name,
+                                                   false,
+                                                   true,
+                                                   false);
             if (decl != NULL) {
                 return decl;
             }
@@ -3741,11 +3786,16 @@ static const FengSymbolDeclView *resolve_symbol_named_type_ref(const FengSymbolP
                                                       use_decl->segments,
                                                       use_decl->segment_count);
             if (module != NULL) {
-                const FengSymbolDeclView *decl = find_symbol_module_decl_by_name(module,
-                                                                                 name,
-                                                                                 false,
-                                                                                 true,
-                                                                                 true);
+                const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
+                    module, name, arity, true);
+                if (decl != NULL) {
+                    return decl;
+                }
+                decl = find_symbol_module_decl_by_name(module,
+                                                       name,
+                                                       false,
+                                                       true,
+                                                       true);
                 if (decl != NULL) {
                     return decl;
                 }
@@ -3758,6 +3808,11 @@ static const FengSymbolDeclView *resolve_symbol_named_type_ref(const FengSymbolP
                                                                                 program,
                                                                                 type_ref->as.named.segments[0]);
         if (alias_module != NULL) {
+            const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
+                alias_module, type_ref->as.named.segments[1], arity, true);
+            if (decl != NULL) {
+                return decl;
+            }
             return find_symbol_module_decl_by_name(alias_module,
                                                    type_ref->as.named.segments[1],
                                                    false,
@@ -3765,13 +3820,20 @@ static const FengSymbolDeclView *resolve_symbol_named_type_ref(const FengSymbolP
                                                    true);
         }
     }
-    return find_symbol_module_decl_by_name(feng_symbol_provider_find_module(provider,
-                                                                            type_ref->as.named.segments,
-                                                                            type_ref->as.named.segment_count - 1U),
-                                           name,
-                                           false,
-                                           true,
-                                           true);
+    {
+        const FengSymbolImportedModule *target_module = feng_symbol_provider_find_module(
+            provider, type_ref->as.named.segments, type_ref->as.named.segment_count - 1U);
+        const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
+            target_module, name, arity, true);
+        if (decl != NULL) {
+            return decl;
+        }
+        return find_symbol_module_decl_by_name(target_module,
+                                               name,
+                                               false,
+                                               true,
+                                               true);
+    }
 }
 
 static const FengSymbolDeclView *resolve_symbol_type_view(const FengSymbolProvider *provider,
@@ -3793,8 +3855,11 @@ static const FengSymbolDeclView *resolve_symbol_type_view(const FengSymbolProvid
                                         program,
                                         feng_symbol_type_inner(type));
     }
-    if (kind == FENG_SYMBOL_TYPE_KIND_NAMED) {
+    if (kind == FENG_SYMBOL_TYPE_KIND_NAMED || kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) {
         size_t segment_count = feng_symbol_type_segment_count(type);
+        size_t arity = (kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC)
+                           ? feng_symbol_type_generic_arg_count(type)
+                           : 0U;
         FengSlice name;
         size_t index;
 
@@ -3804,11 +3869,16 @@ static const FengSymbolDeclView *resolve_symbol_type_view(const FengSymbolProvid
         name = feng_symbol_type_segment_at(type, segment_count - 1U);
         if (segment_count == 1U) {
             if (current_module != NULL) {
-                const FengSymbolDeclView *decl = find_symbol_module_decl_by_name(current_module,
-                                                                                 name,
-                                                                                 false,
-                                                                                 true,
-                                                                                 false);
+                const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
+                    current_module, name, arity, false);
+                if (decl != NULL) {
+                    return decl;
+                }
+                decl = find_symbol_module_decl_by_name(current_module,
+                                                       name,
+                                                       false,
+                                                       true,
+                                                       false);
                 if (decl != NULL) {
                     return decl;
                 }
@@ -3824,11 +3894,16 @@ static const FengSymbolDeclView *resolve_symbol_type_view(const FengSymbolProvid
                                                           use_decl->segments,
                                                           use_decl->segment_count);
                 if (module != NULL) {
-                    const FengSymbolDeclView *decl = find_symbol_module_decl_by_name(module,
-                                                                                     name,
-                                                                                     false,
-                                                                                     true,
-                                                                                     true);
+                    const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
+                        module, name, arity, true);
+                    if (decl != NULL) {
+                        return decl;
+                    }
+                    decl = find_symbol_module_decl_by_name(module,
+                                                           name,
+                                                           false,
+                                                           true,
+                                                           true);
                     if (decl != NULL) {
                         return decl;
                     }
@@ -3841,6 +3916,11 @@ static const FengSymbolDeclView *resolve_symbol_type_view(const FengSymbolProvid
                                                                                     program,
                                                                                     feng_symbol_type_segment_at(type, 0U));
             if (alias_module != NULL) {
+                const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
+                    alias_module, feng_symbol_type_segment_at(type, 1U), arity, true);
+                if (decl != NULL) {
+                    return decl;
+                }
                 return find_symbol_module_decl_by_name(alias_module,
                                                        feng_symbol_type_segment_at(type, 1U),
                                                        false,
@@ -3861,6 +3941,10 @@ static const FengSymbolDeclView *resolve_symbol_type_view(const FengSymbolProvid
             }
             module = feng_symbol_provider_find_module(provider, segments, segment_count - 1U);
             free(segments);
+            decl = find_symbol_module_decl_by_name_and_arity(module, name, arity, true);
+            if (decl != NULL) {
+                return decl;
+            }
             decl = find_symbol_module_decl_by_name(module, name, false, true, true);
             if (decl != NULL) {
                 return decl;
@@ -10982,11 +11066,86 @@ static bool symbol_member_visible_from_module(const FengSymbolImportedModule *cu
     return symbol_decl_is_in_module(current_module, owner_decl);
 }
 
-static bool append_symbol_decl_completion_item(FengLspString *json,
-                                               bool *first,
-                                               const FengSymbolDeclView *decl,
-                                               const char *detail,
-                                               int forced_kind) {
+/* Build a completion label for a symbol decl.
+ * For generic type/spec decls, appends type parameter names:
+ *   "Box<T>", "Box<T, U>", "Reader<T>", etc.
+ * For non-generic decls, returns a copy of the plain name.
+ * Caller must free the returned slice data. */
+static FengSlice build_symbol_decl_completion_label(const FengSymbolDeclView *decl) {
+    FengSlice name;
+    FengSymbolDeclKind kind;
+    size_t type_param_count;
+    FengLspString label = {0};
+    size_t mi;
+    size_t param_index;
+
+    if (decl == NULL) {
+        return (FengSlice){0};
+    }
+    name = feng_symbol_decl_name(decl);
+    kind = feng_symbol_decl_kind(decl);
+    type_param_count = feng_symbol_decl_type_param_count(decl);
+    if (type_param_count == 0U ||
+        (kind != FENG_SYMBOL_DECL_KIND_TYPE && kind != FENG_SYMBOL_DECL_KIND_SPEC)) {
+        char *copy = dup_range(name.data, name.data + name.length);
+        if (copy == NULL) {
+            return (FengSlice){0};
+        }
+        return (FengSlice){copy, name.length};
+    }
+    if (!string_append_bytes(&label, name.data, name.length) ||
+        !string_append_cstr(&label, "<")) {
+        string_dispose(&label);
+        return (FengSlice){0};
+    }
+    for (mi = 0U, param_index = 0U; mi < feng_symbol_decl_member_count(decl); ++mi) {
+        const FengSymbolDeclView *m = feng_symbol_decl_member_at(decl, mi);
+        FengSlice pname;
+
+        if (m == NULL || feng_symbol_decl_kind(m) != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+            continue;
+        }
+        if (param_index > 0U && !string_append_cstr(&label, ", ")) {
+            string_dispose(&label);
+            return (FengSlice){0};
+        }
+        pname = feng_symbol_decl_name(m);
+        if (!string_append_bytes(&label, pname.data, pname.length)) {
+            string_dispose(&label);
+            return (FengSlice){0};
+        }
+        ++param_index;
+    }
+    if (!string_append_cstr(&label, ">")) {
+        string_dispose(&label);
+        return (FengSlice){0};
+    }
+    {
+        FengSlice result = {label.data, label.length};
+        return result;
+    }
+}
+
+/* Extract the base name from a completion label that may contain an arity
+ * suffix "<...>".  Returns a slice pointing into `label` (no allocation).
+ * Examples: "Box<T>" -> "Box", "Box<T, U>" -> "Box", "foo" -> "foo". */
+static FengSlice strip_arity_suffix(FengSlice label) {
+    size_t i;
+
+    for (i = 0U; i < label.length; ++i) {
+        if (label.data[i] == '<') {
+            return (FengSlice){label.data, i};
+        }
+    }
+    return label;
+}
+
+static bool append_symbol_decl_completion_item_with_label(FengLspString *json,
+                                                          bool *first,
+                                                          const FengSymbolDeclView *decl,
+                                                          FengSlice label,
+                                                          const char *detail,
+                                                          int forced_kind) {
     FengLspString signature = {0};
     const char *item_detail = detail;
     int kind;
@@ -11001,7 +11160,7 @@ static bool append_symbol_decl_completion_item(FengLspString *json,
     }
     ok = append_completion_item_with_data(json,
                                           first,
-                                          feng_symbol_decl_name(decl),
+                                          label,
                                           item_detail,
                                           forced_kind > 0 ? forced_kind : kind,
                                           g_completion_uri,
@@ -12010,21 +12169,31 @@ static bool append_bundle_imported_completion_items(FengLspString *json,
         for (decl_index = 0U; decl_index < feng_symbol_module_public_decl_count(module); ++decl_index) {
             const FengSymbolDeclView *decl = feng_symbol_module_public_decl_at(module, decl_index);
             bool has_label = false;
+            FengSlice label;
 
             if (!symbol_decl_is_completion_decl(decl)) {
                 continue;
             }
-            if (!completion_json_contains_label(json, feng_symbol_decl_name(decl), &has_label)) {
+            label = build_symbol_decl_completion_label(decl);
+            if (label.data == NULL) {
+                ok = false;
+                break;
+            }
+            if (!completion_json_contains_label(json, label, &has_label)) {
+                free((void *)label.data);
                 ok = false;
                 break;
             }
             if (has_label) {
+                free((void *)label.data);
                 continue;
             }
-            if (!append_symbol_decl_completion_item(json, first, decl, NULL, -1)) {
+            if (!append_symbol_decl_completion_item_with_label(json, first, decl, label, NULL, -1)) {
+                free((void *)label.data);
                 ok = false;
                 break;
             }
+            free((void *)label.data);
         }
     }
     feng_symbol_provider_free(provider);
@@ -12484,14 +12653,22 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
         if (alias_module != NULL) {
             for (index = 0U; index < feng_symbol_module_public_decl_count(alias_module); ++index) {
                 const FengSymbolDeclView *decl = feng_symbol_module_public_decl_at(alias_module, index);
+                FengSlice label;
 
                 if (!symbol_decl_is_completion_decl(decl)) {
                     continue;
                 }
-                if (!append_symbol_decl_completion_item(json, &first, decl, NULL, -1)) {
+                label = build_symbol_decl_completion_label(decl);
+                if (label.data == NULL) {
                     local_list_dispose(&locals);
                     return false;
                 }
+                if (!append_symbol_decl_completion_item_with_label(json, &first, decl, label, NULL, -1)) {
+                    free((void *)label.data);
+                    local_list_dispose(&locals);
+                    return false;
+                }
+                free((void *)label.data);
                 ++item_count;
             }
         } else {
@@ -12626,14 +12803,22 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
         if (context->current_module != NULL) {
             for (index = 0U; index < feng_symbol_module_decl_count(context->current_module); ++index) {
                 const FengSymbolDeclView *decl = feng_symbol_module_decl_at(context->current_module, index);
+                FengSlice label;
 
                 if (!symbol_decl_is_completion_decl(decl)) {
                     continue;
                 }
-                if (!append_symbol_decl_completion_item(json, &first, decl, NULL, -1)) {
+                label = build_symbol_decl_completion_label(decl);
+                if (label.data == NULL) {
                     local_list_dispose(&locals);
                     return false;
                 }
+                if (!append_symbol_decl_completion_item_with_label(json, &first, decl, label, NULL, -1)) {
+                    free((void *)label.data);
+                    local_list_dispose(&locals);
+                    return false;
+                }
+                free((void *)label.data);
                 ++item_count;
             }
         }
@@ -12656,14 +12841,22 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
 
                 for (decl_index = 0U; decl_index < feng_symbol_module_public_decl_count(module); ++decl_index) {
                     const FengSymbolDeclView *decl = feng_symbol_module_public_decl_at(module, decl_index);
+                    FengSlice label;
 
                     if (!symbol_decl_is_completion_decl(decl)) {
                         continue;
                     }
-                    if (!append_symbol_decl_completion_item(json, &first, decl, NULL, -1)) {
+                    label = build_symbol_decl_completion_label(decl);
+                    if (label.data == NULL) {
                         local_list_dispose(&locals);
                         return false;
                     }
+                    if (!append_symbol_decl_completion_item_with_label(json, &first, decl, label, NULL, -1)) {
+                        free((void *)label.data);
+                        local_list_dispose(&locals);
+                        return false;
+                    }
+                    free((void *)label.data);
                     ++item_count;
                 }
             }
@@ -13548,7 +13741,7 @@ static char *resolve_doc_from_cache(const FengLspCacheQueryContext *context,
         return NULL;
     }
     if (owner_name != NULL) {
-        FengSlice owner_slice = slice_from_cstr(owner_name);
+        FengSlice owner_slice = strip_arity_suffix(slice_from_cstr(owner_name));
         const FengSymbolDeclView *owner_decl = NULL;
 
         if (context->current_module != NULL) {
@@ -13576,10 +13769,40 @@ static char *resolve_doc_from_cache(const FengLspCacheQueryContext *context,
     }
     if (context->current_module != NULL) {
         FengSlice label_slice = slice_from_cstr(label);
-        size_t count = feng_symbol_module_decl_count(context->current_module);
+        FengSlice base_name = strip_arity_suffix(label_slice);
+        bool has_arity = (base_name.length < label_slice.length);
+        size_t arity = 0U;
+        size_t count;
+
+        /* Count type params from the label suffix "<T, U>" if present. */
+        if (has_arity) {
+            size_t i;
+            arity = 1U;
+            for (i = base_name.length; i < label_slice.length; ++i) {
+                if (label_slice.data[i] == ',') {
+                    ++arity;
+                }
+            }
+        }
+        count = feng_symbol_module_decl_count(context->current_module);
+        /* Try exact (name, arity) match first when arity info is available. */
+        if (has_arity) {
+            for (index = 0U; index < count; ++index) {
+                const FengSymbolDeclView *d = feng_symbol_module_decl_at(context->current_module, index);
+                if (slice_equals(feng_symbol_decl_name(d), base_name) &&
+                    feng_symbol_decl_type_param_count(d) == arity) {
+                    FengSlice doc = feng_symbol_decl_doc(d);
+                    if (doc.length > 0U) {
+                        return dup_range(doc.data, doc.data + doc.length);
+                    }
+                    return NULL;
+                }
+            }
+        }
+        /* Fall back to name-only match. */
         for (index = 0U; index < count; ++index) {
             const FengSymbolDeclView *d = feng_symbol_module_decl_at(context->current_module, index);
-            if (slice_equals(feng_symbol_decl_name(d), label_slice)) {
+            if (slice_equals(feng_symbol_decl_name(d), base_name)) {
                 FengSlice doc = feng_symbol_decl_doc(d);
                 if (doc.length > 0U) {
                     return dup_range(doc.data, doc.data + doc.length);
@@ -13606,7 +13829,7 @@ static char *resolve_doc_from_session(const FengLspAnalysisSession *session,
     }
     label_slice = slice_from_cstr(label);
     if (owner_name != NULL) {
-        FengSlice owner_slice = slice_from_cstr(owner_name);
+        FengSlice owner_slice = strip_arity_suffix(slice_from_cstr(owner_name));
         if (program != NULL) {
             for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
                 const FengDecl *decl = program->declarations[decl_index];
@@ -13682,9 +13905,10 @@ static char *resolve_doc_from_session(const FengLspAnalysisSession *session,
         return NULL;
     }
     if (program != NULL) {
+        FengSlice base_name = strip_arity_suffix(label_slice);
         for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
             const FengDecl *decl = program->declarations[decl_index];
-            if (slice_equals(decl_name(decl), label_slice)) {
+            if (slice_equals(decl_name(decl), base_name)) {
                 return normalize_doc_comment(decl->doc_comment);
             }
         }

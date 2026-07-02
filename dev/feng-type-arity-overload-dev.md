@@ -523,7 +523,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 | 存在性检查 | `src/semantic/analyzer.c` | `find_unshadowed_alias`（L4500）/ `resolve_type_target_expr`（L14658）/ `use` 声明冲突检查（L20305）/ 标识符解析（L20809）改用 `find_visible_type_any_arity` |
 | 模块导入 | `src/semantic/analyzer.c` | `import_public_names` 中 `seen_type_names` 改为 (name, arity) 去重（规则 1，惰性不改触发时机）；`collect_symbol_candidates`（L2480）+ `report_name_ambiguity_if_any`（L2716）**保持 name-only**，不感知 arity（跨模块歧义按 name 判定，同模块 arity 精确匹配由下游 `find_named_type_decl` 负责） |
 | 跨模块查找 | `src/semantic/analyzer.c` | `find_module_public_type_decl`（L2948）改为按 (name, arity) 查找 + 新增 `find_module_public_type_decl_any_arity`（存在性检查）；7 处调用点改造（§6.5） |
-| 符号提供 | `src/symbol/provider.c` | 导入时按 `(name, arity)` 注册 |
+| 符号提供 | `src/symbol/provider.c` | 导入时按 `(name, arity)` 注册；`feng_symbol_type_segment_count` / `feng_symbol_type_segment_at` 扩展为同时支持 `NAMED` 和 `NAMED_GENERIC` 类型（§6.7） |
 
 ### 5.2 关联影响
 
@@ -716,10 +716,10 @@ LSP 不直接调用 `find_visible_type` 等 static 函数，而是通过两类�
 
 待办：
 
-- [ ] 改造 `src/cli/lsp/runtime.c` 补全路径：替换 `find_symbol_module_decl_by_name`（L3548）等按 name 查找单个 decl 的调用，改为遍历 + 按 (name, arity) 区分多 arity 候选
-- [ ] 改造 `src/cli/lsp/runtime.c` 跳转/hover 路径：从使用点 type_ref 提取 `type_arg_count`，按 (name, arity) 精确匹配 decl
-- [ ] 验证 `feng_symbol_module_find_public_type` 等 name-only API 是否需要新增按 arity 查找的对应版本；若 LSP 内部遍历已够用，则公共 API 可不动（待实施时确认）
-- [ ] 全量回归 LSP 现有补全/跳转/hover 测试，确保非泛型场景行为不变
+- [x] 改造 `src/cli/lsp/runtime.c` 补全路径：新增 `build_symbol_decl_completion_label` 为泛型 type/spec 生成包含类型参数的 label（如 `Box<T>` / `Box<T, U>`）；4 处补全调用点改用新 label + `append_symbol_decl_completion_item_with_label`；原 `append_symbol_decl_completion_item` 已移除（无调用者）
+- [x] 改造 `src/cli/lsp/runtime.c` 跳转/hover 路径：新增 `find_symbol_module_decl_by_name_and_arity`；`resolve_symbol_named_type_ref` 从 `type_ref->as.named.type_arg_count` 提取 arity 做精确匹配 + name-only fallback；`resolve_symbol_type_view` 新增 `NAMED_GENERIC` 分支，从 `feng_symbol_type_generic_arg_count` 提取 arity
+- [x] 验证 `feng_symbol_module_find_public_type` 等 name-only API 是否需要新增按 arity 查找的对应版本；**结论**：LSP 内部 `find_symbol_module_decl_by_name_and_arity` 已够用，公共 API 不新增 arity 版本。但扩展了 `feng_symbol_type_segment_count` / `feng_symbol_type_segment_at` 以同时支持 `NAMED` 和 `NAMED_GENERIC` 类型（此前 `NAMED_GENERIC` 返回 0 段，导致 `symbol_type_to_string` 输出缺失类型名）
+- [x] 全量回归 LSP 现有补全/跳转/hover 测试，确保非泛型场景行为不变（已更新 `test/cli/test_cli.c` 中 10 处 `Map` label 断言，经人工批准）
 
 > **独立性**：LSP 通过公共 API 访问符号信息，不直接调用 static 函数。依赖前面步骤完成（符号表已支持同名不同 arity 共存）。可独立交付，但需先确认公共 API 是否需要扩展。
 

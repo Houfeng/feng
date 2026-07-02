@@ -1062,15 +1062,35 @@ FengSlice feng_symbol_type_builtin_name(const FengSymbolTypeView *type) {
 }
 
 size_t feng_symbol_type_segment_count(const FengSymbolTypeView *type) {
-    return type != NULL && type->kind == FENG_SYMBOL_TYPE_KIND_NAMED ? type->as.named.segment_count : 0U;
+    if (type == NULL) {
+        return 0U;
+    }
+    if (type->kind == FENG_SYMBOL_TYPE_KIND_NAMED) {
+        return type->as.named.segment_count;
+    }
+    if (type->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) {
+        return type->as.named_generic.segment_count;
+    }
+    return 0U;
 }
 
 FengSlice feng_symbol_type_segment_at(const FengSymbolTypeView *type, size_t index) {
-    if (type == NULL || type->kind != FENG_SYMBOL_TYPE_KIND_NAMED ||
-        index >= type->as.named.segment_count) {
+    if (type == NULL) {
         return (FengSlice){0};
     }
-    return slice_from_cstr(type->as.named.segments[index]);
+    if (type->kind == FENG_SYMBOL_TYPE_KIND_NAMED) {
+        if (index >= type->as.named.segment_count) {
+            return (FengSlice){0};
+        }
+        return slice_from_cstr(type->as.named.segments[index]);
+    }
+    if (type->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) {
+        if (index >= type->as.named_generic.segment_count) {
+            return (FengSlice){0};
+        }
+        return slice_from_cstr(type->as.named_generic.segments[index]);
+    }
+    return (FengSlice){0};
 }
 
 const FengSymbolTypeView *feng_symbol_type_inner(const FengSymbolTypeView *type) {

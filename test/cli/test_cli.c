@@ -12862,14 +12862,14 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     ASSERT(strstr(use_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(use_completion_output, "\"label\":\"collections\"") != NULL);
     ASSERT(strstr(type_completion_output, "\"id\":2,\"result\":[]") == NULL);
-    ASSERT(strstr(type_completion_output, "\"label\":\"Map\"") != NULL);
-    ASSERT(strstr(type_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
+    ASSERT(strstr(type_completion_output, "\"label\":\"Map<K, V>\"") != NULL);
+    ASSERT(strstr(type_completion_output, "\"label\":\"Map<K, V>\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
     ASSERT(strstr(ctor_completion_output, "\"id\":2,\"result\":[]") == NULL);
-    ASSERT(strstr(ctor_completion_output, "\"label\":\"Map\"") != NULL);
-    ASSERT(strstr(ctor_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
+    ASSERT(strstr(ctor_completion_output, "\"label\":\"Map<K, V>\"") != NULL);
+    ASSERT(strstr(ctor_completion_output, "\"label\":\"Map<K, V>\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
     ASSERT(strstr(bare_completion_output, "\"id\":2,\"result\":[]") == NULL);
-    ASSERT(strstr(bare_completion_output, "\"label\":\"Map\"") != NULL);
-    ASSERT(strstr(bare_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
+    ASSERT(strstr(bare_completion_output, "\"label\":\"Map<K, V>\"") != NULL);
+    ASSERT(strstr(bare_completion_output, "\"label\":\"Map<K, V>\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
     ASSERT(strstr(function_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(function_completion_output, "\"label\":\"join\"") != NULL);
     ASSERT(strstr(function_completion_output,
@@ -12877,11 +12877,11 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     ASSERT(strstr(function_completion_output,
                   "\"label\":\"join\",\"kind\":3,\"detail\":\"func join(prefix: string, parts: string[]): string\"") == NULL);
     ASSERT(strstr(local_dep_ctor_completion_output, "\"id\":2,\"result\":[]") == NULL);
-    ASSERT(strstr(local_dep_ctor_completion_output, "\"label\":\"Map\"") != NULL);
-    ASSERT(strstr(local_dep_ctor_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
+    ASSERT(strstr(local_dep_ctor_completion_output, "\"label\":\"Map<K, V>\"") != NULL);
+    ASSERT(strstr(local_dep_ctor_completion_output, "\"label\":\"Map<K, V>\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
     ASSERT(strstr(local_dep_bare_completion_output, "\"id\":2,\"result\":[]") == NULL);
-    ASSERT(strstr(local_dep_bare_completion_output, "\"label\":\"Map\"") != NULL);
-    ASSERT(strstr(local_dep_bare_completion_output, "\"label\":\"Map\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
+    ASSERT(strstr(local_dep_bare_completion_output, "\"label\":\"Map<K, V>\"") != NULL);
+    ASSERT(strstr(local_dep_bare_completion_output, "\"label\":\"Map<K, V>\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
     ASSERT(strstr(member_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(member_completion_output, "\"label\":\"count\"") != NULL);
     ASSERT(strstr(member_completion_output, "\"label\":\"K\"") == NULL);
