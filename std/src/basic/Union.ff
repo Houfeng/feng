@@ -1,10 +1,20 @@
 open module std;
 
-open spec Union2<T1, T2>: T1 | T2;
-open spec Union3<T1, T2, T3>: T1 | T2 | T3;
-open spec Union4<T1, T2, T3, T4>: T1 | T2 | T3 | T4;
-open spec Union5<T1, T2, T3, T4, T5>: T1 | T2 | T3 | T4 | T5;
-open spec Union6<T1, T2, T3, T4, T5, T6>: T1 | T2 | T3 | T4 | T5 | T6;
-open spec Union7<T1, T2, T3, T4, T5, T6, T7>: T1 | T2 | T3 | T4 | T5 | T6 | T7;
-open spec Union8<T1, T2, T3, T4, T5, T6, T7, T8>: T1 | T2 | T3 | T4 | T5 | T6 | T7 | T8;
-open spec Union9<T1, T2, T3, T4, T5, T6, T7, T8, T9>: T1 | T2 | T3 | T4 | T5 | T6 | T7 | T8 | T9;
+/**
+ * The Union spec family defines generic union types that combine 2–8 type parameters.
+ * Each overload provides a convenient named alias for a union of the given types,
+ * avoiding the need to repeatedly write out long `T1 | T2 | ...` expressions.
+ *
+ * Example:
+ * ```
+ * spec Result: Union<None, Error, string>;
+ * // Equivalent to: spec Result: None | Error | string;
+ * ```
+ */
+open spec Union<T1, T2>: T1 | T2;
+open spec Union<T1, T2, T3>: T1 | T2 | T3;
+open spec Union<T1, T2, T3, T4>: T1 | T2 | T3 | T4;
+open spec Union<T1, T2, T3, T4, T5>: T1 | T2 | T3 | T4 | T5;
+open spec Union<T1, T2, T3, T4, T5, T6>: T1 | T2 | T3 | T4 | T5 | T6;
+open spec Union<T1, T2, T3, T4, T5, T6, T7>: T1 | T2 | T3 | T4 | T5 | T6 | T7;
+open spec Union<T1, T2, T3, T4, T5, T6, T7, T8>: T1 | T2 | T3 | T4 | T5 | T6 | T7 | T8;

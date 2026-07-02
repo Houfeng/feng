@@ -1,0 +1,42 @@
+open module std;
+
+/**
+ * The Action spec family defines function signatures that return void.
+ * Each overload accepts a different number of arguments (0–7), providing
+ * a standard contract for callbacks, event handlers, and side-effect operations.
+ *
+ * Example:
+ * ```
+ * func forEach(items: []int, action: Action<int>): void { ... }
+ * ```
+ */
+open spec Action(): void;
+open spec Action<T>(arg1: T): void;
+open spec Action<T1, T2>(arg1: T1, arg2: T2): void;
+open spec Action<T1, T2, T3>(arg1: T1, arg2: T2, arg3: T3): void;
+open spec Action<T1, T2, T3, T4>(arg1: T1, arg2: T2, arg3: T3, arg4: T4): void;
+open spec Action<T1, T2, T3, T4, T5>(arg1: T1, arg2: T2, arg3: T3, arg4: T4, arg5: T5): void;
+open spec Action<T1, T2, T3, T4, T5, T6>(arg1: T1, arg2: T2, arg3: T3, arg4: T4, arg5: T5, arg6: T6): void;
+open spec Action<T1, T2, T3, T4, T5, T6, T7>(arg1: T1, arg2: T2, arg3: T3, arg4: T4, arg5: T5, arg6: T6, arg7: T7): void;
+
+/**
+ * The Func spec family defines function signatures that return a value of type R.
+ * Each overload accepts a different number of arguments (0–7), providing
+ * a standard contract for transformations, computations, and pure functions.
+ *
+ * The last type parameter is always the return type R; all preceding parameters
+ * are argument types.
+ *
+ * Example:
+ * ```
+ * func map(items: []int, transform: Func<int, string>): []string { ... }
+ * ```
+ */
+open spec Func<R>(): R;
+open spec Func<T, R>(arg1: T): R;
+open spec Func<T1, T2, R>(arg1: T1, arg2: T2): R;
+open spec Func<T1, T2, T3, R>(arg1: T1, arg2: T2, arg3: T3): R;
+open spec Func<T1, T2, T3, T4, R>(arg1: T1, arg2: T2, arg3: T3, arg4: T4): R;
+open spec Func<T1, T2, T3, T4, T5, R>(arg1: T1, arg2: T2, arg3: T3, arg4: T4, arg5: T5): R;
+open spec Func<T1, T2, T3, T4, T5, T6, R>(arg1: T1, arg2: T2, arg3: T3, arg4: T4, arg5: T5, arg6: T6): R;
+open spec Func<T1, T2, T3, T4, T5, T6, T7, R>(arg1: T1, arg2: T2, arg3: T3, arg4: T4, arg5: T5, arg6: T6, arg7: T7): R;
