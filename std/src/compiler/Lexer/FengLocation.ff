@@ -4,7 +4,7 @@ open module std.compiler.lexer;
  * 词法单元的源代码位置
  */
 @value
-open type FengSourceLocation {
+open type FengLocation {
   /** 偏移量 */
   let offset: int;
 

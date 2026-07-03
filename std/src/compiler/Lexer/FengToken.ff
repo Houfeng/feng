@@ -17,5 +17,5 @@ open type FengToken {
   let source: FengSource;
   
   /** 词法单元在源文件中的位置 */
-  let location: FengSourceLocation;
+  let location: FengLocation;
 }

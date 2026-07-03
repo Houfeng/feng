@@ -45,7 +45,7 @@ FengToken — 8 words (64 bytes on 64-bit)
 ├── kind: FengTokenKind             1 word   (enum/int)
 ├── value: StringSpan               3 words  (origin:string + start:int + end:int)
 ├── source: FengSource              1 word   (reference)
-└── location: FengSourceLocation    3 words  (offset:int + line:int + column:int)
+└── location: FengLocation    3 words  (offset:int + line:int + column:int)
 ```
 
 - StringSpan.origin（`seal` 私有）持有 source.content 的引用，保证 token value 指向的源码子串不会被释放
@@ -74,7 +74,8 @@ std/src/text/
 std/src/compiler/
 └── Lexer/
     ├── FengTokenKind.ff      # Token 种类枚举
-    ├── FengSource.ff        # 源文件与位置信息
+    ├── FengSource.ff         # 源文件信息
+    ├── FengLocation.ff       # 源码位置信息（@value type）
     ├── FengToken.ff         # Token 类型定义
     ├── FengTokenUtil.ff     # Token 分类工具（静态方法）
     ├── FengLexer.ff         # Lexer 实现
@@ -255,7 +256,7 @@ open type FengSource {
 }
 ```
 
-### 3.3 FengSourceLocation
+### 3.3 FengLocation
 
 ```feng
 /**
@@ -263,7 +264,7 @@ open type FengSource {
  * 记录 Token 在源文件中的位置，用于错误报告和注解变换。
  */
 @value
-open type FengSourceLocation {
+open type FengLocation {
   /** 字节偏移量（从 0 开始） */
   let offset: int;
   /** 行号（从 1 开始） */
@@ -294,7 +295,7 @@ open type FengToken {
   /** Token 所在的源文件 */
   let source: FengSource;
   /** 源码位置 */
-  let location: FengSourceLocation;
+  let location: FengLocation;
 }
 ```
 
