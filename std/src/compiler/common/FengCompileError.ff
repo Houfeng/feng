@@ -1,0 +1,30 @@
+open module std.compiler.common;
+
+/**
+ * 编译错误。
+ *
+ * Lexer 和 Parser 共用，通过 code 前缀区分来源：
+ * - LE00xx：词法错误
+ * - PE00xx：语法错误（将来）
+ *
+ * throw 会装箱，但异常路径 RC 开销可忽略。
+ */
+open type FengCompileError {
+  /** 错误码（如 "LE0001"） */
+  let code: string;
+
+  /** 错误描述 */
+  let message: string;
+
+  /** 源文件路径 */
+  let path: string;
+
+  /** 行号（从 1 开始） */
+  let line: int;
+
+  /** 列号（从 1 开始） */
+  let column: int;
+
+  /** 出错行的源代码片段 */
+  let snippet: string;
+}

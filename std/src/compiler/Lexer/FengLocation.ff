@@ -5,12 +5,12 @@ open module std.compiler.lexer;
  */
 @value
 open type FengLocation {
-  /** 偏移量 */
+  /** 偏移量（从 0 开始） */
   let offset: int;
 
-  /** 词法单元所在的行号 */
+  /** 词法单元所在的行号（从 1 开始） */
   let line: int;
 
-  /** 词法单元所在的列号 */
+  /** 词法单元所在的列号（从 1 开始） */
   let column: int;
 }

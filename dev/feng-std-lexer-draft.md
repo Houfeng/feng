@@ -95,6 +95,7 @@ std/src/compiler/
 
 Lexer 和 Parser 共用的编译错误类型，词法错误码前缀 `LE`，语法错误码前缀 `PE`。
 词法/语法错误不混入 Token 流，遇到错误直接抛出 `FengCompileError`，由调用方捕获处理。
+自包含 path/line/column，不依赖 `FengLocation` 或 `FengSource`。
 
 ```feng
 open module std.compiler.common;
@@ -106,16 +107,21 @@ open module std.compiler.common;
  * - LE00xx：词法错误
  * - PE00xx：语法错误（将来）
  *
- * @value type：栈分配，错误数量有限，无堆压力。
+ * throw 会装箱，但异常路径 RC 开销可忽略。
  */
-@value
 open type FengCompileError {
   /** 错误码（如 "LE0001"） */
   let code: string;
   /** 错误描述 */
   let message: string;
-  /** 错误位置 */
-  let location: FengLocation;
+  /** 源文件路径 */
+  let path: string;
+  /** 行号（从 1 开始） */
+  let line: int;
+  /** 列号（从 1 开始） */
+  let column: int;
+  /** 出错行的源代码片段 */
+  let snippet: string;
 }
 ```
 
