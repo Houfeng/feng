@@ -1,8 +1,12 @@
 open module std.compiler.lexer;
 
+/**
+ * 词法分析器
+ */
 open type FengLexer {
+  /** 词法分析器的源代码 */
   let source: FengSource;
-  
+
   func FengLexer(source: FengSource) {
     self.source = source;
   }
