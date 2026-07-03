@@ -440,25 +440,49 @@ open type FengLexer {
 }
 ```
 
+**内部方法拆分原则**：FengLexer 内部应尽可能将逻辑拆解为多个功能完整的小方法，避免巨型方法。每个方法职责单一、边界清晰，便于理解、测试和维护。
+
+内部方法拆分如下（均为 `seal` 私有方法）：
+
+| 方法 | 职责 |
+|------|------|
+| `scanNext()` | 核心调度：记录起始位置，按首字符分发到各扫描方法，产出 Token |
+| `scanWhitespace()` | 扫描连续同类水平空白或换行 |
+| `scanLineComment()` | 扫描 `//` 到行尾 |
+| `scanBlockOrDocComment()` | 扫描 `/* ... */`，区分 `CommentBlock` 与 `CommentDoc` |
+| `scanIdentifierOrKeyword()` | 扫描标识符并查关键字表，含保留字检查 |
+| `scanNumber()` | 扫描数字字面量（各进制、浮点、`_` 分隔） |
+| `scanString()` | 扫描双引号字符串，处理转义序列 |
+| `scanRawString()` | 扫描反引号原始字符串 |
+| `scanOperatorOrPunctuation()` | 扫描运算符和分隔符，含前瞻逻辑 |
+| `advance()` | 前进一字节，维护 pos/line/column |
+| `peekChar()` / `peekCharAt()` | 前瞻当前/指定偏移的字节，不消费 |
+| `makeToken()` | 从起始位置和当前 pos 构造 FengToken |
+| `throwError()` | 构造并抛出 FengCompileError |
+
+`scanNext()` 只做分发，各 `scan*` 方法内部逻辑自包含，不再嵌套巨型分支。
+
 ### 4.2 核心流程
 
 ```
 next()
   → 如果有 peeked，返回 peeked 并清除 hasPeeked
+  → 调用 scanNext()
+  → 对于非 trivia Token，附加 pendingDoc（如有）
+
+scanNext()
   → 记录 startOffset/startLine/startColumn
   → 如果 atEnd，返回 SpecialEndOfFile Token
-  → 读取当前字符：
-    - 空白字符 → scanWhitespace()：产出 WhitespaceSpace 或 WhitespaceNewline
-    - '/' + '/' → scanLineComment()：产出 CommentLine
-    - '/' + '*' → scanBlockComment()：产出 CommentBlock 或 CommentDoc（/** 开头）
+  → 读取当前字符，分发到对应扫描方法：
+    - 空白字符 → scanWhitespace()
+    - '/' + '/' → scanLineComment()
+    - '/' + '*' → scanBlockOrDocComment()
     - 标识符首字符（字母/_）→ scanIdentifierOrKeyword()
     - 数字 → scanNumber()
-    - '@' → 产出 OperatorAt
     - '"' → scanString()
     - '`' → scanRawString()
-    - 运算符/分隔符 → 直接返回对应 Token（部分需要前瞻）
-    - 其他 → 抛出 FengCompileError (LE0007)
-  → 对于非 trivia Token，附加 pendingDoc（如有）
+    - 运算符/分隔符首字符 → scanOperatorOrPunctuation()
+    - 其他 → throwError() (LE0007)
 ```
 
 ### 4.3 Trivia 处理（空白与注释）
