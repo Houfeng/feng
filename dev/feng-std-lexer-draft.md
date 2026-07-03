@@ -336,7 +336,8 @@ open type FengTokenUtil {
  * 逐字节扫描 + 回溯前瞻，与 C 版 lexer（src/lexer/lexer.c）行为等价。
  *
  * 用法示例：
- *   var lexer = FengLexer(source, "example.ff");
+ *   let source = FengSource(content, "example.ff");
+ *   var lexer = FengLexer(source);
  *   var token = lexer.next();
  *   while token.kind != FengTokenKind.SpecialEndOfFile {
  *     // 处理 token
@@ -353,8 +354,8 @@ open type FengLexer {
   seal var peeked: FengToken;
   seal var hasPeeked: bool;
 
-  /** 从源码内容创建 Lexer */
-  open func FengLexer(content: string, path: string);
+  /** 从 FengSource 创建 Lexer */
+  open func FengLexer(source: FengSource);
 
   /** 获取下一个 Token（消费） */
   open func next(): FengToken;

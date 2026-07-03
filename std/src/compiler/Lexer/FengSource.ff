@@ -1,15 +1,17 @@
 open module std.compiler.lexer;
- 
+
 import std.text;
 
 open type FengSource {
   let path: string;
   let content: string;
+
   /** 从字符串内容创建 */
   func FengSource(content: string, path: string) {
     self.path = path;
     self.content = content;
   }
+
   /** 从字节数组创建（解码为字符串） */
   func FengSource(content: byte[], path: string) {
     self.path = path;
@@ -21,8 +23,10 @@ open type FengSource {
 open type FengSourceLocation {
   /** 偏移量 */
   let offset: int;
+
   /** 词法单元所在的行号 */
   let line: int;
+
   /** 词法单元所在的列号 */
   let column: int;
 }

@@ -9,10 +9,13 @@ import std.text;
 open type FengToken {
   /** 词法单元的类型 */
   let kind: FengTokenKind;
+
   /** 词法单元的值 */
   let value: StringSpan;
+
   /** 词法单元所在的源文件 */
   let source: FengSource;
+  
   /** 词法单元在源文件中的位置 */
   let location: FengSourceLocation;
 }
