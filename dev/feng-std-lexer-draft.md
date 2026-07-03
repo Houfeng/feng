@@ -22,7 +22,7 @@
 
 ### 与 C 版的关系
 
-Feng 版面向更好的设计，不机械对齐 C 版——Lexer 只管词法切分（含空白和注释），语义解析（数值、注解分类）交给 Parser。C 版编译器继续作为当前主力编译器使用；Feng 版首先服务于自定义注解，远期服务于自举。
+Feng 版面向更好的设计，不机械对齐 C 版——Lexer 只管词法切分（含空白和注释），语义解析（数值、注解分类）交给 Parser（详见 `feng-std-parser-draft.md`）。C 版编译器继续作为当前主力编译器使用；Feng 版首先服务于自定义注解，远期服务于自举。
 
 ---
 
@@ -33,7 +33,7 @@ Feng 版面向更好的设计，不机械对齐 C 版——Lexer 只管词法切
 | 交付范围 | Lexer + Parser 整体规划，分两阶段；本文覆盖阶段一 | Lexer 先交付解锁注解 |
 | Token 与 C 版关系 | 面向更好的设计，不机械对齐 C 版 | Lexer 只管词法切分，语义解析交给 Parser |
 | Token 类型形式 | `@value` type | 零 heap/RC 压力；~64 bytes memcpy 远快于 malloc + RC |
-| StringBuilder | 同步实现 | Lexer 字符串扫描依赖 |
+| StringBuilder | 同步实现（详见 `feng-std-string-builder-dev.md`） | Lexer 字符串扫描依赖 |
 | 序列化预留 | 先实现 Token 后再考虑 | |
 
 ### Token @value type 性能分析
@@ -61,69 +61,12 @@ std/src/compiler/
 
 ---
 
-## 3 StringBuilder
-
-**文件**：`std/src/text/StringBuilder.ff`
-**模块**：`std.text`
-
-### 职责
-
-高效的字符串构建，支持逐字节/逐段追加。Lexer 的字符串扫描和数字扫描依赖此组件。
-
-### 设计
-
-```feng
-open module std.text;
-
-/**
- * 高效的字符串构建器。
- * 底层用可变 byte[] 缓冲，支持逐字节和逐段追加，最终产出 string。
- */
-open type StringBuilder {
-  seal var buffer: byte[!];
-  seal var count: int;
-
-  /** 创建空构建器，初始容量 64 */
-  open func StringBuilder();
-
-  /** 创建指定初始容量的构建器 */
-  open func StringBuilder(capacity: int);
-
-  /** 追加单个字节 */
-  open func append(ch: byte);
-
-  /** 追加字符串 */
-  open func append(text: string);
-
-  /** 追加字节数组的前 length 个字节 */
-  open func append(bytes: byte[], length: int);
-
-  /** 产出最终字符串（拷贝 buffer 的前 count 字节） */
-  open func toString(): string;
-
-  /** 清空内容，保留缓冲区可重用 */
-  open func clear();
-
-  /** 当前已追加的字节数 */
-  open func length(): int;
-}
-```
-
-### 实现要点
-
-- 底层 `byte[!]`（可写数组）+ `count` + 自动扩容
-- 扩容策略：容量不足时倍增（`newCapacity = oldCapacity * 2`），初始容量 64
-- `toString()` 拷贝 `buffer[0..count]` 产出新 string
-- `clear()` 仅重置 `count = 0`，不释放缓冲区
-
----
-
-## 4 Token 类型定义
+## 3 Token 类型定义
 
 **文件**：`std/src/compiler/Lexer/FengToken.ff`
 **模块**：`std.compiler`
 
-### 4.1 FengTokenKind 枚举
+### 3.1 FengTokenKind 枚举
 
 按类别分段编号（每段 100），区间判断代替逐个枚举匹配。
 完整拼写命名，类别前缀区分。
@@ -261,7 +204,7 @@ open enum FengTokenKind {
 | 5xx | 分隔符 | `Punctuation` | 11 | 89 |
 | 6xx | 运算符 | `Operator` | 31 | 69 |
 
-### 4.2 SourceLocation
+### 3.2 SourceLocation
 
 ```feng
 /**
@@ -279,7 +222,7 @@ open type SourceLocation {
 }
 ```
 
-### 4.3 FengToken
+### 3.3 FengToken
 
 ```feng
 /**
@@ -307,7 +250,7 @@ open type FengToken {
 }
 ```
 
-### 4.4 辅助函数
+### 3.4 辅助函数
 
 基于区间判断，无需逐个枚举匹配：
 
@@ -336,12 +279,12 @@ open func tokenKindName(kind: FengTokenKind): string;
 
 ---
 
-## 5 Lexer 实现
+## 4 Lexer 实现
 
 **文件**：`std/src/compiler/Lexer/FengLexer.ff`
 **模块**：`std.compiler`
 
-### 5.1 设计
+### 4.1 设计
 
 ```feng
 /**
@@ -390,7 +333,7 @@ open type FengLexer {
 }
 ```
 
-### 5.2 核心流程
+### 4.2 核心流程
 
 ```
 next()
@@ -411,7 +354,7 @@ next()
   → 对于非 trivia Token，附加 pendingDoc（如有）
 ```
 
-### 5.3 Trivia 处理（空白与注释）
+### 4.3 Trivia 处理（空白与注释）
 
 Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建 AST 时过滤 trivia Token。
 
@@ -430,7 +373,7 @@ Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建
 - 如果文档注释与下一个非 trivia Token 之间隔了 ≥ 2 个换行，丢弃 pendingDoc
 - `CommentLine` 和 `CommentBlock` 会清除 pendingDoc
 
-### 5.4 各扫描方法
+### 4.4 各扫描方法
 
 #### scanIdentifierOrKeyword
 
@@ -450,7 +393,7 @@ Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建
 - 数字间允许 `_` 分隔（如 `1_000_000`），但 `_` 不得出现在首位或末位
 - 十进制支持小数点 `.` 和指数 `e`/`E`（可选正负号），产出 FLOAT Token
 - 其他进制仅支持整数
-- 解析值：整数用 `parseIntegerValue()`，浮点用 `parseFloatValue()`
+- Lexer 只扫描数字文本格式，不解析数值；数值解析由 Parser 处理
 - 无效数字字面量 → ERROR Token（LE0002）
 
 #### scanString
@@ -490,7 +433,7 @@ Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建
 | `.` | PunctuationDot, PunctuationEllipsis | 看下一个两个是否都是 `.` |
 | `@` | OperatorAt | 无前瞻，直接产出 |
 
-### 5.5 错误码
+### 4.5 错误码
 
 基于 C 版，移除 LE0005（注解识别移至 Parser）：
 
@@ -503,7 +446,7 @@ Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建
 | LE0006 | 块注释未终止 | unterminated block comment |
 | LE0007 | 无法识别的字符 | unexpected character |
 
-### 5.6 与 C 版对应关系
+### 4.6 与 C 版对应关系
 
 | C 版函数 | Feng 版对应 | 说明 |
 |----------|------------|------|
@@ -515,19 +458,16 @@ Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建
 | `scan_number` | 内部 `scanNumber()` | 数字 |
 | `scan_string` | 内部 `scanString()` | 普通字符串 |
 | `scan_raw_string` | 内部 `scanRawString()` | 原始字符串 |
-| `parse_integer_slice` | Parser 阶段处理 | 数值解析移至 Parser |
-| `parse_float_slice` | Parser 阶段处理 | 数值解析移至 Parser |
 | `feng_lookup_keyword` | 内部关键字查找 | match + 线性扫描 |
-| `feng_lookup_builtin_annotation` | Parser 阶段处理 | 注解识别移至 Parser |
 
 ---
 
-## 6 TokenStream
+## 5 TokenStream
 
 **文件**：`std/src/compiler/Lexer/TokenStream.ff`
 **模块**：`std.compiler`
 
-### 6.1 设计
+### 5.1 设计
 
 ```feng
 /**
@@ -610,7 +550,7 @@ open type TokenSpan {
 }
 ```
 
-### 6.2 findDeclarationEnd 算法细节
+### 5.2 findDeclarationEnd 算法细节
 
 骨架找 target 是 pre-Parse 阶段的核心操作，需要识别声明的 Token 范围：
 
@@ -631,11 +571,11 @@ open type TokenSpan {
 
 ---
 
-## 7 实施顺序
+## 6 实施顺序
 
 | 步骤 | 内容 | 前置 | 产出文件 |
 |------|------|------|---------|
-| 1 | StringBuilder 实现 | 无 | `std/src/text/StringBuilder.ff` |
+| 1 | StringBuilder 实现（详见 `feng-std-string-builder-dev.md`） | 无 | `std/src/text/StringBuilder.ff` |
 | 2 | Token 类型定义 | 无 | `std/src/compiler/Lexer/FengToken.ff` |
 | 3 | Lexer 实现 | 1, 2 | `std/src/compiler/Lexer/FengLexer.ff` |
 | 4 | TokenStream 实现 | 2, 3 | `std/src/compiler/Lexer/TokenStream.ff` |
@@ -643,9 +583,9 @@ open type TokenSpan {
 
 ---
 
-## 8 验证方案
+## 7 验证方案
 
-### 8.1 单元测试
+### 7.1 单元测试
 
 用 fcts 测试框架，对 C 版 lexer 测试用例（`test/lexer/test_lexer.c`）编写对应 Feng 测试：
 
@@ -657,20 +597,20 @@ open type TokenSpan {
 - Trivia 发射（空白 Token、行注释、块注释、文档注释及 leadingDoc 附加规则）
 - 错误处理（全部 6 个错误码场景）
 
-### 8.2 对比验证
+### 7.2 对比验证
 
 同一源码输入，比较 C 版和 Feng 版产出的 Token 序列：
 - FengTokenKind 一致
 - lexeme 一致
 - 位置信息（offset, line, column）一致
 
-### 8.3 注解模拟
+### 7.3 注解模拟
 
 模拟 `@platform` 条件编译场景，验证 TokenStream 的 `slice`/`replace`/`findDeclarationEnd` 正确性。
 
 ---
 
-## 9 与自定义注解的集成
+## 8 与自定义注解的集成
 
 ### pre-Parse 阶段流程（引自 draft-2）
 
@@ -687,7 +627,7 @@ open type TokenSpan {
 
 ---
 
-## 10 开放问题
+## 9 开放问题
 
 1. **关键字查找优化时机**：当前方案用 match + 线性扫描，何时优化为哈希表？建议阶段一先用简单方案，性能测试后再决定
 2. **Token 的 lexeme 字段**：当前方案用 `string` 引用源码子串。Feng 的 `string` 是否支持零拷贝切片（子串引用）？如果不支持，需要改用 `byte[]` + offset + length

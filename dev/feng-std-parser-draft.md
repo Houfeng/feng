@@ -27,7 +27,44 @@
 
 ---
 
-## 1 模块结构
+## 1 Parser 从 Lexer 承接的职责
+
+以下能力原在 C 版 Lexer 中实现，Feng 版按职责划分移至 Parser：
+
+### 1.1 数值解析
+
+Lexer 只扫描数字文本并产出 `LiteralInteger`/`LiteralFloat`/`LiteralBool` Token，不解析语义值。Parser 在构建 AST 时将 lexeme 解析为具体数值：
+
+| C 版函数 | 功能 | Parser 对应 |
+|----------|------|------------|
+| `parse_integer_slice` | 解析整数文本为 `i64`（含十六进制/二进制/八进制/`_` 分隔） | 内部工具函数 |
+| `parse_float_slice` | 解析浮点文本为 `f64`（含指数/`_` 分隔） | 内部工具函数 |
+
+### 1.2 注解识别
+
+Lexer 产出独立的 `OperatorAt` 和 `LiteralIdentifier` Token。Parser 在解析注解序列时组合二者，并查表分类内建/自定义注解：
+
+| C 版函数 | 功能 | Parser 对应 |
+|----------|------|------------|
+| `feng_lookup_builtin_annotation` | 查表判断注解是内建还是自定义 | `parseAnnotations()` 内部 |
+| `scan_annotation` | Lexer 整体扫描 `@name` | Parser 组合 `OperatorAt` + `LiteralIdentifier` |
+
+**内建注解表（8 个）**：
+`abi`, `cdecl`, `stdcall`, `fastcall`, `runtime`, `iterable`, `iterator`, `value`
+
+### 1.3 LE0005 错误
+
+C 版 LE0005（`expected annotation name after '@'`）原由 Lexer 在扫描 `@` 时检查。Feng 版由 Parser 在组合注解时检查。
+
+### 1.4 Trivia 过滤
+
+Lexer 将空白和注释作为独立 Token 发射（`WhitespaceSpace`、`WhitespaceNewline`、`CommentLine`、`CommentBlock`、`CommentDoc`）。Parser 在构建 AST 时跳过 trivia Token。
+
+文档注释关联由 Lexer 处理（`CommentDoc` Token 的 `leadingDoc` 字段），Parser 可直接使用。
+
+---
+
+## 2 模块结构
 
 ```
 std/src/compiler/
@@ -39,12 +76,12 @@ std/src/compiler/
 
 ---
 
-## 2 AST 节点类型
+## 3 AST 节点类型
 
 **文件**：`std/src/compiler/Parser/AstNode.ff`
 **模块**：`std.compiler`
 
-### 2.1 整体设计思路
+### 3.1 整体设计思路
 
 C 版 AST 用 `struct + enum + union` 模式（如 `FengExpr` 有 `FengExprKind` + 大 union）。Feng 版有两个设计选项：
 
@@ -85,7 +122,7 @@ spec ExprValue: IdentifierExprData | IntLiteralData | BinaryExprData | ...;
 - 自举时直接面向 Feng 类型系统，不需要再做转换
 - 虽然类型数量多，但每种类型的定义都很清晰
 
-### 2.2 基础类型
+### 3.2 基础类型
 
 ```feng
 open module std.compiler;
@@ -111,7 +148,7 @@ open type Slice {
 }
 ```
 
-### 2.3 TypeRef（类型引用）
+### 3.3 TypeRef（类型引用）
 
 ```feng
 /** 类型引用种类 */
@@ -143,7 +180,7 @@ open type TypeRef {
 }
 ```
 
-### 2.4 Expr（表达式）
+### 3.4 Expr（表达式）
 
 ```feng
 /** 表达式种类 */
@@ -282,7 +319,7 @@ open type Expr {
 - 与 C 版 union 结构直接对应，验证等价性更直接
 - 未使用字段保持默认值（null/0/false），空间上有些浪费但可接受
 
-### 2.5 辅助 AST 类型
+### 3.5 辅助 AST 类型
 
 ```feng
 /** 参数定义 */
@@ -351,7 +388,7 @@ open type TryCatchClause {
 }
 ```
 
-### 2.6 Stmt（语句）
+### 3.6 Stmt（语句）
 
 ```feng
 /** 语句种类 */
@@ -445,7 +482,7 @@ open type IfClause {
 }
 ```
 
-### 2.7 TypeMember（类型成员）
+### 3.7 TypeMember（类型成员）
 
 ```feng
 /** 类型成员种类 */
@@ -486,7 +523,7 @@ open type TypeMember {
 }
 ```
 
-### 2.8 Decl（声明）
+### 3.8 Decl（声明）
 
 ```feng
 /** 声明种类 */
@@ -570,7 +607,7 @@ open type Decl {
 }
 ```
 
-### 2.9 Program（程序）
+### 3.9 Program（程序）
 
 ```feng
 /** 解析后的完整程序 */
@@ -586,12 +623,12 @@ open type Program {
 
 ---
 
-## 3 Parser 实现
+## 4 Parser 实现
 
 **文件**：`std/src/compiler/Parser/FengParser.ff`
 **模块**：`std.compiler`
 
-### 3.1 设计
+### 4.1 设计
 
 ```feng
 /**
@@ -634,7 +671,7 @@ open type ParseError {
 }
 ```
 
-### 3.2 递归下降结构
+### 4.2 递归下降结构
 
 Parser 的核心是递归下降，按优先级从低到高组织表达式解析：
 
@@ -670,7 +707,7 @@ parseExpression()                     // 表达式入口
                               → parsePrimary() // 字面量, 标识符, self, 分组, if, match, try, lambda, array new
 ```
 
-### 3.3 关键解析策略
+### 4.3 关键解析策略
 
 #### 表达式优先级
 
@@ -711,14 +748,14 @@ Lambda 语法：`(params) => expr` 或 `(params) => { block }`
 - 前者是 match 表达式（match_expr）
 - 后者是 match 运算符（match_op）
 
-### 3.4 错误恢复
+### 4.4 错误恢复
 
 - 解析错误产出 `ParseError` 并记录到错误列表
 - 错误码体系与 C 版一致（`SE*` 前缀）
 - 错误后尝试跳过到下一个同步点（`;`、`}`、声明关键字）继续解析
 - 最终返回部分 AST + 错误列表
 
-### 3.5 与 C 版对应关系
+### 4.5 与 C 版对应关系
 
 | C 版函数 | Feng 版对应 | 说明 |
 |----------|------------|------|
@@ -734,12 +771,12 @@ Lambda 语法：`(params) => expr` 或 `(params) => { block }`
 
 ---
 
-## 4 AstDumper
+## 5 AstDumper
 
 **文件**：`std/src/compiler/Parser/AstDumper.ff`
 **模块**：`std.compiler`
 
-### 4.1 设计
+### 5.1 设计
 
 ```feng
 /**
@@ -757,7 +794,7 @@ open type AstDumper {
 }
 ```
 
-### 4.2 输出格式
+### 5.2 输出格式
 
 与 C 版 `dump.c` 对齐，使用缩进表示层级：
 
@@ -775,7 +812,7 @@ Program: example.ff
 
 ---
 
-## 5 实施顺序
+## 6 实施顺序
 
 | 步骤 | 内容 | 前置 | 产出文件 |
 |------|------|------|---------|
@@ -789,29 +826,31 @@ Program: example.ff
 
 ---
 
-## 6 验证方案
+## 7 验证方案
 
-### 6.1 AST dump 对比
+### 7.1 AST dump 对比
 
 - 对 C 版 parser 测试用例（`test/parser/test_parser.c`）中的每个测试输入
 - 分别用 C 版 parser + dump.c 和 Feng 版 parser + AstDumper 产出 AST dump
 - diff 比较两者输出是否一致
 
-### 6.2 错误码对比
+### 7.2 错误码对比
 
 - 同样的语法错误输入，比较 C 版和 Feng 版产出的 ParseError（错误码 + 错误信息 + 位置）
 
-### 6.3 完整源文件解析
+### 7.3 完整源文件解析
 
 - 用 std 库中的 `.ff` 文件作为输入（如 `std/src/text/String.ff`）
 - 比较 C 版和 Feng 版的解析结果
 
 ---
 
-## 7 开放问题
+## 8 开放问题
 
 1. **Expr 的扁平 type vs spec + 子 type**：当前方案用扁平 type，但如果后续需要更好的类型安全性，可能需要重构为 spec + 子 type。这个决策可以在实现过程中根据实际体验调整
 2. **Parser 的错误恢复策略**：C 版 parser 的错误恢复策略比较复杂，Feng 版是否需要完全复制？还是可以先实现简单版本（遇错即停），后续再增强？
 3. **泛型参数歧义的回溯机制**：`<` 的歧义解析需要回溯能力（保存/恢复解析器状态）。Feng 的 Token 前瞻机制是否足够支持？
 4. **Parser 是否需要支持增量解析**：远期如果用于 IDE/LSP 场景，可能需要增量解析能力。当前方案不支持增量解析
 5. **AST 节点是否用 @value type**：Expr 用普通 type（引用语义），因为 AST 节点形成树形结构，引用更自然；但大量小节点（如 Identifier、IntLiteral）是否有 GC 压力？
+6. **Token/FengToken 类型名对齐**：AST 节点中引用的 `Token` 和 `TokenKind` 类型需更新为 Lexer 草案中的 `FengToken` 和 `FengTokenKind`（含新的区间分段命名：`KeywordType`、`OperatorPlus` 等）
+7. **AnnotationKind 定义位置**：Lexer 草案已移除 `AnnotationKind`（注解分类是 Parser 职责）。Parser AST 的 `Annotation` 节点引用了 `AnnotationKind`，需在此草案中定义
