@@ -31557,6 +31557,12 @@ static bool cg_emit_all_programs(CG *cg,
         }
         buf_append_cstr(&cg->headers, "};\n");
     }
+    /* Pass 3.4: emit enum typedefs + descriptors before user type
+     * definitions so that @value type equal functions referencing enum
+     * descriptors find them already declared. */
+    for (size_t p = 0; p < program_count; p++) {
+        if (!cg_pass_emit_enum_decls(cg, programs[p])) return false;
+    }
     for (size_t i = 0; i < cg->user_type_count; i++) {
         bool imported_owner = cg_program_origin(cg, cg->user_types[i].owner_program) ==
                               FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
@@ -31663,9 +31669,6 @@ static bool cg_emit_all_programs(CG *cg,
         cg_emit_user_spec_definition(cg, &cg->user_specs[i]);
         cg->cur_program = NULL;
         if (cg->failed) return false;
-    }
-    for (size_t p = 0; p < program_count; p++) {
-        if (!cg_pass_emit_enum_decls(cg, programs[p])) return false;
     }
     for (size_t p = 0; p < program_count; p++) {
         if (!cg_pass_emit_imported_function_decls(cg, programs[p])) return false;
