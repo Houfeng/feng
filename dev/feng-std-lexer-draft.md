@@ -72,6 +72,8 @@ std/src/text/
 └── StringBuilder.ff         # 字符串构建器（Lexer 前置依赖）
 
 std/src/compiler/
+├── Common/
+│   └── FengCompileError.ff  # 编译错误（Lexer/Parser 共用）
 └── Lexer/
     ├── FengTokenKind.ff      # Token 种类枚举
     ├── FengSource.ff         # 源文件信息
@@ -80,6 +82,41 @@ std/src/compiler/
     ├── FengTokenUtil.ff     # Token 分类工具（静态方法）
     ├── FengLexer.ff         # Lexer 实现
     └── TokenStream.ff       # Token 流封装（服务注解变换）
+```
+
+---
+
+## 2b Common 类型
+
+**目录**：`std/src/compiler/Common/`
+**模块**：`std.compiler.common`
+
+### FengCompileError
+
+Lexer 和 Parser 共用的编译错误类型，词法错误码前缀 `LE`，语法错误码前缀 `PE`。
+词法/语法错误不混入 Token 流，遇到错误直接抛出 `FengCompileError`，由调用方捕获处理。
+
+```feng
+open module std.compiler.common;
+
+/**
+ * 编译错误。
+ *
+ * Lexer 和 Parser 共用，通过 code 前缀区分来源：
+ * - LE00xx：词法错误
+ * - PE00xx：语法错误（将来）
+ *
+ * @value type：栈分配，错误数量有限，无堆压力。
+ */
+@value
+open type FengCompileError {
+  /** 错误码（如 "LE0001"） */
+  let code: string;
+  /** 错误描述 */
+  let message: string;
+  /** 错误位置 */
+  let location: FengLocation;
+}
 ```
 
 ---
@@ -112,7 +149,6 @@ open enum FengTokenKind {
   // ---- 特殊/空白/注释 (0xx) ----
   // 特殊 (0-19)
   SpecialEndOfFile = 0,
-  SpecialError = 1,
   // 空白 (20-39)
   WhitespaceSpace = 20,
   WhitespaceNewline = 21,
@@ -224,7 +260,7 @@ open enum FengTokenKind {
 
 | 区间 | 类别 | 前缀 | 已用 | 预留 |
 |------|------|------|------|------|
-| 0xx | 特殊/空白/注释 | `Special`/`Whitespace`/`Comment` | 7 | 93 |
+| 0xx | 特殊/空白/注释 | `Special`/`Whitespace`/`Comment` | 6 | 94 |
 | 2xx | 标识符 | `Identifier` | 1 | 99 |
 | 3xx | 字面量 | `Literal` | 5 | 95 |
 | 4xx | 关键字 | `Keyword` | 30 | 70 |
@@ -365,7 +401,7 @@ open type FengTokenUtil {
  *   }
  */
 open type FengLexer {
-  let source: FengSource;
+  seal let source: FengSource;
   seal var pos: int;
   seal var line: int;
   seal var column: int;
@@ -377,13 +413,23 @@ open type FengLexer {
   /** 从 FengSource 创建 Lexer */
   open func FengLexer(source: FengSource);
 
-  /** 获取下一个 Token（消费） */
+  /**
+   * 获取下一个 Token（消费）。
+   * @throws FengCompileError 遇到词法错误时抛出
+   */
   open func next(): FengToken;
 
-  /** 前瞻下一个 Token（不消费） */
+  /**
+   * 前瞻下一个 Token（不消费）。
+   * @throws FengCompileError 遇到词法错误时抛出
+   */
   open func peek(): FengToken;
 
-  /** 一次性产出全部 Token（含 EOF） */
+  /**
+   * 一次性产出全部 Token（含 EOF）。
+   * 内部循环调用 scanNext()，遇错即抛。
+   * @throws FengCompileError 遇到词法错误时抛出
+   */
   open func tokenize(): FengToken[];
 }
 ```
@@ -405,7 +451,7 @@ next()
     - '"' → scanString()
     - '`' → scanRawString()
     - 运算符/分隔符 → 直接返回对应 Token（部分需要前瞻）
-    - 其他 → SpecialError Token (LE0007)
+    - 其他 → 抛出 FengCompileError (LE0007)
   → 对于非 trivia Token，附加 pendingDoc（如有）
 ```
 
@@ -420,7 +466,7 @@ Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建
 
 **注释扫描**：
 - **行注释**：`//` 到行尾 → `CommentLine`
-- **块注释**：`/* ... */` → `CommentBlock`（未终止报错 LE0006）
+- **块注释**：`/* ... */` → `CommentBlock`（未终止抛出 FengCompileError LE0006）
 - **文档注释**：`/** ... */` → `CommentDoc`（同时记录到 pendingDoc，附加到下一个非 trivia Token）
 
 **文档注释附加规则**：
@@ -440,7 +486,7 @@ Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建
 **关键字表（30 个）**：
 `type`, `enum`, `spec`, `fit`, `extern`, `func`, `let`, `var`, `static`, `open`, `seal`, `self`, `module`, `import`, `as`, `if`, `else`, `match`, `while`, `for`, `in`, `break`, `continue`, `try`, `catch`, `unknown`, `throw`, `return`, `defer`, `void`
 
-**保留字检查**：如果标识符匹配保留字（`class`, `struct`, `const`, `export`, `prop`），产出 ERROR Token（LE0001）。
+**保留字检查**：如果标识符匹配保留字（`class`, `struct`, `const`, `export`, `prop`），抛出 FengCompileError（LE0001）。
 
 #### scanNumber
 
@@ -449,23 +495,22 @@ Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建
 - 十进制支持小数点 `.` 和指数 `e`/`E`（可选正负号），产出 FLOAT Token
 - 其他进制仅支持整数
 - Lexer 只扫描数字文本格式，不解析数值；数值解析由 Parser 处理
-- 无效数字字面量 → ERROR Token（LE0002）
+- 无效数字字面量 → 抛出 FengCompileError（LE0002）
 
 #### scanString
 
 - 双引号 `"` 开始，到下一个未转义的 `"` 结束
-- 支持转义序列：`\n \t \r \\ \" \0 \xHH \u{HHHH}`
+- 支持转义序列：`\n \t \r \\ \" \0 \xHH`
   - `\x` 后必须跟 2 个十六进制数字（否则 LE0004）
-  - `\u{...}` 支持 1-6 个十六进制数字（否则 LE0004）
   - 其他 `\?` → LE0004（invalid string escape）
-- 未终止 → ERROR Token（LE0003）
+- 未终止 → 抛出 FengCompileError（LE0003）
 
 #### scanRawString
 
 - 反引号 `` ` `` 开始，到下一个单个 `` ` `` 结束
 - ` `` `（两个反引号）转义为单个 `` ` ``
 - 不处理转义序列，所有字符原样保留
-- 未终止 → ERROR Token（LE0003）
+- 未终止 → 抛出 FengCompileError（LE0003）
 
 #### 运算符与分隔符
 
@@ -631,10 +676,11 @@ open type TokenSpan {
 | 步骤 | 内容 | 前置 | 产出文件 |
 |------|------|------|---------|
 | 1 | StringBuilder 实现（详见 `feng-std-string-builder-dev.md`） | 无 | `std/src/text/StringBuilder.ff` |
-| 2 | Token 类型定义 | 无 | `std/src/compiler/Lexer/FengToken.ff` |
-| 3 | Lexer 实现 | 1, 2 | `std/src/compiler/Lexer/FengLexer.ff` |
-| 4 | TokenStream 实现 | 2, 3 | `std/src/compiler/Lexer/TokenStream.ff` |
-| 5 | Lexer 测试 | 1-4 | fcts 测试 |
+| 2 | FengCompileError 类型定义 | 无 | `std/src/compiler/Common/FengCompileError.ff` |
+| 3 | Token 类型定义 | 2 | `std/src/compiler/Lexer/FengToken.ff` |
+| 4 | Lexer 实现 | 1, 2, 3 | `std/src/compiler/Lexer/FengLexer.ff` |
+| 5 | TokenStream 实现 | 3, 4 | `std/src/compiler/Lexer/TokenStream.ff` |
+| 6 | Lexer 测试 | 1-5 | fcts 测试 |
 
 ---
 
