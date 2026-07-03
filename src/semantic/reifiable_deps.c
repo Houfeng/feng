@@ -283,7 +283,8 @@ static bool determine_dep_kind(const FengDecl *decl,
     }
     switch (decl->kind) {
         case FENG_DECL_TYPE:
-            if (decl->as.type_decl.is_tuple) {
+            if (decl->as.type_decl.is_tuple ||
+                decl->as.type_decl.is_value) {
                 *out_kind = FENG_REIFIABLE_DEP_KIND_AGGREGATE;
             } else {
                 *out_kind = FENG_REIFIABLE_DEP_KIND_MANAGED;

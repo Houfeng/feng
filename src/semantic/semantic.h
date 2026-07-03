@@ -272,7 +272,7 @@ typedef struct FengUnionCoercionSite {
     const FengTypeRef *member_type_ref;
 } FengUnionCoercionSite;
 
-/* 具体化依赖的分类：aggregate（tuple/struct by-value）或 managed（type 托管对象）。 */
+/* 具体化依赖的分类：aggregate（tuple/@value by-value）或 managed（type 托管对象）。 */
 typedef enum FengReifiableDepKind {
     FENG_REIFIABLE_DEP_KIND_AGGREGATE = 0,
     FENG_REIFIABLE_DEP_KIND_MANAGED

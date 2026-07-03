@@ -145,6 +145,7 @@ open type List<T> {
  * An iterator cursor over a List<T>.
  * @param <T> - the element type
  */
+@value
 open type ListIterator<T> {
   seal let items: T[!];
   seal let size: int;
