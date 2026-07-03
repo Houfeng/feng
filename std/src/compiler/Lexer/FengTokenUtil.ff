@@ -18,148 +18,148 @@ open type FengTokenUtil {
   /** 判断是否为标识符（2xx 区间） */
   open static func isIdentifier(kind: FengTokenKind): bool {
     let v = (int)kind;
-    return v >= (int)200 && v < (int)300;
+    return v >= 200 && v < 300;
   }
 
   /** 判断是否为字面量（3xx 区间） */
   open static func isLiteral(kind: FengTokenKind): bool {
     let v = (int)kind;
-    return v >= (int)300 && v < (int)400;
+    return v >= 300 && v < 400;
   }
 
   /** 判断是否为关键字（4xx 区间） */
   open static func isKeyword(kind: FengTokenKind): bool {
     let v = (int)kind;
-    return v >= (int)400 && v < (int)500;
+    return v >= 400 && v < 500;
   }
 
   /** 判断是否为分隔符（5xx 区间） */
   open static func isPunctuation(kind: FengTokenKind): bool {
     let v = (int)kind;
-    return v >= (int)500 && v < (int)600;
+    return v >= 500 && v < 600;
   }
 
   /** 判断是否为运算符（6xx 区间） */
   open static func isOperator(kind: FengTokenKind): bool {
     let v = (int)kind;
-    return v >= (int)600 && v < (int)700;
+    return v >= 600 && v < 700;
   }
 
   /** 判断是否为空白（0xx 子区间：20-39） */
   open static func isWhitespace(kind: FengTokenKind): bool {
     let v = (int)kind;
-    return v >= (int)20 && v < (int)40;
+    return v >= 20 && v < 40;
   }
 
   /** 判断是否为注释（0xx 子区间：40-59） */
   open static func isComment(kind: FengTokenKind): bool {
     let v = (int)kind;
-    return v >= (int)40 && v < (int)60;
+    return v >= 40 && v < 60;
   }
 
   /** 获取 FengTokenKind 的名称字符串（如 "KeywordType"、"OperatorPlus"） */
   open static func kindName(kind: FengTokenKind): string {
     return match kind {
       // 特殊/空白/注释
-      FengTokenKind.SpecialEndOfFile { "SpecialEndOfFile"; }
-      FengTokenKind.SpecialError { "SpecialError"; }
-      FengTokenKind.WhitespaceSpace { "WhitespaceSpace"; }
-      FengTokenKind.WhitespaceNewline { "WhitespaceNewline"; }
-      FengTokenKind.CommentLine { "CommentLine"; }
-      FengTokenKind.CommentBlock { "CommentBlock"; }
-      FengTokenKind.CommentDoc { "CommentDoc"; }
+      FengTokenKind.SpecialEndOfFile { "SpecialEndOfFile" }
+      FengTokenKind.SpecialError { "SpecialError" }
+      FengTokenKind.WhitespaceSpace { "WhitespaceSpace" }
+      FengTokenKind.WhitespaceNewline { "WhitespaceNewline" }
+      FengTokenKind.CommentLine { "CommentLine" }
+      FengTokenKind.CommentBlock { "CommentBlock" }
+      FengTokenKind.CommentDoc { "CommentDoc" }
       // 标识符
-      FengTokenKind.Identifier { "Identifier"; }
+      FengTokenKind.Identifier { "Identifier" }
       // 字面量
-      FengTokenKind.LiteralInteger { "LiteralInteger"; }
-      FengTokenKind.LiteralFloat { "LiteralFloat"; }
-      FengTokenKind.LiteralString { "LiteralString"; }
-      FengTokenKind.LiteralRawString { "LiteralRawString"; }
-      FengTokenKind.LiteralBool { "LiteralBool"; }
+      FengTokenKind.LiteralInteger { "LiteralInteger" }
+      FengTokenKind.LiteralFloat { "LiteralFloat" }
+      FengTokenKind.LiteralString { "LiteralString" }
+      FengTokenKind.LiteralRawString { "LiteralRawString" }
+      FengTokenKind.LiteralBool { "LiteralBool" }
       // 关键字
-      FengTokenKind.KeywordType { "KeywordType"; }
-      FengTokenKind.KeywordEnum { "KeywordEnum"; }
-      FengTokenKind.KeywordSpec { "KeywordSpec"; }
-      FengTokenKind.KeywordFit { "KeywordFit"; }
-      FengTokenKind.KeywordExtern { "KeywordExtern"; }
-      FengTokenKind.KeywordFunc { "KeywordFunc"; }
-      FengTokenKind.KeywordLet { "KeywordLet"; }
-      FengTokenKind.KeywordVar { "KeywordVar"; }
-      FengTokenKind.KeywordStatic { "KeywordStatic"; }
-      FengTokenKind.KeywordOpen { "KeywordOpen"; }
-      FengTokenKind.KeywordSeal { "KeywordSeal"; }
-      FengTokenKind.KeywordSelf { "KeywordSelf"; }
-      FengTokenKind.KeywordModule { "KeywordModule"; }
-      FengTokenKind.KeywordImport { "KeywordImport"; }
-      FengTokenKind.KeywordAs { "KeywordAs"; }
-      FengTokenKind.KeywordIf { "KeywordIf"; }
-      FengTokenKind.KeywordElse { "KeywordElse"; }
-      FengTokenKind.KeywordMatch { "KeywordMatch"; }
-      FengTokenKind.KeywordWhile { "KeywordWhile"; }
-      FengTokenKind.KeywordFor { "KeywordFor"; }
-      FengTokenKind.KeywordIn { "KeywordIn"; }
-      FengTokenKind.KeywordBreak { "KeywordBreak"; }
-      FengTokenKind.KeywordContinue { "KeywordContinue"; }
-      FengTokenKind.KeywordTry { "KeywordTry"; }
-      FengTokenKind.KeywordCatch { "KeywordCatch"; }
-      FengTokenKind.KeywordUnknown { "KeywordUnknown"; }
-      FengTokenKind.KeywordThrow { "KeywordThrow"; }
-      FengTokenKind.KeywordReturn { "KeywordReturn"; }
-      FengTokenKind.KeywordDefer { "KeywordDefer"; }
-      FengTokenKind.KeywordVoid { "KeywordVoid"; }
+      FengTokenKind.KeywordType { "KeywordType" }
+      FengTokenKind.KeywordEnum { "KeywordEnum" }
+      FengTokenKind.KeywordSpec { "KeywordSpec" }
+      FengTokenKind.KeywordFit { "KeywordFit" }
+      FengTokenKind.KeywordExtern { "KeywordExtern" }
+      FengTokenKind.KeywordFunc { "KeywordFunc" }
+      FengTokenKind.KeywordLet { "KeywordLet" }
+      FengTokenKind.KeywordVar { "KeywordVar" }
+      FengTokenKind.KeywordStatic { "KeywordStatic" }
+      FengTokenKind.KeywordOpen { "KeywordOpen" }
+      FengTokenKind.KeywordSeal { "KeywordSeal" }
+      FengTokenKind.KeywordSelf { "KeywordSelf" }
+      FengTokenKind.KeywordModule { "KeywordModule" }
+      FengTokenKind.KeywordImport { "KeywordImport" }
+      FengTokenKind.KeywordAs { "KeywordAs" }
+      FengTokenKind.KeywordIf { "KeywordIf" }
+      FengTokenKind.KeywordElse { "KeywordElse" }
+      FengTokenKind.KeywordMatch { "KeywordMatch" }
+      FengTokenKind.KeywordWhile { "KeywordWhile" }
+      FengTokenKind.KeywordFor { "KeywordFor" }
+      FengTokenKind.KeywordIn { "KeywordIn" }
+      FengTokenKind.KeywordBreak { "KeywordBreak" }
+      FengTokenKind.KeywordContinue { "KeywordContinue" }
+      FengTokenKind.KeywordTry { "KeywordTry" }
+      FengTokenKind.KeywordCatch { "KeywordCatch" }
+      FengTokenKind.KeywordUnknown { "KeywordUnknown" }
+      FengTokenKind.KeywordThrow { "KeywordThrow" }
+      FengTokenKind.KeywordReturn { "KeywordReturn" }
+      FengTokenKind.KeywordDefer { "KeywordDefer" }
+      FengTokenKind.KeywordVoid { "KeywordVoid" }
       // 分隔符
-      FengTokenKind.PunctuationLeftParen { "PunctuationLeftParen"; }
-      FengTokenKind.PunctuationRightParen { "PunctuationRightParen"; }
-      FengTokenKind.PunctuationLeftBrace { "PunctuationLeftBrace"; }
-      FengTokenKind.PunctuationRightBrace { "PunctuationRightBrace"; }
-      FengTokenKind.PunctuationLeftBracket { "PunctuationLeftBracket"; }
-      FengTokenKind.PunctuationRightBracket { "PunctuationRightBracket"; }
-      FengTokenKind.PunctuationComma { "PunctuationComma"; }
-      FengTokenKind.PunctuationColon { "PunctuationColon"; }
-      FengTokenKind.PunctuationSemicolon { "PunctuationSemicolon"; }
-      FengTokenKind.PunctuationDot { "PunctuationDot"; }
-      FengTokenKind.PunctuationEllipsis { "PunctuationEllipsis"; }
+      FengTokenKind.PunctuationLeftParen { "PunctuationLeftParen" }
+      FengTokenKind.PunctuationRightParen { "PunctuationRightParen" }
+      FengTokenKind.PunctuationLeftBrace { "PunctuationLeftBrace" }
+      FengTokenKind.PunctuationRightBrace { "PunctuationRightBrace" }
+      FengTokenKind.PunctuationLeftBracket { "PunctuationLeftBracket" }
+      FengTokenKind.PunctuationRightBracket { "PunctuationRightBracket" }
+      FengTokenKind.PunctuationComma { "PunctuationComma" }
+      FengTokenKind.PunctuationColon { "PunctuationColon" }
+      FengTokenKind.PunctuationSemicolon { "PunctuationSemicolon" }
+      FengTokenKind.PunctuationDot { "PunctuationDot" }
+      FengTokenKind.PunctuationEllipsis { "PunctuationEllipsis" }
       // 运算符 - 算术
-      FengTokenKind.OperatorPlus { "OperatorPlus"; }
-      FengTokenKind.OperatorMinus { "OperatorMinus"; }
-      FengTokenKind.OperatorStar { "OperatorStar"; }
-      FengTokenKind.OperatorSlash { "OperatorSlash"; }
-      FengTokenKind.OperatorPercent { "OperatorPercent"; }
+      FengTokenKind.OperatorPlus { "OperatorPlus" }
+      FengTokenKind.OperatorMinus { "OperatorMinus" }
+      FengTokenKind.OperatorStar { "OperatorStar" }
+      FengTokenKind.OperatorSlash { "OperatorSlash" }
+      FengTokenKind.OperatorPercent { "OperatorPercent" }
       // 运算符 - 赋值
-      FengTokenKind.OperatorAssign { "OperatorAssign"; }
-      FengTokenKind.OperatorPlusAssign { "OperatorPlusAssign"; }
-      FengTokenKind.OperatorMinusAssign { "OperatorMinusAssign"; }
-      FengTokenKind.OperatorStarAssign { "OperatorStarAssign"; }
-      FengTokenKind.OperatorSlashAssign { "OperatorSlashAssign"; }
-      FengTokenKind.OperatorPercentAssign { "OperatorPercentAssign"; }
+      FengTokenKind.OperatorAssign { "OperatorAssign" }
+      FengTokenKind.OperatorPlusAssign { "OperatorPlusAssign" }
+      FengTokenKind.OperatorMinusAssign { "OperatorMinusAssign" }
+      FengTokenKind.OperatorStarAssign { "OperatorStarAssign" }
+      FengTokenKind.OperatorSlashAssign { "OperatorSlashAssign" }
+      FengTokenKind.OperatorPercentAssign { "OperatorPercentAssign" }
       // 运算符 - 比较
-      FengTokenKind.OperatorLess { "OperatorLess"; }
-      FengTokenKind.OperatorLessEqual { "OperatorLessEqual"; }
-      FengTokenKind.OperatorGreater { "OperatorGreater"; }
-      FengTokenKind.OperatorGreaterEqual { "OperatorGreaterEqual"; }
-      FengTokenKind.OperatorEqual { "OperatorEqual"; }
-      FengTokenKind.OperatorNotEqual { "OperatorNotEqual"; }
+      FengTokenKind.OperatorLess { "OperatorLess" }
+      FengTokenKind.OperatorLessEqual { "OperatorLessEqual" }
+      FengTokenKind.OperatorGreater { "OperatorGreater" }
+      FengTokenKind.OperatorGreaterEqual { "OperatorGreaterEqual" }
+      FengTokenKind.OperatorEqual { "OperatorEqual" }
+      FengTokenKind.OperatorNotEqual { "OperatorNotEqual" }
       // 运算符 - 逻辑
-      FengTokenKind.OperatorNot { "OperatorNot"; }
-      FengTokenKind.OperatorLogicalAnd { "OperatorLogicalAnd"; }
-      FengTokenKind.OperatorLogicalOr { "OperatorLogicalOr"; }
+      FengTokenKind.OperatorNot { "OperatorNot" }
+      FengTokenKind.OperatorLogicalAnd { "OperatorLogicalAnd" }
+      FengTokenKind.OperatorLogicalOr { "OperatorLogicalOr" }
       // 运算符 - 位运算
-      FengTokenKind.OperatorBitwiseAnd { "OperatorBitwiseAnd"; }
-      FengTokenKind.OperatorBitwiseOr { "OperatorBitwiseOr"; }
-      FengTokenKind.OperatorBitwiseXor { "OperatorBitwiseXor"; }
-      FengTokenKind.OperatorBitwiseNot { "OperatorBitwiseNot"; }
-      FengTokenKind.OperatorShiftLeft { "OperatorShiftLeft"; }
-      FengTokenKind.OperatorShiftRight { "OperatorShiftRight"; }
+      FengTokenKind.OperatorBitwiseAnd { "OperatorBitwiseAnd" }
+      FengTokenKind.OperatorBitwiseOr { "OperatorBitwiseOr" }
+      FengTokenKind.OperatorBitwiseXor { "OperatorBitwiseXor" }
+      FengTokenKind.OperatorBitwiseNot { "OperatorBitwiseNot" }
+      FengTokenKind.OperatorShiftLeft { "OperatorShiftLeft" }
+      FengTokenKind.OperatorShiftRight { "OperatorShiftRight" }
       // 运算符 - 位运算赋值
-      FengTokenKind.OperatorBitwiseAndAssign { "OperatorBitwiseAndAssign"; }
-      FengTokenKind.OperatorBitwiseOrAssign { "OperatorBitwiseOrAssign"; }
-      FengTokenKind.OperatorBitwiseXorAssign { "OperatorBitwiseXorAssign"; }
-      FengTokenKind.OperatorShiftLeftAssign { "OperatorShiftLeftAssign"; }
-      FengTokenKind.OperatorShiftRightAssign { "OperatorShiftRightAssign"; }
+      FengTokenKind.OperatorBitwiseAndAssign { "OperatorBitwiseAndAssign" }
+      FengTokenKind.OperatorBitwiseOrAssign { "OperatorBitwiseOrAssign" }
+      FengTokenKind.OperatorBitwiseXorAssign { "OperatorBitwiseXorAssign" }
+      FengTokenKind.OperatorShiftLeftAssign { "OperatorShiftLeftAssign" }
+      FengTokenKind.OperatorShiftRightAssign { "OperatorShiftRightAssign" }
       // 运算符 - 其他
-      FengTokenKind.OperatorArrow { "OperatorArrow"; }
-      FengTokenKind.OperatorAt { "OperatorAt"; }
-      else { "Unknown"; }
+      FengTokenKind.OperatorArrow { "OperatorArrow" }
+      FengTokenKind.OperatorAt { "OperatorAt" }
+      else { "Unknown" }
     };
   }
 }
