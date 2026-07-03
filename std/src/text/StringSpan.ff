@@ -27,6 +27,7 @@ open fit string {
 /**
  * A StringSpan is a read-only view over a contiguous byte sub range of a string.
  */
+@value
 open type StringSpan {
 	seal let origin: string;
 	seal let start: int;

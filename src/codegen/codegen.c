@@ -31394,6 +31394,166 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
     return true;
 }
 
+/* Emit one value-type struct body into cg->headers.  Shared by the
+ * topologically-sorted Pass 3.5a emitter so the field layout logic is
+ * written once. */
+static void cg_emit_value_type_struct_body(CG *cg, const UserType *t) {
+    const UserType *open_inst = t->is_generic_instance
+        ? cg_find_open_generic_instance(cg, t) : NULL;
+    buf_append_fmt(&cg->headers, "struct %s {\n", t->c_struct_name);
+    for (size_t fi = 0; fi < t->field_count; fi++) {
+        bool needs_pad = false;
+        if (open_inst != NULL && fi < open_inst->field_count &&
+            open_inst->fields[fi].type != NULL &&
+            open_inst->fields[fi].type->kind == CG_TYPE_GENERIC_PARAM) {
+            switch (t->fields[fi].type->kind) {
+                case CG_TYPE_BOOL:
+                case CG_TYPE_I8:  case CG_TYPE_U8:
+                case CG_TYPE_I16: case CG_TYPE_U16:
+                case CG_TYPE_I32: case CG_TYPE_U32:
+                case CG_TYPE_F32:
+                    needs_pad = true;
+                    break;
+                default:
+                    break;
+            }
+        }
+        if (needs_pad) {
+            buf_append_cstr(&cg->headers, "    _Alignas(sizeof(void *)) ");
+        } else {
+            buf_append_cstr(&cg->headers, "    ");
+        }
+        cg_emit_c_type(&cg->headers, t->fields[fi].type);
+        buf_append_fmt(&cg->headers, " %s;\n", t->fields[fi].c_name);
+        if (needs_pad) {
+            buf_append_fmt(&cg->headers,
+                "    char _pad_%s[sizeof(void *) - sizeof(",
+                t->fields[fi].c_name);
+            cg_emit_c_type(&cg->headers, t->fields[fi].type);
+            buf_append_cstr(&cg->headers, ")];\n");
+        }
+    }
+    buf_append_cstr(&cg->headers, "};\n");
+}
+
+/* Pass 3.5a: emit full struct bodies for non-empty value-semantics types
+ * (tuple / @value) into cg->headers, topologically sorted so that a type
+ * embedded by value in another type is emitted first.  Zero-field value
+ * types are already emitted in cg_emit_user_type_forward (Pass 3).
+ *
+ * Without topological ordering, a value type A that has a field of value
+ * type B may be emitted before B, producing an incomplete-type error in
+ * the C compiler (by-value embedding requires the complete struct). */
+static bool cg_emit_value_type_struct_bodies_sorted(CG *cg) {
+    size_t n = cg->user_type_count;
+    if (n == 0U) return true;
+
+    /* Map each user_types[] index to a local value-type index (SIZE_MAX
+     * for types that are not in the Pass 3.5a set). */
+    size_t *local_idx = calloc(n, sizeof(*local_idx));
+    size_t *type_idx  = calloc(n, sizeof(*type_idx));
+    if (!local_idx || !type_idx) {
+        free(local_idx);
+        free(type_idx);
+        return cg_fail(cg, (FengToken){0}, "IE0001", "codegen: out of memory");
+    }
+    memset(local_idx, 0xFF, n * sizeof(*local_idx));   /* SIZE_MAX */
+
+    size_t count = 0;
+    for (size_t i = 0; i < n; i++) {
+        const UserType *t = &cg->user_types[i];
+        if (!cg_user_type_is_value_semantics(t) || t->field_count == 0U) continue;
+        local_idx[i] = count;
+        type_idx[count] = i;
+        count++;
+    }
+    if (count <= 1U) {
+        /* Zero or one value type — no ordering needed. */
+        for (size_t i = 0; i < n; i++) {
+            const UserType *t = &cg->user_types[i];
+            if (!cg_user_type_is_value_semantics(t) || t->field_count == 0U) continue;
+            cg_emit_value_type_struct_body(cg, t);
+        }
+        free(local_idx);
+        free(type_idx);
+        return true;
+    }
+
+    /* Build adjacency + in-degree for Kahn's algorithm.
+     * Edge from B → A (dep[B][A]) means "A depends on B": A has a field
+     * whose value-type is B, so B's struct body must come first. */
+    bool *dep     = calloc(count * count, sizeof(*dep));
+    size_t *indeg = calloc(count, sizeof(*indeg));
+    bool *emitted = calloc(count, sizeof(*emitted));
+    size_t *order = calloc(count, sizeof(*order));
+    if (!dep || !indeg || !emitted || !order) {
+        free(dep); free(indeg); free(emitted); free(order);
+        free(local_idx); free(type_idx);
+        return cg_fail(cg, (FengToken){0}, "IE0001", "codegen: out of memory");
+    }
+
+    for (size_t vi = 0; vi < count; vi++) {
+        const UserType *t = &cg->user_types[type_idx[vi]];
+        for (size_t fi = 0; fi < t->field_count; fi++) {
+            const CGType *ft = t->fields[fi].type;
+            if (!ft || ft->kind != CG_TYPE_OBJECT || !ft->user) continue;
+            if (!cg_user_type_is_value_semantics(ft->user) ||
+                ft->user->field_count == 0U) continue;
+            /* Find the dependency target's local index. */
+            size_t dep_target = SIZE_MAX;
+            for (size_t j = 0; j < n; j++) {
+                if (&cg->user_types[j] == ft->user) {
+                    dep_target = local_idx[j];
+                    break;
+                }
+            }
+            if (dep_target == SIZE_MAX || dep_target == vi) continue;
+            if (!dep[dep_target * count + vi]) {
+                dep[dep_target * count + vi] = true;
+                indeg[vi]++;
+            }
+        }
+    }
+
+    /* Kahn's algorithm: emit types with no remaining dependencies first. */
+    size_t cursor = 0;
+    while (cursor < count) {
+        bool found = false;
+        for (size_t vi = 0; vi < count; vi++) {
+            if (emitted[vi] || indeg[vi] != 0U) continue;
+            emitted[vi] = true;
+            order[cursor++] = vi;
+            /* Decrease in-degree of dependents. */
+            for (size_t w = 0; w < count; w++) {
+                if (dep[vi * count + w]) indeg[w]--;
+            }
+            found = true;
+            break;
+        }
+        if (!found) break;   /* remaining types form a cycle */
+    }
+
+    /* Emit in topological order. */
+    for (size_t k = 0; k < cursor; k++) {
+        cg_emit_value_type_struct_body(cg, &cg->user_types[type_idx[order[k]]]);
+    }
+    /* Fallback: emit any remaining (cycle — should not happen because
+     * value_type_cycles.c rejects cycles during semantic analysis). */
+    for (size_t vi = 0; vi < count; vi++) {
+        if (!emitted[vi]) {
+            cg_emit_value_type_struct_body(cg, &cg->user_types[type_idx[vi]]);
+        }
+    }
+
+    free(dep);
+    free(indeg);
+    free(emitted);
+    free(order);
+    free(local_idx);
+    free(type_idx);
+    return !cg->failed;
+}
+
 /* Drive every pass across the full program set in deterministic
  * (module, program) order. Passes that mint cross-module-mangled symbols
  * (shells, fits, module bindings, decl emission) re-anchor `cg->module_mangle`
@@ -31514,49 +31674,9 @@ static bool cg_emit_all_programs(CG *cg,
         cg_emit_user_spec_forward(cg, &cg->user_specs[i]);
     }
     /* Emit full struct bodies for non-empty value-semantics types (tuple or
-     * @value) into headers. These come after spec_forward so that fields
-     * referencing spec value types find them complete. Zero-field types were
-     * already emitted in cg_emit_user_type_forward above. */
-    for (size_t i = 0; i < cg->user_type_count; i++) {
-        const UserType *t = &cg->user_types[i];
-        if (!cg_user_type_is_value_semantics(t) || t->field_count == 0U) continue;
-        const UserType *open_inst = t->is_generic_instance
-            ? cg_find_open_generic_instance(cg, t) : NULL;
-        buf_append_fmt(&cg->headers, "struct %s {\n", t->c_struct_name);
-        for (size_t fi = 0; fi < t->field_count; fi++) {
-            bool needs_pad = false;
-            if (open_inst != NULL && fi < open_inst->field_count &&
-                open_inst->fields[fi].type != NULL &&
-                open_inst->fields[fi].type->kind == CG_TYPE_GENERIC_PARAM) {
-                switch (t->fields[fi].type->kind) {
-                    case CG_TYPE_BOOL:
-                    case CG_TYPE_I8:  case CG_TYPE_U8:
-                    case CG_TYPE_I16: case CG_TYPE_U16:
-                    case CG_TYPE_I32: case CG_TYPE_U32:
-                    case CG_TYPE_F32:
-                        needs_pad = true;
-                        break;
-                    default:
-                        break;
-                }
-            }
-            if (needs_pad) {
-                buf_append_cstr(&cg->headers, "    _Alignas(sizeof(void *)) ");
-            } else {
-                buf_append_cstr(&cg->headers, "    ");
-            }
-            cg_emit_c_type(&cg->headers, t->fields[fi].type);
-            buf_append_fmt(&cg->headers, " %s;\n", t->fields[fi].c_name);
-            if (needs_pad) {
-                buf_append_fmt(&cg->headers,
-                    "    char _pad_%s[sizeof(void *) - sizeof(",
-                    t->fields[fi].c_name);
-                cg_emit_c_type(&cg->headers, t->fields[fi].type);
-                buf_append_cstr(&cg->headers, ")];\n");
-            }
-        }
-        buf_append_cstr(&cg->headers, "};\n");
-    }
+     * @value) into headers, topologically sorted so that a value type
+     * embedded by value in another is emitted first (Pass 3.5a). */
+    if (!cg_emit_value_type_struct_bodies_sorted(cg)) return false;
     /* Pass 3.4: emit enum typedefs + descriptors before user type
      * definitions so that @value type equal functions referencing enum
      * descriptors find them already declared. */
