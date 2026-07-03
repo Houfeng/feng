@@ -5648,6 +5648,18 @@ static bool resolve_type_param_hit(const FengLspAnalysisSession *session,
     return false;
 }
 
+/* Forward declaration for mutual recursion with find_type_ref_in_expr. */
+static bool find_type_ref_in_block_exprs(const FengBlock *block,
+                                         const FengProgram *program,
+                                         const FengLspAnalysisSession *session,
+                                         size_t offset,
+                                         FengLspResolvedTarget *target,
+                                         const FengDecl *owner_decl,
+                                         const FengTypeParam *member_type_params,
+                                         size_t member_type_param_count,
+                                         const FengTypeParam *owner_type_params,
+                                         size_t owner_type_param_count);
+
 static bool find_type_ref_in_member(const FengDecl *owner_decl,
                                     const FengTypeMember *member,
                                     const FengProgram *program,
@@ -5739,14 +5751,430 @@ static bool find_type_ref_in_member(const FengDecl *owner_decl,
         return true;
     }
     /* Fallback to owner (type/spec) type params for return type. */
-    return resolve_type_ref_at_offset(session,
-                                      program,
-                                      member->as.callable.return_type,
-                                      offset,
-                                      target,
-                                      owner_decl,
-                                      owner_type_params,
-                                      owner_type_param_count);
+    if (resolve_type_ref_at_offset(session,
+                                   program,
+                                   member->as.callable.return_type,
+                                   offset,
+                                   target,
+                                   owner_decl,
+                                   owner_type_params,
+                                   owner_type_param_count)) {
+        return true;
+    }
+    /* Check type refs inside the callable body expressions (e.g. T in
+     * `Span<T>(...)` within method bodies). */
+    return find_type_ref_in_block_exprs(member->as.callable.body,
+                                        program, session, offset, target,
+                                        owner_decl,
+                                        member->as.callable.type_params,
+                                        member->as.callable.type_param_count,
+                                        owner_type_params,
+                                        owner_type_param_count);
+}
+
+/* Walk an expression tree looking for TypeRefs inside generic targets
+ * (e.g. T in `Span<T>`), explicit call type args (e.g. T in `func<T>(...)`),
+ * cast types, and array-new element types.  Recurses into sub-expressions. */
+static bool find_type_ref_in_expr(const FengExpr *expr,
+                                  const FengProgram *program,
+                                  const FengLspAnalysisSession *session,
+                                  size_t offset,
+                                  FengLspResolvedTarget *target,
+                                  const FengDecl *owner_decl,
+                                  const FengTypeParam *member_type_params,
+                                  size_t member_type_param_count,
+                                  const FengTypeParam *owner_type_params,
+                                  size_t owner_type_param_count) {
+    size_t index;
+
+    if (expr == NULL || offset < expr_start(expr) || offset > expr_end(expr)) {
+        return false;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_GENERIC_TARGET:
+            for (index = 0U; index < expr->as.generic_target.type_arg_count; ++index) {
+                if (resolve_type_ref_at_offset(session, program,
+                                               expr->as.generic_target.type_args[index],
+                                               offset, target, owner_decl,
+                                               member_type_params, member_type_param_count)) {
+                    return true;
+                }
+                if (resolve_type_ref_at_offset(session, program,
+                                               expr->as.generic_target.type_args[index],
+                                               offset, target, owner_decl,
+                                               owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+            }
+            return find_type_ref_in_expr(expr->as.generic_target.target,
+                                         program, session, offset, target,
+                                         owner_decl,
+                                         member_type_params, member_type_param_count,
+                                         owner_type_params, owner_type_param_count);
+        case FENG_EXPR_CALL:
+            if (expr->as.call.has_explicit_type_args) {
+                for (index = 0U; index < expr->as.call.explicit_type_arg_count; ++index) {
+                    if (resolve_type_ref_at_offset(session, program,
+                                                   expr->as.call.explicit_type_args[index],
+                                                   offset, target, owner_decl,
+                                                   member_type_params, member_type_param_count)) {
+                        return true;
+                    }
+                    if (resolve_type_ref_at_offset(session, program,
+                                                   expr->as.call.explicit_type_args[index],
+                                                   offset, target, owner_decl,
+                                                   owner_type_params, owner_type_param_count)) {
+                        return true;
+                    }
+                }
+            }
+            if (find_type_ref_in_expr(expr->as.call.callee,
+                                      program, session, offset, target, owner_decl,
+                                      member_type_params, member_type_param_count,
+                                      owner_type_params, owner_type_param_count)) {
+                return true;
+            }
+            for (index = 0U; index < expr->as.call.arg_count; ++index) {
+                if (find_type_ref_in_expr(expr->as.call.args[index],
+                                          program, session, offset, target, owner_decl,
+                                          member_type_params, member_type_param_count,
+                                          owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_EXPR_CAST:
+            if (resolve_type_ref_at_offset(session, program,
+                                           expr->as.cast.type, offset, target, owner_decl,
+                                           member_type_params, member_type_param_count)) {
+                return true;
+            }
+            if (resolve_type_ref_at_offset(session, program,
+                                           expr->as.cast.type, offset, target, owner_decl,
+                                           owner_type_params, owner_type_param_count)) {
+                return true;
+            }
+            return find_type_ref_in_expr(expr->as.cast.value,
+                                         program, session, offset, target, owner_decl,
+                                         member_type_params, member_type_param_count,
+                                         owner_type_params, owner_type_param_count);
+        case FENG_EXPR_ARRAY_NEW:
+            if (resolve_type_ref_at_offset(session, program,
+                                           expr->as.array_new.element_type, offset, target,
+                                           owner_decl,
+                                           member_type_params, member_type_param_count)) {
+                return true;
+            }
+            if (resolve_type_ref_at_offset(session, program,
+                                           expr->as.array_new.element_type, offset, target,
+                                           owner_decl,
+                                           owner_type_params, owner_type_param_count)) {
+                return true;
+            }
+            return find_type_ref_in_expr(expr->as.array_new.size,
+                                         program, session, offset, target, owner_decl,
+                                         member_type_params, member_type_param_count,
+                                         owner_type_params, owner_type_param_count);
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (index = 0U; index < expr->as.array_literal.count; ++index) {
+                if (find_type_ref_in_expr(expr->as.array_literal.items[index],
+                                          program, session, offset, target, owner_decl,
+                                          member_type_params, member_type_param_count,
+                                          owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_EXPR_OBJECT_LITERAL:
+            if (find_type_ref_in_expr(expr->as.object_literal.target,
+                                      program, session, offset, target, owner_decl,
+                                      member_type_params, member_type_param_count,
+                                      owner_type_params, owner_type_param_count)) {
+                return true;
+            }
+            for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
+                if (find_type_ref_in_expr(expr->as.object_literal.fields[index].value,
+                                          program, session, offset, target, owner_decl,
+                                          member_type_params, member_type_param_count,
+                                          owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_EXPR_MEMBER:
+            return find_type_ref_in_expr(expr->as.member.object,
+                                         program, session, offset, target, owner_decl,
+                                         member_type_params, member_type_param_count,
+                                         owner_type_params, owner_type_param_count);
+        case FENG_EXPR_INDEX:
+            if (find_type_ref_in_expr(expr->as.index.object,
+                                      program, session, offset, target, owner_decl,
+                                      member_type_params, member_type_param_count,
+                                      owner_type_params, owner_type_param_count)) {
+                return true;
+            }
+            return find_type_ref_in_expr(expr->as.index.index,
+                                         program, session, offset, target, owner_decl,
+                                         member_type_params, member_type_param_count,
+                                         owner_type_params, owner_type_param_count);
+        case FENG_EXPR_UNARY:
+            return find_type_ref_in_expr(expr->as.unary.operand,
+                                         program, session, offset, target, owner_decl,
+                                         member_type_params, member_type_param_count,
+                                         owner_type_params, owner_type_param_count);
+        case FENG_EXPR_BINARY:
+            if (find_type_ref_in_expr(expr->as.binary.left,
+                                      program, session, offset, target, owner_decl,
+                                      member_type_params, member_type_param_count,
+                                      owner_type_params, owner_type_param_count)) {
+                return true;
+            }
+            return find_type_ref_in_expr(expr->as.binary.right,
+                                         program, session, offset, target, owner_decl,
+                                         member_type_params, member_type_param_count,
+                                         owner_type_params, owner_type_param_count);
+        case FENG_EXPR_LAMBDA:
+            if (expr->as.lambda.is_block_body) {
+                return find_type_ref_in_block_exprs(expr->as.lambda.body_block,
+                                                    program, session, offset, target,
+                                                    owner_decl,
+                                                    member_type_params, member_type_param_count,
+                                                    owner_type_params, owner_type_param_count);
+            }
+            return find_type_ref_in_expr(expr->as.lambda.body,
+                                         program, session, offset, target, owner_decl,
+                                         member_type_params, member_type_param_count,
+                                         owner_type_params, owner_type_param_count);
+        case FENG_EXPR_IF:
+            if (find_type_ref_in_expr(expr->as.if_expr.condition,
+                                      program, session, offset, target, owner_decl,
+                                      member_type_params, member_type_param_count,
+                                      owner_type_params, owner_type_param_count)) {
+                return true;
+            }
+            if (find_type_ref_in_block_exprs(expr->as.if_expr.then_block,
+                                             program, session, offset, target,
+                                             owner_decl,
+                                             member_type_params, member_type_param_count,
+                                             owner_type_params, owner_type_param_count)) {
+                return true;
+            }
+            return find_type_ref_in_block_exprs(expr->as.if_expr.else_block,
+                                                program, session, offset, target,
+                                                owner_decl,
+                                                member_type_params, member_type_param_count,
+                                                owner_type_params, owner_type_param_count);
+        case FENG_EXPR_MATCH:
+            if (find_type_ref_in_expr(expr->as.match_expr.target,
+                                      program, session, offset, target, owner_decl,
+                                      member_type_params, member_type_param_count,
+                                      owner_type_params, owner_type_param_count)) {
+                return true;
+            }
+            for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                if (find_type_ref_in_block_exprs(expr->as.match_expr.branches[index].body,
+                                                 program, session, offset, target,
+                                                 owner_decl,
+                                                 member_type_params, member_type_param_count,
+                                                 owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+            }
+            return find_type_ref_in_block_exprs(expr->as.match_expr.else_block,
+                                                program, session, offset, target,
+                                                owner_decl,
+                                                member_type_params, member_type_param_count,
+                                                owner_type_params, owner_type_param_count);
+        case FENG_EXPR_TRY:
+            if (find_type_ref_in_expr(expr->as.try_expr.body,
+                                      program, session, offset, target, owner_decl,
+                                      member_type_params, member_type_param_count,
+                                      owner_type_params, owner_type_param_count)) {
+                return true;
+            }
+            for (index = 0U; index < expr->as.try_expr.clause_count; ++index) {
+                if (find_type_ref_in_block_exprs(expr->as.try_expr.clauses[index].body,
+                                                 program, session, offset, target,
+                                                 owner_decl,
+                                                 member_type_params, member_type_param_count,
+                                                 owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
+/* Walk a block looking for TypeRefs inside expressions (e.g. generic type
+ * arguments like T in `Span<T>(...)` within method bodies). */
+static bool find_type_ref_in_block_exprs(const FengBlock *block,
+                                         const FengProgram *program,
+                                         const FengLspAnalysisSession *session,
+                                         size_t offset,
+                                         FengLspResolvedTarget *target,
+                                         const FengDecl *owner_decl,
+                                         const FengTypeParam *member_type_params,
+                                         size_t member_type_param_count,
+                                         const FengTypeParam *owner_type_params,
+                                         size_t owner_type_param_count) {
+    size_t index;
+
+    if (block == NULL || offset < block->token.offset || offset > block_end(block)) {
+        return false;
+    }
+    for (index = 0U; index < block->statement_count; ++index) {
+        const FengStmt *stmt = block->statements[index];
+        size_t branch_index;
+
+        if (stmt == NULL || offset < stmt->token.offset || offset > stmt_end(stmt)) {
+            continue;
+        }
+        switch (stmt->kind) {
+            case FENG_STMT_EXPR:
+            case FENG_STMT_TRY:
+                if (find_type_ref_in_expr(stmt->as.expr,
+                                          program, session, offset, target, owner_decl,
+                                          member_type_params, member_type_param_count,
+                                          owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                break;
+            case FENG_STMT_ASSIGN:
+                if (find_type_ref_in_expr(stmt->as.assign.target,
+                                          program, session, offset, target, owner_decl,
+                                          member_type_params, member_type_param_count,
+                                          owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                if (find_type_ref_in_expr(stmt->as.assign.value,
+                                          program, session, offset, target, owner_decl,
+                                          member_type_params, member_type_param_count,
+                                          owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                break;
+            case FENG_STMT_BINDING:
+                if (find_type_ref_in_expr(stmt->as.binding.initializer,
+                                          program, session, offset, target, owner_decl,
+                                          member_type_params, member_type_param_count,
+                                          owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                break;
+            case FENG_STMT_RETURN:
+                if (find_type_ref_in_expr(stmt->as.return_value,
+                                          program, session, offset, target, owner_decl,
+                                          member_type_params, member_type_param_count,
+                                          owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                break;
+            case FENG_STMT_THROW:
+                if (find_type_ref_in_expr(stmt->as.throw_value,
+                                          program, session, offset, target, owner_decl,
+                                          member_type_params, member_type_param_count,
+                                          owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                break;
+            case FENG_STMT_IF:
+                for (branch_index = 0U; branch_index < stmt->as.if_stmt.clause_count; ++branch_index) {
+                    if (find_type_ref_in_expr(stmt->as.if_stmt.clauses[branch_index].condition,
+                                              program, session, offset, target, owner_decl,
+                                              member_type_params, member_type_param_count,
+                                              owner_type_params, owner_type_param_count)) {
+                        return true;
+                    }
+                    if (find_type_ref_in_block_exprs(stmt->as.if_stmt.clauses[branch_index].block,
+                                                     program, session, offset, target, owner_decl,
+                                                     member_type_params, member_type_param_count,
+                                                     owner_type_params, owner_type_param_count)) {
+                        return true;
+                    }
+                }
+                if (find_type_ref_in_block_exprs(stmt->as.if_stmt.else_block,
+                                                 program, session, offset, target, owner_decl,
+                                                 member_type_params, member_type_param_count,
+                                                 owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                break;
+            case FENG_STMT_MATCH:
+                if (find_type_ref_in_expr(stmt->as.match_stmt.target,
+                                          program, session, offset, target, owner_decl,
+                                          member_type_params, member_type_param_count,
+                                          owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                for (branch_index = 0U; branch_index < stmt->as.match_stmt.branch_count; ++branch_index) {
+                    if (find_type_ref_in_block_exprs(stmt->as.match_stmt.branches[branch_index].body,
+                                                     program, session, offset, target, owner_decl,
+                                                     member_type_params, member_type_param_count,
+                                                     owner_type_params, owner_type_param_count)) {
+                        return true;
+                    }
+                }
+                if (find_type_ref_in_block_exprs(stmt->as.match_stmt.else_block,
+                                                 program, session, offset, target, owner_decl,
+                                                 member_type_params, member_type_param_count,
+                                                 owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                break;
+            case FENG_STMT_WHILE:
+                if (find_type_ref_in_expr(stmt->as.while_stmt.condition,
+                                          program, session, offset, target, owner_decl,
+                                          member_type_params, member_type_param_count,
+                                          owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                if (find_type_ref_in_block_exprs(stmt->as.while_stmt.body,
+                                                 program, session, offset, target, owner_decl,
+                                                 member_type_params, member_type_param_count,
+                                                 owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                break;
+            case FENG_STMT_FOR:
+                if (stmt->as.for_stmt.is_for_in) {
+                    if (find_type_ref_in_expr(stmt->as.for_stmt.iter_expr,
+                                              program, session, offset, target, owner_decl,
+                                              member_type_params, member_type_param_count,
+                                              owner_type_params, owner_type_param_count)) {
+                        return true;
+                    }
+                }
+                if (find_type_ref_in_block_exprs(stmt->as.for_stmt.body,
+                                                 program, session, offset, target, owner_decl,
+                                                 member_type_params, member_type_param_count,
+                                                 owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                break;
+            case FENG_STMT_BLOCK:
+                if (find_type_ref_in_block_exprs(stmt->as.block,
+                                                 program, session, offset, target, owner_decl,
+                                                 member_type_params, member_type_param_count,
+                                                 owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                break;
+            case FENG_STMT_DEFER:
+                if (find_type_ref_in_block_exprs(stmt->as.defer_block,
+                                                 program, session, offset, target, owner_decl,
+                                                 member_type_params, member_type_param_count,
+                                                 owner_type_params, owner_type_param_count)) {
+                    return true;
+                }
+                break;
+            case FENG_STMT_BREAK:
+            case FENG_STMT_CONTINUE:
+                break;
+        }
+    }
+    return false;
 }
 
 static bool find_block_type_ref_hit(const FengBlock *block,
