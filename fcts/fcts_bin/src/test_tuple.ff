@@ -1,5 +1,6 @@
 module fcts_bin;
 
+import std;
 import std.io;
 import std.test;
 
@@ -70,6 +71,32 @@ func consume_tcopyable(value: TCopyable): TFitTuple {
 // 返回 unit
 func make_tunit(): TUnit {
   return ();
+}
+
+// --- 泛型 tuple 类型 ---
+
+// 泛型 tuple：两元素
+type GTPair<A, B>(A, B);
+
+// 泛型 tuple：三元素
+type GTTriple<A, B, C>(A, B, C);
+
+// 泛型 tuple 含 managed 字段（aggregate 实例路径）
+type GTNamed<T>(string, T);
+
+// 返回泛型 tuple 的泛型函数
+func gtmake_pair<T>(first: T, second: int): GTPair<T, int> {
+  return (first, second);
+}
+
+// 接受泛型 tuple 参数的泛型函数
+func gtsum_pair(p: GTPair<int, int>): int {
+  return p.item1 + p.item2;
+}
+
+// 泛型 triple 函数
+func gtmake_triple<A, B, C>(a: A, b: B, c: C): GTTriple<A, B, C> {
+  return (a, b, c);
 }
 
 /** Tuple 类型测试 */
@@ -174,6 +201,82 @@ open func test_tuple() {
       let s: TCopyable = t;
       let copy = s.tlet_self();
       assert(copy.item1 == 6 && copy.item2 == 3, "tuple fit let y = self via spec");
+    });
+
+    // --- 泛型 tuple 测试 ---
+
+    test("generic tuple construction and field access (trivial)", () {
+      let p: GTPair<int, int> = (1, 2);
+      assert(p.item1 == 1 && p.item2 == 2, "generic tuple trivial field access");
+    });
+
+    test("generic tuple construction and field access (mixed)", () {
+      let p: GTPair<int, string> = (42, "hello");
+      assert(p.item1 == 42 && p.item2 == "hello", "generic tuple mixed field access");
+    });
+
+    test("generic triple tuple", () {
+      let t: GTTriple<int, string, bool> = (10, "world", true);
+      assert(t.item1 == 10, "generic triple item1");
+      assert(t.item2 == "world", "generic triple item2");
+      assert(t.item3, "generic triple item3");
+    });
+
+    test("generic tuple value semantics", () {
+      let p1: GTPair<int, int> = (5, 10);
+      var p2: GTPair<int, int> = p1;
+      p2 = (99, 20);
+      assert(p1.item1 == 5 && p1.item2 == 10, "original unchanged after value copy");
+      assert(p2.item1 == 99 && p2.item2 == 20, "copy has new value");
+    });
+
+    test("generic tuple as function return", () {
+      let p = gtmake_pair<string>("test", 7);
+      assert(p.item1 == "test" && p.item2 == 7, "generic tuple returned from generic function");
+    });
+
+    test("generic tuple as function parameter", () {
+      let p: GTPair<int, int> = (15, 25);
+      assert(gtsum_pair(p) == 40, "generic tuple passed as function parameter");
+    });
+
+    test("generic tuple with managed field (aggregate instance)", () {
+      let n: GTNamed<int> = ("label", 42);
+      assert(n.item1 == "label", "generic tuple managed field item1");
+      assert(n.item2 == 42, "generic tuple generic field item2");
+    });
+
+    test("generic tuple with managed field value semantics", () {
+      let n1: GTNamed<int> = ("original", 1);
+      var n2: GTNamed<int> = n1;
+      n2 = ("modified", 99);
+      assert(n1.item1 == "original" && n1.item2 == 1, "original string unchanged after aggregate value copy");
+      assert(n2.item1 == "modified" && n2.item2 == 99, "aggregate copy has new values");
+    });
+
+    test("generic triple returned from generic function", () {
+      let t = gtmake_triple<int, string, bool>(1, "a", false);
+      assert(t.item1 == 1 && t.item2 == "a" && !t.item3, "generic triple from generic function");
+    });
+
+    test("std.Tuple<T1, T2> construction and access", () {
+      let t: Tuple<int, string> = (10, "hello");
+      assert(t.item1 == 10 && t.item2 == "hello", "std.Tuple<T1,T2> field access");
+    });
+
+    test("std.Tuple<T1, T2> value semantics", () {
+      let t1: Tuple<int, string> = (1, "a");
+      var t2: Tuple<int, string> = t1;
+      t2 = (99, "b");
+      assert(t1.item1 == 1 && t1.item2 == "a", "std.Tuple original unchanged after value copy");
+      assert(t2.item1 == 99 && t2.item2 == "b", "std.Tuple copy has new values");
+    });
+
+    test("std.Tuple<T1, T2, T3> construction and access", () {
+      let t: Tuple<int, string, bool> = (42, "world", true);
+      assert(t.item1 == 42, "std.Tuple<T1,T2,T3> item1");
+      assert(t.item2 == "world", "std.Tuple<T1,T2,T3> item2");
+      assert(t.item3, "std.Tuple<T1,T2,T3> item3");
     });
   });
 }

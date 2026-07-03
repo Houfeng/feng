@@ -443,6 +443,27 @@ func vabi_rect_area(r: VAbiRect): int {
   return r.width * r.height;
 }
 
+// --- 泛型 @value 类型：方法返回其他泛型聚合 (§9.10 补充) ---
+
+// 泛型 @value type：方法返回另一个泛型 @value type
+@value
+type VGContainer<T> {
+  var value: T;
+
+  func wrap(): VGBox<T> {
+    var box: VGBox<T>;
+    box.value = self.value;
+    return box;
+  }
+
+  func pair(): VGPair<T, T> {
+    var p: VGPair<T, T>;
+    p.left = self.value;
+    p.right = self.value;
+    return p;
+  }
+}
+
 /** @value type 测试 */
 open func test_value_type() {
   describe("value-type", () {
@@ -1139,6 +1160,40 @@ open func test_value_type() {
       // The compilation itself verifies the wrapper C types are correct.
       // Runtime behavior is tested by direct calls above.
       assert(true, "@abi func @value @abi ABI wrappers generated successfully");
+    });
+
+    // --- 泛型 @value type：方法返回泛型聚合 (§9.10 补充) ---
+
+    test("generic @value method returns different generic @value type", () {
+      var c: VGContainer<int>;
+      c.value = 42;
+      let box = c.wrap();
+      assert(box.get() == 42, "generic @value method returns another generic @value");
+    });
+
+    test("generic @value method returns generic @value pair", () {
+      var c: VGContainer<int>;
+      c.value = 10;
+      let p = c.pair();
+      assert(p.get_left() == 10 && p.get_right() == 10,
+             "generic @value method returns generic @value pair with same type param");
+    });
+
+    test("generic @value returning aggregate in generic context (trivial)", () {
+      var c: VGContainer<int>;
+      c.value = 7;
+      let box = c.wrap();
+      box.set(99);
+      // Original container is unchanged (value semantics)
+      assert(c.value == 7, "original @value unchanged after returning aggregate");
+      assert(box.get() == 99, "returned aggregate can be mutated independently");
+    });
+
+    test("generic @value returning aggregate in generic context (string)", () {
+      var c: VGContainer<string>;
+      c.value = "original";
+      let box = c.wrap();
+      assert(box.get() == "original", "generic @value returns aggregate with string field");
     });
   });
 }

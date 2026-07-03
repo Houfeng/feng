@@ -2,8 +2,15 @@ open module std.compiler.lexer;
 
 import std.text;
 
+/**
+ * 词法分析器的输入源，代表一个源文件的内容和路径
+ * 每个源文件对应一个 FengSource 对象
+ */
 open type FengSource {
+  /** 源文件的路径 */
   let path: string;
+
+  /** 源文件的内容 */
   let content: string;
 
   /** 从字符串内容创建 */
