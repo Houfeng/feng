@@ -38,9 +38,9 @@ Feng 版面向更好的设计，不机械对齐 C 版——Lexer 只管词法切
 
 ### Token @value type 性能分析
 
-- FengToken 共 6 字段：`kind`(enum) + `lexeme`(string ptr) + `location`(3 ints) + `leadingDoc`(string ptr) + `errorMessage`(string ptr) + `errorCode`(string ptr)
-- 其中 string 是指针，不深拷贝
-- @value 每次传递约 ~8 word（~64 bytes on 64-bit）memcpy，L1 cache 内亚 ns 级
+- FengToken 共 4 字段：`kind`(enum, 1 word) + `value`(StringSpan, ~2 word) + `source`(FengSource 引用, 1 word) + `location`(3 ints, ~1.5 word)
+- StringSpan 为轻量引用（指针 + 长度），不深拷贝；FengSource 为托管引用，复制仅增加引用计数
+- @value 每次传递约 ~5-6 word（~40-48 bytes on 64-bit）memcpy，L1 cache 内亚 ns 级
 - 对比普通 type：每次创建需 1 次 heap 分配 + 多次 RC 操作（创建、存入数组、传递、释放），ns 级别 × 数万次
 - 结论：@value 明显更优
 
@@ -54,7 +54,10 @@ std/src/text/
 
 std/src/compiler/
 └── Lexer/
+    ├── FengTokenKind.ff      # Token 种类枚举
+    ├── FengSource.ff        # 源文件与位置信息
     ├── FengToken.ff         # Token 类型定义
+    ├── FengTokenUtil.ff     # Token 分类工具（静态方法）
     ├── FengLexer.ff         # Lexer 实现
     └── TokenStream.ff       # Token 流封装（服务注解变换）
 ```
@@ -63,8 +66,8 @@ std/src/compiler/
 
 ## 3 Token 类型定义
 
-**文件**：`std/src/compiler/Lexer/FengToken.ff`
-**模块**：`std.compiler`
+**目录**：`std/src/compiler/Lexer/`
+**模块**：`std.compiler.lexer`
 
 ### 3.1 FengTokenKind 枚举
 
@@ -72,7 +75,7 @@ std/src/compiler/
 完整拼写命名，类别前缀区分。
 
 ```feng
-open module std.compiler;
+open module std.compiler.lexer;
 
 /**
  * Token 种类枚举。
@@ -208,7 +211,32 @@ open enum FengTokenKind {
 | 5xx | 分隔符 | `Punctuation` | 11 | 89 |
 | 6xx | 运算符 | `Operator` | 31 | 69 |
 
-### 3.2 SourceLocation
+### 3.2 FengSource
+
+```feng
+/**
+ * 源文件信息。
+ * 普通类型（堆分配、引用语义），由 Lexer 创建，每个 Token 持有引用。
+ * 源文件数量少、生命周期长，所有引用同一源文件的 Token 共享同一实例，
+ * 避免每 Token 复制文件内容。
+ */
+open type FengSource {
+  let path: string;
+  let content: string;
+  /** 从字符串内容创建 */
+  func FengSource(content: string, path: string) {
+    self.path = path;
+    self.content = content;
+  }
+  /** 从字节数组创建（解码为字符串） */
+  func FengSource(content: byte[], path: string) {
+    self.path = path;
+    self.content = string.fromUtf8Bytes(content);
+  }
+}
+```
+
+### 3.3 FengSourceLocation
 
 ```feng
 /**
@@ -216,23 +244,24 @@ open enum FengTokenKind {
  * 记录 Token 在源文件中的位置，用于错误报告和注解变换。
  */
 @value
-open type SourceLocation {
+open type FengSourceLocation {
   /** 字节偏移量（从 0 开始） */
-  open let offset: int;
+  let offset: int;
   /** 行号（从 1 开始） */
-  open let line: int;
+  let line: int;
   /** 列号（从 1 开始） */
-  open let column: int;
+  let column: int;
 }
 ```
 
-### 3.3 FengToken
+### 3.4 FengToken
 
 ```feng
 /**
  * Token 实例——词法分析的最小单元。
  *
  * @value type：栈分配、值语义、零 heap/RC 压力。
+ * value 使用 StringSpan 引用源码子串，避免拷贝。
  *
  * Lexer 只负责词法切分，不解析语义值。
  * 数值解析（integer/float/bool）和注解分类由 Parser 阶段处理。
@@ -240,51 +269,54 @@ open type SourceLocation {
 @value
 open type FengToken {
   /** Token 种类 */
-  open let kind: FengTokenKind;
+  let kind: FengTokenKind;
   /** 原始文本（引用源码字符串的子串） */
-  open let lexeme: string;
+  let value: StringSpan;
+  /** Token 所在的源文件 */
+  let source: FengSource;
   /** 源码位置 */
-  open let location: SourceLocation;
-  /** 文档注释（`/** ... */`，无则为空字符串） */
-  open let leadingDoc: string;
-  /** 错误信息（仅 SpecialError 有意义） */
-  open let errorMessage: string;
-  /** 错误码（仅 SpecialError 有意义，如 "LE0001"） */
-  open let errorCode: string;
+  let location: FengSourceLocation;
 }
 ```
 
-### 3.4 辅助函数
+### 3.5 FengTokenUtil
 
-基于区间判断，无需逐个枚举匹配：
+基于区间判断的静态工具方法，无需逐个枚举匹配：
 
 ```feng
-/** 判断是否为 trivia（0xx：特殊/空白/注释） */
-open func isTrivia(kind: FengTokenKind): bool;
+/**
+ * Token 工具类。
+ * 提供基于 FengTokenKind 区间编号的分类判断和名称查询，
+ * 所有方法均为静态方法，通过区间比较实现 O(1) 判断。
+ */
+open type FengTokenUtil {
+  /** 判断是否为 trivia（0xx：特殊/空白/注释） */
+  open static func isTrivia(kind: FengTokenKind): bool;
 
-/** 判断是否为标识符（2xx 区间） */
-open func isIdentifier(kind: FengTokenKind): bool;
+  /** 判断是否为标识符（2xx 区间） */
+  open static func isIdentifier(kind: FengTokenKind): bool;
 
-/** 判断是否为字面量（3xx 区间） */
-open func isLiteral(kind: FengTokenKind): bool;
+  /** 判断是否为字面量（3xx 区间） */
+  open static func isLiteral(kind: FengTokenKind): bool;
 
-/** 判断是否为关键字（4xx 区间） */
-open func isKeyword(kind: FengTokenKind): bool;
+  /** 判断是否为关键字（4xx 区间） */
+  open static func isKeyword(kind: FengTokenKind): bool;
 
-/** 判断是否为分隔符（5xx 区间） */
-open func isPunctuation(kind: FengTokenKind): bool;
+  /** 判断是否为分隔符（5xx 区间） */
+  open static func isPunctuation(kind: FengTokenKind): bool;
 
-/** 判断是否为运算符（6xx 区间） */
-open func isOperator(kind: FengTokenKind): bool;
+  /** 判断是否为运算符（6xx 区间） */
+  open static func isOperator(kind: FengTokenKind): bool;
 
-/** 判断是否为空白（0xx 子区间：20-39） */
-open func isWhitespace(kind: FengTokenKind): bool;
+  /** 判断是否为空白（0xx 子区间：20-39） */
+  open static func isWhitespace(kind: FengTokenKind): bool;
 
-/** 判断是否为注释（0xx 子区间：40-59） */
-open func isComment(kind: FengTokenKind): bool;
+  /** 判断是否为注释（0xx 子区间：40-59） */
+  open static func isComment(kind: FengTokenKind): bool;
 
-/** 获取 FengTokenKind 的名称字符串（如 "KeywordType"、"OperatorPlus"） */
-open func tokenKindName(kind: FengTokenKind): string;
+  /** 获取 FengTokenKind 的名称字符串（如 "KeywordType"、"OperatorPlus"） */
+  open static func kindName(kind: FengTokenKind): string;
+}
 ```
 
 ---
@@ -292,7 +324,7 @@ open func tokenKindName(kind: FengTokenKind): string;
 ## 4 Lexer 实现
 
 **文件**：`std/src/compiler/Lexer/FengLexer.ff`
-**模块**：`std.compiler`
+**模块**：`std.compiler.lexer`
 
 ### 4.1 设计
 
@@ -304,7 +336,7 @@ open func tokenKindName(kind: FengTokenKind): string;
  * 逐字节扫描 + 回溯前瞻，与 C 版 lexer（src/lexer/lexer.c）行为等价。
  *
  * 用法示例：
- *   let lexer = FengLexer(source, "example.ff");
+ *   var lexer = FengLexer(source, "example.ff");
  *   var token = lexer.next();
  *   while token.kind != FengTokenKind.SpecialEndOfFile {
  *     // 处理 token
@@ -312,9 +344,7 @@ open func tokenKindName(kind: FengTokenKind): string;
  *   }
  */
 open type FengLexer {
-  seal let source: byte[];
-  seal let sourceLength: int;
-  seal let path: string;
+  let source: FengSource;
   seal var pos: int;
   seal var line: int;
   seal var column: int;
@@ -323,11 +353,8 @@ open type FengLexer {
   seal var peeked: FengToken;
   seal var hasPeeked: bool;
 
-  /** 从源码字符串创建 Lexer */
-  open func FengLexer(source: string, path: string);
-
-  /** 从字节数组创建 Lexer */
-  open func FengLexer(source: byte[], length: int, path: string);
+  /** 从源码内容创建 Lexer */
+  open func FengLexer(content: string, path: string);
 
   /** 获取下一个 Token（消费） */
   open func next(): FengToken;
@@ -337,9 +364,6 @@ open type FengLexer {
 
   /** 一次性产出全部 Token（含 EOF） */
   open func tokenize(): FengToken[];
-
-  /** 获取源码文件路径 */
-  open func path(): string;
 }
 ```
 
@@ -475,7 +499,7 @@ Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建
 ## 5 TokenStream
 
 **文件**：`std/src/compiler/Lexer/TokenStream.ff`
-**模块**：`std.compiler`
+**模块**：`std.compiler.lexer`
 
 ### 5.1 设计
 
@@ -604,14 +628,14 @@ open type TokenSpan {
 - 数字扫描（十进制、十六进制、二进制、八进制、浮点数、带 `_` 分隔）
 - 字符串扫描（普通字符串、转义序列、原始字符串）
 - 运算符和分隔符（全部 43 种，含 OperatorAt）
-- Trivia 发射（空白 Token、行注释、块注释、文档注释及 leadingDoc 附加规则）
+- Trivia 发射（空白 Token、行注释、块注释、文档注释及 CommentDoc 与目标声明的关联规则）
 - 错误处理（全部 6 个错误码场景）
 
 ### 7.2 对比验证
 
 同一源码输入，比较 C 版和 Feng 版产出的 Token 序列：
 - FengTokenKind 一致
-- lexeme 一致
+- value 一致
 - 位置信息（offset, line, column）一致
 
 ### 7.3 注解模拟
@@ -640,6 +664,6 @@ open type TokenSpan {
 ## 9 开放问题
 
 1. **关键字查找优化时机**：当前方案用 match + 线性扫描，何时优化为哈希表？建议阶段一先用简单方案，性能测试后再决定
-2. **Token 的 lexeme 字段**：当前方案用 `string` 引用源码子串。Feng 的 `string` 是否支持零拷贝切片（子串引用）？如果不支持，需要改用 `byte[]` + offset + length
+2. **Token 的 value 字段**：已确定使用 `StringSpan`（引用源码子串，零拷贝）。`FengSource.content` 为托管引用类型，生命周期由引用计数管理
 3. **`@value` type 的 `open let` 字段**：已确认支持，如有问题是 Bug 需要修复
-4. **文档注释存储**：C 版用指针引用源码中的文档注释文本。Feng 版如果 string 不支持零拷贝切片，文档注释可能需要拷贝
+4. **文档注释处理**：`CommentDoc` 作为独立 Token 发射，文档注释与目标声明的关联由 Parser 阶段处理
