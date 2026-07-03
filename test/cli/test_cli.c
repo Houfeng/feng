@@ -7851,20 +7851,20 @@ static void test_lsp_hover_type_param(void) {
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
     char *output;
 
-    /* Hover on T in type Box<T>: should show "type parameter T" */
+    /* Hover on T in type Box<T>: should show "generic parameter T" */
     output = capture_lsp_hover_response(kSource,
                                         kInitialize,
                                         "type Box<T> {",
                                         strlen("type Box<"));
-    ASSERT(strstr(output, "type parameter T") != NULL);
+    ASSERT(strstr(output, "generic parameter T") != NULL);
     free(output);
 
-    /* Hover on K in type Map<K: Hashable<K>, V>: should show "type parameter K: Hashable<K>" */
+    /* Hover on K in type Map<K: Hashable<K>, V>: should show "generic parameter K: Hashable<K>" */
     output = capture_lsp_hover_response(kSource,
                                         kInitialize,
                                         "type Map<K: Hashable<K>, V> {",
                                         strlen("type Map<"));
-    ASSERT(strstr(output, "type parameter K: Hashable<K>") != NULL);
+    ASSERT(strstr(output, "generic parameter K: Hashable<K>") != NULL);
     free(output);
 
     /* Hover on Hashable in K: Hashable<K>: should show Hashable spec signature */
@@ -7875,12 +7875,12 @@ static void test_lsp_hover_type_param(void) {
     ASSERT(strstr(output, "spec Hashable<T>") != NULL);
     free(output);
 
-    /* Hover on K inside Hashable<K> constraint: should show "type parameter K" */
+    /* Hover on K inside Hashable<K> constraint: should show "generic parameter K" */
     output = capture_lsp_hover_response(kSource,
                                         kInitialize,
                                         "type Map<K: Hashable<K>, V> {",
                                         strlen("type Map<K: Hashable<"));
-    ASSERT(strstr(output, "type parameter K") != NULL);
+    ASSERT(strstr(output, "generic parameter K") != NULL);
     free(output);
 }
 
@@ -7909,68 +7909,118 @@ static void test_lsp_hover_type_param_extended(void) {
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
     char *output;
 
-    /* Hover on T in spec Option<T>: should show "type parameter T" */
+    /* Hover on T in spec Option<T>: should show "generic parameter T" */
     output = capture_lsp_hover_response(kSource,
                                         kInitialize,
                                         "spec Option<T>: Empty | T;",
                                         strlen("spec Option<"));
-    ASSERT(strstr(output, "type parameter T") != NULL);
+    ASSERT(strstr(output, "generic parameter T") != NULL);
     free(output);
 
-    /* Hover on T after | in spec Option<T>: Empty | T: should show "type parameter T" */
+    /* Hover on T after | in spec Option<T>: Empty | T: should show "generic parameter T" */
     output = capture_lsp_hover_response(kSource,
                                         kInitialize,
                                         "spec Option<T>: Empty | T;",
                                         strlen("spec Option<T>: Empty | "));
-    ASSERT(strstr(output, "type parameter T") != NULL);
+    ASSERT(strstr(output, "generic parameter T") != NULL);
     free(output);
 
-    /* Hover on T in spec Action<T>: should show "type parameter T" */
+    /* Hover on T in spec Action<T>: should show "generic parameter T" */
     output = capture_lsp_hover_response(kSource,
                                         kInitialize,
                                         "spec Action<T>(arg1: T): void;",
                                         strlen("spec Action<"));
-    ASSERT(strstr(output, "type parameter T") != NULL);
+    ASSERT(strstr(output, "generic parameter T") != NULL);
     free(output);
 
-    /* Hover on T in arg1: T (callable spec param): should show "type parameter T" */
+    /* Hover on T in arg1: T (callable spec param): should show "generic parameter T" */
     output = capture_lsp_hover_response(kSource,
                                         kInitialize,
                                         "spec Action<T>(arg1: T): void;",
                                         strlen("spec Action<T>(arg1: "));
-    ASSERT(strstr(output, "type parameter T") != NULL);
+    ASSERT(strstr(output, "generic parameter T") != NULL);
     free(output);
 
-    /* Hover on T in func test_fn<T>: should show "type parameter T" */
+    /* Hover on T in func test_fn<T>: should show "generic parameter T" */
     output = capture_lsp_hover_response(kSource,
                                         kInitialize,
                                         "func test_fn<T>(val: T): T {",
                                         strlen("func test_fn<"));
-    ASSERT(strstr(output, "type parameter T") != NULL);
+    ASSERT(strstr(output, "generic parameter T") != NULL);
     free(output);
 
-    /* Hover on T in val: T (function param): should show "type parameter T" */
+    /* Hover on T in val: T (function param): should show "generic parameter T" */
     output = capture_lsp_hover_response(kSource,
                                         kInitialize,
                                         "func test_fn<T>(val: T): T {",
                                         strlen("func test_fn<T>(val: "));
-    ASSERT(strstr(output, "type parameter T") != NULL);
+    ASSERT(strstr(output, "generic parameter T") != NULL);
     free(output);
 
-    /* Hover on T in return type T (function return): should show "type parameter T" */
+    /* Hover on T in return type T (function return): should show "generic parameter T" */
     output = capture_lsp_hover_response(kSource,
                                         kInitialize,
                                         "func test_fn<T>(val: T): T {",
                                         strlen("func test_fn<T>(val: T): "));
-    ASSERT(strstr(output, "type parameter T") != NULL);
+    ASSERT(strstr(output, "generic parameter T") != NULL);
     free(output);
 
-    /* Hover on T in Box<T> field type: should show "type parameter T" */
+    /* Hover on T in Box<T> field type: should show "generic parameter T" */
     output = capture_lsp_hover_response(kSource,
                                         kInitialize,
                                         "    var value: T;",
                                         strlen("    var value: "));
-    ASSERT(strstr(output, "type parameter T") != NULL);
+    ASSERT(strstr(output, "generic parameter T") != NULL);
+    free(output);
+}
+
+static void test_lsp_hover_type_param_in_spec_member(void) {
+    static const char *kSource =
+        "module test.lsp.type_param_spec_member;\n"
+        "\n"
+        "spec Hashable<T> {\n"
+        "    func hash(): u64;\n"
+        "    func same(other: T): bool;\n"
+        "}\n"
+        "\n"
+        "type Box<T> {\n"
+        "    var value: T;\n"
+        "    func get(): T {\n"
+        "        return self.value;\n"
+        "    }\n"
+        "    func set(val: T) {\n"
+        "        self.value = val;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "func main(args: string[]) {\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *output;
+
+    /* Hover on T in func same(other: T) inside spec Hashable<T>: should show "generic parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    func same(other: T): bool;",
+                                        strlen("    func same(other: "));
+    ASSERT(strstr(output, "generic parameter T") != NULL);
+    free(output);
+
+    /* Hover on T in func get(): T inside type Box<T>: should show "generic parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    func get(): T {",
+                                        strlen("    func get(): "));
+    ASSERT(strstr(output, "generic parameter T") != NULL);
+    free(output);
+
+    /* Hover on T in func set(val: T) inside type Box<T>: should show "generic parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    func set(val: T) {",
+                                        strlen("    func set(val: "));
+    ASSERT(strstr(output, "generic parameter T") != NULL);
     free(output);
 }
 
@@ -13292,6 +13342,7 @@ int main(void) {
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
     test_lsp_hover_type_param();
     test_lsp_hover_type_param_extended();
+    test_lsp_hover_type_param_in_spec_member();
     test_lsp_hover_uses_inferred_top_level_binding_type();
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();

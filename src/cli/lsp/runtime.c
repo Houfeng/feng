@@ -5694,15 +5694,38 @@ static bool find_type_ref_in_member(const FengDecl *owner_decl,
                                        member->as.callable.type_param_count)) {
             return true;
         }
+        /* Fallback to owner (type/spec) type params for refs like T in
+         * `func same(other: T): bool` inside `spec Hashable<T>`. */
+        if (resolve_type_ref_at_offset(session,
+                                       program,
+                                       member->as.callable.params[index].type,
+                                       offset,
+                                       target,
+                                       owner_decl,
+                                       owner_type_params,
+                                       owner_type_param_count)) {
+            return true;
+        }
     }
+    if (resolve_type_ref_at_offset(session,
+                                   program,
+                                   member->as.callable.return_type,
+                                   offset,
+                                   target,
+                                   owner_decl,
+                                   member->as.callable.type_params,
+                                   member->as.callable.type_param_count)) {
+        return true;
+    }
+    /* Fallback to owner (type/spec) type params for return type. */
     return resolve_type_ref_at_offset(session,
                                       program,
                                       member->as.callable.return_type,
                                       offset,
                                       target,
                                       owner_decl,
-                                      member->as.callable.type_params,
-                                      member->as.callable.type_param_count);
+                                      owner_type_params,
+                                      owner_type_param_count);
 }
 
 static bool find_block_type_ref_hit(const FengBlock *block,
