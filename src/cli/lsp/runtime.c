@@ -6870,7 +6870,7 @@ static char *hover_text_for_target(const FengLspAnalysisSession *session,
         case FENG_LSP_RESOLVED_TYPE_PARAM:
             (void)session;
             (void)program;
-            if (!string_append_cstr(&signature, "type parameter ") ||
+            if (!string_append_cstr(&signature, "generic parameter ") ||
                 !string_append_bytes(&signature,
                                      target->type_param->name.data,
                                      target->type_param->name.length)) {
@@ -7155,7 +7155,7 @@ static bool symbol_decl_signature_to_string(FengLspString *buffer,
         case FENG_SYMBOL_DECL_KIND_ENUM_ITEM:
             break;
         case FENG_SYMBOL_DECL_KIND_TYPE_PARAM:
-            return string_append_cstr(buffer, "type parameter ") &&
+            return string_append_cstr(buffer, "generic parameter ") &&
                    string_append_bytes(buffer, name.data, name.length);
     }
     return false;
@@ -7300,7 +7300,7 @@ static char *hover_text_for_cache_target(const FengLspCacheResolvedTarget *targe
             break;
         }
         case FENG_LSP_RESOLVED_TYPE_PARAM:
-            if (!string_append_cstr(&signature, "type parameter ") ||
+            if (!string_append_cstr(&signature, "generic parameter ") ||
                 !string_append_bytes(&signature,
                                      target->type_param->name.data,
                                      target->type_param->name.length)) {
