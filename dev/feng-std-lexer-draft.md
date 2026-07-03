@@ -32,17 +32,36 @@ Feng 版面向更好的设计，不机械对齐 C 版——Lexer 只管词法切
 |--------|------|------|
 | 交付范围 | Lexer + Parser 整体规划，分两阶段；本文覆盖阶段一 | Lexer 先交付解锁注解 |
 | Token 与 C 版关系 | 面向更好的设计，不机械对齐 C 版 | Lexer 只管词法切分，语义解析交给 Parser |
-| Token 类型形式 | `@value` type | 零 heap/RC 压力；~64 bytes memcpy 远快于 malloc + RC |
+| Token 类型形式 | `@value` type | 避免每个 token 堆分配；64 bytes memcpy 远快于 malloc + RC |
 | StringBuilder | 同步实现（详见 `feng-std-string-builder-dev.md`） | Lexer 字符串扫描依赖 |
 | 序列化预留 | 先实现 Token 后再考虑 | |
 
 ### Token @value type 性能分析
 
-- FengToken 共 4 字段：`kind`(enum, 1 word) + `value`(StringSpan, ~2 word) + `source`(FengSource 引用, 1 word) + `location`(3 ints, ~1.5 word)
-- StringSpan 为轻量引用（指针 + 长度），不深拷贝；FengSource 为托管引用，复制仅增加引用计数
-- @value 每次传递约 ~5-6 word（~40-48 bytes on 64-bit）memcpy，L1 cache 内亚 ns 级
-- 对比普通 type：每次创建需 1 次 heap 分配 + 多次 RC 操作（创建、存入数组、传递、释放），ns 级别 × 数万次
-- 结论：@value 明显更优
+FengToken 字段布局（@value 类型字段内联展开）：
+
+```
+FengToken — 8 words (64 bytes on 64-bit)
+├── kind: FengTokenKind             1 word   (enum/int)
+├── value: StringSpan               3 words  (origin:string + start:int + end:int)
+├── source: FengSource              1 word   (reference)
+└── location: FengSourceLocation    3 words  (offset:int + line:int + column:int)
+```
+
+- StringSpan.origin（`seal` 私有）持有 source.content 的引用，保证 token value 指向的源码子串不会被释放
+- FengSource 为托管引用，与 StringSpan.origin 共享同一 source.content 对象，提供 path 和完整 content 访问（用于错误报告读取出错行）
+- 两个引用字段（StringSpan.origin、FengSource）的 RC 成本仅为原子计数加减，同一文件所有 token 共享同一实例，开销可忽略
+
+**@value vs 普通 type 对比**：
+
+| | @value type | 普通 type |
+|---|---|---|
+| 分配 | 栈分配，零 heap 开销 | 每个 token 1 次 heap 分配（malloc） |
+| 传递 | 64 bytes memcpy（L1 cache ~1-2ns） | 指针传递 + RC 增减 |
+| 释放 | 自动，无 GC/RC 扫描 | 每个 token 1 次 heap 释放 + 字段 RC 释放 |
+| 总计（10 万 token） | ~10 万次 memcpy | ~10 万次 malloc + ~40 万次 RC 操作 + ~10 万次 free |
+
+- 结论：@value 明显更优，核心收益是避免每个 token 的堆分配
 
 ---
 
