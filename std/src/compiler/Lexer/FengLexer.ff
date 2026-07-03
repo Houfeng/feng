@@ -1,5 +1,8 @@
 open module std.compiler.lexer;
 
 open type FengLexer {
-
+  let source: FengSource;
+  func FengLexer(content: string, path: string) {
+    self.source = FengSource(content, path);
+  }
 }

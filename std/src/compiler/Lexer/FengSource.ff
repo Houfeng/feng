@@ -4,4 +4,8 @@ open module std.compiler.lexer;
 open type FengSource {
   let path: string;
   let content: string;
+  func FengSource(content: string, path: string) {
+    self.path = path;
+    self.content = content;
+  }
 }

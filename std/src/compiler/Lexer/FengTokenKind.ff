@@ -1,25 +1,123 @@
 open module std.compiler.lexer;
 
-import std.text;
-
 /**
- * FengTokenKind 枚举定义了词法分析器中可能出现的各种词法单元类型。
+ * Token 种类枚举。
+ *
+ * 按类别分段编号，便于区间判断分类：
+ * - isTrivia(kind): kind < 100（特殊/空白/注释，含子区间）
+ * - isIdentifier(kind): kind >= 200 && kind < 300
+ * - isLiteral(kind): kind >= 300 && kind < 400
+ * - isKeyword(kind): kind >= 400 && kind < 500
+ * - isPunctuation(kind): kind >= 500 && kind < 600
+ * - isOperator(kind): kind >= 600 && kind < 700
  */
 open enum FengTokenKind {
-  /** 标识符 */
-  Identifier,
-  /** 关键字 */
-  Keyword,
-  /** 字面量 */
-  Literal,
-  /** 操作符 */
-  Operator,
-  /** 标点符号 */
-  Punctuation,
-  /** 注释 */
-  Comment,
-  /** 空白符 */
-  Whitespace,
-  /** 文件结束 */
-  EndOfFile
+  // ---- 特殊/空白/注释 (0xx) ----
+  // 特殊 (0-19)
+  SpecialEndOfFile = 0,
+  SpecialError = 1,
+  // 空白 (20-39)
+  WhitespaceSpace = 20,
+  WhitespaceNewline = 21,
+  // 注释 (40-59)
+  CommentLine = 40,
+  CommentBlock = 41,
+  CommentDoc = 42,
+
+  // ---- 标识符 (2xx) ----
+  Identifier = 200,
+
+  // ---- 字面量 (3xx) ----
+  LiteralInteger = 300,
+  LiteralFloat = 301,
+  LiteralString = 302,
+  LiteralRawString = 303,
+  LiteralBool = 304,
+
+  // ---- 关键字 (4xx) ----
+  KeywordType = 400,
+  KeywordEnum = 401,
+  KeywordSpec = 402,
+  KeywordFit = 403,
+  KeywordExtern = 404,
+  KeywordFunc = 405,
+  KeywordLet = 406,
+  KeywordVar = 407,
+  KeywordStatic = 408,
+  KeywordOpen = 409,
+  KeywordSeal = 410,
+  KeywordSelf = 411,
+  KeywordModule = 412,
+  KeywordImport = 413,
+  KeywordAs = 414,
+  KeywordIf = 415,
+  KeywordElse = 416,
+  KeywordMatch = 417,
+  KeywordWhile = 418,
+  KeywordFor = 419,
+  KeywordIn = 420,
+  KeywordBreak = 421,
+  KeywordContinue = 422,
+  KeywordTry = 423,
+  KeywordCatch = 424,
+  KeywordUnknown = 425,
+  KeywordThrow = 426,
+  KeywordReturn = 427,
+  KeywordDefer = 428,
+  KeywordVoid = 429,
+
+  // ---- 分隔符 (5xx) ----
+  PunctuationLeftParen = 500,
+  PunctuationRightParen = 501,
+  PunctuationLeftBrace = 502,
+  PunctuationRightBrace = 503,
+  PunctuationLeftBracket = 504,
+  PunctuationRightBracket = 505,
+  PunctuationComma = 506,
+  PunctuationColon = 507,
+  PunctuationSemicolon = 508,
+  PunctuationDot = 509,
+  PunctuationEllipsis = 510,
+
+  // ---- 运算符 (6xx) ----
+  // 算术 (600-609)
+  OperatorPlus = 600,
+  OperatorMinus = 601,
+  OperatorStar = 602,
+  OperatorSlash = 603,
+  OperatorPercent = 604,
+  // 赋值 (610-619)
+  OperatorAssign = 610,
+  OperatorPlusAssign = 611,
+  OperatorMinusAssign = 612,
+  OperatorStarAssign = 613,
+  OperatorSlashAssign = 614,
+  OperatorPercentAssign = 615,
+  // 比较 (620-629)
+  OperatorLess = 620,
+  OperatorLessEqual = 621,
+  OperatorGreater = 622,
+  OperatorGreaterEqual = 623,
+  OperatorEqual = 624,
+  OperatorNotEqual = 625,
+  // 逻辑 (630-639)
+  OperatorNot = 630,
+  OperatorLogicalAnd = 631,
+  OperatorLogicalOr = 632,
+  // 位运算 (640-649)
+  OperatorBitwiseAnd = 640,
+  OperatorBitwiseOr = 641,
+  OperatorBitwiseXor = 642,
+  OperatorBitwiseNot = 643,
+  OperatorShiftLeft = 644,
+  OperatorShiftRight = 645,
+  // 位运算赋值 (650-659)
+  OperatorBitwiseAndAssign = 650,
+  OperatorBitwiseOrAssign = 651,
+  OperatorBitwiseXorAssign = 652,
+  OperatorShiftLeftAssign = 653,
+  OperatorShiftRightAssign = 654,
+  // 其他 (660-669)
+  OperatorArrow = 660,
+  OperatorAt = 661
 }
