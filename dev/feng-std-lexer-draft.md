@@ -22,7 +22,7 @@
 
 ### 与 C 版的关系
 
-Feng 版 Token 类型与 C 版**语义等价但结构不同**——按 Feng 风格设计，不机械翻译 C union。C 版编译器继续作为当前主力编译器使用；Feng 版首先服务于自定义注解，远期服务于自举。
+Feng 版面向更好的设计，不机械对齐 C 版——Lexer 只管词法切分（含空白和注释），语义解析（数值、注解分类）交给 Parser。C 版编译器继续作为当前主力编译器使用；Feng 版首先服务于自定义注解，远期服务于自举。
 
 ---
 
@@ -31,17 +31,16 @@ Feng 版 Token 类型与 C 版**语义等价但结构不同**——按 Feng 风�
 | 决策项 | 结论 | 理由 |
 |--------|------|------|
 | 交付范围 | Lexer + Parser 整体规划，分两阶段；本文覆盖阶段一 | Lexer 先交付解锁注解 |
-| Token 与 C 版关系 | 语义等价，结构按 Feng 风格 | 不机械翻译 C union |
-| Token 值存储 | union type（`i64 \| f64 \| bool \| NoValue`） | tag + slot 性能可忽略，类型安全 |
-| Token 类型形式 | `@value` type | 零 heap/RC 压力；~72 bytes memcpy 远快于 malloc + RC |
+| Token 与 C 版关系 | 面向更好的设计，不机械对齐 C 版 | Lexer 只管词法切分，语义解析交给 Parser |
+| Token 类型形式 | `@value` type | 零 heap/RC 压力；~64 bytes memcpy 远快于 malloc + RC |
 | StringBuilder | 同步实现 | Lexer 字符串扫描依赖 |
 | 序列化预留 | 先实现 Token 后再考虑 | |
 
 ### Token @value type 性能分析
 
-- Token 共 8 字段：`kind`(enum) + `lexeme`(string ptr) + `location`(3 ints) + `value`(tag+slot) + `annotationKind`(enum) + `leadingDoc`(string ptr) + `errorMessage`(string ptr) + `errorCode`(string ptr)
+- FengToken 共 6 字段：`kind`(enum) + `lexeme`(string ptr) + `location`(3 ints) + `leadingDoc`(string ptr) + `errorMessage`(string ptr) + `errorCode`(string ptr)
 - 其中 string 是指针，不深拷贝
-- @value 每次传递约 ~9 word（~72 bytes on 64-bit）memcpy，L1 cache 内亚 ns 级
+- @value 每次传递约 ~8 word（~64 bytes on 64-bit）memcpy，L1 cache 内亚 ns 级
 - 对比普通 type：每次创建需 1 次 heap 分配 + 多次 RC 操作（创建、存入数组、传递、释放），ns 级别 × 数万次
 - 结论：@value 明显更优
 
@@ -124,153 +123,145 @@ open type StringBuilder {
 **文件**：`std/src/compiler/Lexer/FengToken.ff`
 **模块**：`std.compiler`
 
-### 4.1 TokenKind 枚举
+### 4.1 FengTokenKind 枚举
 
-语义与 C 版 `FengTokenKind` 完全对齐。
+按类别分段编号（每段 100），区间判断代替逐个枚举匹配。
+完整拼写命名，类别前缀区分。
 
 ```feng
 open module std.compiler;
 
 /**
  * Token 种类枚举。
- * 值与 C 版编译器 FengTokenKind 一一对应。
- */
-open enum TokenKind {
-  // 特殊
-  EOF = 0,
-  ERROR = 1,
-
-  // 字面量与标识符
-  IDENTIFIER = 2,
-  ANNOTATION = 3,
-  INTEGER = 4,
-  FLOAT = 5,
-  STRING = 6,
-  BOOL = 7,
-
-  // 关键字（与 C 版 FENG_TOKEN_KW_* 一一对应）
-  KW_TYPE = 8,
-  KW_ENUM = 9,
-  KW_SPEC = 10,
-  KW_FIT = 11,
-  KW_EXTERN = 12,
-  KW_FUNC = 13,
-  KW_LET = 14,
-  KW_VAR = 15,
-  KW_STATIC = 16,
-  KW_OPEN = 17,
-  KW_SEAL = 18,
-  KW_SELF = 19,
-  KW_MODULE = 20,
-  KW_IMPORT = 21,
-  KW_AS = 22,
-  KW_IF = 23,
-  KW_ELSE = 24,
-  KW_MATCH = 25,
-  KW_WHILE = 26,
-  KW_FOR = 27,
-  KW_IN = 28,
-  KW_BREAK = 29,
-  KW_CONTINUE = 30,
-  KW_TRY = 31,
-  KW_CATCH = 32,
-  KW_UNKNOWN = 33,
-  KW_THROW = 34,
-  KW_RETURN = 35,
-  KW_DEFER = 36,
-  KW_VOID = 37,
-
-  // 分隔符与运算符
-  LPAREN = 38,
-  RPAREN = 39,
-  LBRACE = 40,
-  RBRACE = 41,
-  LBRACKET = 42,
-  RBRACKET = 43,
-  COMMA = 44,
-  COLON = 45,
-  SEMICOLON = 46,
-  DOT = 47,
-  PLUS = 48,
-  MINUS = 49,
-  STAR = 50,
-  SLASH = 51,
-  PERCENT = 52,
-  PLUS_ASSIGN = 53,
-  MINUS_ASSIGN = 54,
-  STAR_ASSIGN = 55,
-  SLASH_ASSIGN = 56,
-  PERCENT_ASSIGN = 57,
-  ASSIGN = 58,
-  NOT = 59,
-  LT = 60,
-  LE = 61,
-  GT = 62,
-  GE = 63,
-  EQ = 64,
-  NE = 65,
-  AND_AND = 66,
-  OR_OR = 67,
-  AMP = 68,
-  AMP_ASSIGN = 69,
-  PIPE = 70,
-  PIPE_ASSIGN = 71,
-  CARET = 72,
-  CARET_ASSIGN = 73,
-  SHL = 74,
-  SHL_ASSIGN = 75,
-  SHR = 76,
-  SHR_ASSIGN = 77,
-  ARROW = 78,
-  TILDE = 79,
-  ELLIPSIS = 80
-}
-```
-
-### 4.2 AnnotationKind 枚举
-
-与 C 版 `FengAnnotationKind` 对齐。
-
-```feng
-/**
- * 注解种类枚举。
- * 与 C 版 FengAnnotationKind 对齐。
- */
-open enum AnnotationKind {
-  NONE = 0,
-  CUSTOM = 1,
-  ABI = 2,
-  CDECL = 3,
-  STDCALL = 4,
-  FASTCALL = 5,
-  RUNTIME = 6,
-  ITERABLE = 7,
-  ITERATOR = 8,
-  VALUE = 9
-}
-```
-
-### 4.3 TokenValue union type
-
-```feng
-/**
- * Token 无值标记。
- * 用于关键字、运算符、标识符、字符串、注解等不携带语义值的 Token。
- */
-open type NoValue {}
-
-/**
- * Token 值类型——union type（tag + slot 布局）。
  *
- * - i64     → INTEGER Token 的整数值
- * - f64     → FLOAT Token 的浮点值
- * - bool    → BOOL Token 的布尔值
- * - NoValue → 其他所有 Token（不携带语义值）
+ * 按类别分段编号（每段 100），便于区间判断分类：
+ * - isKeyword(kind): kind >= 400 && kind < 500
+ * - isOperator(kind): kind >= 600 && kind < 700
  */
-open spec TokenValue: i64 | f64 | bool | NoValue;
+open enum FengTokenKind {
+  // ---- 特殊 (0xx) ----
+  SpecialEndOfFile = 0,
+  SpecialError = 1,
+
+  // ---- 空白 (1xx) ----
+  WhitespaceSpace = 100,
+  WhitespaceNewline = 101,
+
+  // ---- 注释 (2xx) ----
+  CommentLine = 200,
+  CommentBlock = 201,
+  CommentDoc = 202,
+
+  // ---- 字面量与标识符 (3xx) ----
+  LiteralIdentifier = 300,
+  LiteralInteger = 301,
+  LiteralFloat = 302,
+  LiteralString = 303,
+  LiteralRawString = 304,
+  LiteralBool = 305,
+
+  // ---- 关键字 (4xx) ----
+  KeywordType = 400,
+  KeywordEnum = 401,
+  KeywordSpec = 402,
+  KeywordFit = 403,
+  KeywordExtern = 404,
+  KeywordFunc = 405,
+  KeywordLet = 406,
+  KeywordVar = 407,
+  KeywordStatic = 408,
+  KeywordOpen = 409,
+  KeywordSeal = 410,
+  KeywordSelf = 411,
+  KeywordModule = 412,
+  KeywordImport = 413,
+  KeywordAs = 414,
+  KeywordIf = 415,
+  KeywordElse = 416,
+  KeywordMatch = 417,
+  KeywordWhile = 418,
+  KeywordFor = 419,
+  KeywordIn = 420,
+  KeywordBreak = 421,
+  KeywordContinue = 422,
+  KeywordTry = 423,
+  KeywordCatch = 424,
+  KeywordUnknown = 425,
+  KeywordThrow = 426,
+  KeywordReturn = 427,
+  KeywordDefer = 428,
+  KeywordVoid = 429,
+
+  // ---- 分隔符 (5xx) ----
+  PunctuationLeftParen = 500,
+  PunctuationRightParen = 501,
+  PunctuationLeftBrace = 502,
+  PunctuationRightBrace = 503,
+  PunctuationLeftBracket = 504,
+  PunctuationRightBracket = 505,
+  PunctuationComma = 506,
+  PunctuationColon = 507,
+  PunctuationSemicolon = 508,
+  PunctuationDot = 509,
+  PunctuationEllipsis = 510,
+
+  // ---- 运算符 (6xx) ----
+  // 算术 (600-609)
+  OperatorPlus = 600,
+  OperatorMinus = 601,
+  OperatorStar = 602,
+  OperatorSlash = 603,
+  OperatorPercent = 604,
+  // 赋值 (610-619)
+  OperatorAssign = 610,
+  OperatorPlusAssign = 611,
+  OperatorMinusAssign = 612,
+  OperatorStarAssign = 613,
+  OperatorSlashAssign = 614,
+  OperatorPercentAssign = 615,
+  // 比较 (620-629)
+  OperatorLess = 620,
+  OperatorLessEqual = 621,
+  OperatorGreater = 622,
+  OperatorGreaterEqual = 623,
+  OperatorEqual = 624,
+  OperatorNotEqual = 625,
+  // 逻辑 (630-639)
+  OperatorNot = 630,
+  OperatorLogicalAnd = 631,
+  OperatorLogicalOr = 632,
+  // 位运算 (640-649)
+  OperatorBitwiseAnd = 640,
+  OperatorBitwiseOr = 641,
+  OperatorBitwiseXor = 642,
+  OperatorBitwiseNot = 643,
+  OperatorShiftLeft = 644,
+  OperatorShiftRight = 645,
+  // 位运算赋值 (650-659)
+  OperatorBitwiseAndAssign = 650,
+  OperatorBitwiseOrAssign = 651,
+  OperatorBitwiseXorAssign = 652,
+  OperatorShiftLeftAssign = 653,
+  OperatorShiftRightAssign = 654,
+  // 其他 (660-669)
+  OperatorArrow = 660,
+  OperatorAt = 661
+}
 ```
 
-### 4.4 SourceLocation
+**区间总览**：
+
+| 区间 | 类别 | 前缀 | 已用 | 预留 |
+|------|------|------|------|------|
+| 0xx | 特殊 | `Special` | 2 | 98 |
+| 1xx | 空白 | `Whitespace` | 2 | 98 |
+| 2xx | 注释 | `Comment` | 3 | 97 |
+| 3xx | 字面量/标识 | `Literal` | 6 | 94 |
+| 4xx | 关键字 | `Keyword` | 30 | 70 |
+| 5xx | 分隔符 | `Punctuation` | 11 | 89 |
+| 6xx | 运算符 | `Operator` | 31 | 69 |
+
+### 4.2 SourceLocation
 
 ```feng
 /**
@@ -288,56 +279,59 @@ open type SourceLocation {
 }
 ```
 
-### 4.5 Token
+### 4.3 FengToken
 
 ```feng
 /**
  * Token 实例——词法分析的最小单元。
  *
  * @value type：栈分配、值语义、零 heap/RC 压力。
- * 每次传递约 ~9 word（~72 bytes on 64-bit）memcpy，远低于 malloc + RC 开销。
  *
- * lexeme 存储 Token 的原始文本（string 引用，不拷贝源码）。
- * value 存储解析后的语义值（仅 INTEGER/FLOAT/BOOL 有值，其他为 NoValue）。
+ * Lexer 只负责词法切分，不解析语义值。
+ * 数值解析（integer/float/bool）和注解分类由 Parser 阶段处理。
  */
 @value
-open type Token {
+open type FengToken {
   /** Token 种类 */
-  open let kind: TokenKind;
+  open let kind: FengTokenKind;
   /** 原始文本（引用源码字符串的子串） */
   open let lexeme: string;
   /** 源码位置 */
   open let location: SourceLocation;
-  /** 语义值（仅 INTEGER/FLOAT/BOOL 有意义） */
-  open let value: TokenValue;
-  /** 注解种类（仅 ANNOTATION Token 有意义） */
-  open let annotationKind: AnnotationKind;
-  /** 文档注释（`/** ... *​/`，无则为空字符串） */
+  /** 文档注释（`/** ... */`，无则为空字符串） */
   open let leadingDoc: string;
-  /** 错误信息（仅 ERROR Token 有意义） */
+  /** 错误信息（仅 SpecialError 有意义） */
   open let errorMessage: string;
-  /** 错误码（仅 ERROR Token 有意义，如 "LE0001"） */
+  /** 错误码（仅 SpecialError 有意义，如 "LE0001"） */
   open let errorCode: string;
 }
 ```
 
-### 4.6 辅助函数
+### 4.4 辅助函数
+
+基于区间判断，无需逐个枚举匹配：
 
 ```feng
-/**
- * 判断 TokenKind 是否为关键字。
- */
-open func isKeyword(kind: TokenKind): bool;
+/** 判断是否为关键字（4xx 区间） */
+open func isKeyword(kind: FengTokenKind): bool;
 
-/**
- * 获取 TokenKind 的名称字符串（如 "EOF"、"IDENTIFIER"、"KW_TYPE"）。
- */
-open func tokenKindName(kind: TokenKind): string;
+/** 判断是否为运算符（6xx 区间） */
+open func isOperator(kind: FengTokenKind): bool;
 
-/**
- * 获取 AnnotationKind 的名称字符串。
- */
-open func annotationKindName(kind: AnnotationKind): string;
+/** 判断是否为分隔符（5xx 区间） */
+open func isPunctuation(kind: FengTokenKind): bool;
+
+/** 判断是否为字面量（3xx 区间） */
+open func isLiteral(kind: FengTokenKind): bool;
+
+/** 判断是否为注释（2xx 区间） */
+open func isComment(kind: FengTokenKind): bool;
+
+/** 判断是否为空白（1xx 区间） */
+open func isWhitespace(kind: FengTokenKind): bool;
+
+/** 获取 FengTokenKind 的名称字符串（如 "KeywordType"、"OperatorPlus"） */
+open func tokenKindName(kind: FengTokenKind): string;
 ```
 
 ---
@@ -359,7 +353,7 @@ open func annotationKindName(kind: AnnotationKind): string;
  * 用法示例：
  *   let lexer = FengLexer(source, "example.ff");
  *   var token = lexer.next();
- *   while token.kind != TokenKind.EOF {
+ *   while token.kind != FengTokenKind.SpecialEndOfFile {
  *     // 处理 token
  *     token = lexer.next();
  *   }
@@ -373,7 +367,7 @@ open type FengLexer {
   seal var column: int;
   seal var pendingDoc: string;
   seal var pendingDocLineBreaks: int;
-  seal var peeked: Token;
+  seal var peeked: FengToken;
   seal var hasPeeked: bool;
 
   /** 从源码字符串创建 Lexer */
@@ -383,13 +377,13 @@ open type FengLexer {
   open func FengLexer(source: byte[], length: int, path: string);
 
   /** 获取下一个 Token（消费） */
-  open func next(): Token;
+  open func next(): FengToken;
 
   /** 前瞻下一个 Token（不消费） */
-  open func peek(): Token;
+  open func peek(): FengToken;
 
   /** 一次性产出全部 Token（含 EOF） */
-  open func tokenize(): Token[];
+  open func tokenize(): FengToken[];
 
   /** 获取源码文件路径 */
   open func path(): string;
@@ -401,35 +395,40 @@ open type FengLexer {
 ```
 next()
   → 如果有 peeked，返回 peeked 并清除 hasPeeked
-  → skipWhitespaceAndComments()
   → 记录 startOffset/startLine/startColumn
-  → 如果 atEnd，返回 EOF Token
-  → 读取当前字符并 advance
-  → 按字符分发：
+  → 如果 atEnd，返回 SpecialEndOfFile Token
+  → 读取当前字符：
+    - 空白字符 → scanWhitespace()：产出 WhitespaceSpace 或 WhitespaceNewline
+    - '/' + '/' → scanLineComment()：产出 CommentLine
+    - '/' + '*' → scanBlockComment()：产出 CommentBlock 或 CommentDoc（/** 开头）
     - 标识符首字符（字母/_）→ scanIdentifierOrKeyword()
     - 数字 → scanNumber()
-    - '@' → scanAnnotation()
+    - '@' → 产出 OperatorAt
     - '"' → scanString()
     - '`' → scanRawString()
-    - 运算符/分隔符 → 直接返回对应 Token（部分需要前瞻，如 `+` vs `+=`、`<` vs `<=`）
-    - 其他 → ERROR Token (LE0007)
-  → 附加 pendingDoc（如有）
+    - 运算符/分隔符 → 直接返回对应 Token（部分需要前瞻）
+    - 其他 → SpecialError Token (LE0007)
+  → 对于非 trivia Token，附加 pendingDoc（如有）
 ```
 
 ### 5.3 Trivia 处理（空白与注释）
 
-`skipWhitespaceAndComments()` 跳过以下 trivia：
+Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建 AST 时过滤 trivia Token。
 
-- **水平空白**：空格 `0x20`、制表符 `\t`、垂直制表 `\v`、换页 `\f`
-- **换行**：`\n`、`\r\n`、`\r`（换行后更新 line/column，并检查 pendingDoc 是否需要清除）
-- **行注释**：`//` 到行尾（清除 pendingDoc）
-- **块注释**：`/* ... */`（未终止报错 LE0006；普通块注释清除 pendingDoc）
-- **文档注释**：`/** ... */`（记录到 pendingDoc，附加到下一个 Token）
+**空白扫描**：
+- **水平空白**：空格 `0x20`、制表符 `\t`、垂直制表 `\v`、换页 `\f` → `WhitespaceSpace`
+- **换行**：`\n`、`\r\n`、`\r` → `WhitespaceNewline`（更新 line/column）
+- 连续同类空白合并为一个 Token
 
-**文档注释附加规则**（与 C 版一致）：
-- `/** ... */` 记录为 pendingDoc
-- 如果文档注释与下一个 Token 之间隔了 ≥ 2 个换行，丢弃 pendingDoc
-- `//` 行注释和普通 `/* */` 块注释会清除 pendingDoc
+**注释扫描**：
+- **行注释**：`//` 到行尾 → `CommentLine`
+- **块注释**：`/* ... */` → `CommentBlock`（未终止报错 LE0006）
+- **文档注释**：`/** ... */` → `CommentDoc`（同时记录到 pendingDoc，附加到下一个非 trivia Token）
+
+**文档注释附加规则**：
+- `CommentDoc` 产出后记录为 pendingDoc
+- 如果文档注释与下一个非 trivia Token 之间隔了 ≥ 2 个换行，丢弃 pendingDoc
+- `CommentLine` 和 `CommentBlock` 会清除 pendingDoc
 
 ### 5.4 各扫描方法
 
@@ -470,38 +469,30 @@ next()
 - 不处理转义序列，所有字符原样保留
 - 未终止 → ERROR Token（LE0003）
 
-#### scanAnnotation
-
-- `@` 后必须紧跟标识符首字符（否则 LE0005）
-- 扫描 `@` + 标识符 → ANNOTATION Token
-- 查内建注解表：匹配则设 `annotationKind` 为对应值，否则设为 `CUSTOM`
-
-**内建注解表（8 个）**：
-`abi`, `cdecl`, `stdcall`, `fastcall`, `runtime`, `iterable`, `iterator`, `value`
-
 #### 运算符与分隔符
 
 部分运算符需要前瞻（peek 下一字符）：
 
 | 首字符 | 可能产出 | 前瞻逻辑 |
 |--------|---------|---------|
-| `+` | PLUS, PLUS_ASSIGN | 看下一个是否为 `=` |
-| `-` | MINUS, MINUS_ASSIGN, ARROW | 看下一个是否为 `=` 或 `>` |
-| `*` | STAR, STAR_ASSIGN | 看下一个是否为 `=` |
-| `/` | SLASH, SLASH_ASSIGN | 看下一个是否为 `=`（`//` 和 `/*` 已在 trivia 处理） |
-| `%` | PERCENT, PERCENT_ASSIGN | 看下一个是否为 `=` |
-| `=` | ASSIGN, EQ | 看下一个是否为 `=` |
-| `!` | NOT, NE | 看下一个是否为 `=` |
-| `<` | LT, LE, SHL, SHL_ASSIGN | 看下一个是否为 `=` 或 `<`（再下一个 `=`） |
-| `>` | GT, GE, SHR, SHR_ASSIGN | 看下一个是否为 `=` 或 `>`（再下一个 `=`） |
-| `&` | AMP, AMP_ASSIGN, AND_AND | 看下一个是否为 `=` 或 `&` |
-| `\|` | PIPE, PIPE_ASSIGN, OR_OR | 看下一个是否为 `=` 或 `\|` |
-| `^` | CARET, CARET_ASSIGN | 看下一个是否为 `=` |
-| `.` | DOT, ELLIPSIS | 看下一个两个是否都是 `.` |
+| `+` | OperatorPlus, OperatorPlusAssign | 看下一个是否为 `=` |
+| `-` | OperatorMinus, OperatorMinusAssign, OperatorArrow | 看下一个是否为 `=` 或 `>` |
+| `*` | OperatorStar, OperatorStarAssign | 看下一个是否为 `=` |
+| `/` | OperatorSlash, OperatorSlashAssign | 看下一个是否为 `=`（`//` 和 `/*` 已在 trivia 处理） |
+| `%` | OperatorPercent, OperatorPercentAssign | 看下一个是否为 `=` |
+| `=` | OperatorAssign, OperatorEqual | 看下一个是否为 `=` |
+| `!` | OperatorNot, OperatorNotEqual | 看下一个是否为 `=` |
+| `<` | OperatorLess, OperatorLessEqual, OperatorShiftLeft, OperatorShiftLeftAssign | 看下一个是否为 `=` 或 `<`（再下一个 `=`） |
+| `>` | OperatorGreater, OperatorGreaterEqual, OperatorShiftRight, OperatorShiftRightAssign | 看下一个是否为 `=` 或 `>`（再下一个 `=`） |
+| `&` | OperatorBitwiseAnd, OperatorBitwiseAndAssign, OperatorLogicalAnd | 看下一个是否为 `=` 或 `&` |
+| `\|` | OperatorBitwiseOr, OperatorBitwiseOrAssign, OperatorLogicalOr | 看下一个是否为 `=` 或 `\|` |
+| `^` | OperatorBitwiseXor, OperatorBitwiseXorAssign | 看下一个是否为 `=` |
+| `.` | PunctuationDot, PunctuationEllipsis | 看下一个两个是否都是 `.` |
+| `@` | OperatorAt | 无前瞻，直接产出 |
 
 ### 5.5 错误码
 
-与 C 版完全一致：
+基于 C 版，移除 LE0005（注解识别移至 Parser）：
 
 | 错误码 | 场景 | 错误文案 |
 |--------|------|---------|
@@ -509,7 +500,6 @@ next()
 | LE0002 | 无效数字字面量 | invalid numeric literal |
 | LE0003 | 字符串/原始字符串未终止 | unterminated string literal / unterminated raw string literal |
 | LE0004 | 无效转义序列 | invalid string escape / invalid \x escape |
-| LE0005 | @ 后无标识符 | expected annotation name after '@' |
 | LE0006 | 块注释未终止 | unterminated block comment |
 | LE0007 | 无法识别的字符 | unexpected character |
 
@@ -520,16 +510,15 @@ next()
 | `feng_lexer_init` | `FengLexer.FengLexer()` | 构造器 |
 | `feng_lexer_next` | `FengLexer.next()` | 核心接口 |
 | `feng_lexer_peek` | `FengLexer.peek()` | 前瞻 |
-| `skip_whitespace_and_comments` | 内部 `skipTrivia()` | trivia 跳过 |
+| `skip_whitespace_and_comments` | 内部 `scanWhitespace()`/`scanComment()` | 发射为 Token，不再跳过 |
 | `scan_identifier_or_keyword` | 内部 `scanIdentifierOrKeyword()` | 标识符/关键字 |
 | `scan_number` | 内部 `scanNumber()` | 数字 |
 | `scan_string` | 内部 `scanString()` | 普通字符串 |
 | `scan_raw_string` | 内部 `scanRawString()` | 原始字符串 |
-| `scan_annotation` | 内部 `scanAnnotation()` | 注解 |
-| `parse_integer_slice` | 内部 `parseIntegerValue()` | 整数值解析 |
-| `parse_float_slice` | 内部 `parseFloatValue()` | 浮点值解析 |
+| `parse_integer_slice` | Parser 阶段处理 | 数值解析移至 Parser |
+| `parse_float_slice` | Parser 阶段处理 | 数值解析移至 Parser |
 | `feng_lookup_keyword` | 内部关键字查找 | match + 线性扫描 |
-| `feng_lookup_builtin_annotation` | 内部注解查找 | match + 线性扫描 |
+| `feng_lookup_builtin_annotation` | Parser 阶段处理 | 注解识别移至 Parser |
 
 ---
 
@@ -550,10 +539,10 @@ next()
  * - 声明边界查找（findDeclarationEnd）：骨架找 target
  */
 open type TokenStream {
-  seal var tokens: Token[];
+  seal var tokens: FengToken[];
 
   /** 从 Token 数组创建 */
-  open func TokenStream(tokens: Token[]);
+  open func TokenStream(tokens: FengToken[]);
 
   /** 从 Lexer 创建（自动 tokenize） */
   open static func fromLexer(lexer: FengLexer): TokenStream;
@@ -564,7 +553,7 @@ open type TokenStream {
   open func length(): int;
 
   /** 按索引获取 Token */
-  open func at(index: int): Token;
+  open func at(index: int): FengToken;
 
   // ---- 注解变换操作 ----
 
@@ -579,7 +568,7 @@ open type TokenStream {
    * 用于注解 handler 输出替换整个 @X(...) target 范围。
    * 替换后 Token 流长度可能变化。
    */
-  open func replace(start: int, end: int, replacement: Token[]): void;
+  open func replace(start: int, end: int, replacement: FengToken[]): void;
 
   /**
    * 从指定位置向前查找声明边界。
@@ -604,7 +593,7 @@ open type TokenStream {
  */
 open type TokenSpan {
   /** 底层 Token 数组引用 */
-  open let tokens: Token[];
+  open let tokens: FengToken[];
   /** 起始索引（含） */
   open let start: int;
   /** 结束索引（不含） */
@@ -614,10 +603,10 @@ open type TokenSpan {
   open func length(): int;
 
   /** 按相对索引获取 Token */
-  open func at(index: int): Token;
+  open func at(index: int): FengToken;
 
   /** 转为独立 Token 数组（拷贝） */
-  open func toArray(): Token[];
+  open func toArray(): FengToken[];
 }
 ```
 
@@ -664,19 +653,16 @@ open type TokenSpan {
 - 标识符扫描（普通标识符 + 下划线开头）
 - 数字扫描（十进制、十六进制、二进制、八进制、浮点数、带 `_` 分隔）
 - 字符串扫描（普通字符串、转义序列、原始字符串）
-- 注解扫描（内建注解 + 自定义注解 + `@` 后无标识符报错）
-- 运算符和分隔符（全部 43 种）
-- Trivia 处理（空白、行注释、块注释、文档注释附加规则）
-- 错误处理（全部 7 个错误码场景）
+- 运算符和分隔符（全部 43 种，含 OperatorAt）
+- Trivia 发射（空白 Token、行注释、块注释、文档注释及 leadingDoc 附加规则）
+- 错误处理（全部 6 个错误码场景）
 
 ### 8.2 对比验证
 
 同一源码输入，比较 C 版和 Feng 版产出的 Token 序列：
-- TokenKind 一致
+- FengTokenKind 一致
 - lexeme 一致
 - 位置信息（offset, line, column）一致
-- 语义值（integer, floating, boolean）一致
-- annotationKind 一致
 
 ### 8.3 注解模拟
 

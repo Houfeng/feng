@@ -1,0 +1,5 @@
+open module std.compiler.lexer;
+
+open type FengLexer {
+
+}
