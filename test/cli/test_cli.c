@@ -7884,6 +7884,96 @@ static void test_lsp_hover_type_param(void) {
     free(output);
 }
 
+static void test_lsp_hover_type_param_extended(void) {
+    static const char *kSource =
+        "module test.lsp.type_param_hover_ext;\n"
+        "\n"
+        "type Empty {\n"
+        "}\n"
+        "\n"
+        "spec Option<T>: Empty | T;\n"
+        "\n"
+        "spec Action<T>(arg1: T): void;\n"
+        "\n"
+        "type Box<T> {\n"
+        "    var value: T;\n"
+        "}\n"
+        "\n"
+        "func test_fn<T>(val: T): T {\n"
+        "    return val;\n"
+        "}\n"
+        "\n"
+        "func main(args: string[]) {\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *output;
+
+    /* Hover on T in spec Option<T>: should show "type parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "spec Option<T>: Empty | T;",
+                                        strlen("spec Option<"));
+    ASSERT(strstr(output, "type parameter T") != NULL);
+    free(output);
+
+    /* Hover on T after | in spec Option<T>: Empty | T: should show "type parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "spec Option<T>: Empty | T;",
+                                        strlen("spec Option<T>: Empty | "));
+    ASSERT(strstr(output, "type parameter T") != NULL);
+    free(output);
+
+    /* Hover on T in spec Action<T>: should show "type parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "spec Action<T>(arg1: T): void;",
+                                        strlen("spec Action<"));
+    ASSERT(strstr(output, "type parameter T") != NULL);
+    free(output);
+
+    /* Hover on T in arg1: T (callable spec param): should show "type parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "spec Action<T>(arg1: T): void;",
+                                        strlen("spec Action<T>(arg1: "));
+    ASSERT(strstr(output, "type parameter T") != NULL);
+    free(output);
+
+    /* Hover on T in func test_fn<T>: should show "type parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "func test_fn<T>(val: T): T {",
+                                        strlen("func test_fn<"));
+    ASSERT(strstr(output, "type parameter T") != NULL);
+    free(output);
+
+    /* Hover on T in val: T (function param): should show "type parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "func test_fn<T>(val: T): T {",
+                                        strlen("func test_fn<T>(val: "));
+    ASSERT(strstr(output, "type parameter T") != NULL);
+    free(output);
+
+    /* Hover on T in return type T (function return): should show "type parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "func test_fn<T>(val: T): T {",
+                                        strlen("func test_fn<T>(val: T): "));
+    ASSERT(strstr(output, "type parameter T") != NULL);
+    free(output);
+
+    /* Hover on T in Box<T> field type: should show "type parameter T" */
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    var value: T;",
+                                        strlen("    var value: "));
+    ASSERT(strstr(output, "type parameter T") != NULL);
+    free(output);
+}
+
 static void test_lsp_signature_displays_variadic_parameter_syntax(void) {
     static const char *kHoverSource =
         "module test.lsp.variadic_signature_hover;\n"
@@ -13201,6 +13291,7 @@ int main(void) {
     test_lsp_hover_uses_markdown_when_supported();
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
     test_lsp_hover_type_param();
+    test_lsp_hover_type_param_extended();
     test_lsp_hover_uses_inferred_top_level_binding_type();
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();

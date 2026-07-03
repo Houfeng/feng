@@ -2549,6 +2549,29 @@ static size_t decl_end(const FengDecl *decl) {
                         end = limit;
                     }
                 }
+            } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                for (index = 0U; index < decl->as.spec_decl.as.union_form.member_count; ++index) {
+                    size_t limit = type_ref_end(decl->as.spec_decl.as.union_form.members[index]);
+                    if (limit > end) {
+                        end = limit;
+                    }
+                }
+            } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+                for (index = 0U; index < decl->as.spec_decl.as.callable.param_count; ++index) {
+                    size_t param_end = token_end_offset(decl->as.spec_decl.as.callable.params[index].token);
+                    if (decl->as.spec_decl.as.callable.params[index].type != NULL) {
+                        param_end = type_ref_end(decl->as.spec_decl.as.callable.params[index].type);
+                    }
+                    if (param_end > end) {
+                        end = param_end;
+                    }
+                }
+                if (decl->as.spec_decl.as.callable.return_type != NULL) {
+                    size_t return_end = type_ref_end(decl->as.spec_decl.as.callable.return_type);
+                    if (return_end > end) {
+                        end = return_end;
+                    }
+                }
             }
             break;
         case FENG_DECL_FIT:
@@ -5632,10 +5655,24 @@ static bool find_type_ref_in_member(const FengDecl *owner_decl,
                                     size_t offset,
                                     FengLspResolvedTarget *target) {
     size_t index;
+    const FengTypeParam *owner_type_params = NULL;
+    size_t owner_type_param_count = 0U;
+
+    /* Extract type params from the owner decl so field type refs like T in
+     * `var value: T` inside `type Box<T>` can resolve to the type parameter. */
+    if (owner_decl != NULL) {
+        if (owner_decl->kind == FENG_DECL_TYPE) {
+            owner_type_params = owner_decl->as.type_decl.type_params;
+            owner_type_param_count = owner_decl->as.type_decl.type_param_count;
+        } else if (owner_decl->kind == FENG_DECL_SPEC) {
+            owner_type_params = owner_decl->as.spec_decl.type_params;
+            owner_type_param_count = owner_decl->as.spec_decl.type_param_count;
+        }
+    }
 
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
         return resolve_type_ref_at_offset(session, program, member->as.field.type, offset, target,
-                                          NULL, NULL, 0U);
+                                          owner_decl, owner_type_params, owner_type_param_count);
     }
     if (resolve_type_param_hit(session,
                                program,
@@ -5911,6 +5948,44 @@ static bool find_type_ref_hit(const FengDecl *decl,
                                                 target)) {
                         return true;
                     }
+                }
+            }
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                for (index = 0U; index < decl->as.spec_decl.as.union_form.member_count; ++index) {
+                    if (resolve_type_ref_at_offset(session,
+                                                   program,
+                                                   decl->as.spec_decl.as.union_form.members[index],
+                                                   offset,
+                                                   target,
+                                                   decl,
+                                                   decl->as.spec_decl.type_params,
+                                                   decl->as.spec_decl.type_param_count)) {
+                        return true;
+                    }
+                }
+            }
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+                for (index = 0U; index < decl->as.spec_decl.as.callable.param_count; ++index) {
+                    if (resolve_type_ref_at_offset(session,
+                                                   program,
+                                                   decl->as.spec_decl.as.callable.params[index].type,
+                                                   offset,
+                                                   target,
+                                                   decl,
+                                                   decl->as.spec_decl.type_params,
+                                                   decl->as.spec_decl.type_param_count)) {
+                        return true;
+                    }
+                }
+                if (resolve_type_ref_at_offset(session,
+                                               program,
+                                               decl->as.spec_decl.as.callable.return_type,
+                                               offset,
+                                               target,
+                                               decl,
+                                               decl->as.spec_decl.type_params,
+                                               decl->as.spec_decl.type_param_count)) {
+                    return true;
                 }
             }
             break;
