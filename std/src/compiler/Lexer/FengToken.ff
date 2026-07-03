@@ -13,8 +13,6 @@ open type FengToken {
   let value: StringSpan;
   /** 词法单元所在的源文件 */
   let source: FengSource;
-  /** 词法单元所在的行号 */
-  let line: int;
-  /** 词法单元所在的列号 */
-  let column: int;
+  /** 词法单元在源文件中的位置 */
+  let location: FengSourceLocation;
 }

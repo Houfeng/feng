@@ -9,3 +9,13 @@ open type FengSource {
     self.content = content;
   }
 }
+
+@value
+open type FengSourceLocation {
+  /** 偏移量 */
+  let offset: int;
+  /** 词法单元所在的行号 */
+  let line: int;
+  /** 词法单元所在的列号 */
+  let column: int;
+}
