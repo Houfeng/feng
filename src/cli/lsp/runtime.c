@@ -5657,6 +5657,7 @@ static bool find_type_ref_in_member(const FengDecl *owner_decl,
     size_t index;
     const FengTypeParam *owner_type_params = NULL;
     size_t owner_type_param_count = 0U;
+    FengTypeParam inferred_type_param = {0};
 
     /* Extract type params from the owner decl so field type refs like T in
      * `var value: T` inside `type Box<T>` can resolve to the type parameter. */
@@ -5667,6 +5668,26 @@ static bool find_type_ref_in_member(const FengDecl *owner_decl,
         } else if (owner_decl->kind == FENG_DECL_SPEC) {
             owner_type_params = owner_decl->as.spec_decl.type_params;
             owner_type_param_count = owner_decl->as.spec_decl.type_param_count;
+        } else if (owner_decl->kind == FENG_DECL_FIT) {
+            /* For `fit T[]`, infer T as a type parameter from the array target. */
+            FengTypeRef *fit_cursor = owner_decl->as.fit_decl.target;
+            bool has_array_layer = false;
+
+            while (fit_cursor != NULL && fit_cursor->kind == FENG_TYPE_REF_ARRAY) {
+                has_array_layer = true;
+                fit_cursor = fit_cursor->as.inner;
+            }
+            if (has_array_layer && fit_cursor != NULL &&
+                fit_cursor->kind == FENG_TYPE_REF_NAMED &&
+                fit_cursor->as.named.segment_count == 1U &&
+                fit_cursor->as.named.type_arg_count == 0U &&
+                resolve_named_type_ref(session, program, fit_cursor) == NULL) {
+                inferred_type_param.token = owner_decl->token;
+                inferred_type_param.name = fit_cursor->as.named.segments[0];
+                inferred_type_param.constraint = NULL;
+                owner_type_params = &inferred_type_param;
+                owner_type_param_count = 1U;
+            }
         }
     }
 
@@ -6012,14 +6033,60 @@ static bool find_type_ref_hit(const FengDecl *decl,
                 }
             }
             break;
-        case FENG_DECL_FIT:
+        case FENG_DECL_FIT: {
+            /* Infer type param from array target (e.g. T in `fit T[]`). */
+            FengTypeParam fit_inferred_param = {0};
+            const FengTypeParam *fit_type_params = NULL;
+            size_t fit_type_param_count = 0U;
+            {
+                FengTypeRef *fit_cursor = decl->as.fit_decl.target;
+                bool has_array_layer = false;
+
+                while (fit_cursor != NULL && fit_cursor->kind == FENG_TYPE_REF_ARRAY) {
+                    has_array_layer = true;
+                    fit_cursor = fit_cursor->as.inner;
+                }
+                if (has_array_layer && fit_cursor != NULL &&
+                    fit_cursor->kind == FENG_TYPE_REF_NAMED &&
+                    fit_cursor->as.named.segment_count == 1U &&
+                    fit_cursor->as.named.type_arg_count == 0U &&
+                    resolve_named_type_ref(session, program, fit_cursor) == NULL) {
+                    fit_inferred_param.token = decl->token;
+                    fit_inferred_param.name = fit_cursor->as.named.segments[0];
+                    fit_inferred_param.constraint = NULL;
+                    fit_type_params = &fit_inferred_param;
+                    fit_type_param_count = 1U;
+                }
+            }
+            if (fit_type_param_count > 0U &&
+                resolve_type_param_hit(session,
+                                       program,
+                                       decl,
+                                       fit_type_params,
+                                       fit_type_param_count,
+                                       offset,
+                                       target)) {
+                return true;
+            }
+            if (resolve_type_ref_at_offset(session,
+                                           program,
+                                           decl->as.fit_decl.target,
+                                           offset,
+                                           target,
+                                           decl,
+                                           fit_type_params,
+                                           fit_type_param_count)) {
+                return true;
+            }
             for (index = 0U; index < decl->as.fit_decl.spec_count; ++index) {
                 if (resolve_type_ref_at_offset(session,
                                                program,
                                                decl->as.fit_decl.specs[index],
                                                offset,
                                                target,
-                                               NULL, NULL, 0U)) {
+                                               decl,
+                                               fit_type_params,
+                                               fit_type_param_count)) {
                     return true;
                 }
             }
@@ -6034,6 +6101,7 @@ static bool find_type_ref_hit(const FengDecl *decl,
                 }
             }
             break;
+        }
     }
     return false;
 }
