@@ -68,7 +68,7 @@ std/src/compiler/
 
 ### 3.1 FengTokenKind 枚举
 
-按类别分段编号（每段 100），区间判断代替逐个枚举匹配。
+按类别分段编号，区间判断代替逐个枚举匹配。特殊/空白/注释合并在 0xx 并分子段，标识符、字面量、关键字、分隔符、运算符各占独立百段。
 完整拼写命名，类别前缀区分。
 
 ```feng
@@ -77,31 +77,36 @@ open module std.compiler;
 /**
  * Token 种类枚举。
  *
- * 按类别分段编号（每段 100），便于区间判断分类：
+ * 按类别分段编号，便于区间判断分类：
+ * - isTrivia(kind): kind < 100（特殊/空白/注释，含子区间）
+ * - isIdentifier(kind): kind >= 200 && kind < 300
+ * - isLiteral(kind): kind >= 300 && kind < 400
  * - isKeyword(kind): kind >= 400 && kind < 500
+ * - isPunctuation(kind): kind >= 500 && kind < 600
  * - isOperator(kind): kind >= 600 && kind < 700
  */
 open enum FengTokenKind {
-  // ---- 特殊 (0xx) ----
+  // ---- 特殊/空白/注释 (0xx) ----
+  // 特殊 (0-19)
   SpecialEndOfFile = 0,
   SpecialError = 1,
+  // 空白 (20-39)
+  WhitespaceSpace = 20,
+  WhitespaceNewline = 21,
+  // 注释 (40-59)
+  CommentLine = 40,
+  CommentBlock = 41,
+  CommentDoc = 42,
 
-  // ---- 空白 (1xx) ----
-  WhitespaceSpace = 100,
-  WhitespaceNewline = 101,
+  // ---- 标识符 (2xx) ----
+  Identifier = 200,
 
-  // ---- 注释 (2xx) ----
-  CommentLine = 200,
-  CommentBlock = 201,
-  CommentDoc = 202,
-
-  // ---- 字面量与标识符 (3xx) ----
-  LiteralIdentifier = 300,
-  LiteralInteger = 301,
-  LiteralFloat = 302,
-  LiteralString = 303,
-  LiteralRawString = 304,
-  LiteralBool = 305,
+  // ---- 字面量 (3xx) ----
+  LiteralInteger = 300,
+  LiteralFloat = 301,
+  LiteralString = 302,
+  LiteralRawString = 303,
+  LiteralBool = 304,
 
   // ---- 关键字 (4xx) ----
   KeywordType = 400,
@@ -196,10 +201,9 @@ open enum FengTokenKind {
 
 | 区间 | 类别 | 前缀 | 已用 | 预留 |
 |------|------|------|------|------|
-| 0xx | 特殊 | `Special` | 2 | 98 |
-| 1xx | 空白 | `Whitespace` | 2 | 98 |
-| 2xx | 注释 | `Comment` | 3 | 97 |
-| 3xx | 字面量/标识 | `Literal` | 6 | 94 |
+| 0xx | 特殊/空白/注释 | `Special`/`Whitespace`/`Comment` | 7 | 93 |
+| 2xx | 标识符 | `Identifier` | 1 | 99 |
+| 3xx | 字面量 | `Literal` | 5 | 95 |
 | 4xx | 关键字 | `Keyword` | 30 | 70 |
 | 5xx | 分隔符 | `Punctuation` | 11 | 89 |
 | 6xx | 运算符 | `Operator` | 31 | 69 |
@@ -255,23 +259,29 @@ open type FengToken {
 基于区间判断，无需逐个枚举匹配：
 
 ```feng
-/** 判断是否为关键字（4xx 区间） */
-open func isKeyword(kind: FengTokenKind): bool;
+/** 判断是否为 trivia（0xx：特殊/空白/注释） */
+open func isTrivia(kind: FengTokenKind): bool;
 
-/** 判断是否为运算符（6xx 区间） */
-open func isOperator(kind: FengTokenKind): bool;
-
-/** 判断是否为分隔符（5xx 区间） */
-open func isPunctuation(kind: FengTokenKind): bool;
+/** 判断是否为标识符（2xx 区间） */
+open func isIdentifier(kind: FengTokenKind): bool;
 
 /** 判断是否为字面量（3xx 区间） */
 open func isLiteral(kind: FengTokenKind): bool;
 
-/** 判断是否为注释（2xx 区间） */
-open func isComment(kind: FengTokenKind): bool;
+/** 判断是否为关键字（4xx 区间） */
+open func isKeyword(kind: FengTokenKind): bool;
 
-/** 判断是否为空白（1xx 区间） */
+/** 判断是否为分隔符（5xx 区间） */
+open func isPunctuation(kind: FengTokenKind): bool;
+
+/** 判断是否为运算符（6xx 区间） */
+open func isOperator(kind: FengTokenKind): bool;
+
+/** 判断是否为空白（0xx 子区间：20-39） */
 open func isWhitespace(kind: FengTokenKind): bool;
+
+/** 判断是否为注释（0xx 子区间：40-59） */
+open func isComment(kind: FengTokenKind): bool;
 
 /** 获取 FengTokenKind 的名称字符串（如 "KeywordType"、"OperatorPlus"） */
 open func tokenKindName(kind: FengTokenKind): string;
