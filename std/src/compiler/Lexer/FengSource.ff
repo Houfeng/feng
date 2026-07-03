@@ -1,0 +1,7 @@
+open module std.compiler.lexer;
+
+@value
+open type FengSource {
+  let path: string;
+  let content: string;
+}

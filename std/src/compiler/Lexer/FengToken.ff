@@ -3,34 +3,6 @@ open module std.compiler.lexer;
 import std.text;
 
 /**
- * FengTokenKind 枚举定义了词法分析器中可能出现的各种词法单元类型。
- */
-open enum FengTokenKind {
-  /** 标识符 */
-  Identifier,
-  /** 关键字 */
-  Keyword,
-  /** 字面量 */
-  Literal,
-  /** 操作符 */
-  Operator,
-  /** 标点符号 */
-  Punctuation,
-  /** 注释 */
-  Comment,
-  /** 空白符 */
-  Whitespace,
-  /** 文件结束 */
-  EndOfFile
-}
-
-@value
-open type FengSource {
-  let path: string;
-  let content: string;
-}
-
-/**
  * FengToken 结构体表示词法分析器生成的一个词法单元，包含其类型、值以及在源代码中的位置。
  */
 @value
