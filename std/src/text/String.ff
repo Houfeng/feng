@@ -588,6 +588,7 @@ open fit string {
 /**
  * An iterator cursor that yields individual bytes of a string as single-byte substrings.
  */
+@value
 open type StringByteIterator {
   seal let text: string;
   seal let len: int;

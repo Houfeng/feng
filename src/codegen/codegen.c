@@ -23110,6 +23110,20 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             cg_materialize_to_local(cg, &src, "_isrc");
         }
 
+        /* When the source expression has a value-semantics type (tuple or
+         * @value), the @iterable method expects a pointer self parameter,
+         * but the expression is a struct value (rvalue).  Materialize to
+         * a local so we can take its address. */
+        bool src_is_value = src.type != NULL &&
+            src.type->kind == CG_TYPE_OBJECT &&
+            src.type->user != NULL &&
+            cg_user_type_is_value_semantics(src.type->user);
+        const char *src_addr = "";
+        if (src_is_value) {
+            cg_materialize_to_local(cg, &src, "_isrc");
+            src_addr = "&";
+        }
+
         /* Call @iterable: cursor = src.iterable_method() */
         cursor_var = cg_fresh_temp(cg, "_cursor");
         if (!cursor_var) {
@@ -23133,9 +23147,9 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         CGType *cursor_cgtype = cgtype_clone(iterable_um->return_type);
         if (iterable_is_builtin_fit) {
             buf_append_fmt(cg->cur_body,
-                "    %s %s = %s(%s, "
+                "    %s %s = %s(%s%s, "
                 "&(const FengFunctionDescriptor){.name = \"%s\"});\n",
-                cursor_cty, cursor_var, iterable_um->c_name, src.c_expr,
+                cursor_cty, cursor_var, iterable_um->c_name, src_addr, src.c_expr,
                 iterable_um->feng_name);
         } else if (cg->in_generic_type_method && src_ut != NULL &&
                    src_ut->generic_context_type_param_count > 0U) {
@@ -23154,14 +23168,14 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 return false;
             }
             buf_append_fmt(cg->cur_body,
-                "    %s %s; %s((void *)%s, %s, &%s);\n",
+                "    %s %s; %s((void *)%s%s, %s, &%s);\n",
                 cursor_cty, cursor_var,
-                shared_iter, src.c_expr, rtd_expr, cursor_var);
+                shared_iter, src_addr, src.c_expr, rtd_expr, cursor_var);
             free(shared_iter);
             free(rtd_expr);
         } else {
             Buf iter_call; buf_init(&iter_call);
-            buf_append_fmt(&iter_call, "%s(%s", iterable_um->c_name, src.c_expr);
+            buf_append_fmt(&iter_call, "%s(%s%s", iterable_um->c_name, src_addr, src.c_expr);
             if (!cg_append_user_type_context_descriptor_args(
                     cg, &iter_call, src_ut, stmt->token)) {
                 buf_free(&iter_call);
@@ -23298,8 +23312,13 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
     body_scope->continue_label = cont_label_owned;
     cg->cur_scope = body_scope;
 
-    /* Call @iterator: result = cursor.next() */
+    /* Call @iterator: result = cursor.next()
+     * For @value / tuple cursor types the cursor variable is a stack struct,
+     * so take its address to match the pointer self parameter. */
     char *result_var = cg_fresh_temp(cg, "_ir");
+    const char *cursor_addr = (cursor_ut != NULL &&
+                               cg_user_type_is_value_semantics(cursor_ut))
+                                  ? "&" : "";
     if (cg->in_generic_type_method && cursor_ut != NULL &&
         cursor_ut->generic_context_type_param_count > 0U) {
         /* Shared body cross-type call for next(). */
@@ -23322,14 +23341,14 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             return false;
         }
         buf_append_fmt(cg->cur_body,
-            "        %s %s; %s((void *)%s, %s, &%s);\n",
+            "        %s %s; %s((void *)%s%s, %s, &%s);\n",
             result_cty, result_var,
-            shared_next, cursor_var, rtd_expr, result_var);
+            shared_next, cursor_addr, cursor_var, rtd_expr, result_var);
         free(shared_next);
         free(rtd_expr);
     } else {
         Buf next_call; buf_init(&next_call);
-        buf_append_fmt(&next_call, "%s(%s", iter_um->c_name, cursor_var);
+        buf_append_fmt(&next_call, "%s(%s%s", iter_um->c_name, cursor_addr, cursor_var);
         if (!cg_append_user_type_context_descriptor_args(
                 cg, &next_call, cursor_ut, stmt->token)) {
             buf_free(&next_call);

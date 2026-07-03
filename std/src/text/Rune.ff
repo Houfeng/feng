@@ -30,6 +30,7 @@ open fit string {
 /**
  * A read-only view of a string as a sequence of runes (Unicode scalar values).
  */
+@value
 open type RuneView {
   seal let text: string;
 
@@ -91,6 +92,7 @@ open type RuneView {
 /**
  * An iterator cursor that yields individual runes as substring slices.
  */
+@value
 open type RuneIterator {
   seal let text: string;
   seal let len: int;

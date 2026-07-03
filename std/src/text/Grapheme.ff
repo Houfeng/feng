@@ -24,6 +24,7 @@ open fit string {
 /**
  * A read-only view of a string as a sequence of grapheme clusters.
  */
+@value
 open type GraphemeView {
   seal let text: string;
 
@@ -101,6 +102,7 @@ open type GraphemeView {
 /**
  * An iterator cursor that yields individual grapheme clusters as substring slices.
  */
+@value
 open type GraphemeIterator {
   seal let text: string;
   seal let len: int;

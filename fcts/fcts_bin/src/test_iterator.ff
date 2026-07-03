@@ -2,6 +2,7 @@ module fcts_bin;
 
 import std.io;
 import std.test;
+import std.text;
 
 // 迭代结果 tuple
 type IterPair(bool, int);
@@ -49,6 +50,69 @@ type SelfCursor {
   }
 }
 
+// ---- @value type 迭代器 (覆盖 value-semantics for-in 路径) ----
+
+// @value 自迭代 Cursor: source 本身是 @value cursor (self-cursor 路径)
+@value
+type ValueSelfCursor {
+  seal var current: int;
+  seal let limit: int;
+
+  open func ValueSelfCursor(current: int, limit: int) {
+    self.current = current;
+    self.limit = limit;
+  }
+
+  @iterator
+  open func next(): IterPair {
+    if self.current >= self.limit {
+      return (false, 0);
+    }
+    let value = self.current;
+    self.current = self.current + 1;
+    return (true, value);
+  }
+}
+
+// @value Cursor: 由 @iterable 返回
+@value
+type ValueCursor {
+  seal var current: int;
+  seal let end: int;
+
+  open func ValueCursor(current: int, end: int) {
+    self.current = current;
+    self.end = end;
+  }
+
+  @iterator
+  open func next(): IterPair {
+    if self.current >= self.end {
+      return (false, 0);
+    }
+    let value = self.current;
+    self.current = self.current + 1;
+    return (true, value);
+  }
+}
+
+// @value 可迭代类型: @iterable 返回 @value cursor
+@value
+type ValueRange {
+  seal let start: int;
+  seal let end: int;
+
+  open func ValueRange(start: int, end: int) {
+    self.start = start;
+    self.end = end;
+  }
+
+  @iterable
+  open func iter(): ValueCursor {
+    return ValueCursor(self.start, self.end);
+  }
+}
+
 /** 自定义迭代器测试 */
 open func test_iterator() {
   describe("iterator", () {
@@ -93,6 +157,62 @@ open func test_iterator() {
         iter_sum += i;
       }
       assert(arr_sum == 30 && iter_sum == 1, "array and iterator coexist");
+    });
+
+    // @value type for-in 测试
+
+    test("@value @iterable → @value cursor", () {
+      let vr = ValueRange(1, 4);
+      var sum = 0;
+      for let n in vr {
+        sum += n;
+      }
+      assert(sum == 6, "@value @iterable → @value cursor");
+    });
+
+    test("@value self-cursor iterator", () {
+      let vc = ValueSelfCursor(0, 3);
+      var count = 0;
+      for let i in vc {
+        count += 1;
+      }
+      assert(count == 3, "@value self-cursor iterator");
+    });
+
+    test("@value self-cursor sum", () {
+      let vc = ValueSelfCursor(1, 4);
+      var sum = 0;
+      for let n in vc {
+        sum += n;
+      }
+      assert(sum == 6, "@value self-cursor sum");
+    });
+
+    test("std string byte for/in", () {
+      let text = "abc";
+      var result = "";
+      for let b in text {
+        result = result + b;
+      }
+      assert(result == "abc", "std string byte for/in");
+    });
+
+    test("std string rune for/in via runes()", () {
+      let text = "A中B";
+      var result = "";
+      for let r in text.runes() {
+        result = result + "[" + r + "]";
+      }
+      assert(result == "[A][中][B]", "std string rune for/in via runes()");
+    });
+
+    test("std StringByteIterator direct self-cursor", () {
+      let iter = StringByteIterator("xyz");
+      var result = "";
+      for let b in iter {
+        result = result + b;
+      }
+      assert(result == "xyz", "std StringByteIterator direct self-cursor");
     });
   });
 }
