@@ -48,6 +48,9 @@ open type StringBuilder {
   /** 追加字节数组的前 length 个字节 */
   open func append(bytes: byte[], length: int);
 
+  /** 追加整个字节数组 */
+  open func append(bytes: byte[]);
+
   /** 产出最终字符串（拷贝 buffer 的前 count 字节） */
   open func toString(): string;
 
