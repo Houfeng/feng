@@ -44,14 +44,14 @@ open type FengSource {
     if lineStart >= length {
       lineStart = length - 1;
     }
-    if lineStart < 0 {
-      lineStart = 0;
-    }
+    if lineStart < 0 { lineStart = 0; }
     while lineStart > 0 && self.at(lineStart - 1) != (byte)0x0A {
       lineStart = lineStart - 1;
     }
     var lineEnd = lineStart;
-    while lineEnd < length && self.at(lineEnd) != (byte)0x0A && self.at(lineEnd) != (byte)0x0D {
+    while lineEnd < length
+      && self.at(lineEnd) != (byte)0x0A
+      && self.at(lineEnd) != (byte)0x0D {
       lineEnd = lineEnd + 1;
     }
     return self.content.clone(lineStart, lineEnd);
