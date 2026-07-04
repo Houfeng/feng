@@ -1,767 +1,767 @@
-// open module std.compiler.lexer;
-
-// import std.compiler.common;
-// import std.text;
-// import std.collections;
-
-// /**
-//  * Feng 词法分析器。
-//  *
-//  * 将源码字符串转换为 Token 流。逐字节扫描 + 回溯前瞻，
-//  * 与 C 版 lexer 在 Token 种类、value、位置信息上行为等价，
-//  * 但采用 Feng 语言的原生表达方式，不机械对齐 C 版实现。
-//  *
-//  * 设计要点：
-//  * - 空白和注释作为独立 Token 发射，不跳过（Parser 负责过滤 trivia）
-//  * - 数值解析、注解分类等语义解析交给 Parser
-//  * - 文档注释（CommentDoc）作为普通 trivia Token 发射；
-//  *   "附加到下一个非 trivia Token" 是 Parser 阶段的事，不在 Lexer 层维护
-//  * - 词法错误直接抛出 FengCompileError，不混入 Token 流
-//  *
-//  * 用法示例：
-//  *   let source = FengSource(content, "example.ff");
-//  *   var lexer = FengLexer(source);
-//  *   var token = lexer.next();
-//  *   while token.kind != FengTokenKind.SpecialEndOfFile {
-//  *     // 处理 token
-//  *     token = lexer.next();
-//  *   }
-//  */
-// open type FengLexer {
-//   /** 源文件信息 */
-//   seal let source: FengSource;
-//   /** 源码字节内容（用于高效字节级访问） */
-//   seal let bytes: byte[];
-//   /** 字节长度 */
-//   seal let length: int;
-//   /** 当前字节偏移 */
-//   seal var pos: int;
-//   /** 当前行号（从 1 开始） */
-//   seal var line: int;
-//   /** 当前列号（从 1 开始） */
-//   seal var column: int;
-//   /** 前瞻缓存 */
-//   seal var peeked: FengToken;
-//   /** 前瞻缓存是否有效 */
-//   seal var hasPeeked: bool;
-
-//   /** 从 FengSource 创建 Lexer */
-//   open func FengLexer(source: FengSource) {
-//     self.source = source;
-//     self.bytes = source.content.toBytes();
-//     self.length = self.bytes.length();
-//     self.pos = 0;
-//     self.line = 1;
-//     self.column = 1;
-//     self.peeked = FengToken {
-//       kind: FengTokenKind.SpecialEndOfFile,
-//       value: StringSpan(source.content, 0, 0),
-//       source: source,
-//       location: FengLocation { offset: 0, line: 1, column: 1 }
-//     };
-//     self.hasPeeked = false;
-//   }
-
-//   // ==================== 公开接口 ====================
-
-//   /** 获取下一个 Token（消费）。遇到词法错误时抛出 FengCompileError */
-//   open func next(): FengToken {
-//     if self.hasPeeked {
-//       self.hasPeeked = false;
-//       return self.peeked;
-//     }
-//     return self.scanNext();
-//   }
-
-//   /** 前瞻下一个 Token（不消费）。遇到词法错误时抛出 FengCompileError */
-//   open func peek(): FengToken {
-//     if !self.hasPeeked {
-//       self.peeked = self.scanNext();
-//       self.hasPeeked = true;
-//     }
-//     return self.peeked;
-//   }
-
-//   /** 一次性产出全部 Token（含 EOF），遇错即抛 */
-//   open func tokenize(): FengToken[] {
-//     let tokens = List<FengToken>();
-//     while true {
-//       let token = self.next();
-//       tokens.add(token);
-//       if token.kind == FengTokenKind.SpecialEndOfFile {
-//         break;
-//       }
-//     }
-//     return tokens.entries();
-//   }
-
-//   // ==================== 核心调度 ====================
-
-//   /** 核心调度：记录起始位置，按首字符分发到各扫描方法 */
-//   seal func scanNext(): FengToken {
-//     let startOffset = self.pos;
-//     let startLine = self.line;
-//     let startColumn = self.column;
-
-//     if self.atEnd() {
-//       return self.makeToken(FengTokenKind.SpecialEndOfFile, startOffset, startLine, startColumn);
-//     }
-
-//     let c = self.peekChar();
-
-//     // 水平空白
-//     if self.isHorizontalWhitespaceByte(c) {
-//       return self.scanWhitespace(startOffset, startLine, startColumn);
-//     }
-//     // 换行
-//     if c == (byte)0x0A || c == (byte)0x0D {
-//       return self.scanWhitespace(startOffset, startLine, startColumn);
-//     }
-//     // 行注释
-//     if c == (byte)0x2F && self.peekCharAt(1) == (byte)0x2F {
-//       return self.scanLineComment(startOffset, startLine, startColumn);
-//     }
-//     // 块/文档注释
-//     if c == (byte)0x2F && self.peekCharAt(1) == (byte)0x2A {
-//       return self.scanBlockOrDocComment(startOffset, startLine, startColumn);
-//     }
-//     // 标识符 / 关键字
-//     if self.isIdentifierStartByte(c) {
-//       return self.scanIdentifierOrKeyword(startOffset, startLine, startColumn);
-//     }
-//     // 数字
-//     if self.isDigitByte(c) {
-//       return self.scanNumber(startOffset, startLine, startColumn);
-//     }
-//     // 字符串
-//     if c == (byte)0x22 {
-//       return self.scanString(startOffset, startLine, startColumn);
-//     }
-//     // 原始字符串
-//     if c == (byte)0x60 {
-//       return self.scanRawString(startOffset, startLine, startColumn);
-//     }
-//     // 运算符 / 分隔符
-//     return self.scanOperatorOrPunctuation(startOffset, startLine, startColumn);
-//   }
-
-//   // ==================== Trivia 扫描 ====================
-
-//   /** 扫描连续同类水平空白或单个换行 */
-//   seal func scanWhitespace(startOffset: int, startLine: int, startColumn: int): FengToken {
-//     let c = self.peekChar();
-//     if c == (byte)0x0A || c == (byte)0x0D {
-//       self.advance();
-//       return self.makeToken(FengTokenKind.WhitespaceNewline, startOffset, startLine, startColumn);
-//     }
-//     while self.isHorizontalWhitespaceByte(self.peekChar()) {
-//       self.advance();
-//     }
-//     return self.makeToken(FengTokenKind.WhitespaceSpace, startOffset, startLine, startColumn);
-//   }
-
-//   /** 扫描行注释 `//` 到行尾（不含换行） */
-//   seal func scanLineComment(startOffset: int, startLine: int, startColumn: int): FengToken {
-//     self.advance();
-//     self.advance();
-//     while !self.atEnd() {
-//       let c = self.peekChar();
-//       if c == (byte)0x0A || c == (byte)0x0D {
-//         break;
-//       }
-//       self.advance();
-//     }
-//     return self.makeToken(FengTokenKind.CommentLine, startOffset, startLine, startColumn);
-//   }
-
-//   /** 扫描块注释 `/* ... *\/` 或文档注释 `/** ... *\/`，未终止抛 LE0006 */
-//   seal func scanBlockOrDocComment(startOffset: int, startLine: int, startColumn: int): FengToken {
-//     let isDoc = self.peekCharAt(2) == (byte)0x2A;
-//     self.advance();
-//     self.advance();
-//     while !self.atEnd() {
-//       if self.peekChar() == (byte)0x2A && self.peekCharAt(1) == (byte)0x2F {
-//         self.advance();
-//         self.advance();
-//         let kind = self.selectDocKind(isDoc);
-//         return self.makeToken(kind, startOffset, startLine, startColumn);
-//       }
-//       self.advance();
-//     }
-//     return self.throwError(startOffset, startLine, startColumn, "LE0006", "unterminated block comment");
-//   }
-
-//   // ==================== 标识符 / 关键字 ====================
-
-//   /** 扫描标识符并查关键字表，含保留字检查与布尔字面量识别 */
-//   seal func scanIdentifierOrKeyword(startOffset: int, startLine: int, startColumn: int): FengToken {
-//     while self.isIdentifierContinueByte(self.peekChar()) {
-//       self.advance();
-//     }
-//     let text = self.source.content.clone(startOffset, self.pos);
-//     if self.isReservedWord(text) {
-//       return self.throwError(startOffset, startLine, startColumn, "LE0001", "reserved word cannot be used as an identifier");
-//     }
-//     if text == "true" || text == "false" {
-//       return self.makeToken(FengTokenKind.LiteralBool, startOffset, startLine, startColumn);
-//     }
-//     let kind = self.lookupKeyword(text);
-//     return self.makeToken(kind, startOffset, startLine, startColumn);
-//   }
-
-//   /** 关键字查找：match + 线性扫描，未命中返回 Identifier */
-//   seal func lookupKeyword(text: string): FengTokenKind {
-//     return match text {
-//       "type" { FengTokenKind.KeywordType }
-//       "enum" { FengTokenKind.KeywordEnum }
-//       "spec" { FengTokenKind.KeywordSpec }
-//       "fit" { FengTokenKind.KeywordFit }
-//       "extern" { FengTokenKind.KeywordExtern }
-//       "func" { FengTokenKind.KeywordFunc }
-//       "let" { FengTokenKind.KeywordLet }
-//       "var" { FengTokenKind.KeywordVar }
-//       "static" { FengTokenKind.KeywordStatic }
-//       "open" { FengTokenKind.KeywordOpen }
-//       "seal" { FengTokenKind.KeywordSeal }
-//       "self" { FengTokenKind.KeywordSelf }
-//       "module" { FengTokenKind.KeywordModule }
-//       "import" { FengTokenKind.KeywordImport }
-//       "as" { FengTokenKind.KeywordAs }
-//       "if" { FengTokenKind.KeywordIf }
-//       "else" { FengTokenKind.KeywordElse }
-//       "match" { FengTokenKind.KeywordMatch }
-//       "while" { FengTokenKind.KeywordWhile }
-//       "for" { FengTokenKind.KeywordFor }
-//       "in" { FengTokenKind.KeywordIn }
-//       "break" { FengTokenKind.KeywordBreak }
-//       "continue" { FengTokenKind.KeywordContinue }
-//       "try" { FengTokenKind.KeywordTry }
-//       "catch" { FengTokenKind.KeywordCatch }
-//       "unknown" { FengTokenKind.KeywordUnknown }
-//       "throw" { FengTokenKind.KeywordThrow }
-//       "return" { FengTokenKind.KeywordReturn }
-//       "defer" { FengTokenKind.KeywordDefer }
-//       "void" { FengTokenKind.KeywordVoid }
-//       else { FengTokenKind.Identifier }
-//     };
-//   }
-
-//   /** 保留字检查：class/struct/const/export/prop */
-//   seal func isReservedWord(text: string): bool {
-//     return text == "class" || text == "struct" || text == "const" || text == "export" || text == "prop";
-//   }
-
-//   // ==================== 数字 ====================
-
-//   /** 扫描数字字面量：0x/0b/0o 前缀、十进制浮点、_ 分隔，无效格式抛 LE0002 */
-//   seal func scanNumber(startOffset: int, startLine: int, startColumn: int): FengToken {
-//     let first = self.bytes[startOffset];
-//     var base = 10;
-//     var isFloat = false;
-
-//     if first == (byte)0x30 {
-//       let prefix = self.peekChar();
-//       if prefix == (byte)0x78 || prefix == (byte)0x58 {
-//         base = 16;
-//         self.advance();
-//         if !self.isHexDigitByte(self.peekChar()) {
-//           return self.scanInvalidNumberSuffix(startOffset, startLine, startColumn);
-//         }
-//         self.advance();
-//         self.consumeDigitRun(16);
-//       } else if prefix == (byte)0x62 || prefix == (byte)0x42 {
-//         base = 2;
-//         self.advance();
-//         if !self.isBinaryDigitByte(self.peekChar()) {
-//           return self.scanInvalidNumberSuffix(startOffset, startLine, startColumn);
-//         }
-//         self.advance();
-//         self.consumeDigitRun(2);
-//       } else if prefix == (byte)0x6F || prefix == (byte)0x4F {
-//         base = 8;
-//         self.advance();
-//         if !self.isOctalDigitByte(self.peekChar()) {
-//           return self.scanInvalidNumberSuffix(startOffset, startLine, startColumn);
-//         }
-//         self.advance();
-//         self.consumeDigitRun(8);
-//       } else {
-//         self.consumeDigitRun(10);
-//       }
-//     } else {
-//       self.consumeDigitRun(10);
-//     }
-
-//     if base == 10 {
-//       if self.peekChar() == (byte)0x2E && self.isDigitByte(self.peekCharAt(1)) {
-//         isFloat = true;
-//         self.advance();
-//         self.advance();
-//         self.consumeDigitRun(10);
-//       }
-//       let exp = self.peekChar();
-//       if exp == (byte)0x65 || exp == (byte)0x45 {
-//         let afterMarker = self.peekCharAt(1);
-//         let afterSign = self.selectExponentAfterSign(afterMarker);
-//         if self.isDigitByte(afterSign) {
-//           isFloat = true;
-//           self.advance();
-//           if afterMarker == (byte)0x2B || afterMarker == (byte)0x2D {
-//             self.advance();
-//           }
-//           self.advance();
-//           self.consumeDigitRun(10);
-//         }
-//       }
-//     }
-
-//     if self.isIdentifierStartByte(self.peekChar()) {
-//       while self.isIdentifierContinueByte(self.peekChar()) {
-//         self.advance();
-//       }
-//       return self.throwError(startOffset, startLine, startColumn, "LE0002", "invalid numeric literal");
-//     }
-
-//     let kind = self.selectNumberKind(isFloat);
-//     return self.makeToken(kind, startOffset, startLine, startColumn);
-//   }
-
-//   /** 无效数字字面量的后缀消费：将剩余标识符字符消费后抛 LE0002 */
-//   seal func scanInvalidNumberSuffix(startOffset: int, startLine: int, startColumn: int): FengToken {
-//     while self.isIdentifierContinueByte(self.peekChar()) {
-//       self.advance();
-//     }
-//     return self.throwError(startOffset, startLine, startColumn, "LE0002", "invalid numeric literal");
-//   }
-
-//   /** 消费连续数字（含 _ 分隔，_ 仅允许在两个数字之间） */
-//   seal func consumeDigitRun(base: int) {
-//     while true {
-//       let c = self.peekChar();
-//       if self.isDigitOfBase(c, base) {
-//         self.advance();
-//         continue;
-//       }
-//       if c == (byte)0x5F && self.isDigitOfBase(self.peekCharAt(1), base) {
-//         self.advance();
-//         self.advance();
-//         continue;
-//       }
-//       break;
-//     }
-//   }
-
-//   // ==================== 字符串 ====================
-
-//   /** 扫描双引号字符串，处理转义序列，未终止抛 LE0003，无效转义抛 LE0004 */
-//   seal func scanString(startOffset: int, startLine: int, startColumn: int): FengToken {
-//     self.advance();
-//     while !self.atEnd() {
-//       let c = self.peekChar();
-//       if c == (byte)0x22 {
-//         self.advance();
-//         return self.makeToken(FengTokenKind.LiteralString, startOffset, startLine, startColumn);
-//       }
-//       if c == (byte)0x0A || c == (byte)0x0D {
-//         return self.throwError(startOffset, startLine, startColumn, "LE0003", "unterminated string literal");
-//       }
-//       if c == (byte)0x5C {
-//         self.validateStringEscape(startOffset, startLine, startColumn);
-//       } else {
-//         self.advance();
-//       }
-//     }
-//     return self.throwError(startOffset, startLine, startColumn, "LE0003", "unterminated string literal");
-//   }
-
-//   /** 校验字符串转义序列，无效时抛 LE0004 */
-//   seal func validateStringEscape(startOffset: int, startLine: int, startColumn: int) {
-//     self.advance();
-//     if self.atEnd() {
-//       self.throwError(startOffset, startLine, startColumn, "LE0003", "unterminated string literal");
-//     }
-//     let e = self.advance();
-//     if e == (byte)0x5C || e == (byte)0x22 || e == (byte)0x6E || e == (byte)0x72 || e == (byte)0x74 || e == (byte)0x30 {
-//       return;
-//     }
-//     if e == (byte)0x78 {
-//       self.validateHexEscape(startOffset, startLine, startColumn);
-//       return;
-//     }
-//     self.throwError(startOffset, startLine, startColumn, "LE0004", "invalid string escape");
-//   }
-
-//   /** 校验 \xHH 转义：必须紧跟 2 个十六进制数字 */
-//   seal func validateHexEscape(startOffset: int, startLine: int, startColumn: int) {
-//     if self.atEnd() {
-//       self.throwError(startOffset, startLine, startColumn, "LE0004", "invalid \\x escape: expected 2 hex digits");
-//     }
-//     let h1 = self.advance();
-//     if !self.isHexDigitByte(h1) {
-//       self.throwError(startOffset, startLine, startColumn, "LE0004", "invalid \\x escape: expected hex digit");
-//     }
-//     if self.atEnd() {
-//       self.throwError(startOffset, startLine, startColumn, "LE0004", "invalid \\x escape: expected 2 hex digits");
-//     }
-//     let h2 = self.advance();
-//     if !self.isHexDigitByte(h2) {
-//       self.throwError(startOffset, startLine, startColumn, "LE0004", "invalid \\x escape: expected hex digit");
-//     }
-//   }
-
-//   /** 扫描反引号原始字符串，`` 转义为单个 `，未终止抛 LE0003 */
-//   seal func scanRawString(startOffset: int, startLine: int, startColumn: int): FengToken {
-//     self.advance();
-//     while !self.atEnd() {
-//       let c = self.peekChar();
-//       if c == (byte)0x60 {
-//         if self.peekCharAt(1) == (byte)0x60 {
-//           self.advance();
-//           self.advance();
-//         } else {
-//           self.advance();
-//           return self.makeToken(FengTokenKind.LiteralRawString, startOffset, startLine, startColumn);
-//         }
-//       } else {
-//         self.advance();
-//       }
-//     }
-//     return self.throwError(startOffset, startLine, startColumn, "LE0003", "unterminated raw string literal");
-//   }
-
-//   // ==================== 运算符 / 分隔符 ====================
-
-//   /** 扫描运算符和分隔符，含多字符前瞻，无法识别抛 LE0007 */
-//   seal func scanOperatorOrPunctuation(startOffset: int, startLine: int, startColumn: int): FengToken {
-//     let c = self.advance();
-
-//     // 分隔符 - 单字符无前瞻
-//     if c == (byte)0x28 {
-//       return self.makeToken(FengTokenKind.PunctuationLeftParen, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x29 {
-//       return self.makeToken(FengTokenKind.PunctuationRightParen, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x7B {
-//       return self.makeToken(FengTokenKind.PunctuationLeftBrace, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x7D {
-//       return self.makeToken(FengTokenKind.PunctuationRightBrace, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x5B {
-//       return self.makeToken(FengTokenKind.PunctuationLeftBracket, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x5D {
-//       return self.makeToken(FengTokenKind.PunctuationRightBracket, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x2C {
-//       return self.makeToken(FengTokenKind.PunctuationComma, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x3A {
-//       return self.makeToken(FengTokenKind.PunctuationColon, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x3B {
-//       return self.makeToken(FengTokenKind.PunctuationSemicolon, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x40 {
-//       return self.makeToken(FengTokenKind.OperatorAt, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x7E {
-//       return self.makeToken(FengTokenKind.OperatorBitwiseNot, startOffset, startLine, startColumn);
-//     }
-
-//     // 点 / 省略号
-//     if c == (byte)0x2E {
-//       if self.peekChar() == (byte)0x2E && self.peekCharAt(1) == (byte)0x2E {
-//         self.advance();
-//         self.advance();
-//         return self.makeToken(FengTokenKind.PunctuationEllipsis, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.PunctuationDot, startOffset, startLine, startColumn);
-//     }
-
-//     // 算术赋值系列
-//     if c == (byte)0x2B {
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorPlusAssign, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorPlus, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x2D {
-//       if self.consumeIf((byte)0x3E) {
-//         return self.makeToken(FengTokenKind.OperatorArrow, startOffset, startLine, startColumn);
-//       }
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorMinusAssign, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorMinus, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x2A {
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorStarAssign, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorStar, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x2F {
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorSlashAssign, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorSlash, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x25 {
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorPercentAssign, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorPercent, startOffset, startLine, startColumn);
-//     }
-
-//     // 比较 / 赋值 / 逻辑非
-//     if c == (byte)0x3D {
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorEqual, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorAssign, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x21 {
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorNotEqual, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorNot, startOffset, startLine, startColumn);
-//     }
-
-//     // 移位 / 大小比较
-//     if c == (byte)0x3C {
-//       if self.consumeIf((byte)0x3C) {
-//         if self.consumeIf((byte)0x3D) {
-//           return self.makeToken(FengTokenKind.OperatorShiftLeftAssign, startOffset, startLine, startColumn);
-//         }
-//         return self.makeToken(FengTokenKind.OperatorShiftLeft, startOffset, startLine, startColumn);
-//       }
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorLessEqual, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorLess, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x3E {
-//       if self.consumeIf((byte)0x3E) {
-//         if self.consumeIf((byte)0x3D) {
-//           return self.makeToken(FengTokenKind.OperatorShiftRightAssign, startOffset, startLine, startColumn);
-//         }
-//         return self.makeToken(FengTokenKind.OperatorShiftRight, startOffset, startLine, startColumn);
-//       }
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorGreaterEqual, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorGreater, startOffset, startLine, startColumn);
-//     }
-
-//     // 位运算 / 逻辑与或
-//     if c == (byte)0x26 {
-//       if self.consumeIf((byte)0x26) {
-//         return self.makeToken(FengTokenKind.OperatorLogicalAnd, startOffset, startLine, startColumn);
-//       }
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorBitwiseAndAssign, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorBitwiseAnd, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x7C {
-//       if self.consumeIf((byte)0x7C) {
-//         return self.makeToken(FengTokenKind.OperatorLogicalOr, startOffset, startLine, startColumn);
-//       }
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorBitwiseOrAssign, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorBitwiseOr, startOffset, startLine, startColumn);
-//     }
-//     if c == (byte)0x5E {
-//       if self.consumeIf((byte)0x3D) {
-//         return self.makeToken(FengTokenKind.OperatorBitwiseXorAssign, startOffset, startLine, startColumn);
-//       }
-//       return self.makeToken(FengTokenKind.OperatorBitwiseXor, startOffset, startLine, startColumn);
-//     }
-
-//     return self.throwError(startOffset, startLine, startColumn, "LE0007", "unexpected character");
-//   }
-
-//   // ==================== 字节访问与位置维护 ====================
-
-//   /** 当前是否已到末尾 */
-//   seal func atEnd(): bool {
-//     return self.pos >= self.length;
-//   }
-
-//   /** 前瞻当前字节（不消费），到末尾返回 0 */
-//   seal func peekChar(): byte {
-//     if self.pos >= self.length {
-//       return (byte)0;
-//     }
-//     return self.bytes[self.pos];
-//   }
-
-//   /** 前瞻指定偏移字节（不消费），越界返回 0 */
-//   seal func peekCharAt(offset: int): byte {
-//     let idx = self.pos + offset;
-//     if idx < 0 || idx >= self.length {
-//       return (byte)0;
-//     }
-//     return self.bytes[idx];
-//   }
-
-//   /** 前进一字节，维护 pos/line/column，返回该字节（末尾返回 0）；\r 与 \r\n 统一视为 \n */
-//   seal func advance(): byte {
-//     if self.pos >= self.length {
-//       return (byte)0;
-//     }
-//     let c = self.bytes[self.pos];
-//     if c == (byte)0x0D {
-//       self.pos = self.pos + 1;
-//       if self.pos < self.length && self.bytes[self.pos] == (byte)0x0A {
-//         self.pos = self.pos + 1;
-//       }
-//       self.line = self.line + 1;
-//       self.column = 1;
-//       return (byte)0x0A;
-//     }
-//     if c == (byte)0x0A {
-//       self.pos = self.pos + 1;
-//       self.line = self.line + 1;
-//       self.column = 1;
-//       return c;
-//     }
-//     self.pos = self.pos + 1;
-//     self.column = self.column + 1;
-//     return c;
-//   }
-
-//   /** 若当前字节等于 expected 则消费并返回 true，否则返回 false */
-//   seal func consumeIf(expected: byte): bool {
-//     if self.peekChar() != expected {
-//       return false;
-//     }
-//     self.advance();
-//     return true;
-//   }
-
-//   // ==================== 构造 Token 与抛错 ====================
-
-//   /** 根据是否为文档注释选择 Token 种类 */
-//   seal func selectDocKind(isDoc: bool): FengTokenKind {
-//     if isDoc {
-//       return FengTokenKind.CommentDoc;
-//     }
-//     return FengTokenKind.CommentBlock;
-//   }
-
-//   /** 根据是否为浮点选择数字 Token 种类 */
-//   seal func selectNumberKind(isFloat: bool): FengTokenKind {
-//     if isFloat {
-//       return FengTokenKind.LiteralFloat;
-//     }
-//     return FengTokenKind.LiteralInteger;
-//   }
-
-//   /** 计算指数部分起始有效字节位置（跳过可选正负号） */
-//   seal func selectExponentAfterSign(afterMarker: byte): byte {
-//     if afterMarker == (byte)0x2B || afterMarker == (byte)0x2D {
-//       return self.peekCharAt(2);
-//     }
-//     return afterMarker;
-//   }
-
-//   /** 从起始位置和当前 pos 构造 Token */
-//   seal func makeToken(kind: FengTokenKind, startOffset: int, startLine: int, startColumn: int): FengToken {
-//     return FengToken {
-//       kind: kind,
-//       value: StringSpan(self.source.content, startOffset, self.pos),
-//       source: self.source,
-//       location: FengLocation { offset: startOffset, line: startLine, column: startColumn }
-//     };
-//   }
-
-//   /** 构造并抛出词法错误 */
-//   seal func throwError(startOffset: int, startLine: int, startColumn: int, code: string, message: string): FengToken {
-//     let snippet = self.extractLineSnippet(startOffset);
-//     throw FengCompileError {
-//       code: code,
-//       message: message,
-//       path: self.source.path,
-//       line: startLine,
-//       column: startColumn,
-//       snippet: snippet
-//     };
-//   }
-
-//   /** 提取指定偏移所在行的源码片段（不含行尾换行） */
-//   seal func extractLineSnippet(offset: int): string {
-//     if self.length == 0 {
-//       return "";
-//     }
-//     var lineStart = offset;
-//     if lineStart >= self.length {
-//       lineStart = self.length - 1;
-//     }
-//     if lineStart < 0 {
-//       lineStart = 0;
-//     }
-//     while lineStart > 0 && self.bytes[lineStart - 1] != (byte)0x0A {
-//       lineStart = lineStart - 1;
-//     }
-//     var lineEnd = lineStart;
-//     while lineEnd < self.length && self.bytes[lineEnd] != (byte)0x0A && self.bytes[lineEnd] != (byte)0x0D {
-//       lineEnd = lineEnd + 1;
-//     }
-//     return self.source.content.clone(lineStart, lineEnd);
-//   }
-
-//   // ==================== 字节谓词 ====================
-
-//   /** 水平空白：空格 / \t / \v / \f */
-//   seal func isHorizontalWhitespaceByte(c: byte): bool {
-//     return c == (byte)0x20 || c == (byte)0x09 || c == (byte)0x0B || c == (byte)0x0C;
-//   }
-
-//   /** 标识符首字符：[a-zA-Z_] */
-//   seal func isIdentifierStartByte(c: byte): bool {
-//     return (c >= (byte)0x41 && c <= (byte)0x5A) || (c >= (byte)0x61 && c <= (byte)0x7A) || c == (byte)0x5F;
-//   }
-
-//   /** 标识符后续字符：[a-zA-Z0-9_] */
-//   seal func isIdentifierContinueByte(c: byte): bool {
-//     return self.isIdentifierStartByte(c) || (c >= (byte)0x30 && c <= (byte)0x39);
-//   }
-
-//   /** 十进制数字 */
-//   seal func isDigitByte(c: byte): bool {
-//     return c >= (byte)0x30 && c <= (byte)0x39;
-//   }
-
-//   /** 十六进制数字 */
-//   seal func isHexDigitByte(c: byte): bool {
-//     return self.isDigitByte(c) || (c >= (byte)0x41 && c <= (byte)0x46) || (c >= (byte)0x61 && c <= (byte)0x66);
-//   }
-
-//   /** 二进制数字 */
-//   seal func isBinaryDigitByte(c: byte): bool {
-//     return c == (byte)0x30 || c == (byte)0x31;
-//   }
-
-//   /** 八进制数字 */
-//   seal func isOctalDigitByte(c: byte): bool {
-//     return c >= (byte)0x30 && c <= (byte)0x37;
-//   }
-
-//   /** 按进制判断数字 */
-//   seal func isDigitOfBase(c: byte, base: int): bool {
-//     if base == 2 {
-//       return self.isBinaryDigitByte(c);
-//     }
-//     if base == 8 {
-//       return self.isOctalDigitByte(c);
-//     }
-//     if base == 16 {
-//       return self.isHexDigitByte(c);
-//     }
-//     return self.isDigitByte(c);
-//   }
-// }
+open module std.compiler.lexer;
+
+import std.compiler.common;
+import std.text;
+import std.collections;
+
+/**
+ * Feng 词法分析器。
+ *
+ * 将源码字符串转换为 Token 流。逐字节扫描 + 回溯前瞻，
+ * 与 C 版 lexer 在 Token 种类、value、位置信息上行为等价，
+ * 但采用 Feng 语言的原生表达方式，不机械对齐 C 版实现。
+ *
+ * 设计要点：
+ * - 空白和注释作为独立 Token 发射，不跳过（Parser 负责过滤 trivia）
+ * - 数值解析、注解分类等语义解析交给 Parser
+ * - 文档注释（CommentDoc）作为普通 trivia Token 发射；
+ *   "附加到下一个非 trivia Token" 是 Parser 阶段的事，不在 Lexer 层维护
+ * - 词法错误直接抛出 FengCompileError，不混入 Token 流
+ *
+ * 用法示例：
+ *   let source = FengSource(content, "example.ff");
+ *   var lexer = FengLexer(source);
+ *   var token = lexer.next();
+ *   while token.kind != FengTokenKind.SpecialEndOfFile {
+ *     // 处理 token
+ *     token = lexer.next();
+ *   }
+ */
+open type FengLexer {
+  /** 源文件信息 */
+  seal let source: FengSource;
+  /** 源码字节内容（用于高效字节级访问） */
+  seal let bytes: byte[];
+  /** 字节长度 */
+  seal let length: int;
+  /** 当前字节偏移 */
+  seal var pos: int;
+  /** 当前行号（从 1 开始） */
+  seal var line: int;
+  /** 当前列号（从 1 开始） */
+  seal var column: int;
+  /** 前瞻缓存 */
+  seal var peeked: FengToken;
+  /** 前瞻缓存是否有效 */
+  seal var hasPeeked: bool;
+
+  /** 从 FengSource 创建 Lexer */
+  open func FengLexer(source: FengSource) {
+    self.source = source;
+    self.bytes = source.content.toBytes();
+    self.length = self.bytes.length();
+    self.pos = 0;
+    self.line = 1;
+    self.column = 1;
+    self.peeked = FengToken {
+      kind: FengTokenKind.SpecialEndOfFile,
+      value: StringSpan(source.content, 0, 0),
+      source: source,
+      location: FengLocation { offset: 0, line: 1, column: 1 }
+    };
+    self.hasPeeked = false;
+  }
+
+  // ==================== 公开接口 ====================
+
+  /** 获取下一个 Token（消费）。遇到词法错误时抛出 FengCompileError */
+  open func next(): FengToken {
+    if self.hasPeeked {
+      self.hasPeeked = false;
+      return self.peeked;
+    }
+    return self.scanNext();
+  }
+
+  /** 前瞻下一个 Token（不消费）。遇到词法错误时抛出 FengCompileError */
+  open func peek(): FengToken {
+    if !self.hasPeeked {
+      self.peeked = self.scanNext();
+      self.hasPeeked = true;
+    }
+    return self.peeked;
+  }
+
+  /** 一次性产出全部 Token（含 EOF），遇错即抛 */
+  open func tokenize(): FengToken[] {
+    let tokens = List<FengToken>();
+    while true {
+      let token = self.next();
+      tokens.add(token);
+      if token.kind == FengTokenKind.SpecialEndOfFile {
+        break;
+      }
+    }
+    return tokens.entries();
+  }
+
+  // ==================== 核心调度 ====================
+
+  /** 核心调度：记录起始位置，按首字符分发到各扫描方法 */
+  seal func scanNext(): FengToken {
+    let startOffset = self.pos;
+    let startLine = self.line;
+    let startColumn = self.column;
+
+    if self.atEnd() {
+      return self.makeToken(FengTokenKind.SpecialEndOfFile, startOffset, startLine, startColumn);
+    }
+
+    let c = self.peekChar();
+
+    // 水平空白
+    if self.isHorizontalWhitespaceByte(c) {
+      return self.scanWhitespace(startOffset, startLine, startColumn);
+    }
+    // 换行
+    if c == (byte)0x0A || c == (byte)0x0D {
+      return self.scanWhitespace(startOffset, startLine, startColumn);
+    }
+    // 行注释
+    if c == (byte)0x2F && self.peekCharAt(1) == (byte)0x2F {
+      return self.scanLineComment(startOffset, startLine, startColumn);
+    }
+    // 块/文档注释
+    if c == (byte)0x2F && self.peekCharAt(1) == (byte)0x2A {
+      return self.scanBlockOrDocComment(startOffset, startLine, startColumn);
+    }
+    // 标识符 / 关键字
+    if self.isIdentifierStartByte(c) {
+      return self.scanIdentifierOrKeyword(startOffset, startLine, startColumn);
+    }
+    // 数字
+    if self.isDigitByte(c) {
+      return self.scanNumber(startOffset, startLine, startColumn);
+    }
+    // 字符串
+    if c == (byte)0x22 {
+      return self.scanString(startOffset, startLine, startColumn);
+    }
+    // 原始字符串
+    if c == (byte)0x60 {
+      return self.scanRawString(startOffset, startLine, startColumn);
+    }
+    // 运算符 / 分隔符
+    return self.scanOperatorOrPunctuation(startOffset, startLine, startColumn);
+  }
+
+  // ==================== Trivia 扫描 ====================
+
+  /** 扫描连续同类水平空白或单个换行 */
+  seal func scanWhitespace(startOffset: int, startLine: int, startColumn: int): FengToken {
+    let c = self.peekChar();
+    if c == (byte)0x0A || c == (byte)0x0D {
+      self.advance();
+      return self.makeToken(FengTokenKind.WhitespaceNewline, startOffset, startLine, startColumn);
+    }
+    while self.isHorizontalWhitespaceByte(self.peekChar()) {
+      self.advance();
+    }
+    return self.makeToken(FengTokenKind.WhitespaceSpace, startOffset, startLine, startColumn);
+  }
+
+  /** 扫描行注释 `//` 到行尾（不含换行） */
+  seal func scanLineComment(startOffset: int, startLine: int, startColumn: int): FengToken {
+    self.advance();
+    self.advance();
+    while !self.atEnd() {
+      let c = self.peekChar();
+      if c == (byte)0x0A || c == (byte)0x0D {
+        break;
+      }
+      self.advance();
+    }
+    return self.makeToken(FengTokenKind.CommentLine, startOffset, startLine, startColumn);
+  }
+
+  /** 扫描块注释 `/* ... *\/` 或文档注释 `/** ... *\/`，未终止抛 LE0006 */
+  seal func scanBlockOrDocComment(startOffset: int, startLine: int, startColumn: int): FengToken {
+    let isDoc = self.peekCharAt(2) == (byte)0x2A;
+    self.advance();
+    self.advance();
+    while !self.atEnd() {
+      if self.peekChar() == (byte)0x2A && self.peekCharAt(1) == (byte)0x2F {
+        self.advance();
+        self.advance();
+        let kind = self.selectDocKind(isDoc);
+        return self.makeToken(kind, startOffset, startLine, startColumn);
+      }
+      self.advance();
+    }
+    return self.throwError(startOffset, startLine, startColumn, "LE0006", "unterminated block comment");
+  }
+
+  // ==================== 标识符 / 关键字 ====================
+
+  /** 扫描标识符并查关键字表，含保留字检查与布尔字面量识别 */
+  seal func scanIdentifierOrKeyword(startOffset: int, startLine: int, startColumn: int): FengToken {
+    while self.isIdentifierContinueByte(self.peekChar()) {
+      self.advance();
+    }
+    let text = self.source.content.clone(startOffset, self.pos);
+    if self.isReservedWord(text) {
+      return self.throwError(startOffset, startLine, startColumn, "LE0001", "reserved word cannot be used as an identifier");
+    }
+    if text == "true" || text == "false" {
+      return self.makeToken(FengTokenKind.LiteralBool, startOffset, startLine, startColumn);
+    }
+    let kind = self.lookupKeyword(text);
+    return self.makeToken(kind, startOffset, startLine, startColumn);
+  }
+
+  /** 关键字查找：match + 线性扫描，未命中返回 Identifier */
+  seal func lookupKeyword(text: string): FengTokenKind {
+    return match text {
+      "type" { FengTokenKind.KeywordType }
+      "enum" { FengTokenKind.KeywordEnum }
+      "spec" { FengTokenKind.KeywordSpec }
+      "fit" { FengTokenKind.KeywordFit }
+      "extern" { FengTokenKind.KeywordExtern }
+      "func" { FengTokenKind.KeywordFunc }
+      "let" { FengTokenKind.KeywordLet }
+      "var" { FengTokenKind.KeywordVar }
+      "static" { FengTokenKind.KeywordStatic }
+      "open" { FengTokenKind.KeywordOpen }
+      "seal" { FengTokenKind.KeywordSeal }
+      "self" { FengTokenKind.KeywordSelf }
+      "module" { FengTokenKind.KeywordModule }
+      "import" { FengTokenKind.KeywordImport }
+      "as" { FengTokenKind.KeywordAs }
+      "if" { FengTokenKind.KeywordIf }
+      "else" { FengTokenKind.KeywordElse }
+      "match" { FengTokenKind.KeywordMatch }
+      "while" { FengTokenKind.KeywordWhile }
+      "for" { FengTokenKind.KeywordFor }
+      "in" { FengTokenKind.KeywordIn }
+      "break" { FengTokenKind.KeywordBreak }
+      "continue" { FengTokenKind.KeywordContinue }
+      "try" { FengTokenKind.KeywordTry }
+      "catch" { FengTokenKind.KeywordCatch }
+      "unknown" { FengTokenKind.KeywordUnknown }
+      "throw" { FengTokenKind.KeywordThrow }
+      "return" { FengTokenKind.KeywordReturn }
+      "defer" { FengTokenKind.KeywordDefer }
+      "void" { FengTokenKind.KeywordVoid }
+      else { FengTokenKind.Identifier }
+    };
+  }
+
+  /** 保留字检查：class/struct/const/export/prop */
+  seal func isReservedWord(text: string): bool {
+    return text == "class" || text == "struct" || text == "const" || text == "export" || text == "prop";
+  }
+
+  // ==================== 数字 ====================
+
+  /** 扫描数字字面量：0x/0b/0o 前缀、十进制浮点、_ 分隔，无效格式抛 LE0002 */
+  seal func scanNumber(startOffset: int, startLine: int, startColumn: int): FengToken {
+    let first = self.bytes[startOffset];
+    var base = 10;
+    var isFloat = false;
+
+    if first == (byte)0x30 {
+      let prefix = self.peekChar();
+      if prefix == (byte)0x78 || prefix == (byte)0x58 {
+        base = 16;
+        self.advance();
+        if !self.isHexDigitByte(self.peekChar()) {
+          return self.scanInvalidNumberSuffix(startOffset, startLine, startColumn);
+        }
+        self.advance();
+        self.consumeDigitRun(16);
+      } else if prefix == (byte)0x62 || prefix == (byte)0x42 {
+        base = 2;
+        self.advance();
+        if !self.isBinaryDigitByte(self.peekChar()) {
+          return self.scanInvalidNumberSuffix(startOffset, startLine, startColumn);
+        }
+        self.advance();
+        self.consumeDigitRun(2);
+      } else if prefix == (byte)0x6F || prefix == (byte)0x4F {
+        base = 8;
+        self.advance();
+        if !self.isOctalDigitByte(self.peekChar()) {
+          return self.scanInvalidNumberSuffix(startOffset, startLine, startColumn);
+        }
+        self.advance();
+        self.consumeDigitRun(8);
+      } else {
+        self.consumeDigitRun(10);
+      }
+    } else {
+      self.consumeDigitRun(10);
+    }
+
+    if base == 10 {
+      if self.peekChar() == (byte)0x2E && self.isDigitByte(self.peekCharAt(1)) {
+        isFloat = true;
+        self.advance();
+        self.advance();
+        self.consumeDigitRun(10);
+      }
+      let exp = self.peekChar();
+      if exp == (byte)0x65 || exp == (byte)0x45 {
+        let afterMarker = self.peekCharAt(1);
+        let afterSign = self.selectExponentAfterSign(afterMarker);
+        if self.isDigitByte(afterSign) {
+          isFloat = true;
+          self.advance();
+          if afterMarker == (byte)0x2B || afterMarker == (byte)0x2D {
+            self.advance();
+          }
+          self.advance();
+          self.consumeDigitRun(10);
+        }
+      }
+    }
+
+    if self.isIdentifierStartByte(self.peekChar()) {
+      while self.isIdentifierContinueByte(self.peekChar()) {
+        self.advance();
+      }
+      return self.throwError(startOffset, startLine, startColumn, "LE0002", "invalid numeric literal");
+    }
+
+    let kind = self.selectNumberKind(isFloat);
+    return self.makeToken(kind, startOffset, startLine, startColumn);
+  }
+
+  /** 无效数字字面量的后缀消费：将剩余标识符字符消费后抛 LE0002 */
+  seal func scanInvalidNumberSuffix(startOffset: int, startLine: int, startColumn: int): FengToken {
+    while self.isIdentifierContinueByte(self.peekChar()) {
+      self.advance();
+    }
+    return self.throwError(startOffset, startLine, startColumn, "LE0002", "invalid numeric literal");
+  }
+
+  /** 消费连续数字（含 _ 分隔，_ 仅允许在两个数字之间） */
+  seal func consumeDigitRun(base: int) {
+    while true {
+      let c = self.peekChar();
+      if self.isDigitOfBase(c, base) {
+        self.advance();
+        continue;
+      }
+      if c == (byte)0x5F && self.isDigitOfBase(self.peekCharAt(1), base) {
+        self.advance();
+        self.advance();
+        continue;
+      }
+      break;
+    }
+  }
+
+  // ==================== 字符串 ====================
+
+  /** 扫描双引号字符串，处理转义序列，未终止抛 LE0003，无效转义抛 LE0004 */
+  seal func scanString(startOffset: int, startLine: int, startColumn: int): FengToken {
+    self.advance();
+    while !self.atEnd() {
+      let c = self.peekChar();
+      if c == (byte)0x22 {
+        self.advance();
+        return self.makeToken(FengTokenKind.LiteralString, startOffset, startLine, startColumn);
+      }
+      if c == (byte)0x0A || c == (byte)0x0D {
+        return self.throwError(startOffset, startLine, startColumn, "LE0003", "unterminated string literal");
+      }
+      if c == (byte)0x5C {
+        self.validateStringEscape(startOffset, startLine, startColumn);
+      } else {
+        self.advance();
+      }
+    }
+    return self.throwError(startOffset, startLine, startColumn, "LE0003", "unterminated string literal");
+  }
+
+  /** 校验字符串转义序列，无效时抛 LE0004 */
+  seal func validateStringEscape(startOffset: int, startLine: int, startColumn: int) {
+    self.advance();
+    if self.atEnd() {
+      self.throwError(startOffset, startLine, startColumn, "LE0003", "unterminated string literal");
+    }
+    let e = self.advance();
+    if e == (byte)0x5C || e == (byte)0x22 || e == (byte)0x6E || e == (byte)0x72 || e == (byte)0x74 || e == (byte)0x30 {
+      return;
+    }
+    if e == (byte)0x78 {
+      self.validateHexEscape(startOffset, startLine, startColumn);
+      return;
+    }
+    self.throwError(startOffset, startLine, startColumn, "LE0004", "invalid string escape");
+  }
+
+  /** 校验 \xHH 转义：必须紧跟 2 个十六进制数字 */
+  seal func validateHexEscape(startOffset: int, startLine: int, startColumn: int) {
+    if self.atEnd() {
+      self.throwError(startOffset, startLine, startColumn, "LE0004", "invalid \\x escape: expected 2 hex digits");
+    }
+    let h1 = self.advance();
+    if !self.isHexDigitByte(h1) {
+      self.throwError(startOffset, startLine, startColumn, "LE0004", "invalid \\x escape: expected hex digit");
+    }
+    if self.atEnd() {
+      self.throwError(startOffset, startLine, startColumn, "LE0004", "invalid \\x escape: expected 2 hex digits");
+    }
+    let h2 = self.advance();
+    if !self.isHexDigitByte(h2) {
+      self.throwError(startOffset, startLine, startColumn, "LE0004", "invalid \\x escape: expected hex digit");
+    }
+  }
+
+  /** 扫描反引号原始字符串，`` 转义为单个 `，未终止抛 LE0003 */
+  seal func scanRawString(startOffset: int, startLine: int, startColumn: int): FengToken {
+    self.advance();
+    while !self.atEnd() {
+      let c = self.peekChar();
+      if c == (byte)0x60 {
+        if self.peekCharAt(1) == (byte)0x60 {
+          self.advance();
+          self.advance();
+        } else {
+          self.advance();
+          return self.makeToken(FengTokenKind.LiteralRawString, startOffset, startLine, startColumn);
+        }
+      } else {
+        self.advance();
+      }
+    }
+    return self.throwError(startOffset, startLine, startColumn, "LE0003", "unterminated raw string literal");
+  }
+
+  // ==================== 运算符 / 分隔符 ====================
+
+  /** 扫描运算符和分隔符，含多字符前瞻，无法识别抛 LE0007 */
+  seal func scanOperatorOrPunctuation(startOffset: int, startLine: int, startColumn: int): FengToken {
+    let c = self.advance();
+
+    // 分隔符 - 单字符无前瞻
+    if c == (byte)0x28 {
+      return self.makeToken(FengTokenKind.PunctuationLeftParen, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x29 {
+      return self.makeToken(FengTokenKind.PunctuationRightParen, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x7B {
+      return self.makeToken(FengTokenKind.PunctuationLeftBrace, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x7D {
+      return self.makeToken(FengTokenKind.PunctuationRightBrace, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x5B {
+      return self.makeToken(FengTokenKind.PunctuationLeftBracket, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x5D {
+      return self.makeToken(FengTokenKind.PunctuationRightBracket, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x2C {
+      return self.makeToken(FengTokenKind.PunctuationComma, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x3A {
+      return self.makeToken(FengTokenKind.PunctuationColon, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x3B {
+      return self.makeToken(FengTokenKind.PunctuationSemicolon, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x40 {
+      return self.makeToken(FengTokenKind.OperatorAt, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x7E {
+      return self.makeToken(FengTokenKind.OperatorBitwiseNot, startOffset, startLine, startColumn);
+    }
+
+    // 点 / 省略号
+    if c == (byte)0x2E {
+      if self.peekChar() == (byte)0x2E && self.peekCharAt(1) == (byte)0x2E {
+        self.advance();
+        self.advance();
+        return self.makeToken(FengTokenKind.PunctuationEllipsis, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.PunctuationDot, startOffset, startLine, startColumn);
+    }
+
+    // 算术赋值系列
+    if c == (byte)0x2B {
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorPlusAssign, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorPlus, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x2D {
+      if self.consumeIf((byte)0x3E) {
+        return self.makeToken(FengTokenKind.OperatorArrow, startOffset, startLine, startColumn);
+      }
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorMinusAssign, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorMinus, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x2A {
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorStarAssign, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorStar, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x2F {
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorSlashAssign, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorSlash, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x25 {
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorPercentAssign, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorPercent, startOffset, startLine, startColumn);
+    }
+
+    // 比较 / 赋值 / 逻辑非
+    if c == (byte)0x3D {
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorEqual, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorAssign, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x21 {
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorNotEqual, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorNot, startOffset, startLine, startColumn);
+    }
+
+    // 移位 / 大小比较
+    if c == (byte)0x3C {
+      if self.consumeIf((byte)0x3C) {
+        if self.consumeIf((byte)0x3D) {
+          return self.makeToken(FengTokenKind.OperatorShiftLeftAssign, startOffset, startLine, startColumn);
+        }
+        return self.makeToken(FengTokenKind.OperatorShiftLeft, startOffset, startLine, startColumn);
+      }
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorLessEqual, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorLess, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x3E {
+      if self.consumeIf((byte)0x3E) {
+        if self.consumeIf((byte)0x3D) {
+          return self.makeToken(FengTokenKind.OperatorShiftRightAssign, startOffset, startLine, startColumn);
+        }
+        return self.makeToken(FengTokenKind.OperatorShiftRight, startOffset, startLine, startColumn);
+      }
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorGreaterEqual, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorGreater, startOffset, startLine, startColumn);
+    }
+
+    // 位运算 / 逻辑与或
+    if c == (byte)0x26 {
+      if self.consumeIf((byte)0x26) {
+        return self.makeToken(FengTokenKind.OperatorLogicalAnd, startOffset, startLine, startColumn);
+      }
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorBitwiseAndAssign, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorBitwiseAnd, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x7C {
+      if self.consumeIf((byte)0x7C) {
+        return self.makeToken(FengTokenKind.OperatorLogicalOr, startOffset, startLine, startColumn);
+      }
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorBitwiseOrAssign, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorBitwiseOr, startOffset, startLine, startColumn);
+    }
+    if c == (byte)0x5E {
+      if self.consumeIf((byte)0x3D) {
+        return self.makeToken(FengTokenKind.OperatorBitwiseXorAssign, startOffset, startLine, startColumn);
+      }
+      return self.makeToken(FengTokenKind.OperatorBitwiseXor, startOffset, startLine, startColumn);
+    }
+
+    return self.throwError(startOffset, startLine, startColumn, "LE0007", "unexpected character");
+  }
+
+  // ==================== 字节访问与位置维护 ====================
+
+  /** 当前是否已到末尾 */
+  seal func atEnd(): bool {
+    return self.pos >= self.length;
+  }
+
+  /** 前瞻当前字节（不消费），到末尾返回 0 */
+  seal func peekChar(): byte {
+    if self.pos >= self.length {
+      return (byte)0;
+    }
+    return self.bytes[self.pos];
+  }
+
+  /** 前瞻指定偏移字节（不消费），越界返回 0 */
+  seal func peekCharAt(offset: int): byte {
+    let idx = self.pos + offset;
+    if idx < 0 || idx >= self.length {
+      return (byte)0;
+    }
+    return self.bytes[idx];
+  }
+
+  /** 前进一字节，维护 pos/line/column，返回该字节（末尾返回 0）；\r 与 \r\n 统一视为 \n */
+  seal func advance(): byte {
+    if self.pos >= self.length {
+      return (byte)0;
+    }
+    let c = self.bytes[self.pos];
+    if c == (byte)0x0D {
+      self.pos = self.pos + 1;
+      if self.pos < self.length && self.bytes[self.pos] == (byte)0x0A {
+        self.pos = self.pos + 1;
+      }
+      self.line = self.line + 1;
+      self.column = 1;
+      return (byte)0x0A;
+    }
+    if c == (byte)0x0A {
+      self.pos = self.pos + 1;
+      self.line = self.line + 1;
+      self.column = 1;
+      return c;
+    }
+    self.pos = self.pos + 1;
+    self.column = self.column + 1;
+    return c;
+  }
+
+  /** 若当前字节等于 expected 则消费并返回 true，否则返回 false */
+  seal func consumeIf(expected: byte): bool {
+    if self.peekChar() != expected {
+      return false;
+    }
+    self.advance();
+    return true;
+  }
+
+  // ==================== 构造 Token 与抛错 ====================
+
+  /** 根据是否为文档注释选择 Token 种类 */
+  seal func selectDocKind(isDoc: bool): FengTokenKind {
+    if isDoc {
+      return FengTokenKind.CommentDoc;
+    }
+    return FengTokenKind.CommentBlock;
+  }
+
+  /** 根据是否为浮点选择数字 Token 种类 */
+  seal func selectNumberKind(isFloat: bool): FengTokenKind {
+    if isFloat {
+      return FengTokenKind.LiteralFloat;
+    }
+    return FengTokenKind.LiteralInteger;
+  }
+
+  /** 计算指数部分起始有效字节位置（跳过可选正负号） */
+  seal func selectExponentAfterSign(afterMarker: byte): byte {
+    if afterMarker == (byte)0x2B || afterMarker == (byte)0x2D {
+      return self.peekCharAt(2);
+    }
+    return afterMarker;
+  }
+
+  /** 从起始位置和当前 pos 构造 Token */
+  seal func makeToken(kind: FengTokenKind, startOffset: int, startLine: int, startColumn: int): FengToken {
+    return FengToken {
+      kind: kind,
+      value: StringSpan(self.source.content, startOffset, self.pos),
+      source: self.source,
+      location: FengLocation { offset: startOffset, line: startLine, column: startColumn }
+    };
+  }
+
+  /** 构造并抛出词法错误 */
+  seal func throwError(startOffset: int, startLine: int, startColumn: int, code: string, message: string): FengToken {
+    let snippet = self.extractLineSnippet(startOffset);
+    throw FengCompileError {
+      code: code,
+      message: message,
+      path: self.source.path,
+      line: startLine,
+      column: startColumn,
+      snippet: snippet
+    };
+  }
+
+  /** 提取指定偏移所在行的源码片段（不含行尾换行） */
+  seal func extractLineSnippet(offset: int): string {
+    if self.length == 0 {
+      return "";
+    }
+    var lineStart = offset;
+    if lineStart >= self.length {
+      lineStart = self.length - 1;
+    }
+    if lineStart < 0 {
+      lineStart = 0;
+    }
+    while lineStart > 0 && self.bytes[lineStart - 1] != (byte)0x0A {
+      lineStart = lineStart - 1;
+    }
+    var lineEnd = lineStart;
+    while lineEnd < self.length && self.bytes[lineEnd] != (byte)0x0A && self.bytes[lineEnd] != (byte)0x0D {
+      lineEnd = lineEnd + 1;
+    }
+    return self.source.content.clone(lineStart, lineEnd);
+  }
+
+  // ==================== 字节谓词 ====================
+
+  /** 水平空白：空格 / \t / \v / \f */
+  seal func isHorizontalWhitespaceByte(c: byte): bool {
+    return c == (byte)0x20 || c == (byte)0x09 || c == (byte)0x0B || c == (byte)0x0C;
+  }
+
+  /** 标识符首字符：[a-zA-Z_] */
+  seal func isIdentifierStartByte(c: byte): bool {
+    return (c >= (byte)0x41 && c <= (byte)0x5A) || (c >= (byte)0x61 && c <= (byte)0x7A) || c == (byte)0x5F;
+  }
+
+  /** 标识符后续字符：[a-zA-Z0-9_] */
+  seal func isIdentifierContinueByte(c: byte): bool {
+    return self.isIdentifierStartByte(c) || (c >= (byte)0x30 && c <= (byte)0x39);
+  }
+
+  /** 十进制数字 */
+  seal func isDigitByte(c: byte): bool {
+    return c >= (byte)0x30 && c <= (byte)0x39;
+  }
+
+  /** 十六进制数字 */
+  seal func isHexDigitByte(c: byte): bool {
+    return self.isDigitByte(c) || (c >= (byte)0x41 && c <= (byte)0x46) || (c >= (byte)0x61 && c <= (byte)0x66);
+  }
+
+  /** 二进制数字 */
+  seal func isBinaryDigitByte(c: byte): bool {
+    return c == (byte)0x30 || c == (byte)0x31;
+  }
+
+  /** 八进制数字 */
+  seal func isOctalDigitByte(c: byte): bool {
+    return c >= (byte)0x30 && c <= (byte)0x37;
+  }
+
+  /** 按进制判断数字 */
+  seal func isDigitOfBase(c: byte, base: int): bool {
+    if base == 2 {
+      return self.isBinaryDigitByte(c);
+    }
+    if base == 8 {
+      return self.isOctalDigitByte(c);
+    }
+    if base == 16 {
+      return self.isHexDigitByte(c);
+    }
+    return self.isDigitByte(c);
+  }
+}
