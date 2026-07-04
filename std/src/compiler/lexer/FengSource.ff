@@ -57,4 +57,3 @@ open type FengSource {
     return self.content.clone(lineStart, lineEnd);
   }
 }
-
