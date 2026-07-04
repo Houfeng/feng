@@ -31,6 +31,16 @@ open type FengSource {
     return self.content.getByte(index);
   }
 
+  /** 获取指定字节范围的字符串切片 */
+  func slice(start: int, end: int): StringSpan {
+    return self.content.slice(start, end);
+  }
+
+  /** 克隆指定字节范围的字符串 */
+  func clone(start: int, end: int): string {
+    return self.content.clone(start, end);
+  }
+
   /**
    * 提取指定字节偏移所在行的源码片段（不含行尾换行）。
    *
