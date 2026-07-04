@@ -49,8 +49,8 @@ FengToken — 8 words (64 bytes on 64-bit)
 └── location: FengLocation    3 words  (offset:int + line:int + column:int)
 ```
 
-- StringSpan.origin（`seal` 私有）持有 source.content 的引用，保证 token value 指向的源码子串不会被释放
-- FengSource 为托管引用，与 StringSpan.origin 共享同一 source.content 对象，提供 path 和完整 content 访问（用于错误报告读取出错行）
+- StringSpan.origin（`seal` 私有）持有源码 string 的引用，与 FengSource.content 共享同一 string 实例，保证 token value 指向的源码子串不会被释放
+- FengSource 为托管引用，与 StringSpan.origin 共享同一 string 实例，提供 path 和字节级/子串访问 API（`at`/`slice`/`clone`/`length`/`extractLineSnippet`）；content 字段私有化（`seal`），外部不直接访问
 - 两个引用字段（StringSpan.origin、FengSource）的 RC 成本仅为原子计数加减，同一文件所有 token 共享同一实例，开销可忽略
 
 **@value vs 普通 type 对比**：
@@ -282,10 +282,17 @@ open enum FengTokenKind {
  * 普通类型（堆分配、引用语义），由 Lexer 创建，每个 Token 持有引用。
  * 源文件数量少、生命周期长，所有引用同一源文件的 Token 共享同一实例，
  * 避免每 Token 复制文件内容。
+ *
+ * content 私有化（seal），外部不直接访问，统一通过 length/at/slice/clone
+ * 等公开 API 获取字节或子串。字节访问的优化点收敛在本类型内部，便于
+ * 未来调整（如缓存 bytes 视图、提供无边界检查的 raw 访问），不影响 Lexer。
  */
 open type FengSource {
+  /** 源文件路径 */
   let path: string;
-  let content: string;
+  /** 源文件内容（私有，外部通过公开 API 访问） */
+  seal let content: string;
+
   /** 从字符串内容创建 */
   func FengSource(content: string, path: string) {
     self.path = path;
@@ -296,12 +303,23 @@ open type FengSource {
     self.path = path;
     self.content = string.fromUtf8Bytes(content);
   }
+
+  /** 源文件字节长度 */
+  func length(): int;
+  /** 获取指定字节偏移的字节值 */
+  func at(index: int): byte;
+  /** 获取指定字节范围的 StringSpan 视图（零拷贝） */
+  func slice(start: int, end: int): StringSpan;
+  /** 克隆指定字节范围的字符串（独立拷贝） */
+  func clone(start: int, end: int): string;
+
   /**
    * 提取指定字节偏移所在行的源码片段（不含行尾换行）。
    * 用于 Lexer/Parser 构造 FengCompileError 时填充 snippet 字段。
    * 错误报告为冷路径，按需将 content 转为字节访问，不常驻缓存。
+   * 偏移越界时夹到 [0, length] 区间后定位行边界。
    */
-  open func extractLineSnippet(offset: int): string;
+  func extractLineSnippet(offset: int): string;
 }
 ```
 
@@ -415,6 +433,8 @@ open type FengTokenUtil {
  */
 open type FengLexer {
   seal let source: FengSource;
+  /** 字节长度（构造时一次性缓存，避免热路径重复调用 source.length()） */
+  seal let length: int;
   seal var pos: int;
   seal var line: int;
   seal var column: int;
@@ -444,6 +464,8 @@ open type FengLexer {
   open func tokenize(): FengToken[];
 }
 ```
+
+**字节访问设计**：Lexer 不持有源码 bytes 副本，所有字节级访问（`peekChar`/`peekCharAt`/`advance`/`scanNumber` 中的 `source.at(idx)`）与子串构造（`makeToken` 中的 `source.slice(start, end)`）均通过 FengSource 公开 API 完成。`length` 在构造时一次性缓存，避免热路径重复调用 `source.length()`。此设计的优化点收敛在 FengSource，未来若需在内部加 bytes 视图缓存或无边界检查的 raw 访问，Lexer 无需变更。
 
 **内部方法拆分原则**：FengLexer 内部应尽可能将逻辑拆解为多个功能完整的小方法，避免巨型方法。每个方法职责单一、边界清晰，便于理解、测试和维护。
 
@@ -762,5 +784,5 @@ open type TokenSpan {
 ## 9 开放问题
 
 1. **关键字查找优化时机**：当前方案用 match + 线性扫描，何时优化为哈希表？建议阶段一先用简单方案，性能测试后再决定
-2. **Token 的 value 字段**：已确定使用 `StringSpan`（引用源码子串，零拷贝）。`FengSource.content` 为托管引用类型，生命周期由引用计数管理
+2. **Token 的 value 字段**：已确定使用 `StringSpan`（引用源码子串，零拷贝）。`FengSource.content`（`seal` 私有）为托管引用类型，生命周期由引用计数管理；外部通过 `at`/`slice`/`clone` 等公开 API 访问字节或子串
 3. **`@value` type 的 `open let` 字段**：已确认支持，如有问题是 Bug 需要修复
