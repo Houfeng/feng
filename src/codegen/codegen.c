@@ -16426,7 +16426,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                  * switch/case pattern using memcpy(_out, <buf>, size). */
                 out->c_expr = strdup(ret_tmp);
                 out->type = cgtype_clone(um->return_type);
-                out->owns_ref = cgtype_is_managed(um->return_type);
+                out->owns_ref = cgtype_is_managed(um->return_type) ||
+                                cgtype_is_aggregate(um->return_type);
                 free(ret_tmp);
             } else {
                 out->c_expr = strdup("((void)0)");

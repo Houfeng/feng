@@ -351,6 +351,57 @@ type VGBox<T> {
   }
 }
 
+// 复现 codegen.c:16429 路径 bug:
+// 在泛型类型方法体内调用 self.method() 返回非泛型 @value 类型,赋值给字段
+// 16429 行设置 owns_ref = cgtype_is_managed(um->return_type)
+// 对 @value 类型漏掉 || cgtype_is_aggregate
+@value
+type VGCursor<T> {
+  var value: T;
+  var tagged: VTagged;
+
+  // 返回非泛型 @value 类型 (aggregate)
+  func makeTagged(): VTagged {
+    var t: VTagged;
+    t.label = "tag";
+    t.value = 1;
+    return t;
+  }
+
+  // 在泛型类型方法体内调用 self.makeTagged() 走 shared body 路径
+  // 返回 @value 赋值给 @value 字段
+  func seedTagged() {
+    self.tagged = self.makeTagged();
+  }
+
+  // 链式: 把方法返回 @value 直接 return (走 return 路径)
+  func borrowTagged(): VTagged {
+    return self.makeTagged();
+  }
+}
+
+// 复现 16429 路径对 aggregate 的影响:
+// 在 VGWrapper<T> 方法体内调用 self.cursor.makeTagged()
+// self.cursor 是 VGCursor<T>(开放泛型实例),走 16429 路径
+// 返回 VTagged (aggregate),owns_ref = false (bug)
+@value
+type VGWrapper<T> {
+  var cursor: VGCursor<T>;
+
+  // 在 VGWrapper<T> 方法体内,调用 self.cursor.makeTagged()
+  // recv 是 VGCursor<T>(开放),走 16429 路径
+  // 返回 VTagged (aggregate),owns_ref 应该是 true 但被设为 false
+  func getTagged(): VTagged {
+    return self.cursor.makeTagged();
+  }
+
+  // 调用 self.cursor.makeTagged() 赋值给 var 局部变量
+  func fetchTagged(): VTagged {
+    let t = self.cursor.makeTagged();
+    return t;
+  }
+}
+
 // 泛型 @value type + fit + spec dispatch (§9.10 补充)
 spec TBoxReader<T> {
   func read(): T;
@@ -1254,6 +1305,45 @@ open func test_value_type() {
       assert(n.kind == 6, "next.kind from method returning trivial @value");
       assert(n.text == "x+", "next.text from method returning trivial @value");
       assert(t.kind == 5, "original unchanged after method returns @value");
+    });
+
+    // 复现 codegen.c:16429 路径 bug:
+    // 泛型类型方法体内调用 self.method() 返回非泛型 @value 类型,
+    // 16429 行 owns_ref 漏 aggregate,赋值给字段可能编译失败或运行错误
+    test("generic @value method returning @value assigned to field (shared body, aggregate)", () {
+      var c: VGCursor<string>;
+      c.value = "x";
+      c.seedTagged();
+      assert(c.tagged.label == "tag", "tagged.label via shared body method returning @value");
+      assert(c.tagged.value == 1, "tagged.value via shared body method returning @value");
+    });
+
+    test("generic @value method returning @value via return statement (shared body)", () {
+      var c: VGCursor<int>;
+      c.value = 7;
+      let t = c.borrowTagged();
+      assert(t.label == "tag", "borrowed.label via shared body method returning @value");
+      assert(t.value == 1, "borrowed.value via shared body method returning @value");
+    });
+
+    // 复现 16429 路径对 aggregate 返回的影响:
+    // VGWrapper<T>.getTagged() 内调用 self.cursor.makeTagged()
+    // self.cursor 是开放泛型实例,走 16429 路径
+    // 返回 VTagged (aggregate),owns_ref 应该 true 但被设为 false
+    test("open generic instance method returning @value aggregate (16429 path)", () {
+      var w: VGWrapper<string>;
+      w.cursor.value = "x";
+      let t = w.getTagged();
+      assert(t.label == "tag", "tagged.label via 16429 path returning aggregate");
+      assert(t.value == 1, "tagged.value via 16429 path returning aggregate");
+    });
+
+    test("open generic instance method returning @value aggregate via local (16429 path)", () {
+      var w: VGWrapper<int>;
+      w.cursor.value = 9;
+      let t = w.fetchTagged();
+      assert(t.label == "tag", "fetched.label via 16429 path with local binding");
+      assert(t.value == 1, "fetched.value via 16429 path with local binding");
     });
   });
 }
