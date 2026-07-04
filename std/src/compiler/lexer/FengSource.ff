@@ -26,7 +26,8 @@ open type FengSource {
     self.content = string.fromUtf8Bytes(content);
   }
 
-  seal func at(index: int): byte {
+  /** 获取指定字节偏移的字节值 */
+  func at(index: int): byte {
     return self.content.getByte(index);
   }
 
@@ -37,7 +38,7 @@ open type FengSource {
    * 错误报告为冷路径，按需将 content 转为字节访问，不常驻缓存。
    * 偏移越界时夹到 [0, length] 区间后定位行边界。
    */
-  open func extractLineSnippet(offset: int): string {
+  func extractLineSnippet(offset: int): string {
     let length = self.content.length();
     if length == 0 { return ""; }
     var lineStart = offset;
