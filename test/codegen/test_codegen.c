@@ -3984,6 +3984,61 @@ static void test_fit_enum_generic_constraint_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_generic_user_fit_object_spec_coercion_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.fit_generic_user;\n"
+        "spec Readable<T> {\n"
+        "    func read(): T;\n"
+        "}\n"
+        "type Box<T> {\n"
+        "    var value: T;\n"
+        "}\n"
+        "fit Box<T>: Readable<T> {\n"
+        "    func read(): T {\n"
+        "        return self.value;\n"
+        "    }\n"
+        "}\n"
+        "func read_i(value: Readable<int>): int {\n"
+        "    return value.read();\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let box: Box<int> = Box<int>();\n"
+        "    box.value = 42;\n"
+        "    return read_i(box);\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource, "tests/fit_generic_user_codegen.ff");
+    const FengProgram *programs[1] = { program };
+
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic user fit object spec): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecThunk__") != NULL);
+    ASSERT(strstr(out.c_source, "__read") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kCallableSpecTopLevelFnSrc =
     "module feng.codegen.cb1;\n"
     "spec Mapper(x: int): int;\n"
@@ -7029,6 +7084,7 @@ int main(void) {
     test_generic_runtime_type_kind_codegen();
     test_generic_aggregate_facts_shape_codegen();
     test_fit_enum_generic_constraint_codegen();
+    test_generic_user_fit_object_spec_coercion_codegen();
     test_generic_constrained_spec_value_codegen();
     test_spec_aggregate_field_codegen();
     test_generic_constrained_aggregate_spec_value_codegen();

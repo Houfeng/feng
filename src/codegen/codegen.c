@@ -784,7 +784,9 @@ typedef struct GenericSpecDecl {
 typedef struct UserFit {
     const FengDecl *decl;
     const UserType *target;       /* resolved target T (named single-segment) */
+    size_t          target_index; /* index into CG.user_types; stable across realloc */
     const UserSpec **specs;       /* resolved spec list from `fit T :: S, ...` */
+    size_t         *spec_indices; /* indices into CG.user_specs; stable across realloc */
     size_t          spec_count;
     UserMethod     *methods;      /* fit-body methods, c_name mangled with index */
     size_t          method_count;
@@ -1366,6 +1368,7 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
                                         const FengExpr *e,
                                         const CGType *expected_type,
                                         ExprResult *out);
+static void cg_emit_value_type_struct_body(CG *cg, const UserType *t);
 static bool cg_emit_array_literal(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out);
@@ -4629,6 +4632,165 @@ static const UserFit *cg_find_user_fit_by_decl_and_target(const CG *cg,
     return NULL;
 }
 
+static bool cg_user_type_index(const CG *cg, const UserType *target, size_t *out_index) {
+    if (cg == NULL || target == NULL || out_index == NULL) return false;
+    for (size_t i = 0; i < cg->user_type_count; ++i) {
+        if (&cg->user_types[i] == target) {
+            *out_index = i;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void cg_refresh_user_fit_targets(CG *cg) {
+    if (cg == NULL) return;
+    for (size_t i = 0; i < cg->user_fit_count; ++i) {
+        UserFit *fit = &cg->user_fits[i];
+
+        if (fit->target_index < cg->user_type_count) {
+            fit->target = &cg->user_types[fit->target_index];
+        }
+    }
+}
+
+static void cg_refresh_user_fit_specs(CG *cg) {
+    if (cg == NULL) return;
+    for (size_t fit_index = 0; fit_index < cg->user_fit_count; ++fit_index) {
+        UserFit *fit = &cg->user_fits[fit_index];
+
+        for (size_t spec_index = 0; spec_index < fit->spec_count; ++spec_index) {
+            if (fit->spec_indices != NULL &&
+                fit->spec_indices[spec_index] < cg->user_spec_count) {
+                fit->specs[spec_index] = &cg->user_specs[fit->spec_indices[spec_index]];
+            }
+        }
+    }
+}
+
+static const UserSpec *cg_remap_user_spec_ptr(uintptr_t old_base,
+                                              size_t old_count,
+                                              const UserSpec *new_base,
+                                              const UserSpec *ptr) {
+    uintptr_t p;
+    uintptr_t old_end;
+
+    if (old_base == 0U || old_count == 0U || new_base == NULL || ptr == NULL) {
+        return ptr;
+    }
+    p = (uintptr_t)ptr;
+    old_end = old_base + old_count * sizeof(UserSpec);
+    if (p < old_base || p >= old_end || ((p - old_base) % sizeof(UserSpec)) != 0U) {
+        return ptr;
+    }
+    return &new_base[(p - old_base) / sizeof(UserSpec)];
+}
+
+static void cg_refresh_cgtype_user_specs(CGType *type,
+                                         uintptr_t old_base,
+                                         size_t old_count,
+                                         const UserSpec *new_base) {
+    if (type == NULL) return;
+    if (type->kind == CG_TYPE_SPEC || type->kind == CG_TYPE_CALLABLE) {
+        type->user_spec = cg_remap_user_spec_ptr(old_base,
+                                                 old_count,
+                                                 new_base,
+                                                 type->user_spec);
+    }
+    cg_refresh_cgtype_user_specs(type->element, old_base, old_count, new_base);
+}
+
+static void cg_refresh_user_spec_references(CG *cg,
+                                            uintptr_t old_base,
+                                            size_t old_count) {
+    if (cg == NULL || old_base == 0U || old_count == 0U) return;
+
+    for (size_t i = 0; i < cg->extern_count; ++i) {
+        ExternFn *fn = &cg->externs[i];
+        for (size_t j = 0; j < fn->param_count; ++j) {
+            cg_refresh_cgtype_user_specs(fn->param_types[j], old_base, old_count, cg->user_specs);
+        }
+        cg_refresh_cgtype_user_specs(fn->return_type, old_base, old_count, cg->user_specs);
+    }
+    for (size_t i = 0; i < cg->free_fn_count; ++i) {
+        FreeFn *fn = &cg->free_fns[i];
+        for (size_t j = 0; j < fn->param_count; ++j) {
+            cg_refresh_cgtype_user_specs(fn->param_types[j], old_base, old_count, cg->user_specs);
+        }
+        cg_refresh_cgtype_user_specs(fn->return_type, old_base, old_count, cg->user_specs);
+    }
+    for (size_t i = 0; i < cg->user_type_count; ++i) {
+        UserType *type = &cg->user_types[i];
+        for (size_t j = 0; j < type->field_count; ++j) {
+            cg_refresh_cgtype_user_specs(type->fields[j].type, old_base, old_count, cg->user_specs);
+        }
+        for (size_t j = 0; j < type->static_binding_count; ++j) {
+            cg_refresh_cgtype_user_specs(type->static_bindings[j].type, old_base, old_count, cg->user_specs);
+        }
+        for (size_t j = 0; j < type->constructor_count; ++j) {
+            UserMethod *method = &type->constructors[j];
+            for (size_t k = 0; k < method->param_count; ++k) {
+                cg_refresh_cgtype_user_specs(method->param_types[k], old_base, old_count, cg->user_specs);
+            }
+            cg_refresh_cgtype_user_specs(method->return_type, old_base, old_count, cg->user_specs);
+        }
+        for (size_t j = 0; j < type->method_count; ++j) {
+            UserMethod *method = &type->methods[j];
+            for (size_t k = 0; k < method->param_count; ++k) {
+                cg_refresh_cgtype_user_specs(method->param_types[k], old_base, old_count, cg->user_specs);
+            }
+            cg_refresh_cgtype_user_specs(method->return_type, old_base, old_count, cg->user_specs);
+        }
+        for (size_t j = 0; j < type->static_method_count; ++j) {
+            UserMethod *method = &type->static_methods[j];
+            for (size_t k = 0; k < method->param_count; ++k) {
+                cg_refresh_cgtype_user_specs(method->param_types[k], old_base, old_count, cg->user_specs);
+            }
+            cg_refresh_cgtype_user_specs(method->return_type, old_base, old_count, cg->user_specs);
+        }
+    }
+    for (size_t i = 0; i < cg->user_spec_count; ++i) {
+        UserSpec *spec = &cg->user_specs[i];
+        for (size_t j = 0; j < spec->member_count; ++j) {
+            UserSpecMember *member = &spec->members[j];
+            cg_refresh_cgtype_user_specs(member->type, old_base, old_count, cg->user_specs);
+            for (size_t k = 0; k < member->param_count; ++k) {
+                cg_refresh_cgtype_user_specs(member->param_types[k], old_base, old_count, cg->user_specs);
+            }
+        }
+        cg_refresh_cgtype_user_specs(spec->callable_return_type, old_base, old_count, cg->user_specs);
+        for (size_t j = 0; j < spec->callable_param_count; ++j) {
+            cg_refresh_cgtype_user_specs(spec->callable_param_types[j], old_base, old_count, cg->user_specs);
+        }
+        for (size_t j = 0; j < spec->union_member_count; ++j) {
+            cg_refresh_cgtype_user_specs(spec->union_member_types[j], old_base, old_count, cg->user_specs);
+        }
+    }
+    for (size_t i = 0; i < cg->user_fit_count; ++i) {
+        UserFit *fit = &cg->user_fits[i];
+        for (size_t j = 0; j < fit->method_count; ++j) {
+            UserMethod *method = &fit->methods[j];
+            for (size_t k = 0; k < method->param_count; ++k) {
+                cg_refresh_cgtype_user_specs(method->param_types[k], old_base, old_count, cg->user_specs);
+            }
+            cg_refresh_cgtype_user_specs(method->return_type, old_base, old_count, cg->user_specs);
+        }
+    }
+    for (size_t i = 0; i < cg->builtin_fit_count; ++i) {
+        BuiltinFit *fit = &cg->builtin_fits[i];
+        for (size_t j = 0; j < fit->spec_count; ++j) {
+            fit->specs[j] = cg_remap_user_spec_ptr(old_base, old_count, cg->user_specs, fit->specs[j]);
+        }
+        for (size_t j = 0; j < fit->method_count; ++j) {
+            UserMethod *method = &fit->methods[j];
+            for (size_t k = 0; k < method->param_count; ++k) {
+                cg_refresh_cgtype_user_specs(method->param_types[k], old_base, old_count, cg->user_specs);
+            }
+            cg_refresh_cgtype_user_specs(method->return_type, old_base, old_count, cg->user_specs);
+        }
+    }
+}
+
 static const BuiltinFit *cg_find_builtin_fit_by_decl(const CG *cg,
                                                      const FengDecl *decl) {
     for (size_t i = 0; i < cg->builtin_fit_count; i++) {
@@ -5898,12 +6060,22 @@ static UserType *cg_find_generic_instance_user_type_with_active_context(
         context_count = cg->ambient_type_param_count;
     }
 
-    return cg_find_generic_instance_user_type_with_context(cg,
-                                                           origin_decl,
-                                                           type_args,
-                                                           type_arg_count,
-                                                           context_names,
-                                                           context_count);
+    UserType *instance = cg_find_generic_instance_user_type_with_context(cg,
+                                                                        origin_decl,
+                                                                        type_args,
+                                                                        type_arg_count,
+                                                                        context_names,
+                                                                        context_count);
+    if (instance != NULL) {
+        return instance;
+    }
+    if (context_count == 0U) {
+        return cg_find_generic_instance_user_type(cg,
+                                                  origin_decl,
+                                                  type_args,
+                                                  type_arg_count);
+    }
+    return NULL;
 }
 
 static bool cg_collect_generic_instances_from_type_ref(CG *cg,
@@ -6104,6 +6276,7 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
         if (!p) return false;
         cg->user_types = p;
         cg->user_type_capacity = cap;
+        cg_refresh_user_fit_targets(cg);
     }
 
     UserType *t = &cg->user_types[cg->user_type_count++];
@@ -6515,6 +6688,8 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         return true;
     }
     if (cg->user_spec_count + 1 > cg->user_spec_capacity) {
+        uintptr_t old_base = (uintptr_t)cg->user_specs;
+        size_t old_count = cg->user_spec_count;
         size_t cap = cg->user_spec_capacity ? cg->user_spec_capacity * 2 : 4;
         void *p = realloc(cg->user_specs, cap * sizeof *cg->user_specs);
         if (!p) {
@@ -6523,6 +6698,8 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         }
         cg->user_specs = p;
         cg->user_spec_capacity = cap;
+        cg_refresh_user_fit_specs(cg);
+        cg_refresh_user_spec_references(cg, old_base, old_count);
     }
 
     UserSpec *s = &cg->user_specs[cg->user_spec_count++];
@@ -6956,6 +7133,43 @@ static bool cg_resolve_type_with_open_scope(CG *cg,
         cg->generic_fn_type_param_descs = saved_tp_descs;
         cg_free_cstr_array(type_param_names, type_param_count);
         return false;
+    }
+
+    if (ref != NULL && ref->kind == FENG_TYPE_REF_NAMED &&
+        ref->as.named.type_arg_count > 0U) {
+        const GenericTypeDecl *generic_decl = cg_find_generic_type_decl(cg, ref);
+
+        if (generic_decl != NULL) {
+            UserType *generic_instance = cg_find_generic_instance_user_type_with_context(
+                cg,
+                generic_decl->decl,
+                ref->as.named.type_args,
+                ref->as.named.type_arg_count,
+                type_param_names,
+                type_param_count);
+
+            if (generic_instance != NULL) {
+                CGType *resolved = cgtype_new(CG_TYPE_OBJECT);
+                if (resolved == NULL) {
+                    cg->in_generic_fn = saved_in_generic_fn;
+                    cg->generic_fn_type_param_count = saved_tp_count;
+                    cg->generic_fn_type_param_names = saved_tp_names;
+                    cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                    cg->generic_fn_type_param_descs = saved_tp_descs;
+                    cg_free_cstr_array(type_param_names, type_param_count);
+                    return false;
+                }
+                resolved->user = generic_instance;
+                *out_type = resolved;
+                cg->in_generic_fn = saved_in_generic_fn;
+                cg->generic_fn_type_param_count = saved_tp_count;
+                cg->generic_fn_type_param_names = saved_tp_names;
+                cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                cg->generic_fn_type_param_descs = saved_tp_descs;
+                cg_free_cstr_array(type_param_names, type_param_count);
+                return true;
+            }
+        }
     }
 
     ok = cg_resolve_type(cg, ref, fallback, out_type);
@@ -7989,6 +8203,7 @@ static bool cg_register_user_type_shell(CG *cg, const FengDecl *decl) {
         if (!p) return false;
         cg->user_types = p;
         cg->user_type_capacity = cap;
+        cg_refresh_user_fit_targets(cg);
     }
     UserType *t = &cg->user_types[cg->user_type_count++];
     memset(t, 0, sizeof *t);
@@ -8369,11 +8584,15 @@ static const UserMethod *cg_builtin_fit_method_by_member(const BuiltinFit *bf,
 
 static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
     if (cg->user_spec_count + 1 > cg->user_spec_capacity) {
+        uintptr_t old_base = (uintptr_t)cg->user_specs;
+        size_t old_count = cg->user_spec_count;
         size_t cap = cg->user_spec_capacity ? cg->user_spec_capacity * 2 : 4;
         void *p = realloc(cg->user_specs, cap * sizeof *cg->user_specs);
         if (!p) return false;
         cg->user_specs = p;
         cg->user_spec_capacity = cap;
+        cg_refresh_user_fit_specs(cg);
+        cg_refresh_user_spec_references(cg, old_base, old_count);
     }
     UserSpec *s = &cg->user_specs[cg->user_spec_count++];
     memset(s, 0, sizeof *s);
@@ -8663,7 +8882,9 @@ static bool cg_register_user_fit_shell_for_target(CG *cg,
                                                   size_t type_param_count,
                                                   FengTypeRef *const *type_args,
                                                   size_t type_arg_count) {
+    size_t target_index = 0U;
     if (target == NULL) return false;
+    if (!cg_user_type_index(cg, target, &target_index)) return false;
     if (cg->user_fit_count + 1 > cg->user_fit_capacity) {
         size_t cap = cg->user_fit_capacity ? cg->user_fit_capacity * 2 : 4;
         void *p = realloc(cg->user_fits, cap * sizeof *cg->user_fits);
@@ -8675,6 +8896,7 @@ static bool cg_register_user_fit_shell_for_target(CG *cg,
     memset(uf, 0, sizeof *uf);
     uf->decl = decl;
     uf->target = target;
+    uf->target_index = target_index;
     uf->index = cg->user_fit_count;
     uf->owner_program = cg->cur_program;
     Buf b; buf_init(&b);
@@ -8683,7 +8905,8 @@ static bool cg_register_user_fit_shell_for_target(CG *cg,
     uf->c_prefix = b.data;
     uf->spec_count = decl->as.fit_decl.spec_count;
     uf->specs = uf->spec_count ? calloc(uf->spec_count, sizeof *uf->specs) : NULL;
-    if (uf->spec_count > 0U && uf->specs == NULL) return false;
+    uf->spec_indices = uf->spec_count ? calloc(uf->spec_count, sizeof *uf->spec_indices) : NULL;
+    if (uf->spec_count > 0U && (uf->specs == NULL || uf->spec_indices == NULL)) return false;
     for (size_t spec_index = 0; spec_index < uf->spec_count; ++spec_index) {
         const FengTypeRef *spec_ref = decl->as.fit_decl.specs[spec_index];
         const FengTypeRef *resolved_spec_ref = spec_ref;
@@ -8711,6 +8934,10 @@ static bool cg_register_user_fit_shell_for_target(CG *cg,
             cgtype_free(spec_type);
             return cg_fail(cg, decl->token,
                 "CE0048", "codegen: fit spec did not resolve to a known user spec");
+        }
+        if (!cg_user_spec_index(cg, spec_type->user_spec, &uf->spec_indices[spec_index])) {
+            cgtype_free(spec_type);
+            return false;
         }
         uf->specs[spec_index] = spec_type->user_spec;
         cgtype_free(spec_type);
@@ -20546,6 +20773,41 @@ static bool cg_emit_user_field_value_store(CG *cg,
     return true;
 }
 
+static bool cg_emit_generic_param_default_init(CG *cg,
+                                               const char *lvalue_expr,
+                                               const CGType *type,
+                                               FengToken blame) {
+    if (cg == NULL || lvalue_expr == NULL || type == NULL ||
+        type->kind != CG_TYPE_GENERIC_PARAM) {
+        return false;
+    }
+
+    const char *desc = cg_generic_param_desc_name(cg, type->generic_param_index);
+    if (desc == NULL) {
+        return cg_fail(cg,
+                       blame,
+                       "CE0237", "codegen: missing generic descriptor for default value");
+    }
+
+    buf_append_fmt(cg->cur_body,
+        "    switch (%s->kind) {\n"
+        "        case FENG_VALUE_TRIVIAL:\n"
+        "            memset(&%s, 0, feng_generic_value_size(%s));\n"
+        "            break;\n"
+        "        case FENG_VALUE_MANAGED_POINTER:\n"
+        "            *(void **)&%s = NULL;\n"
+        "            break;\n"
+        "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+        "            feng_aggregate_default_init(&%s, feng_generic_aggregate_descriptor(%s));\n"
+        "            break;\n"
+        "    }\n",
+        desc,
+        lvalue_expr, desc,
+        lvalue_expr,
+        lvalue_expr, desc);
+    return true;
+}
+
 /* Emit the no-initializer member default for one field during object construction. */
 static bool cg_emit_user_field_default_value(CG *cg,
                                              const char *object_expr,
@@ -20557,6 +20819,26 @@ static bool cg_emit_user_field_default_value(CG *cg,
 
     if (uf->type != NULL && uf->type->kind == CG_TYPE_CALLABLE) {
         return true;
+    }
+
+    if (uf->type != NULL && uf->type->kind == CG_TYPE_GENERIC_PARAM) {
+        Buf lvalue;
+
+        if (cg_generic_param_desc_name(cg, uf->type->generic_param_index) == NULL) {
+            return true;
+        }
+
+        buf_init(&lvalue);
+        buf_append_fmt(&lvalue, "%s->%s", object_expr, uf->c_name);
+        if (lvalue.data == NULL) {
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        bool ok = cg_emit_generic_param_default_init(cg,
+                                                     lvalue.data,
+                                                     uf->type,
+                                                     blame);
+        buf_free(&lvalue);
+        return ok;
     }
 
     if (cgtype_is_aggregate(uf->type)) {
@@ -20883,18 +21165,40 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
             /* Aggregate default-zero is owned by the aggregate facts provider.
              * For object-form specs this routes through the descriptor's
              * default_init function and produces an owned subject slot. */
-            Buf init_call;
-            buf_init(&init_call);
-            if (!cg_append_aggregate_default_init_call(&init_call, decl_type, cname)) {
+            if (cg_value_needs_reified_layout(cg, decl_type)) {
+                const char *agg_desc = cg_aggregate_desc_name(decl_type);
+                size_t rad_idx;
+
+                if (agg_desc == NULL ||
+                    !cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+                    free(cname); free(cty); cgtype_free(decl_type);
+                    return cg_fail(cg, b->token,
+                        "CE0236", "codegen: missing reified aggregate default-init rule");
+                }
+                const char *src = cg->generic_type_method_rad_via_desc
+                                      ? "_desc" : "_td";
+                buf_append_fmt(cg->cur_body,
+                    "    %s %s; feng_aggregate_default_init(&%s, "
+                    "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]);\n",
+                    cty,
+                    cname,
+                    cname,
+                    src,
+                    rad_idx);
+            } else {
+                Buf init_call;
+                buf_init(&init_call);
+                if (!cg_append_aggregate_default_init_call(&init_call, decl_type, cname)) {
+                    buf_free(&init_call);
+                    free(cname); free(cty); cgtype_free(decl_type);
+                    return cg_fail(cg, b->token,
+                        "CE0236", "codegen: missing aggregate default-init rule");
+                }
+                buf_append_fmt(cg->cur_body, "    %s %s; ", cty, cname);
+                buf_append_cstr(cg->cur_body, init_call.data);
+                buf_append_cstr(cg->cur_body, ";\n");
                 buf_free(&init_call);
-                free(cname); free(cty); cgtype_free(decl_type);
-                return cg_fail(cg, b->token,
-                    "CE0236", "codegen: missing aggregate default-init rule");
             }
-            buf_append_fmt(cg->cur_body, "    %s %s; ", cty, cname);
-            buf_append_cstr(cg->cur_body, init_call.data);
-            buf_append_cstr(cg->cur_body, ";\n");
-            buf_free(&init_call);
         } else {
             char *def_expr = NULL;
             if (!cg_default_value_expr(cg, decl_type, &b->token, &def_expr)) {
@@ -21868,7 +22172,61 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                                             &v)) {
             er_free(&recv); return false;
         }
-        if (cgtype_is_managed(uf->type)) {
+        if (uf->type->kind == CG_TYPE_GENERIC_PARAM) {
+            const char *desc = cg_generic_param_desc_name(cg, uf->type->generic_param_index);
+            char *dst_tmp = cg_fresh_temp(cg, "_gdst");
+            char *src_tmp = cg_fresh_temp(cg, "_gsrc");
+
+            if (desc == NULL || dst_tmp == NULL || src_tmp == NULL) {
+                free(dst_tmp);
+                free(src_tmp);
+                er_free(&v);
+                er_free(&recv);
+                return cg_fail(cg,
+                               stmt->token,
+                               "CE0257", "codegen: generic member assignment requires a matching descriptor");
+            }
+            if (v.type == NULL || v.type->kind != CG_TYPE_GENERIC_PARAM ||
+                v.type->generic_param_index != uf->type->generic_param_index) {
+                free(dst_tmp);
+                free(src_tmp);
+                er_free(&v);
+                er_free(&recv);
+                return cg_fail(cg,
+                               stmt->token,
+                               "CE0257", "codegen: generic member assignment requires a value with the same generic type parameter");
+            }
+            buf_append_fmt(cg->cur_body,
+                "    void *%s = (void *)&(%s)%s%s;\n"
+                "    const void *%s = %s;\n"
+                "    switch (%s->kind) {\n"
+                "        case FENG_VALUE_TRIVIAL:\n"
+                "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
+                "            break;\n"
+                "        case FENG_VALUE_MANAGED_POINTER: {\n"
+                "            void *_new_value = *(void *const *)%s;\n"
+                "            feng_retain(_new_value);\n"
+                "            void *_old_value = *(void **)%s;\n"
+                "            *(void **)%s = _new_value;\n"
+                "            feng_release(_old_value);\n"
+                "            break;\n"
+                "        }\n"
+                "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+                "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
+                "            break;\n"
+                "    }\n",
+                dst_tmp,
+                recv.c_expr, acc, uf->c_name,
+                src_tmp, v.c_expr,
+                desc,
+                dst_tmp, src_tmp, desc,
+                src_tmp,
+                dst_tmp,
+                dst_tmp,
+                dst_tmp, src_tmp, desc);
+            free(dst_tmp);
+            free(src_tmp);
+        } else if (cgtype_is_managed(uf->type)) {
             if (v.owns_ref) {
                 buf_append_fmt(cg->cur_body,
                     "    { void *_old = (%s)%s%s; (%s)%s%s = %s; feng_release(_old); }\n",
@@ -26299,12 +26657,17 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         }
 
         if (!r.owns_ref) {
+            const char *copy_src = cg_type_is_value_user(r.type) ? "&%s" : "%s";
             buf_append_fmt(cg->cur_body,
                 "    _Alignas(max_align_t) char %s[%s->size];\n"
-                "    memcpy(%s, %s, %s->size);\n"
-                "    feng_aggregate_retain(%s, %s);\n",
+                "    memcpy(%s, ",
                 tmp, rad_buf.data,
-                tmp, r.c_expr, rad_buf.data,
+                tmp);
+            buf_append_fmt(cg->cur_body, copy_src, r.c_expr);
+            buf_append_fmt(cg->cur_body,
+                ", %s->size);\n"
+                "    feng_aggregate_retain(%s, %s);\n",
+                rad_buf.data,
                 tmp, rad_buf.data);
         } else {
             /* @value type 的 c_expr 是 struct 值（非指针），取地址用 &；
@@ -27601,6 +27964,107 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
             }
         } else {
             concrete_return = rt;
+        }
+    }
+    if (concrete_return != NULL &&
+        concrete_return->kind == CG_TYPE_OBJECT &&
+        concrete_return->user != NULL &&
+        concrete_return->user->is_generic_instance &&
+        concrete_return->user->generic_context_type_param_count > 0U &&
+        concrete_return->user->generic_origin_decl != NULL) {
+        const GenericTypeDecl *return_generic_decl = cg_find_generic_type_decl_by_decl(
+            cg,
+            concrete_return->user->generic_origin_decl);
+        FengTypeRef **return_type_args = concrete_return->user->generic_type_arg_count > 0U
+            ? calloc(concrete_return->user->generic_type_arg_count, sizeof *return_type_args)
+            : NULL;
+        bool return_type_args_ok = return_generic_decl != NULL &&
+            (concrete_return->user->generic_type_arg_count == 0U || return_type_args != NULL);
+
+        for (size_t i = 0; return_type_args_ok && i < concrete_return->user->generic_type_arg_count; ++i) {
+            CGType *resolved_arg = NULL;
+            size_t direct_tp_index = 0U;
+
+            if (cg_type_ref_is_direct_type_param(concrete_return->user->generic_type_args[i],
+                                                sig->type_params,
+                                                tp_count,
+                                                &direct_tp_index)) {
+                if (direct_tp_index >= tp_count) {
+                    return_type_args_ok = false;
+                    break;
+                }
+                return_type_args[i] = cg_type_ref_from_cgtype(cg,
+                                                              type_args[direct_tp_index],
+                                                              e->token);
+            } else {
+                if (!cg_resolve_type(cg,
+                                     concrete_return->user->generic_type_args[i],
+                                     &e->token,
+                                     &resolved_arg)) {
+                    return_type_args_ok = false;
+                    break;
+                }
+                return_type_args[i] = cg_type_ref_from_cgtype(cg, resolved_arg, e->token);
+                cgtype_free(resolved_arg);
+            }
+            if (return_type_args[i] == NULL) {
+                return_type_args_ok = false;
+            }
+        }
+        if (return_type_args_ok &&
+            !cg_register_generic_type_instance_shell(cg,
+                                                     return_generic_decl,
+                                                     return_type_args,
+                                                     concrete_return->user->generic_type_arg_count,
+                                                     e->token,
+                                                     NULL)) {
+            return_type_args_ok = false;
+        }
+        if (!return_type_args_ok) {
+            for (size_t i = 0; i < concrete_return->user->generic_type_arg_count; ++i) {
+                cg_type_ref_free(return_type_args != NULL ? return_type_args[i] : NULL);
+            }
+            free(return_type_args);
+            for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
+            free(arg_addr_exprs);
+            for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
+            free(desc_exprs);
+            goto bail;
+        }
+        UserType *registered_return = cg_find_generic_instance_user_type(
+            cg,
+            concrete_return->user->generic_origin_decl,
+            return_type_args,
+            concrete_return->user->generic_type_arg_count);
+        for (size_t i = 0; i < concrete_return->user->generic_type_arg_count; ++i) {
+            cg_type_ref_free(return_type_args[i]);
+        }
+        free(return_type_args);
+        if (registered_return != NULL) {
+            if (registered_return->field_count == 0U &&
+                registered_return->decl != NULL &&
+                registered_return->decl->kind == FENG_DECL_TYPE &&
+                registered_return->decl->as.type_decl.member_count > 0U) {
+                const FengProgram *saved_program = cg->cur_program;
+                cg->cur_program = registered_return->instantiation_program != NULL
+                    ? registered_return->instantiation_program
+                    : registered_return->owner_program;
+                if (!cg_register_user_type_members(cg, registered_return, FENG_COMPILE_TARGET_BIN)) {
+                    cg->cur_program = saved_program;
+                    for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
+                    free(arg_addr_exprs);
+                    for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
+                    free(desc_exprs);
+                    goto bail;
+                }
+                if (cg_user_type_is_value_semantics(registered_return)) {
+                    cg_emit_value_type_struct_body(cg, registered_return);
+                }
+                cg_emit_user_type_forward(cg, registered_return);
+                cg_emit_user_type_definition(cg, registered_return);
+                cg->cur_program = saved_program;
+            }
+            concrete_return->user = registered_return;
         }
     }
     bool has_out_param = (concrete_return->kind != CG_TYPE_VOID);
@@ -33309,6 +33773,9 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
     Buf equal_fn_name;
 
     /* Struct body already emitted in cg_emit_user_type_forward (headers). */
+    if (t->is_generic_instance && t->generic_context_type_param_count > 0U) {
+        return;
+    }
 
     /* @value @abi: emit ABI surface (layout struct, c_abi_ptr_name,
      * c_abi_value_name). Dispatches to cg_emit_value_type_abi_surface
@@ -34511,6 +34978,8 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
         for (size_t i = 0; i < t->field_count; i++) {
             const CGType *ft = t->fields[i].type;
             switch (ft->kind) {
+                case CG_TYPE_GENERIC_PARAM:
+                    break;
                 case CG_TYPE_STRING:
                     buf_append_fmt(td,
                         "    _o->%s = feng_string_default();\n",
@@ -36901,6 +37370,8 @@ static void cg_dispose(CG *cg) {
             free(um->param_names);
         }
         free(uf->methods);
+        free(uf->specs);
+        free(uf->spec_indices);
         free(uf->c_prefix);
     }
     free(cg->user_fits);
