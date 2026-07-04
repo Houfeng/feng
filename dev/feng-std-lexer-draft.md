@@ -35,6 +35,7 @@ Feng 版面向更好的设计，不机械对齐 C 版——Lexer 只管词法切
 | Token 类型形式 | `@value` type | 避免每个 token 堆分配；64 bytes memcpy 远快于 malloc + RC |
 | StringBuilder | 同步实现（详见 `feng-std-string-builder-dev.md`） | Lexer 字符串扫描依赖 |
 | 序列化预留 | 先实现 Token 后再考虑 | |
+| 文档注释关联 | Lexer 不处理 pendingDoc，仅发射 CommentDoc Token | 关联语义属 Parser 职责，Lexer 保持纯词法切分 |
 
 ### Token @value type 性能分析
 
@@ -411,8 +412,6 @@ open type FengLexer {
   seal var pos: int;
   seal var line: int;
   seal var column: int;
-  seal var pendingDoc: string;
-  seal var pendingDocLineBreaks: int;
   seal var peeked: FengToken;
   seal var hasPeeked: bool;
 
@@ -468,7 +467,6 @@ open type FengLexer {
 next()
   → 如果有 peeked，返回 peeked 并清除 hasPeeked
   → 调用 scanNext()
-  → 对于非 trivia Token，附加 pendingDoc（如有）
 
 scanNext()
   → 记录 startOffset/startLine/startColumn
@@ -497,12 +495,9 @@ Lexer 将空白和注释作为独立 Token 发射，不跳过。Parser 在构建
 **注释扫描**：
 - **行注释**：`//` 到行尾 → `CommentLine`
 - **块注释**：`/* ... */` → `CommentBlock`（未终止抛出 FengCompileError LE0006）
-- **文档注释**：`/** ... */` → `CommentDoc`（同时记录到 pendingDoc，附加到下一个非 trivia Token）
+- **文档注释**：`/** ... */` → `CommentDoc`
 
-**文档注释附加规则**：
-- `CommentDoc` 产出后记录为 pendingDoc
-- 如果文档注释与下一个非 trivia Token 之间隔了 ≥ 2 个换行，丢弃 pendingDoc
-- `CommentLine` 和 `CommentBlock` 会清除 pendingDoc
+Lexer 不维护文档注释与目标声明的关联。`CommentDoc` 仅作为普通 trivia Token 发射，"附加到下一个非 trivia Token" 的语义交给 Parser 阶段处理。
 
 ### 4.4 各扫描方法
 
@@ -725,7 +720,7 @@ open type TokenSpan {
 - 数字扫描（十进制、十六进制、二进制、八进制、浮点数、带 `_` 分隔）
 - 字符串扫描（普通字符串、转义序列、原始字符串）
 - 运算符和分隔符（全部 43 种，含 OperatorAt）
-- Trivia 发射（空白 Token、行注释、块注释、文档注释及 CommentDoc 与目标声明的关联规则）
+- Trivia 发射（空白 Token、行注释、块注释、文档注释）
 - 错误处理（全部 6 个错误码场景）
 
 ### 7.2 对比验证
@@ -763,4 +758,3 @@ open type TokenSpan {
 1. **关键字查找优化时机**：当前方案用 match + 线性扫描，何时优化为哈希表？建议阶段一先用简单方案，性能测试后再决定
 2. **Token 的 value 字段**：已确定使用 `StringSpan`（引用源码子串，零拷贝）。`FengSource.content` 为托管引用类型，生命周期由引用计数管理
 3. **`@value` type 的 `open let` 字段**：已确认支持，如有问题是 Bug 需要修复
-4. **文档注释处理**：`CommentDoc` 作为独立 Token 发射，文档注释与目标声明的关联由 Parser 阶段处理
