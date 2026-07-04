@@ -1,6 +1,7 @@
 open module std.compiler.lexer;
 
 import std.text;
+import std.collections;
 
 /**
  * 词法分析器的输入源，代表一个源文件的内容和路径
@@ -23,6 +24,36 @@ open type FengSource {
   func FengSource(content: byte[], path: string) {
     self.path = path;
     self.content = string.fromUtf8Bytes(content);
+  }
+
+  /**
+   * 提取指定字节偏移所在行的源码片段（不含行尾换行）。
+   *
+   * 用于 Lexer/Parser 构造 FengCompileError 时填充 snippet 字段。
+   * 错误报告为冷路径，按需将 content 转为字节访问，不常驻缓存。
+   * 偏移越界时夹到 [0, length] 区间后定位行边界。
+   */
+  open func extractLineSnippet(offset: int): string {
+    let bytes = self.content.toBytes();
+    let length = bytes.length();
+    if length == 0 {
+      return "";
+    }
+    var lineStart = offset;
+    if lineStart >= length {
+      lineStart = length - 1;
+    }
+    if lineStart < 0 {
+      lineStart = 0;
+    }
+    while lineStart > 0 && bytes[lineStart - 1] != (byte)0x0A {
+      lineStart = lineStart - 1;
+    }
+    var lineEnd = lineStart;
+    while lineEnd < length && bytes[lineEnd] != (byte)0x0A && bytes[lineEnd] != (byte)0x0D {
+      lineEnd = lineEnd + 1;
+    }
+    return self.content.clone(lineStart, lineEnd);
   }
 }
 

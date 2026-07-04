@@ -296,6 +296,12 @@ open type FengSource {
     self.path = path;
     self.content = string.fromUtf8Bytes(content);
   }
+  /**
+   * 提取指定字节偏移所在行的源码片段（不含行尾换行）。
+   * 用于 Lexer/Parser 构造 FengCompileError 时填充 snippet 字段。
+   * 错误报告为冷路径，按需将 content 转为字节访问，不常驻缓存。
+   */
+  open func extractLineSnippet(offset: int): string;
 }
 ```
 

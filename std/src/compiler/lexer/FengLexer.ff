@@ -681,7 +681,7 @@ open type FengLexer {
 
   /** 构造并抛出词法错误 */
   seal func throwError(startOffset: int, startLine: int, startColumn: int, code: string, message: string): FengToken {
-    let snippet = self.extractLineSnippet(startOffset);
+    let snippet = self.source.extractLineSnippet(startOffset);
     throw FengCompileError {
       code: code,
       message: message,
@@ -690,28 +690,6 @@ open type FengLexer {
       column: startColumn,
       snippet: snippet
     };
-  }
-
-  /** 提取指定偏移所在行的源码片段（不含行尾换行） */
-  seal func extractLineSnippet(offset: int): string {
-    if self.length == 0 {
-      return "";
-    }
-    var lineStart = offset;
-    if lineStart >= self.length {
-      lineStart = self.length - 1;
-    }
-    if lineStart < 0 {
-      lineStart = 0;
-    }
-    while lineStart > 0 && self.bytes[lineStart - 1] != (byte)0x0A {
-      lineStart = lineStart - 1;
-    }
-    var lineEnd = lineStart;
-    while lineEnd < self.length && self.bytes[lineEnd] != (byte)0x0A && self.bytes[lineEnd] != (byte)0x0D {
-      lineEnd = lineEnd + 1;
-    }
-    return self.source.content.clone(lineStart, lineEnd);
   }
 
   // ==================== 字节谓词 ====================

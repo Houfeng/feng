@@ -36,6 +36,9 @@ extern func feng_pointer_move(ptr: string*, offset: int): string*;
 @runtime
 extern func feng_pointer_diff(a: string*, b: string*): int;
 
+@runtime
+extern func feng_pointer_get_scalar<T>(ptr: string*): T;
+
 /**
  * Extends `string` with standard UTF-8 operations.
  */
@@ -89,6 +92,22 @@ open fit string: Display {
       throw "String index out of bounds";
     }
     return feng_string_slice(self, index, (int)1);
+  }
+
+  /**
+   * Returns the byte value at the specified byte offset.
+   * @param index - zero-based byte offset
+   * @return byte value at `index`
+   */
+  open func getByte(index: int): byte {
+    if index < (int)0 {
+      throw "String index out of bounds";
+    }
+    if index >= self.length() {
+      throw "String index out of bounds";
+    }
+    let ptr = feng_pointer_move(&self, index);
+    return feng_pointer_get_scalar<byte>(ptr);
   }
 
   /**
