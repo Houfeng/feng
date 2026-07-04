@@ -26,6 +26,10 @@ open type FengSource {
     self.content = string.fromUtf8Bytes(content);
   }
 
+  seal func at(index: int): byte {
+    return self.content.getByte(index);
+  }
+
   /**
    * 提取指定字节偏移所在行的源码片段（不含行尾换行）。
    *
@@ -34,11 +38,8 @@ open type FengSource {
    * 偏移越界时夹到 [0, length] 区间后定位行边界。
    */
   open func extractLineSnippet(offset: int): string {
-    let bytes = self.content.toBytes();
-    let length = bytes.length();
-    if length == 0 {
-      return "";
-    }
+    let length = self.content.length();
+    if length == 0 { return ""; }
     var lineStart = offset;
     if lineStart >= length {
       lineStart = length - 1;
@@ -46,11 +47,11 @@ open type FengSource {
     if lineStart < 0 {
       lineStart = 0;
     }
-    while lineStart > 0 && bytes[lineStart - 1] != (byte)0x0A {
+    while lineStart > 0 && self.at(lineStart - 1) != (byte)0x0A {
       lineStart = lineStart - 1;
     }
     var lineEnd = lineStart;
-    while lineEnd < length && bytes[lineEnd] != (byte)0x0A && bytes[lineEnd] != (byte)0x0D {
+    while lineEnd < length && self.at(lineEnd) != (byte)0x0A && self.at(lineEnd) != (byte)0x0D {
       lineEnd = lineEnd + 1;
     }
     return self.content.clone(lineStart, lineEnd);
