@@ -15920,7 +15920,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             buf_free(&args_buf);
             out->c_expr = b.data;
             out->type = cgtype_clone(sm->type);
-            out->owns_ref = cgtype_is_managed(out->type);
+            out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
             er_free(&recv);
             return out->c_expr && out->type;
         }
@@ -15971,7 +15971,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             buf_free(&args_buf);
             out->c_expr = b.data;
             out->type = cgtype_clone(sm->type);
-            out->owns_ref = cgtype_is_managed(out->type);
+            out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
             er_free(&recv);
             return out->c_expr && out->type;
         }
@@ -16164,7 +16164,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
             }
-            out->owns_ref = cgtype_is_managed(out->type);
+            out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
             er_free(&recv);
             return out->c_expr && out->type;
         }
@@ -16525,7 +16525,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         buf_free(&args_buf);
         out->c_expr = b.data;
         out->type = cgtype_clone(um->return_type);
-        out->owns_ref = cgtype_is_managed(out->type);
+        out->owns_ref = cgtype_is_managed(out->type) || cgtype_is_aggregate(out->type);
         er_free(&recv);
         return out->c_expr && out->type;
     }

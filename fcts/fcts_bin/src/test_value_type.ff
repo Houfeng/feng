@@ -464,6 +464,43 @@ type VGContainer<T> {
   }
 }
 
+// --- @value 字段赋值为方法返回的 @value (复现 FengLexer codegen bug) ---
+
+// 模拟词法 token 的 @value 类型 (aggregate: 含 string 字段)
+@value
+type VToken {
+  var kind: int;
+  var text: string;
+}
+
+// 模拟词法分析器状态,持有 @value 字段且方法返回 @value
+@value
+type VTokenCursor {
+  var current: VToken;
+  var peeked: VToken;
+
+  // 实例方法返回 @value,赋值给自身的 @value 字段
+  func advance() {
+    self.peeked = self.current.next();
+    self.current = self.peeked;
+  }
+}
+
+// 实例方法返回 @value (trivial 字段)
+func vt_next(t: VToken): VToken {
+  var r: VToken;
+  r.kind = t.kind + 1;
+  r.text = t.text + "+";
+  return r;
+}
+
+// fit 扩展:让 VToken 拥有 next() 方法
+open fit VToken {
+  func next(): VToken {
+    return vt_next(self);
+  }
+}
+
 /** @value type 测试 */
 open func test_value_type() {
   describe("value-type", () {
@@ -1194,6 +1231,29 @@ open func test_value_type() {
       c.value = "original";
       let box = c.wrap();
       assert(box.get() == "original", "generic @value returns aggregate with string field");
+    });
+
+    // 复现 FengLexer codegen bug: @value 字段赋值为方法返回的 @value
+    // 修复前会生成 `feng_aggregate_assign(&dst, &method(self), desc)` —— 取 rvalue 地址非法
+    test("@value field assigned from instance method returning @value (aggregate)", () {
+      var cur: VTokenCursor;
+      cur.current.kind = 1;
+      cur.current.text = "a";
+      cur.advance();
+      assert(cur.peeked.kind == 2, "peeked.kind after advance (method returning @value)");
+      assert(cur.peeked.text == "a+", "peeked.text after advance (method returning @value)");
+      assert(cur.current.kind == 2, "current updated from @value method result");
+      assert(cur.current.text == "a+", "current text updated from @value method result");
+    });
+
+    test("@value field assigned from method returning @value (trivial)", () {
+      var t: VToken;
+      t.kind = 5;
+      t.text = "x";
+      let n = t.next();
+      assert(n.kind == 6, "next.kind from method returning trivial @value");
+      assert(n.text == "x+", "next.text from method returning trivial @value");
+      assert(t.kind == 5, "original unchanged after method returns @value");
     });
   });
 }
