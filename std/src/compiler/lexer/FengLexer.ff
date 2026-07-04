@@ -52,7 +52,7 @@ open type FengLexer {
     self.column = 1;
     self.peeked = FengToken {
       kind: FengTokenKind.SpecialEndOfFile,
-      value: source.slice( 0, 0),
+      value: source.slice(0, 0),
       source: source,
       location: FengLocation { offset: 0, line: 1, column: 1 }
     };
