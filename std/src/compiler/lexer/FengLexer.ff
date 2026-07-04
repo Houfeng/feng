@@ -30,8 +30,6 @@ import std.collections;
 open type FengLexer {
   /** 源文件信息 */
   seal let source: FengSource;
-  /** 源码字节内容（用于高效字节级访问） */
-  seal let bytes: byte[];
   /** 字节长度 */
   seal let length: int;
   /** 当前字节偏移 */
@@ -48,14 +46,13 @@ open type FengLexer {
   /** 从 FengSource 创建 Lexer */
   open func FengLexer(source: FengSource) {
     self.source = source;
-    self.bytes = source.content.toBytes();
-    self.length = self.bytes.length();
+    self.length = self.source.length();
     self.pos = 0;
     self.line = 1;
     self.column = 1;
     self.peeked = FengToken {
       kind: FengTokenKind.SpecialEndOfFile,
-      value: StringSpan(source.content, 0, 0),
+      value: source.slice( 0, 0),
       source: source,
       location: FengLocation { offset: 0, line: 1, column: 1 }
     };
@@ -198,7 +195,7 @@ open type FengLexer {
     while self.isIdentifierContinueByte(self.peekChar()) {
       self.advance();
     }
-    let text = self.source.content.clone(startOffset, self.pos);
+    let text = self.source.clone(startOffset, self.pos);
     if self.isReservedWord(text) {
       return self.throwError(startOffset, startLine, startColumn, "LE0001", "reserved word cannot be used as an identifier");
     }
@@ -255,7 +252,7 @@ open type FengLexer {
 
   /** 扫描数字字面量：0x/0b/0o 前缀、十进制浮点、_ 分隔，无效格式抛 LE0002 */
   seal func scanNumber(startOffset: int, startLine: int, startColumn: int): FengToken {
-    let first = self.bytes[startOffset];
+    let first = self.source.at(startOffset);
     var base = 10;
     var isFloat = false;
 
@@ -596,7 +593,7 @@ open type FengLexer {
     if self.pos >= self.length {
       return (byte)0;
     }
-    return self.bytes[self.pos];
+    return self.source.at(self.pos);
   }
 
   /** 前瞻指定偏移字节（不消费），越界返回 0 */
@@ -605,7 +602,7 @@ open type FengLexer {
     if idx < 0 || idx >= self.length {
       return (byte)0;
     }
-    return self.bytes[idx];
+    return self.source.at(idx);
   }
 
   /** 前进一字节，维护 pos/line/column，返回该字节（末尾返回 0）；\r 与 \r\n 统一视为 \n */
@@ -613,10 +610,10 @@ open type FengLexer {
     if self.pos >= self.length {
       return (byte)0;
     }
-    let c = self.bytes[self.pos];
+    let c = self.source.at(self.pos);
     if c == (byte)0x0D {
       self.pos = self.pos + 1;
-      if self.pos < self.length && self.bytes[self.pos] == (byte)0x0A {
+      if self.pos < self.length && self.source.at(self.pos) == (byte)0x0A {
         self.pos = self.pos + 1;
       }
       self.line = self.line + 1;
@@ -673,7 +670,7 @@ open type FengLexer {
   seal func makeToken(kind: FengTokenKind, startOffset: int, startLine: int, startColumn: int): FengToken {
     return FengToken {
       kind: kind,
-      value: StringSpan(self.source.content, startOffset, self.pos),
+      value: self.source.slice(startOffset, self.pos),
       source: self.source,
       location: FengLocation { offset: startOffset, line: startLine, column: startColumn }
     };

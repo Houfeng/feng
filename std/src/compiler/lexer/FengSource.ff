@@ -8,11 +8,11 @@ import std.collections;
  * 每个源文件对应一个 FengSource 对象
  */
 open type FengSource {
+  /** 源文件的内容 */
+  seal let content: string;
+
   /** 源文件的路径 */
   let path: string;
-
-  /** 源文件的内容 */
-  let content: string;
 
   /** 从字符串内容创建 */
   func FengSource(content: string, path: string) {
@@ -24,6 +24,11 @@ open type FengSource {
   func FengSource(content: byte[], path: string) {
     self.path = path;
     self.content = string.fromUtf8Bytes(content);
+  }
+
+  /** 获取源文件的长度 */
+  func length(): int {
+    return self.content.length();
   }
 
   /** 获取指定字节偏移的字节值 */
