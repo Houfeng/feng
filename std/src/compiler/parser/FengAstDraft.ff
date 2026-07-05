@@ -675,7 +675,9 @@ open type ModuleFile {
   let members: ModuleMember[];
 }
 
-// 语议阶段 ---------------------------------------------------------------------
+// 语议阶段 =====================================================================
+
+// 模块 (module) ---------------------------------------------------------------
 
 open type ModuleDeclaration {
   // 模块可见性
@@ -687,16 +689,16 @@ open type ModuleDeclaration {
   // 语义阶段，根据 path 合并为同一个模块，同时需检查可见性声明一致
   let files: ModuleFile[];
 
-  /**
-   * 返回模块中所有成员的列表
-   */
-  func modules(): ModuleMember[] {
-    var list = List<ModuleMember>();
-    for let file in self.files {
-      for let member in file.members { list.add(member); }
-    }
-    return list.entries();
-  }
+  // /**
+  //  * 返回模块中所有成员的列表
+  //  */
+  // func members(): ModuleMember[] {
+  //   var list = List<ModuleMember>();
+  //   for let file in self.files {
+  //     for let member in file.members { list.add(member); }
+  //   }
+  //   return list.entries();
+  // }
 }
 
 // 程序 (program) --------------------------------------------------------------
