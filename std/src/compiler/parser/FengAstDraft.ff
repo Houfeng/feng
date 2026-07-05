@@ -11,7 +11,7 @@ import std.compiler.lexer;
 // 收窄后直接访问字段，无间接调用开销。
 //
 // 5 个节点大类:
-//   TypeReference(3) / Expression(22) / Statement(14) / TypeMember(4) / Declaration(6)
+//   TypeReference(3) / Expression(21) / Statement(14) / TypeMember(4) / Declaration(6)
 // ======================================================================
 
 // 可见性 & 可变性 --------------------------------------------------------------
@@ -153,150 +153,10 @@ open type Function {
   let isExtern: bool;
 }
 
-// 表达式 ----------------------------------------------------------------------
-
-
-
-// 类型 ------------------------------------------------------------------------
-
-
-
-// ---- 辅助结构 ----
-
-open type Annotation {
-  let token: FengToken;
-  let name: StringSpan;
-  let arguments: Expression[];
-}
-
-open enum SpecificationForm {
-  Object = 0,
-  Callable = 1,
-  Union = 2
-}
-
-open enum ExpressionKind {
-  Identifier = 0,
-  SelfReference = 1,
-  BooleanLiteral = 2,
-  IntegerLiteral = 3,
-  FloatLiteral = 4,
-  StringLiteral = 5,
-  ArrayLiteral = 6,
-  TupleLiteral = 7,
-  ObjectLiteral = 8,
-  GenericTarget = 9,
-  Call = 10,
-  MemberAccess = 11,
-  IndexAccess = 12,
-  UnaryOperation = 13,
-  BinaryOperation = 14,
-  Lambda = 15,
-  Cast = 16,
-  If = 17,
-  Match = 18,
-  Try = 19,
-  ArrayNew = 20,
-  MatchOperator = 21
-}
-
-open enum StatementKind {
-  Block = 0,
-  Binding = 1,
-  Assignment = 2,
-  Expression = 3,
-  Try = 4,
-  If = 5,
-  Match = 6,
-  While = 7,
-  For = 8,
-  Return = 9,
-  Throw = 10,
-  Break = 11,
-  Continue = 12,
-  Defer = 13
-}
-
-open enum TypeMemberKind {
-  Field = 0,
-  Method = 1,
-  Constructor = 2,
-  Finalizer = 3
-}
-
-open enum DeclarationKind {
-  GlobalBinding = 0,
-  Type = 1,
-  Enumeration = 2,
-  Specification = 3,
-  Fit = 4,
-  Function = 5
-}
-
-// ---- 辅助结构 ----
-
-open type EnumerationItem {
-  let token: FengToken;
-  let name: StringSpan;
-  let hasExplicitValue: bool;
-  let explicitValue: i64;
-}
-
-open type ObjectFieldInitializer {
-  let token: FengToken;
-  let name: StringSpan;
-  let value: Expression;
-}
-
-open enum MatchLabelKind {
-  Value = 0,
-  Range = 1,
-  Type = 2
-}
-
-open type MatchLabel {
-  let token: FengToken;
-  let kind: MatchLabelKind;
-  let value: Expression;
-  let rangeLow: Expression;
-  let rangeHigh: Expression;
-  let typeReference: TypeReference;
-}
-
-open type MatchBranch {
-  let token: FengToken;
-  let labels: MatchLabel[];
-  let body: Block;
-  let hasBinding: bool;
-  let bindingName: StringSpan;
-  let bindingMutability: Mutability;
-}
-
-open type TryCatchClause {
-  let token: FengToken;
-  let name: StringSpan;
-  let typeReference: TypeReference;
-  let body: Block;
-}
-
-open type IfClause {
-  let token: FengToken;
-  let condition: Expression;
-  let body: Block;
-}
-
-open type Block {
-  let token: FengToken;
-  let statements: Statement[];
-}
-
-// ---- Expression variants (22) ----
+// 基础表达式 -------------------------------------------------------------------
 
 open type IdentifierExpression {
   let name: StringSpan;
-}
-
-open type SelfReferenceExpression {
 }
 
 open type BooleanLiteralExpression {
@@ -325,9 +185,20 @@ open type TupleLiteralExpression {
   let items: Expression[];
 }
 
+open type ObjectLiteralField {
+  let token: FengToken;
+  let name: StringSpan;
+  let value: Expression;
+}
+
 open type ObjectLiteralExpression {
   let target: Expression;
-  let fields: ObjectFieldInitializer[];
+  let fields: ObjectLiteralField[];
+}
+
+open type ArrayNewExpression {
+  let elementTypeRef: TypeReference;
+  let size: Expression;
 }
 
 open type GenericTargetExpression {
@@ -374,6 +245,16 @@ open type CastExpression {
   let value: Expression;
 }
 
+open type MatchOperatorExpression {
+  let target: Expression;
+  let labels: MatchLabel[];
+  let hasBinding: bool;
+  let bindingName: StringSpan;
+  let bindingMutability: Mutability;
+}
+
+// 块表达式 ---------------------------------------------------------------------
+
 open type IfExpression {
   let condition: Expression;
   let thenBlock: Block;
@@ -391,22 +272,134 @@ open type TryExpression {
   let catchClauses: TryCatchClause[];
 }
 
-open type ArrayNewExpression {
-  let elementType: TypeReference;
-  let size: Expression;
+// 类型 ------------------------------------------------------------------------
+
+
+
+// ---- 辅助结构 ----
+
+open type Annotation {
+  let token: FengToken;
+  let name: StringSpan;
+  let arguments: Expression[];
 }
 
-open type MatchOperatorExpression {
-  let target: Expression;
+open enum SpecificationForm {
+  Object = 0,
+  Callable = 1,
+  Union = 2
+}
+
+open enum ExpressionKind {
+  Identifier = 0,
+  BooleanLiteral = 1,
+  IntegerLiteral = 2,
+  FloatLiteral = 3,
+  StringLiteral = 4,
+  ArrayLiteral = 5,
+  TupleLiteral = 6,
+  ObjectLiteral = 7,
+  ArrayNew = 8,
+  GenericTarget = 9,
+  Call = 10,
+  MemberAccess = 11,
+  IndexAccess = 12,
+  UnaryOperation = 13,
+  BinaryOperation = 14,
+  Lambda = 15,
+  Cast = 16,
+  MatchOperator = 17,
+  If = 18,
+  Match = 19,
+  Try = 20
+}
+
+open enum StatementKind {
+  Block = 0,
+  Binding = 1,
+  Assignment = 2,
+  Expression = 3,
+  Try = 4,
+  If = 5,
+  Match = 6,
+  While = 7,
+  For = 8,
+  Return = 9,
+  Throw = 10,
+  Break = 11,
+  Continue = 12,
+  Defer = 13
+}
+
+open enum TypeMemberKind {
+  Field = 0,
+  Method = 1,
+  Constructor = 2,
+  Finalizer = 3
+}
+
+open enum DeclarationKind {
+  GlobalBinding = 0,
+  Type = 1,
+  Enumeration = 2,
+  Specification = 3,
+  Fit = 4,
+  Function = 5
+}
+
+// ---- 辅助结构 ----
+
+open type EnumerationItem {
+  let token: FengToken;
+  let name: StringSpan;
+  let hasExplicitValue: bool;
+  let explicitValue: i64;
+}
+
+open enum MatchLabelKind {
+  Value = 0,
+  Range = 1,
+  Type = 2
+}
+
+open type MatchLabel {
+  let token: FengToken;
+  let kind: MatchLabelKind;
+  let value: Expression;
+  let rangeLow: Expression;
+  let rangeHigh: Expression;
+  let typeReference: TypeReference;
+}
+
+open type MatchBranch {
+  let token: FengToken;
   let labels: MatchLabel[];
+  let body: Block;
   let hasBinding: bool;
   let bindingName: StringSpan;
   let bindingMutability: Mutability;
 }
 
+open type TryCatchClause {
+  let token: FengToken;
+  let name: StringSpan;
+  let typeReference: TypeReference;
+  let body: Block;
+}
+
+open type IfClause {
+  let token: FengToken;
+  let condition: Expression;
+  let body: Block;
+}
+
+open type Block {
+  let token: FengToken;
+  let statements: Statement[];
+}
+
 open spec ExpressionBody:
 IdentifierExpression
-| SelfReferenceExpression
 | BooleanLiteralExpression
 | IntegerLiteralExpression
 | FloatLiteralExpression
@@ -414,6 +407,7 @@ IdentifierExpression
 | ArrayLiteralExpression
 | TupleLiteralExpression
 | ObjectLiteralExpression
+| ArrayNewExpression
 | GenericTargetExpression
 | CallExpression
 | MemberAccessExpression
@@ -422,11 +416,10 @@ IdentifierExpression
 | BinaryOperationExpression
 | LambdaExpression
 | CastExpression
+| MatchOperatorExpression
 | IfExpression
 | MatchExpression
-| TryExpression
-| ArrayNewExpression
-| MatchOperatorExpression;
+| TryExpression;
 
 open type Expression {
   let token: FengToken;
