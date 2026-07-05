@@ -568,8 +568,7 @@ open type Type {
 open type EnumItem {
   let token: FengToken;
   let name: StringSpan;
-  let hasExplicitValue: bool;
-  let explicitValue: i64;
+  let value: Option<int>;
 }
 
 open type Enum {
