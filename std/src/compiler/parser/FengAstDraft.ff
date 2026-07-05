@@ -45,7 +45,7 @@ open enum Mutability {
 /**
  * 命名类型引用：int, std.text.String, Map<K, V>
  */
-open type TypeReferenceNamedBody {
+open type TypeRefNamedBody {
   let segments: StringSpan[];
   let parameterTypeRefs: TypeReference[];
 }
@@ -53,14 +53,14 @@ open type TypeReferenceNamedBody {
 /**
  * 指针类型引用：int*, string*
  */
-open type TypeReferencePointerBody {
+open type TypeRefPointerBody {
   let targetTypeRef: TypeReference;
 }
 
 /**
  * 数组类型引用：int[], int[!]
  */
-open type TypeReferenceArrayBody {
+open type TypeRefArrayBody {
   let elementTypeRef: TypeReference;
   let elementWritable: bool;
 }
@@ -68,9 +68,9 @@ open type TypeReferenceArrayBody {
 /**
  * 类型引用体，支持命名类型、指针类型、数组类型
  */
-open spec TypeReferenceBody: TypeReferenceNamedBody
-| TypeReferencePointerBody
-| TypeReferenceArrayBody;
+open spec TypeReferenceBody: TypeRefNamedBody
+| TypeRefPointerBody
+| TypeRefArrayBody;
 
 /**
  * 类型引用种类枚举类型
@@ -148,7 +148,7 @@ open type Function {
   let name: StringSpan;
   let genericParameters: GenericParameter[];
   let parameters: Parameter[];
-  let returnType: Option<TypeReference>;
+  let returnTypeRef: Option<TypeReference>;
   let body: Block;
   let isExtern: bool;
 }
