@@ -600,6 +600,7 @@ open type SpecDeclaration {
  * - None: 无实现体（仅声明适配关系）
  */
 open type FitDeclaration {
+  let token: FengToken;
   let targetTypeRef: TypeReference;
   let specTypeRefs: TypeReference[];
   let members: Option<TypeMember[]>;
