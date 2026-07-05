@@ -335,6 +335,29 @@ open type TryExpr {
 
 // 表达式整体结构 ---------------------------------------------------------------
 
+open spec ExpressionBody: IdentifierExpr
+| BooleanLiteralExpr
+| IntegerLiteralExpr
+| FloatLiteralExpr
+| StringLiteralExpr
+| ArrayLiteralExpr
+| TupleLiteralExpr
+| ObjectLiteralExpr
+| ArrayNewExpr
+| GenericTargetExpr
+| CallExpr
+| MemberAccessExpr
+| IndexAccessExpr
+| UnaryExpr
+| BinaryExpr
+| LambdaExpr
+| CastExpr
+| MatchOperatorExpr
+| IfExpr
+| MatchExpr
+| TryExpr
+| RangeExpr;
+
 open enum ExpressionKind {
   Identifier = 0,
   BooleanLiteral = 1,
@@ -359,29 +382,6 @@ open enum ExpressionKind {
   Try = 20,
   Range = 21
 }
-
-open spec ExpressionBody: IdentifierExpr
-| BooleanLiteralExpr
-| IntegerLiteralExpr
-| FloatLiteralExpr
-| StringLiteralExpr
-| ArrayLiteralExpr
-| TupleLiteralExpr
-| ObjectLiteralExpr
-| ArrayNewExpr
-| GenericTargetExpr
-| CallExpr
-| MemberAccessExpr
-| IndexAccessExpr
-| UnaryExpr
-| BinaryExpr
-| LambdaExpr
-| CastExpr
-| MatchOperatorExpr
-| IfExpr
-| MatchExpr
-| TryExpr
-| RangeExpr;
 
 open type Expression {
   let token: FengToken;
@@ -474,6 +474,22 @@ open type DeferStmt {
   let body: Block;
 }
 
+open spec StatementBody: BlockStmt
+| BindingStmt
+| AssignmentStmt
+| ExpressionStmt
+| TryStmt
+| IfStmt
+| MatchStmt
+| WhileStmt
+| ForStmt
+| ForEachStmt
+| ReturnStmt
+| ThrowStmt
+| BreakStmt
+| ContinueStmt
+| DeferStmt;
+
 open enum StatementKind {
   Block = 0,
   Binding = 1,
@@ -492,22 +508,6 @@ open enum StatementKind {
   Defer = 14
 }
 
-open spec StatementBody: BlockStmt
-| BindingStmt
-| AssignmentStmt
-| ExpressionStmt
-| TryStmt
-| IfStmt
-| MatchStmt
-| WhileStmt
-| ForStmt
-| ForEachStmt
-| ReturnStmt
-| ThrowStmt
-| BreakStmt
-| ContinueStmt
-| DeferStmt;
-
 open type Statement {
   let token: FengToken;
   let kind: StatementKind;
@@ -515,13 +515,6 @@ open type Statement {
 }
 
 // 类型 (type) -----------------------------------------------------------------
-
-open enum TypeMemberKind {
-  Field = 0,
-  Method = 1,
-  Constructor = 2,
-  Finalizer = 3
-}
 
 open type TypeField {
   let binding: Binding;
@@ -544,6 +537,13 @@ open spec TypeMemberBody: TypeField
 | TypeConstructor
 | TypeFinalizer;
 
+open enum TypeMemberKind {
+  Field = 0,
+  Method = 1,
+  Constructor = 2,
+  Finalizer = 3
+}
+
 open type TypeMember {
   let token: FengToken;
   let kind: TypeMemberKind;
@@ -565,55 +565,7 @@ open type TypeDeclaration {
   let isValue: bool;
 }
 
-// 顶层函数和绑定 (global) -------------------------------------------------------
-
-open type GlobalBinding {
-  let visibility: Visibility;
-  let binding: Binding;
-}
-
-open type GlobalFunction {
-  let visibility: Visibility;
-  let isExtern: bool;
-  let function: Function;
-}
-
 // 枚举 (enum) -----------------------------------------------------------------
-
-
-// 契约 (spec) -----------------------------------------------------------------
-
-
-// 适配器 (fit) ----------------------------------------------------------------
-
-
-// 注解 (annotation) -----------------------------------------------------------
-
-
-// ---- 辅助结构 ----
-
-open type Annotation {
-  let token: FengToken;
-  let name: StringSpan;
-  let arguments: Expression[];
-}
-
-open enum SpecificationForm {
-  Object = 0,
-  Callable = 1,
-  Union = 2
-}
-
-open enum DeclarationKind {
-  GlobalBinding = 0,
-  Type = 1,
-  Enumeration = 2,
-  Specification = 3,
-  Fit = 4,
-  Function = 5
-}
-
-// ---- 辅助结构 ----
 
 open type EnumerationItem {
   let token: FengToken;
@@ -622,14 +574,17 @@ open type EnumerationItem {
   let explicitValue: i64;
 }
 
-// ---- Declaration variants (6) ----
-
-
-
-
 open type EnumerationDeclaration {
   let name: StringSpan;
   let items: EnumerationItem[];
+}
+
+// 契约 (spec) -----------------------------------------------------------------
+
+open enum SpecificationForm {
+  Object = 0,
+  Callable = 1,
+  Union = 2
 }
 
 open type SpecificationDeclaration {
@@ -643,6 +598,8 @@ open type SpecificationDeclaration {
   let unionMembers: TypeReference[];
 }
 
+// 适配器 (fit) ----------------------------------------------------------------
+
 open type FitDeclaration {
   let target: TypeReference;
   let specifications: TypeReference[];
@@ -650,37 +607,71 @@ open type FitDeclaration {
   let hasBody: bool;
 }
 
-open spec DeclarationBody: GlobalBinding
-| GlobalFunction
+// 注解 (annotation) -----------------------------------------------------------
+
+open type Annotation {
+  let token: FengToken;
+  let name: StringSpan;
+  let arguments: Expression[];
+}
+
+// 模块 (module) ---------------------------------------------------------------
+
+open type ModuleLevelBinding {
+  let binding: Binding;
+}
+
+open type ModuleLevelFunction {
+  let isExtern: bool;
+  let function: Function;
+}
+
+open spec ModuleMemberBody: ModuleLevelBinding
+| ModuleLevelFunction
 | TypeDeclaration
 | EnumerationDeclaration
 | SpecificationDeclaration
 | FitDeclaration;
 
-open type GlobalDeclaration {
-  let token: FengToken;
-  let kind: DeclarationKind;
-  let visibility: Visibility;
-  let isExtern: bool;
-  let docComment: StringSpan;
-  let annotations: Annotation[];
-  let body: DeclarationBody;
+open enum ModuleMemberKind {
+  GlobalBinding = 0,
+  Type = 1,
+  Enumeration = 2,
+  Specification = 3,
+  Fit = 4,
+  Function = 5
 }
 
-// ---- Program ----
+open type ModuleMember {
+  let token: FengToken;
+  let name: StringSpan;
+  let kind: ModuleMemberKind;
+  let visibility: Visibility;
+  let body: ModuleMemberBody;
+}
 
-open type ImportDeclaration {
+open type ModuleImport {
   let token: FengToken;
   let segments: StringSpan[];
   let alias: StringSpan;
   let hasAlias: bool;
 }
 
-open type Program {
+open type ModuleFile {
   let path: string;
-  let moduleToken: FengToken;
-  let moduleVisibility: Visibility;
-  let moduleSegments: StringSpan[];
-  let imports: ImportDeclaration[];
-  let declarations: GlobalDeclaration[];
+  let imports: ModuleImport[];
+}
+
+open type ModuleDeclaration {
+  let token: FengToken;
+  let visibility: Visibility;
+  let segments: StringSpan[];
+  let files: ModuleFile[];
+  let members: ModuleMember[];
+}
+
+// 程序 (program) --------------------------------------------------------------
+
+open type Program {
+  let modules: ModuleDeclaration[];
 }
