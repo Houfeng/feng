@@ -263,11 +263,14 @@ open type IndexAccessExpr {
   let index: Expression;
 }
 
+open spec LambdaBody: Expression | Block;
+
 open type LambdaExpr {
+  // 暂时，lambda 不支持泛型参数，后续扩展
+  // let genericParameters: GenericParameter[];
   let parameters: Parameter[];
-  let expressionBody: Expression;
-  let blockBody: Block;
-  let isBlockBody: bool;
+  let body: LambdaBody;
+  let returnTypeRef: Option<TypeReference>;
 }
 
 open type MatchOperatorExpr {
