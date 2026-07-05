@@ -557,11 +557,24 @@ open type TypeMember {
 
 open type TypeDeclaration {
   let name: StringSpan;
+  let visibility: Visibility;
   let parameters: GenericParameter[];
   let members: TypeMember[];
   let specifications: TypeReference[];
   let isTuple: bool;
   let isValue: bool;
+}
+
+// 顶层函数和绑定 (global) -------------------------------------------------------
+
+open type GlobalBinding {
+  let visibility: Visibility;
+  let binding: Binding;
+}
+
+open type GlobalFunction {
+  let visibility: Visibility;
+  let function: Function;
 }
 
 // 枚举 (enum) -----------------------------------------------------------------
@@ -574,9 +587,6 @@ open type TypeDeclaration {
 
 
 // 注解 (annotation) -----------------------------------------------------------
-
-
-// 顶层声明 (declaration) -------------------------------------------------------
 
 
 // ---- 辅助结构 ----
@@ -613,9 +623,6 @@ open type EnumerationItem {
 
 // ---- Declaration variants (6) ----
 
-open type BindingDeclaration {
-  let binding: Binding;
-}
 
 
 
@@ -642,17 +649,12 @@ open type FitDeclaration {
   let hasBody: bool;
 }
 
-open type FunctionDeclaration {
-  let function: Function;
-}
-
-open spec DeclarationBody:
-BindingDeclaration
+open spec DeclarationBody: GlobalBinding
+| GlobalFunction
 | TypeDeclaration
 | EnumerationDeclaration
 | SpecificationDeclaration
-| FitDeclaration
-| FunctionDeclaration;
+| FitDeclaration;
 
 open type GlobalDeclaration {
   let token: FengToken;
