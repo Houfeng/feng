@@ -646,7 +646,6 @@ open spec ModuleMemberBody: ModuleLevelBinding
 
 open type ModuleMember {
   let token: FengToken;
-  let name: StringSpan;
   let visibility: Visibility;
   let body: ModuleMemberBody;
 }
