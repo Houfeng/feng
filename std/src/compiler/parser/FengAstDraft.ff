@@ -274,8 +274,8 @@ open type LambdaExpr {
 }
 
 open type RangeExpr {
-  let low: Expression;
-  let high: Expression;
+  let start: Expression;
+  let end: Expression;
 }
 
 open spec MatchTarget: IntegerLiteralExpr
