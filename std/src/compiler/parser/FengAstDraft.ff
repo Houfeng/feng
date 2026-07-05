@@ -177,7 +177,7 @@ open type StringLiteralExpr {
   let value: StringSpan;
 }
 
-open type UnaryOperationExpr {
+open type UnaryExpr {
   let operator: FengTokenKind;
   let operand: Expression;
 }
@@ -187,7 +187,7 @@ open type CastExpr {
   let value: Expression;
 }
 
-open type BinaryOperationExpr {
+open type BinaryExpr {
   let operator: FengTokenKind;
   let left: Expression;
   let right: Expression;
@@ -288,8 +288,8 @@ open enum ExpressionKind {
   Call = 10,
   MemberAccess = 11,
   IndexAccess = 12,
-  UnaryOperation = 13,
-  BinaryOperation = 14,
+  Unary = 13,
+  Binary = 14,
   Lambda = 15,
   Cast = 16,
   MatchOperator = 17,
@@ -311,8 +311,8 @@ open spec ExpressionBody: IdentifierExpr
 | CallExpr
 | MemberAccessExpr
 | IndexAccessExpr
-| UnaryOperationExpr
-| BinaryOperationExpr
+| UnaryExpr
+| BinaryExpr
 | LambdaExpr
 | CastExpr
 | MatchOperatorExpr
