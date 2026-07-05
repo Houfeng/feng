@@ -649,6 +649,7 @@ static bool cg_user_type_is_value_semantics(const struct UserType *t) {
     return cg_user_type_is_tuple(t) || cg_user_type_is_value(t);
 }
 
+
 /* Initialise generated symbols owned by value-type lowering. The aggregate
  * descriptor represents the by-value struct; the box descriptor is used
  * only when a value-type value becomes an object-form spec subject.
@@ -1338,6 +1339,36 @@ static bool cg_value_needs_reified_layout(const CG *cg, const CGType *type) {
            type->user != NULL &&
            type->user->generic_context_type_param_count > 0U &&
            (cg->in_generic_type_method || cg->in_generic_fn);
+}
+
+/* Descriptor external visibility: requires both module and type to be PUBLIC. */
+static bool cg_user_type_descriptor_is_externally_visible(const CG *cg, const UserType *t) {
+    if (cg == NULL || t == NULL) {
+        return false;
+    }
+    /* For generic instances, check the origin decl's visibility and owner program. */
+    const FengDecl *decl = t->is_generic_instance ? t->generic_origin_decl : t->decl;
+    const FengProgram *owner_prog = t->owner_program != NULL ? t->owner_program : cg->cur_program;
+    if (decl == NULL || owner_prog == NULL) {
+        return false;
+    }
+    return owner_prog->module_visibility == FENG_VISIBILITY_PUBLIC &&
+           decl->visibility == FENG_VISIBILITY_PUBLIC;
+}
+
+/* Spec descriptor external visibility: requires both module and spec to be PUBLIC. */
+static bool cg_user_spec_descriptor_is_externally_visible(const CG *cg, const UserSpec *spec) {
+    if (cg == NULL || spec == NULL) {
+        return false;
+    }
+    /* For generic instances, check the origin decl's visibility and owner program. */
+    const FengDecl *decl = spec->is_generic_instance ? spec->generic_origin_decl : spec->decl;
+    const FengProgram *owner_prog = spec->owner_program != NULL ? spec->owner_program : cg->cur_program;
+    if (decl == NULL || owner_prog == NULL) {
+        return false;
+    }
+    return owner_prog->module_visibility == FENG_VISIBILITY_PUBLIC &&
+           decl->visibility == FENG_VISIBILITY_PUBLIC;
 }
 
 /* Forward decls. */
@@ -3998,14 +4029,20 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
         return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory emitting enum typedef");
     }
 
+    bool ext_visible = (owner_program != NULL &&
+                        owner_program->module_visibility == FENG_VISIBILITY_PUBLIC &&
+                        decl->visibility == FENG_VISIBILITY_PUBLIC);
     buf_append_fmt(&cg->type_defs, "typedef int32_t %s;\n", typedef_name);
     buf_append_fmt(&cg->type_defs,
-                   "const FengTrivialDescriptor %s __attribute__((weak)) = {\n"
+                   ext_visible
+                       ? "const FengTrivialDescriptor %s __attribute__((weak)) = {\n"
+                       : "static const FengTrivialDescriptor %s = {\n",
+                   descriptor_name);
+    buf_append_fmt(&cg->type_defs,
                    "    .name = \"%s.%.*s\",\n"
                    "    .size = sizeof(%s),\n"
                    "    .equal_fn = NULL,\n"
                    "};\n",
-                   descriptor_name,
                    module_dot_name,
                    (int)decl->as.enum_decl.name.length,
                    decl->as.enum_decl.name.data,
@@ -9552,8 +9589,10 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
             buf_append_cstr(&cg->headers, ";\n");
         }
         buf_append_cstr(&cg->headers, "    } payload;\n};\n");
+        bool ext_visible = cg_user_spec_descriptor_is_externally_visible(cg, s);
         buf_append_fmt(&cg->headers,
-            "static const FengAggregateDescriptor %s;\n",
+            ext_visible ? "extern const FengAggregateDescriptor %s;\n"
+                        : "static const FengAggregateDescriptor %s;\n",
             s->c_aggregate_desc_name);
         return;
     }
@@ -9564,8 +9603,10 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
     buf_append_fmt(&cg->headers,
         "struct %s { void *subject; const struct %s *witness; };\n",
         s->c_value_struct_name, s->c_witness_struct_name);
+    bool ext_visible = cg_user_spec_descriptor_is_externally_visible(cg, s);
     buf_append_fmt(&cg->headers,
-        "static const FengAggregateDescriptor %s;\n",
+        ext_visible ? "extern const FengAggregateDescriptor %s;\n"
+                    : "static const FengAggregateDescriptor %s;\n",
         s->c_aggregate_desc_name);
 }
 
@@ -9849,8 +9890,13 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             s->c_aggregate_default_name,
             s->c_aggregate_init_fn_name);
 
+        bool ext_visible = cg_user_spec_descriptor_is_externally_visible(cg, s);
         buf_append_fmt(td,
-            "static const FengAggregateDescriptor %s __attribute__((unused)) = {\n"
+            ext_visible
+                ? "const FengAggregateDescriptor %s __attribute__((weak, unused)) = {\n"
+                : "static const FengAggregateDescriptor %s __attribute__((unused)) = {\n",
+            s->c_aggregate_desc_name);
+        buf_append_fmt(td,
             "    .name = \"%s\",\n"
             "    .size = sizeof(struct %s),\n"
             "    .default_init = &%s,\n"
@@ -9859,7 +9905,6 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             "    .equal_fn = NULL,\n"
             "    .reified_generic_params_count = 0,\n"
             "};\n\n",
-            s->c_aggregate_desc_name,
             s->feng_name,
             s->c_value_struct_name,
             s->c_aggregate_default_name,
@@ -10282,8 +10327,13 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         s->c_value_struct_name,
         s->c_value_struct_name);
 
+    bool ext_visible = cg_user_spec_descriptor_is_externally_visible(cg, s);
     buf_append_fmt(td,
-        "static const FengAggregateDescriptor %s __attribute__((unused)) = {\n"
+        ext_visible
+            ? "const FengAggregateDescriptor %s __attribute__((weak, unused)) = {\n"
+            : "static const FengAggregateDescriptor %s __attribute__((unused)) = {\n",
+        s->c_aggregate_desc_name);
+    buf_append_fmt(td,
         "    .name = \"%s\",\n"
         "    .size = sizeof(struct %s),\n"
         "    .default_init = &%s,\n"
@@ -10292,7 +10342,6 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         "    .equal_fn = %s__equal,\n"
         "    .reified_generic_params_count = 0,\n"
         "};\n\n",
-        s->c_aggregate_desc_name,
         s->feng_name,
         s->c_value_struct_name,
         s->c_aggregate_default_name,
@@ -34127,13 +34176,17 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
             }
         }
 
+        bool ext_visible = cg_user_type_descriptor_is_externally_visible(cg, t);
         buf_append_fmt(td,
-            "const FengAggregateDescriptor %s __attribute__((weak, unused)) = {\n"
+            ext_visible
+                ? "const FengAggregateDescriptor %s __attribute__((weak, unused)) = {\n"
+                : "static const FengAggregateDescriptor %s __attribute__((unused)) = {\n",
+            t->c_aggregate_desc_name);
+        buf_append_fmt(td,
             "    .name = \"%s.%s\",\n"
             "    .size = sizeof(struct %s),\n"
             "    .default_init = &%s,\n"
             "    .managed_slot_count = %zu,\n",
-            t->c_aggregate_desc_name,
             cg->module_dot_name,
             t->feng_name,
             t->c_struct_name,
@@ -34174,13 +34227,17 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
         }
         buf_append_cstr(td, "};\n\n");
     } else {
+        bool ext_visible = cg_user_type_descriptor_is_externally_visible(cg, t);
         buf_append_fmt(td,
-            "const FengTrivialDescriptor %s __attribute__((weak, unused)) = {\n"
+            ext_visible
+                ? "const FengTrivialDescriptor %s __attribute__((weak, unused)) = {\n"
+                : "static const FengTrivialDescriptor %s __attribute__((unused)) = {\n",
+            t->c_aggregate_desc_name);
+        buf_append_fmt(td,
             "    .name = \"%s.%s\",\n"
             "    .size = sizeof(struct %s),\n"
             "    .equal_fn = &%s,\n"
             "};\n\n",
-            t->c_aggregate_desc_name,
             cg->module_dot_name,
             t->feng_name,
             t->c_struct_name,
@@ -34285,8 +34342,9 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
                                           ? "FengAggregateDescriptor"
                                           : "FengTrivialDescriptor";
 
+        bool ext_visible = cg_user_type_descriptor_is_externally_visible(cg, t);
         buf_append_fmt(&cg->headers,
-                       "extern const %s %s;\n",
+                       ext_visible ? "extern const %s %s;\n" : "static const %s %s;\n",
                        descriptor_type,
                        t->c_aggregate_desc_name);
         buf_append_fmt(&cg->headers,
