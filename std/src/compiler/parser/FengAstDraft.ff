@@ -542,16 +542,28 @@ open type FinalizerMember {
   let function: Function;
 }
 
-open spec TypeMemberBody: FieldMember | MethodMember | ConstructorMember | FinalizerMember;
+open spec TypeMemberBody: FieldMember
+| MethodMember
+| ConstructorMember
+| FinalizerMember;
 
 open type TypeMember {
   let token: FengToken;
   let kind: TypeMemberKind;
   let visibility: Visibility;
   let isStatic: bool;
-  let docComment: StringSpan;
+  let comment: StringSpan;
   let annotations: Annotation[];
   let body: TypeMemberBody;
+}
+
+open type TypeDeclaration {
+  let name: StringSpan;
+  let typeParameters: GenericParameter[];
+  let members: TypeMember[];
+  let declaredSpecifications: TypeReference[];
+  let isTuple: bool;
+  let isValue: bool;
 }
 
 // 枚举 (enum) -----------------------------------------------------------------
@@ -607,14 +619,7 @@ open type BindingDeclaration {
   let binding: Binding;
 }
 
-open type TypeDeclaration {
-  let name: StringSpan;
-  let typeParameters: GenericParameter[];
-  let members: TypeMember[];
-  let declaredSpecifications: TypeReference[];
-  let isTuple: bool;
-  let isValue: bool;
-}
+
 
 open type EnumerationDeclaration {
   let name: StringSpan;
