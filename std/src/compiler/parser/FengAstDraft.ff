@@ -273,12 +273,16 @@ open type LambdaExpr {
   let returnTypeRef: Option<TypeReference>;
 }
 
+open type RangeBounds {
+  let low: Expression;
+  let high: Expression;
+}
+
+open spec MatchTarget: Expression | TypeReference | RangeBounds | SimpleBinding;
+
 open type MatchOperatorExpr {
-  let target: Expression;
-  let labels: MatchLabel[];
-  let hasBinding: bool;
-  let bindingName: StringSpan;
-  let bindingMutability: Mutability;
+  let left: Expression;
+  let right: MatchTarget;
 }
 
 // 块表达式 ---------------------------------------------------------------------
