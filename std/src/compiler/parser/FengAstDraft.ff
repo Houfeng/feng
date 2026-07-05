@@ -1,5 +1,6 @@
 open module std.compiler.parser;
 
+import std;
 import std.text;
 import std.compiler.lexer;
 
@@ -17,24 +18,26 @@ import std.compiler.lexer;
 
 /**
  * 可见性枚举类型
- * Parser 阶段 resolve 默认值：
+ * 语义阶段 resolve 默认值：
  * - 模块/顶层声明无关键字 → Private
  * - 类型成员无关键字 → Public
  */
 open enum Visibility {
-  Private = 0,
-  Public = 1
+  Default = 0,
+  Private = 1,
+  Public = 2
 }
 
 /**
  * 可变性枚举类型
- * Parser 阶段 resolve 默认值：
+ * 语义阶段 resolve 默认值：
  * - 函数参数可省略，无 let/var → Let
  * - 绑定/字段必须显式指定 let/var
  */
 open enum Mutability {
-  Let = 0,
-  Var = 1
+  Default = 0,
+  Let = 1,
+  Var = 2
 }
 
 // 类型引用 ---------------------------------------------------------------------
@@ -96,8 +99,8 @@ open type SimpleBinding {
   let token: FengToken;
   let name: StringSpan;
   let mutability: Mutability;
-  let typeRef: TypeReference;
-  let initializer: Expression;
+  let typeRef: Option<TypeReference>;
+  let initializer: Option<Expression>;
 }
 
 /**
@@ -107,7 +110,8 @@ open type DestructureBinding {
   let token: FengToken;
   let mutability: Mutability;
   let names: StringSpan[];
-  let initializer: Expression;
+  let typeRef: Option<TypeReference>;
+  let initializer: Option<Expression>;
 }
 
 /**
@@ -123,7 +127,7 @@ open spec Binding: SimpleBinding | DestructureBinding;
 open type GenericParameter {
   let token: FengToken;
   let name: StringSpan;
-  let constraintTypeRef: TypeReference;
+  let constraintTypeRef: Option<TypeReference>;
 }
 
 // 函数 ------------------------------------------------------------------------
@@ -134,7 +138,7 @@ open type GenericParameter {
 open type Parameter {
   let token: FengToken;
   let name: StringSpan;
-  let typeRef: TypeReference;
+  let typeRef: Option<TypeReference>;
   let mutability: Mutability;
   let isVariadic: bool;
 }
@@ -147,7 +151,7 @@ open type Function {
   let name: StringSpan;
   let genericParameters: GenericParameter[];
   let parameters: Parameter[];
-  let returnType: TypeReference;
+  let returnType: Option<TypeReference>;
   let body: Block;
   let isExtern: bool;
 }
