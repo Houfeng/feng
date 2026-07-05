@@ -298,9 +298,14 @@ open type MatchOperatorExpr {
 
 // 块表达式 ---------------------------------------------------------------------
 
-open type IfExpr {
+open type IfClause {
+  let token: FengToken;
   let condition: Expression;
-  let thenBlock: Block;
+  let body: Block;
+}
+
+open type IfExpr {
+  let clauses: IfClause[];
   let elseBlock: Block;
 }
 
@@ -317,9 +322,15 @@ open type MatchExpr {
   let elseBlock: Block;
 }
 
+open type CatchClause {
+  let token: FengToken;
+  let binding: Option<SimpleBinding>;
+  let body: Block;
+}
+
 open type TryExpr {
   let body: Expression;
-  let catchClauses: TryCatchClause[];
+  let catchClauses: CatchClause[];
 }
 
 // 表达式整体结构 ---------------------------------------------------------------
@@ -442,19 +453,6 @@ open type EnumerationItem {
   let explicitValue: i64;
 }
 
-open type TryCatchClause {
-  let token: FengToken;
-  let name: StringSpan;
-  let typeReference: TypeReference;
-  let body: Block;
-}
-
-open type IfClause {
-  let token: FengToken;
-  let condition: Expression;
-  let body: Block;
-}
-
 open type Block {
   let token: FengToken;
   let statements: Statement[];
@@ -482,7 +480,7 @@ open type ExpressionStatement {
 
 open type TryStatement {
   let body: Expression;
-  let catchClauses: TryCatchClause[];
+  let catchClauses: CatchClause[];
 }
 
 open type IfStatement {
