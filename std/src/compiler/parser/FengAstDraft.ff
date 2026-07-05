@@ -198,7 +198,7 @@ open type BinaryExpr {
  *
  * 泛型具化调用：
  * - 语法：`foo<int, string>(arg1, arg2)`
- * - 表示：callee 为 GenericTargetExpr { target: IdentifierExpr, typeArguments: [...] }
+ * - 表示：callee 为 GenericTargetExpr { target: IdentifierExpr, argumentTypeRefs: [...] }
  *
  * 普通调用：
  * - 语法：`foo(arg1, arg2)`
@@ -238,7 +238,7 @@ open type ArrayNewExpr {
 }
 
 /**
- * 泛型具化表达式：对目标显式指定类型参数
+ * 泛型具化表达式：对目标显式指定类型实参
  *
  * 用途：
  * - 解析 `identifier<TypeArgs>` 语法的中间节点
@@ -246,13 +246,13 @@ open type ArrayNewExpr {
  *
  * 示例：
  * - `List<int>` 在调用 `List<int>()` 中被解析为 GenericTargetExpr
- * - 解析器随后将其转换为 CallExpr（callee + explicitTypeArguments）
+ * - 解析器随后将其作为 CallExpr 的 callee
  *
  * 注意：当前不支持独立的泛型函数引用（如 `let f = foo<int>`）
  */
 open type GenericTargetExpr {
   let target: Expression;
-  let typeArguments: TypeReference[];
+  let argumentTypeRefs: TypeReference[];
 }
 
 open type MemberAccessExpr {
