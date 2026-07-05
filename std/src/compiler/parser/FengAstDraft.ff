@@ -41,7 +41,7 @@ open enum Mutability {
  */
 open type SegmentedName {
   let token: FengToken;
-  let name: StringSpan;
+  let fullName: StringSpan;
   let segments: StringSpan[];
 }
 
@@ -54,7 +54,7 @@ open type SegmentedName {
  * - 语义阶段按 segments 顺序解析：模块路径 → 类型查找 → 泛型实参代入
  */
 open type NamedTypeRef {
-  let segments: StringSpan[];
+  let name: SegmentedName;
   let parameterTypeRefs: TypeReference[];
 }
 
@@ -585,10 +585,10 @@ open type FitDeclaration {
 /**
  * 注解节点：@test, @std.compiler.deprecated, @test(args)
  *
- * target 字段设计：
- * - 简单注解：@test → target: IdentifierExpr("test")
- * - 限定名注解：@std.compiler.deprecated → target: 嵌套 MemberAccessExpr
- * - 与表达式级成员访问一致，语义阶段解析 target 指向哪个注解定义
+ * name 字段（SegmentedName）：
+ * - 简单注解：@test → segments: ["test"]
+ * - 限定名注解：@std.compiler.deprecated → segments: ["std", "compiler", "deprecated"]
+ * - 语义阶段按 segments 顺序解析：模块路径 → 注解定义查找
  *
  * arguments 字段：
  * - 注解参数列表，如 @test("reason", 2024) 中的参数
@@ -596,7 +596,7 @@ open type FitDeclaration {
  */
 open type Annotation {
   let token: FengToken;
-  let target: Expression;
+  let name: SegmentedName;
   let arguments: Expression[];
 }
 
@@ -634,7 +634,7 @@ open type ModuleMember {
  */
 open type ModuleImport {
   let token: FengToken;
-  let segments: StringSpan[];
+  let name: SegmentedName;
   let alias: Option<StringSpan>;
 }
 
@@ -646,7 +646,7 @@ open type ModuleFile {
 open type ModuleDeclaration {
   let token: FengToken;
   let visibility: Visibility;
-  let segments: StringSpan[];
+  let name: SegmentedName;
   let files: ModuleFile[];
   let members: ModuleMember[];
 }
