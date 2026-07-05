@@ -44,6 +44,11 @@ open enum Mutability {
 
 /**
  * 命名类型引用：int, std.text.String, Map<K, V>
+ *
+ * 与表达式级 MemberAccessExpr 的差异：
+ * - 类型位置语法仅允许标识符链（如 std.text.String），不含运行时表达式
+ * - 因此 Parser 直接识别为多段 segments 数组，而非嵌套 MemberAccess
+ * - 语义阶段按 segments 顺序解析：模块路径 → 类型查找 → 泛型实参代入
  */
 open type NamedTypeRef {
   let segments: StringSpan[];
@@ -73,20 +78,10 @@ open spec TypeReferenceBody: NamedTypeRef
 | ArrayTypeRef;
 
 /**
- * 类型引用种类枚举类型
- */
-open enum TypeReferenceKind {
-  Named = 0,
-  Pointer = 1,
-  Array = 2
-}
-
-/**
  * 类型引用节点，出现在所有需要写类型的位置
  */
 open type TypeReference {
   let token: FengToken;
-  let kind: TypeReferenceKind;
   let body: TypeReferenceBody;
 }
 
@@ -255,6 +250,22 @@ open type GenericTargetExpr {
   let argumentTypeRefs: TypeReference[];
 }
 
+/**
+ * 成员访问表达式：obj.field, std.foo.test
+ *
+ * 多段路径解析策略：
+ * - 语法：`foo.bar.xyz` 按 `.` 左结合嵌套解析
+ * - AST：MemberAccess(MemberAccess(Identifier("foo"), "bar"), "xyz")
+ * - 语义阶段逐层消歧：从最左标识符查作用域，按解析结果切换查找策略
+ *   - 若 `foo` 为模块 → `foo.bar` 按模块成员查找（子模块/类型/函数/绑定）
+ *   - 若 `foo` 为值/类型 → `foo.bar` 按成员访问处理
+ *   - 同一条链可混合：`std.text.String`（模块路径）+ `.length()`（方法访问）
+ *
+ * 与类型位置 NamedTypeRef.segments 的差异：
+ * - 表达式位置允许运行时表达式（如 `obj.field`），Parser 无法预判语义
+ * - 因此统一解析为嵌套 MemberAccess，由语义阶段消歧
+ * - 类型位置仅允许标识符链，Parser 直接识别为 segments 数组
+ */
 open type MemberAccessExpr {
   let target: Expression;
   let member: StringSpan;
@@ -361,34 +372,8 @@ open spec ExpressionBody: IdentifierExpr
 | TryExpr
 | RangeExpr;
 
-open enum ExpressionKind {
-  Identifier = 0,
-  BooleanLiteral = 1,
-  IntegerLiteral = 2,
-  FloatLiteral = 3,
-  StringLiteral = 4,
-  ArrayLiteral = 5,
-  TupleLiteral = 6,
-  ObjectLiteral = 7,
-  ArrayNew = 8,
-  GenericTarget = 9,
-  Call = 10,
-  MemberAccess = 11,
-  IndexAccess = 12,
-  Unary = 13,
-  Binary = 14,
-  Lambda = 15,
-  Cast = 16,
-  MatchOperator = 17,
-  If = 18,
-  Match = 19,
-  Try = 20,
-  Range = 21
-}
-
 open type Expression {
   let token: FengToken;
-  let kind: ExpressionKind;
   // let annotations: Annotation[];
   let body: ExpressionBody;
 }
@@ -494,34 +479,15 @@ open spec StatementBody: BlockStmt
 | ContinueStmt
 | DeferStmt;
 
-open enum StatementKind {
-  Block = 0,
-  Binding = 1,
-  Assignment = 2,
-  Expression = 3,
-  Try = 4,
-  If = 5,
-  Match = 6,
-  While = 7,
-  For = 8,
-  ForEach = 9,
-  Return = 10,
-  Throw = 11,
-  Break = 12,
-  Continue = 13,
-  Defer = 14
-}
-
 open type Statement {
   let token: FengToken;
-  let kind: StatementKind;
   let body: StatementBody;
 }
 
 // 类型 (type) -----------------------------------------------------------------
 
 open type TypeField {
-  let binding: Binding;
+  let binding: SimpleBinding;
 }
 
 open type TypeMethod {
@@ -541,16 +507,8 @@ open spec TypeMemberBody: TypeField
 | TypeConstructor
 | TypeFinalizer;
 
-open enum TypeMemberKind {
-  Field = 0,
-  Method = 1,
-  Constructor = 2,
-  Finalizer = 3
-}
-
 open type TypeMember {
   let token: FengToken;
-  let kind: TypeMemberKind;
   let visibility: Visibility;
   let isStatic: bool;
   let comment: StringSpan;
@@ -624,7 +582,7 @@ open type Annotation {
 // 模块 (module) ---------------------------------------------------------------
 
 open type ModuleLevelBinding {
-  let binding: Binding;
+  let binding: SimpleBinding;
 }
 
 open type ModuleLevelFunction {
@@ -639,19 +597,9 @@ open spec ModuleMemberBody: ModuleLevelBinding
 | SpecificationDeclaration
 | FitDeclaration;
 
-open enum ModuleMemberKind {
-  GlobalBinding = 0,
-  Type = 1,
-  Enumeration = 2,
-  Specification = 3,
-  Fit = 4,
-  Function = 5
-}
-
 open type ModuleMember {
   let token: FengToken;
   let name: StringSpan;
-  let kind: ModuleMemberKind;
   let visibility: Visibility;
   let body: ModuleMemberBody;
 }
