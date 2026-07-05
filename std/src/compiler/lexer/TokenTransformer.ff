@@ -45,12 +45,8 @@ open type TokenTransformer {
    * 提取 Token 子范围 [start, end)。
    * 用于骨架找 target 时提取声明的 Token 范围。
    */
-  open func slice(start: int, end: int): TokenSpan {
-    return TokenSpan {
-      tokens: self.tokens,
-      start: start,
-      end: end
-    };
+  open func slice(start: int, end: int): Span<FengToken> {
+    return self.tokens.slice(start, end);
   }
 
   /**
@@ -126,39 +122,5 @@ open type TokenTransformer {
 
     // 到达末尾
     return self.tokens.length();
-  }
-}
-
-/**
- * Token 流子范围视图。
- *
- * 持有对原 Token 数组的引用和范围索引，
- * 用于注解 handler 接收 target Token 范围。
- */
-open type TokenSpan {
-  /** 底层 Token 数组引用 */
-  open let tokens: FengToken[];
-  /** 起始索引（含） */
-  open let start: int;
-  /** 结束索引（不含） */
-  open let end: int;
-
-  /** 子范围长度 */
-  open func length(): int {
-    return self.end - self.start;
-  }
-
-  /** 按相对索引获取 Token */
-  open func at(index: int): FengToken {
-    return self.tokens[self.start + index];
-  }
-
-  /** 转为独立 Token 数组（拷贝） */
-  open func toArray(): FengToken[] {
-    var result = List<FengToken>();
-    for var i = self.start; i < self.end; i = i + 1 {
-      result.add(self.tokens[i]);
-    }
-    return result.entries();
   }
 }

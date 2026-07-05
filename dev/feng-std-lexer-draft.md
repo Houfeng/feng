@@ -663,8 +663,9 @@ open type TokenTransformer {
   /**
    * 提取 Token 子范围 [start, end)。
    * 用于骨架找 target 时提取声明的 Token 范围。
+   * 返回 std.collections.Span<FengToken>，复用标准库泛型视图类型。
    */
-  open func slice(start: int, end: int): TokenSpan;
+  open func slice(start: int, end: int): Span<FengToken>;
 
   /**
    * 替换 Token 子范围 [start, end) 为新的 Token 数组。
@@ -687,31 +688,9 @@ open type TokenTransformer {
    */
   open func findDeclarationEnd(startIndex: int): int;
 }
-
-/**
- * Token 流子范围视图。
- *
- * 持有对原 Token 数组的引用和范围索引，
- * 用于注解 handler 接收 target Token 范围。
- */
-open type TokenSpan {
-  /** 底层 Token 数组引用 */
-  open let tokens: FengToken[];
-  /** 起始索引（含） */
-  open let start: int;
-  /** 结束索引（不含） */
-  open let end: int;
-
-  /** 子范围长度 */
-  open func length(): int;
-
-  /** 按相对索引获取 Token */
-  open func at(index: int): FengToken;
-
-  /** 转为独立 Token 数组（拷贝） */
-  open func toArray(): FengToken[];
-}
 ```
+
+**设计说明**：`slice` 方法返回 `Span<FengToken>`（`std.collections.Span` 泛型实例），复用标准库已有的只读切片视图类型，无需引入额外的 `TokenSpan` 类型。`Span<T>` 提供 `length()`、`at()`、`toArray()` 等方法，满足注解 handler 对 Token 子范围的所有访问需求。
 
 ### 5.2 findDeclarationEnd 算法细节
 
