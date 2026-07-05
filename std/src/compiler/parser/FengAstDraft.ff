@@ -440,13 +440,16 @@ open type WhileStmt {
 }
 
 open type ForStmt {
-  let isForIn: bool;
-  let body: Block;
   let init: Statement;
   let condition: Expression;
   let update: Statement;
-  let iterBinding: Binding;
-  let iterExpression: Expression;
+  let body: Block;
+}
+
+open type ForEachStmt {
+  let binding: Binding;
+  let iterable: Expression;
+  let body: Block;
 }
 
 open type ReturnStmt {
@@ -475,11 +478,12 @@ open enum StatementKind {
   Match = 6,
   While = 7,
   For = 8,
-  Return = 9,
-  Throw = 10,
-  Break = 11,
-  Continue = 12,
-  Defer = 13
+  ForEach = 9,
+  Return = 10,
+  Throw = 11,
+  Break = 12,
+  Continue = 13,
+  Defer = 14
 }
 
 open spec StatementBody: BlockStmt
@@ -491,6 +495,7 @@ open spec StatementBody: BlockStmt
 | MatchStmt
 | WhileStmt
 | ForStmt
+| ForEachStmt
 | ReturnStmt
 | ThrowStmt
 | BreakStmt
