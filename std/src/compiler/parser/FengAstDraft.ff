@@ -664,16 +664,23 @@ open type ModuleImport {
   let alias: Option<StringSpan>;
 }
 
-open type ModuleFile {
-  let path: string;
+open type ModuleFileMeta {
+  let token: FengToken;
+  let moduleVisibility: Visibility;
+  let moduleName: SegmentedName;
   let imports: ModuleImport[];
+  let path: string;
+}
+
+open type ModuleFile {
+  let meta: ModuleFileMeta;
+  let members: ModuleMember[];
 }
 
 open type ModuleDeclaration {
-  let token: FengToken;
   let visibility: Visibility;
   let name: SegmentedName;
-  let files: ModuleFile[];
+  let files: ModuleFileMeta[];
   let members: ModuleMember[];
 }
 
