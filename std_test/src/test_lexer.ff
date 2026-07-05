@@ -1,0 +1,757 @@
+module std_test;
+
+import std.test;
+import std.compiler.lexer;
+import std.compiler.common;
+import std.text;
+import std.collections;
+import std.io;
+
+// ==================== 辅助函数 ====================
+
+func makeLexer(content: string): FengLexer {
+  let source = FengSource(content, "test.ff");
+  return FengLexer(source);
+}
+
+func collectNonTrivia(content: string): FengToken[] {
+  var lexer = makeLexer(content);
+  let tokens = lexer.tokenize();
+  let result = List<FengToken>();
+  for let t in tokens {
+    if !FengTokenUtil.isTrivia(t.kind) {
+      result.add(t);
+    }
+  }
+  return result.entries();
+}
+
+func kindName(kind: FengTokenKind): string {
+  return FengTokenUtil.kindName(kind);
+}
+
+// ==================== 空输入 ====================
+
+func lexer_empty_source() {
+  var lexer = makeLexer("");
+  let token = lexer.next();
+  check(token.kind == FengTokenKind.SpecialEndOfFile, "lexer/empty-eof");
+  check(token.value.length() == (int)0, "lexer/empty-eof-length");
+  writeLine("__LEXER_EMPTY_SOURCE__=ok");
+}
+
+// ==================== 标识符 ====================
+
+func lexer_identifier_simple() {
+  let tokens = collectNonTrivia("foo");
+  check(tokens.length() == (int)1, "lexer/ident-simple-count");
+  check(tokens[0].kind == FengTokenKind.Identifier, "lexer/ident-simple-kind");
+  check(tokens[0].value.toString() == "foo", "lexer/ident-simple-value");
+  writeLine("__LEXER_IDENTIFIER_SIMPLE__=ok");
+}
+
+func lexer_identifier_with_digits() {
+  let tokens = collectNonTrivia("x1_abc_2");
+  check(tokens[0].kind == FengTokenKind.Identifier, "lexer/ident-digits-kind");
+  check(tokens[0].value.toString() == "x1_abc_2", "lexer/ident-digits-value");
+  writeLine("__LEXER_IDENTIFIER_WITH_DIGITS__=ok");
+}
+
+func lexer_identifier_underscore() {
+  let tokens = collectNonTrivia("_private");
+  check(tokens[0].kind == FengTokenKind.Identifier, "lexer/ident-underscore-kind");
+  check(tokens[0].value.toString() == "_private", "lexer/ident-underscore-value");
+  writeLine("__LEXER_IDENTIFIER_UNDERSCORE__=ok");
+}
+
+// ==================== 关键字 ====================
+
+func lexer_keywords_basic() {
+  let tokens = collectNonTrivia("type enum spec fit extern func let var");
+  check(tokens[0].kind == FengTokenKind.KeywordType, "lexer/kw-type");
+  check(tokens[1].kind == FengTokenKind.KeywordEnum, "lexer/kw-enum");
+  check(tokens[2].kind == FengTokenKind.KeywordSpec, "lexer/kw-spec");
+  check(tokens[3].kind == FengTokenKind.KeywordFit, "lexer/kw-fit");
+  check(tokens[4].kind == FengTokenKind.KeywordExtern, "lexer/kw-extern");
+  check(tokens[5].kind == FengTokenKind.KeywordFunc, "lexer/kw-func");
+  check(tokens[6].kind == FengTokenKind.KeywordLet, "lexer/kw-let");
+  check(tokens[7].kind == FengTokenKind.KeywordVar, "lexer/kw-var");
+  writeLine("__LEXER_KEYWORDS_BASIC__=ok");
+}
+
+func lexer_keywords_modifiers() {
+  let tokens = collectNonTrivia("static open seal self");
+  check(tokens[0].kind == FengTokenKind.KeywordStatic, "lexer/kw-static");
+  check(tokens[1].kind == FengTokenKind.KeywordOpen, "lexer/kw-open");
+  check(tokens[2].kind == FengTokenKind.KeywordSeal, "lexer/kw-seal");
+  check(tokens[3].kind == FengTokenKind.KeywordSelf, "lexer/kw-self");
+  writeLine("__LEXER_KEYWORDS_MODIFIERS__=ok");
+}
+
+func lexer_keywords_module() {
+  let tokens = collectNonTrivia("module import as");
+  check(tokens[0].kind == FengTokenKind.KeywordModule, "lexer/kw-module");
+  check(tokens[1].kind == FengTokenKind.KeywordImport, "lexer/kw-import");
+  check(tokens[2].kind == FengTokenKind.KeywordAs, "lexer/kw-as");
+  writeLine("__LEXER_KEYWORDS_MODULE__=ok");
+}
+
+func lexer_keywords_control() {
+  let tokens = collectNonTrivia("if else match while for in break continue");
+  check(tokens[0].kind == FengTokenKind.KeywordIf, "lexer/kw-if");
+  check(tokens[1].kind == FengTokenKind.KeywordElse, "lexer/kw-else");
+  check(tokens[2].kind == FengTokenKind.KeywordMatch, "lexer/kw-match");
+  check(tokens[3].kind == FengTokenKind.KeywordWhile, "lexer/kw-while");
+  check(tokens[4].kind == FengTokenKind.KeywordFor, "lexer/kw-for");
+  check(tokens[5].kind == FengTokenKind.KeywordIn, "lexer/kw-in");
+  check(tokens[6].kind == FengTokenKind.KeywordBreak, "lexer/kw-break");
+  check(tokens[7].kind == FengTokenKind.KeywordContinue, "lexer/kw-continue");
+  writeLine("__LEXER_KEYWORDS_CONTROL__=ok");
+}
+
+func lexer_keywords_exception() {
+  let tokens = collectNonTrivia("try catch unknown throw return defer void");
+  check(tokens[0].kind == FengTokenKind.KeywordTry, "lexer/kw-try");
+  check(tokens[1].kind == FengTokenKind.KeywordCatch, "lexer/kw-catch");
+  check(tokens[2].kind == FengTokenKind.KeywordUnknown, "lexer/kw-unknown");
+  check(tokens[3].kind == FengTokenKind.KeywordThrow, "lexer/kw-throw");
+  check(tokens[4].kind == FengTokenKind.KeywordReturn, "lexer/kw-return");
+  check(tokens[5].kind == FengTokenKind.KeywordDefer, "lexer/kw-defer");
+  check(tokens[6].kind == FengTokenKind.KeywordVoid, "lexer/kw-void");
+  writeLine("__LEXER_KEYWORDS_EXCEPTION__=ok");
+}
+
+// ==================== 布尔字面量 ====================
+
+func lexer_bool_literals() {
+  let tokens = collectNonTrivia("true false");
+  check(tokens[0].kind == FengTokenKind.LiteralBool, "lexer/bool-true-kind");
+  check(tokens[0].value.toString() == "true", "lexer/bool-true-value");
+  check(tokens[1].kind == FengTokenKind.LiteralBool, "lexer/bool-false-kind");
+  check(tokens[1].value.toString() == "false", "lexer/bool-false-value");
+  writeLine("__LEXER_BOOL_LITERALS__=ok");
+}
+
+// ==================== 整数 ====================
+
+func lexer_integer_decimal() {
+  let tokens = collectNonTrivia("0 42 12345");
+  check(tokens[0].kind == FengTokenKind.LiteralInteger, "lexer/int-dec-zero-kind");
+  check(tokens[0].value.toString() == "0", "lexer/int-dec-zero-value");
+  check(tokens[1].kind == FengTokenKind.LiteralInteger, "lexer/int-dec-42-kind");
+  check(tokens[1].value.toString() == "42", "lexer/int-dec-42-value");
+  check(tokens[2].kind == FengTokenKind.LiteralInteger, "lexer/int-dec-12345-kind");
+  check(tokens[2].value.toString() == "12345", "lexer/int-dec-12345-value");
+  writeLine("__LEXER_INTEGER_DECIMAL__=ok");
+}
+
+func lexer_integer_hex() {
+  writeLine("__LEXER_INTEGER_HEX__=start");
+  var lexer = makeLexer("0xFF");
+  writeLine("__LEXER_INTEGER_HEX__=lexer-created");
+  let token = lexer.next();
+  writeLine("__LEXER_INTEGER_HEX__=token-got");
+  check(token.kind == FengTokenKind.LiteralInteger, "lexer/int-hex-kind");
+  writeLine("__LEXER_INTEGER_HEX__=ok");
+}
+
+func lexer_integer_binary() {
+  let tokens = collectNonTrivia("0b1010 0B11");
+  check(tokens[0].kind == FengTokenKind.LiteralInteger, "lexer/int-bin-kind");
+  check(tokens[0].value.toString() == "0b1010", "lexer/int-bin-value");
+  check(tokens[1].kind == FengTokenKind.LiteralInteger, "lexer/int-bin-upper-kind");
+  check(tokens[1].value.toString() == "0B11", "lexer/int-bin-upper-value");
+  writeLine("__LEXER_INTEGER_BINARY__=ok");
+}
+
+func lexer_integer_octal() {
+  let tokens = collectNonTrivia("0o77 0O12");
+  check(tokens[0].kind == FengTokenKind.LiteralInteger, "lexer/int-oct-kind");
+  check(tokens[0].value.toString() == "0o77", "lexer/int-oct-value");
+  check(tokens[1].kind == FengTokenKind.LiteralInteger, "lexer/int-oct-upper-kind");
+  check(tokens[1].value.toString() == "0O12", "lexer/int-oct-upper-value");
+  writeLine("__LEXER_INTEGER_OCTAL__=ok");
+}
+
+func lexer_integer_underscore() {
+  let tokens = collectNonTrivia("1_000_000 0xFF_FF");
+  check(tokens[0].kind == FengTokenKind.LiteralInteger, "lexer/int-underscore-kind");
+  check(tokens[0].value.toString() == "1_000_000", "lexer/int-underscore-value");
+  check(tokens[1].kind == FengTokenKind.LiteralInteger, "lexer/int-underscore-hex-kind");
+  check(tokens[1].value.toString() == "0xFF_FF", "lexer/int-underscore-hex-value");
+  writeLine("__LEXER_INTEGER_UNDERSCORE__=ok");
+}
+
+// ==================== 浮点数 ====================
+
+func lexer_float_decimal_point() {
+  let tokens = collectNonTrivia("3.14 0.5");
+  check(tokens[0].kind == FengTokenKind.LiteralFloat, "lexer/float-pi-kind");
+  check(tokens[0].value.toString() == "3.14", "lexer/float-pi-value");
+  check(tokens[1].kind == FengTokenKind.LiteralFloat, "lexer/float-half-kind");
+  check(tokens[1].value.toString() == "0.5", "lexer/float-half-value");
+  writeLine("__LEXER_FLOAT_DECIMAL_POINT__=ok");
+}
+
+func lexer_float_exponent() {
+  let tokens = collectNonTrivia("1e10 2E3 1e+4 5e-2");
+  check(tokens[0].kind == FengTokenKind.LiteralFloat, "lexer/float-exp-kind");
+  check(tokens[0].value.toString() == "1e10", "lexer/float-exp-value");
+  check(tokens[1].kind == FengTokenKind.LiteralFloat, "lexer/float-exp-upper-kind");
+  check(tokens[1].value.toString() == "2E3", "lexer/float-exp-upper-value");
+  check(tokens[2].kind == FengTokenKind.LiteralFloat, "lexer/float-exp-plus-kind");
+  check(tokens[2].value.toString() == "1e+4", "lexer/float-exp-plus-value");
+  check(tokens[3].kind == FengTokenKind.LiteralFloat, "lexer/float-exp-minus-kind");
+  check(tokens[3].value.toString() == "5e-2", "lexer/float-exp-minus-value");
+  writeLine("__LEXER_FLOAT_EXPONENT__=ok");
+}
+
+func lexer_float_combined() {
+  let tokens = collectNonTrivia("3.14e2 1.0e-3");
+  check(tokens[0].kind == FengTokenKind.LiteralFloat, "lexer/float-combined-kind");
+  check(tokens[0].value.toString() == "3.14e2", "lexer/float-combined-value");
+  check(tokens[1].kind == FengTokenKind.LiteralFloat, "lexer/float-combined-neg-kind");
+  check(tokens[1].value.toString() == "1.0e-3", "lexer/float-combined-neg-value");
+  writeLine("__LEXER_FLOAT_COMBINED__=ok");
+}
+
+// ==================== 字符串 ====================
+
+func lexer_string_simple() {
+  let tokens = collectNonTrivia("\"hello\"");
+  check(tokens[0].kind == FengTokenKind.LiteralString, "lexer/string-simple-kind");
+  check(tokens[0].value.toString() == "\"hello\"", "lexer/string-simple-value");
+  writeLine("__LEXER_STRING_SIMPLE__=ok");
+}
+
+func lexer_string_empty() {
+  let tokens = collectNonTrivia("\"\"");
+  check(tokens[0].kind == FengTokenKind.LiteralString, "lexer/string-empty-kind");
+  check(tokens[0].value.toString() == "\"\"", "lexer/string-empty-value");
+  writeLine("__LEXER_STRING_EMPTY__=ok");
+}
+
+func lexer_string_escapes() {
+  let tokens = collectNonTrivia("\"a\\nb\\tc\\\\d\\\"e\\0f\\x41\"");
+  check(tokens[0].kind == FengTokenKind.LiteralString, "lexer/string-escapes-kind");
+  writeLine("__LEXER_STRING_ESCAPES__=ok");
+}
+
+// ==================== 原始字符串 ====================
+
+func lexer_raw_string_simple() {
+  let tokens = collectNonTrivia("`hello world`");
+  check(tokens[0].kind == FengTokenKind.LiteralRawString, "lexer/raw-string-kind");
+  check(tokens[0].value.toString() == "`hello world`", "lexer/raw-string-value");
+  writeLine("__LEXER_RAW_STRING_SIMPLE__=ok");
+}
+
+func lexer_raw_string_with_backtick_escape() {
+  let tokens = collectNonTrivia("`a``b`");
+  check(tokens[0].kind == FengTokenKind.LiteralRawString, "lexer/raw-string-bt-kind");
+  check(tokens[0].value.toString() == "`a``b`", "lexer/raw-string-bt-value");
+  writeLine("__LEXER_RAW_STRING_BACKTICK_ESCAPE__=ok");
+}
+
+// ==================== 运算符 ====================
+
+func lexer_operators_arithmetic() {
+  let tokens = collectNonTrivia("+ - * / %");
+  check(tokens[0].kind == FengTokenKind.OperatorPlus, "lexer/op-plus");
+  check(tokens[1].kind == FengTokenKind.OperatorMinus, "lexer/op-minus");
+  check(tokens[2].kind == FengTokenKind.OperatorStar, "lexer/op-star");
+  check(tokens[3].kind == FengTokenKind.OperatorSlash, "lexer/op-slash");
+  check(tokens[4].kind == FengTokenKind.OperatorPercent, "lexer/op-percent");
+  writeLine("__LEXER_OPERATORS_ARITHMETIC__=ok");
+}
+
+func lexer_operators_comparison() {
+  let tokens = collectNonTrivia("< <= > >= == !=");
+  check(tokens[0].kind == FengTokenKind.OperatorLess, "lexer/op-lt");
+  check(tokens[1].kind == FengTokenKind.OperatorLessEqual, "lexer/op-le");
+  check(tokens[2].kind == FengTokenKind.OperatorGreater, "lexer/op-gt");
+  check(tokens[3].kind == FengTokenKind.OperatorGreaterEqual, "lexer/op-ge");
+  check(tokens[4].kind == FengTokenKind.OperatorEqual, "lexer/op-eq");
+  check(tokens[5].kind == FengTokenKind.OperatorNotEqual, "lexer/op-ne");
+  writeLine("__LEXER_OPERATORS_COMPARISON__=ok");
+}
+
+func lexer_operators_logical() {
+  let tokens = collectNonTrivia("! && ||");
+  check(tokens[0].kind == FengTokenKind.OperatorNot, "lexer/op-not");
+  check(tokens[1].kind == FengTokenKind.OperatorLogicalAnd, "lexer/op-and");
+  check(tokens[2].kind == FengTokenKind.OperatorLogicalOr, "lexer/op-or");
+  writeLine("__LEXER_OPERATORS_LOGICAL__=ok");
+}
+
+func lexer_operators_bitwise() {
+  let tokens = collectNonTrivia("& | ^ ~ << >>");
+  check(tokens[0].kind == FengTokenKind.OperatorBitwiseAnd, "lexer/op-bitand");
+  check(tokens[1].kind == FengTokenKind.OperatorBitwiseOr, "lexer/op-bitor");
+  check(tokens[2].kind == FengTokenKind.OperatorBitwiseXor, "lexer/op-bitxor");
+  check(tokens[3].kind == FengTokenKind.OperatorBitwiseNot, "lexer/op-bitnot");
+  check(tokens[4].kind == FengTokenKind.OperatorShiftLeft, "lexer/op-shl");
+  check(tokens[5].kind == FengTokenKind.OperatorShiftRight, "lexer/op-shr");
+  writeLine("__LEXER_OPERATORS_BITWISE__=ok");
+}
+
+func lexer_operators_assignment() {
+  let tokens = collectNonTrivia("= += -= *= /= %=");
+  check(tokens[0].kind == FengTokenKind.OperatorAssign, "lexer/op-assign");
+  check(tokens[1].kind == FengTokenKind.OperatorPlusAssign, "lexer/op-add-assign");
+  check(tokens[2].kind == FengTokenKind.OperatorMinusAssign, "lexer/op-sub-assign");
+  check(tokens[3].kind == FengTokenKind.OperatorStarAssign, "lexer/op-mul-assign");
+  check(tokens[4].kind == FengTokenKind.OperatorSlashAssign, "lexer/op-div-assign");
+  check(tokens[5].kind == FengTokenKind.OperatorPercentAssign, "lexer/op-mod-assign");
+  writeLine("__LEXER_OPERATORS_ASSIGNMENT__=ok");
+}
+
+func lexer_operators_bitwise_assignment() {
+  let tokens = collectNonTrivia("&= |= ^= <<= >>=");
+  check(tokens[0].kind == FengTokenKind.OperatorBitwiseAndAssign, "lexer/op-bitand-assign");
+  check(tokens[1].kind == FengTokenKind.OperatorBitwiseOrAssign, "lexer/op-bitor-assign");
+  check(tokens[2].kind == FengTokenKind.OperatorBitwiseXorAssign, "lexer/op-bitxor-assign");
+  check(tokens[3].kind == FengTokenKind.OperatorShiftLeftAssign, "lexer/op-shl-assign");
+  check(tokens[4].kind == FengTokenKind.OperatorShiftRightAssign, "lexer/op-shr-assign");
+  writeLine("__LEXER_OPERATORS_BITWISE_ASSIGNMENT__=ok");
+}
+
+func lexer_operators_other() {
+  let tokens = collectNonTrivia("-> @");
+  check(tokens[0].kind == FengTokenKind.OperatorArrow, "lexer/op-arrow");
+  check(tokens[0].value.toString() == "->", "lexer/op-arrow-value");
+  check(tokens[1].kind == FengTokenKind.OperatorAt, "lexer/op-at");
+  writeLine("__LEXER_OPERATORS_OTHER__=ok");
+}
+
+// ==================== 分隔符 ====================
+
+func lexer_punctuation() {
+  let tokens = collectNonTrivia("( ) { } [ ] , : ; .");
+  check(tokens[0].kind == FengTokenKind.PunctuationLeftParen, "lexer/punc-lparen");
+  check(tokens[1].kind == FengTokenKind.PunctuationRightParen, "lexer/punc-rparen");
+  check(tokens[2].kind == FengTokenKind.PunctuationLeftBrace, "lexer/punc-lbrace");
+  check(tokens[3].kind == FengTokenKind.PunctuationRightBrace, "lexer/punc-rbrace");
+  check(tokens[4].kind == FengTokenKind.PunctuationLeftBracket, "lexer/punc-lbracket");
+  check(tokens[5].kind == FengTokenKind.PunctuationRightBracket, "lexer/punc-rbracket");
+  check(tokens[6].kind == FengTokenKind.PunctuationComma, "lexer/punc-comma");
+  check(tokens[7].kind == FengTokenKind.PunctuationColon, "lexer/punc-colon");
+  check(tokens[8].kind == FengTokenKind.PunctuationSemicolon, "lexer/punc-semicolon");
+  check(tokens[9].kind == FengTokenKind.PunctuationDot, "lexer/punc-dot");
+  writeLine("__LEXER_PUNCTUATION__=ok");
+}
+
+func lexer_punctuation_ellipsis() {
+  let tokens = collectNonTrivia("...");
+  check(tokens[0].kind == FengTokenKind.PunctuationEllipsis, "lexer/punc-ellipsis-kind");
+  check(tokens[0].value.toString() == "...", "lexer/punc-ellipsis-value");
+  writeLine("__LEXER_PUNCTUATION_ELLIPSIS__=ok");
+}
+
+// ==================== 空白 ====================
+
+func lexer_whitespace_space() {
+  var lexer = makeLexer("  \t ");
+  let token = lexer.next();
+  check(token.kind == FengTokenKind.WhitespaceSpace, "lexer/ws-space-kind");
+  check(token.value.length() == (int)4, "lexer/ws-space-length");
+  writeLine("__LEXER_WHITESPACE_SPACE__=ok");
+}
+
+func lexer_whitespace_newline() {
+  var lexer = makeLexer("\n");
+  let token = lexer.next();
+  check(token.kind == FengTokenKind.WhitespaceNewline, "lexer/ws-newline-kind");
+  writeLine("__LEXER_WHITESPACE_NEWLINE__=ok");
+}
+
+// ==================== 注释 ====================
+
+func lexer_comment_line() {
+  var lexer = makeLexer("// this is a comment");
+  let token = lexer.next();
+  check(token.kind == FengTokenKind.CommentLine, "lexer/comment-line-kind");
+  check(token.value.toString() == "// this is a comment", "lexer/comment-line-value");
+  writeLine("__LEXER_COMMENT_LINE__=ok");
+}
+
+func lexer_comment_line_stops_at_newline() {
+  var lexer = makeLexer("// comment\ncode");
+  let t1 = lexer.next();
+  check(t1.kind == FengTokenKind.CommentLine, "lexer/comment-line-stops-kind");
+  check(t1.value.toString() == "// comment", "lexer/comment-line-stops-value");
+  let t2 = lexer.next();
+  check(t2.kind == FengTokenKind.WhitespaceNewline, "lexer/comment-line-newline");
+  writeLine("__LEXER_COMMENT_LINE_STOPS_AT_NEWLINE__=ok");
+}
+
+func lexer_comment_block() {
+  var lexer = makeLexer("/* block comment */");
+  let token = lexer.next();
+  check(token.kind == FengTokenKind.CommentBlock, "lexer/comment-block-kind");
+  check(token.value.toString() == "/* block comment */", "lexer/comment-block-value");
+  writeLine("__LEXER_COMMENT_BLOCK__=ok");
+}
+
+func lexer_comment_doc() {
+  var lexer = makeLexer("/** doc comment */");
+  let token = lexer.next();
+  check(token.kind == FengTokenKind.CommentDoc, "lexer/comment-doc-kind");
+  check(token.value.toString() == "/** doc comment */", "lexer/comment-doc-value");
+  writeLine("__LEXER_COMMENT_DOC__=ok");
+}
+
+// ==================== 位置追踪 ====================
+
+func lexer_location_first_token() {
+  var lexer = makeLexer("abc");
+  let token = lexer.next();
+  check(token.location.offset == (int)0, "lexer/loc-first-offset");
+  check(token.location.line == (int)1, "lexer/loc-first-line");
+  check(token.location.column == (int)1, "lexer/loc-first-column");
+  writeLine("__LEXER_LOCATION_FIRST_TOKEN__=ok");
+}
+
+func lexer_location_after_whitespace() {
+  var lexer = makeLexer("  abc");
+  let _ = lexer.next();
+  let token = lexer.next();
+  check(token.location.offset == (int)2, "lexer/loc-after-ws-offset");
+  check(token.location.line == (int)1, "lexer/loc-after-ws-line");
+  check(token.location.column == (int)3, "lexer/loc-after-ws-column");
+  writeLine("__LEXER_LOCATION_AFTER_WHITESPACE__=ok");
+}
+
+func lexer_location_after_newline() {
+  var lexer = makeLexer("a\nb");
+  let _ = lexer.next();
+  let _ = lexer.next();
+  let token = lexer.next();
+  check(token.kind == FengTokenKind.Identifier, "lexer/loc-newline-kind");
+  check(token.value.toString() == "b", "lexer/loc-newline-value");
+  check(token.location.line == (int)2, "lexer/loc-newline-line");
+  check(token.location.column == (int)1, "lexer/loc-newline-column");
+  writeLine("__LEXER_LOCATION_AFTER_NEWLINE__=ok");
+}
+
+func lexer_location_multi_line() {
+  var lexer = makeLexer("x\n  y\n    z");
+  let tokens = lexer.tokenize();
+  var zLine: int = 0;
+  var zCol: int = 0;
+  for let t in tokens {
+    if t.kind == FengTokenKind.Identifier && t.value.toString() == "z" {
+      zLine = t.location.line;
+      zCol = t.location.column;
+    }
+  }
+  check(zLine == (int)3, "lexer/loc-multi-line");
+  check(zCol == (int)5, "lexer/loc-multi-column");
+  writeLine("__LEXER_LOCATION_MULTI_LINE__=ok");
+}
+
+// ==================== peek 行为 ====================
+
+func lexer_peek_does_not_consume() {
+  var lexer = makeLexer("abc");
+  let p1 = lexer.peek();
+  let p2 = lexer.peek();
+  check(p1.kind == p2.kind, "lexer/peek-same-kind");
+  check(p1.value.toString() == p2.value.toString(), "lexer/peek-same-value");
+  let n = lexer.next();
+  check(n.kind == FengTokenKind.Identifier, "lexer/peek-then-next-kind");
+  check(n.value.toString() == "abc", "lexer/peek-then-next-value");
+  writeLine("__LEXER_PEEK_DOES_NOT_CONSUME__=ok");
+}
+
+func lexer_peek_then_next_returns_same() {
+  var lexer = makeLexer("42 + 7");
+  let peeked = lexer.peek();
+  let consumed = lexer.next();
+  check(peeked.kind == consumed.kind, "lexer/peek-next-same-kind");
+  check(peeked.value.toString() == consumed.value.toString(), "lexer/peek-next-same-value");
+  check(peeked.location.offset == consumed.location.offset, "lexer/peek-next-same-offset");
+  writeLine("__LEXER_PEEK_THEN_NEXT_RETURNS_SAME__=ok");
+}
+
+// ==================== tokenize ====================
+
+func lexer_tokenize_full() {
+  var lexer = makeLexer("let x = 42;");
+  let tokens = lexer.tokenize();
+  check(tokens.length() >= (int)6, "lexer/tokenize-count");
+  let last = tokens[tokens.length() - 1];
+  check(last.kind == FengTokenKind.SpecialEndOfFile, "lexer/tokenize-ends-eof");
+  writeLine("__LEXER_TOKENIZE_FULL__=ok");
+}
+
+func lexer_tokenize_complex() {
+  var lexer = makeLexer("func add(a: int, b: int): int { return a + b; }");
+  let tokens = lexer.tokenize();
+  var nonTriviaCount: int = 0;
+  for let t in tokens {
+    if !FengTokenUtil.isTrivia(t.kind) {
+      nonTriviaCount = nonTriviaCount + 1;
+    }
+  }
+  check(nonTriviaCount == (int)20, "lexer/tokenize-complex-count");
+  writeLine("__LEXER_TOKENIZE_COMPLEX__=ok");
+}
+
+// ==================== FengTokenUtil 分类 ====================
+
+func lexer_token_util_is_trivia() {
+  check(FengTokenUtil.isTrivia(FengTokenKind.SpecialEndOfFile) == true, "lexer/util-trivia-eof");
+  check(FengTokenUtil.isTrivia(FengTokenKind.WhitespaceSpace) == true, "lexer/util-trivia-space");
+  check(FengTokenUtil.isTrivia(FengTokenKind.CommentLine) == true, "lexer/util-trivia-comment");
+  check(FengTokenUtil.isTrivia(FengTokenKind.Identifier) == false, "lexer/util-not-trivia-ident");
+  writeLine("__LEXER_TOKEN_UTIL_IS_TRIVIA__=ok");
+}
+
+func lexer_token_util_is_keyword() {
+  check(FengTokenUtil.isKeyword(FengTokenKind.KeywordFunc) == true, "lexer/util-kw-func");
+  check(FengTokenUtil.isKeyword(FengTokenKind.KeywordReturn) == true, "lexer/util-kw-return");
+  check(FengTokenUtil.isKeyword(FengTokenKind.Identifier) == false, "lexer/util-not-kw-ident");
+  check(FengTokenUtil.isKeyword(FengTokenKind.LiteralInteger) == false, "lexer/util-not-kw-int");
+  writeLine("__LEXER_TOKEN_UTIL_IS_KEYWORD__=ok");
+}
+
+func lexer_token_util_is_literal() {
+  check(FengTokenUtil.isLiteral(FengTokenKind.LiteralInteger) == true, "lexer/util-lit-int");
+  check(FengTokenUtil.isLiteral(FengTokenKind.LiteralString) == true, "lexer/util-lit-string");
+  check(FengTokenUtil.isLiteral(FengTokenKind.LiteralBool) == true, "lexer/util-lit-bool");
+  check(FengTokenUtil.isLiteral(FengTokenKind.Identifier) == false, "lexer/util-not-lit-ident");
+  writeLine("__LEXER_TOKEN_UTIL_IS_LITERAL__=ok");
+}
+
+func lexer_token_util_is_identifier() {
+  check(FengTokenUtil.isIdentifier(FengTokenKind.Identifier) == true, "lexer/util-ident");
+  check(FengTokenUtil.isIdentifier(FengTokenKind.KeywordFunc) == false, "lexer/util-not-ident-kw");
+  writeLine("__LEXER_TOKEN_UTIL_IS_IDENTIFIER__=ok");
+}
+
+func lexer_token_util_is_punctuation() {
+  check(FengTokenUtil.isPunctuation(FengTokenKind.PunctuationLeftParen) == true, "lexer/util-punc");
+  check(FengTokenUtil.isPunctuation(FengTokenKind.PunctuationEllipsis) == true, "lexer/util-punc-ellipsis");
+  check(FengTokenUtil.isPunctuation(FengTokenKind.OperatorPlus) == false, "lexer/util-not-punc-op");
+  writeLine("__LEXER_TOKEN_UTIL_IS_PUNCTUATION__=ok");
+}
+
+func lexer_token_util_is_operator() {
+  check(FengTokenUtil.isOperator(FengTokenKind.OperatorPlus) == true, "lexer/util-op-plus");
+  check(FengTokenUtil.isOperator(FengTokenKind.OperatorArrow) == true, "lexer/util-op-arrow");
+  check(FengTokenUtil.isOperator(FengTokenKind.PunctuationDot) == false, "lexer/util-not-op-punc");
+  writeLine("__LEXER_TOKEN_UTIL_IS_OPERATOR__=ok");
+}
+
+func lexer_token_util_is_whitespace() {
+  check(FengTokenUtil.isWhitespace(FengTokenKind.WhitespaceSpace) == true, "lexer/util-ws-space");
+  check(FengTokenUtil.isWhitespace(FengTokenKind.WhitespaceNewline) == true, "lexer/util-ws-newline");
+  check(FengTokenUtil.isWhitespace(FengTokenKind.CommentLine) == false, "lexer/util-not-ws-comment");
+  writeLine("__LEXER_TOKEN_UTIL_IS_WHITESPACE__=ok");
+}
+
+func lexer_token_util_is_comment() {
+  check(FengTokenUtil.isComment(FengTokenKind.CommentLine) == true, "lexer/util-comment-line");
+  check(FengTokenUtil.isComment(FengTokenKind.CommentBlock) == true, "lexer/util-comment-block");
+  check(FengTokenUtil.isComment(FengTokenKind.CommentDoc) == true, "lexer/util-comment-doc");
+  check(FengTokenUtil.isComment(FengTokenKind.WhitespaceSpace) == false, "lexer/util-not-comment-ws");
+  writeLine("__LEXER_TOKEN_UTIL_IS_COMMENT__=ok");
+}
+
+func lexer_token_util_kind_name() {
+  check(FengTokenUtil.kindName(FengTokenKind.KeywordFunc) == "KeywordFunc", "lexer/util-name-kw-func");
+  check(FengTokenUtil.kindName(FengTokenKind.OperatorPlus) == "OperatorPlus", "lexer/util-name-op-plus");
+  check(FengTokenUtil.kindName(FengTokenKind.SpecialEndOfFile) == "SpecialEndOfFile", "lexer/util-name-eof");
+  check(FengTokenUtil.kindName(FengTokenKind.Identifier) == "Identifier", "lexer/util-name-ident");
+  writeLine("__LEXER_TOKEN_UTIL_KIND_NAME__=ok");
+}
+
+// ==================== 错误情况 ====================
+
+func lexer_error_unterminated_string() {
+  var lexer = makeLexer("\"hello");
+  var caught = false;
+  var errCode = "";
+  try lexer.next() catch err: FengCompileError {
+    caught = true;
+    errCode = err.code;
+  };
+  check(caught, "lexer/err-unterm-string-caught");
+  check(errCode == "LE0003", "lexer/err-unterm-string-code");
+  writeLine("__LEXER_ERROR_UNTERMINATED_STRING__=ok");
+}
+
+func lexer_error_unterminated_block_comment() {
+  var lexer = makeLexer("/* no end");
+  var caught = false;
+  var errCode = "";
+  try lexer.next() catch err: FengCompileError {
+    caught = true;
+    errCode = err.code;
+  };
+  check(caught, "lexer/err-unterm-block-caught");
+  check(errCode == "LE0006", "lexer/err-unterm-block-code");
+  writeLine("__LEXER_ERROR_UNTERMINATED_BLOCK_COMMENT__=ok");
+}
+
+func lexer_error_invalid_escape() {
+  var lexer = makeLexer("\"\\q\"");
+  var caught = false;
+  var errCode = "";
+  try lexer.next() catch err: FengCompileError {
+    caught = true;
+    errCode = err.code;
+  };
+  check(caught, "lexer/err-invalid-escape-caught");
+  check(errCode == "LE0004", "lexer/err-invalid-escape-code");
+  writeLine("__LEXER_ERROR_INVALID_ESCAPE__=ok");
+}
+
+func lexer_error_reserved_word() {
+  var lexer = makeLexer("class");
+  var caught = false;
+  var errCode = "";
+  try lexer.next() catch err: FengCompileError {
+    caught = true;
+    errCode = err.code;
+  };
+  check(caught, "lexer/err-reserved-caught");
+  check(errCode == "LE0001", "lexer/err-reserved-code");
+  writeLine("__LEXER_ERROR_RESERVED_WORD__=ok");
+}
+
+func lexer_error_unexpected_character() {
+  var lexer = makeLexer("#");
+  var caught = false;
+  var errCode = "";
+  try lexer.next() catch err: FengCompileError {
+    caught = true;
+    errCode = err.code;
+  };
+  check(caught, "lexer/err-unexpected-caught");
+  check(errCode == "LE0007", "lexer/err-unexpected-code");
+  writeLine("__LEXER_ERROR_UNEXPECTED_CHARACTER__=ok");
+}
+
+func lexer_error_invalid_number() {
+  var lexer = makeLexer("0xGG");
+  var caught = false;
+  var errCode = "";
+  try lexer.next() catch err: FengCompileError {
+    caught = true;
+    errCode = err.code;
+  };
+  check(caught, "lexer/err-invalid-num-caught");
+  check(errCode == "LE0002", "lexer/err-invalid-num-code");
+  writeLine("__LEXER_ERROR_INVALID_NUMBER__=ok");
+}
+
+// ==================== 组合场景 ====================
+
+func lexer_mixed_tokens() {
+  let tokens = collectNonTrivia("if x >= 10 { return true; }");
+  check(tokens[0].kind == FengTokenKind.KeywordIf, "lexer/mixed-if");
+  check(tokens[1].kind == FengTokenKind.Identifier, "lexer/mixed-ident");
+  check(tokens[1].value.toString() == "x", "lexer/mixed-ident-val");
+  check(tokens[2].kind == FengTokenKind.OperatorGreaterEqual, "lexer/mixed-ge");
+  check(tokens[3].kind == FengTokenKind.LiteralInteger, "lexer/mixed-int");
+  check(tokens[3].value.toString() == "10", "lexer/mixed-int-val");
+  check(tokens[4].kind == FengTokenKind.PunctuationLeftBrace, "lexer/mixed-lbrace");
+  check(tokens[5].kind == FengTokenKind.KeywordReturn, "lexer/mixed-return");
+  check(tokens[6].kind == FengTokenKind.LiteralBool, "lexer/mixed-bool");
+  check(tokens[7].kind == FengTokenKind.PunctuationSemicolon, "lexer/mixed-semicolon");
+  check(tokens[8].kind == FengTokenKind.PunctuationRightBrace, "lexer/mixed-rbrace");
+  writeLine("__LEXER_MIXED_TOKENS__=ok");
+}
+
+func lexer_dot_vs_decimal() {
+  let tokens = collectNonTrivia("obj.field 3.14");
+  check(tokens[0].kind == FengTokenKind.Identifier, "lexer/dot-dec-ident");
+  check(tokens[1].kind == FengTokenKind.PunctuationDot, "lexer/dot-dec-dot");
+  check(tokens[2].kind == FengTokenKind.Identifier, "lexer/dot-dec-field");
+  check(tokens[3].kind == FengTokenKind.LiteralFloat, "lexer/dot-dec-float");
+  check(tokens[3].value.toString() == "3.14", "lexer/dot-dec-float-val");
+  writeLine("__LEXER_DOT_VS_DECIMAL__=ok");
+}
+
+func lexer_minus_vs_arrow() {
+  let tokens = collectNonTrivia("a - b -> c");
+  check(tokens[0].kind == FengTokenKind.Identifier, "lexer/minus-arrow-ident1");
+  check(tokens[1].kind == FengTokenKind.OperatorMinus, "lexer/minus-arrow-minus");
+  check(tokens[2].kind == FengTokenKind.Identifier, "lexer/minus-arrow-ident2");
+  check(tokens[3].kind == FengTokenKind.OperatorArrow, "lexer/minus-arrow-arrow");
+  check(tokens[4].kind == FengTokenKind.Identifier, "lexer/minus-arrow-ident3");
+  writeLine("__LEXER_MINUS_VS_ARROW__=ok");
+}
+
+// ==================== 注册 ====================
+
+open func run_lexer_tests() {
+  describe("lexer tests", () {
+    test("lexer_empty_source()", () { lexer_empty_source(); });
+    test("lexer_identifier_simple()", () { lexer_identifier_simple(); });
+    test("lexer_identifier_with_digits()", () { lexer_identifier_with_digits(); });
+    test("lexer_identifier_underscore()", () { lexer_identifier_underscore(); });
+    test("lexer_keywords_basic()", () { lexer_keywords_basic(); });
+    test("lexer_keywords_modifiers()", () { lexer_keywords_modifiers(); });
+    test("lexer_keywords_module()", () { lexer_keywords_module(); });
+    test("lexer_keywords_control()", () { lexer_keywords_control(); });
+    test("lexer_keywords_exception()", () { lexer_keywords_exception(); });
+    test("lexer_bool_literals()", () { lexer_bool_literals(); });
+    test("lexer_integer_decimal()", () { lexer_integer_decimal(); });
+    test("lexer_integer_hex()", () { lexer_integer_hex(); });
+    test("lexer_integer_binary()", () { lexer_integer_binary(); });
+    test("lexer_integer_octal()", () { lexer_integer_octal(); });
+    test("lexer_integer_underscore()", () { lexer_integer_underscore(); });
+    test("lexer_float_decimal_point()", () { lexer_float_decimal_point(); });
+    test("lexer_float_exponent()", () { lexer_float_exponent(); });
+    test("lexer_float_combined()", () { lexer_float_combined(); });
+    test("lexer_string_simple()", () { lexer_string_simple(); });
+    test("lexer_string_empty()", () { lexer_string_empty(); });
+    test("lexer_string_escapes()", () { lexer_string_escapes(); });
+    test("lexer_raw_string_simple()", () { lexer_raw_string_simple(); });
+    test("lexer_raw_string_with_backtick_escape()", () { lexer_raw_string_with_backtick_escape(); });
+    test("lexer_operators_arithmetic()", () { lexer_operators_arithmetic(); });
+    test("lexer_operators_comparison()", () { lexer_operators_comparison(); });
+    test("lexer_operators_logical()", () { lexer_operators_logical(); });
+    test("lexer_operators_bitwise()", () { lexer_operators_bitwise(); });
+    test("lexer_operators_assignment()", () { lexer_operators_assignment(); });
+    test("lexer_operators_bitwise_assignment()", () { lexer_operators_bitwise_assignment(); });
+    test("lexer_operators_other()", () { lexer_operators_other(); });
+    test("lexer_punctuation()", () { lexer_punctuation(); });
+    test("lexer_punctuation_ellipsis()", () { lexer_punctuation_ellipsis(); });
+    test("lexer_whitespace_space()", () { lexer_whitespace_space(); });
+    test("lexer_whitespace_newline()", () { lexer_whitespace_newline(); });
+    test("lexer_comment_line()", () { lexer_comment_line(); });
+    test("lexer_comment_line_stops_at_newline()", () { lexer_comment_line_stops_at_newline(); });
+    test("lexer_comment_block()", () { lexer_comment_block(); });
+    test("lexer_comment_doc()", () { lexer_comment_doc(); });
+    test("lexer_location_first_token()", () { lexer_location_first_token(); });
+    test("lexer_location_after_whitespace()", () { lexer_location_after_whitespace(); });
+    test("lexer_location_after_newline()", () { lexer_location_after_newline(); });
+    test("lexer_location_multi_line()", () { lexer_location_multi_line(); });
+    test("lexer_peek_does_not_consume()", () { lexer_peek_does_not_consume(); });
+    test("lexer_peek_then_next_returns_same()", () { lexer_peek_then_next_returns_same(); });
+    test("lexer_tokenize_full()", () { lexer_tokenize_full(); });
+    test("lexer_tokenize_complex()", () { lexer_tokenize_complex(); });
+    test("lexer_token_util_is_trivia()", () { lexer_token_util_is_trivia(); });
+    test("lexer_token_util_is_keyword()", () { lexer_token_util_is_keyword(); });
+    test("lexer_token_util_is_literal()", () { lexer_token_util_is_literal(); });
+    test("lexer_token_util_is_identifier()", () { lexer_token_util_is_identifier(); });
+    test("lexer_token_util_is_punctuation()", () { lexer_token_util_is_punctuation(); });
+    test("lexer_token_util_is_operator()", () { lexer_token_util_is_operator(); });
+    test("lexer_token_util_is_whitespace()", () { lexer_token_util_is_whitespace(); });
+    test("lexer_token_util_is_comment()", () { lexer_token_util_is_comment(); });
+    test("lexer_token_util_kind_name()", () { lexer_token_util_kind_name(); });
+    test("lexer_error_unterminated_string()", () { lexer_error_unterminated_string(); });
+    test("lexer_error_unterminated_block_comment()", () { lexer_error_unterminated_block_comment(); });
+    test("lexer_error_invalid_escape()", () { lexer_error_invalid_escape(); });
+    test("lexer_error_reserved_word()", () { lexer_error_reserved_word(); });
+    test("lexer_error_unexpected_character()", () { lexer_error_unexpected_character(); });
+    test("lexer_error_invalid_number()", () { lexer_error_invalid_number(); });
+    test("lexer_mixed_tokens()", () { lexer_mixed_tokens(); });
+    test("lexer_dot_vs_decimal()", () { lexer_dot_vs_decimal(); });
+    test("lexer_minus_vs_arrow()", () { lexer_minus_vs_arrow(); });
+  });
+}

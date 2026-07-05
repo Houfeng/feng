@@ -18,6 +18,7 @@ func main(args: string[]) {
     run_numeric_tests();
     run_path_tests();
     run_fs_tests();
+    run_lexer_tests();
 
     replaceStdin("ABCDE\nFG");
     run_stdio_api_tests();

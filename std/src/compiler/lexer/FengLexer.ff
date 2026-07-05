@@ -257,11 +257,11 @@ open type FengLexer {
     var isFloat = false;
 
     if first == (byte)0x30 {
-      let prefix = self.peekChar();
+      let prefix = self.peekCharAt(1);
       if prefix == (byte)0x78 || prefix == (byte)0x58 {
         base = 16;
         self.advance();
-        if !self.isHexDigitByte(self.peekChar()) {
+        if !self.isHexDigitByte(self.peekCharAt(1)) {
           return self.scanInvalidNumberSuffix(startOffset, startLine, startColumn);
         }
         self.advance();
@@ -269,7 +269,7 @@ open type FengLexer {
       } else if prefix == (byte)0x62 || prefix == (byte)0x42 {
         base = 2;
         self.advance();
-        if !self.isBinaryDigitByte(self.peekChar()) {
+        if !self.isBinaryDigitByte(self.peekCharAt(1)) {
           return self.scanInvalidNumberSuffix(startOffset, startLine, startColumn);
         }
         self.advance();
@@ -277,7 +277,7 @@ open type FengLexer {
       } else if prefix == (byte)0x6F || prefix == (byte)0x4F {
         base = 8;
         self.advance();
-        if !self.isOctalDigitByte(self.peekChar()) {
+        if !self.isOctalDigitByte(self.peekCharAt(1)) {
           return self.scanInvalidNumberSuffix(startOffset, startLine, startColumn);
         }
         self.advance();

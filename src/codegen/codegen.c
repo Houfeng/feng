@@ -4000,7 +4000,7 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
 
     buf_append_fmt(&cg->type_defs, "typedef int32_t %s;\n", typedef_name);
     buf_append_fmt(&cg->type_defs,
-                   "static const FengTrivialDescriptor %s = {\n"
+                   "const FengTrivialDescriptor %s __attribute__((weak)) = {\n"
                    "    .name = \"%s.%.*s\",\n"
                    "    .size = sizeof(%s),\n"
                    "    .equal_fn = NULL,\n"
@@ -34128,7 +34128,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
         }
 
         buf_append_fmt(td,
-            "static const FengAggregateDescriptor %s __attribute__((unused)) = {\n"
+            "const FengAggregateDescriptor %s __attribute__((weak, unused)) = {\n"
             "    .name = \"%s.%s\",\n"
             "    .size = sizeof(struct %s),\n"
             "    .default_init = &%s,\n"
@@ -34175,7 +34175,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
         buf_append_cstr(td, "};\n\n");
     } else {
         buf_append_fmt(td,
-            "static const FengTrivialDescriptor %s __attribute__((unused)) = {\n"
+            "const FengTrivialDescriptor %s __attribute__((weak, unused)) = {\n"
             "    .name = \"%s.%s\",\n"
             "    .size = sizeof(struct %s),\n"
             "    .equal_fn = &%s,\n"
@@ -34286,7 +34286,7 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
                                           : "FengTrivialDescriptor";
 
         buf_append_fmt(&cg->headers,
-                       "static const %s %s;\n",
+                       "extern const %s %s;\n",
                        descriptor_type,
                        t->c_aggregate_desc_name);
         buf_append_fmt(&cg->headers,
