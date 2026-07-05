@@ -152,38 +152,46 @@ open type Function {
 // 基础表达式 -------------------------------------------------------------------
 
 open type IdentifierExpr {
+  let token: FengToken;
   let name: StringSpan;
 }
 
 open type BooleanLiteralExpr {
+  let token: FengToken;
   let value: bool;
 }
 
 open type IntegerLiteralExpr {
+  let token: FengToken;
   let value: i64;
   let raw: StringSpan;
 }
 
 open type FloatLiteralExpr {
+  let token: FengToken;
   let value: f64;
   let raw: StringSpan;
 }
 
 open type StringLiteralExpr {
+  let token: FengToken;
   let value: StringSpan;
 }
 
 open type UnaryExpr {
+  let token: FengToken;
   let operator: FengTokenKind;
   let operand: Expression;
 }
 
 open type CastExpr {
+  let token: FengToken;
   let targetType: TypeReference;
   let value: Expression;
 }
 
 open type BinaryExpr {
+  let token: FengToken;
   let operator: FengTokenKind;
   let left: Expression;
   let right: Expression;
@@ -205,15 +213,18 @@ open type BinaryExpr {
  * - 表示：callee 为 MemberAccessExpr
  */
 open type CallExpr {
+  let token: FengToken;
   let callee: Expression;
   let arguments: Expression[];
 }
 
 open type ArrayLiteralExpr {
+  let token: FengToken;
   let items: Expression[];
 }
 
 open type TupleLiteralExpr {
+  let token: FengToken;
   let items: Expression[];
 }
 
@@ -224,11 +235,13 @@ open type ObjectLiteralField {
 }
 
 open type ObjectLiteralExpr {
+  let token: FengToken;
   let target: Expression;
   let fields: ObjectLiteralField[];
 }
 
 open type ArrayNewExpr {
+  let token: FengToken;
   let elementTypeRef: TypeReference;
   let size: Expression;
 }
@@ -245,6 +258,7 @@ open type ArrayNewExpr {
  * - 独立引用：`let f = foo<int>` → Binding { initializer: GenericTargetExpr }
  */
 open type GenericTargetExpr {
+  let token: FengToken;
   let target: Expression;
   let argumentTypeRefs: TypeReference[];
 }
@@ -266,11 +280,13 @@ open type GenericTargetExpr {
  * - 类型位置仅允许标识符链，Parser 直接识别为 segments 数组
  */
 open type MemberAccessExpr {
+  let token: FengToken;
   let target: Expression;
   let member: StringSpan;
 }
 
 open type IndexAccessExpr {
+  let token: FengToken;
   let target: Expression;
   let index: Expression;
 }
@@ -278,6 +294,7 @@ open type IndexAccessExpr {
 open spec LambdaBody: Expression | Block;
 
 open type LambdaExpr {
+  let token: FengToken;
   // 暂时，lambda 不支持泛型参数，后续扩展
   // let genericParameters: GenericParameter[];
   let parameters: Parameter[];
@@ -286,6 +303,7 @@ open type LambdaExpr {
 }
 
 open type RangeExpr {
+  let token: FengToken;
   let start: Expression;
   let end: Expression;
 }
@@ -304,6 +322,7 @@ open spec MatchTarget: IntegerLiteralExpr
  * - 贪婪消费所有 `|` 分隔的匹配目标
  */
 open type MatchOperatorExpr {
+  let token: FengToken;
   let value: Expression;
   let targets: MatchTarget[];
 }
@@ -317,6 +336,7 @@ open type IfClause {
 }
 
 open type IfExpr {
+  let token: FengToken;
   let clauses: IfClause[];
   let elseBlock: Block;
 }
@@ -329,6 +349,7 @@ open type MatchClause {
 }
 
 open type MatchExpr {
+  let token: FengToken;
   let target: Expression;
   let clauses: MatchClause[];
   let elseBlock: Block;
@@ -341,14 +362,15 @@ open type CatchClause {
 }
 
 open type TryExpr {
+  let token: FengToken;
   let body: Expression;
   let catchClauses: CatchClause[];
   let catchAllBlock: Option<Block>;
 }
 
-// 表达式整体结构 ---------------------------------------------------------------
+// 表达式联合类型 ----------------------------------------------------------------
 
-open spec ExpressionBody: IdentifierExpr
+open spec Expression: IdentifierExpr
 | BooleanLiteralExpr
 | IntegerLiteralExpr
 | FloatLiteralExpr
@@ -371,12 +393,6 @@ open spec ExpressionBody: IdentifierExpr
 | TryExpr
 | RangeExpr;
 
-open type Expression {
-  let token: FengToken;
-  // let annotations: Annotation[];
-  let body: ExpressionBody;
-}
-
 // 块结构 ----------------------------------------------------------------------
 
 open type Block {
@@ -387,10 +403,12 @@ open type Block {
 // 语句 ------------------------------------------------------------------------
 
 open type BlockStmt {
+  let token: FengToken;
   let block: Block;
 }
 
 open type BindingStmt {
+  let token: FengToken;
   let binding: Binding;
 }
 
@@ -399,33 +417,39 @@ open type BindingStmt {
  * operator: = / += / -= / *= / /= 等
  */
 open type AssignmentStmt {
+  let token: FengToken;
   let operator: FengTokenKind;
   let target: Expression;
   let value: Expression;
 }
 
 open type ExpressionStmt {
+  let token: FengToken;
   let expression: Expression;
 }
 
 open type TryStmt {
+  let token: FengToken;
   let body: Expression;
   let catchClauses: CatchClause[];
   let catchAllBlock: Option<Block>;
 }
 
 open type IfStmt {
+  let token: FengToken;
   let clauses: IfClause[];
   let elseBlock: Block;
 }
 
 open type MatchStmt {
+  let token: FengToken;
   let target: Expression;
   let clauses: MatchClause[];
   let elseBlock: Block;
 }
 
 open type WhileStmt {
+  let token: FengToken;
   let condition: Expression;
   let body: Block;
 }
@@ -434,6 +458,7 @@ open spec ForInit: SimpleBinding | AssignmentStmt;
 open spec ForUpdate: Expression | AssignmentStmt;
 
 open type ForStmt {
+  let token: FengToken;
   let init: ForInit;
   let condition: Expression;
   let update: ForUpdate;
@@ -441,28 +466,36 @@ open type ForStmt {
 }
 
 open type ForEachStmt {
+  let token: FengToken;
   let binding: Binding;
   let iterable: Expression;
   let body: Block;
 }
 
 open type ReturnStmt {
+  let token: FengToken;
   let value: Expression;
 }
 
 open type ThrowStmt {
+  let token: FengToken;
   let value: Expression;
 }
 
-open type BreakStmt {}
+open type BreakStmt {
+  let token: FengToken;
+}
 
-open type ContinueStmt {}
+open type ContinueStmt {
+  let token: FengToken;
+}
 
 open type DeferStmt {
+  let token: FengToken;
   let body: Block;
 }
 
-open spec StatementBody: BlockStmt
+open spec Statement: BlockStmt
 | BindingStmt
 | AssignmentStmt
 | ExpressionStmt
@@ -478,26 +511,25 @@ open spec StatementBody: BlockStmt
 | ContinueStmt
 | DeferStmt;
 
-open type Statement {
-  let token: FengToken;
-  let body: StatementBody;
-}
-
 // 类型 (type) -----------------------------------------------------------------
 
 open type TypeField {
+  let token: FengToken;
   let binding: SimpleBinding;
 }
 
 open type TypeMethod {
+  let token: FengToken;
   let function: Function;
 }
 
 open type TypeConstructor {
+  let token: FengToken;
   let function: Function;
 }
 
 open type TypeFinalizer {
+  let token: FengToken;
   let function: Function;
 }
 
@@ -625,10 +657,12 @@ open type Annotation {
 // 模块 (module) ---------------------------------------------------------------
 
 open type ModuleBinding {
+  let token: FengToken;
   let binding: SimpleBinding;
 }
 
 open type ModuleFunction {
+  let token: FengToken;
   let isExtern: bool;
   let function: Function;
 }
