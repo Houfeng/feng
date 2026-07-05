@@ -407,6 +407,10 @@ open type BindingStmt {
   let binding: Binding;
 }
 
+/**
+ * 赋值语句，支持简单赋值和复合赋值
+ * operator: = / += / -= / *= / /= 等
+ */
 open type AssignmentStmt {
   let operator: FengTokenKind;
   let target: Expression;
@@ -439,10 +443,13 @@ open type WhileStmt {
   let body: Block;
 }
 
+open spec ForInit: SimpleBinding | AssignmentStmt;
+open spec ForUpdate: Expression | AssignmentStmt;
+
 open type ForStmt {
-  let init: Statement;
+  let init: ForInit;
   let condition: Expression;
-  let update: Statement;
+  let update: ForUpdate;
   let body: Block;
 }
 
