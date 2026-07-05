@@ -538,6 +538,12 @@ open spec TypeMemberBody: TypeField
 | TypeConstructor
 | TypeFinalizer;
 
+/**
+ * 结构对应语法的层次关系：
+ * [open|seal] [static] <declaration>
+ * ─────────  ──────── ────────────
+ * visibility isStatic   body
+ */
 open type TypeMember {
   let token: FengToken;
   let visibility: Visibility;
