@@ -304,6 +304,12 @@ open type IfExpr {
   let elseBlock: Block;
 }
 
+open type MatchBranch {
+  let token: FengToken;
+  let targets: MatchTarget[];
+  let body: Block;
+}
+
 open type MatchExpr {
   let target: Expression;
   let branches: MatchBranch[];
@@ -433,30 +439,6 @@ open type EnumerationItem {
   let name: StringSpan;
   let hasExplicitValue: bool;
   let explicitValue: i64;
-}
-
-open enum MatchLabelKind {
-  Value = 0,
-  Range = 1,
-  Type = 2
-}
-
-open type MatchLabel {
-  let token: FengToken;
-  let kind: MatchLabelKind;
-  let value: Expression;
-  let rangeLow: Expression;
-  let rangeHigh: Expression;
-  let typeReference: TypeReference;
-}
-
-open type MatchBranch {
-  let token: FengToken;
-  let labels: MatchLabel[];
-  let body: Block;
-  let hasBinding: bool;
-  let bindingName: StringSpan;
-  let bindingMutability: Mutability;
 }
 
 open type TryCatchClause {
