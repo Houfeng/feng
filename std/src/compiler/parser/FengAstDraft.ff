@@ -304,6 +304,7 @@ open type IfExpr {
   let elseBlock: Block;
 }
 
+/** Match Targets 的分支辅助结构 */
 open type MatchBranch {
   let token: FengToken;
   let targets: MatchTarget[];
