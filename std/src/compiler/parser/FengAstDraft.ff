@@ -241,14 +241,12 @@ open type ArrayNewExpr {
  * 泛型具化表达式：对目标显式指定类型实参
  *
  * 用途：
- * - 解析 `identifier<TypeArgs>` 语法的中间节点
- * - 当前仅在解析过程中存在，必须被调用上下文消费
+ * - 表示 `identifier<TypeArgs>` 语法结构
+ * - 可作为 CallExpr 的 callee，或独立存在
  *
  * 示例：
- * - `List<int>` 在调用 `List<int>()` 中被解析为 GenericTargetExpr
- * - 解析器随后将其作为 CallExpr 的 callee
- *
- * 注意：当前不支持独立的泛型函数引用（如 `let f = foo<int>`）
+ * - 泛型调用：`foo<int>(x)` → CallExpr { callee: GenericTargetExpr, arguments: [x] }
+ * - 独立引用：`let f = foo<int>` → Binding { initializer: GenericTargetExpr }
  */
 open type GenericTargetExpr {
   let target: Expression;
