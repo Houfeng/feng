@@ -62,10 +62,16 @@ open type TypeReferenceArrayBody {
   let elementWritable: bool;
 }
 
+/**
+ * 类型引用体，支持命名类型、指针类型、数组类型
+ */
 open spec TypeReferenceBody: TypeReferenceNamedBody
 | TypeReferencePointerBody
 | TypeReferenceArrayBody;
 
+/**
+ * 类型引用种类枚举类型
+ */
 open enum TypeReferenceKind {
   Named = 0,
   Pointer = 1,
@@ -89,7 +95,7 @@ open type TypeReference {
 open type Binding {
   let token: FengToken;
   let name: StringSpan;
-  let typeReference: TypeReference;
+  let typeRef: TypeReference;
   let initializer: Expression;
   let mutability: Mutability;
   let isDestructure: bool;
