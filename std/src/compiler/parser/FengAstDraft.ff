@@ -559,7 +559,7 @@ open type TypeMember {
 
 open type TypeDeclaration {
   let name: StringSpan;
-  let typeParameters: GenericParameter[];
+  let parameterTypeRefs: GenericParameter[];
   let members: TypeMember[];
   let declaredSpecifications: TypeReference[];
   let isTuple: bool;
