@@ -10,21 +10,21 @@ import std.collections;
  * - 替换（replace）：handler 输出替换 @X(...) target 范围
  * - 声明边界查找（findDeclarationEnd）：骨架找 target
  *
- * 与 TokenStream 概念区分：TokenTransformer 专注变换（基于已 lex 的 Token 数组，
+ * 与 TokenStream 概念区分：FengTokenTransformer 专注变换（基于已 lex 的 Token 数组，
  * 支持随机访问与修改）；未来若引入只读 TokenStream（封装 next/peek/lookback 等
  * 流式读取），其职责仅为 Parser 提供 Token 流读取接口，不提供 replace 等变换方法。
  */
-open type TokenTransformer {
+open type FengTokenTransformer {
   seal var tokens: FengToken[];
 
   /** 从 Token 数组创建 */
-  open func TokenTransformer(tokens: FengToken[]) {
+  open func FengTokenTransformer(tokens: FengToken[]) {
     self.tokens = tokens;
   }
 
   /** 从 Lexer 创建（自动 tokenize） */
-  open static func fromLexer(lexer: FengLexer): TokenTransformer {
-    return TokenTransformer(lexer.tokenize());
+  open static func fromLexer(lexer: FengLexer): FengTokenTransformer {
+    return FengTokenTransformer(lexer.tokenize());
   }
 
   // ---- 基础操作 ----

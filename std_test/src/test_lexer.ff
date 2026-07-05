@@ -685,19 +685,19 @@ func lexer_minus_vs_arrow() {
   writeLine("__LEXER_MINUS_VS_ARROW__=ok");
 }
 
-// ==================== TokenTransformer ====================
+// ==================== FengTokenTransformer ====================
 
 func transformer_constructor() {
   var lexer = makeLexer("let x = 1;");
   let tokens = lexer.tokenize();
-  var transformer = TokenTransformer(tokens);
+  var transformer = FengTokenTransformer(tokens);
   check(transformer.length() == tokens.length(), "transformer/constructor-length");
   writeLine("__TRANSFORMER_CONSTRUCTOR__=ok");
 }
 
 func transformer_from_lexer() {
   var lexer = makeLexer("let x = 1;");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   check(transformer.length() > (int)0, "transformer/from-lexer-length");
   check(transformer.at(0).kind == FengTokenKind.KeywordLet, "transformer/from-lexer-first");
   writeLine("__TRANSFORMER_FROM_LEXER__=ok");
@@ -705,7 +705,7 @@ func transformer_from_lexer() {
 
 func transformer_length() {
   var lexer = makeLexer("a b c");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   // 3 identifiers + 2 spaces + 1 EOF = 6
   check(transformer.length() == (int)6, "transformer/length-count");
   writeLine("__TRANSFORMER_LENGTH__=ok");
@@ -713,7 +713,7 @@ func transformer_length() {
 
 func transformer_at() {
   var lexer = makeLexer("func foo() {}");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   check(transformer.at(0).kind == FengTokenKind.KeywordFunc, "transformer/at-0");
   check(transformer.at(1).kind == FengTokenKind.WhitespaceSpace, "transformer/at-1");
   check(transformer.at(2).kind == FengTokenKind.Identifier, "transformer/at-2");
@@ -723,7 +723,7 @@ func transformer_at() {
 
 func transformer_slice() {
   var lexer = makeLexer("let x = 1;");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   let span = transformer.slice(0, 3);
   check(span.length() == (int)3, "transformer/slice-length");
   check(span.at(0).kind == FengTokenKind.KeywordLet, "transformer/slice-0");
@@ -734,7 +734,7 @@ func transformer_slice() {
 
 func transformer_slice_empty() {
   var lexer = makeLexer("x");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   let span = transformer.slice(0, 0);
   check(span.length() == (int)0, "transformer/slice-empty-length");
   writeLine("__TRANSFORMER_SLICE_EMPTY__=ok");
@@ -742,7 +742,7 @@ func transformer_slice_empty() {
 
 func transformer_replace_same_length() {
   var lexer = makeLexer("let x = 1;");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   let originalLength = transformer.length();
 
   // Replace identifier "x" with identifier "y" by creating a new token
@@ -765,7 +765,7 @@ func transformer_replace_same_length() {
 
 func transformer_replace_longer() {
   var lexer = makeLexer("x");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   let originalLength = transformer.length();
 
   // Replace single identifier with two tokens
@@ -784,7 +784,7 @@ func transformer_replace_longer() {
 
 func transformer_replace_shorter() {
   var lexer = makeLexer("a b c");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   let originalLength = transformer.length();
 
   // Replace "a b c" (3 identifiers + 2 spaces) with single identifier
@@ -801,7 +801,7 @@ func transformer_replace_shorter() {
 
 func transformer_replace_empty() {
   var lexer = makeLexer("let x = 1;");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   let originalLength = transformer.length();
 
   // Delete the identifier (replace with empty array)
@@ -815,7 +815,7 @@ func transformer_replace_empty() {
 
 func transformer_find_declaration_end_with_braces() {
   var lexer = makeLexer("func foo() { return 1; }");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
 
   let end = transformer.findDeclarationEnd(0);
   // Should find the closing brace
@@ -827,7 +827,7 @@ func transformer_find_declaration_end_with_braces() {
 
 func transformer_find_declaration_end_nested_braces() {
   var lexer = makeLexer("func foo() { if x { return 1; } else { return 2; } }");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
 
   let end = transformer.findDeclarationEnd(0);
   // Should find the outermost closing brace
@@ -839,7 +839,7 @@ func transformer_find_declaration_end_nested_braces() {
 
 func transformer_find_declaration_end_semicolon() {
   var lexer = makeLexer("let x = 1;");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
 
   let end = transformer.findDeclarationEnd(0);
   // Should find the semicolon
@@ -851,7 +851,7 @@ func transformer_find_declaration_end_semicolon() {
 
 func transformer_find_declaration_end_with_string() {
   var lexer = makeLexer("func foo() { let s = \"{}\"; }");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
 
   let end = transformer.findDeclarationEnd(0);
   // Should ignore braces inside string literal
@@ -863,7 +863,7 @@ func transformer_find_declaration_end_with_string() {
 
 func token_span_length() {
   var lexer = makeLexer("a b c d");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   let span = transformer.slice(0, 5);
   check(span.length() == (int)5, "token-span/length");
   writeLine("__TOKEN_SPAN_LENGTH__=ok");
@@ -871,7 +871,7 @@ func token_span_length() {
 
 func token_span_at() {
   var lexer = makeLexer("let x = 1;");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   let span = transformer.slice(2, 5);  // "x", " ", "="
   check(span.at(0).kind == FengTokenKind.Identifier, "token-span/at-0");
   check(span.at(0).value.toString() == "x", "token-span/at-0-val");
@@ -882,7 +882,7 @@ func token_span_at() {
 
 func token_span_to_array() {
   var lexer = makeLexer("a b c");
-  var transformer = TokenTransformer.fromLexer(lexer);
+  var transformer = FengTokenTransformer.fromLexer(lexer);
   let span = transformer.slice(0, 3);  // "a", " ", "b"
   let arr = span.toArray();
   check(arr.length() == (int)3, "token-span/to-array-length");
