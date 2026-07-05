@@ -569,6 +569,7 @@ open type EnumItem {
   let token: FengToken;
   let name: StringSpan;
   let value: Option<int>;
+  let annotations: Annotation[];
 }
 
 open type Enum {
