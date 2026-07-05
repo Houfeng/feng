@@ -573,9 +573,21 @@ open type FitDeclaration {
 
 // 注解 (annotation) -----------------------------------------------------------
 
+/**
+ * 注解节点：@test, @std.compiler.deprecated, @test(args)
+ *
+ * target 字段设计：
+ * - 简单注解：@test → target: IdentifierExpr("test")
+ * - 限定名注解：@std.compiler.deprecated → target: 嵌套 MemberAccessExpr
+ * - 与表达式级成员访问一致，语义阶段解析 target 指向哪个注解定义
+ *
+ * arguments 字段：
+ * - 注解参数列表，如 @test("reason", 2024) 中的参数
+ * - 无参数时为空数组
+ */
 open type Annotation {
   let token: FengToken;
-  let name: StringSpan;
+  let target: Expression;
   let arguments: Expression[];
 }
 
