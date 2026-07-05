@@ -392,6 +392,11 @@ open type Expression {
 
 // 语句 ------------------------------------------------------------------------
 
+open type Block {
+  let token: FengToken;
+  let statements: Statement[];
+}
+
 open type BlockStatement {
   let block: Block;
 }
@@ -539,11 +544,6 @@ open type EnumerationItem {
   let name: StringSpan;
   let hasExplicitValue: bool;
   let explicitValue: i64;
-}
-
-open type Block {
-  let token: FengToken;
-  let statements: Statement[];
 }
 
 // ---- TypeMember variants (4) ----
