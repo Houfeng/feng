@@ -519,7 +519,7 @@ open type TypeMember {
   let body: TypeMemberBody;
 }
 
-open type TypeDeclaration {
+open type Type {
   let token: FengToken;
   let name: StringSpan;
   let visibility: Visibility;
@@ -540,7 +540,7 @@ open type EnumItem {
   let explicitValue: i64;
 }
 
-open type EnumDeclaration {
+open type Enum {
   let token: FengToken;
   let name: StringSpan;
   let annotations: Annotation[];
@@ -584,7 +584,7 @@ open spec SpecBody: ObjectSpec
 /**
  * 契约声明节点
  */
-open type SpecDeclaration {
+open type Spec {
   let token: FengToken;
   let name: StringSpan;
   let annotations: Annotation[];
@@ -600,7 +600,7 @@ open type SpecDeclaration {
  * - Some(members): 有实现体，包含适配方法/字段
  * - None: 无实现体（仅声明适配关系）
  */
-open type FitDeclaration {
+open type Fit {
   let token: FengToken;
   let targetTypeRef: TypeReference;
   let specTypeRefs: TypeReference[];
@@ -629,21 +629,21 @@ open type Annotation {
 
 // 模块 (module) ---------------------------------------------------------------
 
-open type ModuleLevelBinding {
+open type ModuleBinding {
   let binding: SimpleBinding;
 }
 
-open type ModuleLevelFunction {
+open type ModuleFunction {
   let isExtern: bool;
   let function: Function;
 }
 
-open spec ModuleMemberBody: ModuleLevelBinding
-| ModuleLevelFunction
-| TypeDeclaration
-| EnumDeclaration
-| SpecDeclaration
-| FitDeclaration;
+open spec ModuleMemberBody: ModuleBinding
+| ModuleFunction
+| Type
+| Enum
+| Spec
+| Fit;
 
 open type ModuleMember {
   let token: FengToken;
@@ -679,7 +679,7 @@ open type ModuleFile {
 
 // 模块 (module) ---------------------------------------------------------------
 
-open type ModuleDeclaration {
+open type Module {
   // 模块可见性
   let visibility: Visibility;
   // 模块名称
@@ -704,5 +704,5 @@ open type ModuleDeclaration {
 // 程序 (program) --------------------------------------------------------------
 
 open type Program {
-  let modules: ModuleDeclaration[];
+  let modules: Module[];
 }
