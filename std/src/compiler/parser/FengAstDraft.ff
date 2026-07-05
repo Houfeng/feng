@@ -177,6 +177,28 @@ open type StringLiteralExpression {
   let value: StringSpan;
 }
 
+open type UnaryOperationExpression {
+  let operator: FengTokenKind;
+  let operand: Expression;
+}
+
+open type CastExpression {
+  let targetType: TypeReference;
+  let value: Expression;
+}
+
+open type BinaryOperationExpression {
+  let operator: FengTokenKind;
+  let left: Expression;
+  let right: Expression;
+}
+
+open type CallExpression {
+  let callee: Expression;
+  let arguments: Expression[];
+  let explicitTypeArguments: TypeReference[];
+}
+
 open type ArrayLiteralExpression {
   let items: Expression[];
 }
@@ -206,12 +228,6 @@ open type GenericTargetExpression {
   let typeArguments: TypeReference[];
 }
 
-open type CallExpression {
-  let callee: Expression;
-  let arguments: Expression[];
-  let explicitTypeArguments: TypeReference[];
-}
-
 open type MemberAccessExpression {
   let object: Expression;
   let memberName: StringSpan;
@@ -222,27 +238,11 @@ open type IndexAccessExpression {
   let index: Expression;
 }
 
-open type UnaryOperationExpression {
-  let operator: FengTokenKind;
-  let operand: Expression;
-}
-
-open type BinaryOperationExpression {
-  let operator: FengTokenKind;
-  let left: Expression;
-  let right: Expression;
-}
-
 open type LambdaExpression {
   let parameters: Parameter[];
   let expressionBody: Expression;
   let blockBody: Block;
   let isBlockBody: bool;
-}
-
-open type CastExpression {
-  let targetType: TypeReference;
-  let value: Expression;
 }
 
 open type MatchOperatorExpression {
@@ -272,23 +272,7 @@ open type TryExpression {
   let catchClauses: TryCatchClause[];
 }
 
-// 类型 ------------------------------------------------------------------------
-
-
-
-// ---- 辅助结构 ----
-
-open type Annotation {
-  let token: FengToken;
-  let name: StringSpan;
-  let arguments: Expression[];
-}
-
-open enum SpecificationForm {
-  Object = 0,
-  Callable = 1,
-  Union = 2
-}
+// 表达式整体结构 ---------------------------------------------------------------
 
 open enum ExpressionKind {
   Identifier = 0,
@@ -313,6 +297,56 @@ open enum ExpressionKind {
   Match = 19,
   Try = 20
 }
+
+open spec ExpressionBody: IdentifierExpression
+| BooleanLiteralExpression
+| IntegerLiteralExpression
+| FloatLiteralExpression
+| StringLiteralExpression
+| ArrayLiteralExpression
+| TupleLiteralExpression
+| ObjectLiteralExpression
+| ArrayNewExpression
+| GenericTargetExpression
+| CallExpression
+| MemberAccessExpression
+| IndexAccessExpression
+| UnaryOperationExpression
+| BinaryOperationExpression
+| LambdaExpression
+| CastExpression
+| MatchOperatorExpression
+| IfExpression
+| MatchExpression
+| TryExpression;
+
+open type Expression {
+  let token: FengToken;
+  let kind: ExpressionKind;
+  let body: ExpressionBody;
+}
+
+// 语句 ------------------------------------------------------------------------
+
+
+// 类型 ------------------------------------------------------------------------
+
+
+
+// ---- 辅助结构 ----
+
+open type Annotation {
+  let token: FengToken;
+  let name: StringSpan;
+  let arguments: Expression[];
+}
+
+open enum SpecificationForm {
+  Object = 0,
+  Callable = 1,
+  Union = 2
+}
+
 
 open enum StatementKind {
   Block = 0,
@@ -396,35 +430,6 @@ open type IfClause {
 open type Block {
   let token: FengToken;
   let statements: Statement[];
-}
-
-open spec ExpressionBody:
-IdentifierExpression
-| BooleanLiteralExpression
-| IntegerLiteralExpression
-| FloatLiteralExpression
-| StringLiteralExpression
-| ArrayLiteralExpression
-| TupleLiteralExpression
-| ObjectLiteralExpression
-| ArrayNewExpression
-| GenericTargetExpression
-| CallExpression
-| MemberAccessExpression
-| IndexAccessExpression
-| UnaryOperationExpression
-| BinaryOperationExpression
-| LambdaExpression
-| CastExpression
-| MatchOperatorExpression
-| IfExpression
-| MatchExpression
-| TryExpression;
-
-open type Expression {
-  let token: FengToken;
-  let kind: ExpressionKind;
-  let body: ExpressionBody;
 }
 
 // ---- Statement variants (14) ----
