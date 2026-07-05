@@ -254,12 +254,12 @@ open type GenericTargetExpr {
 }
 
 open type MemberAccessExpr {
-  let object: Expression;
-  let memberName: StringSpan;
+  let target: Expression;
+  let member: StringSpan;
 }
 
 open type IndexAccessExpr {
-  let object: Expression;
+  let target: Expression;
   let index: Expression;
 }
 
