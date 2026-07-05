@@ -44,21 +44,21 @@ open enum Mutability {
  */
 open type TypeReferenceNamedBody {
   let segments: StringSpan[];
-  let typeArguments: TypeReference[];
+  let parameterTypeRefs: TypeReference[];
 }
 
 /**
  * 指针类型引用：int*, string*
  */
 open type TypeReferencePointerBody {
-  let inner: TypeReference;
+  let targetTypeRef: TypeReference;
 }
 
 /**
  * 数组类型引用：int[], int[!]
  */
 open type TypeReferenceArrayBody {
-  let inner: TypeReference;
+  let elementTypeRef: TypeReference;
   let elementWritable: bool;
 }
 
@@ -90,17 +90,30 @@ open type TypeReference {
 // 绑定 ------------------------------------------------------------------------
 
 /**
- * 绑定节点，用于顶层/成员/局部绑定
+ * 简单绑定：let x: int = 5;
  */
-open type Binding {
+open type SimpleBinding {
   let token: FengToken;
   let name: StringSpan;
   let mutability: Mutability;
   let typeRef: TypeReference;
   let initializer: Expression;
-  let isDestructure: bool;
-  let destructureNames: StringSpan[];
 }
+
+/**
+ * 解构绑定：let (a, b) = (1, 2);
+ */
+open type DestructureBinding {
+  let token: FengToken;
+  let mutability: Mutability;
+  let names: StringSpan[];
+  let initializer: Expression;
+}
+
+/**
+ * 绑定联合类型，用于顶层/成员/局部绑定
+ */
+open spec Binding: SimpleBinding | DestructureBinding;
 
 // 泛型参数 ---------------------------------------------------------------------
 
@@ -110,7 +123,7 @@ open type Binding {
 open type GenericParameter {
   let token: FengToken;
   let name: StringSpan;
-  let typeRef: TypeReference;
+  let constraintTypeRef: TypeReference;
 }
 
 // 函数 ------------------------------------------------------------------------
