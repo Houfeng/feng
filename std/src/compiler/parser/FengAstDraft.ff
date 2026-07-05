@@ -666,13 +666,14 @@ open type ModuleImport {
 
 open type ModuleFile {
   let token: FengToken;
-  let moduleVisibility: Visibility;
-  let moduleName: SegmentedName;
   // import 作用于文件，而非整个模块
   let imports: ModuleImport[];
   // 当前文件的路径
   let path: string;
-  let members: ModuleMember[];
+  // ---
+  let moduleVisibility: Visibility;
+  let moduleName: SegmentedName;
+  let moduleMembers: ModuleMember[];
 }
 
 // 语义阶段 =====================================================================
