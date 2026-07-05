@@ -133,13 +133,10 @@ open type GenericParameter {
 // 函数 ------------------------------------------------------------------------
 
 /**
- * 函数参数节点，支持可变性和可变参数
+ * 函数参数节点，引用 SimpleBinding，支持可变参数
  */
 open type Parameter {
-  let token: FengToken;
-  let name: StringSpan;
-  let typeRef: Option<TypeReference>;
-  let mutability: Mutability;
+  let binding: SimpleBinding;
   let isVariadic: bool;
 }
 
@@ -155,7 +152,6 @@ open type Function {
   let body: Block;
   let isExtern: bool;
 }
-
 
 // 类型 ------------------------------------------------------------------------
 
