@@ -678,9 +678,13 @@ open type ModuleFile {
 // 语议阶段 ---------------------------------------------------------------------
 
 open type ModuleDeclaration {
+  // 模块可见性
   let visibility: Visibility;
+  // 模块名称
   let name: SegmentedName;
+
   // 模块可分布在多个文件，但 import 作用于文件，而非整个模块
+  // 语义阶段，根据 path 合并为同一个模块，同时需检查可见性声明一致
   let files: ModuleFile[];
 
   /**
