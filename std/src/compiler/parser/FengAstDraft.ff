@@ -390,12 +390,14 @@ open type Expression {
   let body: ExpressionBody;
 }
 
-// 语句 ------------------------------------------------------------------------
+// 块结构 ----------------------------------------------------------------------
 
 open type Block {
   let token: FengToken;
   let statements: Statement[];
 }
+
+// 语句 ------------------------------------------------------------------------
 
 open type BlockStatement {
   let block: Block;
