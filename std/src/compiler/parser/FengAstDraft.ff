@@ -279,11 +279,11 @@ open type RangeExpr {
 }
 
 open spec MatchTarget: IntegerLiteralExpr
-  | StringLiteralExpr
-  | BooleanLiteralExpr
-  | MemberAccessExpr
-  | TypeReference
-  | SimpleBinding;
+| StringLiteralExpr
+| BooleanLiteralExpr
+| MemberAccessExpr
+| TypeReference
+| SimpleBinding;
 
 /**
  * 匹配运算符表达式：value match pattern1 | pattern2 | ...
@@ -392,75 +392,6 @@ open type Expression {
 
 // 语句 ------------------------------------------------------------------------
 
-
-// 类型 ------------------------------------------------------------------------
-
-
-
-// ---- 辅助结构 ----
-
-open type Annotation {
-  let token: FengToken;
-  let name: StringSpan;
-  let arguments: Expression[];
-}
-
-open enum SpecificationForm {
-  Object = 0,
-  Callable = 1,
-  Union = 2
-}
-
-
-open enum StatementKind {
-  Block = 0,
-  Binding = 1,
-  Assignment = 2,
-  Expression = 3,
-  Try = 4,
-  If = 5,
-  Match = 6,
-  While = 7,
-  For = 8,
-  Return = 9,
-  Throw = 10,
-  Break = 11,
-  Continue = 12,
-  Defer = 13
-}
-
-open enum TypeMemberKind {
-  Field = 0,
-  Method = 1,
-  Constructor = 2,
-  Finalizer = 3
-}
-
-open enum DeclarationKind {
-  GlobalBinding = 0,
-  Type = 1,
-  Enumeration = 2,
-  Specification = 3,
-  Fit = 4,
-  Function = 5
-}
-
-// ---- 辅助结构 ----
-
-open type EnumerationItem {
-  let token: FengToken;
-  let name: StringSpan;
-  let hasExplicitValue: bool;
-  let explicitValue: i64;
-}
-
-open type Block {
-  let token: FengToken;
-  let statements: Statement[];
-}
-
-// ---- Statement variants (14) ----
-
 open type BlockStatement {
   let block: Block;
 }
@@ -529,8 +460,24 @@ open type DeferStatement {
   let body: Block;
 }
 
-open spec StatementBody:
-BlockStatement
+open enum StatementKind {
+  Block = 0,
+  Binding = 1,
+  Assignment = 2,
+  Expression = 3,
+  Try = 4,
+  If = 5,
+  Match = 6,
+  While = 7,
+  For = 8,
+  Return = 9,
+  Throw = 10,
+  Break = 11,
+  Continue = 12,
+  Defer = 13
+}
+
+open spec StatementBody: BlockStatement
 | BindingStatement
 | AssignmentStatement
 | ExpressionStatement
@@ -549,6 +496,54 @@ open type Statement {
   let token: FengToken;
   let kind: StatementKind;
   let body: StatementBody;
+}
+
+// 类型 ------------------------------------------------------------------------
+
+
+
+// ---- 辅助结构 ----
+
+open type Annotation {
+  let token: FengToken;
+  let name: StringSpan;
+  let arguments: Expression[];
+}
+
+open enum SpecificationForm {
+  Object = 0,
+  Callable = 1,
+  Union = 2
+}
+
+open enum TypeMemberKind {
+  Field = 0,
+  Method = 1,
+  Constructor = 2,
+  Finalizer = 3
+}
+
+open enum DeclarationKind {
+  GlobalBinding = 0,
+  Type = 1,
+  Enumeration = 2,
+  Specification = 3,
+  Fit = 4,
+  Function = 5
+}
+
+// ---- 辅助结构 ----
+
+open type EnumerationItem {
+  let token: FengToken;
+  let name: StringSpan;
+  let hasExplicitValue: bool;
+  let explicitValue: i64;
+}
+
+open type Block {
+  let token: FengToken;
+  let statements: Statement[];
 }
 
 // ---- TypeMember variants (4) ----
