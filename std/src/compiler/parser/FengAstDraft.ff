@@ -324,13 +324,14 @@ open type MatchExpr {
 
 open type CatchClause {
   let token: FengToken;
-  let binding: Option<SimpleBinding>;
+  let binding: SimpleBinding;
   let body: Block;
 }
 
 open type TryExpr {
   let body: Expression;
   let catchClauses: CatchClause[];
+  let catchAllBlock: Option<Block>;
 }
 
 // 表达式整体结构 ---------------------------------------------------------------
@@ -481,6 +482,7 @@ open type ExpressionStatement {
 open type TryStatement {
   let body: Expression;
   let catchClauses: CatchClause[];
+  let catchAllBlock: Option<Block>;
 }
 
 open type IfStatement {
