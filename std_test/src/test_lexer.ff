@@ -685,6 +685,213 @@ func lexer_minus_vs_arrow() {
   writeLine("__LEXER_MINUS_VS_ARROW__=ok");
 }
 
+// ==================== TokenTransformer ====================
+
+func transformer_constructor() {
+  var lexer = makeLexer("let x = 1;");
+  let tokens = lexer.tokenize();
+  var transformer = TokenTransformer(tokens);
+  check(transformer.length() == tokens.length(), "transformer/constructor-length");
+  writeLine("__TRANSFORMER_CONSTRUCTOR__=ok");
+}
+
+func transformer_from_lexer() {
+  var lexer = makeLexer("let x = 1;");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  check(transformer.length() > (int)0, "transformer/from-lexer-length");
+  check(transformer.at(0).kind == FengTokenKind.KeywordLet, "transformer/from-lexer-first");
+  writeLine("__TRANSFORMER_FROM_LEXER__=ok");
+}
+
+func transformer_length() {
+  var lexer = makeLexer("a b c");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  // 3 identifiers + 2 spaces + 1 EOF = 6
+  check(transformer.length() == (int)6, "transformer/length-count");
+  writeLine("__TRANSFORMER_LENGTH__=ok");
+}
+
+func transformer_at() {
+  var lexer = makeLexer("func foo() {}");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  check(transformer.at(0).kind == FengTokenKind.KeywordFunc, "transformer/at-0");
+  check(transformer.at(1).kind == FengTokenKind.WhitespaceSpace, "transformer/at-1");
+  check(transformer.at(2).kind == FengTokenKind.Identifier, "transformer/at-2");
+  check(transformer.at(2).value.toString() == "foo", "transformer/at-2-val");
+  writeLine("__TRANSFORMER_AT__=ok");
+}
+
+func transformer_slice() {
+  var lexer = makeLexer("let x = 1;");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  let span = transformer.slice(0, 3);
+  check(span.length() == (int)3, "transformer/slice-length");
+  check(span.at(0).kind == FengTokenKind.KeywordLet, "transformer/slice-0");
+  check(span.at(1).kind == FengTokenKind.WhitespaceSpace, "transformer/slice-1");
+  check(span.at(2).kind == FengTokenKind.Identifier, "transformer/slice-2");
+  writeLine("__TRANSFORMER_SLICE__=ok");
+}
+
+func transformer_slice_empty() {
+  var lexer = makeLexer("x");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  let span = transformer.slice(0, 0);
+  check(span.length() == (int)0, "transformer/slice-empty-length");
+  writeLine("__TRANSFORMER_SLICE_EMPTY__=ok");
+}
+
+func transformer_replace_same_length() {
+  var lexer = makeLexer("let x = 1;");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  let originalLength = transformer.length();
+
+  // Replace identifier "x" with identifier "y" by creating a new token
+  let oldToken = transformer.at(2);  // identifier token
+  let source = FengSource("y", "test.ff");
+  var newToken = FengToken {
+    kind: FengTokenKind.Identifier,
+    value: source.slice(0, 1),
+    source: oldToken.source,
+    location: oldToken.location
+  };
+
+  let replacement = [newToken];
+  transformer.replace(2, 3, replacement);
+
+  check(transformer.length() == originalLength, "transformer/replace-same-length");
+  check(transformer.at(2).value.toString() == "y", "transformer/replace-same-value");
+  writeLine("__TRANSFORMER_REPLACE_SAME_LENGTH__=ok");
+}
+
+func transformer_replace_longer() {
+  var lexer = makeLexer("x");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  let originalLength = transformer.length();
+
+  // Replace single identifier with two tokens
+  var lexer2 = makeLexer("a b");
+  let tokens2 = lexer2.tokenize();
+  let replacement = [tokens2[0], tokens2[1], tokens2[2]];  // "a", " ", "b"
+
+  transformer.replace(0, 1, replacement);
+
+  check(transformer.length() == originalLength + (int)2, "transformer/replace-longer-length");
+  check(transformer.at(0).value.toString() == "a", "transformer/replace-longer-0");
+  check(transformer.at(1).kind == FengTokenKind.WhitespaceSpace, "transformer/replace-longer-1");
+  check(transformer.at(2).value.toString() == "b", "transformer/replace-longer-2");
+  writeLine("__TRANSFORMER_REPLACE_LONGER__=ok");
+}
+
+func transformer_replace_shorter() {
+  var lexer = makeLexer("a b c");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  let originalLength = transformer.length();
+
+  // Replace "a b c" (3 identifiers + 2 spaces) with single identifier
+  var lexer2 = makeLexer("x");
+  let tokens2 = lexer2.tokenize();
+  let replacement = [tokens2[0]];  // just "x"
+
+  transformer.replace(0, 5, replacement);
+
+  check(transformer.length() == originalLength - (int)4, "transformer/replace-shorter-length");
+  check(transformer.at(0).value.toString() == "x", "transformer/replace-shorter-0");
+  writeLine("__TRANSFORMER_REPLACE_SHORTER__=ok");
+}
+
+func transformer_replace_empty() {
+  var lexer = makeLexer("let x = 1;");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  let originalLength = transformer.length();
+
+  // Delete the identifier (replace with empty array)
+  transformer.replace(2, 3, []);
+
+  check(transformer.length() == originalLength - (int)1, "transformer/replace-empty-length");
+  // After deletion, position 2 should be the space before "="
+  check(transformer.at(2).kind == FengTokenKind.WhitespaceSpace, "transformer/replace-empty-shift");
+  writeLine("__TRANSFORMER_REPLACE_EMPTY__=ok");
+}
+
+func transformer_find_declaration_end_with_braces() {
+  var lexer = makeLexer("func foo() { return 1; }");
+  var transformer = TokenTransformer.fromLexer(lexer);
+
+  let end = transformer.findDeclarationEnd(0);
+  // Should find the closing brace
+  check(end > (int)0, "transformer/find-decl-end-braces-found");
+  check(transformer.at(end - 1).kind == FengTokenKind.PunctuationRightBrace,
+        "transformer/find-decl-end-braces-rbrace");
+  writeLine("__TRANSFORMER_FIND_DECLARATION_END_WITH_BRACES__=ok");
+}
+
+func transformer_find_declaration_end_nested_braces() {
+  var lexer = makeLexer("func foo() { if x { return 1; } else { return 2; } }");
+  var transformer = TokenTransformer.fromLexer(lexer);
+
+  let end = transformer.findDeclarationEnd(0);
+  // Should find the outermost closing brace
+  check(end > (int)0, "transformer/find-decl-end-nested-found");
+  check(transformer.at(end - 1).kind == FengTokenKind.PunctuationRightBrace,
+        "transformer/find-decl-end-nested-rbrace");
+  writeLine("__TRANSFORMER_FIND_DECLARATION_END_NESTED_BRACES__=ok");
+}
+
+func transformer_find_declaration_end_semicolon() {
+  var lexer = makeLexer("let x = 1;");
+  var transformer = TokenTransformer.fromLexer(lexer);
+
+  let end = transformer.findDeclarationEnd(0);
+  // Should find the semicolon
+  check(end > (int)0, "transformer/find-decl-end-semi-found");
+  check(transformer.at(end - 1).kind == FengTokenKind.PunctuationSemicolon,
+        "transformer/find-decl-end-semi-semicolon");
+  writeLine("__TRANSFORMER_FIND_DECLARATION_END_SEMICOLON__=ok");
+}
+
+func transformer_find_declaration_end_with_string() {
+  var lexer = makeLexer("func foo() { let s = \"{}\"; }");
+  var transformer = TokenTransformer.fromLexer(lexer);
+
+  let end = transformer.findDeclarationEnd(0);
+  // Should ignore braces inside string literal
+  check(end > (int)0, "transformer/find-decl-end-string-found");
+  check(transformer.at(end - 1).kind == FengTokenKind.PunctuationRightBrace,
+        "transformer/find-decl-end-string-rbrace");
+  writeLine("__TRANSFORMER_FIND_DECLARATION_END_WITH_STRING__=ok");
+}
+
+func token_span_length() {
+  var lexer = makeLexer("a b c d");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  let span = transformer.slice(0, 5);
+  check(span.length() == (int)5, "token-span/length");
+  writeLine("__TOKEN_SPAN_LENGTH__=ok");
+}
+
+func token_span_at() {
+  var lexer = makeLexer("let x = 1;");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  let span = transformer.slice(2, 5);  // "x", " ", "="
+  check(span.at(0).kind == FengTokenKind.Identifier, "token-span/at-0");
+  check(span.at(0).value.toString() == "x", "token-span/at-0-val");
+  check(span.at(1).kind == FengTokenKind.WhitespaceSpace, "token-span/at-1");
+  check(span.at(2).kind == FengTokenKind.OperatorAssign, "token-span/at-2");
+  writeLine("__TOKEN_SPAN_AT__=ok");
+}
+
+func token_span_to_array() {
+  var lexer = makeLexer("a b c");
+  var transformer = TokenTransformer.fromLexer(lexer);
+  let span = transformer.slice(0, 3);  // "a", " ", "b"
+  let arr = span.toArray();
+  check(arr.length() == (int)3, "token-span/to-array-length");
+  check(arr[0].value.toString() == "a", "token-span/to-array-0");
+  check(arr[1].kind == FengTokenKind.WhitespaceSpace, "token-span/to-array-1");
+  check(arr[2].value.toString() == "b", "token-span/to-array-2");
+  writeLine("__TOKEN_SPAN_TO_ARRAY__=ok");
+}
+
 // ==================== 注册 ====================
 
 open func run_lexer_tests() {
@@ -753,5 +960,22 @@ open func run_lexer_tests() {
     test("lexer_mixed_tokens()", () { lexer_mixed_tokens(); });
     test("lexer_dot_vs_decimal()", () { lexer_dot_vs_decimal(); });
     test("lexer_minus_vs_arrow()", () { lexer_minus_vs_arrow(); });
+    test("transformer_constructor()", () { transformer_constructor(); });
+    test("transformer_from_lexer()", () { transformer_from_lexer(); });
+    test("transformer_length()", () { transformer_length(); });
+    test("transformer_at()", () { transformer_at(); });
+    test("transformer_slice()", () { transformer_slice(); });
+    test("transformer_slice_empty()", () { transformer_slice_empty(); });
+    test("transformer_replace_same_length()", () { transformer_replace_same_length(); });
+    test("transformer_replace_longer()", () { transformer_replace_longer(); });
+    test("transformer_replace_shorter()", () { transformer_replace_shorter(); });
+    test("transformer_replace_empty()", () { transformer_replace_empty(); });
+    test("transformer_find_declaration_end_with_braces()", () { transformer_find_declaration_end_with_braces(); });
+    test("transformer_find_declaration_end_nested_braces()", () { transformer_find_declaration_end_nested_braces(); });
+    test("transformer_find_declaration_end_semicolon()", () { transformer_find_declaration_end_semicolon(); });
+    test("transformer_find_declaration_end_with_string()", () { transformer_find_declaration_end_with_string(); });
+    test("token_span_length()", () { token_span_length(); });
+    test("token_span_at()", () { token_span_at(); });
+    test("token_span_to_array()", () { token_span_to_array(); });
   });
 }

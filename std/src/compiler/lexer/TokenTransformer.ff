@@ -1,0 +1,164 @@
+open module std.compiler.lexer;
+
+import std.collections;
+
+/**
+ * Token 变换器。
+ *
+ * 基于 FengToken[] 的可变变换器，为自定义注解的 pre-Parse 阶段提供 Token 操作能力：
+ * - 切片（slice）：提取声明的 Token 范围
+ * - 替换（replace）：handler 输出替换 @X(...) target 范围
+ * - 声明边界查找（findDeclarationEnd）：骨架找 target
+ *
+ * 与 TokenStream 概念区分：TokenTransformer 专注变换（基于已 lex 的 Token 数组，
+ * 支持随机访问与修改）；未来若引入只读 TokenStream（封装 next/peek/lookback 等
+ * 流式读取），其职责仅为 Parser 提供 Token 流读取接口，不提供 replace 等变换方法。
+ */
+open type TokenTransformer {
+  seal var tokens: FengToken[];
+
+  /** 从 Token 数组创建 */
+  open func TokenTransformer(tokens: FengToken[]) {
+    self.tokens = tokens;
+  }
+
+  /** 从 Lexer 创建（自动 tokenize） */
+  open static func fromLexer(lexer: FengLexer): TokenTransformer {
+    return TokenTransformer(lexer.tokenize());
+  }
+
+  // ---- 基础操作 ----
+
+  /** Token 数量 */
+  open func length(): int {
+    return self.tokens.length();
+  }
+
+  /** 按索引获取 Token */
+  open func at(index: int): FengToken {
+    return self.tokens[index];
+  }
+
+  // ---- 注解变换操作 ----
+
+  /**
+   * 提取 Token 子范围 [start, end)。
+   * 用于骨架找 target 时提取声明的 Token 范围。
+   */
+  open func slice(start: int, end: int): TokenSpan {
+    return TokenSpan {
+      tokens: self.tokens,
+      start: start,
+      end: end
+    };
+  }
+
+  /**
+   * 替换 Token 子范围 [start, end) 为新的 Token 数组。
+   * 用于注解 handler 输出替换整个 @X(...) target 范围。
+   * 替换后 Token 数组长度可能变化。
+   */
+  open func replace(start: int, end: int, replacement: FengToken[]): void {
+    var result = List<FengToken>();
+
+    // 添加替换范围前的 tokens
+    for var i = 0; i < start; i = i + 1 {
+      result.add(self.tokens[i]);
+    }
+
+    // 添加替换内容
+    for let token in replacement {
+      result.add(token);
+    }
+
+    // 添加替换范围后的 tokens
+    for var i = end; i < self.tokens.length(); i = i + 1 {
+      result.add(self.tokens[i]);
+    }
+
+    self.tokens = result.entries();
+  }
+
+  /**
+   * 从指定位置向前查找声明边界。
+   *
+   * 算法：
+   * 1. 从 startIndex 向前扫描
+   * 2. 追踪花括号嵌套深度
+   * 3. 遇到 '{' 深度 +1，遇到 '}' 深度 -1
+   * 4. 深度归零后的下一个位置即为声明结束
+   * 5. 对于无花括号的声明（如 `spec Foo: int | string;`），以分号为界
+   *
+   * 返回声明结束的索引（不含）。
+   */
+  open func findDeclarationEnd(startIndex: int): int {
+    var braceDepth: int = 0;
+    var index = startIndex;
+
+    while index < self.tokens.length() {
+      let token = self.tokens[index];
+
+      // 跳过字符串和原始字符串（其中的花括号不计入深度）
+      if token.kind == FengTokenKind.LiteralString ||
+         token.kind == FengTokenKind.LiteralRawString {
+        index = index + 1;
+        continue;
+      }
+
+      // 追踪花括号深度
+      if token.kind == FengTokenKind.PunctuationLeftBrace {
+        braceDepth = braceDepth + 1;
+      } else if token.kind == FengTokenKind.PunctuationRightBrace {
+        braceDepth = braceDepth - 1;
+        // 深度归零，找到声明结束
+        if braceDepth == 0 {
+          return index + 1;
+        }
+      }
+
+      // 无花括号声明以分号为界
+      if braceDepth == 0 && token.kind == FengTokenKind.PunctuationSemicolon {
+        return index + 1;
+      }
+
+      index = index + 1;
+    }
+
+    // 到达末尾
+    return self.tokens.length();
+  }
+}
+
+/**
+ * Token 流子范围视图。
+ *
+ * 持有对原 Token 数组的引用和范围索引，
+ * 用于注解 handler 接收 target Token 范围。
+ */
+open type TokenSpan {
+  /** 底层 Token 数组引用 */
+  open let tokens: FengToken[];
+  /** 起始索引（含） */
+  open let start: int;
+  /** 结束索引（不含） */
+  open let end: int;
+
+  /** 子范围长度 */
+  open func length(): int {
+    return self.end - self.start;
+  }
+
+  /** 按相对索引获取 Token */
+  open func at(index: int): FengToken {
+    return self.tokens[self.start + index];
+  }
+
+  /** 转为独立 Token 数组（拷贝） */
+  open func toArray(): FengToken[] {
+    var result = List<FengToken>();
+    for var i = self.start; i < self.end; i = i + 1 {
+      result.add(self.tokens[i]);
+    }
+    return result.entries();
+  }
+}
