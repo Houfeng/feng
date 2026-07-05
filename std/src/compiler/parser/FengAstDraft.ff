@@ -2,6 +2,7 @@ open module std.compiler.parser;
 
 import std;
 import std.text;
+import std.collections;
 import std.compiler.lexer;
 
 // 可见性 & 可变性 --------------------------------------------------------------
@@ -663,7 +664,7 @@ open type ModuleImport {
   let alias: Option<StringSpan>;
 }
 
-open type ModuleFileMeta {
+open type ModuleFile {
   let token: FengToken;
   let moduleVisibility: Visibility;
   let moduleName: SegmentedName;
@@ -671,20 +672,27 @@ open type ModuleFileMeta {
   let imports: ModuleImport[];
   // 当前文件的路径
   let path: string;
-}
-
-open type ModuleFile {
-  let meta: ModuleFileMeta;
   let members: ModuleMember[];
 }
+
+// 语议阶段 ---------------------------------------------------------------------
 
 open type ModuleDeclaration {
   let visibility: Visibility;
   let name: SegmentedName;
   // 模块可分布在多个文件，但 import 作用于文件，而非整个模块
-  let files: ModuleFileMeta[];
-  // 合并多个文件的成员列表
-  let members: ModuleMember[];
+  let files: ModuleFile[];
+
+  /**
+   * 返回模块中所有成员的列表
+   */
+  func modules(): ModuleMember[] {
+    var list = List<ModuleMember>();
+    for let file in self.files {
+      for let member in file.members { list.add(member); }
+    }
+    return list.entries();
+  }
 }
 
 // 程序 (program) --------------------------------------------------------------
