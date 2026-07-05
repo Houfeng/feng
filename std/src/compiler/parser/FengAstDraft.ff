@@ -549,7 +549,6 @@ open type TypeMember {
 open type Type {
   let token: FengToken;
   let name: StringSpan;
-  let visibility: Visibility;
   let genericParameters: GenericParameter[];
   let members: TypeMember[];
   let specs: TypeReference[];
@@ -581,6 +580,7 @@ open type Enum {
  * spec Named { let name: string; func greet(): string; }
  */
 open type ObjectSpec {
+  let token: FengToken;
   let genericParameters: GenericParameter[];
   let members: TypeMember[];
   let parentTypeRefs: TypeReference[];
@@ -591,6 +591,7 @@ open type ObjectSpec {
  * spec Predicate<T>: (T) -> bool;
  */
 open type CallableSpec {
+  let token: FengToken;
   let genericParameters: GenericParameter[];
   let parameters: Parameter[];
   let returnTypeRef: TypeReference;
@@ -601,6 +602,7 @@ open type CallableSpec {
  * spec Option<T>: Some<T> | None;
  */
 open type UnionSpec {
+  let token: FengToken;
   let memberTypeRefs: TypeReference[];
 }
 
