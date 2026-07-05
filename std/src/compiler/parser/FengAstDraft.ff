@@ -517,59 +517,11 @@ open type Statement {
 
 // 类型 (type) -----------------------------------------------------------------
 
-
-// 枚举 (enum) -----------------------------------------------------------------
-
-
-// 契约 (spec) -----------------------------------------------------------------
-
-
-// 适配器 (fit) ----------------------------------------------------------------
-
-
-// 注解 (annotation) -----------------------------------------------------------
-
-
-// 顶层声明 (declaration) -------------------------------------------------------
-
-
-// ---- 辅助结构 ----
-
-open type Annotation {
-  let token: FengToken;
-  let name: StringSpan;
-  let arguments: Expression[];
-}
-
-open enum SpecificationForm {
-  Object = 0,
-  Callable = 1,
-  Union = 2
-}
-
 open enum TypeMemberKind {
   Field = 0,
   Method = 1,
   Constructor = 2,
   Finalizer = 3
-}
-
-open enum DeclarationKind {
-  GlobalBinding = 0,
-  Type = 1,
-  Enumeration = 2,
-  Specification = 3,
-  Fit = 4,
-  Function = 5
-}
-
-// ---- 辅助结构 ----
-
-open type EnumerationItem {
-  let token: FengToken;
-  let name: StringSpan;
-  let hasExplicitValue: bool;
-  let explicitValue: i64;
 }
 
 // ---- TypeMember variants (4) ----
@@ -600,6 +552,53 @@ open type TypeMember {
   let docComment: StringSpan;
   let annotations: Annotation[];
   let body: TypeMemberBody;
+}
+
+// 枚举 (enum) -----------------------------------------------------------------
+
+
+// 契约 (spec) -----------------------------------------------------------------
+
+
+// 适配器 (fit) ----------------------------------------------------------------
+
+
+// 注解 (annotation) -----------------------------------------------------------
+
+
+// 顶层声明 (declaration) -------------------------------------------------------
+
+
+// ---- 辅助结构 ----
+
+open type Annotation {
+  let token: FengToken;
+  let name: StringSpan;
+  let arguments: Expression[];
+}
+
+open enum SpecificationForm {
+  Object = 0,
+  Callable = 1,
+  Union = 2
+}
+
+open enum DeclarationKind {
+  GlobalBinding = 0,
+  Type = 1,
+  Enumeration = 2,
+  Specification = 3,
+  Fit = 4,
+  Function = 5
+}
+
+// ---- 辅助结构 ----
+
+open type EnumerationItem {
+  let token: FengToken;
+  let name: StringSpan;
+  let hasExplicitValue: bool;
+  let explicitValue: i64;
 }
 
 // ---- Declaration variants (6) ----
