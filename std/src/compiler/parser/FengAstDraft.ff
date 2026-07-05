@@ -150,7 +150,6 @@ open type Function {
   let parameters: Parameter[];
   let returnTypeRef: Option<TypeReference>;
   let body: Block;
-  let isExtern: bool;
 }
 
 // 基础表达式 -------------------------------------------------------------------
@@ -556,6 +555,7 @@ open type TypeMember {
 }
 
 open type TypeDeclaration {
+  let token: FengToken;
   let name: StringSpan;
   let visibility: Visibility;
   let parameters: GenericParameter[];
@@ -574,6 +574,7 @@ open type GlobalBinding {
 
 open type GlobalFunction {
   let visibility: Visibility;
+  let isExtern: bool;
   let function: Function;
 }
 
