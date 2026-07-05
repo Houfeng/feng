@@ -9567,28 +9567,10 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
         return;
     }
     if (s->form == FENG_SPEC_FORM_UNION) {
-        buf_append_fmt(&cg->headers, "struct %s {\n", s->c_value_struct_name);
-        buf_append_cstr(&cg->headers, "    uint32_t tag;\n");
-        buf_append_cstr(&cg->headers, "    FengManagedSlotDescriptor _fwd;\n");
-        buf_append_cstr(&cg->headers, "    union {\n");
-        if (s->union_member_count == 0U) {
-            buf_append_cstr(&cg->headers, "        char _empty;\n");
-        }
-        for (size_t member_index = 0U;
-             member_index < s->union_member_count;
-             ++member_index) {
-            buf_append_cstr(&cg->headers, "        ");
-            if (s->union_member_types[member_index] != NULL &&
-                s->union_member_types[member_index]->kind == CG_TYPE_VOID) {
-                buf_append_cstr(&cg->headers, "char ");
-            } else {
-                cg_emit_c_type(&cg->headers, s->union_member_types[member_index]);
-                buf_append_cstr(&cg->headers, " ");
-            }
-            cg_append_union_payload_field_name(&cg->headers, member_index);
-            buf_append_cstr(&cg->headers, ";\n");
-        }
-        buf_append_cstr(&cg->headers, "    } payload;\n};\n");
+        /* Union spec struct body is emitted by cg_emit_value_and_union_struct_bodies_sorted
+         * (Pass 3.5a) which topologically sorts value types and union specs together.
+         * Here we only emit a forward declaration and the descriptor extern. */
+        buf_append_fmt(&cg->headers, "struct %s;\n", s->c_value_struct_name);
         bool ext_visible = cg_user_spec_descriptor_is_externally_visible(cg, s);
         buf_append_fmt(&cg->headers,
             ext_visible ? "extern const FengAggregateDescriptor %s;\n"
@@ -32017,75 +31999,151 @@ static void cg_emit_value_type_struct_body(CG *cg, const UserType *t) {
     buf_append_cstr(&cg->headers, "};\n");
 }
 
-/* Pass 3.5a: emit full struct bodies for non-empty value-semantics types
- * (tuple / @value) into cg->headers, topologically sorted so that a type
- * embedded by value in another type is emitted first.  Zero-field value
- * types are already emitted in cg_emit_user_type_forward (Pass 3).
- *
- * Without topological ordering, a value type A that has a field of value
- * type B may be emitted before B, producing an incomplete-type error in
- * the C compiler (by-value embedding requires the complete struct). */
-static bool cg_emit_value_type_struct_bodies_sorted(CG *cg) {
-    size_t n = cg->user_type_count;
-    if (n == 0U) return true;
+/* Emit the struct body for a union-form spec value type into headers.
+ * Called from the combined topological sort (Pass 3.5a) so that value
+ * types embedded by value in the union payload are already defined. */
+static void cg_emit_union_spec_struct_body(CG *cg, const UserSpec *s) {
+    buf_append_fmt(&cg->headers, "struct %s {\n", s->c_value_struct_name);
+    buf_append_cstr(&cg->headers, "    uint32_t tag;\n");
+    buf_append_cstr(&cg->headers, "    FengManagedSlotDescriptor _fwd;\n");
+    buf_append_cstr(&cg->headers, "    union {\n");
+    if (s->union_member_count == 0U) {
+        buf_append_cstr(&cg->headers, "        char _empty;\n");
+    }
+    for (size_t member_index = 0U;
+         member_index < s->union_member_count;
+         ++member_index) {
+        buf_append_cstr(&cg->headers, "        ");
+        if (s->union_member_types[member_index] != NULL &&
+            s->union_member_types[member_index]->kind == CG_TYPE_VOID) {
+            buf_append_cstr(&cg->headers, "char ");
+        } else {
+            cg_emit_c_type(&cg->headers, s->union_member_types[member_index]);
+            buf_append_cstr(&cg->headers, " ");
+        }
+        cg_append_union_payload_field_name(&cg->headers, member_index);
+        buf_append_cstr(&cg->headers, ";\n");
+    }
+    buf_append_cstr(&cg->headers, "    } payload;\n};\n");
+}
 
-    /* Map each user_types[] index to a local value-type index (SIZE_MAX
-     * for types that are not in the Pass 3.5a set). */
-    size_t *local_idx = calloc(n, sizeof(*local_idx));
-    size_t *type_idx  = calloc(n, sizeof(*type_idx));
-    if (!local_idx || !type_idx) {
-        free(local_idx);
-        free(type_idx);
+/* Pass 3.5a: emit full struct bodies for non-empty value-semantics types
+ * (tuple / @value) AND union-form spec value structs into cg->headers,
+ * topologically sorted so that any type embedded by value in another is
+ * emitted first.  Zero-field value types are already emitted in
+ * cg_emit_user_type_forward (Pass 3).
+ *
+ * Both value types and union specs may embed each other by value:
+ * - Value type field of union spec type (e.g. IteratorResult<JsonValue>)
+ * - Union spec member of value type (e.g. Option<StringSpan>)
+ * A combined dependency graph handles both directions via Kahn's algorithm.
+ *
+ * Without topological ordering, a struct A that embeds struct B by value
+ * may be emitted before B, producing an incomplete-type error in C. */
+static bool cg_emit_value_and_union_struct_bodies_sorted(CG *cg) {
+    size_t n_types = cg->user_type_count;
+    size_t n_specs = cg->user_spec_count;
+
+    /* Phase 1: count eligible nodes. */
+    size_t vt_count = 0;
+    for (size_t i = 0; i < n_types; i++) {
+        const UserType *t = &cg->user_types[i];
+        if (cg_user_type_is_value_semantics(t) && t->field_count > 0U) {
+            vt_count++;
+        }
+    }
+    size_t us_count = 0;
+    for (size_t i = 0; i < n_specs; i++) {
+        if (cg->user_specs[i].form == FENG_SPEC_FORM_UNION) {
+            us_count++;
+        }
+    }
+    size_t count = vt_count + us_count;
+    if (count == 0U) return true;
+
+    /* Phase 2: allocate mapping arrays.
+     * node_is_spec[k]: false for value type, true for union spec.
+     * node_type_idx[k]: index into user_types[] or user_specs[].
+     * vt_local[i]: local node index for user_types[i] (SIZE_MAX if not eligible).
+     * us_local[i]: local node index for user_specs[i] (SIZE_MAX if not union). */
+    bool    *node_is_spec = calloc(count, sizeof(*node_is_spec));
+    size_t  *node_type_idx = calloc(count, sizeof(*node_type_idx));
+    size_t  *vt_local = n_types > 0 ? calloc(n_types, sizeof(*vt_local)) : NULL;
+    size_t  *us_local = n_specs > 0 ? calloc(n_specs, sizeof(*us_local)) : NULL;
+    if (!node_is_spec || !node_type_idx ||
+        (n_types > 0 && !vt_local) || (n_specs > 0 && !us_local)) {
+        free(node_is_spec); free(node_type_idx);
+        free(vt_local); free(us_local);
         return cg_fail(cg, (FengToken){0}, "IE0001", "codegen: out of memory");
     }
-    memset(local_idx, 0xFF, n * sizeof(*local_idx));   /* SIZE_MAX */
+    if (n_types > 0) memset(vt_local, 0xFF, n_types * sizeof(*vt_local));
+    if (n_specs > 0) memset(us_local, 0xFF, n_specs * sizeof(*us_local));
 
-    size_t count = 0;
-    for (size_t i = 0; i < n; i++) {
+    size_t k = 0;
+    for (size_t i = 0; i < n_types; i++) {
         const UserType *t = &cg->user_types[i];
         if (!cg_user_type_is_value_semantics(t) || t->field_count == 0U) continue;
-        local_idx[i] = count;
-        type_idx[count] = i;
-        count++;
+        vt_local[i] = k;
+        node_is_spec[k] = false;
+        node_type_idx[k] = i;
+        k++;
     }
-    if (count <= 1U) {
-        /* Zero or one value type — no ordering needed. */
-        for (size_t i = 0; i < n; i++) {
-            const UserType *t = &cg->user_types[i];
-            if (!cg_user_type_is_value_semantics(t) || t->field_count == 0U) continue;
-            cg_emit_value_type_struct_body(cg, t);
+    for (size_t i = 0; i < n_specs; i++) {
+        if (cg->user_specs[i].form != FENG_SPEC_FORM_UNION) continue;
+        us_local[i] = k;
+        node_is_spec[k] = true;
+        node_type_idx[k] = i;
+        k++;
+    }
+
+    if (count == 1U) {
+        /* Single node — no ordering needed. */
+        if (!node_is_spec[0]) {
+            cg_emit_value_type_struct_body(cg, &cg->user_types[node_type_idx[0]]);
+        } else {
+            cg_emit_union_spec_struct_body(cg, &cg->user_specs[node_type_idx[0]]);
         }
-        free(local_idx);
-        free(type_idx);
+        free(node_is_spec); free(node_type_idx);
+        free(vt_local); free(us_local);
         return true;
     }
 
-    /* Build adjacency + in-degree for Kahn's algorithm.
-     * Edge from B → A (dep[B][A]) means "A depends on B": A has a field
-     * whose value-type is B, so B's struct body must come first. */
+    /* Phase 3: build adjacency + in-degree for Kahn's algorithm.
+     * Edge from B → A (dep[B * count + A]) means "A depends on B":
+     * A embeds B by value, so B's struct body must come first. */
     bool *dep     = calloc(count * count, sizeof(*dep));
     size_t *indeg = calloc(count, sizeof(*indeg));
     bool *emitted = calloc(count, sizeof(*emitted));
     size_t *order = calloc(count, sizeof(*order));
     if (!dep || !indeg || !emitted || !order) {
         free(dep); free(indeg); free(emitted); free(order);
-        free(local_idx); free(type_idx);
+        free(node_is_spec); free(node_type_idx);
+        free(vt_local); free(us_local);
         return cg_fail(cg, (FengToken){0}, "IE0001", "codegen: out of memory");
     }
 
-    for (size_t vi = 0; vi < count; vi++) {
-        const UserType *t = &cg->user_types[type_idx[vi]];
+    /* Add dependency edges for value type fields. */
+    for (size_t vi = 0; vi < vt_count; vi++) {
+        const UserType *t = &cg->user_types[node_type_idx[vi]];
         for (size_t fi = 0; fi < t->field_count; fi++) {
             const CGType *ft = t->fields[fi].type;
-            if (!ft || ft->kind != CG_TYPE_OBJECT || !ft->user) continue;
-            if (!cg_user_type_is_value_semantics(ft->user) ||
-                ft->user->field_count == 0U) continue;
-            /* Find the dependency target's local index. */
             size_t dep_target = SIZE_MAX;
-            for (size_t j = 0; j < n; j++) {
-                if (&cg->user_types[j] == ft->user) {
-                    dep_target = local_idx[j];
-                    break;
+            if (ft && ft->kind == CG_TYPE_OBJECT && ft->user &&
+                cg_user_type_is_value_semantics(ft->user) &&
+                ft->user->field_count > 0U) {
+                for (size_t j = 0; j < n_types; j++) {
+                    if (&cg->user_types[j] == ft->user) {
+                        dep_target = vt_local[j];
+                        break;
+                    }
+                }
+            } else if (ft && ft->kind == CG_TYPE_SPEC && ft->user_spec &&
+                       ft->user_spec->form == FENG_SPEC_FORM_UNION) {
+                for (size_t j = 0; j < n_specs; j++) {
+                    if (&cg->user_specs[j] == ft->user_spec) {
+                        dep_target = us_local[j];
+                        break;
+                    }
                 }
             }
             if (dep_target == SIZE_MAX || dep_target == vi) continue;
@@ -32096,33 +32154,74 @@ static bool cg_emit_value_type_struct_bodies_sorted(CG *cg) {
         }
     }
 
-    /* Kahn's algorithm: emit types with no remaining dependencies first. */
+    /* Add dependency edges for union spec members. */
+    for (size_t si = 0; si < us_count; si++) {
+        size_t node_idx = vt_count + si;
+        const UserSpec *s = &cg->user_specs[node_type_idx[node_idx]];
+        for (size_t mi = 0; mi < s->union_member_count; mi++) {
+            const CGType *mt = s->union_member_types[mi];
+            size_t dep_target = SIZE_MAX;
+            if (mt && mt->kind == CG_TYPE_OBJECT && mt->user &&
+                cg_user_type_is_value_semantics(mt->user) &&
+                mt->user->field_count > 0U) {
+                for (size_t j = 0; j < n_types; j++) {
+                    if (&cg->user_types[j] == mt->user) {
+                        dep_target = vt_local[j];
+                        break;
+                    }
+                }
+            } else if (mt && mt->kind == CG_TYPE_SPEC && mt->user_spec &&
+                       mt->user_spec->form == FENG_SPEC_FORM_UNION) {
+                for (size_t j = 0; j < n_specs; j++) {
+                    if (&cg->user_specs[j] == mt->user_spec) {
+                        dep_target = us_local[j];
+                        break;
+                    }
+                }
+            }
+            if (dep_target == SIZE_MAX || dep_target == node_idx) continue;
+            if (!dep[dep_target * count + node_idx]) {
+                dep[dep_target * count + node_idx] = true;
+                indeg[node_idx]++;
+            }
+        }
+    }
+
+    /* Phase 4: Kahn's algorithm — emit nodes with no remaining deps first. */
     size_t cursor = 0;
     while (cursor < count) {
         bool found = false;
-        for (size_t vi = 0; vi < count; vi++) {
-            if (emitted[vi] || indeg[vi] != 0U) continue;
-            emitted[vi] = true;
-            order[cursor++] = vi;
-            /* Decrease in-degree of dependents. */
+        for (size_t ni = 0; ni < count; ni++) {
+            if (emitted[ni] || indeg[ni] != 0U) continue;
+            emitted[ni] = true;
+            order[cursor++] = ni;
             for (size_t w = 0; w < count; w++) {
-                if (dep[vi * count + w]) indeg[w]--;
+                if (dep[ni * count + w]) indeg[w]--;
             }
             found = true;
             break;
         }
-        if (!found) break;   /* remaining types form a cycle */
+        if (!found) break;   /* remaining nodes form a cycle */
     }
 
-    /* Emit in topological order. */
-    for (size_t k = 0; k < cursor; k++) {
-        cg_emit_value_type_struct_body(cg, &cg->user_types[type_idx[order[k]]]);
+    /* Phase 5: emit in topological order. */
+    for (size_t ci = 0; ci < cursor; ci++) {
+        size_t ni = order[ci];
+        if (!node_is_spec[ni]) {
+            cg_emit_value_type_struct_body(cg, &cg->user_types[node_type_idx[ni]]);
+        } else {
+            cg_emit_union_spec_struct_body(cg, &cg->user_specs[node_type_idx[ni]]);
+        }
     }
     /* Fallback: emit any remaining (cycle — should not happen because
      * value_type_cycles.c rejects cycles during semantic analysis). */
-    for (size_t vi = 0; vi < count; vi++) {
-        if (!emitted[vi]) {
-            cg_emit_value_type_struct_body(cg, &cg->user_types[type_idx[vi]]);
+    for (size_t ni = 0; ni < count; ni++) {
+        if (!emitted[ni]) {
+            if (!node_is_spec[ni]) {
+                cg_emit_value_type_struct_body(cg, &cg->user_types[node_type_idx[ni]]);
+            } else {
+                cg_emit_union_spec_struct_body(cg, &cg->user_specs[node_type_idx[ni]]);
+            }
         }
     }
 
@@ -32130,8 +32229,10 @@ static bool cg_emit_value_type_struct_bodies_sorted(CG *cg) {
     free(indeg);
     free(emitted);
     free(order);
-    free(local_idx);
-    free(type_idx);
+    free(node_is_spec);
+    free(node_type_idx);
+    free(vt_local);
+    free(us_local);
     return !cg->failed;
 }
 
@@ -32254,10 +32355,15 @@ static bool cg_emit_all_programs(CG *cg,
     for (size_t i = 0; i < cg->user_spec_count; i++) {
         cg_emit_user_spec_forward(cg, &cg->user_specs[i]);
     }
-    /* Emit full struct bodies for non-empty value-semantics types (tuple or
-     * @value) into headers, topologically sorted so that a value type
-     * embedded by value in another is emitted first (Pass 3.5a). */
-    if (!cg_emit_value_type_struct_bodies_sorted(cg)) return false;
+    /* Pass 3.5a: emit full struct bodies for non-empty value-semantics types
+     * (tuple / @value) AND union-form spec value structs into headers,
+     * topologically sorted so that any type embedded by value in another
+     * is emitted first. Handles cross-dependencies between value types
+     * and union specs (e.g. Option<StringSpan> and IteratorResult<JsonValue>).
+     * Must follow spec forward emission so object-form spec value structs
+     * (e.g. Named) are complete when union specs (e.g. Display) embed them
+     * by value. */
+    if (!cg_emit_value_and_union_struct_bodies_sorted(cg)) return false;
     /* Pass 3.4: emit enum typedefs + descriptors before user type
      * definitions so that @value type equal functions referencing enum
      * descriptors find them already declared. */

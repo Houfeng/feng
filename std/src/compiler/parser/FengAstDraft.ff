@@ -4,34 +4,24 @@ import std;
 import std.text;
 import std.compiler.lexer;
 
-// ======================================================================
-// AST 骨架草案（方案 B：联合类型）
-//
-// 每种节点定义独立 variant type，通过 spec 联合类型组合。
-// 收窄后直接访问字段，无间接调用开销。
-//
-// 5 个节点大类:
-//   TypeReference(3) / Expression(21) / Statement(14) / TypeMember(4) / Declaration(6)
-// ======================================================================
-
 // 可见性 & 可变性 --------------------------------------------------------------
 
 /**
  * 可见性枚举类型
  * 语义阶段 resolve 默认值：
- * - 模块/顶层声明无关键字 → Private
- * - 类型成员无关键字 → Public
+ * - 模块/顶层声明无 open/seal 关键字 → Seal
+ * - 类型成员无关键字 → Open
  */
 open enum Visibility {
   Default = 0,
-  Private = 1,
-  Public = 2
+  Seal = 1,
+  Open = 2
 }
 
 /**
  * 可变性枚举类型
  * 语义阶段 resolve 默认值：
- * - 函数参数可省略，无 let/var → Let
+ * - 函数参数可省略，无 let/var 关键字 → Let
  * - 绑定/字段必须显式指定 let/var
  */
 open enum Mutability {
@@ -41,6 +31,19 @@ open enum Mutability {
 }
 
 // 类型引用 ---------------------------------------------------------------------
+
+/**
+ * 多段命名标识符，用于类型引用、模块路径等
+ *
+ * segments 字段：
+ * - segments[0] 为最左侧标识符，segments[n] 为最右侧标识符
+ * - segments 数组长度至少为 1
+ */
+open type SegmentedName {
+  let token: FengToken;
+  let name: StringSpan;
+  let segments: StringSpan[];
+}
 
 /**
  * 命名类型引用：int, std.text.String, Map<K, V>
@@ -564,11 +567,17 @@ open type SpecificationDeclaration {
 
 // 适配器 (fit) ----------------------------------------------------------------
 
+/**
+ * 适配器声明：fit TargetType: Spec1, Spec2 { ... }
+ *
+ * members 字段：
+ * - Some(members): 有实现体，包含适配方法/字段
+ * - None: 无实现体（仅声明适配关系）
+ */
 open type FitDeclaration {
   let target: TypeReference;
   let specifications: TypeReference[];
-  let members: TypeMember[];
-  let hasBody: bool;
+  let members: Option<TypeMember[]>;
 }
 
 // 注解 (annotation) -----------------------------------------------------------
@@ -616,11 +625,17 @@ open type ModuleMember {
   let body: ModuleMemberBody;
 }
 
+/**
+ * 模块导入声明：import std.text; import std.text as txt;
+ *
+ * alias 字段：
+ * - Some(alias): 有别名，如 import std.text as txt
+ * - None: 无别名，如 import std.text
+ */
 open type ModuleImport {
   let token: FengToken;
   let segments: StringSpan[];
-  let alias: StringSpan;
-  let hasAlias: bool;
+  let alias: Option<StringSpan>;
 }
 
 open type ModuleFile {
