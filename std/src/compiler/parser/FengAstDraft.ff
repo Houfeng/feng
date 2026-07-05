@@ -399,47 +399,47 @@ open type Block {
 
 // 语句 ------------------------------------------------------------------------
 
-open type BlockStatement {
+open type BlockStmt {
   let block: Block;
 }
 
-open type BindingStatement {
+open type BindingStmt {
   let binding: Binding;
 }
 
-open type AssignmentStatement {
+open type AssignmentStmt {
   let operator: FengTokenKind;
   let target: Expression;
   let value: Expression;
 }
 
-open type ExpressionStatement {
+open type ExpressionStmt {
   let expression: Expression;
 }
 
-open type TryStatement {
+open type TryStmt {
   let body: Expression;
   let catchClauses: CatchClause[];
   let catchAllBlock: Option<Block>;
 }
 
-open type IfStatement {
+open type IfStmt {
   let clauses: IfClause[];
   let elseBlock: Block;
 }
 
-open type MatchStatement {
+open type MatchStmt {
   let target: Expression;
   let clauses: MatchClause[];
   let elseBlock: Block;
 }
 
-open type WhileStatement {
+open type WhileStmt {
   let condition: Expression;
   let body: Block;
 }
 
-open type ForStatement {
+open type ForStmt {
   let isForIn: bool;
   let body: Block;
   let init: Statement;
@@ -449,21 +449,19 @@ open type ForStatement {
   let iterExpression: Expression;
 }
 
-open type ReturnStatement {
+open type ReturnStmt {
   let value: Expression;
 }
 
-open type ThrowStatement {
+open type ThrowStmt {
   let value: Expression;
 }
 
-open type BreakStatement {
-}
+open type BreakStmt {}
 
-open type ContinueStatement {
-}
+open type ContinueStmt {}
 
-open type DeferStatement {
+open type DeferStmt {
   let body: Block;
 }
 
@@ -484,20 +482,20 @@ open enum StatementKind {
   Defer = 13
 }
 
-open spec StatementBody: BlockStatement
-| BindingStatement
-| AssignmentStatement
-| ExpressionStatement
-| TryStatement
-| IfStatement
-| MatchStatement
-| WhileStatement
-| ForStatement
-| ReturnStatement
-| ThrowStatement
-| BreakStatement
-| ContinueStatement
-| DeferStatement;
+open spec StatementBody: BlockStmt
+| BindingStmt
+| AssignmentStmt
+| ExpressionStmt
+| TryStmt
+| IfStmt
+| MatchStmt
+| WhileStmt
+| ForStmt
+| ReturnStmt
+| ThrowStmt
+| BreakStmt
+| ContinueStmt
+| DeferStmt;
 
 open type Statement {
   let token: FengToken;
