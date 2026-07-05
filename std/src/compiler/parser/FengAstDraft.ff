@@ -668,7 +668,9 @@ open type ModuleFileMeta {
   let token: FengToken;
   let moduleVisibility: Visibility;
   let moduleName: SegmentedName;
+  // import 作用于文件，而非整个模块
   let imports: ModuleImport[];
+  // 当前文件的路径
   let path: string;
 }
 
@@ -680,7 +682,10 @@ open type ModuleFile {
 open type ModuleDeclaration {
   let visibility: Visibility;
   let name: SegmentedName;
+  // 模块声明可包含多个文件
+  // import 作用于文件，而非整个模块
   let files: ModuleFileMeta[];
+  // 合并多个文件的成员列表
   let members: ModuleMember[];
 }
 
