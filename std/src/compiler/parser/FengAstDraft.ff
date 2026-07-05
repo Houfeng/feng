@@ -522,9 +522,9 @@ open type TypeDeclaration {
   let token: FengToken;
   let name: StringSpan;
   let visibility: Visibility;
-  let parameters: GenericParameter[];
+  let genericParameter: GenericParameter[];
   let members: TypeMember[];
-  let specifications: TypeReference[];
+  let specs: TypeReference[];
   let annotations: Annotation[];
   let isTuple: bool;
   let isValue: bool;
@@ -532,37 +532,62 @@ open type TypeDeclaration {
 
 // 枚举 (enum) -----------------------------------------------------------------
 
-open type EnumerationItem {
+open type EnumItem {
   let token: FengToken;
   let name: StringSpan;
   let hasExplicitValue: bool;
   let explicitValue: i64;
 }
 
-open type EnumerationDeclaration {
+open type EnumDeclaration {
+  let token: FengToken;
   let name: StringSpan;
   let annotations: Annotation[];
-  let items: EnumerationItem[];
+  let items: EnumItem[];
 }
 
 // 契约 (spec) -----------------------------------------------------------------
 
-open enum SpecificationForm {
-  Object = 0,
-  Callable = 1,
-  Union = 2
+/**
+ * 对象契约：定义类型需实现的成员集合
+ * spec Named { let name: string; func greet(): string; }
+ */
+open type ObjectSpec {
+  let genericParameter: GenericParameter[];
+  let members: TypeMember[];
+  let parentTypeRefs: TypeReference[];
 }
 
-open type SpecificationDeclaration {
+/**
+ * 可调用契约：定义函数签名
+ * spec Predicate<T>: (T) -> bool;
+ */
+open type CallableSpec {
+  let genericParameter: GenericParameter[];
+  let parameters: Parameter[];
+  let returnTypeRef: TypeReference;
+}
+
+/**
+ * 联合契约：定义可选类型集合
+ * spec Option<T>: Some<T> | None;
+ */
+open type UnionSpec {
+  let memberTypeRefs: TypeReference[];
+}
+
+open spec SpecBody: ObjectSpec
+| CallableSpec
+| UnionSpec;
+
+/**
+ * 契约声明节点
+ */
+open type SpecDeclaration {
+  let token: FengToken;
   let name: StringSpan;
   let annotations: Annotation[];
-  let typeParameters: GenericParameter[];
-  let form: SpecificationForm;
-  let parentSpecifications: TypeReference[];
-  let objectMembers: TypeMember[];
-  let callableParameters: Parameter[];
-  let callableReturnType: TypeReference;
-  let unionMembers: TypeReference[];
+  let body: SpecBody;
 }
 
 // 适配器 (fit) ----------------------------------------------------------------
@@ -575,8 +600,8 @@ open type SpecificationDeclaration {
  * - None: 无实现体（仅声明适配关系）
  */
 open type FitDeclaration {
-  let target: TypeReference;
-  let specifications: TypeReference[];
+  let targetTypeRef: TypeReference;
+  let specTypeRefs: TypeReference[];
   let members: Option<TypeMember[]>;
 }
 
@@ -614,8 +639,8 @@ open type ModuleLevelFunction {
 open spec ModuleMemberBody: ModuleLevelBinding
 | ModuleLevelFunction
 | TypeDeclaration
-| EnumerationDeclaration
-| SpecificationDeclaration
+| EnumDeclaration
+| SpecDeclaration
 | FitDeclaration;
 
 open type ModuleMember {
