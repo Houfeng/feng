@@ -82,7 +82,7 @@ std/src/compiler/
     ├── FengToken.ff         # Token 类型定义
     ├── FengTokenUtil.ff     # Token 分类工具（静态方法）
     ├── FengLexer.ff         # Lexer 实现
-    └── TokenStream.ff       # Token 流封装（服务注解变换）
+    └── TokenTransformer.ff  # Token 变换器（服务注解 pre-Parse 变换）
 ```
 
 ---
@@ -615,30 +615,40 @@ Lexer 不维护文档注释与目标声明的关联。`CommentDoc` 仅作为普�
 
 ---
 
-## 5 TokenStream
+## 5 TokenTransformer
 
-**文件**：`std/src/compiler/Lexer/TokenStream.ff`
+**文件**：`std/src/compiler/Lexer/TokenTransformer.ff`
 **模块**：`std.compiler.lexer`
 
 ### 5.1 设计
 
+TokenTransformer 是基于 `FengToken[]` 的可变变换器，服务注解 pre-Parse 阶段：
+
+- **职责**：接收已 lex 的 Token 数组，提供 `slice`/`replace`/`findDeclarationEnd` 等查找与变换操作
+- **消费方**：注解 handler 的 pre-Parse 变换
+- **与 TokenStream 概念的区分**：TokenTransformer 专注"变换"；未来若 Parser 需要流式读取接口，另立只读 `TokenStream` 概念（封装 `next`/`peek`/`lookback`，**不提供 `replace` 等变换方法**），与 TokenTransformer 职责严格分离。当前阶段不引入 TokenStream，Parser 衔接方式见 `feng-std-parser-draft.md`
+
 ```feng
 /**
- * Token 流封装。
+ * Token 变换器。
  *
- * 为自定义注解的 pre-Parse 阶段提供 Token 流操作能力：
+ * 基于 FengToken[] 的可变变换器，为自定义注解的 pre-Parse 阶段提供 Token 操作能力：
  * - 切片（slice）：提取声明的 Token 范围
  * - 替换（replace）：handler 输出替换 @X(...) target 范围
  * - 声明边界查找（findDeclarationEnd）：骨架找 target
+ *
+ * 与 TokenStream 概念区分：TokenTransformer 专注变换（基于已 lex 的 Token 数组，
+ * 支持随机访问与修改）；未来若引入只读 TokenStream（封装 next/peek/lookback 等
+ * 流式读取），其职责仅为 Parser 提供 Token 流读取接口，不提供 replace 等变换方法。
  */
-open type TokenStream {
+open type TokenTransformer {
   seal var tokens: FengToken[];
 
   /** 从 Token 数组创建 */
-  open func TokenStream(tokens: FengToken[]);
+  open func TokenTransformer(tokens: FengToken[]);
 
   /** 从 Lexer 创建（自动 tokenize） */
-  open static func fromLexer(lexer: FengLexer): TokenStream;
+  open static func fromLexer(lexer: FengLexer): TokenTransformer;
 
   // ---- 基础操作 ----
 
@@ -659,7 +669,7 @@ open type TokenStream {
   /**
    * 替换 Token 子范围 [start, end) 为新的 Token 数组。
    * 用于注解 handler 输出替换整个 @X(...) target 范围。
-   * 替换后 Token 流长度可能变化。
+   * 替换后 Token 数组长度可能变化。
    */
   open func replace(start: int, end: int, replacement: FengToken[]): void;
 
@@ -732,7 +742,7 @@ open type TokenSpan {
 | 2 | FengCompileError 类型定义 | 无 | `std/src/compiler/Common/FengCompileError.ff` |
 | 3 | Token 类型定义 | 2 | `std/src/compiler/Lexer/FengToken.ff` |
 | 4 | Lexer 实现 | 1, 2, 3 | `std/src/compiler/Lexer/FengLexer.ff` |
-| 5 | TokenStream 实现 | 3, 4 | `std/src/compiler/Lexer/TokenStream.ff` |
+| 5 | TokenTransformer 实现 | 3, 4 | `std/src/compiler/Lexer/TokenTransformer.ff` |
 | 6 | Lexer 测试 | 1-5 | fcts 测试 |
 
 ---
@@ -760,7 +770,7 @@ open type TokenSpan {
 
 ### 7.3 注解模拟
 
-模拟 `@platform` 条件编译场景，验证 TokenStream 的 `slice`/`replace`/`findDeclarationEnd` 正确性。
+模拟 `@platform` 条件编译场景，验证 TokenTransformer 的 `slice`/`replace`/`findDeclarationEnd` 正确性。
 
 ---
 
@@ -769,13 +779,13 @@ open type TokenSpan {
 ### pre-Parse 阶段流程（引自 draft-2）
 
 ```
-源码 → [C 版 Lex] → C Token 流 → [序列化 bytes] → [Feng 反序列化] → TokenStream
-  → [注解 handler 变换] → TokenStream → [序列化 bytes] → [C 版反序列化] → C Token 流 → [Parse]
+源码 → [C 版 Lex] → C Token 流 → [序列化 bytes] → [Feng 反序列化] → TokenTransformer
+  → [注解 handler 变换] → TokenTransformer → [序列化 bytes] → [C 版反序列化] → C Token 流 → [Parse]
 ```
 
 ### 集成接口
 
-- **TokenStream.slice/replace**：直接服务注解 handler 的 Token 流变换
+- **TokenTransformer.slice/replace**：直接服务注解 handler 的 Token 流变换
 - **FengLexer**：注解 handler 内部可用于解析注解参数子语法（如 `@platform(target == "linux")` 的条件表达式）
 - **Token ↔ bytes 序列化**：后续 phase 2 实现，当前不预留接口
 

@@ -3,7 +3,7 @@
 > 本文记录基于 Feng 实现的语法分析器（Parser）设计方向，服务于未来自举。
 > **状态**：草案阶段，尚未实现。依赖阶段一（Lexer）完成后启动。
 > **目标**：在 `std/src/compiler/Parser/` 中实现完整的 Feng 语法分析器，作为自举编译器的前端。
-> **前置**：`feng-std-lexer-draft.md`（阶段一：Lexer + Token + TokenStream）。
+> **前置**：`feng-std-lexer-draft.md`（阶段一：Lexer + Token + TokenTransformer）。
 
 ---
 
@@ -635,7 +635,12 @@ open type Program {
  * Feng 语法分析器。
  *
  * 递归下降式解析器，与 C 版 parser.c 行为等价。
- * 输入 Token 流（来自 FengLexer 或 TokenStream），输出 AST（Program）。
+ * 输入 Token 流（来自 FengLexer），输出 AST（Program）。
+ *
+ * 衔接方式：当前阶段 Parser 直接接受 FengLexer（流式消费 + 内部前瞻缓冲，
+ * 对齐主流编译器设计）。未来若引入只读 TokenStream 概念（封装
+ * next/peek/lookback 等流式读取，不提供 replace 等变换方法），再考虑
+ * 增加 stream 入参。是否引入 TokenStream 到时根据实际需求决定，当前不预设。
  *
  * 用法示例：
  *   let lexer = FengLexer(source, "example.ff");
@@ -649,9 +654,6 @@ open type FengParser {
 
   /** 从 Lexer 创建 Parser */
   open func FengParser(lexer: FengLexer);
-
-  /** 从 TokenStream 创建 Parser */
-  open func FengParser(stream: TokenStream);
 
   /**
    * 解析完整源文件。

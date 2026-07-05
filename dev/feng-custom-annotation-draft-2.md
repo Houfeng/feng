@@ -245,7 +245,7 @@ phase 2 不实现，只保证 phase 1 的接口不挡路：
 - 每个 (包, 架构) 只有一个动态库，调用哪个注解通过 C ABI 入口的全名参数传入，可执行文件内通过全名分发到不同注解逻辑。
 - 注解按正常符号解析，底层用动态库是实现机制，用户不感知。
 - C ABI 入口形如：`__feng_annotation_main__(fullname, request_bytes, request_len, out_response_bytes, out_response_len)` + `__feng_annotation_release_response`。
-- 编译器不感知复杂类型，所以编译器↔.so 之间用字节流传输；std 层（.so 内）负责 bytes ↔ Feng TokenStream 的解析。
+- 编译器不感知复杂类型，所以编译器↔.so 之间用字节流传输；std 层（.so 内）负责 bytes ↔ Feng TokenTransformer 的解析。
 
 ---
 
