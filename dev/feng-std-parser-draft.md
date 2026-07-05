@@ -68,565 +68,824 @@ Lexer 将空白和注释作为独立 Token 发射（`WhitespaceSpace`、`Whitesp
 
 ```
 std/src/compiler/
-└── Parser/
-    ├── AstNode.ff           # AST 节点类型定义
+└── parser/
+    ├── FengAstNodes.ff      # AST 节点类型定义（已实现）
     ├── FengParser.ff        # Parser 实现（递归下降）
-    └── AstDumper.ff         # AST 调试输出
+    └── FengAstDumper.ff     # AST 调试输出
 ```
+
+**模块**：`std.compiler.parser`（与 FengAstNodes.ff 一致）
 
 ---
 
 ## 3 AST 节点类型
 
-**文件**：`std/src/compiler/Parser/AstNode.ff`
-**模块**：`std.compiler`
+**文件**：`std/src/compiler/parser/FengAstNodes.ff`
+**模块**：`std.compiler.parser`
 
 ### 3.1 整体设计思路
 
-C 版 AST 用 `struct + enum + union` 模式（如 `FengExpr` 有 `FengExprKind` + 大 union）。Feng 版有两个设计选项：
-
-**选项 A：spec + 多个 type（面向对象风格）**
+C 版 AST 用 `struct + enum + union` 模式（如 `FengExpr` 有 `FengExprKind` + 大 union）。Feng 版选择 **spec union + 独立 type** 的结构：
 
 ```feng
-spec Expr {
-  let location: SourceLocation;
-}
+open spec Expression: IdentifierExpr
+  | BooleanLiteralExpr
+  | IntegerLiteralExpr
+  // ... 共 22 种
+  ;
 
-type IdentifierExpr: Expr { ... }
-type IntLiteralExpr: Expr { ... }
-type BinaryExpr: Expr { ... }
-// ... 22 种表达式类型
+open type IdentifierExpr {
+  let token: FengToken;
+  let name: StringSpan;
+}
 ```
 
-- 优点：类型安全、每种节点独立定义、可扩展
-- 缺点：节点种类多时类型数量爆炸（22 种 Expr + 14 种 Stmt + 6 种 Decl = 42+ 种类型）；需要引用语义（堆分配）
+**选择依据**：
 
-**选项 B：type + enum + union（与 C 版同构）**
+1. **类型安全**：每种节点独立定义，构造时只能填充该节点的字段，不存在"误读其它 kind 字段"的可能
+2. **消除 kind 枚举**：spec union 自带判别（tag），无需手写 ExprKind/StmtKind/DeclKind 枚举
+3. **token 就近原则**：每个 variant 自带 `token: FengToken`，消除 C 版中"wrapper token + body token 重复"的问题
+4. **语义与语法分离**：Parser 只产出 AST，语义分析阶段的数据（推断类型、resolved callable 等）不进入 AST 节点
+5. **自举友好**：直接面向 Feng 类型系统，不需要做 enum+union 的二次转换
 
-```feng
-type Expr {
-  let kind: ExprKind;
-  let location: SourceLocation;
-  let value: ExprValue;  // union type
-}
-
-spec ExprValue: IdentifierExprData | IntLiteralData | BinaryExprData | ...;
-```
-
-- 优点：与 C 版结构对应、验证等价性更直接
-- 缺点：union 成员多时（22 种）slot 大小由最大成员决定，可能浪费空间
-
-**建议**：采用**选项 A（spec + 多个 type）**。理由：
-- Feng 的 spec/fit 机制天然适合这种多态节点结构
-- 每种节点独立定义，可读性和可维护性更好
-- 自举时直接面向 Feng 类型系统，不需要再做转换
-- 虽然类型数量多，但每种类型的定义都很清晰
+**类型数量**：22 种 Expression + 15 种 Statement + 6 种 ModuleMemberBody + 4 种 TypeMemberBody + 3 种 TypeReference + 3 种 SpecBody + 2 种 Binding + 辅助类型 = 约 60+ 个 type/spec 定义。每个定义 5-15 行，可读性和可维护性均可接受。
 
 ### 3.2 基础类型
 
 ```feng
-open module std.compiler;
-
-/** 可见性 */
+/**
+ * 可见性枚举类型
+ * 语义阶段 resolve 默认值：
+ * - 模块/顶层声明无 open/seal 关键字 → Seal
+ * - 类型成员无关键字 → Open
+ */
 open enum Visibility {
-  DEFAULT = 0,
-  PRIVATE = 1,
-  PUBLIC = 2
+  Default = 0,
+  Seal = 1,
+  Open = 2
 }
 
-/** 可变性 */
+/**
+ * 可变性枚举类型
+ * 语义阶段 resolve 默认值：
+ * - 函数参数可省略，无 let/var 关键字 → Let
+ * - 绑定/字段必须显式指定 let/var
+ */
 open enum Mutability {
-  DEFAULT = 0,
-  LET = 1,
-  VAR = 2
-}
-
-/** 切片（引用源码中的文本段） */
-@value
-open type Slice {
-  open let text: string;
+  Default = 0,
+  Let = 1,
+  Var = 2
 }
 ```
 
-### 3.3 TypeRef（类型引用）
+**命名说明**：
+
+- 使用 `StringSpan`（来自 `std.text`）引用源码文本段，不引入独立的 Slice 类型
+- 使用 `FengToken`（来自 `std.compiler.lexer`）承载词法单元（含 FengLocation）
+- 使用 `FengTokenKind` 表示运算符、关键字等词法单元类型
+
+### 3.3 命名与路径
 
 ```feng
-/** 类型引用种类 */
-open enum TypeRefKind {
-  NAMED = 0,
-  POINTER = 1,
-  ARRAY = 2
-}
-
 /**
- * 类型引用——出现在类型标注位置的 AST 节点。
+ * 多段命名标识符，用于类型引用、模块路径等
  *
- * 示例：
- * - `int`         → NAMED(segments=["int"])
- * - `Map<K, V>`   → NAMED(segments=["Map"], typeArgs=[NAMED("K"), NAMED("V")])
- * - `string*`     → POINTER(inner=NAMED("string"))
- * - `int[]`       → ARRAY(inner=NAMED("int"))
- * - `int[!]`      → ARRAY(inner=NAMED("int"), elementWritable=true)
+ * segments 字段：
+ * - segments[0] 为最左侧标识符，segments[n] 为最右侧标识符
+ * - segments 数组长度至少为 1
  */
-open type TypeRef {
-  open let location: SourceLocation;
-  open let kind: TypeRefKind;
-  open let arrayElementWritable: bool;
-  // NAMED
-  open let segments: Slice[];
-  open let typeArgs: TypeRef[];
-  // POINTER / ARRAY
-  open let inner: TypeRef;
+open type SegmentedName {
+  let token: FengToken;
+  let fullName: StringSpan;
+  let segments: StringSpan[];
 }
 ```
 
-### 3.4 Expr（表达式）
+**用途**：类型引用 `NamedTypeRef`、模块声明 `ModuleFile.moduleName`、import 声明 `ModuleImport.name`、注解 `Annotation.name`。
+
+### 3.4 TypeReference（类型引用）
+
+类型位置仅允许标识符链（如 `std.text.String`），Parser 直接识别为多段 segments 数组。
 
 ```feng
-/** 表达式种类 */
-open enum ExprKind {
-  IDENTIFIER = 0,
-  SELF = 1,
-  BOOL = 2,
-  INTEGER = 3,
-  FLOAT = 4,
-  STRING = 5,
-  ARRAY_LITERAL = 6,
-  TUPLE_LITERAL = 7,
-  OBJECT_LITERAL = 8,
-  GENERIC_TARGET = 9,
-  CALL = 10,
-  MEMBER = 11,
-  INDEX = 12,
-  UNARY = 13,
-  BINARY = 14,
-  LAMBDA = 15,
-  CAST = 16,
-  IF = 17,
-  MATCH = 18,
-  TRY = 19,
-  ARRAY_NEW = 20,
-  MATCH_OP = 21
+/** 命名类型引用：int, std.text.String, Map<K, V> */
+open type NamedTypeRef {
+  let token: FengToken;
+  let name: SegmentedName;
+  let parameterTypeRefs: TypeReference[];
+}
+
+/** 指针类型引用：int*, string* */
+open type PointerTypeRef {
+  let token: FengToken;
+  let targetTypeRef: TypeReference;
+}
+
+/** 数组类型引用：int[], int[!] */
+open type ArrayTypeRef {
+  let token: FengToken;
+  let elementTypeRef: TypeReference;
+  let elementWritable: bool;
+}
+
+/** 类型引用，支持命名类型、指针类型、数组类型 */
+open spec TypeReference: NamedTypeRef
+  | PointerTypeRef
+  | ArrayTypeRef;
+```
+
+**示例**：
+
+- `int` → `NamedTypeRef { name: ["int"], parameterTypeRefs: [] }`
+- `Map<K, V>` → `NamedTypeRef { name: ["Map"], parameterTypeRefs: [NamedTypeRef("K"), NamedTypeRef("V")] }`
+- `string*` → `PointerTypeRef { targetTypeRef: NamedTypeRef("string") }`
+- `int[]` → `ArrayTypeRef { elementTypeRef: NamedTypeRef("int"), elementWritable: false }`
+- `int[!]` → `ArrayTypeRef { elementTypeRef: NamedTypeRef("int"), elementWritable: true }`
+
+### 3.5 Binding（绑定）
+
+绑定区分简单绑定和解构绑定两种形式，用 spec union 区分：
+
+```feng
+/** 简单绑定：let x: int = 5; */
+open type SimpleBinding {
+  let token: FengToken;
+  let name: StringSpan;
+  let mutability: Mutability;
+  let typeRef: Option<TypeReference>;
+  let initializer: Option<Expression>;
+  let annotations: Annotation[];
+}
+
+/** 解构绑定：let (a, b) = (1, 2); */
+open type DestructureBinding {
+  let token: FengToken;
+  let mutability: Mutability;
+  let names: StringSpan[];
+  let typeRef: Option<TypeReference>;
+  let initializer: Option<Expression>;
+  let annotations: Annotation[];
+}
+
+/** 绑定联合类型，用于顶层/成员/局部绑定 */
+open spec Binding: SimpleBinding | DestructureBinding;
+```
+
+**设计说明**：
+
+- 使用 `Option<T>` 替代 `hasX: bool` + `x: T` 的组合，避免"无值时字段仍有垃圾数据"的问题
+- `typeRef` 和 `initializer` 均为可选，符合语法实际（两者至少出现一个，但 Parser 不强制校验）
+- SimpleBinding 包含 `annotations` 字段，支持 `@value let x = ...` 等注解形式
+
+### 3.6 Expression（表达式）
+
+共 22 种表达式，每种为独立 type，通过 spec union 聚合：
+
+```feng
+open spec Expression: IdentifierExpr
+  | BooleanLiteralExpr
+  | IntegerLiteralExpr
+  | FloatLiteralExpr
+  | StringLiteralExpr
+  | ArrayLiteralExpr
+  | TupleLiteralExpr
+  | ObjectLiteralExpr
+  | ArrayNewExpr
+  | GenericTargetExpr
+  | CallExpr
+  | MemberAccessExpr
+  | IndexAccessExpr
+  | UnaryExpr
+  | BinaryExpr
+  | LambdaExpr
+  | CastExpr
+  | MatchOperatorExpr
+  | IfExpr
+  | MatchExpr
+  | TryExpr
+  | RangeExpr;
+```
+
+**各 variant 定义**：
+
+```feng
+open type IdentifierExpr {
+  let token: FengToken;
+  let name: StringSpan;
+}
+
+open type BooleanLiteralExpr {
+  let token: FengToken;
+  let value: bool;
+}
+
+open type IntegerLiteralExpr {
+  let token: FengToken;
+  let value: i64;
+  let raw: StringSpan;
+}
+
+open type FloatLiteralExpr {
+  let token: FengToken;
+  let value: f64;
+  let raw: StringSpan;
+}
+
+open type StringLiteralExpr {
+  let token: FengToken;
+  let value: StringSpan;
+}
+
+open type UnaryExpr {
+  let token: FengToken;
+  let operator: FengTokenKind;
+  let operand: Expression;
+}
+
+open type CastExpr {
+  let token: FengToken;
+  let targetType: TypeReference;
+  let value: Expression;
+}
+
+open type BinaryExpr {
+  let token: FengToken;
+  let operator: FengTokenKind;
+  let left: Expression;
+  let right: Expression;
 }
 
 /**
- * 表达式 AST 节点。
+ * 函数/方法调用表达式
  *
- * 使用 type + enum + 可选字段的方式表达 22 种表达式。
- * 不同类型的表达式通过 kind 区分，按 kind 读取对应字段。
+ * 泛型具化调用：
+ * - 语法：`foo<int, string>(arg1, arg2)`
+ * - 表示：callee 为 GenericTargetExpr { target: IdentifierExpr, argumentTypeRefs: [...] }
  *
- * 设计说明：
- * 这里选择"扁平 type"而非"spec + 22 个子 type"，原因：
- * 1. 表达式是 AST 中数量最多的节点类型，扁平结构减少类型实例数
- * 2. 与 C 版结构对应，验证等价性更直接
- * 3. 后续可重构为 spec + 子 type（如果需要更好的类型安全）
+ * 方法调用：
+ * - 语法：`obj.method(arg1)`
+ * - 表示：callee 为 MemberAccessExpr
  */
-open type Expr {
-  open let kind: ExprKind;
-  open let location: SourceLocation;
-  // 语义分析填充的类型（Parser 阶段为空）
-  open let inferredType: TypeRef;
+open type CallExpr {
+  let token: FengToken;
+  let callee: Expression;
+  let arguments: Expression[];
+}
 
-  // ---- 按 kind 使用的字段 ----
+open type ArrayLiteralExpr {
+  let token: FengToken;
+  let items: Expression[];
+}
 
-  // IDENTIFIER: identifierName
-  open let identifierName: Slice;
+open type TupleLiteralExpr {
+  let token: FengToken;
+  let items: Expression[];
+}
 
-  // BOOL: boolValue
-  // INTEGER: intValue
-  // FLOAT: floatValue
-  // STRING: stringValue
-  open let boolValue: bool;
-  open let intValue: i64;
-  open let floatValue: f64;
-  open let stringValue: Slice;
+open type ObjectLiteralField {
+  let token: FengToken;
+  let name: StringSpan;
+  let value: Expression;
+}
 
-  // ARRAY_LITERAL / TUPLE_LITERAL: items
-  open let items: Expr[];
+open type ObjectLiteralExpr {
+  let token: FengToken;
+  let target: Expression;
+  let fields: ObjectLiteralField[];
+}
 
-  // OBJECT_LITERAL: objectTarget + objectFields
-  open let objectTarget: Expr;
-  open let objectFields: ObjectFieldInit[];
+open type ArrayNewExpr {
+  let token: FengToken;
+  let elementTypeRef: TypeReference;
+  let size: Expression;
+}
 
-  // GENERIC_TARGET: genericTarget + typeArgs
-  open let genericTarget: Expr;
-  open let typeArgs: TypeRef[];
+/**
+ * 泛型具化表达式：对目标显式指定类型实参
+ *
+ * 用途：
+ * - 表示 `identifier<TypeArgs>` 语法结构
+ * - 可作为 CallExpr 的 callee，或独立存在
+ */
+open type GenericTargetExpr {
+  let token: FengToken;
+  let target: Expression;
+  let argumentTypeRefs: TypeReference[];
+}
 
-  // CALL: callee + callArgs + explicitTypeArgs
-  open let callee: Expr;
-  open let callArgs: Expr[];
-  open let explicitTypeArgs: TypeRef[];
+/**
+ * 成员访问表达式：obj.field, std.foo.test
+ *
+ * 多段路径解析策略：
+ * - 语法：`foo.bar.xyz` 按 `.` 左结合嵌套解析
+ * - AST：MemberAccess(MemberAccess(Identifier("foo"), "bar"), "xyz")
+ * - 语义阶段逐层消歧：从最左标识符查作用域，按解析结果切换查找策略
+ */
+open type MemberAccessExpr {
+  let token: FengToken;
+  let target: Expression;
+  let member: StringSpan;
+}
 
-  // MEMBER: memberObject + memberName
-  open let memberObject: Expr;
-  open let memberName: Slice;
+open type IndexAccessExpr {
+  let token: FengToken;
+  let target: Expression;
+  let index: Expression;
+}
 
-  // INDEX: indexObject + indexExpr
-  open let indexObject: Expr;
-  open let indexExpr: Expr;
+open spec LambdaBody: Expression | Block;
 
-  // UNARY: unaryOp + operand
-  open let unaryOp: TokenKind;
-  open let operand: Expr;
+open type LambdaExpr {
+  let token: FengToken;
+  let parameters: Parameter[];
+  let body: LambdaBody;
+  let returnTypeRef: Option<TypeReference>;
+}
 
-  // BINARY: binaryOp + left + right
-  open let binaryOp: TokenKind;
-  open let left: Expr;
-  open let right: Expr;
+open type RangeExpr {
+  let token: FengToken;
+  let start: Expression;
+  let end: Expression;
+}
 
-  // LAMBDA: params + lambdaBody / lambdaBlockBody + isBlockBody
-  open let params: Parameter[];
-  open let lambdaBody: Expr;
-  open let lambdaBlockBody: Block;
-  open let isBlockBody: bool;
+open spec MatchTarget: IntegerLiteralExpr
+  | StringLiteralExpr
+  | BooleanLiteralExpr
+  | MemberAccessExpr
+  | TypeReference
+  | SimpleBinding;
 
-  // CAST: castType + castValue
-  open let castType: TypeRef;
-  open let castValue: Expr;
+/**
+ * 匹配运算符表达式：value match pattern1 | pattern2 | ...
+ *
+ * 解析策略：贪婪消费所有 `|` 分隔的匹配目标
+ */
+open type MatchOperatorExpr {
+  let token: FengToken;
+  let value: Expression;
+  let targets: MatchTarget[];
+}
+```
 
-  // IF: condition + thenBlock + elseBlock
-  open let condition: Expr;
-  open let thenBlock: Block;
-  open let elseBlock: Block;
+### 3.7 Block（代码块）
 
-  // MATCH: matchTarget + branches + matchElse
-  open let matchTarget: Expr;
-  open let branches: MatchBranch[];
-  open let matchElse: Block;
+```feng
+open type Block {
+  let token: FengToken;
+  let statements: Statement[];
+}
+```
 
-  // MATCH_OP: matchOpTarget + matchOpLabels + binding info
-  open let matchOpTarget: Expr;
-  open let matchOpLabels: MatchLabel[];
-  open let hasBinding: bool;
-  open let bindingName: Slice;
-  open let bindingMutability: Mutability;
+### 3.8 Statement（语句）
 
-  // TRY: tryBody + catchClauses
-  open let tryBody: Expr;
-  open let catchClauses: TryCatchClause[];
+共 15 种语句（含 ForEachStmt），每种为独立 type，通过 spec union 聚合：
 
-  // ARRAY_NEW: elementTypeName + arraySize
-  open let elementTypeName: TypeRef;
-  open let arraySize: Expr;
+```feng
+open spec Statement: BlockStmt
+  | BindingStmt
+  | AssignmentStmt
+  | ExpressionStmt
+  | TryStmt
+  | IfStmt
+  | MatchStmt
+  | WhileStmt
+  | ForStmt
+  | ForEachStmt
+  | ReturnStmt
+  | ThrowStmt
+  | BreakStmt
+  | ContinueStmt
+  | DeferStmt;
+```
+
+**各 variant 定义**：
+
+```feng
+open type BlockStmt {
+  let token: FengToken;
+  let block: Block;
+}
+
+open type BindingStmt {
+  let token: FengToken;
+  let binding: Binding;
+}
+
+/**
+ * 赋值语句，支持简单赋值和复合赋值
+ * operator: = / += / -= / *= / /= 等
+ */
+open type AssignmentStmt {
+  let token: FengToken;
+  let operator: FengTokenKind;
+  let target: Expression;
+  let value: Expression;
+}
+
+open type ExpressionStmt {
+  let token: FengToken;
+  let expression: Expression;
+}
+
+open type TryStmt {
+  let token: FengToken;
+  let body: Expression;
+  let catchClauses: CatchClause[];
+  let catchAllBlock: Option<Block>;
+}
+
+open type IfStmt {
+  let token: FengToken;
+  let clauses: IfClause[];
+  let elseBlock: Block;
+}
+
+open type MatchStmt {
+  let token: FengToken;
+  let target: Expression;
+  let clauses: MatchClause[];
+  let elseBlock: Block;
+}
+
+open type WhileStmt {
+  let token: FengToken;
+  let condition: Expression;
+  let body: Block;
+}
+
+open spec ForInit: SimpleBinding | AssignmentStmt;
+open spec ForUpdate: Expression | AssignmentStmt;
+
+open type ForStmt {
+  let token: FengToken;
+  let init: ForInit;
+  let condition: Expression;
+  let update: ForUpdate;
+  let body: Block;
+}
+
+open type ForEachStmt {
+  let token: FengToken;
+  let binding: Binding;
+  let iterable: Expression;
+  let body: Block;
+}
+
+open type ReturnStmt {
+  let token: FengToken;
+  let value: Expression;
+}
+
+open type ThrowStmt {
+  let token: FengToken;
+  let value: Expression;
+}
+
+open type BreakStmt {
+  let token: FengToken;
+}
+
+open type ContinueStmt {
+  let token: FengToken;
+}
+
+open type DeferStmt {
+  let token: FengToken;
+  let body: Block;
 }
 ```
 
 **设计说明**：
 
-这里对 Expr 采用了**扁平 type**（而非 spec + 22 个子 type），原因：
-- Expr 是 AST 中数量最多的节点类型，一个中等大小的函数可能有几十个 Expr 节点
-- 扁平结构可以直接用 `@value` type（如果后续需要），避免 22 种子类型的堆分配
-- 与 C 版 union 结构直接对应，验证等价性更直接
-- 未使用字段保持默认值（null/0/false），空间上有些浪费但可接受
+- ForStmt（三段式 `for init; cond; update`）和 ForEachStmt（`for x in expr`）分离为两种独立 type
+- ForInit 支持 SimpleBinding（`for let i = 0`）或 AssignmentStmt（`for i = 0`）
+- ForUpdate 支持 Expression（`for ...; ...; i++`）或 AssignmentStmt（`for ...; ...; i += 1`）
+- TryStmt 的 `catchAllBlock: Option<Block>` 用于 `catch { ... }` 无类型捕获子句
 
-### 3.5 辅助 AST 类型
+### 3.9 辅助 AST 类型
 
 ```feng
-/** 参数定义 */
+/** 泛型参数节点，类型约束可省略 */
+open type GenericParameter {
+  let token: FengToken;
+  let name: StringSpan;
+  let constraintTypeRef: Option<TypeReference>;
+}
+
+/** 函数参数节点，引用 SimpleBinding，支持可变参数 */
 open type Parameter {
-  open let token: Token;
-  open let mutability: Mutability;
-  open let name: Slice;
-  open let typeRef: TypeRef;
-  open let isVariadic: bool;
+  let binding: SimpleBinding;
+  let isVariadic: bool;
 }
 
-/** 泛型类型参数 */
-open type TypeParam {
-  open let token: Token;
-  open let name: Slice;
-  open let constraint: TypeRef;
+/**
+ * 函数节点，支持泛型参数、参数列表、返回类型、函数体、外部函数标记
+ */
+open type Function {
+  let token: FengToken;
+  let name: StringSpan;
+  let genericParameters: GenericParameter[];
+  let parameters: Parameter[];
+  let returnTypeRef: Option<TypeReference>;
+  let annotations: Annotation[];
+  let body: Block;
 }
 
-/** 注解 */
+/**
+ * 注解节点：@test, @std.compiler.deprecated, @test(args)
+ *
+ * name 字段（SegmentedName）：
+ * - 简单注解：@test → segments: ["test"]
+ * - 限定名注解：@std.compiler.deprecated → segments: ["std", "compiler", "deprecated"]
+ *
+ * arguments 字段：
+ * - 注解参数列表，如 @test("reason", 2024) 中的参数
+ * - 无参数时为空数组
+ */
 open type Annotation {
-  open let token: Token;
-  open let name: Slice;
-  open let builtinKind: AnnotationKind;
-  open let args: Expr[];
-}
-
-/** 对象字段初始化 */
-open type ObjectFieldInit {
-  open let token: Token;
-  open let name: Slice;
-  open let value: Expr;
-}
-
-/** match 分支标签 */
-open enum MatchLabelKind {
-  VALUE = 0,
-  RANGE = 1,
-  TYPE = 2
-}
-
-open type MatchLabel {
-  open let token: Token;
-  open let kind: MatchLabelKind;
-  open let value: Expr;
-  open let rangeLow: Expr;
-  open let rangeHigh: Expr;
-  open let typeRef: TypeRef;
-}
-
-/** match 分支 */
-open type MatchBranch {
-  open let token: Token;
-  open let labels: MatchLabel[];
-  open let body: Block;
-  open let hasBinding: bool;
-  open let bindingName: Slice;
-  open let bindingMutability: Mutability;
-}
-
-/** try/catch 子句 */
-open type TryCatchClause {
-  open let token: Token;
-  open let name: Slice;
-  open let typeRef: TypeRef;
-  open let body: Block;
-}
-```
-
-### 3.6 Stmt（语句）
-
-```feng
-/** 语句种类 */
-open enum StmtKind {
-  BLOCK = 0,
-  BINDING = 1,
-  ASSIGN = 2,
-  EXPR = 3,
-  TRY = 4,
-  IF = 5,
-  MATCH = 6,
-  WHILE = 7,
-  FOR = 8,
-  RETURN = 9,
-  THROW = 10,
-  BREAK = 11,
-  CONTINUE = 12,
-  DEFER = 13
-}
-
-/** 代码块 */
-open type Block {
-  open let token: Token;
-  open let statements: Stmt[];
-}
-
-/** 语句 */
-open type Stmt {
-  open let kind: StmtKind;
-  open let location: SourceLocation;
-
-  // BLOCK
-  open let block: Block;
-
-  // BINDING
-  open let binding: Binding;
-
-  // ASSIGN: assignOp + assignTarget + assignValue
-  open let assignOp: TokenKind;
-  open let assignTarget: Expr;
-  open let assignValue: Expr;
-
-  // EXPR
-  open let expr: Expr;
-
-  // IF: ifClauses + ifElse
-  open let ifClauses: IfClause[];
-  open let ifElse: Block;
-
-  // MATCH
-  open let matchTarget: Expr;
-  open let matchBranches: MatchBranch[];
-  open let matchElse: Block;
-
-  // WHILE
-  open let whileCondition: Expr;
-  open let whileBody: Block;
-
-  // FOR（三段式和 for/in 共用）
-  open let isForIn: bool;
-  open let forBody: Block;
-  open let forInit: Stmt;
-  open let forCondition: Expr;
-  open let forUpdate: Stmt;
-  open let forIterBinding: Binding;
-  open let forIterExpr: Expr;
-
-  // RETURN / THROW
-  open let returnOrThrowValue: Expr;
-
-  // DEFER
-  open let deferBlock: Block;
-}
-
-/** 绑定声明（let/var） */
-open type Binding {
-  open let token: Token;
-  open let mutability: Mutability;
-  open let name: Slice;
-  open let typeRef: TypeRef;
-  open let initializer: Expr;
-  open let isDestructure: bool;
-  open let destructureNames: Slice[];
+  let token: FengToken;
+  let name: SegmentedName;
+  let arguments: Expression[];
 }
 
 /** if 分支 */
 open type IfClause {
-  open let token: Token;
-  open let condition: Expr;
-  open let block: Block;
+  let token: FengToken;
+  let condition: Expression;
+  let body: Block;
+}
+
+/** Match Targets 的分支辅助结构 */
+open type MatchClause {
+  let token: FengToken;
+  let targets: MatchTarget[];
+  let body: Block;
+}
+
+/** try/catch 子句 */
+open type CatchClause {
+  let token: FengToken;
+  let binding: SimpleBinding;
+  let body: Block;
 }
 ```
 
-### 3.7 TypeMember（类型成员）
+**设计说明**：
+
+- `CatchClause` 使用 `SimpleBinding` 替代"name + type"组合，统一绑定语义
+- `Parameter` 复用 `SimpleBinding`（含 mutability、typeRef、initializer），减少重复定义
+- `Function` 独立为 type，被 Function 声明、TypeMethod、TypeConstructor、TypeFinalizer 复用
+
+### 3.10 Type（类型声明）
 
 ```feng
-/** 类型成员种类 */
-open enum TypeMemberKind {
-  FIELD = 0,
-  METHOD = 1,
-  CONSTRUCTOR = 2,
-  FINALIZER = 3
+open type TypeField {
+  let token: FengToken;
+  let binding: SimpleBinding;
 }
 
-/** 可调用签名（函数/方法/构造器共用） */
-open type CallableSignature {
-  open let token: Token;
-  open let name: Slice;
-  open let typeParams: TypeParam[];
-  open let params: Parameter[];
-  open let returnType: TypeRef;
-  open let body: Block;
+open type TypeMethod {
+  let token: FengToken;
+  let function: Function;
 }
 
-/** 类型成员 */
+open type TypeConstructor {
+  let token: FengToken;
+  let function: Function;
+}
+
+open type TypeFinalizer {
+  let token: FengToken;
+  let function: Function;
+}
+
+open spec TypeMemberBody: TypeField
+  | TypeMethod
+  | TypeConstructor
+  | TypeFinalizer;
+
+/**
+ * 结构对应语法的层次关系：
+ * [open|seal] [static] <declaration>
+ * ─────────  ──────── ────────────
+ * visibility isStatic   body
+ */
 open type TypeMember {
-  open let token: Token;
-  open let kind: TypeMemberKind;
-  open let visibility: Visibility;
-  open let isStatic: bool;
-  open let docComment: Slice;
-  open let annotations: Annotation[];
+  let token: FengToken;
+  let visibility: Visibility;
+  let isStatic: bool;
+  let comment: StringSpan;
+  let body: TypeMemberBody;
+}
 
-  // FIELD
-  open let fieldMutability: Mutability;
-  open let fieldName: Slice;
-  open let fieldType: TypeRef;
-  open let fieldInitializer: Expr;
-
-  // METHOD / CONSTRUCTOR / FINALIZER
-  open let callable: CallableSignature;
+open type Type {
+  let token: FengToken;
+  let name: StringSpan;
+  let genericParameters: GenericParameter[];
+  let members: TypeMember[];
+  let specs: TypeReference[];
+  let annotations: Annotation[];
+  let isTuple: bool;
+  let isValue: bool;
 }
 ```
 
-### 3.8 Decl（声明）
+**设计说明**：
+
+- `TypeMember` 是 wrapper，承载 visibility、isStatic、doc comment 等修饰符
+- `TypeMemberBody` 是 spec union，区分 Field/Method/Constructor/Finalizer
+- `TypeField` 复用 `SimpleBinding`，字段声明即绑定
+- `TypeMethod`/`TypeConstructor`/`TypeFinalizer` 均复用 `Function`，仅语义不同
+
+### 3.11 Enum（枚举声明）
 
 ```feng
-/** 声明种类 */
-open enum DeclKind {
-  GLOBAL_BINDING = 0,
-  TYPE = 1,
-  ENUM = 2,
-  SPEC = 3,
-  FIT = 4,
-  FUNCTION = 5
-}
-
-/** spec 形式 */
-open enum SpecForm {
-  OBJECT = 0,
-  CALLABLE = 1,
-  UNION = 2
-}
-
-/** 枚举项 */
 open type EnumItem {
-  open let token: Token;
-  open let name: Slice;
-  open let hasExplicitValue: bool;
-  open let explicitValue: i64;
+  let token: FengToken;
+  let name: StringSpan;
+  let value: Option<int>;
+  let annotations: Annotation[];
 }
 
-/** import 声明 */
-open type UseDecl {
-  open let token: Token;
-  open let segments: Slice[];
-  open let alias: Slice;
-  open let hasAlias: bool;
-}
-
-/** 顶层声明 */
-open type Decl {
-  open let token: Token;
-  open let kind: DeclKind;
-  open let visibility: Visibility;
-  open let isExtern: bool;
-  open let docComment: Slice;
-  open let annotations: Annotation[];
-
-  // GLOBAL_BINDING
-  open let binding: Binding;
-
-  // TYPE
-  open let typeName: Slice;
-  open let typeParams: TypeParam[];
-  open let typeMembers: TypeMember[];
-  open let declaredSpecs: TypeRef[];
-  open let isTuple: bool;
-  open let isValue: bool;
-
-  // ENUM
-  open let enumName: Slice;
-  open let enumItems: EnumItem[];
-
-  // SPEC
-  open let specName: Slice;
-  open let specTypeParams: TypeParam[];
-  open let specForm: SpecForm;
-  open let parentSpecs: TypeRef[];
-  // object-form
-  open let specMembers: TypeMember[];
-  // callable-form
-  open let specCallableParams: Parameter[];
-  open let specCallableReturn: TypeRef;
-  // union-form
-  open let specUnionMembers: TypeRef[];
-
-  // FIT
-  open let fitTarget: TypeRef;
-  open let fitSpecs: TypeRef[];
-  open let fitMembers: TypeMember[];
-  open let fitHasBody: bool;
-
-  // FUNCTION
-  open let functionSig: CallableSignature;
+open type Enum {
+  let token: FengToken;
+  let name: StringSpan;
+  let annotations: Annotation[];
+  let items: EnumItem[];
 }
 ```
 
-### 3.9 Program（程序）
+**设计说明**：
+
+- 使用 `Option<int>` 替代 `hasExplicitValue: bool` + `explicitValue: i64`，避免"无显式值时 explicitValue 含垃圾数据"的问题
+- 枚举项支持注解（如 `@deprecated`）
+
+### 3.12 Spec（契约声明）
 
 ```feng
-/** 解析后的完整程序 */
-open type Program {
-  open let path: string;
-  open let moduleToken: Token;
-  open let moduleVisibility: Visibility;
-  open let moduleSegments: Slice[];
-  open let uses: UseDecl[];
-  open let declarations: Decl[];
+/**
+ * 对象契约：定义类型需实现的成员集合
+ * spec Named { let name: string; func greet(): string; }
+ */
+open type ObjectSpec {
+  let token: FengToken;
+  let genericParameters: GenericParameter[];
+  let members: TypeMember[];
+  let parentTypeRefs: TypeReference[];
+}
+
+/**
+ * 可调用契约：定义函数签名
+ * spec Predicate<T>: (T) -> bool;
+ */
+open type CallableSpec {
+  let token: FengToken;
+  let genericParameters: GenericParameter[];
+  let parameters: Parameter[];
+  let returnTypeRef: TypeReference;
+}
+
+/**
+ * 联合契约：定义可选类型集合
+ * spec Option<T>: Some<T> | None;
+ */
+open type UnionSpec {
+  let token: FengToken;
+  let memberTypeRefs: TypeReference[];
+}
+
+open spec SpecBody: ObjectSpec
+  | CallableSpec
+  | UnionSpec;
+
+/** 契约声明节点 */
+open type Spec {
+  let token: FengToken;
+  let name: StringSpan;
+  let annotations: Annotation[];
+  let body: SpecBody;
 }
 ```
+
+### 3.13 Fit（适配器声明）
+
+```feng
+/**
+ * 适配器声明：fit TargetType: Spec1, Spec2 { ... }
+ *
+ * members 字段：
+ * - Some(members): 有实现体，包含适配方法/字段
+ * - None: 无实现体（仅声明适配关系）
+ */
+open type Fit {
+  let token: FengToken;
+  let targetTypeRef: TypeReference;
+  let specTypeRefs: TypeReference[];
+  let members: Option<TypeMember[]>;
+}
+```
+
+**设计说明**：
+
+- 使用 `Option<TypeMember[]>` 替代 `hasBody: bool` + `members: TypeMember[]`
+
+### 3.14 ModuleFile（模块文件，Parser 输出）
+
+Parser 的输出是 `ModuleFile`（对应单个 `.ff` 文件），而非 `Module`（对应跨多文件的语义模块）。
+
+```feng
+open type ModuleBinding {
+  let token: FengToken;
+  let binding: SimpleBinding;
+}
+
+open type ModuleFunction {
+  let token: FengToken;
+  let isExtern: bool;
+  let function: Function;
+}
+
+open spec ModuleMemberBody: ModuleBinding
+  | ModuleFunction
+  | Type
+  | Enum
+  | Spec
+  | Fit;
+
+open type ModuleMember {
+  let token: FengToken;
+  let visibility: Visibility;
+  let body: ModuleMemberBody;
+}
+
+/**
+ * 模块导入声明：import std.text; import std.text as txt;
+ *
+ * alias 字段：
+ * - Some(alias): 有别名，如 import std.text as txt
+ * - None: 无别名，如 import std.text
+ */
+open type ModuleImport {
+  let token: FengToken;
+  let name: SegmentedName;
+  let alias: Option<StringSpan>;
+}
+
+open type ModuleFile {
+  let token: FengToken;
+  /** 当前文件的路径 */
+  let path: string;
+  /** import 作用于文件，而非整个模块 */
+  let imports: ModuleImport[];
+  let moduleVisibility: Visibility;
+  let moduleName: SegmentedName;
+  let moduleMembers: ModuleMember[];
+}
+```
+
+**设计说明**：
+
+- `ModuleFile` 是 Parser 的直接输出，对应单个 `.ff` 文件
+- `ModuleMember` 是 wrapper，承载 visibility 修饰符
+- `ModuleMemberBody` 包含 6 种成员：ModuleBinding、ModuleFunction、Type、Enum、Spec、Fit
+- `ModuleFunction` 单独包装，增加 `isExtern` 标记（`extern func`）
+- `ModuleImport` 使用 `SegmentedName` 表示模块路径（如 `std.text`）
+
+### 3.15 Module / Program（语义阶段）
+
+语义分析阶段将多个 `ModuleFile` 合并为 `Module`，所有模块聚合为 `Program`：
+
+```feng
+open type Module {
+  /** 模块可见性 */
+  let visibility: Visibility;
+  /** 模块名称 */
+  let name: SegmentedName;
+
+  /**
+   * 模块可分布在多个文件，但 import 作用于文件，而非整个模块
+   * 语义阶段，根据 path 合并为同一个模块，同时需检查可见性声明一致
+   */
+  let files: ModuleFile[];
+}
+
+open type Program {
+  let modules: Module[];
+}
+```
+
+**与 C 版对比**：
+
+- C 版 `FengProgram` 实际是单文件（对应 Feng 版 `ModuleFile`），命名不准确
+- Feng 版明确区分：`ModuleFile`（语法层，单文件）→ `Module`（语义层，跨文件）→ `Program`（所有模块）
+- 主流语言惯例：`Program` 通常对应"整个编译单元/项目"，而非单文件
 
 ---
 
 ## 4 Parser 实现
 
-**文件**：`std/src/compiler/Parser/FengParser.ff`
-**模块**：`std.compiler`
+**文件**：`std/src/compiler/parser/FengParser.ff`
+**模块**：`std.compiler.parser`
 
 ### 4.1 设计
 
@@ -635,7 +894,7 @@ open type Program {
  * Feng 语法分析器。
  *
  * 递归下降式解析器，与 C 版 parser.c 行为等价。
- * 输入 Token 流（来自 FengLexer），输出 AST（Program）。
+ * 输入 Token 流（来自 FengLexer），输出 ModuleFile AST。
  *
  * 衔接方式：当前阶段 Parser 直接接受 FengLexer（流式消费 + 内部前瞻缓冲，
  * 对齐主流编译器设计）。未来若引入只读 TokenStream 概念（封装
@@ -645,11 +904,11 @@ open type Program {
  * 用法示例：
  *   let lexer = FengLexer(source, "example.ff");
  *   let parser = FengParser(lexer);
- *   let program = parser.parse();
+ *   let moduleFile = parser.parse();
  */
 open type FengParser {
   seal let lexer: FengLexer;
-  seal var current: Token;
+  seal var current: FengToken;
   seal var errors: ParseError[];
 
   /** 从 Lexer 创建 Parser */
@@ -657,9 +916,9 @@ open type FengParser {
 
   /**
    * 解析完整源文件。
-   * 返回 Program AST；如果有语法错误，通过 errors() 获取错误列表。
+   * 返回 ModuleFile AST；如果有语法错误，通过 errors() 获取错误列表。
    */
-  open func parse(): Program;
+  open func parse(): ModuleFile;
 
   /** 获取解析过程中收集的错误 */
   open func errors(): ParseError[];
@@ -667,7 +926,7 @@ open type FengParser {
 
 /** 解析错误 */
 open type ParseError {
-  open let token: Token;
+  open let token: FengToken;
   open let code: string;
   open let message: string;
 }
@@ -680,18 +939,18 @@ Parser 的核心是递归下降，按优先级从低到高组织表达式解析�
 ```
 parse()
   → parseModuleDeclaration()          // module ...;
-  → parseUseDeclarations()            // import ...; (多条)
-  → parseTopLevelDeclarations()       // 顶层声明序列
+  → parseModuleImports()              // import ...; (多条)
+  → parseModuleMembers()              // 模块成员序列
     → parseAnnotations()              // @annotation 序列
-    → parseDeclaration()
+    → parseModuleMember()
       → parseTypeDecl()               // type Name { ... }
       → parseEnumDecl()               // enum Name { ... }
       → parseSpecDecl()               // spec Name { ... } / spec Name(): ...; / spec Name: ... | ...;
       → parseFitDecl()                // fit Type: Spec { ... }
       → parseFunctionDecl()           // func name(...) { ... }
-      → parseGlobalBindingDecl()      // let/var name: Type = expr;
+      → parseModuleBindingDecl()      // let/var name: Type = expr;
 
-parseExpression()                     // 表达式入口
+parseExpression()                     // 表达式入口（返回 Expression spec）
   → parseAssignment()                 // = += -= *= /= %= &= |= ^= <<= >>=
     → parseOr()                       // ||
       → parseAnd()                    // &&
@@ -761,22 +1020,22 @@ Lambda 语法：`(params) => expr` 或 `(params) => { block }`
 
 | C 版函数 | Feng 版对应 | 说明 |
 |----------|------------|------|
-| `feng_parse_source` | `FengParser.parse()` | 入口 |
-| `parse_expression` | `parseExpression()` | 表达式 |
+| `feng_parse_source` | `FengParser.parse()` | 入口（返回 ModuleFile） |
+| `parse_expression` | `parseExpression()` | 表达式（返回 Expression spec） |
 | `parse_assignment` | `parseAssignment()` | 赋值 |
 | `parse_or` ... `parse_primary` | 对应优先级层方法 | 优先级链 |
-| `parse_type_ref` | `parseTypeRef()` | 类型引用 |
+| `parse_type_ref` | `parseTypeReference()` | 类型引用（返回 TypeReference spec） |
 | `parse_annotations` | `parseAnnotations()` | 注解序列 |
-| `parse_declaration` | `parseDeclaration()` | 声明分发 |
+| `parse_declaration` | `parseDeclaration()` | 声明分发（返回 ModuleMember） |
 | `parse_block` | `parseBlock()` | 代码块 |
-| `parse_statement` | `parseStatement()` | 语句分发 |
+| `parse_statement` | `parseStatement()` | 语句分发（返回 Statement spec） |
 
 ---
 
 ## 5 AstDumper
 
-**文件**：`std/src/compiler/Parser/AstDumper.ff`
-**模块**：`std.compiler`
+**文件**：`std/src/compiler/parser/FengAstDumper.ff`
+**模块**：`std.compiler.parser`
 
 ### 5.1 设计
 
@@ -787,21 +1046,21 @@ Lambda 语法：`(params) => expr` 或 `(params) => { block }`
  * 将 AST 以缩进文本形式输出，格式与 C 版 dump.c 对齐。
  * 用于测试验证和调试。
  */
-open type AstDumper {
-  /** 将 Program AST 输出为文本 */
-  open static func dump(program: Program): string;
+open type FengAstDumper {
+  /** 将 ModuleFile AST 输出为文本 */
+  open static func dump(moduleFile: ModuleFile): string;
 
-  /** 将单个 Expr AST 输出为文本 */
-  open static func dumpExpr(expr: Expr): string;
+  /** 将单个 Expression AST 输出为文本 */
+  open static func dumpExpr(expr: Expression): string;
 }
 ```
 
 ### 5.2 输出格式
 
-与 C 版 `dump.c` 对齐，使用缩进表示层级：
+与 C 版 `dump.c` 对齐，使用缩进表示层级（以单文件 ModuleFile 为单位）：
 
 ```
-Program: example.ff
+ModuleFile: example.ff
   Module: std.example (open)
   Import: std
   Import: std.text
@@ -809,7 +1068,7 @@ Program: example.ff
     Field: name (string) (let)
     Method: display() -> string
       Return
-        Member: self.name
+        MemberAccess: self.name
 ```
 
 ---
@@ -818,12 +1077,12 @@ Program: example.ff
 
 | 步骤 | 内容 | 前置 | 产出文件 |
 |------|------|------|---------|
-| 6 | AST 节点类型定义 | 阶段一完成 | `std/src/compiler/Parser/AstNode.ff` |
-| 7 | Parser 核心框架 | 6 | `std/src/compiler/Parser/FengParser.ff` |
+| 6 | AST 节点类型定义 | 阶段一完成 | `std/src/compiler/parser/FengAstNodes.ff`（已完成） |
+| 7 | Parser 核心框架 | 6 | `std/src/compiler/parser/FengParser.ff` |
 | 8 | 表达式解析（优先级链） | 7 | 同上 |
 | 9 | 语句解析 | 7 | 同上 |
 | 10 | 声明解析（type/enum/spec/fit/func） | 7-9 | 同上 |
-| 11 | AstDumper | 6 | `std/src/compiler/Parser/AstDumper.ff` |
+| 11 | FengAstDumper | 6 | `std/src/compiler/parser/FengAstDumper.ff` |
 | 12 | Parser 测试 | 7-11 | fcts 测试 |
 
 ---
@@ -833,7 +1092,7 @@ Program: example.ff
 ### 7.1 AST dump 对比
 
 - 对 C 版 parser 测试用例（`test/parser/test_parser.c`）中的每个测试输入
-- 分别用 C 版 parser + dump.c 和 Feng 版 parser + AstDumper 产出 AST dump
+- 分别用 C 版 parser + dump.c 和 Feng 版 parser + FengAstDumper 产出 AST dump
 - diff 比较两者输出是否一致
 
 ### 7.2 错误码对比
@@ -843,16 +1102,16 @@ Program: example.ff
 ### 7.3 完整源文件解析
 
 - 用 std 库中的 `.ff` 文件作为输入（如 `std/src/text/String.ff`）
-- 比较 C 版和 Feng 版的解析结果
+- 比较 C 版和 Feng 版的解析结果（ModuleFile 结构）
 
 ---
 
 ## 8 开放问题
 
-1. **Expr 的扁平 type vs spec + 子 type**：当前方案用扁平 type，但如果后续需要更好的类型安全性，可能需要重构为 spec + 子 type。这个决策可以在实现过程中根据实际体验调整
-2. **Parser 的错误恢复策略**：C 版 parser 的错误恢复策略比较复杂，Feng 版是否需要完全复制？还是可以先实现简单版本（遇错即停），后续再增强？
-3. **泛型参数歧义的回溯机制**：`<` 的歧义解析需要回溯能力（保存/恢复解析器状态）。Feng 的 Token 前瞻机制是否足够支持？
-4. **Parser 是否需要支持增量解析**：远期如果用于 IDE/LSP 场景，可能需要增量解析能力。当前方案不支持增量解析
-5. **AST 节点是否用 @value type**：Expr 用普通 type（引用语义），因为 AST 节点形成树形结构，引用更自然；但大量小节点（如 Identifier、IntLiteral）是否有 GC 压力？
-6. **Token/FengToken 类型名对齐**：AST 节点中引用的 `Token` 和 `TokenKind` 类型需更新为 Lexer 草案中的 `FengToken` 和 `FengTokenKind`（含新的区间分段命名：`KeywordType`、`OperatorPlus` 等）
-7. **AnnotationKind 定义位置**：Lexer 草案已移除 `AnnotationKind`（注解分类是 Parser 职责）。Parser AST 的 `Annotation` 节点引用了 `AnnotationKind`，需在此草案中定义
+1. **Parser 的错误恢复策略**：C 版 parser 的错误恢复策略比较复杂，Feng 版是否需要完全复制？还是可以先实现简单版本（遇错即停），后续再增强？
+2. **泛型参数歧义的回溯机制**：`<` 的歧义解析需要回溯能力（保存/恢复解析器状态）。Feng 的 Token 前瞻机制是否足够支持？
+3. **Parser 是否需要支持增量解析**：远期如果用于 IDE/LSP 场景，可能需要增量解析能力。当前方案不支持增量解析
+4. **AST 节点是否用 @value type**：Expression 用普通 type（引用语义），因为 AST 节点形成树形结构，引用更自然；但大量小节点（如 IdentifierExpr、IntegerLiteralExpr）是否有 GC 压力？
+5. **FengToken / FengTokenKind 类型对齐**：AST 节点已统一使用 `FengToken` / `FengTokenKind`（来自 `std.compiler.lexer`），与 Lexer 草案保持一致
+6. **内建注解识别**：Lexer 草案已移除 `AnnotationKind`（注解分类是 Parser 职责）。Feng 版 `Annotation` 节点不含 `builtinKind` 字段，注解分类在语义阶段通过 `name.segments` 查找完成
+7. **语义阶段产出 Program**：Parser 输出 `ModuleFile`（单文件），语义阶段需将多个 `ModuleFile` 合并为 `Module`（按模块名分组），并聚合为 `Program`。此合并逻辑的设计待细化
