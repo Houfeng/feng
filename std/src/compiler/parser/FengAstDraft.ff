@@ -666,10 +666,10 @@ open type ModuleImport {
 
 open type ModuleFile {
   let token: FengToken;
-  // import 作用于文件，而非整个模块
-  let imports: ModuleImport[];
   // 当前文件的路径
   let path: string;
+  // import 作用于文件，而非整个模块
+  let imports: ModuleImport[];
   // ---
   let moduleVisibility: Visibility;
   let moduleName: SegmentedName;
@@ -696,7 +696,7 @@ open type Module {
   // func members(): ModuleMember[] {
   //   var list = List<ModuleMember>();
   //   for let file in self.files {
-  //     for let member in file.members { list.add(member); }
+  //     for let member in file.moduleMembers { list.add(member); }
   //   }
   //   return list.entries();
   // }
