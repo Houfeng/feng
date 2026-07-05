@@ -310,7 +310,7 @@ open type IfExpr {
 }
 
 /** Match Targets 的分支辅助结构 */
-open type MatchBranch {
+open type MatchClause {
   let token: FengToken;
   let targets: MatchTarget[];
   let body: Block;
@@ -318,7 +318,7 @@ open type MatchBranch {
 
 open type MatchExpr {
   let target: Expression;
-  let branches: MatchBranch[];
+  let clauses: MatchClause[];
   let elseBlock: Block;
 }
 
@@ -490,7 +490,7 @@ open type IfStatement {
 
 open type MatchStatement {
   let target: Expression;
-  let branches: MatchBranch[];
+  let clauses: MatchClause[];
   let elseBlock: Block;
 }
 
