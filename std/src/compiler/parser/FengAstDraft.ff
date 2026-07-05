@@ -95,9 +95,9 @@ open type TypeReference {
 open type Binding {
   let token: FengToken;
   let name: StringSpan;
+  let mutability: Mutability;
   let typeRef: TypeReference;
   let initializer: Expression;
-  let mutability: Mutability;
   let isDestructure: bool;
   let destructureNames: StringSpan[];
 }
