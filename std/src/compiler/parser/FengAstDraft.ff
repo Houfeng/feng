@@ -524,28 +524,26 @@ open enum TypeMemberKind {
   Finalizer = 3
 }
 
-// ---- TypeMember variants (4) ----
-
-open type FieldMember {
+open type TypeField {
   let binding: Binding;
 }
 
-open type MethodMember {
+open type TypeMethod {
   let function: Function;
 }
 
-open type ConstructorMember {
+open type TypeConstructor {
   let function: Function;
 }
 
-open type FinalizerMember {
+open type TypeFinalizer {
   let function: Function;
 }
 
-open spec TypeMemberBody: FieldMember
-| MethodMember
-| ConstructorMember
-| FinalizerMember;
+open spec TypeMemberBody: TypeField
+| TypeMethod
+| TypeConstructor
+| TypeFinalizer;
 
 open type TypeMember {
   let token: FengToken;
@@ -559,9 +557,9 @@ open type TypeMember {
 
 open type TypeDeclaration {
   let name: StringSpan;
-  let parameterTypeRefs: GenericParameter[];
+  let parameters: GenericParameter[];
   let members: TypeMember[];
-  let declaredSpecifications: TypeReference[];
+  let specifications: TypeReference[];
   let isTuple: bool;
   let isValue: bool;
 }
