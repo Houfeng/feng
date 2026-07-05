@@ -45,7 +45,7 @@ open enum Mutability {
 /**
  * 命名类型引用：int, std.text.String, Map<K, V>
  */
-open type TypeRefNamedBody {
+open type NamedTypeRef {
   let segments: StringSpan[];
   let parameterTypeRefs: TypeReference[];
 }
@@ -53,14 +53,14 @@ open type TypeRefNamedBody {
 /**
  * 指针类型引用：int*, string*
  */
-open type TypeRefPointerBody {
+open type PointerTypeRef {
   let targetTypeRef: TypeReference;
 }
 
 /**
  * 数组类型引用：int[], int[!]
  */
-open type TypeRefArrayBody {
+open type ArrayTypeRef {
   let elementTypeRef: TypeReference;
   let elementWritable: bool;
 }
@@ -68,9 +68,9 @@ open type TypeRefArrayBody {
 /**
  * 类型引用体，支持命名类型、指针类型、数组类型
  */
-open spec TypeReferenceBody: TypeRefNamedBody
-| TypeRefPointerBody
-| TypeRefArrayBody;
+open spec TypeReferenceBody: NamedTypeRef
+| PointerTypeRef
+| ArrayTypeRef;
 
 /**
  * 类型引用种类枚举类型
@@ -155,55 +155,55 @@ open type Function {
 
 // 基础表达式 -------------------------------------------------------------------
 
-open type IdentifierExpression {
+open type IdentifierExpr {
   let name: StringSpan;
 }
 
-open type BooleanLiteralExpression {
+open type BooleanLiteralExpr {
   let value: bool;
 }
 
-open type IntegerLiteralExpression {
+open type IntegerLiteralExpr {
   let value: i64;
   let raw: StringSpan;
 }
 
-open type FloatLiteralExpression {
+open type FloatLiteralExpr {
   let value: f64;
   let raw: StringSpan;
 }
 
-open type StringLiteralExpression {
+open type StringLiteralExpr {
   let value: StringSpan;
 }
 
-open type UnaryOperationExpression {
+open type UnaryOperationExpr {
   let operator: FengTokenKind;
   let operand: Expression;
 }
 
-open type CastExpression {
+open type CastExpr {
   let targetType: TypeReference;
   let value: Expression;
 }
 
-open type BinaryOperationExpression {
+open type BinaryOperationExpr {
   let operator: FengTokenKind;
   let left: Expression;
   let right: Expression;
 }
 
-open type CallExpression {
+open type CallExpr {
   let callee: Expression;
   let arguments: Expression[];
   let explicitTypeArguments: TypeReference[];
 }
 
-open type ArrayLiteralExpression {
+open type ArrayLiteralExpr {
   let items: Expression[];
 }
 
-open type TupleLiteralExpression {
+open type TupleLiteralExpr {
   let items: Expression[];
 }
 
@@ -213,39 +213,39 @@ open type ObjectLiteralField {
   let value: Expression;
 }
 
-open type ObjectLiteralExpression {
+open type ObjectLiteralExpr {
   let target: Expression;
   let fields: ObjectLiteralField[];
 }
 
-open type ArrayNewExpression {
+open type ArrayNewExpr {
   let elementTypeRef: TypeReference;
   let size: Expression;
 }
 
-open type GenericTargetExpression {
+open type GenericTargetExpr {
   let target: Expression;
   let typeArguments: TypeReference[];
 }
 
-open type MemberAccessExpression {
+open type MemberAccessExpr {
   let object: Expression;
   let memberName: StringSpan;
 }
 
-open type IndexAccessExpression {
+open type IndexAccessExpr {
   let object: Expression;
   let index: Expression;
 }
 
-open type LambdaExpression {
+open type LambdaExpr {
   let parameters: Parameter[];
   let expressionBody: Expression;
   let blockBody: Block;
   let isBlockBody: bool;
 }
 
-open type MatchOperatorExpression {
+open type MatchOperatorExpr {
   let target: Expression;
   let labels: MatchLabel[];
   let hasBinding: bool;
@@ -255,19 +255,19 @@ open type MatchOperatorExpression {
 
 // 块表达式 ---------------------------------------------------------------------
 
-open type IfExpression {
+open type IfExpr {
   let condition: Expression;
   let thenBlock: Block;
   let elseBlock: Block;
 }
 
-open type MatchExpression {
+open type MatchExpr {
   let target: Expression;
   let branches: MatchBranch[];
   let elseBlock: Block;
 }
 
-open type TryExpression {
+open type TryExpr {
   let body: Expression;
   let catchClauses: TryCatchClause[];
 }
@@ -298,27 +298,27 @@ open enum ExpressionKind {
   Try = 20
 }
 
-open spec ExpressionBody: IdentifierExpression
-| BooleanLiteralExpression
-| IntegerLiteralExpression
-| FloatLiteralExpression
-| StringLiteralExpression
-| ArrayLiteralExpression
-| TupleLiteralExpression
-| ObjectLiteralExpression
-| ArrayNewExpression
-| GenericTargetExpression
-| CallExpression
-| MemberAccessExpression
-| IndexAccessExpression
-| UnaryOperationExpression
-| BinaryOperationExpression
-| LambdaExpression
-| CastExpression
-| MatchOperatorExpression
-| IfExpression
-| MatchExpression
-| TryExpression;
+open spec ExpressionBody: IdentifierExpr
+| BooleanLiteralExpr
+| IntegerLiteralExpr
+| FloatLiteralExpr
+| StringLiteralExpr
+| ArrayLiteralExpr
+| TupleLiteralExpr
+| ObjectLiteralExpr
+| ArrayNewExpr
+| GenericTargetExpr
+| CallExpr
+| MemberAccessExpr
+| IndexAccessExpr
+| UnaryOperationExpr
+| BinaryOperationExpr
+| LambdaExpr
+| CastExpr
+| MatchOperatorExpr
+| IfExpr
+| MatchExpr
+| TryExpr;
 
 open type Expression {
   let token: FengToken;
