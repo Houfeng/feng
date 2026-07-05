@@ -561,6 +561,7 @@ open type TypeDeclaration {
   let parameters: GenericParameter[];
   let members: TypeMember[];
   let specifications: TypeReference[];
+  let annotations: Annotation[];
   let isTuple: bool;
   let isValue: bool;
 }
@@ -647,6 +648,7 @@ open type ModuleMember {
   let name: StringSpan;
   let kind: ModuleMemberKind;
   let visibility: Visibility;
+  let annotations: Annotation[];
   let body: ModuleMemberBody;
 }
 
