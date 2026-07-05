@@ -273,16 +273,27 @@ open type LambdaExpr {
   let returnTypeRef: Option<TypeReference>;
 }
 
-open type RangeBounds {
+open type RangeExpr {
   let low: Expression;
   let high: Expression;
 }
 
-open spec MatchTarget: Expression | TypeReference | RangeBounds | SimpleBinding;
+open spec MatchTarget: IntegerLiteralExpr
+  | StringLiteralExpr
+  | BooleanLiteralExpr
+  | MemberAccessExpr
+  | TypeReference
+  | SimpleBinding;
 
+/**
+ * 匹配运算符表达式：value match pattern1 | pattern2 | ...
+ *
+ * 解析策略：
+ * - 贪婪消费所有 `|` 分隔的匹配目标
+ */
 open type MatchOperatorExpr {
-  let left: Expression;
-  let right: MatchTarget;
+  let value: Expression;
+  let targets: MatchTarget[];
 }
 
 // 块表达式 ---------------------------------------------------------------------
@@ -327,7 +338,8 @@ open enum ExpressionKind {
   MatchOperator = 17,
   If = 18,
   Match = 19,
-  Try = 20
+  Try = 20,
+  Range = 21
 }
 
 open spec ExpressionBody: IdentifierExpr
@@ -350,7 +362,8 @@ open spec ExpressionBody: IdentifierExpr
 | MatchOperatorExpr
 | IfExpr
 | MatchExpr
-| TryExpr;
+| TryExpr
+| RangeExpr;
 
 open type Expression {
   let token: FengToken;
