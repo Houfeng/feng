@@ -101,6 +101,7 @@ open type SimpleBinding {
   let mutability: Mutability;
   let typeRef: Option<TypeReference>;
   let initializer: Option<Expression>;
+  let annotations: Annotation[];
 }
 
 /**
@@ -112,6 +113,7 @@ open type DestructureBinding {
   let names: StringSpan[];
   let typeRef: Option<TypeReference>;
   let initializer: Option<Expression>;
+  let annotations: Annotation[];
 }
 
 /**
@@ -149,6 +151,7 @@ open type Function {
   let genericParameters: GenericParameter[];
   let parameters: Parameter[];
   let returnTypeRef: Option<TypeReference>;
+  let annotations: Annotation[];
   let body: Block;
 }
 
@@ -386,6 +389,7 @@ open enum ExpressionKind {
 open type Expression {
   let token: FengToken;
   let kind: ExpressionKind;
+  // let annotations: Annotation[];
   let body: ExpressionBody;
 }
 
@@ -550,7 +554,6 @@ open type TypeMember {
   let visibility: Visibility;
   let isStatic: bool;
   let comment: StringSpan;
-  let annotations: Annotation[];
   let body: TypeMemberBody;
 }
 
@@ -577,6 +580,7 @@ open type EnumerationItem {
 
 open type EnumerationDeclaration {
   let name: StringSpan;
+  let annotations: Annotation[];
   let items: EnumerationItem[];
 }
 
@@ -590,6 +594,7 @@ open enum SpecificationForm {
 
 open type SpecificationDeclaration {
   let name: StringSpan;
+  let annotations: Annotation[];
   let typeParameters: GenericParameter[];
   let form: SpecificationForm;
   let parentSpecifications: TypeReference[];
@@ -648,7 +653,6 @@ open type ModuleMember {
   let name: StringSpan;
   let kind: ModuleMemberKind;
   let visibility: Visibility;
-  let annotations: Annotation[];
   let body: ModuleMemberBody;
 }
 
