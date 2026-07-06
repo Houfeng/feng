@@ -87,7 +87,9 @@ open spec TypeReference: NamedTypeRef
 // 绑定 ------------------------------------------------------------------------
 
 /**
- * 简单绑定：let x: int = 5;
+ * 简单绑定：let x: int = 5; var name = "hello";
+ *
+ * 支持可选的类型标注和初始化表达式，用于 let/var 声明语句
  */
 open type SimpleBinding {
   let token: FengToken;
@@ -99,7 +101,7 @@ open type SimpleBinding {
 }
 
 /**
- * 简单绑定签名：用于函数参数、契约成员等
+ * 简单绑定签名：不含初始化表达式，用于函数参数、契约成员等声明位置
  */
 open type SimpleBindingSignature {
   let token: FengToken;
@@ -110,7 +112,9 @@ open type SimpleBindingSignature {
 }
 
 /**
- * 解构绑定：let (a, b) = (1, 2);
+ * 解构绑定：let (a, b) = (1, 2); var (x, y, z) = tuple;
+ *
+ * 将元组或复合类型的各分量绑定到多个名称
  */
 open type DestructureBinding {
   let token: FengToken;
@@ -176,45 +180,73 @@ open type Function {
 
 // 基础表达式 -------------------------------------------------------------------
 
+/**
+ * 标识符表达式：引用变量、参数、函数等命名实体
+ */
 open type IdentifierExpr {
   let token: FengToken;
   let name: StringSpan;
 }
 
+/**
+ * 布尔字面量表达式：true, false
+ */
 open type BooleanLiteralExpr {
   let token: FengToken;
   let value: bool;
 }
 
+/**
+ * 整数字面量表达式：42, 0xFF, 0b1010
+ *
+ * raw 字段保留原始源码文本，用于精确还原（如进制前缀、下划线分隔符）
+ */
 open type IntegerLiteralExpr {
   let token: FengToken;
   let value: i64;
   let raw: StringSpan;
 }
 
+/**
+ * 浮点数字面量表达式：3.14, 1.0e-5
+ *
+ * raw 字段保留原始源码文本
+ */
 open type FloatLiteralExpr {
   let token: FengToken;
   let value: f64;
   let raw: StringSpan;
 }
 
+/**
+ * 字符串字面量表达式："hello", "line\n"
+ */
 open type StringLiteralExpr {
   let token: FengToken;
   let value: StringSpan;
 }
 
+/**
+ * 一元表达式：!flag, -x, ~bits
+ */
 open type UnaryExpr {
   let token: FengToken;
   let operator: FengTokenKind;
   let operand: Expression;
 }
 
+/**
+ * 类型转换表达式：value as TargetType
+ */
 open type CastExpr {
   let token: FengToken;
   let targetType: TypeReference;
   let value: Expression;
 }
 
+/**
+ * 二元表达式：a + b, x == y, left && right
+ */
 open type BinaryExpr {
   let token: FengToken;
   let operator: FengTokenKind;
@@ -243,28 +275,47 @@ open type CallExpr {
   let arguments: Expression[];
 }
 
+/**
+ * 数组字面量表达式：[1, 2, 3], []
+ */
 open type ArrayLiteralExpr {
   let token: FengToken;
   let items: Expression[];
 }
 
+/**
+ * 元组字面量表达式：(1, 2), (a, b, c)
+ */
 open type TupleLiteralExpr {
   let token: FengToken;
   let items: Expression[];
 }
 
+/**
+ * 对象字面量字段：name: value
+ */
 open type ObjectLiteralField {
   let token: FengToken;
   let name: StringSpan;
   let value: Expression;
 }
 
+/**
+ * 对象字面量表达式：Point { x: 1, y: 2 }
+ *
+ * target 为目标类型表达式，fields 为字段初始化列表
+ */
 open type ObjectLiteralExpr {
   let token: FengToken;
   let target: Expression;
   let fields: ObjectLiteralField[];
 }
 
+/**
+ * 数组构造表达式：new int[10], new MapEntry<K,V>[n]
+ *
+ * 按元素类型和大小创建数组实例
+ */
 open type ArrayNewExpr {
   let token: FengToken;
   let elementTypeRef: TypeReference;
@@ -310,14 +361,25 @@ open type MemberAccessExpr {
   let member: StringSpan;
 }
 
+/**
+ * 下标访问表达式：arr[0], map["key"]
+ */
 open type IndexAccessExpr {
   let token: FengToken;
   let target: Expression;
   let index: Expression;
 }
 
+/**
+ * Lambda 表达式体：单表达式或语句块
+ */
 open spec LambdaBody: Expression | Block;
 
+/**
+ * Lambda 表达式：(x) => x + 1, (a, b): int => { return a + b; }
+ *
+ * 支持单表达式体和语句块体，可选返回类型标注
+ */
 open type LambdaExpr {
   let token: FengToken;
   // 暂时，lambda 不支持泛型参数，后续扩展
@@ -327,12 +389,22 @@ open type LambdaExpr {
   let returnTypeRef: Option<TypeReference>;
 }
 
+/**
+ * 范围表达式：start..end
+ *
+ * 用于 for 循环等需要范围迭代的上下文
+ */
 open type RangeExpr {
   let token: FengToken;
   let start: Expression;
   let end: Expression;
 }
 
+/**
+ * 匹配目标联合类型：用于 match 分支的模式匹配标签
+ *
+ * 支持字面量、成员访问（枚举值/常量）、类型引用、绑定声明等模式
+ */
 open spec MatchTarget: IntegerLiteralExpr
 | StringLiteralExpr
 | BooleanLiteralExpr
@@ -354,12 +426,20 @@ open type MatchOperatorExpr {
 
 // 块表达式 ---------------------------------------------------------------------
 
+/**
+ * if 分支子句：条件表达式 + 执行体
+ */
 open type IfClause {
   let token: FengToken;
   let condition: Expression;
   let body: Block;
 }
 
+/**
+ * if 表达式：if cond1 { } else if cond2 { } else { }
+ *
+ * clauses 包含所有 if/else if 分支，elseBlock 为 else 分支体
+ */
 open type IfExpr {
   let token: FengToken;
   let clauses: IfClause[];
@@ -373,6 +453,9 @@ open type MatchClause {
   let body: Block;
 }
 
+/**
+ * match 表达式：match target { case1 => body1; case2 => body2; _ => elseBody }
+ */
 open type MatchExpr {
   let token: FengToken;
   let target: Expression;
@@ -380,12 +463,22 @@ open type MatchExpr {
   let elseBlock: Block;
 }
 
+/**
+ * catch 子句：catch binding { body }
+ *
+ * binding 绑定捕获的异常对象，body 为异常处理逻辑
+ */
 open type CatchClause {
   let token: FengToken;
   let binding: SimpleBinding;
   let body: Block;
 }
 
+/**
+ * try 表达式：try { body } catch e: ErrType { handler } catch { catchAll }
+ *
+ * 作为表达式使用时，整体求值为一个结果
+ */
 open type TryExpr {
   let token: FengToken;
   let body: Expression;
@@ -395,6 +488,9 @@ open type TryExpr {
 
 // 表达式联合类型 ----------------------------------------------------------------
 
+/**
+ * 表达式联合类型：所有表达式节点的统一入口
+ */
 open spec Expression: IdentifierExpr
 | BooleanLiteralExpr
 | IntegerLiteralExpr
@@ -420,6 +516,9 @@ open spec Expression: IdentifierExpr
 
 // 块结构 ----------------------------------------------------------------------
 
+/**
+ * 语句块：由花括号包裹的语句序列
+ */
 open type Block {
   let token: FengToken;
   let statements: Statement[];
@@ -427,11 +526,17 @@ open type Block {
 
 // 语句 ------------------------------------------------------------------------
 
+/**
+ * 块语句：嵌套的语句块
+ */
 open type BlockStmt {
   let token: FengToken;
   let block: Block;
 }
 
+/**
+ * 绑定语句：let/var 声明
+ */
 open type BindingStmt {
   let token: FengToken;
   let binding: Binding;
@@ -448,11 +553,19 @@ open type AssignmentStmt {
   let value: Expression;
 }
 
+/**
+ * 表达式语句：函数调用等作为语句使用
+ */
 open type ExpressionStmt {
   let token: FengToken;
   let expression: Expression;
 }
 
+/**
+ * try 语句：try { body } catch e: ErrType { handler } catch { catchAll }
+ *
+ * 作为语句使用时，不产生求值结果
+ */
 open type TryStmt {
   let token: FengToken;
   let body: Expression;
@@ -460,12 +573,22 @@ open type TryStmt {
   let catchAllBlock: Option<Block>;
 }
 
+/**
+ * if 语句：if cond { } else if cond { } else { }
+ *
+ * 作为语句使用时，不产生求值结果
+ */
 open type IfStmt {
   let token: FengToken;
   let clauses: IfClause[];
   let elseBlock: Block;
 }
 
+/**
+ * match 语句：match target { case1 => body1; case2 => body2; _ => elseBody }
+ *
+ * 作为语句使用时，不产生求值结果
+ */
 open type MatchStmt {
   let token: FengToken;
   let target: Expression;
@@ -473,15 +596,27 @@ open type MatchStmt {
   let elseBlock: Block;
 }
 
+/**
+ * while 语句：while condition { body }
+ */
 open type WhileStmt {
   let token: FengToken;
   let condition: Expression;
   let body: Block;
 }
 
+/**
+ * for 循环初始化：绑定声明或赋值语句
+ */
 open spec ForInit: SimpleBinding | AssignmentStmt;
+/**
+ * for 循环更新：表达式或赋值语句
+ */
 open spec ForUpdate: Expression | AssignmentStmt;
 
+/**
+ * for 语句（三子句形式）：for init; condition; update { body }
+ */
 open type ForStmt {
   let token: FengToken;
   let init: ForInit;
@@ -490,6 +625,11 @@ open type ForStmt {
   let body: Block;
 }
 
+/**
+ * for-each 语句：for let item in iterable { body }
+ *
+ * 遍历可迭代对象的每个元素
+ */
 open type ForEachStmt {
   let token: FengToken;
   let binding: Binding;
@@ -497,29 +637,49 @@ open type ForEachStmt {
   let body: Block;
 }
 
+/**
+ * return 语句：return value;
+ */
 open type ReturnStmt {
   let token: FengToken;
   let value: Expression;
 }
 
+/**
+ * throw 语句：throw errorValue;
+ */
 open type ThrowStmt {
   let token: FengToken;
   let value: Expression;
 }
 
+/**
+ * break 语句：跳出当前循环
+ */
 open type BreakStmt {
   let token: FengToken;
 }
 
+/**
+ * continue 语句：跳过当前循环迭代
+ */
 open type ContinueStmt {
   let token: FengToken;
 }
 
+/**
+ * defer 语句：defer { cleanup }
+ *
+ * 在当前作用域退出时执行延迟逻辑
+ */
 open type DeferStmt {
   let token: FengToken;
   let body: Block;
 }
 
+/**
+ * 语句联合类型：所有语句节点的统一入口
+ */
 open spec Statement: BlockStmt
 | BindingStmt
 | AssignmentStmt
@@ -538,26 +698,41 @@ open spec Statement: BlockStmt
 
 // 类型 (type) -----------------------------------------------------------------
 
+/**
+ * 类型字段成员：let/var name: Type = initializer;
+ */
 open type TypeField {
   let token: FengToken;
   let binding: SimpleBinding;
 }
 
+/**
+ * 类型方法成员：func name(params): ReturnType { body }
+ */
 open type TypeMethod {
   let token: FengToken;
   let function: Function;
 }
 
+/**
+ * 类型构造函数：func Self(params) { body }
+ */
 open type TypeConstructor {
   let token: FengToken;
   let function: Function;
 }
 
+/**
+ * 类型析构函数：func ~Self() { body }
+ */
 open type TypeFinalizer {
   let token: FengToken;
   let function: Function;
 }
 
+/**
+ * 类型成员体联合类型：字段、方法、构造函数、析构函数
+ */
 open spec TypeMemberBody: TypeField
 | TypeMethod
 | TypeConstructor
@@ -577,6 +752,12 @@ open type TypeMember {
   let body: TypeMemberBody;
 }
 
+/**
+ * 结构类型声明：[open|seal] type Name<T> : Spec1, Spec2 { members }
+ *
+ * isTuple: 是否为元组类型（成员按位置访问）
+ * isValue: 是否为值类型（@value 注解标记）
+ */
 open type Type {
   let token: FengToken;
   let name: StringSpan;
@@ -590,6 +771,11 @@ open type Type {
 
 // 枚举 (enum) -----------------------------------------------------------------
 
+/**
+ * 枚举项：Name = value
+ *
+ * value 为可选的显式整数值，省略时自动递增
+ */
 open type EnumItem {
   let token: FengToken;
   let name: StringSpan;
@@ -597,6 +783,9 @@ open type EnumItem {
   let annotations: Annotation[];
 }
 
+/**
+ * 枚举类型声明：enum Color { Red = 0, Green, Blue }
+ */
 open type Enum {
   let token: FengToken;
   let name: StringSpan;
@@ -606,18 +795,36 @@ open type Enum {
 
 // 契约 (spec) -----------------------------------------------------------------
 
+/**
+ * 对象契约字段：let name: Type
+ *
+ * 使用 SimpleBindingSignature，不含初始化表达式
+ */
 open type ObjectSpecField {
   let token: FengToken;
   let binding: SimpleBindingSignature;
 }
 
+/**
+ * 对象契约方法：func name(params): ReturnType
+ *
+ * 使用 FunctionSignature，不含函数体
+ */
 open type ObjectSpecMethod {
   let token: FengToken;
   let function: FunctionSignature;
 }
 
+/**
+ * 对象契约成员体联合类型：字段或方法
+ */
 open spec ObjectSpecMemberBody: ObjectSpecField | ObjectSpecMethod;
 
+/**
+ * 对象契约成员：[static] field | method
+ *
+ * 与 TypeMember 的区别：契约成员不含函数体和初始化表达式
+ */
 open type ObjectSpecMember {
   let token: FengToken;
   let isStatic: bool;
@@ -656,6 +863,9 @@ open type UnionSpec {
   let memberTypeRefs: TypeReference[];
 }
 
+/**
+ * 契约体联合类型：对象契约、可调用契约、联合契约
+ */
 open spec SpecBody: ObjectSpec
 | CallableSpec
 | UnionSpec;
@@ -708,21 +918,35 @@ open type Annotation {
 
 // 模块 (module) ---------------------------------------------------------------
 
+/**
+ * 模块级绑定声明：顶层 let/var 声明
+ */
 open type ModuleBinding {
   let token: FengToken;
   let binding: SimpleBinding;
 }
 
+/**
+ * 模块级函数声明：包含完整函数体
+ */
 open type ModuleFunction {
   let token: FengToken;
   let function: Function;
 }
 
+/**
+ * 模块级外部函数声明：extern func name(params): ReturnType
+ *
+ * 使用 FunctionSignature，不含函数体，用于 FFI 绑定
+ */
 open type ModuleExternalFunction {
   let token: FengToken;
   let function: FunctionSignature;
 }
 
+/**
+ * 模块成员体联合类型：绑定、函数、外部函数、类型、枚举、契约、适配器
+ */
 open spec ModuleMemberBody: ModuleBinding
 | ModuleFunction
 | ModuleExternalFunction
@@ -731,6 +955,11 @@ open spec ModuleMemberBody: ModuleBinding
 | Spec
 | Fit;
 
+/**
+ * 模块成员：[open|seal] body
+ *
+ * 包含可见性修饰和成员体
+ */
 open type ModuleMember {
   let token: FengToken;
   let visibility: Visibility;
@@ -750,6 +979,12 @@ open type ModuleImport {
   let alias: Option<StringSpan>;
 }
 
+/**
+ * 模块文件：Parser 对单个 .ff 文件的解析结果
+ *
+ * 一个模块可分布在多个 ModuleFile 中，语义阶段按模块名合并
+ * imports 作用于文件级别，而非整个模块
+ */
 open type ModuleFile {
   let token: FengToken;
   // 当前文件的路径
@@ -766,6 +1001,13 @@ open type ModuleFile {
 
 // 模块 (module) ---------------------------------------------------------------
 
+/**
+ * 模块（语义阶段）：由语义分析器将同一模块的多个 ModuleFile 合并而成
+ *
+ * 语义阶段负责：
+ * - 按模块名合并 files
+ * - 检查可见性声明一致性
+ */
 open type Module {
   // 模块可见性
   let visibility: Visibility;
@@ -790,6 +1032,9 @@ open type Module {
 
 // 程序 (program) --------------------------------------------------------------
 
+/**
+ * 程序（语义阶段）：包含所有模块的顶层结构
+ */
 open type Program {
   let modules: Module[];
 }
