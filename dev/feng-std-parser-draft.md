@@ -1052,34 +1052,30 @@ open type Program {
  * next/peek/lookback 等流式读取，不提供 replace 等变换方法），再考虑
  * 增加 stream 入参。是否引入 TokenStream 到时根据实际需求决定，当前不预设。
  *
+ * 源码访问：通过 lexer.source 获取 FengSource 实例（seal let，公开可读），
+ * 用于构造错误时提取 snippet。无需单独传入 source 参数。
+ *
+ * 错误处理：遇到语法错误立即抛出 FengCompileError，由调用方捕获处理。
+ * 与 Lexer 策略一致，不尝试错误恢复。
+ *
  * 用法示例：
- *   let lexer = FengLexer(source, "example.ff");
+ *   let lexer = FengLexer(source);
  *   let parser = FengParser(lexer);
  *   let moduleFile = parser.parse();
  */
 open type FengParser {
   seal let lexer: FengLexer;
   seal var current: FengToken;
-  seal var errors: ParseError[];
 
   /** 从 Lexer 创建 Parser */
   open func FengParser(lexer: FengLexer);
 
   /**
    * 解析完整源文件。
-   * 返回 ModuleFile AST；如果有语法错误，通过 errors() 获取错误列表。
+   * @return ModuleFile AST
+   * @throws FengCompileError 遇到语法错误时抛出
    */
   open func parse(): ModuleFile;
-
-  /** 获取解析过程中收集的错误 */
-  open func errors(): ParseError[];
-}
-
-/** 解析错误 */
-open type ParseError {
-  open let token: FengToken;
-  open let code: string;
-  open let message: string;
 }
 ```
 
@@ -1160,12 +1156,12 @@ Lambda 语法：`(params) -> expr` 或 `(params): ReturnType { block }`
 - 前者是 match 表达式/语句（MatchExpr/MatchStmt），body 为块
 - 后者是 match 运算符（MatchOperatorExpr），用于内联匹配
 
-### 4.4 错误恢复
+### 4.4 错误处理
 
-- 解析错误产出 `ParseError` 并记录到错误列表
-- 错误码体系与 C 版一致（`SE*` 前缀）
-- 错误后尝试跳过到下一个同步点（`;`、`}`、声明关键字）继续解析
-- 最终返回部分 AST + 错误列表
+- 遇到语法错误立即抛出 `FengCompileError`，不尝试错误恢复
+- 错误码体系与 C 版一致（`PE*` 前缀），与 Lexer 的 `LE*` 前缀区分
+- 错误构造时通过 `lexer.source.extractLineSnippet(location)` 填充 `snippet` 字段
+- 由调用方捕获异常并决定是否继续（如批量编译多个文件时跳过当前文件）
 
 ### 4.5 与 C 版对应关系
 
@@ -1226,15 +1222,182 @@ ModuleFile: example.ff
 
 ## 6 实施顺序
 
+Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验证，再进入下一步。
+
+### 6.1 AST 节点类型定义（已完成）
+
+**产出**：`std/src/compiler/parser/FengAstNodes.ff`
+
+**参考**：
+- C 版 AST 定义：`src/parser/parser.h`（`FengExpr`、`FengStmt`、`FengDecl` 等结构体）
+- 语法文档：`docs/feng-expression.md`、`docs/feng-flow.md`、`docs/feng-type.md`、`docs/feng-function.md`、`docs/feng-module.md`
+
+### 6.2 Parser 核心框架
+
+**产出**：`std/src/compiler/parser/FengParser.ff`（构造器 + 基础工具方法）
+
+**TODO**：
+- [ ] `FengParser(lexer: FengLexer)` 构造器，初始化 `current` 为第一个 token
+- [ ] `advance()` / `peek()` / `previous()` — Token 流读取
+- [ ] `check(kind)` / `match(kind)` / `expect(kind, code, message)` — Token 匹配与消费
+- [ ] `error(code, message)` — 构造并抛出 `FengCompileError`，通过 `lexer.source.extractLineSnippet()` 填充 snippet
+- [ ] `parse()` 入口方法 — 调用 `parseModuleFile()`，暂返回空壳 ModuleFile
+
+**参考**：
+- C 版：`parser.c:128-265`（`parser_current` / `parser_advance` / `parser_check` / `parser_match` / `parser_expect` / `parser_error_at`）
+
+### 6.3 类型引用解析
+
+**产出**：`FengParser.ff`（`parseTypeReference()` 及相关方法）
+
+**TODO**：
+- [ ] `parseTypeReference()` — 分发到 NamedTypeRef / PointerTypeRef / ArrayTypeRef
+- [ ] `parseSegmentedName()` — 多段标识符链（`std.text.String`）
+- [ ] `parseGenericArguments()` — 泛型实参列表 `<T, U>`
+- [ ] `parseTypeParameters()` — 泛型形参列表 `<T: Constraint>`
+
+**参考**：
+- C 版：`parser.c:566-660`（`parse_type_ref` / `parse_type_args` / `parse_type_params`）
+- 语法文档：`docs/feng-type.md`、`docs/feng-generics-draft.md`
+
+### 6.4 表达式解析 — 基础表达式（primary）
+
+**产出**：`FengParser.ff`（`parsePrimary()` 及相关方法）
+
+**TODO**：
+- [ ] `parsePrimary()` — 分发到各类基础表达式
+- [ ] 字面量：`parseIntegerLiteral` / `parseFloatLiteral` / `parseStringLiteral` / `parseBooleanLiteral`
+- [ ] `parseIdentifierExpr()` — 标识符表达式
+- [ ] `parseArrayLiteral()` — 数组字面量 `[1, 2, 3]`
+- [ ] `parseTupleLiteral()` — 元组字面量 `(1, 2)`
+- [ ] `parseObjectLiteral()` — 对象字面量 `Point { x: 1, y: 2 }`
+- [ ] `parseLambda()` — Lambda 表达式 `(x) -> x + 1`
+- [ ] `parseGroupOrCast()` — 分组表达式 `(expr)` 和类型转换 `expr as Type`
+
+**参考**：
+- C 版：`parser.c:2483-2680`（`parse_primary` / `parse_array_literal` / `parse_lambda` / `parse_tuple_literal_tail` / `parse_group_or_cast`）
+- 语法文档：`docs/feng-expression.md`
+
+### 6.5 表达式解析 — 后缀与中缀
+
+**产出**：`FengParser.ff`（`parsePostfix()` / 优先级链方法）
+
+**TODO**：
+- [ ] `parsePostfix()` — 调用 `()`、下标 `[]`、成员访问 `.`
+- [ ] `parseUnary()` — 一元表达式 `-x` / `!flag`
+- [ ] 优先级链：`parseMultiplicative` → `parseAdditive` → `parseShift` → `parseComparison` → `parseEquality` → `parseBitAnd` → `parseBitXor` → `parseBitOr` → `parseAnd` → `parseOr` → `parseExpression`
+- [ ] `parseInfixMatchOp()` — match 运算符 `expr match pattern | pattern`
+
+**参考**：
+- C 版：`parser.c:3601-4006`（`parse_postfix` / `parse_unary` / `parse_binary_series` / 各优先级层）
+- 语法文档：`docs/feng-expression.md`（运算符优先级表）
+
+### 6.6 语句解析
+
+**产出**：`FengParser.ff`（`parseStatement()` 及相关方法）
+
+**TODO**：
+- [ ] `parseStatement()` — 分发到各类语句
+- [ ] `parseBlock()` — 代码块 `{ stmts }`
+- [ ] `parseBindingStmt()` — 绑定声明 `let x = 1;` / `var y: int = 2;`
+- [ ] `parseAssignmentStmt()` — 赋值语句 `x = 1;` / `x += 1;`
+- [ ] `parseIfStatement()` — if 语句
+- [ ] `parseMatchStatement()` — match 语句
+- [ ] `parseWhileStatement()` — while 循环
+- [ ] `parseForStatement()` — for 循环（三子句形式 + for-each 形式）
+- [ ] `parseReturnStmt()` / `parseThrowStmt()` / `parseBreakStmt()` / `parseContinueStmt()` / `parseDeferStmt()`
+
+**参考**：
+- C 版：`parser.c:4010-4518`（`parse_block` / `parse_statement` / `parse_if_statement` / `parse_match_statement` / `parse_while_statement` / `parse_for_statement` / `parse_simple_statement`）
+- 语法文档：`docs/feng-flow.md`、`docs/feng-exception.md`、`docs/feng-defer.md`
+
+### 6.7 声明解析
+
+**产出**：`FengParser.ff`（`parseDeclaration()` 及相关方法）
+
+**TODO**：
+- [ ] `parseDeclaration()` — 分发到各类声明
+- [ ] `parseFunctionDeclaration()` — 函数声明
+- [ ] `parseTypeDeclaration()` — 类型声明（含字段、方法、构造器、析构器）
+- [ ] `parseEnumDeclaration()` — 枚举声明
+- [ ] `parseSpecDeclaration()` — 契约声明（对象契约 / 可调用契约 / 联合契约）
+- [ ] `parseFitDeclaration()` — 适配器声明
+- [ ] `parseGlobalBinding()` — 顶层绑定声明
+- [ ] `parseAnnotations()` — 注解序列 `@test` / `@deprecated("reason")`
+- [ ] `parseVisibility()` — 可见性修饰符 `open` / `seal`
+
+**参考**：
+- C 版：`parser.c:2178-2280`（`parse_declaration`）、`parser.c:381-440`（`parse_annotations`）、`parser.c:331-340`（`parse_visibility`）
+- 语法文档：`docs/feng-function.md`、`docs/feng-type.md`、`docs/feng-enum.md`、`docs/feng-spec.md`、`docs/feng-fit.md`、`docs/feng-binding.md`、`docs/feng-visibility.md`
+
+### 6.8 模块与文件解析
+
+**产出**：`FengParser.ff`（`parseModuleFile()` 及相关方法）
+
+**TODO**：
+- [ ] `parseModuleFile()` — 完整文件解析入口
+- [ ] `parseModuleDeclare()` — 模块声明 `module std.text;`
+- [ ] `parseModuleImport()` — 导入声明 `import std.text;` / `import std as alias;`
+- [ ] 顶层成员循环 — 调用 `parseDeclaration()` 收集所有 `ModuleMember`
+
+**参考**：
+- C 版：`parser.c:4518-5032`（`parse_program`）
+- 语法文档：`docs/feng-module.md`
+
+### 6.9 FengAstDumper
+
+**产出**：`std/src/compiler/parser/FengAstDumper.ff`
+
+**TODO**：
+- [ ] 实现 `dump(moduleFile: ModuleFile): string` 方法
+- [ ] 递归遍历 AST 节点，输出缩进文本
+- [ ] 格式与 C 版 `dump.c` 对齐
+
+**参考**：
+- C 版：`src/parser/dump.c`
+
+### 6.10 Parser 测试
+
+**产出**：`test/parser/` 测试用例
+
+**TODO**：
+- [ ] 基础表达式测试（字面量、运算符、调用、成员访问）
+- [ ] 语句测试（if/match/while/for/return/throw）
+- [ ] 声明测试（type/enum/spec/fit/func/binding）
+- [ ] 错误测试（语法错误输入，验证错误码和位置）
+- [ ] 完整源文件测试（用 `std/src/**/*.ff` 作为输入）
+- [ ] 与 C 版 AST dump 对比验证
+
+**参考**：
+- C 版测试：`test/parser/test_parser.c`
+
+### 6.11 依赖关系总结
+
+```
+6.1 AST 节点定义 (已完成)
+  └── 6.2 Parser 核心框架
+       ├── 6.3 类型引用解析
+       ├── 6.4 基础表达式
+       ├── 6.5 后缀与中缀表达式 (依赖 6.4)
+       ├── 6.6 语句解析 (依赖 6.3, 6.5)
+       ├── 6.7 声明解析 (依赖 6.3, 6.6)
+       └── 6.8 模块与文件解析 (依赖 6.7)
+            └── 6.9 FengAstDumper (依赖 6.1)
+                 └── 6.10 Parser 测试 (依赖 6.2-6.9)
+```
+
 | 步骤 | 内容 | 前置 | 产出文件 |
 |------|------|------|---------|
-| 6 | AST 节点类型定义 | 阶段一完成 | `std/src/compiler/parser/FengAstNodes.ff`（已完成） |
-| 7 | Parser 核心框架 | 6 | `std/src/compiler/parser/FengParser.ff` |
-| 8 | 表达式解析（优先级链） | 7 | 同上 |
-| 9 | 语句解析 | 7 | 同上 |
-| 10 | 声明解析（type/enum/spec/fit/func） | 7-9 | 同上 |
-| 11 | FengAstDumper | 6 | `std/src/compiler/parser/FengAstDumper.ff` |
-| 12 | Parser 测试 | 7-11 | fcts 测试 |
+| 6.1 | AST 节点类型定义 | 阶段一完成 | `FengAstNodes.ff`（已完成） |
+| 6.2 | Parser 核心框架 | 6.1 | `FengParser.ff` |
+| 6.3 | 类型引用解析 | 6.2 | 同上 |
+| 6.4 | 基础表达式解析 | 6.2 | 同上 |
+| 6.5 | 后缀与中缀表达式 | 6.4 | 同上 |
+| 6.6 | 语句解析 | 6.3, 6.5 | 同上 |
+| 6.7 | 声明解析 | 6.3, 6.6 | 同上 |
+| 6.8 | 模块与文件解析 | 6.7 | 同上 |
+| 6.9 | FengAstDumper | 6.1 | `FengAstDumper.ff` |
+| 6.10 | Parser 测试 | 6.2-6.9 | `test/parser/` |
 
 ---
 
@@ -1248,7 +1411,7 @@ ModuleFile: example.ff
 
 ### 7.2 错误码对比
 
-- 同样的语法错误输入，比较 C 版和 Feng 版产出的 ParseError（错误码 + 错误信息 + 位置）
+- 同样的语法错误输入，比较 C 版和 Feng 版产出的 FengCompileError（错误码 + 错误信息 + 位置）
 
 ### 7.3 完整源文件解析
 
@@ -1259,10 +1422,7 @@ ModuleFile: example.ff
 
 ## 8 开放问题
 
-1. **Parser 的错误恢复策略**：C 版 parser 的错误恢复策略比较复杂，Feng 版是否需要完全复制？还是可以先实现简单版本（遇错即停），后续再增强？
-2. **泛型参数歧义的回溯机制**：`<` 的歧义解析需要回溯能力（保存/恢复解析器状态）。Feng 的 Token 前瞻机制是否足够支持？
-3. **Parser 是否需要支持增量解析**：远期如果用于 IDE/LSP 场景，可能需要增量解析能力。当前方案不支持增量解析
-4. **AST 节点是否用 @value type**：Expression 用普通 type（引用语义），因为 AST 节点形成树形结构，引用更自然；但大量小节点（如 IdentifierExpr、IntegerLiteralExpr）是否有 GC 压力？
-5. **FengLocation / FengTokenKind 类型对齐**：AST 节点已统一使用 `FengLocation`（位置信息）和 `FengTokenKind`（词法单元类型），均来自 `std.compiler.lexer`，与 Lexer 草案保持一致
-6. **内建注解识别**：Lexer 草案已移除 `AnnotationKind`（注解分类是 Parser 职责）。Feng 版 `Annotation` 节点不含 `builtinKind` 字段，注解分类在语义阶段通过 `name.segments` 查找完成
-7. **语义阶段产出 Program**：Parser 输出 `ModuleFile`（单文件），语义阶段需将多个 `ModuleFile` 合并为 `Module`（按模块名分组），并聚合为 `Program`。此合并逻辑的设计待细化
+1. **泛型参数歧义的回溯机制**：`<` 的歧义解析需要回溯能力（保存/恢复解析器状态）。Feng 的 Token 前瞻机制是否足够支持？
+2. **Parser 是否需要支持增量解析**：远期如果用于 IDE/LSP 场景，可能需要增量解析能力。当前方案不支持增量解析
+3. **AST 节点是否用 @value type**：Expression 用普通 type（引用语义），因为 AST 节点形成树形结构，引用更自然；但大量小节点（如 IdentifierExpr、IntegerLiteralExpr）是否有 GC 压力？
+4. **语义阶段产出 Program**：Parser 输出 `ModuleFile`（单文件），语义阶段需将多个 `ModuleFile` 合并为 `Module`（按模块名分组），并聚合为 `Program`。此合并逻辑的设计待细化
