@@ -1,7 +1,8 @@
 # 嵌套 Spec Union 赋值问题与优化方案
 
-> **状态**：方案讨论阶段，尚未实施。
+> **状态**：方案二已确定，待实施。
 > **背景**：Parser 6.4 实施过程中发现 `LambdaBody: Expression | Block` 的嵌套 spec union 赋值失败（AE1003）。
+> **落选方案**：方案一、方案三见 [feng-nested-spec-union-rejected.md](feng-nested-spec-union-rejected.md)。
 
 ---
 
@@ -41,214 +42,305 @@ LambdaBody = IdentifierExpr | BooleanLiteralExpr | ... | RangeExpr | Block
 
 ### 1.3 影响范围
 
-所有嵌套 spec union 场景均受影响：
+当前嵌套 spec union 共 3 处，全部在 `FengAstNodes.ff`：
 
-- `LambdaBody: Expression | Block`
-- `ForInit: SimpleBinding | AssignmentStmt`（如果 `SimpleBinding` 或 `AssignmentStmt` 本身是 spec union）
-- 未来可能出现的更多嵌套 spec union 设计
+| 声明 | 嵌套来源 |
+|------|----------|
+| `LambdaBody: Expression \| Block` | Expression 是 spec union |
+| `MatchTarget: ... \| TypeReference \| ...` | TypeReference 是 spec union |
+| `ForUpdate: Expression \| AssignmentStmt` | Expression 是 spec union |
 
----
-
-## 2 三种优化方案
-
-### 方案一：保持展开，优化赋值逻辑
-
-**核心思路**：保持现有的完全展开行为不变，在赋值检查时增加对"源类型是 spec union"的特殊处理。
-
-**赋值规则**：
-
-- 如果新值的类型是 spec union S，且 S 的所有变体都是目标 spec union T 的成员（子集或全集），则允许赋值
-- 运行时保留原始 tag，不需要重新打标
-
-**match 行为**：
-
-- 只能 match 展开后的具体类型（与当前行为一致）
-- 不能 match 未展开的 `Expression`（因为它不在成员列表中）
-- 单层收窄，无需多级 match
-
-**修改点**：
-
-- `validate_expr_against_expected_type`（analyzer.c:17913）：增加嵌套 spec union 的子集检查
-- `select_union_member_for_expr_type`：当源类型是 spec union 时，检查其所有变体是否都在目标成员列表中
-
-**示例**：
-
-```feng
-// 赋值
-let expr: Expression = self.parseExpression();
-let body: LambdaBody = expr;  // ✓ Expression 的所有变体都是 LambdaBody 的成员
-
-// match（只能匹配展开后的类型）
-match body {
-    IdentifierExpr => ...
-    BooleanLiteralExpr => ...
-    Block => ...
-    else => ...
-}
-```
-
-**优点**：
-- 改动最小，只修改赋值检查逻辑
-- match 行为不变，保持简单
-- 不影响现有代码
-
-**缺点**：
-- 赋值时需要遍历源 spec union 的所有变体，检查是否都是目标成员（性能开销）
-- match 时无法用 `Expression` 一次性匹配所有表达式变体，需要逐个列出或用 `else`
+语义分析和代码生成尚未消费这些类型，当前是实施改动影响最小的时机。
 
 ---
 
-### 方案二：改为不展开，多级 coerce
+## 2 方案设计：不展开 + 多级链路
 
-**核心思路**：spec union 不再自动展开，保持层次结构。赋值时做多级链路查找，match 时逐级收窄。
+### 2.1 核心原则
 
-**赋值规则**：
+Spec union 保持声明时的层次结构，不递归展开。赋值时做多级链路查找，match 时逐级收窄。类型关系与声明结构一致，心智模型清晰。
 
-- spec union 的成员列表保持声明时的结构（不递归展开）
-- `LambdaBody` 的成员为：`Expression | Block`（2 个成员）
-- 赋值时做多级检查：`IdentifierExpr` → 是 `Expression` 的成员？✓ → `Expression` 是 `LambdaBody` 的成员？✓ → 允许
-- 如果多个父级成员都匹配（如 `spec S: A | B`，其中 `A` 和 `B` 都包含 `X` 作为子孙类型），报错要求显式转换
+### 2.2 成员收集
 
-**match 行为**：
-
-- 只能 match 槽位声明的直接类型
-- `LambdaBody` 只能 match `Expression | Block`
-- 在 `Expression` 分支内，需要再次 match 具体变体（多级收窄）
-
-**修改点**：
-
-- `collect_normalized_union_member`（analyzer.c:5038）：移除递归展开逻辑
-- `select_union_member_for_expr_type`：增加多级链路查找
-- match 穷尽性检查：改为只检查直接成员
-- 代码生成：多级 tag 表示（每个嵌套层一个 tag）
-
-**示例**：
-
-```feng
-// 赋值
-let body: LambdaBody = someIdentifierExpr;  // ✓ IdentifierExpr → Expression → LambdaBody
-
-// match（多级收窄）
-match body {
-    Expression => match body {
-        IdentifierExpr => ...
-        BooleanLiteralExpr => ...
-        else => ...
-    }
-    Block => ...
-}
-```
-
-**优点**：
-- 类型层次清晰，与声明结构一致
-- 赋值自然（类似 Rust 的 enum 嵌套）
-- match 可以用 `Expression` 一次性匹配所有表达式变体
-
-**缺点**：
-- 改动较大，涉及展开逻辑、赋值检查、match 收窄、代码生成
-- match 需要多级收窄，代码更冗长
-- 多级 tag 的运行时表示增加复杂度
-- 可能影响现有依赖展开行为的代码
-
----
-
-### 方案三：保持展开 + 保留未展开类型占用槽位
-
-**核心思路**：展开所有子变体作为成员，同时保留未展开的 spec union 本身也作为一个成员槽位。
-
-**赋值规则**：
-
-- `LambdaBody` 的成员为：`Expression | IdentifierExpr | BooleanLiteralExpr | ... | RangeExpr | Block`（24 个成员）
-- 赋值时做直接类型对比（`type_refs_semantically_equal`）
-- `IdentifierExpr` 值 → 匹配 `IdentifierExpr` 槽位（不匹配 `Expression` 槽位，因为 `IdentifierExpr ≠ Expression`）
-- `Expression` 值 → 匹配 `Expression` 槽位
-- **无歧义**：编译器做的是精确类型对比，不是递归成员检查
-
-**match 行为**：
-
-- 可以 match 展开后的具体类型，也可以 match `Expression` 槽位
-- 进入时的槽位决定 match 的行为：
-  - 如果值以 `IdentifierExpr` 槽位进入，match `IdentifierExpr` 分支命中
-  - 如果值以 `Expression` 槽位进入，match `Expression` 分支命中
-- 同一值不会同时匹配 `Expression` 和 `IdentifierExpr` 槽位（取决于进入时的 tag）
-
-**修改点**：
-
-- `collect_normalized_union_member`（analyzer.c:5038）：遇到嵌套 spec union 时，既保留它作为成员，又展开其子变体
+`collect_normalized_union_member` 不再递归展开嵌套 spec union。`LambdaBody` 的成员为 `[Expression, Block]`（2 个），而非 23 个叶子类型。
 
 ```c
-// 修改后
+// 修改后：直接添加成员，不递归展开
 if (resolved is union spec) {
-    append_normalized_union_member(member_ref);  // 保留 Expression 本身
-    for each nested member:
-        collect_normalized_union_member(...);     // 同时展开子变体
+    return append_normalized_union_member(member_ref);  // 保持原样
 }
+return append_normalized_union_member(member_ref);
 ```
 
-- match 穷尽性检查：需要理解 `Expression` 槽位覆盖其所有展开子变体
-- 代码生成：tag 值需要区分 `Expression` 槽位和展开子变体槽位
+每个成员节点记录：
+- `member_type_ref`：成员的类型引用（可能是具体类型或 spec union）
+- `is_nested_union`：该成员是否为 spec union（用于后续链路查找）
 
-**示例**：
+### 2.3 赋值校验（多级链路查找）
+
+`select_union_member_for_expr_type` 改为多级查找：
+
+```
+function select_union_member(source_type, target_union):
+    // 第一级：直接匹配
+    for each member in target_union.members:
+        if types_equal(source_type, member.type_ref):
+            return MatchResult(member, path=[member])
+
+    // 第二级：通过嵌套 spec union 间接匹配
+    for each member in target_union.members:
+        if member.is_nested_union:
+            nested_result = select_union_member(source_type, member.resolved_union)
+            if nested_result is MatchResult:
+                return MatchResult(member, path=[member, ...nested_result.path])
+
+    // 歧义检测：收集所有可达路径
+    paths = collect_all_reachable_paths(source_type, target_union)
+    if paths.length > 1:
+        return AmbiguousError(paths)
+
+    return NoMatch
+```
+
+**赋值示例**：
 
 ```feng
-// 赋值
-let expr: Expression = self.parseExpression();
-let body: LambdaBody = expr;  // ✓ 匹配 Expression 槽位
+// 直接匹配
+let body: LambdaBody = Block(...);
+// source=Block, target=LambdaBody → 直接匹配 Block 成员
 
+// 间接匹配（单级）
 let ident: IdentifierExpr = ...;
-let body2: LambdaBody = ident;  // ✓ 匹配 IdentifierExpr 槽位
+let body: LambdaBody = ident;
+// source=IdentifierExpr, target=LambdaBody
+//   → 直接匹配？No（IdentifierExpr ≠ Expression, IdentifierExpr ≠ Block）
+//   → 通过 Expression 间接匹配？Yes（IdentifierExpr 是 Expression 的成员）
+//   → path = [Expression, IdentifierExpr]
 
-// match（可以匹配 Expression 或具体类型）
-match body {
-    Expression => ...   // 匹配以 Expression 槽位进入的值
-    Block => ...
-}
+// 整体赋值
+let expr: Expression = ...;
+let body: LambdaBody = expr;
+// source=Expression, target=LambdaBody → 直接匹配 Expression 成员
+// 运行时：外层 tag=Expression，内层 tag 保持 Expression 自身的 tag
+```
 
-match body {
-    IdentifierExpr => ...   // 匹配以 IdentifierExpr 槽位进入的值
-    BooleanLiteralExpr => ...
-    Block => ...
-    else => ...
+**歧义报错**：
+
+```feng
+open spec A: X | Y;
+open spec B: X | Z;
+open spec C: A | B;
+
+let x: X = ...;
+let c: C = x;
+// 错误：X 可通过 A 和 B 两条路径到达 C，需要显式转换
+// 修复：let c: C = x as A;  // 或 x as B
+```
+
+### 2.4 运行时表示
+
+采用嵌套标记联合（nested tagged union），每个 spec union 层一个 tag。
+
+**内存布局**：
+
+```
+LambdaBody {
+    outer_tag: u8          // 0=Expression, 1=Block
+    union payload {
+        // outer_tag=0 时有效
+        expression: Expression {
+            inner_tag: u8   // Expression 自身的 variant tag
+            data: [...]     // 具体变体的数据
+        }
+        // outer_tag=1 时有效
+        block: Block { ... }
+    }
 }
 ```
 
-**优点**：
-- 赋值自然，无需特殊逻辑（直接类型对比即可）
-- match 灵活，可以用 `Expression` 或具体类型
-- 无歧义（精确类型对比）
-- 对现有代码影响小（展开行为保持不变，只是多了一个 `Expression` 槽位）
+**Tag 编码规则**：
+- 每个 spec union 层的 tag 值从 0 开始，按成员声明顺序递增
+- 嵌套层数在实践中通常 ≤ 2，内存开销可控
+- `Expression` 整体赋给 `LambdaBody` 时，外层 tag=0，内层 tag 原样保留
 
-**缺点**：
-- match 穷尽性检查更复杂（需要理解 `Expression` 槽位与展开子变体的覆盖关系）
-- 成员列表变长（多了一个冗余槽位）
-- 需要明确"进入时的槽位"语义（值以哪个槽位进入取决于赋值源的类型）
+### 2.5 Match 行为
+
+**基础 match**：匹配直接成员，逐级收窄。
+
+```feng
+let body: LambdaBody = ...;
+
+match body {
+    Expression {
+        // body 在此分支内收窄为 Expression 类型
+        // 可进一步 match 具体变体
+        match body {
+            IdentifierExpr { ... }
+            BooleanLiteralExpr { ... }
+            else { ... }
+        }
+    }
+    Block { ... }
+}
+```
+
+**穷尽性检查**：只检查直接成员覆盖，不检查展开后的叶子类型。
+
+- `LambdaBody` 需覆盖 `Expression` 和 `Block`
+- 在 `Expression` 分支内的嵌套 match，需覆盖 `Expression` 的所有直接成员
+
+### 2.6 多级 Match 语法（后续增强）
+
+在基础 match 稳定后，可增加 `->` 链式模式语法，消除嵌套 match 的冗余：
+
+```feng
+// 链式写法
+match body {
+    Expression -> IdentifierExpr { ... }
+    Expression -> BooleanLiteralExpr { ... }
+    Block { ... }
+    else { ... }
+}
+
+// 等价于嵌套写法
+match body {
+    Expression {
+        match body {
+            IdentifierExpr { ... }
+            BooleanLiteralExpr { ... }
+            else { ... }
+        }
+    }
+    Block { ... }
+}
+```
+
+支持任意深度链：
+
+```feng
+match value {
+    A -> B -> C { ... }
+    A -> D { ... }
+    E { ... }
+}
+```
+
+**编译器处理**：在 pattern 编译阶段将 `->` 链递归展开为嵌套 match，不影响类型系统和运行时表示。穷尽性检查按层级验证。
+
+> 此语法为纯前端增强，独立排期，不影响核心方案。
 
 ---
 
-## 3 方案对比
+## 3 代码变更清单
 
-| 维度 | 方案一：优化赋值 | 方案二：不展开 | 方案三：展开 + 保留 |
-|------|-----------------|---------------|-------------------|
-| 改动范围 | 小（仅赋值检查） | 大（展开 + 赋值 + match + 代码生成） | 中（展开逻辑 + match 穷尽性） |
-| 赋值行为 | 子集检查 | 多级链路查找 | 直接对比（无歧义） |
-| match 层数 | 单层 | 多层 | 单层 |
-| match 灵活性 | 只能匹配具体类型 | 可匹配父级类型 | 可匹配父级或具体类型 |
-| 运行时表示 | 不变（单 tag） | 多级 tag | 单 tag（多一个槽位值） |
-| 对现有代码影响 | 无 | 可能较大 | 小 |
-| 穷尽性检查 | 不变 | 改为直接成员 | 需理解覆盖关系 |
+### 3.1 类型系统
+
+| 文件 | 函数 | 变更 |
+|------|------|------|
+| analyzer.c | `collect_normalized_union_member` | 移除递归展开逻辑 |
+| analyzer.c | `select_union_member_for_expr_type` | 改为多级链路查找，增加歧义检测 |
+| analyzer.c | `validate_expr_against_expected_type` | 适配新的 MatchResult（含 path 信息） |
+
+### 3.2 模式匹配
+
+| 文件 | 函数 | 变更 |
+|------|------|------|
+| analyzer.c | match 穷尽性检查 | 改为检查直接成员覆盖 |
+
+### 3.3 代码生成
+
+| 文件 | 函数 | 变更 |
+|------|------|------|
+| codegen | spec union tag 编码 | 支持嵌套 tag 布局 |
+| codegen | spec union 赋值 | 按 path 设置多级 tag |
+| codegen | spec union 值访问 | 按 tag 层次遍历 |
+
+### 3.4 规范文档
+
+| 文件 | 变更 |
+|------|------|
+| spec 文档 | 更新 spec union 语义：非展开、多级链路、嵌套 tag |
 
 ---
 
-## 4 待决策事项
+## 4 边界场景
 
-1. 选择哪个方案
-2. 如果选方案三，match 穷尽性检查的具体规则（`Expression` 槽位是否覆盖所有子变体）
-3. 如果选方案二，多级 tag 的运行时表示方案
+### 4.1 三层及以上嵌套
+
+```feng
+open spec A: X | Y;
+open spec B: A | Z;
+open spec C: B | W;
+
+let x: X = ...;
+let c: C = x;  // path = [B, A, X]，三级链路
+```
+
+运行时：三级 tag 嵌套。查找递归进行，深度无硬限制。
+
+### 4.2 同一类型多条路径（歧义）
+
+```feng
+open spec A: X;
+open spec B: X;
+open spec C: A | B;
+
+let x: X = ...;
+let c: C = x;  // 歧义：X → A → C 或 X → B → C
+```
+
+编译器报错，要求显式转换：`let c: C = x as A;`
+
+### 4.3 open spec 扩展
+
+```feng
+open spec Base: A | B;
+open spec Extended: Base | C;
+
+// 后续通过 open 扩展 Base
+open spec Base: ... | D;
+```
+
+`Extended` 的成员为 `[Base, C]`。`D` 作为 `Base` 的新成员，通过 `Base` 路径可达 `Extended`。链路查找自动适应 `open spec` 的扩展。
+
+### 4.4 泛型 spec union
+
+```feng
+open spec Option<T>: None | T;
+open spec Result<T>: Option<T> | Error;
+
+let none_val: None = None;
+let r: Result<int> = none_val;
+// path = [Option<int>, None]
+```
+
+泛型实例化后，链路查找在实例化类型上进行。
 
 ---
 
-## 5 参考
+## 5 实施分期
+
+### 一期：核心（解除 Parser 6.4 阻塞）
+
+1. 成员收集：移除递归展开
+2. 赋值校验：多级链路查找 + 歧义检测
+3. 运行时：嵌套 tag 布局
+4. 基础 match：匹配直接成员 + 嵌套 match 收窄
+5. 穷尽性检查：直接成员覆盖
+6. 全量回归测试
+
+### 二期：语法增强（独立排期）
+
+1. `->` 链式模式语法解析
+2. Pattern 编译展开
+3. 链式穷尽性检查
+4. 测试覆盖
+
+---
+
+## 6 参考
 
 - 问题发现：Parser 6.4 实施（`LambdaBody: Expression | Block`）
 - 相关代码：`src/semantic/analyzer.c`（`collect_normalized_union_member`、`validate_expr_against_expected_type`、`select_union_member_for_expr_type`）
 - AST 定义：`std/src/compiler/parser/FengAstNodes.ff`
+- 嵌套 spec union 实例：`LambdaBody`（:389）、`MatchTarget`（:422）、`ForUpdate`（:650）
