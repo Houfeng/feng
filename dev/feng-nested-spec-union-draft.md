@@ -142,13 +142,13 @@ let c: C = x;
 
 #### 2.4.1 内存布局
 
-采用嵌套标记联合（nested tagged union），每个 spec union 层一个 tag。
+采用嵌套标记联合（nested tagged union）。每个 spec union 本身就是 tagged union，嵌套只是自然组合——`LambdaBody` 的 Expression 槽位的 payload 就是一个 `Expression` 值（自带 tag + data），无需额外的编码处理。
 
 ```
 LambdaBody {
     outer_tag: u8          // 0=Expression, 1=Block
     union payload {
-        // outer_tag=0 时有效
+        // outer_tag=0 时有效：payload 是一个完整的 Expression 值
         expression: Expression {
             inner_tag: u8   // Expression 自身的 variant tag
             data: [...]     // 具体变体的数据
@@ -162,6 +162,7 @@ LambdaBody {
 Tag 编码规则：
 - 每个 spec union 层的 tag 值从 0 开始，按成员声明顺序递增
 - 嵌套层数在实践中通常 ≤ 2，内存开销可控
+- 成员去重逻辑保持不变（去重作用在直接成员层面，非展开后行为不变）
 
 #### 2.4.2 代码生成（编译期确定，运行时执行）
 
@@ -393,19 +394,18 @@ let r: Result<int> = none_val;
 - [ ] 5.3 `select_union_member_for_expr_type`：改为多级链路查找，返回 path 信息
 - [ ] 5.4 `select_union_member_for_expr_type`：增加歧义检测（同一类型多条路径时报错）
 - [ ] 5.5 `validate_expr_against_expected_type`：适配新的 MatchResult（含 path）
-- [ ] 5.6 运行时内存布局：嵌套 tag 编码（每个 spec union 层一个 tag）
-- [ ] 5.7 代码生成：按 path 逐级设置 tag + 拷贝数据（叶子赋值、整体赋值）
-- [ ] 5.8 基础 match：匹配直接成员，分支内类型收窄
-- [ ] 5.9 match 穷尽性检查：改为检查直接成员覆盖
-- [ ] 5.10 全量回归测试
+- [ ] 5.6 代码生成：按 path 逐级设置 tag + 拷贝数据（叶子赋值、整体赋值）
+- [ ] 5.7 基础 match：匹配直接成员，分支内类型收窄
+- [ ] 5.8 match 穷尽性检查：改为检查直接成员覆盖
+- [ ] 5.9 全量回归测试
 
 ### 二期：语法增强（独立排期）
 
-- [ ] 5.11 `->` 链式多级模式语法解析（Parser）
-- [ ] 5.12 多级模式层级校验：每级必须是前一级类型的成员
-- [ ] 5.13 Pattern 编译：`->` 链展开为嵌套 match
-- [ ] 5.14 链式穷尽性检查：按层级验证覆盖
-- [ ] 5.15 测试覆盖
+- [ ] 5.10 `->` 链式多级模式语法解析（Parser）
+- [ ] 5.11 多级模式层级校验：每级必须是前一级类型的成员
+- [ ] 5.12 Pattern 编译：`->` 链展开为嵌套 match
+- [ ] 5.13 链式穷尽性检查：按层级验证覆盖
+- [ ] 5.14 测试覆盖
 
 ---
 
