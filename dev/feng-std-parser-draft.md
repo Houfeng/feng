@@ -1287,13 +1287,30 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 **TODO**：
 - [ ] `parsePostfix()` — 调用 `()`、下标 `[]`、成员访问 `.`
+- [ ] `looksLikeExplicitGenericTarget()` — 探测 `<...>` 是否为显式泛型 target（回溯机制）
 - [ ] `parseUnary()` — 一元表达式 `-x` / `!flag`
 - [ ] 优先级链：`parseMultiplicative` → `parseAdditive` → `parseShift` → `parseComparison` → `parseEquality` → `parseBitAnd` → `parseBitXor` → `parseBitOr` → `parseAnd` → `parseOr` → `parseExpression`
 - [ ] `parseInfixMatchOp()` — match 运算符 `expr match pattern | pattern`
 
+**泛型 `<...>` 与比较运算符 `<` 的识别**：
+
+在表达式位置，`<` 可能是比较运算符，也可能是显式泛型 target 的开始（如 `foo<int>(x)` vs `foo < bar`）。Parser 需使用 **probe（探测）+ 回溯** 机制识别：
+
+1. 保存当前 parser 状态（current/previous/pendingGt）
+2. 尝试将 `<...>` 解析为类型实参列表
+3. 若解析成功且后续 token 符合预期，确认为显式泛型 target
+4. 若解析失败，恢复 parser 状态，将 `<` 视为比较运算符
+
+**识别规则**（参见 `docs/feng-generics-draft.md` §4）：
+
+当同时满足以下条件时，Parser 必须将 `<...>` 视为显式泛型 target：
+- postfix 目标以合法标识符结尾
+- `<...>` 内部可按类型实参列表稳定解析
+- 闭合 `>` 后紧跟 `(`、`{`、`[`、`;`、`)`、`]` 或 `}` 之一
+
 **参考**：
-- C 版：`parser.c:3601-4006`（`parse_postfix` / `parse_unary` / `parse_binary_series` / 各优先级层）
-- 语法文档：`docs/feng-expression.md`（运算符优先级表）
+- C 版：`parser.c:2437-2456`（`looks_like_explicit_generic_target_suffix`）、`parser.c:3601-4006`（`parse_postfix` / `parse_unary` / `parse_binary_series` / 各优先级层）
+- 语法文档：`docs/feng-expression.md`（运算符优先级表）、`docs/feng-generics-draft.md`（泛型识别规则）
 
 ### 6.6 语句解析
 
