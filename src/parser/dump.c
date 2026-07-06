@@ -311,6 +311,10 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
                     dump_expr(stream, expr->as.match_op.labels[li].range_high, 0);
                 } else if (expr->as.match_op.labels[li].kind == FENG_MATCH_LABEL_TYPE) {
                     dump_type_ref(stream, expr->as.match_op.labels[li].type);
+                    for (size_t ci = 0U; ci < expr->as.match_op.labels[li].type_chain_count; ++ci) {
+                        fputs(" -> ", stream);
+                        dump_type_ref(stream, expr->as.match_op.labels[li].type_chain[ci]);
+                    }
                 } else {
                     dump_expr(stream, expr->as.match_op.labels[li].value, 0);
                 }
@@ -373,6 +377,10 @@ static void dump_match_branch(FILE *stream, const FengMatchBranch *branch, int i
             dump_expr(stream, branch->labels[index].range_high, 0);
         } else if (branch->labels[index].kind == FENG_MATCH_LABEL_TYPE) {
             dump_type_ref(stream, branch->labels[index].type);
+            for (size_t ci = 0U; ci < branch->labels[index].type_chain_count; ++ci) {
+                fputs(" -> ", stream);
+                dump_type_ref(stream, branch->labels[index].type_chain[ci]);
+            }
         } else {
             dump_expr(stream, branch->labels[index].value, 0);
         }

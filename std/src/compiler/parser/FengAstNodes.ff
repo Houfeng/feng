@@ -414,17 +414,30 @@ open type RangeExpr {
   let end: Expression;
 }
 
+open type MatchChainBinding {
+  let location: FengLocation;
+  let name: StringSpan;
+  let mutability: Mutability;
+}
+
+open type MatchChain {
+  let location: FengLocation;
+  let binding: Option<MatchChainBinding>;
+  let typeRefs: TypeReference[];
+}
+
 /**
  * 匹配目标联合类型：用于 match 分支的模式匹配标签
  *
  * 支持字面量、成员访问（枚举值/常量）、类型引用、绑定声明等模式
  */
-open spec MatchTarget: IntegerLiteralExpr
-| StringLiteralExpr
-| BooleanLiteralExpr
-| MemberAccessExpr
-| TypeReference
-| SimpleBinding;
+open spec MatchTarget: IntegerLiteralExpr[]
+| StringLiteralExpr[]
+| BooleanLiteralExpr[]
+| MemberAccessExpr[]
+| TypeReference[]
+| RangeExpr[]
+| MatchChain;
 
 /**
  * 匹配运算符表达式：value match pattern1 | pattern2 | ...
@@ -435,7 +448,7 @@ open spec MatchTarget: IntegerLiteralExpr
 open type MatchOperatorExpr {
   let location: FengLocation;
   let value: Expression;
-  let targets: MatchTarget[];
+  let target: MatchTarget;
 }
 
 // 块表达式 ---------------------------------------------------------------------
@@ -464,7 +477,7 @@ open type IfExpr {
 /** Match Targets 的分支辅助结构 */
 open type MatchClause {
   let location: FengLocation;
-  let targets: MatchTarget[];
+  let target: MatchTarget;
   let body: Block;
 }
 

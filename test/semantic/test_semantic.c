@@ -17792,6 +17792,45 @@ static void test_nested_union_cycle_rejected(void) {
         "cycle");
 }
 
+static void test_chain_match_non_union_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type A { let x: int; }\n"
+        "type B { let y: int; }\n"
+        "spec Inner: A | B;\n"
+        "spec Outer: Inner | int;\n"
+        "func run(v: Outer): void {\n"
+        "    match v {\n"
+        "        Inner -> A -> B { }\n"
+        "    }\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "chain_match_non_union.f",
+        source,
+        "not a union-form spec");
+}
+
+static void test_chain_match_bad_member_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type A { let x: int; }\n"
+        "type B { let y: int; }\n"
+        "type C { let z: int; }\n"
+        "spec Inner: A | B;\n"
+        "spec Outer: Inner | C;\n"
+        "func run(v: Outer): void {\n"
+        "    match v {\n"
+        "        Inner -> C { }\n"
+        "    }\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "chain_match_bad_member.f",
+        source,
+        "not a direct member");
+}
+
 static void test_generic_union_form_accepts_concrete_member_matching(void) {
     const char *source =
         "module demo.main;\n"
@@ -19855,6 +19894,8 @@ int main(void) {
     test_nested_union_direct_member_assignment_records_path();
     test_nested_union_ambiguous_path_rejected();
     test_nested_union_cycle_rejected();
+    test_chain_match_non_union_rejected();
+    test_chain_match_bad_member_rejected();
     test_generic_union_form_accepts_concrete_member_matching();
     test_generic_union_form_rejects_mismatched_member();
     test_spec_parent_specs_must_be_spec();

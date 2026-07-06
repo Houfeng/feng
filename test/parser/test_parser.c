@@ -1578,6 +1578,110 @@ static void test_match_binding_prefix_expression_form(void) {
     feng_program_free(program);
 }
 
+static void test_match_chain_label_parse(void) {
+    const char *source =
+        "module demo.chain;\n"
+        "func run(value: Outer) {\n"
+        "    match value {\n"
+        "        Inner -> A { print(1); }\n"
+        "        Inner -> B { print(2); }\n"
+        "        C { print(3); }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *stmt;
+    const FengMatchBranch *branch;
+
+    ASSERT(feng_parse_source(source, strlen(source), "match_chain.f", &program, &error));
+    ASSERT(program != NULL);
+    stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_MATCH);
+    ASSERT(stmt->as.match_stmt.branch_count == 3U);
+
+    /* Branch 0: Inner -> A (chain with 1 element) */
+    branch = &stmt->as.match_stmt.branches[0];
+    ASSERT(branch->labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(branch->labels[0].type_chain_count == 1U);
+    assert_slice_text(branch->labels[0].type->as.named.segments[0], "Inner");
+    assert_slice_text(branch->labels[0].type_chain[0]->as.named.segments[0], "A");
+
+    /* Branch 1: Inner -> B (chain with 1 element) */
+    branch = &stmt->as.match_stmt.branches[1];
+    ASSERT(branch->labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(branch->labels[0].type_chain_count == 1U);
+    assert_slice_text(branch->labels[0].type_chain[0]->as.named.segments[0], "B");
+
+    /* Branch 2: C (no chain) */
+    branch = &stmt->as.match_stmt.branches[2];
+    ASSERT(branch->labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(branch->labels[0].type_chain_count == 0U);
+    ASSERT(branch->labels[0].type_chain == NULL);
+
+    feng_program_free(program);
+}
+
+static void test_match_three_level_chain_parse(void) {
+    const char *source =
+        "module demo.chain3;\n"
+        "func run(value: C) {\n"
+        "    match value {\n"
+        "        B -> A -> X { print(1); }\n"
+        "        W { print(2); }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *stmt;
+    const FengMatchBranch *branch;
+
+    ASSERT(feng_parse_source(source, strlen(source), "match_chain3.f", &program, &error));
+    ASSERT(program != NULL);
+    stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_MATCH);
+
+    /* Branch 0: B -> A -> X (chain with 2 elements) */
+    branch = &stmt->as.match_stmt.branches[0];
+    ASSERT(branch->labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(branch->labels[0].type_chain_count == 2U);
+    assert_slice_text(branch->labels[0].type->as.named.segments[0], "B");
+    assert_slice_text(branch->labels[0].type_chain[0]->as.named.segments[0], "A");
+    assert_slice_text(branch->labels[0].type_chain[1]->as.named.segments[0], "X");
+
+    feng_program_free(program);
+}
+
+static void test_match_chain_with_binding_parse(void) {
+    const char *source =
+        "module demo.chain_bind;\n"
+        "func run(value: Outer) {\n"
+        "    match value {\n"
+        "        let b: Inner -> A { print(b); }\n"
+        "        C { print(0); }\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *stmt;
+    const FengMatchBranch *branch;
+
+    ASSERT(feng_parse_source(source, strlen(source), "match_chain_bind.f", &program, &error));
+    ASSERT(program != NULL);
+    stmt = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(stmt->kind == FENG_STMT_MATCH);
+
+    /* Branch 0: let b: Inner -> A */
+    branch = &stmt->as.match_stmt.branches[0];
+    ASSERT(branch->has_binding);
+    assert_slice_text(branch->binding_name, "b");
+    ASSERT(branch->labels[0].kind == FENG_MATCH_LABEL_TYPE);
+    ASSERT(branch->labels[0].type_chain_count == 1U);
+    assert_slice_text(branch->labels[0].type->as.named.segments[0], "Inner");
+    assert_slice_text(branch->labels[0].type_chain[0]->as.named.segments[0], "A");
+
+    feng_program_free(program);
+}
+
 static void test_for_in_loop(void) {
     const char *source =
         "module demo.main;\n"
@@ -3020,6 +3124,9 @@ int main(void) {
     test_match_type_labels_parse();
     test_match_binding_prefix_parse();
     test_match_binding_prefix_expression_form();
+    test_match_chain_label_parse();
+    test_match_three_level_chain_parse();
+    test_match_chain_with_binding_parse();
     test_for_in_loop();
     test_block_yield_omits_trailing_semicolon();
     test_non_generic_array_new_uses_colon_dimension_syntax();

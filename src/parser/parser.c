@@ -2770,6 +2770,7 @@ static bool infix_match_label_terminator(FengTokenKind kind) {
         case FENG_TOKEN_RBRACKET:
         case FENG_TOKEN_RBRACE:
         case FENG_TOKEN_LBRACE:
+        case FENG_TOKEN_ARROW:
         case FENG_TOKEN_AND_AND:
         case FENG_TOKEN_OR_OR:
         case FENG_TOKEN_EQ:
@@ -2785,6 +2786,48 @@ static bool infix_match_label_terminator(FengTokenKind kind) {
     }
 }
 
+/* Parse an optional `->` chain after a type label. The first type is already
+ * stored in out_label->type; each `-> TypeRef` appends to type_chain. */
+static bool parse_match_label_chain(Parser *parser, FengMatchLabel *out_label) {
+    FengTypeRef **chain = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+
+    while (parser_check(parser, FENG_TOKEN_ARROW)) {
+        FengTypeRef *next;
+
+        (void)parser_advance(parser);
+        next = parse_type_ref(parser);
+        if (next == NULL) {
+            for (size_t i = 0U; i < count; ++i) {
+                free_type_ref(chain[i]);
+            }
+            free(chain);
+            return false;
+        }
+        if (count == capacity) {
+            size_t new_cap = capacity == 0U ? 4U : capacity * 2U;
+            FengTypeRef **grown = (FengTypeRef **)realloc(chain, new_cap * sizeof(*grown));
+
+            if (grown == NULL) {
+                free_type_ref(next);
+                for (size_t i = 0U; i < count; ++i) {
+                    free_type_ref(chain[i]);
+                }
+                free(chain);
+                return false;
+            }
+            chain = grown;
+            capacity = new_cap;
+        }
+        chain[count++] = next;
+    }
+
+    out_label->type_chain = chain;
+    out_label->type_chain_count = count;
+    return true;
+}
+
 static bool parse_match_label(Parser *parser, FengMatchLabel *out_label, bool infix_mode) {
     FengToken token = *parser_current(parser);
     FengExpr *first;
@@ -2795,6 +2838,8 @@ static bool parse_match_label(Parser *parser, FengMatchLabel *out_label, bool in
     out_label->range_low = NULL;
     out_label->range_high = NULL;
     out_label->type = NULL;
+    out_label->type_chain = NULL;
+    out_label->type_chain_count = 0U;
 
     if (is_type_label_start_token(token.kind)) {
         size_t before = parser->current;
@@ -2820,7 +2865,9 @@ static bool parse_match_label(Parser *parser, FengMatchLabel *out_label, bool in
             }
         } else {
             if (!parser_check(parser, FENG_TOKEN_ELLIPSIS) &&
-                (parser_check(parser, FENG_TOKEN_COMMA) || parser_check(parser, FENG_TOKEN_LBRACE))) {
+                (parser_check(parser, FENG_TOKEN_COMMA) ||
+                 parser_check(parser, FENG_TOKEN_LBRACE) ||
+                 parser_check(parser, FENG_TOKEN_ARROW))) {
                 out_label->kind = FENG_MATCH_LABEL_TYPE;
                 out_label->type = type_ref;
                 if (type_ref->kind == FENG_TYPE_REF_NAMED &&
@@ -2835,7 +2882,7 @@ static bool parse_match_label(Parser *parser, FengMatchLabel *out_label, bool in
                     fallback->as.identifier = type_ref->as.named.segments[0];
                     out_label->value = fallback;
                 }
-                return true;
+                return parse_match_label_chain(parser, out_label);
             }
             /* infix_mode: also accept the wider set of infix label terminators
              * (|, ;, ), ], }, &&, ||, ==, !=, <, <=, >, >=, EOF). The range
@@ -2859,7 +2906,7 @@ static bool parse_match_label(Parser *parser, FengMatchLabel *out_label, bool in
                     fallback->as.identifier = type_ref->as.named.segments[0];
                     out_label->value = fallback;
                 }
-                return true;
+                return parse_match_label_chain(parser, out_label);
             }
             free_type_ref(type_ref);
             parser->current = before;
@@ -2890,6 +2937,17 @@ static bool parse_match_label(Parser *parser, FengMatchLabel *out_label, bool in
     return true;
 }
 
+static void free_match_label_type_chain(FengMatchLabel *label) {
+    if (label->type_chain != NULL) {
+        for (size_t ci = 0U; ci < label->type_chain_count; ++ci) {
+            free_type_ref(label->type_chain[ci]);
+        }
+        free(label->type_chain);
+        label->type_chain = NULL;
+        label->type_chain_count = 0U;
+    }
+}
+
 static void free_match_branch_contents(FengMatchBranch *branch) {
     size_t i;
 
@@ -2901,6 +2959,7 @@ static void free_match_branch_contents(FengMatchBranch *branch) {
         free_expr(branch->labels[i].range_low);
         free_expr(branch->labels[i].range_high);
         free_type_ref(branch->labels[i].type);
+        free_match_label_type_chain(&branch->labels[i]);
     }
     free(branch->labels);
     free_block(branch->body);
@@ -2916,6 +2975,7 @@ static void free_match_label_contents(FengMatchLabel *label) {
     free_expr(label->range_low);
     free_expr(label->range_high);
     free_type_ref(label->type);
+    free_match_label_type_chain(label);
 }
 
 /* Try to parse an optional binding prefix before match branch labels.
@@ -3016,10 +3076,7 @@ static bool parse_match_branch(Parser *parser, FengMatchBranch *out_branch) {
             return false;
         }
         if (!APPEND_VALUE(parser, out_branch->labels, out_branch->label_count, label_capacity, label)) {
-            free_expr(label.value);
-            free_expr(label.range_low);
-            free_expr(label.range_high);
-            free_type_ref(label.type);
+            free_match_label_contents(&label);
             free_match_branch_contents(out_branch);
             return false;
         }

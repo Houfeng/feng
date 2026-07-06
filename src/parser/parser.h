@@ -141,8 +141,13 @@ typedef struct FengMatchLabel {
     FengExpr *range_high;
     /* TYPE: union member type label. For a single-segment identifier label,
      * value may also be populated so non-union match targets can continue to
-     * treat the same syntax as a named constant. */
+     * treat the same syntax as a named constant.
+     * For `->` chain patterns (e.g. `A -> B -> C`), type_chain holds the
+     * ordered chain of type refs and type_chain_count is the chain length.
+     * When type_chain is NULL, type is used as the single type label. */
     FengTypeRef *type;
+    FengTypeRef **type_chain;
+    size_t type_chain_count;
 } FengMatchLabel;
 
 typedef struct FengMatchBranch {
@@ -153,7 +158,9 @@ typedef struct FengMatchBranch {
     /* Optional binding prefix: `[let|var] name: Type { body }`.
      * has_binding is true when the branch declares a binding name;
      * binding_name holds the identifier; binding_mutability defaults
-     * to FENG_MUTABILITY_LET when no explicit let/var keyword is used. */
+     * to FENG_MUTABILITY_LET when no explicit let/var keyword is used.
+     * For chain labels (A -> B), the binding narrows to the deepest
+     * type in the chain. */
     bool has_binding;
     FengSlice binding_name;
     FengMutability binding_mutability;
