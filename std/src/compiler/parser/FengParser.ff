@@ -5,6 +5,7 @@ import std.text;
 import std.collections;
 import std.compiler.lexer;
 import std.compiler.common;
+import std.numeric;
 
 /**
  * Feng 语法分析器。
@@ -28,6 +29,17 @@ import std.compiler.common;
  *   let parser = FengParser(lexer);
  *   let moduleFile = parser.parse();
  */
+/**
+ * Parser 状态快照，用于 probe + backtrack（Lambda/Cast 识别、泛型歧义等）
+ */
+@value
+seal type FengParserState {
+  let current: FengToken;
+  let previous: FengToken;
+  let pendingGt: int;
+  let lexerState: FengLexerState;
+}
+
 open type FengParser {
   seal let lexer: FengLexer;
   seal var current: FengToken;
@@ -431,6 +443,680 @@ open type FengParser {
       declare: emptyModuleDeclare,
       imports: [],
       members: []
+    };
+  }
+
+  // ==================== 状态保存与恢复 ====================
+
+  /**
+   * 保存当前 Parser 状态快照（含 Lexer 状态）
+   * @return 状态快照
+   */
+  seal func saveState(): FengParserState {
+    return FengParserState {
+      current: self.current,
+      previous: self.previous,
+      pendingGt: self.pendingGt,
+      lexerState: self.lexer.saveState()
+    };
+  }
+
+  /**
+   * 从快照恢复 Parser 状态（含 Lexer 状态）
+   * @param state 状态快照
+   */
+  seal func restoreState(state: FengParserState) {
+    self.current = state.current;
+    self.previous = state.previous;
+    self.pendingGt = state.pendingGt;
+    self.lexer.restoreState(state.lexerState);
+  }
+
+  // ==================== 数值解析工具 ====================
+
+  /**
+   * 解析十六进制字符的数值
+   * @param b ASCII 字节值
+   * @return 对应的数值（0-15）
+   */
+  seal func hexDigitValue(b: byte): i64 {
+    if b >= (byte)48 && b <= (byte)57 {
+      return (i64)(b - (byte)48);
+    }
+    if b >= (byte)65 && b <= (byte)70 {
+      return (i64)(b - (byte)55);
+    }
+    if b >= (byte)97 && b <= (byte)102 {
+      return (i64)(b - (byte)87);
+    }
+    return (i64)0;
+  }
+
+  /**
+   * 将整数文本 StringSpan 解析为 i64 值
+   *
+   * 支持十六进制（0x）、二进制（0b）、八进制（0o）前缀和下划线分隔符
+   * @param span 整数文本
+   * @return 解析后的 i64 值
+   */
+  seal func parseIntegerValue(span: StringSpan): i64 {
+    let bytes = span.toBytes();
+    let len = bytes.length();
+    var index: int = 0;
+    var base: i64 = 10;
+
+    if len >= (int)2 && bytes[(int)0] == (byte)48 {
+      let p = bytes[(int)1];
+      if p == (byte)120 || p == (byte)88 {
+        base = 16;
+        index = 2;
+      } else if p == (byte)98 || p == (byte)66 {
+        base = 2;
+        index = 2;
+      } else if p == (byte)111 || p == (byte)79 {
+        base = 8;
+        index = 2;
+      }
+    }
+
+    var value: i64 = 0;
+    while index < len {
+      let b = bytes[index];
+      if b == (byte)95 {
+        index = index + (int)1;
+        continue;
+      }
+      value = value * base + self.hexDigitValue(b);
+      index = index + (int)1;
+    }
+    return value;
+  }
+
+  /**
+   * 将浮点文本 StringSpan 解析为 f64 值
+   *
+   * 先去除下划线分隔符，再调用 f64.parse 解析
+   * @param span 浮点文本
+   * @return 解析后的 f64 值
+   */
+  seal func parseFloatValue(span: StringSpan): f64 {
+    let bytes = span.toBytes();
+    let len = bytes.length();
+    var hasUnderscore = false;
+    var i: int = 0;
+    while i < len {
+      if bytes[i] == (byte)95 {
+        hasUnderscore = true;
+        break;
+      }
+      i = i + (int)1;
+    }
+    if !hasUnderscore {
+      return f64.parse(span.toString());
+    }
+    let filtered: byte[!] = byte[:len];
+    var pos: int = 0;
+    var j: int = 0;
+    while j < len {
+      if bytes[j] != (byte)95 {
+        filtered[pos] = bytes[j];
+        pos = pos + (int)1;
+      }
+      j = j + (int)1;
+    }
+    let result: byte[] = ((byte[])filtered).clone((int)0, pos);
+    return f64.parse(string.fromUtf8Bytes(result));
+  }
+
+  // ==================== 参数解析 ====================
+
+  /**
+   * 解析函数/lambda 参数列表：(name: Type, let name: Type, ...)
+   *
+   * 支持可选的 let/var 可变性标注、类型标注、可变参数（...）
+   *
+   * @return 参数数组
+   * @throws FengCompileError 解析失败时抛出
+   */
+  open func parseParameters(): Parameter[] {
+    self.expect(FengTokenKind.PunctuationLeftParen, "PE0010", "expected '(' to start parameter list");
+    let params = List<Parameter>();
+
+    if !self.check(FengTokenKind.PunctuationRightParen) {
+      let param = self.parseOneParameter();
+      params.add(param);
+
+      while self.matchToken(FengTokenKind.PunctuationComma) {
+        if param.isVariadic {
+          self.error("PE0025", "variadic parameter must be the last parameter");
+        }
+        let nextParam = self.parseOneParameter();
+        params.add(nextParam);
+      }
+    }
+
+    self.expect(FengTokenKind.PunctuationRightParen, "PE0011", "expected ')' to close parameter list");
+    return params.entries();
+  }
+
+  /**
+   * 解析单个参数：[let|var] name: Type [...]
+   * @return Parameter 节点
+   */
+  seal func parseOneParameter(): Parameter {
+    let paramLocation = self.current.location;
+    var mutability: Mutability = Mutability.Default;
+    if self.matchToken(FengTokenKind.KeywordLet) {
+      mutability = Mutability.Let;
+    } else if self.matchToken(FengTokenKind.KeywordVar) {
+      mutability = Mutability.Var;
+    }
+
+    let nameToken = self.expectIdentifierLike(false, "PE0012", "expected a parameter name");
+    self.expect(FengTokenKind.PunctuationColon, "PE0013", "expected ':' after parameter name");
+    let typeRef = self.parseTypeReference();
+
+    var isVariadic = false;
+    if self.matchToken(FengTokenKind.PunctuationEllipsis) {
+      isVariadic = true;
+    }
+
+    let emptySpan = self.lexer.source.slice(0, 0);
+    let binding = SimpleBindingSignature {
+      location: paramLocation,
+      name: nameToken.value,
+      mutability: mutability,
+      typeRef: typeRef,
+      annotations: [],
+      docComment: emptySpan
+    };
+
+    return Parameter {
+      binding: binding,
+      isVariadic: isVariadic
+    };
+  }
+
+  // ==================== Lambda 与 Cast 识别 ====================
+
+  /**
+   * 探测当前 `(` 是否为 Lambda 表达式的参数列表起始
+   *
+   * 通过 probe + backtrack 扫描到匹配的 `)`，检查其后是否紧跟
+   * `->` (OperatorArrow) 或 `{` (PunctuationLeftBrace)，且在 `()` 内部
+   * 深度为 0 处出现 `:` 或为空参数列表
+   *
+   * @return 是否为 Lambda 表达式
+   */
+  seal func looksLikeLambda(): bool {
+    if !self.check(FengTokenKind.PunctuationLeftParen) {
+      return false;
+    }
+    let saved = self.saveState();
+    let _ = self.advance();
+
+    var depth: int = 0;
+    var sawColon = false;
+
+    while self.current.kind != FengTokenKind.SpecialEndOfFile {
+      if self.current.kind == FengTokenKind.PunctuationLeftParen {
+        depth = depth + 1;
+        let _ = self.advance();
+        continue;
+      }
+      if self.current.kind == FengTokenKind.PunctuationRightParen {
+        if depth == 0 {
+          let isEmpty = (self.previous.kind == FengTokenKind.PunctuationLeftParen);
+          let _ = self.advance();
+          let afterKind = self.current.kind;
+          self.restoreState(saved);
+          if afterKind == FengTokenKind.OperatorArrow && (sawColon || isEmpty) {
+            return true;
+          }
+          if afterKind == FengTokenKind.PunctuationLeftBrace && (sawColon || isEmpty) {
+            return true;
+          }
+          return false;
+        }
+        depth = depth - 1;
+        let _ = self.advance();
+        continue;
+      }
+      if depth == 0 && self.current.kind == FengTokenKind.PunctuationColon {
+        sawColon = true;
+      }
+      let _ = self.advance();
+    }
+
+    self.restoreState(saved);
+    return false;
+  }
+
+  /**
+   * 探测当前 `(` 是否为 C 风格类型转换 `(Type) expr`
+   *
+   * 通过 probe + backtrack 手动扫描 TypeRef 模式（标识符链 + 泛型 + 后缀），
+   * 检查闭合 `)` 后是否紧跟可起始表达式的 Token
+   *
+   * @return 是否为类型转换表达式
+   */
+  seal func looksLikeCast(): bool {
+    if !self.check(FengTokenKind.PunctuationLeftParen) {
+      return false;
+    }
+    let saved = self.saveState();
+    let _ = self.advance();
+
+    if !self.isIdentifierLike(true) {
+      self.restoreState(saved);
+      return false;
+    }
+    let _ = self.advance();
+
+    while self.matchToken(FengTokenKind.PunctuationDot) {
+      if !self.isIdentifierLike(false) {
+        self.restoreState(saved);
+        return false;
+      }
+      let _ = self.advance();
+    }
+
+    if self.check(FengTokenKind.OperatorLess) {
+      var depth: int = 1;
+      let _ = self.advance();
+      while depth > 0 && self.current.kind != FengTokenKind.SpecialEndOfFile {
+        if self.current.kind == FengTokenKind.OperatorLess {
+          depth = depth + 1;
+        } else if self.current.kind == FengTokenKind.OperatorGreater {
+          depth = depth - 1;
+        } else if self.current.kind == FengTokenKind.OperatorShiftRight {
+          depth = depth - 2;
+        }
+        let _ = self.advance();
+      }
+    }
+
+    while self.check(FengTokenKind.OperatorStar) {
+      let _ = self.advance();
+    }
+    while self.check(FengTokenKind.PunctuationLeftBracket) {
+      let _ = self.advance();
+      let _ = self.matchToken(FengTokenKind.OperatorNot);
+      if !self.matchToken(FengTokenKind.PunctuationRightBracket) {
+        self.restoreState(saved);
+        return false;
+      }
+    }
+
+    if !self.matchToken(FengTokenKind.PunctuationRightParen) {
+      self.restoreState(saved);
+      return false;
+    }
+
+    let result = self.tokenStartsExpression(self.current.kind);
+    self.restoreState(saved);
+    return result;
+  }
+
+  /**
+   * 检查 Token 种类是否可起始表达式
+   * @param kind Token 种类
+   * @return 是否可起始表达式
+   */
+  seal func tokenStartsExpression(kind: FengTokenKind): bool {
+    return kind == FengTokenKind.Identifier
+      || kind == FengTokenKind.LiteralBool
+      || kind == FengTokenKind.LiteralInteger
+      || kind == FengTokenKind.LiteralFloat
+      || kind == FengTokenKind.LiteralString
+      || kind == FengTokenKind.LiteralRawString
+      || kind == FengTokenKind.PunctuationLeftParen
+      || kind == FengTokenKind.PunctuationLeftBracket
+      || kind == FengTokenKind.OperatorMinus
+      || kind == FengTokenKind.OperatorNot
+      || kind == FengTokenKind.KeywordIf
+      || kind == FengTokenKind.KeywordMatch
+      || kind == FengTokenKind.KeywordTry
+      || kind == FengTokenKind.KeywordSelf;
+  }
+
+  // ==================== 基础表达式解析 ====================
+
+  /**
+   * 解析基础表达式（primary expression）
+   *
+   * 按当前 Token 种类分发到各类基础表达式解析器：
+   * - 标识符 / self → IdentifierExpr
+   * - 布尔字面量 → BooleanLiteralExpr
+   * - 整数字面量 → IntegerLiteralExpr
+   * - 浮点字面量 → FloatLiteralExpr
+   * - 字符串字面量 → StringLiteralExpr
+   * - `[` → 数组字面量
+   * - `(` → 分组 / 类型转换 / Lambda / 元组
+   *
+   * @return Expression 节点
+   * @throws FengCompileError 无法识别为表达式时抛出
+   */
+  open func parsePrimary(): Expression {
+    let kind = self.current.kind;
+
+    if kind == FengTokenKind.Identifier || kind == FengTokenKind.KeywordSelf {
+      return self.parseIdentifierExpr();
+    }
+    if kind == FengTokenKind.LiteralBool {
+      return self.parseBooleanLiteral();
+    }
+    if kind == FengTokenKind.LiteralInteger {
+      return self.parseIntegerLiteral();
+    }
+    if kind == FengTokenKind.LiteralFloat {
+      return self.parseFloatLiteral();
+    }
+    if kind == FengTokenKind.LiteralString || kind == FengTokenKind.LiteralRawString {
+      return self.parseStringLiteral();
+    }
+    if kind == FengTokenKind.PunctuationLeftBracket {
+      return self.parseArrayLiteral();
+    }
+    if kind == FengTokenKind.PunctuationLeftParen {
+      return self.parseGroupOrCast();
+    }
+
+    self.error("PE0007", "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression");
+  }
+
+  /**
+   * 解析标识符表达式（含 self 关键字）
+   * @return IdentifierExpr 节点
+   */
+  seal func parseIdentifierExpr(): Expression {
+    let token = self.advance();
+    return IdentifierExpr {
+      location: token.location,
+      name: token.value
+    };
+  }
+
+  /**
+   * 解析布尔字面量表达式
+   * @return BooleanLiteralExpr 节点
+   */
+  seal func parseBooleanLiteral(): Expression {
+    let token = self.advance();
+    let value = token.value.toString() == "true";
+    return BooleanLiteralExpr {
+      location: token.location,
+      value: value
+    };
+  }
+
+  /**
+   * 解析整数字面量表达式
+   * @return IntegerLiteralExpr 节点
+   */
+  seal func parseIntegerLiteral(): Expression {
+    let token = self.advance();
+    let value = self.parseIntegerValue(token.value);
+    return IntegerLiteralExpr {
+      location: token.location,
+      value: value,
+      raw: token.value
+    };
+  }
+
+  /**
+   * 解析浮点字面量表达式
+   * @return FloatLiteralExpr 节点
+   */
+  seal func parseFloatLiteral(): Expression {
+    let token = self.advance();
+    let value = self.parseFloatValue(token.value);
+    return FloatLiteralExpr {
+      location: token.location,
+      value: value,
+      raw: token.value
+    };
+  }
+
+  /**
+   * 解析字符串字面量表达式
+   * @return StringLiteralExpr 节点
+   */
+  seal func parseStringLiteral(): Expression {
+    let token = self.advance();
+    return StringLiteralExpr {
+      location: token.location,
+      value: token.value
+    };
+  }
+
+  /**
+   * 解析数组字面量表达式：[expr, expr, ...]
+   * @return ArrayLiteralExpr 节点
+   * @throws FengCompileError 解析失败时抛出
+   */
+  seal func parseArrayLiteral(): Expression {
+    let startLocation = self.current.location;
+    self.expect(FengTokenKind.PunctuationLeftBracket, "PE0008", "expected '[' to start array literal");
+    let items = List<Expression>();
+
+    if !self.check(FengTokenKind.PunctuationRightBracket) {
+      items.add(self.parseExpression());
+      while self.matchToken(FengTokenKind.PunctuationComma) {
+        items.add(self.parseExpression());
+      }
+    }
+
+    self.expect(FengTokenKind.PunctuationRightBracket, "PE0009", "expected ']' to close array literal");
+    return ArrayLiteralExpr {
+      location: startLocation,
+      items: items.entries()
+    };
+  }
+
+  /**
+   * 解析分组表达式、类型转换、Lambda 或元组字面量
+   *
+   * 当遇到 `(` 时，按以下优先级识别：
+   * 1. Lambda 表达式：`(params) -> expr` 或 `(params) { block }`
+   * 2. C 风格类型转换：`(Type) expr`
+   * 3. 空元组：`()`
+   * 4. 分组表达式：`(expr)`
+   * 5. 元组字面量：`(expr, expr, ...)`
+   *
+   * @return Expression 节点
+   * @throws FengCompileError 解析失败时抛出
+   */
+  open func parseGroupOrCast(): Expression {
+    let startLocation = self.current.location;
+
+    if self.looksLikeLambda() {
+      return self.parseLambda();
+    }
+
+    if self.looksLikeCast() {
+      self.expect(FengTokenKind.PunctuationLeftParen, "PE0024", "expected '(' to start cast expression");
+      let targetType = self.parseTypeReference();
+      self.expect(FengTokenKind.PunctuationRightParen, "PE0024", "expected ')' after cast type");
+      let value = self.parsePrimary();
+      return CastExpr {
+        location: startLocation,
+        targetType: targetType,
+        value: value
+      };
+    }
+
+    self.expect(FengTokenKind.PunctuationLeftParen, "PE0015", "expected '(' to start grouped expression, cast, or lambda");
+
+    if self.check(FengTokenKind.PunctuationRightParen) {
+      return self.parseEmptyTupleLiteral(startLocation);
+    }
+
+    let expr = self.parseExpression();
+
+    if self.matchToken(FengTokenKind.PunctuationComma) {
+      return self.parseTupleLiteralTail(expr, startLocation);
+    }
+
+    self.expect(FengTokenKind.PunctuationRightParen, "PE0016", "expected ')' to close grouped expression");
+    return expr;
+  }
+
+  /**
+   * 解析 Lambda 表达式：(params) -> expr 或 (params) { block }
+   * @return LambdaExpr 节点
+   * @throws FengCompileError 解析失败时抛出
+   */
+  open func parseLambda(): Expression {
+    let startLocation = self.current.location;
+    let params = self.parseParameters();
+
+    var returnTypeRef: Option<TypeReference> = none;
+    if self.matchToken(FengTokenKind.PunctuationColon) {
+      returnTypeRef = self.parseTypeReference();
+    }
+
+    if self.check(FengTokenKind.PunctuationLeftBrace) {
+      let block = self.parseBlock();
+      return LambdaExpr {
+        location: startLocation,
+        parameters: params,
+        body: block,
+        returnTypeRef: returnTypeRef
+      };
+    }
+
+    self.expect(FengTokenKind.OperatorArrow, "PE0014", "lambda expressions must use '->' before a single-expression body or '{' for a block body");
+
+    if self.check(FengTokenKind.PunctuationLeftBrace) {
+      self.error("PE0026", "multi-line lambda body must omit '->' and use the block form '(params) { ... }'");
+    }
+
+    return LambdaExpr {
+      location: startLocation,
+      parameters: params,
+      // TODO: 优化联合类型后，再继续
+      // body: self.parseExpression(),
+      returnTypeRef: returnTypeRef
+    };
+  }
+
+  /**
+   * 解析元组字面量的后续部分（已有首元素和逗号）
+   * @param first 首元素表达式
+   * @param startLocation 起始位置
+   * @return TupleLiteralExpr 节点
+   */
+  seal func parseTupleLiteralTail(first: Expression, startLocation: FengLocation): Expression {
+    let items = List<Expression>();
+    items.add(first);
+
+    while true {
+      if self.check(FengTokenKind.PunctuationRightParen) {
+        self.error("PE0018", "tuple literals require an expression after ','");
+      }
+      items.add(self.parseExpression());
+      if !self.matchToken(FengTokenKind.PunctuationComma) {
+        break;
+      }
+    }
+
+    self.expect(FengTokenKind.PunctuationRightParen, "PE0017", "expected ')' to close tuple literal");
+    return TupleLiteralExpr {
+      location: startLocation,
+      items: items.entries()
+    };
+  }
+
+  /**
+   * 解析空元组字面量：()
+   * @param startLocation 起始位置
+   * @return TupleLiteralExpr 节点
+   */
+  seal func parseEmptyTupleLiteral(startLocation: FengLocation): Expression {
+    self.expect(FengTokenKind.PunctuationRightParen, "PE0017", "expected ')' to close tuple literal");
+    return TupleLiteralExpr {
+      location: startLocation,
+      items: []
+    };
+  }
+
+  /**
+   * 解析对象字面量后缀：Target { name: value, ... }
+   *
+   * 调用时当前 Token 应为 `{`，由 parsePostfix（6.5）在检测到
+   * `looksLikeObjectLiteral` 后调用
+   *
+   * @param target 目标类型表达式
+   * @return ObjectLiteralExpr 节点
+   * @throws FengCompileError 解析失败时抛出
+   */
+  open func parseObjectLiteral(target: Expression): Expression {
+    let startLocation = self.current.location;
+    self.expect(FengTokenKind.PunctuationLeftBrace, "PE0020", "expected '{' to start object literal");
+    let fields = List<ObjectLiteralField>();
+
+    if !self.check(FengTokenKind.PunctuationRightBrace) {
+      let fieldNameToken = self.expectIdentifierLike(false, "PE0022", "expected an object literal field name");
+      self.expect(FengTokenKind.PunctuationColon, "PE0023", "expected ':' after object literal field name");
+      let fieldValue = self.parseExpression();
+      fields.add(ObjectLiteralField {
+        location: fieldNameToken.location,
+        name: fieldNameToken.value,
+        value: fieldValue
+      });
+
+      while self.matchToken(FengTokenKind.PunctuationComma) {
+        let nameToken = self.expectIdentifierLike(false, "PE0022", "expected an object literal field name");
+        self.expect(FengTokenKind.PunctuationColon, "PE0023", "expected ':' after object literal field name");
+        let value = self.parseExpression();
+        fields.add(ObjectLiteralField {
+          location: nameToken.location,
+          name: nameToken.value,
+          value: value
+        });
+      }
+    }
+
+    self.expect(FengTokenKind.PunctuationRightBrace, "PE0021", "expected '}' to close object literal");
+    return ObjectLiteralExpr {
+      location: startLocation,
+      target: target,
+      fields: fields.entries()
+    };
+  }
+
+  // ==================== 表达式入口（临时，6.5 完善） ====================
+
+  /**
+   * 解析表达式（临时实现，6.5 完善为完整优先级链）
+   *
+   * 当前直接调用 parsePrimary()，后续将实现完整的
+   * parseAssignment → parseOr → ... → parsePrimary 优先级链
+   *
+   * @return Expression 节点
+   * @throws FengCompileError 解析失败时抛出
+   */
+  open func parseExpression(): Expression {
+    return self.parsePrimary();
+  }
+
+  // ==================== Block 入口（临时，6.6 完善） ====================
+
+  /**
+   * 解析语句块（临时实现，6.6 完善）
+   *
+   * 当前仅消费 `{` `}` 并返回空语句列表
+   *
+   * @return Block 节点
+   */
+  open func parseBlock(): Block {
+    let startLocation = self.current.location;
+    self.expect(FengTokenKind.PunctuationLeftBrace, "PE0027", "expected '{' to start block");
+    self.expect(FengTokenKind.PunctuationRightBrace, "PE0028", "expected '}' to close block");
+    return Block {
+      location: startLocation,
+      statements: []
     };
   }
 }

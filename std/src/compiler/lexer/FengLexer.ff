@@ -27,6 +27,18 @@ import std.collections;
  *     token = lexer.next();
  *   }
  */
+/**
+ * Lexer 状态快照，用于 Parser 的 probe + backtrack 机制
+ */
+@value
+open type FengLexerState {
+  let pos: int;
+  let line: int;
+  let column: int;
+  let peeked: FengToken;
+  let hasPeeked: bool;
+}
+
 open type FengLexer {
   /** 源文件信息（公开可读，供 Parser 构造错误时提取 snippet） */
   let source: FengSource;
@@ -91,6 +103,28 @@ open type FengLexer {
       }
     }
     return tokens.entries();
+  }
+
+  // ==================== 状态保存与恢复 ====================
+
+  /** 保存当前 Lexer 状态快照 */
+  open func saveState(): FengLexerState {
+    return FengLexerState {
+      pos: self.pos,
+      line: self.line,
+      column: self.column,
+      peeked: self.peeked,
+      hasPeeked: self.hasPeeked
+    };
+  }
+
+  /** 从快照恢复 Lexer 状态 */
+  open func restoreState(state: FengLexerState) {
+    self.pos = state.pos;
+    self.line = state.line;
+    self.column = state.column;
+    self.peeked = state.peeked;
+    self.hasPeeked = state.hasPeeked;
   }
 
   // ==================== 核心调度 ====================
