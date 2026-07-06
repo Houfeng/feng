@@ -317,7 +317,7 @@ open type ObjectLiteralExpr {
 }
 
 /**
- * 数组构造表达式：new int[10], new MapEntry<K,V>[n]
+ * 数组构造表达式：let x = int[:length]
  *
  * 按元素类型和大小创建数组实例
  */
