@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 static void free_owned_type_ref(FengTypeRef *type_ref) {
     if (type_ref == NULL) {
@@ -111,7 +112,9 @@ bool feng_semantic_record_union_coercion_site(
     const FengDecl *target_union_decl,
     const FengTypeRef *target_union_type_ref,
     size_t member_index,
-    const FengTypeRef *member_type_ref) {
+    const FengTypeRef *member_type_ref,
+    const size_t *path_indices,
+    size_t path_length) {
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
     FengUnionCoercionSite *slot = NULL;
 
@@ -119,6 +122,9 @@ bool feng_semantic_record_union_coercion_site(
         target_union_decl->kind != FENG_DECL_SPEC ||
         target_union_decl->as.spec_decl.form != FENG_SPEC_FORM_UNION ||
         member_type_ref == NULL) {
+        return false;
+    }
+    if (path_length > UNION_COERCION_MAX_PATH_DEPTH) {
         return false;
     }
 
@@ -155,6 +161,10 @@ bool feng_semantic_record_union_coercion_site(
     slot->target_union_type_ref = target_union_type_ref;
     slot->member_index = member_index;
     slot->member_type_ref = member_type_ref;
+    slot->path_length = path_length;
+    if (path_length > 0U && path_indices != NULL) {
+        memcpy(slot->path_indices, path_indices, path_length * sizeof(size_t));
+    }
     return true;
 }
 

@@ -248,10 +248,13 @@ typedef struct FengSpecCoercionSite {
 /* Normalized member metadata for a union-form spec. The analyzer flattens
  * nested union-form members, removes duplicates while preserving declaration
  * order, and stores the resulting member list here for codegen and tooling.
- * `type_ref` entries are owned by the semantic analysis object. */
+ * `type_ref` entries are owned by the semantic analysis object.
+ * `is_nested_union` is true when the member is itself a union-form spec,
+ * enabling multi-level path lookup at coercion sites. */
 typedef struct FengUnionSpecMemberInfo {
     const FengTypeRef *type_ref;
     const FengDecl *resolved_decl;
+    bool is_nested_union;
 } FengUnionSpecMemberInfo;
 
 typedef struct FengUnionSpecInfo {
@@ -263,13 +266,19 @@ typedef struct FengUnionSpecInfo {
 /* Records a value-flow site where expression `expr` is wrapped into a
  * union-form spec and assigned one normalized active member. Exact member
  * matches are preferred by the analyzer before spec-satisfaction matches, so
- * codegen can trust `member_index` as the tag to emit. */
+ * codegen can trust `member_index` as the tag to emit.
+ * `path_indices` records the multi-level path from the target union to the
+ * source type through nested union members; `path_length` is the depth. */
+#define UNION_COERCION_MAX_PATH_DEPTH 8U
+
 typedef struct FengUnionCoercionSite {
     const FengExpr *expr;
     const FengDecl *target_union_decl;
     const FengTypeRef *target_union_type_ref;
     size_t member_index;
     const FengTypeRef *member_type_ref;
+    size_t path_indices[UNION_COERCION_MAX_PATH_DEPTH];
+    size_t path_length;
 } FengUnionCoercionSite;
 
 /* 具体化依赖的分类：aggregate（tuple/@value by-value）或 managed（type 托管对象）。 */
@@ -572,7 +581,9 @@ bool feng_semantic_record_union_coercion_site(
     const FengDecl *target_union_decl,
     const FengTypeRef *target_union_type_ref,
     size_t member_index,
-    const FengTypeRef *member_type_ref);
+    const FengTypeRef *member_type_ref,
+    const size_t *path_indices,
+    size_t path_length);
 
 const FengUnionCoercionSite *feng_semantic_lookup_union_coercion_site(
     const FengSemanticAnalysis *analysis,

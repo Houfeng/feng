@@ -13288,6 +13288,79 @@ static bool cg_emit_callable_spec_coercion(CG *cg,
         "CE0117", "codegen: callable-form lambda/method coercion not yet supported in this step");
 }
 
+static bool cg_append_nested_union_coercion(CG *cg,
+                                             Buf *expr,
+                                             const UserSpec *spec,
+                                             const FengUnionCoercionSite *site,
+                                             size_t path_level,
+                                             const char *source_c_expr,
+                                             bool *out_payload_owns_ref,
+                                             FengToken blame) {
+    Buf slot_descriptor;
+    size_t member_index;
+    const CGType *member_type;
+
+    if (spec == NULL || spec->form != FENG_SPEC_FORM_UNION ||
+        path_level >= site->path_length ||
+        site->path_indices[path_level] >= spec->union_member_count) {
+        return cg_fail(cg, blame,
+                       "CE0118", "codegen: union coercion path is invalid");
+    }
+    member_index = site->path_indices[path_level];
+    buf_init(&slot_descriptor);
+    if (!cg_append_union_member_slot_descriptor(cg, &slot_descriptor, spec, member_index, blame)) {
+        buf_free(&slot_descriptor);
+        return false;
+    }
+
+    buf_append_fmt(expr,
+                   "((struct %s){ .tag = %zuU, ._fwd = %s",
+                   spec->c_value_struct_name,
+                   member_index,
+                   slot_descriptor.data);
+    buf_free(&slot_descriptor);
+
+    member_type = spec->union_member_types[member_index];
+    if (member_type != NULL && member_type->kind != CG_TYPE_VOID) {
+        buf_append_cstr(expr, ", .payload.");
+        cg_append_union_payload_field_name(expr, member_index);
+        buf_append_cstr(expr, " = ");
+
+        if (path_level + 1U < site->path_length) {
+            /* Intermediate level: recurse into nested union. */
+            const UserSpec *nested_spec = (member_type->kind == CG_TYPE_SPEC)
+                                              ? member_type->user_spec
+                                              : NULL;
+            if (nested_spec == NULL || nested_spec->form != FENG_SPEC_FORM_UNION) {
+                buf_free(expr);
+                return cg_fail(cg, blame,
+                               "CE0119", "codegen: nested union path traverses non-union member");
+            }
+            if (!cg_append_nested_union_coercion(cg, expr, nested_spec, site,
+                                                  path_level + 1U, source_c_expr,
+                                                  out_payload_owns_ref, blame)) {
+                buf_free(expr);
+                return false;
+            }
+        } else {
+            /* Leaf level: assign source expression. */
+            if (cgtype_is_by_value_struct(member_type) || cgtype_is_aggregate(member_type)) {
+                buf_append_cstr(expr, source_c_expr);
+            } else {
+                char *member_ctype = cg_ctype_dup(member_type);
+                if (member_ctype == NULL) {
+                    buf_free(expr);
+                    return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+                }
+                buf_append_fmt(expr, "(%s)(%s)", member_ctype, source_c_expr);
+                free(member_ctype);
+            }
+        }
+    }
+    buf_append_cstr(expr, " })");
+    return true;
+}
+
 static bool cg_emit_union_spec_coercion(CG *cg,
                                         const FengExpr *e,
                                         const FengUnionCoercionSite *site,
@@ -13295,66 +13368,43 @@ static bool cg_emit_union_spec_coercion(CG *cg,
     const UserSpec *target_spec = NULL;
     ExprResult source;
     Buf expr;
-    Buf slot_descriptor;
     bool payload_owns_ref = false;
+    FengUnionCoercionSite patched_site;
 
     er_init(out);
     er_init(&source);
     buf_init(&expr);
-    buf_init(&slot_descriptor);
 
     if (!cg_resolve_union_target_user_spec(cg, site, e->token, &target_spec)) {
         return false;
     }
-    if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_UNION ||
-        site->member_index >= target_spec->union_member_count) {
+    if (target_spec == NULL || target_spec->form != FENG_SPEC_FORM_UNION) {
         return cg_fail(cg, e->token,
                        "CE0118", "codegen: union coercion target member is invalid");
     }
+
+    /* Backward compatibility: if path was not set, synthesize single-level path. */
+    if (site->path_length == 0U) {
+        patched_site = *site;
+        patched_site.path_indices[0] = site->member_index;
+        patched_site.path_length = 1U;
+        site = &patched_site;
+    }
+
     if (!cg_emit_expr_raw(cg, e, &source)) {
         return false;
     }
-    if (!cg_append_union_member_slot_descriptor(cg,
-                                                &slot_descriptor,
-                                                target_spec,
-                                                site->member_index,
-                                                e->token)) {
+
+    if (!cg_append_nested_union_coercion(cg, &expr, target_spec, site,
+                                          0U, source.c_expr,
+                                          &payload_owns_ref, e->token)) {
         er_free(&source);
-        buf_free(&slot_descriptor);
+        buf_free(&expr);
         return false;
     }
 
-    buf_append_fmt(&expr,
-                   "((struct %s){ .tag = %zuU, ._fwd = %s",
-                   target_spec->c_value_struct_name,
-                   site->member_index,
-                   slot_descriptor.data);
-    if (target_spec->union_member_types[site->member_index] != NULL &&
-        target_spec->union_member_types[site->member_index]->kind != CG_TYPE_VOID) {
-        const CGType *member_type = target_spec->union_member_types[site->member_index];
-
-        buf_append_cstr(&expr, ", .payload.");
-        cg_append_union_payload_field_name(&expr, site->member_index);
-        buf_append_cstr(&expr, " = ");
-        if (cgtype_is_by_value_struct(member_type) || cgtype_is_aggregate(member_type)) {
-            buf_append_cstr(&expr, source.c_expr);
-        } else {
-            char *member_ctype = cg_ctype_dup(member_type);
-
-            if (member_ctype == NULL) {
-                er_free(&source);
-                buf_free(&expr);
-                buf_free(&slot_descriptor);
-                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
-            }
-            buf_append_fmt(&expr, "(%s)(%s)", member_ctype, source.c_expr);
-            free(member_ctype);
-        }
-        payload_owns_ref = (cgtype_is_managed(source.type) || cgtype_is_aggregate(source.type)) &&
-                           source.owns_ref;
-    }
-    buf_append_cstr(&expr, " })");
-    buf_free(&slot_descriptor);
+    payload_owns_ref = (cgtype_is_managed(source.type) || cgtype_is_aggregate(source.type)) &&
+                       source.owns_ref;
 
     out->c_expr = expr.data;
     out->type = cgtype_new(CG_TYPE_SPEC);

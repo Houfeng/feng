@@ -392,13 +392,23 @@ static void test_union_spec_ft_roundtrip_preserves_normalized_members(void) {
     ASSERT(value_decl != NULL);
     ASSERT(feng_symbol_decl_kind(value_decl) == FENG_SYMBOL_DECL_KIND_SPEC);
     ASSERT(feng_symbol_decl_union_member_count(value_decl) == 3U);
-    assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 0U), "string");
-    /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
+    /* Member 0: Maybe (nested union spec, not expanded) */
+    {
+        const FengSymbolTypeView *maybe_type = feng_symbol_decl_union_member_at(value_decl, 0U);
+        size_t seg_count;
+        ASSERT(maybe_type != NULL);
+        ASSERT(feng_symbol_type_kind(maybe_type) == FENG_SYMBOL_TYPE_KIND_NAMED);
+        seg_count = feng_symbol_type_segment_count(maybe_type);
+        ASSERT(seg_count >= 1U);
+        ASSERT(slice_equals_cstr(feng_symbol_type_segment_at(maybe_type, seg_count - 1U), "Maybe"));
+    }
+    /* Member 1: bool (builtin) */
+    assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 1U), "bool");
+    /* Member 2: int (builtin, platform-dependent canonical name) */
     {
         const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
-        assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 1U), int_canonical);
+        assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 2U), int_canonical);
     }
-    assert_builtin_type_name(feng_symbol_decl_union_member_at(value_decl, 2U), "bool");
 
     cache = feng_symbol_imported_module_cache_create(provider);
     ASSERT(cache != NULL);

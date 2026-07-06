@@ -206,7 +206,7 @@ match v {
 }
 ```
 
-上例成立的前提是 `Named` 本身就是该 union-form 的归一化 member；这里不是在运行时检查某个 concrete type 是否”也满足 `Named`”，而是在判断当前 active member 是否就是 `Named`。
+上例成立的前提是 `Named` 本身就是该 union-form 的直接成员；这里不是在运行时检查某个 concrete type 是否”也满足 `Named`”，而是在判断当前 active member 是否就是 `Named`。
 
 同理，若某个值在进入 union-form 时是按 `UserType` member 进入，则后续：
 
@@ -272,17 +272,16 @@ let x = (Named)u;   // 当前阶段不支持
 
 同时，`void` 当前应继续仅用于无返回值语义的位置，例如函数与方法的返回值声明；不应进入 union-form 的值类型成员集合。
 
-### 3.8 若 member 本身是 union-form，可在编译期拍平、去重并保持声明顺序
+### 3.8 嵌套 union-form 保持声明时层次，不展开
 
-本次讨论已确认：若某个 union-form 的 member 解析后本身又是 union-form，则应在编译期将其拍平到当前 union-form 的 member 集合中；拍平后应去重，并保持声明顺序。
+本次讨论已确认：若某个 union-form 的 member 解析后本身又是 union-form，**不递归展开**其子变体，而是保持声明时的层次结构。成员去重作用在直接成员层面，并保持声明顺序。
 
 这条规则的含义是：
 
-- 拍平是编译期语义归一化行为，而不是新的运行时结构。
-- 归一化成员集合中，相同 member 只保留第一次出现的那一项。
-- 归一化成员集合的顺序以声明顺序为准；后续重复出现的 member 会被忽略，而不会改变首次出现的位置。
-- 运行时不需要保留“union 里面再包一层 union”的层级。
-- 后续的成员匹配、收窄、相等性与 codegen，都应基于拍平后的成员集合来定义。
+- union-form 的成员列表即声明时写出的直接成员，不递归展开嵌套的 union-form。
+- 每个直接成员可以是具体类型（`type`、基础类型等），也可以是另一个 union-form。
+- 成员去重在直接成员层面执行：若同一类型被多次列出，只保留首次出现。
+- 运行时采用嵌套标记联合（nested tagged union）布局，每层 union-form 各自拥有独立的 tag。
 
 示意上，可理解为：
 
@@ -291,35 +290,72 @@ spec A: int | string;
 spec B: A | UserType;
 ```
 
-在语义层可按如下方式归一化理解：
+`B` 的直接成员为 `[A, UserType]`（2 个），**不是** `[int, string, UserType]`（3 个）。
+
+#### 3.8.1 赋值时的多级链路查找
+
+赋值、初始化、传参、返回等进入站点确定 active member 时，编译器在**编译期语义分析阶段**通过递归链路查找，确定从源类型到目标 union-form 的完整路径。路径信息传递给代码生成阶段，运行时仅执行已确定的 tag 设置与数据拷贝，**不存在动态匹配或递归**。
+
+查找规则：
+
+1. **直接匹配**：源类型与某个直接成员精确一致 → 路径为该单一成员。
+2. **间接匹配**：源类型可通过某个嵌套 union-form 成员间接到达 → 递归查找，路径为外层成员 + 内层路径。
+3. **歧义检测**：若源类型可通过多条不同路径到达目标 union-form → 编译期报错，要求显式转换（`as`）。
+
+示例：
 
 ```feng
-spec B: int | string | UserType;
+// 直接匹配
+let b: B = UserType(...);        // path = [UserType]
+let b: B = a;                    // a 类型是 A → path = [A]
+
+// 间接匹配
+let i: int = 42;
+let b: B = i;                    // int 是 A 的成员 → path = [A, int]
+
+// 歧义报错
+spec X: int | string;
+spec Y: int | bool;
+spec Z: X | Y;
+let i: int = 42;
+let z: Z = i;                    // 错误：int 可通过 X 和 Y 两条路径到达 Z
+let z: Z = i as X;               // 修复：显式指定路径
 ```
 
-若存在重复项，则同样按“保留首次出现、去除后续重复项”来理解。例如：
+#### 3.8.2 代码生成
 
-```feng
-spec C: int | string;
-spec D: string | UserType;
-spec E: C | D | int;
-```
+代码生成器根据编译期确定的路径，发射逐级 tag 设置和数据拷贝指令：
 
-在语义层可按如下方式归一化理解：
+- **叶子类型赋值**（path = [A, int]）：设置 B 的外层 tag 为 A 槽位，再设置 A 的内层 tag 为 int 槽位，最后拷贝 int 数据。
+- **整体赋值**（path = [A]）：设置 B 的外层 tag 为 A 槽位，整体拷贝 A 值（含 A 自身的 tag）。
 
-```feng
-spec E: int | string | UserType;
-```
+#### 3.8.3 内存布局
 
-### 3.9 union-form 默认零值先取归一化后的第一个 member
+采用嵌套标记联合（nested tagged union）。每个 union-form 本身就是 tagged union，嵌套是自然组合——外层 union-form 的嵌套 union-form 槽位的 payload 就是一个完整的内层 union-form 值（自带 tag + data），无需额外编码处理。
 
-本次讨论先定为：union-form 的默认零值应取归一化后第一个 member 的默认零值。
+Tag 编码规则：
+
+- 每个 union-form 层的 tag 值从 0 开始，按直接成员声明顺序递增。
+- 嵌套层数在实践中通常 ≤ 2，内存开销可控。
+- 成员去重逻辑保持不变（去重作用在直接成员层面）。
+
+#### 3.8.4 边界场景
+
+**三层及以上嵌套**：路径递归查找，深度无硬限制。运行时对应多级 tag 嵌套。
+
+**open spec 扩展**：`spec Base: A | B; spec Extended: Base | C;` 后通过 `open` 扩展 `Base` 增加新成员 `D`，`Extended` 的直接成员仍为 `[Base, C]`，`D` 通过 `Base` 路径可达 `Extended`。链路查找自动适应 `open spec` 的扩展。
+
+**泛型 union-form**：`spec Option<T>: None | T; spec Result<T>: Option<T> | Error;` 泛型实例化后，链路查找在实例化类型上进行。
+
+### 3.9 union-form 默认零值先取直接成员列表中的第一个 member
+
+本次讨论先定为：union-form 的默认零值应取直接成员列表中第一个 member 的默认零值。
 
 这条规则的直接含义是：
 
-- union-form 默认初始化时，active variant 取归一化后的第一个 member。
+- union-form 默认初始化时，active variant 取直接成员列表中的第一个 member。
 - payload 按该 member 自身的默认零值规则初始化。
-- 若归一化后的第一个 member 本身不是合法的默认零值目标，则该 union-form 也不是合法的默认零值目标。
+- 若直接成员列表中的第一个 member 本身不是合法的默认零值目标，则该 union-form 也不是合法的默认零值目标。
 
 示意上，可理解为：
 
@@ -333,7 +369,7 @@ spec Value: int | string | UserType;
 spec Display: Named | string;
 ```
 
-则 `Display` 的默认零值先按归一化后的第一个 member `Named` 的默认零值来理解，也就是 active variant 为 `Named`，payload 按 `Named` 自身的默认零值规则初始化（如果 `Named` 有合法默认零值）。
+则 `Display` 的默认零值先按直接成员列表中的第一个 member `Named` 的默认零值来理解，也就是 active variant 为 `Named`，payload 按 `Named` 自身的默认零值规则初始化（如果 `Named` 有合法默认零值）。
 
 ### 3.10 union-form 的 `==` / `!=` 也必须先收窄
 
@@ -385,6 +421,65 @@ func use<V: Value>(v: V): void { ... }
 - 在约束链传递中（如子 `spec` 继承父 `spec` 的约束），union-form 约束遵循与 object-form `spec` 约束相同的参数传递规则：向上传递的约束不得比目标约束更宽松。
 - union-form 约束不是进入 union 的值流站点；传入泛型函数的实际实参类型必须已是该 union-form 的某个 member，而不是先进入 union 再传入。
 
+### 3.13 多级 match 语法（后续增强）
+
+在基础 match 稳定后，可增加 `->` 链式模式语法，消除嵌套 match 的冗余。此语法为纯前端增强，独立排期，不影响核心类型系统和运行时表示。
+
+**多级模式层级规则**：每一级必须是前一级类型的成员。
+
+- 第一级：必须是 match 目标所属 union-form 的直接成员。
+- 第二级：必须是第一级类型的直接成员（第一级必须是 union-form）。
+- 第三级：必须是第二级类型的直接成员（第二级必须是 union-form）。
+- 依此类推。
+
+语法：
+
+```feng
+match body {
+    Expression -> IdentifierExpr { ... }
+    Expression -> BooleanLiteralExpr { ... }
+    Block { ... }
+    else { ... }
+}
+```
+
+错误示例：
+
+```feng
+match body {
+    IdentifierExpr { ... }       // 错误：IdentifierExpr 不是 body 所属 union-form 的直接成员
+    Expression -> Block { ... }  // 错误：Block 不是 Expression 的成员
+}
+```
+
+**链式写法与嵌套写法等价**：
+
+```feng
+// 链式写法
+match body {
+    Expression -> IdentifierExpr { ... }
+    Expression -> BooleanLiteralExpr { ... }
+    Block { ... }
+    else { ... }
+}
+
+// 等价的嵌套写法
+match body {
+    Expression {
+        match body {
+            IdentifierExpr { ... }
+            BooleanLiteralExpr { ... }
+            else { ... }
+        }
+    }
+    Block { ... }
+}
+```
+
+**编译器处理**：在 pattern 编译阶段将 `->` 链递归展开为嵌套 match，不影响类型系统和运行时表示。穷尽性检查按层级验证。
+
+**first-match-wins 语义**：match 不报 unreachable pattern 警告，分支按书写顺序从上到下匹配，第一个命中的分支执行。
+
 ## 4 基于三分类的映射原则
 
 ### 4.1 tuple 的映射原则
@@ -435,10 +530,10 @@ func use<V: Value>(v: V): void { ... }
 
 - 把 `aggregate-with-managed-slots` 作为 union-form 的**统一基线表示**；
 - 其首版固定布局为“一个 `tag`、一个 `FengManagedSlotDescriptor _fwd`、一个 inline payload 区域”；
-- `tag` 负责表达当前 active member 在归一化 member 列表中的序号，供 `if` member 匹配与收窄发码使用；
+- `tag` 负责表达当前 active member 在直接成员列表中的序号，供 `match` member 匹配与收窄发码使用；
 - `_fwd` 负责表达当前 active payload 的生命周期槽位，供 aggregate walker 在 retain / release / assign / take / 托管扫描路径中转发使用；
 - `_fwd` 不承载语言层 member identity；多个 member 可以拥有相同的 `_fwd.kind` 与 payload offset，但仍必须用不同 `tag` 区分；
-- inline payload 区域必须能内联容纳归一化 member 中尺寸与对齐需求最大的 member 表示；不允许为 aggregate member 采用装箱作为首版通用路径；
+- inline payload 区域必须能内联容纳直接成员中尺寸与对齐需求最大的 member 表示；不允许为 aggregate member 采用装箱作为首版通用路径；
 - 当前 active member 不含托管槽位时，`_fwd.kind` 写为 `FENG_SLOT_NONE`；active member 是托管指针时，`_fwd.kind` 写为 `FENG_SLOT_POINTER`；active member 是内联 aggregate 时，`_fwd.kind` 写为 `FENG_SLOT_NESTED_AGGREGATE` 且 `nested` 指向对应 aggregate descriptor；
 - 复制、销毁与托管扫描只按 `_fwd` 指向的当前 active payload 生命周期规则处理；这套生命周期继续复用现有 aggregate 通用能力，由相应描述符驱动，不要求为 union-form 新增专用 runtime 分支或新的通用 API；
 - 即使未来对某些受限子集做优化，也不影响 union-form 在抽象层面归类为既有三类之一。
@@ -502,12 +597,12 @@ func use<V: Value>(v: V): void { ... }
   - narrowing / pattern matching 的收窄规则。
 - union-form 还需要保证：
   - union-form 不得作为 `type A: B` 声明头或契约适配 `fit A: B` 的目标；具体值进入 union-form 只能发生在赋值、初始化、传参、返回等值流站点；
-  - 若 member 解析后本身是 union-form，则在编译期拍平、去重并形成保持声明顺序的归一化成员集合；
-  - 默认零值取归一化后的第一个 member 的默认零值；
-  - 若归一化后的第一个 member 不是合法默认零值目标，则该 union-form 也不是合法默认零值目标；
+  - 若 member 解析后本身是 union-form，保持声明时层次结构不递归展开；成员去重在直接成员层面执行并保持声明顺序；
+  - 默认零值取直接成员列表中第一个 member 的默认零值；
+  - 若直接成员列表中的第一个 member 不是合法默认零值目标，则该 union-form 也不是合法默认零值目标；
   - union-form 的成员收窄仅复用现有 `match 目标值 { ... }` 条件匹配形式，不引入独立 `is` 运算符；收窄通过有绑定分支的绑定变量实现，无绑定分支不做自动收窄（绑定语法与约束见 3.6 节）；
   - union 值一旦在进入站点选定 active member，后续条件匹配只按该已选定 member 判别；不会在匹配阶段再依据其可向上转换到的 `spec` 重新解释当前值；
-  - 值进入 union-form 时，若源静态类型与某个归一化 member 精确一致，则必须优先按该 member 进入；即使该源类型也满足其他 `spec` member，也不构成歧义；
+  - 值进入 union-form 时，编译器在编译期通过多级链路查找确定路径：精确直接 member 优先，嵌套 union-form 间接匹配次之；多条可达路径构成歧义时必须报错，不得按声明顺序兜底；
   - 只有在不存在精确 member 命中，且多个 `spec` member 可通过编译期可证的向上转换同时接纳源值时，才构成进入站点冲突；
   - 上述冲突站点禁止隐式选择 active member，也不按声明顺序兜底；开发者必须先显式转换到目标 `spec` member，再把结果写入 union-form；
   - 当开发者已通过显式向上转换选定某个 `spec` member 时，其语义等价于“先构造该目标 `spec` 值，再按该 `spec` member 进入 union-form”；实现可融合发码，但不得高于这条显式两步路径的额外运行时开销；
@@ -533,7 +628,7 @@ func use<V: Value>(v: V): void { ... }
 - 允许用户定义类型作为 union member。
 - 允许其他 `spec` 作为 union member。
 - 不允许 `void` 进入 union-form。
-- 若某个 member 解析后本身是 union-form，则应在编译期拍平、去重并保持声明顺序。
+- 若某个 member 解析后本身是 union-form，保持声明时层次结构不递归展开；成员去重在直接成员层面执行并保持声明顺序（详见 3.8 节）。
 
 当前阶段无剩余未决项。
 
@@ -554,7 +649,8 @@ func use<V: Value>(v: V): void { ... }
 当前讨论已确认基础收窄语义：
 
 - 基础收窄仅复用现有 `match 目标值 { ... }` 条件匹配形式，不新增独立 `is` 运算符。
-- 当 `if` 的目标静态类型为 union-form 时，匹配体只允许 union member 类型标签与 `else`；字面量值标签与区间标签仅适用于非 union 目标。
+- 当 `match` 的目标静态类型为 union-form 时，匹配体只允许 union 直接成员类型标签与 `else`；字面量值标签与区间标签仅适用于非 union 目标。
+- match 匹配直接成员；若某个直接成员本身是 union-form，匹配该成员后目标值收窄为该嵌套 union-form 类型，可在分支内继续 match 其成员。穷尽性检查只验证直接成员是否被覆盖。
 - union 值在进入站点选定 active member 后，后续条件匹配只按该 active member 本身判别；不会在匹配阶段自动向上转换后再命中别的 `spec` branch。
 - union-form 的成员访问必须先收窄到确定 member；收窄通过有绑定分支的绑定变量实现，无绑定分支不做自动收窄（绑定语法与约束见 3.6 节）。
 - 可编译期完成的收窄应优先在编译期完成。
@@ -578,9 +674,9 @@ func use<V: Value>(v: V): void { ... }
 
 对应语义为：
 
-- `tag` 负责表达当前 active member 在归一化 member 列表中的序号，供 member 匹配与收窄发码使用。
+- `tag` 负责表达当前 active member 在直接成员列表中的序号，供 member 匹配与收窄发码使用。
 - `_fwd` 负责表达当前 active payload 的生命周期槽位，供 aggregate walker 转发到 `NONE` / `POINTER` / `NESTED_AGGREGATE` 路径。
-- inline payload 区域按值承载当前 active member，必须能容纳归一化 member 中尺寸与对齐需求最大的表示。
+- inline payload 区域按值承载当前 active member，必须能容纳直接成员中尺寸与对齐需求最大的表示。
 - 复制、销毁与托管扫描仅按 `_fwd` 指向的当前 active payload 规则处理。
 - 该设计仍属于既有 `aggregate-with-managed-slots` 顶层值模型，不构成第四类运行时结构。
 
@@ -592,7 +688,7 @@ func use<V: Value>(v: V): void { ... }
 
 - 由于契约关系可能在后续声明中补全，且包内孤儿契约也会影响当前可见语义，重叠 member 的最终歧义判定不适合在 union-form 声明点完成。
 - 相关判定应延后到当前可见契约闭包固定后，并在值进入 union-form 的具体站点执行。
-- 若源静态类型与某个归一化 member 精确一致，则必须优先按该 member 进入；即使该源类型也满足某个 `spec` member，也不构成歧义。
+- 若源静态类型与某个直接 member 精确一致，则必须优先按该 member 进入；即使该源类型也满足某个 `spec` member，也不构成歧义。
 - 因此，在 `UserType | Named` 这类组合中，`UserType` 值进入 union-form 时应按 `UserType` member 进入；`UserType` 满足 `Named` 本身不构成冲突。
 - 真正的进入冲突只发生在不存在精确 member 命中，而两个或多个 `spec` member 同时可通过编译期可证的向上转换接纳同一源值时，例如两个重叠 `spec`，或父/子 `spec` 同时出现且源值可同时进入二者。
 - 这类冲突站点禁止隐式选择 active variant，也不按声明顺序兜底；开发者必须先显式转换到目标 `spec` member，再把结果写入 union-form。
@@ -642,19 +738,19 @@ let t: Display = s;
 - `feng-spec.md` 应成为 union-form `spec` 的主规范归属。
 - `feng-language.md` 只负责总览性说明，不应重复细则。
 - `feng-type.md` 只负责类型系统总览与引用，不应重复 union-form 的主定义。
-- `feng-flow.md` 只负责 `match 目标值 { ... }` 的流程控制语法外壳与其对 union member 匹配的入口说明；union member 的归一化、收窄、active member 判别与转换边界仍由本文定义。
+- `feng-flow.md` 只负责 `match 目标值 { ... }` 的流程控制语法外壳与其对 union member 匹配的入口说明；union member 的多级链路查找、收窄、active member 判别与转换边界仍由本文定义。
 
 ## 9 当前建议的实现顺序
 
 若继续推进实现，建议按以下顺序落地：
 
 1. 先落 parser / AST，补齐 union-form 语法、form 边界与成员集合承载。
-2. 再落语义层，完成成员归一化、进入站点 member 选择、显式转换边界与 `if` 收窄规则。
-3. 再落 codegen / 描述符接入，基于现有 aggregate runtime 能力按“一个 `tag`、一个 `_fwd`、一个 inline payload 区域”的固定布局完成构造、判别、复制、销毁与扫描。
+2. 再落语义层，完成成员收集（保持声明时层次）、进入站点多级链路查找、显式转换边界与 `match` 收窄规则。
+3. 再落 codegen / 描述符接入，基于现有 aggregate runtime 能力按”一个 `tag`、一个 `_fwd`、一个 inline payload 区域”的固定布局完成构造、判别、复制、销毁与扫描。
 4. 最后补齐 diagnostics、测试与主规范并入。
 
 原因：
 
-- 语法承载与语义归一化先稳定，后续 runtime / codegen 才有确定输入。
+- 语法承载与语义收集先稳定，后续 runtime / codegen 才有确定输入。
 - 固定布局与分支收窄规则需要依赖已完成的语义信息，不能倒序施工。
 - 现有 runtime 的 aggregate 通用能力已足以承载 union 生命周期；实现工作重心在描述符设计与发码接入，而不在 runtime 通用层改造。

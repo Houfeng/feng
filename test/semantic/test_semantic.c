@@ -17505,12 +17505,15 @@ static void test_union_form_spec_records_normalized_members(void) {
     info = feng_semantic_lookup_union_spec_info(analysis, program->declarations[1]);
     ASSERT(info != NULL);
     ASSERT(info->member_count == 3U);
-    ASSERT(type_ref_named_single_is(info->members[0].type_ref, "string"));
+    ASSERT(type_ref_named_single_is(info->members[0].type_ref, "MaybeText"));
+    ASSERT(info->members[0].is_nested_union == true);
+    ASSERT(type_ref_named_single_is(info->members[1].type_ref, "bool"));
+    ASSERT(info->members[1].is_nested_union == false);
     {
         const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
-        ASSERT(type_ref_named_single_is(info->members[1].type_ref, int_canonical));
+        ASSERT(type_ref_named_single_is(info->members[2].type_ref, int_canonical));
     }
-    ASSERT(type_ref_named_single_is(info->members[2].type_ref, "bool"));
+    ASSERT(info->members[2].is_nested_union == false);
 
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
@@ -17703,6 +17706,90 @@ static void test_union_equality_requires_narrowing(void) {
         "union_equality_without_narrowing.f",
         source,
         "requires union-form operands to be narrowed");
+}
+
+static void test_nested_union_leaf_assignment_records_path(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Inner: int | string;\n"
+        "spec Outer: Inner | bool;\n"
+        "let value: Outer = 1;\n";
+    FengProgram *program = parse_program_or_die("nested_union_leaf.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengExpr *initializer;
+    const FengUnionCoercionSite *site;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(program->declaration_count == 3U);
+    ASSERT(program->declarations[2]->kind == FENG_DECL_GLOBAL_BINDING);
+
+    initializer = program->declarations[2]->as.binding.initializer;
+    site = feng_semantic_lookup_union_coercion_site(analysis, initializer);
+    ASSERT(site != NULL);
+    /* path = [0, 0]: Outer.Inner(index 0) → Inner.int(index 0) */
+    ASSERT(site->path_length == 2U);
+    ASSERT(site->path_indices[0] == 0U);
+    ASSERT(site->path_indices[1] == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_nested_union_direct_member_assignment_records_path(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Inner: int | string;\n"
+        "spec Outer: Inner | bool;\n"
+        "func run(inner: Inner): void {\n"
+        "    let value: Outer = inner;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("nested_union_direct.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_nested_union_ambiguous_path_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec X {}\n"
+        "type A: X {}\n"
+        "spec P: A | X;\n"
+        "spec Q: A | X;\n"
+        "spec R: P | Q;\n"
+        "func run(a: A): void {\n"
+        "    let r: R = a;\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "nested_union_ambiguous.f",
+        source,
+        "matches multiple members");
+}
+
+static void test_nested_union_cycle_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec A: B | int;\n"
+        "spec B: A | string;\n";
+
+    assert_single_source_semantic_error_contains(
+        "nested_union_cycle.f",
+        source,
+        "cycle");
 }
 
 static void test_generic_union_form_accepts_concrete_member_matching(void) {
@@ -19764,6 +19851,10 @@ int main(void) {
     test_union_match_narrows_object_spec_member();
     test_union_member_access_requires_narrowing();
     test_union_equality_requires_narrowing();
+    test_nested_union_leaf_assignment_records_path();
+    test_nested_union_direct_member_assignment_records_path();
+    test_nested_union_ambiguous_path_rejected();
+    test_nested_union_cycle_rejected();
     test_generic_union_form_accepts_concrete_member_matching();
     test_generic_union_form_rejects_mismatched_member();
     test_spec_parent_specs_must_be_spec();

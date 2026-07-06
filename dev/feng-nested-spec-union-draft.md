@@ -389,16 +389,16 @@ let r: Result<int> = none_val;
 
 ### 一期：核心（解除 Parser 6.4 阻塞）
 
-- [ ] 5.1 更新 spec union 规范文档：非展开语义、多级链路、嵌套 tag
-- [ ] 5.2 `collect_normalized_union_member`：移除递归展开逻辑，保持声明时层次结构
-- [ ] 5.3 `select_union_member_for_expr_type`：改为多级链路查找，返回 path 信息
-- [ ] 5.4 `select_union_member_for_expr_type`：增加歧义检测（同一类型多条路径时报错）
-- [ ] 5.5 `validate_expr_against_expected_type`：适配新的 MatchResult（含 path）
-- [ ] 5.6 代码生成：按 path 逐级设置 tag + 拷贝数据（叶子赋值、整体赋值）
-- [ ] 5.7 基础 match：匹配直接成员，分支内类型收窄
-- [ ] 5.8 match 穷尽性检查：改为检查直接成员覆盖
-- [ ] 5.9 补充测试用例：嵌套 spec union 赋值、match、歧义报错
-- [ ] 5.10 全量回归测试
+- [x] 5.1 更新 spec union 规范文档：非展开语义、多级链路、嵌套 tag
+- [x] 5.2 `collect_normalized_union_member`：移除递归展开逻辑，保持声明时层次结构
+- [x] 5.3 `select_union_member_for_expr_type`：改为多级链路查找，返回 path 信息
+- [x] 5.4 `select_union_member_for_expr_type`：增加歧义检测（同一类型多条路径时报错）
+- [x] 5.5 `validate_expr_against_expected_type`：适配新的 MatchResult（含 path）
+- [x] 5.6 代码生成：按 path 逐级设置 tag + 拷贝数据（叶子赋值、整体赋值）
+- [x] 5.7 基础 match：匹配直接成员，分支内类型收窄
+- [x] 5.8 match 穷尽性检查：改为检查直接成员覆盖
+- [x] 5.9 补充测试用例：嵌套 spec union 赋值、match、歧义报错
+- [x] 5.10 全量回归测试
 
 ### 二期：多级 Match 语法
 

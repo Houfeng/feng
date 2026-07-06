@@ -4986,17 +4986,6 @@ static const FengDecl *resolve_union_spec_type_ref_decl(const ResolveContext *co
     return NULL;
 }
 
-static bool union_stack_contains(const FengDecl *const *stack,
-                                 size_t stack_count,
-                                 const FengDecl *decl) {
-    for (size_t index = 0U; index < stack_count; ++index) {
-        if (stack[index] == decl) {
-            return true;
-        }
-    }
-    return false;
-}
-
 static void free_union_member_infos_local(FengUnionSpecMemberInfo *members,
                                           size_t member_count) {
     for (size_t index = 0U; index < member_count; ++index) {
@@ -5009,7 +4998,8 @@ static bool append_normalized_union_member(ResolveContext *context,
                                            FengUnionSpecMemberInfo **members,
                                            size_t *member_count,
                                            size_t *member_capacity,
-                                           const FengTypeRef *type_ref) {
+                                           const FengTypeRef *type_ref,
+                                           bool is_nested_union) {
     FengUnionSpecMemberInfo entry;
 
     for (size_t index = 0U; index < *member_count; ++index) {
@@ -5024,6 +5014,7 @@ static bool append_normalized_union_member(ResolveContext *context,
         return false;
     }
     entry.resolved_decl = resolve_type_ref_decl(context, type_ref);
+    entry.is_nested_union = is_nested_union;
     if (!append_raw((void **)members,
                     member_count,
                     member_capacity,
@@ -5040,85 +5031,69 @@ static bool collect_normalized_union_member(ResolveContext *context,
                                             const FengTypeRef *member_ref,
                                             FengUnionSpecMemberInfo **members,
                                             size_t *member_count,
-                                            size_t *member_capacity,
-                                            const FengDecl ***stack,
-                                            size_t *stack_count,
-                                            size_t *stack_capacity) {
+                                            size_t *member_capacity) {
     const FengDecl *resolved = resolve_type_ref_decl(context, member_ref);
+    bool is_nested_union = (resolved != NULL && resolved->kind == FENG_DECL_SPEC &&
+                             resolved->as.spec_decl.form == FENG_SPEC_FORM_UNION);
 
-    if (resolved != NULL && resolved->kind == FENG_DECL_SPEC &&
-        resolved->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
-        bool ok = true;
-
-        if (union_stack_contains(*stack, *stack_count, resolved)) {
-            return resolver_append_error(
-                context,
-                member_ref != NULL ? member_ref->token : owner_union_decl->token,
-                "AE0601", format_message("union-form spec '%.*s' forms a cycle through its member list",
-                               (int)owner_union_decl->as.spec_decl.name.length,
-                               owner_union_decl->as.spec_decl.name.data));
-        }
-        if (!append_raw((void **)stack,
-                        stack_count,
-                        stack_capacity,
-                        sizeof(resolved),
-                        &resolved)) {
-            return false;
-        }
-        for (size_t index = 0U;
-             ok && index < resolved->as.spec_decl.as.union_form.member_count;
-             ++index) {
-            const FengTypeRef *nested_ref = resolved->as.spec_decl.as.union_form.members[index];
-            FengTypeRef *substituted = NULL;
-
-            if (member_ref != NULL && member_ref->kind == FENG_TYPE_REF_NAMED &&
-                resolved->as.spec_decl.type_param_count > 0U &&
-                member_ref->as.named.type_arg_count == resolved->as.spec_decl.type_param_count) {
-                substituted = clone_type_ref_substituting_type_params(
-                    nested_ref,
-                    resolved->as.spec_decl.type_params,
-                    resolved->as.spec_decl.type_param_count,
-                    member_ref->as.named.type_args);
-                if (substituted == NULL) {
-                    ok = false;
-                    break;
-                }
-                nested_ref = substituted;
-            }
-
-            if (!resolve_type_ref(context, nested_ref, false)) {
-                ok = false;
-            } else {
-                ok = collect_normalized_union_member(context,
-                                                     owner_union_decl,
-                                                     nested_ref,
-                                                     members,
-                                                     member_count,
-                                                     member_capacity,
-                                                     stack,
-                                                     stack_count,
-                                                     stack_capacity);
-            }
-            free_synthetic_type_ref(substituted);
-        }
-        *stack_count -= 1U;
-        return ok;
-    }
+    (void)owner_union_decl;
 
     return append_normalized_union_member(context,
                                           members,
                                           member_count,
                                           member_capacity,
-                                          member_ref);
+                                          member_ref,
+                                          is_nested_union);
+}
+
+static bool detect_union_form_cycle(ResolveContext *context,
+                                    const FengDecl *current,
+                                    const FengDecl **stack,
+                                    size_t stack_count) {
+    for (size_t i = 0U; i < stack_count; ++i) {
+        if (stack[i] == current) {
+            return resolver_append_error(
+                context,
+                current->token,
+                "AE0601", format_message("union-form spec '%.*s' forms a cycle through its member list",
+                               (int)current->as.spec_decl.name.length,
+                               current->as.spec_decl.name.data));
+        }
+    }
+
+    if (current->kind != FENG_DECL_SPEC ||
+        current->as.spec_decl.form != FENG_SPEC_FORM_UNION) {
+        return true;
+    }
+
+    if (stack_count >= 256U) {
+        return false;
+    }
+    stack[stack_count] = current;
+    stack_count++;
+
+    for (size_t i = 0U;
+         i < current->as.spec_decl.as.union_form.member_count;
+         ++i) {
+        const FengTypeRef *member_ref = current->as.spec_decl.as.union_form.members[i];
+        const FengDecl *member_decl = resolve_type_ref_decl(context, member_ref);
+
+        if (member_decl != NULL &&
+            member_decl->kind == FENG_DECL_SPEC &&
+            member_decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+            if (!detect_union_form_cycle(context, member_decl, stack, stack_count)) {
+                return false;
+            }
+        }
+    }
+
+    return true;
 }
 
 static bool record_normalized_union_spec_info(ResolveContext *context, const FengDecl *decl) {
     FengUnionSpecMemberInfo *members = NULL;
     size_t member_count = 0U;
     size_t member_capacity = 0U;
-    const FengDecl **stack = NULL;
-    size_t stack_count = 0U;
-    size_t stack_capacity = 0U;
     bool ok = true;
 
     if (context == NULL || context->analysis == NULL || decl == NULL ||
@@ -5126,11 +5101,8 @@ static bool record_normalized_union_spec_info(ResolveContext *context, const Fen
         return true;
     }
 
-    if (!append_raw((void **)&stack,
-                    &stack_count,
-                    &stack_capacity,
-                    sizeof(decl),
-                    &decl)) {
+    const FengDecl *cycle_stack[256];
+    if (!detect_union_form_cycle(context, decl, cycle_stack, 0U)) {
         return false;
     }
 
@@ -5155,13 +5127,9 @@ static bool record_normalized_union_spec_info(ResolveContext *context, const Fen
                                              member_ref,
                                              &members,
                                              &member_count,
-                                             &member_capacity,
-                                             &stack,
-                                             &stack_count,
-                                             &stack_capacity);
+                                             &member_capacity);
     }
 
-    free(stack);
     if (!ok) {
         free_union_member_infos_local(members, member_count);
         return false;
@@ -5302,11 +5270,15 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
     return false;
 }
 
+#define UNION_MAX_PATH_DEPTH 8U
+
 typedef struct UnionMemberSelection {
     bool matched;
     bool ambiguous;
     size_t member_index;
     const FengTypeRef *member_type_ref;
+    size_t path_indices[UNION_MAX_PATH_DEPTH];
+    size_t path_length;
 } UnionMemberSelection;
 
 static bool inferred_expr_type_exactly_matches_type_ref(const ResolveContext *context,
@@ -5344,6 +5316,7 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
     const FengUnionSpecInfo *info = feng_semantic_lookup_union_spec_info(context->analysis,
                                                                          union_decl);
     UnionMemberSelection result;
+    size_t match_count = 0U;
     size_t compatible_count = 0U;
 
     memset(&result, 0, sizeof(result));
@@ -5351,6 +5324,7 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
         return result;
     }
 
+    /* Pass 1: exact direct match. */
     for (size_t index = 0U; index < info->member_count; ++index) {
         const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
             (ResolveContext *)context,
@@ -5364,10 +5338,58 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
             result.matched = true;
             result.member_index = index;
             result.member_type_ref = member_type_ref;
+            result.path_indices[0] = index;
+            result.path_length = 1U;
             return result;
         }
     }
 
+    /* Pass 2: exact match through nested union members (multi-level). */
+    for (size_t index = 0U; index < info->member_count; ++index) {
+        if (!info->members[index].is_nested_union) {
+            continue;
+        }
+        const FengDecl *nested_decl = info->members[index].resolved_decl;
+        if (nested_decl == NULL) {
+            continue;
+        }
+        const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
+            (ResolveContext *)context,
+            union_decl,
+            union_spec_type_ref,
+            info->members[index].type_ref);
+
+        UnionMemberSelection nested = select_union_member_for_expr_type(
+            context, expr_type, nested_decl, member_type_ref);
+        if (nested.matched && !nested.ambiguous) {
+            if (match_count == 0U) {
+                result.matched = true;
+                result.member_index = index;
+                result.member_type_ref = member_type_ref;
+                result.path_indices[0] = index;
+                size_t copy_len = nested.path_length;
+                if (copy_len + 1U > UNION_MAX_PATH_DEPTH) {
+                    copy_len = UNION_MAX_PATH_DEPTH - 1U;
+                }
+                for (size_t j = 0U; j < copy_len; ++j) {
+                    result.path_indices[j + 1U] = nested.path_indices[j];
+                }
+                result.path_length = copy_len + 1U;
+            }
+            ++match_count;
+        }
+    }
+    if (match_count > 1U) {
+        result.ambiguous = true;
+        result.matched = false;
+        result.member_type_ref = NULL;
+        return result;
+    }
+    if (match_count == 1U) {
+        return result;
+    }
+
+    /* Pass 3: compatibility match (non-exact). */
     for (size_t index = 0U; index < info->member_count; ++index) {
         const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
             (ResolveContext *)context,
@@ -5384,6 +5406,8 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
             result.matched = true;
             result.member_index = index;
             result.member_type_ref = member_type_ref;
+            result.path_indices[0] = index;
+            result.path_length = 1U;
         } else {
             result.ambiguous = true;
         }
@@ -16725,7 +16749,9 @@ static void record_union_coercion_site_if_applicable(ResolveContext *context,
                                                    target_union_decl,
                                                    expected_type_ref,
                                                    selection.member_index,
-                                                   selection.member_type_ref);
+                                                   selection.member_type_ref,
+                                                   selection.path_indices,
+                                                   selection.path_length);
 }
 
 static const FengDecl *concrete_type_decl_of_inferred(const ResolveContext *context,
@@ -17959,7 +17985,9 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
                                                                    target_union_decl,
                                                                    expected_type_ref,
                                                                    selection.member_index,
-                                                                   selection.member_type_ref);
+                                                                   selection.member_type_ref,
+                                                                   selection.path_indices,
+                                                                   selection.path_length);
                     return true;
                 }
                 if (selection.ambiguous) {

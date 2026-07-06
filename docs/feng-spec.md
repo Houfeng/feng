@@ -13,8 +13,8 @@
 - `spec`: 统一声明入口,可形成 object-form、callable-form 或 union-form。
 - object-form `spec`: 对象形契约声明,定义字段与行为签名边界。
 - callable-form `spec`: 可调用形状声明,定义参数列表与返回类型边界。
-- union-form `spec`: 候选类型集合声明,表示一个值在进入该 `spec` 后处于归一化 member 集合中的其一。
-- active member: union-form 值当前实际持有的归一化 member,由进入站点确定,由 union-form 的 `tag` 表达。
+- union-form `spec`: 候选类型集合声明,表示一个值在进入该 `spec` 后处于直接成员集合中的其一。
+- active member: union-form 值当前实际持有的直接成员,由进入站点确定,由 union-form 的 `tag` 表达。
 - `type`: 具体类型声明,可通过定义头或 `fit` 显式进入一个或多个 object-form `spec`。
 - 契约满足: 指具体 `type` 满足目标 object-form `spec` 的全部字段与方法要求。
 - 方法签名: 方法名、参数个数、参数类型、参数顺序与返回值类型的组合。
@@ -162,8 +162,9 @@ spec Choice: int | string {}
 - 可调用形状使用 `spec Name(args): ReturnType;` 形式定义。
 - union-form 使用 `spec Name: TypeRef ('|' TypeRef)+;` 形式定义,以分号结束,不允许 `{}` 块体; `|` 表示 OR 关系,不同于 object-form 父 `spec` 列表中的逗号 AND 关系。
 - union-form member 可引用基础类型、用户定义类型与其他 `spec`; `void` 不允许作为 union-form member。
-- union-form member 在语义层按声明顺序拍平嵌套 union-form、去重并形成归一化 member 集合; union-form 默认零值取归一化后的第一个 member 的默认零值。
-- union-form 值在进入 union-form 的赋值、初始化、传参与返回等站点确定 active member; 若源静态类型与某个归一化 member 精确一致,必须优先按该 member 进入。
+- union-form member 保持声明时的层次结构，不递归展开嵌套 union-form；成员去重作用在直接成员层面，并保持声明顺序。
+- union-form 默认零值取直接成员列表中第一个 member 的默认零值。
+- union-form 值在进入 union-form 的赋值、初始化、传参与返回等站点确定 active member；编译器在编译期通过多级链路查找，确定从源类型到目标 union-form 的完整路径（精确 member 优先，嵌套 union-form 间接匹配次之）；若存在多条可达路径则诊断为歧义；运行时仅执行路径已确定的 tag 设置与数据拷贝。
 - union-form 未收窄前不允许直接做成员访问、方法调用或 `==` / `!=` 比较; 收窄通过 `match 目标值 { ... }` 的 union member 类型匹配完成,其详细规则见 [feng-union-type.md](./feng-union-type.md)。
 - 具体 `type` 可在声明头上直接写出其满足的一个或多个 object-form `spec`; 同一关系也可通过可见的 `fit A: SpecB` 或 `fit A: SpecB, SpecC` 显式建立。
 - callable-form `spec` 只描述可调用签名形状,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标。
@@ -231,7 +232,7 @@ spec Choice: int | string {}
 - 编译器必须检查 `spec` 声明头右侧是否仅包含 `spec`。
 - 编译器必须区分 object-form、callable-form 与 union-form `spec`,并按各自语法形态解析。
 - 编译器必须检查 union-form member 列表是否合法,拒绝少于两个 member、`void` member 与 `{}` 块体。
-- 编译器必须对 union-form member 拍平嵌套 union-form、去重并保持声明顺序。
+- 编译器必须保持 union-form 的声明时层次结构，不递归展开嵌套 union-form；在直接成员层面去重并保持声明顺序；在赋值等进入站点做编译期多级链路查找，确定从源类型到目标 union-form 的路径，并在存在多条可达路径时诊断为歧义。
 - 编译器必须检查 object-form `spec` 的父 `spec` 列表中每一项是否均为 object-form `spec`，并拒绝 callable-form `spec` 与 union-form `spec` 出现在父 `spec` 列表中。
 - 编译器必须检查 `type` 声明头与契约适配 `fit` 的右侧是否全部为 object-form `spec`,并拒绝 callable-form `spec` 与 union-form `spec`。
 - 编译器必须检查 `type` 对目标 `spec` 的字段与方法是否满足精确匹配规则。
@@ -247,8 +248,8 @@ spec Choice: int | string {}
 - 编译器必须仅在两个 callable-form `spec` 的实例化后签名完全一致时接受显式转换,并在语义分析阶段拒绝其他 callable-form `spec` 转换。
 - 编译器必须把实例化后签名完全一致的 callable-form `spec` 显式转换 lower 为零转发的目标视角重解释; 不得为该转换生成新的 wrapper/closure,也不得让转换后的每次调用比转换前多一层 invoke forwarding。
 - 编译器必须在语义分析阶段根据当前可见契约关系判定对象形状 `spec` 的显式转换是否属于允许的向上转换,并拒绝父到子、无关 `spec` 或依赖运行时对象具体类型的转换。
-- 编译器必须在 union-form 进入站点按精确 member 优先、可证向上转换候选与歧义诊断规则确定 active member。
-- 编译器必须在 union-form `match 目标值 { ... }` 中只接受 union member 类型标签与 `else`,拒绝字面量标签和区间标签。
+- 编译器必须在 union-form 进入站点按精确直接 member 优先、嵌套 union-form 多级链路间接匹配次之的规则确定 active member 路径；多条可达路径构成歧义时必须报错，不得按声明顺序兜底。
+- 编译器必须在 union-form `match 目标值 { ... }` 中只接受 union 直接成员类型标签与 `else`，拒绝字面量标签和区间标签；穷尽性检查只验证直接成员是否被覆盖。
 - 编译器必须按 [Feng 语言 ABI 互操作规范](./feng-interop.md) 校验可调用形状的 `@abi spec` 的参数类型与返回类型是否满足 ABI 函数签名兼容规则。
 - 编译器必须在语义分析阶段对以上违规报错并阻止通过。
 
