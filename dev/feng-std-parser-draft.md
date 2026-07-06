@@ -207,7 +207,7 @@ open spec TypeReference: NamedTypeRef
 绑定区分简单绑定和解构绑定两种形式，用 spec union 区分：
 
 ```feng
-/** 简单绑定：let x: int = 5; */
+/** 简单绑定：let x: int = 5; var name = "hello"; */
 open type SimpleBinding {
   let token: FengToken;
   let name: StringSpan;
@@ -215,10 +215,11 @@ open type SimpleBinding {
   let typeRef: Option<TypeReference>;
   let initializer: Option<Expression>;
   let annotations: Annotation[];
+  let comment: StringSpan;
 }
 
 /**
- * 简单绑定签名：用于函数参数、契约成员等
+ * 简单绑定签名：不含初始化表达式，用于函数参数、契约成员等声明位置
  */
 open type SimpleBindingSignature {
   let token: FengToken;
@@ -226,9 +227,10 @@ open type SimpleBindingSignature {
   let mutability: Mutability;
   let typeRef: Option<TypeReference>;
   let annotations: Annotation[];
+  let comment: StringSpan;
 }
 
-/** 解构绑定：let (a, b) = (1, 2); */
+/** 解构绑定：let (a, b) = (1, 2); var (x, y, z) = tuple; */
 open type DestructureBinding {
   let token: FengToken;
   let mutability: Mutability;
@@ -236,6 +238,7 @@ open type DestructureBinding {
   let typeRef: Option<TypeReference>;
   let initializer: Option<Expression>;
   let annotations: Annotation[];
+  let comment: StringSpan;
 }
 
 /** 绑定联合类型，用于顶层/成员/局部绑定 */
@@ -247,6 +250,7 @@ open spec Binding: SimpleBinding | DestructureBinding;
 - 使用 `Option<T>` 替代 `hasX: bool` + `x: T` 的组合，避免"无值时字段仍有垃圾数据"的问题
 - `typeRef` 和 `initializer` 均为可选，符合语法实际（两者至少出现一个，但 Parser 不强制校验）
 - SimpleBinding 包含 `annotations` 字段，支持 `@value let x = ...` 等注解形式
+- `comment: StringSpan` 字段承载前置文档注释（`CommentDoc` Token），各绑定类型均包含此字段
 
 ### 3.6 Expression（表达式）
 
@@ -436,6 +440,50 @@ open type MatchOperatorExpr {
   let value: Expression;
   let targets: MatchTarget[];
 }
+
+/**
+ * if 表达式：if cond1 { } else if cond2 { } else { }
+ *
+ * clauses 包含所有 if/else if 分支，elseBlock 为 else 分支体
+ * 当 if 作为表达式时，所有分支最后一个语句应解析为表达式，最后一句可省略分号
+ */
+open type IfExpr {
+  let token: FengToken;
+  let clauses: IfClause[];
+  let elseBlock: Block;
+}
+
+/**
+ * match 表达式：
+ *
+ * let value = match target {
+ *   case1 { body1 }
+ *   case2 { body2 }
+ *   else { elseBody }
+ * }
+ *
+ * 当 match 作为表达式时，各分支最后一个语句应解析为表达式，最后一句可省略分号
+ */
+open type MatchExpr {
+  let token: FengToken;
+  let target: Expression;
+  let clauses: MatchClause[];
+  let elseBlock: Block;
+}
+
+/**
+ * try 表达式：try expr catch e: ErrType { handler } catch { catchAll }
+ *
+ * try 后是一个表达式而不是语句块
+ * 当 try 作为表达式时，求值结果为 body 或 catch 分支的求值结果
+ * catch 的最后一句话应解析为表达式，最后一句可省略分号
+ */
+open type TryExpr {
+  let token: FengToken;
+  let body: Expression;
+  let catchClauses: CatchClause[];
+  let catchAllBlock: Option<Block>;
+}
 ```
 
 ### 3.7 Block（代码块）
@@ -498,6 +546,12 @@ open type ExpressionStmt {
   let expression: Expression;
 }
 
+/**
+ * try 语句：try expr catch e: ErrType { handler } catch { catchAll }
+ *
+ * try 后是一个表达式而不是语句块
+ * 作为语句使用时，不产生求值结果，各分支中语句不能省略分号
+ */
 open type TryStmt {
   let token: FengToken;
   let body: Expression;
@@ -505,12 +559,28 @@ open type TryStmt {
   let catchAllBlock: Option<Block>;
 }
 
+/**
+ * if 语句：if cond { } else if cond { } else { }
+ *
+ * 作为语句使用时，不产生求值结果，各分支中语句不能省略分号
+ */
 open type IfStmt {
   let token: FengToken;
   let clauses: IfClause[];
   let elseBlock: Block;
 }
 
+/**
+ * match 语句：
+ *
+ * match target {
+ *   case1 { body1; }
+ *   case2 { body2; }
+ *   else { elseBody; }
+ * }
+ *
+ * 作为语句使用时，不产生求值结果，各分支中语句不能省略分号
+ */
 open type MatchStmt {
   let token: FengToken;
   let target: Expression;
@@ -571,6 +641,8 @@ open type DeferStmt {
 - ForStmt（三段式 `for init; cond; update`）和 ForEachStmt（`for x in expr`）分离为两种独立 type
 - ForInit 支持 SimpleBinding（`for let i = 0`）或 AssignmentStmt（`for i = 0`）
 - ForUpdate 支持 Expression（`for ...; ...; i++`）或 AssignmentStmt（`for ...; ...; i += 1`）
+- TryStmt/IfStmt/MatchStmt 的 body 均为 **Expression** 而非 Block：`try expr catch ...`、`if cond { stmts }`、`match target { case { stmts } }`
+- 语句形式不产生求值结果，各分支中的语句不能省略分号
 - TryStmt 的 `catchAllBlock: Option<Block>` 用于 `catch { ... }` 无类型捕获子句
 
 ### 3.9 辅助 AST 类型
@@ -600,6 +672,7 @@ open type FunctionSignature {
   let parameters: Parameter[];
   let returnTypeRef: Option<TypeReference>;
   let annotations: Annotation[];
+  let comment: StringSpan;
 }
 
 /**
@@ -613,6 +686,7 @@ open type Function {
   let returnTypeRef: Option<TypeReference>;
   let annotations: Annotation[];
   let body: Block;
+  let comment: StringSpan;
 }
 
 /**
@@ -660,6 +734,7 @@ open type CatchClause {
 - `Parameter` 复用 `SimpleBindingSignature`（函数参数不支持解构绑定和默认值），减少重复定义
 - `FunctionSignature` 无函数体，用于 spec 方法声明和 extern 函数声明
 - `Function` 独立为 type，被 Function 声明、TypeMethod、TypeConstructor、TypeFinalizer 复用
+- `FunctionSignature` 和 `Function` 均包含 `comment: StringSpan` 字段，承载前置文档注释
 
 ### 3.10 Type（类型声明）
 
@@ -699,7 +774,6 @@ open type TypeMember {
   let token: FengToken;
   let visibility: Visibility;
   let isStatic: bool;
-  let comment: StringSpan;
   let body: TypeMemberBody;
 }
 
@@ -708,19 +782,21 @@ open type Type {
   let name: StringSpan;
   let genericParameters: GenericParameter[];
   let members: TypeMember[];
-  let specs: TypeReference[];
+  let specTypeRefs: TypeReference[];
   let annotations: Annotation[];
   let isTuple: bool;
   let isValue: bool;
+  let comment: StringSpan;
 }
 ```
 
 **设计说明**：
 
-- `TypeMember` 是 wrapper，承载 visibility、isStatic、doc comment 等修饰符
+- `TypeMember` 是 wrapper，承载 visibility、isStatic 等修饰符
 - `TypeMemberBody` 是 spec union，区分 Field/Method/Constructor/Finalizer
 - `TypeField` 复用 `SimpleBinding`，字段声明即绑定
 - `TypeMethod`/`TypeConstructor`/`TypeFinalizer` 均复用 `Function`，仅语义不同
+- `comment: StringSpan` 放在 `Type` 而非 `TypeMember` 上，文档注释关联的是声明整体而非单个成员
 
 ### 3.11 Enum（枚举声明）
 
@@ -730,6 +806,7 @@ open type EnumItem {
   let name: StringSpan;
   let value: Option<int>;
   let annotations: Annotation[];
+  let comment: StringSpan;
 }
 
 open type Enum {
@@ -737,6 +814,7 @@ open type Enum {
   let name: StringSpan;
   let annotations: Annotation[];
   let items: EnumItem[];
+  let comment: StringSpan;
 }
 ```
 
@@ -763,7 +841,6 @@ open spec ObjectSpecMemberBody: ObjectSpecField | ObjectSpecMethod;
 open type ObjectSpecMember {
   let token: FengToken;
   let isStatic: bool;
-  let comment: StringSpan;
   let body: ObjectSpecMemberBody;
 }
 
@@ -808,6 +885,7 @@ open type Spec {
   let name: StringSpan;
   let annotations: Annotation[];
   let body: SpecBody;
+  let comment: StringSpan;
 }
 ```
 
@@ -818,6 +896,7 @@ open type Spec {
 - `ObjectSpecMethod` 使用 `FunctionSignature`（无函数体），因为 spec 方法只有签名没有实现
 - `SimpleBindingSignature` 同时被 `Parameter`（函数参数）和 `ObjectSpecField`（契约字段）复用
 - 通过独立类型排除非法状态：spec 成员不可能有函数体或初始化器
+- `comment: StringSpan` 放在 `Spec` 而非 `ObjectSpecMember` 上，与 Type 的设计一致
 
 ### 3.13 Fit（适配器声明）
 
@@ -1057,15 +1136,15 @@ parseExpression()                     // 表达式入口（返回 Expression spe
 
 #### Lambda 解析
 
-Lambda 语法：`(params) => expr` 或 `(params) => { block }`
+Lambda 语法：`(params) -> expr` 或 `(params): ReturnType { block }`
 - 遇到 `(` 时需要前瞻判断是分组表达式还是 Lambda
 - 判断依据：参数列表的形式（`name: Type` 模式）
 
 #### match 运算符
 
-`expr match { branches }` 和 `expr match pattern => expr` 两种形式
-- 前者是 match 表达式（match_expr）
-- 后者是 match 运算符（match_op）
+`match target { case { body } }` 和 `expr match pattern | pattern` 两种形式
+- 前者是 match 表达式/语句（MatchExpr/MatchStmt），body 为块
+- 后者是 match 运算符（MatchOperatorExpr），用于内联匹配
 
 ### 4.4 错误恢复
 
