@@ -108,7 +108,7 @@ open type IdentifierExpr {
 4. **语义与语法分离**：Parser 只产出 AST，语义分析阶段的数据（推断类型、resolved callable 等）不进入 AST 节点
 5. **自举友好**：直接面向 Feng 类型系统，不需要做 enum+union 的二次转换
 
-**类型数量**：22 种 Expression + 15 种 Statement + 6 种 ModuleMemberBody + 4 种 TypeMemberBody + 3 种 TypeReference + 3 种 SpecBody + 2 种 Binding + 辅助类型 = 约 60+ 个 type/spec 定义。每个定义 5-15 行，可读性和可维护性均可接受。
+**类型数量**：22 种 Expression + 15 种 Statement + 7 种 ModuleMemberBody + 4 种 TypeMemberBody + 3 种 TypeReference + 3 种 SpecBody + 3 种 ObjectSpecMemberBody + 2 种 Binding + 辅助类型 = 约 70+ 个 type/spec 定义。每个定义 5-15 行，可读性和可维护性均可接受。
 
 ### 3.2 基础类型
 
@@ -214,6 +214,15 @@ open type SimpleBinding {
   let mutability: Mutability;
   let typeRef: Option<TypeReference>;
   let initializer: Option<Expression>;
+  let annotations: Annotation[];
+}
+
+/** 简单绑定签名（无初始化器），用于 spec 字段声明 */
+open type SimpleBindingSignature {
+  let token: FengToken;
+  let name: StringSpan;
+  let mutability: Mutability;
+  let typeRef: Option<TypeReference>;
   let annotations: Annotation[];
 }
 
@@ -579,7 +588,20 @@ open type Parameter {
 }
 
 /**
- * 函数节点，支持泛型参数、参数列表、返回类型、函数体、外部函数标记
+ * 函数签名节点，支持泛型参数、参数列表、返回类型、注解
+ * 无函数体
+ */
+open type FunctionSignature {
+  let token: FengToken;
+  let name: StringSpan;
+  let genericParameters: GenericParameter[];
+  let parameters: Parameter[];
+  let returnTypeRef: Option<TypeReference>;
+  let annotations: Annotation[];
+}
+
+/**
+ * 函数节点，支持泛型参数、参数列表、返回类型、函数体
  */
 open type Function {
   let token: FengToken;
@@ -634,6 +656,7 @@ open type CatchClause {
 
 - `CatchClause` 使用 `SimpleBinding` 替代"name + type"组合，统一绑定语义
 - `Parameter` 复用 `SimpleBinding`（含 mutability、typeRef、initializer），减少重复定义
+- `FunctionSignature` 无函数体，用于 spec 方法声明和 extern 函数声明
 - `Function` 独立为 type，被 Function 声明、TypeMethod、TypeConstructor、TypeFinalizer 复用
 
 ### 3.10 Type（类型声明）
@@ -723,6 +746,25 @@ open type Enum {
 ### 3.12 Spec（契约声明）
 
 ```feng
+open type ObjectSpecField {
+  let token: FengToken;
+  let binding: SimpleBindingSignature;
+}
+
+open type ObjectSpecMethod {
+  let token: FengToken;
+  let function: FunctionSignature;
+}
+
+open spec ObjectSpecMemberBody: ObjectSpecField | ObjectSpecMethod;
+
+open type ObjectSpecMember {
+  let token: FengToken;
+  let isStatic: bool;
+  let comment: StringSpan;
+  let body: ObjectSpecMemberBody;
+}
+
 /**
  * 对象契约：定义类型需实现的成员集合
  * spec Named { let name: string; func greet(): string; }
@@ -730,7 +772,7 @@ open type Enum {
 open type ObjectSpec {
   let token: FengToken;
   let genericParameters: GenericParameter[];
-  let members: TypeMember[];
+  let members: ObjectSpecMember[];
   let parentTypeRefs: TypeReference[];
 }
 
@@ -767,6 +809,13 @@ open type Spec {
 }
 ```
 
+**设计说明**：
+
+- Spec 成员使用独立的 `ObjectSpecMember` 体系，不复用 `TypeMember`
+- `ObjectSpecField` 使用 `SimpleBindingSignature`（无 initializer），因为 spec 字段只有声明没有初始值
+- `ObjectSpecMethod` 使用 `FunctionSignature`（无函数体），因为 spec 方法只有签名没有实现
+- 通过独立类型排除非法状态：spec 成员不可能有函数体或初始化器
+
 ### 3.13 Fit（适配器声明）
 
 ```feng
@@ -801,12 +850,17 @@ open type ModuleBinding {
 
 open type ModuleFunction {
   let token: FengToken;
-  let isExtern: bool;
   let function: Function;
+}
+
+open type ModuleExternalFunction {
+  let token: FengToken;
+  let function: FunctionSignature;
 }
 
 open spec ModuleMemberBody: ModuleBinding
   | ModuleFunction
+  | ModuleExternalFunction
   | Type
   | Enum
   | Spec
@@ -847,8 +901,9 @@ open type ModuleFile {
 
 - `ModuleFile` 是 Parser 的直接输出，对应单个 `.ff` 文件
 - `ModuleMember` 是 wrapper，承载 visibility 修饰符
-- `ModuleMemberBody` 包含 6 种成员：ModuleBinding、ModuleFunction、Type、Enum、Spec、Fit
-- `ModuleFunction` 单独包装，增加 `isExtern` 标记（`extern func`）
+- `ModuleMemberBody` 包含 7 种成员：ModuleBinding、ModuleFunction、ModuleExternalFunction、Type、Enum、Spec、Fit
+- `ModuleFunction` 包装有函数体的函数声明
+- `ModuleExternalFunction` 包装无函数体的 extern 函数声明（使用 `FunctionSignature`）
 - `ModuleImport` 使用 `SegmentedName` 表示模块路径（如 `std.text`）
 
 ### 3.15 Module / Program（语义阶段）
