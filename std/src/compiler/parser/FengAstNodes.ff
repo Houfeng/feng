@@ -310,7 +310,7 @@ open type ObjectLiteralField {
  * 
  * 对象构造写法：
  *  写法一: Point() { x: 1, y: 2 }  // 构造并初始化成员字段
- *  写法二: Point { x: 1, y: 2 }    // 公开无参构造，可省略括号
+ *  写法二: Point { x: 1, y: 2 }    // 如果有公开无参构造，可省略括号
  *  写法三: Point()                 // 可仅构造函数不初始化字段（此时是 CallExpr）
  *
  * target 为目标类型表达式，fields 为字段初始化列表
