@@ -306,7 +306,12 @@ open type ObjectLiteralField {
 }
 
 /**
- * 对象字面量表达式：Point { x: 1, y: 2 }
+ * 对象字面量表达式，用于构造并初始化对象实例
+ * 
+ * 对象构造写法：
+ *  写法一: Point() { x: 1, y: 2 }  // 构造并初始化成员字段
+ *  写法二: Point { x: 1, y: 2 }    // 公开无参构造，可省略括号
+ *  写法三: Point()                 // 可仅构造函数不初始化字段（此时是 CallExpr）
  *
  * target 为目标类型表达式，fields 为字段初始化列表
  */
@@ -462,15 +467,15 @@ open type MatchClause {
 
 /**
  * match 表达式：
- * 
- * let value = match target { 
- *  case1 { body1 } 
- *  case2 { body2 } 
- *  else { elseBody } 
+ *
+ * let value = match target {
+ *  case1 { body1 }
+ *  case2 { body2 }
+ *  else { elseBody }
  * }
- * 
+ *
  * 当 match 作为表达式时，各分支最后一个语句应该解析为表达式，最后一句可省略分号
- * 
+ *
  */
 open type MatchExpr {
   let token: FengToken;
@@ -607,11 +612,11 @@ open type IfStmt {
 
 /**
  * match 语句：
- * 
- * match target { 
- *  case1 { body1; } 
- *  case2 { body2; } 
- *  else { elseBody; } 
+ *
+ * match target {
+ *  case1 { body1; }
+ *  case2 { body2; }
+ *  else { elseBody; }
  * }
  *
  * 作为语句使用时，不产生求值结果, 各分支中语句不能省略分号
