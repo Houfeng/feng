@@ -1,0 +1,211 @@
+open module std.compiler.parser;
+
+import std;
+import std.text;
+import std.compiler.lexer;
+import std.compiler.common;
+
+/**
+ * Feng 语法分析器。
+ *
+ * 递归下降式解析器，与 C 版 parser.c 行为等价。
+ * 输入 Token 流（来自 FengLexer），输出 ModuleFile AST。
+ *
+ * 衔接方式：当前阶段 Parser 直接接受 FengLexer（流式消费 + 内部前瞻缓冲，
+ * 对齐主流编译器设计）。未来若引入只读 TokenStream 概念（封装
+ * next/peek/lookback 等流式读取，不提供 replace 等变换方法），再考虑
+ * 增加 stream 入参。是否引入 TokenStream 到时根据实际需求决定，当前不预设。
+ *
+ * 源码访问：通过 lexer.source 获取 FengSource 实例（公开可读），
+ * 用于构造错误时提取 snippet。无需单独传入 source 参数。
+ *
+ * 错误处理：遇到语法错误立即抛出 FengCompileError，由调用方捕获处理。
+ * 与 Lexer 策略一致，不尝试错误恢复。
+ *
+ * 用法示例：
+ *   let lexer = FengLexer(source);
+ *   let parser = FengParser(lexer);
+ *   let moduleFile = parser.parse();
+ */
+open type FengParser {
+  seal let lexer: FengLexer;
+  seal var current: FengToken;
+  seal var previous: FengToken;
+
+  // ==================== 构造器 ====================
+
+  /**
+   * 从 Lexer 创建 Parser，初始化 current 为第一个非 trivia Token
+   */
+  open func FengParser(lexer: FengLexer) {
+    self.lexer = lexer;
+    self.previous = FengToken {
+      kind: FengTokenKind.SpecialEndOfFile,
+      value: lexer.source.slice(0, 0),
+      location: FengLocation {
+        path: lexer.source.path, offset: 0, line: 1, column: 1
+      }
+    };
+    self.current = self.nextToken();
+  }
+
+  // ==================== Token 流读取 ====================
+
+  /**
+   * 消费当前 Token 并前进到下一个非 trivia Token
+   * @return 被消费的 Token
+   */
+  open func advance(): FengToken {
+    self.previous = self.current;
+    self.current = self.nextToken();
+    return self.previous;
+  }
+
+  /**
+   * 前瞻下一个非 trivia Token（不消费）
+   * @return 下一个非 trivia Token
+   */
+  open func peek(): FengToken {
+    return self.peekToken();
+  }
+
+  /**
+   * 获取上一个被消费的 Token
+   * @return 上一个被消费的 Token
+   */
+  open func previous(): FengToken {
+    return self.previous;
+  }
+
+  // ==================== Token 匹配与消费 ====================
+
+  /**
+   * 检查当前 Token 是否为指定类型（不消费）
+   * @param kind 期望的 Token 类型
+   * @return 当前 Token 类型是否匹配
+   */
+  open func check(kind: FengTokenKind): bool {
+    return self.current.kind == kind;
+  }
+
+  /**
+   * 若当前 Token 匹配指定类型则消费并返回 true，否则返回 false
+   * @param kind 期望的 Token 类型
+   * @return 是否成功匹配并消费
+   */
+  open func matchToken(kind: FengTokenKind): bool {
+    if !self.check(kind) {
+      return false;
+    }
+    let _ = self.advance();
+    return true;
+  }
+
+  /**
+   * 期望当前 Token 为指定类型，匹配则消费，否则抛出语法错误
+   * @param kind 期望的 Token 类型
+   * @param code 错误码（如 "PE0001"）
+   * @param message 错误描述
+   * @return 被消费的 Token
+   * @throws FengCompileError 当前 Token 不匹配时抛出
+   */
+  open func expect(kind: FengTokenKind, code: string, message: string): FengToken {
+    if self.check(kind) {
+      return self.advance();
+    }
+    self.error(code, message);
+  }
+
+  // ==================== Token 流内部方法 ====================
+
+  /**
+   * 从 Lexer 读取下一个非 trivia Token（跳过空白和注释）
+   * @return 下一个非 trivia Token
+   */
+  seal func nextToken(): FengToken {
+    var token = self.lexer.next();
+    while FengTokenUtil.isTrivia(token.kind) {
+      token = self.lexer.next();
+    }
+    return token;
+  }
+
+  /**
+   * 前瞻下一个非 trivia Token（不消费，跳过空白和注释）
+   * @return 下一个非 trivia Token
+   */
+  seal func peekToken(): FengToken {
+    var token = self.lexer.peek();
+    while FengTokenUtil.isTrivia(token.kind) {
+      let _ = self.lexer.next();
+      token = self.lexer.peek();
+    }
+    return token;
+  }
+
+  // ==================== 错误处理 ====================
+
+  /**
+   * 构造并抛出 FengCompileError，通过 lexer.source.extractLineSnippet() 填充 snippet
+   * @param code 错误码（如 "PE0001"）
+   * @param message 错误描述
+   * @throws FengCompileError 总是抛出
+   */
+  seal func error(code: string, message: string) {
+    self.errorAt(self.current, code, message);
+  }
+
+  /**
+   * 在指定 Token 位置构造并抛出 FengCompileError
+   * @param token 错误位置对应的 Token
+   * @param code 错误码
+   * @param message 错误描述
+   * @throws FengCompileError 总是抛出
+   */
+  seal func errorAt(token: FengToken, code: string, message: string) {
+    let snippet = self.lexer.source.extractLineSnippet(token.location);
+    throw FengCompileError {
+      code: code,
+      message: message,
+      path: token.location.path,
+      line: token.location.line,
+      column: token.location.column,
+      snippet: snippet
+    };
+  }
+
+  // ==================== 解析入口 ====================
+
+  /**
+   * 解析完整源文件
+   * @return ModuleFile AST
+   * @throws FengCompileError 遇到语法错误时抛出
+   */
+  open func parse(): ModuleFile {
+    return self.parseModuleFile();
+  }
+
+  /**
+   * 解析模块文件（临时实现，后续阶段完善）
+   * @return 空壳 ModuleFile
+   */
+  seal func parseModuleFile(): ModuleFile {
+    let emptySpan = self.lexer.source.slice(0, 0);
+    let emptySegmentedName = SegmentedName {
+      fullName: emptySpan,
+      segments: StringSpan[:0]
+    };
+    let emptyModuleDeclare = ModuleDeclare {
+      location: self.current.location,
+      visibility: Visibility.Default,
+      name: emptySegmentedName,
+      docComment: emptySpan
+    };
+    return ModuleFile {
+      path: self.lexer.source.path,
+      declare: emptyModuleDeclare,
+      imports: [],
+      members: []
+    };
+  }
+}

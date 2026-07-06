@@ -28,8 +28,8 @@ import std.collections;
  *   }
  */
 open type FengLexer {
-  /** 源文件信息 */
-  seal let source: FengSource;
+  /** 源文件信息（公开可读，供 Parser 构造错误时提取 snippet） */
+  let source: FengSource;
   /** 字节长度 */
   seal let length: int;
   /** 当前字节偏移 */
