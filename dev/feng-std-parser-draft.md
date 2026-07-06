@@ -161,7 +161,7 @@ open type SegmentedName {
 }
 ```
 
-**用途**：类型引用 `NamedTypeRef`、模块声明 `ModuleFile.moduleName`、import 声明 `ModuleImport.name`、注解 `Annotation.name`。
+**用途**：类型引用 `NamedTypeRef`、模块声明 `ModuleDeclare.name`、import 声明 `ModuleImport.name`、注解 `Annotation.name`。
 
 ### 3.4 TypeReference（类型引用）
 
@@ -215,7 +215,7 @@ open type SimpleBinding {
   let typeRef: Option<TypeReference>;
   let initializer: Option<Expression>;
   let annotations: Annotation[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 /**
@@ -227,7 +227,7 @@ open type SimpleBindingSignature {
   let mutability: Mutability;
   let typeRef: Option<TypeReference>;
   let annotations: Annotation[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 /** 解构绑定：let (a, b) = (1, 2); var (x, y, z) = tuple; */
@@ -238,7 +238,7 @@ open type DestructureBinding {
   let typeRef: Option<TypeReference>;
   let initializer: Option<Expression>;
   let annotations: Annotation[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 /** 绑定联合类型，用于顶层/成员/局部绑定 */
@@ -250,7 +250,7 @@ open spec Binding: SimpleBinding | DestructureBinding;
 - 使用 `Option<T>` 替代 `hasX: bool` + `x: T` 的组合，避免"无值时字段仍有垃圾数据"的问题
 - `typeRef` 和 `initializer` 均为可选，符合语法实际（两者至少出现一个，但 Parser 不强制校验）
 - SimpleBinding 包含 `annotations` 字段，支持 `@value let x = ...` 等注解形式
-- `comment: StringSpan` 字段承载前置文档注释（`CommentDoc` Token），各绑定类型均包含此字段
+- `docComment: StringSpan` 字段承载前置文档注释（`CommentDoc` Token），各绑定类型均包含此字段
 
 ### 3.6 Expression（表达式）
 
@@ -672,7 +672,7 @@ open type FunctionSignature {
   let parameters: Parameter[];
   let returnTypeRef: Option<TypeReference>;
   let annotations: Annotation[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 /**
@@ -686,7 +686,7 @@ open type Function {
   let returnTypeRef: Option<TypeReference>;
   let annotations: Annotation[];
   let body: Block;
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 /**
@@ -734,7 +734,7 @@ open type CatchClause {
 - `Parameter` 复用 `SimpleBindingSignature`（函数参数不支持解构绑定和默认值），减少重复定义
 - `FunctionSignature` 无函数体，用于 spec 方法声明和 extern 函数声明
 - `Function` 独立为 type，被 Function 声明、TypeMethod、TypeConstructor、TypeFinalizer 复用
-- `FunctionSignature` 和 `Function` 均包含 `comment: StringSpan` 字段，承载前置文档注释
+- `FunctionSignature` 和 `Function` 均包含 `docComment: StringSpan` 字段，承载前置文档注释
 
 ### 3.10 Type（类型声明）
 
@@ -786,7 +786,7 @@ open type Type {
   let annotations: Annotation[];
   let isTuple: bool;
   let isValue: bool;
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 ```
 
@@ -796,7 +796,7 @@ open type Type {
 - `TypeMemberBody` 是 spec union，区分 Field/Method/Constructor/Finalizer
 - `TypeField` 复用 `SimpleBinding`，字段声明即绑定
 - `TypeMethod`/`TypeConstructor`/`TypeFinalizer` 均复用 `Function`，仅语义不同
-- `comment: StringSpan` 放在 `Type` 而非 `TypeMember` 上，文档注释关联的是声明整体而非单个成员
+- `docComment: StringSpan` 放在 `Type` 而非 `TypeMember` 上，文档注释关联的是声明整体而非单个成员
 
 ### 3.11 Enum（枚举声明）
 
@@ -806,7 +806,7 @@ open type EnumItem {
   let name: StringSpan;
   let value: Option<int>;
   let annotations: Annotation[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 open type Enum {
@@ -814,7 +814,7 @@ open type Enum {
   let name: StringSpan;
   let annotations: Annotation[];
   let items: EnumItem[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 ```
 
@@ -885,7 +885,7 @@ open type Spec {
   let name: StringSpan;
   let annotations: Annotation[];
   let body: SpecBody;
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 ```
 
@@ -896,7 +896,7 @@ open type Spec {
 - `ObjectSpecMethod` 使用 `FunctionSignature`（无函数体），因为 spec 方法只有签名没有实现
 - `SimpleBindingSignature` 同时被 `Parameter`（函数参数）和 `ObjectSpecField`（契约字段）复用
 - 通过独立类型排除非法状态：spec 成员不可能有函数体或初始化器
-- `comment: StringSpan` 放在 `Spec` 而非 `ObjectSpecMember` 上，与 Type 的设计一致
+- `docComment: StringSpan` 放在 `Spec` 而非 `ObjectSpecMember` 上，与 Type 的设计一致
 
 ### 3.13 Fit（适配器声明）
 
@@ -920,9 +920,9 @@ open type Fit {
 
 - 使用 `Option<TypeMember[]>` 替代 `hasBody: bool` + `members: TypeMember[]`
 
-### 3.14 ModuleFile（模块文件，Parser 输出）
+### 3.14 ModuleDeclare / ModuleFile（模块声明与模块文件，Parser 输出）
 
-Parser 的输出是 `ModuleFile`（对应单个 `.ff` 文件），而非 `Module`（对应跨多文件的语义模块）。
+Parser 的输出是 `ModuleFile`（对应单个 `.ff` 文件），而非 `Module`（对应跨多文件的语义模块）。`ModuleDeclare` 是独立的模块声明节点，从 `ModuleFile` 中提取。
 
 ```feng
 open type ModuleBinding {
@@ -967,21 +967,35 @@ open type ModuleImport {
   let alias: Option<StringSpan>;
 }
 
-open type ModuleFile {
+/**
+ * 模块定义声明：module std.text;
+ *
+ * 语义阶段按模块名合并多个 ModuleFile，形成完整的 Module
+ */
+open type ModuleDeclare {
+  // 模块名称的 location
   let location: FengLocation;
+  let visibility: Visibility;
+  let name: SegmentedName;
+  let docComment: StringSpan;
+}
+
+open type ModuleFile {
   /** 当前文件的路径 */
   let path: string;
+  /** 模块定义声明：module std.text; */
+  let declare: ModuleDeclare;
   /** import 作用于文件，而非整个模块 */
   let imports: ModuleImport[];
-  let moduleVisibility: Visibility;
-  let moduleName: SegmentedName;
-  let moduleMembers: ModuleMember[];
+  /** 当前文件的所有顶层成员声明 */
+  let members: ModuleMember[];
 }
 ```
 
 **设计说明**：
 
 - `ModuleFile` 是 Parser 的直接输出，对应单个 `.ff` 文件
+- `ModuleDeclare` 是独立的模块声明节点，持有 `location`、`visibility`、`name`
 - `ModuleMember` 是 wrapper，承载 visibility 修饰符
 - `ModuleMemberBody` 包含 7 种成员：ModuleBinding、ModuleFunction、ModuleExternalFunction、Type、Enum、Spec、Fit
 - `ModuleFunction` 包装有函数体的函数声明
@@ -1198,7 +1212,7 @@ open type FengAstDumper {
 
 ```
 ModuleFile: example.ff
-  Module: std.example (open)
+  ModuleDeclare: std.example (open)
   Import: std
   Import: std.text
   TypeDecl: User (open)

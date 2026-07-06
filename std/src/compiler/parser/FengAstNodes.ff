@@ -99,7 +99,7 @@ open type SimpleBinding {
   let typeRef: Option<TypeReference>;
   let initializer: Option<Expression>;
   let annotations: Annotation[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 /**
@@ -111,7 +111,7 @@ open type SimpleBindingSignature {
   let mutability: Mutability;
   let typeRef: Option<TypeReference>;
   let annotations: Annotation[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 /**
@@ -126,7 +126,7 @@ open type DestructureBinding {
   let typeRef: Option<TypeReference>;
   let initializer: Option<Expression>;
   let annotations: Annotation[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 /**
@@ -168,7 +168,7 @@ open type FunctionSignature {
   let parameters: Parameter[];
   let returnTypeRef: Option<TypeReference>;
   let annotations: Annotation[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 /**
@@ -182,7 +182,7 @@ open type Function {
   let returnTypeRef: Option<TypeReference>;
   let annotations: Annotation[];
   let body: Block;
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 // 基础表达式 -------------------------------------------------------------------
@@ -802,7 +802,7 @@ open type Type {
   let annotations: Annotation[];
   let isTuple: bool;
   let isValue: bool;
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 // 枚举 (enum) -----------------------------------------------------------------
@@ -817,7 +817,7 @@ open type EnumItem {
   let name: StringSpan;
   let value: Option<int>;
   let annotations: Annotation[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 /**
@@ -828,7 +828,7 @@ open type Enum {
   let name: StringSpan;
   let annotations: Annotation[];
   let items: EnumItem[];
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 // 契约 (spec) -----------------------------------------------------------------
@@ -916,7 +916,7 @@ open type Spec {
   let name: StringSpan;
   let annotations: Annotation[];
   let body: SpecBody;
-  let comment: StringSpan;
+  let docComment: StringSpan;
 }
 
 // 适配器 (fit) ----------------------------------------------------------------
@@ -1006,6 +1006,19 @@ open type ModuleMember {
 }
 
 /**
+ * 模块定义声明：module std.text;
+ *
+ * 语义阶段按模块名合并多个 ModuleFile，形成完整的 Module
+ */
+open type ModuleDeclare {
+  // 模块名称的 location
+  let location: FengLocation;
+  let visibility: Visibility;
+  let name: SegmentedName;
+  let docComment: StringSpan;
+}
+
+/**
  * 模块导入声明：import std.text; import std.text as txt;
  *
  * alias 字段：
@@ -1025,16 +1038,14 @@ open type ModuleImport {
  * imports 作用于文件级别，而非整个模块
  */
 open type ModuleFile {
-  // 模块名称的 location
-  let location: FengLocation;
   // 当前文件的路径
   let path: string;
+  // 模块定义声明：module std.text;
+  let declare: ModuleDeclare;
   // import 作用于文件，而非整个模块
   let imports: ModuleImport[];
-  // ---
-  let moduleVisibility: Visibility;
-  let moduleName: SegmentedName;
-  let moduleMembers: ModuleMember[];
+  // 当前文件的所有顶层成员声明
+  let members: ModuleMember[];
 }
 
 // 语义阶段 =====================================================================
@@ -1064,7 +1075,7 @@ open type Module {
   // func members(): ModuleMember[] {
   //   var list = List<ModuleMember>();
   //   for let file in self.files {
-  //     for let member in file.moduleMembers { list.add(member); }
+  //     for let member in file.members { list.add(member); }
   //   }
   //   return list.entries();
   // }
