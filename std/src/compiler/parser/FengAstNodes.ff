@@ -98,6 +98,14 @@ open type SimpleBinding {
   let annotations: Annotation[];
 }
 
+open type SimpleBindingSignature {
+  let token: FengToken;
+  let name: StringSpan;
+  let mutability: Mutability;
+  let typeRef: Option<TypeReference>;
+  let annotations: Annotation[];
+}
+
 /**
  * 解构绑定：let (a, b) = (1, 2);
  */
@@ -137,7 +145,20 @@ open type Parameter {
 }
 
 /**
- * 函数节点，支持泛型参数、参数列表、返回类型、函数体、外部函数标记
+ * 函数签名节点，支持泛型参数、参数列表、返回类型、注解
+ * 无函数体
+ */
+open type FunctionSignature {
+  let token: FengToken;
+  let name: StringSpan;
+  let genericParameters: GenericParameter[];
+  let parameters: Parameter[];
+  let returnTypeRef: Option<TypeReference>;
+  let annotations: Annotation[];
+}
+
+/**
+ * 函数节点，支持泛型参数、参数列表、返回类型、函数体
  */
 open type Function {
   let token: FengToken;
@@ -581,6 +602,25 @@ open type Enum {
 
 // 契约 (spec) -----------------------------------------------------------------
 
+open type ObjectSpecField {
+  let token: FengToken;
+  let binding: SimpleBindingSignature;
+}
+
+open type ObjectSpecMethod {
+  let token: FengToken;
+  let function: FunctionSignature;
+}
+
+open spec ObjectSpecMemberBody: ObjectSpecField | ObjectSpecMethod;
+
+open type ObjectSpecMember {
+  let token: FengToken;
+  let isStatic: bool;
+  let comment: StringSpan;
+  let body: ObjectSpecMemberBody;
+}
+
 /**
  * 对象契约：定义类型需实现的成员集合
  * spec Named { let name: string; func greet(): string; }
@@ -588,7 +628,7 @@ open type Enum {
 open type ObjectSpec {
   let token: FengToken;
   let genericParameters: GenericParameter[];
-  let members: TypeMember[];
+  let members: ObjectSpecMember[];
   let parentTypeRefs: TypeReference[];
 }
 
@@ -671,12 +711,17 @@ open type ModuleBinding {
 
 open type ModuleFunction {
   let token: FengToken;
-  let isExtern: bool;
   let function: Function;
+}
+
+open type ModuleExternalFunction {
+  let token: FengToken;
+  let function: FunctionSignature;
 }
 
 open spec ModuleMemberBody: ModuleBinding
 | ModuleFunction
+| ModuleExternalFunction
 | Type
 | Enum
 | Spec
