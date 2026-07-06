@@ -98,6 +98,9 @@ open type SimpleBinding {
   let annotations: Annotation[];
 }
 
+/**
+ * 简单绑定签名：用于函数参数、契约成员等
+ */
 open type SimpleBindingSignature {
   let token: FengToken;
   let name: StringSpan;
@@ -137,10 +140,11 @@ open type GenericParameter {
 // 函数 ------------------------------------------------------------------------
 
 /**
- * 函数参数节点，引用 SimpleBinding，支持可变参数
+ * 函数参数节点，引用 SimpleBindingSignature，支持可变参数
+ * 函数参数，目前不支持解构绑定，也不支持默认值，所以使用 SimpleBindingSignature
  */
 open type Parameter {
-  let binding: SimpleBinding;
+  let binding: SimpleBindingSignature;
   let isVariadic: bool;
 }
 

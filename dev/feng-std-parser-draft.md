@@ -217,7 +217,9 @@ open type SimpleBinding {
   let annotations: Annotation[];
 }
 
-/** 简单绑定签名（无初始化器），用于 spec 字段声明 */
+/**
+ * 简单绑定签名：用于函数参数、契约成员等
+ */
 open type SimpleBindingSignature {
   let token: FengToken;
   let name: StringSpan;
@@ -581,9 +583,9 @@ open type GenericParameter {
   let constraintTypeRef: Option<TypeReference>;
 }
 
-/** 函数参数节点，引用 SimpleBinding，支持可变参数 */
+/** 函数参数节点，引用 SimpleBindingSignature，支持可变参数 */
 open type Parameter {
-  let binding: SimpleBinding;
+  let binding: SimpleBindingSignature;
   let isVariadic: bool;
 }
 
@@ -655,7 +657,7 @@ open type CatchClause {
 **设计说明**：
 
 - `CatchClause` 使用 `SimpleBinding` 替代"name + type"组合，统一绑定语义
-- `Parameter` 复用 `SimpleBinding`（含 mutability、typeRef、initializer），减少重复定义
+- `Parameter` 复用 `SimpleBindingSignature`（函数参数不支持解构绑定和默认值），减少重复定义
 - `FunctionSignature` 无函数体，用于 spec 方法声明和 extern 函数声明
 - `Function` 独立为 type，被 Function 声明、TypeMethod、TypeConstructor、TypeFinalizer 复用
 
@@ -814,6 +816,7 @@ open type Spec {
 - Spec 成员使用独立的 `ObjectSpecMember` 体系，不复用 `TypeMember`
 - `ObjectSpecField` 使用 `SimpleBindingSignature`（无 initializer），因为 spec 字段只有声明没有初始值
 - `ObjectSpecMethod` 使用 `FunctionSignature`（无函数体），因为 spec 方法只有签名没有实现
+- `SimpleBindingSignature` 同时被 `Parameter`（函数参数）和 `ObjectSpecField`（契约字段）复用
 - 通过独立类型排除非法状态：spec 成员不可能有函数体或初始化器
 
 ### 3.13 Fit（适配器声明）
