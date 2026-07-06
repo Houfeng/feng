@@ -1179,7 +1179,9 @@ Lambda 语法：`(params) -> expr` 或 `(params): ReturnType { block }`
 
 ---
 
-## 5 AstDumper
+## 5 AstDumper（后续阶段）
+
+> **注意**：AstDumper 不在第一阶段实现，标记为后续任务。第一阶段 Parser 验证通过单元测试直接检查 AST 结构。
 
 **文件**：`std/src/compiler/parser/FengAstDumper.ff`
 **模块**：`std.compiler.parser`
@@ -1344,7 +1346,9 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 - C 版：`parser.c:4518-5032`（`parse_program`）
 - 语法文档：`docs/feng-module.md`
 
-### 6.9 FengAstDumper
+### 6.9 FengAstDumper（后续阶段）
+
+> 不在第一阶段实现，待 Parser 核心功能稳定后再补充。
 
 **产出**：`std/src/compiler/parser/FengAstDumper.ff`
 
@@ -1366,7 +1370,6 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 - [ ] 声明测试（type/enum/spec/fit/func/binding）
 - [ ] 错误测试（语法错误输入，验证错误码和位置）
 - [ ] 完整源文件测试（用 `std/src/**/*.ff` 作为输入）
-- [ ] 与 C 版 AST dump 对比验证
 
 **参考**：
 - C 版测试：`test/parser/test_parser.c`
@@ -1382,8 +1385,10 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
        ├── 6.6 语句解析 (依赖 6.3, 6.5)
        ├── 6.7 声明解析 (依赖 6.3, 6.6)
        └── 6.8 模块与文件解析 (依赖 6.7)
-            └── 6.9 FengAstDumper (依赖 6.1)
-                 └── 6.10 Parser 测试 (依赖 6.2-6.9)
+            └── 6.10 Parser 测试 (依赖 6.2-6.8)
+
+后续阶段：
+  6.9 FengAstDumper (依赖 6.1)
 ```
 
 | 步骤 | 内容 | 前置 | 产出文件 |
@@ -1396,27 +1401,29 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 | 6.6 | 语句解析 | 6.3, 6.5 | 同上 |
 | 6.7 | 声明解析 | 6.3, 6.6 | 同上 |
 | 6.8 | 模块与文件解析 | 6.7 | 同上 |
-| 6.9 | FengAstDumper | 6.1 | `FengAstDumper.ff` |
-| 6.10 | Parser 测试 | 6.2-6.9 | `test/parser/` |
+| 6.9 | FengAstDumper | 6.1 | `FengAstDumper.ff`（后续阶段） |
+| 6.10 | Parser 测试 | 6.2-6.8 | `test/parser/` |
 
 ---
 
 ## 7 验证方案
 
-### 7.1 AST dump 对比
+### 7.1 错误码对比
+
+- 同样的语法错误输入，比较 C 版和 Feng 版产出的 FengCompileError（错误码 + 错误信息 + 位置）
+
+### 7.2 完整源文件解析
+
+- 用 std 库中的 `.ff` 文件作为输入（如 `std/src/text/String.ff`）
+- 比较 C 版和 Feng 版的解析结果（ModuleFile 结构）
+
+### 7.3 AST dump 对比（后续阶段）
+
+> 依赖 FengAstDumper（6.9），待后续阶段实现。
 
 - 对 C 版 parser 测试用例（`test/parser/test_parser.c`）中的每个测试输入
 - 分别用 C 版 parser + dump.c 和 Feng 版 parser + FengAstDumper 产出 AST dump
 - diff 比较两者输出是否一致
-
-### 7.2 错误码对比
-
-- 同样的语法错误输入，比较 C 版和 Feng 版产出的 FengCompileError（错误码 + 错误信息 + 位置）
-
-### 7.3 完整源文件解析
-
-- 用 std 库中的 `.ff` 文件作为输入（如 `std/src/text/String.ff`）
-- 比较 C 版和 Feng 版的解析结果（ModuleFile 结构）
 
 ---
 
