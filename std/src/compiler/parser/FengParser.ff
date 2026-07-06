@@ -2,6 +2,7 @@ open module std.compiler.parser;
 
 import std;
 import std.text;
+import std.collections;
 import std.compiler.lexer;
 import std.compiler.common;
 
@@ -31,6 +32,12 @@ open type FengParser {
   seal let lexer: FengLexer;
   seal var current: FengToken;
   seal var previous: FengToken;
+  /**
+   * 待消费的 `>` 数量，用于处理嵌套泛型中的 `>>` 拆分。
+   * 例如 `Map<string, List<int>>` 中的 `>>` 会被 Lexer 识别为右移运算符，
+   * 需要拆分为两个 `>` 分别消费。
+   */
+  seal var pendingGt: int;
 
   // ==================== 构造器 ====================
 
@@ -39,6 +46,7 @@ open type FengParser {
    */
   open func FengParser(lexer: FengLexer) {
     self.lexer = lexer;
+    self.pendingGt = 0;
     self.previous = FengToken {
       kind: FengTokenKind.SpecialEndOfFile,
       value: lexer.source.slice(0, 0),
@@ -172,6 +180,223 @@ open type FengParser {
       column: token.location.column,
       snippet: snippet
     };
+  }
+
+  // ==================== 标识符与名称解析 ====================
+
+  /**
+   * 检查当前 Token 是否为标识符或可作为名称的关键字（如 void、unknown）
+   * @param allowVoid 是否允许 void 关键字作为名称
+   * @return 当前 Token 是否为标识符类 Token
+   */
+  seal func isIdentifierLike(allowVoid: bool): bool {
+    if self.current.kind == FengTokenKind.Identifier {
+      return true;
+    }
+    if allowVoid && (self.current.kind == FengTokenKind.KeywordVoid || self.current.kind == FengTokenKind.KeywordUnknown) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 期望当前 Token 为标识符或可作为名称的关键字，匹配则消费，否则抛出错误
+   * @param allowVoid 是否允许 void 关键字作为名称
+   * @param code 错误码
+   * @param message 错误描述
+   * @return 被消费的 Token
+   * @throws FengCompileError 当前 Token 不匹配时抛出
+   */
+  seal func expectIdentifierLike(allowVoid: bool, code: string, message: string): FengToken {
+    if !self.isIdentifierLike(allowVoid) {
+      self.error(code, message);
+    }
+    return self.advance();
+  }
+
+  /**
+   * 解析多段命名标识符：identifier.identifier.identifier...
+   *
+   * 用于类型引用、模块路径、注解名称等场景。
+   * 第一段允许 void/unknown 关键字（allowVoid=true 时），后续段仅允许普通标识符。
+   *
+   * @param allowVoidFirst 第一段是否允许 void/unknown 关键字
+   * @param code 期望第一段时的错误码
+   * @param message 期望第一段时的错误描述
+   * @return SegmentedName 节点
+   * @throws FengCompileError 解析失败时抛出
+   */
+  open func parseSegmentedName(allowVoidFirst: bool, code: string, message: string): SegmentedName {
+    let firstToken = self.expectIdentifierLike(allowVoidFirst, code, message);
+    let segments = List<StringSpan>();
+    segments.add(firstToken.value);
+
+    while self.matchToken(FengTokenKind.PunctuationDot) {
+      let segmentToken = self.expectIdentifierLike(false, "PE0002", "expected an identifier after '.' in a qualified name");
+      segments.add(segmentToken.value);
+    }
+
+    let fullNameStart = firstToken.location.offset;
+    let lastToken = self.previous();
+    let fullNameEnd = lastToken.location.offset + lastToken.value.length();
+    let fullName = self.lexer.source.slice(fullNameStart, fullNameEnd);
+
+    return SegmentedName {
+      fullName: fullName,
+      segments: segments.entries()
+    };
+  }
+
+  // ==================== 泛型参数解析 ====================
+
+  /**
+   * 消费泛型列表的闭合 `>`，支持 `>>` 拆分为两个 `>`
+   *
+   * 处理嵌套泛型如 `Map<string, List<int>>` 中 Lexer 将 `>>` 识别为右移运算符的情况：
+   * - 若有 pendingGt > 0，直接消费一个 pending 的 `>`
+   * - 若当前为 `>>` (OperatorShiftRight)，消费它并设置 pendingGt = 1
+   * - 否则尝试匹配 `>` (OperatorGreater)
+   *
+   * @return 是否成功消费 `>`
+   */
+  seal func consumeGt(): bool {
+    if self.pendingGt > 0 {
+      self.pendingGt = self.pendingGt - 1;
+      return true;
+    }
+    if self.check(FengTokenKind.OperatorShiftRight) {
+      let _ = self.advance();
+      self.pendingGt = 1;
+      return true;
+    }
+    return self.matchToken(FengTokenKind.OperatorGreater);
+  }
+
+  /**
+   * 解析泛型实参列表（调用时 `<` 已被消费）：T1, T2, ... >
+   *
+   * 用于类型引用中的泛型具化，如 `Map<string, int>` 中的 `<string, int>`。
+   *
+   * @return 泛型实参类型引用数组
+   * @throws FengCompileError 解析失败时抛出
+   */
+  open func parseGenericArguments(): TypeReference[] {
+    let args = List<TypeReference>();
+    args.add(self.parseTypeReference());
+
+    while self.matchToken(FengTokenKind.PunctuationComma) {
+      args.add(self.parseTypeReference());
+    }
+
+    if !self.consumeGt() {
+      self.error("PE0003", "expected '>' to close type argument list");
+    }
+
+    return args.entries();
+  }
+
+  /**
+   * 解析泛型形参列表（调用时 `<` 已被消费）：T1: Constraint1, T2, ... >
+   *
+   * 用于类型/函数/契约声明中的泛型参数定义，如 `type Map<K, V>` 中的 `<K, V>`。
+   *
+   * @return 泛型形参数组
+   * @throws FengCompileError 解析失败时抛出
+   */
+  open func parseTypeParameters(): GenericParameter[] {
+    let params = List<GenericParameter>();
+
+    let nameToken = self.expectIdentifierLike(false, "PE0004", "expected a type parameter name");
+    var constraint: Option<TypeReference> = none;
+    if self.matchToken(FengTokenKind.PunctuationColon) {
+      constraint = self.parseTypeReference();
+    }
+    params.add(GenericParameter {
+      location: nameToken.location,
+      name: nameToken.value,
+      constraintTypeRef: constraint
+    });
+
+    while self.matchToken(FengTokenKind.PunctuationComma) {
+      let paramToken = self.expectIdentifierLike(false, "PE0004", "expected a type parameter name");
+      var paramConstraint: Option<TypeReference> = none;
+      if self.matchToken(FengTokenKind.PunctuationColon) {
+        paramConstraint = self.parseTypeReference();
+      }
+      params.add(GenericParameter {
+        location: paramToken.location,
+        name: paramToken.value,
+        constraintTypeRef: paramConstraint
+      });
+    }
+
+    if !self.consumeGt() {
+      self.error("PE0003", "expected '>' to close type parameter list");
+    }
+
+    return params.entries();
+  }
+
+  // ==================== 类型引用解析 ====================
+
+  /**
+   * 解析类型引用：NamedTypeRef / PointerTypeRef / ArrayTypeRef
+   *
+   * 语法示例：
+   * - 命名类型：int, std.text.String, Map<K, V>
+   * - 指针类型：int*, string*
+   * - 数组类型：int[], int[!], byte[!][]
+   *
+   * 解析策略：
+   * 1. 解析基础命名类型（含可选泛型实参）
+   * 2. 循环解析后缀：`*` 包裹为 PointerTypeRef，`[]` 或 `[!]` 包裹为 ArrayTypeRef
+   *
+   * @return TypeReference 节点
+   * @throws FengCompileError 解析失败时抛出
+   */
+  open func parseTypeReference(): TypeReference {
+    let startLocation = self.current.location;
+    let name = self.parseSegmentedName(true, "PE0005", "expected a type name");
+
+    var parameterTypeRefs: TypeReference[] = [];
+    if self.matchToken(FengTokenKind.OperatorLess) {
+      parameterTypeRefs = self.parseGenericArguments();
+    }
+
+    var typeRef: TypeReference = NamedTypeRef {
+      location: startLocation,
+      name: name,
+      parameterTypeRefs: parameterTypeRefs
+    };
+
+    while true {
+      if self.matchToken(FengTokenKind.OperatorStar) {
+        typeRef = PointerTypeRef {
+          location: startLocation,
+          targetTypeRef: typeRef
+        };
+        continue;
+      }
+
+      if !self.matchToken(FengTokenKind.PunctuationLeftBracket) {
+        break;
+      }
+
+      let elementWritable = self.matchToken(FengTokenKind.OperatorNot);
+      if elementWritable {
+        self.expect(FengTokenKind.PunctuationRightBracket, "PE0006", "expected ']' after '[!' in array type suffix");
+      } else {
+        self.expect(FengTokenKind.PunctuationRightBracket, "PE0006", "expected ']' to close array type suffix");
+      }
+
+      typeRef = ArrayTypeRef {
+        location: startLocation,
+        elementTypeRef: typeRef,
+        elementWritable: elementWritable
+      };
+    }
+
+    return typeRef;
   }
 
   // ==================== 解析入口 ====================

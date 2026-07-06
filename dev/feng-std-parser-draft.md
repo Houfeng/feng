@@ -1234,29 +1234,30 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 - C 版 AST 定义：`src/parser/parser.h`（`FengExpr`、`FengStmt`、`FengDecl` 等结构体）
 - 语法文档：`docs/feng-expression.md`、`docs/feng-flow.md`、`docs/feng-type.md`、`docs/feng-function.md`、`docs/feng-module.md`
 
-### 6.2 Parser 核心框架
+### 6.2 Parser 核心框架（已完成）
 
 **产出**：`std/src/compiler/parser/FengParser.ff`（构造器 + 基础工具方法）
 
 **TODO**：
-- [ ] `FengParser(lexer: FengLexer)` 构造器，初始化 `current` 为第一个 token
-- [ ] `advance()` / `peek()` / `previous()` — Token 流读取
-- [ ] `check(kind)` / `match(kind)` / `expect(kind, code, message)` — Token 匹配与消费
-- [ ] `error(code, message)` — 构造并抛出 `FengCompileError`，通过 `lexer.source.extractLineSnippet()` 填充 snippet
-- [ ] `parse()` 入口方法 — 调用 `parseModuleFile()`，暂返回空壳 ModuleFile
+- [x] `FengParser(lexer: FengLexer)` 构造器，初始化 `current` 为第一个 token
+- [x] `advance()` / `peek()` / `previous()` — Token 流读取
+- [x] `check(kind)` / `matchToken(kind)` / `expect(kind, code, message)` — Token 匹配与消费（`match` 为关键字，重命名为 `matchToken`）
+- [x] `error(code, message)` — 构造并抛出 `FengCompileError`，通过 `lexer.source.extractLineSnippet()` 填充 snippet
+- [x] `parse()` 入口方法 — 调用 `parseModuleFile()`，暂返回空壳 ModuleFile
 
 **参考**：
 - C 版：`parser.c:128-265`（`parser_current` / `parser_advance` / `parser_check` / `parser_match` / `parser_expect` / `parser_error_at`）
 
-### 6.3 类型引用解析
+### 6.3 类型引用解析（已完成）
 
 **产出**：`FengParser.ff`（`parseTypeReference()` 及相关方法）
 
 **TODO**：
-- [ ] `parseTypeReference()` — 分发到 NamedTypeRef / PointerTypeRef / ArrayTypeRef
-- [ ] `parseSegmentedName()` — 多段标识符链（`std.text.String`）
-- [ ] `parseGenericArguments()` — 泛型实参列表 `<T, U>`
-- [ ] `parseTypeParameters()` — 泛型形参列表 `<T: Constraint>`
+- [x] `parseTypeReference()` — 分发到 NamedTypeRef / PointerTypeRef / ArrayTypeRef
+- [x] `parseSegmentedName()` — 多段标识符链（`std.text.String`）
+- [x] `parseGenericArguments()` — 泛型实参列表 `<T, U>`
+- [x] `parseTypeParameters()` — 泛型形参列表 `<T: Constraint>`
+- [x] `pendingGt` / `consumeGt()` — 处理嵌套泛型中 `>>` 拆分为两个 `>`
 
 **参考**：
 - C 版：`parser.c:566-660`（`parse_type_ref` / `parse_type_args` / `parse_type_params`）
