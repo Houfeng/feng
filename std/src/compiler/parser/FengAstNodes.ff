@@ -381,7 +381,9 @@ open type IndexAccessExpr {
 open spec LambdaBody: Expression | Block;
 
 /**
- * Lambda 表达式：(x) => x + 1, (a, b): int => { return a + b; }
+ * Lambda 表达式：
+ * - 单行 (x) -> x + 1;
+ * - 多行 (a, b): int { return a + b; }
  *
  * 支持单表达式体和语句块体，可选返回类型标注
  */
@@ -396,8 +398,7 @@ open type LambdaExpr {
 
 /**
  * 范围表达式：start..end
- *
- * 用于 for 循环等需要范围迭代的上下文
+ * 目前仅用于 match 匹配
  */
 open type RangeExpr {
   let token: FengToken;
@@ -444,6 +445,7 @@ open type IfClause {
  * if 表达式：if cond1 { } else if cond2 { } else { }
  *
  * clauses 包含所有 if/else if 分支，elseBlock 为 else 分支体
+ * 当 if 作为表达式时，所有分支最后一个语句应解析为表达式，最后一句可省略分号
  */
 open type IfExpr {
   let token: FengToken;
@@ -459,7 +461,16 @@ open type MatchClause {
 }
 
 /**
- * match 表达式：match target { case1 => body1; case2 => body2; _ => elseBody }
+ * match 表达式：
+ * 
+ * let value = match target { 
+ *  case1 { body1 } 
+ *  case2 { body2 } 
+ *  else { elseBody } 
+ * }
+ * 
+ * 当 match 作为表达式时，各分支最后一个语句应该解析为表达式，最后一句可省略分号
+ * 
  */
 open type MatchExpr {
   let token: FengToken;
@@ -480,9 +491,11 @@ open type CatchClause {
 }
 
 /**
- * try 表达式：try { body } catch e: ErrType { handler } catch { catchAll }
+ * try 表达式：try expr catch e: ErrType { handler } catch { catchAll }
  *
- * 作为表达式使用时，整体求值为一个结果
+ * try 后是一个表达式而不是语句块
+ * 当 try 作为表达式使用时，求值结果为 body 的求值结果，或 catch 分支的求值结果
+ * catch 的最一句话应解析为表达式，最后一句可省略分号
  */
 open type TryExpr {
   let token: FengToken;
@@ -567,9 +580,11 @@ open type ExpressionStmt {
 }
 
 /**
- * try 语句：try { body } catch e: ErrType { handler } catch { catchAll }
+ * try 语句：try expr catch e: ErrType { handler } catch { catchAll }
  *
+ * try 后是一个表达式而不是语句块
  * 作为语句使用时，不产生求值结果
+ * 作为语句使用时，不产生求值结果, 各分支中语句不能省略分号
  */
 open type TryStmt {
   let token: FengToken;
@@ -582,6 +597,7 @@ open type TryStmt {
  * if 语句：if cond { } else if cond { } else { }
  *
  * 作为语句使用时，不产生求值结果
+ * 作为语句使用时，不产生求值结果, 各分支中语句不能省略分号
  */
 open type IfStmt {
   let token: FengToken;
@@ -590,9 +606,15 @@ open type IfStmt {
 }
 
 /**
- * match 语句：match target { case1 => body1; case2 => body2; _ => elseBody }
+ * match 语句：
+ * 
+ * match target { 
+ *  case1 { body1; } 
+ *  case2 { body2; } 
+ *  else { elseBody; } 
+ * }
  *
- * 作为语句使用时，不产生求值结果
+ * 作为语句使用时，不产生求值结果, 各分支中语句不能省略分号
  */
 open type MatchStmt {
   let token: FengToken;
