@@ -751,7 +751,6 @@ func transformer_replace_same_length() {
   var newToken = FengToken {
     kind: FengTokenKind.Identifier,
     value: source.slice(0, 1),
-    source: oldToken.source,
     location: oldToken.location
   };
 
