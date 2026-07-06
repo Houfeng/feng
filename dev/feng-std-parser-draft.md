@@ -95,7 +95,7 @@ open spec Expression: IdentifierExpr
   ;
 
 open type IdentifierExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
 }
 ```
@@ -104,7 +104,7 @@ open type IdentifierExpr {
 
 1. **类型安全**：每种节点独立定义，构造时只能填充该节点的字段，不存在"误读其它 kind 字段"的可能
 2. **消除 kind 枚举**：spec union 自带判别（tag），无需手写 ExprKind/StmtKind/DeclKind 枚举
-3. **token 就近原则**：每个 variant 自带 `token: FengToken`，消除 C 版中"wrapper token + body token 重复"的问题
+3. **location 就近原则**：每个 variant 自带 `location: FengLocation`，记录标识符所在源码位置
 4. **语义与语法分离**：Parser 只产出 AST，语义分析阶段的数据（推断类型、resolved callable 等）不进入 AST 节点
 5. **自举友好**：直接面向 Feng 类型系统，不需要做 enum+union 的二次转换
 
@@ -141,7 +141,7 @@ open enum Mutability {
 **命名说明**：
 
 - 使用 `StringSpan`（来自 `std.text`）引用源码文本段，不引入独立的 Slice 类型
-- 使用 `FengToken`（来自 `std.compiler.lexer`）承载词法单元（含 FengLocation）
+- 使用 `FengLocation`（来自 `std.compiler.lexer`）记录源码位置（含文件路径）
 - 使用 `FengTokenKind` 表示运算符、关键字等词法单元类型
 
 ### 3.3 命名与路径
@@ -155,7 +155,7 @@ open enum Mutability {
  * - segments 数组长度至少为 1
  */
 open type SegmentedName {
-  let token: FengToken;
+  let location: FengLocation;
   let fullName: StringSpan;
   let segments: StringSpan[];
 }
@@ -170,20 +170,20 @@ open type SegmentedName {
 ```feng
 /** 命名类型引用：int, std.text.String, Map<K, V> */
 open type NamedTypeRef {
-  let token: FengToken;
+  let location: FengLocation;
   let name: SegmentedName;
   let parameterTypeRefs: TypeReference[];
 }
 
 /** 指针类型引用：int*, string* */
 open type PointerTypeRef {
-  let token: FengToken;
+  let location: FengLocation;
   let targetTypeRef: TypeReference;
 }
 
 /** 数组类型引用：int[], int[!] */
 open type ArrayTypeRef {
-  let token: FengToken;
+  let location: FengLocation;
   let elementTypeRef: TypeReference;
   let elementWritable: bool;
 }
@@ -209,7 +209,7 @@ open spec TypeReference: NamedTypeRef
 ```feng
 /** 简单绑定：let x: int = 5; var name = "hello"; */
 open type SimpleBinding {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
   let mutability: Mutability;
   let typeRef: Option<TypeReference>;
@@ -222,7 +222,7 @@ open type SimpleBinding {
  * 简单绑定签名：不含初始化表达式，用于函数参数、契约成员等声明位置
  */
 open type SimpleBindingSignature {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
   let mutability: Mutability;
   let typeRef: Option<TypeReference>;
@@ -232,7 +232,7 @@ open type SimpleBindingSignature {
 
 /** 解构绑定：let (a, b) = (1, 2); var (x, y, z) = tuple; */
 open type DestructureBinding {
-  let token: FengToken;
+  let location: FengLocation;
   let mutability: Mutability;
   let names: StringSpan[];
   let typeRef: Option<TypeReference>;
@@ -285,46 +285,46 @@ open spec Expression: IdentifierExpr
 
 ```feng
 open type IdentifierExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
 }
 
 open type BooleanLiteralExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let value: bool;
 }
 
 open type IntegerLiteralExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let value: i64;
   let raw: StringSpan;
 }
 
 open type FloatLiteralExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let value: f64;
   let raw: StringSpan;
 }
 
 open type StringLiteralExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let value: StringSpan;
 }
 
 open type UnaryExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let operator: FengTokenKind;
   let operand: Expression;
 }
 
 open type CastExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let targetType: TypeReference;
   let value: Expression;
 }
 
 open type BinaryExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let operator: FengTokenKind;
   let left: Expression;
   let right: Expression;
@@ -342,35 +342,35 @@ open type BinaryExpr {
  * - 表示：callee 为 MemberAccessExpr
  */
 open type CallExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let callee: Expression;
   let arguments: Expression[];
 }
 
 open type ArrayLiteralExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let items: Expression[];
 }
 
 open type TupleLiteralExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let items: Expression[];
 }
 
 open type ObjectLiteralField {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
   let value: Expression;
 }
 
 open type ObjectLiteralExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let target: Expression;
   let fields: ObjectLiteralField[];
 }
 
 open type ArrayNewExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let elementTypeRef: TypeReference;
   let size: Expression;
 }
@@ -383,7 +383,7 @@ open type ArrayNewExpr {
  * - 可作为 CallExpr 的 callee，或独立存在
  */
 open type GenericTargetExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let target: Expression;
   let argumentTypeRefs: TypeReference[];
 }
@@ -397,13 +397,13 @@ open type GenericTargetExpr {
  * - 语义阶段逐层消歧：从最左标识符查作用域，按解析结果切换查找策略
  */
 open type MemberAccessExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let target: Expression;
   let member: StringSpan;
 }
 
 open type IndexAccessExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let target: Expression;
   let index: Expression;
 }
@@ -411,14 +411,14 @@ open type IndexAccessExpr {
 open spec LambdaBody: Expression | Block;
 
 open type LambdaExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let parameters: Parameter[];
   let body: LambdaBody;
   let returnTypeRef: Option<TypeReference>;
 }
 
 open type RangeExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let start: Expression;
   let end: Expression;
 }
@@ -436,7 +436,7 @@ open spec MatchTarget: IntegerLiteralExpr
  * 解析策略：贪婪消费所有 `|` 分隔的匹配目标
  */
 open type MatchOperatorExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let value: Expression;
   let targets: MatchTarget[];
 }
@@ -448,7 +448,7 @@ open type MatchOperatorExpr {
  * 当 if 作为表达式时，所有分支最后一个语句应解析为表达式，最后一句可省略分号
  */
 open type IfExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let clauses: IfClause[];
   let elseBlock: Block;
 }
@@ -465,7 +465,7 @@ open type IfExpr {
  * 当 match 作为表达式时，各分支最后一个语句应解析为表达式，最后一句可省略分号
  */
 open type MatchExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let target: Expression;
   let clauses: MatchClause[];
   let elseBlock: Block;
@@ -479,7 +479,7 @@ open type MatchExpr {
  * catch 的最后一句话应解析为表达式，最后一句可省略分号
  */
 open type TryExpr {
-  let token: FengToken;
+  let location: FengLocation;
   let body: Expression;
   let catchClauses: CatchClause[];
   let catchAllBlock: Option<Block>;
@@ -490,7 +490,7 @@ open type TryExpr {
 
 ```feng
 open type Block {
-  let token: FengToken;
+  let location: FengLocation;
   let statements: Statement[];
 }
 ```
@@ -521,12 +521,12 @@ open spec Statement: BlockStmt
 
 ```feng
 open type BlockStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let block: Block;
 }
 
 open type BindingStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let binding: Binding;
 }
 
@@ -535,14 +535,14 @@ open type BindingStmt {
  * operator: = / += / -= / *= / /= 等
  */
 open type AssignmentStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let operator: FengTokenKind;
   let target: Expression;
   let value: Expression;
 }
 
 open type ExpressionStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let expression: Expression;
 }
 
@@ -553,7 +553,7 @@ open type ExpressionStmt {
  * 作为语句使用时，不产生求值结果，各分支中语句不能省略分号
  */
 open type TryStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let body: Expression;
   let catchClauses: CatchClause[];
   let catchAllBlock: Option<Block>;
@@ -565,7 +565,7 @@ open type TryStmt {
  * 作为语句使用时，不产生求值结果，各分支中语句不能省略分号
  */
 open type IfStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let clauses: IfClause[];
   let elseBlock: Block;
 }
@@ -582,14 +582,14 @@ open type IfStmt {
  * 作为语句使用时，不产生求值结果，各分支中语句不能省略分号
  */
 open type MatchStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let target: Expression;
   let clauses: MatchClause[];
   let elseBlock: Block;
 }
 
 open type WhileStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let condition: Expression;
   let body: Block;
 }
@@ -598,7 +598,7 @@ open spec ForInit: SimpleBinding | AssignmentStmt;
 open spec ForUpdate: Expression | AssignmentStmt;
 
 open type ForStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let init: ForInit;
   let condition: Expression;
   let update: ForUpdate;
@@ -606,32 +606,32 @@ open type ForStmt {
 }
 
 open type ForEachStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let binding: Binding;
   let iterable: Expression;
   let body: Block;
 }
 
 open type ReturnStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let value: Expression;
 }
 
 open type ThrowStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let value: Expression;
 }
 
 open type BreakStmt {
-  let token: FengToken;
+  let location: FengLocation;
 }
 
 open type ContinueStmt {
-  let token: FengToken;
+  let location: FengLocation;
 }
 
 open type DeferStmt {
-  let token: FengToken;
+  let location: FengLocation;
   let body: Block;
 }
 ```
@@ -650,7 +650,7 @@ open type DeferStmt {
 ```feng
 /** 泛型参数节点，类型约束可省略 */
 open type GenericParameter {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
   let constraintTypeRef: Option<TypeReference>;
 }
@@ -666,7 +666,7 @@ open type Parameter {
  * 无函数体
  */
 open type FunctionSignature {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
   let genericParameters: GenericParameter[];
   let parameters: Parameter[];
@@ -679,7 +679,7 @@ open type FunctionSignature {
  * 函数节点，支持泛型参数、参数列表、返回类型、函数体
  */
 open type Function {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
   let genericParameters: GenericParameter[];
   let parameters: Parameter[];
@@ -701,28 +701,28 @@ open type Function {
  * - 无参数时为空数组
  */
 open type Annotation {
-  let token: FengToken;
+  let location: FengLocation;
   let name: SegmentedName;
   let arguments: Expression[];
 }
 
 /** if 分支 */
 open type IfClause {
-  let token: FengToken;
+  let location: FengLocation;
   let condition: Expression;
   let body: Block;
 }
 
 /** Match Targets 的分支辅助结构 */
 open type MatchClause {
-  let token: FengToken;
+  let location: FengLocation;
   let targets: MatchTarget[];
   let body: Block;
 }
 
 /** try/catch 子句 */
 open type CatchClause {
-  let token: FengToken;
+  let location: FengLocation;
   let binding: SimpleBinding;
   let body: Block;
 }
@@ -740,22 +740,22 @@ open type CatchClause {
 
 ```feng
 open type TypeField {
-  let token: FengToken;
+  let location: FengLocation;
   let binding: SimpleBinding;
 }
 
 open type TypeMethod {
-  let token: FengToken;
+  let location: FengLocation;
   let function: Function;
 }
 
 open type TypeConstructor {
-  let token: FengToken;
+  let location: FengLocation;
   let function: Function;
 }
 
 open type TypeFinalizer {
-  let token: FengToken;
+  let location: FengLocation;
   let function: Function;
 }
 
@@ -771,14 +771,14 @@ open spec TypeMemberBody: TypeField
  * visibility isStatic   body
  */
 open type TypeMember {
-  let token: FengToken;
+  let location: FengLocation;
   let visibility: Visibility;
   let isStatic: bool;
   let body: TypeMemberBody;
 }
 
 open type Type {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
   let genericParameters: GenericParameter[];
   let members: TypeMember[];
@@ -802,7 +802,7 @@ open type Type {
 
 ```feng
 open type EnumItem {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
   let value: Option<int>;
   let annotations: Annotation[];
@@ -810,7 +810,7 @@ open type EnumItem {
 }
 
 open type Enum {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
   let annotations: Annotation[];
   let items: EnumItem[];
@@ -827,19 +827,19 @@ open type Enum {
 
 ```feng
 open type ObjectSpecField {
-  let token: FengToken;
+  let location: FengLocation;
   let binding: SimpleBindingSignature;
 }
 
 open type ObjectSpecMethod {
-  let token: FengToken;
+  let location: FengLocation;
   let function: FunctionSignature;
 }
 
 open spec ObjectSpecMemberBody: ObjectSpecField | ObjectSpecMethod;
 
 open type ObjectSpecMember {
-  let token: FengToken;
+  let location: FengLocation;
   let isStatic: bool;
   let body: ObjectSpecMemberBody;
 }
@@ -849,7 +849,7 @@ open type ObjectSpecMember {
  * spec Named { let name: string; func greet(): string; }
  */
 open type ObjectSpec {
-  let token: FengToken;
+  let location: FengLocation;
   let genericParameters: GenericParameter[];
   let members: ObjectSpecMember[];
   let parentTypeRefs: TypeReference[];
@@ -860,7 +860,7 @@ open type ObjectSpec {
  * spec Predicate<T>: (T) -> bool;
  */
 open type CallableSpec {
-  let token: FengToken;
+  let location: FengLocation;
   let genericParameters: GenericParameter[];
   let parameters: Parameter[];
   let returnTypeRef: TypeReference;
@@ -871,7 +871,7 @@ open type CallableSpec {
  * spec Option<T>: Some<T> | None;
  */
 open type UnionSpec {
-  let token: FengToken;
+  let location: FengLocation;
   let memberTypeRefs: TypeReference[];
 }
 
@@ -881,7 +881,7 @@ open spec SpecBody: ObjectSpec
 
 /** 契约声明节点 */
 open type Spec {
-  let token: FengToken;
+  let location: FengLocation;
   let name: StringSpan;
   let annotations: Annotation[];
   let body: SpecBody;
@@ -909,7 +909,7 @@ open type Spec {
  * - None: 无实现体（仅声明适配关系）
  */
 open type Fit {
-  let token: FengToken;
+  let location: FengLocation;
   let targetTypeRef: TypeReference;
   let specTypeRefs: TypeReference[];
   let members: Option<TypeMember[]>;
@@ -926,17 +926,17 @@ Parser 的输出是 `ModuleFile`（对应单个 `.ff` 文件），而非 `Module
 
 ```feng
 open type ModuleBinding {
-  let token: FengToken;
+  let location: FengLocation;
   let binding: SimpleBinding;
 }
 
 open type ModuleFunction {
-  let token: FengToken;
+  let location: FengLocation;
   let function: Function;
 }
 
 open type ModuleExternalFunction {
-  let token: FengToken;
+  let location: FengLocation;
   let function: FunctionSignature;
 }
 
@@ -949,7 +949,7 @@ open spec ModuleMemberBody: ModuleBinding
   | Fit;
 
 open type ModuleMember {
-  let token: FengToken;
+  let location: FengLocation;
   let visibility: Visibility;
   let body: ModuleMemberBody;
 }
@@ -962,13 +962,13 @@ open type ModuleMember {
  * - None: 无别名，如 import std.text
  */
 open type ModuleImport {
-  let token: FengToken;
+  let location: FengLocation;
   let name: SegmentedName;
   let alias: Option<StringSpan>;
 }
 
 open type ModuleFile {
-  let token: FengToken;
+  let location: FengLocation;
   /** 当前文件的路径 */
   let path: string;
   /** import 作用于文件，而非整个模块 */
@@ -1249,6 +1249,6 @@ ModuleFile: example.ff
 2. **泛型参数歧义的回溯机制**：`<` 的歧义解析需要回溯能力（保存/恢复解析器状态）。Feng 的 Token 前瞻机制是否足够支持？
 3. **Parser 是否需要支持增量解析**：远期如果用于 IDE/LSP 场景，可能需要增量解析能力。当前方案不支持增量解析
 4. **AST 节点是否用 @value type**：Expression 用普通 type（引用语义），因为 AST 节点形成树形结构，引用更自然；但大量小节点（如 IdentifierExpr、IntegerLiteralExpr）是否有 GC 压力？
-5. **FengToken / FengTokenKind 类型对齐**：AST 节点已统一使用 `FengToken` / `FengTokenKind`（来自 `std.compiler.lexer`），与 Lexer 草案保持一致
+5. **FengLocation / FengTokenKind 类型对齐**：AST 节点已统一使用 `FengLocation`（位置信息）和 `FengTokenKind`（词法单元类型），均来自 `std.compiler.lexer`，与 Lexer 草案保持一致
 6. **内建注解识别**：Lexer 草案已移除 `AnnotationKind`（注解分类是 Parser 职责）。Feng 版 `Annotation` 节点不含 `builtinKind` 字段，注解分类在语义阶段通过 `name.segments` 查找完成
 7. **语义阶段产出 Program**：Parser 输出 `ModuleFile`（单文件），语义阶段需将多个 `ModuleFile` 合并为 `Module`（按模块名分组），并聚合为 `Program`。此合并逻辑的设计待细化

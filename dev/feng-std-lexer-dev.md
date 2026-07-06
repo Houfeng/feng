@@ -42,16 +42,16 @@ Feng 版面向更好的设计，不机械对齐 C 版——Lexer 只管词法切
 FengToken 字段布局（@value 类型字段内联展开）：
 
 ```
-FengToken — 8 words (64 bytes on 64-bit)
+FengToken — 6 words (48 bytes on 64-bit)
 ├── kind: FengTokenKind             1 word   (enum/int)
 ├── value: StringSpan               3 words  (origin:string + start:int + end:int)
-├── source: FengSource              1 word   (reference)
-└── location: FengLocation    3 words  (offset:int + line:int + column:int)
+└── location: FengLocation    4 words  (path:string + offset:int + line:int + column:int)
 ```
 
 - StringSpan.origin（`seal` 私有）持有源码 string 的引用，与 FengSource.content 共享同一 string 实例，保证 token value 指向的源码子串不会被释放
-- FengSource 为托管引用，与 StringSpan.origin 共享同一 string 实例，提供 path 和字节级/子串访问 API（`at`/`slice`/`clone`/`length`/`extractLineSnippet`）；content 字段私有化（`seal`），外部不直接访问
-- 两个引用字段（StringSpan.origin、FengSource）的 RC 成本仅为原子计数加减，同一文件所有 token 共享同一实例，开销可忽略
+- FengSource 由 Lexer 持有，Token 通过 StringSpan 和 FengLocation 间接引用源码内容和文件路径；content 字段私有化（`seal`），外部不直接访问
+- FengLocation 包含文件路径（`path`），同一文件所有 location 共享同一个字符串实例
+- StringSpan.origin 的 RC 成本仅为原子计数加减，同一文件所有 token 共享同一实例，开销可忽略
 
 **@value vs 普通 type 对比**：
 
@@ -97,9 +97,14 @@ std/src/compiler/
 Lexer 和 Parser 共用的编译错误类型，词法错误码前缀 `LE`，语法错误码前缀 `PE`。
 词法/语法错误不混入 Token 流，遇到错误直接抛出 `FengCompileError`，由调用方捕获处理。
 自包含 path/line/column，不依赖 `FengLocation` 或 `FengSource`。
+实现 `JsonSerializable<FengCompileError>` 和 `Display` 接口，支持序列化为 JSON 和格式化字符串输出。
 
 ```feng
 open module std.compiler.common;
+
+import std.json;
+import std.text;
+import std.numeric;
 
 /**
  * 编译错误。
@@ -109,8 +114,9 @@ open module std.compiler.common;
  * - PE00xx：语法错误（将来）
  *
  * throw 会装箱，但异常路径 RC 开销可忽略。
+ * 实现 JsonSerializable 和 Display 接口，支持 JSON 序列化和格式化输出。
  */
-open type FengCompileError {
+open type FengCompileError: JsonSerializable<FengCompileError>, Display {
   /** 错误码（如 "LE0001"） */
   let code: string;
   /** 错误描述 */
@@ -123,6 +129,21 @@ open type FengCompileError {
   let column: int;
   /** 出错行的源代码片段 */
   let snippet: string;
+
+  /**
+   * 实现 JsonSerializable<FengCompileError> 接口，
+   * 支持将错误信息序列化为 JSON 对象。
+   */
+  static func toJson(value: FengCompileError): JsonObject;
+
+  /** 将错误信息序列化为 JSON 字符串 */
+  func toJsonString(): string;
+
+  /**
+   * 将错误信息格式化为字符串（实现 Display 接口）。
+   * 格式：path:line:column\nCODE: message\n  line | snippet\n       ^
+   */
+  func toString(): string;
 }
 ```
 
@@ -279,9 +300,11 @@ open enum FengTokenKind {
 ```feng
 /**
  * 源文件信息。
- * 普通类型（堆分配、引用语义），由 Lexer 创建，每个 Token 持有引用。
- * 源文件数量少、生命周期长，所有引用同一源文件的 Token 共享同一实例，
- * 避免每 Token 复制文件内容。
+ * 普通类型（堆分配、引用语义），由 Lexer 持有。
+ * Token 通过 StringSpan 和 FengLocation 间接引用源码内容和文件路径，
+ * 不直接持有 FengSource。源文件数量少、生命周期长，
+ * Lexer 持有唯一 FengSource 实例，同一文件所有 Token 通过 StringSpan.origin
+ * 共享同一 string 实例，避免每 Token 复制文件内容。
  *
  * content 私有化（seal），外部不直接访问，统一通过 length/at/slice/clone
  * 等公开 API 获取字节或子串。字节访问的优化点收敛在本类型内部，便于
@@ -320,6 +343,12 @@ open type FengSource {
    * 偏移越界时夹到 [0, length] 区间后定位行边界。
    */
   func extractLineSnippet(offset: int): string;
+
+  /**
+   * 提取指定词法单元所在行的源码片段（不含行尾换行）。
+   * 便捷重载：内部校验 path 后委托给 extractLineSnippet(offset)。
+   */
+  func extractLineSnippet(location: FengLocation): string;
 }
 ```
 
@@ -329,9 +358,12 @@ open type FengSource {
 /**
  * 源码位置信息。
  * 记录 Token 在源文件中的位置，用于错误报告和注解变换。
+ * path 字段：同文件引用同一个字符串实例，避免每个 location 复制路径。
  */
 @value
 open type FengLocation {
+  /** 文件路径，同文件引用同一个字符串实例 */
+  let path: string;
   /** 字节偏移量（从 0 开始） */
   let offset: int;
   /** 行号（从 1 开始） */
@@ -349,6 +381,7 @@ open type FengLocation {
  *
  * @value type：栈分配、值语义、零 heap/RC 压力。
  * value 使用 StringSpan 引用源码子串，避免拷贝。
+ * location 包含文件路径，AST 节点通过 FengLocation 记录位置信息。
  *
  * Lexer 只负责词法切分，不解析语义值。
  * 数值解析（integer/float/bool）和注解分类由 Parser 阶段处理。
@@ -359,9 +392,7 @@ open type FengToken {
   let kind: FengTokenKind;
   /** 原始文本（引用源码字符串的子串） */
   let value: StringSpan;
-  /** Token 所在的源文件 */
-  let source: FengSource;
-  /** 源码位置 */
+  /** 源码位置（含文件路径） */
   let location: FengLocation;
 }
 ```
