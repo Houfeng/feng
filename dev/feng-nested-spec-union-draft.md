@@ -76,11 +76,12 @@ return append_normalized_union_member(member_ref);
 - `member_type_ref`：成员的类型引用（可能是具体类型或 spec union）
 - `is_nested_union`：该成员是否为 spec union（用于后续链路查找）
 
-### 2.3 赋值校验（多级链路查找）
+### 2.3 赋值校验（编译期多级链路查找）
 
-`select_union_member_for_expr_type` 改为多级查找：
+赋值校验在**编译期语义分析阶段**完成。`select_union_member_for_expr_type` 递归向下查找从源类型到目标 spec union 的完整路径，路径信息传递给代码生成阶段使用。
 
 ```
+// 编译期执行：递归查找路径
 function select_union_member(source_type, target_union):
     // 第一级：直接匹配
     for each member in target_union.members:
@@ -137,11 +138,11 @@ let c: C = x;
 // 修复：let c: C = x as A;  // 或 x as B
 ```
 
-### 2.4 运行时表示
+### 2.4 运行时表示与代码生成
+
+#### 2.4.1 内存布局
 
 采用嵌套标记联合（nested tagged union），每个 spec union 层一个 tag。
-
-**内存布局**：
 
 ```
 LambdaBody {
@@ -158,10 +159,50 @@ LambdaBody {
 }
 ```
 
-**Tag 编码规则**：
+Tag 编码规则：
 - 每个 spec union 层的 tag 值从 0 开始，按成员声明顺序递增
 - 嵌套层数在实践中通常 ≤ 2，内存开销可控
-- `Expression` 整体赋给 `LambdaBody` 时，外层 tag=0，内层 tag 原样保留
+
+#### 2.4.2 代码生成（编译期确定，运行时执行）
+
+路径查找在编译期完成，代码生成器根据路径发射逐级 tag 设置和数据拷贝指令。**运行时不存在动态匹配或递归**——仅执行编译期已确定的内存写入操作。
+
+**叶子类型赋值**（`IdentifierExpr → LambdaBody`，path = [Expression, IdentifierExpr]）：
+
+```c
+// 编译器生成的代码
+body.outer_tag = 0;                        // LambdaBody 的 Expression 槽位
+body.payload.expression.inner_tag = 5;     // IdentifierExpr 在 Expression 中的序号
+body.payload.expression.data = ident;      // 拷贝 IdentifierExpr 数据
+```
+
+编译器编译期递归向下查找路径，运行时逐级向上包装：先设最外层 tag，再设内层 tag，最后拷贝叶子数据。
+
+**整体赋值**（`Expression → LambdaBody`，path = [Expression]）：
+
+```c
+// 编译器生成的代码
+body.outer_tag = 0;                        // LambdaBody 的 Expression 槽位
+body.payload.expression = expr;            // 整体拷贝 Expression（含其自身 tag）
+```
+
+直接匹配到 Expression 成员，无需深入内层——Expression 自身的 tag 已标识具体变体。
+
+**三级嵌套赋值**（`X → C`，path = [B, A, X]）：
+
+```c
+// 编译器生成的代码
+c.tag_b = 0;                   // C 的 B 槽位
+c.payload.b.tag_a = 0;         // B 的 A 槽位
+c.payload.b.payload.a.tag_x = 3; // A 的 X 槽位
+c.payload.b.payload.a.data = x;  // 拷贝 X 数据
+```
+
+**要点**：
+
+- **编译期（语义分析）**：`select_union_member_for_expr_type` 递归向下查找路径。例如 `IdentifierExpr → LambdaBody`，递归查找得到路径 `[Expression, IdentifierExpr]`。
+- **编译期（代码生成）**：根据路径，生成逐级包装的代码。
+- **运行时**：仅执行 tag 设置和数据拷贝，没有动态匹配或递归——路径在编译期已完全确定。
 
 ### 2.5 Match 行为
 
@@ -191,10 +232,35 @@ match body {
 
 ### 2.6 多级 Match 语法（后续增强）
 
-在基础 match 稳定后，可增加 `->` 链式模式语法，消除嵌套 match 的冗余：
+在基础 match 稳定后，可增加 `->` 链式模式语法，消除嵌套 match 的冗余。
+
+**多级模式层级规则**：每一级必须是前一级类型的成员。
+
+- 第一级：必须是 match 目标所属 spec union 的直接成员
+- 第二级：必须是第一级类型的直接成员（第一级必须是 spec union）
+- 第三级：必须是第二级类型的直接成员（第二级必须是 spec union）
+- 依此类推
 
 ```feng
-// 链式写法
+let body: LambdaBody = ...;  // LambdaBody 的成员: Expression | Block
+
+match body {
+    Expression -> IdentifierExpr { ... }   // ✓ Expression 是 LambdaBody 的成员，IdentifierExpr 是 Expression 的成员
+    Expression -> BooleanLiteralExpr { ... } // ✓ 同上
+    Block { ... }                           // ✓ Block 是 LambdaBody 的成员
+    else { ... }
+}
+
+// 错误示例
+match body {
+    IdentifierExpr { ... }                 // ✗ IdentifierExpr 不是 LambdaBody 的直接成员
+    Expression -> Block { ... }            // ✗ Block 不是 Expression 的成员
+}
+```
+
+**链式写法**：
+
+```feng
 match body {
     Expression -> IdentifierExpr { ... }
     Expression -> BooleanLiteralExpr { ... }
