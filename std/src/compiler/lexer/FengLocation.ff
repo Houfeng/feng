@@ -5,6 +5,9 @@ open module std.compiler.lexer;
  */
 @value
 open type FengLocation {
+  /** 文件路径, 同文件引用同一个字符串实例 */
+  let path: string;
+
   /** 偏移量（从 0 开始） */
   let offset: int;
 

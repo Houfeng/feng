@@ -1,5 +1,10 @@
 open module std.compiler.common;
 
+import std;
+import std.json;
+import std.text;
+import std.numeric;
+
 /**
  * 编译错误。
  *
@@ -9,7 +14,7 @@ open module std.compiler.common;
  *
  * throw 会装箱，但异常路径 RC 开销可忽略。
  */
-open type FengCompileError {
+open type FengCompileError: JsonSerializable<FengCompileError>, Display {
   /** 错误码（如 "LE0001"） */
   let code: string;
 
@@ -27,4 +32,50 @@ open type FengCompileError {
 
   /** 出错行的源代码片段 */
   let snippet: string;
+
+  /**
+   * 实现 JsonSerializable<FengCompileError> 接口，
+   * 支持将错误信息序列化为 JSON 对象。
+   */
+  static func toJson(value: FengCompileError): JsonObject {
+    let json = JsonObject();
+    json.set("code", value.code);
+    json.set("message", value.message);
+    json.set("path", value.path);
+    json.set("line", value.line);
+    json.set("column", value.column);
+    json.set("snippet", value.snippet);
+    return json;
+  }
+
+  /**
+   * 将错误信息序列化为 JSON 字符串。
+   * @return JSON 字符串
+   */
+  func toJsonString(): string {
+    return Json.stringify(self);
+  }
+
+  /**
+   * 将错误信息格式化为字符串。
+   * @return 格式化后的字符串
+   */
+  func toString(): string {
+    let lineStr = self.line.toString();
+    let columnStr = self.column.toString();
+    // 5 = 缩进空格(2) + 行号长度 + 空格(1) + 管道符(1) + 空格(1)
+    let pointerOffset = (lineStr.length() + 5) + (self.column - 1);
+    return string.format(
+    "{0}:{1}:{2}\n{3}: {4}\n  {5} | {6}\n{7}",
+    self.path,
+    lineStr,
+    columnStr,
+    self.code,
+    self.message,
+    lineStr,
+    self.snippet,
+    " ".repeat(pointerOffset) + "^"
+    );
+  }
+
 }

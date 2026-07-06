@@ -74,8 +74,8 @@ open type FengSource {
   /**
    * 提取指定词法单元所在行的源码片段（不含行尾换行）。
    */
-  func extractLineSnippet(token: FengToken): string {
-    if token.source.path != self.path { return ""; }
-    return self.extractLineSnippet(token.location.offset);
+  func extractLineSnippet(location: FengLocation): string {
+    if location.path != self.path { return ""; }
+    return self.extractLineSnippet(location.offset);
   }
 }

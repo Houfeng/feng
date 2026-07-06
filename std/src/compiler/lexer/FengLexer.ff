@@ -53,8 +53,9 @@ open type FengLexer {
     self.peeked = FengToken {
       kind: FengTokenKind.SpecialEndOfFile,
       value: source.slice(0, 0),
-      source: source,
-      location: FengLocation { offset: 0, line: 1, column: 1 }
+      location: FengLocation {
+        path: source.path, offset: 0, line: 1, column: 1
+      }
     };
     self.hasPeeked = false;
   }
@@ -671,8 +672,9 @@ open type FengLexer {
     return FengToken {
       kind: kind,
       value: self.source.slice(startOffset, self.pos),
-      source: self.source,
-      location: FengLocation { offset: startOffset, line: startLine, column: startColumn }
+      location: FengLocation {
+        path: self.source.path, offset: startOffset, line: startLine, column: startColumn
+      }
     };
   }
 
