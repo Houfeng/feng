@@ -384,23 +384,28 @@ let r: Result<int> = none_val;
 
 ---
 
-## 5 实施分期
+## 5 实施 TODO
 
 ### 一期：核心（解除 Parser 6.4 阻塞）
 
-1. 成员收集：移除递归展开
-2. 赋值校验：多级链路查找 + 歧义检测
-3. 运行时：嵌套 tag 布局
-4. 基础 match：匹配直接成员 + 嵌套 match 收窄
-5. 穷尽性检查：直接成员覆盖
-6. 全量回归测试
+- [ ] 5.1 更新 spec union 规范文档：非展开语义、多级链路、嵌套 tag
+- [ ] 5.2 `collect_normalized_union_member`：移除递归展开逻辑，保持声明时层次结构
+- [ ] 5.3 `select_union_member_for_expr_type`：改为多级链路查找，返回 path 信息
+- [ ] 5.4 `select_union_member_for_expr_type`：增加歧义检测（同一类型多条路径时报错）
+- [ ] 5.5 `validate_expr_against_expected_type`：适配新的 MatchResult（含 path）
+- [ ] 5.6 运行时内存布局：嵌套 tag 编码（每个 spec union 层一个 tag）
+- [ ] 5.7 代码生成：按 path 逐级设置 tag + 拷贝数据（叶子赋值、整体赋值）
+- [ ] 5.8 基础 match：匹配直接成员，分支内类型收窄
+- [ ] 5.9 match 穷尽性检查：改为检查直接成员覆盖
+- [ ] 5.10 全量回归测试
 
 ### 二期：语法增强（独立排期）
 
-1. `->` 链式模式语法解析
-2. Pattern 编译展开
-3. 链式穷尽性检查
-4. 测试覆盖
+- [ ] 5.11 `->` 链式多级模式语法解析（Parser）
+- [ ] 5.12 多级模式层级校验：每级必须是前一级类型的成员
+- [ ] 5.13 Pattern 编译：`->` 链展开为嵌套 match
+- [ ] 5.14 链式穷尽性检查：按层级验证覆盖
+- [ ] 5.15 测试覆盖
 
 ---
 
