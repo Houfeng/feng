@@ -210,7 +210,7 @@ open func test_union() {
       }
     });
 
-    test("nested union - parent constraint with child type", () {
+    test("nested union - parent constraint with child type, 1", () {
       let child: ChildUnion = 42;
       let parent: ParentUnion = child;
       let result: ParentUnion = identity_parent(parent);
@@ -223,6 +223,32 @@ open func test_union() {
         }
       }
     });
+
+    test("nested union - parent constraint with child type, 2", () {
+      let child: ChildUnion = 42;
+      let result = identity_parent(child);
+      match result {
+        int {
+          assert(true, "nested union - parent constraint with child type");
+        }
+        else {
+          assert(false, "nested union - parent constraint with child type - expected ChildUnion");
+        }
+      }
+    });
+
+    // test("nested union - parent constraint with child type, 3", () {
+    //   let child: int = 42;
+    //   let result = identity_parent(child);
+    //   match result {
+    //     42 {
+    //       assert(true, "nested union - parent constraint with child type");
+    //     }
+    //     else {
+    //       assert(false, "nested union - parent constraint with child type - expected ChildUnion");
+    //     }
+    //   }
+    // });
 
     test("nested union - parent constraint with string", () {
       let v: ParentUnion = "test";
