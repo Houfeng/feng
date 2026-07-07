@@ -1435,6 +1435,11 @@ static bool cg_union_member_index_for_label(CG *cg,
                                             const UserSpec *spec,
                                             const FengMatchLabel *label,
                                             size_t *out_index);
+static char *cg_build_chain_payload_path(CG *cg,
+                                         const char *target_tmp,
+                                         const UserSpec *root_spec,
+                                         const FengMatchLabel *label,
+                                         CGType **out_deepest_type);
 static bool cg_register_local_for_cleanup(CG *cg,
                                 const char *cname,
                                 const CGType *type,
@@ -19357,7 +19362,67 @@ static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out) {
             free(tgt_tmp);
             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
-        if (matched_member_count == 1U) {
+
+        /* Check if any label has a chain for deepest-type narrowing */
+        const FengMatchLabel *chain_label = NULL;
+        for (size_t i = 0U; i < e->as.match_op.label_count; ++i) {
+            if (e->as.match_op.labels[i].type_chain_count > 0U) {
+                chain_label = &e->as.match_op.labels[i];
+                break;
+            }
+        }
+
+        if (chain_label != NULL && matched_member_count == 1U) {
+            /* Chain label: build nested payload path to deepest type */
+            CGType *deepest_type = NULL;
+            char *payload_path = cg_build_chain_payload_path(cg,
+                                                              tgt_tmp,
+                                                              union_spec,
+                                                              chain_label,
+                                                              &deepest_type);
+            if (payload_path != NULL && deepest_type != NULL) {
+                bool add_ok = scope_add(cg->cur_scope,
+                                       alias_cstr,
+                                       payload_path,
+                                       deepest_type,
+                                       true);
+                free(payload_path);
+                free(alias_cstr);
+                if (!add_ok) {
+                    cgtype_free(deepest_type);
+                    buf_free(&cond);
+                    free(tgt_tmp);
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                }
+            } else {
+                fprintf(stderr, "DEBUG: falling back to first-level member\n");
+                /* Fallback to first-level member if chain path building fails */
+                cgtype_free(deepest_type);
+                free(payload_path);
+                Buf payload_expr;
+                CGType *alias_type;
+
+                buf_init(&payload_expr);
+                buf_append_fmt(&payload_expr, "%s.payload.", tgt_tmp);
+                cg_append_union_payload_field_name(&payload_expr, first_member_index);
+                alias_type = cgtype_clone(union_spec->union_member_types[first_member_index]);
+                if (payload_expr.data == NULL || alias_type == NULL ||
+                    !scope_add(cg->cur_scope,
+                               alias_cstr,
+                               payload_expr.data,
+                               alias_type,
+                               true)) {
+                    cgtype_free(alias_type);
+                    free(alias_cstr);
+                    buf_free(&payload_expr);
+                    buf_free(&cond);
+                    free(tgt_tmp);
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                }
+                buf_free(&payload_expr);
+                free(alias_cstr);
+            }
+        } else if (matched_member_count == 1U) {
             Buf payload_expr;
             CGType *alias_type;
 
@@ -22854,6 +22919,131 @@ static bool cg_union_member_index_for_label(CG *cg,
     return cg_fail(cg, label->token,
                    "CE0268", "codegen: union-form match label is not a normalized member");
 }
+
+/* Build nested payload access path for chain labels.
+ * For a chain like `Inner -> A`, generates path like "mt.payload.m0.payload.m1"
+ * where m0 is Inner's index in Outer, and m1 is A's index in Inner.
+ * Returns the deepest type in out_deepest_type.
+ * Caller must free the returned string. */
+static char *cg_build_chain_payload_path(CG *cg,
+                                         const char *target_tmp,
+                                         const UserSpec *root_spec,
+                                         const FengMatchLabel *label,
+                                         CGType **out_deepest_type) {
+    Buf path;
+    CGType *current_type = NULL;
+    const UserSpec *current_spec = root_spec;
+
+    if (label == NULL || label->type_chain_count == 0U || target_tmp == NULL ||
+        root_spec == NULL || out_deepest_type == NULL || label->type == NULL) {
+        return NULL;
+    }
+
+    *out_deepest_type = NULL;
+
+    buf_init(&path);
+    buf_append_cstr(&path, target_tmp);
+    if (path.data == NULL) {
+        buf_free(&path);
+        return NULL;
+    }
+
+    /* Start with the first-level member (label->type) */
+    CGType *first_type = NULL;
+    if (!cg_resolve_type(cg, label->type, &label->token, &first_type)) {
+        buf_free(&path);
+        return NULL;
+    }
+
+    size_t first_index = 0U;
+    bool found = false;
+    for (size_t i = 0U; i < current_spec->union_member_count; ++i) {
+        if (cg_types_equal(first_type, current_spec->union_member_types[i])) {
+            first_index = i;
+            found = true;
+            break;
+        }
+    }
+    cgtype_free(first_type);
+
+    if (!found) {
+        buf_free(&path);
+        return NULL;
+    }
+
+    buf_append_fmt(&path, ".payload.");
+    cg_append_union_payload_field_name(&path, first_index);
+    if (path.data == NULL) {
+        buf_free(&path);
+        return NULL;
+    }
+
+    current_type = current_spec->union_member_types[first_index];
+
+    /* Traverse the chain */
+    for (size_t chain_idx = 0U; chain_idx < label->type_chain_count; ++chain_idx) {
+        const FengTypeRef *chain_type_ref = label->type_chain[chain_idx];
+        CGType *chain_type = NULL;
+
+        if (chain_type_ref == NULL) {
+            buf_free(&path);
+            return NULL;
+        }
+
+        if (!cg_resolve_type(cg, chain_type_ref, &label->token, &chain_type)) {
+            buf_free(&path);
+            return NULL;
+        }
+
+        /* Current type must be a union spec */
+        if (current_type == NULL || current_type->kind != CG_TYPE_SPEC ||
+            current_type->user_spec == NULL ||
+            current_type->user_spec->form != FENG_SPEC_FORM_UNION) {
+            cgtype_free(chain_type);
+            buf_free(&path);
+            return NULL;
+        }
+
+        current_spec = current_type->user_spec;
+
+        size_t chain_index = 0U;
+        found = false;
+        for (size_t i = 0U; i < current_spec->union_member_count; ++i) {
+            if (cg_types_equal(chain_type, current_spec->union_member_types[i])) {
+                chain_index = i;
+                found = true;
+                break;
+            }
+        }
+        cgtype_free(chain_type);
+
+        if (!found) {
+            buf_free(&path);
+            return NULL;
+        }
+
+        buf_append_fmt(&path, ".payload.");
+        cg_append_union_payload_field_name(&path, chain_index);
+        if (path.data == NULL) {
+            buf_free(&path);
+            return NULL;
+        }
+
+        current_type = current_spec->union_member_types[chain_index];
+    }
+
+    if (path.data == NULL) {
+        return NULL;
+    }
+
+    *out_deepest_type = cgtype_clone(current_type);
+    if (*out_deepest_type == NULL) {
+        buf_free(&path);
+        return NULL;
+    }
+    return path.data;
+}
+
 
 static bool cg_emit_union_match_stmt_branch(CG *cg,
                                             const FengBlock *block,

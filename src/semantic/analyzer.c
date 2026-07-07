@@ -8932,6 +8932,12 @@ static bool resolve_and_validate_match_op(ResolveContext *context,
         if (covered_members == NULL) {
             return false;
         }
+        bool *chain_members = (bool *)calloc(info->member_count, sizeof(*chain_members));
+
+        if (chain_members == NULL) {
+            free(covered_members);
+            return false;
+        }
         for (label_index = 0U;
              label_index < expr->as.match_op.label_count && ok;
              ++label_index) {
@@ -8950,16 +8956,31 @@ static bool resolve_and_validate_match_op(ResolveContext *context,
                 ok = false;
                 break;
             }
-            if (covered_members[member_index]) {
-                ok = resolver_append_error(
-                    context,
-                    label->token,
-                    "AE0607", format_message("union match label overlaps with an earlier label and is unreachable"));
-                break;
+            if (label->type_chain_count > 0U) {
+                /* Chain label: allow sharing with other chain labels on the
+                 * same first-level member. Reject if already covered by a
+                 * non-chain label. */
+                if (covered_members[member_index] && !chain_members[member_index]) {
+                    ok = resolver_append_error(
+                        context, label->token, "AE0607",
+                        format_message("union match label overlaps with an earlier label and is unreachable"));
+                    break;
+                }
+                chain_members[member_index] = true;
+            } else {
+                /* Non-chain label: reject if already covered. */
+                if (covered_members[member_index]) {
+                    ok = resolver_append_error(
+                        context,
+                        label->token,
+                        "AE0607", format_message("union match label overlaps with an earlier label and is unreachable"));
+                    break;
+                }
+                covered_members[member_index] = true;
             }
-            covered_members[member_index] = true;
         }
         free(covered_members);
+        free(chain_members);
         if (!ok) {
             return false;
         }
@@ -9236,6 +9257,17 @@ static bool register_visible_match_binding(ResolveContext *context,
         }
         active_members[resolved_index] = true;
     }
+    /* Check if any label has a chain for deepest-type narrowing. */
+    const FengTypeRef *deepest_chain_type = NULL;
+
+    for (label_index = 0U; label_index < match_op->as.match_op.label_count; ++label_index) {
+        const FengMatchLabel *label = &match_op->as.match_op.labels[label_index];
+
+        if (label->type_chain_count > 0U) {
+            deepest_chain_type = label->type_chain[label->type_chain_count - 1U];
+            break;
+        }
+    }
     {
         size_t active_count = union_active_member_count(active_members, info->member_count);
         if (active_count == 0U) {
@@ -9243,18 +9275,28 @@ static bool register_visible_match_binding(ResolveContext *context,
             return false;
         }
         if (active_count == 1U) {
-            member_index = union_first_active_member_index(active_members, info->member_count);
-            const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
-                context,
-                info->spec_decl,
-                union_spec_type_ref,
-                info->members[member_index].type_ref);
-            ok = resolver_add_local_entry(context,
-                                          binding->name,
-                                          inferred_expr_type_from_type_ref(member_type_ref),
-                                          binding->mutability,
-                                          target,
-                                          NULL);
+            if (deepest_chain_type != NULL) {
+                /* Chain label: narrow to deepest type in chain. */
+                ok = resolver_add_local_entry(context,
+                                              binding->name,
+                                              inferred_expr_type_from_type_ref(deepest_chain_type),
+                                              binding->mutability,
+                                              target,
+                                              NULL);
+            } else {
+                member_index = union_first_active_member_index(active_members, info->member_count);
+                const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
+                    context,
+                    info->spec_decl,
+                    union_spec_type_ref,
+                    info->members[member_index].type_ref);
+                ok = resolver_add_local_entry(context,
+                                              binding->name,
+                                              inferred_expr_type_from_type_ref(member_type_ref),
+                                              binding->mutability,
+                                              target,
+                                              NULL);
+            }
         } else {
             const UnionNarrowingSet *narrowing = resolver_create_union_narrowing(
                 context,
