@@ -1,6 +1,6 @@
 # 交叉类型（Intersection Type）设计草案
 
-> **状态**：草案（未最终确定，未实施）
+> **状态**：已确定，待实施
 > **日期**：2026-07-07
 > **关联**：[feng-value-model-delivered.md](./feng-value-model-delivered.md)、[feng-generics-delivered.md](./feng-generics-delivered.md)
 
@@ -10,13 +10,14 @@
 
 ### 1.1 现有 Spec 体系
 
-Feng 语言当前有三种 spec form：
+Feng 语言当前有四种 spec form：
 
 | Form | 语法 | 满足方式 | 值表示 |
 |---|---|---|---|
 | OBJECT | `spec T { methods }` | 名义（需 `type X: T`） | `{ subject, witness }` |
 | CALLABLE | `spec T(...): R` | 未绑定时结构性（签名匹配）；绑定后不可隐式匹配，可显式转换 | closure struct |
 | UNION | `spec T: A \| B` | 结构性（成员匹配）；收窄前不可访问，必须收窄到具体类型（非联合类型）才能访问 | tagged union + `_fwd` |
+| INTERSECTION | `spec T: A & B` | 结构性（成员匹配）；X 名义匹配所有成员 spec 即满足 | `{ subject, merged_witness }` |
 
 Object-form spec 支持 parent specs：
 
@@ -53,18 +54,18 @@ func process<T: GreetAndDisplay>(v: T): string {
 type MyType: GreetAndDisplay { ... }
 ```
 
-问题：`MyType` 即使已分别实现了 `Greetable` 和 `Displayable`，也必须**显式声明** `GreetAndDisplay`，否则无法作为参数传入。这增加了不必要的耦合。
+问题：`MyType` 必须**显式声明** `GreetAndDisplay`，否则无法作为参数传入。类型定义方必须知道并引用组合 spec，增加了不必要的耦合。
 
 #### 1.2.2 目标
 
-引入交叉类型，使同时满足多个 spec 的类型**自动满足**交叉约束，无需显式声明：
+引入交叉类型，使名义满足多个成员 spec 的类型**自动满足**交叉约束，无需显式声明交叉类型本身：
 
 ```feng
 // 定义命名交叉类型
 spec GreetAndDisplay: Greetable & Displayable;
 
-// MyType 已声明满足 Greetable 和 Displayable，
-// 自动满足 GreetAndDisplay，无需额外声明
+// MyType 名义声明满足 Greetable 和 Displayable，
+// 自动满足 GreetAndDisplay，无需声明 GreetAndDisplay
 type MyType: Greetable, Displayable {
     func greet(): string { return "hi"; }
     func display(): string { return "display"; }
@@ -76,7 +77,7 @@ func process<T: GreetAndDisplay>(v: T): string {
 }
 
 let m = MyType {};
-process(m);  // OK: MyType 结构性满足 GreetAndDisplay
+process(m);  // OK: MyType 名义满足 GreetAndDisplay 的所有成员
 ```
 
 ---
@@ -116,7 +117,7 @@ spec Comparable<T>: Eq<T> & Ord<T>;
 - 成员 spec **必须全部是 object-form spec**
 - 不支持交叉与 union 混合：`spec T: A & (B | C)` 不支持
 - 交叉类型不能作为 union 成员：`spec U: (A & B) | string` 不支持
-- **暂定不允许** `type X: IntersectionType`（显式声明满足交叉类型），仅通过结构性检查自动满足
+- **不允许** `type X: IntersectionType`（显式声明满足交叉类型），满足性从成员 spec 的名义满足自动推导
 
 ---
 
@@ -144,29 +145,26 @@ T.methods = T1.methods ∪ T2.methods
 
 冲突检测复用现有 `detect_cross_spec_method_conflicts` 逻辑（analyzer.c:24369 附近，随变更行号可能偏移，实施时必须以实际代码为准），该函数已实现上述规则。
 
-### 3.3 结构性满足
+### 3.3 满足性检查
 
-类型 X 满足交叉类型 `T: T1 & T2` 当且仅当 X 实现了 T 的全部方法（含字段）。
+类型 X 满足交叉类型 `T: T1 & T2` 当且仅当 X **名义满足** T 的所有成员 spec。
 
 检查流程：
 
-1. 收集 T 的方法集（成员 spec 方法的并集，去重）
-2. 对每个方法 `m ∈ T.methods`，检查 X 是否实现：
-   - X 自身的 `type_decl.members` 中有同名同签方法
-   - 或 X 声明的某个 spec 的方法闭包中包含 m
-3. 全部覆盖 → 满足；否则 → 不满足
+1. 对每个成员 spec `Ti ∈ T.members`，调用现有 `subject_key_satisfies_spec_decl(X, Ti)` 做名义查表
+2. 全部通过 → 满足；任一不通过 → 不满足
 
-这与现有名义满足（`subject_key_satisfies_spec_decl` 查表）不同，需要新的结构性检查路径。
+**简化点**：与纯结构匹配不同，名义匹配不需要新增检查路径，完全复用现有的名义满足检查。Merged witness 也直接从 X 已有的各成员 spec 的 witness 合并，无需遍历方法集重新查找实现。
 
 ### 3.4 与 `spec A: B, C` 的对比
 
 | | `spec A: B, C { ... }` | `spec T: B & C;` |
 |---|---|---|
 | 方法集 | B ∪ C ∪ A 自有方法 | B ∪ C |
-| 匹配方式 | 名义（需 `type X: A`） | 结构性（有全部方法即满足） |
+| 匹配方式 | 名义（需 `type X: A`） | 结构性（成员匹配）：X 名义满足 B 和 C 即满足 |
 | 自有成员 | 可以有 | 不能有 |
-| 显式声明 | 必须 `type X: A` | 不允许 `type X: T`（暂定） |
-| Witness | X 为 A 生成完整 witness | X 生成 merged witness |
+| 显式声明 | 必须 `type X: A` | 不允许 `type X: T` |
+| Witness | X 为 A 生成完整 witness | 从 X 的 B witness 和 C witness 合并 |
 
 ---
 
@@ -194,14 +192,14 @@ struct FengSpecWitness__BothAnd {
 };
 ```
 
-**按需生成**：仅当类型 X 的值在 coercion site（赋值点/转换点）被赋给交叉类型时，才生成 X 的 merged witness 实例（编译期常量）：
+**按需生成**：仅当类型 X 的值在 coercion site（赋值点/转换点）被赋给交叉类型时，才生成 X 的 merged witness 实例（编译期常量）。由于 X 名义满足所有成员 spec，X 已有每个成员 spec 的独立 witness，merged witness 直接从这些现有 witness 合并：
 
 ```c
-// 仅在 coercion site 处生成
+// 仅在 coercion site 处生成，从 MyType 已有的 Greetable 和 Displayable witness 合并
 static const struct FengSpecWitness__BothAnd
 FengSpecWitness__MyType__BothAnd = {
-    .greet   = MyType_greet,
-    .display = MyType_display,
+    .greet   = FengSpecWitness__MyType__Greetable.greet,
+    .display = FengSpecWitness__MyType__Displayable.display,
 };
 ```
 
@@ -272,10 +270,10 @@ struct {
 ### 6.2 Semantic Analysis
 
 1. **验证成员**：所有成员必须是 object-form spec
-2. **方法集合并**：收集所有成员 spec 的方法（含 parent spec 闭包），去重
+2. **展平**：多层交叉在定义时展平并去重
 3. **冲突检测**：复用 `detect_cross_spec_method_conflicts`
-4. **结构性满足检查**：新增 `type_decl_structurally_satisfies_intersection` 函数
-5. **Coercion 记录**：记录赋值点的 merged witness 信息供 codegen 使用
+4. **满足性检查**：对每个使用交叉类型的位置，检查值类型是否名义满足所有成员（复用 `subject_key_satisfies_spec_decl`）
+5. **Coercion 记录**：记录赋值点的 merged witness 信息供 codegen 使用（从已有的成员 witness 合并）
 
 ### 6.3 Codegen
 
@@ -295,7 +293,7 @@ struct {
 ### 7.1 编译期
 
 - Parser 变更量小（仿照 union form 的 `|` 解析逻辑）
-- 结构性满足检查是新增逻辑路径，需要遍历方法集
+- 满足性检查复用现有名义满足路径，无需新增逻辑
 - 每个交叉类型需要生成独立的 merged witness 结构体和实例
 
 ### 7.2 运行时
@@ -306,8 +304,8 @@ struct {
 
 ### 7.3 复杂度
 
-- 结构性满足检查与名义满足检查是两条独立路径，增加了语义分析复杂度
-- Merged witness 生成需要跨 spec 方法合并逻辑
+- Merged witness 生成需要跨 spec witness 合并逻辑
+- 方法冲突检测复用现有 `detect_cross_spec_method_conflicts`
 
 ---
 
@@ -321,6 +319,62 @@ struct {
 
 4. **交叉类型的 match/narrowing**：不支持
 
-5. **字段（let）的结构性检查**：与 object-form 一致。先合并所有成员 spec 的字段和方法，然后按单个 object-form spec 的逻辑检查：同名但类型不同的字段报冲突，同名但签名不同的方法按现有重载规则处理（同参数不同返回 → 错误，不同参数 → 允许重载）
+5. **字段（let/var）的处理**：满足性检查改为名义匹配后，字段的 getter/setter 已在各成员 spec 的 witness 中，merged witness 直接合并即可。字段冲突检测（同名不同类型）仍在交叉类型定义时通过 `detect_cross_spec_method_conflicts` 检查，与 object-form 一致
 
 6. **性能保障**：以 Intersection-form 视角访问对象的开销不能大于 object-form 视角的开销（值表示和访问路径完全一致，均为 `{ subject, witness }` + 函数指针调用）
+
+---
+
+## 9 实施步骤
+
+每步交付：代码实现 + 新增测试用例 + 全量回归测试通过。
+
+- [ ] **9.1 Parser：解析交叉类型语法**
+  - 新增 `FENG_SPEC_FORM_INTERSECTION` 枚举值
+  - AST 新增 `intersection_form` 节点（`FengTypeRef **members`, `size_t member_count`）
+  - 解析逻辑：`:` 后第一个 type ref 后，`&` → INTERSECTION，`|` → UNION，`,`/`{` → OBJECT
+  - 测试：`test/parser/` 新增 AST 结构测试，验证正确解析 `spec T: A & B;`
+
+- [ ] **9.2 Symbol Table：序列化/反序列化**
+  - `ft_write` 支持写入 `FENG_SPEC_FORM_INTERSECTION` 及 `intersection_form` 成员列表
+  - `ft_read` 支持读取并还原交叉类型 AST
+  - 测试：`test/symbol/` 新增 round-trip 测试，写入后读取验证 AST 一致
+
+- [ ] **9.3 语义验证：成员类型检查**
+  - 验证所有成员必须是 object-form spec，否则报错
+  - 多层交叉在定义时展平并去重（`spec U: T & C` 展平为 `[A, B, C]`）
+  - 测试：`test/semantic/` 新增诊断测试，验证非法成员（union/callable/intersection）触发错误
+
+- [ ] **9.4 语义分析：方法集合并与冲突检测**
+  - 收集所有成员 spec 的方法集（含 parent spec 传递闭包），去重
+  - 复用 `detect_cross_spec_method_conflicts` 检测方法冲突
+  - 同名同参数不同返回类型 → 编译错误；不同参数 → 允许重载
+  - 字段（let/var）处理为 getter/setter 纳入方法集
+  - 测试：`test/semantic/` 新增诊断测试，覆盖去重、冲突报错、重载允许三种场景
+
+- [ ] **9.5 语义分析：满足性检查**
+  - 对每个使用交叉类型的位置，检查值类型是否名义满足所有成员 spec
+  - 复用现有 `subject_key_satisfies_spec_decl` 对每个成员做名义查表
+  - 不满足时报编译错误
+  - 测试：`test/semantic/` 新增诊断测试，覆盖满足/不满足两种路径
+
+- [ ] **9.6 Codegen：Merged Witness 结构体与实例**
+  - 为每个交叉类型生成 merged witness struct（`FengSpecWitness__<Name>`）
+  - 为每个满足交叉类型的具体类型，按需生成 merged witness 实例（编译期常量）
+  - 仅在 coercion site（赋值点）触发实例生成
+  - 测试：`test/codegen/` 新增 IR 测试，验证生成正确的 witness struct 和实例
+
+- [ ] **9.7 Codegen：Coercion 代码生成**
+  - 在赋值点/转换点生成 `{ subject, merged_witness }` 构造
+  - 交叉类型作为独立变量/参数类型：`let x: Both = value;`、`func foo(v: Both)`
+  - 测试：`fcts/` 新增行为测试，覆盖变量声明、函数参数、函数返回值的 coercion
+
+- [ ] **9.8 泛型约束：交叉类型作为约束**
+  - 支持 `func process<T: GreetAndDisplay>(v: T)` 语法
+  - 共享体代码生成复用 object-form 路径，无需改动
+  - 测试：`fcts/` 新增行为测试，覆盖交叉类型约束下的泛型函数调用和方法调用
+
+- [ ] **9.9 泛型交叉类型**
+  - 支持 `spec Comparable<T>: Eq<T> & Ord<T>;` 语法
+  - 成员 spec 带泛型参数，交叉类型本身有泛型参数
+  - 测试：`fcts/` 新增行为测试，覆盖泛型交叉类型的定义、满足检查和泛型约束使用
