@@ -132,6 +132,8 @@ T.methods = T1.methods ∪ T2.methods
 
 包括成员 spec 各自的 parent specs 传递闭包中的方法。
 
+**字段访问**：如果成员 spec 声明了字段约束（如 `let name: string`），这些字段会被处理为 getter/setter 方法纳入方法集。交叉类型的 merged witness 必须包含所有成员 spec 的字段访问器，确保通过交叉类型视角访问字段时正确工作。
+
 ### 3.2 方法冲突
 
 | 场景 | 处理 |
@@ -177,6 +179,8 @@ T.methods = T1.methods ∪ T2.methods
 ```
 { subject: void*, witness: MergedWitness }
 ```
+
+**性能保障**：通过交叉类型视角访问方法/字段的运行时开销与通过 object-form spec 视角访问**完全一致**（一次指针解引用 + 一次函数指针调用）。Merged witness 结构体虽然包含更多方法，但访问任何单个方法的开销不变（函数指针在固定偏移）。
 
 ### 4.2 Merged Witness 结构
 
@@ -309,7 +313,7 @@ struct {
 
 ## 8 待定事项
 
-1. **`type X: IntersectionType` 是否允许**：暂定不允许，需评估是否有漏洞或问题
+1. **`type X: IntersectionType` 是否允许**：倾向于不允许。允许会导致语义混乱（交叉类型是结构性的，显式声明无意义；若自动展开为 `type X: A, B` 则与 A、B 的名义匹配混淆）
 2. **字段（let）的结构性检查**：当成员 spec 含字段声明时，如何检查类型是否满足
 3. **交叉类型的 match/narrowing**：是否支持对交叉类型值做 match（如判断值来自哪个 spec 方法实现）
 4. **多层交叉**：`spec T: A & B; spec U: T & C;` 是否支持？语义上等价于 `A & B & C`
