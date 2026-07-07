@@ -311,11 +311,16 @@ struct {
 
 ---
 
-## 8 待定事项
+## 8 已确定事项
 
-1. **`type X: IntersectionType` 是否允许**：倾向于不允许。允许会导致语义混乱（交叉类型是结构性的，显式声明无意义；若自动展开为 `type X: A, B` 则与 A、B 的名义匹配混淆）
-2. **字段（let）的结构性检查**：当成员 spec 含字段声明时，如何检查类型是否满足
-3. **交叉类型的 match/narrowing**：是否支持对交叉类型值做 match（如判断值来自哪个 spec 方法实现）
-4. **多层交叉**：`spec T: A & B; spec U: T & C;` 是否支持？语义上等价于 `A & B & C`
-5. **交叉类型作为泛型约束时的共享体代码生成**：merged witness 在共享体内如何访问
-6. **性能基准**：merged witness 生成和结构性检查的编译期开销
+1. **`type X: IntersectionType` 不允许**：现有 `AE0615` 验证（`analyzer.c:24754`）只允许 object-form spec，交叉类型（`FENG_SPEC_FORM_INTERSECTION`）自然被拒绝。**原因**：`type X:` 后都是名义匹配的 object-form spec，如果允许交叉类型（结构性匹配），会导致语义混乱
+
+2. **多层交叉**：`spec T: A & B; spec U: T & C;` 等价于 `A & B & C`，可在编译期展平并去重
+
+3. **交叉类型作为泛型约束时的共享体代码生成**：与 object-form spec 无差别，无需改动（共享体通过 witness 调用方法，merged witness 与单个 spec 的 witness 结构一致）
+
+4. **交叉类型的 match/narrowing**：不支持
+
+5. **字段（let）的结构性检查**：与 object-form 一致。先合并所有成员 spec 的字段和方法，然后按单个 object-form spec 的逻辑检查：同名但类型不同的字段报冲突，同名但签名不同的方法按现有重载规则处理（同参数不同返回 → 错误，不同参数 → 允许重载）
+
+6. **性能保障**：以 Intersection-form 视角访问对象的开销不能大于 object-form 视角的开销（值表示和访问路径完全一致，均为 `{ subject, witness }` + 函数指针调用）
