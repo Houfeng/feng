@@ -183,7 +183,9 @@ open func test_spec() {
       - 编译期，在转换点检查父子关系，可在编译期提示非法转换（非子到父的情况）
       - 运行时，从子 witness 表找到父 witness 表（列表中的某个元素），需要递归向上查找（有运行时开销）
 
-      注意： 并且还需要在调用点把 x 和所有父级及祖先的 witness 都生成并建立好引用关系（也有编译期开销）
+      注意：并且还需要在调用点把 x 和所有父级及祖先的 witness 都生成并建立好引用关系（也有编译期开销）
+      补充：或者类似 Rust 的 trait upcasting，生成包含所有祖先的大表，然后编译期确定偏移，运行时 O(1) 
+      或者：每个 child 的 witness 表都包含所有父级 witness 的引用（列表），转换点在编译期确定偏移，运行时 O(1) ，但是为每层 O(1)
     */
 
     // test("child spec assignment to parent spec", () {
