@@ -79,6 +79,10 @@ FengSemanticValueKind feng_semantic_value_kind_of_decl(const FengDecl *decl) {
                     /* Union-form specs lower to an inline aggregate carrying
                      * the active tag, lifecycle forward slot and payload. */
                     return FENG_SEMANTIC_VALUE_AGGREGATE;
+                case FENG_SPEC_FORM_INTERSECTION:
+                    /* Intersection-form specs share object-form value
+                     * representation: { subject, merged_witness }. */
+                    return FENG_SEMANTIC_VALUE_AGGREGATE;
             }
             return FENG_SEMANTIC_VALUE_TRIVIAL;
         default:

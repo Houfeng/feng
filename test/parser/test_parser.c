@@ -1451,6 +1451,31 @@ static void test_union_spec_rejects_void_member(void) {
     ASSERT(strstr(error.message, "union-form spec members cannot be 'void'") != NULL);
 }
 
+static void test_intersection_spec_declaration_parses(void) {
+    const char *source =
+        "module demo.intersection;\n"
+        "spec GreetAndDisplay: Greetable & Displayable & Printable;\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *decl;
+
+    ASSERT(feng_parse_source(source, strlen(source), "intersection_spec.f", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    decl = program->declarations[0];
+    ASSERT(decl->kind == FENG_DECL_SPEC);
+    ASSERT(decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION);
+    ASSERT(decl->as.spec_decl.as.intersection_form.member_count == 3U);
+    ASSERT(decl->as.spec_decl.as.intersection_form.members[0]->kind == FENG_TYPE_REF_NAMED);
+    assert_slice_text(decl->as.spec_decl.as.intersection_form.members[0]->as.named.segments[0], "Greetable");
+    ASSERT(decl->as.spec_decl.as.intersection_form.members[1]->kind == FENG_TYPE_REF_NAMED);
+    assert_slice_text(decl->as.spec_decl.as.intersection_form.members[1]->as.named.segments[0], "Displayable");
+    ASSERT(decl->as.spec_decl.as.intersection_form.members[2]->kind == FENG_TYPE_REF_NAMED);
+    assert_slice_text(decl->as.spec_decl.as.intersection_form.members[2]->as.named.segments[0], "Printable");
+
+    feng_program_free(program);
+}
+
 static void test_match_type_labels_parse(void) {
     const char *source =
         "module demo.union;\n"
@@ -3121,6 +3146,7 @@ int main(void) {
     test_match_enum_item_reference_labels_parse();
     test_union_spec_declaration_parses();
     test_union_spec_rejects_void_member();
+    test_intersection_spec_declaration_parses();
     test_match_type_labels_parse();
     test_match_binding_prefix_parse();
     test_match_binding_prefix_expression_form();

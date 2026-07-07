@@ -97,6 +97,7 @@ typedef enum {
     FENG_OVERLOAD_CATEGORY_SPEC_OBJECT,
     FENG_OVERLOAD_CATEGORY_SPEC_CALLABLE,
     FENG_OVERLOAD_CATEGORY_SPEC_UNION,
+    FENG_OVERLOAD_CATEGORY_SPEC_INTERSECTION,
     FENG_OVERLOAD_CATEGORY_NO_OVERLOADING     /* enum / global_binding (no generic params) */
 } FengOverloadCategory;
 
@@ -127,6 +128,7 @@ static FengOverloadCategory decl_overload_category(const FengDecl *decl) {
                 case FENG_SPEC_FORM_OBJECT:   return FENG_OVERLOAD_CATEGORY_SPEC_OBJECT;
                 case FENG_SPEC_FORM_CALLABLE: return FENG_OVERLOAD_CATEGORY_SPEC_CALLABLE;
                 case FENG_SPEC_FORM_UNION:    return FENG_OVERLOAD_CATEGORY_SPEC_UNION;
+                case FENG_SPEC_FORM_INTERSECTION: return FENG_OVERLOAD_CATEGORY_SPEC_INTERSECTION;
             }
             return FENG_OVERLOAD_CATEGORY_NO_OVERLOADING;
         default:
@@ -27316,6 +27318,11 @@ static void normalize_decl(FengDecl *decl, size_t pointer_size) {
                 case FENG_SPEC_FORM_UNION:
                     for (i = 0; i < decl->as.spec_decl.as.union_form.member_count; ++i) {
                         normalize_type_ref(decl->as.spec_decl.as.union_form.members[i], pointer_size);
+                    }
+                    break;
+                case FENG_SPEC_FORM_INTERSECTION:
+                    for (i = 0; i < decl->as.spec_decl.as.intersection_form.member_count; ++i) {
+                        normalize_type_ref(decl->as.spec_decl.as.intersection_form.members[i], pointer_size);
                     }
                     break;
             }

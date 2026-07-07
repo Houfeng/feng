@@ -1857,6 +1857,44 @@ static FengDecl *parse_spec_declaration(Parser *parser,
             return decl;
         }
 
+        if (parser_match(parser, FENG_TOKEN_AMP)) {
+            decl->as.spec_decl.form = FENG_SPEC_FORM_INTERSECTION;
+            if (!append_type_ref(parser,
+                                 &decl->as.spec_decl.as.intersection_form.members,
+                                 &decl->as.spec_decl.as.intersection_form.member_count,
+                                 &list_capacity,
+                                 first_type)) {
+                free_type_ref(first_type);
+                free_decl(decl);
+                return NULL;
+            }
+            do {
+                FengTypeRef *member_type = parse_type_ref(parser);
+
+                if (member_type == NULL) {
+                    free_decl(decl);
+                    return NULL;
+                }
+                if (!append_type_ref(parser,
+                                     &decl->as.spec_decl.as.intersection_form.members,
+                                     &decl->as.spec_decl.as.intersection_form.member_count,
+                                     &list_capacity,
+                                     member_type)) {
+                    free_type_ref(member_type);
+                    free_decl(decl);
+                    return NULL;
+                }
+            } while (parser_match(parser, FENG_TOKEN_AMP));
+
+            if (!parser_expect(parser,
+                               FENG_TOKEN_SEMICOLON,
+                               "SE0001", "intersection-form spec declarations must end with ';'")) {
+                free_decl(decl);
+                return NULL;
+            }
+            return decl;
+        }
+
         if (!append_type_ref(parser,
                              &decl->as.spec_decl.parent_specs,
                              &decl->as.spec_decl.parent_spec_count,
@@ -5039,11 +5077,16 @@ static void free_decl(FengDecl *decl) {
                 free_parameters(decl->as.spec_decl.as.callable.params,
                                 decl->as.spec_decl.as.callable.param_count);
                 free_type_ref(decl->as.spec_decl.as.callable.return_type);
-            } else {
+            } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
                 for (index = 0U; index < decl->as.spec_decl.as.union_form.member_count; ++index) {
                     free_type_ref(decl->as.spec_decl.as.union_form.members[index]);
                 }
                 free(decl->as.spec_decl.as.union_form.members);
+            } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                for (index = 0U; index < decl->as.spec_decl.as.intersection_form.member_count; ++index) {
+                    free_type_ref(decl->as.spec_decl.as.intersection_form.members[index]);
+                }
+                free(decl->as.spec_decl.as.intersection_form.members);
             }
             break;
         case FENG_DECL_FIT:

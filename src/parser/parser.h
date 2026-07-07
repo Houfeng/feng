@@ -452,7 +452,8 @@ typedef enum FengDeclKind {
 typedef enum FengSpecForm {
     FENG_SPEC_FORM_OBJECT = 0,
     FENG_SPEC_FORM_CALLABLE,
-    FENG_SPEC_FORM_UNION
+    FENG_SPEC_FORM_UNION,
+    FENG_SPEC_FORM_INTERSECTION
 } FengSpecForm;
 
 typedef struct FengUseDecl {
@@ -510,6 +511,10 @@ struct FengDecl {
                     FengTypeRef **members;
                     size_t member_count;
                 } union_form;
+                struct {
+                    FengTypeRef **members;
+                    size_t member_count;
+                } intersection_form;
             } as;
         } spec_decl;
         struct {

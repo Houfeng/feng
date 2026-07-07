@@ -697,7 +697,9 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                         ? "object"
                         : (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE
                            ? "callable"
-                           : "union"));
+                           : (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION
+                              ? "union"
+                              : "intersection")));
                 dump_slice(stream, decl->as.spec_decl.name);
                 if (decl->as.spec_decl.type_param_count > 0U) {
                     fputc('<', stream);
@@ -754,13 +756,22 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                     fputs("): ", stream);
                     dump_type_ref(stream, decl->as.spec_decl.as.callable.return_type);
                     fputc('\n', stream);
-                } else {
+                } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
                     dump_indent(stream, 2);
                     for (member_index = 0U; member_index < decl->as.spec_decl.as.union_form.member_count; ++member_index) {
                         if (member_index != 0U) {
                             fputs(" | ", stream);
                         }
                         dump_type_ref(stream, decl->as.spec_decl.as.union_form.members[member_index]);
+                    }
+                    fputc('\n', stream);
+                } else {
+                    dump_indent(stream, 2);
+                    for (member_index = 0U; member_index < decl->as.spec_decl.as.intersection_form.member_count; ++member_index) {
+                        if (member_index != 0U) {
+                            fputs(" & ", stream);
+                        }
+                        dump_type_ref(stream, decl->as.spec_decl.as.intersection_form.members[member_index]);
                     }
                     fputc('\n', stream);
                 }

@@ -329,7 +329,7 @@ struct {
 
 每步交付：代码实现 + 新增测试用例 + 全量回归测试通过。
 
-- [ ] **9.1 Parser：解析交叉类型语法**
+- [x] **9.1 Parser：解析交叉类型语法**
   - 新增 `FENG_SPEC_FORM_INTERSECTION` 枚举值
   - AST 新增 `intersection_form` 节点（`FengTypeRef **members`, `size_t member_count`）
   - 解析逻辑：`:` 后第一个 type ref 后，`&` → INTERSECTION，`|` → UNION，`,`/`{` → OBJECT
