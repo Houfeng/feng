@@ -3,7 +3,16 @@ module fcts_bin;
 import std.io;
 import std.test;
 
-// 基础嵌套联合类型（使用自定义类型而非原始类型）
+// 基础嵌套联合类型（使用原始类型）
+spec InnerUnion: int | string;
+spec OuterUnion: InnerUnion | bool;
+
+// 三层嵌套
+spec Level1: int | string;
+spec Level2: Level1 | bool;
+spec Level3: Level2 | f64;
+
+// 用于链式匹配测试的自定义类型
 type IntWrapper {
     let value: int;
 }
@@ -12,29 +21,20 @@ type StringWrapper {
     let value: string;
 }
 
-spec InnerUnion: IntWrapper | StringWrapper;
-spec OuterUnion: InnerUnion | bool;
-
-// 三层嵌套
-type IntBox {
-    let value: int;
-}
-
-type StringBox {
-    let value: string;
-}
-
-type BoolBox {
+type BoolWrapper {
     let value: bool;
 }
 
-type F64Box {
+type F64Wrapper {
     let value: f64;
 }
 
-spec Level1: IntBox | StringBox;
-spec Level2: Level1 | BoolBox;
-spec Level3: Level2 | F64Box;
+// 自定义类型的嵌套联合
+spec CustomInner: IntWrapper | StringWrapper;
+spec CustomOuter: CustomInner | BoolWrapper;
+spec CustomLevel1: IntWrapper | StringWrapper;
+spec CustomLevel2: CustomLevel1 | BoolWrapper;
+spec CustomLevel3: CustomLevel2 | F64Wrapper;
 
 // Object-form spec 作为联合成员
 spec Greetable {
@@ -70,15 +70,15 @@ spec CallableOrInt: int_transformer | int;
 open func test_nested_union() {
   describe("nested_union", () {
     test("nested union - assign leaf type to outer", () {
-      let v: OuterUnion = IntWrapper { value: 42 };
+      let v: OuterUnion = 42;
       match v {
         let inner: InnerUnion {
           match inner {
-            IntWrapper {
+            int {
               assert(true, "nested union - assign leaf type to outer");
             }
             else {
-              assert(false, "expected IntWrapper in inner");
+              assert(false, "expected int in inner");
             }
           }
         }
@@ -89,7 +89,7 @@ open func test_nested_union() {
     });
 
     test("nested union - assign inner union to outer", () {
-      let inner: InnerUnion = StringWrapper { value: "hello" };
+      let inner: InnerUnion = "hello";
       let v: OuterUnion = inner;
       match v {
         let iu: InnerUnion {
@@ -114,17 +114,17 @@ open func test_nested_union() {
     });
 
     test("three-level nested union", () {
-      let v: Level3 = IntBox { value: 42 };
+      let v: Level3 = 42;
       match v {
         let l2: Level2 {
           match l2 {
             let l1: Level1 {
               match l1 {
-                IntBox {
+                int {
                   assert(true, "three-level nested union");
                 }
                 else {
-                  assert(false, "expected IntBox at level 1");
+                  assert(false, "expected int at level 1");
                 }
               }
             }
@@ -139,11 +139,11 @@ open func test_nested_union() {
       }
     });
 
-    test("chain match - single level", () {
-      let v: OuterUnion = IntWrapper { value: 42 };
+    test("chain match - custom types - single level (match statement)", () {
+      let v: CustomOuter = IntWrapper { value: 42 };
       match v {
-        InnerUnion -> IntWrapper {
-          assert(true, "chain match - single level");
+        let i: CustomInner -> IntWrapper {
+          assert(i.value == 42, "chain match - custom types - single level (match statement)");
         }
         else {
           assert(false, "expected IntWrapper via chain");
@@ -151,40 +151,423 @@ open func test_nested_union() {
       }
     });
 
-    test("chain match - with binding", () {
-      let v: OuterUnion = IntWrapper { value: 100 };
-      match v {
-        InnerUnion -> IntWrapper {
-          assert(true, "chain match - with binding");
+    test("chain match - custom types - single level (match expression)", () {
+      let v: CustomOuter = IntWrapper { value: 42 };
+      let result = match v {
+        let i: CustomInner -> IntWrapper { i.value }
+        else { -1 }
+      };
+      assert(result == 42, "chain match - custom types - single level (match expression)");
+    });
+
+    test("chain match - custom types - single level (match operator)", () {
+      let v: CustomOuter = IntWrapper { value: 42 };
+      if v match let i: CustomInner -> IntWrapper {
+        assert(i.value == 42, "chain match - custom types - single level (match operator)");
+      } else {
+        assert(false, "expected IntWrapper via match operator");
+      }
+    });
+
+    test("chain match - custom types - multiple branches (match statement)", () {
+      let v1: CustomOuter = IntWrapper { value: 42 };
+      let v2: CustomOuter = StringWrapper { value: "test" };
+      let v3: CustomOuter = BoolWrapper { value: true };
+
+      match v1 {
+        let i: CustomInner -> IntWrapper {
+          assert(i.value == 42, "chain match - custom types - int branch");
+        }
+        let s: CustomInner -> StringWrapper {
+          assert(false, "should not match string");
+        }
+        BoolWrapper {
+          assert(false, "should not match bool");
         }
         else {
-          assert(false, "expected IntWrapper with binding");
+          assert(false, "should match");
+        }
+      }
+
+      match v2 {
+        let i: CustomInner -> IntWrapper {
+          assert(false, "should not match int");
+        }
+        let s: CustomInner -> StringWrapper {
+          assert(s.value == "test", "chain match - custom types - string branch");
+        }
+        BoolWrapper {
+          assert(false, "should not match bool");
+        }
+        else {
+          assert(false, "should match");
+        }
+      }
+
+      match v3 {
+        let i: CustomInner -> IntWrapper {
+          assert(false, "should not match int");
+        }
+        let s: CustomInner -> StringWrapper {
+          assert(false, "should not match string");
+        }
+        BoolWrapper {
+          assert(true, "chain match - custom types - bool branch");
+        }
+        else {
+          assert(false, "should match");
         }
       }
     });
 
-    test("chain match - multiple branches", () {
-      let v1: OuterUnion = IntWrapper { value: 42 };
-      let v2: OuterUnion = StringWrapper { value: "test" };
+    test("chain match - custom types - multiple branches (match expression)", () {
+      let v1: CustomOuter = IntWrapper { value: 42 };
+      let v2: CustomOuter = StringWrapper { value: "test" };
+      let v3: CustomOuter = BoolWrapper { value: true };
+
+      let r1 = match v1 {
+        let i: CustomInner -> IntWrapper { "int" }
+        let s: CustomInner -> StringWrapper { "string" }
+        BoolWrapper { "bool" }
+        else { "else" }
+      };
+
+      let r2 = match v2 {
+        let i: CustomInner -> IntWrapper { "int" }
+        let s: CustomInner -> StringWrapper { "string" }
+        BoolWrapper { "bool" }
+        else { "else" }
+      };
+
+      let r3 = match v3 {
+        let i: CustomInner -> IntWrapper { "int" }
+        let s: CustomInner -> StringWrapper { "string" }
+        BoolWrapper { "bool" }
+        else { "else" }
+      };
+
+      assert(r1 == "int", "chain match - custom types - multiple branches (int)");
+      assert(r2 == "string", "chain match - custom types - multiple branches (string)");
+      assert(r3 == "bool", "chain match - custom types - multiple branches (bool)");
+    });
+
+    test("chain match - custom types - multiple branches (match operator)", () {
+      let v1: CustomOuter = IntWrapper { value: 42 };
+      let v2: CustomOuter = StringWrapper { value: "test" };
+
+      if v1 match let i: CustomInner -> IntWrapper {
+        assert(i.value == 42, "match operator - custom types - int");
+      } else if v1 match let s: CustomInner -> StringWrapper {
+        assert(false, "should not match string");
+      } else {
+        assert(false, "should match int");
+      }
+
+      if v2 match let i: CustomInner -> IntWrapper {
+        assert(false, "should not match int");
+      } else if v2 match let s: CustomInner -> StringWrapper {
+        assert(s.value == "test", "match operator - custom types - string");
+      } else {
+        assert(false, "should match string");
+      }
+    });
+
+    test("chain match - custom types - three levels", () {
+      let v: CustomLevel3 = IntWrapper { value: 42 };
+      match v {
+        let i: CustomLevel2 -> CustomLevel1 -> IntWrapper {
+          assert(i.value == 42, "chain match - custom types - three levels");
+        }
+        else {
+          assert(false, "expected IntWrapper via three-level chain");
+        }
+      }
+    });
+
+    test("chain match - custom types - no binding (match statement)", () {
+      let v: CustomOuter = IntWrapper { value: 42 };
+      match v {
+        CustomInner -> IntWrapper {
+          assert(true, "chain match - custom types - no binding (match statement)");
+        }
+        else {
+          assert(false, "expected IntWrapper via chain");
+        }
+      }
+    });
+
+    test("chain match - custom types - no binding (match expression)", () {
+      let v: CustomOuter = IntWrapper { value: 42 };
+      let result = match v {
+        CustomInner -> IntWrapper { 42 }
+        else { -1 }
+      };
+      assert(result == 42, "chain match - custom types - no binding (match expression)");
+    });
+
+    test("chain match - custom types - no binding (match operator)", () {
+      let v: CustomOuter = IntWrapper { value: 42 };
+      if v match CustomInner -> IntWrapper {
+        assert(true, "chain match - custom types - no binding (match operator)");
+      } else {
+        assert(false, "expected IntWrapper via match operator");
+      }
+    });
+
+    test("chain match - custom types - no binding - multiple branches (match statement)", () {
+      let v1: CustomOuter = IntWrapper { value: 42 };
+      let v2: CustomOuter = StringWrapper { value: "test" };
+      let v3: CustomOuter = BoolWrapper { value: true };
+
+      match v1 {
+        CustomInner -> IntWrapper {
+          assert(true, "chain match - no binding - int branch");
+        }
+        CustomInner -> StringWrapper {
+          assert(false, "should not match string");
+        }
+        BoolWrapper {
+          assert(false, "should not match bool");
+        }
+        else {
+          assert(false, "should match");
+        }
+      }
+
+      match v2 {
+        CustomInner -> IntWrapper {
+          assert(false, "should not match int");
+        }
+        CustomInner -> StringWrapper {
+          assert(true, "chain match - no binding - string branch");
+        }
+        BoolWrapper {
+          assert(false, "should not match bool");
+        }
+        else {
+          assert(false, "should match");
+        }
+      }
+
+      match v3 {
+        CustomInner -> IntWrapper {
+          assert(false, "should not match int");
+        }
+        CustomInner -> StringWrapper {
+          assert(false, "should not match string");
+        }
+        BoolWrapper {
+          assert(true, "chain match - no binding - bool branch");
+        }
+        else {
+          assert(false, "should match");
+        }
+      }
+    });
+
+    test("chain match - custom types - no binding - multiple branches (match expression)", () {
+      let v1: CustomOuter = IntWrapper { value: 42 };
+      let v2: CustomOuter = StringWrapper { value: "test" };
+      let v3: CustomOuter = BoolWrapper { value: true };
+
+      let r1 = match v1 {
+        CustomInner -> IntWrapper { "int" }
+        CustomInner -> StringWrapper { "string" }
+        BoolWrapper { "bool" }
+        else { "else" }
+      };
+
+      let r2 = match v2 {
+        CustomInner -> IntWrapper { "int" }
+        CustomInner -> StringWrapper { "string" }
+        BoolWrapper { "bool" }
+        else { "else" }
+      };
+
+      let r3 = match v3 {
+        CustomInner -> IntWrapper { "int" }
+        CustomInner -> StringWrapper { "string" }
+        BoolWrapper { "bool" }
+        else { "else" }
+      };
+
+      assert(r1 == "int", "chain match - no binding - multiple branches (int)");
+      assert(r2 == "string", "chain match - no binding - multiple branches (string)");
+      assert(r3 == "bool", "chain match - no binding - multiple branches (bool)");
+    });
+
+    test("chain match - custom types - no binding - multiple branches (match operator)", () {
+      let v1: CustomOuter = IntWrapper { value: 42 };
+      let v2: CustomOuter = StringWrapper { value: "test" };
+
+      if v1 match CustomInner -> IntWrapper {
+        assert(true, "match operator - no binding - int");
+      } else if v1 match CustomInner -> StringWrapper {
+        assert(false, "should not match string");
+      } else {
+        assert(false, "should match int");
+      }
+
+      if v2 match CustomInner -> IntWrapper {
+        assert(false, "should not match int");
+      } else if v2 match CustomInner -> StringWrapper {
+        assert(true, "match operator - no binding - string");
+      } else {
+        assert(false, "should match string");
+      }
+    });
+
+    test("chain match - custom types - no binding - three levels", () {
+      let v: CustomLevel3 = IntWrapper { value: 42 };
+      match v {
+        CustomLevel2 -> CustomLevel1 -> IntWrapper {
+          assert(true, "chain match - no binding - three levels");
+        }
+        else {
+          assert(false, "expected IntWrapper via three-level chain");
+        }
+      }
+    });
+
+    test("chain match - custom types - infix match operator with chain - int", () {
+      let v: CustomOuter = IntWrapper { value: 42 };
+      if v match let i: CustomInner -> IntWrapper {
+        assert(i.value == 42, "infix match operator with chain - custom types - int");
+      } else {
+        assert(false, "expected IntWrapper via infix match");
+      }
+    });
+
+    test("chain match - custom types - infix match operator with chain - string", () {
+      let v: CustomOuter = StringWrapper { value: "test" };
+      if v match let s: CustomInner -> StringWrapper {
+        assert(s.value == "test", "infix match operator with chain - custom types - string");
+      } else {
+        assert(false, "expected StringWrapper via infix match");
+      }
+    });
+
+    test("chain match - custom types - infix match operator with chain - no binding - int", () {
+      let v: CustomOuter = IntWrapper { value: 42 };
+      if v match CustomInner -> IntWrapper {
+        assert(true, "infix match operator with chain - no binding - custom types - int");
+      } else {
+        assert(false, "expected IntWrapper via infix match");
+      }
+    });
+
+    test("chain match - custom types - infix match operator with chain - no binding - string", () {
+      let v: CustomOuter = StringWrapper { value: "test" };
+      if v match CustomInner -> StringWrapper {
+        assert(true, "infix match operator with chain - no binding - custom types - string");
+      } else {
+        assert(false, "expected StringWrapper via infix match");
+      }
+    });
+
+    test("chain match - single level (match statement)", () {
+      let v: OuterUnion = 42;
+      match v {
+        let i: InnerUnion -> int {
+          assert(i == 42, "chain match - single level (match statement)");
+        }
+        else {
+          assert(false, "expected int via chain");
+        }
+      }
+    });
+
+    test("chain match - single level (match expression)", () {
+      let v: OuterUnion = 42;
+      let result = match v {
+        let i: InnerUnion -> int { i }
+        else { -1 }
+      };
+      assert(result == 42, "chain match - single level (match expression)");
+    });
+
+    test("chain match - single level (match operator)", () {
+      let v: OuterUnion = 42;
+      if v match let i: InnerUnion -> int {
+        assert(i == 42, "chain match - single level (match operator)");
+      } else {
+        assert(false, "expected int via match operator");
+      }
+    });
+
+    test("chain match - multiple branches (match statement)", () {
+      let v1: OuterUnion = 42;
+      let v2: OuterUnion = "test";
+      let v3: OuterUnion = true;
+
+      match v1 {
+        let i: InnerUnion -> int {
+          assert(i == 42, "chain match - int branch");
+        }
+        let s: InnerUnion -> string {
+          assert(false, "should not match string");
+        }
+        bool {
+          assert(false, "should not match bool");
+        }
+        else {
+          assert(false, "should match");
+        }
+      }
+
+      match v2 {
+        let i: InnerUnion -> int {
+          assert(false, "should not match int");
+        }
+        let s: InnerUnion -> string {
+          assert(s == "test", "chain match - string branch");
+        }
+        bool {
+          assert(false, "should not match bool");
+        }
+        else {
+          assert(false, "should match");
+        }
+      }
+
+      match v3 {
+        let i: InnerUnion -> int {
+          assert(false, "should not match int");
+        }
+        let s: InnerUnion -> string {
+          assert(false, "should not match string");
+        }
+        bool {
+          assert(true, "chain match - bool branch");
+        }
+        else {
+          assert(false, "should match");
+        }
+      }
+    });
+
+    test("chain match - multiple branches (match expression)", () {
+      let v1: OuterUnion = 42;
+      let v2: OuterUnion = "test";
       let v3: OuterUnion = true;
 
       let r1 = match v1 {
-        InnerUnion -> IntWrapper { "int" }
-        InnerUnion -> StringWrapper { "string" }
+        let i: InnerUnion -> int { "int" }
+        let s: InnerUnion -> string { "string" }
         bool { "bool" }
         else { "else" }
       };
 
       let r2 = match v2 {
-        InnerUnion -> IntWrapper { "int" }
-        InnerUnion -> StringWrapper { "string" }
+        let i: InnerUnion -> int { "int" }
+        let s: InnerUnion -> string { "string" }
         bool { "bool" }
         else { "else" }
       };
 
       let r3 = match v3 {
-        InnerUnion -> IntWrapper { "int" }
-        InnerUnion -> StringWrapper { "string" }
+        let i: InnerUnion -> int { "int" }
+        let s: InnerUnion -> string { "string" }
         bool { "bool" }
         else { "else" }
       };
@@ -194,14 +577,180 @@ open func test_nested_union() {
       assert(r3 == "bool", "chain match - multiple branches (bool)");
     });
 
+    test("chain match - multiple branches (match operator)", () {
+      let v1: OuterUnion = 42;
+      let v2: OuterUnion = "test";
+
+      if v1 match let i: InnerUnion -> int {
+        assert(i == 42, "match operator - int");
+      } else if v1 match let s: InnerUnion -> string {
+        assert(false, "should not match string");
+      } else {
+        assert(false, "should match int");
+      }
+
+      if v2 match let i: InnerUnion -> int {
+        assert(false, "should not match int");
+      } else if v2 match let s: InnerUnion -> string {
+        assert(s == "test", "match operator - string");
+      } else {
+        assert(false, "should match string");
+      }
+    });
+
     test("chain match - three levels", () {
-      let v: Level3 = IntBox { value: 42 };
+      let v: Level3 = 42;
       match v {
-        Level2 -> Level1 -> IntBox {
-          assert(true, "chain match - three levels");
+        let i: Level2 -> Level1 -> int {
+          assert(i == 42, "chain match - three levels");
         }
         else {
-          assert(false, "expected IntBox via three-level chain");
+          assert(false, "expected int via three-level chain");
+        }
+      }
+    });
+
+    test("chain match - no binding (match statement)", () {
+      let v: OuterUnion = 42;
+      match v {
+        InnerUnion -> int {
+          assert(true, "chain match - no binding (match statement)");
+        }
+        else {
+          assert(false, "expected int via chain");
+        }
+      }
+    });
+
+    test("chain match - no binding (match expression)", () {
+      let v: OuterUnion = 42;
+      let result = match v {
+        InnerUnion -> int { 42 }
+        else { -1 }
+      };
+      assert(result == 42, "chain match - no binding (match expression)");
+    });
+
+    test("chain match - no binding (match operator)", () {
+      let v: OuterUnion = 42;
+      if v match InnerUnion -> int {
+        assert(true, "chain match - no binding (match operator)");
+      } else {
+        assert(false, "expected int via match operator");
+      }
+    });
+
+    test("chain match - no binding - multiple branches (match statement)", () {
+      let v1: OuterUnion = 42;
+      let v2: OuterUnion = "test";
+      let v3: OuterUnion = true;
+
+      match v1 {
+        InnerUnion -> int {
+          assert(true, "chain match - no binding - int branch");
+        }
+        InnerUnion -> string {
+          assert(false, "should not match string");
+        }
+        bool {
+          assert(false, "should not match bool");
+        }
+        else {
+          assert(false, "should match");
+        }
+      }
+
+      match v2 {
+        InnerUnion -> int {
+          assert(false, "should not match int");
+        }
+        InnerUnion -> string {
+          assert(true, "chain match - no binding - string branch");
+        }
+        bool {
+          assert(false, "should not match bool");
+        }
+        else {
+          assert(false, "should match");
+        }
+      }
+
+      match v3 {
+        InnerUnion -> int {
+          assert(false, "should not match int");
+        }
+        InnerUnion -> string {
+          assert(false, "should not match string");
+        }
+        bool {
+          assert(true, "chain match - no binding - bool branch");
+        }
+        else {
+          assert(false, "should match");
+        }
+      }
+    });
+
+    test("chain match - no binding - multiple branches (match expression)", () {
+      let v1: OuterUnion = 42;
+      let v2: OuterUnion = "test";
+      let v3: OuterUnion = true;
+
+      let r1 = match v1 {
+        InnerUnion -> int { "int" }
+        InnerUnion -> string { "string" }
+        bool { "bool" }
+        else { "else" }
+      };
+
+      let r2 = match v2 {
+        InnerUnion -> int { "int" }
+        InnerUnion -> string { "string" }
+        bool { "bool" }
+        else { "else" }
+      };
+
+      let r3 = match v3 {
+        InnerUnion -> int { "int" }
+        InnerUnion -> string { "string" }
+        bool { "bool" }
+        else { "else" }
+      };
+
+      assert(r1 == "int", "chain match - no binding - multiple branches (int)");
+      assert(r2 == "string", "chain match - no binding - multiple branches (string)");
+      assert(r3 == "bool", "chain match - no binding - multiple branches (bool)");
+    });
+
+    test("chain match - no binding - multiple branches (match operator)", () {
+      let v1: OuterUnion = 42;
+      let v2: OuterUnion = "test";
+
+      if v1 match InnerUnion -> int {
+        assert(true, "match operator - no binding - int");
+      } else if v1 match InnerUnion -> string {
+        assert(false, "should not match string");
+      } else {
+        assert(false, "should match int");
+      }
+
+      if v2 match InnerUnion -> int {
+        assert(false, "should not match int");
+      } else if v2 match InnerUnion -> string {
+        assert(true, "match operator - no binding - string");
+      } else {
+        assert(false, "should match string");
+      }
+    });
+
+    test("chain match - no binding - three levels", () {
+      let v: Level3 = 42;
+      match v {
+        Level2 -> Level1 -> int {
+          assert(true, "chain match - no binding - three levels");
+        }
+        else {
+          assert(false, "expected int via three-level chain");
         }
       }
     });
@@ -296,21 +845,39 @@ open func test_nested_union() {
       assert(result == 99, "callable-form spec in union - int branch");
     });
 
-    test("infix match operator with chain", () {
-      let v: OuterUnion = IntWrapper { value: 42 };
-      if v match InnerUnion -> IntWrapper {
-        assert(true, "infix match operator with chain");
+    test("infix match operator with chain - int", () {
+      let v: OuterUnion = 42;
+      if v match let i: InnerUnion -> int {
+        assert(i == 42, "infix match operator with chain - int");
       } else {
-        assert(false, "expected IntWrapper via infix match");
+        assert(false, "expected int via infix match");
       }
     });
 
     test("infix match operator with chain - string", () {
-      let v: OuterUnion = StringWrapper { value: "test" };
-      if v match InnerUnion -> StringWrapper {
-        assert(true, "infix match operator with chain - string");
+      let v: OuterUnion = "test";
+      if v match let s: InnerUnion -> string {
+        assert(s == "test", "infix match operator with chain - string");
       } else {
-        assert(false, "expected StringWrapper via infix match");
+        assert(false, "expected string via infix match");
+      }
+    });
+
+    test("infix match operator with chain - no binding - int", () {
+      let v: OuterUnion = 42;
+      if v match InnerUnion -> int {
+        assert(true, "infix match operator with chain - no binding - int");
+      } else {
+        assert(false, "expected int via infix match");
+      }
+    });
+
+    test("infix match operator with chain - no binding - string", () {
+      let v: OuterUnion = "test";
+      if v match InnerUnion -> string {
+        assert(true, "infix match operator with chain - no binding - string");
+      } else {
+        assert(false, "expected string via infix match");
       }
     });
 
@@ -319,11 +886,11 @@ open func test_nested_union() {
       match v {
         let inner: InnerUnion {
           match inner {
-            IntWrapper {
+            int {
               assert(true, "nested union default value is first leaf");
             }
             else {
-              assert(false, "expected IntWrapper as default");
+              assert(false, "expected int as default");
             }
           }
         }
