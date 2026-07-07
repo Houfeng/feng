@@ -19,6 +19,7 @@ func main(args: string[]) {
       test_spec();
       test_fit();
       test_union();
+      test_nested_union();
       test_exception();
       test_array();
       test_generic();

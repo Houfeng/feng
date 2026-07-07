@@ -1,0 +1,336 @@
+module fcts_bin;
+
+import std.io;
+import std.test;
+
+// 基础嵌套联合类型（使用自定义类型而非原始类型）
+type IntWrapper {
+    let value: int;
+}
+
+type StringWrapper {
+    let value: string;
+}
+
+spec InnerUnion: IntWrapper | StringWrapper;
+spec OuterUnion: InnerUnion | bool;
+
+// 三层嵌套
+type IntBox {
+    let value: int;
+}
+
+type StringBox {
+    let value: string;
+}
+
+type BoolBox {
+    let value: bool;
+}
+
+type F64Box {
+    let value: f64;
+}
+
+spec Level1: IntBox | StringBox;
+spec Level2: Level1 | BoolBox;
+spec Level3: Level2 | F64Box;
+
+// Object-form spec 作为联合成员
+spec Greetable {
+    func greet(): string;
+}
+
+type GreeterUser: Greetable {
+    let name: string;
+
+    func greet(): string {
+        return "Hello, " + self.name;
+    }
+}
+
+spec GreetableOrString: Greetable | string;
+spec NestedGreetable: GreetableOrString | int;
+
+// Callable-form spec 作为联合成员
+spec int_transformer(input: int): int;
+
+func double_value(x: int): int {
+    return x * 2;
+}
+
+spec CallableOrInt: int_transformer | int;
+
+// 用于测试歧义检测（暂时跳过，需要至少2个成员）
+// spec AmbigA: int | string;
+// spec AmbigB: int | bool;
+// spec AmbigC: AmbigA | AmbigB;
+
+/** 嵌套联合类型测试 */
+open func test_nested_union() {
+  describe("nested_union", () {
+    test("nested union - assign leaf type to outer", () {
+      let v: OuterUnion = IntWrapper { value: 42 };
+      match v {
+        let inner: InnerUnion {
+          match inner {
+            IntWrapper {
+              assert(true, "nested union - assign leaf type to outer");
+            }
+            else {
+              assert(false, "expected IntWrapper in inner");
+            }
+          }
+        }
+        else {
+          assert(false, "expected InnerUnion");
+        }
+      }
+    });
+
+    test("nested union - assign inner union to outer", () {
+      let inner: InnerUnion = StringWrapper { value: "hello" };
+      let v: OuterUnion = inner;
+      match v {
+        let iu: InnerUnion {
+          assert(true, "nested union - assign inner union to outer");
+        }
+        else {
+          assert(false, "expected InnerUnion");
+        }
+      }
+    });
+
+    test("nested union - assign other member", () {
+      let v: OuterUnion = true;
+      match v {
+        bool {
+          assert(true, "nested union - assign other member");
+        }
+        else {
+          assert(false, "expected bool");
+        }
+      }
+    });
+
+    test("three-level nested union", () {
+      let v: Level3 = IntBox { value: 42 };
+      match v {
+        let l2: Level2 {
+          match l2 {
+            let l1: Level1 {
+              match l1 {
+                IntBox {
+                  assert(true, "three-level nested union");
+                }
+                else {
+                  assert(false, "expected IntBox at level 1");
+                }
+              }
+            }
+            else {
+              assert(false, "expected Level1 at level 2");
+            }
+          }
+        }
+        else {
+          assert(false, "expected Level2 at level 3");
+        }
+      }
+    });
+
+    test("chain match - single level", () {
+      let v: OuterUnion = IntWrapper { value: 42 };
+      match v {
+        InnerUnion -> IntWrapper {
+          assert(true, "chain match - single level");
+        }
+        else {
+          assert(false, "expected IntWrapper via chain");
+        }
+      }
+    });
+
+    test("chain match - with binding", () {
+      let v: OuterUnion = IntWrapper { value: 100 };
+      match v {
+        InnerUnion -> IntWrapper {
+          assert(true, "chain match - with binding");
+        }
+        else {
+          assert(false, "expected IntWrapper with binding");
+        }
+      }
+    });
+
+    test("chain match - multiple branches", () {
+      let v1: OuterUnion = IntWrapper { value: 42 };
+      let v2: OuterUnion = StringWrapper { value: "test" };
+      let v3: OuterUnion = true;
+
+      let r1 = match v1 {
+        InnerUnion -> IntWrapper { "int" }
+        InnerUnion -> StringWrapper { "string" }
+        bool { "bool" }
+        else { "else" }
+      };
+
+      let r2 = match v2 {
+        InnerUnion -> IntWrapper { "int" }
+        InnerUnion -> StringWrapper { "string" }
+        bool { "bool" }
+        else { "else" }
+      };
+
+      let r3 = match v3 {
+        InnerUnion -> IntWrapper { "int" }
+        InnerUnion -> StringWrapper { "string" }
+        bool { "bool" }
+        else { "else" }
+      };
+
+      assert(r1 == "int", "chain match - multiple branches (int)");
+      assert(r2 == "string", "chain match - multiple branches (string)");
+      assert(r3 == "bool", "chain match - multiple branches (bool)");
+    });
+
+    test("chain match - three levels", () {
+      let v: Level3 = IntBox { value: 42 };
+      match v {
+        Level2 -> Level1 -> IntBox {
+          assert(true, "chain match - three levels");
+        }
+        else {
+          assert(false, "expected IntBox via three-level chain");
+        }
+      }
+    });
+
+    test("object-form spec in union - direct", () {
+      let user: GreeterUser = GreeterUser { name: "Alice" };
+      let greeter: Greetable = user;
+      let v: GreetableOrString = greeter;
+      let result = match v {
+        let g: Greetable { g.greet() }
+        let s: string { s }
+        else { "else" }
+      };
+      assert(result == "Hello, Alice", "object-form spec in union - direct");
+    });
+
+    test("object-form spec in union - string branch", () {
+      let v: GreetableOrString = "direct";
+      let result = match v {
+        let g: Greetable { g.greet() }
+        let s: string { s }
+        else { "else" }
+      };
+      assert(result == "direct", "object-form spec in union - string branch");
+    });
+
+    test("object-form spec in nested union", () {
+      let user: GreeterUser = GreeterUser { name: "Bob" };
+      let greeter: Greetable = user;
+      let gs: GreetableOrString = greeter;
+      let v: NestedGreetable = gs;
+      let result = match v {
+        let ng: GreetableOrString {
+          match ng {
+            let g: Greetable { "got greeter" }
+            let s: string { "got string" }
+            else { "else" }
+          }
+        }
+        int { "got int" }
+        else { "else" }
+      };
+      assert(result == "got greeter", "object-form spec in nested union");
+    });
+
+    test("object-form spec in nested union - string", () {
+      let gs: GreetableOrString = "nested";
+      let v: NestedGreetable = gs;
+      let result = match v {
+        let ng: GreetableOrString {
+          match ng {
+            let g: Greetable { "got greeter" }
+            let s: string { "got string" }
+            else { "else" }
+          }
+        }
+        int { "got int" }
+        else { "else" }
+      };
+      assert(result == "got string", "object-form spec in nested union - string");
+    });
+
+    test("callable-form spec in union (lambda)", () {
+      let transformer: int_transformer = (x: int) -> x * 2;
+      let v: CallableOrInt = transformer;
+      let result = match v {
+        let t: int_transformer { t(21) }
+        let i: int { i }
+        else { -1 }
+      };
+      assert(result == 42, "callable-form spec in union (lambda)");
+    });
+
+    test("callable-form spec in union (function)", () {
+      let transformer: int_transformer = double_value;
+      let v: CallableOrInt = transformer;
+      let result = match v {
+        let t: int_transformer { t(21) }
+        let i: int { i }
+        else { -1 }
+      };
+      assert(result == 42, "callable-form spec in union (function)");
+    });
+
+    test("callable-form spec in union - int branch", () {
+      let v: CallableOrInt = 99;
+      let result = match v {
+        let t: int_transformer { t(0) }
+        let i: int { i }
+        else { -1 }
+      };
+      assert(result == 99, "callable-form spec in union - int branch");
+    });
+
+    test("infix match operator with chain", () {
+      let v: OuterUnion = IntWrapper { value: 42 };
+      if v match InnerUnion -> IntWrapper {
+        assert(true, "infix match operator with chain");
+      } else {
+        assert(false, "expected IntWrapper via infix match");
+      }
+    });
+
+    test("infix match operator with chain - string", () {
+      let v: OuterUnion = StringWrapper { value: "test" };
+      if v match InnerUnion -> StringWrapper {
+        assert(true, "infix match operator with chain - string");
+      } else {
+        assert(false, "expected StringWrapper via infix match");
+      }
+    });
+
+    test("nested union default value", () {
+      let v: OuterUnion;
+      match v {
+        let inner: InnerUnion {
+          match inner {
+            IntWrapper {
+              assert(true, "nested union default value is first leaf");
+            }
+            else {
+              assert(false, "expected IntWrapper as default");
+            }
+          }
+        }
+        else {
+          assert(false, "expected InnerUnion as default");
+        }
+      }
+    });
+  });
+}
