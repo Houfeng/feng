@@ -114,7 +114,7 @@ spec Comparable<T>: Eq<T> & Ord<T>;
 
 ### 2.3 约束
 
-- 成员 spec **必须全部是 object-form spec**
+- 成员 spec **必须全部是 object-form spec 或 Intersection-form spec**，如果成员是 IntersectionType 将进行展开
 - 不支持交叉与 union 混合：`spec T: A & (B | C)` 不支持
 - 交叉类型不能作为 union 成员：`spec U: (A & B) | string` 不支持
 - **不允许** `type X: IntersectionType`（显式声明满足交叉类型），满足性从成员 spec 的名义满足自动推导
@@ -269,7 +269,7 @@ struct {
 
 ### 6.2 Semantic Analysis
 
-1. **验证成员**：所有成员必须是 object-form spec
+1. **验证成员**：所有成员必须是 object-form spec 或 Intersection-form spec
 2. **展平**：多层交叉在定义时展平并去重
 3. **冲突检测**：复用 `detect_cross_spec_method_conflicts`
 4. **满足性检查**：对每个使用交叉类型的位置，检查值类型是否名义满足所有成员（复用 `subject_key_satisfies_spec_decl`）
@@ -341,9 +341,9 @@ struct {
   - 测试：`test/symbol/` 新增 round-trip 测试，写入后读取验证 AST 一致
 
 - [ ] **9.3 语义验证：成员类型检查**
-  - 验证所有成员必须是 object-form spec，否则报错
+  - 验证所有成员必须是 object-form spec 或 Intersection-form spec，否则报错
   - 多层交叉在定义时展平并去重（`spec U: T & C` 展平为 `[A, B, C]`）
-  - 测试：`test/semantic/` 新增诊断测试，验证非法成员（union/callable/intersection）触发错误
+  - 测试：`test/semantic/` 新增诊断测试，验证非法成员（union/callable）触发错误
 
 - [ ] **9.4 语义分析：方法集合并与冲突检测**
   - 收集所有成员 spec 的方法集（含 parent spec 传递闭包），去重
