@@ -49,6 +49,38 @@ func print_display_union(value: DisplayUnion): string {
   };
 }
 
+// 测试用例 1: 联合类型（无嵌套）作为泛型约束
+spec SimpleUnion: int | string;
+
+func identity_union<T: SimpleUnion>(value: T): T {
+  return value;
+}
+
+// 测试用例 2: 联合类型（有嵌套），父级作为约束，调用点传入子类型
+spec ChildUnion: int | bool;
+spec ParentUnion: ChildUnion | string;
+
+func identity_parent<T: ParentUnion>(value: T): T {
+  return value;
+}
+
+// 测试用例 3: object-form spec，A 作为泛型约束，调用时使用 B
+spec ObjectA {
+  func get_value(): int;
+}
+
+type ObjectB: ObjectA {
+  let value: int;
+
+  func get_value(): int {
+    return self.value;
+  }
+}
+
+func use_object_a<T: ObjectA>(item: T): int {
+  return item.get_value();
+}
+
 /** 联合类型测试 */
 open func test_union() {
   describe("union", () {
@@ -150,6 +182,65 @@ open func test_union() {
         else { "else" }
       };
       assert(err_result == "error-ok", "generic union (error branch)");
+    });
+
+    // test("simple union as generic constraint (int)", () {
+    //   let v: SimpleUnion = 42;
+    //   let result: SimpleUnion = identity_union(v);
+    //   match result {
+    //     int {
+    //       assert(true, "simple union as generic constraint (int)");
+    //     }
+    //     else {
+    //       assert(false, "simple union as generic constraint (int) - expected int");
+    //     }
+    //   }
+    // });
+
+    // test("simple union as generic constraint (string)", () {
+    //   let v: SimpleUnion = "hello";
+    //   let result: SimpleUnion = identity_union(v);
+    //   match result {
+    //     string {
+    //       assert(true, "simple union as generic constraint (string)");
+    //     }
+    //     else {
+    //       assert(false, "simple union as generic constraint (string) - expected string");
+    //     }
+    //   }
+    // });
+
+    // test("nested union - parent constraint with child type", () {
+    //   let child: ChildUnion = 42;
+    //   let parent: ParentUnion = child;
+    //   let result: ParentUnion = identity_parent(parent);
+    //   match result {
+    //     ChildUnion {
+    //       assert(true, "nested union - parent constraint with child type");
+    //     }
+    //     else {
+    //       assert(false, "nested union - parent constraint with child type - expected ChildUnion");
+    //     }
+    //   }
+    // });
+
+    // test("nested union - parent constraint with string", () {
+    //   let v: ParentUnion = "test";
+    //   let result: ParentUnion = identity_parent(v);
+    //   match result {
+    //     string {
+    //       assert(true, "nested union - parent constraint with string");
+    //     }
+    //     else {
+    //       assert(false, "nested union - parent constraint with string - expected string");
+    //     }
+    //   }
+    // });
+
+    test("object-form spec as generic constraint", () {
+      let b: ObjectB = ObjectB { value: 123 };
+      let result: int = use_object_a(b);
+      assert(result == 123, "object-form spec as generic constraint");
     });
   });
 }
