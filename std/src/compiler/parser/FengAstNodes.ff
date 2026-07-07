@@ -414,15 +414,40 @@ open type RangeExpr {
   let end: Expression;
 }
 
-open type MatchChainBinding {
+/**
+ * match 链式匹配, 用嵌套联合类型多级匹配
+ *
+ * match body {
+ *   Expression->IdentifierExpr { ... }
+ *   Expression->BooleanLiteralExpr { ... }
+ *   Expression { ... }
+ *   Block { ... }
+ *   else { ... }
+ * }
+ *
+ */
+open type MatchChain {
+  let location: FengLocation;
+  let typeRefs: TypeReference[];
+}
+
+/**
+ * match 绑定声明：let name: Type
+ * 也支持将多级联合类型的匹配结果绑定到一个变量上
+ *
+ * match body {
+ *   // 将多级匹配结果绑定到 x，并进入分支
+ *   let x: Expression->IdentifierExpr { ... }
+ *   // 将单级匹配结果绑定到 b，并进入分支
+ *   let b: Block { ... }
+ *   else { ... }
+ * }
+ *
+ */
+open type MatchBinding {
   let location: FengLocation;
   let name: StringSpan;
   let mutability: Mutability;
-}
-
-open type MatchChain {
-  let location: FengLocation;
-  let binding: Option<MatchChainBinding>;
   let typeRefs: TypeReference[];
 }
 
@@ -437,7 +462,8 @@ open spec MatchTarget: IntegerLiteralExpr[]
 | MemberAccessExpr[]
 | TypeReference[]
 | RangeExpr[]
-| MatchChain;
+| MatchChain[] // 多级匹配，也支持逻列多个件，匹配其一，即可进入分支
+| MatchBinding; // 一个分支仅支持一个绑定声明, 避免多条件满足其一，无法保证绑定的安全可用
 
 /**
  * 匹配运算符表达式：value match pattern1 | pattern2 | ...
