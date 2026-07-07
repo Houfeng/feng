@@ -106,6 +106,12 @@ open func test_spec() {
       assert(dp.to_string() == "item" && dp.detail() == "item: a test item", "spec inheritance");
     });
 
+    test("concrete type to ancestor spec", () {
+      let detail = DetailItem { label: "item", desc: "description" };
+      let p: Printable = detail;  // DetailItem → DetailPrintable → Printable
+      assert(p.to_string() == "item", "concrete type to ancestor spec");
+    });
+
     test("callable-form spec", () {
       let t: Transformer = (x: int) -> x * 2;
       assert(t(5) == 10, "callable-form spec");
@@ -176,6 +182,8 @@ open func test_spec() {
       - 在 witness 表中添加父 spec witness 的引用（列表，因为父级可能多个）
       - 编译期，在转换点检查父子关系，可在编译期提示非法转换（非子到父的情况）
       - 运行时，从子 witness 表找到父 witness 表（列表中的某个元素），需要递归向上查找（有运行时开销）
+
+      注意： 并且还需要在调用点把 x 和所有父级及祖先的 witness 都生成并建立好引用关系（也有编译期开销）
     */
 
     // test("child spec assignment to parent spec", () {
