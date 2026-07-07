@@ -142,7 +142,7 @@ T.methods = T1.methods ∪ T2.methods
 | 同名、同参数类型、**不同返回类型** | 编译错误 |
 | 同名、**不同参数类型或参数数量** | 允许（重载） |
 
-冲突检测复用现有 `detect_cross_spec_method_conflicts` 逻辑（analyzer.c:24369），该函数已实现上述规则。
+冲突检测复用现有 `detect_cross_spec_method_conflicts` 逻辑（analyzer.c:24369 附近，随变更行号可能偏移，实施时必须以实际代码为准），该函数已实现上述规则。
 
 ### 3.3 结构性满足
 
@@ -313,9 +313,9 @@ struct {
 
 ## 8 已确定事项
 
-1. **`type X: IntersectionType` 不允许**：现有 `AE0615` 验证（`analyzer.c:24754`）只允许 object-form spec，交叉类型（`FENG_SPEC_FORM_INTERSECTION`）自然被拒绝。**原因**：`type X:` 后都是名义匹配的 object-form spec，如果允许交叉类型（结构性匹配），会导致语义混乱
+1. **`type X: IntersectionType` 不允许**：现有 `AE0615` 验证（`analyzer.c:24754` 附近，随变更行号可能偏移，实施时必须以实际代码为准）只允许 object-form spec，交叉类型（`FENG_SPEC_FORM_INTERSECTION`）自然被拒绝。**原因**：`type X:` 后都是名义匹配的 object-form spec，如果允许交叉类型（结构性匹配），会导致语义混乱
 
-2. **多层交叉**：`spec T: A & B; spec U: T & C;` 等价于 `A & B & C`，可在编译期展平并去重
+2. **多层交叉**：`spec T: A & B; spec U: T & C;` 等价于 `A & B & C`，在定义时展平并去重（编译期），以确定 witness 结构
 
 3. **交叉类型作为泛型约束时的共享体代码生成**：与 object-form spec 无差别，无需改动（共享体通过 witness 调用方法，merged witness 与单个 spec 的 witness 结构一致）
 
