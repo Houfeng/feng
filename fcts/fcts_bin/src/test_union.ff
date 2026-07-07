@@ -184,31 +184,31 @@ open func test_union() {
       assert(err_result == "error-ok", "generic union (error branch)");
     });
 
-    // test("simple union as generic constraint (int)", () {
-    //   let v: SimpleUnion = 42;
-    //   let result: SimpleUnion = identity_union(v);
-    //   match result {
-    //     int {
-    //       assert(true, "simple union as generic constraint (int)");
-    //     }
-    //     else {
-    //       assert(false, "simple union as generic constraint (int) - expected int");
-    //     }
-    //   }
-    // });
+    test("simple union as generic constraint (int)", () {
+      let v: SimpleUnion = 42;
+      let result: SimpleUnion = identity_union(v);
+      match result {
+        int {
+          assert(true, "simple union as generic constraint (int)");
+        }
+        else {
+          assert(false, "simple union as generic constraint (int) - expected int");
+        }
+      }
+    });
 
-    // test("simple union as generic constraint (string)", () {
-    //   let v: SimpleUnion = "hello";
-    //   let result: SimpleUnion = identity_union(v);
-    //   match result {
-    //     string {
-    //       assert(true, "simple union as generic constraint (string)");
-    //     }
-    //     else {
-    //       assert(false, "simple union as generic constraint (string) - expected string");
-    //     }
-    //   }
-    // });
+    test("simple union as generic constraint (string)", () {
+      let v: SimpleUnion = "hello";
+      let result: SimpleUnion = identity_union(v);
+      match result {
+        string {
+          assert(true, "simple union as generic constraint (string)");
+        }
+        else {
+          assert(false, "simple union as generic constraint (string) - expected string");
+        }
+      }
+    });
 
     // test("nested union - parent constraint with child type", () {
     //   let child: ChildUnion = 42;

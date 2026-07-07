@@ -6837,11 +6837,11 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         buf_append_fmt(&ib, "FengSpecAggInit__%s__%s", owner_mangle, symbol.data);
         s->c_aggregate_init_fn_name = ib.data;
 
-        if (s->form == FENG_SPEC_FORM_OBJECT) {
-            Buf wb; buf_init(&wb);
-            buf_append_fmt(&wb, "FengSpecWitness__%s__%s", owner_mangle, symbol.data);
-            s->c_witness_struct_name = wb.data;
+        Buf wb; buf_init(&wb);
+        buf_append_fmt(&wb, "FengSpecWitness__%s__%s", owner_mangle, symbol.data);
+        s->c_witness_struct_name = wb.data;
 
+        if (s->form == FENG_SPEC_FORM_OBJECT) {
             Buf dssb; buf_init(&dssb);
             buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
                            owner_mangle, symbol.data);
@@ -6900,7 +6900,7 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
             return false;
         }
     } else if (s->form == FENG_SPEC_FORM_UNION) {
-        if (!(s->feng_name && s->c_value_struct_name &&
+        if (!(s->feng_name && s->c_value_struct_name && s->c_witness_struct_name &&
               s->c_aggregate_desc_name && s->c_aggregate_slots_name &&
               s->c_aggregate_default_name && s->c_aggregate_init_fn_name)) {
             return false;
@@ -8674,11 +8674,11 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
         buf_append_fmt(&ib, "FengSpecAggInit__%s__%s", cg->module_mangle, san);
         s->c_aggregate_init_fn_name = ib.data;
 
-        if (s->form == FENG_SPEC_FORM_OBJECT) {
-            Buf wb; buf_init(&wb);
-            buf_append_fmt(&wb, "FengSpecWitness__%s__%s", cg->module_mangle, san);
-            s->c_witness_struct_name = wb.data;
+        Buf wb; buf_init(&wb);
+        buf_append_fmt(&wb, "FengSpecWitness__%s__%s", cg->module_mangle, san);
+        s->c_witness_struct_name = wb.data;
 
+        if (s->form == FENG_SPEC_FORM_OBJECT) {
             Buf dssb; buf_init(&dssb);
             buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
                            cg->module_mangle, san);
@@ -8734,7 +8734,7 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
             && s->c_default_subject_new_name && s->c_default_witness_name;
     }
     if (s->form == FENG_SPEC_FORM_UNION) {
-        return s->c_value_struct_name
+        return s->c_value_struct_name && s->c_witness_struct_name
             && s->c_aggregate_desc_name && s->c_aggregate_slots_name
             && s->c_aggregate_default_name && s->c_aggregate_init_fn_name;
     }
@@ -9579,6 +9579,7 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
         /* Union spec struct body is emitted by cg_emit_value_and_union_struct_bodies_sorted
          * (Pass 3.5a) which topologically sorts value types and union specs together.
          * Here we only emit a forward declaration and the descriptor extern. */
+        cg_emit_witness_struct_body(cg, s, &cg->headers);
         buf_append_fmt(&cg->headers, "struct %s;\n", s->c_value_struct_name);
         bool ext_visible = cg_user_spec_descriptor_is_externally_visible(cg, s);
         buf_append_fmt(&cg->headers,
