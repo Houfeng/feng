@@ -27115,6 +27115,9 @@ static void normalize_expr(FengExpr *expr, size_t pointer_size) {
                 for (j = 0; j < branch->label_count; ++j) {
                     if (branch->labels[j].kind == FENG_MATCH_LABEL_TYPE) {
                         normalize_type_ref(branch->labels[j].type, pointer_size);
+                        for (size_t ci = 0; ci < branch->labels[j].type_chain_count; ++ci) {
+                            normalize_type_ref(branch->labels[j].type_chain[ci], pointer_size);
+                        }
                     } else if (branch->labels[j].kind == FENG_MATCH_LABEL_VALUE) {
                         normalize_expr(branch->labels[j].value, pointer_size);
                     }
@@ -27128,6 +27131,9 @@ static void normalize_expr(FengExpr *expr, size_t pointer_size) {
             for (i = 0; i < expr->as.match_op.label_count; ++i) {
                 if (expr->as.match_op.labels[i].kind == FENG_MATCH_LABEL_TYPE) {
                     normalize_type_ref(expr->as.match_op.labels[i].type, pointer_size);
+                    for (size_t ci = 0; ci < expr->as.match_op.labels[i].type_chain_count; ++ci) {
+                        normalize_type_ref(expr->as.match_op.labels[i].type_chain[ci], pointer_size);
+                    }
                 } else if (expr->as.match_op.labels[i].kind == FENG_MATCH_LABEL_VALUE) {
                     normalize_expr(expr->as.match_op.labels[i].value, pointer_size);
                 }
@@ -27185,6 +27191,9 @@ static void normalize_stmt(FengStmt *stmt, size_t pointer_size) {
                 for (j = 0; j < branch->label_count; ++j) {
                     if (branch->labels[j].kind == FENG_MATCH_LABEL_TYPE) {
                         normalize_type_ref(branch->labels[j].type, pointer_size);
+                        for (size_t ci = 0; ci < branch->labels[j].type_chain_count; ++ci) {
+                            normalize_type_ref(branch->labels[j].type_chain[ci], pointer_size);
+                        }
                     } else if (branch->labels[j].kind == FENG_MATCH_LABEL_VALUE) {
                         normalize_expr(branch->labels[j].value, pointer_size);
                     }
