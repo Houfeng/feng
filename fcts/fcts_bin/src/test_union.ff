@@ -210,32 +210,32 @@ open func test_union() {
       }
     });
 
-    // test("nested union - parent constraint with child type", () {
-    //   let child: ChildUnion = 42;
-    //   let parent: ParentUnion = child;
-    //   let result: ParentUnion = identity_parent(parent);
-    //   match result {
-    //     ChildUnion {
-    //       assert(true, "nested union - parent constraint with child type");
-    //     }
-    //     else {
-    //       assert(false, "nested union - parent constraint with child type - expected ChildUnion");
-    //     }
-    //   }
-    // });
+    test("nested union - parent constraint with child type", () {
+      let child: ChildUnion = 42;
+      let parent: ParentUnion = child;
+      let result: ParentUnion = identity_parent(parent);
+      match result {
+        ChildUnion {
+          assert(true, "nested union - parent constraint with child type");
+        }
+        else {
+          assert(false, "nested union - parent constraint with child type - expected ChildUnion");
+        }
+      }
+    });
 
-    // test("nested union - parent constraint with string", () {
-    //   let v: ParentUnion = "test";
-    //   let result: ParentUnion = identity_parent(v);
-    //   match result {
-    //     string {
-    //       assert(true, "nested union - parent constraint with string");
-    //     }
-    //     else {
-    //       assert(false, "nested union - parent constraint with string - expected string");
-    //     }
-    //   }
-    // });
+    test("nested union - parent constraint with string", () {
+      let v: ParentUnion = "test";
+      let result: ParentUnion = identity_parent(v);
+      match result {
+        string {
+          assert(true, "nested union - parent constraint with string");
+        }
+        else {
+          assert(false, "nested union - parent constraint with string - expected string");
+        }
+      }
+    });
 
     test("object-form spec as generic constraint", () {
       let b: ObjectB = ObjectB { value: 123 };
