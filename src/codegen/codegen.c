@@ -1440,6 +1440,10 @@ static char *cg_build_chain_payload_path(CG *cg,
                                          const UserSpec *root_spec,
                                          const FengMatchLabel *label,
                                          CGType **out_deepest_type);
+static char *cg_build_label_condition(CG *cg,
+                                       const char *target_tmp,
+                                       const UserSpec *root_spec,
+                                       const FengMatchLabel *label);
 static bool cg_register_local_for_cleanup(CG *cg,
                                 const char *cname,
                                 const CGType *type,
@@ -18673,6 +18677,7 @@ static bool cg_emit_match_expr_all_throw(CG *cg, const FengExpr *e,
                  label_index < branch->label_count;
                  ++label_index) {
                 size_t member_index = 0U;
+                char *label_cond = NULL;
 
                 if (!cg_union_member_index_for_label(cg,
                                                      union_spec,
@@ -18681,10 +18686,17 @@ static bool cg_emit_match_expr_all_throw(CG *cg, const FengExpr *e,
                     ok = false;
                     break;
                 }
+                label_cond = cg_build_label_condition(cg, tgt_tmp, union_spec,
+                                                       &branch->labels[label_index]);
+                if (label_cond == NULL) {
+                    ok = false;
+                    break;
+                }
                 if (label_index != 0U) {
                     buf_append_cstr(&condition, " || ");
                 }
-                buf_append_fmt(&condition, "%s.tag == %zuU", tgt_tmp, member_index);
+                buf_append_cstr(&condition, label_cond);
+                free(label_cond);
                 if (matched_member_count == 0U) {
                     first_member_index = member_index;
                 }
@@ -18996,6 +19008,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                  label_index < branch->label_count;
                  ++label_index) {
                 size_t member_index = 0U;
+                char *label_cond = NULL;
 
                 if (!cg_union_member_index_for_label(cg,
                                                      union_spec,
@@ -19004,10 +19017,17 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                     ok = false;
                     break;
                 }
+                label_cond = cg_build_label_condition(cg, tgt_tmp, union_spec,
+                                                       &branch->labels[label_index]);
+                if (label_cond == NULL) {
+                    ok = false;
+                    break;
+                }
                 if (label_index != 0U) {
                     buf_append_cstr(&condition, " || ");
                 }
-                buf_append_fmt(&condition, "%s.tag == %zuU", tgt_tmp, member_index);
+                buf_append_cstr(&condition, label_cond);
+                free(label_cond);
                 if (matched_member_count == 0U) {
                     first_member_index = member_index;
                 }
@@ -19042,36 +19062,113 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                     alias_name = branch->binding_name;
                 }
                 if (matched_member_count == 1U) {
-                    Buf payload_expr;
-                    CGType *alias_type;
-
-                    buf_init(&payload_expr);
-                    buf_append_fmt(&payload_expr, "%s.payload.", tgt_tmp);
-                    cg_append_union_payload_field_name(&payload_expr, first_member_index);
-                    alias_type = cgtype_clone(union_spec->union_member_types[first_member_index]);
-
-                    if (alias_name.data != NULL && alias_name.length > 0U) {
-                        char *alias_cstr = strndup(alias_name.data, alias_name.length);
-
-                        if (payload_expr.data == NULL || alias_type == NULL || alias_cstr == NULL ||
-                            !scope_add(branch_scope,
-                                       alias_cstr,
-                                       payload_expr.data,
-                                       alias_type,
-                                       true)) {
-                            cgtype_free(alias_type);
-                            free(alias_cstr);
-                            buf_free(&payload_expr);
-                            cg->cur_scope = branch_scope->parent;
-                            scope_pop_free(branch_scope);
-                            ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
+                    /* Check if any label has a chain for deepest-type narrowing */
+                    const FengMatchLabel *chain_label = NULL;
+                    for (size_t label_idx = 0U; label_idx < branch->label_count; ++label_idx) {
+                        if (branch->labels[label_idx].type_chain_count > 0U) {
+                            chain_label = &branch->labels[label_idx];
                             break;
                         }
-                        free(alias_cstr);
-                    } else {
-                        cgtype_free(alias_type);
                     }
-                    buf_free(&payload_expr);
+
+                    if (chain_label != NULL) {
+                        /* Chain label: build nested payload path to deepest type */
+                        CGType *deepest_type = NULL;
+                        char *payload_path = cg_build_chain_payload_path(cg,
+                                                                          tgt_tmp,
+                                                                          union_spec,
+                                                                          chain_label,
+                                                                          &deepest_type);
+                        if (payload_path != NULL && deepest_type != NULL) {
+                            if (alias_name.data != NULL && alias_name.length > 0U) {
+                                char *alias_cstr = strndup(alias_name.data, alias_name.length);
+                                bool add_ok = alias_cstr != NULL &&
+                                              scope_add(branch_scope,
+                                                        alias_cstr,
+                                                        payload_path,
+                                                        deepest_type,
+                                                        true);
+                                free(payload_path);
+                                free(alias_cstr);
+                                if (!add_ok) {
+                                    cgtype_free(deepest_type);
+                                    cg->cur_scope = branch_scope->parent;
+                                    scope_pop_free(branch_scope);
+                                    ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
+                                    break;
+                                }
+                            } else {
+                                free(payload_path);
+                                cgtype_free(deepest_type);
+                            }
+                        } else {
+                            /* Fallback to first-level member if chain path building fails */
+                            cgtype_free(deepest_type);
+                            free(payload_path);
+                            Buf payload_expr;
+                            CGType *alias_type;
+
+                            buf_init(&payload_expr);
+                            buf_append_fmt(&payload_expr, "%s.payload.", tgt_tmp);
+                            cg_append_union_payload_field_name(&payload_expr, first_member_index);
+                            alias_type = cgtype_clone(union_spec->union_member_types[first_member_index]);
+
+                            if (alias_name.data != NULL && alias_name.length > 0U) {
+                                char *alias_cstr = strndup(alias_name.data, alias_name.length);
+
+                                if (payload_expr.data == NULL || alias_type == NULL || alias_cstr == NULL ||
+                                    !scope_add(branch_scope,
+                                               alias_cstr,
+                                               payload_expr.data,
+                                               alias_type,
+                                               true)) {
+                                    cgtype_free(alias_type);
+                                    free(alias_cstr);
+                                    buf_free(&payload_expr);
+                                    cg->cur_scope = branch_scope->parent;
+                                    scope_pop_free(branch_scope);
+                                    ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
+                                    break;
+                                }
+                                free(alias_cstr);
+                            } else {
+                                cgtype_free(alias_type);
+                            }
+                            buf_free(&payload_expr);
+                        }
+                    } else {
+                        /* Non-chain label: use first-level member */
+                        Buf payload_expr;
+                        CGType *alias_type;
+
+                        buf_init(&payload_expr);
+                        buf_append_fmt(&payload_expr, "%s.payload.", tgt_tmp);
+                        cg_append_union_payload_field_name(&payload_expr, first_member_index);
+                        alias_type = cgtype_clone(union_spec->union_member_types[first_member_index]);
+
+                        if (alias_name.data != NULL && alias_name.length > 0U) {
+                            char *alias_cstr = strndup(alias_name.data, alias_name.length);
+
+                            if (payload_expr.data == NULL || alias_type == NULL || alias_cstr == NULL ||
+                                !scope_add(branch_scope,
+                                           alias_cstr,
+                                           payload_expr.data,
+                                           alias_type,
+                                           true)) {
+                                cgtype_free(alias_type);
+                                free(alias_cstr);
+                                buf_free(&payload_expr);
+                                cg->cur_scope = branch_scope->parent;
+                                scope_pop_free(branch_scope);
+                                ok = cg_fail(cg, branch->token, "IE0001", "codegen: out of memory");
+                                break;
+                            }
+                            free(alias_cstr);
+                        } else {
+                            cgtype_free(alias_type);
+                        }
+                        buf_free(&payload_expr);
+                    }
                 }
 
                 if (cg_branch_terminates_with_throw(branch->body)) {
@@ -19299,6 +19396,7 @@ static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out) {
     if (is_union) {
         for (size_t i = 0U; i < e->as.match_op.label_count; ++i) {
             size_t member_index = 0U;
+            char *label_cond = NULL;
             if (!cg_union_member_index_for_label(cg,
                                                   union_spec,
                                                   &e->as.match_op.labels[i],
@@ -19306,10 +19404,17 @@ static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out) {
                 ok = false;
                 break;
             }
+            label_cond = cg_build_label_condition(cg, tgt_tmp, union_spec,
+                                                   &e->as.match_op.labels[i]);
+            if (label_cond == NULL) {
+                ok = false;
+                break;
+            }
             if (i != 0U) {
                 buf_append_cstr(&cond, " || ");
             }
-            buf_append_fmt(&cond, "%s.tag == %zuU", tgt_tmp, member_index);
+            buf_append_cstr(&cond, label_cond);
+            free(label_cond);
             if (matched_member_count == 0U) {
                 first_member_index = member_index;
             }
@@ -22920,6 +23025,105 @@ static bool cg_union_member_index_for_label(CG *cg,
                    "CE0268", "codegen: union-form match label is not a normalized member");
 }
 
+/* Build full match condition for a label, including nested tag checks for chain labels.
+ * For a simple label `A`, generates "tmp.tag == 0U".
+ * For a chain label `A -> B -> C`, generates "tmp.tag == 0U && tmp.payload.m0.tag == 1U && tmp.payload.m0.payload.m1.tag == 2U".
+ * Caller must free the returned string. */
+static char *cg_build_label_condition(CG *cg,
+                                       const char *target_tmp,
+                                       const UserSpec *root_spec,
+                                       const FengMatchLabel *label) {
+    Buf cond;
+    CGType *label_type = NULL;
+    size_t first_index = 0U;
+    bool found = false;
+
+    if (label == NULL || label->kind != FENG_MATCH_LABEL_TYPE ||
+        label->type == NULL || target_tmp == NULL || root_spec == NULL) {
+        return NULL;
+    }
+
+    if (!cg_resolve_type(cg, label->type, &label->token, &label_type)) {
+        return NULL;
+    }
+
+    for (size_t i = 0U; i < root_spec->union_member_count; ++i) {
+        if (cg_types_equal(label_type, root_spec->union_member_types[i])) {
+            first_index = i;
+            found = true;
+            break;
+        }
+    }
+    cgtype_free(label_type);
+
+    if (!found) {
+        return NULL;
+    }
+
+    buf_init(&cond);
+    buf_append_fmt(&cond, "%s.tag == %zuU", target_tmp, first_index);
+
+    if (label->type_chain_count > 0U) {
+        /* Chain label: add nested tag checks */
+        Buf path;
+        CGType *current_type = root_spec->union_member_types[first_index];
+        const UserSpec *current_spec = root_spec;
+
+        buf_init(&path);
+        buf_append_fmt(&path, "%s.payload.", target_tmp);
+        cg_append_union_payload_field_name(&path, first_index);
+
+        for (size_t chain_idx = 0U; chain_idx < label->type_chain_count; ++chain_idx) {
+            const FengTypeRef *chain_type_ref = label->type_chain[chain_idx];
+            CGType *chain_type = NULL;
+            size_t chain_index = 0U;
+
+            if (chain_type_ref == NULL ||
+                !cg_resolve_type(cg, chain_type_ref, &label->token, &chain_type)) {
+                buf_free(&path);
+                buf_free(&cond);
+                return NULL;
+            }
+
+            if (current_type == NULL || current_type->kind != CG_TYPE_SPEC ||
+                current_type->user_spec == NULL ||
+                current_type->user_spec->form != FENG_SPEC_FORM_UNION) {
+                cgtype_free(chain_type);
+                buf_free(&path);
+                buf_free(&cond);
+                return NULL;
+            }
+
+            current_spec = current_type->user_spec;
+            found = false;
+            for (size_t i = 0U; i < current_spec->union_member_count; ++i) {
+                if (cg_types_equal(chain_type, current_spec->union_member_types[i])) {
+                    chain_index = i;
+                    found = true;
+                    break;
+                }
+            }
+            cgtype_free(chain_type);
+
+            if (!found) {
+                buf_free(&path);
+                buf_free(&cond);
+                return NULL;
+            }
+
+            buf_append_fmt(&cond, " && %s.tag == %zuU", path.data, chain_index);
+            buf_append_fmt(&path, ".payload.");
+            cg_append_union_payload_field_name(&path, chain_index);
+
+            current_type = current_spec->union_member_types[chain_index];
+        }
+
+        buf_free(&path);
+    }
+
+    return cond.data;
+}
+
 /* Build nested payload access path for chain labels.
  * For a chain like `Inner -> A`, generates path like "mt.payload.m0.payload.m1"
  * where m0 is Inner's index in Outer, and m1 is A's index in Inner.
@@ -23053,7 +23257,8 @@ static bool cg_emit_union_match_stmt_branch(CG *cg,
                                             bool has_single_member,
                                             const char *target_tmp,
                                             const UserSpec *spec,
-                                            size_t member_index) {
+                                            size_t member_index,
+                                            const FengMatchBranch *branch) {
     Scope *branch_scope = scope_push(cg->cur_scope);
     FengSlice alias_name = {NULL, 0U};
     bool ok;
@@ -23067,30 +23272,97 @@ static bool cg_emit_union_match_stmt_branch(CG *cg,
         alias_name = binding_name;
     }
     if (alias_name.data != NULL && alias_name.length > 0U && has_single_member) {
-        Buf payload_expr;
-        CGType *alias_type;
-        char *alias_cstr;
+        /* Check if any label has a chain for deepest-type narrowing */
+        const FengMatchLabel *chain_label = NULL;
+        if (branch != NULL) {
+            for (size_t label_idx = 0U; label_idx < branch->label_count; ++label_idx) {
+                if (branch->labels[label_idx].type_chain_count > 0U) {
+                    chain_label = &branch->labels[label_idx];
+                    break;
+                }
+            }
+        }
 
-        buf_init(&payload_expr);
-        buf_append_fmt(&payload_expr, "%s.payload.", target_tmp);
-        cg_append_union_payload_field_name(&payload_expr, member_index);
-        alias_type = cgtype_clone(spec->union_member_types[member_index]);
-        alias_cstr = strndup(alias_name.data, alias_name.length);
-        if (payload_expr.data == NULL || alias_type == NULL || alias_cstr == NULL ||
-            !scope_add(branch_scope,
-                       alias_cstr,
-                       payload_expr.data,
-                       alias_type,
-                       true)) {
-            cgtype_free(alias_type);
+        if (chain_label != NULL) {
+            /* Chain label: build nested payload path to deepest type */
+            CGType *deepest_type = NULL;
+            char *payload_path = cg_build_chain_payload_path(cg,
+                                                              target_tmp,
+                                                              spec,
+                                                              chain_label,
+                                                              &deepest_type);
+            if (payload_path != NULL && deepest_type != NULL) {
+                char *alias_cstr = strndup(alias_name.data, alias_name.length);
+                bool add_ok = alias_cstr != NULL &&
+                              scope_add(branch_scope,
+                                        alias_cstr,
+                                        payload_path,
+                                        deepest_type,
+                                        true);
+                free(payload_path);
+                free(alias_cstr);
+                if (!add_ok) {
+                    cgtype_free(deepest_type);
+                    cg->cur_scope = branch_scope->parent;
+                    scope_pop_free(branch_scope);
+                    return cg_fail(cg, token, "IE0001", "codegen: out of memory");
+                }
+            } else {
+                /* Fallback to first-level member if chain path building fails */
+                cgtype_free(deepest_type);
+                free(payload_path);
+                Buf payload_expr;
+                CGType *alias_type;
+                char *alias_cstr;
+
+                buf_init(&payload_expr);
+                buf_append_fmt(&payload_expr, "%s.payload.", target_tmp);
+                cg_append_union_payload_field_name(&payload_expr, member_index);
+                alias_type = cgtype_clone(spec->union_member_types[member_index]);
+                alias_cstr = strndup(alias_name.data, alias_name.length);
+                if (payload_expr.data == NULL || alias_type == NULL || alias_cstr == NULL ||
+                    !scope_add(branch_scope,
+                               alias_cstr,
+                               payload_expr.data,
+                               alias_type,
+                               true)) {
+                    cgtype_free(alias_type);
+                    free(alias_cstr);
+                    buf_free(&payload_expr);
+                    cg->cur_scope = branch_scope->parent;
+                    scope_pop_free(branch_scope);
+                    return cg_fail(cg, token, "IE0001", "codegen: out of memory");
+                }
+                free(alias_cstr);
+                buf_free(&payload_expr);
+            }
+        } else {
+            /* Non-chain label: use first-level member */
+            Buf payload_expr;
+            CGType *alias_type;
+            char *alias_cstr;
+
+            buf_init(&payload_expr);
+            buf_append_fmt(&payload_expr, "%s.payload.", target_tmp);
+            cg_append_union_payload_field_name(&payload_expr, member_index);
+            alias_type = cgtype_clone(spec->union_member_types[member_index]);
+            alias_cstr = strndup(alias_name.data, alias_name.length);
+            if (payload_expr.data == NULL || alias_type == NULL || alias_cstr == NULL ||
+                !scope_add(branch_scope,
+                           alias_cstr,
+                           payload_expr.data,
+                           alias_type,
+                           true)) {
+                cgtype_free(alias_type);
+                free(alias_cstr);
+                buf_free(&payload_expr);
+                cg->cur_scope = branch_scope->parent;
+                scope_pop_free(branch_scope);
+                return cg_fail(cg, token, "IE0001", "codegen: out of memory");
+            }
             free(alias_cstr);
             buf_free(&payload_expr);
-            cg->cur_scope = branch_scope->parent;
-            scope_pop_free(branch_scope);
-            return cg_fail(cg, token, "IE0001", "codegen: out of memory");
         }
-        free(alias_cstr);
-        buf_free(&payload_expr);
     }
 
     ok = cg_emit_block(cg, block);
@@ -23158,6 +23430,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
             buf_init(&condition);
             for (size_t label_index = 0U; label_index < branch->label_count; ++label_index) {
                 size_t member_index = 0U;
+                char *label_cond = NULL;
 
                 if (!cg_union_member_index_for_label(cg,
                                                      union_spec,
@@ -23166,10 +23439,17 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
                     ok = false;
                     break;
                 }
+                label_cond = cg_build_label_condition(cg, target_tmp, union_spec,
+                                                       &branch->labels[label_index]);
+                if (label_cond == NULL) {
+                    ok = false;
+                    break;
+                }
                 if (label_index != 0U) {
                     buf_append_cstr(&condition, " || ");
                 }
-                buf_append_fmt(&condition, "%s.tag == %zuU", target_tmp, member_index);
+                buf_append_cstr(&condition, label_cond);
+                free(label_cond);
                 if (covered_members != NULL) {
                     covered_members[member_index] = true;
                 }
@@ -23199,7 +23479,8 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
                                                  matched_member_count == 1U,
                                                  target_tmp,
                                                  union_spec,
-                                                 first_member_index)) {
+                                                 first_member_index,
+                                                 branch)) {
                 ok = false;
                 break;
             }
@@ -23235,7 +23516,8 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
                                                  else_has_single_member,
                                                  target_tmp,
                                                  union_spec,
-                                                 else_member_index)) {
+                                                 else_member_index,
+                                                 NULL)) {
                 ok = false;
             }
             first_branch = false;
