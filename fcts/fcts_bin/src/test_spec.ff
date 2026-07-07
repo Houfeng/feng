@@ -159,6 +159,33 @@ open func test_spec() {
       assert(sna == sna2, "spec == same reference");
       assert(sna != snb, "spec != different reference");
     });
+
+    /*
+      1. 不能转换的真正原因
+      let b: B = X {};  // b = { subject: X*, witness: Witness__X__B }
+      let a: A = b;     // 需要 a = { subject: X*, witness: Witness__X__A }
+      运行时无法找到 Witness__X__A：
+      - 我们有 subject（X 的指针）✓
+      - 我们有 Witness__X__B（B 的 witness 表）✓
+      - 但我们需要 Witness__X__A（A 的 witness 表）✗
+      Witness__X__B 中没有指向 Witness__X__A 的引用，运行时也没有查找机制。
+
+      2. 目前的情况
+      子 spec 不能赋值给父 spec 的原因是：运行时无法从子 spec 值找到父 spec 的 witness 表，而不是 witness 表不存在。
+      如果要支持 spec 子类型化，需要：
+      - 在 witness 表中添加父 spec witness 的引用（列表，因为父级可能多个）
+      - 编译期，在转换点检查父子关系，可在编译期提示非法转换（非子到父的情况）
+      - 运行时，从子 witness 表找到父 witness 表（列表中的某个元素），需要递归向上查找（有运行时开销）
+    */
+
+    // test("child spec assignment to parent spec", () {
+    //   let detail = DetailItem { label: "item", desc: "description" };
+    //   let dp: DetailPrintable = detail;
+    //   // 测试：子 spec 值赋值给父 spec 变量
+    //   let p: Printable = dp;
+    //   assert(p.to_string() == "item", "child spec to parent spec assignment");
+    // });
+
   });
 }
 
