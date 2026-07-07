@@ -69,6 +69,8 @@ spec CallableOrInt: int_transformer | int;
 /** 嵌套联合类型测试 */
 open func test_nested_union() {
   describe("nested_union", () {
+    // 测试：叶子类型赋值到外层联合
+    // 验证 int 可以赋值到 OuterUnion，并通过嵌套 match 访问
     test("nested union - assign leaf type to outer", () {
       let v: OuterUnion = 42;
       match v {
@@ -88,6 +90,8 @@ open func test_nested_union() {
       }
     });
 
+    // 测试：内层联合类型赋值到外层联合
+    // 验证 InnerUnion 可以赋值到 OuterUnion，并通过 match 访问
     test("nested union - assign inner union to outer", () {
       let inner: InnerUnion = "hello";
       let v: OuterUnion = inner;
@@ -101,6 +105,8 @@ open func test_nested_union() {
       }
     });
 
+    // 测试：其他成员赋值到嵌套联合
+    // 验证 bool 可以赋值到 OuterUnion，并通过 match 访问
     test("nested union - assign other member", () {
       let v: OuterUnion = true;
       match v {
@@ -113,6 +119,8 @@ open func test_nested_union() {
       }
     });
 
+    // 测试：三层嵌套联合类型
+    // 验证 Level3 -> Level2 -> Level1 -> int 的三层嵌套路径
     test("three-level nested union", () {
       let v: Level3 = 42;
       match v {
@@ -139,6 +147,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型链式匹配 - 绑定 - 单级
+    // match 语句形式：验证 CustomInner -> IntWrapper 链式匹配并绑定变量
     test("chain match - custom types - single level (match statement)", () {
       let v: CustomOuter = IntWrapper { value: 42 };
       match v {
@@ -151,6 +161,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型链式匹配 - 绑定 - 单级
+    // match 表达式形式：验证链式匹配并返回值
     test("chain match - custom types - single level (match expression)", () {
       let v: CustomOuter = IntWrapper { value: 42 };
       let result = match v {
@@ -160,6 +172,8 @@ open func test_nested_union() {
       assert(result == 42, "chain match - custom types - single level (match expression)");
     });
 
+    // 自定义类型链式匹配 - 绑定 - 单级
+    // match 运算符形式：验证 if v match 语法
     test("chain match - custom types - single level (match operator)", () {
       let v: CustomOuter = IntWrapper { value: 42 };
       if v match let i: CustomInner -> IntWrapper {
@@ -169,6 +183,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型链式匹配 - 绑定 - 多分支
+    // match 语句形式：验证多个链式分支覆盖不同叶子类型
     test("chain match - custom types - multiple branches (match statement)", () {
       let v1: CustomOuter = IntWrapper { value: 42 };
       let v2: CustomOuter = StringWrapper { value: "test" };
@@ -220,6 +236,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型链式匹配 - 绑定 - 多分支
+    // match 表达式形式：验证多分支链式匹配并返回值
     test("chain match - custom types - multiple branches (match expression)", () {
       let v1: CustomOuter = IntWrapper { value: 42 };
       let v2: CustomOuter = StringWrapper { value: "test" };
@@ -251,6 +269,8 @@ open func test_nested_union() {
       assert(r3 == "bool", "chain match - custom types - multiple branches (bool)");
     });
 
+    // 自定义类型链式匹配 - 绑定 - 多分支
+    // match 运算符形式：验证 if v match 语法的多分支场景
     test("chain match - custom types - multiple branches (match operator)", () {
       let v1: CustomOuter = IntWrapper { value: 42 };
       let v2: CustomOuter = StringWrapper { value: "test" };
@@ -272,6 +292,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型链式匹配 - 绑定 - 三级嵌套
+    // 验证 CustomLevel2 -> CustomLevel1 -> IntWrapper 三级链式路径
     test("chain match - custom types - three levels", () {
       let v: CustomLevel3 = IntWrapper { value: 42 };
       match v {
@@ -284,6 +306,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型链式匹配 - 不绑定 - 单级
+    // match 语句形式：验证链式匹配但不绑定变量
     test("chain match - custom types - no binding (match statement)", () {
       let v: CustomOuter = IntWrapper { value: 42 };
       match v {
@@ -296,6 +320,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型链式匹配 - 不绑定 - 单级
+    // match 表达式形式：验证不绑定变量的链式匹配
     test("chain match - custom types - no binding (match expression)", () {
       let v: CustomOuter = IntWrapper { value: 42 };
       let result = match v {
@@ -305,6 +331,8 @@ open func test_nested_union() {
       assert(result == 42, "chain match - custom types - no binding (match expression)");
     });
 
+    // 自定义类型链式匹配 - 不绑定 - 单级
+    // match 运算符形式：验证不绑定变量的 if v match 语法
     test("chain match - custom types - no binding (match operator)", () {
       let v: CustomOuter = IntWrapper { value: 42 };
       if v match CustomInner -> IntWrapper {
@@ -314,6 +342,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型链式匹配 - 不绑定 - 多分支
+    // match 语句形式：验证不绑定变量的多分支链式匹配
     test("chain match - custom types - no binding - multiple branches (match statement)", () {
       let v1: CustomOuter = IntWrapper { value: 42 };
       let v2: CustomOuter = StringWrapper { value: "test" };
@@ -365,6 +395,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型链式匹配 - 不绑定 - 多分支
+    // match 表达式形式：验证不绑定变量的多分支链式匹配
     test("chain match - custom types - no binding - multiple branches (match expression)", () {
       let v1: CustomOuter = IntWrapper { value: 42 };
       let v2: CustomOuter = StringWrapper { value: "test" };
@@ -396,6 +428,8 @@ open func test_nested_union() {
       assert(r3 == "bool", "chain match - no binding - multiple branches (bool)");
     });
 
+    // 自定义类型链式匹配 - 不绑定 - 多分支
+    // match 运算符形式：验证不绑定变量的多分支 if v match 语法
     test("chain match - custom types - no binding - multiple branches (match operator)", () {
       let v1: CustomOuter = IntWrapper { value: 42 };
       let v2: CustomOuter = StringWrapper { value: "test" };
@@ -417,6 +451,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型链式匹配 - 不绑定 - 三级嵌套
+    // 验证不绑定变量的三级链式路径 CustomLevel2 -> CustomLevel1 -> IntWrapper
     test("chain match - custom types - no binding - three levels", () {
       let v: CustomLevel3 = IntWrapper { value: 42 };
       match v {
@@ -429,6 +465,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型 - infix match 运算符 + 链式匹配 - 绑定 - int
+    // 验证 if v match let i: CustomInner -> IntWrapper 语法
     test("chain match - custom types - infix match operator with chain - int", () {
       let v: CustomOuter = IntWrapper { value: 42 };
       if v match let i: CustomInner -> IntWrapper {
@@ -438,6 +476,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型 - infix match 运算符 + 链式匹配 - 绑定 - string
+    // 验证 if v match let s: CustomInner -> StringWrapper 语法
     test("chain match - custom types - infix match operator with chain - string", () {
       let v: CustomOuter = StringWrapper { value: "test" };
       if v match let s: CustomInner -> StringWrapper {
@@ -447,6 +487,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型 - infix match 运算符 + 链式匹配 - 不绑定 - int
+    // 验证 if v match CustomInner -> IntWrapper 语法（无 let 绑定）
     test("chain match - custom types - infix match operator with chain - no binding - int", () {
       let v: CustomOuter = IntWrapper { value: 42 };
       if v match CustomInner -> IntWrapper {
@@ -456,6 +498,8 @@ open func test_nested_union() {
       }
     });
 
+    // 自定义类型 - infix match 运算符 + 链式匹配 - 不绑定 - string
+    // 验证 if v match CustomInner -> StringWrapper 语法（无 let 绑定）
     test("chain match - custom types - infix match operator with chain - no binding - string", () {
       let v: CustomOuter = StringWrapper { value: "test" };
       if v match CustomInner -> StringWrapper {
@@ -465,6 +509,8 @@ open func test_nested_union() {
       }
     });
 
+    // 原始类型链式匹配 - 绑定 - 单级
+    // match 语句形式：验证 InnerUnion -> int 链式匹配并绑定变量
     test("chain match - single level (match statement)", () {
       let v: OuterUnion = 42;
       match v {
@@ -477,6 +523,8 @@ open func test_nested_union() {
       }
     });
 
+    // 原始类型链式匹配 - 绑定 - 单级
+    // match 表达式形式：验证链式匹配并返回值
     test("chain match - single level (match expression)", () {
       let v: OuterUnion = 42;
       let result = match v {
@@ -486,6 +534,8 @@ open func test_nested_union() {
       assert(result == 42, "chain match - single level (match expression)");
     });
 
+    // 原始类型链式匹配 - 绑定 - 单级
+    // match 运算符形式：验证 if v match 语法
     test("chain match - single level (match operator)", () {
       let v: OuterUnion = 42;
       if v match let i: InnerUnion -> int {
@@ -495,6 +545,8 @@ open func test_nested_union() {
       }
     });
 
+    // 原始类型链式匹配 - 绑定 - 多分支
+    // match 语句形式：验证多个链式分支覆盖 int/string/bool
     test("chain match - multiple branches (match statement)", () {
       let v1: OuterUnion = 42;
       let v2: OuterUnion = "test";
@@ -546,6 +598,8 @@ open func test_nested_union() {
       }
     });
 
+    // 原始类型链式匹配 - 绑定 - 多分支
+    // match 表达式形式：验证多分支链式匹配并返回值
     test("chain match - multiple branches (match expression)", () {
       let v1: OuterUnion = 42;
       let v2: OuterUnion = "test";
@@ -577,6 +631,8 @@ open func test_nested_union() {
       assert(r3 == "bool", "chain match - multiple branches (bool)");
     });
 
+    // 原始类型链式匹配 - 绑定 - 多分支
+    // match 运算符形式：验证 if v match 语法的多分支场景
     test("chain match - multiple branches (match operator)", () {
       let v1: OuterUnion = 42;
       let v2: OuterUnion = "test";
@@ -598,6 +654,8 @@ open func test_nested_union() {
       }
     });
 
+    // 原始类型链式匹配 - 绑定 - 三级嵌套
+    // 验证 Level2 -> Level1 -> int 三级链式路径
     test("chain match - three levels", () {
       let v: Level3 = 42;
       match v {
@@ -610,6 +668,8 @@ open func test_nested_union() {
       }
     });
 
+    // 原始类型链式匹配 - 不绑定 - 单级
+    // match 语句形式：验证不绑定变量的链式匹配
     test("chain match - no binding (match statement)", () {
       let v: OuterUnion = 42;
       match v {
@@ -622,6 +682,8 @@ open func test_nested_union() {
       }
     });
 
+    // 原始类型链式匹配 - 不绑定 - 单级
+    // match 表达式形式：验证不绑定变量的链式匹配
     test("chain match - no binding (match expression)", () {
       let v: OuterUnion = 42;
       let result = match v {
@@ -631,6 +693,8 @@ open func test_nested_union() {
       assert(result == 42, "chain match - no binding (match expression)");
     });
 
+    // 原始类型链式匹配 - 不绑定 - 单级
+    // match 运算符形式：验证不绑定变量的 if v match 语法
     test("chain match - no binding (match operator)", () {
       let v: OuterUnion = 42;
       if v match InnerUnion -> int {
@@ -640,6 +704,8 @@ open func test_nested_union() {
       }
     });
 
+    // 原始类型链式匹配 - 不绑定 - 多分支
+    // match 语句形式：验证不绑定变量的多分支链式匹配
     test("chain match - no binding - multiple branches (match statement)", () {
       let v1: OuterUnion = 42;
       let v2: OuterUnion = "test";
@@ -691,6 +757,8 @@ open func test_nested_union() {
       }
     });
 
+    // 原始类型链式匹配 - 不绑定 - 多分支
+    // match 表达式形式：验证不绑定变量的多分支链式匹配
     test("chain match - no binding - multiple branches (match expression)", () {
       let v1: OuterUnion = 42;
       let v2: OuterUnion = "test";
@@ -722,6 +790,8 @@ open func test_nested_union() {
       assert(r3 == "bool", "chain match - no binding - multiple branches (bool)");
     });
 
+    // 原始类型链式匹配 - 不绑定 - 多分支
+    // match 运算符形式：验证不绑定变量的多分支 if v match 语法
     test("chain match - no binding - multiple branches (match operator)", () {
       let v1: OuterUnion = 42;
       let v2: OuterUnion = "test";
@@ -743,6 +813,8 @@ open func test_nested_union() {
       }
     });
 
+    // 原始类型链式匹配 - 不绑定 - 三级嵌套
+    // 验证不绑定变量的三级链式路径 Level2 -> Level1 -> int
     test("chain match - no binding - three levels", () {
       let v: Level3 = 42;
       match v {
@@ -755,6 +827,8 @@ open func test_nested_union() {
       }
     });
 
+    // Object-form spec 作为联合成员 - 直接赋值
+    // 验证 GreeterUser 通过 Greetable spec 赋值到 GreetableOrString 联合
     test("object-form spec in union - direct", () {
       let user: GreeterUser = GreeterUser { name: "Alice" };
       let greeter: Greetable = user;
@@ -767,6 +841,8 @@ open func test_nested_union() {
       assert(result == "Hello, Alice", "object-form spec in union - direct");
     });
 
+    // Object-form spec 作为联合成员 - string 分支
+    // 验证 string 可以赋值到 GreetableOrString 并匹配
     test("object-form spec in union - string branch", () {
       let v: GreetableOrString = "direct";
       let result = match v {
@@ -777,6 +853,8 @@ open func test_nested_union() {
       assert(result == "direct", "object-form spec in union - string branch");
     });
 
+    // Object-form spec 在嵌套联合中
+    // 验证 GreeterUser 通过 Greetable -> GreetableOrString -> NestedGreetable 嵌套路径
     test("object-form spec in nested union", () {
       let user: GreeterUser = GreeterUser { name: "Bob" };
       let greeter: Greetable = user;
@@ -796,6 +874,8 @@ open func test_nested_union() {
       assert(result == "got greeter", "object-form spec in nested union");
     });
 
+    // Object-form spec 在嵌套联合中 - string 分支
+    // 验证 string 通过 GreetableOrString -> NestedGreetable 嵌套路径
     test("object-form spec in nested union - string", () {
       let gs: GreetableOrString = "nested";
       let v: NestedGreetable = gs;
@@ -813,6 +893,8 @@ open func test_nested_union() {
       assert(result == "got string", "object-form spec in nested union - string");
     });
 
+    // Callable-form spec 作为联合成员 - lambda
+    // 验证 lambda 可以赋值到 CallableOrInt 联合并通过 match 调用
     test("callable-form spec in union (lambda)", () {
       let transformer: int_transformer = (x: int) -> x * 2;
       let v: CallableOrInt = transformer;
@@ -824,6 +906,8 @@ open func test_nested_union() {
       assert(result == 42, "callable-form spec in union (lambda)");
     });
 
+    // Callable-form spec 作为联合成员 - 函数引用
+    // 验证函数可以赋值到 CallableOrInt 联合并通过 match 调用
     test("callable-form spec in union (function)", () {
       let transformer: int_transformer = double_value;
       let v: CallableOrInt = transformer;
@@ -835,6 +919,8 @@ open func test_nested_union() {
       assert(result == 42, "callable-form spec in union (function)");
     });
 
+    // Callable-form spec 作为联合成员 - int 分支
+    // 验证 int 可以赋值到 CallableOrInt 联合并匹配 int 分支
     test("callable-form spec in union - int branch", () {
       let v: CallableOrInt = 99;
       let result = match v {
@@ -845,6 +931,8 @@ open func test_nested_union() {
       assert(result == 99, "callable-form spec in union - int branch");
     });
 
+    // infix match 运算符 + 链式匹配 - 绑定 - int
+    // 验证 if v match let i: InnerUnion -> int 语法
     test("infix match operator with chain - int", () {
       let v: OuterUnion = 42;
       if v match let i: InnerUnion -> int {
@@ -854,6 +942,8 @@ open func test_nested_union() {
       }
     });
 
+    // infix match 运算符 + 链式匹配 - 绑定 - string
+    // 验证 if v match let s: InnerUnion -> string 语法
     test("infix match operator with chain - string", () {
       let v: OuterUnion = "test";
       if v match let s: InnerUnion -> string {
@@ -863,6 +953,8 @@ open func test_nested_union() {
       }
     });
 
+    // infix match 运算符 + 链式匹配 - 不绑定 - int
+    // 验证 if v match InnerUnion -> int 语法（无 let 绑定）
     test("infix match operator with chain - no binding - int", () {
       let v: OuterUnion = 42;
       if v match InnerUnion -> int {
@@ -872,6 +964,8 @@ open func test_nested_union() {
       }
     });
 
+    // infix match 运算符 + 链式匹配 - 不绑定 - string
+    // 验证 if v match InnerUnion -> string 语法（无 let 绑定）
     test("infix match operator with chain - no binding - string", () {
       let v: OuterUnion = "test";
       if v match InnerUnion -> string {
@@ -881,6 +975,8 @@ open func test_nested_union() {
       }
     });
 
+    // 嵌套联合默认值
+    // 验证 OuterUnion 默认初始化为第一个叶子类型 int
     test("nested union default value", () {
       let v: OuterUnion;
       match v {
