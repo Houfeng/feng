@@ -1751,6 +1751,41 @@ static bool argv_push_mode_flags(ArgVec *av, bool release) {
     return true;
 }
 
+/* Split a whitespace-separated flag string and push each token into av.
+ * Used to honour FENG_CC_FLAGS so that host-tool invocations (e.g. UBSan
+ * runtime linking) can be augmented without patching the compiler. */
+static bool argv_push_env_flags(ArgVec *av, const char *flags) {
+    if (flags == NULL || flags[0] == '\0') {
+        return true;
+    }
+    const char *p = flags;
+    while (*p != '\0') {
+        while (*p == ' ' || *p == '\t') {
+            ++p;
+        }
+        if (*p == '\0') {
+            break;
+        }
+        const char *start = p;
+        while (*p != '\0' && *p != ' ' && *p != '\t') {
+            ++p;
+        }
+        size_t len = (size_t)(p - start);
+        char *token = malloc(len + 1U);
+        if (token == NULL) {
+            return false;
+        }
+        memcpy(token, start, len);
+        token[len] = '\0';
+        if (!argv_push(av, token)) {
+            free(token);
+            return false;
+        }
+        free(token);
+    }
+    return true;
+}
+
 /* --- entry --------------------------------------------------------------- */
 
 int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
@@ -1992,6 +2027,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
 #endif
             if (ok && !argv_push(&av, "-Wl,-x")) { ok = false; }
         }
+        if (ok && !argv_push_env_flags(&av, getenv("FENG_CC_FLAGS"))) { ok = false; }
         if (ok && !argv_push(&av, "-o")) { ok = false; }
         if (ok && !argv_push(&av, opts->out_path)) { ok = false; }
         if (!ok) {
@@ -2024,6 +2060,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             if (ok && !argv_push(&av, include_flag)) { ok = false; }
             if (ok && !argv_push(&av, "-c")) { ok = false; }
             if (ok && !argv_push(&av, opts->c_path)) { ok = false; }
+            if (ok && !argv_push_env_flags(&av, getenv("FENG_CC_FLAGS"))) { ok = false; }
             if (ok && !argv_push(&av, "-o")) { ok = false; }
             if (ok && !argv_push(&av, object_path)) { ok = false; }
             if (!ok) {
