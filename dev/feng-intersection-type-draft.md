@@ -346,7 +346,7 @@ struct {
   - Union 成员验证中显式拒绝 Intersection-form spec（命名交叉类型也不允许作为 union 成员）
   - 测试：`test/semantic/` 新增诊断测试，验证非法成员（union/callable）触发错误；union 使用交叉类型成员触发错误
 
-- [ ] **9.4 语义分析：方法集合并与冲突检测**
+- [x] **9.4 语义分析：方法集合并与冲突检测**
   - 收集所有成员 spec 的方法集（含 parent spec 传递闭包），去重
   - 复用 `detect_cross_spec_method_conflicts` 检测方法冲突
   - 同名同参数不同返回类型 → 编译错误；不同参数 → 允许重载

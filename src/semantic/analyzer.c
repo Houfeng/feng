@@ -25173,6 +25173,99 @@ static bool validate_type_param_constraints(ResolveContext *context,
     return true;
 }
 
+static bool resolve_intersection_spec_form(ResolveContext *context, const FengDecl *decl) {
+    const FengDecl **flattened = NULL;
+    size_t flattened_count = 0U;
+    size_t flattened_capacity = 0U;
+    size_t index;
+    bool ok = true;
+
+    for (index = 0U; ok && index < decl->as.spec_decl.as.intersection_form.member_count; ++index) {
+        const FengTypeRef *member_ref = decl->as.spec_decl.as.intersection_form.members[index];
+        const FengDecl *member_decl;
+
+        if (!resolve_type_ref(context, member_ref, false)) {
+            ok = false;
+            break;
+        }
+        member_decl = resolve_type_ref_decl(context, member_ref);
+        if (member_decl == NULL || member_decl->kind != FENG_DECL_SPEC) {
+            char *target_name = format_type_ref_name(member_ref);
+            ok = resolver_append_error(
+                context, member_ref->token,
+                "AE0621", format_message(
+                    "intersection-form spec '%.*s' members must be spec types but found '%s'",
+                    (int)decl->as.spec_decl.name.length,
+                    decl->as.spec_decl.name.data,
+                    target_name != NULL ? target_name : "<unknown>"));
+            free(target_name);
+            break;
+        }
+        if (member_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
+            member_decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION) {
+            ok = resolver_append_error(
+                context, member_ref->token,
+                "AE0621", format_message(
+                    "intersection-form spec '%.*s' members must be object-form or intersection-form specs",
+                    (int)decl->as.spec_decl.name.length,
+                    decl->as.spec_decl.name.data));
+            break;
+        }
+        if (member_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+            const FengIntersectionSpecInfo *inner_info =
+                feng_semantic_lookup_intersection_spec_info(context->analysis, member_decl);
+            if (inner_info == NULL) {
+                ok = false;
+                break;
+            }
+            for (size_t inner_idx = 0U; inner_idx < inner_info->flattened_member_count; ++inner_idx) {
+                const FengDecl *leaf = inner_info->flattened_members[inner_idx];
+                bool duplicate = false;
+                for (size_t dup_idx = 0U; dup_idx < flattened_count; ++dup_idx) {
+                    if (flattened[dup_idx] == leaf) {
+                        duplicate = true;
+                        break;
+                    }
+                }
+                if (duplicate) {
+                    continue;
+                }
+                if (!append_raw((void **)&flattened, &flattened_count, &flattened_capacity,
+                                sizeof(*flattened), &leaf)) {
+                    ok = false;
+                    break;
+                }
+            }
+        } else {
+            bool duplicate = false;
+            for (size_t dup_idx = 0U; dup_idx < flattened_count; ++dup_idx) {
+                if (flattened[dup_idx] == member_decl) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) {
+                continue;
+            }
+            if (!append_raw((void **)&flattened, &flattened_count, &flattened_capacity,
+                            sizeof(*flattened), &member_decl)) {
+                ok = false;
+            }
+        }
+    }
+    if (ok) {
+        ok = feng_semantic_record_intersection_spec_info(context->analysis, decl,
+                                                         flattened, flattened_count);
+        if (ok && flattened_count > 1U) {
+            ok = detect_cross_spec_method_conflicts(context, decl, flattened,
+                                                     flattened_count, decl->token);
+        }
+    } else {
+        free(flattened);
+    }
+    return ok;
+}
+
 static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
     size_t index;
 
@@ -25389,89 +25482,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 return ok;
             }
             if (ok && decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
-                const FengDecl **flattened = NULL;
-                size_t flattened_count = 0U;
-                size_t flattened_capacity = 0U;
-
-                for (index = 0U; ok && index < decl->as.spec_decl.as.intersection_form.member_count; ++index) {
-                    const FengTypeRef *member_ref = decl->as.spec_decl.as.intersection_form.members[index];
-                    const FengDecl *member_decl;
-
-                    if (!resolve_type_ref(context, member_ref, false)) {
-                        ok = false;
-                        break;
-                    }
-                    member_decl = resolve_type_ref_decl(context, member_ref);
-                    if (member_decl == NULL || member_decl->kind != FENG_DECL_SPEC) {
-                        char *target_name = format_type_ref_name(member_ref);
-                        ok = resolver_append_error(
-                            context, member_ref->token,
-                            "AE0621", format_message(
-                                "intersection-form spec '%.*s' members must be spec types but found '%s'",
-                                (int)decl->as.spec_decl.name.length,
-                                decl->as.spec_decl.name.data,
-                                target_name != NULL ? target_name : "<unknown>"));
-                        free(target_name);
-                        break;
-                    }
-                    if (member_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
-                        member_decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION) {
-                        ok = resolver_append_error(
-                            context, member_ref->token,
-                            "AE0621", format_message(
-                                "intersection-form spec '%.*s' members must be object-form or intersection-form specs",
-                                (int)decl->as.spec_decl.name.length,
-                                decl->as.spec_decl.name.data));
-                        break;
-                    }
-                    if (member_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
-                        const FengIntersectionSpecInfo *inner_info =
-                            feng_semantic_lookup_intersection_spec_info(context->analysis, member_decl);
-                        if (inner_info == NULL) {
-                            ok = false;
-                            break;
-                        }
-                        for (size_t inner_idx = 0U; inner_idx < inner_info->flattened_member_count; ++inner_idx) {
-                            const FengDecl *leaf = inner_info->flattened_members[inner_idx];
-                            bool duplicate = false;
-                            for (size_t dup_idx = 0U; dup_idx < flattened_count; ++dup_idx) {
-                                if (flattened[dup_idx] == leaf) {
-                                    duplicate = true;
-                                    break;
-                                }
-                            }
-                            if (duplicate) {
-                                continue;
-                            }
-                            if (!append_raw((void **)&flattened, &flattened_count, &flattened_capacity,
-                                            sizeof(*flattened), &leaf)) {
-                                ok = false;
-                                break;
-                            }
-                        }
-                    } else {
-                        bool duplicate = false;
-                        for (size_t dup_idx = 0U; dup_idx < flattened_count; ++dup_idx) {
-                            if (flattened[dup_idx] == member_decl) {
-                                duplicate = true;
-                                break;
-                            }
-                        }
-                        if (duplicate) {
-                            continue;
-                        }
-                        if (!append_raw((void **)&flattened, &flattened_count, &flattened_capacity,
-                                        sizeof(*flattened), &member_decl)) {
-                            ok = false;
-                        }
-                    }
-                }
-                if (ok) {
-                    ok = feng_semantic_record_intersection_spec_info(context->analysis, decl,
-                                                                     flattened, flattened_count);
-                } else {
-                    free(flattened);
-                }
+                ok = resolve_intersection_spec_form(context, decl);
                 resolver_pop_type_params(context, prev_tp, prev_tp_count);
                 return ok;
             }

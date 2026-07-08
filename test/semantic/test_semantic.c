@@ -19572,6 +19572,71 @@ static void test_union_spec_rejects_intersection_form_member(void) {
     feng_program_free(program);
 }
 
+/* intersection-form spec deduplicates methods from overlapping parents. */
+static void test_intersection_spec_method_dedup(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Parent { func foo(): i32; }\n"
+        "spec A: Parent { func bar(): i32; }\n"
+        "spec B: Parent { func baz(): i32; }\n"
+        "spec Both: A & B;\n";
+    FengProgram *program = parse_program_or_die("isect_method_dedup.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* intersection-form spec rejects conflicting return types across member specs. */
+static void test_intersection_spec_method_conflict_return_type(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec A { func foo(): string; }\n"
+        "spec B { func foo(): i32; }\n"
+        "spec Both: A & B;\n";
+    FengProgram *program = parse_program_or_die("isect_method_conflict.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "same parameters but different return types") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* intersection-form spec allows method overloads with different parameters. */
+static void test_intersection_spec_method_overload_allowed(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec A { func foo(): string; }\n"
+        "spec B { func foo(n: i32): string; }\n"
+        "spec Both: A & B;\n";
+    FengProgram *program = parse_program_or_die("isect_method_overload.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -20287,6 +20352,9 @@ int main(void) {
     test_intersection_spec_flattens_multi_layer();
     test_intersection_spec_deduplicates_members();
     test_union_spec_rejects_intersection_form_member();
+    test_intersection_spec_method_dedup();
+    test_intersection_spec_method_conflict_return_type();
+    test_intersection_spec_method_overload_allowed();
 
     puts("semantic tests passed");
     return 0;
