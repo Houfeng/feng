@@ -13785,7 +13785,7 @@ static bool cg_emit_registered_call(CG *cg,
         ExprResult varr;
 
         if (!cg_pack_variadic_args(cg, &e->token,
-                                   e->as.call.args + fixed_count,
+                                   e->as.call.args ? e->as.call.args + fixed_count : NULL,
                                    variadic_arg_count,
                                    elem_type, &varr)) {
             ok = false;
@@ -14121,7 +14121,7 @@ static bool cg_emit_callable_value_call(CG *cg,
 
         if (!cg_pack_variadic_args(cg,
                                    &e->token,
-                                   e->as.call.args + fixed_count,
+                                   e->as.call.args ? e->as.call.args + fixed_count : NULL,
                                    variadic_arg_count,
                                    spec->callable_param_types[spec->callable_param_count - 1U]->element,
                                    &varr)) {
@@ -14258,7 +14258,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
 
         if (!cg_pack_variadic_args(cg,
                                    &e->token,
-                                   e->as.call.args + fixed_count,
+                                   e->as.call.args ? e->as.call.args + fixed_count : NULL,
                                    e->as.call.arg_count - fixed_count,
                                    constraint->callable_param_types[constraint->callable_param_count - 1U]->element,
                                    &varr)) {
@@ -15360,7 +15360,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         ExprResult varr;
 
         if (!cg_pack_variadic_args(cg, &e->token,
-                                   e->as.call.args + fixed_param_count,
+                                   e->as.call.args ? e->as.call.args + fixed_param_count : NULL,
                                    variadic_arg_count,
                                    elem_type, &varr)) {
             ok = false;

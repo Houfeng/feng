@@ -42,16 +42,22 @@ run_case() {
     local expected="$SMOKE_DIR/$name.expected"
     local out_dir="$GEN_ROOT/$name"
     local bin="$out_dir/bin/$name"
+    local timeout_sec="${SMOKE_TIMEOUT:-30}"
 
     total=$((total + 1))
     rm -rf "$out_dir"
     mkdir -p "$out_dir"
 
     local log="$out_dir/compile.log"
-    if ! "$FENG" "${inputs[@]}" --target=bin --out="$out_dir" \
+    if ! timeout "$timeout_sec" "$FENG" "${inputs[@]}" --target=bin --out="$out_dir" \
             --name="$name" --keep-ir >"$log" 2>&1; then
-        echo "FAIL[$name] compile:"
-        sed 's/^/  /' "$log"
+        local exit_code=$?
+        if [[ $exit_code -eq 124 ]]; then
+            echo "TIMEOUT[$name] compile exceeded ${timeout_sec}s"
+        else
+            echo "FAIL[$name] compile:"
+            sed 's/^/  /' "$log"
+        fi
         failures=$((failures + 1))
         return
     fi
@@ -62,7 +68,13 @@ run_case() {
     fi
 
     local actual
-    actual="$("$bin" 2>&1 || true)"
+    local exec_exit=0
+    actual="$(timeout "$timeout_sec" "$bin" 2>&1)" || exec_exit=$?
+    if [[ $exec_exit -eq 124 ]]; then
+        echo "TIMEOUT[$name] execution exceeded ${timeout_sec}s"
+        failures=$((failures + 1))
+        return
+    fi
     if [[ -f "$expected" ]]; then
         local want
         want="$(cat "$expected")"
