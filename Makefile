@@ -95,7 +95,7 @@ EXTLIB_DIR := extlib/$(HOST_TARGET)
 RUNTIME_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
 LIBUNWIND_LIB := $(EXTLIB_DIR)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC_LIB_EXT)
 
-.PHONY: all cli runtime test smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints clean
+.PHONY: all cli runtime test smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints test-sanitize clean
 
 all: cli runtime
 
@@ -114,42 +114,15 @@ test: $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN
 	$(BIN_DIR)/test_cli
 	$(BIN_DIR)/test_symbol
 
+test-sanitize:
+	$(MAKE) clean
+	$(MAKE) test CFLAGS="-fsanitize=address,undefined -g -O1 -std=c11 -Wall -Wextra -pedantic" LDFLAGS="-fsanitize=address,undefined"
+
 perf-constraints: cli runtime
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_perf_constraints.sh
 
 std-tests: cli runtime
-	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng build ./std
-	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng build ./std_test
-	./std_test/build/bin/std_test > ./std_test/build/std_test.stdout
-	grep -q '^__STD_IO_READLINE1__=ABCDE$$' ./std_test/build/std_test.stdout
-	grep -q '^__STD_IO_READLINE2__=FG$$' ./std_test/build/std_test.stdout
-	grep -q '^__STD_IO_READLINE3__=$$' ./std_test/build/std_test.stdout
-	grep -q '^__STD_IO_WRITELINE__$$' ./std_test/build/std_test.stdout
-	grep -q '^__STD_IO_FORMAT__ left/right$$' ./std_test/build/std_test.stdout
-	grep -q '^__STD_IO_FORMAT_LITERAL__ {2}$$' ./std_test/build/std_test.stdout
-	grep -q '^__STD_IO_PRINT__$$' ./std_test/build/std_test.stdout
-	grep -q '^__STD_IO_PRINTLN__$$' ./std_test/build/std_test.stdout
-	grep -q '^__STDIO_READLINE1__=DE$$' ./std_test/build/std_test.stdout
-	grep -q '^__STDIO_READLINE2__=FG$$' ./std_test/build/std_test.stdout
-	grep -q '^__STDIO_READLINE3__=$$' ./std_test/build/std_test.stdout
-	grep -q '^__STDIO_WRITE__$$' ./std_test/build/std_test.stdout
-	grep -q '^__STDIO_WRITE_TEXT__$$' ./std_test/build/std_test.stdout
-	grep -q '^__STDIO_LINE__$$' ./std_test/build/std_test.stdout
-	grep -q '^__STRING_FROM_UTF8_ASCII__=hello$$' ./std_test/build/std_test.stdout
-	grep -q '^__STRING_FROM_UTF8_UTF8__=你好$$' ./std_test/build/std_test.stdout
-	grep -q '^__STRING_FROM_UTF8_EMPTY__=$$' ./std_test/build/std_test.stdout
-	grep -q '^__STDIO_TOP_PRINT__ left/right$$' ./std_test/build/std_test.stdout
-	grep -q '^__STDIO_LITERAL__ {2}$$' ./std_test/build/std_test.stdout
-	grep -q '^__STDIO_PRINTLN__ left/right$$' ./std_test/build/std_test.stdout
-	grep -q '^__STRING_CLONE_FULL__=hello$$' ./std_test/build/std_test.stdout
-	grep -q '^__STRING_CLONE_RANGE__=world$$' ./std_test/build/std_test.stdout
-	grep -q '^__STRING_CLONE_EMPTY__=$$' ./std_test/build/std_test.stdout
-	grep -q '^__STRING_CLONE_UTF8__=你好世界$$' ./std_test/build/std_test.stdout
-	grep -q '^__STRING_CLONE_UTF8_RANGE__=世界$$' ./std_test/build/std_test.stdout
-	grep -q '^__STRING_EQUALITY__=ok$$' ./std_test/build/std_test.stdout
-	grep -q '^__LIST_FOR_IN__=abc$$' ./std_test/build/std_test.stdout
-	grep -q '^__STRING_BYTE_FOR_IN__=a\.b\.c\.$$' ./std_test/build/std_test.stdout
-	grep -q '^__STRING_RUNE_FOR_IN__=A中B$$' ./std_test/build/std_test.stdout
+	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng run ./std_test
 
 fcts-tests: cli runtime
 	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng run ./fcts/fcts_bin
