@@ -2119,6 +2119,20 @@ static bool inject_external_modules_from_decl(
                 }
                 return true;
             }
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                for (size_t member_index = 0U;
+                     member_index < decl->as.spec_decl.as.intersection_form.member_count;
+                     ++member_index) {
+                    if (!inject_external_modules_from_type_ref(
+                            analysis,
+                            imported_query,
+                            program,
+                            decl->as.spec_decl.as.intersection_form.members[member_index])) {
+                        return false;
+                    }
+                }
+                return true;
+            }
             for (size_t member_index = 0U;
                  member_index < decl->as.spec_decl.as.object.member_count;
                  ++member_index) {
@@ -25359,6 +25373,17 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 resolver_pop_type_params(context, prev_tp, prev_tp_count);
                 return ok;
             }
+            if (ok && decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                for (index = 0U; ok && index < decl->as.spec_decl.as.intersection_form.member_count; ++index) {
+                    if (!resolve_type_ref(context,
+                                          decl->as.spec_decl.as.intersection_form.members[index],
+                                          false)) {
+                        ok = false;
+                    }
+                }
+                resolver_pop_type_params(context, prev_tp, prev_tp_count);
+                return ok;
+            }
             if (ok && decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
                 if (!resolve_type_ref(context, decl->as.spec_decl.as.callable.return_type, true)) {
                     ok = false;
@@ -26354,6 +26379,10 @@ static size_t count_all_callables(const FengSemanticAnalysis *analysis) {
                 if (decl->kind == FENG_DECL_SPEC) {
                     if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
                         ++count;
+                        continue;
+                    }
+                    if (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION ||
+                        decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
                         continue;
                     }
                     for (member_index = 0U;

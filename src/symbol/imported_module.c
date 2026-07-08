@@ -450,6 +450,11 @@ static void free_synthetic_decl_payload(FengDecl *decl) {
                     free_synthetic_type_ref(decl->as.spec_decl.as.union_form.members[index]);
                 }
                 free(decl->as.spec_decl.as.union_form.members);
+            } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                for (index = 0U; index < decl->as.spec_decl.as.intersection_form.member_count; ++index) {
+                    free_synthetic_type_ref(decl->as.spec_decl.as.intersection_form.members[index]);
+                }
+                free(decl->as.spec_decl.as.intersection_form.members);
             } else {
                 free_synthetic_parameters(decl->as.spec_decl.as.callable.params,
                                           decl->as.spec_decl.as.callable.param_count);
@@ -1146,6 +1151,16 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                 }
                 synth_decl->decl.as.spec_decl.as.union_form.member_count =
                     symbol_decl->union_member_count;
+            } else if (symbol_decl->spec_form == FENG_SPEC_FORM_INTERSECTION) {
+                synth_decl->decl.as.spec_decl.as.intersection_form.members =
+                    synthesize_type_ref_list(symbol_decl->intersection_members,
+                                             symbol_decl->intersection_member_count);
+                if (symbol_decl->intersection_member_count > 0U &&
+                    synth_decl->decl.as.spec_decl.as.intersection_form.members == NULL) {
+                    break;
+                }
+                synth_decl->decl.as.spec_decl.as.intersection_form.member_count =
+                    symbol_decl->intersection_member_count;
             } else if (symbol_decl->spec_form == FENG_SPEC_FORM_CALLABLE) {
                 synth_decl->decl.as.spec_decl.as.callable.params =
                     synthesize_parameters(symbol_decl,

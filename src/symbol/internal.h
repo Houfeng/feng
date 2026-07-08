@@ -92,6 +92,8 @@ struct FengSymbolDeclView {
     size_t declared_spec_count;
     FengSymbolTypeView **union_members;
     size_t union_member_count;
+    FengSymbolTypeView **intersection_members;
+    size_t intersection_member_count;
     struct FengSymbolDeclView **members;
     size_t member_count;
     struct FengSymbolDeclView *owner;

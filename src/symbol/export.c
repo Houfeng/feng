@@ -1393,6 +1393,41 @@ static bool fill_union_members_with_tparams(const BuildContext *ctx,
     return true;
 }
 
+static bool fill_intersection_members_with_tparams(const BuildContext *ctx,
+                                                   FengSymbolDeclView *decl,
+                                                   const FengDecl *source_decl,
+                                                   const FengTypeParam *type_params,
+                                                   size_t type_param_count,
+                                                   const char *path,
+                                                   FengToken token,
+                                                   FengSymbolError *out_error) {
+    for (size_t index = 0U; index < source_decl->as.spec_decl.as.intersection_form.member_count; ++index) {
+        FengSymbolTypeView *type = build_type_from_type_ref_with_tparams(
+            ctx,
+            source_decl->as.spec_decl.as.intersection_form.members[index],
+            type_params,
+            type_param_count,
+            path,
+            token,
+            out_error);
+
+        if (source_decl->as.spec_decl.as.intersection_form.members[index] != NULL && type == NULL) {
+            return false;
+        }
+        if (!append_type_pointer(&decl->intersection_members,
+                                 &decl->intersection_member_count,
+                                 type,
+                                 path,
+                                 token,
+                                 out_error)) {
+            feng_symbol_internal_type_free(type);
+            return false;
+        }
+    }
+
+    return true;
+}
+
 /* 从语义阶段的 FengReifiableDepSet 读取依赖，按 kind 分类填入 DeclView 的
  * reifiable_agg_deps（AGGREGATE）和 reifiable_type_deps（MANAGED）。
  * 每个依赖的 type_ref 转换为 NAMED_GENERIC 类型视图。 */
@@ -2686,6 +2721,22 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                                                      path,
                                                      source_decl->token,
                                                      out_error)) {
+                    ctx->type_params = NULL;
+                    ctx->type_param_count = 0U;
+                    feng_symbol_internal_decl_free_members(decl);
+                    free(decl);
+                    return NULL;
+                }
+                ctx->type_params = NULL;
+                ctx->type_param_count = 0U;
+            } else if (source_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                if (!fill_intersection_members_with_tparams(ctx, decl,
+                                                            source_decl,
+                                                            ctx->type_params,
+                                                            ctx->type_param_count,
+                                                            path,
+                                                            source_decl->token,
+                                                            out_error)) {
                     ctx->type_params = NULL;
                     ctx->type_param_count = 0U;
                     feng_symbol_internal_decl_free_members(decl);

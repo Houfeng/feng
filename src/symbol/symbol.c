@@ -207,6 +207,11 @@ static void decl_dispose(FengSymbolDeclView *decl, bool free_self) {
     }
     free(decl->union_members);
 
+    for (index = 0U; index < decl->intersection_member_count; ++index) {
+        feng_symbol_internal_type_free(decl->intersection_members[index]);
+    }
+    free(decl->intersection_members);
+
     for (index = 0U; index < decl->member_count; ++index) {
         decl_dispose(decl->members[index], true);
     }
@@ -446,6 +451,7 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     clone->params = NULL;
     clone->declared_specs = NULL;
     clone->union_members = NULL;
+    clone->intersection_members = NULL;
     clone->members = NULL;
     clone->reifiable_agg_deps = NULL;
     clone->reifiable_type_deps = NULL;
@@ -522,6 +528,25 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
             clone->union_members[index] = feng_symbol_internal_type_clone(decl->union_members[index],
                                                                           out_error);
             if (decl->union_members[index] != NULL && clone->union_members[index] == NULL) {
+                decl_dispose(clone, true);
+                return NULL;
+            }
+        }
+    }
+
+    if (decl->intersection_member_count > 0U) {
+        clone->intersection_members = (FengSymbolTypeView **)calloc(decl->intersection_member_count,
+                                                                    sizeof(*clone->intersection_members));
+        if (clone->intersection_members == NULL) {
+            feng_symbol_internal_set_error(out_error, decl->path, decl->token, "out of memory cloning intersection member list");
+            decl_dispose(clone, true);
+            return NULL;
+        }
+        clone->intersection_member_count = decl->intersection_member_count;
+        for (index = 0U; index < decl->intersection_member_count; ++index) {
+            clone->intersection_members[index] = feng_symbol_internal_type_clone(decl->intersection_members[index],
+                                                                                  out_error);
+            if (decl->intersection_members[index] != NULL && clone->intersection_members[index] == NULL) {
                 decl_dispose(clone, true);
                 return NULL;
             }

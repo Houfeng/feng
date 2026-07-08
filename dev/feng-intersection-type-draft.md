@@ -335,7 +335,7 @@ struct {
   - 解析逻辑：`:` 后第一个 type ref 后，`&` → INTERSECTION，`|` → UNION，`,`/`{` → OBJECT
   - 测试：`test/parser/` 新增 AST 结构测试，验证正确解析 `spec T: A & B;`
 
-- [ ] **9.2 Symbol Table：序列化/反序列化**
+- [x] **9.2 Symbol Table：序列化/反序列化**
   - `ft_write` 支持写入 `FENG_SPEC_FORM_INTERSECTION` 及 `intersection_form` 成员列表
   - `ft_read` 支持读取并还原交叉类型 AST
   - 测试：`test/symbol/` 新增 round-trip 测试，写入后读取验证 AST 一致

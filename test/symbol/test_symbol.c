@@ -429,6 +429,93 @@ static void test_union_spec_ft_roundtrip_preserves_normalized_members(void) {
     free(tmp_dir);
 }
 
+static void test_intersection_spec_ft_roundtrip_preserves_members(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.intersection_roundtrip;\n"
+        "open spec Greetable {\n"
+        "    func greet(): string;\n"
+        "}\n"
+        "open spec Displayable {\n"
+        "    func display(): string;\n"
+        "}\n"
+        "open spec GreetAndDisplay: Greetable & Displayable;\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSymbolError error = {0};
+    FengSlice segments[4];
+    const FengSymbolImportedModule *module = NULL;
+    const FengSymbolDeclView *gd_decl = NULL;
+    const FengSemanticModule *semantic_module = NULL;
+    const FengDecl *synth_gd_decl = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("intersection_roundtrip.ff", kSource, public_root);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("intersection_roundtrip");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+
+    gd_decl = feng_symbol_module_find_public_spec(module, slice_from_cstr("GreetAndDisplay"));
+    ASSERT(gd_decl != NULL);
+    ASSERT(feng_symbol_decl_kind(gd_decl) == FENG_SYMBOL_DECL_KIND_SPEC);
+    ASSERT(feng_symbol_decl_spec_form(gd_decl) == FENG_SPEC_FORM_INTERSECTION);
+    ASSERT(feng_symbol_decl_intersection_member_count(gd_decl) == 2U);
+    {
+        const FengSymbolTypeView *member0 = feng_symbol_decl_intersection_member_at(gd_decl, 0U);
+        size_t seg_count;
+        ASSERT(member0 != NULL);
+        ASSERT(feng_symbol_type_kind(member0) == FENG_SYMBOL_TYPE_KIND_NAMED);
+        seg_count = feng_symbol_type_segment_count(member0);
+        ASSERT(seg_count >= 1U);
+        ASSERT(slice_equals_cstr(feng_symbol_type_segment_at(member0, seg_count - 1U), "Greetable"));
+    }
+    {
+        const FengSymbolTypeView *member1 = feng_symbol_decl_intersection_member_at(gd_decl, 1U);
+        size_t seg_count;
+        ASSERT(member1 != NULL);
+        ASSERT(feng_symbol_type_kind(member1) == FENG_SYMBOL_TYPE_KIND_NAMED);
+        seg_count = feng_symbol_type_segment_count(member1);
+        ASSERT(seg_count >= 1U);
+        ASSERT(slice_equals_cstr(feng_symbol_type_segment_at(member1, seg_count - 1U), "Displayable"));
+    }
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    semantic_module = query.get_module(query.user, segments, 4U);
+    ASSERT(semantic_module != NULL);
+    synth_gd_decl = NULL;
+    for (size_t i = 0U; i < semantic_module->programs[0]->declaration_count; ++i) {
+        const FengDecl *d = semantic_module->programs[0]->declarations[i];
+        if (d->kind == FENG_DECL_SPEC &&
+            slice_equals_cstr(d->as.spec_decl.name, "GreetAndDisplay")) {
+            synth_gd_decl = d;
+            break;
+        }
+    }
+    ASSERT(synth_gd_decl != NULL);
+    ASSERT(synth_gd_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION);
+    ASSERT(synth_gd_decl->as.spec_decl.as.intersection_form.member_count == 2U);
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_bounded_decl_ft_roundtrip_uses_inferred_initializer(void) {
     static const char *kSource =
         "open module feng.test.symbol.bounded;\n"
@@ -1767,6 +1854,7 @@ int main(void) {
 
     test_roundtrip_public_module();
     test_union_spec_ft_roundtrip_preserves_normalized_members();
+    test_intersection_spec_ft_roundtrip_preserves_members();
     test_bounded_decl_ft_roundtrip_uses_inferred_initializer();
     test_roundtrip_public_module_docs();
     test_private_module_skipped();

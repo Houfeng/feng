@@ -377,6 +377,7 @@ static FengSymbolTypeView *parse_type_by_id(ReadContext *ctx,
         case FENG_SYMBOL_FT_TYPE_KIND_SPEC_OBJECT:
         case FENG_SYMBOL_FT_TYPE_KIND_SPEC_CALLABLE:
         case FENG_SYMBOL_FT_TYPE_KIND_SPEC_UNION:
+        case FENG_SYMBOL_FT_TYPE_KIND_SPEC_INTERSECTION:
             /* These node kinds are structural (not value types) and are
              * handled directly in parse_symbols.  If encountered here it
              * means a corrupt TYPS reference from a value-type context. */
@@ -673,6 +674,77 @@ static bool parse_union_members_from_type_ref(ReadContext *ctx,
     return true;
 }
 
+static bool parse_intersection_members_from_type_ref(ReadContext *ctx,
+                                                     uint32_t type_id,
+                                                     FengSymbolDeclView *decl,
+                                                     const char *path,
+                                                     FengSymbolError *out_error) {
+    const unsigned char *typs_base;
+    const unsigned char *record;
+    const unsigned char *tseq_base;
+    uint32_t typs_total;
+    uint32_t tseq_total;
+    uint16_t kind;
+    uint32_t elem_start;
+    uint32_t elem_count;
+
+    if (type_id == 0U || decl == NULL) {
+        return true;
+    }
+
+    typs_total = read_u32_le((const unsigned char *)ctx->typs_section + 0x04);
+    if (type_id > typs_total) {
+        return feng_symbol_internal_set_error(out_error,
+                                              path,
+                                              (FengToken){0},
+                                              "spec type_ref %u is out of range",
+                                              type_id);
+    }
+    typs_base = ctx->data + read_u64_le((const unsigned char *)ctx->typs_section + 0x08);
+    record = typs_base + (size_t)(type_id - 1U) * sizeof(FengSymbolFtTypeRecord);
+    kind = read_u16_le(record + 0x00);
+    elem_start = read_u32_le(record + 0x0C);
+    elem_count = read_u32_le(record + 0x10);
+
+    if (kind != FENG_SYMBOL_FT_TYPE_KIND_SPEC_INTERSECTION) {
+        return false;
+    }
+    if (elem_count == 0U) {
+        return true;
+    }
+
+    tseq_total = read_u32_le((const unsigned char *)ctx->tseq_section + 0x04);
+    if (elem_start + elem_count > tseq_total) {
+        return feng_symbol_internal_set_error(out_error,
+                                              path,
+                                              (FengToken){0},
+                                              "intersection member TSEQ range [%u, %u) exceeds TSEQ section size %u",
+                                              elem_start,
+                                              elem_start + elem_count,
+                                              tseq_total);
+    }
+    decl->intersection_members = (FengSymbolTypeView **)calloc(elem_count, sizeof(*decl->intersection_members));
+    if (decl->intersection_members == NULL) {
+        return feng_symbol_internal_set_error(out_error,
+                                              path,
+                                              (FengToken){0},
+                                              "out of memory allocating intersection member list (%u entries)",
+                                              elem_count);
+    }
+    tseq_base = ctx->data + read_u64_le((const unsigned char *)ctx->tseq_section + 0x08);
+    for (uint32_t member_index = 0U; member_index < elem_count; ++member_index) {
+        const unsigned char *tseq_record = tseq_base + (size_t)(elem_start + member_index) * sizeof(FengSymbolFtTseqRecord);
+        uint32_t member_type_id = read_u32_le(tseq_record + 0x04);
+
+        decl->intersection_members[member_index] = parse_type_by_id(ctx, member_type_id, path, out_error);
+        if (member_type_id != 0U && decl->intersection_members[member_index] == NULL) {
+            return false;
+        }
+        decl->intersection_member_count = (size_t)member_index + 1U;
+    }
+    return true;
+}
+
 static bool parse_spec_from_type_ref(ReadContext *ctx,
                                      uint32_t type_id,
                                      FengSymbolDeclView *decl,
@@ -701,6 +773,9 @@ static bool parse_spec_from_type_ref(ReadContext *ctx,
 
     if (kind == FENG_SYMBOL_FT_TYPE_KIND_SPEC_UNION) {
         return parse_union_members_from_type_ref(ctx, type_id, decl, path, out_error);
+    }
+    if (kind == FENG_SYMBOL_FT_TYPE_KIND_SPEC_INTERSECTION) {
+        return parse_intersection_members_from_type_ref(ctx, type_id, decl, path, out_error);
     }
     return parse_callable_from_type_ref(ctx, type_id, decl, path, out_error);
 }
@@ -805,6 +880,8 @@ static bool parse_symbols(ReadContext *ctx,
 
             if (form_bits == FENG_SYMBOL_FT_SYM_FLAG_SPEC_FORM_UNION) {
                 decl->spec_form = FENG_SPEC_FORM_UNION;
+            } else if (form_bits == FENG_SYMBOL_FT_SYM_FLAG_SPEC_FORM_INTERSECTION) {
+                decl->spec_form = FENG_SPEC_FORM_INTERSECTION;
             } else if (form_bits == FENG_SYMBOL_FT_SYM_FLAG_SPEC_FORM_CALLABLE) {
                 decl->spec_form = FENG_SPEC_FORM_CALLABLE;
             } else {

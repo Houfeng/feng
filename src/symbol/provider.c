@@ -1030,6 +1030,22 @@ const FengSymbolTypeView *feng_symbol_decl_union_member_at(const FengSymbolDeclV
     return decl->union_members[index];
 }
 
+size_t feng_symbol_decl_intersection_member_count(const FengSymbolDeclView *decl) {
+    return decl != NULL ? decl->intersection_member_count : 0U;
+}
+
+const FengSymbolTypeView *feng_symbol_decl_intersection_member_at(const FengSymbolDeclView *decl,
+                                                                   size_t index) {
+    if (decl == NULL || index >= decl->intersection_member_count) {
+        return NULL;
+    }
+    return decl->intersection_members[index];
+}
+
+FengSpecForm feng_symbol_decl_spec_form(const FengSymbolDeclView *decl) {
+    return decl != NULL ? decl->spec_form : FENG_SPEC_FORM_OBJECT;
+}
+
 size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->type_param_count : 0U;
 }
