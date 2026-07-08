@@ -158,6 +158,9 @@
 | AE0615 | type 声明 spec 列表形态约束 | AE0200 | type '%.*s' declared spec list can only contain object-form specs |
 | AE0616 | type 声明 spec 列表唯一性约束 | AE0201 | type '%.*s' lists '%.*s' more than once in its declared spec list |
 | AE0620 | object-form spec 声明限制 | AE0187 | object-form spec '%.*s' cannot declare a finalizer |
+| AE0621 | intersection-form 成员形态约束 | — | intersection-form spec '%.*s' members must be spec types but found '%s' |
+| AE0621 | intersection-form 成员形态约束 | — | intersection-form spec '%.*s' members must be object-form or intersection-form specs |
+| AE0622 | union-form 成员禁止 intersection-form | — | union-form spec '%.*s' cannot have intersection-form spec '%.*s' as a member |
 | AE0701 | spec 字段存在性约束 | AE0188 | type '%.*s' is missing field '%.*s' required by spec '%.*s' |
 | AE0702 | spec 字段可写性一致性约束 | AE0189 | type '%.*s' field '%.*s' mutability does not match spec '%.*s' (expected '%s') |
 | AE0703 | spec 字段类型一致性约束 | AE0190 | type '%.*s' field '%.*s' type '%s' does not match spec '%.*s' field type '%s' |

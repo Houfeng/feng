@@ -263,6 +263,15 @@ typedef struct FengUnionSpecInfo {
     size_t member_count;
 } FengUnionSpecInfo;
 
+/* Flattened intersection spec metadata. After validation, nested intersection
+ * members are expanded so that `flattened_members` holds only object-form
+ * spec decls. Duplicates are removed. */
+typedef struct FengIntersectionSpecInfo {
+    const FengDecl *spec_decl;
+    const FengDecl **flattened_members;
+    size_t flattened_member_count;
+} FengIntersectionSpecInfo;
+
 /* Records a value-flow site where expression `expr` is wrapped into a
  * union-form spec and assigned one normalized active member. Exact member
  * matches are preferred by the analyzer before spec-satisfaction matches, so
@@ -338,6 +347,9 @@ typedef struct FengSemanticAnalysis {
     FengUnionSpecInfo *union_spec_infos;
     size_t union_spec_info_count;
     size_t union_spec_info_capacity;
+    FengIntersectionSpecInfo *intersection_spec_infos;
+    size_t intersection_spec_info_count;
+    size_t intersection_spec_info_capacity;
     FengUnionCoercionSite *union_coercion_sites;
     size_t union_coercion_site_count;
     size_t union_coercion_site_capacity;
@@ -590,6 +602,22 @@ const FengUnionCoercionSite *feng_semantic_lookup_union_coercion_site(
     const FengExpr *expr);
 
 void feng_semantic_free_union_spec_infos(FengSemanticAnalysis *analysis);
+
+/* --- Intersection-form spec metadata ---------------------------------- */
+
+/* Takes ownership of `flattened_members`. Re-recording the same `spec_decl`
+ * replaces the previous member list. */
+bool feng_semantic_record_intersection_spec_info(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *spec_decl,
+    const FengDecl **flattened_members,
+    size_t flattened_member_count);
+
+const FengIntersectionSpecInfo *feng_semantic_lookup_intersection_spec_info(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *spec_decl);
+
+void feng_semantic_free_intersection_spec_infos(FengSemanticAnalysis *analysis);
 
 /* --- SpecDefaultBinding (Phase S2-a, §6.3 / §9.3) --------------------- */
 

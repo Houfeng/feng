@@ -340,7 +340,7 @@ struct {
   - `ft_read` 支持读取并还原交叉类型 AST
   - 测试：`test/symbol/` 新增 round-trip 测试，写入后读取验证 AST 一致
 
-- [ ] **9.3 语义验证：成员类型检查**
+- [x] **9.3 语义验证：成员类型检查**
   - 验证所有成员必须是 object-form spec 或 Intersection-form spec，否则报错
   - 多层交叉在定义时展平并去重（`spec U: T & C` 展平为 `[A, B, C]`）
   - Union 成员验证中显式拒绝 Intersection-form spec（命名交叉类型也不允许作为 union 成员）

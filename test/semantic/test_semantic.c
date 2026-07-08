@@ -19395,6 +19395,183 @@ static void test_generic_bare_name_reference_rejected(void) {
     feng_program_free(program);
 }
 
+/* intersection-form spec member must resolve to a spec type. */
+static void test_intersection_spec_member_must_be_spec(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type NotASpec {}\n"
+        "spec Bad: NotASpec & NotASpec;\n";
+    FengProgram *program = parse_program_or_die("isect_member_not_spec.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "must be spec types") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* intersection-form spec member must be object-form or intersection-form spec. */
+static void test_intersection_spec_member_must_be_object_or_intersection_form(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec A {}\n"
+        "spec U: int | string;\n"
+        "spec Bad: A & U;\n";
+    FengProgram *program = parse_program_or_die("isect_member_union.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "must be object-form or intersection-form specs") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* intersection-form spec member rejects callable-form spec. */
+static void test_intersection_spec_member_rejects_callable_form(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec A {}\n"
+        "spec Callback(): void;\n"
+        "spec Bad: A & Callback;\n";
+    FengProgram *program = parse_program_or_die("isect_member_callable.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "must be object-form or intersection-form specs") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* intersection-form spec with two object-form members is accepted. */
+static void test_intersection_spec_accepts_object_form_members(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Greetable { func greet(): string; }\n"
+        "spec Displayable { func display(): string; }\n"
+        "spec Both: Greetable & Displayable;\n";
+    FengProgram *program = parse_program_or_die("isect_obj_members.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* intersection-form spec can reference another intersection-form spec as member. */
+static void test_intersection_spec_accepts_nested_intersection_members(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec A {}\n"
+        "spec B {}\n"
+        "spec C {}\n"
+        "spec AB: A & B;\n"
+        "spec ABC: AB & C;\n";
+    FengProgram *program = parse_program_or_die("isect_nested.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* multi-layer intersection is flattened: spec ABC: AB & C becomes [A, B, C]. */
+static void test_intersection_spec_flattens_multi_layer(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec A {}\n"
+        "spec B {}\n"
+        "spec C {}\n"
+        "spec AB: A & B;\n"
+        "spec ABC: AB & C;\n";
+    FengProgram *program = parse_program_or_die("isect_flatten.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* duplicate members in a flattened intersection are deduplicated. */
+static void test_intersection_spec_deduplicates_members(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec A {}\n"
+        "spec B {}\n"
+        "spec AB: A & B;\n"
+        "spec ABA: AB & A;\n";
+    FengProgram *program = parse_program_or_die("isect_dedup.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* union-form spec cannot have intersection-form spec as a member. */
+static void test_union_spec_rejects_intersection_form_member(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec A {}\n"
+        "spec B {}\n"
+        "spec AB: A & B;\n"
+        "spec U: AB | int;\n";
+    FengProgram *program = parse_program_or_die("union_rejects_isect.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message, "cannot have intersection-form spec") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -20101,6 +20278,15 @@ int main(void) {
     test_generic_arity_precise_resolution();
     test_generic_arity_mismatch_with_overloads();
     test_generic_bare_name_reference_rejected();
+
+    test_intersection_spec_member_must_be_spec();
+    test_intersection_spec_member_must_be_object_or_intersection_form();
+    test_intersection_spec_member_rejects_callable_form();
+    test_intersection_spec_accepts_object_form_members();
+    test_intersection_spec_accepts_nested_intersection_members();
+    test_intersection_spec_flattens_multi_layer();
+    test_intersection_spec_deduplicates_members();
+    test_union_spec_rejects_intersection_form_member();
 
     puts("semantic tests passed");
     return 0;
