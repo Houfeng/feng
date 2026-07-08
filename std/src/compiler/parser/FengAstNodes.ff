@@ -937,15 +937,27 @@ open type CallableSpec {
  */
 open type UnionSpec {
   let location: FengLocation;
+  let genericParameters: GenericParameter[];
   let memberTypeRefs: TypeReference[];
 }
 
 /**
- * 契约体联合类型：对象契约、可调用契约、联合契约
+ * 交叉契约：定义必须同时满足的契约集合
+ * 比如 spec Serializable: JsonSerializable & BinarySerializable;
+ */
+open type IntersectionSpec {
+  let location: FengLocation;
+  let genericParameters: GenericParameter[];
+  let memberTypeRefs: TypeReference[];
+}
+
+/**
+ * 契约体联合类型：对象契约、可调用契约、联合契约、交叉契约
  */
 open spec SpecBody: ObjectSpec
 | CallableSpec
-| UnionSpec;
+| UnionSpec
+| IntersectionSpec;
 
 /**
  * 契约声明节点
