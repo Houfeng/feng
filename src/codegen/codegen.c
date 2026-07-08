@@ -27055,7 +27055,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             if (!cg_ensure_witness_instance(cg,
                                             &subject_key,
                                             constraint_spec,
-                                            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER,
+                                            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL,
                                             *tok,
                                             &witness_var)) {
                 buf_free(&b);
