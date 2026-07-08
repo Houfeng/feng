@@ -359,7 +359,7 @@ struct {
   - 不满足时报编译错误
   - 测试：`test/semantic/` 新增诊断测试，覆盖满足/不满足两种路径
 
-- [ ] **9.6 Codegen：Merged Witness 结构体与实例**
+- [x] **9.6 Codegen：Merged Witness 结构体与实例**
   - 为每个交叉类型生成 merged witness struct（`FengSpecWitness__<Name>`）
   - 为每个满足交叉类型的具体类型，按需生成 merged witness 实例（编译期常量）
   - 仅在 coercion site（赋值点）触发实例生成

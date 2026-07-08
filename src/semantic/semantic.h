@@ -170,7 +170,14 @@ typedef enum FengSpecCoercionForm {
      * spec. Semantic resolves the exact target spec and source function so
      * codegen does not have to guess which ABI function-pointer surface the
      * site chose. */
-    FENG_SPEC_COERCION_FORM_ABI_FUNCTION_POINTER
+    FENG_SPEC_COERCION_FORM_ABI_FUNCTION_POINTER,
+    /* Concrete type → intersection-form spec. Like FORM_OBJECT the value
+     * is wrapped into a fat-spec `{ subject, witness }`, but the witness
+     * is a *merged* witness assembled from the subject's per-member-spec
+     * witnesses. There is no single SpecRelation justifying the coercion
+     * (satisfaction is per member spec), so `relation` is NULL for this
+     * form — see FengSpecCoercionSite.relation. */
+    FENG_SPEC_COERCION_FORM_INTERSECTION
 } FengSpecCoercionForm;
 
 /* Origin of the callable value being coerced to a callable-form spec. The
@@ -226,9 +233,12 @@ typedef struct FengSpecCoercionSite {
     const FengTypeRef *target_spec_type_ref;
     /* OBJECT form only: the SpecRelation entry that justifies this coercion.
      * Always non-NULL for FORM_OBJECT (analyzer asserts the lookup succeeds
-     * before recording). NULL for FORM_CALLABLE per §8.4. */
+     * before recording). NULL for FORM_CALLABLE per §8.4 and NULL for
+     * FORM_INTERSECTION (satisfaction is per member spec, there is no single
+     * SpecRelation to point at; codegen derives the merged witness from the
+     * subject's per-member witnesses directly). */
     const FengSpecRelation *relation;
-    /* OBJECT form only: subject 承载策略（借用局部地址或装箱 owner）。
+    /* OBJECT/INTERSECTION form only: subject 承载策略（借用局部地址或装箱 owner）。
      * CALLABLE form 下未使用。 */
     FengSpecObjectSubjectStorageKind object_subject_storage;
     /* CALLABLE form only: classification of the value source. Unspecified
@@ -531,6 +541,23 @@ bool feng_semantic_record_object_spec_coercion_site(
     const FengDecl *target_spec_decl,
     const FengTypeRef *target_spec_type_ref,
     const FengSpecRelation *relation,
+    FengSpecObjectSubjectStorageKind object_subject_storage);
+
+/* Record an intersection-form coercion site (`expr` of concrete type
+ * `src_type_decl` flowing into a slot typed as intersection-form spec
+ * `target_spec_decl`). Differs from FORM_OBJECT in that there is no single
+ * SpecRelation: the subject satisfies every member spec (already verified
+ * by 9.5's per-member satisfaction check), so codegen derives the merged
+ * witness from the subject's per-member witnesses. All non-NULL pointers
+ * must be valid; recording replaces any prior entry for the same `expr`.
+ *
+ * Implemented in spec_coercion_sites.c. */
+bool feng_semantic_record_intersection_spec_coercion_site(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr,
+    const FengSemanticSubjectKey *src_subject_key,
+    const FengDecl *target_spec_decl,
+    const FengTypeRef *target_spec_type_ref,
     FengSpecObjectSubjectStorageKind object_subject_storage);
 
 /* Record a callable-form coercion site. `target_spec_decl` is the

@@ -17108,7 +17108,8 @@ static void record_object_spec_coercion_site_if_applicable(
     if (decl_is_function_type(target_decl)) {
         return;
     }
-    if (target_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+    if (target_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
+        target_decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION) {
         return;
     }
     expr_type = infer_expr_type(context, expr);
@@ -17154,6 +17155,20 @@ static void record_object_spec_coercion_site_if_applicable(
         /* Builtin / array path: satisfaction was already confirmed by the
          * type_ref_satisfies_spec_type_ref check in the outer resolver, so
          * we do not re-check here. */
+    }
+    /* Intersection-form: no single SpecRelation justifies the coercion
+     * (satisfaction is per member spec, already verified by 9.5). Record
+     * the site with form=INTERSECTION and skip the SpecRelation lookup and
+     * the SpecWitness compute path — codegen derives the merged witness
+     * from the subject's per-member witnesses directly. */
+    if (target_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+        (void)feng_semantic_record_intersection_spec_coercion_site(context->analysis,
+                                                                   expr,
+                                                                   &subject_key_for_coercion,
+                                                                   target_decl,
+                                                                   expected_type_ref,
+                                                                   FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
+        return;
     }
     relation = feng_semantic_lookup_spec_relation(context->analysis,
                                                   &subject_key_for_coercion,

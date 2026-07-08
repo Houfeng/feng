@@ -250,6 +250,38 @@ bool feng_semantic_record_callable_spec_coercion_site(
     return true;
 }
 
+bool feng_semantic_record_intersection_spec_coercion_site(
+        const FengSemanticAnalysis *analysis_const,
+        const FengExpr *expr,
+        const FengSemanticSubjectKey *src_subject_key,
+        const FengDecl *target_spec_decl,
+        const FengTypeRef *target_spec_type_ref,
+    FengSpecObjectSubjectStorageKind object_subject_storage) {
+    if (analysis_const == NULL || expr == NULL || src_subject_key == NULL ||
+        src_subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_INVALID ||
+        target_spec_decl == NULL || target_spec_type_ref == NULL) {
+        return false;
+    }
+    FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
+    const FengTypeRef *owned_type_ref = analysis_clone_type_ref(analysis, target_spec_type_ref);
+    if (owned_type_ref == NULL) {
+        return false;
+    }
+    FengSpecCoercionSite *slot = reserve_site_slot(analysis, expr);
+    if (slot == NULL) {
+        return false;
+    }
+    slot->expr = expr;
+    slot->form = FENG_SPEC_COERCION_FORM_INTERSECTION;
+    slot->src_subject_key = *src_subject_key;
+    slot->target_spec_decl = target_spec_decl;
+    slot->target_spec_type_ref = owned_type_ref;
+    slot->relation = NULL;
+    slot->object_subject_storage = object_subject_storage;
+    slot->callable_source = FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER; /* unused */
+    return true;
+}
+
 bool feng_semantic_record_abi_function_pointer_site(
         const FengSemanticAnalysis *analysis_const,
         const FengExpr *expr,

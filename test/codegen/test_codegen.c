@@ -3435,6 +3435,295 @@ static void test_fit_enum_object_spec_coercion_codegen(void) {
     feng_program_free(program);
 }
 
+/* 9.6 — verify the merged witness struct for an intersection-form spec is
+ * emitted with one slot per (deduped) member-spec method. The struct name
+ * follows the FengSpecWitness__<module>__<name> convention shared with
+ * object-form specs. Member access on intersection-form values is 9.7
+ * territory; here we only need a coercion site to register the spec and
+ * trigger struct emission. */
+static void test_intersection_spec_witness_struct_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.intersection_witness_struct;\n"
+        "spec Greetable {\n"
+        "    func greet(): string;\n"
+        "}\n"
+        "spec Displayable {\n"
+        "    func display(): string;\n"
+        "}\n"
+        "spec Both: Greetable & Displayable;\n"
+        "type User: Greetable, Displayable {\n"
+        "    var name: string;\n"
+        "    func greet(): string { return self.name; }\n"
+        "    func display(): string { return self.name; }\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let u: User = User { name: \"hi\" };\n"
+        "    let b: Both = u;\n"
+        "    return (int)0;\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource, "intersection_witness_struct.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message ? errors[i].message : "(unknown)");
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (intersection witness struct): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    /* Merged witness struct declaration with both member methods. */
+    ASSERT(strstr(out.c_source, "struct FengSpecWitness__feng__codegen__intersection_witness_struct__Both {\n") != NULL);
+    ASSERT(strstr(out.c_source, "(*greet)(void *_subject)") != NULL);
+    ASSERT(strstr(out.c_source, "(*display)(void *_subject)") != NULL);
+    /* Value struct follows the object-form layout: { subject, witness }. */
+    ASSERT(strstr(out.c_source,
+        "struct FengSpecValue__feng__codegen__intersection_witness_struct__Both { "
+        "void *subject; const struct FengSpecWitness__feng__codegen__intersection_witness_struct__Both *witness; }") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+/* 9.6 — verify that a coercion site (`let b: Both = u;`) triggers emission
+ * of a merged witness constant that aliases slots from X's per-member-spec
+ * witnesses (no thunks — direct field aliasing). */
+static void test_intersection_spec_witness_instance_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.intersection_witness_instance;\n"
+        "spec Greetable {\n"
+        "    func greet(): string;\n"
+        "}\n"
+        "spec Displayable {\n"
+        "    func display(): string;\n"
+        "}\n"
+        "spec Both: Greetable & Displayable;\n"
+        "type User: Greetable, Displayable {\n"
+        "    var name: string;\n"
+        "    func greet(): string { return self.name; }\n"
+        "    func display(): string { return self.name; }\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let u: User = User { name: \"hi\" };\n"
+        "    let b: Both = u;\n"
+        "    return (int)0;\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource, "intersection_witness_instance.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message ? errors[i].message : "(unknown)");
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (intersection witness instance): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    /* Merged witness constant for (User, Both) — direct slot aliasing, no
+     * thunk functions emitted for the intersection. The merged witness var
+     * carries the FengSpecWitness__ prefix; per-member witnesses use the
+     * FengWitness__ prefix (no "Spec") matching the object-form convention. */
+    ASSERT(strstr(out.c_source, "static const struct FengSpecWitness__feng__codegen__intersection_witness_instance__Both "
+                                "FengSpecWitness__feng__codegen__intersection_witness_instance__User__as__"
+                                "feng__codegen__intersection_witness_instance__Both = {") != NULL);
+    /* Slots alias directly from User's Greetable/Displayable witnesses. */
+    ASSERT(strstr(out.c_source, ".greet = FengWitness__feng__codegen__intersection_witness_instance__User__as__"
+                                "feng__codegen__intersection_witness_instance__Greetable.greet") != NULL);
+    ASSERT(strstr(out.c_source, ".display = FengWitness__feng__codegen__intersection_witness_instance__User__as__"
+                                 "feng__codegen__intersection_witness_instance__Displayable.display") != NULL);
+    /* Coercion site constructs the fat value { .subject, .witness }. */
+    ASSERT(strstr(out.c_source, ".witness = &FengSpecWitness__feng__codegen__intersection_witness_instance__User__as__"
+                                "feng__codegen__intersection_witness_instance__Both") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+/* 9.6 — verify the default-zero path for an intersection spec: an
+ * uninitialized `let b: Both;` materialises a default subject and routes
+ * method calls through the default witness (returning default-zero values
+ * of the return type). Mirrors the object-form default-zero flow. Member
+ * access on the resulting value is 9.7; here we only verify the default-
+ * zero infrastructure (subject struct, descriptor, factory, default
+ * witness, aggregate init fn) is emitted. */
+static void test_intersection_spec_default_zero_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.intersection_default_zero;\n"
+        "spec Greetable {\n"
+        "    func greet(): string;\n"
+        "}\n"
+        "spec Displayable {\n"
+        "    func display(): string;\n"
+        "}\n"
+        "spec Both: Greetable & Displayable;\n"
+        "func run(): int {\n"
+        "    let b: Both;\n"
+        "    return (int)0;\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource, "intersection_default_zero.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message ? errors[i].message : "(unknown)");
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (intersection default-zero): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    /* Default subject struct + descriptor + factory for the intersection. */
+    ASSERT(strstr(out.c_source, "struct FengSpecDefault__feng__codegen__intersection_default_zero__Both__Subject {") != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecDefault__feng__codegen__intersection_default_zero__Both__Subject_desc") != NULL);
+    ASSERT(strstr(out.c_source, "FengSpecDefault__feng__codegen__intersection_default_zero__Both__new_subject") != NULL);
+    /* Default witness with greet/display thunks returning default-zero values. */
+    ASSERT(strstr(out.c_source, "FengSpecDefaultWitness__feng__codegen__intersection_default_zero__Both") != NULL);
+    /* Aggregate init fn uses the default subject factory + default witness. */
+    ASSERT(strstr(out.c_source, "FengSpecAggInit__feng__codegen__intersection_default_zero__Both") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+/* 9.6 — verify generic intersection: `spec Comparable<T>: Eq<T> & Ord<T>;`
+ * produces a merged witness struct + instance for `Comparable<User>` where
+ * User satisfies Eq<User> and Ord<User>. Member access on the coerced value
+ * is 9.7; the test only needs the coercion site to register the generic
+ * instance and trigger merged witness emission. */
+static void test_generic_intersection_spec_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_intersection;\n"
+        "spec Eq<T> {\n"
+        "    func equals(other: T): bool;\n"
+        "}\n"
+        "spec Ord<T> {\n"
+        "    func compare(other: T): int;\n"
+        "}\n"
+        "spec Comparable<T>: Eq<T> & Ord<T>;\n"
+        "type User: Eq<User>, Ord<User> {\n"
+        "    let id: int;\n"
+        "    func equals(other: User): bool { return self.id == other.id; }\n"
+        "    func compare(other: User): int { return self.id - other.id; }\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let u: User = User { id: 1 };\n"
+        "    let c: Comparable<User> = u;\n"
+        "    return (int)0;\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(kSource, "generic_intersection.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message ? errors[i].message : "(unknown)");
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic intersection): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    /* Generic-context merged witness struct carries the slot signatures
+     * with the bound type arg (User). The symbol mangling includes the
+     * type-arg encoding (`__G__User` style). */
+    ASSERT(strstr(out.c_source, "struct FengSpecWitness__feng__codegen__generic_intersection__Comparable") != NULL);
+    ASSERT(strstr(out.c_source, "(*equals)(void *_subject") != NULL);
+    ASSERT(strstr(out.c_source, "(*compare)(void *_subject") != NULL);
+    /* Merged witness constant aliases slots from User's Eq<User> and
+     * Ord<User> witnesses. Per-member witnesses use the FengWitness__
+     * prefix (no "Spec"). */
+    ASSERT(strstr(out.c_source, ".equals = FengWitness__feng__codegen__generic_intersection__User__as__") != NULL);
+    ASSERT(strstr(out.c_source, ".compare = FengWitness__feng__codegen__generic_intersection__User__as__") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_object_spec_thunk_subject_cast_shape_codegen(void) {
     static const char *kSource =
         "module feng.codegen.object_spec_cast;\n"
@@ -7063,6 +7352,10 @@ int main(void) {
     test_fit_builtin_and_array_object_spec_coercion_codegen();
     test_fit_enum_object_spec_coercion_codegen();
     test_object_spec_thunk_subject_cast_shape_codegen();
+    test_intersection_spec_witness_struct_codegen();
+    test_intersection_spec_witness_instance_codegen();
+    test_intersection_spec_default_zero_codegen();
+    test_generic_intersection_spec_codegen();
     test_generic_fn_codegen();
     test_generic_type_decl_no_crash();
     test_generic_fn_call_codegen();

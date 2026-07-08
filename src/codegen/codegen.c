@@ -720,6 +720,15 @@ typedef struct UserSpecMember {
     char   **param_names;       /* informational, mirrors signature */
     size_t   param_count;
     const FengTypeMember *member;
+    /* INTERSECTION-form only: pointer to the flattened member spec decl this
+     * slot was cloned from. Used by cg_ensure_witness_instance_for_type to
+     * locate the subject's per-member-spec witness when assembling the merged
+     * witness constant. NULL for OBJECT/UNION/CALLABLE forms (where slots are
+     * either own or inherited from parent specs, satisfied directly by the
+     * subject type). The decl is AST-owned and stable across cg->user_specs
+     * realloc, so no refresh is needed (unlike UserSpec* which would require
+     * refresh tracking). */
+    const FengDecl *source_member_decl;
 } UserSpecMember;
 
 typedef struct UserSpec {
@@ -6821,7 +6830,8 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         return false;
     }
 
-    if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_UNION) {
+    if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_UNION ||
+        s->form == FENG_SPEC_FORM_INTERSECTION) {
         Buf vb; buf_init(&vb);
         buf_append_fmt(&vb, "FengSpecValue__%s__%s", owner_mangle, symbol.data);
         s->c_value_struct_name = vb.data;
@@ -6846,7 +6856,7 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         buf_append_fmt(&wb, "FengSpecWitness__%s__%s", owner_mangle, symbol.data);
         s->c_witness_struct_name = wb.data;
 
-        if (s->form == FENG_SPEC_FORM_OBJECT) {
+        if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_INTERSECTION) {
             Buf dssb; buf_init(&dssb);
             buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
                            owner_mangle, symbol.data);
@@ -6896,7 +6906,7 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
     free(owner_mangle);
     free(base_san);
     buf_free(&symbol);
-    if (s->form == FENG_SPEC_FORM_OBJECT) {
+    if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_INTERSECTION) {
         if (!(s->feng_name && s->c_value_struct_name && s->c_witness_struct_name &&
               s->c_aggregate_desc_name && s->c_aggregate_slots_name &&
               s->c_aggregate_default_name && s->c_aggregate_init_fn_name &&
@@ -7904,6 +7914,48 @@ static bool cg_user_spec_clone_inherited_member(UserSpec *s,
     return true;
 }
 
+/* Clone a member slot from an intersection's flattened member spec into the
+ * intersection's own members[] array. Mirrors cg_user_spec_clone_inherited_member
+ * but additionally records `source_member_decl` — the AST decl of the member
+ * spec this slot was cloned from — so cg_ensure_witness_instance_for_type can
+ * later locate the subject's per-member-spec witness when assembling the
+ * merged witness constant. Dedup is the caller's responsibility (first-seen
+ * wins; 9.4's detect_cross_spec_method_conflicts already validated
+ * same-name/same-signature slots and rejected same-name/different-return-type
+ * conflicts at semantic time). */
+static bool cg_user_spec_clone_intersection_member(UserSpec *s,
+                                                   const UserSpecMember *src,
+                                                   const FengDecl *source_member_decl) {
+    UserSpecMember *dst = NULL;
+    if (src == NULL || src->feng_name == NULL) return true;
+    if (!cg_user_spec_append_member_slot(s, &dst)) return false;
+    dst->kind = src->kind;
+    dst->type = cgtype_clone(src->type);
+    dst->is_var = src->is_var;
+    dst->is_static = src->is_static;
+    dst->param_count = src->param_count;
+    dst->member = src->member;
+    dst->source_member_decl = source_member_decl;
+    dst->feng_name = strdup(src->feng_name);
+    dst->c_field_name = strdup(src->c_field_name);
+    if (src->type != NULL && dst->type == NULL) return false;
+    if (dst->feng_name == NULL || dst->c_field_name == NULL) return false;
+    if (src->param_count > 0U) {
+        dst->param_types = calloc(src->param_count, sizeof *dst->param_types);
+        dst->param_names = calloc(src->param_count, sizeof *dst->param_names);
+        if (dst->param_types == NULL || dst->param_names == NULL) return false;
+        for (size_t i = 0; i < src->param_count; ++i) {
+            dst->param_types[i] = cgtype_clone(src->param_types[i]);
+            dst->param_names[i] = strdup(src->param_names[i]);
+            if ((src->param_types[i] != NULL && dst->param_types[i] == NULL) ||
+                dst->param_names[i] == NULL) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static bool cg_user_spec_append_decl_member(CG *cg,
                                             UserSpec *s,
                                             const FengTypeMember *m) {
@@ -8658,7 +8710,8 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
                             decl->as.spec_decl.name.length);
     if (!san) return false;
 
-    if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_UNION) {
+    if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_UNION ||
+        s->form == FENG_SPEC_FORM_INTERSECTION) {
         Buf vb; buf_init(&vb);
         buf_append_fmt(&vb, "FengSpecValue__%s__%s", cg->module_mangle, san);
         s->c_value_struct_name = vb.data;
@@ -8683,7 +8736,7 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
         buf_append_fmt(&wb, "FengSpecWitness__%s__%s", cg->module_mangle, san);
         s->c_witness_struct_name = wb.data;
 
-        if (s->form == FENG_SPEC_FORM_OBJECT) {
+        if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_INTERSECTION) {
             Buf dssb; buf_init(&dssb);
             buf_append_fmt(&dssb, "FengSpecDefault__%s__%s__Subject",
                            cg->module_mangle, san);
@@ -8731,7 +8784,7 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
     }
 
     free(san);
-    if (s->form == FENG_SPEC_FORM_OBJECT) {
+    if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_INTERSECTION) {
         return s->c_value_struct_name && s->c_witness_struct_name
             && s->c_aggregate_desc_name && s->c_aggregate_slots_name
             && s->c_aggregate_default_name && s->c_aggregate_init_fn_name
@@ -8817,6 +8870,46 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                 return cg_fail(cg,
                                member_ref != NULL ? member_ref->token : decl->token,
                                "CE0045", "codegen: union-form spec member layout requires a concrete type argument");
+            }
+        }
+        return true;
+    }
+    if (s->form == FENG_SPEC_FORM_INTERSECTION) {
+        /* Intersection members are derived from the flattened member spec
+         * list computed by 9.3/9.4 (resolve_intersection_spec_form). Each
+         * flattened member is an object-form spec decl; we clone its
+         * members[] into the intersection's members[] with source_member_decl
+         * set, so cg_ensure_witness_instance_for_type can later locate the
+         * subject's per-member-spec witness when assembling the merged
+         * witness constant. Dedup is first-seen-wins — 9.4's
+         * detect_cross_spec_method_conflicts already validated at semantic
+         * time that same-name/same-signature slots are compatible and
+         * rejected same-name/different-return-type conflicts. */
+        const FengIntersectionSpecInfo *info =
+            feng_semantic_lookup_intersection_spec_info(cg->analysis, decl);
+        if (info == NULL) {
+            return cg_fail(cg, decl->token,
+                "CE0355", "codegen: intersection-form spec has no flattened member info");
+        }
+        for (size_t mi = 0U; mi < info->flattened_member_count; ++mi) {
+            const FengDecl *member_decl = info->flattened_members[mi];
+            const UserSpec *member_spec = cg_find_user_spec_by_decl(cg, member_decl);
+            if (member_spec == NULL) {
+                return cg_fail(cg, decl->token,
+                    "CE0356", "codegen: intersection-form spec member spec not registered");
+            }
+            if (!cg_ensure_user_spec_members_registered(cg, (UserSpec *)member_spec)) {
+                return false;
+            }
+            for (size_t member_index = 0U; member_index < member_spec->member_count; ++member_index) {
+                const UserSpecMember *src_member = &member_spec->members[member_index];
+                if (cg_user_spec_has_member_name(s, src_member->feng_name,
+                                                 strlen(src_member->feng_name))) {
+                    continue;
+                }
+                if (!cg_user_spec_clone_intersection_member(s, src_member, member_decl)) {
+                    return false;
+                }
             }
         }
         return true;
@@ -9599,9 +9692,12 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
             s->c_aggregate_desc_name);
         return;
     }
-    /* Witness struct body is emitted here (not just forward-declared) so
-     * it precedes any witness-instance tentative definitions that appear
-     * later in headers during type-descriptor generation. */
+    /* OBJECT and INTERSECTION forms share the same value layout
+     * ({ void *subject; const Witness *witness; }) and the same aggregate
+     * descriptor shape, so they share the forward-emission path. The witness
+     * struct body is emitted here (not just forward-declared) so it precedes
+     * any witness-instance tentative definitions that appear later in
+     * headers during type-descriptor generation. */
     cg_emit_witness_struct_body(cg, s, &cg->headers);
     buf_append_fmt(&cg->headers,
         "struct %s { void *subject; const struct %s *witness; };\n",
@@ -20229,7 +20325,8 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     /* Step 4b — apply spec coercion if the analyzer marked this expression as
      * a coercion site. For object-form, we wrap the produced object reference
      * into a fat-spec value `{ .subject = expr, .witness = &Witness }`. */
-    if (cs && cs->form == FENG_SPEC_COERCION_FORM_OBJECT) {
+    if (cs && (cs->form == FENG_SPEC_COERCION_FORM_OBJECT ||
+               cs->form == FENG_SPEC_COERCION_FORM_INTERSECTION)) {
         if (out->type == NULL) {
             return cg_fail(cg, e->token,
                 "CE0217", "codegen: spec coercion source type is missing");
@@ -30856,6 +30953,129 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
     const char *cached = cg_witness_table_lookup(cg, t, s);
     if (cached) { *out_var = cached; return true; }
 
+    /* Intersection-form: no single FengSpecWitness exists for (X, Intersection)
+     * because satisfaction is per member spec (9.5). Assemble a merged witness
+     * constant by aliasing slots from X's per-member-spec witnesses — the slot
+     * signatures are identical because intersection.members[] are cloned from
+     * the member specs' members[], so direct `.slot = X_witness_for_M.slot`
+     * works with zero runtime overhead (no thunks). See dev/feng-intersection-
+     * type-draft.md §4.2. */
+    if (s->form == FENG_SPEC_FORM_INTERSECTION) {
+        char *t_san = cg_sanitize(t->feng_name, strlen(t->feng_name));
+        /* Match the non-INTERSECTION path's spec-unique-name rule: generic
+         * context uses c_witness_struct_name (encodes type args); otherwise
+         * use the bare feng name so the mangling matches object-form's
+         * FengSpecWitness__<mod>__<T>__as__<mod>__<S> convention. */
+        const char *spec_unique_name = s->generic_context_type_param_count > 0U && s->c_witness_struct_name
+            ? s->c_witness_struct_name
+            : s->feng_name;
+        char *s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
+        if (!t_san || !s_san) { free(t_san); free(s_san); return false; }
+
+        Buf var; buf_init(&var);
+        buf_append_fmt(&var, "FengSpecWitness__%s__%s__as__%s__%s",
+                       cg->module_mangle, t_san,
+                       cg->module_mangle, s_san);
+        free(t_san);
+        free(s_san);
+        if (var.data == NULL) {
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+
+        /* Forward-declare the merged witness as a tentative definition in
+         * headers so any reference (e.g. type descriptors that embed an
+         * intersection spec value) resolves even before the full definition
+         * is emitted in witness_defs. */
+        buf_append_fmt(&cg->headers, "static const struct %s %s;\n",
+                       s->c_witness_struct_name, var.data);
+
+        /* Two-phase emission: phase 1 ensures all per-member witnesses exist
+         * (recursively emitting their thunks + constants to witness_defs),
+         * collecting each member's witness var name. Phase 2 then emits the
+         * merged witness body referencing those vars. Doing it in this order
+         * keeps the merged witness body contiguous instead of interleaving
+         * the per-member emissions inside it. */
+        const char **member_witness_vars = NULL;
+        if (s->member_count > 0U) {
+            member_witness_vars = (const char **)calloc(s->member_count,
+                                                       sizeof(*member_witness_vars));
+            if (member_witness_vars == NULL) {
+                buf_free(&var);
+                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            }
+        }
+        for (size_t i = 0U; i < s->member_count; ++i) {
+            const UserSpecMember *sm = &s->members[i];
+            if (sm->source_member_decl == NULL) {
+                free((void *)member_witness_vars);
+                buf_free(&var);
+                return cg_fail(cg, blame,
+                    "CE0357", "codegen: intersection-form spec member '%s' is missing source_member_decl",
+                    sm->feng_name);
+            }
+            const UserSpec *member_spec = cg_find_user_spec_by_decl(cg, sm->source_member_decl);
+            if (member_spec == NULL) {
+                free((void *)member_witness_vars);
+                buf_free(&var);
+                return cg_fail(cg, blame,
+                    "CE0358", "codegen: intersection-form spec member source spec not registered");
+            }
+            const char *member_witness_var = NULL;
+            if (!cg_ensure_witness_instance_for_type(cg, t, member_spec, blame,
+                                                     &member_witness_var)) {
+                free((void *)member_witness_vars);
+                buf_free(&var);
+                return false;
+            }
+            member_witness_vars[i] = member_witness_var;
+        }
+
+        /* Phase 2: emit the merged witness body. The per-member witness var
+         * names are stable (cached in cg->witness_tables, live until cg
+         * free), so we can safely reference them by pointer. */
+        Buf *wd = &cg->witness_defs;
+        buf_append_fmt(wd, "static const struct %s %s = {\n",
+                       s->c_witness_struct_name, var.data);
+        for (size_t i = 0U; i < s->member_count; ++i) {
+            const UserSpecMember *sm = &s->members[i];
+            const char *member_witness_var = member_witness_vars[i];
+            if (sm->kind == USM_KIND_FIELD) {
+                buf_append_fmt(wd, "    .get_%s = %s.get_%s,\n",
+                               sm->c_field_name, member_witness_var, sm->c_field_name);
+                if (sm->is_var) {
+                    buf_append_fmt(wd, "    .set_%s = %s.set_%s,\n",
+                                   sm->c_field_name, member_witness_var, sm->c_field_name);
+                }
+            } else {
+                buf_append_fmt(wd, "    .%s = %s.%s,\n",
+                               sm->c_field_name, member_witness_var, sm->c_field_name);
+            }
+        }
+        buf_append_cstr(wd, "};\n\n");
+        free((void *)member_witness_vars);
+
+        /* Cache in witness_tables so subsequent coercion sites for the same
+         * (X, Intersection) pair reuse this merged witness constant. */
+        if (cg->witness_table_count + 1 > cg->witness_table_capacity) {
+            size_t cap = cg->witness_table_capacity
+                             ? cg->witness_table_capacity * 2 : 4;
+            void *p = realloc(cg->witness_tables,
+                              cap * sizeof *cg->witness_tables);
+            if (p == NULL) {
+                buf_free(&var);
+                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            }
+            cg->witness_tables = p;
+            cg->witness_table_capacity = cap;
+        }
+        cg->witness_tables[cg->witness_table_count].t = t;
+        cg->witness_tables[cg->witness_table_count].s = s;
+        cg->witness_tables[cg->witness_table_count].c_var = var.data;
+        *out_var = var.data;
+        cg->witness_table_count++;
+        return true;
+    }
+
     FengSemanticSubjectKey subject_key =
         feng_semantic_subject_key_for_type_decl(t->decl);
     const FengSpecWitness *witness = t->is_generic_instance
@@ -32005,6 +32225,17 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                             return false;
                         }
                     }
+                } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                    for (size_t member_index = 0U;
+                         member_index < decl->as.spec_decl.as.intersection_form.member_count;
+                         ++member_index) {
+                        if (!cg_collect_generic_instances_from_type_ref(cg,
+                            decl->as.spec_decl.as.intersection_form.members[member_index],
+                            scope)) {
+                            cg->cur_program = NULL;
+                            return false;
+                        }
+                    }
                 } else {
                     for (size_t param_index = 0; param_index < decl->as.spec_decl.as.callable.param_count; ++param_index) {
                         if (!cg_collect_generic_instances_from_type_ref(cg,
@@ -33004,7 +33235,8 @@ static bool cg_emit_all_programs(CG *cg,
              *   inline, so we must emit our own copy here. */
             if (cg->user_specs[i].generic_context_type_param_count > 0U ||
                 cg->user_specs[i].form == FENG_SPEC_FORM_UNION ||
-                cg->user_specs[i].form == FENG_SPEC_FORM_CALLABLE) {
+                cg->user_specs[i].form == FENG_SPEC_FORM_CALLABLE ||
+                cg->user_specs[i].form == FENG_SPEC_FORM_INTERSECTION) {
                 cg->cur_program = cg->user_specs[i].owner_program;
                 cg_emit_user_spec_definition(cg, &cg->user_specs[i]);
                 cg->cur_program = NULL;
@@ -33770,7 +34002,8 @@ static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
                 return false;
             }
             if (t->user_spec->form != FENG_SPEC_FORM_OBJECT &&
-                t->user_spec->form != FENG_SPEC_FORM_UNION) {
+                t->user_spec->form != FENG_SPEC_FORM_UNION &&
+                t->user_spec->form != FENG_SPEC_FORM_INTERSECTION) {
                 return false;
             }
             facts.value_kind = CG_VK_AGGREGATE;
