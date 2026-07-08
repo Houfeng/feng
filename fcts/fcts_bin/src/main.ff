@@ -17,6 +17,7 @@ func main(args: string[]) {
       test_type();
       test_enum();
       test_spec();
+      test_intersection();
       test_fit();
       test_union();
       test_nested_union();

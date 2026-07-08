@@ -1,0 +1,108 @@
+module fcts_bin;
+
+import std.io;
+import std.test;
+
+// 交叉类型测试所需的基础 spec
+spec IntersectionGreetable {
+  func igreet(): string;
+}
+
+spec IntersectionDisplayable {
+  func idisplay(): string;
+}
+
+// 命名交叉类型
+spec BothGreetDisplay: IntersectionGreetable & IntersectionDisplayable;
+
+// 带字段的交叉类型
+spec IntersectionNamed {
+  let iname: string;
+}
+
+spec IntersectionIdentified {
+  var iid: int;
+}
+
+spec NamedId: IntersectionNamed & IntersectionIdentified;
+
+// 满足所有成员 spec 的具体类型
+type IntersectionUser: IntersectionGreetable, IntersectionDisplayable,
+                       IntersectionNamed, IntersectionIdentified {
+  let iname: string;
+  var iid: int;
+
+  func igreet(): string {
+    return self.iname;
+  }
+
+  func idisplay(): string {
+    return self.iname;
+  }
+}
+
+// 交叉类型作为函数参数
+func announce_through_both(b: BothGreetDisplay): string {
+  return b.igreet();
+}
+
+// 交叉类型作为函数返回值
+func make_both(u: IntersectionUser): BothGreetDisplay {
+  return u;
+}
+
+// 交叉类型参数 + 交叉类型返回值（转发）
+func forward_both(b: BothGreetDisplay): BothGreetDisplay {
+  return b;
+}
+
+/** 交叉类型 coercion 行为测试 */
+open func test_intersection() {
+  describe("intersection", () {
+    test("variable declaration coercion", () {
+      let u = IntersectionUser { iname: "hi", iid: 1 };
+      let b: BothGreetDisplay = u;
+      assert(b.igreet() == "hi", "variable declaration: method call through intersection");
+      assert(b.idisplay() == "hi", "variable declaration: second member method call");
+    });
+
+    test("function parameter coercion", () {
+      let u = IntersectionUser { iname: "param", iid: 2 };
+      assert(announce_through_both(u) == "param", "function parameter coercion");
+    });
+
+    test("function return value coercion", () {
+      let u = IntersectionUser { iname: "ret", iid: 3 };
+      let b = make_both(u);
+      assert(b.igreet() == "ret", "function return value coercion");
+    });
+
+    test("intersection forwarding (param + return)", () {
+      let u = IntersectionUser { iname: "fwd", iid: 4 };
+      let b: BothGreetDisplay = u;
+      let f = forward_both(b);
+      assert(f.idisplay() == "fwd", "intersection forwarding");
+    });
+
+    test("field access through intersection (getter)", () {
+      let u = IntersectionUser { iname: "field", iid: 7 };
+      let ni: NamedId = u;
+      assert(ni.iname == "field", "intersection field getter (let)");
+      assert(ni.iid == 7, "intersection field getter (var)");
+    });
+
+    test("field mutation through intersection (setter)", () {
+      let u = IntersectionUser { iname: "mut", iid: 10 };
+      let ni: NamedId = u;
+      ni.iid = 99;
+      assert(ni.iid == 99, "intersection field setter reflects on spec view");
+      assert(u.iid == 99, "intersection field setter reflects on original");
+    });
+
+    test("default zero intersection value", () {
+      let b: BothGreetDisplay;
+      assert(b.igreet() == "", "default zero: first member method returns default");
+      assert(b.idisplay() == "", "default zero: second member method returns default");
+    });
+  });
+}

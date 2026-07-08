@@ -365,7 +365,7 @@ struct {
   - 仅在 coercion site（赋值点）触发实例生成
   - 测试：`test/codegen/` 新增 IR 测试，验证生成正确的 witness struct 和实例
 
-- [ ] **9.7 Codegen：Coercion 代码生成**
+- [x] **9.7 Codegen：Coercion 代码生成**
   - 在赋值点/转换点生成 `{ subject, merged_witness }` 构造
   - 交叉类型作为独立变量/参数类型：`let x: Both = value;`、`func foo(v: Both)`
   - 测试：`fcts/` 新增行为测试，覆盖变量声明、函数参数、函数返回值的 coercion

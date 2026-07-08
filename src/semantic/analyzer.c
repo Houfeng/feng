@@ -12887,6 +12887,92 @@ static FunctionCallResolution resolve_accessible_method_overload(
         size_t i;
         size_t j;
 
+        if (type_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+            /* Intersection-form spec: search each flattened member's closure.
+             * The merged method set is the union of all members' methods, so
+             * we iterate through flattened_members and collect the best match
+             * by overload priority. */
+            const FengIntersectionSpecInfo *info =
+                feng_semantic_lookup_intersection_spec_info(context->analysis,
+                                                            type_decl);
+            if (info == NULL) {
+                return result;
+            }
+            for (i = 0U; i < info->flattened_member_count; ++i) {
+                const FengDecl *member_decl = info->flattened_members[i];
+                const FengDecl **member_closure = NULL;
+                size_t member_closure_count = 0U;
+                size_t member_closure_capacity = 0U;
+
+                if (!spec_collect_closure(context, member_decl,
+                                          &member_closure,
+                                          &member_closure_count,
+                                          &member_closure_capacity)) {
+                    free(member_closure);
+                    continue;
+                }
+                for (j = 0U; j < member_closure_count; ++j) {
+                    const FengDecl *current = member_closure[j];
+                    size_t k;
+
+                    if (current->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+                        continue;
+                    }
+                    for (k = 0U; k < current->as.spec_decl.as.object.member_count; ++k) {
+                        const FengTypeMember *member =
+                            current->as.spec_decl.as.object.members[k];
+                        bool rejected_existing_array_for_variadic = false;
+
+                        if (member->kind != FENG_TYPE_MEMBER_METHOD ||
+                            !slice_equals(member->as.callable.name, name) ||
+                            !callable_parameters_match_args_for_owner_instance(
+                                context,
+                                &member->as.callable,
+                                type_decl,
+                                NULL,
+                                owner_type,
+                                args,
+                                arg_count,
+                                false,
+                                &rejected_existing_array_for_variadic)) {
+                            if (rejected_existing_array_for_variadic) {
+                                result.rejected_existing_array_for_variadic = true;
+                            }
+                            continue;
+                        }
+                        int priority = compute_overload_match_priority(
+                            has_explicit_type_args,
+                            explicit_type_arg_count,
+                            member->as.callable.type_param_count,
+                            callable_parameters_exactly_match_args_for_owner_instance(
+                                context,
+                                &member->as.callable,
+                                type_decl,
+                                NULL,
+                                owner_type,
+                                args,
+                                arg_count));
+
+                        if (result.kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
+                            priority < result.match_priority) {
+                            result.kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+                            result.match_priority = priority;
+                            result.decl = NULL;
+                            result.callable = &member->as.callable;
+                            result.member = member;
+                            result.owner_type_decl = type_decl;
+                            continue;
+                        }
+                        if (priority > result.match_priority) {
+                            continue;
+                        }
+                        result.kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
+                    }
+                }
+                free(member_closure);
+            }
+            return result;
+        }
         if (type_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
             return result;
         }
@@ -14286,6 +14372,36 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                                    (int)expr->as.member.member.length,
                                    expr->as.member.member.data));
             }
+            if (owner_type_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                /* Intersection-form spec values expose the merged method set
+                 * of all flattened member specs. Look up the member through
+                 * each flattened member's object-spec closure. */
+                const FengIntersectionSpecInfo *info =
+                    feng_semantic_lookup_intersection_spec_info(context->analysis,
+                                                                owner_type_decl);
+                if (info != NULL) {
+                    for (size_t i = 0U; i < info->flattened_member_count; ++i) {
+                        const FengDecl *member_decl = info->flattened_members[i];
+                        const FengTypeMember *member_i =
+                            find_spec_object_member(context, member_decl,
+                                                    expr->as.member.member,
+                                                    /*include_static=*/false);
+                        if (member_i != NULL) {
+                            record_spec_member_access(context, expr,
+                                                      owner_type_decl, member_i);
+                            return true;
+                        }
+                    }
+                }
+                return resolver_append_error(
+                    context,
+                    expr->token,
+                    "AE1008", format_message("spec '%.*s' has no member '%.*s'",
+                                   (int)owner_name.length,
+                                   owner_name.data,
+                                   (int)expr->as.member.member.length,
+                                   expr->as.member.member.data));
+            }
             return resolver_append_error(
                 context,
                 expr->token,
@@ -14933,6 +15049,26 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
                     const FengTypeMember *member =
                         find_decl_instance_member(context, owner_type_decl, target->as.member.member);
 
+                    if (member == NULL && owner_type_decl->kind == FENG_DECL_SPEC &&
+                        owner_type_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                        /* Intersection-form spec: search each flattened member's
+                         * closure for the field accessor to determine its
+                         * mutability. */
+                        const FengIntersectionSpecInfo *info =
+                            feng_semantic_lookup_intersection_spec_info(
+                                context->analysis, owner_type_decl);
+                        if (info != NULL) {
+                            for (size_t mi = 0U;
+                                 mi < info->flattened_member_count && member == NULL;
+                                 ++mi) {
+                                member = find_spec_object_member(context,
+                                                                 info->flattened_members[mi],
+                                                                 target->as.member.member,
+                                                                 /*include_static=*/false);
+                            }
+                        }
+                    }
+
                     if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD &&
                         member->as.field.mutability == FENG_MUTABILITY_VAR) {
                         return true;
@@ -15450,6 +15586,22 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
         const FengTypeMember *spec_member =
             find_spec_object_member(context, owner_type_decl, expr->as.member.member, /*include_static=*/false);
 
+        if (spec_member == NULL &&
+            owner_type_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+            /* Intersection-form spec: search each flattened member's closure
+             * for the field accessor. */
+            const FengIntersectionSpecInfo *info =
+                feng_semantic_lookup_intersection_spec_info(context->analysis,
+                                                            owner_type_decl);
+            if (info != NULL) {
+                for (size_t mi = 0U; mi < info->flattened_member_count && spec_member == NULL; ++mi) {
+                    spec_member = find_spec_object_member(context,
+                                                          info->flattened_members[mi],
+                                                          expr->as.member.member,
+                                                          /*include_static=*/false);
+                }
+            }
+        }
         if (spec_member != NULL && spec_member->kind == FENG_TYPE_MEMBER_FIELD) {
             field_member = spec_member;
         }
