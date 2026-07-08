@@ -18308,6 +18308,44 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
         return true;
     }
 
+    /* Intersection-form: provide a specific diagnostic identifying which
+     * member spec is not satisfied, before falling through to the generic
+     * AE1003 error. */
+    {
+        const FengDecl *target_decl = resolve_type_ref_decl(context, expected_type_ref);
+
+        if (target_decl != NULL && target_decl->kind == FENG_DECL_SPEC &&
+            target_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+            const FengIntersectionSpecInfo *info =
+                feng_semantic_lookup_intersection_spec_info(context->analysis, target_decl);
+            InferredExprType src_type = infer_expr_type(context, expr);
+            const FengDecl *src_type_decl = concrete_type_decl_of_inferred(context, src_type);
+
+            if (src_type_decl != NULL && info != NULL) {
+                for (size_t mi = 0U; mi < info->flattened_member_count; ++mi) {
+                    const FengDecl *member_decl = info->flattened_members[mi];
+
+                    if (type_decl_satisfies_spec_decl(context, src_type_decl, member_decl)) {
+                        continue;
+                    }
+                    {
+                        bool ok = resolver_append_error(
+                            context, expr->token,
+                            "AE0622", format_message(
+                                "type '%.*s' does not satisfy spec '%.*s' required by intersection '%.*s'",
+                                (int)decl_typeish_name(src_type_decl).length,
+                                decl_typeish_name(src_type_decl).data,
+                                (int)member_decl->as.spec_decl.name.length,
+                                member_decl->as.spec_decl.name.data,
+                                (int)target_decl->as.spec_decl.name.length,
+                                target_decl->as.spec_decl.name.data));
+                        return ok;
+                    }
+                }
+            }
+        }
+    }
+
     expr_type = infer_expr_type(context, expr);
     if (!inferred_expr_type_is_known(expr_type)) {
         if (!expr_is_callable_value_reference(context, expr)) {
@@ -24344,8 +24382,31 @@ static bool subject_key_satisfies_spec_decl(const ResolveContext *ctx,
 
     if (ctx == NULL || ctx->analysis == NULL || subject_key == NULL ||
         spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
-        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
         subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_INVALID) {
+        return false;
+    }
+
+    /* Intersection-form: the subject must nominally satisfy every flattened
+     * member spec (all members are object-form after flattening). */
+    if (spec_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+        const FengIntersectionSpecInfo *info =
+            feng_semantic_lookup_intersection_spec_info(ctx->analysis, spec_decl);
+        size_t member_idx;
+
+        if (info == NULL || info->flattened_member_count == 0U) {
+            return false;
+        }
+        for (member_idx = 0U; member_idx < info->flattened_member_count; ++member_idx) {
+            const FengDecl *member_decl = info->flattened_members[member_idx];
+            if (member_decl == NULL || member_decl->kind != FENG_DECL_SPEC ||
+                !subject_key_satisfies_spec_decl(ctx, subject_key, member_decl)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
         return false;
     }
 
@@ -24371,8 +24432,21 @@ static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
     bool found = false;
 
     if (type_decl == NULL || spec_decl == NULL ||
-        !decl_is_named_fit_target(type_decl) || spec_decl->kind != FENG_DECL_SPEC ||
-        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        !decl_is_named_fit_target(type_decl) || spec_decl->kind != FENG_DECL_SPEC) {
+        return false;
+    }
+
+    /* Intersection-form: derive the subject key and delegate to
+     * subject_key_satisfies_spec_decl which checks all flattened members. */
+    if (spec_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+        if (ctx == NULL || ctx->analysis == NULL) {
+            return false;
+        }
+        FengSemanticSubjectKey sk = feng_semantic_subject_key_for_type_decl(type_decl);
+        return subject_key_satisfies_spec_decl(ctx, &sk, spec_decl);
+    }
+
+    if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
         return false;
     }
 

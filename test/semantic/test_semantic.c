@@ -19637,6 +19637,94 @@ static void test_intersection_spec_method_overload_allowed(void) {
     feng_program_free(program);
 }
 
+/* type satisfying all intersection members passes validation at coercion site. */
+static void test_intersection_satisfaction_succeeds(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Greetable { func greet(): string; }\n"
+        "spec Displayable { func display(): string; }\n"
+        "spec Both: Greetable & Displayable;\n"
+        "type MyType: Greetable, Displayable {\n"
+        "    func greet(): string { return \"hi\"; }\n"
+        "    func display(): string { return \"display\"; }\n"
+        "}\n"
+        "func main() {\n"
+        "    let x: Both = MyType {};\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("isect_satisfaction_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* type missing one intersection member triggers AE0622 diagnostic. */
+static void test_intersection_satisfaction_fails_missing_member(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Greetable { func greet(): string; }\n"
+        "spec Displayable { func display(): string; }\n"
+        "spec Both: Greetable & Displayable;\n"
+        "type MyType: Greetable {\n"
+        "    func greet(): string { return \"hi\"; }\n"
+        "}\n"
+        "func main() {\n"
+        "    let x: Both = MyType {};\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("isect_satisfaction_fail.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0622") == 0);
+    ASSERT(strstr(errors[0].message, "does not satisfy spec 'Displayable'") != NULL);
+    ASSERT(strstr(errors[0].message, "intersection 'Both'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* type not satisfying any intersection member triggers AE0622 for the first member. */
+static void test_intersection_satisfaction_fails_no_members(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Greetable { func greet(): string; }\n"
+        "spec Displayable { func display(): string; }\n"
+        "spec Both: Greetable & Displayable;\n"
+        "type Stranger {}\n"
+        "func main() {\n"
+        "    let x: Both = Stranger {};\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("isect_satisfaction_none.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0622") == 0);
+    ASSERT(strstr(errors[0].message, "does not satisfy spec 'Greetable'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -20355,6 +20443,9 @@ int main(void) {
     test_intersection_spec_method_dedup();
     test_intersection_spec_method_conflict_return_type();
     test_intersection_spec_method_overload_allowed();
+    test_intersection_satisfaction_succeeds();
+    test_intersection_satisfaction_fails_missing_member();
+    test_intersection_satisfaction_fails_no_members();
 
     puts("semantic tests passed");
     return 0;
