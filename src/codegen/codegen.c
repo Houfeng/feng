@@ -2449,12 +2449,12 @@ static bool cg_encode_type_short(const CGType *t, Buf *out) {
             buf_append_cstr(out, t->user->c_struct_name);
             return true;
         case CG_TYPE_SPEC:
-            if (!t->user_spec) { buf_append_cstr(out, "S_unknown"); return true; }
+            if (!t->user_spec || t->user_spec->c_value_struct_name == NULL) { buf_append_cstr(out, "S_unknown"); return true; }
             buf_append_cstr(out, "S_");
             buf_append_cstr(out, t->user_spec->c_value_struct_name);
             return true;
         case CG_TYPE_CALLABLE:
-            if (!t->user_spec) { buf_append_cstr(out, "C_unknown"); return true; }
+            if (!t->user_spec || t->user_spec->c_closure_struct_name == NULL) { buf_append_cstr(out, "C_unknown"); return true; }
             buf_append_cstr(out, "C_");
             buf_append_cstr(out, t->user_spec->c_closure_struct_name);
             return true;
@@ -9569,15 +9569,19 @@ static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out);
 static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
     if (s->form == FENG_SPEC_FORM_CALLABLE) {
         cg_emit_callable_abi_function_pointer_typedef(&cg->headers, s);
-        buf_append_fmt(&cg->headers, "struct %s;\n", s->c_closure_struct_name);
+        if (s->c_closure_struct_name != NULL) {
+            buf_append_fmt(&cg->headers, "struct %s;\n", s->c_closure_struct_name);
+        }
         cg_emit_witness_struct_body(cg, s, &cg->headers);
         /* Forward-declare the closure type descriptor so that generic
          * type instances referencing it (e.g. List<WakerFn>) can compile
          * even though the full definition is emitted later in the spec
          * definition pass. */
-        buf_append_fmt(&cg->headers,
-            "static const FengTypeDescriptor %s;\n",
-            s->c_closure_desc_name);
+        if (s->c_closure_desc_name != NULL) {
+            buf_append_fmt(&cg->headers,
+                "static const FengTypeDescriptor %s;\n",
+                s->c_closure_desc_name);
+        }
         return;
     }
     if (s->form == FENG_SPEC_FORM_UNION) {
@@ -9585,7 +9589,9 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
          * (Pass 3.5a) which topologically sorts value types and union specs together.
          * Here we only emit a forward declaration and the descriptor extern. */
         cg_emit_witness_struct_body(cg, s, &cg->headers);
-        buf_append_fmt(&cg->headers, "struct %s;\n", s->c_value_struct_name);
+        if (s->c_value_struct_name != NULL) {
+            buf_append_fmt(&cg->headers, "struct %s;\n", s->c_value_struct_name);
+        }
         bool ext_visible = cg_user_spec_descriptor_is_externally_visible(cg, s);
         buf_append_fmt(&cg->headers,
             ext_visible ? "extern const FengAggregateDescriptor %s;\n"
@@ -17606,7 +17612,7 @@ static char *cg_array_element_descriptor(const CGType *elem) {
         case CG_TYPE_OBJECT:
             if (cg_type_is_value_semantics(elem)) {
                 buf_append_cstr(&b, "NULL");
-            } else if (elem->user) {
+            } else if (elem->user && elem->user->c_desc_name != NULL) {
                 buf_append_fmt(&b, "&%s", elem->user->c_desc_name);
             } else {
                 buf_append_cstr(&b, "NULL");
@@ -32537,6 +32543,9 @@ static void cg_emit_value_type_struct_body(CG *cg, const UserType *t) {
  * Called from the combined topological sort (Pass 3.5a) so that value
  * types embedded by value in the union payload are already defined. */
 static void cg_emit_union_spec_struct_body(CG *cg, const UserSpec *s) {
+    if (s->c_value_struct_name == NULL) {
+        return;
+    }
     buf_append_fmt(&cg->headers, "struct %s {\n", s->c_value_struct_name);
     buf_append_cstr(&cg->headers, "    uint32_t tag;\n");
     buf_append_cstr(&cg->headers, "    FengManagedSlotDescriptor _fwd;\n");
@@ -34074,7 +34083,7 @@ static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
                     buf_append_cstr(td, "&feng_array_descriptor");
                     break;
                 case CG_TYPE_OBJECT:
-                    if (ft->user) {
+                    if (ft->user && ft->user->c_desc_name != NULL) {
                         buf_append_fmt(td, "&%s", ft->user->c_desc_name);
                     } else {
                         buf_append_cstr(td, "NULL");
@@ -34474,6 +34483,9 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
         return;
     }
 
+    if (t->c_aggregate_desc_name == NULL) {
+        return;
+    }
     buf_init(&equal_fn_name);
     buf_append_fmt(&equal_fn_name, "%s__equal", t->c_aggregate_desc_name);
     if (equal_fn_name.data == NULL) {
@@ -35483,6 +35495,10 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
             }
 
             /* Build a fit-instance C symbol prefix. */
+            if (t->c_desc_name == NULL) {
+                free(fit_tparam_names);
+                continue;
+            }
             Buf fit_sym;
             buf_init(&fit_sym);
             buf_append_fmt(&fit_sym, "%s__fit%zu", t->c_desc_name, uf->index);

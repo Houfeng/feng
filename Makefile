@@ -95,7 +95,7 @@ EXTLIB_DIR := extlib/$(HOST_TARGET)
 RUNTIME_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
 LIBUNWIND_LIB := $(EXTLIB_DIR)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC_LIB_EXT)
 
-.PHONY: all cli runtime test smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints test-sanitize clean
+.PHONY: all cli runtime test test-normal smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints test-sanitize clean
 
 all: cli runtime
 
@@ -103,7 +103,11 @@ cli: $(BIN_DIR)/feng
 
 runtime: $(RUNTIME_LIB)
 
-test: $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
+test: test-sanitize test-normal
+
+test-normal:
+	$(MAKE) clean
+	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -114,11 +118,21 @@ test: $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN
 	$(BIN_DIR)/test_cli
 	$(BIN_DIR)/test_symbol
 
+# Sanitize testing strategy:
+# - macOS: UBSan only (ASan causes deadlock/infinite loop even with LLVM 21)
+# - Linux CI: Should use full ASan + UBSan (-fsanitize=address,undefined)
+#
+# ASan issues on macOS (verified with LLVM 21.1.8):
+# 1. dyld initialization deadlock: ASan's __malloc_init conflicts with libSystem
+# 2. libfeng_unwind stack unwinding conflicts with ASan's fake stack mechanism
+# 3. DYLD_INSERT_LIBRARIES workaround does not resolve the issue
+#
+# Recommendation: Use Linux containers/VMs for full ASan testing on macOS hosts
 test-sanitize:
 	$(MAKE) clean
-	@echo "Note: On macOS, ASan has known dyld initialization deadlocks."
-	@echo "Running with UBSan only (undefined behavior detection)."
-	@echo "For full ASan testing, use Linux CI."
+	@echo "=== Sanitize Test (UBSan only on macOS) ==="
+	@echo "Note: ASan causes deadlock on macOS (dyld + libunwind conflict)."
+	@echo "For full ASan + UBSan testing, use Linux CI."
 	$(MAKE) runtime CFLAGS="-fsanitize=undefined -g -O1 -std=c11 -Wall -Wextra -pedantic"
 	$(MAKE) cli $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_symbol CFLAGS="-fsanitize=undefined -g -O1 -std=c11 -Wall -Wextra -pedantic" LDFLAGS="-fsanitize=undefined"
 	$(BIN_DIR)/test_archive
