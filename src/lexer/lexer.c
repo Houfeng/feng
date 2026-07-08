@@ -1,5 +1,6 @@
 #include "lexer/lexer.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -182,8 +183,8 @@ static FengToken make_error(FengLexer *lexer,
     return token;
 }
 
-static int64_t parse_integer_slice(const char *text, size_t length) {
-    int64_t value = 0;
+static bool parse_integer_slice(const char *text, size_t length, int64_t *out) {
+    uint64_t value = 0;
     size_t index = 0;
     int base = 10;
 
@@ -203,13 +204,19 @@ static int64_t parse_integer_slice(const char *text, size_t length) {
 
     for (; index < length; ++index) {
         char c = text[index];
+        uint64_t digit;
         if (c == '_') {
             continue;
         }
-        value = (value * (int64_t)base) + (int64_t)hex_digit_value(c);
+        digit = (uint64_t)hex_digit_value(c);
+        if (value > (UINT64_MAX - digit) / (uint64_t)base) {
+            return false;
+        }
+        value = (value * (uint64_t)base) + digit;
     }
 
-    return value;
+    memcpy(out, &value, sizeof(*out));
+    return true;
 }
 
 static double parse_float_slice(const char *text, size_t length) {
@@ -513,7 +520,14 @@ static FengToken scan_number(FengLexer *lexer,
                        start_column);
 
     if (token.kind == FENG_TOKEN_INTEGER) {
-        token.value.integer = parse_integer_slice(token.lexeme, token.length);
+        if (!parse_integer_slice(token.lexeme, token.length, &token.value.integer)) {
+            return make_error(lexer,
+                              start_offset,
+                              start_line,
+                              start_column,
+                              "LE0003",
+                              "integer literal overflows u64");
+        }
     } else {
         token.value.floating = parse_float_slice(token.lexeme, token.length);
     }

@@ -885,7 +885,9 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
             if (t->element->user->c_abi_layout_name != NULL) {
                 buf_append_fmt(b, "struct %s *", t->element->user->c_abi_layout_name);
             } else {
-                buf_append_fmt(b, "struct %s *", t->element->user->c_struct_name);
+                buf_append_fmt(b, "struct %s *",
+                               t->element->user->c_struct_name != NULL
+                                   ? t->element->user->c_struct_name : "void");
             }
             return;
         }
@@ -904,11 +906,14 @@ static void cg_emit_c_type(Buf *b, const CGType *t) {
         return;
     }
     if (t && t->kind == CG_TYPE_OBJECT && t->user) {
-        buf_append_fmt(b, "struct %s *", t->user->c_struct_name);
+        buf_append_fmt(b, "struct %s *",
+                       t->user->c_struct_name != NULL ? t->user->c_struct_name : "void");
         return;
     }
     if (t && t->kind == CG_TYPE_CALLABLE && t->user_spec) {
-        buf_append_fmt(b, "struct %s *", t->user_spec->c_closure_struct_name);
+        buf_append_fmt(b, "struct %s *",
+                       t->user_spec->c_closure_struct_name != NULL
+                           ? t->user_spec->c_closure_struct_name : "void");
         return;
     }
     buf_append_cstr(b, cgtype_to_c(t ? t->kind : CG_TYPE_VOID));
@@ -20647,7 +20652,8 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             buf_append_cstr(&b, "NULL"); break;
         case CG_TYPE_CALLABLE:
             if (type->user_spec != NULL &&
-                type->user_spec->c_default_callable_new_name != NULL) {
+                type->user_spec->c_default_callable_new_name != NULL &&
+                type->user_spec->c_closure_struct_name != NULL) {
                 buf_append_fmt(&b, "(struct %s *)%s()",
                                type->user_spec->c_closure_struct_name,
                                type->user_spec->c_default_callable_new_name);
@@ -20695,7 +20701,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             break;
         }
         case CG_TYPE_OBJECT: {
-            if (!type->user) {
+            if (!type->user || type->user->c_struct_name == NULL) {
                 buf_free(&b);
                 return cg_fail(cg, blame ? *blame : (FengToken){0},
                     "CE0225", "codegen: cannot default-zero an unresolved object type");
@@ -20708,7 +20714,12 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
                 buf_free(&b);
                 return cg_fail(cg, blame ? *blame : (FengToken){0},
                     "CE0226", "codegen: type '%s' contains reference cycles and has no default zero value; provide an explicit initializer",
-                    type->user->feng_name);
+                    type->user->feng_name != NULL ? type->user->feng_name : "<unknown>");
+            }
+            if (type->user->c_default_zero_name == NULL) {
+                buf_free(&b);
+                return cg_fail(cg, blame ? *blame : (FengToken){0},
+                    "CE0225", "codegen: cannot default-zero an unresolved object type");
             }
             buf_append_fmt(&b, "%s()", type->user->c_default_zero_name);
             break;
