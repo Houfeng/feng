@@ -370,7 +370,7 @@ struct {
   - 交叉类型作为独立变量/参数类型：`let x: Both = value;`、`func foo(v: Both)`
   - 测试：`fcts/` 新增行为测试，覆盖变量声明、函数参数、函数返回值的 coercion
 
-- [ ] **9.8 泛型约束：交叉类型作为约束**
+- [x] **9.8 泛型约束：交叉类型作为约束**
   - 支持 `func process<T: GreetAndDisplay>(v: T)` 语法
   - 共享体代码生成复用 object-form 路径，无需改动
   - 测试：`fcts/` 新增行为测试，覆盖交叉类型约束下的泛型函数调用和方法调用

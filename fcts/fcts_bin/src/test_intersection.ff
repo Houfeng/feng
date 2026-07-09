@@ -56,6 +56,45 @@ func forward_both(b: BothGreetDisplay): BothGreetDisplay {
   return b;
 }
 
+// 交叉类型作为泛型约束：调用两个成员 spec 的方法
+func ig_process<T: BothGreetDisplay>(v: T): string {
+  return v.igreet() + v.idisplay();
+}
+
+// 交叉类型作为泛型约束：返回类型参数值，调用方再调用方法
+func ig_forward<T: BothGreetDisplay>(v: T): T {
+  return v;
+}
+
+// 交叉类型作为泛型约束：字段访问（getter + setter）
+func ig_named_get<T: NamedId>(v: T): string {
+  return v.iname;
+}
+
+func ig_named_set<T: NamedId>(v: T, new_iid: int): void {
+  v.iid = new_iid;
+}
+
+// 多个交叉类型约束的类型参数
+func ig_pair<T: BothGreetDisplay, U: BothGreetDisplay>(a: T, b: U): string {
+  return a.igreet() + b.idisplay();
+}
+
+// 第二个满足 BothGreetDisplay 的具体类型（验证同一泛型函数可接受不同类型）
+type IntersectionOther: IntersectionGreetable, IntersectionDisplayable,
+                         IntersectionNamed, IntersectionIdentified {
+  let iname: string;
+  var iid: int;
+
+  func igreet(): string {
+    return self.iname;
+  }
+
+  func idisplay(): string {
+    return self.iname;
+  }
+}
+
 /** 交叉类型 coercion 行为测试 */
 open func test_intersection() {
   describe("intersection", () {
@@ -103,6 +142,44 @@ open func test_intersection() {
       let b: BothGreetDisplay;
       assert(b.igreet() == "", "default zero: first member method returns default");
       assert(b.idisplay() == "", "default zero: second member method returns default");
+    });
+  });
+
+  describe("intersection constraint (generic)", () {
+    test("generic function with intersection constraint (method calls)", () {
+      let u = IntersectionUser { iname: "hi", iid: 1 };
+      assert(ig_process(u) == "hihi", "intersection constraint: both methods called");
+    });
+
+    test("generic function with intersection constraint (forwarded result)", () {
+      let u = IntersectionUser { iname: "fwd", iid: 2 };
+      let f = ig_forward(u);
+      assert(f.igreet() == "fwd", "intersection constraint: forwarded result method call");
+      assert(f.idisplay() == "fwd", "intersection constraint: forwarded result second method");
+    });
+
+    test("generic function with intersection constraint (field getter)", () {
+      let u = IntersectionUser { iname: "field", iid: 3 };
+      assert(ig_named_get(u) == "field", "intersection constraint: field getter through type param");
+    });
+
+    test("generic function with intersection constraint (field setter)", () {
+      let u = IntersectionUser { iname: "mut", iid: 4 };
+      ig_named_set(u, 99);
+      assert(u.iid == 99, "intersection constraint: field setter reflects on original");
+    });
+
+    test("generic function accepts multiple types satisfying same constraint", () {
+      let u = IntersectionUser { iname: "u", iid: 5 };
+      let o = IntersectionOther { iname: "o", iid: 6 };
+      assert(ig_process(u) == "uu", "intersection constraint: first type accepted");
+      assert(ig_process(o) == "oo", "intersection constraint: second type accepted");
+    });
+
+    test("generic function with multiple intersection-constrained type params", () {
+      let u = IntersectionUser { iname: "a", iid: 7 };
+      let o = IntersectionOther { iname: "b", iid: 8 };
+      assert(ig_pair(u, o) == "ab", "intersection constraint: two type params, both constraints");
     });
   });
 }

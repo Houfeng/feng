@@ -13946,6 +13946,108 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                     return return_type;
                 }
             }
+
+            /* G4: instance method dispatch on a generic type parameter value
+             * — v.method() where v: T and T's constraint is a spec. Resolve
+             * the method through the constraint spec's method set and infer
+             * the return type. For generic OBJECT-form constraints (e.g.
+             * `K: Cloneable<K>`), substitute the spec's own type params with
+             * the constraint ref's type args (so `Cloneable<T>.cloneValue():T`
+             * becomes `K` when the constraint is `Cloneable<K>`). For
+             * INTERSECTION-form constraints, search each flattened member
+             * spec's closure (9.8 members are non-generic, so the return type
+             * is cloned as-is). Codegen resolves the call independently
+             * through the generic param descriptor's witness table
+             * (cg_emit_call line 15967+), so this path only provides type
+             * inference. */
+            if (resolution.kind != FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
+                owner_type_decl == NULL &&
+                owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+                owner_type.type_ref != NULL &&
+                owner_type.type_ref->kind == FENG_TYPE_REF_NAMED &&
+                owner_type.type_ref->as.named.segment_count == 1U &&
+                owner_type.type_ref->as.named.type_arg_count == 0U) {
+                const TypeParamEntry *tp =
+                    find_type_param(context, owner_type.type_ref->as.named.segments[0]);
+
+                if (tp != NULL && tp->type_param != NULL &&
+                    tp->type_param->constraint != NULL) {
+                    const FengDecl *constraint_decl =
+                        resolve_type_ref_decl(context, tp->type_param->constraint);
+
+                    if (constraint_decl != NULL &&
+                        constraint_decl->kind == FENG_DECL_SPEC) {
+                        const FengTypeMember *spec_member = NULL;
+                        /* The spec decl that actually owns spec_member (used to
+                         * pick the right type_params for substitution). For
+                         * OBJECT-form this is constraint_decl itself; for
+                         * INTERSECTION-form it is the flattened member where
+                         * the method was found. */
+                        const FengDecl *member_owner_decl = NULL;
+
+                        if (constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+                            spec_member = find_spec_object_member(context,
+                                                                  constraint_decl,
+                                                                  callee->as.member.member,
+                                                                  /*include_static=*/false);
+                            member_owner_decl = constraint_decl;
+                        } else if (constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                            const FengIntersectionSpecInfo *info =
+                                feng_semantic_lookup_intersection_spec_info(
+                                    context->analysis, constraint_decl);
+                            if (info != NULL) {
+                                size_t mi;
+                                for (mi = 0U;
+                                     mi < info->flattened_member_count && spec_member == NULL;
+                                     ++mi) {
+                                    spec_member = find_spec_object_member(context,
+                                                                          info->flattened_members[mi],
+                                                                          callee->as.member.member,
+                                                                          /*include_static=*/false);
+                                    if (spec_member != NULL) {
+                                        member_owner_decl = info->flattened_members[mi];
+                                    }
+                                }
+                            }
+                        }
+                        if (spec_member != NULL &&
+                            spec_member->kind == FENG_TYPE_MEMBER_METHOD &&
+                            member_owner_decl != NULL) {
+                            const FengCallableSignature *spec_sig = &spec_member->as.callable;
+
+                            if (spec_sig->return_type != NULL) {
+                                FengTypeRef *substituted = NULL;
+
+                                if (member_owner_decl->as.spec_decl.type_param_count > 0U) {
+                                    /* Generic spec: substitute the spec's own
+                                     * type params with the constraint ref's
+                                     * type args (e.g. Cloneable<T> with
+                                     * constraint Cloneable<K> maps T -> K). */
+                                    const FengTypeRef *constraint_ref =
+                                        tp->type_param->constraint;
+                                    if (constraint_ref != NULL &&
+                                        constraint_ref->kind == FENG_TYPE_REF_NAMED &&
+                                        constraint_ref->as.named.type_arg_count ==
+                                            member_owner_decl->as.spec_decl.type_param_count) {
+                                        substituted = clone_type_ref_substituting_type_params(
+                                            spec_sig->return_type,
+                                            member_owner_decl->as.spec_decl.type_params,
+                                            member_owner_decl->as.spec_decl.type_param_count,
+                                            constraint_ref->as.named.type_args);
+                                    }
+                                } else {
+                                    /* Non-generic spec: return type has no
+                                     * type-param references; clone as-is. */
+                                    substituted = clone_type_ref_for_inference(spec_sig->return_type);
+                                }
+                                if (substituted != NULL) {
+                                    return inferred_expr_type_from_type_ref(substituted);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -17470,10 +17572,14 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
     }
 
     constraint_decl = resolve_type_ref_decl(context, type_param->constraint);
-    if (constraint_decl == NULL || constraint_decl->kind != FENG_DECL_SPEC ||
-        constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+    if (constraint_decl == NULL || constraint_decl->kind != FENG_DECL_SPEC) {
+        return true;
+    }
+    if (constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
+        constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION) {
         /* callable-form / union-form constraints keep the pre-existing lenient
-         * behavior; only object-form constraints are enforced here. */
+         * behavior; only object-form and intersection-form constraints are
+         * enforced here. */
         return true;
     }
 
@@ -17558,8 +17664,76 @@ static void materialize_object_spec_constraint_witness_if_applicable(
     }
 
     constraint_decl = resolve_type_ref_decl(context, type_param->constraint);
-    if (constraint_decl == NULL || constraint_decl->kind != FENG_DECL_SPEC ||
-        constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+    if (constraint_decl == NULL || constraint_decl->kind != FENG_DECL_SPEC) {
+        return;
+    }
+
+    /* Intersection-form constraint: materialize a per-member witness for each
+     * flattened object-form member spec. Codegen's
+     * cg_ensure_witness_instance_for_type assembles the merged witness by
+     * aliasing slots from these per-member witnesses (see dev/feng-intersection-
+     * type-draft.md §4.2). Satisfaction of the whole intersection was already
+     * verified by generic_type_arg_satisfies_constraint; we still guard each
+     * member defensively. spec_type_ref is NULL for members because non-generic
+     * object-form specs don't need substitution (9.9 will handle generic
+     * intersection members). */
+    if (constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+        const FengIntersectionSpecInfo *info =
+            feng_semantic_lookup_intersection_spec_info(context->analysis,
+                                                        constraint_decl);
+        size_t member_idx;
+
+        if (info == NULL) {
+            return;
+        }
+        for (member_idx = 0U; member_idx < info->flattened_member_count;
+             ++member_idx) {
+            const FengDecl *member_decl = info->flattened_members[member_idx];
+
+            if (member_decl == NULL ||
+                member_decl->kind != FENG_DECL_SPEC ||
+                member_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+                continue;
+            }
+            if (decl_is_named_fit_target(actual_type_decl)) {
+                if (!type_decl_satisfies_spec_decl(context, actual_type_decl,
+                                                   member_decl)) {
+                    continue;
+                }
+                compute_spec_witness_if_absent(context,
+                                               actual_type_decl,
+                                               inferred_expr_type_from_type_ref(actual_type_ref),
+                                               actual_type_ref,
+                                               member_decl,
+                                               NULL,
+                                               err_token);
+            } else if (actual_type_ref != NULL &&
+                       actual_type_ref->kind == FENG_TYPE_REF_NAMED &&
+                       actual_type_ref->as.named.segment_count == 1U &&
+                       is_builtin_type_name(actual_type_ref->as.named.segments[0])) {
+                const char *builtin_name =
+                    canonical_builtin_type_name(actual_type_ref->as.named.segments[0],
+                                                context->pointer_size);
+                if (builtin_name != NULL) {
+                    FengSemanticSubjectKey subject_key =
+                        feng_semantic_subject_key_for_builtin(builtin_name);
+                    if (subject_key_satisfies_spec_decl(context, &subject_key,
+                                                        member_decl)) {
+                        compute_spec_witness_if_absent(context,
+                                                       NULL,
+                                                       inferred_expr_type_from_type_ref(actual_type_ref),
+                                                       actual_type_ref,
+                                                       member_decl,
+                                                       NULL,
+                                                       err_token);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    if (constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
         return;
     }
 
