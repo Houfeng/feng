@@ -34,8 +34,8 @@
 ## 3 行为约定
 
 - `SystemInfo.hostName()` 仅查询主机名。
-- `SystemInfo.os()` 仅查询操作系统名称（小写，如 `linux`、`darwin`）。
-- `SystemInfo.arch()` 仅查询系统架构（小写，如 `x86_64`、`arm64`）。
+- `SystemInfo.os()` 仅查询操作系统名称（小写，如 `linux`、`darwin`），如实返回平台原生 uname 值，不归一化到 [feng-os-arch.md](./feng-os-arch.md) 规范，消费方需自行兼容多种原生值。
+- `SystemInfo.arch()` 仅查询系统架构（小写，如 `x86_64`、`arm64`），如实返回平台原生 uname 值，不归一化到 [feng-os-arch.md](./feng-os-arch.md) 规范，消费方需自行兼容多种原生值。
 - `SystemInfo.processId()` 仅查询当前进程 PID。
 - `SystemInfo.parentProcessId()` 仅查询父进程 PID。
 - `MemoryInfo.totalBytes()` 仅查询总内存。

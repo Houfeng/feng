@@ -1,0 +1,248 @@
+# Feng 分发与安装方案
+
+> 本方案收敛 Feng 工具链（编译器 + 运行时静态库 + 精简 toolchain）的分发包结构、构建发布工作流、安装方式与升级卸载规则。
+> `.fb` 包格式（feng 项目间源码级闭源分发）由 [feng-package.md](../docs/feng-package.md) 单独定义，不在本文件重复。
+> CLI 命令与选项由 [feng-cli.md](../docs/feng-cli.md) 单独定义，本方案不引入新的顶层 CLI 命令。
+
+## 1 目标与范围
+
+本方案解决一件事：让用户在目标机器上拿到一个可用的 Feng 工具链，并能在多种平台上以一致方式安装、升级、卸载。
+
+首版明确覆盖：
+
+- 分发物：单一压缩包 `feng-<os>-<arch>-<version>.zip`
+- 平台：仅 `macos-arm64`
+- 安装方式：手动解压 + 在线脚本两种
+- toolchain 策略：bundle 精简版（从 LLVM 官方预编译包剥离，仅保留 `clang`、`lldb`、`lldb-dap`，不自建 LLVM）
+- 运行时分发形态：仅静态库 `.a` / `.lib`
+- 分发渠道：GitHub Releases
+
+首版明确不做：
+
+- Linux / Windows 实际打包（脚本与工作流预留扩展点，不产出二进制）
+- 动态运行时库 `.so` / `.dylib` / `.dll`
+- 版本管理器（fengvm 类工具）
+- 包管理器集成（Homebrew tap / apt repo / winget）
+- 代码签名与公证（macOS notarization、Windows code signing）
+- 自更新命令 `feng upgrade`
+
+## 2 设计原则
+
+- **抽象驱动，面向未来可扩展**：平台矩阵、toolchain 策略、安装前缀、分发渠道均以参数化形式表达，新增平台或切换 toolchain 策略不改动脚本主干。
+- **单一分发物**：一个 zip 覆盖一个目标平台，不按子组件拆分多包，降低用户组合安装成本。
+- **环境变量最小化**：默认仅向 `PATH` 注入 `$FENG_HOME/bin`，不要求用户配置多变量；`FENG_HOME` 与 `FENG_TOOLCHAIN` 仅在需要覆盖默认时使用。
+- **可逆安装**：安装产物集中在一个目录树下，卸载只需删除该目录与少量软链 / shell 片段。
+- **与现有体系一致**：复用 `Makefile` 产物路径、Feng 编译期 `extlib/<os>-<arch>/` 平台隔离约定与 `scripts/` 下既有构建脚本，不另立构建体系。
+
+## 3 命名规范与平台矩阵
+
+### 3.1 分发物命名
+
+```text
+feng-<os>-<arch>-<version>.zip
+```
+
+- `<os>` 与 `<arch>` 取值见 [feng-os-arch.md](../docs/feng-os-arch.md)，不在本文件重复定义。
+- `<version>` 与 git tag 一致，形如 `0.1.0`、`0.2.0-rc.1`，不带前缀 `v`
+
+示例：`feng-macos-arm64-0.1.0.zip`
+
+### 3.2 平台矩阵
+
+| 平台标识     | 首版产出 | 扩展预留 | 备注                                  |
+|--------------|---------|---------|---------------------------------------|
+| `macos-arm64` | 是      | -       | Feng 编译期 extlib 依赖已就绪          |
+| `macos-x64`  | 否      | 是      | Intel Mac，后续按需补齐               |
+| `linux-x64`  | 否      | 是      | glibc 版本基线由人工决策              |
+| `linux-arm64`| 否      | 是      | -                                     |
+| `windows-x64`| 否      | 是      | 静态库后缀切换为 `.lib`，可执行为 `.exe` |
+| `windows-arm64`| 否    | 是      | -                                     |
+
+矩阵在 CI 工作流与安装脚本中以表驱动形式表达，新增平台只改表项，不改主干逻辑。
+
+## 4 压缩包目录结构
+
+解压后顶层目录名与压缩包主名一致：`feng-<os>-<arch>-<version>/`。
+
+```text
+feng-<os>-<arch>-<version>/
+├── manifest.txt              # 必须：分发物清单与校验值
+├── bin/                      # 必须：Feng 可执行
+│   └── feng                  # 编译器 + CLI 主入口（含 lsp / dap 子命令）
+├── lib/                      # 必须：运行时静态库（按平台取其一）
+│   └── libfeng_runtime.a     # linux/macos；Windows 下为 feng_runtime.lib
+├── toolchain/                # 必须（bundle 策略下）：精简 LLVM 工具链
+│   ├── clang/                # 仅 clang 与最小必要依赖
+│   │   ├── bin/clang
+│   │   ├── lib/（仅 clang 运行所必需的子集）
+│   │   └── share/clang/
+│   └── lldb/                 # 仅 lldb 与最小必要依赖
+│       ├── bin/lldb          # 命令行调试器
+│       ├── bin/lldb-dap      # DAP 适配器，供 feng dap / VS Code 使用
+│       ├── lib/（仅 lldb 运行所必需的子集）
+│       └── share/lldb/（含 python 脚本与格式化模块）
+├── scripts/                  # 必须：安装辅助脚本（在线脚本复用此份）
+│   ├── env.sh                # 注入环境变量（POSIX shell）
+│   ├── env.fish              # fish 等价片段
+│   ├── env.ps1               # Windows PowerShell 等价片段
+│   └── uninstall.sh
+└── VERSION                   # 必须：纯文本版本号，单行
+```
+
+约束：
+
+- Windows 平台下，`bin/` 中可执行文件追加 `.exe` 后缀，`lib/` 中静态库后缀切换为 `.lib`。
+- `lib/` 不再按平台分子目录：分发物本身已按 `feng-<os>-<arch>-<version>.zip` 区分平台，包内仅含当前平台一份 `libfeng_runtime.{a,lib}`，`feng` 按固定路径 `$FENG_HOME/lib/` 定位即可。
+- `toolchain/` 仅在 bundle 策略下存在；当用户切换为 system 策略时，`toolchain/` 可缺失，`feng` 必须能回退到系统工具链。
+- `manifest.txt` 列出每个文件的相对路径与 SHA-256，供安装脚本校验完整性。
+- 分发物不包含任何 Feng 源码、`.o` / `.obj` 中间产物、构建缓存。
+
+## 5 toolchain 策略
+
+toolchain 策略决定 `feng` 在调用 `clang`（编译 Feng 生成的 C）与 `lldb` / `lldb-dap`（命令行调试与 DAP 适配）时如何定位可执行文件。策略通过环境变量 `FENG_TOOLCHAIN` 选择：
+
+| 策略值     | 行为                                                                 |
+|------------|----------------------------------------------------------------------|
+| `bundled`  | 优先使用 `$FENG_HOME/toolchain/` 下的 clang / lldb / lldb-dap（首版默认） |
+| `system`   | 使用 `PATH` 中的系统 clang / lldb / lldb-dap，要求版本满足最低约束   |
+| `auto`     | 先查系统，缺失或版本不足时回退到 bundled                             |
+
+约束：
+
+- `feng` 在调用 clang / lldb / lldb-dap 前必须按当前策略解析出绝对路径，解析失败时报错并给出可操作的修复指引（如"请安装 Xcode Command Line Tools"或"请重新安装 Feng 以补齐 toolchain"）。
+- bundled 形态下的 toolchain 必须是精简版，**从 LLVM 官方预编译包剥离，不自建 LLVM/Clang**；只保留 `clang`、`lldb`、`lldb-dap` 及其运行所必需的最小依赖集，不含 `llvm-*`、`lld`、`clang-format`、`clang-tidy` 等其他 LLVM 工具，不含非当前平台 / 非 x86_64 的目标后端。
+- 精简工作由独立子任务实施，本方案只约束产出形式与体积目标：精简后 `toolchain/` 解压体积目标控制在 300 MB 量级（实际值待实施时验证，写入 `manifest.txt`）。
+- 精简 toolchain 的版本、来源、剥离清单由独立子任务文档承载，不在本文件展开，避免方案膨胀。
+
+待人工决策项见 §10。
+
+## 6 构建与发布工作流
+
+### 6.1 触发
+
+GitHub Actions 工作流 `release.yml` 由推送形如 `v*.*.*` 的 tag 触发，并支持 `workflow_dispatch` 手动触发用于试发。
+
+### 6.2 matrix
+
+```yaml
+strategy:
+  matrix:
+    include:
+      - { os: macos, arch: arm64, runner: macos-14 }
+      # 扩展时追加：linux-x64、linux-arm64、windows-x64 等
+```
+
+每个 matrix 项产出一份 `feng-<os>-<arch>-<version>.zip`，互不依赖，可并行。
+
+### 6.3 单平台构建步骤
+
+1. checkout 仓库
+2. 安装构建依赖（仅 macOS 首版无额外依赖）
+3. 执行 `scripts/build_libunwind.sh`（产出 Feng **编译期**依赖 `extlib/<os>-<arch>/libfeng_unwind.a`，不进分发物；其对象在 `make runtime` 时被合并进 `libfeng_runtime.a`）
+4. 执行 `make cli runtime`（产出 `build/bin/feng` 与 `build/lib/libfeng_runtime.a`）
+5. 精简 toolchain 子任务产出 `toolchain/`（独立步骤，调用精简脚本）
+6. 组装分发目录树并计算 `manifest.txt`
+7. 打包 zip
+8. 计算 zip 的 SHA-256，写入 release notes
+9. 上传到 GitHub Release 对应 tag
+
+### 6.4 失败与回滚
+
+- 任一 matrix 项失败不影响其他平台，失败平台不产出资产。
+- 已发布 tag 不允许覆盖；发现问题时发新 tag，不在旧 tag 上重打。
+
+## 7 安装方式
+
+### 7.1 手动解压 + 环境变量
+
+适用于：离线环境、自定义安装路径、对安装脚本不信任的用户。
+
+步骤：
+
+1. 从 GitHub Releases 下载 `feng-<os>-<arch>-<version>.zip`
+2. 解压到任意目录，记为 `$FENG_HOME`，例如 `~/.feng/<version>/`
+3. 在 shell 启动脚本中 source `$FENG_HOME/scripts/env.sh`（或对应 fish / PowerShell 片段）
+4. 重开 shell 或 `source` 当前会话，`feng --version` 可用即安装成功
+
+`scripts/env.sh` 行为约束：
+
+- 将 `$FENG_HOME/bin` 前置追加到 `PATH`（不覆盖已有项）
+- 若 `FENG_HOME` 未设置，按 `env.sh` 自身位置回推导算（`$(dirname "$0")/..`）
+- 不写入任何全局配置；是否追加到 `~/.zshrc` / `~/.bashrc` 由用户自行决定，脚本仅给出提示
+
+### 7.2 在线脚本
+
+适用于：新机器快速上手、CI 环境、首版默认推荐路径。
+
+入口（首版托管在 GitHub raw）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.sh | bash
+```
+
+`install.sh` 行为约束：
+
+- 支持参数：
+  - `--version <ver>`：指定版本，默认 `latest`（解析 GitHub Releases 最新 tag）
+  - `--platform <os>-<arch>`：指定平台，默认按 `uname -s` / `uname -m` 自动检测
+  - `--prefix <path>`：安装根目录，默认 `$HOME/.feng/<version>`
+  - `--toolchain bundled|system|auto`：写入 `$FENG_HOME/scripts/env.sh` 的默认策略，默认 `bundled`
+  - `--no-modify-shell`：不提示修改 shell 启动脚本（默认会提示并询问，不静默修改）
+- 安装流程：
+  1. 解析参数与目标平台
+  2. 拼接下载 URL，下载 zip 到临时目录（工程内 `temp/` 而非系统 `/tmp`，遵循项目约定）
+  3. 校验 SHA-256（从 release notes 或同目录 `.sha256` 读取）
+  4. 解压到 `$FENG_HOME`
+  5. 生成 `$FENG_HOME/scripts/env.sh`（按 `--toolchain` 写入默认策略）
+  6. 维护 `$HOME/.feng/current` 软链指向本次安装版本
+  7. 提示用户将 `source $HOME/.feng/current/scripts/env.sh` 追加到 shell 启动脚本
+- 失败时必须清理半成品目录，不留残文件。
+- 在线脚本与压缩包内 `scripts/` 下的辅助脚本共用同一份 `env.sh` / `uninstall.sh`，不维护两套。
+
+### 7.3 多版本共存与切换
+
+- 多个版本可并行安装于 `$HOME/.feng/<version>/`
+- `$HOME/.feng/current` 软链指向当前激活版本，shell 启动脚本 source `$HOME/.feng/current/scripts/env.sh`
+- 切换版本只需重定向软链：`ln -sfn $HOME/.feng/<version> $HOME/.feng/current`
+- 首版不提供 `feng use <version>` 类命令，软链切换由用户手动完成
+
+## 8 升级与卸载
+
+### 8.1 升级
+
+重新执行 §7.2 在线脚本并指定 `--version <new>`，安装到新版本目录后切换 `current` 软链。旧版本目录保留，用户确认无问题后可手动删除。
+
+### 8.2 卸载
+
+执行 `$FENG_HOME/scripts/uninstall.sh`，行为：
+
+- 删除 `$FENG_HOME` 整个版本目录
+- 若 `$HOME/.feng/current` 指向被卸载版本，移除该软链
+- 提示用户手动移除 shell 启动脚本中的 `source` 行（不静默修改）
+
+## 9 验收清单
+
+发布前必须满足：
+
+- [ ] `manifest.txt` 列出的所有文件存在且 SHA-256 一致
+- [ ] `feng --version` 输出与 `VERSION` 文件一致
+- [ ] `feng build` 在空项目可完整产出二进制
+- [ ] `feng run` 在示例项目可运行
+- [ ] `feng lsp` / `feng dap` 可启动
+- [ ] toolchain 策略为 `bundled` 时，`feng` 不依赖系统 clang / lldb / lldb-dap
+- [ ] toolchain 策略切换为 `system` 时，`feng` 可正确调用系统 clang / lldb / lldb-dap
+- [ ] 安装脚本在干净环境完成安装，卸载脚本完成后无残留
+- [ ] 压缩包解压后体积、toolchain 体积记录到 `manifest.txt`
+
+## 10 待人工决策项
+
+以下事项影响后续迭代，但不阻塞首版 macos-arm64 发布，列出以备决策：
+
+1. **toolchain 精简方案**：从 LLVM 官方预编译包剥离的具体边界（保留哪些 `lib/` / `share/` 子集、剥离哪些目标后端）；精简后的实际体积与最小依赖闭包边界。不自建 LLVM/Clang。
+2. **在线脚本宿主域名**：是否启用 `get.feng-lang.org` 类专属域名重定向到 GitHub raw，便于未来切换 CDN。
+3. **Linux glibc 基线**：linux-x64 / linux-arm64 发布时锁定的最低 glibc 版本。
+4. **签名与公证**：macOS notarization、Windows code signing 何时引入、用何种证书。
+5. **包管理器集成**：Homebrew tap、apt repo、winget 等何时引入，是否纳入本方案或独立文档。
+6. **自更新命令**：是否引入 `feng upgrade` / `feng use <version>`，引入后与软链方案的关系。
+7. **CI runner 选择**：linux / windows 平台发布时使用 GitHub-hosted runner 还是自托管 runner，是否需要交叉编译。
+8. **LLDB 的 Python 依赖**：LLDB 默认链接 `libpython`，用户环境无 Python 时 lldb 启动失败。需先查清 LLVM 官方预编译包是否 bundle `libpython`；若否，在 bundle `libpython`、依赖系统 Python、首次自举下载三者中决策（不自建 LLVM，故不考虑 `-DLLDB_ENABLE_PYTHON=OFF` 这一路径）。此项与第 1 项 toolchain 精简方案强相关，需一并决策。
