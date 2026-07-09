@@ -69,8 +69,9 @@ feng-<os>-<arch>-<version>/
 ├── manifest.txt              # 必须：分发物清单与校验值
 ├── bin/                      # 必须：Feng 可执行
 │   └── feng                  # 编译器 + CLI 主入口（含 lsp / dap 子命令）
-├── lib/                      # 必须：运行时静态库（按平台取其一）
-│   └── libfeng_runtime.a     # linux/macos；Windows 下为 feng_runtime.lib
+├── lib/                      # 必须：运行时静态库（按目标平台分子目录）
+│   └── <os>-<arch>/          # 目标平台标识，取值见 feng-os-arch.md
+│       └── libfeng_runtime.a # linux/macos；Windows 下为 feng_runtime.lib
 ├── toolchain/                # 必须（bundle 策略下）：精简 LLVM 工具链
 │   ├── clang/                # 仅 clang 与最小必要依赖
 │   │   ├── bin/clang
@@ -92,7 +93,7 @@ feng-<os>-<arch>-<version>/
 约束：
 
 - Windows 平台下，`bin/` 中可执行文件追加 `.exe` 后缀，`lib/` 中静态库后缀切换为 `.lib`。
-- `lib/` 不再按平台分子目录：分发物本身已按 `feng-<os>-<arch>-<version>.zip` 区分平台，包内仅含当前平台一份 `libfeng_runtime.{a,lib}`，`feng` 按固定路径 `$FENG_HOME/lib/` 定位即可。
+- `lib/` 按目标平台分子目录（`lib/<os>-<arch>/`，取值见 [feng-os-arch.md](../docs/feng-os-arch.md)）。当前无交叉编译时，目标平台与分发物命名平台一致，仅含一份；未来支持交叉编译时，同一分发物可含多个目标平台子目录，`feng` 按编译目标定位 `$FENG_HOME/lib/<os>-<arch>/`。
 - `toolchain/` 仅在 bundle 策略下存在；当用户切换为 system 策略时，`toolchain/` 可缺失，`feng` 必须能回退到系统工具链。
 - `manifest.txt` 列出每个文件的相对路径与 SHA-256，供安装脚本校验完整性。
 - 分发物不包含任何 Feng 源码、`.o` / `.obj` 中间产物、构建缓存。
@@ -141,7 +142,7 @@ strategy:
 3. 执行 `scripts/build_libunwind.sh`（产出 Feng **编译期**依赖 `extlib/<os>-<arch>/libfeng_unwind.a`，不进分发物；其对象在 `make runtime` 时被合并进 `libfeng_runtime.a`）
 4. 执行 `make cli runtime`（产出 `build/bin/feng` 与 `build/lib/libfeng_runtime.a`）
 5. 精简 toolchain 子任务产出 `toolchain/`（独立步骤，调用精简脚本）
-6. 组装分发目录树并计算 `manifest.txt`
+6. 组装分发目录树（将 `build/lib/libfeng_runtime.a` 放入 `lib/<os>-<arch>/`）并计算 `manifest.txt`
 7. 打包 zip
 8. 计算 zip 的 SHA-256，写入 release notes
 9. 上传到 GitHub Release 对应 tag
