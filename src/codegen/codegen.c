@@ -729,6 +729,17 @@ typedef struct UserSpecMember {
      * realloc, so no refresh is needed (unlike UserSpec* which would require
      * refresh tracking). */
     const FengDecl *source_member_decl;
+    /* 9.9: for INTERSECTION-form generic instances only, the substituted
+     * member type ref (e.g. `Eq<IntBox>` when the intersection is
+     * `Comparable<IntBox>` with member `Eq<T>`). Used to locate the correct
+     * member-spec generic instance (not the generic context) when assembling
+     * the merged witness. NULL for non-generic intersections (where
+     * source_member_decl suffices, because the member spec has no type args
+     * and cg_find_user_spec_by_decl finds the right UserSpec) and for other
+     * forms. Owned by this UserSpecMember (heap-allocated via
+     * cg_type_ref_clone); stable across cg->user_specs realloc because it is
+     * a heap pointer, not a UserSpec* index. */
+    FengTypeRef *source_member_type_ref;
 } UserSpecMember;
 
 typedef struct UserSpec {
@@ -6956,6 +6967,29 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
             if (!ok) return false;
         }
     }
+    /* 9.9: intersection-form members also need their type-arg-substituted
+     * generic instances registered (e.g. `spec Comparable<T>: Eq<T> & Ord<T>`
+     * instantiated as `Comparable<IntBox>` must register `Eq<IntBox>` and
+     * `Ord<IntBox>`). Without this, cg_register_user_spec_members cannot
+     * locate the member-spec instances later. */
+    if (s->form == FENG_SPEC_FORM_INTERSECTION) {
+        for (size_t member_index = 0U;
+             member_index < decl->as.spec_decl.as.intersection_form.member_count;
+             ++member_index) {
+            CGTypeParamScope member_scope = open_scope != NULL ? *open_scope : (CGTypeParamScope){0};
+            FengTypeRef *sub = cg_type_ref_substitute(
+                decl->as.spec_decl.as.intersection_form.members[member_index],
+                decl->as.spec_decl.type_params,
+                decl->as.spec_decl.type_param_count,
+                type_args);
+            bool ok;
+
+            if (sub == NULL) return false;
+            ok = cg_collect_generic_instances_from_type_ref(cg, sub, member_scope);
+            cg_type_ref_free(sub);
+            if (!ok) return false;
+        }
+    }
     return true;
 }
 
@@ -7922,13 +7956,24 @@ static bool cg_user_spec_clone_inherited_member(UserSpec *s,
  * merged witness constant. Dedup is the caller's responsibility (first-seen
  * wins; 9.4's detect_cross_spec_method_conflicts already validated
  * same-name/same-signature slots and rejected same-name/different-return-type
- * conflicts at semantic time). */
+ * conflicts at semantic time).
+ *
+ * 9.9: `source_member_type_ref` is the substituted member type ref for
+ * generic intersection instances (e.g. Eq<IntBox> for Comparable<IntBox>);
+ * NULL for non-generic intersections. Takes ownership of the passed ref. */
 static bool cg_user_spec_clone_intersection_member(UserSpec *s,
                                                    const UserSpecMember *src,
-                                                   const FengDecl *source_member_decl) {
+                                                   const FengDecl *source_member_decl,
+                                                   FengTypeRef *source_member_type_ref) {
     UserSpecMember *dst = NULL;
-    if (src == NULL || src->feng_name == NULL) return true;
-    if (!cg_user_spec_append_member_slot(s, &dst)) return false;
+    if (src == NULL || src->feng_name == NULL) {
+        cg_type_ref_free(source_member_type_ref);
+        return true;
+    }
+    if (!cg_user_spec_append_member_slot(s, &dst)) {
+        cg_type_ref_free(source_member_type_ref);
+        return false;
+    }
     dst->kind = src->kind;
     dst->type = cgtype_clone(src->type);
     dst->is_var = src->is_var;
@@ -7936,6 +7981,7 @@ static bool cg_user_spec_clone_intersection_member(UserSpec *s,
     dst->param_count = src->param_count;
     dst->member = src->member;
     dst->source_member_decl = source_member_decl;
+    dst->source_member_type_ref = source_member_type_ref;
     dst->feng_name = strdup(src->feng_name);
     dst->c_field_name = strdup(src->c_field_name);
     if (src->type != NULL && dst->type == NULL) return false;
@@ -8884,31 +8930,195 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
          * witness constant. Dedup is first-seen-wins — 9.4's
          * detect_cross_spec_method_conflicts already validated at semantic
          * time that same-name/same-signature slots are compatible and
-         * rejected same-name/different-return-type conflicts. */
+         * rejected same-name/different-return-type conflicts.
+         *
+         * 9.9: for generic intersection instances (e.g. `Comparable<IntBox>`
+         * from `spec Comparable<T>: Eq<T> & Ord<T>`), flattened_members only
+         * stores bare decls (Eq<T>, Ord<T>) — the type-arg information is
+         * lost. So we re-traverse intersection_form.members[] (the original
+         * type refs with type args), substitute the intersection's type
+         * params with the instance's type args, resolve the substituted ref
+         * to the correct member-spec generic instance (Eq<IntBox>), and
+         * record that substituted ref as source_member_type_ref so
+         * cg_ensure_witness_instance_for_type can later locate the right
+         * UserSpec (not the generic context). Nested intersection members
+         * propagate their leaf source_member_type_ref through the clone. */
         const FengIntersectionSpecInfo *info =
             feng_semantic_lookup_intersection_spec_info(cg->analysis, decl);
         if (info == NULL) {
             return cg_fail(cg, decl->token,
                 "CE0355", "codegen: intersection-form spec has no flattened member info");
         }
-        for (size_t mi = 0U; mi < info->flattened_member_count; ++mi) {
-            const FengDecl *member_decl = info->flattened_members[mi];
-            const UserSpec *member_spec = cg_find_user_spec_by_decl(cg, member_decl);
-            if (member_spec == NULL) {
-                return cg_fail(cg, decl->token,
-                    "CE0356", "codegen: intersection-form spec member spec not registered");
+        if (s->is_generic_instance) {
+            /* 9.9: generic instance — re-traverse intersection_form.members[]
+             * with type-arg substitution. */
+            /* When the intersection is an open generic instance (e.g.
+             * `Comparable<T>` registered as a generic context from
+             * `func do_compare<T: Comparable<T>>`), resolving the substituted
+             * member ref `Eq<T>` requires the active generic-fn context so
+             * cg_find_generic_instance_user_spec_for_ref can match the
+             * generic-context UserSpec. Temporarily install the instance's
+             * own context names while resolving, mirroring
+             * cg_resolve_type_for_user_spec_member. */
+            bool saved_in_generic_fn = cg->in_generic_fn;
+            size_t saved_tp_count = cg->generic_fn_type_param_count;
+            char **saved_tp_names = cg->generic_fn_type_param_names;
+            const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+            const char **saved_tp_descs = cg->generic_fn_type_param_descs;
+            if (s->generic_context_type_param_count > 0U) {
+                cg->in_generic_fn = true;
+                cg->generic_fn_type_param_count = s->generic_context_type_param_count;
+                cg->generic_fn_type_param_names = s->generic_context_type_param_names;
+                cg->generic_fn_type_param_constraints = NULL;
+                cg->generic_fn_type_param_descs = NULL;
             }
-            if (!cg_ensure_user_spec_members_registered(cg, (UserSpec *)member_spec)) {
-                return false;
-            }
-            for (size_t member_index = 0U; member_index < member_spec->member_count; ++member_index) {
-                const UserSpecMember *src_member = &member_spec->members[member_index];
-                if (cg_user_spec_has_member_name(s, src_member->feng_name,
-                                                 strlen(src_member->feng_name))) {
-                    continue;
-                }
-                if (!cg_user_spec_clone_intersection_member(s, src_member, member_decl)) {
+            for (size_t mi = 0U;
+                 mi < decl->as.spec_decl.as.intersection_form.member_count;
+                 ++mi) {
+                const FengTypeRef *member_ref =
+                    decl->as.spec_decl.as.intersection_form.members[mi];
+                FengTypeRef *sub = cg_type_ref_substitute(
+                    member_ref,
+                    decl->as.spec_decl.type_params,
+                    decl->as.spec_decl.type_param_count,
+                    s->generic_type_args);
+                if (sub == NULL) {
+                    if (s->generic_context_type_param_count > 0U) {
+                        cg->in_generic_fn = saved_in_generic_fn;
+                        cg->generic_fn_type_param_count = saved_tp_count;
+                        cg->generic_fn_type_param_names = saved_tp_names;
+                        cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                        cg->generic_fn_type_param_descs = saved_tp_descs;
+                    }
                     return false;
+                }
+
+                CGType *member_type = NULL;
+                if (!cg_resolve_type(cg, sub, &decl->token, &member_type)) {
+                    cg_type_ref_free(sub);
+                    if (s->generic_context_type_param_count > 0U) {
+                        cg->in_generic_fn = saved_in_generic_fn;
+                        cg->generic_fn_type_param_count = saved_tp_count;
+                        cg->generic_fn_type_param_names = saved_tp_names;
+                        cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                        cg->generic_fn_type_param_descs = saved_tp_descs;
+                    }
+                    return false;
+                }
+                const UserSpec *member_spec =
+                    (member_type != NULL &&
+                     (member_type->kind == CG_TYPE_SPEC ||
+                      member_type->kind == CG_TYPE_CALLABLE))
+                        ? member_type->user_spec : NULL;
+                if (member_spec == NULL) {
+                    cgtype_free(member_type);
+                    cg_type_ref_free(sub);
+                    if (s->generic_context_type_param_count > 0U) {
+                        cg->in_generic_fn = saved_in_generic_fn;
+                        cg->generic_fn_type_param_count = saved_tp_count;
+                        cg->generic_fn_type_param_names = saved_tp_names;
+                        cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                        cg->generic_fn_type_param_descs = saved_tp_descs;
+                    }
+                    return cg_fail(cg, decl->token,
+                        "CE0356", "codegen: intersection-form spec member spec not registered");
+                }
+                if (!cg_ensure_user_spec_members_registered(cg, (UserSpec *)member_spec)) {
+                    cgtype_free(member_type);
+                    cg_type_ref_free(sub);
+                    if (s->generic_context_type_param_count > 0U) {
+                        cg->in_generic_fn = saved_in_generic_fn;
+                        cg->generic_fn_type_param_count = saved_tp_count;
+                        cg->generic_fn_type_param_names = saved_tp_names;
+                        cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                        cg->generic_fn_type_param_descs = saved_tp_descs;
+                    }
+                    return false;
+                }
+                for (size_t member_index = 0U;
+                     member_index < member_spec->member_count;
+                     ++member_index) {
+                    const UserSpecMember *src_member =
+                        &member_spec->members[member_index];
+                    if (cg_user_spec_has_member_name(s, src_member->feng_name,
+                                                     strlen(src_member->feng_name))) {
+                        continue;
+                    }
+                    const FengDecl *decl_for_clone;
+                    FengTypeRef *type_ref_for_clone;
+
+                    if (src_member->source_member_type_ref != NULL) {
+                        /* Nested intersection generic instance: inherit the
+                         * leaf's substituted type ref and decl. */
+                        decl_for_clone = src_member->source_member_decl;
+                        type_ref_for_clone =
+                            cg_type_ref_clone(src_member->source_member_type_ref);
+                    } else {
+                        /* Direct member-spec generic instance: use the outer
+                         * substituted ref and the member spec's origin decl. */
+                        decl_for_clone = member_spec->decl;
+                        type_ref_for_clone = cg_type_ref_clone(sub);
+                    }
+                    if (type_ref_for_clone == NULL &&
+                        src_member->source_member_type_ref != NULL) {
+                        cgtype_free(member_type);
+                        cg_type_ref_free(sub);
+                        if (s->generic_context_type_param_count > 0U) {
+                            cg->in_generic_fn = saved_in_generic_fn;
+                            cg->generic_fn_type_param_count = saved_tp_count;
+                            cg->generic_fn_type_param_names = saved_tp_names;
+                            cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                            cg->generic_fn_type_param_descs = saved_tp_descs;
+                        }
+                        return cg_fail(cg, decl->token, "IE0001",
+                            "codegen: out of memory");
+                    }
+                    if (!cg_user_spec_clone_intersection_member(s, src_member,
+                                                                 decl_for_clone,
+                                                                 type_ref_for_clone)) {
+                        cgtype_free(member_type);
+                        cg_type_ref_free(sub);
+                        if (s->generic_context_type_param_count > 0U) {
+                            cg->in_generic_fn = saved_in_generic_fn;
+                            cg->generic_fn_type_param_count = saved_tp_count;
+                            cg->generic_fn_type_param_names = saved_tp_names;
+                            cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                            cg->generic_fn_type_param_descs = saved_tp_descs;
+                        }
+                        return false;
+                    }
+                }
+                cgtype_free(member_type);
+                cg_type_ref_free(sub);
+            }
+            if (s->generic_context_type_param_count > 0U) {
+                cg->in_generic_fn = saved_in_generic_fn;
+                cg->generic_fn_type_param_count = saved_tp_count;
+                cg->generic_fn_type_param_names = saved_tp_names;
+                cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                cg->generic_fn_type_param_descs = saved_tp_descs;
+            }
+        } else {
+            /* Non-generic: use flattened_members[] (bare decls suffice). */
+            for (size_t mi = 0U; mi < info->flattened_member_count; ++mi) {
+                const FengDecl *member_decl = info->flattened_members[mi];
+                const UserSpec *member_spec = cg_find_user_spec_by_decl(cg, member_decl);
+                if (member_spec == NULL) {
+                    return cg_fail(cg, decl->token,
+                        "CE0356", "codegen: intersection-form spec member spec not registered");
+                }
+                if (!cg_ensure_user_spec_members_registered(cg, (UserSpec *)member_spec)) {
+                    return false;
+                }
+                for (size_t member_index = 0U; member_index < member_spec->member_count; ++member_index) {
+                    const UserSpecMember *src_member = &member_spec->members[member_index];
+                    if (cg_user_spec_has_member_name(s, src_member->feng_name,
+                                                     strlen(src_member->feng_name))) {
+                        continue;
+                    }
+                    if (!cg_user_spec_clone_intersection_member(s, src_member, member_decl, NULL)) {
+                        return false;
+                    }
                 }
             }
         }
@@ -19608,7 +19818,6 @@ static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out) {
                     return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
             } else {
-                fprintf(stderr, "DEBUG: falling back to first-level member\n");
                 /* Fallback to first-level member if chain path building fails */
                 cgtype_free(deepest_type);
                 free(payload_path);
@@ -31004,19 +31213,83 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
             }
         }
+        /* 9.9: when the intersection is an open generic instance (e.g.
+         * `Comparable<T>` registered as a generic context from
+         * `func do_compare<T: Comparable<T>>`), each member's
+         * source_member_type_ref carries an open type-param ref (e.g. `Eq<T>`).
+         * Resolving such a ref requires the active generic-fn context so
+         * cg_find_generic_instance_user_spec_for_ref can match the
+         * generic-context UserSpec for the member spec. Temporarily install
+         * the intersection instance's own context names while resolving
+         * members, mirroring cg_register_user_spec_members. */
+        bool saved_in_generic_fn = cg->in_generic_fn;
+        size_t saved_tp_count = cg->generic_fn_type_param_count;
+        char **saved_tp_names = cg->generic_fn_type_param_names;
+        const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+        const char **saved_tp_descs = cg->generic_fn_type_param_descs;
+        if (s->generic_context_type_param_count > 0U) {
+            cg->in_generic_fn = true;
+            cg->generic_fn_type_param_count = s->generic_context_type_param_count;
+            cg->generic_fn_type_param_names = s->generic_context_type_param_names;
+            cg->generic_fn_type_param_constraints = NULL;
+            cg->generic_fn_type_param_descs = NULL;
+        }
         for (size_t i = 0U; i < s->member_count; ++i) {
             const UserSpecMember *sm = &s->members[i];
-            if (sm->source_member_decl == NULL) {
+            if (sm->source_member_decl == NULL && sm->source_member_type_ref == NULL) {
                 free((void *)member_witness_vars);
                 buf_free(&var);
+                if (s->generic_context_type_param_count > 0U) {
+                    cg->in_generic_fn = saved_in_generic_fn;
+                    cg->generic_fn_type_param_count = saved_tp_count;
+                    cg->generic_fn_type_param_names = saved_tp_names;
+                    cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                    cg->generic_fn_type_param_descs = saved_tp_descs;
+                }
                 return cg_fail(cg, blame,
                     "CE0357", "codegen: intersection-form spec member '%s' is missing source_member_decl",
                     sm->feng_name);
             }
-            const UserSpec *member_spec = cg_find_user_spec_by_decl(cg, sm->source_member_decl);
+            /* 9.9: for generic intersection instances, source_member_type_ref
+             * holds the substituted member ref (e.g. Eq<IntBox>) and is used
+             * to locate the correct generic-instance UserSpec (not the
+             * generic context). For non-generic intersections,
+             * source_member_type_ref is NULL and we fall back to
+             * source_member_decl. */
+            const UserSpec *member_spec = NULL;
+            if (sm->source_member_type_ref != NULL) {
+                CGType *member_type = NULL;
+                if (!cg_resolve_type(cg, sm->source_member_type_ref, NULL, &member_type)) {
+                    free((void *)member_witness_vars);
+                    buf_free(&var);
+                    if (s->generic_context_type_param_count > 0U) {
+                        cg->in_generic_fn = saved_in_generic_fn;
+                        cg->generic_fn_type_param_count = saved_tp_count;
+                        cg->generic_fn_type_param_names = saved_tp_names;
+                        cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                        cg->generic_fn_type_param_descs = saved_tp_descs;
+                    }
+                    return false;
+                }
+                if (member_type != NULL &&
+                    (member_type->kind == CG_TYPE_SPEC ||
+                     member_type->kind == CG_TYPE_CALLABLE)) {
+                    member_spec = member_type->user_spec;
+                }
+                cgtype_free(member_type);
+            } else {
+                member_spec = cg_find_user_spec_by_decl(cg, sm->source_member_decl);
+            }
             if (member_spec == NULL) {
                 free((void *)member_witness_vars);
                 buf_free(&var);
+                if (s->generic_context_type_param_count > 0U) {
+                    cg->in_generic_fn = saved_in_generic_fn;
+                    cg->generic_fn_type_param_count = saved_tp_count;
+                    cg->generic_fn_type_param_names = saved_tp_names;
+                    cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                    cg->generic_fn_type_param_descs = saved_tp_descs;
+                }
                 return cg_fail(cg, blame,
                     "CE0358", "codegen: intersection-form spec member source spec not registered");
             }
@@ -31025,9 +31298,23 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                                                      &member_witness_var)) {
                 free((void *)member_witness_vars);
                 buf_free(&var);
+                if (s->generic_context_type_param_count > 0U) {
+                    cg->in_generic_fn = saved_in_generic_fn;
+                    cg->generic_fn_type_param_count = saved_tp_count;
+                    cg->generic_fn_type_param_names = saved_tp_names;
+                    cg->generic_fn_type_param_constraints = saved_tp_constraints;
+                    cg->generic_fn_type_param_descs = saved_tp_descs;
+                }
                 return false;
             }
             member_witness_vars[i] = member_witness_var;
+        }
+        if (s->generic_context_type_param_count > 0U) {
+            cg->in_generic_fn = saved_in_generic_fn;
+            cg->generic_fn_type_param_count = saved_tp_count;
+            cg->generic_fn_type_param_names = saved_tp_names;
+            cg->generic_fn_type_param_constraints = saved_tp_constraints;
+            cg->generic_fn_type_param_descs = saved_tp_descs;
         }
 
         /* Phase 2: emit the merged witness body. The per-member witness var

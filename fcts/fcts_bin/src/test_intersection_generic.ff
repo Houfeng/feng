@@ -1,0 +1,127 @@
+module fcts_bin;
+
+import std.io;
+import std.test;
+
+// 9.9 泛型交叉类型测试所需的基础 spec
+spec GenEq<T> {
+  func gen_eq(other: T): bool;
+}
+
+spec GenOrd<T> {
+  func gen_compare(other: T): int;
+}
+
+// 命名泛型交叉类型：成员 spec 带泛型参数，交叉类型本身有泛型参数
+spec GenComparable<T>: GenEq<T> & GenOrd<T>;
+
+// 满足 GenEq<GenIntBox> 和 GenOrd<GenIntBox> 的具体类型（自引用）
+type GenIntBox: GenEq<GenIntBox>, GenOrd<GenIntBox> {
+  var value: int;
+
+  func gen_eq(other: GenIntBox): bool {
+    return self.value == other.value;
+  }
+
+  func gen_compare(other: GenIntBox): int {
+    if (self.value < other.value) {
+      return -1;
+    }
+    if (self.value > other.value) {
+      return 1;
+    }
+    return 0;
+  }
+}
+
+// 第二个满足 GenComparable<GenIntBox> 的具体类型（验证同一泛型函数可接受不同类型）
+// GenPairView 视图类型：把内部 first 字段当作 GenIntBox 的 value 来比较
+type GenPairView: GenEq<GenIntBox>, GenOrd<GenIntBox> {
+  var first: int;
+  var second: int;
+
+  func gen_eq(other: GenIntBox): bool {
+    return self.first == other.value;
+  }
+
+  func gen_compare(other: GenIntBox): int {
+    if (self.first < other.value) {
+      return -1;
+    }
+    if (self.first > other.value) {
+      return 1;
+    }
+    return 0;
+  }
+}
+
+// 泛型交叉类型作为约束：调用两个成员 spec 的方法
+func gen_compare_through<T: GenComparable<T>>(v: T, other: T): int {
+  return v.gen_compare(other);
+}
+
+func gen_eq_through<T: GenComparable<T>>(v: T, other: T): bool {
+  return v.gen_eq(other);
+}
+
+// 泛型交叉类型作为约束：返回类型参数值，调用方再调用方法
+func gen_forward<T: GenComparable<T>>(v: T): T {
+  return v;
+}
+
+// 多个泛型交叉类型约束的类型参数（T 和 U 都满足 GenComparable<T>）
+func gen_pair_check<T: GenComparable<T>, U: GenComparable<T>>(a: T, b: U, other: T): bool {
+  return a.gen_eq(other) && b.gen_compare(other) >= 0;
+}
+
+/** 泛型交叉类型行为测试 */
+open func test_intersection_generic() {
+  describe("intersection generic constraint", () {
+    test("generic intersection constraint (method call: compare)", () {
+      let b1 = GenIntBox { value: 5 };
+      let b2 = GenIntBox { value: 3 };
+      assert(gen_compare_through(b1, b2) == 1, "generic intersection: compare greater");
+      assert(gen_compare_through(b2, b1) == -1, "generic intersection: compare less");
+    });
+
+    test("generic intersection constraint (method call: eq)", () {
+      let b1 = GenIntBox { value: 7 };
+      let b2 = GenIntBox { value: 7 };
+      let b3 = GenIntBox { value: 9 };
+      assert(gen_eq_through(b1, b2), "generic intersection: eq equal");
+      assert(!gen_eq_through(b1, b3), "generic intersection: eq not equal");
+    });
+
+    test("generic intersection constraint (forwarded result)", () {
+      let b1 = GenIntBox { value: 11 };
+      let b2 = GenIntBox { value: 11 };
+      let f = gen_forward(b1);
+      assert(f.gen_eq(b2), "generic intersection: forwarded result method call");
+    });
+
+    test("generic intersection constraint accepts multiple types", () {
+      let bi = GenIntBox { value: 5 };
+      let bp = GenPairView { first: 5, second: 99 };
+      let bx = GenIntBox { value: 5 };
+      assert(gen_eq_through(bi, bx), "generic intersection: GenIntBox accepted");
+      assert(gen_eq_through(bp, bx), "generic intersection: GenPairView accepted");
+    });
+
+    test("generic intersection constraint with multiple type params", () {
+      let bi = GenIntBox { value: 5 };
+      let bp = GenPairView { first: 10, second: 0 };
+      let bx = GenIntBox { value: 5 };
+      // a.gen_eq(other) -> bi.gen_eq(bx) == true
+      // b.gen_compare(other) -> bp.gen_compare(bx) == 1 (10 > 5)
+      assert(gen_pair_check(bi, bp, bx), "generic intersection: two type params, both constraints");
+    });
+
+    test("generic intersection constraint: compare through different types", () {
+      let bi = GenIntBox { value: 10 };
+      let bp = GenPairView { first: 8, second: 0 };
+      let bx = GenIntBox { value: 9 };
+      assert(gen_compare_through(bi, bx) == 1, "generic intersection: GenIntBox compare");
+      assert(gen_compare_through(bp, bx) == -1, "generic intersection: GenPairView compare");
+    });
+  });
+}
