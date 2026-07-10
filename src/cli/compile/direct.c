@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "archive/fb.h"
+#include "platform/platform.h"
 #include "cli/common.h"
 #include "cli/compile/direct.h"
 #include "cli/compile/driver.h"
@@ -242,7 +243,7 @@ int feng_cli_direct_run(const char *program,
     if (opts.target == FENG_COMPILE_TARGET_LIB) {
         char *host_target = NULL;
         char *host_target_error = NULL;
-        if (!feng_fb_detect_host_target(&host_target, &host_target_error)) {
+        if (!feng_platform_detect_host_target(&host_target, &host_target_error)) {
             fprintf(stderr, "error: %s\n",
                     host_target_error != NULL ? host_target_error
                                               : "failed to detect host target");
@@ -495,7 +496,7 @@ int feng_cli_direct_run(const char *program,
         }
     }
     if (artifact_name != NULL && opts.target == FENG_COMPILE_TARGET_LIB) {
-        char *lib_name = feng_fb_host_static_library_file_name(artifact_name);
+        char *lib_name = feng_platform_static_library_file_name(artifact_name);
 
         free(artifact_name);
         artifact_name = lib_name;

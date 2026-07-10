@@ -20,6 +20,7 @@
 #include "archive/fb.h"
 #include "archive/zip.h"
 #include "parser/parser.h"
+#include "platform/platform.h"
 #include "symbol/ft.h"
 #include "symbol/provider.h"
 #include "symbol/symbol.h"
@@ -97,7 +98,7 @@ static char *path_join_host_static_library(const char *dir, const char *library_
     char *file_name;
     char *path;
 
-    file_name = feng_fb_host_static_library_file_name(library_name);
+    file_name = feng_platform_static_library_file_name(library_name);
     if (file_name == NULL) {
         return NULL;
     }
@@ -409,7 +410,7 @@ static bool bundle_entry_is_host_library(const FengZipEntryInfo *entry,
     matches = path_length > prefix_length + 1U &&
               strncmp(entry->path, prefix, prefix_length) == 0 &&
               entry->path[prefix_length] == '/' &&
-              feng_fb_is_host_static_library_path(entry->path);
+              feng_platform_is_static_library_path(entry->path);
     free(prefix);
     return matches;
 }
@@ -1099,7 +1100,7 @@ static bool collect_bundle_extlib_static_libraries(const char *const *bundle_pat
             for (lib_index = 0U; lib_index < library_count; ++lib_index) {
                 char *entry_copy;
 
-                if (!feng_fb_host_static_library_matches_name(info.path, library_names[lib_index])) {
+                if (!feng_platform_static_library_matches_name(info.path, library_names[lib_index])) {
                     continue;
                 }
                 if (matches[lib_index].entry_path != NULL) {
@@ -1469,28 +1470,39 @@ static char *find_ancestor_with(const char *start_dir, const char *rel) {
 }
 
 static char *locate_runtime_lib(const char *program_path) {
-    const char *env = getenv("FENG_RUNTIME_LIB");
-    if (env != NULL && env[0] != '\0') {
-        if (!path_exists(env)) {
-            fprintf(stderr,
-                    "FENG_RUNTIME_LIB points to %s which does not exist\n",
-                    env);
-            return NULL;
-        }
-        return str_dup_cstr(env);
-    }
     char *exe = resolve_executable_path(program_path);
     if (exe == NULL) return NULL;
     char *exe_dir = path_dirname_dup(exe);
     free(exe);
     if (exe_dir == NULL) return NULL;
+    /* 1. Install layout: <exe_dir>/../lib/<os>-<arch>/<runtime-lib> */
+    char *host_target = NULL;
+    char *detect_error = NULL;
+    bool detected = feng_platform_detect_host_target(&host_target, &detect_error);
+    free(detect_error);
+    if (detected && host_target != NULL) {
+        char *lib_subdir = path_join2("lib", host_target);
+        char *runtime_rel = path_join_host_static_library(lib_subdir, "feng_runtime");
+        char *parent = path_join2(exe_dir, "..");
+        char *candidate = path_join2(parent, runtime_rel);
+        bool ok = candidate != NULL && path_exists(candidate);
+        free(lib_subdir);
+        free(runtime_rel);
+        free(parent);
+        if (ok) {
+            free(host_target);
+            free(exe_dir);
+            return candidate;
+        }
+        free(candidate);
+    }
+    free(host_target);
+    /* 2. Dev build layout: <root>/build/bin/feng -> <root>/build/lib/<runtime-lib> */
     char *runtime_rel = path_join_host_static_library("build/lib", "feng_runtime");
-
     if (runtime_rel == NULL) {
         free(exe_dir);
         return NULL;
     }
-    /* Common layout: <root>/build/bin/feng -> <root>/build/lib/<host-runtime-lib> */
     char *root = find_ancestor_with(exe_dir, runtime_rel);
     free(exe_dir);
     if (root == NULL) {
@@ -1504,24 +1516,26 @@ static char *locate_runtime_lib(const char *program_path) {
 }
 
 static char *locate_runtime_include(const char *program_path) {
-    const char *env = getenv("FENG_RUNTIME_INCLUDE");
-    if (env != NULL && env[0] != '\0') {
-        char *probe = path_join2(env, "runtime/feng_runtime.h");
-        bool ok = path_exists(probe);
-        free(probe);
-        if (!ok) {
-            fprintf(stderr,
-                    "FENG_RUNTIME_INCLUDE=%s does not contain runtime/feng_runtime.h\n",
-                    env);
-            return NULL;
-        }
-        return str_dup_cstr(env);
-    }
     char *exe = resolve_executable_path(program_path);
     if (exe == NULL) return NULL;
     char *exe_dir = path_dirname_dup(exe);
     free(exe);
     if (exe_dir == NULL) return NULL;
+    /* 1. Install layout: <exe_dir>/../include/runtime/feng_runtime.h */
+    char *parent = path_join2(exe_dir, "..");
+    char *candidate = path_join2(parent, "include/runtime/feng_runtime.h");
+    free(parent);
+    bool ok = candidate != NULL && path_exists(candidate);
+    if (ok) {
+        char *include_root = path_dirname_dup(candidate); /* .../include/runtime */
+        char *result = path_dirname_dup(include_root);     /* .../include        */
+        free(include_root);
+        free(candidate);
+        free(exe_dir);
+        return result;
+    }
+    free(candidate);
+    /* 2. Dev build layout: <root>/src/runtime/feng_runtime.h */
     char *root = find_ancestor_with(exe_dir, "src/runtime/feng_runtime.h");
     free(exe_dir);
     if (root == NULL) return NULL;
@@ -1798,8 +1812,8 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     if (include_dir == NULL) {
         fprintf(stderr,
                 "error: cannot locate runtime headers.\n"
-                "  set FENG_RUNTIME_INCLUDE=<dir-containing-runtime/feng_runtime.h>\n"
-                "  or run from a build tree containing src/runtime/feng_runtime.h.\n");
+                "  expected the install layout at <feng-exe>/../include/runtime/feng_runtime.h\n"
+                "  or the dev build layout at <src-tree>/src/runtime/feng_runtime.h.\n");
         return 1;
     }
 
@@ -1819,12 +1833,12 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
         runtime_lib = locate_runtime_lib(opts->program_path);
         if (runtime_lib == NULL) {
-            char *runtime_basename = feng_fb_host_static_library_file_name("feng_runtime");
+            char *runtime_basename = feng_platform_static_library_file_name("feng_runtime");
 
             fprintf(stderr,
                 "error: cannot locate %s.\n"
-                "  set FENG_RUNTIME_LIB=<path-to-%s> or run from a\n"
-                "  build tree where build/lib/%s exists.\n",
+                "  expected the install layout at <feng-exe>/../lib/<os>-<arch>/%s\n"
+                "  or the dev build layout at <src-tree>/build/lib/%s.\n",
                 runtime_basename != NULL ? runtime_basename : "the Feng runtime static library",
                 runtime_basename != NULL ? runtime_basename : "the Feng runtime static library",
                 runtime_basename != NULL ? runtime_basename : "the Feng runtime static library");
@@ -1833,7 +1847,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             return 1;
         }
         if (opts->bundle_count > 0U) {
-            if (!feng_fb_detect_host_target(&host_target, &bundle_error)) {
+            if (!feng_platform_detect_host_target(&host_target, &bundle_error)) {
                 fprintf(stderr,
                         "error: cannot determine host target for package bundles: %s\n",
                         bundle_error != NULL ? bundle_error : "unknown error");

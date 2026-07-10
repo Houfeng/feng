@@ -8,6 +8,7 @@
 #include <sys/stat.h>
 
 #include "archive/fb.h"
+#include "platform/platform.h"
 #include "cli/deps/manager.h"
 #include "cli/project/common.h"
 
@@ -193,13 +194,13 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
         goto done;
     }
 
-    host_library_name = feng_fb_host_static_library_file_name(context.manifest.name);
+    host_library_name = feng_platform_static_library_file_name(context.manifest.name);
     if (host_library_name == NULL) {
         fprintf(stderr, "error: out of memory while preparing package paths\n");
         rc = 1;
         goto done;
     }
-    if (!feng_fb_detect_host_target(&host_target, &error_message)) {
+    if (!feng_platform_detect_host_target(&host_target, &error_message)) {
         fprintf(stderr, "error: %s\n",
                 error_message != NULL ? error_message : "failed to detect host target");
         rc = 1;

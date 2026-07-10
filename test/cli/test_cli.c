@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "archive/fb.h"
+#include "platform/platform.h"
 #include "archive/zip.h"
 #include "cli/cli.h"
 #include "cli/deps/manager.h"
@@ -228,7 +229,7 @@ static char *make_lib_option(const char *library_name_or_path) {
 }
 
 static char *host_static_library_file_name(const char *stem) {
-    char *name = feng_fb_host_static_library_file_name(stem);
+    char *name = feng_platform_static_library_file_name(stem);
 
     ASSERT(name != NULL);
     return name;
@@ -248,7 +249,7 @@ static char *host_static_library_output_path(const char *out_dir, const char *st
     char *lib_dir;
     char *path;
 
-    ASSERT(feng_fb_detect_host_target(&host_target, NULL));
+    ASSERT(feng_platform_detect_host_target(&host_target, NULL));
     lib_base = path_join(out_dir, "lib");
     lib_dir = path_join(lib_base, host_target);
     free(lib_base);
@@ -1990,7 +1991,7 @@ static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(voi
     mod_nested_dir = path_join(mod_dir, "test/cli");
     mod_path = path_join(mod_nested_dir, "bundle_demo.ft");
     extlib_root = path_join(workspace_dir, "extlib");
-    ASSERT(feng_fb_detect_host_target(&host_target, &error_message));
+    ASSERT(feng_platform_detect_host_target(&host_target, &error_message));
     free(error_message);
     error_message = NULL;
     extlib_platform_dir = path_join(extlib_root, host_target);
@@ -2163,7 +2164,7 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
-    ASSERT(feng_fb_detect_host_target(&host_target, &error_message));
+    ASSERT(feng_platform_detect_host_target(&host_target, &error_message));
     free(error_message);
     error_message = NULL;
     dynamic_name = host_dynamic_library_file_name("helper");
@@ -2337,7 +2338,7 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
-    ASSERT(feng_fb_detect_host_target(&host_target, &error_message));
+    ASSERT(feng_platform_detect_host_target(&host_target, &error_message));
     free(error_message);
     error_message = NULL;
 
@@ -11438,7 +11439,7 @@ static void test_project_build_lib_stages_extlib_assets_without_assets_layer(voi
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
-    ASSERT(feng_fb_detect_host_target(&host_target, &error_message));
+    ASSERT(feng_platform_detect_host_target(&host_target, &error_message));
     free(error_message);
     error_message = NULL;
 
@@ -11861,7 +11862,7 @@ static void test_project_pack_includes_extlib_assets_without_assets_layer(void) 
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
-    ASSERT(feng_fb_detect_host_target(&host_target, &error_message));
+    ASSERT(feng_platform_detect_host_target(&host_target, &error_message));
     free(error_message);
     error_message = NULL;
 

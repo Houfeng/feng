@@ -329,16 +329,24 @@ if ! grep -q "use .*tool lex" "$WORK/legacy_lex.err"; then
     failures=$((failures + 1))
 fi
 
-# 7. runtime override pointing at a missing path is reported clearly
-out7="$WORK/case_rtmiss"
-if FENG_RUNTIME_LIB="$WORK/no_such_runtime.a" "$FENG" "$FIXTURE" --out="$out7" \
-       >"$WORK/rt_missing.out" 2>"$WORK/rt_missing.err"; then
-    echo "FAIL[rt_missing] expected failure with FENG_RUNTIME_LIB pointing nowhere"
-    failures=$((failures + 1))
-elif ! grep -q "FENG_RUNTIME_LIB points to" "$WORK/rt_missing.err"; then
-    echo "FAIL[rt_missing] missing FENG_RUNTIME_LIB diagnostic"
-    failures=$((failures + 1))
-fi
+# 7. runtime lookup failure diagnostic (FENG_RUNTIME_LIB removed).
+# Previously tested the FENG_RUNTIME_LIB environment variable pointing at a
+# nonexistent file. FENG_RUNTIME_LIB has been removed per the release plan
+# (dev/feng-release-and-instanll.md §4.1); runtime is now located via two-step
+# lookup: install layout <exe>/../lib/<os>-<arch>/ then dev build tree build/lib/.
+# In the dev tree the step-2 ancestor search always finds build/lib/libfeng_runtime.a,
+# so a "runtime not found" failure cannot be constructed here. The install-layout
+# missing case is covered by the distribution manifest verification instead.
+#
+# out7="$WORK/case_rtmiss"
+# if FENG_RUNTIME_LIB="$WORK/no_such_runtime.a" "$FENG" "$FIXTURE" --out="$out7" \
+#        >"$WORK/rt_missing.out" 2>"$WORK/rt_missing.err"; then
+#     echo "FAIL[rt_missing] expected failure with FENG_RUNTIME_LIB pointing nowhere"
+#     failures=$((failures + 1))
+# elif ! grep -q "FENG_RUNTIME_LIB points to" "$WORK/rt_missing.err"; then
+#     echo "FAIL[rt_missing] missing FENG_RUNTIME_LIB diagnostic"
+#     failures=$((failures + 1))
+# fi
 
 # 8. failing host cc surfaces a clear error and preserves the IR file
 out8="$WORK/case_ccfail"

@@ -20,6 +20,7 @@ DAP_SRCS := $(wildcard src/dap/*.c)
 SYMBOL_SRCS := $(wildcard src/symbol/*.c)
 RUNTIME_SRCS := $(wildcard src/runtime/*.c)
 ARCHIVE_SRCS := $(wildcard src/archive/*.c)
+PLATFORM_SRCS := $(wildcard src/platform/*.c)
 THIRD_PARTY_SRCS := third_party/miniz/miniz.c
 CLI_SRCS := $(shell find src/cli -name '*.c')
 TEST_ARCHIVE_SRCS := $(wildcard test/archive/*.c)
@@ -44,17 +45,17 @@ TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
 	src/cli/deps/main.c \
 	src/cli/compile/options.c src/cli/compile/direct.c src/cli/compile/driver.c
 
-CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(DAP_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(CLI_SRCS))
+CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(DAP_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(CLI_SRCS))
 RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS))
-TEST_ARCHIVE_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_ARCHIVE_SRCS))
+TEST_ARCHIVE_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_ARCHIVE_SRCS))
 TEST_LEXER_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(TEST_LEXER_SRCS))
 TEST_PARSER_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(TEST_PARSER_SRCS))
-TEST_SEMANTIC_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_SEMANTIC_SRCS))
+TEST_SEMANTIC_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_SEMANTIC_SRCS))
 TEST_RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS) $(TEST_RUNTIME_SRCS))
-TEST_CODEGEN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CODEGEN_SRCS))
-TEST_DEBUG_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_DEBUG_SRCS))
-TEST_CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(DAP_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CLI_SUPPORT_SRCS) $(TEST_CLI_SRCS))
-TEST_SYMBOL_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(THIRD_PARTY_SRCS) $(TEST_SYMBOL_SRCS))
+TEST_CODEGEN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CODEGEN_SRCS))
+TEST_DEBUG_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_DEBUG_SRCS))
+TEST_CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(DAP_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CLI_SUPPORT_SRCS) $(TEST_CLI_SRCS))
+TEST_SYMBOL_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_SYMBOL_SRCS))
 DEPS := $(CLI_OBJS:.o=.d) $(RUNTIME_OBJS:.o=.d) $(TEST_ARCHIVE_OBJS:.o=.d) \
 	$(TEST_LEXER_OBJS:.o=.d) $(TEST_PARSER_OBJS:.o=.d) \
 	$(TEST_SEMANTIC_OBJS:.o=.d) $(TEST_RUNTIME_OBJS:.o=.d) \
@@ -93,6 +94,8 @@ HOST_TARGET := $(_HOST_OS)-$(_HOST_ARCH)
 EXTLIB_DIR := extlib/$(HOST_TARGET)
 
 RUNTIME_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
+RUNTIME_HEADERS := $(BUILD_DIR)/include/runtime/feng_runtime.h \
+	$(BUILD_DIR)/include/runtime/feng_runtime_contract.inc
 LIBUNWIND_LIB := $(EXTLIB_DIR)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC_LIB_EXT)
 
 .PHONY: all cli runtime test test-normal smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints test-sanitize clean
@@ -101,7 +104,7 @@ all: cli runtime
 
 cli: $(BIN_DIR)/feng
 
-runtime: $(RUNTIME_LIB)
+runtime: $(RUNTIME_LIB) $(RUNTIME_HEADERS)
 
 test: test-sanitize test-normal
 
@@ -210,6 +213,18 @@ $(RUNTIME_LIB): $(RUNTIME_OBJS) $(LIBUNWIND_LIB)
 	@mkdir -p $(BUILD_DIR)/temp/runtime-libunwind-objs
 	cd $(BUILD_DIR)/temp/runtime-libunwind-objs && $(AR) x ../../../$(LIBUNWIND_LIB)
 	$(AR) rcs $@ $(RUNTIME_OBJS) $(BUILD_DIR)/temp/runtime-libunwind-objs/*.o
+
+# runtime public ABI headers — copied to build/include/runtime/ so that the
+# install-layout lookup (<feng-exe>/../include/runtime/) mirrors the dev-layout
+# lookup (<root>/src/runtime/) without leaking source-tree paths into the
+# distribution archive.
+$(BUILD_DIR)/include/runtime/feng_runtime.h: src/runtime/feng_runtime.h
+	@mkdir -p $(dir $@)
+	cp $< $@
+
+$(BUILD_DIR)/include/runtime/feng_runtime_contract.inc: src/runtime/feng_runtime_contract.inc
+	@mkdir -p $(dir $@)
+	cp $< $@
 
 # libunwind is a pre-built vendored library; run scripts/build_libunwind.sh once to produce it.
 $(LIBUNWIND_LIB):

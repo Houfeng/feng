@@ -12,6 +12,7 @@
 
 #include "archive/fm.h"
 #include "archive/fb.h"
+#include "platform/platform.h"
 #include "archive/zip.h"
 #include "cli/common.h"
 #include "cli/project/common.h"
@@ -1659,7 +1660,7 @@ static bool build_local_project_bundle(const char *program,
         return false;
     }
 
-    host_library_name = feng_fb_host_static_library_file_name(context.manifest.name);
+    host_library_name = feng_platform_static_library_file_name(context.manifest.name);
     if (host_library_name == NULL) {
         feng_cli_project_context_dispose(&context);
         return set_errorf(error, manifest_path, 0U, "out of memory");
@@ -1667,7 +1668,7 @@ static bool build_local_project_bundle(const char *program,
     {
         char *host_target = NULL;
         char *host_target_error = NULL;
-        if (!feng_fb_detect_host_target(&host_target, &host_target_error)) {
+        if (!feng_platform_detect_host_target(&host_target, &host_target_error)) {
             free(host_target_error);
             free(host_library_name);
             feng_cli_project_context_dispose(&context);

@@ -4862,6 +4862,142 @@ static void cg_refresh_user_spec_references(CG *cg,
     }
 }
 
+/* Mirror of cg_remap_user_spec_ptr for UserType pointers. After cg->user_types
+ * is realloc'd, every borrowed UserType* that pointed into the old array becomes
+ * dangling; this remaps such pointers to the same offset in the new array.
+ * Pointers not within the old array range (e.g., &cg->user_types[0] captured
+ * before any allocation, or NULL) are returned unchanged. */
+static const UserType *cg_remap_user_type_ptr(uintptr_t old_base,
+                                              size_t old_count,
+                                              const UserType *new_base,
+                                              const UserType *ptr) {
+    uintptr_t p;
+    uintptr_t old_end;
+
+    if (old_base == 0U || old_count == 0U || new_base == NULL || ptr == NULL) {
+        return ptr;
+    }
+    p = (uintptr_t)ptr;
+    old_end = old_base + old_count * sizeof(UserType);
+    if (p < old_base || p >= old_end || ((p - old_base) % sizeof(UserType)) != 0U) {
+        return ptr;
+    }
+    return &new_base[(p - old_base) / sizeof(UserType)];
+}
+
+/* Mirror of cg_refresh_cgtype_user_specs for the CGType->user slot. Refreshes
+ * type->user for CG_TYPE_OBJECT nodes (the only kind that borrows a UserType)
+ * and recurses through type->element so arrays/pointers of user types are
+ * remapped too. */
+static void cg_refresh_cgtype_user_types(CGType *type,
+                                         uintptr_t old_base,
+                                         size_t old_count,
+                                         const UserType *new_base) {
+    if (type == NULL) return;
+    if (type->kind == CG_TYPE_OBJECT) {
+        type->user = cg_remap_user_type_ptr(old_base,
+                                            old_count,
+                                            new_base,
+                                            type->user);
+    }
+    cg_refresh_cgtype_user_types(type->element, old_base, old_count, new_base);
+}
+
+/* Mirror of cg_refresh_user_spec_references for UserType pointers. After
+ * cg->user_types is realloc'd, walks every CGType held by externs, free_fns,
+ * user_types (fields, static_bindings, constructors, methods, static_methods),
+ * user_specs (members, callable types, union types), user_fits (methods), and
+ * builtin_fits (methods) to refresh type->user pointers. UserFit->target is
+ * already refreshed by cg_refresh_user_fit_targets via target_index, so it is
+ * not revisited here. */
+static void cg_refresh_user_type_references(CG *cg,
+                                            uintptr_t old_base,
+                                            size_t old_count) {
+    if (cg == NULL || old_base == 0U || old_count == 0U) return;
+
+    for (size_t i = 0; i < cg->extern_count; ++i) {
+        ExternFn *fn = &cg->externs[i];
+        for (size_t j = 0; j < fn->param_count; ++j) {
+            cg_refresh_cgtype_user_types(fn->param_types[j], old_base, old_count, cg->user_types);
+        }
+        cg_refresh_cgtype_user_types(fn->return_type, old_base, old_count, cg->user_types);
+    }
+    for (size_t i = 0; i < cg->free_fn_count; ++i) {
+        FreeFn *fn = &cg->free_fns[i];
+        for (size_t j = 0; j < fn->param_count; ++j) {
+            cg_refresh_cgtype_user_types(fn->param_types[j], old_base, old_count, cg->user_types);
+        }
+        cg_refresh_cgtype_user_types(fn->return_type, old_base, old_count, cg->user_types);
+    }
+    for (size_t i = 0; i < cg->user_type_count; ++i) {
+        UserType *type = &cg->user_types[i];
+        for (size_t j = 0; j < type->field_count; ++j) {
+            cg_refresh_cgtype_user_types(type->fields[j].type, old_base, old_count, cg->user_types);
+        }
+        for (size_t j = 0; j < type->static_binding_count; ++j) {
+            cg_refresh_cgtype_user_types(type->static_bindings[j].type, old_base, old_count, cg->user_types);
+        }
+        for (size_t j = 0; j < type->constructor_count; ++j) {
+            UserMethod *method = &type->constructors[j];
+            for (size_t k = 0; k < method->param_count; ++k) {
+                cg_refresh_cgtype_user_types(method->param_types[k], old_base, old_count, cg->user_types);
+            }
+            cg_refresh_cgtype_user_types(method->return_type, old_base, old_count, cg->user_types);
+        }
+        for (size_t j = 0; j < type->method_count; ++j) {
+            UserMethod *method = &type->methods[j];
+            for (size_t k = 0; k < method->param_count; ++k) {
+                cg_refresh_cgtype_user_types(method->param_types[k], old_base, old_count, cg->user_types);
+            }
+            cg_refresh_cgtype_user_types(method->return_type, old_base, old_count, cg->user_types);
+        }
+        for (size_t j = 0; j < type->static_method_count; ++j) {
+            UserMethod *method = &type->static_methods[j];
+            for (size_t k = 0; k < method->param_count; ++k) {
+                cg_refresh_cgtype_user_types(method->param_types[k], old_base, old_count, cg->user_types);
+            }
+            cg_refresh_cgtype_user_types(method->return_type, old_base, old_count, cg->user_types);
+        }
+    }
+    for (size_t i = 0; i < cg->user_spec_count; ++i) {
+        UserSpec *spec = &cg->user_specs[i];
+        for (size_t j = 0; j < spec->member_count; ++j) {
+            UserSpecMember *member = &spec->members[j];
+            cg_refresh_cgtype_user_types(member->type, old_base, old_count, cg->user_types);
+            for (size_t k = 0; k < member->param_count; ++k) {
+                cg_refresh_cgtype_user_types(member->param_types[k], old_base, old_count, cg->user_types);
+            }
+        }
+        cg_refresh_cgtype_user_types(spec->callable_return_type, old_base, old_count, cg->user_types);
+        for (size_t j = 0; j < spec->callable_param_count; ++j) {
+            cg_refresh_cgtype_user_types(spec->callable_param_types[j], old_base, old_count, cg->user_types);
+        }
+        for (size_t j = 0; j < spec->union_member_count; ++j) {
+            cg_refresh_cgtype_user_types(spec->union_member_types[j], old_base, old_count, cg->user_types);
+        }
+    }
+    for (size_t i = 0; i < cg->user_fit_count; ++i) {
+        UserFit *fit = &cg->user_fits[i];
+        for (size_t j = 0; j < fit->method_count; ++j) {
+            UserMethod *method = &fit->methods[j];
+            for (size_t k = 0; k < method->param_count; ++k) {
+                cg_refresh_cgtype_user_types(method->param_types[k], old_base, old_count, cg->user_types);
+            }
+            cg_refresh_cgtype_user_types(method->return_type, old_base, old_count, cg->user_types);
+        }
+    }
+    for (size_t i = 0; i < cg->builtin_fit_count; ++i) {
+        BuiltinFit *fit = &cg->builtin_fits[i];
+        for (size_t j = 0; j < fit->method_count; ++j) {
+            UserMethod *method = &fit->methods[j];
+            for (size_t k = 0; k < method->param_count; ++k) {
+                cg_refresh_cgtype_user_types(method->param_types[k], old_base, old_count, cg->user_types);
+            }
+            cg_refresh_cgtype_user_types(method->return_type, old_base, old_count, cg->user_types);
+        }
+    }
+}
+
 static const BuiltinFit *cg_find_builtin_fit_by_decl(const CG *cg,
                                                      const FengDecl *decl) {
     for (size_t i = 0; i < cg->builtin_fit_count; i++) {
@@ -6342,12 +6478,15 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
         return true;
     }
     if (cg->user_type_count + 1 > cg->user_type_capacity) {
+        uintptr_t old_base = (uintptr_t)cg->user_types;
+        size_t old_count = cg->user_type_count;
         size_t cap = cg->user_type_capacity ? cg->user_type_capacity * 2 : 4;
         void *p = realloc(cg->user_types, cap * sizeof *cg->user_types);
         if (!p) return false;
         cg->user_types = p;
         cg->user_type_capacity = cap;
         cg_refresh_user_fit_targets(cg);
+        cg_refresh_user_type_references(cg, old_base, old_count);
     }
 
     UserType *t = &cg->user_types[cg->user_type_count++];
@@ -8347,12 +8486,15 @@ static const FreeFn *cg_find_free_fn_by_decl(const CG *cg, const FengDecl *decl)
 
 static bool cg_register_user_type_shell(CG *cg, const FengDecl *decl) {
     if (cg->user_type_count + 1 > cg->user_type_capacity) {
+        uintptr_t old_base = (uintptr_t)cg->user_types;
+        size_t old_count = cg->user_type_count;
         size_t cap = cg->user_type_capacity ? cg->user_type_capacity * 2 : 4;
         void *p = realloc(cg->user_types, cap * sizeof *cg->user_types);
         if (!p) return false;
         cg->user_types = p;
         cg->user_type_capacity = cap;
         cg_refresh_user_fit_targets(cg);
+        cg_refresh_user_type_references(cg, old_base, old_count);
     }
     UserType *t = &cg->user_types[cg->user_type_count++];
     memset(t, 0, sizeof *t);

@@ -10,9 +10,10 @@
  * Host C compiler driver (P5).
  *
  * Drives the post-codegen build:
- *   1. Resolve the runtime include directory and static library, either
- *      via FENG_RUNTIME_INCLUDE / FENG_RUNTIME_LIB environment variables
- *      or by probing paths relative to the running `feng` executable.
+ *   1. Resolve the runtime include directory and static library by probing
+ *      paths relative to the running `feng` executable: first the install
+ *      layout (`<exe>/../include/runtime/` + `<exe>/../lib/<os>-<arch>/`),
+ *      then the dev build layout (`src/runtime/` + `build/lib/`).
  *   2. Mine `extern fn` calling-convention annotations (`@cdecl`,
  *      `@stdcall`, `@fastcall`) across all current programs and flattened
  *      package `.ft` surfaces to derive additional `-l<lib>` link flags.
@@ -36,7 +37,7 @@ struct FengProgram;
 
 typedef struct FengCliDriverOptions {
     /* argv[0] of the host process — used to locate runtime artefacts
-     * relative to the executable when no environment override is set. */
+     * relative to the executable. */
     const char *program_path;
     FengCompileTarget target;
     const char *c_path;
