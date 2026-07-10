@@ -1,12 +1,12 @@
 # Feng 分发与安装方案
 
-> 本方案收敛 Feng 工具链（编译器 + 运行时静态库 + 精简 toolchain）的分发包结构、构建发布工作流、安装方式与升级卸载规则。
+> 本方案收敛 Feng 工具链（编译器 + 运行时静态库 + 精简 toolchain）的分发包结构、构建发布工作流、安装方式。
 > `.fb` 包格式（feng 项目间源码级闭源分发）由 [feng-package.md](../docs/feng-package.md) 单独定义，不在本文件重复。
 > CLI 命令与选项由 [feng-cli.md](../docs/feng-cli.md) 单独定义，本方案不引入新的顶层 CLI 命令。
 
 ## 1 目标与范围
 
-本方案解决一件事：让用户在目标机器上拿到一个可用的 Feng 工具链，并能在多种平台上以一致方式安装、升级、卸载。
+本方案解决一件事：让用户在目标机器上拿到一个可用的 Feng 工具链，并能在多种平台上以一致方式安装。
 
 首版明确覆盖：
 
@@ -31,7 +31,7 @@
 - **抽象驱动，面向未来可扩展**：平台矩阵、toolchain 策略、安装前缀、分发渠道均以参数化形式表达，新增平台或切换 toolchain 策略不改动脚本主干。
 - **单一分发物**：一个 zip 覆盖一个目标平台，不按子组件拆分多包，降低用户组合安装成本。
 - **环境变量最小化**：默认仅向 `PATH` 注入 `$FENG_HOME/bin`，不要求用户配置多变量；`FENG_HOME` 与 `FENG_TOOLCHAIN` 仅在需要覆盖默认时使用。
-- **可逆安装**：安装产物集中在一个目录树下，卸载只需删除该目录与少量软链 / shell 片段。
+- **可逆安装**：安装产物集中在一个目录树下，清理只需删除该目录与 shell 片段。
 - **与现有体系一致**：复用 `Makefile` 产物路径、Feng 编译期 `extlib/<os>-<arch>/` 平台隔离约定与 `scripts/` 下既有构建脚本，不另立构建体系。
 
 ## 3 命名规范与平台矩阵
@@ -88,8 +88,7 @@ feng-<os>-<arch>-<version>/
 ├── scripts/                  # 必须：安装辅助脚本（在线脚本复用此份）
 │   ├── env.sh                # 注入环境变量（POSIX shell）
 │   ├── env.fish              # fish 等价片段
-│   ├── env.ps1               # Windows PowerShell 等价片段
-│   └── uninstall.sh
+│   └── env.ps1               # Windows PowerShell 等价片段
 └── VERSION                   # 必须：纯文本版本号，单行
 ```
 
@@ -200,45 +199,16 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 `install.sh` 行为约束：
 
-- 支持参数：
-  - `--version <ver>`：指定版本，默认 `latest`（解析 GitHub Releases 最新 tag）
-  - `--platform <os>-<arch>`：指定平台，默认按 `uname -s` / `uname -m` 自动检测
-  - `--prefix <path>`：安装根目录，默认 `$HOME/.feng/<version>`
-  - `--toolchain bundled|system|auto`：写入 `$FENG_HOME/scripts/env.sh` 的默认策略，默认 `bundled`
-  - `--no-modify-shell`：不提示修改 shell 启动脚本（默认会提示并询问，不静默修改）
-- 安装流程：
-  1. 解析参数与目标平台
-  2. 拼接下载 URL，下载 zip 到临时目录（工程内 `temp/` 而非系统 `/tmp`，遵循项目约定）
+- 不接受参数，固定行为：
+  1. 自动检测目标平台（按 `uname -s` / `uname -m`），解析 GitHub Releases 最新 tag 为版本
+  2. 拼接下载 URL，下载 zip 到系统临时目录（`$TMPDIR`，回退 `/tmp`）
   3. 校验 SHA-256（从 release notes 或同目录 `.sha256` 读取）
-  4. 解压到 `$FENG_HOME`
-  5. 生成 `$FENG_HOME/scripts/env.sh`（按 `--toolchain` 写入默认策略）
-  6. 维护 `$HOME/.feng/current` 软链指向本次安装版本
-  7. 提示用户将 `source $HOME/.feng/current/scripts/env.sh` 追加到 shell 启动脚本
+  4. 解压到 `$HOME/.feng/`
+  5. 提示用户将 `source $HOME/.feng/scripts/env.sh` 追加到 shell 启动脚本
 - 失败时必须清理半成品目录，不留残文件。
-- 在线脚本与压缩包内 `scripts/` 下的辅助脚本共用同一份 `env.sh` / `uninstall.sh`，不维护两套。
+- 在线脚本与压缩包内 `scripts/` 下的辅助脚本共用同一份 `env.sh`，不维护两套。
 
-### 7.3 多版本共存与切换
-
-- 多个版本可并行安装于 `$HOME/.feng/<version>/`
-- `$HOME/.feng/current` 软链指向当前激活版本，shell 启动脚本 source `$HOME/.feng/current/scripts/env.sh`
-- 切换版本只需重定向软链：`ln -sfn $HOME/.feng/<version> $HOME/.feng/current`
-- 首版不提供 `feng use <version>` 类命令，软链切换由用户手动完成
-
-## 8 升级与卸载
-
-### 8.1 升级
-
-重新执行 §7.2 在线脚本并指定 `--version <new>`，安装到新版本目录后切换 `current` 软链。旧版本目录保留，用户确认无问题后可手动删除。
-
-### 8.2 卸载
-
-执行 `$FENG_HOME/scripts/uninstall.sh`，行为：
-
-- 删除 `$FENG_HOME` 整个版本目录
-- 若 `$HOME/.feng/current` 指向被卸载版本，移除该软链
-- 提示用户手动移除 shell 启动脚本中的 `source` 行（不静默修改）
-
-## 9 验收清单
+## 8 验收清单
 
 发布前必须满足：
 
@@ -249,10 +219,10 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - [ ] `feng lsp` / `feng dap` 可启动
 - [ ] toolchain 策略为 `bundled` 时，`feng` 不依赖系统 clang / lldb / lldb-dap
 - [ ] toolchain 策略切换为 `system` 时，`feng` 可正确调用系统 clang / lldb / lldb-dap
-- [ ] 安装脚本在干净环境完成安装，卸载脚本完成后无残留
+- [ ] 安装脚本在干净环境完成安装，无残留
 - [ ] 压缩包解压后体积、toolchain 体积记录到 `manifest.txt`
 
-## 10 待人工决策项
+## 9 待人工决策项
 
 以下事项影响后续迭代，但不阻塞首版 macos-arm64 发布，列出以备决策：
 
@@ -261,6 +231,6 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 3. **Linux glibc 基线**：linux-x64 / linux-arm64 发布时锁定的最低 glibc 版本。
 4. **签名与公证**：macOS notarization、Windows code signing 何时引入、用何种证书。
 5. **包管理器集成**：Homebrew tap、apt repo、winget 等何时引入，是否纳入本方案或独立文档。
-6. **自更新命令**：是否引入 `feng upgrade` / `feng use <version>`，引入后与软链方案的关系。
+6. **自更新命令**：是否引入 `feng upgrade` / `feng use <version>` 类自更新与版本切换命令。
 7. **CI runner 选择**：linux / windows 平台发布时使用 GitHub-hosted runner 还是自托管 runner，是否需要交叉编译。
 8. **LLDB 的 Python 依赖**：LLDB 默认链接 `libpython`，用户环境无 Python 时 lldb 启动失败。需先查清 LLVM 官方预编译包是否 bundle `libpython`；若否，在 bundle `libpython`、依赖系统 Python、首次自举下载三者中决策（不自建 LLVM，故不考虑 `-DLLDB_ENABLE_PYTHON=OFF` 这一路径）。此项与第 1 项 toolchain 精简方案强相关，需一并决策。
