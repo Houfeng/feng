@@ -66,32 +66,32 @@ feng-<os>-<arch>-<version>.zip
 
 ```text
 feng-<os>-<arch>-<version>/
-├── bin/                      # 必须：Feng 可执行
-│   └── feng                  # 编译器 + CLI 主入口（含 lsp / dap 子命令）
-├── include/                  # 必须：runtime 公共 ABI 头文件（平台无关，单一一份，扁平置于 include/ 根下）
+├── bin/                          # 必须：Feng 可执行
+│   └── feng                      # 编译器 + CLI 主入口（含 lsp / dap 子命令）
+├── include/                      # 必须：runtime 公共 ABI 头文件（平台无关）
 │   ├── feng_runtime.h
 │   └── feng_runtime_contract.inc
-├── lib/                      # 必须：运行时静态库（按目标平台分子目录）
-│   └── <os>-<arch>/          # 目标平台标识，取值见 feng-os-arch.md
-│       └── libfeng_runtime.a # linux/macos；Windows 下为 feng_runtime.lib
+├── lib/                          # 必须：运行时静态库（按目标平台分子目录）
+│   └── <os>-<arch>/              # 目标平台标识，取值见 feng-os-arch.md
+│       └── libfeng_runtime.a     # linux/macos；Windows 下为 feng_runtime.lib
 │  
-├── toolchain/                # 必须：精简 LLVM 工具链
-│   ├── clang/                # 仅 clang 与最小必要依赖
+├── toolchain/                    # 必须：精简 LLVM 工具链
+│   ├── clang/                    # 仅 clang 与最小必要依赖
 │   │   ├── bin/clang
-│   │   └── lib/clang/22/     # clang 官方 resource-dir 结构，保持与 clang 二进制的相对位置
-│   │       ├── include/      # 编译器内置头文件（平台无关，如 stdint.h 等）
-│   │       └── lib/darwin/   # 编译器运行时库（按目标 OS 分目录，如 darwin/、linux/、windows/）
-│   └── lldb/                 # 仅 lldb 与最小必要依赖
-│       ├── bin/lldb          # 命令行调试器
-│       ├── bin/lldb-dap      # DAP 适配器，供 feng dap / VS Code 使用
-│       └── lib/              # 仅 lldb 运行所必需的子集
+│   │   └── lib/clang/22/         # clang 官方 resource-dir 结构，保持与 clang 二进制的相对位置
+│   │       ├── include/          # 编译器内置头文件（平台无关，如 stdint.h 等）
+│   │       └── lib/darwin/       # 编译器运行时库（按目标 OS 分目录 darwin/linux/windows）
+│   └── lldb/                     # 仅 lldb 与最小必要依赖
+│       ├── bin/lldb              # 命令行调试器
+│       ├── bin/lldb-dap          # DAP 适配器，供 feng dap / VS Code 使用
+│       └── lib/                  # 仅 lldb 运行所必需的子集
 │  
-├── sysroot/                  # 交叉编译 sysroot（按目标平台分子目录，与 toolchain/ 平级）
-│   └── <os>-<arch>/          # 目标平台标识，取值见 feng-os-arch.md
-│       ├── usr/include/      # 目标平台系统头文件
-│       └── usr/lib/          # 目标平台系统库
+├── sysroot/                      # 交叉编译 sysroot（按目标平台分子目录）
+│   └── <os>-<arch>/              # 目标平台标识，取值见 feng-os-arch.md
+│       ├── usr/include/          # 目标平台系统头文件
+│       └── usr/lib/              # 目标平台系统库
 │  
-└── VERSION                   # 必须：纯文本版本号，单行
+└── VERSION                       # 必须：纯文本版本号，单行
 ```
 
 - Windows 平台下，`bin/` 中可执行文件追加 `.exe` 后缀，`lib/` 中静态库后缀切换为 `.lib`。
