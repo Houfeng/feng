@@ -66,7 +66,6 @@ feng-<os>-<arch>-<version>.zip
 
 ```text
 feng-<os>-<arch>-<version>/
-├── manifest.txt              # 必须：分发物清单与校验值
 ├── bin/                      # 必须：Feng 可执行
 │   └── feng                  # 编译器 + CLI 主入口（含 lsp / dap 子命令）
 ├── include/                  # 必须：runtime 公共 ABI 头文件（平台无关，单一一份，扁平置于 include/ 根下）
@@ -91,7 +90,6 @@ feng-<os>-<arch>-<version>/
 - Windows 平台下，`bin/` 中可执行文件追加 `.exe` 后缀，`lib/` 中静态库后缀切换为 `.lib`。
 - `lib/` 按目标平台分子目录（`lib/<os>-<arch>/`，取值见 [feng-os-arch.md](../docs/feng-os-arch.md)）。当前无交叉编译时，目标平台与分发物命名平台一致，仅含一份；未来支持交叉编译时，同一分发物可含多个目标平台子目录。
 - `include/` 为 runtime 公共 ABI 头文件，平台无关（C 源码），不分平台子目录，单一一份供所有平台使用，扁平置于 `include/` 根下。`feng_runtime.h` 内部以相对路径 `#include "feng_runtime_contract.inc"`，二者位于同一目录；标准 C 头文件（`<stdint.h>` 等）与系统头文件（`<unwind.h>`）由 host cc / 工具链提供，不进分发物。
-- `manifest.txt` 列出每个文件的相对路径与 SHA-256，供安装脚本校验完整性。
 - 分发物不包含任何 Feng 源码、`.o` / `.obj` 中间产物、构建缓存。
 - `feng` 编译器基于自身位置查找 runtime 静态库与头文件，不使用环境变量覆盖；若未来需要显式指定 runtime 路径，通过 CLI 参数实现。
 
@@ -100,7 +98,7 @@ feng-<os>-<arch>-<version>/
 分发包内 `toolchain/` 为精简版 LLVM 工具链，与 `bin/`、`lib/`、`include/` 并列置于分发包根下。
 
 - **从 LLVM 官方预编译包剥离，不自建 LLVM/Clang**；只保留 `clang`、`lldb`、`lldb-dap` 及其运行所必需的最小依赖集，不含 `llvm-*`、`lld`、`clang-format`、`clang-tidy` 等其他 LLVM 工具，不含非当前平台 / 非 x86_64 的目标后端。
-- 精简工作由独立子任务实施，本方案只约束产出形式与体积目标：精简后 `toolchain/` 解压体积目标控制在 300 MB 量级（实际值待实施时验证，写入 `manifest.txt`）。
+- 精简工作由独立子任务实施，本方案只约束产出形式与体积目标：精简后 `toolchain/` 解压体积目标控制在 300 MB 量级（实际值待实施时验证，写入 release notes）。
 - 精简 toolchain 的版本、来源、剥离清单由独立子任务文档承载，不在本文件展开，避免方案膨胀。
 - `feng` 编译器基于自身位置查找 `toolchain/`。
 
@@ -129,10 +127,9 @@ strategy:
 3. 执行 `scripts/build_libunwind.sh`（产出 Feng **编译期**依赖 `extlib/<os>-<arch>/libfeng_unwind.a`，不进分发物；其对象在 `make runtime` 时被合并进 `libfeng_runtime.a`）
 4. 执行 `make cli runtime`（产出 `build/bin/feng`、`build/lib/libfeng_runtime.a`、`build/include/feng_runtime.h` 与 `build/include/feng_runtime_contract.inc`）
 5. 精简 toolchain 子任务产出 `toolchain/`（独立步骤，调用精简脚本）
-6. 组装分发目录树（将 `build/lib/libfeng_runtime.a` 放入 `lib/<os>-<arch>/`，`build/include/` 下的两个头文件放入 `include/`）并计算 `manifest.txt`
+6. 组装分发目录树（将 `build/lib/libfeng_runtime.a` 放入 `lib/<os>-<arch>/`，`build/include/` 下的两个头文件放入 `include/`）
 7. 打包 zip
-8. 计算 zip 的 SHA-256，写入 release notes
-9. 上传到 GitHub Release 对应 tag
+8. 上传到 GitHub Release 对应 tag
 
 ### 6.4 失败与回滚
 
@@ -167,16 +164,14 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - 不接受参数，固定行为：
   1. 自动检测目标平台（按 `uname -s` / `uname -m`），解析 GitHub Releases 最新 tag 为版本
   2. 拼接下载 URL，下载 zip 到系统临时目录（`$TMPDIR`，回退 `/tmp`）
-  3. 校验 SHA-256（从 release notes 或同目录 `.sha256` 读取）
-  4. 解压到 `$HOME/.feng/`
-  5. 自动将 `$HOME/.feng/bin` 加入 `PATH`（自动写入 `$SHELL` 对应启动脚本；仅在需要管理员权限时提示用户授权）
+  3. 解压到 `$HOME/.feng/`
+  4. 自动将 `$HOME/.feng/bin` 加入 `PATH`（自动写入 `$SHELL` 对应启动脚本；仅在需要管理员权限时提示用户授权）
 - 失败时必须清理半成品目录，不留残文件。
 
 ## 8 验收清单
 
 发布前必须满足：
 
-- [ ] `manifest.txt` 列出的所有文件存在且 SHA-256 一致
 - [ ] `feng --version` 输出与 `VERSION` 文件一致
 - [ ] `feng build` 在空项目可完整产出二进制
 - [ ] `feng run` 在示例项目可运行
@@ -184,7 +179,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - [ ] bundled toolchain 存在时，`feng` 优先使用之，不依赖系统 clang / lldb / lldb-dap
 - [ ] bundled toolchain 缺失时，`feng` 回退到系统 clang / lldb / lldb-dap
 - [ ] 安装脚本在干净环境完成安装，无残留
-- [ ] 压缩包解压后体积、toolchain 体积记录到 `manifest.txt`
+- [ ] 压缩包解压后体积、toolchain 体积记录到 release notes
 
 ## 9 待人工决策项
 
