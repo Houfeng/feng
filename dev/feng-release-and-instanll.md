@@ -127,7 +127,7 @@ strategy:
 3. 执行 `scripts/build_libunwind.sh`（产出 Feng **编译期**依赖 `extlib/<os>-<arch>/libfeng_unwind.a`，不进分发物；其对象在 `make runtime` 时被合并进 `libfeng_runtime.a`）
 4. 执行 `make cli runtime`（产出 `build/bin/feng`、`build/lib/libfeng_runtime.a`、`build/include/feng_runtime.h` 与 `build/include/feng_runtime_contract.inc`）
 5. 精简 toolchain 子任务产出 `toolchain/`（独立步骤，调用精简脚本）
-6. 组装分发目录树（将 `build/lib/libfeng_runtime.a` 放入 `lib/<os>-<arch>/`，`build/include/` 下的两个头文件放入 `include/`）
+6. 组装分发目录树：`build/bin/feng` 放入 `bin/`，`build/include/` 下的两个头文件放入 `include/`，`build/lib/libfeng_runtime.a` 放入 `lib/<os>-<arch>/`，并生成 `VERSION` 文件（写入 git tag 版本号）
 7. 打包 zip
 8. 上传到 GitHub Release 对应 tag
 
