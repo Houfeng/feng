@@ -10,13 +10,22 @@ set -euo pipefail
 # Layout produced:
 #   toolchain/clang/<os>-<arch>/
 #     bin/clang                — the executable
-#     lib/clang/<version>/     — builtin headers + target runtime (libclang_rt.*)
-#     share/clang/             — optional helper scripts
+#     lib/clang/<version>/     — builtin headers + target runtime (libclang_rt.osx.a)
 #     LICENSE.TXT              — upstream license
 #     README.md                — provenance and re-sync instructions
 #
-# Deliberately excluded: clang++/clang-cl/llvm-*/lld, LLVM dev libs/headers,
-# C++ standard library material (host SDK provides).
+# Deliberately excluded:
+# - clang++/clang-cl/llvm-*/lld (other LLVM tools)
+# - LLVM dev libs/headers (clang invoked as standalone compiler)
+# - C++ standard library material (host SDK provides)
+# - share/clang/ (editor integration scripts: clang-format, clang-tidy, etc.)
+# - libclang_rt.* except libclang_rt.osx.a (sanitizers, fuzzer, xray, profile, etc.)
+# - Non-ARM64 builtin headers (x86 intrinsics, CUDA, OpenMP, z/OS, PPC, etc.)
+#
+# Feng's codegen produces C code that only needs standard C headers (stdint.h,
+# stddef.h, etc.) and the basic runtime library. Sanitizer libraries are not
+# needed here because Feng uses the system compiler ($CC) for sanitization
+# during development, not the bundled clang.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -96,13 +105,79 @@ if [[ -z "${CLANG_RESOURCE_DIR}" ]]; then
   exit 1
 fi
 CLANG_RESOURCE_VERSION="$(basename "${CLANG_RESOURCE_DIR}")"
-mkdir -p "${CLANG_TARGET_DIR}/lib/clang"
-cp -R "${CLANG_RESOURCE_DIR}" "${CLANG_TARGET_DIR}/lib/clang/"
 
-if [[ -d "${LLVM_EXTRACTED_ROOT}/share/clang" ]]; then
-  mkdir -p "${CLANG_TARGET_DIR}/share"
-  cp -R "${LLVM_EXTRACTED_ROOT}/share/clang" "${CLANG_TARGET_DIR}/share/"
+# --- Copy builtin headers (selective) ---
+# Feng's codegen produces C code that uses standard C headers (stdint.h,
+# stddef.h, float.h, stdarg.h, stdbool.h, etc.) and ARM64 NEON/SVE intrinsics
+# on macOS. Non-target headers (x86 intrinsics, CUDA, OpenMP, z/OS, PPC,
+# sanitizer/fuzzer/xray/profile/orc headers) are excluded to save ~12 MB.
+mkdir -p "${CLANG_TARGET_DIR}/lib/clang/${CLANG_RESOURCE_VERSION}/include"
+
+# Directories to exclude from builtin headers (non-target platforms/tools).
+EXCLUDE_HEADER_DIRS=(
+  cuda_wrappers
+  openmp_wrappers
+  llvm_libc_wrappers
+  llvm_offload_wrappers
+  zos_wrappers
+  ppc_wrappers
+  orc
+  sanitizer
+  fuzzer
+  xray
+  profile
+)
+
+# Build find exclusion arguments.
+FIND_EXCLUDES=()
+for d in "${EXCLUDE_HEADER_DIRS[@]}"; do
+  FIND_EXCLUDES+=(-not -name "${d}" -not -path "*/${d}/*")
+done
+
+# Copy header files/dirs, excluding non-target content.
+(cd "${CLANG_RESOURCE_DIR}/include" && \
+  find . -mindepth 1 -maxdepth 1 \
+    "${FIND_EXCLUDES[@]}" \
+    -print0 | while IFS= read -r -d '' entry; do
+    if [[ -d "${entry}" ]]; then
+      cp -R "${entry}" "${CLANG_TARGET_DIR}/lib/clang/${CLANG_RESOURCE_VERSION}/include/"
+    else
+      cp "${entry}" "${CLANG_TARGET_DIR}/lib/clang/${CLANG_RESOURCE_VERSION}/include/"
+    fi
+  done)
+
+# --- Copy target runtime library (selective) ---
+# Feng only needs libclang_rt.osx.a (basic runtime, ~228 KB).
+# Sanitizer/fuzzer/xray/profile/ORC libraries (~28 MB) are excluded because
+# Feng uses $CC (system compiler) for sanitization during development,
+# not the bundled clang.
+TARGET_OS_LIB=""
+case "${TARGET}" in
+  macos-*)  TARGET_OS_LIB="libclang_rt.osx.a" ;;
+  linux-*)  TARGET_OS_LIB="" ;;  # Linux uses system crt; no bundled rt needed
+  *) echo "warning: unknown target for runtime lib selection: ${TARGET}" >&2 ;;
+esac
+
+# Determine the platform-specific sub-directory under lib/ (darwin/ on macOS).
+RT_LIB_DIR=""
+if [[ -d "${CLANG_RESOURCE_DIR}/lib/darwin" ]]; then
+  RT_LIB_DIR="darwin"
+elif [[ -d "${CLANG_RESOURCE_DIR}/lib/linux" ]]; then
+  RT_LIB_DIR="linux"
 fi
+
+if [[ -n "${RT_LIB_DIR}" && -n "${TARGET_OS_LIB}" ]]; then
+  mkdir -p "${CLANG_TARGET_DIR}/lib/clang/${CLANG_RESOURCE_VERSION}/lib/${RT_LIB_DIR}"
+  SRC_RT="${CLANG_RESOURCE_DIR}/lib/${RT_LIB_DIR}/${TARGET_OS_LIB}"
+  if [[ -f "${SRC_RT}" ]]; then
+    cp "${SRC_RT}" "${CLANG_TARGET_DIR}/lib/clang/${CLANG_RESOURCE_VERSION}/lib/${RT_LIB_DIR}/"
+  else
+    echo "warning: ${TARGET_OS_LIB} not found in upstream — bundled clang may fail at link time" >&2
+  fi
+fi
+
+# share/clang/ deliberately excluded (clang-format, clang-tidy editor
+# integration scripts — not needed by Feng's compilation pipeline).
 
 if [[ -f "${LLVM_EXTRACTED_ROOT}/LICENSE.TXT" ]]; then
   cp "${LLVM_EXTRACTED_ROOT}/LICENSE.TXT" "${CLANG_TARGET_DIR}/LICENSE.TXT"
@@ -119,16 +194,23 @@ Source:  https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_V
 
 Included:
 - \`bin/clang\` — the executable
-- \`lib/clang/${CLANG_RESOURCE_VERSION}/\` — builtin headers (stdint.h, stddef.h, ...)
-  and target runtime (libclang_rt.*.a)
-- \`share/clang/\` — clang helper scripts (if present)
+- \`lib/clang/${CLANG_RESOURCE_VERSION}/include/\` — standard C builtin headers
+  (stdint.h, stddef.h, float.h, stdarg.h, stdbool.h, arm_neon.h, ...)
+- \`lib/clang/${CLANG_RESOURCE_VERSION}/lib/${RT_LIB_DIR}/libclang_rt.osx.a\` — basic
+  target runtime library
 - \`LICENSE.TXT\` — upstream license
 
 Deliberately excluded:
 - other \`bin/\` tools (clang++, clang-cl, llvm-*, lld, ...)
-- LLVM dev libraries and headers (clang is invoked as a standalone
-  command-line compiler; no \`-lLLVM\` link needed)
+- LLVM dev libraries and headers
 - C++ standard library headers and runtime (host SDK provides)
+- \`share/clang/\` (clang-format, clang-tidy editor integration scripts)
+- Sanitizer libraries (ASan, UBSan, TSan, MSan, ...) — Feng uses \$CC
+  (system compiler) for sanitization during development
+- Fuzzer libraries (libFuzzer)
+- XRay / Profile / Stats / ORC runtime libraries
+- Non-target platform headers (x86 intrinsics, CUDA, OpenMP, z/OS,
+  PPC wrappers, LLVM libc/offload wrappers)
 
 The feng compiler locates this directory by its own executable position.
 
