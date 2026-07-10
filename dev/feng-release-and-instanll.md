@@ -11,7 +11,7 @@
 首版明确覆盖：
 
 - 分发物：单一压缩包 `feng-<os>-<arch>-<version>.zip`
-- 平台：仅 `macos-arm64`
+- 平台：`macos-arm64`、`linux-x64`、`linux-arm64`
 - 安装方式：手动解压 + 在线脚本两种
 - toolchain 形态：bundle 精简版（从 LLVM 官方预编译包剥离，仅保留 `clang`、`lldb`、`lldb-dap`，不自建 LLVM）
 - 运行时分发形态：仅静态库 `.a` / `.lib`
@@ -19,7 +19,7 @@
 
 首版明确不做：
 
-- Linux / Windows 实际打包（脚本与工作流预留扩展点，不产出二进制）
+- Windows 实际打包（脚本与工作流预留扩展点，不产出二进制）
 - 动态运行时库 `.so` / `.dylib` / `.dll`
 - 版本管理器（fengvm 类工具）
 - 包管理器集成（Homebrew tap / apt repo / winget）
@@ -53,8 +53,8 @@ feng-<os>-<arch>-<version>.zip
 |--------------|---------|---------|---------------------------------------|
 | `macos-arm64` | 是      | -       | Feng 编译期 extlib 依赖已就绪          |
 | `macos-x64`  | 否      | 是      | Intel Mac，后续按需补齐               |
-| `linux-x64`  | 否      | 是      | 交叉编译 sysroot 内建 musl；原生 glibc 基线待定 |
-| `linux-arm64`| 否      | 是      | -                                     |
+| `linux-x64`  | 是      | -       | musl sysroot 内建；LLVM 官方预编译包提供 |
+| `linux-arm64`| 是      | -       | musl sysroot 内建；LLVM 官方预编译包提供 |
 | `windows-x64`| 否      | 是      | 静态库后缀切换为 `.lib`，可执行为 `.exe` |
 | `windows-arm64`| 否    | 是      | -                                     |
 
@@ -123,23 +123,26 @@ strategy:
   matrix:
     include:
       - { os: macos, arch: arm64, runner: macos-14 }
-      # 扩展时追加：linux-x64、linux-arm64、windows-x64 等
+      - { os: linux, arch: x64,  runner: ubuntu-latest }
+      - { os: linux, arch: arm64, runner: ubuntu-24.04-arm }
+      # 扩展时追加：macos-x64、windows-x64 等
 ```
 
-每个 matrix 项产出一份 `feng-<os>-<arch>-<version>.zip`，互不依赖，可并行。
+每个 matrix 项产出一份 `feng-<os>-<arch>-<version>.zip`，互不依赖，可并行。各平台的 toolchain（`clang`/`lldb`/`sysroot`）在**本地维护精简产物**（git lfs 管理位于仓库 `toolchain/<tool>/<os>-<arch>/`），CI checkout 即有，无需构建期精简，只需从仓库目录复制。
 
 ### 6.3 单平台构建步骤
 
 GitHub Actions 工作流在各 matrix 项中调用 `scripts/release.sh`，产出安装包到 `release/` 目录。步骤如下：
 
-1. checkout 仓库
-2. 安装构建依赖（仅 macOS 首版无额外依赖）
+1. checkout 仓库（含 git lfs 管理的 `toolchain/<tool>/<os>-<arch>/` 精简产物）
+2. 安装构建依赖（macOS 无额外依赖；Linux 需 `build-essential` 等，由 `release.sh` 检测并安装）
 3. 执行 `scripts/build_libunwind.sh`（产出 Feng **编译期**依赖 `extlib/<os>-<arch>/libfeng_unwind.a`，不进分发物；其对象在 `make runtime` 时被合并进 `libfeng_runtime.a`）
 4. 执行 `make cli runtime`（产出 `build/bin/feng`、`build/lib/libfeng_runtime.a`、`build/include/feng_runtime.h` 与 `build/include/feng_runtime_contract.inc`）
-5. toolchain 精简产物已在仓库（git lfs 管理位于 `toolchain/<tool>/<os>-<arch>/`，其中 `<tool>` 含 `clang`、`lldb`、`sysroot`），CI checkout 即有，无需构建期精简
-6. 组装分发目录树：`build/bin/feng` 放入 `bin/`，`build/include/` 下的两个头文件放入 `include/`，`build/lib/libfeng_runtime.a` 放入 `lib/<os>-<arch>/`，仓库 `toolchain/<tool>/<os>-<arch>/`（含 `clang`、`lldb`、`sysroot`）各对应平台精简产物放入分发包 `toolchain/<tool>/`，并生成 `VERSION` 文件（写入 git tag 版本号）
-7. 打包 zip
-8. 上传到 GitHub Release 对应 tag
+5. 组装分发目录树：`build/bin/feng` 放入 `bin/`，`build/include/` 下的两个头文件放入 `include/`，`build/lib/libfeng_runtime.a` 放入 `lib/<os>-<arch>/`，仓库 `toolchain/<tool>/<os>-<arch>/`（含 `clang`、`lldb`、`sysroot`）各对应平台精简产物放入分发包 `toolchain/<tool>/`，并生成 `VERSION` 文件（写入 git tag 版本号）
+6. 打包 zip
+7. 上传到 GitHub Release 对应 tag
+
+toolchain 精简产物在**本地维护**：开发者用 `fetch_llvm.sh` + `trim_clang.sh` + `trim_lldb.sh` + `fetch_musl.sh` + `trim_musl.sh` 在本地产出各平台精简结果，提交到仓库（git lfs）。CI 只需 checkout 后从仓库目录复制，不做任何精简。这样 CI 构建步骤简、快，且不依赖 musl.cc / LLVM Releases 网络可达性。
 
 ### 6.4 失败与回滚
 
