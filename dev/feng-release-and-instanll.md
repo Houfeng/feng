@@ -98,7 +98,7 @@ feng-<os>-<arch>-<version>/
 分发包内 `toolchain/` 为精简版 LLVM 工具链，与 `bin/`、`lib/`、`include/` 并列置于分发包根下。
 
 - **从 LLVM 官方预编译包剥离，不自建 LLVM/Clang**；只保留 `clang`、`lldb`、`lldb-dap` 及其运行所必需的最小依赖集，不含 `llvm-*`、`lld`、`clang-format`、`clang-tidy` 等其他 LLVM 工具，不含非当前平台 / 非 x86_64 的目标后端。
-- 精简工作由独立子任务实施，本方案只约束产出形式与体积目标：精简后 `toolchain/` 解压体积目标控制在 300 MB 量级（实际值待实施时验证，写入 release notes）。
+- 精简由 `scripts/fetch_clang.sh` / `scripts/fetch_lldb.sh` 完成（维护性脚本，不在发布流程）；本方案只约束产出形式与体积目标：精简后 `toolchain/` 解压体积目标控制在 300 MB 量级（实际值待实施时验证，写入 release notes）。
 - 精简 toolchain 的版本、来源、剥离清单由独立子任务文档承载，不在本文件展开，避免方案膨胀。
 - `feng` 编译器基于自身位置查找 `toolchain/`。
 
@@ -122,12 +122,14 @@ strategy:
 
 ### 6.3 单平台构建步骤
 
+GitHub Actions 工作流在各 matrix 项中调用 `scripts/release.sh`，产出安装包到 `release/` 目录。步骤如下：
+
 1. checkout 仓库
 2. 安装构建依赖（仅 macOS 首版无额外依赖）
 3. 执行 `scripts/build_libunwind.sh`（产出 Feng **编译期**依赖 `extlib/<os>-<arch>/libfeng_unwind.a`，不进分发物；其对象在 `make runtime` 时被合并进 `libfeng_runtime.a`）
 4. 执行 `make cli runtime`（产出 `build/bin/feng`、`build/lib/libfeng_runtime.a`、`build/include/feng_runtime.h` 与 `build/include/feng_runtime_contract.inc`）
-5. 精简 toolchain 子任务产出 `toolchain/`（独立步骤，调用精简脚本）
-6. 组装分发目录树：`build/bin/feng` 放入 `bin/`，`build/include/` 下的两个头文件放入 `include/`，`build/lib/libfeng_runtime.a` 放入 `lib/<os>-<arch>/`，并生成 `VERSION` 文件（写入 git tag 版本号）
+5. toolchain 精简产物已在仓库（git lfs 管理位于 `toolchain/<tool>/<os>-<arch>/`），CI checkout 即有，无需构建期精简
+6. 组装分发目录树：`build/bin/feng` 放入 `bin/`，`build/include/` 下的两个头文件放入 `include/`，`build/lib/libfeng_runtime.a` 放入 `lib/<os>-<arch>/`，仓库 `toolchain/<tool>/<os>-<arch>/` 各工具对应平台精简产物放入分发包 `toolchain/<tool>/`，并生成 `VERSION` 文件（写入 git tag 版本号）
 7. 打包 zip
 8. 上传到 GitHub Release 对应 tag
 
