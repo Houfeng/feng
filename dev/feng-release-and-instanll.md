@@ -74,22 +74,31 @@ feng-<os>-<arch>-<version>/
 ├── lib/                      # 必须：运行时静态库（按目标平台分子目录）
 │   └── <os>-<arch>/          # 目标平台标识，取值见 feng-os-arch.md
 │       └── libfeng_runtime.a # linux/macos；Windows 下为 feng_runtime.lib
+│  
 ├── toolchain/                # 必须：精简 LLVM 工具链
 │   ├── clang/                # 仅 clang 与最小必要依赖
 │   │   ├── bin/clang
-│   │   ├── lib/（仅 clang 运行所必需的子集）
-│   │   └── share/clang/
+│   │   └── lib/clang/22/     # clang 官方 resource-dir 结构，保持与 clang 二进制的相对位置
+│   │       ├── include/      # 编译器内置头文件（平台无关，如 stdint.h 等）
+│   │       └── lib/darwin/   # 编译器运行时库（按目标 OS 分目录，如 darwin/、linux/、windows/）
 │   └── lldb/                 # 仅 lldb 与最小必要依赖
 │       ├── bin/lldb          # 命令行调试器
 │       ├── bin/lldb-dap      # DAP 适配器，供 feng dap / VS Code 使用
-│       ├── lib/（仅 lldb 运行所必需的子集）
-│       └── share/lldb/（含 python 脚本与格式化模块）
+│       └── lib/              # 仅 lldb 运行所必需的子集
+│  
+├── sysroot/                  # 交叉编译 sysroot（按目标平台分子目录，与 toolchain/ 平级）
+│   └── <os>-<arch>/          # 目标平台标识，取值见 feng-os-arch.md
+│       ├── usr/include/      # 目标平台系统头文件
+│       └── usr/lib/          # 目标平台系统库
+│  
 └── VERSION                   # 必须：纯文本版本号，单行
 ```
 
 - Windows 平台下，`bin/` 中可执行文件追加 `.exe` 后缀，`lib/` 中静态库后缀切换为 `.lib`。
 - `lib/` 按目标平台分子目录（`lib/<os>-<arch>/`，取值见 [feng-os-arch.md](../docs/feng-os-arch.md)）。当前无交叉编译时，目标平台与分发物命名平台一致，仅含一份；未来支持交叉编译时，同一分发物可含多个目标平台子目录。
 - `include/` 为 runtime 公共 ABI 头文件，平台无关（C 源码），不分平台子目录，单一一份供所有平台使用，扁平置于 `include/` 根下。`feng_runtime.h` 内部以相对路径 `#include "feng_runtime_contract.inc"`，二者位于同一目录；标准 C 头文件（`<stdint.h>` 等）与系统头文件（`<unwind.h>`）由 host cc / 工具链提供，不进分发物。
+- `toolchain/clang/` 保持 clang 官方 resource-dir 结构（`lib/clang/<version>/`），`bin/clang` 与 `lib/clang/<version>/` 的相对位置关系由 clang 自动推导（`-print-resource-dir`），driver 无需额外指定 `-resource-dir` 或 `-isystem`。`include/`（编译器内置头）平台无关；`lib/<os>/`（编译器运行时库）已按目标 OS 分目录，天然支持交叉编译。
+- `toolchain/sysroot/` 按目标平台分子目录，存放目标平台的系统头文件与系统库（`usr/include/` + `usr/lib/`），供交叉编译时 `--sysroot` 指向。首版 `macos-arm64` 分发包中不含 `sysroot/`（native 编译时由 host 系统 SDK 提供，macOS SDK 受 Apple 版权限制不可自由分发）；未来 `linux-x64` 等分发包可 bundle musl / mingw-w64 等自由许可的 sysroot，实现安装即可交叉编译。`macos` 作为交叉编译目标时受 Apple SDK 版权限制，需用户自行合法获取。
 - 分发物不包含任何 Feng 源码、`.o` / `.obj` 中间产物、构建缓存。
 - `feng` 编译器基于自身位置查找 runtime 静态库与头文件，不使用环境变量覆盖；若未来需要显式指定 runtime 路径，通过 CLI 参数实现。
 
