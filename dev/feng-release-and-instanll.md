@@ -78,9 +78,9 @@ feng-<os>-<arch>-<version>/
 ├── toolchain/                    # 必须：精简 LLVM 工具链
 │   ├── clang/                    # 仅 clang 与最小必要依赖
 │   │   ├── bin/clang
-│   │   └── lib/clang/22/         # clang 官方 resource-dir 结构，保持与 clang 二进制的相对位置
+│   │   └── lib/clang/22/         # clang 官方结构，保持与 clang 二进制的相对位置
 │   │       ├── include/          # 编译器内置头文件（平台无关，如 stdint.h 等）
-│   │       └── lib/darwin/       # 编译器运行时库（按目标 OS 分目录 darwin/linux/windows）
+│   │       └── lib/darwin/       # 编译器运行时库（目标 OS:darwin/linux/windows）
 │   └── lldb/                     # 仅 lldb 与最小必要依赖
 │       ├── bin/lldb              # 命令行调试器
 │       ├── bin/lldb-dap          # DAP 适配器，供 feng dap / VS Code 使用
