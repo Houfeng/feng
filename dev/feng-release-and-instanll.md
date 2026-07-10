@@ -174,9 +174,9 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 首版 macos-arm64 发布前需完成的实施项：
 
-- [ ] `scripts/fetch_llvm.sh`：下载并解压 LLVM 官方预编译包到 `temp/llvm/`（持久 cache，gitignored，维护性脚本）
-- [ ] `scripts/trim_clang.sh`：从 LLVM root 精简 clang，拉取到 `toolchain/clang/<os>-<arch>/`（git lfs 管理）
-- [ ] `scripts/trim_lldb.sh`：从 LLVM root 精简 lldb + lldb-dap，拉取到 `toolchain/lldb/<os>-<arch>/`（git lfs 管理）
+- [x] `scripts/fetch_llvm.sh`：下载并解压 LLVM 官方预编译包到 `temp/llvm/`（持久 cache，gitignored，维护性脚本）
+- [x] `scripts/trim_clang.sh`：从 LLVM root 精简 clang，拉取到 `toolchain/clang/<os>-<arch>/`（git lfs 管理）
+- [x] `scripts/trim_lldb.sh`：从 LLVM root 精简 lldb + lldb-dap，拉取到 `toolchain/lldb/<os>-<arch>/`（git lfs 管理）
 - [ ] `scripts/release.sh`：构建入口，编排 `build_libunwind.sh` + `make cli runtime` + 组装分发目录树，产出安装包到 `release/`
 - [ ] `.github/workflows/release.yml`：CI 工作流，tag 触发，各 matrix 项调用 `scripts/release.sh`
 - [ ] `scripts/install.sh`：在线安装脚本（自动检测平台 + 下载到系统临时目录 + 解压 + 自动配 PATH）
