@@ -12,6 +12,7 @@
     "Jsonable",
     "kinded",
     "libc",
+    "libfeng",
     "libm",
     "libname",
     "lldb",
