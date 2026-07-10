@@ -1,0 +1,25 @@
+open module std.tui;
+
+/**
+ * Cell represents a single character cell in a terminal user interface (TUI).
+ * Each cell contains a Unicode code point and style information. 
+ */
+@value
+open type Cell {
+  /**
+   * 字符的 Unicode 码点
+   * 支持所有 Unicode 字符，包括 Emoji、汉字、拉丁字母等
+   * 部分超过 8 字节的组合 emoji 通过 ZWJ 拆分为多个 emoji  
+   */
+  let value: u64;
+
+  /**
+   * 字符的样式信息
+   * 通过或与运算，支持多种样式的组合，例如粗体、斜体、下划线、前景色、背景色等
+   * 
+   * [ 16 bits 样式与标志位 ] [ 24 bits 背景 RGB ] [ 24 bits 前景 RGB ]
+   * 直接用 16 进制表式，比如： 0x0001ADD8E6FF0000
+   * 
+   */
+  let style: u64;
+}

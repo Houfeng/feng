@@ -1,0 +1,11 @@
+open module std.tui;
+
+/**
+ * Buffer represents a rectangular area of cells in a terminal user interface (TUI).
+ * It contains a width, height, and an array of Cell objects that represent the individual character cells.
+ */
+open type Buffer {
+  let width: u32;
+  let height: u32;
+  let cells: Cell[];
+}

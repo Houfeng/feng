@@ -76,16 +76,45 @@ fetch_one() {
 
   mkdir -p "${CACHE_DIR}"
 
-  # --- Download (with cache) ---
+  # --- Download (with cache + resume) ---
+  # musl.cc is a community-hosted server with intermittent connection drops.
+  # Use curl --continue-at - to resume partial downloads. The loop retries
+  # up to 10 times, resuming from where the previous attempt left off.
   if [[ -d "${extracted_root}" ]]; then
     echo "==> Reusing extracted musl at ${extracted_root}"
-  elif [[ -f "${archive_file}" ]]; then
-    echo "==> Reusing cached archive ${archive_file}"
-    echo "==> Extracting"
-    tar -xzf "${archive_file}" -C "${CACHE_DIR}"
   else
-    echo "==> Downloading ${archive_name}"
-    curl -sSLf --connect-timeout 15 --retry 3 "${src_url}" -o "${archive_file}"
+    download_ok=0
+    for attempt in $(seq 1 10); do
+      if [[ -f "${archive_file}" ]]; then
+        local have_bytes
+        have_bytes=$(wc -c < "${archive_file}" 2>/dev/null || echo 0)
+        echo "==> Resuming download (attempt ${attempt}, have ${have_bytes} bytes)"
+        curl -sSLf --connect-timeout 15 --max-time 300 -C - "${src_url}" -o "${archive_file}" || {
+          echo "==> Transfer interrupted (attempt ${attempt}), will retry..."
+          sleep 2
+          continue
+        }
+      else
+        echo "==> Downloading ${archive_name} (attempt ${attempt})"
+        curl -sSLf --connect-timeout 15 --max-time 300 "${src_url}" -o "${archive_file}" || {
+          echo "==> Transfer failed (attempt ${attempt}), will retry..."
+          sleep 2
+          continue
+        }
+      fi
+      # Verify the download completed successfully by testing gzip integrity.
+      if gzip -t "${archive_file}" 2>/dev/null; then
+        download_ok=1
+        break
+      fi
+      echo "==> Download incomplete (gzip integrity check failed), retrying..."
+      sleep 2
+    done
+    if [[ "${download_ok}" -ne 1 ]]; then
+      echo "error: failed to download ${archive_name} after 10 attempts" >&2
+      rm -f "${archive_file}"
+      return 1
+    fi
     echo "==> Extracting"
     tar -xzf "${archive_file}" -C "${CACHE_DIR}"
   fi
