@@ -187,11 +187,5 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 以下事项影响后续迭代，但不阻塞首版 macos-arm64 发布，列出以备决策：
 
-1. **toolchain 精简方案**：从 LLVM 官方预编译包剥离的具体边界（保留哪些 `lib/` / `share/` 子集、剥离哪些目标后端）；精简后的实际体积与最小依赖闭包边界。不自建 LLVM/Clang。
-2. **在线脚本宿主域名**：是否启用 `get.feng-lang.org` 类专属域名重定向到 GitHub raw，便于未来切换 CDN。
 3. **Linux glibc 基线**：linux-x64 / linux-arm64 发布时锁定的最低 glibc 版本。
-4. **签名与公证**：macOS notarization、Windows code signing 何时引入、用何种证书。
-5. **包管理器集成**：Homebrew tap、apt repo、winget 等何时引入，是否纳入本方案或独立文档。
-6. **自更新命令**：是否引入 `feng upgrade` / `feng use <version>` 类自更新与版本切换命令。
-7. **CI runner 选择**：linux / windows 平台发布时使用 GitHub-hosted runner 还是自托管 runner，是否需要交叉编译。
 8. **LLDB 的 Python 依赖**：LLDB 默认链接 `libpython`，用户环境无 Python 时 lldb 启动失败。需先查清 LLVM 官方预编译包是否 bundle `libpython`；若否，在 bundle `libpython`、依赖系统 Python、首次自举下载三者中决策（不自建 LLVM，故不考虑 `-DLLDB_ENABLE_PYTHON=OFF` 这一路径）。此项与第 1 项 toolchain 精简方案强相关，需一并决策。
