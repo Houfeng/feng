@@ -170,22 +170,21 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
   4. 自动将 `$HOME/.feng/bin` 加入 `PATH`（自动写入 `$SHELL` 对应启动脚本；仅在需要管理员权限时提示用户授权）
 - 失败时必须清理半成品目录，不留残文件。
 
-## 8 验收清单
+## 8 实施 TODO
 
-发布前必须满足：
+首版 macos-arm64 发布前需完成的实施项：
 
-- [ ] `feng --version` 输出与 `VERSION` 文件一致
-- [ ] `feng build` 在空项目可完整产出二进制
-- [ ] `feng run` 在示例项目可运行
-- [ ] `feng lsp` / `feng dap` 可启动
-- [ ] bundled toolchain 存在时，`feng` 优先使用之，不依赖系统 clang / lldb / lldb-dap
-- [ ] bundled toolchain 缺失时，`feng` 回退到系统 clang / lldb / lldb-dap
-- [ ] 安装脚本在干净环境完成安装，无残留
-- [ ] 压缩包解压后体积、toolchain 体积记录到 release notes
+- [ ] `scripts/fetch_clang.sh`：从 LLVM 官方预编译包精简 clang，拉取到 `toolchain/clang/<os>-<arch>/`（git lfs 管理，维护性脚本）
+- [ ] `scripts/fetch_lldb.sh`：从 LLVM 官方预编译包精简 lldb + lldb-dap，拉取到 `toolchain/lldb/<os>-<arch>/`（git lfs 管理，维护性脚本）
+- [ ] `scripts/release.sh`：构建入口，编排 `build_libunwind.sh` + `make cli runtime` + 组装分发目录树，产出安装包到 `release/`
+- [ ] `.github/workflows/release.yml`：CI 工作流，tag 触发，各 matrix 项调用 `scripts/release.sh`
+- [ ] `scripts/install.sh`：在线安装脚本（自动检测平台 + 下载到系统临时目录 + 解压 + 自动配 PATH）
+- [ ] LLDB Python 依赖方案落地（见 §9）
+- [ ] 发布前验收：`feng --version` 与 VERSION 一致；`feng build` / `run` / `lsp` / `dap` 可用；bundled toolchain 存在/缺失两种情形定位正确；干净环境安装无残留
 
 ## 9 待人工决策项
 
 以下事项影响后续迭代，但不阻塞首版 macos-arm64 发布，列出以备决策：
 
-3. **Linux glibc 基线**：linux-x64 / linux-arm64 发布时锁定的最低 glibc 版本。
-8. **LLDB 的 Python 依赖**：LLDB 默认链接 `libpython`，用户环境无 Python 时 lldb 启动失败。需先查清 LLVM 官方预编译包是否 bundle `libpython`；若否，在 bundle `libpython`、依赖系统 Python、首次自举下载三者中决策（不自建 LLVM，故不考虑 `-DLLDB_ENABLE_PYTHON=OFF` 这一路径）。此项与第 1 项 toolchain 精简方案强相关，需一并决策。
+1. **Linux glibc 基线**：linux-x64 / linux-arm64 发布时锁定的最低 glibc 版本。
+2. **LLDB 的 Python 依赖**：LLDB 默认链接 `libpython`，用户环境无 Python 时 lldb 启动失败。决策目标：不要求用户安装 Python。在此约束下待定具体方案（bundle `libpython` 进 toolchain / 首次自举下载 `libpython`），排除"依赖系统 Python"路径。需先查清 LLVM 官方预编译包是否已 bundle `libpython`；不自建 LLVM，故不考虑 `-DLLDB_ENABLE_PYTHON=OFF` 这一路径。
