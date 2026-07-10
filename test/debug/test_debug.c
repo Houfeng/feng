@@ -177,7 +177,7 @@ static void compile_generated_c_or_die(const char *c_source) {
     write_text_file_or_die(c_path, c_source);
     ASSERT(snprintf(command,
                     sizeof(command),
-                    "cc -Isrc -Ithird_party/miniz -std=gnu11 -fexceptions -Werror -c '%s' -o '%s' >/dev/null 2>&1",
+                    "cc -Isrc -Isrc/runtime -Ithird_party/miniz -std=gnu11 -fexceptions -Werror -c '%s' -o '%s' >/dev/null 2>&1",
                     c_path,
                     o_path) > 0);
     if (system(command) != 0) {

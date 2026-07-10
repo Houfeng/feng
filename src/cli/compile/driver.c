@@ -1486,21 +1486,19 @@ static char *locate_runtime_include(const char *program_path) {
     char *exe_dir = path_dirname_dup(exe);
     free(exe);
     if (exe_dir == NULL) return NULL;
-    /* Install layout: <exe_dir>/../include/runtime/feng_runtime.h. Returns
-     * the include root (.../include) so callers pair this with the source-side
-     * #include "runtime/feng_runtime.h" form. */
+    /* Install layout: <exe_dir>/../include/feng_runtime.h. Returns the
+     * include root (.../include) so callers pair this with the source-side
+     * #include "feng_runtime.h" form. */
     char *parent = path_join2(exe_dir, "..");
     free(exe_dir);
-    char *candidate = path_join2(parent, "include/runtime/feng_runtime.h");
+    char *candidate = path_join2(parent, "include/feng_runtime.h");
     free(parent);
     bool ok = candidate != NULL && path_exists(candidate);
     if (!ok) {
         free(candidate);
         return NULL;
     }
-    char *include_root = path_dirname_dup(candidate); /* .../include/runtime */
-    char *result = path_dirname_dup(include_root);     /* .../include        */
-    free(include_root);
+    char *result = path_dirname_dup(candidate); /* .../include */
     free(candidate);
     return result;
 }
@@ -1773,7 +1771,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     if (include_dir == NULL) {
         fprintf(stderr,
                 "error: cannot locate runtime headers.\n"
-                "  expected <feng-exe>/../include/runtime/feng_runtime.h.\n");
+                "  expected <feng-exe>/../include/feng_runtime.h.\n");
         return 1;
     }
 

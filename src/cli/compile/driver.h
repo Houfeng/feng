@@ -11,9 +11,11 @@
  *
  * Drives the post-codegen build:
  *   1. Resolve the runtime include directory and static library by probing
- *      paths relative to the running `feng` executable: first the install
- *      layout (`<exe>/../include/runtime/` + `<exe>/../lib/<os>-<arch>/`),
- *      then the dev build layout (`src/runtime/` + `build/lib/`).
+ *      paths relative to the running `feng` executable: the include root
+ *      at `<exe>/../include/` (single fixed position — headers are
+ *      platform-independent), and the static library with two priority
+ *      positions — first the install layout `<exe>/../lib/<os>-<arch>/`,
+ *      then the dev build layout `<exe>/../lib/`.
  *   2. Mine `extern fn` calling-convention annotations (`@cdecl`,
  *      `@stdcall`, `@fastcall`) across all current programs and flattened
  *      package `.ft` surfaces to derive additional `-l<lib>` link flags.

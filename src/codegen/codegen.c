@@ -38525,7 +38525,7 @@ static char *cg_finalize(CG *cg) {
         "#include <stdint.h>\n"
         "#include <stdlib.h>\n"
         "#include <string.h>\n"
-        "#include \"runtime/feng_runtime.h\"\n"
+        "#include \"feng_runtime.h\"\n"
         "\n"
         "#if defined(__clang__)\n"
         "#pragma clang diagnostic ignored \"-Wbuiltin-requires-header\"\n"

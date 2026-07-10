@@ -94,8 +94,8 @@ HOST_TARGET := $(_HOST_OS)-$(_HOST_ARCH)
 EXTLIB_DIR := extlib/$(HOST_TARGET)
 
 RUNTIME_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
-RUNTIME_HEADERS := $(BUILD_DIR)/include/runtime/feng_runtime.h \
-	$(BUILD_DIR)/include/runtime/feng_runtime_contract.inc
+RUNTIME_HEADERS := $(BUILD_DIR)/include/feng_runtime.h \
+	$(BUILD_DIR)/include/feng_runtime_contract.inc
 LIBUNWIND_LIB := $(EXTLIB_DIR)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC_LIB_EXT)
 
 .PHONY: all cli runtime test test-normal smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints test-sanitize clean
@@ -214,15 +214,17 @@ $(RUNTIME_LIB): $(RUNTIME_OBJS) $(LIBUNWIND_LIB)
 	cd $(BUILD_DIR)/temp/runtime-libunwind-objs && $(AR) x ../../../$(LIBUNWIND_LIB)
 	$(AR) rcs $@ $(RUNTIME_OBJS) $(BUILD_DIR)/temp/runtime-libunwind-objs/*.o
 
-# runtime public ABI headers — copied to build/include/runtime/ so that the
-# install-layout lookup (<feng-exe>/../include/runtime/) mirrors the dev-layout
-# lookup (<root>/src/runtime/) without leaking source-tree paths into the
-# distribution archive.
-$(BUILD_DIR)/include/runtime/feng_runtime.h: src/runtime/feng_runtime.h
+# runtime public ABI headers — copied to build/include/ so that the install-layout
+# lookup (<feng-exe>/../include/) mirrors the dev-layout lookup (<root>/src/runtime/)
+# without leaking source-tree paths into the distribution archive. Emitted C
+# includes "feng_runtime.h" directly (no runtime/ prefix), and feng_runtime.h
+# uses a relative-path include for feng_runtime_contract.inc, so the include
+# root holds both files flat.
+$(BUILD_DIR)/include/feng_runtime.h: src/runtime/feng_runtime.h
 	@mkdir -p $(dir $@)
 	cp $< $@
 
-$(BUILD_DIR)/include/runtime/feng_runtime_contract.inc: src/runtime/feng_runtime_contract.inc
+$(BUILD_DIR)/include/feng_runtime_contract.inc: src/runtime/feng_runtime_contract.inc
 	@mkdir -p $(dir $@)
 	cp $< $@
 
