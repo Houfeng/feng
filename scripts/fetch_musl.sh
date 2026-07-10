@@ -13,10 +13,13 @@ set -euo pipefail
 # musl.cc cross package layout:
 #   <target>-linux-musl-cross/
 #   ├── usr -> .                 # symlink to root (so usr/include == include)
-#   ├── include/                 # musl public headers (== usr/include)
-#   ├── lib/                     # musl static libs + crt objects (== usr/lib)
+#   ├── include/                 # empty (GCC placeholder, not the C library)
+#   ├── lib/                     # GCC support libs (bfd-plugins, gcc/)
 #   ├── bin/                     # cross GCC executables
 #   ├── libexec/gcc/...          # GCC internal tools
+#   ├── <musl-triple>/           # the actual sysroot (e.g. aarch64-linux-musl)
+#   │   ├── include/             # musl public headers (stdio.h, stdlib.h, ...)
+#   │   └── lib/                 # musl static libs + crt objects (libc.a, crt1.o, ...)
 #   └── ...
 #
 # Cache behaviour: the archive and extracted tree live under
@@ -55,23 +58,29 @@ require_cmd curl
 require_cmd tar
 
 # --- Target matrix ---
-# Each entry: <feng-target>|<musl.cc-archive>|<extracted-root-name>
+# Each entry: <feng-target>|<musl.cc-archive>|<extracted-root-name>|<musl-triple>
+# The musl-triple is the sysroot subdirectory name inside the extracted root
+# (e.g. aarch64-linux-musl). The C library headers and static libs live under
+# <root>/<musl-triple>/{include,lib}, not at the top level.
 TARGETS=(
-  "linux-arm64|aarch64-linux-musl-cross.tgz|aarch64-linux-musl-cross"
-  "linux-x64|x86_64-linux-musl-cross.tgz|x86_64-linux-musl-cross"
+  "linux-arm64|aarch64-linux-musl-cross.tgz|aarch64-linux-musl-cross|aarch64-linux-musl"
+  "linux-x64|x86_64-linux-musl-cross.tgz|x86_64-linux-musl-cross|x86_64-linux-musl"
 )
 
 # Download and extract one target into cache.
 # Args: $1 = Feng target triple (e.g. linux-arm64)
 #       $2 = musl.cc archive name (e.g. aarch64-linux-musl-cross.tgz)
 #       $3 = extracted root dir name (e.g. aarch64-linux-musl-cross)
+#       $4 = musl triple (sysroot subdirectory inside extracted root)
 fetch_one() {
   local target="$1"
   local archive_name="$2"
   local extracted_root_name="$3"
+  local musl_triple="$4"
   local src_url="${MUSL_SRC_URL}${archive_name}"
   local archive_file="${CACHE_DIR}/${archive_name}"
   local extracted_root="${CACHE_DIR}/${extracted_root_name}"
+  local sysroot_src="${extracted_root}/${musl_triple}"
 
   echo "==> musl Linux prebuilt for ${target}"
   echo "==> Source: ${src_url}"
@@ -136,19 +145,20 @@ fetch_one() {
   fi
 
   # Verify the extracted root has the expected sysroot markers.
-  if [[ ! -d "${extracted_root}/include" ]]; then
-    echo "error: include/ missing at extracted root — content looks wrong" >&2
+  # The C library headers and static libs live under <root>/<musl-triple>/.
+  if [[ ! -d "${sysroot_src}/include" ]]; then
+    echo "error: ${musl_triple}/include/ missing at extracted root — content looks wrong" >&2
     return 1
   fi
-  if [[ ! -d "${extracted_root}/lib" ]]; then
-    echo "error: lib/ missing at extracted root — content looks wrong" >&2
+  if [[ ! -d "${sysroot_src}/lib" ]]; then
+    echo "error: ${musl_triple}/lib/ missing at extracted root — content looks wrong" >&2
     return 1
   fi
 }
 
 for entry in "${TARGETS[@]}"; do
-  IFS='|' read -r target archive_name extracted_root_name <<<"${entry}"
-  fetch_one "${target}" "${archive_name}" "${extracted_root_name}"
+  IFS='|' read -r target archive_name extracted_root_name musl_triple <<<"${entry}"
+  fetch_one "${target}" "${archive_name}" "${extracted_root_name}" "${musl_triple}"
   echo
 done
 

@@ -7,7 +7,8 @@ set -euo pipefail
 # overwrite the target directories safely — only the sysroot dirs are
 # touched, other tools' trees under toolchain/ are preserved.
 #
-# musl.cc layout: <root>/ is itself the sysroot root, with usr -> . symlink.
+# musl.cc layout: the C library sysroot lives under <root>/<musl-triple>/
+# (e.g. aarch64-linux-musl/), with usr -> . symlink at the top level.
 # We re-materialize the standard --sysroot convention: usr/include + usr/lib.
 # Only the C library sysroot material is copied; GCC toolchain binaries
 # (bin/, libexec/) and GCC private headers are excluded.
@@ -45,21 +46,27 @@ require_cmd() {
 require_cmd cp
 
 # --- Target matrix ---
-# Each entry: <feng-target>|<musl.cc-archive>|<extracted-root-name>
+# Each entry: <feng-target>|<musl.cc-archive>|<extracted-root-name>|<musl-triple>
+# The musl-triple is the sysroot subdirectory name inside the extracted root
+# (e.g. aarch64-linux-musl). The C library headers and static libs live under
+# <root>/<musl-triple>/{include,lib}, not at the top level.
 TARGETS=(
-  "linux-arm64|aarch64-linux-musl-cross.tgz|aarch64-linux-musl-cross"
-  "linux-x64|x86_64-linux-musl-cross.tgz|x86_64-linux-musl-cross"
+  "linux-arm64|aarch64-linux-musl-cross.tgz|aarch64-linux-musl-cross|aarch64-linux-musl"
+  "linux-x64|x86_64-linux-musl-cross.tgz|x86_64-linux-musl-cross|x86_64-linux-musl"
 )
 
 # Trim one target's sysroot from cache into toolchain/.
 # Args: $1 = Feng target triple (e.g. linux-arm64)
 #       $2 = musl.cc archive name (for README provenance)
 #       $3 = extracted root dir name (cache path)
+#       $4 = musl triple (sysroot subdirectory inside extracted root)
 trim_one() {
   local target="$1"
   local archive_name="$2"
   local extracted_root_name="$3"
+  local musl_triple="$4"
   local extracted_root="${CACHE_DIR}/${extracted_root_name}"
+  local sysroot_src="${extracted_root}/${musl_triple}"
   local sysroot_target_dir="${PROJECT_ROOT}/toolchain/sysroot/${target}"
 
   echo "==> Trimming musl sysroot for ${target}"
@@ -70,13 +77,13 @@ trim_one() {
     return 1
   fi
 
-  # Verify the extracted root has the expected sysroot markers.
-  if [[ ! -d "${extracted_root}/include" ]]; then
-    echo "error: include/ missing at extracted root — content looks wrong" >&2
+  # Verify the sysroot subdirectory has the expected markers.
+  if [[ ! -d "${sysroot_src}/include" ]]; then
+    echo "error: ${musl_triple}/include/ missing at extracted root — content looks wrong" >&2
     return 1
   fi
-  if [[ ! -d "${extracted_root}/lib" ]]; then
-    echo "error: lib/ missing at extracted root — content looks wrong" >&2
+  if [[ ! -d "${sysroot_src}/lib" ]]; then
+    echo "error: ${musl_triple}/lib/ missing at extracted root — content looks wrong" >&2
     return 1
   fi
 
@@ -90,13 +97,13 @@ trim_one() {
   # Copy include/ -> usr/include/
   # musl public headers: stdio.h, stdlib.h, string.h, unistd.h, etc.
   echo "==> Copying musl headers (usr/include/)"
-  cp -R "${extracted_root}/include" "${sysroot_target_dir}/usr/include"
+  cp -R "${sysroot_src}/include" "${sysroot_target_dir}/usr/include"
 
   # Copy lib/ -> usr/lib/
   # musl static libraries + crt objects: libc.a, libc.o, crt1.o, crti.o,
   # crtn.o, rcrt1.o, Scrt1.o, etc. These are needed by clang at link time.
   echo "==> Copying musl static libs (usr/lib/)"
-  cp -R "${extracted_root}/lib" "${sysroot_target_dir}/usr/lib"
+  cp -R "${sysroot_src}/lib" "${sysroot_target_dir}/usr/lib"
 
   # musl.cc archives do not ship a top-level LICENSE file; the musl source
   # license (MIT) is documented at https://musl.libc.org/. Record provenance
@@ -143,8 +150,8 @@ EOF
 }
 
 for entry in "${TARGETS[@]}"; do
-  IFS='|' read -r target archive_name extracted_root_name <<<"${entry}"
-  trim_one "${target}" "${archive_name}" "${extracted_root_name}"
+  IFS='|' read -r target archive_name extracted_root_name musl_triple <<<"${entry}"
+  trim_one "${target}" "${archive_name}" "${extracted_root_name}" "${musl_triple}"
   echo
 done
 
