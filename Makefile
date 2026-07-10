@@ -102,7 +102,7 @@ LIBUNWIND_LIB := $(EXTLIB_DIR)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC_LIB_EXT)
 
 all: cli runtime
 
-cli: $(BIN_DIR)/feng
+cli: runtime $(BIN_DIR)/feng
 
 runtime: $(RUNTIME_LIB) $(RUNTIME_HEADERS)
 
@@ -149,22 +149,22 @@ test-sanitize:
 	$(BIN_DIR)/test_symbol
 	FENG_CC_FLAGS="-fsanitize=undefined" $(MAKE) smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
 
-perf-constraints: cli runtime
+perf-constraints: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_perf_constraints.sh
 
-std-tests: cli runtime
+std-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng run ./std_test
 
-fcts-tests: cli runtime
+fcts-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng run ./fcts/fcts_bin
 
-smoke: cli runtime
+smoke: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_smoke.sh
 
-cli-tests: cli runtime
+cli-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_cli_direct.sh
 
-cli-project-tests: cli runtime
+cli-project-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_cli_project.sh
 
 $(BIN_DIR)/feng: $(CLI_OBJS)

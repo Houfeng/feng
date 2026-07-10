@@ -1438,43 +1438,16 @@ static char *resolve_executable_path(const char *argv0) {
     return NULL;
 }
 
-/* Walk up from `start_dir`, looking for `<dir>/<rel>`. Returns the first
- * matching `<dir>` (malloc'd) or NULL. Caller frees. */
-static char *find_ancestor_with(const char *start_dir, const char *rel) {
-    char *cur = realpath(start_dir, NULL);
-    if (cur == NULL) {
-        cur = str_dup_cstr(start_dir);
-        if (cur == NULL) return NULL;
-    }
-    while (cur != NULL && cur[0] != '\0') {
-        char *probe = path_join2(cur, rel);
-        if (probe == NULL) {
-            free(cur);
-            return NULL;
-        }
-        if (path_exists(probe)) {
-            free(probe);
-            return cur;
-        }
-        free(probe);
-        if (strcmp(cur, "/") == 0) {
-            free(cur);
-            return NULL;
-        }
-        char *parent = path_dirname_dup(cur);
-        free(cur);
-        cur = parent;
-    }
-    free(cur);
-    return NULL;
-}
-
 static char *locate_runtime_lib(const char *program_path) {
     char *exe = resolve_executable_path(program_path);
     if (exe == NULL) return NULL;
     char *exe_dir = path_dirname_dup(exe);
     free(exe);
     if (exe_dir == NULL) return NULL;
+    char *parent = path_join2(exe_dir, "..");
+    free(exe_dir);
+    if (parent == NULL) return NULL;
+
     /* 1. Install layout: <exe_dir>/../lib/<os>-<arch>/<runtime-lib> */
     char *host_target = NULL;
     char *detect_error = NULL;
@@ -1483,36 +1456,28 @@ static char *locate_runtime_lib(const char *program_path) {
     if (detected && host_target != NULL) {
         char *lib_subdir = path_join2("lib", host_target);
         char *runtime_rel = path_join_host_static_library(lib_subdir, "feng_runtime");
-        char *parent = path_join2(exe_dir, "..");
         char *candidate = path_join2(parent, runtime_rel);
-        bool ok = candidate != NULL && path_exists(candidate);
         free(lib_subdir);
         free(runtime_rel);
-        free(parent);
-        if (ok) {
+        if (candidate != NULL && path_exists(candidate)) {
             free(host_target);
-            free(exe_dir);
+            free(parent);
             return candidate;
         }
         free(candidate);
     }
     free(host_target);
-    /* 2. Dev build layout: <root>/build/bin/feng -> <root>/build/lib/<runtime-lib> */
-    char *runtime_rel = path_join_host_static_library("build/lib", "feng_runtime");
-    if (runtime_rel == NULL) {
-        free(exe_dir);
-        return NULL;
-    }
-    char *root = find_ancestor_with(exe_dir, runtime_rel);
-    free(exe_dir);
-    if (root == NULL) {
-        free(runtime_rel);
-        return NULL;
-    }
-    char *path = path_join2(root, runtime_rel);
-    free(root);
+
+    /* 2. Dev build layout: <exe_dir>/../lib/<runtime-lib> (no <os>-<arch> subdir) */
+    char *runtime_rel = path_join_host_static_library("lib", "feng_runtime");
+    char *candidate = path_join2(parent, runtime_rel);
     free(runtime_rel);
-    return path;
+    free(parent);
+    if (candidate != NULL && path_exists(candidate)) {
+        return candidate;
+    }
+    free(candidate);
+    return NULL;
 }
 
 static char *locate_runtime_include(const char *program_path) {
@@ -1521,27 +1486,23 @@ static char *locate_runtime_include(const char *program_path) {
     char *exe_dir = path_dirname_dup(exe);
     free(exe);
     if (exe_dir == NULL) return NULL;
-    /* 1. Install layout: <exe_dir>/../include/runtime/feng_runtime.h */
+    /* Install layout: <exe_dir>/../include/runtime/feng_runtime.h. Returns
+     * the include root (.../include) so callers pair this with the source-side
+     * #include "runtime/feng_runtime.h" form. */
     char *parent = path_join2(exe_dir, "..");
+    free(exe_dir);
     char *candidate = path_join2(parent, "include/runtime/feng_runtime.h");
     free(parent);
     bool ok = candidate != NULL && path_exists(candidate);
-    if (ok) {
-        char *include_root = path_dirname_dup(candidate); /* .../include/runtime */
-        char *result = path_dirname_dup(include_root);     /* .../include        */
-        free(include_root);
+    if (!ok) {
         free(candidate);
-        free(exe_dir);
-        return result;
+        return NULL;
     }
+    char *include_root = path_dirname_dup(candidate); /* .../include/runtime */
+    char *result = path_dirname_dup(include_root);     /* .../include        */
+    free(include_root);
     free(candidate);
-    /* 2. Dev build layout: <root>/src/runtime/feng_runtime.h */
-    char *root = find_ancestor_with(exe_dir, "src/runtime/feng_runtime.h");
-    free(exe_dir);
-    if (root == NULL) return NULL;
-    char *path = path_join2(root, "src");
-    free(root);
-    return path;
+    return result;
 }
 
 /* --- extern calling-convention link library mining ----------------------- */
@@ -1812,8 +1773,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     if (include_dir == NULL) {
         fprintf(stderr,
                 "error: cannot locate runtime headers.\n"
-                "  expected the install layout at <feng-exe>/../include/runtime/feng_runtime.h\n"
-                "  or the dev build layout at <src-tree>/src/runtime/feng_runtime.h.\n");
+                "  expected <feng-exe>/../include/runtime/feng_runtime.h.\n");
         return 1;
     }
 
@@ -1837,8 +1797,8 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
 
             fprintf(stderr,
                 "error: cannot locate %s.\n"
-                "  expected the install layout at <feng-exe>/../lib/<os>-<arch>/%s\n"
-                "  or the dev build layout at <src-tree>/build/lib/%s.\n",
+                "  expected <feng-exe>/../lib/<os>-<arch>/%s\n"
+                "  or <feng-exe>/../lib/%s.\n",
                 runtime_basename != NULL ? runtime_basename : "the Feng runtime static library",
                 runtime_basename != NULL ? runtime_basename : "the Feng runtime static library",
                 runtime_basename != NULL ? runtime_basename : "the Feng runtime static library");
