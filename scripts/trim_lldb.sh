@@ -17,7 +17,20 @@ set -euo pipefail
 #     LICENSE.TXT             — upstream license (when present)
 #     README.md                — provenance and re-sync instructions
 #
+# Layout produced (Linux):
+#   toolchain/lldb/<os>-<arch>/
+#     bin/lldb, bin/lldb-dap   — the executables
+#     bin/lldb-argdumper       — used by lldb `run` for shell arg expansion
+#     bin/lldb-server          — local debug server spawned by lldb on Linux
+#     lib/liblldb.so.<ver>     — LLDB shared library (real file, soname dep)
+#     lib/liblldb.so.<abi>     — ABI-versioned symlink (preserved)
+#     lib/liblldb.so           — unversioned symlink (preserved)
+#     LICENSE.TXT             — upstream license (when present)
+#     README.md                — provenance and re-sync instructions
+#
 # On Linux the local debug server is bin/lldb-server instead of bin/debugserver.
+# On Linux liblldb ships as a .so with versioned symlinks (soname convention);
+# on macOS it ships as a .dylib with an unversioned symlink.
 #
 # Deliberately excluded: lldb-mi (MI interface for IDE integration, not
 # needed for DAP / CLI), include/lldb/ (C++ embedding API).
@@ -140,19 +153,33 @@ case "${TARGET}" in
     ;;
 esac
 
-# liblldb.<version>.dylib — the real file bin/lldb and bin/lldb-dap link
-# to via @rpath/liblldb.<version>.dylib. The unversioned liblldb.dylib
-# symlink points to it; copy both with cp -PR to preserve the link.
+# liblldb shared library — the real file bin/lldb and bin/lldb-dap link to.
+# macOS: liblldb.<version>.dylib + unversioned liblldb.dylib symlink.
+# Linux: liblldb.so.<version> + liblldb.so.<abi> + liblldb.so symlinks.
+# Use cp -PR (macOS) / cp -a (Linux) to preserve symlinks. cp -PR works on
+# both platforms for preserving symlink chains.
 mkdir -p "${LLDB_TARGET_DIR}/lib"
-if [[ -f "${LLVM_EXTRACTED_ROOT}/lib/liblldb.${LLVM_VERSION}.dylib" ]]; then
-  cp -PR "${LLVM_EXTRACTED_ROOT}/lib/liblldb"*.dylib "${LLDB_TARGET_DIR}/lib/"
-else
-  echo "warning: lib/liblldb.${LLVM_VERSION}.dylib not found — lldb will fail to start" >&2
-fi
+case "${TARGET}" in
+  macos-*)
+    if [[ -f "${LLVM_EXTRACTED_ROOT}/lib/liblldb.${LLVM_VERSION}.dylib" ]]; then
+      cp -PR "${LLVM_EXTRACTED_ROOT}/lib/liblldb"*.dylib "${LLDB_TARGET_DIR}/lib/"
+    else
+      echo "warning: lib/liblldb.${LLVM_VERSION}.dylib not found — lldb will fail to start" >&2
+    fi
+    ;;
+  linux-*)
+    if [[ -e "${LLVM_EXTRACTED_ROOT}/lib/liblldb.so" ]]; then
+      cp -PR "${LLVM_EXTRACTED_ROOT}/lib/liblldb.so"* "${LLDB_TARGET_DIR}/lib/"
+    else
+      echo "warning: lib/liblldb.so not found — lldb will fail to start" >&2
+    fi
+    ;;
+esac
 
-# lib/Python3.framework — Python runtime. Empirically absent from the
-# LLVM 22.1.8 macOS prebuilt (the build disables Python scripting, so
-# liblldb has no Python hard-link). Conditional block kept for forward
+# lib/Python3.framework — Python runtime. macOS-specific structure.
+# Empirically absent from the LLVM 22.1.8 macOS prebuilt (the build
+# disables Python scripting, so liblldb has no Python hard-link). Linux
+# prebuilts do not ship this either. Conditional block kept for forward
 # compatibility — if a future LLVM prebuilt ships it, bundle it.
 if [[ -d "${LLVM_EXTRACTED_ROOT}/lib/Python3.framework" ]]; then
   cp -R "${LLVM_EXTRACTED_ROOT}/lib/Python3.framework" "${LLDB_TARGET_DIR}/lib/"
@@ -190,14 +217,16 @@ Included:
 - \`bin/lldb-argdumper\` — used by lldb \`run\` for shell arg expansion
 - \`bin/debugserver\` (macOS) / \`bin/lldb-server\` (Linux) — local debug
   server that lldb spawns on the host
-- \`lib/liblldb.${LLVM_VERSION}.dylib\` — LLDB shared library (real file,
-  the @rpath dep bin/lldb and bin/lldb-dap load)
-- \`lib/liblldb.dylib\` — unversioned symlink (preserved)
+- \`lib/liblldb.${LLVM_VERSION}.dylib\` (macOS) / \`lib/liblldb.so.${LLVM_VERSION}\` (Linux)
+  — LLDB shared library (real file, the @rpath/soname dep bin/lldb and
+  bin/lldb-dap load)
+- \`lib/liblldb.dylib\` (macOS) / \`lib/liblldb.so\` (Linux) — unversioned
+  symlink (preserved)
 - \`LICENSE.TXT\` — upstream license (when present in upstream prebuilt)
 
-Conditional (present in some upstream builds; absent in LLVM 22.1.8 macOS):
+Conditional (present in some upstream builds; absent in LLVM 22.1.8):
 - \`lib/Python3.framework/\` — Python runtime, hard-linked by liblldb when
-  the upstream build enables Python scripting
+  the upstream build enables Python scripting (macOS-only structure)
 - \`lib/lldb/\` — LLDB python plug-ins and dynamic type support
 - \`share/lldb/\` — python scripts, formatters, settings
 

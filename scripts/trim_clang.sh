@@ -19,13 +19,15 @@ set -euo pipefail
 # - LLVM dev libs/headers (clang invoked as standalone compiler)
 # - C++ standard library material (host SDK provides)
 # - share/clang/ (editor integration scripts: clang-format, clang-tidy, etc.)
-# - libclang_rt.* except libclang_rt.osx.a (sanitizers, fuzzer, xray, profile, etc.)
-# - Non-ARM64 builtin headers (x86 intrinsics, CUDA, OpenMP, z/OS, PPC, etc.)
+# - libclang_rt.* except libclang_rt.osx.a (macOS) — sanitizers, fuzzer, xray, profile, etc.
+# - Non-target builtin headers (x86 intrinsics, CUDA, OpenMP, z/OS, PPC, etc.)
 #
 # Feng's codegen produces C code that only needs standard C headers (stdint.h,
 # stddef.h, etc.) and the basic runtime library. Sanitizer libraries are not
 # needed here because Feng uses the system compiler ($CC) for sanitization
-# during development, not the bundled clang.
+# during development, not the bundled clang. On Linux the system crt
+# provides the runtime; the bundled clang does not ship a libclang_rt for
+# Linux targets.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -147,14 +149,16 @@ done
   done)
 
 # --- Copy target runtime library (selective) ---
-# Feng only needs libclang_rt.osx.a (basic runtime, ~228 KB).
+# macOS: Feng only needs libclang_rt.osx.a (basic runtime, ~228 KB).
+# Linux: no bundled runtime lib needed — Linux uses system crt; the LLVM
+# prebuilt does not ship a libclang_rt for Linux targets.
 # Sanitizer/fuzzer/xray/profile/ORC libraries (~28 MB) are excluded because
 # Feng uses $CC (system compiler) for sanitization during development,
 # not the bundled clang.
 TARGET_OS_LIB=""
 case "${TARGET}" in
   macos-*)  TARGET_OS_LIB="libclang_rt.osx.a" ;;
-  linux-*)  TARGET_OS_LIB="" ;;  # Linux uses system crt; no bundled rt needed
+  linux-*)  TARGET_OS_LIB="" ;;
   *) echo "warning: unknown target for runtime lib selection: ${TARGET}" >&2 ;;
 esac
 
@@ -196,8 +200,8 @@ Included:
 - \`bin/clang\` — the executable
 - \`lib/clang/${CLANG_RESOURCE_VERSION}/include/\` — standard C builtin headers
   (stdint.h, stddef.h, float.h, stdarg.h, stdbool.h, arm_neon.h, ...)
-- \`lib/clang/${CLANG_RESOURCE_VERSION}/lib/${RT_LIB_DIR}/libclang_rt.osx.a\` — basic
-  target runtime library
+- \`lib/clang/${CLANG_RESOURCE_VERSION}/lib/${RT_LIB_DIR}/${TARGET_OS_LIB:-<none>}\` — basic
+  target runtime library (macOS only; Linux uses system crt)
 - \`LICENSE.TXT\` — upstream license
 
 Deliberately excluded:
