@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fetch and trim a prebuilt musl-based Linux sysroot from musl.cc into
+# Fetch and trim prebuilt musl-based Linux sysroots from musl.cc into
 # toolchain/sysroot/<os>-<arch>/. This is a maintenance script — not part of
 # the release build flow.
 #
@@ -33,9 +33,8 @@ set -euo pipefail
 # musl is MIT-licensed; the prebuilt toolchains are freely distributable.
 # See https://musl.libc.org/ for license details.
 #
-# Supported targets: linux-x64, linux-arm64.
-# macOS is intentionally unsupported here — Apple SDK is not freely
-# redistributable and must be obtained by the user separately.
+# Targets fetched: linux-x64, linux-arm64.
+# The script runs on macOS and Linux without modification.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -44,63 +43,9 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # fixed but the upstream content was last built 2021-11-23. Pin the source
 # URL explicitly so re-runs are reproducible. Override via MUSL_SRC_URL when
 # a pinned/mirrored copy is desired.
-MUSL_SRC_URL_DEFAULT="https://musl.cc/"
-MUSL_SRC_URL="${MUSL_SRC_URL:-${MUSL_SRC_URL_DEFAULT}}"
-
-detect_target() {
-  local os arch uname_s uname_m
-  uname_s="$(uname -s)"
-  uname_m="$(uname -m)"
-  case "${uname_s}" in
-    Darwin) os=macos ;;
-    Linux)  os=linux ;;
-    *) echo "error: unsupported OS for host detection: ${uname_s}" >&2; exit 1 ;;
-  esac
-  case "${uname_m}" in
-    arm64|aarch64) arch=arm64 ;;
-    x86_64|amd64)  arch=x64 ;;
-    *) echo "error: unsupported arch for host detection: ${uname_m}" >&2; exit 1 ;;
-  esac
-  printf '%s-%s' "${os}" "${arch}"
-}
-
-# Only Linux targets make sense for a musl sysroot. macOS/Windows targets
-# are rejected — macOS SDK is Apple-restricted, Windows uses mingw-w64
-# (a separate fetch path not covered here).
-TARGET="${TARGET:-$(detect_target)}"
-
-# Map a Feng target triple (<os>-<arch>) to the musl.cc archive name.
-# musl.cc uses the full target triple in the archive basename.
-target_to_musl_archive() {
-  case "$1" in
-    linux-x64)   printf 'x86_64-linux-musl-cross.tgz' ;;
-    linux-arm64) printf 'aarch64-linux-musl-cross.tgz' ;;
-    macos-*|windows-*)
-      echo "error: musl sysroot fetch does not support target: $1" >&2
-      echo "       macOS SDK is Apple-restricted; Windows uses mingw-w64 (separate path)." >&2
-      exit 1
-      ;;
-    *) echo "error: no musl prebuilt mapping for target: $1" >&2; exit 1 ;;
-  esac
-}
-
-# The extracted root dir name inside the archive (musl.cc convention).
-target_to_extracted_root() {
-  case "$1" in
-    linux-x64)   printf 'x86_64-linux-musl-cross' ;;
-    linux-arm64) printf 'aarch64-linux-musl-cross' ;;
-  esac
-}
-
-MUSL_ARCHIVE_NAME="$(target_to_musl_archive "${TARGET}")"
-MUSL_EXTRACTED_ROOT_NAME="$(target_to_extracted_root "${TARGET}")"
-MUSL_SRC_URL="${MUSL_SRC_URL}${MUSL_ARCHIVE_NAME}"
+MUSL_SRC_URL="${MUSL_SRC_URL:-https://musl.cc/}"
 
 CACHE_DIR="${PROJECT_ROOT}/temp/musl"
-ARCHIVE_FILE="${CACHE_DIR}/${MUSL_ARCHIVE_NAME}"
-EXTRACTED_ROOT="${CACHE_DIR}/${MUSL_EXTRACTED_ROOT_NAME}"
-
-SYSROOT_TARGET_DIR="${PROJECT_ROOT}/toolchain/sysroot/${TARGET}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -113,77 +58,98 @@ require_cmd curl
 require_cmd tar
 require_cmd cp
 
-echo "==> musl Linux sysroot for ${TARGET}"
-echo "==> Source: ${MUSL_SRC_URL}"
-echo "==> Cache:  ${CACHE_DIR}"
+# Fetch (download + extract with cache) for a single target.
+# Args: $1 = Feng target triple (e.g. linux-arm64)
+#       $2 = musl.cc archive name (e.g. aarch64-linux-musl-cross.tgz)
+#       $3 = extracted root dir name (e.g. aarch64-linux-musl-cross)
+fetch_one() {
+  local target="$1"
+  local archive_name="$2"
+  local extracted_root_name="$3"
+  local src_url="${MUSL_SRC_URL}${archive_name}"
+  local archive_file="${CACHE_DIR}/${archive_name}"
+  local extracted_root="${CACHE_DIR}/${extracted_root_name}"
 
-mkdir -p "${CACHE_DIR}"
+  echo "==> musl Linux sysroot for ${target}"
+  echo "==> Source: ${src_url}"
+  echo "==> Cache:  ${CACHE_DIR}"
 
-# --- Download (with cache) ---
-if [[ -d "${EXTRACTED_ROOT}" ]]; then
-  echo "==> Reusing extracted musl at ${EXTRACTED_ROOT}"
-elif [[ -f "${ARCHIVE_FILE}" ]]; then
-  echo "==> Reusing cached archive ${ARCHIVE_FILE}"
-  echo "==> Extracting"
-  tar -xzf "${ARCHIVE_FILE}" -C "${CACHE_DIR}"
-else
-  echo "==> Downloading ${MUSL_ARCHIVE_NAME}"
-  curl -sSLf --connect-timeout 15 --retry 3 "${MUSL_SRC_URL}" -o "${ARCHIVE_FILE}"
-  echo "==> Extracting"
-  tar -xzf "${ARCHIVE_FILE}" -C "${CACHE_DIR}"
-fi
+  mkdir -p "${CACHE_DIR}"
 
-if [[ ! -d "${EXTRACTED_ROOT}" ]]; then
-  echo "error: extraction did not produce expected dir: ${EXTRACTED_ROOT}" >&2
-  exit 1
-fi
+  # --- Download (with cache) ---
+  if [[ -d "${extracted_root}" ]]; then
+    echo "==> Reusing extracted musl at ${extracted_root}"
+  elif [[ -f "${archive_file}" ]]; then
+    echo "==> Reusing cached archive ${archive_file}"
+    echo "==> Extracting"
+    tar -xzf "${archive_file}" -C "${CACHE_DIR}"
+  else
+    echo "==> Downloading ${archive_name}"
+    curl -sSLf --connect-timeout 15 --retry 3 "${src_url}" -o "${archive_file}"
+    echo "==> Extracting"
+    tar -xzf "${archive_file}" -C "${CACHE_DIR}"
+  fi
 
-# Verify the extracted root has the expected sysroot markers.
-if [[ ! -d "${EXTRACTED_ROOT}/include" ]]; then
-  echo "error: include/ missing at extracted root — content looks wrong" >&2
-  exit 1
-fi
-if [[ ! -d "${EXTRACTED_ROOT}/lib" ]]; then
-  echo "error: lib/ missing at extracted root — content looks wrong" >&2
-  exit 1
-fi
+  if [[ ! -d "${extracted_root}" ]]; then
+    echo "error: extraction did not produce expected dir: ${extracted_root}" >&2
+    return 1
+  fi
 
-# --- Trim into toolchain/sysroot/<os>-<arch>/ ---
+  # Verify the extracted root has the expected sysroot markers.
+  if [[ ! -d "${extracted_root}/include" ]]; then
+    echo "error: include/ missing at extracted root — content looks wrong" >&2
+    return 1
+  fi
+  if [[ ! -d "${extracted_root}/lib" ]]; then
+    echo "error: lib/ missing at extracted root — content looks wrong" >&2
+    return 1
+  fi
+}
+
+# Trim into toolchain/sysroot/<os>-<arch>/.
 # musl.cc layout: <root>/ is itself the sysroot root, with usr -> . symlink.
 # We re-materialize the standard --sysroot convention: usr/include + usr/lib.
 # Only the C library sysroot material is copied; GCC toolchain binaries
 # (bin/, libexec/) and GCC private headers are excluded.
-#
 # Only this target's dir is touched — other tools' trees under toolchain/ are
 # preserved.
-echo "==> Trimming sysroot into ${SYSROOT_TARGET_DIR}"
+# Args: $1 = Feng target triple (e.g. linux-arm64)
+#       $2 = musl.cc archive name (for README provenance)
+#       $3 = extracted root dir name (cache path)
+trim_one() {
+  local target="$1"
+  local archive_name="$2"
+  local extracted_root_name="$3"
+  local extracted_root="${CACHE_DIR}/${extracted_root_name}"
+  local sysroot_target_dir="${PROJECT_ROOT}/toolchain/sysroot/${target}"
 
-rm -rf "${SYSROOT_TARGET_DIR}"
-mkdir -p "${SYSROOT_TARGET_DIR}/usr"
+  echo "==> Trimming sysroot into ${sysroot_target_dir}"
 
-# Copy include/ -> usr/include/
-# musl public headers: stdio.h, stdlib.h, string.h, unistd.h, etc.
-echo "==> Copying musl headers (usr/include/)"
-cp -R "${EXTRACTED_ROOT}/include" "${SYSROOT_TARGET_DIR}/usr/include"
+  rm -rf "${sysroot_target_dir}"
+  mkdir -p "${sysroot_target_dir}/usr"
 
-# Copy lib/ -> usr/lib/
-# musl static libraries + crt objects: libc.a, libc.o, crt1.o, crti.o,
-# crtn.o, rcrt1.o, Scrt1.o, etc. These are needed by clang at link time.
-echo "==> Copying musl static libs (usr/lib/)"
-cp -R "${EXTRACTED_ROOT}/lib" "${SYSROOT_TARGET_DIR}/usr/lib"
+  # Copy include/ -> usr/include/
+  # musl public headers: stdio.h, stdlib.h, string.h, unistd.h, etc.
+  echo "==> Copying musl headers (usr/include/)"
+  cp -R "${extracted_root}/include" "${sysroot_target_dir}/usr/include"
 
-# musl.cc archives do not ship a top-level LICENSE file; the musl source
-# license (MIT) is documented at https://musl.libc.org/. Record provenance
-# in README.md below.
+  # Copy lib/ -> usr/lib/
+  # musl static libraries + crt objects: libc.a, libc.o, crt1.o, crti.o,
+  # crtn.o, rcrt1.o, Scrt1.o, etc. These are needed by clang at link time.
+  echo "==> Copying musl static libs (usr/lib/)"
+  cp -R "${extracted_root}/lib" "${sysroot_target_dir}/usr/lib"
 
-cat > "${SYSROOT_TARGET_DIR}/README.md" <<EOF
+  # musl.cc archives do not ship a top-level LICENSE file; the musl source
+  # license (MIT) is documented at https://musl.libc.org/. Record provenance
+  # in README.md below.
+  cat > "${sysroot_target_dir}/README.md" <<EOF
 # musl Linux sysroot (cross compilation)
 
 This directory vendors a prebuilt musl libc sysroot for Feng's cross
 compilation support on Linux targets.
 
-Target:  ${TARGET}
-Source:  https://musl.cc/${MUSL_ARCHIVE_NAME}
+Target:  ${target}
+Source:  https://musl.cc/${archive_name}
 License: MIT (https://musl.libc.org/)
 
 Included:
@@ -197,7 +163,7 @@ Deliberately excluded:
 - GCC internal tools (\`libexec/gcc/\`) — not needed by clang
 - GCC private headers — clang provides its own resource-dir headers
 
-The feng compiler passes \`--sysroot=<install>/toolchain/sysroot/${TARGET}/\`
+The feng compiler passes \`--sysroot=<install>/toolchain/sysroot/${target}/\`
 to clang when cross-compiling to this target. No additional \`-I\` or \`-L\`
 flags are needed — the standard \`usr/include\` + \`usr/lib\` layout is
 recognized by clang automatically.
@@ -207,12 +173,26 @@ use the host system's glibc. See dev/feng-release-and-instanll.md §5/§9 for
 the rationale.
 
 Re-sync:
-- \`TARGET=linux-x64 ./scripts/fetch_musl.sh\` to (re)fetch x86_64 sysroot.
-- \`TARGET=linux-arm64 ./scripts/fetch_musl.sh\` to (re)fetch aarch64 sysroot.
+- Run \`./scripts/fetch_musl.sh\` to (re)fetch both targets.
 - Delete \`temp/musl/\` to force a re-download.
 EOF
 
-echo "==> Done. musl sysroot for ${TARGET} at:"
-echo "    ${SYSROOT_TARGET_DIR}"
-echo "==> Verify: ls ${SYSROOT_TARGET_DIR}/usr/include/stdio.h"
-echo "==> Verify: ls ${SYSROOT_TARGET_DIR}/usr/lib/libc.a"
+  echo "==> Done. musl sysroot for ${target} at:"
+  echo "    ${sysroot_target_dir}"
+  echo "==> Verify: ls ${sysroot_target_dir}/usr/include/stdio.h"
+  echo "==> Verify: ls ${sysroot_target_dir}/usr/lib/libc.a"
+}
+
+# --- Target matrix ---
+# Each entry: <feng-target>|<musl.cc-archive>|<extracted-root-name>
+TARGETS=(
+  "linux-arm64|aarch64-linux-musl-cross.tgz|aarch64-linux-musl-cross"
+  "linux-x64|x86_64-linux-musl-cross.tgz|x86_64-linux-musl-cross"
+)
+
+for entry in "${TARGETS[@]}"; do
+  IFS='|' read -r target archive_name extracted_root_name <<<"${entry}"
+  fetch_one "${target}" "${archive_name}" "${extracted_root_name}"
+  trim_one  "${target}" "${archive_name}" "${extracted_root_name}"
+  echo
+done
