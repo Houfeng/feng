@@ -13,7 +13,7 @@
 - 分发物：单一压缩包 `feng-<os>-<arch>-<version>.zip`
 - 平台：仅 `macos-arm64`
 - 安装方式：手动解压 + 在线脚本两种
-- toolchain 策略：bundle 精简版（从 LLVM 官方预编译包剥离，仅保留 `clang`、`lldb`、`lldb-dap`，不自建 LLVM）
+- toolchain 形态：bundle 精简版（从 LLVM 官方预编译包剥离，仅保留 `clang`、`lldb`、`lldb-dap`，不自建 LLVM）
 - 运行时分发形态：仅静态库 `.a` / `.lib`
 - 分发渠道：GitHub Releases
 
@@ -28,9 +28,9 @@
 
 ## 2 设计原则
 
-- **抽象驱动，面向未来可扩展**：平台矩阵、toolchain 策略、安装前缀、分发渠道均以参数化形式表达，新增平台或切换 toolchain 策略不改动脚本主干。
+- **抽象驱动，面向未来可扩展**：平台矩阵与分发渠道均以参数化形式表达，新增平台不改动脚本主干。
 - **单一分发物**：一个 zip 覆盖一个目标平台，不按子组件拆分多包，降低用户组合安装成本。
-- **环境变量最小化**：默认仅向 `PATH` 注入 `$FENG_HOME/bin`，不要求用户配置多变量；`FENG_HOME` 与 `FENG_TOOLCHAIN` 仅在需要覆盖默认时使用。
+- **安装极简**：安装只需将解压目录的 `bin/` 加入 `PATH`，不引入 `FENG_HOME` / `FENG_TOOLCHAIN` 等环境变量；runtime lib/include 与 toolchain 均由 `feng` 自身查找定位。
 - **可逆安装**：安装产物集中在一个目录树下，清理只需删除该目录与 shell 片段。
 - **与现有体系一致**：复用 `Makefile` 产物路径、Feng 编译期 `extlib/<os>-<arch>/` 平台隔离约定与 `scripts/` 下既有构建脚本，不另立构建体系。
 
@@ -75,7 +75,7 @@ feng-<os>-<arch>-<version>/
 ├── lib/                      # 必须：运行时静态库（按目标平台分子目录）
 │   └── <os>-<arch>/          # 目标平台标识，取值见 feng-os-arch.md
 │       └── libfeng_runtime.a # linux/macos；Windows 下为 feng_runtime.lib
-├── toolchain/                # 必须（bundle 策略下）：精简 LLVM 工具链
+├── toolchain/                # 必须：精简 LLVM 工具链
 │   ├── clang/                # 仅 clang 与最小必要依赖
 │   │   ├── bin/clang
 │   │   ├── lib/（仅 clang 运行所必需的子集）
@@ -85,53 +85,31 @@ feng-<os>-<arch>-<version>/
 │       ├── bin/lldb-dap      # DAP 适配器，供 feng dap / VS Code 使用
 │       ├── lib/（仅 lldb 运行所必需的子集）
 │       └── share/lldb/（含 python 脚本与格式化模块）
-├── scripts/                  # 必须：安装辅助脚本（在线脚本复用此份）
-│   ├── env.sh                # 注入环境变量（POSIX shell）
-│   ├── env.fish              # fish 等价片段
-│   └── env.ps1               # Windows PowerShell 等价片段
 └── VERSION                   # 必须：纯文本版本号，单行
 ```
 
 约束：
 
 - Windows 平台下，`bin/` 中可执行文件追加 `.exe` 后缀，`lib/` 中静态库后缀切换为 `.lib`。
-- `lib/` 按目标平台分子目录（`lib/<os>-<arch>/`，取值见 [feng-os-arch.md](../docs/feng-os-arch.md)）。当前无交叉编译时，目标平台与分发物命名平台一致，仅含一份；未来支持交叉编译时，同一分发物可含多个目标平台子目录，`feng` 按编译目标定位 `$FENG_HOME/lib/<os>-<arch>/`。
+- `lib/` 按目标平台分子目录（`lib/<os>-<arch>/`，取值见 [feng-os-arch.md](../docs/feng-os-arch.md)）。当前无交叉编译时，目标平台与分发物命名平台一致，仅含一份；未来支持交叉编译时，同一分发物可含多个目标平台子目录。
 - `include/` 为 runtime 公共 ABI 头文件，平台无关（C 源码），不分平台子目录，单一一份供所有平台使用，扁平置于 `include/` 根下。`feng_runtime.h` 内部以相对路径 `#include "feng_runtime_contract.inc"`，二者位于同一目录；标准 C 头文件（`<stdint.h>` 等）与系统头文件（`<unwind.h>`）由 host cc / 工具链提供，不进分发物。
-- `toolchain/` 仅在 bundle 策略下存在；当用户切换为 system 策略时，`toolchain/` 可缺失，`feng` 必须能回退到系统工具链。
 - `manifest.txt` 列出每个文件的相对路径与 SHA-256，供安装脚本校验完整性。
 - 分发物不包含任何 Feng 源码、`.o` / `.obj` 中间产物、构建缓存。
 
 ### 4.1 runtime 定位规则
 
-安装后 `feng` 按以下顺序定位 runtime 静态库（`libfeng_runtime.a` / `feng_runtime.lib`）与 runtime 头文件（`feng_runtime.h`）：
+`feng` 编译器基于自身位置查找 runtime 静态库与头文件，不使用环境变量覆盖；若未来需要显式指定 runtime 路径，通过 CLI 参数实现。
 
-1. 安装态：
-   - 静态库：`<exe_dir>/../lib/<os>-<arch>/<runtime-lib>`，其中 `<os>-<arch>` 由编译期宏归一化（见 [feng-os-arch.md](../docs/feng-os-arch.md)），`feng` 按当前可执行文件的宿主平台定位。
-   - 头文件：`<exe_dir>/../include/feng_runtime.h`（平台无关，单一一份）。
-2. 开发态：从 `<exe_dir>` 向上查找含 `build/lib/<runtime-lib>` 与 `build/include/feng_runtime.h` 的祖先目录（开发构建树扁平布局）。
+## 5 toolchain 形态
 
-未来引入 `--platform` 交叉编译参数时，第 1 步的 `<os>-<arch>` 改为取 `--platform` 值，结构不变；`include/` 仍不分平台子目录。
-
-不使用环境变量覆盖；若未来需要显式指定 runtime 路径，通过 CLI 参数实现。
-
-## 5 toolchain 策略
-
-toolchain 策略决定 `feng` 在调用 `clang`（编译 Feng 生成的 C）与 `lldb` / `lldb-dap`（命令行调试与 DAP 适配）时如何定位可执行文件。策略通过环境变量 `FENG_TOOLCHAIN` 选择：
-
-| 策略值     | 行为                                                                 |
-|------------|----------------------------------------------------------------------|
-| `bundled`  | 优先使用 `$FENG_HOME/toolchain/` 下的 clang / lldb / lldb-dap（首版默认） |
-| `system`   | 使用 `PATH` 中的系统 clang / lldb / lldb-dap，要求版本满足最低约束   |
-| `auto`     | 先查系统，缺失或版本不足时回退到 bundled                             |
+分发包内 `toolchain/` 为精简版 LLVM 工具链，与 `bin/`、`lib/`、`include/` 并列置于分发包根下。
 
 约束：
 
-- `feng` 在调用 clang / lldb / lldb-dap 前必须按当前策略解析出绝对路径，解析失败时报错并给出可操作的修复指引（如"请安装 Xcode Command Line Tools"或"请重新安装 Feng 以补齐 toolchain"）。
-- bundled 形态下的 toolchain 必须是精简版，**从 LLVM 官方预编译包剥离，不自建 LLVM/Clang**；只保留 `clang`、`lldb`、`lldb-dap` 及其运行所必需的最小依赖集，不含 `llvm-*`、`lld`、`clang-format`、`clang-tidy` 等其他 LLVM 工具，不含非当前平台 / 非 x86_64 的目标后端。
+- `feng` 编译器基于自身位置查找 `toolchain/`。
+- **从 LLVM 官方预编译包剥离，不自建 LLVM/Clang**；只保留 `clang`、`lldb`、`lldb-dap` 及其运行所必需的最小依赖集，不含 `llvm-*`、`lld`、`clang-format`、`clang-tidy` 等其他 LLVM 工具，不含非当前平台 / 非 x86_64 的目标后端。
 - 精简工作由独立子任务实施，本方案只约束产出形式与体积目标：精简后 `toolchain/` 解压体积目标控制在 300 MB 量级（实际值待实施时验证，写入 `manifest.txt`）。
 - 精简 toolchain 的版本、来源、剥离清单由独立子任务文档承载，不在本文件展开，避免方案膨胀。
-
-待人工决策项见 §10。
 
 ## 6 构建与发布工作流
 
@@ -170,22 +148,16 @@ strategy:
 
 ## 7 安装方式
 
-### 7.1 手动解压 + 环境变量
+### 7.1 手动解压
 
 适用于：离线环境、自定义安装路径、对安装脚本不信任的用户。
 
 步骤：
 
 1. 从 GitHub Releases 下载 `feng-<os>-<arch>-<version>.zip`
-2. 解压到任意目录，记为 `$FENG_HOME`，例如 `~/.feng/<version>/`
-3. 在 shell 启动脚本中 source `$FENG_HOME/scripts/env.sh`（或对应 fish / PowerShell 片段）
+2. 解压到任意目录，例如 `~/.feng/`
+3. 将解压目录的 `bin/` 加入 `PATH`（在 shell 启动脚本中追加 `export PATH="<解压目录>/bin:$PATH"`）
 4. 重开 shell 或 `source` 当前会话，`feng --version` 可用即安装成功
-
-`scripts/env.sh` 行为约束：
-
-- 将 `$FENG_HOME/bin` 前置追加到 `PATH`（不覆盖已有项）
-- 若 `FENG_HOME` 未设置，按 `env.sh` 自身位置回推导算（`$(dirname "$0")/..`）
-- 不写入任何全局配置；是否追加到 `~/.zshrc` / `~/.bashrc` 由用户自行决定，脚本仅给出提示
 
 ### 7.2 在线脚本
 
@@ -204,9 +176,8 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
   2. 拼接下载 URL，下载 zip 到系统临时目录（`$TMPDIR`，回退 `/tmp`）
   3. 校验 SHA-256（从 release notes 或同目录 `.sha256` 读取）
   4. 解压到 `$HOME/.feng/`
-  5. 提示用户将 `source $HOME/.feng/scripts/env.sh` 追加到 shell 启动脚本
+  5. 提示用户将 `$HOME/.feng/bin` 加入 `PATH`
 - 失败时必须清理半成品目录，不留残文件。
-- 在线脚本与压缩包内 `scripts/` 下的辅助脚本共用同一份 `env.sh`，不维护两套。
 
 ## 8 验收清单
 
@@ -217,8 +188,8 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - [ ] `feng build` 在空项目可完整产出二进制
 - [ ] `feng run` 在示例项目可运行
 - [ ] `feng lsp` / `feng dap` 可启动
-- [ ] toolchain 策略为 `bundled` 时，`feng` 不依赖系统 clang / lldb / lldb-dap
-- [ ] toolchain 策略切换为 `system` 时，`feng` 可正确调用系统 clang / lldb / lldb-dap
+- [ ] bundled toolchain 存在时，`feng` 优先使用之，不依赖系统 clang / lldb / lldb-dap
+- [ ] bundled toolchain 缺失时，`feng` 回退到系统 clang / lldb / lldb-dap
 - [ ] 安装脚本在干净环境完成安装，无残留
 - [ ] 压缩包解压后体积、toolchain 体积记录到 `manifest.txt`
 
