@@ -96,8 +96,8 @@ if [[ ! -d "${EXTRACTED_ROOT}" ]]; then
   exit 1
 fi
 
-if [[ ! -f "${EXTRACTED_ROOT}/LICENSE.TXT" ]]; then
-  echo "error: LICENSE.TXT missing at extracted root — content looks wrong" >&2
+if [[ ! -f "${EXTRACTED_ROOT}/bin/clang" ]]; then
+  echo "error: bin/clang missing at extracted root — content looks wrong" >&2
   exit 1
 fi
 

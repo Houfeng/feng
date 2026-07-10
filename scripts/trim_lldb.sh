@@ -7,18 +7,32 @@ set -euo pipefail
 # target directory safely — only this tool's dir is touched, other tools'
 # trees under toolchain/ are preserved.
 #
-# Layout produced:
+# Layout produced (macOS):
 #   toolchain/lldb/<os>-<arch>/
 #     bin/lldb, bin/lldb-dap   — the executables
-#     lib/liblldb.dylib        — LLDB shared library (hard dep on macOS)
-#     lib/Python3.framework/   — Python runtime, hard-linked by liblldb
-#     lib/lldb/                — LLDB python plug-ins and support modules
-#     share/lldb/             — python scripts, formatters, settings
-#     LICENSE.TXT             — upstream license
+#     bin/lldb-argdumper       — used by lldb `run` for shell arg expansion
+#     bin/debugserver          — local debug server spawned by lldb on macOS
+#     lib/liblldb.<ver>.dylib  — LLDB shared library (real file, @rpath dep)
+#     lib/liblldb.dylib       — unversioned symlink (preserved)
+#     LICENSE.TXT             — upstream license (when present)
 #     README.md                — provenance and re-sync instructions
 #
-# Deliberately excluded: lldb-server, lldb-mi, lldb-argdumper (server-side /
-# MI helpers not needed for client-side DAP), include/lldb/ (C++ API).
+# On Linux the local debug server is bin/lldb-server instead of bin/debugserver.
+#
+# Deliberately excluded: lldb-mi (MI interface for IDE integration, not
+# needed for DAP / CLI), include/lldb/ (C++ embedding API).
+#
+# Note: lldb-argdumper is included — lldb's `run` command uses it for
+# shell expansion of process args. Without it, `run` fails with
+# "could not find the lldb-argdumper tool".
+#
+# Python: empirical check on LLVM 22.1.8 macOS ARM64 prebuilt shows
+# liblldb links only system libs (libcompression, libpanel/libncurses/
+# libform, libxml2, libedit, Foundation, CoreFoundation, libobjc,
+# CoreServices, Security, libz, libSystem, libc++). No Python3.framework
+# hard-link, no libpython dependency. The build disables Python scripting.
+# Should a future LLVM prebuilt ship Python3.framework / lib/lldb/ /
+# share/lldb/, the conditional blocks below will pick them up.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -96,38 +110,70 @@ cp "${LLVM_EXTRACTED_ROOT}/bin/lldb" "${LLDB_TARGET_DIR}/bin/lldb"
 cp "${LLVM_EXTRACTED_ROOT}/bin/lldb-dap" "${LLDB_TARGET_DIR}/bin/lldb-dap"
 chmod 0755 "${LLDB_TARGET_DIR}/bin/lldb" "${LLDB_TARGET_DIR}/bin/lldb-dap"
 
-# liblldb.dylib — hard dependency on macOS. bin/lldb and bin/lldb-dap both
-# link to it via @rpath; copy the dylib so the link resolves.
-if [[ -f "${LLVM_EXTRACTED_ROOT}/lib/liblldb.dylib" ]]; then
-  mkdir -p "${LLDB_TARGET_DIR}/lib"
-  cp "${LLVM_EXTRACTED_ROOT}/lib/liblldb.dylib" "${LLDB_TARGET_DIR}/lib/liblldb.dylib"
+# lldb-argdumper — used by lldb's `run` command for shell expansion of
+# process args. Without it, `run` fails.
+if [[ -f "${LLVM_EXTRACTED_ROOT}/bin/lldb-argdumper" ]]; then
+  cp "${LLVM_EXTRACTED_ROOT}/bin/lldb-argdumper" "${LLDB_TARGET_DIR}/bin/lldb-argdumper"
+  chmod 0755 "${LLDB_TARGET_DIR}/bin/lldb-argdumper"
 else
-  echo "warning: lib/liblldb.dylib not found — lldb may fail to start" >&2
+  echo "warning: bin/lldb-argdumper not found — lldb 'run' command will fail" >&2
 fi
 
-# lib/Python3.framework — Python runtime hard-linked by liblldb. Without
-# it, lldb fails to load at startup regardless of whether scripting is
-# used. Bundle the whole framework so the hard-link resolves.
+# Local debug server that lldb spawns on the host. macOS uses debugserver;
+# Linux uses lldb-server. Include whichever is present.
+case "${TARGET}" in
+  macos-*)
+    if [[ -f "${LLVM_EXTRACTED_ROOT}/bin/debugserver" ]]; then
+      cp "${LLVM_EXTRACTED_ROOT}/bin/debugserver" "${LLDB_TARGET_DIR}/bin/debugserver"
+      chmod 0755 "${LLDB_TARGET_DIR}/bin/debugserver"
+    else
+      echo "warning: bin/debugserver not found — lldb will not be able to launch processes" >&2
+    fi
+    ;;
+  linux-*)
+    if [[ -f "${LLVM_EXTRACTED_ROOT}/bin/lldb-server" ]]; then
+      cp "${LLVM_EXTRACTED_ROOT}/bin/lldb-server" "${LLDB_TARGET_DIR}/bin/lldb-server"
+      chmod 0755 "${LLDB_TARGET_DIR}/bin/lldb-server"
+    else
+      echo "warning: bin/lldb-server not found — lldb will not be able to launch processes" >&2
+    fi
+    ;;
+esac
+
+# liblldb.<version>.dylib — the real file bin/lldb and bin/lldb-dap link
+# to via @rpath/liblldb.<version>.dylib. The unversioned liblldb.dylib
+# symlink points to it; copy both with cp -PR to preserve the link.
+mkdir -p "${LLDB_TARGET_DIR}/lib"
+if [[ -f "${LLVM_EXTRACTED_ROOT}/lib/liblldb.${LLVM_VERSION}.dylib" ]]; then
+  cp -PR "${LLVM_EXTRACTED_ROOT}/lib/liblldb"*.dylib "${LLDB_TARGET_DIR}/lib/"
+else
+  echo "warning: lib/liblldb.${LLVM_VERSION}.dylib not found — lldb will fail to start" >&2
+fi
+
+# lib/Python3.framework — Python runtime. Empirically absent from the
+# LLVM 22.1.8 macOS prebuilt (the build disables Python scripting, so
+# liblldb has no Python hard-link). Conditional block kept for forward
+# compatibility — if a future LLVM prebuilt ships it, bundle it.
 if [[ -d "${LLVM_EXTRACTED_ROOT}/lib/Python3.framework" ]]; then
-  mkdir -p "${LLDB_TARGET_DIR}/lib"
   cp -R "${LLVM_EXTRACTED_ROOT}/lib/Python3.framework" "${LLDB_TARGET_DIR}/lib/"
-else
-  echo "warning: lib/Python3.framework not found — see §9 Python dependency decision" >&2
 fi
 
-# lib/lldb/ — LLDB's own python plug-ins / support modules. Needed for
-# pretty-printers and dynamic type synthesis in the DAP adapter.
+# lib/lldb/ — LLDB's own python plug-ins / support modules. Conditional,
+# for forward compatibility.
 if [[ -d "${LLVM_EXTRACTED_ROOT}/lib/lldb" ]]; then
-  mkdir -p "${LLDB_TARGET_DIR}/lib"
   cp -R "${LLVM_EXTRACTED_ROOT}/lib/lldb" "${LLDB_TARGET_DIR}/lib/"
 fi
 
+# share/lldb/ — python scripts, formatters, settings. Conditional,
+# for forward compatibility.
 if [[ -d "${LLVM_EXTRACTED_ROOT}/share/lldb" ]]; then
   mkdir -p "${LLDB_TARGET_DIR}/share"
   cp -R "${LLVM_EXTRACTED_ROOT}/share/lldb" "${LLDB_TARGET_DIR}/share/"
 fi
 
-cp "${LLVM_EXTRACTED_ROOT}/LICENSE.TXT" "${LLDB_TARGET_DIR}/LICENSE.TXT"
+if [[ -f "${LLVM_EXTRACTED_ROOT}/LICENSE.TXT" ]]; then
+  cp "${LLVM_EXTRACTED_ROOT}/LICENSE.TXT" "${LLDB_TARGET_DIR}/LICENSE.TXT"
+fi
 
 cat > "${LLDB_TARGET_DIR}/README.md" <<EOF
 # LLVM lldb minimal binary closure
@@ -141,15 +187,22 @@ Source:  https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_V
 Included:
 - \`bin/lldb\` — command-line debugger
 - \`bin/lldb-dap\` — DAP adapter for \`feng dap\` / VS Code
-- \`lib/liblldb.dylib\` — LLDB shared library (hard dependency)
-- \`lib/Python3.framework/\` — Python runtime, hard-linked by liblldb
+- \`bin/lldb-argdumper\` — used by lldb \`run\` for shell arg expansion
+- \`bin/debugserver\` (macOS) / \`bin/lldb-server\` (Linux) — local debug
+  server that lldb spawns on the host
+- \`lib/liblldb.${LLVM_VERSION}.dylib\` — LLDB shared library (real file,
+  the @rpath dep bin/lldb and bin/lldb-dap load)
+- \`lib/liblldb.dylib\` — unversioned symlink (preserved)
+- \`LICENSE.TXT\` — upstream license (when present in upstream prebuilt)
+
+Conditional (present in some upstream builds; absent in LLVM 22.1.8 macOS):
+- \`lib/Python3.framework/\` — Python runtime, hard-linked by liblldb when
+  the upstream build enables Python scripting
 - \`lib/lldb/\` — LLDB python plug-ins and dynamic type support
 - \`share/lldb/\` — python scripts, formatters, settings
-- \`LICENSE.TXT\` — upstream license
 
 Deliberately excluded:
-- \`bin/lldb-server\`, \`bin/lldb-mi\`, \`bin/lldb-argdumper\` (not needed
-  for client-side DAP / CLI debugging on the local host)
+- \`bin/lldb-mi\` (MI interface for IDE integration, not needed for DAP / CLI)
 - \`include/lldb/\` (C++ embedding API)
 
 The feng compiler locates this directory by its own executable position.

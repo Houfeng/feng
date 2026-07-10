@@ -104,7 +104,9 @@ if [[ -d "${LLVM_EXTRACTED_ROOT}/share/clang" ]]; then
   cp -R "${LLVM_EXTRACTED_ROOT}/share/clang" "${CLANG_TARGET_DIR}/share/"
 fi
 
-cp "${LLVM_EXTRACTED_ROOT}/LICENSE.TXT" "${CLANG_TARGET_DIR}/LICENSE.TXT"
+if [[ -f "${LLVM_EXTRACTED_ROOT}/LICENSE.TXT" ]]; then
+  cp "${LLVM_EXTRACTED_ROOT}/LICENSE.TXT" "${CLANG_TARGET_DIR}/LICENSE.TXT"
+fi
 
 cat > "${CLANG_TARGET_DIR}/README.md" <<EOF
 # LLVM clang minimal binary closure
