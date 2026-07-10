@@ -169,7 +169,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
   2. 拼接下载 URL，下载 zip 到系统临时目录（`$TMPDIR`，回退 `/tmp`）
   3. 校验 SHA-256（从 release notes 或同目录 `.sha256` 读取）
   4. 解压到 `$HOME/.feng/`
-  5. 提示用户将 `$HOME/.feng/bin` 加入 `PATH`
+  5. 自动将 `$HOME/.feng/bin` 加入 `PATH`（自动写入 `$SHELL` 对应启动脚本；仅在需要管理员权限时提示用户授权）
 - 失败时必须清理半成品目录，不留残文件。
 
 ## 8 验收清单
