@@ -112,7 +112,7 @@ open type Screen {
         let y = (u32)((u64)i / (u64)w);
         let x = (u32)((u64)i % (u64)w);
         // 光标定位：\x1b[y;xH（1-based）
-        output.add((byte)0x1b);
+        output.add((byte)0x1b); // ESC
         output.add((byte)0x5b); // '['
         self.writeDecimal(output, (y + (u32)1));
         output.add((byte)0x3b); // ';'
@@ -130,7 +130,7 @@ open type Screen {
     }
     // 渲染完成后重置 SGR（避免样式泄漏到后续终端输出）
     if self.currentSgr != (u64)0 {
-      output.add((byte)0x1b);
+      output.add((byte)0x1b); // ESC
       output.add((byte)0x5b); // '['
       output.add((byte)0x30); // '0'
       output.add((byte)0x6d); // 'm'
@@ -190,13 +190,13 @@ open type Screen {
     let bg = (u32)((style >> (u64)24) & Cell.MASK_FG);
     // 若前景、背景、样式标志全为零，发射 SGR 重置 \x1b[0m
     if fg == (u32)0 && bg == (u32)0 && style == (u64)0 {
-      output.add((byte)0x1b);
+      output.add((byte)0x1b); // ESC
       output.add((byte)0x5b); // '['
       output.add((byte)0x30); // '0'
       output.add((byte)0x6d); // 'm'
       return;
     }
-    output.add((byte)0x1b);
+    output.add((byte)0x1b); // ESC
     output.add((byte)0x5b); // '['
     var first: bool = true;
     // 前景色：38;2;r;g;b
@@ -280,21 +280,26 @@ open type Screen {
    * @param cp - Unicode 码点
    */
   seal func writeCodepoint(output: List<byte>, cp: u64) {
+    // 码点 0 渲染为空格（终端不显示 NUL）
     if cp == (u64)0 {
       output.add((byte)0x20); // 空格
       return;
     }
     let c = (u32)cp;
+    // 1 字节序列：0xxxxxxx（U+0000..U+007F，已排除 NUL）
     if c < (u32)0x80 {
       output.add((byte)c);
     } else if c < (u32)0x800 {
+      // 2 字节序列：110xxxxx 10xxxxxx（U+0080..U+07FF）
       output.add((byte)((u32)0xC0 | (c >> (u32)6)));
       output.add((byte)((u32)0x80 | (c & (u32)0x3F)));
     } else if c < (u32)0x10000 {
+      // 3 字节序列：1110xxxx 10xxxxxx 10xxxxxx（U+0800..U+FFFF）
       output.add((byte)((u32)0xE0 | (c >> (u32)12)));
       output.add((byte)((u32)0x80 | ((c >> (u32)6) & (u32)0x3F)));
       output.add((byte)((u32)0x80 | (c & (u32)0x3F)));
     } else {
+      // 4 字节序列：11110xxx 10xxxxxx 10xxxxxx 10xxxxxx（U+10000..U+10FFFF）
       output.add((byte)((u32)0xF0 | (c >> (u32)18)));
       output.add((byte)((u32)0x80 | ((c >> (u32)12) & (u32)0x3F)));
       output.add((byte)((u32)0x80 | ((c >> (u32)6) & (u32)0x3F)));
