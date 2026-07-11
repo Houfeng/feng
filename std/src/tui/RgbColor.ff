@@ -1,0 +1,36 @@
+open module std.tui;
+
+/**
+ * RgbColor 表示一个 RGB 颜色值，用于终端前景色和背景色。
+ *
+ * @value 类型，3 字节字段（r, g, b），值语义。
+ * 在 Buffer 的 draw 方法中配合 Option<RgbColor> 使用：
+ *   - none 表示终端默认色（不写入 style 的颜色位段）
+ *   - RgbColor(0xFF, 0x00, 0x00) 表示指定颜色
+ */
+@value
+open type RgbColor {
+  /** 红色分量（0-255） */
+  open var r: u8;
+  /** 绿色分量（0-255） */
+  open var g: u8;
+  /** 蓝色分量（0-255） */
+  open var b: u8;
+
+  /**
+   * 默认构造函数：创建黑色 (0, 0, 0)。
+   */
+  func RgbColor() {}
+
+  /**
+   * 构造函数：创建指定 RGB 分量的颜色。
+   * @param r - 红色分量（0-255）
+   * @param g - 绿色分量（0-255）
+   * @param b - 蓝色分量（0-255）
+   */
+  func RgbColor(r: u8, g: u8, b: u8) {
+    self.r = r;
+    self.g = g;
+    self.b = b;
+  }
+}

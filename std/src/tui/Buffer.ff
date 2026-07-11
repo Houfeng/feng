@@ -1,6 +1,8 @@
 open module std.tui;
 
-// ─── extern 函数声明（用于 drawText 码点解码） ──────────────────────────────
+import std;
+
+// ─── extern 函数声明（用于 draw 码点解码） ──────────────────────────────
 
 /** libunistring: 解码下一个 UTF-8 码点，返回指向下一个码点起点的指针 */
 @cdecl("feng_std_unistring", "u8_next")
@@ -78,6 +80,29 @@ open type Buffer {
     return result;
   }
 
+  /**
+   * 将前景色、背景色和样式数组打包为完整的 u64 样式编码。
+   * none 的颜色不写入对应位段，表示终端默认色。
+   * @param fg - 前景色（none 表示终端默认前景色）
+   * @param bg - 背景色（none 表示终端默认背景色）
+   * @param styles - 样式数组
+   * @return 完整的 u64 样式编码
+   */
+  seal func packStyle(fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): u64 {
+    var s = self.combineStyles(styles);
+    match fg {
+      c: RgbColor {
+        s |= ((u64)c.r << (u64)16) | ((u64)c.g << (u64)8) | (u64)c.b;
+      }
+    }
+    match bg {
+      c: RgbColor {
+        s |= (((u64)c.r << (u64)16) | ((u64)c.g << (u64)8) | (u64)c.b) << (u64)24;
+      }
+    }
+    return s;
+  }
+
   // ─── draw 数组版本（seal，内部实现 + fill 转发用） ─────────────────────────
 
   /**
@@ -87,10 +112,12 @@ open type Buffer {
    * @param x - 起始列坐标（0-based）
    * @param y - 行坐标（0-based）
    * @param text - 要绘制的文本
+   * @param fg - 前景色（none 表示终端默认）
+   * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
    */
-  seal func draw(x: u32, y: u32, text: string, styles: Style[]): void {
-    let s = self.combineStyles(styles);
+  seal func draw(x: u32, y: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): void {
+    let s = self.packStyle(fg, bg, styles);
     if y >= self.height {
       return;
     }
@@ -122,10 +149,12 @@ open type Buffer {
    * @param w - 矩形宽度
    * @param h - 矩形高度
    * @param text - 要绘制的文本
+   * @param fg - 前景色（none 表示终端默认）
+   * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
    */
-  seal func draw(x: u32, y: u32, w: u32, h: u32, text: string, styles: Style[]): void {
-    let s = self.combineStyles(styles);
+  seal func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): void {
+    let s = self.packStyle(fg, bg, styles);
     let data: string* = &text;
     var cursor: string* = data;
     var uc: u32 = 0;
@@ -160,10 +189,12 @@ open type Buffer {
    * @param x - 列坐标（0-based）
    * @param y - 行坐标（0-based）
    * @param value - Unicode 码点
+   * @param fg - 前景色（none 表示终端默认）
+   * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
    */
-  seal func draw(x: u32, y: u32, value: u64, styles: Style[]): void {
-    let s = self.combineStyles(styles);
+  seal func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): void {
+    let s = self.packStyle(fg, bg, styles);
     if x >= self.width || y >= self.height {
       return;
     }
@@ -179,10 +210,12 @@ open type Buffer {
    * @param w - 矩形宽度
    * @param h - 矩形高度
    * @param value - Unicode 码点
+   * @param fg - 前景色（none 表示终端默认）
+   * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
    */
-  seal func draw(x: u32, y: u32, w: u32, h: u32, value: u64, styles: Style[]): void {
-    let s = self.combineStyles(styles);
+  seal func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): void {
+    let s = self.packStyle(fg, bg, styles);
     var row: u32 = 0;
     while row < h {
       let cy = y + row;
@@ -204,21 +237,21 @@ open type Buffer {
     }
   }
 
-  // ─── draw 变长参数版本（open，公开 API） ───────────────────────────────────
+  // ─── draw 变长参数版本 — 无颜色（open，公开 API） ──────────────────────────
 
   /**
-   * 在 (x, y) 处绘制文本，逐码点写入连续 Cell。
+   * 在 (x, y) 处绘制文本，使用终端默认前景色和背景色。
    * @param x - 起始列坐标（0-based）
    * @param y - 行坐标（0-based）
    * @param text - 要绘制的文本
    * @param styles - 样式变长参数
    */
   func draw(x: u32, y: u32, text: string, styles: Style...): void {
-    self.draw(x, y, text, styles);
+    self.draw(x, y, text, none, none, styles);
   }
 
   /**
-   * 在 (x, y, w, h) 矩形区域内绘制文本，自动换行。
+   * 在 (x, y, w, h) 矩形区域内绘制文本，使用终端默认颜色。
    * @param x - 起始列坐标（0-based）
    * @param y - 起始行坐标（0-based）
    * @param w - 矩形宽度
@@ -227,22 +260,22 @@ open type Buffer {
    * @param styles - 样式变长参数
    */
   func draw(x: u32, y: u32, w: u32, h: u32, text: string, styles: Style...): void {
-    self.draw(x, y, w, h, text, styles);
+    self.draw(x, y, w, h, text, none, none, styles);
   }
 
   /**
-   * 在 (x, y) 处绘制单个码点。
+   * 在 (x, y) 处绘制单个码点，使用终端默认颜色。
    * @param x - 列坐标（0-based）
    * @param y - 行坐标（0-based）
    * @param value - Unicode 码点
    * @param styles - 样式变长参数
    */
   func draw(x: u32, y: u32, value: u64, styles: Style...): void {
-    self.draw(x, y, value, styles);
+    self.draw(x, y, value, none, none, styles);
   }
 
   /**
-   * 在 (x, y, w, h) 矩形区域内填充码点。
+   * 在 (x, y, w, h) 矩形区域内填充码点，使用终端默认颜色。
    * @param x - 起始列坐标（0-based）
    * @param y - 起始行坐标（0-based）
    * @param w - 矩形宽度
@@ -251,24 +284,146 @@ open type Buffer {
    * @param styles - 样式变长参数
    */
   func draw(x: u32, y: u32, w: u32, h: u32, value: u64, styles: Style...): void {
-    self.draw(x, y, w, h, value, styles);
+    self.draw(x, y, w, h, value, none, none, styles);
+  }
+
+  // ─── draw 变长参数版本 — 带前景色（open，公开 API） ────────────────────────
+
+  /**
+   * 在 (x, y) 处绘制文本，指定前景色，背景色使用终端默认。
+   * @param x - 起始列坐标（0-based）
+   * @param y - 行坐标（0-based）
+   * @param text - 要绘制的文本
+   * @param fg - 前景色
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, text: string, fg: RgbColor, styles: Style...): void {
+    self.draw(x, y, text, fg, none, styles);
+  }
+
+  /**
+   * 在 (x, y, w, h) 矩形区域内绘制文本，指定前景色。
+   * @param x - 起始列坐标（0-based）
+   * @param y - 起始行坐标（0-based）
+   * @param w - 矩形宽度
+   * @param h - 矩形高度
+   * @param text - 要绘制的文本
+   * @param fg - 前景色
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: RgbColor, styles: Style...): void {
+    self.draw(x, y, w, h, text, fg, none, styles);
+  }
+
+  /**
+   * 在 (x, y) 处绘制单个码点，指定前景色。
+   * @param x - 列坐标（0-based）
+   * @param y - 行坐标（0-based）
+   * @param value - Unicode 码点
+   * @param fg - 前景色
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, value: u64, fg: RgbColor, styles: Style...): void {
+    self.draw(x, y, value, fg, none, styles);
+  }
+
+  /**
+   * 在 (x, y, w, h) 矩形区域内填充码点，指定前景色。
+   * @param x - 起始列坐标（0-based）
+   * @param y - 起始行坐标（0-based）
+   * @param w - 矩形宽度
+   * @param h - 矩形高度
+   * @param value - Unicode 码点
+   * @param fg - 前景色
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: RgbColor, styles: Style...): void {
+    self.draw(x, y, w, h, value, fg, none, styles);
+  }
+
+  // ─── draw 变长参数版本 — 带前景色及背景色（open，公开 API） ──────────────
+
+  /**
+   * 在 (x, y) 处绘制文本，指定前景色和背景色。
+   * @param x - 起始列坐标（0-based）
+   * @param y - 行坐标（0-based）
+   * @param text - 要绘制的文本
+   * @param fg - 前景色
+   * @param bg - 背景色
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, text: string, fg: RgbColor, bg: RgbColor, styles: Style...): void {
+    self.draw(x, y, text, fg, bg, styles);
+  }
+
+  /**
+   * 在 (x, y, w, h) 矩形区域内绘制文本，指定前景色和背景色。
+   * @param x - 起始列坐标（0-based）
+   * @param y - 起始行坐标（0-based）
+   * @param w - 矩形宽度
+   * @param h - 矩形高度
+   * @param text - 要绘制的文本
+   * @param fg - 前景色
+   * @param bg - 背景色
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: RgbColor, bg: RgbColor, styles: Style...): void {
+    self.draw(x, y, w, h, text, fg, bg, styles);
+  }
+
+  /**
+   * 在 (x, y) 处绘制单个码点，指定前景色和背景色。
+   * @param x - 列坐标（0-based）
+   * @param y - 行坐标（0-based）
+   * @param value - Unicode 码点
+   * @param fg - 前景色
+   * @param bg - 背景色
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, value: u64, fg: RgbColor, bg: RgbColor, styles: Style...): void {
+    self.draw(x, y, value, fg, bg, styles);
+  }
+
+  /**
+   * 在 (x, y, w, h) 矩形区域内填充码点，指定前景色和背景色。
+   * @param x - 起始列坐标（0-based）
+   * @param y - 起始行坐标（0-based）
+   * @param w - 矩形宽度
+   * @param h - 矩形高度
+   * @param value - Unicode 码点
+   * @param fg - 前景色
+   * @param bg - 背景色
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: RgbColor, bg: RgbColor, styles: Style...): void {
+    self.draw(x, y, w, h, value, fg, bg, styles);
   }
 
   // ─── 便利方法 ─────────────────────────────────────────────────────────────
 
   /**
-   * 用指定的码点和样式填充整个矩阵。
-   * 等价于 draw(0, 0, width, height, value, styles)。
+   * 用指定的码点、前景色、背景色和样式填充整个矩阵。
+   * 等价于 draw(0, 0, width, height, value, fg, bg, styles)。
+   * @param value - Unicode 码点
+   * @param fg - 前景色
+   * @param bg - 背景色
+   * @param styles - 样式变长参数
+   */
+  func fill(value: u64, fg: RgbColor, bg: RgbColor, styles: Style...): void {
+    self.draw((u32)0, (u32)0, self.width, self.height, value, fg, bg, styles);
+  }
+
+  /**
+   * 用指定的码点填充整个矩阵，使用终端默认颜色。
    * @param value - Unicode 码点
    * @param styles - 样式变长参数
    */
   func fill(value: u64, styles: Style...): void {
-    self.draw((u32)0, (u32)0, self.width, self.height, value, styles);
+    self.draw((u32)0, (u32)0, self.width, self.height, value, none, none, styles);
   }
 
   /**
    * 清空整个矩阵，将所有 Cell 重置为默认值（value=0, style=0）。
-   * 等价于 fill(0)。
    */
   func clear(): void {
     self.fill((u64)0);
