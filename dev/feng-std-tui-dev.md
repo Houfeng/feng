@@ -87,30 +87,48 @@
 
 ## 4 实施路线
 
+每个阶段遵循统一流程：实现代码 → 补充 std_test 用例 → 全量回归测试 → 等待人工 Review。
+
+- **std_test 用例**：在 `std_test/src/test_tui.ff` 中新增对应测试函数，注册到 `run_tui_tests()`，并在 `z_main.ff` 中调用。
+- **全量回归测试**：执行 `make test`，确保所有测试套件通过
+- **人工 Review**：变更完成后通知开发者审查，审查通过后方可进入下一阶段。严禁跳过 Review 直接开始下一阶段。
+
 ### 第一阶段：渲染底座（1-3 层）
 
 - [ ] 4.1 完善 Cell：构造函数、静态常量、工厂方法
 - [ ] 4.2 实现 Buffer：Cell 矩阵管理 + 绘制原语
 - [ ] 4.3 实现 Screen：双缓冲 + Diff 引擎 + ANSI 序列生成 + I/O 批处理
+- [ ] 4.4 补充 std_test 用例：新增 `std_test/src/test_tui.ff`，覆盖 Cell 样式读写、Buffer 绘制原语、Screen Diff 输出等；注册 `run_tui_tests()` 并在 `z_main.ff` 中调用
+- [ ] 4.5 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.6 等待人工 Review：开发者审查 Cell / Buffer / Screen 实现与测试用例，通过后方可进入第二阶段
 
 ### 第二阶段：视图逻辑层（第 4 层 - 简化版）
 
-- [ ] 4.4 实现简单 Widget 基类 + Text + Button
-- [ ] 4.5 实现简单的线性布局（Row / Column / Stack）
+- [ ] 4.7 实现简单 Widget 基类 + Text + Button
+- [ ] 4.8 实现简单的线性布局（Row / Column / Stack）
+- [ ] 4.9 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 渲染、Text 内容绘制、Button 状态切换等测试
+- [ ] 4.10 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.11 等待人工 Review：开发者审查 Widget 层设计与实现，通过后方可进入第三阶段
 
 ### 第三阶段：应用控制层（第 5 层）
 
-- [ ] 4.6 实现 TuiApp：Raw Mode + 终端恢复 + SIGWINCH
-- [ ] 4.7 实现输入解析状态机 + 事件路由
+- [ ] 4.12 实现 TuiApp：Raw Mode + 终端恢复 + SIGWINCH
+- [ ] 4.13 实现输入解析状态机 + 事件路由
+- [ ] 4.14 补充 std_test 用例：在 `test_tui.ff` 中新增输入解析状态机（VT100/xterm 转义序列）、事件路由等测试
+- [ ] 4.15 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.16 等待人工 Review：开发者审查 TuiApp 生命周期与终端恢复机制，通过后方可进入第四阶段
 
 ### 第四阶段：测试与验证
 
-- [ ] 4.8 全量回归测试
-- [ ] 4.9 fcts 兼容性测试
+- [ ] 4.17 补充 std_test 用例：审查前三阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
+- [ ] 4.18 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.19 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
+
+> **fcts 用例策略**：std 中的功能默认使用 std_test 用例，不需要 fcts 用例。仅当遇到 Feng 语言层面的问题（如语法、语义、类型系统等编译器行为）时，才在 `fcts/fcts_bin/src/` 中新增 fcts 用例进行兼容性验证。
 
 ## 5 文件组织
 
-```
+```text
 std/src/tui/
   Cell.ff          # Cell（最小单元）
   Buffer.ff        # Buffer（Cell 矩阵）
@@ -132,3 +150,8 @@ std/src/tui/
 - 生产级高标准实现：注意性能、安全性、复用性、可维护性。
 - runtime 是私有 ABI，仅在 Feng + C ABI 无法实现时才考虑。
 - 未经允许，禁止修改已有的测试用例。
+- 每个阶段实现后必须先补充 std_test 用例，再执行全量回归测试，最后等待人工 Review。
+- 严禁跳过人工 Review 直接进入下一阶段。
+- 全量回归测试命令统一使用 `make test`，必须确认全部通过（EXIT:0）。
+- std_test 用例文件统一放在 `std_test/src/test_tui.ff`，遵循现有 `test_*.ff` 命名与 `run_*_tests()` 注册模式。
+- std 中的功能默认使用 std_test 用例，不需要 fcts 用例；仅当遇到 Feng 语言层面的问题（语法、语义、类型系统等编译器行为）时，才新增 fcts 用例。
