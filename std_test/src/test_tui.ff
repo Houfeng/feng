@@ -3,6 +3,7 @@ module std_test;
 import std;
 import std.test;
 import std.collections;
+import std.text;
 
 import std.tui;
 
@@ -558,6 +559,185 @@ func buffer_matrix_index() {
   check(buf.cells[idx34].value == (u64)304, "tui/buffer/matrix-4-3");
 }
 
+// ─── Screen 基础结构 ───────────────────────────────────────────────────────
+
+func screen_ctor() {
+  let scr = Screen((u32)10, (u32)5);
+  let sz = scr.size();
+  check(sz.item1 == (u32)10, "tui/screen/ctor-width");
+  check(sz.item2 == (u32)5, "tui/screen/ctor-height");
+}
+
+func screen_buffer_returns_back() {
+  let scr = Screen((u32)10, (u32)5);
+  let buf = scr.buffer();
+  // buffer() 返回的 Buffer 可正常绘制
+  buf.draw((u32)0, (u32)0, "Hi");
+  check(buf.cells[(int)0].value == (u64)72, "tui/screen/buffer-draw-h");
+  check(buf.cells[(int)1].value == (u64)105, "tui/screen/buffer-draw-i");
+}
+
+func screen_clear() {
+  let scr = Screen((u32)5, (u32)2);
+  scr.buffer().draw((u32)0, (u32)0, "AB");
+  scr.clear();
+  check(scr.buffer().cells[(int)0].value == (u64)0, "tui/screen/clear-0");
+  check(scr.buffer().cells[(int)1].value == (u64)0, "tui/screen/clear-1");
+}
+
+func screen_render_empty_no_diff() {
+  let scr = Screen((u32)5, (u32)2);
+  // front 和 back 都是空白，render() 应返回空字符串（无差异）
+  let out = scr.render();
+  check(out.length() == (int)0, "tui/screen/render-empty-no-diff");
+}
+
+func screen_render_full_diff() {
+  let scr = Screen((u32)5, (u32)2);
+  scr.buffer().draw((u32)0, (u32)0, "Hi");
+  // 第一次 render，front 全空白，back 有内容 → 应输出差异序列
+  let out = scr.render();
+  check(out.length() > (int)0, "tui/screen/render-full-diff-nonempty");
+  // 第二次 render，front 已同步 → 应无差异
+  let out2 = scr.render();
+  check(out2.length() == (int)0, "tui/screen/render-after-sync-no-diff");
+}
+
+func screen_render_cursor_position() {
+  let scr = Screen((u32)10, (u32)5);
+  // 在 (2, 1) 处绘制
+  scr.buffer().draw((u32)2, (u32)1, (u64)65);
+  let out = scr.render();
+  // 应包含光标定位序列 \x1b[2;3H（行=2, 列=3，1-based）
+  check(out.contains("\x1b[2;3H"), "tui/screen/render-cursor-position");
+}
+
+func screen_render_codepoint_output() {
+  let scr = Screen((u32)5, (u32)2);
+  scr.buffer().draw((u32)0, (u32)0, (u64)65);  // 'A'
+  let out = scr.render();
+  check(out.contains("A"), "tui/screen/render-codepoint-ascii");
+}
+
+func screen_render_codepoint_zero_to_space() {
+  let scr = Screen((u32)5, (u32)2);
+  // 先绘制非零内容并 render 同步到 front
+  scr.buffer().draw((u32)0, (u32)0, "AB");
+  scr.render();
+  // 清空 back 为码点 0，render 时码点 0 应输出空格
+  scr.buffer().fill((u64)0);
+  let out = scr.render();
+  check(out.contains(" "), "tui/screen/render-codepoint-zero-space");
+}
+
+func screen_render_sgr_reset() {
+  let scr = Screen((u32)5, (u32)2);
+  scr.buffer().draw((u32)0, (u32)0, "X", Style.bold);
+  let out = scr.render();
+  // 渲染结束后应重置 SGR
+  check(out.contains("\x1b[0m"), "tui/screen/render-sgr-reset");
+}
+
+func screen_render_sgr_bold() {
+  let scr = Screen((u32)5, (u32)2);
+  scr.buffer().draw((u32)0, (u32)0, "X", Style.bold);
+  let out = scr.render();
+  // SGR 序列应包含 bold (1)
+  check(out.contains("\x1b[1m") || out.contains(";1m"), "tui/screen/render-sgr-bold");
+}
+
+func screen_render_sgr_fg_color() {
+  let scr = Screen((u32)5, (u32)2);
+  scr.buffer().draw((u32)0, (u32)0, "X", RgbColor((u8)0xFF, (u8)0x00, (u8)0x00));
+  let out = scr.render();
+  // 前景色 38;2;255;0;0
+  check(out.contains("38;2;255;0;0"), "tui/screen/render-sgr-fg-color");
+}
+
+func screen_render_sgr_fg_bg_color() {
+  let scr = Screen((u32)5, (u32)2);
+  scr.buffer().draw((u32)0, (u32)0, "X",
+    RgbColor((u8)0xFF, (u8)0x00, (u8)0x00),
+    RgbColor((u8)0x00, (u8)0x00, (u8)0xFF));
+  let out = scr.render();
+  // 前景色 38;2;255;0;0 和背景色 48;2;0;0;255
+  check(out.contains("38;2;255;0;0"), "tui/screen/render-sgr-fg");
+  check(out.contains("48;2;0;0;255"), "tui/screen/render-sgr-bg");
+}
+
+func screen_render_sgr_multi_style() {
+  let scr = Screen((u32)5, (u32)2);
+  scr.buffer().draw((u32)0, (u32)0, "X", Style.bold, Style.italic, Style.underline);
+  let out = scr.render();
+  // SGR 应包含 1;3;4
+  check(out.contains("1"), "tui/screen/render-sgr-multi-bold");
+  check(out.contains("3"), "tui/screen/render-sgr-multi-italic");
+  check(out.contains("4"), "tui/screen/render-sgr-multi-underline");
+}
+
+func screen_render_partial_diff() {
+  let scr = Screen((u32)10, (u32)2);
+  // 第一次绘制 + render
+  scr.buffer().draw((u32)0, (u32)0, "Hello");
+  let out1 = scr.render();
+  check(out1.length() > (int)0, "tui/screen/partial-diff-first");
+
+  // 只修改一个 cell
+  scr.buffer().draw((u32)0, (u32)0, (u64)74);  // 'J'
+  let out2 = scr.render();
+  // 应只包含一个 cell 的差异，输出应比第一次短
+  check(out2.length() < out1.length(), "tui/screen/partial-diff-second-shorter");
+  check(out2.contains("J"), "tui/screen/partial-diff-second-contains-j");
+}
+
+func screen_render_no_sgr_for_unchanged_style() {
+  let scr = Screen((u32)10, (u32)2);
+  // 绘制两个连续 cell，相同样式
+  scr.buffer().draw((u32)0, (u32)0, "AB", Style.bold);
+  let out = scr.render();
+  // 应只发射一次 SGR bold（统计 "\x1b[" 后含 "1" 的 SGR 序列出现次数）
+  // 验证：输出中 "1m" 或 ";1m" 只出现一次（不算最终 \x1b[0m）
+  let resetSeq = "\x1b[0m";
+  let withoutReset = out.replace(resetSeq, "");
+  // bold SGR 序列 "\x1b[" 开头且以 "m" 结尾，包含 "1"
+  check(withoutReset.contains("1m"), "tui/screen/no-sgr-repeat-bold-present");
+}
+
+func screen_resize() {
+  let scr = Screen((u32)5, (u32)3);
+  scr.buffer().draw((u32)0, (u32)0, "Hi");
+  scr.render();  // 同步 front
+
+  // resize 后尺寸应更新
+  scr.resize((u32)10, (u32)5);
+  let sz = scr.size();
+  check(sz.item1 == (u32)10, "tui/screen/resize-width");
+  check(sz.item2 == (u32)5, "tui/screen/resize-height");
+
+  // resize 后 back 为空白
+  check(scr.buffer().cells[(int)0].value == (u64)0, "tui/screen/resize-back-cleared");
+
+  // resize 后 front 也清空，绘制新内容后 render 应全量重绘
+  scr.buffer().draw((u32)0, (u32)0, "X");
+  let out = scr.render();
+  check(out.length() > (int)0, "tui/screen/resize-render-full");
+  check(out.contains("X"), "tui/screen/resize-render-contains-x");
+}
+
+func screen_render_unicode_chinese() {
+  let scr = Screen((u32)10, (u32)2);
+  scr.buffer().draw((u32)0, (u32)0, "中");
+  let out = scr.render();
+  check(out.contains("中"), "tui/screen/render-unicode-chinese");
+}
+
+func screen_render_unicode_emoji() {
+  let scr = Screen((u32)10, (u32)2);
+  scr.buffer().draw((u32)0, (u32)0, "😀");
+  let out = scr.render();
+  check(out.contains("😀"), "tui/screen/render-unicode-emoji");
+}
+
 open func run_tui_tests() {
   describe("tui tests", () {
     test("cell_mask_fg()", () { cell_mask_fg(); });
@@ -619,5 +799,24 @@ open func run_tui_tests() {
     test("buffer_fill_with_fg_bg()", () { buffer_fill_with_fg_bg(); });
     test("buffer_clear()", () { buffer_clear(); });
     test("buffer_matrix_index()", () { buffer_matrix_index(); });
+    // ─── Screen ───
+    test("screen_ctor()", () { screen_ctor(); });
+    test("screen_buffer_returns_back()", () { screen_buffer_returns_back(); });
+    test("screen_clear()", () { screen_clear(); });
+    test("screen_render_empty_no_diff()", () { screen_render_empty_no_diff(); });
+    test("screen_render_full_diff()", () { screen_render_full_diff(); });
+    test("screen_render_cursor_position()", () { screen_render_cursor_position(); });
+    test("screen_render_codepoint_output()", () { screen_render_codepoint_output(); });
+    test("screen_render_codepoint_zero_to_space()", () { screen_render_codepoint_zero_to_space(); });
+    test("screen_render_sgr_reset()", () { screen_render_sgr_reset(); });
+    test("screen_render_sgr_bold()", () { screen_render_sgr_bold(); });
+    test("screen_render_sgr_fg_color()", () { screen_render_sgr_fg_color(); });
+    test("screen_render_sgr_fg_bg_color()", () { screen_render_sgr_fg_bg_color(); });
+    test("screen_render_sgr_multi_style()", () { screen_render_sgr_multi_style(); });
+    test("screen_render_partial_diff()", () { screen_render_partial_diff(); });
+    test("screen_render_no_sgr_for_unchanged_style()", () { screen_render_no_sgr_for_unchanged_style(); });
+    test("screen_resize()", () { screen_resize(); });
+    test("screen_render_unicode_chinese()", () { screen_render_unicode_chinese(); });
+    test("screen_render_unicode_emoji()", () { screen_render_unicode_emoji(); });
   });
 }

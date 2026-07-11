@@ -1,0 +1,221 @@
+open module std.tui;
+
+import std;
+import std.collections;
+import std.text;
+import std.numeric;
+
+// ─── ANSI 转义序列常量 ─────────────────────────────────────────────────────
+
+/**
+ * Screen 表示终端用户界面（TUI）的渲染底座——差异同步层。
+ *
+ * 采用双缓冲 + Diff 引擎：`back` 是应用绘制当前帧的画布，`front` 是上次
+ * render 后发送给终端的内容快照（diff 基准）。`render()` 时逐 cell 比较
+ * 两者，只对变化的 cell 发射 ANSI 序列，渲染后用 back 覆盖 front（memcpy，
+ * 不交换指针——交换会导致 back 残留上一帧内容、被迫全刷，性能反而下降）。
+ *
+ * 终端是有状态设备，"双缓冲"在此处是 diff 模型而非图形系统的页翻转。
+ */
+open type Screen {
+
+  // ─── 双缓冲 ─────────────────────────────────────────────────────────────
+
+  /** diff 基准：上次 render 后发送给终端的内容快照，永不对外暴露 */
+  seal var front: Buffer;
+
+  /** 绘制表面：应用通过 buffer() 获取此引用后自由绘制 */
+  seal var back: Buffer;
+
+  // ─── SGR 状态机 ─────────────────────────────────────────────────────────
+
+  /** render() 过程中跟踪的当前 SGR 样式编码（0 表示尚未发射任何 SGR） */
+  seal var currentSgr: u64;
+
+  // ─── 构造函数 ─────────────────────────────────────────────────────────────
+
+  /**
+   * 构造函数：创建指定尺寸的 Screen，front/back 均初始化为空白 Buffer。
+   * @param width - 屏幕列数
+   * @param height - 屏幕行数
+   */
+  func Screen(width: u32, height: u32) {
+    self.front = Buffer(width, height);
+    self.back = Buffer(width, height);
+    self.currentSgr = (u64)0;
+  }
+
+  // ─── 公开 API ───────────────────────────────────────────────────────────
+
+  /**
+   * 返回 back buffer 引用，供应用绘制当前帧。
+   * 调用方可在返回的 Buffer 上直接调用 draw / fill / clear 等方法。
+   * resize() 后需重新调用此方法获取最新引用。
+   * @return back buffer
+   */
+  open func buffer(): Buffer {
+    return self.back;
+  }
+
+  /**
+   * 返回当前屏幕尺寸（列数, 行数）。
+   * @return Tuple<u32, u32>，item1 为 width，item2 为 height
+   */
+  open func size(): Tuple<u32, u32> {
+    return (self.back.width, self.back.height);
+  }
+
+  /**
+   * 调整屏幕尺寸：重建 front/back 为新尺寸的空白 Buffer。
+   * 旧内容不迁移——TUI resize 时旧内容无法对齐，由上层组件树负责重新布局。
+   * front 同时清空，使下次 render() 产生全量重绘。
+   * @param width - 新列数
+   * @param height - 新行数
+   */
+  open func resize(width: u32, height: u32) {
+    self.front = Buffer(width, height);
+    self.back = Buffer(width, height);
+    self.currentSgr = (u64)0;
+  }
+
+  /**
+   * 清空 back buffer（将所有 Cell 重置为默认值），不影响 front。
+   * 下次 render() 时清空区域会作为变化发送给终端。
+   */
+  open func clear() {
+    self.back.clear();
+  }
+
+  /**
+   * 渲染：比较 back 与 front 的差异，生成 ANSI 转义序列字符串。
+   * 渲染完成后将 back 的内容覆盖到 front（memcpy，不交换指针），
+   * 使 front 成为新的 diff 基准。连续相同 style 的 cell 只发射一次 SGR 序列。
+   * @return ANSI 转义序列字符串，由调用方负责写入 stdout
+   */
+  open func render(): string {
+    let w = self.back.width;
+    let h = self.back.height;
+    let total = (int)((u64)w * (u64)h);
+    let frontCells = self.front.cells;
+    let backCells = self.back.cells;
+    var output = "";
+
+    // 逐 cell 比较并发射差异序列
+    var i: int = 0;
+    while i < total {
+      let f = frontCells[i];
+      let b = backCells[i];
+
+      // 值或样式有变化才发射
+      if f.value != b.value || f.style != b.style {
+        // 计算此 cell 的 (x, y) 坐标
+        let y = (u32)((u64)i / (u64)w);
+        let x = (u32)((u64)i % (u64)w);
+
+        // 光标定位：\x1b[y;xH（1-based）
+        output = output + "\x1b[" + (y + (u32)1).toString() + ";" + (x + (u32)1).toString() + "H";
+
+        // SGR 状态机：仅当 style 变化时发射 SGR 序列
+        if self.currentSgr != b.style {
+          output = output + self.buildSgr(b.style);
+          self.currentSgr = b.style;
+        }
+
+        // 发射字符（码点 → UTF-8）
+        output = output + self.encodeCodepoint(b.value);
+      }
+      i = i + (int)1;
+    }
+
+    // 渲染完成后重置 SGR（避免样式泄漏到后续终端输出）
+    if self.currentSgr != (u64)0 {
+      output = output + "\x1b[0m";
+      self.currentSgr = (u64)0;
+    }
+
+    // back → front 覆盖（memcpy，不交换指针）
+    var j: int = 0;
+    while j < total {
+      frontCells[j].value = backCells[j].value;
+      frontCells[j].style = backCells[j].style;
+      j = j + (int)1;
+    }
+
+    return output;
+  }
+
+  // ─── 内部方法（seal） ──────────────────────────────────────────────────────
+
+  /**
+   * 根据 Cell 的 style 编码构建 SGR（Select Graphic Rendition）序列。
+   * 样式布局：[ 16 bits 样式标志 ] [ 24 bits 背景RGB ] [ 24 bits 前景RGB ]
+   * @param style - Cell 的样式编码
+   * @return SGR ANSI 序列字符串（如 "\x1b[1;38;2;255;0;0;48;2;0;0;255m"）
+   */
+  seal func buildSgr(style: u64): string {
+    let parts = List<string>();
+
+    // 前景色（低 24 bits）
+    let fg = (u32)(style & Cell.MASK_FG);
+    if fg != (u32)0 {
+      let r = (fg >> (u32)16) & (u32)0xFF;
+      let g = (fg >> (u32)8) & (u32)0xFF;
+      let bl = fg & (u32)0xFF;
+      parts.add("38;2;" + r.toString() + ";" + g.toString() + ";" + bl.toString());
+    }
+
+    // 背景色（中 24 bits）
+    let bg = (u32)((style >> (u64)24) & Cell.MASK_FG);
+    if bg != (u32)0 {
+      let r = (bg >> (u32)16) & (u32)0xFF;
+      let g = (bg >> (u32)8) & (u32)0xFF;
+      let bl = bg & (u32)0xFF;
+      parts.add("48;2;" + r.toString() + ";" + g.toString() + ";" + bl.toString());
+    }
+
+    // 样式标志位（高 16 bits）
+    if (style & Cell.STYLE_BOLD) != (u64)0 { parts.add("1"); }
+    if (style & Cell.STYLE_DIM) != (u64)0 { parts.add("2"); }
+    if (style & Cell.STYLE_ITALIC) != (u64)0 { parts.add("3"); }
+    if (style & Cell.STYLE_UNDERLINE) != (u64)0 { parts.add("4"); }
+    if (style & Cell.STYLE_BLINK) != (u64)0 { parts.add("5"); }
+    if (style & Cell.STYLE_REVERSE) != (u64)0 { parts.add("7"); }
+    if (style & Cell.STYLE_HIDDEN) != (u64)0 { parts.add("8"); }
+    if (style & Cell.STYLE_STRIKETHROUGH) != (u64)0 { parts.add("9"); }
+
+    if parts.size() == (int)0 {
+      return "\x1b[0m";
+    }
+
+    return "\x1b[" + string.join(";", parts.entries()) + "m";
+  }
+
+  /**
+   * 将 Unicode 码点编码为 UTF-8 字符串。
+   * @param cp - Unicode 码点
+   * @return UTF-8 编码的字符串（空码点 0 返回空格 ' '）
+   */
+  seal func encodeCodepoint(cp: u64): string {
+    if cp == (u64)0 {
+      return " ";
+    }
+    let bytes = List<byte>();
+    let c = (u32)cp;
+    if c < (u32)0x80 {
+      bytes.add((byte)c);
+    } else if c < (u32)0x800 {
+      bytes.add((byte)((u32)0xC0 | (c >> (u32)6)));
+      bytes.add((byte)((u32)0x80 | (c & (u32)0x3F)));
+    } else if c < (u32)0x10000 {
+      bytes.add((byte)((u32)0xE0 | (c >> (u32)12)));
+      bytes.add((byte)((u32)0x80 | ((c >> (u32)6) & (u32)0x3F)));
+      bytes.add((byte)((u32)0x80 | (c & (u32)0x3F)));
+    } else {
+      bytes.add((byte)((u32)0xF0 | (c >> (u32)18)));
+      bytes.add((byte)((u32)0x80 | ((c >> (u32)12) & (u32)0x3F)));
+      bytes.add((byte)((u32)0x80 | ((c >> (u32)6) & (u32)0x3F)));
+      bytes.add((byte)((u32)0x80 | (c & (u32)0x3F)));
+    }
+    return string.fromUtf8Bytes(bytes.entries());
+  }
+}

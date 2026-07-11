@@ -86,13 +86,21 @@
 
 ### 3.3 Screen 设计
 
-- `open type Screen`，持有 front buffer 和 back buffer。
-- **双缓冲 + Diff 引擎**：
-  - `render()` 时逐 cell 比较 front 与 back，只对变化的 cell 发射 ANSI 序列。
-  - **SGR 状态机优化**：连续相同 style 的 cell 只发射一次 SGR 序列，不逐 cell 重发。
-  - 光标移动优化：跳过连续相同区域，批量定位。
-- **I/O 批处理**：积累 64KB 输出后一次性 `write()` 刷新，减少 syscall 次数。
-- 提供终端尺寸查询（`ioctl TIOCGWINSZ`）和光标控制。
+- `open type Screen`，持有 `seal var front: Buffer`（diff 基准）和 `seal var back: Buffer`（绘制表面），两者均私有，外部不可访问。
+- **双缓冲 + Diff 引擎**（非图形系统页翻转，是 diff 模型）：
+  - `render()` 时逐 cell 比较 front 与 back 的 `value` 和 `style` 字段，只对变化的 cell 发射 ANSI 序列。
+  - 渲染完成后将 back 的内容覆盖到 front（memcpy，**不交换指针**——交换会导致 back 残留上一帧内容、被迫全刷，性能反而下降）。
+  - **SGR 状态机优化**：跟踪当前 SGR 样式编码，仅当 style 变化时发射 SGR 序列，连续相同 style 的 cell 不逐 cell 重发。渲染结束后重置 SGR（`\x1b[0m`）。
+  - 光标定位：`\x1b[y;xH`（1-based 坐标）。
+- **公开 API**：
+  - `buffer(): Buffer` — 返回 back 引用，应用在此绘制。`resize()` 后需重新调用获取最新引用。
+  - `size(): Tuple<u32, u32>` — 返回当前屏幕尺寸（width, height）。
+  - `clear()` — 清空 back buffer。
+  - `resize(width, height)` — 重建 front/back 为新尺寸空白 Buffer，旧内容不迁移（TUI resize 时旧内容无法对齐，由上层组件树负责重新布局）。front 同时清空，使下次 `render()` 产生全量重绘。
+  - `render(): string` — 返回 diff 后的 ANSI 转义序列字符串，由调用方负责写入 stdout。
+- **ANSI 序列生成**：
+  - SGR（Select Graphic Rendition）：前景色 `38;2;r;g;b`，背景色 `48;2;r;g;b`，样式标志 `1`(bold) `2`(dim) `3`(italic) `4`(underline) `5`(blink) `7`(reverse) `8`(hidden) `9`(strikethrough)。
+  - 码点 0（空白 cell）render 时输出空格 `' '`。
 
 ### 3.4 组件树设计（后续专门设计）
 
@@ -132,9 +140,9 @@
 
 ### 第三阶段：Screen（渲染底座 - 差异同步）
 
-- [ ] 4.9 实现 Screen：双缓冲 + Diff 引擎 + ANSI 序列生成 + I/O 批处理 + SGR 状态机优化
-- [ ] 4.10 补充 std_test 用例：在 `test_tui.ff` 中新增 Screen Diff 输出、SGR 状态机、双缓冲同步等测试
-- [ ] 4.11 全量回归测试：执行 `make test`，确认全部通过
+- [x] 4.9 实现 Screen：双缓冲 + Diff 引擎 + ANSI 序列生成 + SGR 状态机优化
+- [x] 4.10 补充 std_test 用例：在 `test_tui.ff` 中新增 Screen Diff 输出、SGR 状态机、双缓冲同步、resize、Unicode 渲染等 18 个测试
+- [x] 4.11 全量回归测试：执行 `make test`，确认全部通过（std_test 428/428, fcts 523/523）
 - [ ] 4.12 等待人工 Review：开发者审查 Screen 实现与测试用例，通过后方可进入第四阶段
 
 ### 第四阶段：视图逻辑层（第 4 层 - 简化版）
