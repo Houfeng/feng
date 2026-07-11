@@ -12995,6 +12995,88 @@ static void test_method_overload_return_only_difference_is_rejected(void) {
     feng_program_free(program);
 }
 
+static void test_type_field_method_same_name_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type T {\n"
+        "    seal var value: int;\n"
+        "    open func value(): int { return self.value; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("field_method_same_name.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0513") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_type_static_field_static_method_same_name_is_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type T {\n"
+        "    static let seed: int = 1;\n"
+        "    static func seed(): int { return 1; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("static_field_method_same_name.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0513") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_type_field_static_method_same_name_allowed(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type T {\n"
+        "    seal var value: int;\n"
+        "    static func value(): int { return 1; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("field_static_method_same_name.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_type_static_field_instance_method_same_name_allowed(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type T {\n"
+        "    static let seed: int = 1;\n"
+        "    open func seed(): int { return 1; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("static_field_instance_method_same_name.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_main_entry_required_for_bin_target(void) {
     const char *source =
         "module demo.main;\n"
@@ -20327,6 +20409,10 @@ int main(void) {
     test_field_init_bare_self_is_invalid();
     test_duplicate_method_signature_is_rejected();
     test_method_overload_return_only_difference_is_rejected();
+    test_type_field_method_same_name_is_rejected();
+    test_type_static_field_static_method_same_name_is_rejected();
+    test_type_field_static_method_same_name_allowed();
+    test_type_static_field_instance_method_same_name_allowed();
     test_main_entry_required_for_bin_target();
     test_main_entry_valid_signature_passes_for_bin();
     test_main_entry_bad_signature_is_rejected_for_bin();

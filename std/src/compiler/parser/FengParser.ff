@@ -43,7 +43,7 @@ seal type FengParserState {
 open type FengParser {
   seal let lexer: FengLexer;
   seal var current: FengToken;
-  seal var previous: FengToken;
+  seal var _previous: FengToken;
   /**
    * 待消费的 `>` 数量，用于处理嵌套泛型中的 `>>` 拆分。
    * 例如 `Map<string, List<int>>` 中的 `>>` 会被 Lexer 识别为右移运算符，
@@ -59,7 +59,7 @@ open type FengParser {
   open func FengParser(lexer: FengLexer) {
     self.lexer = lexer;
     self.pendingGt = 0;
-    self.previous = FengToken {
+    self._previous = FengToken {
       kind: FengTokenKind.SpecialEndOfFile,
       value: lexer.source.slice(0, 0),
       location: FengLocation {
@@ -76,9 +76,9 @@ open type FengParser {
    * @return 被消费的 Token
    */
   open func advance(): FengToken {
-    self.previous = self.current;
+    self._previous = self.current;
     self.current = self.nextToken();
-    return self.previous;
+    return self._previous;
   }
 
   /**
@@ -94,7 +94,7 @@ open type FengParser {
    * @return 上一个被消费的 Token
    */
   open func previous(): FengToken {
-    return self.previous;
+    return self._previous;
   }
 
   // ==================== Token 匹配与消费 ====================
@@ -455,7 +455,7 @@ open type FengParser {
   seal func saveState(): FengParserState {
     return FengParserState {
       current: self.current,
-      previous: self.previous,
+      previous: self._previous,
       pendingGt: self.pendingGt,
       lexerState: self.lexer.saveState()
     };
@@ -467,7 +467,7 @@ open type FengParser {
    */
   seal func restoreState(state: FengParserState) {
     self.current = state.current;
-    self.previous = state.previous;
+    self._previous = state.previous;
     self.pendingGt = state.pendingGt;
     self.lexer.restoreState(state.lexerState);
   }
@@ -666,7 +666,7 @@ open type FengParser {
       }
       if self.current.kind == FengTokenKind.PunctuationRightParen {
         if depth == 0 {
-          let isEmpty = (self.previous.kind == FengTokenKind.PunctuationLeftParen);
+          let isEmpty = (self._previous.kind == FengTokenKind.PunctuationLeftParen);
           let _ = self.advance();
           let afterKind = self.current.kind;
           self.restoreState(saved);
