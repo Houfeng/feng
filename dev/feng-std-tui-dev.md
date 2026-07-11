@@ -74,6 +74,7 @@
 
 ### 3.4 组件树设计（后续专门设计）
 
+- Feng 没有继承，组件多态通过 `spec` 契约 + `fit` 实现：定义 `spec Widget` 声明组件行为契约（渲染、事件处理、尺寸等），具体组件 `type Text: Widget` / `type Button: Widget` 通过声明头满足契约。
 - 第一步只实现简单文本（`Text`）和按钮（`Button`）。
 - 完整 Flexbox 布局引擎后续专门设计。
 
@@ -116,11 +117,11 @@
 
 ### 第四阶段：视图逻辑层（第 4 层 - 简化版）
 
-- [ ] 4.13 实现简单 Widget 基类 + Text + Button
+- [ ] 4.13 实现 Widget spec 契约 + Text + Button
 - [ ] 4.14 实现简单的线性布局（Row / Column / Stack）
-- [ ] 4.15 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 渲染、Text 内容绘制、Button 状态切换等测试
+- [ ] 4.15 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、Text 内容绘制、Button 状态切换等测试
 - [ ] 4.16 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.17 等待人工 Review：开发者审查 Widget 层设计与实现，通过后方可进入第五阶段
+- [ ] 4.17 等待人工 Review：开发者审查 Widget 契约设计与实现，通过后方可进入第五阶段
 
 ### 第五阶段：应用控制层（第 5 层）
 
@@ -147,7 +148,7 @@ std/src/tui/
   Screen.ff        # Screen（双缓冲 + Diff）
   Style.ff         # 样式常量与工具函数
   Ansi.ff          # ANSI 转义序列生成器
-  Widget.ff        # Widget 基类（后续）
+  Widget.ff        # Widget spec 契约（后续）
   Text.ff          # 文本组件（后续）
   Button.ff        # 按钮组件（后续）
   TuiApp.ff        # 应用程序入口与主循环（后续）
