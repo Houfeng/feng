@@ -17,6 +17,7 @@
     "libm",
     "libname",
     "lldb",
+    "memcpy",
     "miniz",
     "nums",
     "pcre",

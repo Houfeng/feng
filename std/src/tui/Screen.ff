@@ -98,23 +98,19 @@ open type Screen {
     let total = (int)((u64)w * (u64)h);
     let frontCells = self.front.cells;
     let backCells = self.back.cells;
-
     // 使用 List<byte> 收集输出，避免 string 拼接的 O(n²) 复制开销
     // 预分配容量：按最坏情况（全量变化）估算，每个 cell 约 20 字节
     let output = List<byte>(total * (int)20);
-
     // 逐 cell 比较并发射差异序列
     var i: int = 0;
     while i < total {
       let f = frontCells[i];
       let b = backCells[i];
-
       // 值或样式有变化才发射
       if f.value != b.value || f.style != b.style {
         // 计算此 cell 的 (x, y) 坐标
         let y = (u32)((u64)i / (u64)w);
         let x = (u32)((u64)i % (u64)w);
-
         // 光标定位：\x1b[y;xH（1-based）
         output.add((byte)0x1b);
         output.add((byte)0x5b); // '['
@@ -122,19 +118,16 @@ open type Screen {
         output.add((byte)0x3b); // ';'
         self.writeDecimal(output, (x + (u32)1));
         output.add((byte)0x48); // 'H'
-
         // SGR 状态机：仅当 style 变化时发射 SGR 序列
         if self.currentSgr != b.style {
           self.writeSgr(output, b.style);
           self.currentSgr = b.style;
         }
-
         // 发射字符（码点 → UTF-8）
         self.writeCodepoint(output, b.value);
       }
       i = i + (int)1;
     }
-
     // 渲染完成后重置 SGR（避免样式泄漏到后续终端输出）
     if self.currentSgr != (u64)0 {
       output.add((byte)0x1b);
@@ -143,7 +136,6 @@ open type Screen {
       output.add((byte)0x6d); // 'm'
       self.currentSgr = (u64)0;
     }
-
     // back → front 覆盖（memcpy，不交换指针）
     var j: int = 0;
     while j < total {
@@ -151,7 +143,6 @@ open type Screen {
       frontCells[j].style = backCells[j].style;
       j = j + (int)1;
     }
-
     return string.fromUtf8Bytes(output.entries());
   }
 
@@ -195,10 +186,8 @@ open type Screen {
   seal func writeSgr(output: List<byte>, style: u64) {
     // 前景色（低 24 bits）
     let fg = (u32)(style & Cell.MASK_FG);
-
     // 背景色（中 24 bits）
     let bg = (u32)((style >> (u64)24) & Cell.MASK_FG);
-
     // 若前景、背景、样式标志全为零，发射 SGR 重置 \x1b[0m
     if fg == (u32)0 && bg == (u32)0 && style == (u64)0 {
       output.add((byte)0x1b);
@@ -207,12 +196,9 @@ open type Screen {
       output.add((byte)0x6d); // 'm'
       return;
     }
-
     output.add((byte)0x1b);
     output.add((byte)0x5b); // '['
-
     var first: bool = true;
-
     // 前景色：38;2;r;g;b
     if fg != (u32)0 {
       if !first { output.add((byte)0x3b); } // ';'
@@ -228,7 +214,6 @@ open type Screen {
       output.add((byte)0x3b); // ';'
       self.writeDecimal(output, fg & (u32)0xFF);
     }
-
     // 背景色：48;2;r;g;b
     if bg != (u32)0 {
       if !first { output.add((byte)0x3b); } // ';'
@@ -244,7 +229,6 @@ open type Screen {
       output.add((byte)0x3b); // ';'
       self.writeDecimal(output, bg & (u32)0xFF);
     }
-
     // 样式标志位（高 16 bits）
     if (style & Cell.STYLE_BOLD) != (u64)0 {
       if !first { output.add((byte)0x3b); }
@@ -286,7 +270,6 @@ open type Screen {
       first = false;
       output.add((byte)0x39); // '9'
     }
-
     output.add((byte)0x6d); // 'm'
   }
 
