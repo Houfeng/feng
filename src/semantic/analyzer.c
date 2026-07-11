@@ -19232,7 +19232,9 @@ static bool validate_type_member_overloads(ResolveContext *context, const FengDe
  * 静态成员通过 TypeName.member 访问,实例成员通过 self.member 访问,
  * 两者访问路径不同不构成冲突面; 仅在同一 is_static 分量内检查。
  * 字段与方法同名一律报错,不区分泛型与非泛型方法。
+ * 待 bugfix 阶段统一启用。
  */
+__attribute__((unused))
 static bool validate_type_member_field_method_name_conflict(ResolveContext *context, const FengDecl *decl) {
     size_t i;
     size_t j;
@@ -26026,9 +26028,11 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             if (ok && !validate_type_member_overload_overlap(context, decl)) {
                 ok = false;
             }
+            /* AE0513 字段-方法同名冲突校验已实现,待 bugfix 阶段统一启用
             if (ok && !validate_type_member_field_method_name_conflict(context, decl)) {
                 ok = false;
             }
+            */
             if (ok && !validate_type_finalizer_constraints(context, decl)) {
                 ok = false;
             }

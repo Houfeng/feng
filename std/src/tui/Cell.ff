@@ -43,14 +43,14 @@ open type Cell {
    * 支持所有 Unicode 字符，包括 Emoji、汉字、拉丁字母等
    * 部分超过 8 字节的组合 emoji 通过 ZWJ 拆分为多个 emoji
    */
-  seal var value: u64;
+  seal var _value: u64;
 
   /**
    * 获取字符的 Unicode 码点
    * @return 当前 cell 持有的 Unicode 码点
    */
   open func value(): u64 {
-    return self.value;
+    return self._value;
   }
 
   /**
@@ -62,22 +62,22 @@ open type Cell {
    *
    * 提取前景色 (最低 24 bits)  
    *   - 直接使用 Cell.MASK_FG 掩码截取，指令开销最小
-   *   - (self.style & Cell.MASK_FG)
+   *   - (self._style & Cell.MASK_FG)
    *
    * 提取背景色 (中间 24 bits)  
    *   - 先右移 24 位，再使用 0xFFFFFF 掩码截取
-   *   - ((self.style >> 24) & 0xFFFFFF)
+   *   - ((self._style >> 24) & 0xFFFFFF)
    *
    * 样式标志位常量见类型开头的 `open static let STYLE_*` 声明
    */
-  seal var style: u64;
+  seal var _style: u64;
 
   /**
    * 获取样式信息
    * @return 当前 cell 的完整样式编码
    */
   open func style(): u64 {
-    return self.style;
+    return self._style;
   }
 
   /**
@@ -85,7 +85,7 @@ open type Cell {
    * @return 前景 RGB 值（低 24 bits）
    */
   func foreColor(): u32 {
-    return (u32)(self.style & Cell.MASK_FG);
+    return (u32)(self._style & Cell.MASK_FG);
   }
 
   /**
@@ -93,7 +93,7 @@ open type Cell {
    * @param value - 前景 RGB 值（仅低 24 bits 有效）
    */
   func foreColor(value: u32): void {
-    self.style = (self.style & (u64)(~Cell.MASK_FG)) | ((u64)(value & 0xFFFFFF));
+    self._style = (self._style & (u64)(~Cell.MASK_FG)) | ((u64)(value & 0xFFFFFF));
   }
 
   /**
@@ -101,7 +101,7 @@ open type Cell {
    * @return 背景 RGB 值（中 24 bits）
    */
   func backColor(): u32 {
-    return (u32)((self.style >> 24) & 0xFFFFFF);
+    return (u32)((self._style >> (u64)24) & 0xFFFFFF);
   }
 
   /**
@@ -109,7 +109,7 @@ open type Cell {
    * @param value - 背景 RGB 值（仅低 24 bits 有效）
    */
   func backColor(value: u32): void {
-    self.style = (self.style & (u64)(~Cell.MASK_BG)) | ((u64)(value & 0xFFFFFF) << 24);
+    self._style = (self._style & (u64)(~Cell.MASK_BG)) | ((u64)(value & 0xFFFFFF) << (u64)24);
   }
 
   /**
@@ -117,7 +117,7 @@ open type Cell {
    * @return 粗体标志是否设置
    */
   func bold(): bool {
-    return (self.style & Cell.STYLE_BOLD) != 0;
+    return (self._style & Cell.STYLE_BOLD) != 0;
   }
 
   /**
@@ -126,9 +126,9 @@ open type Cell {
    */
   func bold(value: bool): void {
     if value {
-      self.style |= Cell.STYLE_BOLD;
+      self._style |= Cell.STYLE_BOLD;
     } else {
-      self.style &= (u64)(~Cell.STYLE_BOLD);
+      self._style &= (u64)(~Cell.STYLE_BOLD);
     }
   }
 
@@ -137,7 +137,7 @@ open type Cell {
    * @return 暗淡标志是否设置
    */
   func dim(): bool {
-    return (self.style & Cell.STYLE_DIM) != 0;
+    return (self._style & Cell.STYLE_DIM) != 0;
   }
 
   /**
@@ -146,9 +146,9 @@ open type Cell {
    */
   func dim(value: bool): void {
     if value {
-      self.style |= Cell.STYLE_DIM;
+      self._style |= Cell.STYLE_DIM;
     } else {
-      self.style &= (u64)(~Cell.STYLE_DIM);
+      self._style &= (u64)(~Cell.STYLE_DIM);
     }
   }
 
@@ -157,7 +157,7 @@ open type Cell {
    * @return 斜体标志是否设置
    */
   func italic(): bool {
-    return (self.style & Cell.STYLE_ITALIC) != 0;
+    return (self._style & Cell.STYLE_ITALIC) != 0;
   }
 
   /**
@@ -166,9 +166,9 @@ open type Cell {
    */
   func italic(value: bool): void {
     if value {
-      self.style |= Cell.STYLE_ITALIC;
+      self._style |= Cell.STYLE_ITALIC;
     } else {
-      self.style &= (u64)(~Cell.STYLE_ITALIC);
+      self._style &= (u64)(~Cell.STYLE_ITALIC);
     }
   }
 
@@ -177,7 +177,7 @@ open type Cell {
    * @return 下划线标志是否设置
    */
   func underline(): bool {
-    return (self.style & Cell.STYLE_UNDERLINE) != 0;
+    return (self._style & Cell.STYLE_UNDERLINE) != 0;
   }
 
   /**
@@ -186,9 +186,9 @@ open type Cell {
    */
   func underline(value: bool): void {
     if value {
-      self.style |= Cell.STYLE_UNDERLINE;
+      self._style |= Cell.STYLE_UNDERLINE;
     } else {
-      self.style &= (u64)(~Cell.STYLE_UNDERLINE);
+      self._style &= (u64)(~Cell.STYLE_UNDERLINE);
     }
   }
 
@@ -197,7 +197,7 @@ open type Cell {
    * @return 闪烁标志是否设置
    */
   func blink(): bool {
-    return (self.style & Cell.STYLE_BLINK) != 0;
+    return (self._style & Cell.STYLE_BLINK) != 0;
   }
 
   /**
@@ -206,9 +206,9 @@ open type Cell {
    */
   func blink(value: bool): void {
     if value {
-      self.style |= Cell.STYLE_BLINK;
+      self._style |= Cell.STYLE_BLINK;
     } else {
-      self.style &= (u64)(~Cell.STYLE_BLINK);
+      self._style &= (u64)(~Cell.STYLE_BLINK);
     }
   }
 
@@ -217,7 +217,7 @@ open type Cell {
    * @return 反转标志是否设置
    */
   func reverse(): bool {
-    return (self.style & Cell.STYLE_REVERSE) != 0;
+    return (self._style & Cell.STYLE_REVERSE) != 0;
   }
 
   /**
@@ -226,9 +226,9 @@ open type Cell {
    */
   func reverse(value: bool): void {
     if value {
-      self.style |= Cell.STYLE_REVERSE;
+      self._style |= Cell.STYLE_REVERSE;
     } else {
-      self.style &= (u64)(~Cell.STYLE_REVERSE);
+      self._style &= (u64)(~Cell.STYLE_REVERSE);
     }
   }
 
@@ -237,7 +237,7 @@ open type Cell {
    * @return 隐藏标志是否设置
    */
   func hidden(): bool {
-    return (self.style & Cell.STYLE_HIDDEN) != 0;
+    return (self._style & Cell.STYLE_HIDDEN) != 0;
   }
 
   /**
@@ -246,9 +246,9 @@ open type Cell {
    */
   func hidden(value: bool): void {
     if value {
-      self.style |= Cell.STYLE_HIDDEN;
+      self._style |= Cell.STYLE_HIDDEN;
     } else {
-      self.style &= (u64)(~Cell.STYLE_HIDDEN);
+      self._style &= (u64)(~Cell.STYLE_HIDDEN);
     }
   }
 
@@ -257,7 +257,7 @@ open type Cell {
    * @return 删除线标志是否设置
    */
   func strikeThrough(): bool {
-    return (self.style & Cell.STYLE_STRIKETHROUGH) != 0;
+    return (self._style & Cell.STYLE_STRIKETHROUGH) != 0;
   }
 
   /**
@@ -266,9 +266,9 @@ open type Cell {
    */
   func strikeThrough(value: bool): void {
     if value {
-      self.style |= Cell.STYLE_STRIKETHROUGH;
+      self._style |= Cell.STYLE_STRIKETHROUGH;
     } else {
-      self.style &= (u64)(~Cell.STYLE_STRIKETHROUGH);
+      self._style &= (u64)(~Cell.STYLE_STRIKETHROUGH);
     }
   }
 
@@ -284,8 +284,8 @@ open type Cell {
    * @param value - Unicode 码点
    */
   func Cell(value: u64) {
-    self.value = value;
-    self.style = 0;
+    self._value = value;
+    self._style = 0;
   }
 
   /**
@@ -294,58 +294,7 @@ open type Cell {
    * @param style - 样式编码（通过 Cell.STYLE_* 常量组合）
    */
   func Cell(value: u64, style: u64) {
-    self.value = value;
-    self.style = style;
-  }
-
-  // ─── 静态工厂方法 ───────────────────────────────────────────────────────────
-
-  /**
-   * 创建一个空白 cell（value=0，style=0）
-   * @return 空白 cell
-   */
-  open static func empty(): Cell {
-    return Cell();
-  }
-
-  /**
-   * 创建一个持有指定码点的 cell，不带任何样式
-   * @param value - Unicode 码点
-   * @return 不带样式的 cell
-   */
-  open static func withValue(value: u64): Cell {
-    return Cell(value);
-  }
-
-  /**
-   * 创建一个持有指定码点和样式编码的 cell
-   * @param value - Unicode 码点
-   * @param style - 样式编码（通过 Cell.STYLE_* 常量组合）
-   * @return 带指定样式的 cell
-   */
-  open static func withStyle(value: u64, style: u64): Cell {
-    return Cell(value, style);
-  }
-
-  /**
-   * 创建一个持有指定码点和前景色的 cell
-   * @param value - Unicode 码点
-   * @param fg - 前景 RGB 值
-   * @return 带指定前景色的 cell
-   */
-  open static func withFg(value: u64, fg: u32): Cell {
-    return Cell(value, (u64)(fg & 0xFFFFFF));
-  }
-
-  /**
-   * 创建一个持有指定码点、前景色和背景色的 cell
-   * @param value - Unicode 码点
-   * @param fg - 前景 RGB 值
-   * @param bg - 背景 RGB 值
-   * @return 带指定前景色和背景色的 cell
-   */
-  open static func withColors(value: u64, fg: u32, bg: u32): Cell {
-    let style: u64 = ((u64)(fg & 0xFFFFFF)) | ((u64)(bg & 0xFFFFFF) << 24);
-    return Cell(value, style);
+    self._value = value;
+    self._style = style;
   }
 }

@@ -72,37 +72,6 @@ func cell_ctor_value_style() {
 
 // ─── 工厂方法 ──────────────────────────────────────────────────────────────
 
-func cell_factory_empty() {
-  let c = Cell.empty();
-  check(c.value() == (u64)0, "tui/cell/factory-empty-value");
-  check(c.style() == (u64)0, "tui/cell/factory-empty-style");
-}
-
-func cell_factory_with_value() {
-  let c = Cell.withValue((u64)72);
-  check(c.value() == (u64)72, "tui/cell/factory-with-value-value");
-  check(c.style() == (u64)0, "tui/cell/factory-with-value-style");
-}
-
-func cell_factory_with_style() {
-  let c = Cell.withStyle((u64)88, Cell.STYLE_ITALIC);
-  check(c.value() == (u64)88, "tui/cell/factory-with-style-value");
-  check(c.style() == Cell.STYLE_ITALIC, "tui/cell/factory-with-style-style");
-}
-
-func cell_factory_with_fg() {
-  let c = Cell.withFg((u64)65, (u32)0xFF0000);
-  check(c.value() == (u64)65, "tui/cell/factory-with-fg-value");
-  check(c.foreColor() == (u32)0xFF0000, "tui/cell/factory-with-fg-fg");
-}
-
-func cell_factory_with_colors() {
-  let c = Cell.withColors((u64)65, (u32)0xFF0000, (u32)0x00FF00);
-  check(c.value() == (u64)65, "tui/cell/factory-with-colors-value");
-  check(c.foreColor() == (u32)0xFF0000, "tui/cell/factory-with-colors-fg");
-  check(c.backColor() == (u32)0x00FF00, "tui/cell/factory-with-colors-bg");
-}
-
 // ─── 前景色 / 背景色读写 ────────────────────────────────────────────────────
 
 func cell_fore_color_rw() {
@@ -246,11 +215,6 @@ open func run_tui_tests() {
     test("cell_ctor_default()", () { cell_ctor_default(); });
     test("cell_ctor_value()", () { cell_ctor_value(); });
     test("cell_ctor_value_style()", () { cell_ctor_value_style(); });
-    test("cell_factory_empty()", () { cell_factory_empty(); });
-    test("cell_factory_with_value()", () { cell_factory_with_value(); });
-    test("cell_factory_with_style()", () { cell_factory_with_style(); });
-    test("cell_factory_with_fg()", () { cell_factory_with_fg(); });
-    test("cell_factory_with_colors()", () { cell_factory_with_colors(); });
     test("cell_fore_color_rw()", () { cell_fore_color_rw(); });
     test("cell_back_color_rw()", () { cell_back_color_rw(); });
     test("cell_fore_back_color_independent()", () { cell_fore_back_color_independent(); });
