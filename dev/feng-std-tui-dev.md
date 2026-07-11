@@ -145,27 +145,37 @@
 - [x] 4.11 全量回归测试：执行 `make test`，确认全部通过（std_test 428/428, fcts 523/523）
 - [ ] 4.12 等待人工 Review：开发者审查 Screen 实现与测试用例，通过后方可进入第四阶段
 
-### 第四阶段：视图逻辑层（第 4 层 - 简化版）
+### 第四阶段：应用控制层 - 纯渲染（第 5 层）
 
-- [ ] 4.13 实现 Widget spec 契约 + Text + Button
-- [ ] 4.14 实现简单的线性布局（Row / Column / Stack）
-- [ ] 4.15 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、Text 内容绘制、Button 状态切换等测试
+> 先实现 TuiApp 的渲染通路，以便在真实终端上验证 Screen 的实际绘制效果。
+
+- [ ] 4.13 实现 TuiApp 渲染基础：Raw Mode（`tcgetattr`/`tcsetattr`）+ 终端恢复保证（`defer` + `atexit`）+ SIGWINCH 响应（`signal`/`sigaction` + `ioctl TIOCGWINSZ`）
+- [ ] 4.14 实现渲染主循环：调用 `Screen.render()` 并写入 stdout，在真实终端验证 Screen 绘制效果
+- [ ] 4.15 补充 std_test 用例：在 `test_tui.ff` 中新增 Raw Mode 进入/恢复、SIGWINCH 响应、渲染主循环等测试
 - [ ] 4.16 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.17 等待人工 Review：开发者审查 Widget 契约设计与实现，通过后方可进入第五阶段
+- [ ] 4.17 等待人工 Review：开发者审查 TuiApp 纯渲染实现与测试用例，通过后方可进入第五阶段
 
-### 第五阶段：应用控制层（第 5 层）
+### 第五阶段：应用控制层 - 输入支持（第 5 层）
 
-- [ ] 4.18 实现 TuiApp：Raw Mode + 终端恢复 + SIGWINCH
-- [ ] 4.19 实现输入解析状态机 + 事件路由
+- [ ] 4.18 实现输入解析状态机：VT100/xterm 转义序列解析，将 stdin 字节流解析为 `KeyEvent`/`MouseEvent`
+- [ ] 4.19 实现事件路由：将解析后的事件下发至回调处理，触发状态变更后调用 `Screen.render()`
 - [ ] 4.20 补充 std_test 用例：在 `test_tui.ff` 中新增输入解析状态机（VT100/xterm 转义序列）、事件路由等测试
 - [ ] 4.21 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.22 等待人工 Review：开发者审查 TuiApp 生命周期与终端恢复机制，通过后方可进入第六阶段
+- [ ] 4.22 等待人工 Review：开发者审查输入解析与事件路由实现，通过后方可进入第六阶段
 
-### 第六阶段：测试与验证
+### 第六阶段：视图逻辑层（第 4 层 - 简化版）
 
-- [ ] 4.23 补充 std_test 用例：审查前五阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
-- [ ] 4.24 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.25 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
+- [ ] 4.23 实现 Widget spec 契约 + Text + Button
+- [ ] 4.24 实现简单的线性布局（Row / Column / Stack）
+- [ ] 4.25 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、Text 内容绘制、Button 状态切换等测试
+- [ ] 4.26 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.27 等待人工 Review：开发者审查 Widget 契约设计与实现，通过后方可进入第七阶段
+
+### 第七阶段：测试与验证
+
+- [ ] 4.28 补充 std_test 用例：审查前六阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
+- [ ] 4.29 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.30 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
 
 > **fcts 用例策略**：std 中的功能默认使用 std_test 用例，不需要 fcts 用例。仅当遇到 Feng 语言层面的问题（如语法、语义、类型系统等编译器行为）时，才在 `fcts/fcts_bin/src/` 中新增 fcts 用例进行兼容性验证。
 
