@@ -144,7 +144,7 @@
 - [x] 4.9 实现 Screen：双缓冲 + Diff 引擎 + ANSI 序列生成 + SGR 状态机优化
 - [x] 4.10 补充 std_test 用例：在 `test_tui.ff` 中新增 Screen Diff 输出、SGR 状态机、双缓冲同步、resize、Unicode 渲染等 18 个测试
 - [x] 4.11 全量回归测试：执行 `make test`，确认全部通过（std_test 428/428, fcts 523/523）
-- [ ] 4.12 等待人工 Review：开发者审查 Screen 实现与测试用例，通过后方可进入第四阶段
+- [x] 4.12 等待人工 Review：开发者审查 Screen 实现与测试用例，通过后方可进入第四阶段
 
 ### 第四阶段：应用控制层 - 纯渲染（第 5 层）
 
