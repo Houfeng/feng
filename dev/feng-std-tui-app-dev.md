@@ -211,7 +211,7 @@ open type TuiApp {
   seal var sigpipeR: i32;
   /** 信号管道写端（信号 handler 写） */
   seal var sigpipeW: i32;
-  /** 用户注册的外部通知 fd 数组（不含 stdin 和 sigpipeR，构造时传入） */
+  /** 外部通知 fd 数组（不含 stdin 和 sigpipeR，构造时传入）。TuiApp 只监听可读事件唤醒渲染，不写入、不关闭。 */
   seal var fds: i32[];
 }
 ```
@@ -255,6 +255,7 @@ func TuiApp(screen: Screen) {
 /**
  * 构造函数（有外部 fd）：保存 Screen 引用和外部通知 fd 数组，不做 TTY 初始化。
  * 异步 I/O 库场景使用：fds 为异步 I/O 库的通知 fd（如 epoll/kqueue/self-pipe 管道读端）。
+ * TuiApp 只监听 fd 可读事件唤醒渲染，不向 fd 写入、不处理关闭——fd 的生命周期由调用方管理。
  * @param screen - 由调用方创建的 Screen 实例
  * @param fds - 外部通知 fd 数组，poll 监听可读事件
  */
@@ -410,7 +411,7 @@ open func run(): void {
 > `poll(-1)` 无事件时阻塞休眠，零 CPU。任一 fd 可读即唤醒，TuiApp 只处理内部 sigpipeR，然后 render。
 > 退出由 `exit()` 置 `running = false`，下一轮 poll 返回后循环结束。
 >
-> **运行时动态通知**：其他线程（如异步 I/O 库处理完网络响应）通过写已注册的通知 fd 唤醒主循环，poll 返回后 render。
+> **TuiApp 不处理用户 fd 的数据**：TuiApp 只监听 fd 可读事件唤醒渲染，不向 fd 写入、不读取 fd 数据、不关闭 fd。fd 的生命周期由调用方管理。
 
 ### 5.7 exit() — 退出 TUI 模式与清理
 
