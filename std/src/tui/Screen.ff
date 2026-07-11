@@ -78,13 +78,11 @@ open type Screen {
     self.currentSgr = (u64)0;
   }
 
-  /**
-   * 清空 back buffer（将所有 Cell 重置为默认值），不影响 front。
-   * 下次 render() 时清空区域会作为变化发送给终端。
-   */
-  open func clear() {
-    self.back.clear();
-  }
+  // 使用 List<byte> 收集输出，避免 string 拼接的 O(n²) 复制开销
+  seal let output = List<byte>();
+
+  // 用户主动指令（如清屏、光标隐藏/显示）等
+  seal let directive = List<byte>();
 
   /**
    * 构建 diff 后的 ANSI 转义序列字节，由调用方直接写入 stdout。
@@ -95,14 +93,20 @@ open type Screen {
    * @return ANSI 转义序列字节数组，由调用方负责写入 stdout
    */
   open func buildPatchBytes(): byte[] {
+    let output = self.output;
+    // 清空输出缓冲区，准备发射差异序列
+    output.clear();
+    // 写入指令序列（如清屏、光标隐藏/显示）
+    for var i: int = 0; i < self.directive.size(); i = i + 1 {
+      output.add(self.directive.get(i));
+    }
+    self.directive.clear();
+    // 初始化一些局部变量
     let w = self.back.width;
     let h = self.back.height;
     let total = (int)((u64)w * (u64)h);
     let frontCells = self.front.cells;
     let backCells = self.back.cells;
-    // 使用 List<byte> 收集输出，避免 string 拼接的 O(n²) 复制开销
-    // 预分配容量：按最坏情况（全量变化）估算，每个 cell 约 20 字节
-    let output = List<byte>(total * (int)20);
     // 逐 cell 比较并发射差异序列
     var i: int = 0;
     while i < total {
@@ -116,17 +120,17 @@ open type Screen {
         // 光标定位：\x1b[y;xH（1-based）
         output.add((byte)0x1b); // ESC
         output.add((byte)0x5b); // '['
-        self.writeDecimal(output, (y + (u32)1));
+        self.writeDecimal(y + (u32)1);
         output.add((byte)0x3b); // ';'
-        self.writeDecimal(output, (x + (u32)1));
+        self.writeDecimal(x + (u32)1);
         output.add((byte)0x48); // 'H'
         // SGR 状态机：仅当 style 变化时发射 SGR 序列
         if self.currentSgr != b.style {
-          self.writeSgr(output, b.style);
+          self.writeSgr(b.style);
           self.currentSgr = b.style;
         }
         // 发射字符（码点 → UTF-8）
-        self.writeCodepoint(output, b.value);
+        self.writeCodepoint(b.value);
       }
       i = i + (int)1;
     }
@@ -159,15 +163,68 @@ open type Screen {
     return string.fromUtf8Bytes(bytes);
   }
 
+  /**
+   * 清空 back buffer（将所有 Cell 重置为默认值），不影响 front。
+   * 下次 render() 时清空区域会作为变化发送给终端。
+   */
+  open func clear() {
+    self.back.clear();
+    self.front.clear();
+    self.currentSgr = (u64)0;
+    self.writeClearScreenBytes();
+  }
+
+  /**
+   * 写入生成清屏 ANSI 序列：`\x1b[2J\x1b[H`（清空终端物理屏幕并将光标移到原点）。
+   */
+  seal func writeClearScreenBytes(): void {
+    let output = self.directive;
+    output.add((byte)0x1b); // ESC
+    output.add((byte)0x5b); // '['
+    output.add((byte)0x32); // '2'
+    output.add((byte)0x4a); // 'J'
+    output.add((byte)0x1b); // ESC
+    output.add((byte)0x5b); // '['
+    output.add((byte)0x48); // 'H'
+  }
+
+  /**
+   * 隐藏光标
+   * ANSI 序列：`\x1b[?25l`。
+   */
+  open func hideCursor(): void {
+    let output = self.directive;
+    output.add((byte)0x1b); // ESC
+    output.add((byte)0x5b); // '['
+    output.add((byte)0x3f); // '?'
+    output.add((byte)0x32); // '2'
+    output.add((byte)0x35); // '5'
+    output.add((byte)0x6c); // 'l'
+  }
+
+  /**
+   * 显示光标
+   * ANSI 序列：`\x1b[?25h`。
+   */
+  open func showCursor(): void {
+    let output = self.directive;
+    output.add((byte)0x1b); // ESC
+    output.add((byte)0x5b); // '['
+    output.add((byte)0x3f); // '?'
+    output.add((byte)0x32); // '2'
+    output.add((byte)0x35); // '5'
+    output.add((byte)0x68); // 'h'
+  }
+
   // ─── 内部方法（seal） ──────────────────────────────────────────────────────
 
   /**
    * 将 u32 数值以十进制 ASCII 形式追加到 output 缓冲区。
    * 零值输出单字符 '0'。
-   * @param output - 目标字节缓冲区
    * @param value - 要写入的数值
    */
-  seal func writeDecimal(output: List<byte>, value: u32) {
+  seal func writeDecimal(value: u32) {
+    let output = self.output;
     if value == (u32)0 {
       output.add((byte)0x30); // '0'
       return;
@@ -193,10 +250,10 @@ open type Screen {
    * 根据 Cell 的 style 编码，将 SGR（Select Graphic Rendition）序列
    * 直接追加到 output 缓冲区。
    * 样式布局：[ 16 bits 样式标志 ] [ 24 bits 背景RGB ] [ 24 bits 前景RGB ]
-   * @param output - 目标字节缓冲区
    * @param style - Cell 的样式编码
    */
-  seal func writeSgr(output: List<byte>, style: u64) {
+  seal func writeSgr(style: u64) {
+    let output = self.output;
     // 前景色（低 24 bits）
     let fg = (u32)(style & Cell.MASK_FG);
     // 背景色（中 24 bits）
@@ -221,11 +278,11 @@ open type Screen {
       output.add((byte)0x3b); // ';'
       output.add((byte)0x32); // '2'
       output.add((byte)0x3b); // ';'
-      self.writeDecimal(output, (fg >> (u32)16) & (u32)0xFF);
+      self.writeDecimal((fg >> (u32)16) & (u32)0xFF);
       output.add((byte)0x3b); // ';'
-      self.writeDecimal(output, (fg >> (u32)8) & (u32)0xFF);
+      self.writeDecimal((fg >> (u32)8) & (u32)0xFF);
       output.add((byte)0x3b); // ';'
-      self.writeDecimal(output, fg & (u32)0xFF);
+      self.writeDecimal(fg & (u32)0xFF);
     }
     // 背景色：48;2;r;g;b
     if bg != (u32)0 {
@@ -236,11 +293,11 @@ open type Screen {
       output.add((byte)0x3b); // ';'
       output.add((byte)0x32); // '2'
       output.add((byte)0x3b); // ';'
-      self.writeDecimal(output, (bg >> (u32)16) & (u32)0xFF);
+      self.writeDecimal((bg >> (u32)16) & (u32)0xFF);
       output.add((byte)0x3b); // ';'
-      self.writeDecimal(output, (bg >> (u32)8) & (u32)0xFF);
+      self.writeDecimal((bg >> (u32)8) & (u32)0xFF);
       output.add((byte)0x3b); // ';'
-      self.writeDecimal(output, bg & (u32)0xFF);
+      self.writeDecimal(bg & (u32)0xFF);
     }
     // 样式标志位（高 16 bits）
     if (style & Cell.STYLE_BOLD) != (u64)0 {
@@ -289,10 +346,10 @@ open type Screen {
   /**
    * 将 Unicode 码点编码为 UTF-8 字节序列，直接追加到 output 缓冲区。
    * 码点 0 渲染为空格 ' '（0x20）。
-   * @param output - 目标字节缓冲区
    * @param cp - Unicode 码点
    */
-  seal func writeCodepoint(output: List<byte>, cp: u64) {
+  seal func writeCodepoint(cp: u64) {
+    let output = self.output;
     // 码点 0 渲染为空格（终端不显示 NUL）
     if cp == (u64)0 {
       output.add((byte)0x20); // 空格
