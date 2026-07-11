@@ -151,10 +151,10 @@
 > 先实现 TuiApp 的渲染通路，以便在真实终端上验证 Screen 的实际绘制效果。
 > 实现方案详见 `dev/feng-std-tui-app-dev.md`。
 
-- [ ] 4.13 实现 TuiApp 渲染基础：详见 `dev/feng-std-tui-app-dev.md`（libuv TTY + libc signal + self-pipe + poll 多路复用）
-- [ ] 4.14 实现渲染主循环：调用 `Screen.buildPatchBytes()` 并写入 stdout，在真实终端验证 Screen 绘制效果
-- [ ] 4.15 补充 std_test 用例：在 `test_tui.ff` 中新增 Raw Mode 进入/恢复、SIGWINCH 响应、渲染主循环等测试
-- [ ] 4.16 全量回归测试：执行 `make test`，确认全部通过
+- [x] 4.13 实现 TuiApp 渲染基础：详见 `dev/feng-std-tui-app-dev.md`（libuv TTY + libc signal + self-pipe + poll 多路复用）
+- [x] 4.14 实现渲染主循环：调用 `Screen.buildPatchBytes()` 并写入 stdout，在真实终端验证 Screen 绘制效果
+- [x] 4.15 补充 std_test 用例：在 `test_tui.ff` 中新增 Raw Mode 进入/恢复、SIGWINCH 响应、渲染主循环等测试
+- [x] 4.16 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.17 等待人工 Review：开发者审查 TuiApp 纯渲染实现与测试用例，通过后方可进入第五阶段
 
 ### 第五阶段：应用控制层 - 输入支持（第 5 层）

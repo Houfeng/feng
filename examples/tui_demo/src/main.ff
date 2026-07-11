@@ -1,0 +1,12 @@
+module feng.examples;
+
+import std;
+import std.tui;
+
+
+/**
+ * The main function.
+ */
+func main(args: string[]) {
+  
+}

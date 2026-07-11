@@ -1,6 +1,6 @@
 # 当前包基础信息
 [package]
-name:    "std_demo"
+name:    "tui_demo"
 version: "0.1.0"
 target:  "bin"
 src:     "src/"

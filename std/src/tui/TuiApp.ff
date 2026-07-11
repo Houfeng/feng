@@ -1,0 +1,449 @@
+open module std.tui;
+
+import std;
+import std.collections;
+
+// ─── runtime 内存分配（与 Thread.ff 模式一致） ──────────────────────────────
+
+/**
+ * 分配指定字节数的内存，返回指针值。
+ * 失败返回 0。由 runtime 提供，用于分配 C 结构体（如 uv_tty_t）。
+ * @param size - 分配字节数
+ * @return 内存指针值，0 表示失败
+ */
+@runtime
+extern func feng_alloc(size: int): int;
+
+/**
+ * 释放 feng_alloc 分配的内存。
+ * @param ptr - feng_alloc 返回的指针值
+ */
+@runtime
+extern func feng_free(ptr: int): void;
+
+// ─── libuv TTY API ──────────────────────────────────────────────────────────
+
+/** uv_loop_t* — 默认事件循环句柄（指针值，用 int 承载） */
+@cdecl("feng_std_uv", "uv_default_loop")
+extern func uv_default_loop(): int;
+
+/**
+ * 初始化 TTY 句柄。
+ * fd=0 为 stdin（readable=1），fd=1 为 stdout（readable=0）。
+ * @param loop - 事件循环句柄（uv_default_loop() 返回值）
+ * @param tty - TTY 句柄内存指针（feng_alloc 分配的 uv_tty_t 内存）
+ * @param fd - 文件描述符
+ * @param readable - 1=可读（stdin），0=不可读（stdout）
+ * @return 0 成功，非 0 失败
+ */
+@cdecl("feng_std_uv", "uv_tty_init")
+extern func uv_tty_init(loop: int, tty: int, fd: i32, readable: i32): i32;
+
+/**
+ * 设置终端模式。
+ * @param tty - TTY 句柄内存指针
+ * @param mode - UV_TTY_MODE_NORMAL=0, UV_TTY_MODE_RAW=1, UV_TTY_MODE_IO=2
+ * @return 0 成功，非 0 失败
+ */
+@cdecl("feng_std_uv", "uv_tty_set_mode")
+extern func uv_tty_set_mode(tty: int, mode: i32): i32;
+
+/**
+ * 全局重置终端模式（用于 atexit 兜底恢复）。
+ * 与具体 TTY 句柄无关，重置进程级全局 TTY 状态。
+ * @return 0 成功，非 0 失败
+ */
+@cdecl("feng_std_uv", "uv_tty_reset_mode")
+extern func uv_tty_reset_mode(): i32;
+
+/**
+ * 获取终端窗口尺寸（列数, 行数）。
+ * @param tty - TTY 句柄内存指针
+ * @param width - 输出：列数（i32 缓冲，C 的 int* 指向 32 位整数）
+ * @param height - 输出：行数
+ * @return 0 成功，非 0 失败
+ */
+@cdecl("feng_std_uv", "uv_tty_get_winsize")
+extern func uv_tty_get_winsize(tty: int, width: i32*, height: i32*): i32;
+
+// ─── libc signal / atexit / pipe ───────────────────────────────────────────
+
+/** 信号回调签名：handler(int signum) */
+@abi
+spec SignalHandler(signum: i32): void;
+
+/** atexit 回调签名：handler() */
+@abi
+spec AtexitHandler(): void;
+
+/**
+ * 注册信号处理函数。
+ * @param signum - 信号编号（如 SIGWINCH=28）
+ * @param handler - 信号处理函数指针
+ * @return 旧的信号处理函数指针
+ */
+@cdecl("libc", "signal")
+extern func c_signal(signum: i32, handler: SignalHandler*): SignalHandler*;
+
+/**
+ * 注册进程退出回调。
+ * @param handler - 退出回调函数指针
+ * @return 0 成功，非 0 失败
+ */
+@cdecl("libc", "atexit")
+extern func c_atexit(handler: AtexitHandler*): i32;
+
+/**
+ * 创建管道：fds[0]=读端, fds[1]=写端。
+ * @param fds - 输出参数，长度为 2 的 i32 缓冲
+ * @return 0 成功，非 0 失败
+ */
+@cdecl("libc", "pipe")
+extern func c_pipe(fds: i32*): i32;
+
+// ─── libc poll / write / read / close ──────────────────────────────────────
+
+/**
+ * pollfd 结构体 — 与 C struct pollfd 内存布局一致。
+ * @value @abi：无托管头，offsetof(first_field) == 0，
+ * & 取地址直接得到 struct pollfd*，与 C 内存布局完全一致。
+ */
+@value @abi
+type PollFd {
+  /** 文件描述符 */
+  var fd: i32;
+  /** 监听事件（输入字段）：如 POLLIN=1 */
+  var events: i16;
+  /** 实际发生的事件（输出字段）：由内核在 poll 返回后填充 */
+  var revents: i16;
+
+  /** 无参构造：所有字段置 0 */
+  func PollFd() {
+    self.fd = 0;
+    self.events = 0;
+    self.revents = 0;
+  }
+
+  /**
+   * 指定 fd 和监听事件构造。
+   * revents 内部置 0（输出字段，由内核在 poll 返回后填充）。
+   * @param fd - 文件描述符
+   * @param events - 监听事件（如 POLLIN）
+   */
+  func PollFd(fd: i32, events: i16) {
+    self.fd = fd;
+    self.events = events;
+    self.revents = 0;
+  }
+}
+
+/**
+ * 多路复用 I/O 等待，无事件时阻塞休眠。
+ * @param fds - pollfd 数组指针
+ * @param nfds - 元素个数
+ * @param timeout - -1=无限等待，>=0=等待毫秒数
+ * @return >0 有事件的 fd 数，0 超时，<0 错误
+ */
+@cdecl("libc", "poll")
+extern func c_poll(fds: PollFd*, nfds: i32, timeout: i32): i32;
+
+/**
+ * 输出 ANSI 序列到 stdout。
+ * @param fd - 文件描述符（如 STDOUT_FD=1）
+ * @param buf - 字节缓冲指针
+ * @param count - 字节数
+ * @return 实际写入字节数，<0 错误
+ */
+@cdecl("libc", "write")
+extern func c_write(fd: i32, buf: byte*, count: uint): int;
+
+/**
+ * 从 fd 读取数据。
+ * @param fd - 文件描述符
+ * @param buf - 字节缓冲指针
+ * @param count - 最多读取字节数
+ * @return 实际读取字节数，<0 错误
+ */
+@cdecl("libc", "read")
+extern func c_read(fd: i32, buf: byte*, count: uint): int;
+
+/**
+ * 关闭文件描述符。
+ * @param fd - 文件描述符
+ * @return 0 成功，<0 错误
+ */
+@cdecl("libc", "close")
+extern func c_close(fd: i32): i32;
+
+// ─── 常量 ──────────────────────────────────────────────────────────────────
+
+/** 正常终端模式（uv_tty_set_mode 参数） */
+seal let UV_TTY_MODE_NORMAL: i32 = 0;
+/** Raw 输入模式（uv_tty_set_mode 参数） */
+seal let UV_TTY_MODE_RAW: i32 = 1;
+/** IPC 二进制安全模式（Unix-only） */
+seal let UV_TTY_MODE_IO: i32 = 2;
+/** fd 可读事件（poll events / revents） */
+seal let POLLIN: i16 = 1;
+/** poll 无限等待（无事件时阻塞休眠，零 CPU） */
+seal let POLL_TIMEOUT_BLOCK: i32 = -1;
+/** 窗口大小变化信号（macOS/Linux 一致） */
+seal let SIGWINCH: i32 = 28;
+/** stdin 文件描述符 */
+seal let STDIN_FD: i32 = 0;
+/** stdout 文件描述符 */
+seal let STDOUT_FD: i32 = 1;
+/**
+ * uv_tty_t 结构体大小（macOS arm64 实测 344 字节，用于 feng_alloc）。
+ * 平台注意：Linux 需另行确认，或取安全值 512。
+ */
+seal let UV_TTY_T_SIZE: int = 344;
+
+// ─── 模块级状态（供 @abi func 信号回调访问） ─────────────────────────────
+
+/**
+ * 信号管道写端（模块级变量）。
+ * init() 中由 c_pipe 赋值，供 handleSigwinch 信号回调写入唤醒主循环。
+ * signal() 回调无法访问 TuiApp 实例，但写管道是信号安全操作。
+ */
+seal var sigpipeW: i32 = 0;
+
+/**
+ * SIGWINCH 信号回调：写信号管道唤醒主循环。
+ * 信号中断上下文中只做 write（信号安全操作），不做复杂逻辑。
+ * 主循环 poll 返回后读走管道数据，置 resizeRequested 标志。
+ * @param signum - 信号编号（SIGWINCH）
+ */
+@abi
+func handleSigwinch(signum: i32): void {
+  let dummy: byte[!] = byte[:1];
+  c_write(sigpipeW, &dummy, 1);
+}
+
+/**
+ * atexit 回调：进程退出时全局重置终端模式。
+ * 不依赖任何 TuiApp 实例，直接调用 uv_tty_reset_mode()。
+ */
+@abi
+func ttyCleanup(): void {
+  uv_tty_reset_mode();
+}
+
+/**
+ * TuiApp 是终端用户界面（TUI）的应用控制层——应用入口与主循环。
+ *
+ * 混合方案 + poll 多路复用：libuv TTY API 处理 Raw Mode / 终端尺寸获取，
+ * libc signal() + self-pipe 处理 SIGWINCH，主循环用 poll() 多路复用驱动。
+ * 无事件时阻塞休眠（零 CPU）；任一 fd 可读即唤醒，渲染一帧。
+ *
+ * 阶段四（纯渲染）公开生命周期：init() → run() → exit()。
+ * stdin 已在 poll 监听集合中，阶段五加读取逻辑即可。
+ * 外部通知 fd（如异步 I/O 库的通知 fd）通过构造函数传入，只监听可读唤醒渲染。
+ */
+open type TuiApp {
+
+  /** TTY 句柄（feng_alloc 分配的 uv_tty_t 内存指针） */
+  seal var tty: int;
+  /** 默认事件循环句柄（uv_default_loop() 返回值） */
+  seal var loop: int;
+  /** Screen 渲染底座 */
+  seal var screen: Screen;
+  /** 窗口尺寸已变化标志：sigpipe 可读时置位，render() 中检查并清零 */
+  seal var resizeRequested: bool;
+  /** 是否已初始化（防止重复 init / 重复 exit） */
+  seal var initialized: bool;
+  /** 主循环是否运行中（run() 置 true，exit() 置 false） */
+  seal var running: bool;
+  /** 信号管道读端（主循环 poll 监听） */
+  seal var sigpipeR: i32;
+  /** 信号管道写端（init() 中赋值给模块级 sigpipeW 供信号回调使用） */
+  seal var sigpipeW: i32;
+  /** 外部通知 fd 数组（不含 stdin 和 sigpipeR，构造时传入） */
+  seal var fds: i32[];
+
+  // ─── 状态查询（供测试验证状态） ───────────────────────────────────────
+
+  /** 是否已初始化（init() 置 true，exit() 置 false） */
+  open func isInitialized(): bool {
+    return self.initialized;
+  }
+
+  /** 主循环是否运行中（run() 置 true，exit() 置 false） */
+  open func isRunning(): bool {
+    return self.running;
+  }
+
+  // ─── 构造函数 ─────────────────────────────────────────────────────────────
+
+  /**
+   * 构造函数（无外部 fd）：仅保存 Screen 引用，不做 TTY 初始化。
+   * 阶段四纯渲染场景使用。
+   * @param screen - 由调用方创建的 Screen 实例
+   */
+  func TuiApp(screen: Screen) {
+    self.screen = screen;
+    self.tty = 0;
+    self.loop = 0;
+    self.resizeRequested = false;
+    self.initialized = false;
+    self.running = false;
+    self.sigpipeR = 0;
+    self.sigpipeW = 0;
+    self.fds = i32[:0];
+  }
+
+  /**
+   * 构造函数（有外部 fd）：保存 Screen 引用和外部通知 fd 数组，不做 TTY 初始化。
+   * 异步 I/O 库场景使用：fds 为异步 I/O 库的通知 fd（如 epoll/kqueue/self-pipe 管道读端）。
+   * TuiApp 只监听 fd 可读事件唤醒渲染，不向 fd 写入、不处理关闭——fd 的生命周期由调用方管理。
+   * @param screen - 由调用方创建的 Screen 实例
+   * @param fds - 外部通知 fd 数组，poll 监听可读事件
+   */
+  func TuiApp(screen: Screen, fds: i32[]) {
+    self.screen = screen;
+    self.tty = 0;
+    self.loop = 0;
+    self.resizeRequested = false;
+    self.initialized = false;
+    self.running = false;
+    self.sigpipeR = 0;
+    self.sigpipeW = 0;
+    self.fds = fds;
+  }
+
+  // ─── 生命周期 ─────────────────────────────────────────────────────────────
+
+  /**
+   * 初始化：分配 TTY 句柄、进入 Raw Mode、创建信号管道、注册 SIGWINCH 和 atexit 回调。
+   * 幂等：重复调用安全。
+   * @throws "tui/app/alloc-failed" — feng_alloc 失败
+   * @throws "tui/app/tty-init-failed" — uv_tty_init 失败
+   * @throws "tui/app/raw-mode-failed" — uv_tty_set_mode 失败
+   * @throws "tui/app/pipe-failed" — pipe() 失败
+   */
+  open func init(): void {
+    if self.initialized { return; }
+    // 分配 uv_tty_t 内存
+    self.tty = feng_alloc(UV_TTY_T_SIZE);
+    if self.tty == 0 { throw "tui/app/alloc-failed"; }
+    self.loop = uv_default_loop();
+    // 初始化 TTY 句柄：fd=stdout, readable=0（阶段四只输出，不读输入）
+    let rc = uv_tty_init(self.loop, self.tty, STDOUT_FD, 0);
+    if rc != 0 {
+      feng_free(self.tty);
+      self.tty = 0;
+      throw "tui/app/tty-init-failed";
+    }
+    // 进入 Raw Mode
+    let modeRc = uv_tty_set_mode(self.tty, UV_TTY_MODE_RAW);
+    if modeRc != 0 {
+      feng_free(self.tty);
+      self.tty = 0;
+      throw "tui/app/raw-mode-failed";
+    }
+    // 创建信号管道（SIGWINCH → fd 转换）
+    let pipefds: i32[!] = i32[:2];
+    let pipeRc = c_pipe(&pipefds);
+    if pipeRc != 0 {
+      feng_free(self.tty);
+      self.tty = 0;
+      throw "tui/app/pipe-failed";
+    }
+    self.sigpipeR = pipefds[0];
+    self.sigpipeW = pipefds[1];
+    // 同步到模块级变量，供 handleSigwinch 信号回调访问
+    sigpipeW = self.sigpipeW;
+    // 注册 atexit 兜底恢复
+    c_atexit(&ttyCleanup);
+    // 注册 SIGWINCH handler（写管道唤醒主循环）
+    c_signal(SIGWINCH, &handleSigwinch);
+    self.initialized = true;
+  }
+
+  /**
+   * 渲染一帧：检查 resize、调用 Screen.buildPatchBytes()、写入 stdout。
+   * 单帧渲染，由 run() 事件循环调用，也可在测试中单独调用。
+   * 直接使用 byte[]，不经过 string 中间转换。
+   * @throws "tui/app/write-failed" — write 返回负值
+   */
+  open func render(): void {
+    // 检查窗口尺寸变化标志（由 sigpipe 可读时置位）
+    if self.resizeRequested {
+      let w: i32[!] = i32[:1];
+      let h: i32[!] = i32[:1];
+      let rc = uv_tty_get_winsize(self.tty, &w, &h);
+      if rc == 0 {
+        self.screen.resize((u32)w[0], (u32)h[0]);
+      }
+      self.resizeRequested = false;
+    }
+    // 调用 Screen.buildPatchBytes() 生成 ANSI 序列字节
+    let ansi = self.screen.buildPatchBytes();
+    // 直接写入 stdout，无需 string → byte[] 转换
+    let len = ansi.length();
+    if len > 0 {
+      let written = c_write(STDOUT_FD, &ansi, (uint)len);
+      if written < 0 {
+        throw "tui/app/write-failed";
+      }
+    }
+  }
+
+  /**
+   * 启动主循环：poll() 多路复用驱动。
+   * 无事件时阻塞休眠（零 CPU），任一 fd 可读即唤醒，渲染一帧。
+   * 监听集合：stdin + sigpipeR + 构造时传入的 fds（一次性构造）。
+   * 与 render() 职责分离：run() 管循环生命周期，render() 管单帧渲染。
+   * 退出由 exit() 置 running = false，下一轮 poll 返回后循环结束。
+   */
+  open func run(): void {
+    self.running = true;
+    // 一次性构造 pollfd 数组：stdin + sigpipeR + 用户 fds
+    let total: int = 2 + self.fds.length();
+    let pfds: PollFd[!] = PollFd[:total];
+    // stdin + sigpipeR
+    pfds[0] = PollFd(STDIN_FD, POLLIN);
+    pfds[1] = PollFd(self.sigpipeR, POLLIN);
+    // 用户 fds
+    for var i: int = 0; i < self.fds.length(); i += 1 {
+      pfds[i + 2] = PollFd(self.fds[i], POLLIN);
+    }
+    while self.running {
+      // 重置 revents（poll 输出字段，每轮需清零）
+      for var i: int = 0; i < total; i += 1 {
+        pfds[i].revents = 0;
+      }
+      // 阻塞等待任一 fd 可读
+      let rc = c_poll(&pfds, (i32)total, POLL_TIMEOUT_BLOCK);
+      if rc > 0 {
+        // 处理 sigpipeR（信号到达）
+        if pfds[1].revents & POLLIN != 0 {
+          let dummy: byte[!] = byte[:1];
+          c_read(self.sigpipeR, &dummy, 1);
+          self.resizeRequested = true;
+        }
+        // stdin 和用户 fd 的数据处理由调用方自行处理
+        // 阶段五在此处加 stdin 读取逻辑
+      }
+      self.render();
+    }
+  }
+
+  /**
+   * 退出 TUI 模式与清理：停止主循环、全局重置终端模式、关闭管道、释放 TTY 句柄。
+   * 不退出进程——进程生命周期由调用方控制。
+   * 幂等：重复调用安全。
+   */
+  open func exit(): void {
+    if !self.initialized { return; }
+    self.running = false;
+    uv_tty_reset_mode();       // 全局重置，与 atexit handler 一致
+    c_close(self.sigpipeR);
+    c_close(self.sigpipeW);
+    self.sigpipeR = 0;
+    self.sigpipeW = 0;
+    feng_free(self.tty);
+    self.tty = 0;
+    self.initialized = false;
+  }
+}

@@ -738,6 +738,61 @@ func screen_render_unicode_emoji() {
   check(out.contains("😀"), "tui/screen/render-unicode-emoji");
 }
 
+// ─── TuiApp 构造与字段初始化 ─────────────────────────────────────────────
+
+func tuiapp_ctor_no_fds() {
+  let scr = Screen((u32)10, (u32)5);
+  let app = TuiApp(scr);
+  // 构造后未初始化状态
+  check(app.isInitialized() == false, "tui/app/ctor-initialized");
+  check(app.isRunning() == false, "tui/app/ctor-running");
+}
+
+func tuiapp_ctor_with_fds() {
+  let scr = Screen((u32)10, (u32)5);
+  let fds: i32[!] = i32[:(int)2];
+  fds[0] = (i32)3;
+  fds[1] = (i32)4;
+  let app = TuiApp(scr, (i32[])fds);
+  check(app.isInitialized() == false, "tui/app/ctor-fds-initialized");
+}
+
+// ─── exit() 幂等性（不依赖 TTY 初始化） ──────────────────────────────────
+
+func tuiapp_exit_idempotent_uninit() {
+  let scr = Screen((u32)10, (u32)5);
+  let app = TuiApp(scr);
+  // 未 init 直接 exit，不应抛异常
+  app.exit();
+  app.exit();
+  check(app.isInitialized() == false, "tui/app/exit-idempotent-uninit");
+}
+
+// ─── render() 空帧不抛异常（不依赖 TTY 初始化） ──────────────────────────
+
+func tuiapp_render_empty_no_throw() {
+  let scr = Screen((u32)10, (u32)5);
+  let app = TuiApp(scr);
+  // 未 init 状态下 render()：resizeRequested=false，直接 buildPatchBytes + write
+  // 空白 Screen 的 buildPatchBytes 返回空数组，不触发 write，不会抛异常
+  var caught = false;
+  try app.render() catch ex: string { caught = true; };
+  check(caught == false, "tui/app/render-empty-no-throw");
+}
+
+// ─── render() 有内容输出（不依赖 TTY 初始化，buildPatchBytes 有内容即触发 write） ─────────
+
+func tuiapp_render_with_content() {
+  let scr = Screen((u32)10, (u32)5);
+  scr.buffer().draw((u32)0, (u32)0, "Hi");
+  let app = TuiApp(scr);
+  // resizeRequested=false，直接 buildPatchBytes（有内容）+ write
+  // 非 TTY 环境 write 可能失败，但写 stdout(fd=1) 通常成功
+  var caught = false;
+  try app.render() catch ex: string { caught = true; };
+  check(caught == false, "tui/app/render-with-content");
+}
+
 open func run_tui_tests() {
   describe("tui tests", () {
     test("cell_mask_fg()", () { cell_mask_fg(); });
@@ -818,5 +873,11 @@ open func run_tui_tests() {
     test("screen_resize()", () { screen_resize(); });
     test("screen_render_unicode_chinese()", () { screen_render_unicode_chinese(); });
     test("screen_render_unicode_emoji()", () { screen_render_unicode_emoji(); });
+    // ─── TuiApp ───
+    test("tuiapp_ctor_no_fds()", () { tuiapp_ctor_no_fds(); });
+    test("tuiapp_ctor_with_fds()", () { tuiapp_ctor_with_fds(); });
+    test("tuiapp_exit_idempotent_uninit()", () { tuiapp_exit_idempotent_uninit(); });
+    test("tuiapp_render_empty_no_throw()", () { tuiapp_render_empty_no_throw(); });
+    test("tuiapp_render_with_content()", () { tuiapp_render_with_content(); });
   });
 }
