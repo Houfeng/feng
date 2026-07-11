@@ -123,6 +123,7 @@
 | AE0512 | 调用重载缺失匹配约束 | AE0145 | function '%.*s.%.*s' has no overload accepting %zu argument(s) |
 | AE0511 | 调用重载二义性约束 | AE0146 | static method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous |
 | AE0512 | 调用重载缺失匹配约束 | AE0147 | static method '%.*s.%.*s' has no overload accepting %zu argument(s) |
+| AE0513 | 字段-方法同名冲突约束 | AE0513 | field '%.*s' and method '%.*s' in type '%.*s' cannot share the same name within the same conflict surface (static or instance) |
 | AE0511 | 调用重载二义性约束 | AE0148 | method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous |
 | AE0512 | 调用重载缺失匹配约束 | AE0149 | method '%.*s.%.*s' has no overload accepting %zu argument(s) |
 | AE0511 | 调用重载二义性约束 | AE0150 | method '%s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous |

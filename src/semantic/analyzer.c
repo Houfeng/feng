@@ -19227,6 +19227,58 @@ static bool validate_type_member_overloads(ResolveContext *context, const FengDe
     return ok;
 }
 
+/**
+ * 检查同一 type 内同一冲突面（静态或实例）中字段与方法是否同名。
+ * 静态成员通过 TypeName.member 访问,实例成员通过 self.member 访问,
+ * 两者访问路径不同不构成冲突面; 仅在同一 is_static 分量内检查。
+ * 字段与方法同名一律报错,不区分泛型与非泛型方法。
+ */
+static bool validate_type_member_field_method_name_conflict(ResolveContext *context, const FengDecl *decl) {
+    size_t i;
+    size_t j;
+    bool ok = true;
+
+    if (context == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE) {
+        return true;
+    }
+
+    for (i = 0U; i < decl->as.type_decl.member_count; ++i) {
+        const FengTypeMember *mi = decl->as.type_decl.members[i];
+        const FengCallableSignature *si;
+
+        if (mi == NULL || mi->kind != FENG_TYPE_MEMBER_METHOD) {
+            continue;
+        }
+        si = &mi->as.callable;
+
+        for (j = 0U; j < i; ++j) {
+            const FengTypeMember *mj = decl->as.type_decl.members[j];
+
+            if (mj == NULL || mj->kind != FENG_TYPE_MEMBER_FIELD) {
+                continue;
+            }
+            /* 静态/实例不在同一冲突面 */
+            if (mi->is_static != mj->is_static) {
+                continue;
+            }
+            if (!slice_equals(si->name, mj->as.field.name)) {
+                continue;
+            }
+            ok = resolver_append_error(
+                     context,
+                     si->token,
+                     "AE0513", format_message(
+                         "field '%.*s' and method '%.*s' in type '%.*s' cannot share the same name within the same conflict surface (static or instance)",
+                         (int)mj->as.field.name.length, mj->as.field.name.data,
+                         (int)si->name.length, si->name.data,
+                         (int)decl->as.type_decl.name.length,
+                         decl->as.type_decl.name.data)) && ok;
+        }
+    }
+
+    return ok;
+}
+
 static bool validate_fit_member_overloads(ResolveContext *context, const FengDecl *fit_decl) {
     size_t i;
     size_t j;
@@ -25972,6 +26024,9 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 ok = false;
             }
             if (ok && !validate_type_member_overload_overlap(context, decl)) {
+                ok = false;
+            }
+            if (ok && !validate_type_member_field_method_name_conflict(context, decl)) {
                 ok = false;
             }
             if (ok && !validate_type_finalizer_constraints(context, decl)) {

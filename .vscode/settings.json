@@ -22,6 +22,7 @@
     "println",
     "Reifiable",
     "stdint",
+    "STRIKETHROUGH",
     "venv"
   ],
   "chat.agent.maxRequests": 200

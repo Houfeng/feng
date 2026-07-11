@@ -6,6 +6,38 @@ open module std.tui;
  */
 @value
 open type Cell {
+
+  // ─── 静态常量 ────────────────────────────────────────────────────────────
+
+  /** 前景色掩码（低 24 bits） */
+  open static let MASK_FG: u64 = 0xFFFFFF;
+  /** 背景色掩码（中 24 bits） */
+  open static let MASK_BG: u64 = (u64)0xFFFFFF << (u64)24;
+  /**
+   * 样式标志位掩码（高 16 bits，48-63 位）
+   * 等价于 STYLE_BOLD | STYLE_DIM | ... | STYLE_STRIKETHROUGH
+   */
+  open static let MASK_FLAGS: u64 = (u64)0xFF << (u64)48;
+
+  /** 粗体标志位（第 48 位） */
+  open static let STYLE_BOLD: u64 = (u64)1 << (u64)48;
+  /** 暗淡标志位（第 49 位） */
+  open static let STYLE_DIM: u64 = (u64)1 << (u64)49;
+  /** 斜体标志位（第 50 位） */
+  open static let STYLE_ITALIC: u64 = (u64)1 << (u64)50;
+  /** 下划线标志位（第 51 位） */
+  open static let STYLE_UNDERLINE: u64 = (u64)1 << (u64)51;
+  /** 闪烁标志位（第 52 位） */
+  open static let STYLE_BLINK: u64 = (u64)1 << (u64)52;
+  /** 反转标志位（第 53 位） */
+  open static let STYLE_REVERSE: u64 = (u64)1 << (u64)53;
+  /** 隐藏标志位（第 54 位） */
+  open static let STYLE_HIDDEN: u64 = (u64)1 << (u64)54;
+  /** 删除线标志位（第 55 位） */
+  open static let STYLE_STRIKETHROUGH: u64 = (u64)1 << (u64)55;
+
+  // ─── 实例字段 ──────────────────────────────────────────────────────────────
+
   /**
    * 字符的 Unicode 码点
    * 支持所有 Unicode 字符，包括 Emoji、汉字、拉丁字母等
@@ -15,8 +47,9 @@ open type Cell {
 
   /**
    * 获取字符的 Unicode 码点
+   * @return 当前 cell 持有的 Unicode 码点
    */
-  func value(): u64 {
+  open func value(): u64 {
     return self.value;
   }
 
@@ -28,202 +61,291 @@ open type Cell {
    *   - [ 16 bits 样式与标志位 ] [ 24 bits 背景 RGB ] [ 24 bits 前景 RGB ]
    *
    * 提取前景色 (最低 24 bits)  
-   *   - 直接使用 0xFFFFFF 掩码截取，指令开销最小
-   *   - (self.style & 0xFFFFFF)
+   *   - 直接使用 Cell.MASK_FG 掩码截取，指令开销最小
+   *   - (self.style & Cell.MASK_FG)
    *
    * 提取背景色 (中间 24 bits)  
    *   - 先右移 24 位，再使用 0xFFFFFF 掩码截取
    *   - ((self.style >> 24) & 0xFFFFFF)
    *
-   * 样式位掩码常量定义 (占用 48-63 位)  
-   *   - let STYLE_BOLD: u64          = 1 << 48;
-   *   - let STYLE_DIM: u64           = 1 << 49;
-   *   - let STYLE_ITALIC: u64        = 1 << 50;
-   *   - let STYLE_UNDERLINE: u64     = 1 << 51;
-   *   - let STYLE_BLINK: u64         = 1 << 52;
-   *   - let STYLE_REVERSE: u64       = 1 << 53;
-   *   - let STYLE_HIDDEN: u64        = 1 << 54;
-   *   - let STYLE_STRIKETHROUGH: u64 = 1 << 55;
-   *
+   * 样式标志位常量见类型开头的 `open static let STYLE_*` 声明
    */
   seal var style: u64;
 
   /**
    * 获取样式信息
+   * @return 当前 cell 的完整样式编码
    */
-  func style(): u64 {
+  open func style(): u64 {
     return self.style;
   }
 
   /**
    * 获取前景色
+   * @return 前景 RGB 值（低 24 bits）
    */
   func foreColor(): u32 {
-    return (u32)(self.style & 0xFFFFFF);
+    return (u32)(self.style & Cell.MASK_FG);
   }
 
   /**
    * 设置前景色
+   * @param value - 前景 RGB 值（仅低 24 bits 有效）
    */
   func foreColor(value: u32): void {
-    self.style = (self.style & (u64)(~0xFFFFFF)) | ((u64)(value & 0xFFFFFF));
+    self.style = (self.style & (u64)(~Cell.MASK_FG)) | ((u64)(value & 0xFFFFFF));
   }
 
   /**
-   * 获取取背景色
+   * 获取背景色
+   * @return 背景 RGB 值（中 24 bits）
    */
   func backColor(): u32 {
     return (u32)((self.style >> 24) & 0xFFFFFF);
   }
 
   /**
-   *  设置背景色
+   * 设置背景色
+   * @param value - 背景 RGB 值（仅低 24 bits 有效）
    */
   func backColor(value: u32): void {
-    self.style = (self.style & (u64)(~(0xFFFFFF << 24))) | ((u64)(value & 0xFFFFFF) << 24);
+    self.style = (self.style & (u64)(~Cell.MASK_BG)) | ((u64)(value & 0xFFFFFF) << 24);
   }
 
   /**
    * 是否为粗体
+   * @return 粗体标志是否设置
    */
   func bold(): bool {
-    return (self.style & (1 << 48)) != 0;
+    return (self.style & Cell.STYLE_BOLD) != 0;
   }
 
   /**
    * 设置粗体
+   * @param value - true 表示启用粗体，false 表示关闭
    */
   func bold(value: bool): void {
     if value {
-      self.style |= (1 << 48);
+      self.style |= Cell.STYLE_BOLD;
     } else {
-      self.style &= (u64)(~(1 << 48));
+      self.style &= (u64)(~Cell.STYLE_BOLD);
     }
   }
 
   /**
    * 是否为暗淡
+   * @return 暗淡标志是否设置
    */
   func dim(): bool {
-    return (self.style & (1 << 49)) != 0;
+    return (self.style & Cell.STYLE_DIM) != 0;
   }
 
   /**
    * 设置暗淡
+   * @param value - true 表示启用暗淡，false 表示关闭
    */
   func dim(value: bool): void {
     if value {
-      self.style |= (1 << 49);
+      self.style |= Cell.STYLE_DIM;
     } else {
-      self.style &= (u64)(~(1 << 49));
+      self.style &= (u64)(~Cell.STYLE_DIM);
     }
   }
 
   /**
    * 是否为斜体
+   * @return 斜体标志是否设置
    */
   func italic(): bool {
-    return (self.style & (1 << 50)) != 0;
+    return (self.style & Cell.STYLE_ITALIC) != 0;
   }
 
   /**
    * 设置斜体
+   * @param value - true 表示启用斜体，false 表示关闭
    */
   func italic(value: bool): void {
     if value {
-      self.style |= (1 << 50);
+      self.style |= Cell.STYLE_ITALIC;
     } else {
-      self.style &= (u64)(~(1 << 50));
+      self.style &= (u64)(~Cell.STYLE_ITALIC);
     }
   }
 
   /**
    * 是否为下划线
+   * @return 下划线标志是否设置
    */
   func underline(): bool {
-    return (self.style & (1 << 51)) != 0;
+    return (self.style & Cell.STYLE_UNDERLINE) != 0;
   }
 
   /**
    * 设置下划线
+   * @param value - true 表示启用下划线，false 表示关闭
    */
   func underline(value: bool): void {
     if value {
-      self.style |= (1 << 51);
+      self.style |= Cell.STYLE_UNDERLINE;
     } else {
-      self.style &= (u64)(~(1 << 51));
+      self.style &= (u64)(~Cell.STYLE_UNDERLINE);
     }
   }
 
   /**
    * 是否为闪烁
+   * @return 闪烁标志是否设置
    */
   func blink(): bool {
-    return (self.style & (1 << 52)) != 0;
+    return (self.style & Cell.STYLE_BLINK) != 0;
   }
 
   /**
    * 设置闪烁
+   * @param value - true 表示启用闪烁，false 表示关闭
    */
   func blink(value: bool): void {
     if value {
-      self.style |= (1 << 52);
+      self.style |= Cell.STYLE_BLINK;
     } else {
-      self.style &= (u64)(~(1 << 52));
+      self.style &= (u64)(~Cell.STYLE_BLINK);
     }
   }
 
   /**
    * 是否为反转
+   * @return 反转标志是否设置
    */
   func reverse(): bool {
-    return (self.style & (1 << 53)) != 0;
+    return (self.style & Cell.STYLE_REVERSE) != 0;
   }
 
   /**
    * 设置反转
+   * @param value - true 表示启用反转，false 表示关闭
    */
   func reverse(value: bool): void {
     if value {
-      self.style |= (1 << 53);
+      self.style |= Cell.STYLE_REVERSE;
     } else {
-      self.style &= (u64)(~(1 << 53));
+      self.style &= (u64)(~Cell.STYLE_REVERSE);
     }
   }
 
   /**
    * 是否为隐藏
+   * @return 隐藏标志是否设置
    */
   func hidden(): bool {
-    return (self.style & (1 << 54)) != 0;
+    return (self.style & Cell.STYLE_HIDDEN) != 0;
   }
 
   /**
    * 设置隐藏
+   * @param value - true 表示启用隐藏，false 表示关闭
    */
   func hidden(value: bool): void {
     if value {
-      self.style |= (1 << 54);
+      self.style |= Cell.STYLE_HIDDEN;
     } else {
-      self.style &= (u64)(~(1 << 54));
+      self.style &= (u64)(~Cell.STYLE_HIDDEN);
     }
   }
 
   /**
    * 是否为删除线
+   * @return 删除线标志是否设置
    */
   func strikeThrough(): bool {
-    return (self.style & (1 << 55)) != 0;
+    return (self.style & Cell.STYLE_STRIKETHROUGH) != 0;
   }
 
   /**
    * 设置删除线
+   * @param value - true 表示启用删除线，false 表示关闭
    */
   func strikeThrough(value: bool): void {
     if value {
-      self.style |= (1 << 55);
+      self.style |= Cell.STYLE_STRIKETHROUGH;
     } else {
-      self.style &= (u64)(~(1 << 55));
+      self.style &= (u64)(~Cell.STYLE_STRIKETHROUGH);
     }
+  }
+
+  // ─── 构造函数 ─────────────────────────────────────────────────────────────
+
+  /**
+   * 默认构造函数：创建一个空白 cell（value=0，style=0）
+   */
+  func Cell() {}
+
+  /**
+   * 构造函数：创建一个持有指定码点的 cell，不带任何样式
+   * @param value - Unicode 码点
+   */
+  func Cell(value: u64) {
+    self.value = value;
+    self.style = 0;
+  }
+
+  /**
+   * 构造函数：创建一个持有指定码点和样式编码的 cell
+   * @param value - Unicode 码点
+   * @param style - 样式编码（通过 Cell.STYLE_* 常量组合）
+   */
+  func Cell(value: u64, style: u64) {
+    self.value = value;
+    self.style = style;
+  }
+
+  // ─── 静态工厂方法 ───────────────────────────────────────────────────────────
+
+  /**
+   * 创建一个空白 cell（value=0，style=0）
+   * @return 空白 cell
+   */
+  open static func empty(): Cell {
+    return Cell();
+  }
+
+  /**
+   * 创建一个持有指定码点的 cell，不带任何样式
+   * @param value - Unicode 码点
+   * @return 不带样式的 cell
+   */
+  open static func withValue(value: u64): Cell {
+    return Cell(value);
+  }
+
+  /**
+   * 创建一个持有指定码点和样式编码的 cell
+   * @param value - Unicode 码点
+   * @param style - 样式编码（通过 Cell.STYLE_* 常量组合）
+   * @return 带指定样式的 cell
+   */
+  open static func withStyle(value: u64, style: u64): Cell {
+    return Cell(value, style);
+  }
+
+  /**
+   * 创建一个持有指定码点和前景色的 cell
+   * @param value - Unicode 码点
+   * @param fg - 前景 RGB 值
+   * @return 带指定前景色的 cell
+   */
+  open static func withFg(value: u64, fg: u32): Cell {
+    return Cell(value, (u64)(fg & 0xFFFFFF));
+  }
+
+  /**
+   * 创建一个持有指定码点、前景色和背景色的 cell
+   * @param value - Unicode 码点
+   * @param fg - 前景 RGB 值
+   * @param bg - 背景 RGB 值
+   * @return 带指定前景色和背景色的 cell
+   */
+  open static func withColors(value: u64, fg: u32, bg: u32): Cell {
+    let style: u64 = ((u64)(fg & 0xFFFFFF)) | ((u64)(bg & 0xFFFFFF) << 24);
+    return Cell(value, style);
   }
 }

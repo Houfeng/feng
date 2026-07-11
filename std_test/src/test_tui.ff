@@ -1,0 +1,268 @@
+module std_test;
+
+import std.test;
+
+import std.tui;
+
+// ─── 静态常量 ──────────────────────────────────────────────────────────────
+
+func cell_mask_fg() {
+  check(Cell.MASK_FG == (u64)0xFFFFFF, "tui/cell/mask-fg");
+}
+
+func cell_mask_bg() {
+  check(Cell.MASK_BG == ((u64)0xFFFFFF << (u64)24), "tui/cell/mask-bg");
+}
+
+func cell_mask_flags() {
+  check(Cell.MASK_FLAGS == ((u64)0xFF << (u64)48), "tui/cell/mask-flags");
+}
+
+func cell_style_bold_const() {
+  check(Cell.STYLE_BOLD == ((u64)1 << (u64)48), "tui/cell/style-bold-const");
+}
+
+func cell_style_dim_const() {
+  check(Cell.STYLE_DIM == ((u64)1 << (u64)49), "tui/cell/style-dim-const");
+}
+
+func cell_style_italic_const() {
+  check(Cell.STYLE_ITALIC == ((u64)1 << (u64)50), "tui/cell/style-italic-const");
+}
+
+func cell_style_underline_const() {
+  check(Cell.STYLE_UNDERLINE == ((u64)1 << (u64)51), "tui/cell/style-underline-const");
+}
+
+func cell_style_blink_const() {
+  check(Cell.STYLE_BLINK == ((u64)1 << (u64)52), "tui/cell/style-blink-const");
+}
+
+func cell_style_reverse_const() {
+  check(Cell.STYLE_REVERSE == ((u64)1 << (u64)53), "tui/cell/style-reverse-const");
+}
+
+func cell_style_hidden_const() {
+  check(Cell.STYLE_HIDDEN == ((u64)1 << (u64)54), "tui/cell/style-hidden-const");
+}
+
+func cell_style_strikethrough_const() {
+  check(Cell.STYLE_STRIKETHROUGH == ((u64)1 << (u64)55), "tui/cell/style-strikethrough-const");
+}
+
+// ─── 构造函数 ──────────────────────────────────────────────────────────────
+
+func cell_ctor_default() {
+  let c = Cell();
+  check(c.value() == (u64)0, "tui/cell/ctor-default-value");
+  check(c.style() == (u64)0, "tui/cell/ctor-default-style");
+}
+
+func cell_ctor_value() {
+  let c = Cell((u64)65);
+  check(c.value() == (u64)65, "tui/cell/ctor-value-value");
+  check(c.style() == (u64)0, "tui/cell/ctor-value-style");
+}
+
+func cell_ctor_value_style() {
+  let c = Cell((u64)65, Cell.STYLE_BOLD);
+  check(c.value() == (u64)65, "tui/cell/ctor-value-style-value");
+  check(c.style() == Cell.STYLE_BOLD, "tui/cell/ctor-value-style-style");
+}
+
+// ─── 工厂方法 ──────────────────────────────────────────────────────────────
+
+func cell_factory_empty() {
+  let c = Cell.empty();
+  check(c.value() == (u64)0, "tui/cell/factory-empty-value");
+  check(c.style() == (u64)0, "tui/cell/factory-empty-style");
+}
+
+func cell_factory_with_value() {
+  let c = Cell.withValue((u64)72);
+  check(c.value() == (u64)72, "tui/cell/factory-with-value-value");
+  check(c.style() == (u64)0, "tui/cell/factory-with-value-style");
+}
+
+func cell_factory_with_style() {
+  let c = Cell.withStyle((u64)88, Cell.STYLE_ITALIC);
+  check(c.value() == (u64)88, "tui/cell/factory-with-style-value");
+  check(c.style() == Cell.STYLE_ITALIC, "tui/cell/factory-with-style-style");
+}
+
+func cell_factory_with_fg() {
+  let c = Cell.withFg((u64)65, (u32)0xFF0000);
+  check(c.value() == (u64)65, "tui/cell/factory-with-fg-value");
+  check(c.foreColor() == (u32)0xFF0000, "tui/cell/factory-with-fg-fg");
+}
+
+func cell_factory_with_colors() {
+  let c = Cell.withColors((u64)65, (u32)0xFF0000, (u32)0x00FF00);
+  check(c.value() == (u64)65, "tui/cell/factory-with-colors-value");
+  check(c.foreColor() == (u32)0xFF0000, "tui/cell/factory-with-colors-fg");
+  check(c.backColor() == (u32)0x00FF00, "tui/cell/factory-with-colors-bg");
+}
+
+// ─── 前景色 / 背景色读写 ────────────────────────────────────────────────────
+
+func cell_fore_color_rw() {
+  let c = Cell((u64)65);
+  check(c.foreColor() == (u32)0, "tui/cell/fore-color-init");
+  c.foreColor((u32)0xABCDEE);
+  check(c.foreColor() == (u32)0xABCDEE, "tui/cell/fore-color-set");
+}
+
+func cell_back_color_rw() {
+  let c = Cell((u64)65);
+  check(c.backColor() == (u32)0, "tui/cell/back-color-init");
+  c.backColor((u32)0x123456);
+  check(c.backColor() == (u32)0x123456, "tui/cell/back-color-set");
+}
+
+func cell_fore_back_color_independent() {
+  let c = Cell((u64)65);
+  c.foreColor((u32)0xFF);
+  c.backColor((u32)0xFF00);
+  check(c.foreColor() == (u32)0xFF, "tui/cell/fore-back-independent-fg");
+  check(c.backColor() == (u32)0xFF00, "tui/cell/fore-back-independent-bg");
+}
+
+// ─── 样式标志位读写 ──────────────────────────────────────────────────────────
+
+func cell_bold_rw() {
+  let c = Cell((u64)65);
+  check(c.bold() == false, "tui/cell/bold-init");
+  c.bold(true);
+  check(c.bold() == true, "tui/cell/bold-set-true");
+  check(c.style() == Cell.STYLE_BOLD, "tui/cell/bold-style-value");
+  c.bold(false);
+  check(c.bold() == false, "tui/cell/bold-set-false");
+  check(c.style() == (u64)0, "tui/cell/bold-cleared");
+}
+
+func cell_dim_rw() {
+  let c = Cell((u64)65);
+  check(c.dim() == false, "tui/cell/dim-init");
+  c.dim(true);
+  check(c.dim() == true, "tui/cell/dim-set-true");
+  c.dim(false);
+  check(c.dim() == false, "tui/cell/dim-set-false");
+}
+
+func cell_italic_rw() {
+  let c = Cell((u64)65);
+  check(c.italic() == false, "tui/cell/italic-init");
+  c.italic(true);
+  check(c.italic() == true, "tui/cell/italic-set-true");
+  c.italic(false);
+  check(c.italic() == false, "tui/cell/italic-set-false");
+}
+
+func cell_underline_rw() {
+  let c = Cell((u64)65);
+  check(c.underline() == false, "tui/cell/underline-init");
+  c.underline(true);
+  check(c.underline() == true, "tui/cell/underline-set-true");
+  c.underline(false);
+  check(c.underline() == false, "tui/cell/underline-set-false");
+}
+
+func cell_blink_rw() {
+  let c = Cell((u64)65);
+  check(c.blink() == false, "tui/cell/blink-init");
+  c.blink(true);
+  check(c.blink() == true, "tui/cell/blink-set-true");
+  c.blink(false);
+  check(c.blink() == false, "tui/cell/blink-set-false");
+}
+
+func cell_reverse_rw() {
+  let c = Cell((u64)65);
+  check(c.reverse() == false, "tui/cell/reverse-init");
+  c.reverse(true);
+  check(c.reverse() == true, "tui/cell/reverse-set-true");
+  c.reverse(false);
+  check(c.reverse() == false, "tui/cell/reverse-set-false");
+}
+
+func cell_hidden_rw() {
+  let c = Cell((u64)65);
+  check(c.hidden() == false, "tui/cell/hidden-init");
+  c.hidden(true);
+  check(c.hidden() == true, "tui/cell/hidden-set-true");
+  c.hidden(false);
+  check(c.hidden() == false, "tui/cell/hidden-set-false");
+}
+
+func cell_strikethrough_rw() {
+  let c = Cell((u64)65);
+  check(c.strikeThrough() == false, "tui/cell/strikethrough-init");
+  c.strikeThrough(true);
+  check(c.strikeThrough() == true, "tui/cell/strikethrough-set-true");
+  c.strikeThrough(false);
+  check(c.strikeThrough() == false, "tui/cell/strikethrough-set-false");
+}
+
+// ─── 样式组合 ──────────────────────────────────────────────────────────────
+
+func cell_style_combination() {
+  let c = Cell((u64)65);
+  c.bold(true);
+  c.italic(true);
+  c.underline(true);
+  check(c.bold() == true, "tui/cell/combination-bold");
+  check(c.italic() == true, "tui/cell/combination-italic");
+  check(c.underline() == true, "tui/cell/combination-underline");
+  check(c.dim() == false, "tui/cell/combination-dim-false");
+  check(c.blink() == false, "tui/cell/combination-blink-false");
+  let expected: u64 = Cell.STYLE_BOLD | Cell.STYLE_ITALIC | Cell.STYLE_UNDERLINE;
+  check(c.style() == expected, "tui/cell/combination-style-value");
+}
+
+func cell_style_with_colors() {
+  let c = Cell((u64)65);
+  c.foreColor((u32)0xFFFFFF);
+  c.backColor((u32)0x000000);
+  c.bold(true);
+  check(c.foreColor() == (u32)0xFFFFFF, "tui/cell/style-colors-fg");
+  check(c.backColor() == (u32)0x000000, "tui/cell/style-colors-bg");
+  check(c.bold() == true, "tui/cell/style-colors-bold");
+  check(c.value() == (u64)65, "tui/cell/style-colors-value");
+}
+
+open func run_tui_tests() {
+  describe("tui tests", () {
+    test("cell_mask_fg()", () { cell_mask_fg(); });
+    test("cell_mask_bg()", () { cell_mask_bg(); });
+    test("cell_mask_flags()", () { cell_mask_flags(); });
+    test("cell_style_bold_const()", () { cell_style_bold_const(); });
+    test("cell_style_dim_const()", () { cell_style_dim_const(); });
+    test("cell_style_italic_const()", () { cell_style_italic_const(); });
+    test("cell_style_underline_const()", () { cell_style_underline_const(); });
+    test("cell_style_blink_const()", () { cell_style_blink_const(); });
+    test("cell_style_reverse_const()", () { cell_style_reverse_const(); });
+    test("cell_style_hidden_const()", () { cell_style_hidden_const(); });
+    test("cell_style_strikethrough_const()", () { cell_style_strikethrough_const(); });
+    test("cell_ctor_default()", () { cell_ctor_default(); });
+    test("cell_ctor_value()", () { cell_ctor_value(); });
+    test("cell_ctor_value_style()", () { cell_ctor_value_style(); });
+    test("cell_factory_empty()", () { cell_factory_empty(); });
+    test("cell_factory_with_value()", () { cell_factory_with_value(); });
+    test("cell_factory_with_style()", () { cell_factory_with_style(); });
+    test("cell_factory_with_fg()", () { cell_factory_with_fg(); });
+    test("cell_factory_with_colors()", () { cell_factory_with_colors(); });
+    test("cell_fore_color_rw()", () { cell_fore_color_rw(); });
+    test("cell_back_color_rw()", () { cell_back_color_rw(); });
+    test("cell_fore_back_color_independent()", () { cell_fore_back_color_independent(); });
+    test("cell_bold_rw()", () { cell_bold_rw(); });
+    test("cell_dim_rw()", () { cell_dim_rw(); });
+    test("cell_italic_rw()", () { cell_italic_rw(); });
+    test("cell_underline_rw()", () { cell_underline_rw(); });
+    test("cell_blink_rw()", () { cell_blink_rw(); });
+    test("cell_reverse_rw()", () { cell_reverse_rw(); });
+    test("cell_hidden_rw()", () { cell_hidden_rw(); });
+    test("cell_strikethrough_rw()", () { cell_strikethrough_rw(); });
+    test("cell_style_combination()", () { cell_style_combination(); });
+    test("cell_style_with_colors()", () { cell_style_with_colors(); });
+  });
+}

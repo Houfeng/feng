@@ -22,5 +22,7 @@ func main(args: string[]) {
 
     replaceStdin("ABCDE\nFG");
     run_stdio_api_tests();
+
+    run_tui_tests();
   });
 }
