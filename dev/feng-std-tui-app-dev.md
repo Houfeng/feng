@@ -150,6 +150,20 @@ type PollFd {
   var fd: i32;
   var events: i16;
   var revents: i16;
+
+  /** 无参构造：所有字段置 0 */
+  func PollFd() {
+    self.fd = (i32)0;
+    self.events = (i16)0;
+    self.revents = (i16)0;
+  }
+
+  /** 指定 fd 和监听事件，revents 内部置 0（输出字段，由内核在 poll 返回后填充） */
+  func PollFd(fd: i32, events: i16) {
+    self.fd = fd;
+    self.events = events;
+    self.revents = (i16)0;
+  }
 }
 
 /** 多路复用 I/O 等待，无事件时阻塞休眠 */
@@ -370,24 +384,18 @@ open func render(): void {
 open func run(): void {
   self.running = true;
   // 一次性构造 pollfd 数组：stdin + sigpipeR + 用户 fds
-  let internal: i32 = (i32)2;  // stdin + sigpipeR
-  let userCount: i32 = (i32)self.fds.length();
-  let total: i32 = internal + userCount;
+  let total: i32 = (i32)2 + (i32)self.fds.length();
   let pfds: PollFd[!] = PollFd[:(int)total];
-  // stdin
-  pfds[0].fd = STDIN_FD;
-  pfds[0].events = POLLIN;
-  // sigpipeR
-  pfds[1].fd = self.sigpipeR;
-  pfds[1].events = POLLIN;
+  // stdin + sigpipeR
+  pfds[0] = PollFd(STDIN_FD, POLLIN);
+  pfds[1] = PollFd(self.sigpipeR, POLLIN);
   // 用户 fds
-  for i in 0..<userCount {
-    pfds[(i + internal)].fd = self.fds[(int)i];
-    pfds[(i + internal)].events = POLLIN;
+  for var i: i32 = (i32)0; i < (i32)self.fds.length(); i += (i32)1 {
+    pfds[i + (i32)2] = PollFd(self.fds[(int)i], POLLIN);
   }
   while self.running {
-    // 重置 revents
-    for i in 0..<total {
+    // 重置 revents（poll 输出字段，每轮需清零）
+    for var i: i32 = (i32)0; i < total; i += (i32)1 {
       pfds[i].revents = (i16)0;
     }
     // 阻塞等待任一 fd 可读
