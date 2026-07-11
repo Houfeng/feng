@@ -93,36 +93,48 @@
 - **全量回归测试**：执行 `make test`，确保所有测试套件通过
 - **人工 Review**：变更完成后通知开发者审查，审查通过后方可进入下一阶段。严禁跳过 Review 直接开始下一阶段。
 
-### 第一阶段：渲染底座（1-3 层）
+### 第一阶段：Cell（渲染底座 - 最小单元）
 
 - [ ] 4.1 完善 Cell：构造函数、静态常量、工厂方法
-- [ ] 4.2 实现 Buffer：Cell 矩阵管理 + 绘制原语
-- [ ] 4.3 实现 Screen：双缓冲 + Diff 引擎 + ANSI 序列生成 + I/O 批处理
-- [ ] 4.4 补充 std_test 用例：新增 `std_test/src/test_tui.ff`，覆盖 Cell 样式读写、Buffer 绘制原语、Screen Diff 输出等；注册 `run_tui_tests()` 并在 `z_main.ff` 中调用
-- [ ] 4.5 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.6 等待人工 Review：开发者审查 Cell / Buffer / Screen 实现与测试用例，通过后方可进入第二阶段
+- [ ] 4.2 补充 std_test 用例：新增 `std_test/src/test_tui.ff`，覆盖 Cell 样式读写（前景色/背景色/粗体/斜体等各标志位）；注册 `run_tui_tests()` 并在 `z_main.ff` 中调用
+- [ ] 4.3 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.4 等待人工 Review：开发者审查 Cell 实现与测试用例，通过后方可进入第二阶段
 
-### 第二阶段：视图逻辑层（第 4 层 - 简化版）
+### 第二阶段：Buffer（渲染底座 - 数据容器）
 
-- [ ] 4.7 实现简单 Widget 基类 + Text + Button
-- [ ] 4.8 实现简单的线性布局（Row / Column / Stack）
-- [ ] 4.9 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 渲染、Text 内容绘制、Button 状态切换等测试
-- [ ] 4.10 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.11 等待人工 Review：开发者审查 Widget 层设计与实现，通过后方可进入第三阶段
+- [ ] 4.5 实现 Buffer：Cell 矩阵管理 + 绘制原语（`setCell`、`drawText`、`fill`、`clear`）
+- [ ] 4.6 补充 std_test 用例：在 `test_tui.ff` 中新增 Buffer 矩阵索引、绘制原语、边界校验等测试
+- [ ] 4.7 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.8 等待人工 Review：开发者审查 Buffer 实现与测试用例，通过后方可进入第三阶段
 
-### 第三阶段：应用控制层（第 5 层）
+### 第三阶段：Screen（渲染底座 - 差异同步）
 
-- [ ] 4.12 实现 TuiApp：Raw Mode + 终端恢复 + SIGWINCH
-- [ ] 4.13 实现输入解析状态机 + 事件路由
-- [ ] 4.14 补充 std_test 用例：在 `test_tui.ff` 中新增输入解析状态机（VT100/xterm 转义序列）、事件路由等测试
-- [ ] 4.15 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.16 等待人工 Review：开发者审查 TuiApp 生命周期与终端恢复机制，通过后方可进入第四阶段
+- [ ] 4.9 实现 Screen：双缓冲 + Diff 引擎 + ANSI 序列生成 + I/O 批处理 + SGR 状态机优化
+- [ ] 4.10 补充 std_test 用例：在 `test_tui.ff` 中新增 Screen Diff 输出、SGR 状态机、双缓冲同步等测试
+- [ ] 4.11 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.12 等待人工 Review：开发者审查 Screen 实现与测试用例，通过后方可进入第四阶段
 
-### 第四阶段：测试与验证
+### 第四阶段：视图逻辑层（第 4 层 - 简化版）
 
-- [ ] 4.17 补充 std_test 用例：审查前三阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
-- [ ] 4.18 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.19 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
+- [ ] 4.13 实现简单 Widget 基类 + Text + Button
+- [ ] 4.14 实现简单的线性布局（Row / Column / Stack）
+- [ ] 4.15 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 渲染、Text 内容绘制、Button 状态切换等测试
+- [ ] 4.16 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.17 等待人工 Review：开发者审查 Widget 层设计与实现，通过后方可进入第五阶段
+
+### 第五阶段：应用控制层（第 5 层）
+
+- [ ] 4.18 实现 TuiApp：Raw Mode + 终端恢复 + SIGWINCH
+- [ ] 4.19 实现输入解析状态机 + 事件路由
+- [ ] 4.20 补充 std_test 用例：在 `test_tui.ff` 中新增输入解析状态机（VT100/xterm 转义序列）、事件路由等测试
+- [ ] 4.21 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.22 等待人工 Review：开发者审查 TuiApp 生命周期与终端恢复机制，通过后方可进入第六阶段
+
+### 第六阶段：测试与验证
+
+- [ ] 4.23 补充 std_test 用例：审查前五阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
+- [ ] 4.24 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.25 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
 
 > **fcts 用例策略**：std 中的功能默认使用 std_test 用例，不需要 fcts 用例。仅当遇到 Feng 语言层面的问题（如语法、语义、类型系统等编译器行为）时，才在 `fcts/fcts_bin/src/` 中新增 fcts 用例进行兼容性验证。
 
