@@ -73,6 +73,54 @@ open func test_expression() {
       assert((inv & 0xFF) == 0, "tilde on u64 variable");
     });
 
+    test("bitwise AND type inference across widths", () {
+      let hi: u64 = 0x0000FFFFFFFFFFFF;
+      let lo: u32 = 0x0000FFFF;
+      let masked: u64 = hi & (u64)lo;
+      assert(masked == 0x000000000000FFFF, "u64 & (u64)u32 narrows to low 16 bits");
+      let a: i32 = 0b1010;
+      let b: i64 = 0b1100;
+      let r: i64 = (i64)a & b;
+      assert(r == 0b1000, "cast-then-AND across i32/i64");
+    });
+
+    test("bitwise OR type inference across widths", () {
+      let base: u64 = 0xFF00;
+      let add: u32 = 0x00FF;
+      let combined: u64 = base | (u64)add;
+      assert(combined == 0xFFFF, "u64 | (u64)u32 combines all bits");
+      let x: i32 = 0b0010;
+      let y: i64 = 0b1000;
+      let z: i64 = (i64)x | y;
+      assert(z == 0b1010, "cast-then-OR across i32/i64");
+    });
+
+    test("bitwise XOR type inference across widths", () {
+      let a: u64 = 0x0F0F;
+      let b: u32 = 0x00FF;
+      let r: u64 = a ^ (u64)b;
+      assert(r == 0x0FF0, "u64 ^ (u64)u32 flips bits");
+      let p: i32 = 0b1010;
+      let q: i64 = 0b0110;
+      let s: i64 = (i64)p ^ q;
+      assert(s == 0b1100, "cast-then-XOR across i32/i64");
+    });
+
+    test("shift operators type inference across widths", () {
+      let val: u64 = 0x1;
+      let amt: u32 = 32;
+      let shifted: u64 = val << (u64)amt;
+      assert(shifted == (0x1 << 32), "u64 << (u64)u32");
+      let back: u64 = shifted >> (u64)amt;
+      assert(back == 1, "u64 >> (u64)u32");
+      let signed_val: i32 = 0b1000;
+      let arith: i32 = signed_val >> 2;
+      assert(arith == 0b10, "i32 >> arithmetic shift");
+      let small: i32 = 1;
+      let promoted: i64 = (i64)small << 4;
+      assert(promoted == 16, "cast-then-SHL across i32/i64");
+    });
+
     test("compound assignment", () {
       var c = 10;
       c += 5;
