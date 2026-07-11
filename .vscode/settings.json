@@ -16,6 +16,7 @@
     "libfeng",
     "libm",
     "libname",
+    "libunistring",
     "lldb",
     "memcpy",
     "miniz",
@@ -25,6 +26,7 @@
     "Reifiable",
     "stdint",
     "STRIKETHROUGH",
+    "unistring",
     "venv"
   ],
   "chat.agent.maxRequests": 200
