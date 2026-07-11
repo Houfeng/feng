@@ -90,15 +90,11 @@ open type Buffer {
    */
   seal func packStyle(fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): u64 {
     var s = self.combineStyles(styles);
-    match fg {
-      c: RgbColor {
-        s |= ((u64)c.r << (u64)16) | ((u64)c.g << (u64)8) | (u64)c.b;
-      }
+    if fg match let c: RgbColor {
+      s |= ((u64)c.r << (u64)16) | ((u64)c.g << (u64)8) | (u64)c.b;
     }
-    match bg {
-      c: RgbColor {
-        s |= (((u64)c.r << (u64)16) | ((u64)c.g << (u64)8) | (u64)c.b) << (u64)24;
-      }
+    if bg match let c: RgbColor {
+      s |= (((u64)c.r << (u64)16) | ((u64)c.g << (u64)8) | (u64)c.b) << (u64)24;
     }
     return s;
   }
