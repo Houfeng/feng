@@ -5,8 +5,18 @@ import std.tui;
 
 
 /**
- * The main function.
+ * TUI demo: 通过 Screen 绘制 "hello world"，用 TuiApp 启动主循环。
+ *
+ * 运行方式：./build/bin/feng run ./examples/tui_demo
+ * 退出方式：Ctrl+C 终止进程（atexit handler 会恢复终端模式）。
  */
 func main(args: string[]) {
-  
+  // 创建 80x24 的 Screen
+  let scr = Screen((u32)80, (u32)24);
+  // 在 back buffer 上绘制 "hello world"（带粗体样式）
+  scr.buffer().draw((u32)0, (u32)0, "hello world", Style.bold);
+  // 构造 TuiApp（无外部 fd），init 进入 Raw Mode，run 启动主循环
+  let app = TuiApp(scr);
+  app.init();
+  app.run();
 }
