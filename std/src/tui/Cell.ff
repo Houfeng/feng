@@ -14,6 +14,13 @@ open type Cell {
   seal var value: u64;
 
   /**
+   * 获取字符的 Unicode 码点
+   */
+  func value(): u64 {
+    return self.value;
+  }
+
+  /**
    * 字符的样式信息
    * 通过或与运算，支持多种样式的组合，例如粗体、斜体、下划线、前景色、背景色等
    *
@@ -48,34 +55,51 @@ open type Cell {
   seal var style: u64;
 
   /**
-   * 提取前景色 (最低 24 bits)
-   * 直接使用 0xFFFFFF 掩码截取，指令开销最小
+   * 获取样式信息
+   */
+  func style(): u64 {
+    return self.style;
+  }
+
+  /**
+   * 获取前景色
    */
   func foreColor(): u32 {
     // 未转换类型时，此处理编译报错提示，非常不直观，未来优化编译器错误提示
     return (u32)(self.style & 0xFFFFFF);
   }
 
+  /**
+   * 设置前景色
+   */
   func foreColor(value: u32): void {
     // self.style = (self.style & ~0xFFFFFF) | ((u64)(value & 0xFFFFFF));
   }
 
   /**
-   * 提取背景色 (中间 24 bits)
-   * 先右移 24 位，再使用 0xFFFFFF 掩码截取
+   * 获取取背景色
    */
   func backColor(): u32 {
     return (u32)((self.style >> 24) & 0xFFFFFF);
   }
 
+  /**
+   *  设置背景色
+   */
   func backColor(value: u32): void {
     // self.style = (self.style & ~(0xFFFFFF << 24)) | ((u64)(value & 0xFFFFFF) << 24);
   }
 
+  /**
+   * 是否为粗体
+   */
   func bold(): bool {
     return (self.style & (1 << 48)) != 0;
   }
 
+  /**
+   * 设置粗体
+   */
   func bold(value: bool): void {
     if value {
       self.style |= (1 << 48);
@@ -84,10 +108,16 @@ open type Cell {
     }
   }
 
+  /**
+   * 是否为暗淡
+   */
   func dim(): bool {
     return (self.style & (1 << 49)) != 0;
   }
 
+  /**
+   * 设置暗淡
+   */
   func dim(value: bool): void {
     if value {
       self.style |= (1 << 49);
@@ -96,10 +126,16 @@ open type Cell {
     }
   }
 
+  /**
+   * 是否为斜体
+   */
   func italic(): bool {
     return (self.style & (1 << 50)) != 0;
   }
 
+  /**
+   * 设置斜体
+   */
   func italic(value: bool): void {
     if value {
       self.style |= (1 << 50);
@@ -108,10 +144,16 @@ open type Cell {
     }
   }
 
+  /**
+   * 是否为下划线
+   */
   func underline(): bool {
     return (self.style & (1 << 51)) != 0;
   }
 
+  /**
+   * 设置下划线
+   */
   func underline(value: bool): void {
     if value {
       self.style |= (1 << 51);
@@ -120,10 +162,16 @@ open type Cell {
     }
   }
 
+  /**
+   * 是否为闪烁
+   */
   func blink(): bool {
     return (self.style & (1 << 52)) != 0;
   }
 
+  /**
+   * 设置闪烁
+   */
   func blink(value: bool): void {
     if value {
       self.style |= (1 << 52);
@@ -132,10 +180,16 @@ open type Cell {
     }
   }
 
+  /**
+   * 是否为反转
+   */
   func reverse(): bool {
     return (self.style & (1 << 53)) != 0;
   }
 
+  /**
+   * 设置反转
+   */
   func reverse(value: bool): void {
     if value {
       self.style |= (1 << 53);
@@ -144,10 +198,16 @@ open type Cell {
     }
   }
 
+  /**
+   * 是否为隐藏
+   */
   func hidden(): bool {
     return (self.style & (1 << 54)) != 0;
   }
 
+  /**
+   * 设置隐藏
+   */
   func hidden(value: bool): void {
     if value {
       self.style |= (1 << 54);
@@ -156,10 +216,16 @@ open type Cell {
     }
   }
 
+  /**
+   * 是否为删除线
+   */
   func strikeThrough(): bool {
     return (self.style & (1 << 55)) != 0;
   }
 
+  /**
+   * 设置删除线
+   */
   func strikeThrough(value: bool): void {
     if value {
       self.style |= (1 << 55);
@@ -167,5 +233,4 @@ open type Cell {
       // self.style &= ~(1 << 55);
     }
   }
-
 }
