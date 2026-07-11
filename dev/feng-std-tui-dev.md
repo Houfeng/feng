@@ -31,8 +31,10 @@
 
 ### 2.1 渲染底座（第 1-3 层）
 
-- **Cell**：纯粹的数据容器。`@value` 类型，16 字节布局（`u64 value` + `u64 style`），值语义保证内存绝对连续排列。
-- **Buffer**：管理 `Cell[]` 矩阵。通过 Cell 的 setter 方法就地修改（`@value` 类型的 `self` 方法可修改 `var` 成员），不需要可写数组。
+- **Cell**：纯粹的数据容器。`@value` 类型，16 字节布局（`u64 value` + `u64 style`），值语义保证内存绝对连续排列。成员为 `open var`，可直接字段赋值修改；同时提供 foreColor/backColor/bold/dim 等便利 getter/setter 方法对。
+- **Style**：`open enum`，9 个枚举项（none/bold/dim/italic/underline/blink/reverse/hidden/strikethrough），使用小整数序号。类型安全，调用方只能传入合法样式。
+- **RgbColor**：`@value` 类型，3 个 `u8` 字段（r/g/b），表示 RGB 颜色。配合 `Option<RgbColor>` 使用，`none` 表示终端默认色。
+- **Buffer**：管理 `Cell[]` 矩阵。通过直接字段赋值（`cells[idx].value = ...`）就地修改元素，利用 `@value` 类型的语义，不需要可写数组。提供统一的 `draw` 重载体系（文本/码点 × 单点/矩形 × 无色/前景/前景+背景）、`fill`、`clear` 绘制原语，内部通过 `styleToBits`/`combineStyles`/`packStyle` 将 Style 枚举与 RgbColor 打包为 Cell 的样式编码。
 - **Screen**：封装双缓冲内存同步与差异比对（Diff）引擎。向下对接 stdout，生成 ANSI 转义序列，通过批量 I/O 冲刷。不关心业务逻辑。
 
 ### 2.2 视图逻辑层（第 4 层）
@@ -49,18 +51,38 @@
 
 ### 3.1 Cell 设计
 
-- `@value open type Cell`，两个成员：`seal var value: u64`（码点）、`seal var style: u64`（样式编码）。
-- 样式布局：`[ 16 bits 样式标志 ] [ 24 bits 背景RGB ] [ 24 bits 前景RGB ]`。
+- `@value open type Cell`，两个成员：`open var value: u64`（码点）、`open var style: u64`（样式编码）。成员为 `open var`，允许直接字段赋值修改。
+- 样式布局：`[ 16 bits 样式标志 ] [ 24 bits 背景RGB ] [ 24 bits 前景RGB ]`，RGB 编码为 `0xRRGGBB`（R 在高位，B 在低位）。
+- 静态常量：`MASK_FG`（低 24 bits 前景色掩码）、`MASK_BG`（中 24 bits 背景色掩码）、`MASK_FLAGS`（高 16 bits 样式标志掩码）、`STYLE_BOLD` 至 `STYLE_STRIKETHROUGH`（各样式位值）。
 - 样式标志位（48-63 位）：`BOLD=48, DIM=49, ITALIC=50, UNDERLINE=51, BLINK=52, REVERSE=53, HIDDEN=54, STRIKETHROUGH=55`。
+- 便利方法：`foreColor()`/`foreColor(value)`、`backColor()`/`backColor(value)` 色读写方法对，`bold()`/`bold(value)` 至 `strikeThrough()`/`strikeThrough(value)` 样式读写方法对，均通过 `self` 就地修改 `var` 成员。
+- 构造函数：`Cell()`（空白）、`Cell(value)`（指定码点）、`Cell(value, style)`（指定码点和样式）。
 - **不加 width 字段**。复杂字符（如 ZWJ 组合 emoji `👨‍👨‍👦‍👦`）在输入层拆分为多个 Cell，每个 Cell 持有单个 Unicode 码点。
-- setter 方法通过 `self` 就地修改 `var` 成员，利用 `@value` 类型的语义保证值语义。
+- `@value` 类型的 `self` 方法可就地修改 `var` 成员，值语义保证内存连续排列。
 
 ### 3.2 Buffer 设计
 
-- `open type Buffer`，成员：`let width: u32`、`let height: u32`、`let cells: Cell[]`。
-- **使用不可变数组 `Cell[]`**，通过 Cell 的 setter 方法（如 `cell.bold(true)`）就地修改成员，不需要可写数组 `Cell[!]`。
+- `open type Buffer`，成员：`let width: u32`、`let height: u32`、`let cells: Cell[]`。尺寸创建后不可变，终端尺寸调整由上层（Screen）重新创建新实例处理。
+- **使用不可变数组 `Cell[]`**，通过直接字段赋值（如 `cells[idx].value = 65; cells[idx].style = s`）就地修改元素，不需要可写数组 `Cell[!]`。利用 `@value` 类型的语义，只读数组的元素字段仍可写。
 - 通过 `cells[y * width + x]` 线性索引访问。
-- 提供绘制原语：`setCell`、`drawText`、`fill`、`clear`。
+- **内部样式打包方法（seal）**：
+  - `styleToBits(s: Style): u64` — 将 Style 枚举值映射为 Cell 的 `STYLE_*` 位值。
+  - `combineStyles(styles: Style[]): u64` — 将多个 Style 按位或组合为单个 u64 样式编码。
+  - `packStyle(fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): u64` — 将前景色、背景色和样式数组打包为完整的 u64 样式编码。`none` 的颜色不写入对应位段，表示终端默认色。RGB 编码为 `0xRRGGBB`。
+- **绘制原语**：
+  - `draw`（4 个 seal 数组版本 + 12 个 open 变长版本）。
+    - seal 数组版本（内部实现，参数为 `fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]`）：
+      1. `draw(x, y, text, fg, bg, styles)` — 单行文本，使用 `u8_next` 零分配解码 UTF-8 码点。
+      2. `draw(x, y, w, h, text, fg, bg, styles)` — 矩形区域文本，自动换行。
+      3. `draw(x, y, value: u64, fg, bg, styles)` — 单个码点。
+      4. `draw(x, y, w, h, value: u64, fg, bg, styles)` — 矩形区域码点填充。
+    - open 变长版本（公开 API，3 种颜色组合 × 4 种形状 = 12 个重载，参数为 `styles: Style...`）：
+      - 无颜色：`draw(x, y, text, styles...)` 等 4 个，使用终端默认色。
+      - 带前景色：`draw(x, y, text, fg: RgbColor, styles...)` 等 4 个。
+      - 带前景及背景色：`draw(x, y, text, fg: RgbColor, bg: RgbColor, styles...)` 等 4 个。
+  - `fill(value, fg, bg, styles...)` / `fill(value, styles...)` — 用指定码点和样式填充整个矩阵，委托 `draw(0, 0, width, height, ...)`。
+  - `clear()` — 清空矩阵，委托 `fill(0)`。
+- 所有绘制方法均做边界裁剪，超出 Buffer 范围的内容被跳过。
 
 ### 3.3 Screen 设计
 
@@ -144,10 +166,11 @@
 ```text
 std/src/tui/
   Cell.ff          # Cell（最小单元）
-  Buffer.ff        # Buffer（Cell 矩阵）
-  Screen.ff        # Screen（双缓冲 + Diff）
-  Style.ff         # 样式常量与工具函数
-  Ansi.ff          # ANSI 转义序列生成器
+  Buffer.ff        # Buffer（Cell 矩阵 + 绘制原语）
+  Screen.ff        # Screen（双缓冲 + Diff）（后续）
+  Style.ff         # Style 枚举（样式类型安全）
+  RgbColor.ff      # RgbColor 结构（RGB 颜色）
+  Ansi.ff          # ANSI 转义序列生成器（后续）
   Widget.ff        # Widget spec 契约（后续）
   Text.ff          # 文本组件（后续）
   Button.ff        # 按钮组件（后续）
