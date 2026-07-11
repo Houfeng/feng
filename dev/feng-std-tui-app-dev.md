@@ -153,16 +153,16 @@ type PollFd {
 
   /** 无参构造：所有字段置 0 */
   func PollFd() {
-    self.fd = (i32)0;
-    self.events = (i16)0;
-    self.revents = (i16)0;
+    self.fd = 0;
+    self.events = 0;
+    self.revents = 0;
   }
 
   /** 指定 fd 和监听事件，revents 内部置 0（输出字段，由内核在 poll 返回后填充） */
   func PollFd(fd: i32, events: i16) {
     self.fd = fd;
     self.events = events;
-    self.revents = (i16)0;
+    self.revents = 0;
   }
 }
 
@@ -256,14 +256,14 @@ open type TuiApp {
  */
 func TuiApp(screen: Screen) {
   self.screen = screen;
-  self.tty = (int)0;
-  self.loop = (int)0;
+  self.tty = 0;
+  self.loop = 0;
   self.resizeRequested = false;
   self.initialized = false;
   self.running = false;
-  self.sigpipeR = (i32)0;
-  self.sigpipeW = (i32)0;
-  self.fds = i32[:(int)0];
+  self.sigpipeR = 0;
+  self.sigpipeW = 0;
+  self.fds = i32[:0];
 }
 
 /**
@@ -275,13 +275,13 @@ func TuiApp(screen: Screen) {
  */
 func TuiApp(screen: Screen, fds: i32[]) {
   self.screen = screen;
-  self.tty = (int)0;
-  self.loop = (int)0;
+  self.tty = 0;
+  self.loop = 0;
   self.resizeRequested = false;
   self.initialized = false;
   self.running = false;
-  self.sigpipeR = (i32)0;
-  self.sigpipeW = (i32)0;
+  self.sigpipeR = 0;
+  self.sigpipeW = 0;
   self.fds = fds;
 }
 ```
@@ -303,28 +303,28 @@ open func init(): void {
   if self.initialized { return; }
   // 分配 uv_tty_t 内存
   self.tty = feng_alloc(UV_TTY_T_SIZE);
-  if self.tty == (int)0 { throw "tui/app/alloc-failed"; }
+  if self.tty == 0 { throw "tui/app/alloc-failed"; }
   self.loop = uv_default_loop();
   // 初始化 TTY 句柄：fd=stdout, readable=0（阶段四只输出，不读输入）
-  let rc = uv_tty_init(self.loop, self.tty, STDOUT_FD, (i32)0);
-  if rc != (i32)0 {
+  let rc = uv_tty_init(self.loop, self.tty, STDOUT_FD, 0);
+  if rc != 0 {
     feng_free(self.tty);
-    self.tty = (int)0;
+    self.tty = 0;
     throw "tui/app/tty-init-failed";
   }
   // 进入 Raw Mode
   let modeRc = uv_tty_set_mode(self.tty, UV_TTY_MODE_RAW);
-  if modeRc != (i32)0 {
+  if modeRc != 0 {
     feng_free(self.tty);
-    self.tty = (int)0;
+    self.tty = 0;
     throw "tui/app/raw-mode-failed";
   }
   // 创建信号管道（SIGWINCH → fd 转换）
-  let pipefds: i32[!] = i32[:(int)2];
+  let pipefds: i32[!] = i32[:2];
   let pipeRc = c_pipe(&pipefds);
-  if pipeRc != (i32)0 {
+  if pipeRc != 0 {
     feng_free(self.tty);
-    self.tty = (int)0;
+    self.tty = 0;
     throw "tui/app/pipe-failed";
   }
   self.sigpipeR = pipefds[0];
@@ -349,10 +349,10 @@ open func init(): void {
 open func render(): void {
   // 检查窗口尺寸变化标志（由 sigpipe 可读时置位）
   if self.resizeRequested {
-    let w: i32[!] = i32[:(int)1];
-    let h: i32[!] = i32[:(int)1];
+    let w: i32[!] = i32[:1];
+    let h: i32[!] = i32[:1];
     let rc = uv_tty_get_winsize(self.tty, &w, &h);
-    if rc == (i32)0 {
+    if rc == 0 {
       self.screen.resize((u32)w[0], (u32)h[0]);
     }
     self.resizeRequested = false;
@@ -361,9 +361,9 @@ open func render(): void {
   let ansi = self.screen.buildPatchBytes();
   // 直接写入 stdout，无需 string → byte[] 转换
   let len = ansi.length();
-  if len > (int)0 {
+  if len > 0 {
     let written = c_write(STDOUT_FD, &ansi, (uint)len);
-    if written < (int)0 {
+    if written < 0 {
       throw "tui/app/write-failed";
     }
   }
@@ -384,27 +384,27 @@ open func render(): void {
 open func run(): void {
   self.running = true;
   // 一次性构造 pollfd 数组：stdin + sigpipeR + 用户 fds
-  let total: i32 = (i32)2 + (i32)self.fds.length();
-  let pfds: PollFd[!] = PollFd[:(int)total];
+  let total: int = 2 + self.fds.length();
+  let pfds: PollFd[!] = PollFd[:total];
   // stdin + sigpipeR
   pfds[0] = PollFd(STDIN_FD, POLLIN);
   pfds[1] = PollFd(self.sigpipeR, POLLIN);
   // 用户 fds
-  for var i: i32 = (i32)0; i < (i32)self.fds.length(); i += (i32)1 {
-    pfds[i + (i32)2] = PollFd(self.fds[(int)i], POLLIN);
+  for var i: int = 0; i < self.fds.length(); i += 1 {
+    pfds[i + 2] = PollFd(self.fds[i], POLLIN);
   }
   while self.running {
     // 重置 revents（poll 输出字段，每轮需清零）
-    for var i: i32 = (i32)0; i < total; i += (i32)1 {
-      pfds[i].revents = (i16)0;
+    for var i: int = 0; i < total; i += 1 {
+      pfds[i].revents = 0;
     }
     // 阻塞等待任一 fd 可读
-    let rc = c_poll(&pfds, total, POLL_TIMEOUT_BLOCK);
-    if rc > (i32)0 {
+    let rc = c_poll(&pfds, (i32)total, POLL_TIMEOUT_BLOCK);
+    if rc > 0 {
       // 处理 sigpipeR（信号到达）
-      if pfds[1].revents & POLLIN != (i16)0 {
-        let dummy: byte[!] = byte[:(int)1];
-        c_read(self.sigpipeR, &dummy, (uint)1);
+      if pfds[1].revents & POLLIN != 0 {
+        let dummy: byte[!] = byte[:1];
+        c_read(self.sigpipeR, &dummy, 1);
         self.resizeRequested = true;
       }
       // stdin 和用户 fd 的数据处理由调用方自行处理
@@ -435,10 +435,10 @@ open func exit(): void {
   uv_tty_reset_mode();       // 全局重置，与 atexit handler 一致
   c_close(self.sigpipeR);
   c_close(self.sigpipeW);
-  self.sigpipeR = (i32)0;
-  self.sigpipeW = (i32)0;
+  self.sigpipeR = 0;
+  self.sigpipeW = 0;
   feng_free(self.tty);
-  self.tty = (int)0;
+  self.tty = 0;
   self.initialized = false;
 }
 ```
@@ -459,8 +459,8 @@ open func exit(): void {
 @abi
 func handleSigwinch(signum: i32): void {
   // sigpipeW 是模块级变量，init() 中赋值
-  let dummy: byte[!] = byte[:(int)1];
-  c_write(sigpipeW, &dummy, (uint)1);
+  let dummy: byte[!] = byte[:1];
+  c_write(sigpipeW, &dummy, 1);
 }
 ```
 
