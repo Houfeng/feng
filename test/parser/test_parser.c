@@ -1097,7 +1097,11 @@ static void test_parse_error_direct_finalizer_call(void) {
 }
 
 static void test_bitwise_expr_parsing(void) {
-    /* Expected precedence: a | b ^ c & d == e << f   (shift > equality > & > ^ > |) */
+    /* Expected precedence: a | b ^ c & d == e << f
+     *   (shift > & > ^ > | > equality)
+     * After precedence fix: == is lowest, so tree root is ==, with
+     *   left  = a | (b ^ (c & d))
+     *   right = e << f */
     const char *source =
         "module demo.bits;\n"
         "func f(a: i32, b: i32, c: i32, d: i32, e: i32, f: i32): bool {\n"
@@ -1106,6 +1110,7 @@ static void test_bitwise_expr_parsing(void) {
     FengProgram *program = NULL;
     FengParseError error;
     const FengExpr *ret;
+    const FengExpr *or_lhs;
     const FengExpr *or_rhs;
     const FengExpr *xor_rhs;
     const FengExpr *and_rhs;
@@ -1115,16 +1120,20 @@ static void test_bitwise_expr_parsing(void) {
     ASSERT(program != NULL);
     ret = program->declarations[0]->as.function_decl.body->statements[0]->as.return_value;
     ASSERT(ret->kind == FENG_EXPR_BINARY);
-    ASSERT(ret->as.binary.op == FENG_TOKEN_PIPE);
-    ASSERT(ret->as.binary.left->kind == FENG_EXPR_IDENTIFIER);
-    or_rhs = ret->as.binary.right;
+    ASSERT(ret->as.binary.op == FENG_TOKEN_EQ);
+    /* right of == is e << f */
+    eq_rhs = ret->as.binary.right;
+    ASSERT(eq_rhs->kind == FENG_EXPR_BINARY && eq_rhs->as.binary.op == FENG_TOKEN_SHL);
+    /* left of == is a | (b ^ (c & d)) */
+    or_lhs = ret->as.binary.left;
+    ASSERT(or_lhs->kind == FENG_EXPR_BINARY && or_lhs->as.binary.op == FENG_TOKEN_PIPE);
+    ASSERT(or_lhs->as.binary.left->kind == FENG_EXPR_IDENTIFIER);
+    or_rhs = or_lhs->as.binary.right;
     ASSERT(or_rhs->kind == FENG_EXPR_BINARY && or_rhs->as.binary.op == FENG_TOKEN_CARET);
     xor_rhs = or_rhs->as.binary.right;
     ASSERT(xor_rhs->kind == FENG_EXPR_BINARY && xor_rhs->as.binary.op == FENG_TOKEN_AMP);
     and_rhs = xor_rhs->as.binary.right;
-    ASSERT(and_rhs->kind == FENG_EXPR_BINARY && and_rhs->as.binary.op == FENG_TOKEN_EQ);
-    eq_rhs = and_rhs->as.binary.right;
-    ASSERT(eq_rhs->kind == FENG_EXPR_BINARY && eq_rhs->as.binary.op == FENG_TOKEN_SHL);
+    ASSERT(and_rhs->kind == FENG_EXPR_IDENTIFIER);
 
     feng_program_free(program);
 }

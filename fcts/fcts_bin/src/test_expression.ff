@@ -247,6 +247,18 @@ open func test_expression() {
       assert((bits | 0x01) != 0 || flag != 0, "| higher than ||");
     });
 
+    test("operator precedence bitwise higher than comparison", () {
+      let a: int = 0b1100;
+      let b: int = 0b1010;
+      let c: int = 0b1000;
+      // & higher than == : a & b == c  =>  (a & b) == c  =>  0b1000 == 0b1000  =>  true
+      assert(a & b == c, "& higher than ==");
+      // ^ higher than < : a ^ b < c  =>  (a ^ b) < c  =>  0b0110 < 0b1000  =>  true
+      assert(a ^ b < c, "^ higher than <");
+      // | higher than != : a | b != c  =>  (a | b) != c  =>  0b1110 != 0b1000  =>  true
+      assert(a | b != c, "| higher than !=");
+    });
+
     test("parentheses override precedence", () {
       assert((2 + 3) * 4 == 20, "parens override mul/add");
       assert(((1 | 2) & 3) == 3, "parens override | / &");

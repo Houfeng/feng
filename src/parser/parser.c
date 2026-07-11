@@ -4017,8 +4017,12 @@ static FengExpr *parse_shift(Parser *parser) {
     return parse_binary_series(parser, parse_additive, operators, sizeof(operators) / sizeof(operators[0]));
 }
 
+/* Forward declaration: parse_comparison (next level) calls parse_bit_or,
+ * but parse_bit_or is defined after parse_comparison in source order. */
+static FengExpr *parse_bit_or(Parser *parser);
+
 static FengExpr *parse_comparison(Parser *parser) {
-    FengExpr *expr = parse_shift(parser);
+    FengExpr *expr = parse_bit_or(parser);
 
     if (expr == NULL) {
         return NULL;
@@ -4039,7 +4043,7 @@ static FengExpr *parse_comparison(Parser *parser) {
                 }
                 binary->as.binary.op = parser_previous(parser)->kind;
                 binary->as.binary.left = expr;
-                binary->as.binary.right = parse_shift(parser);
+                binary->as.binary.right = parse_bit_or(parser);
                 if (binary->as.binary.right == NULL) {
                     free_expr(binary);
                     return NULL;
@@ -4075,7 +4079,7 @@ static FengExpr *parse_equality(Parser *parser) {
 
 static FengExpr *parse_bit_and(Parser *parser) {
     static const FengTokenKind operators[] = {FENG_TOKEN_AMP};
-    return parse_binary_series(parser, parse_equality, operators, sizeof(operators) / sizeof(operators[0]));
+    return parse_binary_series(parser, parse_shift, operators, sizeof(operators) / sizeof(operators[0]));
 }
 
 static FengExpr *parse_bit_xor(Parser *parser) {
@@ -4090,7 +4094,7 @@ static FengExpr *parse_bit_or(Parser *parser) {
 
 static FengExpr *parse_and(Parser *parser) {
     static const FengTokenKind operators[] = {FENG_TOKEN_AND_AND};
-    return parse_binary_series(parser, parse_bit_or, operators, sizeof(operators) / sizeof(operators[0]));
+    return parse_binary_series(parser, parse_equality, operators, sizeof(operators) / sizeof(operators[0]));
 }
 
 static FengExpr *parse_or(Parser *parser) {
