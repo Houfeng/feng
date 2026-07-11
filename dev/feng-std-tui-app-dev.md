@@ -160,16 +160,34 @@ open type TuiApp {
   seal var screen: Screen;
   /** SIGWINCH 标志：信号 handler 中置位，主循环检查并清零 */
   seal var resizeRequested: bool;
-  /** 是否已初始化（防止重复 init / 重复 cleanup） */
+  /** 是否已初始化（防止重复 init / 重复 exit） */
   seal var initialized: bool;
+  /** 主循环是否运行中（run() 置 true，退出时置 false） */
+  seal var running: bool;
 }
 ```
 
-### 5.2 构造函数
+### 5.2 核心生命周期 API
+
+阶段四 TuiApp 的公开生命周期仅三个方法：
+
+| 方法 | 职责 |
+|------|------|
+| `init()` | 分配 TTY 句柄、进入 Raw Mode、注册 SIGWINCH 和 atexit |
+| `run()` | 启动主循环，内部反复调用 `render()` 渲染各帧 |
+| `exit()` | 退出 TUI 模式、恢复终端、释放 TTY 句柄 |
+
+> 其他方法（如 `setRootView`、输入处理等）后续阶段扩展。`render()` 是单帧渲染方法，供 `run()` 内部调用，测试中也可单独调用。
+>
+> **`exit()` 不退出进程**：`exit()` 的语义是“退出 TUI 模式并清理资源”，不是终止进程。进程生命周期由调用方控制。进程真正退出时，`atexit` handler 调 `uv_tty_reset_mode()` 兜底恢复。
+>
+> **驱动机制可重构**：`run()` 是主循环入口，至于是由 libuv 事件循环驱动、libc poll 驱动、还是其他方式驱动，都是 `run()` 内部实现细节，可随时重构而不影响 TuiApp 的整体结构和公开 API。
+
+### 5.3 构造函数
 
 ```feng
 /**
- * 构造函数：初始化 TTY 句柄并进入 Raw Mode。
+ * 构造函数：仅保存 Screen 引用，不做 TTY 初始化。
  * @param screen - 由调用方创建的 Screen 实例
  */
 func TuiApp(screen: Screen) {
@@ -178,10 +196,11 @@ func TuiApp(screen: Screen) {
   self.loop = (int)0;
   self.resizeRequested = false;
   self.initialized = false;
+  self.running = false;
 }
 ```
 
-### 5.3 init() — 进入 Raw Mode + 注册信号
+### 5.4 init() — 进入 Raw Mode + 注册信号
 
 ```feng
 /**
@@ -219,11 +238,12 @@ open func init(): void {
 }
 ```
 
-### 5.4 render() — 渲染一帧
+### 5.5 render() — 渲染一帧
 
 ```feng
 /**
  * 渲染一帧：检查 resize、调用 Screen.buildPatchBytes()、写入 stdout。
+ * 单帧渲染，由 run() 内部反复调用，也可在测试中单独调用。
  * 直接使用 byte[]，不经过 string 中间转换。
  * @throws "tui/app/write-failed" — write 返回负值
  */
@@ -251,48 +271,49 @@ open func render(): void {
 }
 ```
 
-### 5.5 run() — 主循环
+> `render()` 与 `run()` 职责分离：`render()` 只管单帧渲染，`run()` 管循环生命周期。
+
+### 5.6 run() — 启动主循环
 
 ```feng
 /**
- * 主循环：反复 render()，由调用方控制退出。
- * 注意：阶段五在此处加入输入读取逻辑（uv_read_start + uv_run）。
- * 退出时通过 defer 保证终端恢复。
+ * 启动主循环：置 running 标志，反复调用 render() 渲染各帧。
+ * 与 render() 职责分离：run() 管循环生命周期，render() 管单帧渲染。
  */
-open func run(renderFn: RenderFn): void {
-  defer {
-    if self.initialized {
-      uv_tty_set_mode(self.tty, UV_TTY_MODE_NORMAL);
-      feng_free(self.tty);
-      self.tty = (int)0;
-      self.initialized = false;
-    }
-  }
-  while renderFn(self) {
+open func run(): void {
+  self.running = true;
+  while self.running {
     self.render();
   }
 }
 ```
 
-> `renderFn` 是一个回调，每次循环调用，返回 `true` 继续、`false` 退出。
-> 回调中由调用方完成业务绘制（往 `self.screen.buffer()` 写内容）。
-> 阶段四先用简单的循环结构，阶段五加入输入后改为事件驱动。
+> `run()` 是主循环入口，无参数。内部通过 `running` 标志控制循环。
+> 阶段四无输入，`running` 的置 false 机制后续扩展（如输入处理中收到退出键）。
+> `exit()` 负责终端恢复，不依赖 `run()` 的 defer。
+>
+> **驱动机制可重构**：当前 `run()` 用 `while` 轮询驱动。未来可重构为 libuv `uv_run` 事件驱动、libc `poll` 驱动等，这些是 `run()` 内部实现细节，不影响 TuiApp 的整体结构和公开 API（`init` / `run` / `exit`）。
 
-### 5.6 cleanup() — 手动清理
+### 5.7 exit() — 退出 TUI 模式与清理
 
 ```feng
 /**
- * 手动清理：恢复终端模式并释放 TTY 句柄。
- * 正常退出路径由 defer 保证调用；此方法供异常路径补充调用。
+ * 退出 TUI 模式与清理：停止主循环、全局重置终端模式、释放 TTY 句柄。
+ * 不退出进程——进程生命周期由调用方控制。
+ * 幂等：重复调用安全。
  */
-open func cleanup(): void {
+open func exit(): void {
   if !self.initialized { return; }
-  uv_tty_set_mode(self.tty, UV_TTY_MODE_NORMAL);
+  self.running = false;
+  uv_tty_reset_mode();       // 全局重置，与 atexit handler 一致
   feng_free(self.tty);
   self.tty = (int)0;
   self.initialized = false;
 }
 ```
+
+> `exit()` 与 atexit handler 统一使用 `uv_tty_reset_mode()`，避免同一目的用两个不同 API。
+> `exit()` 后调用方仍可执行业务资源释放等操作，进程退出由调用方决定。
 
 ## 6 回调函数
 
@@ -338,15 +359,20 @@ TuiApp.init()
   ├── c_atexit(&ttyCleanup)         ← 进程退出兜底
   └── c_signal(SIGWINCH, &handleSigwinch)  ← 信号注册
 
-TuiApp.run(renderFn)
-  ├── defer { uv_tty_set_mode(NORMAL); feng_free(tty) }  ← 正常退出保证
-  └── while renderFn(self):
+TuiApp.run()
+  ├── self.running = true
+  └── while self.running:
         TuiApp.render()
           ├── if resizeRequested:
           │     uv_tty_get_winsize → screen.resize(w, h)
           │     resizeRequested = false
           ├── screen.buildPatchBytes() → byte[]          ← 零转换
           └── c_write(STDOUT_FD, &ansi, len)        ← 零转换
+
+TuiApp.exit()
+  ├── self.running = false
+  ├── uv_tty_reset_mode()       ← 全局重置，与 atexit 一致
+  └── feng_free(tty)
 
 SIGWINCH 中断 → handleSigwinch() → resizeFlag = true
   （下一帧 render() 时检查）
@@ -358,12 +384,12 @@ SIGWINCH 中断 → handleSigwinch() → resizeFlag = true
 
 | 测试项 | 方法 |
 |--------|------|
-| TuiApp 构造与字段初始化 | 构造后检查 tty/loop/screen/initialized 字段 |
+| TuiApp 构造与字段初始化 | 构造后检查 tty/loop/screen/initialized/running 字段 |
 | init() 幂等性 | 连续调用两次 init()，第二次不重复分配 |
 | render() 空帧输出 | Screen 空白时 render() 后 stdout 无额外输出 |
 | render() 有内容输出 | buffer.draw 后 render()，stdout 包含正确 ANSI 序列 |
 | resize 标志处理 | 手动设 resizeRequested=true，render() 后检查 screen 尺寸已更新 |
-| cleanup() 幂等性 | 连续调用两次 cleanup()，第二次不重复恢复 |
+| exit() 幂等性 | 连续调用两次 exit()，第二次不重复恢复 |
 
 ### 8.2 不可测试项（需真实终端）
 
