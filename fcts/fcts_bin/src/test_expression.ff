@@ -59,6 +59,20 @@ open func test_expression() {
       assert((8 >> 2) == 2, "right shift");
     });
 
+    test("bitwise NOT type inference", () {
+      let v: u64 = 0x0000FFFFFFFFFFFF;
+      let cleared: u64 = v & (u64)(~0xFFFFFF);
+      assert((cleared & 0xFFFFFF) == 0, "tilde literal cast clears low 24 bits");
+      let mask: u64 = 1 << 48;
+      let flag_on: u64 = 0;
+      let flag_set: u64 = flag_on | mask;
+      let flag_cleared: u64 = flag_set & (u64)(~(1 << 48));
+      assert((flag_cleared & mask) == 0, "tilde on shifted literal clears flag");
+      let bm: u64 = 0xFF;
+      let inv: u64 = ~bm;
+      assert((inv & 0xFF) == 0, "tilde on u64 variable");
+    });
+
     test("compound assignment", () {
       var c = 10;
       c += 5;

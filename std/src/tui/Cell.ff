@@ -65,7 +65,6 @@ open type Cell {
    * 获取前景色
    */
   func foreColor(): u32 {
-    // 未转换类型时，此处理编译报错的提示信息不准确，未来优化编译器错误提示
     return (u32)(self.style & 0xFFFFFF);
   }
 
@@ -73,7 +72,7 @@ open type Cell {
    * 设置前景色
    */
   func foreColor(value: u32): void {
-    // self.style = (self.style & ~0xFFFFFF) | ((u64)(value & 0xFFFFFF));
+    self.style = (self.style & (u64)(~0xFFFFFF)) | ((u64)(value & 0xFFFFFF));
   }
 
   /**
@@ -87,7 +86,7 @@ open type Cell {
    *  设置背景色
    */
   func backColor(value: u32): void {
-    // self.style = (self.style & ~(0xFFFFFF << 24)) | ((u64)(value & 0xFFFFFF) << 24);
+    self.style = (self.style & (u64)(~(0xFFFFFF << 24))) | ((u64)(value & 0xFFFFFF) << 24);
   }
 
   /**
@@ -104,7 +103,7 @@ open type Cell {
     if value {
       self.style |= (1 << 48);
     } else {
-      // self.style &= ~(1 << 48);
+      self.style &= (u64)(~(1 << 48));
     }
   }
 
@@ -122,7 +121,7 @@ open type Cell {
     if value {
       self.style |= (1 << 49);
     } else {
-      // self.style &= ~(1 << 49);
+      self.style &= (u64)(~(1 << 49));
     }
   }
 
@@ -140,7 +139,7 @@ open type Cell {
     if value {
       self.style |= (1 << 50);
     } else {
-      // self.style &= ~(1 << 50);
+      self.style &= (u64)(~(1 << 50));
     }
   }
 
@@ -158,7 +157,7 @@ open type Cell {
     if value {
       self.style |= (1 << 51);
     } else {
-      // self.style &= ~(1 << 51);
+      self.style &= (u64)(~(1 << 51));
     }
   }
 
@@ -176,7 +175,7 @@ open type Cell {
     if value {
       self.style |= (1 << 52);
     } else {
-      // self.style &= ~(1 << 52);
+      self.style &= (u64)(~(1 << 52));
     }
   }
 
@@ -194,7 +193,7 @@ open type Cell {
     if value {
       self.style |= (1 << 53);
     } else {
-      // self.style &= ~(1 << 53);
+      self.style &= (u64)(~(1 << 53));
     }
   }
 
@@ -212,7 +211,7 @@ open type Cell {
     if value {
       self.style |= (1 << 54);
     } else {
-      // self.style &= ~(1 << 54);
+      self.style &= (u64)(~(1 << 54));
     }
   }
 
@@ -230,7 +229,7 @@ open type Cell {
     if value {
       self.style |= (1 << 55);
     } else {
-      // self.style &= ~(1 << 55);
+      self.style &= (u64)(~(1 << 55));
     }
   }
 }

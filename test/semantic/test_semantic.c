@@ -7470,6 +7470,34 @@ static void test_unary_tilde_rejects_non_integer_operand(void) {
     feng_program_free(program);
 }
 
+/* Regression: infer_expr_type previously had no FENG_TOKEN_TILDE branch,
+ * so ~literal was inferred as UNKNOWN.  This caused AE0030 ("got 'u64' and
+ * '<type>'") when the result was used in a binary bitwise op, and also broke
+ * (u64)(~literal) casts.  Verify ~ on a variable, on a literal, and the
+ * cast-then-bitwise pattern all pass semantic analysis. */
+static void test_unary_tilde_type_inference_passes(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(style: u64) {\n"
+        "    let bm: u64 = 0xFF;\n"
+        "    let inv: u64 = ~bm;\n"
+        "    let cleared = style & (u64)(~0xFFFFFF);\n"
+        "    let combined = cleared | inv;\n"
+        "    let shifted = style & (u64)(~(1 << 48));\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("unary_tilde_infer.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_shift_amount_out_of_range_rejected(void) {
     const char *source =
         "module demo.main;\n"
@@ -20086,6 +20114,7 @@ int main(void) {
     test_bitwise_and_rejects_mismatched_integer_types();
     test_bitwise_or_rejects_non_integer_operand();
     test_unary_tilde_rejects_non_integer_operand();
+    test_unary_tilde_type_inference_passes();
     test_shift_amount_out_of_range_rejected();
     test_const_fold_arithmetic_fits_narrow_target();
     test_const_fold_arithmetic_overflows_narrow_target();

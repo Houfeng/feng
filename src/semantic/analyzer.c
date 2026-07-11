@@ -15969,6 +15969,10 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                 inferred_expr_type_is_numeric(operand_type)) {
                 return operand_type;
             }
+            if (expr->as.unary.op == FENG_TOKEN_TILDE &&
+                inferred_expr_type_is_integer(operand_type)) {
+                return operand_type;
+            }
             if (expr->as.unary.op == FENG_TOKEN_NOT &&
                 inferred_expr_type_is_bool(operand_type)) {
                 return inferred_expr_type_builtin("bool");
