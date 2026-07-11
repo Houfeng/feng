@@ -47,25 +47,6 @@ open type Buffer {
     self.cells = Cell[: count];
   }
 
-  // ─── 读取访问器 ───────────────────────────────────────────────────────────
-
-  /**
-   * 读取指定位置的 Cell（值拷贝）。
-   * 越界时返回默认 Cell（value=0, style=0），不抛异常。
-   * 注意：返回的是值拷贝，修改返回值不会影响 Buffer；
-   * 要修改 Buffer 中的 Cell，请直接操作 `self.cells[idx]`。
-   * @param x - 列坐标（0-based）
-   * @param y - 行坐标（0-based）
-   * @return 该位置的 Cell 值拷贝
-   */
-  func cell(x: u32, y: u32): Cell {
-    if x >= self.width || y >= self.height {
-      return Cell();
-    }
-    let idx = (int)((u64)y * (u64)self.width + (u64)x);
-    return self.cells[idx];
-  }
-
   // ─── 绘制原语 ─────────────────────────────────────────────────────────────
 
   /**
@@ -98,25 +79,24 @@ open type Buffer {
         break;
       }
       let idx = (int)((u64)y * (u64)self.width + (u64)col);
-      self.cells[idx].value((u64)uc);
+      self.cells[idx].value = (u64)uc;
       col += (u32)1;
       cursor = next;
     }
   }
 
   /**
-   * 用指定 Cell 填充整个矩阵。
-   * 逐元素调用 Cell 的 setter 就地修改 value 和 style。
-   * @param cell - 用于填充的 Cell
+   * 用指定的码点和样式编码填充整个矩阵。
+   * 直接字段赋值，无方法调用开销。
+   * @param value - Unicode 码点
+   * @param style - 样式编码（通过 Cell.STYLE_* 常量组合）
    */
-  func fill(cell: Cell): void {
-    let v = cell.value();
-    let s = cell.style();
+  func fill(value: u64, style: u64): void {
     let total = (int)((u64)self.width * (u64)self.height);
     var i: int = 0;
     while i < total {
-      self.cells[i].value(v);
-      self.cells[i].style(s);
+      self.cells[i].value = value;
+      self.cells[i].style = style;
       i += (int)1;
     }
   }
@@ -129,8 +109,8 @@ open type Buffer {
     let total = (int)((u64)self.width * (u64)self.height);
     var i: int = 0;
     while i < total {
-      self.cells[i].value((u64)0);
-      self.cells[i].style((u64)0);
+      self.cells[i].value = (u64)0;
+      self.cells[i].style = (u64)0;
       i += (int)1;
     }
   }

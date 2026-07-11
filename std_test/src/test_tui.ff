@@ -55,23 +55,21 @@ func cell_style_strikethrough_const() {
 
 func cell_ctor_default() {
   let c = Cell();
-  check(c.value() == (u64)0, "tui/cell/ctor-default-value");
-  check(c.style() == (u64)0, "tui/cell/ctor-default-style");
+  check(c.value == (u64)0, "tui/cell/ctor-default-value");
+  check(c.style == (u64)0, "tui/cell/ctor-default-style");
 }
 
 func cell_ctor_value() {
   let c = Cell((u64)65);
-  check(c.value() == (u64)65, "tui/cell/ctor-value-value");
-  check(c.style() == (u64)0, "tui/cell/ctor-value-style");
+  check(c.value == (u64)65, "tui/cell/ctor-value-value");
+  check(c.style == (u64)0, "tui/cell/ctor-value-style");
 }
 
 func cell_ctor_value_style() {
   let c = Cell((u64)65, Cell.STYLE_BOLD);
-  check(c.value() == (u64)65, "tui/cell/ctor-value-style-value");
-  check(c.style() == Cell.STYLE_BOLD, "tui/cell/ctor-value-style-style");
+  check(c.value == (u64)65, "tui/cell/ctor-value-style-value");
+  check(c.style == Cell.STYLE_BOLD, "tui/cell/ctor-value-style-style");
 }
-
-// ─── 工厂方法 ──────────────────────────────────────────────────────────────
 
 // ─── 前景色 / 背景色读写 ────────────────────────────────────────────────────
 
@@ -104,10 +102,10 @@ func cell_bold_rw() {
   check(c.bold() == false, "tui/cell/bold-init");
   c.bold(true);
   check(c.bold() == true, "tui/cell/bold-set-true");
-  check(c.style() == Cell.STYLE_BOLD, "tui/cell/bold-style-value");
+  check(c.style == Cell.STYLE_BOLD, "tui/cell/bold-style-value");
   c.bold(false);
   check(c.bold() == false, "tui/cell/bold-set-false");
-  check(c.style() == (u64)0, "tui/cell/bold-cleared");
+  check(c.style == (u64)0, "tui/cell/bold-cleared");
 }
 
 func cell_dim_rw() {
@@ -186,7 +184,7 @@ func cell_style_combination() {
   check(c.dim() == false, "tui/cell/combination-dim-false");
   check(c.blink() == false, "tui/cell/combination-blink-false");
   let expected: u64 = Cell.STYLE_BOLD | Cell.STYLE_ITALIC | Cell.STYLE_UNDERLINE;
-  check(c.style() == expected, "tui/cell/combination-style-value");
+  check(c.style == expected, "tui/cell/combination-style-value");
 }
 
 func cell_style_with_colors() {
@@ -197,30 +195,26 @@ func cell_style_with_colors() {
   check(c.foreColor() == (u32)0xFFFFFF, "tui/cell/style-colors-fg");
   check(c.backColor() == (u32)0x000000, "tui/cell/style-colors-bg");
   check(c.bold() == true, "tui/cell/style-colors-bold");
-  check(c.value() == (u64)65, "tui/cell/style-colors-value");
+  check(c.value == (u64)65, "tui/cell/style-colors-value");
 }
 
-// ─── Cell 基础 setter（第二阶段新增） ──────────────────────────────────────────
+// ─── Cell 直接字段读写（open var） ──────────────────────────────────────────
 
-func cell_value_setter() {
+func cell_field_rw() {
   let c = Cell();
-  check(c.value() == (u64)0, "tui/cell/value-setter-init");
-  c.value((u64)0x4E2D);
-  check(c.value() == (u64)0x4E2D, "tui/cell/value-setter-write");
-  c.value((u64)65);
-  check(c.value() == (u64)65, "tui/cell/value-setter-overwrite");
-}
-
-func cell_style_setter() {
-  let c = Cell((u64)65);
-  check(c.style() == (u64)0, "tui/cell/style-setter-init");
-  c.style(Cell.STYLE_BOLD | Cell.STYLE_UNDERLINE);
-  check(c.style() == (Cell.STYLE_BOLD | Cell.STYLE_UNDERLINE), "tui/cell/style-setter-write");
-  check(c.bold() == true, "tui/cell/style-setter-bold");
-  check(c.underline() == true, "tui/cell/style-setter-underline");
-  c.style((u64)0);
-  check(c.style() == (u64)0, "tui/cell/style-setter-clear");
-  check(c.bold() == false, "tui/cell/style-setter-bold-cleared");
+  check(c.value == (u64)0, "tui/cell/field-rw-value-init");
+  check(c.style == (u64)0, "tui/cell/field-rw-style-init");
+  c.value = (u64)0x4E2D;
+  c.style = Cell.STYLE_BOLD | Cell.STYLE_UNDERLINE;
+  check(c.value == (u64)0x4E2D, "tui/cell/field-rw-value-write");
+  check(c.style == (Cell.STYLE_BOLD | Cell.STYLE_UNDERLINE), "tui/cell/field-rw-style-write");
+  check(c.bold() == true, "tui/cell/field-rw-bold");
+  check(c.underline() == true, "tui/cell/field-rw-underline");
+  c.value = (u64)65;
+  c.style = (u64)0;
+  check(c.value == (u64)65, "tui/cell/field-rw-value-overwrite");
+  check(c.style == (u64)0, "tui/cell/field-rw-style-clear");
+  check(c.bold() == false, "tui/cell/field-rw-bold-cleared");
 }
 
 // ─── Buffer 构造函数 ──────────────────────────────────────────────────────
@@ -234,30 +228,12 @@ func buffer_ctor() {
 
 func buffer_default_cells() {
   let buf = Buffer((u32)3, (u32)2);
-  let c = buf.cell((u32)1, (u32)1);
-  check(c.value() == (u64)0, "tui/buffer/default-cells-value");
-  check(c.style() == (u64)0, "tui/buffer/default-cells-style");
-}
-
-// ─── Buffer cell 读取 ──────────────────────────────────────────────────────
-
-func buffer_cell_read() {
-  let buf = Buffer((u32)4, (u32)3);
-  // 直接操作 cells 数组，就地修改
-  buf.cells[(int)7].value((u64)88);
-  let c = buf.cell((u32)3, (u32)1);
-  check(c.value() == (u64)88, "tui/buffer/cell-read-after-write");
-}
-
-func buffer_cell_out_of_bounds() {
-  let buf = Buffer((u32)2, (u32)2);
-  // 越界返回默认 Cell
-  let c1 = buf.cell((u32)5, (u32)0);
-  check(c1.value() == (u64)0, "tui/buffer/cell-oob-x");
-  let c2 = buf.cell((u32)0, (u32)5);
-  check(c2.value() == (u64)0, "tui/buffer/cell-oob-y");
-  let c3 = buf.cell((u32)100, (u32)100);
-  check(c3.value() == (u64)0, "tui/buffer/cell-oob-both");
+  // 直接通过 cells 数组读取默认值
+  check(buf.cells[(int)0].value == (u64)0, "tui/buffer/default-cells-value");
+  check(buf.cells[(int)0].style == (u64)0, "tui/buffer/default-cells-style");
+  let idx = (int)((u64)1 * (u64)3 + (u64)1); // y=1, x=1
+  check(buf.cells[idx].value == (u64)0, "tui/buffer/default-cells-value-1-1");
+  check(buf.cells[idx].style == (u64)0, "tui/buffer/default-cells-style-1-1");
 }
 
 // ─── Buffer 直接操作 cells（就地修改） ───────────────────────────────────────
@@ -265,14 +241,13 @@ func buffer_cell_out_of_bounds() {
 func buffer_cells_in_place_modify() {
   let buf = Buffer((u32)4, (u32)4);
   let idx = (int)((u64)1 * (u64)4 + (u64)2);  // y=1, x=2
-  buf.cells[idx].value((u64)65);
+  buf.cells[idx].value = (u64)65;
   buf.cells[idx].bold(true);
   buf.cells[idx].foreColor((u32)0xFF0000);
 
-  let c = buf.cell((u32)2, (u32)1);
-  check(c.value() == (u64)65, "tui/buffer/in-place-value");
-  check(c.bold() == true, "tui/buffer/in-place-bold");
-  check(c.foreColor() == (u32)0xFF0000, "tui/buffer/in-place-fg");
+  check(buf.cells[idx].value == (u64)65, "tui/buffer/in-place-value");
+  check(buf.cells[idx].bold() == true, "tui/buffer/in-place-bold");
+  check(buf.cells[idx].foreColor() == (u32)0xFF0000, "tui/buffer/in-place-fg");
 }
 
 // ─── Buffer drawText ────────────────────────────────────────────────────────
@@ -280,84 +255,86 @@ func buffer_cells_in_place_modify() {
 func buffer_draw_text_ascii() {
   let buf = Buffer((u32)10, (u32)3);
   buf.drawText((u32)0, (u32)0, "Hello");
-  check(buf.cell((u32)0, (u32)0).value() == (u64)72, "tui/buffer/draw-text-ascii-h");
-  check(buf.cell((u32)1, (u32)0).value() == (u64)101, "tui/buffer/draw-text-ascii-e");
-  check(buf.cell((u32)4, (u32)0).value() == (u64)111, "tui/buffer/draw-text-ascii-o");
+  check(buf.cells[(int)0].value == (u64)72, "tui/buffer/draw-text-ascii-h");
+  check(buf.cells[(int)1].value == (u64)101, "tui/buffer/draw-text-ascii-e");
+  check(buf.cells[(int)4].value == (u64)111, "tui/buffer/draw-text-ascii-o");
   // 未写入的位置应保持默认
-  check(buf.cell((u32)5, (u32)0).value() == (u64)0, "tui/buffer/draw-text-ascii-after");
+  check(buf.cells[(int)5].value == (u64)0, "tui/buffer/draw-text-ascii-after");
 }
 
 func buffer_draw_text_chinese() {
   let buf = Buffer((u32)10, (u32)2);
   // "中" U+4E2D, "文" U+6587
   buf.drawText((u32)0, (u32)0, "中文");
-  check(buf.cell((u32)0, (u32)0).value() == (u64)0x4E2D, "tui/buffer/draw-text-chinese-0");
-  check(buf.cell((u32)1, (u32)0).value() == (u64)0x6587, "tui/buffer/draw-text-chinese-1");
+  check(buf.cells[(int)0].value == (u64)0x4E2D, "tui/buffer/draw-text-chinese-0");
+  check(buf.cells[(int)1].value == (u64)0x6587, "tui/buffer/draw-text-chinese-1");
 }
 
 func buffer_draw_text_emoji() {
   let buf = Buffer((u32)10, (u32)2);
   // 😀 U+1F600
   buf.drawText((u32)0, (u32)0, "😀");
-  check(buf.cell((u32)0, (u32)0).value() == (u64)0x1F600, "tui/buffer/draw-text-emoji");
+  check(buf.cells[(int)0].value == (u64)0x1F600, "tui/buffer/draw-text-emoji");
 }
 
 func buffer_draw_text_clip() {
   let buf = Buffer((u32)4, (u32)2);
   // 在宽度为 4 的行写 6 个字符，后 2 个应被裁剪
   buf.drawText((u32)0, (u32)0, "ABCDEF");
-  check(buf.cell((u32)0, (u32)0).value() == (u64)65, "tui/buffer/draw-text-clip-a");
-  check(buf.cell((u32)3, (u32)0).value() == (u64)68, "tui/buffer/draw-text-clip-d");
-  // 越界位置返回默认值
-  check(buf.cell((u32)4, (u32)0).value() == (u64)0, "tui/buffer/draw-text-clip-oob");
+  check(buf.cells[(int)0].value == (u64)65, "tui/buffer/draw-text-clip-a");
+  check(buf.cells[(int)3].value == (u64)68, "tui/buffer/draw-text-clip-d");
+  // 第 5 个字符 'E' (69) 应被裁剪，不写入到下一行
+  check(buf.cells[(int)4].value == (u64)0, "tui/buffer/draw-text-clip-next-row");
 }
 
 func buffer_draw_text_offset_and_clip() {
   let buf = Buffer((u32)5, (u32)2);
   // 从 x=2 开始写，只有 3 个位置可用
   buf.drawText((u32)2, (u32)0, "ABCDE");
-  check(buf.cell((u32)2, (u32)0).value() == (u64)65, "tui/buffer/draw-text-offset-a");
-  check(buf.cell((u32)4, (u32)0).value() == (u64)67, "tui/buffer/draw-text-offset-c");
+  check(buf.cells[(int)2].value == (u64)65, "tui/buffer/draw-text-offset-a");
+  check(buf.cells[(int)4].value == (u64)67, "tui/buffer/draw-text-offset-c");
 }
 
 func buffer_draw_text_empty() {
   let buf = Buffer((u32)5, (u32)2);
   buf.drawText((u32)0, (u32)0, "");
   // 空字符串不改变任何 Cell
-  check(buf.cell((u32)0, (u32)0).value() == (u64)0, "tui/buffer/draw-text-empty");
+  check(buf.cells[(int)0].value == (u64)0, "tui/buffer/draw-text-empty");
 }
 
 func buffer_draw_text_y_out_of_bounds() {
   let buf = Buffer((u32)5, (u32)2);
   buf.drawText((u32)0, (u32)5, "Hello");
   // 行越界，整行不写入
-  check(buf.cell((u32)0, (u32)0).value() == (u64)0, "tui/buffer/draw-text-y-oob");
+  check(buf.cells[(int)0].value == (u64)0, "tui/buffer/draw-text-y-oob");
 }
 
 // ─── Buffer fill ────────────────────────────────────────────────────────────
 
 func buffer_fill() {
   let buf = Buffer((u32)3, (u32)3);
-  let c = Cell((u64)65, Cell.STYLE_BOLD);
-  buf.fill(c);
+  buf.fill((u64)65, Cell.STYLE_BOLD);
   // 检查多个位置
-  check(buf.cell((u32)0, (u32)0).value() == (u64)65, "tui/buffer/fill-0-0");
-  check(buf.cell((u32)2, (u32)2).value() == (u64)65, "tui/buffer/fill-2-2");
-  check(buf.cell((u32)1, (u32)1).bold() == true, "tui/buffer/fill-bold");
+  check(buf.cells[(int)0].value == (u64)65, "tui/buffer/fill-0-0");
+  let idx22 = (int)((u64)2 * (u64)3 + (u64)2);
+  check(buf.cells[idx22].value == (u64)65, "tui/buffer/fill-2-2");
+  let idx11 = (int)((u64)1 * (u64)3 + (u64)1);
+  check(buf.cells[idx11].bold() == true, "tui/buffer/fill-bold");
 }
 
 // ─── Buffer clear ───────────────────────────────────────────────────────────
 
 func buffer_clear() {
   let buf = Buffer((u32)3, (u32)2);
-  buf.cells[(int)0].value((u64)65);
+  buf.cells[(int)0].value = (u64)65;
   buf.cells[(int)0].bold(true);
-  buf.cells[(int)3].value((u64)66);
+  buf.cells[(int)3].value = (u64)66;
   buf.clear();
-  check(buf.cell((u32)0, (u32)0).value() == (u64)0, "tui/buffer/clear-value-0-0");
-  check(buf.cell((u32)0, (u32)0).style() == (u64)0, "tui/buffer/clear-style-0-0");
-  check(buf.cell((u32)0, (u32)1).value() == (u64)0, "tui/buffer/clear-value-0-1");
-  check(buf.cell((u32)0, (u32)1).style() == (u64)0, "tui/buffer/clear-style-0-1");
+  check(buf.cells[(int)0].value == (u64)0, "tui/buffer/clear-value-0-0");
+  check(buf.cells[(int)0].style == (u64)0, "tui/buffer/clear-style-0-0");
+  let idx01 = (int)((u64)1 * (u64)3 + (u64)0);
+  check(buf.cells[idx01].value == (u64)0, "tui/buffer/clear-value-0-1");
+  check(buf.cells[idx01].style == (u64)0, "tui/buffer/clear-style-0-1");
 }
 
 // ─── Buffer 矩阵索引正确性 ──────────────────────────────────────────────────
@@ -370,17 +347,20 @@ func buffer_matrix_index() {
     var x: u32 = 0;
     while x < (u32)5 {
       let idx = (int)((u64)y * (u64)5 + (u64)x);
-      buf.cells[idx].value((u64)((u64)y * (u64)100 + (u64)x));
+      buf.cells[idx].value = (u64)((u64)y * (u64)100 + (u64)x);
       x += (u32)1;
     }
     y += (u32)1;
   }
   // 验证读取
-  check(buf.cell((u32)0, (u32)0).value() == (u64)0, "tui/buffer/matrix-0-0");
-  check(buf.cell((u32)4, (u32)0).value() == (u64)4, "tui/buffer/matrix-4-0");
-  check(buf.cell((u32)0, (u32)1).value() == (u64)100, "tui/buffer/matrix-0-1");
-  check(buf.cell((u32)3, (u32)2).value() == (u64)203, "tui/buffer/matrix-3-2");
-  check(buf.cell((u32)4, (u32)3).value() == (u64)304, "tui/buffer/matrix-4-3");
+  check(buf.cells[(int)0].value == (u64)0, "tui/buffer/matrix-0-0");
+  check(buf.cells[(int)4].value == (u64)4, "tui/buffer/matrix-4-0");
+  let idx01 = (int)((u64)1 * (u64)5 + (u64)0);
+  check(buf.cells[idx01].value == (u64)100, "tui/buffer/matrix-0-1");
+  let idx23 = (int)((u64)2 * (u64)5 + (u64)3);
+  check(buf.cells[idx23].value == (u64)203, "tui/buffer/matrix-3-2");
+  let idx34 = (int)((u64)3 * (u64)5 + (u64)4);
+  check(buf.cells[idx34].value == (u64)304, "tui/buffer/matrix-4-3");
 }
 
 open func run_tui_tests() {
@@ -412,12 +392,9 @@ open func run_tui_tests() {
     test("cell_strikethrough_rw()", () { cell_strikethrough_rw(); });
     test("cell_style_combination()", () { cell_style_combination(); });
     test("cell_style_with_colors()", () { cell_style_with_colors(); });
-    test("cell_value_setter()", () { cell_value_setter(); });
-    test("cell_style_setter()", () { cell_style_setter(); });
+    test("cell_field_rw()", () { cell_field_rw(); });
     test("buffer_ctor()", () { buffer_ctor(); });
     test("buffer_default_cells()", () { buffer_default_cells(); });
-    test("buffer_cell_read()", () { buffer_cell_read(); });
-    test("buffer_cell_out_of_bounds()", () { buffer_cell_out_of_bounds(); });
     test("buffer_cells_in_place_modify()", () { buffer_cells_in_place_modify(); });
     test("buffer_draw_text_ascii()", () { buffer_draw_text_ascii(); });
     test("buffer_draw_text_chinese()", () { buffer_draw_text_chinese(); });
