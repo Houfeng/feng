@@ -198,3 +198,52 @@ Zig 文档的优先级表（从高到低，节选）：
 - 人工明确批准
 - 全量回归测试通过
 - 文档、测试同步更新
+
+## 8. 实施 TODO
+
+以下为获批后的分步实施计划，每一步均需独立验证后再进入下一步。
+
+进度概览：`[ 0 / 7 ]`
+
+- [ ] **TODO 1：更新文档 §5 优先级表**
+  - 文件：`docs/feng-expression.md` §5
+  - 内容：将 `&` `^` `|`（原优先级 8/9/10）上移为 6/7/8，`< <= > >=`（原 6）顺延为 9，`== !=`（原 7）顺延为 10
+  - 验证：文档内容与新优先级表一致，无遗漏层级
+
+- [ ] **TODO 2：调整 parser 优先级链顺序**
+  - 文件：`src/parser/parser.c`
+  - 内容：将调用链从 `parse_shift → parse_comparison → parse_equality → parse_bit_and → parse_bit_xor → parse_bit_or` 调整为 `parse_shift → parse_bit_and → parse_bit_xor → parse_bit_or → parse_comparison → parse_equality`
+  - 注意：`parse_comparison` 内包含 infix `match` 运算符（与关系运算同级），调整后 match 的优先级也随之变为高于位运算，需确认 `dev/feng-match-operator-dev.md` 中记录的 match 语义不受影响
+  - 验证：编译通过，无警告
+
+- [ ] **TODO 3：修正 `test_bitwise_expr_parsing` 断言**
+  - 文件：`test/parser/test_parser.c` `test_bitwise_expr_parsing`
+  - 内容：原测试验证 `a | b ^ c & d == e << f` 的 AST 为 `shift > equality > & > ^ > |`，变更后 AST 变为 `shift > & > ^ > | > comparison > equality`，需重写断言以匹配新的解析结构
+  - 验证：`test_parser` 单独运行通过
+
+- [ ] **TODO 4：检查并修正 infix match 相关 parser 测试**
+  - 文件：`test/parser/test_parser.c`
+  - 涉及测试：`test_infix_match_op_mixed_with_relational_and_equality` 等
+  - 内容：match 原与关系运算同级，变更后 match 仍与关系运算同级但整体高于位运算；需验证现有断言是否仍成立，不成立则修正
+  - 验证：`test_parser` 全部通过
+
+- [ ] **TODO 5：调整 fcts 优先级测试用例**
+  - 文件：`fcts/fcts_bin/src/test_expression.ff`
+  - 涉及测试：
+    - `operator precedence bitwise layers`（`&` 高于 `|` 不变，但 `&` 与 `==` 的关系变化）
+    - `operator precedence shift vs comparison`（shift 仍高于 comparison，不受影响）
+    - `operator precedence comparison vs equality`（comparison 仍高于 equality，不受影响）
+    - `operator precedence bitwise vs logical`（位运算高于逻辑，不受影响）
+    - `parentheses override precedence`（有括号，不受影响）
+  - 内容：逐个检查每个测试用例，若断言依赖 `==` 高于 `&`/`|` 则需调整；同时新增测试用例验证新优先级：`a & b == c` 解析为 `(a & b) == c`、`a | b == c` 解析为 `(a | b) == c`、`a ^ b < c` 解析为 `(a ^ b) < c`
+  - 验证：`feng run ./fcts/fcts_bin` 中表达式测试通过
+
+- [ ] **TODO 6：排查 std/ 代码中无括号的 `位运算 == 比较` 写法**
+  - 范围：`std/src/**/*.ff`
+  - 内容：搜索所有形如 `expr & expr == expr`、`expr | expr == expr`、`expr ^ expr == expr` 等无括号写法，逐一判断变更后语义是否变化；若语义变化则补加括号保持原有行为
+  - 验证：`feng build std` 通过，std-tests 通过
+
+- [ ] **TODO 7：全量回归测试**
+  - 命令：`make test-normal`
+  - 内容：运行 C 单元测试 + fcts + smoke + cli-tests + std-tests + perf-constraints
+  - 验证：全部通过，无回归
