@@ -10,17 +10,13 @@ extern func u8_next(puc: u32*, s: string*): string*;
 extern func feng_pointer_is_null(ptr: string*): bool;
 
 /**
- * Buffer represents a rectangular grid of Cell in a terminal user interface (TUI).
+ * Buffer 表示终端用户界面（TUI）中的矩形 Cell 矩阵。
  *
- * It owns a fixed-size `Cell[]` matrix of `width * height` cells laid out in
- * row-major order (`cells[y * width + x]`). The array itself is read-only
- * (`Cell[]`, not `Cell[!]`); however, because Cell is a `@value` type, calling
- * a Cell setter method (e.g. `buffer.cells[idx].bold(true)`) modifies the
- * element **in place** — no writable array is needed.
+ * 拥有固定大小的 `Cell[]` 矩阵，行主序布局（`cells[y * width + x]`）。
+ * 数组本身为只读 `Cell[]`，但 Cell 是 `@value` 类型，
+ * 通过直接字段赋值（如 `buffer.cells[idx].value = 65`）可就地修改元素。
  *
- * Buffer dimensions are immutable after construction. Terminal resize is
- * handled by the upper layer (Screen) creating a new Buffer instance and
- * copying overlapping content from the old one.
+ * Buffer 尺寸创建后不可变。终端尺寸调整由上层（Screen）重新创建新实例处理。
  */
 open type Buffer {
 
@@ -47,24 +43,57 @@ open type Buffer {
     self.cells = Cell[: count];
   }
 
-  // ─── 绘制原语 ─────────────────────────────────────────────────────────────
+  // ─── 内部方法（seal） ──────────────────────────────────────────────────────
 
   /**
-   * 在指定位置绘制文本，逐码点写入连续 Cell。
-   *
+   * 将 Style 枚举值映射为 Cell 的 STYLE_* 位值。
+   * @param s - Style 枚举值
+   * @return 对应的 u64 位值
+   */
+  seal func styleToBits(s: Style): u64 {
+    return match s {
+      Style.none { (u64)0; }
+      Style.bold { Cell.STYLE_BOLD; }
+      Style.dim { Cell.STYLE_DIM; }
+      Style.italic { Cell.STYLE_ITALIC; }
+      Style.underline { Cell.STYLE_UNDERLINE; }
+      Style.blink { Cell.STYLE_BLINK; }
+      Style.reverse { Cell.STYLE_REVERSE; }
+      Style.hidden { Cell.STYLE_HIDDEN; }
+      Style.strikethrough { Cell.STYLE_STRIKETHROUGH; }
+      else { (u64)0; }
+    };
+  }
+
+  /**
+   * 将多个 Style 组合为单个 u64 样式编码（按位或）。
+   * @param styles - Style 数组
+   * @return 组合后的 u64 样式编码
+   */
+  seal func combineStyles(styles: Style[]): u64 {
+    var result: u64 = 0;
+    for let s in styles {
+      result |= self.styleToBits(s);
+    }
+    return result;
+  }
+
+  // ─── draw 数组版本（seal，内部实现 + fill 转发用） ─────────────────────────
+
+  /**
+   * 在 (x, y) 处绘制文本，逐码点写入连续 Cell。
    * 使用 u8_next 直接解码 UTF-8 码点，零字符串分配。
-   * 超出右边界的内容被裁剪（静默丢弃），不抛异常。
-   *
+   * 超出右边界的内容被裁剪。
    * @param x - 起始列坐标（0-based）
    * @param y - 行坐标（0-based）
    * @param text - 要绘制的文本
+   * @param styles - 样式数组
    */
-  func drawText(x: u32, y: u32, text: string): void {
-    // 行越界，整行不可写
+  seal func draw(x: u32, y: u32, text: string, styles: Style[]): void {
+    let s = self.combineStyles(styles);
     if y >= self.height {
       return;
     }
-    // 解码码点，逐个写入
     let data: string* = &text;
     var cursor: string* = data;
     var uc: u32 = 0;
@@ -74,44 +103,174 @@ open type Buffer {
       if feng_pointer_is_null(next) {
         break;
       }
-      // 超出右边界，裁剪剩余内容
       if col >= self.width {
         break;
       }
       let idx = (int)((u64)y * (u64)self.width + (u64)col);
       self.cells[idx].value = (u64)uc;
+      self.cells[idx].style = s;
       col += (u32)1;
       cursor = next;
     }
   }
 
   /**
-   * 用指定的码点和样式编码填充整个矩阵。
-   * 直接字段赋值，无方法调用开销。
-   * @param value - Unicode 码点
-   * @param style - 样式编码（通过 Cell.STYLE_* 常量组合）
+   * 在 (x, y, w, h) 矩形区域内绘制文本，自动换行。
+   * 文本逐码点填充，每行 w 列，超过 h 行后裁剪。
+   * @param x - 起始列坐标（0-based）
+   * @param y - 起始行坐标（0-based）
+   * @param w - 矩形宽度
+   * @param h - 矩形高度
+   * @param text - 要绘制的文本
+   * @param styles - 样式数组
    */
-  func fill(value: u64, style: u64): void {
-    let total = (int)((u64)self.width * (u64)self.height);
-    var i: int = 0;
-    while i < total {
-      self.cells[i].value = value;
-      self.cells[i].style = style;
-      i += (int)1;
+  seal func draw(x: u32, y: u32, w: u32, h: u32, text: string, styles: Style[]): void {
+    let s = self.combineStyles(styles);
+    let data: string* = &text;
+    var cursor: string* = data;
+    var uc: u32 = 0;
+    var row: u32 = 0;
+    while row < h {
+      let cy = y + row;
+      if cy >= self.height {
+        break;
+      }
+      var col: u32 = 0;
+      while col < w {
+        let cx = x + col;
+        if cx >= self.width {
+          break;
+        }
+        let next: string* = u8_next(&uc, cursor);
+        if feng_pointer_is_null(next) {
+          return;
+        }
+        let idx = (int)((u64)cy * (u64)self.width + (u64)cx);
+        self.cells[idx].value = (u64)uc;
+        self.cells[idx].style = s;
+        col += (u32)1;
+        cursor = next;
+      }
+      row += (u32)1;
     }
   }
 
   /**
+   * 在 (x, y) 处绘制单个码点。
+   * @param x - 列坐标（0-based）
+   * @param y - 行坐标（0-based）
+   * @param value - Unicode 码点
+   * @param styles - 样式数组
+   */
+  seal func draw(x: u32, y: u32, value: u64, styles: Style[]): void {
+    let s = self.combineStyles(styles);
+    if x >= self.width || y >= self.height {
+      return;
+    }
+    let idx = (int)((u64)y * (u64)self.width + (u64)x);
+    self.cells[idx].value = value;
+    self.cells[idx].style = s;
+  }
+
+  /**
+   * 在 (x, y, w, h) 矩形区域内填充码点。
+   * @param x - 起始列坐标（0-based）
+   * @param y - 起始行坐标（0-based）
+   * @param w - 矩形宽度
+   * @param h - 矩形高度
+   * @param value - Unicode 码点
+   * @param styles - 样式数组
+   */
+  seal func draw(x: u32, y: u32, w: u32, h: u32, value: u64, styles: Style[]): void {
+    let s = self.combineStyles(styles);
+    var row: u32 = 0;
+    while row < h {
+      let cy = y + row;
+      if cy >= self.height {
+        break;
+      }
+      var col: u32 = 0;
+      while col < w {
+        let cx = x + col;
+        if cx >= self.width {
+          break;
+        }
+        let idx = (int)((u64)cy * (u64)self.width + (u64)cx);
+        self.cells[idx].value = value;
+        self.cells[idx].style = s;
+        col += (u32)1;
+      }
+      row += (u32)1;
+    }
+  }
+
+  // ─── draw 变长参数版本（open，公开 API） ───────────────────────────────────
+
+  /**
+   * 在 (x, y) 处绘制文本，逐码点写入连续 Cell。
+   * @param x - 起始列坐标（0-based）
+   * @param y - 行坐标（0-based）
+   * @param text - 要绘制的文本
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, text: string, styles: Style...): void {
+    self.draw(x, y, text, styles);
+  }
+
+  /**
+   * 在 (x, y, w, h) 矩形区域内绘制文本，自动换行。
+   * @param x - 起始列坐标（0-based）
+   * @param y - 起始行坐标（0-based）
+   * @param w - 矩形宽度
+   * @param h - 矩形高度
+   * @param text - 要绘制的文本
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, w: u32, h: u32, text: string, styles: Style...): void {
+    self.draw(x, y, w, h, text, styles);
+  }
+
+  /**
+   * 在 (x, y) 处绘制单个码点。
+   * @param x - 列坐标（0-based）
+   * @param y - 行坐标（0-based）
+   * @param value - Unicode 码点
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, value: u64, styles: Style...): void {
+    self.draw(x, y, value, styles);
+  }
+
+  /**
+   * 在 (x, y, w, h) 矩形区域内填充码点。
+   * @param x - 起始列坐标（0-based）
+   * @param y - 起始行坐标（0-based）
+   * @param w - 矩形宽度
+   * @param h - 矩形高度
+   * @param value - Unicode 码点
+   * @param styles - 样式变长参数
+   */
+  func draw(x: u32, y: u32, w: u32, h: u32, value: u64, styles: Style...): void {
+    self.draw(x, y, w, h, value, styles);
+  }
+
+  // ─── 便利方法 ─────────────────────────────────────────────────────────────
+
+  /**
+   * 用指定的码点和样式填充整个矩阵。
+   * 等价于 draw(0, 0, width, height, value, styles)。
+   * @param value - Unicode 码点
+   * @param styles - 样式变长参数
+   */
+  func fill(value: u64, styles: Style...): void {
+    self.draw((u32)0, (u32)0, self.width, self.height, value, styles);
+  }
+
+  /**
    * 清空整个矩阵，将所有 Cell 重置为默认值（value=0, style=0）。
-   * 直接写零，比 fill(Cell()) 更高效。
+   * 等价于 fill(0)。
    */
   func clear(): void {
-    let total = (int)((u64)self.width * (u64)self.height);
-    var i: int = 0;
-    while i < total {
-      self.cells[i].value = (u64)0;
-      self.cells[i].style = (u64)0;
-      i += (int)1;
-    }
+    self.fill((u64)0);
   }
 }

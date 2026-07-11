@@ -250,11 +250,11 @@ func buffer_cells_in_place_modify() {
   check(buf.cells[idx].foreColor() == (u32)0xFF0000, "tui/buffer/in-place-fg");
 }
 
-// ─── Buffer drawText ────────────────────────────────────────────────────────
+// ─── Buffer draw 文本（单行） ────────────────────────────────────────────────
 
 func buffer_draw_text_ascii() {
   let buf = Buffer((u32)10, (u32)3);
-  buf.drawText((u32)0, (u32)0, "Hello");
+  buf.draw((u32)0, (u32)0, "Hello");
   check(buf.cells[(int)0].value == (u64)72, "tui/buffer/draw-text-ascii-h");
   check(buf.cells[(int)1].value == (u64)101, "tui/buffer/draw-text-ascii-e");
   check(buf.cells[(int)4].value == (u64)111, "tui/buffer/draw-text-ascii-o");
@@ -265,7 +265,7 @@ func buffer_draw_text_ascii() {
 func buffer_draw_text_chinese() {
   let buf = Buffer((u32)10, (u32)2);
   // "中" U+4E2D, "文" U+6587
-  buf.drawText((u32)0, (u32)0, "中文");
+  buf.draw((u32)0, (u32)0, "中文");
   check(buf.cells[(int)0].value == (u64)0x4E2D, "tui/buffer/draw-text-chinese-0");
   check(buf.cells[(int)1].value == (u64)0x6587, "tui/buffer/draw-text-chinese-1");
 }
@@ -273,14 +273,14 @@ func buffer_draw_text_chinese() {
 func buffer_draw_text_emoji() {
   let buf = Buffer((u32)10, (u32)2);
   // 😀 U+1F600
-  buf.drawText((u32)0, (u32)0, "😀");
+  buf.draw((u32)0, (u32)0, "😀");
   check(buf.cells[(int)0].value == (u64)0x1F600, "tui/buffer/draw-text-emoji");
 }
 
 func buffer_draw_text_clip() {
   let buf = Buffer((u32)4, (u32)2);
   // 在宽度为 4 的行写 6 个字符，后 2 个应被裁剪
-  buf.drawText((u32)0, (u32)0, "ABCDEF");
+  buf.draw((u32)0, (u32)0, "ABCDEF");
   check(buf.cells[(int)0].value == (u64)65, "tui/buffer/draw-text-clip-a");
   check(buf.cells[(int)3].value == (u64)68, "tui/buffer/draw-text-clip-d");
   // 第 5 个字符 'E' (69) 应被裁剪，不写入到下一行
@@ -290,36 +290,135 @@ func buffer_draw_text_clip() {
 func buffer_draw_text_offset_and_clip() {
   let buf = Buffer((u32)5, (u32)2);
   // 从 x=2 开始写，只有 3 个位置可用
-  buf.drawText((u32)2, (u32)0, "ABCDE");
+  buf.draw((u32)2, (u32)0, "ABCDE");
   check(buf.cells[(int)2].value == (u64)65, "tui/buffer/draw-text-offset-a");
   check(buf.cells[(int)4].value == (u64)67, "tui/buffer/draw-text-offset-c");
 }
 
 func buffer_draw_text_empty() {
   let buf = Buffer((u32)5, (u32)2);
-  buf.drawText((u32)0, (u32)0, "");
+  buf.draw((u32)0, (u32)0, "");
   // 空字符串不改变任何 Cell
   check(buf.cells[(int)0].value == (u64)0, "tui/buffer/draw-text-empty");
 }
 
 func buffer_draw_text_y_out_of_bounds() {
   let buf = Buffer((u32)5, (u32)2);
-  buf.drawText((u32)0, (u32)5, "Hello");
+  buf.draw((u32)0, (u32)5, "Hello");
   // 行越界，整行不写入
   check(buf.cells[(int)0].value == (u64)0, "tui/buffer/draw-text-y-oob");
+}
+
+func buffer_draw_text_with_style() {
+  let buf = Buffer((u32)10, (u32)2);
+  buf.draw((u32)0, (u32)0, "Hi", Style.bold, Style.underline);
+  check(buf.cells[(int)0].value == (u64)72, "tui/buffer/draw-text-style-value");
+  check(buf.cells[(int)0].bold() == true, "tui/buffer/draw-text-style-bold");
+  check(buf.cells[(int)0].underline() == true, "tui/buffer/draw-text-style-underline");
+  check(buf.cells[(int)1].bold() == true, "tui/buffer/draw-text-style-bold-1");
+}
+
+// ─── Buffer draw 矩形文本（自动换行） ──────────────────────────────────────
+
+func buffer_draw_rect_text_wrap() {
+  let buf = Buffer((u32)5, (u32)3);
+  // 在 5x2 矩形内绘制 "ABCDEFGH" (8字符)，应自动换行
+  buf.draw((u32)0, (u32)0, (u32)5, (u32)2, "ABCDEFGH");
+  // 第一行: A B C D E
+  check(buf.cells[(int)0].value == (u64)65, "tui/buffer/draw-rect-wrap-0a");
+  check(buf.cells[(int)4].value == (u64)69, "tui/buffer/draw-rect-wrap-0e");
+  // 第二行: F G H
+  let idx10 = (int)((u64)1 * (u64)5 + (u64)0);
+  check(buf.cells[idx10].value == (u64)70, "tui/buffer/draw-rect-wrap-1f");
+  let idx12 = (int)((u64)1 * (u64)5 + (u64)2);
+  check(buf.cells[idx12].value == (u64)72, "tui/buffer/draw-rect-wrap-1h");
+  // 第三行不应被写入
+  let idx20 = (int)((u64)2 * (u64)5 + (u64)0);
+  check(buf.cells[idx20].value == (u64)0, "tui/buffer/draw-rect-wrap-2-empty");
+}
+
+func buffer_draw_rect_text_clip_height() {
+  let buf = Buffer((u32)5, (u32)2);
+  // 在 5x3 矩形内绘制，但 Buffer 只有 2 行，第 3 行应被裁剪
+  buf.draw((u32)0, (u32)0, (u32)5, (u32)3, "ABCDEFGHIJKLMN");
+  // 第一行写入 5 个
+  check(buf.cells[(int)0].value == (u64)65, "tui/buffer/draw-rect-clip-h-0");
+  check(buf.cells[(int)4].value == (u64)69, "tui/buffer/draw-rect-clip-h-4");
+  // 第二行写入 5 个
+  let idx10 = (int)((u64)1 * (u64)5 + (u64)0);
+  check(buf.cells[idx10].value == (u64)70, "tui/buffer/draw-rect-clip-h-1f");
+  let idx14 = (int)((u64)1 * (u64)5 + (u64)4);
+  check(buf.cells[idx14].value == (u64)74, "tui/buffer/draw-rect-clip-h-1j");
+}
+
+// ─── Buffer draw 单码点 ────────────────────────────────────────────────────
+
+func buffer_draw_codepoint() {
+  let buf = Buffer((u32)5, (u32)3);
+  buf.draw((u32)2, (u32)1, (u64)65, Style.bold);
+  let idx = (int)((u64)1 * (u64)5 + (u64)2);
+  check(buf.cells[idx].value == (u64)65, "tui/buffer/draw-codepoint-value");
+  check(buf.cells[idx].bold() == true, "tui/buffer/draw-codepoint-bold");
+}
+
+func buffer_draw_codepoint_out_of_bounds() {
+  let buf = Buffer((u32)3, (u32)3);
+  buf.draw((u32)5, (u32)0, (u64)65);
+  buf.draw((u32)0, (u32)5, (u64)65);
+  check(buf.cells[(int)0].value == (u64)0, "tui/buffer/draw-codepoint-oob");
+}
+
+// ─── Buffer draw 矩形码点填充 ──────────────────────────────────────────────
+
+func buffer_draw_rect_codepoint() {
+  let buf = Buffer((u32)5, (u32)4);
+  buf.draw((u32)1, (u32)1, (u32)3, (u32)2, (u64)65, Style.italic);
+  // 矩形内 (1,1) 到 (3,2) 应被填充
+  let idx11 = (int)((u64)1 * (u64)5 + (u64)1);
+  check(buf.cells[idx11].value == (u64)65, "tui/buffer/draw-rect-cp-11");
+  let idx13 = (int)((u64)1 * (u64)5 + (u64)3);
+  check(buf.cells[idx13].value == (u64)65, "tui/buffer/draw-rect-cp-13");
+  let idx21 = (int)((u64)2 * (u64)5 + (u64)1);
+  check(buf.cells[idx21].value == (u64)65, "tui/buffer/draw-rect-cp-21");
+  check(buf.cells[idx21].italic() == true, "tui/buffer/draw-rect-cp-italic");
+  let idx23 = (int)((u64)2 * (u64)5 + (u64)3);
+  check(buf.cells[idx23].value == (u64)65, "tui/buffer/draw-rect-cp-23");
+  // 矩形外不应被写入
+  check(buf.cells[(int)0].value == (u64)0, "tui/buffer/draw-rect-cp-outside-0");
+  let idx33 = (int)((u64)3 * (u64)5 + (u64)3);
+  check(buf.cells[idx33].value == (u64)0, "tui/buffer/draw-rect-cp-outside-33");
 }
 
 // ─── Buffer fill ────────────────────────────────────────────────────────────
 
 func buffer_fill() {
   let buf = Buffer((u32)3, (u32)3);
-  buf.fill((u64)65, Cell.STYLE_BOLD);
+  buf.fill((u64)65, Style.bold);
   // 检查多个位置
   check(buf.cells[(int)0].value == (u64)65, "tui/buffer/fill-0-0");
   let idx22 = (int)((u64)2 * (u64)3 + (u64)2);
   check(buf.cells[idx22].value == (u64)65, "tui/buffer/fill-2-2");
   let idx11 = (int)((u64)1 * (u64)3 + (u64)1);
   check(buf.cells[idx11].bold() == true, "tui/buffer/fill-bold");
+}
+
+func buffer_fill_no_style() {
+  let buf = Buffer((u32)2, (u32)2);
+  buf.fill((u64)88);
+  check(buf.cells[(int)0].value == (u64)88, "tui/buffer/fill-no-style-value");
+  check(buf.cells[(int)0].style == (u64)0, "tui/buffer/fill-no-style-style");
+  let idx3 = (int)((u64)1 * (u64)2 + (u64)1);
+  check(buf.cells[idx3].value == (u64)88, "tui/buffer/fill-no-style-value-3");
+}
+
+func buffer_fill_multi_style() {
+  let buf = Buffer((u32)2, (u32)2);
+  buf.fill((u64)65, Style.bold, Style.italic, Style.underline);
+  check(buf.cells[(int)0].bold() == true, "tui/buffer/fill-multi-bold");
+  check(buf.cells[(int)0].italic() == true, "tui/buffer/fill-multi-italic");
+  check(buf.cells[(int)0].underline() == true, "tui/buffer/fill-multi-underline");
+  let expected: u64 = Cell.STYLE_BOLD | Cell.STYLE_ITALIC | Cell.STYLE_UNDERLINE;
+  check(buf.cells[(int)0].style == expected, "tui/buffer/fill-multi-combined");
 }
 
 // ─── Buffer clear ───────────────────────────────────────────────────────────
@@ -403,7 +502,15 @@ open func run_tui_tests() {
     test("buffer_draw_text_offset_and_clip()", () { buffer_draw_text_offset_and_clip(); });
     test("buffer_draw_text_empty()", () { buffer_draw_text_empty(); });
     test("buffer_draw_text_y_out_of_bounds()", () { buffer_draw_text_y_out_of_bounds(); });
+    test("buffer_draw_text_with_style()", () { buffer_draw_text_with_style(); });
+    test("buffer_draw_rect_text_wrap()", () { buffer_draw_rect_text_wrap(); });
+    test("buffer_draw_rect_text_clip_height()", () { buffer_draw_rect_text_clip_height(); });
+    test("buffer_draw_codepoint()", () { buffer_draw_codepoint(); });
+    test("buffer_draw_codepoint_out_of_bounds()", () { buffer_draw_codepoint_out_of_bounds(); });
+    test("buffer_draw_rect_codepoint()", () { buffer_draw_rect_codepoint(); });
     test("buffer_fill()", () { buffer_fill(); });
+    test("buffer_fill_no_style()", () { buffer_fill_no_style(); });
+    test("buffer_fill_multi_style()", () { buffer_fill_multi_style(); });
     test("buffer_clear()", () { buffer_clear(); });
     test("buffer_matrix_index()", () { buffer_matrix_index(); });
   });

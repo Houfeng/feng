@@ -1,0 +1,31 @@
+open module std.tui;
+
+/**
+ * Style 表示终端文本样式的枚举类型。
+ *
+ * 枚举项使用小整数序号，不直接对应 Cell 的位值。
+ * 通过 Buffer 内部的 `styleToBits` 方法将 Style 映射为 Cell 的 STYLE_* 位值，
+ * 再通过 `combineStyles` 将多个 Style 组合为单个 u64 样式编码。
+ *
+ * 使用 enum 而非裸整数，确保调用方只能传入合法样式，类型安全。
+ */
+open enum Style {
+  /** 无样式 */
+  none = 0,
+  /** 粗体 */
+  bold = 1,
+  /** 暗淡 */
+  dim = 2,
+  /** 斜体 */
+  italic = 3,
+  /** 下划线 */
+  underline = 4,
+  /** 闪烁 */
+  blink = 5,
+  /** 反转前景/背景色 */
+  reverse = 6,
+  /** 隐藏（不可见） */
+  hidden = 7,
+  /** 删除线 */
+  strikethrough = 8
+}
