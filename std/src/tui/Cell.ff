@@ -23,33 +23,27 @@ open type Cell {
   /**
    * 字符的样式信息
    * 通过或与运算，支持多种样式的组合，例如粗体、斜体、下划线、前景色、背景色等
+   * 
+   * 直接用 16 进制表式，比如： 0x0001ADD8E6FF0000  
+   *   - [ 16 bits 样式与标志位 ] [ 24 bits 背景 RGB ] [ 24 bits 前景 RGB ]
    *
-   * [ 16 bits 样式与标志位 ] [ 24 bits 背景 RGB ] [ 24 bits 前景 RGB ]
-   * 直接用 16 进制表式，比如： 0x0001ADD8E6FF0000
+   * 提取前景色 (最低 24 bits)  
+   *   - 直接使用 0xFFFFFF 掩码截取，指令开销最小
+   *   - (self.style & 0xFFFFFF)
    *
-   * ==========================================
-   * 提取前景色 (最低 24 bits)
-   * ------------------------------------------
-   * 直接使用 0xFFFFFF 掩码截取，指令开销最小
-   * (self.style & 0xFFFFFF)
+   * 提取背景色 (中间 24 bits)  
+   *   - 先右移 24 位，再使用 0xFFFFFF 掩码截取
+   *   - ((self.style >> 24) & 0xFFFFFF)
    *
-   * ==========================================
-   * 提取背景色 (中间 24 bits)
-   * ------------------------------------------
-   * 先右移 24 位，再使用 0xFFFFFF 掩码截取
-   * ((self.style >> 24) & 0xFFFFFF)
-   *
-   * ==========================================
-   * 样式位掩码常量定义 (占用 48-63 位)
-   * ------------------------------------------
-   * let STYLE_BOLD: u64          = 1 << 48;
-   * let STYLE_DIM: u64           = 1 << 49;
-   * let STYLE_ITALIC: u64        = 1 << 50;
-   * let STYLE_UNDERLINE: u64     = 1 << 51;
-   * let STYLE_BLINK: u64         = 1 << 52;
-   * let STYLE_REVERSE: u64       = 1 << 53;
-   * let STYLE_HIDDEN: u64        = 1 << 54;
-   * let STYLE_STRIKETHROUGH: u64 = 1 << 55;
+   * 样式位掩码常量定义 (占用 48-63 位)  
+   *   - let STYLE_BOLD: u64          = 1 << 48;
+   *   - let STYLE_DIM: u64           = 1 << 49;
+   *   - let STYLE_ITALIC: u64        = 1 << 50;
+   *   - let STYLE_UNDERLINE: u64     = 1 << 51;
+   *   - let STYLE_BLINK: u64         = 1 << 52;
+   *   - let STYLE_REVERSE: u64       = 1 << 53;
+   *   - let STYLE_HIDDEN: u64        = 1 << 54;
+   *   - let STYLE_STRIKETHROUGH: u64 = 1 << 55;
    *
    */
   seal var style: u64;
