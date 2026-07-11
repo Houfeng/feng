@@ -2,24 +2,170 @@ open module std.tui;
 
 /**
  * Cell represents a single character cell in a terminal user interface (TUI).
- * Each cell contains a Unicode code point and style information. 
+ * Each cell contains a Unicode code point and style information.
  */
 @value
 open type Cell {
   /**
    * 字符的 Unicode 码点
    * 支持所有 Unicode 字符，包括 Emoji、汉字、拉丁字母等
-   * 部分超过 8 字节的组合 emoji 通过 ZWJ 拆分为多个 emoji  
+   * 部分超过 8 字节的组合 emoji 通过 ZWJ 拆分为多个 emoji
    */
-  let value: u64;
+  seal var value: u64;
 
   /**
    * 字符的样式信息
    * 通过或与运算，支持多种样式的组合，例如粗体、斜体、下划线、前景色、背景色等
-   * 
+   *
    * [ 16 bits 样式与标志位 ] [ 24 bits 背景 RGB ] [ 24 bits 前景 RGB ]
    * 直接用 16 进制表式，比如： 0x0001ADD8E6FF0000
-   * 
+   *
+   * ==========================================
+   * 提取前景色 (最低 24 bits)
+   * ------------------------------------------
+   * 直接使用 0xFFFFFF 掩码截取，指令开销最小
+   * (self.style & 0xFFFFFF)
+   *
+   * ==========================================
+   * 提取背景色 (中间 24 bits)
+   * ------------------------------------------
+   * 先右移 24 位，再使用 0xFFFFFF 掩码截取
+   * ((self.style >> 24) & 0xFFFFFF)
+   *
+   * ==========================================
+   * 样式位掩码常量定义 (占用 48-63 位)
+   * ------------------------------------------
+   * let STYLE_BOLD: u64          = 1 << 48;
+   * let STYLE_DIM: u64           = 1 << 49;
+   * let STYLE_ITALIC: u64        = 1 << 50;
+   * let STYLE_UNDERLINE: u64     = 1 << 51;
+   * let STYLE_BLINK: u64         = 1 << 52;
+   * let STYLE_REVERSE: u64       = 1 << 53;
+   * let STYLE_HIDDEN: u64        = 1 << 54;
+   * let STYLE_STRIKETHROUGH: u64 = 1 << 55;
+   *
    */
-  let style: u64;
+  seal var style: u64;
+
+  /**
+   * 提取前景色 (最低 24 bits)
+   * 直接使用 0xFFFFFF 掩码截取，指令开销最小
+   */
+  func foreColor(): u32 {
+    // 未转换类型时，此处理编译报错提示，非常不直观，未来优化编译器错误提示
+    return (u32)(self.style & 0xFFFFFF);
+  }
+
+  func foreColor(value: u32): void {
+    // self.style = (self.style & ~0xFFFFFF) | ((u64)(value & 0xFFFFFF));
+  }
+
+  /**
+   * 提取背景色 (中间 24 bits)
+   * 先右移 24 位，再使用 0xFFFFFF 掩码截取
+   */
+  func backColor(): u32 {
+    return (u32)((self.style >> 24) & 0xFFFFFF);
+  }
+
+  func backColor(value: u32): void {
+    // self.style = (self.style & ~(0xFFFFFF << 24)) | ((u64)(value & 0xFFFFFF) << 24);
+  }
+
+  func bold(): bool {
+    return (self.style & (1 << 48)) != 0;
+  }
+
+  func bold(value: bool): void {
+    if value {
+      self.style |= (1 << 48);
+    } else {
+      // self.style &= ~(1 << 48);
+    }
+  }
+
+  func dim(): bool {
+    return (self.style & (1 << 49)) != 0;
+  }
+
+  func dim(value: bool): void {
+    if value {
+      self.style |= (1 << 49);
+    } else {
+      // self.style &= ~(1 << 49);
+    }
+  }
+
+  func italic(): bool {
+    return (self.style & (1 << 50)) != 0;
+  }
+
+  func italic(value: bool): void {
+    if value {
+      self.style |= (1 << 50);
+    } else {
+      // self.style &= ~(1 << 50);
+    }
+  }
+
+  func underline(): bool {
+    return (self.style & (1 << 51)) != 0;
+  }
+
+  func underline(value: bool): void {
+    if value {
+      self.style |= (1 << 51);
+    } else {
+      // self.style &= ~(1 << 51);
+    }
+  }
+
+  func blink(): bool {
+    return (self.style & (1 << 52)) != 0;
+  }
+
+  func blink(value: bool): void {
+    if value {
+      self.style |= (1 << 52);
+    } else {
+      // self.style &= ~(1 << 52);
+    }
+  }
+
+  func reverse(): bool {
+    return (self.style & (1 << 53)) != 0;
+  }
+
+  func reverse(value: bool): void {
+    if value {
+      self.style |= (1 << 53);
+    } else {
+      // self.style &= ~(1 << 53);
+    }
+  }
+
+  func hidden(): bool {
+    return (self.style & (1 << 54)) != 0;
+  }
+
+  func hidden(value: bool): void {
+    if value {
+      self.style |= (1 << 54);
+    } else {
+      // self.style &= ~(1 << 54);
+    }
+  }
+
+  func strikeThrough(): bool {
+    return (self.style & (1 << 55)) != 0;
+  }
+
+  func strikeThrough(value: bool): void {
+    if value {
+      self.style |= (1 << 55);
+    } else {
+      // self.style &= ~(1 << 55);
+    }
+  }
+
 }
