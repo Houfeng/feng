@@ -87,12 +87,14 @@ open type Screen {
   }
 
   /**
-   * 渲染：比较 back 与 front 的差异，生成 ANSI 转义序列字符串。
+   * 构建 diff 后的 ANSI 转义序列字节，由调用方直接写入 stdout。
+   * 比较 back 与 front 的差异，只对变化的 cell 发射 ANSI 序列。
    * 渲染完成后将 back 的内容覆盖到 front（memcpy，不交换指针），
    * 使 front 成为新的 diff 基准。连续相同 style 的 cell 只发射一次 SGR 序列。
-   * @return ANSI 转义序列字符串，由调用方负责写入 stdout
+   * 不执行 I/O，纯函数。
+   * @return ANSI 转义序列字节数组，由调用方负责写入 stdout
    */
-  open func render(): string {
+  open func buildPatchBytes(): byte[] {
     let w = self.back.width;
     let h = self.back.height;
     let total = (int)((u64)w * (u64)h);
@@ -143,7 +145,18 @@ open type Screen {
       frontCells[j].style = backCells[j].style;
       j = j + (int)1;
     }
-    return string.fromUtf8Bytes(output.entries());
+    return output.entries();
+  }
+
+  /**
+   * 构建 diff 后的 ANSI 转义序列字符串，供测试使用。
+   * 内部调用 buildPatchBytes() 后转换为 string 返回。
+   * 生产路径应直接使用 buildPatchBytes() 以避免 string 中间转换。
+   * @return ANSI 转义序列字符串
+   */
+  open func buildPatchString(): string {
+    let bytes = self.buildPatchBytes();
+    return string.fromUtf8Bytes(bytes);
   }
 
   // ─── 内部方法（seal） ──────────────────────────────────────────────────────

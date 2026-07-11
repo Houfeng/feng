@@ -130,12 +130,7 @@ extern func c_atexit(handler: AtexitHandler*): i32;
 extern func c_write(fd: i32, buf: byte*, count: uint): int;
 ```
 
-### 3.5 runtime 字符串转字节（将 render() 返回的 string 转为 byte[] 后写入）
-
-```feng
-@runtime
-extern func feng_string_to_utf8_bytes(value: string): byte[];
-```
+> **无需 `feng_string_to_utf8_bytes`**：`Screen.buildPatchBytes()` 直接返回 `byte[]`，TuiApp 直接写入 stdout，不经过 string 中间转换。
 
 ## 4 常量
 
@@ -228,7 +223,8 @@ open func init(): void {
 
 ```feng
 /**
- * 渲染一帧：检查 resize、调用 Screen.render()、写入 stdout。
+ * 渲染一帧：检查 resize、调用 Screen.buildPatchBytes()、写入 stdout。
+ * 直接使用 byte[]，不经过 string 中间转换。
  * @throws "tui/app/write-failed" — write 返回负值
  */
 open func render(): void {
@@ -242,13 +238,12 @@ open func render(): void {
     }
     self.resizeRequested = false;
   }
-  // 调用 Screen.render() 生成 ANSI 序列
-  let ansi = self.screen.render();
-  // 写入 stdout
-  let bytes = feng_string_to_utf8_bytes(ansi);
-  let len = bytes.length();
+  // 调用 Screen.buildPatchBytes() 生成 ANSI 序列字节
+  let ansi = self.screen.buildPatchBytes();
+  // 直接写入 stdout，无需 string → byte[] 转换
+  let len = ansi.length();
   if len > (int)0 {
-    let written = c_write(STDOUT_FD, &bytes, (uint)len);
+    let written = c_write(STDOUT_FD, &ansi, (uint)len);
     if written < (int)0 {
       throw "tui/app/write-failed";
     }
@@ -350,8 +345,8 @@ TuiApp.run(renderFn)
           ├── if resizeRequested:
           │     uv_tty_get_winsize → screen.resize(w, h)
           │     resizeRequested = false
-          ├── screen.render() → ANSI 字符串
-          └── c_write(STDOUT_FD, bytes, len)
+          ├── screen.buildPatchBytes() → byte[]          ← 零转换
+          └── c_write(STDOUT_FD, &ansi, len)        ← 零转换
 
 SIGWINCH 中断 → handleSigwinch() → resizeFlag = true
   （下一帧 render() 时检查）

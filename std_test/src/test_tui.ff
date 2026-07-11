@@ -587,19 +587,19 @@ func screen_clear() {
 
 func screen_render_empty_no_diff() {
   let scr = Screen((u32)5, (u32)2);
-  // front 和 back 都是空白，render() 应返回空字符串（无差异）
-  let out = scr.render();
+  // front 和 back 都是空白，buildPatchString() 应返回空字符串（无差异）
+  let out = scr.buildPatchString();
   check(out.length() == (int)0, "tui/screen/render-empty-no-diff");
 }
 
 func screen_render_full_diff() {
   let scr = Screen((u32)5, (u32)2);
   scr.buffer().draw((u32)0, (u32)0, "Hi");
-  // 第一次 render，front 全空白，back 有内容 → 应输出差异序列
-  let out = scr.render();
+  // 第一次 buildPatchString，front 全空白，back 有内容 → 应输出差异序列
+  let out = scr.buildPatchString();
   check(out.length() > (int)0, "tui/screen/render-full-diff-nonempty");
-  // 第二次 render，front 已同步 → 应无差异
-  let out2 = scr.render();
+  // 第二次 buildPatchString，front 已同步 → 应无差异
+  let out2 = scr.buildPatchString();
   check(out2.length() == (int)0, "tui/screen/render-after-sync-no-diff");
 }
 
@@ -607,7 +607,7 @@ func screen_render_cursor_position() {
   let scr = Screen((u32)10, (u32)5);
   // 在 (2, 1) 处绘制
   scr.buffer().draw((u32)2, (u32)1, (u64)65);
-  let out = scr.render();
+  let out = scr.buildPatchString();
   // 应包含光标定位序列 \x1b[2;3H（行=2, 列=3，1-based）
   check(out.contains("\x1b[2;3H"), "tui/screen/render-cursor-position");
 }
@@ -615,25 +615,25 @@ func screen_render_cursor_position() {
 func screen_render_codepoint_output() {
   let scr = Screen((u32)5, (u32)2);
   scr.buffer().draw((u32)0, (u32)0, (u64)65);  // 'A'
-  let out = scr.render();
+  let out = scr.buildPatchString();
   check(out.contains("A"), "tui/screen/render-codepoint-ascii");
 }
 
 func screen_render_codepoint_zero_to_space() {
   let scr = Screen((u32)5, (u32)2);
-  // 先绘制非零内容并 render 同步到 front
+  // 先绘制非零内容并 buildPatchString 同步到 front
   scr.buffer().draw((u32)0, (u32)0, "AB");
-  scr.render();
-  // 清空 back 为码点 0，render 时码点 0 应输出空格
+  scr.buildPatchString();
+  // 清空 back 为码点 0，buildPatchString 时码点 0 应输出空格
   scr.buffer().fill((u64)0);
-  let out = scr.render();
+  let out = scr.buildPatchString();
   check(out.contains(" "), "tui/screen/render-codepoint-zero-space");
 }
 
 func screen_render_sgr_reset() {
   let scr = Screen((u32)5, (u32)2);
   scr.buffer().draw((u32)0, (u32)0, "X", Style.bold);
-  let out = scr.render();
+  let out = scr.buildPatchString();
   // 渲染结束后应重置 SGR
   check(out.contains("\x1b[0m"), "tui/screen/render-sgr-reset");
 }
@@ -641,7 +641,7 @@ func screen_render_sgr_reset() {
 func screen_render_sgr_bold() {
   let scr = Screen((u32)5, (u32)2);
   scr.buffer().draw((u32)0, (u32)0, "X", Style.bold);
-  let out = scr.render();
+  let out = scr.buildPatchString();
   // SGR 序列应包含 bold (1)
   check(out.contains("\x1b[1m") || out.contains(";1m"), "tui/screen/render-sgr-bold");
 }
@@ -649,7 +649,7 @@ func screen_render_sgr_bold() {
 func screen_render_sgr_fg_color() {
   let scr = Screen((u32)5, (u32)2);
   scr.buffer().draw((u32)0, (u32)0, "X", RgbColor((u8)0xFF, (u8)0x00, (u8)0x00));
-  let out = scr.render();
+  let out = scr.buildPatchString();
   // 前景色 38;2;255;0;0
   check(out.contains("38;2;255;0;0"), "tui/screen/render-sgr-fg-color");
 }
@@ -659,7 +659,7 @@ func screen_render_sgr_fg_bg_color() {
   scr.buffer().draw((u32)0, (u32)0, "X",
     RgbColor((u8)0xFF, (u8)0x00, (u8)0x00),
     RgbColor((u8)0x00, (u8)0x00, (u8)0xFF));
-  let out = scr.render();
+  let out = scr.buildPatchString();
   // 前景色 38;2;255;0;0 和背景色 48;2;0;0;255
   check(out.contains("38;2;255;0;0"), "tui/screen/render-sgr-fg");
   check(out.contains("48;2;0;0;255"), "tui/screen/render-sgr-bg");
@@ -668,7 +668,7 @@ func screen_render_sgr_fg_bg_color() {
 func screen_render_sgr_multi_style() {
   let scr = Screen((u32)5, (u32)2);
   scr.buffer().draw((u32)0, (u32)0, "X", Style.bold, Style.italic, Style.underline);
-  let out = scr.render();
+  let out = scr.buildPatchString();
   // SGR 应包含 1;3;4
   check(out.contains("1"), "tui/screen/render-sgr-multi-bold");
   check(out.contains("3"), "tui/screen/render-sgr-multi-italic");
@@ -677,14 +677,14 @@ func screen_render_sgr_multi_style() {
 
 func screen_render_partial_diff() {
   let scr = Screen((u32)10, (u32)2);
-  // 第一次绘制 + render
+  // 第一次绘制 + buildPatchString
   scr.buffer().draw((u32)0, (u32)0, "Hello");
-  let out1 = scr.render();
+  let out1 = scr.buildPatchString();
   check(out1.length() > (int)0, "tui/screen/partial-diff-first");
 
   // 只修改一个 cell
   scr.buffer().draw((u32)0, (u32)0, (u64)74);  // 'J'
-  let out2 = scr.render();
+  let out2 = scr.buildPatchString();
   // 应只包含一个 cell 的差异，输出应比第一次短
   check(out2.length() < out1.length(), "tui/screen/partial-diff-second-shorter");
   check(out2.contains("J"), "tui/screen/partial-diff-second-contains-j");
@@ -694,7 +694,7 @@ func screen_render_no_sgr_for_unchanged_style() {
   let scr = Screen((u32)10, (u32)2);
   // 绘制两个连续 cell，相同样式
   scr.buffer().draw((u32)0, (u32)0, "AB", Style.bold);
-  let out = scr.render();
+  let out = scr.buildPatchString();
   // 应只发射一次 SGR bold（统计 "\x1b[" 后含 "1" 的 SGR 序列出现次数）
   // 验证：输出中 "1m" 或 ";1m" 只出现一次（不算最终 \x1b[0m）
   let resetSeq = "\x1b[0m";
@@ -706,7 +706,7 @@ func screen_render_no_sgr_for_unchanged_style() {
 func screen_resize() {
   let scr = Screen((u32)5, (u32)3);
   scr.buffer().draw((u32)0, (u32)0, "Hi");
-  scr.render();  // 同步 front
+  scr.buildPatchString();  // 同步 front
 
   // resize 后尺寸应更新
   scr.resize((u32)10, (u32)5);
@@ -717,9 +717,9 @@ func screen_resize() {
   // resize 后 back 为空白
   check(scr.buffer().cells[(int)0].value == (u64)0, "tui/screen/resize-back-cleared");
 
-  // resize 后 front 也清空，绘制新内容后 render 应全量重绘
+  // resize 后 front 也清空，绘制新内容后 buildPatchString 应全量重绘
   scr.buffer().draw((u32)0, (u32)0, "X");
-  let out = scr.render();
+  let out = scr.buildPatchString();
   check(out.length() > (int)0, "tui/screen/resize-render-full");
   check(out.contains("X"), "tui/screen/resize-render-contains-x");
 }
@@ -727,14 +727,14 @@ func screen_resize() {
 func screen_render_unicode_chinese() {
   let scr = Screen((u32)10, (u32)2);
   scr.buffer().draw((u32)0, (u32)0, "中");
-  let out = scr.render();
+  let out = scr.buildPatchString();
   check(out.contains("中"), "tui/screen/render-unicode-chinese");
 }
 
 func screen_render_unicode_emoji() {
   let scr = Screen((u32)10, (u32)2);
   scr.buffer().draw((u32)0, (u32)0, "😀");
-  let out = scr.render();
+  let out = scr.buildPatchString();
   check(out.contains("😀"), "tui/screen/render-unicode-emoji");
 }
 

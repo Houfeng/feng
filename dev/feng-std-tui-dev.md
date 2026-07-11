@@ -45,7 +45,7 @@
 ### 2.3 应用控制层（第 5 层）
 
 - **生命周期**：启动时进入 Raw Mode，注册 `SIGWINCH` 响应 Resize，程序退出或崩溃时保证终端状态绝对恢复。
-- **输入流解析与路由**：读取 stdin 字节流，通过状态机解析为 `KeyEvent` 或 `MouseEvent`，下发给焦点节点，计算状态变更后触发 `Screen.render()`。
+- **输入流解析与路由**：读取 stdin 字节流，通过状态机解析为 `KeyEvent` 或 `MouseEvent`，下发给焦点节点，计算状态变更后触发 `Screen.buildPatchBytes()`。
 
 ## 3 关键设计决策
 
@@ -88,16 +88,17 @@
 
 - `open type Screen`，持有 `seal var front: Buffer`（diff 基准）和 `seal var back: Buffer`（绘制表面），两者均私有，外部不可访问。
 - **双缓冲 + Diff 引擎**（非图形系统页翻转，是 diff 模型）：
-  - `render()` 时逐 cell 比较 front 与 back 的 `value` 和 `style` 字段，只对变化的 cell 发射 ANSI 序列。
+  - `buildPatchBytes()` 时逐 cell 比较 front 与 back 的 `value` 和 `style` 字段，只对变化的 cell 发射 ANSI 序列。
   - 渲染完成后将 back 的内容覆盖到 front（memcpy，**不交换指针**——交换会导致 back 残留上一帧内容、被迫全刷，性能反而下降）。
-  - **SGR 状态机优化**：跟踪当前 SGR 样式编码，仅当 style 变化时发射 SGR 序列，连续相同 style 的 cell 不逐 cell 重发。渲染结束后重置 SGR（`\x1b[0m`）。
+  - **SGR 状态机优化**：跟踪当前 SGR 样式编码，仅当 style 变化时发射 SGR 序列，连续相同 style 的 cell 不逐 cell 重发。`buildPatchBytes()` 结束后重置 SGR（`\x1b[0m`）。
   - 光标定位：`\x1b[y;xH`（1-based 坐标）。
 - **公开 API**：
   - `buffer(): Buffer` — 返回 back 引用，应用在此绘制。`resize()` 后需重新调用获取最新引用。
   - `size(): Tuple<u32, u32>` — 返回当前屏幕尺寸（width, height）。
   - `clear()` — 清空 back buffer。
-  - `resize(width, height)` — 重建 front/back 为新尺寸空白 Buffer，旧内容不迁移（TUI resize 时旧内容无法对齐，由上层组件树负责重新布局）。front 同时清空，使下次 `render()` 产生全量重绘。
-  - `render(): string` — 返回 diff 后的 ANSI 转义序列字符串，由调用方负责写入 stdout。
+  - `resize(width, height)` — 重建 front/back 为新尺寸空白 Buffer，旧内容不迁移（TUI resize 时旧内容无法对齐，由上层组件树负责重新布局）。front 同时清空，使下次 `buildPatchBytes()` 产生全量重绘。
+  - `buildPatchBytes(): byte[]` — 构建 diff 后的 ANSI 转义序列字节，由调用方直接写入 stdout，零 string 中间转换。主体实现方法。不执行 I/O，纯函数。
+  - `buildPatchString(): string` — 调用 `buildPatchBytes()` 后 `string.fromUtf8Bytes()` 转换返回，供测试使用。
 - **ANSI 序列生成**：
   - SGR（Select Graphic Rendition）：前景色 `38;2;r;g;b`，背景色 `48;2;r;g;b`，样式标志 `1`(bold) `2`(dim) `3`(italic) `4`(underline) `5`(blink) `7`(reverse) `8`(hidden) `9`(strikethrough)。
   - 码点 0（空白 cell）render 时输出空格 `' '`。
@@ -150,7 +151,7 @@
 > 先实现 TuiApp 的渲染通路，以便在真实终端上验证 Screen 的实际绘制效果。
 
 - [ ] 4.13 实现 TuiApp 渲染基础：Raw Mode（`tcgetattr`/`tcsetattr`）+ 终端恢复保证（`defer` + `atexit`）+ SIGWINCH 响应（`signal`/`sigaction` + `ioctl TIOCGWINSZ`）
-- [ ] 4.14 实现渲染主循环：调用 `Screen.render()` 并写入 stdout，在真实终端验证 Screen 绘制效果
+- [ ] 4.14 实现渲染主循环：调用 `Screen.buildPatchBytes()` 并写入 stdout，在真实终端验证 Screen 绘制效果
 - [ ] 4.15 补充 std_test 用例：在 `test_tui.ff` 中新增 Raw Mode 进入/恢复、SIGWINCH 响应、渲染主循环等测试
 - [ ] 4.16 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.17 等待人工 Review：开发者审查 TuiApp 纯渲染实现与测试用例，通过后方可进入第五阶段
@@ -158,7 +159,7 @@
 ### 第五阶段：应用控制层 - 输入支持（第 5 层）
 
 - [ ] 4.18 实现输入解析状态机：VT100/xterm 转义序列解析，将 stdin 字节流解析为 `KeyEvent`/`MouseEvent`
-- [ ] 4.19 实现事件路由：将解析后的事件下发至回调处理，触发状态变更后调用 `Screen.render()`
+- [ ] 4.19 实现事件路由：将解析后的事件下发至回调处理，触发状态变更后调用 `Screen.buildPatchBytes()`
 - [ ] 4.20 补充 std_test 用例：在 `test_tui.ff` 中新增输入解析状态机（VT100/xterm 转义序列）、事件路由等测试
 - [ ] 4.21 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.22 等待人工 Review：开发者审查输入解析与事件路由实现，通过后方可进入第六阶段
