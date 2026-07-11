@@ -1,11 +1,137 @@
 open module std.tui;
 
+// ─── extern 函数声明（用于 drawText 码点解码） ──────────────────────────────
+
+/** libunistring: 解码下一个 UTF-8 码点，返回指向下一个码点起点的指针 */
+@cdecl("feng_std_unistring", "u8_next")
+extern func u8_next(puc: u32*, s: string*): string*;
+
+/** runtime: 判断指针是否为空 */
+extern func feng_pointer_is_null(ptr: string*): bool;
+
 /**
- * Buffer represents a rectangular area of cells in a terminal user interface (TUI).
- * It contains a width, height, and an array of Cell objects that represent the individual character cells.
+ * Buffer represents a rectangular grid of Cell in a terminal user interface (TUI).
+ *
+ * It owns a fixed-size `Cell[]` matrix of `width * height` cells laid out in
+ * row-major order (`cells[y * width + x]`). The array itself is read-only
+ * (`Cell[]`, not `Cell[!]`); however, because Cell is a `@value` type, calling
+ * a Cell setter method (e.g. `buffer.cells[idx].bold(true)`) modifies the
+ * element **in place** — no writable array is needed.
+ *
+ * Buffer dimensions are immutable after construction. Terminal resize is
+ * handled by the upper layer (Screen) creating a new Buffer instance and
+ * copying overlapping content from the old one.
  */
 open type Buffer {
+
+  /** 矩阵列数（创建后不可变） */
   let width: u32;
+
+  /** 矩阵行数（创建后不可变） */
   let height: u32;
+
+  /** Cell 矩阵，行主序布局，长度为 width * height */
   let cells: Cell[];
+
+  // ─── 构造函数 ─────────────────────────────────────────────────────────────
+
+  /**
+   * 构造函数：创建指定尺寸的 Buffer，所有 Cell 初始化为默认值（value=0, style=0）。
+   * @param width - 矩阵列数
+   * @param height - 矩阵行数
+   */
+  func Buffer(width: u32, height: u32) {
+    self.width = width;
+    self.height = height;
+    let count = (int)((u64)width * (u64)height);
+    self.cells = Cell[: count];
+  }
+
+  // ─── 读取访问器 ───────────────────────────────────────────────────────────
+
+  /**
+   * 读取指定位置的 Cell（值拷贝）。
+   * 越界时返回默认 Cell（value=0, style=0），不抛异常。
+   * 注意：返回的是值拷贝，修改返回值不会影响 Buffer；
+   * 要修改 Buffer 中的 Cell，请直接操作 `self.cells[idx]`。
+   * @param x - 列坐标（0-based）
+   * @param y - 行坐标（0-based）
+   * @return 该位置的 Cell 值拷贝
+   */
+  func cell(x: u32, y: u32): Cell {
+    if x >= self.width || y >= self.height {
+      return Cell();
+    }
+    let idx = (int)((u64)y * (u64)self.width + (u64)x);
+    return self.cells[idx];
+  }
+
+  // ─── 绘制原语 ─────────────────────────────────────────────────────────────
+
+  /**
+   * 在指定位置绘制文本，逐码点写入连续 Cell。
+   *
+   * 使用 u8_next 直接解码 UTF-8 码点，零字符串分配。
+   * 超出右边界的内容被裁剪（静默丢弃），不抛异常。
+   *
+   * @param x - 起始列坐标（0-based）
+   * @param y - 行坐标（0-based）
+   * @param text - 要绘制的文本
+   */
+  func drawText(x: u32, y: u32, text: string): void {
+    // 行越界，整行不可写
+    if y >= self.height {
+      return;
+    }
+    // 解码码点，逐个写入
+    let data: string* = &text;
+    var cursor: string* = data;
+    var uc: u32 = 0;
+    var col: u32 = x;
+    while true {
+      let next: string* = u8_next(&uc, cursor);
+      if feng_pointer_is_null(next) {
+        break;
+      }
+      // 超出右边界，裁剪剩余内容
+      if col >= self.width {
+        break;
+      }
+      let idx = (int)((u64)y * (u64)self.width + (u64)col);
+      self.cells[idx].value((u64)uc);
+      col += (u32)1;
+      cursor = next;
+    }
+  }
+
+  /**
+   * 用指定 Cell 填充整个矩阵。
+   * 逐元素调用 Cell 的 setter 就地修改 value 和 style。
+   * @param cell - 用于填充的 Cell
+   */
+  func fill(cell: Cell): void {
+    let v = cell.value();
+    let s = cell.style();
+    let total = (int)((u64)self.width * (u64)self.height);
+    var i: int = 0;
+    while i < total {
+      self.cells[i].value(v);
+      self.cells[i].style(s);
+      i += (int)1;
+    }
+  }
+
+  /**
+   * 清空整个矩阵，将所有 Cell 重置为默认值（value=0, style=0）。
+   * 直接写零，比 fill(Cell()) 更高效。
+   */
+  func clear(): void {
+    let total = (int)((u64)self.width * (u64)self.height);
+    var i: int = 0;
+    while i < total {
+      self.cells[i].value((u64)0);
+      self.cells[i].style((u64)0);
+      i += (int)1;
+    }
+  }
 }

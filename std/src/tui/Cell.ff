@@ -54,6 +54,14 @@ open type Cell {
   }
 
   /**
+   * 设置字符的 Unicode 码点
+   * @param value - Unicode 码点
+   */
+  open func value(value: u64): void {
+    self._value = value;
+  }
+
+  /**
    * 字符的样式信息
    * 通过或与运算，支持多种样式的组合，例如粗体、斜体、下划线、前景色、背景色等
    * 
@@ -78,6 +86,14 @@ open type Cell {
    */
   open func style(): u64 {
     return self._style;
+  }
+
+  /**
+   * 设置样式信息（整体替换）
+   * @param value - 样式编码（通过 Cell.STYLE_* 常量组合）
+   */
+  open func style(value: u64): void {
+    self._style = value;
   }
 
   /**

@@ -96,17 +96,17 @@
 
 ### 第一阶段：Cell（渲染底座 - 最小单元）
 
-- [ ] 4.1 完善 Cell：构造函数、静态常量、工厂方法
-- [ ] 4.2 补充 std_test 用例：新增 `std_test/src/test_tui.ff`，覆盖 Cell 样式读写（前景色/背景色/粗体/斜体等各标志位）；注册 `run_tui_tests()` 并在 `z_main.ff` 中调用
-- [ ] 4.3 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.4 等待人工 Review：开发者审查 Cell 实现与测试用例，通过后方可进入第二阶段
+- [x] 4.1 完善 Cell：构造函数、静态常量、工厂方法
+- [x] 4.2 补充 std_test 用例：新增 `std_test/src/test_tui.ff`，覆盖 Cell 样式读写（前景色/背景色/粗体/斜体等各标志位）；注册 `run_tui_tests()` 并在 `z_main.ff` 中调用
+- [x] 4.3 全量回归测试：执行 `make test`，确认全部通过
+- [x] 4.4 等待人工 Review：开发者审查 Cell 实现与测试用例，通过后方可进入第二阶段
 
 ### 第二阶段：Buffer（渲染底座 - 数据容器）
 
-- [ ] 4.5 实现 Buffer：Cell 矩阵管理 + 绘制原语（`setCell`、`drawText`、`fill`、`clear`）
-- [ ] 4.6 补充 std_test 用例：在 `test_tui.ff` 中新增 Buffer 矩阵索引、绘制原语、边界校验等测试
-- [ ] 4.7 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.8 等待人工 Review：开发者审查 Buffer 实现与测试用例，通过后方可进入第三阶段
+- [x] 4.5 实现 Buffer：Cell 矩阵管理 + 绘制原语（`setCell`、`drawText`、`fill`、`clear`）
+- [x] 4.6 补充 std_test 用例：在 `test_tui.ff` 中新增 Buffer 矩阵索引、绘制原语、边界校验等测试
+- [x] 4.7 全量回归测试：执行 `make test`，确认全部通过
+- [x] 4.8 等待人工 Review：开发者审查 Buffer 实现与测试用例，通过后方可进入第三阶段
 
 ### 第三阶段：Screen（渲染底座 - 差异同步）
 

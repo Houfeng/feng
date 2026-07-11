@@ -1,6 +1,7 @@
 module std_test;
 
 import std.test;
+import std.collections;
 
 import std.tui;
 
@@ -199,6 +200,189 @@ func cell_style_with_colors() {
   check(c.value() == (u64)65, "tui/cell/style-colors-value");
 }
 
+// ─── Cell 基础 setter（第二阶段新增） ──────────────────────────────────────────
+
+func cell_value_setter() {
+  let c = Cell();
+  check(c.value() == (u64)0, "tui/cell/value-setter-init");
+  c.value((u64)0x4E2D);
+  check(c.value() == (u64)0x4E2D, "tui/cell/value-setter-write");
+  c.value((u64)65);
+  check(c.value() == (u64)65, "tui/cell/value-setter-overwrite");
+}
+
+func cell_style_setter() {
+  let c = Cell((u64)65);
+  check(c.style() == (u64)0, "tui/cell/style-setter-init");
+  c.style(Cell.STYLE_BOLD | Cell.STYLE_UNDERLINE);
+  check(c.style() == (Cell.STYLE_BOLD | Cell.STYLE_UNDERLINE), "tui/cell/style-setter-write");
+  check(c.bold() == true, "tui/cell/style-setter-bold");
+  check(c.underline() == true, "tui/cell/style-setter-underline");
+  c.style((u64)0);
+  check(c.style() == (u64)0, "tui/cell/style-setter-clear");
+  check(c.bold() == false, "tui/cell/style-setter-bold-cleared");
+}
+
+// ─── Buffer 构造函数 ──────────────────────────────────────────────────────
+
+func buffer_ctor() {
+  let buf = Buffer((u32)10, (u32)5);
+  check(buf.width == (u32)10, "tui/buffer/ctor-width");
+  check(buf.height == (u32)5, "tui/buffer/ctor-height");
+  check(buf.cells.length() == (int)50, "tui/buffer/ctor-cells-length");
+}
+
+func buffer_default_cells() {
+  let buf = Buffer((u32)3, (u32)2);
+  let c = buf.cell((u32)1, (u32)1);
+  check(c.value() == (u64)0, "tui/buffer/default-cells-value");
+  check(c.style() == (u64)0, "tui/buffer/default-cells-style");
+}
+
+// ─── Buffer cell 读取 ──────────────────────────────────────────────────────
+
+func buffer_cell_read() {
+  let buf = Buffer((u32)4, (u32)3);
+  // 直接操作 cells 数组，就地修改
+  buf.cells[(int)7].value((u64)88);
+  let c = buf.cell((u32)3, (u32)1);
+  check(c.value() == (u64)88, "tui/buffer/cell-read-after-write");
+}
+
+func buffer_cell_out_of_bounds() {
+  let buf = Buffer((u32)2, (u32)2);
+  // 越界返回默认 Cell
+  let c1 = buf.cell((u32)5, (u32)0);
+  check(c1.value() == (u64)0, "tui/buffer/cell-oob-x");
+  let c2 = buf.cell((u32)0, (u32)5);
+  check(c2.value() == (u64)0, "tui/buffer/cell-oob-y");
+  let c3 = buf.cell((u32)100, (u32)100);
+  check(c3.value() == (u64)0, "tui/buffer/cell-oob-both");
+}
+
+// ─── Buffer 直接操作 cells（就地修改） ───────────────────────────────────────
+
+func buffer_cells_in_place_modify() {
+  let buf = Buffer((u32)4, (u32)4);
+  let idx = (int)((u64)1 * (u64)4 + (u64)2);  // y=1, x=2
+  buf.cells[idx].value((u64)65);
+  buf.cells[idx].bold(true);
+  buf.cells[idx].foreColor((u32)0xFF0000);
+
+  let c = buf.cell((u32)2, (u32)1);
+  check(c.value() == (u64)65, "tui/buffer/in-place-value");
+  check(c.bold() == true, "tui/buffer/in-place-bold");
+  check(c.foreColor() == (u32)0xFF0000, "tui/buffer/in-place-fg");
+}
+
+// ─── Buffer drawText ────────────────────────────────────────────────────────
+
+func buffer_draw_text_ascii() {
+  let buf = Buffer((u32)10, (u32)3);
+  buf.drawText((u32)0, (u32)0, "Hello");
+  check(buf.cell((u32)0, (u32)0).value() == (u64)72, "tui/buffer/draw-text-ascii-h");
+  check(buf.cell((u32)1, (u32)0).value() == (u64)101, "tui/buffer/draw-text-ascii-e");
+  check(buf.cell((u32)4, (u32)0).value() == (u64)111, "tui/buffer/draw-text-ascii-o");
+  // 未写入的位置应保持默认
+  check(buf.cell((u32)5, (u32)0).value() == (u64)0, "tui/buffer/draw-text-ascii-after");
+}
+
+func buffer_draw_text_chinese() {
+  let buf = Buffer((u32)10, (u32)2);
+  // "中" U+4E2D, "文" U+6587
+  buf.drawText((u32)0, (u32)0, "中文");
+  check(buf.cell((u32)0, (u32)0).value() == (u64)0x4E2D, "tui/buffer/draw-text-chinese-0");
+  check(buf.cell((u32)1, (u32)0).value() == (u64)0x6587, "tui/buffer/draw-text-chinese-1");
+}
+
+func buffer_draw_text_emoji() {
+  let buf = Buffer((u32)10, (u32)2);
+  // 😀 U+1F600
+  buf.drawText((u32)0, (u32)0, "😀");
+  check(buf.cell((u32)0, (u32)0).value() == (u64)0x1F600, "tui/buffer/draw-text-emoji");
+}
+
+func buffer_draw_text_clip() {
+  let buf = Buffer((u32)4, (u32)2);
+  // 在宽度为 4 的行写 6 个字符，后 2 个应被裁剪
+  buf.drawText((u32)0, (u32)0, "ABCDEF");
+  check(buf.cell((u32)0, (u32)0).value() == (u64)65, "tui/buffer/draw-text-clip-a");
+  check(buf.cell((u32)3, (u32)0).value() == (u64)68, "tui/buffer/draw-text-clip-d");
+  // 越界位置返回默认值
+  check(buf.cell((u32)4, (u32)0).value() == (u64)0, "tui/buffer/draw-text-clip-oob");
+}
+
+func buffer_draw_text_offset_and_clip() {
+  let buf = Buffer((u32)5, (u32)2);
+  // 从 x=2 开始写，只有 3 个位置可用
+  buf.drawText((u32)2, (u32)0, "ABCDE");
+  check(buf.cell((u32)2, (u32)0).value() == (u64)65, "tui/buffer/draw-text-offset-a");
+  check(buf.cell((u32)4, (u32)0).value() == (u64)67, "tui/buffer/draw-text-offset-c");
+}
+
+func buffer_draw_text_empty() {
+  let buf = Buffer((u32)5, (u32)2);
+  buf.drawText((u32)0, (u32)0, "");
+  // 空字符串不改变任何 Cell
+  check(buf.cell((u32)0, (u32)0).value() == (u64)0, "tui/buffer/draw-text-empty");
+}
+
+func buffer_draw_text_y_out_of_bounds() {
+  let buf = Buffer((u32)5, (u32)2);
+  buf.drawText((u32)0, (u32)5, "Hello");
+  // 行越界，整行不写入
+  check(buf.cell((u32)0, (u32)0).value() == (u64)0, "tui/buffer/draw-text-y-oob");
+}
+
+// ─── Buffer fill ────────────────────────────────────────────────────────────
+
+func buffer_fill() {
+  let buf = Buffer((u32)3, (u32)3);
+  let c = Cell((u64)65, Cell.STYLE_BOLD);
+  buf.fill(c);
+  // 检查多个位置
+  check(buf.cell((u32)0, (u32)0).value() == (u64)65, "tui/buffer/fill-0-0");
+  check(buf.cell((u32)2, (u32)2).value() == (u64)65, "tui/buffer/fill-2-2");
+  check(buf.cell((u32)1, (u32)1).bold() == true, "tui/buffer/fill-bold");
+}
+
+// ─── Buffer clear ───────────────────────────────────────────────────────────
+
+func buffer_clear() {
+  let buf = Buffer((u32)3, (u32)2);
+  buf.cells[(int)0].value((u64)65);
+  buf.cells[(int)0].bold(true);
+  buf.cells[(int)3].value((u64)66);
+  buf.clear();
+  check(buf.cell((u32)0, (u32)0).value() == (u64)0, "tui/buffer/clear-value-0-0");
+  check(buf.cell((u32)0, (u32)0).style() == (u64)0, "tui/buffer/clear-style-0-0");
+  check(buf.cell((u32)0, (u32)1).value() == (u64)0, "tui/buffer/clear-value-0-1");
+  check(buf.cell((u32)0, (u32)1).style() == (u64)0, "tui/buffer/clear-style-0-1");
+}
+
+// ─── Buffer 矩阵索引正确性 ──────────────────────────────────────────────────
+
+func buffer_matrix_index() {
+  let buf = Buffer((u32)5, (u32)4);
+  // 在每个位置写入唯一的标识值
+  var y: u32 = 0;
+  while y < (u32)4 {
+    var x: u32 = 0;
+    while x < (u32)5 {
+      let idx = (int)((u64)y * (u64)5 + (u64)x);
+      buf.cells[idx].value((u64)((u64)y * (u64)100 + (u64)x));
+      x += (u32)1;
+    }
+    y += (u32)1;
+  }
+  // 验证读取
+  check(buf.cell((u32)0, (u32)0).value() == (u64)0, "tui/buffer/matrix-0-0");
+  check(buf.cell((u32)4, (u32)0).value() == (u64)4, "tui/buffer/matrix-4-0");
+  check(buf.cell((u32)0, (u32)1).value() == (u64)100, "tui/buffer/matrix-0-1");
+  check(buf.cell((u32)3, (u32)2).value() == (u64)203, "tui/buffer/matrix-3-2");
+  check(buf.cell((u32)4, (u32)3).value() == (u64)304, "tui/buffer/matrix-4-3");
+}
+
 open func run_tui_tests() {
   describe("tui tests", () {
     test("cell_mask_fg()", () { cell_mask_fg(); });
@@ -228,5 +412,22 @@ open func run_tui_tests() {
     test("cell_strikethrough_rw()", () { cell_strikethrough_rw(); });
     test("cell_style_combination()", () { cell_style_combination(); });
     test("cell_style_with_colors()", () { cell_style_with_colors(); });
+    test("cell_value_setter()", () { cell_value_setter(); });
+    test("cell_style_setter()", () { cell_style_setter(); });
+    test("buffer_ctor()", () { buffer_ctor(); });
+    test("buffer_default_cells()", () { buffer_default_cells(); });
+    test("buffer_cell_read()", () { buffer_cell_read(); });
+    test("buffer_cell_out_of_bounds()", () { buffer_cell_out_of_bounds(); });
+    test("buffer_cells_in_place_modify()", () { buffer_cells_in_place_modify(); });
+    test("buffer_draw_text_ascii()", () { buffer_draw_text_ascii(); });
+    test("buffer_draw_text_chinese()", () { buffer_draw_text_chinese(); });
+    test("buffer_draw_text_emoji()", () { buffer_draw_text_emoji(); });
+    test("buffer_draw_text_clip()", () { buffer_draw_text_clip(); });
+    test("buffer_draw_text_offset_and_clip()", () { buffer_draw_text_offset_and_clip(); });
+    test("buffer_draw_text_empty()", () { buffer_draw_text_empty(); });
+    test("buffer_draw_text_y_out_of_bounds()", () { buffer_draw_text_y_out_of_bounds(); });
+    test("buffer_fill()", () { buffer_fill(); });
+    test("buffer_clear()", () { buffer_clear(); });
+    test("buffer_matrix_index()", () { buffer_matrix_index(); });
   });
 }
