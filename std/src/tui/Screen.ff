@@ -98,7 +98,10 @@ open type Screen {
     let total = (int)((u64)w * (u64)h);
     let frontCells = self.front.cells;
     let backCells = self.back.cells;
-    var output = "";
+
+    // 使用 List<byte> 收集输出，避免 string 拼接的 O(n²) 复制开销
+    // 预分配容量：按最坏情况（全量变化）估算，每个 cell 约 20 字节
+    let output = List<byte>(total * (int)20);
 
     // 逐 cell 比较并发射差异序列
     var i: int = 0;
@@ -113,23 +116,31 @@ open type Screen {
         let x = (u32)((u64)i % (u64)w);
 
         // 光标定位：\x1b[y;xH（1-based）
-        output = output + "\x1b[" + (y + (u32)1).toString() + ";" + (x + (u32)1).toString() + "H";
+        output.add((byte)0x1b);
+        output.add((byte)0x5b); // '['
+        self.writeDecimal(output, (y + (u32)1));
+        output.add((byte)0x3b); // ';'
+        self.writeDecimal(output, (x + (u32)1));
+        output.add((byte)0x48); // 'H'
 
         // SGR 状态机：仅当 style 变化时发射 SGR 序列
         if self.currentSgr != b.style {
-          output = output + self.buildSgr(b.style);
+          self.writeSgr(output, b.style);
           self.currentSgr = b.style;
         }
 
         // 发射字符（码点 → UTF-8）
-        output = output + self.encodeCodepoint(b.value);
+        self.writeCodepoint(output, b.value);
       }
       i = i + (int)1;
     }
 
     // 渲染完成后重置 SGR（避免样式泄漏到后续终端输出）
     if self.currentSgr != (u64)0 {
-      output = output + "\x1b[0m";
+      output.add((byte)0x1b);
+      output.add((byte)0x5b); // '['
+      output.add((byte)0x30); // '0'
+      output.add((byte)0x6d); // 'm'
       self.currentSgr = (u64)0;
     }
 
@@ -141,81 +152,170 @@ open type Screen {
       j = j + (int)1;
     }
 
-    return output;
+    return string.fromUtf8Bytes(output.entries());
   }
 
   // ─── 内部方法（seal） ──────────────────────────────────────────────────────
 
   /**
-   * 根据 Cell 的 style 编码构建 SGR（Select Graphic Rendition）序列。
-   * 样式布局：[ 16 bits 样式标志 ] [ 24 bits 背景RGB ] [ 24 bits 前景RGB ]
-   * @param style - Cell 的样式编码
-   * @return SGR ANSI 序列字符串（如 "\x1b[1;38;2;255;0;0;48;2;0;0;255m"）
+   * 将 u32 数值以十进制 ASCII 形式追加到 output 缓冲区。
+   * 零值输出单字符 '0'。
+   * @param output - 目标字节缓冲区
+   * @param value - 要写入的数值
    */
-  seal func buildSgr(style: u64): string {
-    let parts = List<string>();
-
-    // 前景色（低 24 bits）
-    let fg = (u32)(style & Cell.MASK_FG);
-    if fg != (u32)0 {
-      let r = (fg >> (u32)16) & (u32)0xFF;
-      let g = (fg >> (u32)8) & (u32)0xFF;
-      let bl = fg & (u32)0xFF;
-      parts.add("38;2;" + r.toString() + ";" + g.toString() + ";" + bl.toString());
+  seal func writeDecimal(output: List<byte>, value: u32) {
+    if value == (u32)0 {
+      output.add((byte)0x30); // '0'
+      return;
     }
-
-    // 背景色（中 24 bits）
-    let bg = (u32)((style >> (u64)24) & Cell.MASK_FG);
-    if bg != (u32)0 {
-      let r = (bg >> (u32)16) & (u32)0xFF;
-      let g = (bg >> (u32)8) & (u32)0xFF;
-      let bl = bg & (u32)0xFF;
-      parts.add("48;2;" + r.toString() + ";" + g.toString() + ";" + bl.toString());
+    // 临时缓冲区：u32 最大 10 位十进制
+    var tmp: byte[!] = byte[:10];
+    var n: int = 0;
+    var v: u32 = value;
+    while v != (u32)0 {
+      tmp[n] = (byte)((u32)0x30 + (v % (u32)10));
+      n = n + (int)1;
+      v = v / (u32)10;
     }
-
-    // 样式标志位（高 16 bits）
-    if (style & Cell.STYLE_BOLD) != (u64)0 { parts.add("1"); }
-    if (style & Cell.STYLE_DIM) != (u64)0 { parts.add("2"); }
-    if (style & Cell.STYLE_ITALIC) != (u64)0 { parts.add("3"); }
-    if (style & Cell.STYLE_UNDERLINE) != (u64)0 { parts.add("4"); }
-    if (style & Cell.STYLE_BLINK) != (u64)0 { parts.add("5"); }
-    if (style & Cell.STYLE_REVERSE) != (u64)0 { parts.add("7"); }
-    if (style & Cell.STYLE_HIDDEN) != (u64)0 { parts.add("8"); }
-    if (style & Cell.STYLE_STRIKETHROUGH) != (u64)0 { parts.add("9"); }
-
-    if parts.size() == (int)0 {
-      return "\x1b[0m";
+    // 逆序写入
+    var k: int = n - (int)1;
+    while k >= (int)0 {
+      output.add(tmp[k]);
+      k = k - (int)1;
     }
-
-    return "\x1b[" + string.join(";", parts.entries()) + "m";
   }
 
   /**
-   * 将 Unicode 码点编码为 UTF-8 字符串。
-   * @param cp - Unicode 码点
-   * @return UTF-8 编码的字符串（空码点 0 返回空格 ' '）
+   * 根据 Cell 的 style 编码，将 SGR（Select Graphic Rendition）序列
+   * 直接追加到 output 缓冲区。
+   * 样式布局：[ 16 bits 样式标志 ] [ 24 bits 背景RGB ] [ 24 bits 前景RGB ]
+   * @param output - 目标字节缓冲区
+   * @param style - Cell 的样式编码
    */
-  seal func encodeCodepoint(cp: u64): string {
-    if cp == (u64)0 {
-      return " ";
+  seal func writeSgr(output: List<byte>, style: u64) {
+    // 前景色（低 24 bits）
+    let fg = (u32)(style & Cell.MASK_FG);
+
+    // 背景色（中 24 bits）
+    let bg = (u32)((style >> (u64)24) & Cell.MASK_FG);
+
+    // 若前景、背景、样式标志全为零，发射 SGR 重置 \x1b[0m
+    if fg == (u32)0 && bg == (u32)0 && style == (u64)0 {
+      output.add((byte)0x1b);
+      output.add((byte)0x5b); // '['
+      output.add((byte)0x30); // '0'
+      output.add((byte)0x6d); // 'm'
+      return;
     }
-    let bytes = List<byte>();
+
+    output.add((byte)0x1b);
+    output.add((byte)0x5b); // '['
+
+    var first: bool = true;
+
+    // 前景色：38;2;r;g;b
+    if fg != (u32)0 {
+      if !first { output.add((byte)0x3b); } // ';'
+      first = false;
+      output.add((byte)0x33); // '3'
+      output.add((byte)0x38); // '8'
+      output.add((byte)0x3b); // ';'
+      output.add((byte)0x32); // '2'
+      output.add((byte)0x3b); // ';'
+      self.writeDecimal(output, (fg >> (u32)16) & (u32)0xFF);
+      output.add((byte)0x3b); // ';'
+      self.writeDecimal(output, (fg >> (u32)8) & (u32)0xFF);
+      output.add((byte)0x3b); // ';'
+      self.writeDecimal(output, fg & (u32)0xFF);
+    }
+
+    // 背景色：48;2;r;g;b
+    if bg != (u32)0 {
+      if !first { output.add((byte)0x3b); } // ';'
+      first = false;
+      output.add((byte)0x34); // '4'
+      output.add((byte)0x38); // '8'
+      output.add((byte)0x3b); // ';'
+      output.add((byte)0x32); // '2'
+      output.add((byte)0x3b); // ';'
+      self.writeDecimal(output, (bg >> (u32)16) & (u32)0xFF);
+      output.add((byte)0x3b); // ';'
+      self.writeDecimal(output, (bg >> (u32)8) & (u32)0xFF);
+      output.add((byte)0x3b); // ';'
+      self.writeDecimal(output, bg & (u32)0xFF);
+    }
+
+    // 样式标志位（高 16 bits）
+    if (style & Cell.STYLE_BOLD) != (u64)0 {
+      if !first { output.add((byte)0x3b); }
+      first = false;
+      output.add((byte)0x31); // '1'
+    }
+    if (style & Cell.STYLE_DIM) != (u64)0 {
+      if !first { output.add((byte)0x3b); }
+      first = false;
+      output.add((byte)0x32); // '2'
+    }
+    if (style & Cell.STYLE_ITALIC) != (u64)0 {
+      if !first { output.add((byte)0x3b); }
+      first = false;
+      output.add((byte)0x33); // '3'
+    }
+    if (style & Cell.STYLE_UNDERLINE) != (u64)0 {
+      if !first { output.add((byte)0x3b); }
+      first = false;
+      output.add((byte)0x34); // '4'
+    }
+    if (style & Cell.STYLE_BLINK) != (u64)0 {
+      if !first { output.add((byte)0x3b); }
+      first = false;
+      output.add((byte)0x35); // '5'
+    }
+    if (style & Cell.STYLE_REVERSE) != (u64)0 {
+      if !first { output.add((byte)0x3b); }
+      first = false;
+      output.add((byte)0x37); // '7'
+    }
+    if (style & Cell.STYLE_HIDDEN) != (u64)0 {
+      if !first { output.add((byte)0x3b); }
+      first = false;
+      output.add((byte)0x38); // '8'
+    }
+    if (style & Cell.STYLE_STRIKETHROUGH) != (u64)0 {
+      if !first { output.add((byte)0x3b); }
+      first = false;
+      output.add((byte)0x39); // '9'
+    }
+
+    output.add((byte)0x6d); // 'm'
+  }
+
+  /**
+   * 将 Unicode 码点编码为 UTF-8 字节序列，直接追加到 output 缓冲区。
+   * 码点 0 渲染为空格 ' '（0x20）。
+   * @param output - 目标字节缓冲区
+   * @param cp - Unicode 码点
+   */
+  seal func writeCodepoint(output: List<byte>, cp: u64) {
+    if cp == (u64)0 {
+      output.add((byte)0x20); // 空格
+      return;
+    }
     let c = (u32)cp;
     if c < (u32)0x80 {
-      bytes.add((byte)c);
+      output.add((byte)c);
     } else if c < (u32)0x800 {
-      bytes.add((byte)((u32)0xC0 | (c >> (u32)6)));
-      bytes.add((byte)((u32)0x80 | (c & (u32)0x3F)));
+      output.add((byte)((u32)0xC0 | (c >> (u32)6)));
+      output.add((byte)((u32)0x80 | (c & (u32)0x3F)));
     } else if c < (u32)0x10000 {
-      bytes.add((byte)((u32)0xE0 | (c >> (u32)12)));
-      bytes.add((byte)((u32)0x80 | ((c >> (u32)6) & (u32)0x3F)));
-      bytes.add((byte)((u32)0x80 | (c & (u32)0x3F)));
+      output.add((byte)((u32)0xE0 | (c >> (u32)12)));
+      output.add((byte)((u32)0x80 | ((c >> (u32)6) & (u32)0x3F)));
+      output.add((byte)((u32)0x80 | (c & (u32)0x3F)));
     } else {
-      bytes.add((byte)((u32)0xF0 | (c >> (u32)18)));
-      bytes.add((byte)((u32)0x80 | ((c >> (u32)12) & (u32)0x3F)));
-      bytes.add((byte)((u32)0x80 | ((c >> (u32)6) & (u32)0x3F)));
-      bytes.add((byte)((u32)0x80 | (c & (u32)0x3F)));
+      output.add((byte)((u32)0xF0 | (c >> (u32)18)));
+      output.add((byte)((u32)0x80 | ((c >> (u32)12) & (u32)0x3F)));
+      output.add((byte)((u32)0x80 | ((c >> (u32)6) & (u32)0x3F)));
+      output.add((byte)((u32)0x80 | (c & (u32)0x3F)));
     }
-    return string.fromUtf8Bytes(bytes.entries());
   }
 }

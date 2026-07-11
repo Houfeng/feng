@@ -63,6 +63,21 @@ open type List<T> {
   }
 
   /**
+   * Creates an empty list with the given initial capacity pre-allocated.
+   * Useful when the expected number of elements is known in advance,
+   * avoiding intermediate grow() reallocations.
+   * @param capacity - number of slots to pre-allocate (clamped to 0 if negative)
+   */
+  open func List(capacity: int) {
+    if capacity <= (int)0 {
+      self.items = T[:0];
+    } else {
+      self.items = T[:capacity];
+    }
+    self.count = 0;
+  }
+
+  /**
    * Appends `item` to the end of the list.
    * @param item - the element to append
    */
