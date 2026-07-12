@@ -36,14 +36,16 @@ stdin 可读
 
 > **KeyEvent 不求与 GUI 对齐，只求真实反映终端控制流**：终端把“物理按键 + 修饰状态 + 按下/释放”压扁成一条字符字节流，丢失了几乎所有结构化信息。Feng TUI 的 KeyEvent 严谨反映终端能可靠提供的信息，不伪装终端没有的能力。修饰键快捷方法（isCtrl/isShift）只在 100% 能确定时返回 true，不确定时返回 false。
 
-## 2 事件类型（Event.ff）
+## 2 事件类型
 
-### 2.1 Key 枚举
+事件类型拆分为两个文件：`KeyEvent.ff` 和 `MouseEvent.ff`。
 
-终端能可靠识别的特殊键。可打印字符不在此枚举中，通过 `Union<Key, u32>` 的 `u32` 分支传递码点。
+### 2.1 SpecialKey 枚举（KeyEvent.ff）
+
+终端能可靠识别的特殊键。可打印字符不在此枚举中，通过 `Union<SpecialKey, u32>` 的 `u32` 分支传递码点。
 
 ```feng
-open enum Key {
+open enum SpecialKey {
   escape = 1,
   tab = 2,
   enter = 3,
@@ -73,23 +75,23 @@ open enum Key {
 }
 ```
 
-> **无 `none` 项**：Key 枚举不含 `none`。特殊键和可打印字符通过 `Union<Key, u32>` 互斥表达，不会出现"key 字段无值"的不自恰状态。
+> **无 `none` 项**：SpecialKey 枚举不含 `none`。特殊键和可打印字符通过 `Union<SpecialKey, u32>` 互斥表达，不会出现"key 字段无值"的不自恰状态。
 
-### 2.2 按键内容类型
+### 2.2 按键内容类型（KeyEvent.ff）
 
-`Key`（特殊键）与 `u32`（可打印字符码点）互斥——一个按键事件要么是特殊键，要么是可打印字符，不会同时存在。用 std 的 `Union<T1,T2>` 表达：
+`SpecialKey`（特殊键）与 `u32`（可打印字符码点）互斥——一个按键事件要么是特殊键，要么是可打印字符，不会同时存在。用 std 的 `Union<T1,T2>` 表达：
 
 ```feng
-// 按键内容类型，直接用 Union<Key, u32>，不自定义 spec
-// 用法：let content: Union<Key, u32> = Key.arrowUp;
-//      let content: Union<Key, u32> = (u32)0x61;
+// 按键内容类型，直接用 Union<SpecialKey, u32>，不自定义 spec
+// 用法：let content: Union<SpecialKey, u32> = SpecialKey.arrowUp;
+//      let content: Union<SpecialKey, u32> = (u32)0x61;
 ```
 
-> **复用 std 的 `Union<T1,T2>`**：`Union<Key, u32>` 即 `Key | u32`，定义在 `std/basic/Union.ff`。不自定义 KeyContent spec。
+> **复用 std 的 `Union<T1,T2>`**：`Union<SpecialKey, u32>` 即 `SpecialKey | u32`，定义在 `std/basic/Union.ff`。不自定义 KeyContent spec。
 
-### 2.3 Modifiers 常量
+### 2.3 Modifiers 常量（KeyEvent.ff）
 
-修饰键用 `u8` 位标志表示，定义在 Event.ff 顶层（与 Cell 的 STYLE_* 常量同模式）。**仅在 100% 能确定时设置**：
+修饰键用 `u8` 位标志表示，定义在 KeyEvent.ff 顶层（与 Cell 的 STYLE_* 常量同模式）。**仅在 100% 能确定时设置**：
 
 ```feng
 /** Ctrl 修饰键标志（仅在纯控制字符 0x01-0x07,0x0B-0x0C,0x0E-0x1A,0x1C-0x1F 时设置） */
@@ -100,15 +102,15 @@ seal let MOD_SHIFT: u8 = 4;
 
 > **不定义 MOD_ALT**：ESC 前缀与单独 Esc 键无法 100% 消歧（需要超时，超时也不完全可靠）。按严格标准不提供 Alt 检测能力。
 
-### 2.4 KeyEvent
+### 2.4 KeyEvent（KeyEvent.ff）
 
 所有字段为 `let`——结构体初始化后不可变：
 
 ```feng
 @value
 open type KeyEvent {
-  /** 按键内容：Key=特殊键，u32=可打印字符码点 */
-  let content: Union<Key, u32>;
+  /** 按键内容：SpecialKey=特殊键，u32=可打印字符码点 */
+  let content: Union<SpecialKey, u32>;
   /** 修饰键位标志（仅含 100% 可靠推断的修饰键：MOD_CTRL / MOD_SHIFT） */
   let mods: u8;
 
@@ -117,7 +119,7 @@ open type KeyEvent {
     self.mods = 0;
   }
 
-  func KeyEvent(content: Union<Key, u32>, mods: u8) {
+  func KeyEvent(content: Union<SpecialKey, u32>, mods: u8) {
     self.content = content;
     self.mods = mods;
   }
@@ -163,13 +165,13 @@ open type KeyEvent {
 > | `a` | `u32(0x61)` | `0` | false | false |
 > | `A` | `u32(0x41)` | `0` | false | false |
 > | Ctrl+A | `u32(0x01)` | `MOD_CTRL` | true | false |
-> | Ctrl+H / Backspace | `Key.backspace` | `0` | false | false |
-> | Ctrl+M / Enter | `Key.enter` | `0` | false | false |
-> | Ctrl+[ / Esc | `Key.escape` | `0` | false | false |
-> | ArrowUp | `Key.arrowUp` | `0` | false | false |
-> | Shift+ArrowUp | `Key.arrowUp` | `MOD_SHIFT` | false | true |
+> | Ctrl+H / Backspace | `SpecialKey.backspace` | `0` | false | false |
+> | Ctrl+M / Enter | `SpecialKey.enter` | `0` | false | false |
+> | Ctrl+[ / Esc | `SpecialKey.escape` | `0` | false | false |
+> | ArrowUp | `SpecialKey.arrowUp` | `0` | false | false |
+> | Shift+ArrowUp | `SpecialKey.arrowUp` | `MOD_SHIFT` | false | true |
 
-### 2.5 MouseAction / MouseButton 枚举
+### 2.5 MouseAction / MouseButton 枚举（MouseEvent.ff）
 
 ```feng
 open enum MouseAction {
@@ -188,7 +190,7 @@ open enum MouseButton {
 }
 ```
 
-### 2.6 MouseEvent
+### 2.6 MouseEvent（MouseEvent.ff）
 
 所有字段为 `let`——结构体初始化后不可变：
 
@@ -199,9 +201,9 @@ open type MouseEvent {
   let action: MouseAction;
   /** 按下的按钮（move 时为 none） */
   let button: MouseButton;
-  /** 列坐标（1-based，与终端行号一致） */
+  /** 列坐标（0-based，与 Screen/Buffer 一致；InputManager 解析时将终端 1-based 坐标减 1） */
   let x: u32;
-  /** 行坐标（1-based） */
+  /** 行坐标（0-based） */
   let y: u32;
   /** 修饰键位标志（MOD_CTRL / MOD_SHIFT，来自 SGR 鼠标序列的 button 高位，100% 可靠） */
   let mods: u8;
@@ -326,11 +328,11 @@ open func feed(b: u8): void {
 
 | 字节 | KeyEvent |
 |------|----------|
-| 0x08 (BS) | Key.backspace |
-| 0x09 (HT) | Key.tab |
-| 0x0D (CR) | Key.enter |
+| 0x08 (BS) | SpecialKey.backspace |
+| 0x09 (HT) | SpecialKey.tab |
+| 0x0D (CR) | SpecialKey.enter |
 | 0x1B (ESC) | 进入 esc 态（不立即产出） |
-| 0x7F (DEL) | Key.backspace |
+| 0x7F (DEL) | SpecialKey.backspace |
 
 > Ctrl+字母（纯控制字符 0x01–0x07,0x0B–0x0C,0x0E–0x1A,0x1C–0x1F）映射为
 > KeyEvent(content=u32(控制字节值), mods=MOD_CTRL)。
@@ -351,28 +353,28 @@ open func feed(b: u8): void {
 
 | 终态字节 | 参数 | 产出 |
 |----------|------|------|
-| `A` | 无 | Key.arrowUp |
-| `B` | 无 | Key.arrowDown |
-| `C` | 无 | Key.arrowRight |
-| `D` | 无 | Key.arrowLeft |
-| `H` | 无 | Key.home |
-| `F` | 无 | Key.end |
+| `A` | 无 | SpecialKey.arrowUp |
+| `B` | 无 | SpecialKey.arrowDown |
+| `C` | 无 | SpecialKey.arrowRight |
+| `D` | 无 | SpecialKey.arrowLeft |
+| `H` | 无 | SpecialKey.home |
+| `F` | 无 | SpecialKey.end |
 | `P`~`S` | 无 | F1~F4（xterm CSI 方式） |
 | `~` | 0 | 无效 |
-| `~` | 1 | Key.home |
-| `~` | 4 | Key.end |
-| `~` | 5 | Key.pageUp |
-| `~` | 6 | Key.pageDown |
-| `~` | 2 | Key.insert |
-| `~` | 3 | Key.delete |
-| `~` | 15 | Key.f5 |
-| `~` | 17 | Key.f6 |
-| `~` | 18 | Key.f7 |
-| `~` | 19 | Key.f8 |
-| `~` | 20 | Key.f9 |
-| `~` | 21 | Key.f10 |
-| `~` | 23 | Key.f11 |
-| `~` | 24 | Key.f12 |
+| `~` | 1 | SpecialKey.home |
+| `~` | 4 | SpecialKey.end |
+| `~` | 5 | SpecialKey.pageUp |
+| `~` | 6 | SpecialKey.pageDown |
+| `~` | 2 | SpecialKey.insert |
+| `~` | 3 | SpecialKey.delete |
+| `~` | 15 | SpecialKey.f5 |
+| `~` | 17 | SpecialKey.f6 |
+| `~` | 18 | SpecialKey.f7 |
+| `~` | 19 | SpecialKey.f8 |
+| `~` | 20 | SpecialKey.f9 |
+| `~` | 21 | SpecialKey.f10 |
+| `~` | 23 | SpecialKey.f11 |
+| `~` | 24 | SpecialKey.f12 |
 | `M` | — | 隐式鼠标事件（旧式） |
 | `<` | — | SGR 鼠标序列起始，继续收集 |
 
@@ -384,15 +386,15 @@ open func feed(b: u8): void {
 
 | 字节 | 产出 |
 |------|------|
-| `P` | Key.f1 |
-| `Q` | Key.f2 |
-| `R` | Key.f3 |
-| `S` | Key.f4 |
-| `A` | Key.arrowUp（某些终端） |
-| `B` | Key.arrowDown |
-| `C` | Key.arrowRight |
-| `D` | Key.arrowLeft |
-| `H` | Key.home |
+| `P` | SpecialKey.f1 |
+| `Q` | SpecialKey.f2 |
+| `R` | SpecialKey.f3 |
+| `S` | SpecialKey.f4 |
+| `A` | SpecialKey.arrowUp（某些终端） |
+| `B` | SpecialKey.arrowDown |
+| `C` | SpecialKey.arrowRight |
+| `D` | SpecialKey.arrowLeft |
+| `H` | SpecialKey.home |
 | 其他 | 无效，丢弃 |
 
 #### 3.4.5 handleUtf8 — UTF-8 续传态
@@ -435,6 +437,10 @@ button 值映射：
 
 > button 值 32 = 拖动（move 事件）。button 的低 5 位标识按钮，高位标识修饰键。
 > 32 = move, 64 = wheelUp, 65 = wheelDown。
+>
+> **坐标转换**：终端 SGR 序列中的 x/y 为 1-based（与终端行号一致），
+> InputManager 解析时减 1 转为 0-based，与 Screen/Buffer 的坐标体系统一，
+> 应用层可直接用 MouseEvent.x/y 索引 Buffer，无需手动转换。
 
 ### 3.6 params 数组解析
 
@@ -522,8 +528,10 @@ exit() 中发送禁用序列：
 
 ```text
 std/src/tui/
-  Event.ff          # 新增：Key / MouseAction / MouseButton
-  #                 #       KeyEvent / MouseEvent / Modifiers 常量
+  KeyEvent.ff       # 新增：SpecialKey 枚举 / MOD_CTRL,MOD_SHIFT 常量
+  #                 #       Union<SpecialKey,u32> / KeyEvent @value 类型 + 快捷方法
+  MouseEvent.ff     # 新增：MouseAction / MouseButton 枚举
+  #                 #       MouseEvent @value 类型 + 快捷方法
   InputManager.ff   # 新增：VT100/xterm 状态机 + onKey/onMouse (Action<T>)
   #                 #       feed(byte): void
   TuiApp.ff         # 修改：新增 input: InputManager 公开成员
@@ -547,31 +555,31 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 | 测试项 | 喂入字节 | 期望回调事件 |
 |--------|----------|-------------|
 | 可打印 ASCII | `0x41` (A) | onKey(KeyEvent(content=u32(0x41))) |
-| Enter | `0x0D` | onKey(KeyEvent(content=Key.enter)) |
-| Tab | `0x09` | onKey(KeyEvent(content=Key.tab)) |
-| Backspace (BS) | `0x08` | onKey(KeyEvent(content=Key.backspace)) |
-| Backspace (DEL) | `0x7F` | onKey(KeyEvent(content=Key.backspace)) |
+| Enter | `0x0D` | onKey(KeyEvent(content=SpecialKey.enter)) |
+| Tab | `0x09` | onKey(KeyEvent(content=SpecialKey.tab)) |
+| Backspace (BS) | `0x08` | onKey(KeyEvent(content=SpecialKey.backspace)) |
+| Backspace (DEL) | `0x7F` | onKey(KeyEvent(content=SpecialKey.backspace)) |
 | Ctrl+C | `0x03` | onKey(KeyEvent(content=u32(0x03), mods=MOD_CTRL)) |
 | Ctrl+A | `0x01` | onKey(KeyEvent(content=u32(0x01), mods=MOD_CTRL)) |
-| Ctrl+H / Backspace | `0x08` | onKey(KeyEvent(content=Key.backspace)) — isCtrl=false |
-| Ctrl+M / Enter | `0x0D` | onKey(KeyEvent(content=Key.enter)) — isCtrl=false |
+| Ctrl+H / Backspace | `0x08` | onKey(KeyEvent(content=SpecialKey.backspace)) — isCtrl=false |
+| Ctrl+M / Enter | `0x0D` | onKey(KeyEvent(content=SpecialKey.enter)) — isCtrl=false |
 | Esc | `0x1B` | 进入 esc 态，单独 Esc 需 timeout 或后续字节区分 |
-| 方向键 Up | `ESC [ A` | onKey(KeyEvent(content=Key.arrowUp)) |
-| 方向键 Down | `ESC [ B` | onKey(KeyEvent(content=Key.arrowDown)) |
-| 方向键 Right | `ESC [ C` | onKey(KeyEvent(content=Key.arrowRight)) |
-| 方向键 Left | `ESC [ D` | onKey(KeyEvent(content=Key.arrowLeft)) |
-| Home (CSI) | `ESC [ H` | onKey(KeyEvent(content=Key.home)) |
-| End (CSI) | `ESC [ F` | onKey(KeyEvent(content=Key.end)) |
-| Delete | `ESC [ 3 ~` | onKey(KeyEvent(content=Key.delete)) |
-| F1 (SS3) | `ESC O P` | onKey(KeyEvent(content=Key.f1)) |
-| F5 (CSI) | `ESC [ 1 5 ~` | onKey(KeyEvent(content=Key.f5)) |
-| Shift+Up | `ESC [ 1 ; 2 A` | onKey(KeyEvent(content=Key.arrowUp, mods=MOD_SHIFT)) |
-| Ctrl+Up | `ESC [ 1 ; 5 A` | onKey(KeyEvent(content=Key.arrowUp, mods=MOD_CTRL)) |
+| 方向键 Up | `ESC [ A` | onKey(KeyEvent(content=SpecialKey.arrowUp)) |
+| 方向键 Down | `ESC [ B` | onKey(KeyEvent(content=SpecialKey.arrowDown)) |
+| 方向键 Right | `ESC [ C` | onKey(KeyEvent(content=SpecialKey.arrowRight)) |
+| 方向键 Left | `ESC [ D` | onKey(KeyEvent(content=SpecialKey.arrowLeft)) |
+| Home (CSI) | `ESC [ H` | onKey(KeyEvent(content=SpecialKey.home)) |
+| End (CSI) | `ESC [ F` | onKey(KeyEvent(content=SpecialKey.end)) |
+| Delete | `ESC [ 3 ~` | onKey(KeyEvent(content=SpecialKey.delete)) |
+| F1 (SS3) | `ESC O P` | onKey(KeyEvent(content=SpecialKey.f1)) |
+| F5 (CSI) | `ESC [ 1 5 ~` | onKey(KeyEvent(content=SpecialKey.f5)) |
+| Shift+Up | `ESC [ 1 ; 2 A` | onKey(KeyEvent(content=SpecialKey.arrowUp, mods=MOD_SHIFT)) |
+| Ctrl+Up | `ESC [ 1 ; 5 A` | onKey(KeyEvent(content=SpecialKey.arrowUp, mods=MOD_CTRL)) |
 | UTF-8 中文 | `0xE4 0xBD 0xA0` | onKey(KeyEvent(content=u32(0x4F60))) |
 | UTF-8 emoji | `0xF0 0x9F 0x98 0x80` | onKey(KeyEvent(content=u32(0x1F600))) |
-| 鼠标左键点击 | `ESC [ < 0 ; 10 ; 5 M` | onMouse(MouseEvent(action=press, button=left, x=10, y=5)) |
-| 鼠标右键释放 | `ESC [ < 2 ; 10 ; 5 m` | onMouse(MouseEvent(action=release, button=right, x=10, y=5)) |
-| 鼠标滚轮上 | `ESC [ < 64 ; 1 ; 1 M` | onMouse(MouseEvent(action=press, button=wheelUp, x=1, y=1)) |
+| 鼠标左键点击 | `ESC [ < 0 ; 10 ; 5 M` | onMouse(MouseEvent(action=press, button=left, x=9, y=4)) |
+| 鼠标右键释放 | `ESC [ < 2 ; 10 ; 5 m` | onMouse(MouseEvent(action=release, button=right, x=9, y=4)) |
+| 鼠标滚轮上 | `ESC [ < 64 ; 1 ; 1 M` | onMouse(MouseEvent(action=press, button=wheelUp, x=0, y=0)) |
 | 非法 UTF-8 | `0xC0 0x00` | 重置状态机，无回调触发 |
 | 未知 CSI | `ESC [ Z` | 无回调触发，丢弃 |
 
@@ -597,7 +605,7 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 - **F1–F4 双路径**：部分终端用 SS3（`ESC O P`），部分用 CSI（`ESC [ P`）。
   InputManager 两条路径都处理。
 - **Backspace 键**：不同终端发送不同字节。macOS 默认发送 0x7F (DEL)，
-  部分配置发送 0x08 (BS)。InputManager 两者都映射为 Key.backspace。
+  部分配置发送 0x08 (BS)。InputManager 两者都映射为 SpecialKey.backspace。
 - **Alt 键**：在 Raw Mode 下，Alt+字母通常表示为 ESC 后跟字母
   （如 Alt+A = `0x1B 0x61`）。但 ESC 前缀与单独 Esc 键无法 100% 消歧
   （需要超时，超时也不完全可靠）。按严格标准，InputManager 不检测 Alt：
@@ -606,9 +614,10 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 
 ## 8 阶段五实施步骤
 
-1. 实现 Event.ff — 事件类型 + Modifiers 常量 + 快捷方法
-2. 实现 InputManager.ff — VT100/xterm 状态机 + onKey/onMouse (Action<T>) + feed
-3. 修改 TuiApp.ff — 新增 input 公开成员 + run() 集成 + 鼠标启用/禁用
-4. 补充 std_test 用例 — InputManager 单元测试 + 回调分发测试
-5. 全量回归测试 — `make test`
-6. 等待人工 Review
+1. 实现 KeyEvent.ff — SpecialKey 枚举 + Modifiers 常量 + Union<SpecialKey,u32> + KeyEvent 类型 + 快捷方法
+2. 实现 MouseEvent.ff — MouseAction/MouseButton 枚举 + MouseEvent 类型 + 快捷方法
+3. 实现 InputManager.ff — VT100/xterm 状态机 + onKey/onMouse (Action<T>) + feed
+4. 修改 TuiApp.ff — 新增 input 公开成员 + run() 集成 + 鼠标启用/禁用
+5. 补充 std_test 用例 — InputManager 单元测试 + 回调分发测试
+6. 全量回归测试 — `make test`
+7. 等待人工 Review
