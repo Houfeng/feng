@@ -95,9 +95,12 @@
 - **公开 API**：
   - `buffer(): Buffer` — 返回 back 引用，应用在此绘制。`resize()` 后需重新调用获取最新引用。
   - `size(): Tuple<u32, u32>` — 返回当前屏幕尺寸（width, height）。
-  - `clear()` — 清空 back buffer。
+  - `clear()` — 清空 back/front 缓冲区并发射清屏序列（`\x1b[2J\x1b[H`），用于应用主动重置画布。
+  - `clearScreen()` — 仅发射清屏序列（`\x1b[2J\x1b[H`）到 output 缓冲，不清空缓冲区。供 TuiApp.run() 启动时清空物理终端屏幕，保留应用已绘制内容供首帧 diff 输出。
+  - `hideCursor()` — 发射隐藏光标序列（`\x1b[?25l`）到 output 缓冲。
+  - `showCursor()` — 发射显示光标序列（`\x1b[?25h`）到 output 缓冲。
   - `resize(width, height)` — 重建 front/back 为新尺寸空白 Buffer，旧内容不迁移（TUI resize 时旧内容无法对齐，由上层组件树负责重新布局）。front 同时清空，使下次 `buildPatchBytes()` 产生全量重绘。
-  - `buildPatchBytes(): byte[]` — 构建 diff 后的 ANSI 转义序列字节，由调用方直接写入 stdout，零 string 中间转换。主体实现方法。不执行 I/O，纯函数。
+  - `buildPatchBytes(): byte[]` — 构建 diff 后的 ANSI 转义序列字节，由调用方直接写入 stdout，零 string 中间转换。主体实现方法。不执行 I/O，纯函数。已写入 output 的清屏/光标序列会与 diff 序列一同输出，输出后 output 清空。
   - `buildPatchString(): string` — 调用 `buildPatchBytes()` 后 `string.fromUtf8Bytes()` 转换返回，供测试使用。
 - **ANSI 序列生成**：
   - SGR（Select Graphic Rendition）：前景色 `38;2;r;g;b`，背景色 `48;2;r;g;b`，样式标志 `1`(bold) `2`(dim) `3`(italic) `4`(underline) `5`(blink) `7`(reverse) `8`(hidden) `9`(strikethrough)。

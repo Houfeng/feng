@@ -156,13 +156,25 @@ open type Screen {
   }
 
   /**
-   * 清空 back buffer（将所有 Cell 重置为默认值），不影响 front。
-   * 下次 render() 时清空区域会作为变化发送给终端。
+   * 清空 back/front buffer（将所有 Cell 重置为默认值），
+   * 并向 output 追加清屏 ANSI 序列（`\x1b[2J\x1b[H`）。
+   * 下次 buildPatchBytes() 时 output 中的清屏序列会与 diff 序列一同输出。
+   * 用于应用主动重置画布（清空缓冲区 + 清物理终端）。
    */
   open func clear() {
     self.back.clear();
     self.front.clear();
     self.currentSgr = (u64)0;
+    self.writeClearScreenBytes();
+  }
+
+  /**
+   * 仅向 output 追加清屏 ANSI 序列（`\x1b[2J\x1b[H`），不清空 back/front 缓冲区。
+   * 供 TuiApp.run() 启动时清空物理终端屏幕——保留应用已绘制内容供首帧 diff 输出，
+   * 避免清屏的同时擦除用户已绘制的画面。
+   * output 中的清屏序列会在下次 buildPatchBytes() 时与 diff 序列一同输出。
+   */
+  open func clearScreen() {
     self.writeClearScreenBytes();
   }
 

@@ -585,6 +585,24 @@ func screen_clear() {
   check(scr.buffer().cells[(int)1].value == (u64)0, "tui/screen/clear-1");
 }
 
+func screen_clear_screen_only_no_wipe_buffer() {
+  // clearScreen() 仅向 output 追加清屏序列，不清空 back 缓冲区
+  let scr = Screen((u32)5, (u32)2);
+  scr.buffer().draw((u32)0, (u32)0, "AB");
+  scr.clearScreen();
+  // back 缓冲区内容应保留
+  check(scr.buffer().cells[(int)0].value == (u64)65, "tui/screen/clear-screen-keep-a");
+  check(scr.buffer().cells[(int)1].value == (u64)66, "tui/screen/clear-screen-keep-b");
+}
+
+func screen_clear_screen_emits_clear_sequence() {
+  // clearScreen() 后 buildPatchString() 应包含清屏序列 \x1b[2J\x1b[H
+  let scr = Screen((u32)5, (u32)2);
+  scr.clearScreen();
+  let out = scr.buildPatchString();
+  check(out.contains("\x1b[2J\x1b[H"), "tui/screen/clear-screen-emits-seq");
+}
+
 func screen_render_empty_no_diff() {
   let scr = Screen((u32)5, (u32)2);
   // front 和 back 都是空白，buildPatchString() 应返回空字符串（无差异）
@@ -793,6 +811,25 @@ func tuiapp_render_with_content() {
   check(caught == false, "tui/app/render-with-content");
 }
 
+func tuiapp_run_startup_clears_screen_keeps_buffer() {
+  // run() 启动时应清屏但不擦除已绘制内容：构造后手动模拟 run() 启动渲染段
+  // （不真正调用 run() 以免阻塞 poll）。验证 Screen.clearScreen() + hideCursor() + render() 的组合行为。
+  let scr = Screen((u32)10, (u32)5);
+  scr.buffer().draw((u32)0, (u32)0, "Hi");
+  // 模拟 run() 启动初始化渲染：clearScreen + hideCursor + buildPatchString
+  scr.clearScreen();
+  scr.hideCursor();
+  let out = scr.buildPatchString();
+  // 应包含清屏序列
+  check(out.contains("\x1b[2J\x1b[H"), "tui/app/run-startup-clear-seq");
+  // 应包含隐藏光标序列
+  check(out.contains("\x1b[?25l"), "tui/app/run-startup-hide-cursor");
+  // 应包含首帧 diff（Hi 内容）
+  check(out.contains("Hi"), "tui/app/run-startup-first-frame-content");
+  // back 缓冲区内容应保留（clearScreen 不清缓冲区）
+  check(scr.buffer().cells[(int)0].value == (u64)72, "tui/app/run-startup-keep-buffer");
+}
+
 open func run_tui_tests() {
   describe("tui tests", () {
     test("cell_mask_fg()", () { cell_mask_fg(); });
@@ -858,6 +895,8 @@ open func run_tui_tests() {
     test("screen_ctor()", () { screen_ctor(); });
     test("screen_buffer_returns_back()", () { screen_buffer_returns_back(); });
     test("screen_clear()", () { screen_clear(); });
+    test("screen_clear_screen_only_no_wipe_buffer()", () { screen_clear_screen_only_no_wipe_buffer(); });
+    test("screen_clear_screen_emits_clear_sequence()", () { screen_clear_screen_emits_clear_sequence(); });
     test("screen_render_empty_no_diff()", () { screen_render_empty_no_diff(); });
     test("screen_render_full_diff()", () { screen_render_full_diff(); });
     test("screen_render_cursor_position()", () { screen_render_cursor_position(); });
@@ -879,5 +918,6 @@ open func run_tui_tests() {
     test("tuiapp_exit_idempotent_uninit()", () { tuiapp_exit_idempotent_uninit(); });
     test("tuiapp_render_empty_no_throw()", () { tuiapp_render_empty_no_throw(); });
     test("tuiapp_render_with_content()", () { tuiapp_render_with_content(); });
+    test("tuiapp_run_startup_clears_screen_keeps_buffer()", () { tuiapp_run_startup_clears_screen_keeps_buffer(); });
   });
 }

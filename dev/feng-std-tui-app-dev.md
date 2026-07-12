@@ -380,9 +380,18 @@ open func render(): void {
  * 无事件时阻塞休眠（零 CPU），任一 fd 可读即唤醒，渲染一帧。
  * 监听集合：stdin + sigpipeR + 构造时传入的 fds（一次性构造）。
  * 与 render() 职责分离：run() 管循环生命周期，render() 管单帧渲染。
+ *
+ * 启动时执行初始化渲染：清空物理终端屏幕（不擦除已绘制的 back 缓冲区内容）、
+ * 隐藏光标、立即渲染首帧。这样应用在 run() 前绘制的内容首帧即可见，
+ * 无需等待首个 poll 事件唤醒。
+ * 退出由 exit() 置 running = false，下一轮 poll 返回后循环结束。
  */
 open func run(): void {
   self.running = true;
+  // 启动初始化渲染：清屏 + 隐藏光标 + 首帧
+  self.screen.clearScreen();
+  self.screen.hideCursor();
+  self.render();
   // 一次性构造 pollfd 数组：stdin + sigpipeR + 用户 fds
   let total: int = 2 + self.fds.length();
   let pfds: PollFd[!] = PollFd[:total];
@@ -425,13 +434,14 @@ open func run(): void {
 
 ```feng
 /**
- * 退出 TUI 模式与清理：停止主循环、全局重置终端模式、关闭管道、释放 TTY 句柄。
+ * 退出 TUI 模式与清理：停止主循环、显示光标、全局重置终端模式、关闭管道、释放 TTY 句柄。
  * 不退出进程——进程生命周期由调用方控制。
  * 幂等：重复调用安全。
  */
 open func exit(): void {
   if !self.initialized { return; }
   self.running = false;
+  self.screen.showCursor();   // 恢复光标显示，与 run() 启动时隐藏对称
   uv_tty_reset_mode();       // 全局重置，与 atexit handler 一致
   c_close(self.sigpipeR);
   c_close(self.sigpipeW);
