@@ -271,9 +271,9 @@ open type InputManager {
   seal var utf8Remaining: i32;
   /** UTF-8 解码出的码点（中间累积用） */
   seal var utf8Codepoint: u32;
-  /** 键盘事件回调（Action<KeyEvent>，用户直接赋值注册，未设置时键盘事件丢弃） */
+  /** 键盘事件回调（Action<KeyEvent>，用户直接赋值注册） */
   open var onKey: Action<KeyEvent>;
-  /** 鼠标事件回调（Action<MouseEvent>，用户直接赋值注册，未设置时鼠标事件丢弃） */
+  /** 鼠标事件回调（Action<MouseEvent>，用户直接赋值注册） */
   open var onMouse: Action<MouseEvent>;
 
   func InputManager() { ... }
@@ -295,6 +295,12 @@ open type InputManager {
 >
 > **onKey/onMouse 为 `open var`**：用户直接赋值注册
 > （`manager.onKey = func(event: KeyEvent) { ... };`），不需要 setter 方法。
+>
+> **未注册时的零值行为**：Feng 没有 null。`onKey`/`onMouse` 声明为
+> `Action<T>`（非 `Union<None, Action<T>>`），未显式赋值时自动绑定默认零值
+> （default witness），调用时执行空操作——事件被静默丢弃，无异常。这正好满足
+> 「未注册回调时事件丢弃」的需求，无需 None 判空。若将来需要区分「已注册空函数」
+> 与「未注册」，可改为 `Union<None, Action<T>>`，当前不需要。
 
 ### 3.4 feed() 处理逻辑
 
@@ -315,8 +321,9 @@ open func feed(b: u8): void {
 ```
 
 > 各 handler 的分发方式：`handleGround` 产出 KeyEvent 时调
-> `self.emitKey(key, codepoint, mods)`，`emitKey` 内部检查 onKey 是否
-> 已设置，已设置则调用。鼠标同理用 `self.emitMouse(...)`。
+> `self.emitKey(...)`，`emitKey` 内部直接调用 `self.onKey(event)`
+> （Feng 无 null，未赋值的 `Action<T>` 自动绑定默认零值，调用时执行空操作，
+> 事件被静默丢弃）。鼠标同理用 `self.emitMouse(...)`。
 
 #### 3.4.1 handleGround — 地面态
 
@@ -613,7 +620,7 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 |--------|------|
 | onKey 回调触发 | 赋值 onKey，feed 可打印字节，验证回调被调用且参数正确 |
 | onMouse 回调触发 | 赋值 onMouse，feed 鼠标序列，验证回调被调用且参数正确 |
-| 未注册回调时事件丢弃 | 不赋值 onKey/onMouse，feed 字节，不崩溃 |
+| 未注册回调时事件丢弃 | 不赋值 onKey/onMouse，feed 字节，零值回调执行空操作无异常 |
 
 ### 6.3 不可测试项（需真实终端）
 
