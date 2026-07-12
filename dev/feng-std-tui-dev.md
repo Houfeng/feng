@@ -173,19 +173,32 @@
 - [ ] 4.21 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.22 等待人工 Review：开发者审查输入解析与事件路由实现，通过后方可进入第六阶段
 
-### 第六阶段：视图逻辑层（第 4 层 - 简化版）
+### 第六阶段：TuiApp 内部化 Screen
 
-- [ ] 4.23 实现 Widget spec 契约 + Text + Button
-- [ ] 4.24 实现简单的线性布局（Row / Column / Stack）
-- [ ] 4.25 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、Text 内容绘制、Button 状态切换等测试
-- [ ] 4.26 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.27 等待人工 Review：开发者审查 Widget 契约设计与实现，通过后方可进入第七阶段
+> 将 Screen 从外部传入重构为 TuiApp 内部初始化，简化使用方心智负担。
+> TuiApp 构造函数不再接收 Screen 参数，init() 时根据终端尺寸自动创建 Screen 实例。
+> 用户通过 `app.screen` 访问渲染底座（与 `app.input` 同为公开只读成员）。
 
-### 第七阶段：测试与验证
+- [ ] 4.23 重构 TuiApp 构造函数：移除 Screen 参数，Screen 改为 `let` 公开只读成员
+- [ ] 4.24 重构 init()：进入 Raw Mode 后通过 `uv_tty_get_winsize` 获取终端尺寸，内部创建 Screen 实例
+- [ ] 4.25 更新设计文档与代码示例：`dev/feng-std-tui-app-dev.md` 构造函数、init()、render() 等同步修改
+- [ ] 4.26 更新 std_test 用例：调整 TuiApp 相关测试，Screen 不再外部构造，改为从 TuiApp 获取
+- [ ] 4.27 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.28 等待人工 Review：开发者审查 Screen 内部化重构，通过后方可进入第七阶段
 
-- [ ] 4.28 补充 std_test 用例：审查前六阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
-- [ ] 4.29 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.30 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
+### 第七阶段：视图逻辑层（第 4 层 - 简化版）
+
+- [ ] 4.29 实现 Widget spec 契约 + Text + Button
+- [ ] 4.30 实现简单的线性布局（Row / Column / Stack）
+- [ ] 4.31 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、Text 内容绘制、Button 状态切换等测试
+- [ ] 4.32 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.33 等待人工 Review：开发者审查 Widget 契约设计与实现，通过后方可进入第八阶段
+
+### 第八阶段：测试与验证
+
+- [ ] 4.34 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
+- [ ] 4.35 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.36 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
 
 > **fcts 用例策略**：std 中的功能默认使用 std_test 用例，不需要 fcts 用例。仅当遇到 Feng 语言层面的问题（如语法、语义、类型系统等编译器行为）时，才在 `fcts/fcts_bin/src/` 中新增 fcts 用例进行兼容性验证。
 
