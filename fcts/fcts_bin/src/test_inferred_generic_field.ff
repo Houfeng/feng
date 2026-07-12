@@ -17,6 +17,12 @@ import fcts_lib.test;
  *  - seal / open 可见性修饰符不影响类型解析；
  *  - 具化泛型（List<byte>）与开放泛型（List<T>，调用点具化）均工作正常。
  */
+
+/** 工厂函数：返回具化实例，供 run_case 形态测试使用。 */
+func make_inferred_generic_holder(): InferredGenericFieldsGeneric<i32> {
+  return InferredGenericFieldsGeneric<i32>();
+}
+
 open func test_inferred_generic_field() {
   describe("inferred generic field (cross-package)", () {
 
@@ -85,6 +91,20 @@ open func test_inferred_generic_field() {
       let entries = obj.openOpen.entries();
       assert(entries[0] == (i64)1000, "open generic field i64 value[0]");
       assert(entries[1] == (i64)2000, "open generic field i64 value[1]");
+    });
+
+    test("factory function returning concrete instance with seal field method calls", () {
+      // 工厂函数返回具化实例，调用方通过 seal 访问器操作推断泛型字段。
+      // 覆盖跨包具化调用点 + 方法调用链路（run_case 形态）。
+      let obj = make_inferred_generic_holder();
+      obj.appendSealed(11);
+      obj.appendSealed(22);
+      assert(obj.sealedSize() == 2, "factory seal field size");
+      assert(obj.sealedAt(0) == 11, "factory seal field value[0]");
+      assert(obj.sealedAt(1) == 22, "factory seal field value[1]");
+      obj.openOpen.add(33);
+      assert(obj.openOpen.size() == 1, "factory open field size");
+      assert(obj.openOpen.entries()[0] == 33, "factory open field value[0]");
     });
   });
 }

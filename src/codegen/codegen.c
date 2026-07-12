@@ -6071,8 +6071,6 @@ static const GenericTypeDecl *cg_find_generic_type_decl(CG *cg,
                                                      decl->as.type_decl.name)) {
             continue;
         }
-        /* Arity-aware matching: same-name types with different arity are
-         * distinct generic declarations. Match by type_param_count. */
         if (decl->as.type_decl.type_param_count != ref->as.named.type_arg_count) {
             continue;
         }
@@ -6600,11 +6598,31 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     for (size_t i = 0; i < decl->as.type_decl.member_count; ++i) {
         const FengTypeMember *member = decl->as.type_decl.members[i];
         if (member->kind == FENG_TYPE_MEMBER_FIELD) {
-            FengTypeRef *sub = cg_type_ref_substitute(member->as.field.type,
+            /* Inferred fields (field.type == NULL, e.g.
+             * `let items = Inner<T>()`) carry their type only as a semantic
+             * type fact.  Fall back to it so the field's generic instance
+             * (e.g. Inner<i32> when registering Holder<i32>) is substituted
+             * and collected; otherwise substituting NULL yields NULL and
+             * silently aborts instance registration with CE0353. */
+            const FengTypeRef *field_type_ref = member->as.field.type;
+            if (field_type_ref == NULL && cg->analysis != NULL) {
+                const FengSemanticTypeFact *fact =
+                    feng_semantic_lookup_type_fact(cg->analysis, member);
+                if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                    field_type_ref = fact->type_ref;
+                }
+            }
+            FengTypeRef *sub = cg_type_ref_substitute(field_type_ref,
                                                       decl->as.type_decl.type_params,
                                                       decl->as.type_decl.type_param_count,
                                                       type_args);
-            if (!sub) return false;
+            if (!sub) {
+                /* field_type_ref may legitimately be NULL when neither an
+                 * explicit type nor a semantic fact is available (e.g. an
+                 * unbound placeholder); skip collection for that field
+                 * instead of aborting the whole instance registration. */
+                continue;
+            }
             bool ok = cg_collect_generic_instances_from_type_ref(cg, sub, member_scope);
             cg_type_ref_free(sub);
             if (!ok) return false;
