@@ -385,6 +385,14 @@ open func render(): void {
  * 隐藏光标、立即渲染首帧。这样应用在 run() 前绘制的内容首帧即可见，
  * 无需等待首个 poll 事件唤醒。
  * 退出由 exit() 置 running = false，下一轮 poll 返回后循环结束。
+ *
+ * stdin 排空：Raw Mode 下 Ctrl+C 等按键不再产生信号，而是作为原始字节到达
+ * stdin。阶段四尚无输入解析（阶段五实现），但若不排空 stdin，poll() 会因
+ * stdin 持续可读而立即返回，导致 busy-loop（单核 100% 空转）。因此在阶段四
+   * 中 run() 对 stdin 可读事件做最小处理：每次 poll 返回后读取并丢弃一批字节，
+   * 仅排空缓冲区，不解析、不路由。stdin 为阻塞模式，每次 poll 只读一次（poll
+   * 仅保证一次 read 不阻塞），剩余数据由下一轮 poll 立即返回再读。阶段五在此
+   * 处替换为真正的输入解析状态机。
  */
 open func run(): void {
   self.running = true;
@@ -402,6 +410,8 @@ open func run(): void {
   for var i: int = 0; i < self.fds.length(); i += 1 {
     pfds[i + 2] = PollFd(self.fds[i], POLLIN);
   }
+  // stdin 排空缓冲区：Raw Mode 下输入字节到达 stdin，阶段四只排空不解析
+  let drainBuf: byte[!] = byte[:256];
   while self.running {
     // 重置 revents（poll 输出字段，每轮需清零）
     for var i: int = 0; i < total; i += 1 {
@@ -416,8 +426,14 @@ open func run(): void {
         c_read(self.sigpipeR, &dummy, 1);
         self.resizeRequested = true;
       }
-      // stdin 和用户 fd 的数据处理由调用方自行处理
-      // 阶段五在此处加 stdin 读取逻辑
+      // 排空 stdin（阶段四：只读取丢弃，防 busy-loop；阶段五替换为输入解析）
+      // poll 保证至少一次 read 不会阻塞；stdin 为阻塞模式，若用 while 循环
+      // 第二次 read 会挂起。因此每次 poll 只读一次，剩余数据由下一轮 poll
+      // 立即返回 POLLIN 再读——有界工作，非无限空转。
+      if pfds[0].revents & POLLIN != 0 {
+        let n = c_read(STDIN_FD, &drainBuf, (uint)256);
+        // n > 0: 已读取并丢弃 n 字节；n <= 0: 无数据或错误，忽略
+      }
     }
     self.render();
   }
@@ -425,8 +441,10 @@ open func run(): void {
 ```
 
 > `run()` 是主循环入口，无参数。pollfd 数组在循环前一次性构造，循环内只重置 `revents`。
-> `poll(-1)` 无事件时阻塞休眠，零 CPU。任一 fd 可读即唤醒，TuiApp 只处理内部 sigpipeR，然后 render。
+> `poll(-1)` 无事件时阻塞休眠，零 CPU。任一 fd 可读即唤醒，TuiApp 处理内部 sigpipeR 和 stdin 排空，然后 render。
 > 退出由 `exit()` 置 `running = false`，下一轮 poll 返回后循环结束。
+>
+> **stdin 排空（阶段四临时措施）**：Raw Mode 关闭 `ISIG`，Ctrl+C 等按键不产生 SIGINT，而是作为原始字节（如 `0x03`）到达 stdin。阶段四无输入解析，若不排空 stdin，`poll()` 会因 stdin 持续可读而立即返回，造成 busy-loop。因此 run() 在 stdin 可读时读取并丢弃一批字节，仅排空缓冲区。stdin 为阻塞模式，每次 poll 只读一次（`poll` 仅保证一次 `read` 不阻塞；若用 while 循环第二次 `read` 会挂起），剩余数据由下一轮 poll 立即返回 `POLLIN` 再读——有界工作，非无限空转。阶段五将此排空逻辑替换为 VT100/xterm 输入解析状态机，把字节流解析为 `KeyEvent`/`MouseEvent` 并路由。
 >
 > **TuiApp 不处理用户 fd 的数据**：TuiApp 只监听 fd 可读事件唤醒渲染，不向 fd 写入、不读取 fd 数据、不关闭 fd。fd 的生命周期由调用方管理。
 

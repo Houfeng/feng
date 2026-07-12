@@ -159,7 +159,9 @@
 - [x] 4.14 实现渲染主循环：调用 `Screen.buildPatchBytes()` 并写入 stdout，在真实终端验证 Screen 绘制效果
 - [x] 4.15 补充 std_test 用例：在 `test_tui.ff` 中新增 Raw Mode 进入/恢复、SIGWINCH 响应、渲染主循环等测试
 - [x] 4.16 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.17 等待人工 Review：开发者审查 TuiApp 纯渲染实现与测试用例，通过后方可进入第五阶段
+- [x] 4.17 等待人工 Review：开发者审查 TuiApp 纯渲染实现与测试用例，通过后方可进入第五阶段
+
+> **阶段四补充：stdin 排空（busy-loop 修复）**：Review 期间发现 `run()` 将 stdin 纳入 poll 监听集合（为阶段五预留），但循环体不读取 stdin 字节。Raw Mode 下 Ctrl+C 等按键不产生 SIGINT，而是作为原始字节到达 stdin；用户按下任意键后 stdin 持续可读，`poll()` 立即返回 → busy-loop（单核 100% 空转）。修复：`run()` 在 stdin 可读时读取并丢弃一批字节，仅排空缓冲区，不解析、不路由。stdin 为阻塞模式，每次 poll 只读一次（poll 仅保证一次 read 不阻塞），剩余数据由下一轮 poll 立即返回再读。阶段五将此排空逻辑替换为 VT100/xterm 输入解析状态机。详见 `dev/feng-std-tui-app-dev.md` §5.6。
 
 ### 第五阶段：应用控制层 - 输入支持（第 5 层）
 
