@@ -1,0 +1,68 @@
+open module fcts_lib.test;
+
+import std.collections;
+
+/**
+ * 跨包回归用例：推断泛型字段导出一致性。
+ *
+ * 这组类型刻意复现 std.tui.Screen 的字段形态——无显式类型标注、由
+ * 泛型构造调用推断类型的 `let` 字段。历史上此类字段在 .ft 导出时
+ * 会被降级为普通 NAMED 节点并丢失类型实参，导致跨包消费者报
+ * CE0032: codegen: unknown type 'List'。
+ *
+ * 用例矩阵：
+ *  - seal + 具化泛型：seal let sealedConcrete = List<byte>();
+ *  - open + 具化泛型：open let openConcrete = List<byte>();
+ *  - seal + 开放泛型：seal let sealedOpen = List<T>();   （在泛型类型内部）
+ *  - open + 开放泛型：open let openOpen = List<T>();      （在泛型类型内部）
+ */
+
+open type InferredGenericFields {
+
+  // ─── 具化泛型推断字段 ─────────────────────────────────────────────────
+
+  /** seal + 具化泛型：复现 Screen.output 的形态 */
+  seal let sealedConcrete = List<byte>();
+
+  /** open + 具化泛型：验证可见性修饰符不影响导出 */
+  open let openConcrete = List<byte>();
+
+  // ─── 公开访问器（让 seal 字段可被跨包测试间接验证） ───────────────────
+
+  /** 向 seal 字段追加一个字节，供跨包测试间接验证字段可用 */
+  open func appendSealed(b: byte) {
+    self.sealedConcrete.add(b);
+  }
+
+  /** 返回 seal 字段当前元素数，供跨包测试间接验证字段类型正确 */
+  open func sealedSize(): int {
+    return self.sealedConcrete.size();
+  }
+
+  /** 返回 seal 字段指定下标的字节，供跨包测试间接验证写入正确 */
+  open func sealedAt(index: int): byte {
+    return self.sealedConcrete.get(index);
+  }
+
+  // ─── 构造函数 ─────────────────────────────────────────────────────────
+
+  func InferredGenericFields() {}
+}
+
+/**
+ * 泛型版本：内部字段为开放泛型推断，调用点具化时才确定 T。
+ *
+ * 注意：泛型类型内部对 List<T>（T 为类型参数）字段的方法调用目前
+ * 受 codegen 限制（CE0163），因此 seal 字段不提供调用 List 方法的
+ * 访问器；open 字段由跨包消费者直接访问并调用 List 方法验证。
+ */
+open type InferredGenericFieldsGeneric<T> {
+
+  /** seal + 开放泛型：在泛型类型内部用 List<T>() 推断，验证导出保留 type args */
+  seal let sealedOpen = List<T>();
+
+  /** open + 开放泛型：验证可见性修饰符不影响导出，由调用方直接操作 */
+  open let openOpen = List<T>();
+
+  func InferredGenericFieldsGeneric() {}
+}

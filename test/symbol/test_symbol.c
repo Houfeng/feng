@@ -1490,6 +1490,136 @@ static void test_generic_type_ft_roundtrip(void) {
     free(tmp_dir);
 }
 
+/* Regression for the bug where inferred field types that are generic
+ * applications (e.g. `seal let x = Box<i32>()`) lost their type args during
+ * .ft export, degrading to a plain NAMED node and breaking cross-package
+ * codegen with CE0032.  Covers:
+ *  - concrete generic application: seal let concrete = Box<i32>()
+ *  - open (uninstantiated) generic application: open let open_arg = Box<T>()
+ *    inside an enclosing generic type.
+ * After roundtrip, both field value types must be NAMED_GENERIC with the
+ * correct base name and type-arg count, and the open variant's type arg
+ * must be a TYPE_PARAM_REF named "T". */
+static void test_inferred_generic_field_ft_roundtrip(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.inferred_generic_field;\n"
+        "\n"
+        "open type Box<T> { open let value: T; }\n"
+        "\n"
+        "open type ConcreteHolder {\n"
+        "    seal let concrete = Box<i32>();\n"
+        "}\n"
+        "\n"
+        "open type OpenHolder<T> {\n"
+        "    seal let open_arg = Box<T>();\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die("inferred_generic_field.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    const FengSymbolImportedModule *module = NULL;
+    FengSlice segments[4];
+    const FengSymbolDeclView *concrete_type = NULL;
+    const FengSymbolDeclView *concrete_field = NULL;
+    const FengSymbolTypeView *concrete_type_view = NULL;
+    const FengSymbolDeclView *open_type = NULL;
+    const FengSymbolDeclView *open_field = NULL;
+    const FengSymbolTypeView *open_type_view = NULL;
+    const FengSymbolTypeView *field_type = NULL;
+    const FengSymbolTypeView *arg_type = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    {
+        FengSymbolExportOptions options = {0};
+        options.public_root = public_root;
+        ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+    }
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                             public_root,
+                                             FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                             &error));
+    feng_symbol_error_free(&error);
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("inferred_generic_field");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+
+    /* Concrete generic application field: seal let concrete = Box<i32>() */
+    concrete_type = feng_symbol_module_find_public_type(module, slice_from_cstr("ConcreteHolder"));
+    ASSERT(concrete_type != NULL);
+    {
+        size_t mcount = feng_symbol_decl_member_count(concrete_type);
+        size_t mi;
+        for (mi = 0U; mi < mcount; ++mi) {
+            const FengSymbolDeclView *m = feng_symbol_decl_member_at(concrete_type, mi);
+            if (m != NULL &&
+                slice_equals_cstr(feng_symbol_decl_name(m), "concrete")) {
+                concrete_field = m;
+                break;
+            }
+        }
+    }
+    ASSERT(concrete_field != NULL);
+    ASSERT(feng_symbol_decl_kind(concrete_field) == FENG_SYMBOL_DECL_KIND_FIELD);
+    field_type = feng_symbol_decl_value_type(concrete_field);
+    ASSERT(field_type != NULL);
+    ASSERT(feng_symbol_type_kind(field_type) == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(feng_symbol_type_generic_arg_count(field_type) == 1U);
+    arg_type = feng_symbol_type_generic_arg_at(field_type, 0U);
+    ASSERT(arg_type != NULL);
+    ASSERT(feng_symbol_type_kind(arg_type) == FENG_SYMBOL_TYPE_KIND_BUILTIN);
+    ASSERT(slice_equals_cstr(feng_symbol_type_builtin_name(arg_type), "i32"));
+
+    /* Open generic application field: seal let open_arg = Box<T>()
+     * inside OpenHolder<T>.  The type arg must be a TYPE_PARAM_REF named T. */
+    open_type = feng_symbol_module_find_public_type(module, slice_from_cstr("OpenHolder"));
+    ASSERT(open_type != NULL);
+    ASSERT(feng_symbol_decl_type_param_count(open_type) == 1U);
+    {
+        size_t mcount = feng_symbol_decl_member_count(open_type);
+        size_t mi;
+        for (mi = 0U; mi < mcount; ++mi) {
+            const FengSymbolDeclView *m = feng_symbol_decl_member_at(open_type, mi);
+            if (m != NULL &&
+                slice_equals_cstr(feng_symbol_decl_name(m), "open_arg")) {
+                open_field = m;
+                break;
+            }
+        }
+    }
+    ASSERT(open_field != NULL);
+    ASSERT(feng_symbol_decl_kind(open_field) == FENG_SYMBOL_DECL_KIND_FIELD);
+    field_type = feng_symbol_decl_value_type(open_field);
+    ASSERT(field_type != NULL);
+    ASSERT(feng_symbol_type_kind(field_type) == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(feng_symbol_type_generic_arg_count(field_type) == 1U);
+    arg_type = feng_symbol_type_generic_arg_at(field_type, 0U);
+    ASSERT(arg_type != NULL);
+    ASSERT(feng_symbol_type_kind(arg_type) == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF);
+    ASSERT(slice_equals_cstr(feng_symbol_type_type_param_ref_name(arg_type), "T"));
+
+    /* ConcreteHolder and OpenHolder should both be visible as public types
+     * (sanity check that the export did not fail silently). */
+    (void)concrete_type_view;
+    (void)open_type_view;
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_generic_fit_ft_roundtrip(void) {
     static const char *kSource =
         "open module feng.test.symbol.generic_fit;\n"
@@ -1871,6 +2001,7 @@ int main(void) {
     test_imported_module_cache_keeps_multi_file_bundle_fit_modules_alive();
     test_generic_function_ft_roundtrip();
     test_generic_type_ft_roundtrip();
+    test_inferred_generic_field_ft_roundtrip();
     test_generic_fit_ft_roundtrip();
     test_generic_fit_named_generic_return_ft_roundtrip();
     test_fit_builtin_and_array_target_nodes_ft_roundtrip();

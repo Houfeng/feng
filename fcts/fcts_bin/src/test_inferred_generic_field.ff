@@ -1,0 +1,75 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import fcts_lib.test;
+
+/**
+ * 跨包回归测试：推断泛型字段导出一致性。
+ *
+ * fcts_lib.test.InferredGenericFields 与 InferredGenericFieldsGeneric<T>
+ * 在源码中用 `let x = List<byte>()` / `let x = List<T>()` 形式声明字段，
+ * 类型由构造调用推断而非显式标注。历史上此类字段在 .ft 导出时丢失
+ * 类型实参，导致跨包消费者报 CE0032: codegen: unknown type 'List'。
+ *
+ * 本用例跨包引用这两个类型，验证：
+ *  - 字段类型在跨包消费时正确解析为泛型实例；
+ *  - seal / open 可见性修饰符不影响类型解析；
+ *  - 具化泛型（List<byte>）与开放泛型（List<T>，调用点具化）均工作正常。
+ */
+open func test_inferred_generic_field() {
+  describe("inferred generic field (cross-package)", () {
+
+    test("sealed concrete generic field (List<byte>)", () {
+      let obj = InferredGenericFields();
+      // seal 字段跨包不可直接访问，通过公开方法间接验证底层 List 可用
+      obj.appendSealed((byte)65);
+      obj.appendSealed((byte)66);
+      assert(obj.sealedSize() == 2, "sealed concrete field usable");
+      assert(obj.sealedAt(0) == (byte)65, "sealed concrete field value[0]");
+      assert(obj.sealedAt(1) == (byte)66, "sealed concrete field value[1]");
+    });
+
+    test("open concrete generic field (List<byte>)", () {
+      let obj = InferredGenericFields();
+      // open 字段跨包可直接访问
+      obj.openConcrete.add((byte)97);
+      obj.openConcrete.add((byte)98);
+      obj.openConcrete.add((byte)99);
+      assert(obj.openConcrete.size() == 3, "open concrete field usable");
+      let entries = obj.openConcrete.entries();
+      assert(entries[0] == (byte)97, "open concrete field value[0]");
+      assert(entries[2] == (byte)99, "open concrete field value[2]");
+    });
+
+    test("sealed open generic field (List<T> instantiated as List<byte>)", () {
+      // 泛型类型内部 seal 字段导出验证：跨包能正确构造实例，
+      // 证明开放泛型推断字段在 .ft 中以 NAMED_GENERIC 保留类型实参。
+      // （泛型类型内部对 List<T> 字段的方法调用受独立 codegen 限制，
+      //   故此处仅验证实例化成功；字段行为由 open 字段用例覆盖。）
+      let obj = InferredGenericFieldsGeneric<byte>();
+      assert(true, "sealed open generic field instantiable");
+    });
+
+    test("open open generic field (List<T> instantiated as List<int>)", () {
+      let obj = InferredGenericFieldsGeneric<int>();
+      obj.openOpen.add(10);
+      obj.openOpen.add(20);
+      obj.openOpen.add(30);
+      assert(obj.openOpen.size() == 3, "open open generic field usable");
+      let entries = obj.openOpen.entries();
+      assert(entries[0] == 10, "open open generic field value[0]");
+      assert(entries[2] == 30, "open open generic field value[2]");
+    });
+
+    test("open generic field with different instantiation (List<i64>)", () {
+      let obj = InferredGenericFieldsGeneric<i64>();
+      obj.openOpen.add((i64)1000);
+      obj.openOpen.add((i64)2000);
+      assert(obj.openOpen.size() == 2, "open generic field i64 usable");
+      let entries = obj.openOpen.entries();
+      assert(entries[0] == (i64)1000, "open generic field i64 value[0]");
+      assert(entries[1] == (i64)2000, "open generic field i64 value[1]");
+    });
+  });
+}

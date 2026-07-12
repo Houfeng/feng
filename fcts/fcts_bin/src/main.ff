@@ -33,5 +33,6 @@ func main(args: string[]) {
       test_defer();
       test_value_type();
       test_value_type_array();
+      test_inferred_generic_field();
   });
 }

@@ -888,6 +888,80 @@ static FengSymbolTypeView *build_type_from_type_ref(const BuildContext *ctx,
                 return type;
             }
 
+            /* Generic application (e.g. List<byte>).  The no-tparams variant
+             * must preserve type args just like build_type_from_type_ref_with_tparams,
+             * otherwise inferred field types such as `let x = List<byte>()`
+             * lose their type args and degrade to a plain NAMED node, which
+             * breaks cross-package codegen (CE0032 unknown type).  Type args
+             * that are type-parameter refs (e.g. T) are only expected when
+             * the caller routed through the _with_tparams variant; reaching
+             * this branch with such an arg still produces a NAMED_GENERIC
+             * whose arg is resolved as a single-segment NAMED, which is the
+             * same pre-existing behaviour as an unresolved 1-segment name. */
+            if (type_ref->as.named.type_arg_count > 0U) {
+                resolved = resolve_type_ref_segments(ctx,
+                                                      type_ref->as.named.segments,
+                                                      type_ref->as.named.segment_count,
+                                                      &resolved_count,
+                                                      path, token, out_error);
+
+                type = new_type(FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC, path, token, out_error);
+                if (type == NULL) {
+                    for (index = 0U; index < resolved_count; ++index) free(resolved[index]);
+                    free(resolved);
+                    return NULL;
+                }
+                if (resolved != NULL) {
+                    type->as.named_generic.segment_count = resolved_count;
+                    type->as.named_generic.segments = resolved;
+                } else {
+                    type->as.named_generic.segment_count = type_ref->as.named.segment_count;
+                    type->as.named_generic.segments =
+                        (char **)calloc(type->as.named_generic.segment_count,
+                                        sizeof(*type->as.named_generic.segments));
+                    if (type->as.named_generic.segments == NULL) {
+                        feng_symbol_internal_set_error(out_error, path, token,
+                                                       "out of memory cloning named_generic segments");
+                        feng_symbol_internal_type_free(type);
+                        return NULL;
+                    }
+                    for (index = 0U; index < type->as.named_generic.segment_count; ++index) {
+                        type->as.named_generic.segments[index] =
+                            feng_symbol_internal_dup_slice(type_ref->as.named.segments[index]);
+                        if (type->as.named_generic.segments[index] == NULL) {
+                            feng_symbol_internal_set_error(out_error, path, token,
+                                                           "out of memory cloning named_generic segment");
+                            feng_symbol_internal_type_free(type);
+                            return NULL;
+                        }
+                    }
+                }
+                type->as.named_generic.type_arg_count = type_ref->as.named.type_arg_count;
+                type->as.named_generic.type_args =
+                    (FengSymbolTypeView **)calloc(type->as.named_generic.type_arg_count,
+                                                  sizeof(*type->as.named_generic.type_args));
+                if (type->as.named_generic.type_args == NULL) {
+                    feng_symbol_internal_set_error(out_error, path, token,
+                                                   "out of memory cloning named_generic type_args");
+                    feng_symbol_internal_type_free(type);
+                    return NULL;
+                }
+                for (index = 0U; index < type->as.named_generic.type_arg_count; ++index) {
+                    type->as.named_generic.type_args[index] =
+                        build_type_from_type_ref(ctx,
+                                                 type_ref->as.named.type_args[index],
+                                                 path,
+                                                 token,
+                                                 out_error);
+                    if (type_ref->as.named.type_args[index] != NULL &&
+                        type->as.named_generic.type_args[index] == NULL) {
+                        feng_symbol_internal_type_free(type);
+                        return NULL;
+                    }
+                }
+                return type;
+            }
+
             resolved = resolve_type_ref_segments(ctx,
                                                   type_ref->as.named.segments,
                                                   type_ref->as.named.segment_count,
@@ -1247,11 +1321,14 @@ static FengSymbolTypeView *build_type_from_type_ref_with_tparams(
     return NULL;
 }
 
-static FengSymbolTypeView *build_type_from_fact(const BuildContext *ctx,
-                                                const FengSemanticTypeFact *fact,
-                                                const char *path,
-                                                FengToken token,
-                                                FengSymbolError *out_error) {
+static FengSymbolTypeView *build_type_from_fact_with_tparams(
+        const BuildContext *ctx,
+        const FengSemanticTypeFact *fact,
+        const FengTypeParam *type_params,
+        size_t type_param_count,
+        const char *path,
+        FengToken token,
+        FengSymbolError *out_error) {
     FengSymbolTypeView *type;
 
     if (fact == NULL) {
@@ -1273,7 +1350,19 @@ static FengSymbolTypeView *build_type_from_fact(const BuildContext *ctx,
             return type;
 
         case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
-            return build_type_from_type_ref(ctx, fact->type_ref, path, token, out_error);
+            /* Route through the _with_tparams builder so that type-arg
+             * references to enclosing type parameters (e.g. `let x = List<T>()`
+             * inside `type Foo<T>`) are preserved as TYPE_PARAM_REF rather
+             * than being mis-resolved as plain 1-segment named types.  For
+             * concrete type args (e.g. `List<byte>`) the _with_tparams
+             * builder also correctly emits NAMED_GENERIC. */
+            return build_type_from_type_ref_with_tparams(ctx,
+                                                        fact->type_ref,
+                                                        type_params,
+                                                        type_param_count,
+                                                        path,
+                                                        token,
+                                                        out_error);
 
         case FENG_SEMANTIC_TYPE_FACT_DECL:
             return build_named_type_from_decl(ctx != NULL ? ctx->analysis : NULL,
@@ -1285,6 +1374,18 @@ static FengSymbolTypeView *build_type_from_fact(const BuildContext *ctx,
     }
 
     return NULL;
+}
+
+static FengSymbolTypeView *build_type_from_fact(const BuildContext *ctx,
+                                                const FengSemanticTypeFact *fact,
+                                                const char *path,
+                                                FengToken token,
+                                                FengSymbolError *out_error) {
+    /* Non-generic context: no enclosing type parameters, so type-param
+     * references cannot occur in inferred type facts.  Delegate to the
+     * _with_tparams variant with an empty scope; it still correctly
+     * handles concrete generic applications (e.g. `List<byte>`). */
+    return build_type_from_fact_with_tparams(ctx, fact, NULL, 0U, path, token, out_error);
 }
 
 static bool fill_declared_specs(const BuildContext *ctx,
@@ -1905,8 +2006,33 @@ static FengSymbolTypeView *build_callable_return_type_with_tparams(
                                                      out_error);
         return type;
     }
-    /* Fall back to the non-tparam path for inferred return types. */
-    type = build_site_type(ctx, site, explicit_type, path, token, out_error);
+    /* Inferred return type: look up the semantic type fact and route it
+     * through the _with_tparams builder so that type-arg references to
+     * enclosing type parameters are preserved as TYPE_PARAM_REF and
+     * concrete generic applications are emitted as NAMED_GENERIC. */
+    {
+        const FengSemanticTypeFact *fact =
+            feng_semantic_lookup_type_fact(ctx != NULL ? ctx->analysis : NULL, site);
+        if (fact == NULL) {
+            if (fallback_void) {
+                type = new_type(FENG_SYMBOL_TYPE_KIND_BUILTIN, path, token, out_error);
+                if (type == NULL) {
+                    return NULL;
+                }
+                type->as.builtin.name = feng_symbol_internal_dup_cstr("void");
+                if (type->as.builtin.name == NULL) {
+                    feng_symbol_internal_set_error(out_error, path, token, "out of memory cloning builtin name");
+                    feng_symbol_internal_type_free(type);
+                    return NULL;
+                }
+                return type;
+            }
+            feng_symbol_internal_set_error(out_error, path, token, "missing semantic type fact for exported declaration");
+            return NULL;
+        }
+        type = build_type_from_fact_with_tparams(ctx, fact, type_params, type_param_count,
+                                                  path, token, out_error);
+    }
     if (type != NULL || !fallback_void) {
         return type;
     }
@@ -1940,7 +2066,20 @@ static FengSymbolTypeView *build_site_type_with_tparams(const BuildContext *ctx,
                                                      token,
                                                      out_error);
     }
-    return build_site_type(ctx, site, explicit_type, path, token, out_error);
+    /* Inferred site type: route the semantic type fact through the
+     * _with_tparams builder so generic applications (e.g. `let x = List<byte>()`)
+     * are emitted as NAMED_GENERIC and type-param args (e.g. `List<T>` inside
+     * `type Foo<T>`) are preserved as TYPE_PARAM_REF. */
+    {
+        const FengSemanticTypeFact *fact =
+            feng_semantic_lookup_type_fact(ctx != NULL ? ctx->analysis : NULL, site);
+        if (fact == NULL) {
+            feng_symbol_internal_set_error(out_error, path, token, "missing semantic type fact for exported declaration");
+            return NULL;
+        }
+        return build_type_from_fact_with_tparams(ctx, fact, type_params, type_param_count,
+                                                 path, token, out_error);
+    }
 }
 
 static bool cstr_equals_slice(const char *text, FengSlice slice) {
