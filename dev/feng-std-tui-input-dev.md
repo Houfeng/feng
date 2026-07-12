@@ -34,7 +34,7 @@ stdin 可读
 | UTF-8 解码 | InputManager 内部处理 | 解析器负责完整解码，应用拿到的就是 Unicode 码点 |
 | Modifiers | u8 位标志 + 快捷方法 | 位标志简单高效，与 Cell 的 style 编码风格一致 |
 
-> **KeyEvent 不求与 GUI 对齐，只求真实反映终端控制流**：终端把“物理按键 + 修饰状态 + 按下/释放”压扁成一条字符字节流，丢失了几乎所有结构化信息。Feng TUI 的 KeyEvent 严谨反映终端能可靠提供的信息，不伪装终端没有的能力。修饰键快捷方法（isCtrl/isShift）只在 100% 能确定时返回 true，不确定时返回 false。
+> **KeyEvent 不求与 GUI 对齐，只求真实反映终端控制流**：终端把“物理按键 + 修饰状态 + 按下/释放”压扁成一条字符字节流，丢失了几乎所有结构化信息。Feng TUI 的 KeyEvent 严谨反映终端能可靠提供的信息，不伪装终端没有的能力。修饰键快捷方法（isControl/isShift）只在 100% 能确定时返回 true，不确定时返回 false。
 
 ## 2 事件类型
 
@@ -94,13 +94,17 @@ open enum SpecialKey {
 修饰键用 `u8` 位标志表示，定义在 KeyEvent.ff 顶层（与 Cell 的 STYLE_* 常量同模式）。**仅在 100% 能确定时设置**：
 
 ```feng
-/** Ctrl 修饰键标志（仅在纯控制字符 0x01-0x07,0x0B-0x0C,0x0E-0x1A,0x1C-0x1F 时设置） */
-seal let MOD_CTRL: u8 = 1;
-/** Shift 修饰键标志（仅在 CSI 特殊键修饰后缀 ;2 时设置） */
+/** Control 修饰键标志（KeyEvent: 仅纯控制字符时设置；MouseEvent: SGR button 高位，100% 可靠） */
+seal let MOD_CONTROL: u8 = 1;
+/** Alt 修饰键标志（KeyEvent 不设置——ESC 前缀无法消歧；MouseEvent: SGR button 高位，100% 可靠） */
+seal let MOD_ALT: u8 = 2;
+/** Shift 修饰键标志（KeyEvent: 仅 CSI 修饰后缀时设置；MouseEvent: SGR button 高位，100% 可靠） */
 seal let MOD_SHIFT: u8 = 4;
 ```
 
-> **不定义 MOD_ALT**：ESC 前缀与单独 Esc 键无法 100% 消歧（需要超时，超时也不完全可靠）。按严格标准不提供 Alt 检测能力。
+> **KeyEvent 与 MouseEvent 对修饰键的可靠性不同**：
+> - **KeyEvent**：终端把修饰状态压入字节流，只能反推不能直读。`MOD_CONTROL` 仅在纯控制字符时设置，`MOD_SHIFT` 仅在 CSI 修饰后缀时设置，`MOD_ALT` 不设置（ESC 前缀无法消歧）。
+> - **MouseEvent**：SGR 鼠标序列在 button 值高位显式编码修饰键状态（+4=Shift, +8=Alt, +16=Control），是终端主动报告的硬事实，100% 可靠。MouseEvent 的三个修饰键标志都会设置。
 
 ### 2.4 KeyEvent（KeyEvent.ff）
 
@@ -111,7 +115,7 @@ seal let MOD_SHIFT: u8 = 4;
 open type KeyEvent {
   /** 按键内容：SpecialKey=特殊键，u32=可打印字符码点 */
   let content: Union<SpecialKey, u32>;
-  /** 修饰键位标志（仅含 100% 可靠推断的修饰键：MOD_CTRL / MOD_SHIFT） */
+  /** 修饰键位标志（KeyEvent 仅含可靠推断的 MOD_CONTROL/MOD_SHIFT，不设 MOD_ALT） */
   let mods: u8;
 
   func KeyEvent() {
@@ -131,7 +135,7 @@ open type KeyEvent {
    * 仅在纯控制字符（0x01-0x07,0x0B-0x0C,0x0E-0x1A,0x1C-0x1F）时返回 true。
    * 与特殊键冲突的控制字节（0x08=BS,0x09=HT,0x0D=CR,0x1B=ESC）优先映射为特殊键，返回 false。
    */
-  func isCtrl(): bool { return (self.mods & MOD_CTRL) != 0; }
+  func isControl(): bool { return (self.mods & MOD_CONTROL) != 0; }
 
   /**
    * 是否按住 Shift（100% 可靠）
@@ -153,18 +157,19 @@ open type KeyEvent {
 }
 ```
 
-> **不提供 isAlt()**：ESC 前缀无法 100% 消歧。
+> **KeyEvent 不提供 isAlt()**：ESC 前缀无法 100% 消歧，KeyEvent 不设置 MOD_ALT。
+> MouseEvent 提供 isAlt()——SGR 鼠标序列的 button 高位显式报告 Alt 状态，100% 可靠。
 >
 > **所有字段为 `let`**：KeyEvent 是不可变值对象，初始化后字段不可修改。
 > InputManager 构造 KeyEvent 实例后调用 onKey 分发，应用拿到的是只读快照。
 >
 > **各场景 KeyEvent 值**：
 >
-> | 输入 | content | mods | isCtrl | isShift |
+> | 输入 | content | mods | isControl | isShift |
 > |------|---------|------|--------|---------|
 > | `a` | `u32(0x61)` | `0` | false | false |
 > | `A` | `u32(0x41)` | `0` | false | false |
-> | Ctrl+A | `u32(0x01)` | `MOD_CTRL` | true | false |
+> | Ctrl+A | `u32(0x01)` | `MOD_CONTROL` | true | false |
 > | Ctrl+H / Backspace | `SpecialKey.backspace` | `0` | false | false |
 > | Ctrl+M / Enter | `SpecialKey.enter` | `0` | false | false |
 > | Ctrl+[ / Esc | `SpecialKey.escape` | `0` | false | false |
@@ -205,7 +210,7 @@ open type MouseEvent {
   let x: u32;
   /** 行坐标（0-based） */
   let y: u32;
-  /** 修饰键位标志（MOD_CTRL / MOD_SHIFT，来自 SGR 鼠标序列的 button 高位，100% 可靠） */
+  /** 修饰键位标志（MOD_CONTROL / MOD_ALT / MOD_SHIFT，来自 SGR 鼠标序列的 button 高位，100% 可靠） */
   let mods: u8;
 
   func MouseEvent() {
@@ -224,7 +229,8 @@ open type MouseEvent {
     self.mods = mods;
   }
 
-  func isCtrl(): bool { return (self.mods & MOD_CTRL) != 0; }
+  func isControl(): bool { return (self.mods & MOD_CONTROL) != 0; }
+  func isAlt(): bool { return (self.mods & MOD_ALT) != 0; }
   func isShift(): bool { return (self.mods & MOD_SHIFT) != 0; }
 }
 ```
@@ -335,9 +341,9 @@ open func feed(b: u8): void {
 | 0x7F (DEL) | SpecialKey.backspace |
 
 > Ctrl+字母（纯控制字符 0x01–0x07,0x0B–0x0C,0x0E–0x1A,0x1C–0x1F）映射为
-> KeyEvent(content=u32(控制字节值), mods=MOD_CTRL)。
-> 例如 0x01 → content=u32(0x01), mods=MOD_CTRL；0x03 → content=u32(0x03), mods=MOD_CTRL。
-> 与特殊键冲突的控制字节（0x08=BS,0x09=HT,0x0D=CR,0x1B=ESC）优先映射为特殊键，不设 MOD_CTRL。
+> KeyEvent(content=u32(控制字节值), mods=MOD_CONTROL)。
+> 例如 0x01 → content=u32(0x01), mods=MOD_CONTROL；0x03 → content=u32(0x03), mods=MOD_CONTROL。
+> 与特殊键冲突的控制字节（0x08=BS,0x09=HT,0x0D=CR,0x1B=ESC）优先映射为特殊键，不设 MOD_CONTROL。
 
 #### 3.4.2 handleEsc — ESC 态
 
@@ -544,10 +550,10 @@ exit() 中发送禁用序列：
 
 ```text
 std/src/tui/
-  KeyEvent.ff       # 新增：SpecialKey 枚举 / MOD_CTRL,MOD_SHIFT 常量
+  KeyEvent.ff       # 新增：SpecialKey 枚举 / MOD_CONTROL,MOD_ALT,MOD_SHIFT 常量
   #                 #       Union<SpecialKey,u32> / KeyEvent @value 类型 + 快捷方法
   MouseEvent.ff     # 新增：MouseAction / MouseButton 枚举
-  #                 #       MouseEvent @value 类型 + 快捷方法
+  #                 #       MouseEvent @value 类型 + 快捷方法（isControl/isAlt/isShift）
   InputManager.ff   # 新增：VT100/xterm 状态机 + onKey/onMouse (Action<T>)
   #                 #       feed(byte): void
   TuiApp.ff         # 修改：新增 input: InputManager 公开成员
@@ -575,10 +581,10 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 | Tab | `0x09` | onKey(KeyEvent(content=SpecialKey.tab)) |
 | Backspace (BS) | `0x08` | onKey(KeyEvent(content=SpecialKey.backspace)) |
 | Backspace (DEL) | `0x7F` | onKey(KeyEvent(content=SpecialKey.backspace)) |
-| Ctrl+C | `0x03` | onKey(KeyEvent(content=u32(0x03), mods=MOD_CTRL)) |
-| Ctrl+A | `0x01` | onKey(KeyEvent(content=u32(0x01), mods=MOD_CTRL)) |
-| Ctrl+H / Backspace | `0x08` | onKey(KeyEvent(content=SpecialKey.backspace)) — isCtrl=false |
-| Ctrl+M / Enter | `0x0D` | onKey(KeyEvent(content=SpecialKey.enter)) — isCtrl=false |
+| Ctrl+C | `0x03` | onKey(KeyEvent(content=u32(0x03), mods=MOD_CONTROL)) |
+| Ctrl+A | `0x01` | onKey(KeyEvent(content=u32(0x01), mods=MOD_CONTROL)) |
+| Ctrl+H / Backspace | `0x08` | onKey(KeyEvent(content=SpecialKey.backspace)) — isControl=false |
+| Ctrl+M / Enter | `0x0D` | onKey(KeyEvent(content=SpecialKey.enter)) — isControl=false |
 | Esc | `0x1B` | 进入 esc 态，单独 Esc 需 timeout 或后续字节区分 |
 | 方向键 Up | `ESC [ A` | onKey(KeyEvent(content=SpecialKey.arrowUp)) |
 | 方向键 Down | `ESC [ B` | onKey(KeyEvent(content=SpecialKey.arrowDown)) |
@@ -590,7 +596,7 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 | F1 (SS3) | `ESC O P` | onKey(KeyEvent(content=SpecialKey.f1)) |
 | F5 (CSI) | `ESC [ 1 5 ~` | onKey(KeyEvent(content=SpecialKey.f5)) |
 | Shift+Up | `ESC [ 1 ; 2 A` | onKey(KeyEvent(content=SpecialKey.arrowUp, mods=MOD_SHIFT)) |
-| Ctrl+Up | `ESC [ 1 ; 5 A` | onKey(KeyEvent(content=SpecialKey.arrowUp, mods=MOD_CTRL)) |
+| Ctrl+Up | `ESC [ 1 ; 5 A` | onKey(KeyEvent(content=SpecialKey.arrowUp, mods=MOD_CONTROL)) |
 | UTF-8 中文 | `0xE4 0xBD 0xA0` | onKey(KeyEvent(content=u32(0x4F60))) |
 | UTF-8 emoji | `0xF0 0x9F 0x98 0x80` | onKey(KeyEvent(content=u32(0x1F600))) |
 | 鼠标左键点击 | `ESC [ < 0 ; 10 ; 5 M` | onMouse(MouseEvent(action=press, button=left, x=9, y=4)) |
@@ -629,6 +635,7 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
   （需要超时，超时也不完全可靠）。按严格标准，InputManager 不检测 Alt：
   esc 态收到非 `[`/`O` 字节时产出普通字符 KeyEvent（不加 MOD_ALT）。
   若调用方需要区分单独 Esc 与 Alt 组合，可在应用层用 timeout 判断。
+  **MouseEvent 的 Alt 不受此限制**——SGR 鼠标序列在 button 高位显式报告 Alt 状态，100% 可靠。
 
 ## 8 阶段五实施步骤
 
