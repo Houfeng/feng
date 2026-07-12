@@ -95,8 +95,9 @@
 - **公开 API**：
   - `buffer(): Buffer` — 返回 back 引用，应用在此绘制。`resize()` 后需重新调用获取最新引用。
   - `size(): Tuple<u32, u32>` — 返回当前屏幕尺寸（width, height）。
-  - `clear()` — 清空 back/front 缓冲区并发射清屏序列（`\x1b[2J\x1b[H`），用于应用主动重置画布。
-  - `clearScreen()` — 仅发射清屏序列（`\x1b[2J\x1b[H`）到 output 缓冲，不清空缓冲区。供 TuiApp.run() 启动时清空物理终端屏幕，保留应用已绘制内容供首帧 diff 输出。
+  - `clearBuffer()` — 清空 back/front 缓冲区（将所有 Cell 重置为默认值）并重置 SGR 状态机，不发射任何 ANSI 序列。用于应用主动重置画布数据。
+  - `clearScreen()` — 仅向 output 追加清屏序列（`\x1b[2J\x1b[H`），不清空缓冲区。供 TuiApp.run() 启动时清空物理终端屏幕，保留应用已绘制内容供首帧 diff 输出。
+  - `clear()` — 组合 `clearBuffer()` + `clearScreen()`，完整重置（清空缓冲区 + 清物理终端）。
   - `hideCursor()` — 发射隐藏光标序列（`\x1b[?25l`）到 output 缓冲。
   - `showCursor()` — 发射显示光标序列（`\x1b[?25h`）到 output 缓冲。
   - `resize(width, height)` — 重建 front/back 为新尺寸空白 Buffer，旧内容不迁移（TUI resize 时旧内容无法对齐，由上层组件树负责重新布局）。front 同时清空，使下次 `buildPatchBytes()` 产生全量重绘。
