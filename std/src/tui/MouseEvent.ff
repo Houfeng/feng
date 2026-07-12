@@ -1,0 +1,117 @@
+open module std.tui;
+
+import std;
+
+/**
+ * MouseAction 表示鼠标动作类型。
+ */
+open enum MouseAction {
+  /** 按下按钮 */
+  press = 0,
+  /** 释放按钮 */
+  release = 1,
+  /** 移动（含拖动和悬停） */
+  move = 2
+}
+
+/**
+ * MouseButton 表示鼠标按钮类型。
+ */
+open enum MouseButton {
+  /** 无按钮（悬停移动时使用） */
+  none = 0,
+  /** 左键 */
+  left = 1,
+  /** 中键（滚轮点击） */
+  middle = 2,
+  /** 右键 */
+  right = 3,
+  /** 滚轮向上滚动 */
+  wheelUp = 4,
+  /** 滚轮向下滚动 */
+  wheelDown = 5
+}
+
+/**
+ * MouseEvent 表示一个鼠标事件。
+ *
+ * @value 类型，所有字段为 `let`——结构体初始化后不可变。
+ * InputManager 构造 MouseEvent 实例后调用 onMouse 分发，应用拿到的是只读快照。
+ *
+ * 修饰键来自 SGR 鼠标序列（mode 1006）的 button 高位编码，
+ * 由终端主动报告，100% 可靠——isControl/isAlt/isShift 均准确。
+ *
+ * 坐标为 0-based，与 Screen/Buffer 的坐标体系统一。
+ * InputManager 解析时将终端 SGR 序列的 1-based 坐标减 1。
+ */
+@value
+open type MouseEvent {
+
+  /** 鼠标动作类型 */
+  let action: MouseAction;
+
+  /** 按下的按钮（move 动作时为 none） */
+  let button: MouseButton;
+
+  /** 列坐标（0-based，与 Screen/Buffer 一致） */
+  let x: u32;
+
+  /** 行坐标（0-based） */
+  let y: u32;
+
+  /** 修饰键位标志（MOD_CONTROL / MOD_ALT / MOD_SHIFT 的按位或，100% 可靠） */
+  let mods: u8;
+
+  /**
+   * 默认构造函数：action=press, button=none, x=0, y=0, mods=0。
+   */
+  func MouseEvent() {
+    self.action = MouseAction.press;
+    self.button = MouseButton.none;
+    self.x = 0;
+    self.y = 0;
+    self.mods = 0;
+  }
+
+  /**
+   * 构造函数：指定所有字段。
+   * @param action - 鼠标动作类型
+   * @param button - 按下的按钮
+   * @param x - 列坐标（0-based）
+   * @param y - 行坐标（0-based）
+   * @param mods - 修饰键位标志的按位或
+   */
+  func MouseEvent(action: MouseAction, button: MouseButton, x: u32, y: u32, mods: u8) {
+    self.action = action;
+    self.button = button;
+    self.x = x;
+    self.y = y;
+    self.mods = mods;
+  }
+
+  // ─── 快捷判定方法（均 100% 可靠，来自 SGR button 高位） ───────────────
+
+  /**
+   * 是否按住 Ctrl（100% 可靠，来自 SGR button 高位 +16）。
+   * @return 是否按住 Ctrl
+   */
+  func isControl(): bool {
+    return (self.mods & MOD_CONTROL) != 0;
+  }
+
+  /**
+   * 是否按住 Alt（100% 可靠，来自 SGR button 高位 +8）。
+   * @return 是否按住 Alt
+   */
+  func isAlt(): bool {
+    return (self.mods & MOD_ALT) != 0;
+  }
+
+  /**
+   * 是否按住 Shift（100% 可靠，来自 SGR button 高位 +4）。
+   * @return 是否按住 Shift
+   */
+  func isShift(): bool {
+    return (self.mods & MOD_SHIFT) != 0;
+  }
+}
