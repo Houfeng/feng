@@ -34,16 +34,16 @@ stdin 可读
 | UTF-8 解码 | InputManager 内部处理 | 解析器负责完整解码，应用拿到的就是 Unicode 码点 |
 | Modifiers | u8 位标志 + 快捷方法 | 位标志简单高效，与 Cell 的 style 编码风格一致 |
 
+> **KeyEvent 不求与 GUI 对齐，只求真实反映终端控制流**：终端把“物理按键 + 修饰状态 + 按下/释放”压扁成一条字符字节流，丢失了几乎所有结构化信息。Feng TUI 的 KeyEvent 严谨反映终端能可靠提供的信息，不伪装终端没有的能力。修饰键快捷方法（isCtrl/isShift）只在 100% 能确定时返回 true，不确定时返回 false。
+
 ## 2 事件类型（Event.ff）
 
 ### 2.1 Key 枚举
 
-不可打印的特殊键通过 `Key` 枚举表示。可打印字符通过 `codepoint` 字段传递，
-此时 `key` 为 `None`。
+终端能可靠识别的特殊键。可打印字符不在此枚举中，通过 `Union<Key, u32>` 的 `u32` 分支传递码点。
 
 ```feng
 open enum Key {
-  none = 0,
   escape = 1,
   tab = 2,
   enter = 3,
@@ -73,55 +73,103 @@ open enum Key {
 }
 ```
 
-### 2.2 Modifiers 常量与快捷方法
+> **无 `none` 项**：Key 枚举不含 `none`。特殊键和可打印字符通过 `Union<Key, u32>` 互斥表达，不会出现"key 字段无值"的不自恰状态。
 
-修饰键用 `u8` 位标志表示，定义在 Event.ff 顶层（与 Cell 的 STYLE_* 常量同模式）：
+### 2.2 按键内容类型
+
+`Key`（特殊键）与 `u32`（可打印字符码点）互斥——一个按键事件要么是特殊键，要么是可打印字符，不会同时存在。用 std 的 `Union<T1,T2>` 表达：
 
 ```feng
-/** 修饰键位标志（u8 位标志，可组合） */
+// 按键内容类型，直接用 Union<Key, u32>，不自定义 spec
+// 用法：let content: Union<Key, u32> = Key.arrowUp;
+//      let content: Union<Key, u32> = (u32)0x61;
+```
+
+> **复用 std 的 `Union<T1,T2>`**：`Union<Key, u32>` 即 `Key | u32`，定义在 `std/basic/Union.ff`。不自定义 KeyContent spec。
+
+### 2.3 Modifiers 常量
+
+修饰键用 `u8` 位标志表示，定义在 Event.ff 顶层（与 Cell 的 STYLE_* 常量同模式）。**仅在 100% 能确定时设置**：
+
+```feng
+/** Ctrl 修饰键标志（仅在纯控制字符 0x01-0x07,0x0B-0x0C,0x0E-0x1A,0x1C-0x1F 时设置） */
 seal let MOD_CTRL: u8 = 1;
-seal let MOD_ALT: u8 = 2;
+/** Shift 修饰键标志（仅在 CSI 特殊键修饰后缀 ;2 时设置） */
 seal let MOD_SHIFT: u8 = 4;
 ```
 
-### 2.3 KeyEvent
+> **不定义 MOD_ALT**：ESC 前缀与单独 Esc 键无法 100% 消歧（需要超时，超时也不完全可靠）。按严格标准不提供 Alt 检测能力。
+
+### 2.4 KeyEvent
+
+所有字段为 `let`——结构体初始化后不可变：
 
 ```feng
 @value
 open type KeyEvent {
-  /** 特殊键（none 表示可打印字符，数据走 codepoint） */
-  open var key: Key;
-  /** 可打印字符的 Unicode 码点（不可打印为 0） */
-  open var codepoint: u32;
-  /** 修饰键位标志（MOD_CTRL | MOD_ALT | MOD_SHIFT 的组合） */
-  open var mods: u8;
+  /** 按键内容：Key=特殊键，u32=可打印字符码点 */
+  let content: Union<Key, u32>;
+  /** 修饰键位标志（仅含 100% 可靠推断的修饰键：MOD_CTRL / MOD_SHIFT） */
+  let mods: u8;
 
   func KeyEvent() {
-    self.key = Key.none;
-    self.codepoint = 0;
+    self.content = (u32)0;
     self.mods = 0;
   }
 
-  func KeyEvent(key: Key, codepoint: u32, mods: u8) {
-    self.key = key;
-    self.codepoint = codepoint;
+  func KeyEvent(content: Union<Key, u32>, mods: u8) {
+    self.content = content;
     self.mods = mods;
   }
 
   // ─── 快捷判定方法 ─────────────────────────────────────────────────────
 
-  /** 是否按住 Ctrl */
+  /**
+   * 是否按住 Ctrl（100% 可靠）
+   * 仅在纯控制字符（0x01-0x07,0x0B-0x0C,0x0E-0x1A,0x1C-0x1F）时返回 true。
+   * 与特殊键冲突的控制字节（0x08=BS,0x09=HT,0x0D=CR,0x1B=ESC）优先映射为特殊键，返回 false。
+   */
   func isCtrl(): bool { return (self.mods & MOD_CTRL) != 0; }
-  /** 是否按住 Alt */
-  func isAlt(): bool { return (self.mods & MOD_ALT) != 0; }
-  /** 是否按住 Shift */
+
+  /**
+   * 是否按住 Shift（100% 可靠）
+   * 仅在 CSI 特殊键修饰后缀（如 ESC[1;2A 的 ;2）时返回 true。
+   * 可打印字符的大写形式不设置 MOD_SHIFT（可能是 CapsLock，无法区分）。
+   */
   func isShift(): bool { return (self.mods & MOD_SHIFT) != 0; }
-  /** 是否为可打印字符（key == none 且 codepoint != 0） */
-  func isPrintable(): bool { return self.key == Key.none && self.codepoint != 0; }
+
+  /**
+   * 是否为可打印字符
+   * content 为 u32 分支且码点不为 0 时返回 true。
+   */
+  func isPrintable(): bool {
+    return match self.content {
+      c: u32 { c != 0; }
+      else { false; }
+    };
+  }
 }
 ```
 
-### 2.4 MouseAction / MouseButton 枚举
+> **不提供 isAlt()**：ESC 前缀无法 100% 消歧。
+>
+> **所有字段为 `let`**：KeyEvent 是不可变值对象，初始化后字段不可修改。
+> InputManager 构造 KeyEvent 实例后调用 onKey 分发，应用拿到的是只读快照。
+>
+> **各场景 KeyEvent 值**：
+>
+> | 输入 | content | mods | isCtrl | isShift |
+> |------|---------|------|--------|---------|
+> | `a` | `u32(0x61)` | `0` | false | false |
+> | `A` | `u32(0x41)` | `0` | false | false |
+> | Ctrl+A | `u32(0x01)` | `MOD_CTRL` | true | false |
+> | Ctrl+H / Backspace | `Key.backspace` | `0` | false | false |
+> | Ctrl+M / Enter | `Key.enter` | `0` | false | false |
+> | Ctrl+[ / Esc | `Key.escape` | `0` | false | false |
+> | ArrowUp | `Key.arrowUp` | `0` | false | false |
+> | Shift+ArrowUp | `Key.arrowUp` | `MOD_SHIFT` | false | true |
+
+### 2.5 MouseAction / MouseButton 枚举
 
 ```feng
 open enum MouseAction {
@@ -140,21 +188,23 @@ open enum MouseButton {
 }
 ```
 
-### 2.5 MouseEvent
+### 2.6 MouseEvent
+
+所有字段为 `let`——结构体初始化后不可变：
 
 ```feng
 @value
 open type MouseEvent {
   /** 鼠标动作类型 */
-  open var action: MouseAction;
+  let action: MouseAction;
   /** 按下的按钮（move 时为 none） */
-  open var button: MouseButton;
+  let button: MouseButton;
   /** 列坐标（1-based，与终端行号一致） */
-  open var x: u32;
+  let x: u32;
   /** 行坐标（1-based） */
-  open var y: u32;
-  /** 修饰键位标志 */
-  open var mods: u8;
+  let y: u32;
+  /** 修饰键位标志（MOD_CTRL / MOD_SHIFT，来自 SGR 鼠标序列的 button 高位，100% 可靠） */
+  let mods: u8;
 
   func MouseEvent() {
     self.action = MouseAction.press;
@@ -173,7 +223,6 @@ open type MouseEvent {
   }
 
   func isCtrl(): bool { return (self.mods & MOD_CTRL) != 0; }
-  func isAlt(): bool { return (self.mods & MOD_ALT) != 0; }
   func isShift(): bool { return (self.mods & MOD_SHIFT) != 0; }
 }
 ```
@@ -283,8 +332,10 @@ open func feed(b: u8): void {
 | 0x1B (ESC) | 进入 esc 态（不立即产出） |
 | 0x7F (DEL) | Key.backspace |
 
-> Ctrl+字母（0x01–0x1A）映射为 KeyEvent(codepoint=字母, mods=MOD_CTRL)。
-> 例如 0x01 → codepoint='a', mods=MOD_CTRL；0x03 → codepoint='c', mods=MOD_CTRL。
+> Ctrl+字母（纯控制字符 0x01–0x07,0x0B–0x0C,0x0E–0x1A,0x1C–0x1F）映射为
+> KeyEvent(content=u32(控制字节值), mods=MOD_CTRL)。
+> 例如 0x01 → content=u32(0x01), mods=MOD_CTRL；0x03 → content=u32(0x03), mods=MOD_CTRL。
+> 与特殊键冲突的控制字节（0x08=BS,0x09=HT,0x0D=CR,0x1B=ESC）优先映射为特殊键，不设 MOD_CTRL。
 
 #### 3.4.2 handleEsc — ESC 态
 
@@ -292,7 +343,7 @@ open func feed(b: u8): void {
 |------|------|
 | 0x5B `[` | 进入 csi 态，清空 params |
 | 0x4F `O` | 进入 ss3 态 |
-| 其他 | 产出 Alt+该字节（mods=MOD_ALT），回到 ground 态 |
+| 其他 | 产出普通字符 KeyEvent(content=u32(字节值))，不加 MOD_ALT（ESC 前缀无法 100% 消歧），回到 ground 态 |
 
 #### 3.4.3 handleCsi — CSI 态
 
@@ -495,27 +546,29 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 
 | 测试项 | 喂入字节 | 期望回调事件 |
 |--------|----------|-------------|
-| 可打印 ASCII | `0x41` (A) | onKey(KeyEvent(codepoint=0x41)) |
-| Enter | `0x0D` | onKey(KeyEvent(key=enter)) |
-| Tab | `0x09` | onKey(KeyEvent(key=tab)) |
-| Backspace (BS) | `0x08` | onKey(KeyEvent(key=backspace)) |
-| Backspace (DEL) | `0x7F` | onKey(KeyEvent(key=backspace)) |
-| Ctrl+C | `0x03` | onKey(KeyEvent(codepoint='c', mods=MOD_CTRL)) |
-| Ctrl+A | `0x01` | onKey(KeyEvent(codepoint='a', mods=MOD_CTRL)) |
+| 可打印 ASCII | `0x41` (A) | onKey(KeyEvent(content=u32(0x41))) |
+| Enter | `0x0D` | onKey(KeyEvent(content=Key.enter)) |
+| Tab | `0x09` | onKey(KeyEvent(content=Key.tab)) |
+| Backspace (BS) | `0x08` | onKey(KeyEvent(content=Key.backspace)) |
+| Backspace (DEL) | `0x7F` | onKey(KeyEvent(content=Key.backspace)) |
+| Ctrl+C | `0x03` | onKey(KeyEvent(content=u32(0x03), mods=MOD_CTRL)) |
+| Ctrl+A | `0x01` | onKey(KeyEvent(content=u32(0x01), mods=MOD_CTRL)) |
+| Ctrl+H / Backspace | `0x08` | onKey(KeyEvent(content=Key.backspace)) — isCtrl=false |
+| Ctrl+M / Enter | `0x0D` | onKey(KeyEvent(content=Key.enter)) — isCtrl=false |
 | Esc | `0x1B` | 进入 esc 态，单独 Esc 需 timeout 或后续字节区分 |
-| 方向键 Up | `ESC [ A` | onKey(KeyEvent(key=arrowUp)) |
-| 方向键 Down | `ESC [ B` | onKey(KeyEvent(key=arrowDown)) |
-| 方向键 Right | `ESC [ C` | onKey(KeyEvent(key=arrowRight)) |
-| 方向键 Left | `ESC [ D` | onKey(KeyEvent(key=arrowLeft)) |
-| Home (CSI) | `ESC [ H` | onKey(KeyEvent(key=home)) |
-| End (CSI) | `ESC [ F` | onKey(KeyEvent(key=end)) |
-| Delete | `ESC [ 3 ~` | onKey(KeyEvent(key=delete)) |
-| F1 (SS3) | `ESC O P` | onKey(KeyEvent(key=f1)) |
-| F5 (CSI) | `ESC [ 1 5 ~` | onKey(KeyEvent(key=f5)) |
-| Shift+Up | `ESC [ 1 ; 2 A` | onKey(KeyEvent(key=arrowUp, mods=MOD_SHIFT)) |
-| Ctrl+Up | `ESC [ 1 ; 5 A` | onKey(KeyEvent(key=arrowUp, mods=MOD_CTRL)) |
-| UTF-8 中文 | `0xE4 0xBD 0xA0` | onKey(KeyEvent(codepoint=0x4F60=你)) |
-| UTF-8 emoji | `0xF0 0x9F 0x98 0x80` | onKey(KeyEvent(codepoint=0x1F600=😀)) |
+| 方向键 Up | `ESC [ A` | onKey(KeyEvent(content=Key.arrowUp)) |
+| 方向键 Down | `ESC [ B` | onKey(KeyEvent(content=Key.arrowDown)) |
+| 方向键 Right | `ESC [ C` | onKey(KeyEvent(content=Key.arrowRight)) |
+| 方向键 Left | `ESC [ D` | onKey(KeyEvent(content=Key.arrowLeft)) |
+| Home (CSI) | `ESC [ H` | onKey(KeyEvent(content=Key.home)) |
+| End (CSI) | `ESC [ F` | onKey(KeyEvent(content=Key.end)) |
+| Delete | `ESC [ 3 ~` | onKey(KeyEvent(content=Key.delete)) |
+| F1 (SS3) | `ESC O P` | onKey(KeyEvent(content=Key.f1)) |
+| F5 (CSI) | `ESC [ 1 5 ~` | onKey(KeyEvent(content=Key.f5)) |
+| Shift+Up | `ESC [ 1 ; 2 A` | onKey(KeyEvent(content=Key.arrowUp, mods=MOD_SHIFT)) |
+| Ctrl+Up | `ESC [ 1 ; 5 A` | onKey(KeyEvent(content=Key.arrowUp, mods=MOD_CTRL)) |
+| UTF-8 中文 | `0xE4 0xBD 0xA0` | onKey(KeyEvent(content=u32(0x4F60))) |
+| UTF-8 emoji | `0xF0 0x9F 0x98 0x80` | onKey(KeyEvent(content=u32(0x1F600))) |
 | 鼠标左键点击 | `ESC [ < 0 ; 10 ; 5 M` | onMouse(MouseEvent(action=press, button=left, x=10, y=5)) |
 | 鼠标右键释放 | `ESC [ < 2 ; 10 ; 5 m` | onMouse(MouseEvent(action=release, button=right, x=10, y=5)) |
 | 鼠标滚轮上 | `ESC [ < 64 ; 1 ; 1 M` | onMouse(MouseEvent(action=press, button=wheelUp, x=1, y=1)) |
@@ -546,11 +599,10 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 - **Backspace 键**：不同终端发送不同字节。macOS 默认发送 0x7F (DEL)，
   部分配置发送 0x08 (BS)。InputManager 两者都映射为 Key.backspace。
 - **Alt 键**：在 Raw Mode 下，Alt+字母通常表示为 ESC 后跟字母
-  （如 Alt+A = `0x1B 0x61`）。InputManager 在 esc 态收到非 `[`/`O` 字节时
-  产出 Alt+该字节。但这也可能与真正的 Esc 键冲突——单独的 Esc 键需要
-  等待后续字节或 timeout 区分。阶段五采用后续字节区分策略：
-  若 `feed()` 在 esc 态收到非转义起始字节，产出 Alt+该字节；
-  若调用方需要区分单独 Esc，可在应用层用 timeout 判断。
+  （如 Alt+A = `0x1B 0x61`）。但 ESC 前缀与单独 Esc 键无法 100% 消歧
+  （需要超时，超时也不完全可靠）。按严格标准，InputManager 不检测 Alt：
+  esc 态收到非 `[`/`O` 字节时产出普通字符 KeyEvent（不加 MOD_ALT）。
+  若调用方需要区分单独 Esc 与 Alt 组合，可在应用层用 timeout 判断。
 
 ## 8 阶段五实施步骤
 
