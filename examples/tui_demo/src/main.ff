@@ -13,6 +13,7 @@ import std.tui;
 func main(args: string[]) {
   // 创建 80x24 的 Screen
   let scr = Screen(80, 24);
+  // scr.clear();
   // 在 back buffer 上绘制 "hello world"（带粗体样式）
   scr.buffer().draw(10, 10, "hello world", Style.bold);
   // 构造 TuiApp（无外部 fd），init 进入 Raw Mode，run 启动主循环
