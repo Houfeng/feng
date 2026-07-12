@@ -51,10 +51,6 @@ open type InferredGenericFields {
 
 /**
  * 泛型版本：内部字段为开放泛型推断，调用点具化时才确定 T。
- *
- * 注意：泛型类型内部对 List<T>（T 为类型参数）字段的方法调用目前
- * 受 codegen 限制（CE0163），因此 seal 字段不提供调用 List 方法的
- * 访问器；open 字段由跨包消费者直接访问并调用 List 方法验证。
  */
 open type InferredGenericFieldsGeneric<T> {
 
@@ -63,6 +59,21 @@ open type InferredGenericFieldsGeneric<T> {
 
   /** open + 开放泛型：验证可见性修饰符不影响导出，由调用方直接操作 */
   open let openOpen = List<T>();
+
+  /** 向 seal 字段追加一个元素，供跨包测试间接验证字段可用 */
+  open func appendSealed(item: T) {
+    self.sealedOpen.add(item);
+  }
+
+  /** 返回 seal 字段当前元素数，供跨包测试间接验证字段类型正确 */
+  open func sealedSize(): int {
+    return self.sealedOpen.size();
+  }
+
+  /** 返回 seal 字段指定下标的元素，供跨包测试间接验证写入正确 */
+  open func sealedAt(index: int): T {
+    return self.sealedOpen.get(index);
+  }
 
   func InferredGenericFieldsGeneric() {}
 }

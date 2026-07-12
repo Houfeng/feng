@@ -43,12 +43,27 @@ open func test_inferred_generic_field() {
     });
 
     test("sealed open generic field (List<T> instantiated as List<byte>)", () {
-      // 泛型类型内部 seal 字段导出验证：跨包能正确构造实例，
-      // 证明开放泛型推断字段在 .ft 中以 NAMED_GENERIC 保留类型实参。
-      // （泛型类型内部对 List<T> 字段的方法调用受独立 codegen 限制，
-      //   故此处仅验证实例化成功；字段行为由 open 字段用例覆盖。）
+      // 泛型类型内部 seal 推断字段（List<T>()）的方法调用：
+      // 通过公开访问器间接调用 List<T>.add/get，验证 reified type dep
+      // 已正确收集、字段类型解析为泛型实例而非 VOID。
       let obj = InferredGenericFieldsGeneric<byte>();
-      assert(true, "sealed open generic field instantiable");
+      obj.appendSealed((byte)0x41);
+      obj.appendSealed((byte)0x42);
+      assert(obj.sealedSize() == 2, "sealed open generic field usable");
+      assert(obj.sealedAt(0) == (byte)0x41, "sealed open generic field value[0]");
+      assert(obj.sealedAt(1) == (byte)0x42, "sealed open generic field value[1]");
+    });
+
+    test("sealed open generic field with int instantiation", () {
+      // 同一泛型类型用不同类型参数具化，验证 seal 字段方法调用
+      // 在不同具化上下文都工作。
+      let obj = InferredGenericFieldsGeneric<int>();
+      obj.appendSealed(100);
+      obj.appendSealed(200);
+      obj.appendSealed(300);
+      assert(obj.sealedSize() == 3, "sealed open generic field int usable");
+      assert(obj.sealedAt(0) == 100, "sealed open generic field int value[0]");
+      assert(obj.sealedAt(2) == 300, "sealed open generic field int value[2]");
     });
 
     test("open open generic field (List<T> instantiated as List<int>)", () {

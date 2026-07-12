@@ -798,6 +798,64 @@ static void test_generic_type_static_field_codegen(void) {
     feng_program_free(program);
 }
 
+/* Regression for CE0163: a generic type with an inferred field whose
+ * type is a generic application (e.g. `seal let items = Inner<T>()` with no
+ * explicit annotation) must resolve the field type from the semantic type
+ * fact during shared-body field access, instead of degrading to CG_TYPE_VOID
+ * and failing with "method call on non-object value".
+ *
+ * This unit test exercises the type-definition + shared-body codegen path in
+ * isolation (without a concrete instantiation call site, which would exercise
+ * the separate Pass 1.7 nested-concrete-instance registration path covered
+ * by fcts cross-package cases).  The cross-package method-call behaviour is
+ * validated by fcts `test_inferred_generic_field`. */
+static void test_generic_type_inferred_field_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.inferred_field;\n"
+        "type Inner<T> {\n"
+        "    var value: T;\n"
+        "    seal func Inner() {}\n"
+        "    func set_value(next: T) { self.value = next; }\n"
+        "    func get_value(): T { return self.value; }\n"
+        "}\n"
+        "type Holder<T> {\n"
+        "    seal let items = Inner<T>();\n"
+        "    seal func Holder() {}\n"
+        "    func push(item: T) { self.items.set_value(item); }\n"
+        "    func pop(): T { return self.items.get_value(); }\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "inferred_field.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (inferred generic field): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "Holder") != NULL);
+    ASSERT(strstr(out.c_source, "Inner") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 /* Step 3 — spec static member codegen: witness struct slots must omit
  * _subject for static methods/fields, and thunks forward without a
  * subject cast. */
@@ -7306,6 +7364,7 @@ int main(void) {
     test_builtin_fit_static_method_codegen();
     test_generic_static_methods_codegen();
     test_generic_type_static_field_codegen();
+    test_generic_type_inferred_field_codegen();
     test_spec_static_member_witness_codegen();
     test_spec_static_var_witness_codegen();
     test_generic_param_static_method_codegen();

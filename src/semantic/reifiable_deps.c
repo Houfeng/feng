@@ -1053,7 +1053,22 @@ static void collect_for_generic_type(FengSemanticAnalysis *analysis,
         const FengTypeMember *member = decl->as.type_decl.members[i];
 
         if (member->kind == FENG_TYPE_MEMBER_FIELD) {
-            try_collect_type_ref(&ctx, member->as.field.type);
+            /* Inferred fields (field.type == NULL, e.g.
+             * `let items = List<T>()`) carry their type only as a semantic
+             * type fact.  Fall back to it so the generic instance type_ref
+             * (e.g. List<T>) is collected as a reifiable dep; otherwise the
+             * generic method body cannot find the reified type descriptor
+             * when calling methods on the field (CE0007). */
+            if (member->as.field.type == NULL) {
+                const FengSemanticTypeFact *fact =
+                    feng_semantic_lookup_type_fact(analysis, member);
+                if (fact != NULL &&
+                    fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                    try_collect_type_ref(&ctx, fact->type_ref);
+                }
+            } else {
+                try_collect_type_ref(&ctx, member->as.field.type);
+            }
             collect_from_expr(&ctx, member->as.field.initializer);
             continue;
         }

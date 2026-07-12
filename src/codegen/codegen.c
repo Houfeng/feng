@@ -17402,7 +17402,20 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         }
 
         CGType *field_type = NULL;
-        if (!cg_resolve_type(cg, field_member->as.field.type,
+        const FengTypeRef *field_type_ref = field_member->as.field.type;
+        /* Inferred fields (`let x = List<T>()` with no explicit annotation)
+         * carry field.type == NULL.  Fall back to the semantic type fact so
+         * the inferred type_ref (which carries type args + type-param refs)
+         * is resolved instead of degrading to CG_TYPE_VOID, which would make
+         * any subsequent method call on the field fail with CE0163. */
+        if (field_type_ref == NULL && cg->analysis != NULL) {
+            const FengSemanticTypeFact *fact =
+                feng_semantic_lookup_type_fact(cg->analysis, field_member);
+            if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                field_type_ref = fact->type_ref;
+            }
+        }
+        if (!cg_resolve_type(cg, field_type_ref,
                              &field_member->token, &field_type)) {
             er_free(&recv);
             return false;
@@ -22392,7 +22405,17 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     target->as.member.member.data);
             }
             CGType *field_type = NULL;
-            if (!cg_resolve_type(cg, field_member->as.field.type,
+            const FengTypeRef *field_type_ref = field_member->as.field.type;
+            /* Inferred fields (field.type == NULL): fall back to the semantic
+             * type fact so the inferred type_ref is resolved instead of VOID. */
+            if (field_type_ref == NULL && cg->analysis != NULL) {
+                const FengSemanticTypeFact *fact =
+                    feng_semantic_lookup_type_fact(cg->analysis, field_member);
+                if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                    field_type_ref = fact->type_ref;
+                }
+            }
+            if (!cg_resolve_type(cg, field_type_ref,
                                  &field_member->token, &field_type)) {
                 er_free(&recv);
                 return false;
