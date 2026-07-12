@@ -167,11 +167,12 @@
 
 > 实现方案详见 `dev/feng-std-tui-input-dev.md`。
 
-- [ ] 4.18 实现输入解析状态机：VT100/xterm 转义序列解析，将 stdin 字节流解析为 `KeyEvent`/`MouseEvent`
-- [ ] 4.19 实现事件路由：将解析后的事件下发至回调处理，触发状态变更后调用 `Screen.buildPatchBytes()`
-- [ ] 4.20 补充 std_test 用例：在 `test_tui.ff` 中新增输入解析状态机（VT100/xterm 转义序列）、事件路由等测试
-- [ ] 4.21 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.22 等待人工 Review：开发者审查输入解析与事件路由实现，通过后方可进入第六阶段
+- [ ] 4.18 实现事件类型（Event.ff）：`Key` 枚举、`MouseAction`/`MouseButton` 枚举、`MOD_CTRL`/`MOD_ALT`/`MOD_SHIFT` 常量、`KeyEvent`/`MouseEvent` @value 类型 + `isCtrl()`/`isAlt()`/`isShift()`/`isPrintable()` 快捷方法
+- [ ] 4.19 实现 InputManager（InputManager.ff）：`ParserState` 状态机 + `KeyHandler`/`MouseHandler` spec 契约 + `onKey`/`onMouse` 回调字段 + `feed(b: u8): void`；处理单字节字符、CSI/SS3 转义序列、UTF-8 多字节解码、鼠标 SGR 序列
+- [ ] 4.20 集成 InputManager 至 TuiApp：新增 `let input: InputManager` 公开只读成员；`run()` 中 stdin drain 替换为逐字节 `input.feed()`；`init()` 发送鼠标启用序列（`\x1b[?1000h\x1b[?1006h`），`exit()` 发送禁用序列
+- [ ] 4.21 补充 std_test 用例：在 `test_tui.ff` 中新增事件类型快捷方法、InputManager 解析状态机（VT100/xterm 转义序列、UTF-8、鼠标 SGR）、回调分发等测试
+- [ ] 4.22 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.23 等待人工 Review：开发者审查输入解析与事件分发实现，通过后方可进入第六阶段
 
 ### 第六阶段：TuiApp 内部化 Screen
 
@@ -179,26 +180,26 @@
 > TuiApp 构造函数不再接收 Screen 参数，init() 时根据终端尺寸自动创建 Screen 实例。
 > 用户通过 `app.screen` 访问渲染底座（与 `app.input` 同为公开只读成员）。
 
-- [ ] 4.23 重构 TuiApp 构造函数：移除 Screen 参数，Screen 改为 `let` 公开只读成员
-- [ ] 4.24 重构 init()：进入 Raw Mode 后通过 `uv_tty_get_winsize` 获取终端尺寸，内部创建 Screen 实例
-- [ ] 4.25 更新设计文档与代码示例：`dev/feng-std-tui-app-dev.md` 构造函数、init()、render() 等同步修改
-- [ ] 4.26 更新 std_test 用例：调整 TuiApp 相关测试，Screen 不再外部构造，改为从 TuiApp 获取
-- [ ] 4.27 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.28 等待人工 Review：开发者审查 Screen 内部化重构，通过后方可进入第七阶段
+- [ ] 4.24 重构 TuiApp 构造函数：移除 Screen 参数，Screen 改为 `let` 公开只读成员
+- [ ] 4.25 重构 init()：进入 Raw Mode 后通过 `uv_tty_get_winsize` 获取终端尺寸，内部创建 Screen 实例
+- [ ] 4.26 更新设计文档与代码示例：`dev/feng-std-tui-app-dev.md` 构造函数、init()、render() 等同步修改
+- [ ] 4.27 更新 std_test 用例：调整 TuiApp 相关测试，Screen 不再外部构造，改为从 TuiApp 获取
+- [ ] 4.28 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.29 等待人工 Review：开发者审查 Screen 内部化重构，通过后方可进入第七阶段
 
 ### 第七阶段：视图逻辑层（第 4 层 - 简化版）
 
-- [ ] 4.29 实现 Widget spec 契约 + Text + Button
-- [ ] 4.30 实现简单的线性布局（Row / Column / Stack）
-- [ ] 4.31 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、Text 内容绘制、Button 状态切换等测试
-- [ ] 4.32 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.33 等待人工 Review：开发者审查 Widget 契约设计与实现，通过后方可进入第八阶段
+- [ ] 4.30 实现 Widget spec 契约 + Text + Button
+- [ ] 4.31 实现简单的线性布局（Row / Column / Stack）
+- [ ] 4.32 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、Text 内容绘制、Button 状态切换等测试
+- [ ] 4.33 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.34 等待人工 Review：开发者审查 Widget 契约设计与实现，通过后方可进入第八阶段
 
 ### 第八阶段：测试与验证
 
-- [ ] 4.34 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
-- [ ] 4.35 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.36 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
+- [ ] 4.35 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
+- [ ] 4.36 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.37 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
 
 > **fcts 用例策略**：std 中的功能默认使用 std_test 用例，不需要 fcts 用例。仅当遇到 Feng 语言层面的问题（如语法、语义、类型系统等编译器行为）时，才在 `fcts/fcts_bin/src/` 中新增 fcts 用例进行兼容性验证。
 
