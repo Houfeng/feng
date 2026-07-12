@@ -856,6 +856,65 @@ static void test_generic_type_inferred_field_codegen(void) {
     feng_program_free(program);
 }
 
+/* Regression for CE0005: a single-file lib-target program with a concrete
+ * instantiation call site (`Holder<i32>()`) where the generic type has an
+ * inferred generic field (`seal let items = Inner<T>()`).  The constructor
+ * codegen must substitute T→i32 in the field initializer's nested
+ * constructor call `Inner<T>()` → `Inner<i32>()`, resolving the concrete
+ * instance rather than the open instance (which would fail with CE0005
+ * outside a generic method context). */
+static void test_generic_type_inferred_field_concrete_call_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.inferred_field_concrete;\n"
+        "type Inner<T> {\n"
+        "    var value: T;\n"
+        "    seal func Inner() {}\n"
+        "    func set_value(next: T) { self.value = next; }\n"
+        "    func get_value(): T { return self.value; }\n"
+        "}\n"
+        "type Holder<T> {\n"
+        "    seal let items = Inner<T>();\n"
+        "    seal func Holder() {}\n"
+        "    func push(item: T) { self.items.set_value(item); }\n"
+        "    func pop(): T { return self.items.get_value(); }\n"
+        "}\n"
+        "func run_case(): i32 {\n"
+        "    let h = Holder<i32>();\n"
+        "    h.push(7);\n"
+        "    return h.pop();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "inferred_field_concrete.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (inferred generic field concrete call): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "Holder") != NULL);
+    ASSERT(strstr(out.c_source, "Inner") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 /* Step 3 — spec static member codegen: witness struct slots must omit
  * _subject for static methods/fields, and thunks forward without a
  * subject cast. */
@@ -7365,6 +7424,7 @@ int main(void) {
     test_generic_static_methods_codegen();
     test_generic_type_static_field_codegen();
     test_generic_type_inferred_field_codegen();
+    test_generic_type_inferred_field_concrete_call_codegen();
     test_spec_static_member_witness_codegen();
     test_spec_static_var_witness_codegen();
     test_generic_param_static_method_codegen();

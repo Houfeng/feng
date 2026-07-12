@@ -1316,6 +1316,17 @@ typedef struct CG {
     size_t       ambient_type_param_count;
     char       **ambient_type_param_names;      /* borrowed — do NOT free */
     const struct UserSpec **generic_fn_type_param_constraints; /* borrowed */
+    /* Concrete type-arg substitution scope: when emitting field initializers
+     * for a concrete generic instance (e.g. Holder<i32>), the origin decl's
+     * type parameters (e.g. T) must be substituted with the instance's
+     * concrete type_args (e.g. i32) so that nested constructor calls in
+     * field initializers (e.g. `Inner<T>()` → `Inner<i32>()`) resolve to
+     * the concrete instance rather than the open generic instance.
+     * `concrete_subst_param_count` == 0 means no active substitution. */
+    size_t       concrete_subst_param_count;
+    const FengTypeParam *concrete_subst_params;  /* borrowed — origin decl's type_params */
+    FengTypeRef *const *concrete_subst_type_args; /* borrowed — instance's generic_type_args */
+    size_t       concrete_subst_type_arg_count;
     /* C descriptor argument names for each type param ("_T", "_U", …).
      * Heap-owned; freed when in_generic_fn is cleared. */
     const char **generic_fn_type_param_descs;
@@ -6248,6 +6259,62 @@ static UserType *cg_find_generic_instance_user_type_with_active_context(
     size_t type_arg_count) {
     char *const *context_names = NULL;
     size_t context_count = 0U;
+
+    /* Concrete substitution scope: when emitting field initializers for a
+     * concrete generic instance (e.g. Holder<i32>), type-arg references to
+     * the origin's type parameters (e.g. T in Inner<T>()) must be replaced
+     * with the concrete type_args (e.g. i32) so we look up the concrete
+     * instance Inner<i32> rather than the open instance Inner<T>. */
+    if (cg->concrete_subst_param_count > 0U && type_args != NULL) {
+        bool needs_subst = false;
+        for (size_t i = 0; i < type_arg_count; ++i) {
+            if (type_args[i] != NULL &&
+                type_args[i]->kind == FENG_TYPE_REF_NAMED &&
+                type_args[i]->as.named.segment_count == 1U &&
+                type_args[i]->as.named.type_arg_count == 0U) {
+                FengSlice seg = type_args[i]->as.named.segments[0];
+                for (size_t p = 0; p < cg->concrete_subst_param_count; ++p) {
+                    if (cg->concrete_subst_params[p].name.length == seg.length &&
+                        memcmp(cg->concrete_subst_params[p].name.data, seg.data, seg.length) == 0) {
+                        needs_subst = true;
+                        break;
+                    }
+                }
+                if (needs_subst) break;
+            }
+        }
+        if (needs_subst) {
+            FengTypeRef **subst_args = NULL;
+            bool ok = true;
+            subst_args = (FengTypeRef **)calloc(type_arg_count, sizeof(*subst_args));
+            if (subst_args == NULL) return NULL;
+            for (size_t i = 0; i < type_arg_count; ++i) {
+                subst_args[i] = cg_type_ref_substitute(
+                    type_args[i],
+                    cg->concrete_subst_params,
+                    cg->concrete_subst_param_count,
+                    cg->concrete_subst_type_args);
+                if (subst_args[i] == NULL && type_args[i] != NULL) {
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) {
+                UserType *inst = cg_find_generic_instance_user_type(
+                    cg, origin_decl, subst_args, type_arg_count);
+                for (size_t i = 0; i < type_arg_count; ++i) {
+                    cg_type_ref_free(subst_args[i]);
+                }
+                free(subst_args);
+                if (inst != NULL) return inst;
+            } else {
+                for (size_t i = 0; i < type_arg_count; ++i) {
+                    cg_type_ref_free(subst_args[i]);
+                }
+                free(subst_args);
+            }
+        }
+    }
 
     if (cg->in_generic_fn &&
         cg_type_args_contain_type_param_names(type_args,
@@ -21689,8 +21756,32 @@ static bool cg_emit_user_type_member_initializers(CG *cg,
     bool captures_self = false;
     bool ok = false;
 
+    /* Save concrete-subst scope so we can restore it even on early exit. */
+    size_t saved_subst_count = cg->concrete_subst_param_count;
+    const FengTypeParam *saved_subst_params = cg->concrete_subst_params;
+    FengTypeRef *const *saved_subst_args = cg->concrete_subst_type_args;
+    size_t saved_subst_arg_count = cg->concrete_subst_type_arg_count;
+
     if (cg == NULL || ut == NULL || object_expr == NULL) {
         return false;
+    }
+
+    /* For a concrete generic instance (e.g. Holder<i32>), field initializers
+     * may reference the origin's type parameters (e.g. `Inner<T>()`).  Set
+     * up a concrete substitution scope so nested constructor calls resolve
+     * T → i32 and find the concrete instance Inner<i32> rather than the
+     * open instance Inner<T> (which would fail outside a generic method
+     * context with CE0005).  Only activate when the instance is concrete
+     * (no open context type params) and has a known origin decl. */
+    if (ut->is_generic_instance && ut->generic_origin_decl != NULL &&
+        ut->generic_context_type_param_count == 0U &&
+        ut->generic_origin_decl->kind == FENG_DECL_TYPE &&
+        ut->generic_origin_decl->as.type_decl.type_param_count > 0U &&
+        ut->generic_origin_decl->as.type_decl.type_param_count == ut->generic_type_arg_count) {
+        cg->concrete_subst_param_count = ut->generic_origin_decl->as.type_decl.type_param_count;
+        cg->concrete_subst_params = ut->generic_origin_decl->as.type_decl.type_params;
+        cg->concrete_subst_type_args = ut->generic_type_args;
+        cg->concrete_subst_type_arg_count = ut->generic_type_arg_count;
     }
 
     if (!cg_user_type_member_initializers_capture_self(ut, &captures_self)) {
@@ -21783,6 +21874,11 @@ cleanup:
         cg->cur_scope = saved_scope;
         scope_pop_free(initializer_scope);
     }
+    /* Restore concrete-subst scope. */
+    cg->concrete_subst_param_count = saved_subst_count;
+    cg->concrete_subst_params = saved_subst_params;
+    cg->concrete_subst_type_args = saved_subst_args;
+    cg->concrete_subst_type_arg_count = saved_subst_arg_count;
     return ok;
 }
 

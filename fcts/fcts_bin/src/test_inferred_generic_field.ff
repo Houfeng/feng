@@ -106,5 +106,46 @@ open func test_inferred_generic_field() {
       assert(obj.openOpen.size() == 1, "factory open field size");
       assert(obj.openOpen.entries()[0] == 33, "factory open field value[0]");
     });
+
+    test("same-module concrete generic instance with inferred generic field", () {
+      // 本包定义泛型类型 + 推断泛型字段 + 具化调用点 + 方法调用。
+      // 覆盖单文件（本包）场景：字段初始化器 Inner<T>() 在具化实例
+      // Holder<i32>() 的构造调用 codegen 中需代入 T→i32。
+      let h = LocalHolder<i32>();
+      h.push(42);
+      assert(h.pop() == 42, "local holder push/pop");
+      h.push(99);
+      assert(h.pop() == 99, "local holder push/pop 2nd");
+    });
   });
+}
+
+/** 本包定义的泛型类型，含推断泛型字段，用于验证单文件场景。 */
+type LocalInner<T> {
+  var value: T;
+
+  func LocalInner() {}
+
+  func set_value(next: T) {
+    self.value = next;
+  }
+
+  func get_value(): T {
+    return self.value;
+  }
+}
+
+/** 持有 LocalInner<T> 推断字段的泛型容器。 */
+type LocalHolder<T> {
+  seal let items = LocalInner<T>();
+
+  func LocalHolder() {}
+
+  func push(item: T) {
+    self.items.set_value(item);
+  }
+
+  func pop(): T {
+    return self.items.get_value();
+  }
 }
