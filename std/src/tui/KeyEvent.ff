@@ -74,7 +74,7 @@ open enum SpecialKey {
  *
  * MouseEvent：来自 SGR 鼠标序列 button 高位（+16），100% 可靠。
  */
-seal let MOD_CONTROL: u8 = 1;
+open let MOD_CONTROL: u8 = 1;
 
 /**
  * Alt 修饰键标志位。
@@ -84,7 +84,7 @@ seal let MOD_CONTROL: u8 = 1;
  *
  * MouseEvent：来自 SGR 鼠标序列 button 高位（+8），100% 可靠。
  */
-seal let MOD_ALT: u8 = 2;
+open let MOD_ALT: u8 = 2;
 
 /**
  * Shift 修饰键标志位。
@@ -94,7 +94,7 @@ seal let MOD_ALT: u8 = 2;
  *
  * MouseEvent：来自 SGR 鼠标序列 button 高位（+4），100% 可靠。
  */
-seal let MOD_SHIFT: u8 = 4;
+open let MOD_SHIFT: u8 = 4;
 
 /**
  * KeyEvent 表示一个键盘事件。

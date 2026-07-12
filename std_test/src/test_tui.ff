@@ -844,6 +844,545 @@ func tuiapp_run_drains_stdin_and_exit_stops() {
   check(app.isRunning() == false, "tui/app/drain-exit-running-false");
 }
 
+// ─── Phase 5: KeyEvent 测试 ──────────────────────────────────────────────
+
+func key_mod_constants() {
+  // MOD_CONTROL=1, MOD_ALT=2, MOD_SHIFT=4，位标志互不冲突
+  check(MOD_CONTROL == (u8)1, "tui/key/mod-control-value");
+  check(MOD_ALT == (u8)2, "tui/key/mod-alt-value");
+  check(MOD_SHIFT == (u8)4, "tui/key/mod-shift-value");
+  check((MOD_CONTROL | MOD_ALT | MOD_SHIFT) == (u8)7, "tui/key/mod-combined");
+}
+
+func key_special_key_enum() {
+  // SpecialKey 枚举值通过 KeyEvent 构造间接验证可访问性
+  let e1 = KeyEvent(SpecialKey.escape, 0);
+  let e2 = KeyEvent(SpecialKey.tab, 0);
+  let e3 = KeyEvent(SpecialKey.enter, 0);
+  let e4 = KeyEvent(SpecialKey.backspace, 0);
+  let e5 = KeyEvent(SpecialKey.arrowUp, 0);
+  let e6 = KeyEvent(SpecialKey.arrowDown, 0);
+  let e7 = KeyEvent(SpecialKey.arrowLeft, 0);
+  let e8 = KeyEvent(SpecialKey.arrowRight, 0);
+  let e9 = KeyEvent(SpecialKey.f1, 0);
+  let e10 = KeyEvent(SpecialKey.f12, 0);
+  check(e1.isPrintable() == false, "tui/key/special-escape");
+  check(e2.isPrintable() == false, "tui/key/special-tab");
+  check(e3.isPrintable() == false, "tui/key/special-enter");
+  check(e4.isPrintable() == false, "tui/key/special-backspace");
+  check(e5.isPrintable() == false, "tui/key/special-arrow-up");
+  check(e6.isPrintable() == false, "tui/key/special-arrow-down");
+  check(e7.isPrintable() == false, "tui/key/special-arrow-left");
+  check(e8.isPrintable() == false, "tui/key/special-arrow-right");
+  check(e9.isPrintable() == false, "tui/key/special-f1");
+  check(e10.isPrintable() == false, "tui/key/special-f12");
+}
+
+func key_event_default_ctor() {
+  // 默认构造：content=u32(0), mods=0
+  let e = KeyEvent();
+  check(e.mods == (u8)0, "tui/key/ctor-default-mods");
+  check(e.isControl() == false, "tui/key/ctor-default-is-control");
+  check(e.isShift() == false, "tui/key/ctor-default-is-shift");
+  check(e.isPrintable() == false, "tui/key/ctor-default-is-printable");
+}
+
+func key_event_special_key() {
+  // 构造特殊键事件
+  let e = KeyEvent(SpecialKey.enter, 0);
+  check(e.isPrintable() == false, "tui/key/special-enter-is-printable");
+  check(e.isControl() == false, "tui/key/special-enter-is-control");
+  check(e.isShift() == false, "tui/key/special-enter-is-shift");
+}
+
+func key_event_printable() {
+  // 构造可打印字符事件
+  let e = KeyEvent((u32)0x61, 0);  // 'a'
+  check(e.isPrintable() == true, "tui/key/printable-a-is-printable");
+  check(e.isControl() == false, "tui/key/printable-a-is-control");
+  check(e.isShift() == false, "tui/key/printable-a-is-shift");
+}
+
+func key_event_ctrl_combo() {
+  // Ctrl+A：mods=MOD_CONTROL
+  let e = KeyEvent((u32)0x01, MOD_CONTROL);
+  check(e.isControl() == true, "tui/key/ctrl-a-is-control");
+  check(e.isShift() == false, "tui/key/ctrl-a-is-shift");
+  check(e.isPrintable() == true, "tui/key/ctrl-a-is-printable");
+}
+
+func key_event_shift_arrow() {
+  // Shift+ArrowUp：mods=MOD_SHIFT
+  let e = KeyEvent(SpecialKey.arrowUp, MOD_SHIFT);
+  check(e.isShift() == true, "tui/key/shift-arrow-is-shift");
+  check(e.isControl() == false, "tui/key/shift-arrow-is-control");
+  check(e.isPrintable() == false, "tui/key/shift-arrow-is-printable");
+}
+
+// ─── Phase 5: MouseEvent 测试 ────────────────────────────────────────────
+
+func mouse_action_enum() {
+  // 通过 MouseEvent 构造间接验证枚举值可访问
+  let e1 = MouseEvent(MouseAction.press, MouseButton.none, 0, 0, 0);
+  let e2 = MouseEvent(MouseAction.release, MouseButton.none, 0, 0, 0);
+  let e3 = MouseEvent(MouseAction.move, MouseButton.none, 0, 0, 0);
+  check(e1.action == MouseAction.press, "tui/mouse/action-press");
+  check(e2.action == MouseAction.release, "tui/mouse/action-release");
+  check(e3.action == MouseAction.move, "tui/mouse/action-move");
+}
+
+func mouse_button_enum() {
+  // 通过 MouseEvent 构造间接验证枚举值可访问
+  let e1 = MouseEvent(MouseAction.press, MouseButton.none, 0, 0, 0);
+  let e2 = MouseEvent(MouseAction.press, MouseButton.left, 0, 0, 0);
+  let e3 = MouseEvent(MouseAction.press, MouseButton.middle, 0, 0, 0);
+  let e4 = MouseEvent(MouseAction.press, MouseButton.right, 0, 0, 0);
+  let e5 = MouseEvent(MouseAction.press, MouseButton.wheelUp, 0, 0, 0);
+  let e6 = MouseEvent(MouseAction.press, MouseButton.wheelDown, 0, 0, 0);
+  check(e1.button == MouseButton.none, "tui/mouse/button-none");
+  check(e2.button == MouseButton.left, "tui/mouse/button-left");
+  check(e3.button == MouseButton.middle, "tui/mouse/button-middle");
+  check(e4.button == MouseButton.right, "tui/mouse/button-right");
+  check(e5.button == MouseButton.wheelUp, "tui/mouse/button-wheel-up");
+  check(e6.button == MouseButton.wheelDown, "tui/mouse/button-wheel-down");
+}
+
+func mouse_event_default_ctor() {
+  let e = MouseEvent();
+  check(e.action == MouseAction.press, "tui/mouse/ctor-default-action");
+  check(e.button == MouseButton.none, "tui/mouse/ctor-default-button");
+  check(e.x == (u32)0, "tui/mouse/ctor-default-x");
+  check(e.y == (u32)0, "tui/mouse/ctor-default-y");
+  check(e.mods == (u8)0, "tui/mouse/ctor-default-mods");
+  check(e.isControl() == false, "tui/mouse/ctor-default-is-control");
+  check(e.isAlt() == false, "tui/mouse/ctor-default-is-alt");
+  check(e.isShift() == false, "tui/mouse/ctor-default-is-shift");
+}
+
+func mouse_event_left_click() {
+  let e = MouseEvent(MouseAction.press, MouseButton.left, (u32)9, (u32)4, 0);
+  check(e.action == MouseAction.press, "tui/mouse/left-click-action");
+  check(e.button == MouseButton.left, "tui/mouse/left-click-button");
+  check(e.x == (u32)9, "tui/mouse/left-click-x");
+  check(e.y == (u32)4, "tui/mouse/left-click-y");
+  check(e.mods == (u8)0, "tui/mouse/left-click-mods");
+}
+
+func mouse_event_with_modifiers() {
+  // SGR 鼠标：+4=Shift, +8=Alt, +16=Ctrl
+  let mods: u8 = MOD_SHIFT | MOD_ALT | MOD_CONTROL;
+  let e = MouseEvent(MouseAction.press, MouseButton.left, (u32)0, (u32)0, mods);
+  check(e.isShift() == true, "tui/mouse/mod-shift");
+  check(e.isAlt() == true, "tui/mouse/mod-alt");
+  check(e.isControl() == true, "tui/mouse/mod-control");
+}
+
+func mouse_event_move_action() {
+  let e = MouseEvent(MouseAction.move, MouseButton.none, (u32)5, (u32)3, 0);
+  check(e.action == MouseAction.move, "tui/mouse/move-action");
+  check(e.button == MouseButton.none, "tui/mouse/move-button-none");
+}
+
+// ─── Phase 5: InputManager 测试 ──────────────────────────────────────────
+
+// 模块级捕获变量（回调写入，测试读取验证）
+seal var capturedKey: KeyEvent = KeyEvent();
+seal var keyCaptured: bool = false;
+seal var capturedMouse: MouseEvent = MouseEvent();
+seal var mouseCaptured: bool = false;
+
+func resetCaptures() {
+  keyCaptured = false;
+  mouseCaptured = false;
+}
+
+// 命名函数作为 onKey 回调
+func captureKeyHandler(event: KeyEvent): void {
+  capturedKey = event;
+  keyCaptured = true;
+}
+
+// 命名函数作为 onMouse 回调
+func captureMouseHandler(event: MouseEvent): void {
+  capturedMouse = event;
+  mouseCaptured = true;
+}
+
+func makeInputManager(): InputManager {
+  resetCaptures();
+  let mgr = InputManager();
+  mgr.onKey = captureKeyHandler;
+  mgr.onMouse = captureMouseHandler;
+  return mgr;
+}
+
+func feedBytes(mgr: InputManager, bytes: byte[]) {
+  let len = bytes.length();
+  for var i: int = 0; i < len; i += 1 {
+    mgr.feed((u8)bytes[i]);
+  }
+}
+
+func input_printable_ascii() {
+  let mgr = makeInputManager();
+  mgr.feed((u8)0x41);  // 'A'
+  check(keyCaptured == true, "tui/input/printable-ascii-captured");
+  check(capturedKey.isPrintable() == true, "tui/input/printable-ascii-is-printable");
+  check(capturedKey.mods == (u8)0, "tui/input/printable-ascii-mods");
+}
+
+func input_enter_key() {
+  let mgr = makeInputManager();
+  mgr.feed((u8)0x0D);  // CR = Enter
+  check(keyCaptured == true, "tui/input/enter-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/enter-not-printable");
+}
+
+func input_tab_key() {
+  let mgr = makeInputManager();
+  mgr.feed((u8)0x09);  // HT = Tab
+  check(keyCaptured == true, "tui/input/tab-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/tab-not-printable");
+}
+
+func input_backspace_bs() {
+  let mgr = makeInputManager();
+  mgr.feed((u8)0x08);  // BS = Backspace
+  check(keyCaptured == true, "tui/input/backspace-bs-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/backspace-bs-not-printable");
+}
+
+func input_backspace_del() {
+  let mgr = makeInputManager();
+  mgr.feed((u8)0x7F);  // DEL = Backspace
+  check(keyCaptured == true, "tui/input/backspace-del-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/backspace-del-not-printable");
+}
+
+func input_ctrl_c() {
+  let mgr = makeInputManager();
+  mgr.feed((u8)0x03);  // Ctrl+C
+  check(keyCaptured == true, "tui/input/ctrl-c-captured");
+  check(capturedKey.isControl() == true, "tui/input/ctrl-c-is-control");
+  check(capturedKey.isPrintable() == true, "tui/input/ctrl-c-is-printable");
+}
+
+func input_ctrl_a() {
+  let mgr = makeInputManager();
+  mgr.feed((u8)0x01);  // Ctrl+A
+  check(keyCaptured == true, "tui/input/ctrl-a-captured");
+  check(capturedKey.isControl() == true, "tui/input/ctrl-a-is-control");
+}
+
+func input_ctrl_h_is_backspace_not_control() {
+  // Ctrl+H = 0x08 = BS，优先映射为 SpecialKey.backspace，不设 MOD_CONTROL
+  let mgr = makeInputManager();
+  mgr.feed((u8)0x08);
+  check(keyCaptured == true, "tui/input/ctrl-h-captured");
+  check(capturedKey.isControl() == false, "tui/input/ctrl-h-not-control");
+  check(capturedKey.isPrintable() == false, "tui/input/ctrl-h-not-printable");
+}
+
+func input_ctrl_m_is_enter_not_control() {
+  // Ctrl+M = 0x0D = CR，优先映射为 SpecialKey.enter，不设 MOD_CONTROL
+  let mgr = makeInputManager();
+  mgr.feed((u8)0x0D);
+  check(keyCaptured == true, "tui/input/ctrl-m-captured");
+  check(capturedKey.isControl() == false, "tui/input/ctrl-m-not-control");
+  check(capturedKey.isPrintable() == false, "tui/input/ctrl-m-not-printable");
+}
+
+func input_arrow_up() {
+  let mgr = makeInputManager();
+  let seq: byte[!] = byte[:3];
+  seq[0] = (byte)0x1B;
+  seq[1] = (byte)0x5B;
+  seq[2] = (byte)0x41;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/arrow-up-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/arrow-up-not-printable");
+  check(capturedKey.mods == (u8)0, "tui/input/arrow-up-mods-zero");
+}
+
+func input_arrow_down() {
+  let mgr = makeInputManager();
+  let seq: byte[!] = byte[:3];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x42;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/arrow-down-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/arrow-down-not-printable");
+}
+
+func input_arrow_right() {
+  let mgr = makeInputManager();
+  let seq: byte[!] = byte[:3];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x43;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/arrow-right-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/arrow-right-not-printable");
+}
+
+func input_arrow_left() {
+  let mgr = makeInputManager();
+  let seq: byte[!] = byte[:3];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x44;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/arrow-left-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/arrow-left-not-printable");
+}
+
+func input_home_csi() {
+  let mgr = makeInputManager();
+  let seq: byte[!] = byte[:3];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x48;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/home-csi-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/home-csi-not-printable");
+}
+
+func input_end_csi() {
+  let mgr = makeInputManager();
+  let seq: byte[!] = byte[:3];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x46;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/end-csi-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/end-csi-not-printable");
+}
+
+func input_delete_key() {
+  let mgr = makeInputManager();
+  let seq: byte[!] = byte[:4];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x33; seq[3] = (byte)0x7E;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/delete-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/delete-not-printable");
+}
+
+func input_f1_ss3() {
+  let mgr = makeInputManager();
+  let seq: byte[!] = byte[:3];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x4F; seq[2] = (byte)0x50;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/f1-ss3-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/f1-ss3-not-printable");
+}
+
+func input_f5_csi() {
+  let mgr = makeInputManager();
+  let seq: byte[!] = byte[:5];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x31; seq[3] = (byte)0x35; seq[4] = (byte)0x7E;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/f5-csi-captured");
+  check(capturedKey.isPrintable() == false, "tui/input/f5-csi-not-printable");
+}
+
+func input_shift_arrow_up() {
+  let mgr = makeInputManager();
+  // ESC[1;2A = Shift+Up
+  let seq: byte[!] = byte[:6];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x31; seq[3] = (byte)0x3B; seq[4] = (byte)0x32; seq[5] = (byte)0x41;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/shift-up-captured");
+  check(capturedKey.isShift() == true, "tui/input/shift-up-is-shift");
+  check(capturedKey.isControl() == false, "tui/input/shift-up-not-control");
+}
+
+func input_ctrl_arrow_up() {
+  let mgr = makeInputManager();
+  // ESC[1;5A = Ctrl+Up
+  let seq: byte[!] = byte[:6];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x31; seq[3] = (byte)0x3B; seq[4] = (byte)0x35; seq[5] = (byte)0x41;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/ctrl-up-captured");
+  check(capturedKey.isControl() == true, "tui/input/ctrl-up-is-control");
+  check(capturedKey.isShift() == false, "tui/input/ctrl-up-not-shift");
+}
+
+func input_utf8_chinese() {
+  let mgr = makeInputManager();
+  // "你" = U+4F60 = 0xE4 0xBD 0xA0
+  let seq: byte[!] = byte[:3];
+  seq[0] = (byte)0xE4; seq[1] = (byte)0xBD; seq[2] = (byte)0xA0;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/utf8-chinese-captured");
+  check(capturedKey.isPrintable() == true, "tui/input/utf8-chinese-is-printable");
+  check(capturedKey.mods == (u8)0, "tui/input/utf8-chinese-mods");
+}
+
+func input_utf8_emoji() {
+  let mgr = makeInputManager();
+  // 😀 = U+1F600 = 0xF0 0x9F 0x98 0x80
+  let seq: byte[!] = byte[:4];
+  seq[0] = (byte)0xF0; seq[1] = (byte)0x9F; seq[2] = (byte)0x98; seq[3] = (byte)0x80;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == true, "tui/input/utf8-emoji-captured");
+  check(capturedKey.isPrintable() == true, "tui/input/utf8-emoji-is-printable");
+}
+
+func input_invalid_utf8_resets() {
+  let mgr = makeInputManager();
+  // 0xC0 是 2 字节首字节，期望 1 个续传；0x00 不是合法续传（不在 0x80-0xBF）
+  // 应重置状态机，无回调触发
+  mgr.feed((u8)0xC0);
+  mgr.feed((u8)0x00);
+  check(keyCaptured == false, "tui/input/invalid-utf8-no-callback");
+}
+
+func input_unknown_csi_dropped() {
+  let mgr = makeInputManager();
+  // ESC[Z 是未知 CSI 序列，应丢弃，无回调
+  let seq: byte[!] = byte[:3];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x5A;
+  feedBytes(mgr, (byte[])seq);
+  check(keyCaptured == false, "tui/input/unknown-csi-no-callback");
+}
+
+func input_mouse_left_click() {
+  let mgr = makeInputManager();
+  // ESC[<0;10;5M = 左键点击 (10,5)，转 0-based → (9,4)
+  let seq: byte[!] = byte[:10];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x3C; seq[3] = (byte)0x30; seq[4] = (byte)0x3B;
+  seq[5] = (byte)0x31; seq[6] = (byte)0x30; seq[7] = (byte)0x3B; seq[8] = (byte)0x35; seq[9] = (byte)0x4D;
+  feedBytes(mgr, (byte[])seq);
+  check(mouseCaptured == true, "tui/input/mouse-left-click-captured");
+  check(capturedMouse.action == MouseAction.press, "tui/input/mouse-left-click-action");
+  check(capturedMouse.button == MouseButton.left, "tui/input/mouse-left-click-button");
+  check(capturedMouse.x == (u32)9, "tui/input/mouse-left-click-x");
+  check(capturedMouse.y == (u32)4, "tui/input/mouse-left-click-y");
+  check(capturedMouse.mods == (u8)0, "tui/input/mouse-left-click-mods");
+}
+
+func input_mouse_right_release() {
+  let mgr = makeInputManager();
+  // ESC[<2;10;5m = 右键释放 (10,5)，转 0-based → (9,4)
+  let seq: byte[!] = byte[:10];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x3C; seq[3] = (byte)0x32; seq[4] = (byte)0x3B;
+  seq[5] = (byte)0x31; seq[6] = (byte)0x30; seq[7] = (byte)0x3B; seq[8] = (byte)0x35; seq[9] = (byte)0x6D;
+  feedBytes(mgr, (byte[])seq);
+  check(mouseCaptured == true, "tui/input/mouse-right-release-captured");
+  check(capturedMouse.action == MouseAction.release, "tui/input/mouse-right-release-action");
+  check(capturedMouse.button == MouseButton.right, "tui/input/mouse-right-release-button");
+  check(capturedMouse.x == (u32)9, "tui/input/mouse-right-release-x");
+  check(capturedMouse.y == (u32)4, "tui/input/mouse-right-release-y");
+}
+
+func input_mouse_wheel_up() {
+  let mgr = makeInputManager();
+  // ESC[<64;1;1M = 滚轮上 (1,1)，转 0-based → (0,0)
+  let seq: byte[!] = byte[:10];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x3C; seq[3] = (byte)0x36; seq[4] = (byte)0x34; seq[5] = (byte)0x3B;
+  seq[6] = (byte)0x31; seq[7] = (byte)0x3B; seq[8] = (byte)0x31; seq[9] = (byte)0x4D;
+  feedBytes(mgr, (byte[])seq);
+  check(mouseCaptured == true, "tui/input/mouse-wheel-up-captured");
+  check(capturedMouse.action == MouseAction.press, "tui/input/mouse-wheel-up-action");
+  check(capturedMouse.button == MouseButton.wheelUp, "tui/input/mouse-wheel-up-button");
+  check(capturedMouse.x == (u32)0, "tui/input/mouse-wheel-up-x");
+  check(capturedMouse.y == (u32)0, "tui/input/mouse-wheel-up-y");
+}
+
+func input_mouse_drag_left() {
+  let mgr = makeInputManager();
+  // ESC[<32;10;5M = 按住左键拖动 (10,5)，转 0-based → (9,4)
+  // 32 → '3'=0x33 '2'=0x32，共 11 字节
+  let seq: byte[!] = byte[:11];
+  seq[0] = (byte)0x1B;  // ESC
+  seq[1] = (byte)0x5B;  // '['
+  seq[2] = (byte)0x3C;  // '<'
+  seq[3] = (byte)0x33;  // '3'
+  seq[4] = (byte)0x32;  // '2'
+  seq[5] = (byte)0x3B;  // ';'
+  seq[6] = (byte)0x31;  // '1'
+  seq[7] = (byte)0x30;  // '0'
+  seq[8] = (byte)0x3B;  // ';'
+  seq[9] = (byte)0x35;  // '5'
+  seq[10] = (byte)0x4D; // 'M'
+  feedBytes(mgr, (byte[])seq);
+  check(mouseCaptured == true, "tui/input/mouse-drag-left-captured");
+  check(capturedMouse.action == MouseAction.move, "tui/input/mouse-drag-left-action");
+  check(capturedMouse.button == MouseButton.left, "tui/input/mouse-drag-left-button");
+  check(capturedMouse.x == (u32)9, "tui/input/mouse-drag-left-x");
+  check(capturedMouse.y == (u32)4, "tui/input/mouse-drag-left-y");
+}
+
+func input_mouse_hover_move() {
+  let mgr = makeInputManager();
+  // ESC[<35;10;5M = 悬停移动（无按钮） (10,5)，转 0-based → (9,4)
+  // 35 → '3'=0x33 '5'=0x35，共 11 字节
+  let seq: byte[!] = byte[:11];
+  seq[0] = (byte)0x1B;  // ESC
+  seq[1] = (byte)0x5B;  // '['
+  seq[2] = (byte)0x3C;  // '<'
+  seq[3] = (byte)0x33;  // '3'
+  seq[4] = (byte)0x35;  // '5'
+  seq[5] = (byte)0x3B;  // ';'
+  seq[6] = (byte)0x31;  // '1'
+  seq[7] = (byte)0x30;  // '0'
+  seq[8] = (byte)0x3B;  // ';'
+  seq[9] = (byte)0x35;  // '5'
+  seq[10] = (byte)0x4D; // 'M'
+  feedBytes(mgr, (byte[])seq);
+  check(mouseCaptured == true, "tui/input/mouse-hover-captured");
+  check(capturedMouse.action == MouseAction.move, "tui/input/mouse-hover-action");
+  check(capturedMouse.button == MouseButton.none, "tui/input/mouse-hover-button-none");
+  check(capturedMouse.x == (u32)9, "tui/input/mouse-hover-x");
+  check(capturedMouse.y == (u32)4, "tui/input/mouse-hover-y");
+}
+
+func input_mouse_with_modifiers() {
+  let mgr = makeInputManager();
+  // ESC[<4;5;3M = 左键 + Shift (4=0+4)，坐标 (5,3) → 0-based (4,2)
+  let seq: byte[!] = byte[:9];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x3C; seq[3] = (byte)0x34; seq[4] = (byte)0x3B;
+  seq[5] = (byte)0x35; seq[6] = (byte)0x3B; seq[7] = (byte)0x33; seq[8] = (byte)0x4D;
+  feedBytes(mgr, (byte[])seq);
+  check(mouseCaptured == true, "tui/input/mouse-shift-captured");
+  check(capturedMouse.isShift() == true, "tui/input/mouse-shift-is-shift");
+  check(capturedMouse.button == MouseButton.left, "tui/input/mouse-shift-button");
+}
+
+func input_unregistered_callback_drops_events() {
+  // 不赋值 onKey/onMouse，feed 字节，零值回调执行空操作无异常
+  let mgr = InputManager();  // 不注册回调
+  var caught = false;
+  try mgr.feed((u8)0x41) catch ex: string { caught = true; };
+  check(caught == false, "tui/input/unregistered-key-no-throw");
+  // 测试鼠标序列也不抛异常：ESC[<0;1;1M = 9 字节
+  let seq: byte[!] = byte[:9];
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x3C; seq[3] = (byte)0x30; seq[4] = (byte)0x3B;
+  seq[5] = (byte)0x31; seq[6] = (byte)0x3B; seq[7] = (byte)0x31; seq[8] = (byte)0x4D;
+  var caught2 = false;
+  try feedBytes(mgr, (byte[])seq) catch ex: string { caught2 = true; };
+  check(caught2 == false, "tui/input/unregistered-mouse-no-throw");
+}
+
+func input_build_enable_mouse_sgr_bytes() {
+  // buildEnableMouseSgrBytes() 返回 16 字节，包含 1006h 和 1003h 两条序列
+  let mgr = InputManager();
+  let seq = mgr.buildEnableMouseSgrBytes();
+  check(seq.length() == (int)16, "tui/input/enable-mouse-sgr-length");
+  // 第一条：ESC[?1006h
+  check(seq[0] == (byte)0x1B, "tui/input/enable-mouse-sgr-esc1");
+  check(seq[1] == (byte)0x5B, "tui/input/enable-mouse-sgr-bracket1");
+  check(seq[2] == (byte)0x3F, "tui/input/enable-mouse-sgr-question1");
+  check(seq[7] == (byte)0x68, "tui/input/enable-mouse-sgr-h1");
+  // 第二条：ESC[?1003h
+  check(seq[8] == (byte)0x1B, "tui/input/enable-mouse-sgr-esc2");
+  check(seq[15] == (byte)0x68, "tui/input/enable-mouse-sgr-h2");
+}
+
+func input_build_disable_mouse_sgr_bytes() {
+  // buildDisableMouseSgrBytes() 返回 16 字节，包含 1003l 和 1006l 两条序列
+  let mgr = InputManager();
+  let seq = mgr.buildDisableMouseSgrBytes();
+  check(seq.length() == (int)16, "tui/input/disable-mouse-sgr-length");
+  // 第一条：ESC[?1003l
+  check(seq[0] == (byte)0x1B, "tui/input/disable-mouse-sgr-esc1");
+  check(seq[7] == (byte)0x6C, "tui/input/disable-mouse-sgr-l1");
+  // 第二条：ESC[?1006l
+  check(seq[8] == (byte)0x1B, "tui/input/disable-mouse-sgr-esc2");
+  check(seq[15] == (byte)0x6C, "tui/input/disable-mouse-sgr-l2");
+}
+
 open func run_tui_tests() {
   describe("tui tests", () {
     test("cell_mask_fg()", () { cell_mask_fg(); });
@@ -934,5 +1473,54 @@ open func run_tui_tests() {
     test("tuiapp_render_with_content()", () { tuiapp_render_with_content(); });
     test("tuiapp_run_startup_clears_screen_keeps_buffer()", () { tuiapp_run_startup_clears_screen_keeps_buffer(); });
     test("tuiapp_run_drains_stdin_and_exit_stops()", () { tuiapp_run_drains_stdin_and_exit_stops(); });
+    // ─── Phase 5: KeyEvent ───
+    test("key_mod_constants()", () { key_mod_constants(); });
+    test("key_special_key_enum()", () { key_special_key_enum(); });
+    test("key_event_default_ctor()", () { key_event_default_ctor(); });
+    test("key_event_special_key()", () { key_event_special_key(); });
+    test("key_event_printable()", () { key_event_printable(); });
+    test("key_event_ctrl_combo()", () { key_event_ctrl_combo(); });
+    test("key_event_shift_arrow()", () { key_event_shift_arrow(); });
+    // ─── Phase 5: MouseEvent ───
+    test("mouse_action_enum()", () { mouse_action_enum(); });
+    test("mouse_button_enum()", () { mouse_button_enum(); });
+    test("mouse_event_default_ctor()", () { mouse_event_default_ctor(); });
+    test("mouse_event_left_click()", () { mouse_event_left_click(); });
+    test("mouse_event_with_modifiers()", () { mouse_event_with_modifiers(); });
+    test("mouse_event_move_action()", () { mouse_event_move_action(); });
+    // ─── Phase 5: InputManager ───
+    test("input_printable_ascii()", () { input_printable_ascii(); });
+    test("input_enter_key()", () { input_enter_key(); });
+    test("input_tab_key()", () { input_tab_key(); });
+    test("input_backspace_bs()", () { input_backspace_bs(); });
+    test("input_backspace_del()", () { input_backspace_del(); });
+    test("input_ctrl_c()", () { input_ctrl_c(); });
+    test("input_ctrl_a()", () { input_ctrl_a(); });
+    test("input_ctrl_h_is_backspace_not_control()", () { input_ctrl_h_is_backspace_not_control(); });
+    test("input_ctrl_m_is_enter_not_control()", () { input_ctrl_m_is_enter_not_control(); });
+    test("input_arrow_up()", () { input_arrow_up(); });
+    test("input_arrow_down()", () { input_arrow_down(); });
+    test("input_arrow_right()", () { input_arrow_right(); });
+    test("input_arrow_left()", () { input_arrow_left(); });
+    test("input_home_csi()", () { input_home_csi(); });
+    test("input_end_csi()", () { input_end_csi(); });
+    test("input_delete_key()", () { input_delete_key(); });
+    test("input_f1_ss3()", () { input_f1_ss3(); });
+    test("input_f5_csi()", () { input_f5_csi(); });
+    test("input_shift_arrow_up()", () { input_shift_arrow_up(); });
+    test("input_ctrl_arrow_up()", () { input_ctrl_arrow_up(); });
+    test("input_utf8_chinese()", () { input_utf8_chinese(); });
+    test("input_utf8_emoji()", () { input_utf8_emoji(); });
+    test("input_invalid_utf8_resets()", () { input_invalid_utf8_resets(); });
+    test("input_unknown_csi_dropped()", () { input_unknown_csi_dropped(); });
+    test("input_mouse_left_click()", () { input_mouse_left_click(); });
+    test("input_mouse_right_release()", () { input_mouse_right_release(); });
+    test("input_mouse_wheel_up()", () { input_mouse_wheel_up(); });
+    test("input_mouse_drag_left()", () { input_mouse_drag_left(); });
+    test("input_mouse_hover_move()", () { input_mouse_hover_move(); });
+    test("input_mouse_with_modifiers()", () { input_mouse_with_modifiers(); });
+    test("input_unregistered_callback_drops_events()", () { input_unregistered_callback_drops_events(); });
+    test("input_build_enable_mouse_sgr_bytes()", () { input_build_enable_mouse_sgr_bytes(); });
+    test("input_build_disable_mouse_sgr_bytes()", () { input_build_disable_mouse_sgr_bytes(); });
   });
 }

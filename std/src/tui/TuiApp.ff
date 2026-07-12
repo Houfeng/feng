@@ -248,6 +248,8 @@ open type TuiApp {
   seal var loop: int;
   /** Screen 渲染底座 */
   seal var screen: Screen;
+  /** 输入管理器（公开只读成员，构造时创建，用户通过此注册回调） */
+  let input: InputManager;
   /** 窗口尺寸已变化标志：sigpipe 可读时置位，render() 中检查并清零 */
   seal var resizeRequested: bool;
   /** 是否已初始化（防止重复 init / 重复 exit） */
@@ -276,12 +278,13 @@ open type TuiApp {
   // ─── 构造函数 ─────────────────────────────────────────────────────────────
 
   /**
-   * 构造函数（无外部 fd）：仅保存 Screen 引用，不做 TTY 初始化。
+   * 构造函数（无外部 fd）：保存 Screen 引用，创建 InputManager，不做 TTY 初始化。
    * 阶段四纯渲染场景使用。
    * @param screen - 由调用方创建的 Screen 实例
    */
   func TuiApp(screen: Screen) {
     self.screen = screen;
+    self.input = InputManager();
     self.tty = 0;
     self.loop = 0;
     self.resizeRequested = false;
@@ -293,7 +296,7 @@ open type TuiApp {
   }
 
   /**
-   * 构造函数（有外部 fd）：保存 Screen 引用和外部通知 fd 数组，不做 TTY 初始化。
+   * 构造函数（有外部 fd）：保存 Screen 引用、创建 InputManager、保存外部通知 fd 数组，不做 TTY 初始化。
    * 异步 I/O 库场景使用：fds 为异步 I/O 库的通知 fd（如 epoll/kqueue/self-pipe 管道读端）。
    * TuiApp 只监听 fd 可读事件唤醒渲染，不向 fd 写入、不处理关闭——fd 的生命周期由调用方管理。
    * @param screen - 由调用方创建的 Screen 实例
@@ -301,6 +304,7 @@ open type TuiApp {
    */
   func TuiApp(screen: Screen, fds: i32[]) {
     self.screen = screen;
+    self.input = InputManager();
     self.tty = 0;
     self.loop = 0;
     self.resizeRequested = false;
@@ -358,6 +362,9 @@ open type TuiApp {
     // 注册 SIGWINCH handler（写管道唤醒主循环）
     c_signal(SIGWINCH, &handleSigwinch);
     self.initialized = true;
+    // 启用鼠标 SGR 模式（1006）和全移动报告（1003），由 InputManager 构建序列
+    let mouseEnable = self.input.buildEnableMouseSgrBytes();
+    c_write(STDOUT_FD, &mouseEnable, (uint)16);
   }
 
   /**
@@ -402,13 +409,10 @@ open type TuiApp {
    * 无需等待首个 poll 事件唤醒。
    * 退出由 exit() 置 running = false，下一轮 poll 返回后循环结束。
    *
-   * stdin 排空：Raw Mode 下 Ctrl+C 等按键不再产生信号，而是作为原始字节到达
-   * stdin。阶段四尚无输入解析（阶段五实现），但若不排空 stdin，poll() 会因
-   * stdin 持续可读而立即返回，导致 busy-loop（单核 100% 空转）。因此在阶段四
-   * 中 run() 对 stdin 可读事件做最小处理：每次 poll 返回后读取并丢弃一批字节，
-   * 仅排空缓冲区，不解析、不路由。stdin 为阻塞模式，每次 poll 只读一次（poll
-   * 仅保证一次 read 不阻塞），剩余数据由下一轮 poll 立即返回再读。阶段五在此
-   * 处替换为真正的输入解析状态机。
+   * 输入解析（阶段五）：Raw Mode 下 Ctrl+C 等按键不再产生信号，而是作为原始字节到达
+   * stdin。run() 在 stdin 可读时读取一批字节，逐字节喂入 InputManager.feed()，
+   * 由状态机解析为 KeyEvent/MouseEvent 后内部直接调用 onKey/onMouse 分发。
+   * 回调返回后继续处理下一字节，本轮 poll 的字节全部处理完后调 render()。
    */
   open func run(): void {
     self.running = true;
@@ -426,8 +430,8 @@ open type TuiApp {
     for var i: int = 0; i < self.fds.length(); i += 1 {
       pfds[i + 2] = PollFd(self.fds[i], POLLIN);
     }
-    // stdin 排空缓冲区：Raw Mode 下输入字节到达 stdin，阶段四只排空不解析
-    let drainBuf: byte[!] = byte[:256];
+    // stdin 读取缓冲区：poll 保证至少一次 read 不阻塞；stdin 为阻塞模式
+    let readBuf: byte[!] = byte[:256];
     while self.running {
       // 重置 revents（poll 输出字段，每轮需清零）
       for var i: int = 0; i < total; i += 1 {
@@ -442,13 +446,14 @@ open type TuiApp {
           c_read(self.sigpipeR, &dummy, 1);
           self.resizeRequested = true;
         }
-        // 排空 stdin（阶段四：只读取丢弃，防 busy-loop；阶段五替换为输入解析）
-        // poll 保证至少一次 read 不会阻塞；stdin 为阻塞模式，若用 while 循环
-        // 第二次 read 会挂起。因此每次 poll 只读一次，剩余数据由下一轮 poll
-        // 立即返回 POLLIN 再读——有界工作，非无限空转。
+        // 处理 stdin：逐字节喂入 InputManager 解析分发
         if pfds[0].revents & POLLIN != 0 {
-          let n = c_read(STDIN_FD, &drainBuf, (uint)256);
-          // n > 0: 已读取并丢弃 n 字节；n <= 0: 无数据或错误，忽略
+          let n = c_read(STDIN_FD, &readBuf, (uint)256);
+          if n > 0 {
+            for var i: int = 0; i < n; i += 1 {
+              self.input.feed((u8)readBuf[i]);
+            }
+          }
         }
       }
       self.render();
@@ -456,14 +461,18 @@ open type TuiApp {
   }
 
   /**
-   * 退出 TUI 模式与清理：停止主循环、显示光标、全局重置终端模式、关闭管道、释放 TTY 句柄。
+   * 退出 TUI 模式与清理：停止主循环、禁用鼠标、显示光标、全局重置终端模式、关闭管道、释放 TTY 句柄。
    * 显示光标与 run() 启动时隐藏光标对称，确保终端状态恢复。
+   * 禁用鼠标与 init() 启用时对称。
    * 不退出进程——进程生命周期由调用方控制。
    * 幂等：重复调用安全。
    */
   open func exit(): void {
     if !self.initialized { return; }
     self.running = false;
+    // 禁用鼠标 SGR 模式和全移动报告，由 InputManager 构建序列
+    let mouseDisable = self.input.buildDisableMouseSgrBytes();
+    c_write(STDOUT_FD, &mouseDisable, (uint)16);
     self.screen.showCursor();   // 恢复光标显示，与 run() 启动时隐藏对称
     uv_tty_reset_mode();       // 全局重置，与 atexit handler 一致
     c_close(self.sigpipeR);

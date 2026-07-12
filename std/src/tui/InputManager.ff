@@ -1,0 +1,610 @@
+open module std.tui;
+
+import std;
+
+/**
+ * ParserState 表示输入解析状态机的当前状态。
+ *
+ * VT100/xterm 终端转义序列解析器的状态枚举。状态机逐字节驱动，
+ * 在 ground 态处理单字节字符和 UTF-8 首字节，在 esc/csi/ss3 态
+ * 收集转义序列，在 utf8 态处理多字节续传。
+ */
+open enum ParserState {
+  /** 地面态：等待新字节，处理单字节字符和 UTF-8 首字节 */
+  ground = 0,
+  /** ESC 态：已收到 ESC（0x1B），等待下一个字节决定序列类型 */
+  esc = 1,
+  /** CSI 态：已收到 ESC [，收集参数字节，等待终态字节 */
+  csi = 2,
+  /** SS3 态：已收到 ESC O，等待功能键字节 */
+  ss3 = 3,
+  /** UTF-8 多字节续传态：正在收集 UTF-8 续传字节 */
+  utf8 = 4
+}
+
+/**
+ * InputManager 是终端输入解析器——VT100/xterm 状态机。
+ *
+ * 将 stdin 字节流逐字节喂入 `feed()`，内部通过状态机解析为
+ * `KeyEvent` 或 `MouseEvent`，解析完成后直接调用 `onKey`/`onMouse`
+ * 回调分发。序列未完成时不产生任何输出。
+ *
+ * 处理三类输入：
+ * - 单字节字符（ASCII 可打印 + 控制字符）
+ * - CSI 转义序列（方向键、Home/End、Delete、F5-F12、鼠标 SGR 序列等）
+ * - SS3 转义序列（F1-F4、部分终端的方向键等）
+ * - UTF-8 多字节字符（中文、Emoji 等）
+ *
+ * 回调注入：`onKey`/`onMouse` 为 `open var`，用户直接赋值注册
+ * （`manager.onKey = func(event: KeyEvent) { ... };`）。
+ * Feng 无 null，未显式赋值的 `Action<T>` 自动绑定默认零值（default witness），
+ * 调用时执行空操作——事件被静默丢弃，无异常。
+ */
+open type InputManager {
+
+  /** 状态机当前状态 */
+  seal var state: ParserState;
+  /** CSI 参数累积缓冲（可写数组，固定大小 8 足够覆盖所有 CSI 序列） */
+  seal var params: i32[!];
+  /** params 中已存储的参数个数 */
+  seal var paramCount: i32;
+  /** 当前正在构建的参数值（数字字符累积） */
+  seal var currentParam: i32;
+  /** 是否正在累积数字（用于区分空参数和数字参数） */
+  seal var hasDigits: bool;
+  /** SGR 鼠标序列标志：CSI 中遇到 '<' 表示后续为 SGR 鼠标序列 */
+  seal var isMouse: bool;
+  /** 当前正在解码的 UTF-8 字节累积值 */
+  seal var utf8Codepoint: u32;
+  /** UTF-8 期望续传字节数（剩余） */
+  seal var utf8Remaining: i32;
+  /** 键盘事件回调（用户直接赋值注册） */
+  open var onKey: Action<KeyEvent>;
+  /** 鼠标事件回调（用户直接赋值注册） */
+  open var onMouse: Action<MouseEvent>;
+
+  /**
+   * 默认构造函数：初始化为 ground 态，回调未注册（默认零值，事件静默丢弃）。
+   */
+  func InputManager() {
+    self.state = ParserState.ground;
+    self.params = i32[:8];
+    self.paramCount = 0;
+    self.currentParam = 0;
+    self.hasDigits = false;
+    self.isMouse = false;
+    self.utf8Codepoint = 0;
+    self.utf8Remaining = 0;
+  }
+
+  // ─── 公开 API ───────────────────────────────────────────────────────────
+
+  /**
+   * 喂入一个字节，无返回值。
+   *
+   * 状态机解析，序列完成后内部直接调用 `onKey`/`onMouse` 分发。
+   * 序列未完成时不产生任何输出。非法序列导致状态机重置，已收到的字节丢弃。
+   *
+   * @param b - 输入字节（0-255）
+   */
+  open func feed(b: u8): void {
+    match self.state {
+      ParserState.ground { self.handleGround(b); }
+      ParserState.esc { self.handleEsc(b); }
+      ParserState.csi { self.handleCsi(b); }
+      ParserState.ss3 { self.handleSs3(b); }
+      ParserState.utf8 { self.handleUtf8(b); }
+      else { self.reset(); }
+    }
+  }
+
+  /**
+   * 构建鼠标 SGR 模式启用序列字节，供调用方写入终端。
+   *
+   * 包含两条序列：
+   * - `\x1b[?1006h`：启用 SGR 鼠标模式（精确坐标 + press/release 区分）
+   * - `\x1b[?1003h`：启用全移动报告（所有鼠标移动都触发事件，含悬停）
+   *
+   * InputManager 只负责构建字节，不直接写 stdout——I/O 由 TuiApp 统一管理。
+   * TuiApp.init() 调用此方法获取序列并写入 stdout。
+   * @return 16 字节的 ANSI 转义序列
+   */
+  open func buildEnableMouseSgrBytes(): byte[] {
+    let seq: byte[!] = byte[:16];
+    // \x1b[?1006h
+    seq[0] = (byte)0x1B;   // ESC
+    seq[1] = (byte)0x5B;   // '['
+    seq[2] = (byte)0x3F;   // '?'
+    seq[3] = (byte)0x31;   // '1'
+    seq[4] = (byte)0x30;   // '0'
+    seq[5] = (byte)0x30;   // '0'
+    seq[6] = (byte)0x36;   // '6'
+    seq[7] = (byte)0x68;   // 'h'
+    // \x1b[?1003h
+    seq[8] = (byte)0x1B;   // ESC
+    seq[9] = (byte)0x5B;   // '['
+    seq[10] = (byte)0x3F;  // '?'
+    seq[11] = (byte)0x31;  // '1'
+    seq[12] = (byte)0x30;  // '0'
+    seq[13] = (byte)0x30;  // '0'
+    seq[14] = (byte)0x33;  // '3'
+    seq[15] = (byte)0x68;  // 'h'
+    return (byte[])seq;
+  }
+
+  /**
+   * 构建鼠标 SGR 模式禁用序列字节，供调用方写入终端。
+   *
+   * 包含两条序列（与启用对称，顺序相反）：
+   * - `\x1b[?1003l`：禁用全移动报告
+   * - `\x1b[?1006l`：禁用 SGR 鼠标模式
+   *
+   * InputManager 只负责构建字节，不直接写 stdout——I/O 由 TuiApp 统一管理。
+   * TuiApp.exit() 调用此方法获取序列并写入 stdout。
+   * @return 16 字节的 ANSI 转义序列
+   */
+  open func buildDisableMouseSgrBytes(): byte[] {
+    let seq: byte[!] = byte[:16];
+    // \x1b[?1003l
+    seq[0] = (byte)0x1B;   // ESC
+    seq[1] = (byte)0x5B;   // '['
+    seq[2] = (byte)0x3F;   // '?'
+    seq[3] = (byte)0x31;   // '1'
+    seq[4] = (byte)0x30;   // '0'
+    seq[5] = (byte)0x30;   // '0'
+    seq[6] = (byte)0x33;   // '3'
+    seq[7] = (byte)0x6C;   // 'l'
+    // \x1b[?1006l
+    seq[8] = (byte)0x1B;   // ESC
+    seq[9] = (byte)0x5B;   // '['
+    seq[10] = (byte)0x3F;  // '?'
+    seq[11] = (byte)0x31;  // '1'
+    seq[12] = (byte)0x30;  // '0'
+    seq[13] = (byte)0x30;  // '0'
+    seq[14] = (byte)0x36;  // '6'
+    seq[15] = (byte)0x6C;  // 'l'
+    return (byte[])seq;
+  }
+
+  // ─── 状态机各态处理器（seal，内部实现） ───────────────────────────────
+
+  /**
+   * 地面态处理器：处理单字节字符和 UTF-8 首字节。
+   *
+   * - 0x1B (ESC)：进入 esc 态
+   * - 0x08 (BS) / 0x7F (DEL)：Backspace
+   * - 0x09 (HT)：Tab
+   * - 0x0D (CR)：Enter
+   * - 0x01-0x07,0x0B-0x0C,0x0E-0x1A,0x1C-0x1F：Ctrl+字母（设置 MOD_CONTROL）
+   * - 0x20-0x7E：ASCII 可打印字符
+   * - 0xC0-0xDF：2 字节 UTF-8 首字节
+   * - 0xE0-0xEF：3 字节 UTF-8 首字节
+   * - 0xF0-0xF7：4 字节 UTF-8 首字节
+   * - 0x80-0xBF：非法续传字节（ground 态不应出现），重置
+   * @param b - 输入字节
+   */
+  seal func handleGround(b: u8): void {
+    if b == (u8)0x1B {
+      // ESC：进入 esc 态
+      self.state = ParserState.esc;
+      return;
+    }
+    if b == (u8)0x08 || b == (u8)0x7F {
+      // Backspace（BS 或 DEL）
+      self.emitKey(SpecialKey.backspace, 0);
+      return;
+    }
+    if b == (u8)0x09 {
+      // Tab
+      self.emitKey(SpecialKey.tab, 0);
+      return;
+    }
+    if b == (u8)0x0D {
+      // Enter (CR)
+      self.emitKey(SpecialKey.enter, 0);
+      return;
+    }
+    // Ctrl+字母：纯控制字符 0x01-0x07, 0x0B-0x0C, 0x0E-0x1A, 0x1C-0x1F
+    // 不含 0x08(BS), 0x09(HT), 0x0D(CR), 0x1B(ESC)——这些优先映射为特殊键
+    if (b >= (u8)0x01 && b <= (u8)0x07) ||
+       (b >= (u8)0x0B && b <= (u8)0x0C) ||
+       (b >= (u8)0x0E && b <= (u8)0x1A) ||
+       (b >= (u8)0x1C && b <= (u8)0x1F) {
+      self.emitKeyPrintable((u32)b, MOD_CONTROL);
+      return;
+    }
+    // 0x00 (NUL) 和 0x1B 已处理，其余 0x00-0x1F 的控制字符丢弃
+    if b <= (u8)0x1F {
+      return;
+    }
+    // ASCII 可打印字符 0x20-0x7E
+    if b >= (u8)0x20 && b <= (u8)0x7E {
+      self.emitKeyPrintable((u32)b, 0);
+      return;
+    }
+    // 0x7F 已在前面处理为 Backspace
+    // UTF-8 多字节首字节
+    if b >= (u8)0xC0 && b <= (u8)0xDF {
+      // 2 字节序列
+      self.utf8Codepoint = ((u32)b & (u32)0x1F);
+      self.utf8Remaining = 1;
+      self.state = ParserState.utf8;
+      return;
+    }
+    if b >= (u8)0xE0 && b <= (u8)0xEF {
+      // 3 字节序列
+      self.utf8Codepoint = ((u32)b & (u32)0x0F);
+      self.utf8Remaining = 2;
+      self.state = ParserState.utf8;
+      return;
+    }
+    if b >= (u8)0xF0 && b <= (u8)0xF7 {
+      // 4 字节序列
+      self.utf8Codepoint = ((u32)b & (u32)0x07);
+      self.utf8Remaining = 3;
+      self.state = ParserState.utf8;
+      return;
+    }
+    // 0x80-0xBF：非法续传字节（ground 态不应出现），丢弃
+    // 0xF8-0xFF：非法首字节，丢弃
+  }
+
+  /**
+   * ESC 态处理器：收到 ESC 后的下一个字节。
+   *
+   * - `[`：进入 csi 态
+   * - `O`：进入 ss3 态
+   * - 其他：产出普通字符 KeyEvent（不加 MOD_ALT，ESC 前缀无法 100% 消歧），回到 ground 态
+   * @param b - ESC 后的字节
+   */
+  seal func handleEsc(b: u8): void {
+    if b == (u8)0x5B {
+      // '[' — 进入 CSI 态
+      self.resetCsiState();
+      self.state = ParserState.csi;
+      return;
+    }
+    if b == (u8)0x4F {
+      // 'O' — 进入 SS3 态
+      self.state = ParserState.ss3;
+      return;
+    }
+    // 其他字节：产出普通字符（不加 MOD_ALT），回到 ground 态
+    // 不在 ground 态处理 ESC 单独按键——终端无法区分单独 Esc 和 Alt+X
+    self.emitKeyPrintable((u32)b, 0);
+    self.state = ParserState.ground;
+  }
+
+  /**
+   * CSI 态处理器：收集参数字节，终态字节触发解析。
+   *
+   * 参数字节（0x30-0x3F：数字 0-9 和分隔符 ; < = > ?）累积到 params。
+   * 终态字节（0x40-0x7E）触发序列解析和事件分发。
+   * @param b - CSI 序列中的字节
+   */
+  seal func handleCsi(b: u8): void {
+    // SGR 鼠标序列起始 '<'
+    if b == (u8)0x3C && self.paramCount == 0 && !self.hasDigits {
+      self.isMouse = true;
+      return;
+    }
+    // 数字 0-9：累积到 currentParam
+    if b >= (u8)0x30 && b <= (u8)0x39 {
+      self.currentParam = self.currentParam * 10 + (i32)(b - (u8)0x30);
+      self.hasDigits = true;
+      return;
+    }
+    // ';' 参数分隔符
+    if b == (u8)0x3B {
+      self.pushParam();
+      return;
+    }
+    // 其他参数字节（< = > ? 等）忽略（已在上面处理 '<'）
+    if b >= (u8)0x3C && b <= (u8)0x3F {
+      return;
+    }
+    // 终态字节 0x40-0x7E：触发解析
+    if b >= (u8)0x40 && b <= (u8)0x7E {
+      // 先把最后一个参数推入
+      self.pushParam();
+      if self.isMouse {
+        self.handleSgrMouse(b);
+      } else {
+        self.handleCsiFinal(b);
+      }
+      self.reset();
+      return;
+    }
+    // 非法字节：重置
+    self.reset();
+  }
+
+  /**
+   * SS3 态处理器：处理 SS3 功能键序列。
+   *
+   * - `P`-`S`：F1-F4
+   * - `A`-`D`：方向键（某些终端）
+   * - `H`：Home
+   * - 其他：无效，丢弃
+   * @param b - SS3 序列的终态字节
+   */
+  seal func handleSs3(b: u8): void {
+    // F1-F4
+    if b == (u8)0x50 {       // 'P'
+      self.emitKey(SpecialKey.f1, 0);
+    } else if b == (u8)0x51 {  // 'Q'
+      self.emitKey(SpecialKey.f2, 0);
+    } else if b == (u8)0x52 {  // 'R'
+      self.emitKey(SpecialKey.f3, 0);
+    } else if b == (u8)0x53 {  // 'S'
+      self.emitKey(SpecialKey.f4, 0);
+    } else if b == (u8)0x41 {  // 'A' 方向键（某些终端用 SS3）
+      self.emitKey(SpecialKey.arrowUp, 0);
+    } else if b == (u8)0x42 {  // 'B'
+      self.emitKey(SpecialKey.arrowDown, 0);
+    } else if b == (u8)0x43 {  // 'C'
+      self.emitKey(SpecialKey.arrowRight, 0);
+    } else if b == (u8)0x44 {  // 'D'
+      self.emitKey(SpecialKey.arrowLeft, 0);
+    } else if b == (u8)0x48 {  // 'H' Home（某些终端）
+      self.emitKey(SpecialKey.home, 0);
+    }
+    // 其他字节：无效，丢弃
+    self.reset();
+  }
+
+  /**
+   * UTF-8 续传态处理器：收集续传字节，解码完成后产出 KeyEvent。
+   *
+   * 续传字节必须为 0x80-0xBF。非法字节导致状态机重置，已收到的字节丢弃。
+   * @param b - UTF-8 续传字节
+   */
+  seal func handleUtf8(b: u8): void {
+    // 续传字节必须在 0x80-0xBF 范围
+    if b >= (u8)0x80 && b <= (u8)0xBF {
+      self.utf8Codepoint = (self.utf8Codepoint << (u32)6) | ((u32)b & (u32)0x3F);
+      self.utf8Remaining = self.utf8Remaining - 1;
+      if self.utf8Remaining == 0 {
+        // 解码完成，产出可打印字符
+        self.emitKeyPrintable(self.utf8Codepoint, 0);
+        self.reset();
+      }
+      return;
+    }
+    // 非法续传字节：重置状态机，丢弃已收到的字节
+    self.reset();
+  }
+
+  // ─── CSI 序列解析（seal，内部实现） ───────────────────────────────────
+
+  /**
+   * 解析 CSI 终态字节（非鼠标序列），分发对应的 KeyEvent。
+   *
+   * 根据 params 中的修饰参数（第二个参数 2=Shift, 5=Ctrl 等）设置 mods。
+   * @param final - 终态字节（'A', 'B', 'H', '~' 等）
+   */
+  seal func handleCsiFinal(final: u8): void {
+    // 提取修饰键参数（CSI 序列的第二个参数）
+    // 2=Shift, 3=Alt, 4=Alt+Shift, 5=Ctrl, 6=Ctrl+Shift, 7=Ctrl+Alt, 8=Ctrl+Alt+Shift
+    // KeyEvent 只设 100% 可靠的 MOD_CONTROL 和 MOD_SHIFT，不设 MOD_ALT
+    var mods: u8 = 0;
+    if self.paramCount >= 2 {
+      let modVal = self.params[1];
+      if modVal == 2 || modVal == 4 || modVal == 6 || modVal == 8 {
+        mods |= MOD_SHIFT;
+      }
+      if modVal == 5 || modVal == 6 || modVal == 7 || modVal == 8 {
+        mods |= MOD_CONTROL;
+      }
+    }
+    if final == (u8)0x41 {       // 'A'
+      self.emitKey(SpecialKey.arrowUp, mods);
+    } else if final == (u8)0x42 {  // 'B'
+      self.emitKey(SpecialKey.arrowDown, mods);
+    } else if final == (u8)0x43 {  // 'C'
+      self.emitKey(SpecialKey.arrowRight, mods);
+    } else if final == (u8)0x44 {  // 'D'
+      self.emitKey(SpecialKey.arrowLeft, mods);
+    } else if final == (u8)0x48 {  // 'H'
+      self.emitKey(SpecialKey.home, mods);
+    } else if final == (u8)0x46 {  // 'F'
+      self.emitKey(SpecialKey.end, mods);
+    } else if final == (u8)0x50 {  // 'P' (xterm CSI)
+      self.emitKey(SpecialKey.f1, mods);
+    } else if final == (u8)0x51 {  // 'Q'
+      self.emitKey(SpecialKey.f2, mods);
+    } else if final == (u8)0x52 {  // 'R'
+      self.emitKey(SpecialKey.f3, mods);
+    } else if final == (u8)0x53 {  // 'S'
+      self.emitKey(SpecialKey.f4, mods);
+    } else if final == (u8)0x7E {  // '~'
+      self.handleCsiTilde(mods);
+    }
+    // 其他终态字节：未知，丢弃
+  }
+
+  /**
+   * 解析 CSI ~ 序列（Home/End/PageUp/PageDown/Insert/Delete/F5-F12）。
+   *
+   * 根据 params[0] 的值映射到对应的 SpecialKey。
+   * @param mods - 修饰键标志
+   */
+  seal func handleCsiTilde(mods: u8): void {
+    if self.paramCount < 1 {
+      return;
+    }
+    let code = self.params[0];
+    match code {
+      1 { self.emitKey(SpecialKey.home, mods); }
+      4 { self.emitKey(SpecialKey.end, mods); }
+      5 { self.emitKey(SpecialKey.pageUp, mods); }
+      6 { self.emitKey(SpecialKey.pageDown, mods); }
+      2 { self.emitKey(SpecialKey.insert, mods); }
+      3 { self.emitKey(SpecialKey.delete, mods); }
+      15 { self.emitKey(SpecialKey.f5, mods); }
+      17 { self.emitKey(SpecialKey.f6, mods); }
+      18 { self.emitKey(SpecialKey.f7, mods); }
+      19 { self.emitKey(SpecialKey.f8, mods); }
+      20 { self.emitKey(SpecialKey.f9, mods); }
+      21 { self.emitKey(SpecialKey.f10, mods); }
+      23 { self.emitKey(SpecialKey.f11, mods); }
+      24 { self.emitKey(SpecialKey.f12, mods); }
+      else { /* 未知 ~ 序列，丢弃 */ }
+    }
+  }
+
+  // ─── SGR 鼠标序列解析（seal，内部实现） ───────────────────────────────
+
+  /**
+   * 解析 SGR 鼠标序列。
+   *
+   * SGR 鼠标格式：`ESC [ < button ; x ; y M/m`
+   * - M = press, m = release
+   * - button 值：低 2 位=按钮(0=left,1=middle,2=right,3=none)，
+   *   bit5(32)=motion, bit6(64)=wheelUp, bit7(128)=wheelDown,
+   *   高位 4=Shift, 8=Alt, 16=Ctrl
+   * - x/y 为 1-based，转换为 0-based
+   * @param final - 终态字节（'M'=press 或 'm'=release）
+   */
+  seal func handleSgrMouse(final: u8): void {
+    if self.paramCount < 3 {
+      return;
+    }
+    let btnVal = self.params[0];
+    let x = self.params[1];
+    let y = self.params[2];
+    // 修饰键：高位 4=Shift, 8=Alt, 16=Ctrl
+    var mods: u8 = 0;
+    if (btnVal & 4) != 0 { mods |= MOD_SHIFT; }
+    if (btnVal & 8) != 0 { mods |= MOD_ALT; }
+    if (btnVal & 16) != 0 { mods |= MOD_CONTROL; }
+    // 判断按钮和动作
+    var action: MouseAction = MouseAction.press;
+    var button: MouseButton = MouseButton.none;
+    // 滚轮
+    if btnVal == 64 {
+      button = MouseButton.wheelUp;
+      action = MouseAction.press;
+    } else if btnVal == 65 {
+      button = MouseButton.wheelDown;
+      action = MouseAction.press;
+    } else if (btnVal & 32) != 0 {
+      // motion 标志（32）：拖动或悬停移动
+      action = MouseAction.move;
+      let lowBits = btnVal & 3;
+      if lowBits == 0 {
+        button = MouseButton.left;
+      } else if lowBits == 1 {
+        button = MouseButton.middle;
+      } else if lowBits == 2 {
+        button = MouseButton.right;
+      } else {
+        button = MouseButton.none; // 悬停移动（无按钮）
+      }
+    } else {
+      // 普通 press/release
+      if final == (u8)0x6D {
+        // 'm' = release
+        action = MouseAction.release;
+      } else {
+        // 'M' = press
+        action = MouseAction.press;
+      }
+      let lowBits = btnVal & 3;
+      if lowBits == 0 {
+        button = MouseButton.left;
+      } else if lowBits == 1 {
+        button = MouseButton.middle;
+      } else if lowBits == 2 {
+        button = MouseButton.right;
+      } else {
+        button = MouseButton.none;
+      }
+    }
+    // 坐标转换：终端 1-based → 0-based
+    let mx = (u32)(x - 1);
+    let my = (u32)(y - 1);
+    self.emitMouse(action, button, mx, my, mods);
+  }
+
+  // ─── 事件分发（seal，内部实现） ─────────────────────────────────────────
+
+  /**
+   * 构造 KeyEvent(content=SpecialKey) 并调用 onKey 分发。
+   *
+   * Feng 无 null，未赋值的 `Action<T>` 自动绑定默认零值，调用时执行空操作
+   * ——事件被静默丢弃，无异常。
+   * @param key - SpecialKey 枚举值
+   * @param mods - 修饰键位标志
+   */
+  seal func emitKey(key: SpecialKey, mods: u8): void {
+    let event = KeyEvent(key, mods);
+    self.onKey(event);
+  }
+
+  /**
+   * 构造 KeyEvent(content=u32 码点) 并调用 onKey 分发。
+   *
+   * @param codepoint - Unicode 码点
+   * @param mods - 修饰键位标志
+   */
+  seal func emitKeyPrintable(codepoint: u32, mods: u8): void {
+    let content: Union<SpecialKey, u32> = codepoint;
+    let event = KeyEvent(content, mods);
+    self.onKey(event);
+  }
+
+  /**
+   * 构造 MouseEvent 并调用 onMouse 分发。
+   *
+   * @param action - 鼠标动作类型
+   * @param button - 鼠标按钮
+   * @param x - 列坐标（0-based）
+   * @param y - 行坐标（0-based）
+   * @param mods - 修饰键位标志
+   */
+  seal func emitMouse(action: MouseAction, button: MouseButton, x: u32, y: u32, mods: u8): void {
+    let event = MouseEvent(action, button, x, y, mods);
+    self.onMouse(event);
+  }
+
+  // ─── 状态管理（seal，内部实现） ─────────────────────────────────────────
+
+  /**
+   * 重置状态机到 ground 态，清空所有累积状态。
+   */
+  seal func reset(): void {
+    self.state = ParserState.ground;
+    self.paramCount = 0;
+    self.currentParam = 0;
+    self.hasDigits = false;
+    self.isMouse = false;
+    self.utf8Codepoint = 0;
+    self.utf8Remaining = 0;
+  }
+
+  /**
+   * 重置 CSI 相关状态（进入 csi 态时调用）。
+   */
+  seal func resetCsiState(): void {
+    self.paramCount = 0;
+    self.currentParam = 0;
+    self.hasDigits = false;
+    self.isMouse = false;
+  }
+
+  /**
+   * 将当前累积的参数推入 params 数组。
+   *
+   * 如果没有累积数字（hasDigits=false），推入 0（缺省参数补 0）。
+   * params 数组固定大小 8，超出时丢弃（所有标准 CSI 序列不超过 8 个参数）。
+   */
+  seal func pushParam(): void {
+    if self.paramCount < 8 {
+      self.params[self.paramCount] = self.currentParam;
+      self.paramCount = self.paramCount + 1;
+    }
+    self.currentParam = 0;
+    self.hasDigits = false;
+  }
+}

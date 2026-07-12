@@ -139,6 +139,9 @@ static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
                                             const CGType *type,
                                             FengToken token);
 static void cg_append_type_ref_display(Buf *out, const FengTypeRef *ref);
+static const FengProgram *cg_type_ref_decl_identity(const CG *cg,
+                                                    const FengTypeRef *ref,
+                                                    FengSlice *out_name);
 /* Qualifies single-segment user type names to fully-qualified form for debug
  * display_type strings. Only used in the debug path. */
 static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
@@ -1145,7 +1148,8 @@ typedef struct GenericTypeDecl {
 typedef struct CG {
     /* Output sections concatenated at the end. */
     Buf headers;        /* #include / extern decls / forward decls */
-    Buf type_defs;      /* struct/enum defs (Phase 1A iter 2) */
+    Buf enum_defs;      /* enum defs; isolated so lazy emission stays file-scoped */
+    Buf type_defs;      /* struct/spec defs (Phase 1A iter 2) */
     Buf statics;        /* static caches: literal slots */
     Buf fn_protos;      /* forward declarations for free fn / methods */
     Buf fn_defs;        /* function bodies */
@@ -4077,13 +4081,13 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
     bool ext_visible = (owner_program != NULL &&
                         owner_program->module_visibility == FENG_VISIBILITY_PUBLIC &&
                         decl->visibility == FENG_VISIBILITY_PUBLIC);
-    buf_append_fmt(&cg->type_defs, "typedef int32_t %s;\n", typedef_name);
-    buf_append_fmt(&cg->type_defs,
+    buf_append_fmt(&cg->enum_defs, "typedef int32_t %s;\n", typedef_name);
+    buf_append_fmt(&cg->enum_defs,
                    ext_visible
                        ? "const FengTrivialDescriptor %s __attribute__((weak)) = {\n"
                        : "static const FengTrivialDescriptor %s = {\n",
                    descriptor_name);
-    buf_append_fmt(&cg->type_defs,
+    buf_append_fmt(&cg->enum_defs,
                    "    .name = \"%s.%.*s\",\n"
                    "    .size = sizeof(%s),\n"
                    "    .equal_fn = NULL,\n"
@@ -4106,14 +4110,14 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
             return cg_fail(cg, item->token, "IE0001", "codegen: out of memory emitting enum item constant");
         }
 
-        buf_append_fmt(&cg->type_defs,
+        buf_append_fmt(&cg->enum_defs,
                        "static const %s %s = ((int32_t)%" PRId64 ");\n",
                        typedef_name,
                        item_c_name,
                        value);
         free(item_c_name);
     }
-    buf_append_cstr(&cg->type_defs, "\n");
+    buf_append_cstr(&cg->enum_defs, "\n");
 
     free(typedef_name);
     free(descriptor_name);
@@ -5870,7 +5874,7 @@ static bool cg_type_ref_equal(const FengTypeRef *left, const FengTypeRef *right)
     return false;
 }
 
-/* Recursively qualifies single-segment user type names to fully-qualified form
+/* Recursively qualifies declaration-backed type names to fully-qualified form
  * (e.g. "JsonValue" → "std.text.JsonValue") for debug display_type strings. */
 static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
                                               const FengTypeRef *ref) {
@@ -5880,50 +5884,9 @@ static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
 
     switch (ref->kind) {
         case FENG_TYPE_REF_NAMED: {
-            const FengProgram *owner = NULL;
-
-            if (ref->as.named.segment_count == 1U) {
-                FengSlice name = ref->as.named.segments[0];
-                const UserType *ut = cg_find_user_type(cg, name.data,
-                                                       name.length);
-                if (ut != NULL && ut->owner_program != NULL) {
-                    owner = ut->owner_program;
-                } else {
-                    const UserSpec *us = cg_find_user_spec(cg, name.data,
-                                                           name.length);
-                    if (us != NULL && us->owner_program != NULL) {
-                        owner = us->owner_program;
-                    }
-                }
-                if (owner == NULL) {
-                    for (size_t gi = 0; gi < cg->generic_type_decl_count; ++gi) {
-                        const GenericTypeDecl *gd = &cg->generic_type_decls[gi];
-                        if (gd->decl != NULL &&
-                            gd->decl->kind == FENG_DECL_TYPE &&
-                            gd->decl->as.type_decl.name.length == name.length &&
-                            memcmp(gd->decl->as.type_decl.name.data,
-                                   name.data, name.length) == 0 &&
-                            gd->owner_program != NULL) {
-                            owner = gd->owner_program;
-                            break;
-                        }
-                    }
-                }
-                if (owner == NULL) {
-                    for (size_t gi = 0; gi < cg->generic_spec_decl_count; ++gi) {
-                        const GenericSpecDecl *gd = &cg->generic_spec_decls[gi];
-                        if (gd->decl != NULL &&
-                            gd->decl->kind == FENG_DECL_SPEC &&
-                            gd->decl->as.spec_decl.name.length == name.length &&
-                            memcmp(gd->decl->as.spec_decl.name.data,
-                                   name.data, name.length) == 0 &&
-                            gd->owner_program != NULL) {
-                            owner = gd->owner_program;
-                            break;
-                        }
-                    }
-                }
-            }
+            FengSlice decl_name = {0};
+            const FengProgram *owner =
+                cg_type_ref_decl_identity(cg, ref, &decl_name);
 
             result = calloc(1U, sizeof *result);
             if (result == NULL) return NULL;
@@ -5943,8 +5906,7 @@ static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
                 for (size_t i = 0; i < mod_count; ++i) {
                     result->as.named.segments[i] = owner->module_segments[i];
                 }
-                result->as.named.segments[mod_count] =
-                    ref->as.named.segments[0];
+                result->as.named.segments[mod_count] = decl_name;
             } else {
                 result->as.named.segment_count = ref->as.named.segment_count;
                 result->as.named.segments =
@@ -6031,37 +5993,7 @@ static void cg_append_type_ref_display(Buf *out, const FengTypeRef *ref) {
     }
 }
 
-static bool cg_append_type_ref_symbol(Buf *out, const FengTypeRef *ref) {
-    if (ref == NULL) return false;
-    switch (ref->kind) {
-        case FENG_TYPE_REF_NAMED:
-            for (size_t i = 0; i < ref->as.named.segment_count; ++i) {
-                char *san = cg_sanitize(ref->as.named.segments[i].data,
-                                        ref->as.named.segments[i].length);
-                if (!san) return false;
-                if (i) buf_append_cstr(out, "__");
-                buf_append_cstr(out, san);
-                free(san);
-            }
-            if (ref->as.named.type_arg_count > 0U) {
-                buf_append_cstr(out, "__G");
-                for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
-                    buf_append_cstr(out, "__");
-                    if (!cg_append_type_ref_symbol(out, ref->as.named.type_args[i])) return false;
-                }
-            }
-            return true;
-        case FENG_TYPE_REF_POINTER:
-            buf_append_cstr(out, "P__");
-            return cg_append_type_ref_symbol(out, ref->as.inner);
-        case FENG_TYPE_REF_ARRAY:
-            buf_append_cstr(out, ref->array_element_writable ? "AW__" : "A__");
-            return cg_append_type_ref_symbol(out, ref->as.inner);
-    }
-    return false;
-}
-
-static const GenericTypeDecl *cg_find_generic_type_decl(CG *cg,
+static const GenericTypeDecl *cg_find_generic_type_decl(const CG *cg,
                                                         const FengTypeRef *ref) {
     const GenericTypeDecl *visible = NULL;
 
@@ -6105,7 +6037,7 @@ static const GenericTypeDecl *cg_find_generic_type_decl_by_decl(CG *cg,
     return NULL;
 }
 
-static const GenericSpecDecl *cg_find_generic_spec_decl(CG *cg,
+static const GenericSpecDecl *cg_find_generic_spec_decl(const CG *cg,
                                                         const FengTypeRef *ref) {
     const GenericSpecDecl *visible = NULL;
 
@@ -6134,6 +6066,148 @@ static const GenericSpecDecl *cg_find_generic_spec_decl(CG *cg,
         }
     }
     return visible;
+}
+
+/* Resolve a named type reference to the declaration identity used for stable
+ * cross-package generic-instance symbols. Type parameters and builtins have
+ * no declaration owner and intentionally remain encoded by their own name. */
+static const FengProgram *cg_type_ref_decl_identity(const CG *cg,
+                                                    const FengTypeRef *ref,
+                                                    FengSlice *out_name) {
+    const UserType *user_type;
+    const UserSpec *user_spec;
+    const GenericTypeDecl *generic_type;
+    const GenericSpecDecl *generic_spec;
+    const FengProgram *visible_enum_owner = NULL;
+    FengSlice visible_enum_name = {0};
+
+    if (cg == NULL || ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
+        out_name == NULL) {
+        return NULL;
+    }
+
+    user_type = cg_find_user_type_by_ref(cg, ref);
+    if (user_type != NULL && user_type->decl != NULL) {
+        *out_name = user_type->decl->as.type_decl.name;
+        return user_type->owner_program;
+    }
+    user_spec = cg_find_user_spec_by_ref(cg, ref);
+    if (user_spec != NULL && user_spec->decl != NULL) {
+        *out_name = user_spec->decl->as.spec_decl.name;
+        return user_spec->owner_program;
+    }
+    generic_type = cg_find_generic_type_decl(cg, ref);
+    if (generic_type != NULL && generic_type->decl != NULL) {
+        *out_name = generic_type->decl->as.type_decl.name;
+        return generic_type->owner_program;
+    }
+    generic_spec = cg_find_generic_spec_decl(cg, ref);
+    if (generic_spec != NULL && generic_spec->decl != NULL) {
+        *out_name = generic_spec->decl->as.spec_decl.name;
+        return generic_spec->owner_program;
+    }
+
+    if (cg->analysis == NULL) return NULL;
+    for (size_t module_index = 0U;
+         module_index < cg->analysis->module_count;
+         ++module_index) {
+        const FengSemanticModule *module = &cg->analysis->modules[module_index];
+
+        for (size_t program_index = 0U;
+             program_index < module->program_count;
+             ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+
+            for (size_t decl_index = 0U;
+                 decl_index < program->declaration_count;
+                 ++decl_index) {
+                const FengDecl *decl = program->declarations[decl_index];
+
+                if (decl->kind != FENG_DECL_ENUM ||
+                    !cg_named_type_ref_targets_owner_program(cg,
+                                                             ref,
+                                                             program,
+                                                             decl->visibility,
+                                                             decl->as.enum_decl.name)) {
+                    continue;
+                }
+                if (cg->cur_program != NULL && program == cg->cur_program) {
+                    *out_name = decl->as.enum_decl.name;
+                    return program;
+                }
+                if (visible_enum_owner == NULL) {
+                    visible_enum_owner = program;
+                    visible_enum_name = decl->as.enum_decl.name;
+                }
+            }
+        }
+    }
+    if (visible_enum_owner != NULL) {
+        *out_name = visible_enum_name;
+    }
+    return visible_enum_owner;
+}
+
+/* Append a canonical type-reference symbol fragment. Named declaration types
+ * use their real module path so local short names, aliases, and imported
+ * fully-qualified references produce the same cross-package symbol. */
+static bool cg_append_type_ref_symbol(CG *cg,
+                                      Buf *out,
+                                      const FengTypeRef *ref) {
+    if (ref == NULL) return false;
+    switch (ref->kind) {
+        case FENG_TYPE_REF_NAMED: {
+            FengSlice decl_name = {0};
+            const FengProgram *owner =
+                cg_type_ref_decl_identity(cg, ref, &decl_name);
+
+            if (owner != NULL) {
+                for (size_t i = 0U; i < owner->module_segment_count; ++i) {
+                    char *san = cg_sanitize(owner->module_segments[i].data,
+                                            owner->module_segments[i].length);
+                    if (san == NULL) return false;
+                    if (i > 0U) buf_append_cstr(out, "__");
+                    buf_append_cstr(out, san);
+                    free(san);
+                }
+                if (owner->module_segment_count > 0U) {
+                    buf_append_cstr(out, "__");
+                }
+                char *san = cg_sanitize(decl_name.data, decl_name.length);
+                if (san == NULL) return false;
+                buf_append_cstr(out, san);
+                free(san);
+            } else {
+                for (size_t i = 0; i < ref->as.named.segment_count; ++i) {
+                    char *san = cg_sanitize(ref->as.named.segments[i].data,
+                                            ref->as.named.segments[i].length);
+                    if (!san) return false;
+                    if (i) buf_append_cstr(out, "__");
+                    buf_append_cstr(out, san);
+                    free(san);
+                }
+            }
+            if (ref->as.named.type_arg_count > 0U) {
+                buf_append_cstr(out, "__G");
+                for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
+                    buf_append_cstr(out, "__");
+                    if (!cg_append_type_ref_symbol(cg,
+                                                   out,
+                                                   ref->as.named.type_args[i])) {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+        case FENG_TYPE_REF_POINTER:
+            buf_append_cstr(out, "P__");
+            return cg_append_type_ref_symbol(cg, out, ref->as.inner);
+        case FENG_TYPE_REF_ARRAY:
+            buf_append_cstr(out, ref->array_element_writable ? "AW__" : "A__");
+            return cg_append_type_ref_symbol(cg, out, ref->as.inner);
+    }
+    return false;
 }
 
 static UserSpec *cg_find_generic_instance_user_spec_with_context(CG *cg,
@@ -6595,7 +6669,7 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     buf_append_cstr(&symbol, "__G");
     for (size_t i = 0; i < type_arg_count; ++i) {
         buf_append_cstr(&symbol, "__");
-        if (!cg_append_type_ref_symbol(&symbol, type_args[i])) {
+        if (!cg_append_type_ref_symbol(cg, &symbol, type_args[i])) {
             free(base_san);
             buf_free(&symbol);
             return false;
@@ -7035,7 +7109,7 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
     buf_append_cstr(&symbol, "__G");
     for (size_t i = 0; i < type_arg_count; ++i) {
         buf_append_cstr(&symbol, "__");
-        if (!cg_append_type_ref_symbol(&symbol, type_args[i])) {
+        if (!cg_append_type_ref_symbol(cg, &symbol, type_args[i])) {
             free(base_san);
             buf_free(&symbol);
             return false;
@@ -9568,7 +9642,7 @@ static char *cg_builtin_fit_c_prefix(CG *cg, const FengDecl *decl) {
     }
 
     buf_init(&target_symbol);
-    if (!cg_append_type_ref_symbol(&target_symbol, decl->as.fit_decl.target) ||
+    if (!cg_append_type_ref_symbol(cg, &target_symbol, decl->as.fit_decl.target) ||
         target_symbol.data == NULL) {
         free(owner_mangle);
         buf_free(&target_symbol);
@@ -21631,10 +21705,6 @@ static bool cg_emit_user_field_default_value(CG *cg,
                                              FengToken blame) {
     if (cg == NULL || object_expr == NULL || uf == NULL) {
         return false;
-    }
-
-    if (uf->type != NULL && uf->type->kind == CG_TYPE_CALLABLE) {
-        return true;
     }
 
     if (uf->type != NULL && uf->type->kind == CG_TYPE_GENERIC_PARAM) {
@@ -38677,6 +38747,8 @@ static char *cg_finalize(CG *cg) {
         "#endif\n\n");
     if (cg->headers.length) buf_append(&out, cg->headers.data, cg->headers.length);
     buf_append_cstr(&out, "\n");
+    if (cg->enum_defs.length) buf_append(&out, cg->enum_defs.data, cg->enum_defs.length);
+    buf_append_cstr(&out, "\n");
     if (cg->type_defs.length) buf_append(&out, cg->type_defs.data, cg->type_defs.length);
     buf_append_cstr(&out, "\n");
     if (cg->statics.length) buf_append(&out, cg->statics.data, cg->statics.length);
@@ -38694,6 +38766,7 @@ static void cg_dispose(CG *cg) {
     feng_codegen_maping_info_dispose(&cg->debug_info);
     free(cg->debug_line_logical_uri);
     buf_free(&cg->headers);
+    buf_free(&cg->enum_defs);
     buf_free(&cg->type_defs);
     buf_free(&cg->statics);
     buf_free(&cg->fn_protos);

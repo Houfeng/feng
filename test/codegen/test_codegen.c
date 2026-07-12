@@ -3037,6 +3037,201 @@ static void test_imported_enum_codegen_emits_visible_symbols(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+static void test_imported_enum_union_default_codegen_stays_file_scoped(void) {
+    static const char *kImportedSource =
+        "open module vendor.choice;\n"
+        "open enum Status { Ready = 7, Done = 9 }\n"
+        "open spec Choice: Status | int;\n";
+    static const char *kConsumerSource =
+        "module demo.choiceconsumer;\n"
+        "import vendor.choice;\n"
+        "func accept(value: Choice): int {\n"
+        "    return 0;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    const char *enum_decl;
+    const char *union_init;
+
+    imported_source_fixture_init(&fixture,
+                                 "tests/imported_enum_union_vendor.ff",
+                                 kImportedSource);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
+
+    program = parse_or_die(kConsumerSource, "tests/imported_enum_union_consumer.ff");
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+
+    enum_decl = strstr(out.c_source,
+                       "typedef int32_t FengEnum__vendor__choice__Status;");
+    union_init = strstr(out.c_source,
+                        "static void FengSpecAggInit__vendor__choice__Choice");
+    ASSERT(enum_decl != NULL);
+    ASSERT(union_init != NULL);
+    ASSERT(enum_decl < union_init);
+    ASSERT(count_substr(out.c_source,
+                        "typedef int32_t FengEnum__vendor__choice__Status;") == 1U);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+static void test_imported_generic_enum_argument_uses_canonical_identity(void) {
+    static const char *kImportedSource =
+        "open module vendor.event;\n"
+        "open enum Status { Ready = 7, Done = 9 }\n"
+        "open spec Choice<T1, T2>: T1 | T2;\n"
+        "@value\n"
+        "open type Event {\n"
+        "    let content: Choice<Status, u32>;\n"
+        "    func Event(content: Choice<Status, u32>) {\n"
+        "        self.content = content;\n"
+        "    }\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "module demo.eventconsumer;\n"
+        "import vendor.event;\n"
+        "func read(event: Event): int {\n"
+        "    return 0;\n"
+        "}\n";
+    static const char *kCanonicalConstructor =
+        "Feng__vendor__event__Event__ctor__Event__from__S_FengSpecValue__"
+        "vendor__event__Choice__G__vendor__event__Status__u32";
+    static const char *kCanonicalDisplayType =
+        "vendor.event.Choice<vendor.event.Status, u32>";
+    FengCodegenMapingSourceMapping provider_mapping = {
+        .source_path = "tests/imported_generic_enum_vendor.ff",
+        .package_name = "vendor",
+        .package_root = "tests",
+    };
+    FengCodegenMapingSourceMapping consumer_mapping = {
+        .source_path = "tests/imported_generic_enum_consumer.ff",
+        .package_name = "demo",
+        .package_root = "tests",
+    };
+    FengCodegenOptions provider_codegen_options = {
+        .debug_source_mappings = &provider_mapping,
+        .debug_source_mapping_count = 1U,
+    };
+    FengCodegenOptions consumer_codegen_options = {
+        .debug_source_mappings = &consumer_mapping,
+        .debug_source_mapping_count = 1U,
+    };
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions analyze_options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput provider_out = {0};
+    FengCodegenOutput consumer_out = {0};
+    FengCodegenError provider_cgerr = {0};
+    FengCodegenError consumer_cgerr = {0};
+    bool provider_field_found = false;
+    bool consumer_field_found = false;
+
+    imported_source_fixture_init(&fixture,
+                                 "tests/imported_generic_enum_vendor.ff",
+                                 kImportedSource);
+    ASSERT(feng_codegen_emit_program(fixture.analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     &provider_codegen_options,
+                                     &provider_out,
+                                     &provider_cgerr));
+    ASSERT(provider_out.c_source != NULL);
+
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    analyze_options.target = FENG_COMPILE_TARGET_LIB;
+    analyze_options.imported_modules = &query;
+    analyze_options.pointer_size = sizeof(void *);
+    program = parse_or_die(kConsumerSource,
+                           "tests/imported_generic_enum_consumer.ff");
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &analyze_options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     &consumer_codegen_options,
+                                     &consumer_out,
+                                     &consumer_cgerr));
+    ASSERT(consumer_out.c_source != NULL);
+    ASSERT(strstr(provider_out.c_source, kCanonicalConstructor) != NULL);
+    ASSERT(strstr(consumer_out.c_source, kCanonicalConstructor) != NULL);
+
+    for (size_t i = 0U; i < provider_out.debug_info.variable_count; ++i) {
+        const FengCodegenMapingVariableRecord *variable =
+            &provider_out.debug_info.variables[i];
+        if (variable->kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD &&
+            variable->display_name != NULL &&
+            strcmp(variable->display_name, "content") == 0 &&
+            variable->parent_display_type != NULL &&
+            strcmp(variable->parent_display_type, "vendor.event.Event") == 0 &&
+            strcmp(variable->display_type, kCanonicalDisplayType) == 0) {
+            provider_field_found = true;
+        }
+    }
+    for (size_t i = 0U; i < consumer_out.debug_info.variable_count; ++i) {
+        const FengCodegenMapingVariableRecord *variable =
+            &consumer_out.debug_info.variables[i];
+        if (variable->kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD &&
+            variable->display_name != NULL &&
+            strcmp(variable->display_name, "content") == 0 &&
+            variable->parent_display_type != NULL &&
+            strcmp(variable->parent_display_type, "vendor.event.Event") == 0 &&
+            strcmp(variable->display_type, kCanonicalDisplayType) == 0) {
+            consumer_field_found = true;
+        }
+    }
+    ASSERT(provider_field_found);
+    ASSERT(consumer_field_found);
+    compile_generated_c_or_die(provider_out.c_source);
+    compile_generated_c_or_die(consumer_out.c_source);
+
+    feng_codegen_output_free(&provider_out);
+    feng_codegen_output_free(&consumer_out);
+    feng_codegen_error_free(&provider_cgerr);
+    feng_codegen_error_free(&consumer_cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 static void test_bin_public_functions_remain_static(void) {
     static const char *kSource =
         "module feng.codegen.exportbin;\n"
@@ -5958,6 +6153,73 @@ static void test_type_field_callable_lambda_initializer_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_callable_field_default_and_explicit_initialization_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.callablefielddefault;\n"
+        "spec Action(value: int): void;\n"
+        "func ignore(value: int): void {}\n"
+        "type DefaultBox {\n"
+        "    let action: Action;\n"
+        "}\n"
+        "type ExplicitBox {\n"
+        "    let action: Action = ignore;\n"
+        "}\n"
+        "func use_it(): void {\n"
+        "    let defaultBox = DefaultBox();\n"
+        "    let explicitBox = ExplicitBox();\n"
+        "    defaultBox.action(1);\n"
+        "    explicitBox.action(2);\n"
+        "}\n";
+    static const char *kDefaultFactoryCall =
+        "FengCallableDefault__feng__codegen__callablefielddefault__Action__new()";
+    FengProgram *program = parse_or_die(
+        kSource,
+        "tests/callable_field_default_and_explicit_initialization.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    const char *use_body;
+    const char *use_body_end;
+    const char *default_call;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+
+    use_body = strstr(out.c_source,
+                      "static void feng__feng__codegen__callablefielddefault__"
+                      "use_it__from__void(void) {");
+    ASSERT(use_body != NULL);
+    use_body_end = strstr(use_body, "\n}\n\n");
+    ASSERT(use_body_end != NULL);
+    default_call = strstr(use_body, kDefaultFactoryCall);
+    ASSERT(default_call != NULL);
+    ASSERT(default_call < use_body_end);
+    default_call = strstr(default_call + strlen(kDefaultFactoryCall),
+                          kDefaultFactoryCall);
+    ASSERT(default_call == NULL || default_call >= use_body_end);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_void_try_expression_codegen(void) {
     static const char *kSource =
         "module feng.codegen.tryvoid;\n"
@@ -7464,6 +7726,8 @@ int main(void) {
     test_imported_public_binding_inferred_type_codegen_compiles();
     test_enum_codegen_emits_stable_symbols();
     test_imported_enum_codegen_emits_visible_symbols();
+    test_imported_enum_union_default_codegen_stays_file_scoped();
+    test_imported_generic_enum_argument_uses_canonical_identity();
     test_same_named_types_in_distinct_modules();
     test_float_modulo_codegen_uses_math_runtime();
     test_fit_builtin_direct_call_codegen_shape();
@@ -7511,6 +7775,7 @@ int main(void) {
     test_phase_e_aggregate_generic_arg_three_entrances_codegen();
     test_type_field_initializers_codegen();
     test_type_field_callable_lambda_initializer_codegen();
+    test_callable_field_default_and_explicit_initialization_codegen();
     test_void_try_expression_codegen();
     test_try_catch_return_codegen();
     test_empty_array_literal_codegen_uses_target_contexts();

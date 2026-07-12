@@ -284,6 +284,18 @@ open type InputManager {
    * 序列未完成时不产生任何输出。
    */
   open func feed(b: u8): void;
+
+  /**
+   * 构建鼠标 SGR 模式启用序列字节（16 字节）。
+   * 供 TuiApp.init() 写入 stdout，不直接执行 I/O。
+   */
+  open func buildEnableMouseSgrBytes(): byte[];
+
+  /**
+   * 构建鼠标 SGR 模式禁用序列字节（16 字节）。
+   * 供 TuiApp.exit() 写入 stdout，不直接执行 I/O。
+   */
+  open func buildDisableMouseSgrBytes(): byte[];
 }
 ```
 
@@ -531,14 +543,26 @@ while self.running {
 
 ### 4.3 鼠标模式启用/禁用
 
-init() 中进入 Raw Mode 后发送鼠标启用序列：
+鼠标 SGR 模式的启用/禁用序列封装在 InputManager 中：
+
+```feng
+// InputManager 公开方法
+open func buildEnableMouseSgrBytes(): byte[];   // 返回 16 字节启用序列
+open func buildDisableMouseSgrBytes(): byte[];  // 返回 16 字节禁用序列
+```
+
+InputManager 只负责构建字节，不直接写 stdout——I/O 由 TuiApp 统一管理。
+TuiApp.init() 调用 `self.input.buildEnableMouseSgrBytes()` 获取序列并写入 stdout，
+exit() 调用 `self.input.buildDisableMouseSgrBytes()`。
+
+启用序列内容（16 字节）：
 
 ```
 \x1b[?1006h  — 启用 SGR 鼠标模式（精确坐标 + press/release 区分）
 \x1b[?1003h  — 启用全移动报告（所有鼠标移动都触发事件，含悬停）
 ```
 
-exit() 中发送禁用序列：
+禁用序列内容（16 字节，与启用对称，顺序相反）：
 
 ```
 \x1b[?1003l
