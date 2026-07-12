@@ -165,6 +165,8 @@
 
 ### 第五阶段：应用控制层 - 输入支持（第 5 层）
 
+> 实现方案详见 `dev/feng-std-tui-input-dev.md`。
+
 - [ ] 4.18 实现输入解析状态机：VT100/xterm 转义序列解析，将 stdin 字节流解析为 `KeyEvent`/`MouseEvent`
 - [ ] 4.19 实现事件路由：将解析后的事件下发至回调处理，触发状态变更后调用 `Screen.buildPatchBytes()`
 - [ ] 4.20 补充 std_test 用例：在 `test_tui.ff` 中新增输入解析状态机（VT100/xterm 转义序列）、事件路由等测试
