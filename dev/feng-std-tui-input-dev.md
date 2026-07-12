@@ -424,19 +424,30 @@ ESC [ < button ; x ; y m   (release)
 
 button 值映射：
 
-| button 值 | MouseButton | 修饰键 |
-|-----------|-------------|--------|
-| 0 | left | |
-| 1 | middle | |
-| 2 | right | |
-| 64 | wheelUp | |
-| 65 | wheelDown | |
-| 0 + 4 | left | Shift |
-| 0 + 8 | left | Alt |
-| 0 + 16 | left | Ctrl |
+| button 值 | MouseButton | MouseAction | 修饰键 |
+|-----------|-------------|-------------|--------|
+| 0 | left | press | |
+| 1 | middle | press | |
+| 2 | right | press | |
+| 32 (0+32) | left | **move** | 按住左键拖动 |
+| 33 (1+32) | middle | **move** | 按住中键拖动 |
+| 34 (2+32) | right | **move** | 按住右键拖动 |
+| 35 (3+32) | **none** | **move** | 无按钮悬停移动 |
+| 64 | wheelUp | press | |
+| 65 | wheelDown | press | |
+| 0+4 | left | press | Shift |
+| 0+8 | left | press | Alt |
+| 0+16 | left | press | Ctrl |
 
-> button 值 32 = 拖动（move 事件）。button 的低 5 位标识按钮，高位标识修饰键。
-> 32 = move, 64 = wheelUp, 65 = wheelDown。
+> button 值的位掩码：低 2 位标识按钮（0=left,1=middle,2=right,3=none），
+> bit 5 (32) 是 motion 标志，bit 6 (64) 是滚轮上，bit 7 (128) 是滚轮下。
+> 高位 4/8/16 标识修饰键（Shift/Alt/Ctrl）。
+>
+> **`action` 的确定**：
+> - M 终态 + 无 motion 位 → `press`
+> - m 终态 → `release`
+> - 有 motion 位 (32) → `move`，`button` 取低 2 位（left/middle/right/none）
+> - 滚轮 (64/65) → `press`，`button` 为 wheelUp/wheelDown
 >
 > **坐标转换**：终端 SGR 序列中的 x/y 为 1-based（与终端行号一致），
 > InputManager 解析时减 1 转为 0-based，与 Screen/Buffer 的坐标体系统一，
@@ -510,19 +521,24 @@ while self.running {
 init() 中进入 Raw Mode 后发送鼠标启用序列：
 
 ```
-\x1b[?1000h  — 启用鼠标报告（基本模式）
 \x1b[?1006h  — 启用 SGR 鼠标模式（精确坐标 + press/release 区分）
+\x1b[?1003h  — 启用全移动报告（所有鼠标移动都触发事件，含悬停）
 ```
 
 exit() 中发送禁用序列：
 
 ```
+\x1b[?1003l
 \x1b[?1006l
-\x1b[?1000l
 ```
 
 > 通过 `c_write(STDOUT_FD, ...)` 直接发送，与 Screen 的 buildPatchBytes
 > 路径独立（这些是终端模式协商序列，不参与 diff 渲染）。
+>
+> **为什么用 1003 而非 1002**：1002 只报告按住按钮拖动，不报告悬停移动；
+> 1003 报告所有移动（含无按钮悬停），支持 Hover 高亮等交互场景。
+> 代价是事件量较大（每双鼠标移动可能触发数十个 move 事件），
+> 但 `onMouse` 回调中应用可选择忽略 move，只在需要时处理。
 
 ## 5 文件组织
 
@@ -536,7 +552,7 @@ std/src/tui/
   #                 #       feed(byte): void
   TuiApp.ff         # 修改：新增 input: InputManager 公开成员
   #                 #       run() drain → input.feed() 逐字节喂入
-  #                 #       init() 增加鼠标启用序列
+  #                 #       init() 增加鼠标启用序列（1006+1003）
   #                 #       exit() 增加鼠标禁用序列
   Cell.ff           # 不变
   Buffer.ff         # 不变
@@ -580,6 +596,8 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 | 鼠标左键点击 | `ESC [ < 0 ; 10 ; 5 M` | onMouse(MouseEvent(action=press, button=left, x=9, y=4)) |
 | 鼠标右键释放 | `ESC [ < 2 ; 10 ; 5 m` | onMouse(MouseEvent(action=release, button=right, x=9, y=4)) |
 | 鼠标滚轮上 | `ESC [ < 64 ; 1 ; 1 M` | onMouse(MouseEvent(action=press, button=wheelUp, x=0, y=0)) |
+| 按住左键拖动 | `ESC [ < 32 ; 10 ; 5 M` | onMouse(MouseEvent(action=move, button=left, x=9, y=4)) |
+| 悬停移动（无按键） | `ESC [ < 35 ; 10 ; 5 M` | onMouse(MouseEvent(action=move, button=none, x=9, y=4)) |
 | 非法 UTF-8 | `0xC0 0x00` | 重置状态机，无回调触发 |
 | 未知 CSI | `ESC [ Z` | 无回调触发，丢弃 |
 
