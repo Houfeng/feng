@@ -81,9 +81,6 @@ open type Screen {
   // 使用 List<byte> 收集输出，避免 string 拼接的 O(n²) 复制开销
   seal let output = List<byte>();
 
-  // 用户主动指令（如清屏、光标隐藏/显示）等
-  seal let directive = List<byte>();
-
   /**
    * 构建 diff 后的 ANSI 转义序列字节，由调用方直接写入 stdout。
    * 比较 back 与 front 的差异，只对变化的 cell 发射 ANSI 序列。
@@ -94,13 +91,8 @@ open type Screen {
    */
   open func buildPatchBytes(): byte[] {
     let output = self.output;
-    // 清空输出缓冲区，准备发射差异序列
-    output.clear();
-    // 写入指令序列（如清屏、光标隐藏/显示）
-    for var i: int = 0; i < self.directive.size(); i = i + 1 {
-      output.add(self.directive.get(i));
-    }
-    self.directive.clear();
+    // 每次生成 patch 后，清空输出缓冲区，为下次发射差异序列做好准备
+    defer { output.clear(); }
     // 初始化一些局部变量
     let w = self.back.width;
     let h = self.back.height;
@@ -178,7 +170,7 @@ open type Screen {
    * 写入生成清屏 ANSI 序列：`\x1b[2J\x1b[H`（清空终端物理屏幕并将光标移到原点）。
    */
   seal func writeClearScreenBytes(): void {
-    let output = self.directive;
+    let output = self.output;
     output.add((byte)0x1b); // ESC
     output.add((byte)0x5b); // '['
     output.add((byte)0x32); // '2'
@@ -193,7 +185,7 @@ open type Screen {
    * ANSI 序列：`\x1b[?25l`。
    */
   open func hideCursor(): void {
-    let output = self.directive;
+    let output = self.output;
     output.add((byte)0x1b); // ESC
     output.add((byte)0x5b); // '['
     output.add((byte)0x3f); // '?'
@@ -207,7 +199,7 @@ open type Screen {
    * ANSI 序列：`\x1b[?25h`。
    */
   open func showCursor(): void {
-    let output = self.directive;
+    let output = self.output;
     output.add((byte)0x1b); // ESC
     output.add((byte)0x5b); // '['
     output.add((byte)0x3f); // '?'
