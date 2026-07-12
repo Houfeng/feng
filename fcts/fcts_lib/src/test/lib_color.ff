@@ -1,8 +1,15 @@
 open module fcts_lib.test;
 
+import std;
+
 /** 跨包测试用 enum */
 open enum LibColor {
   Red,
   Green,
   Blue
+}
+
+/** 跨包测试用 type，字段组合导入 enum 与泛型 union 默认零值。 */
+open type LibEnumUnionHolder {
+  open let content: Union<LibColor, u32>;
 }
