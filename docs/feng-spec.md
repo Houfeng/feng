@@ -168,7 +168,7 @@ spec Choice: int | string {}
 - union-form 未收窄前不允许直接做成员访问、方法调用或 `==` / `!=` 比较; 收窄通过 `match 目标值 { ... }` 的 union member 类型匹配完成,其详细规则见 [feng-union-type.md](./feng-union-type.md)。
 - 具体 `type` 可在声明头上直接写出其满足的一个或多个 object-form `spec`; 同一关系也可通过可见的 `fit A: SpecB` 或 `fit A: SpecB, SpecC` 显式建立。
 - callable-form `spec` 只描述可调用签名形状,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标。
-- callable-form `spec` 的默认零值必须是可安全调用的零捕获空操作 callable；调用该默认值时不得访问空指针。返回 `void` 时不执行其他行为，返回非 `void` 时返回声明返回类型的默认零值。
+- callable-form `spec` 的默认零值必须是可安全调用的零捕获空操作 callable；其实现不得捕获、绑定或读取任何变量，调用时也不得访问空指针。返回 `void` 时不执行其他行为，返回非 `void` 时返回声明返回类型的默认零值。
 - callable-form `spec` 的隐式匹配采用两段规则: 未绑定到 `spec` 的顶层函数、方法值与 lambda 进入 callable-form `spec` 位置时继续按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”做结构匹配; 一旦值的静态类型已经是某个 callable-form `spec`,后续赋值、参数传递与返回匹配只允许同一 callable-form `spec` 声明。
 - 不同 callable-form `spec` 即使签名完全一致也不得隐式互相匹配; 仅当两个 callable-form `spec` 在实例化后的参数类型与返回类型完全一致时,才允许显式转换。
 - callable-form `spec` 的显式转换资格必须在编译期确定; 运行时不得重新比较签名、搜索候选或决定转换是否成立。

@@ -16,6 +16,23 @@ spec DetailPrintable: Printable {
 // callable-form spec
 spec Transformer(x: int): int;
 
+// callable-form spec 默认零值及字段初始化
+spec DefaultAction(value: int): int;
+spec DefaultVoidAction(value: int): void;
+
+func increment_action(value: int): int {
+  return value + 1;
+}
+
+type DefaultCallableHolder {
+  let action: DefaultAction;
+  let notify: DefaultVoidAction;
+}
+
+type ExplicitCallableHolder {
+  let action: DefaultAction = increment_action;
+}
+
 // type 声明头满足 spec
 type SpecItem: Printable {
   let label: string;
@@ -120,6 +137,18 @@ open func test_spec() {
     test("function assigned to callable-form spec", () {
       let t2: Transformer = double_it;
       assert(t2(7) == 14, "function assigned to callable-form spec");
+    });
+
+    test("callable-form spec field default zero value", () {
+      let holder = DefaultCallableHolder();
+      assert(holder.action(41) == 0, "callable-form spec field default return value");
+      holder.notify(41);
+      assert(true, "callable-form spec void field default callable");
+    });
+
+    test("callable-form spec field explicit initializer", () {
+      let holder = ExplicitCallableHolder();
+      assert(holder.action(41) == 42, "callable-form spec field explicit initializer");
     });
 
     test("spec field matching", () {
