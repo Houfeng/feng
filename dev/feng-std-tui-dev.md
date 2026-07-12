@@ -168,7 +168,7 @@
 > 实现方案详见 `dev/feng-std-tui-input-dev.md`。
 
 - [ ] 4.18 实现事件类型（Event.ff）：`Key` 枚举、`MouseAction`/`MouseButton` 枚举、`MOD_CTRL`/`MOD_ALT`/`MOD_SHIFT` 常量、`KeyEvent`/`MouseEvent` @value 类型 + `isCtrl()`/`isAlt()`/`isShift()`/`isPrintable()` 快捷方法
-- [ ] 4.19 实现 InputManager（InputManager.ff）：`ParserState` 状态机 + `KeyHandler`/`MouseHandler` spec 契约 + `onKey`/`onMouse` 回调字段 + `feed(b: u8): void`；处理单字节字符、CSI/SS3 转义序列、UTF-8 多字节解码、鼠标 SGR 序列
+- [ ] 4.19 实现 InputManager（InputManager.ff）：`ParserState` 状态机 + `onKey`/`onMouse` 回调字段（`Action<KeyEvent>`/`Action<MouseEvent>`） + `feed(b: u8): void`；处理单字节字符、CSI/SS3 转义序列、UTF-8 多字节解码、鼠标 SGR 序列
 - [ ] 4.20 集成 InputManager 至 TuiApp：新增 `let input: InputManager` 公开只读成员；`run()` 中 stdin drain 替换为逐字节 `input.feed()`；`init()` 发送鼠标启用序列（`\x1b[?1000h\x1b[?1006h`），`exit()` 发送禁用序列
 - [ ] 4.21 补充 std_test 用例：在 `test_tui.ff` 中新增事件类型快捷方法、InputManager 解析状态机（VT100/xterm 转义序列、UTF-8、鼠标 SGR）、回调分发等测试
 - [ ] 4.22 全量回归测试：执行 `make test`，确认全部通过

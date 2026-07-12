@@ -203,12 +203,6 @@ open enum ParserState {
 ### 3.3 类型设计
 
 ```feng
-/** 键盘事件回调契约（普通 open spec，非 @abi） */
-open spec KeyHandler(event: KeyEvent): void;
-
-/** 鼠标事件回调契约（普通 open spec，非 @abi） */
-open spec MouseHandler(event: MouseEvent): void;
-
 open type InputManager {
   /** 状态机当前状态 */
   seal var state: ParserState;
@@ -220,10 +214,10 @@ open type InputManager {
   seal var utf8Remaining: i32;
   /** UTF-8 解码出的码点（中间累积用） */
   seal var utf8Codepoint: u32;
-  /** 键盘事件回调（用户直接赋值注册，未设置时键盘事件丢弃） */
-  open var onKey: KeyHandler;
-  /** 鼠标事件回调（用户直接赋值注册，未设置时鼠标事件丢弃） */
-  open var onMouse: MouseHandler;
+  /** 键盘事件回调（Action<KeyEvent>，用户直接赋值注册，未设置时键盘事件丢弃） */
+  open var onKey: Action<KeyEvent>;
+  /** 鼠标事件回调（Action<MouseEvent>，用户直接赋值注册，未设置时鼠标事件丢弃） */
+  open var onMouse: Action<MouseEvent>;
 
   func InputManager() { ... }
 
@@ -236,10 +230,11 @@ open type InputManager {
 }
 ```
 
-> **KeyHandler/MouseHandler 是普通 `open spec`，非 `@abi`**：`feed()` 是
-> Feng 函数，内部调用 `self.onKey(event)` 是 Feng→Feng 调用，不经 C ABI。
-> `@abi` 仅用于 C 代码回调 Feng 的场景（如 TuiApp 的 `handleSigwinch`）。
-> 此模式与 Thread 模块的 `ThreadFn`（普通 `open spec`）一致。
+> **回调类型复用 std 的 `Action<T>`**：`onKey: Action<KeyEvent>`、
+> `onMouse: Action<MouseEvent>`，不自定义 KeyHandler/MouseHandler spec。
+> `Action<T>` 是 `open spec Action<T>(arg1: T): void`（见 `std/basic/Func.ff`），
+> 正好匹配单参数 void 回调签名。`feed()` 是 Feng 函数，内部调用
+> `self.onKey(event)` 是 Feng→Feng 调用，不经 C ABI。
 >
 > **onKey/onMouse 为 `open var`**：用户直接赋值注册
 > （`manager.onKey = func(event: KeyEvent) { ... };`），不需要 setter 方法。
@@ -478,8 +473,8 @@ exit() 中发送禁用序列：
 std/src/tui/
   Event.ff          # 新增：Key / MouseAction / MouseButton
   #                 #       KeyEvent / MouseEvent / Modifiers 常量
-  InputManager.ff   # 新增：VT100/xterm 状态机 + KeyHandler/MouseHandler spec
-  #                 #       onKey/onMouse 字段 + feed(byte): void
+  InputManager.ff   # 新增：VT100/xterm 状态机 + onKey/onMouse (Action<T>)
+  #                 #       feed(byte): void
   TuiApp.ff         # 修改：新增 input: InputManager 公开成员
   #                 #       run() drain → input.feed() 逐字节喂入
   #                 #       init() 增加鼠标启用序列
@@ -560,7 +555,7 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 ## 8 阶段五实施步骤
 
 1. 实现 Event.ff — 事件类型 + Modifiers 常量 + 快捷方法
-2. 实现 InputManager.ff — VT100/xterm 状态机 + KeyHandler/MouseHandler spec + feed/onKey/onMouse
+2. 实现 InputManager.ff — VT100/xterm 状态机 + onKey/onMouse (Action<T>) + feed
 3. 修改 TuiApp.ff — 新增 input 公开成员 + run() 集成 + 鼠标启用/禁用
 4. 补充 std_test 用例 — InputManager 单元测试 + 回调分发测试
 5. 全量回归测试 — `make test`
