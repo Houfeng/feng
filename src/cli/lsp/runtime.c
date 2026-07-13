@@ -2043,6 +2043,11 @@ static size_t expr_start(const FengExpr *expr) {
     if (expr->kind == FENG_EXPR_BINARY && expr->as.binary.left != NULL) {
         return expr_start(expr->as.binary.left);
     }
+    /* Infix match expressions also store the operator token while their source
+     * span begins at the target expression to the left of `match`. */
+    if (expr->kind == FENG_EXPR_MATCH_OP && expr->as.match_op.target != NULL) {
+        return expr_start(expr->as.match_op.target);
+    }
     return expr->token.offset;
 }
 
@@ -2917,6 +2922,9 @@ static const FengLspLocal *find_local(const FengLspLocalList *locals, FengSlice 
 static bool collect_stmt_locals(const FengStmt *stmt,
                                 size_t offset,
                                 FengLspLocalList *locals);
+static bool collect_expr_locals(const FengExpr *expr,
+                                size_t offset,
+                                FengLspLocalList *locals);
 
 static bool collect_block_locals(const FengBlock *block,
                                  size_t offset,
@@ -2949,6 +2957,145 @@ static bool collect_block_locals(const FengBlock *block,
     return true;
 }
 
+/* Collect lexical locals introduced by lambdas along the expression path that
+ * contains `offset`. Nested lambdas append their parameters after outer locals,
+ * so find_local() naturally preserves lexical shadowing. */
+static bool collect_expr_locals(const FengExpr *expr,
+                                size_t offset,
+                                FengLspLocalList *locals) {
+    size_t index;
+
+    if (expr == NULL || offset < expr_start(expr) || offset > expr_end(expr)) {
+        return true;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_LAMBDA:
+            if (expr->as.lambda.is_block_body) {
+                if (expr->as.lambda.body_block == NULL ||
+                    offset < expr->as.lambda.body_block->token.offset ||
+                    offset > block_end(expr->as.lambda.body_block)) {
+                    return true;
+                }
+            } else if (expr->as.lambda.body == NULL ||
+                       offset < expr_start(expr->as.lambda.body) ||
+                       offset > expr_end(expr->as.lambda.body)) {
+                return true;
+            }
+            for (index = 0U; index < expr->as.lambda.param_count; ++index) {
+                if (!local_list_push(locals,
+                                     FENG_LSP_LOCAL_PARAM,
+                                     expr->as.lambda.params[index].name,
+                                     &expr->as.lambda.params[index],
+                                     NULL,
+                                     NULL)) {
+                    return false;
+                }
+            }
+            return expr->as.lambda.is_block_body
+                       ? collect_block_locals(expr->as.lambda.body_block, offset, locals)
+                       : collect_expr_locals(expr->as.lambda.body, offset, locals);
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (index = 0U; index < expr->as.array_literal.count; ++index) {
+                if (offset >= expr_start(expr->as.array_literal.items[index]) &&
+                    offset <= expr_end(expr->as.array_literal.items[index])) {
+                    return collect_expr_locals(expr->as.array_literal.items[index], offset, locals);
+                }
+            }
+            return true;
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (index = 0U; index < expr->as.tuple_literal.count; ++index) {
+                if (offset >= expr_start(expr->as.tuple_literal.items[index]) &&
+                    offset <= expr_end(expr->as.tuple_literal.items[index])) {
+                    return collect_expr_locals(expr->as.tuple_literal.items[index], offset, locals);
+                }
+            }
+            return true;
+        case FENG_EXPR_GENERIC_TARGET:
+            return collect_expr_locals(expr->as.generic_target.target, offset, locals);
+        case FENG_EXPR_ARRAY_NEW:
+            return collect_expr_locals(expr->as.array_new.size, offset, locals);
+        case FENG_EXPR_OBJECT_LITERAL:
+            if (collect_expr_locals(expr->as.object_literal.target, offset, locals)) {
+                for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
+                    const FengExpr *value = expr->as.object_literal.fields[index].value;
+
+                    if (value != NULL && offset >= expr_start(value) && offset <= expr_end(value)) {
+                        return collect_expr_locals(value, offset, locals);
+                    }
+                }
+                return true;
+            }
+            return false;
+        case FENG_EXPR_CALL:
+            if (expr->as.call.callee != NULL &&
+                offset >= expr_start(expr->as.call.callee) &&
+                offset <= expr_end(expr->as.call.callee)) {
+                return collect_expr_locals(expr->as.call.callee, offset, locals);
+            }
+            for (index = 0U; index < expr->as.call.arg_count; ++index) {
+                const FengExpr *arg = expr->as.call.args[index];
+
+                if (arg != NULL && offset >= expr_start(arg) && offset <= expr_end(arg)) {
+                    return collect_expr_locals(arg, offset, locals);
+                }
+            }
+            return true;
+        case FENG_EXPR_MEMBER:
+            return collect_expr_locals(expr->as.member.object, offset, locals);
+        case FENG_EXPR_INDEX:
+            return offset <= expr_end(expr->as.index.object)
+                       ? collect_expr_locals(expr->as.index.object, offset, locals)
+                       : collect_expr_locals(expr->as.index.index, offset, locals);
+        case FENG_EXPR_UNARY:
+            return collect_expr_locals(expr->as.unary.operand, offset, locals);
+        case FENG_EXPR_BINARY:
+            return offset <= expr_end(expr->as.binary.left)
+                       ? collect_expr_locals(expr->as.binary.left, offset, locals)
+                       : collect_expr_locals(expr->as.binary.right, offset, locals);
+        case FENG_EXPR_CAST:
+            return collect_expr_locals(expr->as.cast.value, offset, locals);
+        case FENG_EXPR_IF:
+            if (expr->as.if_expr.condition != NULL &&
+                offset <= expr_end(expr->as.if_expr.condition)) {
+                return collect_expr_locals(expr->as.if_expr.condition, offset, locals);
+            }
+            if (expr->as.if_expr.then_block != NULL &&
+                offset <= block_end(expr->as.if_expr.then_block)) {
+                return collect_block_locals(expr->as.if_expr.then_block, offset, locals);
+            }
+            return collect_block_locals(expr->as.if_expr.else_block, offset, locals);
+        case FENG_EXPR_MATCH:
+            if (expr->as.match_expr.target != NULL &&
+                offset <= expr_end(expr->as.match_expr.target)) {
+                return collect_expr_locals(expr->as.match_expr.target, offset, locals);
+            }
+            for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                const FengBlock *body = expr->as.match_expr.branches[index].body;
+
+                if (body != NULL && offset <= block_end(body)) {
+                    return collect_block_locals(body, offset, locals);
+                }
+            }
+            return collect_block_locals(expr->as.match_expr.else_block, offset, locals);
+        case FENG_EXPR_MATCH_OP:
+            return collect_expr_locals(expr->as.match_op.target, offset, locals);
+        case FENG_EXPR_TRY:
+            if (expr->as.try_expr.body != NULL && offset <= expr_end(expr->as.try_expr.body)) {
+                return collect_expr_locals(expr->as.try_expr.body, offset, locals);
+            }
+            for (index = 0U; index < expr->as.try_expr.clause_count; ++index) {
+                const FengBlock *body = expr->as.try_expr.clauses[index].body;
+
+                if (body != NULL && offset <= block_end(body)) {
+                    return collect_block_locals(body, offset, locals);
+                }
+            }
+            return true;
+        default:
+            return true;
+    }
+}
+
 static bool collect_stmt_locals(const FengStmt *stmt,
                                 size_t offset,
                                 FengLspLocalList *locals) {
@@ -2959,12 +3106,29 @@ static bool collect_stmt_locals(const FengStmt *stmt,
         return true;
     }
     switch (stmt->kind) {
+        case FENG_STMT_BINDING:
+            return collect_expr_locals(stmt->as.binding.initializer, offset, locals);
+        case FENG_STMT_ASSIGN:
+            if (stmt->as.assign.target != NULL &&
+                offset <= expr_end(stmt->as.assign.target)) {
+                return collect_expr_locals(stmt->as.assign.target, offset, locals);
+            }
+            return collect_expr_locals(stmt->as.assign.value, offset, locals);
+        case FENG_STMT_EXPR:
+        case FENG_STMT_TRY:
+            return collect_expr_locals(stmt->as.expr, offset, locals);
+        case FENG_STMT_RETURN:
+            return collect_expr_locals(stmt->as.return_value, offset, locals);
+        case FENG_STMT_THROW:
+            return collect_expr_locals(stmt->as.throw_value, offset, locals);
         case FENG_STMT_BLOCK:
             return collect_block_locals(stmt->as.block, offset, locals);
         case FENG_STMT_IF:
             for (index = 0U; index < stmt->as.if_stmt.clause_count; ++index) {
                 if (offset <= expr_end(stmt->as.if_stmt.clauses[index].condition)) {
-                    return true;
+                    return collect_expr_locals(stmt->as.if_stmt.clauses[index].condition,
+                                               offset,
+                                               locals);
                 }
                 if (offset <= block_end(stmt->as.if_stmt.clauses[index].block)) {
                     return collect_block_locals(stmt->as.if_stmt.clauses[index].block, offset, locals);
@@ -2997,7 +3161,7 @@ static bool collect_stmt_locals(const FengStmt *stmt,
                        : true;
         case FENG_STMT_WHILE:
             if (stmt->as.while_stmt.condition != NULL && offset <= expr_end(stmt->as.while_stmt.condition)) {
-                return true;
+                return collect_expr_locals(stmt->as.while_stmt.condition, offset, locals);
             }
             return stmt->as.while_stmt.body != NULL
                        ? collect_block_locals(stmt->as.while_stmt.body, offset, locals)
@@ -3005,7 +3169,7 @@ static bool collect_stmt_locals(const FengStmt *stmt,
         case FENG_STMT_FOR:
             if (stmt->as.for_stmt.is_for_in) {
                 if (stmt->as.for_stmt.iter_expr != NULL && offset <= expr_end(stmt->as.for_stmt.iter_expr)) {
-                    return true;
+                    return collect_expr_locals(stmt->as.for_stmt.iter_expr, offset, locals);
                 }
                 if (!local_list_push(locals,
                                      FENG_LSP_LOCAL_BINDING,
@@ -3032,7 +3196,7 @@ static bool collect_stmt_locals(const FengStmt *stmt,
                 return false;
             }
             if (stmt->as.for_stmt.condition != NULL && offset <= expr_end(stmt->as.for_stmt.condition)) {
-                return true;
+                return collect_expr_locals(stmt->as.for_stmt.condition, offset, locals);
             }
             if (stmt->as.for_stmt.update != NULL && offset <= stmt_end(stmt->as.for_stmt.update)) {
                 return true;
@@ -4964,6 +5128,51 @@ static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysis
     if (decl != NULL) {
         return decl;
     }
+    if (object->kind == FENG_EXPR_MEMBER && object->as.member.object != NULL) {
+        const FengDecl *owner_decl = resolve_owner_decl_from_object_expr(session,
+                                                                         program,
+                                                                         object->as.member.object,
+                                                                         locals);
+        const FengTypeMember *member = find_member_by_name(owner_decl, object->as.member.member);
+
+        if (member == NULL) {
+            return NULL;
+        }
+        if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+            return resolve_named_type_ref(session, program, member->as.field.type);
+        }
+        return resolve_named_type_ref(session, program, member->as.callable.return_type);
+    }
+    if (object->kind == FENG_EXPR_CALL && object->as.call.callee != NULL) {
+        const FengExpr *callee = object->as.call.callee;
+
+        if (callee->kind == FENG_EXPR_IDENTIFIER) {
+            decl = resolve_type_constructor_expr(session, program, callee);
+            if (decl != NULL) {
+                return decl;
+            }
+            decl = resolve_value_name(session, program, callee->as.identifier);
+            if (decl != NULL && decl->kind == FENG_DECL_FUNCTION) {
+                return resolve_named_type_ref(session,
+                                              program,
+                                              decl->as.function_decl.return_type);
+            }
+            return NULL;
+        }
+        if (callee->kind == FENG_EXPR_MEMBER && callee->as.member.object != NULL) {
+            const FengDecl *owner_decl = resolve_owner_decl_from_object_expr(
+                session, program, callee->as.member.object, locals);
+            const FengTypeMember *member = find_member_by_name(owner_decl,
+                                                               callee->as.member.member);
+
+            if (member != NULL && member->kind != FENG_TYPE_MEMBER_FIELD) {
+                return resolve_named_type_ref(session,
+                                              program,
+                                              member->as.callable.return_type);
+            }
+        }
+        return NULL;
+    }
     if (object->kind == FENG_EXPR_SELF) {
         const FengLspLocal *self_local = find_local(locals, slice_from_cstr("self"));
         if (self_local != NULL && self_local->self_owner_decl != NULL) {
@@ -5934,6 +6143,26 @@ static bool find_type_ref_in_expr(const FengExpr *expr,
                                          member_type_params, member_type_param_count,
                                          owner_type_params, owner_type_param_count);
         case FENG_EXPR_LAMBDA:
+            for (index = 0U; index < expr->as.lambda.param_count; ++index) {
+                if (resolve_type_ref_at_offset(session,
+                                               program,
+                                               expr->as.lambda.params[index].type,
+                                               offset,
+                                               target,
+                                               owner_decl,
+                                               member_type_params,
+                                               member_type_param_count) ||
+                    resolve_type_ref_at_offset(session,
+                                               program,
+                                               expr->as.lambda.params[index].type,
+                                               offset,
+                                               target,
+                                               owner_decl,
+                                               owner_type_params,
+                                               owner_type_param_count)) {
+                    return true;
+                }
+            }
             if (expr->as.lambda.is_block_body) {
                 return find_type_ref_in_block_exprs(expr->as.lambda.body_block,
                                                     program, session, offset, target,
@@ -6354,6 +6583,18 @@ static bool find_type_ref_hit(const FengDecl *decl,
                                         target)) {
                 return true;
             }
+            if (find_type_ref_in_block_exprs(decl->as.function_decl.body,
+                                             program,
+                                             session,
+                                             offset,
+                                             target,
+                                             decl,
+                                             decl->as.function_decl.type_params,
+                                             decl->as.function_decl.type_param_count,
+                                             NULL,
+                                             0U)) {
+                return true;
+            }
             break;
         case FENG_DECL_TYPE:
             if (resolve_type_param_hit(session,
@@ -6607,6 +6848,10 @@ static const FengExpr *find_expr_hit(const FengExpr *expr, size_t offset) {
         }
         case FENG_EXPR_CAST:
             return find_expr_hit(expr->as.cast.value, offset);
+        case FENG_EXPR_LAMBDA:
+            return expr->as.lambda.is_block_body
+                       ? find_expr_hit_in_block(expr->as.lambda.body_block, offset)
+                       : find_expr_hit(expr->as.lambda.body, offset);
         case FENG_EXPR_IF: {
             const FengExpr *hit = find_expr_hit(expr->as.if_expr.condition, offset);
             if (hit != NULL) {
@@ -6633,6 +6878,8 @@ static const FengExpr *find_expr_hit(const FengExpr *expr, size_t offset) {
             }
             return find_expr_hit_in_block(expr->as.match_expr.else_block, offset);
         }
+        case FENG_EXPR_MATCH_OP:
+            return find_expr_hit(expr->as.match_op.target, offset);
         case FENG_EXPR_TRY: {
             const FengExpr *hit = find_expr_hit(expr->as.try_expr.body, offset);
             size_t clause_index;

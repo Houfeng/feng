@@ -7830,6 +7830,85 @@ static void test_lsp_hover_falls_back_to_plaintext_without_markdown_capability(v
     free(output);
 }
 
+/* Hover must resolve lambda parameter types, lambda-local names, and every
+ * level of a chained member access without relying on TUI-specific symbols. */
+static void test_lsp_hover_lambda_scope_and_chained_members(void) {
+    static const char *kSource =
+        "module test.lsp.lambda_hover;\n"
+        "\n"
+        "spec Handler<T>(event: T): void;\n"
+        "\n"
+        "spec Value: i32 | string;\n"
+        "\n"
+        "type Event {\n"
+        "    open let value: Value;\n"
+        "    open func isReady(): bool { return true; }\n"
+        "}\n"
+        "\n"
+        "type Input {\n"
+        "    open var onEvent: Handler<Event>;\n"
+        "}\n"
+        "\n"
+        "type App {\n"
+        "    open let input: Input;\n"
+        "    open func exit(): void {}\n"
+        "}\n"
+        "\n"
+        "func main(args: string[]) {\n"
+        "    let app = App();\n"
+        "    app.input.onEvent = (event: Event) {\n"
+        "        if event.isReady() && event.value match let value: i32 && value == 0 {\n"
+        "            app.exit();\n"
+        "        }\n"
+        "    };\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *output;
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    app.input.onEvent = (event: Event) {",
+                                        strlen("    app.input."));
+    ASSERT(strstr(output, "var onEvent: Handler<Event>") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    app.input.onEvent = (event: Event) {",
+                                        strlen("    app.input.onEvent = (event: "));
+    ASSERT(strstr(output, "type Event") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "        if event.isReady() && event.value match let value: i32 && value == 0 {",
+                                        strlen("        if "));
+    ASSERT(strstr(output, "let event: Event") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "        if event.isReady() && event.value match let value: i32 && value == 0 {",
+                                        strlen("        if event."));
+    ASSERT(strstr(output, "func isReady(): bool") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "        if event.isReady() && event.value match let value: i32 && value == 0 {",
+                                        strlen("        if event.isReady() && event."));
+    ASSERT(strstr(output, "let value: Value") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "            app.exit();",
+                                        strlen("            app."));
+    ASSERT(strstr(output, "func exit(): void") != NULL);
+    free(output);
+}
+
 static void test_lsp_hover_type_param(void) {
     static const char *kSource =
         "module test.lsp.type_param_hover;\n"
@@ -13341,6 +13420,7 @@ int main(void) {
     test_lsp_hover_definition_and_completion();
     test_lsp_hover_uses_markdown_when_supported();
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
+    test_lsp_hover_lambda_scope_and_chained_members();
     test_lsp_hover_type_param();
     test_lsp_hover_type_param_extended();
     test_lsp_hover_type_param_in_spec_member();
