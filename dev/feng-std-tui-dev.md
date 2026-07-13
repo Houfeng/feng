@@ -185,7 +185,7 @@
 - [x] 4.26 更新设计文档与代码示例：`dev/feng-std-tui-app-dev.md` 构造函数、init()、render() 等同步修改
 - [x] 4.27 更新 std_test 用例：调整 TuiApp 相关测试，Screen 不再外部构造，改为从 TuiApp 获取
 - [x] 4.28 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.29 等待人工 Review：开发者审查 Screen 内部化重构，通过后方可进入第七阶段
+- [x] 4.29 等待人工 Review：开发者审查 Screen 内部化重构，通过后方可进入第七阶段
 
 ### 第七阶段：视图逻辑层（第 4 层 - 简化版）
 
