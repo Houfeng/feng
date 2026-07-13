@@ -113,9 +113,9 @@ open type KeyEvent {
 
   /**
    * 按键内容：SpecialKey=特殊键，u32=可打印字符码点。
-   * 两者通过 Union<SpecialKey, u32> 互斥。
+   * 两者通过 Union<u32, SpecialKey> 互斥。
    */
-  let content: Union<SpecialKey, u32>;
+  let content: Union<u32, SpecialKey>;
 
   /**
    * 修饰键位标志（MOD_CONTROL / MOD_SHIFT 的按位或）。
@@ -133,10 +133,10 @@ open type KeyEvent {
 
   /**
    * 构造函数：指定按键内容和修饰键。
-   * @param content - SpecialKey 枚举值或 u32 码点
+   * @param content - u32 码点或 SpecialKey 枚举值
    * @param mods - 修饰键位标志的按位或
    */
-  func KeyEvent(content: Union<SpecialKey, u32>, mods: u8) {
+  func KeyEvent(content: Union<u32, SpecialKey>, mods: u8) {
     self.content = content;
     self.mods = mods;
   }

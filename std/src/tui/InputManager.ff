@@ -112,23 +112,23 @@ open type InputManager {
   open func buildEnableMouseSgrBytes(): byte[] {
     let seq: byte[!] = byte[:16];
     // \x1b[?1006h
-    seq[0] = (byte)0x1B;   // ESC
-    seq[1] = (byte)0x5B;   // '['
-    seq[2] = (byte)0x3F;   // '?'
-    seq[3] = (byte)0x31;   // '1'
-    seq[4] = (byte)0x30;   // '0'
-    seq[5] = (byte)0x30;   // '0'
-    seq[6] = (byte)0x36;   // '6'
-    seq[7] = (byte)0x68;   // 'h'
+    seq[0] = (byte)0x1B; // ESC
+    seq[1] = (byte)0x5B; // '['
+    seq[2] = (byte)0x3F; // '?'
+    seq[3] = (byte)0x31; // '1'
+    seq[4] = (byte)0x30; // '0'
+    seq[5] = (byte)0x30; // '0'
+    seq[6] = (byte)0x36; // '6'
+    seq[7] = (byte)0x68; // 'h'
     // \x1b[?1003h
-    seq[8] = (byte)0x1B;   // ESC
-    seq[9] = (byte)0x5B;   // '['
-    seq[10] = (byte)0x3F;  // '?'
-    seq[11] = (byte)0x31;  // '1'
-    seq[12] = (byte)0x30;  // '0'
-    seq[13] = (byte)0x30;  // '0'
-    seq[14] = (byte)0x33;  // '3'
-    seq[15] = (byte)0x68;  // 'h'
+    seq[8] = (byte)0x1B; // ESC
+    seq[9] = (byte)0x5B; // '['
+    seq[10] = (byte)0x3F; // '?'
+    seq[11] = (byte)0x31; // '1'
+    seq[12] = (byte)0x30; // '0'
+    seq[13] = (byte)0x30; // '0'
+    seq[14] = (byte)0x33; // '3'
+    seq[15] = (byte)0x68; // 'h'
     return (byte[])seq;
   }
 
@@ -146,23 +146,23 @@ open type InputManager {
   open func buildDisableMouseSgrBytes(): byte[] {
     let seq: byte[!] = byte[:16];
     // \x1b[?1003l
-    seq[0] = (byte)0x1B;   // ESC
-    seq[1] = (byte)0x5B;   // '['
-    seq[2] = (byte)0x3F;   // '?'
-    seq[3] = (byte)0x31;   // '1'
-    seq[4] = (byte)0x30;   // '0'
-    seq[5] = (byte)0x30;   // '0'
-    seq[6] = (byte)0x33;   // '3'
-    seq[7] = (byte)0x6C;   // 'l'
+    seq[0] = (byte)0x1B; // ESC
+    seq[1] = (byte)0x5B; // '['
+    seq[2] = (byte)0x3F; // '?'
+    seq[3] = (byte)0x31; // '1'
+    seq[4] = (byte)0x30; // '0'
+    seq[5] = (byte)0x30; // '0'
+    seq[6] = (byte)0x33; // '3'
+    seq[7] = (byte)0x6C; // 'l'
     // \x1b[?1006l
-    seq[8] = (byte)0x1B;   // ESC
-    seq[9] = (byte)0x5B;   // '['
-    seq[10] = (byte)0x3F;  // '?'
-    seq[11] = (byte)0x31;  // '1'
-    seq[12] = (byte)0x30;  // '0'
-    seq[13] = (byte)0x30;  // '0'
-    seq[14] = (byte)0x36;  // '6'
-    seq[15] = (byte)0x6C;  // 'l'
+    seq[8] = (byte)0x1B; // ESC
+    seq[9] = (byte)0x5B; // '['
+    seq[10] = (byte)0x3F; // '?'
+    seq[11] = (byte)0x31; // '1'
+    seq[12] = (byte)0x30; // '0'
+    seq[13] = (byte)0x30; // '0'
+    seq[14] = (byte)0x36; // '6'
+    seq[15] = (byte)0x6C; // 'l'
     return (byte[])seq;
   }
 
@@ -207,9 +207,9 @@ open type InputManager {
     // Ctrl+字母：纯控制字符 0x01-0x07, 0x0B-0x0C, 0x0E-0x1A, 0x1C-0x1F
     // 不含 0x08(BS), 0x09(HT), 0x0D(CR), 0x1B(ESC)——这些优先映射为特殊键
     if (b >= (u8)0x01 && b <= (u8)0x07) ||
-       (b >= (u8)0x0B && b <= (u8)0x0C) ||
-       (b >= (u8)0x0E && b <= (u8)0x1A) ||
-       (b >= (u8)0x1C && b <= (u8)0x1F) {
+    (b >= (u8)0x0B && b <= (u8)0x0C) ||
+    (b >= (u8)0x0E && b <= (u8)0x1A) ||
+    (b >= (u8)0x1C && b <= (u8)0x1F) {
       self.emitKeyPrintable((u32)b, MOD_CONTROL);
       return;
     }
@@ -330,23 +330,23 @@ open type InputManager {
    */
   seal func handleSs3(b: u8): void {
     // F1-F4
-    if b == (u8)0x50 {       // 'P'
+    if b == (u8)0x50 { // 'P'
       self.emitKey(SpecialKey.f1, 0);
-    } else if b == (u8)0x51 {  // 'Q'
+    } else if b == (u8)0x51 { // 'Q'
       self.emitKey(SpecialKey.f2, 0);
-    } else if b == (u8)0x52 {  // 'R'
+    } else if b == (u8)0x52 { // 'R'
       self.emitKey(SpecialKey.f3, 0);
-    } else if b == (u8)0x53 {  // 'S'
+    } else if b == (u8)0x53 { // 'S'
       self.emitKey(SpecialKey.f4, 0);
-    } else if b == (u8)0x41 {  // 'A' 方向键（某些终端用 SS3）
+    } else if b == (u8)0x41 { // 'A' 方向键（某些终端用 SS3）
       self.emitKey(SpecialKey.arrowUp, 0);
-    } else if b == (u8)0x42 {  // 'B'
+    } else if b == (u8)0x42 { // 'B'
       self.emitKey(SpecialKey.arrowDown, 0);
-    } else if b == (u8)0x43 {  // 'C'
+    } else if b == (u8)0x43 { // 'C'
       self.emitKey(SpecialKey.arrowRight, 0);
-    } else if b == (u8)0x44 {  // 'D'
+    } else if b == (u8)0x44 { // 'D'
       self.emitKey(SpecialKey.arrowLeft, 0);
-    } else if b == (u8)0x48 {  // 'H' Home（某些终端）
+    } else if b == (u8)0x48 { // 'H' Home（某些终端）
       self.emitKey(SpecialKey.home, 0);
     }
     // 其他字节：无效，丢弃
@@ -397,27 +397,27 @@ open type InputManager {
         mods |= MOD_CONTROL;
       }
     }
-    if final == (u8)0x41 {       // 'A'
+    if final == (u8)0x41 { // 'A'
       self.emitKey(SpecialKey.arrowUp, mods);
-    } else if final == (u8)0x42 {  // 'B'
+    } else if final == (u8)0x42 { // 'B'
       self.emitKey(SpecialKey.arrowDown, mods);
-    } else if final == (u8)0x43 {  // 'C'
+    } else if final == (u8)0x43 { // 'C'
       self.emitKey(SpecialKey.arrowRight, mods);
-    } else if final == (u8)0x44 {  // 'D'
+    } else if final == (u8)0x44 { // 'D'
       self.emitKey(SpecialKey.arrowLeft, mods);
-    } else if final == (u8)0x48 {  // 'H'
+    } else if final == (u8)0x48 { // 'H'
       self.emitKey(SpecialKey.home, mods);
-    } else if final == (u8)0x46 {  // 'F'
+    } else if final == (u8)0x46 { // 'F'
       self.emitKey(SpecialKey.end, mods);
-    } else if final == (u8)0x50 {  // 'P' (xterm CSI)
+    } else if final == (u8)0x50 { // 'P' (xterm CSI)
       self.emitKey(SpecialKey.f1, mods);
-    } else if final == (u8)0x51 {  // 'Q'
+    } else if final == (u8)0x51 { // 'Q'
       self.emitKey(SpecialKey.f2, mods);
-    } else if final == (u8)0x52 {  // 'R'
+    } else if final == (u8)0x52 { // 'R'
       self.emitKey(SpecialKey.f3, mods);
-    } else if final == (u8)0x53 {  // 'S'
+    } else if final == (u8)0x53 { // 'S'
       self.emitKey(SpecialKey.f4, mods);
-    } else if final == (u8)0x7E {  // '~'
+    } else if final == (u8)0x7E { // '~'
       self.handleCsiTilde(mods);
     }
     // 其他终态字节：未知，丢弃
@@ -549,7 +549,7 @@ open type InputManager {
    * @param mods - 修饰键位标志
    */
   seal func emitKeyPrintable(codepoint: u32, mods: u8): void {
-    let content: Union<SpecialKey, u32> = codepoint;
+    let content: Union < u32, SpecialKey > = codepoint;
     let event = KeyEvent(content, mods);
     self.onKey(event);
   }
