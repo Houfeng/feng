@@ -6778,7 +6778,7 @@ static void test_project_build_keeps_for_body_locals_after_prefix_binding(void) 
     }
 
     ASSERT(path_exists(binary_path));
-    command = dup_printf("lldb -b -o 'breakpoint set --file main.ff --line 10' -o run -o 'frame variable' -- \"%s\" > \"%s\"",
+    command = dup_printf("lldb -b -o 'breakpoint set --file main.ff --line 10' -o 'process launch' -o 'frame variable' -- \"%s\" > \"%s\"",
                          binary_path,
                          output_path);
     ASSERT(command != NULL);

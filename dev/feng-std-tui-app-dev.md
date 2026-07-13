@@ -214,7 +214,7 @@ open type TuiApp {
   /** 默认事件循环句柄（uv_default_loop() 返回值） */
   seal var loop: int;
   /** Screen 渲染底座；声明处绑定零尺寸实例，init() 时原地调整为终端真实尺寸 */
-  let screen: Screen = Screen((u32)0, (u32)0);
+  let screen: Screen = Screen(0, 0);
   /** 输入管理器；用户通过此成员注册输入回调 */
   let input: InputManager;
   /** 窗口尺寸已变化标志：sigpipe 可读时置位，render() 中检查并清零 */
