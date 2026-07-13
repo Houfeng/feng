@@ -39,8 +39,8 @@
 
 ### 2.2 视图逻辑层（第 4 层）
 
-- **组件树**：承载业务状态、样式定义以及排版约束（如 Flexbox）。
-- **第一步**：先实现简单文本和按钮，后续再专门设计完整布局引擎。
+- **组件树机制**：承载组件树、布局声明、布局结果、绘制调度、焦点与事件路由。第七阶段只实现机制层，详见 `dev/feng-std-tui-view-dev.md`。
+- **后续扩展**：Text/Button/Input/List/ScrollView、VStack/HStack/Dock 等组件和布局容器均基于第七阶段机制继续扩展。
 
 ### 2.3 应用控制层（第 5 层）
 
@@ -109,9 +109,9 @@
 
 ### 3.4 组件树设计（后续专门设计）
 
-- Feng 没有继承，组件多态通过 `spec` 契约 + `fit` 实现：定义 `spec Widget` 声明组件行为契约（渲染、事件处理、尺寸等），具体组件 `type Text: Widget` / `type Button: Widget` 通过声明头满足契约。
-- 第一步只实现简单文本（`Text`）和按钮（`Button`）。
-- 完整 Flexbox 布局引擎后续专门设计。
+- Feng 没有继承，组件多态通过 `spec Widget` 实现，组件复用通过组合实现。
+- 第七阶段只定义 `ViewManager` + `Widget` 机制层，不实现高级组件。
+- 详细方案收敛在 `dev/feng-std-tui-view-dev.md`。
 
 ### 3.5 TuiApp 设计
 
@@ -187,19 +187,23 @@
 - [x] 4.28 全量回归测试：执行 `make test`，确认全部通过
 - [x] 4.29 等待人工 Review：开发者审查 Screen 内部化重构，通过后方可进入第七阶段
 
-### 第七阶段：视图逻辑层（第 4 层 - 简化版）
+### 第七阶段：视图机制层（第 4 层）
 
-- [ ] 4.30 实现 Widget spec 契约 + Text + Button
-- [ ] 4.31 实现简单的线性布局（Row / Column / Stack）
-- [ ] 4.32 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、Text 内容绘制、Button 状态切换等测试
-- [ ] 4.33 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.34 等待人工 Review：开发者审查 Widget 契约设计与实现，通过后方可进入第八阶段
+> 本阶段只实现 `ViewManager` + `Widget` 机制层，不实现 Text/Button/Input/List/ScrollView 等高级组件。
+> 实现方案详见 `dev/feng-std-tui-view-dev.md`。
+
+- [ ] 4.30 定义 Widget 机制：`Widget` spec、`BaseWidget`、`WidgetStyle`、`WidgetFrame`、`WidgetChildren`
+- [ ] 4.31 实现 ViewManager：root、focus、paintList、layout/draw 流程、鼠标命中、键盘焦点路由、自下向上事件冒泡
+- [ ] 4.32 集成 ViewManager 至 TuiApp：新增 `view: ViewManager` 成员，并接入 `Screen`/`InputManager`
+- [ ] 4.33 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、layout/frame 计算、paintList 命中、事件冒泡等测试
+- [ ] 4.34 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.35 等待人工 Review：开发者审查视图机制层设计与实现，通过后方可进入第八阶段
 
 ### 第八阶段：测试与验证
 
-- [ ] 4.35 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
-- [ ] 4.36 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.37 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
+- [ ] 4.36 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
+- [ ] 4.37 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.38 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
 
 > **fcts 用例策略**：std 中的功能默认使用 std_test 用例，不需要 fcts 用例。仅当遇到 Feng 语言层面的问题（如语法、语义、类型系统等编译器行为）时，才在 `fcts/fcts_bin/src/` 中新增 fcts 用例进行兼容性验证。
 
@@ -214,8 +218,12 @@ std/src/tui/
   RgbColor.ff      # RgbColor 结构（RGB 颜色）
   Ansi.ff          # ANSI 转义序列生成器（后续）
   Widget.ff        # Widget spec 契约（后续）
-  Text.ff          # 文本组件（后续）
-  Button.ff        # 按钮组件（后续）
+  BaseWidget.ff    # Widget 默认实现（后续）
+  WidgetStyle.ff   # Widget 声明式布局约束（后续）
+  WidgetFrame.ff   # Widget 布局计算结果（后续）
+  WidgetEvent.ff   # 视图层事件对象（后续）
+  WidgetChildren.ff # 子组件集合与 parent 维护（后续）
+  ViewManager.ff   # 视图机制层管理器（后续）
   TuiApp.ff        # 应用程序入口与主循环（后续）
   KeyEvent.ff      # 键盘事件（后续）
   MouseEvent.ff    # 鼠标事件（后续）
