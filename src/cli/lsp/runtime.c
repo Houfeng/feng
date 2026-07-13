@@ -190,6 +190,7 @@ struct FengLspRuntime {
     FengLspDocument *documents;
     size_t document_count;
     size_t document_capacity;
+    size_t document_revision;
     bool shutdown_requested;
     bool should_exit;
     int exit_code;
@@ -201,6 +202,11 @@ struct FengLspRuntime {
     /* Cached manifest path — avoids repeated ancestor directory walks. */
     char *cached_manifest_for_path;
     char *cached_manifest_path;
+    /* Hover keeps the last full semantic analysis alive while the open
+     * document set is unchanged. Building this session dominates request
+     * latency for project files, whereas target lookup itself is inexpensive. */
+    FengLspAnalysisSession cached_hover_session;
+    size_t cached_hover_revision;
 };
 
 /* URI of the document currently being completed.  Set at the beginning of
@@ -1184,6 +1190,7 @@ static bool upsert_document(FengLspRuntime *runtime,
             free(created.text);
             return false;
         }
+        ++runtime->document_revision;
         return true;
     }
 
@@ -1194,6 +1201,9 @@ static bool upsert_document(FengLspRuntime *runtime,
         fprintf(runtime->errors,
                 "lsp: out of memory updating document text for '%s'\n",
                 uri != NULL ? uri : "(null)");
+    }
+    if (document->text != NULL) {
+        ++runtime->document_revision;
     }
     return document->text != NULL;
 }
@@ -1212,6 +1222,7 @@ static void remove_document(FengLspRuntime *runtime, const char *uri) {
                         (runtime->document_count - index - 1U) * sizeof(runtime->documents[0]));
             }
             --runtime->document_count;
+            ++runtime->document_revision;
             return;
         }
     }
@@ -1601,6 +1612,27 @@ static bool build_analysis_session(const FengLspRuntime *runtime,
     free(manifest_path);
     feng_cli_project_error_dispose(&error);
     return build_standalone_session(runtime, document, session);
+}
+
+static const FengProgram *find_program(const FengLspAnalysisSession *session,
+                                       const char *path);
+
+/* Return the semantic session for Hover, rebuilding it only after the tracked
+ * document set changes or when the requested file does not belong to the
+ * cached project/standalone session. */
+static const FengLspAnalysisSession *get_hover_analysis_session(FengLspRuntime *runtime,
+                                                                const FengLspDocument *document) {
+    if (runtime->cached_hover_revision == runtime->document_revision &&
+        find_program(&runtime->cached_hover_session, document->path) != NULL) {
+        return &runtime->cached_hover_session;
+    }
+    session_dispose(&runtime->cached_hover_session);
+    if (!build_analysis_session(runtime, document, &runtime->cached_hover_session)) {
+        session_dispose(&runtime->cached_hover_session);
+        return NULL;
+    }
+    runtime->cached_hover_revision = runtime->document_revision;
+    return &runtime->cached_hover_session;
 }
 
 static void cache_query_context_dispose(FengLspCacheQueryContext *context) {
@@ -6144,6 +6176,11 @@ static bool find_type_ref_in_expr(const FengExpr *expr,
                                          owner_type_params, owner_type_param_count);
         case FENG_EXPR_LAMBDA:
             for (index = 0U; index < expr->as.lambda.param_count; ++index) {
+                if (offset_in_token(expr->as.lambda.params[index].token, offset)) {
+                    target->kind = FENG_LSP_RESOLVED_PARAM;
+                    target->parameter = &expr->as.lambda.params[index];
+                    return true;
+                }
                 if (resolve_type_ref_at_offset(session,
                                                program,
                                                expr->as.lambda.params[index].type,
@@ -11690,7 +11727,7 @@ static bool handle_hover_request(FengLspRuntime *runtime,
     unsigned int line;
     unsigned int character;
     FengLspDocument *document;
-    FengLspAnalysisSession session = {0};
+    const FengLspAnalysisSession *session;
     FengLspCacheQueryContext cache = {0};
     const FengProgram *program;
     FengLspResolvedTarget target = {0};
@@ -11720,16 +11757,16 @@ static bool handle_hover_request(FengLspRuntime *runtime,
     offset = offset_from_position(document->text, line, character);
     /* Prefer analysis path: reads live AST for up-to-date doc comments and
        signatures, works even when exit_code != 0 (best-effort). */
-    if (build_analysis_session(runtime, document, &session)) {
-        program = find_program(&session, document->path);
-        if (program != NULL && resolve_target_at(&session, program, offset, &target)) {
-            hover_text = hover_text_for_target(&session, program, &target);
+    session = get_hover_analysis_session(runtime, document);
+    if (session != NULL) {
+        program = find_program(session, document->path);
+        if (program != NULL && resolve_target_at(session, program, offset, &target)) {
+            hover_text = hover_text_for_target(session, program, &target);
             ok = build_hover_result_json(&result,
                                          runtime->hover_markup_kind,
                                          hover_text);
             free(hover_text);
             free(uri);
-            session_dispose(&session);
             if (!ok) {
                 if (runtime->errors != NULL) {
                     fprintf(runtime->errors, "lsp: textDocument/hover: out of memory building response\n");
@@ -11742,7 +11779,6 @@ static bool handle_hover_request(FengLspRuntime *runtime,
             return ok;
         }
     }
-    session_dispose(&session);
     /* Fallback to symbol cache (e.g., symbols from dependency packages or when
        analysis cannot resolve — uses pre-built .ft symbol tables). */
     if (build_cache_query_context(document, &cache) && resolve_symbol_target_at(&cache, offset, &cache_target)) {
@@ -16700,6 +16736,7 @@ void feng_lsp_runtime_free(FengLspRuntime *runtime) {
     free(runtime->cached_provider_manifest);
     free(runtime->cached_manifest_for_path);
     free(runtime->cached_manifest_path);
+    session_dispose(&runtime->cached_hover_session);
     free(runtime);
 }
 

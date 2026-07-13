@@ -7909,6 +7909,152 @@ static void test_lsp_hover_lambda_scope_and_chained_members(void) {
     free(output);
 }
 
+/* Hover resolves a lambda parameter at both its declaration and use sites.
+ * Consecutive requests share one analysis session, while didChange must
+ * invalidate that session so the updated parameter is resolved. */
+static void test_lsp_hover_lambda_parameter_declaration_and_cache_invalidation(void) {
+    static const char *kSourceBefore =
+        "module test.lsp.lambda_param_cache;\n"
+        "\n"
+        "spec Handler<T>(event: T): void;\n"
+        "\n"
+        "func main(args: string[]) {\n"
+        "    let handler: Handler<i32> = (item: i32) {\n"
+        "        let copy = item;\n"
+        "    };\n"
+        "}\n";
+    static const char *kSourceAfter =
+        "module test.lsp.lambda_param_cache;\n"
+        "\n"
+        "spec Handler<T>(event: T): void;\n"
+        "\n"
+        "func main(args: string[]) {\n"
+        "    let handler: Handler<i32> = (value: i32) {\n"
+        "        let copy = value;\n"
+        "    };\n"
+        "}\n";
+    char template_path[] = "temp/feng_lsp_lambda_param_cache_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *source_uri;
+    char *escaped_before;
+    char *escaped_after;
+    char *initialize;
+    char *did_open;
+    char *hover_declaration;
+    char *hover_use;
+    char *did_change;
+    char *hover_updated_declaration;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    unsigned int declaration_line;
+    unsigned int declaration_character;
+    unsigned int use_line;
+    unsigned int use_character;
+    unsigned int updated_line;
+    unsigned int updated_character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSourceBefore);
+    source_uri = file_uri_from_path(source_path);
+    escaped_before = json_escape_text(kSourceBefore);
+    escaped_after = json_escape_text(kSourceAfter);
+
+    find_line_character(kSourceBefore,
+                        "(item: i32)",
+                        strlen("("),
+                        &declaration_line,
+                        &declaration_character);
+    find_line_character(kSourceBefore,
+                        "let copy = item;",
+                        strlen("let copy = "),
+                        &use_line,
+                        &use_character);
+    find_line_character(kSourceAfter,
+                        "(value: i32)",
+                        strlen("("),
+                        &updated_line,
+                        &updated_character);
+
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                            "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                          "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+                          "\"version\":1,\"text\":\"%s\"}}}",
+                          source_uri,
+                          escaped_before);
+    hover_declaration = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,"
+                                   "\"method\":\"textDocument/hover\","
+                                   "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                                   "\"position\":{\"line\":%u,\"character\":%u}}}",
+                                   source_uri,
+                                   declaration_line,
+                                   declaration_character);
+    hover_use = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":3,"
+                           "\"method\":\"textDocument/hover\","
+                           "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                           "\"position\":{\"line\":%u,\"character\":%u}}}",
+                           source_uri,
+                           use_line,
+                           use_character);
+    did_change = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\","
+                            "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":2},"
+                            "\"contentChanges\":[{\"text\":\"%s\"}]}}",
+                            source_uri,
+                            escaped_after);
+    hover_updated_declaration = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":4,"
+                                           "\"method\":\"textDocument/hover\","
+                                           "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                                           "\"position\":{\"line\":%u,\"character\":%u}}}",
+                                           source_uri,
+                                           updated_line,
+                                           updated_character);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = temp_file();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, hover_declaration);
+    write_lsp_message(input, hover_use);
+    write_lsp_message(input, did_change);
+    write_lsp_message(input, hover_updated_declaration);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+
+    ASSERT(strstr(output,
+                  "\"id\":2,\"result\":{\"contents\":{\"kind\":\"plaintext\","
+                  "\"value\":\"let item: i32\"}}") != NULL);
+    ASSERT(strstr(output,
+                  "\"id\":3,\"result\":{\"contents\":{\"kind\":\"plaintext\","
+                  "\"value\":\"let item: i32\"}}") != NULL);
+    ASSERT(strstr(output,
+                  "\"id\":4,\"result\":{\"contents\":{\"kind\":\"plaintext\","
+                  "\"value\":\"let value: i32\"}}") != NULL);
+
+    free(output);
+    free(shutdown);
+    free(hover_updated_declaration);
+    free(did_change);
+    free(hover_use);
+    free(hover_declaration);
+    free(did_open);
+    free(initialize);
+    free(escaped_after);
+    free(escaped_before);
+    free(source_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
 static void test_lsp_hover_type_param(void) {
     static const char *kSource =
         "module test.lsp.type_param_hover;\n"
@@ -13421,6 +13567,7 @@ int main(void) {
     test_lsp_hover_uses_markdown_when_supported();
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
     test_lsp_hover_lambda_scope_and_chained_members();
+    test_lsp_hover_lambda_parameter_declaration_and_cache_invalidation();
     test_lsp_hover_type_param();
     test_lsp_hover_type_param_extended();
     test_lsp_hover_type_param_in_spec_member();
