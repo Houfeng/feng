@@ -220,7 +220,7 @@ std/src/tui/
   Widget.ff        # Widget spec 契约（后续）
   BaseWidget.ff    # Widget 默认实现（后续）
   WidgetStyle.ff   # Widget 声明式布局约束（后续）
-  WidgetFrame.ff   # Widget 布局计算结果（后续）
+  WidgetFrame.ff   # Widget 布局调度后的计算结果（后续）
   WidgetEvent.ff   # 视图层事件对象（后续）
   WidgetChildren.ff # 子组件集合与 parent 维护（后续）
   ViewManager.ff   # 视图机制层管理器（后续）

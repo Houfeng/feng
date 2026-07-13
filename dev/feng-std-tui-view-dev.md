@@ -263,16 +263,16 @@ drawWidget(widget)
 
 ```text
 children.add(child)
-  child.setParent(owner)
+  child.parent = owner
   append child
 
 children.remove(child)
   remove child
-  child.setParent(none)
+  child.parent = none
 
 children.clear()
   for child in children:
-    child.setParent(none)
+    child.parent = none
   clear list
 ```
 
