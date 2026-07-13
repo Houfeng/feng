@@ -29,7 +29,7 @@ TuiApp
 - 实现 `ViewManager`；
 - 定义 `Widget` spec；
 - 提供 `BaseWidget` 默认实现；
-- 定义 `WidgetStyle`、`WidgetFrame`、布局调度流程；
+- 定义 `WidgetStyle`、`WidgetFrame`、`arrange` 调度流程；
 - 定义事件引用语义、事件冒泡与焦点规则；
 - 定义 `paintList` 命中机制；
 - 将 `ViewManager` 集成到 `TuiApp`。
@@ -50,7 +50,7 @@ TuiApp
 
 `Widget` 不是继承基类，而是组件参与视图树的能力契约。Feng 没有继承，视图多态通过 `spec Widget` 实现，组件复用通过组合实现。
 
-`Widget` spec 只包含 `ViewManager` 必须依赖的字段。Widget 的成员以字段为主，不通过 `handleEvent()` 这类统一方法做事件分发：
+`Widget` spec 只包含 `ViewManager` 必须依赖的成员。`arrange` 和 `draw` 是组件行为，使用 `func` 定义；事件处理使用回调字段，不通过 `handleEvent()` 这类统一方法做事件分发：
 
 ```feng
 spec Widget {
@@ -66,11 +66,11 @@ spec Widget {
   /** 子组件集合；集合内部负责维护 parent 引用 */
   children: WidgetChildren;
 
-  /** 布局回调；普通 Widget 可使用默认布局，布局组件可在此计算子组件 frame */
-  layout: Action<WidgetLayoutContext>;
+  /** 对齐并计算当前组件及其子组件的 frame */
+  func arrange(ctx: WidgetArrangeContext): void;
 
   /** 绘制当前组件；绘制阶段只使用 frame，不重新解释 style */
-  draw: Action<WidgetDrawContext>;
+  func draw(ctx: WidgetDrawContext): void;
 
   /** 键盘事件回调 */
   onKey: Action<WidgetEvent>;
@@ -89,7 +89,9 @@ spec Widget {
 }
 ```
 
-> 说明：上述字段是设计目标，实际实现时如受当前 spec/泛型能力约束，可在不改变语义的前提下调整具体 API 形态。若字段需要可选回调，具体类型可按 Feng 现有 `Option<T>` 或空引用检查能力落地。
+`arrange` 和 `draw` 不是可赋值回调，外部使用者不能在组件实例上替换。具体组件通过实现 `Widget` spec 定义自身行为；组合 `BaseWidget` 的组件可以在自身实现中复用或委托基础逻辑。事件回调字段仍可由外部设置。
+
+> 说明：上述成员是设计目标，实际实现时如受当前 spec/泛型能力约束，可在不改变语义的前提下调整具体 API 形态。若事件字段需要可选回调，具体类型可按 Feng 现有 `Option<T>` 或空引用检查能力落地。
 
 ### 3.2 BaseWidget
 
@@ -102,7 +104,8 @@ BaseWidget
   parent: Option<Widget>
   children: WidgetChildren
   focusable: bool
-  layout/draw/onKey/onMouseDown/onMouseMove/onMouseUp/onWheel 等回调字段
+  arrange(ctx) / draw(ctx) 方法
+  onKey/onMouseDown/onMouseMove/onMouseUp/onWheel 等事件回调字段
 ```
 
 简单组件可以直接创建并配置 `BaseWidget`；复杂组件可以内部持有 `BaseWidget`，并通过方法转发满足 `Widget` spec。用户组装组件树时不需要 `asWidget()` 之类的转换 API，组件自身只要满足 `Widget` 即可加入树。
@@ -114,7 +117,7 @@ BaseWidget
 - 树结构由 `Widget.children` 和 `Widget.parent` 表达；
 - 布局声明由 `WidgetStyle` 表达；
 - 布局结果由 `WidgetFrame` 表达；
-- 布局、绘制和事件由 `Widget.layout` / `Widget.draw` / `Widget.onXXX` 字段表达。
+- 对齐、绘制和事件分别由 `Widget.arrange()` / `Widget.draw()` 方法及 `Widget.onXXX` 字段表达。
 
 这样避免在组件对象之外再维护一棵节点树，降低组件树 API 的复杂度。
 
@@ -122,12 +125,12 @@ BaseWidget
 
 ### 4.1 声明值与计算值分离
 
-组件布局分为两个阶段：
+组件处理分为 `arrange` 和 `draw` 两个阶段；`WidgetStyle` 是进入 `arrange` 前的声明输入：
 
 ```text
-声明阶段：用户设置 WidgetStyle
-布局阶段：ViewManager 调度组件布局，组件或布局组件计算 WidgetFrame
-绘制阶段：Widget.draw() 只读取 WidgetFrame
+声明输入：用户设置 WidgetStyle
+arrange 阶段：ViewManager 调度 Widget.arrange()，组件或布局组件计算 WidgetFrame
+draw 阶段：Widget.draw() 只读取 WidgetFrame
 ```
 
 `WidgetStyle` 是用户意图，`WidgetFrame` 是本轮布局后的事实。绘制、命中测试、事件坐标转换均以 `WidgetFrame` 为准，不在绘制阶段重新解释百分比、margin、padding、align。
@@ -209,7 +212,7 @@ WidgetFrame
   clipX/clipY/...              # 有效裁剪区
 ```
 
-布局阶段由 `ViewManager` 发起调度，具体 `WidgetFrame` 由对应组件或布局组件计算并写入。组件绘制和事件命中只读取 `WidgetFrame`。
+`arrange` 阶段由 `ViewManager` 发起调度，具体 `WidgetFrame` 由对应组件或布局组件计算并写入。组件绘制和事件命中只读取 `WidgetFrame`。
 
 ## 5 ViewManager
 
@@ -231,12 +234,12 @@ ViewManager
 ```text
 ViewManager.render()
   1. paintList.clear()
-  2. dispatchLayout(root, screen rect)
+  2. dispatchArrange(root, screen rect)
   3. draw(root)
   4. Screen.buildPatchBytes() 由 TuiApp 负责输出
 ```
 
-layout 阶段由 `ViewManager` 负责调度，不把具体布局算法写死在 `ViewManager` 中。普通组件可使用默认布局逻辑，VStack/HStack/Dock/ScrollView 等后续布局组件可在自身 `layout` 字段中负责子组件的 `WidgetFrame` 计算。draw 阶段只按 `WidgetFrame` 绘制。
+`arrange` 阶段由 `ViewManager` 负责调度，不把具体布局算法写死在 `ViewManager` 中。普通组件可使用 `BaseWidget.arrange()` 的基础逻辑，VStack/HStack/Dock/ScrollView 等后续布局组件通过自身的 `arrange()` 实现负责子组件的 `WidgetFrame` 计算。`draw` 阶段只按 `WidgetFrame` 绘制。
 
 ### 5.2 paintList
 
@@ -388,7 +391,7 @@ std/src/tui/
   WidgetFrame.ff     # 布局调度后的计算结果
   WidgetEvent.ff     # 视图层事件对象
   WidgetChildren.ff  # 子组件集合与 parent 维护
-  ViewManager.ff     # 组件树、布局、绘制、事件路由、焦点
+  ViewManager.ff     # 组件树、arrange/draw 调度、事件路由、焦点
   TuiApp.ff          # 新增 view 成员并接入 ViewManager
 ```
 
@@ -403,7 +406,7 @@ std/src/tui/
 3. 实现 `WidgetChildren`，确保 parent 由树 API 自动维护；
 4. 实现 `WidgetEvent` 引用语义、传播状态与 clone；
 5. 实现 `ViewManager` 的 root/focus/paintList 基础结构；
-6. 实现 layout 调度阶段：由 `ViewManager` 发起，组件或布局组件将声明值解析为 `WidgetFrame`；
+6. 实现 arrange 调度阶段：由 `ViewManager` 发起，组件或布局组件将声明值解析为 `WidgetFrame`；
 7. 实现 draw 阶段：清空 `paintList`、遍历组件树、draw 前追加组件；
 8. 实现鼠标 hit test 与自下向上冒泡；
 9. 实现键盘焦点路由与自下向上冒泡；

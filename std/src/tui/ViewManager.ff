@@ -1,0 +1,7 @@
+open module std.tui;
+
+import std.collections;
+
+open type ViewManager {
+  seal let sequence: List<Widget>;
+}

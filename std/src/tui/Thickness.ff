@@ -1,0 +1,57 @@
+open module std.tui;
+
+import std;
+
+/**
+ * Thickness 表示距形的四个边的厚度
+ * 可用于 Padding、Margin、Border 等
+ */
+open type Thickness {
+  let top: Union<u32, float>;
+  let right: Union<u32, float>;
+  let bottom: Union<u32, float>;
+  let left: Union<u32, float>;
+
+  func Thickness(t: u32, r: u32, b: u32, l: u32): void {
+    self.top = t;
+    self.right = r;
+    self.bottom = b;
+    self.left = l;
+  }
+
+  func Thickness(v: u32, h: u32): void {
+    self.top = v;
+    self.right = h;
+    self.bottom = v;
+    self.left = h;
+  }
+
+  func Thickness(t: float, r: float, b: float, l: float): void {
+    self.top = t;
+    self.right = r;
+    self.bottom = b;
+    self.left = l;
+  }
+
+  func Thickness(v: float, h: float): void {
+    self.top = v;
+    self.right = h;
+    self.bottom = v;
+    self.left = h;
+  }
+
+  func Thickness(all: u32): void {
+    self.top = all;
+    self.right = all;
+    self.bottom = all;
+    self.left = all;
+  }
+
+  func Thickness(all: float): void {
+    self.top = all;
+    self.right = all;
+    self.bottom = all;
+    self.left = all;
+  }
+
+}

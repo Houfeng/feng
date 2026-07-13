@@ -193,9 +193,9 @@
 > 实现方案详见 `dev/feng-std-tui-view-dev.md`。
 
 - [ ] 4.30 定义 Widget 机制：`Widget` spec、`BaseWidget`、`WidgetStyle`、`WidgetFrame`、`WidgetChildren`
-- [ ] 4.31 实现 ViewManager：root、focus、paintList、layout/draw 流程、鼠标命中、键盘焦点路由、自下向上事件冒泡
+- [ ] 4.31 实现 ViewManager：root、focus、paintList、arrange/draw 流程、鼠标命中、键盘焦点路由、自下向上事件冒泡
 - [ ] 4.32 集成 ViewManager 至 TuiApp：新增 `view: ViewManager` 成员，并接入 `Screen`/`InputManager`
-- [ ] 4.33 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、layout/frame 计算、paintList 命中、事件冒泡等测试
+- [ ] 4.33 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、arrange/frame 计算、paintList 命中、事件冒泡等测试
 - [ ] 4.34 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.35 等待人工 Review：开发者审查视图机制层设计与实现，通过后方可进入第八阶段
 

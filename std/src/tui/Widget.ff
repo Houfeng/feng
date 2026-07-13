@@ -1,0 +1,175 @@
+open module std.tui;
+
+import std;
+import std.collections;
+
+/**
+ * WidgetPosition 组件布局类型
+ */
+open enum WidgetPosition {
+  /** 普通布局，由父组件控制 */
+  Normal,
+  /** 绝对布局，相对于父组件定位 */
+  Absolute,
+  /** 固定布局，相对于屏幕定位 */
+  Fixed
+}
+
+/**
+ * WidgetAlign 组件对齐方式
+ */
+open enum WidgetAlign {
+  /** 填充整个可用空间 */
+  Full,
+  /** 靠开始位置对齐 */
+  Start,
+  /** 居中对齐 */
+  Center,
+  /** 靠结束位置对齐 */
+  End
+}
+
+/**
+ * WidgetOverflow 组件溢出处理方式
+ * 无 Scroll 定义，因为 ScrollView 组件实现（ScrollView 自身是 Hidden）
+ */
+open enum WidgetOverflow {
+  Visible,
+  Hidden
+}
+
+/**
+ * WidgetStyle 组件布局与样式约束
+ */
+open spec WidgetStyle {
+  /**
+   * 组件布局类型
+   */
+  var position: WidgetPosition;
+
+  /**
+   * X 坐标
+   * 非 Absolute/Fixed 布局时忽略
+   * 相对坐标是不受父组件的 Padding 影响
+   */
+  var x: Union<u32, float>;
+
+  /**
+   * Y 坐标
+   * 非 Absolute/Fixed 布局时忽略
+   * 相对坐标是不受父组件的 Padding 影响
+   */
+  var y: Union<u32, float>;
+
+  /**
+   * 宽度
+   * 可以是固定值或百分比, 小数代表百分比
+   */
+  var width: Union<u32, float>;
+
+  /**
+   * 高度
+   * 可以是固定值或百分比, 小数代表百分比
+   */
+  var height: Union<u32, float>;
+
+  /**
+   * 前景色
+   */
+  var foreColor: Option<RgbColor>;
+
+  /**
+   * 背景色
+   */
+  var backColor: Option<RgbColor>;
+
+  /**
+   * 填充间距
+   */
+  var padding: Thickness;
+
+  /**
+   * 边框间距
+   */
+  var margin: Thickness;
+
+  /**
+   * 溢出处理方式
+   */
+  var overflow: WidgetOverflow;
+
+  /**
+   * 水平对齐方式
+   * 当组件浮动时忽略
+   */
+  var horizontalAlign: WidgetAlign;
+
+  /**
+   * 垂直对齐方式
+   * 当组件浮动时忽略
+   */
+  var verticalAlign: WidgetAlign;
+}
+
+@value
+open type WidgetFrame {
+  /** 左上角列坐标（0-based） */
+  var x: u32;
+  /** 左上角行坐标（0-based） */
+  var y: u32;
+  /** 宽度 */
+  var width: u32;
+  /** 高度 */
+  var height: u32;
+}
+
+/**
+ * Widget 组件契约
+ */
+open spec Widget {
+  /**
+   * 用户声明的布局与样式约束
+   */
+  let style: WidgetStyle;
+
+  /**
+   * 布局阶段计算后的最终区域信息
+   */
+  let frame: WidgetFrame;
+
+  /**
+   * 父组件；仅由组件树 API 维护
+   */
+  var parent: Option<Widget>;
+
+  /**
+   * 子组件集合；集合内部负责维护 parent 引用
+   */
+  let children: List<Widget>;
+
+  /**
+   * 对齐并计算当前组件及其子组件的 frame
+   */
+  func arrange(manager: ViewManager): void;
+
+  /**
+   * 绘制当前组件；绘制阶段只使用 frame，不重新解释 style
+   * 需要组件将自身添加到 ViewManager 的 sequence 中，保证绘制顺序正确
+   */
+  func draw(manager: ViewManager): void;
+
+  /** 键盘事件回调 */
+  var onKey: Action<KeyEvent>;
+
+  /** 鼠标按下事件回调 */
+  var onMouseDown: Action<MouseEvent>;
+
+  /** 鼠标移动事件回调 */
+  var onMouseMove: Action<MouseEvent>;
+
+  /** 鼠标释放事件回调 */
+  var onMouseUp: Action<MouseEvent>;
+
+  /** 鼠标滚轮事件回调 */
+  var onWheel: Action<MouseEvent>;
+}
