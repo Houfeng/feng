@@ -213,8 +213,10 @@ open type TuiApp {
   seal var tty: int;
   /** 默认事件循环句柄（uv_default_loop() 返回值） */
   seal var loop: int;
-  /** Screen 渲染底座 */
-  seal var screen: Screen;
+  /** Screen 渲染底座；声明处绑定零尺寸实例，init() 时原地调整为终端真实尺寸 */
+  let screen: Screen = Screen((u32)0, (u32)0);
+  /** 输入管理器；用户通过此成员注册输入回调 */
+  let input: InputManager;
   /** 窗口尺寸已变化标志：sigpipe 可读时置位，render() 中检查并清零 */
   seal var resizeRequested: bool;
   /** 是否已初始化（防止重复 init / 重复 exit） */
@@ -236,7 +238,7 @@ open type TuiApp {
 
 | 方法 | 职责 |
 |------|------|
-| `init()` | 分配 TTY 句柄、进入 Raw Mode、创建信号管道、注册 SIGWINCH 和 atexit |
+| `init()` | 分配 TTY 句柄、进入 Raw Mode、获取终端尺寸并调整 Screen、创建信号管道、注册 SIGWINCH 和 atexit |
 | `run()` | 启动主循环，`poll()` 多路复用驱动，事件到达时渲染一帧 |
 | `exit()` | 退出 TUI 模式、恢复终端、关闭管道、释放 TTY 句柄 |
 
@@ -250,12 +252,11 @@ open type TuiApp {
 
 ```feng
 /**
- * 构造函数（无外部 fd）：仅保存 Screen 引用，不做 TTY 初始化。
- * 阶段四纯渲染场景使用。
- * @param screen - 由调用方创建的 Screen 实例
+ * 构造函数（无外部 fd）：创建 InputManager，不做 TTY 初始化。
+ * screen 已在字段声明处显式初始绑定为零尺寸 Screen，不在构造函数中重复绑定。
  */
-func TuiApp(screen: Screen) {
-  self.screen = screen;
+func TuiApp() {
+  self.input = InputManager();
   self.tty = 0;
   self.loop = 0;
   self.resizeRequested = false;
@@ -267,14 +268,14 @@ func TuiApp(screen: Screen) {
 }
 
 /**
- * 构造函数（有外部 fd）：保存 Screen 引用和外部通知 fd 数组，不做 TTY 初始化。
+ * 构造函数（有外部 fd）：创建 InputManager 并保存外部通知 fd 数组，不做 TTY 初始化。
+ * screen 已在字段声明处显式初始绑定为零尺寸 Screen，不在构造函数中重复绑定。
  * 异步 I/O 库场景使用：fds 为异步 I/O 库的通知 fd（如 epoll/kqueue/self-pipe 管道读端）。
  * TuiApp 只监听 fd 可读事件唤醒渲染，不向 fd 写入、不处理关闭——fd 的生命周期由调用方管理。
- * @param screen - 由调用方创建的 Screen 实例
  * @param fds - 外部通知 fd 数组，poll 监听可读事件
  */
-func TuiApp(screen: Screen, fds: i32[]) {
-  self.screen = screen;
+func TuiApp(fds: i32[]) {
+  self.input = InputManager();
   self.tty = 0;
   self.loop = 0;
   self.resizeRequested = false;
@@ -288,15 +289,17 @@ func TuiApp(screen: Screen, fds: i32[]) {
 
 > **fds 是通知 fd，不是请求 fd**：典型场景是异步 I/O 库内部维护自己的 fd 集合（epoll/kqueue/self-pipe），对 TuiApp 只暴露一个或几个通知 fd。事件到达时 TuiApp 只管 render，异步 I/O 库自己处理事件分发。不是每个网络请求注册一个 fd。
 
-### 5.4 init() — 进入 Raw Mode + 注册信号
+### 5.4 init() — 进入 Raw Mode + 初始化 Screen + 注册信号
 
 ```feng
 /**
- * 初始化：分配 TTY 句柄、进入 Raw Mode、创建信号管道、注册 SIGWINCH 和 atexit 回调。
+ * 初始化：分配 TTY 句柄、进入 Raw Mode、按终端尺寸调整 Screen、创建信号管道、
+ * 注册 SIGWINCH 和 atexit 回调。
  * 幂等：重复调用安全。
  * @throws "tui/app/alloc-failed" — feng_alloc 失败
  * @throws "tui/app/tty-init-failed" — uv_tty_init 失败
  * @throws "tui/app/raw-mode-failed" — uv_tty_set_mode 失败
+ * @throws "tui/app/size-failed" — 无法取得有效终端尺寸
  * @throws "tui/app/pipe-failed" — pipe() 失败
  */
 open func init(): void {
@@ -319,10 +322,22 @@ open func init(): void {
     self.tty = 0;
     throw "tui/app/raw-mode-failed";
   }
+  // 获取终端真实尺寸，并原地调整声明处绑定的 Screen 实例
+  let w: i32[!] = i32[:1];
+  let h: i32[!] = i32[:1];
+  let sizeRc = uv_tty_get_winsize(self.tty, &w, &h);
+  if sizeRc != 0 || w[0] <= 0 || h[0] <= 0 {
+    uv_tty_reset_mode();
+    feng_free(self.tty);
+    self.tty = 0;
+    throw "tui/app/size-failed";
+  }
+  self.screen.resize((u32)w[0], (u32)h[0]);
   // 创建信号管道（SIGWINCH → fd 转换）
   let pipefds: i32[!] = i32[:2];
   let pipeRc = c_pipe(&pipefds);
   if pipeRc != 0 {
+    uv_tty_reset_mode();
     feng_free(self.tty);
     self.tty = 0;
     throw "tui/app/pipe-failed";

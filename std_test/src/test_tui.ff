@@ -759,27 +759,31 @@ func screen_render_unicode_emoji() {
 // ─── TuiApp 构造与字段初始化 ─────────────────────────────────────────────
 
 func tuiapp_ctor_no_fds() {
-  let scr = Screen((u32)10, (u32)5);
-  let app = TuiApp(scr);
+  let app = TuiApp();
   // 构造后未初始化状态
   check(app.isInitialized() == false, "tui/app/ctor-initialized");
   check(app.isRunning() == false, "tui/app/ctor-running");
+  // screen 在字段声明处显式绑定为零尺寸实例，init() 后再调整为终端尺寸
+  let size = app.screen.size();
+  check(size.item1 == (u32)0, "tui/app/ctor-screen-width");
+  check(size.item2 == (u32)0, "tui/app/ctor-screen-height");
 }
 
 func tuiapp_ctor_with_fds() {
-  let scr = Screen((u32)10, (u32)5);
   let fds: i32[!] = i32[:(int)2];
   fds[0] = (i32)3;
   fds[1] = (i32)4;
-  let app = TuiApp(scr, (i32[])fds);
+  let app = TuiApp((i32[])fds);
   check(app.isInitialized() == false, "tui/app/ctor-fds-initialized");
+  let size = app.screen.size();
+  check(size.item1 == (u32)0, "tui/app/ctor-fds-screen-width");
+  check(size.item2 == (u32)0, "tui/app/ctor-fds-screen-height");
 }
 
 // ─── exit() 幂等性（不依赖 TTY 初始化） ──────────────────────────────────
 
 func tuiapp_exit_idempotent_uninit() {
-  let scr = Screen((u32)10, (u32)5);
-  let app = TuiApp(scr);
+  let app = TuiApp();
   // 未 init 直接 exit，不应抛异常
   app.exit();
   app.exit();
@@ -789,8 +793,7 @@ func tuiapp_exit_idempotent_uninit() {
 // ─── render() 空帧不抛异常（不依赖 TTY 初始化） ──────────────────────────
 
 func tuiapp_render_empty_no_throw() {
-  let scr = Screen((u32)10, (u32)5);
-  let app = TuiApp(scr);
+  let app = TuiApp();
   // 未 init 状态下 render()：resizeRequested=false，直接 buildPatchBytes + write
   // 空白 Screen 的 buildPatchBytes 返回空数组，不触发 write，不会抛异常
   var caught = false;
@@ -801,9 +804,9 @@ func tuiapp_render_empty_no_throw() {
 // ─── render() 有内容输出（不依赖 TTY 初始化，buildPatchBytes 有内容即触发 write） ─────────
 
 func tuiapp_render_with_content() {
-  let scr = Screen((u32)10, (u32)5);
-  scr.buffer().draw((u32)0, (u32)0, "Hi");
-  let app = TuiApp(scr);
+  let app = TuiApp();
+  app.screen.resize((u32)10, (u32)5);
+  app.screen.buffer().draw((u32)0, (u32)0, "Hi");
   // resizeRequested=false，直接 buildPatchBytes（有内容）+ write
   // 非 TTY 环境 write 可能失败，但写 stdout(fd=1) 通常成功
   var caught = false;
@@ -814,12 +817,13 @@ func tuiapp_render_with_content() {
 func tuiapp_run_startup_clears_screen_keeps_buffer() {
   // run() 启动时应清屏但不擦除已绘制内容：构造后手动模拟 run() 启动渲染段
   // （不真正调用 run() 以免阻塞 poll）。验证 Screen.clearScreen() + hideCursor() + render() 的组合行为。
-  let scr = Screen((u32)10, (u32)5);
-  scr.buffer().draw((u32)0, (u32)0, "Hi");
+  let app = TuiApp();
+  app.screen.resize((u32)10, (u32)5);
+  app.screen.buffer().draw((u32)0, (u32)0, "Hi");
   // 模拟 run() 启动初始化渲染：clearScreen + hideCursor + buildPatchString
-  scr.clearScreen();
-  scr.hideCursor();
-  let out = scr.buildPatchString();
+  app.screen.clearScreen();
+  app.screen.hideCursor();
+  let out = app.screen.buildPatchString();
   // 应包含清屏序列
   check(out.contains("\x1b[2J\x1b[H"), "tui/app/run-startup-clear-seq");
   // 应包含隐藏光标序列
@@ -827,15 +831,14 @@ func tuiapp_run_startup_clears_screen_keeps_buffer() {
   // 应包含首帧 diff（Hi 内容）
   check(out.contains("Hi"), "tui/app/run-startup-first-frame-content");
   // back 缓冲区内容应保留（clearScreen 不清缓冲区）
-  check(scr.buffer().cells[(int)0].value == (u64)72, "tui/app/run-startup-keep-buffer");
+  check(app.screen.buffer().cells[(int)0].value == (u64)72, "tui/app/run-startup-keep-buffer");
 }
 
 func tuiapp_run_drains_stdin_and_exit_stops() {
   // 阶段四补充：run() 将 stdin 纳入 poll 监听集合并在 POLLIN 时读取丢弃（防 busy-loop），
   // 退出由 exit() 置 running=false。此处不真正调用 run()（会阻塞 poll），验证退出机制：
   // 构造 TuiApp → 手动设 running=true → exit() 应置 running=false，证明循环可正常终止。
-  let scr = Screen((u32)10, (u32)5);
-  let app = TuiApp(scr);
+  let app = TuiApp();
   // exit() 未 init 时幂等，running 本为 false
   check(app.isRunning() == false, "tui/app/drain-before-exit");
   // 再次 exit 确认幂等（退出机制安全）

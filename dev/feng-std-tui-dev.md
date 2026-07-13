@@ -177,14 +177,14 @@
 ### 第六阶段：TuiApp 内部化 Screen
 
 > 将 Screen 从外部传入重构为 TuiApp 内部初始化，简化使用方心智负担。
-> TuiApp 构造函数不再接收 Screen 参数，init() 时根据终端尺寸自动创建 Screen 实例。
+> TuiApp 构造函数不再接收 Screen 参数；`screen` 在字段声明处显式初始绑定为零尺寸 Screen，init() 时根据终端尺寸原地调整为真实尺寸。
 > 用户通过 `app.screen` 访问渲染底座（与 `app.input` 同为公开只读成员）。
 
-- [ ] 4.24 重构 TuiApp 构造函数：移除 Screen 参数，Screen 改为 `let` 公开只读成员
-- [ ] 4.25 重构 init()：进入 Raw Mode 后通过 `uv_tty_get_winsize` 获取终端尺寸，内部创建 Screen 实例
-- [ ] 4.26 更新设计文档与代码示例：`dev/feng-std-tui-app-dev.md` 构造函数、init()、render() 等同步修改
-- [ ] 4.27 更新 std_test 用例：调整 TuiApp 相关测试，Screen 不再外部构造，改为从 TuiApp 获取
-- [ ] 4.28 全量回归测试：执行 `make test`，确认全部通过
+- [x] 4.24 重构 TuiApp 构造函数：移除 Screen 参数，Screen 改为 `let` 公开只读成员
+- [x] 4.25 重构 init()：进入 Raw Mode 后通过 `uv_tty_get_winsize` 获取终端尺寸，将内部 Screen 原地调整为真实尺寸
+- [x] 4.26 更新设计文档与代码示例：`dev/feng-std-tui-app-dev.md` 构造函数、init()、render() 等同步修改
+- [x] 4.27 更新 std_test 用例：调整 TuiApp 相关测试，Screen 不再外部构造，改为从 TuiApp 获取
+- [x] 4.28 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.29 等待人工 Review：开发者审查 Screen 内部化重构，通过后方可进入第七阶段
 
 ### 第七阶段：视图逻辑层（第 4 层 - 简化版）
