@@ -1,6 +1,8 @@
 module feng.examples;
 
 import std;
+import std.text;
+import std.numeric;
 import std.tui;
 
 
@@ -20,6 +22,14 @@ func main(args: string[]) {
     if event.isControl() && event.content match let c: u32 && c == 0x03 {
       app.exit();
     }
+  };
+  app.input.onMouse = (event: MouseEvent) {
+    // 鼠标点击时在终端打印坐标
+    // if event.action == MouseAction.press {
+    //   app.screen.buffer().draw(event.x, event.y, "Hello");
+    // }
+    app.screen.buffer().clear();
+    app.screen.buffer().draw(event.x, event.y, "Hello", RgbColor(255, 0, 0));
   };
   // 在内部 Screen 的 back buffer 上绘制 "hello world"（带粗体样式）
   app.screen.buffer().draw(10, 10, "hello world", Style.bold);
