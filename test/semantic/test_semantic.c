@@ -14661,6 +14661,91 @@ static void test_spec_coercion_callable_lambda_argument(void) {
     feng_program_free(program);
 }
 
+/* Generic callable-form targets must instantiate their parameter and return
+ * types before adapting lambda and top-level function values. */
+static void test_generic_callable_spec_instance_adapts_untyped_callable_values(void) {
+    const char *src =
+        "open module demo.coerce.generic_callable;\n"
+        "spec Mapper<T>(value: T): T;\n"
+        "type Holder {\n"
+        "    open var mapper: Mapper<int>;\n"
+        "}\n"
+        "func add_one(value: int): int { return value + 1; }\n"
+        "func accept(mapper: Mapper<int>): int { return mapper(1); }\n"
+        "func make_mapper(): Mapper<int> {\n"
+        "    return (value: int) -> value + 2;\n"
+        "}\n"
+        "func caller(): int {\n"
+        "    let local: Mapper<int> = (value: int) -> value + 3;\n"
+        "    let function_value: Mapper<int> = add_one;\n"
+        "    let holder = Holder();\n"
+        "    holder.mapper = (value: int) { return value + 4; };\n"
+        "    return local(1) + function_value(1) + holder.mapper(1) +\n"
+        "           accept((value: int) -> value + 5) + make_mapper()(1);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_callable_adaptation_ok.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* A generic callable-form target still rejects a lambda whose parameter does
+ * not match the instantiated parameter type. */
+static void test_generic_callable_spec_instance_rejects_lambda_parameter_mismatch(void) {
+    const char *src =
+        "open module demo.coerce.generic_callable_param_error;\n"
+        "spec Mapper<T>(value: T): T;\n"
+        "func caller(): void {\n"
+        "    let mapper: Mapper<int> = (value: string) -> 1;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_callable_lambda_param_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0522") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* A generic callable-form target still rejects a lambda whose result does not
+ * match the instantiated return type. */
+static void test_generic_callable_spec_instance_rejects_lambda_return_mismatch(void) {
+    const char *src =
+        "open module demo.coerce.generic_callable_return_error;\n"
+        "spec Mapper<T>(value: T): T;\n"
+        "func caller(): void {\n"
+        "    let mapper: Mapper<int> = (value: int) -> \"wrong\";\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("generic_callable_lambda_return_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0522") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_callable_spec_value_rejects_different_spec_implicit_match(void) {
     const char *src =
         "open module demo.callable.nominal;\n"
@@ -19899,6 +19984,9 @@ int main(void) {
     test_spec_coercion_callable_top_level_fn();
     test_spec_coercion_callable_lambda();
     test_spec_coercion_callable_lambda_argument();
+    test_generic_callable_spec_instance_adapts_untyped_callable_values();
+    test_generic_callable_spec_instance_rejects_lambda_parameter_mismatch();
+    test_generic_callable_spec_instance_rejects_lambda_return_mismatch();
     test_callable_spec_value_rejects_different_spec_implicit_match();
     test_callable_spec_value_explicit_cast_accepts_equal_signature();
     test_callable_spec_top_level_fn_still_matches_multiple_specs();

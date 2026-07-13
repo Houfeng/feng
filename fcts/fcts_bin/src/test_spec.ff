@@ -20,6 +20,9 @@ spec Transformer(x: int): int;
 spec DefaultAction(value: int): int;
 spec DefaultVoidAction(value: int): void;
 
+// 泛型 callable-form spec 目标实例的贴合测试
+spec GenericMapper<T>(value: T): T;
+
 func increment_action(value: int): int {
   return value + 1;
 }
@@ -31,6 +34,21 @@ type DefaultCallableHolder {
 
 type ExplicitCallableHolder {
   let action: DefaultAction = increment_action;
+}
+
+/** 保存泛型 callable-form spec 实例的可写字段。 */
+type GenericCallableHolder {
+  var mapper: GenericMapper<int>;
+}
+
+/** 通过泛型 callable-form spec 实例调用传入的映射函数。 */
+func apply_generic_mapper(mapper: GenericMapper<int>, value: int): int {
+  return mapper(value);
+}
+
+/** 返回捕获 delta 的泛型 callable-form spec 实例。 */
+func make_generic_mapper(delta: int): GenericMapper<int> {
+  return (value: int) -> value + delta;
 }
 
 // type 声明头满足 spec
@@ -149,6 +167,32 @@ open func test_spec() {
     test("callable-form spec field explicit initializer", () {
       let holder = ExplicitCallableHolder();
       assert(holder.action(41) == 42, "callable-form spec field explicit initializer");
+    });
+
+    test("generic callable-form spec lambda binding", () {
+      let mapper: GenericMapper<int> = (value: int) -> value + 1;
+      assert(mapper(41) == 42, "generic callable-form spec lambda binding");
+    });
+
+    test("generic callable-form spec function binding", () {
+      let mapper: GenericMapper<int> = increment_action;
+      assert(mapper(41) == 42, "generic callable-form spec function binding");
+    });
+
+    test("generic callable-form spec lambda argument", () {
+      let result = apply_generic_mapper((value: int) -> value + 2, 40);
+      assert(result == 42, "generic callable-form spec lambda argument");
+    });
+
+    test("generic callable-form spec lambda return", () {
+      let mapper = make_generic_mapper(2);
+      assert(mapper(40) == 42, "generic callable-form spec lambda return");
+    });
+
+    test("generic callable-form spec field assignment", () {
+      let holder = GenericCallableHolder();
+      holder.mapper = (value: int) -> value + 3;
+      assert(holder.mapper(39) == 42, "generic callable-form spec field assignment");
     });
 
     test("spec field matching", () {

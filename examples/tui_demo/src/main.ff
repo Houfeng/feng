@@ -15,6 +15,12 @@ func main(args: string[]) {
   let app = TuiApp();
   app.init();
   defer { app.exit(); }
+  app.input.onKey = (event: KeyEvent) {
+    // 按下 Ctrl+C 时退出应用
+    if event.isControl() && event.content match let c: u32 && c == 0x03 {
+      app.exit();
+    }
+  };
   // 在内部 Screen 的 back buffer 上绘制 "hello world"（带粗体样式）
   app.screen.buffer().draw(10, 10, "hello world", Style.bold);
   app.run();

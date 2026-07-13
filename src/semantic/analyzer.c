@@ -4463,6 +4463,7 @@ static bool callable_return_inference_is_pending(ResolveContext *context,
 static bool expr_type_inference_is_pending(ResolveContext *context, const FengExpr *expr);
 static bool lambda_expr_matches_function_type(ResolveContext *context,
                                               const FengExpr *expr,
+                                              const FengTypeRef *function_type_ref,
                                               const FengDecl *function_type_decl);
 static bool lambda_expr_signature_matches_lambda_expr(ResolveContext *context,
                                                       const FengExpr *left,
@@ -5292,6 +5293,7 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
             }
             return lambda_expr_matches_function_type((ResolveContext *)context,
                                                      expr_type.lambda_expr,
+                                                     type_ref,
                                                      target_decl);
 
         case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
@@ -5524,6 +5526,7 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
         decl_is_function_type(right.type_decl)) {
         return lambda_expr_matches_function_type((ResolveContext *)context,
                                                  left.lambda_expr,
+                                                 NULL,
                                                  right.type_decl);
     }
     if (left.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
@@ -5532,6 +5535,7 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
         decl_is_function_type(left.type_decl)) {
         return lambda_expr_matches_function_type((ResolveContext *)context,
                                                  right.lambda_expr,
+                                                 NULL,
                                                  left.type_decl);
     }
 
@@ -16202,6 +16206,7 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
 
 static bool lambda_expr_matches_function_type(ResolveContext *context,
                                               const FengExpr *expr,
+                                              const FengTypeRef *function_type_ref,
                                               const FengDecl *function_type_decl) {
     size_t param_index;
     bool ok = true;
@@ -16216,9 +16221,15 @@ static bool lambda_expr_matches_function_type(ResolveContext *context,
     }
 
     for (param_index = 0U; param_index < expr->as.lambda.param_count; ++param_index) {
+        const FengTypeRef *expected_param = substitute_spec_member_type_ref_for_instance(
+            context,
+            function_type_decl,
+            function_type_ref,
+            function_type_decl->as.spec_decl.as.callable.params[param_index].type);
+
         if (!type_refs_semantically_equal(context,
                                           expr->as.lambda.params[param_index].type,
-                                          function_type_decl->as.spec_decl.as.callable.params[param_index].type)) {
+                                          expected_param)) {
             return false;
         }
     }
@@ -16235,10 +16246,15 @@ static bool lambda_expr_matches_function_type(ResolveContext *context,
                                            expr->as.lambda.params[param_index].mutability);
     }
     if (ok) {
+        const FengTypeRef *expected_return = substitute_spec_member_type_ref_for_instance(
+            context,
+            function_type_decl,
+            function_type_ref,
+            function_type_decl->as.spec_decl.as.callable.return_type);
+
         if (expr->as.lambda.is_block_body) {
             InferredExprType expected =
-                inferred_expr_type_from_return_type_ref(
-                    function_type_decl->as.spec_decl.as.callable.return_type);
+                inferred_expr_type_from_return_type_ref(expected_return);
             InferredExprType inferred =
                 infer_block_return_type(context, expr->as.lambda.body_block);
 
@@ -16251,7 +16267,7 @@ static bool lambda_expr_matches_function_type(ResolveContext *context,
             matches = expr_matches_expected_type_ref(
                 context,
                 expr->as.lambda.body,
-                function_type_decl->as.spec_decl.as.callable.return_type);
+                expected_return);
         }
     }
 
@@ -16411,7 +16427,10 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
             if (requires_abi_callable) {
                 return result;
             }
-            if (lambda_expr_matches_function_type(context, expr, function_type_decl)) {
+            if (lambda_expr_matches_function_type(context,
+                                                  expr,
+                                                  expected_type_ref,
+                                                  function_type_decl)) {
                 result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
                 result.callable_decl = NULL;
                 result.callable_member = NULL;
