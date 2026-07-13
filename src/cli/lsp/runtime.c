@@ -120,6 +120,7 @@ typedef struct FengLspLocal {
     FengSlice name;
     const FengParameter *parameter;
     const FengBinding *binding;
+    const FengExpr *match_op;
     const FengDecl *self_owner_decl;
 } FengLspLocal;
 
@@ -135,6 +136,7 @@ typedef enum FengLspResolvedKind {
     FENG_LSP_RESOLVED_MEMBER,
     FENG_LSP_RESOLVED_PARAM,
     FENG_LSP_RESOLVED_BINDING,
+    FENG_LSP_RESOLVED_MATCH_BINDING,
     FENG_LSP_RESOLVED_SELF,
     FENG_LSP_RESOLVED_TYPE_PARAM
 } FengLspResolvedKind;
@@ -145,6 +147,7 @@ typedef struct FengLspResolvedTarget {
     const FengTypeMember *member;
     const FengParameter *parameter;
     const FengBinding *binding;
+    const FengExpr *match_op;
     const FengDecl *self_owner_decl;
     const FengTypeParam *type_param;       /* resolved type parameter */
     const FengDecl *type_param_owner;      /* decl owning the type parameter */
@@ -2308,6 +2311,53 @@ static size_t expr_end(const FengExpr *expr) {
                 }
             }
             break;
+        case FENG_EXPR_MATCH_OP:
+            if (expr->as.match_op.target != NULL) {
+                size_t target_end = expr_end(expr->as.match_op.target);
+
+                if (target_end > end) {
+                    end = target_end;
+                }
+            }
+            for (index = 0U; index < expr->as.match_op.label_count; ++index) {
+                const FengMatchLabel *label = &expr->as.match_op.labels[index];
+
+                if (label->kind == FENG_MATCH_LABEL_VALUE && label->value != NULL) {
+                    size_t value_end = expr_end(label->value);
+
+                    if (value_end > end) {
+                        end = value_end;
+                    }
+                } else if (label->kind == FENG_MATCH_LABEL_RANGE) {
+                    size_t low_end = expr_end(label->range_low);
+                    size_t high_end = expr_end(label->range_high);
+
+                    if (low_end > end) {
+                        end = low_end;
+                    }
+                    if (high_end > end) {
+                        end = high_end;
+                    }
+                } else if (label->kind == FENG_MATCH_LABEL_TYPE) {
+                    size_t type_index;
+
+                    if (label->type_chain_count == 0U) {
+                        size_t type_end = type_ref_end(label->type);
+
+                        if (type_end > end) {
+                            end = type_end;
+                        }
+                    }
+                    for (type_index = 0U; type_index < label->type_chain_count; ++type_index) {
+                        size_t type_end = type_ref_end(label->type_chain[type_index]);
+
+                        if (type_end > end) {
+                            end = type_end;
+                        }
+                    }
+                }
+            }
+            break;
         case FENG_EXPR_TRY:
             if (expr->as.try_expr.body != NULL) {
                 size_t body_end = expr_end(expr->as.try_expr.body);
@@ -2922,6 +2972,7 @@ static bool local_list_push(FengLspLocalList *locals,
         .name = name,
         .parameter = parameter,
         .binding = binding,
+        .match_op = NULL,
         .self_owner_decl = self_owner_decl
     };
 
@@ -2930,6 +2981,46 @@ static bool local_list_push(FengLspLocalList *locals,
                       &locals->capacity,
                       sizeof(local),
                       &local);
+}
+
+/* Append a local introduced by an infix match expression. It has no
+ * FengBinding AST node, so the owning match-op expression carries the binding
+ * name, mutability, and narrowed type labels used by Hover. */
+static bool local_list_push_match_binding(FengLspLocalList *locals,
+                                          const FengExpr *match_op) {
+    FengLspLocal local;
+
+    if (match_op == NULL || match_op->kind != FENG_EXPR_MATCH_OP ||
+        !match_op->as.match_op.has_binding) {
+        return true;
+    }
+    memset(&local, 0, sizeof(local));
+    local.kind = FENG_LSP_LOCAL_BINDING;
+    local.name = match_op->as.match_op.binding_name;
+    local.match_op = match_op;
+    return append_raw((void **)&locals->items,
+                      &locals->count,
+                      &locals->capacity,
+                      sizeof(local),
+                      &local);
+}
+
+/* Collect infix-match bindings whose truth is guaranteed by an expression.
+ * This mirrors docs/feng-flow.md: && combines bindings, while other wrappers
+ * do not propagate them into a sibling expression or condition body. */
+static bool collect_visible_match_op_bindings(const FengExpr *expr,
+                                              FengLspLocalList *locals) {
+    if (expr == NULL) {
+        return true;
+    }
+    if (expr->kind == FENG_EXPR_BINARY && expr->as.binary.op == FENG_TOKEN_AND_AND) {
+        return collect_visible_match_op_bindings(expr->as.binary.left, locals) &&
+               collect_visible_match_op_bindings(expr->as.binary.right, locals);
+    }
+    if (expr->kind == FENG_EXPR_MATCH_OP) {
+        return local_list_push_match_binding(locals, expr);
+    }
+    return true;
 }
 
 static void local_list_dispose(FengLspLocalList *locals) {
@@ -3081,9 +3172,14 @@ static bool collect_expr_locals(const FengExpr *expr,
         case FENG_EXPR_UNARY:
             return collect_expr_locals(expr->as.unary.operand, offset, locals);
         case FENG_EXPR_BINARY:
-            return offset <= expr_end(expr->as.binary.left)
-                       ? collect_expr_locals(expr->as.binary.left, offset, locals)
-                       : collect_expr_locals(expr->as.binary.right, offset, locals);
+            if (offset <= expr_end(expr->as.binary.left)) {
+                return collect_expr_locals(expr->as.binary.left, offset, locals);
+            }
+            if (expr->as.binary.op == FENG_TOKEN_AND_AND &&
+                !collect_visible_match_op_bindings(expr->as.binary.left, locals)) {
+                return false;
+            }
+            return collect_expr_locals(expr->as.binary.right, offset, locals);
         case FENG_EXPR_CAST:
             return collect_expr_locals(expr->as.cast.value, offset, locals);
         case FENG_EXPR_IF:
@@ -3093,6 +3189,9 @@ static bool collect_expr_locals(const FengExpr *expr,
             }
             if (expr->as.if_expr.then_block != NULL &&
                 offset <= block_end(expr->as.if_expr.then_block)) {
+                if (!collect_visible_match_op_bindings(expr->as.if_expr.condition, locals)) {
+                    return false;
+                }
                 return collect_block_locals(expr->as.if_expr.then_block, offset, locals);
             }
             return collect_block_locals(expr->as.if_expr.else_block, offset, locals);
@@ -3163,6 +3262,10 @@ static bool collect_stmt_locals(const FengStmt *stmt,
                                                locals);
                 }
                 if (offset <= block_end(stmt->as.if_stmt.clauses[index].block)) {
+                    if (!collect_visible_match_op_bindings(stmt->as.if_stmt.clauses[index].condition,
+                                                           locals)) {
+                        return false;
+                    }
                     return collect_block_locals(stmt->as.if_stmt.clauses[index].block, offset, locals);
                 }
             }
@@ -3194,6 +3297,9 @@ static bool collect_stmt_locals(const FengStmt *stmt,
         case FENG_STMT_WHILE:
             if (stmt->as.while_stmt.condition != NULL && offset <= expr_end(stmt->as.while_stmt.condition)) {
                 return collect_expr_locals(stmt->as.while_stmt.condition, offset, locals);
+            }
+            if (!collect_visible_match_op_bindings(stmt->as.while_stmt.condition, locals)) {
+                return false;
             }
             return stmt->as.while_stmt.body != NULL
                        ? collect_block_locals(stmt->as.while_stmt.body, offset, locals)
@@ -6174,6 +6280,74 @@ static bool find_type_ref_in_expr(const FengExpr *expr,
                                          program, session, offset, target, owner_decl,
                                          member_type_params, member_type_param_count,
                                          owner_type_params, owner_type_param_count);
+        case FENG_EXPR_MATCH_OP: {
+            const FengCliLoadedSource *source = find_source(session, program->path);
+
+            if (expr->as.match_op.has_binding && source != NULL &&
+                offset_in_slice_from_source(source->source,
+                                            expr->as.match_op.binding_name,
+                                            offset)) {
+                target->kind = FENG_LSP_RESOLVED_MATCH_BINDING;
+                target->match_op = expr;
+                return true;
+            }
+            if (find_type_ref_in_expr(expr->as.match_op.target,
+                                      program, session, offset, target, owner_decl,
+                                      member_type_params, member_type_param_count,
+                                      owner_type_params, owner_type_param_count)) {
+                return true;
+            }
+            for (index = 0U; index < expr->as.match_op.label_count; ++index) {
+                const FengMatchLabel *label = &expr->as.match_op.labels[index];
+                size_t type_index;
+
+                if (label->kind != FENG_MATCH_LABEL_TYPE) {
+                    continue;
+                }
+                if (label->type_chain_count == 0U) {
+                    if (resolve_type_ref_at_offset(session,
+                                                   program,
+                                                   label->type,
+                                                   offset,
+                                                   target,
+                                                   owner_decl,
+                                                   member_type_params,
+                                                   member_type_param_count) ||
+                        resolve_type_ref_at_offset(session,
+                                                   program,
+                                                   label->type,
+                                                   offset,
+                                                   target,
+                                                   owner_decl,
+                                                   owner_type_params,
+                                                   owner_type_param_count)) {
+                        return true;
+                    }
+                    continue;
+                }
+                for (type_index = 0U; type_index < label->type_chain_count; ++type_index) {
+                    if (resolve_type_ref_at_offset(session,
+                                                   program,
+                                                   label->type_chain[type_index],
+                                                   offset,
+                                                   target,
+                                                   owner_decl,
+                                                   member_type_params,
+                                                   member_type_param_count) ||
+                        resolve_type_ref_at_offset(session,
+                                                   program,
+                                                   label->type_chain[type_index],
+                                                   offset,
+                                                   target,
+                                                   owner_decl,
+                                                   owner_type_params,
+                                                   owner_type_param_count)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
         case FENG_EXPR_LAMBDA:
             for (index = 0U; index < expr->as.lambda.param_count; ++index) {
                 if (offset_in_token(expr->as.lambda.params[index].token, offset)) {
@@ -7266,6 +7440,45 @@ static bool binding_signature_to_string(FengLspString *buffer,
            append_optional_static_type_annotation(buffer, session, binding, binding->type);
 }
 
+/* Format the narrowed static type of an infix-match binding from its validated
+ * type labels. Chain patterns bind to their deepest type; multiple labels form
+ * the subset union described by docs/feng-flow.md. */
+static bool match_binding_signature_to_string(FengLspString *buffer,
+                                              const FengExpr *match_op) {
+    size_t index;
+
+    if (match_op == NULL || match_op->kind != FENG_EXPR_MATCH_OP ||
+        !match_op->as.match_op.has_binding || match_op->as.match_op.label_count == 0U) {
+        return false;
+    }
+    if (!string_append_cstr(buffer,
+                            match_op->as.match_op.binding_mutability == FENG_MUTABILITY_VAR
+                                ? "var "
+                                : "let ") ||
+        !string_append_bytes(buffer,
+                             match_op->as.match_op.binding_name.data,
+                             match_op->as.match_op.binding_name.length) ||
+        !string_append_cstr(buffer, ": ")) {
+        return false;
+    }
+    for (index = 0U; index < match_op->as.match_op.label_count; ++index) {
+        const FengMatchLabel *label = &match_op->as.match_op.labels[index];
+        const FengTypeRef *type_ref;
+
+        if (label->kind != FENG_MATCH_LABEL_TYPE) {
+            return false;
+        }
+        type_ref = label->type_chain_count > 0U
+                       ? label->type_chain[label->type_chain_count - 1U]
+                       : label->type;
+        if ((index > 0U && !string_append_cstr(buffer, " | ")) ||
+            !type_ref_to_string(buffer, type_ref)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool decl_signature_to_string_with_session(FengLspString *buffer,
                                                   const FengLspAnalysisSession *session,
                                                   const FengDecl *decl);
@@ -7657,6 +7870,12 @@ static char *hover_text_for_target(const FengLspAnalysisSession *session,
         case FENG_LSP_RESOLVED_BINDING:
             (void)program;
             if (!binding_signature_to_string(&signature, session, target->binding)) {
+                string_dispose(&signature);
+                return NULL;
+            }
+            break;
+        case FENG_LSP_RESOLVED_MATCH_BINDING:
+            if (!match_binding_signature_to_string(&signature, target->match_op)) {
                 string_dispose(&signature);
                 return NULL;
             }
@@ -8606,8 +8825,13 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
                 return NULL;
             }
             if (local->kind == FENG_LSP_LOCAL_BINDING) {
-                target->kind = FENG_LSP_RESOLVED_BINDING;
-                target->binding = local->binding;
+                if (local->match_op != NULL) {
+                    target->kind = FENG_LSP_RESOLVED_MATCH_BINDING;
+                    target->match_op = local->match_op;
+                } else {
+                    target->kind = FENG_LSP_RESOLVED_BINDING;
+                    target->binding = local->binding;
+                }
                 return NULL;
             }
             target->kind = FENG_LSP_RESOLVED_SELF;
@@ -8874,6 +9098,8 @@ static bool resolved_targets_equal(const FengLspResolvedTarget *lhs,
             return lhs->parameter == rhs->parameter;
         case FENG_LSP_RESOLVED_BINDING:
             return lhs->binding == rhs->binding;
+        case FENG_LSP_RESOLVED_MATCH_BINDING:
+            return lhs->match_op == rhs->match_op;
         case FENG_LSP_RESOLVED_SELF:
             return lhs->self_owner_decl == rhs->self_owner_decl;
         case FENG_LSP_RESOLVED_TYPE_PARAM:
@@ -8897,6 +9123,8 @@ static bool resolved_target_supports_references(const FengLspResolvedTarget *tar
             return target->parameter != NULL;
         case FENG_LSP_RESOLVED_BINDING:
             return target->binding != NULL;
+        case FENG_LSP_RESOLVED_MATCH_BINDING:
+            return false;
         case FENG_LSP_RESOLVED_NONE:
         case FENG_LSP_RESOLVED_SELF:
         case FENG_LSP_RESOLVED_TYPE_PARAM:
@@ -8938,6 +9166,8 @@ static bool resolved_target_can_rename(const FengLspAnalysisSession *session,
         case FENG_LSP_RESOLVED_PARAM:
         case FENG_LSP_RESOLVED_BINDING:
             return true;
+        case FENG_LSP_RESOLVED_MATCH_BINDING:
+            return false;
         case FENG_LSP_RESOLVED_NONE:
         case FENG_LSP_RESOLVED_SELF:
         case FENG_LSP_RESOLVED_TYPE_PARAM:

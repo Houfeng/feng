@@ -8055,6 +8055,62 @@ static void test_lsp_hover_lambda_parameter_declaration_and_cache_invalidation(v
     free(source_path);
 }
 
+/* Infix-match bindings must resolve at the declaration, in a following &&
+ * operand, and inside the true branch. Multi-member patterns report the
+ * narrowed subset-union type rather than the original union spec name. */
+static void test_lsp_hover_infix_match_binding(void) {
+    static const char *kSource =
+        "module test.lsp.match_binding_hover;\n"
+        "\n"
+        "spec Value: i32 | string;\n"
+        "\n"
+        "func positive(value: Value): bool {\n"
+        "    if value match let item: i32 && item > 0 {\n"
+        "        return item > 1;\n"
+        "    }\n"
+        "    return false;\n"
+        "}\n"
+        "\n"
+        "func present(value: Value): bool {\n"
+        "    if value match let item: i32 | string {\n"
+        "        let copy = item;\n"
+        "        return true;\n"
+        "    }\n"
+        "    return false;\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *output;
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    if value match let item: i32 && item > 0 {",
+                                        strlen("    if value match let "));
+    ASSERT(strstr(output, "let item: i32") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    if value match let item: i32 && item > 0 {",
+                                        strlen("    if value match let item: i32 && "));
+    ASSERT(strstr(output, "let item: i32") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "        return item > 1;",
+                                        strlen("        return "));
+    ASSERT(strstr(output, "let item: i32") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    if value match let item: i32 | string {",
+                                        strlen("    if value match let "));
+    ASSERT(strstr(output, "let item: i32 | string") != NULL);
+    free(output);
+}
+
 static void test_lsp_hover_type_param(void) {
     static const char *kSource =
         "module test.lsp.type_param_hover;\n"
@@ -13568,6 +13624,7 @@ int main(void) {
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
     test_lsp_hover_lambda_scope_and_chained_members();
     test_lsp_hover_lambda_parameter_declaration_and_cache_invalidation();
+    test_lsp_hover_infix_match_binding();
     test_lsp_hover_type_param();
     test_lsp_hover_type_param_extended();
     test_lsp_hover_type_param_in_spec_member();
