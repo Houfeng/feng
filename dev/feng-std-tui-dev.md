@@ -192,10 +192,10 @@
 > 本阶段只实现 `ViewManager` + `Widget` 机制层，不实现 Text/Button/Input/List/ScrollView 等高级组件。
 > 实现方案详见 `dev/feng-std-tui-view-dev.md`。
 
-- [ ] 4.30 定义 Widget 机制：`Widget` spec、`BaseWidget`、`WidgetStyle`、`WidgetFrame`、`WidgetChildren`
-- [ ] 4.31 实现 ViewManager：root、focus、paintList、arrange/draw 流程、鼠标命中、键盘焦点路由、自下向上事件冒泡
+- [ ] 4.30 完善 Widget 机制：`Thickness`、布局枚举、`WidgetStyle` type、`WidgetFrame`、`Widget` spec、`std.tui.views.View`
+- [ ] 4.31 实现 ViewManager：root、focus、sequence、arrange/draw 流程、鼠标命中、键盘焦点路由、自下向上事件冒泡
 - [ ] 4.32 集成 ViewManager 至 TuiApp：新增 `view: ViewManager` 成员，并接入 `Screen`/`InputManager`
-- [ ] 4.33 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、arrange/frame 计算、paintList 命中、事件冒泡等测试
+- [ ] 4.33 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、arrange/frame 计算、sequence 命中、事件冒泡等测试
 - [ ] 4.34 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.35 等待人工 Review：开发者审查视图机制层设计与实现，通过后方可进入第八阶段
 
@@ -217,16 +217,15 @@ std/src/tui/
   Style.ff         # Style 枚举（样式类型安全）
   RgbColor.ff      # RgbColor 结构（RGB 颜色）
   Ansi.ff          # ANSI 转义序列生成器（后续）
-  Widget.ff        # Widget spec 契约（后续）
-  BaseWidget.ff    # Widget 默认实现（后续）
-  WidgetStyle.ff   # Widget 声明式布局约束（后续）
-  WidgetFrame.ff   # Widget 布局调度后的计算结果（后续）
-  WidgetEvent.ff   # 视图层事件对象（后续）
-  WidgetChildren.ff # 子组件集合与 parent 维护（后续）
-  ViewManager.ff   # 视图机制层管理器（后续）
+  Thickness.ff     # 四边间距类型
+  Widget.ff        # 布局枚举、WidgetStyle、WidgetFrame、Widget
+  ViewManager.ff   # 视图机制层管理器与 sequence
   TuiApp.ff        # 应用程序入口与主循环（后续）
   KeyEvent.ff      # 键盘事件（后续）
   MouseEvent.ff    # 鼠标事件（后续）
+
+std/src/tui/views/
+  View.ff          # Widget 基础实现
 ```
 
 ## 6 约束

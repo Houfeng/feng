@@ -41,7 +41,7 @@ open enum WidgetOverflow {
 /**
  * WidgetStyle 组件布局与样式约束
  */
-open spec WidgetStyle {
+open type WidgetStyle {
   /**
    * 组件布局类型
    */

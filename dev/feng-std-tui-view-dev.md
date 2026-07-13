@@ -2,370 +2,246 @@
 
 > 状态：设计中（design）
 >
-> 本文档是 `dev/feng-std-tui-dev.md` 阶段七（视图逻辑层）的实现方案细化。
-> 本阶段只定义并实现 `ViewManager` + `Widget` 机制层，不实现 Text/Button/Input/List/ScrollView 等高级组件。
+> 本文档是 `dev/feng-std-tui-dev.md` 第七阶段（视图机制层）的主规范。
+> 当前接口基线以 `std/src/tui/Widget.ff`、`std/src/tui/Thickness.ff`、`std/src/tui/ViewManager.ff` 和 `std/src/tui/views/View.ff` 中已经定义的类型为准。
 
 ## 1 总体目标
 
-在现有 `TuiApp`、`Screen`、`InputManager` 基础上，引入一层 retained-mode 的类型化 TUI 组件机制：
+在现有 `TuiApp`、`Screen`、`InputManager` 基础上，引入 retained-mode 的类型化 TUI 组件机制：
 
 ```text
 TuiApp
   ├─ screen: Screen          # 渲染底座，负责双缓冲与 diff 输出
   ├─ input: InputManager     # 输入底座，负责终端字节流解析
-  └─ view: ViewManager       # 视图机制层，负责组件树、布局、绘制与事件路由
+  └─ view: ViewManager       # 视图机制层，负责组件树、arrange/draw 调度与事件路由
 ```
 
-`Screen`、`InputManager`、`ViewManager` 不互相替代、不重复创建。三者作为 `TuiApp` 的成员分管不同逻辑：
+`Screen`、`InputManager`、`ViewManager` 不互相替代，也不重复创建。三者均为 `TuiApp` 的成员，分别管理画布、基础输入和视图机制。
 
-- `Screen` 只负责画布与差异同步；
-- `InputManager` 只负责基础输入解析；
-- `ViewManager` 负责组件树、布局调度、绘制调度、焦点管理、事件路由。
+## 2 第七阶段边界
 
-## 2 阶段边界
+第七阶段只完善以下机制：
 
-第七阶段只交付视图机制层：
+- `Widget` spec 与 `WidgetStyle` type；
+- `WidgetFrame`、`Thickness` 及布局相关枚举；
+- `std.tui.views.View` 基础组件；
+- `ViewManager` 的组件树、绘制顺序、命中、焦点及事件路由；
+- `ViewManager` 与 `TuiApp`、`Screen`、`InputManager` 的集成。
 
-- 实现 `ViewManager`；
-- 定义 `Widget` spec；
-- 提供 `BaseWidget` 默认实现；
-- 定义 `WidgetStyle`、`WidgetFrame`、`arrange` 调度流程；
-- 定义事件引用语义、事件冒泡与焦点规则；
-- 定义 `paintList` 命中机制；
-- 将 `ViewManager` 集成到 `TuiApp`。
+第七阶段不实现 Text/Button/Input/List/Table/Dialog 等高级组件，也不实现 VStack/HStack/Dock/ScrollView/Grid 等布局容器。CSS、选择器、级联样式、复杂捕获阶段、透明穿透和复杂 z-index 同样不在本阶段范围内。
 
-第七阶段不实现以下内容：
+后续组件直接满足 `Widget` spec，并可在内部组合 `View` 或其他组件。上层组装组件树时不需要 `asWidget()` 之类的转换 API。
 
-- 不实现 Text/Button/Input/List/Table/Dialog 等高级组件；
-- 不实现 VStack/HStack/Dock/ScrollView/Grid 等布局容器；
-- 不实现 CSS、选择器、级联样式系统；
-- 不实现复杂捕获阶段、透明穿透、复杂 z-index 规则；
-- 不实现事件对象池化，池化只作为未来内部优化策略。
+## 3 已定义的核心类型
 
-后续组件均基于本阶段机制扩展。高级组件可以组合 `BaseWidget`，也可以自行实现 `Widget` spec。
+### 3.1 布局枚举
 
-## 3 核心模型
-
-### 3.1 Widget spec
-
-`Widget` 不是继承基类，而是组件参与视图树的能力契约。Feng 没有继承，视图多态通过 `spec Widget` 实现，组件复用通过组合实现。
-
-`Widget` spec 只包含 `ViewManager` 必须依赖的成员。`arrange` 和 `draw` 是组件行为，使用 `func` 定义；事件处理使用回调字段，不通过 `handleEvent()` 这类统一方法做事件分发：
+`std/src/tui/Widget.ff` 已定义：
 
 ```feng
-spec Widget {
-  /** 用户声明的布局与样式约束 */
-  style: WidgetStyle;
+open enum WidgetPosition {
+  Normal,
+  Absolute,
+  Fixed
+}
 
-  /** 布局阶段计算后的最终区域信息 */
-  frame: WidgetFrame;
+open enum WidgetAlign {
+  Full,
+  Start,
+  Center,
+  End
+}
 
-  /** 父组件；仅由组件树 API 维护 */
-  parent: Option<Widget>;
-
-  /** 子组件集合；集合内部负责维护 parent 引用 */
-  children: WidgetChildren;
-
-  /** 对齐并计算当前组件及其子组件的 frame */
-  func arrange(ctx: WidgetArrangeContext): void;
-
-  /** 绘制当前组件；绘制阶段只使用 frame，不重新解释 style */
-  func draw(ctx: WidgetDrawContext): void;
-
-  /** 键盘事件回调 */
-  onKey: Action<WidgetEvent>;
-
-  /** 鼠标按下事件回调 */
-  onMouseDown: Action<WidgetEvent>;
-
-  /** 鼠标移动事件回调 */
-  onMouseMove: Action<WidgetEvent>;
-
-  /** 鼠标释放事件回调 */
-  onMouseUp: Action<WidgetEvent>;
-
-  /** 鼠标滚轮事件回调 */
-  onWheel: Action<WidgetEvent>;
+open enum WidgetOverflow {
+  Visible,
+  Hidden
 }
 ```
 
-`arrange` 和 `draw` 不是可赋值回调，外部使用者不能在组件实例上替换。具体组件通过实现 `Widget` spec 定义自身行为；组合 `BaseWidget` 的组件可以在自身实现中复用或委托基础逻辑。事件回调字段仍可由外部设置。
+- `Normal`：由父组件的排列逻辑定位；
+- `Absolute`：相对父组件定位；
+- `Fixed`：相对屏幕定位；
+- `Full`/`Start`/`Center`/`End`：分别表示填满、起始、居中和末端对齐；
+- `Visible`/`Hidden`：分别表示允许显示溢出内容和裁剪溢出内容。滚动由后续 `ScrollView` 实现，不加入 `WidgetOverflow`。
 
-> 说明：上述成员是设计目标，实际实现时如受当前 spec/泛型能力约束，可在不改变语义的前提下调整具体 API 形态。若事件字段需要可选回调，具体类型可按 Feng 现有 `Option<T>` 或空引用检查能力落地。
+### 3.2 WidgetStyle
 
-### 3.2 BaseWidget
+`WidgetStyle` 是保存组件布局与基础颜色声明的普通引用类型：
 
-`BaseWidget` 是标准库提供的默认实现，保存通用组件状态：
-
-```text
-BaseWidget
-  style: WidgetStyle
-  frame: WidgetFrame
-  parent: Option<Widget>
-  children: WidgetChildren
-  focusable: bool
-  arrange(ctx) / draw(ctx) 方法
-  onKey/onMouseDown/onMouseMove/onMouseUp/onWheel 等事件回调字段
+```feng
+open type WidgetStyle {
+  var position: WidgetPosition;
+  var x: Union<u32, float>;
+  var y: Union<u32, float>;
+  var width: Union<u32, float>;
+  var height: Union<u32, float>;
+  var foreColor: Option<RgbColor>;
+  var backColor: Option<RgbColor>;
+  var padding: Thickness;
+  var margin: Thickness;
+  var overflow: WidgetOverflow;
+  var horizontalAlign: WidgetAlign;
+  var verticalAlign: WidgetAlign;
+}
 ```
 
-简单组件可以直接创建并配置 `BaseWidget`；复杂组件可以内部持有 `BaseWidget`，并通过方法转发满足 `Widget` spec。用户组装组件树时不需要 `asWidget()` 之类的转换 API，组件自身只要满足 `Widget` 即可加入树。
+尺寸和坐标使用 `Union<u32, float>`：`u32` 表示固定终端单元数，`float` 表示百分比。`x`/`y` 仅用于 `Absolute` 和 `Fixed`，`Normal` 忽略二者。`Absolute` 的相对坐标以父组件为参照，且不受父组件 `padding` 影响；`Fixed` 以屏幕为参照。浮动组件忽略 `horizontalAlign` 和 `verticalAlign`。
 
-### 3.3 无 ViewNode
+`foreColor`/`backColor` 为 `none` 时使用终端默认色。`overflow == Hidden` 时裁剪超出组件区域的绘制；滚动能力由后续组件实现。
 
-第七阶段不引入 `ViewNode`。`Widget` 自身就是组件树节点：
+### 3.3 Thickness
 
-- 树结构由 `Widget.children` 和 `Widget.parent` 表达；
-- 布局声明由 `WidgetStyle` 表达；
-- 布局结果由 `WidgetFrame` 表达；
-- 对齐、绘制和事件分别由 `Widget.arrange()` / `Widget.draw()` 方法及 `Widget.onXXX` 字段表达。
+`Thickness` 表示矩形四边的间距，供 `padding`、`margin` 及后续边框使用：
 
-这样避免在组件对象之外再维护一棵节点树，降低组件树 API 的复杂度。
-
-## 4 布局模型
-
-### 4.1 声明值与计算值分离
-
-组件处理分为 `arrange` 和 `draw` 两个阶段；`WidgetStyle` 是进入 `arrange` 前的声明输入：
-
-```text
-声明输入：用户设置 WidgetStyle
-arrange 阶段：ViewManager 调度 Widget.arrange()，组件或布局组件计算 WidgetFrame
-draw 阶段：Widget.draw() 只读取 WidgetFrame
+```feng
+open type Thickness {
+  let top: Union<u32, float>;
+  let right: Union<u32, float>;
+  let bottom: Union<u32, float>;
+  let left: Union<u32, float>;
+}
 ```
 
-`WidgetStyle` 是用户意图，`WidgetFrame` 是本轮布局后的事实。绘制、命中测试、事件坐标转换均以 `WidgetFrame` 为准，不在绘制阶段重新解释百分比、margin、padding、align。
+当前提供六种构造形式：四边值、垂直/水平值和统一值，每种形式分别支持全部使用 `u32` 或全部使用 `float`。
 
-### 4.2 WidgetStyle
+### 3.4 WidgetFrame
 
-`WidgetStyle` 保存用户声明的布局约束：
+`WidgetFrame` 是 `@value` 类型，只保存 `arrange` 后的最终矩形：
 
-```text
-WidgetStyle
-  position: normal | absolute | fixed
-  x: WidgetOffset
-  y: WidgetOffset
-  width: WidgetSize
-  height: WidgetSize
-  margin: WidgetInsets
-  padding: WidgetInsets
-  hAlign: start | center | end | full
-  vAlign: start | center | end | full
+```feng
+@value
+open type WidgetFrame {
+  var x: u32;
+  var y: u32;
+  var width: u32;
+  var height: u32;
+}
 ```
 
-`width`/`height` 是重要字段，支持数字或百分比。百分比的参照系为父容器内容区尺寸，即父组件 `frame` 扣除 `padding` 后的区域。
+用户声明值保存在 `WidgetStyle` 中，计算结果写入 `WidgetFrame`。`draw`、命中测试和事件坐标判断均使用 `WidgetFrame`，不在绘制阶段重新解析声明值。
 
-`x`/`y` 用于浮动元素，支持数字或百分比：
+## 4 Widget 契约
 
-- `absolute`：相对父容器内容区定位；
-- `fixed`：相对 screen 区域定位；
-- `normal`：忽略 `x`/`y`，通过 align 定位。
+`Widget` 不是继承基类，而是组件参与视图树的能力契约。组件多态通过 spec 实现，代码复用通过组合实现。
 
-### 4.3 padding 与 margin
+```feng
+open spec Widget {
+  let style: WidgetStyle;
+  let frame: WidgetFrame;
+  var parent: Option<Widget>;
+  let children: List<Widget>;
 
-盒模型按以下语义定义：
+  func arrange(manager: ViewManager): void;
+  func draw(manager: ViewManager): void;
 
-```text
-parent frame
-  └─ parent padding 后得到 parent content rect
-       └─ child margin box
-            └─ child frame
-                 └─ child padding 后得到 child content rect
+  var onKey: Action<KeyEvent>;
+  var onMouseDown: Action<MouseEvent>;
+  var onMouseMove: Action<MouseEvent>;
+  var onMouseUp: Action<MouseEvent>;
+  var onWheel: Action<MouseEvent>;
+}
 ```
 
-- `padding` 属于组件内部，影响子组件的可布局区域；
-- `margin` 属于组件外部，影响当前组件在父容器分配区域内的位置与尺寸；
-- 命中测试默认使用组件最终可见区域，不包含 margin。
+其中：
 
-### 4.4 普通定位
+- `style` 和 `frame` 引用不可重新绑定；
+- `parent` 由组件树机制维护；
+- `children` 直接使用 `List<Widget>`；
+- `arrange`、`draw` 使用 `func` 定义，不是可由外部替换的回调字段；
+- 键盘和鼠标处理使用可配置的事件回调字段；
+- 第七阶段不引入独立 `ViewNode`，`Widget` 自身就是组件树节点。
 
-`position == normal` 的组件通过 align 在父容器内容区内定位：
+## 5 View 基础组件
 
-```text
-available = parent content rect - child margin
-size = resolve(width/height, available)
-position = align(size, available, hAlign/vAlign)
-frame = resolved position + resolved size
+基础组件定义在 `std.tui.views` 子模块中：
+
+```feng
+open type View: Widget {
+  let style: WidgetStyle;
+  let frame: WidgetFrame;
+  var parent: Option<Widget>;
+  let children: List<Widget>;
+
+  func arrange(manager: ViewManager): void;
+  func draw(manager: ViewManager): void;
+
+  var onKey: Action<KeyEvent>;
+  var onMouseDown: Action<MouseEvent>;
+  var onMouseMove: Action<MouseEvent>;
+  var onMouseUp: Action<MouseEvent>;
+  var onWheel: Action<MouseEvent>;
+}
 ```
 
-`hAlign.full` 表示横向填满可用区域，`vAlign.full` 表示纵向填满可用区域。若对应方向同时设置了 `width`/`height`，`full` 优先，尺寸字段在该方向被忽略。
+`View.arrange()` 提供按 `style` 计算 `frame` 的默认入口，子组件分别通过自身 `arrange()` 计算区域。`View.draw()` 默认不绘制内容。后续组件可以组合 `View` 复用公共状态，也可以直接实现 `Widget` spec。
 
-### 4.5 浮动定位
+## 6 arrange 与 draw
 
-`position == absolute` 或 `position == fixed` 的组件使用 `x`/`y` 定位：
-
-- `absolute` 的 `x`/`y` 相对父容器内容区；
-- `fixed` 的 `x`/`y` 相对 screen 区域；
-- `width`/`height` 仍按数字或百分比解析；
-- `margin` 仍影响最终 frame；
-- `align` 不参与浮动元素定位。
-
-第七阶段不支持透明穿透。浮动组件一旦绘制并命中，即作为鼠标事件 target。
-
-### 4.6 WidgetFrame
-
-`WidgetFrame` 保存布局阶段计算后的区域信息，至少包含：
+每轮渲染分为固定的两个阶段：
 
 ```text
-WidgetFrame
-  x/y/width/height             # 组件最终绝对区域
-  contentX/contentY/...        # 扣除 padding 后的内容区
-  clipX/clipY/...              # 有效裁剪区
+arrange 阶段
+  Widget.arrange(manager)
+  将 WidgetStyle 解析为 WidgetFrame
+
+draw 阶段
+  Widget.draw(manager)
+  只根据 WidgetFrame 绘制
+  将自身登记到 ViewManager.sequence
 ```
 
-`arrange` 阶段由 `ViewManager` 发起调度，具体 `WidgetFrame` 由对应组件或布局组件计算并写入。组件绘制和事件命中只读取 `WidgetFrame`。
+`arrange` 和 `draw` 都接收同一个 `ViewManager`。组件通过 manager 获取本轮调度所需的视图上下文；具体公开或内部辅助 API 随 `ViewManager` 完善后确定。
 
-## 5 ViewManager
+### 6.1 Normal 排列
 
-`ViewManager` 是 `TuiApp` 的成员，负责连接组件树、`Screen` 和 `InputManager`：
+`position == Normal` 时，组件由父组件安排，并根据 `margin`、`padding`、`width`、`height`、`horizontalAlign` 和 `verticalAlign` 计算最终区域。`x`/`y` 不参与计算。
 
-```text
-ViewManager
-  screen: Screen
-  input: InputManager
-  root: Widget
-  focusedWidget: Option<Widget>
-  paintList: List<Widget>
+`Full` 表示对应方向填满父组件分配的可用空间。`Full` 与显式 `width`/`height` 同时设置时的优先级尚未由现有类型定义确定，进入实现前需要人工确认。
+
+### 6.2 Absolute 与 Fixed
+
+- `Absolute` 使用 `x`/`y` 相对父组件定位，坐标不受父组件 `padding` 影响；
+- `Fixed` 使用 `x`/`y` 相对屏幕定位；
+- 两者均忽略 `horizontalAlign` 和 `verticalAlign`；
+- `width`/`height` 仍支持固定值或百分比；
+- `margin`、百分比参照范围及父级裁剪规则按 Review 后确定的 arrange 规则执行。
+
+## 7 ViewManager 与 sequence
+
+`ViewManager` 当前已定义绘制顺序集合：
+
+```feng
+open type ViewManager {
+  seal let sequence: List<Widget>;
+}
 ```
 
-### 5.1 渲染流程
+`sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；组件进入自身 `draw()` 时将自身登记到 `sequence`，越靠后的组件绘制层级越高。
 
-每轮渲染按固定流程执行：
+鼠标命中时从 `sequence` 末尾向前查找，第一个包含事件坐标的 `WidgetFrame` 即为目标组件。第七阶段不支持透明穿透，因此命中顶层组件后不继续向下查找。
 
-```text
-ViewManager.render()
-  1. paintList.clear()
-  2. dispatchArrange(root, screen rect)
-  3. draw(root)
-  4. Screen.buildPatchBytes() 由 TuiApp 负责输出
-```
+当前 `ViewManager` 尚未定义 root、焦点、screen/input 引用、渲染入口和 sequence 登记方法。这些成员和方法属于第七阶段后续实现，但具体签名不能在当前文档中先行假定。
 
-`arrange` 阶段由 `ViewManager` 负责调度，不把具体布局算法写死在 `ViewManager` 中。普通组件可使用 `BaseWidget.arrange()` 的基础逻辑，VStack/HStack/Dock/ScrollView 等后续布局组件通过自身的 `arrange()` 实现负责子组件的 `WidgetFrame` 计算。`draw` 阶段只按 `WidgetFrame` 绘制。
+## 8 组件树与 parent
 
-### 5.2 paintList
+组件树直接由 `Widget.children: List<Widget>` 与 `Widget.parent` 表达，不增加 `WidgetChildren` 或 `ViewNode`。
 
-`paintList` 是 `ViewManager` 的成员，每轮渲染开始时清空。绘制遍历过程中，每进入一个组件的 `draw()` 之前，将该组件自身追加到 `paintList`：
+`parent` 不能由上层调用者手动维护，添加、移除和清空子组件时必须由组件树 API 同步更新。当前源码尚未定义组件树变更 API；由于 `children` 是 `List<Widget>`，如何防止调用者绕过 parent 维护，需要在实现前确定。
 
-```text
-drawWidget(widget)
-  paintList.add(widget)
-  widget.draw(ctx)
-  draw children
-```
+## 9 事件接口
 
-`paintList` 只保存 `Widget`，不引入独立 `PaintEntry`。命中测试所需区域来自 `widget.frame`。
+`Widget` 当前直接使用已有基础事件类型：
 
-`paintList` 中越靠后的组件越晚绘制，视觉层级越高。鼠标事件分发时从 `paintList` 末尾向前扫描，找到第一个命中的组件作为 target。
+- `onKey: Action<KeyEvent>`；
+- `onMouseDown`、`onMouseMove`、`onMouseUp`、`onWheel: Action<MouseEvent>`。
 
-第七阶段暂不支持组件透明，因此不存在穿透规则：最上层命中组件即为鼠标事件 target。
+`KeyEvent` 和 `MouseEvent` 均为不可变的 `@value` 快照。当前定义不新增 `WidgetEvent`，也未定义 `target`、`currentTarget`、`stopPropagation()`、`preventDefault()`、`clone()` 或事件池化语义。
 
-## 6 组件树与 parent
+`ViewManager` 后续负责根据焦点和 `sequence` 选择起始组件，并按 `parent` 自下向上传递事件。现有回调签名没有传播状态或返回值，因此“如何阻止继续向上传递”尚未由当前接口表达，需要在实现事件冒泡前人工确定。
 
-`parent` 引用必须由组件树 API 自动维护，用户不能手动维护。
+## 10 与 TuiApp/InputManager 的集成
 
-`WidgetChildren` 负责添加、移除、清空子组件时维护 parent：
-
-```text
-children.add(child)
-  child.parent = owner
-  append child
-
-children.remove(child)
-  remove child
-  child.parent = none
-
-children.clear()
-  for child in children:
-    child.parent = none
-  clear list
-```
-
-`WidgetChildren` 的元素类型为 `Widget`，因此任何满足 `Widget` spec 的组件都能加入组件树。
-
-## 7 事件模型
-
-### 7.1 事件引用语义
-
-视图层事件使用普通 `type`，不是 `@value`，按引用语义传递。
-
-同一次事件分发过程中，`ViewManager` 将同一个 `WidgetEvent` 实例沿组件树传递，避免在组件树中逐层复制事件对象。
-
-事件对象生命周期定义为：
-
-- 事件对象只保证在当前同步分发过程中有效；
-- 组件不应在分发结束后保存事件引用；
-- 如需异步保存事件内容，应调用 `clone()` 或复制必要字段；
-- 是否池化是内部优化策略，不进入上层语义；
-- 未来如实现对象池，必须在借用前 `reset`，在分发后归还。
-
-### 7.2 传播状态
-
-`WidgetEvent` 持有分发状态：
-
-```text
-WidgetEvent
-  target: Widget
-  currentTarget: Widget
-  propagationStopped: bool
-  defaultPrevented: bool
-```
-
-并提供方法：
-
-```text
-stopPropagation()
-preventDefault()
-clone()
-```
-
-`clone()` 生成独立事件快照，用于用户需要在分发结束后保存事件数据的场景。`clone()` 不共享传播状态。
-
-### 7.3 鼠标事件分发
-
-鼠标事件基于上一轮渲染生成的 `paintList` 命中：
-
-```text
-dispatchMouse(event)
-  for widget in paintList reverse:
-    if hit(event.x, event.y, widget.frame):
-      event.target = widget
-      bubble(widget, event)
-      return
-```
-
-命中后只支持自下向上的冒泡：
-
-```text
-bubble(widget, event)
-  current = widget
-  while current exists:
-    event.currentTarget = current
-    dispatch current.onXXX(event)
-    if event.propagationStopped:
-      return
-    current = current.parent
-```
-
-第七阶段不设计捕获阶段，不设计透明穿透，不设计复杂事件路径缓存。
-
-### 7.4 键盘事件分发
-
-键盘事件不走 `paintList`，由 `ViewManager.focusedWidget` 决定起点：
-
-```text
-dispatchKey(event)
-  if focusedWidget exists:
-    event.target = focusedWidget
-    bubble(focusedWidget, event)
-  else:
-    event.target = root
-    bubble(root, event)
-```
-
-焦点由 `ViewManager` 统一维护。鼠标点击可根据 target 的 `focusable` 状态更新焦点。
-
-## 8 与 TuiApp/InputManager 的集成
-
-第七阶段集成后，`TuiApp` 持有：
+第七阶段完成后，`TuiApp` 持有：
 
 ```feng
 open type TuiApp {
@@ -375,54 +251,49 @@ open type TuiApp {
 }
 ```
 
-`ViewManager` 注册到 `InputManager` 的回调字段，将基础 `KeyEvent`/`MouseEvent` 转换或包装为 `WidgetEvent` 后，按事件类型路由到命中组件或焦点组件的 `onKey`/`onMouseDown`/`onMouseMove`/`onMouseUp`/`onWheel` 字段。
+`ViewManager` 使用 `InputManager` 产生的 `KeyEvent`/`MouseEvent` 进行视图事件路由，并通过 `Screen` 完成组件绘制。`Screen` 和 `InputManager` 不在视图层重建。
 
-`TuiApp.run()` 中 stdin 解析完成后仍由主循环触发渲染；区别是渲染入口从直接使用 `Screen` 扩展为调用 `ViewManager.render()`。
-
-## 9 文件规划
-
-第七阶段预计新增或修改：
+## 11 文件规划
 
 ```text
 std/src/tui/
-  Widget.ff          # Widget spec
-  BaseWidget.ff      # BaseWidget 默认实现
-  WidgetStyle.ff     # 声明式布局约束
-  WidgetFrame.ff     # 布局调度后的计算结果
-  WidgetEvent.ff     # 视图层事件对象
-  WidgetChildren.ff  # 子组件集合与 parent 维护
-  ViewManager.ff     # 组件树、arrange/draw 调度、事件路由、焦点
-  TuiApp.ff          # 新增 view 成员并接入 ViewManager
+  Thickness.ff       # 四边间距类型（已定义）
+  Widget.ff          # 布局枚举、WidgetStyle、WidgetFrame、Widget（已定义）
+  ViewManager.ff     # 视图管理器与 sequence（已定义骨架）
+  TuiApp.ff          # 后续新增 view 成员并接入 ViewManager
+
+std/src/tui/views/
+  View.ff            # Widget 基础实现（已定义骨架）
 ```
 
-不新增 Text/Button 等高级组件文件。
+第七阶段不新增 Text/Button 等高级组件文件。
 
-## 10 实施步骤
+## 12 实施步骤
 
-第七阶段按以下顺序实施：
+1. Review 并确认现有 `Thickness`、`WidgetStyle`、`WidgetFrame`、`Widget`、`View` 和 `ViewManager.sequence` 定义；
+2. 补全 `WidgetStyle` 默认值以及 `View` 的初始化；
+3. 定义组件树修改 API，确保 parent 自动维护；
+4. 完善 `ViewManager` 的 root、焦点、screen/input 接入及 sequence 登记机制；
+5. 实现 `arrange` 阶段；
+6. 实现 `draw` 阶段及 sequence 维护；
+7. 实现鼠标命中和键盘焦点路由；
+8. 在事件接口确定后实现自下向上的冒泡及阻止传播；
+9. 集成 `ViewManager` 到 `TuiApp`；
+10. 补充 std_test 用例；
+11. 执行全量回归测试 `make test`；
+12. 等待人工 Review，通过后再进入后续组件扩展阶段。
 
-1. 定义 `WidgetStyle`、`WidgetFrame`、基础布局类型（size/offset/insets/align/position）；
-2. 定义 `Widget` spec 与 `BaseWidget`；
-3. 实现 `WidgetChildren`，确保 parent 由树 API 自动维护；
-4. 实现 `WidgetEvent` 引用语义、传播状态与 clone；
-5. 实现 `ViewManager` 的 root/focus/paintList 基础结构；
-6. 实现 arrange 调度阶段：由 `ViewManager` 发起，组件或布局组件将声明值解析为 `WidgetFrame`；
-7. 实现 draw 阶段：清空 `paintList`、遍历组件树、draw 前追加组件；
-8. 实现鼠标 hit test 与自下向上冒泡；
-9. 实现键盘焦点路由与自下向上冒泡；
-10. 集成 `ViewManager` 到 `TuiApp`；
-11. 补充 std_test 用例；
-12. 执行全量回归测试 `make test`；
-13. 等待人工 Review，通过后再进入后续组件扩展阶段。
+## 13 Review 关注点
 
-## 11 Review 关注点
+现有定义尚未确定以下实现契约：
 
-进入实现前需要确认：
-
-- `Widget` spec 具体签名是否符合当前 Feng spec 能力；
-- `WidgetStyle` 中 `full` 与 `width/height` 同时设置时，是否确定为 `full` 优先；
-- `absolute` 是否固定为相对父容器 content rect；
-- `fixed` 是否固定为相对 screen rect，且是否不受父级 clip 影响；
-- `WidgetEvent` 是否采用统一事件类型，还是按 key/mouse 派生多个事件类型；
-- `paintList` 存 `Widget` 是否满足第一版命中需求；
-- `WidgetChildren` 的公开 API 是否足够防止用户绕过 parent 维护。
+- `WidgetStyle` 的默认值；
+- `View` 的构造和字段初始化方式；
+- `u32`/`float` 尺寸、坐标及 `Thickness` 百分比的精确参照范围和取整规则；
+- `Full` 与显式 `width`/`height` 同时设置时的优先级；
+- `Absolute`/`Fixed` 的 margin 与裁剪规则；
+- `overflow == Hidden` 的裁剪状态由何处保存和传递；
+- `children: List<Widget>` 条件下如何保证 parent 只能由组件树 API 维护；
+- `seal sequence` 的组件登记 API；
+- root、焦点以及 `Screen`/`InputManager` 与 `ViewManager` 的具体关系；
+- 现有 `@value` 事件回调如何表达阻止冒泡。
