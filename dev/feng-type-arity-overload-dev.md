@@ -755,6 +755,30 @@ LSP 不直接调用 `find_visible_type` 等 static 函数，而是通过两类�
   - `infer_call_expr_type`（`analyzer.c:13223`）：构造函数调用的返回类型推断使用 name-only 查找，导致泛型实例化使用错误的 arity decl。新增 arity-aware 修正
   - `cg_find_generic_type_decl`（`codegen.c:5642`）：代码生成按 name 查找泛型 decl，同名不同 arity 返回首个匹配。新增 `type_param_count == type_arg_count` 匹配条件
 
+### 6.9 裸类型构造目标 arity=0 修复
+
+规范依据见 `docs/feng-generics-draft.md` §4-§6：类型构造目标未显式携带类型实参时，其 arity 固定为 0；调用点泛型推导不推导构造目标所属 `type` 的类型参数。该规则与 C# 的同名不同 arity 类型解析一致。
+
+修复前缺陷：
+
+- 核心编译器的 `resolve_type_target_expr` 对裸标识符和模块限定类型目标使用 `find_visible_type_any_arity` / `find_module_public_type_decl_any_arity`，导致 `type View<T>` 写在 `type View` 前面时，`View()` 错误命中泛型声明；交换声明顺序则行为改变
+- `infer_call_expr_type`、`validate_constructor_call_expr` 和对象字面量类型目标仅在存在显式类型实参时执行 arity 精确纠正，未覆盖裸调用的 arity 0
+- LSP 的 AST 与符号缓存回退路径解析裸构造目标时仍按 name-only 查找，hover / definition 会错误命中先声明的 `View<T>`
+
+修复要求：
+
+- [x] 核心编译器解析裸类型目标时优先按 `(name, arity=0)` 精确匹配；仅在不存在精确匹配时保留 name-only 结果用于既有错误诊断，不得把该回退结果当作合法推导
+- [x] 显式泛型类型目标继续按显式类型实参数量精确匹配，不能因裸目标修复而回归
+- [x] LSP 的 analysis-session 与 symbol-cache 两条路径均按使用点 arity 精确解析裸构造目标，hover / definition 不得依赖声明顺序
+- [x] `fcts/` 覆盖泛型声明在前、非泛型声明在后的 `View()`，并通过成员调用确认结果类型为非泛型 `View`
+- [x] 全量回归测试
+
+**实现说明**：
+
+- 核心编译器新增按使用点 arity 精确解析直接类型目标的统一入口，类型推断、构造验证、对象字面量和静态类型目标复用同一规则；仅存在泛型声明时，裸构造在 Semantic 阶段报 AE0315，不再延迟到 Codegen 报 CE0021
+- LSP 为 AST analysis-session 与 symbol cache 分别补充 exact-arity 类型查找，裸构造的 hover / definition 均命中 arity 0 声明，显式泛型目标继续按显式 arity 解析
+- `fcts/fcts_bin/src/test_generic.ff` 新增直接构造与静态 `new()` 两条行为验证；`make test` 的 UBSan 与普通两轮全量回归均通过，smoke 88/88、fcts 540/540
+
 ---
 
 ## 7 测试用例设计

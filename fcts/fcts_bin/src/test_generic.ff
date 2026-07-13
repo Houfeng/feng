@@ -461,6 +461,28 @@ type Container<T, U> {
   }
 }
 
+/** 泛型声明在前的 arity=1 View。 */
+type ArityView<T> {
+  static func new(): ArityView<T> {
+    return ArityView<T>();
+  }
+
+  func generic_value(): int {
+    return 1;
+  }
+}
+
+/** 与 ArityView<T> 同名、后声明的 arity=0 View。 */
+type ArityView {
+  static func new(): ArityView {
+    return ArityView();
+  }
+
+  func plain_value(): int {
+    return 2;
+  }
+}
+
 /** 泛型测试 */
 open func test_generic() {
   describe("generic", () {
@@ -695,6 +717,14 @@ open func test_generic() {
       let c2: Container<int, string> = Container<int, string>() { first: 1, second: "hello" };
       assert(c2.get_first() == 1, "arity overload: Container<int, string> get_first");
       assert(c2.get_second() == "hello", "arity overload: Container<int, string> get_second");
+    });
+
+    test("arity overload: bare constructor selects arity zero regardless of declaration order", () {
+      let direct = ArityView();
+      assert(direct.plain_value() == 2, "arity overload: bare constructor selects arity zero");
+
+      let from_static = ArityView.new();
+      assert(from_static.plain_value() == 2, "arity overload: bare static target selects arity zero");
     });
   });
 }

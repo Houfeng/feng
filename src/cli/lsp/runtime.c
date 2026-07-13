@@ -3675,6 +3675,21 @@ static FengSlice decl_name(const FengDecl *decl) {
     return (FengSlice){0};
 }
 
+/* Return the generic arity that participates in a type/spec declaration's
+ * identity. Non-generic type-like declarations have arity zero. */
+static size_t ast_decl_type_param_count(const FengDecl *decl) {
+    if (decl == NULL) {
+        return 0U;
+    }
+    if (decl->kind == FENG_DECL_TYPE) {
+        return decl->as.type_decl.type_param_count;
+    }
+    if (decl->kind == FENG_DECL_SPEC) {
+        return decl->as.spec_decl.type_param_count;
+    }
+    return 0U;
+}
+
 static const FengDecl *find_module_decl_by_name(const FengSemanticModule *module,
                                                 FengSlice name,
                                                 bool values_only,
@@ -3715,6 +3730,38 @@ static const FengDecl *find_module_decl_by_name(const FengSemanticModule *module
     return NULL;
 }
 
+/* Find an AST type/spec/enum declaration by its exact (name, arity) identity. */
+static const FengDecl *find_module_type_decl_by_name_and_arity(
+    const FengSemanticModule *module,
+    FengSlice name,
+    size_t type_param_count,
+    bool public_only) {
+    size_t program_index;
+    size_t decl_index;
+
+    if (module == NULL) {
+        return NULL;
+    }
+    for (program_index = 0U; program_index < module->program_count; ++program_index) {
+        const FengProgram *program = module->programs[program_index];
+
+        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+            const FengDecl *decl = program->declarations[decl_index];
+            bool is_type = decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_ENUM ||
+                           decl->kind == FENG_DECL_SPEC;
+
+            if (!is_type || (public_only && decl->visibility != FENG_VISIBILITY_PUBLIC)) {
+                continue;
+            }
+            if (slice_equals(decl_name(decl), name) &&
+                ast_decl_type_param_count(decl) == type_param_count) {
+                return decl;
+            }
+        }
+    }
+    return NULL;
+}
+
 static const FengDecl *find_program_decl_by_name(const FengProgram *program,
                                                  FengSlice name,
                                                  bool values_only,
@@ -3744,6 +3791,33 @@ static const FengDecl *find_program_decl_by_name(const FengProgram *program,
             continue;
         }
         if (slice_equals(decl_name(decl), name)) {
+            return decl;
+        }
+    }
+    return NULL;
+}
+
+/* Find an exact-arity type declaration in one parsed source program. */
+static const FengDecl *find_program_type_decl_by_name_and_arity(
+    const FengProgram *program,
+    FengSlice name,
+    size_t type_param_count,
+    bool public_only) {
+    size_t decl_index;
+
+    if (program == NULL) {
+        return NULL;
+    }
+    for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+        const FengDecl *decl = program->declarations[decl_index];
+        bool is_type = decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_ENUM ||
+                       decl->kind == FENG_DECL_SPEC;
+
+        if (!is_type || (public_only && decl->visibility != FENG_VISIBILITY_PUBLIC)) {
+            continue;
+        }
+        if (slice_equals(decl_name(decl), name) &&
+            ast_decl_type_param_count(decl) == type_param_count) {
             return decl;
         }
     }
@@ -3787,6 +3861,34 @@ static const FengDecl *find_loaded_module_decl_by_name(const FengLspAnalysisSess
                                                             values_only,
                                                             types_only,
                                                             public_only);
+            if (decl != NULL) {
+                return decl;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Find an exact-arity type declaration across parsed sources of one module. */
+static const FengDecl *find_loaded_module_type_decl_by_name_and_arity(
+    const FengLspAnalysisSession *session,
+    const FengSlice *segments,
+    size_t segment_count,
+    FengSlice name,
+    size_t type_param_count,
+    bool public_only) {
+    size_t source_index;
+
+    if (session == NULL || segments == NULL || segment_count == 0U) {
+        return NULL;
+    }
+    for (source_index = 0U; source_index < session->source_count; ++source_index) {
+        const FengProgram *program = session->sources[source_index].program;
+
+        if (program_module_matches(program, segments, segment_count)) {
+            const FengDecl *decl = find_program_type_decl_by_name_and_arity(
+                program, name, type_param_count, public_only);
+
             if (decl != NULL) {
                 return decl;
             }
@@ -4326,18 +4428,28 @@ static const FengSymbolDeclView *resolve_symbol_value_name(const FengSymbolProvi
     return NULL;
 }
 
-static const FengSymbolDeclView *resolve_symbol_type_name(const FengSymbolProvider *provider,
-                                                          const FengSymbolImportedModule *current_module,
-                                                          const FengProgram *program,
-                                                          FengSlice name) {
+/* Resolve a symbol-backed type name by exact arity first, retaining name-only
+ * fallback for incomplete documents whose precise declaration is unavailable. */
+static const FengSymbolDeclView *resolve_symbol_type_name_with_arity(
+    const FengSymbolProvider *provider,
+    const FengSymbolImportedModule *current_module,
+    const FengProgram *program,
+    FengSlice name,
+    size_t type_param_count) {
     size_t index;
 
     if (current_module != NULL) {
-        const FengSymbolDeclView *decl = find_symbol_module_decl_by_name(current_module,
-                                                                         name,
-                                                                         false,
-                                                                         true,
-                                                                         false);
+        const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
+            current_module, name, type_param_count, false);
+
+        if (decl != NULL) {
+            return decl;
+        }
+        decl = find_symbol_module_decl_by_name(current_module,
+                                               name,
+                                               false,
+                                               true,
+                                               false);
         if (decl != NULL) {
             return decl;
         }
@@ -4354,11 +4466,17 @@ static const FengSymbolDeclView *resolve_symbol_type_name(const FengSymbolProvid
         }
         module = feng_symbol_provider_find_module(provider, use_decl->segments, use_decl->segment_count);
         if (module != NULL) {
-            const FengSymbolDeclView *decl = find_symbol_module_decl_by_name(module,
-                                                                             name,
-                                                                             false,
-                                                                             true,
-                                                                             true);
+            const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
+                module, name, type_param_count, true);
+
+            if (decl != NULL) {
+                return decl;
+            }
+            decl = find_symbol_module_decl_by_name(module,
+                                                   name,
+                                                   false,
+                                                   true,
+                                                   true);
             if (decl != NULL) {
                 return decl;
             }
@@ -4367,16 +4485,29 @@ static const FengSymbolDeclView *resolve_symbol_type_name(const FengSymbolProvid
     return NULL;
 }
 
-static const FengSymbolDeclView *resolve_symbol_type_constructor_expr(const FengLspCacheQueryContext *context,
-                                                                      const FengExpr *expr) {
+/* Resolve a bare symbol-backed type name, whose use-site arity is zero. */
+static const FengSymbolDeclView *resolve_symbol_type_name(const FengSymbolProvider *provider,
+                                                          const FengSymbolImportedModule *current_module,
+                                                          const FengProgram *program,
+                                                          FengSlice name) {
+    return resolve_symbol_type_name_with_arity(provider, current_module, program, name, 0U);
+}
+
+/* Resolve a symbol-backed constructor target using the arity supplied by the
+ * enclosing call or explicit generic target. */
+static const FengSymbolDeclView *resolve_symbol_type_constructor_expr_with_arity(
+    const FengLspCacheQueryContext *context,
+    const FengExpr *expr,
+    size_t type_param_count) {
     if (context == NULL || expr == NULL) {
         return NULL;
     }
     if (expr->kind == FENG_EXPR_IDENTIFIER) {
-        return resolve_symbol_type_name(context->provider,
-                                        context->current_module,
-                                        context->program,
-                                        expr->as.identifier);
+        return resolve_symbol_type_name_with_arity(context->provider,
+                                                   context->current_module,
+                                                   context->program,
+                                                   expr->as.identifier,
+                                                   type_param_count);
     }
     if (expr->kind == FENG_EXPR_MEMBER && expr->as.member.object != NULL &&
         expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
@@ -4384,6 +4515,12 @@ static const FengSymbolDeclView *resolve_symbol_type_constructor_expr(const Feng
                                                                                 context->program,
                                                                                 expr->as.member.object->as.identifier);
         if (alias_module != NULL) {
+            const FengSymbolDeclView *decl = find_symbol_module_decl_by_name_and_arity(
+                alias_module, expr->as.member.member, type_param_count, true);
+
+            if (decl != NULL) {
+                return decl;
+            }
             return find_symbol_module_decl_by_name(alias_module,
                                                    expr->as.member.member,
                                                    false,
@@ -4392,6 +4529,30 @@ static const FengSymbolDeclView *resolve_symbol_type_constructor_expr(const Feng
         }
     }
     return NULL;
+}
+
+/* Derive constructor target arity from the parsed expression shape. */
+static const FengSymbolDeclView *resolve_symbol_type_constructor_expr(
+    const FengLspCacheQueryContext *context,
+    const FengExpr *expr) {
+    if (expr == NULL) {
+        return NULL;
+    }
+    if (expr->kind == FENG_EXPR_CALL) {
+        size_t type_param_count = expr->as.call.has_explicit_type_args
+                                      ? expr->as.call.explicit_type_arg_count
+                                      : 0U;
+
+        return resolve_symbol_type_constructor_expr_with_arity(
+            context, expr->as.call.callee, type_param_count);
+    }
+    if (expr->kind == FENG_EXPR_GENERIC_TARGET) {
+        return resolve_symbol_type_constructor_expr_with_arity(
+            context,
+            expr->as.generic_target.target,
+            expr->as.generic_target.type_arg_count);
+    }
+    return resolve_symbol_type_constructor_expr_with_arity(context, expr, 0U);
 }
 
 static const FengSymbolDeclView *resolve_symbol_owner_decl_from_initializer_expr(const FengLspCacheQueryContext *context,
@@ -4403,7 +4564,7 @@ static const FengSymbolDeclView *resolve_symbol_owner_decl_from_initializer_expr
         return resolve_symbol_type_constructor_expr(context, expr->as.object_literal.target);
     }
     if (expr->kind == FENG_EXPR_CALL) {
-        return resolve_symbol_type_constructor_expr(context, expr->as.call.callee);
+        return resolve_symbol_type_constructor_expr(context, expr);
     }
     return NULL;
 }
@@ -4719,26 +4880,46 @@ static const FengDecl *resolve_value_name(const FengLspAnalysisSession *session,
     return NULL;
 }
 
-static const FengDecl *resolve_type_name(const FengLspAnalysisSession *session,
-                                         const FengProgram *program,
-                                         FengSlice name) {
+/* Resolve an AST-backed type name by exact arity first, retaining name-only
+ * fallback to keep edit-time behavior for incomplete sources. */
+static const FengDecl *resolve_type_name_with_arity(const FengLspAnalysisSession *session,
+                                                    const FengProgram *program,
+                                                    FengSlice name,
+                                                    size_t type_param_count) {
     const FengSemanticModule *program_module = find_program_module(session, program);
     size_t index;
 
     if (program_module != NULL) {
-        const FengDecl *decl = find_module_decl_by_name(program_module, name, false, true, false);
+        const FengDecl *decl = find_module_type_decl_by_name_and_arity(
+            program_module, name, type_param_count, false);
+
+        if (decl != NULL) {
+            return decl;
+        }
+        decl = find_module_decl_by_name(program_module, name, false, true, false);
         if (decl != NULL) {
             return decl;
         }
     }
     {
-        const FengDecl *decl = find_loaded_module_decl_by_name(session,
-                                                              program->module_segments,
-                                                              program->module_segment_count,
-                                                              name,
-                                                              false,
-                                                              true,
-                                                              false);
+        const FengDecl *decl = find_loaded_module_type_decl_by_name_and_arity(
+            session,
+            program->module_segments,
+            program->module_segment_count,
+            name,
+            type_param_count,
+            false);
+
+        if (decl != NULL) {
+            return decl;
+        }
+        decl = find_loaded_module_decl_by_name(session,
+                                               program->module_segments,
+                                               program->module_segment_count,
+                                               name,
+                                               false,
+                                               true,
+                                               false);
         if (decl != NULL) {
             return decl;
         }
@@ -4752,25 +4933,49 @@ static const FengDecl *resolve_type_name(const FengLspAnalysisSession *session,
         }
         module = find_module_by_segments(session->analysis, use_decl->segments, use_decl->segment_count);
         if (module != NULL) {
-            const FengDecl *decl = find_module_decl_by_name(module, name, false, true, true);
+            const FengDecl *decl = find_module_type_decl_by_name_and_arity(
+                module, name, type_param_count, true);
+
+            if (decl != NULL) {
+                return decl;
+            }
+            decl = find_module_decl_by_name(module, name, false, true, true);
             if (decl != NULL) {
                 return decl;
             }
         }
         {
-            const FengDecl *decl = find_loaded_module_decl_by_name(session,
-                                                                  use_decl->segments,
-                                                                  use_decl->segment_count,
-                                                                  name,
-                                                                  false,
-                                                                  true,
-                                                                  true);
+            const FengDecl *decl = find_loaded_module_type_decl_by_name_and_arity(
+                session,
+                use_decl->segments,
+                use_decl->segment_count,
+                name,
+                type_param_count,
+                true);
+
+            if (decl != NULL) {
+                return decl;
+            }
+            decl = find_loaded_module_decl_by_name(session,
+                                                   use_decl->segments,
+                                                   use_decl->segment_count,
+                                                   name,
+                                                   false,
+                                                   true,
+                                                   true);
             if (decl != NULL) {
                 return decl;
             }
         }
     }
     return NULL;
+}
+
+/* Resolve a bare AST-backed type name, whose use-site arity is zero. */
+static const FengDecl *resolve_type_name(const FengLspAnalysisSession *session,
+                                         const FengProgram *program,
+                                         FengSlice name) {
+    return resolve_type_name_with_arity(session, program, name, 0U);
 }
 
 static const FengDecl *owner_decl_from_type_fact(const FengLspAnalysisSession *session,
@@ -5156,16 +5361,22 @@ static bool append_owner_fit_member_completion_items(FengLspString *json,
     return true;
 }
 
-static const FengDecl *resolve_type_constructor_expr(const FengLspAnalysisSession *session,
-                                                     const FengProgram *program,
-                                                     const FengExpr *expr) {
+/* Resolve an AST-backed constructor target using its call-site arity. */
+static const FengDecl *resolve_type_constructor_expr_with_arity(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengExpr *expr,
+    size_t type_param_count) {
     size_t index;
 
     if (expr == NULL) {
         return NULL;
     }
     if (expr->kind == FENG_EXPR_IDENTIFIER) {
-        return resolve_type_name(session, program, expr->as.identifier);
+        return resolve_type_name_with_arity(session,
+                                            program,
+                                            expr->as.identifier,
+                                            type_param_count);
     }
     if (expr->kind == FENG_EXPR_MEMBER && expr->as.member.object != NULL &&
         expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
@@ -5173,11 +5384,17 @@ static const FengDecl *resolve_type_constructor_expr(const FengLspAnalysisSessio
                                                                    program,
                                                                    expr->as.member.object->as.identifier);
         if (alias_module != NULL) {
-            const FengDecl *decl = find_module_decl_by_name(alias_module,
-                                                            expr->as.member.member,
-                                                            false,
-                                                            true,
-                                                            true);
+            const FengDecl *decl = find_module_type_decl_by_name_and_arity(
+                alias_module, expr->as.member.member, type_param_count, true);
+
+            if (decl != NULL) {
+                return decl;
+            }
+            decl = find_module_decl_by_name(alias_module,
+                                            expr->as.member.member,
+                                            false,
+                                            true,
+                                            true);
             if (decl != NULL) {
                 return decl;
             }
@@ -5186,13 +5403,24 @@ static const FengDecl *resolve_type_constructor_expr(const FengLspAnalysisSessio
             const FengUseDecl *use_decl = &program->uses[index];
 
             if (use_decl->has_alias && slice_equals(use_decl->alias, expr->as.member.object->as.identifier)) {
-                const FengDecl *decl = find_loaded_module_decl_by_name(session,
-                                                                      use_decl->segments,
-                                                                      use_decl->segment_count,
-                                                                      expr->as.member.member,
-                                                                      false,
-                                                                      true,
-                                                                      true);
+                const FengDecl *decl = find_loaded_module_type_decl_by_name_and_arity(
+                    session,
+                    use_decl->segments,
+                    use_decl->segment_count,
+                    expr->as.member.member,
+                    type_param_count,
+                    true);
+
+                if (decl != NULL) {
+                    return decl;
+                }
+                decl = find_loaded_module_decl_by_name(session,
+                                                       use_decl->segments,
+                                                       use_decl->segment_count,
+                                                       expr->as.member.member,
+                                                       false,
+                                                       true,
+                                                       true);
                 if (decl != NULL) {
                     return decl;
                 }
@@ -5200,6 +5428,31 @@ static const FengDecl *resolve_type_constructor_expr(const FengLspAnalysisSessio
         }
     }
     return NULL;
+}
+
+/* Derive an AST-backed constructor target's arity from its expression. */
+static const FengDecl *resolve_type_constructor_expr(const FengLspAnalysisSession *session,
+                                                     const FengProgram *program,
+                                                     const FengExpr *expr) {
+    if (expr == NULL) {
+        return NULL;
+    }
+    if (expr->kind == FENG_EXPR_CALL) {
+        size_t type_param_count = expr->as.call.has_explicit_type_args
+                                      ? expr->as.call.explicit_type_arg_count
+                                      : 0U;
+
+        return resolve_type_constructor_expr_with_arity(
+            session, program, expr->as.call.callee, type_param_count);
+    }
+    if (expr->kind == FENG_EXPR_GENERIC_TARGET) {
+        return resolve_type_constructor_expr_with_arity(
+            session,
+            program,
+            expr->as.generic_target.target,
+            expr->as.generic_target.type_arg_count);
+    }
+    return resolve_type_constructor_expr_with_arity(session, program, expr, 0U);
 }
 
 static const FengDecl *owner_decl_from_initializer_expr(const FengLspAnalysisSession *session,
@@ -5218,7 +5471,7 @@ static const FengDecl *owner_decl_from_initializer_expr(const FengLspAnalysisSes
         return resolve_type_constructor_expr(session, program, expr->as.object_literal.target);
     }
     if (expr->kind == FENG_EXPR_CALL) {
-        return resolve_type_constructor_expr(session, program, expr->as.call.callee);
+        return resolve_type_constructor_expr(session, program, expr);
     }
     return NULL;
 }

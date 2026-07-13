@@ -4491,6 +4491,9 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
 static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
                                                    const FengExpr *target_expr,
                                                    bool follow_call_callee);
+static ResolvedTypeTarget resolve_type_target_expr_exact_arity(ResolveContext *context,
+                                                               const FengExpr *target_expr,
+                                                               size_t type_param_count);
 static InferredExprType resolved_type_target_owner_type(const ResolvedTypeTarget *target);
 static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
                                           const FengDecl *type_decl,
@@ -13638,24 +13641,15 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
     callee = expr->as.call.callee;
     target = resolve_type_target_expr(context, callee, false);
+    {
+        size_t wanted_arity = expr->as.call.has_explicit_type_args
+                                  ? expr->as.call.explicit_type_arg_count
+                                  : 0U;
+        ResolvedTypeTarget precise =
+            resolve_type_target_expr_exact_arity(context, callee, wanted_arity);
 
-    /* Arity-aware correction for constructor calls: when the callee is a bare
-     * identifier and the call carries explicit type args, the initial name-only
-     * lookup may land on a same-name type with mismatched arity. Re-resolve
-     * with the exact arity to support arity overloading. */
-    if (target.type_decl != NULL &&
-        expr->as.call.has_explicit_type_args &&
-        target.type_decl->kind == FENG_DECL_TYPE &&
-        target.type_decl->as.type_decl.type_param_count != expr->as.call.explicit_type_arg_count &&
-        callee != NULL && callee->kind == FENG_EXPR_IDENTIFIER) {
-        const VisibleTypeEntry *precise =
-            find_visible_type(context->visible_types,
-                              context->visible_type_count,
-                              callee->as.identifier,
-                              expr->as.call.explicit_type_arg_count);
-        if (precise != NULL && precise->decl != NULL) {
-            target.type_decl = precise->decl;
-            target.provider_module = precise->provider_module;
+        if (precise.type_decl != NULL) {
+            target = precise;
         }
     }
 
@@ -15357,6 +15351,75 @@ static bool synthesize_type_ref_from_generic_target_expr(ResolveContext *context
     return true;
 }
 
+/* Resolve a direct type target by the arity known at its use site.
+ * A zero result means no exact declaration exists; callers may then retain a
+ * name-only result solely for existing mismatch diagnostics. */
+static ResolvedTypeTarget resolve_type_target_expr_exact_arity(ResolveContext *context,
+                                                               const FengExpr *target_expr,
+                                                               size_t type_param_count) {
+    ResolvedTypeTarget result;
+
+    memset(&result, 0, sizeof(result));
+    if (target_expr == NULL) {
+        return result;
+    }
+
+    if (target_expr->kind == FENG_EXPR_IDENTIFIER) {
+        const VisibleTypeEntry *entry =
+            find_visible_type(context->visible_types,
+                              context->visible_type_count,
+                              target_expr->as.identifier,
+                              type_param_count);
+
+        if (entry != NULL) {
+            result.type_decl = entry->decl;
+            result.provider_module = entry->provider_module;
+        }
+        return result;
+    }
+
+    if (target_expr->kind == FENG_EXPR_MEMBER) {
+        if (target_expr->as.member.object != NULL &&
+            target_expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
+            const AliasEntry *alias =
+                find_unshadowed_alias(context, target_expr->as.member.object->as.identifier);
+
+            if (alias != NULL) {
+                result.type_decl =
+                    find_module_public_type_decl(alias->target_module,
+                                                 target_expr->as.member.member,
+                                                 type_param_count);
+                result.provider_module = result.type_decl != NULL ? alias->target_module : NULL;
+            }
+        }
+
+        if (result.type_decl == NULL) {
+            size_t path_segment_count = 0U;
+            FengSlice *path_segments = expr_path_segments_alloc(target_expr, &path_segment_count);
+
+            if (path_segments != NULL && path_segment_count > 1U) {
+                size_t module_index = find_module_index_by_path(context->analysis,
+                                                                path_segments,
+                                                                path_segment_count - 1U);
+
+                if (module_index < context->analysis->module_count &&
+                    module_is_full_path_visible_from(context,
+                                                     &context->analysis->modules[module_index])) {
+                    result.type_decl = find_module_public_type_decl(
+                        &context->analysis->modules[module_index],
+                        path_segments[path_segment_count - 1U],
+                        type_param_count);
+                    result.provider_module = result.type_decl != NULL
+                        ? &context->analysis->modules[module_index]
+                        : NULL;
+                }
+            }
+            free(path_segments);
+        }
+    }
+    return result;
+}
+
 static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
                                                    const FengExpr *target_expr,
                                                    bool follow_call_callee) {
@@ -15369,10 +15432,17 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
 
     switch (target_expr->kind) {
         case FENG_EXPR_IDENTIFIER: {
-            const VisibleTypeEntry *entry =
-                find_visible_type_any_arity(context->visible_types,
-                                  context->visible_type_count,
-                                  target_expr->as.identifier);
+            const VisibleTypeEntry *entry = find_visible_type(
+                context->visible_types,
+                context->visible_type_count,
+                target_expr->as.identifier,
+                0U);
+
+            if (entry == NULL) {
+                entry = find_visible_type_any_arity(context->visible_types,
+                                                    context->visible_type_count,
+                                                    target_expr->as.identifier);
+            }
 
             if (entry != NULL) {
                 result.type_decl = entry->decl;
@@ -15429,8 +15499,13 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
                     find_unshadowed_alias(context, target_expr->as.member.object->as.identifier);
 
                 if (alias != NULL) {
-                    result.type_decl =
-                        find_module_public_type_decl_any_arity(alias->target_module, target_expr->as.member.member);
+                    result.type_decl = find_module_public_type_decl(alias->target_module,
+                                                                    target_expr->as.member.member,
+                                                                    0U);
+                    if (result.type_decl == NULL) {
+                        result.type_decl = find_module_public_type_decl_any_arity(
+                            alias->target_module, target_expr->as.member.member);
+                    }
                     result.provider_module = result.type_decl != NULL ? alias->target_module : NULL;
                 }
             }
@@ -15447,9 +15522,15 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
                     if (module_index < context->analysis->module_count &&
                         module_is_full_path_visible_from(context,
                                                          &context->analysis->modules[module_index])) {
-                        result.type_decl = find_module_public_type_decl_any_arity(
+                        result.type_decl = find_module_public_type_decl(
                             &context->analysis->modules[module_index],
-                            path_segments[path_segment_count - 1U]);
+                            path_segments[path_segment_count - 1U],
+                            0U);
+                        if (result.type_decl == NULL) {
+                            result.type_decl = find_module_public_type_decl_any_arity(
+                                &context->analysis->modules[module_index],
+                                path_segments[path_segment_count - 1U]);
+                        }
                         result.provider_module = result.type_decl != NULL
                             ? &context->analysis->modules[module_index]
                             : NULL;
@@ -15461,23 +15542,14 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
 
         case FENG_EXPR_CALL:
             if (follow_call_callee) {
-                /* When the call has explicit type args (e.g., Container<int, string>()),
-                 * use the type arg count as arity for precise type resolution instead
-                 * of the name-only lookup on the bare callee identifier. */
-                if (target_expr->as.call.has_explicit_type_args &&
-                    target_expr->as.call.callee != NULL &&
-                    target_expr->as.call.callee->kind == FENG_EXPR_IDENTIFIER) {
-                    size_t wanted_arity = target_expr->as.call.explicit_type_arg_count;
-                    const VisibleTypeEntry *precise =
-                        find_visible_type(context->visible_types,
-                                          context->visible_type_count,
-                                          target_expr->as.call.callee->as.identifier,
-                                          wanted_arity);
-                    if (precise != NULL && precise->decl != NULL) {
-                        result.type_decl = precise->decl;
-                        result.provider_module = precise->provider_module;
-                        return result;
-                    }
+                size_t wanted_arity = target_expr->as.call.has_explicit_type_args
+                                          ? target_expr->as.call.explicit_type_arg_count
+                                          : 0U;
+
+                result = resolve_type_target_expr_exact_arity(
+                    context, target_expr->as.call.callee, wanted_arity);
+                if (result.type_decl != NULL) {
+                    return result;
                 }
                 return resolve_type_target_expr(context, target_expr->as.call.callee, true);
             }
@@ -15486,9 +15558,15 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
         case FENG_EXPR_GENERIC_TARGET: {
             FengTypeRef *type_ref = NULL;
 
-            result = resolve_type_target_expr(context,
-                                              target_expr->as.generic_target.target,
-                                              false);
+            result = resolve_type_target_expr_exact_arity(
+                context,
+                target_expr->as.generic_target.target,
+                target_expr->as.generic_target.type_arg_count);
+            if (result.type_decl == NULL) {
+                result = resolve_type_target_expr(context,
+                                                  target_expr->as.generic_target.target,
+                                                  false);
+            }
             if (result.type_decl != NULL &&
                 synthesize_type_ref_from_generic_target_expr(context,
                                                             target_expr->as.generic_target.target,
@@ -20049,6 +20127,21 @@ static bool validate_constructor_invocation(ResolveContext *context,
         return ok;
     }
 
+    /* A bare constructor target has arity zero. A generic owner selected only
+     * by the name-only diagnostic fallback is not a constructible instance:
+     * constructor arguments and contextual types never infer owner type
+     * parameters. */
+    if (type_decl->as.type_decl.type_param_count > 0U &&
+        explicit_type_arg_count == 0U) {
+        return resolver_append_error(
+            context,
+            target_expr != NULL ? target_expr->token : context->program->module_token,
+            "AE0315", format_message("type '%.*s' has no accessible constructor accepting %zu argument(s)",
+                           (int)type_decl->as.type_decl.name.length,
+                           type_decl->as.type_decl.name.data,
+                           arg_count));
+    }
+
     declared_constructor_count = count_declared_constructors(type_decl);
     if (declared_constructor_count == 0U) {
         if (arg_count == 0U) {
@@ -20111,74 +20204,15 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
     ResolvedTypeTarget target = resolve_type_target_expr(context, expr->as.call.callee, false);
     const FengTypeMember *constructor_member = NULL;
 
-    /* Arity-aware correction: resolve_type_target_expr uses name-only lookup
-     * (find_visible_type_any_arity). When the call carries explicit type args,
-     * the arity is known (explicit_type_arg_count). If the initial resolution
-     * landed on a type with mismatched arity, re-resolve with the exact arity
-     * to support same-name types with different arity (arity overloading). */
-    if (target.type_decl != NULL &&
-        expr->as.call.has_explicit_type_args &&
-        target.type_decl->kind == FENG_DECL_TYPE &&
-        target.type_decl->as.type_decl.type_param_count != expr->as.call.explicit_type_arg_count) {
-        size_t wanted_arity = expr->as.call.explicit_type_arg_count;
+    {
+        size_t wanted_arity = expr->as.call.has_explicit_type_args
+                                  ? expr->as.call.explicit_type_arg_count
+                                  : 0U;
+        ResolvedTypeTarget precise = resolve_type_target_expr_exact_arity(
+            context, expr->as.call.callee, wanted_arity);
 
-        if (expr->as.call.callee->kind == FENG_EXPR_IDENTIFIER) {
-            const VisibleTypeEntry *precise =
-                find_visible_type(context->visible_types,
-                                  context->visible_type_count,
-                                  expr->as.call.callee->as.identifier,
-                                  wanted_arity);
-            if (precise != NULL && precise->decl != NULL) {
-                target.type_decl = precise->decl;
-                target.provider_module = precise->provider_module;
-            }
-        } else if (expr->as.call.callee->kind == FENG_EXPR_MEMBER &&
-                   expr->as.call.callee->as.member.object != NULL &&
-                   expr->as.call.callee->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
-            /* Module-qualified constructor call: Module.Type<T1, T2>() */
-            const AliasEntry *alias =
-                find_unshadowed_alias(context,
-                                      expr->as.call.callee->as.member.object->as.identifier);
-            if (alias != NULL && alias->target_module != NULL) {
-                const FengDecl *precise =
-                    find_module_public_type_decl(alias->target_module,
-                                                 expr->as.call.callee->as.member.member,
-                                                 wanted_arity);
-                if (precise != NULL) {
-                    target.type_decl = precise;
-                    target.provider_module = alias->target_module;
-                }
-            }
-
-            /* Fallback: multi-segment module path (a.b.Type<...>()) */
-            if (target.type_decl == NULL ||
-                (target.type_decl->kind == FENG_DECL_TYPE &&
-                 target.type_decl->as.type_decl.type_param_count != wanted_arity)) {
-                size_t path_segment_count = 0U;
-                FengSlice *path_segments =
-                    expr_path_segments_alloc(expr->as.call.callee, &path_segment_count);
-
-                if (path_segments != NULL && path_segment_count > 1U) {
-                    size_t module_index = find_module_index_by_path(context->analysis,
-                                                                    path_segments,
-                                                                    path_segment_count - 1U);
-                    if (module_index < context->analysis->module_count &&
-                        module_is_full_path_visible_from(context,
-                                                         &context->analysis->modules[module_index])) {
-                        const FengDecl *precise =
-                            find_module_public_type_decl(
-                                &context->analysis->modules[module_index],
-                                path_segments[path_segment_count - 1U],
-                                wanted_arity);
-                        if (precise != NULL) {
-                            target.type_decl = precise;
-                            target.provider_module =
-                                &context->analysis->modules[module_index];
-                        }
-                    }
-                }
-                free(path_segments);
-            }
+        if (precise.type_decl != NULL) {
+            target = precise;
         }
     }
 
