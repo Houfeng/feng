@@ -423,7 +423,7 @@ storage API 必须满足：
 - [x] 在 `src/runtime/feng_runtime_contract.inc` 增加四个 contract 符号。
 - [x] 在数组 runtime 模块中实现四个 API；`feng_runtime_contract.c` 只保留必要的 contract bridge，避免重复数组生命周期逻辑。
 - [x] 补齐用例进行验证，并进行全量回归测试。
-- [ ] 人工 Review。
+- [x] 人工 Review。
 
 ### 8.4 测试
 
