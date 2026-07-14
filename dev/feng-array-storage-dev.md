@@ -407,8 +407,8 @@ storage API 必须满足：
 ### 8.1 文档
 
 - [ ] 本文 Review 通过后作为本次开发主文档。
-- [ ] 实现时同步更新 `dev/feng-runtime-contract-api.md`，只登记新增 contract API 并引用本文，不重复维护完整算法。
-- [ ] 在 `dev/feng-array-optimize-delivered.md` 的后续边界处引用本文，不改写已交付阶段的历史范围。
+- [x] 实现时同步更新 `dev/feng-runtime-contract-api.md`，只登记新增 contract API 并引用本文，不重复维护完整算法。
+- [x] 在 `dev/feng-array-optimize-delivered.md` 的后续边界处引用本文，不改写已交付阶段的历史范围。
 - [ ] 人工 Review。
 
 ### 8.2 Runtime

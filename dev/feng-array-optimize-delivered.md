@@ -430,3 +430,6 @@ make test
 - 迁移时避免保留前缀元素的 ARC 增减
 
 但这些内容都不应和本阶段的“尾部内联”布局改造绑定在同一批实现中。
+
+后续 array storage runtime contract API 及 `List<T>` 优化方案统一见
+`dev/feng-array-storage-dev.md`；本文不重复定义其容量模型、迁移语义与实施步骤。

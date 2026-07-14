@@ -17,6 +17,17 @@
 7. `feng_pointer_equal`
 8. `feng_pointer_get_scalar`
 
+计划新增以下 array storage contract API，完整语义与实施边界统一由
+`dev/feng-array-storage-dev.md` 定义，本文不重复维护算法细节：
+
+1. `feng_array_storage_get_capacity`
+2. `feng_array_storage_insert`
+3. `feng_array_storage_remove`
+4. `feng_array_storage_migrate`
+
+以上 API 尚未加入 `src/runtime/feng_runtime_contract.inc`，当前不可通过
+`@runtime extern func` 使用。
+
 ## 2. API 清单
 
 ### 2.1 `feng_string_utf8_length`
