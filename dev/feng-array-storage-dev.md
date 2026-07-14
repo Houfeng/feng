@@ -464,6 +464,7 @@ storage API 必须满足：
 拟使用关系：
 
 - [ ] `List.add` 使用 `get_capacity + migrate（必要时）+ insert(length, item)`。
+- [ ] `List.insert(index, item)` 使用 `get_capacity + migrate（必要时）+ insert(index, item)`，只插入单个元素。
 - [ ] `List.remove` 使用 `remove(index, 1) + migrate（满足缩容策略时）`。
 - [ ] `List.clear` 使用 `remove(0, length)`。
 - [ ] `List.size` 使用 `items.length()`。
@@ -471,6 +472,7 @@ storage API 必须满足：
 第二阶段已确定的实施项与备注：
 
 - [ ] `List(items: T[!])` 利用 `std.collections` 数组 `clone()` 的复制语义创建私有 backing array，不直接保存调用方数组引用。
+- [x] runtime storage contract 保持现有四个 API，不增加批量 insert 或其他 range API。
 
 备注：`ListIterator<T>` 保持当前实现，本阶段不同步优化；后续根据实际需求单独评估。
 
@@ -478,7 +480,6 @@ storage API 必须满足：
 
 - [ ] 是否删除 `List.count`，直接以 `items.length()` 作为元素数量。
 - [ ] 自动 shrink 策略是否保持现状，是否需要避免容量临界点反复迁移。
-- [ ] 是否增加批量 insert 或其他 range API；没有实际需求和基准前不提前扩展。
 - [ ] 补齐用例进行验证，并进行全量回归测试。
 - [ ] 人工 Review。
 
