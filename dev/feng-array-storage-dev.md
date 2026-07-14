@@ -139,9 +139,9 @@ index < length
 
 为保持普通数组现有可观察行为：
 
-1. 内部 raw payload helper 应能在 `capacity > 0` 时取得 payload。
-2. 面向普通数组访问的 `feng_array_data()` 在 `length == 0` 时仍返回 `NULL`。
-3. storage API 直接复用内部 raw payload helper，不通过普通数组的 `feng_array_data()` 访问备用容量。
+1. 复用现有内部 `feng_array_payload_inline()` / `feng_array_payload_inline_const()` 作为 payload 起始地址的唯一计算入口，但把空 payload 判断从 `length == 0` 改为 `capacity == 0`。
+2. `feng_array_data()` 在调用内部 payload helper 前单独检查 `length == 0`，继续向普通数组访问路径返回 `NULL`，保持现有可观察行为。
+3. storage API 直接通过现有内部 payload helper 取得起始地址；第 `index` 个槽位地址为 `payload + index * element_size`，不增加第二套 payload 地址计算 helper。
 
 ### 4.5 生命周期与循环回收
 
@@ -402,9 +402,9 @@ storage API 必须满足：
 
 1. 为 `FengArray` 增加 `capacity`。
 2. 普通数组创建路径设置 `capacity = length`，保持现有公开语义。
-3. 将 allocation 大小计算改为基于 `capacity`。
-4. 增加可访问备用容量的内部 raw payload helper，同时保持 `feng_array_data()` 的普通数组行为。
-5. 终结器和 cycle collector 继续只遍历 `[0, length)`。
+3. 新增可接收独立 `length/capacity` 的内部 storage allocation 路径，其 allocation 大小按 `capacity * element_size` 计算；现有普通数组创建路径继续传入 `length == capacity`，行为不变。
+4. 将现有内部 `feng_array_payload_inline()` / `feng_array_payload_inline_const()` 的空 payload 判断改为基于 `capacity`；`feng_array_data()` 自身保留 `length == 0` 返回 `NULL` 的普通数组行为。storage API 直接复用现有内部 helper，不新增第二套 payload helper。
+5. 终结器和 cycle collector 当前已经只遍历 `[0, length)`，无需修改遍历边界；本阶段只需审计所有数组路径并增加回归测试，确认没有路径错误地遍历到 `capacity`。
 6. 在 `src/runtime/feng_runtime_contract.inc` 增加四个 contract 符号。
 7. 在数组 runtime 模块中实现四个 API；`feng_runtime_contract.c` 只保留必要的 contract bridge，避免重复数组生命周期逻辑。
 
