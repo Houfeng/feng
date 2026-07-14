@@ -429,17 +429,17 @@ storage API 必须满足：
 
 新增测试至少覆盖：
 
-- [ ] 普通数组仍满足 `length == capacity`，现有数组行为不变。
-- [ ] `length == 0 && capacity > 0` 时，普通索引仍全部越界，storage insert 可以复用容量。
-- [ ] trivial、managed pointer、aggregate 三类元素的头部、中间和尾部 insert；新增托管引用恰好 retain 一次，原有移动元素 RC 不变。
-- [ ] 删除头部、中间、尾部、全部区间以及 `count == 0`。
-- [ ] 删除后保留元素顺序正确；每个被删除托管引用恰好 release 一次，保留移动元素 RC 不变。
-- [ ] migrate 到更大、更小、相等和零 `capacity` 的新数组实例，并覆盖截断有效元素的场景。
-- [ ] migrate 保留元素不产生元素级 RC 增减，截断元素恰好 release 一次。
-- [ ] 数组终结和 cycle collector 只遍历当前 `length`。
-- [ ] 非法负数、越界范围、满容量 insert 和 allocation 溢出按 contract panic。
-- [ ] `@runtime` 泛型声明、参数 carrier、数组返回值及赋值接管 `+1` 返回引用的 codegen 回归。
-- [ ] 补齐用例进行验证，并进行全量回归测试。
+- [x] 普通数组仍满足 `length == capacity`，现有数组行为不变。
+- [x] `length == 0 && capacity > 0` 时，普通索引仍全部越界，storage insert 可以复用容量。
+- [x] trivial、managed pointer、aggregate 三类元素的头部、中间和尾部 insert；新增托管引用恰好 retain 一次，原有移动元素 RC 不变。
+- [x] 删除头部、中间、尾部、全部区间以及 `count == 0`。
+- [x] 删除后保留元素顺序正确；每个被删除托管引用恰好 release 一次，保留移动元素 RC 不变。
+- [x] migrate 到更大、更小、相等和零 `capacity` 的新数组实例，并覆盖截断有效元素的场景。
+- [x] migrate 保留元素不产生元素级 RC 增减，截断元素恰好 release 一次。
+- [x] 数组终结和 cycle collector 只遍历当前 `length`。
+- [x] 非法负数、越界范围、满容量 insert 和 allocation 溢出按 contract panic。
+- [x] `@runtime` 泛型声明、参数 carrier、数组返回值及赋值接管 `+1` 返回引用的 codegen 回归。
+- [x] 补齐用例进行验证，并进行全量回归测试。
 
   验证顺序：
 
@@ -450,7 +450,7 @@ storage API 必须满足：
   make test-sanitize
   ```
 
-- [ ] 人工 Review。
+- [x] 人工 Review。
 
 不得把测试产物放到 `/tmp` 或 `/private/tmp` 后执行。
 

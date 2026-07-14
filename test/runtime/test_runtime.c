@@ -618,6 +618,30 @@ static void test_array_storage_capacity_and_public_data(void) {
     feng_release(ordinary);
 }
 
+/* Verify that zero logical length hides the reserved payload from ordinary
+ * array access while storage insertion can initialize and expose that slot. */
+static void test_array_storage_zero_length_reuses_capacity(void) {
+    FengArray *storage = feng_array_new_storage_kinded(
+        FENG_VALUE_TRIVIAL,
+        NULL,
+        &i32_element_descriptor,
+        sizeof(int32_t),
+        0U,
+        1U);
+    int32_t value = 42;
+
+    ASSERT(feng_array_length(storage) == 0U);
+    ASSERT(feng_array_data(storage) == NULL);
+    feng_array_storage_insert(&i32_runtime_generic_descriptor,
+                              storage,
+                              0,
+                              &value);
+    ASSERT(feng_array_length(storage) == 1U);
+    ASSERT(*(int32_t *)feng_array_data(storage) == 42);
+
+    feng_release(storage);
+}
+
 /* Verify that finalization ignores stale bytes in uninitialized capacity. */
 static void test_array_storage_finalize_uses_length(void) {
     FengArray *storage_value;
@@ -800,6 +824,374 @@ static void test_array_storage_contracts_managed_pointer(void) {
     feng_release(storage);
     ASSERT(g_finalize_count == 2);
     feng_release(shrunk);
+    ASSERT(g_finalize_count == 3);
+}
+
+/* Cover head, middle, and tail insertion for trivial storage. */
+static void test_array_storage_insert_positions_trivial(void) {
+    FengArray *storage = feng_array_new_storage_kinded(
+        FENG_VALUE_TRIVIAL,
+        NULL,
+        &i32_element_descriptor,
+        sizeof(int32_t),
+        0U,
+        4U);
+    int32_t values[] = {10, 20, 30, 40};
+    int32_t *items;
+
+    feng_array_storage_insert(&i32_runtime_generic_descriptor,
+                              storage,
+                              0,
+                              &values[1]);
+    feng_array_storage_insert(&i32_runtime_generic_descriptor,
+                              storage,
+                              0,
+                              &values[0]);
+    feng_array_storage_insert(&i32_runtime_generic_descriptor,
+                              storage,
+                              2,
+                              &values[3]);
+    feng_array_storage_insert(&i32_runtime_generic_descriptor,
+                              storage,
+                              2,
+                              &values[2]);
+
+    items = (int32_t *)feng_array_data(storage);
+    ASSERT(feng_array_length(storage) == 4U);
+    ASSERT(items[0] == 10);
+    ASSERT(items[1] == 20);
+    ASSERT(items[2] == 30);
+    ASSERT(items[3] == 40);
+
+    feng_release(storage);
+}
+
+/* Cover head, middle, and tail insertion for managed pointers, proving that
+ * each new slot retains once and moving existing slots causes no RC churn. */
+static void test_array_storage_insert_positions_managed_pointer(void) {
+    FengArray *storage = feng_array_new_storage_kinded(
+        FENG_VALUE_MANAGED_POINTER,
+        NULL,
+        &test_object_descriptor,
+        sizeof(void *),
+        0U,
+        4U);
+    TestObject *values[4];
+    void **items;
+    size_t i;
+
+    g_finalize_count = 0;
+    for (i = 0U; i < 4U; ++i) {
+        values[i] = (TestObject *)feng_object_new(&test_object_descriptor);
+    }
+
+    feng_array_storage_insert(&object_runtime_generic_descriptor,
+                              storage,
+                              0,
+                              &values[1]);
+    ASSERT(values[1]->header.refcount == 2U);
+    feng_array_storage_insert(&object_runtime_generic_descriptor,
+                              storage,
+                              0,
+                              &values[0]);
+    ASSERT(values[0]->header.refcount == 2U);
+    ASSERT(values[1]->header.refcount == 2U);
+    feng_array_storage_insert(&object_runtime_generic_descriptor,
+                              storage,
+                              2,
+                              &values[3]);
+    ASSERT(values[0]->header.refcount == 2U);
+    ASSERT(values[1]->header.refcount == 2U);
+    ASSERT(values[3]->header.refcount == 2U);
+    feng_array_storage_insert(&object_runtime_generic_descriptor,
+                              storage,
+                              2,
+                              &values[2]);
+
+    items = (void **)feng_array_data(storage);
+    for (i = 0U; i < 4U; ++i) {
+        ASSERT(items[i] == values[i]);
+        ASSERT(values[i]->header.refcount == 2U);
+        feng_release(values[i]);
+    }
+    ASSERT(g_finalize_count == 0);
+
+    feng_release(storage);
+    ASSERT(g_finalize_count == 4);
+}
+
+/* Cover zero-count, head, middle, tail, and whole-range removal while
+ * checking the exact surviving order after every movement. */
+static void test_array_storage_remove_ranges_trivial(void) {
+    FengArray *storage = feng_array_new_storage_kinded(
+        FENG_VALUE_TRIVIAL,
+        NULL,
+        &i32_element_descriptor,
+        sizeof(int32_t),
+        7U,
+        7U);
+    int32_t *items = (int32_t *)feng_array_data(storage);
+    size_t i;
+
+    for (i = 0U; i < 7U; ++i) {
+        items[i] = (int32_t)(i + 1U);
+    }
+
+    feng_array_storage_remove(&i32_runtime_generic_descriptor,
+                              storage,
+                              7,
+                              0);
+    ASSERT(feng_array_length(storage) == 7U);
+
+    feng_array_storage_remove(&i32_runtime_generic_descriptor,
+                              storage,
+                              0,
+                              1);
+    items = (int32_t *)feng_array_data(storage);
+    ASSERT(feng_array_length(storage) == 6U);
+    ASSERT(items[0] == 2 && items[5] == 7);
+
+    feng_array_storage_remove(&i32_runtime_generic_descriptor,
+                              storage,
+                              2,
+                              2);
+    items = (int32_t *)feng_array_data(storage);
+    ASSERT(feng_array_length(storage) == 4U);
+    ASSERT(items[0] == 2 && items[1] == 3);
+    ASSERT(items[2] == 6 && items[3] == 7);
+
+    feng_array_storage_remove(&i32_runtime_generic_descriptor,
+                              storage,
+                              3,
+                              1);
+    items = (int32_t *)feng_array_data(storage);
+    ASSERT(feng_array_length(storage) == 3U);
+    ASSERT(items[0] == 2 && items[1] == 3 && items[2] == 6);
+
+    feng_array_storage_remove(&i32_runtime_generic_descriptor,
+                              storage,
+                              0,
+                              3);
+    ASSERT(feng_array_length(storage) == 0U);
+    ASSERT(feng_array_data(storage) == NULL);
+
+    feng_release(storage);
+}
+
+/* Verify removed managed slots release exactly once and surviving slots keep
+ * their original RC while moving through head, middle, and tail removals. */
+static void test_array_storage_remove_ranges_managed_pointer(void) {
+    FengArray *storage = feng_array_new_storage_kinded(
+        FENG_VALUE_MANAGED_POINTER,
+        NULL,
+        &test_object_descriptor,
+        sizeof(void *),
+        7U,
+        7U);
+    TestObject *values[7];
+    void **items = (void **)feng_array_data(storage);
+    size_t i;
+
+    g_finalize_count = 0;
+    for (i = 0U; i < 7U; ++i) {
+        values[i] = (TestObject *)feng_object_new(&test_object_descriptor);
+        items[i] = feng_retain(values[i]);
+        ASSERT(values[i]->header.refcount == 2U);
+    }
+
+    feng_array_storage_remove(&object_runtime_generic_descriptor,
+                              storage,
+                              7,
+                              0);
+    for (i = 0U; i < 7U; ++i) {
+        ASSERT(values[i]->header.refcount == 2U);
+    }
+
+    feng_array_storage_remove(&object_runtime_generic_descriptor,
+                              storage,
+                              0,
+                              1);
+    ASSERT(values[0]->header.refcount == 1U);
+    items = (void **)feng_array_data(storage);
+    ASSERT(items[0] == values[1] && items[5] == values[6]);
+    for (i = 1U; i < 7U; ++i) {
+        ASSERT(values[i]->header.refcount == 2U);
+    }
+
+    feng_array_storage_remove(&object_runtime_generic_descriptor,
+                              storage,
+                              2,
+                              2);
+    ASSERT(values[3]->header.refcount == 1U);
+    ASSERT(values[4]->header.refcount == 1U);
+    items = (void **)feng_array_data(storage);
+    ASSERT(items[0] == values[1] && items[1] == values[2]);
+    ASSERT(items[2] == values[5] && items[3] == values[6]);
+    ASSERT(values[1]->header.refcount == 2U);
+    ASSERT(values[2]->header.refcount == 2U);
+    ASSERT(values[5]->header.refcount == 2U);
+    ASSERT(values[6]->header.refcount == 2U);
+
+    feng_array_storage_remove(&object_runtime_generic_descriptor,
+                              storage,
+                              3,
+                              1);
+    ASSERT(values[6]->header.refcount == 1U);
+    items = (void **)feng_array_data(storage);
+    ASSERT(items[0] == values[1]);
+    ASSERT(items[1] == values[2]);
+    ASSERT(items[2] == values[5]);
+
+    feng_array_storage_remove(&object_runtime_generic_descriptor,
+                              storage,
+                              0,
+                              3);
+    ASSERT(values[1]->header.refcount == 1U);
+    ASSERT(values[2]->header.refcount == 1U);
+    ASSERT(values[5]->header.refcount == 1U);
+    ASSERT(feng_array_length(storage) == 0U);
+    ASSERT(g_finalize_count == 0);
+
+    feng_release(storage);
+    ASSERT(g_finalize_count == 0);
+    for (i = 0U; i < 7U; ++i) {
+        feng_release(values[i]);
+    }
+    ASSERT(g_finalize_count == 7);
+}
+
+/* Verify migration always creates a replacement instance for equal, larger,
+ * smaller, and zero capacities while preserving the retained prefix order. */
+static void test_array_storage_migrate_capacity_shapes(void) {
+    FengArray *storage = feng_array_new_storage_kinded(
+        FENG_VALUE_TRIVIAL,
+        NULL,
+        &i32_element_descriptor,
+        sizeof(int32_t),
+        3U,
+        4U);
+    FengArray *replacement;
+    int32_t *items = (int32_t *)feng_array_data(storage);
+
+    items[0] = 10;
+    items[1] = 20;
+    items[2] = 30;
+
+    replacement = feng_array_storage_migrate(&i32_runtime_generic_descriptor,
+                                              storage,
+                                              4);
+    ASSERT(replacement != storage);
+    ASSERT(feng_array_length(storage) == 0U);
+    ASSERT(feng_array_storage_get_capacity(&i32_runtime_generic_descriptor,
+                                           replacement) == 4);
+    items = (int32_t *)feng_array_data(replacement);
+    ASSERT(items[0] == 10 && items[1] == 20 && items[2] == 30);
+    feng_release(storage);
+    storage = replacement;
+
+    replacement = feng_array_storage_migrate(&i32_runtime_generic_descriptor,
+                                              storage,
+                                              6);
+    ASSERT(replacement != storage);
+    ASSERT(feng_array_length(storage) == 0U);
+    ASSERT(feng_array_storage_get_capacity(&i32_runtime_generic_descriptor,
+                                           replacement) == 6);
+    items = (int32_t *)feng_array_data(replacement);
+    ASSERT(items[0] == 10 && items[1] == 20 && items[2] == 30);
+    feng_release(storage);
+    storage = replacement;
+
+    replacement = feng_array_storage_migrate(&i32_runtime_generic_descriptor,
+                                              storage,
+                                              2);
+    ASSERT(replacement != storage);
+    ASSERT(feng_array_length(storage) == 0U);
+    ASSERT(feng_array_length(replacement) == 2U);
+    items = (int32_t *)feng_array_data(replacement);
+    ASSERT(items[0] == 10 && items[1] == 20);
+    feng_release(storage);
+    storage = replacement;
+
+    replacement = feng_array_storage_migrate(&i32_runtime_generic_descriptor,
+                                              storage,
+                                              0);
+    ASSERT(replacement != storage);
+    ASSERT(feng_array_length(storage) == 0U);
+    ASSERT(feng_array_length(replacement) == 0U);
+    ASSERT(feng_array_storage_get_capacity(&i32_runtime_generic_descriptor,
+                                           replacement) == 0);
+    feng_release(storage);
+    feng_release(replacement);
+}
+
+/* Verify equal and growth migration preserve every element hold, while
+ * shrink and zero-capacity migration release each truncated hold once. */
+static void test_array_storage_migrate_managed_pointer_refcounts(void) {
+    FengArray *storage = feng_array_new_storage_kinded(
+        FENG_VALUE_MANAGED_POINTER,
+        NULL,
+        &test_object_descriptor,
+        sizeof(void *),
+        3U,
+        4U);
+    FengArray *replacement;
+    TestObject *values[3];
+    void **items = (void **)feng_array_data(storage);
+    size_t i;
+
+    g_finalize_count = 0;
+    for (i = 0U; i < 3U; ++i) {
+        values[i] = (TestObject *)feng_object_new(&test_object_descriptor);
+        items[i] = feng_retain(values[i]);
+        ASSERT(values[i]->header.refcount == 2U);
+    }
+
+    replacement = feng_array_storage_migrate(&object_runtime_generic_descriptor,
+                                              storage,
+                                              4);
+    ASSERT(replacement != storage);
+    for (i = 0U; i < 3U; ++i) {
+        ASSERT(values[i]->header.refcount == 2U);
+    }
+    feng_release(storage);
+    storage = replacement;
+
+    replacement = feng_array_storage_migrate(&object_runtime_generic_descriptor,
+                                              storage,
+                                              6);
+    ASSERT(replacement != storage);
+    for (i = 0U; i < 3U; ++i) {
+        ASSERT(values[i]->header.refcount == 2U);
+    }
+    feng_release(storage);
+    storage = replacement;
+
+    replacement = feng_array_storage_migrate(&object_runtime_generic_descriptor,
+                                              storage,
+                                              2);
+    ASSERT(replacement != storage);
+    ASSERT(values[0]->header.refcount == 2U);
+    ASSERT(values[1]->header.refcount == 2U);
+    ASSERT(values[2]->header.refcount == 1U);
+    items = (void **)feng_array_data(replacement);
+    ASSERT(items[0] == values[0] && items[1] == values[1]);
+    feng_release(storage);
+    storage = replacement;
+
+    replacement = feng_array_storage_migrate(&object_runtime_generic_descriptor,
+                                              storage,
+                                              0);
+    ASSERT(replacement != storage);
+    ASSERT(values[0]->header.refcount == 1U);
+    ASSERT(values[1]->header.refcount == 1U);
+    ASSERT(values[2]->header.refcount == 1U);
+    ASSERT(g_finalize_count == 0);
+    feng_release(storage);
+    feng_release(replacement);
+
+    for (i = 0U; i < 3U; ++i) {
+        feng_release(values[i]);
+    }
     ASSERT(g_finalize_count == 3);
 }
 
@@ -1271,6 +1663,135 @@ static void array_slice_out_of_range_body(void) {
     feng_release(source);
 }
 
+/* Child-process body proving ordinary index checks use logical length rather
+ * than reserved storage capacity. */
+static void array_storage_zero_length_index_body(void) {
+    FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
+                                                     NULL,
+                                                     &i32_element_descriptor,
+                                                     sizeof(int32_t),
+                                                     0U,
+                                                     1U);
+    feng_array_check_index(array, 0U);
+    feng_release(array);
+}
+
+/* Child-process body for a negative insertion index. */
+static void array_storage_insert_negative_index_body(void) {
+    FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
+                                                     NULL,
+                                                     &i32_element_descriptor,
+                                                     sizeof(int32_t),
+                                                     0U,
+                                                     1U);
+    int32_t value = 1;
+
+    feng_array_storage_insert(&i32_runtime_generic_descriptor,
+                              array,
+                              -1,
+                              &value);
+    feng_release(array);
+}
+
+/* Child-process body for an insertion index beyond logical length. */
+static void array_storage_insert_out_of_range_body(void) {
+    FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
+                                                     NULL,
+                                                     &i32_element_descriptor,
+                                                     sizeof(int32_t),
+                                                     0U,
+                                                     1U);
+    int32_t value = 1;
+
+    feng_array_storage_insert(&i32_runtime_generic_descriptor,
+                              array,
+                              1,
+                              &value);
+    feng_release(array);
+}
+
+/* Child-process body for insertion into full storage. */
+static void array_storage_insert_full_body(void) {
+    FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
+                                                     NULL,
+                                                     &i32_element_descriptor,
+                                                     sizeof(int32_t),
+                                                     1U,
+                                                     1U);
+    int32_t value = 1;
+
+    feng_array_storage_insert(&i32_runtime_generic_descriptor,
+                              array,
+                              1,
+                              &value);
+    feng_release(array);
+}
+
+/* Child-process body for a negative removal index. */
+static void array_storage_remove_negative_index_body(void) {
+    FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
+                                                     NULL,
+                                                     &i32_element_descriptor,
+                                                     sizeof(int32_t),
+                                                     1U,
+                                                     1U);
+
+    feng_array_storage_remove(&i32_runtime_generic_descriptor,
+                              array,
+                              -1,
+                              0);
+    feng_release(array);
+}
+
+/* Child-process body for a negative removal count. */
+static void array_storage_remove_negative_count_body(void) {
+    FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
+                                                     NULL,
+                                                     &i32_element_descriptor,
+                                                     sizeof(int32_t),
+                                                     1U,
+                                                     1U);
+
+    feng_array_storage_remove(&i32_runtime_generic_descriptor,
+                              array,
+                              0,
+                              -1);
+    feng_release(array);
+}
+
+/* Child-process body for a removal range beyond logical length. */
+static void array_storage_remove_out_of_range_body(void) {
+    FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
+                                                     NULL,
+                                                     &i32_element_descriptor,
+                                                     sizeof(int32_t),
+                                                     1U,
+                                                     1U);
+
+    feng_array_storage_remove(&i32_runtime_generic_descriptor,
+                              array,
+                              1,
+                              1);
+    feng_release(array);
+}
+
+/* Child-process body for a negative migration capacity. */
+static void array_storage_migrate_negative_capacity_body(void) {
+    FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
+                                                     NULL,
+                                                     &i32_element_descriptor,
+                                                     sizeof(int32_t),
+                                                     0U,
+                                                     1U);
+    FengArray *replacement = feng_array_storage_migrate(
+        &i32_runtime_generic_descriptor,
+        array,
+        -1);
+
+    feng_release(replacement);
+    feng_release(array);
+}
+
 /* Child-process body for the invalid length/capacity invariant. */
 static void array_storage_length_exceeds_capacity_body(void) {
     FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
@@ -1323,6 +1844,19 @@ static void test_array_slice_out_of_range_aborts(void) {
 static void test_array_storage_invalid_shape_aborts(void) {
     assert_child_aborts(array_storage_length_exceeds_capacity_body);
     assert_child_aborts(array_storage_capacity_overflow_body);
+}
+
+/* Verify storage operations reject negative values, invalid ranges, and full
+ * insertion, and that ordinary indexing still rejects reserved-only slots. */
+static void test_array_storage_invalid_operations_abort(void) {
+    assert_child_aborts(array_storage_zero_length_index_body);
+    assert_child_aborts(array_storage_insert_negative_index_body);
+    assert_child_aborts(array_storage_insert_out_of_range_body);
+    assert_child_aborts(array_storage_insert_full_body);
+    assert_child_aborts(array_storage_remove_negative_index_body);
+    assert_child_aborts(array_storage_remove_negative_count_body);
+    assert_child_aborts(array_storage_remove_out_of_range_body);
+    assert_child_aborts(array_storage_migrate_negative_capacity_body);
 }
 
 /* --- Threshold-triggered collection ------------------------------------ */
@@ -1555,6 +2089,13 @@ static const FengAggregateDescriptor outer_desc = {
     .default_init = &outer_default_zero,
     .managed_slot_count = sizeof(outer_slots) / sizeof(outer_slots[0]),
     .managed_slots = outer_slots,
+};
+
+/* Runtime generic carrier for the nested three-managed-slot aggregate. */
+static const FengGenericParamDescriptor outer_runtime_generic_descriptor = {
+    .kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+    .descriptor = &outer_desc,
+    .witness = NULL,
 };
 
 typedef struct ForwardAgg {
@@ -2133,6 +2674,84 @@ static void test_array_storage_contracts_aggregate(void) {
     ASSERT(g_finalize_count == 2);
 }
 
+/* Cover head, middle, and tail insertion for nested aggregates, proving that
+ * every managed slot is retained once and moved aggregates keep stable RC. */
+static void test_array_storage_insert_positions_aggregate(void) {
+    FengArray *storage = feng_array_new_storage_kinded(
+        FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+        &outer_desc,
+        NULL,
+        outer_desc.size,
+        0U,
+        4U);
+    TestObject *objects[4][3];
+    OuterAgg values[4];
+    OuterAgg *items;
+    size_t i;
+    size_t j;
+
+    g_finalize_count = 0;
+    memset(values, 0, sizeof(values));
+    for (i = 0U; i < 4U; ++i) {
+        for (j = 0U; j < 3U; ++j) {
+            objects[i][j] = (TestObject *)feng_object_new(&test_object_descriptor);
+        }
+        values[i].head = objects[i][0];
+        values[i].inner.subject = objects[i][1];
+        values[i].inner.tag = (int)i;
+        values[i].tail = objects[i][2];
+    }
+
+    feng_array_storage_insert(&outer_runtime_generic_descriptor,
+                              storage,
+                              0,
+                              &values[1]);
+    for (j = 0U; j < 3U; ++j) {
+        ASSERT(objects[1][j]->header.refcount == 2U);
+    }
+    feng_array_storage_insert(&outer_runtime_generic_descriptor,
+                              storage,
+                              0,
+                              &values[0]);
+    for (i = 0U; i < 2U; ++i) {
+        for (j = 0U; j < 3U; ++j) {
+            ASSERT(objects[i][j]->header.refcount == 2U);
+        }
+    }
+    feng_array_storage_insert(&outer_runtime_generic_descriptor,
+                              storage,
+                              2,
+                              &values[3]);
+    for (j = 0U; j < 3U; ++j) {
+        ASSERT(objects[3][j]->header.refcount == 2U);
+    }
+    feng_array_storage_insert(&outer_runtime_generic_descriptor,
+                              storage,
+                              2,
+                              &values[2]);
+
+    items = (OuterAgg *)feng_array_data(storage);
+    for (i = 0U; i < 4U; ++i) {
+        ASSERT(items[i].head == objects[i][0]);
+        ASSERT(items[i].inner.subject == objects[i][1]);
+        ASSERT(items[i].inner.tag == (int)i);
+        ASSERT(items[i].tail == objects[i][2]);
+        for (j = 0U; j < 3U; ++j) {
+            ASSERT(objects[i][j]->header.refcount == 2U);
+        }
+        feng_aggregate_release(&values[i], &outer_desc);
+    }
+    ASSERT(g_finalize_count == 0);
+    for (i = 0U; i < 4U; ++i) {
+        for (j = 0U; j < 3U; ++j) {
+            ASSERT(objects[i][j]->header.refcount == 1U);
+        }
+    }
+
+    feng_release(storage);
+    ASSERT(g_finalize_count == 12);
+}
+
 static void test_array_aggregate_assign_per_element_tracks_refcount(void) {
     /* User-driven: zero-initialise the array, then move owning references
      * into each element via feng_aggregate_assign, and verify the array
@@ -2217,9 +2836,16 @@ int main(void) {
     test_finalizer_resurrection_reruns_on_next_release();
     test_finalizer_no_resurrection_releases();
     test_array_storage_capacity_and_public_data();
+    test_array_storage_zero_length_reuses_capacity();
     test_array_storage_finalize_uses_length();
     test_array_storage_contracts_trivial();
     test_array_storage_contracts_managed_pointer();
+    test_array_storage_insert_positions_trivial();
+    test_array_storage_insert_positions_managed_pointer();
+    test_array_storage_remove_ranges_trivial();
+    test_array_storage_remove_ranges_managed_pointer();
+    test_array_storage_migrate_capacity_shapes();
+    test_array_storage_migrate_managed_pointer_refcounts();
     test_cycle_collector_reclaims_two_node_cycle();
     test_cycle_collector_does_not_collect_externally_referenced();
     test_cycle_collector_reclaims_cycle_with_finalizer();
@@ -2231,6 +2857,7 @@ int main(void) {
     test_finalizer_throw_on_cycle_path_aborts();
     test_array_slice_out_of_range_aborts();
     test_array_storage_invalid_shape_aborts();
+    test_array_storage_invalid_operations_abort();
     test_cycle_collector_threshold_triggers_collection();
     test_cycle_collector_multithreaded_stress();
 
@@ -2256,6 +2883,7 @@ int main(void) {
     test_array_aggregate_init_fn_runs_per_element();
     test_array_storage_aggregate_lifecycle_uses_length();
     test_array_storage_contracts_aggregate();
+    test_array_storage_insert_positions_aggregate();
     test_array_aggregate_assign_per_element_tracks_refcount();
     test_array_aggregate_zero_length();
 

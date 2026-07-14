@@ -1947,6 +1947,78 @@ static void test_generic_runtime_extern_call_accepts_explicit_type_args(void) {
     feng_program_free(program);
 }
 
+/* Regression for array-storage runtime contracts: generic carriers must be
+ * injected, direct T values must use an address carrier, and migrate's +1
+ * array result must be taken by assignment without an extra retain. */
+static void test_array_storage_runtime_contract_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.arraystoragecontract;\n"
+        "@runtime\n"
+        "extern func feng_array_storage_get_capacity<T>(array: T[!]): int;\n"
+        "@runtime\n"
+        "extern func feng_array_storage_insert<T>(array: T[!], index: int, value: T): void;\n"
+        "@runtime\n"
+        "extern func feng_array_storage_remove<T>(array: T[!], index: int, count: int): void;\n"
+        "@runtime\n"
+        "extern func feng_array_storage_migrate<T>(array: T[!], newCapacity: int): T[!];\n"
+        "func run(values: int[!], value: int): int {\n"
+        "    var storage: int[!] = values;\n"
+        "    let capacity = feng_array_storage_get_capacity(storage);\n"
+        "    feng_array_storage_insert(storage, 0, value);\n"
+        "    feng_array_storage_remove(storage, 0, 0);\n"
+        "    storage = feng_array_storage_migrate(storage, capacity);\n"
+        "    return feng_array_storage_get_capacity(storage);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "arraystoragecontract.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    char descriptor[256];
+    const char *int_descriptor = sizeof(void *) >= 8U
+                                     ? "feng_i64_descriptor"
+                                     : "feng_i32_descriptor";
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+
+    snprintf(descriptor,
+             sizeof(descriptor),
+             "&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL}",
+             int_descriptor);
+    ASSERT(count_substr(out.c_source, descriptor) == 5U);
+    ASSERT(count_substr(out.c_source,
+                        "feng_array_storage_get_capacity(") == 2U);
+    ASSERT(count_substr(out.c_source,
+                        "feng_array_storage_insert(") == 1U);
+    ASSERT(count_substr(out.c_source,
+                        "feng_array_storage_remove(") == 1U);
+    ASSERT(count_substr(out.c_source,
+                        "feng_array_storage_migrate(") == 1U);
+    ASSERT(strstr(out.c_source, "&_rga") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "{ void *_old = _l_storage_0; _l_storage_0 = feng_array_storage_migrate(") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_assign((void**)&_l_storage_0, feng_array_storage_migrate(") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_generic_runtime_extern_expression_equal_codegen(void) {
     static const char *kSource =
         "module feng.codegen.genericruntimeexprequal;\n"
@@ -7785,6 +7857,7 @@ int main(void) {
     test_runtime_extern_codegen_uses_feng_surface_types();
     test_generic_runtime_extern_call_infers_type_args();
     test_generic_runtime_extern_call_accepts_explicit_type_args();
+    test_array_storage_runtime_contract_codegen();
     test_generic_runtime_extern_expression_equal_codegen();
     test_generic_runtime_extern_direct_type_param_return_codegen();
     test_runtime_extern_codegen_rejects_non_contract_symbol();
