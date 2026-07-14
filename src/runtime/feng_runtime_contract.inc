@@ -21,6 +21,10 @@ FENG_RUNTIME_CONTRACT(FengString *, feng_string_slice, (FengString *value, intpt
 FENG_RUNTIME_CONTRACT(FengArray *, feng_string_slice_bytes, (FengString *value, intptr_t start, intptr_t length))
 FENG_RUNTIME_CONTRACT(intptr_t, feng_array_get_length, (const FengGenericParamDescriptor *type, const FengArray *value))
 FENG_RUNTIME_CONTRACT(FengArray *, feng_array_slice, (const FengGenericParamDescriptor *type, const FengArray *value, intptr_t start, intptr_t length))
+FENG_RUNTIME_CONTRACT(intptr_t, feng_array_storage_get_capacity, (const FengGenericParamDescriptor *type, const FengArray *array))
+FENG_RUNTIME_CONTRACT(void, feng_array_storage_insert, (const FengGenericParamDescriptor *type, FengArray *array, intptr_t index, const void *value))
+FENG_RUNTIME_CONTRACT(void, feng_array_storage_remove, (const FengGenericParamDescriptor *type, FengArray *array, intptr_t index, intptr_t count))
+FENG_RUNTIME_CONTRACT(FengArray *, feng_array_storage_migrate, (const FengGenericParamDescriptor *type, FengArray *array, intptr_t new_capacity))
 FENG_RUNTIME_CONTRACT(bool, feng_expression_equal, (const FengGenericParamDescriptor *type, const void *left, const void *right))
 FENG_RUNTIME_CONTRACT(bool, feng_string_range_equal, (FengString *a, intptr_t a_start, intptr_t a_end, FengString *b, intptr_t b_start, intptr_t b_end))
 

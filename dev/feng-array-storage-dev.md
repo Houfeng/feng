@@ -393,10 +393,7 @@ storage API 必须满足：
 3. `for/in` 每次进入循环时创建独立 Iterator，循环结束时按当前作用域生命周期清理。
 4. 是否改为引用 List、是否增加版本号或其他迭代失效检查，后续根据实际需求和问题单独评估。
 
-首版 API 是否在 runtime 中检查 `array.header.refcount == 1`，留待本轮 Review 决定：
-
-- 检查：能尽早发现 std 误用，但会给尾部 `insert` 热路径增加一次引用计数读取。
-- 不检查：热路径无额外开销，但独占性完全依赖 std 实现保证。
+首版 API 不在 runtime 中检查 `array.header.refcount == 1`。该检查不能证明没有调用方继续按普通数组语义观察 backing array，且会给尾部 `insert` 热路径增加一次引用计数读取；独占性由标准库实现保证。
 
 首版不建议增加共享数组复制 fallback。共享 fallback 会让 `migrate` 的“保留元素 RC 不变”只在部分路径成立，并掩盖 backing array 别名错误。
 
@@ -423,9 +420,9 @@ storage API 必须满足：
 
 ### 8.3 Runtime contract
 
-- [ ] 在 `src/runtime/feng_runtime_contract.inc` 增加四个 contract 符号。
-- [ ] 在数组 runtime 模块中实现四个 API；`feng_runtime_contract.c` 只保留必要的 contract bridge，避免重复数组生命周期逻辑。
-- [ ] 补齐用例进行验证，并进行全量回归测试。
+- [x] 在 `src/runtime/feng_runtime_contract.inc` 增加四个 contract 符号。
+- [x] 在数组 runtime 模块中实现四个 API；`feng_runtime_contract.c` 只保留必要的 contract bridge，避免重复数组生命周期逻辑。
+- [x] 补齐用例进行验证，并进行全量回归测试。
 - [ ] 人工 Review。
 
 ### 8.4 测试
@@ -494,5 +491,5 @@ storage API 必须满足：
 3. 四个 API 的名称与签名是否固定为 `feng_array_storage_*`。
 4. `remove(index, count)` 是否作为 clear、单项删除与批量删除的统一原语。
 5. `migrate` 是否要求旧 backing array 无仍按普通数组语义观察它的外部引用、迁移后立即用返回的新数组替换它，并且不提供共享复制 fallback。
-6. runtime 是否对 storage mutation 执行唯一引用检查。
+6. runtime 不对 storage mutation 执行唯一引用检查；独占性由标准库实现保证。
 7. 第一阶段只实现 API，第二阶段再修改 List。

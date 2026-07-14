@@ -12,7 +12,7 @@
  * (feng_retain / feng_release) on every FENG_SLOT_POINTER slot, so the
  * Phase 1A managed-pointer infrastructure remains the sole authority over
  * refcounting; aggregates never touch FengManagedHeader directly. */
-#include "runtime/feng_runtime.h"
+#include "runtime/feng_runtime_internal.h"
 
 #include <string.h>
 
@@ -116,6 +116,18 @@ static void visit_release(void **pslot, void *ctx) {
     feng_release(*pslot);
 }
 
+/* Invalidate one managed slot before dropping its reference so a synchronous
+ * collector traversal cannot observe stale ownership. */
+static void visit_release_and_clear(void **pslot, void *ctx) {
+    void *managed = *pslot;
+
+    (void)ctx;
+    /* Clear before release because release may synchronously run the cycle
+     * collector, which must not traverse a reference already being dropped. */
+    *pslot = NULL;
+    feng_release(managed);
+}
+
 static void visit_null_out(void **pslot, void *ctx) {
     (void)ctx;
     *pslot = NULL;
@@ -135,6 +147,21 @@ void feng_aggregate_release(void *value,
     feng_aggregate_assert_desc(desc, "feng_aggregate_release");
     feng_aggregate_assert_value(value, "feng_aggregate_release");
     feng_visit_aggregate_managed_slots(value, desc, visit_release, NULL);
+}
+
+/* Collector-safe release used when a still-live container invalidates an
+ * aggregate slot before reusing its storage. */
+void feng_aggregate_release_and_clear_internal(
+        void *value,
+        const FengAggregateDescriptor *desc) {
+    feng_aggregate_assert_desc(desc,
+                               "feng_aggregate_release_and_clear_internal");
+    feng_aggregate_assert_value(value,
+                                "feng_aggregate_release_and_clear_internal");
+    feng_visit_aggregate_managed_slots(value,
+                                       desc,
+                                       visit_release_and_clear,
+                                       NULL);
 }
 
 void feng_aggregate_assign(void *dst, const void *src,

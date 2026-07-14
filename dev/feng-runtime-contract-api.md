@@ -6,7 +6,7 @@
 - 允许列表的唯一权威来源是 `src/runtime/feng_runtime_contract.inc`；本文是解释性索引，不是第二份白名单定义。
 - 若 future 变更新增、删除或重命名 runtime contract API，必须先修改 `src/runtime/feng_runtime_contract.inc`，再同步更新本文。
 
-当前 contract API 共 8 个：
+本文现有解释条目包括：
 
 1. `feng_string_utf8_length`
 2. `feng_string_from_utf8_bytes`
@@ -17,7 +17,7 @@
 7. `feng_pointer_equal`
 8. `feng_pointer_get_scalar`
 
-计划新增以下 array storage contract API，完整语义与实施边界统一由
+本轮新增以下 array storage contract API，完整语义与实施边界统一由
 `dev/feng-array-storage-dev.md` 定义，本文不重复维护算法细节：
 
 1. `feng_array_storage_get_capacity`
@@ -25,8 +25,8 @@
 3. `feng_array_storage_remove`
 4. `feng_array_storage_migrate`
 
-以上 API 尚未加入 `src/runtime/feng_runtime_contract.inc`，当前不可通过
-`@runtime extern func` 使用。
+以上 API 已加入 `src/runtime/feng_runtime_contract.inc`，可以通过
+`@runtime extern func` 声明使用。
 
 ## 2. API 清单
 
@@ -119,6 +119,30 @@
   - 读取大小由 `FengTrivialDescriptor.size` 决定，执行 `memcpy` 语义。
 - 主要使用点：标准库 `std/src/text/RegExp.ff` 用它读取 PCRE2 ovector（`size_t*` 数组）中的匹配偏移量。
 - 边界说明：指针偏移通过已有 `feng_pointer_move` 完成，`feng_pointer_get_scalar` 仅负责读取，职责单一。
+
+### 2.9 `feng_array_storage_get_capacity`
+
+- C 符号：`intptr_t feng_array_storage_get_capacity(const FengGenericParamDescriptor *type, const FengArray *array)`
+- Feng 声明形态：`extern func feng_array_storage_get_capacity<T>(array: T[!]): int;`
+- 用途：读取容器 backing array 的固定容量；完整语义见 `dev/feng-array-storage-dev.md`。
+
+### 2.10 `feng_array_storage_insert`
+
+- C 符号：`void feng_array_storage_insert(const FengGenericParamDescriptor *type, FengArray *array, intptr_t index, const void *value)`
+- Feng 声明形态：`extern func feng_array_storage_insert<T>(array: T[!], index: int, value: T): void;`
+- 用途：在已有容量内插入单个元素；完整语义与生命周期规则见 `dev/feng-array-storage-dev.md`。
+
+### 2.11 `feng_array_storage_remove`
+
+- C 符号：`void feng_array_storage_remove(const FengGenericParamDescriptor *type, FengArray *array, intptr_t index, intptr_t count)`
+- Feng 声明形态：`extern func feng_array_storage_remove<T>(array: T[!], index: int, count: int): void;`
+- 用途：删除 backing array 的指定元素区间；完整语义与生命周期规则见 `dev/feng-array-storage-dev.md`。
+
+### 2.12 `feng_array_storage_migrate`
+
+- C 符号：`FengArray *feng_array_storage_migrate(const FengGenericParamDescriptor *type, FengArray *array, intptr_t new_capacity)`
+- Feng 声明形态：`extern func feng_array_storage_migrate<T>(array: T[!], newCapacity: int): T[!];`
+- 用途：创建固定容量的新 backing array 并迁移有效元素；完整语义与生命周期规则见 `dev/feng-array-storage-dev.md`。
 
 ## 3. 维护规则
 

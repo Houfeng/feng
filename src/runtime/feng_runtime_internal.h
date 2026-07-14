@@ -71,6 +71,13 @@ void feng_array_slice_copy_into(struct FengArray *dst,
                                 size_t start,
                                 size_t length);
 
+/* Release every managed slot in an aggregate after first clearing that slot.
+ * This ordering keeps collector traversal from observing a pointer whose
+ * ownership has already been dropped. Non-managed bytes are left unchanged. */
+void feng_aggregate_release_and_clear_internal(
+    void *value,
+    const FengAggregateDescriptor *desc);
+
 /* Invoke a user-declared finalizer behind a sentinel exception barrier. Per
  * docs/feng-lifetime.md §13.2 / docs/feng-type.md, a finalizer must not let
  * an exception propagate past its body; if one does, the runtime panics

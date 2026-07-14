@@ -5,6 +5,7 @@
 #include "runtime/feng_runtime.h"
 #include "runtime/feng_runtime_internal.h"
 
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -293,4 +294,286 @@ const FengAggregateDescriptor *feng_array_element_aggregate(const FengArray *arr
         feng_panic("feng_array_element_aggregate: array must not be NULL");
     }
     return ((const struct FengArray *)array)->element_aggregate;
+}
+
+/* Validate the array and erased element descriptor shared by all storage
+ * contracts. Per-instance metadata remains authoritative for lifecycle work;
+ * the generic descriptor is checked only for ABI consistency. */
+static const struct FengArray *feng_array_storage_require_compatible(
+        const char *operation,
+        const FengGenericParamDescriptor *type,
+        const FengArray *array) {
+    const struct FengArray *storage = (const struct FengArray *)array;
+    size_t generic_size;
+
+    if (storage == NULL) {
+        feng_panic("%s: array must not be NULL", operation);
+    }
+    if (type == NULL) {
+        feng_panic("%s: type must not be NULL", operation);
+    }
+    if (type->kind != storage->element_kind) {
+        feng_panic("%s: element kind mismatch (array=%d, type=%d)",
+                   operation,
+                   (int)storage->element_kind,
+                   (int)type->kind);
+    }
+    if (type->descriptor == NULL) {
+        feng_panic("%s: type descriptor must not be NULL", operation);
+    }
+
+    switch (type->kind) {
+        case FENG_VALUE_TRIVIAL:
+            generic_size = feng_generic_trivial_descriptor(type)->size;
+            break;
+        case FENG_VALUE_MANAGED_POINTER:
+            generic_size = sizeof(void *);
+            break;
+        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:
+            if (feng_generic_aggregate_descriptor(type) !=
+                storage->element_aggregate) {
+                feng_panic("%s: aggregate descriptor mismatch", operation);
+            }
+            generic_size = feng_generic_aggregate_descriptor(type)->size;
+            break;
+        default:
+            feng_panic("%s: unknown value kind=%d",
+                       operation,
+                       (int)type->kind);
+    }
+
+    if (generic_size != storage->element_size) {
+        feng_panic("%s: element size mismatch (array=%zu, type=%zu)",
+                   operation,
+                   storage->element_size,
+                   generic_size);
+    }
+    return storage;
+}
+
+/* Convert a non-negative Feng int contract argument to the runtime size
+ * domain, trapping before any storage mutation on invalid input. */
+static size_t feng_array_storage_require_size(const char *operation,
+                                              const char *argument,
+                                              intptr_t value) {
+    if (value < 0) {
+        feng_panic("%s: %s must be non-negative, got %" PRIdPTR,
+                   operation,
+                   argument,
+                   value);
+    }
+    if ((uintmax_t)value > (uintmax_t)SIZE_MAX) {
+        feng_panic("%s: %s exceeds runtime size range",
+                   operation,
+                   argument);
+    }
+    return (size_t)value;
+}
+
+/* Drop one initialized slot without leaving a stale managed pointer visible
+ * to a synchronous cycle-collector traversal. */
+static void feng_array_storage_release_slot(struct FengArray *storage,
+                                            unsigned char *slot) {
+    switch (storage->element_kind) {
+        case FENG_VALUE_TRIVIAL:
+            return;
+        case FENG_VALUE_MANAGED_POINTER: {
+            void *managed = *(void **)slot;
+
+            *(void **)slot = NULL;
+            feng_release(managed);
+            return;
+        }
+        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:
+            feng_aggregate_release_and_clear_internal(
+                slot,
+                storage->element_aggregate);
+            return;
+        default:
+            feng_panic("feng_array_storage: corrupted element_kind=%d",
+                       (int)storage->element_kind);
+    }
+}
+
+/* Return the fixed physical capacity of a valid array storage allocation. */
+intptr_t feng_array_storage_get_capacity(
+        const FengGenericParamDescriptor *type,
+        const FengArray *array) {
+    const struct FengArray *storage = feng_array_storage_require_compatible(
+        "feng_array_storage_get_capacity",
+        type,
+        array);
+
+    if (storage->capacity > (size_t)INTPTR_MAX) {
+        feng_panic("feng_array_storage_get_capacity: capacity overflow");
+    }
+    return (intptr_t)storage->capacity;
+}
+
+/* Insert one copy-initialized element and move the existing suffix right
+ * without changing ownership of the moved elements. */
+void feng_array_storage_insert(const FengGenericParamDescriptor *type,
+                               FengArray *array,
+                               intptr_t index,
+                               const void *value) {
+    struct FengArray *storage = (struct FengArray *)
+        feng_array_storage_require_compatible("feng_array_storage_insert",
+                                              type,
+                                              array);
+    size_t insertion_index = feng_array_storage_require_size(
+        "feng_array_storage_insert",
+        "index",
+        index);
+    unsigned char *payload;
+    unsigned char *slot;
+    size_t suffix_size;
+    void *managed = NULL;
+
+    if (value == NULL) {
+        feng_panic("feng_array_storage_insert: value must not be NULL");
+    }
+    if (insertion_index > storage->length) {
+        feng_panic("feng_array_storage_insert: index %zu out of range (length=%zu)",
+                   insertion_index,
+                   storage->length);
+    }
+    if (storage->length >= storage->capacity) {
+        feng_panic("feng_array_storage_insert: array storage is full (length=%zu, capacity=%zu)",
+                   storage->length,
+                   storage->capacity);
+    }
+
+    payload = (unsigned char *)feng_array_payload_inline(storage);
+    slot = payload + insertion_index * storage->element_size;
+    suffix_size = (storage->length - insertion_index) * storage->element_size;
+
+    switch (storage->element_kind) {
+        case FENG_VALUE_TRIVIAL:
+            break;
+        case FENG_VALUE_MANAGED_POINTER:
+            managed = *(void *const *)value;
+            feng_retain(managed);
+            break;
+        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:
+            feng_aggregate_retain((void *)value,
+                                  storage->element_aggregate);
+            break;
+        default:
+            feng_panic("feng_array_storage_insert: corrupted element_kind=%d",
+                       (int)storage->element_kind);
+    }
+
+    if (suffix_size > 0U) {
+        memmove(slot + storage->element_size, slot, suffix_size);
+    }
+    if (storage->element_kind == FENG_VALUE_MANAGED_POINTER) {
+        *(void **)slot = managed;
+    } else {
+        memcpy(slot, value, storage->element_size);
+    }
+    storage->length += 1U;
+}
+
+/* Remove an initialized range, release only the removed elements, and move
+ * the surviving suffix left without retain/release churn. */
+void feng_array_storage_remove(const FengGenericParamDescriptor *type,
+                               FengArray *array,
+                               intptr_t index,
+                               intptr_t count) {
+    struct FengArray *storage = (struct FengArray *)
+        feng_array_storage_require_compatible("feng_array_storage_remove",
+                                              type,
+                                              array);
+    size_t removal_index = feng_array_storage_require_size(
+        "feng_array_storage_remove",
+        "index",
+        index);
+    size_t removal_count = feng_array_storage_require_size(
+        "feng_array_storage_remove",
+        "count",
+        count);
+    size_t tail_start;
+    size_t tail_count;
+    size_t new_length;
+    unsigned char *payload;
+    size_t i;
+
+    if (removal_index > storage->length ||
+        removal_count > storage->length - removal_index) {
+        feng_panic("feng_array_storage_remove: range [index=%zu, count=%zu] out of range (length=%zu)",
+                   removal_index,
+                   removal_count,
+                   storage->length);
+    }
+    if (removal_count == 0U) {
+        return;
+    }
+
+    tail_start = removal_index + removal_count;
+    tail_count = storage->length - tail_start;
+    new_length = storage->length - removal_count;
+    payload = (unsigned char *)feng_array_payload_inline(storage);
+
+    if (storage->element_kind != FENG_VALUE_TRIVIAL) {
+        for (i = removal_index; i < tail_start; ++i) {
+            feng_array_storage_release_slot(
+                storage,
+                payload + i * storage->element_size);
+        }
+    }
+    if (tail_count > 0U) {
+        memmove(payload + removal_index * storage->element_size,
+                payload + tail_start * storage->element_size,
+                tail_count * storage->element_size);
+    }
+    storage->length = new_length;
+}
+
+/* Allocate fixed-capacity replacement storage, transfer the retained prefix
+ * without RC changes, release any truncated suffix, and empty the old array. */
+FengArray *feng_array_storage_migrate(
+        const FengGenericParamDescriptor *type,
+        FengArray *array,
+        intptr_t new_capacity) {
+    struct FengArray *storage = (struct FengArray *)
+        feng_array_storage_require_compatible("feng_array_storage_migrate",
+                                              type,
+                                              array);
+    size_t capacity = feng_array_storage_require_size(
+        "feng_array_storage_migrate",
+        "new_capacity",
+        new_capacity);
+    size_t move_length = storage->length < capacity
+                             ? storage->length
+                             : capacity;
+    FengArray *result = feng_array_new_storage_kinded(
+        storage->element_kind,
+        storage->element_aggregate,
+        storage->element_desc,
+        storage->element_size,
+        0U,
+        capacity);
+    struct FengArray *new_storage = (struct FengArray *)result;
+    unsigned char *old_payload =
+        (unsigned char *)feng_array_payload_inline(storage);
+    size_t i;
+
+    if (storage->element_kind != FENG_VALUE_TRIVIAL) {
+        for (i = move_length; i < storage->length; ++i) {
+            feng_array_storage_release_slot(
+                storage,
+                old_payload + i * storage->element_size);
+        }
+    }
+    if (move_length > 0U) {
+        memcpy(feng_array_payload_inline(new_storage),
+               old_payload,
+               move_length * storage->element_size);
+    }
+
+    /* No lifecycle callback occurs between these stores: ownership of the
+     * copied prefix changes containers exactly once at this boundary. */
+    storage->length = 0U;
+    new_storage->length = move_length;
+    return result;
 }
