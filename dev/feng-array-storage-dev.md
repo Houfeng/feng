@@ -472,14 +472,14 @@ storage API 必须满足：
 第二阶段已确定的实施项与备注：
 
 - [ ] `List(items: T[!])` 利用 `std.collections` 数组 `clone()` 的复制语义创建私有 backing array，不直接保存调用方数组引用。
+- [ ] 删除 `List.count` 字段，统一使用 `items.length()` 表示元素数量。
+- [ ] 自动 shrink 沿用现有逻辑：容量大于 8 且元素数量不超过容量的四分之一时，将容量减半且不低于 8。
 - [x] runtime storage contract 保持现有四个 API，不增加批量 insert 或其他 range API。
 
 备注：`ListIterator<T>` 保持当前实现，本阶段不同步优化；后续根据实际需求单独评估。
 
-第二阶段实施前仍需单独确定：
+第二阶段验证与验收：
 
-- [ ] 是否删除 `List.count`，直接以 `items.length()` 作为元素数量。
-- [ ] 自动 shrink 策略是否保持现状，是否需要避免容量临界点反复迁移。
 - [ ] 补齐用例进行验证，并进行全量回归测试。
 - [ ] 人工 Review。
 
