@@ -1,6 +1,6 @@
-# Feng 数组容器存储 API 开发方案（待 Review）
+# Feng 数组容器存储 API 开发方案
 
-> 状态：待 Review，尚未实施  
+> 状态：已 Review，实施中
 > 主规范范围：本文定义 `FengArray` 的内部容量模型，以及仅供标准库容器使用的 array storage runtime contract API。  
 > 实施顺序：先实现并验证 runtime API；API 独立通过回归后，再单独优化 `List<T>`。
 
@@ -413,12 +413,12 @@ storage API 必须满足：
 
 ### 8.2 Runtime
 
-- [ ] 为 `FengArray` 增加 `capacity`。
-- [ ] 普通数组创建路径设置 `capacity = length`，保持现有公开语义。
-- [ ] 新增可接收独立 `length/capacity` 的内部 storage allocation 路径，其 allocation 大小按 `capacity * element_size` 计算；现有普通数组创建路径继续传入 `length == capacity`，行为不变。
-- [ ] 将现有内部 `feng_array_payload_inline()` / `feng_array_payload_inline_const()` 的空 payload 判断改为基于 `capacity`；`feng_array_data()` 自身保留 `length == 0` 返回 `NULL` 的普通数组行为。storage API 直接复用现有内部 helper，不新增第二套 payload helper。
-- [ ] 审计终结器、cycle collector 及其他数组路径，并增加回归测试，确认所有路径都只遍历 `[0, length)`，没有路径错误地遍历到 `capacity`。
-- [ ] 补齐用例进行验证，并进行全量回归测试。
+- [x] 为 `FengArray` 增加 `capacity`。
+- [x] 普通数组创建路径设置 `capacity = length`，保持现有公开语义。
+- [x] 新增可接收独立 `length/capacity` 的内部 storage allocation 路径，其 allocation 大小按 `capacity * element_size` 计算；现有普通数组创建路径继续传入 `length == capacity`，行为不变。
+- [x] 将现有内部 `feng_array_payload_inline()` / `feng_array_payload_inline_const()` 的空 payload 判断改为基于 `capacity`；`feng_array_data()` 自身保留 `length == 0` 返回 `NULL` 的普通数组行为。storage API 直接复用现有内部 helper，不新增第二套 payload helper。
+- [x] 审计终结器、cycle collector 及其他数组路径，并增加回归测试，确认所有路径都只遍历 `[0, length)`，没有路径错误地遍历到 `capacity`。
+- [x] 补齐用例进行验证，并进行全量回归测试。
 - [ ] 人工 Review。
 
 ### 8.3 Runtime contract

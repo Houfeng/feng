@@ -15,8 +15,10 @@ struct FengString {
 
 struct FengArray {
     FengManagedHeader header;
-    /* Number of elements, not bytes. */
+    /* Number of initialized elements, not bytes. */
     size_t length;
+    /* Number of tail-inline element slots allocated for this instance. */
+    size_t capacity;
     /* Per-element storage size in bytes (fixed per array instance). */
     size_t element_size;
     const FengTypeDescriptor *element_desc;
@@ -40,14 +42,26 @@ void feng_array_finalize_internal(struct FengArray *a);
 
 /* Internal array payload accessors.
  *
- * Both helpers return NULL when `a == NULL` or `a->length == 0`.
- * For non-empty arrays they return the aligned tail-inline payload address
- * inside the same allocation as `struct FengArray`.
+ * Both helpers return NULL when `a == NULL` or `a->capacity == 0`.
+ * Otherwise they return the aligned tail-inline payload address inside the
+ * same allocation as `struct FengArray`, including when `a->length == 0`.
  *
  * All runtime paths (array accessors/finalize/collector) must reuse these
  * helpers instead of open-coding offset math. */
 void *feng_array_payload_inline(struct FengArray *a);
 const void *feng_array_payload_inline_const(const struct FengArray *a);
+
+/* Creates a fresh +1 internal array storage allocation. `length` describes
+ * the initialized prefix and must not exceed the immutable `capacity`.
+ * Allocation size is based on `capacity`, while default initialization and
+ * all subsequent lifecycle traversal are restricted to `[0, length)`. */
+FengArray *feng_array_new_storage_kinded(
+    FengValueKind element_kind,
+    const FengAggregateDescriptor *element_aggregate,
+    const FengTypeDescriptor *element_desc,
+    size_t element_size,
+    size_t length,
+    size_t capacity);
 
 /* Copy `length` elements from `src[start, start+length)` into `dst[0, length)`.
  * Retain/release semantics are handled per element kind. Caller must ensure

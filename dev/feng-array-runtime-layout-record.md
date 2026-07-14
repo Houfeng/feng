@@ -114,13 +114,15 @@ FengArray allocation:
 `FengArray` 固定采用“托管瘦引用 + 对齐后尾随内联 payload”布局：
 
 1. 语言层数组值是指向 `FengArray` 的单个强引用，不在数组值中携带 length 或 capacity。
-2. `FengArray` 对象头保存 ARC、类型、长度和元素生命周期所需的元数据。
+2. `FengArray` 对象头保存 ARC、类型、长度、固定容量和元素生命周期所需的元数据。
 3. 元素 payload 位于同一 allocation 中的对齐后尾部，`struct FengArray` 不保存 payload 指针或柔性数组占位成员。
 4. payload 起始地址必须由统一的运行时 helper 按对齐偏移计算，不在多条路径重复手写地址计算。
 5. 托管数组对象地址在其生命周期内保持稳定；不通过移动已暴露引用的 allocation 来调整容量。
 6. 普通数组的长度保持固定，动态容器不改变普通数组的公开语义。
 
 已交付的布局改造过程记录在 [Feng 数组运行时优化](./feng-array-optimize-delivered.md)。该文档记录实施过程，本文则保留选择该结构的长期理由。
+
+在该布局上增加内部固定容量及容器 storage API 的规范统一见 [Feng 数组容器存储 API 开发方案](./feng-array-storage-dev.md)。
 
 ## 4. 切片与胖视图的分层
 

@@ -585,6 +585,69 @@ static void test_finalizer_no_resurrection_releases(void) {
  * objects so we may include the internal header directly. */
 #include "runtime/feng_runtime_internal.h"
 
+/* Verify that ordinary arrays keep length == capacity, while internal storage
+ * can reserve a payload without exposing it through the public data accessor. */
+static void test_array_storage_capacity_and_public_data(void) {
+    FengArray *ordinary = feng_array_new(&i32_element_descriptor,
+                                         sizeof(int32_t),
+                                         false,
+                                         3U);
+    FengArray *storage_value = feng_array_new_storage_kinded(
+        FENG_VALUE_TRIVIAL,
+        NULL,
+        &i32_element_descriptor,
+        sizeof(int32_t),
+        0U,
+        4U);
+    struct FengArray *ordinary_storage = (struct FengArray *)ordinary;
+    struct FengArray *storage = (struct FengArray *)storage_value;
+    int32_t *payload = (int32_t *)feng_array_payload_inline(storage);
+
+    ASSERT(ordinary_storage->length == 3U);
+    ASSERT(ordinary_storage->capacity == 3U);
+    ASSERT(storage->length == 0U);
+    ASSERT(storage->capacity == 4U);
+    ASSERT(feng_array_length(storage_value) == 0U);
+    ASSERT(feng_array_data(storage_value) == NULL);
+    ASSERT(payload != NULL);
+    ASSERT(feng_array_payload_inline_const(storage) == payload);
+    payload[0] = 42;
+    ASSERT(payload[0] == 42);
+
+    feng_release(storage_value);
+    feng_release(ordinary);
+}
+
+/* Verify that finalization ignores stale bytes in uninitialized capacity. */
+static void test_array_storage_finalize_uses_length(void) {
+    FengArray *storage_value;
+    struct FengArray *storage;
+    void **slots;
+    TestObject *active;
+    TestObject *inactive;
+
+    g_finalize_count = 0;
+    storage_value = feng_array_new_storage_kinded(
+        FENG_VALUE_MANAGED_POINTER,
+        NULL,
+        &test_object_descriptor,
+        sizeof(void *),
+        1U,
+        3U);
+    storage = (struct FengArray *)storage_value;
+    slots = (void **)feng_array_payload_inline(storage);
+    active = (TestObject *)feng_object_new(&test_object_descriptor);
+    inactive = (TestObject *)feng_object_new(&test_object_descriptor);
+    slots[0] = active;
+    slots[1] = inactive;
+
+    feng_release(storage_value);
+    ASSERT(g_finalize_count == 1);
+
+    feng_release(inactive);
+    ASSERT(g_finalize_count == 2);
+}
+
 /* A two-field finalizer-less node type: each instance can hold up to two
  * managed children. We use this to construct arbitrary cyclic graphs.
  * `is_potentially_cyclic = true` so feng_release routes instances through
@@ -798,6 +861,68 @@ static void test_cycle_collector_finalizer_resurrects_self(void) {
     feng_cycle_runtime_shutdown();
 }
 
+/* Exercise all collector array walkers through finalization and survivor BFS,
+ * proving that stale bytes in [length, capacity) are never treated as edges. */
+static void test_array_storage_cycle_collector_uses_length(void) {
+    FengArray *storage_value;
+    struct FengArray *storage;
+    void **slots;
+    CycNode *node;
+    TestObject *inactive;
+    void *node_via_array;
+    void *array_via_node;
+
+    g_finalize_count = 0;
+    g_cyc_res_self_fin_count = 0;
+    g_cyc_res_slot_self = NULL;
+    g_cyc_res_self_enabled = true;
+
+    storage_value = feng_array_new_storage_kinded(
+        FENG_VALUE_MANAGED_POINTER,
+        NULL,
+        &cyc_node_res_self_descriptor,
+        sizeof(void *),
+        1U,
+        2U);
+    storage = (struct FengArray *)storage_value;
+    slots = (void **)feng_array_payload_inline(storage);
+    node = cyc_new(&cyc_node_res_self_descriptor);
+    inactive = (TestObject *)feng_object_new(&test_object_descriptor);
+
+    slots[0] = feng_retain(node);
+    slots[1] = inactive;
+    node->child_a = feng_retain(storage_value);
+
+    feng_release(storage_value);
+    feng_release(node);
+
+    feng_cycle_lock();
+    feng_cycle_collect_locked();
+    feng_cycle_unlock();
+
+    ASSERT(g_cyc_res_self_fin_count == 1);
+    ASSERT(g_cyc_res_slot_self == node);
+    ASSERT(g_finalize_count == 0);
+    ASSERT(node->header.refcount == 2U);
+    ASSERT(storage->header.refcount == 1U);
+
+    g_cyc_res_self_enabled = false;
+    node_via_array = slots[0];
+    slots[0] = NULL;
+    array_via_node = node->child_a;
+    node->child_a = NULL;
+    g_cyc_res_slot_self = NULL;
+
+    feng_release(node_via_array);
+    feng_release(array_via_node);
+    feng_release(node);
+    ASSERT(g_cyc_res_self_fin_count == 2);
+
+    feng_release(inactive);
+    ASSERT(g_finalize_count == 1);
+    feng_cycle_runtime_shutdown();
+}
+
 /* Resurrect-partner finalizer: when armed, publishes a designated target
  * into a global. This is mounted on a dedicated descriptor so we can build
  * a topology where only the target is reachable as a survivor seed. */
@@ -991,6 +1116,28 @@ static void array_slice_out_of_range_body(void) {
     feng_release(source);
 }
 
+/* Child-process body for the invalid length/capacity invariant. */
+static void array_storage_length_exceeds_capacity_body(void) {
+    FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
+                                                     NULL,
+                                                     &i32_element_descriptor,
+                                                     sizeof(int32_t),
+                                                     2U,
+                                                     1U);
+    feng_release(array);
+}
+
+/* Child-process body for capacity byte-size overflow. */
+static void array_storage_capacity_overflow_body(void) {
+    FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
+                                                     NULL,
+                                                     &i32_element_descriptor,
+                                                     sizeof(int32_t),
+                                                     0U,
+                                                     SIZE_MAX);
+    feng_release(array);
+}
+
 static void cycle_throw_body(void) {
     /* Build a 2-node cycle whose nodes carry the throwing finalizer; force
      * collection so Phase 1 invokes the finalizer through the cycle path. */
@@ -1015,6 +1162,12 @@ static void test_finalizer_throw_on_cycle_path_aborts(void) {
 
 static void test_array_slice_out_of_range_aborts(void) {
     assert_child_aborts(array_slice_out_of_range_body);
+}
+
+/* Verify internal storage construction rejects invalid shapes before allocation. */
+static void test_array_storage_invalid_shape_aborts(void) {
+    assert_child_aborts(array_storage_length_exceeds_capacity_body);
+    assert_child_aborts(array_storage_capacity_overflow_body);
 }
 
 /* --- Threshold-triggered collection ------------------------------------ */
@@ -1723,6 +1876,33 @@ static void test_array_aggregate_init_fn_runs_per_element(void) {
     ASSERT(g_finalize_count == 4);
 }
 
+/* Aggregate default initialization and release cover only the initialized
+ * prefix, even when the allocation contains additional storage slots. */
+static void test_array_storage_aggregate_lifecycle_uses_length(void) {
+    FengArray *storage_value;
+    struct FengArray *storage;
+    FatPair *items;
+
+    g_finalize_count = 0;
+    storage_value = feng_array_new_storage_kinded(
+        FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+        &fat_pair_desc,
+        NULL,
+        fat_pair_desc.size,
+        2U,
+        4U);
+    storage = (struct FengArray *)storage_value;
+    items = (FatPair *)feng_array_payload_inline(storage);
+
+    ASSERT(items[0].subject != NULL);
+    ASSERT(items[1].subject != NULL);
+    ASSERT(items[2].subject == NULL);
+    ASSERT(items[3].subject == NULL);
+
+    feng_release(storage_value);
+    ASSERT(g_finalize_count == 2);
+}
+
 static void test_array_aggregate_assign_per_element_tracks_refcount(void) {
     /* User-driven: zero-initialise the array, then move owning references
      * into each element via feng_aggregate_assign, and verify the array
@@ -1806,15 +1986,19 @@ int main(void) {
     test_finalizer_resurrection_then_release();
     test_finalizer_resurrection_reruns_on_next_release();
     test_finalizer_no_resurrection_releases();
+    test_array_storage_capacity_and_public_data();
+    test_array_storage_finalize_uses_length();
     test_cycle_collector_reclaims_two_node_cycle();
     test_cycle_collector_does_not_collect_externally_referenced();
     test_cycle_collector_reclaims_cycle_with_finalizer();
     test_cycle_collector_finalizer_resurrects_self();
+    test_array_storage_cycle_collector_uses_length();
     test_cycle_collector_partial_resurrection_frees_unsurvived();
     test_cycle_collector_acyclic_object_never_enqueued();
     test_finalizer_throw_on_arc_path_aborts();
     test_finalizer_throw_on_cycle_path_aborts();
     test_array_slice_out_of_range_aborts();
+    test_array_storage_invalid_shape_aborts();
     test_cycle_collector_threshold_triggers_collection();
     test_cycle_collector_multithreaded_stress();
 
@@ -1838,6 +2022,7 @@ int main(void) {
     test_array_kinded_managed_pointer_matches_legacy();
     test_array_aggregate_zero_bytes_default();
     test_array_aggregate_init_fn_runs_per_element();
+    test_array_storage_aggregate_lifecycle_uses_length();
     test_array_aggregate_assign_per_element_tracks_refcount();
     test_array_aggregate_zero_length();
 

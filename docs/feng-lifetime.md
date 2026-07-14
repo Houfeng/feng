@@ -138,17 +138,18 @@ typedef struct FengString {
 typedef struct FengArray_T {
    FengManagedHeader header;
    size_t len;
+   size_t capacity;
    T items[];
 } FengArray_T;
 ```
 
 其中：
 
-- `len` 表示该数组层的元素个数，而不是字节数。
-- `items[0..len)` 按该数组层的元素顺序存放元素。实现上该区域位于同一块 allocation 的尾部，通过统一的对齐偏移计算得到起始地址。
+- `len` 表示该数组层已初始化的元素个数，`capacity` 表示 allocation 中的物理槽位数量，两者都不是字节数。
+- `items[0..len)` 按该数组层的元素顺序存放元素。实现上 payload 按 `capacity` 分配，位于同一块 allocation 的尾部，通过统一的对齐偏移计算得到起始地址。
 - `T` 表示该数组层元素的运行时存储类型；若元素类型本身是引用语义类型（如 `string`、数组、普通 `type` 对象或闭包），则 `items[]` 中存放的是对应引用，而不是对象内联本体。
 - 多维数组不需要单独的专用布局；每一层数组都按自身元素类型复用同一数组对象表示。例如 `int[][]` 的最外层 `items[]` 存放的是内层数组引用。
-- 数组对象创建完成后长度固定；`len` 在对象生命周期内不再变化。
+- 普通数组创建时 `len == capacity`，其长度在对象生命周期内保持固定。标准库容器使用的内部 storage 例外及未初始化区间生命周期规则统一见 [Feng 数组容器存储 API 开发方案](../dev/feng-array-storage-dev.md)。
 - 数组各层元素是否允许原地改写，属于语言层数组语义，统一见 [Feng 内建类型规范](./feng-builtin-type.md)；该可写性规则不额外编码进运行时对象头布局。
 
 ## 13 循环检测

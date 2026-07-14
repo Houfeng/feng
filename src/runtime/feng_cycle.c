@@ -820,8 +820,8 @@ static void phase15_restore_survivor_state(WhiteList *wl) {
  * freed; no rc maintenance required) or to BLACK external objects whose
  * refcount was already balanced by mark_grey's decrement of this dying
  * edge. Survivor → free and free → survivor edges have been handled by
- * phase15_sanitise. Built-in tags (array's items buffer) get their
- * tag-specific heap freed. */
+ * phase15_sanitise. Built-in values, including an array's tail-inline payload,
+ * are freed with their single owning allocation. */
 static void phase2_free_unsurvived(WhiteList *wl) {
     for (size_t i = 0U; i < wl->count; ++i) {
         FengManagedHeader *h = wl->buf[i];

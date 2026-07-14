@@ -526,7 +526,8 @@ typedef struct FengArray FengArray;
  * `element_desc` is currently used only for diagnostics; pass NULL when the
  * caller has nothing meaningful (e.g. aggregate elements). All
  * preconditions are enforced with feng_panic to surface descriptor /
- * codegen mistakes early. */
+ * codegen mistakes early. Ordinary arrays allocate exactly `length` slots,
+ * so their internal capacity is initialized to the same value. */
 FengArray *feng_array_new_kinded(FengValueKind element_kind,
                                  const FengAggregateDescriptor *element_aggregate,
                                  const FengTypeDescriptor *element_desc,
