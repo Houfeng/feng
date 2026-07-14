@@ -34,7 +34,7 @@ length == 已初始化元素数量 == 已分配槽位数量
 1. 为 `FengArray` 增加独立的 `capacity`，允许内部存在未初始化的备用槽位。
 2. 保持普通 Feng 数组的固定长度语言语义不变。
 3. 提供一组 array storage runtime contract API，让标准库容器可以读取固定的 `capacity`，并在该容量内管理作为占用数量的 `length`。
-4. 需要不同容量时，通过迁移创建另一个 capacity 固定的新数组；对保留元素执行所有权迁移，不产生元素级 retain/release。
+4. 需要不同容量时，通过迁移创建另一个 capacity 固定的新数组；保留元素的槽位内容及引用持有关系随之转移，不产生元素级 retain/release。
 5. 中间删除时只释放被删除元素，保留元素通过重叠安全的内存迁移完成左移。
 6. `clear()` 后保留容量，托管元素按正常生命周期规则释放。
 7. 继续复用 `FengArray` 已有的元素类型信息、终结逻辑和循环回收遍历能力，不引入第二套容器存储对象。
@@ -100,7 +100,7 @@ allocation size = aligned array header + capacity * element_size
 1. allocation 创建时确定。
 2. 该实例存活期间始终不变。
 3. 普通数组 API 和 storage API 都不得原地修改它。
-4. 若需要不同容量，只能创建另一个数组实例并迁移元素所有权。
+4. 若需要不同容量，只能创建另一个数组实例并迁移有效元素。
 
 `length` 的语义按使用层次区分：
 
@@ -151,7 +151,7 @@ index < length
 2. cycle collector 的所有数组子引用遍历路径。
 3. 数组 slice/copy 等普通数组操作。
 
-`[length, capacity)` 不拥有任何 Feng 值，也不拥有其中旧字节可能表示的引用。
+`[length, capacity)` 不表示有效 Feng 值；其中旧字节即使仍呈现为指针，也不计作有效引用。
 
 ## 5. Runtime contract API
 
@@ -229,13 +229,15 @@ array.length < array.capacity
 
 1. 将 `[index, array.length)` 通过重叠安全的 `memmove` 整体右移一个槽位。
 2. 被右移元素只发生存储位置迁移，不执行 retain/release。
-3. 移动后 `data[index]` 中的旧字节不再拥有 Feng 值，可用于初始化新元素。
+3. 移动后 `data[index]` 中的旧字节不再表示有效 Feng 值，可用于初始化新元素。
 4. 在 `data[index]` 按元素类别执行 copy-initialization：
    - trivial：复制 `element_size` 字节；
-   - managed pointer：保存指针并 retain 一次；
-   - aggregate：复制完整值，并按 aggregate descriptor retain 托管槽位。
+   - managed pointer：保存指针并 retain 一次，使被插入元素的 RC 正常增加 1；
+   - aggregate：复制完整值，并按 aggregate descriptor 将每个托管槽位 retain 一次。
 5. 新元素完全初始化后，设置 `length += 1`。
 6. 不改变 `capacity`。
+
+`insert` 只为新插入元素建立一个新的数组槽位引用持有关系。原有元素即使因插入而右移，也只发生存储位置迁移，其 RC 必须保持不变。
 
 当 `index == array.length` 时，右移区间为空，`insert` 直接执行尾部初始化，等价于 append 快路径。
 
@@ -269,12 +271,14 @@ tailCount  = length - tailStart
 newLength  = length - count
 ```
 
-1. 被删除区间中的元素按元素类别正常释放。
+1. 被删除区间中的元素按元素类别正常释放：managed pointer 元素的 RC 正常减少 1；aggregate 元素的每个托管槽位正常 release 一次。
 2. `[tailStart, length)` 通过重叠安全的 `memmove` 左移到 `index`。
 3. 保留元素视为存储位置迁移，不执行 retain/release。
 4. 设置 `length = newLength`。
 5. 不改变 `capacity`。
-6. 移动后落在 `[newLength, oldLength)` 的旧字节不再拥有 Feng 值，不得再次释放。
+6. 移动后落在 `[newLength, oldLength)` 的旧字节不再表示有效 Feng 值，不得再次释放。
+
+`remove` 只解除被删除元素对应的数组槽位引用持有关系。被保留元素即使因删除而左移，其 RC 必须保持不变。
 
 `count == 0` 时为空操作。
 
@@ -318,9 +322,9 @@ moveLength = min(oldLength, newCapacity)
 
    `newArray.capacity` 在 allocation 创建时确定，后续不再改变；旧数组的 `capacity` 在整个迁移过程中也保持不变。
 
-3. `[0, moveLength)` 按所有权迁移处理：复制元素字节，但不执行元素级 retain/release，元素 RC 不变。
+3. `[0, moveLength)` 按槽位迁移处理：复制元素字节，引用持有关系从旧数组槽位转到新数组槽位，但不执行元素级 retain/release，元素 RC 不变。
 4. `[moveLength, oldLength)` 为 `newCapacity < oldLength` 时产生的缩容截断区间，元素被丢弃并按元素类别正常释放，元素 RC 相应减少。
-5. 旧数组不再拥有已迁移前缀；新数组最终设置 `length = moveLength`。
+5. 旧数组的有效区间不再包含已迁移前缀；新数组最终设置 `length = moveLength`。
 6. 返回新的 `+1` 数组引用。
 7. 调用方必须立即用返回值替换旧 backing array：
 
@@ -332,7 +336,7 @@ moveLength = min(oldLength, newCapacity)
 
 无论目标容量大于、等于还是小于旧容量，保留前缀的元素 RC 都不变；只有超出 `newCapacity` 的旧有效元素发生 RC 减少。
 
-首次实现不使用 `realloc`：普通 Feng 赋值仍会在保存新返回值后 release 旧数组，直接 `realloc` 旧对象会使该 release 指向失效地址。首版采用“新 allocation + 所有权迁移 + 旧数组 moved-from”的方式。
+首次实现不使用 `realloc`：普通 Feng 赋值仍会在保存新返回值后 release 旧数组，直接 `realloc` 旧对象会使该 release 指向失效地址。首版采用“新 allocation + 槽位迁移 + 旧数组有效长度归零”的方式。
 
 若 allocation 失败，必须在修改旧数组前 panic，保证旧数组仍保持原状态。
 
@@ -343,17 +347,31 @@ moveLength = min(oldLength, newCapacity)
 | 元素类别 | insert 新元素 | remove | migrate 保留区间 | migrate 截断区间 |
 | --- | --- | --- | --- | --- |
 | `FENG_VALUE_TRIVIAL` | `memcpy` | 不做 release | `memcpy` | 不做 release |
-| `FENG_VALUE_MANAGED_POINTER` | 保存并 retain | release 被删除指针 | 转移指针所有权，RC 不变 | release 被截断指针 |
-| `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | 复制并 retain 托管槽 | aggregate release | 转移完整 aggregate 所有权，RC 不变 | aggregate release |
+| `FENG_VALUE_MANAGED_POINTER` | 保存并 retain | release 被删除指针 | 转移指针槽位及其引用持有关系，RC 不变 | release 被截断指针 |
+| `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS` | 复制并 retain 托管槽 | aggregate release | 转移完整 aggregate 槽位及其引用持有关系，RC 不变 | aggregate release |
 
 storage API 不得对 `[length, capacity)` 执行 aggregate default initialization。新增容量只产生未初始化槽位。
+
+### 6.1 RC 计数不变量
+
+本节所说的 RC 变化是元素持有的托管引用计数变化，不包括新旧 `FengArray` 对象自身的引用计数。
+
+storage API 必须满足：
+
+| 操作 | 新增元素 | 删除或丢弃元素 | 保留但移动的元素 |
+| --- | --- | --- | --- |
+| `insert` | 每个新增托管引用正常 `+1` | 无 | RC 不变 |
+| `remove` | 无 | 每个被删除托管引用正常 `-1` | RC 不变 |
+| `migrate` | 无 | 每个被新容量截断的托管引用正常 `-1` | RC 不变 |
+
+对于 `FENG_VALUE_MANAGED_POINTER`，表中的 `+1/-1` 对应元素指针本身的一次 retain/release。对于 `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS`，规则分别应用到 aggregate descriptor 描述的每个托管槽位。若同一个对象在多个元素或多个槽位中重复出现，每个存储位置分别表示一次独立的引用持有关系，必须分别计数。
 
 ## 7. 独占 backing array 约束
 
 本稿建议 storage mutation API 只操作由标准库容器独占的 backing array：
 
 1. `insert` 和 `remove` 会原地改变 `length` 与 payload。
-2. `migrate` 会消费旧数组持有的元素所有权，并使旧数组进入 moved-from 状态。
+2. `migrate` 会把旧数组有效元素的槽位内容及引用持有关系迁移到新数组，并将旧数组的有效长度归零。
 3. 若其他数组引用仍在观察同一个 `FengArray`，上述操作会破坏普通固定长度数组的可观察语义。
 
 因此，后续 `List<T>` 优化必须先处理两类别名来源：
@@ -368,7 +386,7 @@ storage API 不得对 `[length, capacity)` 执行 aggregate default initializati
 - 检查：能尽早发现 std 误用，但会给尾部 `insert` 热路径增加一次引用计数读取。
 - 不检查：热路径无额外开销，但独占性完全依赖 std 实现保证。
 
-首版不建议增加共享数组复制 fallback。共享 fallback 会让 `migrate` 的“保留元素 RC 不变”只在部分路径成立，并掩盖 backing array 所有权错误。
+首版不建议增加共享数组复制 fallback。共享 fallback 会让 `migrate` 的“保留元素 RC 不变”只在部分路径成立，并掩盖 backing array 别名错误。
 
 ## 8. 第一阶段：实现并验证 storage API
 
@@ -396,9 +414,9 @@ storage API 不得对 `[length, capacity)` 执行 aggregate default initializati
 
 1. 普通数组仍满足 `length == capacity`，现有数组行为不变。
 2. `length == 0 && capacity > 0` 时，普通索引仍全部越界，storage insert 可以复用容量。
-3. trivial、managed pointer、aggregate 三类元素的头部、中间和尾部 insert。
+3. trivial、managed pointer、aggregate 三类元素的头部、中间和尾部 insert；新增托管引用恰好 retain 一次，原有移动元素 RC 不变。
 4. 删除头部、中间、尾部、全部区间以及 `count == 0`。
-5. 删除后保留元素顺序正确，只有被删除元素发生 release。
+5. 删除后保留元素顺序正确；每个被删除托管引用恰好 release 一次，保留移动元素 RC 不变。
 6. migrate 到更大、更小、相等和零 `capacity` 的新数组实例，并覆盖截断有效元素的场景。
 7. migrate 保留元素不产生元素级 RC 增减，截断元素恰好 release 一次。
 8. 数组终结和 cycle collector 只遍历当前 `length`。
@@ -445,6 +463,6 @@ List.size    -> items.length()
 2. `[length, capacity)` 明确定义为未初始化、不可观察、无生命周期的存储。
 3. 四个 API 的名称与签名是否固定为 `feng_array_storage_*`。
 4. `remove(index, count)` 是否作为 clear、单项删除与批量删除的统一原语。
-5. `migrate` 是否采用独占、消费旧 backing array 的语义，不提供共享复制 fallback。
+5. `migrate` 是否要求旧 backing array 无其他别名、迁移后立即用返回的新数组替换它，并且不提供共享复制 fallback。
 6. runtime 是否对 storage mutation 执行唯一引用检查。
 7. 第一阶段只实现 API，第二阶段再修改 List。
