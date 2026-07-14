@@ -54,6 +54,7 @@ open fit T[!] {
  * A Span is a read-only view over a contiguous sub range of an array.
  * @param <T> - the element type
  */
+@value
 open type Span<T> {
 	seal let origin: T[];
 	seal let start: int;

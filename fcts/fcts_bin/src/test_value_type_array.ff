@@ -18,6 +18,12 @@ type VAPerson {
   var age: int;
 }
 
+// Return a value-semantics span whose backing array is owned by the result.
+func make_va_int_span(): Span<int> {
+  let values: int[] = [10, 20, 30, 40];
+  return values.slice((int)1, (int)4);
+}
+
 /** @value type 数组测试 (§9.13) */
 open func test_value_type_array() {
   describe("value-type-array", () {
@@ -134,6 +140,26 @@ open func test_value_type_array() {
       let p = points[0];
       // VAPoint doesn't have methods yet, but we can test field access
       assert(p.x == 3 && p.y == 4, "@value array element field access");
+    });
+
+    test("builtin generic fit returns @value Span<int>", () {
+      let span = make_va_int_span();
+      let copied = span;
+      let nested = copied.slice((int)1, (int)3);
+      assert(copied.length() == (int)3, "copied Span<int> preserves length");
+      assert(copied.at((int)0) == 20, "copied Span<int> retains backing array");
+      assert(nested.length() == (int)2, "nested Span<int> preserves range");
+      assert(nested.at((int)0) == 30 && nested.at((int)1) == 40,
+             "nested Span<int> reads the expected elements");
+    });
+
+    test("builtin generic fit returns @value Span<string>", () {
+      let values: string[] = ["zero", "one", "two"];
+      let span: Span<string> = values.slice((int)1);
+      let copied = span;
+      assert(copied.length() == (int)2, "copied Span<string> preserves length");
+      assert(copied.at((int)0) == "one" && copied.at((int)1) == "two",
+             "copied Span<string> preserves managed elements");
     });
   });
 }

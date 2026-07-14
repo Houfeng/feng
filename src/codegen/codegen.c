@@ -1506,6 +1506,8 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                                        const BuiltinFit *bf,
                                        const UserMethod *m,
                                        bool needs_static);
+static bool cg_builtin_fit_return_uses_out(const BuiltinFit *bf,
+                                           const UserMethod *m);
 static bool cg_emit_user_field_value_store(CG *cg,
                                            const char *object_expr,
                                            const UserField *uf,
@@ -16790,9 +16792,10 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 e->token);
 
             Buf b; buf_init(&b);
-            if (cg->generic_type_method_rtd_via_desc) {
+            if (cg->generic_type_method_rtd_via_desc ||
+                cg->generic_type_method_rad_via_desc) {
                 /* 在 BuiltinFit 共享体内部调用同一 fit 的另一个方法
-                 * 时，直接传递 _desc（已含正确的 reified_type_deps）。 */
+                 * 时，直接传递 _desc（已含正确的 reified deps）。 */
                 buf_append_fmt(&b, "%s(%s, _desc",
                                um->c_name, recv.c_expr);
             } else {
@@ -16841,16 +16844,83 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             if (args_buf.data != NULL) {
                 buf_append(&b, args_buf.data, args_buf.length);
             }
-            buf_append_cstr(&b, ")");
             buf_free(&args_buf);
-            out->c_expr = b.data;
             out->type = bf_ret;
             if (out->type == NULL) {
+                buf_free(&b);
                 er_free(&recv);
                 return cg_fail(cg, e->token,
                     "CE0162", "codegen: failed to instantiate builtin fit return type");
             }
-            if (bf->target_type_param_count > 0U &&
+            if (cg_builtin_fit_return_uses_out(bf, um)) {
+                char *return_temp = cg_fresh_temp(cg, "_bfr");
+                if (return_temp == NULL) {
+                    free(return_temp);
+                    buf_free(&b);
+                    er_free(&recv);
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                }
+                if (cg_value_needs_reified_layout(cg, out->type)) {
+                    const char *agg_desc = cg_aggregate_desc_name(out->type);
+                    size_t rad_index = 0U;
+                    char *return_ctype = cg_ctype_dup(out->type);
+                    const char *desc_source = cg->generic_type_method_rad_via_desc
+                                                  ? "_desc" : "_td";
+
+                    if (agg_desc == NULL || return_ctype == NULL ||
+                        !cg_lookup_reified_agg_dep_index(cg,
+                                                        agg_desc,
+                                                        &rad_index)) {
+                        free(return_ctype);
+                        free(return_temp);
+                        buf_free(&b);
+                        er_free(&recv);
+                        return cg_fail(cg, e->token,
+                            "CE0163", "codegen: builtin fit value return requires a reified aggregate descriptor");
+                    }
+                    buf_append_fmt(&b, ", %s)", return_temp);
+                    buf_append_fmt(cg->cur_body,
+                        "    _Alignas(max_align_t) char %s[((const FengAggregateDescriptor *)%s->reified_agg_deps[%zu])->size];\n"
+                        "    %s;\n",
+                        return_temp, desc_source, rad_index, b.data);
+                    Buf value_expr;
+                    buf_init(&value_expr);
+                    buf_append_fmt(&value_expr,
+                                   "(*(%s *)%s)",
+                                   return_ctype,
+                                   return_temp);
+                    out->c_expr = value_expr.data;
+                    free(return_ctype);
+                } else {
+                    char *return_ctype = cg_ctype_dup(out->type);
+                    if (return_ctype == NULL) {
+                        free(return_temp);
+                        buf_free(&b);
+                        er_free(&recv);
+                        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                    }
+                    buf_append_fmt(&b, ", &%s)", return_temp);
+                    buf_append_fmt(cg->cur_body,
+                                   "    %s %s;\n"
+                                   "    %s;\n",
+                                   return_ctype,
+                                   return_temp,
+                                   b.data);
+                    out->c_expr = strdup(return_temp);
+                    free(return_ctype);
+                }
+                free(return_temp);
+                buf_free(&b);
+                if (out->c_expr == NULL) {
+                    er_free(&recv);
+                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                }
+            } else {
+                buf_append_cstr(&b, ")");
+                out->c_expr = b.data;
+            }
+            if (!cg_builtin_fit_return_uses_out(bf, um) &&
+                bf->target_type_param_count > 0U &&
                 out->type->kind == CG_TYPE_OBJECT &&
                 um->return_type != NULL &&
                 um->return_type->kind == CG_TYPE_OBJECT &&
@@ -27064,6 +27134,21 @@ static void cg_emit_user_method_proto(Buf *out,
     buf_append_cstr(out, ");\n");
 }
 
+/* Builtin array fits share one body across all element types.  A value-
+ * semantics return whose concrete type depends on the fit target parameter
+ * cannot use a C return value: the open and concrete generic structs are
+ * distinct C types and the concrete layout is described at the call site.
+ * Use the same caller-provided output-slot ABI as other generic shared bodies. */
+static bool cg_builtin_fit_return_uses_out(const BuiltinFit *bf,
+                                           const UserMethod *m) {
+    return bf != NULL && bf->target_type_param_count > 0U &&
+           m != NULL && m->return_type != NULL &&
+           m->return_type->kind != CG_TYPE_VOID &&
+           cg_type_is_value_semantics(m->return_type) &&
+           m->return_type->user != NULL &&
+           m->return_type->user->generic_context_type_param_count > 0U;
+}
+
 static void cg_emit_builtin_fit_method_proto(Buf *out,
                                              const BuiltinFit *bf,
                                              const UserMethod *m,
@@ -27074,7 +27159,12 @@ static void cg_emit_builtin_fit_method_proto(Buf *out,
     if (needs_static) {
         buf_append_cstr(out, "static ");
     }
-    cg_emit_c_type(out, m->return_type);
+    const bool return_uses_out = cg_builtin_fit_return_uses_out(bf, m);
+    if (return_uses_out) {
+        buf_append_cstr(out, "void");
+    } else {
+        cg_emit_c_type(out, m->return_type);
+    }
     buf_append_fmt(out, " %s(", m->c_name);
     if (!is_static_method) {
         cg_emit_c_type(out, bf->target_type);
@@ -27120,6 +27210,13 @@ static void cg_emit_builtin_fit_method_proto(Buf *out,
             cg_emit_c_type(out, m->param_types[i]);
             buf_append_fmt(out, " %s", m->param_names[i] ? m->param_names[i] : "_p");
         }
+        has_param = true;
+    }
+    if (return_uses_out) {
+        if (has_param) {
+            buf_append_cstr(out, ", ");
+        }
+        buf_append_cstr(out, "void *_out");
         has_param = true;
     }
     if (!has_param) {
@@ -27484,11 +27581,128 @@ static char *cg_resolve_dep_descriptor_name(CG *cg,
     return result;
 }
 
-/* 为 BuiltinFit 方法调用点生成 _desc compound literal 表达式。
- * 当 fit decl 有 MANAGED reifiable deps 时，生成包含 reified_type_deps
- * 的静态数组 + compound literal；否则退化为简单 {.name=...}。
- * element_type 是调用时的具体元素类型（如 int[]→int 的 CGType）。
- * 返回堆分配的 C 表达式字符串，调用方释放。 */
+/* Resolve one descriptor family for a concrete builtin-array fit call.  The
+ * result order must match the shared body's independently sorted dependency
+ * map so both sides address the same descriptor index. */
+static bool cg_resolve_builtin_fit_dep_descriptor_names(
+    CG *cg,
+    const BuiltinFit *bf,
+    const FengReifiableDepSet *dep_set,
+    FengReifiableDepKind kind,
+    const CGType *element_type,
+    const FengToken *blame,
+    char ***out_names,
+    size_t *out_count) {
+    typedef struct {
+        size_t index;
+        char *key;
+    } SortedDep;
+
+    size_t count = 0U;
+    FengSlice *type_param_names = NULL;
+    SortedDep *sorted = NULL;
+    FengTypeRef *concrete_ref = NULL;
+    char **names = NULL;
+    bool ok = false;
+
+    *out_names = NULL;
+    *out_count = 0U;
+    for (size_t i = 0U; i < dep_set->dep_count; ++i) {
+        if (dep_set->deps[i].kind == kind) {
+            count++;
+        }
+    }
+    if (count == 0U) {
+        return true;
+    }
+    if (element_type == NULL || bf->target_type_param_count != 1U) {
+        return cg_fail(cg, *blame,
+            "CE0292", "codegen: builtin array fit dependency resolution requires one concrete element type");
+    }
+
+    type_param_names = calloc(bf->target_type_param_count,
+                              sizeof *type_param_names);
+    sorted = calloc(count, sizeof *sorted);
+    names = calloc(count, sizeof *names);
+    if (type_param_names == NULL || sorted == NULL || names == NULL) {
+        cg_fail(cg, *blame, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    for (size_t i = 0U; i < bf->target_type_param_count; ++i) {
+        type_param_names[i] = bf->target_type_params[i].name;
+    }
+
+    size_t sorted_index = 0U;
+    for (size_t i = 0U; i < dep_set->dep_count; ++i) {
+        if (dep_set->deps[i].kind != kind) {
+            continue;
+        }
+        sorted[sorted_index].index = i;
+        sorted[sorted_index].key = cg_reifiable_sort_key(
+            dep_set->deps[i].type_ref,
+            type_param_names,
+            bf->target_type_param_count,
+            true);
+        if (sorted[sorted_index].key == NULL) {
+            cg_fail(cg, *blame, "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+        sorted_index++;
+    }
+    for (size_t i = 1U; i < count; ++i) {
+        SortedDep current = sorted[i];
+        size_t j = i;
+        while (j > 0U && strcmp(sorted[j - 1U].key, current.key) > 0) {
+            sorted[j] = sorted[j - 1U];
+            j--;
+        }
+        sorted[j] = current;
+    }
+
+    concrete_ref = cg_type_ref_from_cgtype(cg, element_type, *blame);
+    if (concrete_ref == NULL) {
+        goto cleanup;
+    }
+    FengTypeRef *concrete_args[1] = { concrete_ref };
+    for (size_t i = 0U; i < count; ++i) {
+        names[i] = cg_resolve_dep_descriptor_name(
+            cg,
+            dep_set->deps[sorted[i].index].type_ref,
+            bf->target_type_params,
+            bf->target_type_param_count,
+            concrete_args,
+            kind,
+            blame);
+        if (names[i] == NULL) {
+            goto cleanup;
+        }
+    }
+
+    *out_names = names;
+    *out_count = count;
+    names = NULL;
+    ok = true;
+
+cleanup:
+    if (names != NULL) {
+        for (size_t i = 0U; i < count; ++i) {
+            free(names[i]);
+        }
+    }
+    free(names);
+    if (sorted != NULL) {
+        for (size_t i = 0U; i < count; ++i) {
+            free(sorted[i].key);
+        }
+    }
+    free(sorted);
+    free(type_param_names);
+    cg_type_ref_free(concrete_ref);
+    return ok;
+}
+
+/* Build the function descriptor passed to a builtin-array fit shared body.
+ * Managed and aggregate dependencies are both concrete at the call site. */
 static char *cg_builtin_fit_fdesc_expr(CG *cg,
                                        const BuiltinFit *bf,
                                        const char *method_name,
@@ -27496,7 +27710,10 @@ static char *cg_builtin_fit_fdesc_expr(CG *cg,
                                        const FengToken *blame) {
     const FengReifiableDepSet *dep_set;
     Buf result;
-    size_t mc = 0;
+    char **managed_names = NULL;
+    char **aggregate_names = NULL;
+    size_t managed_count = 0U;
+    size_t aggregate_count = 0U;
 
     if (bf == NULL || bf->decl == NULL) {
         goto simple;
@@ -27507,114 +27724,68 @@ static char *cg_builtin_fit_fdesc_expr(CG *cg,
         goto simple;
     }
 
-    for (size_t i = 0; i < dep_set->dep_count; ++i) {
-        if (dep_set->deps[i].kind == FENG_REIFIABLE_DEP_KIND_MANAGED) {
-            mc++;
-        }
+    if (!cg_resolve_builtin_fit_dep_descriptor_names(
+            cg, bf, dep_set, FENG_REIFIABLE_DEP_KIND_MANAGED,
+            element_type, blame, &managed_names, &managed_count) ||
+        !cg_resolve_builtin_fit_dep_descriptor_names(
+            cg, bf, dep_set, FENG_REIFIABLE_DEP_KIND_AGGREGATE,
+            element_type, blame, &aggregate_names, &aggregate_count)) {
+        goto fail;
     }
-    if (mc == 0U || element_type == NULL) {
+    if (managed_count == 0U && aggregate_count == 0U) {
         goto simple;
     }
 
-    {
-        FengSlice *tp_names = (FengSlice *)calloc(
-            bf->target_type_param_count, sizeof(FengSlice));
-        if (tp_names == NULL) goto simple;
-        for (size_t i = 0; i < bf->target_type_param_count; ++i) {
-            tp_names[i] = bf->target_type_params[i].name;
-        }
-
-        typedef struct { size_t idx; char *key; } RTDSort;
-        RTDSort *sorted = (RTDSort *)calloc(mc, sizeof(RTDSort));
-        if (sorted == NULL) { free(tp_names); goto simple; }
-
-        size_t si = 0;
-        for (size_t i = 0; i < dep_set->dep_count; ++i) {
-            if (dep_set->deps[i].kind != FENG_REIFIABLE_DEP_KIND_MANAGED)
-                continue;
-            sorted[si].idx = i;
-            sorted[si].key = cg_reifiable_sort_key(
-                dep_set->deps[i].type_ref,
-                tp_names, bf->target_type_param_count, true);
-            si++;
-        }
-        for (size_t i = 1; i < mc; ++i) {
-            RTDSort tmp = sorted[i];
-            size_t j = i;
-            while (j > 0 && strcmp(sorted[j - 1].key, tmp.key) > 0) {
-                sorted[j] = sorted[j - 1];
-                j--;
-            }
-            sorted[j] = tmp;
-        }
-
-        /* 构建 concrete_type_args：目前 BuiltinFit 只支持单 T 参数。 */
-        FengTypeRef *concrete_ref = cg_type_ref_from_cgtype(cg,
-                                                             element_type,
-                                                             *blame);
-        if (concrete_ref == NULL) {
-            for (size_t i = 0; i < mc; ++i) free(sorted[i].key);
-            free(sorted);
-            free(tp_names);
-            goto simple;
-        }
-        FengTypeRef *concrete_args[1] = { concrete_ref };
-
-        /* 解析每个 dep 对应的具体描述符名。 */
-        char **desc_names = (char **)calloc(mc, sizeof(char *));
-        bool all_resolved = true;
-        if (desc_names != NULL) {
-            for (size_t i = 0; i < mc; ++i) {
-                desc_names[i] = cg_resolve_dep_descriptor_name(
-                    cg, dep_set->deps[sorted[i].idx].type_ref,
-                    bf->target_type_params,
-                    bf->target_type_param_count,
-                    concrete_args,
-                    FENG_REIFIABLE_DEP_KIND_MANAGED,
-                    blame);
-                if (desc_names[i] == NULL) {
-                    all_resolved = false;
-                    break;
-                }
-            }
-        } else {
-            all_resolved = false;
-        }
-
-        for (size_t i = 0; i < mc; ++i) free(sorted[i].key);
-        free(sorted);
-        free(tp_names);
-        cg_type_ref_free(concrete_ref);
-
-        if (!all_resolved) {
-            for (size_t i = 0; i < mc; ++i) free(desc_names[i]);
-            free(desc_names);
-            goto simple;
-        }
-
-        /* 生成 compound literal。 */
-        buf_init(&result);
+    buf_init(&result);
+    buf_append_fmt(&result,
+                   "&(const FengFunctionDescriptor){.name = \"%s\"",
+                   method_name);
+    if (managed_count > 0U) {
         buf_append_fmt(&result,
-            "&(const FengFunctionDescriptor){.name = \"%s\", "
-            ".reified_type_deps_count = %zu, "
+            ", .reified_type_deps_count = %zu, "
             ".reified_type_deps = (const FengTypeDescriptor *[]){",
-            method_name, mc);
-        for (size_t i = 0; i < mc; ++i) {
-            if (i > 0) buf_append_cstr(&result, ", ");
-            buf_append_fmt(&result, "&%s", desc_names[i]);
-            free(desc_names[i]);
+            managed_count);
+        for (size_t i = 0U; i < managed_count; ++i) {
+            if (i > 0U) buf_append_cstr(&result, ", ");
+            buf_append_fmt(&result, "&%s", managed_names[i]);
         }
-        free(desc_names);
-        buf_append_cstr(&result, "}}");
-        return result.data;
+        buf_append_cstr(&result, "}");
     }
+    if (aggregate_count > 0U) {
+        buf_append_fmt(&result,
+            ", .reified_agg_deps_count = %zu, "
+            ".reified_agg_deps = (const FengAggregateDescriptor *[]){",
+            aggregate_count);
+        for (size_t i = 0U; i < aggregate_count; ++i) {
+            if (i > 0U) buf_append_cstr(&result, ", ");
+            buf_append_fmt(&result, "&%s", aggregate_names[i]);
+        }
+        buf_append_cstr(&result, "}");
+    }
+    buf_append_cstr(&result, "}");
+    for (size_t i = 0U; i < managed_count; ++i) free(managed_names[i]);
+    for (size_t i = 0U; i < aggregate_count; ++i) free(aggregate_names[i]);
+    free(managed_names);
+    free(aggregate_names);
+    return result.data;
 
 simple:
+    for (size_t i = 0U; i < managed_count; ++i) free(managed_names[i]);
+    for (size_t i = 0U; i < aggregate_count; ++i) free(aggregate_names[i]);
+    free(managed_names);
+    free(aggregate_names);
     buf_init(&result);
     buf_append_fmt(&result,
         "&(const FengFunctionDescriptor){.name = \"%s\"}",
         method_name);
     return result.data;
+
+fail:
+    for (size_t i = 0U; i < managed_count; ++i) free(managed_names[i]);
+    for (size_t i = 0U; i < aggregate_count; ++i) free(aggregate_names[i]);
+    free(managed_names);
+    free(aggregate_names);
+    return NULL;
 }
 
 /* Build a compound-literal expression for a FengGenericParamDescriptor
@@ -32412,10 +32583,69 @@ static bool cg_collect_generic_instances_from_type_params(CG *cg,
     return true;
 }
 
+/* Type facts for inferred bindings can preserve an unsubstituted callee type
+ * parameter (for example an imported method return `T`) even outside that
+ * callee's scope.  Only facts whose complete type tree resolves to concrete
+ * builtin or declared types are safe inputs to the pre-emission instance
+ * collector. */
+static bool cg_type_ref_is_concrete_for_instance_collection(
+    CG *cg,
+    const FengTypeRef *ref) {
+    if (ref == NULL) {
+        return false;
+    }
+    if (ref->kind == FENG_TYPE_REF_ARRAY ||
+        ref->kind == FENG_TYPE_REF_POINTER) {
+        return cg_type_ref_is_concrete_for_instance_collection(cg,
+                                                               ref->as.inner);
+    }
+    if (ref->kind != FENG_TYPE_REF_NAMED ||
+        ref->as.named.segment_count == 0U) {
+        return false;
+    }
+    for (size_t i = 0U; i < ref->as.named.type_arg_count; ++i) {
+        if (!cg_type_ref_is_concrete_for_instance_collection(
+                cg, ref->as.named.type_args[i])) {
+            return false;
+        }
+    }
+    if (ref->as.named.type_arg_count > 0U) {
+        return cg_find_generic_type_decl(cg, ref) != NULL ||
+               cg_find_generic_spec_decl(cg, ref) != NULL;
+    }
+    if (ref->as.named.segment_count == 1U) {
+        const FengSlice name = ref->as.named.segments[0];
+
+        for (size_t i = 0U;
+             i < sizeof k_builtin_types / sizeof k_builtin_types[0];
+             ++i) {
+            if (strlen(k_builtin_types[i].name) == name.length &&
+                memcmp(k_builtin_types[i].name, name.data, name.length) == 0) {
+                return true;
+            }
+        }
+    }
+    return cg_find_user_type_by_ref(cg, ref) != NULL ||
+           cg_find_user_spec_by_ref(cg, ref) != NULL ||
+           cg_find_enum_decl_by_ref(cg, ref) != NULL;
+}
+
 static bool cg_collect_generic_instances_from_binding(CG *cg,
                                                       const FengBinding *binding,
                                                       CGTypeParamScope scope) {
-    return cg_collect_generic_instances_from_type_ref(cg, binding->type, scope) &&
+    const FengTypeRef *inferred_type = binding->type;
+
+    if (inferred_type == NULL && cg->analysis != NULL) {
+        const FengSemanticTypeFact *fact =
+            feng_semantic_lookup_type_fact(cg->analysis, binding);
+
+        if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF &&
+            cg_type_ref_is_concrete_for_instance_collection(cg,
+                                                            fact->type_ref)) {
+            inferred_type = fact->type_ref;
+        }
+    }
+    return cg_collect_generic_instances_from_type_ref(cg, inferred_type, scope) &&
            cg_collect_generic_instances_from_expr(cg, binding->initializer, scope);
 }
 
@@ -38048,6 +38278,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     bool saved_rad_via_desc = cg->generic_type_method_rad_via_desc;
     char **saved_ambient_tp_names = cg->ambient_type_param_names;
     bool saved_in_generic_fn = cg->in_generic_fn;
+    bool saved_generic_return_uses_out = cg->generic_return_uses_out;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
     const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
@@ -38056,6 +38287,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     bool ok = false;
     FengSlice self_name = {"self", 4U};
     bool is_static_method = m != NULL && m->member != NULL && m->member->is_static;
+    bool return_uses_out = cg_builtin_fit_return_uses_out(bf, m);
     bool has_param = false;
 
     if (bf == NULL || bf->target_type == NULL || m == NULL) {
@@ -38071,7 +38303,11 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     if (needs_static) {
         buf_append_cstr(body, "static ");
     }
-    cg_emit_c_type(body, m->return_type);
+    if (return_uses_out) {
+        buf_append_cstr(body, "void");
+    } else {
+        cg_emit_c_type(body, m->return_type);
+    }
     buf_append_fmt(body, " %s(", m->c_name);
     if (!is_static_method) {
         cg_emit_c_type(body, bf->target_type);
@@ -38132,6 +38368,13 @@ static bool cg_emit_builtin_fit_method(CG *cg,
             cg_emit_c_type(body, m->param_types[i]);
             buf_append_fmt(body, " %s", m->param_names[i] ? m->param_names[i] : "_p");
         }
+        has_param = true;
+    }
+    if (return_uses_out) {
+        if (has_param) {
+            buf_append_cstr(body, ", ");
+        }
+        buf_append_cstr(body, "void *_out");
         has_param = true;
     }
     if (!has_param) {
@@ -38278,6 +38521,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                 combined_constraints_alloc = combined_constraints;
             }
             cg->generic_fn_type_param_descs = combined_desc_names;
+            cg->generic_return_uses_out = return_uses_out;
         }
     }
 
@@ -38562,6 +38806,7 @@ cleanup:
     cg->ambient_type_param_count = saved_ambient_tp_count;
     cg->ambient_type_param_names = saved_ambient_tp_names;
     cg->in_generic_fn = saved_in_generic_fn;
+    cg->generic_return_uses_out = saved_generic_return_uses_out;
     cg->generic_fn_type_param_count = saved_tp_count;
     cg->generic_fn_type_param_names = saved_tp_names;
     cg->generic_fn_type_param_constraints = saved_tp_constraints;

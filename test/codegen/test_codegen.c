@@ -3560,6 +3560,85 @@ static void test_fit_builtin_array_open_generic_return_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_fit_builtin_array_open_generic_value_return_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.fit_builtin_generic_value_array;\n"
+        "@value\n"
+        "type ValueSpan<T> {\n"
+        "    let origin: T[];\n"
+        "    let start: i64;\n"
+        "    let end: i64;\n"
+        "    func ValueSpan(origin: T[], start: i64, end: i64) {\n"
+        "        self.origin = origin;\n"
+        "        self.start = start;\n"
+        "        self.end = end;\n"
+        "    }\n"
+        "    func length(): i64 { return self.end - self.start; }\n"
+        "    func get(index: i64): T { return self.origin[self.start + index]; }\n"
+        "}\n"
+        "fit T[] {\n"
+        "    func value_slice(start: i64, end: i64): ValueSpan<T> {\n"
+        "        return ValueSpan<T>(self, start, end);\n"
+        "    }\n"
+        "    func value_slice(start: i64): ValueSpan<T> {\n"
+        "        return self.value_slice(start, (i64)4);\n"
+        "    }\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let values: int[] = [1, 2, 3, 4];\n"
+        "    let middle: ValueSpan<int> = values.value_slice((i64)1, (i64)3);\n"
+        "    let tail: ValueSpan<int> = values.value_slice((i64)1);\n"
+        "    return middle.get((i64)0) + (int)middle.length() + "
+        "tail.get((i64)0) + (int)tail.length();\n"
+        "}\n";
+
+    FengProgram *program = parse_or_die(
+        kSource, "tests/fit_builtin_generic_value_array_codegen.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                    &analysis, &errors, &error_count);
+
+    if (!ok) {
+        for (size_t i = 0; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path, errors[i].token.line, errors[i].token.column,
+                    errors[i].message);
+        }
+        ASSERT(ok);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (fit builtin generic @value array): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "void FengFitBuiltin__feng__codegen__fit_builtin_generic_value_array") != NULL);
+    ASSERT(strstr(out.c_source, "void *_out") != NULL);
+    ASSERT(strstr(out.c_source, ".reified_agg_deps_count = ") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "ValueSpan__G__i64__aggregate_desc") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "ValueSpan__G__T)(FengFitBuiltin") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     static const char *kSource =
         "module feng.codegen.fit_builtin_spec;\n"
@@ -7732,6 +7811,7 @@ int main(void) {
     test_float_modulo_codegen_uses_math_runtime();
     test_fit_builtin_direct_call_codegen_shape();
     test_fit_builtin_array_open_generic_return_codegen();
+    test_fit_builtin_array_open_generic_value_return_codegen();
     test_fit_builtin_and_array_object_spec_coercion_codegen();
     test_fit_enum_object_spec_coercion_codegen();
     test_object_spec_thunk_subject_cast_shape_codegen();
