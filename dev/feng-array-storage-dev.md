@@ -336,7 +336,17 @@ moveLength = min(oldLength, newCapacity)
 
 无论目标容量大于、等于还是小于旧容量，保留前缀的元素 RC 都不变；只有超出 `newCapacity` 的旧有效元素发生 RC 减少。
 
-首次实现不使用 `realloc`：普通 Feng 赋值仍会在保存新返回值后 release 旧数组，直接 `realloc` 旧对象会使该 release 指向失效地址。首版采用“新 allocation + 槽位迁移 + 旧数组有效长度归零”的方式。
+首次实现不使用 `realloc`。`FengArray` 的 header 与 payload 位于同一块尾随内联 allocation，`realloc` 一旦移动 allocation，整个数组对象的地址都会改变。调用形态：
+
+```feng
+self.items = feng_array_storage_migrate(self.items, newCapacity);
+```
+
+在语义上仍需要先以旧数组引用调用 `migrate`，再用返回的新数组替换 `self.items`，并由普通赋值路径 release 字段中的旧引用。若 `realloc` 已把对象移到新地址，字段中保留的旧地址已是野指针，随后的 release 会访问失效的对象头，造成 use-after-free。
+
+`array.header.refcount == 1` 也不能解决该问题：它只能证明没有其他数组引用，不能阻止调用方字段在赋值完成前仍持有并随后 release 旧地址。若要安全使用 `realloc`，必须另外引入“调用前从调用方槽位取出并消费旧引用”的 contract 或编译器特殊发码，不属于本方案。
+
+首版固定采用“新 allocation + 槽位迁移 + 旧数组有效长度归零”的方式，确保普通赋值路径仍可安全 release 旧数组。
 
 若 allocation 失败，必须在修改旧数组前 panic，保证旧数组仍保持原状态。
 
