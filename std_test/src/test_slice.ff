@@ -26,6 +26,24 @@ func array_clone_range_is_independent() {
   check(copied[(int)1] == 30, "slice/array-clone-range-1");
 }
 
+func array_clone_writable_preserves_writability() {
+  let values: int[!] = [1, 2, 3, 4];
+  let copiedAll: int[!] = values.clone();
+  let copiedRange: int[!] = values.clone((int)1, (int)3);
+  let copiedTail: int[!] = values.clone((int)2);
+
+  copiedAll[(int)0] = 10;
+  copiedRange[(int)0] = 20;
+  copiedTail[(int)0] = 30;
+
+  check(values[(int)0] == 1, "slice/array-clone-writable-source-0");
+  check(values[(int)1] == 2, "slice/array-clone-writable-source-1");
+  check(values[(int)2] == 3, "slice/array-clone-writable-source-2");
+  check(copiedAll[(int)0] == 10, "slice/array-clone-writable-all");
+  check(copiedRange[(int)0] == 20, "slice/array-clone-writable-range");
+  check(copiedTail[(int)0] == 30, "slice/array-clone-writable-tail");
+}
+
 func array_clone_invalid_range() {
   let values: int[] = [1, 2, 3];
   var caught: bool = false;
@@ -126,6 +144,7 @@ open func run_slice_tests() {
   describe("slice tests", () {
     test("array_clone_all_readonly()", () { array_clone_all_readonly(); });
     test("array_clone_range_is_independent()", () { array_clone_range_is_independent(); });
+    test("array_clone_writable_preserves_writability()", () { array_clone_writable_preserves_writability(); });
     test("array_clone_invalid_range()", () { array_clone_invalid_range(); });
     test("array_clone_negative_end()", () { array_clone_negative_end(); });
     test("array_slice_to_end_readonly()", () { array_slice_to_end_readonly(); });

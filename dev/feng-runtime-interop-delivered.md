@@ -322,7 +322,7 @@ func size_of(s: string): long {
 
 ```feng
 @runtime
-extern func feng_array_slice<T>(values: T[], start: long, length: long): T[];
+extern func feng_array_slice<T>(values: T[], start: long, length: long): T[!];
 ```
 
 该类 helper 的 contract 语义应由具体符号精确定义；例如 `feng_array_slice` 可定义为按右开区间 `[start, start + length)` 复制数组子区间并返回新的数组值，而不是返回借用视图。

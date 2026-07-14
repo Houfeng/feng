@@ -10,7 +10,7 @@
 - 两者可以共用同一个类型实参描述符载体：`FengGenericParamDescriptor`。普通泛型共享体消费其中的值模型字段与 `witness`；runtime helper 消费其中的 runtime 类型分类字段。
 - `FengGenericParamDescriptor.witness` 继续只服务非 runtime 泛型共享体：在二进制分发场景下，结构按具体类型单态，方法体可共享，共享方法体通过 descriptor 与 witness 操作已单态结构。
 - runtime API 的实现方是 C 方法，不能直接消费 Feng witness。runtime helper 需要的是编译期已知、且 C runtime 可直接理解的类型分类信息；该信息由新增的 `FengRuntimeTypeKind` 字段承载。
-- 当前 generic runtime extern 已支持 `T[]` 这类可降为稳定 C surface 的形态，例如 `feng_array_length_i64<T>(value: T[]): long` 和 `feng_array_slice<T>(value: T[], ...): T[]`。
+- 当前 generic runtime extern 已支持数组这类可降为稳定 C surface 的形态，例如 `feng_array_length_i64<T>(value: T[]): long` 和当前 contract 中的 `feng_array_slice<T>`；具体声明形态统一见 `dev/feng-runtime-contract-api.md`。
 - 原有 `T[]` 路径已收口到统一的 descriptor-aware runtime 泛型调用机制，不再继续为每种包裹形态增加专属特判。
 - `fit T[]` / `fit T[!]` 支持声明元素类型约束是独立语言能力，整理在 [dev/feng-array-generics-pending.md](./feng-array-generics-pending.md)。两项能力都必须做，但职责不同，不能互相替代。
 

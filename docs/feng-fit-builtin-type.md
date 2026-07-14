@@ -94,11 +94,11 @@ fit T[!] {
     return (T[])self;
   }
 
-  func clone(): T[] {
-    return (T[])self;
+  func clone(): T[!] {
+    ...
   }
 
-  func clone(start: long, length: long): T[] {
+  func clone(start: long, length: long): T[!] {
     ...
   }
 
@@ -133,7 +133,7 @@ fit *byte {
 - [必须] 在孤儿适配判定中, 内建类型目标一律按外部类型处理；当目标 `spec` 在当前包内时, `open fit` 可公开导出关系声明；当目标 `spec` 也在当前包外时, `open fit` 不得导出。
 - [必须] 内建类型上的 `fit` 在用户可见层面不得引入区别于用户 `type` 的独立调用规则或独立语义模型。
 - [必须] 内建类型上的 `fit` 方法继续通过普通方法调用语法使用, 不得引入第二种用户可见调用方式。
-- [必须] 数组目标上的 `clone()` 与 `clone(start, end)` 可返回新的实体数组 `T[]`；它们与返回视图类型 `Span<T>` 的 `slice(start, end)` 必须视为不同能力，不得混淆语义。
+- [必须] 数组目标上的 `clone()` 与 `clone(start, end)` 返回新的实体数组，并按 [Feng 标准库数组扩展规范](./feng-std-array.md) 保持目标数组层的可写性；它们与返回视图类型 `Span<T>` 的 `slice(start, end)` 必须视为不同能力，不得混淆语义。
 - [必须] 数组目标上的 `slice(start, end)` 可返回只读视图类型 `Span<T>`；第一阶段该方法不得隐式产生可写视图语义。
 - [禁止] 将 C 指针类型作为 `fit` 左侧目标。
 - [说明] 对方法重载、方法冲突、块体成员限制、私有成员访问、可见性与导出等通用规则, 统一直接适用 [feng-fit.md](./feng-fit.md), 本文不重复定义。

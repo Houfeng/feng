@@ -458,29 +458,29 @@ storage API 必须满足：
 
 ### 9.1 实施
 
-- [ ] 第一阶段独立通过全量回归后，开始第二阶段。
-- [ ] 实施前再次 Review `List<T>` 的具体改造方案。
+- [x] 第一阶段独立通过全量回归后，开始第二阶段。
+- [x] 实施前再次 Review `List<T>` 的具体改造方案。
 
 拟使用关系：
 
-- [ ] `List.add` 使用 `get_capacity + migrate（必要时）+ insert(length, item)`。
-- [ ] `List.insert(index, item)` 使用 `get_capacity + migrate（必要时）+ insert(index, item)`，只插入单个元素。
-- [ ] `List.remove` 使用 `remove(index, 1) + migrate（满足缩容策略时）`。
-- [ ] `List.clear` 使用 `remove(0, length)`。
-- [ ] `List.size` 使用 `items.length()`。
+- [x] `List.add` 使用 `get_capacity + migrate（必要时）+ insert(length, item)`。
+- [x] `List.insert(index, item)` 使用 `get_capacity + migrate（必要时）+ insert(index, item)`，只插入单个元素。
+- [x] `List.remove` 使用 `remove(index, 1) + migrate（满足缩容策略时）`。
+- [x] `List.clear` 使用 `remove(0, length)`。
+- [x] `List.size` 使用 `items.length()`。
 
 第二阶段已确定的实施项与备注：
 
-- [ ] `List(items: T[!])` 利用 `std.collections` 数组 `clone()` 的复制语义创建私有 backing array，不直接保存调用方数组引用。
-- [ ] 删除 `List.count` 字段，统一使用 `items.length()` 表示元素数量。
-- [ ] 自动 shrink 沿用现有逻辑：容量大于 8 且元素数量不超过容量的四分之一时，将容量减半且不低于 8。
+- [x] `List(items: T[!])` 直接保存 `items.clone()` 返回的可写副本作为私有 backing array，不直接保存调用方数组引用；数组 `clone` 的返回可写性由 `docs/feng-std-array.md` 统一定义。
+- [x] 删除 `List.count` 字段，统一使用 `items.length()` 表示元素数量。
+- [x] 自动 shrink 沿用现有逻辑：容量大于 8 且元素数量不超过容量的四分之一时，将容量减半且不低于 8。
 - [x] runtime storage contract 保持现有四个 API，不增加批量 insert 或其他 range API。
 
 备注：`ListIterator<T>` 保持当前实现，本阶段不同步优化；后续根据实际需求单独评估。
 
 第二阶段验证与验收：
 
-- [ ] 补齐用例进行验证，并进行全量回归测试。
+- [x] 补齐用例进行验证，并进行全量回归测试。
 - [ ] 人工 Review。
 
 ## 10. Review 清单

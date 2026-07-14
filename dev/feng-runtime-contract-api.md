@@ -64,12 +64,13 @@
 ### 2.4 `feng_array_slice`
 
 - C 符号：`FengArray *feng_array_slice(const FengGenericParamDescriptor *type, const FengArray *value, int64_t start, int64_t length)`
-- Feng 声明形态：`extern func feng_array_slice<T>(value: T[], start: long, length: long): T[];`
+- Feng 声明形态：`extern func feng_array_slice<T>(value: T[], start: long, length: long): T[!];`
 - 用途：复制数组的一个右开区间子段 `[start, start + length)`，并返回一个新的 `FengArray`。适用于调用方需要“独立数组值”而不是共享视图的场景。
 - ABI 说明：generated C 会把元素类型 `T` 的 `FengGenericParamDescriptor` 作为隐藏参数放在最前面传入；当前 helper 沿用现有数组 carrier，不额外暴露第二套数组类型元数据。
 - 语义说明：
   - `start`、`length` 必须非负，且满足 `start + length <= value.length()`。
   - 返回值是新数组，不与源数组共享 payload 存储。
+  - runtime 返回的新数组本身可写；标准库只读数组 `clone` 在语言层将其显式降级为 `T[]`，可写数组 `clone` 则保持 `T[!]`。
   - 对元素的复制策略由源数组的元素类别决定：
     - trivial 元素按字节复制；
     - managed pointer 元素逐槽 retain；

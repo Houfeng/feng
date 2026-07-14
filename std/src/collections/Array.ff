@@ -4,7 +4,7 @@ open module std.collections;
 extern func feng_array_get_length<T>(value: T[]): int;
 
 @runtime
-extern func feng_array_slice<T>(value: T[], start: int, length: int): T[];
+extern func feng_array_slice<T>(value: T[], start: int, length: int): T[!];
 
 @runtime
 extern func feng_expression_equal<T>(left: T, right: T): bool;
@@ -74,7 +74,7 @@ open fit T[] {
     if end > self.length() {
       throw "Array clone end out of bounds";
     }
-    return feng_array_slice(self, start, end - start);
+    return (T[])feng_array_slice(self, start, end - start);
   }
 
   /**
@@ -119,30 +119,39 @@ open fit T[!] {
   }
 
   /**
-   * Returns a dense read-only copy of this array.
-   * @return copied array containing all elements
+   * Returns a dense writable copy of this array.
+   * @return copied writable array containing all elements
    */
-  open func clone(): T[] {
-    return ((T[])self).clone();
+  open func clone(): T[!] {
+    return self.clone((int)0, self.length());
   }
 
   /**
-   * Returns a dense read-only copy of the range `[start, end)`.
+   * Returns a dense writable copy of the range `[start, end)`.
    * @param start - zero-based start offset of the copied range
    * @param end - zero-based exclusive end offset of the copied range
-   * @return copied array containing all elements from `start` to `end`
+   * @return copied writable array containing all elements from `start` to `end`
    */
-  open func clone(start: int, end: int): T[] {
-    return ((T[])self).clone(start, end);
+  open func clone(start: int, end: int): T[!] {
+    if start < (int)0 {
+      throw "Array clone start out of bounds";
+    }
+    if end < start {
+      throw "Array clone end out of bounds";
+    }
+    if end > self.length() {
+      throw "Array clone end out of bounds";
+    }
+    return feng_array_slice((T[])self, start, end - start);
   }
 
   /**
-   * Returns a dense read-only copy of the range `[start, length)`.
+   * Returns a dense writable copy of the range `[start, length)`.
    * @param start - zero-based start offset of the copied range
-   * @return copied array containing all elements from `start` to the end of this array
+   * @return copied writable array containing all elements from `start` to the end of this array
    */
-  open func clone(start: int): T[] {
-    return ((T[])self).clone(start);
+  open func clone(start: int): T[!] {
+    return self.clone(start, self.length());
   }
 
 }

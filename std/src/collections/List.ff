@@ -1,65 +1,80 @@
 open module std.collections;
 
+/** Returns the fixed storage capacity of a private writable array. */
+@runtime
+extern func feng_array_storage_get_capacity<T>(array: T[!]): int;
+
+/** Inserts one element into a private writable array with spare capacity. */
+@runtime
+extern func feng_array_storage_insert<T>(array: T[!], index: int, value: T): void;
+
+/** Removes a range of elements from a private writable array. */
+@runtime
+extern func feng_array_storage_remove<T>(array: T[!], index: int, count: int): void;
+
+/** Moves the elements of a private writable array into storage with a new capacity. */
+@runtime
+extern func feng_array_storage_migrate<T>(array: T[!], newCapacity: int): T[!];
+
 /**
  * A list is a growable ordered collection of elements backed by a dynamic array.
  * @param <T> - the element type
  *
  * Implementation notes:
- * - Backed by a contiguous array that doubles in capacity when full.
+ * - Backed by a private contiguous array with independent length and capacity.
+ * - Storage doubles in capacity when full and retains capacity across clear().
  * - Average O(1) amortized for add; O(n) for remove due to element shifting.
  * - get and set are O(1) by index.
- * - entities returns an immutable dense copy of all elements in order.
+ * - entries returns an immutable dense copy of all elements in order.
  */
 open type List<T> {
   seal var items: T[!];
-  seal var count: int;
   seal var missing: T;
 
+  /** Doubles backing storage capacity, using eight slots for the first allocation. */
   seal func grow() {
-    if self.items.length() == (int)0 {
-      self.items = T[:8];
+    let capacity = feng_array_storage_get_capacity(self.items);
+    if capacity == (int)0 {
+      self.items = feng_array_storage_migrate(self.items, (int)8);
       return;
     }
-    let newCapacity: int = self.items.length() * 2;
-    let newItems: T[!] = T[:newCapacity];
-    for var i: int = 0; i < self.count; i = i + 1 {
-      newItems[i] = self.items[i];
-    }
-    self.items = newItems;
+    self.items = feng_array_storage_migrate(self.items, capacity * (int)2);
   }
 
+  /** Halves sparse backing storage while retaining a minimum capacity of eight. */
   seal func shrink() {
-    if self.items.length() <= (int)8 {
+    let capacity = feng_array_storage_get_capacity(self.items);
+    if capacity <= (int)8 {
       return;
     }
-    if self.count * 4 > self.items.length() {
+    if self.items.length() > capacity / (int)4 {
       return;
     }
-    var newCapacity: int = self.items.length() / 2;
-    if newCapacity < 8 {
-      newCapacity = 8;
+    var newCapacity: int = capacity / (int)2;
+    if newCapacity < (int)8 {
+      newCapacity = (int)8;
     }
-    let newItems: T[!] = T[:newCapacity];
-    for var i: int = 0; i < self.count; i = i + 1 {
-      newItems[i] = self.items[i];
-    }
-    self.items = newItems;
+    self.items = feng_array_storage_migrate(self.items, newCapacity);
   }
 
+  /** Creates an empty list without pre-allocating backing storage. */
   open func List() {}
 
+  /**
+   * Creates a list from a private writable clone of `items`.
+   * @param items - source writable array copied into the list
+   */
   open func List(items: T[!]) {
-    self.items = items;
-    self.count = items.length();
+    self.items = items.clone();
   }
 
+  /**
+   * Creates a list from a private writable copy of `items`.
+   * @param items - source read-only array copied into the list
+   */
   open func List(items: T[]) {
     let length = items.length();
-    self.items = T[:length];
-    for var i: int = 0; i < length; i = i + 1 {
-      self.items[i] = items[i];
-    }
-    self.count = length;
+    self.items = feng_array_slice(items, (int)0, length);
   }
 
   /**
@@ -69,12 +84,9 @@ open type List<T> {
    * @param capacity - number of slots to pre-allocate (clamped to 0 if negative)
    */
   open func List(capacity: int) {
-    if capacity <= (int)0 {
-      self.items = T[:0];
-    } else {
-      self.items = T[:capacity];
+    if capacity > (int)0 {
+      self.items = feng_array_storage_migrate(self.items, capacity);
     }
-    self.count = 0;
   }
 
   /**
@@ -82,11 +94,23 @@ open type List<T> {
    * @param item - the element to append
    */
   open func add(item: T) {
-    if self.count >= self.items.length() {
+    let length = self.items.length();
+    if length >= feng_array_storage_get_capacity(self.items) {
       self.grow();
     }
-    self.items[self.count] = item;
-    self.count = self.count + 1;
+    feng_array_storage_insert(self.items, length, item);
+  }
+
+  /**
+   * Inserts `item` at `index`, shifting subsequent elements right.
+   * @param index - zero-based insertion position from zero through size()
+   * @param item - the element to insert
+   */
+  open func insert(index: int, item: T) {
+    if self.items.length() >= feng_array_storage_get_capacity(self.items) {
+      self.grow();
+    }
+    feng_array_storage_insert(self.items, index, item);
   }
 
   /**
@@ -111,11 +135,7 @@ open type List<T> {
    * @param index - zero-based position of the element to remove
    */
   open func remove(index: int) {
-    for var i: int = index; i < self.count - 1; i = i + 1 {
-      self.items[i] = self.items[i + 1];
-    }
-    self.items[self.count - 1] = self.missing;
-    self.count = self.count - 1;
+    feng_array_storage_remove(self.items, index, (int)1);
     self.shrink();
   }
 
@@ -123,15 +143,14 @@ open type List<T> {
    * Removes all elements from the list, resetting it to an empty state.
    */
   open func clear() {
-    self.items = T[:0];
-    self.count = 0;
+    feng_array_storage_remove(self.items, (int)0, self.items.length());
   }
 
   /**
    * Returns the number of elements in the list.
    */
   open func size(): int {
-    return self.count;
+    return self.items.length();
   }
 
   /**
@@ -139,8 +158,9 @@ open type List<T> {
    * @return immutable array of all elements
    */
   open func entries(): T[] {
-    let result: T[!] = T[:self.count];
-    for var i: int = 0; i < self.count; i = i + 1 {
+    let length = self.items.length();
+    let result: T[!] = T[:length];
+    for var i: int = 0; i < length; i = i + 1 {
       result[i] = self.items[i];
     }
     return (T[])result;
@@ -152,7 +172,7 @@ open type List<T> {
    */
   @iterable
   open func iter(): ListIterator<T> {
-    return ListIterator<T>(self.items, self.count, self.missing);
+    return ListIterator<T>(self.items, self.items.length(), self.missing);
   }
 }
 

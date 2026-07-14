@@ -106,6 +106,113 @@ func list_reference_semantics() {
   check(l.get(0).value == 99, "list/reference-semantics");
 }
 
+func list_writable_array_constructor_is_private() {
+  let source: i32[!] = [10, 20, 30];
+  let l = List<i32>(source);
+
+  source[0] = 99;
+  l.set(1, 88);
+
+  check(l.size() == 3, "list/writable-array-constructor-size");
+  check(l.get(0) == 10, "list/writable-array-constructor-source-independent");
+  check(source[1] == 20, "list/writable-array-constructor-list-independent");
+}
+
+func list_readonly_array_constructor_copies() {
+  let source: i32[] = [4, 5, 6];
+  let l = List<i32>(source);
+
+  l.set(0, 40);
+
+  check(l.size() == 3, "list/readonly-array-constructor-size");
+  check(l.get(0) == 40, "list/readonly-array-constructor-list-write");
+  check(source[0] == 4, "list/readonly-array-constructor-source-independent");
+}
+
+func list_insert_positions() {
+  let l = List<i32>();
+  l.add(20);
+  l.add(40);
+  l.insert(0, 10);
+  l.insert(2, 30);
+  l.insert(4, 50);
+
+  check(l.size() == 5, "list/insert-positions-size");
+  check(l.get(0) == 10, "list/insert-head");
+  check(l.get(1) == 20, "list/insert-after-head");
+  check(l.get(2) == 30, "list/insert-middle");
+  check(l.get(3) == 40, "list/insert-before-tail");
+  check(l.get(4) == 50, "list/insert-tail");
+}
+
+func list_insert_grows_full_storage() {
+  let l = List<i32>(2);
+  l.add(1);
+  l.add(3);
+  l.insert(1, 2);
+
+  check(l.size() == 3, "list/insert-grow-size");
+  check(l.get(0) == 1, "list/insert-grow-0");
+  check(l.get(1) == 2, "list/insert-grow-1");
+  check(l.get(2) == 3, "list/insert-grow-2");
+}
+
+func list_capacity_constructor_starts_empty() {
+  let l = List<i32>(16);
+  check(l.size() == 0, "list/capacity-constructor-empty");
+
+  l.add(7);
+  l.add(8);
+
+  check(l.size() == 2, "list/capacity-constructor-size");
+  check(l.get(0) == 7, "list/capacity-constructor-0");
+  check(l.get(1) == 8, "list/capacity-constructor-1");
+}
+
+func list_clear_reuses_storage() {
+  let l = List<string>(16);
+  l.add("alpha");
+  l.add("beta");
+  l.clear();
+
+  check(l.size() == 0, "list/clear-size");
+
+  l.add("gamma");
+  check(l.size() == 1, "list/clear-reuse-size");
+  check(l.get(0) == "gamma", "list/clear-reuse-value");
+}
+
+func list_remove_shrinks_and_preserves_order() {
+  let l = List<i32>();
+  for var i: int = 0; i < 32; i = i + 1 {
+    l.add((i32)i);
+  }
+  for var i: int = 0; i < 28; i = i + 1 {
+    l.remove(0);
+  }
+
+  check(l.size() == 4, "list/shrink-size");
+  check(l.get(0) == 28, "list/shrink-0");
+  check(l.get(1) == 29, "list/shrink-1");
+  check(l.get(2) == 30, "list/shrink-2");
+  check(l.get(3) == 31, "list/shrink-3");
+}
+
+func list_insert_managed_element() {
+  let first = RefBox { value: 1 };
+  let middle = RefBox { value: 2 };
+  let last = RefBox { value: 3 };
+  let l = List<RefBox>();
+  l.add(first);
+  l.add(last);
+  l.insert(1, middle);
+
+  check(l.size() == 3, "list/insert-managed-size");
+  check(l.get(0).value == 1, "list/insert-managed-0");
+  check(l.get(1).value == 2, "list/insert-managed-1");
+  check(l.get(2).value == 3, "list/insert-managed-2");
+}
+
 func list_for_in_basic() {
   let l = List<i32>();
   l.add(10);
@@ -204,6 +311,14 @@ open func run_list_tests() {
     test("list_entities_order()", () { list_entities_order(); });
     test("list_entities_count()", () { list_entities_count(); });
     test("list_reference_semantics()", () { list_reference_semantics(); });
+    test("list_writable_array_constructor_is_private()", () { list_writable_array_constructor_is_private(); });
+    test("list_readonly_array_constructor_copies()", () { list_readonly_array_constructor_copies(); });
+    test("list_insert_positions()", () { list_insert_positions(); });
+    test("list_insert_grows_full_storage()", () { list_insert_grows_full_storage(); });
+    test("list_capacity_constructor_starts_empty()", () { list_capacity_constructor_starts_empty(); });
+    test("list_clear_reuses_storage()", () { list_clear_reuses_storage(); });
+    test("list_remove_shrinks_and_preserves_order()", () { list_remove_shrinks_and_preserves_order(); });
+    test("list_insert_managed_element()", () { list_insert_managed_element(); });
     test("list_for_in_basic()", () { list_for_in_basic(); });
     test("list_for_in_empty()", () { list_for_in_empty(); });
     test("list_for_in_nested()", () { list_for_in_nested(); });
