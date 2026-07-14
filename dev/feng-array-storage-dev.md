@@ -366,20 +366,22 @@ storage API 必须满足：
 
 对于 `FENG_VALUE_MANAGED_POINTER`，表中的 `+1/-1` 对应元素指针本身的一次 retain/release。对于 `FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS`，规则分别应用到 aggregate descriptor 描述的每个托管槽位。若同一个对象在多个元素或多个槽位中重复出现，每个存储位置分别表示一次独立的引用持有关系，必须分别计数。
 
-## 7. 独占 backing array 约束
+## 7. backing array 引用约束
 
-本稿建议 storage mutation API 只操作由标准库容器独占的 backing array：
+本稿建议 storage mutation API 只操作不会被普通数组语义继续观察的标准库容器 backing array：
 
 1. `insert` 和 `remove` 会原地改变 `length` 与 payload。
 2. `migrate` 会把旧数组有效元素的槽位内容及引用持有关系迁移到新数组，并将旧数组的有效长度归零。
-3. 若其他数组引用仍在观察同一个 `FengArray`，上述操作会破坏普通固定长度数组的可观察语义。
+3. 若调用方仍以普通数组语义观察同一个 `FengArray`，上述操作会破坏普通固定长度数组的可观察语义。
 
-因此，后续 `List<T>` 优化必须先处理两类别名来源：
+后续优化 `List<T>` 时，`List(items: T[!])` 不得继续直接保存调用方数组引用。该构造函数必须利用 `std.collections` 已有的数组 `clone()` 能力，以复制输入数组全部有效元素的语义创建新的私有 backing array。新 backing array 不得与输入数组共享 payload；后续 List 的 `insert`、`remove` 或 `migrate` 不得改变调用方数组的 `length` 或元素槽位。
 
-1. `List(items: T[!])` 当前直接保存调用方数组引用。
-2. `ListIterator<T>` 当前直接保存 backing array 引用。
+`ListIterator<T>` 本轮保持现状，继续保存 backing array 引用：
 
-在这两类问题解决前，不得把当前 `List<T>` 直接切换到 storage API。
+1. 第一阶段不修改 `List<T>` 或 `ListIterator<T>`。
+2. 第二阶段优化 `List<T>` 时，不同步改造 Iterator 的字段、游标或失效检查机制。
+3. `for/in` 每次进入循环时创建独立 Iterator，循环结束时按当前作用域生命周期清理。
+4. 是否改为引用 List、是否增加版本号或其他迭代失效检查，后续根据实际需求和问题单独评估。
 
 首版 API 是否在 runtime 中检查 `array.header.refcount == 1`，留待本轮 Review 决定：
 
@@ -447,13 +449,16 @@ List.clear   -> remove(0, length)
 List.size    -> items.length()
 ```
 
-第二阶段需要单独确定：
+第二阶段已确定：
+
+1. `List(items: T[!])` 利用 `std.collections` 数组 `clone()` 的复制语义创建私有 backing array，不直接保存调用方数组引用。
+2. `ListIterator<T>` 保持当前实现，本阶段不同步优化；后续根据实际需求单独评估。
+
+第二阶段实施前仍需单独确定：
 
 1. 是否删除 `List.count`，直接以 `items.length()` 作为元素数量。
-2. `List(items: T[!])` 是复制输入、接管输入，还是引入其他独占策略。
-3. `ListIterator<T>` 的 backing array 生命周期以及迭代期间修改 List 的行为。
-4. 自动 shrink 策略是否保持现状，是否需要避免容量临界点反复迁移。
-5. 是否增加批量 insert 或其他 range API；没有实际需求和基准前不提前扩展。
+2. 自动 shrink 策略是否保持现状，是否需要避免容量临界点反复迁移。
+3. 是否增加批量 insert 或其他 range API；没有实际需求和基准前不提前扩展。
 
 ## 10. Review 清单
 
@@ -463,6 +468,6 @@ List.size    -> items.length()
 2. `[length, capacity)` 明确定义为未初始化、不可观察、无生命周期的存储。
 3. 四个 API 的名称与签名是否固定为 `feng_array_storage_*`。
 4. `remove(index, count)` 是否作为 clear、单项删除与批量删除的统一原语。
-5. `migrate` 是否要求旧 backing array 无其他别名、迁移后立即用返回的新数组替换它，并且不提供共享复制 fallback。
+5. `migrate` 是否要求旧 backing array 无仍按普通数组语义观察它的外部引用、迁移后立即用返回的新数组替换它，并且不提供共享复制 fallback。
 6. runtime 是否对 storage mutation 执行唯一引用检查。
 7. 第一阶段只实现 API，第二阶段再修改 List。
