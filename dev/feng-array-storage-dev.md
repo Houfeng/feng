@@ -419,7 +419,7 @@ storage API 必须满足：
 - [x] 将现有内部 `feng_array_payload_inline()` / `feng_array_payload_inline_const()` 的空 payload 判断改为基于 `capacity`；`feng_array_data()` 自身保留 `length == 0` 返回 `NULL` 的普通数组行为。storage API 直接复用现有内部 helper，不新增第二套 payload helper。
 - [x] 审计终结器、cycle collector 及其他数组路径，并增加回归测试，确认所有路径都只遍历 `[0, length)`，没有路径错误地遍历到 `capacity`。
 - [x] 补齐用例进行验证，并进行全量回归测试。
-- [ ] 人工 Review。
+- [x] 人工 Review。
 
 ### 8.3 Runtime contract
 
