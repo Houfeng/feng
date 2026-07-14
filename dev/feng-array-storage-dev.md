@@ -406,69 +406,84 @@ storage API 必须满足：
 
 ### 8.1 文档
 
-1. 本文 Review 通过后作为本次开发主文档。
-2. 实现时同步更新 `dev/feng-runtime-contract-api.md`，只登记新增 contract API 并引用本文，不重复维护完整算法。
-3. 在 `dev/feng-array-optimize-delivered.md` 的后续边界处引用本文，不改写已交付阶段的历史范围。
+- [ ] 本文 Review 通过后作为本次开发主文档。
+- [ ] 实现时同步更新 `dev/feng-runtime-contract-api.md`，只登记新增 contract API 并引用本文，不重复维护完整算法。
+- [ ] 在 `dev/feng-array-optimize-delivered.md` 的后续边界处引用本文，不改写已交付阶段的历史范围。
+- [ ] 人工 Review。
 
 ### 8.2 Runtime
 
-1. 为 `FengArray` 增加 `capacity`。
-2. 普通数组创建路径设置 `capacity = length`，保持现有公开语义。
-3. 新增可接收独立 `length/capacity` 的内部 storage allocation 路径，其 allocation 大小按 `capacity * element_size` 计算；现有普通数组创建路径继续传入 `length == capacity`，行为不变。
-4. 将现有内部 `feng_array_payload_inline()` / `feng_array_payload_inline_const()` 的空 payload 判断改为基于 `capacity`；`feng_array_data()` 自身保留 `length == 0` 返回 `NULL` 的普通数组行为。storage API 直接复用现有内部 helper，不新增第二套 payload helper。
-5. 终结器和 cycle collector 当前已经只遍历 `[0, length)`，无需修改遍历边界；本阶段只需审计所有数组路径并增加回归测试，确认没有路径错误地遍历到 `capacity`。
-6. 在 `src/runtime/feng_runtime_contract.inc` 增加四个 contract 符号。
-7. 在数组 runtime 模块中实现四个 API；`feng_runtime_contract.c` 只保留必要的 contract bridge，避免重复数组生命周期逻辑。
+- [ ] 为 `FengArray` 增加 `capacity`。
+- [ ] 普通数组创建路径设置 `capacity = length`，保持现有公开语义。
+- [ ] 新增可接收独立 `length/capacity` 的内部 storage allocation 路径，其 allocation 大小按 `capacity * element_size` 计算；现有普通数组创建路径继续传入 `length == capacity`，行为不变。
+- [ ] 将现有内部 `feng_array_payload_inline()` / `feng_array_payload_inline_const()` 的空 payload 判断改为基于 `capacity`；`feng_array_data()` 自身保留 `length == 0` 返回 `NULL` 的普通数组行为。storage API 直接复用现有内部 helper，不新增第二套 payload helper。
+- [ ] 审计终结器、cycle collector 及其他数组路径，并增加回归测试，确认所有路径都只遍历 `[0, length)`，没有路径错误地遍历到 `capacity`。
+- [ ] 补齐用例进行验证，并进行全量回归测试。
+- [ ] 人工 Review。
 
-### 8.3 测试
+### 8.3 Runtime contract
+
+- [ ] 在 `src/runtime/feng_runtime_contract.inc` 增加四个 contract 符号。
+- [ ] 在数组 runtime 模块中实现四个 API；`feng_runtime_contract.c` 只保留必要的 contract bridge，避免重复数组生命周期逻辑。
+- [ ] 补齐用例进行验证，并进行全量回归测试。
+- [ ] 人工 Review。
+
+### 8.4 测试
 
 新增测试至少覆盖：
 
-1. 普通数组仍满足 `length == capacity`，现有数组行为不变。
-2. `length == 0 && capacity > 0` 时，普通索引仍全部越界，storage insert 可以复用容量。
-3. trivial、managed pointer、aggregate 三类元素的头部、中间和尾部 insert；新增托管引用恰好 retain 一次，原有移动元素 RC 不变。
-4. 删除头部、中间、尾部、全部区间以及 `count == 0`。
-5. 删除后保留元素顺序正确；每个被删除托管引用恰好 release 一次，保留移动元素 RC 不变。
-6. migrate 到更大、更小、相等和零 `capacity` 的新数组实例，并覆盖截断有效元素的场景。
-7. migrate 保留元素不产生元素级 RC 增减，截断元素恰好 release 一次。
-8. 数组终结和 cycle collector 只遍历当前 `length`。
-9. 非法负数、越界范围、满容量 insert 和 allocation 溢出按 contract panic。
-10. `@runtime` 泛型声明、参数 carrier、数组返回值及赋值接管 `+1` 返回引用的 codegen 回归。
+- [ ] 普通数组仍满足 `length == capacity`，现有数组行为不变。
+- [ ] `length == 0 && capacity > 0` 时，普通索引仍全部越界，storage insert 可以复用容量。
+- [ ] trivial、managed pointer、aggregate 三类元素的头部、中间和尾部 insert；新增托管引用恰好 retain 一次，原有移动元素 RC 不变。
+- [ ] 删除头部、中间、尾部、全部区间以及 `count == 0`。
+- [ ] 删除后保留元素顺序正确；每个被删除托管引用恰好 release 一次，保留移动元素 RC 不变。
+- [ ] migrate 到更大、更小、相等和零 `capacity` 的新数组实例，并覆盖截断有效元素的场景。
+- [ ] migrate 保留元素不产生元素级 RC 增减，截断元素恰好 release 一次。
+- [ ] 数组终结和 cycle collector 只遍历当前 `length`。
+- [ ] 非法负数、越界范围、满容量 insert 和 allocation 溢出按 contract panic。
+- [ ] `@runtime` 泛型声明、参数 carrier、数组返回值及赋值接管 `+1` 返回引用的 codegen 回归。
+- [ ] 补齐用例进行验证，并进行全量回归测试。
 
-第一阶段验证顺序：
+  验证顺序：
 
-```sh
-make runtime
-./build/bin/test_runtime
-make test
-make test-sanitize
-```
+  ```sh
+  make runtime
+  ./build/bin/test_runtime
+  make test
+  make test-sanitize
+  ```
+
+- [ ] 人工 Review。
 
 不得把测试产物放到 `/tmp` 或 `/private/tmp` 后执行。
 
 ## 9. 第二阶段：优化 `List<T>`
 
-第二阶段必须在第一阶段独立通过全量回归后开始，并在实施前再次 Review `List<T>` 的具体改造方案。
+### 9.1 实施
+
+- [ ] 第一阶段独立通过全量回归后，开始第二阶段。
+- [ ] 实施前再次 Review `List<T>` 的具体改造方案。
 
 拟使用关系：
 
-```text
-List.add     -> get_capacity + migrate（必要时）+ insert(length, item)
-List.remove  -> remove(index, 1) + migrate（满足缩容策略时）
-List.clear   -> remove(0, length)
-List.size    -> items.length()
-```
+- [ ] `List.add` 使用 `get_capacity + migrate（必要时）+ insert(length, item)`。
+- [ ] `List.remove` 使用 `remove(index, 1) + migrate（满足缩容策略时）`。
+- [ ] `List.clear` 使用 `remove(0, length)`。
+- [ ] `List.size` 使用 `items.length()`。
 
-第二阶段已确定：
+第二阶段已确定的实施项与备注：
 
-1. `List(items: T[!])` 利用 `std.collections` 数组 `clone()` 的复制语义创建私有 backing array，不直接保存调用方数组引用。
-2. `ListIterator<T>` 保持当前实现，本阶段不同步优化；后续根据实际需求单独评估。
+- [ ] `List(items: T[!])` 利用 `std.collections` 数组 `clone()` 的复制语义创建私有 backing array，不直接保存调用方数组引用。
+
+备注：`ListIterator<T>` 保持当前实现，本阶段不同步优化；后续根据实际需求单独评估。
 
 第二阶段实施前仍需单独确定：
 
-1. 是否删除 `List.count`，直接以 `items.length()` 作为元素数量。
-2. 自动 shrink 策略是否保持现状，是否需要避免容量临界点反复迁移。
-3. 是否增加批量 insert 或其他 range API；没有实际需求和基准前不提前扩展。
+- [ ] 是否删除 `List.count`，直接以 `items.length()` 作为元素数量。
+- [ ] 自动 shrink 策略是否保持现状，是否需要避免容量临界点反复迁移。
+- [ ] 是否增加批量 insert 或其他 range API；没有实际需求和基准前不提前扩展。
+- [ ] 补齐用例进行验证，并进行全量回归测试。
+- [ ] 人工 Review。
 
 ## 10. Review 清单
 
