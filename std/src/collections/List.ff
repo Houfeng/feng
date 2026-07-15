@@ -108,6 +108,7 @@ open type List<T> {
    * Inserts `item` at `index`, shifting subsequent elements right.
    * @param index - zero-based insertion position from zero through size()
    * @param item - the element to insert
+   * @panic if `index` is less than zero or greater than size()
    */
   open func insert(index: int, item: T) {
     if self.items.length() >= feng_array_storage_get_capacity(self.items) {
@@ -119,6 +120,7 @@ open type List<T> {
   /**
    * Returns the element at position `index`.
    * @param index - zero-based position
+   * @panic if `index` is less than zero or greater than or equal to size()
    */
   open func get(index: int): T {
     return self.items[index];
@@ -128,6 +130,7 @@ open type List<T> {
    * Replaces the element at position `index` with `item`.
    * @param index - zero-based position
    * @param item - new value to store
+   * @panic if `index` is less than zero or greater than or equal to size()
    */
   open func set(index: int, item: T) {
     self.items[index] = item;
@@ -136,6 +139,7 @@ open type List<T> {
   /**
    * Removes the element at position `index`, shifting subsequent elements left.
    * @param index - zero-based position of the element to remove
+   * @panic if `index` is less than zero or greater than or equal to size()
    */
   open func remove(index: int) {
     feng_array_storage_remove(self.items, index, (int)1);
