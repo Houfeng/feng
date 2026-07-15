@@ -143,7 +143,7 @@
 
 - C 符号：`FengArray *feng_array_storage_migrate(const FengGenericParamDescriptor *type, FengArray *array, intptr_t new_capacity)`
 - Feng 声明形态：`extern func feng_array_storage_migrate<T>(array: T[!], newCapacity: int): T[!];`
-- 用途：创建固定容量的新 backing array 并迁移有效元素；完整语义与生命周期规则见 `dev/feng-array-storage-dev.md`。
+- 用途：创建固定容量的新 backing array，不改变 RC 地转移保留前缀，正常释放截断后缀，并将旧数组设为逻辑空；旧数组、迁移元素和丢弃元素的完整语义统一见 `dev/feng-array-storage-dev.md` §5.4。
 
 ## 3. 维护规则
 

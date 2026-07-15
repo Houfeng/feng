@@ -529,8 +529,20 @@ void feng_array_storage_remove(const FengGenericParamDescriptor *type,
     storage->length = new_length;
 }
 
-/* Allocate fixed-capacity replacement storage, transfer the retained prefix
- * without RC changes, release any truncated suffix, and empty the old array. */
+/* Allocate fixed-capacity replacement storage and consume the old storage's
+ * initialized range without consuming the caller's array reference.
+ *
+ * Old array: keep its allocation, capacity, header, and reference count, but
+ * set its length to zero after a successful transfer. Any aliases still point
+ * to this now-empty array; stale payload bytes no longer represent Feng values.
+ *
+ * Moved prefix: copy [0, move_length) byte-for-byte to the same indices in the
+ * replacement and transfer slot ownership without default initialization,
+ * retain, or release. The replacement becomes the sole semantic owner.
+ *
+ * Discarded suffix: release [move_length, old_length) exactly once according
+ * to element kind. The slot-release helper clears managed references before a
+ * release that may synchronously expose the array to the cycle collector. */
 FengArray *feng_array_storage_migrate(
         const FengGenericParamDescriptor *type,
         FengArray *array,
@@ -558,6 +570,8 @@ FengArray *feng_array_storage_migrate(
         (unsigned char *)feng_array_payload_inline(storage);
     size_t i;
 
+    /* Elements truncated by the requested capacity do not move. Release each
+     * non-trivial slot once while the old initialized range is still visible. */
     if (storage->element_kind != FENG_VALUE_TRIVIAL) {
         for (i = move_length; i < storage->length; ++i) {
             feng_array_storage_release_slot(
@@ -565,14 +579,17 @@ FengArray *feng_array_storage_migrate(
                 old_payload + i * storage->element_size);
         }
     }
+    /* This raw copy transfers the retained prefix; it is intentionally not a
+     * Feng copy-initialization and therefore performs no element RC changes. */
     if (move_length > 0U) {
         memcpy(feng_array_payload_inline(new_storage),
                old_payload,
                move_length * storage->element_size);
     }
 
-    /* No lifecycle callback occurs between these stores: ownership of the
-     * copied prefix changes containers exactly once at this boundary. */
+    /* No lifecycle callback occurs between these stores. Emptying the source
+     * prevents its finalizer or collector traversal from releasing the moved
+     * prefix; publishing the destination length establishes its sole ownership. */
     storage->length = 0U;
     new_storage->length = move_length;
     return result;

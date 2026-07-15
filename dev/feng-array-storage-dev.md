@@ -310,6 +310,14 @@ moveLength = min(oldLength, newCapacity)
 
 只有 `newCapacity < oldLength` 时，第二个区间才非空，此时迁移同时完成缩容截断。若 `newCapacity >= oldLength`，全部有效元素都会迁移，任何元素都不会因迁移发生 RC 增减。
 
+对旧数组、迁移元素和丢弃元素的处理分别为：
+
+1. **旧数组**：迁移成功后旧数组实例的 `length` 固定设为 `0`；其 `capacity`、allocation 地址和数组引用计数均不由 `migrate` 修改。`migrate` 不释放调用方传入的旧数组引用，调用方仍须通过普通赋值路径替换并 release 该引用。旧 payload 中残留的字节不再表示 Feng 值，不得读取、释放或再次迁移。
+2. **迁移元素**：`[0, moveLength)` 的完整槽位字节复制到新数组的同一下标区间；元素的引用持有关系从旧槽位转移给新槽位，不执行默认初始化、copy-initialization、retain 或 release。物理字节在短暂时间内可能同时存在于新旧 payload，但语义上始终只有一份元素所有权，元素 RC 保持不变。
+3. **丢弃元素**：`[moveLength, oldLength)` 中的每个元素按 trivial、managed pointer 或 aggregate 的现有生命周期规则恰好释放一次。managed pointer 和 aggregate 槽位必须在可能触发同步 cycle collector 遍历的 release 前清除托管引用；释放后的旧槽位不再是有效 Feng 值，且不得在旧数组终结时再次释放。
+
+若其他引用仍指向旧数组实例，该引用不会重定向新数组，并会在迁移后观察到 `length == 0`。因此 `migrate` 只能用于不再被其他调用方按普通数组语义观察的私有 backing array；完整引用约束见第 7 节。
+
 执行逻辑：
 
 1. 校验 `newCapacity >= 0` 以及 allocation 大小无溢出。
@@ -324,7 +332,7 @@ moveLength = min(oldLength, newCapacity)
 
 3. `[0, moveLength)` 按槽位迁移处理：复制元素字节，引用持有关系从旧数组槽位转到新数组槽位，但不执行元素级 retain/release，元素 RC 不变。
 4. `[moveLength, oldLength)` 为 `newCapacity < oldLength` 时产生的缩容截断区间，元素被丢弃并按元素类别正常释放，元素 RC 相应减少。
-5. 旧数组的有效区间不再包含已迁移前缀；新数组最终设置 `length = moveLength`。
+5. 在不执行任何元素生命周期回调的连续状态更新中，设置 `oldArray.length = 0` 和 `newArray.length = moveLength`。此后旧数组的终结、cycle collector 遍历和普通索引均不会再触及已迁移或已丢弃的槽位。
 6. 返回新的 `+1` 数组引用。
 7. 调用方必须立即用返回值替换旧 backing array：
 

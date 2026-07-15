@@ -12,7 +12,10 @@ extern func feng_array_storage_insert<T>(array: T[!], index: int, value: T): voi
 @runtime
 extern func feng_array_storage_remove<T>(array: T[!], index: int, count: int): void;
 
-/** Moves the elements of a private writable array into storage with a new capacity. */
+/**
+ * Creates new-capacity storage, transfers the retained prefix without element
+ * RC changes, releases any truncated suffix, and leaves the source array empty.
+ */
 @runtime
 extern func feng_array_storage_migrate<T>(array: T[!], newCapacity: int): T[!];
 
