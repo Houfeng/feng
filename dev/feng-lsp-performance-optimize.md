@@ -1,6 +1,6 @@
 # Feng LSP 性能优化方案
 
-> 状态：实施中。Phase A、Phase B 的核心请求路径已完成，Phase C、Phase D、Phase E 部分完成；尚未达到本文“完成交付”标准。
+> 状态：LSP 性能优化实现与专项自动化验收完成。仓库全量回归已执行；既有 DAP 子进程和 VS Code 图标基线失败仍未通过，真实 VS Code 无 loading 体验需在重启 LSP 后由开发者最终确认。
 >
 > 关联文档：
 > - [Feng LSP 已交付方案](feng-lsp-delivered.md)：定义已交付 LSP 能力与语义行为基线。
@@ -431,7 +431,7 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 1. 更新当前文档文本、version 和行索引；
 2. 使该文档当前 parse 状态失效；
 3. 安排当前文件 parse；
-4. debounce 后安排新的 candidate 完整分析；
+4. `didOpen` 立即安排首次 candidate，连续 `didChange` / `didSave` debounce 后安排新的 candidate 完整分析；
 5. 标记更旧、尚未开始的 candidate 任务为过期。
 
 不得清除 `last_successful_analysis`。
@@ -446,6 +446,10 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 - 已完成结果若不新于已发布 generation，则不得覆盖已发布结果；
 - 最新 generation 在 debounce 后继续分析。
 
+本阶段连续编辑与保存的 debounce 固定为 75ms，从最后一次 `didChange` / `didSave`
+调度开始计算；首次 `didOpen` 不 debounce，以便 workspace 索引尽早在交互前发布。等待期间若出现更新 generation，只替换尚未开始的 candidate 并重新计时；
+不得阻塞协议读取或交互请求。该值是 LSP 调度参数，不改变编译器行为。
+
 ### 9.4 协议读取与交互执行
 
 协议读取不得被完整分析阻塞。实现阶段应将以下职责分离：
@@ -456,12 +460,21 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 
 所有跨线程共享对象必须不可变发布或通过明确锁保护。启用并行前必须审计现有 parser、semantic、symbol provider 公共调用的可重入性，并增加并发压力测试。
 
+请求队列必须保持通知可见性边界：请求只能在它前面的通知已应用、它后面的通知尚未应用时执行。
+优先级调整只允许发生在两个通知之间的连续请求区间内，禁止把后到的 `didChange` 提前到
+已排队请求之前。协议读取线程只负责 framing、登记 request / cancel 和入队；唯一交互执行线程
+负责修改 DocumentStore 与执行查询，后台分析线程只读取不可变 snapshot。
+
 ### 9.5 取消
 
 - 收到 `$/cancelRequest` 后，尚未执行的请求立即从队列移除。
 - 已开始的 LSP 自身扫描、候选构建和 JSON 构建必须定期检查取消状态。
 - 已进入不可取消的核心分析调用时，完成后不得发布已经倒退的 generation。
 - 取消属于正常控制流，不得记录为协议错误或清除缓存。
+
+取消响应使用 JSON-RPC / LSP `RequestCancelled` 错误码 `-32800`。协议读取线程收到取消后应立即
+标记对应 request；尚未执行的 request 从队列移除并立即响应，已开始的 request 在 LSP 自身的
+扫描和结果构建边界检查标记。已经完成或未知的 request id 忽略。
 
 ---
 
@@ -520,40 +533,40 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 
 - [x] 新增 workspace 级 `last_successful_analysis`。
 - [x] 将 Hover 的破坏式重建改为 candidate 成功后替换。
-- [ ] provider 改为成功后替换。
-- [ ] 增加分析失败、取消、编辑后缓存仍存在的协议测试。
+- [x] provider 改为成功后替换。
+- [x] 增加分析失败、取消、编辑后缓存仍存在的协议测试。
 
 ### Phase B：Hover / Completion 快路径
 
 - [x] Hover 先处理当前 token 的关键字、注解、内建类型和字面量。
-- [ ] 增加 DocumentStore token / line 索引，避免字面量从文件开头扫描。
+- [x] 增加 DocumentStore token / line 索引，避免 position 从文件开头扫描。
 - [x] 修复 cached completion 候选计数。
-- [ ] 统一 completion item append 与去重接口。
+- [x] 统一 completion item append、精确计数与 label 去重接口。
 - [x] 禁止 Completion 请求同步调用完整 analysis。
 - [x] 移除 `g_completion_uri`，改为显式 request context。
 - [x] 保证 `foo. → 删除 → foo.` 等临时错误后的 Completion 恢复一致性。
 
 ### Phase C：持久 Workspace
 
-- [ ] manifest、project、dependency 和 provider 提升到 workspace 生命周期。
-- [ ] 实现统一分层 SymbolIndex 查询接口。
+- [x] manifest、project、dependency 和 provider 提升到 workspace 生命周期。
+- [x] 实现 current parse、last successful、source module index 与 dependency provider 分层查询。
 - [x] 每个文档只缓存当前版本 parse。
 - [x] 支持 Incremental text synchronization。
 
 ### Phase D：调度与取消
 
-- [ ] 分离协议读取、交互执行和后台分析。
-- [ ] 实现请求优先级、debounce 和 generation 合并。
-- [ ] 实现 `$/cancelRequest`。
-- [ ] 完成核心公开 API 可重入性审计和并发压力测试。
+- [x] 分离协议读取、交互执行和后台分析。
+- [x] 实现请求优先级、debounce 和 generation 合并。
+- [x] 实现 `$/cancelRequest`。
+- [x] 完成核心公开 API 可重入性审计和并发压力测试。
 - [x] 将 Diagnostics 切换为后台结果消费。
 
 ### Phase E：性能验收
 
 - [x] 新增独立 LSP 协议性能基准，不修改既有测试用例。
-- [ ] 覆盖冷启动、热缓存、编辑后请求、连续输入和分析失败。
-- [ ] 执行编译器与 VS Code 插件全量回归测试。
-- [ ] 将 §3 指标加入回归门槛。
+- [x] 覆盖冷启动、热缓存、编辑后请求、连续输入和分析失败。
+- [x] 执行编译器与 VS Code 插件全量回归测试并记录既有失败。
+- [x] 将 §3 指标加入回归门槛。
 - [ ] 在真实 VS Code 中确认不再出现可感知 Completion / Hover loading。
 
 ---
@@ -580,7 +593,7 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 
 | 文件或目录 | 原因 |
 | --- | --- |
-| `Makefile` | `TEST_CLI_SUPPORT_SRCS` 当前显式列出 `server.c`、`runtime.c` 和 `main.c`；文件重命名、新模块及线程链接选项必须同步 |
+| `Makefile` | `TEST_CLI_SUPPORT_SRCS` 显式列出 `server.c`、`service.c`、新增 LSP 模块和 `main.c`；模块及线程链接选项必须同步 |
 | `test/cli/` | 覆盖 last-successful、失败保留、generation、取消、Completion / Hover 快路径等协议行为 |
 | `scripts/` 或新增性能测试目录 | 从 stdio 协议层运行真实 LSP 性能基准 |
 | `dev/feng-lsp-performance-optimize.md` | 更新任务状态、实测结果和最终验收结论 |
@@ -638,8 +651,8 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - [x] 当前文本与旧缓存不一致时不会使用旧绝对位置返回错误结果。
 - [x] Completion 候选计数与实际 JSON 项一致。
 - [x] 临时不完整输入恢复后，Hover / Completion 与冷启动相同状态结果一致。
-- [ ] 请求取消、generation 合并和过期结果丢弃有效。
-- [ ] §3 的全部性能门槛通过自动化基准。
+- [x] 请求取消、generation 合并和过期结果丢弃有效。
+- [x] §3 的全部性能门槛通过自动化基准。
 - [ ] 全量回归测试通过。
 
 ### 16.1 2026-07-16 实施记录
@@ -648,7 +661,7 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 
 - 将 LSP `runtime.c/.h`、类型和函数统一重命名为 `service.c/.h`、`FengLspService` 和 `feng_lsp_service_*`；
 - 增加后台 candidate 分析线程，只在完整分析成功且 generation 更新时替换唯一的 `last_successful_analysis`，失败分析不清除已有成功缓存；
-- 将 workspace 源码模块索引、依赖 symbol provider 与完整语义分析并行构建，并分别以 generation 保护后发布；
+- 将 workspace 源码模块索引与完整语义分析并行构建；dependency provider 在完整语义分析前发布，避免两者并发访问相同编译器缓存产物，并分别以 generation 保护发布；
 - Hover 将关键字、注解、内建类型和字面量提升到当前文本快路径，字面量使用文档 token 索引；
 - Completion 移除同步完整分析和全局请求 URI，使用当前 parse、已发布分析、源码模块索引和依赖 symbol provider；
 - 支持 UTF-16 position 的 Incremental text synchronization；
@@ -679,6 +692,64 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - Incremental change、Full change 与新启动 LSP 在相同文本和位置下返回相同候选。
 
 该测试作为独立 LSP 协议回归工具保留，通过 `python3 scripts/test_lsp_completion_recovery.py` 手动执行，不作为正常 Makefile 工作流的依赖。修复后本机 200 次性能复测：Hover P95 0.036ms，Completion P95 0.084ms，全部交互样本 P99 0.104ms。
+
+真实 VS Code 在未重启旧 LSP 进程时仍表现为修复前行为；执行 `Feng: Restart Language Server`
+后恢复正常，确认新服务进程中的 `foo.` 成员补全可恢复。该现象不表示失败分析覆盖了最后成功缓存，
+但说明本地替换 `feng` 可执行文件后必须重启既有 LSP 进程才能加载新实现。
+
+### 16.3 最终实施收敛
+
+本方案剩余实现按以下边界收敛，不扩展到核心编译器：
+
+1. 交互路径取消每次请求都会进入的 10ms / 40ms 广泛冷启动等待；纯文本 Completion 在 parse / index 前返回，
+   Signature Help、Completion Resolve、Definition、References 与 Rename 不再同步构建 project、
+   dependency provider 或完整语义分析。仅当冷启动请求已经证明需要尚未发布的 import/provider 索引时，
+   允许一次最大 8ms（provider use-path 回退最大 16ms）的有界就绪窗口；普通 `foo.`、字面量、热缓存和编辑后请求不进入该窗口。
+2. workspace provider 与 source module index 只在首次缺失或显式刷新时后台构建，candidate 完整成功后
+   替换旧 published 对象；普通输入只更新文档 snapshot 并 debounce 完整分析。
+3. 协议读取、交互执行和后台分析分离；请求队列遵守 §9.4 的通知边界，支持优先级、取消、
+   75ms debounce、generation 合并和过期结果保护。
+4. DocumentStore 增加当前文本行索引；Completion 使用统一 builder 维护 JSON、数量和 label 去重。
+5. 新增不进入正常 Makefile 工作流的独立 stdio 协议测试，覆盖失败缓存保留、取消、连续输入、
+   并发压力以及 1 万 / 10 万 / 100 万行性能矩阵；正常 Makefile 工作流不得依赖 Python。
+
+### 16.4 2026-07-17 最终验收结果
+
+最终实现补充完成：
+
+- Definition、References、Prepare Rename、Rename、Signature Help 和 Completion Resolve 请求不再同步执行完整分析、project 打开或 dependency provider 构建；
+- `didOpen` 立即调度首次 workspace candidate，普通 `didChange` 使用固定 75ms debounce，只复制 debounce 后的最新文档 snapshot；
+- 协议读取线程持续收包，interaction worker 按通知可见性边界和请求优先级执行，后台 analyzer 只发布更新 generation 的成功 candidate；
+- queued cancellation 立即移除请求并返回 `-32800`，已开始的核心 semantic 调用按 §2.3 的边界在调用返回后观察取消；
+- source module index、dependency provider 与 last successful 都采用 candidate 成功后替换；manifest、provider 或分析刷新失败保留旧 published 对象；
+- dependency provider 与完整语义分析串行使用编译器缓存产物，避免并发构建产生文件级竞态；source module index 继续基于独立只读 snapshot 并行构建；
+- `DocumentStore` 使用 UTF-16 行索引，Completion builder 使用请求内 label hash、精确 item count 和显式 request context；
+- `FENG_LSP_TRACE=1` 可输出 method、id、version、generation、duration、query path、cache hit、cancel、同步 I/O 和完整分析标记，默认关闭。
+
+普通优化构建的最终协议性能结果：
+
+| 指标 | 最终实测 |
+| --- | ---: |
+| `std_test` Hover P50 / P95 / P99 / Max | 0.027 / 0.036 / 0.048 / 0.057ms |
+| `std_test` Completion P50 / P95 / P99 / Max | 0.021 / 0.029 / 0.029 / 0.031ms |
+| Definition P95 | 0.340ms |
+| queued cancellation 观测 | 0.135ms |
+| 1 万 / 10 万 / 100 万行矩阵全部交互 P99 / Max | 0.229 / 0.362ms |
+| 100 万行后台分析 CPU | 0.045s |
+| 100 万行进程 RSS | 36704KiB |
+
+专项测试全部通过：
+
+- `scripts/test_lsp_completion_recovery.py`；
+- `scripts/test_lsp_cache_retention.py`；
+- `scripts/test_lsp_scheduler.py`，包括 200 个低优先级 References、Hover 抢占和 queued cancellation；
+- `scripts/run_lsp_performance.py`；
+- `scripts/run_lsp_performance_matrix.py`；
+- 独立 LSP-only 入口执行 `test/cli/test_cli.c` 中全部既有 LSP 用例，连续三次通过，未修改既有测试文件。
+
+仓库回归结果：编译器 archive、lexer、parser、semantic、runtime、codegen、debug、symbol 单元测试通过；smoke 88 项、CLI direct / project、`std_test`、`fcts` 542 项和 perf constraints 全部通过。`make test-sanitize` 仍在既有 DAP 子进程断言 `test/cli/test_cli.c:431` 失败，错误为 `process exited with status -1 (no such process)`，发生在 LSP 用例之前。VS Code formatter、diagnostics、debug、syntax 通过；既有 `debug-smoke.test.js:464` 和 `icon.test.js:39` 失败。上述失败不在本轮 LSP 变更路径内，因此不修改其测试或生产实现。
+
+真实 VS Code 已确认重启 LSP 后 `foo. → 删除 → foo.` 恢复；“不再出现可感知 loading”仍需开发者用本次最终二进制重启 LSP 后完成最后一项人工体验确认。
 
 ---
 

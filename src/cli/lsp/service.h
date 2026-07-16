@@ -13,8 +13,8 @@ FengLspService *feng_lsp_service_create(void);
 /* Releases an LSP service and all workspace state owned by it. */
 void feng_lsp_service_free(FengLspService *service);
 
-/* Dispatches one complete JSON-RPC payload. */
-bool feng_lsp_service_handle_payload(FengLspService *service,
+/* Copies one complete JSON-RPC payload into the interaction request queue. */
+bool feng_lsp_service_submit_payload(FengLspService *service,
                                      FILE *output,
                                      const char *payload,
                                      size_t payload_length,

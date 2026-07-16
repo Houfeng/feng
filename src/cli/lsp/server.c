@@ -167,7 +167,7 @@ int feng_lsp_server_run(FILE *input, FILE *output, FILE *errors) {
                 feng_lsp_service_free(service);
                 return 1;
             }
-            if (!feng_lsp_service_handle_payload(service,
+            if (!feng_lsp_service_submit_payload(service,
                                                  output,
                                                  payload,
                                                  content_length,

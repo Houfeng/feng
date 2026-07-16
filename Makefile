@@ -34,7 +34,8 @@ TEST_DEBUG_SRCS := $(wildcard test/debug/*.c)
 TEST_CLI_SRCS := $(wildcard test/cli/*.c)
 TEST_SYMBOL_SRCS := $(wildcard test/symbol/*.c)
 TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
-	src/cli/lsp/server.c src/cli/lsp/service.c src/cli/lsp/main.c \
+	src/cli/lsp/server.c src/cli/lsp/service.c src/cli/lsp/scheduler.c \
+	src/cli/lsp/document_store.c src/cli/lsp/trace.c src/cli/lsp/main.c \
 	src/cli/dap/main.c \
 	src/cli/project/common.c src/cli/project/init.c src/cli/project/manifest.c \
 	src/cli/project/build.c \
