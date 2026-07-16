@@ -59,7 +59,7 @@
 - `src/parser/`
 - `src/semantic/`
 - `src/codegen/`
-- `src/runtime/`
+- `src/runtime/`（Feng 语言运行时）
 - `src/symbol/` 及 `.ft` / `.fb` 格式
 - 编译器既有语义、诊断码和构建行为
 
@@ -76,6 +76,28 @@
 5. 已进入核心 semantic 调用后能够在函数内部立即取消。
 
 这些限制不得通过返回未经证明的候选或错误 Hover 来掩盖。
+
+### 2.4 LSP 命名约束
+
+`runtime` 专用于 Feng 语言运行时。LSP 自身不得继续使用 `runtime` 作为模块、类型、变量或日志概念，避免与 `src/runtime/` 及 Feng runtime ABI 混淆。
+
+LSP 统一使用以下职责命名：
+
+| 名称 | 职责 |
+| --- | --- |
+| `server` | stdio framing、服务进程生命周期和顶层循环 |
+| `service` | LSP capability、JSON-RPC 分发和服务级状态 |
+| `workspace` | project、document、index、analysis 与 generation 状态 |
+| `request_context` | 单次请求的 URI、取消状态和响应构建上下文 |
+
+实施时执行以下重命名：
+
+- `src/cli/lsp/runtime.c` → `src/cli/lsp/service.c`
+- `src/cli/lsp/runtime.h` → `src/cli/lsp/service.h`
+- `FengLspRuntime` → `FengLspService`
+- `feng_lsp_runtime_*` → `feng_lsp_service_*`
+
+现有 `server.c` 保持传输层职责，不把 service 状态和全部请求实现重新并入 `server.c`。新增 LSP 标识符禁止使用 `runtime`。
 
 ---
 
@@ -180,10 +202,10 @@ manifest、依赖解析和 symbol provider 也只能成功后替换：
 
 ## 5. LSP Workspace 架构
 
-推荐将当前集中在 `runtime.c` 的状态拆分为以下职责：
+推荐将当前集中在 LSP service 实现中的状态拆分为以下职责：
 
 ```text
-FengLspRuntime
+FengLspService
 ├── ProtocolReader
 ├── RequestScheduler
 └── WorkspaceRegistry
@@ -528,7 +550,7 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 
 | 模块 | 职责 |
 | --- | --- |
-| `runtime.c` | JSON-RPC 分发和 capability，不继续承载全部缓存实现 |
+| `service.c` | JSON-RPC 分发和 capability，不继续承载全部缓存实现 |
 | `workspace.*` | workspace 配置、generation 和长期对象所有权 |
 | `document_store.*` | 当前文本、version、行索引、当前 parse |
 | `analysis_cache.*` | last-successful / candidate 构建与原子替换 |
@@ -538,7 +560,7 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 | `completion.*` | Completion context、候选模型、排序和响应 |
 | `trace.*` | 性能计数和基准事件 |
 
-不得为了减少文件数量继续把新增状态全部堆积在 `runtime.c`。
+不得为了减少文件数量继续把新增状态全部堆积在 `service.c`。
 
 ---
 
