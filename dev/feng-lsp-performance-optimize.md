@@ -50,6 +50,10 @@
 
 - `src/cli/lsp/` 下的协议处理、文档管理、缓存、查询、调度与响应构建。
 - `editors/feng-vscode/` 中与标准 LSP capability、同步方式和性能观测直接相关的配置。
+- `Makefile` 中 CLI 测试显式 LSP 源文件清单，以及调度线程所需的编译 / 链接选项。
+- `test/cli/` 中的 LSP 协议正确性测试；若需修改已有测试用例，必须先取得人工批准。
+- `scripts/` 或新增测试目录中的独立 LSP 协议性能基准。
+- `dev/` 中本方案的实施状态与验收结果。
 - 新增 LSP 专用模块、数据结构、测试和性能基准。
 - 通过现有公开 API 调用 lexer、parser、semantic 和 symbol provider。
 
@@ -561,6 +565,17 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 | `trace.*` | 性能计数和基准事件 |
 
 不得为了减少文件数量继续把新增状态全部堆积在 `service.c`。
+
+除 `src/cli/lsp/` 外，完整交付预计还需要修改：
+
+| 文件或目录 | 原因 |
+| --- | --- |
+| `Makefile` | `TEST_CLI_SUPPORT_SRCS` 当前显式列出 `server.c`、`runtime.c` 和 `main.c`；文件重命名、新模块及线程链接选项必须同步 |
+| `test/cli/` | 覆盖 last-successful、失败保留、generation、取消、Completion / Hover 快路径等协议行为 |
+| `scripts/` 或新增性能测试目录 | 从 stdio 协议层运行真实 LSP 性能基准 |
+| `dev/feng-lsp-performance-optimize.md` | 更新任务状态、实测结果和最终验收结论 |
+
+VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full 或 Incremental text synchronization。除非实测发现客户端适配或观测需求，预计无需修改 `editors/feng-vscode/` 的生产代码；仍需执行其全量回归测试。
 
 ---
 
