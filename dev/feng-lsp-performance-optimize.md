@@ -1,0 +1,619 @@
+# Feng LSP 性能优化方案
+
+> 状态：设计方案，尚未实施。
+>
+> 关联文档：
+> - [Feng LSP 已交付方案](feng-lsp-delivered.md)：定义已交付 LSP 能力与语义行为基线。
+> - [Feng LSP 关键字与注解补全优化](feng-lsp-optimize.md)：定义关键字、注解、Snippet、内建类型与字面量的具体补全和 Hover 行为。
+>
+> 本文档是 Feng LSP 性能架构的主规范。关联文档只定义功能行为，不重复定义缓存、调度、请求优先级和性能验收规则。
+
+---
+
+## 1. 背景与结论
+
+当前 VS Code 扩展仅使用标准 Language Client，明显的 `loading` 来自 LSP 服务端同步执行昂贵分析，不是插件 UI 自身造成。
+
+在 `std_test`（约 3.2 万行）上通过真实 LSP 协议得到的本地基线如下。该数据用于确认瓶颈数量级，正式实施时必须由自动化基准重新采集：
+
+| 场景 | 当前耗时 |
+| --- | ---: |
+| 首次 Hover 方法参数内建类型 | 约 1609ms |
+| 相同位置再次 Hover | 约 765ms |
+| 编辑后首次 Hover 字符串字面量 | 约 821ms |
+| 缓存命中的字面量 Hover | 约 0.13ms |
+| 输入参数类型 Completion，第一次 | 约 775ms |
+| 输入参数类型 Completion，第二次 | 约 777ms |
+
+已确认的主要原因：
+
+1. Hover 在识别内建类型和字面量之前，先尝试整项目语义分析和符号缓存查询。
+2. 当前 Hover 缓存会在新分析开始前被释放；分析失败时最近一次成功结果也随之丢失。
+3. 任意打开文档变化都会通过全局 `document_revision` 使 Hover 缓存失效。
+4. Completion 不复用 Hover 的成功语义分析，每次请求都可能重新执行整项目分析。
+5. cached completion 已经追加关键字或内建类型候选时，没有同步更新 `item_count`，上层会把有效结果当作空结果并继续慢路径。
+6. LSP 服务端串行处理消息，`$/cancelRequest` 未实际取消请求；连续输入会使慢 Completion 排队。
+7. manifest、依赖、provider、workspace `.ft` 和当前文件解析仍可能在交互请求路径重复构建。
+
+本方案结论：
+
+- 交互请求必须只读取当前文档状态、持久 workspace 索引和最近一次成功语义分析，不得同步执行整项目分析。
+- workspace 生命周期内只保留**最后一次成功语义分析**，不保存多个历史版本。
+- 新分析使用临时 candidate 构建，只有成功后才能原子替换最后一次成功结果。
+- 暂不修改核心编译器，可以消除当前主要卡顿并使常见 Hover / Completion 达到无体感延迟；脏代码下最新语义推导的精确度仍受现有 parser / semantic 能力限制。
+
+---
+
+## 2. 范围与边界
+
+### 2.1 本阶段允许修改
+
+- `src/cli/lsp/` 下的协议处理、文档管理、缓存、查询、调度与响应构建。
+- `editors/feng-vscode/` 中与标准 LSP capability、同步方式和性能观测直接相关的配置。
+- 新增 LSP 专用模块、数据结构、测试和性能基准。
+- 通过现有公开 API 调用 lexer、parser、semantic 和 symbol provider。
+
+### 2.2 本阶段禁止修改
+
+- `src/lexer/`
+- `src/parser/`
+- `src/semantic/`
+- `src/codegen/`
+- `src/runtime/`
+- `src/symbol/` 及 `.ft` / `.fb` 格式
+- 编译器既有语义、诊断码和构建行为
+
+不得在 LSP 中复制第二套完整 parser 或 semantic，不得为某个具体类型、成员名或项目增加特判。
+
+### 2.3 本阶段不承诺
+
+由于不修改核心编译器，本阶段不承诺：
+
+1. 增量语义分析；后台成功分析仍会执行完整项目分析。
+2. parser 失败时返回完整容错 AST。
+3. semantic 出现普通源码错误时返回部分语义模型。
+4. 对尚未成功分析的新复杂表达式立即给出完全精确的类型推导和成员补全。
+5. 已进入核心 semantic 调用后能够在函数内部立即取消。
+
+这些限制不得通过返回未经证明的候选或错误 Hover 来掩盖。
+
+---
+
+## 3. 性能目标与验收门槛
+
+以下指标均指 LSP 服务端从收到完整请求到写出完整响应的处理时间，不包含 VS Code UI 展示延迟：
+
+| 指标 | 目标 |
+| --- | ---: |
+| 内建类型、字面量、关键字、注解 Hover P95 | ≤ 5ms |
+| 缓存命中的普通 Hover P95 | ≤ 15ms |
+| 普通 Completion P95 | ≤ 20ms |
+| 所有交互请求 P99 | ≤ 50ms |
+| 已排队过期请求的取消处理 | ≤ 5ms |
+| 交互请求同步磁盘 I/O | 0 次 |
+| 交互请求同步整项目分析 | 0 次 |
+| 编辑、失败或取消导致最后成功缓存变空 | 0 次 |
+| 返回使用错误文档版本的精确语义结果 | 0 次 |
+
+正式性能基准至少覆盖：
+
+- 1 万行小项目；
+- 10 万行中型项目；
+- 100 万行大型项目；
+- 冷启动、热请求、一次编辑后请求、连续快速输入、语法错误和语义错误；
+- P50、P95、P99、最大值、内存峰值、缓存命中率和后台分析 CPU 时间。
+
+性能测试失败必须视为回归，不能只检查平均值。
+
+---
+
+## 4. 核心不变量
+
+### 4.1 只保留最后一次成功语义分析
+
+每个 workspace 只持有一个长期缓存：`last_successful_analysis`。
+
+```text
+current_documents          当前编辑器文本，每个文档只保留当前版本
+current_parse              每个打开文档最多一个当前版本解析结果
+last_successful_analysis   每个 workspace 唯一的成功语义缓存
+candidate_analysis         正在构建的临时对象，不属于历史缓存
+```
+
+不得保存语义分析历史版本队列，也不得为了位置映射长期保留多个旧语义快照。
+
+### 4.2 成功后替换，失败时保留
+
+必须遵守以下状态转换：
+
+```text
+尚无成功分析
+    ├── candidate 成功 ──> last_successful = candidate
+    └── candidate 失败 ──> 仍无成功分析
+
+已有 last_successful
+    ├── candidate 成功且 generation 更新
+    │       └── 原子替换 last_successful
+    └── candidate 失败 / 取消 / generation 不新于已发布结果
+            └── 丢弃 candidate，last_successful 保持不变
+```
+
+一旦 `last_successful_analysis != NULL`，除 workspace 关闭或 LSP 退出外，不允许因为以下事件变回 `NULL`：
+
+- `didOpen`、`didChange`、`didSave`、`didClose`；
+- parser 或 semantic 报错；
+- candidate 被取消或过期；
+- manifest / dependency 刷新失败；
+- provider 重建失败；
+- 内存分配失败。
+
+### 4.3 替换期间的短暂生命周期重叠
+
+并发请求可能仍在读取旧分析。成功替换时允许旧对象和新对象短暂同时存活，但旧对象只用于完成已经开始的读请求，引用归零后立即释放。这是并发内存安全，不是多版本缓存。
+
+推荐使用不可变 published 对象和引用计数：
+
+```c
+candidate = build_analysis(generation);
+if (candidate != NULL && candidate->generation > published->generation) {
+    old = atomic_exchange(&published, candidate);
+    release(old);
+} else {
+    release(candidate);
+}
+```
+
+若实现阶段继续使用单请求线程，也必须保持同样的“先成功构建、后替换”语义，禁止先 `session_dispose` 再构建。
+
+### 4.4 Provider 使用相同事务语义
+
+manifest、依赖解析和 symbol provider 也只能成功后替换：
+
+1. 使用临时对象构建新 provider；
+2. 完整加载依赖 bundle 和 workspace `.ft`；
+3. 构建成功后替换旧 provider；
+4. 构建失败时继续使用旧 provider。
+
+禁止先释放 `cached_provider` 再尝试创建新 provider。
+
+---
+
+## 5. LSP Workspace 架构
+
+推荐将当前集中在 `runtime.c` 的状态拆分为以下职责：
+
+```text
+FengLspRuntime
+├── ProtocolReader
+├── RequestScheduler
+└── WorkspaceRegistry
+    └── FengLspWorkspace
+        ├── DocumentStore
+        ├── WorkspaceConfig
+        ├── SymbolIndex
+        ├── ParseCache
+        ├── LastSuccessfulAnalysis
+        └── BackgroundAnalyzer
+```
+
+### 5.1 DocumentStore
+
+每个打开文档只保存当前版本：
+
+- URI 与规范化路径；
+- LSP document version；
+- 当前文本；
+- 行起始位置索引，用于 UTF-16 position 与 byte offset 转换；
+- dirty 状态；
+- 当前 parse generation；
+- 最多一个当前版本 AST。
+
+第一阶段可继续保存完整文本，但应把 `textDocumentSync.change` 从 Full 切换到 Incremental，并在 LSP 层应用 range edit，避免每次输入复制和传输整个文档。
+
+### 5.2 WorkspaceConfig
+
+workspace 生命周期内持久保存：
+
+- manifest 路径与内容指纹；
+- source roots；
+- output / symbols root；
+- 已解析依赖路径；
+- package / module 映射；
+- pointer size 等稳定编译选项。
+
+交互请求不得向上遍历目录查找 manifest，不得重新打开 project，不得重新解析依赖。
+
+### 5.3 SymbolIndex
+
+符号查询使用分层视图，但不复制语义定义：
+
+```text
+current document declarations
+        ↓ 覆盖
+workspace .ft symbols
+        ↓ 覆盖
+dependency bundle symbols
+```
+
+请求方只消费统一查询接口，不关心符号来自哪一层。workspace `.ft` 缺失时仍可使用最后成功分析和依赖 bundle；不得在请求路径触发外部构建。
+
+### 5.4 ParseCache
+
+每个打开文档最多保存一个当前版本成功 AST：
+
+- 文本版本变化后，旧 AST 不得作为当前版本精确 AST 使用；
+- 当前版本解析成功后替换该文档 AST；
+- 当前版本解析失败时可以保留上次成功语义缓存，但不能把旧 AST 的绝对 offset 直接应用到当前文本；
+- completion repair 结果只服务单次请求，不进入长期历史缓存。
+
+### 5.5 LastSuccessfulAnalysis
+
+唯一成功语义缓存至少记录：
+
+- workspace generation；
+- 分析所使用的每个源文件内容或内容指纹；
+- `FengLspAnalysisSession`；
+- 与 session 同寿命的 imported module cache；
+- 是否可用于指定文档的精确位置查询。
+
+LastSuccessfulAnalysis 只读发布。请求处理不能修改其中 AST、semantic analysis 或 imported module 数据。
+
+---
+
+## 6. 文档版本与查询正确性
+
+只保留最后一次成功分析时，必须明确“缓存存在”和“缓存与当前文本完全一致”是两个不同事实。
+
+### 6.1 精确查询
+
+当当前文档内容指纹与 `last_successful_analysis` 中对应源文件一致时，可以使用缓存 AST 的位置和语义事实精确查询。
+
+### 6.2 当前文本查询
+
+以下能力直接基于当前文本或当前 token，不依赖语义缓存版本：
+
+- 关键字 Hover；
+- 注解 Hover；
+- 内建类型 Hover；
+- 字符串、整数和浮点字面量 Hover；
+- 关键字、注解和内建类型 Completion；
+- import 路径前缀；
+- 当前输入前缀和 Completion 上下文分类。
+
+### 6.3 当前 AST 加持久符号索引
+
+当前文档解析成功但完整语义分析尚未成功时，可以使用：
+
+- 当前 AST 中的参数、局部绑定、显式类型注解和声明；
+- 持久 workspace / dependency SymbolIndex；
+- last successful 中与当前位置无关的稳定全局声明事实。
+
+不得把旧 AST 的 source pointer、token offset 或局部 binding 指针应用到当前 AST。
+
+### 6.4 无法安全对应时
+
+如果查询依赖最新类型推导，而当前文档与最后成功分析不同且无法通过当前 AST 与稳定符号身份安全解析，则必须返回保守结果或 `null` / 空候选，等待后台分析成功。禁止为了避免空结果而返回可能错误的成员或类型。
+
+---
+
+## 7. Hover 优化路径
+
+Hover 必须从低成本、与当前文本一致的查询开始：
+
+```text
+1. 解析 URI、position，取得当前 document 与 offset
+2. 当前 token 分类
+   ├── keyword
+   ├── annotation
+   ├── builtin type / alias
+   └── integer / float / string literal
+3. 当前版本 AST 查询
+4. last_successful 精确语义查询（内容指纹一致）
+5. 当前 AST + 持久 SymbolIndex 查询
+6. 无安全结果时返回 null
+```
+
+约束：
+
+- 步骤 2 命中后必须立即返回，不能先构建 analysis 或 provider。
+- 字面量定位不得每次从文件开头扫描到光标；DocumentStore 应提供当前 token 索引或等价的局部定位能力。
+- 步骤 3 至 5 只能读取已存在对象，不能触发 manifest、依赖或整项目分析。
+- 现有功能文档定义的 Hover 文本和 Markdown 格式保持不变。
+
+---
+
+## 8. Completion 优化路径
+
+Completion 必须以当前输入为中心，禁止把完整语义分析作为请求 fallback：
+
+```text
+1. 解析当前 CompletionContext
+2. annotation / keyword / builtin type 等纯上下文候选
+3. 当前 AST 的参数、局部绑定、self 和当前模块声明
+4. 持久 SymbolIndex 的 workspace / dependency 候选
+5. last_successful 中版本一致的类型事实和成员
+6. 必要时仅对当前文本做现有 repair + 单文件 parse
+7. 返回候选；后台分析独立进行
+```
+
+必须移除以下交互路径行为：
+
+- Completion 请求内调用 `build_analysis_session`；
+- repair Completion 请求内再次执行整项目分析；
+- 同一文档版本重复打开 project、解析依赖或创建 provider；
+- 因 `item_count` 未更新而丢弃已经生成的候选；
+- 通过全局 `g_completion_uri` 保存请求状态。
+
+### 8.1 Completion 候选计数
+
+候选构建必须使用统一 append 接口，由接口同时完成：
+
+- JSON 追加；
+- 候选总数更新；
+- label 去重；
+- 可选来源和排序信息记录。
+
+禁止调用方分别维护 JSON 是否有项和 `item_count`，避免两者再次不一致。
+
+### 8.2 CompletionItem Resolve
+
+初始 Completion 响应只返回排序和展示所需的最小字段。文档注释、完整签名、额外 import edit 等非首屏必要信息通过 `completionItem/resolve` 按需计算。
+
+resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依赖“上一次 Completion 的第 N 项”或全局请求变量。
+
+### 8.3 排序与质量
+
+性能优化不得降低候选质量。统一候选模型应为未来排序保留以下字段：
+
+- 当前作用域距离；
+- 精确前缀 / 模糊匹配分数；
+- local、current module、imported module、dependency 等来源；
+- 静态 / 实例成员适用性；
+- 可见性；
+- 是否需要自动 import。
+
+本阶段不在本文重复定义具体排序算法；排序行为应在后续独立功能规范中定义。
+
+---
+
+## 9. 后台分析与调度
+
+### 9.1 请求分类
+
+调度器至少区分：
+
+| 优先级 | 请求 |
+| --- | --- |
+| 最高 | Completion、Hover、Signature Help |
+| 高 | Definition、Prepare Rename |
+| 中 | References、Rename |
+| 低 | Diagnostics、workspace 索引刷新、完整 candidate 分析 |
+
+### 9.2 文档变化
+
+`didOpen` / `didChange` 只执行：
+
+1. 更新当前文档文本、version 和行索引；
+2. 使该文档当前 parse 状态失效；
+3. 安排当前文件 parse；
+4. debounce 后安排新的 candidate 完整分析；
+5. 标记更旧、尚未开始的 candidate 任务为过期。
+
+不得清除 `last_successful_analysis`。
+
+### 9.3 Candidate 合并
+
+连续输入期间只保留最新待分析 generation：
+
+- 一个完整分析正在运行时，不再并行启动第二个完整分析；
+- 中间 generation 只要尚未开始就直接丢弃；
+- 正在运行的核心分析本阶段不强制中断；只要成功且 generation 新于已发布结果，即使当前文档已有更新 generation，也先替换 last successful；
+- 已完成结果若不新于已发布 generation，则不得覆盖已发布结果；
+- 最新 generation 在 debounce 后继续分析。
+
+### 9.4 协议读取与交互执行
+
+协议读取不得被完整分析阻塞。实现阶段应将以下职责分离：
+
+- 消息读取与 JSON-RPC request/cancel 登记；
+- 交互请求执行；
+- 后台完整分析。
+
+所有跨线程共享对象必须不可变发布或通过明确锁保护。启用并行前必须审计现有 parser、semantic、symbol provider 公共调用的可重入性，并增加并发压力测试。
+
+### 9.5 取消
+
+- 收到 `$/cancelRequest` 后，尚未执行的请求立即从队列移除。
+- 已开始的 LSP 自身扫描、候选构建和 JSON 构建必须定期检查取消状态。
+- 已进入不可取消的核心分析调用时，完成后不得发布已经倒退的 generation。
+- 取消属于正常控制流，不得记录为协议错误或清除缓存。
+
+---
+
+## 10. Diagnostics
+
+`didSave` 不得同步执行完整分析并阻塞后续交互请求。Diagnostics 与 candidate 分析共享后台结果：
+
+1. candidate 成功时发布对应 generation 的 diagnostics；
+2. candidate 因源码错误失败时，仍发布本次收集到的 parse / semantic diagnostics，但不替换 `last_successful_analysis`；
+3. diagnostics 必须携带或内部关联文档 version，过期结果不得覆盖更新版本；
+4. 发布 diagnostics 和发布成功语义缓存是两个独立动作。
+
+首次启动尚无成功分析时，Hover / Completion 仍可使用当前文本、当前 parse 和 SymbolIndex，不等待 diagnostics。
+
+---
+
+## 11. 内存与生命周期
+
+长期对象上限：
+
+- 每个打开文档一个当前文本；
+- 每个打开文档最多一个当前版本 AST；
+- 每个 workspace 一个 `last_successful_analysis`；
+- 每个 workspace 一个持久 SymbolIndex / provider；
+- 每个 workspace 最多一个正在构建的 candidate。
+
+替换瞬间允许旧 published 与新 candidate 短暂重叠。旧 published 在最后一个读者释放后立即回收。
+
+可淘汰的派生数据，例如模糊搜索临时表、JSON buffer 和 repair AST，应使用明确容量或请求生命周期，不得通过清除 `last_successful_analysis` 回收内存。
+
+---
+
+## 12. 可观测性
+
+必须为每个 LSP 请求记录可聚合的性能事件，默认不得污染 stdout 协议流：
+
+- method；
+- request id；
+- document version；
+- workspace generation；
+- 总耗时；
+- query path（text / current AST / last successful / symbol index / repair）；
+- cache hit / miss；
+- 候选数量或 Hover 是否命中；
+- 是否取消或因 generation 过期丢弃；
+- 是否发生同步 I/O；
+- 是否错误进入完整分析。
+
+性能日志必须通过显式 trace / benchmark 开关启用，并写入 stderr 或独立日志。生产默认模式只保留低开销计数器。
+
+---
+
+## 13. 分阶段实施
+
+### Phase A：缓存正确性
+
+- [ ] 新增 workspace 级 `last_successful_analysis`。
+- [ ] 将 Hover 的破坏式重建改为 candidate 成功后替换。
+- [ ] provider 改为成功后替换。
+- [ ] 增加分析失败、取消、编辑后缓存仍存在的协议测试。
+
+### Phase B：Hover / Completion 快路径
+
+- [ ] Hover 先处理当前 token 的关键字、注解、内建类型和字面量。
+- [ ] 增加 DocumentStore token / line 索引，避免字面量从文件开头扫描。
+- [ ] 修复 cached completion 候选计数。
+- [ ] 统一 completion item append 与去重接口。
+- [ ] 禁止 Completion 请求同步调用完整 analysis。
+- [ ] 移除 `g_completion_uri`，改为显式 request context。
+
+### Phase C：持久 Workspace
+
+- [ ] manifest、project、dependency 和 provider 提升到 workspace 生命周期。
+- [ ] 实现统一分层 SymbolIndex 查询接口。
+- [ ] 每个文档只缓存当前版本 parse。
+- [ ] 支持 Incremental text synchronization。
+
+### Phase D：调度与取消
+
+- [ ] 分离协议读取、交互执行和后台分析。
+- [ ] 实现请求优先级、debounce 和 generation 合并。
+- [ ] 实现 `$/cancelRequest`。
+- [ ] 完成核心公开 API 可重入性审计和并发压力测试。
+- [ ] 将 Diagnostics 切换为后台结果消费。
+
+### Phase E：性能验收
+
+- [ ] 新增独立 LSP 协议性能基准，不修改既有测试用例。
+- [ ] 覆盖冷启动、热缓存、编辑后请求、连续输入和分析失败。
+- [ ] 执行编译器与 VS Code 插件全量回归测试。
+- [ ] 将 §3 指标加入回归门槛。
+- [ ] 在真实 VS Code 中确认不再出现可感知 Completion / Hover loading。
+
+---
+
+## 14. 预计代码组织
+
+具体文件名可在实现前根据现有目录结构调整，但职责必须分离：
+
+| 模块 | 职责 |
+| --- | --- |
+| `runtime.c` | JSON-RPC 分发和 capability，不继续承载全部缓存实现 |
+| `workspace.*` | workspace 配置、generation 和长期对象所有权 |
+| `document_store.*` | 当前文本、version、行索引、当前 parse |
+| `analysis_cache.*` | last-successful / candidate 构建与原子替换 |
+| `symbol_index.*` | current / workspace / dependency 分层查询 |
+| `scheduler.*` | 优先级、后台任务、debounce、取消 |
+| `hover.*` | Hover 查询编排 |
+| `completion.*` | Completion context、候选模型、排序和响应 |
+| `trace.*` | 性能计数和基准事件 |
+
+不得为了减少文件数量继续把新增状态全部堆积在 `runtime.c`。
+
+---
+
+## 15. 测试要求
+
+### 15.1 正确性测试
+
+新增测试必须覆盖：
+
+- 首次成功分析后发生语法错误，Hover 仍可读取最后成功缓存；
+- 新 candidate 失败不会释放 last successful；
+- 更旧 generation 完成后不会覆盖更新 generation；
+- provider 刷新失败继续使用旧 provider；
+- 当前文本与缓存不同，不使用旧绝对 offset 返回错误局部符号；
+- 内建类型和字面量 Hover 不进入 analysis path；
+- Completion 已生成关键字 / 内建类型候选时不会错误进入慢路径；
+- 连续 Completion 中被取消的旧请求不执行；
+- `didSave` 不阻塞后续 Hover / Completion；
+- completion resolve 不依赖全局上一次请求状态。
+
+### 15.2 性能测试
+
+性能基准必须从协议层启动真实 `feng lsp --stdio`，不能只测内部 helper。每个场景至少预热、重复采样并输出分位数。
+
+测试编译结果只能放在工程 `build/` 或 `temp/`，不得输出到 `/tmp` 或 `/private/tmp` 后执行。
+
+### 15.3 回归测试
+
+变更完成后必须执行全量回归：
+
+- 编译器 `test/`；
+- Feng 兼容性测试 `fcts/`；
+- VS Code 插件测试；
+- 新增 LSP 性能基准。
+
+未经人工批准，不修改已有测试用例；性能覆盖通过新增测试或新增基准实现。
+
+---
+
+## 16. 完成交付标准
+
+只有同时满足以下条件，本方案才能标记完成：
+
+- [ ] Hover 和 Completion 请求路径不存在同步整项目分析。
+- [ ] 交互请求路径不存在 manifest、依赖和 provider 重建。
+- [ ] last successful 只在更新分析成功后替换。
+- [ ] 一旦产生成功缓存，编辑、失败和取消不会使其意外消失。
+- [ ] 每个 workspace 不保存多个历史语义缓存。
+- [ ] 当前文本与旧缓存不一致时不会使用旧绝对位置返回错误结果。
+- [ ] Completion 候选计数与实际 JSON 项一致。
+- [ ] 请求取消、generation 合并和过期结果丢弃有效。
+- [ ] §3 的全部性能门槛通过自动化基准。
+- [ ] 全量回归测试通过。
+
+---
+
+## 17. 后续核心编译器演进方向
+
+本阶段完成后，若要进一步达到脏代码语义质量和大型项目 CPU 效率的第一梯队，可在独立方案中评估：
+
+1. parser 容错 AST；
+2. semantic 返回带诊断的部分可查询分析；
+3. 稳定 ModuleId / DeclId / BodyId；
+4. 声明、函数体和依赖边级增量失效；
+5. 核心分析内部取消。
+
+这些内容不属于本文实施范围，不得在本方案实现中顺带修改。
+
+---
+
+## 18. 参考架构
+
+- [clangd Design](https://clangd.llvm.org/design/)
+- [clangd Indexing](https://clangd.llvm.org/design/indexing)
+- [rust-analyzer Architecture](https://rust-analyzer.github.io/book/contributing/architecture.html)
+- [gopls Implementation](https://go.dev/gopls/design/implementation)
+- [TypeScript Compiler API：Incremental Language Service](https://github.com/microsoft/TypeScript/wiki/Using-the-Compiler-API)
+- [Language Server Protocol 3.18](https://microsoft.github.io/language-server-protocol/specifications/lsp/3.18/specification/)
