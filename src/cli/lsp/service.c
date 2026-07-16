@@ -840,6 +840,7 @@ static size_t json_unicode_to_utf8(unsigned long cp, char buf[4]) {
     return 0U;
 }
 
+/* Decodes one JSON string, including the valid empty-string value. */
 static char *json_string_dup(FengLspJsonValue value) {
     const char *cursor;
     FengLspString out = {0};
@@ -963,7 +964,7 @@ static char *json_string_dup(FengLspJsonValue value) {
                 return NULL;
         }
     }
-    return out.data;
+    return out.data != NULL ? out.data : dup_cstr("");
 }
 
 static FengLspParseStatus parse_jsonrpc_message(const char *payload,

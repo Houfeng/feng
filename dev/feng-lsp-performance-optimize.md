@@ -320,6 +320,15 @@ LastSuccessfulAnalysis 只读发布。请求处理不能修改其中 AST、seman
 
 如果查询依赖最新类型推导，而当前文档与最后成功分析不同且无法通过当前 AST 与稳定符号身份安全解析，则必须返回保守结果或 `null` / 空候选，等待后台分析成功。禁止为了避免空结果而返回可能错误的成员或类型。
 
+### 6.5 错误恢复一致性
+
+临时不完整输入不得使文档进入不可恢复状态。对于同一 LSP 会话中的编辑序列 `A → 不完整状态 B → 恢复状态 A`，恢复后的 Hover / Completion 结果必须与以下结果一致：
+
+- 同一会话首次处于状态 A 时的结果；
+- 新启动 LSP 后直接打开状态 A 时的结果。
+
+成员补全至少覆盖 `foo. → 退格删除点号 → 再次输入 foo.`。每次成功应用 `didChange` 后，当前文本、version、UTF-16 position 映射、当前 parse 状态和单次 repair 输入必须属于同一文档版本。失败 parse、失败 candidate、已消费的冷启动等待状态和中间 generation 都不得阻止后续版本重新查询已发布缓存与索引。
+
 ---
 
 ## 7. Hover 优化路径
@@ -522,6 +531,7 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 - [ ] 统一 completion item append 与去重接口。
 - [x] 禁止 Completion 请求同步调用完整 analysis。
 - [x] 移除 `g_completion_uri`，改为显式 request context。
+- [x] 保证 `foo. → 删除 → foo.` 等临时错误后的 Completion 恢复一致性。
 
 ### Phase C：持久 Workspace
 
@@ -595,6 +605,7 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - 连续 Completion 中被取消的旧请求不执行；
 - `didSave` 不阻塞后续 Hover / Completion；
 - completion resolve 不依赖全局上一次请求状态。
+- `foo. → 删除 → foo.` 后成员 Completion 与首次输入及冷启动结果一致。
 
 ### 15.2 性能测试
 
@@ -626,6 +637,7 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - [x] 每个 workspace 不保存多个历史语义缓存。
 - [x] 当前文本与旧缓存不一致时不会使用旧绝对位置返回错误结果。
 - [x] Completion 候选计数与实际 JSON 项一致。
+- [x] 临时不完整输入恢复后，Hover / Completion 与冷启动相同状态结果一致。
 - [ ] 请求取消、generation 合并和过期结果丢弃有效。
 - [ ] §3 的全部性能门槛通过自动化基准。
 - [ ] 全量回归测试通过。
@@ -654,6 +666,19 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 本轮没有修改既有 `test/cli/test_cli.c`。通过独立生成的 LSP-only 测试入口执行了其中全部既有 LSP 用例，结果通过；smoke 88 项、CLI direct / project、`std_test`、`fcts` 542 项和 perf constraints 也全部通过。仓库全量 UBSan 回归在既有 DAP 子进程测试处失败：`test/cli/test_cli.c:431` 收到 `process exited with status -1 (no such process)`，发生在 LSP 用例之前。VS Code 插件普通构建回归中 formatter、diagnostics、debug、syntax 通过，`debug-smoke.test.js:464` 与 `icon.test.js:39` 失败。由于全量回归未通过，本文状态保持“实施中”。
 
 尚未完成：请求队列与 `$/cancelRequest`、debounce / 优先级调度、完整可重入性和并发压力审计、独立模块拆分、1 万 / 10 万 / 100 万行完整性能矩阵、真实 VS Code 体验验收。
+
+### 16.2 2026-07-17 Completion 错误恢复修复
+
+已修复 `foo. → 退格删除点号 → 再次输入 foo.` 后成员补全不能恢复的问题。根因不是失败 candidate 清除了最后成功语义分析，而是 JSON 字符串解码把合法空字符串 `""` 返回为 `NULL`；点号删除 edit 的 `text` 正是空字符串，导致该次 `didChange` 被拒绝，服务端保留旧点号，随后再次输入形成 `foo..`。
+
+修复后 JSON 空字符串返回有效的空 C 字符串。新增 `scripts/test_lsp_completion_recovery.py`，通过真实 stdio 协议验证：
+
+- 第一次输入点号能够返回成员；
+- 删除点号的空字符串增量 edit 成功应用；
+- 再次输入点号后的候选与第一次完全一致；
+- Incremental change、Full change 与新启动 LSP 在相同文本和位置下返回相同候选。
+
+该测试已加入 `make cli-tests`。修复后本机 200 次性能复测：Hover P95 0.036ms，Completion P95 0.084ms，全部交互样本 P99 0.104ms。
 
 ---
 
