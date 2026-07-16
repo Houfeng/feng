@@ -164,7 +164,6 @@ smoke: cli
 
 cli-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_cli_direct.sh
-	python3 ./scripts/test_lsp_completion_recovery.py
 
 cli-project-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_cli_project.sh

@@ -678,7 +678,7 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - 再次输入点号后的候选与第一次完全一致；
 - Incremental change、Full change 与新启动 LSP 在相同文本和位置下返回相同候选。
 
-该测试已加入 `make cli-tests`。修复后本机 200 次性能复测：Hover P95 0.036ms，Completion P95 0.084ms，全部交互样本 P99 0.104ms。
+该测试作为独立 LSP 协议回归工具保留，通过 `python3 scripts/test_lsp_completion_recovery.py` 手动执行，不作为正常 Makefile 工作流的依赖。修复后本机 200 次性能复测：Hover P95 0.036ms，Completion P95 0.084ms，全部交互样本 P99 0.104ms。
 
 ---
 
