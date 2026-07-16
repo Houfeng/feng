@@ -7,7 +7,7 @@
 #include <string.h>
 #include <strings.h>
 
-#include "cli/lsp/runtime.h"
+#include "cli/lsp/service.h"
 
 
 static int read_header_line(FILE *input, char **out_line) {
@@ -108,14 +108,14 @@ static bool read_payload(FILE *input, size_t payload_length, char **out_payload)
 }
 
 int feng_lsp_server_run(FILE *input, FILE *output, FILE *errors) {
-    FengLspRuntime *runtime = feng_lsp_runtime_create();
+    FengLspService *service = feng_lsp_service_create();
 
-    if (runtime == NULL) {
-        fprintf(errors, "lsp runtime error: out of memory\n");
+    if (service == NULL) {
+        fprintf(errors, "lsp service error: out of memory\n");
         return 1;
     }
 
-    while (!feng_lsp_runtime_should_exit(runtime)) {
+    while (!feng_lsp_service_should_exit(service)) {
         bool saw_header = false;
         bool has_length = false;
         size_t content_length = 0U;
@@ -126,19 +126,19 @@ int feng_lsp_server_run(FILE *input, FILE *output, FILE *errors) {
 
             if (status == 0) {
                 if (!saw_header) {
-                    int exit_code = feng_lsp_runtime_exit_code(runtime);
+                    int exit_code = feng_lsp_service_exit_code(service);
 
-                    feng_lsp_runtime_free(runtime);
+                    feng_lsp_service_free(service);
                     return exit_code;
                 }
                 fprintf(errors, "lsp protocol error: unexpected EOF while reading headers\n");
-                feng_lsp_runtime_free(runtime);
+                feng_lsp_service_free(service);
                 return 1;
             }
             if (status < 0) {
                 fprintf(errors, "lsp protocol error: failed to read message headers\n");
                 free(line);
-                feng_lsp_runtime_free(runtime);
+                feng_lsp_service_free(service);
                 return 1;
             }
 
@@ -164,16 +164,16 @@ int feng_lsp_server_run(FILE *input, FILE *output, FILE *errors) {
             if (!read_payload(input, content_length, &payload)) {
                 fprintf(errors, "lsp protocol error: failed to read payload\n");
                 free(payload);
-                feng_lsp_runtime_free(runtime);
+                feng_lsp_service_free(service);
                 return 1;
             }
-            if (!feng_lsp_runtime_handle_payload(runtime,
+            if (!feng_lsp_service_handle_payload(service,
                                                  output,
                                                  payload,
                                                  content_length,
                                                  errors)) {
                 free(payload);
-                feng_lsp_runtime_free(runtime);
+                feng_lsp_service_free(service);
                 return 1;
             }
             free(payload);
@@ -181,9 +181,9 @@ int feng_lsp_server_run(FILE *input, FILE *output, FILE *errors) {
     }
 
     {
-        int exit_code = feng_lsp_runtime_exit_code(runtime);
+        int exit_code = feng_lsp_service_exit_code(service);
 
-        feng_lsp_runtime_free(runtime);
+        feng_lsp_service_free(service);
         return exit_code;
     }
 }

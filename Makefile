@@ -5,6 +5,7 @@ LDFLAGS ?=
 # Phase 1B cycle collector relies on pthread (recursive mutex). Unit tests link
 # runtime objects directly, so they also link the vendored unwinder archive.
 RUNTIME_LDLIBS ?= $(LIBUNWIND_LIB) -lpthread
+LSP_LDLIBS ?= -lpthread
 DEPFLAGS = -MMD -MP
 
 BUILD_DIR := build
@@ -33,7 +34,7 @@ TEST_DEBUG_SRCS := $(wildcard test/debug/*.c)
 TEST_CLI_SRCS := $(wildcard test/cli/*.c)
 TEST_SYMBOL_SRCS := $(wildcard test/symbol/*.c)
 TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
-	src/cli/lsp/server.c src/cli/lsp/runtime.c src/cli/lsp/main.c \
+	src/cli/lsp/server.c src/cli/lsp/service.c src/cli/lsp/main.c \
 	src/cli/dap/main.c \
 	src/cli/project/common.c src/cli/project/init.c src/cli/project/manifest.c \
 	src/cli/project/build.c \
@@ -169,7 +170,7 @@ cli-project-tests: cli
 
 $(BIN_DIR)/feng: $(CLI_OBJS)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(CLI_OBJS) $(LDFLAGS) -o $@
+	$(CC) $(CLI_OBJS) $(LDFLAGS) $(LSP_LDLIBS) -o $@
 
 $(BIN_DIR)/test_lexer: $(TEST_LEXER_OBJS)
 	@mkdir -p $(BIN_DIR)
@@ -201,7 +202,7 @@ $(BIN_DIR)/test_debug: $(TEST_DEBUG_OBJS)
 
 $(BIN_DIR)/test_cli: $(TEST_CLI_OBJS) $(RUNTIME_LIB)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(TEST_CLI_OBJS) $(LDFLAGS) -o $@
+	$(CC) $(TEST_CLI_OBJS) $(LDFLAGS) $(LSP_LDLIBS) -o $@
 
 $(BIN_DIR)/test_symbol: $(TEST_SYMBOL_OBJS)
 	@mkdir -p $(BIN_DIR)

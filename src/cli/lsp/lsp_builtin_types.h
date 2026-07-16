@@ -5,7 +5,7 @@
  * hard-coding any type text in C logic.
  *
  * The label strings intentionally duplicate the compiler internal type table
- * (codegen.c k_builtin_types / runtime.c builtin_name_for_type_identifier):
+ * used by code generation and target-dependent type resolution:
  * the two tables serve different purposes (code generation / semantic analysis
  * vs. LSP completion and hover) and are kept independent on purpose. */
 
@@ -47,7 +47,7 @@ static const size_t BUILTIN_TYPE_COUNT =
     sizeof(BUILTIN_TYPES) / sizeof(BUILTIN_TYPES[0]);
 
 /* Builtin type alias table (5 items).
- * int is platform-dependent: canonical == NULL signals runtime resolution
+ * int is platform-dependent: canonical == NULL signals target resolution
  * based on sizeof(void *) (i32 on 32-bit, i64 on 64-bit platforms).
  * long, byte, float, double are fixed aliases with static canonical names. */
 static const LspBuiltinTypeAliasItem BUILTIN_TYPE_ALIASES[] = {

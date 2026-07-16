@@ -1,6 +1,6 @@
 # Feng LSP 性能优化方案
 
-> 状态：设计方案，尚未实施。
+> 状态：实施中。Phase A、Phase B 的核心请求路径已完成，Phase C、Phase D、Phase E 部分完成；尚未达到本文“完成交付”标准。
 >
 > 关联文档：
 > - [Feng LSP 已交付方案](feng-lsp-delivered.md)：定义已交付 LSP 能力与语义行为基线。
@@ -509,26 +509,26 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 
 ### Phase A：缓存正确性
 
-- [ ] 新增 workspace 级 `last_successful_analysis`。
-- [ ] 将 Hover 的破坏式重建改为 candidate 成功后替换。
+- [x] 新增 workspace 级 `last_successful_analysis`。
+- [x] 将 Hover 的破坏式重建改为 candidate 成功后替换。
 - [ ] provider 改为成功后替换。
 - [ ] 增加分析失败、取消、编辑后缓存仍存在的协议测试。
 
 ### Phase B：Hover / Completion 快路径
 
-- [ ] Hover 先处理当前 token 的关键字、注解、内建类型和字面量。
+- [x] Hover 先处理当前 token 的关键字、注解、内建类型和字面量。
 - [ ] 增加 DocumentStore token / line 索引，避免字面量从文件开头扫描。
-- [ ] 修复 cached completion 候选计数。
+- [x] 修复 cached completion 候选计数。
 - [ ] 统一 completion item append 与去重接口。
-- [ ] 禁止 Completion 请求同步调用完整 analysis。
-- [ ] 移除 `g_completion_uri`，改为显式 request context。
+- [x] 禁止 Completion 请求同步调用完整 analysis。
+- [x] 移除 `g_completion_uri`，改为显式 request context。
 
 ### Phase C：持久 Workspace
 
 - [ ] manifest、project、dependency 和 provider 提升到 workspace 生命周期。
 - [ ] 实现统一分层 SymbolIndex 查询接口。
-- [ ] 每个文档只缓存当前版本 parse。
-- [ ] 支持 Incremental text synchronization。
+- [x] 每个文档只缓存当前版本 parse。
+- [x] 支持 Incremental text synchronization。
 
 ### Phase D：调度与取消
 
@@ -536,11 +536,11 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 - [ ] 实现请求优先级、debounce 和 generation 合并。
 - [ ] 实现 `$/cancelRequest`。
 - [ ] 完成核心公开 API 可重入性审计和并发压力测试。
-- [ ] 将 Diagnostics 切换为后台结果消费。
+- [x] 将 Diagnostics 切换为后台结果消费。
 
 ### Phase E：性能验收
 
-- [ ] 新增独立 LSP 协议性能基准，不修改既有测试用例。
+- [x] 新增独立 LSP 协议性能基准，不修改既有测试用例。
 - [ ] 覆盖冷启动、热缓存、编辑后请求、连续输入和分析失败。
 - [ ] 执行编译器与 VS Code 插件全量回归测试。
 - [ ] 将 §3 指标加入回归门槛。
@@ -619,16 +619,41 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 
 只有同时满足以下条件，本方案才能标记完成：
 
-- [ ] Hover 和 Completion 请求路径不存在同步整项目分析。
-- [ ] 交互请求路径不存在 manifest、依赖和 provider 重建。
-- [ ] last successful 只在更新分析成功后替换。
-- [ ] 一旦产生成功缓存，编辑、失败和取消不会使其意外消失。
-- [ ] 每个 workspace 不保存多个历史语义缓存。
-- [ ] 当前文本与旧缓存不一致时不会使用旧绝对位置返回错误结果。
-- [ ] Completion 候选计数与实际 JSON 项一致。
+- [x] Hover 和 Completion 请求路径不存在同步整项目分析。
+- [x] 交互请求路径不存在 manifest、依赖和 provider 重建。
+- [x] last successful 只在更新分析成功后替换。
+- [x] 一旦产生成功缓存，编辑、失败和取消不会使其意外消失。
+- [x] 每个 workspace 不保存多个历史语义缓存。
+- [x] 当前文本与旧缓存不一致时不会使用旧绝对位置返回错误结果。
+- [x] Completion 候选计数与实际 JSON 项一致。
 - [ ] 请求取消、generation 合并和过期结果丢弃有效。
 - [ ] §3 的全部性能门槛通过自动化基准。
 - [ ] 全量回归测试通过。
+
+### 16.1 2026-07-16 实施记录
+
+本轮未修改核心编译器，已完成：
+
+- 将 LSP `runtime.c/.h`、类型和函数统一重命名为 `service.c/.h`、`FengLspService` 和 `feng_lsp_service_*`；
+- 增加后台 candidate 分析线程，只在完整分析成功且 generation 更新时替换唯一的 `last_successful_analysis`，失败分析不清除已有成功缓存；
+- 将 workspace 源码模块索引、依赖 symbol provider 与完整语义分析并行构建，并分别以 generation 保护后发布；
+- Hover 将关键字、注解、内建类型和字面量提升到当前文本快路径，字面量使用文档 token 索引；
+- Completion 移除同步完整分析和全局请求 URI，使用当前 parse、已发布分析、源码模块索引和依赖 symbol provider；
+- 支持 UTF-16 position 的 Incremental text synchronization；
+- `didSave` 只同步执行当前文件 parse，完整 semantic / project diagnostics 消费后台 candidate 结果；
+- 新增 `scripts/run_lsp_performance.py`，从真实 `feng lsp --stdio` 协议采样并检查 Hover P95、Completion P95 和交互 P99 门槛。
+
+在本机普通优化构建、`std_test/src/z_main.ff`、Hover 与 Completion 各 200 次采样下：
+
+| 指标 | 实测 |
+| --- | ---: |
+| Hover P50 / P95 / P99 / Max | 0.018 / 0.030 / 0.041 / 0.098ms |
+| Completion P50 / P95 / P99 / Max | 0.056 / 0.071 / 0.113 / 45.110ms |
+| 全部交互样本 P99 | 0.098ms |
+
+本轮没有修改既有 `test/cli/test_cli.c`。通过独立生成的 LSP-only 测试入口执行了其中全部既有 LSP 用例，结果通过；smoke 88 项、CLI direct / project、`std_test`、`fcts` 542 项和 perf constraints 也全部通过。仓库全量 UBSan 回归在既有 DAP 子进程测试处失败：`test/cli/test_cli.c:431` 收到 `process exited with status -1 (no such process)`，发生在 LSP 用例之前。VS Code 插件普通构建回归中 formatter、diagnostics、debug、syntax 通过，`debug-smoke.test.js:464` 与 `icon.test.js:39` 失败。由于全量回归未通过，本文状态保持“实施中”。
+
+尚未完成：请求队列与 `$/cancelRequest`、debounce / 优先级调度、完整可重入性和并发压力审计、独立模块拆分、1 万 / 10 万 / 100 万行完整性能矩阵、真实 VS Code 体验验收。
 
 ---
 
