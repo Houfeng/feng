@@ -15465,6 +15465,9 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
     const FengTypeMember *enclosing_member;
     FengLspLocalList locals = {0};
     const FengExpr *expr;
+    const FengExpr *member_object = NULL;
+    FengExpr textual_member_object = {0};
+    FengLspCompletionContext completion_context = {0};
     FengLspPosition position;
     bool first = true;
     size_t item_count = 0U;
@@ -15474,6 +15477,9 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
         return false;
     }
     *out_item_count = 0U;
+    (void)completion_context_from_text(context->source_text,
+                                       offset,
+                                       &completion_context);
     enclosing_decl = find_enclosing_decl_for_completion(context->source_text,
                                                         context->program,
                                                         offset,
@@ -15520,21 +15526,40 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
         }
     }
     expr = enclosing_decl != NULL ? find_expr_hit_in_decl(enclosing_decl, offset) : NULL;
-    if (expr != NULL && expr->kind == FENG_EXPR_MEMBER) {
+    if (completion_context.is_member &&
+        completion_context.literal_builtin_name.length == 0U) {
+        /* Dirty-code parsing may not preserve the member expression.  Model the
+         * receiver identified from current text so the cache path cannot fall
+         * through to unrelated global completion items. */
+        if (slice_equals_cstr(completion_context.object, "self")) {
+            textual_member_object.kind = FENG_EXPR_SELF;
+        } else {
+            textual_member_object.kind = FENG_EXPR_IDENTIFIER;
+            textual_member_object.as.identifier = completion_context.object;
+        }
+        member_object = &textual_member_object;
+    } else if (!completion_context.is_member &&
+               expr != NULL &&
+               expr->kind == FENG_EXPR_MEMBER) {
+        member_object = expr->as.member.object;
+    }
+    if (completion_context.is_member || member_object != NULL) {
         const FengSymbolImportedModule *alias_module = NULL;
         const FengSymbolDeclView *owner_decl = NULL;
-        FengLspMemberFilter filter = FENG_LSP_MEMBER_FILTER_INSTANCE;
+        FengLspMemberFilter filter = completion_context.is_static_access
+                                         ? FENG_LSP_MEMBER_FILTER_STATIC
+                                         : FENG_LSP_MEMBER_FILTER_INSTANCE;
 
-        if (expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_IDENTIFIER &&
-            find_local(&locals, expr->as.member.object->as.identifier) == NULL) {
+        if (member_object != NULL && member_object->kind == FENG_EXPR_IDENTIFIER &&
+            find_local(&locals, member_object->as.identifier) == NULL) {
             alias_module = find_symbol_alias_module(context->provider,
                                                     context->program,
-                                                    expr->as.member.object->as.identifier);
+                                                    member_object->as.identifier);
             if (alias_module == NULL) {
                 const FengSymbolDeclView *vdecl = resolve_symbol_value_name(context->provider,
                                                                              context->current_module,
                                                                              context->program,
-                                                                             expr->as.member.object->as.identifier);
+                                                                             member_object->as.identifier);
 
                 if (vdecl != NULL) {
                     FengSymbolDeclKind vkind = feng_symbol_decl_kind(vdecl);
@@ -15546,11 +15571,11 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                 } else if (resolve_symbol_type_name(context->provider,
                                                      context->current_module,
                                                      context->program,
-                                                     expr->as.member.object->as.identifier) != NULL) {
+                                                     member_object->as.identifier) != NULL) {
                     filter = FENG_LSP_MEMBER_FILTER_STATIC;
                 }
             }
-        } else if (expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_SELF) {
+        } else if (member_object != NULL && member_object->kind == FENG_EXPR_SELF) {
             filter = FENG_LSP_MEMBER_FILTER_ALL;
         }
         if (alias_module != NULL) {
@@ -15581,9 +15606,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                 ++item_count;
             }
         } else {
-            owner_decl = resolve_symbol_owner_decl_from_expr(context,
-                                                            expr->as.member.object,
-                                                            &locals);
+            owner_decl = resolve_symbol_owner_decl_from_expr(context, member_object, &locals);
             if (owner_decl != NULL) {
                 FengSlice owner_slice = feng_symbol_decl_name(owner_decl);
                 char *sym_owner_name = dup_range(owner_slice.data, owner_slice.data + owner_slice.length);
@@ -15627,16 +15650,18 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                 free(sym_owner_name);
             }
             if (owner_decl == NULL || item_count == 0U) {
-                FengSlice builtin_name = resolve_symbol_builtin_name_from_expr(context,
-                                                                               expr->as.member.object,
-                                                                               &locals);
+                FengSlice builtin_name = completion_context.literal_builtin_name.length > 0U
+                                             ? completion_context.literal_builtin_name
+                                             : resolve_symbol_builtin_name_from_expr(context,
+                                                                                     member_object,
+                                                                                     &locals);
 
                 /* When the object is a bare builtin type identifier (not a local),
                  * this is a static access: string., i32., etc. */
                 if (builtin_name.length > 0U &&
-                    expr->as.member.object != NULL &&
-                    expr->as.member.object->kind == FENG_EXPR_IDENTIFIER &&
-                    find_local(&locals, expr->as.member.object->as.identifier) == NULL) {
+                    member_object != NULL &&
+                    member_object->kind == FENG_EXPR_IDENTIFIER &&
+                    find_local(&locals, member_object->as.identifier) == NULL) {
                     filter = FENG_LSP_MEMBER_FILTER_STATIC;
                 }
                 if (builtin_name.length > 0U) {

@@ -619,6 +619,8 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - `didSave` 不阻塞后续 Hover / Completion；
 - completion resolve 不依赖全局上一次请求状态。
 - `foo. → 删除 → foo.` 后成员 Completion 与首次输入及冷启动结果一致。
+- 文本上下文已经确认是成员访问时，所有缓存、当前 parse 与 repair 路径只能返回该接收者的成员；
+  未完成 AST 未形成成员表达式时必须继续成员修复路径，不得把全局符号当作有效结果提前返回。
 
 ### 15.2 性能测试
 
@@ -750,6 +752,31 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 仓库回归结果：编译器 archive、lexer、parser、semantic、runtime、codegen、debug、symbol 单元测试通过；smoke 88 项、CLI direct / project、`std_test`、`fcts` 542 项和 perf constraints 全部通过。`make test-sanitize` 仍在既有 DAP 子进程断言 `test/cli/test_cli.c:431` 失败，错误为 `process exited with status -1 (no such process)`，发生在 LSP 用例之前。VS Code formatter、diagnostics、debug、syntax 通过；既有 `debug-smoke.test.js:464` 和 `icon.test.js:39` 失败。上述失败不在本轮 LSP 变更路径内，因此不修改其测试或生产实现。
 
 真实 VS Code 已确认重启 LSP 后 `foo. → 删除 → foo.` 恢复；“不再出现可感知 loading”仍需开发者用本次最终二进制重启 LSP 后完成最后一项人工体验确认。
+
+### 16.5 2026-07-17 成员候选范围修复
+
+已修复不完整成员访问可能返回全局候选的问题。根因是普通 AST Completion 已经以当前文本识别的成员上下文为准，
+但 persistent symbol cache 路径仍只通过未完成 AST 判断成员访问；当 parser recovery 没有在光标处保留
+member expression 时，该路径会进入非成员分支，并把 `Action`、`args`、`assert` 等全局符号当作有效结果提前返回。
+
+修复后，persistent symbol cache 与普通 Completion 使用相同的当前文本成员上下文。在 AST 缺少 member expression 时，
+缓存路径以文本中识别出的 receiver 构造只读查询表达式，继续解析局部绑定的显式类型、对象字面量初始化类型、
+类型构造调用、`self`、模块别名和内建字面量；成员上下文不再进入全局候选分支。该修复只修改
+`src/cli/lsp/service.c`，不修改 parser、semantic 或其他核心编译器模块。
+
+新增 `scripts/test_lsp_member_completion_scope.py`，通过真实 stdio 协议逐字符输入 `user.`，验证：
+
+- `let user = User { name: "alice", age: 20 };` 后输入 `user.` 返回 `name`、`age`；
+- 结果不包含 `Action`、`args`、`assert`、`break` 等全局候选；
+- 与既有 `scripts/test_lsp_completion_recovery.py` 一起执行时，删除点号再输入的恢复行为保持通过。
+
+修复后普通优化构建性能复测：Hover P95 0.040ms，Completion P95 0.310ms，全部交互样本 P99 0.571ms；
+1 万 / 10 万 / 100 万行矩阵全部交互 P99 0.161ms、Max 0.169ms，继续满足 §3 门槛。
+
+本次普通与 UBSan 全量回归均运行到既有 DAP 子进程断言 `test/cli/test_cli.c:431` 后停止；在此之前，
+archive、lexer、parser、semantic、runtime、codegen、debug、smoke 88 项、CLI direct / project、`std_test`、
+`fcts` 542 项和 perf constraints 通过。VS Code formatter、diagnostics、debug、syntax 通过；既有
+`debug-smoke.test.js:464` 与 `icon.test.js:39` 仍失败。未修改上述既有失败对应的生产代码或测试。
 
 ---
 
