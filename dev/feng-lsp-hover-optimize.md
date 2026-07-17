@@ -136,6 +136,7 @@ Hover 使用以下面向用户的完整英文标签，不使用 `Val`、`Ref` �
 | 普通 `type` | `Reference Type` |
 | `@value type` | `Value Type` |
 | 具名元组 | `Tuple Type` |
+| `enum` 及 enum item | `Enum` |
 | object-form spec | `Object Spec` |
 | callback-form spec | `Callback Spec` |
 | union-form spec | `Union Spec` |
@@ -158,6 +159,7 @@ Tuple Type 虽具有值语义，仍显示独立的 `Tuple Type`，不得合并�
 | `User`，且 `User` 为普通 `type` | `Reference Type` |
 | `Point`，且 `Point` 为 `@value type` | `Value Type` |
 | `Pair`，且 `Pair` 为具名元组 | `Tuple Type` |
+| `Color`，且 `Color` 为 `enum` | `Enum` |
 | `User[]` | `Array` |
 | `User*` | `Pointer` |
 | `Box<User>`，且 `Box` 为普通 `type` | `Reference Type` |
@@ -206,7 +208,25 @@ type Unit();
 type Pair<T>(T, T): Equatable;
 ```
 
-### 4.4 Object Spec
+### 4.4 Enum
+
+Enum 声明显示声明头，不展开 enum item：
+
+```feng
+enum Color
+```
+
+**Kind:** `Enum`
+
+Hover enum item 时显示 item 自身名称及其确定的整数值：
+
+```feng
+Red = 1
+```
+
+**Kind:** `Enum`
+
+### 4.5 Object Spec
 
 保留名称、泛型参数和父 spec 列表，不展开字段、方法或继承成员：
 
@@ -216,7 +236,7 @@ spec Readable<T>: Named {...}
 
 **Kind:** `Object Spec`
 
-### 4.5 Callback Spec
+### 4.6 Callback Spec
 
 完整显示参数与返回类型：
 
@@ -226,7 +246,7 @@ spec Mapper<T>(value: T): string;
 
 **Kind:** `Callback Spec`
 
-### 4.6 Union Spec
+### 4.7 Union Spec
 
 完整显示直接 member 列表，不展开嵌套 union：
 
@@ -236,7 +256,7 @@ spec Result: Success | Failure;
 
 **Kind:** `Union Spec`
 
-### 4.7 Intersection Spec
+### 4.8 Intersection Spec
 
 完整显示直接 member 列表，不展开 member 的父 spec 或成员集合：
 
@@ -260,7 +280,9 @@ spec ReadWrite: Readable & Writable;
 | 全局或局部绑定 | 无 | `Kind: Reference Type` |
 | 参数 | `param` | `Kind: Value Type` |
 | 字段，包括元组 `item1`～`item8` | 无 | `Kind: Builtin` |
+| enum item | 无 | `Kind: Enum` |
 | 函数或方法 | 无 | 不显示 |
+| 构造方法或类型构造调用 | `ctor` 或类型声明形状 | 被构造类型的 `Kind` |
 
 ### 5.1 绑定
 
@@ -305,6 +327,19 @@ func create(): User
 ```
 
 函数和方法签名已经明确显示返回类型，不再额外显示返回类型 `Kind`。
+
+### 5.5 构造方法与类型构造调用
+
+构造方法声明以及 `UserType()` 等类型构造调用显示被构造类型的类别：
+
+```feng
+ctor UserType(): void
+```
+
+**Kind:** `Reference Type`
+
+`UserType {}` 与 `UserType()` 可以采用各自已有的签名形状，但必须显示相同的类型类别。
+该规则不适用于返回 `UserType` 的普通函数；普通函数仍按 5.4 节不显示返回类型类别。
 
 ---
 
@@ -497,7 +532,9 @@ typedef struct FengLspHoverPresentation {
 全部满足以下条件后方可视为完成：
 
 - 类型和 `spec` 声明/引用 Hover 均显示声明核心形状与正确类别；
+- enum 声明、引用及 enum item 均显示 `Kind: Enum`；
 - 绑定、参数和字段显示 `Kind`，参数签名以 `param let/var` 开头；
+- 类型构造调用与构造方法显示被构造类型的 `Kind`；
 - 函数和方法不额外显示返回类型 `Kind`；
 - 所有注解在声明核心形状中一致省略；
 - 非空块体显示 `{...}`，真实空块体显示 `{}`；
@@ -515,7 +552,8 @@ typedef struct FengLspHoverPresentation {
 2026-07-17 完成实施：
 
 - 已统一 AST 与持久符号索引两条 Hover 路径的声明形状、类别映射与渲染；
-- 已实现 Reference、Value、Tuple、四种 Spec、Array、Builtin 与 Pointer 类别；
+- 已实现 Reference、Value、Tuple、Enum、四种 Spec、Array、Builtin 与 Pointer 类别；
+- enum item 及 `UserType()` / `UserType {}` 类型构造形式显示一致的类型类别；
 - 参数签名以同行的 `param let/var` 开头，类别行统一为 `Kind`；
 - 函数和方法不额外显示返回类型 `Kind`；
 - Hover 中的命名类型统一显示短名称，并递归应用于泛型、参数和返回类型；

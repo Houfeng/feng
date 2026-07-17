@@ -7862,6 +7862,14 @@ static void test_lsp_hover_type_categories_and_declaration_shapes(void) {
         "    let first: i32 = octet.item1;\n"
         "    return user;\n"
         "}\n";
+    static const char *kEnumSource =
+        "module test.lsp.hover_enum;\n"
+        "enum Color { Red = 1, Green = 2 }\n"
+        "func inspect(color: Color) { let selected: Color = Color.Green; }\n";
+    static const char *kConstructorSource =
+        "module test.lsp.hover_constructor;\n"
+        "type UserType { func UserType() {} }\n"
+        "func run() { let constructed = UserType(); let literal = UserType {}; }\n";
     static const char *kPlaintextInitialize =
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
     static const char *kMarkdownInitialize =
@@ -7918,6 +7926,27 @@ static void test_lsp_hover_type_categories_and_declaration_shapes(void) {
     output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "spec Both: Named & Serializable;", 5U);
     ASSERT(strstr(output,
                   "spec Both: Named & Serializable;\\n\\nKind: Intersection Spec") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kEnumSource,
+                                        kPlaintextInitialize,
+                                        "enum Color {",
+                                        strlen("enum "));
+    ASSERT(strstr(output, "enum Color\\n\\nKind: Enum") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kEnumSource,
+                                        kPlaintextInitialize,
+                                        "Red = 1",
+                                        1U);
+    ASSERT(strstr(output, "Red = 1\\n\\nKind: Enum") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kEnumSource,
+                                        kPlaintextInitialize,
+                                        "Color.Green",
+                                        strlen("Color."));
+    ASSERT(strstr(output, "Green = 2\\n\\nKind: Enum") != NULL);
     free(output);
 
     output = capture_lsp_hover_response(kSource,
@@ -7977,11 +8006,33 @@ static void test_lsp_hover_type_categories_and_declaration_shapes(void) {
     ASSERT(strstr(output, "param var total: i32\\n\\nKind: Builtin") != NULL);
     free(output);
 
+    output = capture_lsp_hover_response(kEnumSource,
+                                        kPlaintextInitialize,
+                                        "color: Color",
+                                        1U);
+    ASSERT(strstr(output, "param let color: Color\\n\\nKind: Enum") != NULL);
+    free(output);
+
     output = capture_lsp_hover_response(kSource,
                                         kPlaintextInitialize,
                                         "let inferred = Point",
                                         strlen("let "));
     ASSERT(strstr(output, "let inferred: Point\\n\\nKind: Value Type") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kConstructorSource,
+                                        kPlaintextInitialize,
+                                        "let constructed = UserType();",
+                                        strlen("let constructed = "));
+    ASSERT(strstr(output, "ctor UserType(): void") != NULL);
+    ASSERT(strstr(output, "Kind: Reference Type") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kConstructorSource,
+                                        kPlaintextInitialize,
+                                        "let literal = UserType {};",
+                                        strlen("let literal = "));
+    ASSERT(strstr(output, "Kind: Reference Type") != NULL);
     free(output);
 
     output = capture_lsp_hover_response(kSource,
@@ -13713,6 +13764,7 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
         "    open let value: i32;\n"
         "}\n"
         "open type TupleType(i32, string);\n"
+        "open enum State { Ready = 1, Done = 2 }\n"
         "open spec ObjectShape {\n"
         "    func first(): string;\n"
         "}\n"
@@ -13726,8 +13778,10 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
         "module test.lsp.hoverconsumer;\n"
         "import test.lsp.hoverpkg;\n"
         "\n"
-        "func broken(ref: RefType, value: ValueType, tuple: TupleType, object: ObjectShape, callback: CallbackShape, unionValue: UnionShape, intersectionValue: IntersectionShape): void {\n"
+        "func broken(ref: RefType, value: ValueType, tuple: TupleType, state: State, object: ObjectShape, callback: CallbackShape, unionValue: UnionShape, intersectionValue: IntersectionShape): void {\n"
         "    ref.copy(ref);\n"
+        "    let constructed = RefType();\n"
+        "    let done: State = State.Done;\n"
         "    missing;\n"
         "}\n";
     static const char *kInitialize =
@@ -13826,6 +13880,34 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     strlen("tuple: "));
     ASSERT(strstr(output,
                   "type TupleType(i32, string);\\n\\nKind: Tuple Type") != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(consumer_source_path,
+                                                    kConsumerSource,
+                                                    kInitialize,
+                                                    "textDocument/hover",
+                                                    "state: State",
+                                                    strlen("state: "));
+    ASSERT(strstr(output, "enum State\\n\\nKind: Enum") != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(consumer_source_path,
+                                                    kConsumerSource,
+                                                    kInitialize,
+                                                    "textDocument/hover",
+                                                    "State.Done",
+                                                    strlen("State."));
+    ASSERT(strstr(output, "Done") != NULL);
+    ASSERT(strstr(output, "Kind: Enum") != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(consumer_source_path,
+                                                    kConsumerSource,
+                                                    kInitialize,
+                                                    "textDocument/hover",
+                                                    "let constructed = RefType();",
+                                                    strlen("let constructed = "));
+    ASSERT(strstr(output, "Kind: Reference Type") != NULL);
     free(output);
 
     output = capture_lsp_position_response_at_path(consumer_source_path,

@@ -239,6 +239,7 @@ typedef enum FengLspResolvedKind {
     FENG_LSP_RESOLVED_NONE = 0,
     FENG_LSP_RESOLVED_DECL,
     FENG_LSP_RESOLVED_MEMBER,
+    FENG_LSP_RESOLVED_ENUM_ITEM,
     FENG_LSP_RESOLVED_PARAM,
     FENG_LSP_RESOLVED_BINDING,
     FENG_LSP_RESOLVED_MATCH_BINDING,
@@ -250,6 +251,7 @@ typedef struct FengLspResolvedTarget {
     FengLspResolvedKind kind;
     const FengDecl *decl;
     const FengTypeMember *member;
+    const FengEnumItem *enum_item;
     const FengParameter *parameter;
     const FengBinding *binding;
     const FengExpr *match_op;
@@ -308,6 +310,7 @@ typedef enum FengLspTypeCategory {
     FENG_LSP_TYPE_CATEGORY_REFERENCE,
     FENG_LSP_TYPE_CATEGORY_VALUE,
     FENG_LSP_TYPE_CATEGORY_TUPLE,
+    FENG_LSP_TYPE_CATEGORY_ENUM,
     FENG_LSP_TYPE_CATEGORY_OBJECT_SPEC,
     FENG_LSP_TYPE_CATEGORY_CALLBACK_SPEC,
     FENG_LSP_TYPE_CATEGORY_UNION_SPEC,
@@ -6032,6 +6035,24 @@ static const FengTypeMember *find_member_by_name(const FengDecl *owner_decl, Fen
     return NULL;
 }
 
+/* Find an enum item by its declared name without requiring semantic analysis. */
+static const FengEnumItem *find_enum_item_by_name(const FengDecl *owner_decl,
+                                                  FengSlice name) {
+    size_t index;
+
+    if (owner_decl == NULL || owner_decl->kind != FENG_DECL_ENUM) {
+        return NULL;
+    }
+    for (index = 0U; index < owner_decl->as.enum_decl.item_count; ++index) {
+        const FengEnumItem *item = &owner_decl->as.enum_decl.items[index];
+
+        if (slice_equals(item->name, name)) {
+            return item;
+        }
+    }
+    return NULL;
+}
+
 static const FengDecl *resolve_value_name(const FengLspAnalysisSession *session,
                                           const FengProgram *program,
                                           FengSlice name) {
@@ -7718,6 +7739,17 @@ static bool find_decl_token_hit(const char *source_text,
             }
             break;
         case FENG_DECL_ENUM:
+            for (index = 0U; index < decl->as.enum_decl.item_count; ++index) {
+                const FengEnumItem *item = &decl->as.enum_decl.items[index];
+
+                if (offset_in_token(item->token, offset) ||
+                    offset_in_slice_from_source(source_text, item->name, offset)) {
+                    target->kind = FENG_LSP_RESOLVED_ENUM_ITEM;
+                    target->decl = decl;
+                    target->enum_item = item;
+                    return true;
+                }
+            }
             break;
         case FENG_DECL_TYPE:
             for (index = 0U; index < decl->as.type_decl.type_param_count; ++index) {
@@ -9581,6 +9613,8 @@ static const char *hover_type_category_label(FengLspTypeCategory category) {
             return "Value Type";
         case FENG_LSP_TYPE_CATEGORY_TUPLE:
             return "Tuple Type";
+        case FENG_LSP_TYPE_CATEGORY_ENUM:
+            return "Enum";
         case FENG_LSP_TYPE_CATEGORY_OBJECT_SPEC:
             return "Object Spec";
         case FENG_LSP_TYPE_CATEGORY_CALLBACK_SPEC:
@@ -9613,6 +9647,9 @@ static FengLspTypeCategory hover_category_from_decl(const FengDecl *decl) {
         return decl->as.type_decl.is_value ? FENG_LSP_TYPE_CATEGORY_VALUE
                                            : FENG_LSP_TYPE_CATEGORY_REFERENCE;
     }
+    if (decl->kind == FENG_DECL_ENUM) {
+        return FENG_LSP_TYPE_CATEGORY_ENUM;
+    }
     if (decl->kind == FENG_DECL_SPEC) {
         switch (decl->as.spec_decl.form) {
             case FENG_SPEC_FORM_OBJECT:
@@ -9640,6 +9677,9 @@ static FengLspTypeCategory hover_category_from_symbol_decl(
         }
         return feng_symbol_decl_is_value_type(decl) ? FENG_LSP_TYPE_CATEGORY_VALUE
                                                     : FENG_LSP_TYPE_CATEGORY_REFERENCE;
+    }
+    if (feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_ENUM) {
+        return FENG_LSP_TYPE_CATEGORY_ENUM;
     }
     if (feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_SPEC) {
         switch (feng_symbol_decl_spec_form(decl)) {
@@ -10251,6 +10291,44 @@ static bool build_hover_result_json(FengLspString *result,
     return ok;
 }
 
+/* Format an AST enum item with its deterministic integer value. */
+static bool enum_item_hover_signature_to_string(
+    FengLspString *buffer,
+    const FengLspAnalysisSession *session,
+    const FengDecl *enum_decl,
+    const FengEnumItem *item) {
+    const FengSemanticEnumItemInfo *info = NULL;
+    size_t index;
+
+    if (item == NULL ||
+        !string_append_bytes(buffer, item->name.data, item->name.length)) {
+        return false;
+    }
+    if (session != NULL && session->analysis != NULL) {
+        info = feng_semantic_find_enum_item_info(session->analysis,
+                                                 enum_decl,
+                                                 item->name);
+    }
+    if (info != NULL) {
+        return string_append_format(buffer, " = %lld", (long long)info->value);
+    }
+    if (item->has_explicit_value) {
+        return string_append_format(buffer,
+                                    " = %lld",
+                                    (long long)item->explicit_value);
+    }
+    if (enum_decl != NULL && enum_decl->kind == FENG_DECL_ENUM) {
+        for (index = 0U; index < enum_decl->as.enum_decl.item_count; ++index) {
+            if (&enum_decl->as.enum_decl.items[index] == item) {
+                return string_append_format(buffer,
+                                            " = %lld",
+                                            (long long)index);
+            }
+        }
+    }
+    return true;
+}
+
 /* Build structured Hover content from an AST-backed resolved target. */
 static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
                                           const FengProgram *program,
@@ -10269,7 +10347,9 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
                 return false;
             }
             presentation->documentation = normalize_doc_comment(target->decl->doc_comment);
-            if (target->decl->kind == FENG_DECL_TYPE || target->decl->kind == FENG_DECL_SPEC) {
+            if (target->decl->kind == FENG_DECL_TYPE ||
+                target->decl->kind == FENG_DECL_ENUM ||
+                target->decl->kind == FENG_DECL_SPEC) {
                 category = hover_category_from_decl(target->decl);
                 hover_presentation_set_category(presentation, "Kind", category);
             } else if (target->decl->kind == FENG_DECL_GLOBAL_BINDING) {
@@ -10287,6 +10367,17 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
                                          : NULL);
                 hover_presentation_set_category(presentation, "Kind", category);
             }
+            break;
+        case FENG_LSP_RESOLVED_ENUM_ITEM:
+            if (!enum_item_hover_signature_to_string(&presentation->signature,
+                                                      session,
+                                                      target->decl,
+                                                      target->enum_item)) {
+                return false;
+            }
+            hover_presentation_set_category(presentation,
+                                            "Kind",
+                                            FENG_LSP_TYPE_CATEGORY_ENUM);
             break;
         case FENG_LSP_RESOLVED_MEMBER:
             if (!member_signature_to_string_with_session_and_style(
@@ -10310,6 +10401,11 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
                                                                           target->member)
                                          : NULL);
                 hover_presentation_set_category(presentation, "Kind", category);
+            } else if (target->member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+                hover_presentation_set_category(
+                    presentation,
+                    "Kind",
+                    hover_category_from_decl(target->decl));
             }
             break;
         case FENG_LSP_RESOLVED_PARAM:
@@ -11613,6 +11709,14 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
                                                            expr->as.member.object,
                                                            locals);
         if (target->decl != NULL) {
+            if (target->decl->kind == FENG_DECL_ENUM) {
+                target->enum_item = find_enum_item_by_name(target->decl,
+                                                           expr->as.member.member);
+                if (target->enum_item != NULL) {
+                    target->kind = FENG_LSP_RESOLVED_ENUM_ITEM;
+                    return target->decl;
+                }
+            }
             target->member = find_member_by_name(target->decl, expr->as.member.member);
             if (target->member != NULL) {
                 target->kind = FENG_LSP_RESOLVED_MEMBER;
@@ -11820,6 +11924,8 @@ static bool resolved_targets_equal(const FengLspResolvedTarget *lhs,
             return lhs->decl == rhs->decl;
         case FENG_LSP_RESOLVED_MEMBER:
             return lhs->member == rhs->member;
+        case FENG_LSP_RESOLVED_ENUM_ITEM:
+            return lhs->enum_item == rhs->enum_item && lhs->decl == rhs->decl;
         case FENG_LSP_RESOLVED_PARAM:
             return lhs->parameter == rhs->parameter;
         case FENG_LSP_RESOLVED_BINDING:
@@ -11845,6 +11951,8 @@ static bool resolved_target_supports_references(const FengLspResolvedTarget *tar
             return target->decl != NULL && target->decl->kind != FENG_DECL_FIT;
         case FENG_LSP_RESOLVED_MEMBER:
             return target->member != NULL;
+        case FENG_LSP_RESOLVED_ENUM_ITEM:
+            return false;
         case FENG_LSP_RESOLVED_PARAM:
             return target->parameter != NULL;
         case FENG_LSP_RESOLVED_BINDING:
@@ -11900,6 +12008,8 @@ static bool resolved_target_can_rename(const FengLspAnalysisSession *session,
                 owner_program = find_decl_owner_program_in_session(session, target->decl);
             }
             return owner_program != NULL && find_source(session, owner_program->path) != NULL;
+        case FENG_LSP_RESOLVED_ENUM_ITEM:
+            return false;
         case FENG_LSP_RESOLVED_PARAM:
         case FENG_LSP_RESOLVED_BINDING:
             return true;
@@ -13811,6 +13921,32 @@ static bool find_symbol_decl_token_hit(const FengLspCacheQueryContext *context,
             }
             break;
         case FENG_DECL_ENUM:
+            for (index = 0U; index < decl->as.enum_decl.item_count; ++index) {
+                const FengEnumItem *item = &decl->as.enum_decl.items[index];
+
+                if (offset_in_token(item->token, offset) ||
+                    offset_in_slice_from_source(context->source_text,
+                                                item->name,
+                                                offset)) {
+                    const FengSymbolDeclView *owner_symbol =
+                        match_ast_decl_to_symbol(context->current_module,
+                                                 context->program,
+                                                 decl);
+                    const FengSymbolDeclView *item_symbol =
+                        find_symbol_decl_member_by_name(owner_symbol,
+                                                        item->name,
+                                                        false);
+
+                    if (item_symbol != NULL &&
+                        feng_symbol_decl_kind(item_symbol) ==
+                            FENG_SYMBOL_DECL_KIND_ENUM_ITEM) {
+                        target->kind = FENG_LSP_RESOLVED_ENUM_ITEM;
+                        target->decl = owner_symbol;
+                        target->member = item_symbol;
+                        return true;
+                    }
+                }
+            }
             break;
         case FENG_DECL_TYPE:
             for (index = 0U; index < decl->as.type_decl.type_param_count; ++index) {
@@ -14368,7 +14504,10 @@ static const FengSymbolDeclView *resolve_symbol_expr_target(const FengLspCacheQu
                                                              expr->as.member.member,
                                                              false);
             if (target->member != NULL) {
-                target->kind = FENG_LSP_RESOLVED_MEMBER;
+                target->kind = feng_symbol_decl_kind(target->member) ==
+                                       FENG_SYMBOL_DECL_KIND_ENUM_ITEM
+                                   ? FENG_LSP_RESOLVED_ENUM_ITEM
+                                   : FENG_LSP_RESOLVED_MEMBER;
                 return target->decl;
             }
         }
@@ -14753,6 +14892,7 @@ static bool hover_presentation_for_cache_target(
             }
             documentation = feng_symbol_decl_doc(target->decl);
             if (feng_symbol_decl_kind(target->decl) == FENG_SYMBOL_DECL_KIND_TYPE ||
+                feng_symbol_decl_kind(target->decl) == FENG_SYMBOL_DECL_KIND_ENUM ||
                 feng_symbol_decl_kind(target->decl) == FENG_SYMBOL_DECL_KIND_SPEC) {
                 hover_presentation_set_category(
                     presentation,
@@ -14767,6 +14907,18 @@ static bool hover_presentation_for_cache_target(
                         context,
                         feng_symbol_decl_value_type(target->decl)));
             }
+            break;
+        case FENG_LSP_RESOLVED_ENUM_ITEM:
+            if (!symbol_member_signature_to_string_with_style(
+                    &presentation->signature,
+                    target->member,
+                    FENG_LSP_TYPE_NAME_SHORT)) {
+                return false;
+            }
+            documentation = feng_symbol_decl_doc(target->member);
+            hover_presentation_set_category(presentation,
+                                            "Kind",
+                                            FENG_LSP_TYPE_CATEGORY_ENUM);
             break;
         case FENG_LSP_RESOLVED_MEMBER:
             if (!symbol_member_signature_to_string_with_style(
@@ -14783,6 +14935,12 @@ static bool hover_presentation_for_cache_target(
                     hover_category_from_symbol_type(
                         context,
                         feng_symbol_decl_value_type(target->member)));
+            } else if (feng_symbol_decl_kind(target->member) ==
+                       FENG_SYMBOL_DECL_KIND_CONSTRUCTOR) {
+                hover_presentation_set_category(
+                    presentation,
+                    "Kind",
+                    hover_category_from_symbol_decl(target->decl));
             }
             break;
         case FENG_LSP_RESOLVED_PARAM:
@@ -15101,6 +15259,14 @@ static bool definition_location_from_analysis(const FengLspAnalysisSession *sess
             return location_json(result,
                                  target_program != NULL ? target_program->path : NULL,
                                  target->member->token);
+        case FENG_LSP_RESOLVED_ENUM_ITEM:
+            (void)find_decl_module(session, target->decl, &target_program);
+            if (target_program == NULL && session->analysis == NULL) {
+                target_program = program;
+            }
+            return location_json(result,
+                                 target_program != NULL ? target_program->path : NULL,
+                                 target->enum_item->token);
         case FENG_LSP_RESOLVED_PARAM:
             return location_json(result, program->path, target->parameter->token);
         case FENG_LSP_RESOLVED_BINDING:
@@ -15130,6 +15296,10 @@ static bool definition_location_from_cache(const FengLspCacheQueryContext *cache
             return location_json(result, path.data, feng_symbol_decl_token(target->decl));
         }
         case FENG_LSP_RESOLVED_MEMBER: {
+            FengSlice path = feng_symbol_decl_path(target->member);
+            return location_json(result, path.data, feng_symbol_decl_token(target->member));
+        }
+        case FENG_LSP_RESOLVED_ENUM_ITEM: {
             FengSlice path = feng_symbol_decl_path(target->member);
             return location_json(result, path.data, feng_symbol_decl_token(target->member));
         }
