@@ -7873,11 +7873,11 @@ static void test_lsp_hover_type_categories_and_declaration_shapes(void) {
     free(output);
 
     output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "type User: Named {", 5U);
-    ASSERT(strstr(output, "type User: Named { ... }\\n\\nKind: Reference Type") != NULL);
+    ASSERT(strstr(output, "type User: Named {...}\\n\\nKind: Reference Type") != NULL);
     free(output);
 
     output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "@value type Point {", 12U);
-    ASSERT(strstr(output, "type Point { ... }\\n\\nKind: Value Type") != NULL);
+    ASSERT(strstr(output, "type Point {...}\\n\\nKind: Value Type") != NULL);
     ASSERT(strstr(output, "@value type Point") == NULL);
     free(output);
 
@@ -7898,7 +7898,7 @@ static void test_lsp_hover_type_categories_and_declaration_shapes(void) {
     free(output);
 
     output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "spec Named {", 5U);
-    ASSERT(strstr(output, "spec Named { ... }\\n\\nKind: Object Spec") != NULL);
+    ASSERT(strstr(output, "spec Named {...}\\n\\nKind: Object Spec") != NULL);
     free(output);
 
     output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "spec EmptySpec {}", 5U);
@@ -8018,6 +8018,19 @@ static void test_lsp_hover_type_categories_and_declaration_shapes(void) {
     ASSERT(strstr(output, "type Annotated {}\\n\\nKind: Value Type") != NULL);
     ASSERT(strstr(output, "@value") == NULL);
     ASSERT(strstr(output, "@abi") == NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(
+        "module test.lsp.hover_short_names;\n"
+        "func qualified<T: external.contracts.Named>(value: external.models.User): external.models.User {\n"
+        "    return value;\n"
+        "}\n",
+        kPlaintextInitialize,
+        "func qualified<T: external.contracts.Named>",
+        strlen("func "));
+    ASSERT(strstr(output,
+                  "func qualified<T: Named>(value: User): User") != NULL);
+    ASSERT(strstr(output, "external.") == NULL);
     free(output);
 }
 
@@ -8335,7 +8348,7 @@ static void test_lsp_hover_type_category_survives_failed_edit(void) {
     ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
     ASSERT(strstr(output, "\"id\":3,\"result\":null") == NULL);
     ASSERT(count_occurrences(output,
-                             "type Point { ... }\\n\\nKind: Value Type") == 2);
+                             "type Point {...}\\n\\nKind: Value Type") == 2);
 
     free(output);
     free(shutdown);
@@ -13693,6 +13706,7 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
         "\n"
         "open type RefType {\n"
         "    open let value: i32;\n"
+        "    open func copy(value: RefType): RefType { return value; }\n"
         "}\n"
         "@value\n"
         "open type ValueType {\n"
@@ -13713,6 +13727,7 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
         "import test.lsp.hoverpkg;\n"
         "\n"
         "func broken(ref: RefType, value: ValueType, tuple: TupleType, object: ObjectShape, callback: CallbackShape, unionValue: UnionShape, intersectionValue: IntersectionShape): void {\n"
+        "    ref.copy(ref);\n"
         "    missing;\n"
         "}\n";
     static const char *kInitialize =
@@ -13779,7 +13794,17 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     "ref: RefType",
                                                     strlen("ref: "));
     ASSERT(strstr(output,
-                  "type RefType { ... }\\n\\nKind: Reference Type") != NULL);
+                  "type RefType {...}\\n\\nKind: Reference Type") != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(consumer_source_path,
+                                                    kConsumerSource,
+                                                    kInitialize,
+                                                    "textDocument/hover",
+                                                    "ref.copy(ref)",
+                                                    strlen("ref."));
+    ASSERT(strstr(output, "func copy(value: RefType): RefType") != NULL);
+    ASSERT(strstr(output, "test.lsp.hoverpkg.RefType") == NULL);
     free(output);
 
     output = capture_lsp_position_response_at_path(consumer_source_path,
@@ -13789,7 +13814,7 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     "value: ValueType",
                                                     strlen("value: "));
     ASSERT(strstr(output,
-                  "type ValueType { ... }\\n\\nKind: Value Type") != NULL);
+                  "type ValueType {...}\\n\\nKind: Value Type") != NULL);
     ASSERT(strstr(output, "@value type ValueType") == NULL);
     free(output);
 
@@ -13810,7 +13835,7 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     "object: ObjectShape",
                                                     strlen("object: "));
     ASSERT(strstr(output,
-                  "spec ObjectShape { ... }\\n\\nKind: Object Spec") != NULL);
+                  "spec ObjectShape {...}\\n\\nKind: Object Spec") != NULL);
     free(output);
 
     output = capture_lsp_position_response_at_path(consumer_source_path,
@@ -13830,7 +13855,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     "unionValue: UnionShape",
                                                     strlen("unionValue: "));
     ASSERT(strstr(output,
-                  "spec UnionShape: test.lsp.hoverpkg.RefType | test.lsp.hoverpkg.ValueType;\\n\\nKind: Union Spec") != NULL);
+                  "spec UnionShape: RefType | ValueType;\\n\\nKind: Union Spec") != NULL);
+    ASSERT(strstr(output, "test.lsp.hoverpkg.RefType") == NULL);
     free(output);
 
     output = capture_lsp_position_response_at_path(consumer_source_path,
@@ -13840,7 +13866,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     "intersectionValue: IntersectionShape",
                                                     strlen("intersectionValue: "));
     ASSERT(strstr(output,
-                  "spec IntersectionShape: test.lsp.hoverpkg.ObjectShape & test.lsp.hoverpkg.OtherShape;\\n\\nKind: Intersection Spec") != NULL);
+                  "spec IntersectionShape: ObjectShape & OtherShape;\\n\\nKind: Intersection Spec") != NULL);
+    ASSERT(strstr(output, "test.lsp.hoverpkg.ObjectShape") == NULL);
     free(output);
 
     free(consumer_source_path);

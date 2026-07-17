@@ -78,7 +78,7 @@ Kind: Reference Type
 例如 `@value type Point { ... }` 的 Hover 应显示：
 
 ```feng
-type Point { ... }
+type Point {...}
 ```
 
 **Kind:** `Value Type`
@@ -86,7 +86,7 @@ type Point { ... }
 普通 `type` 使用相同的声明语法形状，由类别标签表达差异：
 
 ```feng
-type User { ... }
+type User {...}
 ```
 
 **Kind:** `Reference Type`
@@ -96,7 +96,7 @@ type User { ... }
 普通 `type`、Value Type 与 Object Spec 不展开块体成员：
 
 - 声明确实没有成员时显示 `{}`；
-- 声明存在成员但被省略时显示 `{ ... }`。
+- 声明存在成员但被省略时显示 `{...}`。
 
 不得显示 `{}` 来代表被省略的非空块体，也不得把完整字段、方法或继承成员集合展开到类型 Hover 中。
 
@@ -110,6 +110,20 @@ type User { ... }
 - Intersection Spec 的直接 member 列表。
 
 不得递归展开元素类型、union member、intersection member 或其继承闭包。
+
+### 2.4 类型名称展示规则
+
+Hover 的 Feng 代码块只显示命名类型路径的最后一段，不显示模块限定的
+full name。该规则递归适用于泛型参数、泛型约束、数组元素、指针目标、参数类型与返回类型。
+
+例如，符号索引中保存的 `std.json.JsonSerializable<T>` 在 Hover 中显示为：
+
+```feng
+JsonSerializable<T>
+```
+
+当前阶段不根据可见性或同名歧义恢复模块限定；Hover 一律使用短名称。该规则仅改变
+Hover 表现，不改变源码、名称解析、符号索引、Completion、Signature Help、诊断或编译行为。
 
 ---
 
@@ -160,7 +174,7 @@ Hover `User[]` 中的 `User` 类型引用时，目标是 `User` 声明本身，�
 保留名称、泛型参数和声明头上的 spec 关系，不展开块体成员：
 
 ```feng
-type User<T>: Named, Serializable { ... }
+type User<T>: Named, Serializable {...}
 ```
 
 **Kind:** `Reference Type`
@@ -170,7 +184,7 @@ type User<T>: Named, Serializable { ... }
 不显示 `@value` 或其他注解；保留与普通 `type` 相同的声明核心形状：
 
 ```feng
-type Point: Equatable { ... }
+type Point: Equatable {...}
 ```
 
 **Kind:** `Value Type`
@@ -197,7 +211,7 @@ type Pair<T>(T, T): Equatable;
 保留名称、泛型参数和父 spec 列表，不展开字段、方法或继承成员：
 
 ```feng
-spec Readable<T>: Named { ... }
+spec Readable<T>: Named {...}
 ```
 
 **Kind:** `Object Spec`
@@ -486,7 +500,7 @@ typedef struct FengLspHoverPresentation {
 - 绑定、参数和字段显示 `Kind`，参数签名以 `param let/var` 开头；
 - 函数和方法不额外显示返回类型 `Kind`；
 - 所有注解在声明核心形状中一致省略；
-- 非空块体显示 `{ ... }`，真实空块体显示 `{}`；
+- 非空块体显示 `{...}`，真实空块体显示 `{}`；
 - Tuple、Callback、Union、Intersection 按本方案显示完整直接签名；
 - 当前文件、跨文件和跨模块结果一致；
 - 不通过源码文本或成员名称猜测类别；
@@ -504,6 +518,8 @@ typedef struct FengLspHoverPresentation {
 - 已实现 Reference、Value、Tuple、四种 Spec、Array、Builtin 与 Pointer 类别；
 - 参数签名以同行的 `param let/var` 开头，类别行统一为 `Kind`；
 - 函数和方法不额外显示返回类型 `Kind`；
+- Hover 中的命名类型统一显示短名称，并递归应用于泛型、参数和返回类型；
+- 非空声明块体统一显示为 `{...}`，真实空块体仍显示 `{}`；
 - 不完整输入继续使用最后一次成功分析，失败分析不覆盖已成功结果。
 
 验收结果：

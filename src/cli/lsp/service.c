@@ -9305,16 +9305,32 @@ static void position_from_offset(const char *text,
     }
 }
 
-static bool type_ref_to_string(FengLspString *buffer, const FengTypeRef *type_ref) {
+typedef enum FengLspTypeNameStyle {
+    FENG_LSP_TYPE_NAME_QUALIFIED,
+    FENG_LSP_TYPE_NAME_SHORT
+} FengLspTypeNameStyle;
+
+/* Format an AST type reference with either its complete path or only its
+ * final path segment. Nested type arguments inherit the same presentation. */
+static bool type_ref_to_string_with_style(FengLspString *buffer,
+                                          const FengTypeRef *type_ref,
+                                          FengLspTypeNameStyle style) {
     size_t index;
 
     if (type_ref == NULL) {
         return string_append_cstr(buffer, "void");
     }
     switch (type_ref->kind) {
-        case FENG_TYPE_REF_NAMED:
-            for (index = 0U; index < type_ref->as.named.segment_count; ++index) {
-                if (index > 0U && !string_append_cstr(buffer, ".")) {
+        case FENG_TYPE_REF_NAMED: {
+            size_t segment_start = style == FENG_LSP_TYPE_NAME_SHORT &&
+                                   type_ref->as.named.segment_count > 0U
+                                       ? type_ref->as.named.segment_count - 1U
+                                       : 0U;
+
+            for (index = segment_start;
+                 index < type_ref->as.named.segment_count;
+                 ++index) {
+                if (index > segment_start && !string_append_cstr(buffer, ".")) {
                     return false;
                 }
                 if (!string_append_bytes(buffer,
@@ -9331,7 +9347,9 @@ static bool type_ref_to_string(FengLspString *buffer, const FengTypeRef *type_re
                     if (index > 0U && !string_append_cstr(buffer, ", ")) {
                         return false;
                     }
-                    if (!type_ref_to_string(buffer, type_ref->as.named.type_args[index])) {
+                    if (!type_ref_to_string_with_style(buffer,
+                                                       type_ref->as.named.type_args[index],
+                                                       style)) {
                         return false;
                     }
                 }
@@ -9340,30 +9358,45 @@ static bool type_ref_to_string(FengLspString *buffer, const FengTypeRef *type_re
                 }
             }
             return true;
+        }
         case FENG_TYPE_REF_POINTER:
-            return type_ref_to_string(buffer, type_ref->as.inner) &&
+            return type_ref_to_string_with_style(buffer, type_ref->as.inner, style) &&
                    string_append_cstr(buffer, "*");
         case FENG_TYPE_REF_ARRAY:
-            return type_ref_to_string(buffer, type_ref->as.inner) &&
+            return type_ref_to_string_with_style(buffer, type_ref->as.inner, style) &&
                    string_append_cstr(buffer, type_ref->array_element_writable ? "[!]" : "[]");
     }
     return false;
 }
 
-static bool parameter_type_to_string(FengLspString *buffer, const FengParameter *param) {
+/* Hover deliberately presents only the final segment of named type paths. */
+static bool hover_type_ref_to_string(FengLspString *buffer,
+                                     const FengTypeRef *type_ref) {
+    return type_ref_to_string_with_style(buffer,
+                                         type_ref,
+                                         FENG_LSP_TYPE_NAME_SHORT);
+}
+
+static bool parameter_type_to_string_with_style(FengLspString *buffer,
+                                                const FengParameter *param,
+                                                FengLspTypeNameStyle style) {
     const FengTypeRef *type = param != NULL ? param->type : NULL;
 
     if (param != NULL && param->is_variadic) {
         if (type != NULL && type->kind == FENG_TYPE_REF_ARRAY) {
-            return type_ref_to_string(buffer, type->as.inner) && string_append_cstr(buffer, "...");
+            return type_ref_to_string_with_style(buffer, type->as.inner, style) &&
+                   string_append_cstr(buffer, "...");
         }
-        return type_ref_to_string(buffer, type) && string_append_cstr(buffer, "...");
+        return type_ref_to_string_with_style(buffer, type, style) &&
+               string_append_cstr(buffer, "...");
     }
-    return type_ref_to_string(buffer, type);
+    return type_ref_to_string_with_style(buffer, type, style);
 }
 
-static bool semantic_type_fact_to_string(FengLspString *buffer,
-                                         const FengSemanticTypeFact *fact) {
+static bool semantic_type_fact_to_string_with_style(
+    FengLspString *buffer,
+    const FengSemanticTypeFact *fact,
+    FengLspTypeNameStyle style) {
     if (fact == NULL) {
         return false;
     }
@@ -9371,7 +9404,7 @@ static bool semantic_type_fact_to_string(FengLspString *buffer,
         case FENG_SEMANTIC_TYPE_FACT_BUILTIN:
             return string_append_bytes(buffer, fact->builtin_name.data, fact->builtin_name.length);
         case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
-            return type_ref_to_string(buffer, fact->type_ref);
+            return type_ref_to_string_with_style(buffer, fact->type_ref, style);
         case FENG_SEMANTIC_TYPE_FACT_DECL: {
             FengSlice name = decl_name(fact->type_decl);
 
@@ -9383,32 +9416,42 @@ static bool semantic_type_fact_to_string(FengLspString *buffer,
     return false;
 }
 
-static bool append_optional_static_type_annotation(FengLspString *buffer,
-                                                  const FengLspAnalysisSession *session,
-                                                  const void *site,
-                                                  const FengTypeRef *explicit_type) {
+static bool append_optional_static_type_annotation_with_style(
+    FengLspString *buffer,
+    const FengLspAnalysisSession *session,
+    const void *site,
+    const FengTypeRef *explicit_type,
+    FengLspTypeNameStyle style) {
     if (explicit_type != NULL) {
-        return string_append_cstr(buffer, ": ") && type_ref_to_string(buffer, explicit_type);
+        return string_append_cstr(buffer, ": ") &&
+               type_ref_to_string_with_style(buffer, explicit_type, style);
     }
     if (session != NULL && session->analysis != NULL) {
         const FengSemanticTypeFact *fact = feng_semantic_lookup_type_fact(session->analysis, site);
 
         if (fact != NULL) {
-            return string_append_cstr(buffer, ": ") && semantic_type_fact_to_string(buffer, fact);
+            return string_append_cstr(buffer, ": ") &&
+                   semantic_type_fact_to_string_with_style(buffer, fact, style);
         }
     }
     return true;
 }
 
-static bool binding_signature_to_string(FengLspString *buffer,
-                                        const FengLspAnalysisSession *session,
-                                        const FengBinding *binding) {
+static bool binding_signature_to_string_with_style(
+    FengLspString *buffer,
+    const FengLspAnalysisSession *session,
+    const FengBinding *binding,
+    FengLspTypeNameStyle style) {
     const char *literal_type = NULL;
 
     if (!string_append_cstr(buffer,
                             binding->mutability == FENG_MUTABILITY_VAR ? "var " : "let ") ||
         !string_append_bytes(buffer, binding->name.data, binding->name.length) ||
-        !append_optional_static_type_annotation(buffer, session, binding, binding->type)) {
+        !append_optional_static_type_annotation_with_style(buffer,
+                                                           session,
+                                                           binding,
+                                                           binding->type,
+                                                           style)) {
         return false;
     }
     if (binding->type != NULL || (session != NULL && session->analysis != NULL) ||
@@ -9439,8 +9482,10 @@ static bool binding_signature_to_string(FengLspString *buffer,
 /* Format the narrowed static type of an infix-match binding from its validated
  * type labels. Chain patterns bind to their deepest type; multiple labels form
  * the subset union described by docs/feng-flow.md. */
-static bool match_binding_signature_to_string(FengLspString *buffer,
-                                              const FengExpr *match_op) {
+static bool match_binding_signature_to_string_with_style(
+    FengLspString *buffer,
+    const FengExpr *match_op,
+    FengLspTypeNameStyle style) {
     size_t index;
 
     if (match_op == NULL || match_op->kind != FENG_EXPR_MATCH_OP ||
@@ -9468,7 +9513,7 @@ static bool match_binding_signature_to_string(FengLspString *buffer,
                        ? label->type_chain[label->type_chain_count - 1U]
                        : label->type;
         if ((index > 0U && !string_append_cstr(buffer, " | ")) ||
-            !type_ref_to_string(buffer, type_ref)) {
+            !type_ref_to_string_with_style(buffer, type_ref, style)) {
             return false;
         }
     }
@@ -9478,13 +9523,24 @@ static bool match_binding_signature_to_string(FengLspString *buffer,
 static bool decl_signature_to_string_with_session(FengLspString *buffer,
                                                   const FengLspAnalysisSession *session,
                                                   const FengDecl *decl);
+static bool decl_signature_to_string_with_session_and_style(
+    FengLspString *buffer,
+    const FengLspAnalysisSession *session,
+    const FengDecl *decl,
+    FengLspTypeNameStyle style);
 static bool member_signature_to_string_with_session(FengLspString *buffer,
                                                     const FengLspAnalysisSession *session,
                                                     const FengTypeMember *member);
+static bool member_signature_to_string_with_session_and_style(
+    FengLspString *buffer,
+    const FengLspAnalysisSession *session,
+    const FengTypeMember *member,
+    FengLspTypeNameStyle style);
 
-static bool append_decl_type_params(FengLspString *buffer,
-                                    const FengTypeParam *params,
-                                    size_t count) {
+static bool append_decl_type_params_with_style(FengLspString *buffer,
+                                               const FengTypeParam *params,
+                                               size_t count,
+                                               FengLspTypeNameStyle style) {
     size_t i;
 
     if (count == 0U) {
@@ -9508,7 +9564,7 @@ static bool append_decl_type_params(FengLspString *buffer,
         }
         if (params[i].constraint != NULL) {
             if (!string_append_cstr(buffer, ": ") ||
-                !type_ref_to_string(buffer, params[i].constraint)) {
+                !type_ref_to_string_with_style(buffer, params[i].constraint, style)) {
                 return false;
             }
         }
@@ -9659,7 +9715,7 @@ static bool append_type_ref_list(FengLspString *buffer,
     }
     for (index = 0U; index < count; ++index) {
         if ((index > 0U && !string_append_cstr(buffer, separator)) ||
-            !type_ref_to_string(buffer, types[index])) {
+            !hover_type_ref_to_string(buffer, types[index])) {
             return false;
         }
     }
@@ -9680,9 +9736,10 @@ static bool decl_hover_signature_to_string(FengLspString *buffer,
             !string_append_bytes(buffer,
                                  decl->as.type_decl.name.data,
                                  decl->as.type_decl.name.length) ||
-            !append_decl_type_params(buffer,
-                                     decl->as.type_decl.type_params,
-                                     decl->as.type_decl.type_param_count)) {
+            !append_decl_type_params_with_style(buffer,
+                                                decl->as.type_decl.type_params,
+                                                decl->as.type_decl.type_param_count,
+                                                FENG_LSP_TYPE_NAME_SHORT)) {
             return false;
         }
         if (decl->as.type_decl.is_tuple) {
@@ -9694,7 +9751,7 @@ static bool decl_hover_signature_to_string(FengLspString *buffer,
 
                 if (member == NULL || member->kind != FENG_TYPE_MEMBER_FIELD ||
                     (index > 0U && !string_append_cstr(buffer, ", ")) ||
-                    !type_ref_to_string(buffer, member->as.field.type)) {
+                    !hover_type_ref_to_string(buffer, member->as.field.type)) {
                     return false;
                 }
             }
@@ -9714,7 +9771,7 @@ static bool decl_hover_signature_to_string(FengLspString *buffer,
         }
         return string_append_cstr(buffer,
                                   decl->as.type_decl.member_count > 0U
-                                      ? " { ... }"
+                                      ? " {...}"
                                       : " {}");
     }
     if (decl->kind == FENG_DECL_SPEC) {
@@ -9722,9 +9779,10 @@ static bool decl_hover_signature_to_string(FengLspString *buffer,
             !string_append_bytes(buffer,
                                  decl->as.spec_decl.name.data,
                                  decl->as.spec_decl.name.length) ||
-            !append_decl_type_params(buffer,
-                                     decl->as.spec_decl.type_params,
-                                     decl->as.spec_decl.type_param_count)) {
+            !append_decl_type_params_with_style(buffer,
+                                                decl->as.spec_decl.type_params,
+                                                decl->as.spec_decl.type_param_count,
+                                                FENG_LSP_TYPE_NAME_SHORT)) {
             return false;
         }
         switch (decl->as.spec_decl.form) {
@@ -9736,7 +9794,7 @@ static bool decl_hover_signature_to_string(FengLspString *buffer,
                                             ", ") &&
                        string_append_cstr(buffer,
                                           decl->as.spec_decl.as.object.member_count > 0U
-                                              ? " { ... }"
+                                              ? " {...}"
                                               : " {}");
             case FENG_SPEC_FORM_CALLABLE:
                 if (!string_append_cstr(buffer, "(")) {
@@ -9751,13 +9809,17 @@ static bool decl_hover_signature_to_string(FengLspString *buffer,
                     if ((index > 0U && !string_append_cstr(buffer, ", ")) ||
                         !string_append_bytes(buffer, param->name.data, param->name.length) ||
                         !string_append_cstr(buffer, ": ") ||
-                        !parameter_type_to_string(buffer, param)) {
+                        !parameter_type_to_string_with_style(
+                            buffer,
+                            param,
+                            FENG_LSP_TYPE_NAME_SHORT)) {
                         return false;
                     }
                 }
                 return string_append_cstr(buffer, "): ") &&
-                       type_ref_to_string(buffer,
-                                          decl->as.spec_decl.as.callable.return_type) &&
+                       hover_type_ref_to_string(
+                           buffer,
+                           decl->as.spec_decl.as.callable.return_type) &&
                        string_append_cstr(buffer, ";");
             case FENG_SPEC_FORM_UNION:
                 return append_type_ref_list(buffer,
@@ -9775,21 +9837,30 @@ static bool decl_hover_signature_to_string(FengLspString *buffer,
                        string_append_cstr(buffer, ";");
         }
     }
-    return decl_signature_to_string_with_session(buffer, session, decl);
+    return decl_signature_to_string_with_session_and_style(
+        buffer,
+        session,
+        decl,
+        FENG_LSP_TYPE_NAME_SHORT);
 }
 
 static bool decl_signature_to_string(FengLspString *buffer, const FengDecl *decl) {
     return decl_signature_to_string_with_session(buffer, NULL, decl);
 }
 
-static bool decl_signature_to_string_with_session(FengLspString *buffer,
-                                                  const FengLspAnalysisSession *session,
-                                                  const FengDecl *decl) {
+static bool decl_signature_to_string_with_session_and_style(
+    FengLspString *buffer,
+    const FengLspAnalysisSession *session,
+    const FengDecl *decl,
+    FengLspTypeNameStyle style) {
     size_t index;
 
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
-            return binding_signature_to_string(buffer, session, &decl->as.binding);
+            return binding_signature_to_string_with_style(buffer,
+                                                          session,
+                                                          &decl->as.binding,
+                                                          style);
         case FENG_DECL_ENUM:
             return string_append_cstr(buffer, "enum ") &&
                    string_append_bytes(buffer,
@@ -9798,11 +9869,17 @@ static bool decl_signature_to_string_with_session(FengLspString *buffer,
         case FENG_DECL_TYPE:
             return string_append_cstr(buffer, "type ") &&
                    string_append_bytes(buffer, decl->as.type_decl.name.data, decl->as.type_decl.name.length) &&
-                   append_decl_type_params(buffer, decl->as.type_decl.type_params, decl->as.type_decl.type_param_count);
+                   append_decl_type_params_with_style(buffer,
+                                                      decl->as.type_decl.type_params,
+                                                      decl->as.type_decl.type_param_count,
+                                                      style);
         case FENG_DECL_SPEC:
             return string_append_cstr(buffer, "spec ") &&
                    string_append_bytes(buffer, decl->as.spec_decl.name.data, decl->as.spec_decl.name.length) &&
-                   append_decl_type_params(buffer, decl->as.spec_decl.type_params, decl->as.spec_decl.type_param_count);
+                   append_decl_type_params_with_style(buffer,
+                                                      decl->as.spec_decl.type_params,
+                                                      decl->as.spec_decl.type_param_count,
+                                                      style);
         case FENG_DECL_FIT:
             return string_append_cstr(buffer, "fit");
         case FENG_DECL_FUNCTION:
@@ -9810,7 +9887,11 @@ static bool decl_signature_to_string_with_session(FengLspString *buffer,
                 !string_append_bytes(buffer,
                                      decl->as.function_decl.name.data,
                                      decl->as.function_decl.name.length) ||
-                !append_decl_type_params(buffer, decl->as.function_decl.type_params, decl->as.function_decl.type_param_count) ||
+                !append_decl_type_params_with_style(
+                    buffer,
+                    decl->as.function_decl.type_params,
+                    decl->as.function_decl.type_param_count,
+                    style) ||
                 !string_append_cstr(buffer, "(")) {
                 return false;
             }
@@ -9822,23 +9903,40 @@ static bool decl_signature_to_string_with_session(FengLspString *buffer,
                                          decl->as.function_decl.params[index].name.data,
                                          decl->as.function_decl.params[index].name.length) ||
                     !string_append_cstr(buffer, ": ") ||
-                    !parameter_type_to_string(buffer, &decl->as.function_decl.params[index])) {
+                    !parameter_type_to_string_with_style(
+                        buffer,
+                        &decl->as.function_decl.params[index],
+                        style)) {
                     return false;
                 }
             }
             return string_append_cstr(buffer, "): ") &&
-                   type_ref_to_string(buffer, decl->as.function_decl.return_type);
+                   type_ref_to_string_with_style(buffer,
+                                                 decl->as.function_decl.return_type,
+                                                 style);
     }
     return false;
+}
+
+static bool decl_signature_to_string_with_session(FengLspString *buffer,
+                                                  const FengLspAnalysisSession *session,
+                                                  const FengDecl *decl) {
+    return decl_signature_to_string_with_session_and_style(
+        buffer,
+        session,
+        decl,
+        FENG_LSP_TYPE_NAME_QUALIFIED);
 }
 
 static bool member_signature_to_string(FengLspString *buffer, const FengTypeMember *member) {
     return member_signature_to_string_with_session(buffer, NULL, member);
 }
 
-static bool member_signature_to_string_with_session(FengLspString *buffer,
-                                                    const FengLspAnalysisSession *session,
-                                                    const FengTypeMember *member) {
+static bool member_signature_to_string_with_session_and_style(
+    FengLspString *buffer,
+    const FengLspAnalysisSession *session,
+    const FengTypeMember *member,
+    FengLspTypeNameStyle style) {
     size_t index;
 
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
@@ -9847,7 +9945,11 @@ static bool member_signature_to_string_with_session(FengLspString *buffer,
                string_append_bytes(buffer,
                                    member->as.field.name.data,
                                    member->as.field.name.length) &&
-               append_optional_static_type_annotation(buffer, session, member, member->as.field.type);
+               append_optional_static_type_annotation_with_style(buffer,
+                                                                 session,
+                                                                 member,
+                                                                 member->as.field.type,
+                                                                 style);
     }
     if (!string_append_cstr(buffer,
                             member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ? "ctor " :
@@ -9855,7 +9957,10 @@ static bool member_signature_to_string_with_session(FengLspString *buffer,
         !string_append_bytes(buffer,
                              member->as.callable.name.data,
                              member->as.callable.name.length) ||
-        !append_decl_type_params(buffer, member->as.callable.type_params, member->as.callable.type_param_count) ||
+        !append_decl_type_params_with_style(buffer,
+                                           member->as.callable.type_params,
+                                           member->as.callable.type_param_count,
+                                           style) ||
         !string_append_cstr(buffer, "(")) {
         return false;
     }
@@ -9867,12 +9972,27 @@ static bool member_signature_to_string_with_session(FengLspString *buffer,
                                  member->as.callable.params[index].name.data,
                                  member->as.callable.params[index].name.length) ||
             !string_append_cstr(buffer, ": ") ||
-            !parameter_type_to_string(buffer, &member->as.callable.params[index])) {
+            !parameter_type_to_string_with_style(buffer,
+                                                 &member->as.callable.params[index],
+                                                 style)) {
             return false;
         }
     }
     return string_append_cstr(buffer, "): ") &&
-           type_ref_to_string(buffer, member->as.callable.return_type);
+           type_ref_to_string_with_style(buffer,
+                                         member->as.callable.return_type,
+                                         style);
+}
+
+static bool member_signature_to_string_with_session(
+    FengLspString *buffer,
+    const FengLspAnalysisSession *session,
+    const FengTypeMember *member) {
+    return member_signature_to_string_with_session_and_style(
+        buffer,
+        session,
+        member,
+        FENG_LSP_TYPE_NAME_QUALIFIED);
 }
 
 static char *normalize_doc_comment(FengSlice raw) {
@@ -10169,9 +10289,11 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
             }
             break;
         case FENG_LSP_RESOLVED_MEMBER:
-            if (!member_signature_to_string_with_session(&presentation->signature,
-                                                         session,
-                                                         target->member)) {
+            if (!member_signature_to_string_with_session_and_style(
+                    &presentation->signature,
+                    session,
+                    target->member,
+                    FENG_LSP_TYPE_NAME_SHORT)) {
                 return false;
             }
             presentation->documentation = normalize_doc_comment(target->member->doc_comment);
@@ -10200,7 +10322,8 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
                                      target->parameter->name.data,
                                      target->parameter->name.length) ||
                 !string_append_cstr(&presentation->signature, ": ") ||
-                !type_ref_to_string(&presentation->signature, target->parameter->type)) {
+                !hover_type_ref_to_string(&presentation->signature,
+                                          target->parameter->type)) {
                 return false;
             }
             hover_presentation_set_category(
@@ -10209,9 +10332,11 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
                 hover_category_from_type_ref(session, program, target->parameter->type));
             break;
         case FENG_LSP_RESOLVED_BINDING:
-            if (!binding_signature_to_string(&presentation->signature,
-                                             session,
-                                             target->binding)) {
+            if (!binding_signature_to_string_with_style(
+                    &presentation->signature,
+                    session,
+                    target->binding,
+                    FENG_LSP_TYPE_NAME_SHORT)) {
                 return false;
             }
             category = target->binding->type != NULL
@@ -10228,7 +10353,10 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
             hover_presentation_set_category(presentation, "Kind", category);
             break;
         case FENG_LSP_RESOLVED_MATCH_BINDING:
-            if (!match_binding_signature_to_string(&presentation->signature, target->match_op)) {
+            if (!match_binding_signature_to_string_with_style(
+                    &presentation->signature,
+                    target->match_op,
+                    FENG_LSP_TYPE_NAME_SHORT)) {
                 return false;
             }
             if (target->match_op->as.match_op.label_count == 1U) {
@@ -10264,8 +10392,8 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
             }
             if (target->type_param->constraint != NULL) {
                 if (!string_append_cstr(&presentation->signature, ": ") ||
-                    !type_ref_to_string(&presentation->signature,
-                                        target->type_param->constraint)) {
+                    !hover_type_ref_to_string(&presentation->signature,
+                                              target->type_param->constraint)) {
                     return false;
                 }
             }
@@ -10276,7 +10404,10 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
     return presentation->signature.data != NULL;
 }
 
-static bool symbol_type_to_string(FengLspString *buffer, const FengSymbolTypeView *type) {
+/* Format a persistent symbol type without changing its stored qualified name. */
+static bool symbol_type_to_string_with_style(FengLspString *buffer,
+                                             const FengSymbolTypeView *type,
+                                             FengLspTypeNameStyle style) {
     size_t index;
 
     if (type == NULL) {
@@ -10287,11 +10418,16 @@ static bool symbol_type_to_string(FengLspString *buffer, const FengSymbolTypeVie
             FengSlice name = feng_symbol_type_builtin_name(type);
             return string_append_bytes(buffer, name.data, name.length);
         }
-        case FENG_SYMBOL_TYPE_KIND_NAMED:
-            for (index = 0U; index < feng_symbol_type_segment_count(type); ++index) {
+        case FENG_SYMBOL_TYPE_KIND_NAMED: {
+            size_t segment_count = feng_symbol_type_segment_count(type);
+            size_t segment_start = style == FENG_LSP_TYPE_NAME_SHORT && segment_count > 0U
+                                       ? segment_count - 1U
+                                       : 0U;
+
+            for (index = segment_start; index < segment_count; ++index) {
                 FengSlice segment = feng_symbol_type_segment_at(type, index);
 
-                if (index > 0U && !string_append_cstr(buffer, ".")) {
+                if (index > segment_start && !string_append_cstr(buffer, ".")) {
                     return false;
                 }
                 if (!string_append_bytes(buffer, segment.data, segment.length)) {
@@ -10299,11 +10435,16 @@ static bool symbol_type_to_string(FengLspString *buffer, const FengSymbolTypeVie
                 }
             }
             return true;
+        }
         case FENG_SYMBOL_TYPE_KIND_POINTER:
-            return symbol_type_to_string(buffer, feng_symbol_type_inner(type)) &&
+            return symbol_type_to_string_with_style(buffer,
+                                                    feng_symbol_type_inner(type),
+                                                    style) &&
                    string_append_cstr(buffer, "*");
         case FENG_SYMBOL_TYPE_KIND_ARRAY:
-            if (!symbol_type_to_string(buffer, feng_symbol_type_inner(type))) {
+            if (!symbol_type_to_string_with_style(buffer,
+                                                  feng_symbol_type_inner(type),
+                                                  style)) {
                 return false;
             }
             for (index = 0U; index < feng_symbol_type_array_rank(type); ++index) {
@@ -10321,11 +10462,15 @@ static bool symbol_type_to_string(FengLspString *buffer, const FengSymbolTypeVie
         }
         case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC: {
             size_t arg_count;
+            size_t segment_count = feng_symbol_type_segment_count(type);
+            size_t segment_start = style == FENG_LSP_TYPE_NAME_SHORT && segment_count > 0U
+                                       ? segment_count - 1U
+                                       : 0U;
 
-            for (index = 0U; index < feng_symbol_type_segment_count(type); ++index) {
+            for (index = segment_start; index < segment_count; ++index) {
                 FengSlice segment = feng_symbol_type_segment_at(type, index);
 
-                if (index > 0U && !string_append_cstr(buffer, ".")) {
+                if (index > segment_start && !string_append_cstr(buffer, ".")) {
                     return false;
                 }
                 if (!string_append_bytes(buffer, segment.data, segment.length)) {
@@ -10341,7 +10486,10 @@ static bool symbol_type_to_string(FengLspString *buffer, const FengSymbolTypeVie
                     if (index > 0U && !string_append_cstr(buffer, ", ")) {
                         return false;
                     }
-                    if (!symbol_type_to_string(buffer, feng_symbol_type_generic_arg_at(type, index))) {
+                    if (!symbol_type_to_string_with_style(
+                            buffer,
+                            feng_symbol_type_generic_arg_at(type, index),
+                            style)) {
                         return false;
                     }
                 }
@@ -10357,9 +10505,27 @@ static bool symbol_type_to_string(FengLspString *buffer, const FengSymbolTypeVie
     return false;
 }
 
-static bool symbol_param_type_to_string(FengLspString *buffer,
-                                        const FengSymbolDeclView *decl,
-                                        size_t param_index) {
+/* Keep qualified symbol names for non-Hover LSP features. */
+static bool symbol_type_to_string(FengLspString *buffer,
+                                  const FengSymbolTypeView *type) {
+    return symbol_type_to_string_with_style(buffer,
+                                            type,
+                                            FENG_LSP_TYPE_NAME_QUALIFIED);
+}
+
+/* Hover presents the final path segment for every nested named symbol type. */
+static bool symbol_hover_type_to_string(FengLspString *buffer,
+                                        const FengSymbolTypeView *type) {
+    return symbol_type_to_string_with_style(buffer,
+                                            type,
+                                            FENG_LSP_TYPE_NAME_SHORT);
+}
+
+static bool symbol_param_type_to_string_with_style(
+    FengLspString *buffer,
+    const FengSymbolDeclView *decl,
+    size_t param_index,
+    FengLspTypeNameStyle style) {
     const FengSymbolTypeView *type = feng_symbol_decl_param_type(decl, param_index);
 
     if (feng_symbol_decl_param_is_variadic(decl, param_index)) {
@@ -10368,7 +10534,9 @@ static bool symbol_param_type_to_string(FengLspString *buffer,
             size_t layer_index;
 
             if (rank > 0U) {
-                if (!symbol_type_to_string(buffer, feng_symbol_type_inner(type))) {
+                if (!symbol_type_to_string_with_style(buffer,
+                                                      feng_symbol_type_inner(type),
+                                                      style)) {
                     return false;
                 }
                 for (layer_index = 1U; layer_index < rank; ++layer_index) {
@@ -10382,13 +10550,27 @@ static bool symbol_param_type_to_string(FengLspString *buffer,
                 return string_append_cstr(buffer, "...");
             }
         }
-        return symbol_type_to_string(buffer, type) && string_append_cstr(buffer, "...");
+        return symbol_type_to_string_with_style(buffer, type, style) &&
+               string_append_cstr(buffer, "...");
     }
-    return symbol_type_to_string(buffer, type);
+    return symbol_type_to_string_with_style(buffer, type, style);
+}
+
+static bool symbol_param_type_to_string(FengLspString *buffer,
+                                        const FengSymbolDeclView *decl,
+                                        size_t param_index) {
+    return symbol_param_type_to_string_with_style(buffer,
+                                                  decl,
+                                                  param_index,
+                                                  FENG_LSP_TYPE_NAME_QUALIFIED);
 }
 
 static bool symbol_decl_signature_to_string(FengLspString *buffer,
                                             const FengSymbolDeclView *decl);
+static bool symbol_decl_signature_to_string_with_style(
+    FengLspString *buffer,
+    const FengSymbolDeclView *decl,
+    FengLspTypeNameStyle style);
 
 /* Classify the outermost persistent symbol type without loading new data. */
 static FengLspTypeCategory hover_category_from_symbol_type(
@@ -10453,7 +10635,7 @@ static bool append_symbol_decl_type_params(FengLspString *buffer,
         constraint = feng_symbol_decl_value_type(member);
         if (constraint != NULL &&
             (!string_append_cstr(buffer, ": ") ||
-             !symbol_type_to_string(buffer, constraint))) {
+             !symbol_hover_type_to_string(buffer, constraint))) {
             return false;
         }
         ++parameter_index;
@@ -10498,8 +10680,9 @@ static bool append_symbol_declared_specs(FengLspString *buffer,
     }
     for (index = 0U; index < count; ++index) {
         if ((index > 0U && !string_append_cstr(buffer, separator)) ||
-            !symbol_type_to_string(buffer,
-                                   feng_symbol_decl_declared_spec_at(decl, index))) {
+            !symbol_hover_type_to_string(
+                buffer,
+                feng_symbol_decl_declared_spec_at(decl, index))) {
             return false;
         }
     }
@@ -10538,8 +10721,9 @@ static bool symbol_decl_hover_signature_to_string(FengLspString *buffer,
                     continue;
                 }
                 if ((tuple_item_count > 0U && !string_append_cstr(buffer, ", ")) ||
-                    !symbol_type_to_string(buffer,
-                                           feng_symbol_decl_value_type(member))) {
+                    !symbol_hover_type_to_string(
+                        buffer,
+                        feng_symbol_decl_value_type(member))) {
                     return false;
                 }
                 ++tuple_item_count;
@@ -10556,7 +10740,7 @@ static bool symbol_decl_hover_signature_to_string(FengLspString *buffer,
         }
         return string_append_cstr(buffer,
                                   symbol_decl_has_body_member(decl)
-                                      ? " { ... }"
+                                      ? " {...}"
                                       : " {}");
     }
     if (kind == FENG_SYMBOL_DECL_KIND_SPEC) {
@@ -10571,7 +10755,7 @@ static bool symbol_decl_hover_signature_to_string(FengLspString *buffer,
             return append_symbol_declared_specs(buffer, decl, ", ") &&
                    string_append_cstr(buffer,
                                       symbol_decl_has_body_member(decl)
-                                          ? " { ... }"
+                                          ? " {...}"
                                           : " {}");
         }
         if (form == FENG_SPEC_FORM_CALLABLE) {
@@ -10584,12 +10768,18 @@ static bool symbol_decl_hover_signature_to_string(FengLspString *buffer,
                 if ((index > 0U && !string_append_cstr(buffer, ", ")) ||
                     !string_append_bytes(buffer, param_name.data, param_name.length) ||
                     !string_append_cstr(buffer, ": ") ||
-                    !symbol_param_type_to_string(buffer, decl, index)) {
+                    !symbol_param_type_to_string_with_style(
+                        buffer,
+                        decl,
+                        index,
+                        FENG_LSP_TYPE_NAME_SHORT)) {
                     return false;
                 }
             }
             return string_append_cstr(buffer, "): ") &&
-                   symbol_type_to_string(buffer, feng_symbol_decl_return_type(decl)) &&
+                   symbol_hover_type_to_string(
+                       buffer,
+                       feng_symbol_decl_return_type(decl)) &&
                    string_append_cstr(buffer, ";");
         }
         if (!string_append_cstr(buffer, ": ")) {
@@ -10598,8 +10788,9 @@ static bool symbol_decl_hover_signature_to_string(FengLspString *buffer,
         if (form == FENG_SPEC_FORM_UNION) {
             for (index = 0U; index < feng_symbol_decl_union_member_count(decl); ++index) {
                 if ((index > 0U && !string_append_cstr(buffer, " | ")) ||
-                    !symbol_type_to_string(buffer,
-                                           feng_symbol_decl_union_member_at(decl, index))) {
+                    !symbol_hover_type_to_string(
+                        buffer,
+                        feng_symbol_decl_union_member_at(decl, index))) {
                     return false;
                 }
             }
@@ -10608,7 +10799,7 @@ static bool symbol_decl_hover_signature_to_string(FengLspString *buffer,
                  index < feng_symbol_decl_intersection_member_count(decl);
                  ++index) {
                 if ((index > 0U && !string_append_cstr(buffer, " & ")) ||
-                    !symbol_type_to_string(
+                    !symbol_hover_type_to_string(
                         buffer,
                         feng_symbol_decl_intersection_member_at(decl, index))) {
                     return false;
@@ -10619,11 +10810,16 @@ static bool symbol_decl_hover_signature_to_string(FengLspString *buffer,
         }
         return string_append_cstr(buffer, ";");
     }
-    return symbol_decl_signature_to_string(buffer, decl);
+    return symbol_decl_signature_to_string_with_style(
+        buffer,
+        decl,
+        FENG_LSP_TYPE_NAME_SHORT);
 }
 
-static bool symbol_decl_signature_to_string(FengLspString *buffer,
-                                            const FengSymbolDeclView *decl) {
+static bool symbol_decl_signature_to_string_with_style(
+    FengLspString *buffer,
+    const FengSymbolDeclView *decl,
+    FengLspTypeNameStyle style) {
     size_t index;
     FengSlice name = feng_symbol_decl_name(decl);
 
@@ -10633,7 +10829,9 @@ static bool symbol_decl_signature_to_string(FengLspString *buffer,
                                       feng_symbol_decl_mutability(decl) == FENG_MUTABILITY_VAR ? "var " : "let ") &&
                    string_append_bytes(buffer, name.data, name.length) &&
                    string_append_cstr(buffer, ": ") &&
-                   symbol_type_to_string(buffer, feng_symbol_decl_value_type(decl));
+                   symbol_type_to_string_with_style(buffer,
+                                                    feng_symbol_decl_value_type(decl),
+                                                    style);
         case FENG_SYMBOL_DECL_KIND_TYPE: {
             size_t mi;
 
@@ -10750,12 +10948,17 @@ static bool symbol_decl_signature_to_string(FengLspString *buffer,
                 }
                 if (!string_append_bytes(buffer, param_name.data, param_name.length) ||
                     !string_append_cstr(buffer, ": ") ||
-                    !symbol_param_type_to_string(buffer, decl, index)) {
+                    !symbol_param_type_to_string_with_style(buffer,
+                                                            decl,
+                                                            index,
+                                                            style)) {
                     return false;
                 }
             }
             return string_append_cstr(buffer, "): ") &&
-                   symbol_type_to_string(buffer, feng_symbol_decl_return_type(decl));
+                   symbol_type_to_string_with_style(buffer,
+                                                    feng_symbol_decl_return_type(decl),
+                                                    style);
         }
         case FENG_SYMBOL_DECL_KIND_MODULE:
         case FENG_SYMBOL_DECL_KIND_FIELD:
@@ -10771,8 +10974,18 @@ static bool symbol_decl_signature_to_string(FengLspString *buffer,
     return false;
 }
 
-static bool symbol_member_signature_to_string(FengLspString *buffer,
-                                              const FengSymbolDeclView *member) {
+static bool symbol_decl_signature_to_string(FengLspString *buffer,
+                                            const FengSymbolDeclView *decl) {
+    return symbol_decl_signature_to_string_with_style(
+        buffer,
+        decl,
+        FENG_LSP_TYPE_NAME_QUALIFIED);
+}
+
+static bool symbol_member_signature_to_string_with_style(
+    FengLspString *buffer,
+    const FengSymbolDeclView *member,
+    FengLspTypeNameStyle style) {
     size_t index;
     FengSlice name = feng_symbol_decl_name(member);
     FengSymbolDeclKind kind = feng_symbol_decl_kind(member);
@@ -10782,7 +10995,9 @@ static bool symbol_member_signature_to_string(FengLspString *buffer,
                                   feng_symbol_decl_mutability(member) == FENG_MUTABILITY_VAR ? "var " : "let ") &&
                string_append_bytes(buffer, name.data, name.length) &&
                string_append_cstr(buffer, ": ") &&
-               symbol_type_to_string(buffer, feng_symbol_decl_value_type(member));
+               symbol_type_to_string_with_style(buffer,
+                                                feng_symbol_decl_value_type(member),
+                                                style);
     }
     if (kind == FENG_SYMBOL_DECL_KIND_ENUM_ITEM) {
         if (!string_append_bytes(buffer, name.data, name.length)) {
@@ -10839,12 +11054,26 @@ static bool symbol_member_signature_to_string(FengLspString *buffer,
         }
         if (!string_append_bytes(buffer, param_name.data, param_name.length) ||
             !string_append_cstr(buffer, ": ") ||
-            !symbol_param_type_to_string(buffer, member, index)) {
+            !symbol_param_type_to_string_with_style(buffer,
+                                                    member,
+                                                    index,
+                                                    style)) {
             return false;
         }
     }
     return string_append_cstr(buffer, "): ") &&
-           symbol_type_to_string(buffer, feng_symbol_decl_return_type(member));
+           symbol_type_to_string_with_style(buffer,
+                                            feng_symbol_decl_return_type(member),
+                                            style);
+}
+
+static bool symbol_member_signature_to_string(
+    FengLspString *buffer,
+    const FengSymbolDeclView *member) {
+    return symbol_member_signature_to_string_with_style(
+        buffer,
+        member,
+        FENG_LSP_TYPE_NAME_QUALIFIED);
 }
 
 static bool location_json(FengLspString *json, const char *path, FengToken token) {
@@ -14540,8 +14769,10 @@ static bool hover_presentation_for_cache_target(
             }
             break;
         case FENG_LSP_RESOLVED_MEMBER:
-            if (!symbol_member_signature_to_string(&presentation->signature,
-                                                   target->member)) {
+            if (!symbol_member_signature_to_string_with_style(
+                    &presentation->signature,
+                    target->member,
+                    FENG_LSP_TYPE_NAME_SHORT)) {
                 return false;
             }
             documentation = feng_symbol_decl_doc(target->member);
@@ -14564,7 +14795,8 @@ static bool hover_presentation_for_cache_target(
                                      target->parameter->name.data,
                                      target->parameter->name.length) ||
                 !string_append_cstr(&presentation->signature, ": ") ||
-                !type_ref_to_string(&presentation->signature, target->parameter->type)) {
+                !hover_type_ref_to_string(&presentation->signature,
+                                          target->parameter->type)) {
                 return false;
             }
             hover_presentation_set_category(
@@ -14584,7 +14816,8 @@ static bool hover_presentation_for_cache_target(
             }
             if (target->binding->type != NULL &&
                 (!string_append_cstr(&presentation->signature, ": ") ||
-                 !type_ref_to_string(&presentation->signature, target->binding->type))) {
+                 !hover_type_ref_to_string(&presentation->signature,
+                                           target->binding->type))) {
                 return false;
             }
             hover_presentation_set_category(
@@ -14616,8 +14849,8 @@ static bool hover_presentation_for_cache_target(
             }
             if (target->type_param->constraint != NULL &&
                 (!string_append_cstr(&presentation->signature, ": ") ||
-                 !type_ref_to_string(&presentation->signature,
-                                     target->type_param->constraint))) {
+                 !hover_type_ref_to_string(&presentation->signature,
+                                           target->type_param->constraint))) {
                 return false;
             }
             break;
