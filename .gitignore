@@ -10,3 +10,4 @@ temp/
 third_party/**/*.a
 third_party/**/*.o
 editors/feng-zed/target/
+__pycache__

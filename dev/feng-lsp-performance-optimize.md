@@ -673,7 +673,7 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - Completion 移除同步完整分析和全局请求 URI，使用当前 parse、已发布分析、源码模块索引和依赖 symbol provider；
 - 支持 UTF-16 position 的 Incremental text synchronization；
 - `didSave` 只同步执行当前文件 parse，完整 semantic / project diagnostics 消费后台 candidate 结果；
-- 新增 `scripts/run_lsp_performance.py`，从真实 `feng lsp --stdio` 协议采样并检查 Hover P95、Completion P95 和交互 P99 门槛。
+- 新增 `scripts/test/run_lsp_performance.py`，从真实 `feng lsp --stdio` 协议采样并检查 Hover P95、Completion P95 和交互 P99 门槛。
 
 在本机普通优化构建、`std_test/src/z_main.ff`、Hover 与 Completion 各 200 次采样下：
 
@@ -691,14 +691,14 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 
 已修复 `foo. → 退格删除点号 → 再次输入 foo.` 后成员补全不能恢复的问题。根因不是失败 candidate 清除了最后成功语义分析，而是 JSON 字符串解码把合法空字符串 `""` 返回为 `NULL`；点号删除 edit 的 `text` 正是空字符串，导致该次 `didChange` 被拒绝，服务端保留旧点号，随后再次输入形成 `foo..`。
 
-修复后 JSON 空字符串返回有效的空 C 字符串。新增 `scripts/test_lsp_completion_recovery.py`，通过真实 stdio 协议验证：
+修复后 JSON 空字符串返回有效的空 C 字符串。新增 `scripts/test/test_lsp_completion_recovery.py`，通过真实 stdio 协议验证：
 
 - 第一次输入点号能够返回成员；
 - 删除点号的空字符串增量 edit 成功应用；
 - 再次输入点号后的候选与第一次完全一致；
 - Incremental change、Full change 与新启动 LSP 在相同文本和位置下返回相同候选。
 
-该测试作为独立 LSP 协议回归工具保留，通过 `python3 scripts/test_lsp_completion_recovery.py` 手动执行，不作为正常 Makefile 工作流的依赖。修复后本机 200 次性能复测：Hover P95 0.036ms，Completion P95 0.084ms，全部交互样本 P99 0.104ms。
+该测试作为独立 LSP 协议回归工具保留，通过 `python3 scripts/test/test_lsp_completion_recovery.py` 手动执行，不作为正常 Makefile 工作流的依赖。修复后本机 200 次性能复测：Hover P95 0.036ms，Completion P95 0.084ms，全部交互样本 P99 0.104ms。
 
 真实 VS Code 在未重启旧 LSP 进程时仍表现为修复前行为；执行 `Feng: Restart Language Server`
 后恢复正常，确认新服务进程中的 `foo.` 成员补全可恢复。该现象不表示失败分析覆盖了最后成功缓存，
@@ -747,11 +747,11 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 
 专项测试全部通过：
 
-- `scripts/test_lsp_completion_recovery.py`；
-- `scripts/test_lsp_cache_retention.py`；
-- `scripts/test_lsp_scheduler.py`，包括 200 个低优先级 References、Hover 抢占和 queued cancellation；
-- `scripts/run_lsp_performance.py`；
-- `scripts/run_lsp_performance_matrix.py`；
+- `scripts/test/test_lsp_completion_recovery.py`；
+- `scripts/test/test_lsp_cache_retention.py`；
+- `scripts/test/test_lsp_scheduler.py`，包括 200 个低优先级 References、Hover 抢占和 queued cancellation；
+- `scripts/test/run_lsp_performance.py`；
+- `scripts/test/run_lsp_performance_matrix.py`；
 - 独立 LSP-only 入口执行 `test/cli/test_cli.c` 中全部既有 LSP 用例，连续三次通过，未修改既有测试文件。
 
 仓库回归结果：编译器 archive、lexer、parser、semantic、runtime、codegen、debug、symbol 单元测试通过；smoke 88 项、CLI direct / project、`std_test`、`fcts` 542 项和 perf constraints 全部通过。`make test-sanitize` 仍在既有 DAP 子进程断言 `test/cli/test_cli.c:431` 失败，错误为 `process exited with status -1 (no such process)`，发生在 LSP 用例之前。VS Code formatter、diagnostics、debug、syntax 通过；既有 `debug-smoke.test.js:464` 和 `icon.test.js:39` 失败。上述失败不在本轮 LSP 变更路径内，因此不修改其测试或生产实现。
@@ -769,11 +769,11 @@ member expression 时，该路径会进入非成员分支，并把 `Action`、`a
 类型构造调用、`self`、模块别名和内建字面量；成员上下文不再进入全局候选分支。该修复只修改
 `src/cli/lsp/service.c`，不修改 parser、semantic 或其他核心编译器模块。
 
-新增 `scripts/test_lsp_member_completion_scope.py`，通过真实 stdio 协议逐字符输入 `user.`，验证：
+新增 `scripts/test/test_lsp_member_completion_scope.py`，通过真实 stdio 协议逐字符输入 `user.`，验证：
 
 - `let user = User { name: "alice", age: 20 };` 后输入 `user.` 返回 `name`、`age`；
 - 结果不包含 `Action`、`args`、`assert`、`break` 等全局候选；
-- 与既有 `scripts/test_lsp_completion_recovery.py` 一起执行时，删除点号再输入的恢复行为保持通过。
+- 与既有 `scripts/test/test_lsp_completion_recovery.py` 一起执行时，删除点号再输入的恢复行为保持通过。
 
 修复后普通优化构建性能复测：Hover P95 0.040ms，Completion P95 0.310ms，全部交互样本 P99 0.571ms；
 1 万 / 10 万 / 100 万行矩阵全部交互 P99 0.161ms、Max 0.169ms，继续满足 §3 门槛。
@@ -794,7 +794,7 @@ archive、lexer、parser、semantic、runtime、codegen、debug、smoke 88 项�
 继续解析类型。该路径只读取内存中的已发布对象，不在 Completion 请求中打开项目、读取文件或触发完整分析；
 source module index 尚未发布时返回空结果，发布后后续请求自动恢复。
 
-新增 `scripts/test_lsp_chained_member_completion.py`，通过真实 stdio 协议在
+新增 `scripts/test/test_lsp_chained_member_completion.py`，通过真实 stdio 协议在
 `examples/tui_demo/src/main.ff` 中输入 `app.screen.`，验证结果包含 `buffer`、`size`、`resize`，且不包含
 `Action`、`args`、`break`、`catch`、`continue`、`defer`。普通优化构建下，链式成员、成员范围、补全恢复、
 缓存保留和调度器专项测试均通过；本次调度器复测 Definition P95 为 0.110ms。
@@ -813,7 +813,7 @@ receiver，并解析为根值以及 member、call、index 三种后缀操作；�
 也不在 Completion 请求中执行项目 I/O 或完整语义分析。任一步骤无法确定类型时仍返回空结果，不进入
 全局候选或关键字兜底。
 
-新增 `scripts/test_lsp_mixed_receiver_completion.py`，通过真实 stdio 协议验证：
+新增 `scripts/test/test_lsp_mixed_receiver_completion.py`，通过真实 stdio 协议验证：
 
 - `app.screen.buffer().` 返回 `Buffer` 的 `width`、`height`、`cells`、`draw`、`fill`、`clear`；
 - `foo.bar.xyz[(0)].get(/* nested ) ] */).` 依次经过字段、数组下标、方法调用后返回 `Leaf` 的
