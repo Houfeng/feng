@@ -100,6 +100,9 @@ typedef struct FengLspDocument {
     size_t token_capacity;
     bool tokens_indexed;
     FengLspLineIndex lines;
+    /* Prefix still byte-identical to the published successful generation. */
+    size_t successful_prefix_length;
+    size_t successful_prefix_generation;
 } FengLspDocument;
 
 /* Immutable document snapshot consumed by one background analysis candidate. */
@@ -298,6 +301,29 @@ typedef enum FengLspMarkupKind {
     FENG_LSP_MARKUP_PLAINTEXT = 0,
     FENG_LSP_MARKUP_MARKDOWN
 } FengLspMarkupKind;
+
+/* Semantic category shown beside a Hover signature when it is proven. */
+typedef enum FengLspTypeCategory {
+    FENG_LSP_TYPE_CATEGORY_UNKNOWN = 0,
+    FENG_LSP_TYPE_CATEGORY_REFERENCE,
+    FENG_LSP_TYPE_CATEGORY_VALUE,
+    FENG_LSP_TYPE_CATEGORY_TUPLE,
+    FENG_LSP_TYPE_CATEGORY_OBJECT_SPEC,
+    FENG_LSP_TYPE_CATEGORY_CALLBACK_SPEC,
+    FENG_LSP_TYPE_CATEGORY_UNION_SPEC,
+    FENG_LSP_TYPE_CATEGORY_INTERSECTION_SPEC,
+    FENG_LSP_TYPE_CATEGORY_ARRAY,
+    FENG_LSP_TYPE_CATEGORY_BUILTIN,
+    FENG_LSP_TYPE_CATEGORY_POINTER
+} FengLspTypeCategory;
+
+/* Structured Hover content shared by plaintext and Markdown renderers. */
+typedef struct FengLspHoverPresentation {
+    FengLspString signature;
+    const char *category_caption;
+    const char *category_label;
+    char *documentation;
+} FengLspHoverPresentation;
 
 struct FengLspService {
     FengLspDocument *documents;
@@ -519,6 +545,7 @@ static bool receiver_text_find_start(const char *text,
     }
     while (cursor > 0U) {
         size_t start;
+        size_t separator;
         char tail = text[cursor - 1U];
 
         if (tail == ')' || tail == ']') {
@@ -553,11 +580,12 @@ static bool receiver_text_find_start(const char *text,
         } else {
             return false;
         }
-        while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
-            --cursor;
+        separator = cursor;
+        while (separator > 0U && isspace((unsigned char)text[separator - 1U])) {
+            --separator;
         }
-        if (cursor > 0U && text[cursor - 1U] == '.') {
-            --cursor;
+        if (separator > 0U && text[separator - 1U] == '.') {
+            cursor = separator - 1U;
             while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
                 --cursor;
             }
@@ -1771,6 +1799,10 @@ static bool upsert_document(FengLspService *service,
     {
         char *updated_text = dup_cstr(text != NULL ? text : "");
         FengLspLineIndex updated_lines = {0};
+        size_t old_length;
+        size_t new_length;
+        size_t shared_length;
+        size_t shared_prefix = 0U;
 
         if (updated_text == NULL ||
             !feng_lsp_line_index_rebuild(&updated_lines, updated_text)) {
@@ -1783,6 +1815,16 @@ static bool upsert_document(FengLspService *service,
             feng_lsp_line_index_dispose(&updated_lines);
             return false;
         }
+        old_length = strlen(document->text);
+        new_length = strlen(updated_text);
+        shared_length = old_length < new_length ? old_length : new_length;
+        while (shared_prefix < shared_length &&
+               document->text[shared_prefix] == updated_text[shared_prefix]) {
+            ++shared_prefix;
+        }
+        if (document->successful_prefix_length > shared_prefix) {
+            document->successful_prefix_length = shared_prefix;
+        }
         document_dispose_derived(document);
         free(document->text);
         feng_lsp_line_index_dispose(&document->lines);
@@ -1793,6 +1835,48 @@ static bool upsert_document(FengLspService *service,
     document->version = version;
     ++service->document_revision;
     return true;
+}
+
+/* Mark live documents that exactly match a newly published successful task. */
+static void mark_successful_document_prefixes(FengLspService *service,
+                                              const FengLspAnalysisTask *task) {
+    size_t document_index;
+
+    if (service == NULL || task == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&service->documents_mutex);
+    pthread_mutex_lock(&service->analysis_mutex);
+    if (service->last_successful_generation != task->generation) {
+        pthread_mutex_unlock(&service->analysis_mutex);
+        pthread_mutex_unlock(&service->documents_mutex);
+        return;
+    }
+    for (document_index = 0U;
+         document_index < service->document_count;
+         ++document_index) {
+        FengLspDocument *document = &service->documents[document_index];
+        size_t snapshot_index;
+
+        for (snapshot_index = 0U; snapshot_index < task->document_count; ++snapshot_index) {
+            const FengLspDocument *snapshot = &task->documents[snapshot_index];
+            size_t text_length;
+
+            if (document->path == NULL || snapshot->path == NULL ||
+                strcmp(document->path, snapshot->path) != 0) {
+                continue;
+            }
+            text_length = strlen(document->text);
+            if (text_length == strlen(snapshot->text) &&
+                memcmp(document->text, snapshot->text, text_length) == 0) {
+                document->successful_prefix_length = text_length;
+                document->successful_prefix_generation = task->generation;
+            }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&service->analysis_mutex);
+    pthread_mutex_unlock(&service->documents_mutex);
 }
 
 static void remove_document(FengLspService *service, const char *uri) {
@@ -2725,6 +2809,7 @@ static void *background_analyzer_main(void *user) {
             pthread_mutex_unlock(&service->analysis_mutex);
         }
         if (publish) {
+            mark_successful_document_prefixes(service, &task);
             session_dispose(&previous);
         }
         if (analysis_built) {
@@ -9256,7 +9341,8 @@ static bool type_ref_to_string(FengLspString *buffer, const FengTypeRef *type_re
             }
             return true;
         case FENG_TYPE_REF_POINTER:
-            return string_append_cstr(buffer, "*") && type_ref_to_string(buffer, type_ref->as.inner);
+            return type_ref_to_string(buffer, type_ref->as.inner) &&
+                   string_append_cstr(buffer, "*");
         case FENG_TYPE_REF_ARRAY:
             return type_ref_to_string(buffer, type_ref->as.inner) &&
                    string_append_cstr(buffer, type_ref->array_element_writable ? "[!]" : "[]");
@@ -9428,6 +9514,268 @@ static bool append_decl_type_params(FengLspString *buffer,
         }
     }
     return string_append_cstr(buffer, ">");
+}
+
+/* Return the stable user-facing label for a proven type category. */
+static const char *hover_type_category_label(FengLspTypeCategory category) {
+    switch (category) {
+        case FENG_LSP_TYPE_CATEGORY_REFERENCE:
+            return "Reference Type";
+        case FENG_LSP_TYPE_CATEGORY_VALUE:
+            return "Value Type";
+        case FENG_LSP_TYPE_CATEGORY_TUPLE:
+            return "Tuple Type";
+        case FENG_LSP_TYPE_CATEGORY_OBJECT_SPEC:
+            return "Object Spec";
+        case FENG_LSP_TYPE_CATEGORY_CALLBACK_SPEC:
+            return "Callback Spec";
+        case FENG_LSP_TYPE_CATEGORY_UNION_SPEC:
+            return "Union Spec";
+        case FENG_LSP_TYPE_CATEGORY_INTERSECTION_SPEC:
+            return "Intersection Spec";
+        case FENG_LSP_TYPE_CATEGORY_ARRAY:
+            return "Array";
+        case FENG_LSP_TYPE_CATEGORY_BUILTIN:
+            return "Builtin";
+        case FENG_LSP_TYPE_CATEGORY_POINTER:
+            return "Pointer";
+        case FENG_LSP_TYPE_CATEGORY_UNKNOWN:
+            break;
+    }
+    return NULL;
+}
+
+/* Classify a declaration using semantic flags already present in the AST. */
+static FengLspTypeCategory hover_category_from_decl(const FengDecl *decl) {
+    if (decl == NULL) {
+        return FENG_LSP_TYPE_CATEGORY_UNKNOWN;
+    }
+    if (decl->kind == FENG_DECL_TYPE) {
+        if (decl->as.type_decl.is_tuple) {
+            return FENG_LSP_TYPE_CATEGORY_TUPLE;
+        }
+        return decl->as.type_decl.is_value ? FENG_LSP_TYPE_CATEGORY_VALUE
+                                           : FENG_LSP_TYPE_CATEGORY_REFERENCE;
+    }
+    if (decl->kind == FENG_DECL_SPEC) {
+        switch (decl->as.spec_decl.form) {
+            case FENG_SPEC_FORM_OBJECT:
+                return FENG_LSP_TYPE_CATEGORY_OBJECT_SPEC;
+            case FENG_SPEC_FORM_CALLABLE:
+                return FENG_LSP_TYPE_CATEGORY_CALLBACK_SPEC;
+            case FENG_SPEC_FORM_UNION:
+                return FENG_LSP_TYPE_CATEGORY_UNION_SPEC;
+            case FENG_SPEC_FORM_INTERSECTION:
+                return FENG_LSP_TYPE_CATEGORY_INTERSECTION_SPEC;
+        }
+    }
+    return FENG_LSP_TYPE_CATEGORY_UNKNOWN;
+}
+
+/* Classify a declaration using flags from the persistent symbol index. */
+static FengLspTypeCategory hover_category_from_symbol_decl(
+    const FengSymbolDeclView *decl) {
+    if (decl == NULL) {
+        return FENG_LSP_TYPE_CATEGORY_UNKNOWN;
+    }
+    if (feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_TYPE) {
+        if (feng_symbol_decl_is_tuple(decl)) {
+            return FENG_LSP_TYPE_CATEGORY_TUPLE;
+        }
+        return feng_symbol_decl_is_value_type(decl) ? FENG_LSP_TYPE_CATEGORY_VALUE
+                                                    : FENG_LSP_TYPE_CATEGORY_REFERENCE;
+    }
+    if (feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_SPEC) {
+        switch (feng_symbol_decl_spec_form(decl)) {
+            case FENG_SPEC_FORM_OBJECT:
+                return FENG_LSP_TYPE_CATEGORY_OBJECT_SPEC;
+            case FENG_SPEC_FORM_CALLABLE:
+                return FENG_LSP_TYPE_CATEGORY_CALLBACK_SPEC;
+            case FENG_SPEC_FORM_UNION:
+                return FENG_LSP_TYPE_CATEGORY_UNION_SPEC;
+            case FENG_SPEC_FORM_INTERSECTION:
+                return FENG_LSP_TYPE_CATEGORY_INTERSECTION_SPEC;
+        }
+    }
+    return FENG_LSP_TYPE_CATEGORY_UNKNOWN;
+}
+
+/* Classify the outermost AST type without recursively expanding its target. */
+static FengLspTypeCategory hover_category_from_type_ref(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengTypeRef *type_ref) {
+    if (type_ref == NULL) {
+        return FENG_LSP_TYPE_CATEGORY_UNKNOWN;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_ARRAY) {
+        return FENG_LSP_TYPE_CATEGORY_ARRAY;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_POINTER) {
+        return FENG_LSP_TYPE_CATEGORY_POINTER;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_NAMED &&
+        type_ref->as.named.segment_count == 1U &&
+        feng_semantic_is_builtin_type_name(type_ref->as.named.segments[0])) {
+        return FENG_LSP_TYPE_CATEGORY_BUILTIN;
+    }
+    return hover_category_from_decl(resolve_named_type_ref(session, program, type_ref));
+}
+
+/* Classify a successful semantic type fact used by inferred declarations. */
+static FengLspTypeCategory hover_category_from_type_fact(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengSemanticTypeFact *fact) {
+    if (fact == NULL) {
+        return FENG_LSP_TYPE_CATEGORY_UNKNOWN;
+    }
+    switch (fact->kind) {
+        case FENG_SEMANTIC_TYPE_FACT_BUILTIN:
+            return FENG_LSP_TYPE_CATEGORY_BUILTIN;
+        case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
+            return hover_category_from_type_ref(session, program, fact->type_ref);
+        case FENG_SEMANTIC_TYPE_FACT_DECL:
+            return hover_category_from_decl(fact->type_decl);
+        case FENG_SEMANTIC_TYPE_FACT_UNKNOWN:
+            break;
+    }
+    return FENG_LSP_TYPE_CATEGORY_UNKNOWN;
+}
+
+/* Append a comma-separated list of AST type references after `prefix`. */
+static bool append_type_ref_list(FengLspString *buffer,
+                                 const char *prefix,
+                                 FengTypeRef *const *types,
+                                 size_t count,
+                                 const char *separator) {
+    size_t index;
+
+    if (count == 0U) {
+        return true;
+    }
+    if (!string_append_cstr(buffer, prefix)) {
+        return false;
+    }
+    for (index = 0U; index < count; ++index) {
+        if ((index > 0U && !string_append_cstr(buffer, separator)) ||
+            !type_ref_to_string(buffer, types[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Format the core declaration shape used only by AST-backed Hover. */
+static bool decl_hover_signature_to_string(FengLspString *buffer,
+                                           const FengLspAnalysisSession *session,
+                                           const FengDecl *decl) {
+    size_t index;
+
+    if (decl == NULL) {
+        return false;
+    }
+    if (decl->kind == FENG_DECL_TYPE) {
+        if (!string_append_cstr(buffer, "type ") ||
+            !string_append_bytes(buffer,
+                                 decl->as.type_decl.name.data,
+                                 decl->as.type_decl.name.length) ||
+            !append_decl_type_params(buffer,
+                                     decl->as.type_decl.type_params,
+                                     decl->as.type_decl.type_param_count)) {
+            return false;
+        }
+        if (decl->as.type_decl.is_tuple) {
+            if (!string_append_cstr(buffer, "(")) {
+                return false;
+            }
+            for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
+                const FengTypeMember *member = decl->as.type_decl.members[index];
+
+                if (member == NULL || member->kind != FENG_TYPE_MEMBER_FIELD ||
+                    (index > 0U && !string_append_cstr(buffer, ", ")) ||
+                    !type_ref_to_string(buffer, member->as.field.type)) {
+                    return false;
+                }
+            }
+            if (!string_append_cstr(buffer, ")")) {
+                return false;
+            }
+        }
+        if (!append_type_ref_list(buffer,
+                                  ": ",
+                                  decl->as.type_decl.declared_specs,
+                                  decl->as.type_decl.declared_spec_count,
+                                  ", ")) {
+            return false;
+        }
+        if (decl->as.type_decl.is_tuple) {
+            return string_append_cstr(buffer, ";");
+        }
+        return string_append_cstr(buffer,
+                                  decl->as.type_decl.member_count > 0U
+                                      ? " { ... }"
+                                      : " {}");
+    }
+    if (decl->kind == FENG_DECL_SPEC) {
+        if (!string_append_cstr(buffer, "spec ") ||
+            !string_append_bytes(buffer,
+                                 decl->as.spec_decl.name.data,
+                                 decl->as.spec_decl.name.length) ||
+            !append_decl_type_params(buffer,
+                                     decl->as.spec_decl.type_params,
+                                     decl->as.spec_decl.type_param_count)) {
+            return false;
+        }
+        switch (decl->as.spec_decl.form) {
+            case FENG_SPEC_FORM_OBJECT:
+                return append_type_ref_list(buffer,
+                                            ": ",
+                                            decl->as.spec_decl.parent_specs,
+                                            decl->as.spec_decl.parent_spec_count,
+                                            ", ") &&
+                       string_append_cstr(buffer,
+                                          decl->as.spec_decl.as.object.member_count > 0U
+                                              ? " { ... }"
+                                              : " {}");
+            case FENG_SPEC_FORM_CALLABLE:
+                if (!string_append_cstr(buffer, "(")) {
+                    return false;
+                }
+                for (index = 0U;
+                     index < decl->as.spec_decl.as.callable.param_count;
+                     ++index) {
+                    const FengParameter *param =
+                        &decl->as.spec_decl.as.callable.params[index];
+
+                    if ((index > 0U && !string_append_cstr(buffer, ", ")) ||
+                        !string_append_bytes(buffer, param->name.data, param->name.length) ||
+                        !string_append_cstr(buffer, ": ") ||
+                        !parameter_type_to_string(buffer, param)) {
+                        return false;
+                    }
+                }
+                return string_append_cstr(buffer, "): ") &&
+                       type_ref_to_string(buffer,
+                                          decl->as.spec_decl.as.callable.return_type) &&
+                       string_append_cstr(buffer, ";");
+            case FENG_SPEC_FORM_UNION:
+                return append_type_ref_list(buffer,
+                                            ": ",
+                                            decl->as.spec_decl.as.union_form.members,
+                                            decl->as.spec_decl.as.union_form.member_count,
+                                            " | ") &&
+                       string_append_cstr(buffer, ";");
+            case FENG_SPEC_FORM_INTERSECTION:
+                return append_type_ref_list(buffer,
+                                            ": ",
+                                            decl->as.spec_decl.as.intersection_form.members,
+                                            decl->as.spec_decl.as.intersection_form.member_count,
+                                            " & ") &&
+                       string_append_cstr(buffer, ";");
+        }
+    }
+    return decl_signature_to_string_with_session(buffer, session, decl);
 }
 
 static bool decl_signature_to_string(FengLspString *buffer, const FengDecl *decl) {
@@ -9688,149 +10036,244 @@ static bool append_hover_doc_markdown(FengLspString *buffer, const char *doc_tex
     return true;
 }
 
-static char *hover_markdown_from_plaintext(const char *hover_text) {
-    FengLspString out = {0};
-    const char *doc = NULL;
-    const char *signature_end;
-
-    if (hover_text == NULL) {
-        return NULL;
+/* Release all storage owned by a structured Hover presentation. */
+static void hover_presentation_dispose(FengLspHoverPresentation *presentation) {
+    if (presentation == NULL) {
+        return;
     }
-    doc = strstr(hover_text, "\n\n");
-    signature_end = doc != NULL ? doc : hover_text + strlen(hover_text);
-    if (!string_append_cstr(&out, "```feng\n") ||
-        !string_append_bytes(&out, hover_text, (size_t)(signature_end - hover_text)) ||
-        !string_append_cstr(&out, "\n```")) {
-        string_dispose(&out);
-        return NULL;
-    }
-    if (doc != NULL && doc[2] != '\0') {
-        if (!string_append_cstr(&out, "\n\n") ||
-            !append_hover_doc_markdown(&out, doc + 2U)) {
-            string_dispose(&out);
-            return NULL;
-        }
-    }
-    return out.data;
+    string_dispose(&presentation->signature);
+    free(presentation->documentation);
+    memset(presentation, 0, sizeof(*presentation));
 }
 
+/* Attach a category caption and label when the category is proven. */
+static void hover_presentation_set_category(FengLspHoverPresentation *presentation,
+                                            const char *caption,
+                                            FengLspTypeCategory category) {
+    const char *label = hover_type_category_label(category);
+
+    if (presentation == NULL || caption == NULL || label == NULL) {
+        return;
+    }
+    presentation->category_caption = caption;
+    presentation->category_label = label;
+}
+
+/* Render structured Hover content as plaintext. */
+static bool render_hover_plaintext(FengLspString *out,
+                                   const FengLspHoverPresentation *presentation) {
+    if (out == NULL || presentation == NULL || presentation->signature.data == NULL) {
+        return false;
+    }
+    if (!string_append_cstr(out, presentation->signature.data)) {
+        return false;
+    }
+    if (presentation->category_caption != NULL && presentation->category_label != NULL &&
+        (!string_append_cstr(out, "\n\n") ||
+         !string_append_cstr(out, presentation->category_caption) ||
+         !string_append_cstr(out, ": ") ||
+         !string_append_cstr(out, presentation->category_label))) {
+        return false;
+    }
+    return presentation->documentation == NULL || presentation->documentation[0] == '\0' ||
+           (string_append_cstr(out, "\n\n") &&
+            string_append_cstr(out, presentation->documentation));
+}
+
+/* Render structured Hover content as Markdown without reparsing plaintext. */
+static bool render_hover_markdown(FengLspString *out,
+                                  const FengLspHoverPresentation *presentation) {
+    if (out == NULL || presentation == NULL || presentation->signature.data == NULL) {
+        return false;
+    }
+    if (!string_append_cstr(out, "```feng\n") ||
+        !string_append_cstr(out, presentation->signature.data) ||
+        !string_append_cstr(out, "\n```")) {
+        return false;
+    }
+    if (presentation->category_caption != NULL && presentation->category_label != NULL &&
+        (!string_append_cstr(out, "\n\n**") ||
+         !string_append_cstr(out, presentation->category_caption) ||
+         !string_append_cstr(out, ":** `") ||
+         !string_append_cstr(out, presentation->category_label) ||
+         !string_append_cstr(out, "`"))) {
+        return false;
+    }
+    return presentation->documentation == NULL || presentation->documentation[0] == '\0' ||
+           (string_append_cstr(out, "\n\n") &&
+            append_hover_doc_markdown(out, presentation->documentation));
+}
+
+/* Build an LSP Hover result from the shared structured presentation. */
 static bool build_hover_result_json(FengLspString *result,
                                     FengLspMarkupKind markup_kind,
-                                    const char *hover_text) {
-    char *markdown = NULL;
-    const char *contents = hover_text;
+                                    const FengLspHoverPresentation *presentation) {
+    FengLspString contents = {0};
     const char *kind = markup_kind == FENG_LSP_MARKUP_MARKDOWN ? "markdown" : "plaintext";
     bool ok;
 
-    if (result == NULL || hover_text == NULL) {
+    if (result == NULL || presentation == NULL) {
         return false;
     }
-    if (markup_kind == FENG_LSP_MARKUP_MARKDOWN) {
-        markdown = hover_markdown_from_plaintext(hover_text);
-        if (markdown == NULL) {
-            return false;
-        }
-        contents = markdown;
+    if ((markup_kind == FENG_LSP_MARKUP_MARKDOWN &&
+         !render_hover_markdown(&contents, presentation)) ||
+        (markup_kind == FENG_LSP_MARKUP_PLAINTEXT &&
+         !render_hover_plaintext(&contents, presentation))) {
+        string_dispose(&contents);
+        return false;
     }
     ok = string_append_cstr(result, "{\"contents\":{\"kind\":") &&
          string_append_json_string(result, kind) &&
          string_append_cstr(result, ",\"value\":") &&
-         string_append_json_string(result, contents) &&
+         string_append_json_string(result, contents.data) &&
          string_append_cstr(result, "}}");
-    free(markdown);
+    string_dispose(&contents);
     return ok;
 }
 
-static char *hover_text_for_target(const FengLspAnalysisSession *session,
-                                   const FengProgram *program,
-                                   const FengLspResolvedTarget *target) {
-    FengLspString signature = {0};
-    char *doc = NULL;
-    char *result;
+/* Build structured Hover content from an AST-backed resolved target. */
+static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
+                                          const FengProgram *program,
+                                          const FengLspResolvedTarget *target,
+                                          FengLspHoverPresentation *presentation) {
+    FengLspTypeCategory category = FENG_LSP_TYPE_CATEGORY_UNKNOWN;
 
+    if (target == NULL || presentation == NULL) {
+        return false;
+    }
     switch (target->kind) {
         case FENG_LSP_RESOLVED_DECL:
-            if (!decl_signature_to_string_with_session(&signature, session, target->decl)) {
-                string_dispose(&signature);
-                return NULL;
+            if (!decl_hover_signature_to_string(&presentation->signature,
+                                                session,
+                                                target->decl)) {
+                return false;
             }
-            doc = normalize_doc_comment(target->decl->doc_comment);
+            presentation->documentation = normalize_doc_comment(target->decl->doc_comment);
+            if (target->decl->kind == FENG_DECL_TYPE || target->decl->kind == FENG_DECL_SPEC) {
+                category = hover_category_from_decl(target->decl);
+                hover_presentation_set_category(presentation, "Kind", category);
+            } else if (target->decl->kind == FENG_DECL_GLOBAL_BINDING) {
+                category = target->decl->as.binding.type != NULL
+                               ? hover_category_from_type_ref(session,
+                                                              program,
+                                                              target->decl->as.binding.type)
+                               : hover_category_from_type_fact(
+                                     session,
+                                     program,
+                                     session != NULL && session->analysis != NULL
+                                         ? feng_semantic_lookup_type_fact(
+                                               session->analysis,
+                                               &target->decl->as.binding)
+                                         : NULL);
+                hover_presentation_set_category(presentation, "Kind", category);
+            }
             break;
         case FENG_LSP_RESOLVED_MEMBER:
-            if (!member_signature_to_string_with_session(&signature, session, target->member)) {
-                string_dispose(&signature);
-                return NULL;
+            if (!member_signature_to_string_with_session(&presentation->signature,
+                                                         session,
+                                                         target->member)) {
+                return false;
             }
-            doc = normalize_doc_comment(target->member->doc_comment);
+            presentation->documentation = normalize_doc_comment(target->member->doc_comment);
+            if (target->member->kind == FENG_TYPE_MEMBER_FIELD) {
+                category = target->member->as.field.type != NULL
+                               ? hover_category_from_type_ref(session,
+                                                              program,
+                                                              target->member->as.field.type)
+                               : hover_category_from_type_fact(
+                                     session,
+                                     program,
+                                     session != NULL && session->analysis != NULL
+                                         ? feng_semantic_lookup_type_fact(session->analysis,
+                                                                          target->member)
+                                         : NULL);
+                hover_presentation_set_category(presentation, "Kind", category);
+            }
             break;
         case FENG_LSP_RESOLVED_PARAM:
-            if (!string_append_cstr(&signature,
+            if (!string_append_cstr(&presentation->signature, "param ") ||
+                !string_append_cstr(&presentation->signature,
                                     target->parameter->mutability == FENG_MUTABILITY_VAR
                                         ? "var "
                                         : "let ") ||
-                !string_append_bytes(&signature,
+                !string_append_bytes(&presentation->signature,
                                      target->parameter->name.data,
                                      target->parameter->name.length) ||
-                !string_append_cstr(&signature, ": ") ||
-                !type_ref_to_string(&signature, target->parameter->type)) {
-                string_dispose(&signature);
-                return NULL;
+                !string_append_cstr(&presentation->signature, ": ") ||
+                !type_ref_to_string(&presentation->signature, target->parameter->type)) {
+                return false;
             }
+            hover_presentation_set_category(
+                presentation,
+                "Kind",
+                hover_category_from_type_ref(session, program, target->parameter->type));
             break;
         case FENG_LSP_RESOLVED_BINDING:
-            (void)program;
-            if (!binding_signature_to_string(&signature, session, target->binding)) {
-                string_dispose(&signature);
-                return NULL;
+            if (!binding_signature_to_string(&presentation->signature,
+                                             session,
+                                             target->binding)) {
+                return false;
             }
+            category = target->binding->type != NULL
+                           ? hover_category_from_type_ref(session,
+                                                          program,
+                                                          target->binding->type)
+                           : hover_category_from_type_fact(
+                                 session,
+                                 program,
+                                 session != NULL && session->analysis != NULL
+                                     ? feng_semantic_lookup_type_fact(session->analysis,
+                                                                      target->binding)
+                                     : NULL);
+            hover_presentation_set_category(presentation, "Kind", category);
             break;
         case FENG_LSP_RESOLVED_MATCH_BINDING:
-            if (!match_binding_signature_to_string(&signature, target->match_op)) {
-                string_dispose(&signature);
-                return NULL;
+            if (!match_binding_signature_to_string(&presentation->signature, target->match_op)) {
+                return false;
+            }
+            if (target->match_op->as.match_op.label_count == 1U) {
+                const FengMatchLabel *label = &target->match_op->as.match_op.labels[0];
+                const FengTypeRef *type_ref = label->type_chain_count > 0U
+                                                  ? label->type_chain[
+                                                        label->type_chain_count - 1U]
+                                                  : label->type;
+
+                hover_presentation_set_category(
+                    presentation,
+                    "Kind",
+                    hover_category_from_type_ref(session, program, type_ref));
             }
             break;
         case FENG_LSP_RESOLVED_SELF:
-            if (!string_append_cstr(&signature, "self: ") ||
-                !string_append_bytes(&signature,
+            if (!string_append_cstr(&presentation->signature, "self: ") ||
+                !string_append_bytes(&presentation->signature,
                                      decl_name(target->self_owner_decl).data,
                                      decl_name(target->self_owner_decl).length)) {
-                string_dispose(&signature);
-                return NULL;
+                return false;
             }
+            hover_presentation_set_category(presentation,
+                                            "Kind",
+                                            hover_category_from_decl(target->self_owner_decl));
             break;
         case FENG_LSP_RESOLVED_TYPE_PARAM:
-            (void)session;
-            (void)program;
-            if (!string_append_cstr(&signature, "generic parameter ") ||
-                !string_append_bytes(&signature,
+            if (!string_append_cstr(&presentation->signature, "generic parameter ") ||
+                !string_append_bytes(&presentation->signature,
                                      target->type_param->name.data,
                                      target->type_param->name.length)) {
-                string_dispose(&signature);
-                return NULL;
+                return false;
             }
             if (target->type_param->constraint != NULL) {
-                if (!string_append_cstr(&signature, ": ") ||
-                    !type_ref_to_string(&signature, target->type_param->constraint)) {
-                    string_dispose(&signature);
-                    return NULL;
+                if (!string_append_cstr(&presentation->signature, ": ") ||
+                    !type_ref_to_string(&presentation->signature,
+                                        target->type_param->constraint)) {
+                    return false;
                 }
             }
             break;
         default:
-            return NULL;
+            return false;
     }
-    result = signature.data;
-    if (doc != NULL && doc[0] != '\0') {
-        if (!string_append_cstr(&signature, "\n\n") || !string_append_cstr(&signature, doc)) {
-            free(doc);
-            string_dispose(&signature);
-            return NULL;
-        }
-        result = signature.data;
-    }
-    free(doc);
-    return result;
+    return presentation->signature.data != NULL;
 }
 
 static bool symbol_type_to_string(FengLspString *buffer, const FengSymbolTypeView *type) {
@@ -9857,8 +10300,8 @@ static bool symbol_type_to_string(FengLspString *buffer, const FengSymbolTypeVie
             }
             return true;
         case FENG_SYMBOL_TYPE_KIND_POINTER:
-            return string_append_cstr(buffer, "*") &&
-                   symbol_type_to_string(buffer, feng_symbol_type_inner(type));
+            return symbol_type_to_string(buffer, feng_symbol_type_inner(type)) &&
+                   string_append_cstr(buffer, "*");
         case FENG_SYMBOL_TYPE_KIND_ARRAY:
             if (!symbol_type_to_string(buffer, feng_symbol_type_inner(type))) {
                 return false;
@@ -9942,6 +10385,241 @@ static bool symbol_param_type_to_string(FengLspString *buffer,
         return symbol_type_to_string(buffer, type) && string_append_cstr(buffer, "...");
     }
     return symbol_type_to_string(buffer, type);
+}
+
+static bool symbol_decl_signature_to_string(FengLspString *buffer,
+                                            const FengSymbolDeclView *decl);
+
+/* Classify the outermost persistent symbol type without loading new data. */
+static FengLspTypeCategory hover_category_from_symbol_type(
+    const FengLspCacheQueryContext *context,
+    const FengSymbolTypeView *type) {
+    FengSymbolTypeKind kind;
+
+    if (context == NULL || type == NULL) {
+        return FENG_LSP_TYPE_CATEGORY_UNKNOWN;
+    }
+    kind = feng_symbol_type_kind(type);
+    if (kind == FENG_SYMBOL_TYPE_KIND_BUILTIN) {
+        return FENG_LSP_TYPE_CATEGORY_BUILTIN;
+    }
+    if (kind == FENG_SYMBOL_TYPE_KIND_ARRAY) {
+        return FENG_LSP_TYPE_CATEGORY_ARRAY;
+    }
+    if (kind == FENG_SYMBOL_TYPE_KIND_POINTER) {
+        return FENG_LSP_TYPE_CATEGORY_POINTER;
+    }
+    if (kind == FENG_SYMBOL_TYPE_KIND_NAMED ||
+        kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) {
+        return hover_category_from_symbol_decl(
+            resolve_symbol_type_view(context->provider,
+                                     context->current_module,
+                                     context->program,
+                                     type));
+    }
+    return FENG_LSP_TYPE_CATEGORY_UNKNOWN;
+}
+
+/* Append symbol-backed generic parameters, including proven constraints. */
+static bool append_symbol_decl_type_params(FengLspString *buffer,
+                                           const FengSymbolDeclView *decl) {
+    size_t member_index;
+    size_t parameter_index = 0U;
+
+    if (feng_symbol_decl_type_param_count(decl) == 0U) {
+        return true;
+    }
+    if (!string_append_cstr(buffer, "<")) {
+        return false;
+    }
+    for (member_index = 0U;
+         member_index < feng_symbol_decl_member_count(decl);
+         ++member_index) {
+        const FengSymbolDeclView *member = feng_symbol_decl_member_at(decl, member_index);
+        const FengSymbolTypeView *constraint;
+        FengSlice name;
+
+        if (member == NULL ||
+            feng_symbol_decl_kind(member) != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+            continue;
+        }
+        if (parameter_index > 0U && !string_append_cstr(buffer, ", ")) {
+            return false;
+        }
+        name = feng_symbol_decl_name(member);
+        if (!string_append_bytes(buffer, name.data, name.length)) {
+            return false;
+        }
+        constraint = feng_symbol_decl_value_type(member);
+        if (constraint != NULL &&
+            (!string_append_cstr(buffer, ": ") ||
+             !symbol_type_to_string(buffer, constraint))) {
+            return false;
+        }
+        ++parameter_index;
+    }
+    return string_append_cstr(buffer, ">");
+}
+
+/* Return whether a symbol type/spec declaration has a body member. */
+static bool symbol_decl_has_body_member(const FengSymbolDeclView *decl) {
+    size_t index;
+
+    for (index = 0U; index < feng_symbol_decl_member_count(decl); ++index) {
+        const FengSymbolDeclView *member = feng_symbol_decl_member_at(decl, index);
+        FengSymbolDeclKind kind;
+
+        if (member == NULL) {
+            continue;
+        }
+        kind = feng_symbol_decl_kind(member);
+        if (kind == FENG_SYMBOL_DECL_KIND_FIELD ||
+            kind == FENG_SYMBOL_DECL_KIND_METHOD ||
+            kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR ||
+            kind == FENG_SYMBOL_DECL_KIND_FINALIZER) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Append symbol-backed declared specs with a caller-selected separator. */
+static bool append_symbol_declared_specs(FengLspString *buffer,
+                                         const FengSymbolDeclView *decl,
+                                         const char *separator) {
+    size_t index;
+    size_t count = feng_symbol_decl_declared_spec_count(decl);
+
+    if (count == 0U) {
+        return true;
+    }
+    if (!string_append_cstr(buffer, ": ")) {
+        return false;
+    }
+    for (index = 0U; index < count; ++index) {
+        if ((index > 0U && !string_append_cstr(buffer, separator)) ||
+            !symbol_type_to_string(buffer,
+                                   feng_symbol_decl_declared_spec_at(decl, index))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Format the core declaration shape used only by symbol-backed Hover. */
+static bool symbol_decl_hover_signature_to_string(FengLspString *buffer,
+                                                  const FengSymbolDeclView *decl) {
+    FengSymbolDeclKind kind;
+    FengSlice name;
+    size_t index;
+
+    if (decl == NULL) {
+        return false;
+    }
+    kind = feng_symbol_decl_kind(decl);
+    name = feng_symbol_decl_name(decl);
+    if (kind == FENG_SYMBOL_DECL_KIND_TYPE) {
+        size_t tuple_item_count = 0U;
+
+        if (!string_append_cstr(buffer, "type ") ||
+            !string_append_bytes(buffer, name.data, name.length) ||
+            !append_symbol_decl_type_params(buffer, decl)) {
+            return false;
+        }
+        if (feng_symbol_decl_is_tuple(decl)) {
+            if (!string_append_cstr(buffer, "(")) {
+                return false;
+            }
+            for (index = 0U; index < feng_symbol_decl_member_count(decl); ++index) {
+                const FengSymbolDeclView *member = feng_symbol_decl_member_at(decl, index);
+
+                if (member == NULL ||
+                    feng_symbol_decl_kind(member) != FENG_SYMBOL_DECL_KIND_FIELD) {
+                    continue;
+                }
+                if ((tuple_item_count > 0U && !string_append_cstr(buffer, ", ")) ||
+                    !symbol_type_to_string(buffer,
+                                           feng_symbol_decl_value_type(member))) {
+                    return false;
+                }
+                ++tuple_item_count;
+            }
+            if (!string_append_cstr(buffer, ")")) {
+                return false;
+            }
+        }
+        if (!append_symbol_declared_specs(buffer, decl, ", ")) {
+            return false;
+        }
+        if (feng_symbol_decl_is_tuple(decl)) {
+            return string_append_cstr(buffer, ";");
+        }
+        return string_append_cstr(buffer,
+                                  symbol_decl_has_body_member(decl)
+                                      ? " { ... }"
+                                      : " {}");
+    }
+    if (kind == FENG_SYMBOL_DECL_KIND_SPEC) {
+        FengSpecForm form = feng_symbol_decl_spec_form(decl);
+
+        if (!string_append_cstr(buffer, "spec ") ||
+            !string_append_bytes(buffer, name.data, name.length) ||
+            !append_symbol_decl_type_params(buffer, decl)) {
+            return false;
+        }
+        if (form == FENG_SPEC_FORM_OBJECT) {
+            return append_symbol_declared_specs(buffer, decl, ", ") &&
+                   string_append_cstr(buffer,
+                                      symbol_decl_has_body_member(decl)
+                                          ? " { ... }"
+                                          : " {}");
+        }
+        if (form == FENG_SPEC_FORM_CALLABLE) {
+            if (!string_append_cstr(buffer, "(")) {
+                return false;
+            }
+            for (index = 0U; index < feng_symbol_decl_param_count(decl); ++index) {
+                FengSlice param_name = feng_symbol_decl_param_name(decl, index);
+
+                if ((index > 0U && !string_append_cstr(buffer, ", ")) ||
+                    !string_append_bytes(buffer, param_name.data, param_name.length) ||
+                    !string_append_cstr(buffer, ": ") ||
+                    !symbol_param_type_to_string(buffer, decl, index)) {
+                    return false;
+                }
+            }
+            return string_append_cstr(buffer, "): ") &&
+                   symbol_type_to_string(buffer, feng_symbol_decl_return_type(decl)) &&
+                   string_append_cstr(buffer, ";");
+        }
+        if (!string_append_cstr(buffer, ": ")) {
+            return false;
+        }
+        if (form == FENG_SPEC_FORM_UNION) {
+            for (index = 0U; index < feng_symbol_decl_union_member_count(decl); ++index) {
+                if ((index > 0U && !string_append_cstr(buffer, " | ")) ||
+                    !symbol_type_to_string(buffer,
+                                           feng_symbol_decl_union_member_at(decl, index))) {
+                    return false;
+                }
+            }
+        } else if (form == FENG_SPEC_FORM_INTERSECTION) {
+            for (index = 0U;
+                 index < feng_symbol_decl_intersection_member_count(decl);
+                 ++index) {
+                if ((index > 0U && !string_append_cstr(buffer, " & ")) ||
+                    !symbol_type_to_string(
+                        buffer,
+                        feng_symbol_decl_intersection_member_at(decl, index))) {
+                    return false;
+                }
+            }
+        } else {
+            return false;
+        }
+        return string_append_cstr(buffer, ";");
+    }
+    return symbol_decl_signature_to_string(buffer, decl);
 }
 
 static bool symbol_decl_signature_to_string(FengLspString *buffer,
@@ -13520,20 +14198,18 @@ static bool append_builtin_type_items(FengLspString *json,
                                        bool *first,
                                        FengSlice prefix);
 
-/* Extract the identifier at `offset` in `text`, verify it is a keyword,
- * and look it up in the LspKwItem tables.  Returns a strdup'd hover
- * string ("keyword\n\ndetail") on match, or NULL when the cursor is not
- * on a keyword token.  Caller must free the returned string. */
-static char *hover_text_for_keyword(const char *text, size_t offset) {
+/* Build structured Hover content for a keyword at the requested offset. */
+static bool hover_presentation_for_keyword(const char *text,
+                                           size_t offset,
+                                           FengLspHoverPresentation *presentation) {
     size_t start;
     size_t end;
     size_t length;
     size_t pos;
     size_t index;
-    FengLspString hover = {0};
 
-    if (text == NULL || offset > strlen(text)) {
-        return NULL;
+    if (text == NULL || presentation == NULL || offset > strlen(text)) {
+        return false;
     }
     /* Expand backward from offset to find identifier start. */
     start = offset;
@@ -13547,11 +14223,11 @@ static char *hover_text_for_keyword(const char *text, size_t offset) {
         ++end;
     }
     if (start == end) {
-        return NULL;
+        return false;
     }
     /* Reject if the first character is not a valid identifier start. */
     if (!completion_identifier_start(text[start])) {
-        return NULL;
+        return false;
     }
     /* Verify the word is actually a keyword (not a plain identifier). */
     if (!feng_lookup_keyword(text + start, end - start, NULL)) {
@@ -13571,35 +14247,31 @@ static char *hover_text_for_keyword(const char *text, size_t offset) {
 
             if (label_len == end - start &&
                 memcmp(item->label, text + start, label_len) == 0) {
-                if (!string_append_bytes(&hover, text + start, end - start) ||
-                    !string_append_cstr(&hover, "\n\n") ||
-                    !string_append_cstr(&hover, item->detail)) {
-                    string_dispose(&hover);
-                    return NULL;
+                if (!string_append_bytes(&presentation->signature,
+                                         text + start,
+                                         end - start)) {
+                    return false;
                 }
-                return hover.data;
+                presentation->documentation = dup_cstr(item->detail);
+                return presentation->documentation != NULL;
             }
         }
     }
-    string_dispose(&hover);
-    return NULL;
+    return false;
 }
 
-/* Extract the identifier at `offset` in `text`, check whether it is
- * preceded by '@' (annotation context), and look it up in the builtin
- * annotation table.  Returns a strdup'd hover string ("@label\n\ndetail")
- * on match, or NULL when the cursor is not on a builtin annotation.
- * Caller must free the returned string. */
-static char *hover_text_for_annotation(const char *text, size_t offset) {
+/* Build structured Hover content for a builtin annotation. */
+static bool hover_presentation_for_annotation(const char *text,
+                                              size_t offset,
+                                              FengLspHoverPresentation *presentation) {
     size_t start;
     size_t end;
     size_t length;
     size_t at_pos;
     size_t index;
-    FengLspString hover = {0};
 
-    if (text == NULL || offset > strlen(text)) {
-        return NULL;
+    if (text == NULL || presentation == NULL || offset > strlen(text)) {
+        return false;
     }
     /* Expand backward from offset to find identifier start. */
     start = offset;
@@ -13613,20 +14285,20 @@ static char *hover_text_for_annotation(const char *text, size_t offset) {
         ++end;
     }
     if (start == end) {
-        return NULL;
+        return false;
     }
     /* Reject if the first character is not a valid identifier start. */
     if (!completion_identifier_start(text[start])) {
-        return NULL;
+        return false;
     }
     /* The character before the identifier must be '@'. */
     if (start == 0U || text[start - 1U] != '@') {
-        return NULL;
+        return false;
     }
     at_pos = start - 1U;
     /* '@' must be at start of file or preceded by whitespace. */
     if (at_pos > 0U && !isspace((unsigned char)text[at_pos - 1U])) {
-        return NULL;
+        return false;
     }
     /* Search the builtin annotation table for a matching label. */
     for (index = 0U; index < BUILTIN_ANNOTATION_COUNT; ++index) {
@@ -13635,33 +14307,31 @@ static char *hover_text_for_annotation(const char *text, size_t offset) {
 
         if (label_len == end - start &&
             memcmp(item->label, text + start, label_len) == 0) {
-            if (!string_append_cstr(&hover, "@") ||
-                !string_append_bytes(&hover, text + start, end - start) ||
-                !string_append_cstr(&hover, "\n\n") ||
-                !string_append_cstr(&hover, item->detail)) {
-                string_dispose(&hover);
-                return NULL;
+            if (!string_append_cstr(&presentation->signature, "@") ||
+                !string_append_bytes(&presentation->signature,
+                                     text + start,
+                                     end - start)) {
+                return false;
             }
-            return hover.data;
+            presentation->documentation = dup_cstr(item->detail);
+            return presentation->documentation != NULL;
         }
     }
-    string_dispose(&hover);
-    return NULL;
+    return false;
 }
 
-/* Extract the identifier at `offset` in `text`, then look it up in the
- * BUILTIN_TYPES and BUILTIN_TYPE_ALIASES tables.  Returns a strdup'd hover
- * string on match, or NULL when the cursor is not on a builtin type name.
- * Caller must free the returned string. */
-static char *hover_text_for_builtin_type(const char *text, size_t offset) {
+/* Build structured Hover content for a builtin type or alias. */
+static bool hover_presentation_for_builtin_type(
+    const char *text,
+    size_t offset,
+    FengLspHoverPresentation *presentation) {
     size_t start;
     size_t end;
     size_t length;
     size_t index;
-    FengLspString hover = {0};
 
-    if (text == NULL || offset > strlen(text)) {
-        return NULL;
+    if (text == NULL || presentation == NULL || offset > strlen(text)) {
+        return false;
     }
     /* Expand backward from offset to find identifier start. */
     start = offset;
@@ -13675,11 +14345,11 @@ static char *hover_text_for_builtin_type(const char *text, size_t offset) {
         ++end;
     }
     if (start == end) {
-        return NULL;
+        return false;
     }
     /* Reject if the first character is not a valid identifier start. */
     if (!completion_identifier_start(text[start])) {
-        return NULL;
+        return false;
     }
     /* Search builtin type table for a matching label. */
     for (index = 0U; index < BUILTIN_TYPE_COUNT; ++index) {
@@ -13688,13 +14358,16 @@ static char *hover_text_for_builtin_type(const char *text, size_t offset) {
 
         if (label_len == end - start &&
             memcmp(item->label, text + start, label_len) == 0) {
-            if (!string_append_bytes(&hover, text + start, end - start) ||
-                !string_append_cstr(&hover, "\n\n") ||
-                !string_append_cstr(&hover, item->detail)) {
-                string_dispose(&hover);
-                return NULL;
+            if (!string_append_bytes(&presentation->signature,
+                                     text + start,
+                                     end - start)) {
+                return false;
             }
-            return hover.data;
+            presentation->documentation = dup_cstr(item->detail);
+            hover_presentation_set_category(presentation,
+                                            "Kind",
+                                            FENG_LSP_TYPE_CATEGORY_BUILTIN);
+            return presentation->documentation != NULL;
         }
     }
     /* Search builtin type alias table for a matching label. */
@@ -13710,19 +14383,21 @@ static char *hover_text_for_builtin_type(const char *text, size_t offset) {
             if (resolved == NULL) {
                 resolved = (sizeof(void *) == 4U) ? "i32" : "i64";
             }
-            if (!string_append_bytes(&hover, text + start, end - start) ||
-                !string_append_cstr(&hover, " \xe2\x86\x92 ") ||
-                !string_append_cstr(&hover, resolved) ||
-                !string_append_cstr(&hover, "\n\n") ||
-                !string_append_cstr(&hover, alias->detail)) {
-                string_dispose(&hover);
-                return NULL;
+            if (!string_append_bytes(&presentation->signature,
+                                     text + start,
+                                     end - start) ||
+                !string_append_cstr(&presentation->signature, " \xe2\x86\x92 ") ||
+                !string_append_cstr(&presentation->signature, resolved)) {
+                return false;
             }
-            return hover.data;
+            presentation->documentation = dup_cstr(alias->detail);
+            hover_presentation_set_category(presentation,
+                                            "Kind",
+                                            FENG_LSP_TYPE_CATEGORY_BUILTIN);
+            return presentation->documentation != NULL;
         }
     }
-    string_dispose(&hover);
-    return NULL;
+    return false;
 }
 
 /* Builds the current-version token index once and reuses it for local queries. */
@@ -13763,14 +14438,17 @@ static bool ensure_document_token_index(FengLspDocument *document) {
     return true;
 }
 
-/* Looks up a literal at the cursor by binary-searching the document token index. */
-static char *hover_text_for_literal(FengLspDocument *document, size_t offset) {
+/* Build structured Hover content for a literal from the document token index. */
+static bool hover_presentation_for_literal(FengLspDocument *document,
+                                           size_t offset,
+                                           FengLspHoverPresentation *presentation) {
     size_t low = 0U;
     size_t high;
     const FengLspTokenSpan *token;
 
-    if (!ensure_document_token_index(document) || document->token_count == 0U) {
-        return NULL;
+    if (presentation == NULL || !ensure_document_token_index(document) ||
+        document->token_count == 0U) {
+        return false;
     }
     high = document->token_count;
     while (low < high) {
@@ -13783,114 +14461,177 @@ static char *hover_text_for_literal(FengLspDocument *document, size_t offset) {
         }
     }
     if (low == 0U) {
-        return NULL;
+        return false;
     }
     token = &document->tokens[low - 1U];
     if (offset >= token->offset + token->length) {
-        return NULL;
+        return false;
     }
     switch (token->kind) {
         case FENG_TOKEN_INTEGER:
-            return dup_cstr("integer literal");
+            return string_append_cstr(&presentation->signature, "integer literal");
         case FENG_TOKEN_FLOAT:
-            return dup_cstr("float literal");
+            return string_append_cstr(&presentation->signature, "float literal");
         case FENG_TOKEN_STRING:
-            return dup_cstr("string literal");
+            return string_append_cstr(&presentation->signature, "string literal");
         default:
             break;
     }
-    return NULL;
+    return false;
 }
 
-/* Builds Hover text from a persistent symbol-index target. */
-static char *hover_text_for_cache_target(const FengLspCacheResolvedTarget *target) {
-    FengLspString signature = {0};
+/* Classify an AST type reference against the already-loaded symbol index. */
+static FengLspTypeCategory hover_category_from_cache_type_ref(
+    const FengLspCacheQueryContext *context,
+    const FengTypeRef *type_ref) {
+    if (context == NULL || type_ref == NULL) {
+        return FENG_LSP_TYPE_CATEGORY_UNKNOWN;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_ARRAY) {
+        return FENG_LSP_TYPE_CATEGORY_ARRAY;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_POINTER) {
+        return FENG_LSP_TYPE_CATEGORY_POINTER;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_NAMED &&
+        type_ref->as.named.segment_count == 1U &&
+        feng_semantic_is_builtin_type_name(type_ref->as.named.segments[0])) {
+        return FENG_LSP_TYPE_CATEGORY_BUILTIN;
+    }
+    return hover_category_from_symbol_decl(
+        resolve_symbol_named_type_ref(context->provider,
+                                      context->current_module,
+                                      context->program,
+                                      type_ref));
+}
+
+/* Build structured Hover content from a persistent symbol-index target. */
+static bool hover_presentation_for_cache_target(
+    const FengLspCacheQueryContext *context,
+    const FengLspCacheResolvedTarget *target,
+    FengLspHoverPresentation *presentation) {
     FengSlice documentation = {0};
+
+    if (context == NULL || target == NULL || presentation == NULL) {
+        return false;
+    }
 
     switch (target->kind) {
         case FENG_LSP_RESOLVED_DECL:
-            if (!symbol_decl_signature_to_string(&signature, target->decl)) {
-                return NULL;
+            if (!symbol_decl_hover_signature_to_string(&presentation->signature,
+                                                       target->decl)) {
+                return false;
             }
             documentation = feng_symbol_decl_doc(target->decl);
+            if (feng_symbol_decl_kind(target->decl) == FENG_SYMBOL_DECL_KIND_TYPE ||
+                feng_symbol_decl_kind(target->decl) == FENG_SYMBOL_DECL_KIND_SPEC) {
+                hover_presentation_set_category(
+                    presentation,
+                    "Kind",
+                    hover_category_from_symbol_decl(target->decl));
+            } else if (feng_symbol_decl_kind(target->decl) ==
+                       FENG_SYMBOL_DECL_KIND_BINDING) {
+                hover_presentation_set_category(
+                    presentation,
+                    "Kind",
+                    hover_category_from_symbol_type(
+                        context,
+                        feng_symbol_decl_value_type(target->decl)));
+            }
             break;
         case FENG_LSP_RESOLVED_MEMBER:
-            if (!symbol_member_signature_to_string(&signature, target->member)) {
-                return NULL;
+            if (!symbol_member_signature_to_string(&presentation->signature,
+                                                   target->member)) {
+                return false;
             }
             documentation = feng_symbol_decl_doc(target->member);
+            if (feng_symbol_decl_kind(target->member) == FENG_SYMBOL_DECL_KIND_FIELD) {
+                hover_presentation_set_category(
+                    presentation,
+                    "Kind",
+                    hover_category_from_symbol_type(
+                        context,
+                        feng_symbol_decl_value_type(target->member)));
+            }
             break;
         case FENG_LSP_RESOLVED_PARAM:
-            if (!string_append_cstr(&signature,
+            if (!string_append_cstr(&presentation->signature, "param ") ||
+                !string_append_cstr(&presentation->signature,
                                     target->parameter->mutability == FENG_MUTABILITY_VAR
                                         ? "var "
                                         : "let ") ||
-                !string_append_bytes(&signature,
+                !string_append_bytes(&presentation->signature,
                                      target->parameter->name.data,
                                      target->parameter->name.length) ||
-                !string_append_cstr(&signature, ": ") ||
-                !type_ref_to_string(&signature, target->parameter->type)) {
-                string_dispose(&signature);
-                return NULL;
+                !string_append_cstr(&presentation->signature, ": ") ||
+                !type_ref_to_string(&presentation->signature, target->parameter->type)) {
+                return false;
             }
+            hover_presentation_set_category(
+                presentation,
+                "Kind",
+                hover_category_from_cache_type_ref(context, target->parameter->type));
             break;
         case FENG_LSP_RESOLVED_BINDING:
-            if (!string_append_cstr(&signature,
+            if (!string_append_cstr(&presentation->signature,
                                     target->binding->mutability == FENG_MUTABILITY_VAR
                                         ? "var "
                                         : "let ") ||
-                !string_append_bytes(&signature,
+                !string_append_bytes(&presentation->signature,
                                      target->binding->name.data,
                                      target->binding->name.length)) {
-                string_dispose(&signature);
-                return NULL;
+                return false;
             }
             if (target->binding->type != NULL &&
-                (!string_append_cstr(&signature, ": ") ||
-                 !type_ref_to_string(&signature, target->binding->type))) {
-                string_dispose(&signature);
-                return NULL;
+                (!string_append_cstr(&presentation->signature, ": ") ||
+                 !type_ref_to_string(&presentation->signature, target->binding->type))) {
+                return false;
             }
+            hover_presentation_set_category(
+                presentation,
+                "Kind",
+                hover_category_from_cache_type_ref(context, target->binding->type));
             break;
         case FENG_LSP_RESOLVED_SELF: {
             FengSlice name = target->self_owner_decl != NULL
                                  ? feng_symbol_decl_name(target->self_owner_decl)
                                  : (FengSlice){0};
 
-            if (!string_append_cstr(&signature, "self: ") ||
-                !string_append_bytes(&signature, name.data, name.length)) {
-                string_dispose(&signature);
-                return NULL;
+            if (!string_append_cstr(&presentation->signature, "self: ") ||
+                !string_append_bytes(&presentation->signature, name.data, name.length)) {
+                return false;
             }
+            hover_presentation_set_category(
+                presentation,
+                "Kind",
+                hover_category_from_symbol_decl(target->self_owner_decl));
             break;
         }
         case FENG_LSP_RESOLVED_TYPE_PARAM:
-            if (!string_append_cstr(&signature, "generic parameter ") ||
-                !string_append_bytes(&signature,
+            if (!string_append_cstr(&presentation->signature, "generic parameter ") ||
+                !string_append_bytes(&presentation->signature,
                                      target->type_param->name.data,
                                      target->type_param->name.length)) {
-                string_dispose(&signature);
-                return NULL;
+                return false;
             }
             if (target->type_param->constraint != NULL &&
-                (!string_append_cstr(&signature, ": ") ||
-                 !type_ref_to_string(&signature, target->type_param->constraint))) {
-                string_dispose(&signature);
-                return NULL;
+                (!string_append_cstr(&presentation->signature, ": ") ||
+                 !type_ref_to_string(&presentation->signature,
+                                     target->type_param->constraint))) {
+                return false;
             }
             break;
         default:
-            return NULL;
+            return false;
     }
-    if (documentation.data != NULL && documentation.length > 0U &&
-        (!string_append_cstr(&signature, "\n\n") ||
-         !string_append_bytes(&signature,
-                              documentation.data,
-                              documentation.length))) {
-        string_dispose(&signature);
-        return NULL;
+    if (documentation.data != NULL && documentation.length > 0U) {
+        presentation->documentation = dup_range(documentation.data,
+                                                documentation.data + documentation.length);
+        if (presentation->documentation == NULL) {
+            return false;
+        }
     }
-    return signature.data;
+    return presentation->signature.data != NULL;
 }
 
 /* Returns whether cached source positions are exact for the current document. */
@@ -13909,6 +14650,15 @@ static bool analysis_matches_document(const FengLspAnalysisSession *session,
     text_length = strlen(document->text);
     return source->source_length == text_length &&
            memcmp(source->source, document->text, text_length) == 0;
+}
+
+/* Return whether `offset` remains exact for the successful generation. */
+static bool analysis_position_matches_document(const FengLspDocument *document,
+                                               size_t successful_generation,
+                                               size_t offset) {
+    return document != NULL && successful_generation > 0U &&
+           document->successful_prefix_generation == successful_generation &&
+           offset < document->successful_prefix_length;
 }
 
 static bool handle_hover_request(FengLspService *service,
@@ -13932,8 +14682,9 @@ static bool handle_hover_request(FengLspService *service,
     FengCliLoadedSource current_source = {0};
     FengLspAnalysisSession current_parse = {0};
     size_t offset;
-    char *hover_text;
+    FengLspHoverPresentation presentation = {0};
     FengLspString result = {0};
+    bool has_hover;
     bool ok;
 
     if (!json_object_get(params, "textDocument", &text_document) ||
@@ -13956,21 +14707,28 @@ static bool handle_hover_request(FengLspService *service,
     offset = document_offset_from_position(document, line, character);
     /* Current-text Hover is exact and must never wait for project analysis or
      * symbol-provider construction. */
-    hover_text = hover_text_for_keyword(document->text, offset);
-    if (hover_text == NULL) {
-        hover_text = hover_text_for_annotation(document->text, offset);
+    has_hover = hover_presentation_for_keyword(document->text, offset, &presentation);
+    if (!has_hover) {
+        hover_presentation_dispose(&presentation);
+        has_hover = hover_presentation_for_annotation(document->text,
+                                                       offset,
+                                                       &presentation);
     }
-    if (hover_text == NULL) {
-        hover_text = hover_text_for_builtin_type(document->text, offset);
+    if (!has_hover) {
+        hover_presentation_dispose(&presentation);
+        has_hover = hover_presentation_for_builtin_type(document->text,
+                                                        offset,
+                                                        &presentation);
     }
-    if (hover_text == NULL) {
-        hover_text = hover_text_for_literal(document, offset);
+    if (!has_hover) {
+        hover_presentation_dispose(&presentation);
+        has_hover = hover_presentation_for_literal(document, offset, &presentation);
     }
-    if (hover_text != NULL) {
+    if (has_hover) {
         ok = build_hover_result_json(&result,
                                      service->hover_markup_kind,
-                                     hover_text);
-        free(hover_text);
+                                     &presentation);
+        hover_presentation_dispose(&presentation);
         free(uri);
         if (!ok) {
             if (service->errors != NULL) {
@@ -13984,24 +14742,31 @@ static bool handle_hover_request(FengLspService *service,
         string_dispose(&result);
         return ok;
     }
+    hover_presentation_dispose(&presentation);
     wait_for_initial_query_state(service);
     /* Read the immutable published analysis only when its source fingerprint
      * exactly matches the current document. */
-    hover_text = NULL;
+    has_hover = false;
     pthread_mutex_lock(&service->analysis_mutex);
     session = &service->last_successful_analysis;
-    if (analysis_matches_document(session, document)) {
+    if (analysis_matches_document(session, document) ||
+        analysis_position_matches_document(document,
+                                           service->last_successful_generation,
+                                           offset)) {
         program = find_program(session, document->path);
         if (program != NULL && resolve_target_at(session, program, offset, &target)) {
-            hover_text = hover_text_for_target(session, program, &target);
+            has_hover = hover_presentation_for_target(session,
+                                                       program,
+                                                       &target,
+                                                       &presentation);
         }
     }
     pthread_mutex_unlock(&service->analysis_mutex);
-    if (hover_text != NULL) {
+    if (has_hover) {
         ok = build_hover_result_json(&result,
                                      service->hover_markup_kind,
-                                     hover_text);
-        free(hover_text);
+                                     &presentation);
+        hover_presentation_dispose(&presentation);
         free(uri);
         if (!ok) {
             if (service->errors != NULL) {
@@ -14015,6 +14780,7 @@ static bool handle_hover_request(FengLspService *service,
         string_dispose(&result);
         return ok;
     }
+    hover_presentation_dispose(&presentation);
     program = ensure_document_parse(document);
     if (program != NULL) {
         current_source.path = document->path;
@@ -14025,12 +14791,15 @@ static bool handle_hover_request(FengLspService *service,
         current_parse.source_count = 1U;
         memset(&target, 0, sizeof(target));
         if (resolve_target_at(&current_parse, program, offset, &target)) {
-            hover_text = hover_text_for_target(&current_parse, program, &target);
-            if (hover_text != NULL) {
+            has_hover = hover_presentation_for_target(&current_parse,
+                                                       program,
+                                                       &target,
+                                                       &presentation);
+            if (has_hover) {
                 ok = build_hover_result_json(&result,
                                              service->hover_markup_kind,
-                                             hover_text);
-                free(hover_text);
+                                             &presentation);
+                hover_presentation_dispose(&presentation);
                 free(uri);
                 if (!ok) {
                     string_dispose(&result);
@@ -14042,22 +14811,25 @@ static bool handle_hover_request(FengLspService *service,
             }
         }
     }
-    hover_text = NULL;
+    hover_presentation_dispose(&presentation);
+    has_hover = false;
     pthread_mutex_lock(&service->analysis_mutex);
     if (build_persistent_cache_query_context(service,
                                              document,
                                              document->text,
                                              &cache) &&
         resolve_symbol_target_at(&cache, offset, &cache_target)) {
-        hover_text = hover_text_for_cache_target(&cache_target);
+        has_hover = hover_presentation_for_cache_target(&cache,
+                                                        &cache_target,
+                                                        &presentation);
     }
     cache_query_context_dispose(&cache);
     pthread_mutex_unlock(&service->analysis_mutex);
-    if (hover_text != NULL) {
+    if (has_hover) {
         ok = build_hover_result_json(&result,
                                      service->hover_markup_kind,
-                                     hover_text);
-        free(hover_text);
+                                     &presentation);
+        hover_presentation_dispose(&presentation);
         free(uri);
         if (!ok) {
             string_dispose(&result);
@@ -14067,6 +14839,7 @@ static bool handle_hover_request(FengLspService *service,
         string_dispose(&result);
         return ok;
     }
+    hover_presentation_dispose(&presentation);
     free(uri);
     return send_json_response(output, id, "null");
 }

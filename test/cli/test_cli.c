@@ -7830,6 +7830,197 @@ static void test_lsp_hover_falls_back_to_plaintext_without_markdown_capability(v
     free(output);
 }
 
+/* Hover exposes declaration shapes and proven outermost type categories. */
+static void test_lsp_hover_type_categories_and_declaration_shapes(void) {
+    static const char *kSource =
+        "module test.lsp.hover_categories;\n"
+        "\n"
+        "spec Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "spec EmptySpec {}\n"
+        "spec Serializable {\n"
+        "    func serialize(): string;\n"
+        "}\n"
+        "spec Mapper<T>(value: T): string;\n"
+        "spec Choice: User | Point;\n"
+        "spec Both: Named & Serializable;\n"
+        "\n"
+        "type Empty {}\n"
+        "type User: Named {\n"
+        "    let name: string;\n"
+        "}\n"
+        "@value type Point {\n"
+        "    let x: f64;\n"
+        "}\n"
+        "type Unit();\n"
+        "type Pair<T>(T, T);\n"
+        "type Octet(i32, i32, i32, i32, i32, i32, i32, i32);\n"
+        "\n"
+        "func inspect(user: User, point: Point, pair: Pair<i32>, octet: Octet, users: User[], pointer: User*, count: i32, var total: i32): User {\n"
+        "    let inferred = Point { x: 1.0 };\n"
+        "    let first: i32 = octet.item1;\n"
+        "    return user;\n"
+        "}\n";
+    static const char *kPlaintextInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    static const char *kMarkdownInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{\"textDocument\":{\"hover\":{\"contentFormat\":[\"markdown\"]}}}}}";
+    char *output;
+
+    output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "type Empty {}", 5U);
+    ASSERT(strstr(output, "type Empty {}\\n\\nKind: Reference Type") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "type User: Named {", 5U);
+    ASSERT(strstr(output, "type User: Named { ... }\\n\\nKind: Reference Type") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "@value type Point {", 12U);
+    ASSERT(strstr(output, "type Point { ... }\\n\\nKind: Value Type") != NULL);
+    ASSERT(strstr(output, "@value type Point") == NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "type Unit();", 5U);
+    ASSERT(strstr(output, "type Unit();\\n\\nKind: Tuple Type") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "type Pair<T>(T, T);", 5U);
+    ASSERT(strstr(output, "type Pair<T>(T, T);\\n\\nKind: Tuple Type") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "type Octet(i32, i32, i32, i32, i32, i32, i32, i32);",
+                                        5U);
+    ASSERT(strstr(output,
+                  "type Octet(i32, i32, i32, i32, i32, i32, i32, i32);\\n\\nKind: Tuple Type") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "spec Named {", 5U);
+    ASSERT(strstr(output, "spec Named { ... }\\n\\nKind: Object Spec") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "spec EmptySpec {}", 5U);
+    ASSERT(strstr(output, "spec EmptySpec {}\\n\\nKind: Object Spec") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "spec Mapper<T>(value: T): string;", 5U);
+    ASSERT(strstr(output,
+                  "spec Mapper<T>(value: T): string;\\n\\nKind: Callback Spec") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "spec Choice: User | Point;", 5U);
+    ASSERT(strstr(output,
+                  "spec Choice: User | Point;\\n\\nKind: Union Spec") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource, kPlaintextInitialize, "spec Both: Named & Serializable;", 5U);
+    ASSERT(strstr(output,
+                  "spec Both: Named & Serializable;\\n\\nKind: Intersection Spec") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "    let name: string;",
+                                        strlen("    let "));
+    ASSERT(strstr(output, "let name: string\\n\\nKind: Builtin") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "func inspect(user: User",
+                                        strlen("func "));
+    ASSERT(strstr(output, "func inspect(user: User") != NULL);
+    ASSERT(strstr(output, "Kind:") == NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "func inspect(user: User",
+                                        strlen("func inspect("));
+    ASSERT(strstr(output, "param let user: User\\n\\nKind: Reference Type") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "point: Point, pair",
+                                        1U);
+    ASSERT(strstr(output, "param let point: Point\\n\\nKind: Value Type") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "users: User[]",
+                                        1U);
+    ASSERT(strstr(output, "param let users: User[]\\n\\nKind: Array") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "pointer: User*",
+                                        1U);
+    ASSERT(strstr(output, "param let pointer: User*\\n\\nKind: Pointer") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "count: i32",
+                                        1U);
+    ASSERT(strstr(output, "param let count: i32\\n\\nKind: Builtin") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "var total: i32",
+                                        strlen("var "));
+    ASSERT(strstr(output, "param var total: i32\\n\\nKind: Builtin") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "let inferred = Point",
+                                        strlen("let "));
+    ASSERT(strstr(output, "let inferred: Point\\n\\nKind: Value Type") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "octet.item1",
+                                        strlen("octet."));
+    ASSERT(strstr(output, "let item1: i32\\n\\nKind: Builtin") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kMarkdownInitialize,
+                                        "spec Both: Named & Serializable;",
+                                        5U);
+    ASSERT(strstr(output, "```feng\\nspec Both: Named & Serializable;\\n```") != NULL);
+    ASSERT(strstr(output, "**Kind:** `Intersection Spec`") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kMarkdownInitialize,
+                                        "func inspect(user: User",
+                                        strlen("func inspect("));
+    ASSERT(strstr(output, "```feng\\nparam let user: User\\n```") != NULL);
+    ASSERT(strstr(output, "**Kind:** `Reference Type`") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(
+        "module test.lsp.hover_annotations;\n"
+        "@value\n"
+        "@abi\n"
+        "type Annotated {}\n",
+        kPlaintextInitialize,
+        "type Annotated {}",
+        5U);
+    ASSERT(strstr(output, "type Annotated {}\\n\\nKind: Value Type") != NULL);
+    ASSERT(strstr(output, "@value") == NULL);
+    ASSERT(strstr(output, "@abi") == NULL);
+    free(output);
+}
+
 /* Hover must resolve lambda parameter types, lambda-local names, and every
  * level of a chained member access without relying on TUI-specific symbols. */
 static void test_lsp_hover_lambda_scope_and_chained_members(void) {
@@ -8031,13 +8222,13 @@ static void test_lsp_hover_lambda_parameter_declaration_and_cache_invalidation(v
 
     ASSERT(strstr(output,
                   "\"id\":2,\"result\":{\"contents\":{\"kind\":\"plaintext\","
-                  "\"value\":\"let item: i32\"}}") != NULL);
+                  "\"value\":\"param let item: i32\\n\\nKind: Builtin\"}}") != NULL);
     ASSERT(strstr(output,
                   "\"id\":3,\"result\":{\"contents\":{\"kind\":\"plaintext\","
-                  "\"value\":\"let item: i32\"}}") != NULL);
+                  "\"value\":\"param let item: i32\\n\\nKind: Builtin\"}}") != NULL);
     ASSERT(strstr(output,
                   "\"id\":4,\"result\":{\"contents\":{\"kind\":\"plaintext\","
-                  "\"value\":\"let value: i32\"}}") != NULL);
+                  "\"value\":\"param let value: i32\\n\\nKind: Builtin\"}}") != NULL);
 
     free(output);
     free(shutdown);
@@ -8045,6 +8236,112 @@ static void test_lsp_hover_lambda_parameter_declaration_and_cache_invalidation(v
     free(did_change);
     free(hover_use);
     free(hover_declaration);
+    free(did_open);
+    free(initialize);
+    free(escaped_after);
+    free(escaped_before);
+    free(source_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
+/* A failed edit never removes the last successful Hover type category. */
+static void test_lsp_hover_type_category_survives_failed_edit(void) {
+    static const char *kSourceBefore =
+        "module test.lsp.hover_category_cache;\n"
+        "\n"
+        "@value\n"
+        "type Point {\n"
+        "    let x: i32;\n"
+        "}\n";
+    static const char *kSourceAfter =
+        "module test.lsp.hover_category_cache;\n"
+        "\n"
+        "@value\n"
+        "type Point {\n"
+        "    let x: i32;\n"
+        "}\n"
+        "\n"
+        "func broken(): void {\n"
+        "    foo.\n";
+    char template_path[] = "temp/feng_lsp_hover_category_cache_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *source_uri;
+    char *escaped_before;
+    char *escaped_after;
+    char *initialize;
+    char *did_open;
+    char *hover_before;
+    char *did_change;
+    char *hover_after;
+    char *shutdown;
+    char *output;
+    FILE *input;
+    unsigned int line;
+    unsigned int character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSourceBefore);
+    source_uri = file_uri_from_path(source_path);
+    escaped_before = json_escape_text(kSourceBefore);
+    escaped_after = json_escape_text(kSourceAfter);
+    find_line_character(kSourceBefore, "type Point {", strlen("type "), &line, &character);
+
+    initialize = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                            "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+                          "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+                          "\"version\":1,\"text\":\"%s\"}}}",
+                          source_uri,
+                          escaped_before);
+    hover_before = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":2,"
+                              "\"method\":\"textDocument/hover\","
+                              "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                              "\"position\":{\"line\":%u,\"character\":%u}}}",
+                              source_uri,
+                              line,
+                              character);
+    did_change = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\","
+                            "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":2},"
+                            "\"contentChanges\":[{\"text\":\"%s\"}]}}",
+                            source_uri,
+                            escaped_after);
+    hover_after = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":3,"
+                             "\"method\":\"textDocument/hover\","
+                             "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+                             "\"position\":{\"line\":%u,\"character\":%u}}}",
+                             source_uri,
+                             line,
+                             character);
+    shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    input = temp_file();
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    write_lsp_message(input, hover_before);
+    write_lsp_message(input, did_change);
+    write_lsp_message(input, hover_after);
+    write_lsp_message(input, shutdown);
+    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+
+    output = run_lsp_server_capture(input);
+    fclose(input);
+    ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(output, "\"id\":3,\"result\":null") == NULL);
+    ASSERT(count_occurrences(output,
+                             "type Point { ... }\\n\\nKind: Value Type") == 2);
+
+    free(output);
+    free(shutdown);
+    free(hover_after);
+    free(did_change);
+    free(hover_before);
     free(did_open);
     free(initialize);
     free(escaped_after);
@@ -13389,6 +13686,176 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     free(remove_error);
 }
 
+/* Persistent package symbols preserve every Hover declaration category and shape. */
+static void test_lsp_package_symbol_hover_type_categories(void) {
+    static const char *kPackageSource =
+        "open module test.lsp.hoverpkg;\n"
+        "\n"
+        "open type RefType {\n"
+        "    open let value: i32;\n"
+        "}\n"
+        "@value\n"
+        "open type ValueType {\n"
+        "    open let value: i32;\n"
+        "}\n"
+        "open type TupleType(i32, string);\n"
+        "open spec ObjectShape {\n"
+        "    func first(): string;\n"
+        "}\n"
+        "open spec OtherShape {\n"
+        "    func second(): string;\n"
+        "}\n"
+        "open spec CallbackShape(input: i32): string;\n"
+        "open spec UnionShape: RefType | ValueType;\n"
+        "open spec IntersectionShape: ObjectShape & OtherShape;\n";
+    static const char *kConsumerSource =
+        "module test.lsp.hoverconsumer;\n"
+        "import test.lsp.hoverpkg;\n"
+        "\n"
+        "func broken(ref: RefType, value: ValueType, tuple: TupleType, object: ObjectShape, callback: CallbackShape, unionValue: UnionShape, intersectionValue: IntersectionShape): void {\n"
+        "    missing;\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char template_path[] = "temp/feng_lsp_hover_symbol_categories_XXXXXX";
+    char *workspace_dir;
+    char *package_dir;
+    char *package_manifest;
+    char *package_src_dir;
+    char *package_source_path;
+    char *bundle_path;
+    char *consumer_dir;
+    char *consumer_manifest;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *output;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    package_dir = path_join(workspace_dir, "package");
+    package_manifest = path_join(package_dir, "feng.fm");
+    package_src_dir = path_join(package_dir, "src");
+    package_source_path = path_join(package_src_dir, "types.ff");
+    bundle_path = path_join(package_dir, "build/lsp_hover_types-0.1.0.fb");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_dir, "src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+
+    mkdir_p(package_src_dir);
+    mkdir_p(consumer_src_dir);
+    write_text_file(package_manifest,
+                    "[package]\n"
+                    "name: \"lsp_hover_types\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(package_source_path, kPackageSource);
+    {
+        char *argv[] = { package_dir };
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    ASSERT(path_exists(bundle_path));
+    ASSERT(unlink(package_source_path) == 0);
+
+    write_text_file(consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_hover_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "lsp_hover_types: \"../package/build/lsp_hover_types-0.1.0.fb\"\n");
+    write_text_file(consumer_source_path, kConsumerSource);
+
+    output = capture_lsp_position_response_at_path(consumer_source_path,
+                                                    kConsumerSource,
+                                                    kInitialize,
+                                                    "textDocument/hover",
+                                                    "ref: RefType",
+                                                    strlen("ref: "));
+    ASSERT(strstr(output,
+                  "type RefType { ... }\\n\\nKind: Reference Type") != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(consumer_source_path,
+                                                    kConsumerSource,
+                                                    kInitialize,
+                                                    "textDocument/hover",
+                                                    "value: ValueType",
+                                                    strlen("value: "));
+    ASSERT(strstr(output,
+                  "type ValueType { ... }\\n\\nKind: Value Type") != NULL);
+    ASSERT(strstr(output, "@value type ValueType") == NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(consumer_source_path,
+                                                    kConsumerSource,
+                                                    kInitialize,
+                                                    "textDocument/hover",
+                                                    "tuple: TupleType",
+                                                    strlen("tuple: "));
+    ASSERT(strstr(output,
+                  "type TupleType(i32, string);\\n\\nKind: Tuple Type") != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(consumer_source_path,
+                                                    kConsumerSource,
+                                                    kInitialize,
+                                                    "textDocument/hover",
+                                                    "object: ObjectShape",
+                                                    strlen("object: "));
+    ASSERT(strstr(output,
+                  "spec ObjectShape { ... }\\n\\nKind: Object Spec") != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(consumer_source_path,
+                                                    kConsumerSource,
+                                                    kInitialize,
+                                                    "textDocument/hover",
+                                                    "callback: CallbackShape",
+                                                    strlen("callback: "));
+    ASSERT(strstr(output,
+                  "spec CallbackShape(input: i32): string;\\n\\nKind: Callback Spec") != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(consumer_source_path,
+                                                    kConsumerSource,
+                                                    kInitialize,
+                                                    "textDocument/hover",
+                                                    "unionValue: UnionShape",
+                                                    strlen("unionValue: "));
+    ASSERT(strstr(output,
+                  "spec UnionShape: test.lsp.hoverpkg.RefType | test.lsp.hoverpkg.ValueType;\\n\\nKind: Union Spec") != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(consumer_source_path,
+                                                    kConsumerSource,
+                                                    kInitialize,
+                                                    "textDocument/hover",
+                                                    "intersectionValue: IntersectionShape",
+                                                    strlen("intersectionValue: "));
+    ASSERT(strstr(output,
+                  "spec IntersectionShape: test.lsp.hoverpkg.ObjectShape & test.lsp.hoverpkg.OtherShape;\\n\\nKind: Intersection Spec") != NULL);
+    free(output);
+
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(consumer_manifest);
+    free(consumer_dir);
+    free(bundle_path);
+    free(package_source_path);
+    free(package_src_dir);
+    free(package_manifest);
+    free(package_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 /* §1.8 keyword completion regression tests.
  * Each test verifies that context-aware keywords appear (or do not
  * appear) at the expected grammar position. */
@@ -13622,8 +14089,10 @@ int main(void) {
     test_lsp_hover_definition_and_completion();
     test_lsp_hover_uses_markdown_when_supported();
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
+    test_lsp_hover_type_categories_and_declaration_shapes();
     test_lsp_hover_lambda_scope_and_chained_members();
     test_lsp_hover_lambda_parameter_declaration_and_cache_invalidation();
+    test_lsp_hover_type_category_survives_failed_edit();
     test_lsp_hover_infix_match_binding();
     test_lsp_hover_type_param();
     test_lsp_hover_type_param_extended();
@@ -13633,7 +14102,7 @@ int main(void) {
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_member_completion_survives_incomplete_member_access();
     test_lsp_fit_extension_member_completion_on_builtin_string();
-        test_lsp_enum_member_completion_survives_incomplete_member_access();
+    test_lsp_enum_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();
     test_lsp_member_completion_infers_constructor_call_overloads();
     test_lsp_member_references_and_rename_from_object_literal_field();
@@ -13651,6 +14120,7 @@ int main(void) {
     test_lsp_imported_type_completion_survives_project_semantic_failure();
     test_lsp_alias_module_completion_survives_incomplete_member_access();
     test_lsp_external_package_hover_docs_and_completion();
+    test_lsp_package_symbol_hover_type_categories();
     test_lsp_keyword_completion_top_decl_position();
     test_lsp_keyword_completion_body_position();
     test_lsp_keyword_completion_member_position();

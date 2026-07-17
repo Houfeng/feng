@@ -826,6 +826,23 @@ receiver，并解析为根值以及 member、call、index 三种后缀操作；�
 DAP 子进程断言 `test/cli/test_cli.c:431` 停止，未出现 sanitizer 报告；VS Code 测试仍停在既有
 `debug-smoke.test.js:464`。
 
+### 16.8 2026-07-17 receiver 起始边界修复
+
+已修复成员 receiver 前存在表达式分隔空白时，空白被错误纳入 receiver 文本的问题。例如
+`let status: HttpStatus = HttpStatus.;` 中，右侧 `HttpStatus` 必须识别为简单类型名，不得因为其前面的
+空白被误判为复杂链。receiver 反向扫描只允许跨越点号两侧的空白；未遇到前序点号时，必须保留当前
+原子表达式的真实起始位置。
+
+该修复不增加枚举或类型名特判，统一适用于标识符、调用、下标和字符串字面量组成的 receiver 链。
+既有枚举不完整成员访问测试必须同时覆盖 `HttpStatus.` 与 `HttpStatus.N`，分别返回全部枚举项和前缀
+匹配项。
+
+普通构建与 UBSan 下的参数 Hover、参数缓存失效和枚举成员补全专项测试均通过；成员范围、链式与混合
+receiver、补全恢复、缓存保留和调度器协议测试通过。普通优化构建复测 Hover P95 为 `0.049 ms`，
+Completion P95 为 `0.041 ms`；1 万 / 10 万 / 100 万行矩阵交互 P99 为 `0.197 ms`，Max 为
+`0.234 ms`。普通与 UBSan 全量回归仍只在既有 DAP 子进程断言 `test/cli/test_cli.c:431` 停止，
+未出现 sanitizer 报告。
+
 ---
 
 ## 17. 后续核心编译器演进方向

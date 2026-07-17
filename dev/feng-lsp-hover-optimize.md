@@ -1,6 +1,6 @@
 # Feng LSP Hover 提示优化方案
 
-> 状态：方案已确定，待实施
+> 状态：已实施
 >
 > 日期：2026-07-17
 >
@@ -43,7 +43,7 @@
 Hover 内容按以下固定顺序组织：
 
 1. Feng 代码块：目标自身的签名或声明核心形状；
-2. 类别行：目标静态类型对应的类别标签；
+2. 类别行：目标静态类型对应的 `Kind` 标签；
 3. 文档区：原有文档注释，没有文档时省略。
 
 Markdown 客户端示例：
@@ -53,7 +53,7 @@ Markdown 客户端示例：
 let user: User
 ```
 
-**Type kind:** `Reference Type`
+**Kind:** `Reference Type`
 
 用户信息。
 ````
@@ -63,7 +63,7 @@ let user: User
 ```text
 let user: User
 
-Type kind: Reference Type
+Kind: Reference Type
 
 用户信息。
 ```
@@ -81,7 +81,7 @@ Type kind: Reference Type
 type Point { ... }
 ```
 
-**Type kind:** `Value Type`
+**Kind:** `Value Type`
 
 普通 `type` 使用相同的声明语法形状，由类别标签表达差异：
 
@@ -89,7 +89,7 @@ type Point { ... }
 type User { ... }
 ```
 
-**Type kind:** `Reference Type`
+**Kind:** `Reference Type`
 
 ### 2.2 块体省略规则
 
@@ -163,7 +163,7 @@ Hover `User[]` 中的 `User` 类型引用时，目标是 `User` 声明本身，�
 type User<T>: Named, Serializable { ... }
 ```
 
-**Type kind:** `Reference Type`
+**Kind:** `Reference Type`
 
 ### 4.2 Value Type
 
@@ -173,7 +173,7 @@ type User<T>: Named, Serializable { ... }
 type Point: Equatable { ... }
 ```
 
-**Type kind:** `Value Type`
+**Kind:** `Value Type`
 
 ### 4.3 Tuple Type
 
@@ -183,7 +183,7 @@ type Point: Equatable { ... }
 type Point(float, float);
 ```
 
-**Type kind:** `Tuple Type`
+**Kind:** `Tuple Type`
 
 泛型、空元组和声明头 spec 关系按真实核心形状显示：
 
@@ -200,7 +200,7 @@ type Pair<T>(T, T): Equatable;
 spec Readable<T>: Named { ... }
 ```
 
-**Type kind:** `Object Spec`
+**Kind:** `Object Spec`
 
 ### 4.5 Callback Spec
 
@@ -210,7 +210,7 @@ spec Readable<T>: Named { ... }
 spec Mapper<T>(value: T): string;
 ```
 
-**Type kind:** `Callback Spec`
+**Kind:** `Callback Spec`
 
 ### 4.6 Union Spec
 
@@ -220,7 +220,7 @@ spec Mapper<T>(value: T): string;
 spec Result: Success | Failure;
 ```
 
-**Type kind:** `Union Spec`
+**Kind:** `Union Spec`
 
 ### 4.7 Intersection Spec
 
@@ -230,20 +230,23 @@ spec Result: Success | Failure;
 spec ReadWrite: Readable & Writable;
 ```
 
-**Type kind:** `Intersection Spec`
+**Kind:** `Intersection Spec`
 
 ---
 
 ## 5. 绑定、参数与成员 Hover
 
-目标自身的原有签名保持不变，类别行说明该目标静态类型的类别。类别标题必须明确所描述的对象，禁止统一使用含义模糊的 `Kind`。
+目标自身的原有签名保持不变，类别行统一使用 `Kind`，避免在
+`spec` 声明下方使用 `Type kind` 造成语义歧义。参数在 Feng 签名前增加
+`param` 紧凑角色前缀，与 `ctor` 等 Hover 签名前缀一样与 `let` / `var` 同行显示。
+`param` 只是 Hover 表现层元信息，不新增 Feng 语法或关键字。
 
-| Hover 目标 | 类别标题 | 示例 |
+| Hover 目标 | 签名前缀 | 类别行 |
 | --- | --- | --- |
-| 全局或局部绑定 | `Type kind` | `Type kind: Reference Type` |
-| 参数 | `Parameter type kind` | `Parameter type kind: Value Type` |
-| 字段，包括元组 `item1`～`item8` | `Field type kind` | `Field type kind: Builtin` |
-| 函数或方法 | `Return type kind` | `Return type kind: Reference Type` |
+| 全局或局部绑定 | 无 | `Kind: Reference Type` |
+| 参数 | `param` | `Kind: Value Type` |
+| 字段，包括元组 `item1`～`item8` | 无 | `Kind: Builtin` |
+| 函数或方法 | 无 | 不显示 |
 
 ### 5.1 绑定
 
@@ -251,19 +254,19 @@ spec ReadWrite: Readable & Writable;
 let user: User
 ```
 
-**Type kind:** `Reference Type`
+**Kind:** `Reference Type`
 
 显式类型使用声明类型；省略类型的绑定使用最后一次成功分析中已经证明的推导静态类型。
 
 ### 5.2 参数
 
 ```feng
-let point: Point
+param let point: Point
 ```
 
-**Parameter type kind:** `Value Type`
+**Kind:** `Value Type`
 
-参数原有 `let` / `var` 展示规则保持不变。
+参数原有 `let` / `var` 展示规则保持不变，仅在最前面增加 `param` 表现前缀。
 
 ### 5.3 字段与元组元素
 
@@ -271,7 +274,7 @@ let point: Point
 let owner: User
 ```
 
-**Field type kind:** `Reference Type`
+**Kind:** `Reference Type`
 
 元组元素沿用字段 Hover：
 
@@ -279,7 +282,7 @@ let owner: User
 let item1: float
 ```
 
-**Field type kind:** `Builtin`
+**Kind:** `Builtin`
 
 ### 5.4 函数与方法
 
@@ -287,9 +290,7 @@ let item1: float
 func create(): User
 ```
 
-**Return type kind:** `Reference Type`
-
-返回类型类别不得误写成函数或方法自身的类别。没有可证明返回类型的目标不显示返回类型类别。
+函数和方法签名已经明确显示返回类型，不再额外显示返回类型 `Kind`。
 
 ---
 
@@ -436,7 +437,7 @@ typedef struct FengLspHoverPresentation {
 - 参数；
 - 普通字段；
 - 元组 `item1`～`item8` 字段；
-- 函数和方法返回类型；
+- 函数和方法不额外显示返回类型 `Kind`；
 - Array、Builtin、Pointer 与泛型具名类型的最外层类别；
 - Hover 类型引用时显示被引用声明自身的类别。
 
@@ -473,7 +474,7 @@ typedef struct FengLspHoverPresentation {
 3. 在 LSP 中建立统一类别枚举和标签映射。
 4. 统一 AST 与持久符号两条声明核心形状格式化路径。
 5. 结构化构建签名、类别和文档，并渲染 Markdown/plaintext。
-6. 为绑定、参数、字段和函数/方法返回类型附加明确类别标题。
+6. 为绑定、参数和字段附加 `Kind`，并在参数签名前同行显示 `param`。
 7. 新增专项正确性、跨模块、缓存与性能测试。
 8. 执行完整回归并将结果记录到本文档。
 
@@ -482,7 +483,8 @@ typedef struct FengLspHoverPresentation {
 全部满足以下条件后方可视为完成：
 
 - 类型和 `spec` 声明/引用 Hover 均显示声明核心形状与正确类别；
-- 绑定、参数、字段和函数/方法返回值显示对应的明确类别标题；
+- 绑定、参数和字段显示 `Kind`，参数签名以 `param let/var` 开头；
+- 函数和方法不额外显示返回类型 `Kind`；
 - 所有注解在声明核心形状中一致省略；
 - 非空块体显示 `{ ... }`，真实空块体显示 `{}`；
 - Tuple、Callback、Union、Intersection 按本方案显示完整直接签名；
@@ -491,3 +493,31 @@ typedef struct FengLspHoverPresentation {
 - 不触发同步分析或磁盘 I/O；
 - Markdown/plaintext 与文档注释布局正确；
 - 专项测试、全量回归与性能验收完成，既有基线失败如实记录。
+
+---
+
+## 11. 实施与验收结果
+
+2026-07-17 完成实施：
+
+- 已统一 AST 与持久符号索引两条 Hover 路径的声明形状、类别映射与渲染；
+- 已实现 Reference、Value、Tuple、四种 Spec、Array、Builtin 与 Pointer 类别；
+- 参数签名以同行的 `param let/var` 开头，类别行统一为 `Kind`；
+- 函数和方法不额外显示返回类型 `Kind`；
+- 不完整输入继续使用最后一次成功分析，失败分析不覆盖已成功结果。
+
+验收结果：
+
+- Hover 专项协议测试：普通构建与 UBSan 均通过；
+- 跨模块符号 Hover、失败编辑缓存保留与既有参数缓存失效测试：通过；
+- `test_symbol`、LSP 调度、LSP 缓存保留和性能约束：通过；
+- LSP 性能复测：Hover P95 为 `0.049 ms`，Completion P95 为 `0.041 ms`；
+  100 万行热 Hover P95 为 `0.033 ms`，矩阵交互请求 P99 为 `0.197 ms`；
+- `make test-normal`：88 项 smoke、542 项 FCTS、标准库、perf constraints 与 CLI 之前的
+  编译器单元套件均通过；在既有 CLI/LLDB 子进程测试处因
+  `process exited with status -1 (no such process)` 中止；
+- `make test-sanitize`：UBSan 下的 archive、lexer、parser、semantic、runtime、codegen、debug
+  及 Hover 专项测试均通过；同样在上述 CLI/LLDB 子进程测试处中止；
+- VS Code 插件 formatter、diagnostics、debug integration 和 syntax 通过；
+  既有 debug smoke 在断点验证处失败，icon 测试存在
+  `icons/feng-logo.png` 与 `./icons/feng-logo.png` 的既有预期不一致。

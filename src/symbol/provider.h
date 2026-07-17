@@ -132,6 +132,10 @@ size_t feng_symbol_decl_intersection_member_count(const FengSymbolDeclView *decl
 const FengSymbolTypeView *feng_symbol_decl_intersection_member_at(const FengSymbolDeclView *decl,
                                                                    size_t index);
 FengSpecForm feng_symbol_decl_spec_form(const FengSymbolDeclView *decl);
+/* Return whether a symbol declaration is a named tuple type. */
+bool feng_symbol_decl_is_tuple(const FengSymbolDeclView *decl);
+/* Return whether a symbol declaration is an @value type. */
+bool feng_symbol_decl_is_value_type(const FengSymbolDeclView *decl);
 size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_has_enum_item_value(const FengSymbolDeclView *decl);
 int64_t feng_symbol_decl_enum_item_value(const FengSymbolDeclView *decl);
@@ -161,4 +165,3 @@ void feng_symbol_provider_free(FengSymbolProvider *provider);
 #endif
 
 #endif /* FENG_SYMBOL_PROVIDER_H */
-

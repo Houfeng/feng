@@ -1046,6 +1046,16 @@ FengSpecForm feng_symbol_decl_spec_form(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->spec_form : FENG_SPEC_FORM_OBJECT;
 }
 
+/* Return whether a cached declaration is a named tuple type. */
+bool feng_symbol_decl_is_tuple(const FengSymbolDeclView *decl) {
+    return decl != NULL && decl->kind == FENG_SYMBOL_DECL_KIND_TYPE && decl->is_tuple;
+}
+
+/* Return whether a cached declaration carries @value semantics. */
+bool feng_symbol_decl_is_value_type(const FengSymbolDeclView *decl) {
+    return decl != NULL && decl->kind == FENG_SYMBOL_DECL_KIND_TYPE && decl->is_value;
+}
+
 size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->type_param_count : 0U;
 }

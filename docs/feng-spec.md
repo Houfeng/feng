@@ -1,19 +1,20 @@
 # Feng 语言 `spec` 规范
 
-本文档说明 Feng 中 `spec` 的职责、语法、语义与实现约束。`spec` 是 object-form、callable-form 与 union-form 的统一声明入口; 具体类型如何显式满足 object-form `spec` 契约,见 [feng-fit.md](./feng-fit.md); union-form 的成员选择、收窄与布局细则见 [feng-union-type.md](./feng-union-type.md)。
+本文档说明 Feng 中 `spec` 的职责、语法、语义与实现约束。`spec` 是 object-form、callable-form、union-form 与 intersection-form 的统一声明入口; 具体类型如何显式满足 object-form `spec` 契约,见 [feng-fit.md](./feng-fit.md); union-form 的成员选择、收窄与布局细则见 [feng-union-type.md](./feng-union-type.md)。
 
 ## 1 职责
 
-- `spec` 用于声明 object-form 契约形状、callable-form 可调用形状或 union-form 候选成员集合,不提供实现体。
+- `spec` 用于声明 object-form 契约形状、callable-form 可调用形状、union-form 候选成员集合或 intersection-form 组合约束,不提供实现体。
 - `spec` 可作为参数类型、返回类型、成员类型和其他类型位置中的引用目标。
-- `type` 负责具体定义; object-form `spec` 负责契约目标; callable-form `spec` 负责可调用签名目标; union-form `spec` 负责值进入时的 active member 选择与后续收窄边界。
+- `type` 负责具体定义; object-form `spec` 负责契约目标; callable-form `spec` 负责可调用签名目标; union-form `spec` 负责值进入时的 active member 选择与后续收窄边界; intersection-form `spec` 负责组合多个 object-form 契约。
 
 ## 2 术语
 
-- `spec`: 统一声明入口,可形成 object-form、callable-form 或 union-form。
+- `spec`: 统一声明入口,可形成 object-form、callable-form、union-form 或 intersection-form。
 - object-form `spec`: 对象形契约声明,定义字段与行为签名边界。
 - callable-form `spec`: 可调用形状声明,定义参数列表与返回类型边界。
 - union-form `spec`: 候选类型集合声明,表示一个值在进入该 `spec` 后处于直接成员集合中的其一。
+- intersection-form `spec`: object-form 契约组合声明,表示值必须名义满足全部直接成员约束。
 - active member: union-form 值当前实际持有的直接成员,由进入站点确定,由 union-form 的 `tag` 表达。
 - `type`: 具体类型声明,可通过定义头或 `fit` 显式进入一个或多个 object-form `spec`。
 - 契约满足: 指具体 `type` 满足目标 object-form `spec` 的全部字段与方法要求。
@@ -60,7 +61,14 @@ spec Mapper(x: int): int;
 spec Choice: int | string | User;
 ```
 
-正确语法四,object-form spec 中声明静态成员:
+正确语法四,intersection-form:
+
+```feng
+spec ReadWrite: Readable & Writable;
+spec Comparable<T>: Eq<T> & Ord<T>;
+```
+
+正确语法五,object-form spec 中声明静态成员:
 
 ```feng
 // 静态字段与静态方法签名
@@ -147,6 +155,20 @@ type Box: Choice {}
 spec Choice: int | string {}
 ```
 
+错语法八,intersection-form `spec` 使用块体:
+
+```feng
+spec ReadWrite: Readable & Writable {}
+```
+
+错语法九,`type` 声明头满足 intersection-form `spec`:
+
+```feng
+spec ReadWrite: Readable & Writable;
+
+type Stream: ReadWrite {}
+```
+
 ## 4 语义
 
 - object-form `spec` 只约束可见形状（字段名、绑定方式 `let`/`var`、字段类型、行为签名与返回类型）,不约束具体内存布局、对象物理结构或 ABI 值布局。
@@ -166,6 +188,11 @@ spec Choice: int | string {}
 - union-form 默认零值取直接成员列表中第一个 member 的默认零值。
 - union-form 值在进入 union-form 的赋值、初始化、传参与返回等站点确定 active member；编译器在编译期通过多级链路查找，确定从源类型到目标 union-form 的完整路径（精确 member 优先，嵌套 union-form 间接匹配次之）；若存在多条可达路径则诊断为歧义；运行时仅执行路径已确定的 tag 设置与数据拷贝。
 - union-form 未收窄前不允许直接做成员访问、方法调用或 `==` / `!=` 比较; 收窄通过 `match 目标值 { ... }` 的 union member 类型匹配完成,其详细规则见 [feng-union-type.md](./feng-union-type.md)。
+- intersection-form 使用 `spec Name: SpecRef ('&' SpecRef)+;` 形式定义,以分号结束,不允许 `{}` 块体或自有成员; `&` 表示值必须同时满足全部成员约束。
+- intersection-form 的直接 member 必须是 object-form 或 intersection-form `spec`; 多层 intersection-form 在编译期展平并去重,其成员方法集包含各 object-form 成员及其父 `spec` 闭包的方法集。
+- 具体类型满足 intersection-form,当且仅当其名义满足该 intersection-form 展平后的全部 object-form 成员; 具体 `type` 不得在声明头或 `fit` 中直接列出 intersection-form `spec`。
+- intersection-form 允许作为具名类型和泛型约束使用,但不支持内联 intersection、`match`/收窄或作为 union-form member。
+- intersection-form 的同名同参数同返回类型方法去重; 同名同参数但返回类型不同构成冲突; 参数列表不同的方法保留为重载。
 - 具体 `type` 可在声明头上直接写出其满足的一个或多个 object-form `spec`; 同一关系也可通过可见的 `fit A: SpecB` 或 `fit A: SpecB, SpecC` 显式建立。
 - callable-form `spec` 只描述可调用签名形状,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标。
 - callable-form `spec` 的默认零值必须是可安全调用的零捕获空操作 callable；其实现不得捕获、绑定或读取任何变量，调用时也不得访问空指针。返回 `void` 时不执行其他行为，返回非 `void` 时返回声明返回类型的默认零值。
@@ -174,6 +201,7 @@ spec Choice: int | string {}
 - callable-form `spec` 的显式转换资格必须在编译期确定; 运行时不得重新比较签名、搜索候选或决定转换是否成立。
 - callable-form `spec` 的显式转换一旦合法,编译器必须直接按目标 callable-form `spec` 视角发码; 对实例化后签名完全一致的 callable-form `spec`,该发码只允许切换静态视角,不得构造新的 wrapper/closure、不得插入额外转发层,且转换后通过该值发起的每次调用开销必须小于等于转换前; 运行时不得再做动态适配或回退。
 - union-form `spec` 只描述值进入时的 member 选择与收窄边界,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标; union-form 的专门规则见 [feng-union-type.md](./feng-union-type.md)。
+- intersection-form `spec` 只描述多个 object-form 契约的组合约束,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标。
 - 对象形状 `spec` 的显式转换只允许向上建立视角: 具体 `type` 可显式转换到当前可见契约闭包中已证明满足的 object-form `spec`; object-form `spec` 也可显式转换到其当前可见父 `spec` 视角。
 - 对象形状 `spec` 的显式转换资格必须在编译期确定; 运行时不得重新搜索满足关系,也不得依据对象真实具体类型临时决定转换是否成立。
 - 对象形状 `spec` 的显式转换一旦合法,编译器必须直接按目标 `spec` 视角发码; 运行时不得再做候选 `spec` 搜索、试探转换或回退。
@@ -199,7 +227,10 @@ spec Choice: int | string {}
 - [必须] union-form 必须写作 `spec Foo: A | B | C;`,右侧至少包含两个 member,并使用 `|` 分隔。
 - [禁止] union-form `spec` 使用 `{}` 块体。
 - [禁止] `void` 作为 union-form member。
-- [禁止] object-form `spec` 的父 `spec` 列表中出现 callable-form `spec` 或 union-form `spec`；object-form `spec` 的父级只能是 object-form `spec`。
+- [必须] intersection-form 必须写作 `spec Foo: A & B & C;`,右侧至少包含两个 member,并使用 `&` 分隔。
+- [禁止] intersection-form `spec` 使用 `{}` 块体、声明自有成员或出现在 union-form member 中。
+- [必须] intersection-form member 必须是 object-form 或 intersection-form `spec`; 多层 intersection-form 必须在编译期展平并去重。
+- [禁止] object-form `spec` 的父 `spec` 列表中出现 callable-form、union-form 或 intersection-form `spec`；object-form `spec` 的父级只能是 object-form `spec`。
 - [必须] 在 `type Foo: Bar, Baz {}` 或契约适配 `fit Foo: Bar, Baz` 中,冒号右侧每一项都必须是 object-form `spec`。
 - [必须] 判断 `type` 是否满足 `spec` 时,字段匹配采用“名称 + 绑定方式（`let` 或 `var`，即字段是否可变） + 类型完全一致”规则。
 - [必须] 判断 `type` 是否满足 `spec` 时,方法匹配采用“名称 + 参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”规则。
@@ -208,7 +239,7 @@ spec Choice: int | string {}
 - [必须] 若某个列出的 `spec` 还要求满足其他 `spec`,则该 `type` 也必须同时满足这些额外 `spec` 的全部要求。
 - [禁止] `spec` 循环声明满足; `spec` 之间形成直接或间接循环满足关系时禁止通过。
 - [禁止] 同一声明头中的 `spec` 列表重复列出同一个 `spec`。
-- [禁止] 在 `type` 声明头或契约适配 `fit` 中把 callable-form `spec` 或 union-form `spec` 当作满足目标。
+- [禁止] 在 `type` 声明头或契约适配 `fit` 中把 callable-form、union-form 或 intersection-form `spec` 当作满足目标。
 - [禁止] `spec` 中任何参数位置使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数。
 - [禁止] object-form `spec` 声明终结器（`~` 前缀的方法）; 该限制属于语义规则,由语义分析阶段诊断。
 - [必须] object-form `spec` 中声明的 `static let` / `static var` / `static func` 必须不带初始值或函数体;静态字段声明必须以 `;` 结束,静态方法签名必须以 `;` 结束,静态方法必须显式声明返回类型。
@@ -225,17 +256,21 @@ spec Choice: int | string {}
 - [禁止] 从父 object-form `spec` 到子 object-form `spec` 的显式转换、无关 `spec` 之间的显式转换、以及依赖运行时具体对象类型才可能成立的对象形状 `spec` 显式转换。
 - [必须] union-form 进入站点必须在编译期决定 active member; 当多个 object-form `spec` member 可同时接纳同一源值且不存在精确 member 命中时,必须诊断为歧义,不得按声明顺序兜底。
 - [禁止] 当前阶段直接把 union-form 视角值显式转换到共同 object-form `spec`,即使该 union-form 的全部 member 都满足该共同 `spec`。
+- [必须] 具体类型满足 intersection-form,当且仅当其名义满足该 intersection-form 展平后的全部 object-form member。
+- [必须] intersection-form 的成员方法集合并必须对完全相同的签名去重,保留参数列表不同的重载,并拒绝同名同参数但返回类型不同的冲突。
+- [禁止] 内联 intersection、intersection-form `match`/收窄以及显式声明满足 intersection-form。
 - [必须] 可调用形状的 `spec` 其参数类型与返回类型必须符合 [Feng 语言 ABI 互操作规范](./feng-interop.md) 中定义的 ABI 函数签名兼容规则，才能标记为 `@abi`。
 - [建议] 直接写在 `type` 声明头上的满足关系用于表达“定义者主动承诺”; `fit` 优先用于无法修改原始 `type` 定义时的非侵入适配。
 
 ## 6 编译期
 
 - 编译器必须检查 `spec` 声明头右侧是否仅包含 `spec`。
-- 编译器必须区分 object-form、callable-form 与 union-form `spec`,并按各自语法形态解析。
+- 编译器必须区分 object-form、callable-form、union-form 与 intersection-form `spec`,并按各自语法形态解析。
 - 编译器必须检查 union-form member 列表是否合法,拒绝少于两个 member、`void` member 与 `{}` 块体。
 - 编译器必须保持 union-form 的声明时层次结构，不递归展开嵌套 union-form；在直接成员层面去重并保持声明顺序；在赋值等进入站点做编译期多级链路查找，确定从源类型到目标 union-form 的路径，并在存在多条可达路径时诊断为歧义。
-- 编译器必须检查 object-form `spec` 的父 `spec` 列表中每一项是否均为 object-form `spec`，并拒绝 callable-form `spec` 与 union-form `spec` 出现在父 `spec` 列表中。
-- 编译器必须检查 `type` 声明头与契约适配 `fit` 的右侧是否全部为 object-form `spec`,并拒绝 callable-form `spec` 与 union-form `spec`。
+- 编译器必须检查 intersection-form member 是否均为 object-form 或 intersection-form `spec`,在编译期展平并去重多层 intersection-form,并拒绝其使用块体、自有成员或出现在 union-form member 中。
+- 编译器必须检查 object-form `spec` 的父 `spec` 列表中每一项是否均为 object-form `spec`，并拒绝 callable-form、union-form 与 intersection-form `spec` 出现在父 `spec` 列表中。
+- 编译器必须检查 `type` 声明头与契约适配 `fit` 的右侧是否全部为 object-form `spec`,并拒绝 callable-form、union-form 与 intersection-form `spec`。
 - 编译器必须检查 `type` 对目标 `spec` 的字段与方法是否满足精确匹配规则。
 - 编译器必须在 Parser 阶段接受 object-form `spec` 体内的 `static let` / `static var` / `static func` 声明,并在语义阶段以与 `type` 静态成员一致的规则对签名、可见性、`~` 前缀做检查。
 - 编译器必须检查并拒绝 `spec` 循环声明满足关系。
@@ -251,6 +286,8 @@ spec Choice: int | string {}
 - 编译器必须在语义分析阶段根据当前可见契约关系判定对象形状 `spec` 的显式转换是否属于允许的向上转换,并拒绝父到子、无关 `spec` 或依赖运行时对象具体类型的转换。
 - 编译器必须在 union-form 进入站点按精确直接 member 优先、嵌套 union-form 多级链路间接匹配次之的规则确定 active member 路径；多条可达路径构成歧义时必须报错，不得按声明顺序兜底。
 - 编译器必须在 union-form `match 目标值 { ... }` 中只接受 union 直接成员类型标签与 `else`，拒绝字面量标签和区间标签；穷尽性检查只验证直接成员是否被覆盖。
+- 编译器必须在 intersection-form 使用位置检查源类型是否名义满足展平后的全部 object-form member,并使用合并 witness 支持成员访问与泛型约束。
+- 编译器必须合并 intersection-form 全部成员及其父 `spec` 闭包的方法集,对完全相同的签名去重,保留合法重载并诊断返回类型冲突。
 - 编译器必须按 [Feng 语言 ABI 互操作规范](./feng-interop.md) 校验可调用形状的 `@abi spec` 的参数类型与返回类型是否满足 ABI 函数签名兼容规则。
 - 编译器必须在语义分析阶段对以上违规报错并阻止通过。
 
@@ -267,6 +304,7 @@ spec Choice: int | string {}
 - callable-form `spec` 的显式转换不引入运行时签名比较、候选搜索、wrapper/closure 分配或额外调用转发; 对实例化后签名完全一致的 callable-form `spec`,转换前后经该值发起的调用开销必须保持同级。
 - 对象形状 `spec` 的显式转换不引入运行时满足关系搜索、候选比较或回退; 运行时只执行编译期已选定的 `spec` 视角构造与成员分发。
 - union-form 统一映射为既有 `aggregate-with-managed-slots` 顶层值模型,首版值布局为 `tag + _fwd + payload`; `tag` 表达 active member identity,`_fwd` 只表达当前 payload 生命周期路径,不得把 union-form 实现为新的 runtime top-level value kind。
+- intersection-form 与 object-form `spec` 使用等价的对象视角与 witness 分发模型; 合并 witness 在编译期确定,成员访问开销不得大于 object-form `spec` 视角。
 - 运行时实现不强制绑定单一机制; 只要求满足高性能、0 开销或极低开销、ABI 稳定。
 
 ## 8 关联
