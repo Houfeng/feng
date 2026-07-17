@@ -621,6 +621,11 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - `foo. → 删除 → foo.` 后成员 Completion 与首次输入及冷启动结果一致。
 - 文本上下文已经确认是成员访问时，所有缓存、当前 parse 与 repair 路径只能返回该接收者的成员；
   未完成 AST 未形成成员表达式时必须继续成员修复路径，不得把全局符号当作有效结果提前返回。
+- 成员 Completion 的文本上下文必须保留完整 receiver 表达式链。链模型必须统一支持字段访问、
+  方法或函数调用、数组下标及其任意交错组合；例如 `app.screen.buffer().` 与
+  `foo.bar.xyz[0].get().` 必须逐步传播每个字段类型、调用返回类型和下标元素类型，返回最终 owner
+  的成员。参数或下标内部允许出现嵌套括号、字符串和注释，但不得在交互请求中触发完整语义分析。
+  receiver 无法解析时返回空结果，不得退化为控制流关键字或其他非成员候选。
 
 ### 15.2 性能测试
 
@@ -777,6 +782,49 @@ member expression 时，该路径会进入非成员分支，并把 `Action`、`a
 archive、lexer、parser、semantic、runtime、codegen、debug、smoke 88 项、CLI direct / project、`std_test`、
 `fcts` 542 项和 perf constraints 通过。VS Code formatter、diagnostics、debug、syntax 通过；既有
 `debug-smoke.test.js:464` 与 `icon.test.js:39` 仍失败。未修改上述既有失败对应的生产代码或测试。
+
+### 16.6 2026-07-17 链式成员补全修复
+
+已修复 `app.screen.` 错误返回 `break`、`catch` 等非成员候选的问题。根因是文本 Completion context
+只保留了点号前最后一段 `screen`，丢失完整 receiver `app.screen`；同时未解析出 owner 时仍会进入
+关键字兜底。修复后文本 context 保留完整 receiver chain，缓存与当前分析查询均逐段解析局部变量、
+字段类型和方法返回类型；链式 receiver 未解析成功时返回空结果，不再退化为关键字或全局候选。
+
+本地源码依赖尚未进入 dependency symbol provider 时，查询可使用后台已发布的 source module index
+继续解析类型。该路径只读取内存中的已发布对象，不在 Completion 请求中打开项目、读取文件或触发完整分析；
+source module index 尚未发布时返回空结果，发布后后续请求自动恢复。
+
+新增 `scripts/test_lsp_chained_member_completion.py`，通过真实 stdio 协议在
+`examples/tui_demo/src/main.ff` 中输入 `app.screen.`，验证结果包含 `buffer`、`size`、`resize`，且不包含
+`Action`、`args`、`break`、`catch`、`continue`、`defer`。普通优化构建下，链式成员、成员范围、补全恢复、
+缓存保留和调度器专项测试均通过；本次调度器复测 Definition P95 为 0.110ms。
+
+普通与 UBSan 全量回归仍只在既有 DAP 子进程断言 `test/cli/test_cli.c:431` 停止，未出现 sanitizer 报告；
+VS Code 测试仍停在既有 `debug-smoke.test.js:464`。上述失败不在本次 LSP Completion 变更路径内。
+
+### 16.7 2026-07-17 混合 receiver 链补全修复
+
+已将上一节的纯标识符点链提升为统一的轻量 receiver 表达式链。文本层从最终成员点号向前提取完整
+receiver，并解析为根值以及 member、call、index 三种后缀操作；括号内容支持嵌套、字符串、行注释和
+块注释。AST/source-index 与 symbol-index 查询分别执行同一组操作语义：字段访问传播字段类型，调用
+传播函数或方法返回类型，下标仅从数组类型剥离一层元素类型。未调用的方法不会被错误地当成返回值。
+
+该实现只读取当前文档、最后成功分析和已发布索引，不修改 parser、semantic 或其他核心编译器模块，
+也不在 Completion 请求中执行项目 I/O 或完整语义分析。任一步骤无法确定类型时仍返回空结果，不进入
+全局候选或关键字兜底。
+
+新增 `scripts/test_lsp_mixed_receiver_completion.py`，通过真实 stdio 协议验证：
+
+- `app.screen.buffer().` 返回 `Buffer` 的 `width`、`height`、`cells`、`draw`、`fill`、`clear`；
+- `foo.bar.xyz[(0)].get(/* nested ) ] */).` 依次经过字段、数组下标、方法调用后返回 `Leaf` 的
+  `leafMarker`、`get`；
+- `foo.bar.xyz[0].get.` 不会把未调用方法错误地解析成其返回类型；
+- 有效链结果均不包含 `Action`、`args`、`break`、`catch`、`continue`、`defer`。
+
+普通优化构建性能复测：Hover P95 0.037ms，Completion P95 0.040ms，全部交互 P99 0.042ms；
+1 万 / 10 万 / 100 万行矩阵全部交互 P99 0.179ms、Max 0.247ms。普通与 UBSan 全量回归仍只在既有
+DAP 子进程断言 `test/cli/test_cli.c:431` 停止，未出现 sanitizer 报告；VS Code 测试仍停在既有
+`debug-smoke.test.js:464`。
 
 ---
 

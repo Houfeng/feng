@@ -164,6 +164,9 @@ typedef struct FengLspAnalysisSession {
      * Without this, the cache is freed at the end of frontend_run_with_overlays
      * and every external-package module pointer becomes dangling. */
     FengSymbolImportedModuleCache *imported_module_cache;
+    /* Optional borrowed workspace source index for edit-time queries that do
+     * not require a complete semantic analysis. */
+    const FengLspModuleIndex *source_module_index;
 } FengLspAnalysisSession;
 
 static bool publish_diagnostics(FILE *output,
@@ -197,6 +200,37 @@ typedef struct FengLspLocalList {
     size_t count;
     size_t capacity;
 } FengLspLocalList;
+
+typedef enum FengLspReceiverRootKind {
+    FENG_LSP_RECEIVER_ROOT_IDENTIFIER = 0,
+    FENG_LSP_RECEIVER_ROOT_STRING,
+    FENG_LSP_RECEIVER_ROOT_INTEGER,
+    FENG_LSP_RECEIVER_ROOT_FLOAT,
+    FENG_LSP_RECEIVER_ROOT_BOOL
+} FengLspReceiverRootKind;
+
+typedef enum FengLspReceiverOperationKind {
+    FENG_LSP_RECEIVER_MEMBER = 0,
+    FENG_LSP_RECEIVER_CALL,
+    FENG_LSP_RECEIVER_INDEX
+} FengLspReceiverOperationKind;
+
+/* One postfix operation in a text-derived member-completion receiver. */
+typedef struct FengLspReceiverOperation {
+    FengLspReceiverOperationKind kind;
+    FengSlice member;
+} FengLspReceiverOperation;
+
+/* Lightweight receiver expression used when dirty parsing drops the final
+ * member access. Arguments and index expressions remain in source text and
+ * are skipped after delimiter validation. */
+typedef struct FengLspReceiverChain {
+    FengLspReceiverRootKind root_kind;
+    FengSlice root;
+    FengLspReceiverOperation *operations;
+    size_t operation_count;
+    size_t operation_capacity;
+} FengLspReceiverChain;
 
 typedef enum FengLspResolvedKind {
     FENG_LSP_RESOLVED_NONE = 0,
@@ -237,9 +271,16 @@ typedef struct FengLspCacheQueryContext {
     FengSymbolProvider *provider;
     const FengSymbolImportedModule *current_module;
     const char *source_text;
+    const FengLspModuleIndex *source_module_index;
     bool owns_program;
     bool owns_provider;
 } FengLspCacheQueryContext;
+
+/* Identifier character classification helpers defined by the completion
+ * engine and reused by edit-time receiver parsing. */
+static bool completion_identifier_start(char ch);
+static bool completion_identifier_continue(char ch);
+static bool slice_equals_cstr(FengSlice lhs, const char *rhs);
 
 typedef struct FengLspReferenceEntry {
     const char *path;
@@ -317,6 +358,412 @@ static bool append_raw(void **items,
     }
     memcpy((char *)(*items) + (*count * item_size), value, item_size);
     ++(*count);
+    return true;
+}
+
+/* Returns the first byte of the source line containing `offset`. */
+static size_t receiver_line_start(const char *text, size_t offset) {
+    while (offset > 0U && text[offset - 1U] != '\n') {
+        --offset;
+    }
+    return offset;
+}
+
+/* Finds a line comment outside strings and same-line block comments. */
+static size_t receiver_line_comment_start(const char *text,
+                                          size_t start,
+                                          size_t end) {
+    size_t cursor = start;
+
+    while (cursor + 1U < end) {
+        if (text[cursor] == '"') {
+            ++cursor;
+            while (cursor < end) {
+                if (text[cursor] == '\\' && cursor + 1U < end) {
+                    cursor += 2U;
+                } else if (text[cursor] == '"') {
+                    ++cursor;
+                    break;
+                } else {
+                    ++cursor;
+                }
+            }
+            continue;
+        }
+        if (text[cursor] == '/' && text[cursor + 1U] == '*') {
+            cursor += 2U;
+            while (cursor + 1U < end &&
+                   !(text[cursor] == '*' && text[cursor + 1U] == '/')) {
+                ++cursor;
+            }
+            cursor = cursor + 1U < end ? cursor + 2U : end;
+            continue;
+        }
+        if (text[cursor] == '/' && text[cursor + 1U] == '/') {
+            return cursor;
+        }
+        ++cursor;
+    }
+    return end;
+}
+
+/* Finds the opening quote paired with a quote encountered while scanning
+ * backward. Escaped quotes are ignored. */
+static bool receiver_string_start_backward(const char *text,
+                                           size_t quote_offset,
+                                           size_t *out_start) {
+    size_t cursor = quote_offset;
+
+    while (cursor > 0U) {
+        size_t slash_count = 0U;
+        size_t slash_cursor;
+
+        --cursor;
+        if (text[cursor] != '"') {
+            continue;
+        }
+        slash_cursor = cursor;
+        while (slash_cursor > 0U && text[slash_cursor - 1U] == '\\') {
+            --slash_cursor;
+            ++slash_count;
+        }
+        if ((slash_count % 2U) == 0U) {
+            *out_start = cursor;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Finds the opening delimiter paired with `close_offset` while ignoring
+ * strings and comments. The scan is bounded by the receiver expression. */
+static bool receiver_matching_open_backward(const char *text,
+                                            size_t close_offset,
+                                            char open,
+                                            char close,
+                                            size_t *out_open) {
+    size_t cursor = close_offset;
+    size_t line_start = receiver_line_start(text, cursor);
+    size_t depth = 1U;
+
+    while (cursor > 0U) {
+        size_t line_end;
+        size_t comment_start;
+        char ch;
+
+        if (cursor == line_start) {
+            if (line_start == 0U) {
+                break;
+            }
+            line_end = line_start - 1U;
+            line_start = receiver_line_start(text, line_end);
+            comment_start = receiver_line_comment_start(text, line_start, line_end);
+            cursor = comment_start < line_end ? comment_start : line_end;
+            continue;
+        }
+        --cursor;
+        ch = text[cursor];
+        if (ch == '"') {
+            size_t string_start;
+
+            if (!receiver_string_start_backward(text, cursor, &string_start)) {
+                return false;
+            }
+            cursor = string_start;
+            line_start = receiver_line_start(text, cursor);
+            continue;
+        }
+        if (ch == '/' && cursor > 0U && text[cursor - 1U] == '*') {
+            size_t comment_cursor = cursor - 1U;
+            bool found = false;
+
+            while (comment_cursor > 0U) {
+                if (text[comment_cursor - 1U] == '/' && text[comment_cursor] == '*') {
+                    cursor = comment_cursor - 1U;
+                    line_start = receiver_line_start(text, cursor);
+                    found = true;
+                    break;
+                }
+                --comment_cursor;
+            }
+            if (!found) {
+                return false;
+            }
+            continue;
+        }
+        if (ch == close) {
+            ++depth;
+        } else if (ch == open) {
+            --depth;
+            if (depth == 0U) {
+                *out_open = cursor;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Finds the start of a postfix receiver ending immediately before a member
+ * dot. Supported postfix forms are member access, call, and index. */
+static bool receiver_text_find_start(const char *text,
+                                     size_t receiver_end,
+                                     size_t *out_start) {
+    size_t cursor = receiver_end;
+
+    if (text == NULL || out_start == NULL) {
+        return false;
+    }
+    while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
+        --cursor;
+    }
+    while (cursor > 0U) {
+        size_t start;
+        char tail = text[cursor - 1U];
+
+        if (tail == ')' || tail == ']') {
+            if (!receiver_matching_open_backward(text,
+                                                 cursor - 1U,
+                                                 tail == ')' ? '(' : '[',
+                                                 tail,
+                                                 &start)) {
+                return false;
+            }
+            cursor = start;
+            while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
+                --cursor;
+            }
+            continue;
+        }
+        if (completion_identifier_continue(tail)) {
+            start = cursor - 1U;
+            while (start > 0U && completion_identifier_continue(text[start - 1U])) {
+                --start;
+            }
+            if (!completion_identifier_start(text[start]) &&
+                !isdigit((unsigned char)text[start])) {
+                return false;
+            }
+            cursor = start;
+        } else if (tail == '"') {
+            if (!receiver_string_start_backward(text, cursor - 1U, &start)) {
+                return false;
+            }
+            cursor = start;
+        } else {
+            return false;
+        }
+        while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
+            --cursor;
+        }
+        if (cursor > 0U && text[cursor - 1U] == '.') {
+            --cursor;
+            while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
+                --cursor;
+            }
+            continue;
+        }
+        *out_start = cursor;
+        return true;
+    }
+    return false;
+}
+
+/* Skips one balanced call or index suffix in a receiver chain. */
+static bool receiver_skip_balanced_forward(FengSlice text,
+                                           size_t open_offset,
+                                           char open,
+                                           char close,
+                                           size_t *out_after) {
+    size_t cursor = open_offset;
+    size_t depth = 0U;
+
+    while (cursor < text.length) {
+        char ch = text.data[cursor];
+
+        if (ch == '"') {
+            ++cursor;
+            while (cursor < text.length) {
+                if (text.data[cursor] == '\\' && cursor + 1U < text.length) {
+                    cursor += 2U;
+                } else if (text.data[cursor] == '"') {
+                    ++cursor;
+                    break;
+                } else {
+                    ++cursor;
+                }
+            }
+            continue;
+        }
+        if (ch == '/' && cursor + 1U < text.length && text.data[cursor + 1U] == '/') {
+            cursor += 2U;
+            while (cursor < text.length && text.data[cursor] != '\n') {
+                ++cursor;
+            }
+            continue;
+        }
+        if (ch == '/' && cursor + 1U < text.length && text.data[cursor + 1U] == '*') {
+            cursor += 2U;
+            while (cursor + 1U < text.length &&
+                   !(text.data[cursor] == '*' && text.data[cursor + 1U] == '/')) {
+                ++cursor;
+            }
+            if (cursor + 1U >= text.length) {
+                return false;
+            }
+            cursor += 2U;
+            continue;
+        }
+        if (ch == open) {
+            ++depth;
+        } else if (ch == close) {
+            if (depth == 0U) {
+                return false;
+            }
+            --depth;
+            if (depth == 0U) {
+                *out_after = cursor + 1U;
+                return true;
+            }
+        }
+        ++cursor;
+    }
+    return false;
+}
+
+/* Releases operations owned by a receiver chain. */
+static void receiver_chain_dispose(FengLspReceiverChain *chain) {
+    if (chain == NULL) {
+        return;
+    }
+    free(chain->operations);
+    memset(chain, 0, sizeof(*chain));
+}
+
+/* Parses a bounded receiver expression into root + postfix operations. */
+static bool receiver_chain_parse(FengSlice text, FengLspReceiverChain *chain) {
+    size_t cursor = 0U;
+
+    if (chain == NULL || text.data == NULL || text.length == 0U) {
+        return false;
+    }
+    memset(chain, 0, sizeof(*chain));
+    while (cursor < text.length && isspace((unsigned char)text.data[cursor])) {
+        ++cursor;
+    }
+    if (cursor >= text.length) {
+        return false;
+    }
+    if (completion_identifier_start(text.data[cursor])) {
+        size_t start = cursor;
+
+        ++cursor;
+        while (cursor < text.length && completion_identifier_continue(text.data[cursor])) {
+            ++cursor;
+        }
+        chain->root.data = text.data + start;
+        chain->root.length = cursor - start;
+        chain->root_kind = slice_equals_cstr(chain->root, "true") ||
+                                   slice_equals_cstr(chain->root, "false")
+                               ? FENG_LSP_RECEIVER_ROOT_BOOL
+                               : FENG_LSP_RECEIVER_ROOT_IDENTIFIER;
+    } else if (text.data[cursor] == '"') {
+        size_t start = cursor++;
+
+        while (cursor < text.length) {
+            if (text.data[cursor] == '\\' && cursor + 1U < text.length) {
+                cursor += 2U;
+            } else if (text.data[cursor] == '"') {
+                ++cursor;
+                break;
+            } else {
+                ++cursor;
+            }
+        }
+        if (cursor > text.length || text.data[cursor - 1U] != '"') {
+            return false;
+        }
+        chain->root.data = text.data + start;
+        chain->root.length = cursor - start;
+        chain->root_kind = FENG_LSP_RECEIVER_ROOT_STRING;
+    } else if (isdigit((unsigned char)text.data[cursor])) {
+        size_t start = cursor;
+        bool is_float = false;
+
+        while (cursor < text.length && isdigit((unsigned char)text.data[cursor])) {
+            ++cursor;
+        }
+        if (cursor + 1U < text.length && text.data[cursor] == '.' &&
+            isdigit((unsigned char)text.data[cursor + 1U])) {
+            is_float = true;
+            ++cursor;
+            while (cursor < text.length && isdigit((unsigned char)text.data[cursor])) {
+                ++cursor;
+            }
+        }
+        chain->root.data = text.data + start;
+        chain->root.length = cursor - start;
+        chain->root_kind = is_float ? FENG_LSP_RECEIVER_ROOT_FLOAT
+                                    : FENG_LSP_RECEIVER_ROOT_INTEGER;
+    } else {
+        return false;
+    }
+    while (cursor < text.length) {
+        FengLspReceiverOperation operation = {0};
+
+        while (cursor < text.length && isspace((unsigned char)text.data[cursor])) {
+            ++cursor;
+        }
+        if (cursor >= text.length) {
+            break;
+        }
+        if (text.data[cursor] == '.') {
+            size_t start;
+
+            ++cursor;
+            while (cursor < text.length && isspace((unsigned char)text.data[cursor])) {
+                ++cursor;
+            }
+            start = cursor;
+            if (cursor >= text.length || !completion_identifier_start(text.data[cursor])) {
+                receiver_chain_dispose(chain);
+                return false;
+            }
+            ++cursor;
+            while (cursor < text.length && completion_identifier_continue(text.data[cursor])) {
+                ++cursor;
+            }
+            operation.kind = FENG_LSP_RECEIVER_MEMBER;
+            operation.member.data = text.data + start;
+            operation.member.length = cursor - start;
+        } else if (text.data[cursor] == '(' || text.data[cursor] == '[') {
+            char open = text.data[cursor];
+            size_t after;
+
+            if (!receiver_skip_balanced_forward(text,
+                                                cursor,
+                                                open,
+                                                open == '(' ? ')' : ']',
+                                                &after)) {
+                receiver_chain_dispose(chain);
+                return false;
+            }
+            operation.kind = open == '(' ? FENG_LSP_RECEIVER_CALL
+                                         : FENG_LSP_RECEIVER_INDEX;
+            cursor = after;
+        } else {
+            receiver_chain_dispose(chain);
+            return false;
+        }
+        if (!append_raw((void **)&chain->operations,
+                        &chain->operation_count,
+                        &chain->operation_capacity,
+                        sizeof(operation),
+                        &operation)) {
+            receiver_chain_dispose(chain);
+            return false;
+        }
+    }
     return true;
 }
 
@@ -2407,6 +2854,7 @@ static bool build_persistent_cache_query_context(FengLspService *service,
                                                                context->program->module_segments,
                                                                context->program->module_segment_count);
     context->source_text = source_text;
+    context->source_module_index = &service->module_index;
     return true;
 }
 
@@ -4495,6 +4943,28 @@ static const FengDecl *find_loaded_module_decl_by_name(const FengLspAnalysisSess
             }
         }
     }
+    if (session->source_module_index != NULL) {
+        size_t module_index;
+
+        for (module_index = 0U;
+             module_index < session->source_module_index->module_count;
+             ++module_index) {
+            const FengProgram *program =
+                session->source_module_index->modules[module_index].program;
+
+            if (program_module_matches(program, segments, segment_count)) {
+                const FengDecl *decl = find_program_decl_by_name(program,
+                                                                name,
+                                                                values_only,
+                                                                types_only,
+                                                                public_only);
+
+                if (decl != NULL) {
+                    return decl;
+                }
+            }
+        }
+    }
     return NULL;
 }
 
@@ -4520,6 +4990,28 @@ static const FengDecl *find_loaded_module_type_decl_by_name_and_arity(
 
             if (decl != NULL) {
                 return decl;
+            }
+        }
+    }
+    if (session->source_module_index != NULL) {
+        size_t module_index;
+
+        for (module_index = 0U;
+             module_index < session->source_module_index->module_count;
+             ++module_index) {
+            const FengProgram *program =
+                session->source_module_index->modules[module_index].program;
+
+            if (program_module_matches(program, segments, segment_count)) {
+                const FengDecl *decl = find_program_type_decl_by_name_and_arity(
+                    program,
+                    name,
+                    type_param_count,
+                    public_only);
+
+                if (decl != NULL) {
+                    return decl;
+                }
             }
         }
     }
@@ -6257,6 +6749,210 @@ static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysis
     return NULL;
 }
 
+typedef enum FengLspReceiverPendingCall {
+    FENG_LSP_RECEIVER_PENDING_NONE = 0,
+    FENG_LSP_RECEIVER_PENDING_CONSTRUCTOR,
+    FENG_LSP_RECEIVER_PENDING_FUNCTION,
+    FENG_LSP_RECEIVER_PENDING_MEMBER
+} FengLspReceiverPendingCall;
+
+/* AST-backed type state while executing a text-derived receiver chain. */
+typedef struct FengLspAstReceiverState {
+    const FengDecl *owner_decl;
+    const FengTypeRef *type_ref;
+    FengSlice builtin_name;
+    FengLspReceiverPendingCall pending_call;
+    const FengDecl *pending_function;
+    const FengTypeMember *pending_member;
+} FengLspAstReceiverState;
+
+/* Replaces an AST receiver state with one declared type reference. */
+static void ast_receiver_state_set_type(const FengLspAnalysisSession *session,
+                                        const FengProgram *program,
+                                        const FengTypeRef *type_ref,
+                                        FengLspAstReceiverState *state) {
+    const char *builtin;
+
+    memset(state, 0, sizeof(*state));
+    state->type_ref = type_ref;
+    builtin = builtin_name_for_single_segment_type_ref(type_ref);
+    if (builtin != NULL) {
+        state->builtin_name = slice_from_cstr(builtin);
+    } else if (type_ref != NULL && type_ref->kind == FENG_TYPE_REF_NAMED) {
+        state->owner_decl = resolve_named_type_ref(session, program, type_ref);
+    }
+}
+
+/* Resolves the root value of an AST-backed receiver chain. */
+static bool ast_receiver_state_from_root(const FengLspAnalysisSession *session,
+                                         const FengProgram *program,
+                                         const FengLspReceiverChain *chain,
+                                         const FengLspLocalList *locals,
+                                         FengLspAstReceiverState *state) {
+    const FengLspLocal *local;
+    const FengDecl *decl;
+
+    memset(state, 0, sizeof(*state));
+    if (chain->root_kind == FENG_LSP_RECEIVER_ROOT_STRING) {
+        state->builtin_name = slice_from_cstr("string");
+        return true;
+    }
+    if (chain->root_kind == FENG_LSP_RECEIVER_ROOT_INTEGER) {
+        state->builtin_name = slice_from_cstr("i32");
+        return true;
+    }
+    if (chain->root_kind == FENG_LSP_RECEIVER_ROOT_FLOAT) {
+        state->builtin_name = slice_from_cstr("f64");
+        return true;
+    }
+    if (chain->root_kind == FENG_LSP_RECEIVER_ROOT_BOOL) {
+        state->builtin_name = slice_from_cstr("bool");
+        return true;
+    }
+    local = find_local(locals, chain->root);
+    if (local != NULL) {
+        if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
+            ast_receiver_state_set_type(session, program, local->parameter->type, state);
+            return state->owner_decl != NULL || state->type_ref != NULL ||
+                   state->builtin_name.length > 0U;
+        }
+        if (local->kind == FENG_LSP_LOCAL_BINDING && local->binding != NULL) {
+            const FengSemanticTypeFact *fact =
+                session->analysis != NULL
+                    ? feng_semantic_lookup_type_fact(session->analysis, local->binding)
+                    : NULL;
+
+            if (local->binding->type != NULL) {
+                ast_receiver_state_set_type(session, program, local->binding->type, state);
+            } else if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                ast_receiver_state_set_type(session, program, fact->type_ref, state);
+            } else if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_DECL) {
+                state->owner_decl = fact->type_decl;
+            } else if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_BUILTIN) {
+                state->builtin_name = fact->builtin_name;
+            } else {
+                state->owner_decl = owner_decl_from_binding(session,
+                                                            program,
+                                                            local->binding);
+            }
+            return state->owner_decl != NULL || state->type_ref != NULL ||
+                   state->builtin_name.length > 0U;
+        }
+        if (local->kind == FENG_LSP_LOCAL_SELF) {
+            FengExpr self_expr = {0};
+
+            self_expr.kind = FENG_EXPR_SELF;
+            state->owner_decl = resolve_owner_decl_from_object_expr(session,
+                                                                    program,
+                                                                    &self_expr,
+                                                                    locals);
+            return state->owner_decl != NULL;
+        }
+    }
+    decl = resolve_value_name(session, program, chain->root);
+    if (decl != NULL && decl->kind == FENG_DECL_GLOBAL_BINDING) {
+        if (decl->as.binding.type != NULL) {
+            ast_receiver_state_set_type(session, program, decl->as.binding.type, state);
+        } else {
+            state->owner_decl = owner_decl_from_binding(session,
+                                                        program,
+                                                        &decl->as.binding);
+        }
+        return state->owner_decl != NULL || state->type_ref != NULL ||
+               state->builtin_name.length > 0U;
+    }
+    if (decl != NULL && decl->kind == FENG_DECL_FUNCTION) {
+        state->pending_call = FENG_LSP_RECEIVER_PENDING_FUNCTION;
+        state->pending_function = decl;
+        return true;
+    }
+    state->owner_decl = resolve_type_name(session, program, chain->root);
+    if (state->owner_decl != NULL) {
+        state->pending_call = FENG_LSP_RECEIVER_PENDING_CONSTRUCTOR;
+        return true;
+    }
+    return false;
+}
+
+/* Resolves a mixed member/call/index receiver without requiring the dirty
+ * parser to preserve its final member expression. */
+static const FengDecl *resolve_owner_decl_from_receiver_text(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    FengSlice receiver,
+    const FengLspLocalList *locals,
+    FengSlice *out_builtin_name) {
+    FengLspReceiverChain chain = {0};
+    FengLspAstReceiverState state = {0};
+    size_t index;
+    bool valid;
+
+    if (out_builtin_name != NULL) {
+        *out_builtin_name = (FengSlice){0};
+    }
+    if (!receiver_chain_parse(receiver, &chain) ||
+        !ast_receiver_state_from_root(session, program, &chain, locals, &state)) {
+        receiver_chain_dispose(&chain);
+        return NULL;
+    }
+    valid = true;
+    for (index = 0U; valid && index < chain.operation_count; ++index) {
+        const FengLspReceiverOperation *operation = &chain.operations[index];
+
+        if (operation->kind == FENG_LSP_RECEIVER_MEMBER) {
+            const FengTypeMember *member;
+
+            if (state.pending_call != FENG_LSP_RECEIVER_PENDING_NONE ||
+                state.owner_decl == NULL) {
+                valid = false;
+                break;
+            }
+            member = find_member_by_name(state.owner_decl, operation->member);
+            if (member == NULL) {
+                valid = false;
+            } else if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+                ast_receiver_state_set_type(session, program, member->as.field.type, &state);
+            } else {
+                memset(&state, 0, sizeof(state));
+                state.pending_call = FENG_LSP_RECEIVER_PENDING_MEMBER;
+                state.pending_member = member;
+            }
+        } else if (operation->kind == FENG_LSP_RECEIVER_CALL) {
+            if (state.pending_call == FENG_LSP_RECEIVER_PENDING_CONSTRUCTOR) {
+                state.pending_call = FENG_LSP_RECEIVER_PENDING_NONE;
+            } else if (state.pending_call == FENG_LSP_RECEIVER_PENDING_FUNCTION &&
+                       state.pending_function != NULL) {
+                const FengTypeRef *return_type =
+                    state.pending_function->as.function_decl.return_type;
+
+                ast_receiver_state_set_type(session, program, return_type, &state);
+            } else if (state.pending_call == FENG_LSP_RECEIVER_PENDING_MEMBER &&
+                       state.pending_member != NULL) {
+                const FengTypeRef *return_type = state.pending_member->as.callable.return_type;
+
+                ast_receiver_state_set_type(session, program, return_type, &state);
+            } else {
+                valid = false;
+            }
+        } else {
+            if (state.pending_call != FENG_LSP_RECEIVER_PENDING_NONE ||
+                state.type_ref == NULL || state.type_ref->kind != FENG_TYPE_REF_ARRAY) {
+                valid = false;
+            } else {
+                ast_receiver_state_set_type(session, program, state.type_ref->as.inner, &state);
+            }
+        }
+    }
+    receiver_chain_dispose(&chain);
+    if (!valid || state.pending_call != FENG_LSP_RECEIVER_PENDING_NONE) {
+        return NULL;
+    }
+    if (out_builtin_name != NULL) {
+        *out_builtin_name = state.builtin_name;
+    }
+    return state.owner_decl;
+}
+
 /* --- Expression type inference for cache path (symbol table) --- */
 
 /* Find a member by name in a type declaration's direct members. */
@@ -6485,6 +7181,233 @@ static const FengSymbolDeclView *resolve_symbol_owner_decl_from_expr(
         return resolve_symbol_member_access_type(context, expr, locals);
     }
     return NULL;
+}
+
+/* Symbol-backed type state while executing a text-derived receiver chain. */
+typedef struct FengLspSymbolReceiverState {
+    const FengSymbolDeclView *owner_decl;
+    const FengSymbolTypeView *symbol_type;
+    const FengTypeRef *ast_type_ref;
+    FengSlice builtin_name;
+    FengLspReceiverPendingCall pending_call;
+    const FengSymbolDeclView *pending_callable;
+} FengLspSymbolReceiverState;
+
+/* Replaces a symbol receiver state with a provider-owned type view. */
+static void symbol_receiver_state_set_symbol_type(
+    const FengLspCacheQueryContext *context,
+    const FengSymbolTypeView *type,
+    FengLspSymbolReceiverState *state) {
+    FengSymbolTypeKind kind;
+
+    memset(state, 0, sizeof(*state));
+    state->symbol_type = type;
+    kind = feng_symbol_type_kind(type);
+    if (kind == FENG_SYMBOL_TYPE_KIND_BUILTIN) {
+        state->builtin_name = feng_symbol_type_builtin_name(type);
+    } else if (kind == FENG_SYMBOL_TYPE_KIND_NAMED ||
+               kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) {
+        state->owner_decl = resolve_symbol_type_view(context->provider,
+                                                     context->current_module,
+                                                     context->program,
+                                                     type);
+    }
+}
+
+/* Replaces a symbol receiver state with an AST type from the current source. */
+static void symbol_receiver_state_set_ast_type(
+    const FengLspCacheQueryContext *context,
+    const FengTypeRef *type_ref,
+    FengLspSymbolReceiverState *state) {
+    const char *builtin;
+
+    memset(state, 0, sizeof(*state));
+    state->ast_type_ref = type_ref;
+    builtin = builtin_name_for_single_segment_type_ref(type_ref);
+    if (builtin != NULL) {
+        state->builtin_name = slice_from_cstr(builtin);
+    } else if (type_ref != NULL && type_ref->kind == FENG_TYPE_REF_NAMED) {
+        state->owner_decl = resolve_symbol_named_type_ref(context->provider,
+                                                         context->current_module,
+                                                         context->program,
+                                                         type_ref);
+    }
+}
+
+/* Resolves the root value of a symbol-backed receiver chain. */
+static bool symbol_receiver_state_from_root(
+    const FengLspCacheQueryContext *context,
+    const FengLspReceiverChain *chain,
+    const FengLspLocalList *locals,
+    FengLspSymbolReceiverState *state) {
+    const FengLspLocal *local;
+    const FengSymbolDeclView *decl;
+
+    memset(state, 0, sizeof(*state));
+    if (chain->root_kind == FENG_LSP_RECEIVER_ROOT_STRING) {
+        state->builtin_name = slice_from_cstr("string");
+        return true;
+    }
+    if (chain->root_kind == FENG_LSP_RECEIVER_ROOT_INTEGER) {
+        state->builtin_name = slice_from_cstr("i32");
+        return true;
+    }
+    if (chain->root_kind == FENG_LSP_RECEIVER_ROOT_FLOAT) {
+        state->builtin_name = slice_from_cstr("f64");
+        return true;
+    }
+    if (chain->root_kind == FENG_LSP_RECEIVER_ROOT_BOOL) {
+        state->builtin_name = slice_from_cstr("bool");
+        return true;
+    }
+    local = find_local(locals, chain->root);
+    if (local != NULL) {
+        if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
+            symbol_receiver_state_set_ast_type(context, local->parameter->type, state);
+            return state->owner_decl != NULL || state->ast_type_ref != NULL ||
+                   state->builtin_name.length > 0U;
+        }
+        if (local->kind == FENG_LSP_LOCAL_BINDING && local->binding != NULL) {
+            if (local->binding->type != NULL) {
+                symbol_receiver_state_set_ast_type(context, local->binding->type, state);
+            } else {
+                state->owner_decl =
+                    resolve_symbol_owner_decl_from_initializer_expr(context,
+                                                                    local->binding->initializer);
+            }
+            return state->owner_decl != NULL || state->ast_type_ref != NULL ||
+                   state->builtin_name.length > 0U;
+        }
+        if (local->kind == FENG_LSP_LOCAL_SELF) {
+            FengExpr self_expr = {0};
+
+            self_expr.kind = FENG_EXPR_SELF;
+            state->owner_decl = resolve_symbol_owner_decl_from_object_expr(context,
+                                                                           &self_expr,
+                                                                           locals);
+            return state->owner_decl != NULL;
+        }
+    }
+    decl = resolve_symbol_value_name(context->provider,
+                                     context->current_module,
+                                     context->program,
+                                     chain->root);
+    if (decl != NULL && feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_BINDING) {
+        symbol_receiver_state_set_symbol_type(context,
+                                              feng_symbol_decl_value_type(decl),
+                                              state);
+        return state->owner_decl != NULL || state->symbol_type != NULL ||
+               state->builtin_name.length > 0U;
+    }
+    if (decl != NULL && feng_symbol_decl_kind(decl) == FENG_SYMBOL_DECL_KIND_FUNCTION) {
+        state->pending_call = FENG_LSP_RECEIVER_PENDING_FUNCTION;
+        state->pending_callable = decl;
+        return true;
+    }
+    state->owner_decl = resolve_symbol_type_name(context->provider,
+                                                 context->current_module,
+                                                 context->program,
+                                                 chain->root);
+    if (state->owner_decl != NULL) {
+        state->pending_call = FENG_LSP_RECEIVER_PENDING_CONSTRUCTOR;
+        return true;
+    }
+    return false;
+}
+
+/* Resolves a mixed member/call/index receiver against the published symbol
+ * index when dirty parsing does not retain its final member access. */
+static const FengSymbolDeclView *resolve_symbol_owner_decl_from_receiver_text(
+    const FengLspCacheQueryContext *context,
+    FengSlice receiver,
+    const FengLspLocalList *locals,
+    FengSlice *out_builtin_name) {
+    FengLspReceiverChain chain = {0};
+    FengLspSymbolReceiverState state = {0};
+    size_t index;
+    bool valid;
+
+    if (out_builtin_name != NULL) {
+        *out_builtin_name = (FengSlice){0};
+    }
+    if (!receiver_chain_parse(receiver, &chain) ||
+        !symbol_receiver_state_from_root(context, &chain, locals, &state)) {
+        receiver_chain_dispose(&chain);
+        return NULL;
+    }
+    valid = true;
+    for (index = 0U; valid && index < chain.operation_count; ++index) {
+        const FengLspReceiverOperation *operation = &chain.operations[index];
+
+        if (operation->kind == FENG_LSP_RECEIVER_MEMBER) {
+            const FengSymbolDeclView *member;
+            FengSymbolDeclKind kind;
+
+            if (state.pending_call != FENG_LSP_RECEIVER_PENDING_NONE ||
+                state.owner_decl == NULL) {
+                valid = false;
+                break;
+            }
+            member = find_symbol_type_member_by_name(state.owner_decl, operation->member);
+            if (member == NULL) {
+                member = find_symbol_fit_member_by_name(context,
+                                                        state.owner_decl,
+                                                        operation->member);
+            }
+            if (member == NULL) {
+                valid = false;
+                break;
+            }
+            kind = feng_symbol_decl_kind(member);
+            if (kind == FENG_SYMBOL_DECL_KIND_FIELD) {
+                symbol_receiver_state_set_symbol_type(context,
+                                                      feng_symbol_decl_value_type(member),
+                                                      &state);
+            } else if (kind == FENG_SYMBOL_DECL_KIND_METHOD ||
+                       kind == FENG_SYMBOL_DECL_KIND_FUNCTION) {
+                memset(&state, 0, sizeof(state));
+                state.pending_call = FENG_LSP_RECEIVER_PENDING_MEMBER;
+                state.pending_callable = member;
+            } else {
+                valid = false;
+            }
+        } else if (operation->kind == FENG_LSP_RECEIVER_CALL) {
+            if (state.pending_call == FENG_LSP_RECEIVER_PENDING_CONSTRUCTOR) {
+                state.pending_call = FENG_LSP_RECEIVER_PENDING_NONE;
+            } else if ((state.pending_call == FENG_LSP_RECEIVER_PENDING_FUNCTION ||
+                        state.pending_call == FENG_LSP_RECEIVER_PENDING_MEMBER) &&
+                       state.pending_callable != NULL) {
+                symbol_receiver_state_set_symbol_type(
+                    context,
+                    feng_symbol_decl_return_type(state.pending_callable),
+                    &state);
+            } else {
+                valid = false;
+            }
+        } else if (state.pending_call != FENG_LSP_RECEIVER_PENDING_NONE) {
+            valid = false;
+        } else if (state.ast_type_ref != NULL &&
+                   state.ast_type_ref->kind == FENG_TYPE_REF_ARRAY) {
+            symbol_receiver_state_set_ast_type(context,
+                                               state.ast_type_ref->as.inner,
+                                               &state);
+        } else if (state.symbol_type != NULL &&
+                   feng_symbol_type_kind(state.symbol_type) == FENG_SYMBOL_TYPE_KIND_ARRAY) {
+            symbol_receiver_state_set_symbol_type(context,
+                                                  feng_symbol_type_inner(state.symbol_type),
+                                                  &state);
+        } else {
+            valid = false;
+        }
+    }
+    receiver_chain_dispose(&chain);
+    if (!valid || state.pending_call != FENG_LSP_RECEIVER_PENDING_NONE) {
+        return NULL;
+    }
+    if (out_builtin_name != NULL) {
+        *out_builtin_name = state.builtin_name;
+    }
+    return state.owner_decl;
 }
 
 /* Resolve the builtin type name of an expression when its type is a builtin.
@@ -12588,11 +13511,6 @@ static bool resolve_symbol_target_at(const FengLspCacheQueryContext *context,
     return target->kind != FENG_LSP_RESOLVED_NONE;
 }
 
-/* Forward declarations for identifier character classification helpers
- * defined later in the completion engine. */
-static bool completion_identifier_start(char ch);
-static bool completion_identifier_continue(char ch);
-
 /* Forward declarations for builtin type completion helpers defined later
  * in the completion engine. */
 static bool completion_context_is_type_position(const char *text,
@@ -13359,6 +14277,7 @@ static bool symbol_member_passes_filter(const FengSymbolDeclView *member, FengLs
 typedef struct FengLspCompletionContext {
     bool is_member;
     bool is_static_access;
+    FengSlice receiver;
     FengSlice object;
     FengSlice prefix;
     FengSlice literal_builtin_name;
@@ -13561,6 +14480,7 @@ static bool completion_context_from_text(const char *text,
                                          FengLspCompletionContext *context) {
     size_t length;
     size_t prefix_start;
+    size_t receiver_start;
     size_t object_start;
     size_t object_end;
 
@@ -13584,6 +14504,14 @@ static bool completion_context_from_text(const char *text,
         return true;
     }
     object_end = prefix_start - 1U;
+    if (!receiver_text_find_start(text, object_end, &receiver_start)) {
+        return true;
+    }
+    context->is_member = true;
+    context->receiver.data = text + receiver_start;
+    context->receiver.length = object_end - receiver_start;
+    context->prefix.data = text + prefix_start;
+    context->prefix.length = offset - prefix_start;
     object_start = object_end;
     while (object_start > 0U && completion_identifier_continue(text[object_start - 1U])) {
         --object_start;
@@ -13592,38 +14520,31 @@ static bool completion_context_from_text(const char *text,
         /* No identifier chars before the dot.  Check for a closing string
          * quote immediately before the dot: `"hello".` */
         if (object_end > 0U && text[object_end - 1U] == '"') {
-            context->is_member = true;
             context->literal_builtin_name = slice_from_cstr("string");
-            context->prefix.data = text + prefix_start;
-            context->prefix.length = offset - prefix_start;
         }
         return true;
     }
     if (!completion_identifier_start(text[object_start])) {
         /* Object starts with a non-identifier character.  If it starts
          * with a digit the token is a numeric literal. */
-        if (isdigit((unsigned char)text[object_start])) {
-            context->is_member = true;
+        if (context->receiver.length == object_end - object_start &&
+            isdigit((unsigned char)text[object_start])) {
             context->literal_builtin_name = slice_from_cstr("i32");
             context->object.data = text + object_start;
             context->object.length = object_end - object_start;
-            context->prefix.data = text + prefix_start;
-            context->prefix.length = offset - prefix_start;
         }
         return true;
     }
-    context->is_member = true;
     context->object.data = text + object_start;
     context->object.length = object_end - object_start;
-    context->prefix.data = text + prefix_start;
-    context->prefix.length = offset - prefix_start;
     /* Detect boolean literal keywords `true` and `false`. */
-    if (slice_equals_cstr(context->object, "true") ||
-        slice_equals_cstr(context->object, "false")) {
+    if (context->receiver.length == context->object.length &&
+        (slice_equals_cstr(context->object, "true") ||
+         slice_equals_cstr(context->object, "false"))) {
         context->literal_builtin_name = slice_from_cstr("bool");
     }
     /* Detect builtin type names for static member access (e.g. i32.parse). */
-    {
+    if (context->receiver.length == context->object.length) {
         const char *type_builtin = builtin_name_for_type_identifier(context->object);
 
         if (type_builtin != NULL) {
@@ -15199,11 +16120,14 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
         FengSlice owner_builtin_name = {0};
         bool alias_handled = false;
         bool is_static = completion_context.is_static_access;
+        bool receiver_is_simple = completion_context.receiver.length ==
+                                  completion_context.object.length;
 
         if (completion_context.literal_builtin_name.length > 0U) {
             owner_builtin_name = completion_context.literal_builtin_name;
         } else {
-            if (find_local(&locals, completion_context.object) == NULL &&
+            if (receiver_is_simple &&
+                find_local(&locals, completion_context.object) == NULL &&
                 !slice_equals_cstr(completion_context.object, "self")) {
                 if (!append_alias_module_completion_items(json,
                                                           &first,
@@ -15217,16 +16141,24 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                 }
             }
             if (!alias_handled) {
-                owner_decl = resolve_owner_decl_from_object_name(session,
-                                                                 program,
-                                                                 completion_context.object,
-                                                                 &locals);
-                (void)resolve_owner_builtin_name_from_object_name(session,
-                                                                  program,
-                                                                  completion_context.object,
-                                                                  &locals,
-                                                                  &owner_builtin_name);
-                if (!is_static && owner_decl != NULL &&
+                if (receiver_is_simple) {
+                    owner_decl = resolve_owner_decl_from_object_name(session,
+                                                                     program,
+                                                                     completion_context.object,
+                                                                     &locals);
+                    (void)resolve_owner_builtin_name_from_object_name(session,
+                                                                      program,
+                                                                      completion_context.object,
+                                                                      &locals,
+                                                                      &owner_builtin_name);
+                } else {
+                    owner_decl = resolve_owner_decl_from_receiver_text(session,
+                                                                       program,
+                                                                       completion_context.receiver,
+                                                                       &locals,
+                                                                       &owner_builtin_name);
+                }
+                if (receiver_is_simple && !is_static && owner_decl != NULL &&
                     find_local(&locals, completion_context.object) == NULL &&
                     resolve_type_name(session, program, completion_context.object) != NULL) {
                     is_static = true;
@@ -15468,6 +16400,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
     const FengExpr *member_object = NULL;
     FengExpr textual_member_object = {0};
     FengLspCompletionContext completion_context = {0};
+    bool textual_receiver_is_complex = false;
     FengLspPosition position;
     bool first = true;
     size_t item_count = 0U;
@@ -15526,8 +16459,13 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
         }
     }
     expr = enclosing_decl != NULL ? find_expr_hit_in_decl(enclosing_decl, offset) : NULL;
+    textual_receiver_is_complex = completion_context.is_member &&
+                                   completion_context.receiver.length > 0U &&
+                                   completion_context.receiver.length !=
+                                       completion_context.object.length;
     if (completion_context.is_member &&
-        completion_context.literal_builtin_name.length == 0U) {
+        completion_context.literal_builtin_name.length == 0U &&
+        !textual_receiver_is_complex) {
         /* Dirty-code parsing may not preserve the member expression.  Model the
          * receiver identified from current text so the cache path cannot fall
          * through to unrelated global completion items. */
@@ -15546,6 +16484,7 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
     if (completion_context.is_member || member_object != NULL) {
         const FengSymbolImportedModule *alias_module = NULL;
         const FengSymbolDeclView *owner_decl = NULL;
+        FengSlice textual_builtin_name = {0};
         FengLspMemberFilter filter = completion_context.is_static_access
                                          ? FENG_LSP_MEMBER_FILTER_STATIC
                                          : FENG_LSP_MEMBER_FILTER_INSTANCE;
@@ -15606,7 +16545,15 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                 ++item_count;
             }
         } else {
-            owner_decl = resolve_symbol_owner_decl_from_expr(context, member_object, &locals);
+            owner_decl = textual_receiver_is_complex
+                             ? resolve_symbol_owner_decl_from_receiver_text(
+                                   context,
+                                   completion_context.receiver,
+                                   &locals,
+                                   &textual_builtin_name)
+                             : resolve_symbol_owner_decl_from_expr(context,
+                                                                   member_object,
+                                                                   &locals);
             if (owner_decl != NULL) {
                 FengSlice owner_slice = feng_symbol_decl_name(owner_decl);
                 char *sym_owner_name = dup_range(owner_slice.data, owner_slice.data + owner_slice.length);
@@ -15649,12 +16596,49 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                 }
                 free(sym_owner_name);
             }
-            if (owner_decl == NULL || item_count == 0U) {
+            if ((owner_decl == NULL || item_count == 0U) &&
+                context->source_module_index != NULL) {
+                FengLspAnalysisSession source_session = {0};
+                const FengDecl *source_owner;
+                FengSlice source_builtin_name = {0};
+
+                source_session.source_module_index = context->source_module_index;
+                source_owner = textual_receiver_is_complex
+                                   ? resolve_owner_decl_from_receiver_text(
+                                         &source_session,
+                                         context->program,
+                                         completion_context.receiver,
+                                         &locals,
+                                         &source_builtin_name)
+                                   : resolve_owner_decl_from_object_expr(
+                                         &source_session,
+                                         context->program,
+                                         member_object,
+                                         &locals);
+                if (!append_owner_member_completion_items(json,
+                                                          &first,
+                                                          &source_session,
+                                                          context->program,
+                                                          source_owner,
+                                                          filter,
+                                                          request)) {
+                    local_list_dispose(&locals);
+                    return false;
+                }
+                if (textual_builtin_name.length == 0U) {
+                    textual_builtin_name = source_builtin_name;
+                }
+                item_count = completion_json_item_count(json);
+            }
+            if (item_count == 0U) {
                 FengSlice builtin_name = completion_context.literal_builtin_name.length > 0U
                                              ? completion_context.literal_builtin_name
-                                             : resolve_symbol_builtin_name_from_expr(context,
-                                                                                     member_object,
-                                                                                     &locals);
+                                             : textual_builtin_name.length > 0U
+                                                   ? textual_builtin_name
+                                                   : resolve_symbol_builtin_name_from_expr(
+                                                         context,
+                                                         member_object,
+                                                         &locals);
 
                 /* When the object is a bare builtin type identifier (not a local),
                  * this is a static access: string., i32., etc. */
@@ -16536,7 +17520,7 @@ static bool handle_completion_request(FengLspService *service,
     {
         FengLspPosition kw_position = completion_position_from_text(document->text, offset);
 
-        if (kw_position != FENG_LSP_POS_OTHER) {
+        if (!is_member_completion && kw_position != FENG_LSP_POS_OTHER) {
             bool first = true;
 
             if (string_append_cstr(&json, "[") &&
