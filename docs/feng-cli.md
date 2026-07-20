@@ -1,6 +1,6 @@
 # Feng CLI 命令与选项
 
-> 本文件仅描述 CLI 的命令、选项与参数，不涉及 CLI 内部处理逻辑。平台标识值以 [feng-os-arch.md](feng-os-arch.md) 为准，内部构建、工具链选择与平台转换流程以 [feng-build.md](feng-build.md) 为准。
+> 本文件仅描述 CLI 的命令、选项与参数，不涉及 CLI 内部处理逻辑。平台标识值以 [feng-os-arch.md](feng-os-arch.md) 为准，内部构建、工具链选择与平台转换流程以 [feng-build.md](feng-build.md) 为准，发行包内 runtime / LLVM / sysroot 布局以 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) 为准。
 
 ## 1 设计目标
 

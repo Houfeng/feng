@@ -53,16 +53,22 @@ sysroot 规则:
 - 一次编译只能选择一个有效 sysroot,不得叠加多个 `-isysroot` / `--sysroot` 并依赖参数覆盖顺序。
 - macOS 目标使用 `-isysroot <macOS SDK>`。使用 Feng 内置 Clang 编译 macOS 目标时,通过 `xcrun --sdk macosx --show-sdk-path` 获取 SDK 路径；macOS SDK 不随 Feng 分发,用户必须安装 Xcode 或 Xcode Command Line Tools。已有 `CC` 显式覆盖与系统 `cc` 回退保持原有行为,不由 Feng 额外注入 SDK。
 - Linux native 使用 host glibc,不传 musl sysroot。
-- Linux 交叉编译使用与目标平台对应的 musl `--sysroot`,同时传入上表中的 musl triple,不调用 `xcrun`,也不再传 macOS SDK 的 `-isysroot`。
-- `--target` 与 `--sysroot` 只解决目标代码生成、系统头文件和系统库定位,不能替代目标平台 linker 与 compiler runtime。完整链接 Linux musl 产物还必须提供目标 ELF linker,以及 `crtbegin` / `crtend` 和编译器运行时库（compiler-rt 或等价 libgcc 支持）；任一项缺失时只能报告目标平台不可用,不得宣称交叉链接成功。具体分发方案由 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) 记录。
+- Linux 交叉编译使用与目标平台对应的 musl `--sysroot`,同时传入上表中的 musl triple,不调用 `xcrun`,也不再传 macOS SDK 的 `-isysroot`。Linux musl 交叉链接的分发组成以 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) §9 为准。
+
+Linux musl 交叉链接参数:
+
+- `--sysroot=<feng 可执行文件目录>/../toolchain/sysroot/<目标平台>`:选择目标 musl 头文件、库与 CRT。
+- `--gcc-toolchain=<同一目标 sysroot>`:使 Clang 从 musl.cc 配套目录中定位目标 `crtbegin*` / `crtend*` 与 libgcc 支持运行库。sysroot 内部兼容目录与文件清单由 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) §4 / §9 定义。
+- `--ld-path=<feng 可执行文件目录>/../toolchain/llvm/bin/ld.lld`:显式使用与内置 Clang 同包的 host LLVM `lld`,不允许 Clang 回退到 macOS `/usr/bin/ld` 或 musl.cc 中的非当前 host linker。
+- 以上参数只解决 C/ELF 工具链定位；driver 还必须链接 `<feng 可执行文件目录>/../lib/<目标平台>/libfeng_runtime.a`。`lld`、目标 sysroot / compiler runtime 或目标 Feng runtime 任一缺失时,必须报告目标平台不可用,不得改用 host runtime 或 host linker。
 
 Clang 查找顺序:
 
-1. 已有且非空的 `CC`,作为开发与测试的显式覆盖；指定非 host 平台时,该编译器必须兼容 Clang 的 `--target` / `--sysroot` 参数。
+1. 已有且非空的 `CC`,作为开发与测试的显式覆盖；指定 Linux musl 交叉目标时,该编译器必须兼容本节定义的 Clang `--target`、`--sysroot`、`--gcc-toolchain` 与 `--ld-path` 参数，否则报告目标平台不可用。
 2. `<feng 可执行文件目录>/../toolchain/llvm/bin/clang`。
 3. `PATH` 中的系统 `cc`,作为源码开发环境或不完整安装的兜底。
 
-不增加 `FENG_HOME`、`FENG_TOOLCHAIN` 等环境变量。可执行文件绝对路径解析与 runtime、Clang、`lldb-dap` 的相对定位共用同一套 CLI 公共路径函数,不得分别实现重复的可执行文件定位逻辑。
+不增加 `FENG_HOME`、`FENG_TOOLCHAIN` 等环境变量。可执行文件绝对路径解析与 runtime、Clang、LLD、`lldb-dap` 的相对定位共用同一套 CLI 公共路径函数,不得分别实现重复的可执行文件定位逻辑。发行包与源码开发的统一相对布局及 Makefile 软链接约定见 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) §4 / §5。
 
 目标平台同时决定以下输入,不得只转换 Clang 参数:
 

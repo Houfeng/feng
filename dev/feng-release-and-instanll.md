@@ -13,7 +13,7 @@
 - 分发物：单一压缩包 `feng-<version>-<os>-<arch>.zip`
 - 平台：`macos-arm64`、`linux-x64`、`linux-arm64`
 - 安装方式：手动解压 + 在线脚本两种
-- toolchain 形态：bundle 精简版（从 LLVM 官方预编译包剥离，核心保留 `clang`、`lldb`、`lldb-dap`，Linux 交叉链接器按 §9 决策，不自建 LLVM）
+- toolchain 形态：bundle 精简版（从同一 host 平台的 LLVM 官方预编译包剥离，核心保留 `clang`、`lld`、`lldb`、`lldb-dap`，不自建 LLVM）
 - 运行时分发形态：仅静态库 `.a` / `.lib`
 - 分发渠道：GitHub Releases
 
@@ -80,6 +80,8 @@ feng-<version>-<os>-<arch>/
 │   ├── llvm/                     # 同一 LLVM 官方包精简后的统一根目录
 │   │   ├── bin/
 │   │   │   ├── clang          # C/LLVM 后端驱动
+│   │   │   ├── lld            # LLVM linker，Linux musl 交叉链接使用
+│   │   │   ├── ld.lld -> lld  # Clang / driver 调用入口
 │   │   │   ├── lldb           # 命令行调试器
 │   │   │   └── lldb-dap       # DAP 适配器，供 feng dap / VS Code 使用
 │   │   └── lib/
@@ -90,15 +92,21 @@ feng-<version>-<os>-<arch>/
 │   └── sysroot/                  # 交叉编译 sysroot（按目标平台分子目录）
 │       └── <os>-<arch>/          # 目标平台标识，取值见 feng-os-arch.md
 │           ├── usr/include/      # 目标平台系统头文件
-│           └── usr/lib/          # 目标平台系统库
+│           ├── usr/lib/          # musl 库、动态加载器与 musl CRT
+│           │   └── gcc/<musl-triple>/<gcc-version>/
+│           │       └── crtbegin* / crtend* / libgcc*
+│           ├── lib -> usr/lib    # musl.cc / Clang 目录兼容视图
+│           └── <musl-triple>/    # Clang GCC toolchain 检测所需的目标视图
+│               ├── include -> ../usr/include
+│               └── lib -> ../usr/lib
 └── VERSION                       # 必须：纯文本版本号，单行
 ```
 
 - Windows 平台下，`bin/` 中可执行文件追加 `.exe` 后缀，`lib/` 中静态库后缀切换为 `.lib`。
 - `lib/` 按目标平台分子目录（`lib/<os>-<arch>/`，取值见 [feng-os-arch.md](../docs/feng-os-arch.md)）。分发包至少包含其 host 平台 runtime；支持交叉编译时，可同时包含其他目标平台 runtime 子目录。
 - `include/` 为 runtime 公共 ABI 头文件，平台无关（C 源码），不分平台子目录，单一一份供所有平台使用，扁平置于 `include/` 根下。`feng_runtime.h` 内部以相对路径 `#include "feng_runtime_contract.inc"`，二者位于同一目录；标准 C 头文件（`<stdint.h>` 等）与系统头文件（`<unwind.h>`）由目标平台 SDK / sysroot 提供，不重复放入 runtime include 目录。
-- `toolchain/llvm/` 保持 LLVM 官方包的统一根目录布局，`clang`、`lldb` 与 `lldb-dap` 必须来自同一 LLVM 版本和同一 host 平台包。`bin/clang` 与 `lib/clang/<version>/` 的相对位置关系由 clang 自动推导（`-print-resource-dir`），driver 无需额外指定 `-resource-dir` 或 `-isystem`；`bin/lldb` / `bin/lldb-dap` 与 `lib/liblldb.*` 也保持官方包内的相对位置。`lib/clang/<version>/include/`（编译器内置头）平台无关；`lib/clang/<version>/lib/<os>/`（编译器运行时库）按目标 OS 分目录。
-- `toolchain/sysroot/` 按目标平台分子目录，保持 `--sysroot` 官方约定结构（`usr/include/` + `usr/lib/`），具体选择规则见 [feng-build.md](../docs/feng-build.md)。Linux 交叉编译 sysroot 可随包分发 musl；macOS SDK 受 Apple 许可限制不进入 Feng 分发包，macOS native 编译使用用户合法安装的系统 SDK，macOS 作为交叉目标时也必须由用户自行合法获取 SDK。
+- `toolchain/llvm/` 保持 LLVM 官方包的统一根目录布局，`clang`、`lld`、`lldb` 与 `lldb-dap` 必须来自同一 LLVM 版本和同一 host 平台包。`bin/clang` 与 `lib/clang/<version>/` 的相对位置关系由 clang 自动推导（`-print-resource-dir`），driver 无需额外指定 `-resource-dir` 或 `-isystem`；`bin/ld.lld` 必须保留为指向 `bin/lld` 的入口；`bin/lldb` / `bin/lldb-dap` 与 `lib/liblldb.*` 也保持官方包内的相对位置。`lib/clang/<version>/include/`（编译器内置头）平台无关；`lib/clang/<version>/lib/<os>/`（编译器运行时库）按目标 OS 分目录。
+- `toolchain/sysroot/` 按目标平台分子目录，保持 `--sysroot` 约定的 `usr/include/` + `usr/lib/` 主视图。Linux musl sysroot 从 musl.cc 配套包精简，除 musl 头文件、库与 `crt1` / `crti` / `crtn` 外，还必须保留目标 `crtbegin*` / `crtend*`、`libgcc.a`、`libgcc_eh.a`、`libgcc_s.so*` 及 Clang GCC toolchain 检测所需的相对目录关系；不保留 musl.cc 中只能在特定宿主上运行的交叉链接器可执行文件。具体调用参数见 [feng-build.md](../docs/feng-build.md)。macOS SDK 受 Apple 许可限制不进入 Feng 分发包，macOS native 编译使用用户合法安装的系统 SDK，macOS 作为交叉目标时也必须由用户自行合法获取 SDK。
 - 分发物不包含任何 Feng 源码、`.o` / `.obj` 中间产物、构建缓存。
 - `feng` 编译器基于自身位置查找 runtime 静态库、头文件与 toolchain：runtime 位于 `<feng 可执行文件目录>/../lib/` 与 `../include/`，Clang 和 `lldb-dap` 位于 `<feng 可执行文件目录>/../toolchain/llvm/bin/`。不引入 `FENG_HOME` / `FENG_TOOLCHAIN` 等环境变量；完整查找顺序见 [feng-build.md](../docs/feng-build.md) 与 [feng-cli.md](../docs/feng-cli.md) 的 DAP 规范。
 
@@ -106,11 +114,11 @@ feng-<version>-<os>-<arch>/
 
 分发包内 `toolchain/` 为精简版 LLVM 工具链与交叉编译 sysroot，与 `bin/`、`lib/`、`include/` 并列置于分发包根下。
 
-- **从 LLVM 官方预编译包剥离，不自建 LLVM/Clang**；核心只保留 `clang`、`lldb`、`lldb-dap` 及其运行所必需的最小依赖集，不含 `llvm-*`、`clang-format`、`clang-tidy` 等其他通用 LLVM 工具。`lld` 是否作为 Linux 交叉链接器进入最小集合由 §9 单独决策,不得在决策前由精简脚本私自加入。
-- 精简由 `scripts/fetch_llvm.sh` + `scripts/trim_llvm.sh` 完成（维护性脚本，不在发布流程）：`fetch_llvm.sh` 下载并解压 LLVM 官方预编译包到 `local/llvm/`（持久 cache，gitignored，不受 `make clean` 或测试清理 `temp/` 影响），`trim_llvm.sh` 从单个已解压 LLVM root 中同时精简 clang、lldb 与 lldb-dap，原子产出到仓库 `toolchain/llvm/<os>-<arch>/`。合并为一个精简脚本，避免两个脚本共享输出根目录时相互删除产物，并保证 clang 与 LLDB 的版本、来源和目标平台一致。本方案只约束产出形式与体积目标：精简后 `toolchain/` 解压体积目标控制在 300 MB 量级（实际值待实施时验证，写入 release notes）。
-- `toolchain/sysroot/` 为交叉编译 sysroot，按目标平台分子目录。Linux 交叉编译目标基于 musl libc（MIT 许可，自由可分发），由 `scripts/fetch_musl.sh` 下载预构建包到 `temp/musl/`，再由 `scripts/trim_musl.sh` 精简到仓库 `toolchain/sysroot/<os>-<arch>/`（git lfs 管理）；musl 主要用于交叉编译场景，未来 linux 平台原生编译时采用 glibc（由 host 系统提供）。macOS 目标受 Apple SDK 版权限制不可自由分发，需用户自行合法获取。
+- **从 LLVM 官方预编译包剥离，不自建 LLVM/Clang**；核心只保留 `clang`、`lld`、`lldb`、`lldb-dap` 及其运行所必需的最小依赖集，不含 `llvm-*`、`clang-format`、`clang-tidy` 等其他通用 LLVM 工具。Linux musl 交叉链接统一使用该 host 平台 LLVM 包中的 `lld`，不分发 musl.cc 中的 linker 可执行文件。
+- 精简由 `scripts/fetch_llvm.sh` + `scripts/trim_llvm.sh` 完成（维护性脚本，不在发布流程）：`fetch_llvm.sh` 下载并解压 LLVM 官方预编译包到 `local/llvm/`（持久 cache，gitignored，不受 `make clean` 或测试清理 `temp/` 影响），`trim_llvm.sh` 从单个已解压 LLVM root 中同时精简 clang、lld、lldb 与 lldb-dap，原子产出到仓库 `toolchain/llvm/<os>-<arch>/`。合并为一个精简脚本，避免两个脚本共享输出根目录时相互删除产物，并保证四个工具的版本、来源和 host 平台一致。精简脚本只保留运行与目标编译所必需的文件，实际解压体积在维护验收时记录，不以删除必要运行依赖换取固定体积。
+- `toolchain/sysroot/` 为交叉编译 sysroot，按目标平台分子目录。Linux 交叉编译目标基于 musl libc，由 `scripts/fetch_musl.sh` 下载 musl.cc 配套预构建包到 `temp/musl/`，再由 `scripts/trim_musl.sh` 将 musl sysroot 与目标 CRT / GCC 支持运行库一起精简到仓库 `toolchain/sysroot/<os>-<arch>/`（git lfs 管理）；不保留预构建包中的 GCC、`ld` 等 host 可执行工具。精简产物的 README 必须分别记录 musl 与 GCC runtime 的来源、版本和上游许可，不得把整个 sysroot 笼统标记为单一 musl 许可。musl 主要用于交叉编译场景，Linux 平台原生编译采用 glibc（由 host 系统提供）。macOS 目标受 Apple SDK 版权限制不可自由分发，需用户自行合法获取。
 - 精简 toolchain 的版本、来源、剥离清单由独立子任务文档承载，不在本文件展开，避免方案膨胀。
-- `feng` 编译器基于自身位置查找 `toolchain/`。源码开发构建通过 Makefile 创建 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>` 软链接，使 `build/bin/feng` 观察到的 `../toolchain/llvm/bin/` 与发行包完全一致；`make clean` 删除整个 `build/`，软链接不作为持久产物或分发内容。
+- `feng` 编译器基于自身位置查找 `toolchain/`。源码开发构建通过 Makefile 创建 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>` 与 `build/toolchain/sysroot -> ../../toolchain/sysroot` 两个软链接，使 `build/bin/feng` 观察到的 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 都与发行包布局一致。LLVM 按 host 平台选择单一目录，sysroot 保留全部已交付目标平台子目录；`make clean` 删除整个 `build/`，软链接不作为持久产物或分发内容。
 
 ### 5.1 macOS 系统前置条件
 
@@ -205,18 +213,20 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 首版 `macos-arm64`、`linux-x64` 与 `linux-arm64` 发布前需完成的实施项：
 
 - [x] `scripts/fetch_llvm.sh`：下载并解压 LLVM 官方预编译包到 `local/llvm/`（持久 cache，gitignored，维护性脚本）
-- [ ] `scripts/trim_llvm.sh`：从同一 LLVM root 原子精简 clang + lldb + lldb-dap，产出到 `toolchain/llvm/<os>-<arch>/`（git lfs 管理），支持 `macos-arm64`、`linux-x64` 与 `linux-arm64`
+- [ ] `scripts/trim_llvm.sh`：从同一 LLVM root 原子精简 clang + lld + lldb + lldb-dap，产出到 `toolchain/llvm/<os>-<arch>/`（git lfs 管理），支持 `macos-arm64`、`linux-x64` 与 `linux-arm64`
 - [x] `scripts/fetch_musl.sh`：从 musl.cc 下载并解压 Linux musl 预构建包到 `temp/musl/`（持久 cache，gitignored，维护性脚本）
-- [x] `scripts/trim_musl.sh`：从 `temp/musl/` 精简 musl sysroot（仅保留 `include/` + `lib/`，排除 GCC 工具链）到 `toolchain/sysroot/<os>-<arch>/`（git lfs 管理）
+- [ ] `scripts/trim_musl.sh`：从 `temp/musl/` 同时精简 musl sysroot 与目标 CRT / GCC 支持运行库，排除 GCC、`ld` 等 host 可执行工具，产出到 `toolchain/sysroot/<os>-<arch>/`（git lfs 管理）
 - [ ] `scripts/release.sh`：构建入口，编排 `build_libunwind.sh` + `make cli runtime` + 组装分发目录树，产出安装包到 `release/`
 - [ ] `.github/workflows/release.yml`：CI 工作流，tag 触发，各 matrix 项调用 `scripts/release.sh`
 - [ ] `scripts/install.sh`：在线安装脚本（自动检测平台 + 下载到系统临时目录 + 解压 + 自动配 PATH）
-- [ ] Linux musl 交叉链接工具链：按 §9 的人工决策补齐目标 ELF linker 与 compiler runtime，并纳入精简脚本和发布验收
+- [ ] Linux musl 交叉链接工具链：按 §9 已定方案在 LLVM 精简产物中保留 host `lld` / `ld.lld`，在目标 sysroot 中保留 musl.cc CRT / GCC 支持运行库，并纳入发布验收
 - [ ] 发布前验收：`feng --version` 与 VERSION 一致；`feng build` / `run` / `lsp` / `dap` 可用；bundled toolchain 存在/缺失两种情形定位正确；干净环境安装无残留
 
-## 9 待人工决策项
+## 9 Linux musl 交叉链接已定方案
 
-以下事项影响后续迭代，但不阻塞首版 macos-arm64 发布，列出以备决策：
+本节记录 Linux musl 交叉链接的分发决策；Feng 平台到 Clang 参数的转换以 [feng-build.md](../docs/feng-build.md) 为主规范。
 
-1. **Linux musl 版本与来源**：`fetch_musl.sh` 下载的 musl 预构建包版本与提供方（如 musl.cc）由人工决策锁定，确保 ABI 稳定与许可合规。musl 仅用于交叉编译 sysroot；未来 linux 平台原生编译时采用 glibc，其最低版本基线另由人工决策。
-2. **Linux musl 交叉链接依赖**：`--target` + musl `--sysroot` 不包含目标 linker 与 compiler runtime。当前 macOS LLVM Clang 会回退调用不支持 ELF 的 `/usr/bin/ld`；当前精简 musl sysroot 也不含 `crtbegin` / `crtend` 与 libgcc,macOS LLVM resource-dir 只含 Darwin compiler-rt。必须由人工决定是把 LLVM 官方包中的 `lld` 与目标 compiler-rt 纳入 `toolchain/llvm/`,还是从 musl 交叉工具链保留等价 linker / libgcc 支持；该决策完成前不得宣称 Linux 交叉链接可用。
+1. **linker**：各 host 分发包使用自身 `toolchain/llvm/bin/lld`，并保留 `bin/ld.lld -> lld`。该可执行文件来自与 `clang` 相同的 LLVM 官方包，因此可在当前 host 上运行并链接 Linux ELF；不使用 musl.cc 预构建包中的 `ld`。
+2. **目标 C 环境与 compiler runtime**：`toolchain/sysroot/<linux-target>/` 使用与目标架构匹配的 musl.cc 配套包，同时保留 musl 头文件、库、动态加载器、musl CRT，以及目标 `crtbegin*` / `crtend*`、`libgcc.a`、`libgcc_eh.a`、`libgcc_s.so*`。仅排除不会在目标程序中被链接且不作为当前 host 工具使用的 GCC / binutils 可执行文件。
+3. **Feng runtime**：交叉目标必须使用 `lib/<目标平台>/libfeng_runtime.a`，不得误用 host runtime。该路径属于本文 §4 已定义的分平台 runtime 布局，不在 sysroot 中重复分发。
+4. **可用性边界**：`lld`、目标 sysroot / compiler runtime 与目标 `libfeng_runtime.a` 必须同时存在并通过链接验收，才能宣称该 Linux 交叉目标可用。
