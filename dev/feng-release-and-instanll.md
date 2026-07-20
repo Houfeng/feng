@@ -218,7 +218,11 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - `linux-arm64` host：支持 native 编译 / 运行 `linux-arm64` 程序，并支持交叉编译 `linux-x64` 程序。
 - 本 TODO 不要求产出 `macos-x64` 程序，也不支持在 Linux host 上交叉编译 macOS 程序。平台标识以 [feng-os-arch.md](../docs/feng-os-arch.md) 为准，CLI 与工具链转换分别以 [feng-cli.md](../docs/feng-cli.md) 和 [feng-build.md](../docs/feng-build.md) 为准。
 
-实施按以下阶段顺序进行。每个阶段都必须产出可单独 Review 和交付的稳定检查点；本阶段任务、专项验收与三个 host 的全量 `make test` 均通过后，才能进入下一阶段。`make test` 是仓库全量回归入口，已包含单元测试、UBSan、smoke、CLI、std、fcts 与性能约束检查。
+实施必须严格按以下阶段顺序进行，每个阶段都是可独立交付的实施单元，并遵守统一阶段门禁：
+
+1. 完成本阶段全部任务和专项验收，并在三个 host 上通过全量 `make test`。`make test` 是仓库全量回归入口，已包含单元测试、UBSan、smoke、CLI、std、fcts 与性能约束检查。
+2. 提交本阶段的全部变更和验收结果供人工 Review；全量回归通过不代表可以自动进入下一阶段。
+3. 只有人工 Review 通过且收到“开始下一阶段”的明确人工指令后，才能实施下一阶段。在此之前必须停止在当前阶段，不得提前修改后续阶段的文档、代码或测试。
 
 ### 8.1 阶段 1：可独立验证的精简工具链
 
