@@ -57,26 +57,8 @@ Feng 在跨模块边界上采用“**编译产出符号表,消费侧走查询**�
 
 ```text
 build/
-  mod/
-    mylib/
-      api.ft
-      model.ft
-```
-
-规则:
-
-- 一个公开模块恰好对应一个 `.ft` 文件。
-- 路径仍由模块名唯一决定: `mylib.api` -> `build/mod/mylib/api.ft`。
-- `pack` 时直接把 `build/mod/**/*.ft` 复制进 `.fb` 的 `mod/` 目录,不重新建模、不重新序列化。
-
-### 3.2 本地缓存产物
-
-为加快当前工程的 IDE/LSP 与增量编译,编译器额外输出本地缓存:
-
-```text
-build/
-  obj/
-    symbols/
+  <platform>/
+    mod/
       mylib/
         api.ft
         model.ft
@@ -84,21 +66,41 @@ build/
 
 规则:
 
+- 在一个目标平台的开发构建根内,一个公开模块恰好对应一个 `.ft` 文件；`.fb` 内仍只保留多平台校验后的一份。
+- 开发态路径由目标平台与模块名共同决定: `mylib.api` -> `build/<platform>/mod/mylib/api.ft`。
+- `pack` 校验各目标平台 `build/<platform>/mod/**/*.ft` 的模块集合与公开语义事实等价后,从其中提取一套写入 `.fb` 的 `mod/` 目录,不重新建模、不重新序列化。
+
+### 3.2 本地缓存产物
+
+为加快当前工程的 IDE/LSP 与增量编译,编译器额外输出本地缓存:
+
+```text
+build/
+  <platform>/
+    obj/
+      symbols/
+        mylib/
+          api.ft
+          model.ft
+```
+
+规则:
+
 - 本地缓存仍使用 `.ft`,不再单独引入其他缓存扩展名。
 - 公开包表与本地缓存表共享同一套核心节格式,但 `profile` 不同,允许包含额外节。
-- 发布到 `.fb` 的公开包表（`build/mod/**/*.ft`）不得包含 span、源码位置或其他 workspace-only 节; 这些信息只允许出现在 `build/obj/symbols/**/*.ft`。
+- 发布到 `.fb` 的公开包表候选（`build/<platform>/mod/**/*.ft`）不得包含 span、源码位置或其他 workspace-only 节; 这些信息只允许出现在同平台的 `build/<platform>/obj/symbols/**/*.ft`。
 - 本地缓存 `.ft` 可以保留当前包内不可导出的声明、源码位置、失效校验指纹等本地信息。
 - `.ft` 的用途由“目录位置 + Header.profile”共同决定,而不是由扩展名决定。
 
 补充边界:
 
-- `.ft` 继续只承担模块级声明缓存与 workspace cache 职责; 与最终 binary 绑定的调试信息必须落入独立 `.fd` sidecar,而不是塞进 `build/mod/**/*.ft` 或 `build/obj/symbols/**/*.ft`。
+- `.ft` 继续只承担模块级声明缓存与 workspace cache 职责; 与最终 binary 绑定的调试信息必须落入独立 `.fd` sidecar,而不是塞进 `build/<platform>/mod/**/*.ft` 或 `build/<platform>/obj/symbols/**/*.ft`。
 - `.fd` 即使复用与 `.ft` 类似的二进制容器思路,也不属于本规范定义的 `.ft` profile/section 集合; `pack`、provider、LSP 与跨包编译都不得把 `.fd` 当成 `.ft` 的一种 profile 来消费。
 
 ### 3.3 消费优先级
 
 - **编译器消费依赖包**: 读取 `.fb/mod/**/*.ft`。
-- **语言服务消费当前项目**: 优先读取 `build/obj/symbols/**/*.ft`。
+- **语言服务消费当前项目**: 当前 `feng lsp` 未接受目标平台参数,优先读取 `build/<归一化 host 平台>/obj/symbols/**/*.ft`。
 - **语言服务消费外部依赖**: 读取 `.fb/mod/**/*.ft`。
 - **当前文件存在未保存修改**: 以内存中的当前文档 AST/语义结果覆盖磁盘 cache,但其他未改动模块仍尽量复用磁盘 `.ft`。
 - **调试器消费当前产物**: 读取最终 binary 同级 `.fd`; 不从 `.ft` 推导局部变量、frame 或 watch 元数据。
@@ -124,9 +126,9 @@ build/
 
 1. 解析 `.ff` 源文件,完成语义分析。
 2. 编译驱动把语义结果交给 `src/symbol/`,以“模块”为单位收敛可导出声明与本地声明,生成内存中的模块符号图。
-3. `src/symbol/` 对每个公开模块输出 `build/mod/<module>.ft`。
-4. `src/symbol/` 对当前项目内模块输出 `build/obj/symbols/<module>.ft`。
-5. `pack` 直接复用 `build/mod/**/*.ft` 与库文件生成 `.fb`。
+3. `src/symbol/` 对每个公开模块输出 `build/<platform>/mod/<module>.ft`。
+4. `src/symbol/` 对当前项目内模块输出 `build/<platform>/obj/symbols/<module>.ft`。
+5. `pack` 校验各目标平台公开 `.ft` 候选的模块集合与公开语义事实等价后,提取一套与分平台库文件生成 `.fb`。
 
 ### 4.2 编译器消费流程
 
@@ -142,7 +144,7 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 
 ### 4.3 IDE/LSP 消费流程
 
-1. 打开当前项目时,扫描 `build/obj/symbols/**/*.ft`。
+1. 打开当前项目时,扫描 `build/<归一化 host 平台>/obj/symbols/**/*.ft`。
 2. 若本地缓存 `.ft` 指纹有效,直接读取声明、签名、文档注释、源码位置用于 hover / completion / definition。
 3. 若本地缓存 `.ft` 缺失或失效,退回源码分析,并在下一次成功 `check` / `build` 后重新生成缓存。
 4. 对外部依赖,语言服务与编译器可共用 `src/symbol/` 中的 `.ft` 读取器,但对上层都只暴露统一查询接口或查询视图,不把 `.ft` 文件格式细节扩散到核心分析逻辑。
@@ -302,7 +304,7 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 | `FT_VERSION_MAJOR` | `0x01` | 主版本 |
 | `FT_VERSION_MINOR` | `0x00` | 次版本 |
 | `FT_PROFILE_PACKAGE_PUBLIC` | `0x01` | `.fb/mod/**/*.ft` 公开包表 |
-| `FT_PROFILE_WORKSPACE_CACHE` | `0x02` | `build/obj/symbols/**/*.ft` 本地缓存 |
+| `FT_PROFILE_WORKSPACE_CACHE` | `0x02` | `build/<platform>/obj/symbols/**/*.ft` 本地缓存 |
 | `FT_HEADER_V1_SIZE` | `64` | Header 固定大小 |
 | `FT_SECTION_DIR_V1_ENTRY_SIZE` | `32` | Section Directory 单项固定大小 |
 | `FT_FLAG_HAS_DOCS` | `0x00000001` | 文件包含 `DOCS` 节 |
@@ -1005,17 +1007,17 @@ open fit Box<T>: Reader<T> {
 
 - 本地缓存 `.ft` 以源文件指纹、依赖模块指纹、`feng.fm` 相关字段、编译器构建指纹共同决定是否失效。
 - LSP 读到失效本地缓存 `.ft` 时直接忽略并回退到源码分析,而不是冒险继续使用旧缓存。
-- `clean` 时统一删除 `build/mod/` 与 `build/obj/symbols/`。
+- `clean` 时统一删除各目标平台的 `build/<platform>/mod/` 与 `build/<platform>/obj/symbols/`；清理某一平台时不得删除其他平台目录。
 
 ## 9 推荐落地顺序
 
 建议按以下顺序推进:
 
 1. **先定内存模型**: 在前端/语义分析后构建统一“模块符号图”,不要直接在 writer 里拼字节。
-2. **先落公开 `.ft`**: 打通 `build/mod/**/*.ft` 生成、读取与 `pack` 复用,先把跨包消费闭环立住。
+2. **先落公开 `.ft`**: 打通 `build/<platform>/mod/**/*.ft` 生成、读取以及 `pack` 的多平台校验与提取,先把跨包消费闭环立住。
 3. **再在同一格式上补 workspace-cache profile**: 增加 `SPNS`、`USES`、`META`,供当前项目语言服务复用。
 4. **再接编译器读取器**: 依赖包消费改走 `.ft` 二进制查询。
-5. **最后接 LSP**: 当前项目优先读 `build/obj/symbols/**/*.ft`,外部依赖读 `.fb/mod/**/*.ft`。
+5. **最后接 LSP**: 当前项目优先读 `build/<归一化 host 平台>/obj/symbols/**/*.ft`,外部依赖读 `.fb/mod/**/*.ft`。
 
 ## 10 需要评审确认的点
 
@@ -1053,7 +1055,7 @@ open fit Box<T>: Reader<T> {
 - `build/check/pack` 负责产出并复用符号表。
 - `.fb` 中 `mod/` 放的是**二进制公开符号表 `.ft`**,不再是假想的文本接口源码。
 - 编译器消费外部包时,核心路径从“解析接口文本”改成“按模块名查 `.ft` 并查询符号”。
-- 本地工程的 IDE 类型感知优先复用 `build/obj/symbols/**/*.ft`,减少重复工作。
+- 本地工程的 IDE 类型感知优先复用 `build/<归一化 host 平台>/obj/symbols/**/*.ft`,减少重复工作且不得跨目标平台读取 workspace cache。
 
 这条路径与主流编译型语言的做法一致,也更适合后续把跨模块语义分析稳定收敛为查询模型。
 

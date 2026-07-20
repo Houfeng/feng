@@ -29,7 +29,7 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 
 - `.ff`: 源文件（Feng File）
 - `.fm`: 项目或包清单文件（Feng Manifest）
-- `.ft`: 编译器导出的符号表文件（Feng Symbol Table）；公开包表位于 `.fb/mod/**/*.ft`，本地缓存位于 `build/obj/symbols/**/*.ft`
+- `.ft`: 编译器导出的符号表文件（Feng Symbol Table）；公开包表位于 `.fb/mod/**/*.ft`，开发态公开表与本地缓存分别位于 `build/<platform>/mod/**/*.ft`、`build/<platform>/obj/symbols/**/*.ft`
 - `.fb`: 包文件（Feng Bundle）
 
 语法约定:
