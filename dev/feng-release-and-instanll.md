@@ -107,7 +107,7 @@ feng-<version>-<os>-<arch>/
 分发包内 `toolchain/` 为精简版 LLVM 工具链与交叉编译 sysroot，与 `bin/`、`lib/`、`include/` 并列置于分发包根下。
 
 - **从 LLVM 官方预编译包剥离，不自建 LLVM/Clang**；只保留 `clang`、`lldb`、`lldb-dap` 及其运行所必需的最小依赖集，不含 `llvm-*`、`lld`、`clang-format`、`clang-tidy` 等其他 LLVM 工具，不含非当前平台 / 非 x86_64 的目标后端。
-- 精简由 `scripts/fetch_llvm.sh` + `scripts/trim_llvm.sh` 完成（维护性脚本，不在发布流程）：`fetch_llvm.sh` 下载并解压 LLVM 官方预编译包到 `temp/llvm/`（持久 cache，gitignored），`trim_llvm.sh` 从单个已解压 LLVM root 中同时精简 clang、lldb 与 lldb-dap，原子产出到仓库 `toolchain/llvm/<os>-<arch>/`。合并为一个精简脚本，避免两个脚本共享输出根目录时相互删除产物，并保证 clang 与 LLDB 的版本、来源和目标平台一致。本方案只约束产出形式与体积目标：精简后 `toolchain/` 解压体积目标控制在 300 MB 量级（实际值待实施时验证，写入 release notes）。
+- 精简由 `scripts/fetch_llvm.sh` + `scripts/trim_llvm.sh` 完成（维护性脚本，不在发布流程）：`fetch_llvm.sh` 下载并解压 LLVM 官方预编译包到 `local/llvm/`（持久 cache，gitignored，不受 `make clean` 或测试清理 `temp/` 影响），`trim_llvm.sh` 从单个已解压 LLVM root 中同时精简 clang、lldb 与 lldb-dap，原子产出到仓库 `toolchain/llvm/<os>-<arch>/`。合并为一个精简脚本，避免两个脚本共享输出根目录时相互删除产物，并保证 clang 与 LLDB 的版本、来源和目标平台一致。本方案只约束产出形式与体积目标：精简后 `toolchain/` 解压体积目标控制在 300 MB 量级（实际值待实施时验证，写入 release notes）。
 - `toolchain/sysroot/` 为交叉编译 sysroot，按目标平台分子目录。Linux 交叉编译目标基于 musl libc（MIT 许可，自由可分发），由 `scripts/fetch_musl.sh` 下载预构建包到 `temp/musl/`，再由 `scripts/trim_musl.sh` 精简到仓库 `toolchain/sysroot/<os>-<arch>/`（git lfs 管理）；musl 主要用于交叉编译场景，未来 linux 平台原生编译时采用 glibc（由 host 系统提供）。macOS 目标受 Apple SDK 版权限制不可自由分发，需用户自行合法获取。
 - 精简 toolchain 的版本、来源、剥离清单由独立子任务文档承载，不在本文件展开，避免方案膨胀。
 - `feng` 编译器基于自身位置查找 `toolchain/`。
@@ -187,7 +187,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 首版 macos-arm64 发布前需完成的实施项：
 
-- [x] `scripts/fetch_llvm.sh`：下载并解压 LLVM 官方预编译包到 `temp/llvm/`（持久 cache，gitignored，维护性脚本）
+- [x] `scripts/fetch_llvm.sh`：下载并解压 LLVM 官方预编译包到 `local/llvm/`（持久 cache，gitignored，维护性脚本）
 - [ ] `scripts/trim_llvm.sh`：从同一 LLVM root 原子精简 clang + lldb + lldb-dap，产出到 `toolchain/llvm/<os>-<arch>/`（git lfs 管理），支持 `macos-arm64`、`linux-x64` 与 `linux-arm64`
 - [x] `scripts/fetch_musl.sh`：从 musl.cc 下载并解压 Linux musl 预构建包到 `temp/musl/`（持久 cache，gitignored，维护性脚本）
 - [x] `scripts/trim_musl.sh`：从 `temp/musl/` 精简 musl sysroot（仅保留 `include/` + `lib/`，排除 GCC 工具链）到 `toolchain/sysroot/<os>-<arch>/`（git lfs 管理）
