@@ -77,15 +77,16 @@ feng-<version>-<os>-<arch>/
 │       └── libfeng_runtime.a     # linux/macos；Windows 下为 feng_runtime.lib
 │  
 ├── toolchain/                    # 必须：精简 LLVM 工具链 + 交叉编译 sysroot
-│   ├── clang/                    # 仅 clang 与最小必要依赖
-│   │   ├── bin/clang
-│   │   └── lib/clang/22/         # clang 官方结构，保持与 clang 二进制的相对位置
-│   │       ├── include/          # 编译器内置头文件（平台无关，如 stdint.h 等）
-│   │       └── lib/darwin/       # 编译器运行时库（目标 OS:darwin/linux/windows）
-│   ├── lldb/                     # 仅 lldb 与最小必要依赖
-│   │   ├── bin/lldb              # 命令行调试器
-│   │   ├── bin/lldb-dap          # DAP 适配器，供 feng dap / VS Code 使用
-│   │   └── lib/                  # 仅 lldb 运行所必需的子集
+│   ├── llvm/                     # 同一 LLVM 官方包精简后的统一根目录
+│   │   ├── bin/
+│   │   │   ├── clang          # C/LLVM 后端驱动
+│   │   │   ├── lldb           # 命令行调试器
+│   │   │   └── lldb-dap       # DAP 适配器，供 feng dap / VS Code 使用
+│   │   └── lib/
+│   │       ├── clang/22/      # clang 官方 resource-dir，保持与 bin/clang 的相对位置
+│   │       │   ├── include/   # 编译器内置头文件（平台无关）
+│   │       │   └── lib/<os>/  # 编译器运行时库（目标 OS）
+│   │       └── liblldb.*       # lldb / lldb-dap 运行所必需的库
 │   └── sysroot/                  # 交叉编译 sysroot（按目标平台分子目录）
 │       └── <os>-<arch>/          # 目标平台标识，取值见 feng-os-arch.md
 │           ├── usr/include/      # 目标平台系统头文件
@@ -96,7 +97,7 @@ feng-<version>-<os>-<arch>/
 - Windows 平台下，`bin/` 中可执行文件追加 `.exe` 后缀，`lib/` 中静态库后缀切换为 `.lib`。
 - `lib/` 按目标平台分子目录（`lib/<os>-<arch>/`，取值见 [feng-os-arch.md](../docs/feng-os-arch.md)）。当前无交叉编译时，目标平台与分发物命名平台一致，仅含一份；未来支持交叉编译时，同一分发物可含多个目标平台子目录。
 - `include/` 为 runtime 公共 ABI 头文件，平台无关（C 源码），不分平台子目录，单一一份供所有平台使用，扁平置于 `include/` 根下。`feng_runtime.h` 内部以相对路径 `#include "feng_runtime_contract.inc"`，二者位于同一目录；标准 C 头文件（`<stdint.h>` 等）与系统头文件（`<unwind.h>`）由 host cc / 工具链提供，不进分发物。
-- `toolchain/clang/` 保持 clang 官方 resource-dir 结构（`lib/clang/<version>/`），`bin/clang` 与 `lib/clang/<version>/` 的相对位置关系由 clang 自动推导（`-print-resource-dir`），driver 无需额外指定 `-resource-dir` 或 `-isystem`。`include/`（编译器内置头）平台无关；`lib/<os>/`（编译器运行时库）已按目标 OS 分目录，天然支持交叉编译。
+- `toolchain/llvm/` 保持 LLVM 官方包的统一根目录布局，`clang`、`lldb` 与 `lldb-dap` 必须来自同一 LLVM 版本和同一 host 平台包。`bin/clang` 与 `lib/clang/<version>/` 的相对位置关系由 clang 自动推导（`-print-resource-dir`），driver 无需额外指定 `-resource-dir` 或 `-isystem`；`bin/lldb` / `bin/lldb-dap` 与 `lib/liblldb.*` 也保持官方包内的相对位置。`lib/clang/<version>/include/`（编译器内置头）平台无关；`lib/clang/<version>/lib/<os>/`（编译器运行时库）按目标 OS 分目录。
 - `toolchain/sysroot/` 按目标平台分子目录，保持 `--sysroot` 官方约定结构（`usr/include/` + `usr/lib/`），driver 传 `--sysroot=<install>/toolchain/sysroot/<os>-<arch>/` 即可，无需额外 `-I` / `-L`。首版 `macos-arm64` 分发包中不含 `toolchain/sysroot/`（native 编译时由 host 系统 SDK 提供，macOS SDK 受 Apple 版权限制不可自由分发）；未来 `linux-x64` 等分发包可 bundle musl / mingw-w64 等自由许可的 sysroot，实现安装即可交叉编译。`macos` 作为交叉编译目标时受 Apple SDK 版权限制，需用户自行合法获取。
 - 分发物不包含任何 Feng 源码、`.o` / `.obj` 中间产物、构建缓存。
 - `feng` 编译器基于自身位置查找 runtime 静态库与头文件，不使用环境变量覆盖；若未来需要显式指定 runtime 路径，通过 CLI 参数实现。
@@ -106,7 +107,7 @@ feng-<version>-<os>-<arch>/
 分发包内 `toolchain/` 为精简版 LLVM 工具链与交叉编译 sysroot，与 `bin/`、`lib/`、`include/` 并列置于分发包根下。
 
 - **从 LLVM 官方预编译包剥离，不自建 LLVM/Clang**；只保留 `clang`、`lldb`、`lldb-dap` 及其运行所必需的最小依赖集，不含 `llvm-*`、`lld`、`clang-format`、`clang-tidy` 等其他 LLVM 工具，不含非当前平台 / 非 x86_64 的目标后端。
-- 精简由 `scripts/fetch_llvm.sh` + `scripts/trim_clang.sh` + `scripts/trim_lldb.sh` 完成（维护性脚本，不在发布流程）：`fetch_llvm.sh` 下载并解压 LLVM 官方预编译包到 `temp/llvm/`（持久 cache，gitignored），`trim_clang.sh` / `trim_lldb.sh` 从已解压的 LLVM root 各自精简到 `toolchain/clang/` / `toolchain/lldb/`。本方案只约束产出形式与体积目标：精简后 `toolchain/` 解压体积目标控制在 300 MB 量级（实际值待实施时验证，写入 release notes）。
+- 精简由 `scripts/fetch_llvm.sh` + `scripts/trim_llvm.sh` 完成（维护性脚本，不在发布流程）：`fetch_llvm.sh` 下载并解压 LLVM 官方预编译包到 `temp/llvm/`（持久 cache，gitignored），`trim_llvm.sh` 从单个已解压 LLVM root 中同时精简 clang、lldb 与 lldb-dap，原子产出到仓库 `toolchain/llvm/<os>-<arch>/`。合并为一个精简脚本，避免两个脚本共享输出根目录时相互删除产物，并保证 clang 与 LLDB 的版本、来源和目标平台一致。本方案只约束产出形式与体积目标：精简后 `toolchain/` 解压体积目标控制在 300 MB 量级（实际值待实施时验证，写入 release notes）。
 - `toolchain/sysroot/` 为交叉编译 sysroot，按目标平台分子目录。Linux 交叉编译目标基于 musl libc（MIT 许可，自由可分发），由 `scripts/fetch_musl.sh` 下载预构建包到 `temp/musl/`，再由 `scripts/trim_musl.sh` 精简到仓库 `toolchain/sysroot/<os>-<arch>/`（git lfs 管理）；musl 主要用于交叉编译场景，未来 linux 平台原生编译时采用 glibc（由 host 系统提供）。macOS 目标受 Apple SDK 版权限制不可自由分发，需用户自行合法获取。
 - 精简 toolchain 的版本、来源、剥离清单由独立子任务文档承载，不在本文件展开，避免方案膨胀。
 - `feng` 编译器基于自身位置查找 `toolchain/`。
@@ -129,21 +130,21 @@ strategy:
       # 扩展时追加：macos-x64、windows-x64 等
 ```
 
-每个 matrix 项产出一份 `feng-<version>-<os>-<arch>.zip`，互不依赖，可并行。各平台的 toolchain（`clang`/`lldb`/`sysroot`）在**本地维护精简产物**（git lfs 管理位于仓库 `toolchain/<tool>/<os>-<arch>/`），CI checkout 即有，无需构建期精简，只需从仓库目录复制。
+每个 matrix 项产出一份 `feng-<version>-<os>-<arch>.zip`，互不依赖，可并行。各 host 平台的精简 LLVM 产物位于仓库 `toolchain/llvm/<os>-<arch>/`，各目标平台的 sysroot 位于仓库 `toolchain/sysroot/<os>-<arch>/`，均由 git lfs 管理。CI checkout 即有，无需构建期精简，只需从仓库目录复制。
 
 ### 6.3 单平台构建步骤
 
 GitHub Actions 工作流在各 matrix 项中调用 `scripts/release.sh`，产出安装包到 `release/` 目录。步骤如下：
 
-1. checkout 仓库（含 git lfs 管理的 `toolchain/<tool>/<os>-<arch>/` 精简产物）
+1. checkout 仓库（含 git lfs 管理的 `toolchain/llvm/<os>-<arch>/` 与 `toolchain/sysroot/<os>-<arch>/` 精简产物）
 2. 安装构建依赖（macOS 无额外依赖；Linux 需 `build-essential` 等，由 `release.sh` 检测并安装）
 3. 执行 `scripts/build_libunwind.sh`（产出 Feng **编译期**依赖 `extlib/<os>-<arch>/libfeng_unwind.a`，不进分发物；其对象在 `make runtime` 时被合并进 `libfeng_runtime.a`）
 4. 执行 `make cli runtime`（产出 `build/bin/feng`、`build/lib/libfeng_runtime.a`、`build/include/feng_runtime.h` 与 `build/include/feng_runtime_contract.inc`）
-5. 组装分发目录树：`build/bin/feng` 放入 `bin/`，`build/include/` 下的两个头文件放入 `include/`，`build/lib/libfeng_runtime.a` 放入 `lib/<os>-<arch>/`，仓库 `toolchain/<tool>/<os>-<arch>/`（含 `clang`、`lldb`、`sysroot`）各对应平台精简产物放入分发包 `toolchain/<tool>/`，并生成 `VERSION` 文件（写入 git tag 版本号）
+5. 组装分发目录树：`build/bin/feng` 放入 `bin/`，`build/include/` 下的两个头文件放入 `include/`，`build/lib/libfeng_runtime.a` 放入 `lib/<os>-<arch>/`，仓库 `toolchain/llvm/<os>-<arch>/` 对应 host 平台产物放入分发包 `toolchain/llvm/`，需要分发的 `toolchain/sysroot/<target-os>-<target-arch>/` 保持目标平台子目录放入分发包 `toolchain/sysroot/`，并生成 `VERSION` 文件（写入 git tag 版本号）
 6. 打包 zip
 7. 上传到 GitHub Release 对应 tag
 
-toolchain 精简产物在**本地维护**：开发者用 `fetch_llvm.sh` + `trim_clang.sh` + `trim_lldb.sh` + `fetch_musl.sh` + `trim_musl.sh` 在本地产出各平台精简结果，提交到仓库（git lfs）。CI 只需 checkout 后从仓库目录复制，不做任何精简。这样 CI 构建步骤简、快，且不依赖 musl.cc / LLVM Releases 网络可达性。
+toolchain 精简产物在**本地维护**：开发者用 `fetch_llvm.sh` + `trim_llvm.sh` + `fetch_musl.sh` + `trim_musl.sh` 在本地产出各平台精简结果，提交到仓库（git lfs）。CI 只需 checkout 后从仓库目录复制，不做任何精简。这样 CI 构建步骤简、快，且不依赖 musl.cc / LLVM Releases 网络可达性。
 
 ### 6.4 失败与回滚
 
@@ -187,8 +188,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 首版 macos-arm64 发布前需完成的实施项：
 
 - [x] `scripts/fetch_llvm.sh`：下载并解压 LLVM 官方预编译包到 `temp/llvm/`（持久 cache，gitignored，维护性脚本）
-- [x] `scripts/trim_clang.sh`：从 LLVM root 精简 clang，拉取到 `toolchain/clang/<os>-<arch>/`（git lfs 管理）
-- [x] `scripts/trim_lldb.sh`：从 LLVM root 精简 lldb + lldb-dap，拉取到 `toolchain/lldb/<os>-<arch>/`（git lfs 管理）
+- [ ] `scripts/trim_llvm.sh`：从同一 LLVM root 原子精简 clang + lldb + lldb-dap，产出到 `toolchain/llvm/<os>-<arch>/`（git lfs 管理），支持 `macos-arm64`、`linux-x64` 与 `linux-arm64`
 - [x] `scripts/fetch_musl.sh`：从 musl.cc 下载并解压 Linux musl 预构建包到 `temp/musl/`（持久 cache，gitignored，维护性脚本）
 - [x] `scripts/trim_musl.sh`：从 `temp/musl/` 精简 musl sysroot（仅保留 `include/` + `lib/`，排除 GCC 工具链）到 `toolchain/sysroot/<os>-<arch>/`（git lfs 管理）
 - [ ] `scripts/release.sh`：构建入口，编排 `build_libunwind.sh` + `make cli runtime` + 组装分发目录树，产出安装包到 `release/`
