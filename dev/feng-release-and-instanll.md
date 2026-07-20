@@ -226,7 +226,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 本节记录 Linux musl 交叉链接的分发决策；Feng 平台到 Clang 参数的转换以 [feng-build.md](../docs/feng-build.md) 为主规范。
 
-1. **linker**：各 host 分发包使用自身 `toolchain/llvm/bin/lld`，并保留 `bin/ld.lld -> lld`。该可执行文件来自与 `clang` 相同的 LLVM 官方包，因此可在当前 host 上运行并链接 Linux ELF；不使用 musl.cc 预构建包中的 `ld`。
+1. **linker**：各 host 分发包使用自身 `toolchain/llvm/bin/lld`，并保留 `bin/ld.lld -> lld`。该可执行文件来自与 `clang` 相同的 LLVM 官方包，因此可在当前 host 上运行并链接 Linux ELF。driver 传入 `-fuse-ld=lld`，由 Clang 基于自身安装目录定位 `bin/ld.lld`，不传 `--ld-path`，也不使用 musl.cc 预构建包中的 `ld`。
 2. **目标 C 环境与 compiler runtime**：`toolchain/sysroot/<linux-target>/` 使用与目标架构匹配的 musl.cc 配套包，同时保留 musl 头文件、库、动态加载器、musl CRT，以及目标 `crtbegin*` / `crtend*`、`libgcc.a`、`libgcc_eh.a`、`libgcc_s.so*`。仅排除不会在目标程序中被链接且不作为当前 host 工具使用的 GCC / binutils 可执行文件。
 3. **Feng runtime**：交叉目标必须使用 `lib/<目标平台>/libfeng_runtime.a`，不得误用 host runtime。该路径属于本文 §4 已定义的分平台 runtime 布局，不在 sysroot 中重复分发。
 4. **可用性边界**：`lld`、目标 sysroot / compiler runtime 与目标 `libfeng_runtime.a` 必须同时存在并通过链接验收，才能宣称该 Linux 交叉目标可用。

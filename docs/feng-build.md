@@ -59,12 +59,12 @@ Linux musl 交叉链接参数:
 
 - `--sysroot=<feng 可执行文件目录>/../toolchain/sysroot/<目标平台>`:选择目标 musl 头文件、库与 CRT。
 - `--gcc-toolchain=<同一目标 sysroot>`:使 Clang 从 musl.cc 配套目录中定位目标 `crtbegin*` / `crtend*` 与 libgcc 支持运行库。sysroot 内部兼容目录与文件清单由 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) §4 / §9 定义。
-- `--ld-path=<feng 可执行文件目录>/../toolchain/llvm/bin/ld.lld`:显式使用与内置 Clang 同包的 host LLVM `lld`,不允许 Clang 回退到 macOS `/usr/bin/ld` 或 musl.cc 中的非当前 host linker。
+- `-fuse-ld=lld`:选择 LLVM LLD，由 Clang 基于自身安装目录定位同包的 `bin/ld.lld -> lld`。不传 `--ld-path`，也不允许省略该参数后回退到 macOS `/usr/bin/ld` 或其他系统 linker。
 - 以上参数只解决 C/ELF 工具链定位；driver 还必须链接 `<feng 可执行文件目录>/../lib/<目标平台>/libfeng_runtime.a`。`lld`、目标 sysroot / compiler runtime 或目标 Feng runtime 任一缺失时,必须报告目标平台不可用,不得改用 host runtime 或 host linker。
 
 Clang 查找顺序:
 
-1. 已有且非空的 `CC`,作为开发与测试的显式覆盖；指定 Linux musl 交叉目标时,该编译器必须兼容本节定义的 Clang `--target`、`--sysroot`、`--gcc-toolchain` 与 `--ld-path` 参数，否则报告目标平台不可用。
+1. 已有且非空的 `CC`,作为开发与测试的显式覆盖；指定 Linux musl 交叉目标时,该编译器必须兼容本节定义的 Clang `--target`、`--sysroot`、`--gcc-toolchain` 与 `-fuse-ld=lld` 参数，并能定位可在当前 host 运行的 `ld.lld`，否则报告目标平台不可用。
 2. `<feng 可执行文件目录>/../toolchain/llvm/bin/clang`。
 3. `PATH` 中的系统 `cc`,作为源码开发环境或不完整安装的兜底。
 
