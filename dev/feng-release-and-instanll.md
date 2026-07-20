@@ -231,14 +231,14 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 任务：
 
 - [x] `scripts/fetch_llvm.sh`：下载并解压 `macos-arm64`、`linux-x64`、`linux-arm64` 的 LLVM 官方预编译包到 `local/llvm/`。
-- [ ] `scripts/trim_llvm.sh`：从单个 host LLVM root 原子精简 `clang`、`lld` / `ld.lld`、`lldb`、`lldb-dap` 及必要运行依赖，分别产出 `toolchain/llvm/macos-arm64/`、`toolchain/llvm/linux-x64/`、`toolchain/llvm/linux-arm64/`。
+- [x] `scripts/trim_llvm.sh`：从单个 host LLVM root 原子精简 `clang`、`lld` / `ld.lld`、`lldb`、`lldb-dap` 及必要运行依赖，分别产出 `toolchain/llvm/macos-arm64/`、`toolchain/llvm/linux-x64/`、`toolchain/llvm/linux-arm64/`。
 - [x] `scripts/fetch_musl.sh`：从 musl.cc 下载并解压 `linux-x64` 与 `linux-arm64` 配套预构建包到 `temp/musl/`。
-- [ ] `scripts/trim_musl.sh`：产出 `toolchain/sysroot/linux-x64/` 与 `toolchain/sysroot/linux-arm64/`，保留 §4 / §9 规定的 musl、CRT、libgcc 与相对目录关系，排除 GCC / binutils host 可执行工具，并记录来源、版本和上游许可。
+- [x] `scripts/trim_musl.sh`：产出 `toolchain/sysroot/linux-x64/` 与 `toolchain/sysroot/linux-arm64/`，保留 §4 / §9 规定的 musl、CRT、libgcc 与相对目录关系，排除 GCC / binutils host 可执行工具，并记录来源、版本和上游许可。
 
 独立交付与回归门：
 
 - [ ] 三份 LLVM 产物在对应 host 上通过 `clang`、`lld`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构与动态依赖。
-- [ ] 使用精简 Clang / LLD 与两份 sysroot 直接链接最小 C ELF，验证 x64 / arm64 的 CRT、libgcc 和 musl 链路完整，不依赖 Feng CLI。
+- [x] 使用精简 Clang / LLD 与两份 sysroot 直接链接最小 C ELF，验证 x64 / arm64 的 CRT、libgcc 和 musl 链路完整，不依赖 Feng CLI。
 - [ ] `macos-arm64`、`linux-x64`、`linux-arm64` 三个 host 的全量 `make test` 通过。
 
 ### 8.2 阶段 2：统一相对布局与 CLI 路径基础设施

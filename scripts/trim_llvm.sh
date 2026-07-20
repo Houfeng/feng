@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # Trim one official LLVM prebuilt into toolchain/llvm/<os>-<arch>/.
-# clang, lldb and lldb-dap are emitted together so their version, source and
-# host platform cannot drift. The source archive is prepared separately by
-# fetch_llvm.sh; this maintenance script performs no network access.
+# clang, lld, lldb and lldb-dap are emitted together so their version, source
+# and host platform cannot drift. The source archive is prepared separately
+# by fetch_llvm.sh; this maintenance script performs no network access.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -145,7 +145,7 @@ validate_source_tree() {
   local required resource_dir
   [[ -d "${LLVM_ROOT}" ]] || die "LLVM extracted root not found: ${LLVM_ROOT}"
 
-  for required in clang lldb lldb-dap lldb-argdumper; do
+  for required in clang lld ld.lld lldb lldb-dap lldb-argdumper; do
     [[ -f "${LLVM_ROOT}/bin/${required}" ]] || die "required upstream file not found: bin/${required}"
     verify_binary_platform "${LLVM_ROOT}/bin/${required}"
   done
@@ -224,6 +224,13 @@ trim_clang() {
   esac
 }
 
+# Copy the LLD driver and preserve the Unix driver name used by
+# clang -fuse-ld=lld. The official package ships bin/ld.lld -> lld.
+trim_lld() {
+  copy_executable lld
+  ln -s lld "${STAGING_DIR}/bin/ld.lld"
+}
+
 # Copy LLDB executables, its shared library, and optional upstream support data.
 trim_lldb() {
   local library matched=0
@@ -288,6 +295,7 @@ Source: https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VE
 
 Included:
 - bin/clang
+- bin/lld and bin/ld.lld -> lld
 - bin/lldb and bin/lldb-dap
 - bin/lldb-argdumper
 - bin/debugserver (macOS) or bin/lldb-server (Linux)
@@ -307,6 +315,18 @@ Re-sync:
   ./scripts/fetch_llvm.sh --platform ${PLATFORM}
   ./scripts/trim_llvm.sh --platform ${PLATFORM}
 EOF
+
+  if [[ "${PLATFORM}" == linux-* ]]; then
+    cat >>"${STAGING_DIR}/README.md" <<'EOF'
+
+Linux runtime prerequisites:
+- The official LLVM Linux binaries retain their system shared-library
+  dependencies. In particular, liblldb directly requires
+  libpython3.11.so.1.0; it is not included in the official LLVM archive and
+  must be installed by the user together with the other distribution runtime
+  libraries required by the official binaries.
+EOF
+  fi
 }
 
 # Reject broken relative or absolute symlinks in the staged tree.
@@ -327,7 +347,9 @@ verify_native_executables() {
   fi
 
   "${STAGING_DIR}/bin/clang" --version >/dev/null
+  "${STAGING_DIR}/bin/ld.lld" --version >/dev/null
   "${STAGING_DIR}/bin/lldb" --version >/dev/null
+  "${STAGING_DIR}/bin/lldb-dap" --version >/dev/null
 }
 
 # Remove staging state and restore the previous output after an interrupted swap.
@@ -377,6 +399,7 @@ main() {
   require_cmd dirname
   require_cmd file
   require_cmd find
+  require_cmd ln
   require_cmd mktemp
   require_cmd mv
 
@@ -392,6 +415,7 @@ main() {
   echo "==> Output: ${OUTPUT_PARENT}/${PLATFORM}"
 
   trim_clang
+  trim_lld
   trim_lldb
   write_metadata
   verify_symlinks
