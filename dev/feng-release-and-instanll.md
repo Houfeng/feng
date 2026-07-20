@@ -327,10 +327,10 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 任务：
 
-- [ ] 核心编译器直接模式继续保持一次只接受一个 `--platform`；项目级 `feng build` / `feng pack` 对 `target=lib` 支持重复 `--platform=<os>-<arch>`，未指定时只使用 host 平台；`target=bin` 最多接受一个目标平台。
-- [ ] 构建工具按目标平台分别调用核心编译器，将 `gen/`、`mod/`、`assets/`、`bin/`、`lib/`、`obj/`、`ir/` 与 `extlib/` 全部隔离到 `<out>/<目标平台>/` 完整开发构建根；相同平台集合必须递归传递给本地 `target=lib` 依赖。
+- [ ] 核心编译器直接模式继续保持一次只接受一个 `--platform` 和调用方给定的精确 `--out`；直编不自动追加平台目录、不感知多平台循环，也不负责 `.fb` 聚合。项目级 `feng build` / `feng pack` 对 `target=lib` 支持重复 `--platform=<os>-<arch>`，未指定时只使用 host 平台；`target=bin` 最多接受一个目标平台。
+- [ ] `feng build` 按目标平台分别调用核心编译器，每次传入单个 `--platform=<目标平台>` 与 `--out=<项目输出根>/<目标平台>`，将 `gen/`、`mod/`、`assets/`、`bin/`、`lib/`、`obj/`、`ir/` 与 `extlib/` 全部隔离到该平台完整开发构建根；相同平台集合必须递归传递给本地 `target=lib` 依赖。
 - [ ] `feng pack` 校验各平台 `mod/` 的模块集合与公开语义事实等价、普通 `assets/` 内容一致后分别提取一套；平台相关公开 API / ABI 或同包路径普通资源不一致时拒绝合并。
-- [ ] `feng pack` 从每个 `<out>/<目标平台>/lib/` 与 `extlib/` 提取分平台制品，写入包内 `lib/<目标平台>/` 与 `extlib/<目标平台>/`，将实际平台集合写入 `feng.fm.arch`，最终包写入 `<out>/pkg/`；任一平台构建或校验失败时整体失败，不得生成部分平台 `.fb`。
+- [ ] `feng pack` 从每个 `<项目输出根>/<目标平台>/lib/` 与 `extlib/` 提取分平台制品，写入包内 `lib/<目标平台>/` 与 `extlib/<目标平台>/`，将实际平台集合写入 `feng.fm.arch`，最终包写入 `<项目输出根>/pkg/`；任一平台构建或校验失败时整体失败，不得生成部分平台 `.fb`。
 - [ ] Linux host 指定 macOS 目标时明确报告目标不可用，不查找或接受 Apple SDK；平台标识合法不得误报为参数格式错误。
 - [ ] 补充单平台默认值、重复 `--platform`、分平台产物隔离、递归本地依赖、远程包目标制品缺失、公开符号表不一致、`arch` 精确匹配和原子组包回归。
 

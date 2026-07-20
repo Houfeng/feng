@@ -67,7 +67,7 @@ build/
 规则:
 
 - 在一个目标平台的开发构建根内,一个公开模块恰好对应一个 `.ft` 文件；`.fb` 内仍只保留多平台校验后的一份。
-- 开发态路径由目标平台与模块名共同决定: `mylib.api` -> `build/<platform>/mod/mylib/api.ft`。
+- 项目级 `feng build` 将 `build/<platform>` 作为该平台直编的 `--out`,因此开发态路径为 `build/<platform>/mod/mylib/api.ft`；核心直编只按自身收到的 `<out>/mod/mylib/api.ft` 输出,不自行拼接平台目录。
 - `pack` 校验各目标平台 `build/<platform>/mod/**/*.ft` 的模块集合与公开语义事实等价后,从其中提取一套写入 `.fb` 的 `mod/` 目录,不重新建模、不重新序列化。
 
 ### 3.2 本地缓存产物
