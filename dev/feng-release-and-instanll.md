@@ -10,7 +10,7 @@
 
 首版明确覆盖：
 
-- 分发物：单一压缩包 `feng-<os>-<arch>-<version>.zip`
+- 分发物：单一压缩包 `feng-<version>-<os>-<arch>.zip`
 - 平台：`macos-arm64`、`linux-x64`、`linux-arm64`
 - 安装方式：手动解压 + 在线脚本两种
 - toolchain 形态：bundle 精简版（从 LLVM 官方预编译包剥离，仅保留 `clang`、`lldb`、`lldb-dap`，不自建 LLVM）
@@ -39,13 +39,14 @@
 ### 3.1 分发物命名
 
 ```text
-feng-<os>-<arch>-<version>.zip
+feng-<version>-<os>-<arch>.zip
 ```
 
+- `feng` 后紧跟 `<version>`，明确表示该版本为 Feng 自身版本；`<os>-<arch>` 作为目标平台后缀。
 - `<os>` 与 `<arch>` 取值见 [feng-os-arch.md](../docs/feng-os-arch.md)，不在本文件重复定义。
 - `<version>` 与 git tag 一致，形如 `0.1.0`、`0.2.0-rc.1`，不带前缀 `v`
 
-示例：`feng-macos-arm64-0.1.0.zip`
+示例：`feng-0.1.0-macos-arm64.zip`
 
 ### 3.2 平台矩阵
 
@@ -62,10 +63,10 @@ feng-<os>-<arch>-<version>.zip
 
 ## 4 压缩包目录结构
 
-解压后顶层目录名与压缩包主名一致：`feng-<os>-<arch>-<version>/`。
+解压后顶层目录名与压缩包主名一致：`feng-<version>-<os>-<arch>/`。
 
 ```text
-feng-<os>-<arch>-<version>/
+feng-<version>-<os>-<arch>/
 ├── bin/                          # 必须：Feng 可执行
 │   └── feng                      # 编译器 + CLI 主入口（含 lsp / dap 子命令）
 ├── include/                      # 必须：runtime 公共 ABI 头文件（平台无关）
@@ -128,7 +129,7 @@ strategy:
       # 扩展时追加：macos-x64、windows-x64 等
 ```
 
-每个 matrix 项产出一份 `feng-<os>-<arch>-<version>.zip`，互不依赖，可并行。各平台的 toolchain（`clang`/`lldb`/`sysroot`）在**本地维护精简产物**（git lfs 管理位于仓库 `toolchain/<tool>/<os>-<arch>/`），CI checkout 即有，无需构建期精简，只需从仓库目录复制。
+每个 matrix 项产出一份 `feng-<version>-<os>-<arch>.zip`，互不依赖，可并行。各平台的 toolchain（`clang`/`lldb`/`sysroot`）在**本地维护精简产物**（git lfs 管理位于仓库 `toolchain/<tool>/<os>-<arch>/`），CI checkout 即有，无需构建期精简，只需从仓库目录复制。
 
 ### 6.3 单平台构建步骤
 
@@ -157,7 +158,7 @@ toolchain 精简产物在**本地维护**：开发者用 `fetch_llvm.sh` + `trim
 
 步骤：
 
-1. 从 GitHub Releases 下载 `feng-<os>-<arch>-<version>.zip`
+1. 从 GitHub Releases 下载 `feng-<version>-<os>-<arch>.zip`
 2. 解压到任意目录，例如 `~/.feng/`
 3. 将解压目录的 `bin/` 加入 `PATH`（在 shell 启动脚本中追加 `export PATH="<解压目录>/bin:$PATH"`）
 4. 重开 shell 或 `source` 当前会话，`feng --version` 可用即安装成功
