@@ -1,12 +1,12 @@
 # Feng 语言编译与构建规范
 
-本文档说明 feng 编译器与构建工具的职责划分、处理逻辑及调用协议。
+本文档说明 feng 编译器与构建工具的职责划分、处理逻辑及调用协议。CLI 语法以 [feng-cli.md](./feng-cli.md) 为准,平台标识值以 [feng-os-arch.md](./feng-os-arch.md) 为准,分发包内工具链与 sysroot 布局以 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) 为准。
 
 ## 1 职责划分
 
 Feng 将"编译"与"构建"明确分为两个独立层次:
 
-- **编译器（`feng` 直接模式）**: 接受源文件列表、已平铺的包路径列表（`--pkg <.fb路径>`）以及额外原生库参数（`--lib <库路径或系统库名>`）,负责类型检查、代码生成和链接参数收集。编译器不读取任何 `feng.fm`,也不解析依赖树,仅从传入的平铺 `.fb` 与显式 CLI 参数读取依赖输入。
+- **编译器（`feng` 直接模式）**: 接受源文件列表、目标平台、已平铺的包路径列表（`--pkg <.fb路径>`）以及额外原生库参数（`--lib <库路径或系统库名>`）,负责类型检查、代码生成和链接参数收集。编译器不读取任何 `feng.fm`,也不解析依赖树,仅从传入的平铺 `.fb` 与显式 CLI 参数读取依赖输入。
 - **构建工具（`feng build`）**: 读取项目 `feng.fm`,并在解析依赖图时读取依赖包内的 `feng.fm`,按精确版本检查并安装依赖,将依赖图展平为编译器可直接消费的 `--pkg <.fb路径>` 列表,再组装其他编译参数。
 
 两者职责分离的核心原因:编译器只需要足够的信息完成一次编译,不应感知任何 `feng.fm`; 是否存在可用制品,最终都必须以 `.fb` 内实际文件为准。`feng.fm` 由构建工具用于项目组织、依赖解析和打包校验。构建工具可替换,编译器可被第三方构建系统直接驱动。
@@ -18,19 +18,61 @@ Feng 将"编译"与"构建"明确分为两个独立层次:
 编译器接受以下输入:
 
 ```bash
-feng <源文件列表> --target <目标> --out <输出路径> [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target=<目标> [--platform=<os>-<arch>] --out=<输出路径> [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
 - `<源文件列表>`: 需要编译的 `.ff` 源文件,可使用 glob 展开
-- `--target <目标>`: 编译目标,取值为 `bin`（可执行文件）或 `lib`（库,通常会进一步打包为 `.fb` 分发包）; 该参数必须显式指定
+- `--target=<目标>`: 产物类型,取值为 `bin`（可执行文件）或 `lib`（库,通常会进一步打包为 `.fb` 分发包）; 该参数必须显式指定,不表示目标操作系统或 CPU 架构
+- `--platform=<os>-<arch>`: 目标平台,取值以 [feng-os-arch.md](./feng-os-arch.md) 为准; 未指定时使用归一化后的 host 平台
 - `--out <输出路径>`: 指定输出文件路径; 该参数必须显式指定,编译器不假定默认输出位置
 - `--release`: 使用发布模式编译; 未指定时使用调试友好的构建模式。调试友好构建会保留主机编译器的 `-O0` / `-g` 路径,并额外生成稳定 `#line` 与当前产物对应的 `.fd` 调试 sidecar; 项目级 `build`、`run` 与 `pack` 的发布模式行为最终透传到该参数
 - `--pkg <.fb路径>`: 直接指定依赖包的 `.fb` 文件路径,可重复出现
 - `--lib <库路径>`: 直接指定额外链接的原生库路径或系统库名,可重复出现
 
-编译器不接受包名、版本号或搜索路径,不读取任何 `feng.fm`,也不解析依赖树。对 `--pkg` 指定的 `.fb`,编译器只直接读取其中的公开 `.ft` 与对应平台正式库文件（如 `.a`、`.lib`、`.so`、`.dylib`、`.dll`）; `.o` / `.obj` 不属于 `.fb` 的稳定分发接口。当前版本不支持交叉编译,始终以当前平台为目标平台。调试 sidecar `.fd` 只属于本地构建产物,不从 `.fb` 读取,也不进入 `.fb` 分发包。
+编译器不接受包名、版本号或搜索路径,不读取任何 `feng.fm`,也不解析依赖树。对 `--pkg` 指定的 `.fb`,编译器只直接读取其中的公开 `.ft` 与目标平台正式库文件（如 `.a`、`.lib`、`.so`、`.dylib`、`.dll`）; `.o` / `.obj` 不属于 `.fb` 的稳定分发接口。调试 sidecar `.fd` 只属于本地构建产物,不从 `.fb` 读取,也不进入 `.fb` 分发包。
 
-### 2.2 构建模块索引
+### 2.2 目标平台与工具链转换
+
+`--platform` 使用 Feng 自身的 `<os>-<arch>` 标识,不得把 Clang triple 直接暴露为 CLI 值。编译器在调用 Clang 前把目标平台转换为 Clang 的 `--target` 参数；平台标识合法但当前安装缺少对应工具链、runtime 或 sysroot 时,必须报告目标平台不可用。
+
+当前已定义的转换如下:
+
+| Feng 目标平台 | 场景 | Clang `--target` | sysroot |
+|---------------|------|------------------|---------|
+| `macos-arm64` | macOS 目标 | `arm64-apple-macosx` | 合法安装的 macOS SDK |
+| `macos-x64` | macOS 目标 | `x86_64-apple-macosx` | 合法安装的 macOS SDK |
+| `linux-x64` | Linux x64 native | `x86_64-unknown-linux-gnu` | host glibc,不显式传 sysroot |
+| `linux-arm64` | Linux arm64 native | `aarch64-unknown-linux-gnu` | host glibc,不显式传 sysroot |
+| `linux-x64` | 非 Linux x64 host 交叉编译 | `x86_64-unknown-linux-musl` | `toolchain/sysroot/linux-x64/` |
+| `linux-arm64` | 非 Linux arm64 host 交叉编译 | `aarch64-unknown-linux-musl` | `toolchain/sysroot/linux-arm64/` |
+
+Windows 与 32 位平台虽然是 [feng-os-arch.md](./feng-os-arch.md) 中的合法平台标识,但在对应 ABI、runtime 与 sysroot 交付前应报告目标平台不可用,不得临时猜测 Clang triple。
+
+sysroot 规则:
+
+- 一次编译只能选择一个有效 sysroot,不得叠加多个 `-isysroot` / `--sysroot` 并依赖参数覆盖顺序。
+- macOS 目标使用 `-isysroot <macOS SDK>`。使用 Feng 内置 Clang 编译 macOS 目标时,通过 `xcrun --sdk macosx --show-sdk-path` 获取 SDK 路径；macOS SDK 不随 Feng 分发,用户必须安装 Xcode 或 Xcode Command Line Tools。已有 `CC` 显式覆盖与系统 `cc` 回退保持原有行为,不由 Feng 额外注入 SDK。
+- Linux native 使用 host glibc,不传 musl sysroot。
+- Linux 交叉编译使用与目标平台对应的 musl `--sysroot`,同时传入上表中的 musl triple,不调用 `xcrun`,也不再传 macOS SDK 的 `-isysroot`。
+- `--target` 与 `--sysroot` 只解决目标代码生成、系统头文件和系统库定位,不能替代目标平台 linker 与 compiler runtime。完整链接 Linux musl 产物还必须提供目标 ELF linker,以及 `crtbegin` / `crtend` 和编译器运行时库（compiler-rt 或等价 libgcc 支持）；任一项缺失时只能报告目标平台不可用,不得宣称交叉链接成功。具体分发方案由 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) 记录。
+
+Clang 查找顺序:
+
+1. 已有且非空的 `CC`,作为开发与测试的显式覆盖；指定非 host 平台时,该编译器必须兼容 Clang 的 `--target` / `--sysroot` 参数。
+2. `<feng 可执行文件目录>/../toolchain/llvm/bin/clang`。
+3. `PATH` 中的系统 `cc`,作为源码开发环境或不完整安装的兜底。
+
+不增加 `FENG_HOME`、`FENG_TOOLCHAIN` 等环境变量。可执行文件绝对路径解析与 runtime、Clang、`lldb-dap` 的相对定位共用同一套 CLI 公共路径函数,不得分别实现重复的可执行文件定位逻辑。
+
+目标平台同时决定以下输入,不得只转换 Clang 参数:
+
+- 前端、语义分析与 codegen 中所有平台相关行为,包括指针宽度与平台相关基础类型；不得继续用编译 Feng 自身时的 host `sizeof` 代替目标平台信息。
+- Feng runtime 静态库:`<feng 可执行文件目录>/../lib/<目标平台>/`；源码构建保留 `build/lib/` 开发布局回退。
+- `.fb` 正式库:`lib/<目标平台>/`。
+- `.fb` 原生扩展库:`extlib/<目标平台>/`。
+- 交叉编译 sysroot:`toolchain/sysroot/<目标平台>/`。
+
+### 2.3 构建模块索引
 
 编译器启动后,对每个 `--pkg` 指定的 `.fb`:
 
@@ -46,7 +88,7 @@ error: 模块 "net.http" 在包 utils-1.0.0.fb 和 net-2.0.0.fb 中均有定义
 
 模块名冲突不推迟到 `import` 使用点,编译器不提供别名机制;消解冲突是构建工具在依赖解析阶段的责任。
 
-### 2.3 处理 import 声明
+### 2.4 处理 import 声明
 
 遇到 `import net.http;` 时:
 
@@ -56,13 +98,13 @@ error: 模块 "net.http" 在包 utils-1.0.0.fb 和 net-2.0.0.fb 中均有定义
 
 整个过程 O(1),无需遍历搜索。
 
-### 2.4 收集链接信息
+### 2.5 收集链接信息
 
 编译器从源码 / 依赖包自动收集链接参数,并接收用户显式追加的 `--lib` 参数。
 
 runtime 链接边界:
 
-- `target=bin`: 编译器固定补入 runtime 静态库 `build/lib/libfeng_runtime.a`。
+- `target=bin`: 编译器固定补入目标平台对应的 runtime 静态库。
 - `target=lib`: 编译器只生成对象并归档,不链接 runtime,也不在此阶段闭合最终原生依赖。
 
 编译器私有的 runtime contract helper 若存在,统一由这套 runtime 库提供,不再单独产出 intrinsic 静态库。在 Feng 层（如标准库）显式调用这类 helper 时,使用 `@runtime extern func`,不通过公开 C ABI 注解声明内部 helper。
@@ -81,10 +123,10 @@ extern func ssl_connect(fd: int): int;
 
 **来源②: `--pkg` 指定的 `.fb` 包内正式库文件**
 
-编译器根据公开 `.ft` 中的声明事实与 `extern` 元信息,并结合 `.fb` 内实际存在的目录与文件,自动确定当前平台可用的链接目标:
+编译器根据公开 `.ft` 中的声明事实与 `extern` 元信息,并结合 `.fb` 内实际存在的目录与文件,自动确定目标平台可用的链接目标:
 
-- 普通 `open type` / `open func` / `open let` / `open var` 声明 → 链接 `lib/` 下对应平台正式静态库; 当前平台文件名规则固定为 Linux / macOS 使用 `lib<name>.a`,Windows 使用 `<name>.lib`
-- `extern func` 导入声明 → 从当前源码与导入包公开 `.ft` 携带的 `extern` 链接事实中收集原生库名; 导入包 `.ft` 可以携带非公开 `extern` 的链接事实,这类事实只参与链接信息收集,不作为用户可见 API 导入。若某个 `--pkg` 包在 `extlib/<当前平台>/` 下携带了与该库名匹配的主机静态库文件,编译器先提取该静态库并以显式文件路径参与链接; 其余未命中 `extlib/` 的原生库继续转换为底层 C 链接器参数
+- 普通 `open type` / `open func` / `open let` / `open var` 声明 → 链接 `lib/` 下目标平台正式静态库; 目标平台文件名规则固定为 Linux / macOS 使用 `lib<name>.a`,Windows 使用 `<name>.lib`
+- `extern func` 导入声明 → 从当前源码与导入包公开 `.ft` 携带的 `extern` 链接事实中收集原生库名; 导入包 `.ft` 可以携带非公开 `extern` 的链接事实,这类事实只参与链接信息收集,不作为用户可见 API 导入。若某个 `--pkg` 包在 `extlib/<目标平台>/` 下携带了与该库名匹配的目标平台静态库文件,编译器先提取该静态库并以显式文件路径参与链接; 其余未命中 `extlib/` 的原生库继续转换为底层 C 链接器参数
 
 上述自动收集结果与显式 `--lib` 参数最终汇总后统一传递给底层 C 链接器。`--lib` 在 `target=bin` 的最终链接步骤生效; `target=lib` 只生成对象并归档,不会在该阶段闭合原生依赖。
 
@@ -94,7 +136,7 @@ extern func ssl_connect(fd: int): int;
 
 补充边界：除编译器自身 runtime 产物外,编译器不会主动扫描磁盘动态查找 `.a` / `.lib` / `.so` / `.dylib` / `.dll`。`extlib/` 静态库只会在已有 `extern func` 元信息显式要求该库名时参与链接,不会因为目录存在而被自动注入。项目与依赖库输入应通过源码声明和显式 CLI 参数（`--pkg` / `--lib`）提供。
 
-### 2.5 动态库运行时查找策略
+### 2.6 动态库运行时查找策略
 
 动态库的运行时加载遵循以下顺序:
 
@@ -104,11 +146,11 @@ extern func ssl_connect(fd: int): int;
 说明:
 
 - 编译器不定义额外的运行时动态库发现机制。
-- 当编译目标是 `target=bin` 时,核心编译器应先根据当前源码与导入包公开 `.ft` 中携带的 `extern` 链接事实收集库名,仅从传入的平铺 `.fb` 中筛出当前平台且被实际引用的动态库,再释放到可执行文件目录（与可执行文件同目录）。
-- 运行期释放只处理 `.fb/extlib/<当前平台>/` 下与已收集库名精确命中的动态库后缀（Linux `lib<name>.so`、macOS `lib<name>.dylib`、Windows `<name>.dll`）；未命中的动态库、`extlib/` 中的静态库（`.a` / `.lib`）与 `.fb/lib/<平台>/` 中的正式静态库都不参与运行期释放。
-- 若多个依赖包在当前平台提供同名动态库,构建应报错,避免在可执行文件目录中发生静默覆盖。
+- 当编译目标是 `target=bin` 时,核心编译器应先根据当前源码与导入包公开 `.ft` 中携带的 `extern` 链接事实收集库名,仅从传入的平铺 `.fb` 中筛出目标平台且被实际引用的动态库,再释放到可执行文件目录（与可执行文件同目录）。
+- 运行期释放只处理 `.fb/extlib/<目标平台>/` 下与已收集库名精确命中的动态库后缀（Linux `lib<name>.so`、macOS `lib<name>.dylib`、Windows `<name>.dll`）；未命中的动态库、`extlib/` 中的静态库（`.a` / `.lib`）与 `.fb/lib/<平台>/` 中的正式静态库都不参与运行期释放。
+- 若多个依赖包在目标平台提供同名动态库,构建应报错,避免在可执行文件目录中发生静默覆盖。
 
-### 2.6 调试 sidecar 与源码映射
+### 2.7 调试 sidecar 与源码映射
 
 调试产物遵循以下规则:
 
@@ -166,7 +208,7 @@ extern func ssl_connect(fd: int): int;
 将解析完成并展平的依赖图转换为编译器参数:
 
 ```bash
-feng src/*.ff --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.fb
+feng src/*.ff --platform=<host平台> --pkg ~/.feng/cache/utils-1.0.0.fb --pkg ~/.feng/cache/base-2.1.0.fb
 ```
 
 构建工具传入的是**已确定并展平的 `.fb` 路径列表**,不传包名、版本或搜索路径。编译器只认路径,并直接从这些 `.fb` 中读取所需公开 `.ft` 与正式库文件。
@@ -207,12 +249,12 @@ feng.fm (项目)
     └─ 组装参数
            │
            ▼
-feng src/*.ff --pkg a.fb --pkg b.fb
+feng src/*.ff --platform=<host平台> --pkg a.fb --pkg b.fb
     │
     ├─ 扫描 .fb，建模块索引
     ├─ 处理 import，定位 .ft，类型检查
     ├─ 收集 @cdecl 注解，生成链接参数
-    ├─ 从 .fb 读取当前平台实际存在的 lib，生成链接参数
+    ├─ 从 .fb 读取目标平台实际存在的 lib，生成链接参数
     └─ 调用 C 链接器，产出最终二进制
 ```
 
@@ -220,6 +262,9 @@ feng src/*.ff --pkg a.fb --pkg b.fb
 
 - [feng-language.md](./feng-language.md): 语言总体规范，包含模块、类型、函数、C 互操作概要。
 - [feng-package.md](./feng-package.md): `.fb` 包格式、`feng.fm` 清单以及编译器可从 `.fb` 读取哪些包级元信息。
+- [feng-cli.md](./feng-cli.md): CLI 命令、`--target` / `--platform` 语法与用户可见诊断。
+- [feng-os-arch.md](./feng-os-arch.md): Feng 平台标识的唯一值域与归一化规则。
+- [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md): 分发包内 runtime、LLVM 工具链与 sysroot 的安装布局。
 - [feng-symbol-table.md](./feng-symbol-table.md): `.ft` 符号表格式、profile 常量与二进制布局。
 - [feng-interop.md](./feng-interop.md): `@cdecl`/`@stdcall`/`@fastcall` 注解语法与 C 互操作规则。
 - 本文档: 编译器与构建工具的职责划分、参数协议、模块索引机制与链接信息收集规则。

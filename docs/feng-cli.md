@@ -1,6 +1,6 @@
 # Feng CLI 命令与选项
 
-> 本文件仅描述 CLI 的命令、选项与参数，不涉及 CLI 内部处理逻辑。内部构建与编译流程请参考 [feng-build.md](feng-build.md)。
+> 本文件仅描述 CLI 的命令、选项与参数，不涉及 CLI 内部处理逻辑。平台标识值以 [feng-os-arch.md](feng-os-arch.md) 为准，内部构建、工具链选择与平台转换流程以 [feng-build.md](feng-build.md) 为准。
 
 ## 1 设计目标
 
@@ -14,7 +14,7 @@
 基础编译
 
 ```bash
-feng <源文件列表> --target=<目标> --out=<输出路径> [--name=<产物名>] [--release] [--keep-ir] [--pkg=<.fb路径>|--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target=<目标> [--platform=<os>-<arch>] --out=<输出路径> [--name=<产物名>] [--release] [--keep-ir] [--pkg=<.fb路径>|--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
 ```text
@@ -95,8 +95,8 @@ feng dap [--stdio]
 说明:
 
 - `dap` 与 `lsp` 明确分层; `feng dap` 只负责调试协议代理,不承载语言服务能力。
-- 当前首版只支持 macOS 上的 `lldb-dap` 后端,并且 launch 入口只接受 `target=bin` 的本地非 `release` 构建产物。
-- 当前已交付的基线行为是: `feng dap` 先在本地处理 `initialize`,随后在 DAP `launch` 前完成 `.fd` 装载与 binary 指纹校验,只有校验通过才会优先通过 `PATH` 查找并拉起 `lldb-dap`; 若 `PATH` 中未命中,则回退到 `xcrun -f lldb-dap` 解析后的绝对路径再拉起后端。进入代理阶段后,`setBreakpoints` 会把编辑器本地文件路径改写为 `PKG_NAME://<package-relative path>`,`stackTrace` 会把该逻辑 URI 回写为编辑器本地文件路径,并把 backend frame 名称重写为 Feng callable 名称,同时隐藏标记为 runtime / generated helper 的 frame。
+- `feng dap` 支持 macOS 与 Linux 上的 `lldb-dap` 后端,launch 入口只接受 `target=bin` 的本地非 `release` 构建产物。
+- `feng dap` 先在本地处理 `initialize`,随后在 DAP `launch` 前完成 `.fd` 装载与 binary 指纹校验。只有校验通过后才按以下顺序定位并拉起后端:首先使用 `<feng 可执行文件目录>/../toolchain/llvm/bin/lldb-dap`（发行布局见 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md)）,未命中时回退到 `PATH` 中的 `lldb-dap`,macOS 上仍未命中时再回退到 `xcrun -f lldb-dap`。所有候选均不可用时必须报告明确错误,不得静默启动其他调试后端。进入代理阶段后,`setBreakpoints` 会把编辑器本地文件路径改写为 `PKG_NAME://<package-relative path>`,`stackTrace` 会把该逻辑 URI 回写为编辑器本地文件路径,并把 backend frame 名称重写为 Feng callable 名称,同时隐藏标记为 runtime / generated helper 的 frame。
 - `feng dap` 在 DAP `launch` 请求中定位目标 binary 同级的 `.fd`,校验 sidecar 中记录的 binary 内容指纹与当前 binary 是否匹配; 校验失败必须直接拒绝会话。
 - `feng dap` 当前已负责在编辑器本地文件路径与 `PKG_NAME://<package-relative path>` 逻辑源码 URI 之间双向转换,并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame 过滤; `variables` 当前以 `.fd` 中声明的用户变量映射为白名单,会过滤未映射的 backend 临时变量,并优先用用户变量自己的读表达式回读显示值: 对 capture / `self` 等特殊 carrier 使用 `.fd.read_expr`,对普通参数与局部绑定则默认以其 backend lvalue 作为只读回读表达式,避免首次停下时直接暴露不稳定的 backend 原值; 当前 frame 可直接访问的模块级 binding 也需要出现在该 frame 的 `.fd` 变量映射中,这样 backend `Globals` scope 才能显示 Feng 名称; `.fd` 中每个用户变量记录现在都必须携带 `display_type`,数组类型沿用 Feng 语法显示为 `T[]` 或 `T[!]`; 对仍表现为 runtime carrier pointer 的数组 / 字符串变量,顶层变量显示会进一步收敛,其中数组显示为基于 runtime `length` 字段回读得到的 `元素类型[length=N]` 摘要,例如 `string[length=1]`,而字符串应优先显示实际字符串值,而不是沿用数组式的 `string[length=N]` 格式。为避免循环体首行断点命中 `for` 初始化之前的 backend 位置,调试构建还需要把三段式 `for` 的 header / body / update scaffolding 保持在稳定且分离的逻辑源码行上,并把一个 Feng binding 或表达式语句展开出的 `ensure_init` / 临时局部 / variadic 打包数组 / cleanup 注册持续锚定在同一源码行,不能把下一条语句的首个断点地址提前占走。`evaluate` 已支持只读 watch 子集中的 identifier、成员访问、常量整数字面量索引以及简单算术 / 比较表达式的 Feng 名称解析与后端读取改写; `frame_policy` 的 `COLLAPSE` 语义仍在后续子项中。
 - 当前首版不支持 attach、reverse debugging、具有副作用的 evaluate/watch,也不支持函数调用、赋值、非常量索引或其他未落入只读 watch 子集的 Feng 表达式求值。
@@ -113,6 +113,8 @@ feng dap [--stdio]
 
 ## 2.4 顶层直编补充选项
 
+- `--target=<bin|lib>`: 指定产物类型,`bin` 为可执行文件,`lib` 为库；该参数不表示目标操作系统或 CPU 架构。
+- `--platform=<os>-<arch>`: 指定目标平台,取值必须是 [feng-os-arch.md](feng-os-arch.md) 平台矩阵中的规范标识；未指定时使用归一化后的 host 平台。不接受 `aarch64`、`x86_64`、`amd64`、`darwin` 等别名。平台标识合法但当前安装缺少对应工具链、runtime 或 sysroot 时,应报告目标平台不可用,不得误报为参数格式错误。
 - `--name=<产物名>`: 指定本次编译的产物基名。当前 `bin` 目标会落到 `<out>/bin/<name>`；未来 `lib`/`pkg` 目标也复用同一命名语义，而不是再引入只针对可执行文件的选项。
 - `--keep-ir`: 固定保留中间 IR 产物。当前实现会把生成的 C 文件保留在 `<out>/ir/c/` 下面，便于编译器开发与问题排查；未指定时，构建开始前会先清理旧的 `ir/c` 产物，前端 / 语义 / codegen 失败不会留下陈旧 C 文件，只有 host C 编译阶段失败时才保留本次生成的 C 代码用于排查；成功构建后仍会把已变空的 `<out>/ir/c` 与 `<out>/ir` 一并清理掉。
 - `--pkg=<.fb路径>` / `--pkg <.fb路径>`: 注册一个外部 `.fb` 依赖包,可重复出现。直编模式只接受具体 `.fb` 路径,不接受包名、版本号或搜索路径,也不解析依赖树。
@@ -372,6 +374,7 @@ Project:
 
 Compile:
   feng <files...> [--target=<bin|lib>]
+                  [--platform=<os>-<arch>]
                   [--out=<dir>]
                   [--name=<artifact>]
                   [--release]

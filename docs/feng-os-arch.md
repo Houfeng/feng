@@ -1,7 +1,7 @@
 # Feng OS 与 Arch 标识规范
 
 > 本文件是 Feng 体系内"平台标识"（os + arch）的主规范,定义枚举值、适用范围与归一化映射。
-> 其他文档（[feng-package.md](./feng-package.md) 的 `arch` 字段、[feng-cli.md](./feng-cli.md) 的平台相关参数、[feng-std-platform.md](./feng-std-platform.md) 的 API 行为、[../dev/feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) 的分发物命名)仅引用本规范,不重复定义。
+> 其他文档（[feng-package.md](./feng-package.md) 的 `arch` 字段、[feng-cli.md](./feng-cli.md) 的 `--platform` 参数、[feng-build.md](./feng-build.md) 的工具链转换、[feng-std-platform.md](./feng-std-platform.md) 的 API 行为、[../dev/feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) 的分发物命名)仅引用本规范,不重复定义。
 
 ## 1 设计目标
 
@@ -13,9 +13,9 @@
 本规范适用于:
 
 - **目录命名**:`extlib/<os>-<arch>/`、`.fb` 包内 `lib/<os>-<arch>/` 与 `extlib/<os>-<arch>/`、`std/extlib/<os>-<arch>/` 等。
-- **分发物命名**:`feng-<os>-<arch>-<version>.zip`。
+- **分发物命名**:`feng-<version>-<os>-<arch>.zip`。
 - **包标识字段**:`feng.fm` 的 `arch` 字段取值。
-- **CLI 参数**(未来交叉编译):平台标识参数(参数名待定,见 §7)。
+- **CLI 参数**:`--platform=<os>-<arch>` 的平台标识取值(见 §7)。
 - **构建脚本归一化目标**:`scripts/` 下各构建脚本从 `uname` 检测后归一化到的目标值。
 
 **不适用**:
@@ -46,14 +46,14 @@
 
 ## 5 平台矩阵
 
-`<os>-<arch>` 组合如下,首版实际产出仅 `macos-arm64`,其余为规范预留:
+`<os>-<arch>` 组合如下。CLI 值是否合法由本表决定；对应工具链、runtime 与 sysroot 是否已经交付是独立的能力判断:
 
 | 平台标识 | 首版产出 | 备注 |
 |----------|---------|------|
 | `macos-arm64` | 是 | Apple Silicon Mac |
 | `macos-x64` | 否 | Intel Mac |
-| `linux-x64` | 否 | glibc 基线待定 |
-| `linux-arm64` | 否 | |
+| `linux-x64` | 是 | glibc native；musl 交叉编译 sysroot |
+| `linux-arm64` | 是 | glibc native；musl 交叉编译 sysroot |
 | `linux-x86` | 否 | 32 位,低优先级 |
 | `linux-arm` | 否 | 32 位,低优先级 |
 | `windows-x64` | 否 | |
@@ -79,11 +79,13 @@
 
 当前 `feng` CLI 的 `--target` 参数已用于**编译目标类型**(`bin` / `lib`),语义为"产物形态",不是"目标平台"。
 
-未来引入交叉编译时,**平台标识参数不得复用 `--target`**,应使用独立参数名(候选:`--platform`、`--target-triple`、`--os` / `--arch` 分开等,具体由 [feng-cli.md](./feng-cli.md) 在交叉编译实现时定义)。
+目标平台使用独立的 `--platform=<os>-<arch>` 参数；CLI 语法与默认行为由 [feng-cli.md](./feng-cli.md) 定义，Feng 平台到 Clang target triple / sysroot 的转换由 [feng-build.md](./feng-build.md) 定义。
 
 约束:
-- 平台标识参数的取值必须使用本规范 §3 / §4 的 os / arch 枚举,组合为 `<os>-<arch>` 形式(如 `--platform linux-arm64`)。
+- `--platform` 的取值必须使用本规范 §3 / §4 的 os / arch 枚举,并且是 §5 定义的 `<os>-<arch>` 组合(如 `--platform=linux-arm64`)。
 - 不引入 `aarch64` / `x86_64` / `amd64` / `darwin` 等本规范之外的别名。
+- 未指定 `--platform` 时使用归一化后的 host 平台。
+- 平台标识合法但当前安装缺少对应工具链、runtime 或 sysroot 时,应报告“目标平台不可用”,不得误报为参数格式错误。
 
 ## 8 归一化映射
 
