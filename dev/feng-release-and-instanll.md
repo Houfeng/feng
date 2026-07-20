@@ -218,22 +218,103 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - `linux-arm64` host：支持 native 编译 / 运行 `linux-arm64` 程序，并支持交叉编译 `linux-x64` 程序。
 - 本 TODO 不要求产出 `macos-x64` 程序，也不支持在 Linux host 上交叉编译 macOS 程序。平台标识以 [feng-os-arch.md](../docs/feng-os-arch.md) 为准，CLI 与工具链转换分别以 [feng-cli.md](../docs/feng-cli.md) 和 [feng-build.md](../docs/feng-build.md) 为准。
 
-实施项：
+实施按以下阶段顺序进行。每个阶段都必须产出可单独 Review 和交付的稳定检查点；本阶段任务、专项验收与三个 host 的全量 `make test` 均通过后，才能进入下一阶段。`make test` 是仓库全量回归入口，已包含单元测试、UBSan、smoke、CLI、std、fcts 与性能约束检查。
 
-- [x] `scripts/fetch_llvm.sh`：下载并解压 `macos-arm64`、`linux-x64`、`linux-arm64` 的 LLVM 官方预编译包到 `local/llvm/`（持久 cache，gitignored，维护性脚本）。
-- [ ] `scripts/trim_llvm.sh`：从单个 host LLVM root 原子精简 `clang` + `lld` / `ld.lld` + `lldb` + `lldb-dap` 及必要运行依赖，分别产出 `toolchain/llvm/macos-arm64/`、`toolchain/llvm/linux-x64/`、`toolchain/llvm/linux-arm64/`（git lfs 管理）；每份产物必须在对应 host 上通过 `clang`、`lld`、`lldb`、`lldb-dap` 启动验收。
-- [x] `scripts/fetch_musl.sh`：从 musl.cc 下载并解压 `linux-x64` 与 `linux-arm64` 配套预构建包到 `temp/musl/`（持久 cache，gitignored，维护性脚本）。
-- [ ] `scripts/trim_musl.sh`：分别产出 `toolchain/sysroot/linux-x64/` 与 `toolchain/sysroot/linux-arm64/`，保留 musl 头文件、库、动态加载器、musl CRT、目标 `crtbegin*` / `crtend*` 与 libgcc 支持运行库，保持 §4 规定的 Clang GCC toolchain 相对目录关系，排除 GCC、`ld` 等 host 可执行工具，并记录 musl 与 GCC runtime 的来源、版本和上游许可。
-- [ ] Makefile 本地布局：编译 Feng CLI 时创建 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>` 与 `build/toolchain/sysroot -> ../../toolchain/sysroot`，使 `build/bin/feng` 与发行包使用相同的 `../toolchain/` 相对定位；`make clean` 必须随 `build/` 一起清理软链接。
-- [ ] CLI 公共路径能力：将 Feng 可执行文件绝对路径解析与相对路径组装收敛到 `src/cli/common.*`，runtime、Clang 与 `lldb-dap` 共用，不增加工具链环境变量或重复实现。
-- [ ] CLI 目标平台与 driver：实现 `--platform`、host 默认值、Clang 查找顺序与目标 triple 转换；macOS native 使用 `xcrun` 获取 SDK 并传入 `-isysroot`；任一 host 交叉编译 Linux 时传入对应 `--target`、`--sysroot`、`--gcc-toolchain` 与 `-fuse-ld=lld`，链接 `lib/<目标平台>/libfeng_runtime.a`，不得误用 macOS SDK、host linker 或 host runtime；Linux host 上的 macOS 目标必须报告不可用。
-- [ ] DAP 跨平台集成：`feng dap` 在 macOS 与 Linux 按 [feng-cli.md](../docs/feng-cli.md) 规定定位并启动 `lldb-dap`；Linux 验收环境需安装 §5.2 规定的 `libpython3.11.so.1.0`，但 Feng 本身不使用 Python 脚本。
-- [ ] 分平台 runtime：产出并验证 `macos-arm64`、`linux-x64`、`linux-arm64` 的 `libfeng_runtime.a`。`feng-<version>-macos-arm64.zip` 按 §4 的 `lib/<目标平台>/` 布局同时放入三份 runtime；`feng-<version>-linux-x64.zip` 与 `feng-<version>-linux-arm64.zip` 都放入两份 Linux runtime。三份分发包都放入 `linux-x64` / `linux-arm64` 两份 sysroot，不得通过改名复用其他平台 runtime。
-- [ ] `scripts/release.sh`：按上述能力矩阵组装 `feng-<version>-<os>-<arch>.zip`，将 host LLVM、所需目标 runtime 与 sysroot 放入约定相对位置，不在发布流程中临时下载或精简工具链。
-- [ ] `.github/workflows/release.yml`：tag / `workflow_dispatch` 触发三个 host 构建，产出 `feng-<version>-macos-arm64.zip`、`feng-<version>-linux-x64.zip`、`feng-<version>-linux-arm64.zip`；工作流必须使 macOS 分发包能组装两份 Linux 目标 runtime，并使两份 Linux 分发包都能组装另一 Linux 架构的 runtime，不得把 host runtime 复制后改名为目标 runtime。
-- [ ] `scripts/install.sh`：在线安装脚本按 [feng-os-arch.md](../docs/feng-os-arch.md) 归一化当前 host，下载对应 zip 到系统临时目录，原子解压并配置 `PATH`，失败时不留半成品。
-- [ ] native 发布验收：在 `macos-arm64`、`linux-x64`、`linux-arm64` 干净环境分别验证 `feng --version` 与 `VERSION` 一致，`feng build` / `run` / `lsp` / `dap` 可用，当前 host 的 Clang / LLD / LLDB 可启动，且安装失败时无残留。
-- [ ] Linux 交叉编译验收：分别在干净 `macos-arm64`、`linux-x64`、`linux-arm64` host 使用对应发行包产出能力矩阵要求的 Linux ELF，检查 ELF 架构、interpreter 与链接依赖，再将每份产物交给对应架构的 Linux musl 环境实际运行；`macos-arm64 → linux-x64`、`macos-arm64 → linux-arm64`、`linux-x64 → linux-arm64`、`linux-arm64 → linux-x64` 四条路径都通过才能宣称 Linux 交叉编译可用。
+### 8.1 阶段 1：可独立验证的精简工具链
+
+本阶段只交付精简脚本和工具链产物，不改变 Feng CLI 的编译器选择行为。
+
+任务：
+
+- [x] `scripts/fetch_llvm.sh`：下载并解压 `macos-arm64`、`linux-x64`、`linux-arm64` 的 LLVM 官方预编译包到 `local/llvm/`。
+- [ ] `scripts/trim_llvm.sh`：从单个 host LLVM root 原子精简 `clang`、`lld` / `ld.lld`、`lldb`、`lldb-dap` 及必要运行依赖，分别产出 `toolchain/llvm/macos-arm64/`、`toolchain/llvm/linux-x64/`、`toolchain/llvm/linux-arm64/`。
+- [x] `scripts/fetch_musl.sh`：从 musl.cc 下载并解压 `linux-x64` 与 `linux-arm64` 配套预构建包到 `temp/musl/`。
+- [ ] `scripts/trim_musl.sh`：产出 `toolchain/sysroot/linux-x64/` 与 `toolchain/sysroot/linux-arm64/`，保留 §4 / §9 规定的 musl、CRT、libgcc 与相对目录关系，排除 GCC / binutils host 可执行工具，并记录来源、版本和上游许可。
+
+独立交付与回归门：
+
+- [ ] 三份 LLVM 产物在对应 host 上通过 `clang`、`lld`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构与动态依赖。
+- [ ] 使用精简 Clang / LLD 与两份 sysroot 直接链接最小 C ELF，验证 x64 / arm64 的 CRT、libgcc 和 musl 链路完整，不依赖 Feng CLI。
+- [ ] `macos-arm64`、`linux-x64`、`linux-arm64` 三个 host 的全量 `make test` 通过。
+
+### 8.2 阶段 2：统一相对布局与 CLI 路径基础设施
+
+本阶段只收敛路径和开发布局，不切换现有 driver 的编译器选择策略。
+
+任务：
+
+- [ ] Makefile 在编译 Feng CLI 时创建 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>` 与 `build/toolchain/sysroot -> ../../toolchain/sysroot`，`make clean` 随 `build/` 清理两个软链接。
+- [ ] 将 Feng 可执行文件绝对路径解析与相对路径组装收敛到 `src/cli/common.*`，runtime、Clang 与 `lldb-dap` 共用，不增加工具链环境变量或重复实现。
+- [ ] 为可执行文件定位、相对目录组装、软链接布局与缺失路径诊断补充独立回归。
+
+独立交付与回归门：
+
+- [ ] `build/bin/feng` 可通过 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 观察到与发行包一致的布局，同时现有编译、runtime 与 DAP 行为不变。
+- [ ] 三个 host 的全量 `make test` 通过。
+
+### 8.3 阶段 3：三平台 native 编译
+
+本阶段交付三个 host 的 native 编译能力；非 native Linux 目标在阶段 4 交付前必须明确报告目标不可用。
+
+任务：
+
+- [ ] 实现 `--platform`、host 默认值、平台参数校验、Clang 查找顺序和 native target triple 转换。
+- [ ] macOS native 使用 `xcrun` 获取 SDK 并传入 `-isysroot`；Linux native 使用 host glibc，不传 musl sysroot。
+- [ ] 分别产出并定位 `macos-arm64`、`linux-x64`、`linux-arm64` 的 native `libfeng_runtime.a`，不得以 host runtime 改名替代其他平台 runtime。
+- [ ] 补充 `--platform` 诊断、native Clang / SDK / runtime 定位和三平台 native 编译回归。
+
+独立交付与回归门：
+
+- [ ] 在三个 host 上分别使用 `build/bin/feng` 完成 native `feng build` / `run` / `lsp` 验收，并验证 bundled toolchain 存在、显式 `CC` 覆盖和回退路径的行为。
+- [ ] 三个 host 的全量 `make test` 通过。
+
+### 8.4 阶段 4：Linux 全矩阵交叉编译
+
+本阶段交付 macOS 到两个 Linux 目标及两个 Linux host 之间的交叉编译，不包含 Linux 到 macOS。
+
+任务：
+
+- [ ] 在任一 host 交叉编译 Linux 时传入对应 `--target`、`--sysroot`、`--gcc-toolchain` 与 `-fuse-ld=lld`，不得误用 macOS SDK 或 host linker。
+- [ ] 建立两个 Linux 目标 `libfeng_runtime.a` 的可复现产出与交付流程，交叉编译时只链接 `lib/<目标平台>/libfeng_runtime.a`。
+- [ ] Linux host 上的 macOS 目标报告目标不可用，不查找、下载或接受 Apple SDK。
+- [ ] 补充 sysroot / compiler runtime / target runtime / LLD 缺失诊断，以及四条交叉路径的回归。
+
+独立交付与回归门：
+
+- [ ] 分别验证 `macos-arm64 → linux-x64`、`macos-arm64 → linux-arm64`、`linux-x64 → linux-arm64`、`linux-arm64 → linux-x64`；检查 ELF 架构、interpreter 和链接依赖，并在对应架构的 Linux musl 环境实际运行。
+- [ ] 三个 host 的全量 `make test` 通过。
+
+### 8.5 阶段 5：macOS / Linux DAP
+
+本阶段只交付调试后端的跨平台定位、启动与诊断，不与发布脚本变更混合。
+
+任务：
+
+- [ ] `feng dap` 在 macOS 与 Linux 按 [feng-cli.md](../docs/feng-cli.md) 规定共用阶段 2 的路径能力，依次定位并启动 bundled、`PATH` 与 macOS `xcrun` 提供的 `lldb-dap`。
+- [ ] Linux 缺失 `libpython3.11.so.1.0` 时保留动态加载器真实错误并给出可操作诊断；Feng 本身不使用 Python 脚本。
+- [ ] 补充 macOS / Linux 后端定位、启动、缺失依赖和 DAP 基础会话回归。
+
+独立交付与回归门：
+
+- [ ] 三个 host 分别完成 `feng dap` 真实后端启动与基础调试会话；Linux 验收环境已安装 §5.2 规定的 libpython。
+- [ ] 三个 host 的全量 `make test` 通过。
+
+### 8.6 阶段 6：分发、CI 与安装
+
+本阶段在前五个阶段的可验收产物之上组装分发包，不在发布流程中临时下载、精简或修补工具链。
+
+任务：
+
+- [ ] `scripts/release.sh` 按能力矩阵组装 `feng-<version>-<os>-<arch>.zip`，将 host LLVM、所需目标 runtime 与两份 Linux sysroot 放入约定相对位置。
+- [ ] `feng-<version>-macos-arm64.zip` 包含三份目标 runtime；两份 Linux zip 都包含两份 Linux runtime；三份 zip 都包含 `linux-x64` / `linux-arm64` sysroot，不得通过改名复用其他平台 runtime。
+- [ ] `.github/workflows/release.yml` 由 tag / `workflow_dispatch` 触发三个 host 构建，能够正确聚合各目标 runtime，并产出三份规范命名的 zip。
+- [ ] `scripts/install.sh` 按 [feng-os-arch.md](../docs/feng-os-arch.md) 归一化当前 host，下载对应 zip，原子解压并配置 `PATH`，失败时不留半成品。
+
+独立交付与回归门：
+
+- [ ] 在三个干净 host 上分别从 zip 安装，验证 `feng --version` / `VERSION`、native `build` / `run` / `lsp` / `dap`、bundled Clang / LLD / LLDB，并复验阶段 4 的四条交叉编译路径。
+- [ ] 验证 bundled toolchain 存在 / 缺失时的定位与诊断，以及安装失败无残留。
+- [ ] 三个 host 的全量 `make test` 通过。
 
 ## 9 Linux musl 交叉链接已定方案
 
