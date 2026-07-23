@@ -1,11 +1,13 @@
 # std.text RegExp 正则表达式实现方案
 
+> 完整平台标识与 `std/extlib/<platform>/` 目录取值以 [../docs/feng-os-arch.md](../docs/feng-os-arch.md) 为准。
+
 ## 1 背景
 
 ### 1.1 PCRE2 静态库（已就绪）
 
 `third_party/PCRE2/` 已 vendor PCRE2 10.45 源码，配置为 8-bit 静态库 + Unicode/UTF 支持，
-构建产物为 `std/extlib/<os>-<arch>/libfeng_std_pcre2.a`。
+构建产物为 `std/extlib/<platform>/libfeng_std_pcre2.a`。
 
 当前编译宏：
 - `PCRE2_CODE_UNIT_WIDTH=8` — 固定 8-bit code unit，与 Feng string 的 UTF-8 字节表示一致

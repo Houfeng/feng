@@ -14,7 +14,7 @@
 基础编译
 
 ```bash
-feng <源文件列表> --target=<目标> [--platform=<os>-<arch>] [--sysroot=<路径>] --out=<输出目录> [--name=<产物名>] [--release] [--keep-ir] [--pkg=<.fb路径>|--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target=<目标> --platform=<platform> [--sysroot=<路径>] --out=<输出目录> [--name=<产物名>] [--release] [--keep-ir] [--pkg=<.fb路径>|--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
 ```text
@@ -105,14 +105,14 @@ feng dap [--stdio]
 ## 2.3 --out 说明
 
 - 顶层直编模式的 `--out` 指定**本次单平台编译的精确输出根目录**,直编不会自动追加目标平台目录，也不感知多平台目录编排；其 `ir/`、`gen/`、`bin/`、`lib/`、`mod/` 与 `obj/` 均直接位于该 `--out` 目录下。
-- 项目级 `feng build` 从 `feng.fm.out` 取得项目输出根（默认 `./build`）,再为每个目标平台构造 `<项目输出根>/<目标平台>`，并将该目录作为对应直编调用的 `--out`。因此项目开发态产物表现为 `build/<目标平台>/ir/`、`gen/`、`bin/`、`lib/`、`mod/` 与 `obj/`。
-- `assets/` 与 `extlib/` 由读取 `feng.fm` 的项目构建层 staging 到同一 `<项目输出根>/<目标平台>/`；直编模式不读取 `[assets]`，也不负责建立这两个目录。
+- 项目级 `feng build` 从 `feng.fm.out` 取得项目输出根（默认 `./build`），再为每个完整目标平台构造 `<项目输出根>/<platform>`，并将该目录作为对应直编调用的 `--out`。因此项目开发态产物表现为 `build/linux-x64-gnu/ir/`、`build/linux-x64-musl/gen/` 等。
+- `assets/` 与 `extlib/` 由读取 `feng.fm` 的项目构建层 staging 到同一 `<项目输出根>/<platform>/`；直编模式不读取 `[assets]`，也不负责建立这两个目录。
 - `feng pack` 从各目标平台开发目录提取并校验所需内容，将最终单一 `.fb` 写入 `<项目输出根>/pkg/`；直编模式不生成 `.fb`。
 
 ## 2.4 顶层直编补充选项
 
 - `--target=<bin|lib>`: 指定产物类型,`bin` 为可执行文件,`lib` 为库；该参数不表示目标操作系统或 CPU 架构。
-- `--platform=<os>-<arch>`: 指定本次核心编译的唯一目标平台,取值必须是 [feng-os-arch.md](feng-os-arch.md) 平台矩阵中的规范标识；未指定时使用归一化后的 host 平台。顶层直编模式不允许重复该选项；项目级 `feng build` / `feng pack` 的多平台编排规则见 §4.2 / §4.6。不接受 `aarch64`、`x86_64`、`amd64`、`darwin` 等别名。平台标识合法但当前安装缺少本次目标与产物类型实际需要的工具链、runtime、sysroot 或 SDK 时,应报告目标平台不可用,不得误报为参数格式错误。
+- `--platform=<platform>`: 必须显式指定本次核心直编的唯一完整目标平台，取值必须是 [feng-os-arch.md](feng-os-arch.md) 平台矩阵中的规范标识。顶层直编不根据 host、sysroot 或产物类型推断平台，不自动展开多平台，也不允许重复该选项。Linux 必须写成 `linux-x64-gnu`、`linux-x64-musl`、`linux-arm64-gnu` 或 `linux-arm64-musl`，不接受不完整的 `linux-x64` / `linux-arm64`。项目级 `feng build` / `feng pack` 的多平台编排规则见 §4.2 / §4.6。
 - `--sysroot=<路径>`: 为本次唯一目标平台显式指定目标 sysroot。该选项不下载、复制或授权任何 SDK；用户负责所提供路径及其内容的许可合规。macOS 目标传给 Clang 时转换为 `-isysroot`，Linux 目标转换为 `--sysroot`。完整默认值与平台规则见 [feng-build.md](feng-build.md)。
 - `--name=<产物名>`: 指定本次直编的产物基名。`bin` 目标落到 `<out>/bin/<name>`，`lib` 目标落到 `<out>/lib/<平台静态库名>`；该选项不负责 `.fb` 命名。
 - `--keep-ir`: 固定保留本次直编的中间 IR 产物。当前实现会把生成的 C 文件保留在 `<out>/ir/c/` 下面，便于编译器开发与问题排查；未指定时，构建开始前会先清理该直编输出根中的旧 `ir/c` 产物，前端 / 语义 / codegen 失败不会留下陈旧 C 文件，只有目标 C 编译阶段失败时才保留本次生成的 C 代码用于排查；成功构建后仍会把已变空的 `ir/c` 与 `ir` 一并清理掉。
@@ -162,24 +162,24 @@ feng init [<name>] [--target=<bin|lib>]
 用法:
 
 ```text
-feng build [<path>] [--release] [--platform=<os>-<arch>]... [--sysroot=<路径>]
+feng build [<path>] [--release] [--platform=<platform>] [--sysroot=<路径>]
 ```
 
 选项:
 
 - `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 - `--release`: 以发布模式构建,透传给当前项目编译器,并同样用于递归构建本地 `target: "lib"` 依赖。
-- `--platform=<os>-<arch>`: 指定目标平台,可重复出现；未指定时只构建归一化后的 host 平台。`target=bin` 项目最多指定一个平台；`target=lib` 项目可指定一个或多个平台。每个值都必须是 [feng-os-arch.md](feng-os-arch.md) 中的规范标识，标识合法但当前 host 缺少本次目标与产物类型实际需要的工具链、runtime、sysroot 或 SDK 时报告目标平台不可用。
-- `--sysroot=<路径>`: 显式指定目标 sysroot，只允许当前命令恰好构建一个目标平台时使用；与多个 `--platform` 同时出现必须报歧义错误。需要为多个平台使用不同 sysroot 时，应分别执行多次单平台 `feng build`，再由 `feng pack` 汇聚已有构件。
+- `--platform=<platform>`: 指定本次项目构建的唯一完整目标平台，不能重复。指定时，`build` 只根据该参数值调用一次核心编译器；未指定时，按项目 `feng.fm.platform` 声明的顺序逐个平台调用核心编译器。若命令行未指定且项目未声明 `platform`，必须报错。每个值都必须是 [feng-os-arch.md](feng-os-arch.md) 中的完整规范标识；不得从 host 或 `--sysroot` 推断 GNU / musl。
+- `--sysroot=<路径>`: 显式指定目标 sysroot，只允许本次命令最终构建一个目标平台时使用。未指定 `--platform` 且 `feng.fm.platform` 声明多个平台时，必须报歧义错误；需要为多个平台使用不同 sysroot 时，应分别执行多次带单一 `--platform` 的 `feng build`，再由 `feng pack` 汇聚已有构件。
 
 说明:
 
-- `build` 从 `feng.fm` 中读取源文件列表、编译目标、输出路径等配置；除项目级 `--release`、`--platform` 与单目标 `--sysroot` 外,不接受编译器级别的细粒度选项。
+- `build` 从 `feng.fm` 中读取源文件列表、编译目标、输出路径等配置；除项目级 `--release`、`--platform` 与单目标 `--sysroot` 外，不接受编译器级别的细粒度选项。
 - `build` 总是先对同一 `feng.fm` 执行 `feng deps install`;默认情况下,已安装的依赖不会重新安装。
 - `build` 负责解析依赖树并展平为 `--pkg <.fb路径>` 列表,再调用核心编译器。
-- `target=lib` 指定多个 `--platform` 时,`build` 按平台分别调用一次核心编译器；每次只传一个 `--platform`,并将 `<项目输出根>/<该平台>` 作为该次直编的 `--out`。项目构建层再把原生依赖与普通资源 staging 到同一平台目录；相同平台列表继续传递给递归本地 `target: "lib"` 依赖。
+- 未指定 `--platform` 时，`build` 按 `feng.fm.platform` 中声明的平台集合分别调用一次核心编译器；指定时只调用一次。每次直编只传一个 `--platform`，并将 `<项目输出根>/<platform>` 作为该次直编的 `--out`。项目构建层再把原生依赖与普通资源 staging 到同一平台目录；同一目标平台集合继续传递给递归本地 `target: "lib"` 依赖。
 - 多平台 `target=lib` 构建在各平台目录分别产生 `mod/**/*.ft`；`feng pack` 校验其公开接口事实一致后只向 `.fb` 写入一套。完整编排与产物规则见 [feng-build.md](feng-build.md)，`.fb` 结构见 [feng-package.md](feng-package.md)。
-- `build` 读取 `feng.fm` 的 `[assets]` 配置：`target=bin` 时复制到 `<项目输出根>/<目标平台>/bin/` 下的可执行文件同级目标目录；`target=lib` 时普通目标目录先复制到 `<项目输出根>/<目标平台>/assets/` staging，后续 `pack` 从各目标平台目录校验并提取一份写入 `.fb` 内对应目标目录；若目标目录精确为 `extlib`，则直接复制当前目标平台对应的内容到 `<项目输出根>/<目标平台>/extlib/`，不额外插入 `assets` 目录层。
+- `build` 读取 `feng.fm` 的 `[assets]` 配置：`target=bin` 时复制到 `<项目输出根>/<platform>/bin/` 下的可执行文件同级目标目录；`target=lib` 时普通目标目录先复制到 `<项目输出根>/<platform>/assets/` staging，后续 `pack` 从各目标平台目录校验并提取一份写入 `.fb` 内对应目标目录；若目标目录精确为 `extlib`，则直接复制当前目标平台对应的内容到 `<项目输出根>/<platform>/extlib/`，不额外插入 `assets` 目录层。
 - 当构建目标是 `target=bin` 时,核心编译器会先根据当前源码与导入包公开 `.ft` 中的 `extern func` 元信息解析原生库名；若某个依赖包在 `.fb/extlib/<当前平台>/` 下携带了匹配该库名的主机静态库（Linux / macOS `lib<name>.a`,Windows `<name>.lib`）,则先提取并参与链接；若携带了匹配该库名的动态库（Linux `lib<name>.so`,macOS `lib<name>.dylib`,Windows `<name>.dll`）,则仅这些已命中的动态库会被释放到可执行文件同目录,其余未命中的 `extlib` 制品不参与。
 - 未指定 `--release` 时使用调试友好的构建模式; 指定 `--release` 时改用发布优化模式。
 
@@ -251,20 +251,20 @@ feng clean [<path>]
 用法:
 
 ```text
-feng pack [<path>] [--platform=<os>-<arch>]...
+feng pack [<path>] [--platform=<platform>]...
 ```
 
 选项:
 
 - `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
-- `--platform=<os>-<arch>`: 指定需要写入同一 `.fb` 的目标平台,可重复出现；未指定时只打包归一化后的 host 平台。`pack` 只校验平台标识与对应构件目录，不因当前 host 无法编译或运行该平台而拒绝组包。
+- `--platform=<platform>`: 指定需要写入同一 `.fb` 的完整目标平台，可重复出现；未指定时按项目 `feng.fm.platform` 声明的平台集合打包已有 release 构件。`pack` 只校验平台标识与对应构件目录，不因当前 host 无法编译或运行该平台而拒绝组包。
 
 说明:
 
-- `pack` 只读取此前由一次或多次 `feng build --release --platform=<目标平台>` 生成并汇聚到 `<项目输出根>/<目标平台>/` 的已有构件，不重新编译当前项目或递归本地依赖，也不接受 `--release` / `--sysroot`。
+- `pack` 只读取此前由按 `feng.fm.platform` 构建的 `feng build --release`，或一次、多次显式 `feng build --release --platform=<platform>` 生成并汇聚到 `<项目输出根>/<platform>/` 的已有构件，不重新编译当前项目或递归本地依赖，也不接受 `--release` / `--sysroot`。
 - `<path>` 用于读取项目 `feng.fm`、输出根、包名和版本；`--platform` 只选择本次必须存在并写入 `.fb` 的平台目录。
 - 若项目的 `target` 不是 `lib`,报错退出。
-- `pack` 从每个 `<项目输出根>/<目标平台>/` 提取 `mod/`、`lib/`、`extlib/` 与 `assets/`：各平台 `mod/` 的公开语义事实和普通 `assets/` 内容必须一致,校验后各提取一套写入 `.fb/mod/` 与配置的资源目录；`lib/` 和 `extlib/` 则按目标平台分别写入 `.fb/lib/<目标平台>/` 与 `.fb/extlib/<目标平台>/`。`feng.fm.arch` 必须与实际写入的平台集合完全一致。任一请求平台构件缺失或校验失败时不得生成部分平台 `.fb`。
+- `pack` 从每个 `<项目输出根>/<platform>/` 提取 `mod/`、`lib/`、`extlib/` 与 `assets/`：各平台 `mod/` 的公开语义事实和普通 `assets/` 内容必须一致,校验后各提取一套写入 `.fb/mod/` 与配置的资源目录；`lib/` 和 `extlib/` 则按目标平台分别写入 `.fb/lib/<platform>/` 与 `.fb/extlib/<platform>/`。分发包 `feng.fm.platform` 必须与实际写入的平台集合完全一致。任一请求平台构件缺失或校验失败时不得生成部分平台 `.fb`。
 
 ## 5 依赖管理命令
 
@@ -369,16 +369,16 @@ Usage:
 
 Project:
   feng init       [<name>] [--target=<bin|lib>]
-  feng build      [<path>] [--release] [--platform=<os>-<arch>]... [--sysroot=<path>]
+  feng build      [<path>] [--release] [--platform=<platform>] [--sysroot=<path>]
   feng check      [<path>] [--format=<text|json>]
   feng run        [<path>] [--release] [-- <program-args>...]
   feng clean      [<path>]
-  feng pack       [<path>] [--platform=<os>-<arch>]...
+  feng pack       [<path>] [--platform=<platform>]...
   feng deps       <add|remove|install> ...
 
 Compile:
   feng <files...> [--target=<bin|lib>]
-                  [--platform=<os>-<arch>]
+                  --platform=<platform>
                   [--sysroot=<path>]
                   [--out=<dir>]
                   [--name=<artifact>]

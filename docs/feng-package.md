@@ -30,20 +30,24 @@ feng 编译器在消费 `.fb` 时,只直接读取 `mod/` 下的公开 `.ft` 与�
 │   └── .../*.ft
 │
 ├── lib/                     // 可选①：自有 ABI 静态库（abi 含 feng 时存在）
-│   ├── linux-x64/
+│   ├── linux-x64-gnu/
 │   │   └── libxxx.a
-│   ├── windows-x64/
-│   │   └── xxx.lib
+│   ├── linux-x64-musl/
+│   │   └── libxxx.a
+│   ├── linux-arm64-gnu/
+│   │   └── libxxx.a
+│   ├── linux-arm64-musl/
+│   │   └── libxxx.a
 │   └── macos-arm64/
 │       └── libxxx.a
 │
 ├── extlib/                  // 可选②：依赖型原生库（按需随包分发；静态/动态均可）
-│   ├── linux-x64/
+│   ├── linux-x64-gnu/
 │   │   ├── libdep.a
 │   │   └── libdep.so
-│   ├── windows-x64/
-│   │   ├── dep.lib
-│   │   └── dep.dll
+│   ├── linux-x64-musl/
+│   │   ├── libdep.a
+│   │   └── libdep.so
 │   └── macos-arm64/
 │       ├── libdep.a
 │       └── libdep.dylib
@@ -65,10 +69,10 @@ feng 编译器在消费 `.fb` 时,只直接读取 `mod/` 下的公开 `.ft` 与�
 - 字段值当前统一使用双引号字符串; 节名与键名均为不带引号的标识符。空行允许存在。以 `#` 开头的独立注释行会被忽略。
 - `target` 字段声明构建目标,取值为 `bin`（可执行文件）或 `lib`（分发包）; 该字段为**开发阶段必填**,由构建工具读取后转换为编译器 `--target` 参数; 分发包内的 `feng.fm` 不含此字段。
 - `src` 字段指定源文件根目录; 省略时默认为 `src/`; 仅开发阶段有效,不出现在分发包内。
-- `out` 字段指定输出根目录; 省略时默认为 `build/`; `target=bin` 时最终文件位于 `<out>/<platform>/bin/<name>`,`target=lib` 时各平台开发产物位于 `<out>/<platform>/`,执行 `feng pack` 后最终包位于 `<out>/pkg/<name>-<version>.fb`; 仅开发阶段有效,不出现在分发包内。
+- `out` 字段指定输出根目录；省略时默认为 `build/`；`target=bin` 时最终文件位于 `<out>/<platform>/bin/<name>`，`target=lib` 时各完整平台开发产物位于 `<out>/<platform>/`，执行 `feng pack` 后最终包位于 `<out>/pkg/<name>-<version>.fb`；仅开发阶段有效，不出现在分发包内。
 - `[assets]` 节声明开发态资源复制配置; 省略时为空,仅开发阶段有效,不出现在分发包内。节内每个键是目标目录（相对可执行文件目录或 `.fb` 根目录）,每个值是源目录路径（相对 `feng.fm` 所在目录）且不得为空字符串。所有开发态资源均按目标平台隔离:`target=bin` 时将指定资源目录复制到 `<out>/<platform>/bin/` 下的可执行文件同级目标目录；`target=lib` 时普通目标目录复制到 `<out>/<platform>/assets/` staging,但当目标目录精确为 `extlib` 时,只将当前平台内容复制到 `<out>/<platform>/extlib/`,不额外插入 `assets/` 目录层。`pack` 从各平台 staging 校验并提取资源写入 `.fb`；构建工具写回 `feng.fm` 时保留 `[assets]` 的声明顺序。
-- `arch` 字段声明分发包内实际携带制品的平台/架构集合,采用逗号分隔的标识列表（例如 `linux-x64,windows-x64,macos-arm64`），取值见 [feng-os-arch.md](./feng-os-arch.md); 该字段由构建工具在打包时根据本次请求且全部构建成功的平台填写,必须与包内实际平台目录集合完全一致,开发项目可省略; 它用于构建、依赖管理和打包校验,不是编译器判定包内制品是否存在的依据。
-- `abi` 字段声明本包携带哪些能力层,当前仅支持 `feng`; `feng` 表示存在 `lib/` 目录。该字段必须与包内实际目录结构一致,声明与实际不符则该包非法; 开发项目若不作为包发布可省略此字段; 它用于构建、依赖管理和打包校验,不是编译器选择读取层的依据。
+- `platform` 字段采用逗号分隔的完整平台标识列表（例如 `macos-arm64,linux-x64-gnu,linux-x64-musl,linux-arm64-gnu,linux-arm64-musl`），取值见 [feng-os-arch.md](./feng-os-arch.md)，Linux 项必须包含 GNU / musl 后缀。开发项目中，该字段声明 `feng build` 未显式指定 `--platform` 时依次构建的平台集合；字段省略时，调用方必须显式指定一个 `--platform`。分发包内，该字段记录实际携带制品的平台集合，必须与包内实际平台目录完全一致。
+- `abi` 字段声明本包携带哪些 Feng 能力层，当前仅支持 `feng`；`feng` 表示存在 `lib/` 目录。该字段与完整平台标识中的 Linux C library ABI 无关，不得写入 `gnu` / `musl` 或用于选择 libc。
 - `[dependencies]` 节表示当前包对其他 feng 包的直接依赖; 同包内模块之间的引用不属于依赖声明。
 - `[dependencies]` 节中的每个键表示一个直接依赖包名,同一依赖包名不得重复出现。开发态项目中,值允许是精确版本字符串或本地路径字符串: 以 `./`、`../` 或 `/` 开头的值视为本地路径依赖,其他值视为精确版本依赖。分发包内的 `feng.fm` 不允许保留本地路径写法,所有直接依赖都必须写回为精确版本字符串。
 - 本地路径依赖可指向三类目标: `.fb` 文件、包含 `feng.fm` 的目录,或显式 `feng.fm` 文件路径。若值是本地路径,则依赖键必须与目标包的 `package.name` 一致; 不一致时构建工具报错。
@@ -86,6 +90,7 @@ version: "0.1.0"
 target: "bin"
 src: "src/"
 out: "build/"
+platform: "macos-arm64"
 
 [dependencies]
 base: "1.0.0"
@@ -100,6 +105,7 @@ version: "0.1.0"
 target: "bin"
 src: "src/"
 out: "build/"
+platform: "macos-arm64"
 
 [dependencies]
 base: "1.0.0"
@@ -115,7 +121,7 @@ url: "https://packages.example.com/feng"
 [package]
 name: "mylib"
 version: "1.0.0"
-arch: "linux-x64,windows-x64,macos-arm64"
+platform: "macos-arm64,linux-x64-gnu,linux-x64-musl,linux-arm64-gnu,linux-arm64-musl"
 abi: "feng"
 
 [dependencies]
@@ -145,12 +151,12 @@ base: "1.0.0"
 
 ### 6.1 发布方流程
 
-1. 发布方通过一次或多次项目级 `feng build --release --platform=<目标平台>` 确定并构建目标平台集合；不同平台目录可以由不同 host / CI 任务生成后汇聚。CLI 语法、显式 `--sysroot` 和平台可用性诊断以 [feng-cli.md](./feng-cli.md) 与 [feng-build.md](./feng-build.md) 为准
+1. 发布方在开发态 `feng.fm.platform` 中声明目标平台集合后，通过项目级 `feng build --release` 依次构建；也可通过一次或多次 `feng build --release --platform=<platform>` 分别构建单个平台，不同平台目录可以由不同 host / CI 任务生成后汇聚。CLI 语法、显式 `--sysroot` 和平台可用性诊断以 [feng-cli.md](./feng-cli.md) 与 [feng-build.md](./feng-build.md) 为准
 2. 每次构建对一个或多个目标平台分别扫描全部 `.ff` 源文件并完成生成、语义分析、代码生成与归档；该平台的 `gen/`、`mod/`、`assets/`、对象、中间产物、正式静态库与原生依赖全部写入独立的 `<out>/<platform>/` 开发构建根（若 `abi` 含 `feng`,正式静态库位于 `<out>/<platform>/lib/`）
-3. 全部平台构件汇聚到同一项目输出根后，发布方执行 `feng pack --platform=<目标平台>...`；`pack` 不重新编译，也不接受 `--sysroot`
+3. 全部平台构件汇聚到同一项目输出根后，发布方执行 `feng pack`；需要收窄已有构件集合时可重复传入 `--platform=<platform>`，`pack` 不重新编译，也不接受 `--sysroot`
 4. `pack` 校验各 `<out>/<platform>/mod/` 的模块集合与公开语义事实等价,并校验各平台准备写入相同包路径的普通 `assets/` 内容一致；分别提取一套作为包内 `mod/` 与普通资源
 5. `pack` 分平台汇总 `<out>/<platform>/lib/` 正式库以及 `<out>/<platform>/extlib/` 中由 `extern func` 链接事实要求的原生库,分别写入包内 `lib/<platform>/` 与 `extlib/<platform>/`
-6. 生成 `feng.fm`,将实际平台集合填写到 `arch`,并将上述提取结果打包为 `<out>/pkg/<name>-<version>.fb`
+6. 生成 `feng.fm`,将实际平台集合填写到 `platform`,并将上述提取结果打包为 `<out>/pkg/<name>-<version>.fb`
 7. 任一请求平台构件缺失、公开符号表一致性校验或制品完整性校验失败时,发布整体失败,不得生成部分平台 `.fb`
 
 ### 6.2 feng 使用方流程
@@ -170,7 +176,7 @@ base: "1.0.0"
 ## 7 约束规则
 
 - `mod/` 下的公开 `.ft` 文件属编译器自动生成的接口描述产物,不得手动修改; 一旦其内容与包内真实实现不一致,后续编译、链接或运行行为均不再受语言规范保证,可能表现为编译失败、链接失败或不可预期的运行时异常
-- `arch` 与 `abi` 字段属于分发元信息; 若字段存在,则必须与包内实际平台目录和能力层目录一致: 声明了 `feng` 则 `lib/` 必须存在,`arch` 中列出的平台也必须在包内具有对应制品,否则该包非法
+- `platform` 与 `abi` 字段属于分发元信息; 若字段存在,则必须与包内实际平台目录和能力层目录一致: 声明了 `feng` 则 `lib/` 必须存在,`platform` 中列出的平台也必须在包内具有对应制品,否则该包非法
 - 多平台 `.fb` 仍然只允许一套 `mod/**/*.ft`; 各平台实现对应的公开模块集合与公开语义事实必须等价。若公开 API 或 ABI 事实随平台不同,当前包格式不能把这些实现合并为一个 `.fb`,构建工具必须拒绝打包
 - 多平台 `.fb` 的普通复制资源不分平台；各开发平台 staging 中映射到同一包路径的普通资源必须逐文件一致,否则构建工具必须拒绝打包。原生依赖使用 `extlib/<platform>/`,允许各平台内容不同
 - feng 编译器只消费公开 `.ft` 与实际存在的正式库文件,不读取 `feng.fm`; `feng.fm` 用于构建、依赖管理与打包校验

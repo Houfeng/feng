@@ -4,6 +4,7 @@
 > 目标原则：**最小改动、架构合理、面向未来**。  
 > 分四个 Phase 实现，每个 Phase 结束后做一次全量回归（`make test`）。
 > 当前状态：步骤 0–13 已全部完成，相关 codegen / CLI / pack / link 回归与全量 `make test` 已通过。
+> `.fb` 当前正式结构与完整平台目录以 [../docs/feng-package.md](../docs/feng-package.md) 和 [../docs/feng-os-arch.md](../docs/feng-os-arch.md) 为准；本文只记录既有交付过程。
 
 ## 1. 背景与目标
 
@@ -36,7 +37,7 @@
 - `FengSymbolDeclView` 包含完整签名（params、return\_type、members、declared\_specs）
 - `FengSymbolTypeView` 可 1:1 映射到 `FengTypeRef`（named/pointer/array）
 - `import_public_names()` 接受 `FengSemanticModule*`，内外模块处理逻辑完全一致
-- 外部包 `.fb` 结构：`feng.fm`（元信息）+ `mod/*.ft`（符号）+ `lib/<os>-<arch>/lib*.a`（静态库）
+- 外部包 `.fb` 结构：`feng.fm`（元信息）+ `mod/*.ft`（符号）+ `lib/<platform>/lib*.a`（静态库）
 
 ## 3. 显式范围外
 
