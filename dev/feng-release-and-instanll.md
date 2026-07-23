@@ -246,9 +246,13 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 独立交付与回归门：
 
-- [ ] 三份 LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构与动态依赖。
+- [x] `macos-arm64` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构与动态依赖。
+- [ ] `linux-x64` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构与动态依赖。
+- [ ] `linux-arm64` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构与动态依赖。
 - [x] 使用精简 Clang / LLD 与两份 sysroot 直接链接最小 C ELF，验证 x64 / arm64 的 CRT、libgcc 和 musl 链路完整，不依赖 Feng CLI。
-- [ ] 三个 host 的全量 `make test` 通过。
+- [x] `macos-arm64` host 的全量 `make test` 在 Codex 沙箱外通过。
+- [ ] `linux-x64` host 的全量 `make test` 通过。
+- [ ] `linux-arm64` host 的全量 `make test` 通过。
 
 ### 8.2 统一相对布局与 CLI 路径基础设施
 
