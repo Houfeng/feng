@@ -2,9 +2,10 @@
 set -euo pipefail
 
 # Trim one official LLVM prebuilt into toolchain/llvm/<os>-<arch>/.
-# clang, lld, lldb and lldb-dap are emitted together so their version, source
-# and host platform cannot drift. The source archive is prepared separately
-# by fetch_llvm.sh; this maintenance script performs no network access.
+# clang, lld, llvm-ar, llvm-ranlib, lldb and lldb-dap are emitted together so
+# their version, source and host platform cannot drift. The source archive is
+# prepared separately by fetch_llvm.sh; this maintenance script performs no
+# network access.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -145,7 +146,7 @@ validate_source_tree() {
   local required resource_dir
   [[ -d "${LLVM_ROOT}" ]] || die "LLVM extracted root not found: ${LLVM_ROOT}"
 
-  for required in clang lld ld.lld lldb lldb-dap lldb-argdumper; do
+  for required in clang lld ld.lld llvm-ar llvm-ranlib lldb lldb-dap lldb-argdumper; do
     [[ -f "${LLVM_ROOT}/bin/${required}" ]] || die "required upstream file not found: bin/${required}"
     verify_binary_platform "${LLVM_ROOT}/bin/${required}"
   done
@@ -231,6 +232,14 @@ trim_lld() {
   ln -s lld "${STAGING_DIR}/bin/ld.lld"
 }
 
+# Copy LLVM's archive tool and preserve the upstream llvm-ranlib multicall
+# entry. The official packages expose llvm-ranlib as a symlink to llvm-ar, so
+# this adds no duplicate executable while retaining the standard tool name.
+trim_archive_tools() {
+  copy_executable llvm-ar
+  ln -s llvm-ar "${STAGING_DIR}/bin/llvm-ranlib"
+}
+
 # Copy LLDB executables, its shared library, and optional upstream support data.
 trim_lldb() {
   local library matched=0
@@ -296,6 +305,7 @@ Source: https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VE
 Included:
 - bin/clang
 - bin/lld and bin/ld.lld -> lld
+- bin/llvm-ar and bin/llvm-ranlib -> llvm-ar
 - bin/lldb and bin/lldb-dap
 - bin/lldb-argdumper
 - bin/debugserver (macOS) or bin/lldb-server (Linux)
@@ -348,6 +358,8 @@ verify_native_executables() {
 
   "${STAGING_DIR}/bin/clang" --version >/dev/null
   "${STAGING_DIR}/bin/ld.lld" --version >/dev/null
+  "${STAGING_DIR}/bin/llvm-ar" --version >/dev/null
+  "${STAGING_DIR}/bin/llvm-ranlib" --version >/dev/null
   "${STAGING_DIR}/bin/lldb" --version >/dev/null
   "${STAGING_DIR}/bin/lldb-dap" --version >/dev/null
 }
@@ -416,6 +428,7 @@ main() {
 
   trim_clang
   trim_lld
+  trim_archive_tools
   trim_lldb
   write_metadata
   verify_symlinks

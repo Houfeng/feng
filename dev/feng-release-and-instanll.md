@@ -240,7 +240,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 - [x] `scripts/fetch_llvm.sh`：下载并解压 `macos-arm64`、`linux-x64`、`linux-arm64` 的 LLVM 官方预编译包到 `local/llvm/`。
 - [x] `scripts/trim_llvm.sh`：从单个 host LLVM root 原子精简 `clang`、`lld` / `ld.lld`、`lldb`、`lldb-dap` 及必要运行依赖，分别产出 `toolchain/llvm/macos-arm64/`、`toolchain/llvm/linux-x64/`、`toolchain/llvm/linux-arm64/`。
-- [ ] 扩展 `scripts/trim_llvm.sh`，从同一官方包保留 `llvm-ar` 与 `llvm-ranlib`，供 §9 的跨目标静态归档使用；不得引入 host `ar` 处理其他目标对象的隐式依赖。
+- [x] 扩展 `scripts/trim_llvm.sh`，从同一官方包保留 `llvm-ar` 与 `llvm-ranlib`，供 §9 的跨目标静态归档使用；不得引入 host `ar` 处理其他目标对象的隐式依赖。
 - [x] `scripts/fetch_musl.sh`：从 musl.cc 下载并解压 `linux-x64` 与 `linux-arm64` 配套预构建包到 `temp/musl/`。
 - [x] `scripts/trim_musl.sh`：产出 `toolchain/sysroot/linux-x64/` 与 `toolchain/sysroot/linux-arm64/`，保留 §4 / §10 规定的 musl、CRT、libgcc 与相对目录关系，排除 GCC / binutils host 可执行工具，并记录来源、版本和上游许可。
 
