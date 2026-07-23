@@ -6,7 +6,7 @@
 
 Feng 将"编译"与"构建"明确分为两个独立层次:
 
-- **编译器（`feng` 直接模式）**: 接受源文件列表、目标平台、已平铺的包路径列表（`--pkg <.fb路径>`）以及额外原生库参数（`--lib <库路径或系统库名>`）,负责类型检查、代码生成和链接参数收集。编译器不读取任何 `feng.fm`,也不解析依赖树,仅从传入的平铺 `.fb` 与显式 CLI 参数读取依赖输入。
+- **编译器（`feng` 直接模式）**: 接受源文件列表、目标平台、可选的显式 `--sysroot`、已平铺的包路径列表（`--pkg <.fb路径>`）以及额外原生库参数（`--lib <库路径或系统库名>`）,负责类型检查、代码生成和链接参数收集。编译器不读取任何 `feng.fm`,也不解析依赖树,仅从传入的平铺 `.fb` 与显式 CLI 参数读取依赖输入。
 - **构建工具（`feng build`）**: 读取项目 `feng.fm`,并在解析依赖图时读取依赖包内的 `feng.fm`,按精确版本检查并安装依赖,将依赖图展平为编译器可直接消费的 `--pkg <.fb路径>` 列表,再组装其他编译参数。对 `target=lib` 的多平台构建,构建工具负责按目标平台分别调用核心编译器并汇总分平台产物；核心编译器本身始终只处理一个目标平台。
 
 两者职责分离的核心原因:编译器只需要足够的信息完成一次编译,不应感知任何 `feng.fm`; 是否存在可用制品,最终都必须以 `.fb` 内实际文件为准。`feng.fm` 由构建工具用于项目组织、依赖解析和打包校验。构建工具可替换,编译器可被第三方构建系统直接驱动。
@@ -18,14 +18,15 @@ Feng 将"编译"与"构建"明确分为两个独立层次:
 编译器接受以下输入:
 
 ```bash
-feng <源文件列表> --target=<目标> [--platform=<os>-<arch>] --out=<输出目录> [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target=<目标> [--platform=<os>-<arch>] [--sysroot=<路径>] --out=<输出目录> [--release] [--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
 - `<源文件列表>`: 需要编译的 `.ff` 源文件,可使用 glob 展开
 - `--target=<目标>`: 产物类型,取值为 `bin`（可执行文件）或 `lib`（库,通常会进一步打包为 `.fb` 分发包）; 该参数必须显式指定,不表示目标操作系统或 CPU 架构
 - `--platform=<os>-<arch>`: 本次核心编译的唯一目标平台,取值以 [feng-os-arch.md](./feng-os-arch.md) 为准; 未指定时使用归一化后的 host 平台。直接模式不允许重复该选项；多平台库构建由项目级 `feng build` / `feng pack` 编排
+- `--sysroot=<路径>`: 可选地为本次唯一目标平台显式指定 sysroot；不下载、复制或授权该路径中的任何 SDK，用户负责其输入的许可合规
 - `--out <输出目录>`: 指定本次单平台直编的精确输出根；该参数必须显式指定,编译器不假定默认输出位置,也不自动追加目标平台目录
-- `--release`: 使用发布模式编译; 未指定时使用调试友好的构建模式。调试友好构建会保留主机编译器的 `-O0` / `-g` 路径,并额外生成稳定 `#line` 与当前产物对应的 `.fd` 调试 sidecar; 项目级 `build`、`run` 与 `pack` 的发布模式行为最终透传到该参数
+- `--release`: 使用发布模式编译; 未指定时使用调试友好的构建模式。调试友好构建会保留主机编译器的 `-O0` / `-g` 路径,并额外生成稳定 `#line` 与当前产物对应的 `.fd` 调试 sidecar; 项目级 `build` 与 `run` 的发布模式行为最终透传到该参数
 - `--pkg <.fb路径>`: 直接指定依赖包的 `.fb` 文件路径,可重复出现
 - `--lib <库路径>`: 直接指定额外链接的原生库路径或系统库名,可重复出现
 
@@ -33,14 +34,15 @@ feng <源文件列表> --target=<目标> [--platform=<os>-<arch>] --out=<输出�
 
 ### 2.2 目标平台与工具链转换
 
-`--platform` 使用 Feng 自身的 `<os>-<arch>` 标识,不得把 Clang triple 直接暴露为 CLI 值。编译器在调用 Clang 前把目标平台转换为 Clang 的 `--target` 参数；平台标识合法但当前安装缺少对应工具链、runtime 或 sysroot 时,必须报告目标平台不可用。
+`--platform` 使用 Feng 自身的 `<os>-<arch>` 标识,不得把 Clang triple 直接暴露为 CLI 值。编译器在调用 Clang 前把目标平台转换为 Clang 的 `--target` 参数；平台标识合法但当前安装缺少本次目标与产物类型实际需要的工具链、runtime、sysroot 或 SDK 时,必须报告目标平台不可用。
 
 当前已定义的转换如下:
 
 | Feng 目标平台 | 场景 | Clang `--target` | sysroot |
 |---------------|------|------------------|---------|
-| `macos-arm64` | macOS 目标 | `arm64-apple-macosx` | 合法安装的 macOS SDK |
-| `macos-x64` | macOS 目标 | `x86_64-apple-macosx` | 合法安装的 macOS SDK |
+| `macos-arm64` | `target=bin`，macOS host | `arm64-apple-macosx` | 合法安装的 macOS SDK |
+| `macos-arm64` | `target=lib`，任意支持 host | `arm64-apple-macosx` | 默认 SDK-free；可由用户显式指定 |
+| `macos-x64` | 尚未交付 | — | — |
 | `linux-x64` | Linux x64 native | `x86_64-unknown-linux-gnu` | host glibc,不显式传 sysroot |
 | `linux-arm64` | Linux arm64 native | `aarch64-unknown-linux-gnu` | host glibc,不显式传 sysroot |
 | `linux-x64` | 非 Linux x64 host 交叉编译 | `x86_64-unknown-linux-musl` | `toolchain/sysroot/linux-x64/` |
@@ -50,15 +52,16 @@ Windows 与 32 位平台虽然是 [feng-os-arch.md](./feng-os-arch.md) 中的合
 
 sysroot 规则:
 
-- 一次编译只能选择一个有效 sysroot,不得叠加多个 `-isysroot` / `--sysroot` 并依赖参数覆盖顺序。
-- macOS 目标使用 `-isysroot <macOS SDK>`。使用 Feng 内置 Clang 编译 macOS 目标时,通过 `xcrun --sdk macosx --show-sdk-path` 获取 SDK 路径；macOS SDK 不随 Feng 分发,用户必须安装 Xcode 或 Xcode Command Line Tools。已有 `CC` 显式覆盖与系统 `cc` 回退保持原有行为,不由 Feng 额外注入 SDK。
+- 一次核心编译只能选择一个有效 sysroot,不得叠加多个 `-isysroot` / `--sysroot` 并依赖参数覆盖顺序。项目级 `feng build --sysroot=<路径>` 只允许目标平台集合恰好包含一个平台；多个平台需要不同 sysroot 时必须分多次单平台构建。
+- `target=bin` 的 macOS native 最终链接使用 `-isysroot <macOS SDK>`。未显式传入 `--sysroot` 时,通过 `xcrun --sdk macosx --show-sdk-path` 获取 SDK 路径；macOS SDK 不随 Feng 分发,用户必须安装 Xcode 或 Xcode Command Line Tools。
+- `target=lib --platform=macos-arm64` 默认走 SDK-free 路径：生成 C 只使用 Feng / LLVM 合法分发的自包含编译头闭包，Clang 只执行 Mach-O 对象编译，随后由 bundled `llvm-ar` / `llvm-ranlib` 归档，不进入最终链接。用户显式传入 `--sysroot=<路径>` 时转换为 Clang `-isysroot <路径>`；Feng 不下载、复制或判断该 sysroot 的授权来源。
 - Linux native 使用 host glibc,不传 musl sysroot。
-- Linux 交叉编译使用与目标平台对应的 musl `--sysroot`,同时传入上表中的 musl triple,不调用 `xcrun`,也不再传 macOS SDK 的 `-isysroot`。Linux musl 交叉链接的分发组成以 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) §9 为准。
+- Linux 交叉编译未显式指定 `--sysroot` 时，使用与目标平台对应的 bundled musl sysroot，同时传入上表中的 musl triple，不调用 `xcrun`。Linux musl 交叉链接的分发组成以 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) §10 为准。
 
 Linux musl 交叉链接参数:
 
-- `--sysroot=<feng 可执行文件目录>/../toolchain/sysroot/<目标平台>`:选择目标 musl 头文件、库与 CRT。
-- `--gcc-toolchain=<同一目标 sysroot>`:使 Clang 从 musl.cc 配套目录中定位目标 `crtbegin*` / `crtend*` 与 libgcc 支持运行库。sysroot 内部兼容目录与文件清单由 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) §4 / §9 定义。
+- `--sysroot=<feng 可执行文件目录>/../toolchain/sysroot/<目标平台>`:未提供用户显式覆盖时，选择 bundled 目标 musl 头文件、库与 CRT。
+- `--gcc-toolchain=<同一目标 sysroot>`:使 Clang 从 musl.cc 配套目录中定位目标 `crtbegin*` / `crtend*` 与 libgcc 支持运行库。sysroot 内部兼容目录与文件清单由 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) §4 / §10 定义。
 - `-fuse-ld=lld`:选择 LLVM LLD，由 Clang 基于自身安装目录定位同包的 `bin/ld.lld -> lld`。不传 `--ld-path`，也不允许省略该参数后回退到 macOS `/usr/bin/ld` 或其他系统 linker。
 - 以上参数只解决 C/ELF 工具链定位；driver 还必须链接 `<feng 可执行文件目录>/../lib/<目标平台>/libfeng_runtime.a`。`lld`、目标 sysroot / compiler runtime 或目标 Feng runtime 任一缺失时,必须报告目标平台不可用,不得改用 host runtime 或 host linker。
 
@@ -73,7 +76,7 @@ Clang 查找顺序:
 目标平台同时决定以下输入,不得只转换 Clang 参数:
 
 - 前端、语义分析与 codegen 中所有平台相关行为,包括指针宽度与平台相关基础类型；不得继续用编译 Feng 自身时的 host `sizeof` 代替目标平台信息。
-- Feng runtime 静态库:`<feng 可执行文件目录>/../lib/<目标平台>/`；源码开发构建从 `build/<目标平台>/bin/feng` 按同样相对关系定位 `build/<目标平台>/lib/`。
+- `target=bin` 使用的 Feng runtime 静态库：发行包从 `<feng 可执行文件目录>/../lib/<目标平台>/` 定位；源码开发的 native 构建兼容现有 `build/bin/feng` 与 `build/lib/` 布局。`target=lib` 不链接 runtime。
 - `.fb` 正式库:`lib/<目标平台>/`。
 - `.fb` 原生扩展库:`extlib/<目标平台>/`。
 - 交叉编译 sysroot:`toolchain/sysroot/<目标平台>/`。
@@ -203,7 +206,7 @@ extern func ssl_connect(fd: int): int;
 - 顶层 `target=bin` 构建完成后,构建工具负责把主项目与递归本地依赖的中间 `.fd` 汇总为最终 binary 对应的单个 `.fd`; 运行时的 `feng dap` 只读取这个最终 sidecar,不在会话中递归追踪多个依赖 sidecar。
 - 若两个输入 `.fd` 对同一 `PKG_NAME` 提供不一致本地包根,或对同一 `frame_backend_symbol + backend_name` 提供不一致映射,构建必须立即报错,不得把歧义推迟到调试会话。
 
-`feng deps add` 在写入 `feng.fm` 后,若新增的是远程精确版本依赖,立即触发对应安装流程; 若新增的是本地路径依赖,则立即做路径合法性校验。`feng deps install` 会按 `feng.fm` 中声明的依赖递归检查远程缓存,并校验本地路径依赖; 默认只重新拉取缺失的远程包,传入 `--force` 时强制重新拉取全部远程依赖。`feng deps remove` 只更新目标 `feng.fm`,不触发安装流程。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`; 然后继续做本地路径依赖的递归构建与完整依赖图展平。`feng build --release` 与 `feng run --release` 需要把 release 模式继续传递给递归构建的本地 `target: "lib"` 依赖; 项目级 `feng build` 指定的目标平台集合也必须继续传递给递归本地 `target: "lib"` 依赖。`feng pack` 固定使用 release 模式和同一目标平台集合完成递归构建与打包。
+`feng deps add` 在写入 `feng.fm` 后,若新增的是远程精确版本依赖,立即触发对应安装流程; 若新增的是本地路径依赖,则立即做路径合法性校验。`feng deps install` 会按 `feng.fm` 中声明的依赖递归检查远程缓存,并校验本地路径依赖; 默认只重新拉取缺失的远程包,传入 `--force` 时强制重新拉取全部远程依赖。`feng deps remove` 只更新目标 `feng.fm`,不触发安装流程。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`; 然后继续做本地路径依赖的递归构建与完整依赖图展平。`feng build --release` 与 `feng run --release` 需要把 release 模式继续传递给递归构建的本地 `target: "lib"` 依赖; 项目级 `feng build` 指定的目标平台集合也必须继续传递给递归本地 `target: "lib"` 依赖。`feng pack` 不解析或构建依赖，只校验并汇聚已有的分平台 release 构件。
 
 ### 3.3 模块名冲突预检
 
@@ -230,7 +233,8 @@ feng src/*.ff \
 - 未指定 `--platform` 时,目标平台集合只包含归一化后的 host 平台。
 - `target=bin` 只能指定一个目标平台；重复指定 `--platform` 必须报错。
 - `target=lib` 可以重复指定 `--platform` 形成目标平台集合。构建工具对集合中的每个平台分别组装一次核心编译器调用,每次调用只传入一个 `--platform`,并传入该平台独立的 `--out=<项目输出根>/<platform>`。
-- 平台标识合法但当前 host 缺少该目标所需工具链、runtime、sysroot 或依赖包平台制品时,对应目标报告不可用；不得回退到 host 平台或复用其他平台产物。
+- 显式 `--sysroot=<路径>` 只允许目标平台集合恰好包含一个平台；需要不同 sysroot 的平台分别执行单平台 `feng build`，其产物可以由后续 `feng pack` 汇聚。
+- 平台标识合法但当前 host 缺少该目标与产物类型实际需要的工具链、sysroot 或依赖包平台制品时,对应目标报告不可用；`target=bin` 还必须具有目标 runtime，SDK-free `target=lib` 不得仅因没有目标 runtime 或系统 SDK而误报不可用。任何场景都不得回退到 host 平台或复用其他平台产物。
 
 构建工具还应按 `feng.fm` 的 `[assets]` 配置处理资源目录:
 
@@ -251,7 +255,7 @@ feng src/*.ff \
 5. 相同目标平台集合递归传递给本地 `target=lib` 依赖；已安装 `.fb` 依赖必须实际包含当前编译目标所需的平台制品,不得仅依据其 `feng.fm.arch` 声明跳过文件校验。
 6. 任一请求平台失败时,本次多平台构建整体失败；已生成的分平台中间产物不得被视为完整构建结果,后续 `pack` 不得据此生成部分平台包。
 
-例如,在具备三个目标工具链与制品的 `macos-arm64` host 上:
+例如,在具备三个目标工具链与制品的任一支持 host 上:
 
 ```bash
 feng build --platform=macos-arm64 \
@@ -259,24 +263,25 @@ feng build --platform=macos-arm64 \
            --platform=linux-arm64
 ```
 
-Linux host 不支持 macOS 目标；在 Linux 上将 `macos-arm64` 加入目标平台集合时必须明确报告目标不可用。
+其中 Linux host 的 `macos-arm64 target=lib` 使用 SDK-free Mach-O 对象与静态归档路径。该能力不表示 Linux host 可以链接或运行 macOS 可执行程序。
 
 ### 3.6 发布流程（打包为 .fb）
 
-构建工具驱动完整发布流程:
+`feng pack` 驱动独立组包流程:
 
 - 若项目的 `target` 不是 `lib`,构建工具在进入打包流程前立即报错。
 
-1. 按 §3.5 完成全部请求平台的 release 构建,每个平台的完整开发态产物保留在 `<out>/<platform>/`
-2. 校验各平台 `mod/**/*.ft` 的公开语义事实与 `assets/` 普通资源内容一致,并分别提取一套作为包内 `mod/` 与普通资源
-3. 从每个 `<out>/<platform>/lib/` 与 `<out>/<platform>/extlib/` 提取正式静态库和需要参与链接的 `extern func` 原生库制品,分别写入包内 `lib/<platform>/` 与 `extlib/<platform>/`
-4. 补全 `feng.fm`: `abi` 与实际能力目录一致,`arch` 与实际写入 `lib/<platform>/` / `extlib/<platform>/` 的目标平台集合完全一致
-5. 将上述提取结果写入 `<out>/pkg/<name>-<version>.fb`,不直接把某个平台的整个开发构建根复制进包内
+1. 调用方预先通过一次或多次 `feng build --release --platform=<目标平台>` 在同一项目输出根准备 `<out>/<platform>/`；这些目录可以由不同 host / CI 任务生成后汇聚
+2. `feng pack` 校验全部请求平台目录、正式库、公开 `.ft` 与资源 staging 已存在，不重新运行编译器，也不接受 `--sysroot`
+3. 校验各平台 `mod/**/*.ft` 的公开语义事实与 `assets/` 普通资源内容一致,并分别提取一套作为包内 `mod/` 与普通资源
+4. 从每个 `<out>/<platform>/lib/` 与 `<out>/<platform>/extlib/` 提取正式静态库和需要参与链接的 `extern func` 原生库制品,分别写入包内 `lib/<platform>/` 与 `extlib/<platform>/`
+5. 补全 `feng.fm`: `abi` 与实际能力目录一致,`arch` 与实际写入 `lib/<platform>/` / `extlib/<platform>/` 的目标平台集合完全一致
+6. 将上述提取结果原子写入 `<out>/pkg/<name>-<version>.fb`,不直接把某个平台的整个开发构建根复制进包内
 
 补充约束:
 
 - `pack` 只复用公开 `.ft`、正式库与资源 staging; `.fd` 调试 sidecar 不属于分发接口,不得进入 `.fb`。
-- 任一请求平台构建、公开符号表一致性校验或制品完整性校验失败时,`pack` 整体失败,不得生成或保留只包含部分请求平台的 `.fb`。
+- 任一请求平台构件缺失、公开符号表一致性校验或制品完整性校验失败时,`pack` 整体失败,不得生成或保留只包含部分平台的 `.fb`。
 
 ## 4 交互协议总览
 

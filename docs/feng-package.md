@@ -145,12 +145,13 @@ base: "1.0.0"
 
 ### 6.1 发布方流程
 
-1. 构建工具根据项目级 `feng build` / `feng pack` 的 `--platform` 选项确定目标平台集合；未指定时集合只包含归一化后的 host 平台。CLI 语法和平台可用性诊断以 [feng-cli.md](./feng-cli.md) 与 [feng-build.md](./feng-build.md) 为准
-2. 对每个目标平台分别扫描全部 `.ff` 源文件并完成生成、语义分析、代码生成与归档；该平台的 `gen/`、`mod/`、`assets/`、对象、中间产物、正式静态库与原生依赖全部写入独立的 `<out>/<platform>/` 开发构建根（若 `abi` 含 `feng`,正式静态库位于 `<out>/<platform>/lib/`）
-3. 所有目标平台构建成功后,校验各 `<out>/<platform>/mod/` 的模块集合与公开语义事实等价,并校验各平台准备写入相同包路径的普通 `assets/` 内容一致；分别提取一套作为包内 `mod/` 与普通资源
-4. 分平台汇总 `<out>/<platform>/lib/` 正式库以及 `<out>/<platform>/extlib/` 中由 `extern func` 链接事实要求的原生库,分别写入包内 `lib/<platform>/` 与 `extlib/<platform>/`
-5. 生成 `feng.fm`,将实际平台集合填写到 `arch`,并将上述提取结果打包为 `<out>/pkg/<name>-<version>.fb`
-6. 任一请求平台构建、公开符号表一致性校验或制品完整性校验失败时,发布整体失败,不得生成部分平台 `.fb`
+1. 发布方通过一次或多次项目级 `feng build --release --platform=<目标平台>` 确定并构建目标平台集合；不同平台目录可以由不同 host / CI 任务生成后汇聚。CLI 语法、显式 `--sysroot` 和平台可用性诊断以 [feng-cli.md](./feng-cli.md) 与 [feng-build.md](./feng-build.md) 为准
+2. 每次构建对一个或多个目标平台分别扫描全部 `.ff` 源文件并完成生成、语义分析、代码生成与归档；该平台的 `gen/`、`mod/`、`assets/`、对象、中间产物、正式静态库与原生依赖全部写入独立的 `<out>/<platform>/` 开发构建根（若 `abi` 含 `feng`,正式静态库位于 `<out>/<platform>/lib/`）
+3. 全部平台构件汇聚到同一项目输出根后，发布方执行 `feng pack --platform=<目标平台>...`；`pack` 不重新编译，也不接受 `--sysroot`
+4. `pack` 校验各 `<out>/<platform>/mod/` 的模块集合与公开语义事实等价,并校验各平台准备写入相同包路径的普通 `assets/` 内容一致；分别提取一套作为包内 `mod/` 与普通资源
+5. `pack` 分平台汇总 `<out>/<platform>/lib/` 正式库以及 `<out>/<platform>/extlib/` 中由 `extern func` 链接事实要求的原生库,分别写入包内 `lib/<platform>/` 与 `extlib/<platform>/`
+6. 生成 `feng.fm`,将实际平台集合填写到 `arch`,并将上述提取结果打包为 `<out>/pkg/<name>-<version>.fb`
+7. 任一请求平台构件缺失、公开符号表一致性校验或制品完整性校验失败时,发布整体失败,不得生成部分平台 `.fb`
 
 ### 6.2 feng 使用方流程
 
