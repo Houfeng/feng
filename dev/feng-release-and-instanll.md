@@ -296,19 +296,21 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - [x] 在对应 x64 / ARM64 GNU/glibc 目标环境运行两份最小 ELF，并检查产物的 ELF 架构、解释器路径与最高 `GLIBC_*` 要求；GNU sysroot 目录同时通过无 host ELF 可执行工具、无断链符号链接和许可证 / 来源 manifest 完整性检查。
 - [x] `macos-arm64` host 的全量 `make test` 在 Codex 沙箱外通过。
 
-### 8.2 统一相对布局与 CLI 路径基础设施
+### 8.2 统一相对布局、CLI 路径基础设施与 host LLVM 定位
 
-本阶段只收敛发行包与源码开发的路径基础设施，不切换现有 driver 的编译器选择策略，也不改变 Feng 自身现有 `build/` 产物层级。
+本阶段收敛发行包与源码开发的路径基础设施，并切换 driver 默认使用当前 host 的 bundled LLVM；不引入目标平台、target triple、sysroot 或其他交叉编译逻辑，也不改变 Feng 自身现有 `build/` 产物层级。LLVM 可执行文件始终属于 host 工具，native 与后续交叉编译共用同一套定位结果，目标平台只影响后续传给 LLVM 的编译与链接参数。
 
 任务：
 
 - [x] Makefile 在现有 `build/toolchain/` 中创建 `llvm -> ../../toolchain/llvm/<host-platform>` 与 `sysroot -> ../../toolchain/sysroot`；`make clean` 随 `build/` 清理软链接。
-- [x] 将 Feng 可执行文件绝对路径解析、安装根解析、相对路径组装、`PATH` 可执行文件查找与缺失路径诊断收敛到 `src/cli/common.*`；runtime 立即迁移到该公共能力，Clang 与 `lldb-dap` 在后续切换定位策略时直接复用，不增加工具链环境变量或重复实现。
+- [x] 将 Feng 可执行文件绝对路径解析、安装根解析、相对路径组装、`PATH` 可执行文件查找与缺失路径诊断收敛到 `src/cli/common.*`；runtime 已迁移到该公共能力，Clang 在本阶段继续复用，`lldb-dap` 在 §8.4 切换定位策略时复用，不增加工具链环境变量或重复实现。
 - [x] 为可执行文件定位、相对目录组装、软链接布局与缺失路径诊断补充独立回归。
+- [ ] driver 按 [feng-build.md](../docs/feng-build.md) 规定的顺序选择 host Clang：非空 `CC` 显式覆盖、`<feng 可执行文件目录>/../toolchain/llvm/bin/clang` 默认项、`PATH` 中系统 `cc` 兜底；native 编译立即使用该结果，后续交叉编译也复用同一 host Clang 定位，不得按目标平台选择另一份 LLVM。
+- [ ] 补充 driver 编译器选择回归，分别验证显式 `CC`、bundled Clang 默认命中、系统 `cc` 兜底及候选均不可用时的明确诊断；不得在本阶段加入 `--target`、`--sysroot` 或目标 runtime 选择测试。
 
 独立交付与回归门：
 
-- [x] `build/bin/feng` 可通过 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 观察到与发行包一致的布局，同时现有编译、runtime 与 DAP 行为不变。
+- [ ] `build/bin/feng` 可通过 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 观察到与发行包一致的布局；未设置 `CC` 时，native `.ff` 编译实际启动 bundled `clang`，runtime 与 DAP 的现有行为保持不变。
 - [ ] `macos-arm64` 已在 Codex 沙箱外通过全量 `make test`；`linux-x64-gnu` 与 `linux-arm64-gnu` 已分别在 Apple Container 的 Ubuntu 26.04 中通过新增路径能力、软链接布局与 bundled LLVM / sysroot 专项回归，仍须在两个 Linux host 上通过全量 `make test`。
 
 ### 8.3 三 host 编译器与五目标 runtime 发行构件
@@ -393,14 +395,14 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 任务：
 
-- [ ] 将 `feng.fm` 的完整平台集合字段由 `arch` 改为 `platform`，并完整实现 [feng-cli.md](../docs/feng-cli.md)“项目平台选择统一规则”、Clang 查找顺序和 native target triple 转换。
+- [ ] 将 `feng.fm` 的完整平台集合字段由 `arch` 改为 `platform`，并完整实现 [feng-cli.md](../docs/feng-cli.md)“项目平台选择统一规则”和 native target triple 转换；host Clang 直接复用 §8.2 的定位结果。
 - [ ] macOS native 最终链接使用 `xcrun` 获取 SDK 并传入 `-isysroot`；Linux native GNU 与 Linux GNU 交叉编译统一使用对应 bundled glibc sysroot，不读取 host glibc 开发文件。
 - [ ] native `target=bin` 只定位并链接 `lib/<platform>/libfeng_runtime.a`，不得使用其他平台或其他 libc ABI runtime。
-- [ ] 补充完整平台诊断、native Clang / SDK / sysroot / runtime 定位和三 host native 编译回归。
+- [ ] 补充完整平台诊断、native target triple、SDK / sysroot / runtime 定位和三 host native 编译回归。
 
 独立交付与回归门：
 
-- [ ] 三个 host 分别使用 §8 发行包完成 native `feng build` / `run` / `lsp` 验收，并验证 bundled toolchain、显式 `CC` 覆盖和回退路径。
+- [ ] 三个 host 分别使用 §8 发行包完成 native `feng build` / `run` / `lsp` 验收，并验证 native target triple、SDK / sysroot 与目标 runtime 均正确。
 - [ ] 三个 host 的全量 `make test` 通过。
 
 ### 9.3 Linux GNU / musl 全矩阵编译
