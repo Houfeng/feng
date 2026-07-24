@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "cli/common.h"
 #include "dap/proxy.h"
 
 /* Duplicate a NUL-terminated string into owned heap storage. */
@@ -26,77 +27,6 @@ static char *dup_cstr(const char *text) {
     }
     memcpy(copy, text, length + 1U);
     return copy;
-}
-
-/* Return whether one filesystem path exists and is executable. */
-static bool is_executable_path(const char *file_path) {
-    return file_path != NULL && file_path[0] != '\0' && access(file_path, X_OK) == 0;
-}
-
-/* Build one `<dir>/<program>` candidate path from a PATH segment. */
-static char *build_path_candidate(const char *directory, size_t directory_length, const char *program) {
-    size_t program_length;
-    size_t total_length;
-    char *candidate;
-
-    if (program == NULL) {
-        return NULL;
-    }
-    program_length = strlen(program);
-    total_length = directory_length + 1U + program_length;
-    candidate = (char *)malloc(total_length + 1U);
-    if (candidate == NULL) {
-        return NULL;
-    }
-    if (directory_length == 0U) {
-        candidate[0] = '.';
-        directory_length = 1U;
-    } else {
-        memcpy(candidate, directory, directory_length);
-    }
-    candidate[directory_length] = '/';
-    memcpy(candidate + directory_length + 1U, program, program_length);
-    candidate[total_length] = '\0';
-    return candidate;
-}
-
-/* Search the current PATH for one executable program and return its full path. */
-static char *find_program_on_path(const char *program) {
-    const char *path_value;
-    const char *segment_start;
-
-    if (program == NULL || program[0] == '\0') {
-        return NULL;
-    }
-    if (strchr(program, '/') != NULL) {
-        return is_executable_path(program) ? dup_cstr(program) : NULL;
-    }
-
-    path_value = getenv("PATH");
-    if (path_value == NULL || path_value[0] == '\0') {
-        return NULL;
-    }
-
-    segment_start = path_value;
-    while (true) {
-        const char *segment_end = strchr(segment_start, ':');
-        size_t segment_length = segment_end != NULL
-            ? (size_t)(segment_end - segment_start)
-            : strlen(segment_start);
-        char *candidate = build_path_candidate(segment_start, segment_length, program);
-
-        if (candidate != NULL && is_executable_path(candidate)) {
-            return candidate;
-        }
-        free(candidate);
-
-        if (segment_end == NULL) {
-            break;
-        }
-        segment_start = segment_end + 1;
-    }
-
-    return NULL;
 }
 
 /* Remove trailing newlines and spaces from one command output buffer in place. */
@@ -121,7 +51,7 @@ static void trim_trailing_ascii_whitespace(char *text) {
 
 /* Ask `xcrun -f lldb-dap` for the native backend path when PATH misses it. */
 static char *try_resolve_lldb_dap_via_xcrun(void) {
-    char *xcrun_program = find_program_on_path("xcrun");
+    char *xcrun_program = feng_cli_find_executable_on_path("xcrun");
     int output_pipe[2] = {-1, -1};
     pid_t child;
     char output_buffer[4096];
@@ -188,7 +118,7 @@ static char *try_resolve_lldb_dap_via_xcrun(void) {
 
     output_buffer[output_length] = '\0';
     trim_trailing_ascii_whitespace(output_buffer);
-    if (!is_executable_path(output_buffer)) {
+    if (!feng_cli_path_is_executable(output_buffer)) {
         return NULL;
     }
     return dup_cstr(output_buffer);
@@ -196,7 +126,7 @@ static char *try_resolve_lldb_dap_via_xcrun(void) {
 
 /* Resolve the `lldb-dap` backend using PATH first, then `xcrun` on macOS. */
 static char *resolve_lldb_dap_backend_program(void) {
-    char *resolved = find_program_on_path("lldb-dap");
+    char *resolved = feng_cli_find_executable_on_path("lldb-dap");
 
     if (resolved != NULL) {
         return resolved;

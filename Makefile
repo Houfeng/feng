@@ -31,7 +31,8 @@ TEST_SEMANTIC_SRCS := $(wildcard test/semantic/*.c)
 TEST_RUNTIME_SRCS := $(wildcard test/runtime/*.c)
 TEST_CODEGEN_SRCS := $(wildcard test/codegen/*.c)
 TEST_DEBUG_SRCS := $(wildcard test/debug/*.c)
-TEST_CLI_SRCS := $(wildcard test/cli/*.c)
+TEST_CLI_SRCS := test/cli/test_cli.c
+TEST_CLI_PATHS_SRCS := test/cli/test_paths.c
 TEST_SYMBOL_SRCS := $(wildcard test/symbol/*.c)
 TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
 	src/cli/lsp/server.c src/cli/lsp/service.c src/cli/lsp/scheduler.c \
@@ -57,12 +58,13 @@ TEST_RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS) $(TEST_RUNTIM
 TEST_CODEGEN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CODEGEN_SRCS))
 TEST_DEBUG_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_DEBUG_SRCS))
 TEST_CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(DAP_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CLI_SUPPORT_SRCS) $(TEST_CLI_SRCS))
+TEST_CLI_PATHS_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) src/cli/common.c $(TEST_CLI_PATHS_SRCS))
 TEST_SYMBOL_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_SYMBOL_SRCS))
 DEPS := $(CLI_OBJS:.o=.d) $(RUNTIME_OBJS:.o=.d) $(TEST_ARCHIVE_OBJS:.o=.d) \
 	$(TEST_LEXER_OBJS:.o=.d) $(TEST_PARSER_OBJS:.o=.d) \
 	$(TEST_SEMANTIC_OBJS:.o=.d) $(TEST_RUNTIME_OBJS:.o=.d) \
 	$(TEST_CODEGEN_OBJS:.o=.d) $(TEST_DEBUG_OBJS:.o=.d) $(TEST_CLI_OBJS:.o=.d) \
-	$(TEST_SYMBOL_OBJS:.o=.d)
+	$(TEST_CLI_PATHS_OBJS:.o=.d) $(TEST_SYMBOL_OBJS:.o=.d)
 
 THIRD_PARTY_CFLAGS := $(filter-out -Werror -pedantic,$(CFLAGS)) -Wno-unused-function
 
@@ -93,14 +95,22 @@ else
   _HOST_ARCH := x64
 endif
 HOST_TARGET := $(_HOST_OS)-$(_HOST_ARCH)
+ifeq ($(_HOST_OS),linux)
+HOST_PLATFORM := $(HOST_TARGET)-gnu
+else
+HOST_PLATFORM := $(HOST_TARGET)
+endif
 EXTLIB_DIR := extlib/$(HOST_TARGET)
 
 RUNTIME_LIB := $(LIB_DIR)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
 RUNTIME_HEADERS := $(BUILD_DIR)/include/feng_runtime.h \
 	$(BUILD_DIR)/include/feng_runtime_contract.inc
 LIBUNWIND_LIB := $(EXTLIB_DIR)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC_LIB_EXT)
+TOOLCHAIN_LAYOUT_DIR := $(BUILD_DIR)/toolchain
+LLVM_LAYOUT_LINK := $(TOOLCHAIN_LAYOUT_DIR)/llvm
+SYSROOT_LAYOUT_LINK := $(TOOLCHAIN_LAYOUT_DIR)/sysroot
 
-.PHONY: all cli runtime test test-normal smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints test-sanitize clean
+.PHONY: all cli runtime toolchain-layout test test-normal smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints test-sanitize clean
 
 all: cli runtime
 
@@ -112,7 +122,7 @@ test: test-sanitize test-normal
 
 test-normal:
 	$(MAKE) clean
-	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
+	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -121,6 +131,7 @@ test-normal:
 	$(BIN_DIR)/test_codegen
 	$(BIN_DIR)/test_debug
 	$(BIN_DIR)/test_cli
+	$(BIN_DIR)/test_cli_paths
 	$(BIN_DIR)/test_symbol
 
 # Sanitize testing strategy:
@@ -139,7 +150,7 @@ test-sanitize:
 	@echo "Note: ASan causes deadlock on macOS (dyld + libunwind conflict)."
 	@echo "For full ASan + UBSan testing, use Linux CI."
 	$(MAKE) runtime CFLAGS="-fsanitize=undefined -g -O1 -std=c11 -Wall -Wextra -pedantic"
-	$(MAKE) cli $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_symbol CFLAGS="-fsanitize=undefined -g -O1 -std=c11 -Wall -Wextra -pedantic" LDFLAGS="-fsanitize=undefined"
+	$(MAKE) cli $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol CFLAGS="-fsanitize=undefined -g -O1 -std=c11 -Wall -Wextra -pedantic" LDFLAGS="-fsanitize=undefined"
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -148,6 +159,7 @@ test-sanitize:
 	$(BIN_DIR)/test_codegen
 	$(BIN_DIR)/test_debug
 	FENG_CC_FLAGS="-fsanitize=undefined" $(BIN_DIR)/test_cli
+	$(BIN_DIR)/test_cli_paths
 	$(BIN_DIR)/test_symbol
 	FENG_CC_FLAGS="-fsanitize=undefined" $(MAKE) smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
 
@@ -169,7 +181,28 @@ cli-tests: cli
 cli-project-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_cli_project.sh
 
-$(BIN_DIR)/feng: $(CLI_OBJS)
+toolchain-layout:
+	@if [ ! -d "toolchain/llvm/$(HOST_PLATFORM)" ]; then \
+		echo "error: host LLVM toolchain not found: toolchain/llvm/$(HOST_PLATFORM)" >&2; \
+		exit 1; \
+	fi
+	@if [ ! -d "toolchain/sysroot" ]; then \
+		echo "error: sysroot collection not found: toolchain/sysroot" >&2; \
+		exit 1; \
+	fi
+	@mkdir -p $(TOOLCHAIN_LAYOUT_DIR)
+	@if [ -e "$(LLVM_LAYOUT_LINK)" ] && [ ! -L "$(LLVM_LAYOUT_LINK)" ]; then \
+		echo "error: toolchain layout path exists and is not a symlink: $(LLVM_LAYOUT_LINK)" >&2; \
+		exit 1; \
+	fi
+	@if [ -e "$(SYSROOT_LAYOUT_LINK)" ] && [ ! -L "$(SYSROOT_LAYOUT_LINK)" ]; then \
+		echo "error: toolchain layout path exists and is not a symlink: $(SYSROOT_LAYOUT_LINK)" >&2; \
+		exit 1; \
+	fi
+	@ln -sfn ../../toolchain/llvm/$(HOST_PLATFORM) $(LLVM_LAYOUT_LINK)
+	@ln -sfn ../../toolchain/sysroot $(SYSROOT_LAYOUT_LINK)
+
+$(BIN_DIR)/feng: $(CLI_OBJS) | toolchain-layout
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(CLI_OBJS) $(LDFLAGS) $(LSP_LDLIBS) -o $@
 
@@ -204,6 +237,10 @@ $(BIN_DIR)/test_debug: $(TEST_DEBUG_OBJS)
 $(BIN_DIR)/test_cli: $(TEST_CLI_OBJS) $(RUNTIME_LIB)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_CLI_OBJS) $(LDFLAGS) $(LSP_LDLIBS) -o $@
+
+$(BIN_DIR)/test_cli_paths: $(TEST_CLI_PATHS_OBJS) | toolchain-layout
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(TEST_CLI_PATHS_OBJS) $(LDFLAGS) -o $@
 
 $(BIN_DIR)/test_symbol: $(TEST_SYMBOL_OBJS)
 	@mkdir -p $(BIN_DIR)

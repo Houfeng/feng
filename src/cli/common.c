@@ -1,8 +1,373 @@
+#define _XOPEN_SOURCE 700
+
 #include "cli/common.h"
 
+#include <errno.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
+
+#if defined(__APPLE__)
+#  include <mach-o/dyld.h>
+#endif
+
+/* Replace one owned error message with formatted text. */
+static void set_errorf(char **out_error_message, const char *format, ...) {
+    va_list args;
+    va_list args_copy;
+    int required;
+    char *message;
+
+    if (out_error_message == NULL) {
+        return;
+    }
+
+    va_start(args, format);
+    va_copy(args_copy, args);
+    required = vsnprintf(NULL, 0, format, args);
+    va_end(args);
+    if (required < 0) {
+        va_end(args_copy);
+        return;
+    }
+
+    message = (char *)malloc((size_t)required + 1U);
+    if (message == NULL) {
+        va_end(args_copy);
+        return;
+    }
+    vsnprintf(message, (size_t)required + 1U, format, args_copy);
+    va_end(args_copy);
+    *out_error_message = message;
+}
+
+/* Duplicate one NUL-terminated string into owned storage. */
+static char *duplicate_string(const char *text) {
+    size_t length;
+    char *copy;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    length = strlen(text);
+    copy = (char *)malloc(length + 1U);
+    if (copy == NULL) {
+        return NULL;
+    }
+    memcpy(copy, text, length + 1U);
+    return copy;
+}
+
+/* Return an owned dirname while preserving the filesystem root. */
+static char *path_dirname(const char *path) {
+    const char *separator;
+    size_t length;
+    char *directory;
+
+    if (path == NULL || path[0] == '\0') {
+        return NULL;
+    }
+    separator = strrchr(path, '/');
+    if (separator == NULL) {
+        return duplicate_string(".");
+    }
+    length = separator == path ? 1U : (size_t)(separator - path);
+    directory = (char *)malloc(length + 1U);
+    if (directory == NULL) {
+        return NULL;
+    }
+    memcpy(directory, path, length);
+    directory[length] = '\0';
+    return directory;
+}
+
+/* Join two path components with exactly one separator. */
+static char *path_join(const char *left, const char *right) {
+    size_t left_length;
+    size_t right_offset;
+    size_t right_length;
+    bool needs_separator;
+    char *path;
+
+    if (left == NULL || right == NULL) {
+        return NULL;
+    }
+    left_length = strlen(left);
+    right_offset = right[0] == '/' ? 1U : 0U;
+    right_length = strlen(right + right_offset);
+    needs_separator = left_length > 0U && left[left_length - 1U] != '/';
+
+    path = (char *)malloc(left_length + (needs_separator ? 1U : 0U) + right_length + 1U);
+    if (path == NULL) {
+        return NULL;
+    }
+    memcpy(path, left, left_length);
+    if (needs_separator) {
+        path[left_length++] = '/';
+    }
+    memcpy(path + left_length, right + right_offset, right_length);
+    path[left_length + right_length] = '\0';
+    return path;
+}
+
+/* Reject absolute paths and parent traversal outside the installation root. */
+static bool is_safe_relative_path(const char *path) {
+    const char *component;
+
+    if (path == NULL || path[0] == '\0' || path[0] == '/') {
+        return false;
+    }
+
+    component = path;
+    while (*component != '\0') {
+        const char *end = strchr(component, '/');
+        size_t length = end != NULL
+            ? (size_t)(end - component)
+            : strlen(component);
+
+        if (length == 2U && component[0] == '.' && component[1] == '.') {
+            return false;
+        }
+        if (end == NULL) {
+            break;
+        }
+        component = end + 1;
+    }
+    return true;
+}
+
+/* Resolve /proc/self/exe without imposing a fixed PATH_MAX limit. */
+#if defined(__linux__)
+static char *resolve_linux_executable_path(void) {
+    size_t capacity = 256U;
+
+    while (capacity <= 1024U * 1024U) {
+        char *buffer = (char *)malloc(capacity);
+        ssize_t length;
+
+        if (buffer == NULL) {
+            return NULL;
+        }
+        length = readlink("/proc/self/exe", buffer, capacity - 1U);
+        if (length < 0) {
+            free(buffer);
+            return NULL;
+        }
+        if ((size_t)length < capacity - 1U) {
+            char *resolved;
+
+            buffer[length] = '\0';
+            resolved = realpath(buffer, NULL);
+            free(buffer);
+            return resolved;
+        }
+        free(buffer);
+        capacity *= 2U;
+    }
+    return NULL;
+}
+#endif
+
+char *feng_cli_find_executable_on_path(const char *program) {
+    const char *path_value;
+    const char *segment_start;
+
+    if (program == NULL || program[0] == '\0') {
+        return NULL;
+    }
+    if (strchr(program, '/') != NULL) {
+        return access(program, X_OK) == 0 ? duplicate_string(program) : NULL;
+    }
+
+    path_value = getenv("PATH");
+    if (path_value == NULL || path_value[0] == '\0') {
+        return NULL;
+    }
+
+    segment_start = path_value;
+    while (true) {
+        const char *segment_end = strchr(segment_start, ':');
+        size_t segment_length = segment_end != NULL
+            ? (size_t)(segment_end - segment_start)
+            : strlen(segment_start);
+        const char *directory = segment_length == 0U ? "." : segment_start;
+        size_t directory_length = segment_length == 0U ? 1U : segment_length;
+        size_t program_length = strlen(program);
+        char *candidate = (char *)malloc(directory_length + 1U + program_length + 1U);
+
+        if (candidate != NULL) {
+            memcpy(candidate, directory, directory_length);
+            candidate[directory_length] = '/';
+            memcpy(candidate + directory_length + 1U, program, program_length + 1U);
+            if (access(candidate, X_OK) == 0) {
+                return candidate;
+            }
+            free(candidate);
+        }
+
+        if (segment_end == NULL) {
+            break;
+        }
+        segment_start = segment_end + 1;
+    }
+    return NULL;
+}
+
+bool feng_cli_path_is_executable(const char *path) {
+    return path != NULL && path[0] != '\0' && access(path, X_OK) == 0;
+}
+
+char *feng_cli_resolve_executable_path(const char *program_path, char **out_error_message) {
+    char *resolved = NULL;
+    int saved_errno = 0;
+
+    if (out_error_message != NULL) {
+        *out_error_message = NULL;
+    }
+
+#if defined(__APPLE__)
+    {
+        uint32_t size = 0U;
+
+        (void)_NSGetExecutablePath(NULL, &size);
+        if (size > 0U) {
+            char *raw_path = (char *)malloc(size);
+
+            if (raw_path != NULL) {
+                if (_NSGetExecutablePath(raw_path, &size) == 0) {
+                    resolved = realpath(raw_path, NULL);
+                    saved_errno = errno;
+                }
+                free(raw_path);
+            }
+        }
+    }
+#elif defined(__linux__)
+    resolved = resolve_linux_executable_path();
+    saved_errno = errno;
+#endif
+
+    if (resolved == NULL && program_path != NULL && program_path[0] != '\0') {
+        char *candidate = NULL;
+
+        if (strchr(program_path, '/') != NULL) {
+            candidate = duplicate_string(program_path);
+        } else {
+            candidate = feng_cli_find_executable_on_path(program_path);
+        }
+        if (candidate != NULL) {
+            resolved = realpath(candidate, NULL);
+            saved_errno = errno;
+            free(candidate);
+        }
+    }
+
+    if (resolved == NULL) {
+        set_errorf(out_error_message,
+                   "cannot resolve Feng executable path from '%s': %s",
+                   program_path != NULL ? program_path : "",
+                   saved_errno != 0 ? strerror(saved_errno) : "path is unavailable");
+    }
+    return resolved;
+}
+
+char *feng_cli_resolve_install_path(const char *program_path,
+                                    const char *relative_path,
+                                    char **out_error_message) {
+    char *executable_path;
+    char *executable_directory;
+    char *install_root;
+    char *resolved_path;
+
+    if (out_error_message != NULL) {
+        *out_error_message = NULL;
+    }
+    if (!is_safe_relative_path(relative_path)) {
+        set_errorf(out_error_message,
+                   "installation path must be relative and stay below the Feng root: %s",
+                   relative_path != NULL ? relative_path : "(null)");
+        return NULL;
+    }
+
+    executable_path = feng_cli_resolve_executable_path(program_path, out_error_message);
+    if (executable_path == NULL) {
+        return NULL;
+    }
+    executable_directory = path_dirname(executable_path);
+    free(executable_path);
+    if (executable_directory == NULL) {
+        set_errorf(out_error_message, "out of memory resolving Feng executable directory");
+        return NULL;
+    }
+    install_root = path_dirname(executable_directory);
+    free(executable_directory);
+    if (install_root == NULL) {
+        set_errorf(out_error_message, "out of memory resolving Feng installation root");
+        return NULL;
+    }
+    resolved_path = path_join(install_root, relative_path);
+    free(install_root);
+    if (resolved_path == NULL) {
+        set_errorf(out_error_message, "out of memory resolving Feng installation path");
+    }
+    return resolved_path;
+}
+
+char *feng_cli_require_install_path(const char *program_path,
+                                    const char *relative_path,
+                                    FengCliRequiredPathKind required_kind,
+                                    char **out_error_message) {
+    char *path = feng_cli_resolve_install_path(program_path,
+                                               relative_path,
+                                               out_error_message);
+    struct stat status;
+    bool valid = false;
+    const char *description = "path";
+
+    if (path == NULL) {
+        return NULL;
+    }
+    if (stat(path, &status) == 0) {
+        switch (required_kind) {
+            case FENG_CLI_REQUIRED_REGULAR_FILE:
+                description = "regular file";
+                valid = S_ISREG(status.st_mode);
+                break;
+            case FENG_CLI_REQUIRED_DIRECTORY:
+                description = "directory";
+                valid = S_ISDIR(status.st_mode);
+                break;
+            case FENG_CLI_REQUIRED_EXECUTABLE:
+                description = "executable";
+                valid = S_ISREG(status.st_mode) && access(path, X_OK) == 0;
+                break;
+        }
+    } else {
+        switch (required_kind) {
+            case FENG_CLI_REQUIRED_REGULAR_FILE:
+                description = "regular file";
+                break;
+            case FENG_CLI_REQUIRED_DIRECTORY:
+                description = "directory";
+                break;
+            case FENG_CLI_REQUIRED_EXECUTABLE:
+                description = "executable";
+                break;
+        }
+    }
+
+    if (!valid) {
+        set_errorf(out_error_message,
+                   "required %s is missing or has the wrong type: %s",
+                   description,
+                   path);
+        free(path);
+        return NULL;
+    }
+    return path;
+}
 
 bool feng_cli_stream_supports_color(FILE *stream) {
     const char *force_color = getenv("CLICOLOR_FORCE");

@@ -2,7 +2,6 @@
 
 #include <dirent.h>
 #include <errno.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -13,12 +12,9 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-#if defined(__APPLE__)
-#  include <mach-o/dyld.h>
-#endif
-
 #include "archive/fb.h"
 #include "archive/zip.h"
+#include "cli/common.h"
 #include "parser/parser.h"
 #include "platform/platform.h"
 #include "symbol/ft.h"
@@ -26,12 +22,6 @@
 #include "symbol/symbol.h"
 
 /* --- small helpers ------------------------------------------------------- */
-
-static bool path_exists(const char *path) {
-    if (path == NULL) return false;
-    struct stat st;
-    return stat(path, &st) == 0;
-}
 
 static char *str_dup_n(const char *s, size_t n) {
     char *out = malloc(n + 1U);
@@ -1405,49 +1395,7 @@ done:
 
 /* --- runtime artefact discovery ----------------------------------------- */
 
-/* Resolve the running executable's absolute path. Returns a malloc'd
- * string on success, or NULL on failure. */
-static char *resolve_executable_path(const char *argv0) {
-#if defined(__APPLE__)
-    uint32_t size = 0U;
-    _NSGetExecutablePath(NULL, &size);
-    if (size == 0U) return NULL;
-    char *raw = malloc(size);
-    if (raw == NULL) return NULL;
-    if (_NSGetExecutablePath(raw, &size) != 0) {
-        free(raw);
-        return NULL;
-    }
-    char *real = realpath(raw, NULL);
-    free(raw);
-    if (real != NULL) return real;
-#elif defined(__linux__)
-    char buf[PATH_MAX];
-    ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1U);
-    if (n > 0) {
-        buf[n] = '\0';
-        char *real = realpath(buf, NULL);
-        if (real != NULL) return real;
-    }
-#endif
-    /* Fallback: realpath argv[0] (works when invoked with a path). */
-    if (argv0 != NULL && argv0[0] != '\0') {
-        char *real = realpath(argv0, NULL);
-        if (real != NULL) return real;
-    }
-    return NULL;
-}
-
 static char *locate_runtime_lib(const char *program_path) {
-    char *exe = resolve_executable_path(program_path);
-    if (exe == NULL) return NULL;
-    char *exe_dir = path_dirname_dup(exe);
-    free(exe);
-    if (exe_dir == NULL) return NULL;
-    char *parent = path_join2(exe_dir, "..");
-    free(exe_dir);
-    if (parent == NULL) return NULL;
-
     /* 1. Install layout: <exe_dir>/../lib/<os>-<arch>/<runtime-lib> */
     char *host_target = NULL;
     char *detect_error = NULL;
@@ -1456,46 +1404,38 @@ static char *locate_runtime_lib(const char *program_path) {
     if (detected && host_target != NULL) {
         char *lib_subdir = path_join2("lib", host_target);
         char *runtime_rel = path_join_host_static_library(lib_subdir, "feng_runtime");
-        char *candidate = path_join2(parent, runtime_rel);
+        char *candidate = feng_cli_require_install_path(program_path,
+                                                        runtime_rel,
+                                                        FENG_CLI_REQUIRED_REGULAR_FILE,
+                                                        NULL);
         free(lib_subdir);
         free(runtime_rel);
-        if (candidate != NULL && path_exists(candidate)) {
+        if (candidate != NULL) {
             free(host_target);
-            free(parent);
             return candidate;
         }
-        free(candidate);
     }
     free(host_target);
 
     /* 2. Dev build layout: <exe_dir>/../lib/<runtime-lib> (no <os>-<arch> subdir) */
     char *runtime_rel = path_join_host_static_library("lib", "feng_runtime");
-    char *candidate = path_join2(parent, runtime_rel);
+    char *candidate = feng_cli_require_install_path(program_path,
+                                                    runtime_rel,
+                                                    FENG_CLI_REQUIRED_REGULAR_FILE,
+                                                    NULL);
     free(runtime_rel);
-    free(parent);
-    if (candidate != NULL && path_exists(candidate)) {
-        return candidate;
-    }
-    free(candidate);
-    return NULL;
+    return candidate;
 }
 
 static char *locate_runtime_include(const char *program_path) {
-    char *exe = resolve_executable_path(program_path);
-    if (exe == NULL) return NULL;
-    char *exe_dir = path_dirname_dup(exe);
-    free(exe);
-    if (exe_dir == NULL) return NULL;
     /* Install layout: <exe_dir>/../include/feng_runtime.h. Returns the
      * include root (.../include) so callers pair this with the source-side
      * #include "feng_runtime.h" form. */
-    char *parent = path_join2(exe_dir, "..");
-    free(exe_dir);
-    char *candidate = path_join2(parent, "include/feng_runtime.h");
-    free(parent);
-    bool ok = candidate != NULL && path_exists(candidate);
-    if (!ok) {
-        free(candidate);
+    char *candidate = feng_cli_require_install_path(program_path,
+                                                    "include/feng_runtime.h",
+                                                    FENG_CLI_REQUIRED_REGULAR_FILE,
+                                                    NULL);
+    if (candidate == NULL) {
         return NULL;
     }
     char *result = path_dirname_dup(candidate); /* .../include */

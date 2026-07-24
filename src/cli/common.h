@@ -23,6 +23,49 @@
 #define FENG_COLOR_RED "\x1b[31m"
 #define FENG_COLOR_RESET "\x1b[0m"
 
+/*
+ * Required filesystem object kind for paths resolved relative to the Feng
+ * installation root.
+ */
+typedef enum FengCliRequiredPathKind {
+    FENG_CLI_REQUIRED_REGULAR_FILE,
+    FENG_CLI_REQUIRED_DIRECTORY,
+    FENG_CLI_REQUIRED_EXECUTABLE
+} FengCliRequiredPathKind;
+
+/*
+ * Resolve the running Feng executable to a canonical absolute path.
+ * The returned string and optional error message are owned by the caller.
+ */
+char *feng_cli_resolve_executable_path(const char *program_path, char **out_error_message);
+
+/*
+ * Resolve one safe relative path below `<feng-executable-dir>/..`.
+ * The target itself does not need to exist. The returned string and optional
+ * error message are owned by the caller.
+ */
+char *feng_cli_resolve_install_path(const char *program_path,
+                                    const char *relative_path,
+                                    char **out_error_message);
+
+/*
+ * Resolve and validate one required installation path.
+ * The returned string and optional error message are owned by the caller.
+ */
+char *feng_cli_require_install_path(const char *program_path,
+                                    const char *relative_path,
+                                    FengCliRequiredPathKind required_kind,
+                                    char **out_error_message);
+
+/*
+ * Find one executable through PATH without consulting Feng-specific
+ * environment variables. The returned string is owned by the caller.
+ */
+char *feng_cli_find_executable_on_path(const char *program);
+
+/* Return whether one filesystem path exists and is executable. */
+bool feng_cli_path_is_executable(const char *path);
+
 bool feng_cli_stream_supports_color(FILE *stream);
 void feng_cli_set_stream_color(FILE *stream, bool enabled, const char *color);
 void feng_cli_reset_stream_color(FILE *stream, bool enabled);

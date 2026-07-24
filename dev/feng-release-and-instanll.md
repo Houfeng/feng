@@ -263,6 +263,8 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 2. 提交本子阶段全部变更和验收结果供人工 Review；全量回归通过不代表可以自动进入下一子阶段。
 3. 只有人工 Review 通过且收到“开始下一阶段”的明确人工指令后，才能实施下一子阶段。§8 全部通过人工 Review 前不得开始 §9。
 
+仅因外部原生机器或发行版镜像暂不可用而未完成的兼容性矩阵验收，在人工确认其不阻塞下一子阶段实现后，可与不依赖该验收结果的后续子阶段并行；对应 TODO 必须保持未完成，并在 §8.5 分发、CI 汇聚与安装实施前全部通过。该例外不适用于脚本、产物、代码、测试或当前可用环境中的验收缺口，也不代表前一子阶段已经完成。
+
 ### 8.1 可独立验证的精简工具链
 
 本阶段只交付精简脚本和工具链产物，不改变 Feng CLI 的工具选择行为。
@@ -300,14 +302,14 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 任务：
 
-- [ ] Makefile 在现有 `build/toolchain/` 中创建 `llvm -> ../../toolchain/llvm/<host-platform>` 与 `sysroot -> ../../toolchain/sysroot`；`make clean` 随 `build/` 清理软链接。
-- [ ] 将 Feng 可执行文件绝对路径解析与相对路径组装收敛到 `src/cli/common.*`，runtime、Clang 与 `lldb-dap` 共用，不增加工具链环境变量或重复实现。
-- [ ] 为可执行文件定位、相对目录组装、软链接布局与缺失路径诊断补充独立回归。
+- [x] Makefile 在现有 `build/toolchain/` 中创建 `llvm -> ../../toolchain/llvm/<host-platform>` 与 `sysroot -> ../../toolchain/sysroot`；`make clean` 随 `build/` 清理软链接。
+- [x] 将 Feng 可执行文件绝对路径解析、安装根解析、相对路径组装、`PATH` 可执行文件查找与缺失路径诊断收敛到 `src/cli/common.*`；runtime 立即迁移到该公共能力，Clang 与 `lldb-dap` 在后续切换定位策略时直接复用，不增加工具链环境变量或重复实现。
+- [x] 为可执行文件定位、相对目录组装、软链接布局与缺失路径诊断补充独立回归。
 
 独立交付与回归门：
 
-- [ ] `build/bin/feng` 可通过 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 观察到与发行包一致的布局，同时现有编译、runtime 与 DAP 行为不变。
-- [ ] 三个 host 的全量 `make test` 通过。
+- [x] `build/bin/feng` 可通过 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 观察到与发行包一致的布局，同时现有编译、runtime 与 DAP 行为不变。
+- [ ] `macos-arm64` 已在 Codex 沙箱外通过全量 `make test`；`linux-x64-gnu` 与 `linux-arm64-gnu` 已分别在 Apple Container 的 Ubuntu 26.04 中通过新增路径能力、软链接布局与 bundled LLVM / sysroot 专项回归，仍须在两个 Linux host 上通过全量 `make test`。
 
 ### 8.3 三 host 编译器与五目标 runtime 发行构件
 
