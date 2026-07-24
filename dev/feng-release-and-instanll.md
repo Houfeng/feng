@@ -122,7 +122,7 @@ feng-<version>-<platform>/
 - `include/` 为 runtime 公共 ABI 头文件，平台无关（C 源码），不分平台子目录，单一一份供所有平台使用，扁平置于 `include/` 根下。`feng_runtime.h` 内部以相对路径 `#include "feng_runtime_contract.inc"`，二者位于同一目录。最终编译 / 链接所需的标准 C 头文件（`<stdint.h>` 等）与系统头文件（`<unwind.h>`）由目标平台 SDK / sysroot 提供，不复制到 runtime include 目录；§9.4 的 SDK-free `target=lib` 编译头闭包也不得通过复制 Apple SDK 头文件实现。
 - `toolchain/llvm/` 保持 LLVM 官方包的统一根目录布局，`clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb` 与 `lldb-dap` 必须来自同一 LLVM 版本和同一 host 平台包。官方 LLVM Linux 可执行文件本身是 GNU/glibc 动态程序，不提供独立 musl host 包；一份 GNU-hosted Clang 可生成 GNU 与 musl 两类目标，因此每份 Linux 发行包只携带当前 host 架构的一份 LLVM，不按用户程序目标 ABI复制。
 - `toolchain/sysroot/` 按完整 Linux 目标平台分子目录，同时内建 GNU/glibc 与 musl。每份 sysroot 都必须保持 `--sysroot` 约定的头文件、目标 libc、动态加载器、CRT、linker scripts、compiler runtime 及 Clang 检测所需相对目录关系；不保留只能在特定宿主上运行的 GCC、binutils 或 musl.cc 工具可执行文件。GNU 与 musl sysroot 均属于目标输入，native 与交叉编译使用同一份。具体调用参数见 [feng-build.md](../docs/feng-build.md)。
-- glibc sysroot 必须记录确切来源、版本、目标架构、裁剪清单及 LGPL 等上游许可材料，并满足二进制再分发所需的许可与源码提供义务；不得把 host `/usr` 临时复制进发行包。musl sysroot 同样记录 musl 与配套 compiler runtime 的独立来源及许可证。
+- GNU/glibc sysroot 的来源与裁剪规则以 §5.3 为准，必须记录确切来源、版本、目标架构、裁剪清单及 LGPL 等上游许可材料，并满足二进制再分发所需的许可与源码提供义务；不得把 host `/usr` 临时复制进发行包。musl sysroot 同样记录 musl 与配套 compiler runtime 的独立来源及许可证。
 - 分发物不包含任何 Feng 源码、`.o` / `.obj` 中间产物、构建缓存。
 - `feng` 编译器基于自身位置查找 runtime 静态库、头文件与 toolchain：runtime 位于 `<feng 可执行文件目录>/../lib/` 与 `../include/`，Clang 和 `lldb-dap` 位于 `<feng 可执行文件目录>/../toolchain/llvm/bin/`。不引入 `FENG_HOME` / `FENG_TOOLCHAIN` 等环境变量；完整查找顺序见 [feng-build.md](../docs/feng-build.md) 与 [feng-cli.md](../docs/feng-cli.md) 的 DAP 规范。
 
@@ -131,9 +131,9 @@ feng-<version>-<platform>/
 分发包内 `toolchain/` 为精简版 LLVM 工具链与交叉编译 sysroot，与 `bin/`、`lib/`、`include/` 并列置于分发包根下。
 
 - **从 LLVM 官方预编译包剥离，不自建 LLVM/Clang**；核心只保留 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap` 及其运行所必需的最小依赖集，不含其他 `llvm-*`、`clang-format`、`clang-tidy` 等通用 LLVM 工具。所有 Linux GNU / musl 目标统一使用当前 host LLVM 包中的 `lld`，不分发 sysroot 来源包中的 linker 可执行文件。
-- 精简由 `scripts/fetch_llvm.sh` + `scripts/trim_llvm.sh` 完成（维护性脚本，不在发布流程）：`fetch_llvm.sh` 下载并解压 LLVM 官方预编译包到 `local/llvm/`（持久 cache，gitignored，不受 `make clean` 或测试清理 `temp/` 影响），`trim_llvm.sh` 从单个已解压 LLVM root 中同时精简 clang、lld、lldb 与 lldb-dap，原子产出到仓库 `toolchain/llvm/<host-platform>/`。合并为一个精简脚本，避免多个脚本共享输出根目录时相互删除产物，并保证全部 LLVM 工具的版本、来源和 host 平台一致。
-- `toolchain/sysroot/` 为 Linux native / 交叉编译共用的目标 sysroot，最终产物固定为 `linux-x64-gnu`、`linux-x64-musl`、`linux-arm64-gnu`、`linux-arm64-musl` 四份并由 git lfs 管理。musl 继续由维护脚本从 musl.cc 配套包精简；GNU/glibc 由独立维护脚本从选定且可追溯的发行源构造，不在用户构建或 CI 发布时从 host 系统抓取。CI checkout 后直接复制，不临时下载或重建 sysroot。
-- 精简 toolchain 的版本、来源、剥离清单由独立子任务文档承载，不在本文件展开，避免方案膨胀。
+- 精简由 `scripts/fetch_llvm.sh` + `scripts/trim_llvm.sh` 完成（维护性脚本，不在发布流程）：`fetch_llvm.sh` 下载并解压 LLVM 官方预编译包到 `local/llvm/`，并为 Linux host 下载 §5.2 固定的私有运行库来源包；`trim_llvm.sh` 从单个已解压 LLVM root 中同时精简 clang、lld、lldb 与 lldb-dap，为 Linux 产物提取并校验完整私有动态依赖闭包，原子产出到仓库 `toolchain/llvm/<host-platform>/`。`local/llvm/` 是 gitignored 的持久 cache，不受 `make clean` 或测试清理 `temp/` 影响。全部 LLVM 工具必须来自同一 LLVM 版本和同一 host 平台包，多个工具不得分别精简到共享输出根。
+- `toolchain/sysroot/` 为 Linux native / 交叉编译共用的目标 sysroot，最终产物固定为 `linux-x64-gnu`、`linux-x64-musl`、`linux-arm64-gnu`、`linux-arm64-musl` 四份并由 git lfs 管理。musl 继续由维护脚本从 musl.cc 配套包精简；GNU/glibc 按 §5.3 由 `scripts/fetch_gnu_sysroot.sh` + `scripts/trim_gnu_sysroot.sh` 从固定 Debian cross packages 构造。维护脚本只读写 `local/` cache 与仓库 toolchain 产物，不在用户构建或 CI 发布时从 host 系统抓取内容。CI checkout 后直接复制，不临时下载或重建 sysroot。
+- 每份精简 toolchain 产物以自身 README / manifest 记录实际版本、来源、校验值、许可证与剥离清单；本文件只定义统一来源政策和验收边界，不重复维护逐文件 manifest。
 - `feng` 编译器基于自身位置查找 `toolchain/`。源码开发继续使用现有 `build/` 根；Makefile 在 `build/toolchain/` 下创建 `llvm -> ../../toolchain/llvm/<host-platform>` 与 `sysroot -> ../../toolchain/sysroot` 两个软链接，使 `build/bin/feng` 观察到的 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 都与发行包布局一致，不要求为 Feng 自身引入 `build/<platform>/` 多目标构建体系。`make clean` 删除整个 `build/`，软链接不作为持久产物或分发内容。
 
 ### 5.1 macOS 系统前置条件
@@ -150,9 +150,25 @@ Feng 在 macOS host 最终链接 macOS 可执行程序时，通过 `xcrun --sdk 
 
 LLVM 22.1.8 官方 Linux x64 与 arm64 包是 GNU/glibc host 程序，不是 musl 程序。已验证的直接依赖中，`lld` 需要 `libxml2.so.2`，`liblldb.so.22.1.8` 需要 `libpython3.11.so.1.0`、`libxml2.so.2`、`libncurses.so.6`、`libpanel.so.6`、`libform.so.6`、`libtinfo.so.6`，并同时依赖其完整的 `DT_NEEDED` 传递闭包。官方 LLVM 包本身不携带这些全部共享库。
 
-Feng 不使用 Python 脚本，但动态加载器仍要求满足 `liblldb` 对 `libpython3.11.so.1.0` 的直接依赖。当前方案不额外捆绑 libpython；Linux 用户使用 `lldb` 或 `feng dap` 前必须通过所在发行版提供对应 soname。其余 Linux LLVM host 依赖的最终“随包携带”与“系统前置条件”边界必须在 §8.1 完成真实发行版验收后固定，不能只复制六个 soname 而忽略例如 libxml2 的传递依赖。
+Linux Feng 发行包必须开箱即用，不得要求用户为 bundled LLVM 手工安装 `libpython3.11`、`libxml2`、ncurses、特定版本的 `libstdc++` 或其他非 glibc 运行库。系统边界只保留 Linux 内核、动态加载器及 glibc 所属基础库；LLVM 需要的其余直接和传递动态依赖必须作为私有运行库置于 `toolchain/llvm/lib/`。所有 bundled LLVM 可执行文件和私有库必须通过相对 RPATH / RUNPATH 定位该目录，不依赖 `LD_LIBRARY_PATH`，也不得从目标 sysroot 加载 host 运行库。
 
-首版 Linux host 支持范围是主流 GNU/glibc 发行版，不包括纯 musl Alpine。该限制只影响 `feng` 与 bundled LLVM 工具自身的启动；`linux-*-musl` 目标程序仍可生成，并在静态链接后于 Alpine 运行。目标 glibc / musl sysroot 是用户程序的编译输入，不能解决 LLVM host 可执行文件自身的动态依赖。
+Linux 私有运行库从固定 AlmaLinux 8.10 RPM 构造：普通依赖使用同架构 BaseOS / AppStream 包，`libpython3.11.so.1.0` 使用同架构 `python3.11-libs`，满足 `GLIBCXX_3.4.30` 的 `libstdc++.so.6` 及配套 `libgcc_s.so.1` 使用同架构 GCC Toolset 12 包。`scripts/fetch_llvm.sh` 必须固定每个 RPM 的仓库位置、文件名、版本与 SHA-256；`scripts/trim_llvm.sh` 只提取实际依赖的共享库及 soname 链，并记录来源、许可证和裁剪清单，不携带 RPM 中的解释器、命令、头文件、包管理元数据或其他无关文件。已知 soname 只是闭包计算的起点，脚本必须对最终产物递归校验 `DT_NEEDED`，不得把固定六个库当成完整清单。
+
+Feng 永不使用或支持 Python 脚本。`libpython3.11.so.1.0` 仅用于满足官方 `liblldb` 的 ELF 直接依赖；发行包不包含 Python 可执行文件、标准库、模块或脚本。§8.1 必须在这样的裁剪结果上完成真实 `lldb` / `lldb-dap` 基础调试会话，而不能只验证进程能够输出版本号；如果基础调试仍会初始化并要求 Python 运行时其他内容，该产物不得通过验收，也不得通过继续引入 Python 运行时规避。
+
+首版 Linux host ABI 下限固定为 glibc 2.34。`linux-x64-gnu` 不得引入 x86-64-v2 或更高的隐式 CPU 基线，`linux-arm64-gnu` 使用通用 AArch64 基线。每次重新提取必须同时校验 LLVM 可执行文件、`liblldb` 和全部私有库的最高 `GLIBC_*` / `GLIBCXX_*` 要求与 ELF CPU 属性；任一文件超过基线时必须停止生成产物。
+
+首版 Linux host 支持范围是满足上述 ABI / CPU 基线并通过 §8.1 干净环境验收的主流 GNU/glibc 发行版，至少包括 Ubuntu 22.04 / 24.04 / 26.04、Debian 12 / 13 与 AlmaLinux 9 系列的 x64、ARM64 对应环境。纯 musl Alpine 不作为 Feng 编译器和 bundled LLVM 的 host；该限制只影响工具自身启动，`linux-*-musl` 目标程序仍可生成，并在静态链接后于 Alpine 运行。目标 GNU / musl sysroot 是用户程序的编译输入，不能解决 LLVM host 可执行文件自身的动态依赖。
+
+### 5.3 Linux GNU sysroot 来源与裁剪
+
+`linux-x64-gnu` 与 `linux-arm64-gnu` sysroot 统一以 Debian 11 Bullseye 官方 cross packages 为来源，固定 glibc 2.31 目标 ABI 基线。选择较低的目标 glibc 基线是为了提高 Feng 生成程序的运行兼容性，不改变 §5.2 中 LLVM host 自身的 glibc 2.34 下限。两者职责严格分离：LLVM 私有运行库只供 host 工具启动，GNU sysroot 只作为目标程序的头文件、对象与链接输入。
+
+每个目标架构的来源集合固定为对应的 `libc6-<deb-arch>-cross`、`libc6-dev-<deb-arch>-cross`、`linux-libc-dev-<deb-arch>-cross`、`libgcc-s1-<deb-arch>-cross` 与 `libgcc-10-dev-<deb-arch>-cross`，其中 `linux-x64-gnu` 对应 Debian `amd64`，`linux-arm64-gnu` 对应 Debian `arm64`。首版固定 Debian Bullseye cross-toolchain-base 的 glibc `2.31-9cross4`、Linux userspace headers `5.10.13-1cross4` 与 GCC runtime `10.2.1-6cross1`；后续升级必须作为显式工具链基线变更单独 Review，不得由仓库 `latest` 状态自动漂移。
+
+`scripts/fetch_gnu_sysroot.sh` 必须从 Debian 官方 archive / snapshot 的不可变地址下载固定 `.deb` 到 `local/sysroot/gnu/`，逐项校验文件名、版本与 SHA-256 后再解包；不得调用 host 包管理器解析当前最新版本。`scripts/trim_gnu_sysroot.sh` 从缓存原子生成 `toolchain/sysroot/linux-x64-gnu/` 与 `toolchain/sysroot/linux-arm64-gnu/`，仅保留目标公开 C / Linux userspace 头文件、glibc 动态与链接所需文件、动态加载器、CRT、linker scripts、`libgcc_s`、`libgcc.a`、`libgcc_eh.a`、GCC CRT 及 Clang GCC installation detector 所需目录和相对链接。GCC、binutils、`ld`、包维护脚本以及其他 host 可执行文件一律排除。
+
+每份 GNU sysroot 必须内建 README / manifest，记录所有二进制包与对应源码包的精确地址、版本、SHA-256、许可证、裁剪清单和源码提供方式。剪裁验收必须检查目标 ELF 架构、动态加载器、CRT、linker scripts、compiler runtime、全部符号链接，以及目录中不存在 host ELF 可执行工具；随后按 §8.1 分别完成 native、Linux 跨架构和 macOS host 的最小 C 编译、链接与目标运行验证。
 
 ## 6 构建与发布工作流
 
@@ -253,24 +269,29 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 任务：
 
-- [x] `scripts/fetch_llvm.sh`：下载并解压 macOS ARM64、Linux x64、Linux ARM64 的 LLVM 官方预编译包到 `local/llvm/`。
-- [x] `scripts/trim_llvm.sh`：已从单个 host LLVM root 原子精简 `clang`、`lld` / `ld.lld`、`lldb`、`lldb-dap` 及官方包内可提取的运行依赖；官方包外的 Linux host 共享库闭包仍由本阶段未完成项处理。
+- [x] `scripts/fetch_llvm.sh`：已能下载并解压 macOS ARM64、Linux x64、Linux ARM64 的 LLVM 官方预编译包到 `local/llvm/`；Linux 私有运行库来源包的下载、版本固定与校验仍由下列未完成项处理。
+- [x] `scripts/trim_llvm.sh`：已从单个 host LLVM root 原子精简 `clang`、`lld` / `ld.lld`、`lldb`、`lldb-dap` 及官方包内可提取的运行依赖；官方包外的 Linux host 私有动态依赖闭包仍由下列未完成项处理。
 - [x] 扩展 `scripts/trim_llvm.sh`，从同一官方包保留 `llvm-ar` 与 `llvm-ranlib`，供 §9 的跨目标静态归档使用；不得引入 host `ar` 处理其他目标对象的隐式依赖。
 - [ ] 按完整 host 平台标识调整 LLVM 维护脚本与现有产物目录，最终产出 `toolchain/llvm/macos-arm64/`、`toolchain/llvm/linux-x64-gnu/`、`toolchain/llvm/linux-arm64-gnu/`；不得仅重命名未校验的二进制。
+- [ ] 扩展 `scripts/fetch_llvm.sh`，按 §5.2 为 Linux x64 / ARM64 下载固定 AlmaLinux 8.10 BaseOS / AppStream、Python 3.11 与 GCC Toolset 12 RPM，逐项固定仓库位置、文件名、版本和 SHA-256，并缓存到 `local/llvm/`；不得使用会随仓库更新漂移的未固定 URL。
+- [ ] 扩展 `scripts/trim_llvm.sh`，从 Linux 来源 RPM 中只提取 LLVM 实际需要的私有共享库与 soname 链，设置相对 RPATH / RUNPATH，递归验证最终 `DT_NEEDED` 闭包，并原子写入对应 `toolchain/llvm/<host-platform>/lib/`；系统不得再承担非 glibc LLVM 运行库。
+- [ ] Linux LLVM 产物只保留 `libpython3.11.so.1.0` 以满足 `liblldb` ELF 依赖，不得包含 Python 可执行文件、标准库、模块或脚本；Feng 永不使用或支持 Python 脚本。
 - [x] `scripts/fetch_musl.sh`：从 musl.cc 下载并解压 x64 与 arm64 配套预构建包。
 - [x] `scripts/trim_musl.sh`：已验证两种架构 musl、CRT、libgcc 与相对目录关系完整，并排除 GCC / binutils host 可执行工具。
 - [ ] 将 musl 维护脚本与现有产物迁移为 `toolchain/sysroot/linux-x64-musl/`、`toolchain/sysroot/linux-arm64-musl/`，保持既有来源、许可和链路验收。
-- [ ] 增加可复现的 GNU/glibc sysroot fetch / trim 维护脚本，产出 `toolchain/sysroot/linux-x64-gnu/`、`toolchain/sysroot/linux-arm64-gnu/`；保留目标头文件、glibc、动态加载器、CRT、linker scripts、compiler runtime 与 Clang 所需目录关系，不包含 host 可执行工具。
-- [ ] 两份 GNU sysroot 分别记录来源、版本、最低 glibc ABI、裁剪清单、许可证与源码提供方式；构造过程不得复制维护机的 `/usr`。
+- [ ] 新增 `scripts/fetch_gnu_sysroot.sh`，按 §5.3 从 Debian 官方不可变 archive / snapshot 地址真实下载两个架构的固定 Bullseye cross packages 到 `local/sysroot/gnu/`，逐项校验文件名、版本与 SHA-256；不得调用 host 包管理器选择当前版本。
+- [ ] 新增 `scripts/trim_gnu_sysroot.sh`，原子产出 `toolchain/sysroot/linux-x64-gnu/`、`toolchain/sysroot/linux-arm64-gnu/`；保留目标头文件、glibc、动态加载器、CRT、linker scripts、compiler runtime 与 Clang 所需目录关系，不包含 GCC / binutils / `ld` 或其他 host 可执行工具。
+- [ ] 两份 GNU sysroot 固定 glibc 2.31 目标 ABI，并分别记录全部二进制包与源码包的地址、版本、SHA-256、裁剪清单、许可证与源码提供方式；构造过程不得复制维护机的 `/usr`。
 
 独立交付与回归门：
 
 - [x] `macos-arm64` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构与动态依赖。
-- [ ] `linux-x64-gnu` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构、glibc / GLIBCXX 基线与完整动态依赖闭包。
-- [ ] `linux-arm64-gnu` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构、glibc / GLIBCXX 基线与完整动态依赖闭包。
-- [ ] 在受支持的主流 glibc 发行版干净环境固定 LLVM host 共享库边界；系统依赖与随包私有库必须覆盖完整 `DT_NEEDED` 闭包，不能只验证文件存在。纯 musl Alpine 不作为 LLVM host 验收环境。
+- [ ] `linux-x64-gnu` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib` 启动验收，并通过真实 `lldb` / `lldb-dap` 基础调试会话；同时校验 ELF 架构、通用 x86-64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包。
+- [ ] `linux-arm64-gnu` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib` 启动验收，并通过真实 `lldb` / `lldb-dap` 基础调试会话；同时校验 ELF 架构、通用 AArch64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包。
+- [ ] LLVM host 的 glibc 下限不高于 2.34；在 Ubuntu 22.04 / 24.04 / 26.04、Debian 12 / 13 与 AlmaLinux 9 系列干净环境验证对应 x64 / ARM64 发行物无需安装额外包即可运行。纯 musl Alpine 不作为 LLVM host 验收环境。
 - [x] 使用精简 Clang / LLD 与两份 sysroot 直接链接最小 C ELF，验证 x64 / arm64 的 CRT、libgcc 和 musl 链路完整，不依赖 Feng CLI。
-- [ ] 使用精简 Clang / LLD 与两份 GNU sysroot 分别在 native、跨架构和 macOS host 路径链接最小 C ELF，验证 glibc、动态加载器、CRT、compiler runtime 与 LLD 链路完整，不依赖 Feng CLI。
+- [ ] 使用精简 Clang / LLD 与两份 GNU sysroot 分别在 native、Linux 跨架构和 macOS host 路径编译并链接最小 C ELF，验证 glibc 2.31 目标 ABI、动态加载器、CRT、linker scripts、compiler runtime 与 LLD 链路完整，不依赖 Feng CLI。
+- [ ] 在对应 x64 / ARM64 GNU/glibc 目标环境运行两份最小 ELF，并检查产物的 ELF 架构、解释器路径与最高 `GLIBC_*` 要求；GNU sysroot 目录同时通过无 host ELF 可执行工具、无断链符号链接和许可证 / 来源 manifest 完整性检查。
 - [x] `macos-arm64` host 的全量 `make test` 在 Codex 沙箱外通过。
 - [ ] `linux-x64-gnu` host 的全量 `make test` 通过。
 - [ ] `linux-arm64-gnu` host 的全量 `make test` 通过。
@@ -313,12 +334,12 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 任务：
 
 - [ ] `feng dap` 在 macOS 与 Linux 按 [feng-cli.md](../docs/feng-cli.md) 规定共用 §8.2 的路径能力，依次定位并启动 bundled、`PATH` 与 macOS `xcrun` 提供的 `lldb-dap`。
-- [ ] Linux 缺失 `libpython3.11.so.1.0` 或其他官方 LLDB 直接动态依赖时，保留动态加载器真实错误并给出与已验证 Linux 支持基线一致的可操作诊断；Feng 本身不使用 Python 脚本。
+- [ ] Linux bundled `libpython3.11.so.1.0` 或其他 §5.2 私有 LLDB 依赖缺失时，按发行包损坏处理，保留动态加载器真实错误并给出可操作诊断，不得提示用户安装系统 Python 或其他系统包；Feng 永不使用或支持 Python 脚本。
 - [ ] 补充 macOS / Linux 后端定位、启动、缺失依赖和 DAP 基础会话回归。
 
 独立交付与回归门：
 
-- [ ] 三个 host 分别完成 `feng dap` 真实后端启动与基础调试会话；Linux 验收环境满足 §5.2 规定的系统动态依赖。
+- [ ] 三个 host 分别完成 `feng dap` 真实后端启动与基础调试会话；Linux 验收环境只提供 §5.2 规定的 host 基线，不预装 Feng 私有 LLVM 运行库。
 - [ ] 三个 host 的全量 `make test` 通过。
 
 ### 8.5 分发、CI 汇聚与安装
@@ -443,7 +464,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 本节只记录 Linux 目标链接所需的分发组成；完整平台到 Clang 参数的转换以 [feng-build.md](../docs/feng-build.md) 为主规范。
 
 1. **linker**：各 host 分发包使用自身 `toolchain/llvm/bin/lld`，并保留 `bin/ld.lld -> lld`。该可执行文件来自与 `clang` 相同的 LLVM 官方 host 包。driver 对全部 Linux GNU / musl 平台传入 `-fuse-ld=lld`，由 Clang 基于自身安装目录定位 `bin/ld.lld`，不传 `--ld-path`，也不使用 sysroot 来源包中的 linker。
-2. **GNU 目标 C 环境**：`toolchain/sysroot/linux-*-gnu/` 携带与目标架构及选定最低 glibc ABI 匹配的头文件、glibc、动态加载器、CRT、linker scripts 与 compiler runtime。Linux native 与交叉编译都使用该 bundled sysroot，不消费 host glibc 开发文件。
+2. **GNU 目标 C 环境**：`toolchain/sysroot/linux-*-gnu/` 按 §5.3 从固定 Debian Bullseye cross packages 裁剪，携带与目标架构及 glibc 2.31 目标 ABI 匹配的头文件、glibc、动态加载器、CRT、linker scripts 与 compiler runtime。Linux native 与交叉编译都使用该 bundled sysroot，不消费 host glibc 开发文件。
 3. **musl 目标 C 环境**：`toolchain/sysroot/linux-*-musl/` 使用与目标架构匹配的 musl.cc 配套内容，保留 musl 头文件、库、动态加载器、CRT 及目标 compiler runtime。`target=bin` 默认执行静态链接；`target=lib` 只编译对象并归档。
 4. **Feng runtime**：`target=bin` 必须使用 `lib/<platform>/libfeng_runtime.a`，GNU / musl 不得互换。libc 不合并进 runtime 归档，由最终目标链接从对应 sysroot 解析。
 5. **Feng 包与 std 原生库**：正式 `.a` 与 std 第三方 C 依赖同样按完整平台区分，分别位于 `.fb/lib/<platform>/` 与 `.fb/extlib/<platform>/`。
