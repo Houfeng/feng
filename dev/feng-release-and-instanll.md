@@ -286,9 +286,9 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 独立交付与回归门：
 
 - [x] `macos-arm64` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构与动态依赖。
-- [ ] `linux-x64-gnu` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib` 启动验收，并通过真实 `lldb` / `lldb-dap` 基础调试会话；同时校验 ELF 架构、通用 x86-64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包。
-- [x] `linux-arm64-gnu` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib` 启动验收，并通过真实 `lldb` / `lldb-dap` 基础调试会话；同时校验 ELF 架构、通用 AArch64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包。
-- [ ] LLVM host 的 glibc 下限不高于 2.34；在 Ubuntu 22.04 / 24.04 / 26.04、Debian 12 / 13 与 AlmaLinux 9 系列干净环境验证对应 x64 / ARM64 发行物无需安装额外包即可运行。纯 musl Alpine 不作为 LLVM host 验收环境。
+- [ ] `linux-x64-gnu` LLVM 产物已在 Apple Container 的 Ubuntu 26.04 x64 环境通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb` 与 `lldb-dap` 启动验收，并已校验 ELF 架构、通用 x86-64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包；但 Apple Container 的 x64 仿真环境设置 LLDB 软件断点时返回 `SIGILL`，硬件断点也不可用，因此仍须在原生 x64 Linux host 完成真实 `lldb` / `lldb-dap` 基础调试会话后才能标记完成。
+- [x] `linux-arm64-gnu` LLVM 产物已在 Apple Container 的 Ubuntu 26.04 ARM64 干净环境通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb` 与 `lldb-dap` 启动验收，并通过真实 `lldb` / `lldb-dap` 断点、调用栈、局部变量、继续与正常退出基础调试会话；同时已校验 ELF 架构、通用 AArch64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包。
+- [ ] LLVM host 的 glibc 下限已校验不高于 2.34；对应 x64 / ARM64 发行物已在 Apple Container 的 Ubuntu 26.04 干净环境验证无需安装额外包即可启动，其中 ARM64 真实 LLDB / DAP 调试会话已通过。仍须补齐 Ubuntu 22.04 / 24.04、Debian 12 / 13 与 AlmaLinux 9 系列的 x64 / ARM64 干净环境验收；纯 musl Alpine 不作为 LLVM host 验收环境。
 - [x] 使用精简 Clang / LLD 与两份 sysroot 直接链接最小 C ELF，验证 x64 / arm64 的 CRT、libgcc 和 musl 链路完整，不依赖 Feng CLI。
 - [x] 使用精简 Clang / LLD 与两份 GNU sysroot 分别在 native、Linux 跨架构和 macOS host 路径编译并链接最小 C ELF，验证 glibc 2.31 目标 ABI、动态加载器、CRT、linker scripts、compiler runtime 与 LLD 链路完整，不依赖 Feng CLI。
 - [x] 在对应 x64 / ARM64 GNU/glibc 目标环境运行两份最小 ELF，并检查产物的 ELF 架构、解释器路径与最高 `GLIBC_*` 要求；GNU sysroot 目录同时通过无 host ELF 可执行工具、无断链符号链接和许可证 / 来源 manifest 完整性检查。
