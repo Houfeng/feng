@@ -1,3 +1,14 @@
+/*
+ * Linux libc headers hide POSIX.1-2008 pthread declarations such as
+ * pthread_mutexattr_settype() and PTHREAD_MUTEX_RECURSIVE when this
+ * translation unit is compiled in strict C11 mode. Define the feature-test
+ * macro before every header, and keep it Linux-only so the macOS header
+ * namespace and runtime implementation remain unchanged.
+ */
+#if defined(__linux__) && !defined(_POSIX_C_SOURCE)
+#define _POSIX_C_SOURCE 200809L
+#endif
+
 /* Phase 1B cycle collector — Bacon-Rajan trial-deletion.
  *
  * Spec: docs/feng-lifetime.md §13.1 (cycle collector contract) and §11
