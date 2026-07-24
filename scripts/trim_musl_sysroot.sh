@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Trim the musl.cc cross-toolchain archives prepared by fetch_musl.sh into
+# Trim the musl.cc cross-toolchain archives prepared by
+# fetch_musl_sysroot.sh into
 # toolchain/sysroot/<os>-<arch>-musl/. Feng uses bundled Clang and LLD, so the
 # GCC/binutils host executables are excluded. The target musl C environment
 # and the GCC runtime closure required by Clang are retained.
@@ -223,8 +224,8 @@ Feng invokes Clang with:
   -fuse-ld=lld
 
 Re-sync:
-  ./scripts/fetch_musl.sh
-  ./scripts/trim_musl.sh
+  ./scripts/fetch_musl_sysroot.sh
+  ./scripts/trim_musl_sysroot.sh
 EOF
 }
 

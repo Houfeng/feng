@@ -2,13 +2,15 @@
 set -euo pipefail
 
 # Download and extract prebuilt musl-based Linux cross toolchains from musl.cc
-# into local/sysroot-musl/ for consumption by trim_musl.sh. This is a maintenance
+# into local/sysroot-musl/ for consumption by trim_musl_sysroot.sh. This is a
+# maintenance
 # script — not part of the release build flow.
 #
 # musl.cc ships complete cross toolchains (GCC + binutils + musl). Feng only
 # needs the sysroot portion (C library headers + static libs) for clang-based
 # cross compilation. This script downloads the full prebuilt and caches it;
-# trim_musl.sh extracts only the sysroot component into toolchain/sysroot/.
+# trim_musl_sysroot.sh extracts only the sysroot component into
+# toolchain/sysroot/.
 #
 # musl.cc cross package layout:
 #   <target>-linux-musl-cross/
@@ -186,4 +188,4 @@ for entry in "${TARGETS[@]}"; do
 done
 
 echo "==> Done. All musl prebuilts cached at ${CACHE_DIR}"
-echo "==> Next: scripts/trim_musl.sh"
+echo "==> Next: scripts/trim_musl_sysroot.sh"

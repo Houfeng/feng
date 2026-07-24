@@ -276,8 +276,8 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - [x] 扩展 `scripts/fetch_llvm.sh`，按 §5.2 为 Linux x64 / ARM64 下载固定 AlmaLinux 8.10 BaseOS / AppStream RPM、Ubuntu 22.04 Jammy security ncurses DEB 与 Ubuntu 22.04 updates `libstdc++6` DEB，逐项固定仓库位置、文件名、版本和 SHA-256，并缓存到 `local/llvm/`；不得使用会随仓库更新漂移的未固定 URL。
 - [x] 扩展 `scripts/trim_llvm.sh`，从 Linux 固定来源包中只提取 LLVM 实际需要的私有共享库与 soname 链，设置相对 RPATH / RUNPATH，递归验证最终 `DT_NEEDED` 闭包和 ncurses 版本化符号，并原子写入对应 `toolchain/llvm/<host-platform>/lib/`；系统不得再承担非 glibc LLVM 运行库。
 - [x] Linux LLVM 产物保留 `libpython3.11.so.1.0` 与仅供 LLDB 初始化使用的同版本 `encodings`，通过工具链内部启动器设置私有相对 `PYTHONHOME`；不得包含 Python 可执行文件、其余标准库、LLDB Python bindings、第三方模块或通用脚本能力，Feng 永不使用或支持 Python 脚本。
-- [x] `scripts/fetch_musl.sh`：从 musl.cc 下载并解压 x64 与 arm64 配套预构建包。
-- [x] `scripts/trim_musl.sh`：已验证两种架构 musl、CRT、libgcc 与相对目录关系完整，并排除 GCC / binutils host 可执行工具。
+- [x] `scripts/fetch_musl_sysroot.sh`：从 musl.cc 下载并解压 x64 与 arm64 配套预构建包。
+- [x] `scripts/trim_musl_sysroot.sh`：已验证两种架构 musl、CRT、libgcc 与相对目录关系完整，并排除 GCC / binutils host 可执行工具。
 - [x] 将 musl 维护脚本与现有产物迁移为 `toolchain/sysroot/linux-x64-musl/`、`toolchain/sysroot/linux-arm64-musl/`，保持既有来源、许可和链路验收。
 - [x] 新增 `scripts/fetch_gnu_sysroot.sh`，按 §5.3 从 Debian 官方不可变 archive / snapshot 地址真实下载两个架构的固定 Bullseye cross packages 到 `local/sysroot-gnu/`，逐项校验文件名、版本与 SHA-256；不得调用 host 包管理器选择当前版本。
 - [x] 新增 `scripts/trim_gnu_sysroot.sh`，原子产出 `toolchain/sysroot/linux-x64-gnu/`、`toolchain/sysroot/linux-arm64-gnu/`；保留目标头文件、glibc、动态加载器、CRT、linker scripts、compiler runtime 与 Clang 所需目录关系，不包含 GCC / binutils / `ld` 或其他 host 可执行工具。
