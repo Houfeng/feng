@@ -166,7 +166,7 @@ Feng 永不使用或支持 Python 脚本。`libpython3.11.so.1.0` 用于满足�
 
 每个目标架构的来源集合固定为对应的 `libc6-<deb-arch>-cross`、`libc6-dev-<deb-arch>-cross`、`linux-libc-dev-<deb-arch>-cross`、`libgcc-s1-<deb-arch>-cross` 与 `libgcc-10-dev-<deb-arch>-cross`，其中 `linux-x64-gnu` 对应 Debian `amd64`，`linux-arm64-gnu` 对应 Debian `arm64`。首版固定 Debian Bullseye cross-toolchain-base 的 glibc `2.31-9cross4`、Linux userspace headers `5.10.13-1cross4` 与 GCC runtime `10.2.1-6cross1`；后续升级必须作为显式工具链基线变更单独 Review，不得由仓库 `latest` 状态自动漂移。
 
-`scripts/fetch_gnu_sysroot.sh` 必须从 Debian 官方 archive / snapshot 的不可变地址下载固定 `.deb` 到 `local/sysroot/gnu/`，逐项校验文件名、版本与 SHA-256 后再解包；不得调用 host 包管理器解析当前最新版本。`scripts/trim_gnu_sysroot.sh` 从缓存原子生成 `toolchain/sysroot/linux-x64-gnu/` 与 `toolchain/sysroot/linux-arm64-gnu/`，仅保留目标公开 C / Linux userspace 头文件、glibc 动态与链接所需文件、动态加载器、CRT、linker scripts、`libgcc_s`、`libgcc.a`、`libgcc_eh.a`、GCC CRT 及 Clang GCC installation detector 所需目录和相对链接。GCC、binutils、`ld`、包维护脚本以及其他 host 可执行文件一律排除。
+`scripts/fetch_gnu_sysroot.sh` 必须从 Debian 官方 archive / snapshot 的不可变地址下载固定 `.deb` 到 `local/sysroot-gnu/`，逐项校验文件名、版本与 SHA-256 后再解包；不得调用 host 包管理器解析当前最新版本。`scripts/trim_gnu_sysroot.sh` 从缓存原子生成 `toolchain/sysroot/linux-x64-gnu/` 与 `toolchain/sysroot/linux-arm64-gnu/`，仅保留目标公开 C / Linux userspace 头文件、glibc 动态与链接所需文件、动态加载器、CRT、linker scripts、`libgcc_s`、`libgcc.a`、`libgcc_eh.a`、GCC CRT 及 Clang GCC installation detector 所需目录和相对链接。GCC、binutils、`ld`、包维护脚本以及其他 host 可执行文件一律排除。
 
 每份 GNU sysroot 必须内建 README / manifest，记录所有二进制包与对应源码包的精确地址、版本、SHA-256、许可证、裁剪清单和源码提供方式。剪裁验收必须检查目标 ELF 架构、动态加载器、CRT、linker scripts、compiler runtime、全部符号链接，以及目录中不存在 host ELF 可执行工具；随后按 §8.1 分别完成 native、Linux 跨架构和 macOS host 的最小 C 编译、链接与目标运行验证。
 
@@ -279,7 +279,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - [x] `scripts/fetch_musl.sh`：从 musl.cc 下载并解压 x64 与 arm64 配套预构建包。
 - [x] `scripts/trim_musl.sh`：已验证两种架构 musl、CRT、libgcc 与相对目录关系完整，并排除 GCC / binutils host 可执行工具。
 - [x] 将 musl 维护脚本与现有产物迁移为 `toolchain/sysroot/linux-x64-musl/`、`toolchain/sysroot/linux-arm64-musl/`，保持既有来源、许可和链路验收。
-- [x] 新增 `scripts/fetch_gnu_sysroot.sh`，按 §5.3 从 Debian 官方不可变 archive / snapshot 地址真实下载两个架构的固定 Bullseye cross packages 到 `local/sysroot/gnu/`，逐项校验文件名、版本与 SHA-256；不得调用 host 包管理器选择当前版本。
+- [x] 新增 `scripts/fetch_gnu_sysroot.sh`，按 §5.3 从 Debian 官方不可变 archive / snapshot 地址真实下载两个架构的固定 Bullseye cross packages 到 `local/sysroot-gnu/`，逐项校验文件名、版本与 SHA-256；不得调用 host 包管理器选择当前版本。
 - [x] 新增 `scripts/trim_gnu_sysroot.sh`，原子产出 `toolchain/sysroot/linux-x64-gnu/`、`toolchain/sysroot/linux-arm64-gnu/`；保留目标头文件、glibc、动态加载器、CRT、linker scripts、compiler runtime 与 Clang 所需目录关系，不包含 GCC / binutils / `ld` 或其他 host 可执行工具。
 - [x] 两份 GNU sysroot 固定 glibc 2.31 目标 ABI，并分别记录全部二进制包与源码包的地址、版本、SHA-256、裁剪清单、许可证与源码提供方式；构造过程不得复制维护机的 `/usr`。
 

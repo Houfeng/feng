@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Download and extract prebuilt musl-based Linux cross toolchains from musl.cc
-# into local/musl/ for consumption by trim_musl.sh. This is a maintenance
+# into local/sysroot-musl/ for consumption by trim_musl.sh. This is a maintenance
 # script — not part of the release build flow.
 #
 # musl.cc ships complete cross toolchains (GCC + binutils + musl). Feng only
@@ -23,14 +23,14 @@ set -euo pipefail
 #   └── ...
 #
 # Cache behaviour: the archive and extracted tree live under
-# ${PROJECT_ROOT}/local/musl/ (gitignored). Re-runs skip the download when
+# ${PROJECT_ROOT}/local/sysroot-musl/ (gitignored). Re-runs skip the download when
 # the archive is already present and valid, and skip extraction when the
 # extracted root is already present. Delete the cache to force a re-download.
 #
 # musl.cc is a community-hosted server with intermittent connection drops.
 # The download loop uses curl --continue-at - to resume partial downloads,
 # retrying up to 10 times. If the server is unreachable, you can download
-# the archives manually (e.g. via browser) and place them in local/musl/;
+# the archives manually (e.g. via browser) and place them in local/sysroot-musl/;
 # this script will detect the existing archive and skip to extraction.
 #
 # Resource: https://musl.cc/
@@ -45,7 +45,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 MUSL_SRC_URL="${MUSL_SRC_URL:-https://musl.cc/}"
 
-CACHE_DIR="${PROJECT_ROOT}/local/musl"
+CACHE_DIR="${PROJECT_ROOT}/local/sysroot-musl"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then

@@ -21,7 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CACHE_DIR="${PROJECT_ROOT}/local/musl"
+CACHE_DIR="${PROJECT_ROOT}/local/sysroot-musl"
 OUTPUT_PARENT="${PROJECT_ROOT}/toolchain/sysroot"
 STAGING_DIR=""
 BACKUP_DIR=""
