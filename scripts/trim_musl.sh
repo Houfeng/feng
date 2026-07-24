@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # Trim the musl.cc cross-toolchain archives prepared by fetch_musl.sh into
-# toolchain/sysroot/<os>-<arch>/. Feng uses the bundled Clang and LLD, so the
+# toolchain/sysroot/<os>-<arch>-musl/. Feng uses bundled Clang and LLD, so the
 # GCC/binutils host executables are excluded. The target musl C environment
 # and the GCC runtime closure required by Clang are retained.
 #
 # Produced layout:
-#   toolchain/sysroot/<os>-<arch>/
+#   toolchain/sysroot/<os>-<arch>-musl/
 #     usr/include/                         musl public headers
 #     usr/lib/                             musl libraries and CRT objects
 #     lib/gcc/<musl-triple>/<gcc-version>/ GCC CRT and runtime archives
@@ -21,7 +21,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-CACHE_DIR="${PROJECT_ROOT}/temp/musl"
+CACHE_DIR="${PROJECT_ROOT}/local/musl"
 OUTPUT_PARENT="${PROJECT_ROOT}/toolchain/sysroot"
 STAGING_DIR=""
 BACKUP_DIR=""
@@ -29,8 +29,8 @@ OUTPUT_DIR=""
 
 # Each entry is <feng-target>|<archive>|<extracted-root>|<musl-triple>.
 TARGETS=(
-  "linux-arm64|aarch64-linux-musl-cross.tgz|aarch64-linux-musl-cross|aarch64-linux-musl"
-  "linux-x64|x86_64-linux-musl-cross.tgz|x86_64-linux-musl-cross|x86_64-linux-musl"
+  "linux-arm64-musl|aarch64-linux-musl-cross.tgz|aarch64-linux-musl-cross|aarch64-linux-musl"
+  "linux-x64-musl|x86_64-linux-musl-cross.tgz|x86_64-linux-musl-cross|x86_64-linux-musl"
 )
 
 # Fail with a consistent diagnostic.
@@ -71,11 +71,11 @@ verify_target_binary() {
   description="$(file -b "${path}")"
 
   case "${target}" in
-    linux-arm64)
+    linux-arm64-musl)
       [[ "${description}" == *"ARM aarch64"* || "${description}" == *"ARM64"* ]] ||
         die "${path} does not match ${target}: ${description}"
       ;;
-    linux-x64)
+    linux-x64-musl)
       [[ "${description}" == *"x86-64"* ]] ||
         die "${path} does not match ${target}: ${description}"
       ;;

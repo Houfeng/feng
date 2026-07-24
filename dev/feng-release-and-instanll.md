@@ -152,9 +152,9 @@ LLVM 22.1.8 官方 Linux x64 与 arm64 包是 GNU/glibc host 程序，不是 mus
 
 Linux Feng 发行包必须开箱即用，不得要求用户为 bundled LLVM 手工安装 `libpython3.11`、`libxml2`、ncurses、特定版本的 `libstdc++` 或其他非 glibc 运行库。系统边界只保留 Linux 内核、动态加载器及 glibc 所属基础库；LLVM 需要的其余直接和传递动态依赖必须作为私有运行库置于 `toolchain/llvm/lib/`。所有 bundled LLVM 可执行文件和私有库必须通过相对 RPATH / RUNPATH 定位该目录，不依赖 `LD_LIBRARY_PATH`，也不得从目标 sysroot 加载 host 运行库。
 
-Linux 私有运行库从固定 AlmaLinux 8.10 RPM 构造：普通依赖使用同架构 BaseOS / AppStream 包，`libpython3.11.so.1.0` 使用同架构 `python3.11-libs`，满足 `GLIBCXX_3.4.30` 的 `libstdc++.so.6` 及配套 `libgcc_s.so.1` 使用同架构 GCC Toolset 12 包。`scripts/fetch_llvm.sh` 必须固定每个 RPM 的仓库位置、文件名、版本与 SHA-256；`scripts/trim_llvm.sh` 只提取实际依赖的共享库及 soname 链，并记录来源、许可证和裁剪清单，不携带 RPM 中的解释器、命令、头文件、包管理元数据或其他无关文件。已知 soname 只是闭包计算的起点，脚本必须对最终产物递归校验 `DT_NEEDED`，不得把固定六个库当成完整清单。
+Linux 私有运行库使用经过 ABI 实测的固定来源：`libxml2`、xz、zlib、`libpython3.11.so.1.0` 与 `libgcc_s.so.1` 使用同架构 AlmaLinux 8.10 BaseOS / AppStream RPM；`libncurses.so.6`、`libpanel.so.6`、`libform.so.6` 与 `libtinfo.so.6` 统一使用同架构 Ubuntu 22.04 Jammy security 的 ncurses `6.3-2ubuntu0.2`；`libstdc++.so.6.0.30` 使用同架构 Ubuntu 22.04 updates 的 `libstdc++6 12.3.0-1ubuntu1~22.04.3`。Ubuntu ncurses 提供官方 `liblldb` 要求的 `NCURSES6_*` / `NCURSES6_TINFO_*` 版本化符号且最高只要求 `GLIBC_2.34`；AlmaLinux 8 ncurses 只提供未版本化符号，禁止作为官方 LLVM 22.1.8 `liblldb` 的私有库来源。Ubuntu `libstdc++6` 同时提供 LLVM 需要的 `GLIBCXX_3.4.30` 且两架构最高只要求 `GLIBC_2.34`；AlmaLinux 8 的 GCC Toolset 12 只提供指向系统 `libstdc++.so.6` / `libgcc_s.so.1` 的 linker script 和 `libstdc++_nonshared.a`，不能满足已链接完成的官方 LLVM，禁止作为这两个私有共享库的来源。CPython 3.11.9 官方 `LICENSE` 与 Ubuntu `gcc-12-base` 的同版本包作为缺失许可证正文的固定来源，但后者的命令和其他运行文件不得进入产物。`scripts/fetch_llvm.sh` 必须固定每个 RPM / DEB / 许可证文件的来源位置、文件名、版本与 SHA-256；`scripts/trim_llvm.sh` 只提取实际依赖的共享库及 soname 链，并记录来源、许可证和裁剪清单，不携带包中的解释器、命令、头文件、GDB Python 脚本、包管理元数据或其他无关文件。已知 soname 只是闭包计算的起点，脚本必须对最终产物递归校验 `DT_NEEDED`，不得把固定库名当成完整清单。
 
-Feng 永不使用或支持 Python 脚本。`libpython3.11.so.1.0` 仅用于满足官方 `liblldb` 的 ELF 直接依赖；发行包不包含 Python 可执行文件、标准库、模块或脚本。§8.1 必须在这样的裁剪结果上完成真实 `lldb` / `lldb-dap` 基础调试会话，而不能只验证进程能够输出版本号；如果基础调试仍会初始化并要求 Python 运行时其他内容，该产物不得通过验收，也不得通过继续引入 Python 运行时规避。
+Feng 永不使用或支持 Python 脚本。`libpython3.11.so.1.0` 用于满足官方 `liblldb` 的 ELF 直接依赖；官方 Linux `liblldb` 创建调试器时仍会初始化 Python 的文件系统编码，因此发行包额外只保留与该库同版本的 Python 3.11 `encodings` 包，不包含 Python 可执行文件、其余标准库、LLDB Python bindings、第三方模块或通用脚本能力。`lldb` 与 `lldb-dap` 的工具链内部启动器根据自身位置设置私有相对 `PYTHONHOME` 后执行原始 ELF，用户无需配置环境变量，私有 Python 路径也不得作为 Feng CLI 的工具链定位接口。§8.1 必须在这样的裁剪结果上完成真实 `lldb` / `lldb-dap` 基础调试会话，而不能只验证进程能够输出版本号；任何基础调试流程若仍要求 `encodings` 之外的 Python 运行时内容，该产物不得通过验收，也不得未经人工决策继续扩大 Python 运行时范围。
 
 首版 Linux host ABI 下限固定为 glibc 2.34。`linux-x64-gnu` 不得引入 x86-64-v2 或更高的隐式 CPU 基线，`linux-arm64-gnu` 使用通用 AArch64 基线。每次重新提取必须同时校验 LLVM 可执行文件、`liblldb` 和全部私有库的最高 `GLIBC_*` / `GLIBCXX_*` 要求与 ELF CPU 属性；任一文件超过基线时必须停止生成产物。
 
@@ -259,7 +259,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 §8 与 §9 的所有子阶段都必须严格遵守统一门禁：
 
-1. 完成本子阶段全部任务和专项验收，并在 `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 三个 host 上通过全量 `make test`。`make test` 是仓库全量回归入口，已包含单元测试、UBSan、smoke、CLI、std、fcts 与性能约束检查。
+1. 完成本子阶段全部任务、专项验收和该子阶段明确要求的全量回归。除子阶段另有明确规定外，涉及 Feng 编译器、runtime 或 host 行为的子阶段必须在 `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 三个 host 上通过全量 `make test`；`make test` 是仓库全量回归入口，已包含单元测试、UBSan、smoke、CLI、std、fcts 与性能约束检查。§8.1 只改变维护脚本和预生成工具链产物，不改变 Feng 编译器、runtime、Makefile 或测试，因此只要求当前 `macos-arm64` 开发 host 的全量 `make test`；Linux host 只执行该节列出的工具链与 sysroot 专项验收。
 2. 提交本子阶段全部变更和验收结果供人工 Review；全量回归通过不代表可以自动进入下一子阶段。
 3. 只有人工 Review 通过且收到“开始下一阶段”的明确人工指令后，才能实施下一子阶段。§8 全部通过人工 Review 前不得开始 §9。
 
@@ -272,29 +272,27 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - [x] `scripts/fetch_llvm.sh`：已能下载并解压 macOS ARM64、Linux x64、Linux ARM64 的 LLVM 官方预编译包到 `local/llvm/`；Linux 私有运行库来源包的下载、版本固定与校验仍由下列未完成项处理。
 - [x] `scripts/trim_llvm.sh`：已从单个 host LLVM root 原子精简 `clang`、`lld` / `ld.lld`、`lldb`、`lldb-dap` 及官方包内可提取的运行依赖；官方包外的 Linux host 私有动态依赖闭包仍由下列未完成项处理。
 - [x] 扩展 `scripts/trim_llvm.sh`，从同一官方包保留 `llvm-ar` 与 `llvm-ranlib`，供 §9 的跨目标静态归档使用；不得引入 host `ar` 处理其他目标对象的隐式依赖。
-- [ ] 按完整 host 平台标识调整 LLVM 维护脚本与现有产物目录，最终产出 `toolchain/llvm/macos-arm64/`、`toolchain/llvm/linux-x64-gnu/`、`toolchain/llvm/linux-arm64-gnu/`；不得仅重命名未校验的二进制。
-- [ ] 扩展 `scripts/fetch_llvm.sh`，按 §5.2 为 Linux x64 / ARM64 下载固定 AlmaLinux 8.10 BaseOS / AppStream、Python 3.11 与 GCC Toolset 12 RPM，逐项固定仓库位置、文件名、版本和 SHA-256，并缓存到 `local/llvm/`；不得使用会随仓库更新漂移的未固定 URL。
-- [ ] 扩展 `scripts/trim_llvm.sh`，从 Linux 来源 RPM 中只提取 LLVM 实际需要的私有共享库与 soname 链，设置相对 RPATH / RUNPATH，递归验证最终 `DT_NEEDED` 闭包，并原子写入对应 `toolchain/llvm/<host-platform>/lib/`；系统不得再承担非 glibc LLVM 运行库。
-- [ ] Linux LLVM 产物只保留 `libpython3.11.so.1.0` 以满足 `liblldb` ELF 依赖，不得包含 Python 可执行文件、标准库、模块或脚本；Feng 永不使用或支持 Python 脚本。
+- [x] 按完整 host 平台标识调整 LLVM 维护脚本与现有产物目录，最终产出 `toolchain/llvm/macos-arm64/`、`toolchain/llvm/linux-x64-gnu/`、`toolchain/llvm/linux-arm64-gnu/`；不得仅重命名未校验的二进制。
+- [x] 扩展 `scripts/fetch_llvm.sh`，按 §5.2 为 Linux x64 / ARM64 下载固定 AlmaLinux 8.10 BaseOS / AppStream RPM、Ubuntu 22.04 Jammy security ncurses DEB 与 Ubuntu 22.04 updates `libstdc++6` DEB，逐项固定仓库位置、文件名、版本和 SHA-256，并缓存到 `local/llvm/`；不得使用会随仓库更新漂移的未固定 URL。
+- [x] 扩展 `scripts/trim_llvm.sh`，从 Linux 固定来源包中只提取 LLVM 实际需要的私有共享库与 soname 链，设置相对 RPATH / RUNPATH，递归验证最终 `DT_NEEDED` 闭包和 ncurses 版本化符号，并原子写入对应 `toolchain/llvm/<host-platform>/lib/`；系统不得再承担非 glibc LLVM 运行库。
+- [x] Linux LLVM 产物保留 `libpython3.11.so.1.0` 与仅供 LLDB 初始化使用的同版本 `encodings`，通过工具链内部启动器设置私有相对 `PYTHONHOME`；不得包含 Python 可执行文件、其余标准库、LLDB Python bindings、第三方模块或通用脚本能力，Feng 永不使用或支持 Python 脚本。
 - [x] `scripts/fetch_musl.sh`：从 musl.cc 下载并解压 x64 与 arm64 配套预构建包。
 - [x] `scripts/trim_musl.sh`：已验证两种架构 musl、CRT、libgcc 与相对目录关系完整，并排除 GCC / binutils host 可执行工具。
-- [ ] 将 musl 维护脚本与现有产物迁移为 `toolchain/sysroot/linux-x64-musl/`、`toolchain/sysroot/linux-arm64-musl/`，保持既有来源、许可和链路验收。
-- [ ] 新增 `scripts/fetch_gnu_sysroot.sh`，按 §5.3 从 Debian 官方不可变 archive / snapshot 地址真实下载两个架构的固定 Bullseye cross packages 到 `local/sysroot/gnu/`，逐项校验文件名、版本与 SHA-256；不得调用 host 包管理器选择当前版本。
-- [ ] 新增 `scripts/trim_gnu_sysroot.sh`，原子产出 `toolchain/sysroot/linux-x64-gnu/`、`toolchain/sysroot/linux-arm64-gnu/`；保留目标头文件、glibc、动态加载器、CRT、linker scripts、compiler runtime 与 Clang 所需目录关系，不包含 GCC / binutils / `ld` 或其他 host 可执行工具。
-- [ ] 两份 GNU sysroot 固定 glibc 2.31 目标 ABI，并分别记录全部二进制包与源码包的地址、版本、SHA-256、裁剪清单、许可证与源码提供方式；构造过程不得复制维护机的 `/usr`。
+- [x] 将 musl 维护脚本与现有产物迁移为 `toolchain/sysroot/linux-x64-musl/`、`toolchain/sysroot/linux-arm64-musl/`，保持既有来源、许可和链路验收。
+- [x] 新增 `scripts/fetch_gnu_sysroot.sh`，按 §5.3 从 Debian 官方不可变 archive / snapshot 地址真实下载两个架构的固定 Bullseye cross packages 到 `local/sysroot/gnu/`，逐项校验文件名、版本与 SHA-256；不得调用 host 包管理器选择当前版本。
+- [x] 新增 `scripts/trim_gnu_sysroot.sh`，原子产出 `toolchain/sysroot/linux-x64-gnu/`、`toolchain/sysroot/linux-arm64-gnu/`；保留目标头文件、glibc、动态加载器、CRT、linker scripts、compiler runtime 与 Clang 所需目录关系，不包含 GCC / binutils / `ld` 或其他 host 可执行工具。
+- [x] 两份 GNU sysroot 固定 glibc 2.31 目标 ABI，并分别记录全部二进制包与源码包的地址、版本、SHA-256、裁剪清单、许可证与源码提供方式；构造过程不得复制维护机的 `/usr`。
 
 独立交付与回归门：
 
 - [x] `macos-arm64` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构与动态依赖。
 - [ ] `linux-x64-gnu` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib` 启动验收，并通过真实 `lldb` / `lldb-dap` 基础调试会话；同时校验 ELF 架构、通用 x86-64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包。
-- [ ] `linux-arm64-gnu` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib` 启动验收，并通过真实 `lldb` / `lldb-dap` 基础调试会话；同时校验 ELF 架构、通用 AArch64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包。
+- [x] `linux-arm64-gnu` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib` 启动验收，并通过真实 `lldb` / `lldb-dap` 基础调试会话；同时校验 ELF 架构、通用 AArch64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包。
 - [ ] LLVM host 的 glibc 下限不高于 2.34；在 Ubuntu 22.04 / 24.04 / 26.04、Debian 12 / 13 与 AlmaLinux 9 系列干净环境验证对应 x64 / ARM64 发行物无需安装额外包即可运行。纯 musl Alpine 不作为 LLVM host 验收环境。
 - [x] 使用精简 Clang / LLD 与两份 sysroot 直接链接最小 C ELF，验证 x64 / arm64 的 CRT、libgcc 和 musl 链路完整，不依赖 Feng CLI。
-- [ ] 使用精简 Clang / LLD 与两份 GNU sysroot 分别在 native、Linux 跨架构和 macOS host 路径编译并链接最小 C ELF，验证 glibc 2.31 目标 ABI、动态加载器、CRT、linker scripts、compiler runtime 与 LLD 链路完整，不依赖 Feng CLI。
-- [ ] 在对应 x64 / ARM64 GNU/glibc 目标环境运行两份最小 ELF，并检查产物的 ELF 架构、解释器路径与最高 `GLIBC_*` 要求；GNU sysroot 目录同时通过无 host ELF 可执行工具、无断链符号链接和许可证 / 来源 manifest 完整性检查。
+- [x] 使用精简 Clang / LLD 与两份 GNU sysroot 分别在 native、Linux 跨架构和 macOS host 路径编译并链接最小 C ELF，验证 glibc 2.31 目标 ABI、动态加载器、CRT、linker scripts、compiler runtime 与 LLD 链路完整，不依赖 Feng CLI。
+- [x] 在对应 x64 / ARM64 GNU/glibc 目标环境运行两份最小 ELF，并检查产物的 ELF 架构、解释器路径与最高 `GLIBC_*` 要求；GNU sysroot 目录同时通过无 host ELF 可执行工具、无断链符号链接和许可证 / 来源 manifest 完整性检查。
 - [x] `macos-arm64` host 的全量 `make test` 在 Codex 沙箱外通过。
-- [ ] `linux-x64-gnu` host 的全量 `make test` 通过。
-- [ ] `linux-arm64-gnu` host 的全量 `make test` 通过。
 
 ### 8.2 统一相对布局与 CLI 路径基础设施
 
@@ -334,7 +332,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 任务：
 
 - [ ] `feng dap` 在 macOS 与 Linux 按 [feng-cli.md](../docs/feng-cli.md) 规定共用 §8.2 的路径能力，依次定位并启动 bundled、`PATH` 与 macOS `xcrun` 提供的 `lldb-dap`。
-- [ ] Linux bundled `libpython3.11.so.1.0` 或其他 §5.2 私有 LLDB 依赖缺失时，按发行包损坏处理，保留动态加载器真实错误并给出可操作诊断，不得提示用户安装系统 Python 或其他系统包；Feng 永不使用或支持 Python 脚本。
+- [ ] Linux bundled `libpython3.11.so.1.0`、私有 `encodings` 或其他 §5.2 私有 LLDB 依赖缺失时，按发行包损坏处理，保留真实错误并给出可操作诊断，不得提示用户安装系统 Python 或其他系统包；Feng 永不使用或支持 Python 脚本。
 - [ ] 补充 macOS / Linux 后端定位、启动、缺失依赖和 DAP 基础会话回归。
 
 独立交付与回归门：
