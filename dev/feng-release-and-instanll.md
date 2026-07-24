@@ -372,7 +372,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 任务：
 
-- [ ] 将 `feng.fm` 的完整平台集合字段由 `arch` 改为 `platform`，并实现 Feng CLI 完整 `--platform`、`feng.fm.platform` 默认构建平台集合、平台参数校验、Clang 查找顺序和 native target triple 转换；顶层直编不得省略或推断平台。
+- [ ] 将 `feng.fm` 的完整平台集合字段由 `arch` 改为 `platform`，并完整实现 [feng-cli.md](../docs/feng-cli.md)“项目平台选择统一规则”、Clang 查找顺序和 native target triple 转换。
 - [ ] macOS native 最终链接使用 `xcrun` 获取 SDK 并传入 `-isysroot`；Linux native GNU 与 Linux GNU 交叉编译统一使用对应 bundled glibc sysroot，不读取 host glibc 开发文件。
 - [ ] native `target=bin` 只定位并链接 `lib/<platform>/libfeng_runtime.a`，不得使用其他平台或其他 libc ABI runtime。
 - [ ] 补充完整平台诊断、native Clang / SDK / sysroot / runtime 定位和三 host native 编译回归。
@@ -407,7 +407,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 - [ ] 将生成 C 与 `feng_runtime.h` 在 `target=lib` 编译阶段需要的 C 类型、函数声明和 unwind 声明收敛为 Feng / LLVM 合法分发的自包含编译头闭包；默认路径不得读取目标 macOS SDK 的 `math.h`、`stdlib.h`、`string.h` 等系统头。
 - [ ] `target=lib --platform=macos-arm64` 使用 bundled Clang 的明确 Darwin target triple，只执行 `-c`，再使用 bundled `llvm-ar` / `llvm-ranlib` 生成 Mach-O 静态库；不得调用 host `ar` 或进入最终链接。
-- [ ] 核心直编与项目级单平台 `feng build` 支持通用 `--sysroot=<path>`。该路径只作用于本次唯一目标平台；项目级未指定 `--platform` 且 `feng.fm.platform` 声明多个平台时不得同时使用单一 `--sysroot`，需要不同 sysroot 的平台必须分多次带单一 `--platform` 的 `feng build`，再由 `feng pack` 汇聚。
+- [ ] 核心直编与项目级单平台 `feng build` 支持通用 `--sysroot=<path>`。该路径只作用于本次唯一目标平台；项目命令的目标集合按 [feng-cli.md](../docs/feng-cli.md)“项目平台选择统一规则”确定，集合包含多个平台时不得同时使用单一 `--sysroot`，需要不同 sysroot 的平台必须分多次带单一 `--platform` 的 `feng build`。
 - [ ] macOS 目标显式 `--sysroot` 转换为 Clang `-isysroot`；Feng 只校验路径与构建所需内容，不下载、复制或判断第三方 SDK 的授权来源，用户负责其输入的许可合规。
 - [ ] `target=lib` 不链接 `libfeng_runtime.a` 或 std extlib；macOS runtime 与四个 std extlib 继续使用 §8 / §9.1 在 macOS CI 原生预构建的制品。
 
@@ -420,21 +420,21 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 ### 9.5 多平台 `.fb` 与 std 组包
 
-本阶段在 §9.1—§9.4 之上交付项目级分平台构建、可搬运构件汇聚和单一跨平台 `.fb`；std 作为每个完整平台均包含四个第三方 extlib 的完整验收包。
+本阶段在 §9.1—§9.4 之上交付项目级分平台构建和单一跨平台 `.fb`；std 作为每个完整平台均包含四个第三方 extlib 的完整验收包。
 
 任务：
 
-- [ ] 核心编译器直编必须显式接受且一次只接受一个完整 `--platform` 和调用方给定的精确 `--out`，不推断 host、不展开平台；项目级 `feng build` 未指定平台时按 `feng.fm.platform` 声明依次调用核心编译器，指定时只根据该参数值调用一次；不同 host / CI 任务可以分别生成可搬运的 `<out>/<platform>/` 构件。
+- [ ] 核心编译器直编与项目级 `feng init` / `build` / `run` / `pack` 完整实现 [feng-cli.md](../docs/feng-cli.md)“项目平台选择统一规则”；直编继续使用调用方给定的精确 `--out`。
 - [ ] `feng build` 将 `gen/`、`mod/`、`assets/`、`bin/`、`lib/`、`obj/`、`ir/` 与 `extlib/` 全部隔离到 `<项目输出根>/<platform>/`；相同目标递归传递给本地 `target=lib` 依赖。
-- [ ] `feng pack` 只读取已经存在的各平台构件，不重新编译，也不接受 `--sysroot`；它校验各平台 `mod/` 的模块集合与公开语义事实等价、普通 `assets/` 内容一致后分别提取一套。
+- [ ] `feng pack` 按 [feng-cli.md](../docs/feng-cli.md)“项目平台选择统一规则”复用项目构建流程，固定执行 release 构建且不接受 `--release` / `--sysroot`；全部选定平台构建成功后，校验各平台 `mod/` 的模块集合与公开语义事实等价、普通 `assets/` 内容一致并分别提取一套。
 - [ ] `feng pack` 从每个 `<项目输出根>/<platform>/lib/` 与 `extlib/` 提取分平台制品，写入包内 `lib/<platform>/` 与 `extlib/<platform>/`，将实际平台集合写入分发包 `feng.fm.platform`；任一请求平台缺失或校验失败时不得生成部分 `.fb`。
 - [ ] std 构建对五个目标分别生成 `libstd.a`，并从 §9.1 的预构件中选择对应完整平台的四个 `libfeng_std_*` 写入 `extlib/<platform>/`；Linux 构建 macOS std 分片时只编译 Feng 生成 C，不重建或链接 macOS extlib。
-- [ ] 补充 `feng.fm.platform` 多平台默认编排、命令行单平台覆盖、重复 `--platform` 拒绝、分次构建后汇聚、分平台产物隔离、递归本地依赖、远程包目标制品缺失、公开符号表不一致、`platform` 精确匹配和原子组包回归。
+- [ ] 补充 [feng-cli.md](../docs/feng-cli.md)“项目平台选择统一规则”表格全部分支，以及分平台产物隔离、递归本地依赖、远程包目标制品缺失、公开符号表不一致、`platform` 精确匹配和原子组包回归。
 
 独立交付与回归门：
 
-- [ ] 在单个 Linux host 不使用 Apple SDK，由 std 项目 `feng.fm.platform` 声明五个平台，执行不带 `--platform` 的 `feng build --release`，构建五个平台的 std 静态分片并组装一个五平台 `std.fb`。
-- [ ] 在多 host CI 中分别构建完整平台目录，再由任一 host 的 `feng pack` 汇聚为相同结构的五平台 `.fb`。
+- [ ] 在单个 Linux host 不使用 Apple SDK，由 std 项目执行 `feng pack`，通过其 release 构建与组包流程生成一个五平台 `std.fb`；目标选择按 [feng-cli.md](../docs/feng-cli.md)“项目平台选择统一规则”执行。
+- [ ] 在三个支持 host 上分别执行 `feng pack`，验证均生成结构一致的五平台 `.fb`。
 - [ ] 五个平台分别将该 `.fb` 作为依赖完成编译与最终链接，并在可运行环境完成运行验收；macOS 最终链接和运行只在合法 macOS 环境执行。
 - [ ] 三个 host 的全量 `make test` 通过。
 

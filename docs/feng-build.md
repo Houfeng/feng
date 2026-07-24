@@ -7,7 +7,7 @@
 Feng 将"编译"与"构建"明确分为两个独立层次:
 
 - **编译器（`feng` 直接模式）**: 接受源文件列表、显式且完整的目标平台、可选的显式 `--sysroot`、已平铺的包路径列表（`--pkg <.fb路径>`）以及额外原生库参数（`--lib <库路径或系统库名>`），负责类型检查、代码生成和链接参数收集。编译器不读取任何 `feng.fm`，不解析依赖树，不推断 host 平台或 Linux ABI，也不自动展开多平台。
-- **构建工具（`feng build`）**: 读取项目 `feng.fm`，并在解析依赖图时读取依赖包内的 `feng.fm`，按精确版本检查并安装依赖，将依赖图展平为编译器可直接消费的 `--pkg <.fb路径>` 列表，再组装其他编译参数。未指定 `--platform` 时，构建工具按项目 `feng.fm.platform` 声明的平台集合分别调用核心编译器；指定 `--platform` 时，只根据该参数值调用一次核心编译器。
+- **构建工具（`feng build`）**: 读取项目 `feng.fm`，并在解析依赖图时读取依赖包内的 `feng.fm`，按精确版本检查并安装依赖，将依赖图展平为编译器可直接消费的 `--pkg <.fb路径>` 列表，再组装其他编译参数。项目命令的平台选择与校验统一以 [feng-cli.md](./feng-cli.md)“项目平台选择统一规则”为准。
 
 两者职责分离的核心原因:编译器只需要足够的信息完成一次编译,不应感知任何 `feng.fm`; 是否存在可用制品,最终都必须以 `.fb` 内实际文件为准。`feng.fm` 由构建工具用于项目组织、依赖解析和打包校验。构建工具可替换,编译器可被第三方构建系统直接驱动。
 
@@ -186,7 +186,7 @@ extern func ssl_connect(fd: int): int;
 | `target` | 是 | — | 构建目标，取值 `bin`（可执行文件）或 `lib`（库；进一步打包为 `.fb` 分发包） |
 | `src` | 否 | `src/` | 源文件根目录，构建工具对此目录 glob 展开 `.ff` 文件 |
 | `out` | 否 | `build/` | 输出根目录；开发态产物位于 `<out>/<platform>/`，`target=bin` 的可执行文件位于其 `bin/`，`feng pack` 生成的 `.fb` 位于 `<out>/pkg/` |
-| `platform` | 否 | — | `--platform` 未指定时依次构建的完整平台集合；字段格式与缺失规则见 [feng-package.md](./feng-package.md) |
+| `platform` | 否 | — | 完整平台集合；字段格式见 [feng-package.md](./feng-package.md)，项目命令的选择与校验见 [feng-cli.md](./feng-cli.md)“项目平台选择统一规则” |
 | `[assets]` | 否 | 空 | 资源复制配置（字段语义见 [feng-package.md](./feng-package.md)） |
 
 构建工具将 `target` 转换为编译器的 `--target` 参数；对每个目标平台,将 `feng.fm.out` 指定的项目输出根与平台标识拼装为 `<项目输出根>/<platform>`,并将该完整目录作为本次直编的 `--out`。项目名转换为直编的 `--name`；版本只参与最终 `.fb` 文件名,不进入直编输出路径计算。
@@ -208,7 +208,7 @@ extern func ssl_connect(fd: int): int;
 - 顶层 `target=bin` 构建完成后,构建工具负责把主项目与递归本地依赖的中间 `.fd` 汇总为最终 binary 对应的单个 `.fd`; 运行时的 `feng dap` 只读取这个最终 sidecar,不在会话中递归追踪多个依赖 sidecar。
 - 若两个输入 `.fd` 对同一 `PKG_NAME` 提供不一致本地包根,或对同一 `frame_backend_symbol + backend_name` 提供不一致映射,构建必须立即报错,不得把歧义推迟到调试会话。
 
-`feng deps add` 在写入 `feng.fm` 后,若新增的是远程精确版本依赖,立即触发对应安装流程; 若新增的是本地路径依赖,则立即做路径合法性校验。`feng deps install` 会按 `feng.fm` 中声明的依赖递归检查远程缓存,并校验本地路径依赖; 默认只重新拉取缺失的远程包,传入 `--force` 时强制重新拉取全部远程依赖。`feng deps remove` 只更新目标 `feng.fm`,不触发安装流程。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`; 然后继续做本地路径依赖的递归构建与完整依赖图展平。`feng build --release` 与 `feng run --release` 需要把 release 模式继续传递给递归构建的本地 `target: "lib"` 依赖; 项目级 `feng build` 本次选定的平台集合也必须继续传递给递归本地 `target: "lib"` 依赖。`feng pack` 不解析或构建依赖，只校验并汇聚已有的分平台 release 构件。
+`feng deps add` 在写入 `feng.fm` 后,若新增的是远程精确版本依赖,立即触发对应安装流程; 若新增的是本地路径依赖,则立即做路径合法性校验。`feng deps install` 会按 `feng.fm` 中声明的依赖递归检查远程缓存,并校验本地路径依赖; 默认只重新拉取缺失的远程包,传入 `--force` 时强制重新拉取全部远程依赖。`feng deps remove` 只更新目标 `feng.fm`,不触发安装流程。`feng build` 与 `feng check` 在执行前总是先执行 `feng deps install`; 然后继续做本地路径依赖的递归构建与完整依赖图展平。`feng build --release` 与 `feng run --release` 需要把 release 模式继续传递给递归构建的本地 `target: "lib"` 依赖; 项目级 `feng build` 本次选定的平台集合也必须继续传递给递归本地 `target: "lib"` 依赖。`feng pack` 复用同一依赖解析与构建主链，固定执行 release 构建，成功后才进入组包阶段。
 
 ### 3.3 模块名冲突预检
 
@@ -230,12 +230,10 @@ feng src/*.ff \
 
 构建工具传入的是**已确定并展平的 `.fb` 路径列表**以及已经完成平台分层的精确 `--out`,不传包名、版本或搜索路径。编译器只认这些显式输入,并直接从 `.fb` 中读取所需公开 `.ft` 与正式库文件；它不会再次把平台标识拼接到 `--out`。
 
-项目级目标平台规则:
+项目级目标平台集合及其白名单校验统一以 [feng-cli.md](./feng-cli.md)“项目平台选择统一规则”为准。本节只规定目标平台确定后的内部编排:
 
-- 未指定 `--platform` 时，目标平台集合等于开发态 `feng.fm.platform` 声明的平台集合；构建工具按声明顺序为每个平台分别组装一次核心编译器调用。若项目未声明 `platform`，必须报错，不得根据 host 或 `target` 推断默认平台。
-- 指定 `--platform=<platform>` 时，该参数不能重复；构建工具只为参数指定的平台组装一次核心编译器调用，不展开 `feng.fm.platform` 中的其他平台。
 - 每次核心编译器调用只传入一个 `--platform`，并传入该平台独立的 `--out=<项目输出根>/<platform>`。
-- 显式 `--sysroot=<路径>` 只允许目标平台集合恰好包含一个平台；需要不同 sysroot 的平台分别执行单平台 `feng build`，其产物可以由后续 `feng pack` 汇聚。
+- 显式 `--sysroot=<路径>` 只允许目标平台集合恰好包含一个平台；需要不同 sysroot 的平台分别执行单平台 `feng build`。
 - 平台标识合法但当前 host 缺少该目标与产物类型实际需要的工具链、sysroot 或依赖包平台制品时,对应目标报告不可用；`target=bin` 还必须具有目标 runtime，SDK-free `target=lib` 不得仅因没有目标 runtime 或系统 SDK而误报不可用。任何场景都不得回退到 host 平台或复用其他平台产物。
 
 构建工具还应按 `feng.fm` 的 `[assets]` 配置处理资源目录:
@@ -248,7 +246,7 @@ feng src/*.ff \
 
 ### 3.5 多平台库构建编排
 
-`target=lib` 的 `feng.fm.platform` 声明多个目标平台时遵循以下规则:
+当 [feng-cli.md](./feng-cli.md)“项目平台选择统一规则”得到的 `target=lib` 目标集合包含多个平台时，遵循以下规则:
 
 1. 本节的 `<out>` 表示 `feng.fm.out` 定义的**项目输出根**,不是某次直编的 `--out`。构建工具为每个平台建立完整且独立的 `<out>/<platform>/` 开发构建根,并把它作为该平台直编的 `--out`；其中 `bin/`、`lib/`、`obj/`、`ir/`、`gen/`、`mod/`、`assets/` 与 `extlib/` 均不得被其他平台复用。正式静态库写入 `<out>/<platform>/lib/`,不得让后一个平台复用前一个平台的目标文件或覆盖其任何开发态产物。
 2. `[assets].extlib` 的源目录可以同时包含多个平台子目录。构建只选择当前目标平台对应的目录,staging 到 `<out>/<platform>/extlib/`; 缺少任一请求平台所需的原生库时该平台构建失败。普通资源 staging 到 `<out>/<platform>/assets/`,使 `feng run` 及其他开发态操作始终只消费当前目标平台的构建树。
@@ -257,24 +255,24 @@ feng src/*.ff \
 5. 相同目标平台集合递归传递给本地 `target=lib` 依赖；已安装 `.fb` 依赖必须实际包含当前编译目标所需的平台制品,不得仅依据其 `feng.fm.platform` 声明跳过文件校验。
 6. 任一请求平台失败时,本次多平台构建整体失败；已生成的分平台中间产物不得被视为完整构建结果,后续 `pack` 不得据此生成部分平台包。
 
-例如，在具备五目标工具链与制品的任一支持 host 上，项目 `feng.fm` 声明：
+例如，目标平台集合包含以下五个平台：
 
 ```text
 [package]
 platform: "macos-arm64,linux-x64-gnu,linux-x64-musl,linux-arm64-gnu,linux-arm64-musl"
 ```
 
-随后执行不带 `--platform` 的 `feng build`，构建工具按上述声明依次完成五次直编。其中 Linux host 的 `macos-arm64 target=lib` 使用 SDK-free Mach-O 对象与静态归档路径。该能力不表示 Linux host 可以链接或运行 macOS 可执行程序。若执行 `feng build --platform=linux-x64-gnu`，则本次只完成一次 `linux-x64-gnu` 直编。
+构建工具依次完成五次直编。其中 Linux host 的 `macos-arm64 target=lib` 使用 SDK-free Mach-O 对象与静态归档路径。该能力不表示 Linux host 可以链接或运行 macOS 可执行程序。
 
 ### 3.6 发布流程（打包为 .fb）
 
-`feng pack` 驱动独立组包流程:
+`feng pack` 驱动 release 构建与组包流程:
 
 - 若项目的 `target` 不是 `lib`,构建工具在进入打包流程前立即报错。
 
-1. 调用方在 `feng.fm.platform` 声明所需平台后，通过不带 `--platform` 的 `feng build --release` 依次准备全部声明平台，或通过一次、多次 `feng build --release --platform=<platform>` 在同一项目输出根分别准备所需 `<out>/<platform>/`；这些目录可以由不同 host / CI 任务生成后汇聚
-2. `feng pack` 校验全部请求平台目录、正式库、公开 `.ft` 与资源 staging 已存在，不重新运行编译器，也不接受 `--sysroot`
-3. 校验各平台 `mod/**/*.ft` 的公开语义事实与 `assets/` 普通资源内容一致,并分别提取一套作为包内 `mod/` 与普通资源
+1. 按 [feng-cli.md](./feng-cli.md)“项目平台选择统一规则”确定并校验目标平台集合
+2. 复用项目构建主链，对全部选定平台固定执行 release 构建；`pack` 不接受 `--release` / `--sysroot`
+3. 全部平台构建成功后，校验各平台 `mod/**/*.ft` 的公开语义事实与 `assets/` 普通资源内容一致,并分别提取一套作为包内 `mod/` 与普通资源
 4. 从每个 `<out>/<platform>/lib/` 与 `<out>/<platform>/extlib/` 提取正式静态库和需要参与链接的 `extern func` 原生库制品,分别写入包内 `lib/<platform>/` 与 `extlib/<platform>/`
 5. 补全 `feng.fm`: `abi` 与实际能力目录一致,`platform` 与实际写入 `lib/<platform>/` / `extlib/<platform>/` 的目标平台集合完全一致
 6. 将上述提取结果原子写入 `<out>/pkg/<name>-<version>.fb`,不直接把某个平台的整个开发构建根复制进包内
@@ -305,7 +303,7 @@ feng src/*.ff --platform=<platform> --out=<项目输出根>/<platform> --pkg a.f
     └─ 调用 C 链接器，产出最终二进制
 ```
 
-`target=lib` 的项目级多平台构建会对每个目标平台分别执行一次上图中的核心编译器调用,由 `feng build` 计算不同的 `--platform` 与 `--out` 参数；`feng pack` 再按 §3.5 / §3.6 从这些平台目录提取内容并组装最终 `.fb`。
+`target=lib` 的项目级多平台构建会对每个目标平台分别执行一次上图中的核心编译器调用,由项目构建层计算不同的 `--platform` 与 `--out` 参数；`feng pack` 固定先执行该 release 构建，再按 §3.5 / §3.6 从这些平台目录提取内容并组装最终 `.fb`。
 
 ## 5 与相关规范的关系
 

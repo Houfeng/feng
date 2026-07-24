@@ -116,8 +116,7 @@ linux-arm64-musl/
 
 约束：
 
-- 顶层直编不做 host 推断或多目标展开，必须显式指定唯一、完整的 `--platform`。
-- `feng build` 才允许省略 `--platform`，并按项目 `feng.fm.platform` 声明的平台集合应用 [feng-cli.md](./feng-cli.md) 定义的编排。
+- 顶层直编和项目命令的平台选择、默认行为及清单校验统一以 [feng-cli.md](./feng-cli.md)“项目平台选择统一规则”为准。
 - 不接受 `aarch64`、`x86_64`、`amd64`、`darwin`、`glibc` 等别名；glibc ABI 的规范标识是 `gnu`。
 - 标识合法但当前安装缺少对应工具链、runtime、sysroot 或 SDK 时，应报告“目标平台不可用”，不得误报为参数格式错误，也不得回退到 host 平台。
 

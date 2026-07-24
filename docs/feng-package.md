@@ -71,7 +71,7 @@ feng 编译器在消费 `.fb` 时,只直接读取 `mod/` 下的公开 `.ft` 与�
 - `src` 字段指定源文件根目录; 省略时默认为 `src/`; 仅开发阶段有效,不出现在分发包内。
 - `out` 字段指定输出根目录；省略时默认为 `build/`；`target=bin` 时最终文件位于 `<out>/<platform>/bin/<name>`，`target=lib` 时各完整平台开发产物位于 `<out>/<platform>/`，执行 `feng pack` 后最终包位于 `<out>/pkg/<name>-<version>.fb`；仅开发阶段有效，不出现在分发包内。
 - `[assets]` 节声明开发态资源复制配置; 省略时为空,仅开发阶段有效,不出现在分发包内。节内每个键是目标目录（相对可执行文件目录或 `.fb` 根目录）,每个值是源目录路径（相对 `feng.fm` 所在目录）且不得为空字符串。所有开发态资源均按目标平台隔离:`target=bin` 时将指定资源目录复制到 `<out>/<platform>/bin/` 下的可执行文件同级目标目录；`target=lib` 时普通目标目录复制到 `<out>/<platform>/assets/` staging,但当目标目录精确为 `extlib` 时,只将当前平台内容复制到 `<out>/<platform>/extlib/`,不额外插入 `assets/` 目录层。`pack` 从各平台 staging 校验并提取资源写入 `.fb`；构建工具写回 `feng.fm` 时保留 `[assets]` 的声明顺序。
-- `platform` 字段采用逗号分隔的完整平台标识列表（例如 `macos-arm64,linux-x64-gnu,linux-x64-musl,linux-arm64-gnu,linux-arm64-musl`），取值见 [feng-os-arch.md](./feng-os-arch.md)，Linux 项必须包含 GNU / musl 后缀。开发项目中，该字段声明 `feng build` 未显式指定 `--platform` 时依次构建的平台集合；字段省略时，调用方必须显式指定一个 `--platform`。分发包内，该字段记录实际携带制品的平台集合，必须与包内实际平台目录完全一致。
+- `platform` 字段采用逗号分隔的完整平台标识列表（例如 `macos-arm64,linux-x64-gnu,linux-x64-musl,linux-arm64-gnu,linux-arm64-musl`），取值见 [feng-os-arch.md](./feng-os-arch.md)，Linux 项必须包含 GNU / musl 后缀。开发项目的平台选择、白名单校验、字段缺失行为以及分发包内该字段的要求，统一以 [feng-cli.md](./feng-cli.md)“项目平台选择统一规则”为准。
 - `abi` 字段声明本包携带哪些 Feng 能力层，当前仅支持 `feng`；`feng` 表示存在 `lib/` 目录。该字段与完整平台标识中的 Linux C library ABI 无关，不得写入 `gnu` / `musl` 或用于选择 libc。
 - `[dependencies]` 节表示当前包对其他 feng 包的直接依赖; 同包内模块之间的引用不属于依赖声明。
 - `[dependencies]` 节中的每个键表示一个直接依赖包名,同一依赖包名不得重复出现。开发态项目中,值允许是精确版本字符串或本地路径字符串: 以 `./`、`../` 或 `/` 开头的值视为本地路径依赖,其他值视为精确版本依赖。分发包内的 `feng.fm` 不允许保留本地路径写法,所有直接依赖都必须写回为精确版本字符串。
@@ -90,7 +90,6 @@ version: "0.1.0"
 target: "bin"
 src: "src/"
 out: "build/"
-platform: "macos-arm64"
 
 [dependencies]
 base: "1.0.0"
@@ -105,7 +104,6 @@ version: "0.1.0"
 target: "bin"
 src: "src/"
 out: "build/"
-platform: "macos-arm64"
 
 [dependencies]
 base: "1.0.0"
@@ -151,13 +149,12 @@ base: "1.0.0"
 
 ### 6.1 发布方流程
 
-1. 发布方在开发态 `feng.fm.platform` 中声明目标平台集合后，通过项目级 `feng build --release` 依次构建；也可通过一次或多次 `feng build --release --platform=<platform>` 分别构建单个平台，不同平台目录可以由不同 host / CI 任务生成后汇聚。CLI 语法、显式 `--sysroot` 和平台可用性诊断以 [feng-cli.md](./feng-cli.md) 与 [feng-build.md](./feng-build.md) 为准
-2. 每次构建对一个或多个目标平台分别扫描全部 `.ff` 源文件并完成生成、语义分析、代码生成与归档；该平台的 `gen/`、`mod/`、`assets/`、对象、中间产物、正式静态库与原生依赖全部写入独立的 `<out>/<platform>/` 开发构建根（若 `abi` 含 `feng`,正式静态库位于 `<out>/<platform>/lib/`）
-3. 全部平台构件汇聚到同一项目输出根后，发布方执行 `feng pack`；需要收窄已有构件集合时可重复传入 `--platform=<platform>`，`pack` 不重新编译，也不接受 `--sysroot`
-4. `pack` 校验各 `<out>/<platform>/mod/` 的模块集合与公开语义事实等价,并校验各平台准备写入相同包路径的普通 `assets/` 内容一致；分别提取一套作为包内 `mod/` 与普通资源
-5. `pack` 分平台汇总 `<out>/<platform>/lib/` 正式库以及 `<out>/<platform>/extlib/` 中由 `extern func` 链接事实要求的原生库,分别写入包内 `lib/<platform>/` 与 `extlib/<platform>/`
-6. 生成 `feng.fm`,将实际平台集合填写到 `platform`,并将上述提取结果打包为 `<out>/pkg/<name>-<version>.fb`
-7. 任一请求平台构件缺失、公开符号表一致性校验或制品完整性校验失败时,发布整体失败,不得生成部分平台 `.fb`
+1. 发布方执行 `feng pack`；目标平台的选择与校验统一以 [feng-cli.md](./feng-cli.md)“项目平台选择统一规则”为准，显式 `--sysroot` 和平台可用性诊断以 [feng-build.md](./feng-build.md) 为准
+2. `pack` 先复用项目构建流程，对选定平台固定执行 release 构建；每个平台分别扫描全部 `.ff` 源文件并完成生成、语义分析、代码生成与归档，其 `gen/`、`mod/`、`assets/`、对象、中间产物、正式静态库与原生依赖全部写入独立的 `<out>/<platform>/` 开发构建根（若 `abi` 含 `feng`,正式静态库位于 `<out>/<platform>/lib/`）
+3. 全部选定平台构建成功后，`pack` 校验各 `<out>/<platform>/mod/` 的模块集合与公开语义事实等价,并校验各平台准备写入相同包路径的普通 `assets/` 内容一致；分别提取一套作为包内 `mod/` 与普通资源
+4. `pack` 分平台汇总 `<out>/<platform>/lib/` 正式库以及 `<out>/<platform>/extlib/` 中由 `extern func` 链接事实要求的原生库,分别写入包内 `lib/<platform>/` 与 `extlib/<platform>/`
+5. 生成 `feng.fm`,将实际平台集合填写到 `platform`,并将上述提取结果打包为 `<out>/pkg/<name>-<version>.fb`
+6. 任一请求平台构建失败、构件缺失、公开符号表一致性校验或制品完整性校验失败时,发布整体失败,不得生成部分平台 `.fb`
 
 ### 6.2 feng 使用方流程
 
@@ -165,7 +162,7 @@ base: "1.0.0"
 2. `import` 公开模块名 → 编译器按模块名推导路径,定位 `mod/` 下对应 `.ft`
 3. 由 `.ft` 读取器把公开包表解析为统一查询视图,将公开 `type`、公开 `enum`、公开顶层 `func`、公开模块级 `let` / `var`、公开成员、`spec` / `fit` 与 type 实例成员绑定推断事实引入当前编译期查询环境
     对公开泛型声明,该查询视图还必须暴露类型参数顺序、约束目标、未实例化签名骨架以及泛型父 `spec` / 泛型 `fit` 使用事实,使使用方只依赖 `.ft` 即可完成跨包泛型语义分析
-4. 根据声明关键字与 `extern` 链接事实,编译器直接在 `.fb` 中定位当前平台下实际存在的 `lib/` 正式库文件; 若所需文件不存在则报错; 对 `.ft` 保留的原生库名,编译器尝试匹配同包或其他依赖包 `extlib/<当前平台>/` 下的主机静态库文件（Linux / macOS `lib<name>.a`,Windows `<name>.lib`）,命中时直接提取该静态库参与链接,未命中时再回退为常规原生库链接参数
+4. 根据声明关键字与 `extern` 链接事实,编译器直接在 `.fb` 中定位当前平台下实际存在的 `lib/` 正式库文件; 若所需文件不存在则报错; 对 `.ft` 保留的原生库名,编译器尝试匹配同包或其他依赖包 `extlib/<platform>/` 下的主机静态库文件（Linux / macOS `lib<name>.a`,Windows `<name>.lib`）,命中时直接提取该静态库参与链接,未命中时再回退为常规原生库链接参数
 5. 使用方无需手写带参 `@cdecl` / `@stdcall` / `@fastcall`,包内公开 `.ft` 已携带必要的原生库来源与调用方式元信息
 
 ### 6.3 依赖型原生库分发流程
