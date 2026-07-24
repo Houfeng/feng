@@ -1443,6 +1443,47 @@ static char *locate_runtime_include(const char *program_path) {
     return result;
 }
 
+/* Resolve the host C compiler using the shared LLVM tool policy. */
+static char *locate_host_c_compiler(const char *program_path, char **out_error_message) {
+    const FengCliHostToolStrategy strategy = {
+        "C compiler",
+        "FENG_CC",
+        "toolchain/llvm/bin/clang",
+        "CC",
+        "cc"
+    };
+
+    return feng_cli_resolve_host_tool(program_path, &strategy, out_error_message);
+}
+
+/* Resolve the host static archiver using the shared LLVM tool policy. */
+static char *locate_host_archiver(const char *program_path, char **out_error_message) {
+    const FengCliHostToolStrategy strategy = {
+        "static archiver",
+        "FENG_AR",
+        "toolchain/llvm/bin/llvm-ar",
+        "AR",
+        "ar"
+    };
+
+    return feng_cli_resolve_host_tool(program_path, &strategy, out_error_message);
+}
+
+/* Resolve the host archive indexer using the shared LLVM tool policy. */
+#if defined(__APPLE__)
+static char *locate_host_ranlib(const char *program_path, char **out_error_message) {
+    const FengCliHostToolStrategy strategy = {
+        "archive indexer",
+        "FENG_RANLIB",
+        "toolchain/llvm/bin/llvm-ranlib",
+        "RANLIB",
+        "ranlib"
+    };
+
+    return feng_cli_resolve_host_tool(program_path, &strategy, out_error_message);
+}
+#endif
+
 /* --- extern calling-convention link library mining ----------------------- */
 
 /* Decode a single string-literal annotation argument. The lexer keeps the
@@ -1651,6 +1692,201 @@ static int spawn_and_wait(char *const argv[]) {
     return -1;
 }
 
+#if defined(__APPLE__)
+/*
+ * Run one fixed argv vector and capture stdout without invoking a shell.
+ * Child stderr remains attached so xcrun can preserve its native diagnostic.
+ */
+static bool spawn_and_capture_stdout(char *const argv[],
+                                     char **out_stdout,
+                                     char **out_error_message) {
+    int output_pipe[2];
+    pid_t pid;
+    char *output = NULL;
+    size_t output_length = 0U;
+    size_t output_capacity = 0U;
+    int status = 0;
+
+    if (out_stdout == NULL) {
+        return set_errorf(out_error_message, "captured stdout destination must not be null");
+    }
+    *out_stdout = NULL;
+    if (pipe(output_pipe) != 0) {
+        return set_errorf(out_error_message,
+                          "cannot create subprocess output pipe: %s",
+                          strerror(errno));
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        int saved_errno = errno;
+
+        close(output_pipe[0]);
+        close(output_pipe[1]);
+        return set_errorf(out_error_message,
+                          "cannot start %s: %s",
+                          argv[0],
+                          strerror(saved_errno));
+    }
+    if (pid == 0) {
+        close(output_pipe[0]);
+        if (dup2(output_pipe[1], STDOUT_FILENO) < 0) {
+            fprintf(stderr, "dup2 for %s failed: %s\n", argv[0], strerror(errno));
+            _exit(127);
+        }
+        close(output_pipe[1]);
+        execv(argv[0], argv);
+        fprintf(stderr, "exec %s failed: %s\n", argv[0], strerror(errno));
+        _exit(127);
+    }
+
+    close(output_pipe[1]);
+    while (true) {
+        char chunk[256];
+        ssize_t count = read(output_pipe[0], chunk, sizeof(chunk));
+
+        if (count > 0) {
+            size_t required = output_length + (size_t)count + 1U;
+
+            if (required > output_capacity) {
+                size_t next_capacity = output_capacity == 0U ? 512U : output_capacity;
+                char *next;
+
+                while (next_capacity < required) {
+                    next_capacity *= 2U;
+                }
+                next = (char *)realloc(output, next_capacity);
+                if (next == NULL) {
+                    close(output_pipe[0]);
+                    free(output);
+                    while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+                    }
+                    return set_errorf(out_error_message,
+                                      "out of memory reading output from %s",
+                                      argv[0]);
+                }
+                output = next;
+                output_capacity = next_capacity;
+            }
+            memcpy(output + output_length, chunk, (size_t)count);
+            output_length += (size_t)count;
+            continue;
+        }
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        if (count < 0) {
+            int saved_errno = errno;
+
+            close(output_pipe[0]);
+            free(output);
+            while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {
+            }
+            return set_errorf(out_error_message,
+                              "cannot read output from %s: %s",
+                              argv[0],
+                              strerror(saved_errno));
+        }
+        break;
+    }
+    close(output_pipe[0]);
+
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) {
+            free(output);
+            return set_errorf(out_error_message,
+                              "cannot wait for %s: %s",
+                              argv[0],
+                              strerror(errno));
+        }
+    }
+    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        free(output);
+        if (WIFSIGNALED(status)) {
+            return set_errorf(out_error_message,
+                              "%s terminated by signal %d",
+                              argv[0],
+                              WTERMSIG(status));
+        }
+        return set_errorf(out_error_message,
+                          "%s exited with status %d",
+                          argv[0],
+                          WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+    }
+
+    if (output == NULL) {
+        output = str_dup_cstr("");
+        if (output == NULL) {
+            return set_errorf(out_error_message,
+                              "out of memory storing output from %s",
+                              argv[0]);
+        }
+    } else {
+        output[output_length] = '\0';
+    }
+    *out_stdout = output;
+    return true;
+}
+
+/* Resolve and validate the SDK required by the macOS native Clang driver. */
+static char *locate_macos_native_sdk(char **out_error_message) {
+    char *xcrun = feng_cli_find_executable_on_path("xcrun");
+    char *sdk_path = NULL;
+    struct stat status;
+    size_t length;
+
+    if (out_error_message != NULL) {
+        *out_error_message = NULL;
+    }
+    if (xcrun == NULL) {
+        set_errorf(out_error_message,
+                   "cannot locate xcrun on PATH; install Xcode or Xcode Command Line Tools");
+        return NULL;
+    }
+
+    {
+        char *const argv[] = {
+            xcrun,
+            "--sdk",
+            "macosx",
+            "--show-sdk-path",
+            NULL
+        };
+
+        if (!spawn_and_capture_stdout(argv, &sdk_path, out_error_message)) {
+            free(xcrun);
+            return NULL;
+        }
+    }
+    free(xcrun);
+
+    length = strlen(sdk_path);
+    while (length > 0U &&
+           (sdk_path[length - 1U] == '\n' ||
+            sdk_path[length - 1U] == '\r' ||
+            sdk_path[length - 1U] == ' ' ||
+            sdk_path[length - 1U] == '\t')) {
+        sdk_path[--length] = '\0';
+    }
+    if (length == 0U) {
+        free(sdk_path);
+        set_errorf(out_error_message, "xcrun returned an empty macOS SDK path");
+        return NULL;
+    }
+    if (stat(sdk_path, &status) != 0 || !S_ISDIR(status.st_mode)) {
+        char *invalid_path = sdk_path;
+
+        sdk_path = NULL;
+        set_errorf(out_error_message,
+                   "xcrun returned an unavailable macOS SDK directory: %s",
+                   invalid_path);
+        free(invalid_path);
+        return NULL;
+    }
+    return sdk_path;
+}
+#endif
+
 static bool argv_push_mode_flags(ArgVec *av, bool release) {
     if (!argv_push(av, release ? "-O2" : "-O0")) {
         return false;
@@ -1838,15 +2074,59 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         return 1;
     }
 
-    const char *cc = getenv("CC");
-    if (cc == NULL || cc[0] == '\0') cc = "cc";
-
     int rc = 0;
     char *include_flag = NULL;
     char *object_path = NULL;
+    char *cc = NULL;
+    char *ar = NULL;
+    char *ranlib = NULL;
+    char *tool_error = NULL;
+#if defined(__APPLE__)
+    char *native_sdk_path = NULL;
+#endif
     ArgVec av = {0};
     bool ok = true;
     bool host_tool_failed = false;
+    const char *failed_tool_description = NULL;
+
+    cc = locate_host_c_compiler(opts->program_path, &tool_error);
+    if (cc == NULL) {
+        fprintf(stderr,
+                "error: cannot select host C compiler: %s\n",
+                tool_error != NULL ? tool_error : "unknown error");
+        rc = 1;
+        goto cleanup;
+    }
+    if (opts->target == FENG_COMPILE_TARGET_LIB) {
+        ar = locate_host_archiver(opts->program_path, &tool_error);
+        if (ar == NULL) {
+            fprintf(stderr,
+                    "error: cannot select host static archiver: %s\n",
+                    tool_error != NULL ? tool_error : "unknown error");
+            rc = 1;
+            goto cleanup;
+        }
+#if defined(__APPLE__)
+        ranlib = locate_host_ranlib(opts->program_path, &tool_error);
+        if (ranlib == NULL) {
+            fprintf(stderr,
+                    "error: cannot select host archive indexer: %s\n",
+                    tool_error != NULL ? tool_error : "unknown error");
+            rc = 1;
+            goto cleanup;
+        }
+#endif
+    }
+#if defined(__APPLE__)
+    native_sdk_path = locate_macos_native_sdk(&tool_error);
+    if (native_sdk_path == NULL) {
+        fprintf(stderr,
+                "error: cannot select macOS native SDK: %s\n",
+                tool_error != NULL ? tool_error : "unknown error");
+        rc = 1;
+        goto cleanup;
+    }
+#endif
 
     size_t include_need = strlen(include_dir) + 3U;
     include_flag = malloc(include_need);
@@ -1858,23 +2138,18 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
 
     if (!ok) {
         fprintf(stderr, "error: out of memory building compiler argv\n");
-        free(include_flag);
-        for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
-        free(libs);
-        free_string_array(bundle_abi_libs, bundle_abi_lib_count);
-        free_string_array(bundle_libs, bundle_lib_count);
-        remove_tree(bundle_temp_dir);
-        free(bundle_temp_dir);
-        free(host_target);
-        free(runtime_lib);
-        free(include_dir);
-        return 1;
+        rc = 1;
+        goto cleanup;
     }
 
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
         if (!argv_push(&av, cc)) { ok = false; }
         if (ok && !argv_push(&av, "-std=gnu11")) { ok = false; }
         if (ok && !argv_push(&av, "-fexceptions")) { ok = false; }
+#if defined(__APPLE__)
+        if (ok && !argv_push(&av, "-isysroot")) { ok = false; }
+        if (ok && !argv_push(&av, native_sdk_path)) { ok = false; }
+#endif
         if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
 #if defined(__linux__)
         /* Per-function/data sections let --gc-sections discard unused
@@ -1946,6 +2221,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             fprintf(stderr, "error: out of memory building cc argv\n");
             rc = 1;
         } else {
+            failed_tool_description = "C compiler";
             rc = spawn_and_wait(av.items);
             host_tool_failed = rc != 0;
         }
@@ -1959,6 +2235,10 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             if (!argv_push(&av, cc)) { ok = false; }
             if (ok && !argv_push(&av, "-std=gnu11")) { ok = false; }
             if (ok && !argv_push(&av, "-fexceptions")) { ok = false; }
+#if defined(__APPLE__)
+            if (ok && !argv_push(&av, "-isysroot")) { ok = false; }
+            if (ok && !argv_push(&av, native_sdk_path)) { ok = false; }
+#endif
             if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
             if (ok && !argv_push(&av, "-Wall")) { ok = false; }
             if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
@@ -1979,6 +2259,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 fprintf(stderr, "error: out of memory building cc argv\n");
                 rc = 1;
             } else {
+                failed_tool_description = "C compiler";
                 rc = spawn_and_wait(av.items);
                 host_tool_failed = rc != 0;
             }
@@ -1986,16 +2267,12 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         }
 
         if (rc == 0) {
-            const char *ar = getenv("AR");
-            if (ar == NULL || ar[0] == '\0') ar = "ar";
 #if defined(__APPLE__)
-            /* On macOS, 'ar rcs' implicitly runs ranlib which emits
-             *   "the table of contents is empty"
-             * when the object contains no exported C symbols (e.g. an
-             * archive of empty-body generic stubs).  Use 'ar rc' (no
-             * implicit ranlib) followed by an explicit
-             * 'ranlib -no_warning_for_no_symbols' invocation that
-             * silences that diagnostic while still updating the table. */
+            /*
+             * Keep archive creation and indexing explicit on macOS. LLVM
+             * ranlib accepts empty symbol tables without the Apple ranlib-only
+             * `-no_warning_for_no_symbols` option.
+             */
             if (!argv_push(&av, ar)) { ok = false; }
             if (ok && !argv_push(&av, "rc")) { ok = false; }
             if (ok && !argv_push(&av, opts->out_path)) { ok = false; }
@@ -2004,20 +2281,19 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 fprintf(stderr, "error: out of memory building archive argv\n");
                 rc = 1;
             } else {
+                failed_tool_description = "static archiver";
                 rc = spawn_and_wait(av.items);
                 host_tool_failed = rc != 0;
             }
             argv_free(&av);
             if (rc == 0) {
-                const char *ranlib = getenv("RANLIB");
-                if (ranlib == NULL || ranlib[0] == '\0') ranlib = "ranlib";
                 if (!argv_push(&av, ranlib)) { ok = false; }
-                if (ok && !argv_push(&av, "-no_warning_for_no_symbols")) { ok = false; }
                 if (ok && !argv_push(&av, opts->out_path)) { ok = false; }
                 if (!ok) {
                     fprintf(stderr, "error: out of memory building ranlib argv\n");
                     rc = 1;
                 } else {
+                    failed_tool_description = "archive indexer";
                     rc = spawn_and_wait(av.items);
                     host_tool_failed = rc != 0;
                 }
@@ -2032,6 +2308,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 fprintf(stderr, "error: out of memory building archive argv\n");
                 rc = 1;
             } else {
+                failed_tool_description = "static archiver";
                 rc = spawn_and_wait(av.items);
                 host_tool_failed = rc != 0;
             }
@@ -2057,6 +2334,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         }
     }
 
+cleanup:
     for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
     free(libs);
     free_string_array(bundle_extlib_satisfied_libs, bundle_extlib_satisfied_lib_count);
@@ -2072,6 +2350,13 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     free(runtime_lib);
     free(include_dir);
     free(include_flag);
+    free(tool_error);
+#if defined(__APPLE__)
+    free(native_sdk_path);
+#endif
+    free(ranlib);
+    free(ar);
+    free(cc);
 
     if (rc != 0) {
         if (!host_tool_failed) {
@@ -2079,9 +2364,11 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             return rc;
         }
         fprintf(stderr,
-                "error: host C compiler failed (exit=%d).\n"
+                "error: host %s failed (exit=%d).\n"
                 "  generated C kept at: %s\n",
-                rc, opts->c_path);
+                failed_tool_description != NULL ? failed_tool_description : "build tool",
+                rc,
+                opts->c_path);
         free(object_path);
         return rc;
     }

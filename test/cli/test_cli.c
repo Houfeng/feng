@@ -2423,10 +2423,10 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
                     "  }\n"
                     "}\n");
 
-    if (getenv("CC") != NULL) {
-        saved_cc = dup_cstr(getenv("CC"));
+    if (getenv("FENG_CC") != NULL) {
+        saved_cc = dup_cstr(getenv("FENG_CC"));
     }
-    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+    ASSERT(setenv("FENG_CC", cc_wrapper_path, 1) == 0);
     {
         char *out_opt = make_out_option(consumer_out_dir);
         char *pkg_opt = make_pkg_option(bundle_path);
@@ -2442,9 +2442,9 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
         free(out_opt);
     }
     if (saved_cc != NULL) {
-        ASSERT(setenv("CC", saved_cc, 1) == 0);
+        ASSERT(setenv("FENG_CC", saved_cc, 1) == 0);
     } else {
-        ASSERT(unsetenv("CC") == 0);
+        ASSERT(unsetenv("FENG_CC") == 0);
     }
 
     ASSERT(path_exists(consumer_binary_path));
@@ -2512,10 +2512,10 @@ static void test_direct_build_maps_cli_library_name_to_link_flag(void) {
                     "module test.cli.directclilibname;\n"
                     "func main(args: string[]) {}\n");
 
-    if (getenv("CC") != NULL) {
-        saved_cc = dup_cstr(getenv("CC"));
+    if (getenv("FENG_CC") != NULL) {
+        saved_cc = dup_cstr(getenv("FENG_CC"));
     }
-    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+    ASSERT(setenv("FENG_CC", cc_wrapper_path, 1) == 0);
 
     out_opt = make_out_option(out_dir);
     lib_opt = make_lib_option("m");
@@ -2531,9 +2531,9 @@ static void test_direct_build_maps_cli_library_name_to_link_flag(void) {
     }
 
     if (saved_cc != NULL) {
-        ASSERT(setenv("CC", saved_cc, 1) == 0);
+        ASSERT(setenv("FENG_CC", saved_cc, 1) == 0);
     } else {
-        ASSERT(unsetenv("CC") == 0);
+        ASSERT(unsetenv("FENG_CC") == 0);
     }
 
     ASSERT(path_exists(binary_path));
@@ -2595,10 +2595,10 @@ static void test_direct_build_passes_cli_library_path_verbatim(void) {
                     "module test.cli.directclilibpath;\n"
                     "func main(args: string[]) {}\n");
 
-    if (getenv("CC") != NULL) {
-        saved_cc = dup_cstr(getenv("CC"));
+    if (getenv("FENG_CC") != NULL) {
+        saved_cc = dup_cstr(getenv("FENG_CC"));
     }
-    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+    ASSERT(setenv("FENG_CC", cc_wrapper_path, 1) == 0);
 
     out_opt = make_out_option(out_dir);
     {
@@ -2614,9 +2614,9 @@ static void test_direct_build_passes_cli_library_path_verbatim(void) {
     }
 
     if (saved_cc != NULL) {
-        ASSERT(setenv("CC", saved_cc, 1) == 0);
+        ASSERT(setenv("FENG_CC", saved_cc, 1) == 0);
     } else {
-        ASSERT(unsetenv("CC") == 0);
+        ASSERT(unsetenv("FENG_CC") == 0);
     }
 
     ASSERT(path_exists(binary_path));
@@ -11720,10 +11720,10 @@ static void test_project_build_default_uses_debug_friendly_flags(void) {
                     "module test.cli.debugflags;\n"
                     "func main(args: string[]) {}\n");
 
-    if (getenv("CC") != NULL) {
-        saved_cc = dup_cstr(getenv("CC"));
+    if (getenv("FENG_CC") != NULL) {
+        saved_cc = dup_cstr(getenv("FENG_CC"));
     }
-    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+    ASSERT(setenv("FENG_CC", cc_wrapper_path, 1) == 0);
 
     {
         char *argv[] = { project_dir };
@@ -11738,9 +11738,9 @@ static void test_project_build_default_uses_debug_friendly_flags(void) {
     ASSERT(count_occurrences(cc_log_text, "-DNDEBUG") == 0);
 
     if (saved_cc != NULL) {
-        ASSERT(setenv("CC", saved_cc, 1) == 0);
+        ASSERT(setenv("FENG_CC", saved_cc, 1) == 0);
     } else {
-        ASSERT(unsetenv("CC") == 0);
+        ASSERT(unsetenv("FENG_CC") == 0);
     }
 
     free(saved_cc);
@@ -11821,10 +11821,10 @@ static void test_project_build_release_propagates_to_local_dependencies(void) {
                     "  }\n"
                     "}\n");
 
-    if (getenv("CC") != NULL) {
-        saved_cc = dup_cstr(getenv("CC"));
+    if (getenv("FENG_CC") != NULL) {
+        saved_cc = dup_cstr(getenv("FENG_CC"));
     }
-    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+    ASSERT(setenv("FENG_CC", cc_wrapper_path, 1) == 0);
 
     {
         char *argv[] = { root_project_dir, "--release" };
@@ -11840,9 +11840,9 @@ static void test_project_build_release_propagates_to_local_dependencies(void) {
     ASSERT(count_occurrences(cc_log_text, "-g") == 0);
 
     if (saved_cc != NULL) {
-        ASSERT(setenv("CC", saved_cc, 1) == 0);
+        ASSERT(setenv("FENG_CC", saved_cc, 1) == 0);
     } else {
-        ASSERT(unsetenv("CC") == 0);
+        ASSERT(unsetenv("FENG_CC") == 0);
     }
 
     free(saved_cc);
@@ -12227,10 +12227,10 @@ static void test_project_run_release_reuses_build_pipeline(void) {
                     "  }\n"
                     "}\n");
 
-    if (getenv("CC") != NULL) {
-        saved_cc = dup_cstr(getenv("CC"));
+    if (getenv("FENG_CC") != NULL) {
+        saved_cc = dup_cstr(getenv("FENG_CC"));
     }
-    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+    ASSERT(setenv("FENG_CC", cc_wrapper_path, 1) == 0);
 
     {
         char *argv[] = { root_project_dir, "--release" };
@@ -12246,9 +12246,9 @@ static void test_project_run_release_reuses_build_pipeline(void) {
     ASSERT(count_occurrences(cc_log_text, "-g") == 0);
 
     if (saved_cc != NULL) {
-        ASSERT(setenv("CC", saved_cc, 1) == 0);
+        ASSERT(setenv("FENG_CC", saved_cc, 1) == 0);
     } else {
-        ASSERT(unsetenv("CC") == 0);
+        ASSERT(unsetenv("FENG_CC") == 0);
     }
 
     free(saved_cc);
@@ -12336,10 +12336,10 @@ static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(vo
                     "  return 2;\n"
                     "}\n");
 
-    if (getenv("CC") != NULL) {
-        saved_cc = dup_cstr(getenv("CC"));
+    if (getenv("FENG_CC") != NULL) {
+        saved_cc = dup_cstr(getenv("FENG_CC"));
     }
-    ASSERT(setenv("CC", cc_wrapper_path, 1) == 0);
+    ASSERT(setenv("FENG_CC", cc_wrapper_path, 1) == 0);
 
     {
         char *argv[] = { root_project_dir };
@@ -12366,9 +12366,9 @@ static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(vo
     ASSERT((header.flags & FENG_SYMBOL_FT_FLAG_HAS_SPANS) == 0U);
 
     if (saved_cc != NULL) {
-        ASSERT(setenv("CC", saved_cc, 1) == 0);
+        ASSERT(setenv("FENG_CC", saved_cc, 1) == 0);
     } else {
-        ASSERT(unsetenv("CC") == 0);
+        ASSERT(unsetenv("FENG_CC") == 0);
     }
 
     free(saved_cc);

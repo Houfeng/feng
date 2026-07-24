@@ -158,10 +158,13 @@ test-sanitize:
 	$(BIN_DIR)/test_runtime
 	$(BIN_DIR)/test_codegen
 	$(BIN_DIR)/test_debug
-	FENG_CC_FLAGS="-fsanitize=undefined" $(BIN_DIR)/test_cli
+	# The trimmed distribution Clang intentionally omits sanitizer runtimes.
+	# Generated-program UBSan coverage therefore uses the host compiler through
+	# the explicit Feng tool override; the normal phase below exercises bundled.
+	FENG_CC=cc FENG_CC_FLAGS="-fsanitize=undefined" $(BIN_DIR)/test_cli
 	$(BIN_DIR)/test_cli_paths
 	$(BIN_DIR)/test_symbol
-	FENG_CC_FLAGS="-fsanitize=undefined" $(MAKE) smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
+	FENG_CC=cc FENG_CC_FLAGS="-fsanitize=undefined" $(MAKE) smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
 
 perf-constraints: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_perf_constraints.sh

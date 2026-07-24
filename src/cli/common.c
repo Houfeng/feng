@@ -170,6 +170,17 @@ static char *resolve_linux_executable_path(void) {
 }
 #endif
 
+/* Return whether one path is a regular executable file. */
+static bool path_is_regular_executable(const char *path) {
+    struct stat status;
+
+    return path != NULL &&
+           path[0] != '\0' &&
+           stat(path, &status) == 0 &&
+           S_ISREG(status.st_mode) &&
+           access(path, X_OK) == 0;
+}
+
 char *feng_cli_find_executable_on_path(const char *program) {
     const char *path_value;
     const char *segment_start;
@@ -178,7 +189,7 @@ char *feng_cli_find_executable_on_path(const char *program) {
         return NULL;
     }
     if (strchr(program, '/') != NULL) {
-        return access(program, X_OK) == 0 ? duplicate_string(program) : NULL;
+        return path_is_regular_executable(program) ? duplicate_string(program) : NULL;
     }
 
     path_value = getenv("PATH");
@@ -201,7 +212,7 @@ char *feng_cli_find_executable_on_path(const char *program) {
             memcpy(candidate, directory, directory_length);
             candidate[directory_length] = '/';
             memcpy(candidate + directory_length + 1U, program, program_length + 1U);
-            if (access(candidate, X_OK) == 0) {
+            if (path_is_regular_executable(candidate)) {
                 return candidate;
             }
             free(candidate);
@@ -216,7 +227,7 @@ char *feng_cli_find_executable_on_path(const char *program) {
 }
 
 bool feng_cli_path_is_executable(const char *path) {
-    return path != NULL && path[0] != '\0' && access(path, X_OK) == 0;
+    return path_is_regular_executable(path);
 }
 
 char *feng_cli_resolve_executable_path(const char *program_path, char **out_error_message) {
@@ -367,6 +378,100 @@ char *feng_cli_require_install_path(const char *program_path,
         return NULL;
     }
     return path;
+}
+
+char *feng_cli_resolve_host_tool(const char *program_path,
+                                 const FengCliHostToolStrategy *strategy,
+                                 char **out_error_message) {
+    const char *environment_value;
+    char *candidate;
+    struct stat bundled_status;
+    int bundled_errno;
+
+    if (out_error_message != NULL) {
+        *out_error_message = NULL;
+    }
+    if (strategy == NULL ||
+        strategy->display_name == NULL ||
+        strategy->display_name[0] == '\0' ||
+        strategy->bundled_relative_path == NULL ||
+        strategy->bundled_relative_path[0] == '\0' ||
+        strategy->system_executable == NULL ||
+        strategy->system_executable[0] == '\0') {
+        set_errorf(out_error_message, "invalid host tool lookup specification");
+        return NULL;
+    }
+
+    environment_value = strategy->feng_environment_variable != NULL
+        ? getenv(strategy->feng_environment_variable)
+        : NULL;
+    if (environment_value != NULL && environment_value[0] != '\0') {
+        candidate = feng_cli_find_executable_on_path(environment_value);
+        if (candidate != NULL) {
+            return candidate;
+        }
+        set_errorf(out_error_message,
+                   "%s environment variable %s specifies an unavailable executable: %s",
+                   strategy->display_name,
+                   strategy->feng_environment_variable,
+                   environment_value);
+        return NULL;
+    }
+
+    candidate = feng_cli_resolve_install_path(program_path,
+                                              strategy->bundled_relative_path,
+                                              out_error_message);
+    if (candidate == NULL) {
+        return NULL;
+    }
+    if (lstat(candidate, &bundled_status) == 0) {
+        if (path_is_regular_executable(candidate)) {
+            return candidate;
+        }
+        set_errorf(out_error_message,
+                   "bundled %s is present but is not an executable regular file: %s",
+                   strategy->display_name,
+                   candidate);
+        free(candidate);
+        return NULL;
+    }
+    bundled_errno = errno;
+    free(candidate);
+    if (bundled_errno != ENOENT && bundled_errno != ENOTDIR) {
+        set_errorf(out_error_message,
+                   "cannot inspect bundled %s at %s: %s",
+                   strategy->display_name,
+                   strategy->bundled_relative_path,
+                   strerror(bundled_errno));
+        return NULL;
+    }
+
+    environment_value = strategy->conventional_environment_variable != NULL
+        ? getenv(strategy->conventional_environment_variable)
+        : NULL;
+    if (environment_value != NULL && environment_value[0] != '\0') {
+        candidate = feng_cli_find_executable_on_path(environment_value);
+        if (candidate != NULL) {
+            return candidate;
+        }
+        set_errorf(out_error_message,
+                   "%s environment variable %s specifies an unavailable executable: %s",
+                   strategy->display_name,
+                   strategy->conventional_environment_variable,
+                   environment_value);
+        return NULL;
+    }
+
+    candidate = feng_cli_find_executable_on_path(strategy->system_executable);
+    if (candidate != NULL) {
+        return candidate;
+    }
+    set_errorf(out_error_message,
+               "cannot locate %s: bundled path is absent, environment variables are unset, "
+               "and '%s' was not found on PATH",
+               strategy->display_name,
+               strategy->system_executable);
+    return NULL;
 }
 
 bool feng_cli_stream_supports_color(FILE *stream) {

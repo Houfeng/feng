@@ -34,6 +34,18 @@ typedef enum FengCliRequiredPathKind {
 } FengCliRequiredPathKind;
 
 /*
+ * Declarative lookup policy for one host tool used by Feng.
+ * Environment variable values and executable names are never shell-parsed.
+ */
+typedef struct FengCliHostToolStrategy {
+    const char *display_name;
+    const char *feng_environment_variable;
+    const char *bundled_relative_path;
+    const char *conventional_environment_variable;
+    const char *system_executable;
+} FengCliHostToolStrategy;
+
+/*
  * Resolve the running Feng executable to a canonical absolute path.
  * The returned string and optional error message are owned by the caller.
  */
@@ -65,6 +77,15 @@ char *feng_cli_find_executable_on_path(const char *program);
 
 /* Return whether one filesystem path exists and is executable. */
 bool feng_cli_path_is_executable(const char *path);
+
+/*
+ * Resolve one host tool in this order: Feng-specific environment variable,
+ * bundled installation path, conventional environment variable, and PATH.
+ * The returned string and optional error message are owned by the caller.
+ */
+char *feng_cli_resolve_host_tool(const char *program_path,
+                                 const FengCliHostToolStrategy *strategy,
+                                 char **out_error_message);
 
 bool feng_cli_stream_supports_color(FILE *stream);
 void feng_cli_set_stream_color(FILE *stream, bool enabled, const char *color);

@@ -348,7 +348,7 @@ fi
 #     failures=$((failures + 1))
 # fi
 
-# 8. failing host cc surfaces a clear error and preserves the IR file
+# 8. failing explicit Feng C compiler surfaces an error and preserves the IR
 out8="$WORK/case_ccfail"
 fake_cc_dir="$WORK/fake_cc"
 mkdir -p "$fake_cc_dir"
@@ -358,9 +358,9 @@ echo "fake cc: simulated failure" >&2
 exit 7
 INNER
 chmod +x "$fake_cc_dir/cc"
-if CC="$fake_cc_dir/cc" "$FENG" "$FIXTURE" --out="$out8" \
+if FENG_CC="$fake_cc_dir/cc" "$FENG" "$FIXTURE" --out="$out8" \
        >"$WORK/cc_fail.out" 2>"$WORK/cc_fail.err"; then
-    echo "FAIL[cc_fail] expected failure when CC stub returns non-zero"
+    echo "FAIL[cc_fail] expected failure when FENG_CC stub returns non-zero"
     failures=$((failures + 1))
 elif ! grep -q "host C compiler failed" "$WORK/cc_fail.err"; then
     echo "FAIL[cc_fail] missing host cc failure diagnostic"

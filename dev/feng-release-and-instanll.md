@@ -298,19 +298,20 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 ### 8.2 统一相对布局、CLI 路径基础设施与 host LLVM 定位
 
-本阶段收敛发行包与源码开发的路径基础设施，并切换 driver 默认使用当前 host 的 bundled LLVM；不引入目标平台、target triple、sysroot 或其他交叉编译逻辑，也不改变 Feng 自身现有 `build/` 产物层级。LLVM 可执行文件始终属于 host 工具，native 与后续交叉编译共用同一套定位结果，目标平台只影响后续传给 LLVM 的编译与链接参数。
+本阶段收敛发行包与源码开发的路径基础设施，并切换 driver 默认使用当前 host 的 bundled LLVM；同时完成 macOS native bundled Clang 必需的系统 SDK 定位。不引入显式目标平台、target triple、用户 `--sysroot` 或其他交叉编译逻辑，也不改变 Feng 自身现有 `build/` 产物层级。LLVM 可执行文件始终属于 host 工具，native 与后续交叉编译共用同一套定位结果，目标平台只影响后续传给 LLVM 的编译与链接参数。
 
 任务：
 
 - [x] Makefile 在现有 `build/toolchain/` 中创建 `llvm -> ../../toolchain/llvm/<host-platform>` 与 `sysroot -> ../../toolchain/sysroot`；`make clean` 随 `build/` 清理软链接。
-- [x] 将 Feng 可执行文件绝对路径解析、安装根解析、相对路径组装、`PATH` 可执行文件查找与缺失路径诊断收敛到 `src/cli/common.*`；runtime 已迁移到该公共能力，host LLVM 构建工具在本阶段继续复用，`lldb-dap` 在 §8.4 切换定位策略时复用，不增加 Feng 专用工具链环境变量或重复实现。
+- [x] 将 Feng 可执行文件绝对路径解析、安装根解析、相对路径组装、`PATH` 可执行文件查找与缺失路径诊断收敛到 `src/cli/common.*`；runtime 已迁移到该公共能力，host LLVM 构建工具在本阶段继续复用，`lldb-dap` 在 §8.4 切换定位策略时复用，不增加改变安装根或整套工具链根目录的环境变量，也不重复实现。
 - [x] 为可执行文件定位、相对目录组装、软链接布局与缺失路径诊断补充独立回归。
-- [ ] driver 按 [feng-build.md](../docs/feng-build.md) 规定的统一顺序选择 host LLVM 构建工具：bundled `clang` / `llvm-ar` / `llvm-ranlib`、对应的 `CC` / `AR` / `RANLIB`、系统 `cc` / `ar` / `ranlib`；native 编译立即使用该结果，后续交叉编译也复用同一 host 工具定位，不得按目标平台选择另一份 LLVM。
-- [ ] 补充 driver 工具选择回归，分别验证三种 bundled 工具默认命中、bundled 缺失后的环境变量候选、环境变量未设置时的系统 `PATH` 兜底，以及 bundled 损坏、环境变量无效、候选均不可用时不静默降级并给出明确诊断；不得在本阶段加入 `--target`、`--sysroot` 或目标 runtime 选择测试。
+- [x] driver 按 [feng-build.md](../docs/feng-build.md) 规定的统一顺序选择 host LLVM 构建工具：`FENG_CC` / `FENG_AR` / `FENG_RANLIB`、bundled `clang` / `llvm-ar` / `llvm-ranlib`、传统 `CC` / `AR` / `RANLIB`、系统 `cc` / `ar` / `ranlib`；native 编译立即使用该结果，后续交叉编译也复用同一 host 工具定位，不得按目标平台选择另一份 LLVM。
+- [x] 补充 driver 工具选择回归，分别验证 Feng 专用变量显式覆盖、三种 bundled 工具默认命中、bundled 缺失后的传统环境变量候选、环境变量未设置时的系统 `PATH` 兜底，以及 bundled 损坏、环境变量无效、候选均不可用时不静默降级并给出明确诊断；不得在本阶段加入 `--target`、`--sysroot` 或目标 runtime 选择测试。
+- [x] macOS native 编译通过 `xcrun --sdk macosx --show-sdk-path` 定位系统 SDK，并向本阶段选中的 C 编译器传入唯一的 `-isysroot`；`xcrun`、developer directory 或 SDK 不可用时给出明确诊断，不得回退到未指定 SDK 的编译。该行为只启用当前 native 编译，不增加显式 `--sysroot` 或跨目标选择。
 
 独立交付与回归门：
 
-- [ ] `build/bin/feng` 可通过 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 观察到与发行包一致的布局；native `.ff` 编译实际启动 bundled `clang`，静态归档实际启动 bundled `llvm-ar`，归档流程需要独立索引时实际启动 bundled `llvm-ranlib`，runtime 与 DAP 的现有行为保持不变。
+- [x] `build/bin/feng` 可通过 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 观察到与发行包一致的布局；native `.ff` 编译实际启动 bundled `clang`，macOS 同时使用 `xcrun` 返回的系统 SDK，静态归档实际启动 bundled `llvm-ar`，归档流程需要独立索引时实际启动 bundled `llvm-ranlib`，runtime 与 DAP 的现有行为保持不变。
 - [ ] `macos-arm64` 已在 Codex 沙箱外通过全量 `make test`；`linux-x64-gnu` 与 `linux-arm64-gnu` 已分别在 Apple Container 的 Ubuntu 26.04 中通过新增路径能力、软链接布局与 bundled LLVM / sysroot 专项回归，仍须在两个 Linux host 上通过全量 `make test`。
 
 ### 8.3 三 host 编译器与五目标 runtime 发行构件
@@ -335,7 +336,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 任务：
 
-- [ ] `feng dap` 在 macOS 与 Linux 按 [feng-cli.md](../docs/feng-cli.md) 规定共用 §8.2 的路径能力，依次定位并启动 bundled、`PATH` 与 macOS `xcrun` 提供的 `lldb-dap`。
+- [ ] `feng dap` 在 macOS 与 Linux 按 [feng-cli.md](../docs/feng-cli.md) 规定共用 §8.2 的路径能力，依次定位并启动 `FENG_LLDB_DAP`、bundled、`PATH` 与 macOS `xcrun` 提供的 `lldb-dap`。
 - [ ] Linux bundled `libpython3.11.so.1.0`、私有 `encodings` 或其他 §5.2 私有 LLDB 依赖缺失时，按发行包损坏处理，保留真实错误并给出可操作诊断，不得提示用户安装系统 Python 或其他系统包；Feng 永不使用或支持 Python 脚本。
 - [ ] 补充 macOS / Linux 后端定位、启动、缺失依赖和 DAP 基础会话回归。
 
@@ -396,7 +397,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 任务：
 
 - [ ] 将 `feng.fm` 的完整平台集合字段由 `arch` 改为 `platform`，并完整实现 [feng-cli.md](../docs/feng-cli.md)“项目平台选择统一规则”和 native target triple 转换；host Clang 直接复用 §8.2 的定位结果。
-- [ ] macOS native 最终链接使用 `xcrun` 获取 SDK 并传入 `-isysroot`；Linux native GNU 与 Linux GNU 交叉编译统一使用对应 bundled glibc sysroot，不读取 host glibc 开发文件。
+- [ ] Linux native GNU 与 Linux GNU 交叉编译统一使用对应 bundled glibc sysroot，不读取 host glibc 开发文件；macOS native SDK 定位直接复用 §8.2，不得建立第二套 `xcrun` 调用。
 - [ ] native `target=bin` 只定位并链接 `lib/<platform>/libfeng_runtime.a`，不得使用其他平台或其他 libc ABI runtime。
 - [ ] 补充完整平台诊断、native target triple、SDK / sysroot / runtime 定位和三 host native 编译回归。
 
