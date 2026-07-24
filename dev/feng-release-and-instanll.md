@@ -303,14 +303,14 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 任务：
 
 - [x] Makefile 在现有 `build/toolchain/` 中创建 `llvm -> ../../toolchain/llvm/<host-platform>` 与 `sysroot -> ../../toolchain/sysroot`；`make clean` 随 `build/` 清理软链接。
-- [x] 将 Feng 可执行文件绝对路径解析、安装根解析、相对路径组装、`PATH` 可执行文件查找与缺失路径诊断收敛到 `src/cli/common.*`；runtime 已迁移到该公共能力，Clang 在本阶段继续复用，`lldb-dap` 在 §8.4 切换定位策略时复用，不增加工具链环境变量或重复实现。
+- [x] 将 Feng 可执行文件绝对路径解析、安装根解析、相对路径组装、`PATH` 可执行文件查找与缺失路径诊断收敛到 `src/cli/common.*`；runtime 已迁移到该公共能力，host LLVM 构建工具在本阶段继续复用，`lldb-dap` 在 §8.4 切换定位策略时复用，不增加 Feng 专用工具链环境变量或重复实现。
 - [x] 为可执行文件定位、相对目录组装、软链接布局与缺失路径诊断补充独立回归。
-- [ ] driver 按 [feng-build.md](../docs/feng-build.md) 规定的顺序选择 host Clang：非空 `CC` 显式覆盖、`<feng 可执行文件目录>/../toolchain/llvm/bin/clang` 默认项、`PATH` 中系统 `cc` 兜底；native 编译立即使用该结果，后续交叉编译也复用同一 host Clang 定位，不得按目标平台选择另一份 LLVM。
-- [ ] 补充 driver 编译器选择回归，分别验证显式 `CC`、bundled Clang 默认命中、系统 `cc` 兜底及候选均不可用时的明确诊断；不得在本阶段加入 `--target`、`--sysroot` 或目标 runtime 选择测试。
+- [ ] driver 按 [feng-build.md](../docs/feng-build.md) 规定的统一顺序选择 host LLVM 构建工具：bundled `clang` / `llvm-ar` / `llvm-ranlib`、对应的 `CC` / `AR` / `RANLIB`、系统 `cc` / `ar` / `ranlib`；native 编译立即使用该结果，后续交叉编译也复用同一 host 工具定位，不得按目标平台选择另一份 LLVM。
+- [ ] 补充 driver 工具选择回归，分别验证三种 bundled 工具默认命中、bundled 缺失后的环境变量候选、环境变量未设置时的系统 `PATH` 兜底，以及 bundled 损坏、环境变量无效、候选均不可用时不静默降级并给出明确诊断；不得在本阶段加入 `--target`、`--sysroot` 或目标 runtime 选择测试。
 
 独立交付与回归门：
 
-- [ ] `build/bin/feng` 可通过 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 观察到与发行包一致的布局；未设置 `CC` 时，native `.ff` 编译实际启动 bundled `clang`，runtime 与 DAP 的现有行为保持不变。
+- [ ] `build/bin/feng` 可通过 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 观察到与发行包一致的布局；native `.ff` 编译实际启动 bundled `clang`，静态归档实际启动 bundled `llvm-ar`，归档流程需要独立索引时实际启动 bundled `llvm-ranlib`，runtime 与 DAP 的现有行为保持不变。
 - [ ] `macos-arm64` 已在 Codex 沙箱外通过全量 `make test`；`linux-x64-gnu` 与 `linux-arm64-gnu` 已分别在 Apple Container 的 Ubuntu 26.04 中通过新增路径能力、软链接布局与 bundled LLVM / sysroot 专项回归，仍须在两个 Linux host 上通过全量 `make test`。
 
 ### 8.3 三 host 编译器与五目标 runtime 发行构件
