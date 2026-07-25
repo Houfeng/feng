@@ -83,7 +83,7 @@ Feng 专用环境变量是用户对单次 Feng 调用的最高优先级显式覆
 目标平台同时决定以下输入,不得只转换 Clang 参数:
 
 - 前端、语义分析与 codegen 中所有平台相关行为,包括指针宽度与平台相关基础类型；不得继续用编译 Feng 自身时的 host `sizeof` 代替目标平台信息。
-- `target=bin` 使用的 Feng runtime 静态库：发行包从 `<feng 可执行文件目录>/../lib/<platform>/` 定位；GNU 与 musl runtime 不得互换。源码开发的 native 构建兼容现有 `build/bin/feng` 与 `build/lib/` 布局。`target=lib` 不链接 runtime。
+- `target=bin` 使用的 Feng runtime 静态库：从 `<feng 可执行文件目录>/../lib/<platform>/` 定位；发行包对应 `lib/<platform>/libfeng_runtime.a`，源码开发对应 `build/lib/<platform>/libfeng_runtime.a`。GNU 与 musl runtime 不得互换。`target=lib` 不链接 runtime。
 - `.fb` 正式库:`lib/<platform>/`。
 - `.fb` 原生扩展库:`extlib/<platform>/`。
 - Linux 目标 sysroot：`toolchain/sysroot/<platform>/`，native 与交叉编译共用。

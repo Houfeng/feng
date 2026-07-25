@@ -318,21 +318,29 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [x] `macos-arm64` 已在 Codex 沙箱外通过全量 `make test`。
 - [ ] `linux-x64-gnu` 与 `linux-arm64-gnu` 已分别在 Apple Container 的 Ubuntu 26.04 中通过新增路径能力、软链接布局与 bundled LLVM / sysroot 专项回归，仍须在两个 Linux host 上通过全量 `make test`。
 
-### 8.3 多平台构建
+### 8.3 libunwind、Feng 编译器与 runtime 构建
 
 本阶段只更新 `scripts/build_libunwind.sh` 和 Makefile，不修改 Feng CLI、CI 或发行脚本。
 
+平台标识以 [feng-os-arch.md](../docs/feng-os-arch.md) 为准，构件路径固定如下：
+
+| 构建环境 | `libfeng_unwind.a` 维护产物 | `libfeng_runtime.a` 构建产物 |
+|----------|-----------------------------|-------------------------------|
+| `macos-arm64` | `extlib/macos-arm64/libfeng_unwind.a` | `build/lib/macos-arm64/libfeng_runtime.a` |
+| `linux-x64-gnu` | `extlib/linux-x64-gnu/libfeng_unwind.a`<br>`extlib/linux-x64-musl/libfeng_unwind.a` | `build/lib/linux-x64-gnu/libfeng_runtime.a`<br>`build/lib/linux-x64-musl/libfeng_runtime.a` |
+| `linux-arm64-gnu` | `extlib/linux-arm64-gnu/libfeng_unwind.a`<br>`extlib/linux-arm64-musl/libfeng_unwind.a` | `build/lib/linux-arm64-gnu/libfeng_runtime.a`<br>`build/lib/linux-arm64-musl/libfeng_runtime.a` |
+
 任务：
 
-- [ ] 更新 `scripts/build_libunwind.sh`。该脚本只供维护者手动执行：macOS ARM64 生成 macOS 一份，Linux x64 和 Linux ARM64 分别生成同架构 GNU / musl 两份，共五份 `libfeng_unwind.a`；每份构件使用对应 SDK 或 sysroot。
-- [ ] 更新 Makefile。三个发行平台分别构建当前平台的 Feng 编译器；macOS 构建一份 runtime，两个 Linux 平台分别构建同架构 GNU / musl 两份 runtime，共五份 `libfeng_runtime.a`。
-- [ ] runtime 按完整目标平台分开输出，只合并相同平台的 unwind，不包含 libc；文件格式或 CPU 架构不匹配时立即失败。
+- [ ] 更新 `scripts/build_libunwind.sh`。该脚本只供维护者手动执行，生成上表规定的五份 unwind；每份构件使用对应 SDK 或 sysroot。
+- [ ] 更新 Makefile。三个构建环境均将当前平台的 Feng 编译器输出到 `build/bin/feng`，并生成上表规定的 runtime。
+- [ ] 每份 runtime 只合并 `extlib/<platform>/libfeng_unwind.a` 中 `<platform>` 完全相同的 unwind，不包含 libc；SDK / sysroot、文件格式或 CPU 架构与 `<platform>` 不匹配时立即失败。
 
 独立交付与回归门：
 
 - [ ] 五份 unwind 均可由维护脚本重新生成并通过校验。
-- [ ] 三个平台的 `feng --version` 均可正常执行，五份 runtime 均通过平台、文件格式与 CPU 架构校验。
-- [ ] 三个平台的全量 `make test` 均通过。
+- [ ] `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 的 `build/bin/feng --version` 均可正常执行，上表五份 runtime 均通过平台、文件格式与 CPU 架构校验。
+- [ ] `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 的全量 `make test` 均通过。
 
 ### 8.4 macOS 与 Linux 调试
 
