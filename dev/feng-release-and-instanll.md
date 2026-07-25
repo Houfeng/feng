@@ -238,7 +238,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 2. 提交变更和验收结果供人工 Review。
 3. 人工 Review 通过并明确批准后，方可进入下一子阶段；§8 全部通过前不得开始 §9。
 
-外部原生机器或发行版镜像不可用时，经人工确认，可并行实施不依赖相关兼容性验收的后续任务。未完成项须保持为 TODO，并在 §8.6 前通过。此规则不适用于脚本、产物、代码、测试或当前环境中的验收缺口。
+外部原生机器或发行版镜像不可用时，经人工确认，可并行实施不依赖相关兼容性验收的后续任务。未完成项须保持为 TODO，并在 §8.5 前通过。此规则不适用于脚本、产物、代码、测试或当前环境中的验收缺口。
 
 ### 8.1 可独立验证的精简工具链
 
@@ -273,7 +273,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 值，也不支持 GCC。Linux host 在严格 C11 模式下统一启用 glibc 的 GNU feature namespace，以公开源码和测试实际使用的 GNU、XSI 与 POSIX.1-2008 接口。Feng 语义分析器直接调用 `fmod` 完成编译期浮点常量计算，因此仅为包含该语义分析器对象的 Linux host 工具与测试可执行文件链接 `libm`；这属于 Feng 编译器自身的构建依赖，不得用于替代 [feng-build.md](../docs/feng-build.md#25-收集链接信息) 规定的 Feng 用户程序 external 链接信息收集机制。
 
 - [x] Makefile 在缺失时创建 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>` 和 `build/toolchain/sysroot -> ../../toolchain/sysroot`。不检查已有链接；链接错误时执行 `make clean` 和 `make all` 重建。
-- [x] 在 `src/cli/common.*` 统一实现 Feng 可执行文件、安装根、相对路径和 `PATH` 工具的查找与错误提示。runtime 和 host LLVM 共用该实现，`lldb-dap` 在 §8.5 接入。不增加工具链根目录环境变量。
+- [x] 在 `src/cli/common.*` 统一实现 Feng 可执行文件、安装根、相对路径和 `PATH` 工具的查找与错误提示。runtime 和 host LLVM 共用该实现，`lldb-dap` 在 §8.4 接入。不增加工具链根目录环境变量。
 - [x] 测试可执行文件查找、相对路径、软链接布局和缺失路径错误。
 - [x] driver 按 [feng-build.md](../docs/feng-build.md) 的顺序选择 host 工具：`FENG_CC` / `FENG_AR` / `FENG_RANLIB`、bundled `clang` / `llvm-ar` / `llvm-ranlib`、`CC` / `AR` / `RANLIB`、系统 `cc` / `ar` / `ranlib`。native 和交叉编译共用该结果。
 - [x] 测试上述工具选择顺序。bundled 工具缺失时继续查找；bundled 工具损坏、环境变量无效或全部工具不可用时明确报错。本阶段不加入 `--target`、`--sysroot` 或目标 runtime 测试。
@@ -300,9 +300,9 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [ ] 更新 `scripts/build_libunwind.sh`。Linux 必须传入 `--libc=gnu|musl`；非 Linux 传入该参数时报错。
 - [ ] 在上表对应环境执行脚本，生成五份 libunwind，并校验平台、文件格式和 CPU 架构。
 
-### 8.4 Feng 编译及运行时支持多平台分别构建
+### 8.4 Feng 编译器及运行时，支持多平台分别构建
 
-本阶段只更新 Makefile，不修改 Feng CLI、CI 或发行脚本。
+本阶段更新 Makefile，并确保 `feng dap` 在 macOS 与 Linux 正常运行。不修改 CI 或发行脚本。
 
 | 构建环境 | runtime 构建产物 |
 |----------|------------------|
@@ -313,18 +313,11 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [ ] 更新 Makefile。三个构建环境均将当前平台的 Feng 编译器输出到 `build/bin/feng`，并生成上表规定的 runtime。
 - [ ] 每份 runtime 只合并 `extlib/<platform>/libfeng_unwind.a` 中 `<platform>` 完全相同的 unwind，不包含 libc；SDK / sysroot、文件格式或 CPU 架构与 `<platform>` 不匹配时立即失败。
 - [ ] `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 的 `build/bin/feng --version` 均可正常执行，上表五份 runtime 均通过平台、文件格式与 CPU 架构校验。
+- [ ] 各平台的 Feng 编译器编译 `.ff` 文件时，均能找到对应平台的 runtime 和 SDK / sysroot。
+- [ ] 三个发行平台的 `feng dap` 均按 [feng-cli.md](../docs/feng-cli.md) 定位并启动 `lldb-dap`，路径处理复用 §8.2，并通过定位失败、启动失败和真实调试测试。
 - [ ] `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 的全量 `make test` 均通过。
 
-### 8.5 macOS 与 Linux 调试
-
-本阶段只更新 `feng dap`。精简 `lldb` 与 `lldb-dap` 由 §8.1 提供，不在本阶段重新剪裁。
-
-- [ ] `feng dap` 在 macOS 与 Linux 按 [feng-cli.md](../docs/feng-cli.md) 规定定位并启动 `lldb-dap`，复用 §8.2 的公共路径能力。
-- [ ] 补充后端定位、启动失败和真实 DAP 调试会话测试。
-- [ ] 三个发行平台均通过 `feng dap` 真实调试会话。
-- [ ] 三个发行平台的全量 `make test` 均通过。
-
-### 8.6 CI、发行与安装
+### 8.5 CI、发行与安装
 
 本阶段只编写 CI、构件汇聚、发行包生成和安装脚本。
 
