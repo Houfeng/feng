@@ -300,19 +300,23 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 本阶段收敛发行包与源码开发的路径基础设施，并切换 driver 默认使用当前 host 的 bundled LLVM；同时完成 macOS native bundled Clang 必需的系统 SDK 定位。不引入显式目标平台、target triple、用户 `--sysroot` 或其他交叉编译逻辑，也不改变 Feng 自身现有 `build/` 产物层级。LLVM 可执行文件始终属于 host 工具，native 与后续交叉编译共用同一套定位结果，目标平台只影响后续传给 LLVM 的编译与链接参数。
 
+Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 值，也不支持 GCC。Linux host 在严格 C11 模式下统一启用 glibc 的 GNU feature namespace，以公开源码和测试实际使用的 GNU、XSI 与 POSIX.1-2008 接口。Feng 语义分析器直接调用 `fmod` 完成编译期浮点常量计算，因此仅为包含该语义分析器对象的 Linux host 工具与测试可执行文件链接 `libm`；这属于 Feng 编译器自身的构建依赖，不得用于替代 [feng-build.md](../docs/feng-build.md#25-收集链接信息) 规定的 Feng 用户程序 external 链接信息收集机制。
+
 任务：
 
-- [x] Makefile 在现有 `build/toolchain/` 中创建 `llvm -> ../../toolchain/llvm/<host-platform>` 与 `sysroot -> ../../toolchain/sysroot`；`make clean` 随 `build/` 清理软链接。
+- [x] Makefile 将 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>` 与 `build/toolchain/sysroot -> ../../toolchain/sysroot` 作为实际构建目标，仅在缺失时创建；不持续校验已存在链接的指向，链接被手工破坏时通过 `make clean` 后重新执行 `make all` 恢复。
 - [x] 将 Feng 可执行文件绝对路径解析、安装根解析、相对路径组装、`PATH` 可执行文件查找与缺失路径诊断收敛到 `src/cli/common.*`；runtime 已迁移到该公共能力，host LLVM 构建工具在本阶段继续复用，`lldb-dap` 在 §8.4 切换定位策略时复用，不增加改变安装根或整套工具链根目录的环境变量，也不重复实现。
 - [x] 为可执行文件定位、相对目录组装、软链接布局与缺失路径诊断补充独立回归。
 - [x] driver 按 [feng-build.md](../docs/feng-build.md) 规定的统一顺序选择 host LLVM 构建工具：`FENG_CC` / `FENG_AR` / `FENG_RANLIB`、bundled `clang` / `llvm-ar` / `llvm-ranlib`、传统 `CC` / `AR` / `RANLIB`、系统 `cc` / `ar` / `ranlib`；native 编译立即使用该结果，后续交叉编译也复用同一 host 工具定位，不得按目标平台选择另一份 LLVM。
 - [x] 补充 driver 工具选择回归，分别验证 Feng 专用变量显式覆盖、三种 bundled 工具默认命中、bundled 缺失后的传统环境变量候选、环境变量未设置时的系统 `PATH` 兜底，以及 bundled 损坏、环境变量无效、候选均不可用时不静默降级并给出明确诊断；不得在本阶段加入 `--target`、`--sysroot` 或目标 runtime 选择测试。
 - [x] macOS native 编译通过 `xcrun --sdk macosx --show-sdk-path` 定位系统 SDK，并向本阶段选中的 C 编译器传入唯一的 `-isysroot`；`xcrun`、developer directory 或 SDK 不可用时给出明确诊断，不得回退到未指定 SDK 的编译。该行为只启用当前 native 编译，不增加显式 `--sysroot` 或跨目标选择。
+- [x] Makefile 固定使用 `clang` 构建 Feng 编译器自身，不增加运行时编译器类型检查；Linux host 全局启用 GNU / XSI / POSIX.1-2008 声明，并仅为包含语义分析器对象的 host 工具与测试链接其直接使用的 `libm`，不得依赖 GCC 或 macOS `libSystem` 的隐式行为。
 
 独立交付与回归门：
 
 - [x] `build/bin/feng` 可通过 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 观察到与发行包一致的布局；native `.ff` 编译实际启动 bundled `clang`，macOS 同时使用 `xcrun` 返回的系统 SDK，静态归档实际启动 bundled `llvm-ar`，归档流程需要独立索引时实际启动 bundled `llvm-ranlib`，runtime 与 DAP 的现有行为保持不变。
-- [ ] `macos-arm64` 已在 Codex 沙箱外通过全量 `make test`；`linux-x64-gnu` 与 `linux-arm64-gnu` 已分别在 Apple Container 的 Ubuntu 26.04 中通过新增路径能力、软链接布局与 bundled LLVM / sysroot 专项回归，仍须在两个 Linux host 上通过全量 `make test`。
+- [x] `macos-arm64` 已在 Codex 沙箱外通过全量 `make test`。
+- [ ] `linux-x64-gnu` 与 `linux-arm64-gnu` 已分别在 Apple Container 的 Ubuntu 26.04 中通过新增路径能力、软链接布局与 bundled LLVM / sysroot 专项回归，仍须在两个 Linux host 上通过全量 `make test`。
 
 ### 8.3 三 host 编译器与五目标 runtime 发行构件
 

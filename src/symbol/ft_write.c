@@ -87,6 +87,9 @@ static bool buffer_append(Buffer *buffer,
                           const char *path,
                           FengToken token,
                           FengSymbolError *out_error) {
+    if (length == 0U) {
+        return true;
+    }
     if (!buffer_reserve(buffer, length, path, token, out_error)) {
         return false;
     }
@@ -1604,5 +1607,4 @@ cleanup:
     buffer_free(&payload);
     return false;
 }
-
 

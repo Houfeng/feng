@@ -1,4 +1,4 @@
-CC ?= cc
+override CC := clang
 CPPFLAGS ?= -Isrc -Ithird_party/miniz
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror -pedantic
 LDFLAGS ?=
@@ -97,8 +97,16 @@ endif
 HOST_TARGET := $(_HOST_OS)-$(_HOST_ARCH)
 ifeq ($(_HOST_OS),linux)
 HOST_PLATFORM := $(HOST_TARGET)-gnu
+# Feng sources and tests use GNU, XSI and POSIX.1-2008 interfaces on Linux,
+# including memmem(), realpath(), strdup() and recursive pthread mutexes.
+HOST_CPPFLAGS := -D_GNU_SOURCE
+# The semantic analyzer directly calls fmod() for compile-time constant
+# evaluation. Only executables containing its object files need libm.
+SEMANTIC_LDLIBS := -lm
 else
 HOST_PLATFORM := $(HOST_TARGET)
+HOST_CPPFLAGS :=
+SEMANTIC_LDLIBS :=
 endif
 EXTLIB_DIR := extlib/$(HOST_TARGET)
 
@@ -161,10 +169,10 @@ test-sanitize:
 	# The trimmed distribution Clang intentionally omits sanitizer runtimes.
 	# Generated-program UBSan coverage therefore uses the host compiler through
 	# the explicit Feng tool override; the normal phase below exercises bundled.
-	FENG_CC=cc FENG_CC_FLAGS="-fsanitize=undefined" $(BIN_DIR)/test_cli
+	FENG_CC=$(CC) FENG_CC_FLAGS="-fsanitize=undefined" $(BIN_DIR)/test_cli
 	$(BIN_DIR)/test_cli_paths
 	$(BIN_DIR)/test_symbol
-	FENG_CC=cc FENG_CC_FLAGS="-fsanitize=undefined" $(MAKE) smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
+	FENG_CC=$(CC) FENG_CC_FLAGS="-fsanitize=undefined" $(MAKE) smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
 
 perf-constraints: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_perf_constraints.sh
@@ -184,30 +192,27 @@ cli-tests: cli
 cli-project-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_cli_project.sh
 
-toolchain-layout:
+toolchain-layout: $(LLVM_LAYOUT_LINK) $(SYSROOT_LAYOUT_LINK)
+
+$(LLVM_LAYOUT_LINK):
 	@if [ ! -d "toolchain/llvm/$(HOST_PLATFORM)" ]; then \
 		echo "error: host LLVM toolchain not found: toolchain/llvm/$(HOST_PLATFORM)" >&2; \
 		exit 1; \
 	fi
+	@mkdir -p $(TOOLCHAIN_LAYOUT_DIR)
+	@ln -sfn ../../toolchain/llvm/$(HOST_PLATFORM) $(LLVM_LAYOUT_LINK)
+
+$(SYSROOT_LAYOUT_LINK):
 	@if [ ! -d "toolchain/sysroot" ]; then \
 		echo "error: sysroot collection not found: toolchain/sysroot" >&2; \
 		exit 1; \
 	fi
 	@mkdir -p $(TOOLCHAIN_LAYOUT_DIR)
-	@if [ -e "$(LLVM_LAYOUT_LINK)" ] && [ ! -L "$(LLVM_LAYOUT_LINK)" ]; then \
-		echo "error: toolchain layout path exists and is not a symlink: $(LLVM_LAYOUT_LINK)" >&2; \
-		exit 1; \
-	fi
-	@if [ -e "$(SYSROOT_LAYOUT_LINK)" ] && [ ! -L "$(SYSROOT_LAYOUT_LINK)" ]; then \
-		echo "error: toolchain layout path exists and is not a symlink: $(SYSROOT_LAYOUT_LINK)" >&2; \
-		exit 1; \
-	fi
-	@ln -sfn ../../toolchain/llvm/$(HOST_PLATFORM) $(LLVM_LAYOUT_LINK)
 	@ln -sfn ../../toolchain/sysroot $(SYSROOT_LAYOUT_LINK)
 
 $(BIN_DIR)/feng: $(CLI_OBJS) | toolchain-layout
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(CLI_OBJS) $(LDFLAGS) $(LSP_LDLIBS) -o $@
+	$(CC) $(CLI_OBJS) $(LDFLAGS) $(LSP_LDLIBS) $(SEMANTIC_LDLIBS) -o $@
 
 $(BIN_DIR)/test_lexer: $(TEST_LEXER_OBJS)
 	@mkdir -p $(BIN_DIR)
@@ -223,7 +228,7 @@ $(BIN_DIR)/test_parser: $(TEST_PARSER_OBJS)
 
 $(BIN_DIR)/test_semantic: $(TEST_SEMANTIC_OBJS)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(TEST_SEMANTIC_OBJS) $(LDFLAGS) -o $@
+	$(CC) $(TEST_SEMANTIC_OBJS) $(LDFLAGS) $(SEMANTIC_LDLIBS) -o $@
 
 $(BIN_DIR)/test_runtime: $(TEST_RUNTIME_OBJS) $(LIBUNWIND_LIB)
 	@mkdir -p $(BIN_DIR)
@@ -231,15 +236,15 @@ $(BIN_DIR)/test_runtime: $(TEST_RUNTIME_OBJS) $(LIBUNWIND_LIB)
 
 $(BIN_DIR)/test_codegen: $(TEST_CODEGEN_OBJS)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(TEST_CODEGEN_OBJS) $(LDFLAGS) -o $@
+	$(CC) $(TEST_CODEGEN_OBJS) $(LDFLAGS) $(SEMANTIC_LDLIBS) -o $@
 
 $(BIN_DIR)/test_debug: $(TEST_DEBUG_OBJS)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(TEST_DEBUG_OBJS) $(LDFLAGS) -o $@
+	$(CC) $(TEST_DEBUG_OBJS) $(LDFLAGS) $(SEMANTIC_LDLIBS) -o $@
 
 $(BIN_DIR)/test_cli: $(TEST_CLI_OBJS) $(RUNTIME_LIB)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(TEST_CLI_OBJS) $(LDFLAGS) $(LSP_LDLIBS) -o $@
+	$(CC) $(TEST_CLI_OBJS) $(LDFLAGS) $(LSP_LDLIBS) $(SEMANTIC_LDLIBS) -o $@
 
 $(BIN_DIR)/test_cli_paths: $(TEST_CLI_PATHS_OBJS) | toolchain-layout
 	@mkdir -p $(BIN_DIR)
@@ -247,7 +252,7 @@ $(BIN_DIR)/test_cli_paths: $(TEST_CLI_PATHS_OBJS) | toolchain-layout
 
 $(BIN_DIR)/test_symbol: $(TEST_SYMBOL_OBJS)
 	@mkdir -p $(BIN_DIR)
-	$(CC) $(TEST_SYMBOL_OBJS) $(LDFLAGS) -o $@
+	$(CC) $(TEST_SYMBOL_OBJS) $(LDFLAGS) $(SEMANTIC_LDLIBS) -o $@
 
 $(RUNTIME_LIB): $(RUNTIME_OBJS) $(LIBUNWIND_LIB)
 	@mkdir -p $(LIB_DIR)
@@ -278,11 +283,11 @@ $(LIBUNWIND_LIB):
 
 $(OBJ_DIR)/third_party/miniz/%.o: third_party/miniz/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(THIRD_PARTY_CFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(HOST_CPPFLAGS) $(THIRD_PARTY_CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(OBJ_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+	$(CC) $(CPPFLAGS) $(HOST_CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
 clean:
 	$(RM) -r $(BUILD_DIR)

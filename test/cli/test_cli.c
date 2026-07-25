@@ -431,6 +431,7 @@ static void run_command_or_die(const char *command) {
     ASSERT(WEXITSTATUS(status) == 0);
 }
 
+#if defined(__APPLE__)
 static int find_first_dwarfdump_address_for_line(const char *dump_text,
                                                  const char *file_name,
                                                  unsigned target_line,
@@ -479,6 +480,7 @@ static int find_first_dwarfdump_address_for_line(const char *dump_text,
     }
     return found;
 }
+#endif
 
 static void build_native_static_library_or_die(const char *source_path,
                                                const char *library_path) {

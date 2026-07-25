@@ -12,6 +12,7 @@
 #include "cli/common.h"
 #include "dap/proxy.h"
 
+#if defined(__APPLE__)
 /* Duplicate a NUL-terminated string into owned heap storage. */
 static char *dup_cstr(const char *text) {
     size_t length;
@@ -137,6 +138,7 @@ static char *resolve_lldb_dap_backend_program(void) {
     }
     return dup_cstr("lldb-dap");
 }
+#endif
 
 /* Print command usage for `feng dap`. */
 static void print_usage(const char *program, FILE *stream) {
