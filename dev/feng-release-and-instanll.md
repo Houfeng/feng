@@ -287,7 +287,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 独立交付与回归门：
 
-- [x] `macos-arm64` LLVM 产物在对应 host 上通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb`、`lldb-dap` 启动验收，并校验二进制架构与动态依赖。
+- [x] `macos-arm64` LLVM 产物通过工具启动、二进制架构和动态依赖验收；`lldb` 与 `lldb-dap` 均通过真实断点、调用栈、局部变量和继续执行调试会话。
 - [ ] `linux-x64-gnu` LLVM 产物已在 Apple Container 的 Ubuntu 26.04 x64 环境通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb` 与 `lldb-dap` 启动验收，并已校验 ELF 架构、通用 x86-64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包；但 Apple Container 的 x64 仿真环境设置 LLDB 软件断点时返回 `SIGILL`，硬件断点也不可用，因此仍须在原生 x64 Linux host 完成真实 `lldb` / `lldb-dap` 基础调试会话后才能标记完成。
 - [x] `linux-arm64-gnu` LLVM 产物已在 Apple Container 的 Ubuntu 26.04 ARM64 干净环境通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb` 与 `lldb-dap` 启动验收，并通过真实 `lldb` / `lldb-dap` 断点、调用栈、局部变量、继续与正常退出基础调试会话；同时已校验 ELF 架构、通用 AArch64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包。
 - [ ] LLVM host 的 glibc 下限已校验不高于 2.34；对应 x64 / ARM64 发行物已在 Apple Container 的 Ubuntu 26.04 干净环境验证无需安装额外包即可启动，其中 ARM64 真实 LLDB / DAP 调试会话已通过。仍须补齐 Ubuntu 22.04 / 24.04、Debian 12 / 13 与 AlmaLinux 9 系列的 x64 / ARM64 干净环境验收；纯 musl Alpine 不作为 LLVM host 验收环境。
@@ -318,54 +318,52 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [x] `macos-arm64` 已在 Codex 沙箱外通过全量 `make test`。
 - [ ] `linux-x64-gnu` 与 `linux-arm64-gnu` 已分别在 Apple Container 的 Ubuntu 26.04 中通过新增路径能力、软链接布局与 bundled LLVM / sysroot 专项回归，仍须在两个 Linux host 上通过全量 `make test`。
 
-### 8.3 三个发行平台的 Feng 编译器与五个目标平台的 runtime 构建
+### 8.3 多平台构建
 
-本阶段使用现有 `make cli`，分别生成 `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 三个平台的 Feng 编译器；同时生成五个平台的 runtime。本阶段不增加新的 Feng 编译器构建能力，只生成并校验构件；CI 上传和发行包组装由 §8.5 完成。
+本阶段只更新 `scripts/build_libunwind.sh` 和 Makefile，不修改 Feng CLI、CI 或发行脚本。
 
 任务：
 
-- [ ] 在三个平台分别执行 `make cli`，生成当前平台的 Feng 编译器，不交叉构建 Feng 编译器。
-- [ ] `scripts/build_libunwind.sh` 生成 `macos-arm64` 和四个 Linux GNU / musl 平台的 `libfeng_unwind.a`；每份构件使用对应 SDK 或 sysroot。
-- [ ] 新增 runtime 维护脚本，生成五份 `lib/<platform>/libfeng_runtime.a`；每份 runtime 只合并相同平台的 unwind，不包含 libc。
-- [ ] 校验每份构件的构建目标、文件格式和 CPU 架构；构建目标与输出路径不一致时必须失败。
+- [ ] 更新 `scripts/build_libunwind.sh`。该脚本只供维护者手动执行：macOS ARM64 生成 macOS 一份，Linux x64 和 Linux ARM64 分别生成同架构 GNU / musl 两份，共五份 `libfeng_unwind.a`；每份构件使用对应 SDK 或 sysroot。
+- [ ] 更新 Makefile。三个发行平台分别构建当前平台的 Feng 编译器；macOS 构建一份 runtime，两个 Linux 平台分别构建同架构 GNU / musl 两份 runtime，共五份 `libfeng_runtime.a`。
+- [ ] runtime 按完整目标平台分开输出，只合并相同平台的 unwind，不包含 libc；文件格式或 CPU 架构不匹配时立即失败。
 
 独立交付与回归门：
 
-- [ ] 三个平台的 `feng --version` 均可正常执行，五份 runtime 和 unwind 均通过构建目标、文件格式与 CPU 架构校验。
+- [ ] 五份 unwind 均可由维护脚本重新生成并通过校验。
+- [ ] 三个平台的 `feng --version` 均可正常执行，五份 runtime 均通过平台、文件格式与 CPU 架构校验。
 - [ ] 三个平台的全量 `make test` 均通过。
 
-### 8.4 macOS / Linux DAP
+### 8.4 macOS 与 Linux 调试
 
-本阶段只交付发行工具中的调试后端定位、启动与诊断，不混入用户程序交叉编译或发布脚本变更。
+本阶段只更新 `feng dap`。精简 `lldb` 与 `lldb-dap` 由 §8.1 提供，不在本阶段重新剪裁。
 
 任务：
 
-- [ ] `feng dap` 在 macOS 与 Linux 按 [feng-cli.md](../docs/feng-cli.md) 规定共用 §8.2 的路径能力，依次定位并启动 `FENG_LLDB_DAP`、bundled、`PATH` 与 macOS `xcrun` 提供的 `lldb-dap`。
-- [ ] Linux bundled `libpython3.11.so.1.0`、私有 `encodings` 或其他 §5.2 私有 LLDB 依赖缺失时，按发行包损坏处理，保留真实错误并给出可操作诊断，不得提示用户安装系统 Python 或其他系统包；Feng 永不使用或支持 Python 脚本。
-- [ ] 补充 macOS / Linux 后端定位、启动、缺失依赖和 DAP 基础会话回归。
+- [ ] `feng dap` 在 macOS 与 Linux 按 [feng-cli.md](../docs/feng-cli.md) 规定定位并启动 `lldb-dap`，复用 §8.2 的公共路径能力。
+- [ ] 补充后端定位、启动失败和真实 DAP 调试会话回归。
 
 独立交付与回归门：
 
-- [ ] 三个 host 分别完成 `feng dap` 真实后端启动与基础调试会话；Linux 验收环境只提供 §5.2 规定的 host 基线，不预装 Feng 私有 LLVM 运行库。
-- [ ] 三个 host 的全量 `make test` 通过。
+- [ ] 三个发行平台均通过 `feng dap` 真实调试会话。
+- [ ] 三个发行平台的全量 `make test` 均通过。
 
-### 8.5 分发、CI 汇聚与安装
+### 8.5 CI、发行与安装
 
-本阶段在 §8.1—§8.4 的可验收产物之上组装分发包，不在发布流程中临时下载、精简或修补工具链，也不交叉构建 Feng 自身。
+本阶段只编写 CI、构件汇聚、发行包生成和安装脚本。
 
 任务：
 
-- [ ] `.github/workflows/release.yml` 由 tag / `workflow_dispatch` 触发三个 native 构件任务；每个任务执行 §8.3 的构件生成、校验和全量回归后上传 `release-component-<host-platform>`。
-- [ ] 独立汇聚任务等待三份原生构件，校验五份 runtime 平台完整且公共头文件一致，再调用 `scripts/release.sh` 的纯组装入口。
-- [ ] `scripts/release.sh` 不调用 Feng 可执行文件的跨平台构建入口；它针对每份 zip 选择对应 host 的 `feng` 与 LLVM，并放入五份 runtime、四份 Linux GNU / musl sysroot、公共头文件和 `VERSION`。
-- [ ] 三份 `feng-<version>-<platform>.zip` 都包含 `macos-arm64`、`linux-x64-gnu`、`linux-x64-musl`、`linux-arm64-gnu`、`linux-arm64-musl` runtime 与四份 Linux sysroot，不得通过改名复用其他平台 runtime。
+- [ ] `.github/workflows/release.yml` 在三个发行平台分别构建 Feng 编译器及该平台负责的 runtime，完成校验和全量回归后上传构件。
+- [ ] 汇聚任务下载三组构件，校验五份 runtime 和公共头文件，再调用 `scripts/release.sh`。
+- [ ] `scripts/release.sh` 生成三个发行包；每个发行包包含对应平台的 Feng 编译器与 LLVM，以及全部五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
 - [ ] `scripts/install.sh` 按 [feng-os-arch.md](../docs/feng-os-arch.md) 归一化当前 host，下载对应 zip，原子解压并配置 `PATH`，失败时不留半成品。
 
 独立交付与回归门：
 
-- [ ] 在三个干净 host 上分别从 zip 安装，验证 `feng --version` / `VERSION`、native `build` / `run` / `lsp` / `dap` 以及 bundled Clang / LLD / LLVM ar / LLDB。
-- [ ] 校验三份 zip 的五目标 runtime / 四目标 sysroot 集合、host LLVM 架构与 ABI、相对定位，验证 toolchain 缺失时的诊断和安装失败无残留。
-- [ ] 三个 host 的全量 `make test` 通过；完成人工 Review 并收到明确指令后，才能开始 §9。
+- [ ] 在三个干净发行平台安装对应发行包，验证 `feng --version`、`build`、`run`、`lsp`、`dap` 和 bundled LLVM。
+- [ ] 三个发行包的目录、平台构件和相对定位均通过校验。
+- [ ] 三个发行平台的全量 `make test` 均通过；完成人工 Review 并收到明确指令后，才能开始 §9。
 
 ## 9 实施 TODO：Feng 程序交叉编译与标准库
 
