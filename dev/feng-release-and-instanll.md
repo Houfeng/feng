@@ -302,7 +302,7 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 ### 8.4 Feng 编译器及运行时，支持多平台分别构建
 
-本阶段更新 Makefile，并确保 `feng dap` 在 macOS 与 Linux 正常运行。不修改 CI 或发行脚本。
+本阶段更新构建脚本，并确保 `feng dap` 在 macOS 与 Linux 正常运行。不修改 CI 或发行脚本。
 
 | 构建环境 | runtime 构建产物 |
 |----------|------------------|
@@ -310,9 +310,8 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 | `linux-x64-gnu` | `build/lib/linux-x64-gnu/libfeng_runtime.a`<br>`build/lib/linux-x64-musl/libfeng_runtime.a` |
 | `linux-arm64-gnu` | `build/lib/linux-arm64-gnu/libfeng_runtime.a`<br>`build/lib/linux-arm64-musl/libfeng_runtime.a` |
 
-- [ ] 更新 Makefile。三个构建环境均将当前平台的 Feng 编译器输出到 `build/bin/feng`，并生成上表规定的 runtime。
-- [ ] 每份 runtime 只合并 `extlib/<platform>/libfeng_unwind.a` 中 `<platform>` 完全相同的 unwind，不包含 libc；SDK / sysroot、文件格式或 CPU 架构与 `<platform>` 不匹配时立即失败。
-- [ ] `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 的 `build/bin/feng --version` 均可正常执行，上表五份 runtime 均通过平台、文件格式与 CPU 架构校验。
+- [ ] Feng 编译器：在三个构建环境构建并运行；失败时更新构建脚本。各平台均输出 `build/bin/feng`，并能正常执行 `feng --version`。
+- [ ] Feng runtime：在三个构建环境使用对应 SDK / sysroot 生成上表五份 runtime。每份只合并 `extlib/<platform>/libfeng_unwind.a` 中的同平台预构建库，不包含 libc，并通过平台、文件格式和 CPU 架构校验。
 - [ ] 各平台的 Feng 编译器编译 `.ff` 文件时，均能找到对应平台的 runtime 和 SDK / sysroot。
 - [ ] 三个发行平台的 `feng dap` 均按 [feng-cli.md](../docs/feng-cli.md) 定位并启动 `lldb-dap`，路径处理复用 §8.2，并通过定位失败、启动失败和真实调试测试。
 - [ ] `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 的全量 `make test` 均通过。
