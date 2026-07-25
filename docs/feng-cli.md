@@ -155,6 +155,7 @@ platform: "macos-arm64,linux-x64-gnu,linux-x64-musl"
 - `feng init --target=bin` 默认不写 `platform`。
 - `feng init --target=lib` 默认写入首版全部可产出平台。
 - `feng run` 不支持 `--platform`。
+- `feng build` / `feng pack` 传入 `--sysroot` 时，最终只能选择一个平台；未传 `--platform` 且 `feng.fm.platform` 声明多个平台时，必须报错。
 - `feng pack` 会复用构建流程，固定执行 release 构建，成功后再生成 `.fb`。
 - 分发包内的 `feng.fm.platform` 必须存在，并精确记录包内实际携带的平台集合。
 - 顶层直编不读取 `feng.fm`，必须显式指定唯一的 `--platform`。
@@ -279,17 +280,18 @@ feng clean [<path>]
 用法:
 
 ```text
-feng pack [<path>] [--platform=<platform>]...
+feng pack [<path>] [--platform=<platform>]... [--sysroot=<路径>]
 ```
 
 选项:
 
 - `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 - `--platform=<platform>`: 指定需要写入同一 `.fb` 的完整目标平台，可重复出现；选择与校验规则以本节“项目平台选择统一规则”为准。
+- `--sysroot=<路径>`: 显式指定目标 sysroot，只允许本次打包一个平台时使用，并传给项目构建流程。
 
 说明:
 
-- `pack` 按本节“项目平台选择统一规则”取得目标平台集合，复用项目构建流程并固定执行 release 构建；全部目标平台构建成功后才生成 `.fb`。`pack` 不接受 `--release` / `--sysroot`。
+- `pack` 按本节“项目平台选择统一规则”取得目标平台集合，复用项目构建流程并固定执行 release 构建；全部目标平台构建成功后才生成 `.fb`。`pack` 不接受 `--release`。
 - `<path>` 用于读取项目 `feng.fm`、输出根、包名和版本；`--platform` 选择本次必须构建并写入 `.fb` 的平台。
 - 若项目的 `target` 不是 `lib`,报错退出。
 - `pack` 从每个 `<项目输出根>/<platform>/` 提取 `mod/`、`lib/`、`extlib/` 与 `assets/`：各平台 `mod/` 的公开语义事实和普通 `assets/` 内容必须一致,校验后各提取一套写入 `.fb/mod/` 与配置的资源目录；`lib/` 和 `extlib/` 则按目标平台分别写入 `.fb/lib/<platform>/` 与 `.fb/extlib/<platform>/`。分发包 `feng.fm.platform` 必须与实际写入的平台集合完全一致。任一请求平台构件缺失或校验失败时不得生成部分平台 `.fb`。
@@ -401,7 +403,7 @@ Project:
   feng check      [<path>] [--format=<text|json>]
   feng run        [<path>] [--release] [-- <program-args>...]
   feng clean      [<path>]
-  feng pack       [<path>] [--platform=<platform>]...
+  feng pack       [<path>] [--platform=<platform>]... [--sysroot=<path>]
   feng deps       <add|remove|install> ...
 
 Compile:

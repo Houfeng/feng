@@ -239,7 +239,7 @@ feng src/*.ff \
 项目级目标平台集合及其白名单校验统一以 [feng-cli.md](./feng-cli.md)“项目平台选择统一规则”为准。本节只规定目标平台确定后的内部编排:
 
 - 每次核心编译器调用只传入一个 `--platform`，并传入该平台独立的 `--out=<项目输出根>/<platform>`。
-- 显式 `--sysroot=<路径>` 只允许目标平台集合恰好包含一个平台；需要不同 sysroot 的平台分别执行单平台 `feng build`。
+- 显式 `--sysroot=<路径>` 只允许目标平台集合恰好包含一个平台；`feng build` 与 `feng pack` 的多平台调用均不能使用单一 sysroot。
 - 平台标识合法但当前 host 缺少该目标与产物类型实际需要的工具链、sysroot 或依赖包平台制品时,对应目标报告不可用；`target=bin` 还必须具有目标 runtime，SDK-free `target=lib` 不得仅因没有目标 runtime 或系统 SDK而误报不可用。任何场景都不得回退到 host 平台或复用其他平台产物。
 
 构建工具还应按 `feng.fm` 的 `[assets]` 配置处理资源目录:
@@ -277,7 +277,7 @@ platform: "macos-arm64,linux-x64-gnu,linux-x64-musl,linux-arm64-gnu,linux-arm64-
 - 若项目的 `target` 不是 `lib`,构建工具在进入打包流程前立即报错。
 
 1. 按 [feng-cli.md](./feng-cli.md)“项目平台选择统一规则”确定并校验目标平台集合
-2. 复用项目构建主链，对全部选定平台固定执行 release 构建；`pack` 不接受 `--release` / `--sysroot`
+2. 复用项目构建主链，对全部选定平台固定执行 release 构建；`pack` 不接受 `--release`，单平台打包时将显式 `--sysroot` 传给构建流程
 3. 全部平台构建成功后，校验各平台 `mod/**/*.ft` 的公开语义事实与 `assets/` 普通资源内容一致,并分别提取一套作为包内 `mod/` 与普通资源
 4. 从每个 `<out>/<platform>/lib/` 与 `<out>/<platform>/extlib/` 提取正式静态库和需要参与链接的 `extern func` 原生库制品,分别写入包内 `lib/<platform>/` 与 `extlib/<platform>/`
 5. 补全 `feng.fm`: `abi` 与实际能力目录一致,`platform` 与实际写入 `lib/<platform>/` / `extlib/<platform>/` 的目标平台集合完全一致
