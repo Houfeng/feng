@@ -18,16 +18,6 @@
 - 运行时分发形态：仅静态库 `.a` / `.lib`
 - 分发渠道：GitHub Releases
 
-首版明确不做：
-
-- Windows 实际打包（脚本与工作流预留扩展点，不产出二进制）
-- Linux host 交叉链接 macOS 可执行程序。Apple SDK 不随 Feng 分发，且标准 [Xcode and Apple SDKs Agreement](https://www.apple.com/legal/sla/docs/xcode.pdf) 不允许单独使用 Apple SDK 或在非 Apple 品牌硬件上运行 Apple Software；但 `target=lib` 只生成 Mach-O 对象和静态归档，不执行最终链接，其 SDK-free 跨 host 能力由 §9 单独交付。
-- 动态运行时库 `.so` / `.dylib` / `.dll`
-- 版本管理器（fengvm 类工具）
-- 包管理器集成（Homebrew tap / apt repo / winget）
-- 代码签名与公证（macOS notarization、Windows code signing）
-- 自更新命令 `feng upgrade`
-
 ## 2 设计原则
 
 - **抽象驱动，面向未来可扩展**：平台矩阵与分发渠道均以参数化形式表达，新增平台不改动脚本主干。
@@ -117,14 +107,14 @@ feng-<version>-<platform>/
 └── VERSION                       # 必须：纯文本版本号，单行
 ```
 
-- Windows 平台下，`bin/` 中可执行文件追加 `.exe` 后缀，`lib/` 中静态库后缀切换为 `.lib`。
-- `lib/` 按完整目标平台分子目录。首版三份分发包都包含五份 runtime；macOS runtime 只能在合法 macOS 构建环境生成，Linux GNU / musl runtime 分别使用对应 bundled sysroot 构建。每份 runtime 必须校验对象格式、CPU 架构与完整平台，发布汇聚任务不得把其他平台或其他 libc ABI 的 runtime 改名复用。
-- `include/` 为 runtime 公共 ABI 头文件，平台无关（C 源码），不分平台子目录，单一一份供所有平台使用，扁平置于 `include/` 根下。`feng_runtime.h` 内部以相对路径 `#include "feng_runtime_contract.inc"`，二者位于同一目录。最终编译 / 链接所需的标准 C 头文件（`<stdint.h>` 等）与系统头文件（`<unwind.h>`）由目标平台 SDK / sysroot 提供，不复制到 runtime include 目录；§9.4 的 SDK-free `target=lib` 编译头闭包也不得通过复制 Apple SDK 头文件实现。
-- `toolchain/llvm/` 保持 LLVM 官方包的统一根目录布局，`clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb` 与 `lldb-dap` 必须来自同一 LLVM 版本和同一 host 平台包。官方 LLVM Linux 可执行文件本身是 GNU/glibc 动态程序，不提供独立 musl host 包；一份 GNU-hosted Clang 可生成 GNU 与 musl 两类目标，因此每份 Linux 发行包只携带当前 host 架构的一份 LLVM，不按用户程序目标 ABI复制。
-- `toolchain/sysroot/` 按完整 Linux 目标平台分子目录，同时内建 GNU/glibc 与 musl。每份 sysroot 都必须保持 `--sysroot` 约定的头文件、目标 libc、动态加载器、CRT、linker scripts、compiler runtime 及 Clang 检测所需相对目录关系；不保留只能在特定宿主上运行的 GCC、binutils 或 musl.cc 工具可执行文件。GNU 与 musl sysroot 均属于目标输入，native 与交叉编译使用同一份。具体调用参数见 [feng-build.md](../docs/feng-build.md)。
-- GNU/glibc sysroot 的来源与裁剪规则以 §5.3 为准，必须记录确切来源、版本、目标架构、裁剪清单及 LGPL 等上游许可材料，并满足二进制再分发所需的许可与源码提供义务；不得把 host `/usr` 临时复制进发行包。musl sysroot 同样记录 musl 与配套 compiler runtime 的独立来源及许可证。
-- 分发物不包含任何 Feng 源码、`.o` / `.obj` 中间产物、构建缓存。
-- `feng` 编译器基于自身位置查找 runtime 静态库、头文件与 toolchain：runtime 位于 `<feng 可执行文件目录>/../lib/` 与 `../include/`，Clang 和 `lldb-dap` 位于 `<feng 可执行文件目录>/../toolchain/llvm/bin/`。不引入 `FENG_HOME` / `FENG_TOOLCHAIN` 等环境变量；完整查找顺序见 [feng-build.md](../docs/feng-build.md) 与 [feng-cli.md](../docs/feng-cli.md) 的 DAP 规范。
+- Windows 可执行文件使用 `.exe` 后缀，静态库使用 `.lib` 后缀。
+- `lib/` 按完整目标平台分目录。三份分发包均包含五份 runtime；macOS runtime 在合法 macOS 环境构建，Linux runtime 使用对应 sysroot 构建。发布时校验对象格式、CPU 架构和平台，禁止跨平台或 libc ABI 复用。
+- `include/` 仅存放一份平台无关的 runtime 公共 ABI 头文件。标准和系统头文件由目标 SDK / sysroot 提供，不得复制 Apple SDK 头文件。
+- `toolchain/llvm/` 保持 LLVM 官方包布局，所有工具来自同一版本、同一 host 平台包。每份 Linux 分发包只包含当前 host 架构的一份 LLVM，同时支持 GNU 和 musl 目标。
+- `toolchain/sysroot/` 按完整 Linux 目标平台分目录，保留编译和链接所需文件及目录关系，移除 GCC、binutils 和 musl.cc 工具。native 与交叉编译共用 sysroot，调用参数见 [feng-build.md](../docs/feng-build.md)。
+- sysroot 的来源、版本、裁剪和许可信息见 §5.3。禁止复制 host `/usr`。
+- 分发包不包含 Feng 源码、中间产物或构建缓存。
+- `feng` 按自身位置查找 `../lib/`、`../include/` 和 `../toolchain/llvm/bin/`，不使用 `FENG_HOME` 或 `FENG_TOOLCHAIN`。查找顺序见 [feng-build.md](../docs/feng-build.md) 和 [feng-cli.md](../docs/feng-cli.md)。
 
 ## 5 toolchain 形态
 
