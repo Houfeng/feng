@@ -317,14 +317,11 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [ ] 三个发行平台的 `feng dap` 均按 [feng-cli.md](../docs/feng-cli.md) 定位并启动 `lldb-dap`，路径处理复用 §8.2，并通过定位失败、启动失败和真实调试测试。
 - [ ] `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 的全量 `make test` 均通过。
 
-### 8.5 CI、发行与安装
+### 8.5 CI 构建脚本
 
-本阶段只编写 CI、构件汇聚、发行包生成和安装脚本。
+本阶段编写以下文件：
 
-- [ ] `.github/workflows/release.yml` 在三个发行平台分别构建 Feng 编译器及该平台负责的 runtime，完成校验和 `make test` 后上传构件。
-- [ ] 汇聚任务下载三组构件，校验五份 runtime 和公共头文件，再调用 `scripts/release.sh`。
-- [ ] `scripts/release.sh` 生成三个发行包；每个发行包包含对应平台的 Feng 编译器与 LLVM，以及全部五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
-- [ ] `scripts/install.sh` 按 [feng-os-arch.md](../docs/feng-os-arch.md) 归一化当前 host，下载对应 zip，原子解压并配置 `PATH`，失败时不留半成品。
-- [ ] 在三个干净发行平台安装对应发行包，验证 `feng --version`、`build`、`run`、`lsp`、`dap` 和 bundled LLVM。
-- [ ] 三个发行包的目录、平台构件和相对定位均通过校验。
-- [ ] 三个发行平台的全量 `make test` 均通过；完成人工 Review 并收到明确指令后，才能开始 §9。
+- [ ] `.github/workflows/release.yml`：在三个发行平台构建 Feng 编译器和对应 runtime，运行校验与 `make test`，上传构件；全部成功后调用 `scripts/release.sh` 并发布。
+- [ ] `scripts/release.sh`：汇总三组构件，校验五份 runtime 和公共头文件，生成三个发行包。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
+- [ ] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载对应发行包，完成安装和 `PATH` 配置；失败时不留半成品。
+- [ ] 在三个干净发行平台安装并验证 `feng --version`、`build`、`run`、`lsp`、`dap`、bundled LLVM、目录结构、平台构件和相对定位。人工 Review 通过后方可开始 §9。
