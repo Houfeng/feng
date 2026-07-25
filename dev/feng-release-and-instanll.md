@@ -292,11 +292,13 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 | 构建环境 | 预构建产物 |
 |----------|------------|
 | `macos-arm64` | `extlib/macos-arm64/libfeng_unwind.a` |
-| `linux-x64-gnu` | `extlib/linux-x64-gnu/libfeng_unwind.a`<br>`extlib/linux-x64-musl/libfeng_unwind.a` |
-| `linux-arm64-gnu` | `extlib/linux-arm64-gnu/libfeng_unwind.a`<br>`extlib/linux-arm64-musl/libfeng_unwind.a` |
+| `linux-x64-gnu` | `extlib/linux-x64-gnu/libfeng_unwind.a` |
+| `linux-x64-musl` | `extlib/linux-x64-musl/libfeng_unwind.a` |
+| `linux-arm64-gnu` | `extlib/linux-arm64-gnu/libfeng_unwind.a` |
+| `linux-arm64-musl` | `extlib/linux-arm64-musl/libfeng_unwind.a` |
 
-- [ ] 更新 `scripts/build_libunwind.sh`，使用对应 SDK 或 sysroot 生成上表五份 libunwind。该脚本只供维护者手动执行。
-- [ ] 五份 libunwind 均可重新生成，并通过平台、文件格式和 CPU 架构校验。
+- [ ] 更新 `scripts/build_libunwind.sh`。Linux 必须传入 `--libc=gnu|musl`；非 Linux 传入该参数时报错。
+- [ ] 在上表对应环境执行脚本，生成五份 libunwind，并校验平台、文件格式和 CPU 架构。
 
 ### 8.4 Feng 编译及运行时支持多平台分别构建
 
