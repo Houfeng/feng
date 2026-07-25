@@ -230,7 +230,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 ## 8 实施 TODO
 
-本节交付三个 native host 的 Feng 编译器、五个平台的 runtime、调试工具、四份 Linux sysroot 和安装包。跨平台编译、标准库多平台制品及 `.fb` 多平台组包见 §9。各 native CI 任务构建当前 host 的 `feng`，汇聚任务将五份 runtime 加入每份发行包。
+本节交付三个 native host 的 Feng 编译器、五个平台的 runtime、调试工具、四份 Linux sysroot、安装包和交叉编译。标准库多平台制品及 `.fb` 多平台组包见 §9。各 native CI 任务构建当前 host 的 `feng`，汇聚任务将五份 runtime 加入每份发行包。
 
 §8 与 §9 的每个子阶段依次执行：
 
@@ -323,4 +323,9 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [ ] `.github/workflows/release.yml`：在三个发行平台构建 Feng 编译器和对应 runtime，运行校验与 `make test`，上传构件；全部成功后调用 `scripts/release.sh` 并发布。
 - [ ] `scripts/release.sh`：汇总三组构件，校验五份 runtime 和公共头文件，生成三个发行包。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
 - [ ] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载对应发行包，完成安装和 `PATH` 配置；失败时不留半成品。
-- [ ] 在三个干净发行平台安装并验证 `feng --version`、`build`、`run`、`lsp`、`dap`、bundled LLVM、目录结构、平台构件和相对定位。人工 Review 通过后方可开始 §9。
+- [ ] 在三个干净发行平台安装并验证 `feng --version`、`build`、`run`、`lsp`、`dap`、bundled LLVM、目录结构、平台构件和相对定位。人工 Review 通过后方可开始 §8.6。
+
+### 8.6 支持交叉编译
+
+- [ ] 支持 `--platform=<platform>`，按目标平台选择对应的 runtime 和 SDK / sysroot，并完成交叉编译。
+- [ ] 支持 `--sysroot=<path>`；传入时使用该 sysroot，不使用目标平台的默认 sysroot。
