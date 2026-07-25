@@ -318,21 +318,21 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [x] `macos-arm64` 已在 Codex 沙箱外通过全量 `make test`。
 - [ ] `linux-x64-gnu` 与 `linux-arm64-gnu` 已分别在 Apple Container 的 Ubuntu 26.04 中通过新增路径能力、软链接布局与 bundled LLVM / sysroot 专项回归，仍须在两个 Linux host 上通过全量 `make test`。
 
-### 8.3 三 host 编译器与五目标 runtime 发行构件
+### 8.3 三个发行平台的 Feng 编译器与五个目标平台的 runtime 构建
 
-本阶段只在三个对应 native host 构建 Feng 可执行文件；runtime / unwind 按五个完整目标平台构建。不得把“Feng 可执行文件 native 构建”与“随发行包提供多目标 runtime”混为同一个 Makefile 交叉构建体系。
+本阶段使用现有 `make cli`，分别生成 `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 三个平台的 Feng 编译器；同时生成五个平台的 runtime。本阶段不增加新的 Feng 编译器构建能力，只生成并校验构件；CI 上传和发行包组装由 §8.5 完成。
 
 任务：
 
-- [ ] `scripts/build_libunwind.sh` 按 `macos-arm64` 与四个 Linux GNU / musl 完整平台生成维护性中间产物；每份必须使用对应 SDK / sysroot，并校验对象格式、CPU 架构与 libc ABI。
-- [ ] runtime 维护入口分别生成 `lib/<platform>/libfeng_runtime.a`，只合并同一完整平台的 unwind；不得把 libc 链入 runtime 归档，最终 libc 仍由 `target=bin` 的目标 sysroot 在链接阶段提供。
-- [ ] 三个 CI 原生构件任务分别上传当前 host 的 `feng`，并上传其负责生成的目标 runtime：macOS 一份、Linux x64 GNU / musl 两份、Linux ARM64 GNU / musl 两份；不得由改名伪造其他目标。
-- [ ] 为 native 构件的平台标识、格式、CPU 架构、公共头文件摘要和缓存污染拒绝补充回归。
+- [ ] 在三个平台分别执行 `make cli`，生成当前平台的 Feng 编译器，不交叉构建 Feng 编译器。
+- [ ] `scripts/build_libunwind.sh` 生成 `macos-arm64` 和四个 Linux GNU / musl 平台的 `libfeng_unwind.a`；每份构件使用对应 SDK 或 sysroot。
+- [ ] 新增 runtime 维护脚本，生成五份 `lib/<platform>/libfeng_runtime.a`；每份 runtime 只合并相同平台的 unwind，不包含 libc。
+- [ ] 校验每份构件的构建目标、文件格式和 CPU 架构；构建目标与输出路径不一致时必须失败。
 
 独立交付与回归门：
 
-- [ ] 三个 host 上分别验证 native `feng --version`，并验证五份 runtime / unwind 的对象格式、CPU 架构与完整平台，确认构件可被后续汇聚任务唯一识别。
-- [ ] 三个 host 的全量 `make test` 通过。
+- [ ] 三个平台的 `feng --version` 均可正常执行，五份 runtime 和 unwind 均通过构建目标、文件格式与 CPU 架构校验。
+- [ ] 三个平台的全量 `make test` 均通过。
 
 ### 8.4 macOS / Linux DAP
 
@@ -355,7 +355,7 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 任务：
 
-- [ ] `.github/workflows/release.yml` 由 tag / `workflow_dispatch` 触发三个 native 构件任务；每个任务执行 §8.3 的 native 构建、构件校验和全量回归后上传 `release-component-<host-platform>`。
+- [ ] `.github/workflows/release.yml` 由 tag / `workflow_dispatch` 触发三个 native 构件任务；每个任务执行 §8.3 的构件生成、校验和全量回归后上传 `release-component-<host-platform>`。
 - [ ] 独立汇聚任务等待三份原生构件，校验五份 runtime 平台完整且公共头文件一致，再调用 `scripts/release.sh` 的纯组装入口。
 - [ ] `scripts/release.sh` 不调用 Feng 可执行文件的跨平台构建入口；它针对每份 zip 选择对应 host 的 `feng` 与 LLVM，并放入五份 runtime、四份 Linux GNU / musl sysroot、公共头文件和 `VERSION`。
 - [ ] 三份 `feng-<version>-<platform>.zip` 都包含 `macos-arm64`、`linux-x64-gnu`、`linux-x64-musl`、`linux-arm64-gnu`、`linux-arm64-musl` runtime 与四份 Linux sysroot，不得通过改名复用其他平台 runtime。
