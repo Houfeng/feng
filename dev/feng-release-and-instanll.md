@@ -297,8 +297,8 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 | `linux-arm64-gnu` | `extlib/linux-arm64-gnu/libfeng_unwind.a` |
 | `linux-arm64-musl` | `extlib/linux-arm64-musl/libfeng_unwind.a` |
 
-- [ ] 更新 `scripts/build_libunwind.sh`。Linux 必须传入 `--libc=gnu|musl`；非 Linux 传入该参数时报错。
-- [ ] 在上表对应环境执行脚本，生成五份 libunwind，并校验平台、文件格式和 CPU 架构。
+- [x] 更新 `scripts/build_libunwind.sh`。Linux 必须传入 `--libc=gnu|musl`；非 Linux 传入该参数时报错。
+- [x] 在上表对应环境执行脚本，生成五份 libunwind，并校验平台、文件格式和 CPU 架构。
 
 ### 8.4 Feng 编译器及运行时，支持多平台分别构建
 
