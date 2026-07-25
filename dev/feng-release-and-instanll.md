@@ -232,9 +232,9 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 本节交付三个 native host 的 Feng 编译器、五个平台的 runtime、调试工具、四份 Linux sysroot 和安装包。跨平台编译、标准库多平台制品及 `.fb` 多平台组包见 §9。各 native CI 任务构建当前 host 的 `feng`，汇聚任务将五份 runtime 加入每份发行包。
 
-§8 与 §9 的子阶段按以下门禁实施：
+§8 与 §9 的每个子阶段依次执行：
 
-1. 完成本子阶段的任务、专项验收和规定的回归。修改 Feng 编译器、runtime 或 host 行为时，须在 `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 上通过 `make test`。§8.1 仅在 `macos-arm64` 上运行 `make test`，Linux host 只执行专项验收。
+1. 完成所列任务、专项验收和规定的测试。修改 Feng 编译器、runtime 或 host 行为时，须在 `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 上通过 `make test`。§8.1 仅在 `macos-arm64` 上运行 `make test`，Linux host 只执行专项验收。
 2. 提交变更和验收结果供人工 Review。
 3. 人工 Review 通过并明确批准后，方可进入下一子阶段；§8 全部通过前不得开始 §9。
 
@@ -243,8 +243,6 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 ### 8.1 可独立验证的精简工具链
 
 本阶段只交付精简脚本和工具链产物，不改变 Feng CLI 的工具选择行为。
-
-任务：
 
 - [x] `scripts/fetch_llvm.sh`：已能下载并解压 macOS ARM64、Linux x64、Linux ARM64 的 LLVM 官方预编译包到 `local/llvm/`；Linux 私有运行库来源包的下载、版本固定与校验仍由下列未完成项处理。
 - [x] `scripts/trim_llvm.sh`：已从单个 host LLVM root 原子精简 `clang`、`lld` / `ld.lld`、`lldb`、`lldb-dap` 及官方包内可提取的运行依赖；官方包外的 Linux host 私有动态依赖闭包仍由下列未完成项处理。
@@ -259,9 +257,6 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - [x] 新增 `scripts/fetch_gnu_sysroot.sh`，按 §5.3 从 Debian 官方不可变 archive / snapshot 地址真实下载两个架构的固定 Bullseye cross packages 到 `local/sysroot-gnu/`，逐项校验文件名、版本与 SHA-256；不得调用 host 包管理器选择当前版本。
 - [x] 新增 `scripts/trim_gnu_sysroot.sh`，原子产出 `toolchain/sysroot/linux-x64-gnu/`、`toolchain/sysroot/linux-arm64-gnu/`；保留目标头文件、glibc、动态加载器、CRT、linker scripts、compiler runtime 与 Clang 所需目录关系，不包含 GCC / binutils / `ld` 或其他 host 可执行工具。
 - [x] 两份 GNU sysroot 固定 glibc 2.31 目标 ABI，并分别记录全部二进制包与源码包的地址、版本、SHA-256、裁剪清单、许可证与源码提供方式；构造过程不得复制维护机的 `/usr`。
-
-独立交付与回归门：
-
 - [x] `macos-arm64` LLVM 产物通过工具启动、二进制架构和动态依赖验收；`lldb` 与 `lldb-dap` 均通过真实断点、调用栈、局部变量和继续执行调试会话。
 - [ ] `linux-x64-gnu` LLVM 产物已在 Apple Container 的 Ubuntu 26.04 x64 环境通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb` 与 `lldb-dap` 启动验收，并已校验 ELF 架构、通用 x86-64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包；但 Apple Container 的 x64 仿真环境设置 LLDB 软件断点时返回 `SIGILL`，硬件断点也不可用，因此仍须在原生 x64 Linux host 完成真实 `lldb` / `lldb-dap` 基础调试会话后才能标记完成。
 - [x] `linux-arm64-gnu` LLVM 产物已在 Apple Container 的 Ubuntu 26.04 ARM64 干净环境通过 `clang`、`lld`、`llvm-ar`、`llvm-ranlib`、`lldb` 与 `lldb-dap` 启动验收，并通过真实 `lldb` / `lldb-dap` 断点、调用栈、局部变量、继续与正常退出基础调试会话；同时已校验 ELF 架构、通用 AArch64 CPU 基线、最高 `GLIBC_*` / `GLIBCXX_*` 版本、相对 RPATH / RUNPATH 与完整动态依赖闭包。
@@ -277,21 +272,16 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 
 Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 值，也不支持 GCC。Linux host 在严格 C11 模式下统一启用 glibc 的 GNU feature namespace，以公开源码和测试实际使用的 GNU、XSI 与 POSIX.1-2008 接口。Feng 语义分析器直接调用 `fmod` 完成编译期浮点常量计算，因此仅为包含该语义分析器对象的 Linux host 工具与测试可执行文件链接 `libm`；这属于 Feng 编译器自身的构建依赖，不得用于替代 [feng-build.md](../docs/feng-build.md#25-收集链接信息) 规定的 Feng 用户程序 external 链接信息收集机制。
 
-任务：
-
 - [x] Makefile 将 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>` 与 `build/toolchain/sysroot -> ../../toolchain/sysroot` 作为实际构建目标，仅在缺失时创建；不持续校验已存在链接的指向，链接被手工破坏时通过 `make clean` 后重新执行 `make all` 恢复。
 - [x] 将 Feng 可执行文件绝对路径解析、安装根解析、相对路径组装、`PATH` 可执行文件查找与缺失路径诊断收敛到 `src/cli/common.*`；runtime 已迁移到该公共能力，host LLVM 构建工具在本阶段继续复用，`lldb-dap` 在 §8.4 切换定位策略时复用，不增加改变安装根或整套工具链根目录的环境变量，也不重复实现。
-- [x] 为可执行文件定位、相对目录组装、软链接布局与缺失路径诊断补充独立回归。
+- [x] 为可执行文件定位、相对目录组装、软链接布局与缺失路径诊断补充测试。
 - [x] driver 按 [feng-build.md](../docs/feng-build.md) 规定的统一顺序选择 host LLVM 构建工具：`FENG_CC` / `FENG_AR` / `FENG_RANLIB`、bundled `clang` / `llvm-ar` / `llvm-ranlib`、传统 `CC` / `AR` / `RANLIB`、系统 `cc` / `ar` / `ranlib`；native 编译立即使用该结果，后续交叉编译也复用同一 host 工具定位，不得按目标平台选择另一份 LLVM。
-- [x] 补充 driver 工具选择回归，分别验证 Feng 专用变量显式覆盖、三种 bundled 工具默认命中、bundled 缺失后的传统环境变量候选、环境变量未设置时的系统 `PATH` 兜底，以及 bundled 损坏、环境变量无效、候选均不可用时不静默降级并给出明确诊断；不得在本阶段加入 `--target`、`--sysroot` 或目标 runtime 选择测试。
+- [x] 补充 driver 工具选择测试，分别验证 Feng 专用变量显式覆盖、三种 bundled 工具默认命中、bundled 缺失后的传统环境变量候选、环境变量未设置时的系统 `PATH` 兜底，以及 bundled 损坏、环境变量无效、候选均不可用时不静默降级并给出明确诊断；不得在本阶段加入 `--target`、`--sysroot` 或目标 runtime 选择测试。
 - [x] macOS native 编译通过 `xcrun --sdk macosx --show-sdk-path` 定位系统 SDK，并向本阶段选中的 C 编译器传入唯一的 `-isysroot`；`xcrun`、developer directory 或 SDK 不可用时给出明确诊断，不得回退到未指定 SDK 的编译。该行为只启用当前 native 编译，不增加显式 `--sysroot` 或跨目标选择。
 - [x] Makefile 固定使用 `clang` 构建 Feng 编译器自身，不增加运行时编译器类型检查；Linux host 全局启用 GNU / XSI / POSIX.1-2008 声明，并仅为包含语义分析器对象的 host 工具与测试链接其直接使用的 `libm`，不得依赖 GCC 或 macOS `libSystem` 的隐式行为。
-
-独立交付与回归门：
-
 - [x] `build/bin/feng` 可通过 `../toolchain/llvm/` 与 `../toolchain/sysroot/` 观察到与发行包一致的布局；native `.ff` 编译实际启动 bundled `clang`，macOS 同时使用 `xcrun` 返回的系统 SDK，静态归档实际启动 bundled `llvm-ar`，归档流程需要独立索引时实际启动 bundled `llvm-ranlib`，runtime 与 DAP 的现有行为保持不变。
 - [x] `macos-arm64` 已在 Codex 沙箱外通过全量 `make test`。
-- [ ] `linux-x64-gnu` 与 `linux-arm64-gnu` 已分别在 Apple Container 的 Ubuntu 26.04 中通过新增路径能力、软链接布局与 bundled LLVM / sysroot 专项回归，仍须在两个 Linux host 上通过全量 `make test`。
+- [ ] `linux-x64-gnu` 与 `linux-arm64-gnu` 已分别在 Apple Container 的 Ubuntu 26.04 中通过新增路径能力、软链接布局与 bundled LLVM / sysroot 专项测试，仍须在两个 Linux host 上通过 `make test`。
 
 ### 8.3 libunwind、Feng 编译器与 runtime 构建
 
@@ -305,14 +295,9 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 | `linux-x64-gnu` | `extlib/linux-x64-gnu/libfeng_unwind.a`<br>`extlib/linux-x64-musl/libfeng_unwind.a` | `build/lib/linux-x64-gnu/libfeng_runtime.a`<br>`build/lib/linux-x64-musl/libfeng_runtime.a` |
 | `linux-arm64-gnu` | `extlib/linux-arm64-gnu/libfeng_unwind.a`<br>`extlib/linux-arm64-musl/libfeng_unwind.a` | `build/lib/linux-arm64-gnu/libfeng_runtime.a`<br>`build/lib/linux-arm64-musl/libfeng_runtime.a` |
 
-任务：
-
 - [ ] 更新 `scripts/build_libunwind.sh`。该脚本只供维护者手动执行，生成上表规定的五份 unwind；每份构件使用对应 SDK 或 sysroot。
 - [ ] 更新 Makefile。三个构建环境均将当前平台的 Feng 编译器输出到 `build/bin/feng`，并生成上表规定的 runtime。
 - [ ] 每份 runtime 只合并 `extlib/<platform>/libfeng_unwind.a` 中 `<platform>` 完全相同的 unwind，不包含 libc；SDK / sysroot、文件格式或 CPU 架构与 `<platform>` 不匹配时立即失败。
-
-独立交付与回归门：
-
 - [ ] 五份 unwind 均可由维护脚本重新生成并通过校验。
 - [ ] `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 的 `build/bin/feng --version` 均可正常执行，上表五份 runtime 均通过平台、文件格式与 CPU 架构校验。
 - [ ] `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 的全量 `make test` 均通过。
@@ -321,13 +306,8 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 本阶段只更新 `feng dap`。精简 `lldb` 与 `lldb-dap` 由 §8.1 提供，不在本阶段重新剪裁。
 
-任务：
-
 - [ ] `feng dap` 在 macOS 与 Linux 按 [feng-cli.md](../docs/feng-cli.md) 规定定位并启动 `lldb-dap`，复用 §8.2 的公共路径能力。
-- [ ] 补充后端定位、启动失败和真实 DAP 调试会话回归。
-
-独立交付与回归门：
-
+- [ ] 补充后端定位、启动失败和真实 DAP 调试会话测试。
 - [ ] 三个发行平台均通过 `feng dap` 真实调试会话。
 - [ ] 三个发行平台的全量 `make test` 均通过。
 
@@ -335,15 +315,10 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 本阶段只编写 CI、构件汇聚、发行包生成和安装脚本。
 
-任务：
-
-- [ ] `.github/workflows/release.yml` 在三个发行平台分别构建 Feng 编译器及该平台负责的 runtime，完成校验和全量回归后上传构件。
+- [ ] `.github/workflows/release.yml` 在三个发行平台分别构建 Feng 编译器及该平台负责的 runtime，完成校验和 `make test` 后上传构件。
 - [ ] 汇聚任务下载三组构件，校验五份 runtime 和公共头文件，再调用 `scripts/release.sh`。
 - [ ] `scripts/release.sh` 生成三个发行包；每个发行包包含对应平台的 Feng 编译器与 LLVM，以及全部五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
 - [ ] `scripts/install.sh` 按 [feng-os-arch.md](../docs/feng-os-arch.md) 归一化当前 host，下载对应 zip，原子解压并配置 `PATH`，失败时不留半成品。
-
-独立交付与回归门：
-
 - [ ] 在三个干净发行平台安装对应发行包，验证 `feng --version`、`build`、`run`、`lsp`、`dap` 和 bundled LLVM。
 - [ ] 三个发行包的目录、平台构件和相对定位均通过校验。
 - [ ] 三个发行平台的全量 `make test` 均通过；完成人工 Review 并收到明确指令后，才能开始 §9。
