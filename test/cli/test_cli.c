@@ -259,6 +259,31 @@ static char *host_static_library_output_path(const char *out_dir, const char *st
     return path;
 }
 
+/* Ensure native platform detection includes the Linux ABI and target triple. */
+static void test_platform_detects_complete_native_platform(void) {
+    char *host_platform = NULL;
+    char *error_message = NULL;
+
+    ASSERT(feng_platform_detect_host_platform(&host_platform, &error_message));
+    ASSERT(error_message == NULL);
+#if defined(__APPLE__)
+    ASSERT(strcmp(host_platform, "macos-arm64") == 0);
+    ASSERT(strcmp(feng_platform_clang_target(host_platform),
+                  "arm64-apple-macosx") == 0);
+#elif defined(__linux__) && defined(__aarch64__)
+    ASSERT(strcmp(host_platform, "linux-arm64-gnu") == 0);
+    ASSERT(strcmp(feng_platform_clang_target(host_platform),
+                  "aarch64-unknown-linux-gnu") == 0);
+#elif defined(__linux__) && defined(__x86_64__)
+    ASSERT(strcmp(host_platform, "linux-x64-gnu") == 0);
+    ASSERT(strcmp(feng_platform_clang_target(host_platform),
+                  "x86_64-unknown-linux-gnu") == 0);
+#endif
+    ASSERT(feng_platform_clang_target("unsupported-platform") == NULL);
+    free(error_message);
+    free(host_platform);
+}
+
 static char *host_dynamic_library_file_name(const char *stem) {
 #if defined(_WIN32)
     return dup_printf("%s.dll", stem);
@@ -886,11 +911,12 @@ static char *read_fd_until_contains(int fd, const char *needle) {
     return content;
 }
 
-/* Run `feng dap` with redirected stdio and a temporary PATH override. */
+/* Run `feng dap` with redirected stdio and temporary backend lookup overrides. */
 static char *run_dap_capture_stdout_with_path(int argc,
                                               char **argv,
                                               const char *input_text,
                                               const char *path_value,
+                                              const char *lldb_dap_value,
                                               int *out_rc,
                                               char **out_stderr) {
     int input_pipe[2];
@@ -901,6 +927,8 @@ static char *run_dap_capture_stdout_with_path(int argc,
     FILE *errors = temp_file();
     const char *existing_path = getenv("PATH");
     char *saved_path = existing_path != NULL ? dup_cstr(existing_path) : NULL;
+    const char *existing_lldb_dap = getenv("FENG_LLDB_DAP");
+    char *saved_lldb_dap = existing_lldb_dap != NULL ? dup_cstr(existing_lldb_dap) : NULL;
     char *captured_stdout;
     char *captured_stderr;
     size_t input_length = input_text != NULL ? strlen(input_text) : 0U;
@@ -913,6 +941,11 @@ static char *run_dap_capture_stdout_with_path(int argc,
         ASSERT(setenv("PATH", path_value, 1) == 0);
     } else {
         ASSERT(unsetenv("PATH") == 0);
+    }
+    if (lldb_dap_value != NULL) {
+        ASSERT(setenv("FENG_LLDB_DAP", lldb_dap_value, 1) == 0);
+    } else {
+        ASSERT(unsetenv("FENG_LLDB_DAP") == 0);
     }
     if (input_length > 0U) {
         ASSERT(write(input_pipe[1], input_text, input_length) == (ssize_t)input_length);
@@ -955,6 +988,12 @@ static char *run_dap_capture_stdout_with_path(int argc,
         ASSERT(unsetenv("PATH") == 0);
     }
     free(saved_path);
+    if (saved_lldb_dap != NULL) {
+        ASSERT(setenv("FENG_LLDB_DAP", saved_lldb_dap, 1) == 0);
+    } else {
+        ASSERT(unsetenv("FENG_LLDB_DAP") == 0);
+    }
+    free(saved_lldb_dap);
 
     if (out_rc != NULL) {
         *out_rc = rc;
@@ -973,6 +1012,7 @@ static char *run_dap_interactive_capture_stdout_with_path(int argc,
                                                           const char *wait_for_text,
                                                           const char *followup_input,
                                                           const char *path_value,
+                                                          const char *lldb_dap_value,
                                                           int *out_rc,
                                                           char **out_stderr) {
     int input_pipe[2];
@@ -980,6 +1020,8 @@ static char *run_dap_interactive_capture_stdout_with_path(int argc,
     int error_pipe[2];
     const char *existing_path = getenv("PATH");
     char *saved_path = existing_path != NULL ? dup_cstr(existing_path) : NULL;
+    const char *existing_lldb_dap = getenv("FENG_LLDB_DAP");
+    char *saved_lldb_dap = existing_lldb_dap != NULL ? dup_cstr(existing_lldb_dap) : NULL;
     size_t initial_length = initial_input != NULL ? strlen(initial_input) : 0U;
     size_t followup_length = followup_input != NULL ? strlen(followup_input) : 0U;
     char *captured_prefix;
@@ -996,6 +1038,11 @@ static char *run_dap_interactive_capture_stdout_with_path(int argc,
         ASSERT(setenv("PATH", path_value, 1) == 0);
     } else {
         ASSERT(unsetenv("PATH") == 0);
+    }
+    if (lldb_dap_value != NULL) {
+        ASSERT(setenv("FENG_LLDB_DAP", lldb_dap_value, 1) == 0);
+    } else {
+        ASSERT(unsetenv("FENG_LLDB_DAP") == 0);
     }
 
     child = fork();
@@ -1044,6 +1091,12 @@ static char *run_dap_interactive_capture_stdout_with_path(int argc,
         ASSERT(unsetenv("PATH") == 0);
     }
     free(saved_path);
+    if (saved_lldb_dap != NULL) {
+        ASSERT(setenv("FENG_LLDB_DAP", saved_lldb_dap, 1) == 0);
+    } else {
+        ASSERT(unsetenv("FENG_LLDB_DAP") == 0);
+    }
+    free(saved_lldb_dap);
 
     if (out_rc != NULL) {
         *out_rc = WEXITSTATUS(status);
@@ -1064,6 +1117,7 @@ static char *run_dap_two_step_interactive_capture_stdout_with_path(int argc,
                                                                    const char *second_wait_text,
                                                                    const char *second_followup_input,
                                                                    const char *path_value,
+                                                                   const char *lldb_dap_value,
                                                                    int *out_rc,
                                                                    char **out_stderr) {
     int input_pipe[2];
@@ -1071,6 +1125,8 @@ static char *run_dap_two_step_interactive_capture_stdout_with_path(int argc,
     int error_pipe[2];
     const char *existing_path = getenv("PATH");
     char *saved_path = existing_path != NULL ? dup_cstr(existing_path) : NULL;
+    const char *existing_lldb_dap = getenv("FENG_LLDB_DAP");
+    char *saved_lldb_dap = existing_lldb_dap != NULL ? dup_cstr(existing_lldb_dap) : NULL;
     size_t initial_length = initial_input != NULL ? strlen(initial_input) : 0U;
     size_t first_followup_length = first_followup_input != NULL ? strlen(first_followup_input) : 0U;
     size_t second_followup_length = second_followup_input != NULL ? strlen(second_followup_input) : 0U;
@@ -1089,6 +1145,11 @@ static char *run_dap_two_step_interactive_capture_stdout_with_path(int argc,
         ASSERT(setenv("PATH", path_value, 1) == 0);
     } else {
         ASSERT(unsetenv("PATH") == 0);
+    }
+    if (lldb_dap_value != NULL) {
+        ASSERT(setenv("FENG_LLDB_DAP", lldb_dap_value, 1) == 0);
+    } else {
+        ASSERT(unsetenv("FENG_LLDB_DAP") == 0);
     }
 
     child = fork();
@@ -1146,6 +1207,12 @@ static char *run_dap_two_step_interactive_capture_stdout_with_path(int argc,
         ASSERT(unsetenv("PATH") == 0);
     }
     free(saved_path);
+    if (saved_lldb_dap != NULL) {
+        ASSERT(setenv("FENG_LLDB_DAP", saved_lldb_dap, 1) == 0);
+    } else {
+        ASSERT(unsetenv("FENG_LLDB_DAP") == 0);
+    }
+    free(saved_lldb_dap);
 
     if (out_rc != NULL) {
         *out_rc = WEXITSTATUS(status);
@@ -3860,6 +3927,7 @@ static void test_dap_validated_launch_starts_backend(void) {
                                                    argv,
                                                    input_text,
                                                    path_value,
+                                                   backend_path,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc == 0);
@@ -3890,18 +3958,16 @@ static void test_dap_validated_launch_starts_backend(void) {
     free(remove_error);
 }
 
-/* Ensure launch falls back to `xcrun -f lldb-dap` when PATH misses lldb-dap. */
-static void test_dap_resolves_backend_via_xcrun_when_path_misses(void) {
+/* Ensure FENG_LLDB_DAP selects an explicit backend even when PATH misses it. */
+static void test_dap_resolves_backend_via_feng_lldb_dap(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x12U};
-    char template_path[] = "temp/feng_cli_dap_launch_xcrun_XXXXXX";
+    char template_path[] = "temp/feng_cli_dap_launch_env_XXXXXX";
     char *workspace_dir;
     char *binary_path;
     char *fd_path;
     char *backend_path;
-    char *xcrun_path;
     char *marker_path;
     char *backend_script;
-    char *xcrun_script;
     char *path_value;
     char *escaped_binary_path;
     char *initialize_json;
@@ -3924,7 +3990,6 @@ static void test_dap_resolves_backend_via_xcrun_when_path_misses(void) {
     binary_path = path_join(workspace_dir, "demo.bin");
     fd_path = dup_printf("%s.fd", binary_path);
     backend_path = path_join(workspace_dir, "resolved-lldb-dap");
-    xcrun_path = path_join(workspace_dir, "xcrun");
     marker_path = path_join(workspace_dir, "spawned.txt");
     ASSERT(fd_path != NULL);
 
@@ -3944,11 +4009,8 @@ static void test_dap_resolves_backend_via_xcrun_when_path_misses(void) {
     backend_script = dup_printf("#!/bin/sh\nprintf 'spawned' > \"%s\"\nprintf '%%b' '%s'\ncat >/dev/null\n",
                                 marker_path,
                                 backend_initialize_text);
-    xcrun_script = dup_printf("#!/bin/sh\nif [ \"$1\" = \"-f\" ] && [ \"$2\" = \"lldb-dap\" ]; then\n  printf '%%s\\n' \"%s\"\n  exit 0\nfi\nexit 1\n",
-                              backend_path);
     write_executable_text_file(backend_path, backend_script);
-    write_executable_text_file(xcrun_path, xcrun_script);
-    path_value = dup_printf("%s:/bin:/usr/bin:/usr/sbin:/sbin", workspace_dir);
+    path_value = dup_cstr("/bin:/usr/bin:/usr/sbin:/sbin");
 
     escaped_binary_path = json_escape_text(binary_path);
     initialize_json = dup_printf("{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"}}");
@@ -3962,6 +4024,7 @@ static void test_dap_resolves_backend_via_xcrun_when_path_misses(void) {
                                                    argv,
                                                    input_text,
                                                    path_value,
+                                                   backend_path,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc == 0);
@@ -3981,10 +4044,8 @@ static void test_dap_resolves_backend_via_xcrun_when_path_misses(void) {
     free(initialize_json);
     free(escaped_binary_path);
     free(path_value);
-    free(xcrun_script);
     free(backend_script);
     free(marker_path);
-    free(xcrun_path);
     free(backend_path);
     free(fd_path);
     free(binary_path);
@@ -4064,6 +4125,7 @@ static void test_dap_rejects_fingerprint_mismatch_before_backend_spawn(void) {
                                                    argv,
                                                    input_text,
                                                    path_value,
+                                                   marker_path,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc != 0);
@@ -4096,13 +4158,14 @@ static void test_dap_rejects_fingerprint_mismatch_before_backend_spawn(void) {
     free(remove_error);
 }
 
-/* Ensure launch surfaces backend startup failures after local validation succeeds. */
+/* Ensure launch distinguishes backend lookup and process-start failures. */
 static void test_dap_reports_missing_backend_after_launch_validation(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x31U};
     char template_path[] = "temp/feng_cli_dap_missing_backend_XXXXXX";
     char *workspace_dir;
     char *binary_path;
     char *fd_path;
+    char *backend_path;
     char *escaped_binary_path;
     char *initialize_json;
     char *launch_json;
@@ -4121,6 +4184,7 @@ static void test_dap_reports_missing_backend_after_launch_validation(void) {
     ASSERT(workspace_dir != NULL);
     binary_path = path_join(workspace_dir, "demo.bin");
     fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(workspace_dir, "missing-lldb-dap");
     ASSERT(fd_path != NULL);
 
     write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
@@ -4145,12 +4209,32 @@ static void test_dap_reports_missing_backend_after_launch_validation(void) {
                                                    argv,
                                                    input_text,
                                                    workspace_dir,
+                                                   backend_path,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc != 0);
     ASSERT(strstr(stdout_text, "\"command\":\"initialize\"") != NULL);
     ASSERT(strstr(stdout_text, "\"command\":\"launch\"") != NULL);
-    ASSERT(strstr(stdout_text, "failed to exec lldb-dap") != NULL);
+    ASSERT(strstr(stdout_text,
+                  "FENG_LLDB_DAP specifies an unavailable executable") != NULL);
+    ASSERT(strcmp(stderr_text, "") == 0);
+
+    free(stderr_text);
+    free(stdout_text);
+    stderr_text = NULL;
+    write_executable_text_file(backend_path,
+                               "#!/feng-test/missing-interpreter\nexit 0\n");
+    stdout_text = run_dap_capture_stdout_with_path(1,
+                                                   argv,
+                                                   input_text,
+                                                   workspace_dir,
+                                                   backend_path,
+                                                   &rc,
+                                                   &stderr_text);
+    ASSERT(rc != 0);
+    ASSERT(strstr(stdout_text, "\"command\":\"launch\"") != NULL);
+    ASSERT(strstr(stdout_text, "failed to exec") != NULL);
+    ASSERT(strstr(stdout_text, "missing-lldb-dap") != NULL);
     ASSERT(strcmp(stderr_text, "") == 0);
 
     free(stderr_text);
@@ -4161,6 +4245,7 @@ static void test_dap_reports_missing_backend_after_launch_validation(void) {
     free(launch_json);
     free(initialize_json);
     free(escaped_binary_path);
+    free(backend_path);
     free(fd_path);
     free(binary_path);
     free(fd_error);
@@ -4258,6 +4343,7 @@ static void test_dap_rewrites_set_breakpoints_source_path_to_package_uri(void) {
                                                    argv,
                                                    input_text,
                                                    path_value,
+                                                   backend_path,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc == 0);
@@ -4386,6 +4472,7 @@ static void test_dap_rejects_set_breakpoints_outside_debug_closure(void) {
                                                    argv,
                                                    input_text,
                                                    path_value,
+                                                   backend_path,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc == 0);
@@ -4519,6 +4606,7 @@ static void test_dap_rewrites_stack_trace_source_path_to_local_path(void) {
                                                    argv,
                                                    input_text,
                                                    path_value,
+                                                   backend_path,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc == 0);
@@ -4661,6 +4749,7 @@ static void test_dap_rewrites_stack_trace_compiler_normalized_source_path(void) 
                                                    argv,
                                                    input_text,
                                                    path_value,
+                                                   backend_path,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc == 0);
@@ -4801,6 +4890,7 @@ static void test_dap_hides_hidden_stack_trace_frames(void) {
                                                    argv,
                                                    input_text,
                                                    path_value,
+                                                   backend_path,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc == 0);
@@ -5029,6 +5119,7 @@ static void test_dap_rewrites_variables_to_feng_names(void) {
                                                                "\"command\":\"scopes\"",
                                                                variables_text,
                                                                path_value,
+                                                               backend_path,
                                                                &rc,
                                                                &stderr_text);
     ASSERT(rc == 0);
@@ -5292,6 +5383,7 @@ static void test_dap_filters_backend_variables_and_rewrites_user_values(void) {
                                                    argv,
                                                    input_text,
                                                    path_value,
+                                                   backend_path,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc == 0);
@@ -5603,6 +5695,7 @@ static void test_project_build_rewrites_module_binding_in_dap_globals(void) {
                                                    argv,
                                                    input_text,
                                                    path_value,
+                                                   backend_path,
                                                    &rc,
                                                    &stderr_text);
     ASSERT(rc == 0);
@@ -5927,6 +6020,7 @@ static void test_dap_uses_array_element_type_name_in_value_summary(void) {
                                                                "\"variablesReference\":1073741826",
                                                                synthetic_variables_text,
                                                                path_value,
+                                                               backend_path,
                                                                &rc,
                                                                &stderr_text);
     ASSERT(rc == 0);
@@ -6288,6 +6382,7 @@ static void test_dap_clears_synthetic_refs_after_continue(void) {
                                                                         "\"request_seq\":11",
                                                                         second_variables_text,
                                                                         path_value,
+                                                                        backend_path,
                                                                         &rc,
                                                                         &stderr_text);
     ASSERT(rc == 0);
@@ -6577,6 +6672,7 @@ static void test_dap_expands_user_type_fields_with_synthetic_reference(void) {
                                                                "\"variablesReference\":1073741824",
                                                                synthetic_variables_text,
                                                                path_value,
+                                                               backend_path,
                                                                &rc,
                                                                &stderr_text);
     ASSERT(rc == 0);
@@ -6958,6 +7054,7 @@ static void test_dap_rewrites_identifier_evaluate_expression(void) {
                                                                "\"command\":\"stackTrace\"",
                                                                evaluate_text,
                                                                path_value,
+                                                               backend_path,
                                                                &rc,
                                                                &stderr_text);
     ASSERT(rc == 0);
@@ -7166,6 +7263,7 @@ static void run_dap_evaluate_session(FengCodegenMapingInfo *info,
                                                                "\"command\":\"stackTrace\"",
                                                                evaluate_text,
                                                                path_value,
+                                                               backend_path,
                                                                &rc,
                                                                &stderr_text);
     requests_text = read_text_file(requests_path);
@@ -14130,6 +14228,7 @@ int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
 
+    test_platform_detects_complete_native_platform();
     test_manifest_defaults();
     test_manifest_parses_dependencies_and_registry();
     test_manifest_parses_and_writes_assets();
@@ -14175,7 +14274,7 @@ int main(void) {
     test_dap_rejects_unknown_option();
     test_deps_add_help_writes_stdout_and_returns_success();
     test_dap_validated_launch_starts_backend();
-    test_dap_resolves_backend_via_xcrun_when_path_misses();
+    test_dap_resolves_backend_via_feng_lldb_dap();
     test_dap_rewrites_set_breakpoints_source_path_to_package_uri();
     test_dap_rejects_set_breakpoints_outside_debug_closure();
     test_dap_rewrites_stack_trace_source_path_to_local_path();

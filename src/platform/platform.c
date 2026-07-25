@@ -185,3 +185,50 @@ bool feng_platform_detect_host_target(char **out_host_target,
     }
     return true;
 }
+
+/* Detect the complete native platform name used by runtime and sysroot paths. */
+bool feng_platform_detect_host_platform(char **out_host_platform,
+                                        char **out_error_message) {
+    char *host_target = NULL;
+
+    if (out_host_platform == NULL) {
+        return set_errorf(out_error_message,
+                          "host platform output must not be null");
+    }
+    if (!feng_platform_detect_host_target(&host_target, out_error_message)) {
+        return false;
+    }
+#if defined(__linux__)
+    *out_host_platform = dup_printf("%s-gnu", host_target);
+    free(host_target);
+    if (*out_host_platform == NULL) {
+        return set_errorf(out_error_message, "out of memory");
+    }
+#else
+    *out_host_platform = host_target;
+#endif
+    return true;
+}
+
+/* Map one supported Feng platform identifier to its Clang target triple. */
+const char *feng_platform_clang_target(const char *platform) {
+    if (platform == NULL) {
+        return NULL;
+    }
+    if (strcmp(platform, "macos-arm64") == 0) {
+        return "arm64-apple-macosx";
+    }
+    if (strcmp(platform, "linux-x64-gnu") == 0) {
+        return "x86_64-unknown-linux-gnu";
+    }
+    if (strcmp(platform, "linux-x64-musl") == 0) {
+        return "x86_64-unknown-linux-musl";
+    }
+    if (strcmp(platform, "linux-arm64-gnu") == 0) {
+        return "aarch64-unknown-linux-gnu";
+    }
+    if (strcmp(platform, "linux-arm64-musl") == 0) {
+        return "aarch64-unknown-linux-musl";
+    }
+    return NULL;
+}

@@ -12,7 +12,6 @@
 #include "cli/common.h"
 #include "dap/proxy.h"
 
-#if defined(__APPLE__)
 /* Duplicate a NUL-terminated string into owned heap storage. */
 static char *dup_cstr(const char *text) {
     size_t length;
@@ -30,6 +29,7 @@ static char *dup_cstr(const char *text) {
     return copy;
 }
 
+#if defined(__APPLE__)
 /* Remove trailing newlines and spaces from one command output buffer in place. */
 static void trim_trailing_ascii_whitespace(char *text) {
     size_t length;
@@ -124,21 +124,48 @@ static char *try_resolve_lldb_dap_via_xcrun(void) {
     }
     return dup_cstr(output_buffer);
 }
+#endif
 
-/* Resolve the `lldb-dap` backend using PATH first, then `xcrun` on macOS. */
-static char *resolve_lldb_dap_backend_program(void) {
-    char *resolved = feng_cli_find_executable_on_path("lldb-dap");
+/* Resolve lldb-dap according to the documented host-tool precedence. */
+static char *resolve_lldb_dap_backend(void *context, char **out_error_message) {
+    const char *program = (const char *)context;
+    const FengCliHostToolStrategy strategy = {
+        "lldb-dap backend",
+        "FENG_LLDB_DAP",
+        "toolchain/llvm/bin/lldb-dap",
+        NULL,
+        "lldb-dap"
+    };
+    FengCliHostToolLookupStatus status;
+    char *resolved = NULL;
 
-    if (resolved != NULL) {
+    status = feng_cli_lookup_host_tool(program,
+                                       &strategy,
+                                       &resolved,
+                                       out_error_message);
+    if (status == FENG_CLI_HOST_TOOL_FOUND ||
+        status == FENG_CLI_HOST_TOOL_ERROR) {
         return resolved;
     }
+#if defined(__APPLE__)
     resolved = try_resolve_lldb_dap_via_xcrun();
     if (resolved != NULL) {
         return resolved;
     }
-    return dup_cstr("lldb-dap");
-}
+    if (out_error_message != NULL) {
+        *out_error_message = dup_cstr(
+            "cannot locate lldb-dap backend: FENG_LLDB_DAP is unset, "
+            "the bundled path and PATH entry are absent, and xcrun could not resolve lldb-dap");
+    }
+#else
+    if (out_error_message != NULL) {
+        *out_error_message = dup_cstr(
+            "cannot locate lldb-dap backend: FENG_LLDB_DAP is unset and "
+            "the bundled path and PATH entry are absent");
+    }
 #endif
+    return NULL;
+}
 
 /* Print command usage for `feng dap`. */
 static void print_usage(const char *program, FILE *stream) {
@@ -169,20 +196,9 @@ int feng_cli_dap_main(const char *program, int argc, char **argv) {
         return 1;
     }
 
-#if !defined(__APPLE__)
-    fprintf(stderr, "error: `feng dap` currently only supports macOS with lldb-dap\n");
-    return 1;
-#else
-    char *backend_program = resolve_lldb_dap_backend_program();
-    int exit_code;
-
-    if (backend_program == NULL) {
-        fprintf(stderr, "error: failed to resolve lldb-dap backend path\n");
-        return 1;
-    }
-
-    exit_code = feng_dap_proxy_run(backend_program, STDIN_FILENO, STDOUT_FILENO, STDERR_FILENO);
-    free(backend_program);
-    return exit_code;
-#endif
+    return feng_dap_proxy_run(resolve_lldb_dap_backend,
+                              (void *)program,
+                              STDIN_FILENO,
+                              STDOUT_FILENO,
+                              STDERR_FILENO);
 }

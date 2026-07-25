@@ -380,18 +380,25 @@ char *feng_cli_require_install_path(const char *program_path,
     return path;
 }
 
-char *feng_cli_resolve_host_tool(const char *program_path,
-                                 const FengCliHostToolStrategy *strategy,
-                                 char **out_error_message) {
+/* Resolve the shared portion of one host-tool lookup policy. */
+FengCliHostToolLookupStatus feng_cli_lookup_host_tool(
+    const char *program_path,
+    const FengCliHostToolStrategy *strategy,
+    char **out_tool_path,
+    char **out_error_message) {
     const char *environment_value;
     char *candidate;
     struct stat bundled_status;
     int bundled_errno;
 
+    if (out_tool_path != NULL) {
+        *out_tool_path = NULL;
+    }
     if (out_error_message != NULL) {
         *out_error_message = NULL;
     }
-    if (strategy == NULL ||
+    if (out_tool_path == NULL ||
+        strategy == NULL ||
         strategy->display_name == NULL ||
         strategy->display_name[0] == '\0' ||
         strategy->bundled_relative_path == NULL ||
@@ -399,7 +406,7 @@ char *feng_cli_resolve_host_tool(const char *program_path,
         strategy->system_executable == NULL ||
         strategy->system_executable[0] == '\0') {
         set_errorf(out_error_message, "invalid host tool lookup specification");
-        return NULL;
+        return FENG_CLI_HOST_TOOL_ERROR;
     }
 
     environment_value = strategy->feng_environment_variable != NULL
@@ -408,32 +415,34 @@ char *feng_cli_resolve_host_tool(const char *program_path,
     if (environment_value != NULL && environment_value[0] != '\0') {
         candidate = feng_cli_find_executable_on_path(environment_value);
         if (candidate != NULL) {
-            return candidate;
+            *out_tool_path = candidate;
+            return FENG_CLI_HOST_TOOL_FOUND;
         }
         set_errorf(out_error_message,
                    "%s environment variable %s specifies an unavailable executable: %s",
                    strategy->display_name,
                    strategy->feng_environment_variable,
                    environment_value);
-        return NULL;
+        return FENG_CLI_HOST_TOOL_ERROR;
     }
 
     candidate = feng_cli_resolve_install_path(program_path,
                                               strategy->bundled_relative_path,
                                               out_error_message);
     if (candidate == NULL) {
-        return NULL;
+        return FENG_CLI_HOST_TOOL_ERROR;
     }
     if (lstat(candidate, &bundled_status) == 0) {
         if (path_is_regular_executable(candidate)) {
-            return candidate;
+            *out_tool_path = candidate;
+            return FENG_CLI_HOST_TOOL_FOUND;
         }
         set_errorf(out_error_message,
                    "bundled %s is present but is not an executable regular file: %s",
                    strategy->display_name,
                    candidate);
         free(candidate);
-        return NULL;
+        return FENG_CLI_HOST_TOOL_ERROR;
     }
     bundled_errno = errno;
     free(candidate);
@@ -443,7 +452,7 @@ char *feng_cli_resolve_host_tool(const char *program_path,
                    strategy->display_name,
                    strategy->bundled_relative_path,
                    strerror(bundled_errno));
-        return NULL;
+        return FENG_CLI_HOST_TOOL_ERROR;
     }
 
     environment_value = strategy->conventional_environment_variable != NULL
@@ -452,19 +461,40 @@ char *feng_cli_resolve_host_tool(const char *program_path,
     if (environment_value != NULL && environment_value[0] != '\0') {
         candidate = feng_cli_find_executable_on_path(environment_value);
         if (candidate != NULL) {
-            return candidate;
+            *out_tool_path = candidate;
+            return FENG_CLI_HOST_TOOL_FOUND;
         }
         set_errorf(out_error_message,
                    "%s environment variable %s specifies an unavailable executable: %s",
                    strategy->display_name,
                    strategy->conventional_environment_variable,
                    environment_value);
-        return NULL;
+        return FENG_CLI_HOST_TOOL_ERROR;
     }
 
     candidate = feng_cli_find_executable_on_path(strategy->system_executable);
     if (candidate != NULL) {
-        return candidate;
+        *out_tool_path = candidate;
+        return FENG_CLI_HOST_TOOL_FOUND;
+    }
+    return FENG_CLI_HOST_TOOL_ABSENT;
+}
+
+/* Resolve one host tool and report a fully exhausted candidate chain. */
+char *feng_cli_resolve_host_tool(const char *program_path,
+                                 const FengCliHostToolStrategy *strategy,
+                                 char **out_error_message) {
+    char *tool_path = NULL;
+    FengCliHostToolLookupStatus status = feng_cli_lookup_host_tool(program_path,
+                                                                  strategy,
+                                                                  &tool_path,
+                                                                  out_error_message);
+
+    if (status == FENG_CLI_HOST_TOOL_FOUND) {
+        return tool_path;
+    }
+    if (status == FENG_CLI_HOST_TOOL_ERROR) {
+        return NULL;
     }
     set_errorf(out_error_message,
                "cannot locate %s: bundled path is absent, environment variables are unset, "

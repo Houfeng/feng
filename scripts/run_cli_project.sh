@@ -2,8 +2,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/scripts/host_platform.sh"
 FENG="$ROOT/build/bin/feng"
-RT_LIB="$ROOT/build/lib/libfeng_runtime.a"
+HOST_TARGET="$(feng_detect_host_target)"
+HOST_PLATFORM="$(feng_detect_host_platform)"
+RT_LIB="$ROOT/build/lib/$HOST_PLATFORM/libfeng_runtime.a"
 FIXTURE="$ROOT/test/cli/projects/bin_hello"
 LIB_FIXTURE="$ROOT/test/cli/projects/lib_hello"
 INVALID_FIXTURE="$ROOT/test/cli/projects/bin_hello_invalid"
@@ -14,43 +17,6 @@ LOCAL_DEP_EXPECTED="$ROOT/test/cli/projects/bin_with_local_dep.expected"
 mkdir -p "$ROOT/temp"
 WORK="$(mktemp -d "$ROOT/temp/feng_cli_project_XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
-
-detect_host_target() {
-    local os arch
-
-    case "$(uname -s)" in
-        Darwin)
-            os="macos"
-            ;;
-        Linux)
-            os="linux"
-            ;;
-        MINGW*|MSYS*|CYGWIN*)
-            os="windows"
-            ;;
-        *)
-            echo "unsupported host OS for project smoke: $(uname -s)" >&2
-            exit 2
-            ;;
-    esac
-
-    case "$(uname -m)" in
-        arm64|aarch64)
-            arch="arm64"
-            ;;
-        x86_64|amd64)
-            arch="x64"
-            ;;
-        *)
-            echo "unsupported host architecture for project smoke: $(uname -m)" >&2
-            exit 2
-            ;;
-    esac
-
-    printf '%s-%s\n' "$os" "$arch"
-}
-
-HOST_TARGET="$(detect_host_target)"
 
 if [[ ! -x "$FENG" ]]; then
     echo "missing $FENG (run 'make cli' first)" >&2

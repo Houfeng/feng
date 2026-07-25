@@ -6213,7 +6213,8 @@ cleanup:
 }
 
 /* Run the launch-gated DAP session until the backend exits or launch fails. */
-static int proxy_run_session(const char *backend_program,
+static int proxy_run_session(FengDapBackendResolver backend_resolver,
+                             void *backend_resolver_context,
                              int input_fd,
                              int output_fd,
                              int error_fd) {
@@ -6239,6 +6240,7 @@ static int proxy_run_session(const char *backend_program,
         pid_t child = -1;
         int exit_code;
         char *error_detail = NULL;
+        char *backend_program = NULL;
 
         if (status == FENG_DAP_READ_EOF) {
             break;
@@ -6364,6 +6366,25 @@ static int proxy_run_session(const char *backend_program,
         }
         free(error_detail);
         error_detail = NULL;
+        backend_program = backend_resolver(backend_resolver_context, &error_detail);
+        if (backend_program == NULL) {
+            proxy_send_request_failure_response(output_fd,
+                                                "launch",
+                                                request_seq,
+                                                error_detail != NULL
+                                                    ? error_detail
+                                                    : "failed to resolve lldb-dap backend",
+                                                &next_seq,
+                                                error_fd);
+            free(error_detail);
+            proxy_message_dispose(&request);
+            proxy_message_dispose(&initialize_request);
+            proxy_reader_dispose(&client_reader);
+            proxy_reader_dispose(&backend_reader);
+            feng_debug_artifact_dispose(&launch_artifact);
+            proxy_relay_state_dispose(&relay_state);
+            return 1;
+        }
         if (pipe(child_stdin) != 0 || pipe(child_stdout) != 0) {
             proxy_send_request_failure_response(output_fd,
                                                 "launch",
@@ -6379,6 +6400,7 @@ static int proxy_run_session(const char *backend_program,
                 close(child_stdout[0]);
                 close(child_stdout[1]);
             }
+            free(backend_program);
             proxy_message_dispose(&request);
             proxy_message_dispose(&initialize_request);
             proxy_reader_dispose(&client_reader);
@@ -6404,6 +6426,7 @@ static int proxy_run_session(const char *backend_program,
             close(child_stdin[1]);
             close(child_stdout[0]);
             close(child_stdout[1]);
+            free(backend_program);
             proxy_message_dispose(&request);
             proxy_message_dispose(&initialize_request);
             proxy_reader_dispose(&client_reader);
@@ -6438,6 +6461,7 @@ static int proxy_run_session(const char *backend_program,
             close(child_stdin[1]);
             close(child_stdout[0]);
             exit_code = proxy_wait_for_child(child, error_fd, backend_program);
+            free(backend_program);
             proxy_message_dispose(&request);
             proxy_message_dispose(&initialize_request);
             proxy_reader_dispose(&client_reader);
@@ -6459,6 +6483,7 @@ static int proxy_run_session(const char *backend_program,
                                   error_fd)) {
             close(child_stdout[0]);
             exit_code = proxy_wait_for_child(child, error_fd, backend_program);
+            free(backend_program);
             proxy_reader_dispose(&client_reader);
             proxy_reader_dispose(&backend_reader);
             feng_debug_artifact_dispose(&launch_artifact);
@@ -6467,6 +6492,7 @@ static int proxy_run_session(const char *backend_program,
         }
         close(child_stdout[0]);
         exit_code = proxy_wait_for_child(child, error_fd, backend_program);
+        free(backend_program);
         proxy_reader_dispose(&client_reader);
         proxy_reader_dispose(&backend_reader);
         feng_debug_artifact_dispose(&launch_artifact);
@@ -6483,7 +6509,8 @@ static int proxy_run_session(const char *backend_program,
 }
 
 /* Run the launch-gated DAP proxy against the selected backend program. */
-int feng_dap_proxy_run(const char *backend_program,
+int feng_dap_proxy_run(FengDapBackendResolver backend_resolver,
+                       void *backend_resolver_context,
                        int input_fd,
                        int output_fd,
                        int error_fd) {
@@ -6491,10 +6518,10 @@ int feng_dap_proxy_run(const char *backend_program,
     struct sigaction ignore_sigpipe;
     int exit_code;
 
-    if (backend_program == NULL || input_fd < 0 || output_fd < 0) {
+    if (backend_resolver == NULL || input_fd < 0 || output_fd < 0) {
         proxy_report_error(error_fd,
                            "invalid dap proxy configuration",
-                           "backend program and stdio fds are required");
+                           "backend resolver and stdio fds are required");
         return 1;
     }
 
@@ -6503,7 +6530,11 @@ int feng_dap_proxy_run(const char *backend_program,
     ignore_sigpipe.sa_flags = 0;
     sigaction(SIGPIPE, &ignore_sigpipe, &old_sigpipe);
 
-    exit_code = proxy_run_session(backend_program, input_fd, output_fd, error_fd);
+    exit_code = proxy_run_session(backend_resolver,
+                                  backend_resolver_context,
+                                  input_fd,
+                                  output_fd,
+                                  error_fd);
     sigaction(SIGPIPE, &old_sigpipe, NULL);
     return exit_code;
 }

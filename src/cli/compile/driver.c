@@ -1406,34 +1406,22 @@ done:
 
 /* --- runtime artefact discovery ----------------------------------------- */
 
-static char *locate_runtime_lib(const char *program_path) {
-    /* 1. Install layout: <exe_dir>/../lib/<os>-<arch>/<runtime-lib> */
-    char *host_target = NULL;
-    char *detect_error = NULL;
-    bool detected = feng_platform_detect_host_target(&host_target, &detect_error);
-    free(detect_error);
-    if (detected && host_target != NULL) {
-        char *lib_subdir = path_join2("lib", host_target);
-        char *runtime_rel = path_join_host_static_library(lib_subdir, "feng_runtime");
-        char *candidate = feng_cli_require_install_path(program_path,
-                                                        runtime_rel,
-                                                        FENG_CLI_REQUIRED_REGULAR_FILE,
-                                                        NULL);
-        free(lib_subdir);
-        free(runtime_rel);
-        if (candidate != NULL) {
-            free(host_target);
-            return candidate;
-        }
-    }
-    free(host_target);
+static char *locate_runtime_lib(const char *program_path,
+                                const char *host_platform) {
+    char *lib_subdir = path_join2("lib", host_platform);
+    char *runtime_rel = NULL;
+    char *candidate = NULL;
 
-    /* 2. Dev build layout: <exe_dir>/../lib/<runtime-lib> (no <os>-<arch> subdir) */
-    char *runtime_rel = path_join_host_static_library("lib", "feng_runtime");
-    char *candidate = feng_cli_require_install_path(program_path,
-                                                    runtime_rel,
-                                                    FENG_CLI_REQUIRED_REGULAR_FILE,
-                                                    NULL);
+    if (lib_subdir != NULL) {
+        runtime_rel = path_join_host_static_library(lib_subdir, "feng_runtime");
+    }
+    if (runtime_rel != NULL) {
+        candidate = feng_cli_require_install_path(program_path,
+                                                  runtime_rel,
+                                                  FENG_CLI_REQUIRED_REGULAR_FILE,
+                                                  NULL);
+    }
+    free(lib_subdir);
     free(runtime_rel);
     return candidate;
 }
@@ -1481,7 +1469,6 @@ static char *locate_host_archiver(const char *program_path, char **out_error_mes
 }
 
 /* Resolve the host archive indexer using the shared LLVM tool policy. */
-#if defined(__APPLE__)
 static char *locate_host_ranlib(const char *program_path, char **out_error_message) {
     const FengCliHostToolStrategy strategy = {
         "archive indexer",
@@ -1492,6 +1479,26 @@ static char *locate_host_ranlib(const char *program_path, char **out_error_messa
     };
 
     return feng_cli_resolve_host_tool(program_path, &strategy, out_error_message);
+}
+
+/* Resolve the native Linux sysroot shipped beside the Feng executable. */
+#if defined(__linux__)
+static char *locate_linux_native_sysroot(const char *program_path,
+                                         const char *host_platform,
+                                         char **out_error_message) {
+    char *relative_path = path_join2("toolchain/sysroot", host_platform);
+    char *sysroot;
+
+    if (relative_path == NULL) {
+        set_errorf(out_error_message, "out of memory composing native sysroot path");
+        return NULL;
+    }
+    sysroot = feng_cli_require_install_path(program_path,
+                                            relative_path,
+                                            FENG_CLI_REQUIRED_DIRECTORY,
+                                            out_error_message);
+    free(relative_path);
+    return sysroot;
 }
 #endif
 
@@ -1911,6 +1918,51 @@ static bool argv_push_mode_flags(ArgVec *av, bool release) {
     return true;
 }
 
+/* Add the explicit native target and SDK/sysroot required by bundled Clang. */
+static bool argv_push_native_platform_flags(ArgVec *av,
+                                            const char *clang_target,
+                                            const char *native_sdk_path,
+                                            const char *native_sysroot,
+                                            bool link_executable) {
+    char *target_flag = dup_printf("--target=%s", clang_target);
+    bool ok = target_flag != NULL && argv_push(av, target_flag);
+
+    free(target_flag);
+#if defined(__APPLE__)
+    (void)native_sysroot;
+    (void)link_executable;
+    if (ok && !argv_push(av, "-isysroot")) {
+        ok = false;
+    }
+    if (ok && !argv_push(av, native_sdk_path)) {
+        ok = false;
+    }
+#elif defined(__linux__)
+    char *sysroot_flag;
+    char *gcc_toolchain_flag;
+
+    (void)native_sdk_path;
+    sysroot_flag = dup_printf("--sysroot=%s", native_sysroot);
+    gcc_toolchain_flag = dup_printf("--gcc-toolchain=%s", native_sysroot);
+    if (ok && (sysroot_flag == NULL || !argv_push(av, sysroot_flag))) {
+        ok = false;
+    }
+    if (ok && (gcc_toolchain_flag == NULL || !argv_push(av, gcc_toolchain_flag))) {
+        ok = false;
+    }
+    if (ok && link_executable && !argv_push(av, "-fuse-ld=lld")) {
+        ok = false;
+    }
+    free(sysroot_flag);
+    free(gcc_toolchain_flag);
+#else
+    (void)native_sdk_path;
+    (void)native_sysroot;
+    (void)link_executable;
+#endif
+    return ok;
+}
+
 /* Split a whitespace-separated flag string and push each token into av.
  * Used to honour FENG_CC_FLAGS so that host-tool invocations (e.g. UBSan
  * runtime linking) can be augmented without patching the compiler. */
@@ -1949,9 +2001,26 @@ static bool argv_push_env_flags(ArgVec *av, const char *flags) {
 /* --- entry --------------------------------------------------------------- */
 
 int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
+    char *native_platform = NULL;
+    char *platform_error = NULL;
+    const char *native_clang_target;
+
     if (opts == NULL || opts->c_path == NULL || opts->out_path == NULL) {
         fprintf(stderr, "internal error: driver invoked with NULL options\n");
         return 2;
+    }
+    if (!feng_platform_detect_host_platform(&native_platform, &platform_error)) {
+        fprintf(stderr,
+                "error: cannot determine native build platform: %s\n",
+                platform_error != NULL ? platform_error : "unknown error");
+        free(platform_error);
+        return 1;
+    }
+    native_clang_target = feng_platform_clang_target(native_platform);
+    if (native_clang_target == NULL) {
+        fprintf(stderr, "error: unsupported native build platform: %s\n", native_platform);
+        free(native_platform);
+        return 1;
     }
 
     char *include_dir = locate_runtime_include(opts->program_path);
@@ -1959,6 +2028,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         fprintf(stderr,
                 "error: cannot locate runtime headers.\n"
                 "  expected <feng-exe>/../include/feng_runtime.h.\n");
+        free(native_platform);
         return 1;
     }
 
@@ -1976,18 +2046,18 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     size_t bundle_extlib_static_lib_count = 0U;
     size_t bundle_extlib_satisfied_lib_count = 0U;
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
-        runtime_lib = locate_runtime_lib(opts->program_path);
+        runtime_lib = locate_runtime_lib(opts->program_path, native_platform);
         if (runtime_lib == NULL) {
             char *runtime_basename = feng_platform_static_library_file_name("feng_runtime");
 
             fprintf(stderr,
                 "error: cannot locate %s.\n"
-                "  expected <feng-exe>/../lib/<os>-<arch>/%s\n"
-                "  or <feng-exe>/../lib/%s.\n",
+                "  expected <feng-exe>/../lib/%s/%s\n",
                 runtime_basename != NULL ? runtime_basename : "the Feng runtime static library",
-                runtime_basename != NULL ? runtime_basename : "the Feng runtime static library",
+                native_platform,
                 runtime_basename != NULL ? runtime_basename : "the Feng runtime static library");
             free(runtime_basename);
+            free(native_platform);
             free(include_dir);
             return 1;
         }
@@ -1997,6 +2067,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                         "error: cannot determine host target for package bundles: %s\n",
                         bundle_error != NULL ? bundle_error : "unknown error");
                 free(bundle_error);
+                free(native_platform);
                 free(runtime_lib);
                 free(include_dir);
                 return 1;
@@ -2017,6 +2088,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                         bundle_error != NULL ? bundle_error : "unknown error");
                 free(bundle_error);
                 free(host_target);
+                free(native_platform);
                 free(runtime_lib);
                 free(include_dir);
                 return 1;
@@ -2034,6 +2106,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         remove_tree(bundle_temp_dir);
         free(bundle_temp_dir);
         free(host_target);
+        free(native_platform);
         free(runtime_lib);
         free(include_dir);
         return 1;
@@ -2049,6 +2122,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 remove_tree(bundle_temp_dir);
                 free(bundle_temp_dir);
                 free(host_target);
+                free(native_platform);
                 free(runtime_lib);
                 free(include_dir);
                 return 1;
@@ -2080,6 +2154,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         remove_tree(bundle_temp_dir);
         free(bundle_temp_dir);
         free(host_target);
+        free(native_platform);
         free(runtime_lib);
         free(include_dir);
         return 1;
@@ -2094,6 +2169,13 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     char *tool_error = NULL;
 #if defined(__APPLE__)
     char *native_sdk_path = NULL;
+#else
+    const char *native_sdk_path = NULL;
+#endif
+#if defined(__linux__)
+    char *native_sysroot = NULL;
+#else
+    const char *native_sysroot = NULL;
 #endif
     ArgVec av = {0};
     bool ok = true;
@@ -2117,7 +2199,6 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             rc = 1;
             goto cleanup;
         }
-#if defined(__APPLE__)
         ranlib = locate_host_ranlib(opts->program_path, &tool_error);
         if (ranlib == NULL) {
             fprintf(stderr,
@@ -2126,13 +2207,23 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             rc = 1;
             goto cleanup;
         }
-#endif
     }
 #if defined(__APPLE__)
     native_sdk_path = locate_macos_native_sdk(&tool_error);
     if (native_sdk_path == NULL) {
         fprintf(stderr,
                 "error: cannot select macOS native SDK: %s\n",
+                tool_error != NULL ? tool_error : "unknown error");
+        rc = 1;
+        goto cleanup;
+    }
+#elif defined(__linux__)
+    native_sysroot = locate_linux_native_sysroot(opts->program_path,
+                                                 native_platform,
+                                                 &tool_error);
+    if (native_sysroot == NULL) {
+        fprintf(stderr,
+                "error: cannot select native Linux sysroot: %s\n",
                 tool_error != NULL ? tool_error : "unknown error");
         rc = 1;
         goto cleanup;
@@ -2157,10 +2248,11 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         if (!argv_push(&av, cc)) { ok = false; }
         if (ok && !argv_push(&av, "-std=gnu11")) { ok = false; }
         if (ok && !argv_push(&av, "-fexceptions")) { ok = false; }
-#if defined(__APPLE__)
-        if (ok && !argv_push(&av, "-isysroot")) { ok = false; }
-        if (ok && !argv_push(&av, native_sdk_path)) { ok = false; }
-#endif
+        if (ok && !argv_push_native_platform_flags(&av,
+                                                   native_clang_target,
+                                                   native_sdk_path,
+                                                   native_sysroot,
+                                                   true)) { ok = false; }
         if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
 #if defined(__linux__)
         /* Per-function/data sections let --gc-sections discard unused
@@ -2246,10 +2338,11 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             if (!argv_push(&av, cc)) { ok = false; }
             if (ok && !argv_push(&av, "-std=gnu11")) { ok = false; }
             if (ok && !argv_push(&av, "-fexceptions")) { ok = false; }
-#if defined(__APPLE__)
-            if (ok && !argv_push(&av, "-isysroot")) { ok = false; }
-            if (ok && !argv_push(&av, native_sdk_path)) { ok = false; }
-#endif
+            if (ok && !argv_push_native_platform_flags(&av,
+                                                       native_clang_target,
+                                                       native_sdk_path,
+                                                       native_sysroot,
+                                                       false)) { ok = false; }
             if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
             if (ok && !argv_push(&av, "-Wall")) { ok = false; }
             if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
@@ -2278,11 +2371,9 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         }
 
         if (rc == 0) {
-#if defined(__APPLE__)
             /*
-             * Keep archive creation and indexing explicit on macOS. LLVM
-             * ranlib accepts empty symbol tables without the Apple ranlib-only
-             * `-no_warning_for_no_symbols` option.
+             * Keep archive creation and indexing explicit so FENG_RANLIB and
+             * the shared tool-selection policy apply on every host.
              */
             if (!argv_push(&av, ar)) { ok = false; }
             if (ok && !argv_push(&av, "rc")) { ok = false; }
@@ -2310,21 +2401,6 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 }
                 argv_free(&av);
             }
-#else
-            if (!argv_push(&av, ar)) { ok = false; }
-            if (ok && !argv_push(&av, "rcs")) { ok = false; }
-            if (ok && !argv_push(&av, opts->out_path)) { ok = false; }
-            if (ok && !argv_push(&av, object_path)) { ok = false; }
-            if (!ok) {
-                fprintf(stderr, "error: out of memory building archive argv\n");
-                rc = 1;
-            } else {
-                failed_tool_description = "static archiver";
-                rc = spawn_and_wait(av.items);
-                host_tool_failed = rc != 0;
-            }
-            argv_free(&av);
-#endif
         }
     }
 
@@ -2357,6 +2433,7 @@ cleanup:
     remove_tree(bundle_temp_dir);
     free(bundle_temp_dir);
     free(host_target);
+    free(native_platform);
     free(bundle_error);
     free(runtime_lib);
     free(include_dir);
@@ -2364,6 +2441,9 @@ cleanup:
     free(tool_error);
 #if defined(__APPLE__)
     free(native_sdk_path);
+#endif
+#if defined(__linux__)
+    free(native_sysroot);
 #endif
     free(ranlib);
     free(ar);

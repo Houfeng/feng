@@ -20,4 +20,14 @@ bool feng_platform_static_library_matches_name(const char *path,
 bool feng_platform_detect_host_target(char **out_host_target,
                                        char **out_error_message);
 
+/*
+ * Detect the complete native platform identifier, including the Linux ABI.
+ * The returned platform string and optional error message are owned by the caller.
+ */
+bool feng_platform_detect_host_platform(char **out_host_platform,
+                                        char **out_error_message);
+
+/* Return the Clang target triple for one supported complete platform identifier. */
+const char *feng_platform_clang_target(const char *platform);
+
 #endif /* FENG_PLATFORM_PLATFORM_H */

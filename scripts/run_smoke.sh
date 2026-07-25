@@ -19,8 +19,10 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/scripts/host_platform.sh"
 FENG="$ROOT/build/bin/feng"
-RT_LIB="$ROOT/build/lib/libfeng_runtime.a"
+HOST_PLATFORM="$(feng_detect_host_platform)"
+RT_LIB="$ROOT/build/lib/$HOST_PLATFORM/libfeng_runtime.a"
 SMOKE_DIR="$ROOT/test/smoke/phase1a"
 GEN_ROOT="$ROOT/build/gen/smoke"
 

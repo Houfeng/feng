@@ -13,21 +13,21 @@
  *   1. Resolve the runtime include directory and static library by probing
  *      paths relative to the running `feng` executable: the include root
  *      at `<exe>/../include/` (single fixed position — headers are
- *      platform-independent), and the static library with two priority
- *      positions — first the install layout `<exe>/../lib/<os>-<arch>/`,
- *      then the dev build layout `<exe>/../lib/`.
+ *      platform-independent), and the static library at the single native
+ *      platform path `<exe>/../lib/<os>-<arch>-<abi>/`.
  *   2. Mine `extern fn` calling-convention annotations (`@cdecl`,
  *      `@stdcall`, `@fastcall`) across all current programs and flattened
  *      package `.ft` surfaces to derive additional `-l<lib>` link flags.
  *      The reserved library name "libc" / "c" is skipped because it is
  *      implicit on POSIX hosts. Other names have a leading "lib" prefix
  *      stripped.
- *   3. For `bin`, spawn ${CC:-cc} with a fixed compiler flag set, the
- *      generated C source, the runtime archive, `-lpthread`, the
+ *   3. For `bin`, select the configured/bundled native Clang, pass an
+ *      explicit target plus SDK/sysroot, and compile the generated C source
+ *      with the native runtime archive, `-lpthread`, the
  *      derived link flags, and any explicit `--lib` inputs from direct
  *      mode, producing the final executable at `out_path`.
- *   4. For `lib`, compile the generated C to an object file and archive it
- *      into a static library at `out_path`.
+ *   4. For `lib`, compile with the same native target inputs and archive the
+ *      generated object into a static library at `out_path`.
  *
  * On success returns 0. On failure returns non-zero. Host-compiler
  * failures intentionally preserve the generated C path so users can

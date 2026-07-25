@@ -45,6 +45,13 @@ typedef struct FengCliHostToolStrategy {
     const char *system_executable;
 } FengCliHostToolStrategy;
 
+/* Result category for host-tool lookup before command-specific fallbacks. */
+typedef enum FengCliHostToolLookupStatus {
+    FENG_CLI_HOST_TOOL_FOUND,
+    FENG_CLI_HOST_TOOL_ABSENT,
+    FENG_CLI_HOST_TOOL_ERROR
+} FengCliHostToolLookupStatus;
+
 /*
  * Resolve the running Feng executable to a canonical absolute path.
  * The returned string and optional error message are owned by the caller.
@@ -86,6 +93,16 @@ bool feng_cli_path_is_executable(const char *path);
 char *feng_cli_resolve_host_tool(const char *program_path,
                                  const FengCliHostToolStrategy *strategy,
                                  char **out_error_message);
+
+/*
+ * Resolve one host tool while distinguishing an absent candidate chain from
+ * an explicitly configured or bundled candidate that is invalid.
+ */
+FengCliHostToolLookupStatus feng_cli_lookup_host_tool(
+    const char *program_path,
+    const FengCliHostToolStrategy *strategy,
+    char **out_tool_path,
+    char **out_error_message);
 
 bool feng_cli_stream_supports_color(FILE *stream);
 void feng_cli_set_stream_color(FILE *stream, bool enabled, const char *color);

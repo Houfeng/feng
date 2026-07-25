@@ -18,7 +18,8 @@ Build:
 - `make install` is an alias of the staging step.
 - default staged library name: `libfeng_unwind.a`
 - the root Makefile unpacks this archive and merges its object files into
-	`build/lib/libfeng_runtime.a`; generated programs link only `libfeng_runtime`.
+	`build/lib/<platform>/libfeng_runtime.a`; generated programs link only the
+	matching complete-platform `libfeng_runtime`.
 
 Note:
 - This is LLVM libunwind, not the C-majority `libunwind/libunwind` project.

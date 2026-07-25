@@ -8,41 +8,17 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+source "$ROOT/scripts/host_platform.sh"
 FENG="$ROOT/build/bin/feng"
-RT_LIB="$ROOT/build/lib/libfeng_runtime.a"
+HOST_TARGET="$(feng_detect_host_target)"
+HOST_PLATFORM="$(feng_detect_host_platform)"
+RT_LIB="$ROOT/build/lib/$HOST_PLATFORM/libfeng_runtime.a"
 FIXTURE="$ROOT/test/smoke/phase1a/hello.ff"
 EXPECTED="$ROOT/test/smoke/phase1a/hello.expected"
 WORK="$ROOT/build/gen/cli_direct"
 rm -rf "$WORK"
 mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
-
-detect_host_target() {
-    local os arch
-
-    case "$(uname -s)" in
-        Darwin)         os="macos" ;;
-        Linux)          os="linux" ;;
-        MINGW*|MSYS*|CYGWIN*) os="windows" ;;
-        *)
-            echo "unsupported host OS for CLI smoke: $(uname -s)" >&2
-            exit 2
-            ;;
-    esac
-
-    case "$(uname -m)" in
-        arm64|aarch64)  arch="arm64" ;;
-        x86_64|amd64)   arch="x64" ;;
-        *)
-            echo "unsupported host architecture for CLI smoke: $(uname -m)" >&2
-            exit 2
-            ;;
-    esac
-
-    printf '%s-%s\n' "$os" "$arch"
-}
-
-HOST_TARGET="$(detect_host_target)"
 
 if [[ ! -x "$FENG" ]]; then
     echo "missing $FENG (run 'make cli' first)" >&2
@@ -333,10 +309,9 @@ fi
 # Previously tested the FENG_RUNTIME_LIB environment variable pointing at a
 # nonexistent file. FENG_RUNTIME_LIB has been removed per the release plan
 # (dev/feng-release-and-instanll.md §4.1); runtime is now located via two-step
-# lookup: install layout <exe>/../lib/<os>-<arch>/ then dev build tree build/lib/.
-# In the dev tree the step-2 ancestor search always finds build/lib/libfeng_runtime.a,
-# so a "runtime not found" failure cannot be constructed here. The install-layout
-# missing case is covered by the distribution manifest verification instead.
+# lookup: the single complete platform path <exe>/../lib/<os>-<arch>-<abi>/.
+# A missing-runtime case requires an isolated installation layout and is covered
+# by distribution manifest verification rather than this source-tree smoke test.
 #
 # out7="$WORK/case_rtmiss"
 # if FENG_RUNTIME_LIB="$WORK/no_such_runtime.a" "$FENG" "$FIXTURE" --out="$out7" \
