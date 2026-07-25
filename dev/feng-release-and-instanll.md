@@ -228,17 +228,17 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
   4. 自动将 `$HOME/.feng/bin` 加入 `PATH`（自动写入 `$SHELL` 对应启动脚本；仅在需要管理员权限时提示用户授权）
 - 失败时必须清理半成品目录，不留残文件。
 
-## 8 实施 TODO：Feng 编译器与工具发行包
+## 8 实施 TODO
 
-本大阶段只交付三个 native host 上的 Feng 编译器、五目标 runtime、调试工具、四份 Linux GNU / musl sysroot 与安装包，不实现 Feng 用户程序的跨平台编译、标准库多平台制品或 `.fb` 多平台组包；这些能力统一由 §9 承载。Feng 可执行文件自身不要求交叉构建：三个 native CI 任务分别生成当前 host 平台的 `feng`，runtime 按 §4 的五个完整目标平台生成后由汇聚任务放入每一份发行包。
+本节交付三个 native host 的 Feng 编译器、五个平台的 runtime、调试工具、四份 Linux sysroot 和安装包。跨平台编译、标准库多平台制品及 `.fb` 多平台组包见 §9。各 native CI 任务构建当前 host 的 `feng`，汇聚任务将五份 runtime 加入每份发行包。
 
-§8 与 §9 的所有子阶段都必须严格遵守统一门禁：
+§8 与 §9 的子阶段按以下门禁实施：
 
-1. 完成本子阶段全部任务、专项验收和该子阶段明确要求的全量回归。除子阶段另有明确规定外，涉及 Feng 编译器、runtime 或 host 行为的子阶段必须在 `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 三个 host 上通过全量 `make test`；`make test` 是仓库全量回归入口，已包含单元测试、UBSan、smoke、CLI、std、fcts 与性能约束检查。§8.1 只改变维护脚本和预生成工具链产物，不改变 Feng 编译器、runtime、Makefile 或测试，因此只要求当前 `macos-arm64` 开发 host 的全量 `make test`；Linux host 只执行该节列出的工具链与 sysroot 专项验收。
-2. 提交本子阶段全部变更和验收结果供人工 Review；全量回归通过不代表可以自动进入下一子阶段。
-3. 只有人工 Review 通过且收到“开始下一阶段”的明确人工指令后，才能实施下一子阶段。§8 全部通过人工 Review 前不得开始 §9。
+1. 完成本子阶段的任务、专项验收和规定的回归。修改 Feng 编译器、runtime 或 host 行为时，须在 `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 上通过 `make test`。§8.1 仅在 `macos-arm64` 上运行 `make test`，Linux host 只执行专项验收。
+2. 提交变更和验收结果供人工 Review。
+3. 人工 Review 通过并明确批准后，方可进入下一子阶段；§8 全部通过前不得开始 §9。
 
-仅因外部原生机器或发行版镜像暂不可用而未完成的兼容性矩阵验收，在人工确认其不阻塞下一子阶段实现后，可与不依赖该验收结果的后续子阶段并行；对应 TODO 必须保持未完成，并在 §8.5 分发、CI 汇聚与安装实施前全部通过。该例外不适用于脚本、产物、代码、测试或当前可用环境中的验收缺口，也不代表前一子阶段已经完成。
+外部原生机器或发行版镜像不可用时，经人工确认，可并行实施不依赖相关兼容性验收的后续任务。未完成项须保持为 TODO，并在 §8.5 前通过。此规则不适用于脚本、产物、代码、测试或当前环境中的验收缺口。
 
 ### 8.1 可独立验证的精简工具链
 
