@@ -327,5 +327,8 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 ### 8.6 支持交叉编译
 
+项目命令的参数行为以 [feng-cli.md](../docs/feng-cli.md#项目平台选择统一规则) 为准。
+
 - [ ] 支持 `--platform=<platform>`，按目标平台选择对应的 runtime 和 SDK / sysroot，并完成交叉编译。
 - [ ] 支持 `--sysroot=<path>`；传入时使用该 sysroot，不使用目标平台的默认 sysroot。
+- [ ] 验证 `feng build`、`feng run`、`feng pack` 传入或省略 `--platform`、`--sysroot` 时均符合上述规则。
