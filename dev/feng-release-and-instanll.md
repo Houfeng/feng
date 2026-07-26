@@ -327,7 +327,7 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [x] `feng build` 支持可重复的 `--platform=<platform>`；仅当最终选择一个平台时支持 `--sysroot=<path>`，多平台与单一 `--sysroot` 同时使用必须报错；按项目平台选择统一规则完成构建。
 - [x] `feng run` 固定构建并运行 host 平台，不支持 `--platform` 和 `--sysroot`。
 - [x] `feng pack` 支持可重复的 `--platform=<platform>`；仅当最终选择一个平台时支持 `--sysroot=<path>`，多平台与单一 `--sysroot` 同时使用必须报错；将目标平台集合和显式 sysroot 传给项目构建流程并触发 release 构建，全部构建成功后再打包，不重复实现构建逻辑。
-- [ ] 人工 Review。
+- [x] 人工 Review。
 
 ### 8.6 CI 构建脚本
 
