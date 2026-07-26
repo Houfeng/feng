@@ -503,6 +503,10 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 
 替换瞬间允许旧 published 与新 candidate 短暂重叠。旧 published 在最后一个读者释放后立即回收。
 
+每个 analysis session 必须持有其全部源码路径，路径生命周期覆盖 candidate 构建、发布、并发查询和最终回收。
+同一源码对应的 `FengCliLoadedSource.path` 与 `FengProgram.path` 必须绑定到同一份由 session 持有的持久路径；
+禁止在 session 发布后继续引用 document snapshot、project context 或其他临时构建对象中的路径。
+
 可淘汰的派生数据，例如模糊搜索临时表、JSON buffer 和 repair AST，应使用明确容量或请求生命周期，不得通过清除 `last_successful_analysis` 回收内存。
 
 ---

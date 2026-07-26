@@ -153,11 +153,9 @@ typedef struct FengLspAnalysisSession {
     size_t source_count;
     char **bundle_paths;
     size_t bundle_count;
-    /* Owned copies of source file paths for project sessions. The sources[]
-     * array borrows path pointers from the project context, which is disposed
-     * before the session is used. We steal source_paths from the context (set
-     * context.source_paths = NULL before dispose) so they outlive the context.
-     * session_dispose() frees these strings and the array. */
+    /* Owns every source path for the session lifetime. Each sources[i].path
+     * and its program->path, when present, are bound to the corresponding
+     * string in this array. session_dispose() frees the strings and array. */
     char **owned_source_paths;
     size_t owned_source_path_count;
     char *manifest_path;
@@ -2139,6 +2137,36 @@ static bool append_project_error(FengLspAnalysisSession *session,
                               message);
 }
 
+/* Binds every loaded source and program to its session-owned path. */
+static bool session_bind_owned_source_paths(FengLspAnalysisSession *session) {
+    size_t index;
+
+    if (session == NULL ||
+        session->source_count != session->owned_source_path_count ||
+        (session->source_count > 0U &&
+         (session->sources == NULL || session->owned_source_paths == NULL))) {
+        return false;
+    }
+    for (index = 0U; index < session->source_count; ++index) {
+        const char *owned_path = session->owned_source_paths[index];
+
+        if (owned_path == NULL || session->sources[index].path == NULL ||
+            strcmp(owned_path, session->sources[index].path) != 0) {
+            return false;
+        }
+    }
+
+    for (index = 0U; index < session->source_count; ++index) {
+        const char *owned_path = session->owned_source_paths[index];
+
+        session->sources[index].path = owned_path;
+        if (session->sources[index].program != NULL) {
+            session->sources[index].program->path = owned_path;
+        }
+    }
+    return true;
+}
+
 static bool build_standalone_session(const FengLspService *service,
                                      const FengLspDocument *document,
                                      FengLspAnalysisSession *session) {
@@ -2190,7 +2218,7 @@ static bool build_standalone_session(const FengLspService *service,
             return false;
         }
         session->owned_source_path_count = 1U;
-        session->sources[0].path = session->owned_source_paths[0];
+        return session_bind_owned_source_paths(session);
     }
     return true;
 }
@@ -2270,15 +2298,17 @@ static bool build_project_session(const FengLspService *service,
                                                              &outputs);
     free(overlays);
     feng_cli_deps_resolved_dispose(&resolved);
-    /* session->sources[i].path borrows pointers from context.source_paths.
-     * Steal the source_paths array before disposing the context so those
-     * pointers remain valid for the lifetime of the session. session_dispose()
-     * will free them via owned_source_paths. Clear source_count too so
-     * feng_cli_project_context_dispose does not iterate a NULL array. */
+    /* Transfer project paths to the session before disposing the context. */
     session->owned_source_paths = context.source_paths;
     session->owned_source_path_count = context.source_count;
     context.source_paths = NULL;
     context.source_count = 0U;
+    if (session->sources != NULL && session->source_count > 0U &&
+        !session_bind_owned_source_paths(session)) {
+        feng_cli_project_context_dispose(&context);
+        feng_cli_project_error_dispose(&error);
+        return false;
+    }
     feng_cli_project_context_dispose(&context);
     feng_cli_project_error_dispose(&error);
     return true;
