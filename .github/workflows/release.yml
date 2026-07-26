@@ -1,0 +1,224 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Validate release version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+
+      - name: Validate VERSION and tag
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n '1p' VERSION)"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "error: invalid VERSION: ${version}" >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "error: tag ${GITHUB_REF_NAME} does not match VERSION ${version}" >&2
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+  component:
+    name: Build ${{ matrix.platform }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-14
+          - platform: linux-x64-gnu
+            runner: ubuntu-latest
+          - platform: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout with release assets
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Install Linux build dependencies
+        if: startsWith(matrix.platform, 'linux-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y binutils clang file make python3 zip unzip
+
+      - name: Run full regression
+        shell: bash
+        run: make test
+
+      - name: Stage native release component
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/release_component.sh \
+            --platform="${{ matrix.platform }}" \
+            --output=build/release-component
+          tar -cf "build/release-component-${{ matrix.platform }}.tar" \
+            -C build/release-component \
+            "${{ matrix.platform }}"
+
+      - name: Upload native release component
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-component-${{ matrix.platform }}
+          path: build/release-component-${{ matrix.platform }}.tar
+          if-no-files-found: error
+          compression-level: 0
+
+  assemble:
+    name: Assemble release packages
+    needs:
+      - prepare
+      - component
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout with release assets
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Install assembly dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y binutils file zip
+
+      - name: Download native release components
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-component-*
+          path: build/release-component-tars
+          merge-multiple: true
+
+      - name: Extract and assemble release packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/release-components build/release-packages
+          for archive in build/release-component-tars/*.tar; do
+            tar -xf "${archive}" -C build/release-components
+          done
+          scripts/release.sh \
+            --version="${{ needs.prepare.outputs.version }}" \
+            --components=build/release-components \
+            --output=build/release-packages \
+            --archive-tool=toolchain/llvm/linux-x64-gnu/bin/llvm-ar
+
+      - name: Upload complete release packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-packages
+          path: build/release-packages/*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  verify:
+    name: Verify ${{ matrix.platform }} package
+    needs:
+      - prepare
+      - assemble
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-arm64
+            runner: macos-14
+          - platform: linux-x64-gnu
+            runner: ubuntu-latest
+          - platform: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout verification scripts
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+
+      - name: Install Linux verification dependencies
+        if: startsWith(matrix.platform, 'linux-')
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y file python3 unzip
+
+      - name: Download complete release packages
+        uses: actions/download-artifact@v8
+        with:
+          name: release-packages
+          path: build/release-packages
+
+      - name: Verify clean installation
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="feng-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}"
+          mkdir -p build/release-install
+          unzip -q "build/release-packages/${package}.zip" \
+            -d build/release-install
+          scripts/verify_release_install.sh \
+            --root="build/release-install/${package}" \
+            --version="${{ needs.prepare.outputs.version }}"
+
+  publish:
+    name: Publish GitHub Release
+    if: github.event_name == 'push'
+    needs:
+      - prepare
+      - verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download verified release packages
+        uses: actions/download-artifact@v8
+        with:
+          name: release-packages
+          path: release-packages
+
+      - name: Publish immutable tag assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_flags=(
+            --verify-tag
+            --generate-notes
+            --title "Feng ${{ needs.prepare.outputs.version }}"
+          )
+          if [[ "${{ needs.prepare.outputs.version }}" == *-* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "${GITHUB_REF_NAME}" \
+            release-packages/*.zip \
+            "${release_flags[@]}"

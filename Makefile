@@ -2,6 +2,8 @@ override CC := clang
 CPPFLAGS ?= -Isrc -Ithird_party/miniz
 CFLAGS ?= -std=c11 -O2 -Wall -Wextra -Werror -pedantic
 LDFLAGS ?=
+FENG_CLI_VERSION := $(strip $(shell sed -n '1p' VERSION))
+CPPFLAGS += -DFENG_CLI_VERSION=\"$(FENG_CLI_VERSION)\"
 # Phase 1B cycle collector relies on pthread (recursive mutex). Unit tests link
 # runtime objects directly, so they also link the vendored unwinder archive.
 RUNTIME_LDLIBS ?= $(LIBUNWIND_LIB) -lpthread
@@ -181,7 +183,7 @@ endef
 $(foreach platform,$(RUNTIME_PLATFORMS),$(eval $(call DEFINE_RUNTIME_PLATFORM,$(platform))))
 RUNTIME_PLATFORM_OBJS := $(foreach platform,$(RUNTIME_PLATFORMS),$(RUNTIME_OBJS_$(platform)))
 
-.PHONY: all cli runtime test test-normal smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints incremental-build-test test-sanitize clean
+.PHONY: all cli runtime test test-normal smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test test-sanitize clean
 
 all: cli runtime
 
@@ -193,7 +195,7 @@ test: test-sanitize test-normal
 
 test-normal:
 	$(MAKE) clean
-	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints incremental-build-test
+	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -242,6 +244,9 @@ perf-constraints: cli
 
 incremental-build-test: all
 	./scripts/run_make_incremental.sh
+
+release-scripts-test: all
+	./scripts/run_release_scripts.sh
 
 std-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng run ./std_test
@@ -305,6 +310,8 @@ endif
 $(BIN_DIR)/feng: $(CLI_OBJS) | toolchain-layout
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(CLI_OBJS) $(LDFLAGS) $(LSP_LDLIBS) $(SEMANTIC_LDLIBS) -o $@
+
+$(OBJ_DIR)/src/cli/main.o: VERSION
 
 $(BIN_DIR)/test_lexer: $(TEST_LEXER_OBJS)
 	@mkdir -p $(BIN_DIR)

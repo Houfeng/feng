@@ -5,7 +5,7 @@
 #include "cli/tool/tool.h"
 
 #ifndef FENG_CLI_VERSION
-#define FENG_CLI_VERSION "0.1.0"
+#error "FENG_CLI_VERSION must be defined from the repository VERSION file"
 #endif
 
 static void feng_cli_print_version(const char *program, FILE *stream) {

@@ -36,7 +36,8 @@ feng-<version>-<platform>.zip
 
 - `feng` 后紧跟 `<version>`，明确表示该版本为 Feng 自身版本；`<platform>` 作为 host 平台后缀。
 - `<platform>` 取值见 [feng-os-arch.md](../docs/feng-os-arch.md)，不在本文件重复定义。首版 Linux 工具运行于 GNU/glibc host，因此发行包名称必须包含 `-gnu`。
-- `<version>` 与 git tag 一致，形如 `0.1.0`、`0.2.0-rc.1`，不带前缀 `v`
+- 仓库根目录 `VERSION` 是 Feng 版本的唯一来源，内容为不带 `v` 前缀的单行 `<version>`；`feng --version`、分发包名和包内 `VERSION` 必须与其一致。
+- 发布 tag 固定为 `v<version>`，其中 `<version>` 与仓库根 `VERSION` 完全一致，形如 `0.1.0`、`0.2.0-rc.1`。
 
 示例：`feng-0.1.0-macos-arm64.zip`、`feng-0.1.0-linux-x64-gnu.zip`
 
@@ -150,7 +151,7 @@ feng-<version>-<platform>/
 
 ### 6.1 触发
 
-GitHub Actions 工作流 `release.yml` 由推送形如 `v*.*.*` 的 tag 触发，并支持 `workflow_dispatch` 手动触发用于试发。
+GitHub Actions 工作流 `release.yml` 由推送形如 `v*.*.*` 的 tag 触发，并支持 `workflow_dispatch` 手动触发用于试发。tag 触发时必须校验 tag 去掉 `v` 后与仓库根 `VERSION` 完全一致，并在全部构建与汇聚成功后创建 GitHub Release；带 `-<prerelease>` 后缀的版本必须发布为 GitHub prerelease，不得成为在线安装脚本解析的 latest stable release。手动试发读取同一份 `VERSION`，执行相同构建、汇聚与校验并上传完整发行包 workflow artifact，但不得创建 GitHub Release。
 
 ### 6.2 原生构件 matrix
 
@@ -174,15 +175,15 @@ strategy:
 
 1. checkout 仓库（含 git lfs 管理的精简 LLVM 与 Linux sysroot）
 2. 安装当前 host 的构建依赖
-3. 执行 `scripts/build_libunwind.sh`：macOS 生成一份，Linux 分别使用同架构 GNU / musl sysroot 生成两份 ABI 匹配的维护性中间产物
-4. 执行现有 native `make cli` 生成当前 host 的 `build/bin/feng`；每个任务只生成 §6.2 分配给它的一份或两份 runtime / unwind，三个任务合计产出五份最终 `libfeng_runtime.a` 与内容一致的一套公共 `build/include/`，但不向 Makefile 增加用于交叉构建 Feng 可执行文件自身的 `TARGET_PLATFORM`
-5. 校验 `feng`、runtime 与 unwind 的格式和 CPU 架构，执行当前 host 全量 `make test`
-6. 上传 `release-component-<host-platform>`，其中 `feng` 与 runtime 均带明确平台元信息，公共头文件同时记录内容摘要
+3. 直接使用仓库 `extlib/<platform>/libfeng_unwind.a` 中已经预构建并校验的五个平台产物；CI 不重复执行 `scripts/build_libunwind.sh`
+4. 执行当前 host 全量 `make test`，生成 `build/bin/feng`、公共 `build/include/` 及 §6.2 分配给当前任务的一份或两份 runtime；三个任务合计产出五份最终 `libfeng_runtime.a`，但不向 Makefile 增加用于交叉构建 Feng 可执行文件自身的 `TARGET_PLATFORM`
+5. 校验 `feng` 的格式和 CPU 架构，并逐一校验 runtime 归档成员的格式和 CPU 架构
+6. 生成并上传 `release-component-<host-platform>`。构件解压后的固定结构为 `<host-platform>/bin/feng`、`<host-platform>/lib/<runtime-platform>/libfeng_runtime.a`、`<host-platform>/include/` 和 `<host-platform>/SHA256SUMS`；`SHA256SUMS` 记录上述全部文件的 SHA-256。macOS 构件包含一份 runtime，两个 Linux 构件分别包含同架构的 GNU 与 musl runtime。
 
 汇聚任务：
 
-1. 等待并下载三份原生构件，不执行任何跨 host 编译
-2. 校验五份 runtime 的完整平台互异且完整，公共头文件内容一致
+1. 等待并下载三份原生构件到同一构件根目录，不执行任何跨 host 编译
+2. 校验每组 `SHA256SUMS`、三个 host 的 Feng 可执行文件格式和 CPU 架构、五份 runtime 的对象格式和 CPU 架构、runtime 平台集合完整且没有重复，并校验三组公共头文件内容一致
 3. 针对每个 host 平台选择对应 `feng` 与 `toolchain/llvm/<host-platform>/`
 4. 将五份 runtime、四份 Linux sysroot、公共头文件及 `VERSION` 放入每一份分发目录
 5. 执行 `scripts/release.sh` 的纯组装与校验入口，生成三份规范命名的 zip
@@ -225,9 +226,10 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 - 不接受参数，固定行为：
   1. 自动检测目标平台（按 `uname -s` / `uname -m`），解析 GitHub Releases 最新 tag 为版本
   2. 拼接下载 URL，下载 zip 到系统临时目录（`$TMPDIR`，回退 `/tmp`）
-  3. 解压到 `$HOME/.feng/`
-  4. 自动将 `$HOME/.feng/bin` 加入 `PATH`（自动写入 `$SHELL` 对应启动脚本；仅在需要管理员权限时提示用户授权）
-- 失败时必须清理半成品目录，不留残文件。
+  3. 校验压缩包仅包含预期顶层目录、包内 `VERSION` 与 release tag 一致，并解压到 staging 目录
+  4. 原子替换 `$HOME/.feng/`；已有安装在新目录替换成功前保持可用
+  5. 自动将 `$HOME/.feng/bin` 加入 `PATH`，按 `$SHELL` 写入对应启动脚本且不重复追加
+- 安装目录替换或 shell 启动脚本更新失败时必须回滚已有安装，并清理下载文件、staging 与备份，不留半成品。
 
 ## 8 实施 TODO
 
@@ -333,8 +335,11 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 本阶段编写以下文件：
 
-- [ ] `.github/workflows/release.yml`：在三个发行平台构建 Feng 编译器和对应 runtime，运行校验与 `make test`，上传构件；全部成功后调用 `scripts/release.sh` 并发布。
-- [ ] `scripts/release.sh`：汇总三组构件，校验五份 runtime 和公共头文件，生成三个发行包。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
-- [ ] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载对应发行包，完成安装和 `PATH` 配置；失败时不留半成品。
+- [x] 新增仓库根 `VERSION`，并由 Makefile 将其作为 `feng --version` 的唯一版本来源；发布 tag、可执行文件版本、发行包名和包内版本必须一致。
+- [x] `.github/workflows/release.yml`：在三个发行平台构建 Feng 编译器和对应 runtime，运行构件校验与 `make test`，通过 `scripts/release_component.sh` 上传三组固定结构的原生构件；全部成功后调用 `scripts/release.sh`。tag 触发时发布 GitHub Release，手动触发时只上传完整发行包 workflow artifact。
+- [x] `scripts/release.sh`：按 §6.3 的构件结构汇总三组构件，校验构件摘要、三个 Feng 可执行文件、五份 runtime 和公共头文件，在临时目录完整生成并校验三个发行包后再移入输出目录。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
+- [x] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载并校验对应发行包，原子完成安装和 `PATH` 配置；失败时回滚已有安装且不留半成品。
+- [x] 新增可独立执行的发行与安装脚本回归测试，覆盖正常汇聚、输入校验失败、安装成功、重复安装和失败回滚，并纳入 `make test`。
+- [x] 新增可独立执行的干净安装验收脚本，验证版本、完整目录、平台构件、bundled LLVM、项目 `build` / `run` 以及 LSP / DAP 基础协议；CI 在对应原生 runner 解压各自发行包后执行。
 - [ ] 在三个干净发行平台安装并验证 `feng --version`、`build`、`run`、`lsp`、`dap`、bundled LLVM、目录结构、平台构件和相对定位。
 - [ ] 人工 Review。
