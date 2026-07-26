@@ -1,47 +1,47 @@
 Usage:
-  feng <command>  [options]                  项目命令
-  feng <files>... [options]                  直编命令
+  feng <command>  [options]                  Project command
+  feng <files>... [options]                  Direct compile
 
 Project:
-  feng init       [<name>]                   初始化项目名
-                  [--target=bin|lib]         初始化项目类型
-  feng build      [<path>]                   项目根目录
-                  [--release]                是否 release 模式
-                  [--platform=<platform>]... 目标平台
-                  [--sysroot=<path>]         目标平台依赖
-                  [--keep-ir]                是否保留 IR
-  feng check      [<path>]                   项目根目录
-                  [--format=text|json]       输入格式
-  feng run        [<path>]                   项目根目录
-                  [--release]                是否 Release 模式
-                  [--keep-ir]                是否保留 IR
-                  [-- <args>...]             运行参数
-  feng clean      [<path>]                   项目根目录
-  feng pack       [<path>]                   项目根目录
-                  [--platform=<platform>]... 目标平台
-                  [--sysroot=<path>]         目标平台依赖
-  feng deps       add     <pkg-name>         包名称
-                          [<path>]           项目根目录
-  feng deps       remove  <pkg-name>         包名称
-                          [<path>]           项目根目录
-  feng deps       install [<path>]           项目根目录
-                          [--force]          是否强重新安装
+  feng init       [<name>]                   Project name
+                  [--target=bin|lib]         Project type
+  feng build      [<path>]                   Project root
+                  [--release]                Release mode
+                  [--platform=<platform>]... Target platform
+                  [--sysroot=<path>]         Target dependencies
+                  [--keep-ir]                Keep IR
+  feng check      [<path>]                   Project root
+                  [--format=text|json]       Input format
+  feng run        [<path>]                   Project root
+                  [--release]                Release mode
+                  [--keep-ir]                Keep IR
+                  [-- <args>...]             Program arguments
+  feng clean      [<path>]                   Project root
+  feng pack       [<path>]                   Project root
+                  [--platform=<platform>]... Target platform
+                  [--sysroot=<path>]         Target dependencies
+  feng deps       add     <pkg-name>         Package name
+                          [<path>]           Project root
+  feng deps       remove  <pkg-name>         Package name
+                          [<path>]           Project root
+  feng deps       install [<path>]           Project root
+                          [--force]          Force reinstall
 
 Compile:
-  feng <files>... [--target=bin|lib]         项目类型
-                  [--platform=<platform>]    目标平台
-                  [--sysroot=<path>]         目标平台依赖
-                  [--out=<dir>]              输出目录
-                  [--name=<artifact>]        产物名称
-                  [--release]                是否 Release 模式
-                  [--keep-ir]                是否保留 IR
-                  [--pkg=<fb-path>]...       包列表
-                  [--lib=<lib-path>]...      库列表
+  feng <files>... [--target=bin|lib]         Project type
+                  [--platform=<platform>]    Target platform
+                  [--sysroot=<path>]         Target dependencies
+                  [--out=<dir>]              Output directory
+                  [--name=<artifact>]        Artifact name
+                  [--release]                Release mode
+                  [--keep-ir]                Keep IR
+                  [--pkg=<fb-path>]...       Package list
+                  [--lib=<lib-path>]...      Library list
 
 Protocol:
-  feng lsp        [--stdio]                  启动 LSP
-  feng dap        [--stdio]                  启动 DAP
+  feng lsp        [--stdio]                  Start LSP
+  feng dap        [--stdio]                  Start DAP
 
 Global:
-  -h, --help                                 Display help message.
-  -v, --version                              Display version information.
+  -h, --help                                 Display help message
+  -v, --version                              Display version information
