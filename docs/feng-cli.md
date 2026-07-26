@@ -137,7 +137,7 @@ feng dap [--stdio]
 | 场景 | `feng.fm.platform` 已声明 | 未声明 |
 |---|---|---|
 | `feng build` 不传 `--platform` | 按声明顺序构建全部平台 | 只构建 host |
-| `feng build --platform=<platform>` | 只构建指定平台，但该平台必须在声明中 | 允许任意合法且工具链可用的平台 |
+| `feng build --platform=...` | 只构建指定平台集合，所有值必须在声明中 | 可选择任意合法且工具链可用的平台 |
 | `feng run` | 固定运行 host；host 不在声明中则报错 | 固定构建并运行 host |
 | `feng pack` 不传 `--platform` | 先以 release 模式构建全部声明平台，再打包全部平台 | 先构建 host，再打包 host |
 | `feng pack --platform=...` | 只构建并打包指定平台，所有值必须在声明中 | 可选择任意合法且工具链可用的平台 |
@@ -190,14 +190,14 @@ feng init [<name>] [--target=<bin|lib>]
 用法:
 
 ```text
-feng build [<path>] [--release] [--platform=<platform>] [--sysroot=<路径>]
+feng build [<path>] [--release] [--platform=<platform>]... [--sysroot=<路径>]
 ```
 
 选项:
 
 - `<path>`: 若省略,使用当前目录下的 `feng.fm`;若为目录,使用该目录下的 `feng.fm`;若为文件,支持直接传入 `feng.fm` 路径;若最终找不到 `feng.fm`,报错退出。
 - `--release`: 以发布模式构建,透传给当前项目编译器,并同样用于递归构建本地 `target: "lib"` 依赖。
-- `--platform=<platform>`: 指定本次项目构建的唯一完整目标平台，不能重复；选择与校验规则以本节“项目平台选择统一规则”为准。每个值都必须是 [feng-os-arch.md](feng-os-arch.md) 中的完整规范标识；不得从 `--sysroot` 推断 GNU / musl。
+- `--platform=<platform>`: 指定本次项目构建的完整目标平台，可重复出现；选择与校验规则以本节“项目平台选择统一规则”为准。每个值都必须是 [feng-os-arch.md](feng-os-arch.md) 中的完整规范标识；不得从 `--sysroot` 推断 GNU / musl。
 - `--sysroot=<路径>`: 显式指定目标 sysroot，只允许本次命令最终构建一个目标平台时使用。需要为多个平台使用不同 sysroot 时，应分别执行多次带单一 `--platform` 的 `feng build`。
 
 说明:
@@ -399,7 +399,7 @@ Usage:
 
 Project:
   feng init       [<name>] [--target=<bin|lib>]
-  feng build      [<path>] [--release] [--platform=<platform>] [--sysroot=<path>]
+  feng build      [<path>] [--release] [--platform=<platform>]... [--sysroot=<path>]
   feng check      [<path>] [--format=<text|json>]
   feng run        [<path>] [--release] [-- <program-args>...]
   feng clean      [<path>]

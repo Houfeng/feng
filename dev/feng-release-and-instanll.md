@@ -321,9 +321,10 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 项目命令的参数行为以 [feng-cli.md](../docs/feng-cli.md#项目平台选择统一规则) 为准。
 
-- [ ] 支持 `--platform=<platform>` 和 `--sysroot=<path>`，按目标平台选择对应的 runtime 和 SDK / sysroot，并完成交叉编译。
-- [ ] `feng build` 与 `feng pack` 支持 `--sysroot=<path>`；传入时使用该 sysroot，不使用目标平台的默认 sysroot。
-- [ ] 验证 `feng build`、`feng run`、`feng pack` 传入或省略 `--platform`、`--sysroot` 时均符合上述规则。
+- [ ] 直编支持 `--platform=<platform>` 和 `--sysroot=<path>`。
+- [ ] `feng build` 支持可重复的 `--platform=<platform>`；仅当最终选择一个平台时支持 `--sysroot=<path>`，多平台与单一 `--sysroot` 同时使用必须报错；按项目平台选择统一规则完成构建。
+- [ ] `feng run` 固定构建并运行 host 平台，不支持 `--platform` 和 `--sysroot`。
+- [ ] `feng pack` 支持可重复的 `--platform=<platform>`；仅当最终选择一个平台时支持 `--sysroot=<path>`，多平台与单一 `--sysroot` 同时使用必须报错；将目标平台集合和显式 sysroot 传给项目构建流程并触发 release 构建，全部构建成功后再打包，不重复实现构建逻辑。
 - [ ] 人工 Review。
 
 ### 8.6 CI 构建脚本
