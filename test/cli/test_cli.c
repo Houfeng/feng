@@ -8610,6 +8610,9 @@ static void test_lsp_hover_type_category_survives_failed_edit(void) {
     char *shutdown;
     char *output;
     FILE *input;
+    FILE *capture;
+    int input_pipe[2];
+    pid_t writer;
     unsigned int line;
     unsigned int character;
     char *remove_error = NULL;
@@ -8651,18 +8654,34 @@ static void test_lsp_hover_type_category_survives_failed_edit(void) {
                              character);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = temp_file();
-    ASSERT(input != NULL);
-    write_lsp_message(input, initialize);
-    write_lsp_message(input, did_open);
-    write_lsp_message(input, hover_before);
-    write_lsp_message(input, did_change);
-    write_lsp_message(input, hover_after);
-    write_lsp_message(input, shutdown);
-    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
-
-    output = run_lsp_server_capture(input);
+    ASSERT(pipe(input_pipe) == 0);
+    writer = fork();
+    ASSERT(writer >= 0);
+    if (writer == 0) {
+        close(input_pipe[0]);
+        input = fdopen(input_pipe[1], "wb");
+        ASSERT(input != NULL);
+        write_lsp_message(input, initialize);
+        write_lsp_message(input, did_open);
+        write_lsp_message(input, hover_before);
+        ASSERT(fflush(input) == 0);
+        (void)usleep(30U * 1000U);
+        write_lsp_message(input, did_change);
+        write_lsp_message(input, hover_after);
+        write_lsp_message(input, shutdown);
+        write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
+        fclose(input);
+        _exit(0);
+    }
+    close(input_pipe[1]);
+    input = fdopen(input_pipe[0], "rb");
+    capture = temp_file();
+    ASSERT(input != NULL && capture != NULL);
+    ASSERT(feng_lsp_server_run(input, capture, stderr) == 0);
+    output = read_text_stream(capture);
+    fclose(capture);
     fclose(input);
+    ASSERT(waitpid(writer, NULL, 0) == writer);
     ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
     ASSERT(strstr(output, "\"id\":3,\"result\":null") == NULL);
     ASSERT(count_occurrences(output,
