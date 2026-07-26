@@ -57,11 +57,17 @@ jobs:
         with:
           lfs: true
 
+      - name: Install macOS build environment
+        run: brew install llvm@21
+
       - name: Configure build version
         run: scripts/release_version.sh set --version="${{ needs.prepare.outputs.version }}"
 
-      - name: Verify macOS build environment
-        run: scripts/release_ci_environment.sh --platform=macos-arm64
+      - name: Configure and verify macOS build environment
+        run: >-
+          scripts/release_ci_environment.sh
+          --platform=macos-arm64
+          --path-output="${GITHUB_PATH}"
 
       - name: Run full regression
         run: make test
@@ -202,8 +208,14 @@ jobs:
         with:
           lfs: false
 
-      - name: Verify macOS build environment
-        run: scripts/release_ci_environment.sh --platform=macos-arm64
+      - name: Install macOS build environment
+        run: brew install llvm@21
+
+      - name: Configure and verify macOS build environment
+        run: >-
+          scripts/release_ci_environment.sh
+          --platform=macos-arm64
+          --path-output="${GITHUB_PATH}"
 
       - name: Download complete release packages
         uses: actions/download-artifact@v8
