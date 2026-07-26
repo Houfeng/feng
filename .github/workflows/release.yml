@@ -1,48 +1,66 @@
-name: Release
+name: CI and Release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches:
+      - "**"
+  create:
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: ci-release-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   prepare:
-    name: Validate release version
+    name: Resolve build version
+    if: >-
+      github.event_name != 'create' ||
+      (github.ref_type == 'tag' && startsWith(github.ref_name, 'v'))
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      release: ${{ steps.version.outputs.release }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           lfs: false
 
-      - name: Validate VERSION and tag
+      - name: Resolve and validate build version
         id: version
         shell: bash
         run: |
           set -euo pipefail
-          version="$(sed -n '1p' VERSION)"
-          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
-            echo "error: invalid VERSION: ${version}" >&2
-            exit 1
+          tag=""
+          is_release=false
+          if [[ "${GITHUB_EVENT_NAME}" == "create" &&
+                "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            tag="${GITHUB_REF_NAME}"
+            if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+              echo "error: invalid release tag: ${tag}" >&2
+              exit 1
+            fi
+            version="${tag#v}"
+            is_release=true
+          else
+            version="$(sed -n '1p' VERSION)"
           fi
-          if [[ "${GITHUB_EVENT_NAME}" == "push" && "${GITHUB_REF_NAME}" != "v${version}" ]]; then
-            echo "error: tag ${GITHUB_REF_NAME} does not match VERSION ${version}" >&2
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "error: invalid build version: ${version}" >&2
             exit 1
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+          echo "release=${is_release}" >> "${GITHUB_OUTPUT}"
 
   component:
-    name: Build ${{ matrix.platform }}
+    name: Test and build ${{ matrix.platform }}
     needs: prepare
     strategy:
       fail-fast: false
@@ -61,6 +79,10 @@ jobs:
         with:
           lfs: true
 
+      - name: Configure build version
+        shell: bash
+        run: printf '%s\n' "${{ needs.prepare.outputs.version }}" > VERSION
+
       - name: Install Linux build dependencies
         if: startsWith(matrix.platform, 'linux-')
         shell: bash
@@ -74,6 +96,7 @@ jobs:
         run: make test
 
       - name: Stage native release component
+        if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           set -euo pipefail
@@ -85,6 +108,7 @@ jobs:
             "${{ matrix.platform }}"
 
       - name: Upload native release component
+        if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v7
         with:
           name: release-component-${{ matrix.platform }}
@@ -94,6 +118,7 @@ jobs:
 
   assemble:
     name: Assemble release packages
+    if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
     needs:
       - prepare
       - component
@@ -103,6 +128,10 @@ jobs:
         uses: actions/checkout@v6
         with:
           lfs: true
+
+      - name: Configure build version
+        shell: bash
+        run: printf '%s\n' "${{ needs.prepare.outputs.version }}" > VERSION
 
       - name: Install assembly dependencies
         shell: bash
@@ -142,6 +171,7 @@ jobs:
 
   verify:
     name: Verify ${{ matrix.platform }} package
+    if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
     needs:
       - prepare
       - assemble
@@ -190,7 +220,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    if: github.event_name == 'push'
+    if: needs.prepare.outputs.release == 'true'
     needs:
       - prepare
       - verify
@@ -204,21 +234,43 @@ jobs:
           name: release-packages
           path: release-packages
 
-      - name: Publish immutable tag assets
+      - name: Publish verified tag assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         shell: bash
         run: |
           set -euo pipefail
+          tag="${{ needs.prepare.outputs.tag }}"
+          expected_prerelease=false
           release_flags=(
             --verify-tag
             --generate-notes
             --title "Feng ${{ needs.prepare.outputs.version }}"
           )
           if [[ "${{ needs.prepare.outputs.version }}" == *-* ]]; then
+            expected_prerelease=true
             release_flags+=(--prerelease)
           fi
-          gh release create "${GITHUB_REF_NAME}" \
-            release-packages/*.zip \
-            "${release_flags[@]}"
+          if release_state="$(gh release view "${tag}" \
+            --json isDraft,isImmutable,isPrerelease \
+            --jq '[.isDraft, .isImmutable, .isPrerelease] | @tsv' \
+            2>/dev/null)"; then
+            read -r is_draft is_immutable is_prerelease <<< "${release_state}"
+            [[ "${is_immutable}" == "false" ]] || {
+              echo "error: existing GitHub Release is immutable: ${tag}" >&2
+              exit 1
+            }
+            [[ "${is_prerelease}" == "${expected_prerelease}" ]] || {
+              echo "error: existing GitHub Release prerelease state does not match ${tag}" >&2
+              exit 1
+            }
+            gh release upload "${tag}" release-packages/*.zip
+            if [[ "${is_draft}" == "true" ]]; then
+              gh release edit "${tag}" --draft=false
+            fi
+          else
+            gh release create "${tag}" \
+              release-packages/*.zip \
+              "${release_flags[@]}"
+          fi

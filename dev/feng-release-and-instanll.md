@@ -36,8 +36,8 @@ feng-<version>-<platform>.zip
 
 - `feng` 后紧跟 `<version>`，明确表示该版本为 Feng 自身版本；`<platform>` 作为 host 平台后缀。
 - `<platform>` 取值见 [feng-os-arch.md](../docs/feng-os-arch.md)，不在本文件重复定义。首版 Linux 工具运行于 GNU/glibc host，因此发行包名称必须包含 `-gnu`。
-- 仓库根目录 `VERSION` 是 Feng 版本的唯一来源，内容为不带 `v` 前缀的单行 `<version>`；`feng --version`、分发包名和包内 `VERSION` 必须与其一致。
-- 发布 tag 固定为 `v<version>`，其中 `<version>` 与仓库根 `VERSION` 完全一致，形如 `0.1.0`、`0.2.0-rc.1`。
+- 仓库根目录 `VERSION` 是普通分支、pull request、手动试发和本地构建的默认版本来源，内容为不带 `v` 前缀的单行 `<version>`。
+- 正式发布以 GitHub 仓库中新建的 Git tag 为权威版本来源。tag 固定为 `v<version>`，形如 `v0.1.0`、`v0.2.0-rc.1`；工作流去掉 `v` 后注入 `feng --version`，并用于分发包名和包内 `VERSION`。本地创建后 push 与直接在 GitHub 创建等价。
 
 示例：`feng-0.1.0-macos-arm64.zip`、`feng-0.1.0-linux-x64-gnu.zip`
 
@@ -151,7 +151,9 @@ feng-<version>-<platform>/
 
 ### 6.1 触发
 
-GitHub Actions 工作流 `release.yml` 由推送形如 `v*.*.*` 的 tag 触发，并支持 `workflow_dispatch` 手动触发用于试发。tag 触发时必须校验 tag 去掉 `v` 后与仓库根 `VERSION` 完全一致，并在全部构建与汇聚成功后创建 GitHub Release；带 `-<prerelease>` 后缀的版本必须发布为 GitHub prerelease，不得成为在线安装脚本解析的 latest stable release。手动试发读取同一份 `VERSION`，执行相同构建、汇聚与校验并上传完整发行包 workflow artifact，但不得创建 GitHub Release。
+GitHub Actions 工作流 `release.yml` 由所有分支的 push、所有 pull request 以及 GitHub 仓库的 Git ref `create` 事件触发，并支持 `workflow_dispatch` 手动触发。`create` 事件仅在新建符合 `v<version>` 的 tag 时进入正式发布；新建 branch 或非版本 tag 不执行构建。每次发布只新建一个版本 tag，不批量创建或 push 多个 tag。所有有效触发方式均须在三个原生 runner 完成构建和 `make test`；普通分支 push 与 pull request 到此结束，不上传发布构件，也不汇聚发行包。
+
+版本 tag 的 `create` 事件表示正式发布：工作流读取 tag，校验其符合 `v<version>` 并以去掉 `v` 后的内容作为权威发布版本，注入 Feng 构建并用于发行包名和包内 `VERSION`。三个原生构建和测试全部成功后才上传原生构件、汇聚并验证三份发行包。若该 tag 尚无 GitHub Release，工作流创建 Release 并上传发行包；若直接在 GitHub 创建 tag 时已同时生成同名 Release，则校验 prerelease 状态后向该 Release 上传发行包，draft Release 在上传成功后发布。已发布且不可变的 Release 无法追加资产，工作流必须报错。带 `-<prerelease>` 后缀的版本必须创建为 GitHub prerelease，不得成为在线安装脚本解析的 latest stable release。`workflow_dispatch` 用于试发，读取根 `VERSION`，执行相同构建、汇聚与校验并上传完整发行包 workflow artifact，但不得创建或更新 GitHub Release。
 
 ### 6.2 原生构件 matrix
 
@@ -167,7 +169,7 @@ strategy:
 
 三个 matrix 项互不交叉构建 Feng 可执行文件，只在对应 native host 产出当前 host 平台的 `feng`。macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架构 GNU / musl sysroot 生成该架构的两份 runtime。各 host 平台的精简 LLVM 产物位于仓库 `toolchain/llvm/<host-platform>/`，四份 Linux 目标 sysroot 位于仓库 `toolchain/sysroot/<platform>/`，均由 git lfs 管理。
 
-三个原生构件任务全部成功后，独立汇聚任务下载三份构件并组装三份 `feng-<version>-<platform>.zip`。因此发布流程不要求 Linux 生成 macOS runtime，也不要求 macOS 或任一 Linux host 单独产生完整 release zip。
+版本 tag 创建或手动试发的三个原生构件任务全部成功后，独立汇聚任务下载三份构件并组装三份 `feng-<version>-<platform>.zip`。因此发布流程不要求 Linux 生成 macOS runtime，也不要求 macOS 或任一 Linux host 单独产生完整 release zip。普通分支 push 与 pull request 不执行该汇聚任务。
 
 ### 6.3 原生构建与汇聚步骤
 
@@ -177,8 +179,8 @@ strategy:
 2. 安装当前 host 的构建依赖
 3. 直接使用仓库 `extlib/<platform>/libfeng_unwind.a` 中已经预构建并校验的五个平台产物；CI 不重复执行 `scripts/build_libunwind.sh`
 4. 执行当前 host 全量 `make test`，生成 `build/bin/feng`、公共 `build/include/` 及 §6.2 分配给当前任务的一份或两份 runtime；三个任务合计产出五份最终 `libfeng_runtime.a`，但不向 Makefile 增加用于交叉构建 Feng 可执行文件自身的 `TARGET_PLATFORM`
-5. 校验 `feng` 的格式和 CPU 架构，并逐一校验 runtime 归档成员的格式和 CPU 架构
-6. 生成并上传 `release-component-<host-platform>`。构件解压后的固定结构为 `<host-platform>/bin/feng`、`<host-platform>/lib/<runtime-platform>/libfeng_runtime.a`、`<host-platform>/include/` 和 `<host-platform>/SHA256SUMS`；`SHA256SUMS` 记录上述全部文件的 SHA-256。macOS 构件包含一份 runtime，两个 Linux 构件分别包含同架构的 GNU 与 musl runtime。
+5. 仅在版本 tag 创建或手动试发时校验 `feng` 的格式和 CPU 架构，并逐一校验 runtime 归档成员的格式和 CPU 架构
+6. 仅在版本 tag 创建或手动试发时生成并上传 `release-component-<host-platform>`。构件解压后的固定结构为 `<host-platform>/bin/feng`、`<host-platform>/lib/<runtime-platform>/libfeng_runtime.a`、`<host-platform>/include/` 和 `<host-platform>/SHA256SUMS`；`SHA256SUMS` 记录上述全部文件的 SHA-256。macOS 构件包含一份 runtime，两个 Linux 构件分别包含同架构的 GNU 与 musl runtime。
 
 汇聚任务：
 
@@ -335,8 +337,8 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 本阶段编写以下文件：
 
-- [x] 新增仓库根 `VERSION`，并由 Makefile 将其作为 `feng --version` 的唯一版本来源；发布 tag、可执行文件版本、发行包名和包内版本必须一致。
-- [x] `.github/workflows/release.yml`：在三个发行平台构建 Feng 编译器和对应 runtime，运行构件校验与 `make test`，通过 `scripts/release_component.sh` 上传三组固定结构的原生构件；全部成功后调用 `scripts/release.sh`。tag 触发时发布 GitHub Release，手动触发时只上传完整发行包 workflow artifact。
+- [x] 新增仓库根 `VERSION`，并由 Makefile 将其作为普通构建的默认版本来源；GitHub 仓库中新建的版本 tag 是正式发布的权威版本来源，工作流将其注入构建，确保可执行文件版本、发行包名和包内版本一致。
+- [x] `.github/workflows/release.yml`：所有分支 push 和 pull request 均在三个发行平台构建 Feng 编译器和对应 runtime 并运行 `make test`；版本 tag 创建与手动试发在全部构建和测试成功后，通过 `scripts/release_component.sh` 校验并上传三组固定结构的原生构件，再调用 `scripts/release.sh`。版本 tag 创建后，正式发布任务创建或更新同名 GitHub Release；手动试发只上传 workflow artifact。
 - [x] `scripts/release.sh`：按 §6.3 的构件结构汇总三组构件，校验构件摘要、三个 Feng 可执行文件、五份 runtime 和公共头文件，在临时目录完整生成并校验三个发行包后再移入输出目录。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
 - [x] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载并校验对应发行包，原子完成安装和 `PATH` 配置；失败时回滚已有安装且不留半成品。
 - [x] 新增可独立执行的发行与安装脚本回归测试，覆盖正常汇聚、输入校验失败、安装成功、重复安装和失败回滚，并纳入 `make test`。
