@@ -29,7 +29,7 @@ Project:
 
 Compile:
   feng <files>... [--target=bin|lib]
-                  [--platform=<platform>]...
+                  [--platform=<platform>]
                   [--sysroot=<path>]
                   [--out=<dir>]
                   [--name=<artifact>]
