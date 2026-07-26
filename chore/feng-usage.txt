@@ -1,47 +1,47 @@
 Usage:
-  feng <command>  [options]
-  feng <files>... [options]
+  feng <command>  [options]                  项目命令
+  feng <files>... [options]                  直编命令
 
 Project:
-  feng init       [<name>]
-                  [--target=bin|lib]
-  feng build      [<path>]
-                  [--release]
-                  [--platform=<platform>]...
-                  [--sysroot=<path>]
-                  [--keep-ir]
-  feng check      [<path>]
-                  [--format=text|json]
-  feng run        [<path>]
-                  [--release]
-                  [--keep-ir]
-                  [-- <args>...]
-  feng clean      [<path>]
-  feng pack       [<path>]
-                  [--platform=<platform>]...
-                  [--sysroot=<path>]
-  feng deps       add     <pkg-name>
-                          [<path>]
-  feng deps       remove  <pkg-name>
-                          [<path>]
-  feng deps       install [<path>]
-                          [--force]
+  feng init       [<name>]                   初始化项目名
+                  [--target=bin|lib]         初始化项目类型
+  feng build      [<path>]                   项目根目录
+                  [--release]                是否 release 模式
+                  [--platform=<platform>]... 目标平台
+                  [--sysroot=<path>]         目标平台依赖
+                  [--keep-ir]                是否保留 IR
+  feng check      [<path>]                   项目根目录
+                  [--format=text|json]       输入格式
+  feng run        [<path>]                   项目根目录
+                  [--release]                是否 Release 模式
+                  [--keep-ir]                是否保留 IR
+                  [-- <args>...]             运行参数
+  feng clean      [<path>]                   项目根目录
+  feng pack       [<path>]                   项目根目录
+                  [--platform=<platform>]... 目标平台
+                  [--sysroot=<path>]         目标平台依赖
+  feng deps       add     <pkg-name>         包名称
+                          [<path>]           项目根目录
+  feng deps       remove  <pkg-name>         包名称
+                          [<path>]           项目根目录
+  feng deps       install [<path>]           项目根目录
+                          [--force]          是否强重新安装
 
 Compile:
-  feng <files>... [--target=bin|lib]
-                  [--platform=<platform>]
-                  [--sysroot=<path>]
-                  [--out=<dir>]
-                  [--name=<artifact>]
-                  [--release]
-                  [--keep-ir]
-                  [--pkg=<fb-path>]...
-                  [--lib=<lib-path>]...
+  feng <files>... [--target=bin|lib]         项目类型
+                  [--platform=<platform>]    目标平台
+                  [--sysroot=<path>]         目标平台依赖
+                  [--out=<dir>]              输出目录
+                  [--name=<artifact>]        产物名称
+                  [--release]                是否 Release 模式
+                  [--keep-ir]                是否保留 IR
+                  [--pkg=<fb-path>]...       包列表
+                  [--lib=<lib-path>]...      库列表
 
 Protocol:
-  feng lsp        [--stdio]
-  feng dap        [--stdio]
+  feng lsp        [--stdio]                  启动 LSP
+  feng dap        [--stdio]                  启动 DAP
 
 Global:
-  -h, --help      Display this message.
-  -v, --version   Display version information.
+  -h, --help                                 Display help message.
+  -v, --version                              Display version information.
