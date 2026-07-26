@@ -321,6 +321,7 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 项目命令的参数行为以 [feng-cli.md](../docs/feng-cli.md#项目平台选择统一规则) 为准。
 
+- [ ] 按 [feng-std-extlib-build.md](./feng-std-extlib-build.md) 更新标准库各 extlib 的预构建脚本，在三个发行 host 构建环境完整预构建并校验五个目标平台版本，供后续交叉编译验证使用。
 - [ ] 直编支持 `--platform=<platform>` 和 `--sysroot=<path>`。
 - [ ] `feng build` 支持可重复的 `--platform=<platform>`；仅当最终选择一个平台时支持 `--sysroot=<path>`，多平台与单一 `--sysroot` 同时使用必须报错；按项目平台选择统一规则完成构建。
 - [ ] `feng run` 固定构建并运行 host 平台，不支持 `--platform` 和 `--sysroot`。
