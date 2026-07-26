@@ -394,36 +394,52 @@ feng tool check [--target=<bin|lib>] <file> [more files...]
 
 ```text
 Usage:
-  feng <command>  [<options>]
-  feng <files...> [<options>]
+  feng <command>  [options]
+  feng <files>... [options]
 
 Project:
-  feng init       [<name>] [--target=<bin|lib>]
-  feng build      [<path>] [--release] [--platform=<platform>]... [--sysroot=<path>]
-  feng check      [<path>] [--format=<text|json>]
-  feng run        [<path>] [--release] [-- <program-args>...]
+  feng init       [<name>]
+                  [--target=bin|lib]
+  feng build      [<path>]
+                  [--release]
+                  [--platform=<platform>]...
+                  [--sysroot=<path>]
+                  [--keep-ir]
+  feng check      [<path>]
+                  [--format=text|json]
+  feng run        [<path>]
+                  [--release]
+                  [--keep-ir]
+                  [-- <args>...]
   feng clean      [<path>]
-  feng pack       [<path>] [--platform=<platform>]... [--sysroot=<path>]
-  feng deps       <add|remove|install> ...
+  feng pack       [<path>]
+                  [--platform=<platform>]...
+                  [--sysroot=<path>]
+  feng deps       add     <pkg-name>
+                          [<path>]
+  feng deps       remove  <pkg-name>
+                          [<path>]
+  feng deps       install [<path>]
+                          [--force]
 
 Compile:
-  feng <files...> [--target=<bin|lib>]
+  feng <files>... [--target=bin|lib]
                   [--platform=<platform>]
                   [--sysroot=<path>]
                   [--out=<dir>]
                   [--name=<artifact>]
                   [--release]
                   [--keep-ir]
-                  [--pkg=<fb-path>...]
-                  [--lib=<lib-path>...]
-
-Global:
-  -h, --help      Display this message.
-  -v, --version   Display version information.
+                  [--pkg=<fb-path>]...
+                  [--lib=<lib-path>]...
 
 Protocol:
   feng lsp        [--stdio]
   feng dap        [--stdio]
+
+Global:
+  -h, --help      Display this message.
+  -v, --version   Display version information.
 ```
 
 - 用户显式执行 `--help` 时,上述帮助文本输出到 stdout。
