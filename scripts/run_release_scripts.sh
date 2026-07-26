@@ -245,36 +245,116 @@ create_single_failure_mv() {
   chmod 0755 "${mock_path}"
 }
 
+# Create a PATH gh replacement for deterministic publication regression cases.
+create_mock_gh() {
+  local mock_path="$1"
+
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    printf '%s\n' 'set -euo pipefail'
+    printf '%s\n' 'printf "%s\\n" "$*" >> "${MOCK_GH_LOG}"'
+    printf '%s\n' 'case "$1" in'
+    printf '%s\n' '  api)'
+    printf '%s\n' '    case "${MOCK_GH_MODE}" in'
+    printf '%s\n' '      missing)'
+    printf '%s\n' '        echo "gh: Not Found (HTTP 404)" >&2'
+    printf '%s\n' '        exit 1'
+    printf '%s\n' '        ;;'
+    printf '%s\n' '      auth)'
+    printf '%s\n' '        echo "gh: authentication failed (HTTP 401)" >&2'
+    printf '%s\n' '        exit 1'
+    printf '%s\n' '        ;;'
+    printf '%s\n' '      draft)'
+    printf '%s\n' '        printf "true\\tfalse\\tfalse\\n"'
+    printf '%s\n' '        ;;'
+    printf '%s\n' '      *)'
+    printf '%s\n' '        exit 2'
+    printf '%s\n' '        ;;'
+    printf '%s\n' '    esac'
+    printf '%s\n' '    ;;'
+    printf '%s\n' '  release)'
+    printf '%s\n' '    exit 0'
+    printf '%s\n' '    ;;'
+    printf '%s\n' '  *)'
+    printf '%s\n' '    exit 2'
+    printf '%s\n' '    ;;'
+    printf '%s\n' 'esac'
+  } > "${mock_path}"
+  chmod 0755 "${mock_path}"
+}
+
 trap cleanup EXIT
 configure_sha256_tool
 mkdir -p "${PROJECT_ROOT}/build"
 WORK_ROOT="$(mktemp -d "${PROJECT_ROOT}/build/release-scripts-test.XXXXXX")"
 printf '%s\n' 'int feng_release_test_object;' > "${WORK_ROOT}/source.c"
+
+VERSION_TEST_FILE="${WORK_ROOT}/VERSION"
+printf '%s\n' '0.1.0' > "${VERSION_TEST_FILE}"
+VERSION_OUTPUT="$("${SCRIPT_DIR}/release_version.sh" resolve \
+  --event-name=push \
+  --ref-type=branch \
+  --ref-name=main \
+  --version-file="${VERSION_TEST_FILE}")"
+[[ "${VERSION_OUTPUT}" == $'version=0.1.0\ntag=\nrelease=false' ]] ||
+  die "branch build version resolution returned unexpected values"
+VERSION_OUTPUT="$("${SCRIPT_DIR}/release_version.sh" resolve \
+  --event-name=create \
+  --ref-type=tag \
+  --ref-name=v1.2.3-rc.1 \
+  --version-file="${VERSION_TEST_FILE}")"
+[[ "${VERSION_OUTPUT}" == $'version=1.2.3-rc.1\ntag=v1.2.3-rc.1\nrelease=true' ]] ||
+  die "release tag version resolution returned unexpected values"
+if "${SCRIPT_DIR}/release_version.sh" resolve \
+  --event-name=create \
+  --ref-type=tag \
+  --ref-name=release-1.2.3 \
+  --version-file="${VERSION_TEST_FILE}" \
+  >/dev/null 2>&1; then
+  die "release version resolution accepted an invalid tag"
+fi
+"${SCRIPT_DIR}/release_version.sh" set \
+  --version=2.0.0 \
+  --version-file="${VERSION_TEST_FILE}"
+[[ "$(sed -n '1p' "${VERSION_TEST_FILE}")" == "2.0.0" ]] ||
+  die "release version configuration did not update the version file"
+
 NATIVE_PLATFORM="$(source "${SCRIPT_DIR}/host_platform.sh"; feng_detect_host_platform)"
 [[ "$("${PROJECT_ROOT}/build/bin/feng" --version)" == "feng $(sed -n '1p' "${PROJECT_ROOT}/VERSION")" ]] ||
   die "Makefile-built Feng version does not match VERSION"
 "${SCRIPT_DIR}/release_component.sh" \
   --platform="${NATIVE_PLATFORM}" \
-  --output="${WORK_ROOT}/native-component" >/dev/null
-[[ -f "${WORK_ROOT}/native-component/${NATIVE_PLATFORM}/SHA256SUMS" ]] ||
-  die "native release component staging did not create SHA256SUMS"
+  --archive="${WORK_ROOT}/release-component-${NATIVE_PLATFORM}.tar" >/dev/null
+tar -tf "${WORK_ROOT}/release-component-${NATIVE_PLATFORM}.tar" |
+  grep -qx "${NATIVE_PLATFORM}/SHA256SUMS" ||
+  die "native release component archive did not contain SHA256SUMS"
 
 SOURCE_ROOT="${WORK_ROOT}/source-root"
 COMPONENTS_ROOT="${WORK_ROOT}/components"
+COMPONENT_ARCHIVES_ROOT="${WORK_ROOT}/component-archives"
 OUTPUT_ROOT="${WORK_ROOT}/release"
-mkdir -p "${SOURCE_ROOT}" "${COMPONENTS_ROOT}" "${OUTPUT_ROOT}"
+mkdir -p \
+  "${SOURCE_ROOT}" \
+  "${COMPONENTS_ROOT}" \
+  "${COMPONENT_ARCHIVES_ROOT}" \
+  "${OUTPUT_ROOT}"
 create_source_root "${SOURCE_ROOT}"
 create_components "${COMPONENTS_ROOT}"
+for host_platform in "${HOST_PLATFORMS[@]}"; do
+  tar -cf \
+    "${COMPONENT_ARCHIVES_ROOT}/release-component-${host_platform}.tar" \
+    -C "${COMPONENTS_ROOT}" "${host_platform}"
+done
 
-"${SCRIPT_DIR}/release.sh" \
+"${SCRIPT_DIR}/release_assemble.sh" \
   --version=0.1.0 \
-  --components="${COMPONENTS_ROOT}" \
+  --component-archives="${COMPONENT_ARCHIVES_ROOT}" \
   --output="${OUTPUT_ROOT}" \
   --source-root="${SOURCE_ROOT}" \
   --archive-tool="${PROJECT_ROOT}/build/toolchain/llvm/bin/llvm-ar"
 [[ "$(find "${OUTPUT_ROOT}" -type f -name '*.zip' | wc -l | tr -d ' ')" == "3" ]] ||
   die "release assembly did not create exactly three archives"
-if "${SCRIPT_DIR}/release.sh" \
+if "${SCRIPT_DIR}/release_assemble.sh" \
   --version=0.1.0.rc.1 \
   --components="${COMPONENTS_ROOT}" \
   --output="${WORK_ROOT}/invalid-version-output" \
@@ -293,7 +373,7 @@ BAD_COMPONENTS="${WORK_ROOT}/bad-components"
 BAD_OUTPUT="${WORK_ROOT}/bad-output"
 cp -R "${COMPONENTS_ROOT}" "${BAD_COMPONENTS}"
 printf '%s\n' 'corrupt' >> "${BAD_COMPONENTS}/linux-x64-gnu/include/feng_runtime.h"
-if "${SCRIPT_DIR}/release.sh" \
+if "${SCRIPT_DIR}/release_assemble.sh" \
   --version=0.1.0 \
   --components="${BAD_COMPONENTS}" \
   --output="${BAD_OUTPUT}" \
@@ -311,6 +391,57 @@ INSTALL_HOME="${WORK_ROOT}/home"
 INSTALL_TEMP="${WORK_ROOT}/install-temp"
 mkdir -p "${MOCK_BIN}" "${INSTALL_HOME}" "${INSTALL_TEMP}"
 create_mock_curl "${MOCK_BIN}/curl"
+create_mock_gh "${MOCK_BIN}/gh"
+
+GH_LOG="${WORK_ROOT}/gh.log"
+: > "${GH_LOG}"
+GH_REPO="Houfeng/feng" \
+MOCK_GH_LOG="${GH_LOG}" \
+MOCK_GH_MODE=draft \
+PATH="${MOCK_BIN}:${PATH}" \
+  "${SCRIPT_DIR}/release_publish_github.sh" \
+    --tag=v0.1.0 \
+    --version=0.1.0 \
+    --packages="${OUTPUT_ROOT}" >/dev/null
+grep -q '^release upload v0.1.0 ' "${GH_LOG}" ||
+  die "GitHub publication did not upload to an existing release"
+grep -q '^release edit v0.1.0 --draft=false ' "${GH_LOG}" ||
+  die "GitHub publication did not publish an existing draft"
+
+RC_PACKAGES="${WORK_ROOT}/rc-packages"
+mkdir -p "${RC_PACKAGES}"
+for host_platform in "${HOST_PLATFORMS[@]}"; do
+  cp \
+    "${OUTPUT_ROOT}/feng-0.1.0-${host_platform}.zip" \
+    "${RC_PACKAGES}/feng-0.1.0-rc.1-${host_platform}.zip"
+done
+: > "${GH_LOG}"
+GH_REPO="Houfeng/feng" \
+MOCK_GH_LOG="${GH_LOG}" \
+MOCK_GH_MODE=missing \
+PATH="${MOCK_BIN}:${PATH}" \
+  "${SCRIPT_DIR}/release_publish_github.sh" \
+    --tag=v0.1.0-rc.1 \
+    --version=0.1.0-rc.1 \
+    --packages="${RC_PACKAGES}" >/dev/null
+grep -q '^release create v0.1.0-rc.1 .* --prerelease$' "${GH_LOG}" ||
+  die "GitHub publication did not create a prerelease"
+
+: > "${GH_LOG}"
+if GH_REPO="Houfeng/feng" \
+   MOCK_GH_LOG="${GH_LOG}" \
+   MOCK_GH_MODE=auth \
+   PATH="${MOCK_BIN}:${PATH}" \
+     "${SCRIPT_DIR}/release_publish_github.sh" \
+       --tag=v0.1.0 \
+       --version=0.1.0 \
+       --packages="${OUTPUT_ROOT}" \
+       >/dev/null 2>&1; then
+  die "GitHub publication treated an authentication error as a missing release"
+fi
+if grep -q '^release create ' "${GH_LOG}"; then
+  die "GitHub publication created a release after an authentication error"
+fi
 
 for iteration in 1 2; do
   HOME="${INSTALL_HOME}" \
@@ -347,4 +478,4 @@ if find "${INSTALL_HOME}" -maxdepth 1 \
   die "installer failure left staging or backup paths"
 fi
 
-echo "release scripts: assembly, validation, install, idempotency, and rollback passed"
+echo "release scripts: version, component, assembly, publication, install, idempotency, and rollback passed"

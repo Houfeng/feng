@@ -32,47 +32,25 @@ jobs:
         with:
           lfs: false
 
-      - name: Resolve and validate build version
+      - name: Resolve build version
         id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag=""
-          is_release=false
-          if [[ "${GITHUB_EVENT_NAME}" == "create" &&
-                "${GITHUB_REF_TYPE}" == "tag" ]]; then
-            tag="${GITHUB_REF_NAME}"
-            if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
-              echo "error: invalid release tag: ${tag}" >&2
-              exit 1
-            fi
-            version="${tag#v}"
-            is_release=true
-          else
-            version="$(sed -n '1p' VERSION)"
-          fi
-          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
-            echo "error: invalid build version: ${version}" >&2
-            exit 1
-          fi
-          echo "version=${version}" >> "${GITHUB_OUTPUT}"
-          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
-          echo "release=${is_release}" >> "${GITHUB_OUTPUT}"
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: >-
+          scripts/release_version.sh resolve
+          --event-name="${EVENT_NAME}"
+          --ref-type="${REF_TYPE}"
+          --ref-name="${REF_NAME}"
+          --output="${GITHUB_OUTPUT}"
 
-  component:
-    name: Test and build ${{ matrix.platform }}
+  component_macos:
+    name: Test and build macos-arm64
     needs: prepare
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: macos-arm64
-            runner: macos-14
-          - platform: linux-x64-gnu
-            runner: ubuntu-latest
-          - platform: linux-arm64-gnu
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
       - name: Checkout with release assets
         uses: actions/checkout@v6
@@ -80,32 +58,75 @@ jobs:
           lfs: true
 
       - name: Configure build version
-        shell: bash
-        run: printf '%s\n' "${{ needs.prepare.outputs.version }}" > VERSION
+        run: scripts/release_version.sh set --version="${{ needs.prepare.outputs.version }}"
 
-      - name: Install Linux build dependencies
-        if: startsWith(matrix.platform, 'linux-')
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y binutils clang file make zip unzip
+      - name: Verify macOS build environment
+        run: scripts/release_ci_environment.sh --platform=macos-arm64
 
       - name: Run full regression
-        shell: bash
         run: make test
 
-      - name: Stage native release component
+      - name: Create native release component
         if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
-        shell: bash
-        run: |
-          set -euo pipefail
-          scripts/release_component.sh \
-            --platform="${{ matrix.platform }}" \
-            --output=build/release-component
-          tar -cf "build/release-component-${{ matrix.platform }}.tar" \
-            -C build/release-component \
-            "${{ matrix.platform }}"
+        run: >-
+          scripts/release_component.sh
+          --platform=macos-arm64
+          --archive=build/release-component-macos-arm64.tar
+
+      - name: Upload native release component
+        if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-component-macos-arm64
+          path: build/release-component-macos-arm64.tar
+          if-no-files-found: error
+          compression-level: 0
+
+  component_linux:
+    name: Test and build ${{ matrix.platform }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64-gnu
+            runner: ubuntu-latest
+          - platform: linux-arm64-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ubuntu:26.04
+      options: --cap-add=SYS_PTRACE --security-opt seccomp=unconfined
+    steps:
+      - name: Install Ubuntu build environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: >-
+          apt-get update &&
+          apt-get install -y --no-install-recommends
+          binutils ca-certificates clang file git git-lfs libc6-dev
+          libclang-rt-dev lld make nodejs unzip zip
+
+      - name: Checkout with release assets
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Configure build version
+        run: scripts/release_version.sh set --version="${{ needs.prepare.outputs.version }}"
+
+      - name: Verify Ubuntu build environment
+        run: scripts/release_ci_environment.sh --platform="${{ matrix.platform }}"
+
+      - name: Run full regression
+        run: make test
+
+      - name: Create native release component
+        if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+        run: >-
+          scripts/release_component.sh
+          --platform="${{ matrix.platform }}"
+          --archive="build/release-component-${{ matrix.platform }}.tar"
 
       - name: Upload native release component
         if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
@@ -121,45 +142,42 @@ jobs:
     if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
     needs:
       - prepare
-      - component
+      - component_macos
+      - component_linux
     runs-on: ubuntu-latest
+    container:
+      image: ubuntu:26.04
     steps:
+      - name: Install Ubuntu assembly environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: >-
+          apt-get update &&
+          apt-get install -y --no-install-recommends
+          binutils ca-certificates file git git-lfs unzip zip
+
       - name: Checkout with release assets
         uses: actions/checkout@v6
         with:
           lfs: true
 
       - name: Configure build version
-        shell: bash
-        run: printf '%s\n' "${{ needs.prepare.outputs.version }}" > VERSION
-
-      - name: Install assembly dependencies
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y binutils file zip
+        run: scripts/release_version.sh set --version="${{ needs.prepare.outputs.version }}"
 
       - name: Download native release components
         uses: actions/download-artifact@v8
         with:
           pattern: release-component-*
-          path: build/release-component-tars
+          path: build/release-component-archives
           merge-multiple: true
 
-      - name: Extract and assemble release packages
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p build/release-components build/release-packages
-          for archive in build/release-component-tars/*.tar; do
-            tar -xf "${archive}" -C build/release-components
-          done
-          scripts/release.sh \
-            --version="${{ needs.prepare.outputs.version }}" \
-            --components=build/release-components \
-            --output=build/release-packages \
-            --archive-tool=toolchain/llvm/linux-x64-gnu/bin/llvm-ar
+      - name: Assemble release packages
+        run: >-
+          scripts/release_assemble.sh
+          --version="${{ needs.prepare.outputs.version }}"
+          --component-archives=build/release-component-archives
+          --output=build/release-packages
+          --archive-tool=toolchain/llvm/linux-x64-gnu/bin/llvm-ar
 
       - name: Upload complete release packages
         uses: actions/upload-artifact@v7
@@ -169,7 +187,37 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  verify:
+  verify_macos:
+    name: Verify macos-arm64 package
+    if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+    needs:
+      - prepare
+      - assemble
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - name: Checkout verification scripts
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+
+      - name: Verify macOS build environment
+        run: scripts/release_ci_environment.sh --platform=macos-arm64
+
+      - name: Download complete release packages
+        uses: actions/download-artifact@v8
+        with:
+          name: release-packages
+          path: build/release-packages
+
+      - name: Verify clean installation
+        run: >-
+          scripts/release_verify_install.sh
+          --archive="build/release-packages/feng-${{ needs.prepare.outputs.version }}-macos-arm64.zip"
+          --version="${{ needs.prepare.outputs.version }}"
+
+  verify_linux:
     name: Verify ${{ matrix.platform }} package
     if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
     needs:
@@ -179,26 +227,31 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-arm64
-            runner: macos-14
           - platform: linux-x64-gnu
             runner: ubuntu-latest
           - platform: linux-arm64-gnu
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    container:
+      image: ubuntu:26.04
+      options: --cap-add=SYS_PTRACE --security-opt seccomp=unconfined
     steps:
+      - name: Install Ubuntu verification environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: >-
+          apt-get update &&
+          apt-get install -y --no-install-recommends
+          binutils ca-certificates clang file git git-lfs libc6-dev
+          libclang-rt-dev lld make nodejs unzip zip
+
       - name: Checkout verification scripts
         uses: actions/checkout@v6
         with:
           lfs: false
 
-      - name: Install Linux verification dependencies
-        if: startsWith(matrix.platform, 'linux-')
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y file unzip
+      - name: Verify Ubuntu build environment
+        run: scripts/release_ci_environment.sh --platform="${{ matrix.platform }}"
 
       - name: Download complete release packages
         uses: actions/download-artifact@v8
@@ -207,70 +260,39 @@ jobs:
           path: build/release-packages
 
       - name: Verify clean installation
-        shell: bash
-        run: |
-          set -euo pipefail
-          package="feng-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}"
-          mkdir -p build/release-install
-          unzip -q "build/release-packages/${package}.zip" \
-            -d build/release-install
-          scripts/verify_release_install.sh \
-            --root="build/release-install/${package}" \
-            --version="${{ needs.prepare.outputs.version }}"
+        run: >-
+          scripts/release_verify_install.sh
+          --archive="build/release-packages/feng-${{ needs.prepare.outputs.version }}-${{ matrix.platform }}.zip"
+          --version="${{ needs.prepare.outputs.version }}"
 
   publish:
     name: Publish GitHub Release
     if: needs.prepare.outputs.release == 'true'
     needs:
       - prepare
-      - verify
+      - verify_macos
+      - verify_linux
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Checkout publication script
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+
       - name: Download verified release packages
         uses: actions/download-artifact@v8
         with:
           name: release-packages
-          path: release-packages
+          path: build/release-packages
 
       - name: Publish verified tag assets
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          tag="${{ needs.prepare.outputs.tag }}"
-          expected_prerelease=false
-          release_flags=(
-            --verify-tag
-            --generate-notes
-            --title "Feng ${{ needs.prepare.outputs.version }}"
-          )
-          if [[ "${{ needs.prepare.outputs.version }}" == *-* ]]; then
-            expected_prerelease=true
-            release_flags+=(--prerelease)
-          fi
-          if release_state="$(gh release view "${tag}" \
-            --json isDraft,isImmutable,isPrerelease \
-            --jq '[.isDraft, .isImmutable, .isPrerelease] | @tsv' \
-            2>/dev/null)"; then
-            read -r is_draft is_immutable is_prerelease <<< "${release_state}"
-            [[ "${is_immutable}" == "false" ]] || {
-              echo "error: existing GitHub Release is immutable: ${tag}" >&2
-              exit 1
-            }
-            [[ "${is_prerelease}" == "${expected_prerelease}" ]] || {
-              echo "error: existing GitHub Release prerelease state does not match ${tag}" >&2
-              exit 1
-            }
-            gh release upload "${tag}" release-packages/*.zip
-            if [[ "${is_draft}" == "true" ]]; then
-              gh release edit "${tag}" --draft=false
-            fi
-          else
-            gh release create "${tag}" \
-              release-packages/*.zip \
-              "${release_flags[@]}"
-          fi
+        run: >-
+          scripts/release_publish_github.sh
+          --tag="${{ needs.prepare.outputs.tag }}"
+          --version="${{ needs.prepare.outputs.version }}"
+          --packages=build/release-packages

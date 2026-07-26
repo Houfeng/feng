@@ -155,19 +155,23 @@ GitHub Actions 工作流 `release.yml` 由所有分支的 push、所有 pull req
 
 版本 tag 的 `create` 事件表示正式发布：工作流读取 tag，校验其符合 `v<version>` 并以去掉 `v` 后的内容作为权威发布版本，注入 Feng 构建并用于发行包名和包内 `VERSION`。三个原生构建和测试全部成功后才上传原生构件、汇聚并验证三份发行包。若该 tag 尚无 GitHub Release，工作流创建 Release 并上传发行包；若直接在 GitHub 创建 tag 时已同时生成同名 Release，则校验 prerelease 状态后向该 Release 上传发行包，draft Release 在上传成功后发布。已发布且不可变的 Release 无法追加资产，工作流必须报错。带 `-<prerelease>` 后缀的版本必须创建为 GitHub prerelease，不得成为在线安装脚本解析的 latest stable release。`workflow_dispatch` 用于试发，读取根 `VERSION`，执行相同构建、汇聚与校验并上传完整发行包 workflow artifact，但不得创建或更新 GitHub Release。
 
+工作流 YAML 只声明触发条件、host runner / Linux job container、权限、任务依赖、执行条件与 artifact 传输，不实现版本解析、构件归档与解包、发行包汇聚、安装验收编排或 GitHub Release 状态处理。上述主要逻辑必须位于仓库内可独立执行和回归的脚本中，CI 与本机使用同一入口。脚本优先使用 shell；允许在确有必要时使用 Node.js，禁止使用 Python，采用其他实现语言前必须人工批准。
+
 ### 6.2 原生构件 matrix
 
 ```yaml
 strategy:
   matrix:
     include:
-      - { platform: macos-arm64,     runner: macos-14 }
-      - { platform: linux-x64-gnu,   runner: ubuntu-latest }
-      - { platform: linux-arm64-gnu, runner: ubuntu-24.04-arm }
+      - { platform: macos-arm64,     runner: macos-26,       environment: Xcode 26.3 }
+      - { platform: linux-x64-gnu,   runner: ubuntu-latest,  environment: ubuntu:26.04 }
+      - { platform: linux-arm64-gnu, runner: ubuntu-24.04-arm, environment: ubuntu:26.04 }
       # 扩展时追加：macos-x64、windows-x64 等
 ```
 
-三个 matrix 项互不交叉构建 Feng 可执行文件，只在对应 native host 产出当前 host 平台的 `feng`。macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架构 GNU / musl sysroot 生成该架构的两份 runtime。各 host 平台的精简 LLVM 产物位于仓库 `toolchain/llvm/<host-platform>/`，四份 Linux 目标 sysroot 位于仓库 `toolchain/sysroot/<platform>/`，均由 git lfs 管理。
+三个平台任务互不交叉构建 Feng 可执行文件，只在对应 native host 产出当前 host 平台的 `feng`。macOS 使用 `macos-26` arm64 runner，并显式选择与本机一致的 Xcode 26.3 和 macOS 26.2 SDK；Makefile 构建 Feng 实际调用的 host `clang` 必须为 Clang 21，不得与 Feng 编译 `.ff` 时使用的 bundled Clang 混为同一工具，也不得使用 runner 隐式默认 Xcode。两个 Linux host runner 分别提供 x64 与 arm64 CPU，在 `ubuntu:26.04` job container 中安装与本机 `feng-ubuntu-dev:26.04` 相同的构建依赖，并校验 Ubuntu 26.04、Clang 21 后再执行任务。未参与构建的 `cc` 不作为 CI 环境约束。Git、Git LFS 与 CA 证书可作为 CI checkout 的传输依赖额外安装，不改变构建工具基线。
+
+macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架构 GNU / musl sysroot 生成该架构的两份 runtime。各 host 平台的精简 LLVM 产物位于仓库 `toolchain/llvm/<host-platform>/`，四份 Linux 目标 sysroot 位于仓库 `toolchain/sysroot/<platform>/`，均由 git lfs 管理。
 
 版本 tag 创建或手动试发的三个原生构件任务全部成功后，独立汇聚任务下载三份构件并组装三份 `feng-<version>-<platform>.zip`。因此发布流程不要求 Linux 生成 macOS runtime，也不要求 macOS 或任一 Linux host 单独产生完整 release zip。普通分支 push 与 pull request 不执行该汇聚任务。
 
@@ -190,7 +194,7 @@ LSP / DAP 行为由第 4 步 `make test` 中的原生用例验证，干净安装
 2. 校验每组 `SHA256SUMS`、三个 host 的 Feng 可执行文件格式和 CPU 架构、五份 runtime 的对象格式和 CPU 架构、runtime 平台集合完整且没有重复，并校验三组公共头文件内容一致
 3. 针对每个 host 平台选择对应 `feng` 与 `toolchain/llvm/<host-platform>/`
 4. 将五份 runtime、四份 Linux sysroot、公共头文件及 `VERSION` 放入每一份分发目录
-5. 执行 `scripts/release.sh` 的纯组装与校验入口，生成三份规范命名的 zip
+5. 执行 `scripts/release_assemble.sh` 的纯组装与校验入口，生成三份规范命名的 zip
 6. 上传到 GitHub Release 对应 tag
 
 toolchain 精简产物在**本地维护**：开发者使用 LLVM、musl 与 GNU sysroot 的 fetch / trim / build 维护脚本产出各平台精简结果，提交到仓库（git lfs）。CI 只需 checkout 后从仓库目录复制，不做任何精简。这样 CI 构建步骤简、快，且不依赖上游下载站点在发布时可达。
@@ -348,8 +352,9 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 本阶段编写以下文件：
 
 - [x] 新增仓库根 `VERSION`，并由 Makefile 将其作为普通构建的默认版本来源；GitHub 仓库中新建的版本 tag 是正式发布的权威版本来源，工作流将其注入构建，确保可执行文件版本、发行包名和包内版本一致。
-- [x] `.github/workflows/release.yml`：所有分支 push 和 pull request 均在三个发行平台构建 Feng 编译器和对应 runtime 并运行 `make test`；版本 tag 创建与手动试发在全部构建和测试成功后，通过 `scripts/release_component.sh` 校验并上传三组固定结构的原生构件，再调用 `scripts/release.sh`。版本 tag 创建后，正式发布任务创建或更新同名 GitHub Release；手动试发只上传 workflow artifact。
-- [x] `scripts/release.sh`：按 §6.3 的构件结构汇总三组构件，校验构件摘要、三个 Feng 可执行文件、五份 runtime 和公共头文件，在临时目录完整生成并校验三个发行包后再移入输出目录。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
+- [x] `.github/workflows/release.yml`：所有分支 push 和 pull request 均在三个发行平台构建 Feng 编译器和对应 runtime 并运行 `make test`；版本 tag 创建与手动试发在全部构建和测试成功后，通过 `scripts/release_component.sh` 校验并上传三组固定结构的原生构件，再调用 `scripts/release_assemble.sh`。版本 tag 创建后，正式发布任务通过独立 shell 创建或更新同名 GitHub Release；手动试发只上传 workflow artifact。工作流自身只保留环境和任务声明，主要逻辑不以内联 shell 实现。
+- [x] `scripts/release_component.sh`、`scripts/release_assemble.sh`、`scripts/release_verify_install.sh` 统一使用 `release_` 前缀并可独立执行；版本解析、构件归档与解包、安装验收编排及 GitHub Release 发布也由可本机回归的 `release_` 前缀 shell 提供。
+- [x] `scripts/release_assemble.sh`：按 §6.3 的构件结构汇总三组构件，校验构件摘要、三个 Feng 可执行文件、五份 runtime 和公共头文件，在临时目录完整生成并校验三个发行包后再移入输出目录。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
 - [x] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载并校验对应发行包，原子完成安装和 `PATH` 配置；失败时回滚已有安装且不留半成品。
 - [x] 新增可独立执行的发行与安装脚本回归测试，覆盖正常汇聚、输入校验失败、安装成功、重复安装和失败回滚，并纳入 `make test`。
 - [x] 新增可独立执行的干净安装验收脚本，按 §6.3 验证版本、完整目录、平台构件、bundled LLVM 以及项目 `build` / `run`；CI 在对应原生 runner 解压各自发行包后执行。

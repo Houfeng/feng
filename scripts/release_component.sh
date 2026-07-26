@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 BUILD_ROOT="${PROJECT_ROOT}/build"
 OUTPUT_ROOT=""
+ARCHIVE_PATH=""
 PLATFORM=""
 WORK_ROOT=""
 SHA256_TOOL=""
@@ -21,8 +22,11 @@ usage() {
 Usage:
   scripts/release_component.sh \
     --platform=<host-platform> \
-    --output=<component-root> \
+    [--output=<component-root>] \
+    [--archive=<component-tar>] \
     [--build-root=<build-root>]
+
+At least one of --output or --archive is required.
 EOF
 }
 
@@ -151,6 +155,10 @@ while [[ "$#" -gt 0 ]]; do
       [[ -z "${OUTPUT_ROOT}" ]] || die "--output may only be specified once"
       OUTPUT_ROOT="${1#--output=}"
       ;;
+    --archive=*)
+      [[ -z "${ARCHIVE_PATH}" ]] || die "--archive may only be specified once"
+      ARCHIVE_PATH="${1#--archive=}"
+      ;;
     --build-root=*)
       [[ "${BUILD_ROOT}" == "${PROJECT_ROOT}/build" ]] ||
         die "--build-root may only be specified once"
@@ -170,9 +178,13 @@ done
 trap cleanup EXIT
 
 [[ -n "${PLATFORM}" ]] || die "--platform is required"
-[[ -n "${OUTPUT_ROOT}" ]] || die "--output is required"
+[[ -n "${OUTPUT_ROOT}" || -n "${ARCHIVE_PATH}" ]] ||
+  die "at least one of --output or --archive is required"
 configure_sha256_tool
 command -v file >/dev/null 2>&1 || die "missing required command: file"
+if [[ -n "${ARCHIVE_PATH}" ]]; then
+  command -v tar >/dev/null 2>&1 || die "missing required command: tar"
+fi
 
 # shellcheck source=host_platform.sh
 source "${SCRIPT_DIR}/host_platform.sh"
@@ -191,12 +203,24 @@ ARCHIVE_TOOL="${BUILD_ROOT}/toolchain/llvm/bin/llvm-ar"
 [[ -x "${ARCHIVE_TOOL}" ]] ||
   die "bundled llvm-ar is missing or not executable: ${ARCHIVE_TOOL}"
 
-mkdir -p "${OUTPUT_ROOT}"
-OUTPUT_ROOT="$(cd "${OUTPUT_ROOT}" && pwd)"
-FINAL_COMPONENT_ROOT="${OUTPUT_ROOT}/${PLATFORM}"
-[[ ! -e "${FINAL_COMPONENT_ROOT}" ]] ||
-  die "refusing to overwrite existing release component: ${FINAL_COMPONENT_ROOT}"
-WORK_ROOT="$(mktemp -d "${OUTPUT_ROOT}/.release-component.${PLATFORM}.XXXXXX")"
+mkdir -p "${BUILD_ROOT}"
+BUILD_ROOT="$(cd "${BUILD_ROOT}" && pwd)"
+if [[ -n "${OUTPUT_ROOT}" ]]; then
+  mkdir -p "${OUTPUT_ROOT}"
+  OUTPUT_ROOT="$(cd "${OUTPUT_ROOT}" && pwd)"
+  FINAL_COMPONENT_ROOT="${OUTPUT_ROOT}/${PLATFORM}"
+  [[ ! -e "${FINAL_COMPONENT_ROOT}" ]] ||
+    die "refusing to overwrite existing release component: ${FINAL_COMPONENT_ROOT}"
+fi
+if [[ -n "${ARCHIVE_PATH}" ]]; then
+  ARCHIVE_DIR="$(dirname "${ARCHIVE_PATH}")"
+  mkdir -p "${ARCHIVE_DIR}"
+  ARCHIVE_DIR="$(cd "${ARCHIVE_DIR}" && pwd)"
+  ARCHIVE_PATH="${ARCHIVE_DIR}/$(basename "${ARCHIVE_PATH}")"
+  [[ ! -e "${ARCHIVE_PATH}" ]] ||
+    die "refusing to overwrite existing component archive: ${ARCHIVE_PATH}"
+fi
+WORK_ROOT="$(mktemp -d "${BUILD_ROOT}/.release-component.${PLATFORM}.XXXXXX")"
 COMPONENT_ROOT="${WORK_ROOT}/${PLATFORM}"
 mkdir -p "${COMPONENT_ROOT}/bin" "${COMPONENT_ROOT}/include"
 cp "${BUILD_ROOT}/bin/feng" "${COMPONENT_ROOT}/bin/feng"
@@ -242,7 +266,21 @@ done < <(component_runtime_platforms "${PLATFORM}")
 LC_ALL=C sort "${MANIFEST_TEMP}" > "${COMPONENT_ROOT}/SHA256SUMS"
 rm "${MANIFEST_TEMP}"
 
-mv "${COMPONENT_ROOT}" "${FINAL_COMPONENT_ROOT}"
+if [[ -n "${ARCHIVE_PATH}" ]]; then
+  tar -cf "${WORK_ROOT}/release-component-${PLATFORM}.tar" \
+    -C "${WORK_ROOT}" "${PLATFORM}"
+fi
+if [[ -n "${OUTPUT_ROOT}" ]]; then
+  mv "${COMPONENT_ROOT}" "${FINAL_COMPONENT_ROOT}"
+fi
+if [[ -n "${ARCHIVE_PATH}" ]]; then
+  mv "${WORK_ROOT}/release-component-${PLATFORM}.tar" "${ARCHIVE_PATH}"
+fi
 rm -rf "${WORK_ROOT}"
 WORK_ROOT=""
-echo "==> Created release component ${FINAL_COMPONENT_ROOT}"
+if [[ -n "${OUTPUT_ROOT}" ]]; then
+  echo "==> Created release component ${FINAL_COMPONENT_ROOT}"
+fi
+if [[ -n "${ARCHIVE_PATH}" ]]; then
+  echo "==> Created release component archive ${ARCHIVE_PATH}"
+fi

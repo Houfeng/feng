@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEFAULT_SOURCE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SOURCE_ROOT="${DEFAULT_SOURCE_ROOT}"
 COMPONENTS_ROOT=""
+COMPONENT_ARCHIVES_ROOT=""
 OUTPUT_ROOT=""
 VERSION=""
 WORK_ROOT=""
@@ -39,15 +40,17 @@ PUBLIC_HEADERS=(
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/release.sh \
+  scripts/release_assemble.sh \
     --version=<version> \
-    --components=<component-root> \
+    (--components=<component-root> | --component-archives=<archive-root>) \
     --output=<output-dir> \
     [--source-root=<repository-root>] \
     [--archive-tool=<ar-or-llvm-ar>]
 
 The component root must contain macos-arm64/, linux-x64-gnu/, and
 linux-arm64-gnu/ in the layout defined by the release specification.
+The archive root must contain one release-component-<platform>.tar for
+each of those platforms; this script validates and extracts the archives.
 EOF
 }
 
@@ -322,6 +325,45 @@ copy_tree() {
   cp -R -P "${source_dir}/." "${destination_dir}/"
 }
 
+# Validate and extract the three native component archives.
+extract_component_archives() {
+  local host_platform
+  local archive_path
+  local member
+  local member_count
+
+  mkdir -p "${COMPONENTS_ROOT}"
+  for host_platform in "${HOST_PLATFORMS[@]}"; do
+    archive_path="${COMPONENT_ARCHIVES_ROOT}/release-component-${host_platform}.tar"
+    require_file "${archive_path}"
+    member_count=0
+    while IFS= read -r member; do
+      [[ -n "${member}" ]] || continue
+      [[ "${member}" != /* ]] ||
+        die "component archive contains an absolute path: ${archive_path}"
+      case "/${member}/" in
+        *"/../"*|*"/./"*)
+          die "component archive contains an unsafe path: ${member}"
+          ;;
+      esac
+      case "${member}" in
+        "${host_platform}"|"${host_platform}/"|"${host_platform}/"*)
+          ;;
+        *)
+          die "component archive contains an unexpected path: ${member}"
+          ;;
+      esac
+      member_count=$((member_count + 1))
+    done < <(tar -tf "${archive_path}")
+    [[ "${member_count}" -gt 0 ]] ||
+      die "component archive is empty: ${archive_path}"
+    tar -xf "${archive_path}" -C "${COMPONENTS_ROOT}"
+  done
+  if [[ -n "$(find "${COMPONENTS_ROOT}" -type l -print -quit)" ]]; then
+    die "component archives must not contain symbolic links"
+  fi
+}
+
 # Assemble and validate one complete host distribution tree.
 assemble_distribution() {
   local host_platform="$1"
@@ -391,6 +433,11 @@ while [[ "$#" -gt 0 ]]; do
         die "--components may only be specified once"
       COMPONENTS_ROOT="${1#--components=}"
       ;;
+    --component-archives=*)
+      [[ -z "${COMPONENT_ARCHIVES_ROOT}" ]] ||
+        die "--component-archives may only be specified once"
+      COMPONENT_ARCHIVES_ROOT="${1#--component-archives=}"
+      ;;
     --output=*)
       [[ -z "${OUTPUT_ROOT}" ]] || die "--output may only be specified once"
       OUTPUT_ROOT="${1#--output=}"
@@ -418,7 +465,10 @@ done
 
 [[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] ||
   die "invalid release version: ${VERSION:-<empty>}"
-[[ -n "${COMPONENTS_ROOT}" ]] || die "--components is required"
+[[ -z "${COMPONENTS_ROOT}" || -z "${COMPONENT_ARCHIVES_ROOT}" ]] ||
+  die "--components and --component-archives are mutually exclusive"
+[[ -n "${COMPONENTS_ROOT}" || -n "${COMPONENT_ARCHIVES_ROOT}" ]] ||
+  die "one of --components or --component-archives is required"
 [[ -n "${OUTPUT_ROOT}" ]] || die "--output is required"
 
 require_cmd "${ARCHIVE_TOOL}"
@@ -427,19 +477,31 @@ require_cmd cmp
 require_cmd file
 require_cmd find
 require_cmd zip
+if [[ -n "${COMPONENT_ARCHIVES_ROOT}" ]]; then
+  require_cmd tar
+fi
 configure_sha256_tool
 require_dir "${SOURCE_ROOT}"
-require_dir "${COMPONENTS_ROOT}"
 require_file "${SOURCE_ROOT}/VERSION"
 [[ "$(sed -n '1p' "${SOURCE_ROOT}/VERSION")" == "${VERSION}" ]] ||
   die "requested version does not match ${SOURCE_ROOT}/VERSION"
 
 mkdir -p "${OUTPUT_ROOT}"
 SOURCE_ROOT="$(cd "${SOURCE_ROOT}" && pwd)"
-COMPONENTS_ROOT="$(cd "${COMPONENTS_ROOT}" && pwd)"
 OUTPUT_ROOT="$(cd "${OUTPUT_ROOT}" && pwd)"
 WORK_ROOT="$(mktemp -d "${OUTPUT_ROOT}/.feng-release.XXXXXX")"
 mkdir -p "${WORK_ROOT}/archives" "${WORK_ROOT}/packages"
+if [[ -n "${COMPONENT_ARCHIVES_ROOT}" ]]; then
+  require_dir "${COMPONENT_ARCHIVES_ROOT}"
+  COMPONENT_ARCHIVES_ROOT="$(cd "${COMPONENT_ARCHIVES_ROOT}" && pwd)"
+  [[ "$(find "${COMPONENT_ARCHIVES_ROOT}" -maxdepth 1 -type f -name 'release-component-*.tar' | wc -l | tr -d ' ')" == "3" ]] ||
+    die "component archive directory must contain exactly three component archives"
+  COMPONENTS_ROOT="${WORK_ROOT}/components"
+  extract_component_archives
+else
+  require_dir "${COMPONENTS_ROOT}"
+  COMPONENTS_ROOT="$(cd "${COMPONENTS_ROOT}" && pwd)"
+fi
 
 for host_platform in "${HOST_PLATFORMS[@]}"; do
   verify_component "${host_platform}"

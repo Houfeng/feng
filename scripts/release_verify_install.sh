@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 INSTALL_ROOT=""
+ARCHIVE_PATH=""
 VERSION=""
 WORK_ROOT=""
 PUBLIC_HEADERS=(
@@ -29,8 +30,8 @@ LINUX_PLATFORMS=(
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/verify_release_install.sh \
-    --root=<installed-package-root> \
+  scripts/release_verify_install.sh \
+    (--root=<installed-package-root> | --archive=<release-zip>) \
     --version=<version>
 EOF
 }
@@ -122,6 +123,10 @@ while [[ "$#" -gt 0 ]]; do
       [[ -z "${INSTALL_ROOT}" ]] || die "--root may only be specified once"
       INSTALL_ROOT="${1#--root=}"
       ;;
+    --archive=*)
+      [[ -z "${ARCHIVE_PATH}" ]] || die "--archive may only be specified once"
+      ARCHIVE_PATH="${1#--archive=}"
+      ;;
     --version=*)
       [[ -z "${VERSION}" ]] || die "--version may only be specified once"
       VERSION="${1#--version=}"
@@ -137,10 +142,13 @@ while [[ "$#" -gt 0 ]]; do
   shift
 done
 
-[[ -n "${INSTALL_ROOT}" ]] || die "--root is required"
+[[ -z "${INSTALL_ROOT}" || -z "${ARCHIVE_PATH}" ]] ||
+  die "--root and --archive are mutually exclusive"
+[[ -n "${INSTALL_ROOT}" || -n "${ARCHIVE_PATH}" ]] ||
+  die "one of --root or --archive is required"
 [[ -n "${VERSION}" ]] || die "--version is required"
-[[ -d "${INSTALL_ROOT}" ]] || die "installed package root not found: ${INSTALL_ROOT}"
-INSTALL_ROOT="$(cd "${INSTALL_ROOT}" && pwd)"
+[[ "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] ||
+  die "invalid release version: ${VERSION}"
 require_cmd file
 mkdir -p "${PROJECT_ROOT}/build"
 WORK_ROOT="$(mktemp -d "${PROJECT_ROOT}/build/release-install-verify.XXXXXX")"
@@ -149,6 +157,43 @@ trap cleanup EXIT
 # shellcheck source=host_platform.sh
 source "${SCRIPT_DIR}/host_platform.sh"
 HOST_PLATFORM="$(feng_detect_host_platform)"
+if [[ -n "${ARCHIVE_PATH}" ]]; then
+  require_cmd unzip
+  [[ -f "${ARCHIVE_PATH}" ]] ||
+    die "release archive not found: ${ARCHIVE_PATH}"
+  ARCHIVE_PATH="$(cd "$(dirname "${ARCHIVE_PATH}")" && pwd)/$(basename "${ARCHIVE_PATH}")"
+  PACKAGE_NAME="feng-${VERSION}-${HOST_PLATFORM}"
+  MEMBER_COUNT=0
+  while IFS= read -r member; do
+    [[ -n "${member}" ]] || continue
+    [[ "${member}" != /* ]] ||
+      die "release archive contains an absolute path: ${member}"
+    case "/${member}/" in
+      *"/../"*|*"/./"*)
+        die "release archive contains an unsafe path: ${member}"
+        ;;
+    esac
+    case "${member}" in
+      "${PACKAGE_NAME}"|"${PACKAGE_NAME}/"|"${PACKAGE_NAME}/"*)
+        ;;
+      *)
+        die "release archive contains an unexpected path: ${member}"
+        ;;
+    esac
+    MEMBER_COUNT=$((MEMBER_COUNT + 1))
+  done < <(unzip -Z1 "${ARCHIVE_PATH}")
+  [[ "${MEMBER_COUNT}" -gt 0 ]] ||
+    die "release archive is empty: ${ARCHIVE_PATH}"
+  mkdir -p "${WORK_ROOT}/install"
+  unzip -q "${ARCHIVE_PATH}" -d "${WORK_ROOT}/install"
+  INSTALL_ROOT="${WORK_ROOT}/install/${PACKAGE_NAME}"
+else
+  [[ -d "${INSTALL_ROOT}" ]] ||
+    die "installed package root not found: ${INSTALL_ROOT}"
+  INSTALL_ROOT="$(cd "${INSTALL_ROOT}" && pwd)"
+fi
+[[ -d "${INSTALL_ROOT}" ]] ||
+  die "installed package root not found after extraction: ${INSTALL_ROOT}"
 FENG="${INSTALL_ROOT}/bin/feng"
 LLVM_BIN="${INSTALL_ROOT}/toolchain/llvm/bin"
 
