@@ -58,7 +58,7 @@ FengCliParseResult feng_cli_legacy_compile_parse(const char *program,
  *
  * Accepted forms:
  *   feng <file> [<file>...] --target=<bin|lib>
- *        --platform=<platform> [--sysroot=<path>] --out=<dir>
+ *        [--platform=<platform>] [--sysroot=<path>] [--out=<dir>]
  *        [--name=<artifact>] [--release] [--keep-ir]
  *        [--pkg=<.fb路径>|--pkg <.fb路径>]...
  *        [--lib=<库路径或系统库名>|--lib <库路径或系统库名>]...
@@ -79,11 +79,12 @@ FengCliParseResult feng_cli_direct_options_parse(const char *program,
     int index;
 
     out->target = FENG_COMPILE_TARGET_BIN;
-    out->out_dir = NULL;
+    out->out_dir = "./build";
     out->release = false;
     out->keep_intermediate = false;
     out->artifact_name = NULL;
     out->platform = NULL;
+    out->owned_platform = NULL;
     out->sysroot = NULL;
     out->input_count = 0;
     out->inputs = NULL;
@@ -279,21 +280,22 @@ FengCliParseResult feng_cli_direct_options_parse(const char *program,
         feng_cli_print_usage(program, stderr);
         return FENG_CLI_PARSE_ERROR;
     }
-    if (out->out_dir == NULL) {
-        fprintf(stderr, "--out=<dir> is required for direct compile mode\n");
-        free(link_libs);
-        free(package_paths);
-        free(inputs);
-        feng_cli_print_usage(program, stderr);
-        return FENG_CLI_PARSE_ERROR;
-    }
     if (out->platform == NULL) {
-        fprintf(stderr, "--platform=<platform> is required for direct compile mode\n");
-        free(link_libs);
-        free(package_paths);
-        free(inputs);
-        feng_cli_print_usage(program, stderr);
-        return FENG_CLI_PARSE_ERROR;
+        char *host_error = NULL;
+
+        if (!feng_platform_detect_host_platform(&out->owned_platform,
+                                                &host_error)) {
+            fprintf(stderr,
+                    "failed to detect host platform: %s\n",
+                    host_error != NULL ? host_error : "(unknown)");
+            free(host_error);
+            free(link_libs);
+            free(package_paths);
+            free(inputs);
+            feng_cli_print_usage(program, stderr);
+            return FENG_CLI_PARSE_ERROR;
+        }
+        out->platform = out->owned_platform;
     }
 
     out->input_count = input_count;
@@ -307,6 +309,9 @@ FengCliParseResult feng_cli_direct_options_parse(const char *program,
 
 void feng_cli_direct_options_dispose(FengCliDirectOptions *opts) {
     if (opts == NULL) return;
+    free(opts->owned_platform);
+    opts->owned_platform = NULL;
+    opts->platform = NULL;
     free((void *)opts->inputs);
     opts->inputs = NULL;
     opts->input_count = 0;

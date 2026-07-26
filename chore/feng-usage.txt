@@ -3,18 +3,34 @@ Usage:
   feng <files>... [options]
 
 Project:
-  feng init       [<name>] [--target=bin|lib]
-  feng build      [<path>] [--release] [--keep-ir]
-  feng check      [<path>] [--format=text|json]
-  feng run        [<path>] [--release] [--keep-ir] [-- <args>...]
+  feng init       [<name>]
+                  [--target=bin|lib]
+  feng build      [<path>]
+                  [--release]
+                  [--platform=<platform>]...
+                  [--sysroot=<path>]
+                  [--keep-ir]
+  feng check      [<path>]
+                  [--format=text|json]
+  feng run        [<path>]
+                  [--release]
+                  [--keep-ir]
+                  [-- <args>...]
   feng clean      [<path>]
   feng pack       [<path>]
-  feng deps       add      <pkg-name> [<path>]
-  feng deps       remove   <pkg-name> [<path>]
-  feng deps       install  [<path>]   [--force]
+                  [--platform=<platform>]...
+                  [--sysroot=<path>]
+  feng deps       add     <pkg-name>
+                          [<path>]
+  feng deps       remove  <pkg-name>
+                          [<path>]
+  feng deps       install [<path>]
+                          [--force]
 
 Compile:
   feng <files>... [--target=bin|lib]
+                  [--platform=<platform>]...
+                  [--sysroot=<path>]
                   [--out=<dir>]
                   [--name=<artifact>]
                   [--release]
@@ -29,4 +45,3 @@ Protocol:
 Global:
   -h, --help      Display this message.
   -v, --version   Display version information.
-  

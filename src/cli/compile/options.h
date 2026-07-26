@@ -31,11 +31,12 @@ FengCliParseResult feng_cli_legacy_compile_parse(const char *program,
  */
 typedef struct FengCliDirectOptions {
     FengCompileTarget target;     /* Direct mode supports BIN and LIB outputs. */
-    const char *out_dir;          /* required: <out>/ir/c plus <out>/bin or <out>/lib */
+    const char *out_dir;          /* defaults to ./build */
     bool release;                 /* Selects release-vs-debug build mode. */
     bool keep_intermediate;       /* P5: keep generated C across failures/success. */
     const char *artifact_name;    /* optional override for the produced artifact stem */
-    const char *platform;         /* required complete target platform */
+    const char *platform;         /* explicit target platform or detected host */
+    char *owned_platform;         /* detected host storage owned by this options value */
     const char *sysroot;          /* optional target SDK/sysroot override */
     int input_count;
     const char **inputs;          /* heap-allocated array of borrowed argv ptrs */

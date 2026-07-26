@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Direct-mode CLI surface checks for Phase 2 P4 + P5.
 #
-# Verifies that `feng <file> --target=bin --platform=<platform> --out=<dir>`
+# Verifies that `feng <file> --target=bin [--platform=<platform>] [--out=<dir>]`
 # drives the full
 # pipeline (frontend -> codegen -> host cc) and produces a runnable
 # executable, that error paths return non-zero with actionable
@@ -91,12 +91,12 @@ if expect_ok "help" "$FENG" --help; then
         echo "FAIL[help] missing wrapped compile header line"
         failures=$((failures + 1))
     fi
-    if ! grep -Eq '^[[:space:]]+--platform=<platform>[[:space:]]*$' "$WORK/help.out"; then
-        echo "FAIL[help] missing required wrapped --platform line"
+    if ! grep -Eq '^[[:space:]]+\[--platform=<platform>\][[:space:]]*$' "$WORK/help.out"; then
+        echo "FAIL[help] missing optional wrapped --platform line"
         failures=$((failures + 1))
     fi
-    if ! grep -Eq '^[[:space:]]+--out=<dir>[[:space:]]*$' "$WORK/help.out"; then
-        echo "FAIL[help] missing wrapped --out line"
+    if ! grep -Eq '^[[:space:]]+\[--out=<dir>\][[:space:]]*$' "$WORK/help.out"; then
+        echo "FAIL[help] missing optional wrapped --out line"
         failures=$((failures + 1))
     fi
     if ! grep -Eq '^[[:space:]]+\[--name=<artifact>\][[:space:]]*$' "$WORK/help.out"; then
@@ -291,11 +291,16 @@ if expect_ok "lib_static" "$FENG" "$FIXTURE" --target=lib \
     fi
 fi
 
-# 4. missing --out
-expect_fail "no_out" "$FENG" "$FIXTURE" --target=bin \
-    --platform="$HOST_PLATFORM" || true
-if ! grep -q -- "--out=<dir> is required" "$WORK/no_out.err"; then
-    echo "FAIL[no_out] missing --out diagnostic"
+# 4. omitted --platform and --out default to host and ./build
+default_root="$WORK/defaults"
+mkdir -p "$default_root"
+if ! (cd "$default_root" && "$FENG" "$FIXTURE" --target=bin) \
+    >"$WORK/defaults.out" 2>"$WORK/defaults.err"; then
+    echo "FAIL[defaults] direct compile with defaults failed"
+    sed 's/^/  /' "$WORK/defaults.err"
+    failures=$((failures + 1))
+elif [[ ! -x "$default_root/build/bin/hello" ]]; then
+    echo "FAIL[defaults] missing default output build/bin/hello"
     failures=$((failures + 1))
 fi
 

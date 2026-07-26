@@ -33,9 +33,9 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
     fprintf(stream, "\n");
     fprintf(stream, "Compile:\n");
     fprintf(stream, "  %s <files>... [--target=bin|lib]\n", program);
-    fprintf(stream, "%*s--platform=<platform>\n", compile_indent, "");
+    fprintf(stream, "%*s[--platform=<platform>]\n", compile_indent, "");
     fprintf(stream, "%*s[--sysroot=<path>]\n", compile_indent, "");
-    fprintf(stream, "%*s--out=<dir>\n", compile_indent, "");
+    fprintf(stream, "%*s[--out=<dir>]\n", compile_indent, "");
     fprintf(stream, "%*s[--name=<artifact>]\n", compile_indent, "");
     fprintf(stream, "%*s[--release]\n", compile_indent, "");
     fprintf(stream, "%*s[--keep-ir]\n", compile_indent, "");

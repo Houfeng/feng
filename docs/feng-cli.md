@@ -14,7 +14,7 @@
 基础编译
 
 ```bash
-feng <源文件列表> --target=<目标> --platform=<platform> [--sysroot=<路径>] --out=<输出目录> [--name=<产物名>] [--release] [--keep-ir] [--pkg=<.fb路径>|--pkg <.fb路径>]... [--lib <库路径>]...
+feng <源文件列表> --target=<目标> [--platform=<platform>] [--sysroot=<路径>] [--out=<输出目录>] [--name=<产物名>] [--release] [--keep-ir] [--pkg=<.fb路径>|--pkg <.fb路径>]... [--lib <库路径>]...
 ```
 
 ```text
@@ -104,7 +104,7 @@ feng dap [--stdio]
 
 ## 2.3 --out 说明
 
-- 顶层直编模式的 `--out` 指定**本次单平台编译的精确输出根目录**,直编不会自动追加目标平台目录，也不感知多平台目录编排；其 `ir/`、`gen/`、`bin/`、`lib/`、`mod/` 与 `obj/` 均直接位于该 `--out` 目录下。
+- 顶层直编模式的 `--out` 指定**本次单平台编译的精确输出根目录**，未指定时默认为 `./build`。直编不会自动追加目标平台目录，也不感知多平台目录编排；其 `ir/`、`gen/`、`bin/`、`lib/`、`mod/` 与 `obj/` 均直接位于该输出目录下。
 - 项目级 `feng build` 从 `feng.fm.out` 取得项目输出根（默认 `./build`），再为每个完整目标平台构造 `<项目输出根>/<platform>`，并将该目录作为对应直编调用的 `--out`。因此项目开发态产物表现为 `build/linux-x64-gnu/ir/`、`build/linux-x64-musl/gen/` 等。
 - `assets/` 与 `extlib/` 由读取 `feng.fm` 的项目构建层 staging 到同一 `<项目输出根>/<platform>/`；直编模式不读取 `[assets]`，也不负责建立这两个目录。
 - `feng pack` 从各目标平台开发目录提取并校验所需内容，将最终单一 `.fb` 写入 `<项目输出根>/pkg/`；直编模式不生成 `.fb`。
@@ -112,7 +112,7 @@ feng dap [--stdio]
 ## 2.4 顶层直编补充选项
 
 - `--target=<bin|lib>`: 指定产物类型,`bin` 为可执行文件,`lib` 为库；该参数不表示目标操作系统或 CPU 架构。
-- `--platform=<platform>`: 必须显式指定本次核心直编的唯一完整目标平台，取值必须是 [feng-os-arch.md](feng-os-arch.md) 平台矩阵中的规范标识。顶层直编不根据 host、sysroot 或产物类型推断平台，不自动展开多平台，也不允许重复该选项。Linux 必须写成 `linux-x64-gnu`、`linux-x64-musl`、`linux-arm64-gnu` 或 `linux-arm64-musl`，不接受不完整的 `linux-x64` / `linux-arm64`。项目级 `feng build` / `feng pack` 的多平台编排规则见 §4.2 / §4.6。
+- `--platform=<platform>`: 可选地指定本次核心直编的唯一完整目标平台；未指定时默认使用 host 完整平台。显式值必须是 [feng-os-arch.md](feng-os-arch.md) 平台矩阵中的规范标识。顶层直编不根据 sysroot 或产物类型推断平台，不自动展开多平台，也不允许重复该选项。Linux 必须写成 `linux-x64-gnu`、`linux-x64-musl`、`linux-arm64-gnu` 或 `linux-arm64-musl`，不接受不完整的 `linux-x64` / `linux-arm64`。项目级 `feng build` / `feng pack` 的多平台编排规则见 §4.2 / §4.6。
 - `--sysroot=<路径>`: 为本次唯一目标平台显式指定目标 sysroot。该选项不下载、复制或授权任何 SDK；用户负责所提供路径及其内容的许可合规。macOS 目标传给 Clang 时转换为 `-isysroot`，Linux 目标转换为 `--sysroot`。完整默认值与平台规则见 [feng-build.md](feng-build.md)。
 - `--name=<产物名>`: 指定本次直编的产物基名。`bin` 目标落到 `<out>/bin/<name>`，`lib` 目标落到 `<out>/lib/<平台静态库名>`；该选项不负责 `.fb` 命名。
 - `--keep-ir`: 固定保留本次直编的中间 IR 产物。当前实现会把生成的 C 文件保留在 `<out>/ir/c/` 下面，便于编译器开发与问题排查；未指定时，构建开始前会先清理该直编输出根中的旧 `ir/c` 产物，前端 / 语义 / codegen 失败不会留下陈旧 C 文件，只有目标 C 编译阶段失败时才保留本次生成的 C 代码用于排查；成功构建后仍会把已变空的 `ir/c` 与 `ir` 一并清理掉。
@@ -158,7 +158,7 @@ platform: "macos-arm64,linux-x64-gnu,linux-x64-musl"
 - `feng build` / `feng pack` 传入 `--sysroot` 时，最终只能选择一个平台；未传 `--platform` 且 `feng.fm.platform` 声明多个平台时，必须报错。
 - `feng pack` 会复用构建流程，固定执行 release 构建，成功后再生成 `.fb`。
 - 分发包内的 `feng.fm.platform` 必须存在，并精确记录包内实际携带的平台集合。
-- 顶层直编不读取 `feng.fm`，必须显式指定唯一的 `--platform`。
+- 顶层直编不读取 `feng.fm`；未传 `--platform` 时默认使用 host，显式传入时只允许指定一个完整平台。
 
 ### 4.1 `feng init`
 
@@ -408,7 +408,7 @@ Project:
 
 Compile:
   feng <files...> [--target=<bin|lib>]
-                  --platform=<platform>
+                  [--platform=<platform>]
                   [--sysroot=<path>]
                   [--out=<dir>]
                   [--name=<artifact>]

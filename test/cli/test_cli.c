@@ -777,12 +777,12 @@ static int run_direct_quiet_stderr(int argc, char **argv) {
     return rc;
 }
 
-/* Verify direct mode requires one complete platform and preserves sysroot. */
-static void test_direct_options_require_one_platform_and_accept_sysroot(void) {
+/* Verify direct mode defaults to host/build and preserves explicit target inputs. */
+static void test_direct_options_default_host_and_out_and_accept_sysroot(void) {
     FengCliDirectOptions options = {0};
-    char *missing_platform[] = {
+    char *host_platform = NULL;
+    char *defaults[] = {
         "main.ff",
-        "--out=build",
     };
     char *valid[] = {
         "main.ff",
@@ -798,11 +798,16 @@ static void test_direct_options_require_one_platform_and_accept_sysroot(void) {
         "--out=build",
     };
 
+    ASSERT(feng_platform_detect_host_platform(&host_platform, NULL));
     ASSERT(feng_cli_direct_options_parse(
                "feng",
-               2,
-               missing_platform,
-               &options) == FENG_CLI_PARSE_ERROR);
+               1,
+               defaults,
+               &options) == FENG_CLI_PARSE_OK);
+    ASSERT(strcmp(options.platform, host_platform) == 0);
+    ASSERT(strcmp(options.out_dir, "./build") == 0);
+    feng_cli_direct_options_dispose(&options);
+    free(host_platform);
     ASSERT(feng_cli_direct_options_parse(
                "feng",
                5,
@@ -14805,7 +14810,7 @@ int main(void) {
     test_lsp_snippet_completion_no_duplicate_items();
     test_lsp_annotation_completion_all();
     test_lsp_annotation_completion_filter_prefix();
-    test_direct_options_require_one_platform_and_accept_sysroot();
+    test_direct_options_default_host_and_out_and_accept_sysroot();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
     test_direct_build_accepts_package_bundle();
