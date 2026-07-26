@@ -8,7 +8,7 @@ Project:
   feng build      [<path>]                   Project root
                   [--release]                Release mode
                   [--platform=<platform>]... Target platform
-                  [--sysroot=<path>]         Target dependencies
+                  [--sysroot=<path>]         Target sysroot
                   [--keep-ir]                Keep IR
   feng check      [<path>]                   Project root
                   [--format=text|json]       Input format
@@ -19,7 +19,9 @@ Project:
   feng clean      [<path>]                   Project root
   feng pack       [<path>]                   Project root
                   [--platform=<platform>]... Target platform
-                  [--sysroot=<path>]         Target dependencies
+                  [--sysroot=<path>]         Target sysroot
+
+Dependence:
   feng deps       add     <pkg-name>         Package name
                           [<path>]           Project root
   feng deps       remove  <pkg-name>         Package name
@@ -30,7 +32,7 @@ Project:
 Compile:
   feng <files>... [--target=bin|lib]         Project type
                   [--platform=<platform>]    Target platform
-                  [--sysroot=<path>]         Target dependencies
+                  [--sysroot=<path>]         Target sysroot
                   [--out=<dir>]              Output directory
                   [--name=<artifact>]        Artifact name
                   [--release]                Release mode
@@ -44,4 +46,4 @@ Protocol:
 
 Global:
   -h, --help                                 Display help message
-  -v, --version                              Display version information
+  -v, --version                              Display version info

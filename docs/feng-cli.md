@@ -394,52 +394,55 @@ feng tool check [--target=<bin|lib>] <file> [more files...]
 
 ```text
 Usage:
-  feng <command>  [options]
-  feng <files>... [options]
+  feng <command>  [options]                  Project command
+  feng <files>... [options]                  Direct compile
 
 Project:
-  feng init       [<name>]
-                  [--target=bin|lib]
-  feng build      [<path>]
-                  [--release]
-                  [--platform=<platform>]...
-                  [--sysroot=<path>]
-                  [--keep-ir]
-  feng check      [<path>]
-                  [--format=text|json]
-  feng run        [<path>]
-                  [--release]
-                  [--keep-ir]
-                  [-- <args>...]
-  feng clean      [<path>]
-  feng pack       [<path>]
-                  [--platform=<platform>]...
-                  [--sysroot=<path>]
-  feng deps       add     <pkg-name>
-                          [<path>]
-  feng deps       remove  <pkg-name>
-                          [<path>]
-  feng deps       install [<path>]
-                          [--force]
+  feng init       [<name>]                   Project name
+                  [--target=bin|lib]         Project type
+  feng build      [<path>]                   Project root
+                  [--release]                Release mode
+                  [--platform=<platform>]... Target platform
+                  [--sysroot=<path>]         Target sysroot
+                  [--keep-ir]                Keep IR
+  feng check      [<path>]                   Project root
+                  [--format=text|json]       Input format
+  feng run        [<path>]                   Project root
+                  [--release]                Release mode
+                  [--keep-ir]                Keep IR
+                  [-- <args>...]             Program arguments
+  feng clean      [<path>]                   Project root
+  feng pack       [<path>]                   Project root
+                  [--platform=<platform>]... Target platform
+                  [--sysroot=<path>]         Target sysroot
+
+Dependence:
+  feng deps       add     <pkg-name>         Package name
+                          [<path>]           Project root
+  feng deps       remove  <pkg-name>         Package name
+                          [<path>]           Project root
+  feng deps       install [<path>]           Project root
+                          [--force]          Force reinstall
 
 Compile:
-  feng <files>... [--target=bin|lib]
-                  [--platform=<platform>]
-                  [--sysroot=<path>]
-                  [--out=<dir>]
-                  [--name=<artifact>]
-                  [--release]
-                  [--keep-ir]
-                  [--pkg=<fb-path>]...
-                  [--lib=<lib-path>]...
+  feng <files>... [--target=bin|lib]         Project type
+                  [--platform=<platform>]    Target platform
+                  [--sysroot=<path>]         Target sysroot
+                  [--out=<dir>]              Output directory
+                  [--name=<artifact>]        Artifact name
+                  [--release]                Release mode
+                  [--keep-ir]                Keep IR
+                  [--pkg=<fb-path>]...       Package list
+                  [--lib=<lib-path>]...      Library list
 
 Protocol:
-  feng lsp        [--stdio]
-  feng dap        [--stdio]
+  feng lsp        [--stdio]                  Start LSP
+  feng dap        [--stdio]                  Start DAP
 
 Global:
-  -h, --help      Display this message.
-  -v, --version   Display version information.
+  -h, --help                                 Display help message
+  -v, --version                              Display version info
+
 ```
 
 - 用户显式执行 `--help` 时,上述帮助文本输出到 stdout。

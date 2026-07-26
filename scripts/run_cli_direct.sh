@@ -71,76 +71,10 @@ if expect_ok "help" "$FENG" --help; then
         echo "FAIL[help] help command should not write stderr"
         failures=$((failures + 1))
     fi
-    if ! grep -q '^  feng <files>\.\.\. \[options\]$' "$WORK/help.out"; then
-        echo "FAIL[help] missing direct compile usage line"
-        failures=$((failures + 1))
-    fi
-    if ! grep -q '^  feng <command>  \[options\]$' "$WORK/help.out"; then
-        echo "FAIL[help] missing command usage line"
-        failures=$((failures + 1))
-    fi
-    if ! grep -q '^Project:$' "$WORK/help.out"; then
-        echo "FAIL[help] missing Project section"
-        failures=$((failures + 1))
-    fi
-    if ! grep -Eq '^Compile:$' "$WORK/help.out"; then
-        echo "FAIL[help] missing Compile section"
-        failures=$((failures + 1))
-    fi
-    if ! grep -Eq '^  feng <files>\.\.\. \[--target=bin\|lib\][[:space:]]*$' "$WORK/help.out"; then
-        echo "FAIL[help] missing wrapped compile header line"
-        failures=$((failures + 1))
-    fi
-    if ! grep -Eq '^[[:space:]]+\[--platform=<platform>\][[:space:]]*$' "$WORK/help.out"; then
-        echo "FAIL[help] missing optional wrapped --platform line"
-        failures=$((failures + 1))
-    fi
-    if ! grep -Eq '^[[:space:]]+\[--out=<dir>\][[:space:]]*$' "$WORK/help.out"; then
-        echo "FAIL[help] missing optional wrapped --out line"
-        failures=$((failures + 1))
-    fi
-    if ! grep -Eq '^[[:space:]]+\[--name=<artifact>\][[:space:]]*$' "$WORK/help.out"; then
-        echo "FAIL[help] missing wrapped --name line"
-        failures=$((failures + 1))
-    fi
-    if ! grep -Eq '^[[:space:]]+\[--release\][[:space:]]*$' "$WORK/help.out"; then
-        echo "FAIL[help] missing wrapped --release line"
-        failures=$((failures + 1))
-    fi
-    if ! grep -Eq '^[[:space:]]+\[--keep-ir\]$' "$WORK/help.out"; then
-        echo "FAIL[help] missing wrapped --keep-ir line"
-        failures=$((failures + 1))
-    fi
-    if ! grep -q '^Global:$' "$WORK/help.out"; then
-        echo "FAIL[help] missing Global section"
-        failures=$((failures + 1))
-    fi
-    if ! grep -q '^  -h, --help      Display this message\.$' "$WORK/help.out"; then
-        echo "FAIL[help] missing --help description line"
-        failures=$((failures + 1))
-    fi
-    if ! grep -q '^  -v, --version   Display version information\.$' "$WORK/help.out"; then
-        echo "FAIL[help] missing --version description line"
-        failures=$((failures + 1))
-    fi
-    if ! grep -Eq '^Protocol:[[:space:]]*$' "$WORK/help.out"; then
-        echo "FAIL[help] missing Protocol section"
-        failures=$((failures + 1))
-    fi
-    if ! grep -q '^  feng lsp        \[--stdio\]$' "$WORK/help.out"; then
-        echo "FAIL[help] missing lsp usage line"
-        failures=$((failures + 1))
-    fi
-
-    project_line=$(grep -n '^Project:$' "$WORK/help.out" | head -n1 | cut -d: -f1)
-    compile_line=$(grep -n '^Compile:$' "$WORK/help.out" | head -n1 | cut -d: -f1)
-    global_line=$(grep -n '^Global:$' "$WORK/help.out" | head -n1 | cut -d: -f1)
-    editor_line=$(grep -n '^Protocol:[[:space:]]*$' "$WORK/help.out" | head -n1 | cut -d: -f1)
-    if [[ -z "$project_line" || -z "$compile_line" || -z "$global_line" || -z "$editor_line" ]] \
-        || (( project_line >= compile_line )) \
-        || (( compile_line >= editor_line )) \
-        || (( editor_line >= global_line )); then
-        echo "FAIL[help] usage sections are out of order"
+    sed '$d' "$WORK/help.out" >"$WORK/help.content.out"
+    if ! cmp -s "$ROOT/chore/feng-usage.txt" "$WORK/help.content.out"; then
+        echo "FAIL[help] output differs from chore/feng-usage.txt"
+        diff -u "$ROOT/chore/feng-usage.txt" "$WORK/help.content.out" || true
         failures=$((failures + 1))
     fi
 fi

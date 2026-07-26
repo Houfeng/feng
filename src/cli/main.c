@@ -1,3 +1,4 @@
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -8,8 +9,33 @@
 #error "FENG_CLI_VERSION must be defined from the repository VERSION file"
 #endif
 
+#define FENG_CLI_USAGE_DESCRIPTION_COLUMN 45
+
 static void feng_cli_print_version(const char *program, FILE *stream) {
     fprintf(stream, "%s %s\n", program, FENG_CLI_VERSION);
+}
+
+/* Prints one usage syntax line with its description aligned to the help column. */
+static void feng_cli_print_usage_line(FILE *stream,
+                                      const char *description,
+                                      const char *format,
+                                      ...) {
+    va_list args;
+    int syntax_width;
+
+    va_start(args, format);
+    syntax_width = vfprintf(stream, format, args);
+    va_end(args);
+
+    if (syntax_width < 0) return;
+    if (syntax_width < FENG_CLI_USAGE_DESCRIPTION_COLUMN) {
+        fprintf(stream, "%*s",
+                FENG_CLI_USAGE_DESCRIPTION_COLUMN - syntax_width,
+                "");
+    } else {
+        fputc(' ', stream);
+    }
+    fprintf(stream, "%s\n", description);
 }
 
 void feng_cli_print_usage(const char *program, FILE *stream) {
@@ -19,52 +45,101 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
 
     if (stream == stderr) fprintf(stream, "\n");
     fprintf(stream, "Usage:\n");
-    fprintf(stream, "  %s <command>  [options]\n", program);
-    fprintf(stream, "  %s <files>... [options]\n", program);
+    feng_cli_print_usage_line(
+        stream, "Project command", "  %s <command>  [options]", program);
+    feng_cli_print_usage_line(
+        stream, "Direct compile", "  %s <files>... [options]", program);
     fprintf(stream, "\n");
     fprintf(stream, "Project:\n");
-    fprintf(stream, "  %s init       [<name>]\n", program);
-    fprintf(stream, "%*s[--target=bin|lib]\n", project_indent, "");
-    fprintf(stream, "  %s build      [<path>]\n", program);
-    fprintf(stream, "%*s[--release]\n", project_indent, "");
-    fprintf(stream, "%*s[--platform=<platform>]...\n", project_indent, "");
-    fprintf(stream, "%*s[--sysroot=<path>]\n", project_indent, "");
-    fprintf(stream, "%*s[--keep-ir]\n", project_indent, "");
-    fprintf(stream, "  %s check      [<path>]\n", program);
-    fprintf(stream, "%*s[--format=text|json]\n", project_indent, "");
-    fprintf(stream, "  %s run        [<path>]\n", program);
-    fprintf(stream, "%*s[--release]\n", project_indent, "");
-    fprintf(stream, "%*s[--keep-ir]\n", project_indent, "");
-    fprintf(stream, "%*s[-- <args>...]\n", project_indent, "");
-    fprintf(stream, "  %s clean      [<path>]\n", program);
-    fprintf(stream, "  %s pack       [<path>]\n", program);
-    fprintf(stream, "%*s[--platform=<platform>]...\n", project_indent, "");
-    fprintf(stream, "%*s[--sysroot=<path>]\n", project_indent, "");
-    fprintf(stream, "  %s deps       add     <pkg-name>\n", program);
-    fprintf(stream, "%*s[<path>]\n", deps_indent, "");
-    fprintf(stream, "  %s deps       remove  <pkg-name>\n", program);
-    fprintf(stream, "%*s[<path>]\n", deps_indent, "");
-    fprintf(stream, "  %s deps       install [<path>]\n", program);
-    fprintf(stream, "%*s[--force]\n", deps_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Project name", "  %s init       [<name>]", program);
+    feng_cli_print_usage_line(
+        stream, "Project type", "%*s[--target=bin|lib]", project_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Project root", "  %s build      [<path>]", program);
+    feng_cli_print_usage_line(
+        stream, "Release mode", "%*s[--release]", project_indent, "");
+    feng_cli_print_usage_line(stream,
+                              "Target platform",
+                              "%*s[--platform=<platform>]...",
+                              project_indent,
+                              "");
+    feng_cli_print_usage_line(
+        stream, "Target sysroot", "%*s[--sysroot=<path>]", project_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Keep IR", "%*s[--keep-ir]", project_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Project root", "  %s check      [<path>]", program);
+    feng_cli_print_usage_line(
+        stream, "Input format", "%*s[--format=text|json]", project_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Project root", "  %s run        [<path>]", program);
+    feng_cli_print_usage_line(
+        stream, "Release mode", "%*s[--release]", project_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Keep IR", "%*s[--keep-ir]", project_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Program arguments", "%*s[-- <args>...]", project_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Project root", "  %s clean      [<path>]", program);
+    feng_cli_print_usage_line(
+        stream, "Project root", "  %s pack       [<path>]", program);
+    feng_cli_print_usage_line(stream,
+                              "Target platform",
+                              "%*s[--platform=<platform>]...",
+                              project_indent,
+                              "");
+    feng_cli_print_usage_line(
+        stream, "Target sysroot", "%*s[--sysroot=<path>]", project_indent, "");
+    fprintf(stream, "\n");
+    fprintf(stream, "Dependence:\n");
+    feng_cli_print_usage_line(
+        stream, "Package name", "  %s deps       add     <pkg-name>", program);
+    feng_cli_print_usage_line(
+        stream, "Project root", "%*s[<path>]", deps_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Package name", "  %s deps       remove  <pkg-name>", program);
+    feng_cli_print_usage_line(
+        stream, "Project root", "%*s[<path>]", deps_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Project root", "  %s deps       install [<path>]", program);
+    feng_cli_print_usage_line(
+        stream, "Force reinstall", "%*s[--force]", deps_indent, "");
     fprintf(stream, "\n");
     fprintf(stream, "Compile:\n");
-    fprintf(stream, "  %s <files>... [--target=bin|lib]\n", program);
-    fprintf(stream, "%*s[--platform=<platform>]\n", compile_indent, "");
-    fprintf(stream, "%*s[--sysroot=<path>]\n", compile_indent, "");
-    fprintf(stream, "%*s[--out=<dir>]\n", compile_indent, "");
-    fprintf(stream, "%*s[--name=<artifact>]\n", compile_indent, "");
-    fprintf(stream, "%*s[--release]\n", compile_indent, "");
-    fprintf(stream, "%*s[--keep-ir]\n", compile_indent, "");
-    fprintf(stream, "%*s[--pkg=<fb-path>]...\n", compile_indent, "");
-    fprintf(stream, "%*s[--lib=<lib-path>]...\n", compile_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Project type", "  %s <files>... [--target=bin|lib]", program);
+    feng_cli_print_usage_line(stream,
+                              "Target platform",
+                              "%*s[--platform=<platform>]",
+                              compile_indent,
+                              "");
+    feng_cli_print_usage_line(
+        stream, "Target sysroot", "%*s[--sysroot=<path>]", compile_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Output directory", "%*s[--out=<dir>]", compile_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Artifact name", "%*s[--name=<artifact>]", compile_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Release mode", "%*s[--release]", compile_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Keep IR", "%*s[--keep-ir]", compile_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Package list", "%*s[--pkg=<fb-path>]...", compile_indent, "");
+    feng_cli_print_usage_line(
+        stream, "Library list", "%*s[--lib=<lib-path>]...", compile_indent, "");
     fprintf(stream, "\n");
     fprintf(stream, "Protocol:\n");
-    fprintf(stream, "  %s lsp        [--stdio]\n", program);
-    fprintf(stream, "  %s dap        [--stdio]\n", program);
+    feng_cli_print_usage_line(
+        stream, "Start LSP", "  %s lsp        [--stdio]", program);
+    feng_cli_print_usage_line(
+        stream, "Start DAP", "  %s dap        [--stdio]", program);
     fprintf(stream, "\n");
     fprintf(stream, "Global:\n");
-    fprintf(stream, "  -h, --help      Display this message.\n");
-    fprintf(stream, "  -v, --version   Display version information.\n");
+    feng_cli_print_usage_line(stream, "Display help message", "  -h, --help");
+    feng_cli_print_usage_line(
+        stream, "Display version info", "  -v, --version");
+    fprintf(stream, "\n");
     // fprintf(stderr, "  %s tool compile [--target=bin|lib] [--emit-c=<path>] <file>\n", program);
     // fprintf(stderr, "  %s tool lex <file>\n", program);
     // fprintf(stderr, "  %s tool parse <file>\n", program);
