@@ -5,6 +5,8 @@
 FENG_STD_EXTLIB_BUILD_ROOT=""
 FENG_STD_EXTLIB_SOURCE_DIR=""
 FENG_STD_EXTLIB_MAKE_ARGS=()
+FENG_STD_EXTLIB_LIBC=""
+FENG_STD_EXTLIB_OUTPUT=""
 
 # Report a fatal std extlib build error.
 feng_std_extlib_die() {
@@ -24,8 +26,43 @@ feng_std_extlib_require_executable() {
     feng_std_extlib_die "required executable not found: $1"
 }
 
-# Detect the complete native host platform and configure its bundled toolchain.
-feng_std_extlib_configure_host() {
+# Parse the common target-libc option and one optional custom output path.
+feng_std_extlib_parse_args() {
+  local usage_text="$1"
+  shift
+
+  FENG_STD_EXTLIB_LIBC=""
+  FENG_STD_EXTLIB_OUTPUT=""
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --libc=gnu|--libc=musl)
+        [[ -z "${FENG_STD_EXTLIB_LIBC}" ]] ||
+          feng_std_extlib_die "--libc may only be specified once"
+        FENG_STD_EXTLIB_LIBC="${1#--libc=}"
+        ;;
+      --libc=*)
+        feng_std_extlib_die \
+          "unsupported Linux libc: ${1#--libc=}; expected gnu or musl"
+        ;;
+      -h|--help)
+        printf '%s\n' "${usage_text}"
+        exit 0
+        ;;
+      -*)
+        feng_std_extlib_die "unknown argument: $1"
+        ;;
+      *)
+        [[ -z "${FENG_STD_EXTLIB_OUTPUT}" ]] ||
+          feng_std_extlib_die "only one custom output path may be specified"
+        FENG_STD_EXTLIB_OUTPUT="$1"
+        ;;
+    esac
+    shift
+  done
+}
+
+# Detect the host and configure its bundled tools for the selected target libc.
+feng_std_extlib_configure_target() {
   local host_arch target_triple target_flags
 
   case "$(uname -m)" in
@@ -36,9 +73,12 @@ feng_std_extlib_configure_host() {
 
   case "$(uname -s)" in
     Darwin)
+      [[ -z "${FENG_STD_EXTLIB_LIBC}" ]] ||
+        feng_std_extlib_die "--libc is only valid on Linux"
       [[ "${host_arch}" == "arm64" ]] ||
         feng_std_extlib_die "unsupported macOS build environment: macos-${host_arch}"
       FENG_STD_EXTLIB_HOST_OS="macos"
+      FENG_STD_EXTLIB_HOST_PLATFORM="macos-arm64"
       FENG_STD_EXTLIB_PLATFORM="macos-arm64"
       target_triple="arm64-apple-macosx"
       FENG_STD_EXTLIB_EXPECTED_FORMAT="Mach-O 64-bit object arm64"
@@ -50,16 +90,19 @@ feng_std_extlib_configure_host() {
       target_flags="--target=${target_triple} -isysroot ${FENG_STD_EXTLIB_SDK_PATH}"
       ;;
     Linux)
+      [[ -n "${FENG_STD_EXTLIB_LIBC}" ]] ||
+        feng_std_extlib_die "Linux builds require --libc=gnu or --libc=musl"
       FENG_STD_EXTLIB_HOST_OS="linux"
-      FENG_STD_EXTLIB_PLATFORM="linux-${host_arch}-gnu"
+      FENG_STD_EXTLIB_HOST_PLATFORM="linux-${host_arch}-gnu"
+      FENG_STD_EXTLIB_PLATFORM="linux-${host_arch}-${FENG_STD_EXTLIB_LIBC}"
       case "${host_arch}" in
         x64)
-          target_triple="x86_64-unknown-linux-gnu"
+          target_triple="x86_64-unknown-linux-${FENG_STD_EXTLIB_LIBC}"
           FENG_STD_EXTLIB_EXPECTED_FORMAT="ELF 64-bit LSB relocatable"
           FENG_STD_EXTLIB_EXPECTED_CPU="x86-64"
           ;;
         arm64)
-          target_triple="aarch64-unknown-linux-gnu"
+          target_triple="aarch64-unknown-linux-${FENG_STD_EXTLIB_LIBC}"
           FENG_STD_EXTLIB_EXPECTED_FORMAT="ELF 64-bit LSB relocatable"
           FENG_STD_EXTLIB_EXPECTED_CPU="ARM aarch64"
           ;;
@@ -78,7 +121,7 @@ feng_std_extlib_configure_host() {
       ;;
   esac
 
-  FENG_STD_EXTLIB_LLVM_BIN="${PROJECT_ROOT}/toolchain/llvm/${FENG_STD_EXTLIB_PLATFORM}/bin"
+  FENG_STD_EXTLIB_LLVM_BIN="${PROJECT_ROOT}/toolchain/llvm/${FENG_STD_EXTLIB_HOST_PLATFORM}/bin"
   FENG_STD_EXTLIB_CLANG="${FENG_STD_EXTLIB_LLVM_BIN}/clang"
   FENG_STD_EXTLIB_AR="${FENG_STD_EXTLIB_LLVM_BIN}/llvm-ar"
   FENG_STD_EXTLIB_CFLAGS="-O2 -Wall -Wextra -fPIC ${target_flags}"

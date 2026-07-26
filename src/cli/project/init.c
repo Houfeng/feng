@@ -448,9 +448,12 @@ int feng_cli_project_init_main(const char *program, int argc, char **argv) {
         goto cleanup;
     }
 
-    manifest_content = dup_printf("[package]\nname: \"%s\"\nversion: \"0.1.0\"\ntarget: \"%s\"\nsrc: \"src/\"\nout: \"build/\"\n",
+    manifest_content = dup_printf("[package]\nname: \"%s\"\nversion: \"0.1.0\"\ntarget: \"%s\"\nsrc: \"src/\"\nout: \"build/\"\n%s",
                                   package_name,
-                                  options.target_lib ? "lib" : "bin");
+                                  options.target_lib ? "lib" : "bin",
+                                  options.target_lib
+                                      ? "platform: \"macos-arm64,linux-x64-gnu,linux-x64-musl,linux-arm64-gnu,linux-arm64-musl\"\n"
+                                      : "");
     if (manifest_content == NULL) {
         fprintf(stderr, "out of memory preparing project manifest\n");
         goto cleanup;

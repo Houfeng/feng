@@ -132,9 +132,9 @@ rm -rf "$LOCAL_DEP_FIXTURE/build"
 rm -rf "$LOCAL_DEP_APP_FIXTURE/build"
 
 if expect_ok build "$FENG" build "$FIXTURE"; then
-    bin="$FIXTURE/build/bin/hello_project"
-    workspace_ft="$FIXTURE/build/obj/symbols/feng/cli/project.ft"
-    public_ft="$FIXTURE/build/mod/feng/cli/project.ft"
+    bin="$FIXTURE/build/$HOST_PLATFORM/bin/hello_project"
+    workspace_ft="$FIXTURE/build/$HOST_PLATFORM/obj/symbols/feng/cli/project.ft"
+    public_ft="$FIXTURE/build/$HOST_PLATFORM/mod/feng/cli/project.ft"
     if [[ ! -x "$bin" ]]; then
         echo "FAIL[build] missing executable $bin"
         failures=$((failures + 1))
@@ -181,8 +181,8 @@ if expect_ok run "$FENG" run "$FIXTURE"; then
 fi
 
 if expect_ok build_local_dep_app "$FENG" build "$LOCAL_DEP_APP_FIXTURE"; then
-    bin="$LOCAL_DEP_APP_FIXTURE/build/bin/local_dep_app"
-    dep_bundle="$LOCAL_DEP_FIXTURE/build/local_dep-0.1.0.fb"
+    bin="$LOCAL_DEP_APP_FIXTURE/build/$HOST_PLATFORM/bin/local_dep_app"
+    dep_bundle="$LOCAL_DEP_FIXTURE/build/pkg/local_dep-0.1.0.fb"
     if [[ ! -x "$bin" ]]; then
         echo "FAIL[build_local_dep_app] missing executable $bin"
         failures=$((failures + 1))
@@ -221,16 +221,16 @@ if expect_ok clean "$FENG" clean "$FIXTURE"; then
 fi
 
 if expect_ok default_path bash -lc "cd '$FIXTURE' && '$FENG' build"; then
-    if [[ ! -x "$FIXTURE/build/bin/hello_project" ]]; then
+    if [[ ! -x "$FIXTURE/build/$HOST_PLATFORM/bin/hello_project" ]]; then
         echo "FAIL[default_path] missing rebuilt executable"
         failures=$((failures + 1))
     fi
 fi
 
 if expect_ok build_lib "$FENG" build "$LIB_FIXTURE"; then
-    lib="$LIB_FIXTURE/build/lib/$HOST_PLATFORM/libhello_library.a"
-    workspace_ft="$LIB_FIXTURE/build/obj/symbols/feng/cli/project/lib.ft"
-    public_ft="$LIB_FIXTURE/build/mod/feng/cli/project/lib.ft"
+    lib="$LIB_FIXTURE/build/$HOST_PLATFORM/lib/libhello_library.a"
+    workspace_ft="$LIB_FIXTURE/build/$HOST_PLATFORM/obj/symbols/feng/cli/project/lib.ft"
+    public_ft="$LIB_FIXTURE/build/$HOST_PLATFORM/mod/feng/cli/project/lib.ft"
     if [[ ! -f "$lib" ]]; then
         echo "FAIL[build_lib] missing archive $lib"
         failures=$((failures + 1))
@@ -249,7 +249,7 @@ if expect_ok build_lib "$FENG" build "$LIB_FIXTURE"; then
 fi
 
 if expect_ok pack_lib "$FENG" pack "$LIB_FIXTURE"; then
-    package="$LIB_FIXTURE/build/hello_library-0.1.0.fb"
+    package="$LIB_FIXTURE/build/pkg/hello_library-0.1.0.fb"
     if [[ ! -f "$package" ]]; then
         echo "FAIL[pack_lib] missing bundle $package"
         failures=$((failures + 1))
@@ -289,7 +289,7 @@ if expect_ok pack_lib "$FENG" pack "$LIB_FIXTURE"; then
                     echo "FAIL[pack_lib] packaged .ft has wrong magic: '$magic'"
                     failures=$((failures + 1))
                 fi
-                disk_ft="$LIB_FIXTURE/build/mod/feng/cli/project/lib.ft"
+                disk_ft="$LIB_FIXTURE/build/$HOST_PLATFORM/mod/feng/cli/project/lib.ft"
                 if [[ ! -f "$disk_ft" ]]; then
                     echo "FAIL[pack_lib] missing on-disk source .ft for byte-equality check"
                     failures=$((failures + 1))
@@ -321,8 +321,8 @@ if expect_ok pack_lib "$FENG" pack "$LIB_FIXTURE"; then
                 echo "FAIL[pack_lib] packaged manifest missing version"
                 failures=$((failures + 1))
             fi
-            if ! grep -qx "arch: \"$HOST_PLATFORM\"" "$WORK/pack_lib.manifest"; then
-                echo "FAIL[pack_lib] packaged manifest missing host arch"
+            if ! grep -qx "platform: \"$HOST_PLATFORM\"" "$WORK/pack_lib.manifest"; then
+                echo "FAIL[pack_lib] packaged manifest missing host platform"
                 failures=$((failures + 1))
             fi
             if ! grep -qx 'abi: "feng"' "$WORK/pack_lib.manifest"; then

@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include "cli/common.h"
+#include "platform/platform.h"
 
 typedef struct SourceList {
     char **items;
@@ -606,35 +607,25 @@ bool feng_cli_project_asset_targets_extlib(const FengCliProjectManifestAsset *as
 }
 
 static bool fill_output_paths(FengCliProjectContext *context, FengCliProjectError *error) {
-    char *bin_dir;
+    char *package_dir;
     char *package_name;
 
-    bin_dir = path_join(context->out_root, "bin");
-    if (bin_dir == NULL) {
-        set_error(error, context->out_root, 0U, "out of memory");
-        return false;
-    }
-    context->binary_path = path_join(bin_dir, context->manifest.name);
-    free(bin_dir);
-    if (context->binary_path == NULL) {
+    package_dir = path_join(context->out_root, "pkg");
+    if (package_dir == NULL) {
         set_error(error, context->out_root, 0U, "out of memory");
         return false;
     }
 
     package_name = dup_printf("%s-%s.fb", context->manifest.name, context->manifest.version);
     if (package_name == NULL) {
+        free(package_dir);
         set_error(error, context->out_root, 0U, "out of memory");
         return false;
     }
-    context->package_path = path_join(context->out_root, package_name);
+    context->package_path = path_join(package_dir, package_name);
+    free(package_dir);
     free(package_name);
     if (context->package_path == NULL) {
-        set_error(error, context->out_root, 0U, "out of memory");
-        return false;
-    }
-
-    context->asset_stage_root = path_join(context->out_root, "assets");
-    if (context->asset_stage_root == NULL) {
         set_error(error, context->out_root, 0U, "out of memory");
         return false;
     }
@@ -643,6 +634,8 @@ static bool fill_output_paths(FengCliProjectContext *context, FengCliProjectErro
 
 static bool stage_single_asset(const FengCliProjectContext *context,
                                const FengCliProjectManifestAsset *asset,
+                               const char *platform,
+                               const char *binary_path,
                                const char *dest_root,
                                FengCliProjectError *error) {
     char *source_path = NULL;
@@ -664,6 +657,16 @@ static bool stage_single_asset(const FengCliProjectContext *context,
     if (source_path == NULL) {
         set_error(error, context->manifest_path, asset->line, "out of memory");
         goto fail;
+    }
+    if (feng_cli_project_asset_targets_extlib(asset)) {
+        char *platform_source = path_join(source_path, platform);
+
+        free(source_path);
+        source_path = platform_source;
+        if (source_path == NULL) {
+            set_error(error, context->manifest_path, asset->line, "out of memory");
+            goto fail;
+        }
     }
     resolved_source = realpath(source_path, NULL);
     if (resolved_source == NULL) {
@@ -699,7 +702,7 @@ static bool stage_single_asset(const FengCliProjectContext *context,
         goto fail;
     }
     if (context->manifest.target == FENG_COMPILE_TARGET_BIN &&
-        strcmp(dest_path, context->binary_path) == 0) {
+        strcmp(dest_path, binary_path) == 0) {
         set_error(error,
                   context->manifest_path,
                   asset->line,
@@ -746,15 +749,31 @@ fail:
 }
 
 bool feng_cli_project_stage_assets(const FengCliProjectContext *context,
+                                   const char *platform,
                                    FengCliProjectError *out_error) {
     size_t index;
+    char *platform_out_root = NULL;
+    char *binary_path = NULL;
+    char *asset_stage_root = NULL;
 
-    if (context == NULL) {
+    if (context == NULL || platform == NULL) {
         set_error(out_error, NULL, 0U, "invalid asset staging request");
         return false;
     }
     if (context->manifest.asset_count == 0U) {
         return true;
+    }
+    platform_out_root = feng_cli_project_platform_out_root(context, platform);
+    binary_path = feng_cli_project_platform_binary_path(context, platform);
+    asset_stage_root = platform_out_root != NULL
+        ? path_join(platform_out_root, "assets")
+        : NULL;
+    if (platform_out_root == NULL || binary_path == NULL || asset_stage_root == NULL) {
+        set_error(out_error, context->out_root, 0U, "out of memory");
+        free(asset_stage_root);
+        free(binary_path);
+        free(platform_out_root);
+        return false;
     }
 
     for (index = 0U; index < context->manifest.asset_count; ++index) {
@@ -762,23 +781,244 @@ bool feng_cli_project_stage_assets(const FengCliProjectContext *context,
         char *dest_root;
 
         if (context->manifest.target == FENG_COMPILE_TARGET_BIN) {
-            dest_root = path_dirname_dup(context->binary_path);
+            dest_root = path_dirname_dup(binary_path);
         } else if (feng_cli_project_asset_targets_extlib(asset)) {
-            dest_root = dup_cstr(context->out_root);
+            dest_root = dup_cstr(platform_out_root);
         } else {
-            dest_root = dup_cstr(context->asset_stage_root);
+            dest_root = dup_cstr(asset_stage_root);
         }
         if (dest_root == NULL) {
             set_error(out_error, context->out_root, 0U, "out of memory");
-            return false;
+            goto fail;
         }
-        if (!stage_single_asset(context, asset, dest_root, out_error)) {
+        if (!stage_single_asset(context,
+                                asset,
+                                platform,
+                                binary_path,
+                                dest_root,
+                                out_error)) {
             free(dest_root);
-            return false;
+            goto fail;
         }
         free(dest_root);
     }
+    free(asset_stage_root);
+    free(binary_path);
+    free(platform_out_root);
     return true;
+
+fail:
+    free(asset_stage_root);
+    free(binary_path);
+    free(platform_out_root);
+    return false;
+}
+
+/* Return whether a manifest platform whitelist contains one platform. */
+static bool manifest_contains_platform(const FengCliProjectManifest *manifest,
+                                       const char *platform) {
+    size_t index;
+
+    for (index = 0U; index < manifest->platform_count; ++index) {
+        if (strcmp(manifest->platforms[index], platform) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Append one validated, unique platform to an owned selection. */
+static bool platform_selection_append(FengCliProjectPlatformSelection *selection,
+                                      const char *platform,
+                                      const FengCliProjectContext *context,
+                                      FengCliProjectError *error) {
+    char **resized;
+    char *copy;
+    size_t index;
+
+    if (!feng_platform_is_valid(platform)) {
+        set_error(error,
+                  context->manifest_path,
+                  0U,
+                  "invalid target platform: %s",
+                  platform != NULL && platform[0] != '\0' ? platform : "(empty)");
+        return false;
+    }
+    if (context->manifest.platform_count > 0U &&
+        !manifest_contains_platform(&context->manifest, platform)) {
+        set_error(error,
+                  context->manifest_path,
+                  0U,
+                  "target platform is not declared by feng.fm: %s",
+                  platform);
+        return false;
+    }
+    for (index = 0U; index < selection->platform_count; ++index) {
+        if (strcmp(selection->platforms[index], platform) == 0) {
+            set_error(error,
+                      context->manifest_path,
+                      0U,
+                      "target platform was selected more than once: %s",
+                      platform);
+            return false;
+        }
+    }
+    copy = dup_cstr(platform);
+    if (copy == NULL) {
+        set_error(error, context->manifest_path, 0U, "out of memory");
+        return false;
+    }
+    resized = (char **)realloc(
+        selection->platforms,
+        (selection->platform_count + 1U) * sizeof(*selection->platforms));
+    if (resized == NULL) {
+        free(copy);
+        set_error(error, context->manifest_path, 0U, "out of memory");
+        return false;
+    }
+    selection->platforms = resized;
+    selection->platforms[selection->platform_count++] = copy;
+    return true;
+}
+
+bool feng_cli_project_select_platforms(
+    const FengCliProjectContext *context,
+    const char *const *requested_platforms,
+    size_t requested_platform_count,
+    const char *sysroot,
+    bool host_only,
+    FengCliProjectPlatformSelection *out_selection,
+    FengCliProjectError *out_error) {
+    FengCliProjectPlatformSelection selection = {0};
+    char *host_platform = NULL;
+    char *host_error = NULL;
+    size_t index;
+
+    if (context == NULL || out_selection == NULL) {
+        set_error(out_error, NULL, 0U, "invalid project platform selection request");
+        return false;
+    }
+    if (host_only) {
+        if (requested_platform_count > 0U || sysroot != NULL) {
+            set_error(out_error,
+                      context->manifest_path,
+                      0U,
+                      "host-only project command does not accept target platform or sysroot");
+            return false;
+        }
+        if (!feng_platform_detect_host_platform(&host_platform, &host_error)) {
+            set_error(out_error,
+                      context->manifest_path,
+                      0U,
+                      "%s",
+                      host_error != NULL ? host_error : "failed to detect host platform");
+            free(host_error);
+            return false;
+        }
+        if (!platform_selection_append(&selection,
+                                       host_platform,
+                                       context,
+                                       out_error)) {
+            free(host_platform);
+            return false;
+        }
+        free(host_platform);
+    } else if (requested_platform_count > 0U) {
+        for (index = 0U; index < requested_platform_count; ++index) {
+            if (!platform_selection_append(&selection,
+                                           requested_platforms[index],
+                                           context,
+                                           out_error)) {
+                feng_cli_project_platform_selection_dispose(&selection);
+                return false;
+            }
+        }
+    } else if (context->manifest.platform_count > 0U) {
+        for (index = 0U; index < context->manifest.platform_count; ++index) {
+            if (!platform_selection_append(&selection,
+                                           context->manifest.platforms[index],
+                                           context,
+                                           out_error)) {
+                feng_cli_project_platform_selection_dispose(&selection);
+                return false;
+            }
+        }
+    } else {
+        if (!feng_platform_detect_host_platform(&host_platform, &host_error)) {
+            set_error(out_error,
+                      context->manifest_path,
+                      0U,
+                      "%s",
+                      host_error != NULL ? host_error : "failed to detect host platform");
+            free(host_error);
+            return false;
+        }
+        if (!platform_selection_append(&selection,
+                                       host_platform,
+                                       context,
+                                       out_error)) {
+            free(host_platform);
+            return false;
+        }
+        free(host_platform);
+    }
+
+    if (sysroot != NULL && selection.platform_count != 1U) {
+        set_error(out_error,
+                  context->manifest_path,
+                  0U,
+                  "--sysroot requires exactly one selected target platform");
+        feng_cli_project_platform_selection_dispose(&selection);
+        return false;
+    }
+    *out_selection = selection;
+    return true;
+}
+
+void feng_cli_project_platform_selection_dispose(
+    FengCliProjectPlatformSelection *selection) {
+    size_t index;
+
+    if (selection == NULL) {
+        return;
+    }
+    for (index = 0U; index < selection->platform_count; ++index) {
+        free(selection->platforms[index]);
+    }
+    free(selection->platforms);
+    selection->platforms = NULL;
+    selection->platform_count = 0U;
+}
+
+char *feng_cli_project_platform_out_root(const FengCliProjectContext *context,
+                                         const char *platform) {
+    if (context == NULL || context->out_root == NULL || platform == NULL) {
+        return NULL;
+    }
+    return path_join(context->out_root, platform);
+}
+
+char *feng_cli_project_platform_binary_path(const FengCliProjectContext *context,
+                                            const char *platform) {
+    char *platform_out_root;
+    char *bin_dir;
+    char *binary_path;
+
+    if (context == NULL) {
+        return NULL;
+    }
+    platform_out_root = feng_cli_project_platform_out_root(context, platform);
+    if (platform_out_root == NULL) {
+        return NULL;
+    }
+    bin_dir = path_join(platform_out_root, "bin");
+    free(platform_out_root);
+    if (bin_dir == NULL) {
+        return NULL;
+    }
+    binary_path = path_join(bin_dir, context->manifest.name);
+    free(bin_dir);
+    return binary_path;
 }
 
 bool feng_cli_project_open(const char *path_arg,
@@ -877,8 +1117,6 @@ void feng_cli_project_context_dispose(FengCliProjectContext *context) {
     free(context->project_root);
     free(context->source_root);
     free(context->out_root);
-    free(context->asset_stage_root);
-    free(context->binary_path);
     free(context->package_path);
     for (index = 0U; index < context->source_count; ++index) {
         free(context->source_paths[index]);
@@ -890,8 +1128,6 @@ void feng_cli_project_context_dispose(FengCliProjectContext *context) {
     context->project_root = NULL;
     context->source_root = NULL;
     context->out_root = NULL;
-    context->asset_stage_root = NULL;
-    context->binary_path = NULL;
     context->package_path = NULL;
     context->source_paths = NULL;
     context->source_count = 0U;

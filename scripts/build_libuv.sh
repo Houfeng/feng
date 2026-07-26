@@ -9,6 +9,8 @@ MAKE_BIN="${MAKE:-make}"
 # shellcheck source=std_extlib_build_common.sh
 source "${SCRIPT_DIR}/std_extlib_build_common.sh"
 
-[[ "$#" -le 1 ]] || feng_std_extlib_die "usage: scripts/build_libuv.sh [output-dir]"
-feng_std_extlib_configure_host
-feng_std_extlib_build_archive "${TARGET_DIR}" "libfeng_std_uv.a" "${1:-}"
+feng_std_extlib_parse_args \
+  "usage: scripts/build_libuv.sh [--libc=gnu|musl] [output-dir]" "$@"
+feng_std_extlib_configure_target
+feng_std_extlib_build_archive \
+  "${TARGET_DIR}" "libfeng_std_uv.a" "${FENG_STD_EXTLIB_OUTPUT}"

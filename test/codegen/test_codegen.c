@@ -3481,7 +3481,7 @@ static void test_float_modulo_codegen_uses_math_runtime(void) {
     }
 
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "#include <math.h>") != NULL);
+    ASSERT(strstr(out.c_source, "#include \"feng_generated.h\"") != NULL);
     ASSERT(strstr(out.c_source, "fmodf(") != NULL);
 
     feng_codegen_output_free(&out);

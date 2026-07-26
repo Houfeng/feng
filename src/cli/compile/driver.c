@@ -95,7 +95,7 @@ static char *path_join2(const char *a, const char *b) {
     return out;
 }
 
-static char *path_join_host_static_library(const char *dir, const char *library_name) {
+static char *path_join_static_library(const char *dir, const char *library_name) {
     char *file_name;
     char *path;
 
@@ -106,21 +106,6 @@ static char *path_join_host_static_library(const char *dir, const char *library_
     path = path_join2(dir, file_name);
     free(file_name);
     return path;
-}
-
-static char *host_runtime_dynamic_library_file_name(const char *library_name) {
-    if (library_name == NULL || library_name[0] == '\0') {
-        return NULL;
-    }
-#if defined(__APPLE__)
-    return dup_printf("lib%s.dylib", library_name);
-#elif defined(_WIN32)
-    return dup_printf("%s.dll", library_name);
-#elif defined(__linux__)
-    return dup_printf("lib%s.so", library_name);
-#else
-    return NULL;
-#endif
 }
 
 /* Strip the trailing path component, returning a malloc'd directory copy.
@@ -392,17 +377,17 @@ static bool bundle_entry_is_public_ft(const FengZipEntryInfo *entry) {
     return length > 7U && strcmp(entry->path + length - 3U, ".ft") == 0;
 }
 
-static bool bundle_entry_is_host_library(const FengZipEntryInfo *entry,
-                                         const char *host_target) {
+static bool bundle_entry_is_target_library(const FengZipEntryInfo *entry,
+                                           const char *target_platform) {
     char *prefix;
     bool matches;
     size_t prefix_length;
     size_t path_length;
 
-    if (entry == NULL || entry->is_directory || host_target == NULL) {
+    if (entry == NULL || entry->is_directory || target_platform == NULL) {
         return false;
     }
-    prefix = path_join2("lib", host_target);
+    prefix = path_join2("lib", target_platform);
     if (prefix == NULL) {
         return false;
     }
@@ -560,7 +545,7 @@ done:
 }
 
 static bool scan_bundle_dependencies(const char *bundle_path,
-                                     const char *host_target,
+                                     const char *target_platform,
                                      BundleScanInfo *out_info,
                                      char **out_error_message) {
     FengZipReader reader = {0};
@@ -594,13 +579,13 @@ static bool scan_bundle_dependencies(const char *bundle_path,
                               bundle_path,
                               zip_error != NULL ? zip_error : "unknown error");
         }
-        if (bundle_entry_is_host_library(&entry, host_target)) {
+        if (bundle_entry_is_target_library(&entry, target_platform)) {
             if (out_info->library_entry_path != NULL) {
                 feng_zip_reader_dispose(&reader);
                 return set_errorf(out_error_message,
-                                  "bundle %s contains multiple host libraries under lib/%s",
+                                  "bundle %s contains multiple target libraries under lib/%s",
                                   bundle_path,
-                                  host_target);
+                                  target_platform);
             }
             out_info->library_entry_path = str_dup_cstr(entry.path);
             if (out_info->library_entry_path == NULL) {
@@ -713,9 +698,9 @@ static bool scan_bundle_dependencies(const char *bundle_path,
     feng_zip_reader_dispose(&reader);
     if (out_info->library_entry_path == NULL) {
         return set_errorf(out_error_message,
-                          "bundle %s does not contain a host static library under lib/%s",
+                          "bundle %s does not contain a target static library under lib/%s",
                           bundle_path,
-                          host_target);
+                          target_platform);
     }
     return true;
 }
@@ -964,7 +949,7 @@ static bool collect_scanned_bundle_abi_libraries(const BundleScanInfo *bundles,
 
 static bool collect_bundle_link_libraries(const char *const *bundle_paths,
                                           size_t bundle_count,
-                                          const char *host_target,
+                                          const char *target_platform,
                                           char ***out_library_paths,
                                           size_t *out_library_count,
                                           char ***out_abi_libraries,
@@ -983,7 +968,7 @@ static bool collect_bundle_link_libraries(const char *const *bundle_paths,
 
     for (index = 0U; index < bundle_count; ++index) {
         if (!scan_bundle_dependencies(bundle_paths[index],
-                                      host_target,
+                                      target_platform,
                                       &bundles[index],
                                       out_error_message)) {
             goto done;
@@ -1022,7 +1007,7 @@ done:
 
 static bool collect_bundle_extlib_static_libraries(const char *const *bundle_paths,
                                                    size_t bundle_count,
-                                                   const char *host_target,
+                                                   const char *target_platform,
                                                    char *const *library_names,
                                                    size_t library_count,
                                                    char ***out_library_paths,
@@ -1051,13 +1036,13 @@ static bool collect_bundle_extlib_static_libraries(const char *const *bundle_pat
     if (bundle_count == 0U || library_count == 0U) {
         return true;
     }
-    if (host_target == NULL || host_target[0] == '\0') {
+    if (target_platform == NULL || target_platform[0] == '\0') {
         return set_errorf(out_error_message,
-                          "host target is required to prepare bundle extlib static libraries");
+                          "target platform is required to prepare bundle extlib static libraries");
     }
 
     matches = calloc(library_count, sizeof(*matches));
-    entry_prefix = dup_printf("extlib/%s/", host_target);
+    entry_prefix = dup_printf("extlib/%s/", target_platform);
     if (matches == NULL || entry_prefix == NULL) {
         set_errorf(out_error_message, "out of memory");
         goto done;
@@ -1211,21 +1196,9 @@ done:
     return ok;
 }
 
-static const char *host_runtime_dynamic_library_suffix(void) {
-#if defined(__APPLE__)
-    return ".dylib";
-#elif defined(_WIN32)
-    return ".dll";
-#elif defined(__linux__)
-    return ".so";
-#else
-    return NULL;
-#endif
-}
-
 static bool extract_bundle_runtime_dynamic_libraries(const char *const *bundle_paths,
                                                      size_t bundle_count,
-                                                     const char *host_target,
+                                                     const char *target_platform,
                                                      char *const *library_names,
                                                      size_t library_count,
                                                      const char *binary_path,
@@ -1243,23 +1216,24 @@ static bool extract_bundle_runtime_dynamic_libraries(const char *const *bundle_p
     if (bundle_count == 0U || library_count == 0U) {
         return true;
     }
-    if (host_target == NULL || host_target[0] == '\0') {
+    if (target_platform == NULL || target_platform[0] == '\0') {
         return set_errorf(out_error_message,
-                          "host target is required to release bundle extlib dynamic libraries");
+                          "target platform is required to release bundle extlib dynamic libraries");
     }
     if (binary_path == NULL || binary_path[0] == '\0') {
         return set_errorf(out_error_message,
                           "binary output path is required to release bundle extlib dynamic libraries");
     }
 
-    suffix = host_runtime_dynamic_library_suffix();
+    suffix = feng_platform_dynamic_library_suffix(target_platform);
     if (suffix == NULL) {
         return set_errorf(out_error_message,
-                          "unsupported host OS for bundle extlib dynamic library release");
+                          "unsupported target platform for bundle extlib dynamic library release: %s",
+                          target_platform);
     }
 
     binary_dir = path_dirname_dup(binary_path);
-    entry_prefix = dup_printf("extlib/%s/", host_target);
+    entry_prefix = dup_printf("extlib/%s/", target_platform);
     if (binary_dir == NULL || entry_prefix == NULL) {
         set_errorf(out_error_message, "out of memory");
         goto done;
@@ -1315,7 +1289,9 @@ static bool extract_bundle_runtime_dynamic_libraries(const char *const *bundle_p
                 size_t lib_index;
 
                 for (lib_index = 0U; lib_index < library_count; ++lib_index) {
-                    char *expected = host_runtime_dynamic_library_file_name(library_names[lib_index]);
+                    char *expected =
+                        feng_platform_dynamic_library_file_name(target_platform,
+                                                                library_names[lib_index]);
 
                     if (expected != NULL && strcmp(path_basename(info.path), expected) == 0) {
                         matched = true;
@@ -1407,13 +1383,13 @@ done:
 /* --- runtime artefact discovery ----------------------------------------- */
 
 static char *locate_runtime_lib(const char *program_path,
-                                const char *host_platform) {
-    char *lib_subdir = path_join2("lib", host_platform);
+                                const char *target_platform) {
+    char *lib_subdir = path_join2("lib", target_platform);
     char *runtime_rel = NULL;
     char *candidate = NULL;
 
     if (lib_subdir != NULL) {
-        runtime_rel = path_join_host_static_library(lib_subdir, "feng_runtime");
+        runtime_rel = path_join_static_library(lib_subdir, "feng_runtime");
     }
     if (runtime_rel != NULL) {
         candidate = feng_cli_require_install_path(program_path,
@@ -1481,16 +1457,15 @@ static char *locate_host_ranlib(const char *program_path, char **out_error_messa
     return feng_cli_resolve_host_tool(program_path, &strategy, out_error_message);
 }
 
-/* Resolve the native Linux sysroot shipped beside the Feng executable. */
-#if defined(__linux__)
-static char *locate_linux_native_sysroot(const char *program_path,
-                                         const char *host_platform,
+/* Resolve one Linux target sysroot shipped beside the Feng executable. */
+static char *locate_linux_target_sysroot(const char *program_path,
+                                         const char *target_platform,
                                          char **out_error_message) {
-    char *relative_path = path_join2("toolchain/sysroot", host_platform);
+    char *relative_path = path_join2("toolchain/sysroot", target_platform);
     char *sysroot;
 
     if (relative_path == NULL) {
-        set_errorf(out_error_message, "out of memory composing native sysroot path");
+        set_errorf(out_error_message, "out of memory composing target sysroot path");
         return NULL;
     }
     sysroot = feng_cli_require_install_path(program_path,
@@ -1500,7 +1475,30 @@ static char *locate_linux_native_sysroot(const char *program_path,
     free(relative_path);
     return sysroot;
 }
-#endif
+
+/* Resolve and validate an explicit SDK/sysroot directory. */
+static char *resolve_explicit_sysroot(const char *path,
+                                      char **out_error_message) {
+    char *resolved;
+    struct stat status;
+
+    resolved = realpath(path, NULL);
+    if (resolved == NULL) {
+        set_errorf(out_error_message,
+                   "cannot resolve explicit sysroot %s: %s",
+                   path,
+                   strerror(errno));
+        return NULL;
+    }
+    if (stat(resolved, &status) != 0 || !S_ISDIR(status.st_mode)) {
+        set_errorf(out_error_message,
+                   "explicit sysroot is not an available directory: %s",
+                   resolved);
+        free(resolved);
+        return NULL;
+    }
+    return resolved;
+}
 
 /* --- extern calling-convention link library mining ----------------------- */
 
@@ -1846,8 +1844,8 @@ static bool spawn_and_capture_stdout(char *const argv[],
     return true;
 }
 
-/* Resolve and validate the SDK required by the macOS native Clang driver. */
-static char *locate_macos_native_sdk(char **out_error_message) {
+/* Resolve and validate the default SDK for a macOS executable target. */
+static char *locate_macos_target_sdk(char **out_error_message) {
     char *xcrun = feng_cli_find_executable_on_path("xcrun");
     char *sdk_path = NULL;
     struct stat status;
@@ -1918,48 +1916,57 @@ static bool argv_push_mode_flags(ArgVec *av, bool release) {
     return true;
 }
 
-/* Add the explicit native target and SDK/sysroot required by bundled Clang. */
-static bool argv_push_native_platform_flags(ArgVec *av,
+/* Add the explicit target and SDK/sysroot required by bundled Clang. */
+static bool argv_push_target_platform_flags(ArgVec *av,
+                                            const char *target_platform,
                                             const char *clang_target,
-                                            const char *native_sdk_path,
-                                            const char *native_sysroot,
+                                            const char *target_sysroot,
                                             bool link_executable) {
     char *target_flag = dup_printf("--target=%s", clang_target);
     bool ok = target_flag != NULL && argv_push(av, target_flag);
 
     free(target_flag);
-#if defined(__APPLE__)
-    (void)native_sysroot;
-    (void)link_executable;
-    if (ok && !argv_push(av, "-isysroot")) {
-        ok = false;
-    }
-    if (ok && !argv_push(av, native_sdk_path)) {
-        ok = false;
-    }
-#elif defined(__linux__)
-    char *sysroot_flag;
-    char *gcc_toolchain_flag;
+    if (feng_platform_is_macos(target_platform)) {
+        if (target_sysroot == NULL) {
+            if (ok && !argv_push(av, "-ffreestanding")) {
+                ok = false;
+            }
+            if (ok && !argv_push(av, "-DFENG_COMPILE_SDK_FREE")) {
+                ok = false;
+            }
+        }
+        if (ok && target_sysroot != NULL && !argv_push(av, "-isysroot")) {
+            ok = false;
+        }
+        if (ok && target_sysroot != NULL && !argv_push(av, target_sysroot)) {
+            ok = false;
+        }
+    } else if (feng_platform_is_linux(target_platform)) {
+        char *sysroot_flag;
+        char *gcc_toolchain_flag;
 
-    (void)native_sdk_path;
-    sysroot_flag = dup_printf("--sysroot=%s", native_sysroot);
-    gcc_toolchain_flag = dup_printf("--gcc-toolchain=%s", native_sysroot);
-    if (ok && (sysroot_flag == NULL || !argv_push(av, sysroot_flag))) {
-        ok = false;
+        if (target_sysroot == NULL) {
+            return false;
+        }
+        sysroot_flag = dup_printf("--sysroot=%s", target_sysroot);
+        gcc_toolchain_flag = dup_printf("--gcc-toolchain=%s", target_sysroot);
+        if (ok && (sysroot_flag == NULL || !argv_push(av, sysroot_flag))) {
+            ok = false;
+        }
+        if (ok && (gcc_toolchain_flag == NULL || !argv_push(av, gcc_toolchain_flag))) {
+            ok = false;
+        }
+        if (ok && link_executable && !argv_push(av, "-fuse-ld=lld")) {
+            ok = false;
+        }
+        if (ok && link_executable &&
+            feng_platform_is_linux_musl(target_platform) &&
+            !argv_push(av, "-static")) {
+            ok = false;
+        }
+        free(sysroot_flag);
+        free(gcc_toolchain_flag);
     }
-    if (ok && (gcc_toolchain_flag == NULL || !argv_push(av, gcc_toolchain_flag))) {
-        ok = false;
-    }
-    if (ok && link_executable && !argv_push(av, "-fuse-ld=lld")) {
-        ok = false;
-    }
-    free(sysroot_flag);
-    free(gcc_toolchain_flag);
-#else
-    (void)native_sdk_path;
-    (void)native_sysroot;
-    (void)link_executable;
-#endif
     return ok;
 }
 
@@ -2001,25 +2008,22 @@ static bool argv_push_env_flags(ArgVec *av, const char *flags) {
 /* --- entry --------------------------------------------------------------- */
 
 int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
-    char *native_platform = NULL;
-    char *platform_error = NULL;
-    const char *native_clang_target;
+    const char *target_platform;
+    const char *target_clang;
 
-    if (opts == NULL || opts->c_path == NULL || opts->out_path == NULL) {
+    if (opts == NULL || opts->platform == NULL ||
+        opts->c_path == NULL || opts->out_path == NULL) {
         fprintf(stderr, "internal error: driver invoked with NULL options\n");
         return 2;
     }
-    if (!feng_platform_detect_host_platform(&native_platform, &platform_error)) {
-        fprintf(stderr,
-                "error: cannot determine native build platform: %s\n",
-                platform_error != NULL ? platform_error : "unknown error");
-        free(platform_error);
+    target_platform = opts->platform;
+    if (!feng_platform_is_valid(target_platform)) {
+        fprintf(stderr, "error: invalid target platform: %s\n", target_platform);
         return 1;
     }
-    native_clang_target = feng_platform_clang_target(native_platform);
-    if (native_clang_target == NULL) {
-        fprintf(stderr, "error: unsupported native build platform: %s\n", native_platform);
-        free(native_platform);
+    target_clang = feng_platform_clang_target(target_platform);
+    if (target_clang == NULL) {
+        fprintf(stderr, "error: target platform unavailable: %s\n", target_platform);
         return 1;
     }
 
@@ -2028,12 +2032,11 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         fprintf(stderr,
                 "error: cannot locate runtime headers.\n"
                 "  expected <feng-exe>/../include/feng_runtime.h.\n");
-        free(native_platform);
         return 1;
     }
 
     char *runtime_lib = NULL;
-    char *host_target = NULL;
+    char *bundle_platform = NULL;
     char *bundle_error = NULL;
     char *bundle_temp_dir = NULL;
     char *bundle_extlib_temp_dir = NULL;
@@ -2046,7 +2049,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     size_t bundle_extlib_static_lib_count = 0U;
     size_t bundle_extlib_satisfied_lib_count = 0U;
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
-        runtime_lib = locate_runtime_lib(opts->program_path, native_platform);
+        runtime_lib = locate_runtime_lib(opts->program_path, target_platform);
         if (runtime_lib == NULL) {
             char *runtime_basename = feng_platform_static_library_file_name("feng_runtime");
 
@@ -2054,29 +2057,23 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 "error: cannot locate %s.\n"
                 "  expected <feng-exe>/../lib/%s/%s\n",
                 runtime_basename != NULL ? runtime_basename : "the Feng runtime static library",
-                native_platform,
+                target_platform,
                 runtime_basename != NULL ? runtime_basename : "the Feng runtime static library");
             free(runtime_basename);
-            free(native_platform);
             free(include_dir);
             return 1;
         }
         if (opts->bundle_count > 0U) {
-            if (!feng_platform_detect_host_platform(&host_target, &bundle_error)) {
-                fprintf(stderr,
-                        "error: cannot determine host target for package bundles: %s\n",
-                        bundle_error != NULL ? bundle_error : "unknown error");
-                free(bundle_error);
-                free(native_platform);
+            bundle_platform = str_dup_cstr(target_platform);
+            if (bundle_platform == NULL) {
+                fprintf(stderr, "error: out of memory selecting package target platform\n");
                 free(runtime_lib);
                 free(include_dir);
                 return 1;
             }
-            free(bundle_error);
-            bundle_error = NULL;
             if (!collect_bundle_link_libraries(opts->bundle_paths,
                                                opts->bundle_count,
-                                               host_target,
+                                               bundle_platform,
                                                &bundle_libs,
                                                &bundle_lib_count,
                                                &bundle_abi_libs,
@@ -2087,8 +2084,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                         "error: failed to prepare package libraries: %s\n",
                         bundle_error != NULL ? bundle_error : "unknown error");
                 free(bundle_error);
-                free(host_target);
-                free(native_platform);
+                free(bundle_platform);
                 free(runtime_lib);
                 free(include_dir);
                 return 1;
@@ -2105,8 +2101,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         free_string_array(bundle_libs, bundle_lib_count);
         remove_tree(bundle_temp_dir);
         free(bundle_temp_dir);
-        free(host_target);
-        free(native_platform);
+        free(bundle_platform);
         free(runtime_lib);
         free(include_dir);
         return 1;
@@ -2121,8 +2116,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
                 free_string_array(bundle_libs, bundle_lib_count);
                 remove_tree(bundle_temp_dir);
                 free(bundle_temp_dir);
-                free(host_target);
-                free(native_platform);
+                free(bundle_platform);
                 free(runtime_lib);
                 free(include_dir);
                 return 1;
@@ -2134,7 +2128,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         && lib_count > 0U
         && !collect_bundle_extlib_static_libraries(opts->bundle_paths,
                                                    opts->bundle_count,
-                                                   host_target,
+                                                   bundle_platform,
                                                    libs,
                                                    lib_count,
                                                    &bundle_extlib_static_libs,
@@ -2153,8 +2147,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         free_string_array(bundle_libs, bundle_lib_count);
         remove_tree(bundle_temp_dir);
         free(bundle_temp_dir);
-        free(host_target);
-        free(native_platform);
+        free(bundle_platform);
         free(runtime_lib);
         free(include_dir);
         return 1;
@@ -2167,16 +2160,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     char *ar = NULL;
     char *ranlib = NULL;
     char *tool_error = NULL;
-#if defined(__APPLE__)
-    char *native_sdk_path = NULL;
-#else
-    const char *native_sdk_path = NULL;
-#endif
-#if defined(__linux__)
-    char *native_sysroot = NULL;
-#else
-    const char *native_sysroot = NULL;
-#endif
+    char *target_sysroot = NULL;
     ArgVec av = {0};
     bool ok = true;
     bool host_tool_failed = false;
@@ -2208,27 +2192,50 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             goto cleanup;
         }
     }
+
+    if (opts->sysroot != NULL) {
+        target_sysroot = resolve_explicit_sysroot(opts->sysroot, &tool_error);
+        if (target_sysroot == NULL) {
+            fprintf(stderr,
+                    "error: cannot select target SDK/sysroot: %s\n",
+                    tool_error != NULL ? tool_error : "unknown error");
+            rc = 1;
+            goto cleanup;
+        }
+    } else if (feng_platform_is_linux(target_platform)) {
+        target_sysroot = locate_linux_target_sysroot(opts->program_path,
+                                                     target_platform,
+                                                     &tool_error);
+        if (target_sysroot == NULL) {
+            fprintf(stderr,
+                    "error: cannot select Linux target sysroot: %s\n",
+                    tool_error != NULL ? tool_error : "unknown error");
+            rc = 1;
+            goto cleanup;
+        }
+    }
+
+    if (opts->target == FENG_COMPILE_TARGET_BIN &&
+        feng_platform_is_macos(target_platform)) {
 #if defined(__APPLE__)
-    native_sdk_path = locate_macos_native_sdk(&tool_error);
-    if (native_sdk_path == NULL) {
+        if (target_sysroot == NULL) {
+            target_sysroot = locate_macos_target_sdk(&tool_error);
+        }
+        if (target_sysroot == NULL) {
+            fprintf(stderr,
+                    "error: cannot select macOS target SDK: %s\n",
+                    tool_error != NULL ? tool_error : "unknown error");
+            rc = 1;
+            goto cleanup;
+        }
+#else
         fprintf(stderr,
-                "error: cannot select macOS native SDK: %s\n",
-                tool_error != NULL ? tool_error : "unknown error");
+                "error: target platform unavailable for executable output on this host: %s\n",
+                target_platform);
         rc = 1;
         goto cleanup;
-    }
-#elif defined(__linux__)
-    native_sysroot = locate_linux_native_sysroot(opts->program_path,
-                                                 native_platform,
-                                                 &tool_error);
-    if (native_sysroot == NULL) {
-        fprintf(stderr,
-                "error: cannot select native Linux sysroot: %s\n",
-                tool_error != NULL ? tool_error : "unknown error");
-        rc = 1;
-        goto cleanup;
-    }
 #endif
+    }
 
     size_t include_need = strlen(include_dir) + 3U;
     include_flag = malloc(include_need);
@@ -2248,19 +2255,23 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         if (!argv_push(&av, cc)) { ok = false; }
         if (ok && !argv_push(&av, "-std=gnu11")) { ok = false; }
         if (ok && !argv_push(&av, "-fexceptions")) { ok = false; }
-        if (ok && !argv_push_native_platform_flags(&av,
-                                                   native_clang_target,
-                                                   native_sdk_path,
-                                                   native_sysroot,
+        if (ok && !argv_push_target_platform_flags(&av,
+                                                   target_platform,
+                                                   target_clang,
+                                                   target_sysroot,
                                                    true)) { ok = false; }
         if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
-#if defined(__linux__)
         /* Per-function/data sections let --gc-sections discard unused
-         * runtime symbols at link time.  macOS clang already uses
-         * subsections-via-symbols by default so this is Linux-only. */
-        if (ok && opts->release && !argv_push(&av, "-ffunction-sections")) { ok = false; }
-        if (ok && opts->release && !argv_push(&av, "-fdata-sections")) { ok = false; }
-#endif
+         * runtime symbols at Linux link time. macOS Clang already uses
+         * subsections-via-symbols by default. */
+        if (ok && opts->release && feng_platform_is_linux(target_platform) &&
+            !argv_push(&av, "-ffunction-sections")) {
+            ok = false;
+        }
+        if (ok && opts->release && feng_platform_is_linux(target_platform) &&
+            !argv_push(&av, "-fdata-sections")) {
+            ok = false;
+        }
         if (ok && !argv_push(&av, "-Wall")) { ok = false; }
         if (ok && !argv_push(&av, "-Wextra")) { ok = false; }
         /* Generated C may emit fit-helper functions that are not exercised
@@ -2283,10 +2294,10 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         if (ok && !argv_push(&av, runtime_lib)) { ok = false; }
         if (ok && !argv_push(&av, "-lpthread")) { ok = false; }
         /*
-         * Linux platform support libraries include libdl for native static
+         * Linux platform support libraries include libdl for target static
          * dependencies that use the pre-glibc-2.34 dynamic-loader ABI.
          */
-        if (ok && strncmp(native_platform, "linux-", 6U) == 0 &&
+        if (ok && feng_platform_is_linux(target_platform) &&
             !argv_push(&av, "-ldl")) {
             ok = false;
         }
@@ -2318,11 +2329,14 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             free(flag);
         }
         if (ok && opts->release) {
-#if defined(__APPLE__)
-            if (!argv_push(&av, "-Wl,-dead_strip")) { ok = false; }
-#elif defined(__linux__)
-            if (!argv_push(&av, "-Wl,--gc-sections")) { ok = false; }
-#endif
+            if (feng_platform_is_macos(target_platform) &&
+                !argv_push(&av, "-Wl,-dead_strip")) {
+                ok = false;
+            }
+            if (feng_platform_is_linux(target_platform) &&
+                !argv_push(&av, "-Wl,--gc-sections")) {
+                ok = false;
+            }
             if (ok && !argv_push(&av, "-Wl,-x")) { ok = false; }
         }
         if (ok && !argv_push_env_flags(&av, getenv("FENG_CC_FLAGS"))) { ok = false; }
@@ -2346,10 +2360,10 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             if (!argv_push(&av, cc)) { ok = false; }
             if (ok && !argv_push(&av, "-std=gnu11")) { ok = false; }
             if (ok && !argv_push(&av, "-fexceptions")) { ok = false; }
-            if (ok && !argv_push_native_platform_flags(&av,
-                                                       native_clang_target,
-                                                       native_sdk_path,
-                                                       native_sysroot,
+            if (ok && !argv_push_target_platform_flags(&av,
+                                                       target_platform,
+                                                       target_clang,
+                                                       target_sysroot,
                                                        false)) { ok = false; }
             if (ok && !argv_push_mode_flags(&av, opts->release)) { ok = false; }
             if (ok && !argv_push(&av, "-Wall")) { ok = false; }
@@ -2417,7 +2431,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         bundle_error = NULL;
         if (!extract_bundle_runtime_dynamic_libraries(opts->bundle_paths,
                                                       opts->bundle_count,
-                                                      host_target,
+                                                      bundle_platform,
                                                       libs,
                                                       lib_count,
                                                       opts->out_path,
@@ -2440,19 +2454,13 @@ cleanup:
     free_string_array(bundle_libs, bundle_lib_count);
     remove_tree(bundle_temp_dir);
     free(bundle_temp_dir);
-    free(host_target);
-    free(native_platform);
+    free(bundle_platform);
     free(bundle_error);
     free(runtime_lib);
     free(include_dir);
     free(include_flag);
     free(tool_error);
-#if defined(__APPLE__)
-    free(native_sdk_path);
-#endif
-#if defined(__linux__)
-    free(native_sysroot);
-#endif
+    free(target_sysroot);
     free(ranlib);
     free(ar);
     free(cc);

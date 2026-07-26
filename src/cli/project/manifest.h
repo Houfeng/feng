@@ -32,7 +32,8 @@ typedef struct FengCliProjectManifest {
     FengCompileTarget target;
     char *src_path;
     char *out_path;
-    char *arch;
+    char **platforms;
+    size_t platform_count;
     char *abi;
     char *registry_url;
     FengCliProjectManifestAsset *assets;

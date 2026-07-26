@@ -116,6 +116,45 @@ static bool dir_exists(const char *path) {
     return path != NULL && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+/* Ensure the parent directory of one output file exists. */
+static bool ensure_parent_directory(const char *path, char **out_error_message) {
+    char *parent;
+    char *cursor;
+    const char *slash = strrchr(path, '/');
+
+    if (slash == NULL) {
+        return true;
+    }
+    parent = dup_printf("%.*s", (int)(slash - path), path);
+    if (parent == NULL) {
+        return set_errorf(out_error_message, "out of memory");
+    }
+    for (cursor = parent + 1; *cursor != '\0'; ++cursor) {
+        if (*cursor == '/') {
+            *cursor = '\0';
+            if (mkdir(parent, 0775) != 0 && errno != EEXIST) {
+                bool result = set_errorf(out_error_message,
+                                         "failed to create directory %s: %s",
+                                         parent,
+                                         strerror(errno));
+                free(parent);
+                return result;
+            }
+            *cursor = '/';
+        }
+    }
+    if (parent[0] != '\0' && mkdir(parent, 0775) != 0 && errno != EEXIST) {
+        bool result = set_errorf(out_error_message,
+                                 "failed to create directory %s: %s",
+                                 parent,
+                                 strerror(errno));
+        free(parent);
+        return result;
+    }
+    free(parent);
+    return true;
+}
+
 static int compare_strings(const void *a, const void *b) {
     const char *const *lhs = (const char *const *)a;
     const char *const *rhs = (const char *const *)b;
@@ -374,23 +413,33 @@ done:
 }
 
 static bool write_bundle_to_path(const FengFbLibraryBundleSpec *spec,
-                                 const char *host_target,
                                  const char *archive_path,
                                  char **out_error_message) {
     FengZipWriter writer = {0};
     char *manifest = NULL;
     size_t manifest_length = 0U;
-    char *host_lib_dir = NULL;
-    char *library_entry_path = NULL;
     size_t index;
     bool ok = false;
 
     if (!appendf(&manifest,
                  &manifest_length,
-                 "[package]\nname: \"%s\"\nversion: \"%s\"\narch: \"%s\"\nabi: \"feng\"\n",
+                 "[package]\nname: \"%s\"\nversion: \"%s\"\nplatform: \"",
                  spec->package_name,
-                 spec->package_version,
-                 host_target)) {
+                 spec->package_version)) {
+        set_errorf(out_error_message, "out of memory");
+        goto done;
+    }
+    for (index = 0U; index < spec->platform_artifact_count; ++index) {
+        if (!appendf(&manifest,
+                     &manifest_length,
+                     "%s%s",
+                     index > 0U ? "," : "",
+                     spec->platform_artifacts[index].platform)) {
+            set_errorf(out_error_message, "out of memory");
+            goto done;
+        }
+    }
+    if (!appendf(&manifest, &manifest_length, "\"\nabi: \"feng\"\n")) {
         set_errorf(out_error_message, "out of memory");
         goto done;
     }
@@ -410,19 +459,6 @@ static bool write_bundle_to_path(const FengFbLibraryBundleSpec *spec,
             }
         }
     }
-    host_lib_dir = dup_printf("lib/%s", host_target);
-    if (host_lib_dir == NULL) {
-        set_errorf(out_error_message, "out of memory");
-        goto done;
-    }
-    library_entry_path = dup_printf("%s/%s",
-                                    host_lib_dir,
-                                    path_basename(spec->library_path));
-    if (library_entry_path == NULL) {
-        set_errorf(out_error_message, "out of memory");
-        goto done;
-    }
-
     if (!feng_zip_writer_open(archive_path, &writer, out_error_message)) {
         goto done;
     }
@@ -434,9 +470,8 @@ static bool write_bundle_to_path(const FengFbLibraryBundleSpec *spec,
                                    out_error_message)) {
         goto done;
     }
-    /* Phase 3 lands .fb container emission before .fi generation. Keep the
-     * stable mod/ location present now so the later .fi task only needs to
-     * add files beneath an already stable bundle layout. */
+    /* Keep the stable mod/ location present even when a package exports no
+     * public declarations. */
     if (!feng_zip_writer_add_directory(&writer, "mod", out_error_message)) {
         goto done;
     }
@@ -453,24 +488,54 @@ static bool write_bundle_to_path(const FengFbLibraryBundleSpec *spec,
     if (!feng_zip_writer_add_directory(&writer, "lib", out_error_message)) {
         goto done;
     }
-    if (!feng_zip_writer_add_directory(&writer, host_lib_dir, out_error_message)) {
-        goto done;
-    }
-    if (!feng_zip_writer_add_file(&writer,
-                                  library_entry_path,
-                                  spec->library_path,
-                                  FENG_ZIP_COMPRESSION_STORE,
-                                  out_error_message)) {
-        goto done;
-    }
-    if (spec->extlib_root != NULL) {
-        if (!add_tree_filtered(&writer,
-                               spec->extlib_root,
-                               "extlib",
-                               include_any_regular_file,
-                               true,
-                               out_error_message)) {
+    for (index = 0U; index < spec->platform_artifact_count; ++index) {
+        const FengFbBundlePlatformArtifact *artifact =
+            &spec->platform_artifacts[index];
+        char *library_dir = dup_printf("lib/%s", artifact->platform);
+        char *library_entry = library_dir != NULL
+            ? dup_printf("%s/%s",
+                         library_dir,
+                         path_basename(artifact->library_path))
+            : NULL;
+
+        if (library_dir == NULL || library_entry == NULL) {
+            free(library_entry);
+            free(library_dir);
+            set_errorf(out_error_message, "out of memory");
             goto done;
+        }
+        if (!feng_zip_writer_add_directory(&writer,
+                                           library_dir,
+                                           out_error_message) ||
+            !feng_zip_writer_add_file(&writer,
+                                      library_entry,
+                                      artifact->library_path,
+                                      FENG_ZIP_COMPRESSION_STORE,
+                                      out_error_message)) {
+            free(library_entry);
+            free(library_dir);
+            goto done;
+        }
+        free(library_entry);
+        free(library_dir);
+
+        if (artifact->extlib_root != NULL) {
+            char *extlib_entry = dup_printf("extlib/%s", artifact->platform);
+
+            if (extlib_entry == NULL) {
+                set_errorf(out_error_message, "out of memory");
+                goto done;
+            }
+            if (!add_tree_filtered(&writer,
+                                   artifact->extlib_root,
+                                   extlib_entry,
+                                   include_any_regular_file,
+                                   true,
+                                   out_error_message)) {
+                free(extlib_entry);
+                goto done;
+            }
+            free(extlib_entry);
         }
     }
     for (index = 0U; index < spec->asset_entry_count; ++index) {
@@ -493,15 +558,12 @@ static bool write_bundle_to_path(const FengFbLibraryBundleSpec *spec,
 
 done:
     feng_zip_writer_dispose(&writer);
-    free(library_entry_path);
-    free(host_lib_dir);
     free(manifest);
     return ok;
 }
 
 bool feng_fb_write_library_bundle(const FengFbLibraryBundleSpec *spec,
                                   char **out_error_message) {
-    char *host_target = NULL;
     char *temp_path = NULL;
     int temp_fd = -1;
     size_t index;
@@ -520,19 +582,48 @@ bool feng_fb_write_library_bundle(const FengFbLibraryBundleSpec *spec,
         return set_errorf(out_error_message,
                           "bundle package version must not be empty");
     }
+    if (spec->platform_artifact_count == 0U ||
+        spec->platform_artifacts == NULL) {
+        return set_errorf(out_error_message,
+                          "bundle platform artifacts must not be empty");
+    }
     if (spec->asset_entry_count > 0U && spec->asset_entries == NULL) {
         return set_errorf(out_error_message,
                           "bundle asset entries must not be null when count is non-zero");
     }
-    if (!file_exists(spec->library_path)) {
-        return set_errorf(out_error_message,
-                          "bundle library artifact not found: %s",
-                          spec->library_path != NULL ? spec->library_path : "(null)");
-    }
-    if (spec->extlib_root != NULL && !dir_exists(spec->extlib_root)) {
-        return set_errorf(out_error_message,
-                          "bundle extlib directory not found: %s",
-                          spec->extlib_root);
+    for (index = 0U; index < spec->platform_artifact_count; ++index) {
+        const FengFbBundlePlatformArtifact *artifact =
+            &spec->platform_artifacts[index];
+        size_t prior_index;
+
+        if (!feng_platform_is_valid(artifact->platform)) {
+            return set_errorf(out_error_message,
+                              "invalid bundle target platform: %s",
+                              artifact->platform != NULL
+                                  ? artifact->platform
+                                  : "(null)");
+        }
+        for (prior_index = 0U; prior_index < index; ++prior_index) {
+            if (strcmp(spec->platform_artifacts[prior_index].platform,
+                       artifact->platform) == 0) {
+                return set_errorf(out_error_message,
+                                  "duplicate bundle target platform: %s",
+                                  artifact->platform);
+            }
+        }
+        if (!file_exists(artifact->library_path)) {
+            return set_errorf(out_error_message,
+                              "bundle library artifact not found: %s",
+                              artifact->library_path != NULL
+                                  ? artifact->library_path
+                                  : "(null)");
+        }
+        if (artifact->extlib_root != NULL &&
+            !dir_exists(artifact->extlib_root)) {
+            return set_errorf(out_error_message,
+                              "bundle extlib directory not found: %s",
+                              artifact->extlib_root);
+        }
     }
     for (index = 0U; index < spec->asset_entry_count; ++index) {
         const FengFbBundleDirectoryEntry *entry = &spec->asset_entries[index];
@@ -551,7 +642,7 @@ bool feng_fb_write_library_bundle(const FengFbLibraryBundleSpec *spec,
                               entry->source_root);
         }
     }
-    if (!feng_platform_detect_host_platform(&host_target, out_error_message)) {
+    if (!ensure_parent_directory(spec->package_path, out_error_message)) {
         goto done;
     }
 
@@ -571,7 +662,7 @@ bool feng_fb_write_library_bundle(const FengFbLibraryBundleSpec *spec,
     close(temp_fd);
     temp_fd = -1;
 
-    if (!write_bundle_to_path(spec, host_target, temp_path, out_error_message)) {
+    if (!write_bundle_to_path(spec, temp_path, out_error_message)) {
         goto done;
     }
     if (rename(temp_path, spec->package_path) != 0) {
@@ -592,6 +683,5 @@ done:
         unlink(temp_path);
     }
     free(temp_path);
-    free(host_target);
     return ok;
 }

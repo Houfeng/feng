@@ -9,16 +9,16 @@ MAKE_BIN="${MAKE:-make}"
 # shellcheck source=std_extlib_build_common.sh
 source "${SCRIPT_DIR}/std_extlib_build_common.sh"
 
-[[ "$#" -le 1 ]] ||
-  feng_std_extlib_die "usage: scripts/build_libsodium.sh [output-archive]"
-feng_std_extlib_configure_host
+feng_std_extlib_parse_args \
+  "usage: scripts/build_libsodium.sh [--libc=gnu|musl] [output-archive]" "$@"
+feng_std_extlib_configure_target
 
 OUTPUT_DIR=""
-if [[ "$#" -eq 1 ]]; then
-  [[ "$(basename "$1")" == "libfeng_std_sodium.a" ]] ||
+if [[ -n "${FENG_STD_EXTLIB_OUTPUT}" ]]; then
+  [[ "$(basename "${FENG_STD_EXTLIB_OUTPUT}")" == "libfeng_std_sodium.a" ]] ||
     feng_std_extlib_die \
       "custom libsodium output must end with libfeng_std_sodium.a"
-  OUTPUT_DIR="$(dirname "$1")"
+  OUTPUT_DIR="$(dirname "${FENG_STD_EXTLIB_OUTPUT}")"
 fi
 feng_std_extlib_build_archive \
   "${TARGET_DIR}" "libfeng_std_sodium.a" "${OUTPUT_DIR}"

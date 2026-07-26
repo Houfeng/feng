@@ -40,6 +40,17 @@ bool feng_cli_deps_resolve_for_manifest(const char *program,
                                         FengCliDepsResolved *out_resolved,
                                         FengCliProjectError *out_error);
 
+/* Resolve dependencies while materializing local projects for one target. */
+bool feng_cli_deps_resolve_for_manifest_platform(
+    const char *program,
+    const char *manifest_path,
+    bool force_remote,
+    bool release,
+    const char *platform,
+    const char *sysroot,
+    FengCliDepsResolved *out_resolved,
+    FengCliProjectError *out_error);
+
 void feng_cli_deps_resolved_dispose(FengCliDepsResolved *resolved);
 
 #endif /* FENG_CLI_DEPS_MANAGER_H */

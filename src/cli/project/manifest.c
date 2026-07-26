@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "platform/platform.h"
+
 static char *dup_n(const char *text, size_t length) {
     char *out = (char *)malloc(length + 1U);
     if (out == NULL) {
@@ -247,6 +249,104 @@ static bool push_asset(FengCliProjectManifest *manifest,
     return true;
 }
 
+/* Parse one comma-separated platform field into validated, ordered entries. */
+static bool assign_platforms(FengCliProjectManifest *manifest,
+                             const char *value,
+                             const char *path,
+                             unsigned int line,
+                             FengCliProjectError *error) {
+    const char *segment = value;
+    const char *cursor = value;
+
+    if (manifest->platform_count > 0U) {
+        set_error(error, path, line, "duplicate manifest field");
+        return false;
+    }
+    if (value[0] == '\0') {
+        set_error(error, path, line, "manifest field value must not be empty");
+        return false;
+    }
+
+    for (;;) {
+        if (*cursor == ',' || *cursor == '\0') {
+            char *platform;
+            char **resized;
+            size_t index;
+
+            if (cursor == segment) {
+                set_error(error, path, line, "platform list must not contain empty entries");
+                return false;
+            }
+            platform = dup_n(segment, (size_t)(cursor - segment));
+            if (platform == NULL) {
+                set_error(error, path, line, "out of memory");
+                return false;
+            }
+            if (!feng_platform_is_valid(platform)) {
+                char *message = dup_printf("invalid platform identifier: %s", platform);
+
+                free(platform);
+                if (message == NULL) {
+                    set_error(error, path, line, "out of memory");
+                } else {
+                    set_error(error, path, line, message);
+                    free(message);
+                }
+                return false;
+            }
+            for (index = 0U; index < manifest->platform_count; ++index) {
+                if (strcmp(manifest->platforms[index], platform) == 0) {
+                    char *message = dup_printf("duplicate platform identifier: %s", platform);
+
+                    free(platform);
+                    if (message == NULL) {
+                        set_error(error, path, line, "out of memory");
+                    } else {
+                        set_error(error, path, line, message);
+                        free(message);
+                    }
+                    return false;
+                }
+            }
+            resized = (char **)realloc(
+                manifest->platforms,
+                (manifest->platform_count + 1U) * sizeof(*manifest->platforms));
+            if (resized == NULL) {
+                free(platform);
+                set_error(error, path, line, "out of memory");
+                return false;
+            }
+            manifest->platforms = resized;
+            manifest->platforms[manifest->platform_count++] = platform;
+            if (*cursor == '\0') {
+                return true;
+            }
+            segment = cursor + 1;
+        }
+        cursor++;
+    }
+}
+
+/* Write a platform array as the manifest's comma-separated platform field. */
+static bool write_platform_field(FILE *stream,
+                                 char *const *platforms,
+                                 size_t platform_count) {
+    size_t index;
+
+    if (fputs("platform: \"", stream) == EOF) {
+        return false;
+    }
+    for (index = 0U; index < platform_count; ++index) {
+        if (index > 0U && fputc(',', stream) == EOF) {
+            return false;
+        }
+        if (fputs(platforms[index], stream) == EOF) {
+            return false;
+        }
+    }
+    return fputs("\"\n", stream) != EOF;
+}
+
 static void set_error_from_fm(FengCliProjectError *out_error, const FengFmError *fm_error) {
     if (fm_error == NULL) {
         return;
@@ -452,14 +552,12 @@ static bool parse_manifest(const char *manifest_path,
                               out_error)) {
                 goto fail;
             }
-        } else if (strcmp(entry->key, "arch") == 0) {
-            if (!assign_owned(&manifest.arch,
-                              entry->value,
-                              entry->value + strlen(entry->value),
-                              manifest_path,
-                              entry->line,
-                              false,
-                              out_error)) {
+        } else if (strcmp(entry->key, "platform") == 0) {
+            if (!assign_platforms(&manifest,
+                                  entry->value,
+                                  manifest_path,
+                                  entry->line,
+                                  out_error)) {
                 goto fail;
             }
         } else if (strcmp(entry->key, "abi") == 0) {
@@ -502,6 +600,18 @@ static bool parse_manifest(const char *manifest_path,
     if (mode == MANIFEST_MODE_PROJECT &&
         (manifest.src_path == NULL || manifest.out_path == NULL)) {
         set_error(out_error, manifest_path, 0U, "out of memory");
+        goto fail;
+    }
+    if (mode == MANIFEST_MODE_BUNDLE && manifest.platform_count == 0U) {
+        set_error(out_error, manifest_path, 0U, "bundle manifest requires `platform` field");
+        goto fail;
+    }
+    if (mode == MANIFEST_MODE_BUNDLE &&
+        (manifest.abi == NULL || strcmp(manifest.abi, "feng") != 0)) {
+        set_error(out_error,
+                  manifest_path,
+                  0U,
+                  "bundle manifest requires `abi: \"feng\"`");
         goto fail;
     }
 
@@ -569,7 +679,8 @@ bool feng_cli_project_manifest_write(const char *manifest_path,
                                manifest->target == FENG_COMPILE_TARGET_LIB ? "lib" : "bin")) ||
         (manifest->src_path != NULL && !write_manifest_field(stream, "src", manifest->src_path)) ||
         (manifest->out_path != NULL && !write_manifest_field(stream, "out", manifest->out_path)) ||
-        (manifest->arch != NULL && !write_manifest_field(stream, "arch", manifest->arch)) ||
+        (manifest->platform_count > 0U &&
+         !write_platform_field(stream, manifest->platforms, manifest->platform_count)) ||
         (manifest->abi != NULL && !write_manifest_field(stream, "abi", manifest->abi))) {
         fclose(stream);
         if (out_error_message != NULL) {
@@ -650,7 +761,10 @@ void feng_cli_project_manifest_dispose(FengCliProjectManifest *manifest) {
     free(manifest->version);
     free(manifest->src_path);
     free(manifest->out_path);
-    free(manifest->arch);
+    for (index = 0U; index < manifest->platform_count; ++index) {
+        free(manifest->platforms[index]);
+    }
+    free(manifest->platforms);
     free(manifest->abi);
     free(manifest->registry_url);
     for (index = 0U; index < manifest->asset_count; ++index) {
@@ -668,7 +782,8 @@ void feng_cli_project_manifest_dispose(FengCliProjectManifest *manifest) {
     manifest->has_target = false;
     manifest->src_path = NULL;
     manifest->out_path = NULL;
-    manifest->arch = NULL;
+    manifest->platforms = NULL;
+    manifest->platform_count = 0U;
     manifest->abi = NULL;
     manifest->registry_url = NULL;
     manifest->assets = NULL;

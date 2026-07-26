@@ -121,8 +121,9 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv) {
     char **program_argv = NULL;
     FengCliParseResult parse_result;
     FengCliProjectContext context = {0};
+    FengCliProjectPlatformSelection selection = {0};
     FengCliProjectError error = {0};
-    FengCliDepsResolved resolved = {0};
+    char *binary_path = NULL;
     int rc;
 
     parse_result = parse_args(program, argc, argv, &path_arg, &release, &keep_ir, &program_argc, &program_argv);
@@ -136,28 +137,46 @@ int feng_cli_project_run_main(const char *program, int argc, char **argv) {
     }
     if (context.manifest.target != FENG_COMPILE_TARGET_BIN) {
         fprintf(stderr, "error: `feng run` requires a target=bin project\n");
-        feng_cli_project_context_dispose(&context);
-        return 1;
+        rc = 1;
+        goto done;
     }
-
-    if (!feng_cli_project_resolve_build_dependencies(program,
-                                                     &context,
-                                                     release,
-                                                     &resolved,
-                                                     &error)) {
+    if (!feng_cli_project_select_platforms(&context,
+                                           NULL,
+                                           0U,
+                                           NULL,
+                                           true,
+                                           &selection,
+                                           &error)) {
         feng_cli_project_print_error(stderr, &error);
-        feng_cli_deps_resolved_dispose(&resolved);
-        feng_cli_project_context_dispose(&context);
-        feng_cli_project_error_dispose(&error);
-        return 1;
+        rc = 1;
+        goto done;
     }
 
-    rc = feng_cli_project_compile_prepared(program, &context, &resolved, release, keep_ir);
-    feng_cli_deps_resolved_dispose(&resolved);
+    rc = feng_cli_project_build_platform(program,
+                                         &context,
+                                         selection.platforms[0],
+                                         NULL,
+                                         release,
+                                         keep_ir,
+                                         &error);
     if (rc == 0) {
-        rc = execute_program(context.binary_path, program_argc, program_argv);
+        binary_path = feng_cli_project_platform_binary_path(
+            &context,
+            selection.platforms[0]);
+        if (binary_path == NULL) {
+            fprintf(stderr, "error: out of memory preparing host executable path\n");
+            rc = 1;
+        } else {
+            rc = execute_program(binary_path, program_argc, program_argv);
+        }
+    } else {
+        feng_cli_project_print_error(stderr, &error);
     }
 
+done:
+    free(binary_path);
+    feng_cli_project_platform_selection_dispose(&selection);
     feng_cli_project_context_dispose(&context);
+    feng_cli_project_error_dispose(&error);
     return rc;
 }

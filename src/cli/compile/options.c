@@ -6,6 +6,7 @@
 
 #include "cli/cli.h"
 #include "cli/common.h"
+#include "platform/platform.h"
 
 FengCliParseResult feng_cli_legacy_compile_parse(const char *program,
                                                  int argc,
@@ -56,7 +57,8 @@ FengCliParseResult feng_cli_legacy_compile_parse(const char *program,
 /* --- P4 direct mode option parser ----------------------------------------
  *
  * Accepted forms:
- *   feng <file> [<file>...] --target=<bin|lib> --out=<dir>
+ *   feng <file> [<file>...] --target=<bin|lib>
+ *        --platform=<platform> [--sysroot=<path>] --out=<dir>
  *        [--name=<artifact>] [--release] [--keep-ir]
  *        [--pkg=<.fb路径>|--pkg <.fb路径>]...
  *        [--lib=<库路径或系统库名>|--lib <库路径或系统库名>]...
@@ -81,6 +83,8 @@ FengCliParseResult feng_cli_direct_options_parse(const char *program,
     out->release = false;
     out->keep_intermediate = false;
     out->artifact_name = NULL;
+    out->platform = NULL;
+    out->sysroot = NULL;
     out->input_count = 0;
     out->inputs = NULL;
     out->package_path_count = 0;
@@ -131,6 +135,49 @@ FengCliParseResult feng_cli_direct_options_parse(const char *program,
             out->out_dir = arg + 6;
             if (out->out_dir[0] == '\0') {
                 fprintf(stderr, "--out requires a non-empty directory path\n");
+                free(link_libs);
+                free(package_paths);
+                free(inputs);
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
+            }
+            continue;
+        }
+        if (strncmp(arg, "--platform=", 11) == 0) {
+            const char *platform = arg + 11;
+
+            if (out->platform != NULL) {
+                fprintf(stderr, "--platform may only be specified once in direct compile mode\n");
+                free(link_libs);
+                free(package_paths);
+                free(inputs);
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
+            }
+            if (!feng_platform_is_valid(platform)) {
+                fprintf(stderr, "invalid target platform: %s\n",
+                        platform[0] != '\0' ? platform : "(empty)");
+                free(link_libs);
+                free(package_paths);
+                free(inputs);
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
+            }
+            out->platform = platform;
+            continue;
+        }
+        if (strncmp(arg, "--sysroot=", 10) == 0) {
+            if (out->sysroot != NULL) {
+                fprintf(stderr, "--sysroot may only be specified once\n");
+                free(link_libs);
+                free(package_paths);
+                free(inputs);
+                feng_cli_print_usage(program, stderr);
+                return FENG_CLI_PARSE_ERROR;
+            }
+            out->sysroot = arg + 10;
+            if (out->sysroot[0] == '\0') {
+                fprintf(stderr, "--sysroot requires a non-empty directory path\n");
                 free(link_libs);
                 free(package_paths);
                 free(inputs);
@@ -234,6 +281,14 @@ FengCliParseResult feng_cli_direct_options_parse(const char *program,
     }
     if (out->out_dir == NULL) {
         fprintf(stderr, "--out=<dir> is required for direct compile mode\n");
+        free(link_libs);
+        free(package_paths);
+        free(inputs);
+        feng_cli_print_usage(program, stderr);
+        return FENG_CLI_PARSE_ERROR;
+    }
+    if (out->platform == NULL) {
+        fprintf(stderr, "--platform=<platform> is required for direct compile mode\n");
         free(link_libs);
         free(package_paths);
         free(inputs);

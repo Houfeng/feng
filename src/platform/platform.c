@@ -151,6 +151,38 @@ bool feng_platform_static_library_matches_name(const char *path,
     return matches;
 }
 
+/* Return the dynamic-library suffix used by one complete target platform. */
+const char *feng_platform_dynamic_library_suffix(const char *platform) {
+    if (feng_platform_is_macos(platform)) {
+        return ".dylib";
+    }
+    if (feng_platform_is_linux(platform)) {
+        return ".so";
+    }
+    if (platform != NULL && strncmp(platform, "windows-", 8U) == 0) {
+        return ".dll";
+    }
+    return NULL;
+}
+
+/* Return the allocated dynamic-library file name for a target platform. */
+char *feng_platform_dynamic_library_file_name(const char *platform,
+                                              const char *library_name) {
+    const char *suffix;
+
+    if (library_name == NULL || library_name[0] == '\0') {
+        return NULL;
+    }
+    suffix = feng_platform_dynamic_library_suffix(platform);
+    if (suffix == NULL) {
+        return NULL;
+    }
+    if (strncmp(platform, "windows-", 8U) == 0) {
+        return dup_printf("%s%s", library_name, suffix);
+    }
+    return dup_printf("lib%s%s", library_name, suffix);
+}
+
 bool feng_platform_detect_host_target(char **out_host_target,
                                        char **out_error_message) {
     const char *os_name;
@@ -210,6 +242,37 @@ bool feng_platform_detect_host_platform(char **out_host_platform,
     return true;
 }
 
+/* Check one identifier against the complete platform matrix. */
+bool feng_platform_is_valid(const char *platform) {
+    static const char *const platforms[] = {
+        "macos-arm64",
+        "macos-x64",
+        "linux-x64-gnu",
+        "linux-x64-musl",
+        "linux-arm64-gnu",
+        "linux-arm64-musl",
+        "linux-x86-gnu",
+        "linux-x86-musl",
+        "linux-arm-gnu",
+        "linux-arm-musl",
+        "windows-x64",
+        "windows-arm64",
+        "windows-x86",
+        "windows-arm"
+    };
+    size_t index;
+
+    if (platform == NULL) {
+        return false;
+    }
+    for (index = 0U; index < sizeof(platforms) / sizeof(platforms[0]); ++index) {
+        if (strcmp(platform, platforms[index]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Map one supported Feng platform identifier to its Clang target triple. */
 const char *feng_platform_clang_target(const char *platform) {
     if (platform == NULL) {
@@ -231,4 +294,25 @@ const char *feng_platform_clang_target(const char *platform) {
         return "aarch64-unknown-linux-musl";
     }
     return NULL;
+}
+
+/* Check whether a complete platform identifier targets macOS. */
+bool feng_platform_is_macos(const char *platform) {
+    return platform != NULL && strncmp(platform, "macos-", 6U) == 0;
+}
+
+/* Check whether a complete platform identifier targets Linux. */
+bool feng_platform_is_linux(const char *platform) {
+    return platform != NULL && strncmp(platform, "linux-", 6U) == 0;
+}
+
+/* Check whether a complete platform identifier targets Linux musl. */
+bool feng_platform_is_linux_musl(const char *platform) {
+    size_t length;
+
+    if (!feng_platform_is_linux(platform)) {
+        return false;
+    }
+    length = strlen(platform);
+    return length >= 5U && strcmp(platform + length - 5U, "-musl") == 0;
 }

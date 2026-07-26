@@ -35,6 +35,8 @@ typedef struct FengCliDirectOptions {
     bool release;                 /* Selects release-vs-debug build mode. */
     bool keep_intermediate;       /* P5: keep generated C across failures/success. */
     const char *artifact_name;    /* optional override for the produced artifact stem */
+    const char *platform;         /* required complete target platform */
+    const char *sysroot;          /* optional target SDK/sysroot override */
     int input_count;
     const char **inputs;          /* heap-allocated array of borrowed argv ptrs */
     int package_path_count;

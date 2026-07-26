@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Direct-mode CLI surface checks for Phase 2 P4 + P5.
 #
-# Verifies that `feng <file> --target=bin --out=<dir>` drives the full
+# Verifies that `feng <file> --target=bin --platform=<platform> --out=<dir>`
+# drives the full
 # pipeline (frontend -> codegen -> host cc) and produces a runnable
 # executable, that error paths return non-zero with actionable
 # diagnostics, and that `--keep-ir` preserves the intermediate C file.
@@ -90,7 +91,11 @@ if expect_ok "help" "$FENG" --help; then
         echo "FAIL[help] missing wrapped compile header line"
         failures=$((failures + 1))
     fi
-    if ! grep -Eq '^[[:space:]]+\[--out=<dir>\][[:space:]]*$' "$WORK/help.out"; then
+    if ! grep -Eq '^[[:space:]]+--platform=<platform>[[:space:]]*$' "$WORK/help.out"; then
+        echo "FAIL[help] missing required wrapped --platform line"
+        failures=$((failures + 1))
+    fi
+    if ! grep -Eq '^[[:space:]]+--out=<dir>[[:space:]]*$' "$WORK/help.out"; then
         echo "FAIL[help] missing wrapped --out line"
         failures=$((failures + 1))
     fi
@@ -222,7 +227,8 @@ fi
 
 # 1. happy path: full pipeline produces a runnable binary
 out1="$WORK/case_full"
-if expect_ok "full_pipeline" "$FENG" "$FIXTURE" --target=bin --out="$out1"; then
+if expect_ok "full_pipeline" "$FENG" "$FIXTURE" --target=bin \
+        --platform="$HOST_PLATFORM" --out="$out1"; then
     bin="$out1/bin/hello"
     workspace_ft="$out1/obj/symbols/feng/smoke.ft"
     public_ft="$out1/mod/feng/smoke.ft"
@@ -259,7 +265,8 @@ fi
 
 # 2. --keep-ir preserves the intermediate C file
 out2="$WORK/case_keep"
-if expect_ok "keep_ir" "$FENG" "$FIXTURE" --out="$out2" --keep-ir; then
+if expect_ok "keep_ir" "$FENG" "$FIXTURE" --platform="$HOST_PLATFORM" \
+        --out="$out2" --keep-ir; then
     if [[ ! -f "$out2/ir/c/feng.c" ]]; then
         echo "FAIL[keep_ir] missing $out2/ir/c/feng.c"
         failures=$((failures + 1))
@@ -268,8 +275,9 @@ fi
 
 # 3. --target=lib should produce a static archive under <out>/lib
 out3="$WORK/case_lib"
-if expect_ok "lib_static" "$FENG" "$FIXTURE" --target=lib --out="$out3" --name=hello_lib; then
-    lib="$out3/lib/$HOST_PLATFORM/libhello_lib.a"
+if expect_ok "lib_static" "$FENG" "$FIXTURE" --target=lib \
+        --platform="$HOST_PLATFORM" --out="$out3" --name=hello_lib; then
+    lib="$out3/lib/libhello_lib.a"
     if [[ ! -f "$lib" ]]; then
         echo "FAIL[lib_static] missing archive $lib"
         failures=$((failures + 1))
@@ -284,7 +292,8 @@ if expect_ok "lib_static" "$FENG" "$FIXTURE" --target=lib --out="$out3" --name=h
 fi
 
 # 4. missing --out
-expect_fail "no_out" "$FENG" "$FIXTURE" --target=bin || true
+expect_fail "no_out" "$FENG" "$FIXTURE" --target=bin \
+    --platform="$HOST_PLATFORM" || true
 if ! grep -q -- "--out=<dir> is required" "$WORK/no_out.err"; then
     echo "FAIL[no_out] missing --out diagnostic"
     failures=$((failures + 1))
@@ -332,7 +341,8 @@ echo "fake cc: simulated failure" >&2
 exit 7
 INNER
 chmod +x "$fake_cc_dir/cc"
-if FENG_CC="$fake_cc_dir/cc" "$FENG" "$FIXTURE" --out="$out8" \
+if FENG_CC="$fake_cc_dir/cc" "$FENG" "$FIXTURE" \
+       --platform="$HOST_PLATFORM" --out="$out8" \
        >"$WORK/cc_fail.out" 2>"$WORK/cc_fail.err"; then
     echo "FAIL[cc_fail] expected failure when FENG_CC stub returns non-zero"
     failures=$((failures + 1))
@@ -355,6 +365,7 @@ if [[ -d "$MULTI_DIR" ]]; then
         multi_files+=("$f")
     done < <(find "$MULTI_DIR" -maxdepth 1 -name '*.ff' | sort)
         if expect_ok "multi_file" "$FENG" "${multi_files[@]}" --target=bin \
+            --platform="$HOST_PLATFORM" \
             --out="$out9" --name=multi_hello; then
         bin="$out9/bin/multi_hello"
         if [[ ! -x "$bin" ]]; then
@@ -377,7 +388,8 @@ else
 fi
 
 # 10. --name with an empty value is rejected
-expect_fail "name_empty" "$FENG" "$FIXTURE" --out="$WORK/case_name" \
+expect_fail "name_empty" "$FENG" "$FIXTURE" \
+    --platform="$HOST_PLATFORM" --out="$WORK/case_name" \
     --name= || true
 if ! grep -q -- "--name requires a non-empty value" "$WORK/name_empty.err"; then
     echo "FAIL[name_empty] missing --name diagnostic"

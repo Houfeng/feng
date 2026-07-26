@@ -36,6 +36,8 @@ typedef struct ResolvedNode {
 
 typedef struct ResolveState {
     const char *program;
+    const char *platform;
+    const char *sysroot;
     bool force_remote;
     bool materialize_local_projects;
     bool release;
@@ -1607,16 +1609,21 @@ bool feng_cli_deps_normalize_direct_dependencies(const char *manifest_path,
 
 static bool build_local_project_bundle(const char *program,
                                        const char *manifest_path,
+                                       const char *platform,
+                                       const char *sysroot,
                                        bool release,
                                        const FengCliDepsResolved *dependencies,
                                        char **out_bundle_path,
                                        char **out_debug_fd_path,
                                        FengCliProjectError *error) {
     FengCliProjectContext context = {0};
+    FengCliProjectPlatformSelection selection = {0};
     FengFbLibraryBundleSpec spec = {0};
+    FengFbBundlePlatformArtifact platform_artifact = {0};
     FengCliProjectManifestDependency *direct_dependencies = NULL;
     size_t direct_dependency_count = 0U;
     char *host_library_name = NULL;
+    char *platform_out_root = NULL;
     char *library_path = NULL;
     char *debug_fd_path = NULL;
     char *public_mod_root = NULL;
@@ -1639,9 +1646,25 @@ static bool build_local_project_bundle(const char *program,
                           "local dependency project %s must use target: \"lib\"",
                           manifest_path);
     }
+    {
+        const char *requested_platforms[] = {platform};
+
+        if (!feng_cli_project_select_platforms(&context,
+                                               requested_platforms,
+                                               1U,
+                                               sysroot,
+                                               false,
+                                               &selection,
+                                               error)) {
+            feng_cli_project_context_dispose(&context);
+            return false;
+        }
+    }
 
     rc = feng_cli_project_invoke_direct_compile_with_packages(program,
                                                               &context,
+                                                              platform,
+                                                              sysroot,
                                                               release,
                                                               false,
                                                               dependencies->package_count,
@@ -1649,46 +1672,48 @@ static bool build_local_project_bundle(const char *program,
                                                               0U,
                                                               NULL);
     if (rc != 0) {
+        feng_cli_project_platform_selection_dispose(&selection);
         feng_cli_project_context_dispose(&context);
         return set_errorf(error,
                           manifest_path,
                           0U,
                           "failed to build local dependency project");
     }
-    if (!feng_cli_project_stage_assets(&context, error)) {
+    if (!feng_cli_project_stage_assets(&context, platform, error)) {
+        feng_cli_project_platform_selection_dispose(&selection);
         feng_cli_project_context_dispose(&context);
         return false;
     }
 
     host_library_name = feng_platform_static_library_file_name(context.manifest.name);
     if (host_library_name == NULL) {
+        feng_cli_project_platform_selection_dispose(&selection);
         feng_cli_project_context_dispose(&context);
         return set_errorf(error, manifest_path, 0U, "out of memory");
     }
-    {
-        char *host_target = NULL;
-        char *host_target_error = NULL;
-        if (!feng_platform_detect_host_platform(&host_target, &host_target_error)) {
-            free(host_target_error);
-            free(host_library_name);
-            feng_cli_project_context_dispose(&context);
-            return set_errorf(error, manifest_path, 0U, "failed to detect host target");
-        }
-        library_path = dup_printf("%s/lib/%s/%s", context.out_root, host_target, host_library_name);
-        free(host_target);
-    }
-    if (!release) {
+    platform_out_root = feng_cli_project_platform_out_root(&context, platform);
+    library_path = platform_out_root != NULL
+        ? dup_printf("%s/lib/%s", platform_out_root, host_library_name)
+        : NULL;
+    if (!release && library_path != NULL) {
         debug_fd_path = dup_printf("%s.fd", library_path);
     }
-    public_mod_root = dup_printf("%s/mod", context.out_root);
-    extlib_root = dup_printf("%s/extlib", context.out_root);
-    if (library_path == NULL || public_mod_root == NULL || extlib_root == NULL ||
+    public_mod_root = platform_out_root != NULL
+        ? dup_printf("%s/mod", platform_out_root)
+        : NULL;
+    extlib_root = platform_out_root != NULL
+        ? dup_printf("%s/extlib", platform_out_root)
+        : NULL;
+    if (platform_out_root == NULL || library_path == NULL ||
+        public_mod_root == NULL || extlib_root == NULL ||
         (!release && debug_fd_path == NULL)) {
         free(host_library_name);
+        free(platform_out_root);
         free(debug_fd_path);
         free(extlib_root);
         free(public_mod_root);
         free(library_path);
+        feng_cli_project_platform_selection_dispose(&selection);
         feng_cli_project_context_dispose(&context);
         return set_errorf(error, manifest_path, 0U, "out of memory");
     }
@@ -1702,6 +1727,8 @@ static bool build_local_project_bundle(const char *program,
         free(extlib_root);
         free(public_mod_root);
         free(library_path);
+        free(platform_out_root);
+        feng_cli_project_platform_selection_dispose(&selection);
         feng_cli_project_context_dispose(&context);
         return set_errorf(error,
                           manifest_path,
@@ -1718,6 +1745,8 @@ static bool build_local_project_bundle(const char *program,
         free(extlib_root);
         free(public_mod_root);
         free(library_path);
+        free(platform_out_root);
+        feng_cli_project_platform_selection_dispose(&selection);
         feng_cli_project_context_dispose(&context);
         return false;
     }
@@ -1725,11 +1754,14 @@ static bool build_local_project_bundle(const char *program,
     spec.package_path = context.package_path;
     spec.package_name = context.manifest.name;
     spec.package_version = context.manifest.version;
-    spec.library_path = library_path;
+    platform_artifact.platform = platform;
+    platform_artifact.library_path = library_path;
+    platform_artifact.extlib_root = extlib_root;
+    spec.platform_artifacts = &platform_artifact;
+    spec.platform_artifact_count = 1U;
     spec.dependencies = (const FengFbBundleDependency *)direct_dependencies;
     spec.dependency_count = direct_dependency_count;
     spec.public_mod_root = public_mod_root;
-    spec.extlib_root = extlib_root;
 
     if (!feng_fb_write_library_bundle(&spec, &fb_error)) {
         bool ok = set_errorf(error,
@@ -1744,6 +1776,8 @@ static bool build_local_project_bundle(const char *program,
         free(extlib_root);
         free(public_mod_root);
         free(library_path);
+        free(platform_out_root);
+        feng_cli_project_platform_selection_dispose(&selection);
         feng_cli_project_context_dispose(&context);
         return ok;
     }
@@ -1755,6 +1789,8 @@ static bool build_local_project_bundle(const char *program,
     free(extlib_root);
     free(public_mod_root);
     free(library_path);
+    free(platform_out_root);
+    feng_cli_project_platform_selection_dispose(&selection);
     feng_cli_project_context_dispose(&context);
     if (*out_bundle_path == NULL) {
         free(debug_fd_path);
@@ -1940,6 +1976,8 @@ static bool resolve_project_dependencies(ResolveState *state,
                     if (state->materialize_local_projects &&
                         !build_local_project_bundle(state->program,
                                                     child_manifest_path,
+                                                    state->platform,
+                                                    state->sysroot,
                                                     state->release,
                                                     &state->nodes[child_slot].subtree,
                                                     &state->nodes[child_slot].bundle_path,
@@ -2152,6 +2190,8 @@ static bool resolve_root_manifest(const char *program,
                                   bool force_remote,
                                   bool materialize_local_projects,
                                   bool release,
+                                  const char *platform,
+                                  const char *sysroot,
                                   FengCliDepsResolved *out_resolved,
                                   FengCliProjectError *out_error) {
     ResolveState state;
@@ -2160,6 +2200,8 @@ static bool resolve_root_manifest(const char *program,
 
     memset(&state, 0, sizeof(state));
     state.program = program;
+    state.platform = platform;
+    state.sysroot = sysroot;
     state.force_remote = force_remote;
     state.materialize_local_projects = materialize_local_projects;
     state.release = release;
@@ -2187,6 +2229,8 @@ bool feng_cli_deps_install_for_manifest(const char *program,
                                     force_remote,
                                     false,
                                     false,
+                                    NULL,
+                                    NULL,
                                     &resolved,
                                     out_error);
 
@@ -2197,9 +2241,56 @@ bool feng_cli_deps_install_for_manifest(const char *program,
 bool feng_cli_deps_resolve_for_manifest(const char *program,
                                         const char *manifest_path,
                                         bool force_remote,
-                         bool release,
+                                        bool release,
                                         FengCliDepsResolved *out_resolved,
                                         FengCliProjectError *out_error) {
+    char *host_platform = NULL;
+    char *host_error = NULL;
+    bool ok;
+
+    if (!feng_platform_detect_host_platform(&host_platform, &host_error)) {
+        bool result = set_errorf(out_error,
+                                 manifest_path,
+                                 0U,
+                                 "%s",
+                                 host_error != NULL
+                                     ? host_error
+                                     : "failed to detect host platform");
+        free(host_error);
+        return result;
+    }
+    out_resolved->package_paths = NULL;
+    out_resolved->package_count = 0U;
+    out_resolved->debug_fd_paths = NULL;
+    out_resolved->debug_fd_count = 0U;
+    ok = resolve_root_manifest(program,
+                               manifest_path,
+                               force_remote,
+                               true,
+                               release,
+                               host_platform,
+                               NULL,
+                               out_resolved,
+                               out_error);
+    free(host_platform);
+    return ok;
+}
+
+bool feng_cli_deps_resolve_for_manifest_platform(
+    const char *program,
+    const char *manifest_path,
+    bool force_remote,
+    bool release,
+    const char *platform,
+    const char *sysroot,
+    FengCliDepsResolved *out_resolved,
+    FengCliProjectError *out_error) {
+    if (platform == NULL || !feng_platform_is_valid(platform)) {
+        return set_errorf(out_error,
+                          manifest_path,
+                          0U,
+                          "invalid target platform for dependency resolution");
+    }
     out_resolved->package_paths = NULL;
     out_resolved->package_count = 0U;
     out_resolved->debug_fd_paths = NULL;
@@ -2208,7 +2299,9 @@ bool feng_cli_deps_resolve_for_manifest(const char *program,
                                  manifest_path,
                                  force_remote,
                                  true,
-                     release,
+                                 release,
+                                 platform,
+                                 sysroot,
                                  out_resolved,
                                  out_error);
 }

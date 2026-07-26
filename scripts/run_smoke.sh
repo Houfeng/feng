@@ -9,8 +9,9 @@
 #                         are passed to the compiler in deterministic
 #                         (alphabetical) order.
 #
-# For each case we invoke `feng <files...> --target=bin --out=<gen-dir>
-# --name=<name> --keep-ir`, which produces:
+# For each case we invoke `feng <files...> --target=bin
+# --platform=<host-platform> --out=<gen-dir> --name=<name> --keep-ir`, which
+# produces:
 #
 #   <gen-dir>/ir/c/feng.c
 #   <gen-dir>/bin/<name>
@@ -51,7 +52,8 @@ run_case() {
     mkdir -p "$out_dir"
 
     local log="$out_dir/compile.log"
-    if ! timeout "$timeout_sec" "$FENG" "${inputs[@]}" --target=bin --out="$out_dir" \
+    if ! timeout "$timeout_sec" "$FENG" "${inputs[@]}" --target=bin \
+            --platform="$HOST_PLATFORM" --out="$out_dir" \
             --name="$name" --keep-ir >"$log" 2>&1; then
         local exit_code=$?
         if [[ $exit_code -eq 124 ]]; then

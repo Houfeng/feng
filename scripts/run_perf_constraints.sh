@@ -37,7 +37,8 @@ compile_single_case() {
     local src="$2"
     local out_dir="$OUT_ROOT/$name"
     mkdir -p "$out_dir"
-    if ! "$FENG" "$src" --target=lib --out="$out_dir" --name="$name" --keep-ir >"$out_dir/compile.log" 2>&1; then
+    if ! "$FENG" "$src" --target=lib --platform="$HOST_PLATFORM" \
+            --out="$out_dir" --name="$name" --keep-ir >"$out_dir/compile.log" 2>&1; then
         echo "FAIL[$name] compile"
         sed 's/^/  /' "$out_dir/compile.log"
         failures=$((failures + 1))
@@ -52,7 +53,8 @@ compile_inline_case() {
     mkdir -p "$out_dir"
     local src="$out_dir/$name.ff"
     printf "%s" "$src_text" > "$src"
-    if ! "$FENG" "$src" --target=lib --out="$out_dir" --name="$name" --keep-ir >"$out_dir/compile.log" 2>&1; then
+    if ! "$FENG" "$src" --target=lib --platform="$HOST_PLATFORM" \
+            --out="$out_dir" --name="$name" --keep-ir >"$out_dir/compile.log" 2>&1; then
         echo "FAIL[$name] compile"
         sed 's/^/  /' "$out_dir/compile.log"
         failures=$((failures + 1))

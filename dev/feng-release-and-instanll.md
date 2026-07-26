@@ -61,7 +61,8 @@ feng-<version>-<platform>.zip
 feng-<version>-<platform>/
 ├── bin/                          # 必须：Feng 可执行
 │   └── feng                      # 编译器 + CLI 主入口（含 lsp / dap 子命令）
-├── include/                      # 必须：runtime 公共 ABI 头文件（平台无关）
+├── include/                      # 必须：生成 C 与 runtime 使用的头文件（平台无关）
+│   ├── feng_generated.h
 │   ├── feng_runtime.h
 │   └── feng_runtime_contract.inc
 ├── lib/                          # 必须：运行时静态库（按完整目标平台分子目录）
@@ -109,7 +110,7 @@ feng-<version>-<platform>/
 
 - Windows 可执行文件使用 `.exe` 后缀，静态库使用 `.lib` 后缀。
 - `lib/` 按完整目标平台分目录。三份分发包均包含五份 runtime；macOS runtime 在合法 macOS 环境构建，Linux runtime 使用对应 sysroot 构建。发布时校验对象格式、CPU 架构和平台，禁止跨平台或 libc ABI 复用。
-- `include/` 仅存放一份平台无关的 runtime 公共 ABI 头文件。标准和系统头文件由目标 SDK / sysroot 提供，不得复制 Apple SDK 头文件。
+- `include/` 仅存放一份平台无关的 Feng 头文件。其中 `feng_generated.h` 为生成 C 提供 SDK-free 编译所需的自包含声明闭包，`feng_runtime.h` 与 `feng_runtime_contract.inc` 定义 runtime 公共 ABI；正常目标的标准和系统头文件仍由目标 SDK / sysroot 提供，不得复制 Apple SDK 头文件。
 - `toolchain/llvm/` 保持 LLVM 官方包布局，所有工具来自同一版本、同一 host 平台包。每份 Linux 分发包只包含当前 host 架构的一份 LLVM，同时支持 GNU 和 musl 目标。
 - `toolchain/sysroot/` 按完整 Linux 目标平台分目录，保留编译和链接所需文件及目录关系，移除 GCC、binutils 和 musl.cc 工具。native 与交叉编译共用 sysroot，调用参数见 [feng-build.md](../docs/feng-build.md)。
 - sysroot 的来源、版本、裁剪和许可信息见 §5.3。禁止复制 host `/usr`。
@@ -321,11 +322,11 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 项目命令的参数行为以 [feng-cli.md](../docs/feng-cli.md#项目平台选择统一规则) 为准。
 
-- [ ] 按 [feng-std-extlib-build.md](./feng-std-extlib-build.md) 更新标准库各 extlib 的预构建脚本，在三个发行 host 构建环境完整预构建并校验五个目标平台版本，供后续交叉编译验证使用。
-- [ ] 直编支持 `--platform=<platform>` 和 `--sysroot=<path>`。
-- [ ] `feng build` 支持可重复的 `--platform=<platform>`；仅当最终选择一个平台时支持 `--sysroot=<path>`，多平台与单一 `--sysroot` 同时使用必须报错；按项目平台选择统一规则完成构建。
-- [ ] `feng run` 固定构建并运行 host 平台，不支持 `--platform` 和 `--sysroot`。
-- [ ] `feng pack` 支持可重复的 `--platform=<platform>`；仅当最终选择一个平台时支持 `--sysroot=<path>`，多平台与单一 `--sysroot` 同时使用必须报错；将目标平台集合和显式 sysroot 传给项目构建流程并触发 release 构建，全部构建成功后再打包，不重复实现构建逻辑。
+- [x] 按 [feng-std-extlib-build.md](./feng-std-extlib-build.md) 更新标准库各 extlib 的预构建脚本，在三个发行 host 构建环境完整预构建并校验五个目标平台版本，供后续交叉编译验证使用。
+- [x] 直编支持 `--platform=<platform>` 和 `--sysroot=<path>`。
+- [x] `feng build` 支持可重复的 `--platform=<platform>`；仅当最终选择一个平台时支持 `--sysroot=<path>`，多平台与单一 `--sysroot` 同时使用必须报错；按项目平台选择统一规则完成构建。
+- [x] `feng run` 固定构建并运行 host 平台，不支持 `--platform` 和 `--sysroot`。
+- [x] `feng pack` 支持可重复的 `--platform=<platform>`；仅当最终选择一个平台时支持 `--sysroot=<path>`，多平台与单一 `--sysroot` 同时使用必须报错；将目标平台集合和显式 sysroot 传给项目构建流程并触发 release 构建，全部构建成功后再打包，不重复实现构建逻辑。
 - [ ] 人工 Review。
 
 ### 8.6 CI 构建脚本

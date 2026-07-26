@@ -115,7 +115,8 @@ endif
 
 RUNTIME_LIBS := $(foreach platform,$(RUNTIME_PLATFORMS),$(LIB_DIR)/$(platform)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT))
 RUNTIME_LIB := $(LIB_DIR)/$(HOST_PLATFORM)/$(STATIC_LIB_PREFIX)feng_runtime$(STATIC_LIB_EXT)
-RUNTIME_HEADERS := $(BUILD_DIR)/include/feng_runtime.h \
+RUNTIME_HEADERS := $(BUILD_DIR)/include/feng_generated.h \
+	$(BUILD_DIR)/include/feng_runtime.h \
 	$(BUILD_DIR)/include/feng_runtime_contract.inc
 LIBUNWIND_LIB := extlib/$(HOST_PLATFORM)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC_LIB_EXT)
 TOOLCHAIN_LAYOUT_DIR := $(BUILD_DIR)/toolchain
@@ -135,7 +136,7 @@ RUNTIME_FLAGS_linux-arm64-musl := --target=aarch64-unknown-linux-musl --sysroot=
 endif
 
 # Define isolated runtime objects and one runtime archive for each platform
-# supported by the current native build environment.
+# supported by the current build environment.
 define DEFINE_RUNTIME_PLATFORM
 RUNTIME_OBJS_$(1) := $$(patsubst src/runtime/%.c,$$(OBJ_DIR)/runtime/$(1)/%.o,$$(RUNTIME_SRCS))
 RUNTIME_UNWIND_$(1) := extlib/$(1)/$$(STATIC_LIB_PREFIX)feng_unwind$$(STATIC_LIB_EXT)
@@ -307,6 +308,10 @@ $(BIN_DIR)/test_symbol: $(TEST_SYMBOL_OBJS)
 # includes "feng_runtime.h" directly (no runtime/ prefix), and feng_runtime.h
 # uses a relative-path include for feng_runtime_contract.inc, so the include
 # root holds both files flat.
+$(BUILD_DIR)/include/feng_generated.h: src/runtime/feng_generated.h
+	@mkdir -p $(dir $@)
+	cp $< $@
+
 $(BUILD_DIR)/include/feng_runtime.h: src/runtime/feng_runtime.h
 	@mkdir -p $(dir $@)
 	cp $< $@

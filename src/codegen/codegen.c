@@ -38971,12 +38971,7 @@ static char *cg_finalize(CG *cg) {
     Buf out; buf_init(&out);
     buf_append_cstr(&out,
         "/* Feng generated code — do not edit. */\n"
-        "#include <stdbool.h>\n"
-        "#include <math.h>\n"
-        "#include <stddef.h>\n"
-        "#include <stdint.h>\n"
-        "#include <stdlib.h>\n"
-        "#include <string.h>\n"
+        "#include \"feng_generated.h\"\n"
         "#include \"feng_runtime.h\"\n"
         "\n"
         "#if defined(__clang__)\n"

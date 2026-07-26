@@ -25,6 +25,7 @@
 #include "cli/project/common.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
+#include "platform/platform.h"
 #include "semantic/semantic.h"
 #include "symbol/provider.h"
 #include "symbol/imported_module.h"
@@ -2367,6 +2368,8 @@ static FengSymbolProvider *build_symbol_index_candidate(const FengLspDocument *d
     FengCliProjectContext project = {0};
     FengCliDepsResolved resolved = {0};
     char *manifest_path = NULL;
+    char *host_platform = NULL;
+    char *platform_out_root = NULL;
     char *symbols_root = NULL;
     size_t index;
 
@@ -2407,7 +2410,14 @@ static FengSymbolProvider *build_symbol_index_candidate(const FengLspDocument *d
             goto cleanup;
         }
     }
-    symbols_root = path_join(project.out_root, "obj/symbols");
+    if (feng_platform_detect_host_platform(&host_platform, NULL)) {
+        platform_out_root = feng_cli_project_platform_out_root(
+            &project,
+            host_platform);
+    }
+    symbols_root = platform_out_root != NULL
+        ? path_join(platform_out_root, "obj/symbols")
+        : NULL;
     if (symbols_root != NULL && path_is_directory(symbols_root) &&
         !feng_symbol_provider_add_ft_root(provider,
                                           symbols_root,
@@ -2419,6 +2429,8 @@ static FengSymbolProvider *build_symbol_index_candidate(const FengLspDocument *d
 
 cleanup:
     free(symbols_root);
+    free(platform_out_root);
+    free(host_platform);
     free(manifest_path);
     feng_cli_deps_resolved_dispose(&resolved);
     feng_cli_project_context_dispose(&project);

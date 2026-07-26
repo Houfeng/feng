@@ -14,6 +14,7 @@
 #include "platform/platform.h"
 #include "archive/zip.h"
 #include "cli/cli.h"
+#include "cli/compile/options.h"
 #include "cli/deps/manager.h"
 #include "cli/frontend.h"
 #include "cli/lsp/server.h"
@@ -265,18 +266,43 @@ static char *host_static_library_path(const char *dir, const char *stem) {
 }
 
 static char *host_static_library_output_path(const char *out_dir, const char *stem) {
-    char *host_target = NULL;
-    char *lib_base;
     char *lib_dir;
     char *path;
 
-    ASSERT(feng_platform_detect_host_platform(&host_target, NULL));
-    lib_base = path_join(out_dir, "lib");
-    lib_dir = path_join(lib_base, host_target);
-    free(lib_base);
-    free(host_target);
+    lib_dir = path_join(out_dir, "lib");
     path = host_static_library_path(lib_dir, stem);
     free(lib_dir);
+    return path;
+}
+
+/* Compose one project output path below build/<platform>/. */
+static char *project_platform_build_path(const char *project_dir,
+                                         const char *platform,
+                                         const char *relative_path) {
+    char *build_root;
+    char *platform_root;
+    char *path;
+
+    build_root = path_join(project_dir, "build");
+    platform_root = path_join(build_root, platform);
+    path = path_join(platform_root, relative_path);
+    free(platform_root);
+    free(build_root);
+    return path;
+}
+
+/* Compose one project output path below build/<host-platform>/. */
+static char *project_host_build_path(const char *project_dir,
+                                     const char *relative_path) {
+    char *host_platform = NULL;
+    char *path;
+
+    ASSERT(feng_platform_detect_host_platform(&host_platform, NULL));
+    path = project_platform_build_path(
+        project_dir,
+        host_platform,
+        relative_path);
+    free(host_platform);
     return path;
 }
 
@@ -284,6 +310,7 @@ static char *host_static_library_output_path(const char *out_dir, const char *st
 static void test_platform_detects_complete_native_platform(void) {
     char *host_platform = NULL;
     char *error_message = NULL;
+    char *dynamic_name = NULL;
 
     ASSERT(feng_platform_detect_host_platform(&host_platform, &error_message));
     ASSERT(error_message == NULL);
@@ -301,6 +328,16 @@ static void test_platform_detects_complete_native_platform(void) {
                   "x86_64-unknown-linux-gnu") == 0);
 #endif
     ASSERT(feng_platform_clang_target("unsupported-platform") == NULL);
+    ASSERT(strcmp(feng_platform_dynamic_library_suffix("macos-arm64"),
+                  ".dylib") == 0);
+    ASSERT(strcmp(feng_platform_dynamic_library_suffix("linux-x64-musl"),
+                  ".so") == 0);
+    dynamic_name = feng_platform_dynamic_library_file_name(
+        "linux-arm64-gnu",
+        "helper");
+    ASSERT(dynamic_name != NULL);
+    ASSERT(strcmp(dynamic_name, "libhelper.so") == 0);
+    free(dynamic_name);
     free(error_message);
     free(host_platform);
 }
@@ -348,6 +385,30 @@ static char *host_bundle_extlib_dynamic_entry_path(const char *host_target,
 
     free(name);
     return entry;
+}
+
+/* Invoke direct compilation for the detected host platform. */
+static int run_direct_for_host(int argc, char **argv) {
+    char *host_platform = NULL;
+    char *platform_option = NULL;
+    char **full_argv = NULL;
+    int index;
+    int rc;
+
+    ASSERT(feng_platform_detect_host_platform(&host_platform, NULL));
+    platform_option = dup_printf("--platform=%s", host_platform);
+    full_argv = (char **)calloc((size_t)argc + 1U, sizeof(*full_argv));
+    ASSERT(platform_option != NULL);
+    ASSERT(full_argv != NULL);
+    for (index = 0; index < argc; ++index) {
+        full_argv[index] = argv[index];
+    }
+    full_argv[argc] = platform_option;
+    rc = feng_cli_direct_main("feng", argc + 1, full_argv);
+    free(full_argv);
+    free(platform_option);
+    free(host_platform);
+    return rc;
 }
 
 static void write_bundle_with_file_or_die(const char *bundle_path,
@@ -421,16 +482,25 @@ static void write_library_bundle_or_die(const char *bundle_path,
                                         const char *library_path,
                                         const char *public_mod_root) {
     FengFbLibraryBundleSpec spec = {0};
+    FengFbBundlePlatformArtifact artifact = {0};
+    char *host_platform = NULL;
     char *error_message = NULL;
 
+    ASSERT(feng_platform_detect_host_platform(&host_platform, &error_message));
+    free(error_message);
+    error_message = NULL;
     spec.package_path = bundle_path;
     spec.package_name = package_name;
     spec.package_version = package_version;
-    spec.library_path = library_path;
+    artifact.platform = host_platform;
+    artifact.library_path = library_path;
+    spec.platform_artifacts = &artifact;
+    spec.platform_artifact_count = 1U;
     spec.public_mod_root = public_mod_root;
 
     ASSERT(feng_fb_write_library_bundle(&spec, &error_message));
     free(error_message);
+    free(host_platform);
 }
 
 static void assert_zip_ok(bool ok, char **zip_error) {
@@ -594,7 +664,7 @@ static char *build_single_source_package_bundle(const char *workspace_dir,
             out_opt,
             name_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        ASSERT(run_direct_for_host(4, argv) == 0);
         free(name_opt);
         free(out_opt);
     }
@@ -643,7 +713,7 @@ static void compile_consumer_with_package_and_expect_stdout(const char *workspac
             name_opt,
             pkg_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        ASSERT(run_direct_for_host(5, argv) == 0);
         free(pkg_opt);
         free(name_opt);
         free(out_opt);
@@ -699,12 +769,55 @@ static int run_direct_quiet_stderr(int argc, char **argv) {
     ASSERT(dup2(null_fd, STDERR_FILENO) >= 0);
     close(null_fd);
 
-    rc = feng_cli_direct_main("feng", argc, argv);
+    rc = run_direct_for_host(argc, argv);
 
     fflush(stderr);
     ASSERT(dup2(saved_stderr, STDERR_FILENO) >= 0);
     close(saved_stderr);
     return rc;
+}
+
+/* Verify direct mode requires one complete platform and preserves sysroot. */
+static void test_direct_options_require_one_platform_and_accept_sysroot(void) {
+    FengCliDirectOptions options = {0};
+    char *missing_platform[] = {
+        "main.ff",
+        "--out=build",
+    };
+    char *valid[] = {
+        "main.ff",
+        "--target=lib",
+        "--platform=linux-x64-musl",
+        "--sysroot=/sdk/linux-x64-musl",
+        "--out=build",
+    };
+    char *duplicate_platform[] = {
+        "main.ff",
+        "--platform=macos-arm64",
+        "--platform=linux-x64-gnu",
+        "--out=build",
+    };
+
+    ASSERT(feng_cli_direct_options_parse(
+               "feng",
+               2,
+               missing_platform,
+               &options) == FENG_CLI_PARSE_ERROR);
+    ASSERT(feng_cli_direct_options_parse(
+               "feng",
+               5,
+               valid,
+               &options) == FENG_CLI_PARSE_OK);
+    ASSERT(options.target == FENG_COMPILE_TARGET_LIB);
+    ASSERT(strcmp(options.platform, "linux-x64-musl") == 0);
+    ASSERT(strcmp(options.sysroot, "/sdk/linux-x64-musl") == 0);
+    ASSERT(strcmp(options.out_dir, "build") == 0);
+    feng_cli_direct_options_dispose(&options);
+    ASSERT(feng_cli_direct_options_parse(
+               "feng",
+               4,
+               duplicate_platform,
+               &options) == FENG_CLI_PARSE_ERROR);
 }
 
 static int run_init_quiet_stderr(int argc, char **argv) {
@@ -1496,7 +1609,7 @@ static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
         };
         char *out_opt = make_out_option(out_dir);
         argv[2] = out_opt;
-        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        ASSERT(run_direct_for_host(4, argv) == 0);
         ASSERT(!path_exists(c_path));
         free(out_opt);
     }
@@ -1533,7 +1646,7 @@ static void test_direct_build_cleans_stale_ir_on_frontend_failure(void) {
         };
         char *out_opt = make_out_option(out_dir);
         argv[2] = out_opt;
-        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        ASSERT(run_direct_for_host(5, argv) == 0);
         ASSERT(path_exists(c_path));
         free(out_opt);
     }
@@ -1602,7 +1715,7 @@ static void test_direct_build_emits_symbol_tables(void) {
         };
         char *out_opt = make_out_option(out_dir);
         argv[2] = out_opt;
-        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        ASSERT(run_direct_for_host(4, argv) == 0);
         free(out_opt);
     }
 
@@ -1667,7 +1780,7 @@ static void test_direct_build_accepts_package_bundle(void) {
             out_opt,
             "--name=dep",
         };
-        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        ASSERT(run_direct_for_host(4, argv) == 0);
         free(out_opt);
     }
     ASSERT(path_exists(dep_library_path));
@@ -1688,7 +1801,7 @@ static void test_direct_build_accepts_package_bundle(void) {
             "--name=main",
             pkg_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        ASSERT(run_direct_for_host(5, argv) == 0);
         free(pkg_opt);
         free(out_opt);
     }
@@ -1760,7 +1873,7 @@ static void test_direct_build_links_library_from_package_bundle(void) {
             out_opt,
             "--name=pkgdep",
         };
-        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        ASSERT(run_direct_for_host(4, argv) == 0);
         free(out_opt);
     }
 
@@ -1782,7 +1895,7 @@ static void test_direct_build_links_library_from_package_bundle(void) {
             "--name=main",
             pkg_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        ASSERT(run_direct_for_host(5, argv) == 0);
         free(pkg_opt);
         free(out_opt);
     }
@@ -1879,7 +1992,7 @@ static void test_direct_build_sorts_package_libraries_by_dependency(void) {
             out_opt,
             "--name=pkgb",
         };
-        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        ASSERT(run_direct_for_host(4, argv) == 0);
         free(out_opt);
     }
     ASSERT(path_exists(b_library_path));
@@ -1899,7 +2012,7 @@ static void test_direct_build_sorts_package_libraries_by_dependency(void) {
             "--name=pkga",
             pkg_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        ASSERT(run_direct_for_host(5, argv) == 0);
         free(pkg_opt);
         free(out_opt);
     }
@@ -1922,7 +2035,7 @@ static void test_direct_build_sorts_package_libraries_by_dependency(void) {
             pkg_b_opt,
             pkg_a_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 6, argv) == 0);
+        ASSERT(run_direct_for_host(6, argv) == 0);
         free(pkg_a_opt);
         free(pkg_b_opt);
         free(out_opt);
@@ -1975,7 +2088,7 @@ static void test_project_pack_bundle_can_be_consumed(void) {
     lib_manifest_path = path_join(lib_project_dir, "feng.fm");
     lib_src_dir = path_join(lib_project_dir, "src");
     lib_source_path = path_join(lib_src_dir, "lib.ff");
-    bundle_path = path_join(lib_project_dir, "build/pkgpack-0.1.0.fb");
+    bundle_path = path_join(lib_project_dir, "build/pkg/pkgpack-0.1.0.fb");
     consumer_src_dir = path_join(workspace_dir, "consumer/src");
     consumer_source_path = path_join(consumer_src_dir, "main.ff");
     consumer_out_dir = path_join(workspace_dir, "consumer/build");
@@ -2021,7 +2134,7 @@ static void test_project_pack_bundle_can_be_consumed(void) {
             "--name=main",
             pkg_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        ASSERT(run_direct_for_host(5, argv) == 0);
         free(pkg_opt);
         free(out_opt);
     }
@@ -2066,6 +2179,7 @@ static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(voi
     char *error_message = NULL;
     char *remove_error = NULL;
     FengFbBundleDirectoryEntry asset_entries[2] = {0};
+    FengFbBundlePlatformArtifact platform_artifact = {0};
     FengFbLibraryBundleSpec spec = {0};
     FengZipReader reader = {0};
     char *zip_error = NULL;
@@ -2114,9 +2228,12 @@ static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(voi
     spec.package_path = bundle_path;
     spec.package_name = "bundle_demo";
     spec.package_version = "0.1.0";
-    spec.library_path = library_path;
+    platform_artifact.platform = host_target;
+    platform_artifact.library_path = library_path;
+    platform_artifact.extlib_root = extlib_platform_dir;
+    spec.platform_artifacts = &platform_artifact;
+    spec.platform_artifact_count = 1U;
     spec.public_mod_root = mod_dir;
-    spec.extlib_root = extlib_root;
     spec.asset_entries = asset_entries;
     spec.asset_entry_count = 2U;
 
@@ -2250,6 +2367,7 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
     char *stdout_text;
     char *released_text;
     char *remove_error = NULL;
+    FengFbBundlePlatformArtifact platform_artifact = {0};
     FengFbLibraryBundleSpec spec = {0};
 
     workspace_dir = mkdtemp(template_path);
@@ -2300,7 +2418,7 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
             out_opt,
             name_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        ASSERT(run_direct_for_host(4, argv) == 0);
         free(name_opt);
         free(out_opt);
     }
@@ -2319,9 +2437,12 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
     spec.package_path = bundle_path;
     spec.package_name = "pkgextlib";
     spec.package_version = "0.1.0";
-    spec.library_path = dep_library_path;
+    platform_artifact.platform = host_target;
+    platform_artifact.library_path = dep_library_path;
+    platform_artifact.extlib_root = extlib_platform_dir;
+    spec.platform_artifacts = &platform_artifact;
+    spec.platform_artifact_count = 1U;
     spec.public_mod_root = dep_mod_root;
-    spec.extlib_root = extlib_root;
     ASSERT(feng_fb_write_library_bundle(&spec, &error_message));
     free(error_message);
     error_message = NULL;
@@ -2349,7 +2470,7 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
             "--name=main",
             pkg_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        ASSERT(run_direct_for_host(5, argv) == 0);
         free(pkg_opt);
         free(out_opt);
     }
@@ -2424,6 +2545,7 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
     char *error_message = NULL;
     char *stdout_text;
     char *remove_error = NULL;
+    FengFbBundlePlatformArtifact platform_artifact = {0};
     FengFbLibraryBundleSpec spec = {0};
 
     workspace_dir = mkdtemp(template_path);
@@ -2470,7 +2592,7 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
             out_opt,
             name_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        ASSERT(run_direct_for_host(4, argv) == 0);
         free(name_opt);
         free(out_opt);
     }
@@ -2492,9 +2614,12 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
     spec.package_path = bundle_path;
     spec.package_name = "pkgextlibstatic";
     spec.package_version = "0.1.0";
-    spec.library_path = dep_library_path;
+    platform_artifact.platform = host_target;
+    platform_artifact.library_path = dep_library_path;
+    platform_artifact.extlib_root = extlib_platform_dir;
+    spec.platform_artifacts = &platform_artifact;
+    spec.platform_artifact_count = 1U;
     spec.public_mod_root = dep_mod_root;
-    spec.extlib_root = extlib_root;
     ASSERT(feng_fb_write_library_bundle(&spec, &error_message));
     free(error_message);
     error_message = NULL;
@@ -2527,7 +2652,7 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
             "--name=main",
             pkg_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        ASSERT(run_direct_for_host(5, argv) == 0);
         free(pkg_opt);
         free(out_opt);
     }
@@ -2617,7 +2742,7 @@ static void test_direct_build_maps_cli_library_name_to_link_flag(void) {
             "--name=main",
             lib_opt,
         };
-        ASSERT(feng_cli_direct_main("feng", 5, argv) == 0);
+        ASSERT(run_direct_for_host(5, argv) == 0);
     }
 
     if (saved_cc != NULL) {
@@ -2700,7 +2825,7 @@ static void test_direct_build_passes_cli_library_path_verbatim(void) {
             "--lib",
             native_library_path,
         };
-        ASSERT(feng_cli_direct_main("feng", 6, argv) == 0);
+        ASSERT(run_direct_for_host(6, argv) == 0);
     }
 
     if (saved_cc != NULL) {
@@ -3022,7 +3147,7 @@ static void test_pack_bundle_manifest_rewrites_local_dependency_versions(void) {
     root_manifest_path = path_join(root_project_dir, "feng.fm");
     root_src_dir = path_join(root_project_dir, "src");
     root_source_path = path_join(root_src_dir, "lib.ff");
-    bundle_path = path_join(root_project_dir, "build/rootlib-0.1.0.fb");
+    bundle_path = path_join(root_project_dir, "build/pkg/rootlib-0.1.0.fb");
 
     mkdir_p(dep_src_dir);
     mkdir_p(root_src_dir);
@@ -3270,7 +3395,7 @@ static void test_frontend_outputs_absolute_bundle_paths(void) {
             out_opt,
             "--name=dep",
         };
-        ASSERT(feng_cli_direct_main("feng", 4, argv) == 0);
+        ASSERT(run_direct_for_host(4, argv) == 0);
         free(out_opt);
     }
 
@@ -3582,7 +3707,15 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
     manifest_path = path_join(project_dir, "feng.fm");
     src_dir = path_join(project_dir, "src");
     lib_path = path_join(src_dir, "lib.ff");
-    expected_manifest = dup_printf("[package]\nname: \"_9_demo_lib\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    expected_manifest = dup_printf(
+        "[package]\n"
+        "name: \"_9_demo_lib\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n"
+        "platform: \"macos-arm64,linux-x64-gnu,linux-x64-musl,"
+        "linux-arm64-gnu,linux-arm64-musl\"\n");
     expected_lib_text = dup_printf("module _9_demo_lib;\n\nfunc helper(): int {\n  return 0;\n}\n");
     ASSERT(expected_manifest != NULL);
     ASSERT(expected_lib_text != NULL);
@@ -3745,7 +3878,10 @@ static void test_project_build_help_writes_stdout_and_returns_success(void) {
                                                           &stderr_text);
 
     ASSERT(rc == 0);
-    ASSERT(strstr(stdout_text, "Usage:\n  feng build [<path>] [--release] [--keep-ir]\n") != NULL);
+    ASSERT(strstr(stdout_text,
+                  "Usage:\n"
+                  "  feng build [<path>] [--release] [--keep-ir] "
+                  "[--platform=<platform>]... [--sysroot=<path>]\n") != NULL);
     ASSERT(stderr_text[0] == '\0');
 
     free(stderr_text);
@@ -3765,7 +3901,10 @@ static void test_project_pack_help_writes_stdout_and_returns_success(void) {
                                                           &stderr_text);
 
     ASSERT(rc == 0);
-    ASSERT(strstr(stdout_text, "Usage:\n  feng pack [<path>]\n") != NULL);
+    ASSERT(strstr(stdout_text,
+                  "Usage:\n"
+                  "  feng pack [<path>] [--platform=<platform>]... "
+                  "[--sysroot=<path>]\n") != NULL);
     ASSERT(stderr_text[0] == '\0');
 
     free(stderr_text);
@@ -5534,7 +5673,7 @@ static void test_project_build_rewrites_module_binding_in_dap_globals(void) {
     manifest_path = path_join(project_dir, "feng.fm");
     src_dir = path_join(project_dir, "src");
     source_path = path_join(src_dir, "main.ff");
-    binary_path = path_join(project_dir, "build/bin/demo");
+    binary_path = project_host_build_path(project_dir, "bin/demo");
     fd_path = dup_printf("%s.fd", binary_path);
     backend_path = path_join(workspace_dir, "lldb-dap");
     requests_path = path_join(workspace_dir, "requests.txt");
@@ -6804,7 +6943,9 @@ static void test_project_build_keeps_for_body_breakpoint_after_init_in_dwarf(voi
         ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
     }
 
-    dwarf_path = path_join(project_dir, "build/bin/demo.dSYM/Contents/Resources/DWARF/demo");
+    dwarf_path = project_host_build_path(
+        project_dir,
+        "bin/demo.dSYM/Contents/Resources/DWARF/demo");
     dump_path = path_join(workspace_dir, "dwarfdump.txt");
     ASSERT(path_exists(dwarf_path));
 
@@ -6858,7 +6999,7 @@ static void test_project_build_keeps_for_body_locals_after_prefix_binding(void) 
     manifest_path = path_join(project_dir, "feng.fm");
     src_dir = path_join(project_dir, "src");
     source_path = path_join(src_dir, "main.ff");
-    binary_path = path_join(project_dir, "build/bin/demo");
+    binary_path = project_host_build_path(project_dir, "bin/demo");
     output_path = path_join(workspace_dir, "lldb.txt");
     repo_root = getcwd(NULL, 0);
     ASSERT(repo_root != NULL);
@@ -10205,6 +10346,81 @@ static void test_manifest_defaults(void) {
     feng_cli_project_error_dispose(&error);
 }
 
+/* Verify manifest platform sets preserve order and reject invalid duplicates. */
+static void test_manifest_parses_writes_and_validates_platform_set(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"demo\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "platform: \"linux-x64-musl,macos-arm64\"\n";
+    static const char *kDuplicateManifest =
+        "[package]\n"
+        "name: \"demo\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "platform: \"macos-arm64,macos-arm64\"\n";
+    static const char *kIncompleteManifest =
+        "[package]\n"
+        "name: \"demo\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "platform: \"linux-x64\"\n";
+    char template_path[] = "temp/feng_cli_manifest_platform_XXXXXX";
+    char *workspace_dir;
+    char *manifest_path;
+    char *written_text;
+    char *write_error = NULL;
+    char *remove_error = NULL;
+    FengCliProjectManifest manifest = {0};
+    FengCliProjectError error = {0};
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    manifest_path = path_join(workspace_dir, "feng.fm");
+
+    ASSERT(feng_cli_project_manifest_parse(
+        manifest_path,
+        kManifest,
+        &manifest,
+        &error));
+    ASSERT(manifest.platform_count == 2U);
+    ASSERT(strcmp(manifest.platforms[0], "linux-x64-musl") == 0);
+    ASSERT(strcmp(manifest.platforms[1], "macos-arm64") == 0);
+    ASSERT(feng_cli_project_manifest_write(
+        manifest_path,
+        &manifest,
+        &write_error));
+    ASSERT(write_error == NULL);
+    written_text = read_text_file(manifest_path);
+    ASSERT(strstr(
+               written_text,
+               "platform: \"linux-x64-musl,macos-arm64\"\n") != NULL);
+    free(written_text);
+    feng_cli_project_manifest_dispose(&manifest);
+
+    ASSERT(!feng_cli_project_manifest_parse(
+        manifest_path,
+        kDuplicateManifest,
+        &manifest,
+        &error));
+    ASSERT(strstr(error.message, "duplicate platform") != NULL);
+    feng_cli_project_error_dispose(&error);
+    ASSERT(!feng_cli_project_manifest_parse(
+        manifest_path,
+        kIncompleteManifest,
+        &manifest,
+        &error));
+    ASSERT(strstr(error.message, "invalid platform") != NULL);
+
+    feng_cli_project_manifest_dispose(&manifest);
+    feng_cli_project_error_dispose(&error);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(write_error);
+    free(manifest_path);
+}
+
 static void test_manifest_parses_dependencies_and_registry(void) {
     static const char *kManifest =
         "[package]\n"
@@ -10372,6 +10588,8 @@ static void test_project_open_collects_sources(void) {
     char *manifest_path;
     char *main_path;
     char *helper_path;
+    char *host_platform = NULL;
+    char *binary_path = NULL;
     FengCliProjectContext context = {0};
     FengCliProjectError error = {0};
     char *remove_error = NULL;
@@ -10405,8 +10623,12 @@ static void test_project_open_collects_sources(void) {
     ASSERT(strcmp(context.manifest.version, "0.1.0") == 0);
     ASSERT(context.source_count == 2U);
     ASSERT(strstr(context.out_root, "/dist") != NULL);
-    ASSERT(strstr(context.binary_path, "/dist/bin/demo") != NULL);
-    ASSERT(strstr(context.package_path, "/dist/demo-0.1.0.fb") != NULL);
+    ASSERT(feng_platform_detect_host_platform(&host_platform, NULL));
+    binary_path = feng_cli_project_platform_binary_path(&context, host_platform);
+    ASSERT(binary_path != NULL);
+    ASSERT(strstr(binary_path, "/dist/") != NULL);
+    ASSERT(strstr(binary_path, "/bin/demo") != NULL);
+    ASSERT(strstr(context.package_path, "/dist/pkg/demo-0.1.0.fb") != NULL);
     ASSERT(strcmp(context.source_paths[0], context.source_paths[1]) < 0);
     ASSERT((path_ends_with(context.source_paths[0], "/src/main.ff")
             && path_ends_with(context.source_paths[1], "/src/nested/helper.ff"))
@@ -10414,6 +10636,8 @@ static void test_project_open_collects_sources(void) {
                && path_ends_with(context.source_paths[1], "/src/main.ff")));
 
     feng_cli_project_context_dispose(&context);
+    free(binary_path);
+    free(host_platform);
     ASSERT(feng_cli_project_remove_tree(project_dir, &remove_error));
     free(remove_error);
     free(helper_path);
@@ -10445,7 +10669,7 @@ static void test_bundle_manifest_allows_dependencies_without_target(void) {
         "[package]\n"
         "name: \"demo\"\n"
         "version: \"1.0.0\"\n"
-        "arch: \"macos-arm64\"\n"
+        "platform: \"macos-arm64\"\n"
         "abi: \"feng\"\n"
         "\n"
         "[dependencies]\n"
@@ -10458,8 +10682,8 @@ static void test_bundle_manifest_allows_dependencies_without_target(void) {
                                                   &manifest,
                                                   &error));
     ASSERT(!manifest.has_target);
-    ASSERT(manifest.arch != NULL);
-    ASSERT(strcmp(manifest.arch, "macos-arm64") == 0);
+    ASSERT(manifest.platform_count == 1U);
+    ASSERT(strcmp(manifest.platforms[0], "macos-arm64") == 0);
     ASSERT(manifest.abi != NULL);
     ASSERT(strcmp(manifest.abi, "feng") == 0);
     ASSERT(manifest.dependency_count == 1U);
@@ -10475,7 +10699,7 @@ static void test_bundle_manifest_rejects_local_path_dependency(void) {
         "[package]\n"
         "name: \"demo\"\n"
         "version: \"1.0.0\"\n"
-        "arch: \"macos-arm64\"\n"
+        "platform: \"macos-arm64\"\n"
         "abi: \"feng\"\n"
         "\n"
         "[dependencies]\n"
@@ -10499,7 +10723,7 @@ static void test_bundle_manifest_rejects_assets(void) {
         "[package]\n"
         "name: \"demo\"\n"
         "version: \"1.0.0\"\n"
-        "arch: \"macos-arm64\"\n"
+        "platform: \"macos-arm64\"\n"
         "abi: \"feng\"\n"
         "\n"
         "[assets]\n"
@@ -10548,13 +10772,13 @@ static void test_deps_resolve_installs_remote_transitive_dependencies(void) {
                                       "[package]\n"
                                       "name: \"dep_b\"\n"
                                       "version: \"1.0.0\"\n"
-                                      "arch: \"macos-arm64\"\n"
+                                      "platform: \"macos-arm64\"\n"
                                       "abi: \"feng\"\n");
     write_manifest_only_bundle_or_die(bundle_a,
                                       "[package]\n"
                                       "name: \"dep_a\"\n"
                                       "version: \"1.0.0\"\n"
-                                      "arch: \"macos-arm64\"\n"
+                                      "platform: \"macos-arm64\"\n"
                                       "abi: \"feng\"\n"
                                       "\n"
                                       "[dependencies]\n"
@@ -10628,7 +10852,7 @@ static void test_deps_resolve_builds_local_library_dependency(void) {
     project_manifest_path = path_join(project_dir, "feng.fm");
     dep_manifest_path = path_join(dep_dir, "feng.fm");
     dep_source_path = path_join(dep_src_dir, "lib.ff");
-    expected_bundle_path = path_join(dep_dir, "build/local_dep-0.1.0.fb");
+    expected_bundle_path = path_join(dep_dir, "build/pkg/local_dep-0.1.0.fb");
 
     mkdir_p(project_dir);
     mkdir_p(dep_src_dir);
@@ -10761,7 +10985,7 @@ static void test_deps_resolve_uses_global_registry_config(void) {
                                       "[package]\n"
                                       "name: \"remote_dep\"\n"
                                       "version: \"1.0.0\"\n"
-                                      "arch: \"macos-arm64\"\n"
+                                      "platform: \"macos-arm64\"\n"
                                       "abi: \"feng\"\n");
     write_text_file(manifest_path,
                     "[package]\n"
@@ -10837,19 +11061,19 @@ static void test_deps_resolve_reports_transitive_version_conflict(void) {
                                       "[package]\n"
                                       "name: \"common\"\n"
                                       "version: \"1.0.0\"\n"
-                                      "arch: \"macos-arm64\"\n"
+                                      "platform: \"macos-arm64\"\n"
                                       "abi: \"feng\"\n");
     write_manifest_only_bundle_or_die(common_v2_path,
                                       "[package]\n"
                                       "name: \"common\"\n"
                                       "version: \"2.0.0\"\n"
-                                      "arch: \"macos-arm64\"\n"
+                                      "platform: \"macos-arm64\"\n"
                                       "abi: \"feng\"\n");
     write_manifest_only_bundle_or_die(dep_a_path,
                                       "[package]\n"
                                       "name: \"dep_a\"\n"
                                       "version: \"1.0.0\"\n"
-                                      "arch: \"macos-arm64\"\n"
+                                      "platform: \"macos-arm64\"\n"
                                       "abi: \"feng\"\n"
                                       "\n"
                                       "[dependencies]\n"
@@ -10858,7 +11082,7 @@ static void test_deps_resolve_reports_transitive_version_conflict(void) {
                                       "[package]\n"
                                       "name: \"dep_b\"\n"
                                       "version: \"1.0.0\"\n"
-                                      "arch: \"macos-arm64\"\n"
+                                      "platform: \"macos-arm64\"\n"
                                       "abi: \"feng\"\n"
                                       "\n"
                                       "[dependencies]\n"
@@ -11030,7 +11254,7 @@ static void test_deps_add_remote_updates_manifest_and_cache(void) {
                                       "[package]\n"
                                       "name: \"remote_dep\"\n"
                                       "version: \"1.0.0\"\n"
-                                      "arch: \"macos-arm64\"\n"
+                                      "platform: \"macos-arm64\"\n"
                                       "abi: \"feng\"\n");
     write_text_file(manifest_path,
                     "[package]\n"
@@ -11095,7 +11319,7 @@ static void test_deps_add_local_validates_then_writes_manifest(void) {
     project_manifest_path = path_join(project_dir, "feng.fm");
     dep_manifest_path = path_join(dep_dir, "feng.fm");
     dep_source_path = path_join(dep_src_dir, "lib.ff");
-    dep_bundle_path = path_join(dep_dir, "build/local_dep-0.1.0.fb");
+    dep_bundle_path = path_join(dep_dir, "build/pkg/local_dep-0.1.0.fb");
 
     mkdir_p(project_dir);
     mkdir_p(dep_src_dir);
@@ -11332,7 +11556,7 @@ static void test_deps_install_populates_cache_from_registry(void) {
                                       "[package]\n"
                                       "name: \"remote_dep\"\n"
                                       "version: \"1.0.0\"\n"
-                                      "arch: \"macos-arm64\"\n"
+                                      "platform: \"macos-arm64\"\n"
                                       "abi: \"feng\"\n");
     write_text_file(manifest_path,
                     "[package]\n"
@@ -11475,7 +11699,7 @@ static void test_deps_install_rejects_invalid_downloaded_bundle(void) {
                                       "[package]\n"
                                       "name: \"other_dep\"\n"
                                       "version: \"1.0.0\"\n"
-                                      "arch: \"macos-arm64\"\n"
+                                      "platform: \"macos-arm64\"\n"
                                       "abi: \"feng\"\n");
     write_text_file(manifest_path,
                     "[package]\n"
@@ -11729,7 +11953,7 @@ static void test_deps_install_force_refreshes_cached_bundle(void) {
                                       "[package]\n"
                                       "name: \"remote_dep\"\n"
                                       "version: \"1.0.0\"\n"
-                                      "arch: \"macos-arm64\"\n"
+                                      "platform: \"macos-arm64\"\n"
                                       "abi: \"feng\"\n");
     assert_zip_ok(feng_zip_writer_open(registry_bundle_path, &writer, &zip_error), &zip_error);
     assert_zip_ok(feng_zip_writer_add_bytes(&writer,
@@ -11737,12 +11961,12 @@ static void test_deps_install_force_refreshes_cached_bundle(void) {
                                             "[package]\n"
                                             "name: \"remote_dep\"\n"
                                             "version: \"1.0.0\"\n"
-                                            "arch: \"macos-arm64\"\n"
+                                            "platform: \"macos-arm64\"\n"
                                             "abi: \"feng\"\n",
                                             strlen("[package]\n"
                                                    "name: \"remote_dep\"\n"
                                                    "version: \"1.0.0\"\n"
-                                                   "arch: \"macos-arm64\"\n"
+                                                   "platform: \"macos-arm64\"\n"
                                                    "abi: \"feng\"\n"),
                                             FENG_ZIP_COMPRESSION_DEFLATE,
                                             &zip_error),
@@ -11804,6 +12028,220 @@ static void test_deps_install_force_refreshes_cached_bundle(void) {
     free(project_dir);
 }
 
+/* Verify unified project platform selection, whitelist, and sysroot rules. */
+static void test_project_platform_selection_rules(void) {
+    char *declared_platforms[] = {
+        "linux-x64-musl",
+        "macos-arm64",
+    };
+    const char *single_request[] = {
+        "macos-arm64",
+    };
+    const char *duplicate_request[] = {
+        "linux-x64-musl",
+        "linux-x64-musl",
+    };
+    FengCliProjectContext context = {0};
+    FengCliProjectPlatformSelection selection = {0};
+    FengCliProjectError error = {0};
+    char *host_platform = NULL;
+
+    context.manifest_path = "/project/feng.fm";
+    context.manifest.platforms = declared_platforms;
+    context.manifest.platform_count = 2U;
+
+    ASSERT(feng_cli_project_select_platforms(
+        &context,
+        NULL,
+        0U,
+        NULL,
+        false,
+        &selection,
+        &error));
+    ASSERT(selection.platform_count == 2U);
+    ASSERT(strcmp(selection.platforms[0], "linux-x64-musl") == 0);
+    ASSERT(strcmp(selection.platforms[1], "macos-arm64") == 0);
+    feng_cli_project_platform_selection_dispose(&selection);
+
+    ASSERT(feng_cli_project_select_platforms(
+        &context,
+        single_request,
+        1U,
+        "/sdk/macos",
+        false,
+        &selection,
+        &error));
+    ASSERT(selection.platform_count == 1U);
+    ASSERT(strcmp(selection.platforms[0], "macos-arm64") == 0);
+    feng_cli_project_platform_selection_dispose(&selection);
+
+    ASSERT(!feng_cli_project_select_platforms(
+        &context,
+        NULL,
+        0U,
+        "/sdk/ambiguous",
+        false,
+        &selection,
+        &error));
+    ASSERT(strstr(error.message, "exactly one") != NULL);
+    feng_cli_project_error_dispose(&error);
+
+    ASSERT(!feng_cli_project_select_platforms(
+        &context,
+        duplicate_request,
+        2U,
+        NULL,
+        false,
+        &selection,
+        &error));
+    ASSERT(strstr(error.message, "more than once") != NULL);
+    feng_cli_project_error_dispose(&error);
+
+    context.manifest.platforms = NULL;
+    context.manifest.platform_count = 0U;
+    ASSERT(feng_cli_project_select_platforms(
+        &context,
+        NULL,
+        0U,
+        NULL,
+        true,
+        &selection,
+        &error));
+    ASSERT(feng_platform_detect_host_platform(&host_platform, NULL));
+    ASSERT(selection.platform_count == 1U);
+    ASSERT(strcmp(selection.platforms[0], host_platform) == 0);
+
+    free(host_platform);
+    feng_cli_project_platform_selection_dispose(&selection);
+    feng_cli_project_error_dispose(&error);
+}
+
+/* Verify repeated project platforms build and pack only the requested set. */
+static void test_project_build_and_pack_multiple_platforms(void) {
+    char template_path[] = "temp/feng_cli_project_multi_platform_XXXXXX";
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *linux_library_dir;
+    char *macos_library_dir;
+    char *linux_library_path;
+    char *macos_library_path;
+    char *library_name;
+    char *bundle_path;
+    char *bundle_manifest = NULL;
+    char *remove_error = NULL;
+    char *zip_error = NULL;
+    void *manifest_bytes = NULL;
+    size_t manifest_size = 0U;
+    FengZipReader reader = {0};
+
+    project_dir = mkdtemp(template_path);
+    ASSERT(project_dir != NULL);
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    source_path = path_join(src_dir, "lib.ff");
+    linux_library_dir = project_platform_build_path(
+        project_dir,
+        "linux-x64-musl",
+        "lib");
+    macos_library_dir = project_platform_build_path(
+        project_dir,
+        "macos-arm64",
+        "lib");
+    library_name = host_static_library_file_name("crosslib");
+    linux_library_path = path_join(linux_library_dir, library_name);
+    macos_library_path = path_join(macos_library_dir, library_name);
+    bundle_path = path_join(project_dir, "build/pkg/crosslib-0.1.0.fb");
+
+    mkdir_p(src_dir);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"crosslib\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "platform: \"macos-arm64,linux-x64-musl\"\n");
+    write_text_file(source_path,
+                    "open module test.cli.crosslib;\n"
+                    "open func value(): int { return 1; }\n");
+
+    {
+        char *argv[] = {
+            project_dir,
+            "--platform=linux-x64-musl",
+            "--platform=macos-arm64",
+        };
+        ASSERT(feng_cli_project_build_main("feng", 3, argv) == 0);
+    }
+    ASSERT(path_exists(linux_library_path));
+    ASSERT(path_exists(macos_library_path));
+    {
+        char *argv[] = {
+            project_dir,
+            "--sysroot=/sdk/ambiguous",
+        };
+        ASSERT(feng_cli_project_build_main("feng", 2, argv) != 0);
+        ASSERT(feng_cli_project_pack_main("feng", 2, argv) != 0);
+    }
+
+    {
+        char *argv[] = {
+            project_dir,
+            "--platform=linux-x64-musl",
+            "--platform=macos-arm64",
+        };
+        ASSERT(feng_cli_project_pack_main("feng", 3, argv) == 0);
+    }
+    ASSERT(path_exists(bundle_path));
+    ASSERT(feng_zip_reader_open(bundle_path, &reader, &zip_error));
+    ASSERT(feng_zip_reader_read(
+        &reader,
+        "feng.fm",
+        &manifest_bytes,
+        &manifest_size,
+        &zip_error));
+    bundle_manifest = (char *)malloc(manifest_size + 1U);
+    ASSERT(bundle_manifest != NULL);
+    memcpy(bundle_manifest, manifest_bytes, manifest_size);
+    bundle_manifest[manifest_size] = '\0';
+    ASSERT(strstr(
+               bundle_manifest,
+               "platform: \"linux-x64-musl,macos-arm64\"\n") != NULL);
+    ASSERT(zip_contains_path_prefix(&reader, "lib/linux-x64-musl/"));
+    ASSERT(zip_contains_path_prefix(&reader, "lib/macos-arm64/"));
+
+    feng_zip_free(manifest_bytes);
+    feng_zip_reader_dispose(&reader);
+    ASSERT(feng_cli_project_remove_tree(project_dir, &remove_error));
+    free(remove_error);
+    free(bundle_manifest);
+    free(zip_error);
+    free(bundle_path);
+    free(library_name);
+    free(macos_library_path);
+    free(linux_library_path);
+    free(macos_library_dir);
+    free(linux_library_dir);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+}
+
+/* Verify run does not expose target-platform or sysroot options. */
+static void test_project_run_rejects_platform_and_sysroot_options(void) {
+    char *platform_argv[] = {
+        "--platform=macos-arm64",
+    };
+    char *sysroot_argv[] = {
+        "--sysroot=/sdk",
+    };
+
+    ASSERT(feng_cli_project_run_main("feng", 1, platform_argv) != 0);
+    ASSERT(feng_cli_project_run_main("feng", 1, sysroot_argv) != 0);
+}
+
 static void test_project_build_default_uses_debug_friendly_flags(void) {
     char template_path[] = "temp/feng_cli_build_debug_flags_XXXXXX";
     char *workspace_dir;
@@ -11827,7 +12265,7 @@ static void test_project_build_default_uses_debug_friendly_flags(void) {
     source_path = path_join(src_dir, "main.ff");
     cc_log_path = path_join(workspace_dir, "cc.log");
     cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
-    binary_path = path_join(project_dir, "build/bin/app");
+    binary_path = project_host_build_path(project_dir, "bin/app");
 
     mkdir_p(src_dir);
     write_text_file(manifest_path,
@@ -11906,7 +12344,7 @@ static void test_project_build_release_propagates_to_local_dependencies(void) {
     root_manifest_path = path_join(root_project_dir, "feng.fm");
     root_src_dir = path_join(root_project_dir, "src");
     root_source_path = path_join(root_src_dir, "main.ff");
-    binary_path = path_join(root_project_dir, "build/bin/release_app");
+    binary_path = project_host_build_path(root_project_dir, "bin/release_app");
     cc_log_path = path_join(workspace_dir, "cc.log");
     cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
 
@@ -12012,9 +12450,13 @@ static void test_project_build_bin_copies_assets_and_refreshes_existing_output(v
     asset_nested_dir = path_join(asset_source_dir, "nested");
     asset_source_path = path_join(asset_source_dir, "config.txt");
     asset_nested_path = path_join(asset_nested_dir, "data.txt");
-    copied_asset_path = path_join(project_dir, "build/bin/runtime/config.txt");
-    copied_nested_path = path_join(project_dir, "build/bin/runtime/nested/data.txt");
-    binary_path = path_join(project_dir, "build/bin/asset_app");
+    copied_asset_path = project_host_build_path(
+        project_dir,
+        "bin/runtime/config.txt");
+    copied_nested_path = project_host_build_path(
+        project_dir,
+        "bin/runtime/nested/data.txt");
+    binary_path = project_host_build_path(project_dir, "bin/asset_app");
 
     mkdir_p(src_dir);
     mkdir_p(asset_nested_dir);
@@ -12108,12 +12550,16 @@ static void test_project_build_lib_stages_assets_under_output_root(void) {
     asset_nested_dir = path_join(asset_source_dir, "nested");
     asset_source_path = path_join(asset_source_dir, "config.txt");
     asset_nested_path = path_join(asset_nested_dir, "data.txt");
-    staged_asset_path = path_join(project_dir, "build/assets/runtime/config.txt");
-    staged_nested_path = path_join(project_dir, "build/assets/runtime/nested/data.txt");
+    staged_asset_path = project_host_build_path(
+        project_dir,
+        "assets/runtime/config.txt");
+    staged_nested_path = project_host_build_path(
+        project_dir,
+        "assets/runtime/nested/data.txt");
     {
-        char *build_dir = path_join(project_dir, "build");
-        library_path = host_static_library_output_path(build_dir, "asset_lib");
-        free(build_dir);
+        char *library_dir = project_host_build_path(project_dir, "lib");
+        library_path = host_static_library_path(library_dir, "asset_lib");
+        free(library_dir);
     }
 
     mkdir_p(src_dir);
@@ -12191,7 +12637,6 @@ static void test_project_build_lib_stages_extlib_assets_without_assets_layer(voi
     char *asset_platform_dir;
     char *asset_source_path;
     char *staged_extlib_dir;
-    char *staged_platform_dir;
     char *staged_asset_path;
     char *shadow_stage_dir;
     char *library_path;
@@ -12213,14 +12658,13 @@ static void test_project_build_lib_stages_extlib_assets_without_assets_layer(voi
     asset_source_dir = path_join(project_dir, "vendor_extlib");
     asset_platform_dir = path_join(asset_source_dir, host_target);
     asset_source_path = host_dynamic_library_path(asset_platform_dir, "helper");
-    staged_extlib_dir = path_join(project_dir, "build/extlib");
-    staged_platform_dir = path_join(staged_extlib_dir, host_target);
-    staged_asset_path = host_dynamic_library_path(staged_platform_dir, "helper");
-    shadow_stage_dir = path_join(project_dir, "build/assets/extlib");
+    staged_extlib_dir = project_host_build_path(project_dir, "extlib");
+    staged_asset_path = host_dynamic_library_path(staged_extlib_dir, "helper");
+    shadow_stage_dir = project_host_build_path(project_dir, "assets/extlib");
     {
-        char *build_dir = path_join(project_dir, "build");
-        library_path = host_static_library_output_path(build_dir, "asset_extlib");
-        free(build_dir);
+        char *library_dir = project_host_build_path(project_dir, "lib");
+        library_path = host_static_library_path(library_dir, "asset_extlib");
+        free(library_dir);
     }
 
     mkdir_p(src_dir);
@@ -12272,7 +12716,6 @@ static void test_project_build_lib_stages_extlib_assets_without_assets_layer(voi
     free(library_path);
     free(shadow_stage_dir);
     free(staged_asset_path);
-    free(staged_platform_dir);
     free(staged_extlib_dir);
     free(asset_source_path);
     free(asset_platform_dir);
@@ -12312,7 +12755,7 @@ static void test_project_run_release_reuses_build_pipeline(void) {
     root_manifest_path = path_join(root_project_dir, "feng.fm");
     root_src_dir = path_join(root_project_dir, "src");
     root_source_path = path_join(root_src_dir, "main.ff");
-    binary_path = path_join(root_project_dir, "build/bin/run_app");
+    binary_path = project_host_build_path(root_project_dir, "bin/run_app");
     cc_log_path = path_join(workspace_dir, "cc.log");
     cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
 
@@ -12423,7 +12866,7 @@ static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(vo
     root_manifest_path = path_join(root_project_dir, "feng.fm");
     root_src_dir = path_join(root_project_dir, "src");
     root_source_path = path_join(root_src_dir, "lib.ff");
-    bundle_path = path_join(root_project_dir, "build/rootlib-0.1.0.fb");
+    bundle_path = path_join(root_project_dir, "build/pkg/rootlib-0.1.0.fb");
     cc_log_path = path_join(workspace_dir, "cc.log");
     cc_wrapper_path = create_logging_cc_wrapper(workspace_dir, cc_log_path);
 
@@ -12540,7 +12983,7 @@ static void test_project_pack_includes_staged_assets_in_bundle(void) {
     asset_nested_dir = path_join(asset_dir, "nested");
     asset_config_path = path_join(asset_dir, "config.txt");
     asset_nested_path = path_join(asset_nested_dir, "value.txt");
-    bundle_path = path_join(project_dir, "build/asset_pack-0.1.0.fb");
+    bundle_path = path_join(project_dir, "build/pkg/asset_pack-0.1.0.fb");
 
     mkdir_p(src_dir);
     mkdir_p(asset_nested_dir);
@@ -12636,8 +13079,8 @@ static void test_project_pack_includes_extlib_assets_without_assets_layer(void) 
     asset_source_dir = path_join(project_dir, "vendor_extlib");
     asset_platform_dir = path_join(asset_source_dir, host_target);
     asset_source_path = host_dynamic_library_path(asset_platform_dir, "helper");
-    shadow_stage_dir = path_join(project_dir, "build/assets/extlib");
-    bundle_path = path_join(project_dir, "build/asset_extlib_pack-0.1.0.fb");
+    shadow_stage_dir = project_host_build_path(project_dir, "assets/extlib");
+    bundle_path = path_join(project_dir, "build/pkg/asset_extlib_pack-0.1.0.fb");
 
     mkdir_p(src_dir);
     mkdir_p(asset_platform_dir);
@@ -13694,7 +14137,7 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     pkg_manifest_path = path_join(pkg_project_dir, "feng.fm");
     pkg_src_dir = path_join(pkg_project_dir, "src");
     pkg_source_path = path_join(pkg_src_dir, "collections.ff");
-    bundle_path = path_join(pkg_project_dir, "build/lsp_pkgdocs-0.1.0.fb");
+    bundle_path = path_join(pkg_project_dir, "build/pkg/lsp_pkgdocs-0.1.0.fb");
     consumer_project_dir = path_join(workspace_dir, "consumer");
     consumer_manifest_path = path_join(consumer_project_dir, "feng.fm");
     consumer_src_dir = path_join(consumer_project_dir, "src");
@@ -13725,7 +14168,7 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
                     "out: \"build/\"\n"
                     "\n"
                     "[dependencies]\n"
-                    "lsp_pkgdocs: \"../pkgdocs/build/lsp_pkgdocs-0.1.0.fb\"\n");
+                    "lsp_pkgdocs: \"../pkgdocs/build/pkg/lsp_pkgdocs-0.1.0.fb\"\n");
     write_text_file(main_path, kHoverSource);
 
     hover_type_output = capture_lsp_position_response_at_path(main_path,
@@ -13927,7 +14370,7 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
     package_manifest = path_join(package_dir, "feng.fm");
     package_src_dir = path_join(package_dir, "src");
     package_source_path = path_join(package_src_dir, "types.ff");
-    bundle_path = path_join(package_dir, "build/lsp_hover_types-0.1.0.fb");
+    bundle_path = path_join(package_dir, "build/pkg/lsp_hover_types-0.1.0.fb");
     consumer_dir = path_join(workspace_dir, "consumer");
     consumer_manifest = path_join(consumer_dir, "feng.fm");
     consumer_src_dir = path_join(consumer_dir, "src");
@@ -13959,7 +14402,7 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                     "out: \"build/\"\n"
                     "\n"
                     "[dependencies]\n"
-                    "lsp_hover_types: \"../package/build/lsp_hover_types-0.1.0.fb\"\n");
+                    "lsp_hover_types: \"../package/build/pkg/lsp_hover_types-0.1.0.fb\"\n");
     write_text_file(consumer_source_path, kConsumerSource);
 
     output = capture_lsp_position_response_at_path(consumer_source_path,
@@ -14251,6 +14694,7 @@ int main(void) {
 
     test_platform_detects_complete_native_platform();
     test_manifest_defaults();
+    test_manifest_parses_writes_and_validates_platform_set();
     test_manifest_parses_dependencies_and_registry();
     test_manifest_parses_and_writes_assets();
     test_manifest_rejects_empty_asset_value();
@@ -14361,6 +14805,7 @@ int main(void) {
     test_lsp_snippet_completion_no_duplicate_items();
     test_lsp_annotation_completion_all();
     test_lsp_annotation_completion_filter_prefix();
+    test_direct_options_require_one_platform_and_accept_sysroot();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
     test_direct_build_accepts_package_bundle();
@@ -14385,6 +14830,9 @@ int main(void) {
     test_frontend_source_overlay_replaces_disk_source();
     test_frontend_source_overlay_rejects_duplicate_paths();
     test_direct_build_rejects_bad_package_bundle();
+    test_project_platform_selection_rules();
+    test_project_build_and_pack_multiple_platforms();
+    test_project_run_rejects_platform_and_sysroot_options();
     test_project_build_default_uses_debug_friendly_flags();
     test_project_build_release_propagates_to_local_dependencies();
     test_project_build_bin_copies_assets_and_refreshes_existing_output();

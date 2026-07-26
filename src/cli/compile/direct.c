@@ -241,21 +241,7 @@ int feng_cli_direct_run(const char *program,
     char *ir_dir = path_join(opts.out_dir, "ir/c");
     char *artifact_dir = NULL;
     if (opts.target == FENG_COMPILE_TARGET_LIB) {
-        char *host_target = NULL;
-        char *host_target_error = NULL;
-        if (!feng_platform_detect_host_platform(&host_target, &host_target_error)) {
-            fprintf(stderr, "error: %s\n",
-                    host_target_error != NULL ? host_target_error
-                                              : "failed to detect host target");
-            free(host_target_error);
-            free(ir_dir);
-            feng_cli_direct_options_dispose(&opts);
-            return 1;
-        }
-        char *lib_base = path_join(opts.out_dir, "lib");
-        artifact_dir = lib_base != NULL ? path_join(lib_base, host_target) : NULL;
-        free(lib_base);
-        free(host_target);
+        artifact_dir = path_join(opts.out_dir, "lib");
     } else {
         artifact_dir = path_join(opts.out_dir, "bin");
     }
@@ -591,6 +577,8 @@ int feng_cli_direct_run(const char *program,
     FengCliDriverOptions drv = {
         .program_path = program,
         .target = opts.target,
+        .platform = opts.platform,
+        .sysroot = opts.sysroot,
         .c_path = c_path,
         .out_path = artifact_path,
         .programs = prog_array,
