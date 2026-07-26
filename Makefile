@@ -122,6 +122,8 @@ LIBUNWIND_LIB := extlib/$(HOST_PLATFORM)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC
 TOOLCHAIN_LAYOUT_DIR := $(BUILD_DIR)/toolchain
 LLVM_LAYOUT_LINK := $(TOOLCHAIN_LAYOUT_DIR)/llvm
 SYSROOT_LAYOUT_LINK := $(TOOLCHAIN_LAYOUT_DIR)/sysroot
+LLVM_LAYOUT_TARGET := ../../toolchain/llvm/$(HOST_PLATFORM)
+SYSROOT_LAYOUT_TARGET := ../../toolchain/sysroot
 RUNTIME_CC := $(LLVM_LAYOUT_LINK)/bin/clang
 RUNTIME_AR := $(LLVM_LAYOUT_LINK)/bin/llvm-ar
 
@@ -133,6 +135,29 @@ RUNTIME_FLAGS_linux-x64-gnu := --target=x86_64-unknown-linux-gnu --sysroot=$(SYS
 RUNTIME_FLAGS_linux-x64-musl := --target=x86_64-unknown-linux-musl --sysroot=$(SYSROOT_LAYOUT_LINK)/linux-x64-musl --gcc-toolchain=$(SYSROOT_LAYOUT_LINK)/linux-x64-musl
 RUNTIME_FLAGS_linux-arm64-gnu := --target=aarch64-unknown-linux-gnu --sysroot=$(SYSROOT_LAYOUT_LINK)/linux-arm64-gnu --gcc-toolchain=$(SYSROOT_LAYOUT_LINK)/linux-arm64-gnu
 RUNTIME_FLAGS_linux-arm64-musl := --target=aarch64-unknown-linux-musl --sysroot=$(SYSROOT_LAYOUT_LINK)/linux-arm64-musl --gcc-toolchain=$(SYSROOT_LAYOUT_LINK)/linux-arm64-musl
+endif
+
+# Keep no-op builds read-only: layout checks become recipes only when the
+# current host links or runtime inputs are not already valid.
+TOOLCHAIN_LAYOUT_READY := $(shell \
+	if [ -d "toolchain/llvm/$(HOST_PLATFORM)" ] && \
+	   [ -d "toolchain/sysroot" ] && \
+	   [ "$$(readlink "$(LLVM_LAYOUT_LINK)" 2>/dev/null)" = "$(LLVM_LAYOUT_TARGET)" ] && \
+	   [ "$$(readlink "$(SYSROOT_LAYOUT_LINK)" 2>/dev/null)" = "$(SYSROOT_LAYOUT_TARGET)" ]; then \
+		printf 'yes'; \
+	fi)
+ifeq ($(_HOST_OS),macos)
+RUNTIME_PLATFORM_INPUTS_READY := $(shell \
+	if [ -n "$(MACOS_SDK_PATH)" ] && [ -d "$(MACOS_SDK_PATH)" ]; then \
+		printf 'yes'; \
+	fi)
+else
+RUNTIME_PLATFORM_INPUTS_READY := $(shell \
+	ready=yes; \
+	for platform in $(RUNTIME_PLATFORMS); do \
+		if [ ! -d "toolchain/sysroot/$$platform" ]; then ready=; break; fi; \
+	done; \
+	printf '%s' "$$ready")
 endif
 
 # Define isolated runtime objects and one runtime archive for each platform
@@ -156,7 +181,7 @@ endef
 $(foreach platform,$(RUNTIME_PLATFORMS),$(eval $(call DEFINE_RUNTIME_PLATFORM,$(platform))))
 RUNTIME_PLATFORM_OBJS := $(foreach platform,$(RUNTIME_PLATFORMS),$(RUNTIME_OBJS_$(platform)))
 
-.PHONY: all cli runtime toolchain-layout runtime-platform-inputs test test-normal smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints test-sanitize clean
+.PHONY: all cli runtime test test-normal smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints incremental-build-test test-sanitize clean
 
 all: cli runtime
 
@@ -168,7 +193,7 @@ test: test-sanitize test-normal
 
 test-normal:
 	$(MAKE) clean
-	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints
+	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests std-tests fcts-tests perf-constraints incremental-build-test
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -215,6 +240,9 @@ test-sanitize:
 perf-constraints: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_perf_constraints.sh
 
+incremental-build-test: all
+	./scripts/run_make_incremental.sh
+
 std-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng run ./std_test
 
@@ -231,6 +259,7 @@ cli-project-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_cli_project.sh
 
 toolchain-layout:
+ifneq ($(TOOLCHAIN_LAYOUT_READY),yes)
 	@if [ ! -d "toolchain/llvm/$(HOST_PLATFORM)" ]; then \
 		echo "error: host LLVM toolchain not found: toolchain/llvm/$(HOST_PLATFORM)" >&2; \
 		exit 1; \
@@ -240,10 +269,24 @@ toolchain-layout:
 		exit 1; \
 	fi
 	@mkdir -p $(TOOLCHAIN_LAYOUT_DIR)
-	@ln -sfn ../../toolchain/llvm/$(HOST_PLATFORM) $(LLVM_LAYOUT_LINK)
-	@ln -sfn ../../toolchain/sysroot $(SYSROOT_LAYOUT_LINK)
+	@if [ -e "$(LLVM_LAYOUT_LINK)" ] && [ ! -L "$(LLVM_LAYOUT_LINK)" ]; then \
+		echo "error: toolchain layout path is not a symbolic link: $(LLVM_LAYOUT_LINK)" >&2; \
+		exit 1; \
+	fi
+	@if [ -e "$(SYSROOT_LAYOUT_LINK)" ] && [ ! -L "$(SYSROOT_LAYOUT_LINK)" ]; then \
+		echo "error: toolchain layout path is not a symbolic link: $(SYSROOT_LAYOUT_LINK)" >&2; \
+		exit 1; \
+	fi
+	@if [ "$$(readlink "$(LLVM_LAYOUT_LINK)" 2>/dev/null)" != "$(LLVM_LAYOUT_TARGET)" ]; then \
+		ln -sfn "$(LLVM_LAYOUT_TARGET)" "$(LLVM_LAYOUT_LINK)"; \
+	fi
+	@if [ "$$(readlink "$(SYSROOT_LAYOUT_LINK)" 2>/dev/null)" != "$(SYSROOT_LAYOUT_TARGET)" ]; then \
+		ln -sfn "$(SYSROOT_LAYOUT_TARGET)" "$(SYSROOT_LAYOUT_LINK)"; \
+	fi
+endif
 
 runtime-platform-inputs: toolchain-layout
+ifneq ($(RUNTIME_PLATFORM_INPUTS_READY),yes)
 ifeq ($(_HOST_OS),macos)
 	@if [ -z "$(MACOS_SDK_PATH)" ] || [ ! -d "$(MACOS_SDK_PATH)" ]; then \
 		echo "error: macOS SDK not found through xcrun" >&2; \
@@ -256,6 +299,7 @@ else
 			exit 1; \
 		fi; \
 	done
+endif
 endif
 
 $(BIN_DIR)/feng: $(CLI_OBJS) | toolchain-layout
