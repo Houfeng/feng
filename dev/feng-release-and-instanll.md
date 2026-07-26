@@ -223,10 +223,18 @@ toolchain 精简产物在**本地维护**：开发者使用 LLVM、musl 与 GNU 
 curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.sh | bash
 ```
 
+默认安装 latest stable release。安装指定的正式版或 prerelease 时，显式传入完整 Git tag：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.sh |
+  bash -s -- --version=v0.1.0-rc.1
+```
+
 `install.sh` 行为约束：
 
-- 不接受参数，固定行为：
-  1. 自动检测目标平台（按 `uname -s` / `uname -m`），解析 GitHub Releases 最新 tag 为版本
+- 仅接受至多一个 `--version=v<version>` 参数，`<version>` 必须符合本规范的版本格式；不传参数时解析 GitHub Releases latest stable tag，显式传入时直接使用该 tag，因此可以安装正式版或 prerelease。
+- 固定行为：
+  1. 自动检测目标平台（按 `uname -s` / `uname -m`），确定默认或显式指定的 release tag
   2. 拼接下载 URL，下载 zip 到系统临时目录（`$TMPDIR`，回退 `/tmp`）
   3. 校验压缩包仅包含预期顶层目录、包内 `VERSION` 与 release tag 一致，并解压到 staging 目录
   4. 原子替换 `$HOME/.feng/`；已有安装在新目录替换成功前保持可用

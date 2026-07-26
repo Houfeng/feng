@@ -14,6 +14,7 @@ SHELL_FILE_BACKUP=""
 INSTALL_COMMITTED=0
 INSTALL_BACKED_UP=0
 SHELL_FILE_COMMITTED=0
+REQUESTED_TAG=""
 
 # Report one fatal installation error.
 die() {
@@ -25,6 +26,30 @@ die() {
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 ||
     die "missing required command: $1"
+}
+
+# Parse the optional explicit GitHub Release tag.
+parse_arguments() {
+  while [[ "$#" -gt 0 ]]; do
+    case "$1" in
+      --version=*)
+        [[ -z "${REQUESTED_TAG}" ]] ||
+          die "--version may only be specified once"
+        REQUESTED_TAG="${1#--version=}"
+        [[ -n "${REQUESTED_TAG}" ]] ||
+          die "--version requires a release tag"
+        ;;
+      *)
+        die "unsupported argument: $1"
+        ;;
+    esac
+    shift
+  done
+
+  if [[ -n "${REQUESTED_TAG}" ]] &&
+     [[ ! "${REQUESTED_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+    die "invalid Feng release tag: ${REQUESTED_TAG}"
+  fi
 }
 
 # Detect the complete Feng host platform supported by the first release.
@@ -62,6 +87,15 @@ resolve_latest_tag() {
   [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] ||
     die "latest Feng release has an invalid tag: ${tag}"
   printf '%s\n' "${tag}"
+}
+
+# Resolve an explicit release tag or fall back to the latest stable release.
+resolve_release_tag() {
+  if [[ -n "${REQUESTED_TAG}" ]]; then
+    printf '%s\n' "${REQUESTED_TAG}"
+  else
+    resolve_latest_tag
+  fi
 }
 
 # Select the shell startup file and matching PATH statement.
@@ -309,7 +343,7 @@ cleanup() {
   return "${exit_status}"
 }
 
-[[ "$#" -eq 0 ]] || die "install.sh does not accept arguments"
+parse_arguments "$@"
 [[ -n "${HOME:-}" && -d "${HOME}" ]] || die "HOME is not a directory"
 [[ -n "${SHELL:-}" ]] || die "SHELL is not set"
 require_cmd curl
@@ -322,7 +356,7 @@ require_cmd unzip
 trap cleanup EXIT
 
 PLATFORM="$(detect_host_platform)"
-TAG="$(resolve_latest_tag)"
+TAG="$(resolve_release_tag)"
 VERSION="${TAG#v}"
 PACKAGE_NAME="feng-${VERSION}-${PLATFORM}"
 DOWNLOAD_URL="https://github.com/${REPOSITORY}/releases/download/${TAG}/${PACKAGE_NAME}.zip"

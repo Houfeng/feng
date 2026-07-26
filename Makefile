@@ -247,6 +247,7 @@ incremental-build-test: all
 
 release-scripts-test: all
 	./scripts/run_release_scripts.sh
+	./scripts/run_install_explicit_version.sh
 
 std-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng run ./std_test
