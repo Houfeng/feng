@@ -22,7 +22,7 @@
 - `libfeng_std_sodium.a`
 
 本阶段只生成 native host 需要的 GNU/Linux 产物。`linux-*-musl` 目标产物随
-§8.6 交叉编译能力实现，不得用 GNU 产物冒充。
+§8.5 交叉编译能力实现，不得用 GNU 产物冒充。
 
 ## 2 工具链与 SDK / sysroot
 

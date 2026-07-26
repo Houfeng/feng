@@ -238,7 +238,7 @@ curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.s
 2. 提交变更和验收结果供人工 Review。
 3. 人工 Review 通过并明确批准后，方可进入下一子阶段；§8 全部通过前不得开始 §9。
 
-外部原生机器或发行版镜像不可用时，经人工确认，可并行实施不依赖相关兼容性验收的后续任务。未完成项须保持为 TODO，并在 §8.5 前通过。此规则不适用于脚本、产物、代码、测试或当前环境中的验收缺口。
+外部原生机器或发行版镜像不可用时，经人工确认，可并行实施不依赖相关兼容性验收的后续任务。未完成项须保持为 TODO，并在 §8.6 前通过。此规则不适用于脚本、产物、代码、测试或当前环境中的验收缺口。
 
 ### 8.1 可独立验证的精简工具链
 
@@ -317,19 +317,21 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [x] 按 [feng-std-extlib-build.md](./feng-std-extlib-build.md) 更新标准库依赖的 extlib 预构建脚本，分别生成并校验三个发行 host 的预构建物；验收中发现的小型平台兼容问题在本阶段修复。
 - [x] `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 的全量 `make test` 均通过。
 
-### 8.5 CI 构建脚本
-
-本阶段编写以下文件：
-
-- [ ] `.github/workflows/release.yml`：在三个发行平台构建 Feng 编译器和对应 runtime，运行校验与 `make test`，上传构件；全部成功后调用 `scripts/release.sh` 并发布。
-- [ ] `scripts/release.sh`：汇总三组构件，校验五份 runtime 和公共头文件，生成三个发行包。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
-- [ ] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载对应发行包，完成安装和 `PATH` 配置；失败时不留半成品。
-- [ ] 在三个干净发行平台安装并验证 `feng --version`、`build`、`run`、`lsp`、`dap`、bundled LLVM、目录结构、平台构件和相对定位。人工 Review 通过后方可开始 §8.6。
-
-### 8.6 支持交叉编译
+### 8.5 支持交叉编译
 
 项目命令的参数行为以 [feng-cli.md](../docs/feng-cli.md#项目平台选择统一规则) 为准。
 
 - [ ] 支持 `--platform=<platform>`，按目标平台选择对应的 runtime 和 SDK / sysroot，并完成交叉编译。
 - [ ] `feng build` 与 `feng pack` 支持 `--sysroot=<path>`；传入时使用该 sysroot，不使用目标平台的默认 sysroot。
 - [ ] 验证 `feng build`、`feng run`、`feng pack` 传入或省略 `--platform`、`--sysroot` 时均符合上述规则。
+- [ ] 人工 Review。
+
+### 8.6 CI 构建脚本
+
+本阶段编写以下文件：
+
+- [ ] `.github/workflows/release.yml`：在三个发行平台构建 Feng 编译器和对应 runtime，运行校验与 `make test`，上传构件；全部成功后调用 `scripts/release.sh` 并发布。
+- [ ] `scripts/release.sh`：汇总三组构件，校验五份 runtime 和公共头文件，生成三个发行包。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
+- [ ] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载对应发行包，完成安装和 `PATH` 配置；失败时不留半成品。
+- [ ] 在三个干净发行平台安装并验证 `feng --version`、`build`、`run`、`lsp`、`dap`、bundled LLVM、目录结构、平台构件和相对定位。
+- [ ] 人工 Review。
