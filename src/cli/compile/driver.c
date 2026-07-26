@@ -2062,7 +2062,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             return 1;
         }
         if (opts->bundle_count > 0U) {
-            if (!feng_platform_detect_host_target(&host_target, &bundle_error)) {
+            if (!feng_platform_detect_host_platform(&host_target, &bundle_error)) {
                 fprintf(stderr,
                         "error: cannot determine host target for package bundles: %s\n",
                         bundle_error != NULL ? bundle_error : "unknown error");
@@ -2282,6 +2282,14 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         }
         if (ok && !argv_push(&av, runtime_lib)) { ok = false; }
         if (ok && !argv_push(&av, "-lpthread")) { ok = false; }
+        /*
+         * Linux platform support libraries include libdl for native static
+         * dependencies that use the pre-glibc-2.34 dynamic-loader ABI.
+         */
+        if (ok && strncmp(native_platform, "linux-", 6U) == 0 &&
+            !argv_push(&av, "-ldl")) {
+            ok = false;
+        }
         for (size_t i = 0; ok && i < lib_count; ++i) {
             size_t need = strlen(libs[i]) + 3U;
             char *flag = malloc(need);

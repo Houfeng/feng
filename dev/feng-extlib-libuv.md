@@ -14,7 +14,8 @@
   - DNS
   - TCP / UDP
 - 同步物理目录固定为 `third_party/libuv`。
-- 构建产物固定为 `std/extlib/<os-arch>/libfeng_std_uv.a`。
+- 构建产物与工具链规则统一遵循
+  [feng-std-extlib-build.md](./feng-std-extlib-build.md)。
 
 ## 同步范围
 
@@ -36,6 +37,8 @@
 ## 构建约束
 
 - `scripts/build_libuv.sh` 仅构建静态库，不生成动态库。
+- host 平台、bundled LLVM、SDK / sysroot、构建隔离及产物校验统一遵循
+  [feng-std-extlib-build.md](./feng-std-extlib-build.md)。
 - `third_party/libuv/Makefile` 由同步脚本生成，按宿主平台选择源码列表：Linux/macOS/Windows。
 - Darwin 额外启用：`_DARWIN_UNLIMITED_SELECT=1`、`_DARWIN_USE_64_BIT_INODE=1`。
 - Linux 额外启用：`_GNU_SOURCE`、`_POSIX_C_SOURCE=200112`。

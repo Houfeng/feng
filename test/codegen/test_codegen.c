@@ -6442,7 +6442,10 @@ static void test_void_try_expression_codegen(void) {
     ASSERT(strstr(out.c_source, "FengLSDA") != NULL);
     ASSERT(strstr(out.c_source, "feng_try_frame_push") != NULL);
     ASSERT(strstr(out.c_source, "_try_keep_lpad") != NULL);
-    ASSERT(strstr(out.c_source, ".cfi_personality") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".cfi_personality 155, ___feng_personality_v0") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".cfi_personality 27, __feng_personality_v0") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);

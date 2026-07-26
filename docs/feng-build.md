@@ -146,6 +146,11 @@ extern func ssl_connect(fd: int): int;
 
 上述自动收集结果与显式 `--lib` 参数最终汇总后统一传递给底层 C 链接器。`--lib` 在 `target=bin` 的最终链接步骤生效; `target=lib` 只生成对象并归档,不会在该阶段闭合原生依赖。
 
+`target=bin` 的平台基础链接库由 driver 统一闭合：所有当前发行平台链接
+`pthread`；Linux 目标同时链接 `dl`，以满足标准库原生静态依赖使用
+`dlopen` / `dlsym` 时在 glibc 2.34 之前的独立 `libdl` ABI。该规则按目标 OS
+决定，不按某个包名或某份 extlib 特判。
+
 **`--lib` 的用途**
 
 `--lib` 是兜底参数,仅用于以下场景：没有对应 feng `extern func` 声明、也不来自任何 `.fb` 包的纯原生库（如系统 `pthread`）。大多数情况下不需要手动指定。裸系统库名按 `-l<name>` 语义参与最终链接；显式库文件路径（如 `.a`、`.lib`、`.so`、`.dylib`、`.dll`）按文件路径原样参与最终链接。

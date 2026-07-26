@@ -198,7 +198,7 @@ open type Dir {
       // Linux: 无 d_namlen 字段，扫描 d_name 的 null 终止符计算长度
       for var i: int = (int)0; i < (int)256; i += (int)1 {
         let bytePtr = feng_pointer_move(nameDataPtr, i);
-        let b: i64 = feng_pointer_get_scalar<i64>(bytePtr);
+        let b: i64 = feng_pointer_get_scalar<i64>(bytePtr) & (i64)255;
         if b == (i64)0 {
           break;
         }

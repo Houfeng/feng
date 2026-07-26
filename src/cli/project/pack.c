@@ -200,7 +200,7 @@ int feng_cli_project_pack_main(const char *program, int argc, char **argv) {
         rc = 1;
         goto done;
     }
-    if (!feng_platform_detect_host_target(&host_target, &error_message)) {
+    if (!feng_platform_detect_host_platform(&host_target, &error_message)) {
         fprintf(stderr, "error: %s\n",
                 error_message != NULL ? error_message : "failed to detect host target");
         rc = 1;

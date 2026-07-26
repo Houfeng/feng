@@ -181,6 +181,27 @@ static int count_occurrences(const char *text, const char *needle) {
     return count;
 }
 
+/* Count exact command-line arguments in the one-argument-per-line compiler log. */
+static int count_logged_arguments(const char *text, const char *argument) {
+    int count = 0;
+    size_t argument_len = strlen(argument);
+    const char *line = text;
+
+    while (*line != '\0') {
+        const char *line_end = strchr(line, '\n');
+        size_t line_len = line_end != NULL ? (size_t)(line_end - line) : strlen(line);
+
+        if (line_len == argument_len && memcmp(line, argument, argument_len) == 0) {
+            count += 1;
+        }
+        if (line_end == NULL) {
+            break;
+        }
+        line = line_end + 1;
+    }
+    return count;
+}
+
 static char *create_logging_cc_wrapper(const char *dir, const char *log_path) {
     char *script_path = path_join(dir, "fake-cc.sh");
     char *script_text = dup_printf("#!/bin/sh\n"
@@ -249,7 +270,7 @@ static char *host_static_library_output_path(const char *out_dir, const char *st
     char *lib_dir;
     char *path;
 
-    ASSERT(feng_platform_detect_host_target(&host_target, NULL));
+    ASSERT(feng_platform_detect_host_platform(&host_target, NULL));
     lib_base = path_join(out_dir, "lib");
     lib_dir = path_join(lib_base, host_target);
     free(lib_base);
@@ -2060,7 +2081,7 @@ static void test_bundle_writer_includes_extlib_and_assets_without_empty_dirs(voi
     mod_nested_dir = path_join(mod_dir, "test/cli");
     mod_path = path_join(mod_nested_dir, "bundle_demo.ft");
     extlib_root = path_join(workspace_dir, "extlib");
-    ASSERT(feng_platform_detect_host_target(&host_target, &error_message));
+    ASSERT(feng_platform_detect_host_platform(&host_target, &error_message));
     free(error_message);
     error_message = NULL;
     extlib_platform_dir = path_join(extlib_root, host_target);
@@ -2233,7 +2254,7 @@ static void test_direct_build_releases_bundle_extlib_dynamic_libraries_only(void
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
-    ASSERT(feng_platform_detect_host_target(&host_target, &error_message));
+    ASSERT(feng_platform_detect_host_platform(&host_target, &error_message));
     free(error_message);
     error_message = NULL;
     dynamic_name = host_dynamic_library_file_name("helper");
@@ -2407,7 +2428,7 @@ static void test_direct_build_links_only_used_bundle_extlib_static_libraries(voi
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
-    ASSERT(feng_platform_detect_host_target(&host_target, &error_message));
+    ASSERT(feng_platform_detect_host_platform(&host_target, &error_message));
     free(error_message);
     error_message = NULL;
 
@@ -11834,7 +11855,7 @@ static void test_project_build_default_uses_debug_friendly_flags(void) {
     cc_log_text = read_text_file(cc_log_path);
     ASSERT(count_occurrences(cc_log_text, "__CMD__") >= 1);
     ASSERT(count_occurrences(cc_log_text, "-O0") >= 1);
-    ASSERT(count_occurrences(cc_log_text, "-g") >= 1);
+    ASSERT(count_logged_arguments(cc_log_text, "-g") >= 1);
     ASSERT(count_occurrences(cc_log_text, "-DNDEBUG") == 0);
 
     if (saved_cc != NULL) {
@@ -11937,7 +11958,7 @@ static void test_project_build_release_propagates_to_local_dependencies(void) {
     ASSERT(count_occurrences(cc_log_text, "-O2") >= 2);
     ASSERT(count_occurrences(cc_log_text, "-DNDEBUG") >= 2);
     ASSERT(count_occurrences(cc_log_text, "-O0") == 0);
-    ASSERT(count_occurrences(cc_log_text, "-g") == 0);
+    ASSERT(count_logged_arguments(cc_log_text, "-g") == 0);
 
     if (saved_cc != NULL) {
         ASSERT(setenv("FENG_CC", saved_cc, 1) == 0);
@@ -12181,7 +12202,7 @@ static void test_project_build_lib_stages_extlib_assets_without_assets_layer(voi
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
-    ASSERT(feng_platform_detect_host_target(&host_target, &error_message));
+    ASSERT(feng_platform_detect_host_platform(&host_target, &error_message));
     free(error_message);
     error_message = NULL;
 
@@ -12343,7 +12364,7 @@ static void test_project_run_release_reuses_build_pipeline(void) {
     ASSERT(count_occurrences(cc_log_text, "-O2") >= 2);
     ASSERT(count_occurrences(cc_log_text, "-DNDEBUG") >= 2);
     ASSERT(count_occurrences(cc_log_text, "-O0") == 0);
-    ASSERT(count_occurrences(cc_log_text, "-g") == 0);
+    ASSERT(count_logged_arguments(cc_log_text, "-g") == 0);
 
     if (saved_cc != NULL) {
         ASSERT(setenv("FENG_CC", saved_cc, 1) == 0);
@@ -12452,7 +12473,7 @@ static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(vo
     ASSERT(count_occurrences(cc_log_text, "-O2") >= 2);
     ASSERT(count_occurrences(cc_log_text, "-DNDEBUG") >= 2);
     ASSERT(count_occurrences(cc_log_text, "-O0") == 0);
-    ASSERT(count_occurrences(cc_log_text, "-g") == 0);
+    ASSERT(count_logged_arguments(cc_log_text, "-g") == 0);
 
     ASSERT(feng_zip_reader_open(bundle_path, &reader, &zip_error));
     ASSERT(feng_zip_reader_read(&reader,
@@ -12604,7 +12625,7 @@ static void test_project_pack_includes_extlib_assets_without_assets_layer(void) 
 
     workspace_dir = mkdtemp(template_path);
     ASSERT(workspace_dir != NULL);
-    ASSERT(feng_platform_detect_host_target(&host_target, &error_message));
+    ASSERT(feng_platform_detect_host_platform(&host_target, &error_message));
     free(error_message);
     error_message = NULL;
 

@@ -27024,7 +27024,7 @@ static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
                     "    __asm__ volatile(\".cfi_personality 155, ___feng_personality_v0\\n\"\n"
                     "                     \".cfi_lsda 16, _feng_empty_function_lsda\\n\");\n"
                     "#else\n"
-                    "    __asm__ volatile(\".cfi_personality 155, __feng_personality_v0\\n\"\n"
+                    "    __asm__ volatile(\".cfi_personality 27, __feng_personality_v0\\n\"\n"
                     "                     \".cfi_lsda 16, feng_empty_function_lsda\\n\");\n"
                     "#endif\n"
                     "#endif\n");

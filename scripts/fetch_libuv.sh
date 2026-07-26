@@ -327,7 +327,7 @@ Excluded:
 - upstream CMake/Autotools build system
 
 Build:
-- \`make\` builds host-target static archive and stages it into \`../../std/extlib/<host-target>\` by default.
+- \`make\` builds the native static archive and stages it into \`../../std/extlib/<host-platform>\` by default.
 - \`make OUTPUT_DIR=<path>\` overrides the staging directory.
 - \`make install\` is an alias of the staging step.
 - default staged library name: \`libfeng_std_uv.a\`
@@ -346,7 +346,8 @@ TARGET ?= libfeng_std_uv.a
 HOST_OS := \
   \$(shell sh -c 'os=\$\$(uname -s); if [ "\$\$os" = Darwin ]; then printf macos; elif [ "\$\$os" = Linux ]; then printf linux; else printf %s "\$\$os" | tr "[:upper:]" "[:lower:]"; fi')
 HOST_ARCH := \$(if \$(filter x86_64 amd64,\$(shell uname -m)),x64,\$(if \$(filter arm64 aarch64,\$(shell uname -m)),arm64,\$(shell uname -m)))
-OUTPUT_DIR ?= ../../std/extlib/\$(HOST_OS)-\$(HOST_ARCH)
+HOST_PLATFORM := \$(if \$(filter linux,\$(HOST_OS)),\$(HOST_OS)-\$(HOST_ARCH)-gnu,\$(HOST_OS)-\$(HOST_ARCH))
+OUTPUT_DIR ?= ../../std/extlib/\$(HOST_PLATFORM)
 OUTPUT_NAME ?= \$(TARGET)
 OUTPUT_TARGET := \$(OUTPUT_DIR)/\$(OUTPUT_NAME)
 

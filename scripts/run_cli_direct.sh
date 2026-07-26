@@ -10,7 +10,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/scripts/host_platform.sh"
 FENG="$ROOT/build/bin/feng"
-HOST_TARGET="$(feng_detect_host_target)"
 HOST_PLATFORM="$(feng_detect_host_platform)"
 RT_LIB="$ROOT/build/lib/$HOST_PLATFORM/libfeng_runtime.a"
 FIXTURE="$ROOT/test/smoke/phase1a/hello.ff"
@@ -270,7 +269,7 @@ fi
 # 3. --target=lib should produce a static archive under <out>/lib
 out3="$WORK/case_lib"
 if expect_ok "lib_static" "$FENG" "$FIXTURE" --target=lib --out="$out3" --name=hello_lib; then
-    lib="$out3/lib/$HOST_TARGET/libhello_lib.a"
+    lib="$out3/lib/$HOST_PLATFORM/libhello_lib.a"
     if [[ ! -f "$lib" ]]; then
         echo "FAIL[lib_static] missing archive $lib"
         failures=$((failures + 1))

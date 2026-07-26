@@ -46,7 +46,8 @@ open type File {
    */
   open static func create(path: string, mode: FileMode): File {
     let pathBytes = makeNullTerminatedPath(path);
-    let fd = (int)c_open(&pathBytes, (i32)(int)mode, (i32)DEFAULT_FILE_MODE);
+    let flags = fileModeToPosixFlags(mode);
+    let fd = (int)c_open(&pathBytes, flags, (i32)DEFAULT_FILE_MODE);
     if fd < 0 {
       throw "fs/open-failed";
     }
@@ -175,7 +176,8 @@ open type File {
    */
   open func stat(): StatInfo {
     self.ensureOpen();
-    let statBuf: i64[!] = i64[:(int)16];
+    ensurePosixLayout();
+    let statBuf: i64[!] = i64[:STAT_BUFFER_WORD_COUNT];
     let rc = fs_posix_fstat(self.fd, &statBuf);
     if rc != (i32)0 {
       throw "fs/stat-failed";
@@ -304,8 +306,9 @@ open func exists(path: string): bool {
  * @return Whether the path is a regular file
  */
 open func isFile(path: string): bool {
+  ensurePosixLayout();
   let pathBytes = makeNullTerminatedPath(path);
-  let statBuf: i64[!] = i64[:(int)16];
+  let statBuf: i64[!] = i64[:STAT_BUFFER_WORD_COUNT];
   let rc = posix_stat(&pathBytes, &statBuf);
   if rc != (i32)0 {
     return false;
@@ -321,8 +324,9 @@ open func isFile(path: string): bool {
  * @return Whether the path is a directory
  */
 open func isDir(path: string): bool {
+  ensurePosixLayout();
   let pathBytes = makeNullTerminatedPath(path);
-  let statBuf: i64[!] = i64[:(int)16];
+  let statBuf: i64[!] = i64[:STAT_BUFFER_WORD_COUNT];
   let rc = posix_stat(&pathBytes, &statBuf);
   if rc != (i32)0 {
     return false;
@@ -337,8 +341,9 @@ open func isDir(path: string): bool {
  * @return StatInfo
  */
 open func stat(path: string): StatInfo {
+  ensurePosixLayout();
   let pathBytes = makeNullTerminatedPath(path);
-  let statBuf: i64[!] = i64[:(int)16];
+  let statBuf: i64[!] = i64[:STAT_BUFFER_WORD_COUNT];
   let rc = posix_stat(&pathBytes, &statBuf);
   if rc != (i32)0 {
     throw "fs/stat-failed";

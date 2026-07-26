@@ -1668,7 +1668,7 @@ static bool build_local_project_bundle(const char *program,
     {
         char *host_target = NULL;
         char *host_target_error = NULL;
-        if (!feng_platform_detect_host_target(&host_target, &host_target_error)) {
+        if (!feng_platform_detect_host_platform(&host_target, &host_target_error)) {
             free(host_target_error);
             free(host_library_name);
             feng_cli_project_context_dispose(&context);

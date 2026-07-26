@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 source "$ROOT/scripts/host_platform.sh"
 FENG="$ROOT/build/bin/feng"
-HOST_TARGET="$(feng_detect_host_target)"
 HOST_PLATFORM="$(feng_detect_host_platform)"
 RT_LIB="$ROOT/build/lib/$HOST_PLATFORM/libfeng_runtime.a"
 FIXTURE="$ROOT/test/cli/projects/bin_hello"
@@ -229,7 +228,7 @@ if expect_ok default_path bash -lc "cd '$FIXTURE' && '$FENG' build"; then
 fi
 
 if expect_ok build_lib "$FENG" build "$LIB_FIXTURE"; then
-    lib="$LIB_FIXTURE/build/lib/$HOST_TARGET/libhello_library.a"
+    lib="$LIB_FIXTURE/build/lib/$HOST_PLATFORM/libhello_library.a"
     workspace_ft="$LIB_FIXTURE/build/obj/symbols/feng/cli/project/lib.ft"
     public_ft="$LIB_FIXTURE/build/mod/feng/cli/project/lib.ft"
     if [[ ! -f "$lib" ]]; then
@@ -268,11 +267,11 @@ if expect_ok pack_lib "$FENG" pack "$LIB_FIXTURE"; then
                 echo "FAIL[pack_lib] bundle missing mod/ directory"
                 failures=$((failures + 1))
             fi
-            if ! grep -qx "lib/$HOST_TARGET/" "$WORK/pack_lib.entries"; then
+            if ! grep -qx "lib/$HOST_PLATFORM/" "$WORK/pack_lib.entries"; then
                 echo "FAIL[pack_lib] bundle missing host library directory"
                 failures=$((failures + 1))
             fi
-            if ! grep -qx "lib/$HOST_TARGET/libhello_library.a" "$WORK/pack_lib.entries"; then
+            if ! grep -qx "lib/$HOST_PLATFORM/libhello_library.a" "$WORK/pack_lib.entries"; then
                 echo "FAIL[pack_lib] bundle missing host library entry"
                 failures=$((failures + 1))
             fi
@@ -322,7 +321,7 @@ if expect_ok pack_lib "$FENG" pack "$LIB_FIXTURE"; then
                 echo "FAIL[pack_lib] packaged manifest missing version"
                 failures=$((failures + 1))
             fi
-            if ! grep -qx "arch: \"$HOST_TARGET\"" "$WORK/pack_lib.manifest"; then
+            if ! grep -qx "arch: \"$HOST_PLATFORM\"" "$WORK/pack_lib.manifest"; then
                 echo "FAIL[pack_lib] packaged manifest missing host arch"
                 failures=$((failures + 1))
             fi
@@ -332,7 +331,7 @@ if expect_ok pack_lib "$FENG" pack "$LIB_FIXTURE"; then
             fi
         fi
 
-        if unzip -p "$package" "lib/$HOST_TARGET/libhello_library.a" >"$WORK/pack_lib.a" 2>"$WORK/pack_lib.a.err"; then
+        if unzip -p "$package" "lib/$HOST_PLATFORM/libhello_library.a" >"$WORK/pack_lib.a" 2>"$WORK/pack_lib.a.err"; then
             if ! ar -t "$WORK/pack_lib.a" | grep -q '^feng.o$'; then
                 echo "FAIL[pack_lib] packaged archive does not contain feng.o"
                 failures=$((failures + 1))

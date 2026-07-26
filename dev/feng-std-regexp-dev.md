@@ -13,6 +13,9 @@
 - `PCRE2_CODE_UNIT_WIDTH=8` — 固定 8-bit code unit，与 Feng string 的 UTF-8 字节表示一致
 - `HAVE_CONFIG_H` — 使用 vendor 固定的 `config.h`
 
+预构建使用的完整 host 平台、bundled LLVM、SDK / sysroot、构建隔离及产物校验
+统一遵循 [feng-std-extlib-build.md](./feng-std-extlib-build.md)。
+
 ### 1.2 目标
 
 基于 PCRE2 静态库 + `@cdecl` C ABI 互操作，为 Feng 标准库实现 `RegExp` 类型，

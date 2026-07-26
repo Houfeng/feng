@@ -23,7 +23,7 @@
  *      stripped.
  *   3. For `bin`, select the configured/bundled native Clang, pass an
  *      explicit target plus SDK/sysroot, and compile the generated C source
- *      with the native runtime archive, `-lpthread`, the
+ *      with the native runtime archive, platform support libraries, the
  *      derived link flags, and any explicit `--lib` inputs from direct
  *      mode, producing the final executable at `out_path`.
  *   4. For `lib`, compile with the same native target inputs and archive the

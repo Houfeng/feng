@@ -290,6 +290,8 @@
 | `fs/rename-failed` | 重命名失败 |
 | `fs/file-closed` | 对已关闭的 `File` 执行读/写操作 |
 | `fs/dir-closed` | 对已关闭的 `Dir` 执行读取或迭代操作 |
+| `fs/unsupported-os` | 当前 OS 没有受支持的文件系统 ABI 映射 |
+| `fs/unsupported-arch` | 当前 CPU 架构没有受支持的文件系统 ABI 映射 |
 
 ---
 
@@ -345,6 +347,15 @@
 - `std.fs` 对 `extlib` 的调用必须走 C ABI 路径。
 - `std.fs` 不通过 `@runtime` 访问 `extlib`。
 - 底层实现可使用 `libc` 或 `libuv`，由实现选择，不要求绑定到某一个固定的 C 库。
+- `FileMode` 表示公开的跨平台文件打开语义；实现必须将其映射为当前 host 的
+  POSIX `open()` flags，不得把某一 OS 的 flags 数值直接用于其他 OS。
+- 直接调用 POSIX `stat` 系列函数时，缓冲区大小和字段偏移必须匹配当前 host
+  的 `struct stat` ABI，不得固定使用单一 OS 或 CPU 架构的布局。
+- 当前实现支持 `macos-arm64`、`linux-x64-gnu` 与 `linux-arm64-gnu`。平台相关
+  flags 和结构体布局在首次文件系统操作时识别并缓存；后续操作只执行已初始化
+  判断，不重复查询 OS 或 CPU 架构。
+- 不支持的 OS 或 CPU 架构必须明确抛出 `fs/unsupported-os` 或
+  `fs/unsupported-arch`，不得回退到其他平台布局。
 
 ---
 

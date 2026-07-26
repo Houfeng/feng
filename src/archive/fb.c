@@ -551,7 +551,7 @@ bool feng_fb_write_library_bundle(const FengFbLibraryBundleSpec *spec,
                               entry->source_root);
         }
     }
-    if (!feng_platform_detect_host_target(&host_target, out_error_message)) {
+    if (!feng_platform_detect_host_platform(&host_target, out_error_message)) {
         goto done;
     }
 

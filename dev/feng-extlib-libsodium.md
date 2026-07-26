@@ -41,7 +41,8 @@
 
 - `scripts/fetch_libsodium.sh` 负责将官方白名单源码闭包同步到 `third_party/libsodium/`。
 - `scripts/build_libsodium.sh` 负责构建静态库。
-- 当前标准输出物固定为 `std/extlib/<os-arch>/libfeng_std_sodium.a`。
+- 输出平台、bundled LLVM、SDK / sysroot、构建隔离及产物校验统一遵循
+  [feng-std-extlib-build.md](./feng-std-extlib-build.md)。
 - 构建脚本需要按目标平台控制源码集与逐文件 SIMD 编译参数，保证官方 dispatcher 能正确绑定已同步后端。
 
 ## 显式排除

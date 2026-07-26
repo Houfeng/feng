@@ -243,7 +243,7 @@ int feng_cli_direct_run(const char *program,
     if (opts.target == FENG_COMPILE_TARGET_LIB) {
         char *host_target = NULL;
         char *host_target_error = NULL;
-        if (!feng_platform_detect_host_target(&host_target, &host_target_error)) {
+        if (!feng_platform_detect_host_platform(&host_target, &host_target_error)) {
             fprintf(stderr, "error: %s\n",
                     host_target_error != NULL ? host_target_error
                                               : "failed to detect host target");

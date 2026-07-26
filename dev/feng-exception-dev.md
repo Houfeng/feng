@@ -66,6 +66,11 @@ Windows 后端不能复用 GNU label address；后续需要以 SEH 或 Windows �
 
 C 函数默认不携带自定义 personality。当前后端在每个 Feng 生成函数入口发射平台相关 `.cfi_personality` / `.cfi_lsda` inline asm，使 `_Unwind_RaiseException` 能在 thrower、中间帧与 handler frame 上调用 `__feng_personality_v0`。
 
+personality 指针编码必须与目标对象格式匹配：
+
+- Mach-O 使用 `0x9b`（`indirect + pcrel + sdata4`），由 Darwin 链接器通过间接符号指针解析。
+- ELF 使用 `0x1b`（`pcrel + sdata4`），直接指向 `__feng_personality_v0`。ELF 不得对函数符号使用带 `indirect` 位的 `0x9b`；否则 libunwind 会把 personality 函数开头的机器指令误读为二级指针并跳转到无效地址。
+
 2026-05-24 Darwin/arm64 POC 结论：只给含 try/catch 的函数注入 EH CFI 不足以展开；如果 thrower 或中间 Feng 函数没有 personality/FDE，`_Unwind_RaiseException` 会返回 `_URC_END_OF_STACK` 或跳过 Feng personality。因此所有可能被展开穿过的 Feng 生成函数都必须带 EH metadata，哪怕函数本身不含 try/catch。
 
 ### 编译参数要求

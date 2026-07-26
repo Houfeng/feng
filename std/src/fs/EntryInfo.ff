@@ -1,6 +1,7 @@
 open module std.fs;
 
 import std.collections;
+import std.platform;
 import std.text;
 
 // libc POSIX stat
@@ -17,12 +18,18 @@ extern func feng_pointer_move(ptr: int*, offset: int): int*;
 @runtime
 extern func feng_pointer_get_scalar<T>(ptr: int*): T;
 
-// POSIX stat struct offsets (macOS aarch64, 64-bit inode)
-seal let STAT_MODE_OFFSET: int = (int)4;
-seal let STAT_SIZE_OFFSET: int = (int)96;
-seal let STAT_ATIME_OFFSET: int = (int)32;
-seal let STAT_MTIME_OFFSET: int = (int)48;
-seal let STAT_CTIME_OFFSET: int = (int)64;
+// POSIX open flags and struct stat layout, initialized once for the host.
+seal let STAT_BUFFER_WORD_COUNT: int = (int)18;
+seal var STAT_MODE_OFFSET: int = (int)0;
+seal var STAT_SIZE_OFFSET: int = (int)0;
+seal var STAT_ATIME_OFFSET: int = (int)0;
+seal var STAT_MTIME_OFFSET: int = (int)0;
+seal var STAT_CTIME_OFFSET: int = (int)0;
+seal var POSIX_O_CREAT: i32 = (i32)0;
+seal var POSIX_O_TRUNC: i32 = (i32)0;
+seal var POSIX_O_EXCL: i32 = (i32)0;
+seal var POSIX_O_APPEND: i32 = (i32)0;
+seal var posixLayoutInited: bool = false;
 
 // POSIX S_IF* file type masks
 seal let S_IFMT: i64 = (i64)61440;
@@ -82,9 +89,8 @@ open enum EntryKind {
 /**
  * File open mode, covering all meaningful POSIX open() flag combinations.
  *
- * Values correspond to macOS POSIX open flag combinations:
- *   O_RDONLY=0, O_WRONLY=1, O_RDWR=2,
- *   O_CREAT=512, O_TRUNC=1024, O_EXCL=2048, O_APPEND=8
+ * Enum values are stable logical mode identifiers. They are mapped to the
+ * current host's POSIX flags before calling open().
  */
 open enum FileMode {
   /**
@@ -208,14 +214,74 @@ open type EntryInfo {
    * @return StatInfo of the entry
    */
   open func stat(): StatInfo {
+    ensurePosixLayout();
     let pathBytes = makeNullTerminatedPath(self.path);
-    let statBuf: i64[!] = i64[:(int)16];
+    let statBuf: i64[!] = i64[:STAT_BUFFER_WORD_COUNT];
     let rc = posix_stat(&pathBytes, &statBuf);
     if rc != (i32)0 {
       throw "fs/stat-failed";
     }
     return readStatInfo(statBuf);
   }
+}
+
+/**
+ * Initialize POSIX open flags and struct stat offsets for the current host.
+ */
+seal func ensurePosixLayout(): void {
+  if posixLayoutInited {
+    return;
+  }
+
+  let os = SystemInfo.os();
+  let arch = SystemInfo.arch();
+  if os == "darwin" {
+    if arch != "arm64" && arch != "aarch64" {
+      throw "fs/unsupported-arch";
+    }
+    STAT_MODE_OFFSET = (int)4;
+    STAT_SIZE_OFFSET = (int)96;
+    STAT_ATIME_OFFSET = (int)32;
+    STAT_MTIME_OFFSET = (int)48;
+    STAT_CTIME_OFFSET = (int)64;
+    POSIX_O_CREAT = (i32)512;
+    POSIX_O_TRUNC = (i32)1024;
+    POSIX_O_EXCL = (i32)2048;
+    POSIX_O_APPEND = (i32)8;
+  } else if os == "linux" {
+    if arch == "arm64" || arch == "aarch64" {
+      STAT_MODE_OFFSET = (int)16;
+    } else if arch == "x86_64" {
+      STAT_MODE_OFFSET = (int)24;
+    } else {
+      throw "fs/unsupported-arch";
+    }
+    STAT_SIZE_OFFSET = (int)48;
+    STAT_ATIME_OFFSET = (int)72;
+    STAT_MTIME_OFFSET = (int)88;
+    STAT_CTIME_OFFSET = (int)104;
+    POSIX_O_CREAT = (i32)64;
+    POSIX_O_TRUNC = (i32)512;
+    POSIX_O_EXCL = (i32)128;
+    POSIX_O_APPEND = (i32)1024;
+  } else {
+    throw "fs/unsupported-os";
+  }
+  posixLayoutInited = true;
+}
+
+/**
+ * Map a public FileMode value to the current host's POSIX open flags.
+ */
+seal func fileModeToPosixFlags(mode: FileMode): i32 {
+  ensurePosixLayout();
+  let encoded = (i32)(int)mode;
+  let access = encoded & (i32)3;
+  let create = ((encoded >> 9) & (i32)1) * POSIX_O_CREAT;
+  let trunc = ((encoded >> 10) & (i32)1) * POSIX_O_TRUNC;
+  let exclusive = ((encoded >> 11) & (i32)1) * POSIX_O_EXCL;
+  let append = ((encoded >> 3) & (i32)1) * POSIX_O_APPEND;
+  return access | create | trunc | exclusive | append;
 }
 
 /**
@@ -263,8 +329,7 @@ seal func makeNullTerminatedPath(path: string): byte[!] {
 }
 
 /**
- * Extract StatInfo from a POSIX stat buffer.
- * Uses known field offsets for macOS aarch64 struct stat.
+ * Extract StatInfo from a POSIX stat buffer using the cached host layout.
  */
 seal func readStatInfo(statBuf: i64[!]): StatInfo {
   let modeRaw: i64 = feng_pointer_get_scalar<i64>(feng_pointer_move(&statBuf, STAT_MODE_OFFSET));

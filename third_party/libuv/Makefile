@@ -9,7 +9,8 @@ LINUX_CPPFLAGS := -D_GNU_SOURCE -D_POSIX_C_SOURCE=200112
 TARGET ?= libfeng_std_uv.a
 HOST_OS :=   $(shell sh -c 'os=$$(uname -s); if [ "$$os" = Darwin ]; then printf macos; elif [ "$$os" = Linux ]; then printf linux; else printf %s "$$os" | tr "[:upper:]" "[:lower:]"; fi')
 HOST_ARCH := $(if $(filter x86_64 amd64,$(shell uname -m)),x64,$(if $(filter arm64 aarch64,$(shell uname -m)),arm64,$(shell uname -m)))
-OUTPUT_DIR ?= ../../std/extlib/$(HOST_OS)-$(HOST_ARCH)
+HOST_PLATFORM := $(if $(filter linux,$(HOST_OS)),$(HOST_OS)-$(HOST_ARCH)-gnu,$(HOST_OS)-$(HOST_ARCH))
+OUTPUT_DIR ?= ../../std/extlib/$(HOST_PLATFORM)
 OUTPUT_NAME ?= $(TARGET)
 OUTPUT_TARGET := $(OUTPUT_DIR)/$(OUTPUT_NAME)
 
