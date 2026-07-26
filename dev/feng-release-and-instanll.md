@@ -176,11 +176,13 @@ strategy:
 原生构件任务：
 
 1. checkout 仓库（含 git lfs 管理的精简 LLVM 与 Linux sysroot）
-2. 安装当前 host 的构建依赖
+2. 安装当前 host 的必要构建依赖；CI 不依赖 Python 可执行程序
 3. 直接使用仓库 `extlib/<platform>/libfeng_unwind.a` 中已经预构建并校验的五个平台产物；CI 不重复执行 `scripts/build_libunwind.sh`
 4. 执行当前 host 全量 `make test`，生成 `build/bin/feng`、公共 `build/include/` 及 §6.2 分配给当前任务的一份或两份 runtime；三个任务合计产出五份最终 `libfeng_runtime.a`，但不向 Makefile 增加用于交叉构建 Feng 可执行文件自身的 `TARGET_PLATFORM`
 5. 仅在版本 tag 创建或手动试发时校验 `feng` 的格式和 CPU 架构，并逐一校验 runtime 归档成员的格式和 CPU 架构
 6. 仅在版本 tag 创建或手动试发时生成并上传 `release-component-<host-platform>`。构件解压后的固定结构为 `<host-platform>/bin/feng`、`<host-platform>/lib/<runtime-platform>/libfeng_runtime.a`、`<host-platform>/include/` 和 `<host-platform>/SHA256SUMS`；`SHA256SUMS` 记录上述全部文件的 SHA-256。macOS 构件包含一份 runtime，两个 Linux 构件分别包含同架构的 GNU 与 musl runtime。
+
+LSP / DAP 行为由第 4 步 `make test` 中的原生用例验证，干净安装验收不重复执行协议测试，也不为此引入 Python 可执行程序。Linux LLVM 内随包分发的私有 `libpython3.11.so.1.0` 仅用于 LLDB 初始化，不是 CI Python 依赖。
 
 汇聚任务：
 
@@ -350,6 +352,6 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [x] `scripts/release.sh`：按 §6.3 的构件结构汇总三组构件，校验构件摘要、三个 Feng 可执行文件、五份 runtime 和公共头文件，在临时目录完整生成并校验三个发行包后再移入输出目录。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
 - [x] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载并校验对应发行包，原子完成安装和 `PATH` 配置；失败时回滚已有安装且不留半成品。
 - [x] 新增可独立执行的发行与安装脚本回归测试，覆盖正常汇聚、输入校验失败、安装成功、重复安装和失败回滚，并纳入 `make test`。
-- [x] 新增可独立执行的干净安装验收脚本，验证版本、完整目录、平台构件、bundled LLVM、项目 `build` / `run` 以及 LSP / DAP 基础协议；CI 在对应原生 runner 解压各自发行包后执行。
-- [ ] 在三个干净发行平台安装并验证 `feng --version`、`build`、`run`、`lsp`、`dap`、bundled LLVM、目录结构、平台构件和相对定位。
+- [x] 新增可独立执行的干净安装验收脚本，按 §6.3 验证版本、完整目录、平台构件、bundled LLVM 以及项目 `build` / `run`；CI 在对应原生 runner 解压各自发行包后执行。
+- [ ] 在三个干净发行平台安装并验证 `feng --version`、`build`、`run`、bundled LLVM、目录结构、平台构件和相对定位。
 - [ ] 人工 Review。

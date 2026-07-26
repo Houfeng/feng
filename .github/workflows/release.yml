@@ -89,7 +89,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y binutils clang file make python3 zip unzip
+          sudo apt-get install -y binutils clang file make zip unzip
 
       - name: Run full regression
         shell: bash
@@ -198,7 +198,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y file python3 unzip
+          sudo apt-get install -y file unzip
 
       - name: Download complete release packages
         uses: actions/download-artifact@v8

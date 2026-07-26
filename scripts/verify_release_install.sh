@@ -142,7 +142,6 @@ done
 [[ -d "${INSTALL_ROOT}" ]] || die "installed package root not found: ${INSTALL_ROOT}"
 INSTALL_ROOT="$(cd "${INSTALL_ROOT}" && pwd)"
 require_cmd file
-require_cmd python3
 mkdir -p "${PROJECT_ROOT}/build"
 WORK_ROOT="$(mktemp -d "${PROJECT_ROOT}/build/release-install-verify.XXXXXX")"
 trap cleanup EXIT
@@ -234,5 +233,4 @@ RUN_OUTPUT="$("${FENG}" run "${PROJECT_DIR}")"
 [[ "${RUN_OUTPUT}" == *"release install verification"* ]] ||
   die "installed Feng run produced unexpected output"
 
-python3 "${SCRIPT_DIR}/verify_release_protocols.py" "${FENG}"
 echo "==> Verified Feng ${VERSION} clean install for ${HOST_PLATFORM}"
