@@ -70,7 +70,7 @@ if [[ "${PLATFORM}" == "macos-arm64" ]]; then
   export PATH
 fi
 
-for command_name in clang file make node unzip zip; do
+for command_name in clang file make node timeout unzip zip; do
   require_cmd "${command_name}"
 done
 

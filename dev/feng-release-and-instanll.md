@@ -169,7 +169,7 @@ strategy:
       # 扩展时追加：macos-x64、windows-x64 等
 ```
 
-三个平台任务互不交叉构建 Feng 可执行文件，只在对应 native host 产出当前 host 平台的 `feng`。macOS 使用 `macos-26` arm64 runner，并显式选择与本机一致的 Xcode 26.3、macOS 26.2 SDK 和 Homebrew `llvm@21` 21.1.8；`$(brew --prefix llvm@21)/bin` 必须位于构建任务 `PATH` 首位，使 Makefile 构建 Feng 实际调用的 host `clang` 与本机一致，不得依赖 runner 的隐式 `clang` 解析结果，也不得与 Feng 编译 `.ff` 时使用的 bundled Clang 混为同一工具。两个 Linux host runner 分别提供 x64 与 arm64 CPU，在 `ubuntu:26.04` job container 中安装与本机 `feng-ubuntu-dev:26.04` 相同的构建依赖，并校验 Ubuntu 26.04、Clang 21 后再执行任务。未参与构建的 `cc` 不作为 CI 环境约束。Git、Git LFS 与 CA 证书可作为 CI checkout 的传输依赖额外安装，不改变构建工具基线。
+三个平台任务互不交叉构建 Feng 可执行文件，只在对应 native host 产出当前 host 平台的 `feng`。macOS 使用 `macos-26` arm64 runner，并显式选择与本机一致的 Xcode 26.3、macOS 26.2 SDK、Homebrew `llvm@21` 21.1.8 和 Homebrew `coreutils`；`$(brew --prefix llvm@21)/bin` 必须位于构建任务 `PATH` 首位，使 Makefile 构建 Feng 实际调用的 host `clang` 与本机一致，`coreutils` 提供 smoke 回归脚本所需的 `timeout`，不得依赖 runner 的隐式工具解析结果，也不得将构建 Feng 自身使用的 host Clang 与 Feng 编译 `.ff` 时使用的 bundled Clang 混为同一工具。两个 Linux host runner 分别提供 x64 与 arm64 CPU，在 `ubuntu:26.04` job container 中安装与本机 `feng-ubuntu-dev:26.04` 相同的构建依赖，并校验 Ubuntu 26.04、Clang 21 后再执行任务。未参与构建的 `cc` 不作为 CI 环境约束。Git、Git LFS 与 CA 证书可作为 CI checkout 的传输依赖额外安装，不改变构建工具基线。
 
 macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架构 GNU / musl sysroot 生成该架构的两份 runtime。各 host 平台的精简 LLVM 产物位于仓库 `toolchain/llvm/<host-platform>/`，四份 Linux 目标 sysroot 位于仓库 `toolchain/sysroot/<platform>/`，均由 git lfs 管理。
 

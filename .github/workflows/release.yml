@@ -58,7 +58,7 @@ jobs:
           lfs: true
 
       - name: Install macOS build environment
-        run: brew install llvm@21
+        run: brew install coreutils llvm@21
 
       - name: Configure build version
         run: scripts/release_version.sh set --version="${{ needs.prepare.outputs.version }}"
@@ -209,7 +209,7 @@ jobs:
           lfs: false
 
       - name: Install macOS build environment
-        run: brew install llvm@21
+        run: brew install coreutils llvm@21
 
       - name: Configure and verify macOS build environment
         run: >-
