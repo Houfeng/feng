@@ -4,6 +4,21 @@ import std.test;
 
 import std.collections;
 
+/** A map test key that forces every entry into the same bucket chain. */
+type MapCollisionKey: Hashable<MapCollisionKey> {
+  let value: i32;
+
+  /** Returns a constant hash to exercise collision-chain maintenance. */
+  func hash(): u64 {
+    return (u64)1;
+  }
+
+  /** Compares collision keys by their stored integer value. */
+  func same(other: MapCollisionKey): bool {
+    return self.value == other.value;
+  }
+}
+
 func map_set_get() {
   let m = Map<IntKey, i32>();
   let k = IntKey { value: 10 };
@@ -107,6 +122,51 @@ func map_entries_tuple_entity() {
   check(found, "map/entries-item");
 }
 
+/** Verifies collision chains after removals move the last dense entry. */
+func map_collision_remove_keeps_dense_chains() {
+  let m = Map<MapCollisionKey, i32>();
+  for var i: i32 = 0; i < 32; i = i + 1 {
+    m.set(MapCollisionKey { value: i }, i * 10);
+  }
+
+  m.remove(MapCollisionKey { value: 5 });
+  m.remove(MapCollisionKey { value: 17 });
+  var valid: bool = m.count() == 30;
+  for var i: i32 = 0; i < 32; i = i + 1 {
+    let key = MapCollisionKey { value: i };
+    if i == 5 || i == 17 {
+      if m.has(key) {
+        valid = false;
+      }
+    } else {
+      if !m.has(key) || m.get(key) != i * 10 {
+        valid = false;
+      }
+    }
+  }
+  check(valid, "map/collision-remove-keeps-dense-chains");
+}
+
+/** Verifies managed values remain valid across growth, removal, and shrink. */
+func map_shrink_preserves_managed_values() {
+  let m = Map<IntKey, string>();
+  for var i: i32 = 0; i < 80; i = i + 1 {
+    m.set(IntKey { value: i }, "retained");
+  }
+  for var i: i32 = 0; i < 76; i = i + 1 {
+    m.remove(IntKey { value: i });
+  }
+
+  var valid: bool = m.count() == 4;
+  for var i: i32 = 76; i < 80; i = i + 1 {
+    let key = IntKey { value: i };
+    if !m.has(key) || m.get(key) != "retained" {
+      valid = false;
+    }
+  }
+  check(valid, "map/shrink-preserves-managed-values");
+}
+
 open func run_map_tests() {
   describe("map tests", () {
     test("map_set_get()", () { map_set_get(); });
@@ -119,5 +179,11 @@ open func run_map_tests() {
     test("map_multiple_keys()", () { map_multiple_keys(); });
     test("map_count()", () { map_count(); });
     test("map_entries_tuple_entity()", () { map_entries_tuple_entity(); });
+    test("map_collision_remove_keeps_dense_chains()", () {
+      map_collision_remove_keeps_dense_chains();
+    });
+    test("map_shrink_preserves_managed_values()", () {
+      map_shrink_preserves_managed_values();
+    });
   });
 }
