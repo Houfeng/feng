@@ -5,6 +5,13 @@
 #include "cli/cli.h"
 #include "cli/tool/tool.h"
 
+// Only for IntelliSense ------------------------------------------------------
+#ifdef __INTELLISENSE__
+#define FENG_CLI_VERSION "IntelliSense"
+#endif
+// ----------------------------------------------------------------------------
+
+
 #ifndef FENG_CLI_VERSION
 #error "FENG_CLI_VERSION must be defined from the repository VERSION file"
 #endif
