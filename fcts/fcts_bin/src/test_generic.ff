@@ -68,6 +68,11 @@ type GBox<T> {
   }
 }
 
+// 用于验证用户类型作为泛型实参时的递归默认值。
+type TestType {
+  let x: int;
+}
+
 // 泛型 void 函数
 func gdiscard<T>(x: T) {
 }
@@ -538,6 +543,21 @@ open func test_generic() {
       let cbox: GBox<int> = GBox<int>();
       cbox.value = 99;
       assert(cbox.value == 99, "generic type constructor");
+    });
+
+    test("generic type constructor default value (string)", () {
+      let box = GBox<string>();
+      assert(box.value == "", "generic string field defaults to empty string");
+    });
+
+    test("generic type constructor default value (int)", () {
+      let box = GBox<int>();
+      assert(box.value == 0, "generic int field defaults to zero");
+    });
+
+    test("generic type constructor default value (user type)", () {
+      let box = GBox<TestType>();
+      assert(box.value.x == 0, "generic user type field defaults recursively");
     });
 
     test("generic void function", () {
