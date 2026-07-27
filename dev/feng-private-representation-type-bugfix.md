@@ -184,3 +184,8 @@ C# 与 Go 方案的共同底座、行为差异和额外工作见
 [公开成员使用私有类型的方案](./feng-private-type-public-api-options.md)。
 
 本修复采用 Go 方案。
+
+## 8. 代码调查
+
+当前实现、临时验证和方案复杂度结论见
+[私有表示类型方案的代码调查](./feng-private-type-code-investigation.md)。
