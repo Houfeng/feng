@@ -1,3 +1,10 @@
+// Only for IntelliSense ------------------------------------------------------
+#ifdef __INTELLISENSE__
+#define FENG_SYSTEM_HEADER_SYMBOL(name)
+#endif
+// ----------------------------------------------------------------------------
+
+
 /* C-library symbol list shared by the codegen extern-declaration pass.
  *
  * Generated C includes feng_generated.h, which either includes the relevant
@@ -129,3 +136,10 @@ FENG_SYSTEM_HEADER_SYMBOL(lrint)
 FENG_SYSTEM_HEADER_SYMBOL(llrint)
 FENG_SYSTEM_HEADER_SYMBOL(lround)
 FENG_SYSTEM_HEADER_SYMBOL(llround)
+
+
+// Only for IntelliSense ------------------------------------------------------
+#ifdef __INTELLISENSE__
+#undef FENG_SYSTEM_HEADER_SYMBOL
+#endif
+// ----------------------------------------------------------------------------
