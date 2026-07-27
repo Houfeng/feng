@@ -5,6 +5,8 @@
 #include "cli/cli.h"
 #include "cli/tool/tool.h"
 
+// Real builds inject the version from the repository VERSION file through the
+// build system; this placeholder only lets IntelliSense parse this source file.
 // Only for IntelliSense ------------------------------------------------------
 #ifdef __INTELLISENSE__
 #define FENG_CLI_VERSION "IntelliSense"
