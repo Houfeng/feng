@@ -1,0 +1,35 @@
+module fcts_bin;
+
+import std.test;
+import fcts_bin.private_generic_representation;
+
+open func test_private_generic_representation() {
+  describe("private generic representation type", () {
+    test("same module", () {
+      assert(private_generic_same_module_probe(),
+             "private generic representation works in its declaring module");
+    });
+
+    test("explicit field across modules", () {
+      let int_box = ExplicitPrivateBox<int>();
+      let string_box = ExplicitPrivateBox<string>();
+      assert(int_box.read() == 0, "explicit int default");
+      assert(string_box.read() == "", "explicit string default");
+      int_box.set(42);
+      string_box.set("explicit");
+      assert(int_box.read() == 42, "explicit int value");
+      assert(string_box.read() == "explicit", "explicit string value");
+    });
+
+    test("inferred field across modules", () {
+      let int_box = InferredPrivateBox<int>();
+      let string_box = InferredPrivateBox<string>();
+      assert(int_box.read() == 0, "inferred int default");
+      assert(string_box.read() == "", "inferred string default");
+      int_box.set(43);
+      string_box.set("inferred");
+      assert(int_box.read() == 43, "inferred int value");
+      assert(string_box.read() == "inferred", "inferred string value");
+    });
+  });
+}

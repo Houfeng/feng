@@ -230,3 +230,23 @@ open type User {
 | module        | `seal`    |
 | module 成员    | `seal`    |
 | type 成员      | `open`    |
+
+## 10 私有成员的表示类型
+
+私有成员可以使用在成员声明位置可访问的私有类型。成员类型是否为泛型不改变该
+规则；泛型实参中的类型按相同规则处理。
+
+```feng
+open module app.api.box;
+
+type Entry<T> {
+  let value: T;
+}
+
+open type Box<T> {
+  seal let entry: Entry<T>;
+}
+```
+
+`Box<T>.entry` 为私有成员，因此可以使用当前模块的私有类型 `Entry<T>`。
+其他模块仍不能直接引用、导入或构造 `Entry<T>`。

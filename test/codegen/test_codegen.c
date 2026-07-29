@@ -354,6 +354,88 @@ static void test_multi_file_lib(void) {
     feng_program_free(prog_c);
 }
 
+static void test_private_generic_representation_same_package_codegen(void) {
+    static const char *kProviderSource =
+        "open module feng.codegen.private_repr.provider;\n"
+        "type PrivateLeaf<T> {\n"
+        "    let value: T;\n"
+        "}\n"
+        "type PrivateEntry<T> {\n"
+        "    seal let leaf: PrivateLeaf<T>;\n"
+        "    func read(): T { return self.leaf.value; }\n"
+        "}\n"
+        "open type ExplicitBox<T> {\n"
+        "    seal let entry: PrivateEntry<T>;\n"
+        "    func read(): T { return self.entry.read(); }\n"
+        "}\n"
+        "open type InferredBox<T> {\n"
+        "    seal let entry = PrivateEntry<T>();\n"
+        "    func read(): T { return self.entry.read(); }\n"
+        "}\n"
+        "func same_module_probe(): bool {\n"
+        "    let explicit_int = ExplicitBox<int>();\n"
+        "    let inferred_string = InferredBox<string>();\n"
+        "    return explicit_int.read() == 0 && inferred_string.read() == \"\";\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "module feng.codegen.private_repr.consumer;\n"
+        "import feng.codegen.private_repr.provider;\n"
+        "func main(args: string[]) {\n"
+        "    let explicit_int = ExplicitBox<int>();\n"
+        "    let explicit_string = ExplicitBox<string>();\n"
+        "    let inferred_int = InferredBox<int>();\n"
+        "    let inferred_string = InferredBox<string>();\n"
+        "    if explicit_int.read() != 0 || inferred_int.read() != 0 {\n"
+        "        throw \"private generic int failure\";\n"
+        "    }\n"
+        "    if explicit_string.read() != \"\" || inferred_string.read() != \"\" {\n"
+        "        throw \"private generic string failure\";\n"
+        "    }\n"
+        "}\n";
+    FengProgram *provider =
+        parse_or_die(kProviderSource, "private_repr_provider.ff");
+    FengProgram *consumer =
+        parse_or_die(kConsumerSource, "private_repr_consumer.ff");
+    const FengProgram *programs[2] = {provider, consumer};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 2U,
+                                 FENG_COMPILE_TARGET_BIN,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_BIN,
+                                     NULL,
+                                     &out,
+                                     &codegen_error));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "PrivateLeaf__G__i64") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "PrivateLeaf__G__string") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "PrivateEntry__G__i64") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "PrivateEntry__G__string") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "(void *)&((") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(provider);
+    feng_program_free(consumer);
+}
+
 static void test_module_binding_lazy_ensure_init_codegen(void) {
     static const char *kSource =
         "module feng.codegen.topbind;\n"
@@ -7831,6 +7913,7 @@ int main(void) {
 
     test_multi_file_bin();
     test_multi_file_lib();
+    test_private_generic_representation_same_package_codegen();
     test_module_binding_lazy_ensure_init_codegen();
     test_address_of_module_binding_uses_storage_slot_codegen();
     test_module_scalar_var_assignment_marks_initialized_codegen();

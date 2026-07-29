@@ -1,0 +1,53 @@
+open module fcts_bin.private_generic_representation;
+
+type PrivateLeaf<T> {
+  var value: T;
+
+  func set(value: T) {
+    self.value = value;
+  }
+}
+
+type PrivateEntry<T> {
+  seal let leaf: PrivateLeaf<T>;
+
+  func set(value: T) {
+    self.leaf.set(value);
+  }
+
+  func read(): T {
+    return self.leaf.value;
+  }
+}
+
+open type ExplicitPrivateBox<T> {
+  seal let entry: PrivateEntry<T>;
+
+  func set(value: T) {
+    self.entry.set(value);
+  }
+
+  func read(): T {
+    return self.entry.read();
+  }
+}
+
+open type InferredPrivateBox<T> {
+  seal let entry = PrivateEntry<T>();
+
+  func set(value: T) {
+    self.entry.set(value);
+  }
+
+  func read(): T {
+    return self.entry.read();
+  }
+}
+
+open func private_generic_same_module_probe(): bool {
+  let int_box = ExplicitPrivateBox<int>();
+  let string_box = InferredPrivateBox<string>();
+  int_box.set(41);
+  string_box.set("same module");
+  return int_box.read() == 41 && string_box.read() == "same module";
+}

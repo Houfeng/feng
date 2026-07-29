@@ -4963,6 +4963,53 @@ static void test_private_method_is_inaccessible_across_modules(void) {
     feng_program_free(main_program);
 }
 
+static void test_private_generic_type_is_inaccessible_across_modules(void) {
+    const char *base_source =
+        "open module demo.private_generic.base;\n"
+        "type PrivateEntry<T> {\n"
+        "    let value: T;\n"
+        "}\n"
+        "open type PublicBox<T> {\n"
+        "    seal let entry: PrivateEntry<T>;\n"
+        "}\n";
+    const char *main_source =
+        "module demo.private_generic.main;\n"
+        "import demo.private_generic.base;\n"
+        "func run() {\n"
+        "    let entry = PrivateEntry<int>();\n"
+        "}\n";
+    FengProgram *base_program =
+        parse_program_or_die("private_generic_base.ff", base_source);
+    FengProgram *main_program =
+        parse_program_or_die("private_generic_main.ff", main_source);
+    const FengProgram *programs[] = {base_program, main_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool found_undefined = false;
+
+    ASSERT(!feng_semantic_analyze(programs,
+                                  2U,
+                                  FENG_COMPILE_TARGET_LIB,
+                                  &analysis,
+                                  &errors,
+                                  &error_count));
+    ASSERT(error_count > 0U);
+    for (size_t error_index = 0U; error_index < error_count; ++error_index) {
+        if (strcmp(errors[error_index].path, "private_generic_main.ff") == 0 &&
+            strcmp(errors[error_index].code, "AE0001") == 0 &&
+            strstr(errors[error_index].message,
+                   "undefined identifier 'PrivateEntry'") != NULL) {
+            found_undefined = true;
+        }
+    }
+    ASSERT(found_undefined);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(base_program);
+    feng_program_free(main_program);
+}
+
 static void test_top_level_function_value_selects_overload_by_explicit_binding_type(void) {
     const char *source =
         "module demo.main;\n"
@@ -20187,6 +20234,7 @@ int main(void) {
     test_function_typed_local_binding_is_callable();
     test_non_callable_local_binding_reports_error();
     test_private_method_is_inaccessible_across_modules();
+    test_private_generic_type_is_inaccessible_across_modules();
     test_top_level_function_value_selects_overload_by_explicit_binding_type();
     test_top_level_function_value_selects_overload_by_parameter_context();
     test_top_level_function_value_selects_overload_by_return_type_context();
