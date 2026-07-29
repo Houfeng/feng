@@ -238,6 +238,8 @@ static bool writer_append_tseq(WriterContext *ctx,
                                const char *path,
                                FengToken token,
                                FengSymbolError *out_error);
+static uint32_t writer_find_decl_id(const WriterContext *ctx,
+                                    const FengSymbolDeclView *decl);
 
 static char *join_string_array_with_dot(char **segments, size_t count) {
     size_t total = 0U;
@@ -299,6 +301,7 @@ static uint32_t writer_serialize_type(WriterContext *ctx,
             if (record.string_ref == 0U) {
                 return 0U;
             }
+            record.sym_ref = writer_find_decl_id(ctx, type->target_decl);
             break;
 
         case FENG_SYMBOL_TYPE_KIND_POINTER:
@@ -351,6 +354,7 @@ static uint32_t writer_serialize_type(WriterContext *ctx,
             if (type->as.type_param_ref.name != NULL && record.string_ref == 0U) {
                 return 0U;
             }
+            record.sym_ref = writer_find_decl_id(ctx, type->target_decl);
             break;
 
         case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC: {
@@ -370,6 +374,7 @@ static uint32_t writer_serialize_type(WriterContext *ctx,
             if (type->as.named_generic.segment_count > 0U && record.string_ref == 0U) {
                 return 0U;
             }
+            record.sym_ref = writer_find_decl_id(ctx, type->target_decl);
             tseq_start = (uint32_t)(ctx->tseq_count + 1U);
             record.elem_start = tseq_start;
             record.elem_count = (uint32_t)type->as.named_generic.type_arg_count;
@@ -703,6 +708,268 @@ static bool writer_should_export_decl(FengSymbolProfile profile, const FengSymbo
          decl->kind == FENG_SYMBOL_DECL_KIND_METHOD) &&
         decl->visibility != FENG_VISIBILITY_PRIVATE) return true;
     return false;
+}
+
+/* Return whether one declaration is already part of the output selection. */
+static bool writer_has_decl(const WriterContext *ctx,
+                            const FengSymbolDeclView *decl) {
+    size_t index;
+
+    for (index = 0U; index < ctx->decl_id_count; ++index) {
+        if (ctx->decl_ids[index].decl == decl) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Add one declaration to the package selection; ids are assigned later. */
+static bool writer_select_decl(WriterContext *ctx,
+                               const FengSymbolDeclView *decl,
+                               const char *path,
+                               FengSymbolError *out_error) {
+    if (decl == NULL || writer_has_decl(ctx, decl)) {
+        return true;
+    }
+    return writer_append_decl_id(ctx,
+                                 decl,
+                                 0U,
+                                 path,
+                                 decl->token,
+                                 out_error);
+}
+
+/* Select declarations exported by the existing profile rules. */
+static bool writer_select_initial_tree(WriterContext *ctx,
+                                       const FengSymbolDeclView *decl,
+                                       const char *path,
+                                       FengSymbolError *out_error) {
+    size_t index;
+
+    if (!writer_select_decl(ctx, decl, path, out_error)) {
+        return false;
+    }
+    for (index = 0U; index < decl->member_count; ++index) {
+        const FengSymbolDeclView *member = decl->members[index];
+
+        if (ctx->profile != FENG_SYMBOL_PROFILE_WORKSPACE_CACHE &&
+            !writer_should_export_decl(ctx->profile, member)) {
+            continue;
+        }
+        if (!writer_select_initial_tree(ctx, member, path, out_error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Select declaration skeleton members required by codegen. */
+static bool writer_select_skeleton_members(WriterContext *ctx,
+                                           const FengSymbolDeclView *decl,
+                                           const char *path,
+                                           FengSymbolError *out_error) {
+    size_t index;
+
+    for (index = 0U; index < decl->member_count; ++index) {
+        const FengSymbolDeclView *member = decl->members[index];
+        bool required = member != NULL &&
+                        member->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM;
+
+        if (decl->kind == FENG_SYMBOL_DECL_KIND_TYPE) {
+            required = required ||
+                       (member != NULL &&
+                        member->kind == FENG_SYMBOL_DECL_KIND_FIELD);
+        } else if (decl->kind == FENG_SYMBOL_DECL_KIND_ENUM) {
+            required = required ||
+                       (member != NULL &&
+                        member->kind == FENG_SYMBOL_DECL_KIND_ENUM_ITEM);
+        } else if (decl->kind == FENG_SYMBOL_DECL_KIND_SPEC) {
+            required = true;
+        }
+        if (required && !writer_select_decl(ctx, member, path, out_error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Select local type-like declarations referenced by one type node. */
+static bool writer_select_type_dependencies(WriterContext *ctx,
+                                            const FengSymbolTypeView *type,
+                                            const char *path,
+                                            FengSymbolError *out_error) {
+    size_t index;
+
+    if (type == NULL) {
+        return true;
+    }
+    if (type->target_decl != NULL &&
+        type->target_decl->owner == &ctx->module->root_decl &&
+        (type->target_decl->kind == FENG_SYMBOL_DECL_KIND_TYPE ||
+         type->target_decl->kind == FENG_SYMBOL_DECL_KIND_ENUM ||
+         type->target_decl->kind == FENG_SYMBOL_DECL_KIND_SPEC) &&
+        !writer_select_decl(ctx, type->target_decl, path, out_error)) {
+        return false;
+    }
+    switch (type->kind) {
+        case FENG_SYMBOL_TYPE_KIND_POINTER:
+            return writer_select_type_dependencies(ctx,
+                                                   type->as.pointer.inner,
+                                                   path,
+                                                   out_error);
+
+        case FENG_SYMBOL_TYPE_KIND_ARRAY:
+            return writer_select_type_dependencies(ctx,
+                                                   type->as.array.element,
+                                                   path,
+                                                   out_error);
+
+        case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC:
+            for (index = 0U; index < type->as.named_generic.type_arg_count; ++index) {
+                if (!writer_select_type_dependencies(
+                        ctx,
+                        type->as.named_generic.type_args[index],
+                        path,
+                        out_error)) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_SYMBOL_TYPE_KIND_BUILTIN:
+        case FENG_SYMBOL_TYPE_KIND_NAMED:
+        case FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF:
+        case FENG_SYMBOL_TYPE_KIND_INVALID:
+        default:
+            return true;
+    }
+}
+
+/* Expand the dependency closure from every type surface of a selected declaration. */
+static bool writer_select_decl_dependencies(WriterContext *ctx,
+                                            const FengSymbolDeclView *decl,
+                                            const char *path,
+                                            FengSymbolError *out_error) {
+    size_t index;
+
+    if (!writer_select_skeleton_members(ctx, decl, path, out_error) ||
+        !writer_select_type_dependencies(ctx, decl->value_type, path, out_error) ||
+        !writer_select_type_dependencies(ctx, decl->return_type, path, out_error) ||
+        !writer_select_type_dependencies(ctx, decl->fit_target, path, out_error)) {
+        return false;
+    }
+    for (index = 0U; index < decl->param_count; ++index) {
+        if (!writer_select_type_dependencies(ctx,
+                                             decl->params[index].type,
+                                             path,
+                                             out_error)) {
+            return false;
+        }
+    }
+    for (index = 0U; index < decl->declared_spec_count; ++index) {
+        if (!writer_select_type_dependencies(ctx,
+                                             decl->declared_specs[index],
+                                             path,
+                                             out_error)) {
+            return false;
+        }
+    }
+    for (index = 0U; index < decl->union_member_count; ++index) {
+        if (!writer_select_type_dependencies(ctx,
+                                             decl->union_members[index],
+                                             path,
+                                             out_error)) {
+            return false;
+        }
+    }
+    for (index = 0U; index < decl->intersection_member_count; ++index) {
+        if (!writer_select_type_dependencies(ctx,
+                                             decl->intersection_members[index],
+                                             path,
+                                             out_error)) {
+            return false;
+        }
+    }
+    for (index = 0U; index < decl->reifiable_agg_dep_count; ++index) {
+        if (!writer_select_type_dependencies(ctx,
+                                             decl->reifiable_agg_deps[index],
+                                             path,
+                                             out_error)) {
+            return false;
+        }
+    }
+    for (index = 0U; index < decl->reifiable_type_dep_count; ++index) {
+        if (!writer_select_type_dependencies(ctx,
+                                             decl->reifiable_type_deps[index],
+                                             path,
+                                             out_error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Assign deterministic ids in declaration-tree order after closure selection. */
+static bool writer_assign_decl_ids(WriterContext *ctx,
+                                   const FengSymbolDeclView *decl,
+                                   uint32_t *next_id,
+                                   const char *path,
+                                   FengSymbolError *out_error) {
+    size_t index;
+
+    if (!writer_has_decl(ctx, decl)) {
+        return true;
+    }
+    for (index = 0U; index < ctx->decl_id_count; ++index) {
+        if (ctx->decl_ids[index].decl == decl) {
+            if (*next_id == 0U) {
+                return feng_symbol_internal_set_error(out_error,
+                                                      path,
+                                                      decl->token,
+                                                      "symbol id exceeds .ft range");
+            }
+            ctx->decl_ids[index].id = (*next_id)++;
+            break;
+        }
+    }
+    for (index = 0U; index < decl->member_count; ++index) {
+        if (!writer_assign_decl_ids(ctx,
+                                    decl->members[index],
+                                    next_id,
+                                    path,
+                                    out_error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Compute the complete selection before serializing any type node. */
+static bool writer_prepare_decl_ids(WriterContext *ctx,
+                                    const char *path,
+                                    FengSymbolError *out_error) {
+    size_t index;
+    uint32_t next_id = 1U;
+
+    if (!writer_select_initial_tree(ctx,
+                                    &ctx->module->root_decl,
+                                    path,
+                                    out_error)) {
+        return false;
+    }
+    for (index = 0U; index < ctx->decl_id_count; ++index) {
+        if (!writer_select_decl_dependencies(ctx,
+                                             ctx->decl_ids[index].decl,
+                                             path,
+                                             out_error)) {
+            return false;
+        }
+    }
+    return writer_assign_decl_ids(ctx,
+                                  &ctx->module->root_decl,
+                                  &next_id,
+                                  path,
+                                  out_error);
 }
 
 static uint16_t writer_symbol_kind(const FengSymbolDeclView *decl) {
@@ -1080,7 +1347,13 @@ static bool writer_collect_decl(WriterContext *ctx,
     char *full_module_name = NULL;
 
     memset(&record, 0, sizeof(record));
-    symbol_id = (uint32_t)(ctx->sym_count + 1U);
+    symbol_id = writer_find_decl_id(ctx, decl);
+    if (symbol_id == 0U || symbol_id != (uint32_t)(ctx->sym_count + 1U)) {
+        return feng_symbol_internal_set_error(out_error,
+                                              path,
+                                              decl->token,
+                                              "invalid preassigned symbol id");
+    }
     record.id = symbol_id;
     record.owner_id = owner_id;
     record.name_str = writer_intern_string(ctx, decl->name, path, decl->token, out_error);
@@ -1223,7 +1496,6 @@ static bool writer_collect_decl(WriterContext *ctx,
                        path,
                        decl->token,
                        out_error) ||
-        !writer_append_decl_id(ctx, decl, symbol_id, path, decl->token, out_error) ||
         !writer_emit_decl_attrs(ctx, decl, symbol_id, path, decl->token, out_error) ||
         !writer_emit_span(ctx, decl, symbol_id, path, decl->token, out_error)) {
         return false;
@@ -1233,7 +1505,7 @@ static bool writer_collect_decl(WriterContext *ctx,
     }
 
     for (index = 0U; index < decl->member_count; ++index) {
-        if (!writer_should_export_decl(ctx->profile, decl->members[index])) {
+        if (!writer_has_decl(ctx, decl->members[index])) {
             continue;
         }
         if (!writer_collect_decl(ctx, decl->members[index], symbol_id, path, out_error)) {
@@ -1447,7 +1719,8 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     ctx.module = module;
     ctx.profile = profile;
 
-    if (!writer_collect_decl(&ctx, &module->root_decl, 0U, path, out_error) ||
+    if (!writer_prepare_decl_ids(&ctx, path, out_error) ||
+        !writer_collect_decl(&ctx, &module->root_decl, 0U, path, out_error) ||
         !writer_collect_relations(&ctx, path, out_error) ||
         !build_strings_section(&ctx, &strings, path, module->root_decl.token, out_error) ||
         !build_fixed_section(&syms, ctx.syms, ctx.sym_count, sizeof(*ctx.syms), path, module->root_decl.token, out_error) ||
@@ -1607,4 +1880,3 @@ cleanup:
     buffer_free(&payload);
     return false;
 }
-

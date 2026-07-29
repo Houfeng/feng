@@ -157,6 +157,8 @@ size_t feng_symbol_type_generic_arg_count(const FengSymbolTypeView *type);
 /* NAMED_GENERIC: type argument at index */
 const FengSymbolTypeView *feng_symbol_type_generic_arg_at(const FengSymbolTypeView *type,
                                                           size_t index);
+/* Resolved declaration identity for NAMED, NAMED_GENERIC and TYPE_PARAM_REF. */
+const FengSymbolDeclView *feng_symbol_type_target_decl(const FengSymbolTypeView *type);
 
 void feng_symbol_provider_free(FengSymbolProvider *provider);
 

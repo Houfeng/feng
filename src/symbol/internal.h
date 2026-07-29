@@ -37,6 +37,8 @@ typedef struct FengSymbolParamView {
 
 struct FengSymbolTypeView {
     FengSymbolTypeKind kind;
+    /* Resolved declaration identity for named and type-parameter references. */
+    struct FengSymbolDeclView *target_decl;
     union {
         struct {
             char *name;

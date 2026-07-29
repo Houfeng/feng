@@ -1163,6 +1163,10 @@ const FengSymbolTypeView *feng_symbol_type_generic_arg_at(const FengSymbolTypeVi
     return type->as.named_generic.type_args[index];
 }
 
+const FengSymbolDeclView *feng_symbol_type_target_decl(const FengSymbolTypeView *type) {
+    return type != NULL ? type->target_decl : NULL;
+}
+
 void feng_symbol_provider_free(FengSymbolProvider *provider) {
     if (provider == NULL) {
         return;

@@ -117,8 +117,7 @@ open type Public {
 收录的私有依赖保持私有，只进入编译器内部声明查询，不进入用户名称查找、
 导入和补全。语义分析和 codegen 按声明身份使用这些依赖。
 
-本节规则实施时统一定义在 `docs/feng-visibility.md` 和
-`docs/feng-symbol-table.md`；其他正式文档只引用，不重复定义。
+本节规则由 `docs/feng-symbol-table.md` 定义；其他正式文档只引用，不重复定义。
 
 ## 3. 根因
 
@@ -163,42 +162,42 @@ fcts 用例，且全量回归测试 `make test` 通过后，才可标记完成�
   - [x] 交付验收：合法同包场景不再产生 `CE0031`，且形成可供 TODO 2 复用的
         唯一 codegen 具化路径。
 
-- [ ] **TODO 2：修复跨包私有表示依赖**
+- [x] **TODO 2：修复跨包私有表示依赖**
 
-  - [ ] 在 `docs/feng-symbol-table.md` 定义第 2.2 节的依赖闭包、私有标记、
+  - [x] 在 `docs/feng-symbol-table.md` 定义第 2.2 节的依赖闭包、私有标记、
         `sym_ref` 编码和内部查询规则；`docs/feng-package.md` 只保留引用。
-  - [ ] 依赖闭包以已收录 `type` 的全部字段类型，以及已收录 `type`、函数和
+  - [x] 依赖闭包以已收录 `type` 的全部字段类型，以及已收录 `type`、函数和
         `fit` 的 reifiable 依赖为根；函数体和字段初始化器不在 `.ft` 阶段重新遍历。
-  - [ ] 按第 2.2 节统一收录私有 `type`、`enum`、`spec` 骨架，不区分是否泛型；
+  - [x] 按第 2.2 节统一收录私有 `type`、`enum`、`spec` 骨架，不区分是否泛型；
         递归收集骨架中的具名目标、泛型实参、数组元素和指针目标。
-  - [ ] `type` 骨架包含类型参数及约束、Tuple/`@value` 等标记、父 `spec`、
+  - [x] `type` 骨架包含类型参数及约束、Tuple/`@value` 等标记、父 `spec`、
         全部字段和 reifiable 依赖；`enum`、`spec` 骨架完整保留第 2.2 节
         规定的 codegen 事实。
-  - [ ] 仅写入两端声明均已收录且 codegen 需要的现有关系；不因目标类型被收录而
+  - [x] 仅写入两端声明均已收录且 codegen 需要的现有关系；不因目标类型被收录而
         自动收录私有 `fit`。
-  - [ ] 不收录无关私有声明，所有收录的私有依赖保持私有标记。
-  - [ ] `FengSymbolTypeView` 的 `NAMED`、`NAMED_GENERIC` 和
+  - [x] 不收录无关私有声明，所有收录的私有依赖保持私有标记。
+  - [x] `FengSymbolTypeView` 的 `NAMED`、`NAMED_GENERIC` 和
         `TYPE_PARAM_REF` 保存目标声明身份；symbol graph 构建时按源码声明映射填写。
-  - [ ] `.ft` writer 先确定本次收录闭包并分配全部 symbol id，再序列化类型，
+  - [x] `.ft` writer 先确定本次收录闭包并分配全部 symbol id，再序列化类型，
         将目标 symbol id 写入 `sym_ref`。
-  - [ ] `.ft` reader 分两阶段创建声明和恢复类型引用，按 `sym_ref` 还原目标声明；
+  - [x] `.ft` reader 分两阶段创建声明和恢复类型引用，按 `sym_ref` 还原目标声明；
         不把已绑定类型降格为纯名称。
-  - [ ] imported-module cache 同时注册公开声明和已收录的私有依赖；内部编译查询
+  - [x] imported-module cache 同时注册公开声明和已收录的私有依赖；内部编译查询
         可以取得两者，用户名称查询、`use` 和补全仍只返回可见声明。
-  - [ ] 将恢复出的目标声明接入 TODO 1 的 codegen 具化路径；不得新增独立的
+  - [x] 将恢复出的目标声明接入 TODO 1 的 codegen 具化路径；不得新增独立的
         跨包名称查找或具化分支。
-  - [ ] 补齐 symbol 用例：覆盖 managed `type`、`@value type`、Tuple、枚举和
+  - [x] 补齐 symbol 用例：覆盖 managed `type`、`@value type`、Tuple、枚举和
         object/callable/union/intersection `spec`，验证最小闭包、私有标记、
         symbol id 预分配、`sym_ref` round-trip、递归依赖和排除项。
-  - [ ] 补齐 semantic/provider 用例：验证内部查询可用且用户查询、直接引用、
+  - [x] 补齐 semantic/provider 用例：验证内部查询可用且用户查询、直接引用、
         导入和构造私有依赖仍失败。
-  - [ ] 补齐 codegen 用例：消费 `.ft` 后覆盖 managed `type`、`@value type`、
+  - [x] 补齐 codegen 用例：消费 `.ft` 后覆盖 managed `type`、`@value type`、
         Tuple、枚举和四种 `spec`，并覆盖递归依赖、reifiable 依赖以及 `int`、
         `string` 具化。
-  - [ ] 补齐 fcts 跨包用例：在 `fcts_lib` 定义上述各类私有表示类型，在
+  - [x] 补齐 fcts 跨包用例：在 `fcts_lib` 定义上述各类私有表示类型，在
         `fcts_bin` 构造并使用公开类型的 `int`、`string` 实例。
-  - [ ] 运行并通过全量回归测试 `make test`。
-  - [ ] 交付验收：合法跨包场景不再产生 `CE0031` 或 `CE0032`，且私有依赖未进入
+  - [x] 运行并通过全量回归测试 `make test`。
+  - [x] 交付验收：合法跨包场景不再产生 `CE0031` 或 `CE0032`，且私有依赖未进入
         用户可见符号集合。
 
 - [ ] **TODO 3：增加公开签名可见性一致检查**

@@ -294,6 +294,7 @@ FengSymbolTypeView *feng_symbol_internal_type_clone(const FengSymbolTypeView *ty
     }
 
     clone->kind = type->kind;
+    clone->target_decl = type->target_decl;
     switch (type->kind) {
         case FENG_SYMBOL_TYPE_KIND_BUILTIN:
             clone->as.builtin.name = feng_symbol_internal_dup_cstr(type->as.builtin.name);
@@ -417,6 +418,79 @@ FengSymbolTypeView *feng_symbol_internal_type_clone(const FengSymbolTypeView *ty
     }
 
     return clone;
+}
+
+/* Rebind cloned type nodes from source declarations to cloned declarations. */
+static void remap_type_target(FengSymbolTypeView *type,
+                              DeclClonePair *pairs,
+                              size_t pair_count) {
+    size_t index;
+
+    if (type == NULL) {
+        return;
+    }
+    if (type->target_decl != NULL) {
+        type->target_decl = find_decl_clone(pairs, pair_count, type->target_decl);
+    }
+    switch (type->kind) {
+        case FENG_SYMBOL_TYPE_KIND_POINTER:
+            remap_type_target(type->as.pointer.inner, pairs, pair_count);
+            break;
+
+        case FENG_SYMBOL_TYPE_KIND_ARRAY:
+            remap_type_target(type->as.array.element, pairs, pair_count);
+            break;
+
+        case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC:
+            for (index = 0U; index < type->as.named_generic.type_arg_count; ++index) {
+                remap_type_target(type->as.named_generic.type_args[index],
+                                  pairs,
+                                  pair_count);
+            }
+            break;
+
+        case FENG_SYMBOL_TYPE_KIND_BUILTIN:
+        case FENG_SYMBOL_TYPE_KIND_NAMED:
+        case FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF:
+        case FENG_SYMBOL_TYPE_KIND_INVALID:
+        default:
+            break;
+    }
+}
+
+/* Rebind every cloned type surface after the declaration clone map is complete. */
+static void remap_decl_type_targets(FengSymbolDeclView *decl,
+                                    DeclClonePair *pairs,
+                                    size_t pair_count) {
+    size_t index;
+
+    if (decl == NULL) {
+        return;
+    }
+    remap_type_target(decl->value_type, pairs, pair_count);
+    remap_type_target(decl->return_type, pairs, pair_count);
+    remap_type_target(decl->fit_target, pairs, pair_count);
+    for (index = 0U; index < decl->param_count; ++index) {
+        remap_type_target(decl->params[index].type, pairs, pair_count);
+    }
+    for (index = 0U; index < decl->declared_spec_count; ++index) {
+        remap_type_target(decl->declared_specs[index], pairs, pair_count);
+    }
+    for (index = 0U; index < decl->union_member_count; ++index) {
+        remap_type_target(decl->union_members[index], pairs, pair_count);
+    }
+    for (index = 0U; index < decl->intersection_member_count; ++index) {
+        remap_type_target(decl->intersection_members[index], pairs, pair_count);
+    }
+    for (index = 0U; index < decl->reifiable_agg_dep_count; ++index) {
+        remap_type_target(decl->reifiable_agg_deps[index], pairs, pair_count);
+    }
+    for (index = 0U; index < decl->reifiable_type_dep_count; ++index) {
+        remap_type_target(decl->reifiable_type_deps[index], pairs, pair_count);
+    }
+    for (index = 0U; index < decl->member_count; ++index) {
+        remap_decl_type_targets(decl->members[index], pairs, pair_count);
+    }
 }
 
 static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
@@ -628,6 +702,9 @@ FengSymbolDeclView *feng_symbol_internal_decl_clone(const FengSymbolDeclView *de
                                                      &pair_capacity,
                                                      out_error);
 
+    if (clone != NULL) {
+        remap_decl_type_targets(clone, pairs, pair_count);
+    }
     free(pairs);
     return clone;
 }
@@ -782,6 +859,7 @@ FengSymbolModuleGraph *feng_symbol_internal_module_clone(const FengSymbolModuleG
         }
     }
 
+    remap_decl_type_targets(&clone->root_decl, pairs, pair_count);
     free(pairs);
     return clone;
 }
@@ -922,4 +1000,3 @@ void feng_symbol_graph_free(FengSymbolGraph *graph) {
     free(graph->modules);
     free(graph);
 }
-

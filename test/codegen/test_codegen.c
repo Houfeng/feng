@@ -436,6 +436,172 @@ static void test_private_generic_representation_same_package_codegen(void) {
     feng_program_free(consumer);
 }
 
+static void test_private_representation_cross_package_ft_codegen(void) {
+    static const char *kProviderSource =
+        "open module vendor.private_repr;\n"
+        "open type PublicBox<T> {\n"
+        "    seal let managed: HiddenManaged<T>;\n"
+        "    seal let value: HiddenValue<T>;\n"
+        "    seal let tuple: HiddenTuple<T>;\n"
+        "    seal let enum_value: HiddenEnum;\n"
+        "    seal let object_value: HiddenObject;\n"
+        "    seal let callable_value: HiddenCallable;\n"
+        "    seal let union_value: HiddenUnion;\n"
+        "    seal let intersection_value: HiddenIntersection;\n"
+        "    seal let recursive: HiddenRecursive<T>;\n"
+        "}\n"
+        "type HiddenManaged<T> { let value: T; }\n"
+        "@value\n"
+        "type HiddenValue<T> { let value: T; }\n"
+        "type HiddenTuple<T>(T, string);\n"
+        "enum HiddenEnum { Zero = 0, One = 1 }\n"
+        "spec HiddenObject { let item: HiddenManaged<int>; }\n"
+        "spec HiddenBase { func count(): int; }\n"
+        "spec HiddenCallable(value: HiddenValue<int>): HiddenTuple<int>;\n"
+        "spec HiddenUnion: HiddenEnum | HiddenTuple<int>;\n"
+        "spec HiddenIntersection: HiddenObject & HiddenBase;\n"
+        "type HiddenRecursive<T> { let child: HiddenManaged<T>; }\n"
+        "@abi\n"
+        "type HiddenAbi {}\n"
+        "@cdecl(\"hidden_abi\", \"hidden_abi_identity\")\n"
+        "extern func hiddenAbiIdentity(value: HiddenAbi*): HiddenAbi*;\n"
+        "type UnusedPrivate {}\n";
+    static const char *kConsumerSource =
+        "module demo.private_repr;\n"
+        "import vendor.private_repr;\n"
+        "func main(args: string[]) {\n"
+        "    let int_box = PublicBox<int>();\n"
+        "    let string_box = PublicBox<string>();\n"
+        "}\n";
+    static const char *kInvalidConsumerSource =
+        "module demo.private_repr_invalid;\n"
+        "import vendor.private_repr;\n"
+        "func probe() {\n"
+        "    let hidden = HiddenManaged<int>();\n"
+        "}\n";
+    FengProgram *provider_program =
+        parse_or_die(kProviderSource, "tests/private_repr_vendor.ff");
+    const FengProgram *provider_programs[1] = {provider_program};
+    FengSemanticAnalysis *provider_analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolExportOptions export_options = {0};
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions analyze_options = {0};
+    FengSymbolError symbol_error = {0};
+    FengProgram *consumer_program = NULL;
+    const FengProgram *consumer_programs[1];
+    FengSemanticAnalysis *consumer_analysis = NULL;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    FengProgram *invalid_program = NULL;
+    const FengProgram *invalid_programs[1];
+    FengSemanticAnalysis *invalid_analysis = NULL;
+    bool saw_private_error = false;
+
+    ASSERT(feng_semantic_analyze(provider_programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &provider_analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_options.public_root = public_root;
+    ASSERT(feng_symbol_export_analysis(provider_analysis,
+                                       &export_options,
+                                       &symbol_error));
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &symbol_error));
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    analyze_options.target = FENG_COMPILE_TARGET_BIN;
+    analyze_options.imported_modules = &query;
+    analyze_options.pointer_size = sizeof(void *);
+
+    consumer_program =
+        parse_or_die(kConsumerSource, "tests/private_repr_consumer.ff");
+    consumer_programs[0] = consumer_program;
+    ASSERT(feng_semantic_analyze_with_options(consumer_programs,
+                                              1U,
+                                              &analyze_options,
+                                              &consumer_analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    feng_symbol_imported_module_cache_populate_codegen_metadata(cache,
+                                                                 consumer_analysis);
+    if (!feng_codegen_emit_program(consumer_analysis,
+                                   FENG_COMPILE_TARGET_BIN,
+                                   NULL,
+                                   &output,
+                                   &codegen_error)) {
+        fprintf(stderr,
+                "cross-package private representation codegen error: %s\n",
+                codegen_error.message != NULL ? codegen_error.message
+                                              : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source, "HiddenManaged__G__i64") != NULL);
+    ASSERT(strstr(output.c_source, "HiddenManaged__G__string") != NULL);
+    ASSERT(strstr(output.c_source, "HiddenValue__G__i64") != NULL);
+    ASSERT(strstr(output.c_source, "HiddenTuple__G__string") != NULL);
+    ASSERT(strstr(output.c_source, "FengEnum__vendor__private_repr__HiddenEnum") != NULL);
+    ASSERT(strstr(output.c_source, "HiddenCallable") != NULL);
+    ASSERT(strstr(output.c_source, "HiddenUnion") != NULL);
+    ASSERT(strstr(output.c_source, "HiddenIntersection") != NULL);
+    ASSERT(strstr(output.c_source, "HiddenRecursive__G__i64") != NULL);
+    ASSERT(strstr(output.c_source, "HiddenAbi") != NULL);
+    ASSERT(strstr(output.c_source, "UnusedPrivate") == NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    invalid_program =
+        parse_or_die(kInvalidConsumerSource,
+                     "tests/private_repr_invalid_consumer.ff");
+    invalid_programs[0] = invalid_program;
+    errors = NULL;
+    error_count = 0U;
+    analyze_options.target = FENG_COMPILE_TARGET_LIB;
+    ASSERT(!feng_semantic_analyze_with_options(invalid_programs,
+                                               1U,
+                                               &analyze_options,
+                                               &invalid_analysis,
+                                               &errors,
+                                               &error_count));
+    for (size_t index = 0U; index < error_count; ++index) {
+        if (strcmp(errors[index].code, "AE0001") == 0 &&
+            strstr(errors[index].message, "HiddenManaged") != NULL) {
+            saw_private_error = true;
+        }
+    }
+    ASSERT(saw_private_error);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(invalid_program);
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(consumer_analysis);
+    feng_program_free(consumer_program);
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    feng_semantic_analysis_free(provider_analysis);
+    feng_program_free(provider_program);
+    ASSERT(remove_dir_recursive(tmp_dir) == 0);
+    free(tmp_dir);
+}
+
 static void test_module_binding_lazy_ensure_init_codegen(void) {
     static const char *kSource =
         "module feng.codegen.topbind;\n"
@@ -7914,6 +8080,7 @@ int main(void) {
     test_multi_file_bin();
     test_multi_file_lib();
     test_private_generic_representation_same_package_codegen();
+    test_private_representation_cross_package_ft_codegen();
     test_module_binding_lazy_ensure_init_codegen();
     test_address_of_module_binding_uses_storage_slot_codegen();
     test_module_scalar_var_assignment_marks_initialized_codegen();

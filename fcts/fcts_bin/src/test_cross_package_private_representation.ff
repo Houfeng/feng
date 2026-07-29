@@ -1,0 +1,36 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.private_representation;
+
+open func test_cross_package_private_representation() {
+  describe("cross-package private representation type", () {
+    test("int instance", () {
+      let box = CrossPackagePrivateBox<int>();
+      assert(box.readManaged() == 0, "managed int default");
+      assert(box.readValue() == 0, "value int default");
+      assert(box.readTuple() == 0, "tuple int default");
+      assert(box.readRecursive() == 0, "recursive int default");
+      assert(box.enumIsZero(), "enum default");
+      assert(box.objectDefault() == 0, "object spec default");
+      assert(box.callableDefault() == 0, "callable spec default");
+      assert(box.intersectionDefault() == 0, "intersection spec default");
+      box.writeManaged(42);
+      box.writeValue(43);
+      assert(box.readManaged() == 42, "managed int value");
+      assert(box.readValue() == 43, "value int value");
+    });
+
+    test("string instance", () {
+      let box = CrossPackagePrivateBox<string>();
+      assert(box.readManaged() == "", "managed string default");
+      assert(box.readValue() == "", "value string default");
+      assert(box.readTuple() == "", "tuple string default");
+      assert(box.readRecursive() == "", "recursive string default");
+      box.writeManaged("managed");
+      box.writeValue("value");
+      assert(box.readManaged() == "managed", "managed string value");
+      assert(box.readValue() == "value", "value string value");
+    });
+  });
+}

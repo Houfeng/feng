@@ -1,0 +1,92 @@
+open module fcts_lib.private_representation;
+
+type HiddenManaged<T> {
+  var value: T;
+}
+
+@value
+type HiddenValue<T> {
+  var value: T;
+}
+
+type HiddenTuple<T>(T, string);
+
+enum HiddenEnum {
+  Zero = 0,
+  One = 1
+}
+
+spec HiddenObject {
+  let number: int;
+}
+
+spec HiddenBase {
+  func count(): int;
+}
+
+spec HiddenText {
+  func text(): string;
+}
+
+spec HiddenCallable(): int;
+
+spec HiddenUnion: HiddenEnum | HiddenTuple<int>;
+
+spec HiddenIntersection: HiddenBase & HiddenText;
+
+type HiddenRecursive<T> {
+  let child: HiddenManaged<T>;
+}
+
+open type CrossPackagePrivateBox<T> {
+  seal let managed: HiddenManaged<T>;
+  seal var value: HiddenValue<T>;
+  seal let tuple: HiddenTuple<T>;
+  seal let enumValue: HiddenEnum;
+  seal let objectValue: HiddenObject;
+  seal let callableValue: HiddenCallable;
+  seal let unionValue: HiddenUnion;
+  seal let intersectionValue: HiddenIntersection;
+  seal let recursive: HiddenRecursive<T>;
+
+  func readManaged(): T {
+    return self.managed.value;
+  }
+
+  func writeManaged(value: T) {
+    self.managed.value = value;
+  }
+
+  func readValue(): T {
+    return self.value.value;
+  }
+
+  func writeValue(value: T) {
+    self.value.value = value;
+  }
+
+  func readTuple(): T {
+    return self.tuple.item1;
+  }
+
+  func readRecursive(): T {
+    return self.recursive.child.value;
+  }
+
+  func enumIsZero(): bool {
+    return self.enumValue == HiddenEnum.Zero;
+  }
+
+  func objectDefault(): int {
+    return self.objectValue.number;
+  }
+
+  func callableDefault(): int {
+    let callable = self.callableValue;
+    return callable();
+  }
+
+  func intersectionDefault(): int {
+    return self.intersectionValue.count();
+  }
+}

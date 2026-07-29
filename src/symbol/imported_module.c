@@ -15,7 +15,7 @@ typedef struct SynthDecl {
     size_t reifiable_dep_ref_count;
 } SynthDecl;
 
-/* One synthetic FengProgram holding the public decls of an external module. */
+/* One synthetic FengProgram holding public declarations and private dependencies. */
 typedef struct SynthProgram {
     char *path_buf;
     SynthDecl *decls;
@@ -230,6 +230,7 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     size_t arg_count;
     size_t total_count = 0U;
     bool has_calling_conv = false;
+    bool has_abi_annotation = false;
     bool has_iter_annotation = false;
 
     if (out_annotations == NULL || out_count == NULL) {
@@ -243,14 +244,18 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     }
 
     has_calling_conv = symbol_decl->calling_convention != FENG_ANNOTATION_NONE;
+    has_abi_annotation = symbol_decl->abi_annotated;
     has_iter_annotation = symbol_decl->is_iterable || symbol_decl->is_iterator;
 
-    if (!has_calling_conv && !has_iter_annotation) {
+    if (!has_calling_conv && !has_abi_annotation && !has_iter_annotation) {
         return true;
     }
 
     /* Count total annotations needed. */
     if (has_calling_conv) {
+        total_count++;
+    }
+    if (has_abi_annotation) {
         total_count++;
     }
     if (has_iter_annotation) {
@@ -300,9 +305,20 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
         annotations[0].arg_count = arg_count;
     }
 
+    /* Synthesize the standalone @abi marker retained by the symbol table. */
+    if (has_abi_annotation) {
+        size_t idx = has_calling_conv ? 1U : 0U;
+
+        annotations[idx].token = symbol_decl->token;
+        annotations[idx].name.data = "abi";
+        annotations[idx].name.length = 3U;
+        annotations[idx].builtin_kind = FENG_ANNOTATION_ABI;
+    }
+
     /* Synthesize @iterable or @iterator annotation. */
     if (has_iter_annotation) {
-        size_t idx = has_calling_conv ? 1U : 0U;
+        size_t idx = (has_calling_conv ? 1U : 0U) +
+                     (has_abi_annotation ? 1U : 0U);
         annotations[idx].token = symbol_decl->token;
         if (symbol_decl->is_iterable) {
             annotations[idx].name.data = "iterable";
@@ -366,7 +382,7 @@ static void free_synthetic_type_params(FengTypeParam *params, size_t count) {
     }
     for (index = 0U; index < count; ++index) {
         free((void *)params[index].name.data);
-        /* constraint is always NULL for synthesized type params */
+        free_synthetic_type_ref(params[index].constraint);
     }
     free(params);
 }
@@ -1121,6 +1137,12 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                 break;
             }
             synth_decl->decl.as.type_decl.declared_spec_count = symbol_decl->declared_spec_count;
+            if (!synthesize_decl_annotations_from_symbol(
+                    symbol_decl,
+                    &synth_decl->decl.annotations,
+                    &synth_decl->decl.annotation_count)) {
+                break;
+            }
             return true;
 
         case FENG_SYMBOL_DECL_KIND_SPEC:
@@ -1347,7 +1369,7 @@ static const FengSemanticModule *cache_get_module(const void *user,
         }
     }
 
-    decl_count = feng_symbol_module_public_decl_count(imp_mod);
+    decl_count = feng_symbol_module_decl_count(imp_mod);
     entry.prog = (SynthProgram *)calloc(1U, sizeof(*entry.prog));
     if (entry.prog == NULL) {
         goto fail;
@@ -1361,7 +1383,7 @@ static const FengSemanticModule *cache_get_module(const void *user,
     }
 
     for (index = 0U; index < decl_count; ++index) {
-        const FengSymbolDeclView *symbol_decl = feng_symbol_module_public_decl_at(imp_mod, index);
+        const FengSymbolDeclView *symbol_decl = feng_symbol_module_decl_at(imp_mod, index);
         SynthDecl *synth_decl;
 
         switch (symbol_decl->kind) {
@@ -1453,11 +1475,166 @@ FengSemanticImportedModuleQuery feng_symbol_imported_module_cache_as_query(
     return query;
 }
 
-/* Convert imported symbol-level reifiable deps into semantic-level dep sets
- * so that codegen can query them uniformly via
- * feng_semantic_lookup_reifiable_dep_set(). Must be called after semantic
- * analysis completes and before codegen begins. */
-void feng_symbol_imported_module_cache_populate_reifiable_deps(
+/* Find the synthetic declaration created for one provider declaration. */
+static const SynthDecl *cache_find_synth_decl_for_symbol(
+    const FengSymbolImportedModuleCache *cache,
+    const FengSymbolDeclView *symbol_decl) {
+    size_t entry_index;
+
+    if (cache == NULL || symbol_decl == NULL) {
+        return NULL;
+    }
+    for (entry_index = 0U; entry_index < cache->entry_count; ++entry_index) {
+        const SynthProgram *program = cache->entries[entry_index].prog;
+        size_t decl_index;
+
+        if (program == NULL) {
+            continue;
+        }
+        for (decl_index = 0U; decl_index < program->decl_count; ++decl_index) {
+            if (program->decls[decl_index].symbol_view == symbol_decl) {
+                return &program->decls[decl_index];
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Count synthetic declarations to bound recursive intersection flattening. */
+static size_t cache_synth_decl_count(
+    const FengSymbolImportedModuleCache *cache) {
+    size_t entry_index;
+    size_t count = 0U;
+
+    if (cache == NULL) {
+        return 0U;
+    }
+    for (entry_index = 0U; entry_index < cache->entry_count; ++entry_index) {
+        if (cache->entries[entry_index].prog != NULL) {
+            count += cache->entries[entry_index].prog->decl_count;
+        }
+    }
+    return count;
+}
+
+/* Append one unique flattened intersection member declaration. */
+static bool append_flattened_intersection_member(
+    const FengDecl ***members,
+    size_t *member_count,
+    const FengDecl *member) {
+    const FengDecl **grown;
+    size_t index;
+
+    for (index = 0U; index < *member_count; ++index) {
+        if ((*members)[index] == member) {
+            return true;
+        }
+    }
+    grown = (const FengDecl **)realloc(
+        (void *)*members,
+        (*member_count + 1U) * sizeof(**members));
+    if (grown == NULL) {
+        return false;
+    }
+    *members = grown;
+    (*members)[(*member_count)++] = member;
+    return true;
+}
+
+/* Flatten an imported intersection from declaration identities restored by .ft. */
+static bool collect_imported_intersection_members(
+    const FengSymbolImportedModuleCache *cache,
+    const FengSymbolDeclView *intersection,
+    size_t depth,
+    size_t depth_limit,
+    const FengDecl ***members,
+    size_t *member_count) {
+    size_t member_index;
+
+    if (intersection == NULL ||
+        intersection->kind != FENG_SYMBOL_DECL_KIND_SPEC ||
+        intersection->spec_form != FENG_SPEC_FORM_INTERSECTION ||
+        depth > depth_limit) {
+        return false;
+    }
+    for (member_index = 0U;
+         member_index < intersection->intersection_member_count;
+         ++member_index) {
+        const FengSymbolTypeView *member_type =
+            intersection->intersection_members[member_index];
+        const FengSymbolDeclView *target =
+            member_type != NULL ? member_type->target_decl : NULL;
+        const SynthDecl *synthetic =
+            cache_find_synth_decl_for_symbol(cache, target);
+
+        if (target == NULL || synthetic == NULL ||
+            target->kind != FENG_SYMBOL_DECL_KIND_SPEC) {
+            return false;
+        }
+        if (target->spec_form == FENG_SPEC_FORM_INTERSECTION) {
+            if (!collect_imported_intersection_members(cache,
+                                                       target,
+                                                       depth + 1U,
+                                                       depth_limit,
+                                                       members,
+                                                       member_count)) {
+                return false;
+            }
+        } else if (!append_flattened_intersection_member(
+                       members,
+                       member_count,
+                       &synthetic->decl)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Restore intersection sidecars skipped for pre-resolved imported modules. */
+static void populate_imported_intersection_infos(
+    FengSymbolImportedModuleCache *cache,
+    FengSemanticAnalysis *analysis) {
+    size_t entry_index;
+    size_t depth_limit = cache_synth_decl_count(cache);
+
+    for (entry_index = 0U; entry_index < cache->entry_count; ++entry_index) {
+        SynthProgram *program = cache->entries[entry_index].prog;
+        size_t decl_index;
+
+        if (program == NULL) {
+            continue;
+        }
+        for (decl_index = 0U; decl_index < program->decl_count; ++decl_index) {
+            SynthDecl *synthetic = &program->decls[decl_index];
+            const FengSymbolDeclView *symbol_decl = synthetic->symbol_view;
+            const FengDecl **flattened = NULL;
+            size_t flattened_count = 0U;
+
+            if (symbol_decl == NULL ||
+                symbol_decl->kind != FENG_SYMBOL_DECL_KIND_SPEC ||
+                symbol_decl->spec_form != FENG_SPEC_FORM_INTERSECTION) {
+                continue;
+            }
+            if (!collect_imported_intersection_members(cache,
+                                                       symbol_decl,
+                                                       0U,
+                                                       depth_limit,
+                                                       &flattened,
+                                                       &flattened_count)) {
+                free((void *)flattened);
+                continue;
+            }
+            (void)feng_semantic_record_intersection_spec_info(
+                analysis,
+                &synthetic->decl,
+                flattened,
+                flattened_count);
+        }
+    }
+}
+
+/* Restore imported codegen facts in the semantic side-table abstraction. */
+void feng_symbol_imported_module_cache_populate_codegen_metadata(
     FengSymbolImportedModuleCache *cache,
     FengSemanticAnalysis *analysis) {
     size_t ei;
@@ -1530,4 +1707,5 @@ void feng_symbol_imported_module_cache_populate_reifiable_deps(
             }
         }
     }
+    populate_imported_intersection_infos(cache, analysis);
 }

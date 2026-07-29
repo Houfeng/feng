@@ -3319,6 +3319,150 @@ static bool build_spec_relations(BuildContext *ctx, FengSymbolError *out_error) 
     return true;
 }
 
+/* Find a type parameter visible from a declaration's lexical owner chain. */
+static FengSymbolDeclView *find_type_param_target(FengSymbolDeclView *scope,
+                                                  const char *name) {
+    FengSymbolDeclView *cursor;
+
+    for (cursor = scope; cursor != NULL; cursor = cursor->owner) {
+        size_t member_index;
+
+        for (member_index = 0U; member_index < cursor->member_count; ++member_index) {
+            FengSymbolDeclView *member = cursor->members[member_index];
+
+            if (member != NULL &&
+                member->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM &&
+                member->name != NULL &&
+                name != NULL &&
+                strcmp(member->name, name) == 0) {
+                return member;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Resolve a fully-qualified local named type to its declaration identity. */
+static FengSymbolDeclView *find_local_named_target(FengSymbolModuleGraph *graph,
+                                                   char *const *segments,
+                                                   size_t segment_count,
+                                                   size_t type_arg_count,
+                                                   bool is_generic) {
+    size_t member_index;
+    size_t segment_index;
+
+    if (graph == NULL || segment_count != graph->segment_count + 1U) {
+        return NULL;
+    }
+    for (segment_index = 0U; segment_index < graph->segment_count; ++segment_index) {
+        if (segments[segment_index] == NULL ||
+            strcmp(segments[segment_index], graph->segments[segment_index]) != 0) {
+            return NULL;
+        }
+    }
+    for (member_index = 0U; member_index < graph->root_decl.member_count; ++member_index) {
+        FengSymbolDeclView *decl = graph->root_decl.members[member_index];
+
+        if (decl == NULL ||
+            (decl->kind != FENG_SYMBOL_DECL_KIND_TYPE &&
+             decl->kind != FENG_SYMBOL_DECL_KIND_ENUM &&
+             decl->kind != FENG_SYMBOL_DECL_KIND_SPEC) ||
+            decl->name == NULL ||
+            strcmp(decl->name, segments[segment_count - 1U]) != 0) {
+            continue;
+        }
+        if ((is_generic && decl->type_param_count == type_arg_count) ||
+            (!is_generic && decl->type_param_count == 0U)) {
+            return decl;
+        }
+    }
+    return NULL;
+}
+
+/* Bind declaration identities after the complete module graph exists. */
+static void bind_type_target(FengSymbolModuleGraph *graph,
+                             FengSymbolDeclView *scope,
+                             FengSymbolTypeView *type) {
+    size_t index;
+
+    if (type == NULL) {
+        return;
+    }
+    switch (type->kind) {
+        case FENG_SYMBOL_TYPE_KIND_NAMED:
+            type->target_decl = find_local_named_target(graph,
+                                                        type->as.named.segments,
+                                                        type->as.named.segment_count,
+                                                        0U,
+                                                        false);
+            break;
+
+        case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC:
+            type->target_decl = find_local_named_target(
+                graph,
+                type->as.named_generic.segments,
+                type->as.named_generic.segment_count,
+                type->as.named_generic.type_arg_count,
+                true);
+            for (index = 0U; index < type->as.named_generic.type_arg_count; ++index) {
+                bind_type_target(graph, scope, type->as.named_generic.type_args[index]);
+            }
+            break;
+
+        case FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF:
+            type->target_decl =
+                find_type_param_target(scope, type->as.type_param_ref.name);
+            break;
+
+        case FENG_SYMBOL_TYPE_KIND_POINTER:
+            bind_type_target(graph, scope, type->as.pointer.inner);
+            break;
+
+        case FENG_SYMBOL_TYPE_KIND_ARRAY:
+            bind_type_target(graph, scope, type->as.array.element);
+            break;
+
+        case FENG_SYMBOL_TYPE_KIND_BUILTIN:
+        case FENG_SYMBOL_TYPE_KIND_INVALID:
+        default:
+            break;
+    }
+}
+
+/* Bind every type surface owned by one declaration and its children. */
+static void bind_decl_type_targets(FengSymbolModuleGraph *graph,
+                                   FengSymbolDeclView *decl) {
+    size_t index;
+
+    if (decl == NULL) {
+        return;
+    }
+    bind_type_target(graph, decl, decl->value_type);
+    bind_type_target(graph, decl, decl->return_type);
+    bind_type_target(graph, decl, decl->fit_target);
+    for (index = 0U; index < decl->param_count; ++index) {
+        bind_type_target(graph, decl, decl->params[index].type);
+    }
+    for (index = 0U; index < decl->declared_spec_count; ++index) {
+        bind_type_target(graph, decl, decl->declared_specs[index]);
+    }
+    for (index = 0U; index < decl->union_member_count; ++index) {
+        bind_type_target(graph, decl, decl->union_members[index]);
+    }
+    for (index = 0U; index < decl->intersection_member_count; ++index) {
+        bind_type_target(graph, decl, decl->intersection_members[index]);
+    }
+    for (index = 0U; index < decl->reifiable_agg_dep_count; ++index) {
+        bind_type_target(graph, decl, decl->reifiable_agg_deps[index]);
+    }
+    for (index = 0U; index < decl->reifiable_type_dep_count; ++index) {
+        bind_type_target(graph, decl, decl->reifiable_type_deps[index]);
+    }
+    for (index = 0U; index < decl->member_count; ++index) {
+        bind_decl_type_targets(graph, decl->members[index]);
+    }
+}
+
 static FengSymbolModuleGraph *build_module_graph(const FengSemanticAnalysis *analysis,
                                                  const FengSemanticModule *module,
                                                  FengSymbolError *out_error) {
@@ -3436,6 +3580,7 @@ static FengSymbolModuleGraph *build_module_graph(const FengSemanticAnalysis *ana
         return NULL;
     }
 
+    bind_decl_type_targets(ctx.graph, &ctx.graph->root_decl);
     free(ctx.source_map);
     return ctx.graph;
 }
@@ -3590,4 +3735,3 @@ bool feng_symbol_export_analysis(const FengSemanticAnalysis *analysis,
     feng_symbol_graph_free(graph);
     return ok;
 }
-

@@ -331,10 +331,9 @@ int feng_cli_frontend_run_with_overlays(const FengCliFrontendInput *input,
         exit_code = 1;
     }
 
-    /* Populate imported reifiable deps into the analysis side-tables so that
-     * codegen can query them uniformly. */
+    /* Restore imported codegen metadata into the shared semantic side-tables. */
     if (analysis != NULL && exit_code == 0 && imported_module_cache != NULL) {
-        feng_symbol_imported_module_cache_populate_reifiable_deps(
+        feng_symbol_imported_module_cache_populate_codegen_metadata(
             imported_module_cache, analysis);
     }
 

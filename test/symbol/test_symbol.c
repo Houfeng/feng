@@ -1978,6 +1978,172 @@ static void test_fit_array_type_param_target_ft_roundtrip(void) {
     free(tmp_dir);
 }
 
+static void test_private_representation_dependency_closure_roundtrip(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.private_repr;\n"
+        "open type PublicBox<T> {\n"
+        "    seal let managed: HiddenManaged<T>;\n"
+        "    seal let value: HiddenValue<T>;\n"
+        "    seal let tuple: HiddenTuple<T>;\n"
+        "    seal let enum_value: HiddenEnum;\n"
+        "    seal let object_value: HiddenObject;\n"
+        "    seal let callable_value: HiddenCallable;\n"
+        "    seal let union_value: HiddenUnion;\n"
+        "    seal let intersection_value: HiddenIntersection;\n"
+        "    seal let recursive: HiddenRecursive<T>;\n"
+        "}\n"
+        "type HiddenManaged<T> { let value: T; }\n"
+        "@value\n"
+        "type HiddenValue<T> { let value: T; }\n"
+        "type HiddenTuple<T>(T, string);\n"
+        "enum HiddenEnum { Zero = 0, One = 1 }\n"
+        "spec HiddenObject { let item: HiddenManaged<int>; }\n"
+        "spec HiddenBase { func count(): int; }\n"
+        "spec HiddenCallable(value: HiddenValue<int>): HiddenTuple<int>;\n"
+        "spec HiddenUnion: HiddenEnum | HiddenTuple<int>;\n"
+        "spec HiddenIntersection: HiddenObject & HiddenBase;\n"
+        "type HiddenRecursive<T> { let child: HiddenManaged<T>; }\n"
+        "type UnusedPrivate {}\n"
+        "fit HiddenManaged<T> {\n"
+        "    func unused(): int { return 0; }\n"
+        "}\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSymbolError error = {0};
+    FengSlice segments[4];
+    const FengSymbolImportedModule *module = NULL;
+    const FengSymbolDeclView *public_box = NULL;
+    const FengSymbolDeclView *hidden_managed = NULL;
+    const FengSymbolDeclView *hidden_value = NULL;
+    const FengSymbolDeclView *hidden_tuple = NULL;
+    const FengSymbolDeclView *hidden_enum = NULL;
+    const FengSymbolDeclView *hidden_object = NULL;
+    const FengSymbolDeclView *hidden_callable = NULL;
+    const FengSymbolDeclView *hidden_union = NULL;
+    const FengSymbolDeclView *hidden_intersection = NULL;
+    const FengSymbolDeclView *hidden_recursive = NULL;
+    const FengSymbolDeclView *managed_field = NULL;
+    const FengSymbolDeclView *public_type_param = NULL;
+    const FengSymbolTypeView *managed_type = NULL;
+    const FengSymbolTypeView *managed_arg = NULL;
+    const FengSemanticModule *semantic_module = NULL;
+    size_t index;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("private_repr.ff", kSource, public_root);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("private_repr");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+    ASSERT(feng_symbol_module_public_decl_count(module) == 1U);
+    ASSERT(feng_symbol_module_fit_count(module) == 0U);
+    ASSERT(feng_symbol_module_find_public_type(module,
+                                               slice_from_cstr("HiddenManaged")) == NULL);
+
+    public_box = feng_symbol_module_find_public_type(module,
+                                                     slice_from_cstr("PublicBox"));
+    ASSERT(public_box != NULL);
+    for (index = 0U; index < feng_symbol_module_decl_count(module); ++index) {
+        const FengSymbolDeclView *decl = feng_symbol_module_decl_at(module, index);
+        FengSlice name = feng_symbol_decl_name(decl);
+
+        if (slice_equals_cstr(name, "HiddenManaged")) hidden_managed = decl;
+        if (slice_equals_cstr(name, "HiddenValue")) hidden_value = decl;
+        if (slice_equals_cstr(name, "HiddenTuple")) hidden_tuple = decl;
+        if (slice_equals_cstr(name, "HiddenEnum")) hidden_enum = decl;
+        if (slice_equals_cstr(name, "HiddenObject")) hidden_object = decl;
+        if (slice_equals_cstr(name, "HiddenCallable")) hidden_callable = decl;
+        if (slice_equals_cstr(name, "HiddenUnion")) hidden_union = decl;
+        if (slice_equals_cstr(name, "HiddenIntersection")) hidden_intersection = decl;
+        if (slice_equals_cstr(name, "HiddenRecursive")) hidden_recursive = decl;
+        ASSERT(!slice_equals_cstr(name, "UnusedPrivate"));
+    }
+    ASSERT(hidden_managed != NULL);
+    ASSERT(hidden_value != NULL);
+    ASSERT(hidden_tuple != NULL);
+    ASSERT(hidden_enum != NULL);
+    ASSERT(hidden_object != NULL);
+    ASSERT(hidden_callable != NULL);
+    ASSERT(hidden_union != NULL);
+    ASSERT(hidden_intersection != NULL);
+    ASSERT(hidden_recursive != NULL);
+    ASSERT(feng_symbol_decl_visibility(hidden_managed) == FENG_VISIBILITY_PRIVATE);
+    ASSERT(feng_symbol_decl_is_value_type(hidden_value));
+    ASSERT(feng_symbol_decl_is_tuple(hidden_tuple));
+    ASSERT(feng_symbol_decl_member_count(hidden_enum) == 2U);
+    ASSERT(feng_symbol_decl_spec_form(hidden_object) == FENG_SPEC_FORM_OBJECT);
+    ASSERT(feng_symbol_decl_spec_form(hidden_callable) == FENG_SPEC_FORM_CALLABLE);
+    ASSERT(feng_symbol_decl_spec_form(hidden_union) == FENG_SPEC_FORM_UNION);
+    ASSERT(feng_symbol_decl_spec_form(hidden_intersection) ==
+           FENG_SPEC_FORM_INTERSECTION);
+
+    for (index = 0U; index < feng_symbol_decl_member_count(public_box); ++index) {
+        const FengSymbolDeclView *member =
+            feng_symbol_decl_member_at(public_box, index);
+
+        if (feng_symbol_decl_kind(member) == FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+            public_type_param = member;
+        } else if (slice_equals_cstr(feng_symbol_decl_name(member), "managed")) {
+            managed_field = member;
+        }
+    }
+    ASSERT(public_type_param != NULL);
+    ASSERT(managed_field != NULL);
+    managed_type = feng_symbol_decl_value_type(managed_field);
+    ASSERT(managed_type != NULL);
+    ASSERT(feng_symbol_type_kind(managed_type) ==
+           FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(feng_symbol_type_target_decl(managed_type) == hidden_managed);
+    managed_arg = feng_symbol_type_generic_arg_at(managed_type, 0U);
+    ASSERT(managed_arg != NULL);
+    ASSERT(feng_symbol_type_kind(managed_arg) ==
+           FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF);
+    ASSERT(feng_symbol_type_target_decl(managed_arg) == public_type_param);
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    semantic_module = query.get_module(query.user, segments, 4U);
+    ASSERT(semantic_module != NULL);
+    ASSERT(semantic_module->program_count == 1U);
+    ASSERT(semantic_module->programs[0]->declaration_count ==
+           feng_symbol_module_decl_count(module));
+    {
+        bool found_private = false;
+
+        for (index = 0U;
+             index < semantic_module->programs[0]->declaration_count;
+             ++index) {
+            const FengDecl *decl = semantic_module->programs[0]->declarations[index];
+
+            if (decl->kind == FENG_DECL_TYPE &&
+                slice_equals_cstr(decl->as.type_decl.name, "HiddenManaged")) {
+                ASSERT(decl->visibility == FENG_VISIBILITY_PRIVATE);
+                found_private = true;
+            }
+        }
+        ASSERT(found_private);
+    }
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -2006,6 +2172,7 @@ int main(void) {
     test_generic_fit_named_generic_return_ft_roundtrip();
     test_fit_builtin_and_array_target_nodes_ft_roundtrip();
     test_fit_array_type_param_target_ft_roundtrip();
+    test_private_representation_dependency_closure_roundtrip();
     fprintf(stdout, "symbol tests passed\n");
     return 0;
 }
