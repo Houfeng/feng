@@ -28,7 +28,11 @@
 | 外部模块缓存 | 只把公开顶层声明合成为语义模块 | 已写入的私有依赖也无法注册为内部声明 |
 | 名称查询 | provider 同时提供公开声明查询和全部声明查询；用户类型解析只使用公开查询 | 已具备内部查询与用户查询隔离的基础 |
 | 类型事实 | 语义类型事实可保存 `TYPE_REF` 或具体 `DECL` | 声明身份路径已有基础但未统一 |
-| codegen | 泛型类型仍按名称和当前程序可见性查找 | 私有泛型依赖产生 `CE0031` |
+| codegen 类型解析 | 具名类型必须解析为 `type`、`enum` 或 `spec` 声明 | 缺少私有非泛型声明同样产生 `CE0032` |
+| managed 默认值 | 普通对象默认值依赖 `UserType`、实例字段和循环性分析 | 未解析私有类型不能降格为 opaque 指针或内部 `NULL` |
+| 值布局 | Tuple、`@value type` 和 union `spec` 按字段或成员构造 C 布局 | 必须恢复完整声明及递归布局依赖 |
+| 静态字段 | imported type 注册时仍创建并解析全部静态字段 | 私有静态字段类型也是当前 codegen 所需事实 |
+| reifiable 依赖 | generic `type`、函数和 `fit` 的依赖已汇总为声明属性 | 已收录声明的这些属性也是 `.ft` 依赖闭包的根 |
 
 对应代码：
 
@@ -42,7 +46,11 @@
 - [src/symbol/imported_module.c:1350](../src/symbol/imported_module.c#L1350)：外部模块缓存只合成公开顶层声明。
 - [src/semantic/analyzer.c:3056](../src/semantic/analyzer.c#L3056)：外部类型名称只查询公开声明。
 - [src/semantic/semantic.h:58](../src/semantic/semantic.h#L58)：类型事实支持 `TYPE_REF` 和 `DECL`。
-- [src/codegen/codegen.c:5998](../src/codegen/codegen.c#L5998)：codegen 按名称和可见性查找泛型类型。
+- [src/codegen/codegen.c:7296](../src/codegen/codegen.c#L7296)：codegen 的具名类型解析要求取得具体声明。
+- [src/codegen/codegen.c:8793](../src/codegen/codegen.c#L8793)：type 注册同时处理实例字段和静态字段。
+- [src/codegen/codegen.c:21290](../src/codegen/codegen.c#L21290)：managed 默认值递归检查具体类型及字段。
+- [src/codegen/codegen.c:33683](../src/codegen/codegen.c#L33683)：值类型与 union 按递归布局拓扑排序。
+- [src/semantic/reifiable_deps.c:1229](../src/semantic/reifiable_deps.c#L1229)：reifiable 依赖收集入口。
 
 ## 3. 临时验证
 
@@ -56,14 +64,23 @@
 | 外部显式声明 `provider.Hidden` | `AE1013` | 用户名称查询正确隐藏私有类型 |
 | 外部对公开函数返回的私有类型值调用公开方法 | `AE0306` | 名称类型无法解析到私有类型成员 |
 | 公开泛型类型的私有字段使用私有泛型类型 | `CE0031` | codegen 按名称和调用方可见性查找私有泛型声明 |
+| 公开类型的私有字段使用普通 managed 私有类型 | `CE0032` | 字段类型名存在，目标声明未进入 `.ft` |
+| 公开类型的私有字段使用 `@value type` 或 Tuple | `CE0032` | 消费方缺少值布局声明 |
+| 公开类型的私有字段使用枚举 | `CE0032` | 消费方缺少枚举声明和有序枚举项 |
+| 公开类型的私有字段使用 object/callable/union/intersection `spec` | `CE0032` | 消费方缺少对应 form 的声明结构 |
 
 当前行为既不是 C#、Rust，也不是 Go，而是语义阶段按名称推导后在后续阶段不一致失败。
+
+因此，私有表示依赖不能按“是否泛型”筛选。当前架构下，只要字段或已记录的
+reifiable 依赖指向具名 `type`、`enum` 或 `spec`，该目标及其递归表示依赖就必须
+作为私有内部声明进入 `.ft`。数组、指针和类型参数引用只保留结构化类型节点；
+函数体和初始化器不在 `.ft` 阶段重新遍历。
 
 ## 4. 两种方案的共同修复
 
 无论选择 C# 还是 Go 方案，都需要：
 
-1. 收集布局、泛型具化和 codegen 所需的私有表示依赖。
+1. 收集 `type`、`enum`、`spec` 的布局、泛型具化和 codegen 所需私有表示依赖。
 2. 为具名类型及其递归组成类型写入目标声明身份。
 3. reader 恢复声明身份，外部模块缓存将已收录私有依赖注册到内部声明表。
 4. 用户名称查询继续只返回可见声明。
