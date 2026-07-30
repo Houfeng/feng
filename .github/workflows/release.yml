@@ -143,6 +143,47 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  bundled_packages:
+    name: Build bundled packages
+    if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+    needs: prepare
+    runs-on: ubuntu-latest
+    container:
+      image: ubuntu:26.04
+    steps:
+      - name: Install Ubuntu build environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: >-
+          apt-get update &&
+          apt-get install -y --no-install-recommends
+          binutils ca-certificates clang file git git-lfs libc6-dev
+          libclang-rt-dev lld make nodejs unzip zip
+
+      - name: Checkout with release assets
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Configure build version
+        run: scripts/release_version.sh set --version="${{ needs.prepare.outputs.version }}"
+
+      - name: Verify Ubuntu build environment
+        run: scripts/release_ci_environment.sh --platform=linux-x64-gnu
+
+      - name: Build bundled packages
+        run: >-
+          scripts/release_bundled_packages.sh
+          --output=build/release-bundled-packages
+
+      - name: Upload bundled packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-bundled-packages
+          path: build/release-bundled-packages/*.fb
+          if-no-files-found: error
+          compression-level: 0
+
   assemble:
     name: Assemble release packages
     if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
@@ -150,6 +191,7 @@ jobs:
       - prepare
       - component_macos
       - component_linux
+      - bundled_packages
     runs-on: ubuntu-latest
     container:
       image: ubuntu:26.04
@@ -177,11 +219,18 @@ jobs:
           path: build/release-component-archives
           merge-multiple: true
 
+      - name: Download bundled packages
+        uses: actions/download-artifact@v8
+        with:
+          name: release-bundled-packages
+          path: build/release-bundled-packages
+
       - name: Assemble release packages
         run: >-
           scripts/release_assemble.sh
           --version="${{ needs.prepare.outputs.version }}"
           --component-archives=build/release-component-archives
+          --packages=build/release-bundled-packages
           --output=build/release-packages
           --archive-tool=toolchain/llvm/linux-x64-gnu/bin/llvm-ar
 

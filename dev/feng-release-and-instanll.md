@@ -119,6 +119,9 @@ feng-<version>-<platform>/
   `<name>-<version>.fb`。三个 host 分发包使用同一组输入；组装流程只校验并原样复制,
   不重新构建或修改 `.fb`。随附包的安装来源优先级和 cache 语义统一由
   [feng-deps.md](../docs/feng-deps.md#1-精确版本包来源) 定义。
+- 当前官方发行的随附包集合包含 `std`。该集合由独立脚本一次构建为多平台 `.fb`，
+  再作为单独 artifact 交给汇聚任务；具体 CI 实施边界见
+  [Feng 发行包随附 std 的 CI 实施方案](./feng-std-release-package-dev.md)。
 - sysroot 的来源、版本、裁剪和许可信息见 §5.3。禁止复制 host `/usr`。
 - 分发包不包含 Feng 源码、中间产物或构建缓存；`pkg/` 中经过校验的随附 `.fb`
   是正式分发物，不属于构建缓存。
@@ -194,9 +197,16 @@ macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架
 
 LSP / DAP 行为由第 4 步 `make test` 中的原生用例验证，干净安装验收不重复执行协议测试，也不为此引入 Python 可执行程序。Linux LLVM 内随包分发的私有 `libpython3.11.so.1.0` 仅用于 LLDB 初始化，不是 CI Python 依赖。
 
+随附包任务：
+
+1. 仅在版本 tag 创建或手动试发时，与三个原生构件任务并行运行
+2. 在 Linux x64 发行构建环境 checkout 完整 LFS 资源并配置本次构建版本
+3. 调用 `scripts/release_bundled_packages.sh` 独立入口构建当前随附包集合
+4. 将该入口原子发布的目录上传为唯一的 `release-bundled-packages` artifact
+
 汇聚任务：
 
-1. 等待并下载三份原生构件到同一构件根目录，不执行任何跨 host 编译
+1. 等待并下载三份原生构件与一份随附包 artifact，不执行任何跨 host 编译
 2. 校验每组 `SHA256SUMS`、三个 host 的 Feng 可执行文件格式和 CPU 架构、五份 runtime 的对象格式和 CPU 架构、runtime 平台集合完整且没有重复，并校验三组公共头文件内容一致
 3. 针对每个 host 平台选择对应 `feng` 与 `toolchain/llvm/<host-platform>/`
 4. 校验发行任务准备的随附包均可作为 `.fb` 打开，且包内名称和版本与文件名坐标
@@ -211,6 +221,7 @@ toolchain 精简产物在**本地维护**：开发者使用 LLVM、musl 与 GNU 
 ### 6.4 失败与回滚
 
 - 任一原生构件任务失败时，汇聚任务不得生成任何 release zip；已成功的平台构件只作为本次失败工作流的诊断输入，不得单独发布。
+- 随附包任务失败、artifact 缺失或内容非法时，汇聚任务不得生成任何 release zip。
 - 汇聚任务失败时不得上传部分平台 release zip。
 - 已发布 tag 不允许覆盖；发现问题时发新 tag，不在旧 tag 上重打。
 
@@ -367,6 +378,11 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [x] `scripts/release_assemble.sh`：接收通用随附包目录，校验所有 `.fb` 的包名、版本
   与文件坐标，将同一组包原样复制到三个发行包的顶层 `pkg/`；没有随附包输入时仍
   创建空 `pkg/`。
+- [x] `scripts/release_bundled_packages.sh`：在工程 `build/` 下隔离构建当前随附包
+  集合，校验后原子发布为可直接传给 `release_assemble.sh --packages` 的目录。
+- [x] `.github/workflows/release.yml`：版本发行与手动试发时并行运行独立
+  `bundled_packages` Job；workflow 只调用随附包脚本并传递 artifact，汇聚任务消费
+  同一份输入组装三个 host 发行包。
 - [x] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载并校验对应发行包，原子完成安装和 `PATH` 配置；失败时回滚已有安装且不留半成品。
 - [x] 新增可独立执行的发行与安装脚本回归测试，覆盖正常汇聚、输入校验失败、安装成功、重复安装和失败回滚，并纳入 `make test`。
 - [x] 新增可独立执行的干净安装验收脚本，按 §6.3 验证版本、完整目录、平台构件、bundled LLVM 以及项目 `build` / `run`；CI 在对应原生 runner 解压各自发行包后执行。

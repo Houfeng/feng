@@ -1,6 +1,6 @@
 # Feng 发行包随附 std 的 CI 实施方案
 
-> 状态：待人工 Review，未实施。
+> 状态：实施完成，等待人工代码 Review。
 
 ## 1. 目标
 
@@ -302,17 +302,17 @@ make test
 
 ## 8. 实施顺序
 
-- [ ] TODO 0：人工 Review 并确认本方案。
-- [ ] TODO 1：更新发行主方案，只引用本阶段确定的随附包集合与脚本入口，不重复包
+- [x] TODO 0：人工 Review 并确认本方案。
+- [x] TODO 1：更新发行主方案，只引用本阶段确定的随附包集合与脚本入口，不重复包
   格式和安装规则。
-- [ ] TODO 2：新增 `scripts/release_bundled_packages.sh`，完成隔离构建、校验和原子
+- [x] TODO 2：新增 `scripts/release_bundled_packages.sh`，完成隔离构建、校验和原子
   发布。
-- [ ] TODO 3：新增独立脚本专项测试并接入现有测试入口。
-- [ ] TODO 4：在 GitHub Actions 中增加 `bundled_packages` Job。
-- [ ] TODO 5：让 `assemble` 下载随附包 artifact，并向现有组装脚本传入
+- [x] TODO 3：新增独立脚本专项测试并接入现有测试入口。
+- [x] TODO 4：在 GitHub Actions 中增加 `bundled_packages` Job。
+- [x] TODO 5：让 `assemble` 下载随附包 artifact，并向现有组装脚本传入
   `--packages`。
-- [ ] TODO 6：执行脚本专项测试、workflow 检查和沙箱外全量 `make test`。
-- [ ] TODO 7：更新本文状态和 TODO，等待人工代码 Review。
+- [x] TODO 6：执行脚本专项测试、workflow 检查和沙箱外全量 `make test`。
+- [x] TODO 7：更新本文状态和 TODO，等待人工代码 Review。
 
 ## 9. 验收标准
 
