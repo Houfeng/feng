@@ -36,6 +36,7 @@ extern int64_t write(int64_t, uint8_t *, uint64_t);
 3. 生成代码直接调用原生符号，不增加 wrapper 和运行时调用。
 4. `@cdecl`、`@stdcall`、`@fastcall` 的现有调用约定和 ABI 转换保持不变。
 5. `@runtime extern func` 保持由 runtime header 声明，不进入本修复路径。
+6. C variadic 的固定参数个数完整写入并读回 `.ft`，保证跨包调用不丢失。
 
 ## 3. 方案
 
@@ -55,6 +56,8 @@ Feng 完整生成名直接复用普通顶层函数的命名流程：
 cg_fn_mangle(module, name) + 参数类型签名后缀
 ```
 
+其中 `module` 必须取自声明所属 program，不能依赖调用点或遍历过程中的当前模块。
+
 不增加 `__native` 后缀，不建立第二套 mangling 规则。
 
 ### 3.2 原生符号映射
@@ -65,6 +68,8 @@ cg_fn_mangle(module, name) + 参数类型签名后缀
 #if defined(__APPLE__)
 #define FENG_NATIVE_SYMBOL(name) __asm__("_" name)
 #else
+/* 当前非 Apple 交付目标仅为 Linux ELF。
+ * Windows/COFF 尚未支持，启用前必须在此增加独立映射规则。 */
 #define FENG_NATIVE_SYMBOL(name) __asm__(name)
 #endif
 
@@ -117,6 +122,40 @@ Feng 名称为 `writeText`，原生符号名为 `write`。
 
 第一个参数 `libc` 只表示链接依赖，不参与生成名，也不构成静态链接符号命名空间。
 
+### 3.5 C variadic 跨包元数据
+
+调用约定注解的第三个参数表示 C 原型中的固定参数个数：
+
+```feng
+@cdecl("libc", "snprintf", 3)
+extern func snprintf_f64(buf: byte*, size: uint, fmt: byte*, value: f64): i32;
+```
+
+对应 C 原型：
+
+```c
+extern int32_t feng__std__numeric__snprintf_f64__from__...(
+    uint8_t *,
+    uint64_t,
+    uint8_t *,
+    ...
+) FENG_NATIVE_SYMBOL("snprintf");
+```
+
+当前 `.ft` 只保存调用约定、库名和原生符号名，跨包导入时会丢失固定参数个数。
+本方案同时完成以下修复：
+
+1. `FengSymbolDeclView` 保存 C variadic 固定参数个数。
+2. symbol export 从调用约定注解的第三个参数读取该值。
+3. `.ft` 使用独立、可忽略的 attribute 写入该值；不修改既有记录含义。
+4. `.ft` reader 读回该值；旧 `.ft` 缺少该 attribute 时保持当前默认值 `0`。
+5. imported module 重建调用约定注解时恢复第三个整数参数。
+6. symbol clone、provider 内部视图和相关测试同步覆盖该字段。
+
+新增 attribute 不提升 `.ft` 版本：旧 reader 忽略未知 attribute，新 reader 可读取旧
+`.ft`。使用旧编译器生成的 `.ft` 不包含该值，需要重新构建提供方后才能恢复跨包
+C variadic 信息。
+
 ## 4. 不新增 wrapper
 
 当前 `extern func` 只生成原生函数声明。参数转换、`@abi type` 转换和返回值处理
@@ -143,34 +182,39 @@ Feng 调用点 -> wrapper -> 原生符号
 3. 多个不同 Feng 签名可以映射到同一个最终原生符号。
 4. 普通静态链接不能表达“分别调用两个静态库中的同名符号”。需要这种能力时，
    原生库或绑定层必须提供不同的导出符号。
-5. 本修复不改变链接库选择、动态加载和 `.ft` 的 C ABI 语义。
+5. 除补齐 C variadic 固定参数个数外，本修复不改变 `.ft` 的其他 C ABI 语义。
+6. Windows/COFF 尚未支持；本次只实现并验证 Apple Mach-O 和 Linux ELF。
 
 ## 6. 实施 TODO
 
 - [ ] TODO 1：按声明身份重构 extern 注册和查找。
   - [ ] `ExternFn` 分离 Feng 名称、完整生成名、原生符号名、`FengDecl` 和所属
     program。
-  - [ ] 复用普通顶层函数的模块和参数签名 mangling。
+  - [ ] 复用普通顶层函数的模块和参数签名 mangling；模块取自声明所属 program。
   - [ ] 普通、泛型、同模块和跨模块 extern 调用均按已解析声明定位。
   - [ ] 补齐编译器用例和必要的 fcts 用例。
   - [ ] `make test` 全量回归通过。
 
-- [ ] TODO 2：生成独立原型并映射原生符号。
-  - [ ] 增加统一的平台原生符号映射宏。
+- [ ] TODO 2：补齐 C variadic 跨包元数据。
+  - [ ] symbol view、export 和 clone 保存固定参数个数。
+  - [ ] `.ft` writer/reader 使用独立 attribute 往返固定参数个数。
+  - [ ] imported module 重建调用约定注解的第三个整数参数。
+  - [ ] 补齐默认值、`.ft` 往返、bundle 导入和跨包 codegen 用例。
+  - [ ] 验证本包和跨包生成的 C variadic 原型一致。
+  - [ ] `make test` 全量回归通过。
+
+- [ ] TODO 3：生成独立原型并映射原生符号。
+  - [ ] 增加统一的平台原生符号映射宏，并注明 Windows/COFF 尚未支持。
   - [ ] 每个普通 C ABI extern 生成独立原型，不再按原生符号名去重或按系统函数
     名跳过。
   - [ ] 调用点改用 Feng 完整生成名，确认目标文件仍直接引用原生符号。
   - [ ] 保持 calling convention、C variadic 和 runtime contract 路径正确。
-  - [ ] 补齐同一原生符号对应不同指针、标量和返回值签名的编译器用例及 fcts
-    用例。
-  - [ ] 验证 `feng build std_test` 不再出现同名 extern 原型导致的
-    `-Wpointer-sign` 警告。
-  - [ ] `make test` 全量回归通过。
-
-- [ ] TODO 3：完成平台和边界验证。
   - [ ] 验证 Apple 目标引用带下划线的 Mach-O 原生符号。
   - [ ] 验证 ELF 目标引用不带下划线的原生符号。
   - [ ] 验证默认原生名、显式原生名、系统头文件同名符号和跨包 extern。
   - [ ] 验证生成代码没有 extern wrapper 和额外运行时调用。
-  - [ ] 补齐相应用例。
+  - [ ] 补齐同一原生符号对应不同指针、标量和返回值签名的编译器用例及 fcts
+    用例。
+  - [ ] 验证 `feng build std_test` 不再出现同名 extern 原型导致的
+    `-Wpointer-sign` 警告。
   - [ ] `make test` 全量回归通过。
