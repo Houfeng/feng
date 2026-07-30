@@ -3,7 +3,7 @@
 > 状态：待评审，不实施代码
 >
 > C ABI 类型与调用规则由
-> [Feng ABI 互操作](./feng-interop-delivered.md) 定义；本文只定义 `extern func`
+> [Feng 语言 ABI 互操作规范](../docs/feng-interop.md) 定义；本文只定义 `extern func`
 > 的 codegen 修复。
 
 ## 1. 问题
@@ -124,7 +124,9 @@ Feng 名称为 `writeText`，原生符号名为 `write`。
 
 ### 3.5 C variadic 跨包元数据
 
-调用约定注解的第三个参数表示 C 原型中的固定参数个数：
+C variadic 的语言规则由
+[Feng 语言 ABI 互操作规范](../docs/feng-interop.md) 定义。以下声明用于说明
+固定参数个数的跨包保存：
 
 ```feng
 @cdecl("libc", "snprintf", 3)
@@ -187,15 +189,22 @@ Feng 调用点 -> wrapper -> 原生符号
 
 ## 6. 实施 TODO
 
-- [ ] TODO 1：按声明身份重构 extern 注册和查找。
+- [ ] TODO 1：补齐正式规范。
+  - [ ] 在 `docs/feng-interop.md` 中定义 `@cdecl`、`@stdcall` 和 `@fastcall` 的
+    可选固定参数个数。
+  - [ ] 明确参数形式、有效范围、C 原型含义及跨包保持要求。
+  - [ ] 本文只保留实现说明并引用正式规范，不重复定义语言规则。
+
+- [ ] TODO 2：按声明身份重构 extern 注册和查找。
   - [ ] `ExternFn` 分离 Feng 名称、完整生成名、原生符号名、`FengDecl` 和所属
     program。
   - [ ] 复用普通顶层函数的模块和参数签名 mangling；模块取自声明所属 program。
   - [ ] 普通、泛型、同模块和跨模块 extern 调用均按已解析声明定位。
-  - [ ] 补齐编译器用例和必要的 fcts 用例。
+  - [ ] 补齐声明身份、模块命名、重载和泛型 extern 的编译器用例及必要的 fcts
+    用例。
   - [ ] `make test` 全量回归通过。
 
-- [ ] TODO 2：补齐 C variadic 跨包元数据。
+- [ ] TODO 3：补齐 C variadic 跨包元数据。
   - [ ] symbol view、export 和 clone 保存固定参数个数。
   - [ ] `.ft` writer/reader 使用独立 attribute 往返固定参数个数。
   - [ ] imported module 重建调用约定注解的第三个整数参数。
@@ -203,7 +212,7 @@ Feng 调用点 -> wrapper -> 原生符号
   - [ ] 验证本包和跨包生成的 C variadic 原型一致。
   - [ ] `make test` 全量回归通过。
 
-- [ ] TODO 3：生成独立原型并映射原生符号。
+- [ ] TODO 4：生成独立原型并映射原生符号。
   - [ ] 增加统一的平台原生符号映射宏，并注明 Windows/COFF 尚未支持。
   - [ ] 每个普通 C ABI extern 生成独立原型，不再按原生符号名去重或按系统函数
     名跳过。
@@ -211,7 +220,7 @@ Feng 调用点 -> wrapper -> 原生符号
   - [ ] 保持 calling convention、C variadic 和 runtime contract 路径正确。
   - [ ] 验证 Apple 目标引用带下划线的 Mach-O 原生符号。
   - [ ] 验证 ELF 目标引用不带下划线的原生符号。
-  - [ ] 验证默认原生名、显式原生名、系统头文件同名符号和跨包 extern。
+  - [ ] 验证默认原生名、显式原生名、系统头文件同名符号和跨包原生符号别名。
   - [ ] 验证生成代码没有 extern wrapper 和额外运行时调用。
   - [ ] 补齐同一原生符号对应不同指针、标量和返回值签名的编译器用例及 fcts
     用例。
