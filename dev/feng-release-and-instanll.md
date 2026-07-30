@@ -77,7 +77,8 @@ feng-<version>-<platform>/
 │   │   └── libfeng_runtime.a
 │   └── linux-arm64-musl/
 │       └── libfeng_runtime.a
-│  
+├── pkg/                          # 必须：精确版本随附包，可为空
+│   └── <name>-<version>.fb
 ├── toolchain/                    # 必须：精简 LLVM 工具链 + 交叉编译 sysroot
 │   ├── llvm/                     # 同一 LLVM 官方包精简后的统一根目录
 │   │   ├── bin/
@@ -114,8 +115,13 @@ feng-<version>-<platform>/
 - `include/` 仅存放一份平台无关的 Feng 头文件。其中 `feng_generated.h` 为生成 C 提供 SDK-free 编译所需的自包含声明闭包，`feng_runtime.h` 与 `feng_runtime_contract.inc` 定义 runtime 公共 ABI；正常目标的标准和系统头文件仍由目标 SDK / sysroot 提供，不得复制 Apple SDK 头文件。
 - `toolchain/llvm/` 保持 LLVM 官方包布局，所有工具来自同一版本、同一 host 平台包。每份 Linux 分发包只包含当前 host 架构的一份 LLVM，同时支持 GNU 和 musl 目标。
 - `toolchain/sysroot/` 按完整 Linux 目标平台分目录，保留编译和链接所需文件及目录关系，移除 GCC、binutils 和 musl.cc 工具。native 与交叉编译共用 sysroot，调用参数见 [feng-build.md](../docs/feng-build.md)。
+- `pkg/` 存放发行任务准备好的精确版本 `.fb`，文件名固定为
+  `<name>-<version>.fb`。三个 host 分发包使用同一组输入；组装流程只校验并原样复制,
+  不重新构建或修改 `.fb`。随附包的安装来源优先级和 cache 语义统一由
+  [feng-deps.md](../docs/feng-deps.md#1-精确版本包来源) 定义。
 - sysroot 的来源、版本、裁剪和许可信息见 §5.3。禁止复制 host `/usr`。
-- 分发包不包含 Feng 源码、中间产物或构建缓存。
+- 分发包不包含 Feng 源码、中间产物或构建缓存；`pkg/` 中经过校验的随附 `.fb`
+  是正式分发物，不属于构建缓存。
 - `feng` 按自身位置查找 `../lib/`、`../include/` 和 `../toolchain/llvm/bin/`，不使用 `FENG_HOME` 或 `FENG_TOOLCHAIN`。查找顺序见 [feng-build.md](../docs/feng-build.md) 和 [feng-cli.md](../docs/feng-cli.md)。
 
 ## 5 toolchain 形态
@@ -193,9 +199,12 @@ LSP / DAP 行为由第 4 步 `make test` 中的原生用例验证，干净安装
 1. 等待并下载三份原生构件到同一构件根目录，不执行任何跨 host 编译
 2. 校验每组 `SHA256SUMS`、三个 host 的 Feng 可执行文件格式和 CPU 架构、五份 runtime 的对象格式和 CPU 架构、runtime 平台集合完整且没有重复，并校验三组公共头文件内容一致
 3. 针对每个 host 平台选择对应 `feng` 与 `toolchain/llvm/<host-platform>/`
-4. 将五份 runtime、四份 Linux sysroot、公共头文件及 `VERSION` 放入每一份分发目录
-5. 执行 `scripts/release_assemble.sh` 的纯组装与校验入口，生成三份规范命名的 zip
-6. 上传到 GitHub Release 对应 tag
+4. 校验发行任务准备的随附包均可作为 `.fb` 打开，且包内名称和版本与文件名坐标
+   一致
+5. 将同一组随附包、五份 runtime、四份 Linux sysroot、公共头文件及 `VERSION`
+   放入每一份分发目录
+6. 执行 `scripts/release_assemble.sh` 的纯组装与校验入口，生成三份规范命名的 zip
+7. 上传到 GitHub Release 对应 tag
 
 toolchain 精简产物在**本地维护**：开发者使用 LLVM、musl 与 GNU sysroot 的 fetch / trim / build 维护脚本产出各平台精简结果，提交到仓库（git lfs）。CI 只需 checkout 后从仓库目录复制，不做任何精简。这样 CI 构建步骤简、快，且不依赖上游下载站点在发布时可达。
 
@@ -355,6 +364,9 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [x] `.github/workflows/release.yml`：所有分支 push 和 pull request 均在三个发行平台构建 Feng 编译器和对应 runtime 并运行 `make test`；版本 tag 创建与手动试发在全部构建和测试成功后，通过 `scripts/release_component.sh` 校验并上传三组固定结构的原生构件，再调用 `scripts/release_assemble.sh`。版本 tag 创建后，正式发布任务通过独立 shell 创建或更新同名 GitHub Release；手动试发只上传 workflow artifact。工作流自身只保留环境和任务声明，主要逻辑不以内联 shell 实现。
 - [x] `scripts/release_component.sh`、`scripts/release_assemble.sh`、`scripts/release_verify_install.sh` 统一使用 `release_` 前缀并可独立执行；版本解析、构件归档与解包、安装验收编排及 GitHub Release 发布也由可本机回归的 `release_` 前缀 shell 提供。
 - [x] `scripts/release_assemble.sh`：按 §6.3 的构件结构汇总三组构件，校验构件摘要、三个 Feng 可执行文件、五份 runtime 和公共头文件，在临时目录完整生成并校验三个发行包后再移入输出目录。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
+- [x] `scripts/release_assemble.sh`：接收通用随附包目录，校验所有 `.fb` 的包名、版本
+  与文件坐标，将同一组包原样复制到三个发行包的顶层 `pkg/`；没有随附包输入时仍
+  创建空 `pkg/`。
 - [x] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载并校验对应发行包，原子完成安装和 `PATH` 配置；失败时回滚已有安装且不留半成品。
 - [x] 新增可独立执行的发行与安装脚本回归测试，覆盖正常汇聚、输入校验失败、安装成功、重复安装和失败回滚，并纳入 `make test`。
 - [x] 新增可独立执行的干净安装验收脚本，按 §6.3 验证版本、完整目录、平台构件、bundled LLVM 以及项目 `build` / `run`；CI 在对应原生 runner 解压各自发行包后执行。

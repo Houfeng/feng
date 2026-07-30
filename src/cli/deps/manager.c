@@ -48,6 +48,20 @@ typedef struct ResolveState {
     size_t node_count;
 } ResolveState;
 
+/* Describe whether one package source produced a candidate bundle. */
+typedef enum PackageSourceResult {
+    PACKAGE_SOURCE_FOUND = 0,
+    PACKAGE_SOURCE_ABSENT,
+    PACKAGE_SOURCE_ERROR
+} PackageSourceResult;
+
+/* Describe whether curl downloaded a package or observed an HTTP absence. */
+typedef enum CurlDownloadResult {
+    CURL_DOWNLOAD_FOUND = 0,
+    CURL_DOWNLOAD_ABSENT,
+    CURL_DOWNLOAD_ERROR
+} CurlDownloadResult;
+
 static char *dup_n(const char *text, size_t length) {
     char *out = (char *)malloc(length + 1U);
 
@@ -959,23 +973,30 @@ static bool read_bundle_manifest(const char *bundle_path,
     return ok;
 }
 
-static bool download_with_curl(const char *url,
-                               const char *dest_path,
-                               char **out_reason) {
+/*
+ * Download one registry candidate and distinguish an HTTP 404 from transport
+ * or server failures so only a definite absence can use the fallback source.
+ */
+static CurlDownloadResult download_with_curl(const char *url,
+                                             const char *dest_path,
+                                             char **out_reason) {
     int pipe_fds[2] = {-1, -1};
     pid_t child;
     int status = 0;
     char buffer[512];
-    char *stderr_text = NULL;
-    size_t stderr_length = 0U;
+    char *output_text = NULL;
+    size_t output_length = 0U;
     ssize_t read_size;
     int read_errno = 0;
+    const char *status_marker = "FENG_HTTP_STATUS:";
+    char *marker_position = NULL;
+    long http_status = 0L;
 
     *out_reason = NULL;
 
     if (pipe(pipe_fds) != 0) {
-        *out_reason = dup_printf("failed to create curl stderr pipe: %s", strerror(errno));
-        return false;
+        *out_reason = dup_printf("failed to create curl output pipe: %s", strerror(errno));
+        return CURL_DOWNLOAD_ERROR;
     }
 
     child = fork();
@@ -983,72 +1004,111 @@ static bool download_with_curl(const char *url,
         close(pipe_fds[0]);
         close(pipe_fds[1]);
         *out_reason = dup_printf("failed to fork curl: %s", strerror(errno));
-        return false;
+        return CURL_DOWNLOAD_ERROR;
     }
     if (child == 0) {
         close(pipe_fds[0]);
-        if (dup2(pipe_fds[1], STDERR_FILENO) < 0) {
+        if (dup2(pipe_fds[1], STDOUT_FILENO) < 0 ||
+            dup2(pipe_fds[1], STDERR_FILENO) < 0) {
             _exit(127);
         }
         close(pipe_fds[1]);
-        execlp("curl", "curl", "-fsSL", "-o", dest_path, url, (char *)NULL);
+        execlp("curl",
+               "curl",
+               "-sS",
+               "-L",
+               "--fail",
+               "--write-out",
+               "\nFENG_HTTP_STATUS:%{http_code}\n",
+               "-o",
+               dest_path,
+               url,
+               (char *)NULL);
         _exit(127);
     }
     close(pipe_fds[1]);
 
     while ((read_size = read(pipe_fds[0], buffer, sizeof(buffer))) > 0) {
-        char *resized = (char *)realloc(stderr_text, stderr_length + (size_t)read_size + 1U);
+        char *resized;
 
-        if (resized == NULL) {
-            free(stderr_text);
-            stderr_text = NULL;
-            stderr_length = 0U;
-            read_errno = ENOMEM;
-            break;
+        if (read_errno == ENOMEM) {
+            continue;
         }
-        stderr_text = resized;
-        memcpy(stderr_text + stderr_length, buffer, (size_t)read_size);
-        stderr_length += (size_t)read_size;
-        stderr_text[stderr_length] = '\0';
+        resized = (char *)realloc(output_text, output_length + (size_t)read_size + 1U);
+        if (resized == NULL) {
+            free(output_text);
+            output_text = NULL;
+            output_length = 0U;
+            read_errno = ENOMEM;
+            continue;
+        }
+        output_text = resized;
+        memcpy(output_text + output_length, buffer, (size_t)read_size);
+        output_length += (size_t)read_size;
+        output_text[output_length] = '\0';
     }
-    if (read_size < 0) {
+    if (read_size < 0 && read_errno == 0) {
         read_errno = errno;
     }
     close(pipe_fds[0]);
 
     if (waitpid(child, &status, 0) < 0) {
-        free(stderr_text);
+        free(output_text);
         *out_reason = dup_printf("failed to wait for curl: %s", strerror(errno));
-        return false;
+        return CURL_DOWNLOAD_ERROR;
     }
     if (read_errno != 0) {
-        free(stderr_text);
+        free(output_text);
         *out_reason = dup_printf("failed to read curl stderr: %s",
                                  read_errno == ENOMEM ? "out of memory" : strerror(read_errno));
-        return false;
+        return CURL_DOWNLOAD_ERROR;
+    }
+
+    if (output_text != NULL) {
+        char *cursor = output_text;
+
+        while ((cursor = strstr(cursor, status_marker)) != NULL) {
+            marker_position = cursor;
+            cursor += strlen(status_marker);
+        }
+        if (marker_position != NULL) {
+            char *status_text = marker_position + strlen(status_marker);
+            char *status_end = NULL;
+
+            errno = 0;
+            http_status = strtol(status_text, &status_end, 10);
+            if (errno != 0 || status_end == status_text) {
+                http_status = 0L;
+            }
+            *marker_position = '\0';
+            trim_trailing_ascii_whitespace(output_text);
+        }
+    }
+
+    if (http_status == 404L) {
+        free(output_text);
+        *out_reason = dup_cstr("HTTP 404");
+        return CURL_DOWNLOAD_ABSENT;
     }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
-        if (stderr_text != NULL) {
-            trim_trailing_ascii_whitespace(stderr_text);
+        if (output_text != NULL && output_text[0] != '\0') {
+            *out_reason = output_text;
+            return CURL_DOWNLOAD_ERROR;
         }
-        if (stderr_text != NULL && stderr_text[0] != '\0') {
-            *out_reason = stderr_text;
-            return false;
-        }
-        free(stderr_text);
+        free(output_text);
         if (!WIFEXITED(status)) {
             *out_reason = dup_cstr("curl terminated unexpectedly");
-            return false;
+            return CURL_DOWNLOAD_ERROR;
         }
         if (WEXITSTATUS(status) == 127) {
             *out_reason = dup_cstr("curl is not available");
-            return false;
+            return CURL_DOWNLOAD_ERROR;
         }
         *out_reason = dup_printf("curl exited with status %d", WEXITSTATUS(status));
-        return false;
+        return CURL_DOWNLOAD_ERROR;
     }
-    free(stderr_text);
-    return true;
+    free(output_text);
+    return CURL_DOWNLOAD_FOUND;
 }
 
 static bool validate_remote_bundle(const char *bundle_path,
@@ -1102,6 +1162,212 @@ static bool validate_remote_bundle(const char *bundle_path,
     return true;
 }
 
+/*
+ * Copy and validate one filesystem package candidate into the cache staging
+ * file. Missing paths are reported separately from all other source errors.
+ */
+static PackageSourceResult install_filesystem_candidate(const char *source_path,
+                                                        const char *temp_path,
+                                                        const char *origin_path,
+                                                        unsigned int origin_line,
+                                                        const char *name,
+                                                        const char *version,
+                                                        FengCliProjectError *error) {
+    struct stat status;
+    FengCliProjectError copy_error = {0};
+
+    if (stat(source_path, &status) != 0) {
+        if (errno == ENOENT || errno == ENOTDIR) {
+            return PACKAGE_SOURCE_ABSENT;
+        }
+        set_remote_install_errorf(error,
+                                  origin_path,
+                                  origin_line,
+                                  name,
+                                  version,
+                                  "from %s: failed to inspect package: %s",
+                                  source_path,
+                                  strerror(errno));
+        return PACKAGE_SOURCE_ERROR;
+    }
+    if (!S_ISREG(status.st_mode)) {
+        set_remote_install_errorf(error,
+                                  origin_path,
+                                  origin_line,
+                                  name,
+                                  version,
+                                  "from %s: package candidate is not a regular file",
+                                  source_path);
+        return PACKAGE_SOURCE_ERROR;
+    }
+    if (!copy_file(source_path, temp_path, &copy_error)) {
+        set_remote_install_errorf(error,
+                                  origin_path,
+                                  origin_line,
+                                  name,
+                                  version,
+                                  "from %s: %s",
+                                  source_path,
+                                  copy_error.message != NULL ? copy_error.message
+                                                             : "failed to copy package");
+        feng_cli_project_error_dispose(&copy_error);
+        return PACKAGE_SOURCE_ERROR;
+    }
+    feng_cli_project_error_dispose(&copy_error);
+    if (!validate_remote_bundle(temp_path,
+                                origin_path,
+                                origin_line,
+                                name,
+                                version,
+                                source_path,
+                                error)) {
+        return PACKAGE_SOURCE_ERROR;
+    }
+    return PACKAGE_SOURCE_FOUND;
+}
+
+/*
+ * Try the configured registry and return the exact checked location for a
+ * later combined not-found diagnostic.
+ */
+static PackageSourceResult install_registry_candidate(const char *registry,
+                                                      const char *bundle_name,
+                                                      const char *temp_path,
+                                                      const char *origin_path,
+                                                      unsigned int origin_line,
+                                                      const char *name,
+                                                      const char *version,
+                                                      char **out_location,
+                                                      char **out_absent_reason,
+                                                      FengCliProjectError *error) {
+    *out_location = NULL;
+    *out_absent_reason = NULL;
+
+    if (strncmp(registry, "http://", 7U) == 0 ||
+        strncmp(registry, "https://", 8U) == 0) {
+        CurlDownloadResult download_result;
+        char *download_reason = NULL;
+
+        *out_location = dup_printf("%s%s/packages/%s",
+                                   registry,
+                                   registry[strlen(registry) - 1U] == '/' ? "" : "/",
+                                   bundle_name);
+        if (*out_location == NULL) {
+            set_remote_install_internal_errorf(error, name, version, "out of memory");
+            return PACKAGE_SOURCE_ERROR;
+        }
+        download_result = download_with_curl(*out_location, temp_path, &download_reason);
+        if (download_result == CURL_DOWNLOAD_ABSENT) {
+            *out_absent_reason = download_reason;
+            return PACKAGE_SOURCE_ABSENT;
+        }
+        if (download_result == CURL_DOWNLOAD_ERROR) {
+            set_remote_install_errorf(error,
+                                      origin_path,
+                                      origin_line,
+                                      name,
+                                      version,
+                                      "from %s: %s",
+                                      *out_location,
+                                      download_reason != NULL ? download_reason
+                                                              : "download failed");
+            free(download_reason);
+            return PACKAGE_SOURCE_ERROR;
+        }
+        free(download_reason);
+        if (!validate_remote_bundle(temp_path,
+                                    origin_path,
+                                    origin_line,
+                                    name,
+                                    version,
+                                    *out_location,
+                                    error)) {
+            return PACKAGE_SOURCE_ERROR;
+        }
+        return PACKAGE_SOURCE_FOUND;
+    }
+
+    {
+        char *packages_dir = path_join(registry, "packages");
+        PackageSourceResult result;
+
+        if (packages_dir == NULL) {
+            set_remote_install_internal_errorf(error, name, version, "out of memory");
+            return PACKAGE_SOURCE_ERROR;
+        }
+        *out_location = path_join(packages_dir, bundle_name);
+        free(packages_dir);
+        if (*out_location == NULL) {
+            set_remote_install_internal_errorf(error, name, version, "out of memory");
+            return PACKAGE_SOURCE_ERROR;
+        }
+        result = install_filesystem_candidate(*out_location,
+                                              temp_path,
+                                              origin_path,
+                                              origin_line,
+                                              name,
+                                              version,
+                                              error);
+        if (result == PACKAGE_SOURCE_ABSENT) {
+            *out_absent_reason = dup_cstr(strerror(ENOENT));
+            if (*out_absent_reason == NULL) {
+                set_remote_install_internal_errorf(error, name, version, "out of memory");
+                return PACKAGE_SOURCE_ERROR;
+            }
+        }
+        return result;
+    }
+}
+
+/*
+ * Resolve and try the package shipped next to the Feng installation. The
+ * resolver is shared with all other install-relative toolchain lookups.
+ */
+static PackageSourceResult install_bundled_candidate(ResolveState *state,
+                                                     const char *bundle_name,
+                                                     const char *temp_path,
+                                                     const char *origin_path,
+                                                     unsigned int origin_line,
+                                                     const char *name,
+                                                     const char *version,
+                                                     char **out_location,
+                                                     FengCliProjectError *error) {
+    char *relative_path;
+    char *resolve_error = NULL;
+    PackageSourceResult result;
+
+    *out_location = NULL;
+    relative_path = dup_printf("pkg/%s", bundle_name);
+    if (relative_path == NULL) {
+        set_remote_install_internal_errorf(error, name, version, "out of memory");
+        return PACKAGE_SOURCE_ERROR;
+    }
+    *out_location = feng_cli_resolve_install_path(state->program,
+                                                  relative_path,
+                                                  &resolve_error);
+    free(relative_path);
+    if (*out_location == NULL) {
+        set_remote_install_errorf(error,
+                                  origin_path,
+                                  origin_line,
+                                  name,
+                                  version,
+                                  "failed to resolve bundled package path: %s",
+                                  resolve_error != NULL ? resolve_error : "unknown error");
+        free(resolve_error);
+        return PACKAGE_SOURCE_ERROR;
+    }
+    free(resolve_error);
+    result = install_filesystem_candidate(*out_location,
+                                          temp_path,
+                                          origin_path,
+                                          origin_line,
+                                          name,
+                                          version,
+                                          error);
+    return result;
+}
+
 static bool ensure_remote_bundle_cached(ResolveState *state,
                                         const char *registry,
                                         const char *name,
@@ -1113,6 +1379,12 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
     char *cache_root;
     char *bundle_name;
     char *bundle_path;
+    char *temp_path = NULL;
+    char *registry_location = NULL;
+    char *registry_absent_reason = NULL;
+    char *bundled_location = NULL;
+    PackageSourceResult source_result = PACKAGE_SOURCE_ABSENT;
+    int temp_fd;
 
     if (!get_cache_root(state, error, &cache_root)) {
         return false;
@@ -1132,8 +1404,8 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
         return set_remote_install_internal_errorf(error, name, version, "out of memory");
     }
     bundle_path = path_join(cache_root, bundle_name);
-    free(bundle_name);
     if (bundle_path == NULL) {
+        free(bundle_name);
         return set_remote_install_internal_errorf(error, name, version, "out of memory");
     }
 
@@ -1145,150 +1417,120 @@ static bool ensure_remote_bundle_cached(ResolveState *state,
                                    version,
                                    "cached bundle",
                                    error)) {
+            free(bundle_name);
             *out_bundle_path = bundle_path;
             return true;
-        }
-        if (registry == NULL) {
-            free(bundle_path);
-            return false;
         }
         feng_cli_project_error_dispose(error);
     }
 
-    if (registry == NULL) {
+    temp_path = dup_printf("%s.tmp.XXXXXX", bundle_path);
+    if (temp_path == NULL) {
+        free(bundle_name);
         free(bundle_path);
-        return set_remote_install_errorf(error,
-                                         origin_path,
-                                         origin_line,
-                                         name,
-                                         version,
-                                         "no configured registry available");
+        return set_remote_install_internal_errorf(error, name, version, "out of memory");
     }
-
-    {
-        char *temp_path = dup_printf("%s.tmp.XXXXXX", bundle_path);
-        int temp_fd;
-
-        if (temp_path == NULL) {
-            free(bundle_path);
-            return set_remote_install_internal_errorf(error, name, version, "out of memory");
-        }
-        temp_fd = mkstemp(temp_path);
-        if (temp_fd < 0) {
-            free(temp_path);
-            free(bundle_path);
-            return set_remote_install_internal_errorf(error,
-                                                      name,
-                                                      version,
-                                                      "failed to create temporary cache file: %s",
-                                                      strerror(errno));
-        }
-        close(temp_fd);
-
-        if (strncmp(registry, "http://", 7U) == 0 || strncmp(registry, "https://", 8U) == 0) {
-            char *url = dup_printf("%s%s/packages/%s-%s.fb",
-                                   registry,
-                                   registry[strlen(registry) - 1U] == '/' ? "" : "/",
-                                   name,
-                                   version);
-            char *download_reason = NULL;
-
-            if (url == NULL) {
-                unlink(temp_path);
-                free(temp_path);
-                free(bundle_path);
-                return set_remote_install_internal_errorf(error, name, version, "out of memory");
-            }
-            if (!download_with_curl(url, temp_path, &download_reason)) {
-                bool ok = set_remote_install_errorf(error,
-                                                    origin_path,
-                                                    origin_line,
-                                                    name,
-                                                    version,
-                                                    "from %s: %s",
-                                                    url,
-                                                    download_reason != NULL ? download_reason
-                                                                            : "download failed");
-                free(download_reason);
-                free(url);
-                unlink(temp_path);
-                free(temp_path);
-                free(bundle_path);
-                return ok;
-            }
-            free(url);
-        } else {
-            char *packages_dir = path_join(registry, "packages");
-            char *source_name = dup_printf("%s-%s.fb", name, version);
-            char *source_path;
-
-            if (packages_dir == NULL || source_name == NULL) {
-                free(source_name);
-                free(packages_dir);
-                unlink(temp_path);
-                free(temp_path);
-                free(bundle_path);
-                return set_remote_install_internal_errorf(error, name, version, "out of memory");
-            }
-            source_path = path_join(packages_dir, source_name);
-            free(source_name);
-            free(packages_dir);
-            if (source_path == NULL) {
-                unlink(temp_path);
-                free(temp_path);
-                free(bundle_path);
-                return set_remote_install_internal_errorf(error, name, version, "out of memory");
-            }
-            {
-                FengCliProjectError copy_error = {0};
-
-                if (!copy_file(source_path, temp_path, &copy_error)) {
-                    bool ok = set_remote_install_errorf(error,
-                                                        origin_path,
-                                                        origin_line,
-                                                        name,
-                                                        version,
-                                                        "from %s: %s",
-                                                        source_path,
-                                                        copy_error.message != NULL
-                                                            ? copy_error.message
-                                                            : "download failed");
-                    feng_cli_project_error_dispose(&copy_error);
-                    free(source_path);
-                    unlink(temp_path);
-                    free(temp_path);
-                    free(bundle_path);
-                    return ok;
-                }
-                feng_cli_project_error_dispose(&copy_error);
-            }
-            free(source_path);
-        }
-
-        if (rename(temp_path, bundle_path) != 0) {
-            unlink(temp_path);
-            free(temp_path);
-            free(bundle_path);
-            return set_remote_install_internal_errorf(error,
-                                                      name,
-                                                      version,
-                                                      "failed to publish cached bundle: %s",
-                                                      strerror(errno));
-        }
+    temp_fd = mkstemp(temp_path);
+    if (temp_fd < 0) {
         free(temp_path);
+        free(bundle_name);
+        free(bundle_path);
+        return set_remote_install_internal_errorf(error,
+                                                  name,
+                                                  version,
+                                                  "failed to create temporary cache file: %s",
+                                                  strerror(errno));
     }
+    close(temp_fd);
 
-    if (!validate_remote_bundle(bundle_path,
-                                origin_path,
-                                origin_line,
-                                name,
-                                version,
-                                "downloaded bundle",
-                                error)) {
-        unlink(bundle_path);
+    if (registry != NULL) {
+        source_result = install_registry_candidate(registry,
+                                                   bundle_name,
+                                                   temp_path,
+                                                   origin_path,
+                                                   origin_line,
+                                                   name,
+                                                   version,
+                                                   &registry_location,
+                                                   &registry_absent_reason,
+                                                   error);
+    }
+    if (source_result == PACKAGE_SOURCE_ABSENT) {
+        source_result = install_bundled_candidate(state,
+                                                  bundle_name,
+                                                  temp_path,
+                                                  origin_path,
+                                                  origin_line,
+                                                  name,
+                                                  version,
+                                                  &bundled_location,
+                                                  error);
+    }
+    if (source_result == PACKAGE_SOURCE_ERROR) {
+        free(bundled_location);
+        free(registry_absent_reason);
+        free(registry_location);
+        unlink(temp_path);
+        free(temp_path);
+        free(bundle_name);
         free(bundle_path);
         return false;
     }
+    if (source_result == PACKAGE_SOURCE_ABSENT) {
+        bool ok;
+
+        if (registry != NULL) {
+            ok = set_remote_install_errorf(error,
+                                           origin_path,
+                                           origin_line,
+                                           name,
+                                           version,
+                                           "package not found; registry candidate %s: %s; bundled package candidate %s: %s",
+                                           registry_location,
+                                           registry_absent_reason != NULL
+                                               ? registry_absent_reason
+                                               : "not found",
+                                           bundled_location,
+                                           strerror(ENOENT));
+        } else {
+            ok = set_remote_install_errorf(error,
+                                           origin_path,
+                                           origin_line,
+                                           name,
+                                           version,
+                                           "package not found; no configured registry available; bundled package candidate %s: %s",
+                                           bundled_location,
+                                           strerror(ENOENT));
+        }
+        free(bundled_location);
+        free(registry_absent_reason);
+        free(registry_location);
+        unlink(temp_path);
+        free(temp_path);
+        free(bundle_name);
+        free(bundle_path);
+        return ok;
+    }
+
+    if (rename(temp_path, bundle_path) != 0) {
+        free(bundled_location);
+        free(registry_absent_reason);
+        free(registry_location);
+        unlink(temp_path);
+        free(temp_path);
+        free(bundle_name);
+        free(bundle_path);
+        return set_remote_install_internal_errorf(error,
+                                                  name,
+                                                  version,
+                                                  "failed to publish cached bundle: %s",
+                                                  strerror(errno));
+    }
+    free(bundled_location);
+    free(registry_absent_reason);
+    free(registry_location);
+    free(temp_path);
+    free(bundle_name);
     *out_bundle_path = bundle_path;
     return true;
 }

@@ -6,6 +6,7 @@ DEFAULT_SOURCE_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 SOURCE_ROOT="${DEFAULT_SOURCE_ROOT}"
 COMPONENTS_ROOT=""
 COMPONENT_ARCHIVES_ROOT=""
+BUNDLED_PACKAGES_ROOT=""
 OUTPUT_ROOT=""
 VERSION=""
 WORK_ROOT=""
@@ -44,6 +45,7 @@ Usage:
     --version=<version> \
     (--components=<component-root> | --component-archives=<archive-root>) \
     --output=<output-dir> \
+    [--packages=<bundled-package-dir>] \
     [--source-root=<repository-root>] \
     [--archive-tool=<ar-or-llvm-ar>]
 
@@ -51,6 +53,9 @@ The component root must contain macos-arm64/, linux-x64-gnu/, and
 linux-arm64-gnu/ in the layout defined by the release specification.
 The archive root must contain one release-component-<platform>.tar for
 each of those platforms; this script validates and extracts the archives.
+The optional package directory may contain only top-level
+<name>-<version>.fb files. Every distribution receives the same validated
+package set, and omitting the option produces an empty top-level pkg/.
 EOF
 }
 
@@ -316,6 +321,87 @@ verify_linux_sysroots() {
   done
 }
 
+# Read one quoted field from the package section of a bundle manifest.
+package_manifest_value() {
+  local manifest_path="$1"
+  local field_name="$2"
+
+  awk -v wanted="${field_name}" '
+    function trim(value) {
+      sub(/^[[:space:]]+/, "", value)
+      sub(/[[:space:]]+$/, "", value)
+      return value
+    }
+    /^[[:space:]]*\[package\][[:space:]]*$/ {
+      in_package = 1
+      next
+    }
+    /^[[:space:]]*\[/ {
+      if (in_package) {
+        exit
+      }
+    }
+    in_package {
+      separator = index($0, ":")
+      if (separator == 0) {
+        next
+      }
+      key = trim(substr($0, 1, separator - 1))
+      value = trim(substr($0, separator + 1))
+      if (key == wanted && value ~ /^"[^"]+"$/) {
+        print substr(value, 2, length(value) - 2)
+      }
+    }
+  ' "${manifest_path}"
+}
+
+# Validate every optional bundled package and its filename coordinate.
+verify_bundled_packages() {
+  local unexpected_entry
+  local package_path
+  local package_name
+  local manifest_path="${WORK_ROOT}/bundled-package.feng.fm"
+  local manifest_name
+  local manifest_version
+  local expected_name
+
+  [[ -n "${BUNDLED_PACKAGES_ROOT}" ]] || return 0
+  require_dir "${BUNDLED_PACKAGES_ROOT}"
+  unexpected_entry="$(
+    find "${BUNDLED_PACKAGES_ROOT}" \
+      -mindepth 1 -maxdepth 1 ! -type f -print -quit
+  )"
+  [[ -z "${unexpected_entry}" ]] ||
+    die "bundled package directory contains a non-file entry: ${unexpected_entry}"
+
+  while IFS= read -r package_path; do
+    [[ -n "${package_path}" ]] || continue
+    case "${package_path}" in
+      *.fb) ;;
+      *) die "bundled package directory contains a non-.fb file: ${package_path}" ;;
+    esac
+    unzip -tqq "${package_path}" >/dev/null ||
+      die "bundled package is not a readable .fb archive: ${package_path}"
+    [[ "$(unzip -Z1 "${package_path}" | grep -c '^feng\.fm$')" == "1" ]] ||
+      die "bundled package must contain exactly one top-level feng.fm: ${package_path}"
+    unzip -p "${package_path}" feng.fm > "${manifest_path}" ||
+      die "failed to read bundled package manifest: ${package_path}"
+    manifest_name="$(package_manifest_value "${manifest_path}" "name")"
+    manifest_version="$(package_manifest_value "${manifest_path}" "version")"
+    [[ -n "${manifest_name}" && "${manifest_name}" != *$'\n'* ]] ||
+      die "bundled package manifest must contain one package name: ${package_path}"
+    [[ -n "${manifest_version}" && "${manifest_version}" != *$'\n'* ]] ||
+      die "bundled package manifest must contain one package version: ${package_path}"
+    package_name="${package_path##*/}"
+    expected_name="${manifest_name}-${manifest_version}.fb"
+    [[ "${package_name}" == "${expected_name}" ]] ||
+      die "bundled package filename coordinate mismatch: expected ${expected_name}, found ${package_name}"
+  done < <(
+    find "${BUNDLED_PACKAGES_ROOT}" \
+      -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort
+  )
+}
+
 # Copy one directory tree while preserving symbolic links and file modes.
 copy_tree() {
   local source_dir="$1"
@@ -378,6 +464,7 @@ assemble_distribution() {
     "${package_root}/bin" \
     "${package_root}/include" \
     "${package_root}/lib" \
+    "${package_root}/pkg" \
     "${package_root}/toolchain"
   cp "${component_root}/bin/feng" "${package_root}/bin/feng"
   chmod 0755 "${package_root}/bin/feng"
@@ -399,6 +486,9 @@ assemble_distribution() {
   copy_tree \
     "${SOURCE_ROOT}/toolchain/sysroot" \
     "${package_root}/toolchain/sysroot"
+  if [[ -n "${BUNDLED_PACKAGES_ROOT}" ]]; then
+    copy_tree "${BUNDLED_PACKAGES_ROOT}" "${package_root}/pkg"
+  fi
   printf '%s\n' "${VERSION}" > "${package_root}/VERSION"
 
   [[ "$(find "${package_root}/lib" -type f -name 'libfeng_runtime.a' | wc -l | tr -d ' ')" == "5" ]] ||
@@ -442,6 +532,11 @@ while [[ "$#" -gt 0 ]]; do
       [[ -z "${OUTPUT_ROOT}" ]] || die "--output may only be specified once"
       OUTPUT_ROOT="${1#--output=}"
       ;;
+    --packages=*)
+      [[ -z "${BUNDLED_PACKAGES_ROOT}" ]] ||
+        die "--packages may only be specified once"
+      BUNDLED_PACKAGES_ROOT="${1#--packages=}"
+      ;;
     --source-root=*)
       [[ "${SOURCE_ROOT}" == "${DEFAULT_SOURCE_ROOT}" ]] ||
         die "--source-root may only be specified once"
@@ -476,6 +571,8 @@ require_cmd awk
 require_cmd cmp
 require_cmd file
 require_cmd find
+require_cmd grep
+require_cmd unzip
 require_cmd zip
 if [[ -n "${COMPONENT_ARCHIVES_ROOT}" ]]; then
   require_cmd tar
@@ -489,6 +586,10 @@ require_file "${SOURCE_ROOT}/VERSION"
 mkdir -p "${OUTPUT_ROOT}"
 SOURCE_ROOT="$(cd "${SOURCE_ROOT}" && pwd)"
 OUTPUT_ROOT="$(cd "${OUTPUT_ROOT}" && pwd)"
+if [[ -n "${BUNDLED_PACKAGES_ROOT}" ]]; then
+  require_dir "${BUNDLED_PACKAGES_ROOT}"
+  BUNDLED_PACKAGES_ROOT="$(cd "${BUNDLED_PACKAGES_ROOT}" && pwd)"
+fi
 WORK_ROOT="$(mktemp -d "${OUTPUT_ROOT}/.feng-release.XXXXXX")"
 mkdir -p "${WORK_ROOT}/archives" "${WORK_ROOT}/packages"
 if [[ -n "${COMPONENT_ARCHIVES_ROOT}" ]]; then
@@ -509,6 +610,7 @@ for host_platform in "${HOST_PLATFORMS[@]}"; do
 done
 verify_public_headers
 verify_linux_sysroots
+verify_bundled_packages
 
 for host_platform in "${HOST_PLATFORMS[@]}"; do
   final_archive="${OUTPUT_ROOT}/feng-${VERSION}-${host_platform}.zip"

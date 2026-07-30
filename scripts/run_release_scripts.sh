@@ -201,6 +201,27 @@ create_source_root() {
   done
 }
 
+# Create one generic bundled-package input for release assembly regression.
+create_bundled_packages() {
+  local packages_root="$1"
+  local staging_root="${WORK_ROOT}/bundled-package-staging"
+
+  mkdir -p "${packages_root}" "${staging_root}"
+  printf '%s\n' \
+    '[package]' \
+    'name: "release_fixture_pkg"' \
+    'version: "1.2.3"' \
+    'platform: "macos-arm64"' \
+    'abi: "feng"' \
+    > "${staging_root}/feng.fm"
+  (
+    cd "${staging_root}"
+    zip -q -X \
+      "${packages_root}/release_fixture_pkg-1.2.3.fb" \
+      feng.fm
+  )
+}
+
 # Create a PATH curl replacement that serves one local release archive.
 create_mock_curl() {
   local mock_path="$1"
@@ -332,6 +353,7 @@ tar -tf "${WORK_ROOT}/release-component-${NATIVE_PLATFORM}.tar" |
 SOURCE_ROOT="${WORK_ROOT}/source-root"
 COMPONENTS_ROOT="${WORK_ROOT}/components"
 COMPONENT_ARCHIVES_ROOT="${WORK_ROOT}/component-archives"
+BUNDLED_PACKAGES_ROOT="${WORK_ROOT}/bundled-packages"
 OUTPUT_ROOT="${WORK_ROOT}/release"
 mkdir -p \
   "${SOURCE_ROOT}" \
@@ -340,6 +362,7 @@ mkdir -p \
   "${OUTPUT_ROOT}"
 create_source_root "${SOURCE_ROOT}"
 create_components "${COMPONENTS_ROOT}"
+create_bundled_packages "${BUNDLED_PACKAGES_ROOT}"
 for host_platform in "${HOST_PLATFORMS[@]}"; do
   tar -cf \
     "${COMPONENT_ARCHIVES_ROOT}/release-component-${host_platform}.tar" \
@@ -349,11 +372,25 @@ done
 "${SCRIPT_DIR}/release_assemble.sh" \
   --version=0.1.0 \
   --component-archives="${COMPONENT_ARCHIVES_ROOT}" \
+  --packages="${BUNDLED_PACKAGES_ROOT}" \
   --output="${OUTPUT_ROOT}" \
   --source-root="${SOURCE_ROOT}" \
   --archive-tool="${PROJECT_ROOT}/build/toolchain/llvm/bin/llvm-ar"
 [[ "$(find "${OUTPUT_ROOT}" -type f -name '*.zip' | wc -l | tr -d ' ')" == "3" ]] ||
   die "release assembly did not create exactly three archives"
+for host_platform in "${HOST_PLATFORMS[@]}"; do
+  package_name="feng-0.1.0-${host_platform}"
+  archive_path="${OUTPUT_ROOT}/${package_name}.zip"
+  unzip -Z1 "${archive_path}" |
+    grep -x "${package_name}/pkg/release_fixture_pkg-1.2.3.fb" >/dev/null ||
+    die "release archive did not contain the validated bundled package: ${archive_path}"
+  cmp -s \
+    <(unzip -p \
+      "${archive_path}" \
+      "${package_name}/pkg/release_fixture_pkg-1.2.3.fb") \
+    "${BUNDLED_PACKAGES_ROOT}/release_fixture_pkg-1.2.3.fb" ||
+    die "release assembly modified the bundled package: ${archive_path}"
+done
 if "${SCRIPT_DIR}/release_assemble.sh" \
   --version=0.1.0.rc.1 \
   --components="${COMPONENTS_ROOT}" \
@@ -362,6 +399,43 @@ if "${SCRIPT_DIR}/release_assemble.sh" \
   --archive-tool="${PROJECT_ROOT}/build/toolchain/llvm/bin/llvm-ar" \
   >/dev/null 2>&1; then
   die "release assembly accepted an invalid prerelease version"
+fi
+
+EMPTY_PACKAGES_OUTPUT="${WORK_ROOT}/empty-bundled-packages-output"
+"${SCRIPT_DIR}/release_assemble.sh" \
+  --version=0.1.0 \
+  --components="${COMPONENTS_ROOT}" \
+  --output="${EMPTY_PACKAGES_OUTPUT}" \
+  --source-root="${SOURCE_ROOT}" \
+  --archive-tool="${PROJECT_ROOT}/build/toolchain/llvm/bin/llvm-ar" \
+  >/dev/null
+for host_platform in "${HOST_PLATFORMS[@]}"; do
+  package_name="feng-0.1.0-${host_platform}"
+  archive_path="${EMPTY_PACKAGES_OUTPUT}/${package_name}.zip"
+  unzip -Z1 "${archive_path}" |
+    grep -x "${package_name}/pkg/" >/dev/null ||
+    die "release archive omitted the empty top-level pkg directory: ${archive_path}"
+  if unzip -Z1 "${archive_path}" |
+    grep "^${package_name}/pkg/.*\\.fb$" >/dev/null; then
+    die "release archive unexpectedly populated pkg without an input: ${archive_path}"
+  fi
+done
+
+BAD_PACKAGES="${WORK_ROOT}/bad-bundled-packages"
+BAD_PACKAGES_OUTPUT="${WORK_ROOT}/bad-bundled-packages-output"
+mkdir -p "${BAD_PACKAGES}"
+cp \
+  "${BUNDLED_PACKAGES_ROOT}/release_fixture_pkg-1.2.3.fb" \
+  "${BAD_PACKAGES}/wrong-coordinate-1.2.3.fb"
+if "${SCRIPT_DIR}/release_assemble.sh" \
+  --version=0.1.0 \
+  --components="${COMPONENTS_ROOT}" \
+  --packages="${BAD_PACKAGES}" \
+  --output="${BAD_PACKAGES_OUTPUT}" \
+  --source-root="${SOURCE_ROOT}" \
+  --archive-tool="${PROJECT_ROOT}/build/toolchain/llvm/bin/llvm-ar" \
+  >/dev/null 2>&1; then
+  die "release assembly accepted a bundled package filename mismatch"
 fi
 
 PACKAGE_NAME="feng-0.1.0-${NATIVE_PLATFORM}"

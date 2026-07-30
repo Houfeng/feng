@@ -14,6 +14,7 @@
 #include "platform/platform.h"
 #include "archive/zip.h"
 #include "cli/cli.h"
+#include "cli/common.h"
 #include "cli/compile/options.h"
 #include "cli/deps/manager.h"
 #include "cli/frontend.h"
@@ -123,6 +124,24 @@ static void write_binary_file(const char *path,
     ASSERT(file != NULL);
     ASSERT(fwrite(bytes, 1U, length, file) == length);
     fclose(file);
+}
+
+/* Copy one binary test fixture without changing its contents. */
+static void copy_file_or_die(const char *source_path, const char *destination_path) {
+    FILE *source = fopen(source_path, "rb");
+    FILE *destination;
+    char buffer[8192];
+    size_t read_size;
+
+    ASSERT(source != NULL);
+    destination = fopen(destination_path, "wb");
+    ASSERT(destination != NULL);
+    while ((read_size = fread(buffer, 1U, sizeof(buffer), source)) > 0U) {
+        ASSERT(fwrite(buffer, 1U, read_size, destination) == read_size);
+    }
+    ASSERT(!ferror(source));
+    ASSERT(fclose(destination) == 0);
+    ASSERT(fclose(source) == 0);
 }
 
 static void write_executable_text_file(const char *path, const char *content) {
@@ -474,6 +493,74 @@ static void write_manifest_only_bundle_or_die(const char *bundle_path,
     ASSERT(feng_zip_writer_finalize(&writer, &error_message));
     free(error_message);
     feng_zip_writer_dispose(&writer);
+}
+
+/* Write a manifest-only package with one marker used to identify its source. */
+static void write_marked_manifest_bundle_or_die(const char *bundle_path,
+                                                const char *manifest_text,
+                                                const char *marker_text) {
+    FengZipWriter writer = {0};
+    char *error_message = NULL;
+
+    ASSERT(feng_zip_writer_open(bundle_path, &writer, &error_message));
+    free(error_message);
+    error_message = NULL;
+    ASSERT(feng_zip_writer_add_bytes(&writer,
+                                     "feng.fm",
+                                     manifest_text,
+                                     strlen(manifest_text),
+                                     FENG_ZIP_COMPRESSION_DEFLATE,
+                                     &error_message));
+    free(error_message);
+    error_message = NULL;
+    ASSERT(feng_zip_writer_add_bytes(&writer,
+                                     "source-marker.txt",
+                                     marker_text,
+                                     strlen(marker_text),
+                                     FENG_ZIP_COMPRESSION_DEFLATE,
+                                     &error_message));
+    free(error_message);
+    error_message = NULL;
+    ASSERT(feng_zip_writer_finalize(&writer, &error_message));
+    free(error_message);
+    feng_zip_writer_dispose(&writer);
+}
+
+/* Assert that one installed package contains the expected source marker. */
+static void assert_bundle_source_marker(const char *bundle_path,
+                                        const char *expected_marker) {
+    FengZipReader reader = {0};
+    char *error_message = NULL;
+    void *marker_bytes = NULL;
+    size_t marker_size = 0U;
+
+    ASSERT(feng_zip_reader_open(bundle_path, &reader, &error_message));
+    free(error_message);
+    error_message = NULL;
+    ASSERT(feng_zip_reader_read(&reader,
+                                "source-marker.txt",
+                                &marker_bytes,
+                                &marker_size,
+                                &error_message));
+    free(error_message);
+    ASSERT(marker_size == strlen(expected_marker));
+    ASSERT(memcmp(marker_bytes, expected_marker, marker_size) == 0);
+    feng_zip_free(marker_bytes);
+    feng_zip_reader_dispose(&reader);
+}
+
+/* Resolve one package path below the running test binary's Feng install root. */
+static char *bundled_package_path(const char *bundle_name) {
+    char *relative_path = dup_printf("pkg/%s", bundle_name);
+    char *error_message = NULL;
+    char *resolved_path = feng_cli_resolve_install_path("feng",
+                                                        relative_path,
+                                                        &error_message);
+
+    free(relative_path);
+    ASSERT(resolved_path != NULL);
+    ASSERT(error_message == NULL);
+    return resolved_path;
 }
 
 static void write_library_bundle_or_die(const char *bundle_path,
@@ -12052,6 +12139,705 @@ static void test_deps_install_force_refreshes_cached_bundle(void) {
     free(project_dir);
 }
 
+/* Verify no-registry installation and recursive dependencies use bundled packages. */
+static void test_deps_install_uses_bundled_packages_recursively(void) {
+    char template_path[] = "temp/feng_cli_deps_bundled_recursive_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *bundled_root;
+    char *bundled_parent;
+    char *bundled_leaf;
+    char *parent_cache;
+    char *leaf_cache;
+    char *saved_home = NULL;
+    char *resolve_error = NULL;
+    char *remove_error = NULL;
+    FengCliProjectError error = {0};
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    manifest_path = path_join(project_dir, "feng.fm");
+    parent_cache = path_join(workspace_dir,
+                             ".feng/cache/bundled_recursive_parent-1.0.0.fb");
+    leaf_cache = path_join(workspace_dir,
+                           ".feng/cache/bundled_recursive_leaf-2.0.0.fb");
+    bundled_root = feng_cli_resolve_install_path("feng", "pkg", &resolve_error);
+    ASSERT(bundled_root != NULL);
+    ASSERT(resolve_error == NULL);
+    bundled_parent = bundled_package_path("bundled_recursive_parent-1.0.0.fb");
+    bundled_leaf = bundled_package_path("bundled_recursive_leaf-2.0.0.fb");
+
+    mkdir_p(project_dir);
+    mkdir_p(bundled_root);
+    ASSERT(unlink(bundled_parent) == 0 || errno == ENOENT);
+    ASSERT(unlink(bundled_leaf) == 0 || errno == ENOENT);
+    write_manifest_only_bundle_or_die(
+        bundled_leaf,
+        "[package]\n"
+        "name: \"bundled_recursive_leaf\"\n"
+        "version: \"2.0.0\"\n"
+        "platform: \"macos-arm64\"\n"
+        "abi: \"feng\"\n");
+    write_manifest_only_bundle_or_die(
+        bundled_parent,
+        "[package]\n"
+        "name: \"bundled_recursive_parent\"\n"
+        "version: \"1.0.0\"\n"
+        "platform: \"macos-arm64\"\n"
+        "abi: \"feng\"\n"
+        "\n"
+        "[dependencies]\n"
+        "bundled_recursive_leaf: \"2.0.0\"\n");
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "bundled_recursive_parent: \"1.0.0\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+    ASSERT(feng_cli_deps_install_for_manifest("feng", manifest_path, false, &error));
+    ASSERT(path_exists(parent_cache));
+    ASSERT(path_exists(leaf_cache));
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+
+    ASSERT(unlink(bundled_parent) == 0);
+    ASSERT(unlink(bundled_leaf) == 0);
+    free(saved_home);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(leaf_cache);
+    free(parent_cache);
+    free(bundled_leaf);
+    free(bundled_parent);
+    free(bundled_root);
+    free(manifest_path);
+    free(project_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
+/* Verify registry precedence and a definite registry miss falling back to pkg/. */
+static void test_deps_install_selects_registry_before_bundled_fallback(void) {
+    char template_path[] = "temp/feng_cli_deps_bundled_precedence_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *registry_dir;
+    char *packages_dir;
+    char *manifest_path;
+    char *registry_preferred;
+    char *bundled_preferred;
+    char *bundled_fallback;
+    char *preferred_cache;
+    char *fallback_cache;
+    char *bundled_root;
+    char *saved_home = NULL;
+    char *resolve_error = NULL;
+    char *remove_error = NULL;
+    FengCliProjectError error = {0};
+    static const char *kPreferredManifest =
+        "[package]\n"
+        "name: \"bundled_precedence_dep\"\n"
+        "version: \"1.0.0\"\n"
+        "platform: \"macos-arm64\"\n"
+        "abi: \"feng\"\n";
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    registry_dir = path_join(workspace_dir, "registry");
+    packages_dir = path_join(registry_dir, "packages");
+    manifest_path = path_join(project_dir, "feng.fm");
+    registry_preferred = path_join(packages_dir,
+                                   "bundled_precedence_dep-1.0.0.fb");
+    bundled_preferred = bundled_package_path("bundled_precedence_dep-1.0.0.fb");
+    bundled_fallback = bundled_package_path("bundled_registry_fallback-2.0.0.fb");
+    preferred_cache = path_join(workspace_dir,
+                                ".feng/cache/bundled_precedence_dep-1.0.0.fb");
+    fallback_cache = path_join(workspace_dir,
+                               ".feng/cache/bundled_registry_fallback-2.0.0.fb");
+    bundled_root = feng_cli_resolve_install_path("feng", "pkg", &resolve_error);
+    ASSERT(bundled_root != NULL);
+    ASSERT(resolve_error == NULL);
+
+    mkdir_p(project_dir);
+    mkdir_p(packages_dir);
+    mkdir_p(bundled_root);
+    ASSERT(unlink(bundled_preferred) == 0 || errno == ENOENT);
+    ASSERT(unlink(bundled_fallback) == 0 || errno == ENOENT);
+    write_marked_manifest_bundle_or_die(registry_preferred,
+                                        kPreferredManifest,
+                                        "registry");
+    write_marked_manifest_bundle_or_die(bundled_preferred,
+                                        kPreferredManifest,
+                                        "bundled");
+    write_marked_manifest_bundle_or_die(
+        bundled_fallback,
+        "[package]\n"
+        "name: \"bundled_registry_fallback\"\n"
+        "version: \"2.0.0\"\n"
+        "platform: \"macos-arm64\"\n"
+        "abi: \"feng\"\n",
+        "fallback");
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "bundled_precedence_dep: \"1.0.0\"\n"
+                    "bundled_registry_fallback: \"2.0.0\"\n"
+                    "\n"
+                    "[registry]\n"
+                    "url: \"../registry\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+    ASSERT(feng_cli_deps_install_for_manifest("feng", manifest_path, false, &error));
+    assert_bundle_source_marker(preferred_cache, "registry");
+    assert_bundle_source_marker(fallback_cache, "fallback");
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+
+    ASSERT(unlink(bundled_preferred) == 0);
+    ASSERT(unlink(bundled_fallback) == 0);
+    free(saved_home);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(bundled_root);
+    free(fallback_cache);
+    free(preferred_cache);
+    free(bundled_fallback);
+    free(bundled_preferred);
+    free(registry_preferred);
+    free(manifest_path);
+    free(packages_dir);
+    free(registry_dir);
+    free(project_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
+/* Verify an HTTP 404 is treated as absence and may use the bundled fallback. */
+static void test_deps_install_http_404_uses_bundled_fallback(void) {
+    char template_path[] = "temp/feng_cli_deps_bundled_http_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *mock_bin_dir;
+    char *mock_curl;
+    char *manifest_path;
+    char *bundled_root;
+    char *bundled_path;
+    char *cache_path;
+    char *saved_home = NULL;
+    char *saved_path = NULL;
+    char *mock_path;
+    char *resolve_error = NULL;
+    char *remove_error = NULL;
+    FengCliProjectError error = {0};
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    mock_bin_dir = path_join(workspace_dir, "mock-bin");
+    mock_curl = path_join(mock_bin_dir, "curl");
+    manifest_path = path_join(project_dir, "feng.fm");
+    bundled_root = feng_cli_resolve_install_path("feng", "pkg", &resolve_error);
+    ASSERT(bundled_root != NULL);
+    ASSERT(resolve_error == NULL);
+    bundled_path = bundled_package_path("bundled_http_fallback-1.0.0.fb");
+    cache_path = path_join(workspace_dir,
+                           ".feng/cache/bundled_http_fallback-1.0.0.fb");
+
+    mkdir_p(project_dir);
+    mkdir_p(mock_bin_dir);
+    mkdir_p(bundled_root);
+    ASSERT(unlink(bundled_path) == 0 || errno == ENOENT);
+    write_executable_text_file(
+        mock_curl,
+        "#!/bin/sh\n"
+        "output=\"\"\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "  if [ \"$1\" = \"-o\" ]; then\n"
+        "    shift\n"
+        "    output=\"$1\"\n"
+        "  fi\n"
+        "  shift\n"
+        "done\n"
+        ": > \"$output\"\n"
+        "printf '\\nFENG_HTTP_STATUS:404\\n'\n"
+        "exit 22\n");
+    write_manifest_only_bundle_or_die(
+        bundled_path,
+        "[package]\n"
+        "name: \"bundled_http_fallback\"\n"
+        "version: \"1.0.0\"\n"
+        "platform: \"macos-arm64\"\n"
+        "abi: \"feng\"\n");
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "bundled_http_fallback: \"1.0.0\"\n"
+                    "\n"
+                    "[registry]\n"
+                    "url: \"https://registry.example/feng\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    if (getenv("PATH") != NULL) {
+        saved_path = dup_cstr(getenv("PATH"));
+    }
+    mock_path = dup_printf("%s:%s",
+                           mock_bin_dir,
+                           saved_path != NULL ? saved_path : "");
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+    ASSERT(setenv("PATH", mock_path, 1) == 0);
+    ASSERT(feng_cli_deps_install_for_manifest("feng", manifest_path, false, &error));
+    ASSERT(path_exists(cache_path));
+    if (saved_path != NULL) {
+        ASSERT(setenv("PATH", saved_path, 1) == 0);
+    } else {
+        ASSERT(unsetenv("PATH") == 0);
+    }
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+
+    ASSERT(unlink(bundled_path) == 0);
+    free(mock_path);
+    free(saved_path);
+    free(saved_home);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(cache_path);
+    free(bundled_path);
+    free(bundled_root);
+    free(manifest_path);
+    free(mock_curl);
+    free(mock_bin_dir);
+    free(project_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
+/* Verify invalid bundled packages never publish and --force refreshes from pkg/. */
+static void test_deps_install_validates_and_force_refreshes_bundled_package(void) {
+    char template_path[] = "temp/feng_cli_deps_bundled_force_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *invalid_bundled;
+    char *force_bundled;
+    char *invalid_cache;
+    char *force_cache;
+    char *cache_root;
+    char *bundled_root;
+    char *saved_home = NULL;
+    char *resolve_error = NULL;
+    char *remove_error = NULL;
+    FengCliProjectError error = {0};
+    static const char *kForceManifest =
+        "[package]\n"
+        "name: \"bundled_force_dep\"\n"
+        "version: \"1.0.0\"\n"
+        "platform: \"macos-arm64\"\n"
+        "abi: \"feng\"\n";
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    manifest_path = path_join(project_dir, "feng.fm");
+    invalid_bundled = bundled_package_path("bundled_invalid_dep-1.0.0.fb");
+    force_bundled = bundled_package_path("bundled_force_dep-1.0.0.fb");
+    invalid_cache = path_join(workspace_dir,
+                              ".feng/cache/bundled_invalid_dep-1.0.0.fb");
+    force_cache = path_join(workspace_dir,
+                            ".feng/cache/bundled_force_dep-1.0.0.fb");
+    cache_root = path_join(workspace_dir, ".feng/cache");
+    bundled_root = feng_cli_resolve_install_path("feng", "pkg", &resolve_error);
+    ASSERT(bundled_root != NULL);
+    ASSERT(resolve_error == NULL);
+
+    mkdir_p(project_dir);
+    mkdir_p(cache_root);
+    mkdir_p(bundled_root);
+    ASSERT(unlink(invalid_bundled) == 0 || errno == ENOENT);
+    ASSERT(unlink(force_bundled) == 0 || errno == ENOENT);
+    write_manifest_only_bundle_or_die(
+        invalid_bundled,
+        "[package]\n"
+        "name: \"other_dep\"\n"
+        "version: \"1.0.0\"\n"
+        "platform: \"macos-arm64\"\n"
+        "abi: \"feng\"\n");
+    write_marked_manifest_bundle_or_die(force_cache, kForceManifest, "cached");
+    write_marked_manifest_bundle_or_die(force_bundled, kForceManifest, "bundled");
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "bundled_invalid_dep: \"1.0.0\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+    ASSERT(!feng_cli_deps_install_for_manifest("feng", manifest_path, false, &error));
+    ASSERT(error.message != NULL);
+    ASSERT(strstr(error.message, "bundled_invalid_dep@1.0.0") != NULL);
+    ASSERT(strstr(error.message, invalid_bundled) != NULL);
+    ASSERT(strstr(error.message, "dependency name mismatch") != NULL);
+    ASSERT(!path_exists(invalid_cache));
+    feng_cli_project_error_dispose(&error);
+
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "bundled_force_dep: \"1.0.0\"\n");
+    ASSERT(feng_cli_deps_install_for_manifest("feng", manifest_path, true, &error));
+    assert_bundle_source_marker(force_cache, "bundled");
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+
+    ASSERT(unlink(invalid_bundled) == 0);
+    ASSERT(unlink(force_bundled) == 0);
+    free(saved_home);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(bundled_root);
+    free(cache_root);
+    free(force_cache);
+    free(invalid_cache);
+    free(force_bundled);
+    free(invalid_bundled);
+    free(manifest_path);
+    free(project_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
+/* Verify local bundle and local project dependencies recurse through pkg/. */
+static void test_deps_install_local_dependencies_use_bundled_transitives(void) {
+    char template_path[] = "temp/feng_cli_deps_bundled_local_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *local_bundle_dir;
+    char *local_project_dir;
+    char *local_project_src;
+    char *manifest_path;
+    char *local_bundle_path;
+    char *local_project_manifest;
+    char *bundled_bundle_dep;
+    char *bundled_project_dep;
+    char *bundle_dep_cache;
+    char *project_dep_cache;
+    char *local_cache;
+    char *local_project_build;
+    char *bundled_root;
+    char *saved_home = NULL;
+    char *resolve_error = NULL;
+    char *remove_error = NULL;
+    FengCliProjectError error = {0};
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    local_bundle_dir = path_join(workspace_dir, "local_bundle");
+    local_project_dir = path_join(workspace_dir, "local_project");
+    local_project_src = path_join(local_project_dir, "src");
+    manifest_path = path_join(project_dir, "feng.fm");
+    local_bundle_path = path_join(local_bundle_dir, "local_bundle.fb");
+    local_project_manifest = path_join(local_project_dir, "feng.fm");
+    bundled_bundle_dep = bundled_package_path("bundled_from_local_bundle-1.0.0.fb");
+    bundled_project_dep = bundled_package_path("bundled_from_local_project-2.0.0.fb");
+    bundle_dep_cache = path_join(workspace_dir,
+                                 ".feng/cache/bundled_from_local_bundle-1.0.0.fb");
+    project_dep_cache = path_join(workspace_dir,
+                                  ".feng/cache/bundled_from_local_project-2.0.0.fb");
+    local_cache = path_join(workspace_dir, ".feng/cache/local_bundle-0.1.0.fb");
+    local_project_build = path_join(local_project_dir, "build");
+    bundled_root = feng_cli_resolve_install_path("feng", "pkg", &resolve_error);
+    ASSERT(bundled_root != NULL);
+    ASSERT(resolve_error == NULL);
+
+    mkdir_p(project_dir);
+    mkdir_p(local_bundle_dir);
+    mkdir_p(local_project_src);
+    mkdir_p(bundled_root);
+    ASSERT(unlink(bundled_bundle_dep) == 0 || errno == ENOENT);
+    ASSERT(unlink(bundled_project_dep) == 0 || errno == ENOENT);
+    write_manifest_only_bundle_or_die(
+        bundled_bundle_dep,
+        "[package]\n"
+        "name: \"bundled_from_local_bundle\"\n"
+        "version: \"1.0.0\"\n"
+        "platform: \"macos-arm64\"\n"
+        "abi: \"feng\"\n");
+    write_manifest_only_bundle_or_die(
+        bundled_project_dep,
+        "[package]\n"
+        "name: \"bundled_from_local_project\"\n"
+        "version: \"2.0.0\"\n"
+        "platform: \"macos-arm64\"\n"
+        "abi: \"feng\"\n");
+    write_manifest_only_bundle_or_die(
+        local_bundle_path,
+        "[package]\n"
+        "name: \"local_bundle\"\n"
+        "version: \"0.1.0\"\n"
+        "platform: \"macos-arm64\"\n"
+        "abi: \"feng\"\n"
+        "\n"
+        "[dependencies]\n"
+        "bundled_from_local_bundle: \"1.0.0\"\n");
+    write_text_file(local_project_manifest,
+                    "[package]\n"
+                    "name: \"local_project\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "bundled_from_local_project: \"2.0.0\"\n");
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "local_bundle: \"../local_bundle/local_bundle.fb\"\n"
+                    "local_project: \"../local_project\"\n");
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+    ASSERT(feng_cli_deps_install_for_manifest("feng", manifest_path, false, &error));
+    ASSERT(path_exists(bundle_dep_cache));
+    ASSERT(path_exists(project_dep_cache));
+    ASSERT(!path_exists(local_cache));
+    ASSERT(!path_exists(local_project_build));
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+
+    ASSERT(unlink(bundled_bundle_dep) == 0);
+    ASSERT(unlink(bundled_project_dep) == 0);
+    free(saved_home);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(bundled_root);
+    free(local_project_build);
+    free(local_cache);
+    free(project_dep_cache);
+    free(bundle_dep_cache);
+    free(bundled_project_dep);
+    free(bundled_bundle_dep);
+    free(local_project_manifest);
+    free(local_bundle_path);
+    free(manifest_path);
+    free(local_project_src);
+    free(local_project_dir);
+    free(local_bundle_dir);
+    free(project_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
+/* Verify independent install and direct build both consume pkg/ through cache. */
+static void test_project_build_installs_bundled_package_into_cache(void) {
+    char template_path[] = "temp/feng_cli_build_bundled_package_XXXXXX";
+    char *workspace_dir;
+    char *library_dir;
+    char *library_src_dir;
+    char *library_manifest;
+    char *library_source;
+    char *packed_bundle;
+    char *project_dir;
+    char *project_src_dir;
+    char *project_manifest;
+    char *project_source;
+    char *project_build_dir;
+    char *binary_path;
+    char *bundled_root;
+    char *bundled_path;
+    char *cache_path;
+    char *saved_home = NULL;
+    char *resolve_error = NULL;
+    char *remove_error = NULL;
+    FengCliDepsResolved resolved = {0};
+    FengCliProjectError error = {0};
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    library_dir = path_join(workspace_dir, "library");
+    library_src_dir = path_join(library_dir, "src");
+    library_manifest = path_join(library_dir, "feng.fm");
+    library_source = path_join(library_src_dir, "lib.ff");
+    packed_bundle = path_join(library_dir,
+                              "build/pkg/bundled_build_dep-1.0.0.fb");
+    project_dir = path_join(workspace_dir, "project");
+    project_src_dir = path_join(project_dir, "src");
+    project_manifest = path_join(project_dir, "feng.fm");
+    project_source = path_join(project_src_dir, "main.ff");
+    project_build_dir = path_join(project_dir, "build");
+    binary_path = project_host_build_path(project_dir, "bin/bundled_build_app");
+    bundled_root = feng_cli_resolve_install_path("feng", "pkg", &resolve_error);
+    ASSERT(bundled_root != NULL);
+    ASSERT(resolve_error == NULL);
+    bundled_path = bundled_package_path("bundled_build_dep-1.0.0.fb");
+    cache_path = path_join(workspace_dir,
+                           ".feng/cache/bundled_build_dep-1.0.0.fb");
+
+    mkdir_p(library_src_dir);
+    mkdir_p(project_src_dir);
+    mkdir_p(bundled_root);
+    ASSERT(unlink(bundled_path) == 0 || errno == ENOENT);
+    write_text_file(library_manifest,
+                    "[package]\n"
+                    "name: \"bundled_build_dep\"\n"
+                    "version: \"1.0.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(library_source,
+                    "open module test.cli.bundledbuilddep;\n"
+                    "open func bundled_value(): int { return 17; }\n");
+    write_text_file(project_manifest,
+                    "[package]\n"
+                    "name: \"bundled_build_app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "bundled_build_dep: \"1.0.0\"\n");
+    write_text_file(project_source,
+                    "module test.cli.bundledbuildapp;\n"
+                    "import test.cli.bundledbuilddep;\n"
+                    "func main(args: string[]) {\n"
+                    "  if bundled_value() == 17 {}\n"
+                    "}\n");
+
+    {
+        char *argv[] = { library_dir };
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    ASSERT(path_exists(packed_bundle));
+    copy_file_or_die(packed_bundle, bundled_path);
+
+    if (getenv("HOME") != NULL) {
+        saved_home = dup_cstr(getenv("HOME"));
+    }
+    ASSERT(setenv("HOME", workspace_dir, 1) == 0);
+
+    ASSERT(feng_cli_deps_install_for_manifest("feng",
+                                              project_manifest,
+                                              false,
+                                              &error));
+    ASSERT(path_exists(cache_path));
+    ASSERT(feng_cli_deps_resolve_for_manifest("feng",
+                                              project_manifest,
+                                              false,
+                                              false,
+                                              &resolved,
+                                              &error));
+    ASSERT(resolved.package_count == 1U);
+    ASSERT(strcmp(resolved.package_paths[0], cache_path) == 0);
+    feng_cli_deps_resolved_dispose(&resolved);
+    ASSERT(unlink(bundled_path) == 0);
+    {
+        char *argv[] = { project_dir };
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+    ASSERT(path_exists(binary_path));
+
+    ASSERT(feng_cli_project_remove_tree(project_build_dir, &remove_error));
+    free(remove_error);
+    remove_error = NULL;
+    ASSERT(unlink(cache_path) == 0);
+    copy_file_or_die(packed_bundle, bundled_path);
+    {
+        char *argv[] = { project_dir };
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+    ASSERT(path_exists(cache_path));
+    ASSERT(path_exists(binary_path));
+
+    if (saved_home != NULL) {
+        ASSERT(setenv("HOME", saved_home, 1) == 0);
+    } else {
+        ASSERT(unsetenv("HOME") == 0);
+    }
+    ASSERT(unlink(bundled_path) == 0);
+
+    free(saved_home);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(cache_path);
+    free(bundled_path);
+    free(bundled_root);
+    free(binary_path);
+    free(project_build_dir);
+    free(project_source);
+    free(project_manifest);
+    free(project_src_dir);
+    free(project_dir);
+    free(packed_bundle);
+    free(library_source);
+    free(library_manifest);
+    free(library_src_dir);
+    free(library_dir);
+    feng_cli_deps_resolved_dispose(&resolved);
+    feng_cli_project_error_dispose(&error);
+}
+
 /* Verify unified project platform selection, whitelist, and sysroot rules. */
 static void test_project_platform_selection_rules(void) {
     char *declared_platforms[] = {
@@ -14747,6 +15533,12 @@ int main(void) {
     test_deps_install_rejects_invalid_downloaded_bundle();
     test_deps_install_hides_cache_dir_prefix_in_error_output();
     test_deps_install_force_refreshes_cached_bundle();
+    test_deps_install_uses_bundled_packages_recursively();
+    test_deps_install_selects_registry_before_bundled_fallback();
+    test_deps_install_http_404_uses_bundled_fallback();
+    test_deps_install_validates_and_force_refreshes_bundled_package();
+    test_deps_install_local_dependencies_use_bundled_transitives();
+    test_project_build_installs_bundled_package_into_cache();
     test_init_creates_bin_project();
     test_init_creates_lib_project_using_current_directory_name();
     test_init_rejects_space_separated_target_value();
