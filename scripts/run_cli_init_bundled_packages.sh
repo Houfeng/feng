@@ -2,9 +2,11 @@
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SOURCE_FENG="${PROJECT_ROOT}/build/bin/feng"
-WORK_ROOT="$(mktemp -d "${PROJECT_ROOT}/temp/feng-init-bundled-packages.XXXXXX")"
-BUNDLE_SOURCE_INDEX=0
+WORK_ROOT="$(mktemp -d "${PROJECT_ROOT}/temp/feng-init-bundled.XXXXXX")"
+INSTALL_ROOT="${WORK_ROOT}/install"
+PKG_ROOT="${INSTALL_ROOT}/pkg"
+FENG="${INSTALL_ROOT}/bin/feng"
+BUNDLE_INDEX=0
 
 cleanup() {
   rm -rf "${WORK_ROOT}"
@@ -16,27 +18,19 @@ die() {
   exit 1
 }
 
-require_file() {
-  [[ -f "$1" ]] || die "missing file: $1"
-}
-
-create_install_layout() {
-  local layout="$1"
-
-  mkdir -p "${layout}/bin"
-  cp "${SOURCE_FENG}" "${layout}/bin/feng"
-  chmod +x "${layout}/bin/feng"
+reset_pkg() {
+  rm -rf "${PKG_ROOT}"
 }
 
 create_bundle_from_manifest() {
   local bundle_path="$1"
-  local manifest_text="$2"
+  local manifest="$2"
   local source_dir
 
-  BUNDLE_SOURCE_INDEX=$((BUNDLE_SOURCE_INDEX + 1))
-  source_dir="${WORK_ROOT}/bundle-source-${BUNDLE_SOURCE_INDEX}"
+  BUNDLE_INDEX=$((BUNDLE_INDEX + 1))
+  source_dir="${WORK_ROOT}/bundle-${BUNDLE_INDEX}"
   mkdir -p "${source_dir}" "$(dirname "${bundle_path}")"
-  printf '%s' "${manifest_text}" > "${source_dir}/feng.fm"
+  printf '%s' "${manifest}" > "${source_dir}/feng.fm"
   (
     cd "${source_dir}"
     zip -q -X "${bundle_path}" feng.fm
@@ -44,217 +38,119 @@ create_bundle_from_manifest() {
 }
 
 create_bundle() {
-  local bundle_path="$1"
-  local package_name="$2"
-  local package_version="$3"
-
   create_bundle_from_manifest \
-    "${bundle_path}" \
-    "$(printf '[package]\nname: "%s"\nversion: "%s"\n' \
-      "${package_name}" \
-      "${package_version}")"
-}
-
-create_bundle_without_manifest() {
-  local bundle_path="$1"
-  local source_dir
-
-  BUNDLE_SOURCE_INDEX=$((BUNDLE_SOURCE_INDEX + 1))
-  source_dir="${WORK_ROOT}/bundle-source-${BUNDLE_SOURCE_INDEX}"
-  mkdir -p "${source_dir}" "$(dirname "${bundle_path}")"
-  printf 'not a manifest\n' > "${source_dir}/note.txt"
-  (
-    cd "${source_dir}"
-    zip -q -X "${bundle_path}" note.txt
-  )
+    "$1" \
+    "$(printf '[package]\nname: "%s"\nversion: "%s"\n' "$2" "$3")"
 }
 
 run_init_success() {
-  local feng="$1"
-  local project_dir="$2"
-  shift 2
+  local label="$1"
+  shift
+  local project="${WORK_ROOT}/project-${label}"
 
-  mkdir -p "${project_dir}"
+  mkdir -p "${project}"
   (
-    cd "${project_dir}"
-    "${feng}" init "$@"
+    cd "${project}"
+    "${FENG}" init demo "$@"
   )
+  printf '%s\n' "${project}/feng.fm"
 }
 
 run_init_failure() {
-  local feng="$1"
-  local project_dir="$2"
-  local error_path="$3"
+  local label="$1"
+  local project="${WORK_ROOT}/project-${label}"
+  local error_path="${WORK_ROOT}/${label}.stderr"
 
-  mkdir -p "${project_dir}"
+  mkdir -p "${project}"
   if (
-    cd "${project_dir}"
-    "${feng}" init demo
+    cd "${project}"
+    "${FENG}" init demo
   ) > /dev/null 2> "${error_path}"; then
-    die "init unexpectedly succeeded: ${project_dir}"
+    die "init unexpectedly succeeded: ${label}"
   fi
-  [[ ! -e "${project_dir}/feng.fm" ]] ||
-    die "failed init left feng.fm: ${project_dir}"
-  [[ ! -e "${project_dir}/src" ]] ||
-    die "failed init left src/: ${project_dir}"
-}
-
-dependency_section() {
-  sed -n '/^\[dependencies\]$/,$p' "$1"
+  [[ ! -e "${project}/feng.fm" && ! -e "${project}/src" ]] ||
+    die "failed init left project files: ${label}"
+  printf '%s\n' "${error_path}"
 }
 
 require_no_dependencies() {
-  local manifest_path="$1"
-
-  require_file "${manifest_path}"
-  if grep -Fq '[dependencies]' "${manifest_path}"; then
-    die "manifest unexpectedly contains dependencies: ${manifest_path}"
-  fi
+  ! grep -Fq '[dependencies]' "$1" ||
+    die "manifest unexpectedly contains dependencies: $1"
 }
 
-require_dependency_section() {
-  local manifest_path="$1"
-  local expected="$2"
+require_dependencies() {
   local actual
 
-  require_file "${manifest_path}"
-  actual="$(dependency_section "${manifest_path}")"
-  [[ "${actual}" == "${expected}" ]] ||
-    die "unexpected dependency section in ${manifest_path}: ${actual}"
+  actual="$(sed -n '/^\[dependencies\]$/,$p' "$1")"
+  [[ "${actual}" == "$2" ]] ||
+    die "unexpected dependency section: ${actual}"
 }
 
-require_file "${SOURCE_FENG}"
+[[ -x "${PROJECT_ROOT}/build/bin/feng" ]] || die "build/bin/feng is required"
 command -v zip > /dev/null || die "zip is required"
+mkdir -p "${INSTALL_ROOT}/bin"
+cp "${PROJECT_ROOT}/build/bin/feng" "${FENG}"
 
-# A missing pkg/ directory keeps the previous init output.
-MISSING_LAYOUT="${WORK_ROOT}/missing-layout"
-create_install_layout "${MISSING_LAYOUT}"
-run_init_success \
-  "${MISSING_LAYOUT}/bin/feng" \
-  "${WORK_ROOT}/missing-project" \
-  demo
-require_no_dependencies "${WORK_ROOT}/missing-project/feng.fm"
+# Missing, empty and irrelevant pkg contents do not add dependencies.
+reset_pkg
+require_no_dependencies "$(run_init_success missing)"
+mkdir -p "${PKG_ROOT}"
+require_no_dependencies "$(run_init_success empty)"
+printf 'ignored\n' > "${PKG_ROOT}/README.txt"
+mkdir -p "${PKG_ROOT}/directory.fb" "${PKG_ROOT}/nested"
+create_bundle "${PKG_ROOT}/nested/nested.fb" nested 1.0.0
+require_no_dependencies "$(run_init_success ignored)"
 
-# An empty pkg/ and one containing only ignored entries both omit the section.
-EMPTY_LAYOUT="${WORK_ROOT}/empty-layout"
-create_install_layout "${EMPTY_LAYOUT}"
-mkdir -p "${EMPTY_LAYOUT}/pkg"
-run_init_success \
-  "${EMPTY_LAYOUT}/bin/feng" \
-  "${WORK_ROOT}/empty-project" \
-  demo
-require_no_dependencies "${WORK_ROOT}/empty-project/feng.fm"
-
-printf 'ignored\n' > "${EMPTY_LAYOUT}/pkg/README.txt"
-mkdir -p "${EMPTY_LAYOUT}/pkg/directory.fb" "${EMPTY_LAYOUT}/pkg/nested"
-create_bundle \
-  "${EMPTY_LAYOUT}/pkg/nested/nested-1.0.0.fb" \
-  nested \
-  1.0.0
-run_init_success \
-  "${EMPTY_LAYOUT}/bin/feng" \
-  "${WORK_ROOT}/ignored-project" \
-  demo
-require_no_dependencies "${WORK_ROOT}/ignored-project/feng.fm"
-
-# Coordinates come from each root manifest, retain prerelease suffixes, and sort by name.
-POPULATED_LAYOUT="${WORK_ROOT}/populated-layout"
-create_install_layout "${POPULATED_LAYOUT}"
-mkdir -p "${POPULATED_LAYOUT}/pkg"
-create_bundle \
-  "${POPULATED_LAYOUT}/pkg/filename-does-not-match.fb" \
-  zeta \
-  2.0.0-beta.2
-create_bundle \
-  "${POPULATED_LAYOUT}/pkg/another-unrelated-name.fb" \
-  alpha \
-  1.0.0-rc.1
-
-EXPECTED_DEPENDENCIES="$(printf \
+# Root manifests are authoritative; output retains versions and sorts by name.
+reset_pkg
+mkdir -p "${PKG_ROOT}"
+create_bundle "${PKG_ROOT}/wrong-zeta-name.fb" zeta 2.0.0-beta.2
+create_bundle "${PKG_ROOT}/wrong-alpha-name.fb" alpha 1.0.0-rc.1
+EXPECTED="$(printf \
   '[dependencies]\nalpha: "1.0.0-rc.1"\nzeta: "2.0.0-beta.2"')"
-run_init_success \
-  "${POPULATED_LAYOUT}/bin/feng" \
-  "${WORK_ROOT}/populated-bin-project" \
-  demo
-require_dependency_section \
-  "${WORK_ROOT}/populated-bin-project/feng.fm" \
-  "${EXPECTED_DEPENDENCIES}"
+require_dependencies "$(run_init_success populated-bin)" "${EXPECTED}"
+require_dependencies "$(run_init_success populated-lib --target=lib)" "${EXPECTED}"
 
-run_init_success \
-  "${POPULATED_LAYOUT}/bin/feng" \
-  "${WORK_ROOT}/populated-lib-project" \
-  demo \
-  --target=lib
-require_dependency_section \
-  "${WORK_ROOT}/populated-lib-project/feng.fm" \
-  "${EXPECTED_DEPENDENCIES}"
-
-# Invalid archives, missing manifests and missing coordinates fail without project residue.
-CORRUPT_LAYOUT="${WORK_ROOT}/corrupt-layout"
-create_install_layout "${CORRUPT_LAYOUT}"
-mkdir -p "${CORRUPT_LAYOUT}/pkg"
-printf 'not a zip archive\n' > "${CORRUPT_LAYOUT}/pkg/corrupt.fb"
-run_init_failure \
-  "${CORRUPT_LAYOUT}/bin/feng" \
-  "${WORK_ROOT}/corrupt-project" \
-  "${WORK_ROOT}/corrupt.stderr"
-grep -Fq "${CORRUPT_LAYOUT}/pkg/corrupt.fb" "${WORK_ROOT}/corrupt.stderr" ||
+# Invalid bundles and unrepresentable coordinates fail before writing the project.
+reset_pkg
+mkdir -p "${PKG_ROOT}"
+printf 'not a zip\n' > "${PKG_ROOT}/corrupt.fb"
+ERROR_PATH="$(run_init_failure corrupt)"
+grep -Fq "${PKG_ROOT}/corrupt.fb" "${ERROR_PATH}" ||
   die "corrupt bundle error omitted its path"
 
-NO_MANIFEST_LAYOUT="${WORK_ROOT}/no-manifest-layout"
-create_install_layout "${NO_MANIFEST_LAYOUT}"
-mkdir -p "${NO_MANIFEST_LAYOUT}/pkg"
-create_bundle_without_manifest \
-  "${NO_MANIFEST_LAYOUT}/pkg/no-manifest.fb"
-run_init_failure \
-  "${NO_MANIFEST_LAYOUT}/bin/feng" \
-  "${WORK_ROOT}/no-manifest-project" \
-  "${WORK_ROOT}/no-manifest.stderr"
-grep -Fq "${NO_MANIFEST_LAYOUT}/pkg/no-manifest.fb" "${WORK_ROOT}/no-manifest.stderr" ||
-  die "missing manifest error omitted its bundle path"
+reset_pkg
+mkdir -p "${PKG_ROOT}" "${WORK_ROOT}/no-manifest"
+printf 'ignored\n' > "${WORK_ROOT}/no-manifest/note.txt"
+(
+  cd "${WORK_ROOT}/no-manifest"
+  zip -q -X "${PKG_ROOT}/no-manifest.fb" note.txt
+)
+ERROR_PATH="$(run_init_failure no-manifest)"
+grep -Fq "${PKG_ROOT}/no-manifest.fb" "${ERROR_PATH}" ||
+  die "missing manifest error omitted its path"
 
-NO_COORDINATE_LAYOUT="${WORK_ROOT}/no-coordinate-layout"
-create_install_layout "${NO_COORDINATE_LAYOUT}"
-mkdir -p "${NO_COORDINATE_LAYOUT}/pkg"
+reset_pkg
+mkdir -p "${PKG_ROOT}"
 create_bundle_from_manifest \
-  "${NO_COORDINATE_LAYOUT}/pkg/no-version.fb" \
+  "${PKG_ROOT}/no-version.fb" \
   "$(printf '[package]\nname: "no_version"\n')"
-run_init_failure \
-  "${NO_COORDINATE_LAYOUT}/bin/feng" \
-  "${WORK_ROOT}/no-coordinate-project" \
-  "${WORK_ROOT}/no-coordinate.stderr"
-grep -Fq '[package].name' "${WORK_ROOT}/no-coordinate.stderr" ||
+ERROR_PATH="$(run_init_failure no-version)"
+grep -Fq '[package].name' "${ERROR_PATH}" ||
   die "missing coordinate error omitted the required fields"
 
-# The single-key dependency model rejects multiple bundles with the same name.
-DUPLICATE_LAYOUT="${WORK_ROOT}/duplicate-layout"
-create_install_layout "${DUPLICATE_LAYOUT}"
-mkdir -p "${DUPLICATE_LAYOUT}/pkg"
-create_bundle \
-  "${DUPLICATE_LAYOUT}/pkg/duplicate-a.fb" \
-  duplicate \
-  1.0.0
-create_bundle \
-  "${DUPLICATE_LAYOUT}/pkg/duplicate-b.fb" \
-  duplicate \
-  2.0.0
-run_init_failure \
-  "${DUPLICATE_LAYOUT}/bin/feng" \
-  "${WORK_ROOT}/duplicate-project" \
-  "${WORK_ROOT}/duplicate.stderr"
-grep -Fq 'multiple bundled packages declare dependency `duplicate`' \
-  "${WORK_ROOT}/duplicate.stderr" ||
+reset_pkg
+mkdir -p "${PKG_ROOT}"
+create_bundle "${PKG_ROOT}/duplicate-a.fb" duplicate 1.0.0
+create_bundle "${PKG_ROOT}/duplicate-b.fb" duplicate 2.0.0
+ERROR_PATH="$(run_init_failure duplicate)"
+grep -Fq 'multiple bundled packages declare dependency `duplicate`' "${ERROR_PATH}" ||
   die "duplicate package error omitted its package name"
 
-# An existing non-directory pkg path is a discovery error, not an absent source.
-INVALID_PKG_LAYOUT="${WORK_ROOT}/invalid-pkg-layout"
-create_install_layout "${INVALID_PKG_LAYOUT}"
-printf 'not a directory\n' > "${INVALID_PKG_LAYOUT}/pkg"
-run_init_failure \
-  "${INVALID_PKG_LAYOUT}/bin/feng" \
-  "${WORK_ROOT}/invalid-pkg-project" \
-  "${WORK_ROOT}/invalid-pkg.stderr"
-grep -Fq "${INVALID_PKG_LAYOUT}/pkg" "${WORK_ROOT}/invalid-pkg.stderr" ||
+reset_pkg
+printf 'not a directory\n' > "${PKG_ROOT}"
+ERROR_PATH="$(run_init_failure invalid-pkg)"
+grep -Fq "${PKG_ROOT}" "${ERROR_PATH}" ||
   die "pkg directory error omitted its path"
 
 echo "feng init bundled package tests passed"

@@ -15,6 +15,7 @@
 #include "archive/fm.h"
 #include "archive/zip.h"
 #include "cli/common.h"
+#include "cli/project/manifest.h"
 #include "lexer/token.h"
 
 /* Parsed options accepted by `feng init`. */
@@ -30,16 +31,9 @@ typedef enum InitDirectoryState {
     INIT_DIRECTORY_ERROR
 } InitDirectoryState;
 
-/* One direct dependency declared by a package bundled with Feng. */
-typedef struct InitBundledDependency {
-    char *bundle_path;
-    char *name;
-    char *version;
-} InitBundledDependency;
-
 /* Owned, deterministically ordered bundled dependencies discovered by init. */
 typedef struct InitBundledDependencies {
-    InitBundledDependency *items;
+    FengCliProjectManifestDependency *items;
     size_t count;
 } InitBundledDependencies;
 
@@ -97,49 +91,13 @@ static char *dup_printf(const char *fmt, ...) {
     return out;
 }
 
-/* Replace an init error message with one formatted, caller-owned string. */
-static void set_init_errorf(char **out_error_message, const char *fmt, ...) {
-    va_list args;
-    va_list args_copy;
-    int needed;
-    char *message;
-
-    if (out_error_message == NULL) {
-        return;
-    }
-    free(*out_error_message);
-    *out_error_message = NULL;
-
-    va_start(args, fmt);
-    va_copy(args_copy, args);
-    needed = vsnprintf(NULL, 0, fmt, args);
-    va_end(args);
-    if (needed < 0) {
-        va_end(args_copy);
-        return;
-    }
-
-    message = (char *)malloc((size_t)needed + 1U);
-    if (message == NULL) {
-        va_end(args_copy);
-        return;
-    }
-    vsnprintf(message, (size_t)needed + 1U, fmt, args_copy);
-    va_end(args_copy);
-    *out_error_message = message;
-}
-
-/* Release all coordinates and paths collected from the bundled package directory. */
+/* Release all coordinates collected from the bundled package directory. */
 static void bundled_dependencies_dispose(InitBundledDependencies *dependencies) {
     size_t index;
 
-    if (dependencies == NULL) {
-        return;
-    }
     for (index = 0U; index < dependencies->count; ++index) {
-        free(dependencies->items[index].bundle_path);
         free(dependencies->items[index].name);
-        free(dependencies->items[index].version);
+        free(dependencies->items[index].value);
     }
     free(dependencies->items);
     dependencies->items = NULL;
@@ -414,76 +372,16 @@ static InitDirectoryState inspect_current_directory(char **out_error_message) {
     return INIT_DIRECTORY_EMPTY;
 }
 
-/* Return whether one directory entry has the exact `.fb` suffix. */
-static bool has_bundle_extension(const char *name) {
-    size_t length = strlen(name);
+/* Select direct directory entries with the exact `.fb` suffix. */
+static int select_bundle_entry(const struct dirent *entry) {
+    size_t length = strlen(entry->d_name);
 
-    return length >= 3U && strcmp(name + length - 3U, ".fb") == 0;
-}
-
-/* Join one directory and direct child name without normalizing either path. */
-static char *join_child_path(const char *directory, const char *name) {
-    size_t directory_length = strlen(directory);
-
-    return dup_printf("%s%s%s",
-                      directory,
-                      directory_length > 0U && directory[directory_length - 1U] == '/'
-                          ? ""
-                          : "/",
-                      name);
-}
-
-/* Copy the required package coordinates from one parsed root manifest. */
-static bool extract_bundled_coordinates(const char *bundle_path,
-                                        const FengFmDocument *document,
-                                        InitBundledDependency *out_dependency,
-                                        char **out_error_message) {
-    const char *name = NULL;
-    const char *version = NULL;
-    size_t index;
-
-    for (index = 0U; index < document->entry_count; ++index) {
-        const FengFmEntry *entry = &document->entries[index];
-
-        if (strcmp(entry->section, "package") != 0) {
-            continue;
-        }
-        if (strcmp(entry->key, "name") == 0) {
-            name = entry->value;
-        } else if (strcmp(entry->key, "version") == 0) {
-            version = entry->value;
-        }
-    }
-
-    if (name == NULL || name[0] == '\0' || version == NULL || version[0] == '\0') {
-        set_init_errorf(out_error_message,
-                        "bundled package manifest is missing non-empty "
-                        "`[package].name` or `[package].version`: %s",
-                        bundle_path);
-        return false;
-    }
-
-    out_dependency->bundle_path = dup_n(bundle_path, strlen(bundle_path));
-    out_dependency->name = dup_n(name, strlen(name));
-    out_dependency->version = dup_n(version, strlen(version));
-    if (out_dependency->bundle_path == NULL ||
-        out_dependency->name == NULL ||
-        out_dependency->version == NULL) {
-        free(out_dependency->bundle_path);
-        free(out_dependency->name);
-        free(out_dependency->version);
-        memset(out_dependency, 0, sizeof(*out_dependency));
-        set_init_errorf(out_error_message,
-                        "out of memory reading bundled package coordinates: %s",
-                        bundle_path);
-        return false;
-    }
-    return true;
+    return length >= 3U && strcmp(entry->d_name + length - 3U, ".fb") == 0;
 }
 
 /* Read only the root `feng.fm` needed to obtain one bundled package coordinate. */
 static bool read_bundled_dependency(const char *bundle_path,
-                                    InitBundledDependency *out_dependency,
+                                    FengCliProjectManifestDependency *out_dependency,
                                     char **out_error_message) {
     FengZipReader reader = {0};
     FengFmDocument document = {0};
@@ -492,14 +390,16 @@ static bool read_bundled_dependency(const char *bundle_path,
     void *manifest_bytes = NULL;
     size_t manifest_size = 0U;
     char *manifest_text = NULL;
+    const char *name = NULL;
+    const char *version = NULL;
+    size_t index;
     bool ok = false;
 
     memset(out_dependency, 0, sizeof(*out_dependency));
     if (!feng_zip_reader_open(bundle_path, &reader, &zip_error)) {
-        set_init_errorf(out_error_message,
-                        "failed to open bundled package %s: %s",
-                        bundle_path,
-                        zip_error != NULL ? zip_error : "unknown error");
+        *out_error_message = dup_printf("failed to open bundled package %s: %s",
+                                        bundle_path,
+                                        zip_error != NULL ? zip_error : "unknown error");
         goto cleanup;
     }
     if (!feng_zip_reader_read(&reader,
@@ -507,51 +407,62 @@ static bool read_bundled_dependency(const char *bundle_path,
                               &manifest_bytes,
                               &manifest_size,
                               &zip_error)) {
-        set_init_errorf(out_error_message,
-                        "failed to read bundled package manifest %s: %s",
-                        bundle_path,
-                        zip_error != NULL ? zip_error : "unknown error");
-        goto cleanup;
-    }
-
-    if (manifest_size == SIZE_MAX) {
-        set_init_errorf(out_error_message,
-                        "bundled package manifest is too large: %s",
-                        bundle_path);
+        *out_error_message = dup_printf("failed to read bundled package manifest %s: %s",
+                                        bundle_path,
+                                        zip_error != NULL ? zip_error : "unknown error");
         goto cleanup;
     }
     manifest_text = (char *)malloc(manifest_size + 1U);
     if (manifest_text == NULL) {
-        set_init_errorf(out_error_message,
-                        "out of memory reading bundled package manifest: %s",
-                        bundle_path);
+        *out_error_message = dup_printf("out of memory reading bundled package manifest: %s",
+                                        bundle_path);
         goto cleanup;
     }
     memcpy(manifest_text, manifest_bytes, manifest_size);
     manifest_text[manifest_size] = '\0';
 
     if (!feng_fm_parse(bundle_path, manifest_text, &document, &fm_error)) {
-        if (fm_error.line > 0U) {
-            set_init_errorf(out_error_message,
-                            "failed to parse bundled package manifest %s:%u: %s",
-                            bundle_path,
-                            fm_error.line,
-                            fm_error.message != NULL ? fm_error.message : "unknown error");
-        } else {
-            set_init_errorf(out_error_message,
-                            "failed to parse bundled package manifest %s: %s",
-                            bundle_path,
-                            fm_error.message != NULL ? fm_error.message : "unknown error");
-        }
+        *out_error_message = dup_printf("failed to parse bundled package manifest %s:%u: %s",
+                                        bundle_path,
+                                        fm_error.line,
+                                        fm_error.message != NULL
+                                            ? fm_error.message
+                                            : "unknown error");
         goto cleanup;
     }
+    for (index = 0U; index < document.entry_count; ++index) {
+        const FengFmEntry *entry = &document.entries[index];
 
-    ok = extract_bundled_coordinates(bundle_path,
-                                     &document,
-                                     out_dependency,
-                                     out_error_message);
+        if (strcmp(entry->section, "package") == 0) {
+            if (strcmp(entry->key, "name") == 0) {
+                name = entry->value;
+            } else if (strcmp(entry->key, "version") == 0) {
+                version = entry->value;
+            }
+        }
+    }
+    if (name == NULL || name[0] == '\0' || version == NULL || version[0] == '\0') {
+        *out_error_message = dup_printf(
+            "bundled package manifest is missing non-empty "
+            "`[package].name` or `[package].version`: %s",
+            bundle_path);
+        goto cleanup;
+    }
+    out_dependency->name = dup_n(name, strlen(name));
+    out_dependency->value = dup_n(version, strlen(version));
+    if (out_dependency->name == NULL || out_dependency->value == NULL) {
+        *out_error_message = dup_printf("out of memory reading bundled package: %s",
+                                        bundle_path);
+        goto cleanup;
+    }
+    ok = true;
 
 cleanup:
+    if (!ok) {
+        free(out_dependency->name);
+        free(out_dependency->value);
+        memset(out_dependency, 0, sizeof(*out_dependency));
+    }
     free(zip_error);
     free(manifest_text);
     feng_zip_free(manifest_bytes);
@@ -561,34 +472,18 @@ cleanup:
     return ok;
 }
 
-/* Add one owned dependency to the collection. */
-static bool append_bundled_dependency(InitBundledDependencies *dependencies,
-                                      InitBundledDependency *dependency,
-                                      char **out_error_message) {
-    InitBundledDependency *resized = (InitBundledDependency *)realloc(
-        dependencies->items,
-        (dependencies->count + 1U) * sizeof(*dependencies->items));
-
-    if (resized == NULL) {
-        set_init_errorf(out_error_message, "out of memory collecting bundled packages");
-        return false;
-    }
-    dependencies->items = resized;
-    dependencies->items[dependencies->count++] = *dependency;
-    memset(dependency, 0, sizeof(*dependency));
-    return true;
-}
-
 /* Sort bundled dependencies by coordinate for deterministic manifest output. */
 static int compare_bundled_dependencies(const void *lhs, const void *rhs) {
-    const InitBundledDependency *left = (const InitBundledDependency *)lhs;
-    const InitBundledDependency *right = (const InitBundledDependency *)rhs;
+    const FengCliProjectManifestDependency *left =
+        (const FengCliProjectManifestDependency *)lhs;
+    const FengCliProjectManifestDependency *right =
+        (const FengCliProjectManifestDependency *)rhs;
     int name_order = strcmp(left->name, right->name);
 
     if (name_order != 0) {
         return name_order;
     }
-    return strcmp(left->version, right->version);
+    return strcmp(left->value, right->value);
 }
 
 /* Discover all direct `.fb` files in the running Feng installation's `pkg/`. */
@@ -596,66 +491,47 @@ static bool collect_bundled_dependencies(const char *program,
                                          InitBundledDependencies *out_dependencies,
                                          char **out_error_message) {
     char *package_directory = NULL;
-    char *resolve_error = NULL;
-    DIR *directory = NULL;
-    struct dirent *entry;
+    struct dirent **entries = NULL;
+    int entry_count = 0;
+    int index;
     bool ok = false;
 
     memset(out_dependencies, 0, sizeof(*out_dependencies));
     *out_error_message = NULL;
 
-    package_directory = feng_cli_resolve_install_path(program, "pkg", &resolve_error);
+    package_directory = feng_cli_resolve_install_path(program, "pkg", out_error_message);
     if (package_directory == NULL) {
-        set_init_errorf(out_error_message,
-                        "failed to locate bundled package directory: %s",
-                        resolve_error != NULL ? resolve_error : "unknown error");
         goto cleanup;
     }
 
-    directory = opendir(package_directory);
-    if (directory == NULL) {
-        if (errno == ENOENT) {
+    entry_count = scandir(package_directory, &entries, select_bundle_entry, NULL);
+    if (entry_count < 0) {
+        int scan_error = errno;
+
+        if (scan_error == ENOENT) {
             ok = true;
             goto cleanup;
         }
-        set_init_errorf(out_error_message,
-                        "failed to open bundled package directory %s: %s",
-                        package_directory,
-                        strerror(errno));
+        *out_error_message = dup_printf("failed to open bundled package directory %s: %s",
+                                        package_directory,
+                                        strerror(scan_error));
         goto cleanup;
     }
 
-    for (;;) {
+    for (index = 0; index < entry_count; ++index) {
         char *bundle_path;
         struct stat file_status;
-        InitBundledDependency dependency = {0};
+        FengCliProjectManifestDependency dependency = {0};
 
-        errno = 0;
-        entry = readdir(directory);
-        if (entry == NULL) {
-            if (errno != 0) {
-                set_init_errorf(out_error_message,
-                                "failed to read bundled package directory %s: %s",
-                                package_directory,
-                                strerror(errno));
-                goto cleanup;
-            }
-            break;
-        }
-        if (!has_bundle_extension(entry->d_name)) {
-            continue;
-        }
-
-        bundle_path = join_child_path(package_directory, entry->d_name);
+        bundle_path = dup_printf("%s/%s", package_directory, entries[index]->d_name);
         if (bundle_path == NULL) {
-            set_init_errorf(out_error_message, "out of memory collecting bundled packages");
+            *out_error_message = dup_printf("out of memory collecting bundled packages");
             goto cleanup;
         }
         if (stat(bundle_path, &file_status) != 0) {
-            set_init_errorf(out_error_message,
-                            "failed to inspect bundled package %s: %s",
-                            bundle_path,
-                            strerror(errno));
+            *out_error_message = dup_printf("failed to inspect bundled package %s: %s",
+                                            bundle_path,
+                                            strerror(errno));
             free(bundle_path);
             goto cleanup;
         }
@@ -668,25 +544,22 @@ static bool collect_bundled_dependencies(const char *program,
             goto cleanup;
         }
         free(bundle_path);
-        if (!append_bundled_dependency(out_dependencies,
-                                       &dependency,
-                                       out_error_message)) {
-            free(dependency.bundle_path);
-            free(dependency.name);
-            free(dependency.version);
-            goto cleanup;
+        {
+            FengCliProjectManifestDependency *resized =
+                (FengCliProjectManifestDependency *)realloc(
+                out_dependencies->items,
+                (out_dependencies->count + 1U) * sizeof(*out_dependencies->items));
+
+            if (resized == NULL) {
+                *out_error_message = dup_printf("out of memory collecting bundled packages");
+                free(dependency.name);
+                free(dependency.value);
+                goto cleanup;
+            }
+            out_dependencies->items = resized;
+            out_dependencies->items[out_dependencies->count++] = dependency;
         }
     }
-
-    if (closedir(directory) != 0) {
-        directory = NULL;
-        set_init_errorf(out_error_message,
-                        "failed to close bundled package directory %s: %s",
-                        package_directory,
-                        strerror(errno));
-        goto cleanup;
-    }
-    directory = NULL;
 
     if (out_dependencies->count > 1U) {
         qsort(out_dependencies->items,
@@ -698,15 +571,15 @@ static bool collect_bundled_dependencies(const char *program,
         size_t index;
 
         for (index = 1U; index < out_dependencies->count; ++index) {
-            const InitBundledDependency *previous = &out_dependencies->items[index - 1U];
-            const InitBundledDependency *current = &out_dependencies->items[index];
+            const FengCliProjectManifestDependency *previous =
+                &out_dependencies->items[index - 1U];
+            const FengCliProjectManifestDependency *current =
+                &out_dependencies->items[index];
 
             if (strcmp(previous->name, current->name) == 0) {
-                set_init_errorf(out_error_message,
-                                "multiple bundled packages declare dependency `%s`: %s and %s",
-                                current->name,
-                                previous->bundle_path,
-                                current->bundle_path);
+                *out_error_message = dup_printf(
+                    "multiple bundled packages declare dependency `%s`",
+                    current->name);
                 goto cleanup;
             }
         }
@@ -715,74 +588,15 @@ static bool collect_bundled_dependencies(const char *program,
     ok = true;
 
 cleanup:
-    if (directory != NULL) {
-        closedir(directory);
+    for (index = 0; index < entry_count; ++index) {
+        free(entries[index]);
     }
+    free(entries);
     if (!ok) {
         bundled_dependencies_dispose(out_dependencies);
     }
-    free(resolve_error);
     free(package_directory);
     return ok;
-}
-
-/* Build the complete new-project manifest including optional bundled dependencies. */
-static char *build_manifest_content(const char *package_name,
-                                    bool target_lib,
-                                    const InitBundledDependencies *dependencies) {
-    char *content;
-    size_t length;
-    size_t capacity;
-    size_t index;
-
-    content = dup_printf("[package]\n"
-                         "name: \"%s\"\n"
-                         "version: \"0.1.0\"\n"
-                         "target: \"%s\"\n"
-                         "src: \"src/\"\n"
-                         "out: \"build/\"\n"
-                         "%s",
-                         package_name,
-                         target_lib ? "lib" : "bin",
-                         target_lib
-                             ? "platform: \"macos-arm64,linux-x64-gnu,linux-x64-musl,"
-                               "linux-arm64-gnu,linux-arm64-musl\"\n"
-                             : "");
-    if (content == NULL) {
-        return NULL;
-    }
-    if (dependencies->count == 0U) {
-        return content;
-    }
-
-    length = strlen(content);
-    capacity = length + 1U;
-    if (!append_slice(&content,
-                      &length,
-                      &capacity,
-                      "\n[dependencies]\n",
-                      strlen("\n[dependencies]\n"))) {
-        free(content);
-        return NULL;
-    }
-    for (index = 0U; index < dependencies->count; ++index) {
-        char *entry = dup_printf("%s: \"%s\"\n",
-                                 dependencies->items[index].name,
-                                 dependencies->items[index].version);
-
-        if (entry == NULL ||
-            !append_slice(&content,
-                          &length,
-                          &capacity,
-                          entry,
-                          entry != NULL ? strlen(entry) : 0U)) {
-            free(entry);
-            free(content);
-            return NULL;
-        }
-        free(entry);
-    }
-    return content;
 }
 
 static bool write_all(int fd, const char *content, size_t length) {
@@ -839,15 +653,22 @@ cleanup:
 
 int feng_cli_project_init_main(const char *program, int argc, char **argv) {
     InitOptions options = {0};
+    FengCliProjectManifest manifest = {0};
     FengCliParseResult parse_result;
     InitDirectoryState directory_state;
+    char *lib_platforms[] = {
+        "macos-arm64",
+        "linux-x64-gnu",
+        "linux-x64-musl",
+        "linux-arm64-gnu",
+        "linux-arm64-musl",
+    };
     char *directory_error = NULL;
     char *derived_name = NULL;
     const char *raw_package_name;
     char *package_name = NULL;
     InitBundledDependencies bundled_dependencies = {0};
     char *bundled_error = NULL;
-    char *manifest_content = NULL;
     char *write_error = NULL;
     const char *source_path;
     char *source_template = NULL;
@@ -899,12 +720,17 @@ int feng_cli_project_init_main(const char *program, int argc, char **argv) {
         goto cleanup;
     }
 
-    manifest_content = build_manifest_content(package_name,
-                                              options.target_lib,
-                                              &bundled_dependencies);
-    if (manifest_content == NULL) {
-        fprintf(stderr, "out of memory preparing project manifest\n");
-        goto cleanup;
+    manifest.name = package_name;
+    manifest.version = "0.1.0";
+    manifest.has_target = true;
+    manifest.target = options.target_lib ? FENG_COMPILE_TARGET_LIB : FENG_COMPILE_TARGET_BIN;
+    manifest.src_path = "src/";
+    manifest.out_path = "build/";
+    manifest.dependencies = bundled_dependencies.items;
+    manifest.dependency_count = bundled_dependencies.count;
+    if (options.target_lib) {
+        manifest.platforms = lib_platforms;
+        manifest.platform_count = sizeof(lib_platforms) / sizeof(lib_platforms[0]);
     }
 
     if (mkdir("src", 0775) != 0) {
@@ -913,13 +739,19 @@ int feng_cli_project_init_main(const char *program, int argc, char **argv) {
     }
     created_src_dir = true;
 
-    if (!write_file_exclusive("feng.fm", manifest_content, &write_error)) {
+    if (!write_file_exclusive("feng.fm", "", &write_error)) {
         fprintf(stderr, "%s\n", write_error != NULL ? write_error : "failed to create feng.fm");
         free(write_error);
         write_error = NULL;
         goto cleanup;
     }
     created_manifest = true;
+    if (!feng_cli_project_manifest_write("feng.fm", &manifest, &write_error)) {
+        fprintf(stderr, "%s\n", write_error != NULL ? write_error : "failed to write feng.fm");
+        free(write_error);
+        write_error = NULL;
+        goto cleanup;
+    }
 
     source_path = options.target_lib ? "src/lib.ff" : "src/main.ff";
     source_template = dup_printf(options.target_lib ? kLibTemplate : kBinTemplate,
@@ -955,7 +787,6 @@ cleanup:
     bundled_dependencies_dispose(&bundled_dependencies);
     free(package_name);
     free(source_template);
-    free(manifest_content);
     free(derived_name);
     return rc;
 }
