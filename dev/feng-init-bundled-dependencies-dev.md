@@ -1,6 +1,6 @@
 # Feng init 自动声明随附包依赖开发方案
 
-> 状态：等待人工 Review，尚未实施。
+> 状态：已完成实施和全量回归，等待人工代码 Review。
 
 ## 1. 目标
 
@@ -278,15 +278,15 @@ manifest 源再增加一层公共封装。
 
 ## 8. 实施顺序
 
-- [ ] TODO 0：等待本文人工 Review；Review 通过后再实施。
-- [ ] TODO 1：更新 `docs/feng-cli.md` 中的 `feng init` 主规范。
-- [ ] TODO 2：复用现有 `FengZipReader` 与 `feng_fm_parse` 读取随附包坐标。
-- [ ] TODO 3：实现安装根 `pkg/` 枚举和包坐标收集。
-- [ ] TODO 4：将确定排序的随附包依赖写入新项目 `feng.fm`。
-- [ ] TODO 5：保留并验证初始化失败清理语义。
-- [ ] TODO 6：新增隔离安装布局下的 init 专项测试。
-- [ ] TODO 7：在 Codex 沙箱外执行全量 `make test`。
-- [ ] TODO 8：整理实现与测试结果，等待人工代码 Review。
+- [x] TODO 0：等待本文人工 Review；Review 通过后再实施。
+- [x] TODO 1：更新 `docs/feng-cli.md` 中的 `feng init` 主规范。
+- [x] TODO 2：复用现有 `FengZipReader` 与 `feng_fm_parse` 读取随附包坐标。
+- [x] TODO 3：实现安装根 `pkg/` 枚举和包坐标收集。
+- [x] TODO 4：将确定排序的随附包依赖写入新项目 `feng.fm`。
+- [x] TODO 5：保留并验证初始化失败清理语义。
+- [x] TODO 6：新增隔离安装布局下的 init 专项测试。
+- [x] TODO 7：在 Codex 沙箱外执行全量 `make test`。
+- [x] TODO 8：整理实现与测试结果，等待人工代码 Review。
 
 ## 9. Review 重点
 
