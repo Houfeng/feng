@@ -1176,6 +1176,30 @@ static bool writer_emit_decl_attrs(WriterContext *ctx,
             return false;
         }
     }
+    if (decl->abi_fixed_param_count > 0U) {
+        FengSymbolFtAttrRecord attr;
+
+        if (decl->abi_fixed_param_count > UINT32_MAX) {
+            return feng_symbol_internal_set_error(
+                out_error,
+                path,
+                token,
+                "extern fixed parameter count exceeds .ft attribute capacity");
+        }
+        memset(&attr, 0, sizeof(attr));
+        attr.symbol_id = symbol_id;
+        attr.kind = (uint16_t)FENG_SYMBOL_ATTR_ABI_FIXED_PARAM_COUNT;
+        attr.value0 = (uint32_t)decl->abi_fixed_param_count;
+        if (!append_record((void **)&ctx->attrs,
+                           &ctx->attr_count,
+                           sizeof(attr),
+                           &attr,
+                           path,
+                           token,
+                           out_error)) {
+            return false;
+        }
+    }
     if (decl->kind == FENG_SYMBOL_DECL_KIND_ENUM_ITEM && decl->has_enum_item_value) {
         FengSymbolFtAttrRecord attr;
 

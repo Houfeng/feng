@@ -111,6 +111,8 @@ FengMutability feng_symbol_decl_mutability(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_is_extern(const FengSymbolDeclView *decl);
 FengAnnotationKind feng_symbol_decl_calling_convention(const FengSymbolDeclView *decl);
 const char *feng_symbol_decl_abi_library(const FengSymbolDeclView *decl);
+/* Return the C variadic fixed-parameter count; zero means non-variadic. */
+size_t feng_symbol_decl_abi_fixed_param_count(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_has_bounded_decl(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_is_static(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_value_type(const FengSymbolDeclView *decl);

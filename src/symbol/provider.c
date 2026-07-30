@@ -956,6 +956,11 @@ const char *feng_symbol_decl_abi_library(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->abi_library : NULL;
 }
 
+/* Return the imported C variadic fixed-parameter count. */
+size_t feng_symbol_decl_abi_fixed_param_count(const FengSymbolDeclView *decl) {
+    return decl != NULL ? decl->abi_fixed_param_count : 0U;
+}
+
 bool feng_symbol_decl_has_bounded_decl(const FengSymbolDeclView *decl) {
     return decl != NULL && decl->bounded_decl;
 }

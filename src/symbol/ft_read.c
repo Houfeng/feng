@@ -1230,6 +1230,10 @@ static bool parse_attrs(ReadContext *ctx,
             }
             continue;
         }
+        if (kind == FENG_SYMBOL_ATTR_ABI_FIXED_PARAM_COUNT) {
+            decl->abi_fixed_param_count = (size_t)value0;
+            continue;
+        }
         if (kind == FENG_SYMBOL_ATTR_ENUM_ITEM_VALUE) {
             decl->enum_item_value = (int64_t)(int32_t)value0;
             decl->has_enum_item_value = true;

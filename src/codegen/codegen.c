@@ -82,6 +82,24 @@ static void buf_append_fmt(Buf *b, const char *fmt, ...) {
     va_end(ap2);
 }
 
+/* Append text as one escaped C string literal. */
+static void buf_append_c_string_literal(Buf *b, const char *text) {
+    const unsigned char *cursor = (const unsigned char *)text;
+
+    buf_append_cstr(b, "\"");
+    while (*cursor != '\0') {
+        if (*cursor == '"' || *cursor == '\\') {
+            buf_append_fmt(b, "\\%c", (char)*cursor);
+        } else if (*cursor >= 0x20U && *cursor <= 0x7eU) {
+            buf_append(b, (const char *)cursor, 1U);
+        } else {
+            buf_append_fmt(b, "\\%03o", (unsigned int)*cursor);
+        }
+        ++cursor;
+    }
+    buf_append_cstr(b, "\"");
+}
+
 /* ===================== type kinds ===================== */
 
 typedef enum CGTypeKind {
@@ -1085,15 +1103,19 @@ static const Local *scope_lookup(const Scope *s, const char *name, size_t len) {
 
 /* ===================== codegen context ===================== */
 
+/* Registered code-generation metadata for one exact extern declaration. */
 typedef struct ExternFn {
-    char    *name;          /* Feng name used for language-level lookup */
-    char    *c_name;        /* Imported C symbol; defaults to `name` */
+    char    *feng_name;        /* Feng declaration name */
+    char    *generated_c_name; /* Module- and signature-qualified C identifier */
+    char    *native_symbol;    /* Imported native symbol; defaults to `feng_name` */
     CGType **param_types;
     size_t   param_count;
     CGType  *return_type;
     FengAnnotationKind calling_convention;
     bool     uses_runtime_contract;
     size_t   fixed_param_count; /* >0: first N params are fixed, rest are C variadic */
+    const FengDecl *decl;
+    const FengProgram *owner_program;
 } ExternFn;
 
 typedef struct FreeFn {
@@ -6647,18 +6669,6 @@ static bool cg_runtime_contract_contains_name(FengSlice name) {
     return false;
 }
 
-/* Returns true when the C symbol name is already declared by one of the
- * system headers that generated C always includes (<stdlib.h>, <math.h>,
- * <string.h>, etc.).  Emitting a second extern prototype for these symbols
- * would conflict with the authoritative system-header declaration. */
-static bool cg_is_system_header_symbol(const char *name) {
-#define FENG_SYSTEM_HEADER_SYMBOL(sym) \
-    if (strcmp(name, #sym) == 0) return true;
-#include "runtime/system_header_symbols.inc"
-#undef FENG_SYSTEM_HEADER_SYMBOL
-    return false;
-}
-
 static bool cg_init_user_type_abi_symbols(UserType *t) {
     if (t == NULL || !t->is_abi_type || !cg_decl_has_field_members(t->decl)) {
         return true;
@@ -8798,8 +8808,23 @@ static bool cg_user_spec_append_decl_member(CG *cg,
 
 /* ===================== symbol tables ===================== */
 
+/* Find the exact extern entry selected by semantic analysis. */
+static const ExternFn *cg_find_extern_by_decl(const CG *cg,
+                                              const FengDecl *decl) {
+    if (decl == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0U; i < cg->extern_count; ++i) {
+        if (cg->externs[i].decl == decl) {
+            return &cg->externs[i];
+        }
+    }
+    return NULL;
+}
+
 static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     char **type_param_names = NULL;
+    char *module_mangle = NULL;
     bool saved_in_generic_fn = cg->in_generic_fn;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
@@ -8818,6 +8843,15 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     ExternFn *ef = &cg->externs[cg->extern_count];
 
     memset(ef, 0, sizeof(*ef));
+    ef->decl = decl;
+    ef->owner_program = cg_find_decl_owner_program(cg, decl);
+    if (ef->owner_program == NULL) {
+        return cg_fail(cg,
+                       sig->token,
+                       "CE0071", "codegen: cannot determine owner program for extern func '%.*s'",
+                       (int)sig->name.length,
+                       sig->name.data);
+    }
     ef->uses_runtime_contract = cg_decl_uses_runtime_contract(decl);
     ef->calling_convention = cg_find_calling_convention_kind(decl->annotations,
                                                              decl->annotation_count);
@@ -8838,13 +8872,13 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
                        sig->name.data);
     }
 
-    ef->name = strndup(sig->name.data, sig->name.length);
-    if (ef->name == NULL) {
+    ef->feng_name = strndup(sig->name.data, sig->name.length);
+    if (ef->feng_name == NULL) {
         cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
-    ef->c_name = cg_extern_c_symbol_name(cg, decl, sig);
-    if (ef->c_name == NULL) {
+    ef->native_symbol = cg_extern_c_symbol_name(cg, decl, sig);
+    if (ef->native_symbol == NULL) {
         if (!cg->failed) {
             cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
         }
@@ -8859,7 +8893,7 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
 
     if (sig->type_param_count > 0U) {
         if (!cg_callable_type_param_names(cg, sig, sig->token, &type_param_names)) {
-            return false;
+            goto cleanup;
         }
         cg->in_generic_fn = true;
         cg->generic_fn_type_param_count = sig->type_param_count;
@@ -8912,13 +8946,36 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
             goto cleanup;
         }
     }
+    module_mangle = cg_module_mangle(ef->owner_program->module_segments,
+                                     ef->owner_program->module_segment_count);
+    if (module_mangle == NULL) {
+        cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    ef->generated_c_name = cg_fn_mangle(module_mangle, &sig->name);
+    if (ef->generated_c_name == NULL) {
+        cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    ef->generated_c_name = cg_append_param_suffix(
+        ef->generated_c_name,
+        ef->param_types,
+        ef->param_count,
+        false,
+        sig->type_param_count > 0U);
+    if (ef->generated_c_name == NULL) {
+        cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
     cg->extern_count++;
     ok = true;
 
 cleanup:
+    free(module_mangle);
     if (!ok) {
-        free(ef->name);
-        free(ef->c_name);
+        free(ef->feng_name);
+        free(ef->generated_c_name);
+        free(ef->native_symbol);
         if (ef->param_types != NULL) {
             for (size_t param_index = 0U; param_index < ef->param_count; ++param_index) {
                 cgtype_free(ef->param_types[param_index]);
@@ -8937,32 +8994,30 @@ cleanup:
     return ok;
 }
 
-static const ExternFn *cg_find_extern(const CG *cg, const char *name, size_t len) {
+/* Legacy fallback for call sites that do not carry a resolved declaration. */
+static const ExternFn *cg_find_extern_by_name(const CG *cg,
+                                              const char *name,
+                                              size_t len) {
     for (size_t i = 0; i < cg->extern_count; i++) {
-        if (strlen(cg->externs[i].name) == len &&
-            memcmp(cg->externs[i].name, name, len) == 0) {
+        if (strlen(cg->externs[i].feng_name) == len &&
+            memcmp(cg->externs[i].feng_name, name, len) == 0) {
             return &cg->externs[i];
         }
     }
     return NULL;
 }
 
-/* Returns the C symbol name for an extern function entry. When @cdecl
- * provides an explicit alias it is stored in c_name; otherwise the Feng
- * name is used as the C symbol directly. */
+/* Return the linker-visible symbol selected by the extern annotation. */
 static const char *cg_extern_c_symbol(const ExternFn *ef) {
-    return ef->c_name != NULL ? ef->c_name : ef->name;
+    return ef->native_symbol != NULL ? ef->native_symbol : ef->feng_name;
 }
 
-/* Returns true when an earlier entry in the externs array already declared
- * the same C symbol.  Used to emit exactly one C prototype per C name. */
-static bool cg_c_name_already_declared(const CG *cg, const ExternFn *ef) {
-    const char *c_name = cg_extern_c_symbol(ef);
-    for (size_t i = 0; i < cg->extern_count; i++) {
-        if (&cg->externs[i] == ef) return false;
-        if (strcmp(c_name, cg_extern_c_symbol(&cg->externs[i])) == 0) return true;
+/* Return the C identifier used at a generated call site. */
+static const char *cg_extern_call_target(const ExternFn *ef) {
+    if (ef->uses_runtime_contract) {
+        return cg_extern_c_symbol(ef);
     }
-    return false;
+    return ef->generated_c_name;
 }
 
 static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
@@ -8979,19 +9034,6 @@ static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
         return true;
     }
 
-    /* System-header externs are already declared by the always-included
-     * headers (<stdlib.h>, <math.h>, <string.h>, …). Emitting a second
-     * prototype with Feng-mapped types would conflict. */
-    if (cg_is_system_header_symbol(cg_extern_c_symbol(ef))) {
-        return true;
-    }
-
-    /* C-name dedup: when multiple Feng externs map to the same C symbol
-     * (e.g. via @cdecl alias), emit only the first declaration. */
-    if (cg_c_name_already_declared(cg, ef)) {
-        return true;
-    }
-
     buf_append_cstr(h, "extern ");
     cg_emit_c_abi_surface_type(h, ef->return_type);
     {
@@ -9001,7 +9043,7 @@ static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
             buf_append_fmt(h, " %s", callconv_macro);
         }
     }
-    buf_append_fmt(h, " %s(", cg_extern_c_symbol(ef));
+    buf_append_fmt(h, " %s(", ef->generated_c_name);
     if (ef->param_count == 0) {
         buf_append_cstr(h, "void");
     } else if (ef->fixed_param_count > 0) {
@@ -9017,6 +9059,8 @@ static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
             cg_emit_c_abi_surface_type(h, ef->param_types[i]);
         }
     }
+    buf_append_cstr(h, ") FENG_NATIVE_SYMBOL(");
+    buf_append_c_string_literal(h, cg_extern_c_symbol(ef));
     buf_append_cstr(h, ");\n");
     return true;
 }
@@ -14877,7 +14921,7 @@ static bool cg_emit_registered_call(CG *cg,
     Buf b;
     buf_init(&b);
     if (ext) {
-        const char *extern_c_name = ext->c_name != NULL ? ext->c_name : ext->name;
+        const char *extern_c_name = cg_extern_call_target(ext);
         const UserType *return_abi_user =
             ext->uses_runtime_contract ? NULL : cg_abi_value_user_type(ext->return_type);
 
@@ -17955,10 +17999,13 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         return true;
     }
 
-    const ExternFn *ext = cg_find_extern(cg, name.data, name.length);
+    const ExternFn *ext = NULL;
     const FreeFn *fn = NULL;
+    bool has_resolved_extern_decl = false;
     if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION && rc->function_decl) {
         if (rc->function_decl->is_extern) {
+            has_resolved_extern_decl = true;
+            ext = cg_find_extern_by_decl(cg, rc->function_decl);
             /* Generic extern calls are specialized through the ordinary extern
              * ABI path after resolving/inferencing concrete type arguments.
              * Non-generic externs continue through cg_emit_registered_call. */
@@ -17973,6 +18020,9 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 if (gfn) return cg_emit_generic_call(cg, e, gfn, out);
             }
         }
+    }
+    if (ext == NULL && !has_resolved_extern_decl) {
+        ext = cg_find_extern_by_name(cg, name.data, name.length);
     }
     if (!fn && !ext) {
         fn = cg_find_free_fn(cg, name.data, name.length);
@@ -27500,8 +27550,12 @@ static void cg_emit_function_fallthrough_cleanup(CG *cg) {
 }
 
 static bool cg_emit_extern_decl(CG *cg, const FengDecl *decl) {
-    if (!cg_register_extern(cg, decl)) return false;
-    const ExternFn *ef = &cg->externs[cg->extern_count - 1];
+    const ExternFn *ef = cg_find_extern_by_decl(cg, decl);
+
+    if (ef == NULL) {
+        if (!cg_register_extern(cg, decl)) return false;
+        ef = &cg->externs[cg->extern_count - 1U];
+    }
     return cg_emit_registered_extern_decl(cg, ef);
 }
 
@@ -27733,10 +27787,7 @@ static bool cg_emit_imported_type_static_binding_decl(CG *cg,
 
 static bool cg_emit_imported_function_decl(CG *cg, const FengDecl *decl) {
     if (decl->is_extern) {
-        if (!cg_register_extern(cg, decl)) {
-            return false;
-        }
-        return cg_emit_registered_extern_decl(cg, &cg->externs[cg->extern_count - 1]);
+        return cg_emit_extern_decl(cg, decl);
     }
 
     if (decl->as.function_decl.type_param_count > 0U) {
@@ -29234,13 +29285,17 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
     const UserSpec **constraint_specs = NULL;
     char **desc_exprs = NULL;
     ExternFn concrete = {
-        .name = ext != NULL ? ext->name : NULL,
-        .c_name = ext != NULL ? ext->c_name : NULL,
+        .feng_name = ext != NULL ? ext->feng_name : NULL,
+        .generated_c_name = ext != NULL ? ext->generated_c_name : NULL,
+        .native_symbol = ext != NULL ? ext->native_symbol : NULL,
         .param_types = param_types,
         .param_count = sig->param_count,
         .return_type = NULL,
         .calling_convention = ext != NULL ? ext->calling_convention : FENG_ANNOTATION_NONE,
         .uses_runtime_contract = ext != NULL && ext->uses_runtime_contract,
+        .fixed_param_count = ext != NULL ? ext->fixed_param_count : 0U,
+        .decl = ext != NULL ? ext->decl : NULL,
+        .owner_program = ext != NULL ? ext->owner_program : NULL,
     };
     bool return_is_direct_type_param = false;
     bool ok = false;
@@ -29506,7 +29561,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
             buf_append_fmt(&args_buf, "&%s", ret_cname);
             buf_append_fmt(cg->cur_body,
                            "    %s(%s);\n",
-                           concrete.c_name != NULL ? concrete.c_name : concrete.name,
+                           cg_extern_call_target(&concrete),
                            args_buf.data ? args_buf.data : "");
 
             out->c_expr = strdup(ret_cname);
@@ -29547,7 +29602,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
             buf_init(&b);
             buf_append_fmt(&b,
                            "%s(%s)",
-                           concrete.c_name != NULL ? concrete.c_name : concrete.name,
+                           cg_extern_call_target(&concrete),
                            args_buf.data ? args_buf.data : "");
             out->c_expr = b.data;
             out->type = cgtype_clone(concrete.return_type);
@@ -33829,8 +33884,7 @@ static bool cg_pass_pre_register_functions(CG *cg,
         if (d->kind != FENG_DECL_FUNCTION) continue;
 
         if (d->is_extern) {
-            const FengCallableSignature *sig = &d->as.function_decl;
-            if (cg_find_extern(cg, sig->name.data, sig->name.length)) continue;
+            if (cg_find_extern_by_decl(cg, d) != NULL) continue;
             if (!cg_emit_extern_decl(cg, d)) { cg->cur_program = NULL; return false; }
         } else if (d->as.function_decl.type_param_count > 0) {
             if (!cg_find_generic_fn_by_decl(cg, d)) {
@@ -39514,6 +39568,14 @@ static char *cg_finalize(CG *cg) {
         "#else\n"
         "#define FENG_EXTERN_CALLCONV_STDCALL\n"
         "#define FENG_EXTERN_CALLCONV_FASTCALL\n"
+        "#endif\n"
+        "\n"
+        "#if defined(__APPLE__)\n"
+        "#define FENG_NATIVE_SYMBOL(name) __asm__(\"_\" name)\n"
+        "#else\n"
+        "/* Current non-Apple delivery targets use Linux ELF. Windows/COFF is\n"
+        " * not supported and requires a separate native-symbol mapping. */\n"
+        "#define FENG_NATIVE_SYMBOL(name) __asm__(name)\n"
         "#endif\n\n");
     if (cg->headers.length) buf_append(&out, cg->headers.data, cg->headers.length);
     buf_append_cstr(&out, "\n");
@@ -39546,8 +39608,9 @@ static void cg_dispose(CG *cg) {
     free(cg->module_mangle);
     free(cg->module_dot_name);
     for (size_t i = 0; i < cg->extern_count; i++) {
-        free(cg->externs[i].name);
-        free(cg->externs[i].c_name);
+        free(cg->externs[i].feng_name);
+        free(cg->externs[i].generated_c_name);
+        free(cg->externs[i].native_symbol);
         for (size_t j = 0; j < cg->externs[i].param_count; j++)
             cgtype_free(cg->externs[i].param_types[j]);
         free(cg->externs[i].param_types);

@@ -13,6 +13,7 @@
 #include "symbol/imported_module.h"
 #include "symbol/provider.h"
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -150,6 +151,59 @@ static void write_text_file_or_die(const char *path, const char *text) {
     ASSERT(fclose(file) == 0);
 }
 
+/* Read one complete text file into a NUL-terminated buffer. */
+static char *read_text_file_or_die(const char *path) {
+    FILE *file = fopen(path, "rb");
+    long length;
+    char *text;
+
+    ASSERT(file != NULL);
+    ASSERT(fseek(file, 0L, SEEK_END) == 0);
+    length = ftell(file);
+    ASSERT(length >= 0L);
+    ASSERT(fseek(file, 0L, SEEK_SET) == 0);
+    text = (char *)malloc((size_t)length + 1U);
+    ASSERT(text != NULL);
+    ASSERT(fread(text, 1U, (size_t)length, file) == (size_t)length);
+    text[length] = '\0';
+    ASSERT(fclose(file) == 0);
+    return text;
+}
+
+/* Return true when nm output contains one exact undefined-symbol name. */
+static bool nm_output_contains_symbol(const char *text, const char *symbol) {
+    size_t symbol_length = strlen(symbol);
+    const char *cursor = text;
+
+    while (*cursor != '\0') {
+        const char *line_end = strchr(cursor, '\n');
+        const char *start = cursor;
+        const char *end = line_end != NULL ? line_end : cursor + strlen(cursor);
+
+        while (start < end && isspace((unsigned char)*start)) {
+            ++start;
+        }
+        if (start < end && *start == 'U') {
+            ++start;
+            while (start < end && isspace((unsigned char)*start)) {
+                ++start;
+            }
+        }
+        while (end > start && isspace((unsigned char)end[-1])) {
+            --end;
+        }
+        if ((size_t)(end - start) == symbol_length &&
+            memcmp(start, symbol, symbol_length) == 0) {
+            return true;
+        }
+        if (line_end == NULL) {
+            break;
+        }
+        cursor = line_end + 1;
+    }
+    return false;
+}
+
 static void compile_generated_c_or_die(const char *c_source) {
     char *tmp_dir = make_temp_dir();
     char c_path[1024];
@@ -168,6 +222,69 @@ static void compile_generated_c_or_die(const char *c_source) {
         fprintf(stderr, "generated C failed to compile: %s\n", command);
         ASSERT(false);
     }
+    ASSERT(remove_dir_recursive(tmp_dir) == 0);
+    free(tmp_dir);
+}
+
+/* Compile generated C for one object format and verify its native relocation. */
+static void assert_generated_native_symbol_relocation(const char *c_source,
+                                                      bool target_elf,
+                                                      const char *native_symbol) {
+    char *tmp_dir = make_temp_dir();
+    char c_path[1024];
+    char o_path[1024];
+    char nm_path[1024];
+    char command[4096];
+    char *nm_output;
+    char expected[256];
+    char unexpected[256];
+
+    ASSERT(snprintf(c_path, sizeof(c_path), "%s/generated.c", tmp_dir) > 0);
+    ASSERT(snprintf(o_path, sizeof(o_path), "%s/generated.o", tmp_dir) > 0);
+    ASSERT(snprintf(nm_path, sizeof(nm_path), "%s/nm.txt", tmp_dir) > 0);
+    write_text_file_or_die(c_path, c_source);
+    if (target_elf) {
+        ASSERT(snprintf(command,
+                        sizeof(command),
+                        "build/toolchain/llvm/bin/clang --target=x86_64-unknown-linux-gnu "
+                        "--sysroot=build/toolchain/sysroot/linux-x64-gnu "
+                        "-Isrc -Isrc/runtime -std=gnu11 -fexceptions -Werror "
+                        "-c '%s' -o '%s' >/dev/null 2>&1",
+                        c_path,
+                        o_path) > 0);
+    } else {
+        ASSERT(snprintf(command,
+                        sizeof(command),
+                        "cc -Isrc -Isrc/runtime -std=gnu11 -fexceptions -Werror "
+                        "-c '%s' -o '%s' >/dev/null 2>&1",
+                        c_path,
+                        o_path) > 0);
+    }
+    ASSERT(system(command) == 0);
+    ASSERT(snprintf(command,
+                    sizeof(command),
+                    "if command -v llvm-nm >/dev/null 2>&1; then "
+                    "llvm-nm -u '%s' > '%s'; else nm -u '%s' > '%s'; fi",
+                    o_path,
+                    nm_path,
+                    o_path,
+                    nm_path) > 0);
+    ASSERT(system(command) == 0);
+    nm_output = read_text_file_or_die(nm_path);
+    ASSERT(snprintf(expected,
+                    sizeof(expected),
+                    target_elf ? "%s" : "_%s",
+                    native_symbol) > 0);
+    ASSERT(nm_output_contains_symbol(nm_output, expected));
+    if (target_elf) {
+        ASSERT(snprintf(unexpected,
+                        sizeof(unexpected),
+                        "_%s",
+                        native_symbol) > 0);
+        ASSERT(!nm_output_contains_symbol(nm_output, unexpected));
+    }
+
+    free(nm_output);
     ASSERT(remove_dir_recursive(tmp_dir) == 0);
     free(tmp_dir);
 }
@@ -288,8 +405,10 @@ static void test_multi_file_bin(void) {
      * visible in the source). */
     ASSERT(strstr(out.c_source, "feng__feng__codegen__mfa__helper") != NULL);
     ASSERT(strstr(out.c_source, "feng__feng__codegen__mfb__main") != NULL);
-    ASSERT(strstr(out.c_source, "c_puts(char *)") != NULL);
-    ASSERT(strstr(out.c_source, "c_puts(((char *)feng_string_data(") != NULL);
+    ASSERT(count_substr(out.c_source, "FENG_NATIVE_SYMBOL(\"c_puts\")") == 2U);
+    ASSERT(count_substr(out.c_source,
+                        "feng__feng__codegen__mfb__c_puts__from__") == 2U);
+    ASSERT(strstr(out.c_source, "((char *)feng_string_data(") != NULL);
     /* Exactly one C `main` entry wrapper for the binary. */
     ASSERT(count_substr(out.c_source, "int main(int argc, char **argv)") == 1U);
     compile_generated_c_or_die(out.c_source);
@@ -589,6 +708,102 @@ static void test_private_representation_cross_package_ft_codegen(void) {
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(invalid_program);
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(consumer_analysis);
+    feng_program_free(consumer_program);
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    feng_semantic_analysis_free(provider_analysis);
+    feng_program_free(provider_program);
+    ASSERT(remove_dir_recursive(tmp_dir) == 0);
+    free(tmp_dir);
+}
+
+static void test_c_variadic_cross_package_ft_codegen(void) {
+    static const char *kProviderSource =
+        "open module vendor.c_variadic;\n"
+        "@cdecl(\"c\", \"native_variadic\", 2)\n"
+        "open extern func send(data: byte*, count: i32, value: f64): i32;\n";
+    static const char *kConsumerSource =
+        "module demo.c_variadic;\n"
+        "import vendor.c_variadic;\n"
+        "func call(data: byte*, count: i32, value: f64): i32 {\n"
+        "    return send(data, count, value);\n"
+        "}\n";
+    FengProgram *provider_program =
+        parse_or_die(kProviderSource, "tests/c_variadic_vendor.ff");
+    const FengProgram *provider_programs[1] = {provider_program};
+    FengSemanticAnalysis *provider_analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolExportOptions export_options = {0};
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions analyze_options = {0};
+    FengSymbolError symbol_error = {0};
+    FengProgram *consumer_program = NULL;
+    const FengProgram *consumer_programs[1];
+    FengSemanticAnalysis *consumer_analysis = NULL;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(provider_programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &provider_analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_options.public_root = public_root;
+    ASSERT(feng_symbol_export_analysis(provider_analysis,
+                                       &export_options,
+                                       &symbol_error));
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &symbol_error));
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    analyze_options.target = FENG_COMPILE_TARGET_LIB;
+    analyze_options.imported_modules = &query;
+    analyze_options.pointer_size = sizeof(void *);
+
+    consumer_program =
+        parse_or_die(kConsumerSource, "tests/c_variadic_consumer.ff");
+    consumer_programs[0] = consumer_program;
+    ASSERT(feng_semantic_analyze_with_options(consumer_programs,
+                                              1U,
+                                              &analyze_options,
+                                              &consumer_analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    feng_symbol_imported_module_cache_populate_codegen_metadata(cache,
+                                                                 consumer_analysis);
+    ASSERT(feng_codegen_emit_program(consumer_analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &output,
+                                     &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source,
+                  "extern int32_t feng__vendor__c_variadic__send__from__") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "(uint8_t *, int32_t, ...) FENG_NATIVE_SYMBOL(\"native_variadic\");") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "(uint8_t *, int32_t, double) FENG_NATIVE_SYMBOL(\"native_variadic\");") == NULL);
+    compile_generated_c_or_die(output.c_source);
+
     feng_codegen_output_free(&output);
     feng_codegen_error_free(&codegen_error);
     feng_semantic_analysis_free(consumer_analysis);
@@ -1587,8 +1802,14 @@ static void test_extern_calling_convention_codegen(void) {
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "#define FENG_EXTERN_CALLCONV_STDCALL") != NULL);
     ASSERT(strstr(out.c_source, "#define FENG_EXTERN_CALLCONV_FASTCALL") != NULL);
-    ASSERT(strstr(out.c_source, "FENG_EXTERN_CALLCONV_STDCALL stdcall_value(") != NULL);
-    ASSERT(strstr(out.c_source, "FENG_EXTERN_CALLCONV_FASTCALL fastcall_value(") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FENG_EXTERN_CALLCONV_STDCALL feng__feng__codegen__callconv__stdcall_value__from__") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FENG_EXTERN_CALLCONV_FASTCALL feng__feng__codegen__callconv__fastcall_value__from__") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FENG_NATIVE_SYMBOL(\"stdcall_value\")") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FENG_NATIVE_SYMBOL(\"fastcall_value\")") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -1628,11 +1849,11 @@ static void test_extern_c_symbol_name_codegen(void) {
     }
 
     ASSERT(out.c_source != NULL);
-    /* fabs is a system-header symbol — its extern declaration is suppressed
-     * because the generated C always includes <math.h>. */
-    /* ASSERT(strstr(out.c_source, "extern double fabs(double);") != NULL); */
     ASSERT(strstr(out.c_source, "extern double fabs(double);") == NULL);
-    ASSERT(strstr(out.c_source, "fabs(") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern double feng__feng__codegen__externsymbol__abs_value__from__f64(double) FENG_NATIVE_SYMBOL(\"fabs\");") != NULL);
+    ASSERT(count_substr(out.c_source,
+                        "feng__feng__codegen__externsymbol__abs_value__from__f64(") == 2U);
     ASSERT(strstr(out.c_source, "extern double abs_value(double);") == NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -1640,6 +1861,130 @@ static void test_extern_c_symbol_name_codegen(void) {
     feng_codegen_error_free(&cgerr);
     feng_semantic_analysis_free(analysis);
     free(errors);
+    feng_program_free(program);
+}
+
+static void test_extern_overload_uses_resolved_declaration_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.externoverload;\n"
+        "@cdecl(\"c\", \"extern_i32\")\n"
+        "extern func select(value: i32): i32;\n"
+        "@cdecl(\"c\", \"extern_f64\")\n"
+        "extern func select(value: f64): f64;\n"
+        "func select_i32(value: i32): i32 {\n"
+        "    return select(value);\n"
+        "}\n"
+        "func select_f64(value: f64): f64 {\n"
+        "    return select(value);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "extern_overload.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    if (!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                               &analysis, &errors, &error_count)) {
+        for (size_t i = 0U; i < error_count; ++i) {
+            fprintf(stderr, "semantic error (extern overload identity): %s\n",
+                    errors[i].message ? errors[i].message : "(unknown)");
+        }
+        ASSERT(false);
+    }
+    ASSERT(error_count == 0U);
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (extern overload identity): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    {
+        const char *i32_name =
+            "feng__feng__codegen__externoverload__select__from__i32(";
+        const char *f64_name =
+            "feng__feng__codegen__externoverload__select__from__f64(";
+
+        ASSERT(strstr(out.c_source, "FENG_NATIVE_SYMBOL(\"extern_i32\")") != NULL);
+        ASSERT(strstr(out.c_source, "FENG_NATIVE_SYMBOL(\"extern_f64\")") != NULL);
+        ASSERT(count_substr(out.c_source, i32_name) == 2U);
+        ASSERT(count_substr(out.c_source, f64_name) == 2U);
+    }
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_extern_native_symbol_alias_codegen(void) {
+    static const char *kNativeSymbol = "feng_test_native_alias_symbol";
+    static const char *kSource =
+        "module feng.codegen.nativealias;\n"
+        "@cdecl(\"c\", \"feng_test_native_alias_symbol\")\n"
+        "extern func pointer_call(value: byte*): i32;\n"
+        "@cdecl(\"c\", \"feng_test_native_alias_symbol\")\n"
+        "extern func scalar_call(value: i32): i64;\n"
+        "@cdecl(\"c\", \"feng_test_native_alias_symbol\")\n"
+        "extern func floating_call(value: f64): f64;\n"
+        "@cdecl(\"c\", \"feng_test_escaped_\\\"symbol\")\n"
+        "extern func escaped_symbol(value: i32): i32;\n"
+        "open func use_pointer(value: byte*): i32 {\n"
+        "    return pointer_call(value);\n"
+        "}\n"
+        "open func use_scalar(value: i32): i64 {\n"
+        "    return scalar_call(value);\n"
+        "}\n"
+        "open func use_floating(value: f64): f64 {\n"
+        "    return floating_call(value);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "extern_native_alias.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "#define FENG_NATIVE_SYMBOL(name) __asm__(\"_\" name)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "#define FENG_NATIVE_SYMBOL(name) __asm__(name)") != NULL);
+    ASSERT(strstr(out.c_source, "Windows/COFF is") != NULL);
+    ASSERT(count_substr(out.c_source,
+                        "FENG_NATIVE_SYMBOL(\"feng_test_native_alias_symbol\")") == 3U);
+    ASSERT(strstr(out.c_source,
+                  "FENG_NATIVE_SYMBOL(\"feng_test_escaped_\\\"symbol\")") != NULL);
+    ASSERT(count_substr(out.c_source,
+                        "feng__feng__codegen__nativealias__pointer_call__from__") == 2U);
+    ASSERT(count_substr(out.c_source,
+                        "feng__feng__codegen__nativealias__scalar_call__from__") == 2U);
+    ASSERT(count_substr(out.c_source,
+                        "feng__feng__codegen__nativealias__floating_call__from__") == 2U);
+    ASSERT(strstr(out.c_source, "feng_test_native_alias_symbol(") == NULL);
+    compile_generated_c_or_die(out.c_source);
+#if defined(__APPLE__)
+    assert_generated_native_symbol_relocation(out.c_source, false, kNativeSymbol);
+#endif
+    assert_generated_native_symbol_relocation(out.c_source, true, kNativeSymbol);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
     feng_program_free(program);
 }
 
@@ -1740,11 +2085,12 @@ static void test_abi_function_pointer_codegen(void) {
     ASSERT(strstr(out.c_source,
                   "FengAbiFnPtr__feng__codegen__abifn__Cmp") != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern FengAbiFnPtr__feng__codegen__abifn__Cmp c_load_cmp(void);") != NULL);
+                  "extern FengAbiFnPtr__feng__codegen__abifn__Cmp feng__feng__codegen__abifn__c_load_cmp__from__void(void) FENG_NATIVE_SYMBOL(\"c_load_cmp\");") != NULL);
     ASSERT(strstr(out.c_source,
                   "FengAbiFnPtr__feng__codegen__abifn__Cmp cb;") != NULL);
     ASSERT(strstr(out.c_source, "&feng__feng__codegen__abifn__cmp") != NULL);
-    ASSERT(strstr(out.c_source, "c_load_cmp()") != NULL);
+    ASSERT(count_substr(out.c_source,
+                        "feng__feng__codegen__abifn__c_load_cmp__from__void(") == 2U);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -1804,9 +2150,11 @@ static void test_abi_value_pointer_codegen(void) {
     ASSERT(strstr(out.c_source,
                   "Feng__feng__codegen__abivalue__Point__abi_ptr(") != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern void c_use_point_ptr(struct Feng__feng__codegen__abivalue__Point__AbiLayout *") != NULL);
+                  "extern void feng__feng__codegen__abivalue__c_use_point_ptr__from__") != NULL);
     ASSERT(strstr(out.c_source,
-                  "c_use_point_ptr(Feng__feng__codegen__abivalue__Point__abi_ptr(") != NULL);
+                  "(struct Feng__feng__codegen__abivalue__Point__AbiLayout *) FENG_NATIVE_SYMBOL(\"c_use_point_ptr\");") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng__feng__codegen__abivalue__c_use_point_ptr__from__") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -1871,15 +2219,19 @@ static void test_abi_array_pointee_codegen(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern uint8_t * c_load_bytes(void);") != NULL);
+                  "extern uint8_t * feng__feng__codegen__arraypointee__c_load_bytes__from__void(void) FENG_NATIVE_SYMBOL(\"c_load_bytes\");") != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern void c_use_bytes(uint8_t *);") != NULL);
+                  "extern void feng__feng__codegen__arraypointee__c_use_bytes__from__") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "(uint8_t *) FENG_NATIVE_SYMBOL(\"c_use_bytes\");") != NULL);
     ASSERT(strstr(out.c_source,
                   "uint8_t * data;") != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern struct Feng__feng__codegen__arraypointee__Point__AbiLayout * c_load_points(void);") != NULL);
+                  "extern struct Feng__feng__codegen__arraypointee__Point__AbiLayout * feng__feng__codegen__arraypointee__c_load_points__from__void(void) FENG_NATIVE_SYMBOL(\"c_load_points\");") != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern void c_use_points(struct Feng__feng__codegen__arraypointee__Point__AbiLayout *);") != NULL);
+                  "extern void feng__feng__codegen__arraypointee__c_use_points__from__") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "(struct Feng__feng__codegen__arraypointee__Point__AbiLayout *) FENG_NATIVE_SYMBOL(\"c_use_points\");") != NULL);
     ASSERT(strstr(out.c_source,
                   "struct Feng__feng__codegen__arraypointee__Point__AbiLayout * data;") != NULL);
     compile_generated_c_or_die(out.c_source);
@@ -1933,11 +2285,15 @@ static void test_fieldless_abi_pointer_codegen(void) {
     ASSERT(strstr(out.c_source,
                   "struct Feng__feng__codegen__opaquehandle__Handle;") != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern struct Feng__feng__codegen__opaquehandle__Handle * c_make_handle(void);") != NULL);
+                  "extern struct Feng__feng__codegen__opaquehandle__Handle * feng__feng__codegen__opaquehandle__c_make_handle__from__void(void) FENG_NATIVE_SYMBOL(\"c_make_handle\");") != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern void c_use_handle(struct Feng__feng__codegen__opaquehandle__Handle *") != NULL);
+                  "extern void feng__feng__codegen__opaquehandle__c_use_handle__from__") != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern struct Feng__feng__codegen__opaquehandle__Handle * c_roundtrip_handle(struct Feng__feng__codegen__opaquehandle__Handle *") != NULL);
+                  "(struct Feng__feng__codegen__opaquehandle__Handle *) FENG_NATIVE_SYMBOL(\"c_use_handle\");") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern struct Feng__feng__codegen__opaquehandle__Handle * feng__feng__codegen__opaquehandle__c_roundtrip_handle__from__") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "(struct Feng__feng__codegen__opaquehandle__Handle *) FENG_NATIVE_SYMBOL(\"c_roundtrip_handle\");") != NULL);
     ASSERT(strstr(out.c_source,
                   "Feng__feng__codegen__opaquehandle__Handle__AbiLayout") == NULL);
     ASSERT(strstr(out.c_source,
@@ -2037,16 +2393,20 @@ static void test_abi_value_extern_codegen(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source,
-                  "extern struct Feng__feng__codegen__abivalueextern__Point__AbiLayout create_point(") != NULL);
+                  "extern struct Feng__feng__codegen__abivalueextern__Point__AbiLayout feng__feng__codegen__abivalueextern__create_point__from__") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FENG_NATIVE_SYMBOL(\"create_point\")") != NULL);
     /* int is platform-dependent: i32 (int32_t) on 32-bit, i64 (int64_t) on 64-bit. */
     {
         const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
         char expected[128];
         snprintf(expected, sizeof(expected),
-                 "extern %s point_sum(struct Feng__feng__codegen__abivalueextern__Point__AbiLayout",
+                 "extern %s feng__feng__codegen__abivalueextern__point_sum__from__",
                  int_c_type);
         ASSERT(strstr(out.c_source, expected) != NULL);
     }
+    ASSERT(strstr(out.c_source,
+                  "FENG_NATIVE_SYMBOL(\"point_sum\")") != NULL);
     ASSERT(strstr(out.c_source,
                   "Feng__feng__codegen__abivalueextern__Point__abi_box(") != NULL);
     ASSERT(strstr(out.c_source,
@@ -8081,6 +8441,7 @@ int main(void) {
     test_multi_file_lib();
     test_private_generic_representation_same_package_codegen();
     test_private_representation_cross_package_ft_codegen();
+    test_c_variadic_cross_package_ft_codegen();
     test_module_binding_lazy_ensure_init_codegen();
     test_address_of_module_binding_uses_storage_slot_codegen();
     test_module_scalar_var_assignment_marks_initialized_codegen();
@@ -8100,6 +8461,8 @@ int main(void) {
     test_module_binding_default_zero_ensure_init_codegen();
     test_extern_calling_convention_codegen();
     test_extern_c_symbol_name_codegen();
+    test_extern_overload_uses_resolved_declaration_codegen();
+    test_extern_native_symbol_alias_codegen();
     test_address_of_scalar_and_array_codegen();
     test_abi_function_pointer_codegen();
     test_abi_value_pointer_codegen();

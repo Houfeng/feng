@@ -1,0 +1,31 @@
+module fcts_bin;
+
+import std.test;
+
+@cdecl("libc", "strlen")
+extern func nativeByteLength(value: byte*): uint;
+
+@cdecl("libc", "strlen")
+extern func nativeTextLength(value: string*): int;
+
+@cdecl("libc", "labs")
+extern func nativeSignedAbs(value: int): int;
+
+@cdecl("libc", "labs")
+extern func nativeUnsignedAbs(value: uint): uint;
+
+open func test_extern() {
+  describe("extern", () {
+    test("same native symbol with different pointer and return types", () {
+      var terminator: byte = 0;
+      let text = "feng";
+      assert(nativeByteLength(&terminator) == 0, "byte pointer signature");
+      assert(nativeTextLength(&text) == 4, "string pointer signature");
+    });
+
+    test("same native symbol with different scalar and return types", () {
+      assert(nativeSignedAbs(-7) == 7, "signed scalar signature");
+      assert(nativeUnsignedAbs(9) == 9, "unsigned scalar signature");
+    });
+  });
+}

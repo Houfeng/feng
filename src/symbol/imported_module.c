@@ -219,6 +219,19 @@ static FengExpr *synthesize_string_literal_annotation_arg(const char *text) {
     return expr;
 }
 
+/* Build the integer literal used for imported C variadic metadata. */
+static FengExpr *synthesize_integer_literal_annotation_arg(size_t value) {
+    FengExpr *expr = (FengExpr *)calloc(1U, sizeof(*expr));
+
+    if (expr == NULL || value > (size_t)INT64_MAX) {
+        free(expr);
+        return NULL;
+    }
+    expr->kind = FENG_EXPR_INTEGER;
+    expr->as.integer = (int64_t)value;
+    return expr;
+}
+
 static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *symbol_decl,
                                                     FengAnnotation **out_annotations,
                                                     size_t *out_count) {
@@ -226,6 +239,7 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     FengExpr **args = NULL;
     FengExpr *arg_expr = NULL;
     FengExpr *symbol_expr = NULL;
+    FengExpr *fixed_count_expr = NULL;
     const char *annotation_name;
     size_t arg_count;
     size_t total_count = 0U;
@@ -276,16 +290,24 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
             return false;
         }
 
-        arg_count = symbol_decl->abi_symbol != NULL && symbol_decl->abi_symbol[0] != '\0'
-            ? 2U
-            : 1U;
+        arg_count = symbol_decl->abi_fixed_param_count > 0U
+            ? 3U
+            : (symbol_decl->abi_symbol != NULL && symbol_decl->abi_symbol[0] != '\0'
+                ? 2U
+                : 1U);
         args = (FengExpr **)calloc(arg_count, sizeof(*args));
         arg_expr = synthesize_string_literal_annotation_arg(symbol_decl->abi_library);
         if (arg_count > 1U) {
             symbol_expr = synthesize_string_literal_annotation_arg(symbol_decl->abi_symbol);
         }
+        if (arg_count > 2U) {
+            fixed_count_expr = synthesize_integer_literal_annotation_arg(
+                symbol_decl->abi_fixed_param_count);
+        }
         if (args == NULL || arg_expr == NULL ||
-            (arg_count > 1U && symbol_expr == NULL)) {
+            (arg_count > 1U && symbol_expr == NULL) ||
+            (arg_count > 2U && fixed_count_expr == NULL)) {
+            free_synthetic_annotation_expr(fixed_count_expr);
             free_synthetic_annotation_expr(symbol_expr);
             free_synthetic_annotation_expr(arg_expr);
             free(args);
@@ -301,6 +323,9 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
         annotations[0].args[0] = arg_expr;
         if (arg_count > 1U) {
             annotations[0].args[1] = symbol_expr;
+        }
+        if (arg_count > 2U) {
+            annotations[0].args[2] = fixed_count_expr;
         }
         annotations[0].arg_count = arg_count;
     }

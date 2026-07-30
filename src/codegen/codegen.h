@@ -3,12 +3,14 @@
  *
  * Scope (Phase 1A complete):
  *   - module declaration
- *   - extern fn with @cdecl(<lib>[, <c-name>]) /
- *     @stdcall(<lib>[, <c-name>]) / @fastcall(<lib>[, <c-name>]) —
+ *   - extern fn with @cdecl(<lib>[, <c-name>[, <fixed-count>]]) /
+ *     @stdcall(<lib>[, <c-name>[, <fixed-count>]]) /
+ *     @fastcall(<lib>[, <c-name>[, <fixed-count>]]) —
  *     emits an `extern` declaration whose surface types follow the C ABI path;
  *     `@stdcall` / `@fastcall` carry host calling-convention markers when the
- *     target toolchain distinguishes them, and the optional second annotation
- *     argument selects the imported C symbol name
+ *     target toolchain distinguishes them; the optional second annotation
+ *     argument selects the imported C symbol name and the optional third
+ *     argument declares the C variadic fixed-parameter count
  *   - extern fn with @runtime — reuses the runtime contract header's
  *     declaration and emits ordinary C calls (no ABI bridge / trampoline)
  *   - top-level free fn (including `main(args: string[])` entry)

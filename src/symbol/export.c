@@ -1958,6 +1958,21 @@ static bool apply_decl_annotations(FengSymbolDeclView *decl,
                     return false;
                 }
             }
+            if (callconv->arg_count > 2U) {
+                const FengExpr *fixed_count = callconv->args[2];
+
+                if (fixed_count == NULL ||
+                    fixed_count->kind != FENG_EXPR_INTEGER ||
+                    fixed_count->as.integer < 0 ||
+                    (uint64_t)fixed_count->as.integer > (uint64_t)SIZE_MAX) {
+                    return feng_symbol_internal_set_error(
+                        out_error,
+                        path,
+                        token,
+                        "extern callable annotation fixed parameter count must be a non-negative integer literal");
+                }
+                decl->abi_fixed_param_count = (size_t)fixed_count->as.integer;
+            }
         }
     }
     return true;

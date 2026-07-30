@@ -1068,6 +1068,96 @@ static void test_imported_module_cache_preserves_extern_c_symbol_name(void) {
     free(tmp_dir);
 }
 
+static void test_c_variadic_fixed_param_count_ft_roundtrip(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.c_variadic;\n"
+        "@cdecl(\"c\", \"native_fixed\", 2)\n"
+        "open extern func fixed(format: byte*, count: i32, value: f64): i32;\n"
+        "@stdcall(\"c\", \"native_zero\", 0)\n"
+        "open extern func zero(value: i32): i32;\n"
+        "@fastcall(\"c\", \"native_omitted\")\n"
+        "open extern func omitted(value: i32): i32;\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    char public_ft[1024];
+    char bundle_path[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query = {0};
+    FengSlice segments[4];
+    const FengSymbolImportedModule *symbol_module = NULL;
+    const FengSymbolDeclView *fixed_view = NULL;
+    const FengSymbolDeclView *zero_view = NULL;
+    const FengSymbolDeclView *omitted_view = NULL;
+    const FengSemanticModule *semantic_module = NULL;
+    const FengProgram *program = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/c_variadic_mod", tmp_dir) > 0);
+    ASSERT(snprintf(public_ft,
+                    sizeof(public_ft),
+                    "%s/feng/test/symbol/c_variadic.ft",
+                    public_root) > 0);
+    ASSERT(snprintf(bundle_path, sizeof(bundle_path), "%s/c_variadic.fb", tmp_dir) > 0);
+
+    export_public_source_or_die("c_variadic.ff", kSource, public_root);
+    write_bundle_with_file_or_die(bundle_path,
+                                  "mod/feng/test/symbol/c_variadic.ft",
+                                  public_ft);
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_bundle(provider, bundle_path, &error));
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("c_variadic");
+    symbol_module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(symbol_module != NULL);
+    fixed_view = feng_symbol_module_find_public_value(symbol_module,
+                                                       slice_from_cstr("fixed"));
+    zero_view = feng_symbol_module_find_public_value(symbol_module,
+                                                      slice_from_cstr("zero"));
+    omitted_view = feng_symbol_module_find_public_value(symbol_module,
+                                                         slice_from_cstr("omitted"));
+    ASSERT(fixed_view != NULL);
+    ASSERT(zero_view != NULL);
+    ASSERT(omitted_view != NULL);
+    ASSERT(feng_symbol_decl_abi_fixed_param_count(fixed_view) == 2U);
+    ASSERT(feng_symbol_decl_abi_fixed_param_count(zero_view) == 0U);
+    ASSERT(feng_symbol_decl_abi_fixed_param_count(omitted_view) == 0U);
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    semantic_module = query.get_module(query.user, segments, 4U);
+    ASSERT(semantic_module != NULL);
+    ASSERT(semantic_module->program_count == 1U);
+    program = semantic_module->programs[0];
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 3U);
+    for (size_t index = 0U; index < program->declaration_count; ++index) {
+        const FengDecl *decl = program->declarations[index];
+        const FengAnnotation *annotation;
+
+        ASSERT(decl != NULL);
+        ASSERT(decl->annotation_count == 1U);
+        annotation = &decl->annotations[0];
+        if (slice_equals_cstr(decl->as.function_decl.name, "fixed")) {
+            ASSERT(annotation->arg_count == 3U);
+            ASSERT(annotation->args[2]->kind == FENG_EXPR_INTEGER);
+            ASSERT(annotation->args[2]->as.integer == 2);
+        } else {
+            ASSERT(annotation->arg_count == 2U);
+        }
+    }
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_imported_module_cache_preserves_enum_items(void) {
     static const char *kSource =
         "open module feng.test.symbol.imported_enum_cache;\n"
@@ -2205,6 +2295,7 @@ int main(void) {
     test_provider_rejects_bad_bundle_symbol_entry();
     test_imported_module_cache_keeps_synthesized_modules_alive();
     test_imported_module_cache_preserves_extern_c_symbol_name();
+    test_c_variadic_fixed_param_count_ft_roundtrip();
     test_imported_module_cache_preserves_enum_items();
     test_imported_enum_value_participates_in_semantic_analysis();
     test_imported_module_cache_keeps_bundle_fit_modules_alive();
