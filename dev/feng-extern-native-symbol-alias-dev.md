@@ -1,6 +1,6 @@
 # `extern func` 原生符号别名修复
 
-> 状态：待评审，不实施代码
+> 状态：方案已收敛，可开始实施
 >
 > C ABI 类型与调用规则由
 > [Feng 语言 ABI 互操作规范](../docs/feng-interop.md) 定义；本文只定义 `extern func`
@@ -128,6 +128,15 @@ C variadic 的语言规则由
 [Feng 语言 ABI 互操作规范](../docs/feng-interop.md) 定义。以下声明用于说明
 固定参数个数的跨包保存：
 
+本方案保持现有语义：
+
+1. 省略第三个参数或显式传入 `0`，都表示非 C variadic。
+2. 第三个参数大于 `0` 时生成 C variadic 原型；其值表示 C 原型中的固定参数
+   个数，有效范围为 `1..param_count`。
+3. 固定参数之后的 Feng 声明参数按 C `...` 传递。
+4. 固定参数个数等于 `param_count` 时，原型仍为 C variadic，但该 Feng 声明没有
+   传入可变参数。
+
 ```feng
 @cdecl("libc", "snprintf", 3)
 extern func snprintf_f64(buf: byte*, size: uint, fmt: byte*, value: f64): i32;
@@ -149,7 +158,8 @@ extern int32_t feng__std__numeric__snprintf_f64__from__...(
 
 1. `FengSymbolDeclView` 保存 C variadic 固定参数个数。
 2. symbol export 从调用约定注解的第三个参数读取该值。
-3. `.ft` 使用独立、可忽略的 attribute 写入该值；不修改既有记录含义。
+3. `.ft` 使用独立、可忽略的 attribute 写入大于 `0` 的值；`0` 与缺少该
+   attribute 含义相同，不修改既有记录含义。
 4. `.ft` reader 读回该值；旧 `.ft` 缺少该 attribute 时保持当前默认值 `0`。
 5. imported module 重建调用约定注解时恢复第三个整数参数。
 6. symbol clone、provider 内部视图和相关测试同步覆盖该字段。
@@ -193,6 +203,7 @@ Feng 调用点 -> wrapper -> 原生符号
   - [ ] 在 `docs/feng-interop.md` 中定义 `@cdecl`、`@stdcall` 和 `@fastcall` 的
     可选固定参数个数。
   - [ ] 明确参数形式、有效范围、C 原型含义及跨包保持要求。
+  - [ ] 明确省略或传入 `0` 均表示非 C variadic，不改变现有行为。
   - [ ] 本文只保留实现说明并引用正式规范，不重复定义语言规则。
 
 - [ ] TODO 2：按声明身份重构 extern 注册和查找。
@@ -206,7 +217,7 @@ Feng 调用点 -> wrapper -> 原生符号
 
 - [ ] TODO 3：补齐 C variadic 跨包元数据。
   - [ ] symbol view、export 和 clone 保存固定参数个数。
-  - [ ] `.ft` writer/reader 使用独立 attribute 往返固定参数个数。
+  - [ ] `.ft` writer/reader 使用独立 attribute 往返大于 `0` 的固定参数个数。
   - [ ] imported module 重建调用约定注解的第三个整数参数。
   - [ ] 补齐默认值、`.ft` 往返、bundle 导入和跨包 codegen 用例。
   - [ ] 验证本包和跨包生成的 C variadic 原型一致。
