@@ -2144,6 +2144,50 @@ static void test_private_representation_dependency_closure_roundtrip(void) {
     free(tmp_dir);
 }
 
+/* A provider visibility error leaves no semantic analysis to export and no
+ * package-public .ft may be created. */
+static void test_signature_visibility_error_prevents_public_ft_export(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.visibility_error;\n"
+        "type Hidden {}\n"
+        "open let value: Hidden;\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    char ft_path[1024];
+    FengProgram *program = parse_or_die("visibility_error.ff", kSource);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSymbolExportOptions options = {0};
+    FengSymbolError error = {0};
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    ASSERT(snprintf(ft_path,
+                    sizeof(ft_path),
+                    "%s/feng/test/symbol/visibility_error.ft",
+                    public_root) > 0);
+    ASSERT(!feng_semantic_analyze(programs,
+                                  1U,
+                                  FENG_COMPILE_TARGET_LIB,
+                                  &analysis,
+                                  &errors,
+                                  &error_count));
+    ASSERT(analysis == NULL);
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0327") == 0);
+
+    options.public_root = public_root;
+    ASSERT(!feng_symbol_export_analysis(analysis, &options, &error));
+    ASSERT(access(ft_path, F_OK) != 0);
+
+    feng_symbol_error_free(&error);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -2173,6 +2217,7 @@ int main(void) {
     test_fit_builtin_and_array_target_nodes_ft_roundtrip();
     test_fit_array_type_param_target_ft_roundtrip();
     test_private_representation_dependency_closure_roundtrip();
+    test_signature_visibility_error_prevents_public_ft_export();
     fprintf(stdout, "symbol tests passed\n");
     return 0;
 }

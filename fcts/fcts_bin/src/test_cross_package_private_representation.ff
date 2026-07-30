@@ -7,6 +7,7 @@ open func test_cross_package_private_representation() {
   describe("cross-package private representation type", () {
     test("int instance", () {
       let box = CrossPackagePrivateBox<int>();
+      assert(box.readPlain() == 0, "private non-generic default");
       assert(box.readManaged() == 0, "managed int default");
       assert(box.readValue() == 0, "value int default");
       assert(box.readTuple() == 0, "tuple int default");

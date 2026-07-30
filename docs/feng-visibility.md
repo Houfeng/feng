@@ -231,7 +231,75 @@ open type User {
 | module 成员    | `seal`    |
 | type 成员      | `open`    |
 
-## 10 私有成员的表示类型
+## 10 有效可见范围
+
+可见范围从窄到宽分为：
+
+1. **类型私有**：仅所属 `type` 或 `fit` 内可用。
+2. **模块私有**：仅声明所在 module 内可用。
+3. **包内可见**：当前包内可用，包外不可用。
+4. **包外公开**：包内、包外均可用。
+
+有效可见范围按以下规则计算：
+
+- module 为 `open` 时不收窄范围；module 为 `seal` 时收窄到包内可见。
+- 顶层声明为 `open` 时不收窄范围；为 `seal` 或省略修饰时收窄到模块私有。
+- `type`、`fit` 成员为 `open` 或省略修饰时不收窄范围；为 `seal` 时收窄到类型私有。
+- 声明的有效可见范围是 module、所属顶层声明和成员各层范围中的最窄者。
+- `spec` 成员不能声明可见性，其有效可见范围与所属 `spec` 一致。
+- `fit` 不是可命名声明：仅 `open module` 中的 `open fit` 形成包外公开签名；
+  其他 `fit` 仅在声明 module 内生效，按模块私有检查。
+
+因此，`seal module` 中的 `open` 顶层声明为包内可见；`open module` 中未标记
+`open` 的顶层声明为模块私有。
+
+## 11 公开签名的可见性一致性
+
+声明签名中每个组成类型的有效可见范围不得小于该声明的有效可见范围。
+
+检查范围：
+
+- 顶层 `let`、`var`、函数的类型、参数、返回类型和泛型约束。
+- `type` 的泛型约束、父 `spec`，以及实例和静态字段、方法、构造函数的公开签名。
+- `spec` 的泛型约束、父 `spec`，以及 object、callable、union、intersection
+  四种 form 的组成类型。
+- `fit` 的目标类型、`spec` 列表，以及实例和静态成员的公开签名。
+- 显式类型和推导类型；推导类型在类型推导完成后检查。
+
+组成类型按以下规则递归检查：
+
+- 泛型实参、数组元素和指针目标继续参与检查。
+- callable 的参数和返回类型继续参与检查。
+- 泛型参数本身不参与比较，其约束类型参与检查。
+- 具名类型按语义分析已解析的目标声明计算有效可见范围，不按名称或 `.ft`
+  是否收录判断。
+
+可见性不一致使用 `AE0327`，在提供方语义分析阶段报错。显式类型以产生不一致的
+类型引用为诊断位置；推导类型没有对应类型引用时，以声明位置为诊断位置。存在该
+错误时不得生成公开 `.ft`。
+
+```feng
+open module app.api;
+
+type Hidden {}
+
+open let value: Hidden;                 // AE0327
+open func create() -> Hidden;           // AE0327
+open func consume(value: Hidden);       // AE0327
+open func process<T: Hidden>(value: T); // AE0327
+open let values: List<Hidden>;          // AE0327
+
+open type Public {
+  seal let hidden: Hidden;              // 合法：类型私有
+  let exposed: Hidden;                  // AE0327：成员默认 open
+  static let shared: Hidden;            // AE0327
+}
+```
+
+在 `seal module` 中，`open` 声明可以使用同一包内其他 `seal module` 的 `open`
+类型；两者均为包内可见。包外公开声明不能使用该类型。
+
+## 12 私有成员的表示类型
 
 私有成员可以使用在成员声明位置可访问的私有类型。成员类型是否为泛型不改变该
 规则；泛型实参中的类型按相同规则处理。

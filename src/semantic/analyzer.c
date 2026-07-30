@@ -26334,6 +26334,621 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
     return true;
 }
 
+/* Effective declaration visibility ordered from the narrowest scope to the
+ * widest scope.  The ordering is used directly by signature consistency
+ * checks: every referenced type must have a value greater than or equal to
+ * the signature that exposes it. */
+typedef enum SignatureEffectiveVisibility {
+    SIGNATURE_VISIBILITY_TYPE_PRIVATE = 0,
+    SIGNATURE_VISIBILITY_MODULE_PRIVATE,
+    SIGNATURE_VISIBILITY_PACKAGE,
+    SIGNATURE_VISIBILITY_PUBLIC
+} SignatureEffectiveVisibility;
+
+/* Lexical type-parameter scopes active for one declaration signature.
+ * Type-parameter references are not declarations and therefore do not
+ * participate directly in visibility comparisons. */
+typedef struct SignatureTypeParamScope {
+    const FengTypeParam *params;
+    size_t param_count;
+    const struct SignatureTypeParamScope *parent;
+} SignatureTypeParamScope;
+
+/* Return the stable diagnostic name for one effective visibility level. */
+static const char *signature_visibility_name(SignatureEffectiveVisibility visibility) {
+    switch (visibility) {
+        case SIGNATURE_VISIBILITY_TYPE_PRIVATE:
+            return "type-private";
+        case SIGNATURE_VISIBILITY_MODULE_PRIVATE:
+            return "module-private";
+        case SIGNATURE_VISIBILITY_PACKAGE:
+            return "package";
+        case SIGNATURE_VISIBILITY_PUBLIC:
+            return "public";
+    }
+    return "unknown";
+}
+
+/* Compute the effective visibility of a top-level declaration from its
+ * module and declaration modifiers. */
+static SignatureEffectiveVisibility signature_decl_visibility(
+    const FengSemanticModule *module,
+    const FengDecl *decl) {
+    if (decl != NULL && decl->kind == FENG_DECL_FIT) {
+        return module != NULL &&
+                       module->visibility == FENG_VISIBILITY_PUBLIC &&
+                       decl->visibility == FENG_VISIBILITY_PUBLIC
+                   ? SIGNATURE_VISIBILITY_PUBLIC
+                   : SIGNATURE_VISIBILITY_MODULE_PRIVATE;
+    }
+    if (decl == NULL || decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        return SIGNATURE_VISIBILITY_MODULE_PRIVATE;
+    }
+    if (module == NULL || module->visibility != FENG_VISIBILITY_PUBLIC) {
+        return SIGNATURE_VISIBILITY_PACKAGE;
+    }
+    return SIGNATURE_VISIBILITY_PUBLIC;
+}
+
+/* Apply a member visibility modifier to its owner's effective visibility. */
+static SignatureEffectiveVisibility signature_member_visibility(
+    SignatureEffectiveVisibility owner_visibility,
+    const FengTypeMember *member) {
+    if (member != NULL && member->visibility == FENG_VISIBILITY_PRIVATE) {
+        return SIGNATURE_VISIBILITY_TYPE_PRIVATE;
+    }
+    return owner_visibility;
+}
+
+/* Return true when a named type reference denotes a type parameter in the
+ * active declaration signature. */
+static bool signature_type_ref_is_type_param(
+    const FengTypeRef *type_ref,
+    const SignatureTypeParamScope *scope) {
+    const SignatureTypeParamScope *cursor;
+
+    if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED ||
+        type_ref->as.named.segment_count != 1U ||
+        type_ref->as.named.type_arg_count != 0U) {
+        return false;
+    }
+    for (cursor = scope; cursor != NULL; cursor = cursor->parent) {
+        size_t param_index;
+
+        for (param_index = 0U; param_index < cursor->param_count; ++param_index) {
+            if (slice_equals(type_ref->as.named.segments[0],
+                             cursor->params[param_index].name)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Return the source-level name used to identify a declaration signature in
+ * AE0327 diagnostics. */
+static FengSlice signature_decl_name(const FengDecl *decl) {
+    static const char kFitName[] = "fit";
+
+    if (decl == NULL) {
+        return (FengSlice){NULL, 0U};
+    }
+    switch (decl->kind) {
+        case FENG_DECL_GLOBAL_BINDING:
+            return decl->as.binding.name;
+        case FENG_DECL_TYPE:
+            return decl->as.type_decl.name;
+        case FENG_DECL_ENUM:
+            return decl->as.enum_decl.name;
+        case FENG_DECL_SPEC:
+            return decl->as.spec_decl.name;
+        case FENG_DECL_FIT:
+            return (FengSlice){kFitName, sizeof(kFitName) - 1U};
+        case FENG_DECL_FUNCTION:
+            return decl->as.function_decl.name;
+    }
+    return (FengSlice){NULL, 0U};
+}
+
+/* Append one AE0327 diagnostic for a type whose visibility is narrower than
+ * the declaration signature that exposes it. */
+static bool report_signature_visibility_error(
+    ResolveContext *context,
+    FengSlice signature_name,
+    FengToken token,
+    SignatureEffectiveVisibility signature_visibility,
+    const char *type_name,
+    SignatureEffectiveVisibility type_visibility) {
+    return resolver_append_error(
+        context,
+        token,
+        "AE0327",
+        format_message(
+            "declaration '%.*s' has effective visibility '%s' but type '%s' has narrower effective visibility '%s'",
+            (int)signature_name.length,
+            signature_name.data != NULL ? signature_name.data : "",
+            signature_visibility_name(signature_visibility),
+            type_name != NULL ? type_name : "<unknown>",
+            signature_visibility_name(type_visibility)));
+}
+
+/* Compare one resolved target declaration with the signature that references
+ * it.  Builtins and type parameters never reach this helper. */
+static bool validate_signature_target_visibility(
+    ResolveContext *context,
+    const FengDecl *target,
+    FengSlice signature_name,
+    FengToken token,
+    SignatureEffectiveVisibility signature_visibility,
+    const char *type_name) {
+    const FengSemanticModule *target_module;
+    SignatureEffectiveVisibility target_visibility;
+
+    if (target == NULL) {
+        return true;
+    }
+    target_module = find_decl_provider_module(context->analysis, target);
+    if (target_module == NULL) {
+        return true;
+    }
+    target_visibility = signature_decl_visibility(target_module, target);
+    if (target_visibility >= signature_visibility) {
+        return true;
+    }
+    return report_signature_visibility_error(context,
+                                             signature_name,
+                                             token,
+                                             signature_visibility,
+                                             type_name,
+                                             target_visibility);
+}
+
+/* Recursively validate a structured type reference.  Named targets are
+ * compared by resolved declaration identity; generic arguments, arrays and
+ * pointers are traversed independently. */
+static bool validate_signature_type_ref_visibility(
+    ResolveContext *context,
+    const FengTypeRef *type_ref,
+    const SignatureTypeParamScope *type_params,
+    FengSlice signature_name,
+    SignatureEffectiveVisibility signature_visibility) {
+    bool ok = true;
+
+    if (type_ref == NULL) {
+        return true;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_POINTER ||
+        type_ref->kind == FENG_TYPE_REF_ARRAY) {
+        return validate_signature_type_ref_visibility(context,
+                                                      type_ref->as.inner,
+                                                      type_params,
+                                                      signature_name,
+                                                      signature_visibility);
+    }
+    if (signature_type_ref_is_type_param(type_ref, type_params)) {
+        return true;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_NAMED) {
+        const FengDecl *target = resolve_type_ref_decl(context, type_ref);
+
+        if (target != NULL) {
+            char *type_name = format_type_ref_name(type_ref);
+
+            ok = validate_signature_target_visibility(context,
+                                                      target,
+                                                      signature_name,
+                                                      type_ref->token,
+                                                      signature_visibility,
+                                                      type_name);
+            free(type_name);
+            if (!ok) {
+                return false;
+            }
+        }
+        for (size_t arg_index = 0U;
+             arg_index < type_ref->as.named.type_arg_count;
+             ++arg_index) {
+            if (!validate_signature_type_ref_visibility(
+                    context,
+                    type_ref->as.named.type_args[arg_index],
+                    type_params,
+                    signature_name,
+                    signature_visibility)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/* Validate an inferred semantic type fact when a declaration has no explicit
+ * type reference in the AST. */
+static bool validate_signature_type_fact_visibility(
+    ResolveContext *context,
+    const FengSemanticTypeFact *fact,
+    const SignatureTypeParamScope *type_params,
+    FengSlice signature_name,
+    FengToken declaration_token,
+    SignatureEffectiveVisibility signature_visibility) {
+    if (fact == NULL) {
+        return true;
+    }
+    switch (fact->kind) {
+        case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
+            return validate_signature_type_ref_visibility(context,
+                                                          fact->type_ref,
+                                                          type_params,
+                                                          signature_name,
+                                                          signature_visibility);
+        case FENG_SEMANTIC_TYPE_FACT_DECL: {
+            FengSlice target_name = decl_typeish_name(fact->type_decl);
+            char *type_name = format_module_name(&target_name, 1U);
+            bool ok = validate_signature_target_visibility(context,
+                                                           fact->type_decl,
+                                                           signature_name,
+                                                           declaration_token,
+                                                           signature_visibility,
+                                                           type_name);
+
+            free(type_name);
+            return ok;
+        }
+        case FENG_SEMANTIC_TYPE_FACT_UNKNOWN:
+        case FENG_SEMANTIC_TYPE_FACT_BUILTIN:
+            return true;
+    }
+    return true;
+}
+
+/* Validate an explicit type or its inferred replacement for a field/binding
+ * site. */
+static bool validate_signature_site_type_visibility(
+    ResolveContext *context,
+    const void *site,
+    const FengTypeRef *explicit_type,
+    const SignatureTypeParamScope *type_params,
+    FengSlice signature_name,
+    FengToken declaration_token,
+    SignatureEffectiveVisibility signature_visibility) {
+    if (explicit_type != NULL) {
+        return validate_signature_type_ref_visibility(context,
+                                                      explicit_type,
+                                                      type_params,
+                                                      signature_name,
+                                                      signature_visibility);
+    }
+    return validate_signature_type_fact_visibility(
+        context,
+        feng_semantic_lookup_type_fact(context->analysis, site),
+        type_params,
+        signature_name,
+        declaration_token,
+        signature_visibility);
+}
+
+/* Validate every constraint in one generic parameter list. */
+static bool validate_signature_type_param_visibility(
+    ResolveContext *context,
+    const FengTypeParam *params,
+    size_t param_count,
+    const SignatureTypeParamScope *scope,
+    FengSlice signature_name,
+    SignatureEffectiveVisibility signature_visibility) {
+    size_t param_index;
+
+    for (param_index = 0U; param_index < param_count; ++param_index) {
+        if (!validate_signature_type_ref_visibility(context,
+                                                    params[param_index].constraint,
+                                                    scope,
+                                                    signature_name,
+                                                    signature_visibility)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Validate parameters, return type and generic constraints for one callable
+ * signature.  Constructors and finalizers have no exposed return type. */
+static bool validate_callable_signature_visibility(
+    ResolveContext *context,
+    const FengCallableSignature *callable,
+    const SignatureTypeParamScope *parent_type_params,
+    FengSlice signature_name,
+    SignatureEffectiveVisibility signature_visibility,
+    bool check_return_type) {
+    SignatureTypeParamScope callable_scope;
+    size_t param_index;
+
+    callable_scope.params = callable->type_params;
+    callable_scope.param_count = callable->type_param_count;
+    callable_scope.parent = parent_type_params;
+    if (!validate_signature_type_param_visibility(context,
+                                                  callable->type_params,
+                                                  callable->type_param_count,
+                                                  &callable_scope,
+                                                  signature_name,
+                                                  signature_visibility)) {
+        return false;
+    }
+    for (param_index = 0U; param_index < callable->param_count; ++param_index) {
+        if (!validate_signature_type_ref_visibility(
+                context,
+                callable->params[param_index].type,
+                &callable_scope,
+                signature_name,
+                signature_visibility)) {
+            return false;
+        }
+    }
+    if (!check_return_type) {
+        return true;
+    }
+    return validate_signature_site_type_visibility(context,
+                                                   callable,
+                                                   callable->return_type,
+                                                   &callable_scope,
+                                                   signature_name,
+                                                   callable->token,
+                                                   signature_visibility);
+}
+
+/* Validate all signature surfaces of one type member. */
+static bool validate_type_member_signature_visibility(
+    ResolveContext *context,
+    const FengTypeMember *member,
+    const SignatureTypeParamScope *owner_type_params,
+    SignatureEffectiveVisibility owner_visibility) {
+    SignatureEffectiveVisibility member_visibility;
+    FengSlice member_name;
+
+    if (member == NULL) {
+        return true;
+    }
+    member_visibility = signature_member_visibility(owner_visibility, member);
+    if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+        member_name = member->as.field.name;
+        return validate_signature_site_type_visibility(context,
+                                                       member,
+                                                       member->as.field.type,
+                                                       owner_type_params,
+                                                       member_name,
+                                                       member->token,
+                                                       member_visibility);
+    }
+
+    member_name = member->as.callable.name;
+    return validate_callable_signature_visibility(
+        context,
+        &member->as.callable,
+        owner_type_params,
+        member_name,
+        member_visibility,
+        member->kind == FENG_TYPE_MEMBER_METHOD);
+}
+
+/* Validate every signature surface declared by one top-level declaration. */
+static bool validate_declaration_signature_visibility(
+    ResolveContext *context,
+    const FengDecl *decl) {
+    SignatureEffectiveVisibility visibility =
+        signature_decl_visibility(context->module, decl);
+    FengSlice name = signature_decl_name(decl);
+    size_t index;
+
+    switch (decl->kind) {
+        case FENG_DECL_GLOBAL_BINDING:
+            return validate_signature_site_type_visibility(context,
+                                                           &decl->as.binding,
+                                                           decl->as.binding.type,
+                                                           NULL,
+                                                           name,
+                                                           decl->as.binding.token,
+                                                           visibility);
+
+        case FENG_DECL_ENUM:
+            return true;
+
+        case FENG_DECL_TYPE: {
+            SignatureTypeParamScope type_scope = {
+                decl->as.type_decl.type_params,
+                decl->as.type_decl.type_param_count,
+                NULL};
+
+            if (!validate_signature_type_param_visibility(
+                    context,
+                    decl->as.type_decl.type_params,
+                    decl->as.type_decl.type_param_count,
+                    &type_scope,
+                    name,
+                    visibility)) {
+                return false;
+            }
+            for (index = 0U; index < decl->as.type_decl.declared_spec_count; ++index) {
+                if (!validate_signature_type_ref_visibility(
+                        context,
+                        decl->as.type_decl.declared_specs[index],
+                        &type_scope,
+                        name,
+                        visibility)) {
+                    return false;
+                }
+            }
+            for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
+                if (!validate_type_member_signature_visibility(
+                        context,
+                        decl->as.type_decl.members[index],
+                        &type_scope,
+                        visibility)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        case FENG_DECL_SPEC: {
+            SignatureTypeParamScope spec_scope = {
+                decl->as.spec_decl.type_params,
+                decl->as.spec_decl.type_param_count,
+                NULL};
+
+            if (!validate_signature_type_param_visibility(
+                    context,
+                    decl->as.spec_decl.type_params,
+                    decl->as.spec_decl.type_param_count,
+                    &spec_scope,
+                    name,
+                    visibility)) {
+                return false;
+            }
+            for (index = 0U; index < decl->as.spec_decl.parent_spec_count; ++index) {
+                if (!validate_signature_type_ref_visibility(
+                        context,
+                        decl->as.spec_decl.parent_specs[index],
+                        &spec_scope,
+                        name,
+                        visibility)) {
+                    return false;
+                }
+            }
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+                for (index = 0U;
+                     index < decl->as.spec_decl.as.callable.param_count;
+                     ++index) {
+                    if (!validate_signature_type_ref_visibility(
+                            context,
+                            decl->as.spec_decl.as.callable.params[index].type,
+                            &spec_scope,
+                            name,
+                            visibility)) {
+                        return false;
+                    }
+                }
+                return validate_signature_type_ref_visibility(
+                    context,
+                    decl->as.spec_decl.as.callable.return_type,
+                    &spec_scope,
+                    name,
+                    visibility);
+            }
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                for (index = 0U;
+                     index < decl->as.spec_decl.as.union_form.member_count;
+                     ++index) {
+                    if (!validate_signature_type_ref_visibility(
+                            context,
+                            decl->as.spec_decl.as.union_form.members[index],
+                            &spec_scope,
+                            name,
+                            visibility)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                for (index = 0U;
+                     index < decl->as.spec_decl.as.intersection_form.member_count;
+                     ++index) {
+                    if (!validate_signature_type_ref_visibility(
+                            context,
+                            decl->as.spec_decl.as.intersection_form.members[index],
+                            &spec_scope,
+                            name,
+                            visibility)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            for (index = 0U;
+                 index < decl->as.spec_decl.as.object.member_count;
+                 ++index) {
+                if (!validate_type_member_signature_visibility(
+                        context,
+                        decl->as.spec_decl.as.object.members[index],
+                        &spec_scope,
+                        visibility)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        case FENG_DECL_FIT: {
+            const FengDecl *target =
+                resolve_type_ref_decl(context, decl->as.fit_decl.target);
+            FengTypeParam array_type_param;
+            SignatureTypeParamScope fit_scope = {NULL, 0U, NULL};
+
+            if (target != NULL && target->kind == FENG_DECL_TYPE) {
+                fit_scope.params = target->as.type_decl.type_params;
+                fit_scope.param_count = target->as.type_decl.type_param_count;
+            } else if (fit_target_collect_array_local_type_param(
+                           context,
+                           decl->as.fit_decl.target,
+                           &array_type_param)) {
+                fit_scope.params = &array_type_param;
+                fit_scope.param_count = 1U;
+            }
+            if (!validate_signature_type_ref_visibility(context,
+                                                        decl->as.fit_decl.target,
+                                                        &fit_scope,
+                                                        name,
+                                                        visibility)) {
+                return false;
+            }
+            for (index = 0U; index < decl->as.fit_decl.spec_count; ++index) {
+                if (!validate_signature_type_ref_visibility(
+                        context,
+                        decl->as.fit_decl.specs[index],
+                        &fit_scope,
+                        name,
+                        visibility)) {
+                    return false;
+                }
+            }
+            for (index = 0U; index < decl->as.fit_decl.member_count; ++index) {
+                if (!validate_type_member_signature_visibility(
+                        context,
+                        decl->as.fit_decl.members[index],
+                        &fit_scope,
+                        visibility)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        case FENG_DECL_FUNCTION:
+            return validate_callable_signature_visibility(
+                context,
+                &decl->as.function_decl,
+                NULL,
+                name,
+                visibility,
+                true);
+    }
+    return true;
+}
+
+/* Validate declaration/type visibility consistency after all declarations in
+ * the current program have completed normal type resolution and inference. */
+static bool validate_program_signature_visibility(
+    ResolveContext *context,
+    const FengProgram *program) {
+    size_t decl_index;
+
+    for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+        if (!validate_declaration_signature_visibility(
+                context,
+                program->declarations[decl_index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool resolve_program_names(const FengSemanticAnalysis *analysis,
                                   const FengSemanticModule *module,
                                   const FengProgram *program,
@@ -26424,6 +27039,10 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
 
     for (decl_index = 0U; decl_index < program->declaration_count && ok; ++decl_index) {
         ok = resolve_declaration(&context, program->declarations[decl_index]);
+    }
+
+    if (ok) {
+        ok = validate_program_signature_visibility(&context, program);
     }
 
     if (ok) {

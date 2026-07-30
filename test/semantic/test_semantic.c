@@ -19967,6 +19967,265 @@ static void test_intersection_satisfaction_fails_no_members(void) {
     feng_program_free(program);
 }
 
+/* Find an AE0327 diagnostic for one declaration name. */
+static const FengSemanticError *find_signature_visibility_error(
+    const FengSemanticError *errors,
+    size_t error_count,
+    const char *declaration_name) {
+    size_t error_index;
+    char needle[128];
+
+    ASSERT(snprintf(needle,
+                    sizeof(needle),
+                    "declaration '%s'",
+                    declaration_name) > 0);
+    for (error_index = 0U; error_index < error_count; ++error_index) {
+        if (strcmp(errors[error_index].code, "AE0327") == 0 &&
+            strstr(errors[error_index].message, needle) != NULL) {
+            return &errors[error_index];
+        }
+    }
+    return NULL;
+}
+
+/* Public top-level signatures reject direct, inferred and recursively nested
+ * references to module-private types. */
+static void test_signature_visibility_rejects_top_level_surfaces(void) {
+    const char *source =
+        "open module demo.visibility.top;\n"
+        "open type Wrapper<T> { seal let value: T; }\n"
+        "type Hidden {}\n"
+        "spec HiddenConstraint {}\n"
+        "open let explicit: Hidden;\n"
+        "open let inferred = Hidden();\n"
+        "open let generic: Wrapper<Hidden>;\n"
+        "open let arrayValue: Hidden[];\n"
+        "open let pointerValue: Hidden*;\n"
+        "open func consume(value: Hidden) {}\n"
+        "open func create(): Hidden { return Hidden(); }\n"
+        "open func infer() { return Hidden(); }\n"
+        "open func process<T: HiddenConstraint>(value: T) {}\n";
+    static const char *const kExpectedDeclarations[] = {
+        "explicit",
+        "inferred",
+        "generic",
+        "arrayValue",
+        "pointerValue",
+        "consume",
+        "create",
+        "infer",
+        "process"};
+    FengProgram *program = parse_program_or_die("signature_visibility_top.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengSemanticError *generic_error;
+    const FengSemanticError *inferred_error;
+    const FengTypeRef *generic_hidden_ref;
+    size_t expected_index;
+
+    ASSERT(!feng_semantic_analyze(programs,
+                                  1U,
+                                  FENG_COMPILE_TARGET_LIB,
+                                  &analysis,
+                                  &errors,
+                                  &error_count));
+    ASSERT(analysis == NULL);
+    for (expected_index = 0U;
+         expected_index < sizeof(kExpectedDeclarations) / sizeof(kExpectedDeclarations[0]);
+         ++expected_index) {
+        ASSERT(find_signature_visibility_error(
+                   errors,
+                   error_count,
+                   kExpectedDeclarations[expected_index]) != NULL);
+    }
+
+    generic_hidden_ref =
+        program->declarations[5]->as.binding.type->as.named.type_args[0];
+    generic_error = find_signature_visibility_error(errors, error_count, "generic");
+    ASSERT(generic_error != NULL);
+    ASSERT(generic_error->token.line == generic_hidden_ref->token.line);
+    ASSERT(generic_error->token.column == generic_hidden_ref->token.column);
+
+    inferred_error = find_signature_visibility_error(errors, error_count, "inferred");
+    ASSERT(inferred_error != NULL);
+    ASSERT(inferred_error->token.line == program->declarations[4]->as.binding.token.line);
+    ASSERT(inferred_error->token.column == program->declarations[4]->as.binding.token.column);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Type, spec and fit headers and members all enforce the same recursive
+ * signature visibility rule. */
+static void test_signature_visibility_rejects_type_spec_and_fit_surfaces(void) {
+    const char *source =
+        "open module demo.visibility.surfaces;\n"
+        "type Hidden {}\n"
+        "spec HiddenConstraint {}\n"
+        "spec HiddenParent {}\n"
+        "open spec VisibleParent {}\n"
+        "open type Public<T: HiddenConstraint>: HiddenParent {\n"
+        "  var exposed: Hidden;\n"
+        "  static var shared: Hidden;\n"
+        "  var inferredField = Hidden();\n"
+        "  func Public(value: Hidden) {}\n"
+        "  func transform<U: HiddenConstraint>(value: Hidden): Hidden { return value; }\n"
+        "}\n"
+        "open spec ObjectApi: HiddenParent {\n"
+        "  let value: Hidden;\n"
+        "  func convert(value: Hidden): Hidden;\n"
+        "}\n"
+        "open spec CallableApi(value: Hidden): Hidden;\n"
+        "open spec UnionApi: Hidden | i32;\n"
+        "open spec IntersectionApi: HiddenParent & VisibleParent;\n"
+        "open type Target {}\n"
+        "open fit Target: HiddenParent {\n"
+        "  func leak(value: Hidden): Hidden { return value; }\n"
+        "}\n"
+        "open fit Hidden {}\n";
+    static const char *const kExpectedDeclarations[] = {
+        "Public",
+        "exposed",
+        "shared",
+        "inferredField",
+        "transform",
+        "ObjectApi",
+        "value",
+        "convert",
+        "CallableApi",
+        "UnionApi",
+        "IntersectionApi",
+        "leak",
+        "fit"};
+    FengProgram *program =
+        parse_program_or_die("signature_visibility_surfaces.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    size_t expected_index;
+
+    ASSERT(!feng_semantic_analyze(programs,
+                                  1U,
+                                  FENG_COMPILE_TARGET_LIB,
+                                  &analysis,
+                                  &errors,
+                                  &error_count));
+    ASSERT(analysis == NULL);
+    for (expected_index = 0U;
+         expected_index < sizeof(kExpectedDeclarations) / sizeof(kExpectedDeclarations[0]);
+         ++expected_index) {
+        ASSERT(find_signature_visibility_error(
+                   errors,
+                   error_count,
+                   kExpectedDeclarations[expected_index]) != NULL);
+    }
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* The four effective visibility levels allow equal-or-wider referenced types
+ * and reject package/module and public/package mismatches. */
+static void test_signature_visibility_effective_ranges(void) {
+    const char *valid_public_source =
+        "open module demo.visibility.public_api;\n"
+        "open type PublicType {}\n"
+        "type Hidden {}\n"
+        "type HiddenGeneric<T> { let value: T; }\n"
+        "open let publicValue: PublicType;\n"
+        "let moduleValue: Hidden;\n"
+        "open type PublicBox<T> {\n"
+        "  seal let hidden: Hidden;\n"
+        "  seal let generic: HiddenGeneric<T>;\n"
+        "}\n";
+    const char *valid_package_source =
+        "module demo.visibility.package_api;\n"
+        "open type PackageType {}\n"
+        "open let packageValue: PackageType;\n";
+    FengProgram *valid_public =
+        parse_program_or_die("signature_visibility_valid_public.f", valid_public_source);
+    FengProgram *valid_package =
+        parse_program_or_die("signature_visibility_valid_package.f", valid_package_source);
+    const FengProgram *valid_programs[] = {valid_public, valid_package};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(valid_programs,
+                                 2U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(valid_public);
+    feng_program_free(valid_package);
+
+    {
+        const char *source =
+            "module demo.visibility.package_bad;\n"
+            "type ModuleType {}\n"
+            "open let value: ModuleType;\n";
+        FengProgram *program =
+            parse_program_or_die("signature_visibility_package_bad.f", source);
+        const FengProgram *programs[] = {program};
+        const FengSemanticError *error;
+
+        analysis = NULL;
+        errors = NULL;
+        error_count = 0U;
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        error = find_signature_visibility_error(errors, error_count, "value");
+        ASSERT(error != NULL);
+        ASSERT(strstr(error->message, "visibility 'package'") != NULL);
+        ASSERT(strstr(error->message, "visibility 'module-private'") != NULL);
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+
+    {
+        const char *package_source =
+            "module demo.visibility.internal;\n"
+            "open type PackageType {}\n";
+        const char *public_source =
+            "open module demo.visibility.external;\n"
+            "import demo.visibility.internal;\n"
+            "open let value: PackageType;\n";
+        FengProgram *package_program =
+            parse_program_or_die("signature_visibility_internal.f", package_source);
+        FengProgram *public_program =
+            parse_program_or_die("signature_visibility_external.f", public_source);
+        const FengProgram *programs[] = {package_program, public_program};
+        const FengSemanticError *error;
+
+        analysis = NULL;
+        errors = NULL;
+        error_count = 0U;
+        ASSERT(!feng_semantic_analyze(programs,
+                                      2U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        error = find_signature_visibility_error(errors, error_count, "value");
+        ASSERT(error != NULL);
+        ASSERT(strstr(error->message, "visibility 'public'") != NULL);
+        ASSERT(strstr(error->message, "visibility 'package'") != NULL);
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(package_program);
+        feng_program_free(public_program);
+    }
+}
+
 int main(void) {
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
@@ -20216,6 +20475,9 @@ int main(void) {
     test_untyped_lambda_binding_is_rejected();
     test_untyped_lambda_binding_cannot_later_match_named_function_type();
     test_module_visibility_conflict();
+    test_signature_visibility_rejects_top_level_surfaces();
+    test_signature_visibility_rejects_type_spec_and_fit_surfaces();
+    test_signature_visibility_effective_ranges();
     test_valid_function_overload_by_parameter_type();
     test_top_level_function_call_selects_overload_by_literal_type();
     test_top_level_function_call_selects_overload_by_inferred_local_binding();

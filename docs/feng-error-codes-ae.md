@@ -95,6 +95,7 @@
 | AE0324 | @iterator 参数个数约束 | AE0068 | @iterator method must take no parameters |
 | AE0325 | @iterator 返回类型约束 | AE0069 | @iterator method must return a named tuple type of the form (bool, E) |
 | AE0326 | 类型可迭代性缺失约束 | AE0180 | type '%s' is not iterable (no @iterable or @iterator method found) |
+| AE0327 | 声明签名可见性一致性约束 | (新增) | declaration '%s' has effective visibility '%s' but type '%s' has narrower effective visibility '%s' |
 
 ## 04 枚举段
 

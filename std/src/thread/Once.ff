@@ -1,6 +1,6 @@
 open module std.thread;
 
-spec OnceAction(): void;
+open spec OnceAction(): void;
 
 /**
  * A synchronization primitive that ensures a block of code is executed

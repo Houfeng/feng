@@ -1,5 +1,9 @@
 open module fcts_bin.private_generic_representation;
 
+type PrivatePlain {
+  var value: int;
+}
+
 type PrivateLeaf<T> {
   var value: T;
 
@@ -21,7 +25,12 @@ type PrivateEntry<T> {
 }
 
 open type ExplicitPrivateBox<T> {
+  seal let plain: PrivatePlain;
   seal let entry: PrivateEntry<T>;
+
+  func readPlain(): int {
+    return self.plain.value;
+  }
 
   func set(value: T) {
     self.entry.set(value);
@@ -49,5 +58,7 @@ open func private_generic_same_module_probe(): bool {
   let string_box = InferredPrivateBox<string>();
   int_box.set(41);
   string_box.set("same module");
-  return int_box.read() == 41 && string_box.read() == "same module";
+  return int_box.readPlain() == 0 &&
+         int_box.read() == 41 &&
+         string_box.read() == "same module";
 }

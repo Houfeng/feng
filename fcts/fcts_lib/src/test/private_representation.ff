@@ -1,5 +1,9 @@
 open module fcts_lib.private_representation;
 
+type HiddenPlain {
+  var value: int;
+}
+
 type HiddenManaged<T> {
   var value: T;
 }
@@ -39,6 +43,7 @@ type HiddenRecursive<T> {
 }
 
 open type CrossPackagePrivateBox<T> {
+  seal let plain: HiddenPlain;
   seal let managed: HiddenManaged<T>;
   seal var value: HiddenValue<T>;
   seal let tuple: HiddenTuple<T>;
@@ -48,6 +53,10 @@ open type CrossPackagePrivateBox<T> {
   seal let unionValue: HiddenUnion;
   seal let intersectionValue: HiddenIntersection;
   seal let recursive: HiddenRecursive<T>;
+
+  func readPlain(): int {
+    return self.plain.value;
+  }
 
   func readManaged(): T {
     return self.managed.value;

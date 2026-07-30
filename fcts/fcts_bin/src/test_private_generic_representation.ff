@@ -13,6 +13,7 @@ open func test_private_generic_representation() {
     test("explicit field across modules", () {
       let int_box = ExplicitPrivateBox<int>();
       let string_box = ExplicitPrivateBox<string>();
+      assert(int_box.readPlain() == 0, "private non-generic field default");
       assert(int_box.read() == 0, "explicit int default");
       assert(string_box.read() == "", "explicit string default");
       int_box.set(42);

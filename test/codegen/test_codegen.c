@@ -1955,7 +1955,7 @@ static void test_fieldless_abi_function_surface_codegen(void) {
     static const char *kSource =
         "module feng.codegen.opaqueabifn;\n"
         "@abi\n"
-        "type Handle {\n"
+        "open type Handle {\n"
         "}\n"
         "@abi\n"
         "open func roundtrip(handle: Handle*): Handle* {\n"
@@ -2494,7 +2494,7 @@ static void test_abi_value_function_pointer_codegen(void) {
     static const char *kSource =
         "module feng.codegen.abivaluefn;\n"
         "@abi\n"
-        "type Point {\n"
+        "open type Point {\n"
         "    var x: int;\n"
         "    var y: int;\n"
         "}\n"
