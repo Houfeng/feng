@@ -20,7 +20,7 @@
 
     <nav class="site-nav" aria-label="主导航">
       <a href="#install">安装</a>
-      <a href="#docs">文档 <small>筹备中</small></a>
+      <span class="pending">文档 <small>筹备中</small></span>
       <a href="https://github.com/Houfeng/feng">GitHub <span aria-hidden="true">↗</span></a>
     </nav>
   </header>
@@ -29,10 +29,14 @@
     <section class="hero" id="top" aria-labelledby="hero-title">
       <p class="intro-label">Feng 编程语言</p>
       <h1 id="hero-title">清晰，自有章法。</h1>
-      <p class="hero-lead">
-        一门为清晰与可靠而设计的静态类型语言。语法简洁，契约显式，
-        自动管理内存，并可直接与 C 互操作。
-      </p>
+      <ul class="hero-keywords" aria-label="Feng 特点">
+        <li>AI 友好</li>
+        <li>显式契约</li>
+        <li>静态类型</li>
+        <li>自动内存管理</li>
+        <li>C 亲和</li>
+        <li>容易上手</li>
+      </ul>
 
       <div class="install" id="install" data-command>
         <p class="install-label">安装 Feng</p>
@@ -82,23 +86,6 @@
       </figure>
     </section>
 
-    <section class="section destinations" aria-label="文档与 GitHub">
-      <article id="docs">
-        <h2>文档</h2>
-        <p>语言指南与参考文档正在整理中。</p>
-        <span>敬请期待</span>
-      </article>
-
-      <article>
-        <h2>GitHub</h2>
-        <p>查看源码、下载发行包，并关注项目进展。</p>
-        <nav aria-label="GitHub 入口">
-          <a href="https://github.com/Houfeng/feng">源码 <span aria-hidden="true">↗</span></a>
-          <a href="https://github.com/Houfeng/feng/releases">发行版 <span aria-hidden="true">↗</span></a>
-          <a href="https://github.com/Houfeng/feng/issues">问题反馈 <span aria-hidden="true">↗</span></a>
-        </nav>
-      </article>
-    </section>
   </main>
 
   <footer class="site-footer">

@@ -94,7 +94,8 @@ button {
   font-family: var(--serif);
 }
 
-.site-nav a {
+.site-nav a,
+.site-nav .pending {
   color: var(--ink-soft);
   font-size: 0.88rem;
   letter-spacing: 0.08em;
@@ -114,8 +115,6 @@ button {
 .site-nav a:focus-visible,
 .install-actions a:hover,
 .install-actions a:focus-visible,
-.destinations a:hover,
-.destinations a:focus-visible,
 .site-footer a:hover,
 .site-footer a:focus-visible {
   color: var(--cinnabar);
@@ -127,11 +126,10 @@ button {
 }
 
 .hero {
-  min-height: calc(100svh - 82px);
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  padding-block: 64px 76px;
+  justify-content: flex-start;
+  padding-block: clamp(88px, 12vh, 112px) 0;
 }
 
 .intro-label,
@@ -139,7 +137,9 @@ button {
   margin: 0 0 22px;
   color: var(--cinnabar);
   font-size: 0.82rem;
+  font-style: normal;
   letter-spacing: 0.2em;
+  line-height: 1.5;
 }
 
 h1,
@@ -152,22 +152,36 @@ h1,
 h2 {
   font-weight: 400;
   line-height: 1.3;
+  text-wrap: balance;
 }
 
 h1 {
-  max-width: 12em;
+  max-width: none;
   margin-bottom: 24px;
-  font-size: clamp(3.2rem, 8vw, 5.2rem);
-  letter-spacing: 0.1em;
+  font-size: clamp(3rem, 6vw, 4.35rem);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
 }
 
-.hero-lead {
-  max-width: 31em;
-  margin-bottom: 0;
+.hero-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
   color: var(--ink-soft);
-  font-size: clamp(1.08rem, 2.4vw, 1.28rem);
-  letter-spacing: 0.035em;
-  line-height: 1.95;
+  list-style: none;
+  font-size: clamp(1.04rem, 2vw, 1.16rem);
+  letter-spacing: 0.025em;
+  line-height: 1.9;
+}
+
+.hero-keywords li {
+  white-space: nowrap;
+}
+
+.hero-keywords li:not(:last-child)::after {
+  content: "、";
 }
 
 .install {
@@ -185,6 +199,7 @@ h1 {
   font-size: 0.78rem;
   font-weight: 500;
   letter-spacing: 0.16em;
+  text-transform: none;
 }
 
 .command-line {
@@ -255,8 +270,7 @@ h1 {
 }
 
 .section {
-  padding-block: 88px;
-  border-top: 1px solid var(--line);
+  padding-block: 64px;
 }
 
 .language {
@@ -264,26 +278,28 @@ h1 {
 }
 
 .section-intro {
-  max-width: 620px;
+  max-width: 760px;
 }
 
 .section-intro h2 {
   margin-bottom: 18px;
-  font-size: clamp(2.2rem, 5vw, 3.2rem);
-  letter-spacing: 0.08em;
+  font-size: clamp(2rem, 4vw, 2.7rem);
+  letter-spacing: 0.055em;
+  white-space: nowrap;
 }
 
 .section-intro > p:last-child {
-  max-width: 32em;
+  max-width: 46em;
   margin-bottom: 0;
   color: var(--ink-soft);
   font-size: 1.02rem;
-  letter-spacing: 0.03em;
-  line-height: 1.9;
+  letter-spacing: 0.02em;
+  line-height: 1.85;
+  text-wrap: pretty;
 }
 
 .code-sample {
-  margin: 42px 0 0;
+  margin: 36px 0 0;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
 }
@@ -319,53 +335,12 @@ h1 {
   color: var(--ink-faint);
 }
 
-.destinations {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: clamp(50px, 10vw, 100px);
-  border-top: 0;
-}
-
-.destinations article + article {
-  padding-left: clamp(50px, 10vw, 100px);
-  border-left: 1px solid var(--line);
-}
-
-.destinations h2 {
-  margin-bottom: 14px;
-  font-size: clamp(1.8rem, 4vw, 2.35rem);
-  letter-spacing: 0.08em;
-}
-
-.destinations p {
-  margin-bottom: 22px;
-  color: var(--ink-soft);
-  letter-spacing: 0.03em;
-  line-height: 1.9;
-}
-
-.destinations article > span {
-  color: var(--ink-faint);
-  font-family: var(--sans);
-  font-size: 0.7rem;
-  letter-spacing: 0.12em;
-}
-
-.destinations nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px 24px;
-  font-family: var(--sans);
-  font-size: 0.78rem;
-}
-
 .site-footer {
   min-height: 88px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  border-top: 1px solid var(--line);
   color: var(--ink-faint);
   font-family: var(--sans);
   font-size: 0.72rem;
@@ -385,8 +360,7 @@ h1 {
   }
 
   .hero {
-    min-height: calc(100svh - 76px);
-    padding-block: 52px 60px;
+    padding-block: 52px 0;
   }
 
   .install-meta {
@@ -395,23 +369,13 @@ h1 {
   }
 
   .section {
-    padding-block: 68px;
+    padding-block: 56px;
   }
 
   .language {
     padding-bottom: 0;
   }
 
-  .destinations {
-    grid-template-columns: 1fr;
-    gap: 52px;
-  }
-
-  .destinations article + article {
-    padding: 52px 0 0;
-    border-top: 1px solid var(--line);
-    border-left: 0;
-  }
 }
 
 @media (max-width: 460px) {
@@ -435,8 +399,14 @@ h1 {
   }
 
   h1 {
-    font-size: clamp(2.7rem, 13vw, 3.6rem);
+    max-width: 8em;
+    font-size: clamp(2.5rem, 12vw, 3.2rem);
     letter-spacing: 0.06em;
+    white-space: normal;
+  }
+
+  .section-intro h2 {
+    white-space: normal;
   }
 
   .install-actions {
