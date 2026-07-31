@@ -152,7 +152,6 @@ svg {
 
 .site-nav a,
 .nav-pending {
-  color: #4e534e;
   font-size: 1rem;
   font-weight: 570;
   line-height: 1.25;
@@ -161,21 +160,17 @@ svg {
 }
 
 .site-nav a {
+  color: #4e534e;
   transition: color 150ms ease;
+}
+
+.nav-pending {
+  color: var(--faint);
 }
 
 .site-nav a:hover,
 .site-nav a:focus-visible {
   color: var(--accent);
-}
-
-.nav-pending small {
-  margin-left: 4px;
-  color: var(--accent);
-  font-size: 0.64rem;
-  font-weight: 720;
-  letter-spacing: 0.04em;
-  vertical-align: super;
 }
 
 .site-menu {
@@ -733,7 +728,6 @@ svg {
   }
 
   .site-nav--mobile .nav-pending {
-    justify-content: space-between;
     color: var(--terminal-muted);
   }
 
@@ -741,11 +735,6 @@ svg {
   .site-nav--mobile a:focus-visible {
     color: #fff;
     background: rgba(255, 255, 255, 0.08);
-  }
-
-  .site-nav--mobile .nav-pending small {
-    margin-left: auto;
-    vertical-align: baseline;
   }
 
   .install-panel__header {
