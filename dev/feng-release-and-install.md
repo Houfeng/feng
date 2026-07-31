@@ -297,7 +297,7 @@ curl -fsSL https://feng-lang.com/install.sh |
 - 仅接受至多一个 `--version=v<version>` 参数，`<version>` 必须符合本规范的版本格式；不传参数时解析 GitHub Releases latest stable tag，显式传入时直接使用该 tag，因此可以安装正式版或 prerelease。
 - 固定行为：
   1. 自动检测目标平台（按 `uname -s` / `uname -m`），确定默认或显式指定的 release tag
-  2. 拼接下载 URL，下载 zip 到系统临时目录（`$TMPDIR`，回退 `/tmp`）
+  2. 拼接下载 URL，下载 zip 到系统临时目录（`$TMPDIR`，回退 `/tmp`）；标准错误连接交互式终端时使用 curl progress bar 显式展示下载进度，非交互环境静默下载且保留错误输出
   3. 校验压缩包仅包含预期顶层目录、包内 `VERSION` 与 release tag 一致，并解压到 staging 目录
   4. 原子替换 `$HOME/.feng/`；已有安装在新目录替换成功前保持可用
   5. 自动将 `$HOME/.feng/bin` 加入 `PATH`，按 `$SHELL` 写入对应启动脚本且不重复追加

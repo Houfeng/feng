@@ -98,6 +98,20 @@ resolve_release_tag() {
   fi
 }
 
+# Download one release archive with terminal-aware progress reporting.
+download_release_archive() {
+  local download_url="$1"
+  local archive_path="$2"
+
+  if [[ -t 2 ]]; then
+    curl --fail --location --progress-bar \
+      "${download_url}" -o "${archive_path}"
+  else
+    curl --fail --location --silent --show-error \
+      "${download_url}" -o "${archive_path}"
+  fi
+}
+
 # Select the shell startup file and matching PATH statement.
 configure_shell_path() {
   local shell_name="${SHELL##*/}"
@@ -368,7 +382,7 @@ EXTRACT_ROOT="${TEMP_ROOT}/extract"
 mkdir -p "${EXTRACT_ROOT}"
 
 echo "==> Downloading ${PACKAGE_NAME}.zip"
-curl -fsSL "${DOWNLOAD_URL}" -o "${ARCHIVE_PATH}" ||
+download_release_archive "${DOWNLOAD_URL}" "${ARCHIVE_PATH}" ||
   die "failed to download ${DOWNLOAD_URL}"
 validate_archive_entries "${ARCHIVE_PATH}" "${PACKAGE_NAME}"
 validate_archive_symlinks "${ARCHIVE_PATH}" "${PACKAGE_NAME}"
