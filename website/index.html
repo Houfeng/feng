@@ -4,11 +4,27 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Feng 是一门面向开发者与 AI 的静态类型编程语言，以简洁语法、显式契约、自动内存管理与 C 互操作能力，让代码清晰可靠。">
-  <meta name="theme-color" content="#f7f8f5">
+  <meta name="theme-color" content="#f7f8f5" data-theme-color>
   <meta property="og:type" content="website">
   <meta property="og:title" content="Feng — 清晰，自有章法">
   <meta property="og:description" content="一门面向开发者与 AI 的静态类型编程语言。">
   <title>Feng 编程语言</title>
+  <script>
+    try {
+      const savedTheme = localStorage.getItem('feng-theme');
+      const hasSavedTheme = savedTheme === 'light' || savedTheme === 'dark';
+      const systemTheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      const initialTheme = hasSavedTheme ? savedTheme : systemTheme;
+      document.documentElement.dataset.theme = initialTheme;
+      document.documentElement.dataset.themeSource = hasSavedTheme ? 'saved' : 'system';
+      document.querySelector('[data-theme-color]').content = initialTheme === 'dark' ? '#111311' : '#f7f8f5';
+    } catch (_) {
+      const fallbackTheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = fallbackTheme;
+      document.documentElement.dataset.themeSource = 'system';
+      document.querySelector('[data-theme-color]').content = fallbackTheme === 'dark' ? '#111311' : '#f7f8f5';
+    }
+  </script>
   <link rel="stylesheet" href="styles.css">
   <script defer src="app.js"></script>
 </head>
@@ -27,10 +43,29 @@
         <span class="nav-pending" aria-disabled="true">文档</span>
         <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language">插件</a>
         <a href="https://github.com/Houfeng/feng">开源</a>
-        <span class="nav-pending nav-language" aria-disabled="true" title="语言">
-          <span aria-hidden="true">文</span>
-          <span class="visually-hidden">语言</span>
-        </span>
+        <div class="nav-controls" role="group" aria-label="页面设置">
+          <details class="language-menu" data-language-menu>
+            <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="选择语言" title="选择语言">
+              <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="9"></circle>
+                <path d="M3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18"></path>
+              </svg>
+            </summary>
+            <ul class="language-menu__popover" aria-label="语言">
+              <li><span class="language-menu__option" aria-current="page">中<span class="visually-hidden">（当前语言）</span></span></li>
+              <li><span class="language-menu__option" aria-disabled="true">英<span class="visually-hidden">（即将提供）</span></span></li>
+            </ul>
+          </details>
+          <button class="nav-icon-button theme-toggle" type="button" data-theme-toggle aria-label="切换主题" aria-pressed="false" title="切换主题">
+            <svg class="theme-toggle__sun" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="3.5"></circle>
+              <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
+            </svg>
+            <svg class="theme-toggle__moon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+              <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
+            </svg>
+          </button>
+        </div>
       </nav>
 
       <details class="site-menu" data-site-menu>
@@ -43,7 +78,29 @@
           <span class="nav-pending" aria-disabled="true">文档</span>
           <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language">插件</a>
           <a href="https://github.com/Houfeng/feng">开源</a>
-          <span class="nav-pending" aria-disabled="true">语言</span>
+          <div class="nav-controls" role="group" aria-label="页面设置">
+            <details class="language-menu" data-language-menu>
+              <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="选择语言" title="选择语言">
+                <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="9"></circle>
+                  <path d="M3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18"></path>
+                </svg>
+              </summary>
+              <ul class="language-menu__popover" aria-label="语言">
+                <li><span class="language-menu__option" aria-current="page">中<span class="visually-hidden">（当前语言）</span></span></li>
+                <li><span class="language-menu__option" aria-disabled="true">英<span class="visually-hidden">（即将提供）</span></span></li>
+              </ul>
+            </details>
+            <button class="nav-icon-button theme-toggle" type="button" data-theme-toggle aria-label="切换主题" aria-pressed="false" title="切换主题">
+              <svg class="theme-toggle__sun" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="3.5"></circle>
+                <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
+              </svg>
+              <svg class="theme-toggle__moon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
+              </svg>
+            </button>
+          </div>
         </nav>
       </details>
     </div>

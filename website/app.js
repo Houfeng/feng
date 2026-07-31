@@ -81,6 +81,174 @@ function setupNavigationMenu() {
       menu.removeAttribute('open');
     }
   });
+
+  menu.addEventListener('toggle', () => {
+    if (!menu.open) {
+      menu.querySelectorAll('[data-language-menu]').forEach((languageMenu) => {
+        languageMenu.removeAttribute('open');
+      });
+    }
+  });
+}
+
+/** Closes one language menu and optionally returns focus to its trigger. */
+function closeLanguageMenu(menu, shouldFocus) {
+  if (!menu.open) {
+    return;
+  }
+
+  menu.removeAttribute('open');
+  if (shouldFocus) {
+    menu.querySelector('[data-language-trigger]')?.focus();
+  }
+}
+
+/** Enhances native language menus with mutual exclusion and dismissal behavior. */
+function setupLanguageMenus() {
+  const menus = Array.from(document.querySelectorAll('[data-language-menu]'));
+
+  if (menus.length === 0) {
+    return;
+  }
+
+  menus.forEach((menu) => {
+    menu.addEventListener('toggle', () => {
+      if (!menu.open) {
+        return;
+      }
+
+      menus.forEach((candidate) => {
+        if (candidate !== menu) {
+          closeLanguageMenu(candidate, false);
+        }
+      });
+    });
+  });
+
+  document.addEventListener('pointerdown', (event) => {
+    menus.forEach((menu) => {
+      if (!menu.contains(event.target)) {
+        closeLanguageMenu(menu, false);
+      }
+    });
+  });
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') {
+      return;
+    }
+
+    const openMenu = menus.find((menu) => menu.open);
+    if (openMenu) {
+      event.preventDefault();
+      closeLanguageMenu(openMenu, true);
+    }
+  });
+
+  const smallViewport = window.matchMedia('(max-width: 720px)');
+  const handleViewportChange = () => {
+    menus.forEach((menu) => closeLanguageMenu(menu, false));
+  };
+
+  if (typeof smallViewport.addEventListener === 'function') {
+    smallViewport.addEventListener('change', handleViewportChange);
+  } else {
+    smallViewport.addListener(handleViewportChange);
+  }
+}
+
+const THEME_STORAGE_KEY = 'feng-theme';
+const VALID_THEMES = new Set(['light', 'dark']);
+
+/** Resolves the active theme from document state and then the system preference. */
+function getActiveTheme() {
+  const documentTheme = document.documentElement.dataset.theme;
+  if (VALID_THEMES.has(documentTheme)) {
+    return documentTheme;
+  }
+
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+/** Synchronizes every visible theme control with the active theme. */
+function syncThemeControls(theme) {
+  const isDark = theme === 'dark';
+  const actionLabel = isDark ? '切换至浅色主题' : '切换至深色主题';
+
+  document.querySelectorAll('[data-theme-toggle]').forEach((button) => {
+    button.setAttribute('aria-pressed', String(isDark));
+    button.setAttribute('aria-label', actionLabel);
+    button.setAttribute('title', actionLabel);
+  });
+}
+
+/** Applies a theme, updates browser chrome, and optionally persists the choice. */
+function applyTheme(theme, shouldPersist) {
+  if (!VALID_THEMES.has(theme)) {
+    return;
+  }
+
+  document.documentElement.dataset.theme = theme;
+  const themeColor = document.querySelector('[data-theme-color]');
+  if (themeColor) {
+    themeColor.setAttribute('content', theme === 'dark' ? '#111311' : '#f7f8f5');
+  }
+
+  if (shouldPersist) {
+    document.documentElement.dataset.themeSource = 'manual';
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+      document.documentElement.dataset.themeSource = 'saved';
+    } catch (_) {
+    }
+  }
+
+  syncThemeControls(theme);
+}
+
+/** Enables persistent theme switching and keeps system and cross-tab changes synchronized. */
+function setupThemeSwitching() {
+  const buttons = Array.from(document.querySelectorAll('[data-theme-toggle]'));
+
+  if (buttons.length === 0) {
+    return;
+  }
+
+  applyTheme(getActiveTheme(), false);
+
+  buttons.forEach((button) => {
+    button.addEventListener('click', () => {
+      applyTheme(getActiveTheme() === 'dark' ? 'light' : 'dark', true);
+    });
+  });
+
+  const colorScheme = window.matchMedia('(prefers-color-scheme: dark)');
+  const handleSystemThemeChange = (event) => {
+    if (document.documentElement.dataset.themeSource === 'system') {
+      applyTheme(event.matches ? 'dark' : 'light', false);
+    }
+  };
+
+  if (typeof colorScheme.addEventListener === 'function') {
+    colorScheme.addEventListener('change', handleSystemThemeChange);
+  } else {
+    colorScheme.addListener(handleSystemThemeChange);
+  }
+
+  window.addEventListener('storage', (event) => {
+    if (event.key !== THEME_STORAGE_KEY) {
+      return;
+    }
+
+    if (VALID_THEMES.has(event.newValue)) {
+      document.documentElement.dataset.themeSource = 'saved';
+      applyTheme(event.newValue, false);
+      return;
+    }
+
+    document.documentElement.dataset.themeSource = 'system';
+    applyTheme(colorScheme.matches ? 'dark' : 'light', false);
+  });
 }
 
 /** Activates one example tab and synchronizes its ARIA state with the panels. */
@@ -162,4 +330,6 @@ function setupCodeTabs() {
 
 setupCommandCopying();
 setupNavigationMenu();
+setupLanguageMenus();
+setupThemeSwitching();
 setupCodeTabs();
