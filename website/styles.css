@@ -394,6 +394,8 @@ svg {
   right: 0;
   z-index: 70;
   width: 176px;
+  display: grid;
+  gap: 4px;
   margin: 0;
   padding: 6px;
   border: 1px solid var(--line);
