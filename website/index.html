@@ -108,6 +108,7 @@
             <a class="code-tabs__tab" id="tab-loop" href="#example-loop" data-code-tab>循环控制</a>
             <a class="code-tabs__tab" id="tab-branch" href="#example-branch" data-code-tab>条件分支</a>
             <a class="code-tabs__tab" id="tab-match" href="#example-match" data-code-tab>模式匹配</a>
+            <a class="code-tabs__tab" id="tab-exception" href="#example-exception" data-code-tab>异常处理</a>
           </nav>
 
           <div class="code-tabs__panel" id="example-hello" data-code-panel>
@@ -141,20 +142,36 @@
           <div class="code-tabs__panel" id="example-contract" data-code-panel>
             <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
-<span class="syntax-dim">// spec 只声明行为契约</span>
-<span class="syntax-keyword">spec</span> Greeter {
-  <span class="syntax-keyword">func</span> greet(name: string): string;
+<span class="syntax-dim">// 对象契约声明对象必须提供的行为</span>
+<span class="syntax-keyword">spec</span> Named {
+  <span class="syntax-keyword">func</span> name(): string;
 }
-<span class="syntax-dim">// type 显式实现契约中的方法</span>
-<span class="syntax-keyword">type</span> FriendlyGreeter: Greeter {
-  <span class="syntax-keyword">func</span> greet(name: string): string {
-    <span class="syntax-keyword">return</span> <span class="syntax-string">"你好，"</span> + name;
+
+<span class="syntax-keyword">spec</span> Persistable {
+  <span class="syntax-keyword">func</span> save(): void;
+}
+
+<span class="syntax-dim">// 函数契约声明可调用值的完整签名</span>
+<span class="syntax-keyword">spec</span> Formatter(value: string): string;
+
+<span class="syntax-dim">// 联合契约表示值可来自多个候选类型</span>
+<span class="syntax-keyword">spec</span> Identifier: int | string;
+
+<span class="syntax-dim">// 交叉契约要求值同时满足所有成员契约</span>
+<span class="syntax-keyword">spec</span> Entity: Named &amp; Persistable;
+
+<span class="syntax-keyword">type</span> User {
+  <span class="syntax-keyword">let</span> username: string;
+}
+
+<span class="syntax-dim">// fit 在不修改 type 声明的情况下满足对象契约</span>
+<span class="syntax-keyword">fit</span> User: Named, Persistable {
+  <span class="syntax-keyword">func</span> name(): string {
+    <span class="syntax-keyword">return</span> self.username;
   }
-}
-<span class="syntax-keyword">func</span> welcome(): string {
-  <span class="syntax-dim">// 契约类型可接收任何符合契约的实现</span>
-  <span class="syntax-keyword">let</span> greeter: Greeter = FriendlyGreeter();
-  <span class="syntax-keyword">return</span> greeter.greet(<span class="syntax-string">"Feng"</span>);
+
+  <span class="syntax-keyword">func</span> save(): void {
+  }
 }</code></pre>
           </div>
 
@@ -246,6 +263,34 @@
     <span class="syntax-keyword">else</span> { <span class="syntax-string">"其他"</span> }
   };
   <span class="syntax-keyword">return</span> category + <span class="syntax-string">"："</span> + detail;
+}</code></pre>
+          </div>
+
+          <div class="code-tabs__panel" id="example-exception" data-code-panel>
+            <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
+
+<span class="syntax-keyword">import</span> std.io;
+
+<span class="syntax-keyword">func</span> require_port(port: int): int {
+  <span class="syntax-keyword">if</span> port &lt;= 0 {
+    <span class="syntax-dim">// throw 终止当前路径并向调用方传递异常</span>
+    <span class="syntax-keyword">throw</span> <span class="syntax-string">"端口必须为正数"</span>;
+  }
+  <span class="syntax-keyword">return</span> port;
+}
+
+<span class="syntax-keyword">func</span> main(args: string[]) {
+  <span class="syntax-dim">// 语句用法用于处理异常时的操作</span>
+  <span class="syntax-keyword">try</span> require_port(-1) <span class="syntax-keyword">catch</span> error: string {
+    println(error);
+  };
+
+  <span class="syntax-dim">// 表达式用法可以为异常路径提供回退值</span>
+  <span class="syntax-keyword">let</span> port = <span class="syntax-keyword">try</span> require_port(-1) <span class="syntax-keyword">catch</span> error: string {
+    println(error);
+    3000
+  };
+  println(<span class="syntax-string">"使用端口：{0}"</span>, port);
 }</code></pre>
           </div>
         </div>
