@@ -432,6 +432,13 @@ svg {
   font-weight: 600;
   line-height: 1;
   white-space: nowrap;
+  transition: color 150ms ease, background-color 150ms ease;
+}
+
+.language-menu__option:is(a):hover,
+.language-menu__option:is(a):focus-visible {
+  color: var(--ink);
+  background: var(--page);
 }
 
 .language-menu__state {
@@ -1119,6 +1126,12 @@ svg {
     padding: 0 8px;
     color: var(--terminal-muted);
     font-size: 0.84rem;
+  }
+
+  .site-nav--mobile .language-menu__option:is(a):hover,
+  .site-nav--mobile .language-menu__option:is(a):focus-visible {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.08);
   }
 
   .site-nav--mobile .language-menu__option[aria-current="page"] {
