@@ -523,15 +523,16 @@ svg {
 
 .code-tabs__panel pre {
   margin: 0;
-  padding: 34px 42px 40px;
-  overflow: auto;
+  padding: 32px;
+  overflow-x: auto;
+  overflow-y: hidden;
   color: #e8ece7;
   font: 500 clamp(0.8rem, 1.2vw, 0.94rem)/1.72 var(--mono);
   tab-size: 2;
 }
 
 .code-tabs--enhanced .code-tabs__panel pre {
-  height: 430px;
+  min-height: 420px;
 }
 
 .code-tabs__panel code {
@@ -881,12 +882,12 @@ svg {
   }
 
   .code-tabs__panel pre {
-    padding: 25px 20px 30px;
+    padding: 32px;
     font-size: 0.72rem;
   }
 
   .code-tabs--enhanced .code-tabs__panel pre {
-    height: 390px;
+    min-height: 390px;
   }
 
   .site-footer__inner {
