@@ -276,21 +276,24 @@ toolchain 精简产物在**本地维护**：开发者使用 LLVM、musl 与 GNU 
 
 适用于：新机器快速上手、CI 环境、首版默认推荐路径。
 
-入口（首版托管在 GitHub raw）：
+入口（由 Feng 官网托管）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.sh | bash
+curl -fsSL https://feng-lang.com/install.sh | bash
 ```
 
 默认安装 latest stable release。安装指定的正式版或 prerelease 时，显式传入完整 Git tag：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/<org>/<repo>/main/scripts/install.sh |
+curl -fsSL https://feng-lang.com/install.sh |
   bash -s -- --version=v0.1.0-rc.1
 ```
 
 `install.sh` 行为约束：
 
+- 脚本唯一源文件为仓库内的 `scripts/install.sh`，不得在 `website/` 中维护副本。
+  GitHub Pages 工作流必须在部署 staging 中将该源文件发布为站点根目录的
+  `/install.sh`，并与 `website/` 的静态内容一起上传。
 - 仅接受至多一个 `--version=v<version>` 参数，`<version>` 必须符合本规范的版本格式；不传参数时解析 GitHub Releases latest stable tag，显式传入时直接使用该 tag，因此可以安装正式版或 prerelease。
 - 固定行为：
   1. 自动检测目标平台（按 `uname -s` / `uname -m`），确定默认或显式指定的 release tag
@@ -417,6 +420,9 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
   `bundled_packages` Job；workflow 只调用随附包脚本并传递 artifact，汇聚任务消费
   同一份输入组装三个 host 发行包。
 - [x] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载并校验对应发行包，原子完成安装和 `PATH` 配置；失败时回滚已有安装且不留半成品。
+- [x] `.github/workflows/static.yml`：从 `website/` 与唯一源文件
+  `scripts/install.sh` 生成 GitHub Pages staging，将在线安装脚本发布为官网根目录的
+  `/install.sh`，不得在 `website/` 中维护脚本副本。
 - [x] 新增可独立执行的发行与安装脚本回归测试，覆盖正常汇聚、输入校验失败、安装成功、重复安装和失败回滚，并纳入 `make test`。
 - [x] 新增可独立执行的干净安装验收脚本，按 §6.3 验证版本、完整目录、平台构件、bundled LLVM 以及项目 `build` / `run`；CI 在对应原生 runner 解压各自发行包后执行。
 - [x] 新增可独立执行的 macOS 最终化脚本，按 §6.3 安全解包、完整发现并签名 Mach-O
