@@ -10,7 +10,8 @@
 
 首版明确覆盖：
 
-- 分发物：单一压缩包 `feng-<version>-<platform>.zip`
+- 基础分发物：单一压缩包 `feng-<version>-<platform>.zip`。zip 是长期保留的可移植
+  分发形式；未来新增 macOS `.pkg` 时只能作为并行安装渠道，不能替代 zip
 - host 平台：`macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu`
 - 用户程序目标平台：`macos-arm64`、`linux-x64-gnu`、`linux-x64-musl`、`linux-arm64-gnu`、`linux-arm64-musl`
 - 安装方式：手动解压 + 在线脚本两种
@@ -22,6 +23,8 @@
 
 - **抽象驱动，面向未来可扩展**：平台矩阵与分发渠道均以参数化形式表达，新增平台不改动脚本主干。
 - **单一分发物**：一个 zip 覆盖一个目标平台，不按子组件拆分多包，降低用户组合安装成本。
+- **zip 长期可用**：自动安装、手动解压、CI 和离线归档统一以 zip 为基础输入；
+  平台原生安装器属于可选并行渠道，不得成为取得完整工具链的唯一方式。
 - **安装极简**：安装只需将解压目录的 `bin/` 加入 `PATH`，不引入 `FENG_HOME` / `FENG_TOOLCHAIN` 等环境变量；runtime lib/include 与 toolchain 均由 `feng` 自身查找定位。
 - **可逆安装**：安装产物集中在一个目录树下，清理只需删除该目录与 shell 片段。
 - **与现有体系一致**：复用 `Makefile` 产物路径、Feng 编译期 `extlib/<platform>/` 平台隔离约定与 `scripts/` 下既有构建脚本，不另立构建体系。
@@ -184,7 +187,7 @@ macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架
 
 版本 tag 创建或手动试发的三个原生构件任务全部成功后，独立汇聚任务下载三份构件并组装三份 `feng-<version>-<platform>.zip`。因此发布流程不要求 Linux 生成 macOS runtime，也不要求 macOS 或任一 Linux host 单独产生完整 release zip。普通分支 push 与 pull request 不执行该汇聚任务。
 
-### 6.3 原生构建与汇聚步骤
+### 6.3 原生构建、汇聚与 macOS 最终化步骤
 
 原生构件任务：
 
@@ -214,7 +217,33 @@ LSP / DAP 行为由第 4 步 `make test` 中的原生用例验证，干净安装
 5. 将同一组随附包、五份 runtime、四份 Linux sysroot、公共头文件及 `VERSION`
    放入每一份分发目录
 6. 执行 `scripts/release_assemble.sh` 的纯组装与校验入口，生成三份规范命名的 zip
-7. 上传到 GitHub Release 对应 tag
+7. 将三份尚未执行 macOS Developer ID 签名的 zip 作为内部
+   `release-packages-unsigned` artifact 交给 macOS 最终化任务，不得直接验证或发布
+
+macOS 最终化任务：
+
+1. 仅在版本 tag 创建或手动试发时运行于规范指定的原生 macOS / Xcode 环境，并通过
+   GitHub `release-signing` Environment 读取签名与公证凭证；普通 push 和 pull
+   request 不得访问这些凭证。该 Environment 的 secrets 固定为
+   `MACOS_SIGNING_P12_BASE64`、`MACOS_SIGNING_P12_PASSWORD`、
+   `APPLE_NOTARY_KEY_P8_BASE64`，非敏感 variables 固定为 `APPLE_TEAM_ID`、
+   `APPLE_NOTARY_KEY_ID`、`APPLE_NOTARY_ISSUER_ID`
+2. 下载 `release-packages-unsigned`，逐一校验三份规范命名的 zip，并将两份 Linux
+   zip 原字节复制到最终输出
+3. 安全解压 macOS zip，扫描完整分发目录中的 Mach-O 可执行文件、动态库和 bundle；
+   静态归档及其中的对象文件不属于签名目标
+4. 使用同一 `Developer ID Application` 身份对全部签名目标执行 Hardened Runtime
+   签名并请求 Apple 安全时间戳；签名前后必须保持每个目标已有的 identifier 与
+   entitlement，其中 `debugserver` 的调试 entitlement 不得丢失
+5. 对每个目标执行严格签名校验，确认 Developer ID 证书链、Team ID、Hardened
+   Runtime 和安全时间戳；任何遗漏、签名失败或元数据变化都必须阻止发布
+6. 以原顶层目录和文件名重新生成 macOS zip，再通过 `notarytool` 与 App Store
+   Connect API Key 将该最终 zip 提交 Apple 公证；仅 `Accepted` 结果可继续
+7. zip 不能直接 staple，裸 Mach-O 也不能附加公证票据；当前 zip 发行依赖 Apple
+   在线票据完成首次 Gatekeeper 公证查询。未来若增加可 staple 的 `.pkg`，不得改变
+   zip 的签名、公证和持续发布要求
+8. 三份最终 zip 完整生成后再原子发布为唯一的 `release-packages` artifact；后续
+   macOS / Linux 干净安装验收及 GitHub Release 发布只能消费该 artifact
 
 toolchain 精简产物在**本地维护**：开发者使用 LLVM、musl 与 GNU sysroot 的 fetch / trim / build 维护脚本产出各平台精简结果，提交到仓库（git lfs）。CI 只需 checkout 后从仓库目录复制，不做任何精简。这样 CI 构建步骤简、快，且不依赖上游下载站点在发布时可达。
 
@@ -223,6 +252,8 @@ toolchain 精简产物在**本地维护**：开发者使用 LLVM、musl 与 GNU 
 - 任一原生构件任务失败时，汇聚任务不得生成任何 release zip；已成功的平台构件只作为本次失败工作流的诊断输入，不得单独发布。
 - 随附包任务失败、artifact 缺失或内容非法时，汇聚任务不得生成任何 release zip。
 - 汇聚任务失败时不得上传部分平台 release zip。
+- macOS 签名、时间戳、公证或最终 artifact 发布任一步骤失败时，不得执行任何平台
+  的干净安装验收或 GitHub Release 发布；内部 unsigned artifact 不得作为发行物。
 - 已发布 tag 不允许覆盖；发现问题时发新 tag，不在旧 tag 上重打。
 
 ## 7 安装方式
@@ -386,5 +417,13 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [x] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载并校验对应发行包，原子完成安装和 `PATH` 配置；失败时回滚已有安装且不留半成品。
 - [x] 新增可独立执行的发行与安装脚本回归测试，覆盖正常汇聚、输入校验失败、安装成功、重复安装和失败回滚，并纳入 `make test`。
 - [x] 新增可独立执行的干净安装验收脚本，按 §6.3 验证版本、完整目录、平台构件、bundled LLVM 以及项目 `build` / `run`；CI 在对应原生 runner 解压各自发行包后执行。
+- [x] 新增可独立执行的 macOS 最终化脚本，按 §6.3 安全解包、完整发现并签名 Mach-O
+  代码、保持签名元数据、严格校验、重新归档和公证；脚本失败时不得留下最终 zip。
+- [x] `.github/workflows/release.yml`：汇聚任务只发布内部 unsigned artifact；受
+  `release-signing` Environment 保护的原生 macOS Job 生成唯一最终 artifact，
+  所有干净安装验收和 GitHub Release 发布仅消费最终 artifact。
+- [x] 发行脚本回归覆盖 macOS 最终化入口的参数、归档边界、代码发现、签名元数据
+  保持、原子输出和 CI artifact 依赖；真实 Developer ID 安全时间戳与公证由受保护的
+  手动试发或版本 tag 工作流验收。
 - [ ] 在三个干净发行平台安装并验证 `feng --version`、`build`、`run`、bundled LLVM、目录结构、平台构件和相对定位。
 - [ ] 人工 Review。

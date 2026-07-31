@@ -234,7 +234,125 @@ jobs:
           --output=build/release-packages
           --archive-tool=toolchain/llvm/linux-x64-gnu/bin/llvm-ar
 
-      - name: Upload complete release packages
+      - name: Upload unsigned release packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-packages-unsigned
+          path: build/release-packages/*.zip
+          if-no-files-found: error
+          compression-level: 0
+
+  finalize_macos:
+    name: Sign and notarize macos-arm64 package
+    if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
+    needs:
+      - prepare
+      - assemble
+    runs-on: macos-26
+    environment: release-signing
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - name: Checkout macOS finalization script
+        uses: actions/checkout@v6
+        with:
+          lfs: false
+
+      - name: Download unsigned release packages
+        uses: actions/download-artifact@v8
+        with:
+          name: release-packages-unsigned
+          path: build/release-packages-unsigned
+
+      - name: Install macOS release credentials
+        env:
+          MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          certificate_path="${RUNNER_TEMP}/developer-id-application.p12"
+          notary_key_path="${RUNNER_TEMP}/notary-api-key.p8"
+          keychain_path="${RUNNER_TEMP}/release-signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+
+          printf '%s' "${MACOS_SIGNING_P12_BASE64}" |
+            base64 --decode -o "${certificate_path}"
+          printf '%s' "${APPLE_NOTARY_KEY_P8_BASE64}" |
+            base64 --decode -o "${notary_key_path}"
+          chmod 0600 "${certificate_path}" "${notary_key_path}"
+
+          security create-keychain -p "${keychain_password}" "${keychain_path}"
+          security set-keychain-settings -lut 21600 "${keychain_path}"
+          security unlock-keychain -p "${keychain_password}" "${keychain_path}"
+          security import "${certificate_path}" \
+            -P "${MACOS_SIGNING_P12_PASSWORD}" \
+            -A -t cert -f pkcs12 -k "${keychain_path}"
+          security set-key-partition-list \
+            -S apple-tool:,apple: \
+            -k "${keychain_password}" \
+            "${keychain_path}"
+          security list-keychain -d user -s "${keychain_path}"
+
+          signing_identity="$(
+            security find-identity -v -p codesigning "${keychain_path}" |
+              awk -F '"' -v team="(${APPLE_TEAM_ID})" \
+                '$2 ~ /^Developer ID Application:/ &&
+                 index($2, team) > 0 { print $2 }'
+          )"
+          [[ -n "${signing_identity}" && "${signing_identity}" != *$'\n'* ]] || {
+            echo "error: expected exactly one Developer ID Application identity for ${APPLE_TEAM_ID}" >&2
+            exit 1
+          }
+          printf 'MACOS_SIGNING_IDENTITY=%s\n' "${signing_identity}" \
+            >> "${GITHUB_ENV}"
+          printf 'MACOS_NOTARY_KEY_PATH=%s\n' "${notary_key_path}" \
+            >> "${GITHUB_ENV}"
+
+      - name: Finalize release packages
+        env:
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
+        run: |
+          unsigned_root="build/release-packages-unsigned"
+          version="${{ needs.prepare.outputs.version }}"
+          expected_archives=(
+            "feng-${version}-macos-arm64.zip"
+            "feng-${version}-linux-x64-gnu.zip"
+            "feng-${version}-linux-arm64-gnu.zip"
+          )
+          [[ "$(
+            find "${unsigned_root}" -maxdepth 1 -type f -name '*.zip' |
+              wc -l |
+              tr -d ' '
+          )" == "${#expected_archives[@]}" ]] || {
+            echo "error: unsigned release artifact must contain exactly three zip files" >&2
+            exit 1
+          }
+          for archive_name in "${expected_archives[@]}"; do
+            unzip -tqq "${unsigned_root}/${archive_name}" || {
+              echo "error: missing or invalid unsigned release archive: ${archive_name}" >&2
+              exit 1
+            }
+          done
+
+          mkdir -p build/release-packages
+          cp \
+            "${unsigned_root}/feng-${version}-linux-x64-gnu.zip" \
+            "${unsigned_root}/feng-${version}-linux-arm64-gnu.zip" \
+            build/release-packages/
+          scripts/release_finalize_macos.sh \
+            --archive="${unsigned_root}/feng-${version}-macos-arm64.zip" \
+            --output="build/release-packages/feng-${version}-macos-arm64.zip" \
+            --version="${version}" \
+            --identity="${MACOS_SIGNING_IDENTITY}" \
+            --team-id="${APPLE_TEAM_ID}" \
+            --notary-key="${MACOS_NOTARY_KEY_PATH}" \
+            --notary-key-id="${APPLE_NOTARY_KEY_ID}" \
+            --notary-issuer-id="${APPLE_NOTARY_ISSUER_ID}"
+
+      - name: Upload finalized release packages
         uses: actions/upload-artifact@v7
         with:
           name: release-packages
@@ -242,12 +360,21 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+      - name: Remove macOS release credentials
+        if: ${{ always() }}
+        run: |
+          security delete-keychain \
+            "${RUNNER_TEMP}/release-signing.keychain-db" 2>/dev/null || true
+          rm -f \
+            "${RUNNER_TEMP}/developer-id-application.p12" \
+            "${RUNNER_TEMP}/notary-api-key.p8"
+
   verify_macos:
     name: Verify macos-arm64 package
     if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
     needs:
       - prepare
-      - assemble
+      - finalize_macos
     runs-on: macos-26
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
@@ -283,7 +410,7 @@ jobs:
     if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
     needs:
       - prepare
-      - assemble
+      - finalize_macos
     strategy:
       fail-fast: false
       matrix:
