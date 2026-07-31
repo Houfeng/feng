@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Feng is a statically typed programming language for developers and AI. Its concise syntax, explicit contracts, automatic memory management, and C interoperability make code clear and reliable.">
+  <meta name="description" content="Feng 是一门面向开发者与 AI 的静态类型编程语言，以简洁语法、显式契约、自动内存管理与 C 互操作能力，让代码清晰可靠。">
   <meta name="theme-color" content="#f7f8f5" data-theme-color>
   <meta property="og:type" content="website">
-  <meta property="og:title" content="Feng — Clarity by design">
-  <meta property="og:description" content="A statically typed programming language for developers and AI.">
-  <title>Feng Programming Language</title>
+  <meta property="og:title" content="Feng — 清晰，自有章法">
+  <meta property="og:description" content="一门面向开发者与 AI 的静态类型编程语言。">
+  <title>Feng 编程语言</title>
   <script>
     try {
       const savedTheme = localStorage.getItem('feng-theme');
@@ -29,95 +29,95 @@
   <script defer src="app.js"></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to main content</a>
+  <a class="skip-link" href="#main">跳到正文</a>
 
   <header class="site-header">
     <div class="shell site-header__inner">
-      <a class="brand" href="#top" aria-label="Feng home">
+      <a class="brand" href="#top" aria-label="Feng 首页">
         <span class="brand__mark" aria-hidden="true">F</span>
         <span class="brand__name">Feng</span>
       </a>
 
-      <nav class="site-nav site-nav--desktop" aria-label="Main navigation">
-        <a href="#install">Install</a>
-        <span class="nav-pending" aria-disabled="true">Docs</span>
-        <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">Extension</a>
-        <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Open Source</a>
+      <nav class="site-nav site-nav--desktop" aria-label="主导航">
+        <a href="#install">安装</a>
+        <span class="nav-pending" aria-disabled="true">文档</span>
+        <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">插件</a>
+        <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">开源</a>
         <div class="nav-settings">
           <details class="language-menu" data-language-menu>
-            <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="Choose language" title="Choose language">
+            <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="选择语言" title="选择语言">
               <svg class="language-menu__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="9"></circle>
                 <path d="M3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18"></path>
               </svg>
-              <span class="language-menu__label" aria-hidden="true">Language</span>
+              <span class="language-menu__label" aria-hidden="true">语言</span>
               <svg class="language-menu__chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <path d="m7 10 5 5 5-5"></path>
               </svg>
             </summary>
-            <ul class="language-menu__popover" aria-label="Language">
-              <li><a class="language-menu__option" href="index.html"><span>简体中文</span></a></li>
-              <li><span class="language-menu__option" aria-current="page"><span>English</span><span class="language-menu__state">Current</span></span></li>
+            <ul class="language-menu__popover" aria-label="语言">
+              <li><span class="language-menu__option" aria-current="page"><span>简体中文</span><span class="language-menu__state">当前</span></span></li>
+              <li><a class="language-menu__option" href="index-en.html"><span>English</span></a></li>
             </ul>
           </details>
-          <div class="theme-switch" role="group" aria-label="Color mode">
-            <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="Use light mode" aria-pressed="false" title="Use light mode">
+          <div class="theme-switch" role="group" aria-label="颜色模式">
+            <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="使用浅色模式" aria-pressed="false" title="使用浅色模式">
               <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="3.5"></circle>
                 <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
               </svg>
-              <span class="theme-switch__label" aria-hidden="true">Light</span>
+              <span class="theme-switch__label" aria-hidden="true">浅色</span>
             </button>
-            <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="Use dark mode" aria-pressed="false" title="Use dark mode">
+            <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="使用深色模式" aria-pressed="false" title="使用深色模式">
               <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
               </svg>
-              <span class="theme-switch__label" aria-hidden="true">Dark</span>
+              <span class="theme-switch__label" aria-hidden="true">深色</span>
             </button>
           </div>
         </div>
       </nav>
 
       <details class="site-menu" data-site-menu>
-        <summary class="site-menu__trigger" aria-label="Toggle navigation menu">
-          <span class="visually-hidden">Toggle navigation menu</span>
+        <summary class="site-menu__trigger" aria-label="切换导航菜单">
+          <span class="visually-hidden">切换导航菜单</span>
           <span class="site-menu__lines" aria-hidden="true"></span>
         </summary>
-        <nav class="site-nav site-nav--mobile" aria-label="Mobile navigation">
-          <a href="#install">Install</a>
-          <span class="nav-pending" aria-disabled="true">Docs</span>
-          <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">Extension</a>
-          <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Open Source</a>
+        <nav class="site-nav site-nav--mobile" aria-label="移动端主导航">
+          <a href="#install">安装</a>
+          <span class="nav-pending" aria-disabled="true">文档</span>
+          <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">插件</a>
+          <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">开源</a>
           <div class="nav-settings">
             <details class="language-menu" data-language-menu>
-              <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="Choose language" title="Choose language">
+              <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="选择语言" title="选择语言">
                 <svg class="language-menu__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="9"></circle>
                   <path d="M3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18"></path>
                 </svg>
-                <span class="language-menu__label" aria-hidden="true">Language</span>
+                <span class="language-menu__label" aria-hidden="true">语言</span>
                 <svg class="language-menu__chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <path d="m7 10 5 5 5-5"></path>
                 </svg>
               </summary>
-              <ul class="language-menu__popover" aria-label="Language">
-                <li><a class="language-menu__option" href="index.html"><span>简体中文</span></a></li>
-                <li><span class="language-menu__option" aria-current="page"><span>English</span><span class="language-menu__state">Current</span></span></li>
+              <ul class="language-menu__popover" aria-label="语言">
+                <li><span class="language-menu__option" aria-current="page"><span>简体中文</span><span class="language-menu__state">当前</span></span></li>
+                <li><a class="language-menu__option" href="index-en.html"><span>English</span></a></li>
               </ul>
             </details>
-            <div class="theme-switch" role="group" aria-label="Color mode">
-              <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="Use light mode" aria-pressed="false" title="Use light mode">
+            <div class="theme-switch" role="group" aria-label="颜色模式">
+              <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="使用浅色模式" aria-pressed="false" title="使用浅色模式">
                 <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="3.5"></circle>
                   <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
                 </svg>
-                <span class="theme-switch__label" aria-hidden="true">Light</span>
+                <span class="theme-switch__label" aria-hidden="true">浅色</span>
               </button>
-              <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="Use dark mode" aria-pressed="false" title="Use dark mode">
+              <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="使用深色模式" aria-pressed="false" title="使用深色模式">
                 <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
                 </svg>
-                <span class="theme-switch__label" aria-hidden="true">Dark</span>
+                <span class="theme-switch__label" aria-hidden="true">深色</span>
               </button>
             </div>
           </div>
@@ -129,43 +129,43 @@
   <main id="main">
     <section class="hero shell" id="top" aria-labelledby="hero-title">
       <div class="hero__intro">
-        <h1 id="hero-title"><span>Feng,</span><span>Clarity by design</span></h1>
-        <p class="hero__lead">Feng helps developers and AI write clear, reliable, and maintainable code</p>
+        <h1 id="hero-title"><span>锋，</span><span>自有章法</span></h1>
+        <p class="hero__lead">Feng 语言，让开发者和 AI 都更易于写出 「清晰、可靠、可维护」 的代码</p>
       </div>
 
       <div class="hero__traits">
-        <ul aria-label="Feng features">
-          <li>AI-friendly</li>
-          <li>Explicit contracts</li>
-          <li>Static typing</li>
-          <li>Managed memory</li>
-          <li>Compiled</li>
-          <li>Cross-platform</li>
+        <ul aria-label="Feng 特点">
+          <li>AI 友好</li>
+          <li>显式契约</li>
+          <li>静态类型</li>
+          <li>自动内存管理</li>
+          <li>编译型</li>
+          <li>跨平台</li>
         </ul>
       </div>
 
       <section class="install-panel" id="install" data-command aria-labelledby="install-title">
         <header class="install-panel__header">
-          <h2 id="install-title">Quick install</h2>
-          <p>Copy the command and run it in your terminal</p>
+          <h2 id="install-title">快速安装</h2>
+          <p>复制命令，在终端中运行</p>
         </header>
 
         <div class="command-bar">
-          <div class="command-bar__code" aria-label="Install command">
+          <div class="command-bar__code" aria-label="安装命令">
             <span class="command-bar__prompt" aria-hidden="true">$</span>
             <code>curl -fsSL https://feng-lang.com/install.sh | bash</code>
           </div>
-          <button class="copy-button" type="button" data-copy-command aria-label="Copy install command">
+          <button class="copy-button" type="button" data-copy-command aria-label="复制安装命令">
             <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
               <rect x="9" y="9" width="11" height="11" rx="2"></rect>
               <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path>
             </svg>
-            <span data-copy-label>Copy</span>
+            <span data-copy-label>复制</span>
           </button>
         </div>
 
         <footer class="install-panel__footer">
-          <ul class="platform-list" aria-label="Supported platforms">
+          <ul class="platform-list" aria-label="支持的平台">
             <li><span aria-hidden="true"></span>macOS Apple Silicon</li>
             <li><span aria-hidden="true"></span>Linux x86-64</li>
             <li><span aria-hidden="true"></span>Linux ARM64</li>
@@ -174,25 +174,25 @@
             <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
               <path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"></path>
             </svg>
-            <span>Manual download</span>
+            <span>手动下载</span>
           </a>
         </footer>
         <span class="visually-hidden" role="status" aria-live="polite" data-copy-status></span>
       </section>
     </section>
 
-    <section class="language-section" aria-label="Feng code examples">
+    <section class="language-section" aria-label="Feng 代码示例">
       <div class="shell language-section__inner">
         <div class="code-tabs" data-code-tabs>
-          <nav class="code-tabs__list" data-code-tab-list aria-label="Choose a code example">
-            <a class="code-tabs__tab" id="tab-hello" href="#example-hello" data-code-tab>Hello, world</a>
-            <a class="code-tabs__tab" id="tab-type" href="#example-type" data-code-tab>Define a type</a>
-            <a class="code-tabs__tab" id="tab-contract" href="#example-contract" data-code-tab>Declare contracts</a>
-            <a class="code-tabs__tab" id="tab-generics" href="#example-generics" data-code-tab>Define generics</a>
-            <a class="code-tabs__tab" id="tab-loop" href="#example-loop" data-code-tab>Loops</a>
-            <a class="code-tabs__tab" id="tab-branch" href="#example-branch" data-code-tab>Conditionals</a>
-            <a class="code-tabs__tab" id="tab-match" href="#example-match" data-code-tab>Pattern matching</a>
-            <a class="code-tabs__tab" id="tab-exception" href="#example-exception" data-code-tab>Exception handling</a>
+          <nav class="code-tabs__list" data-code-tab-list aria-label="选择代码示例">
+            <a class="code-tabs__tab" id="tab-hello" href="#example-hello" data-code-tab>你好世界</a>
+            <a class="code-tabs__tab" id="tab-type" href="#example-type" data-code-tab>定义类型</a>
+            <a class="code-tabs__tab" id="tab-contract" href="#example-contract" data-code-tab>声明契约</a>
+            <a class="code-tabs__tab" id="tab-generics" href="#example-generics" data-code-tab>定义泛型</a>
+            <a class="code-tabs__tab" id="tab-loop" href="#example-loop" data-code-tab>循环控制</a>
+            <a class="code-tabs__tab" id="tab-branch" href="#example-branch" data-code-tab>条件分支</a>
+            <a class="code-tabs__tab" id="tab-match" href="#example-match" data-code-tab>模式匹配</a>
+            <a class="code-tabs__tab" id="tab-exception" href="#example-exception" data-code-tab>异常处理</a>
           </nav>
 
           <div class="code-tabs__panel" id="example-hello" data-code-panel>
@@ -200,25 +200,25 @@
 
 <span class="syntax-keyword">import</span> std.io;
 
-<span class="syntax-dim">// main is the sole entry point of an executable program</span>
+<span class="syntax-dim">// main 是可执行程序的唯一入口</span>
 <span class="syntax-keyword">func</span> main(args: string[]) {
-  println(<span class="syntax-string">"Hello, world!"</span>);
+  println(<span class="syntax-string">"你好世界"</span>);
 }</code></pre>
           </div>
 
           <div class="code-tabs__panel" id="example-type" data-code-panel>
             <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
-<span class="syntax-dim">// type organizes data and behavior into a static type</span>
+<span class="syntax-dim">// type 将数据与行为组织为静态类型</span>
 <span class="syntax-keyword">type</span> User {
-  <span class="syntax-dim">// let fields are read-only; var fields can be updated</span>
+  <span class="syntax-dim">// let 字段只读，var 字段可更新</span>
   <span class="syntax-keyword">let</span> name: string;
   <span class="syntax-keyword">let</span> email: string;
   <span class="syntax-keyword">var</span> active: bool;
 
-  <span class="syntax-dim">// Methods access the current instance through self</span>
+  <span class="syntax-dim">// 方法通过 self 访问当前实例</span>
   <span class="syntax-keyword">func</span> greeting(): string {
-    <span class="syntax-keyword">return</span> <span class="syntax-string">"Hello, "</span> + self.name;
+    <span class="syntax-keyword">return</span> <span class="syntax-string">"你好，"</span> + self.name;
   }
 }</code></pre>
           </div>
@@ -226,7 +226,7 @@
           <div class="code-tabs__panel" id="example-contract" data-code-panel>
             <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
-<span class="syntax-dim">// An object contract declares required behavior</span>
+<span class="syntax-dim">// 对象契约声明对象必须提供的行为</span>
 <span class="syntax-keyword">spec</span> Named {
   <span class="syntax-keyword">func</span> name(): string;
 }
@@ -235,20 +235,20 @@
   <span class="syntax-keyword">func</span> save(): void;
 }
 
-<span class="syntax-dim">// A function contract declares a callable value's full signature</span>
+<span class="syntax-dim">// 函数契约声明可调用值的完整签名</span>
 <span class="syntax-keyword">spec</span> Formatter(value: string): string;
 
-<span class="syntax-dim">// A union contract accepts values from multiple candidate types</span>
+<span class="syntax-dim">// 联合契约表示值可来自多个候选类型</span>
 <span class="syntax-keyword">spec</span> Identifier: int | string;
 
-<span class="syntax-dim">// An intersection contract requires every member contract</span>
+<span class="syntax-dim">// 交叉契约要求值同时满足所有成员契约</span>
 <span class="syntax-keyword">spec</span> Entity: Named &amp; Persistable;
 
 <span class="syntax-keyword">type</span> User {
   <span class="syntax-keyword">let</span> username: string;
 }
 
-<span class="syntax-dim">// fit satisfies object contracts without changing the type declaration</span>
+<span class="syntax-dim">// fit 在不修改 type 声明的情况下满足对象契约</span>
 <span class="syntax-keyword">fit</span> User: Named, Persistable {
   <span class="syntax-keyword">func</span> name(): string {
     <span class="syntax-keyword">return</span> self.username;
@@ -264,7 +264,7 @@
 
 <span class="syntax-keyword">import</span> std.io;
 
-<span class="syntax-dim">// T makes logic reusable while preserving static types</span>
+<span class="syntax-dim">// T 使函数在保留静态类型的同时复用逻辑</span>
 <span class="syntax-keyword">func</span> identity&lt;T&gt;(value: T): T {
   <span class="syntax-keyword">return</span> value;
 }
@@ -281,18 +281,18 @@
 <span class="syntax-keyword">func</span> calculate_total(): int {
   <span class="syntax-keyword">var</span> total = 0;
 
-  <span class="syntax-dim">// A three-part for loop suits a defined counting range</span>
+  <span class="syntax-dim">// 三段式 for 适合明确的计数范围</span>
   <span class="syntax-keyword">for var</span> i = 1; i &lt;= 3; i += 1 {
     total += i;
   }
 
-  <span class="syntax-dim">// for/in iterates through array elements in order</span>
+  <span class="syntax-dim">// for/in 按顺序迭代数组元素</span>
   <span class="syntax-keyword">let</span> values = [4, 5, 6];
   <span class="syntax-keyword">for let</span> value <span class="syntax-keyword">in</span> values {
     total += value;
   }
 
-  <span class="syntax-dim">// while checks its condition again before each iteration</span>
+  <span class="syntax-dim">// while 在每轮循环前重新检查条件</span>
   <span class="syntax-keyword">var</span> remaining = 2;
   <span class="syntax-keyword">while</span> remaining &gt; 0 {
     total += remaining;
@@ -308,22 +308,22 @@
 <span class="syntax-keyword">func</span> evaluate(score: int): string {
   <span class="syntax-keyword">var</span> status = <span class="syntax-string">""</span>;
 
-  <span class="syntax-dim">// An if/else statement performs different actions by condition</span>
+  <span class="syntax-dim">// if/else 语句按条件执行不同操作</span>
   <span class="syntax-keyword">if</span> score &gt;= 60 {
-    status = <span class="syntax-string">"Pass"</span>;
+    status = <span class="syntax-string">"通过"</span>;
   } <span class="syntax-keyword">else</span> {
-    status = <span class="syntax-string">"Fail"</span>;
+    status = <span class="syntax-string">"未通过"</span>;
   }
 
-  <span class="syntax-dim">// An if expression directly produces a value to bind</span>
+  <span class="syntax-dim">// if 表达式直接生成可绑定的值</span>
   <span class="syntax-keyword">let</span> level = <span class="syntax-keyword">if</span> score &gt;= 90 {
-    <span class="syntax-string">"Excellent"</span>
+    <span class="syntax-string">"优秀"</span>
   } <span class="syntax-keyword">else if</span> score &gt;= 60 {
-    <span class="syntax-string">"Qualified"</span>
+    <span class="syntax-string">"合格"</span>
   } <span class="syntax-keyword">else</span> {
-    <span class="syntax-string">"Needs improvement"</span>
+    <span class="syntax-string">"待提高"</span>
   };
-  <span class="syntax-keyword">return</span> status + <span class="syntax-string">": "</span> + level;
+  <span class="syntax-keyword">return</span> status + <span class="syntax-string">"："</span> + level;
 }</code></pre>
           </div>
 
@@ -333,20 +333,20 @@
 <span class="syntax-keyword">func</span> describe(code: int): string {
   <span class="syntax-keyword">var</span> detail = <span class="syntax-string">""</span>;
 
-  <span class="syntax-dim">// A match statement runs the first matching branch</span>
+  <span class="syntax-dim">// match 语句执行第一个命中分支</span>
   <span class="syntax-keyword">match</span> code {
-    200 { detail = <span class="syntax-string">"Request succeeded"</span>; }
-    404 { detail = <span class="syntax-string">"Resource not found"</span>; }
-    <span class="syntax-keyword">else</span> { detail = <span class="syntax-string">"Unknown status"</span>; }
+    200 { detail = <span class="syntax-string">"请求成功"</span>; }
+    404 { detail = <span class="syntax-string">"资源不存在"</span>; }
+    <span class="syntax-keyword">else</span> { detail = <span class="syntax-string">"未知状态"</span>; }
   }
 
-  <span class="syntax-dim">// A match expression returns the value of its matching branch</span>
+  <span class="syntax-dim">// match 表达式返回命中分支的值</span>
   <span class="syntax-keyword">let</span> category = <span class="syntax-keyword">match</span> code {
-    200...299 { <span class="syntax-string">"Success"</span> }
-    400...499 { <span class="syntax-string">"Client error"</span> }
-    <span class="syntax-keyword">else</span> { <span class="syntax-string">"Other"</span> }
+    200...299 { <span class="syntax-string">"成功"</span> }
+    400...499 { <span class="syntax-string">"客户端错误"</span> }
+    <span class="syntax-keyword">else</span> { <span class="syntax-string">"其他"</span> }
   };
-  <span class="syntax-keyword">return</span> category + <span class="syntax-string">": "</span> + detail;
+  <span class="syntax-keyword">return</span> category + <span class="syntax-string">"："</span> + detail;
 }</code></pre>
           </div>
 
@@ -357,24 +357,24 @@
 
 <span class="syntax-keyword">func</span> require_port(port: int): int {
   <span class="syntax-keyword">if</span> port &lt;= 0 {
-    <span class="syntax-dim">// throw ends the current path and passes an exception to the caller</span>
-    <span class="syntax-keyword">throw</span> <span class="syntax-string">"Port must be positive"</span>;
+    <span class="syntax-dim">// throw 终止当前路径并向调用方传递异常</span>
+    <span class="syntax-keyword">throw</span> <span class="syntax-string">"端口必须为正数"</span>;
   }
   <span class="syntax-keyword">return</span> port;
 }
 
 <span class="syntax-keyword">func</span> main(args: string[]) {
-  <span class="syntax-dim">// Statement form performs actions while handling an exception</span>
+  <span class="syntax-dim">// 语句用法用于处理异常时的操作</span>
   <span class="syntax-keyword">try</span> require_port(-1) <span class="syntax-keyword">catch</span> error: string {
     println(error);
   };
 
-  <span class="syntax-dim">// Expression form can provide a fallback value for an exception path</span>
+  <span class="syntax-dim">// 表达式用法可以为异常路径提供回退值</span>
   <span class="syntax-keyword">let</span> port = <span class="syntax-keyword">try</span> require_port(-1) <span class="syntax-keyword">catch</span> error: string {
     println(error);
     3000
   };
-  println(<span class="syntax-string">"Using port: {0}"</span>, port);
+  println(<span class="syntax-string">"使用端口：{0}"</span>, port);
 }</code></pre>
           </div>
         </div>
@@ -384,8 +384,8 @@
 
   <footer class="site-footer">
     <div class="shell site-footer__inner">
-      <p><span aria-hidden="true">©</span> Feng Language Project</p>
-      <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Open Source</a>
+      <p><span aria-hidden="true">©</span> Feng 语言项目</p>
+      <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">开源</a>
     </div>
   </footer>
 </body>
