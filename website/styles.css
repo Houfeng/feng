@@ -480,22 +480,40 @@ svg {
   padding-bottom: clamp(20px, 1.8vw, 24px);
 }
 
+[lang="en"] .hero {
+  padding-top: clamp(70px, 7.5vw, 96px);
+}
+
 .hero__intro {
   max-width: 720px;
 }
 
 .hero h1 {
   margin: 0;
+  max-width: 790px;
   font-weight: 720;
+  font-size: clamp(4.3rem, 7.4vw, 6.7rem);
+  line-height: 0.98;
   letter-spacing: -0.065em;
   text-wrap: balance;
 }
 
-.hero h1 {
-  max-width: 790px;
-  font-size: clamp(4.3rem, 7.4vw, 6.7rem);
-  line-height: 0.98;
+.hero h1 span {
+  display: block;
   white-space: nowrap;
+}
+
+[lang="en"] .hero h1 {
+  font-size: clamp(3.5rem, 5.8vw, 5.4rem);
+  letter-spacing: 0;
+}
+
+[lang="zh-CN"] .hero h1 {
+  white-space: nowrap;
+}
+
+[lang="zh-CN"] .hero h1 span {
+  display: inline;
 }
 
 .hero__lead {
@@ -1215,10 +1233,17 @@ svg {
     padding-bottom: 20px;
   }
 
+  [lang="en"] .hero {
+    padding-top: 44px;
+  }
+
   .hero h1 {
     font-size: clamp(2.5rem, 12.5vw, 3.5rem);
     letter-spacing: -0.075em;
-    white-space: nowrap;
+  }
+
+  [lang="en"] .hero h1 {
+    font-size: clamp(2rem, 9.8vw, 3.15rem);
   }
 
   .hero__lead {
