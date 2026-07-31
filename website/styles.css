@@ -291,7 +291,7 @@ svg {
   align-items: end;
   justify-content: space-between;
   gap: 24px;
-  padding: 26px 32px 12px;
+  padding: 24px 32px 12px;
 }
 
 .install-panel h2 {
@@ -399,7 +399,7 @@ svg {
   align-items: center;
   justify-content: space-between;
   gap: 24px;
-  padding: 10px 32px 11px;
+  padding: 10px 32px 14px;
 }
 
 .platform-list {
