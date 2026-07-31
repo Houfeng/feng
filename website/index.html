@@ -8,7 +8,7 @@
   <meta property="og:type" content="website">
   <meta property="og:title" content="Feng — 清晰，自有章法">
   <meta property="og:description" content="一门面向开发者与 AI 的静态类型编程语言。">
-  <title>Feng — 清晰，自有章法</title>
+  <title>Feng 编程语言</title>
   <link rel="stylesheet" href="styles.css">
   <script defer src="app.js"></script>
 </head>
@@ -101,7 +101,9 @@
       <div class="shell language-section__inner">
         <div class="code-tabs" data-code-tabs>
           <nav class="code-tabs__list" data-code-tab-list aria-label="选择代码示例">
-            <a class="code-tabs__tab" id="tab-hello" href="#example-hello" data-code-tab>Hello World</a>
+            <a class="code-tabs__tab" id="tab-hello" href="#example-hello" data-code-tab>你好世界</a>
+            <a class="code-tabs__tab" id="tab-type" href="#example-type" data-code-tab>定义类型</a>
+            <a class="code-tabs__tab" id="tab-contract" href="#example-contract" data-code-tab>声明契约</a>
             <a class="code-tabs__tab" id="tab-generics" href="#example-generics" data-code-tab>泛型</a>
             <a class="code-tabs__tab" id="tab-loop" href="#example-loop" data-code-tab>循环控制</a>
           </nav>
@@ -112,7 +114,30 @@
 <span class="syntax-keyword">import</span> std.io;
 
 <span class="syntax-keyword">func</span> main(args: string[]) {
-  println(<span class="syntax-string">"Hello, Feng!"</span>);
+  println(<span class="syntax-string">"你好世界"</span>);
+}</code></pre>
+          </div>
+
+          <div class="code-tabs__panel" id="example-type" data-code-panel>
+            <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
+
+<span class="syntax-keyword">type</span> User {
+  <span class="syntax-keyword">let</span> name: string;
+  <span class="syntax-keyword">let</span> email: string;
+  <span class="syntax-keyword">var</span> active: bool;
+
+  <span class="syntax-keyword">func</span> greeting(): string {
+    <span class="syntax-keyword">return</span> <span class="syntax-string">"你好，"</span> + self.name;
+  }
+}</code></pre>
+          </div>
+
+          <div class="code-tabs__panel" id="example-contract" data-code-panel>
+            <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
+
+<span class="syntax-keyword">spec</span> Storage {
+  <span class="syntax-keyword">func</span> read(key: string): string;
+  <span class="syntax-keyword">func</span> write(key: string, value: string): void;
 }</code></pre>
           </div>
 
