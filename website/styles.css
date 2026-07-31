@@ -168,6 +168,18 @@ svg {
   color: var(--faint);
 }
 
+.site-nav--desktop .nav-language {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
 .site-nav a:hover,
 .site-nav a:focus-visible {
   color: var(--accent);
@@ -467,6 +479,7 @@ svg {
   gap: 4px;
   padding-inline: 14px;
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
   border-bottom: 1px solid var(--terminal-line);
 }
