@@ -203,7 +203,10 @@ sign_and_verify_code() {
       --timestamp
     )
     if [[ "${had_signature}" == "true" ]]; then
-      sign_args+=(--preserve-metadata=identifier,entitlements)
+      sign_args+=(
+        --identifier "${before_identifier}"
+        --preserve-metadata=entitlements
+      )
     fi
     "${CODESIGN_TOOL}" "${sign_args[@]}" "${file_path}" ||
       die "failed to sign macOS release code: ${relative_path}"

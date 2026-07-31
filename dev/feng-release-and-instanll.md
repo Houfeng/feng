@@ -233,8 +233,10 @@ macOS 最终化任务：
 3. 安全解压 macOS zip，扫描完整分发目录中的 Mach-O 可执行文件、动态库和 bundle；
    静态归档及其中的对象文件不属于签名目标
 4. 使用同一 `Developer ID Application` 身份对全部签名目标执行 Hardened Runtime
-   签名并请求 Apple 安全时间戳；签名前后必须保持每个目标已有的 identifier 与
-   entitlement，其中 `debugserver` 的调试 entitlement 不得丢失
+   签名并请求 Apple 安全时间戳；签名前必须读取已有 identifier，并在重签时通过
+   `codesign --identifier` 显式写回，不得仅依赖 `--preserve-metadata`（linker-signed
+   Mach-O 可能忽略其 identifier 保持请求）；签名前后还必须保持 entitlement，其中
+   `debugserver` 的调试 entitlement 不得丢失
 5. 对每个目标执行严格签名校验，确认 Developer ID 证书链、Team ID、Hardened
    Runtime 和安全时间戳；任何遗漏、签名失败或元数据变化都必须阻止发布
 6. 以原顶层目录和文件名重新生成 macOS zip，再通过 `notarytool` 与 App Store

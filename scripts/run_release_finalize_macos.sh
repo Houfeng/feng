@@ -39,8 +39,12 @@ create_mock_codesign() {
     printf '%s\n' '    exit 0'
     printf '%s\n' '  fi'
     printf '%s\n' '  if [[ "${joined}" == *" --verbose=4 "* ]]; then'
+    printf '%s\n' '    identifier="$(basename "${file_path}")"'
+    printf '%s\n' '    if [[ "${identifier}" == "clang" ]]; then'
+    printf '%s\n' '      identifier="clang-22"'
+    printf '%s\n' '    fi'
     printf '%s\n' '    printf "%s\\n" \'
-    printf '%s\n' '      "Identifier=$(basename "${file_path}")" \'
+    printf '%s\n' '      "Identifier=${identifier}" \'
     printf '%s\n' '      "CodeDirectory v=20500 flags=0x10000(runtime)" \'
     printf '%s\n' '      "Authority=Developer ID Application: Release Test (ABCDEFGHIJ)" \'
     printf '%s\n' '      "Authority=Developer ID Certification Authority" \'
@@ -64,7 +68,7 @@ create_mock_file() {
     printf '%s\n' 'set -euo pipefail'
     printf '%s\n' 'file_path="${!#}"'
     printf '%s\n' 'case "$(basename "${file_path}")" in'
-    printf '%s\n' '  feng|debugserver)'
+    printf '%s\n' '  feng|clang|debugserver)'
     printf '%s\n' '    echo "Mach-O 64-bit executable arm64"'
     printf '%s\n' '    ;;'
     printf '%s\n' '  librelease.dylib)'
@@ -143,6 +147,8 @@ mkdir -p \
   "${FIXTURE_ROOT}/toolchain/llvm/lib/clang/22/lib/darwin" \
   "${FIXTURE_ROOT}/toolchain/llvm/lib/plugins"
 printf '%s\n' "Mach-O executable fixture" > "${FIXTURE_ROOT}/bin/feng"
+printf '%s\n' "Mach-O linker-signed fixture" \
+  > "${FIXTURE_ROOT}/toolchain/llvm/bin/clang"
 printf '%s\n' "Mach-O debugger fixture" \
   > "${FIXTURE_ROOT}/toolchain/llvm/bin/debugserver"
 printf '%s\n' "Mach-O dylib fixture" \
@@ -180,10 +186,14 @@ MOCK_NOTARY_STATUS=Accepted \
   die "macOS finalization did not publish its accepted archive"
 unzip -tqq "${FINAL_ARCHIVE}" >/dev/null ||
   die "macOS finalization published an invalid zip"
-[[ "$(grep -c '^sign|' "${MOCK_CODESIGN_LOG}")" == "4" ]] ||
+[[ "$(grep -c '^sign|' "${MOCK_CODESIGN_LOG}")" == "5" ]] ||
   die "macOS finalization did not sign every distributable Mach-O file"
-[[ "$(grep -Fc -- '--preserve-metadata=identifier,entitlements' "${MOCK_CODESIGN_LOG}")" == "4" ]] ||
+[[ "$(grep -Fc -- '--preserve-metadata=entitlements' "${MOCK_CODESIGN_LOG}")" == "5" ]] ||
   die "macOS finalization did not preserve existing signing metadata"
+grep '^sign|' "${MOCK_CODESIGN_LOG}" |
+  grep -F -- '--identifier clang-22 --preserve-metadata=entitlements' |
+  grep -Fq '/clang' ||
+  die "macOS finalization did not explicitly preserve the clang identifier"
 grep -Fq 'submit ' "${MOCK_NOTARY_LOG}" ||
   die "macOS finalization did not submit the final zip for notarization"
 
