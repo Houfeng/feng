@@ -39,17 +39,48 @@
       </ul>
 
       <div class="install" id="install" data-command>
+        <p class="install-label">安装 Feng</p>
         <div class="command-line">
-          <span class="install-label">安装 Feng</span>
           <span class="command-prompt" aria-hidden="true">$</span>
           <code>curl -fsSL https://feng-lang.com/install.sh | bash</code>
+          <button class="command-copy" type="button" data-copy-command aria-label="复制安装命令" aria-live="polite">
+            <svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+              <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+              <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path>
+            </svg>
+            <span data-copy-label>复制</span>
+          </button>
         </div>
         <div class="install-meta">
-          <p>支持 macOS Apple Silicon、Linux x86-64 与 Linux ARM64；macOS 编译需 Xcode 或 Command Line Tools。</p>
-          <div class="install-actions">
-            <button type="button" data-copy-command aria-label="复制安装命令" aria-live="polite">复制</button>
-            <a href="https://github.com/Houfeng/feng/releases">手动下载 <span aria-hidden="true">↗</span></a>
-          </div>
+          <ul class="platform-tags" aria-label="支持的平台">
+            <li>
+              <svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <rect x="4" y="5" width="16" height="11" rx="2"></rect>
+                <path d="M2 19h20"></path>
+              </svg>
+              <span>macOS Apple Silicon</span>
+            </li>
+            <li>
+              <svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                <path d="m7 9 3 3-3 3M13 15h4"></path>
+              </svg>
+              <span>Linux x86-64</span>
+            </li>
+            <li>
+              <svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
+                <path d="m7 9 3 3-3 3M13 15h4"></path>
+              </svg>
+              <span>Linux ARM64</span>
+            </li>
+          </ul>
+          <a class="manual-download" href="https://github.com/Houfeng/feng/releases">
+            <svg class="ui-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+              <path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"></path>
+            </svg>
+            <span>手动下载</span>
+          </a>
         </div>
       </div>
     </section>

@@ -36,19 +36,20 @@ async function copyCommand(command) {
 function setupCommandCopying() {
   document.querySelectorAll('[data-command]').forEach((container) => {
     const button = container.querySelector('[data-copy-command]');
+    const label = container.querySelector('[data-copy-label]');
     const code = container.querySelector('code');
 
-    if (!button || !code) {
+    if (!button || !label || !code) {
       return;
     }
 
     button.addEventListener('click', async () => {
-      const original = button.textContent;
+      const original = label.textContent;
       const copied = await copyCommand(code.textContent.trim());
-      button.textContent = copied ? '已复制' : '请重试';
+      label.textContent = copied ? '已复制' : '请重试';
 
       window.setTimeout(() => {
-        button.textContent = original;
+        label.textContent = original;
       }, 1400);
     });
   });

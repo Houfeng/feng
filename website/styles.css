@@ -5,7 +5,9 @@
   --ink-soft: #625d54;
   --ink-faint: #898276;
   --line: #d8d1c3;
+  --line-soft: #e6e1d7;
   --cinnabar: #923c2b;
+  --small-radius: 5px;
   --content: min(920px, calc(100vw - 56px));
   --serif: "Songti SC", STSong, "Source Han Serif SC", "Noto Serif CJK SC", SimSun, serif;
   --sans: "Avenir Next", Avenir, "Helvetica Neue", Arial, sans-serif;
@@ -113,8 +115,6 @@ button {
 
 .site-nav a:hover,
 .site-nav a:focus-visible,
-.install-actions a:hover,
-.install-actions a:focus-visible,
 .site-footer a:hover,
 .site-footer a:focus-visible {
   color: var(--cinnabar);
@@ -187,34 +187,40 @@ h1 {
   color: var(--cinnabar);
 }
 
+.hero-keywords .brand-keyword::after {
+  content: "：";
+}
+
 .install {
   margin-top: clamp(36px, 6vh, 52px);
-  padding: 0 24px;
+  padding: 16px 24px 0;
   border: 1px solid var(--line);
+  border-radius: var(--small-radius);
   background: var(--surface);
+  overflow: hidden;
   scroll-margin-top: 24px;
 }
 
 .install-label {
-  margin: 0;
+  margin: 0 0 2px;
   color: var(--cinnabar);
   font-family: var(--serif);
-  font-size: 0.78rem;
-  font-weight: 500;
+  font-size: 0.9rem;
+  font-weight: 600;
   letter-spacing: 0.16em;
   text-transform: none;
 }
 
 .command-line {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 12px;
-  align-items: baseline;
+  align-items: center;
   padding-block: 18px;
   font-family: var(--mono);
 }
 
-.command-line span {
+.command-prompt {
   color: var(--cinnabar);
 }
 
@@ -227,34 +233,16 @@ h1 {
   overflow-wrap: anywhere;
 }
 
-.install-meta {
-  display: flex;
+.command-copy {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 28px;
-  margin-inline: -24px;
-  padding: 15px 24px 17px;
-  border-top: 1px solid var(--line);
-  color: var(--ink-faint);
-  font-family: var(--sans);
-  font-size: 0.72rem;
-  line-height: 1.75;
-}
-
-.install-meta p {
-  margin-bottom: 0;
-}
-
-.install-actions {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 20px;
-}
-
-.install-actions button {
-  padding: 7px 15px;
+  justify-content: center;
+  gap: 7px;
+  inline-size: 92px;
+  min-height: 34px;
+  padding: 7px 10px;
   border: 1px solid var(--cinnabar);
+  border-radius: var(--small-radius);
   color: #fff;
   background: var(--cinnabar);
   cursor: pointer;
@@ -262,14 +250,80 @@ h1 {
   font-size: 0.72rem;
 }
 
-.install-actions button:hover,
-.install-actions button:focus-visible {
+.command-copy:hover,
+.command-copy:focus-visible {
   border-color: var(--ink);
   background: var(--ink);
 }
 
-.install-actions a {
-  color: var(--ink);
+.install-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  margin-inline: -24px;
+  padding: 15px 24px 17px;
+  border-top: 1px solid var(--line-soft);
+  color: var(--ink-faint);
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  line-height: 1.75;
+}
+
+.platform-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.platform-tags li {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--small-radius);
+  color: var(--ink-soft);
+  background: var(--paper);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.manual-download {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  inline-size: 92px;
+  min-height: 34px;
+  padding: 7px 10px;
+  border: 1px solid var(--cinnabar);
+  border-radius: var(--small-radius);
+  color: var(--cinnabar);
+  background: transparent;
+  line-height: 1.4;
+  text-decoration: none;
+}
+
+.ui-icon {
+  flex: 0 0 auto;
+  inline-size: 1.1em;
+  block-size: 1.1em;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.manual-download:hover,
+.manual-download:focus-visible {
+  color: #fff;
+  background: var(--cinnabar);
 }
 
 .section {
@@ -372,6 +426,10 @@ h1 {
     gap: 14px;
   }
 
+  .manual-download {
+    align-self: flex-end;
+  }
+
   .section {
     padding-block: 56px;
   }
@@ -413,19 +471,6 @@ h1 {
     white-space: normal;
   }
 
-  .command-line {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .command-line .install-label {
-    grid-column: 1 / -1;
-  }
-
-  .install-actions {
-    width: 100%;
-    justify-content: space-between;
-    gap: 12px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
