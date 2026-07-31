@@ -83,5 +83,83 @@ function setupNavigationMenu() {
   });
 }
 
+/** Activates one example tab and synchronizes its ARIA state with the panels. */
+function activateCodeTab(container, selectedTab, shouldFocus) {
+  const tabs = Array.from(container.querySelectorAll('[data-code-tab]'));
+  const panels = Array.from(container.querySelectorAll('[data-code-panel]'));
+  const selectedPanelId = selectedTab.getAttribute('href').slice(1);
+
+  tabs.forEach((tab) => {
+    const isSelected = tab === selectedTab;
+    tab.setAttribute('aria-selected', String(isSelected));
+    tab.setAttribute('tabindex', isSelected ? '0' : '-1');
+  });
+
+  panels.forEach((panel) => {
+    panel.hidden = panel.id !== selectedPanelId;
+  });
+
+  if (shouldFocus) {
+    selectedTab.focus();
+  }
+}
+
+/** Enhances example links into keyboard-accessible tabs while preserving a no-script fallback. */
+function setupCodeTabs() {
+  document.querySelectorAll('[data-code-tabs]').forEach((container) => {
+    const tabList = container.querySelector('[data-code-tab-list]');
+    const tabs = Array.from(container.querySelectorAll('[data-code-tab]'));
+    const panels = Array.from(container.querySelectorAll('[data-code-panel]'));
+
+    if (!tabList || tabs.length === 0 || panels.length === 0) {
+      return;
+    }
+
+    tabList.setAttribute('role', 'tablist');
+    tabs.forEach((tab) => {
+      const panelId = tab.getAttribute('href').slice(1);
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-controls', panelId);
+    });
+    panels.forEach((panel) => {
+      const tab = tabs.find((candidate) => candidate.getAttribute('href') === `#${panel.id}`);
+      panel.setAttribute('role', 'tabpanel');
+      if (tab) {
+        panel.setAttribute('aria-labelledby', tab.id);
+      }
+    });
+
+    container.classList.add('code-tabs--enhanced');
+    const initialTab = tabs.find((tab) => tab.hash === window.location.hash) || tabs[0];
+    activateCodeTab(container, initialTab, false);
+
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', (event) => {
+        event.preventDefault();
+        activateCodeTab(container, tab, false);
+      });
+
+      tab.addEventListener('keydown', (event) => {
+        let nextIndex;
+        if (event.key === 'ArrowRight') {
+          nextIndex = (index + 1) % tabs.length;
+        } else if (event.key === 'ArrowLeft') {
+          nextIndex = (index - 1 + tabs.length) % tabs.length;
+        } else if (event.key === 'Home') {
+          nextIndex = 0;
+        } else if (event.key === 'End') {
+          nextIndex = tabs.length - 1;
+        } else {
+          return;
+        }
+
+        event.preventDefault();
+        activateCodeTab(container, tabs[nextIndex], true);
+      });
+    });
+  });
+}
+
 setupCommandCopying();
 setupNavigationMenu();
+setupCodeTabs();

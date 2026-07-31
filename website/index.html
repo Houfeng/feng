@@ -31,8 +31,8 @@
       </nav>
 
       <details class="site-menu" data-site-menu>
-        <summary class="site-menu__trigger">
-          <span>菜单</span>
+        <summary class="site-menu__trigger" aria-label="切换导航菜单">
+          <span class="visually-hidden">切换导航菜单</span>
           <span class="site-menu__lines" aria-hidden="true"></span>
         </summary>
         <nav class="site-nav site-nav--mobile" aria-label="移动端主导航">
@@ -49,7 +49,7 @@
   <main id="main">
     <section class="hero shell" id="top" aria-labelledby="hero-title">
       <div class="hero__intro">
-        <h1 id="hero-title"><span>锋，</span><br class="hero__title-break"><span>自有章法。</span></h1>
+        <h1 id="hero-title"><span>锋，</span><span>自有章法。</span></h1>
         <p class="hero__lead">Feng 为开发者而设计，也让 AI 更容易理解、生成和维护可靠的代码。</p>
       </div>
 
@@ -101,36 +101,54 @@
       </section>
     </section>
 
-    <section class="language-section" aria-labelledby="language-title">
+    <section class="language-section" aria-label="Feng 代码示例">
       <div class="shell language-section__inner">
-        <header class="language-section__intro">
-          <h2 id="language-title">语法简洁，<br>意图明晰。</h2>
-          <p>类型描述数据，<code>spec</code> 显式声明契约，泛型让抽象得以复用。</p>
-        </header>
+        <div class="code-tabs" data-code-tabs>
+          <nav class="code-tabs__list" data-code-tab-list aria-label="选择代码示例">
+            <a class="code-tabs__tab" id="tab-hello" href="#example-hello" data-code-tab>Hello World</a>
+            <a class="code-tabs__tab" id="tab-generics" href="#example-generics" data-code-tab>泛型</a>
+            <a class="code-tabs__tab" id="tab-loop" href="#example-loop" data-code-tab>循环控制</a>
+          </nav>
 
-        <figure class="code-window">
-          <figcaption>
-            <span class="code-window__dots" aria-hidden="true"><i></i><i></i><i></i></span>
-            <span>sequence.ff</span>
-            <span class="code-window__language">Feng</span>
-          </figcaption>
-          <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
+          <div class="code-tabs__panel" id="example-hello" data-code-panel>
+            <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
-<span class="syntax-keyword">spec</span> Sequence&lt;T&gt; {
-  <span class="syntax-keyword">func</span> size(): int;
-}
+<span class="syntax-keyword">import</span> std.io;
 
-<span class="syntax-keyword">type</span> Counter: Sequence&lt;int&gt; {
-  <span class="syntax-keyword">func</span> size(): int {
-    <span class="syntax-keyword">return</span> 1;
-  }
+<span class="syntax-keyword">func</span> main(args: string[]) {
+  println(<span class="syntax-string">"Hello, Feng!"</span>);
+}</code></pre>
+          </div>
+
+          <div class="code-tabs__panel" id="example-generics" data-code-panel>
+            <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
+
+<span class="syntax-keyword">import</span> std.io;
+
+<span class="syntax-keyword">func</span> identity&lt;T&gt;(value: T): T {
+  <span class="syntax-keyword">return</span> value;
 }
 
 <span class="syntax-keyword">func</span> main(args: string[]) {
-  <span class="syntax-keyword">let</span> counter: Sequence&lt;int&gt; = Counter();
-  print(counter.size());
+  <span class="syntax-keyword">let</span> language = identity(<span class="syntax-string">"Feng"</span>);
+  println(<span class="syntax-string">"Hello, {0}!"</span>, language);
 }</code></pre>
-        </figure>
+          </div>
+
+          <div class="code-tabs__panel" id="example-loop" data-code-panel>
+            <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
+
+<span class="syntax-keyword">import</span> std.io;
+
+<span class="syntax-keyword">func</span> main(args: string[]) {
+  <span class="syntax-keyword">var</span> total = 0;
+  <span class="syntax-keyword">for var</span> i = 1; i &lt;= 5; i += 1 {
+    total += i;
+  }
+  println(<span class="syntax-string">"1 + ... + 5 = {0}"</span>, total);
+}</code></pre>
+          </div>
+        </div>
       </div>
     </section>
   </main>
