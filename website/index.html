@@ -3,8 +3,11 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Feng 是一门为清晰与可靠而设计的静态类型编程语言，具有简洁语法、显式契约、自动内存管理与 C 互操作能力。">
-  <meta name="theme-color" content="#f3eee5">
+  <meta name="description" content="Feng 是一门面向开发者与 AI 的静态类型编程语言，以简洁语法、显式契约、自动内存管理与 C 互操作能力，让代码清晰可靠。">
+  <meta name="theme-color" content="#f7f8f5">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Feng — 清晰，自有章法">
+  <meta property="og:description" content="一门面向开发者与 AI 的静态类型编程语言。">
   <title>Feng — 清晰，自有章法</title>
   <link rel="stylesheet" href="styles.css">
   <script defer src="app.js"></script>
@@ -13,26 +16,30 @@
   <a class="skip-link" href="#main">跳到正文</a>
 
   <header class="site-header">
-    <div class="site-header__inner">
+    <div class="shell site-header__inner">
       <a class="brand" href="#top" aria-label="Feng 首页">
-        <span class="brand-mark" aria-hidden="true">F</span>
-        <span class="brand-name">Feng</span>
+        <span class="brand__mark" aria-hidden="true">F</span>
+        <span class="brand__name">Feng</span>
       </a>
 
       <nav class="site-nav site-nav--desktop" aria-label="主导航">
         <a href="#install">安装</a>
-        <span class="pending" aria-label="文档，筹备中">文档 <small aria-hidden="true">筹备中</small></span>
+        <span class="nav-pending" aria-label="文档，筹备中">
+          文档 <small aria-hidden="true">筹备中</small>
+        </span>
         <a href="https://github.com/Houfeng/feng">GitHub <span aria-hidden="true">↗</span></a>
       </nav>
 
       <details class="site-menu" data-site-menu>
         <summary class="site-menu__trigger">
           <span>菜单</span>
-          <span class="site-menu__icon" aria-hidden="true"></span>
+          <span class="site-menu__lines" aria-hidden="true"></span>
         </summary>
         <nav class="site-nav site-nav--mobile" aria-label="移动端主导航">
           <a href="#install">安装</a>
-          <span class="pending" aria-label="文档，筹备中">文档 <small aria-hidden="true">筹备中</small></span>
+          <span class="nav-pending" aria-label="文档，筹备中">
+            文档 <small aria-hidden="true">筹备中</small>
+          </span>
           <a href="https://github.com/Houfeng/feng">GitHub <span aria-hidden="true">↗</span></a>
         </nav>
       </details>
@@ -40,70 +47,57 @@
   </header>
 
   <main id="main">
-    <section class="hero" id="top" aria-labelledby="hero-title">
-      <div class="hero__copy">
-        <h1 id="hero-title"><span>清晰，</span><span>自有章法。</span></h1>
-        <div class="hero-keyword-group">
-          <p class="hero-keyword-label">Feng 编程语言：</p>
-          <ul class="hero-keywords" aria-label="Feng 特点">
-            <li>AI 友好</li>
-            <li>显式契约</li>
-            <li>静态类型</li>
-            <li>自动内存管理</li>
-            <li>C 亲和</li>
-            <li>容易上手</li>
-          </ul>
-        </div>
+    <section class="hero shell" id="top" aria-labelledby="hero-title">
+      <div class="hero__intro">
+        <h1 id="hero-title"><span>锋，</span><br class="hero__title-break"><span>自有章法。</span></h1>
+        <p class="hero__lead">Feng 为开发者而设计，也让 AI 更容易理解、生成和维护可靠的代码。</p>
       </div>
 
-      <section class="install-card" id="install" data-command aria-labelledby="install-title">
-        <header class="install-card__header">
-          <h2 class="install-card__title" id="install-title">安装 Feng</h2>
+      <div class="hero__traits">
+        <ul aria-label="Feng 特点">
+          <li>AI 友好</li>
+          <li>显式契约</li>
+          <li>静态类型</li>
+          <li>自动内存管理</li>
+          <li>C 亲和</li>
+          <li>容易上手</li>
+        </ul>
+      </div>
+
+      <section class="install-panel" id="install" data-command aria-labelledby="install-title">
+        <header class="install-panel__header">
+          <div>
+            <p class="install-panel__eyebrow">快速开始</p>
+            <h2 id="install-title">安装 Feng</h2>
+          </div>
+          <p>复制命令，在终端中运行</p>
         </header>
 
-        <div class="install-card__command">
-          <div class="command" aria-label="安装命令">
-            <span class="command__prompt" aria-hidden="true">$</span>
+        <div class="command-bar">
+          <div class="command-bar__code" aria-label="安装命令">
+            <span class="command-bar__prompt" aria-hidden="true">$</span>
             <code>curl -fsSL https://feng-lang.com/install.sh | bash</code>
           </div>
-          <button class="install-action install-action--primary" type="button" data-copy-command aria-label="复制安装命令">
-            <svg class="install-action__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+          <button class="copy-button" type="button" data-copy-command aria-label="复制安装命令">
+            <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
               <rect x="9" y="9" width="11" height="11" rx="2"></rect>
               <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path>
             </svg>
-            <span class="install-action__label" data-copy-label>复制</span>
+            <span data-copy-label>复制</span>
           </button>
         </div>
 
-        <footer class="install-card__footer">
-          <ul class="platform-tags" aria-label="支持的平台">
-            <li class="platform-tag">
-              <svg class="platform-tag__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
-                <rect x="4" y="5" width="16" height="11" rx="2"></rect>
-                <path d="M2 19h20"></path>
-              </svg>
-              <span>macOS Apple Silicon</span>
-            </li>
-            <li class="platform-tag">
-              <svg class="platform-tag__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
-                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
-                <path d="m7 9 3 3-3 3M13 15h4"></path>
-              </svg>
-              <span>Linux x86-64</span>
-            </li>
-            <li class="platform-tag">
-              <svg class="platform-tag__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
-                <rect x="3" y="4" width="18" height="16" rx="2"></rect>
-                <path d="m7 9 3 3-3 3M13 15h4"></path>
-              </svg>
-              <span>Linux ARM64</span>
-            </li>
+        <footer class="install-panel__footer">
+          <ul class="platform-list" aria-label="支持的平台">
+            <li><span aria-hidden="true"></span>macOS Apple Silicon</li>
+            <li><span aria-hidden="true"></span>Linux x86-64</li>
+            <li><span aria-hidden="true"></span>Linux ARM64</li>
           </ul>
-          <a class="install-action install-action--secondary" href="https://github.com/Houfeng/feng/releases">
-            <svg class="install-action__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+          <a class="download-link" href="https://github.com/Houfeng/feng/releases">
+            <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
               <path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"></path>
             </svg>
-            <span class="install-action__label">手动下载</span>
+            <span>手动下载</span>
           </a>
         </footer>
         <span class="visually-hidden" role="status" aria-live="polite" data-copy-status></span>
@@ -111,15 +105,19 @@
     </section>
 
     <section class="language-section" aria-labelledby="language-title">
-      <div class="language-section__inner">
-        <header class="section-intro">
+      <div class="shell language-section__inner">
+        <header class="language-section__intro">
           <h2 id="language-title">语法简洁，<br>意图明晰。</h2>
           <p>类型描述数据，<code>spec</code> 显式声明契约，泛型让抽象得以复用。</p>
         </header>
 
-        <figure class="code-sample">
-          <figcaption>sequence.ff</figcaption>
-          <pre tabindex="0"><code><span class="syntax-muted">module</span> app;
+        <figure class="code-window">
+          <figcaption>
+            <span class="code-window__dots" aria-hidden="true"><i></i><i></i><i></i></span>
+            <span>sequence.ff</span>
+            <span class="code-window__language">Feng</span>
+          </figcaption>
+          <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
 <span class="syntax-keyword">spec</span> Sequence&lt;T&gt; {
   <span class="syntax-keyword">func</span> size(): int;
@@ -138,12 +136,11 @@
         </figure>
       </div>
     </section>
-
   </main>
 
   <footer class="site-footer">
-    <div class="site-footer__inner">
-      <p>Feng 语言项目</p>
+    <div class="shell site-footer__inner">
+      <p><span aria-hidden="true">©</span> Feng 语言项目</p>
       <a href="https://github.com/Houfeng/feng">GitHub <span aria-hidden="true">↗</span></a>
     </div>
   </footer>
