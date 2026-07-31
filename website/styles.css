@@ -264,8 +264,8 @@ svg {
 .nav-icon-button:hover,
 .nav-icon-button:focus-visible,
 .language-menu[open] .language-menu__trigger {
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: var(--ink);
+  background: var(--page);
 }
 
 .nav-icon-button svg {
@@ -314,8 +314,8 @@ svg {
 
 .theme-switch__option:hover,
 .theme-switch__option:focus-visible {
-  color: var(--accent);
-  background: var(--accent-soft);
+  color: var(--ink);
+  background: var(--page);
 }
 
 .theme-switch__option[aria-pressed="true"] {
@@ -397,7 +397,7 @@ svg {
 
 .site-nav a:hover,
 .site-nav a:focus-visible {
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .site-menu {
