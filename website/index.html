@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Feng 是一门为清晰与可靠而设计的静态类型编程语言，具有简洁语法、显式契约、自动内存管理与 C 互操作能力。">
-  <meta name="theme-color" content="#fdfcf9">
+  <meta name="theme-color" content="#f3eee5">
   <title>Feng — 清晰，自有章法</title>
   <link rel="stylesheet" href="styles.css">
   <script defer src="app.js"></script>
@@ -15,30 +15,46 @@
   <header class="site-header">
     <div class="site-header__inner">
       <a class="brand" href="#top" aria-label="Feng 首页">
-        <span class="brand-stroke" aria-hidden="true"></span>
-        <span>Feng</span>
+        <span class="brand-mark" aria-hidden="true">F</span>
+        <span class="brand-name">Feng</span>
       </a>
 
-      <nav class="site-nav" aria-label="主导航">
+      <nav class="site-nav site-nav--desktop" aria-label="主导航">
         <a href="#install">安装</a>
         <span class="pending" aria-label="文档，筹备中">文档 <small aria-hidden="true">筹备中</small></span>
         <a href="https://github.com/Houfeng/feng">GitHub <span aria-hidden="true">↗</span></a>
       </nav>
+
+      <details class="site-menu" data-site-menu>
+        <summary class="site-menu__trigger">
+          <span>菜单</span>
+          <span class="site-menu__icon" aria-hidden="true"></span>
+        </summary>
+        <nav class="site-nav site-nav--mobile" aria-label="移动端主导航">
+          <a href="#install">安装</a>
+          <span class="pending" aria-label="文档，筹备中">文档 <small aria-hidden="true">筹备中</small></span>
+          <a href="https://github.com/Houfeng/feng">GitHub <span aria-hidden="true">↗</span></a>
+        </nav>
+      </details>
     </div>
   </header>
 
   <main id="main">
     <section class="hero" id="top" aria-labelledby="hero-title">
-      <h1 id="hero-title">清晰，自有章法。</h1>
-      <ul class="hero-keywords" aria-label="Feng 特点">
-        <li class="brand-keyword">Feng 编程语言</li>
-        <li>AI 友好</li>
-        <li>显式契约</li>
-        <li>静态类型</li>
-        <li>自动内存管理</li>
-        <li>C 亲和</li>
-        <li>容易上手</li>
-      </ul>
+      <div class="hero__copy">
+        <h1 id="hero-title"><span>清晰，</span><span>自有章法。</span></h1>
+        <div class="hero-keyword-group">
+          <p class="hero-keyword-label">Feng 编程语言：</p>
+          <ul class="hero-keywords" aria-label="Feng 特点">
+            <li>AI 友好</li>
+            <li>显式契约</li>
+            <li>静态类型</li>
+            <li>自动内存管理</li>
+            <li>C 亲和</li>
+            <li>容易上手</li>
+          </ul>
+        </div>
+      </div>
 
       <section class="install-card" id="install" data-command aria-labelledby="install-title">
         <header class="install-card__header">
@@ -46,7 +62,7 @@
         </header>
 
         <div class="install-card__command">
-          <div class="command">
+          <div class="command" aria-label="安装命令">
             <span class="command__prompt" aria-hidden="true">$</span>
             <code>curl -fsSL https://feng-lang.com/install.sh | bash</code>
           </div>
@@ -94,16 +110,16 @@
       </section>
     </section>
 
-    <section class="section language" aria-labelledby="language-title">
-      <header class="section-intro">
-        <p class="section-label">语言</p>
-        <h2 id="language-title">语法简洁，意图明晰。</h2>
-        <p>类型描述数据，<code>spec</code> 显式声明契约，泛型让抽象得以复用。</p>
-      </header>
+    <section class="language-section" aria-labelledby="language-title">
+      <div class="language-section__inner">
+        <header class="section-intro">
+          <h2 id="language-title">语法简洁，<br>意图明晰。</h2>
+          <p>类型描述数据，<code>spec</code> 显式声明契约，泛型让抽象得以复用。</p>
+        </header>
 
-      <figure class="code-sample">
-        <figcaption>sequence.ff</figcaption>
-        <pre tabindex="0"><code><span class="syntax-muted">module</span> app;
+        <figure class="code-sample">
+          <figcaption>sequence.ff</figcaption>
+          <pre tabindex="0"><code><span class="syntax-muted">module</span> app;
 
 <span class="syntax-keyword">spec</span> Sequence&lt;T&gt; {
   <span class="syntax-keyword">func</span> size(): int;
@@ -119,7 +135,8 @@
   <span class="syntax-keyword">let</span> counter: Sequence&lt;int&gt; = Counter();
   print(counter.size());
 }</code></pre>
-      </figure>
+        </figure>
+      </div>
     </section>
 
   </main>

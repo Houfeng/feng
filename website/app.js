@@ -68,4 +68,20 @@ function setupCommandCopying() {
   });
 }
 
+/** Closes the native small-window navigation after a destination is selected. */
+function setupNavigationMenu() {
+  const menu = document.querySelector('[data-site-menu]');
+
+  if (!menu) {
+    return;
+  }
+
+  menu.addEventListener('click', (event) => {
+    if (event.target.closest('a')) {
+      menu.removeAttribute('open');
+    }
+  });
+}
+
 setupCommandCopying();
+setupNavigationMenu();
