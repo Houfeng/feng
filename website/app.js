@@ -45,7 +45,7 @@ function setupCommandCopying() {
     button.addEventListener('click', async () => {
       const original = button.textContent;
       const copied = await copyCommand(code.textContent.trim());
-      button.textContent = copied ? 'Copied' : 'Try again';
+      button.textContent = copied ? '已复制' : '请重试';
 
       window.setTimeout(() => {
         button.textContent = original;
