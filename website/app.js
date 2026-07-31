@@ -37,19 +37,32 @@ function setupCommandCopying() {
   document.querySelectorAll('[data-command]').forEach((container) => {
     const button = container.querySelector('[data-copy-command]');
     const label = container.querySelector('[data-copy-label]');
+    const status = container.querySelector('[data-copy-status]');
     const code = container.querySelector('code');
 
     if (!button || !label || !code) {
       return;
     }
 
+    const originalLabel = label.textContent;
+    let resetTimer;
+
     button.addEventListener('click', async () => {
-      const original = label.textContent;
+      window.clearTimeout(resetTimer);
+      if (status) {
+        status.textContent = '';
+      }
       const copied = await copyCommand(code.textContent.trim());
       label.textContent = copied ? '已复制' : '请重试';
+      if (status) {
+        status.textContent = copied ? '安装命令已复制' : '复制失败，请重试';
+      }
 
-      window.setTimeout(() => {
-        label.textContent = original;
+      resetTimer = window.setTimeout(() => {
+        label.textContent = originalLabel;
+        if (status) {
+          status.textContent = '';
+        }
       }, 1400);
     });
   });
