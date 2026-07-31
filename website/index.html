@@ -3,258 +3,162 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Feng is a statically typed language for building clear, reliable, and maintainable software, with explicit contracts, a straightforward workflow, C interop, and unified package distribution.">
-  <meta name="theme-color" content="#f5efe2">
-  <title>Feng | A Clear and Reliable Statically Typed Language</title>
+  <meta name="description" content="Feng is a statically typed programming language for clear, reliable software, with compact syntax, explicit contracts, and C interoperability.">
+  <meta name="theme-color" content="#f3efe5">
+  <title>Feng — Clear by design</title>
   <link rel="stylesheet" href="styles.css">
   <script defer src="app.js"></script>
 </head>
 <body>
-  <div class="page-backdrop" aria-hidden="true"></div>
+  <a class="skip-link" href="#main">Skip to content</a>
+
   <header class="site-header">
-    <div class="brand-lockup">
-      <a class="brand" href="#hero" aria-label="Feng home">
-        <span class="brand-mark">F</span>
-        <span class="brand-text">
-          <strong>Feng</strong>
-          <span>Static, strongly typed, spec-first</span>
-        </span>
-      </a>
-      <p class="brand-caption">Clear syntax, reliable types, smooth workflow</p>
-    </div>
-    <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="site-nav" data-menu-toggle>
-      Menu
-    </button>
-    <nav class="site-nav" id="site-nav" data-nav>
-      <a href="#features">Features</a>
-      <a href="#sample">Sample</a>
-      <a href="#workflow">Workflow</a>
-      <a href="#language-map">More</a>
+    <a class="brand" href="#top" aria-label="Feng home">
+      <span class="brand-stroke" aria-hidden="true"></span>
+      <span>Feng</span>
+    </a>
+
+    <nav class="site-nav" aria-label="Main navigation">
+      <a href="#install">Install</a>
+      <a href="#docs">Docs <small>Soon</small></a>
+      <a href="https://github.com/Houfeng/feng">GitHub <span aria-hidden="true">↗</span></a>
     </nav>
   </header>
 
-  <main>
-    <section class="hero section-shell" id="hero" data-reveal>
-      <div class="hero-copy">
-        <p class="eyebrow">Official website for the Feng language</p>
-        <h1>Build more reliable software.</h1>
+  <main id="main">
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="hero-title">
+        <p class="kicker">The Feng programming language</p>
+        <h1 id="hero-title">Clear by design.<br>Reliable by nature.</h1>
+      </div>
+
+      <div class="hero-intro">
         <p class="hero-lead">
-          Feng combines static typing, explicit contracts, modular organization, and a straightforward workflow,
-          so you can build everyday apps and libraries, call into C when needed, and ship packages with the same toolchain.
+          A statically typed language with compact syntax, explicit contracts,
+          automatic memory management, and direct C interoperability.
         </p>
-        <div class="hero-actions">
-          <a class="button primary" href="#features">See Features</a>
-          <a class="button secondary" href="#workflow">See Workflow</a>
+
+        <div class="command" data-command>
+          <span class="prompt" aria-hidden="true">$</span>
+          <code>curl -fsSL https://feng-lang.com/install.sh | bash</code>
+          <button type="button" data-copy-command aria-label="Copy install command" aria-live="polite">Copy</button>
         </div>
-        <ul class="hero-metrics" aria-label="Feng at a glance">
-          <li>
-            <strong>26</strong>
-            <span>Keywords</span>
-          </li>
-          <li>
-            <strong>23</strong>
-            <span>Reserved Words</span>
-          </li>
-          <li>
-            <strong>6</strong>
-            <span>Built-in Annotations</span>
-          </li>
-        </ul>
-      </div>
-      <div class="hero-panel">
-        <div class="panel-strip">
-          <span>type</span>
-          <span>spec</span>
-          <span>fit</span>
-          <span>@fixed</span>
-          <span>.fb</span>
-        </div>
-        <div class="panel-card">
-          <h2>Why Feng</h2>
-          <p>
-            If you want a language with compact syntax and clear rules for types, abstractions, error handling, and C interop, Feng aims to offer a more direct path.
-          </p>
-          <dl class="panel-list">
-            <div>
-              <dt>While coding</dt>
-              <dd>Types are known at compile time, so refactoring and debugging stay direct instead of turning into runtime hunts.</dd>
-            </div>
-            <div>
-              <dt>While designing APIs</dt>
-              <dd>Use `spec` and `fit` to make contracts explicit, which keeps collaboration and long-term evolution stable.</dd>
-            </div>
-            <div>
-              <dt>While integrating existing code</dt>
-              <dd>Call into C with `extern fn` and `@fixed` without giving up the language's clarity.</dd>
-            </div>
-          </dl>
+
+        <div class="hero-links">
+          <a href="#install">Installation details <span aria-hidden="true">↓</span></a>
+          <a href="https://github.com/Houfeng/feng">View on GitHub <span aria-hidden="true">↗</span></a>
         </div>
       </div>
     </section>
 
-    <section class="section-shell" id="features" data-reveal>
+    <section class="section code-section" aria-labelledby="code-title">
       <div class="section-heading">
-        <p class="eyebrow">Language features</p>
-        <h2>Features</h2>
-      </div>
-      <div class="feature-grid">
-        <article class="feature-card tone-ink">
-          <h3>Static typing</h3>
-          <p>Many mistakes show up at compile time, which makes day-to-day coding and refactoring more predictable.</p>
-        </article>
-        <article class="feature-card tone-sand">
-          <h3>Unified type system</h3>
-          <p>Object types and ABI-fixed layout types live in the same language, so you spend less time switching mental models.</p>
-        </article>
-        <article class="feature-card tone-teal">
-          <h3>Explicit contracts</h3>
-          <p>`spec` and `fit` keep contracts and adaptation rules in the source, which makes intent easier to read and maintain.</p>
-        </article>
-        <article class="feature-card tone-paper">
-          <h3>Functions, lambdas, closures</h3>
-          <p>You can write straightforward application code and still lift behavior into reusable functions, lambdas, and closures.</p>
-        </article>
-        <article class="feature-card tone-brass">
-          <h3>Structured exceptions and memory management</h3>
-          <p>Error handling stays explicit, and ordinary objects are managed by the runtime, which helps keep everyday code clean.</p>
-        </article>
-        <article class="feature-card tone-clay">
-          <h3>C interop and package distribution</h3>
-          <p>When you need to call C libraries or ship binary packages, the language already gives you a clear path.</p>
-        </article>
-      </div>
-    </section>
-
-    <section class="sample section-shell" id="sample" data-reveal>
-      <div class="section-heading split-heading">
+        <span class="section-index" aria-hidden="true">01</span>
         <div>
-          <p class="eyebrow">Code sample</p>
-          <h2>Sample</h2>
+          <p class="kicker">The language</p>
+          <h2 id="code-title">Small syntax.<br>Explicit intent.</h2>
         </div>
-        <p class="section-note">One shows syntax, the other shows a minimal project setup.</p>
       </div>
-      <div class="sample-frame">
-        <div class="sample-toolbar">
-          <div class="sample-tabs" role="tablist" aria-label="Sample switcher">
-            <button class="sample-tab is-active" type="button" role="tab" aria-selected="true" data-sample-tab="hello">Code</button>
-            <button class="sample-tab" type="button" role="tab" aria-selected="false" data-sample-tab="manifest">Manifest</button>
-          </div>
-          <button class="copy-button" type="button" data-copy-sample>Copy Sample</button>
-        </div>
-        <div class="sample-panels">
-          <figure class="sample-panel is-active" data-sample-panel="hello">
-            <figcaption>Types, methods, and a C import</figcaption>
-            <pre><code>mod app.hello;
 
-@cdecl("libc")
-extern fn puts(msg: string): int;
+      <div class="code-layout">
+        <p class="section-copy">
+          Types describe data. Specs make contracts visible. Generics keep
+          abstractions reusable without hiding what the program means.
+        </p>
 
-type User {
-  let name: string;
-  let age: i32;
+        <figure class="code-sample">
+          <figcaption>
+            <span>sequence.ff</span>
+            <span>Feng</span>
+          </figcaption>
+          <pre tabindex="0"><code><span class="syntax-muted">module</span> app;
 
-  fn say(msg: string): void {
-    puts(msg);
+<span class="syntax-keyword">spec</span> Sequence&lt;T&gt; {
+  <span class="syntax-keyword">func</span> size(): int;
+}
+
+<span class="syntax-keyword">type</span> Counter: Sequence&lt;int&gt; {
+  <span class="syntax-keyword">func</span> size(): int {
+    <span class="syntax-keyword">return</span> 1;
   }
 }
 
-fn main(args: string[]): void {
-  let user = User {
-    name: "Houfeng",
-    age: 18
-  };
-
-  user.say("Hello World: " + user.name);
+<span class="syntax-keyword">func</span> main(args: string[]) {
+  <span class="syntax-keyword">let</span> counter: Sequence&lt;int&gt; = Counter();
+  print(counter.size());
 }</code></pre>
-          </figure>
-          <figure class="sample-panel" data-sample-panel="manifest" hidden>
-            <figcaption>Minimal executable project manifest</figcaption>
-            <pre><code>[package]
-name: "demo"
-version: "0.1.0"
-target: "bin"
-src: "src/"
-out: "build/"</code></pre>
-          </figure>
-        </div>
+        </figure>
       </div>
     </section>
 
-    <section class="section-shell" id="workflow" data-reveal>
+    <section class="section install-section" id="install" aria-labelledby="install-title">
       <div class="section-heading">
-        <p class="eyebrow">Workflow</p>
-        <h2>Workflow</h2>
+        <span class="section-index" aria-hidden="true">02</span>
+        <div>
+          <p class="kicker">Installation</p>
+          <h2 id="install-title">Begin with one command.</h2>
+        </div>
       </div>
-      <div class="workflow-grid">
-        <article class="workflow-step">
-          <span class="step-index">01</span>
-          <h3>Initialize</h3>
-          <p>Start with `feng init` to get a project skeleton, a manifest, and an entry template so you can begin immediately.</p>
-          <pre><code>feng init demo</code></pre>
+
+      <div class="install-grid">
+        <article class="install-method install-primary">
+          <p class="method-label">Recommended</p>
+          <h3>Install online</h3>
+          <p>The installer detects your platform, downloads the matching release, and adds Feng to your PATH.</p>
+
+          <div class="command command-wide" data-command>
+            <span class="prompt" aria-hidden="true">$</span>
+            <code>curl -fsSL https://feng-lang.com/install.sh | bash</code>
+            <button type="button" data-copy-command aria-label="Copy install command" aria-live="polite">Copy</button>
+          </div>
+
+          <a class="text-link" href="https://github.com/Houfeng/feng/blob/main/scripts/install.sh">
+            Read the installer before running it <span aria-hidden="true">↗</span>
+          </a>
         </article>
-        <article class="workflow-step">
-          <span class="step-index">02</span>
-          <h3>Check as you go</h3>
-          <p>Run `feng check` while you work so you can catch problems early instead of waiting for a later build failure.</p>
-          <pre><code>feng check</code></pre>
+
+        <article class="install-method">
+          <p class="method-label">Alternative</p>
+          <h3>Install manually</h3>
+          <p>Download the zip for your platform, extract it, then add the extracted <code>bin/</code> directory to your PATH.</p>
+          <a class="release-link" href="https://github.com/Houfeng/feng/releases">
+            Download from GitHub Releases <span aria-hidden="true">↗</span>
+          </a>
         </article>
-        <article class="workflow-step">
-          <span class="step-index">03</span>
-          <h3>Build</h3>
-          <p>`feng build` reads the project manifest and produces the target artifact through one straightforward path.</p>
-          <pre><code>feng build</code></pre>
-        </article>
-        <article class="workflow-step">
-          <span class="step-index">04</span>
-          <h3>Run or pack</h3>
-          <p>Use `feng run` for applications, and switch to `feng pack` when you want a `.fb` package for a library.</p>
-          <pre><code>feng run
-# for library projects
-feng pack</code></pre>
-        </article>
+      </div>
+
+      <div class="platform-note">
+        <p><strong>Available hosts</strong> macOS Apple Silicon · Linux x86-64 · Linux ARM64</p>
+        <p>Compiling on macOS requires Xcode or Xcode Command Line Tools.</p>
       </div>
     </section>
 
-    <section class="section-shell" id="language-map" data-reveal>
-      <div class="section-heading split-heading">
-        <div>
-          <p class="eyebrow">What to learn next</p>
-          <h2>More</h2>
-        </div>
-        <p class="section-note">These are the main topics to explore after the homepage overview.</p>
-      </div>
-      <div class="docs-grid">
-        <article class="doc-card">
-          <strong>Modules and imports</strong>
-          <span>`mod` and `use` help you organize code, split modules, and make dependencies explicit.</span>
-        </article>
-        <article class="doc-card">
-          <strong>Types and bindings</strong>
-          <span>`type`, `let`, `var`, constructors, and methods define how you organize data and behavior.</span>
-        </article>
-        <article class="doc-card">
-          <strong>Functions and abstraction</strong>
-          <span>`fn`, overloading, lambdas, and closures let you move naturally from simple calls to reusable abstractions.</span>
-        </article>
-        <article class="doc-card">
-          <strong>Control flow</strong>
-          <span>`if`, conditional expressions, `while`, `for`, `break`, and `continue` cover everyday control-flow needs.</span>
-        </article>
-        <article class="doc-card">
-          <strong>Exceptions and lifetime</strong>
-          <span>Structured exceptions and automatic memory management define how programs handle failure and how objects are reclaimed.</span>
-        </article>
-        <article class="doc-card">
-          <strong>Interop and distribution</strong>
-          <span>This area matters when you need system integration, existing libraries, or binary package distribution.</span>
-        </article>
-      </div>
+    <section class="section destinations" aria-label="Documentation and GitHub">
+      <article id="docs">
+        <span class="section-index" aria-hidden="true">03</span>
+        <p class="kicker">Documentation</p>
+        <h2>Docs are<br>on the way.</h2>
+        <p>Language guides and reference documentation are being prepared.</p>
+        <span class="unavailable">Coming later</span>
+      </article>
+
+      <article id="github">
+        <span class="section-index" aria-hidden="true">04</span>
+        <p class="kicker">Open development</p>
+        <h2>Follow Feng<br>on GitHub.</h2>
+        <p>Explore the source, download releases, and follow the project as it evolves.</p>
+        <ul class="github-links">
+          <li><a href="https://github.com/Houfeng/feng">Source code <span aria-hidden="true">↗</span></a></li>
+          <li><a href="https://github.com/Houfeng/feng/releases">Releases <span aria-hidden="true">↗</span></a></li>
+          <li><a href="https://github.com/Houfeng/feng/issues">Issues <span aria-hidden="true">↗</span></a></li>
+        </ul>
+      </article>
     </section>
   </main>
 
   <footer class="site-footer">
-    <p>Feng | A clear, reliable, and maintainable statically typed language</p>
-    <p>© <span data-year></span> Feng Language Project</p>
+    <p>Feng Language Project</p>
+    <a href="https://github.com/Houfeng/feng">GitHub <span aria-hidden="true">↗</span></a>
   </footer>
 </body>
 </html>

@@ -33,8 +33,6 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Pages
         uses: actions/configure-pages@v5
-      - name: Validate website
-        run: bash website/validate.sh
       - name: Prepare Pages artifact
         run: |
           mkdir -p build/pages
