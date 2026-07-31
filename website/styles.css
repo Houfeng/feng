@@ -509,6 +509,10 @@ svg {
   line-height: 1;
 }
 
+[lang="en"] .hero h1 span:first-child {
+  text-transform: uppercase;
+}
+
 [lang="zh-CN"] .hero h1 {
   white-space: nowrap;
 }
