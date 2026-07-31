@@ -106,6 +106,8 @@
             <a class="code-tabs__tab" id="tab-contract" href="#example-contract" data-code-tab>声明契约</a>
             <a class="code-tabs__tab" id="tab-generics" href="#example-generics" data-code-tab>泛型</a>
             <a class="code-tabs__tab" id="tab-loop" href="#example-loop" data-code-tab>循环控制</a>
+            <a class="code-tabs__tab" id="tab-branch" href="#example-branch" data-code-tab>条件分支</a>
+            <a class="code-tabs__tab" id="tab-match" href="#example-match" data-code-tab>模式匹配</a>
           </nav>
 
           <div class="code-tabs__panel" id="example-hello" data-code-panel>
@@ -113,6 +115,7 @@
 
 <span class="syntax-keyword">import</span> std.io;
 
+<span class="syntax-dim">// main 是可执行程序的唯一入口</span>
 <span class="syntax-keyword">func</span> main(args: string[]) {
   println(<span class="syntax-string">"你好世界"</span>);
 }</code></pre>
@@ -121,11 +124,14 @@
           <div class="code-tabs__panel" id="example-type" data-code-panel>
             <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
+<span class="syntax-dim">// type 将数据与行为组织为静态类型</span>
 <span class="syntax-keyword">type</span> User {
+  <span class="syntax-dim">// let 字段只读，var 字段可更新</span>
   <span class="syntax-keyword">let</span> name: string;
   <span class="syntax-keyword">let</span> email: string;
   <span class="syntax-keyword">var</span> active: bool;
 
+  <span class="syntax-dim">// 方法通过 self 访问当前实例</span>
   <span class="syntax-keyword">func</span> greeting(): string {
     <span class="syntax-keyword">return</span> <span class="syntax-string">"你好，"</span> + self.name;
   }
@@ -135,9 +141,20 @@
           <div class="code-tabs__panel" id="example-contract" data-code-panel>
             <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
-<span class="syntax-keyword">spec</span> Storage {
-  <span class="syntax-keyword">func</span> read(key: string): string;
-  <span class="syntax-keyword">func</span> write(key: string, value: string): void;
+<span class="syntax-dim">// spec 只声明行为契约</span>
+<span class="syntax-keyword">spec</span> Greeter {
+  <span class="syntax-keyword">func</span> greet(name: string): string;
+}
+<span class="syntax-dim">// type 显式实现契约中的方法</span>
+<span class="syntax-keyword">type</span> FriendlyGreeter: Greeter {
+  <span class="syntax-keyword">func</span> greet(name: string): string {
+    <span class="syntax-keyword">return</span> <span class="syntax-string">"你好，"</span> + name;
+  }
+}
+<span class="syntax-keyword">func</span> welcome(): string {
+  <span class="syntax-dim">// 契约类型可接收任何符合契约的实现</span>
+  <span class="syntax-keyword">let</span> greeter: Greeter = FriendlyGreeter();
+  <span class="syntax-keyword">return</span> greeter.greet(<span class="syntax-string">"Feng"</span>);
 }</code></pre>
           </div>
 
@@ -146,6 +163,7 @@
 
 <span class="syntax-keyword">import</span> std.io;
 
+<span class="syntax-dim">// T 使函数在保留静态类型的同时复用逻辑</span>
 <span class="syntax-keyword">func</span> identity&lt;T&gt;(value: T): T {
   <span class="syntax-keyword">return</span> value;
 }
@@ -159,14 +177,75 @@
           <div class="code-tabs__panel" id="example-loop" data-code-panel>
             <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
-<span class="syntax-keyword">import</span> std.io;
-
-<span class="syntax-keyword">func</span> main(args: string[]) {
+<span class="syntax-keyword">func</span> calculate_total(): int {
   <span class="syntax-keyword">var</span> total = 0;
-  <span class="syntax-keyword">for var</span> i = 1; i &lt;= 5; i += 1 {
+
+  <span class="syntax-dim">// 三段式 for 适合明确的计数范围</span>
+  <span class="syntax-keyword">for var</span> i = 1; i &lt;= 3; i += 1 {
     total += i;
   }
-  println(<span class="syntax-string">"1 + ... + 5 = {0}"</span>, total);
+
+  <span class="syntax-dim">// for/in 按顺序迭代数组元素</span>
+  <span class="syntax-keyword">let</span> values = [4, 5, 6];
+  <span class="syntax-keyword">for let</span> value <span class="syntax-keyword">in</span> values {
+    total += value;
+  }
+
+  <span class="syntax-dim">// while 在每轮循环前重新检查条件</span>
+  <span class="syntax-keyword">var</span> remaining = 2;
+  <span class="syntax-keyword">while</span> remaining &gt; 0 {
+    total += remaining;
+    remaining -= 1;
+  }
+  <span class="syntax-keyword">return</span> total;
+}</code></pre>
+          </div>
+
+          <div class="code-tabs__panel" id="example-branch" data-code-panel>
+            <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
+
+<span class="syntax-keyword">func</span> evaluate(score: int): string {
+  <span class="syntax-keyword">var</span> status = <span class="syntax-string">""</span>;
+
+  <span class="syntax-dim">// if/else 语句按条件执行不同操作</span>
+  <span class="syntax-keyword">if</span> score &gt;= 60 {
+    status = <span class="syntax-string">"通过"</span>;
+  } <span class="syntax-keyword">else</span> {
+    status = <span class="syntax-string">"未通过"</span>;
+  }
+
+  <span class="syntax-dim">// if 表达式直接生成可绑定的值</span>
+  <span class="syntax-keyword">let</span> level = <span class="syntax-keyword">if</span> score &gt;= 90 {
+    <span class="syntax-string">"优秀"</span>
+  } <span class="syntax-keyword">else if</span> score &gt;= 60 {
+    <span class="syntax-string">"合格"</span>
+  } <span class="syntax-keyword">else</span> {
+    <span class="syntax-string">"待提高"</span>
+  };
+  <span class="syntax-keyword">return</span> status + <span class="syntax-string">"："</span> + level;
+}</code></pre>
+          </div>
+
+          <div class="code-tabs__panel" id="example-match" data-code-panel>
+            <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
+
+<span class="syntax-keyword">func</span> describe(code: int): string {
+  <span class="syntax-keyword">var</span> detail = <span class="syntax-string">""</span>;
+
+  <span class="syntax-dim">// match 语句执行第一个命中分支</span>
+  <span class="syntax-keyword">match</span> code {
+    200 { detail = <span class="syntax-string">"请求成功"</span>; }
+    404 { detail = <span class="syntax-string">"资源不存在"</span>; }
+    <span class="syntax-keyword">else</span> { detail = <span class="syntax-string">"未知状态"</span>; }
+  }
+
+  <span class="syntax-dim">// match 表达式返回命中分支的值</span>
+  <span class="syntax-keyword">let</span> category = <span class="syntax-keyword">match</span> code {
+    200...299 { <span class="syntax-string">"成功"</span> }
+    400...499 { <span class="syntax-string">"客户端错误"</span> }
+    <span class="syntax-keyword">else</span> { <span class="syntax-string">"其他"</span> }
+  };
+  <span class="syntax-keyword">return</span> category + <span class="syntax-string">"："</span> + detail;
 }</code></pre>
           </div>
         </div>
