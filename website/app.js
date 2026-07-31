@@ -34,6 +34,21 @@ async function copyCommand(command) {
 
 /** Connects each installation command to its adjacent copy button. */
 function setupCommandCopying() {
+  const isEnglish = document.documentElement.lang.startsWith('en');
+  const feedback = isEnglish
+    ? {
+        copied: 'Copied',
+        retry: 'Try again',
+        copiedStatus: 'Install command copied',
+        retryStatus: 'Copy failed. Please try again',
+      }
+    : {
+        copied: '已复制',
+        retry: '请重试',
+        copiedStatus: '安装命令已复制',
+        retryStatus: '复制失败，请重试',
+      };
+
   document.querySelectorAll('[data-command]').forEach((container) => {
     const button = container.querySelector('[data-copy-command]');
     const label = container.querySelector('[data-copy-label]');
@@ -53,9 +68,9 @@ function setupCommandCopying() {
         status.textContent = '';
       }
       const copied = await copyCommand(code.textContent.trim());
-      label.textContent = copied ? '已复制' : '请重试';
+      label.textContent = copied ? feedback.copied : feedback.retry;
       if (status) {
-        status.textContent = copied ? '安装命令已复制' : '复制失败，请重试';
+        status.textContent = copied ? feedback.copiedStatus : feedback.retryStatus;
       }
 
       resetTimer = window.setTimeout(() => {
@@ -172,12 +187,17 @@ function getActiveTheme() {
 
 /** Synchronizes every visible theme control with the active theme. */
 function syncThemeControls(theme) {
+  const isEnglish = document.documentElement.lang.startsWith('en');
+
   document.querySelectorAll('[data-theme-option]').forEach((button) => {
     const option = button.dataset.themeOption;
-    const optionLabel = option === 'dark' ? '深色' : '浅色';
+    const optionLabel = isEnglish
+      ? (option === 'dark' ? 'dark' : 'light')
+      : (option === 'dark' ? '深色' : '浅色');
+    const accessibleLabel = isEnglish ? `Use ${optionLabel} mode` : `使用${optionLabel}模式`;
     button.setAttribute('aria-pressed', String(option === theme));
-    button.setAttribute('aria-label', `使用${optionLabel}模式`);
-    button.setAttribute('title', `使用${optionLabel}模式`);
+    button.setAttribute('aria-label', accessibleLabel);
+    button.setAttribute('title', accessibleLabel);
   });
 }
 
