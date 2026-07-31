@@ -172,18 +172,12 @@ function getActiveTheme() {
 
 /** Synchronizes every visible theme control with the active theme. */
 function syncThemeControls(theme) {
-  const isDark = theme === 'dark';
-  const actionLabel = isDark ? '切换至浅色主题' : '切换至深色主题';
-  const visibleLabel = isDark ? '浅色模式' : '深色模式';
-
-  document.querySelectorAll('[data-theme-toggle]').forEach((button) => {
-    button.setAttribute('aria-pressed', String(isDark));
-    button.setAttribute('aria-label', actionLabel);
-    button.setAttribute('title', actionLabel);
-    const label = button.querySelector('[data-theme-label]');
-    if (label) {
-      label.textContent = visibleLabel;
-    }
+  document.querySelectorAll('[data-theme-option]').forEach((button) => {
+    const option = button.dataset.themeOption;
+    const optionLabel = option === 'dark' ? '深色' : '浅色';
+    button.setAttribute('aria-pressed', String(option === theme));
+    button.setAttribute('aria-label', `使用${optionLabel}模式`);
+    button.setAttribute('title', `使用${optionLabel}模式`);
   });
 }
 
@@ -213,7 +207,7 @@ function applyTheme(theme, shouldPersist) {
 
 /** Enables persistent theme switching and keeps system and cross-tab changes synchronized. */
 function setupThemeSwitching() {
-  const buttons = Array.from(document.querySelectorAll('[data-theme-toggle]'));
+  const buttons = Array.from(document.querySelectorAll('[data-theme-option]'));
 
   if (buttons.length === 0) {
     return;
@@ -223,7 +217,7 @@ function setupThemeSwitching() {
 
   buttons.forEach((button) => {
     button.addEventListener('click', () => {
-      applyTheme(getActiveTheme() === 'dark' ? 'light' : 'dark', true);
+      applyTheme(button.dataset.themeOption, true);
     });
   });
 

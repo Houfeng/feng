@@ -43,7 +43,7 @@
         <span class="nav-pending" aria-disabled="true">文档</span>
         <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language">插件</a>
         <a href="https://github.com/Houfeng/feng">开源</a>
-        <div class="nav-controls" role="group" aria-label="页面设置">
+        <div class="nav-settings">
           <details class="language-menu" data-language-menu>
             <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="选择语言" title="选择语言">
               <svg class="language-menu__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
@@ -60,16 +60,21 @@
               <li><span class="language-menu__option" aria-disabled="true"><span>English</span><span class="language-menu__state">即将提供</span></span></li>
             </ul>
           </details>
-          <button class="nav-icon-button theme-toggle" type="button" data-theme-toggle aria-label="切换主题" aria-pressed="false" title="切换主题">
-            <svg class="theme-toggle__sun" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
-              <circle cx="12" cy="12" r="3.5"></circle>
-              <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
-            </svg>
-            <svg class="theme-toggle__moon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
-              <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
-            </svg>
-            <span class="theme-toggle__label" data-theme-label aria-hidden="true">主题</span>
-          </button>
+          <div class="theme-switch" role="group" aria-label="颜色模式">
+            <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="使用浅色模式" aria-pressed="false" title="使用浅色模式">
+              <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="3.5"></circle>
+                <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
+              </svg>
+              <span class="theme-switch__label" aria-hidden="true">浅色</span>
+            </button>
+            <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="使用深色模式" aria-pressed="false" title="使用深色模式">
+              <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
+              </svg>
+              <span class="theme-switch__label" aria-hidden="true">深色</span>
+            </button>
+          </div>
         </div>
       </nav>
 
@@ -83,7 +88,7 @@
           <span class="nav-pending" aria-disabled="true">文档</span>
           <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language">插件</a>
           <a href="https://github.com/Houfeng/feng">开源</a>
-          <div class="nav-controls" role="group" aria-label="页面设置">
+          <div class="nav-settings">
             <details class="language-menu" data-language-menu>
               <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="选择语言" title="选择语言">
                 <svg class="language-menu__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
@@ -100,16 +105,21 @@
                 <li><span class="language-menu__option" aria-disabled="true"><span>English</span><span class="language-menu__state">即将提供</span></span></li>
               </ul>
             </details>
-            <button class="nav-icon-button theme-toggle" type="button" data-theme-toggle aria-label="切换主题" aria-pressed="false" title="切换主题">
-              <svg class="theme-toggle__sun" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
-                <circle cx="12" cy="12" r="3.5"></circle>
-                <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
-              </svg>
-              <svg class="theme-toggle__moon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
-                <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
-              </svg>
-              <span class="theme-toggle__label" data-theme-label aria-hidden="true">主题</span>
-            </button>
+            <div class="theme-switch" role="group" aria-label="颜色模式">
+              <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="使用浅色模式" aria-pressed="false" title="使用浅色模式">
+                <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                  <circle cx="12" cy="12" r="3.5"></circle>
+                  <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
+                </svg>
+                <span class="theme-switch__label" aria-hidden="true">浅色</span>
+              </button>
+              <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="使用深色模式" aria-pressed="false" title="使用深色模式">
+                <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                  <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
+                </svg>
+                <span class="theme-switch__label" aria-hidden="true">深色</span>
+              </button>
+            </div>
           </div>
         </nav>
       </details>
