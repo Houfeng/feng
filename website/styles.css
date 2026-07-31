@@ -129,10 +129,9 @@ button {
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  padding-block: clamp(88px, 12vh, 112px) 0;
+  padding-block: clamp(48px, 6vh, 64px) 0;
 }
 
-.intro-label,
 .section-label {
   margin: 0 0 22px;
   color: var(--cinnabar);
@@ -184,16 +183,20 @@ h1 {
   content: "、";
 }
 
+.hero-keywords .brand-keyword {
+  color: var(--cinnabar);
+}
+
 .install {
   margin-top: clamp(36px, 6vh, 52px);
-  padding: 16px 24px 0;
+  padding: 0 24px;
   border: 1px solid var(--line);
   background: var(--surface);
   scroll-margin-top: 24px;
 }
 
 .install-label {
-  margin-bottom: 2px;
+  margin: 0;
   color: var(--cinnabar);
   font-family: var(--serif);
   font-size: 0.78rem;
@@ -204,10 +207,10 @@ h1 {
 
 .command-line {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 14px;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  gap: 12px;
   align-items: baseline;
-  padding-block: 12px 18px;
+  padding-block: 18px;
   font-family: var(--mono);
 }
 
@@ -226,7 +229,7 @@ h1 {
 
 .install-meta {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 28px;
   margin-inline: -24px;
@@ -239,7 +242,7 @@ h1 {
 }
 
 .install-meta p {
-  margin-bottom: 2px;
+  margin-bottom: 0;
 }
 
 .install-actions {
@@ -364,6 +367,7 @@ h1 {
   }
 
   .install-meta {
+    align-items: flex-start;
     flex-direction: column;
     gap: 14px;
   }
@@ -407,6 +411,14 @@ h1 {
 
   .section-intro h2 {
     white-space: normal;
+  }
+
+  .command-line {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .command-line .install-label {
+    grid-column: 1 / -1;
   }
 
   .install-actions {
