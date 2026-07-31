@@ -1,5 +1,6 @@
 :root {
-  --paper: #faf9f5;
+  --paper: #fdfcf9;
+  --surface: #f6f3ec;
   --ink: #2b2924;
   --ink-soft: #6e695f;
   --ink-faint: #91897b;
@@ -167,9 +168,20 @@ h1 {
 
 .install {
   margin-top: clamp(42px, 7vh, 64px);
-  border-top: 1px solid var(--line);
-  border-bottom: 1px solid var(--line);
+  padding: 18px 24px 0;
+  border: 1px solid var(--line);
+  background: var(--surface);
   scroll-margin-top: 24px;
+}
+
+.install-label {
+  margin-bottom: 4px;
+  color: var(--cinnabar);
+  font-family: var(--sans);
+  font-size: 0.69rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .command-line {
@@ -177,7 +189,7 @@ h1 {
   grid-template-columns: auto minmax(0, 1fr);
   gap: 14px;
   align-items: baseline;
-  padding-block: 22px;
+  padding-block: 14px 22px;
   font-family: var(--mono);
 }
 
@@ -199,7 +211,8 @@ h1 {
   align-items: flex-start;
   justify-content: space-between;
   gap: 28px;
-  padding-block: 17px 19px;
+  margin-inline: -24px;
+  padding: 17px 24px 19px;
   border-top: 1px solid var(--line);
   color: var(--ink-faint);
   font-family: var(--sans);
@@ -218,14 +231,19 @@ h1 {
 }
 
 .install-actions button {
-  padding: 0;
-  border: 0;
-  border-bottom: 1px solid currentColor;
-  color: var(--ink);
-  background: transparent;
+  padding: 7px 15px;
+  border: 1px solid var(--cinnabar);
+  color: #fff;
+  background: var(--cinnabar);
   cursor: pointer;
   font-family: var(--sans);
   font-size: 0.69rem;
+}
+
+.install-actions button:hover,
+.install-actions button:focus-visible {
+  border-color: var(--ink);
+  background: var(--ink);
 }
 
 .install-actions a {
