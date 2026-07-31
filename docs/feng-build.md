@@ -1,6 +1,6 @@
 # Feng 语言编译与构建规范
 
-本文档说明 feng 编译器与构建工具的职责划分、处理逻辑及调用协议。CLI 语法以 [feng-cli.md](./feng-cli.md) 为准,平台标识值以 [feng-os-arch.md](./feng-os-arch.md) 为准,分发包内工具链与 sysroot 布局以 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) 为准。
+本文档说明 feng 编译器与构建工具的职责划分、处理逻辑及调用协议。CLI 语法以 [feng-cli.md](./feng-cli.md) 为准,平台标识值以 [feng-os-arch.md](./feng-os-arch.md) 为准,分发包内工具链与 sysroot 布局以 [feng-release-and-install.md](../dev/feng-release-and-install.md) 为准。
 
 ## 1 职责划分
 
@@ -61,7 +61,7 @@ sysroot 规则:
 Linux GNU / musl 目标参数：
 
 - `--sysroot=<feng 可执行文件目录>/../toolchain/sysroot/<platform>`：未提供用户显式覆盖时，选择 bundled GNU 或 musl 目标头文件、库、CRT 与动态加载器。
-- `--gcc-toolchain=<同一目标 sysroot>`：使 Clang 从 sysroot 配套目录中定位目标 `crtbegin*` / `crtend*` 与 compiler runtime。sysroot 内部兼容目录与文件清单由 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) §4 / §10 定义。
+- `--gcc-toolchain=<同一目标 sysroot>`：使 Clang 从 sysroot 配套目录中定位目标 `crtbegin*` / `crtend*` 与 compiler runtime。sysroot 内部兼容目录与文件清单由 [feng-release-and-install.md](../dev/feng-release-and-install.md) §4 / §10 定义。
 - `-fuse-ld=lld`:选择 LLVM LLD，由 Clang 基于自身安装目录定位同包的 `bin/ld.lld -> lld`。不传 `--ld-path`，也不允许省略该参数后回退到 macOS `/usr/bin/ld` 或其他系统 linker。
 - `linux-*-musl target=bin` 额外传入静态链接选项；`target=lib` 只编译对象并归档，不执行最终静态链接。
 - 以上参数只解决 C/ELF 工具链定位；`target=bin` driver 还必须链接 `<feng 可执行文件目录>/../lib/<platform>/libfeng_runtime.a`。`lld`、目标 sysroot / compiler runtime 或目标 Feng runtime 任一缺失时，必须报告目标平台不可用，不得改用 host runtime、其他 ABI runtime 或 host linker。
@@ -78,7 +78,7 @@ Feng 专用环境变量是用户对单次 Feng 调用的最高优先级显式覆
 
 指定任一 Linux 目标时，最终选中的 C 编译器必须兼容本节定义的 Clang `--target`、`--sysroot`、`--gcc-toolchain` 与 `-fuse-ld=lld` 参数，并能按自身安装规则定位可在当前 host 运行的 `ld.lld`，否则报告目标平台不可用。LLD 不建立独立查找链；Feng 通过 `-fuse-ld=lld` 让选中的 Clang 定位同一工具链中的 `bin/ld.lld -> lld`。`lldb-dap` 的后端定位由 [feng-cli.md](feng-cli.md) 单独定义。
 
-不增加 `FENG_HOME`、`FENG_TOOLCHAIN` 等用于改变安装根或整套工具链根目录的环境变量。可执行文件绝对路径解析与 runtime、Clang、LLVM ar / ranlib、LLD、`lldb-dap` 的相对定位共用同一套 CLI 公共路径函数,不得分别实现重复的可执行文件定位逻辑。发行包与源码开发的统一相对布局及 Makefile 软链接约定见 [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md) §4 / §5。
+不增加 `FENG_HOME`、`FENG_TOOLCHAIN` 等用于改变安装根或整套工具链根目录的环境变量。可执行文件绝对路径解析与 runtime、Clang、LLVM ar / ranlib、LLD、`lldb-dap` 的相对定位共用同一套 CLI 公共路径函数,不得分别实现重复的可执行文件定位逻辑。发行包与源码开发的统一相对布局及 Makefile 软链接约定见 [feng-release-and-install.md](../dev/feng-release-and-install.md) §4 / §5。
 
 目标平台同时决定以下输入,不得只转换 Clang 参数:
 
@@ -322,7 +322,7 @@ feng src/*.ff --platform=<platform> --out=<项目输出根>/<platform> --pkg a.f
 - [feng-package.md](./feng-package.md): `.fb` 包格式、`feng.fm` 清单以及编译器可从 `.fb` 读取哪些包级元信息。
 - [feng-cli.md](./feng-cli.md): CLI 命令、`--target` / `--platform` 语法与用户可见诊断。
 - [feng-os-arch.md](./feng-os-arch.md): Feng 平台标识的唯一值域与归一化规则。
-- [feng-release-and-instanll.md](../dev/feng-release-and-instanll.md): 分发包内 runtime、LLVM 工具链与 sysroot 的安装布局。
+- [feng-release-and-install.md](../dev/feng-release-and-install.md): 分发包内 runtime、LLVM 工具链与 sysroot 的安装布局。
 - [feng-symbol-table.md](./feng-symbol-table.md): `.ft` 符号表格式、profile 常量与二进制布局。
 - [feng-interop.md](./feng-interop.md): `@cdecl`/`@stdcall`/`@fastcall` 注解语法与 C 互操作规则。
 - 本文档: 编译器与构建工具的职责划分、参数协议、模块索引机制与链接信息收集规则。

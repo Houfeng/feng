@@ -14,7 +14,7 @@
 - [Feng CLI](../docs/feng-cli.md)
 - [Feng 构建流程](../docs/feng-build.md)
 - [Feng 依赖管理机制](../docs/feng-deps.md)
-- [Feng 分发与安装方案](./feng-release-and-instanll.md)
+- [Feng 分发与安装方案](./feng-release-and-install.md)
 - [发行包随附包安装方案](./feng-bundled-package-install-dev.md)
 
 ## 2. 范围

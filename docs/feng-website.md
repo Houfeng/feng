@@ -17,7 +17,7 @@
 - 编译器与构建工具职责分离以 `docs/feng-build.md` 为准。
 - 包格式、`feng.fm` 与 `.fb` 分发语义以 `docs/feng-package.md` 为准。
 - 在线安装脚本的入口、唯一源文件与发布规则以
-  `dev/feng-release-and-instanll.md` §7.2 为准。
+  `dev/feng-release-and-install.md` §7.2 为准。
 - 官网中使用的示例代码、命令与清单片段必须能在现有规范或示例文件中找到依据。
 
 官网可以对上述内容做压缩表达，但不得重新定义规则，也不得把“去仓库哪里看”作为首页主叙事。
@@ -43,7 +43,7 @@
 - 官网静态资源命名应清晰稳定，便于后续继续扩展多页结构。
 - GitHub Pages 部署物必须通过临时 staging 生成，不得把部署生成文件写回
   `website/`。除 `website/` 静态内容外，staging 仅按
-  `dev/feng-release-and-instanll.md` §7.2 注入在线安装脚本。
+  `dev/feng-release-and-install.md` §7.2 注入在线安装脚本。
 - 自定义域名由仓库 GitHub Pages 设置管理，Actions 部署物不维护 `CNAME` 文件。
 
 ## 5 验证要求

@@ -55,4 +55,4 @@ GNU 与 musl 产物必须分别使用对应目标平台的 sysroot 构建，不�
 - [feng-extlib-libuv.md](./feng-extlib-libuv.md)
 - [feng-extlib-libsodium.md](./feng-extlib-libsodium.md)
 - [feng-std-regexp-dev.md](./feng-std-regexp-dev.md)
-- [feng-release-and-instanll.md](./feng-release-and-instanll.md)
+- [feng-release-and-install.md](./feng-release-and-install.md)

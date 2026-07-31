@@ -36,7 +36,7 @@ std: "0.1.0"
 - [Feng CLI](../docs/feng-cli.md)
 - [Feng 包格式](../docs/feng-package.md)
 - [Feng 依赖管理机制](../docs/feng-deps.md)
-- [Feng 分发与安装方案](./feng-release-and-instanll.md)
+- [Feng 分发与安装方案](./feng-release-and-install.md)
 
 ## 2. 已确认规则
 

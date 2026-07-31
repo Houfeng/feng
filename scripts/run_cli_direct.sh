@@ -255,7 +255,7 @@ fi
 # 7. runtime lookup failure diagnostic (FENG_RUNTIME_LIB removed).
 # Previously tested the FENG_RUNTIME_LIB environment variable pointing at a
 # nonexistent file. FENG_RUNTIME_LIB has been removed per the release plan
-# (dev/feng-release-and-instanll.md §4.1); runtime is now located via two-step
+# (dev/feng-release-and-install.md §4.1); runtime is now located via two-step
 # lookup: the single complete platform path <exe>/../lib/<os>-<arch>-<abi>/.
 # A missing-runtime case requires an isolated installation layout and is covered
 # by distribution manifest verification rather than this source-tree smoke test.

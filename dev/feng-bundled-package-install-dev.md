@@ -168,7 +168,7 @@ registry 包非法，不使用 `pkg/` 覆盖该错误。registry 的其他既有
 - 明确本地路径依赖不受影响。
 - 明确 `pkg/` 只用于安装到 cache，不作为编译器直接包来源。
 
-发行目录布局在 [feng-release-and-instanll.md](./feng-release-and-instanll.md)
+发行目录布局在 [feng-release-and-install.md](./feng-release-and-install.md)
 中只定义一次；其他文档引用该布局，不重复维护目录结构。
 
 ### 8.2 依赖管理
