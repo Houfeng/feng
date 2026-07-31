@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Feng is a statically typed programming language for clear, reliable software, with compact syntax, explicit contracts, and C interoperability.">
-  <meta name="theme-color" content="#f3efe5">
+  <meta name="theme-color" content="#faf9f5">
   <title>Feng — Clear by design</title>
   <link rel="stylesheet" href="styles.css">
   <script defer src="app.js"></script>
@@ -27,51 +27,42 @@
 
   <main id="main">
     <section class="hero" id="top" aria-labelledby="hero-title">
-      <div class="hero-title">
-        <p class="kicker">The Feng programming language</p>
-        <h1 id="hero-title">Clear by design.<br>Reliable by nature.</h1>
-      </div>
+      <p class="intro-label">The Feng programming language</p>
+      <h1 id="hero-title">A statically typed language for clear, reliable software.</h1>
+      <p class="hero-lead">
+        Compact syntax, explicit contracts, automatic memory management,
+        and direct C interoperability.
+      </p>
 
-      <div class="hero-intro">
-        <p class="hero-lead">
-          A statically typed language with compact syntax, explicit contracts,
-          automatic memory management, and direct C interoperability.
-        </p>
-
-        <div class="command" data-command>
-          <span class="prompt" aria-hidden="true">$</span>
+      <div class="install" id="install" data-command>
+        <div class="command-line">
+          <span aria-hidden="true">$</span>
           <code>curl -fsSL https://feng-lang.com/install.sh | bash</code>
-          <button type="button" data-copy-command aria-label="Copy install command" aria-live="polite">Copy</button>
         </div>
-
-        <div class="hero-links">
-          <a href="#install">Installation details <span aria-hidden="true">↓</span></a>
-          <a href="https://github.com/Houfeng/feng">View on GitHub <span aria-hidden="true">↗</span></a>
+        <div class="install-meta">
+          <div>
+            <p>macOS Apple Silicon · Linux x86-64 · Linux ARM64</p>
+            <p>Compiling on macOS requires Xcode or Command Line Tools.</p>
+          </div>
+          <div class="install-actions">
+            <button type="button" data-copy-command aria-label="Copy install command" aria-live="polite">Copy</button>
+            <a href="https://github.com/Houfeng/feng/releases">Manual download <span aria-hidden="true">↗</span></a>
+            <a href="https://github.com/Houfeng/feng">GitHub <span aria-hidden="true">↗</span></a>
+          </div>
         </div>
       </div>
     </section>
 
-    <section class="section code-section" aria-labelledby="code-title">
-      <div class="section-heading">
-        <span class="section-index" aria-hidden="true">01</span>
-        <div>
-          <p class="kicker">The language</p>
-          <h2 id="code-title">Small syntax.<br>Explicit intent.</h2>
-        </div>
-      </div>
+    <section class="section language" aria-labelledby="language-title">
+      <header class="section-intro">
+        <p class="section-label">Language</p>
+        <h2 id="language-title">Small syntax, explicit intent.</h2>
+        <p>Types describe data. Specs make contracts visible. Generics keep abstractions reusable.</p>
+      </header>
 
-      <div class="code-layout">
-        <p class="section-copy">
-          Types describe data. Specs make contracts visible. Generics keep
-          abstractions reusable without hiding what the program means.
-        </p>
-
-        <figure class="code-sample">
-          <figcaption>
-            <span>sequence.ff</span>
-            <span>Feng</span>
-          </figcaption>
-          <pre tabindex="0"><code><span class="syntax-muted">module</span> app;
+      <figure class="code-sample">
+        <figcaption>sequence.ff</figcaption>
+        <pre tabindex="0"><code><span class="syntax-muted">module</span> app;
 
 <span class="syntax-keyword">spec</span> Sequence&lt;T&gt; {
   <span class="syntax-keyword">func</span> size(): int;
@@ -87,71 +78,24 @@
   <span class="syntax-keyword">let</span> counter: Sequence&lt;int&gt; = Counter();
   print(counter.size());
 }</code></pre>
-        </figure>
-      </div>
-    </section>
-
-    <section class="section install-section" id="install" aria-labelledby="install-title">
-      <div class="section-heading">
-        <span class="section-index" aria-hidden="true">02</span>
-        <div>
-          <p class="kicker">Installation</p>
-          <h2 id="install-title">Begin with one command.</h2>
-        </div>
-      </div>
-
-      <div class="install-grid">
-        <article class="install-method install-primary">
-          <p class="method-label">Recommended</p>
-          <h3>Install online</h3>
-          <p>The installer detects your platform, downloads the matching release, and adds Feng to your PATH.</p>
-
-          <div class="command command-wide" data-command>
-            <span class="prompt" aria-hidden="true">$</span>
-            <code>curl -fsSL https://feng-lang.com/install.sh | bash</code>
-            <button type="button" data-copy-command aria-label="Copy install command" aria-live="polite">Copy</button>
-          </div>
-
-          <a class="text-link" href="https://github.com/Houfeng/feng/blob/main/scripts/install.sh">
-            Read the installer before running it <span aria-hidden="true">↗</span>
-          </a>
-        </article>
-
-        <article class="install-method">
-          <p class="method-label">Alternative</p>
-          <h3>Install manually</h3>
-          <p>Download the zip for your platform, extract it, then add the extracted <code>bin/</code> directory to your PATH.</p>
-          <a class="release-link" href="https://github.com/Houfeng/feng/releases">
-            Download from GitHub Releases <span aria-hidden="true">↗</span>
-          </a>
-        </article>
-      </div>
-
-      <div class="platform-note">
-        <p><strong>Available hosts</strong> macOS Apple Silicon · Linux x86-64 · Linux ARM64</p>
-        <p>Compiling on macOS requires Xcode or Xcode Command Line Tools.</p>
-      </div>
+      </figure>
     </section>
 
     <section class="section destinations" aria-label="Documentation and GitHub">
       <article id="docs">
-        <span class="section-index" aria-hidden="true">03</span>
-        <p class="kicker">Documentation</p>
-        <h2>Docs are<br>on the way.</h2>
+        <h2>Documentation</h2>
         <p>Language guides and reference documentation are being prepared.</p>
-        <span class="unavailable">Coming later</span>
+        <span>Coming later</span>
       </article>
 
-      <article id="github">
-        <span class="section-index" aria-hidden="true">04</span>
-        <p class="kicker">Open development</p>
-        <h2>Follow Feng<br>on GitHub.</h2>
-        <p>Explore the source, download releases, and follow the project as it evolves.</p>
-        <ul class="github-links">
-          <li><a href="https://github.com/Houfeng/feng">Source code <span aria-hidden="true">↗</span></a></li>
-          <li><a href="https://github.com/Houfeng/feng/releases">Releases <span aria-hidden="true">↗</span></a></li>
-          <li><a href="https://github.com/Houfeng/feng/issues">Issues <span aria-hidden="true">↗</span></a></li>
-        </ul>
+      <article>
+        <h2>GitHub</h2>
+        <p>Explore the source, download releases, and follow the project.</p>
+        <nav aria-label="GitHub links">
+          <a href="https://github.com/Houfeng/feng">Source <span aria-hidden="true">↗</span></a>
+          <a href="https://github.com/Houfeng/feng/releases">Releases <span aria-hidden="true">↗</span></a>
+          <a href="https://github.com/Houfeng/feng/issues">Issues <span aria-hidden="true">↗</span></a>
+        </nav>
       </article>
     </section>
   </main>
