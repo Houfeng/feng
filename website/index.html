@@ -46,14 +46,18 @@
         <div class="nav-controls" role="group" aria-label="页面设置">
           <details class="language-menu" data-language-menu>
             <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="选择语言" title="选择语言">
-              <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+              <svg class="language-menu__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="9"></circle>
                 <path d="M3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18"></path>
               </svg>
+              <span class="language-menu__label" aria-hidden="true">语言</span>
+              <svg class="language-menu__chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <path d="m7 10 5 5 5-5"></path>
+              </svg>
             </summary>
             <ul class="language-menu__popover" aria-label="语言">
-              <li><span class="language-menu__option" aria-current="page">中<span class="visually-hidden">（当前语言）</span></span></li>
-              <li><span class="language-menu__option" aria-disabled="true">英<span class="visually-hidden">（即将提供）</span></span></li>
+              <li><span class="language-menu__option" aria-current="page"><span>简体中文</span><span class="language-menu__state">当前</span></span></li>
+              <li><span class="language-menu__option" aria-disabled="true"><span>English</span><span class="language-menu__state">即将提供</span></span></li>
             </ul>
           </details>
           <button class="nav-icon-button theme-toggle" type="button" data-theme-toggle aria-label="切换主题" aria-pressed="false" title="切换主题">
@@ -64,6 +68,7 @@
             <svg class="theme-toggle__moon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
               <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
             </svg>
+            <span class="theme-toggle__label" data-theme-label aria-hidden="true">主题</span>
           </button>
         </div>
       </nav>
@@ -81,14 +86,18 @@
           <div class="nav-controls" role="group" aria-label="页面设置">
             <details class="language-menu" data-language-menu>
               <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="选择语言" title="选择语言">
-                <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                <svg class="language-menu__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="9"></circle>
                   <path d="M3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18"></path>
                 </svg>
+                <span class="language-menu__label" aria-hidden="true">语言</span>
+                <svg class="language-menu__chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+                  <path d="m7 10 5 5 5-5"></path>
+                </svg>
               </summary>
               <ul class="language-menu__popover" aria-label="语言">
-                <li><span class="language-menu__option" aria-current="page">中<span class="visually-hidden">（当前语言）</span></span></li>
-                <li><span class="language-menu__option" aria-disabled="true">英<span class="visually-hidden">（即将提供）</span></span></li>
+                <li><span class="language-menu__option" aria-current="page"><span>简体中文</span><span class="language-menu__state">当前</span></span></li>
+                <li><span class="language-menu__option" aria-disabled="true"><span>English</span><span class="language-menu__state">即将提供</span></span></li>
               </ul>
             </details>
             <button class="nav-icon-button theme-toggle" type="button" data-theme-toggle aria-label="切换主题" aria-pressed="false" title="切换主题">
@@ -99,6 +108,7 @@
               <svg class="theme-toggle__moon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
               </svg>
+              <span class="theme-toggle__label" data-theme-label aria-hidden="true">主题</span>
             </button>
           </div>
         </nav>

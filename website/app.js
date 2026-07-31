@@ -174,11 +174,16 @@ function getActiveTheme() {
 function syncThemeControls(theme) {
   const isDark = theme === 'dark';
   const actionLabel = isDark ? '切换至浅色主题' : '切换至深色主题';
+  const visibleLabel = isDark ? '浅色模式' : '深色模式';
 
   document.querySelectorAll('[data-theme-toggle]').forEach((button) => {
     button.setAttribute('aria-pressed', String(isDark));
     button.setAttribute('aria-label', actionLabel);
     button.setAttribute('title', actionLabel);
+    const label = button.querySelector('[data-theme-label]');
+    if (label) {
+      label.textContent = visibleLabel;
+    }
   });
 }
 
