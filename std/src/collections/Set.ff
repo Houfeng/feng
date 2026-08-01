@@ -5,211 +5,208 @@ open module std.collections;
  * @param <K> - the element type of this set
  *
  * Implementation notes:
- * - Uses the same open-addressing strategy as `Map`.
- * - Set stores keys only (no value payload).
- * - `entities` returns an immutable dense array of keys.
+ * - Uses the key-only dense bucket-chain storage defined by
+ *   `dev/feng-std-set-optimize.md`.
+ * - Average O(1) for add/remove/has under normal hash distribution.
+ * - `entries` returns an immutable copy of all live keys with no order guarantee.
  */
 open type Set<K: Hashable<K>> {
-	// Slot states: 0 = never used, 1 = occupied, 2 = tombstone.
-	seal var states: i32[!];
-	seal var hashes: u64[!];
-	seal var keys: K[!];
-	seal var size: int;
-	seal var used: int;
-	seal var capacity: int;
-	seal var missingKey: K;
+  seal var buckets: int[!];
+  seal var hashes: u64[!];
+  seal var nexts: int[!];
+  seal var keys: K[!];
+  seal var size: int;
+  seal var capacity: int;
 
-	seal func nextSlot(slot: int): int {
-		let next: int = slot + 1;
-		if next >= self.capacity {
-			return 0;
-		}
-		return next;
-	}
+  /** Returns the bucket index selected by `hash`. */
+  seal func slotForHash(hash: u64): int {
+    return (int)(hash % (u64)self.capacity);
+  }
 
-	seal func slotForHash(hash: u64): int {
-		return (int)(hash % (u64)self.capacity);
-	}
+  /** Resizes entry storage and rebuilds all bucket chains. */
+  seal func rehash(newCapacity: int) {
+    self.hashes = feng_array_storage_migrate(self.hashes, newCapacity);
+    self.nexts = feng_array_storage_migrate(self.nexts, newCapacity);
+    self.keys = feng_array_storage_migrate(self.keys, newCapacity);
+    self.buckets = int[:newCapacity];
+    self.capacity = newCapacity;
+    for var i: int = 0; i < self.size; i = i + 1 {
+      let bucket: int = self.slotForHash(self.hashes[i]);
+      self.nexts[i] = self.buckets[bucket];
+      self.buckets[bucket] = i + 1;
+    }
+  }
 
-	seal func insertRehashed(hash: u64, key: K) {
-		var slot: int = self.slotForHash(hash);
-		for var step: int = 0; step < self.capacity; step = step + 1 {
-			if self.states[slot] != 1 {
-				self.states[slot] = 1;
-				self.hashes[slot] = hash;
-				self.keys[slot] = key;
-				self.size = self.size + 1;
-				self.used = self.used + 1;
-				return;
-			}
-			slot = self.nextSlot(slot);
-		}
-	}
+  /** Ensures bucket and entry storage have room for one more live entry. */
+  seal func ensureWritableForInsert() {
+    if self.capacity == 0 {
+      self.rehash(8);
+      return;
+    }
+    if (self.size + 1) * 10 >= self.capacity * 7 {
+      self.rehash(self.capacity * 2);
+    }
+  }
 
-	seal func rehash(newCapacity: int) {
-		let oldStates: i32[!] = self.states;
-		let oldHashes: u64[!] = self.hashes;
-		let oldKeys: K[!] = self.keys;
-		let oldCapacity: int = self.capacity;
-		self.states = i32[:newCapacity];
-		self.hashes = u64[:newCapacity];
-		self.keys = K[:newCapacity];
-		self.capacity = newCapacity;
-		self.size = 0;
-		self.used = 0;
-		for var i: int = 0; i < oldCapacity; i = i + 1 {
-			if oldStates[i] == 1 {
-				self.insertRehashed(oldHashes[i], oldKeys[i]);
-			}
-		}
-	}
+  /** Shrinks sparse entry storage while retaining a minimum capacity of eight. */
+  seal func maybeShrinkAfterRemove() {
+    if self.capacity <= 8 {
+      return;
+    }
+    if self.size * 10 <= self.capacity * 2 {
+      var newCapacity: int = self.capacity / 2;
+      if newCapacity < 8 {
+        newCapacity = 8;
+      }
+      self.rehash(newCapacity);
+    }
+  }
 
-	seal func ensureWritableForInsert() {
-		if self.capacity == 0 {
-			self.rehash(8);
-			return;
-		}
-		if (self.used + 1) * 10 >= self.capacity * 7 {
-			self.rehash(self.capacity * 2);
-			return;
-		}
-		if self.size * 4 < self.used {
-			self.rehash(self.capacity);
-		}
-	}
+  /** Returns the dense entry index for `key`, or minus one when absent. */
+  seal func findEntry(key: K, keyHash: u64): int {
+    if self.capacity == 0 {
+      return -1;
+    }
+    let bucket: int = self.slotForHash(keyHash);
+    var encodedIndex: int = self.buckets[bucket];
+    while encodedIndex != 0 {
+      let index: int = encodedIndex - 1;
+      if self.hashes[index] == keyHash {
+        let candidate: K = self.keys[index];
+        let matched: bool = key.same(candidate);
+        if matched {
+          return index;
+        }
+      }
+      encodedIndex = self.nexts[index];
+    }
+    return -1;
+  }
 
-	seal func maybeShrinkAfterRemove() {
-		if self.capacity <= 8 {
-			return;
-		}
-		if self.size * 10 <= self.capacity * 2 {
-			var newCapacity: int = self.capacity / 2;
-			if newCapacity < 8 {
-				newCapacity = 8;
-			}
-			self.rehash(newCapacity);
-			return;
-		}
-		if self.size * 4 < self.used {
-			self.rehash(self.capacity);
-		}
-	}
+  /**
+   * Replaces a bucket-chain reference after the last dense entry is moved.
+   * @param hash - hash of the moved entry
+   * @param oldEncodedIndex - previous entry index plus one
+   * @param newEncodedIndex - replacement entry index plus one
+   */
+  seal func replaceChainIndex(
+    hash: u64,
+    oldEncodedIndex: int,
+    newEncodedIndex: int
+  ) {
+    let bucket: int = self.slotForHash(hash);
+    if self.buckets[bucket] == oldEncodedIndex {
+      self.buckets[bucket] = newEncodedIndex;
+      return;
+    }
+    var encodedIndex: int = self.buckets[bucket];
+    while encodedIndex != 0 {
+      let index: int = encodedIndex - 1;
+      if self.nexts[index] == oldEncodedIndex {
+        self.nexts[index] = newEncodedIndex;
+        return;
+      }
+      encodedIndex = self.nexts[index];
+    }
+  }
 
-	seal func findSlot(key: K, keyHash: u64): int {
-		if self.capacity == 0 {
-			return -1;
-		}
-		var slot: int = self.slotForHash(keyHash);
-		for var step: int = 0; step < self.capacity; step = step + 1 {
-			let state: i32 = self.states[slot];
-			if state == 0 {
-				return -1;
-			}
-			if state == 1 && self.hashes[slot] == keyHash {
-				let candidate: K = self.keys[slot];
-				let matched: bool = key.same(candidate);
-				if matched {
-					return slot;
-				}
-			}
-			slot = self.nextSlot(slot);
-		}
-		return -1;
-	}
+  /**
+   * Removes a known entry index while preserving dense storage.
+   * @param index - dense index of the entry to remove
+   */
+  seal func removeEntryAt(index: int) {
+    let lastIndex: int = self.size - 1;
+    if index != lastIndex {
+      let movedHash: u64 = self.hashes[lastIndex];
+      self.hashes[index] = movedHash;
+      self.nexts[index] = self.nexts[lastIndex];
+      self.keys[index] = self.keys[lastIndex];
+      self.replaceChainIndex(movedHash, lastIndex + 1, index + 1);
+    }
+    feng_array_storage_remove(self.hashes, lastIndex, 1);
+    feng_array_storage_remove(self.nexts, lastIndex, 1);
+    feng_array_storage_remove(self.keys, lastIndex, 1);
+    self.size = self.size - 1;
+    self.maybeShrinkAfterRemove();
+  }
 
-	/**
-	 * Adds `key` into this set.
-	 * @param key - element to add
-	 * @return true if `key` was added, otherwise false
-	 */
-	open func add(key: K) {
-		self.ensureWritableForInsert();
-		let keyHash: u64 = key.hash();
-		var slot: int = self.slotForHash(keyHash);
-		var firstDeleted: int = -1;
-		for var step: int = 0; step < self.capacity; step = step + 1 {
-			let state: i32 = self.states[slot];
-			if state == 0 {
-				var target: int = slot;
-				if firstDeleted >= 0 {
-					target = firstDeleted;
-				} else {
-					self.used = self.used + 1;
-				}
-				self.states[target] = 1;
-				self.hashes[target] = keyHash;
-				self.keys[target] = key;
-				self.size = self.size + 1;
-				return;
-			}
-			if state == 2 {
-				if firstDeleted < 0 {
-					firstDeleted = slot;
-				}
-			} else {
-				if self.hashes[slot] == keyHash {
-					let candidate: K = self.keys[slot];
-					let matched: bool = key.same(candidate);
-					if matched {
-						return;
-					}
-				}
-			}
-			slot = self.nextSlot(slot);
-		}
-		self.rehash(self.capacity * 2);
-		self.add(key);
-	}
+  /**
+   * Adds `key` into this set if it is not already present.
+   * @param key - element to add
+   */
+  open func add(key: K) {
+    let keyHash: u64 = key.hash();
+    if self.findEntry(key, keyHash) >= 0 {
+      return;
+    }
 
-	/**
-	 * Removes `key` from this set if it exists.
-	 * @param key - element to remove
-	 * @return true if `key` was removed, otherwise false
-	 */
-	open func remove(key: K) {
-		let keyHash: u64 = key.hash();
-		let slot: int = self.findSlot(key, keyHash);
-		if slot < 0 {
-			return;
-		}
-		self.states[slot] = 2;
-		self.hashes[slot] = 0;
-		self.keys[slot] = self.missingKey;
-		self.size = self.size - 1;
-		self.maybeShrinkAfterRemove();
-	}
+    self.ensureWritableForInsert();
+    let bucket: int = self.slotForHash(keyHash);
+    feng_array_storage_insert(self.hashes, self.size, keyHash);
+    feng_array_storage_insert(self.nexts, self.size, self.buckets[bucket]);
+    feng_array_storage_insert(self.keys, self.size, key);
+    self.buckets[bucket] = self.size + 1;
+    self.size = self.size + 1;
+  }
 
-	/**
-	 * Returns true if `key` exists in this set, otherwise false.
-	 * @param key - element to test
-	 * @return true if `key` exists in this set, otherwise false
-	 */
-	open func has(key: K): bool {
-		let keyHash: u64 = key.hash();
-		return self.findSlot(key, keyHash) >= 0;
-	}
+  /**
+   * Removes `key` from this set if it exists.
+   * @param key - element to remove
+   */
+  open func remove(key: K) {
+    if self.capacity == 0 {
+      return;
+    }
+    let keyHash: u64 = key.hash();
+    let bucket: int = self.slotForHash(keyHash);
+    var previousIndex: int = -1;
+    var encodedIndex: int = self.buckets[bucket];
+    while encodedIndex != 0 {
+      let index: int = encodedIndex - 1;
+      let entryHash: u64 = self.hashes[index];
+      let candidate: K = self.keys[index];
+      if entryHash == keyHash && key.same(candidate) {
+        let nextEncodedIndex: int = self.nexts[index];
+        if previousIndex < 0 {
+          self.buckets[bucket] = nextEncodedIndex;
+        } else {
+          self.nexts[previousIndex] = nextEncodedIndex;
+        }
+        self.removeEntryAt(index);
+        return;
+      }
+      previousIndex = index;
+      encodedIndex = self.nexts[index];
+    }
+  }
 
-	/**
-	 * Returns the number of occupied elements in the set.
-	 * @return number of elements
-	 */
-	open func count(): int {
-		return self.size;
-	}
+  /**
+   * Returns true if `key` exists in this set, otherwise false.
+   * @param key - element to test
+   * @return true if `key` exists in this set, otherwise false
+   */
+  open func has(key: K): bool {
+    let keyHash: u64 = key.hash();
+    return self.findEntry(key, keyHash) >= 0;
+  }
 
-	/**
-	 * Returns all keys as an immutable dense array.
-	 * @return immutable array of keys
-	 */
-	open func entries(): K[] {
-		let items: K[!] = K[:self.size];
-		var outputIndex: int = 0;
-		for var i: int = 0; i < self.capacity; i = i + 1 {
-			if self.states[i] == 1 {
-				items[outputIndex] = self.keys[i];
-				outputIndex = outputIndex + 1;
-			}
-		}
-		return (K[])items;
-	}
+  /**
+   * Returns the number of occupied elements in the set.
+   * @return number of elements
+   */
+  open func count(): int {
+    return self.size;
+  }
+
+  /**
+   * Returns all keys as an immutable dense array with no order guarantee.
+   * @return immutable array of keys
+   */
+  open func entries(): K[] {
+    let result: K[!] = K[:self.size];
+    for var i: int = 0; i < self.size; i = i + 1 {
+      result[i] = self.keys[i];
+    }
+    return (K[])result;
+  }
 }

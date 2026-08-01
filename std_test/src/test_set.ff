@@ -4,6 +4,36 @@ import std.test;
 
 import std.collections;
 
+/** A set test key that forces every entry into the same bucket chain. */
+type SetCollisionKey: Hashable<SetCollisionKey> {
+  let value: i32;
+
+  /** Returns a constant hash to exercise collision-chain maintenance. */
+  func hash(): u64 {
+    return (u64)1;
+  }
+
+  /** Compares collision keys by their stored integer value. */
+  func same(other: SetCollisionKey): bool {
+    return self.value == other.value;
+  }
+}
+
+/** A managed set key used to verify key lifecycle across storage migration. */
+type SetManagedKey: Hashable<SetManagedKey> {
+  let value: i32;
+
+  /** Returns the stored integer as the key hash. */
+  func hash(): u64 {
+    return (u64)self.value;
+  }
+
+  /** Compares managed keys by their stored integer value. */
+  func same(other: SetManagedKey): bool {
+    return self.value == other.value;
+  }
+}
+
 func set_add_has() {
   let s = Set<IntKey>();
   let k = IntKey { value: 10 };
@@ -97,6 +127,91 @@ func set_int_direct_call() {
   check((a == (i32)13) || (b == (i32)13), "set/int-entries-has-13");
 }
 
+/** Verifies collision chains after removals move the last dense entry. */
+func set_collision_remove_keeps_dense_chains() {
+  let s = Set<SetCollisionKey>();
+  for var i: i32 = 0; i < 32; i = i + 1 {
+    let key = SetCollisionKey { value: i };
+    s.add(key);
+    s.add(key);
+  }
+
+  s.remove(SetCollisionKey { value: 5 });
+  s.remove(SetCollisionKey { value: 17 });
+  var valid: bool = s.count() == 30;
+  for var i: i32 = 0; i < 32; i = i + 1 {
+    let key = SetCollisionKey { value: i };
+    if i == 5 || i == 17 {
+      if s.has(key) {
+        valid = false;
+      }
+    } else {
+      if !s.has(key) {
+        valid = false;
+      }
+    }
+  }
+
+  let entries = s.entries();
+  if entries.length() != 30 {
+    valid = false;
+  }
+  for let entry in entries {
+    if entry.value == 5 || entry.value == 17 {
+      valid = false;
+    }
+  }
+  check(valid, "set/collision-remove-keeps-dense-chains");
+}
+
+/** Verifies managed keys remain valid across growth, removal, and shrink. */
+func set_shrink_preserves_managed_keys() {
+  let s = Set<SetManagedKey>();
+  for var i: i32 = 0; i < 80; i = i + 1 {
+    s.add(SetManagedKey { value: i });
+  }
+  for var i: i32 = 0; i < 76; i = i + 1 {
+    s.remove(SetManagedKey { value: i });
+  }
+
+  var valid: bool = s.count() == 4;
+  for var i: i32 = 76; i < 80; i = i + 1 {
+    if !s.has(SetManagedKey { value: i }) {
+      valid = false;
+    }
+  }
+
+  let entries = s.entries();
+  if entries.length() != 4 {
+    valid = false;
+  }
+  for let entry in entries {
+    if entry.value < 76 || entry.value >= 80 {
+      valid = false;
+    }
+  }
+  check(valid, "set/shrink-preserves-managed-keys");
+}
+
+/** Verifies entries returns an immutable snapshot independent of later removal. */
+func set_entries_snapshot_survives_remove() {
+  let s = Set<SetManagedKey>();
+  s.add(SetManagedKey { value: 1 });
+  s.add(SetManagedKey { value: 2 });
+  s.add(SetManagedKey { value: 3 });
+  let snapshot = s.entries();
+
+  s.remove(SetManagedKey { value: 2 });
+  var snapshotSum: i32 = 0;
+  for let entry in snapshot {
+    snapshotSum = snapshotSum + entry.value;
+  }
+  check(snapshot.length() == 3, "set/entries-snapshot-length");
+  check(snapshotSum == 6, "set/entries-snapshot-values");
+  check(s.count() == 2, "set/entries-live-count-after-remove");
+  check(!s.has(SetManagedKey { value: 2 }), "set/entries-live-remove");
+}
+
 open func run_set_tests() {
   describe("set tests", () {
     test("set_add_has()", () { set_add_has(); });
@@ -108,5 +223,14 @@ open func run_set_tests() {
     test("set_count()", () { set_count(); });
     test("set_entities_two()", () { set_entities_two(); });
     test("set_int_direct_call()", () { set_int_direct_call(); });
+    test("set_collision_remove_keeps_dense_chains()", () {
+      set_collision_remove_keeps_dense_chains();
+    });
+    test("set_shrink_preserves_managed_keys()", () {
+      set_shrink_preserves_managed_keys();
+    });
+    test("set_entries_snapshot_survives_remove()", () {
+      set_entries_snapshot_survives_remove();
+    });
   });
 }
