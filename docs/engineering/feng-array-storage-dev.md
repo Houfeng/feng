@@ -25,7 +25,7 @@ length == 已初始化元素数量 == 已分配槽位数量
 3. `[count, items.length())` 仍然必须存放合法的默认值；对于需要自定义默认初始化的元素，这些备用槽位也会产生初始化和生命周期开销。
 4. `remove()` 逐项向左赋值，托管元素在移动过程中产生逐项 retain/release。
 
-`dev/feng-array-optimize-delivered.md` 已把 List 迁移 API 明确留到后续阶段。本文承接该边界，不重新定义已交付的尾随内联方案。
+`docs/engineering/feng-array-optimize-delivered.md` 已把 List 迁移 API 明确留到后续阶段。本文承接该边界，不重新定义已交付的尾随内联方案。
 
 ## 2. 目标与非目标
 
@@ -412,8 +412,8 @@ storage API 必须满足：
 ### 8.1 文档
 
 - [x] 本文 Review 通过后作为本次开发主文档。
-- [x] 实现时同步更新 `dev/feng-runtime-contract-api.md`，只登记新增 contract API 并引用本文，不重复维护完整算法。
-- [x] 在 `dev/feng-array-optimize-delivered.md` 的后续边界处引用本文，不改写已交付阶段的历史范围。
+- [x] 实现时同步更新 `docs/engineering/feng-runtime-contract-api.md`，只登记新增 contract API 并引用本文，不重复维护完整算法。
+- [x] 在 `docs/engineering/feng-array-optimize-delivered.md` 的后续边界处引用本文，不改写已交付阶段的历史范围。
 - [x] 人工 Review。
 
 ### 8.2 Runtime
@@ -479,7 +479,7 @@ storage API 必须满足：
 
 第二阶段已确定的实施项与备注：
 
-- [x] `List(items: T[!])` 直接保存 `items.clone()` 返回的可写副本作为私有 backing array，不直接保存调用方数组引用；数组 `clone` 的返回可写性由 `docs/feng-std-array.md` 统一定义。
+- [x] `List(items: T[!])` 直接保存 `items.clone()` 返回的可写副本作为私有 backing array，不直接保存调用方数组引用；数组 `clone` 的返回可写性由 `docs/specifications/feng-std-array.md` 统一定义。
 - [x] 删除 `List.count` 字段，统一使用 `items.length()` 表示元素数量。
 - [x] 自动 shrink 沿用现有逻辑：容量大于 8 且元素数量不超过容量的四分之一时，将容量减半且不低于 8。
 - [x] runtime storage contract 保持现有四个 API，不增加批量 insert 或其他 range API。

@@ -4,7 +4,7 @@
 > 目标原则：**最小改动、架构合理、面向未来**。  
 > 分四个 Phase 实现，每个 Phase 结束后做一次全量回归（`make test`）。
 > 当前状态：步骤 0–13 已全部完成，相关 codegen / CLI / pack / link 回归与全量 `make test` 已通过。
-> `.fb` 当前正式结构与完整平台目录以 [../docs/feng-package.md](../docs/feng-package.md) 和 [../docs/feng-os-arch.md](../docs/feng-os-arch.md) 为准；本文只记录既有交付过程。
+> `.fb` 当前正式结构与完整平台目录以 [../specifications/feng-package.md](../specifications/feng-package.md) 和 [../specifications/feng-os-arch.md](../specifications/feng-os-arch.md) 为准；本文只记录既有交付过程。
 
 ## 1. 背景与目标
 

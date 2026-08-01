@@ -73,7 +73,7 @@ if (ok && !validate_type_member_field_method_name_conflict(context, decl)) {
 
 ### 变更 3：新增错误码
 
-**文件**: `docs/feng-error-codes-ae.md`
+**文件**: `docs/specifications/feng-error-codes-ae.md`
 **位置**: AE05 段末尾
 
 ```
@@ -82,7 +82,7 @@ if (ok && !validate_type_member_field_method_name_conflict(context, decl)) {
 
 ### 变更 4：文档规则
 
-**文件**: `docs/feng-type.md`
+**文件**: `docs/specifications/feng-type.md`
 
 - §5 规则段新增：`[必须] 同一冲突面内字段与方法不得同名; 实例字段与实例方法属于同一冲突面,静态字段与静态方法属于同一冲突面; 静态成员与实例成员因访问路径不同不构成冲突面; 违反时编译期报错。`
 - 编译器规则段新增：`编译器必须在语义阶段检查同一 type 内同一冲突面中字段与方法是否同名,并在编译期报错; 静态成员与实例成员因访问路径不同不构成冲突面,不在此检查范围内。`

@@ -1,11 +1,11 @@
 # Feng enum 已交付项
 
 > 本文档用于拆解 enum 从现有规范进入实现的施工顺序、边界与验收口径。
-> [docs/feng-enum.md](../docs/feng-enum.md) 是 enum 的专项规范；本文只写开发步骤与 TODO，不重复规范定义。
+> [docs/specifications/feng-enum.md](../specifications/feng-enum.md) 是 enum 的专项规范；本文只写开发步骤与 TODO，不重复规范定义。
 
 ## 1. 当前前提
 
-- enum 公开语义已经收敛到 [docs/feng-enum.md](../docs/feng-enum.md)，当前阶段只支持简单的 int enum：无关联值、无字段、无方法、无泛型。
+- enum 公开语义已经收敛到 [docs/specifications/feng-enum.md](../specifications/feng-enum.md)，当前阶段只支持简单的 int enum：无关联值、无字段、无方法、无泛型。
 - 当前规则已明确：只允许“全隐式取值”或“全显式取值”，禁止混合取值。
 - 当前规则已明确：不支持任何形式的 `int -> enum` 显式转换，包括整数字面量与常量表达式 cast。
 - lexer 侧已经把 `enum` 识别为关键字；首版实现不需要新增关键字扫描逻辑，但需要补回归测试。
@@ -119,7 +119,7 @@
 
 进入本阶段前先做：
 
-- [x] 先更新 [docs/feng-symbol-table.md](../docs/feng-symbol-table.md)，补一小段 enum item 的 `.ft` 导出与查询视图规范，不把这一步留到编码时临时决定。
+- [x] 先更新 [docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md)，补一小段 enum item 的 `.ft` 导出与查询视图规范，不把这一步留到编码时临时决定。
 - [x] 在该小段中明确 enum item 在 `.ft` 中的稳定表达形状：是独立子声明、独立 decl kind，还是 enum 声明上的有序属性列表；若需要新增 decl kind / attr kind / relation kind，必须先写清楚。
 - [x] 在该小段中明确 enum item 至少导出的事实：所属 enum、声明顺序、枚举项名称、底层 `int` 值，以及 consumer 恢复 `Enum.Item` 解析所需的最小信息。
 - [x] 在该小段中明确 imported-module 查询视图如何恢复 enum 类型引用、枚举项访问，以及 `Enum.` completion / hover / definition 所需的最小事实。
@@ -131,11 +131,11 @@
 - [x] 让跨模块 / 跨包 `import` 后的 enum 类型引用与枚举项访问可被正确解析。
 - [x] 把 enum 纳入 imported-module 的重名冲突检查与可见性查询。
 - [x] 让 LSP completion / hover / definition 至少能识别 enum 声明与 `Enum.` 后的枚举项候选。
-- [x] 若 `.ft` 格式需要新增 decl kind / attr kind / relation kind，先回写 `docs/feng-symbol-table.md`，再落代码。
+- [x] 若 `.ft` 格式需要新增 decl kind / attr kind / relation kind，先回写 `docs/specifications/feng-symbol-table.md`，再落代码。
 
 验收口径：
 
-- 进入 2.5 编码前，enum item 的 `.ft` 导出形状与查询视图恢复形状已经在 [docs/feng-symbol-table.md](../docs/feng-symbol-table.md) 中唯一确定。
+- 进入 2.5 编码前，enum item 的 `.ft` 导出形状与查询视图恢复形状已经在 [docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md) 中唯一确定。
 - 当前项目源码模块中的 enum 可以跨文件、跨模块引用。
 - `.fb` 公开包中的 enum 可以被 consumer 读取并参与语义分析。
 - `Enum.` 位置至少能返回稳定的枚举项候选，不退化为普通成员猜测。
@@ -151,7 +151,7 @@
 
 - [x] 复核所有涉及“顶层声明种类”“公开声明查询视图”“类型引用”的实现分支，补上 enum。
 - [x] 复核 CLI parse / semantic / build / check 的诊断文本，确保 enum 错误信息清晰、不退化成“unknown type”。
-- [x] 若实现过程中发现规范仍有缺口，先回写 `docs/feng-enum.md` 或相关权威文档，再继续编码。
+- [x] 若实现过程中发现规范仍有缺口，先回写 `docs/specifications/feng-enum.md` 或相关权威文档，再继续编码。
 - [x] 每个阶段都以“先文档、后代码、再测试”的顺序落地，不修改已有测试语义，只新增覆盖。
 - [x] 阶段完成后执行全量回归。
 
@@ -178,15 +178,15 @@
 1. 先完成 Parser / AST，并补 `test_parser` 与 lexer 回归。
 2. 再完成语义层的值归一化、默认值、转换和比较规则，并补 `test_semantic`。
 3. 再完成 codegen，把 enum 固定落到 trivial `int32_t` 路径，并补 `test_codegen` / 最小 CLI 端到端用例。
-4. 在进入 symbol table、包导入导出与 LSP / CLI 查询视图编码前，先补 [docs/feng-symbol-table.md](../docs/feng-symbol-table.md) 中 enum item 的 `.ft` 导出与查询视图规范。
+4. 在进入 symbol table、包导入导出与 LSP / CLI 查询视图编码前，先补 [docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md) 中 enum item 的 `.ft` 导出与查询视图规范。
 5. 再补 symbol table、包导入导出与 LSP / CLI 查询视图，并补 `test_symbol` / `test_cli`。
 6. 每一阶段稳定后都执行全量 `make test`。
 
 ## 5. 交付约束
 
-- 所有实现必须以 [docs/feng-enum.md](../docs/feng-enum.md) 为准，不得在编码阶段临时放宽为“类 C 混合取值”。
+- 所有实现必须以 [docs/specifications/feng-enum.md](../specifications/feng-enum.md) 为准，不得在编码阶段临时放宽为“类 C 混合取值”。
 - enum 首版必须保持“具名的 int 标量”定位，不得偷渡成托管对象、fat value 或 ABI 特判对象。
 - enum 首版必须保持“语义独立但表示零成本”的定位：不得偷渡成托管对象、fat value、反射驱动值或依赖 C 原生 `enum` 的不稳定宽度语义。
-- 进入 2.5 代码实现前，必须先在 [docs/feng-symbol-table.md](../docs/feng-symbol-table.md) 中写清 enum item 的 `.ft` 形状与查询视图恢复规则，不得边写代码边临时决定格式。
+- 进入 2.5 代码实现前，必须先在 [docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md) 中写清 enum item 的 `.ft` 形状与查询视图恢复规则，不得边写代码边临时决定格式。
 - 若符号表格式、导入查询模型或 LSP 展示需要新事实，先更新对应文档，再进入实现。
 - 若后续要支持 payload enum、位标志语义或可配置底层类型，必须另开规范，不在本待开发项中顺手扩展。

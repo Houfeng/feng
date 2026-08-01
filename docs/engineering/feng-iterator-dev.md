@@ -1,6 +1,6 @@
 # Feng 迭代器开发文档
 
-> 规范来源：[docs/feng-iterator.md](../docs/feng-iterator.md)  
+> 规范来源：[docs/specifications/feng-iterator.md](../specifications/feng-iterator.md)
 > 本文记录核心实现原理与分步开发任务。
 
 ---

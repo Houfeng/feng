@@ -1,7 +1,7 @@
 # spec 语义层优化方案草案
 
 > 本文档是实现草案，不是语言权威规范。
-> 语言语义以 [docs/feng-spec.md](../docs/feng-spec.md)、[docs/feng-fit.md](../docs/feng-fit.md)、[docs/feng-function.md](../docs/feng-function.md) 为准。
+> 语言语义以 [docs/specifications/feng-spec.md](../specifications/feng-spec.md)、[docs/specifications/feng-fit.md](../specifications/feng-fit.md)、[docs/specifications/feng-function.md](../specifications/feng-function.md) 为准。
 > 本草案只讨论 `spec` 在 semantic 层应当稳定产出哪些结论，**不**讨论运行时值表示选型（box / fat value / 其他），也**不**讨论 codegen lowering 细节。
 
 ## 1 目标
@@ -85,7 +85,7 @@
 
 ### 5.4 spec 默认零值绑定点未标注
 
-规范要求：无初始值的 `spec` 绑定 / 字段 / 返回点必须使用默认 witness（[docs/feng-spec.md](../docs/feng-spec.md) §7）。semantic 当前对这些点应该都允许通过（不报"missing initializer"），但是否**显式标注**了"此处需要默认 witness"这一事实，目前不明确。
+规范要求：无初始值的 `spec` 绑定 / 字段 / 返回点必须使用默认 witness（[docs/specifications/feng-spec.md](../specifications/feng-spec.md) §7）。semantic 当前对这些点应该都允许通过（不报"missing initializer"），但是否**显式标注**了"此处需要默认 witness"这一事实，目前不明确。
 
 后果：codegen 难以在不重做规则推导的前提下区分"显式 `null`/默认零值"与"spec 默认 witness"两条不同 lowering 路径。
 
@@ -99,7 +99,7 @@ lambda / 函数值 / 方法值 → callable-form `spec` 的匹配在 `lambda_exp
 
 ### 5.6 spec 等值比较的语义路径未明确
 
-[docs/feng-spec.md](../docs/feng-spec.md) §7 规定 spec 值默认按引用身份比较。当 spec 值参与 `==` / `!=` 时，semantic 应当：
+[docs/specifications/feng-spec.md](../specifications/feng-spec.md) §7 规定 spec 值默认按引用身份比较。当 spec 值参与 `==` / `!=` 时，semantic 应当：
 
 - 将其归类为引用身份比较（与 string / array 的值语义比较区分开）。
 - 若未来运行时表示发生变化（box → fat value），semantic 这条结论本身不变，仅 codegen 改变 lowering。

@@ -7,7 +7,7 @@
  * Top-level CLI entry/router declarations shared between
  * src/cli/main.c and the per-command translation units.
  *
- * Phase 2 split (see dev/feng-phase2-guide-delivered.md):
+ * Phase 2 split (see docs/engineering/feng-phase2-guide-delivered.md):
  *   - main.c is reduced to a router.
  *   - tool/ owns `feng tool ...` subcommands, including single-file debug
  *     compile.

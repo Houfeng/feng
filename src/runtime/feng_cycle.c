@@ -11,7 +11,7 @@
 
 /* Phase 1B cycle collector — Bacon-Rajan trial-deletion.
  *
- * Spec: docs/feng-lifetime.md §13.1 (cycle collector contract) and §11
+ * Spec: docs/specifications/feng-lifetime.md §13.1 (cycle collector contract) and §11
  * (potentially-cyclic SCC metadata).
  *
  * Concurrency model (1B-3 baseline):
@@ -41,7 +41,7 @@
  *      scan_black restores refcounts on the BLACK closure.
  *   3. Collect phase: every WHITE object is freed.
  *
- * Cycle path with finalizers (Phase 1B-4 — docs/feng-lifetime.md §13.2):
+ * Cycle path with finalizers (Phase 1B-4 — docs/specifications/feng-lifetime.md §13.2):
  *   Once the WHITE set is determined, if any white-coloured object has a
  *   user finalizer (FengTypeDescriptor.finalizer != NULL), the collector
  *   runs the §13.2 two-phase protocol:
@@ -614,7 +614,7 @@ static void phase1_run_finalizers(WhiteList *wl) {
             /* Route through the runtime barrier so an uncaught exception in
              * the user finalizer aborts deterministically instead of
              * unwinding across the collector and leaving g_cycle_lock
-             * held. See docs/feng-lifetime.md §13.2. */
+             * held. See docs/specifications/feng-lifetime.md §13.2. */
             feng_finalizer_invoke(h->desc, (void *)h);
         }
     }

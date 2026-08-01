@@ -2,7 +2,7 @@
 
 > 状态：待 Review  
 > 日期：2026-06-15  
-> 关联文档：[CE 错误码分段归类](../docs/feng-error-codes-ce.md)
+> 关联文档：[CE 错误码分段归类](../specifications/feng-error-codes-ce.md)
 
 ## 1. 背景
 

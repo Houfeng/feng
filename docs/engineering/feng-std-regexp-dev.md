@@ -1,6 +1,6 @@
 # std.text RegExp 正则表达式实现方案
 
-> 完整平台标识与 `std/extlib/<platform>/` 目录取值以 [../docs/feng-os-arch.md](../docs/feng-os-arch.md) 为准。
+> 完整平台标识与 `std/extlib/<platform>/` 目录取值以 [../specifications/feng-os-arch.md](../specifications/feng-os-arch.md) 为准。
 
 ## 1 背景
 

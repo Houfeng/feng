@@ -119,7 +119,7 @@ typedef enum CGTypeKind {
     CG_TYPE_DEFER         /* sentinel: scope-local defer registration entry.
                            * Not a real type; only used by cg_release_scope to
                            * recognise defer cleanup nodes mixed into the
-                           * locals list (docs/feng-defer-dev.md §5.6.1). */
+                           * locals list (docs/engineering/feng-defer-dev.md §5.6.1). */
 } CGTypeKind;
 
 struct UserType;     /* forward */
@@ -247,7 +247,7 @@ static CGType *cgtype_new_enum(const FengDecl *enum_decl) {
 
 /* Value-kind classifier for codegen-side dispatch on per-field lifetime
  * emission. Mirrors the runtime three-way classification described in
- * dev/feng-value-model-delivered.md §3.3 / §7.2:
+ * docs/engineering/feng-value-model-delivered.md §3.3 / §7.2:
  *
  *   CG_VK_TRIVIAL          — bit-copyable, no participation in ARC.
  *   CG_VK_MANAGED_POINTER  — single managed pointer (string / array / object).
@@ -290,7 +290,7 @@ static bool cgtype_is_aggregate(const CGType *t) {
     return cgtype_value_kind(t) == CG_VK_AGGREGATE;
 }
 
-/* docs/feng-defer-dev.md §5.6.1: DEFER sentinel kind for scope-local defer
+/* docs/engineering/feng-defer-dev.md §5.6.1: DEFER sentinel kind for scope-local defer
  * registration entries. cgtype_is_defer is checked by cg_release_scope to
  * dispatch on defer nodes mixed into the locals list. */
 static bool cgtype_is_defer(const CGType *t) {
@@ -768,7 +768,7 @@ typedef struct UserSpec {
     FengSpecForm form;
     char   *c_value_struct_name;      /* e.g., FengSpecValue__feng__sample__Named */
     char   *c_witness_struct_name;    /* e.g., FengSpecWitness__feng__sample__Named */
-    /* Value-model descriptor symbols (see dev/feng-value-model-delivered.md
+    /* Value-model descriptor symbols (see docs/engineering/feng-value-model-delivered.md
      * §3, §7.2). For object-form specs the aggregate has exactly one
      * managed slot — the `subject` pointer at offset 0 of the value
      * struct. The descriptor is emitted unconditionally so per-field
@@ -778,7 +778,7 @@ typedef struct UserSpec {
     char   *c_aggregate_default_name;  /* e.g., FengSpecAggDefault__M__S */
     char   *c_aggregate_init_fn_name;  /* e.g., FengSpecAggInit__M__S */
     char   *c_aggregate_desc_name;     /* e.g., FengSpecAgg__M__S */
-    /* Default-zero machinery (dev/feng-spec-codegen-pending.md §6). The
+    /* Default-zero machinery (docs/engineering/feng-spec-codegen-delivered.md §6). The
      * hidden subject type is a real managed object emitted purely to
      * back default spec values; the default witness reads / writes its
      * fields and returns per-type defaults from method slots. */
@@ -1061,7 +1061,7 @@ static bool scope_add(Scope *s, const char *name, const char *c_name,
     return l->name && l->c_name;
 }
 
-/* docs/feng-defer-dev.md §5.6.2: thin wrapper that registers a defer entry in
+/* docs/engineering/feng-defer-dev.md §5.6.2: thin wrapper that registers a defer entry in
  * the scope's locals list. `defer_fn_name` is the generated static function
  * name; `defer_closure_name` is the generated stack-allocated closure struct
  * variable name (may be NULL when the defer body captures nothing); the type
@@ -2543,7 +2543,7 @@ static bool cg_encode_type_short(const CGType *t, Buf *out) {
 }
 
 /* Build the "__from__<param-types>" suffix that disambiguates overloads.
- * docs/feng-function.md §5 / docs/feng-type.md §5 require that overloads
+ * docs/specifications/feng-function.md §5 / docs/specifications/feng-type.md §5 require that overloads
  * differ by parameter signature, so encoding only the parameter types is
  * sufficient (return type is not part of the overload key). The suffix is
  * applied unconditionally — even single, unambiguous declarations gain it —
@@ -10288,7 +10288,7 @@ static bool cg_register_builtin_fit_shell(CG *cg,
 }
 
 static bool cg_is_builtin_named_fit_target(FengSlice name) {
-    /* After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
+    /* After AST alias normalization (docs/engineering/feng-scalar-alias-optimize.md §6),
      * only canonical width-explicit names reach codegen. */
     static const char *kBuiltinNames[] = {
         "i8", "i16", "i32", "i64",
@@ -11023,7 +11023,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         return;
     }
 
-    /* ---- Value-model aggregate descriptor (dev/feng-value-model-delivered.md
+    /* ---- Value-model aggregate descriptor (docs/engineering/feng-value-model-delivered.md
      * §3, §7.2, §8.2). For object-form specs the value layout is
      * { void *subject; const Witness *witness; } — exactly one managed
      * pointer slot at offset 0 (subject). The witness pointer is a
@@ -11035,7 +11035,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         s->c_aggregate_slots_name,
         s->c_value_struct_name);
 
-    /* ---- Hidden default-subject type (dev/feng-spec-codegen-pending.md §6).
+    /* ---- Hidden default-subject type (docs/engineering/feng-spec-codegen-delivered.md §6).
      * For each object-form spec we generate a real managed object that
      * backs default-initialised spec values: the default witness reads /
      * writes its fields, and method slots return per-type defaults. The
@@ -11345,7 +11345,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             } else if (cgtype_is_aggregate(sm->type)) {
                 /* Aggregate return type (object-form / union-form spec):
                  * declare a local, default-init it, and return by value.
-                 * Per docs/feng-spec.md §7 line 215 the default witness
+                 * Per docs/specifications/feng-spec.md §7 line 215 the default witness
                  * method thunk must return the spec's default zero. */
                 char *ret_cty = cg_ctype_dup(sm->type);
                 Buf init_call;
@@ -11400,7 +11400,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     buf_append_cstr(td, "};\n\n");
 
     /* Real default-init function: allocate fresh subject (+1) and bind
-     * the default witness. Per dev/feng-spec-codegen-pending.md §6.4 the
+     * the default witness. Per docs/engineering/feng-spec-codegen-delivered.md §6.4 the
      * factory already returned an owning reference, so no extra retain. */
     buf_append_fmt(td,
         "static void %s(void *_value_out) {\n"
@@ -12971,7 +12971,7 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
     if (!cg_emit_expr(cg, e->as.binary.left, &lr)) return false;
     if (!cg_emit_expr(cg, e->as.binary.right, &rr)) { er_free(&lr); return false; }
 
-    /* Spec `==` / `!=` — reference-identity per dev/feng-spec-codegen-pending.md
+    /* Spec `==` / `!=` — reference-identity per docs/engineering/feng-spec-codegen-delivered.md
      * §7. Semantic registers a SpecEquality sidecar entry for every binary
      * `==`/`!=` whose operands resolve to a spec; codegen consumes it and
      * lowers to a direct subject pointer compare. Both operands are fat
@@ -19349,7 +19349,7 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
 
 /* ===================== if / match expression emission =====================
  *
- * Per docs/feng-flow.md §4 the `if` expression form requires every branch
+ * Per docs/specifications/feng-flow.md §4 the `if` expression form requires every branch
  * (then, every `else if`, and a mandatory `else`) to be a block whose final
  * statement is an expression statement. The block's value is that
  * expression's value; semantic analysis has already verified all branch
@@ -19746,7 +19746,7 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
 /* Build a C boolean expression matching `target_tmp` against a single match
  * label. Label literal expressions are emitted via cg_emit_expr; per
- * docs/feng-flow.md §3 they must be compile-time constants/let-literal
+ * docs/specifications/feng-flow.md §3 they must be compile-time constants/let-literal
  * bindings, so the emitted C is a pure value with no scope side-effects.
  * String comparison uses inline length+memcmp lowering against the runtime's
  * FengString accessors so the runtime surface stays the value-model API set.
@@ -21575,7 +21575,7 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
         const Local *l = &scope->items[i - 1];
         if (l->is_param) continue;
         if (cgtype_is_defer(l->type)) {
-            /* docs/feng-defer-dev.md §5.6.3: defer nodes mix with managed
+            /* docs/engineering/feng-defer-dev.md §5.6.3: defer nodes mix with managed
              * locals in LIFO order on the cleanup chain. Pop the chain node
              * pushed at registration time, then invoke the generated defer
              * function with its closure (NULL when the defer body captures
@@ -21760,7 +21760,7 @@ static void cg_emit_cleanup_zero_for_aggregate_local(Buf *out,
  *
  * Feng has no `null`. Every binding without an explicit initializer (and
  * every object-literal field omitted by the user) takes the type's default
- * zero value, see docs/feng-builtin-type.md and docs/feng-type.md §5/§7.
+ * zero value, see docs/specifications/feng-builtin-type.md and docs/specifications/feng-type.md §5/§7.
  *
  * The string default is the process-wide IMMORTAL singleton produced by
  * feng_string_default(); the array default is a freshly allocated empty
@@ -22648,7 +22648,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
         er_free(&init);
     } else {
         /* No initializer: emit the type's default zero value. Per
-         * docs/feng-builtin-type.md & docs/feng-type.md §5/§7 every Feng
+         * docs/specifications/feng-builtin-type.md & docs/specifications/feng-type.md §5/§7 every Feng
          * type has a finite default zero (Feng has no `null`). For managed
          * types the resulting reference is owned by this slot and joins the
          * cleanup chain just like an explicit initializer. */
@@ -24039,7 +24039,7 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
          *     nulls the source's managed slots so the cleanup-chain
          *     release at scope exit is a well-defined no-op (per
          *     feng_aggregate.c §take), which is exactly the documented
-         *     spec-return move semantics (dev/feng-spec-codegen-pending
+         *     spec-return move semantics (docs/engineering/feng-spec-codegen-delivered
          *     §13.3.γ-2). _ret itself is null-initialised before take so
          *     take's "release dst slots first" precondition holds.
          */
@@ -24883,7 +24883,7 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
 /* Returns true if `expr` is or contains a match_op node with a binding.
  * Used by if/while codegen to decide whether to keep condition temporaries
  * alive across the body (the binding alias references the materialized
- * target tmp). Only `&&` chains propagate bindings (per docs/feng-flow.md
+ * target tmp). Only `&&` chains propagate bindings (per docs/specifications/feng-flow.md
  * §3.3); `||` / `!` subtrees do not. */
 static bool cg_expr_has_visible_match_binding(const FengExpr *expr) {
     if (expr == NULL) return false;
@@ -25005,7 +25005,7 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
     return true;
 }
 
-/* `for` statement — supports both forms documented in docs/feng-flow.md §6:
+/* `for` statement — supports both forms documented in docs/specifications/feng-flow.md §6:
  *
  *   1. Three-clause:  for [init]; [cond]; [update] { body }
  *   2. for/in       :  for let|var IT in SEQ { body }
@@ -26315,7 +26315,7 @@ static bool cg_emit_block(CG *cg, const FengBlock *block) {
 
 /* ---- defer capture analysis ------------------------------------------------
  *
- * docs/feng-defer-dev.md §5.4: scan the defer body AST, collect every
+ * docs/engineering/feng-defer-dev.md §5.4: scan the defer body AST, collect every
  * outer-scope binding name referenced inside it. We use the same approach
  * as cg_collect_capture_requirements_in_block_inner but operate on the
  * defer block; the captured names list is filtered by a shadow set built
@@ -27154,7 +27154,7 @@ static void cg_defer_capture_infos_free(DeferCaptureInfo *infos, size_t count) {
     free(infos);
 }
 
-/* docs/feng-defer-dev.md §5.1–§5.6: emit a defer statement.
+/* docs/engineering/feng-defer-dev.md §5.1–§5.6: emit a defer statement.
  *
  * Steps:
  *   1. Analyze capture requirements on the defer body (§5.4).
@@ -32226,7 +32226,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
      * constant by aliasing slots from X's per-member-spec witnesses — the slot
      * signatures are identical because intersection.members[] are cloned from
      * the member specs' members[], so direct `.slot = X_witness_for_M.slot`
-     * works with zero runtime overhead (no thunks). See dev/feng-intersection-
+     * works with zero runtime overhead (no thunks). See docs/engineering/feng-intersection-
      * type-draft.md §4.2. */
     if (s->form == FENG_SPEC_FORM_INTERSECTION) {
         char *t_san = cg_sanitize(t->feng_name, strlen(t->feng_name));
@@ -35341,7 +35341,7 @@ static bool cg_emit_main_wrapper(CG *cg, const FreeFn *main_fn) {
  *
  *   TRIVIAL          — contributes nothing.
  *   MANAGED_POINTER  — one managed_fields[] entry; one feng_release() call.
- *   AGGREGATE        — flattened per dev/feng-value-model-delivered.md §7.2:
+ *   AGGREGATE        — flattened per docs/engineering/feng-value-model-delivered.md §7.2:
  *                      one descriptor per FENG_SLOT_POINTER slot inside the
  *                      aggregate (with offset = field_offset + slot_offset),
  *                      plus a feng_aggregate_release() call on the field
@@ -36747,7 +36747,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
      * least one managed reference; otherwise the descriptor's
      * .release_children slot is left NULL so the runtime can skip the call.
      * This is a separate concept from the user finalizer (which lives in
-     * descriptor.finalizer); see docs/feng-lifetime.md §11/§13.2 and the
+     * descriptor.finalizer); see docs/specifications/feng-lifetime.md §11/§13.2 and the
      * FengReleaseChildrenFn typedef in feng_runtime.h.
      *
      * Per-field dispatch goes through cg_emit_field_release so the AGGREGATE
@@ -36784,7 +36784,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
      * functions; here we only emit a forward declaration so the descriptor
      * below can take its address. The runtime invokes this through
      * descriptor.finalizer with `void *self` pointing at the
-     * FengManagedHeader-prefixed instance. Per docs/feng-lifetime.md §13.2,
+     * FengManagedHeader-prefixed instance. Per docs/specifications/feng-lifetime.md §13.2,
      * any uncaught exception escaping the body is a deterministic crash; that
      * barrier is enforced one layer up by feng_finalizer_invoke
      * (src/runtime/feng_object.c). */
@@ -37349,7 +37349,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
         }
     }
 
-    /* Default-zero factory: per docs/feng-type.md §5/§7 every non-cyclic
+    /* Default-zero factory: per docs/specifications/feng-type.md §5/§7 every non-cyclic
      * user object type has a recursive default zero instance. The factory
      * allocates a fresh object via feng_object_new (which zeroes the struct
      * memory and runs no constructor) and then materialises non-zero

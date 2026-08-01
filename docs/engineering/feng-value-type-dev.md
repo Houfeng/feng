@@ -680,11 +680,11 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 ## 8 关联文档
 
 - [feng-value-model-delivered.md](./feng-value-model-delivered.md)：值模型基础设施（Phase 3 的基座）
-- [feng-type.md](../docs/feng-type.md)：`type` 类型规范
-- [feng-tuple.md](../docs/feng-tuple.md)：元组规范
-- [feng-spec.md](../docs/feng-spec.md)：`spec` 规范
-- [feng-fit.md](../docs/feng-fit.md)：`fit` 扩展规范
-- [feng-fit-builtin-type.md](../docs/feng-fit-builtin-type.md)：内建类型 fit 与装箱约束
+- [feng-type.md](../specifications/feng-type.md)：`type` 类型规范
+- [feng-tuple.md](../specifications/feng-tuple.md)：元组规范
+- [feng-spec.md](../specifications/feng-spec.md)：`spec` 规范
+- [feng-fit.md](../specifications/feng-fit.md)：`fit` 扩展规范
+- [feng-fit-builtin-type.md](../specifications/feng-fit-builtin-type.md)：内建类型 fit 与装箱约束
 
 ---
 

@@ -2,9 +2,9 @@
 
 > 状态：已实施  
 > 日期：2026-05-21  
-> 关联规范：[docs/feng-spec.md](../docs/feng-spec.md)、[docs/feng-function.md](../docs/feng-function.md)
+> 关联规范：[docs/specifications/feng-spec.md](../specifications/feng-spec.md)、[docs/specifications/feng-function.md](../specifications/feng-function.md)
 
-> 2026-05-21 更新：最终交付规则以 [docs/feng-spec.md](../docs/feng-spec.md) 为准。本文早期草案中的 callable-form `spec` 值间“结构可赋值”方案已收敛为：不同 callable-form `spec` 不允许隐式结构匹配；仅当实例化后签名完全一致时允许显式转换；未绑定的顶层函数、方法值、lambda 进入 callable-form `spec` 位置时仍保持结构匹配。
+> 2026-05-21 更新：最终交付规则以 [docs/specifications/feng-spec.md](../specifications/feng-spec.md) 为准。本文早期草案中的 callable-form `spec` 值间“结构可赋值”方案已收敛为：不同 callable-form `spec` 不允许隐式结构匹配；仅当实例化后签名完全一致时允许显式转换；未绑定的顶层函数、方法值、lambda 进入 callable-form `spec` 位置时仍保持结构匹配。
 >
 > 2026-05-21 补充：实例化后签名完全一致的 callable-form `spec` 显式转换必须是零转发的目标视角切换。`(BSpec)a` 不得生成 `FengCallableRewrap__...` 适配器，不得分配新的 wrapper/closure，且 `b(...)` 的每次调用开销必须小于等于 `a(...)`。
 

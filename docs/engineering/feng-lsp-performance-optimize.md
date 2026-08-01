@@ -600,7 +600,7 @@ resolve 的 `data` 必须包含可重新定位候选的稳定信息，不得依�
 | `Makefile` | `TEST_CLI_SUPPORT_SRCS` 显式列出 `server.c`、`service.c`、新增 LSP 模块和 `main.c`；模块及线程链接选项必须同步 |
 | `test/cli/` | 覆盖 last-successful、失败保留、generation、取消、Completion / Hover 快路径等协议行为 |
 | `scripts/` 或新增性能测试目录 | 从 stdio 协议层运行真实 LSP 性能基准 |
-| `dev/feng-lsp-performance-optimize.md` | 更新任务状态、实测结果和最终验收结论 |
+| `docs/engineering/feng-lsp-performance-optimize.md` | 更新任务状态、实测结果和最终验收结论 |
 
 VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full 或 Incremental text synchronization。除非实测发现客户端适配或观测需求，预计无需修改 `editors/feng-vscode/` 的生产代码；仍需执行其全量回归测试。
 

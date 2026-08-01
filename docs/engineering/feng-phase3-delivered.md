@@ -417,7 +417,7 @@ bool feng_symbol_ft_write_module(const FengSymbolModuleGraph *module,
 ### P5 `.ft` 生成与最终回归
 
 > `.ft` 生成仍属于 Phase 3，但作为本阶段最后一项功能任务处理。
-> 具体规范见 [docs/feng-symbol-table.md](../docs/feng-symbol-table.md)。
+> 具体规范见 [docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md)。
 
 补充约束:
 

@@ -6,7 +6,7 @@
 > 内建数值、布尔、字符串与别名规则统一见 [feng-builtin-type.md](./feng-builtin-type.md)。
 > 数组本体语义统一见 [feng-builtin-type.md](./feng-builtin-type.md)；数组标准库扩展能力见 [feng-std-array.md](./feng-std-array.md)。
 > 符号表导出格式统一见 [feng-symbol-table.md](./feng-symbol-table.md)。
-> 开发指导见 [dev/feng-fit-optimize-delivered.md](../dev/feng-fit-optimize-delivered.md)。
+> 开发指导见 [docs/engineering/feng-fit-optimize-delivered.md](../engineering/feng-fit-optimize-delivered.md)。
 
 ## 1 职责
 

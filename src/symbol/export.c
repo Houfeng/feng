@@ -60,7 +60,7 @@ static const FengAnnotation *find_calling_convention_annotation(const FengAnnota
 }
 
 static const char *canonical_builtin_name(FengSlice name) {
-    /* After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
+    /* After AST alias normalization (docs/engineering/feng-scalar-alias-optimize.md §6),
      * only canonical width-explicit names reach this function. */
     static const struct {
         const char *alias;

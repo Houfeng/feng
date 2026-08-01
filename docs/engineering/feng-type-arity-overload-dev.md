@@ -1,6 +1,6 @@
 # Feng Type/Spec 按泛型参数个数重载开发文档
 
-> 规范来源：[docs/feng-generics-draft.md](../docs/feng-generics-draft.md) §4-§6
+> 规范来源：[docs/specifications/feng-generics-draft.md](../specifications/feng-generics-draft.md) §4-§6
 > 本文记录实现方案、数据结构改造、影响面分析与待办任务。
 
 ---
@@ -18,13 +18,13 @@
 
 ### 0.2 Type/Spec 泛型重载（未实现）
 
-**规范已明确要求**（`docs/feng-generics-draft.md`）：
+**规范已明确要求**（`docs/specifications/feng-generics-draft.md`）：
 
 - 正确语法九：`type UserType<T>` 和 `type UserType<T, U>` 应允许共存
 - [必须] "同一作用域内,同 kind 的具名泛型 type 与具名泛型 spec 的声明 identity 按'名称 + 泛型参数数量'确定"
 - [必须] "所有具名泛型 type / spec 的使用位置都必须按'名称 + 泛型参数数量'精确解析到已存在声明"
 
-> **规范措辞待同步**：原文用"同 kind"，本次实现已将冲突维度从 `FengDeclKind` 收紧为 7 类 category（§0.3）。需同步更新 `docs/feng-generics-draft.md` 的措辞为"同 category"。
+> **规范措辞待同步**：原文用"同 kind"，本次实现已将冲突维度从 `FengDeclKind` 收紧为 7 类 category（§0.3）。需同步更新 `docs/specifications/feng-generics-draft.md` 的措辞为"同 category"。
 
 ### 0.3 支持 arity 重载的声明形式（完整清单）
 
@@ -208,7 +208,7 @@ static FengOverloadCategory decl_overload_category(const FengDecl *decl) {
 
 ### 3.0 冲突判定规则总览
 
-**触发时机约束（本次不改动）**：冲突检测的触发时机遵循 [`dev/feng-module-optimize-dev.md`](./feng-module-optimize-dev.md) §0 六类规则的定义——涉及 import 的总是惰性（规则 1/2/3，使用点报 AE0005），纯本地的非 func 总是急切（规则 4，定义处报 AE0213-AE0216），func 同模块允许重载、仅重载冲突急切报错（规则 5，AE0217-AE0220）。**本次优化只改冲突"判定规则"（引入 category 维度 + arity 维度），不改"触发时机"**——急切的仍急切，惰性的仍惰性。
+**触发时机约束（本次不改动）**：冲突检测的触发时机遵循 [`docs/engineering/feng-module-optimize-dev.md`](./feng-module-optimize-dev.md) §0 六类规则的定义——涉及 import 的总是惰性（规则 1/2/3，使用点报 AE0005），纯本地的非 func 总是急切（规则 4，定义处报 AE0213-AE0216），func 同模块允许重载、仅重载冲突急切报错（规则 5，AE0217-AE0220）。**本次优化只改冲突"判定规则"（引入 category 维度 + arity 维度），不改"触发时机"**——急切的仍急切，惰性的仍惰性。
 
 **术语澄清——本文规则编号 vs module-optimize-dev.md §0 规则编号**：两者同名不同义，不要混淆。
 
@@ -231,7 +231,7 @@ static FengOverloadCategory decl_overload_category(const FengDecl *decl) {
   - **同模块重载面内按 arity 精确匹配**：跨模块歧义检测通过后（`report_name_ambiguity_if_any` 返回 true），类型引用解析走 `find_named_type_decl(name, arity)` 按 (name, arity) 精确匹配同模块重载面内的目标声明（§4）。`collect_symbol_candidates` **不增加 arity 参数**——arity 精确匹配由下游 `find_named_type_decl` 负责，不在候选收集阶段做
   - `report_name_ambiguity_if_any`（L2716）**不透传 arity**：歧义检测是 name-only 的，与 arity 无关
 - **跨模块规则（本次不改动触发时机，仅澄清语义）**：不同模块间一律 name-only 同名即冲突（与顶层函数重载一致——同模块才构成同一重载面，跨模块 name-only 判定）。模块A `type Box<T>` 与模块B `type Box<T, U>` 在使用方同时 import 时，**不论 arity 都报 AE0005**（lazy，使用点触发）。`collect_symbol_candidates` 不按 arity 筛选，`candidates_form_ambiguity` 按 `provider_module` 判定歧义
-- **规则 2 影响**（急切，不改触发时机）：`check_symbol_conflicts` 中跨 category 冲突检查按 name 判定。当前实现中，type/spec/enum 三者共享 `visible_types` 数组（已通过 `find_visible_type_index` name 查找间接实现 name-only 冲突，L25080/L25113/L25323），function/binding 共享 `visible_values` 数组（同理已实现，L25144/L25191）；但 **function/binding 与 type/spec/enum 之间无跨数组检查**（既有缺陷，非泛型也存在，如 `type Box{}` 与 `func Box()` 同名当前不报错），本次新增 `has_value_name_only_conflict` / `has_type_name_only_conflict` 分别在注册前查**对岸数组**按 name + category 判定（§3.3）。**本次修复不依赖 scope 优化**——`dev/feng-scope-optimize-dev.md` 是 AST 多级作用域链统一（模块→文件→类型→函数→块）的优化，与顶层符号冲突检测是不同层面，且该优化尚未实施；本次在双表架构上独立修复跨数组漏检
+- **规则 2 影响**（急切，不改触发时机）：`check_symbol_conflicts` 中跨 category 冲突检查按 name 判定。当前实现中，type/spec/enum 三者共享 `visible_types` 数组（已通过 `find_visible_type_index` name 查找间接实现 name-only 冲突，L25080/L25113/L25323），function/binding 共享 `visible_values` 数组（同理已实现，L25144/L25191）；但 **function/binding 与 type/spec/enum 之间无跨数组检查**（既有缺陷，非泛型也存在，如 `type Box{}` 与 `func Box()` 同名当前不报错），本次新增 `has_value_name_only_conflict` / `has_type_name_only_conflict` 分别在注册前查**对岸数组**按 name + category 判定（§3.3）。**本次修复不依赖 scope 优化**——`docs/engineering/feng-scope-optimize-draft.md` 是 AST 多级作用域链统一（模块→文件→类型→函数→块）的优化，与顶层符号冲突检测是不同层面，且该优化尚未实施；本次在双表架构上独立修复跨数组漏检
 - **规则 3 影响**（急切，不改触发时机）：`check_symbol_conflicts` 中同 category 冲突检查：5 类 type/spec category 改为按 `(name, arity)` 判定（**核心改动点**）；FUNCTION 仍走现有 `FunctionOverloadSetEntry` / `compute_overload_match_priority` 多维重载机制（**不改动**）；NO_OVERLOADING 仍按 name 判定（现有行为，不变）
 
 - **规则 2 与规则 3 的关系**：规则 2 在 category 维度判定"跨面冲突"（一律 name-only）；规则 3 在 category 维度判定"同面重载"——5 类 type/spec 按 (name, arity)，FUNCTION 按现有函数多维重载，NO_OVERLOADING 按 name（即同面也是 name-only，等价于规则 2 的行为）。两者均以 category 为边界，取代原文档的 kind 维度判定。
@@ -396,11 +396,11 @@ static bool has_type_name_only_conflict(
 
 **错误码决策（已定）**：跨数组 name-only 冲突（即跨 category 冲突）统一使用通用段 **AE0004**（"跨结构或跨类型冲突"）。理由：
 
-- 00 通用段定义即"跨结构的基础语义约束"（`docs/feng-error-codes-ae.md` §00），与"function/binding 与 type/spec/enum 跨数组冲突"语义对齐
+- 00 通用段定义即"跨结构的基础语义约束"（`docs/specifications/feng-error-codes-ae.md` §00），与"function/binding 与 type/spec/enum 跨数组冲突"语义对齐
 - AE0002 旧语义为 @runtime 相关（已迁移至 AE1301），码位虽释放但语义易混，避开
 - AE0004/AE0006 旧语义为 @runtime/@abi 相关（已迁至 AE1320/AE1303），码位释放且**代码中完全未被引用**（`grep -rn "AE0004\|AE0006" src/` 无结果），本次复用为通用段新错误码
 - 同 category 内重复仍用 AE0213（type/spec）/ AE0214（enum）/ AE0215-AE0220（function/binding），按 decl kind 选码；跨 category 冲突用 AE0004，message 区分"跨 category 冲突"
-- 实施时需同步在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目
+- 实施时需同步在 `docs/specifications/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目
 
 ---
 
@@ -562,18 +562,18 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 ### 6.1 规范确认
 
-- [x] 同步更新 `docs/feng-generics-draft.md`：将"同 kind"措辞改为"同 category"（§0.3 的 7 类），定义 7 类 category 划分及派生规则
-- [x] 确认 `docs/feng-generics-draft.md` 中相关规范是否完整
-- [x] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目（"跨 category name-only 冲突"），message 形如 "'%.*s' conflicts with an existing visible name in a different category"
-- [x] 在 `docs/feng-error-codes-ae.md` §00 通用段新增 AE0006 条目（"使用点裸名引用泛型"），message 形如 "'%.*s' is a generic type and requires type arguments"
+- [x] 同步更新 `docs/specifications/feng-generics-draft.md`：将"同 kind"措辞改为"同 category"（§0.3 的 7 类），定义 7 类 category 划分及派生规则
+- [x] 确认 `docs/specifications/feng-generics-draft.md` 中相关规范是否完整
+- [x] 在 `docs/specifications/feng-error-codes-ae.md` §00 通用段新增 AE0004 条目（"跨 category name-only 冲突"），message 形如 "'%.*s' conflicts with an existing visible name in a different category"
+- [x] 在 `docs/specifications/feng-error-codes-ae.md` §00 通用段新增 AE0006 条目（"使用点裸名引用泛型"），message 形如 "'%.*s' is a generic type and requires type arguments"
 
 **备注（已决策/已查证/已澄清，无需进一步改动）**：
 
 - **错误码决策**：跨 category name-only 冲突用 AE0004（§3.3）；使用点裸名引用泛型用 AE0006（§4.6，对 type/spec 都适用，按"不跨结构但通用"先例归通用段）；同 category 重复仍用 AE0213（type/spec）/ AE0214（enum）/ AE0215-AE0220（function/binding）；arity 不匹配保留 AE1013/AE1014/AE1015，仅重构触发逻辑（§4.5）
 - **AE0004/AE0006 码位可用性已查证**：代码中完全未被引用（`grep -rn "AE0004\|AE0006" src/` 无结果），错误码文档中作为"原错误码"出现（旧语义已迁至 AE1320/AE1303），码位实际处于释放可用状态
 - **跨 kind 冲突规则已决策**：规则 2，同模块不同 category 按 name 判定冲突（补充 function/binding 与 type/spec/enum 跨数组检查，§3.3）
-- **触发时机约束已决策**：本次只改判定规则，不改触发时机（急切的仍急切，惰性的仍惰性，遵循 `dev/feng-module-optimize-dev.md` §0 六类规则）
-- **与 scope 优化的关系已澄清**：`dev/feng-scope-optimize-dev.md` 是 AST 多级作用域链统一（模块→文件→类型→函数→块）的优化，与顶层符号冲突检测是不同层面，且该优化尚未实施；本次在双表架构上独立修复跨数组漏检，不依赖 scope 优化，不与 scope 优化冲突
+- **触发时机约束已决策**：本次只改判定规则，不改触发时机（急切的仍急切，惰性的仍惰性，遵循 `docs/engineering/feng-module-optimize-dev.md` §0 六类规则）
+- **与 scope 优化的关系已澄清**：`docs/engineering/feng-scope-optimize-draft.md` 是 AST 多级作用域链统一（模块→文件→类型→函数→块）的优化，与顶层符号冲突检测是不同层面，且该优化尚未实施；本次在双表架构上独立修复跨数组漏检，不依赖 scope 优化，不与 scope 优化冲突
 - **独立性**：仅文档变更，可独立交付。无代码变更，回归测试行为不变。
 
 ### 6.2 辅助函数实现 + 存在性检查调用点改造（已与 §6.3 合并交付）
@@ -620,7 +620,7 @@ static const FengDecl *find_named_type_decl(const ResolveContext *context,
 
 **不改动触发时机**：
 
-- import 阶段仍不做冲突检查（惰性，§3.0 规则 1），仅做去重 + 候选收集；check_symbol_conflicts 中急切/惰性的触发时机遵循 `dev/feng-module-optimize-dev.md` §0 六类规则，本次只改判定规则不改触发时机。
+- import 阶段仍不做冲突检查（惰性，§3.0 规则 1），仅做去重 + 候选收集；check_symbol_conflicts 中急切/惰性的触发时机遵循 `docs/engineering/feng-module-optimize-dev.md` §0 六类规则，本次只改判定规则不改触发时机。
 
 **备注（无需改动）**：
 
@@ -757,7 +757,7 @@ LSP 不直接调用 `find_visible_type` 等 static 函数，而是通过两类�
 
 ### 6.9 裸类型构造目标 arity=0 修复
 
-规范依据见 `docs/feng-generics-draft.md` §4-§6：类型构造目标未显式携带类型实参时，其 arity 固定为 0；调用点泛型推导不推导构造目标所属 `type` 的类型参数。该规则与 C# 的同名不同 arity 类型解析一致。
+规范依据见 `docs/specifications/feng-generics-draft.md` §4-§6：类型构造目标未显式携带类型实参时，其 arity 固定为 0；调用点泛型推导不推导构造目标所属 `type` 的类型参数。该规则与 C# 的同名不同 arity 类型解析一致。
 
 修复前缺陷：
 
@@ -901,8 +901,8 @@ func main() {
 
 ## 9 关联文档
 
-- [docs/feng-generics-draft.md](../docs/feng-generics-draft.md)：泛型规范与语法定义
-- [docs/feng-type.md](../docs/feng-type.md)：类型系统规范
-- [docs/feng-spec.md](../docs/feng-spec.md)：spec 规范
-- [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md)：错误码定义
-- [CLAUDE.md](../CLAUDE.md)：开发原则与流程
+- [docs/specifications/feng-generics-draft.md](../specifications/feng-generics-draft.md)：泛型规范与语法定义
+- [docs/specifications/feng-type.md](../specifications/feng-type.md)：类型系统规范
+- [docs/specifications/feng-spec.md](../specifications/feng-spec.md)：spec 规范
+- [docs/specifications/feng-error-codes-ae.md](../specifications/feng-error-codes-ae.md)：错误码定义
+- [AGENTS.md](../../AGENTS.md)：开发原则与流程

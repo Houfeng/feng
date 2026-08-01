@@ -107,12 +107,12 @@ let label = match value {
 
 ### 3. 文档更新
 
-#### 3.1 docs/feng-flow.md
+#### 3.1 docs/specifications/feng-flow.md
 
 更新 §4 `if` 表达式规则:
 - 在现有规则后补充: 各分支块的最后一条语句也允许是 `throw`，此时该分支不产生结果值。
 
-#### 3.2 docs/feng-exception.md
+#### 3.2 docs/specifications/feng-exception.md
 
 补充说明 `if`/`match` 表达式分支中也允许以 `throw` 结尾。
 
@@ -130,8 +130,8 @@ let label = match value {
 - [x] **T5. 语义: infer_expr_type** — FENG_EXPR_IF / FENG_EXPR_MATCH 推导时，throw 分支类型视为 unknown，结果取第一个已知的非 throw 分支类型
 - [x] **T6. 代码生成: cg_emit_if_expr** — throw 分支走 cg_emit_block 整体发射，非 throw 分支走 cg_emit_branch_into_slot；两个都 throw 时不分配 result slot
 - [x] **T7. 代码生成: cg_emit_match_expr** — 同上模式，throw 分支走 cg_emit_block
-- [x] **T8. 文档: docs/feng-flow.md** — 更新 §4 if 表达式规则，补充 throw 允许说明
-- [x] **T9. 文档: docs/feng-exception.md** — 补充 if/match 表达式分支允许 throw
+- [x] **T8. 文档: docs/specifications/feng-flow.md** — 更新 §4 if 表达式规则，补充 throw 允许说明
+- [x] **T9. 文档: docs/specifications/feng-exception.md** — 补充 if/match 表达式分支允许 throw
 - [x] **T10. 全量回归测试** — 编译通过并运行现有测试套件
 
 ## 验证

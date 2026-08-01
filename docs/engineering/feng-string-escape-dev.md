@@ -2,7 +2,7 @@
 
 ## 规范阶段
 
-- [x] 编写字符串转义序列规范文档 `docs/feng-string-escape.md`
+- [x] 编写字符串转义序列规范文档 `docs/specifications/feng-string-escape.md`
 - [x] 明确 `\xNN` 语法规则（恰好 2 位十六进制、不足报错、支持连续书写）
 - [x] 明确 Codegen 解码实现方案并写入规范文档
 

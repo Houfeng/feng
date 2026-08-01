@@ -65,7 +65,7 @@ compiler 将后一种写法降为对前一种普通函数的调用。`@operator`
 
 ### 2.3 与属性的边界
 
-索引访问不属于运算符重载。其候选设计已经由 [Feng 语言属性规范草案](../docs/feng-prop-draft.md) 归入索引属性：
+索引访问不属于运算符重载。其候选设计已经由 [Feng 语言属性规范草案](../specifications/feng-prop-draft.md) 归入索引属性：
 
 ```text
 obj.name       -> 普通属性 getter/setter 调用语法糖
@@ -309,9 +309,9 @@ func string_equal(left: String, right: String): bool;
 
 ## 9 关联文档
 
-- [Feng 语言属性规范草案](../docs/feng-prop-draft.md)：普通属性与索引属性候选设计。
-- [Feng 语言函数规范](../docs/feng-function.md)：普通函数、重载与调用规则。
-- [Feng 模块与包规范](../docs/feng-module.md)：文件级 import 可见性与公开符号导入规则。
-- [Feng 契约适配规范](../docs/feng-fit.md)：现有孤儿适配与导出限制。
-- [Feng 表达式与运算规范](../docs/feng-expression.md)：当前内建运算符、优先级及表达式语义。
-- [Feng 语言核心规范](../docs/feng-language.md)：关键字、内建注解与核心能力总览。
+- [Feng 语言属性规范草案](../specifications/feng-prop-draft.md)：普通属性与索引属性候选设计。
+- [Feng 语言函数规范](../specifications/feng-function.md)：普通函数、重载与调用规则。
+- [Feng 模块与包规范](../specifications/feng-module.md)：文件级 import 可见性与公开符号导入规则。
+- [Feng 契约适配规范](../specifications/feng-fit.md)：现有孤儿适配与导出限制。
+- [Feng 表达式与运算规范](../specifications/feng-expression.md)：当前内建运算符、优先级及表达式语义。
+- [Feng 语言核心规范](../specifications/feng-language.md)：关键字、内建注解与核心能力总览。

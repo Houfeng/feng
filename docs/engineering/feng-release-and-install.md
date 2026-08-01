@@ -1,8 +1,8 @@
 # Feng 分发与安装方案
 
 > 本方案收敛 Feng 工具链（编译器 + 运行时静态库 + 精简 toolchain）的分发包结构、构建发布工作流、安装方式。
-> `.fb` 包格式（feng 项目间源码级闭源分发）由 [feng-package.md](../docs/feng-package.md) 单独定义，不在本文件重复。
-> CLI 命令与 `--platform` 选项由 [feng-cli.md](../docs/feng-cli.md) 单独定义，`<os>-<arch>[-<abi>]` 完整平台标识由 [feng-os-arch.md](../docs/feng-os-arch.md) 统一定义，工具链选择与 Clang target / sysroot 转换由 [feng-build.md](../docs/feng-build.md) 定义；本方案只定义分发与安装布局及实施阶段。
+> `.fb` 包格式（feng 项目间源码级闭源分发）由 [feng-package.md](../specifications/feng-package.md) 单独定义，不在本文件重复。
+> CLI 命令与 `--platform` 选项由 [feng-cli.md](../specifications/feng-cli.md) 单独定义，`<os>-<arch>[-<abi>]` 完整平台标识由 [feng-os-arch.md](../specifications/feng-os-arch.md) 统一定义，工具链选择与 Clang target / sysroot 转换由 [feng-build.md](../specifications/feng-build.md) 定义；本方案只定义分发与安装布局及实施阶段。
 
 ## 1 目标与范围
 
@@ -38,7 +38,7 @@ feng-<version>-<platform>.zip
 ```
 
 - `feng` 后紧跟 `<version>`，明确表示该版本为 Feng 自身版本；`<platform>` 作为 host 平台后缀。
-- `<platform>` 取值见 [feng-os-arch.md](../docs/feng-os-arch.md)，不在本文件重复定义。首版 Linux 工具运行于 GNU/glibc host，因此发行包名称必须包含 `-gnu`。
+- `<platform>` 取值见 [feng-os-arch.md](../specifications/feng-os-arch.md)，不在本文件重复定义。首版 Linux 工具运行于 GNU/glibc host，因此发行包名称必须包含 `-gnu`。
 - 仓库根目录 `VERSION` 是普通分支、pull request、手动试发和本地构建的默认版本来源，内容为不带 `v` 前缀的单行 `<version>`。
 - 正式发布以 GitHub 仓库中新建的 Git tag 为权威版本来源。tag 固定为 `v<version>`，形如 `v0.1.0`、`v0.2.0-rc.1`；工作流去掉 `v` 后注入 `feng --version`，并用于分发包名和包内 `VERSION`。本地创建后 push 与直接在 GitHub 创建等价。
 
@@ -117,18 +117,18 @@ feng-<version>-<platform>/
 - `lib/` 按完整目标平台分目录。三份分发包均包含五份 runtime；macOS runtime 在合法 macOS 环境构建，Linux runtime 使用对应 sysroot 构建。发布时校验对象格式、CPU 架构和平台，禁止跨平台或 libc ABI 复用。
 - `include/` 仅存放一份平台无关的 Feng 头文件。其中 `feng_generated.h` 为生成 C 提供 SDK-free 编译所需的自包含声明闭包，`feng_runtime.h` 与 `feng_runtime_contract.inc` 定义 runtime 公共 ABI；正常目标的标准和系统头文件仍由目标 SDK / sysroot 提供，不得复制 Apple SDK 头文件。
 - `toolchain/llvm/` 保持 LLVM 官方包布局，所有工具来自同一版本、同一 host 平台包。每份 Linux 分发包只包含当前 host 架构的一份 LLVM，同时支持 GNU 和 musl 目标。
-- `toolchain/sysroot/` 按完整 Linux 目标平台分目录，保留编译和链接所需文件及目录关系，移除 GCC、binutils 和 musl.cc 工具。native 与交叉编译共用 sysroot，调用参数见 [feng-build.md](../docs/feng-build.md)。
+- `toolchain/sysroot/` 按完整 Linux 目标平台分目录，保留编译和链接所需文件及目录关系，移除 GCC、binutils 和 musl.cc 工具。native 与交叉编译共用 sysroot，调用参数见 [feng-build.md](../specifications/feng-build.md)。
 - `pkg/` 存放发行任务准备好的精确版本 `.fb`，文件名固定为
   `<name>-<version>.fb`。三个 host 分发包使用同一组输入；组装流程只校验并原样复制,
   不重新构建或修改 `.fb`。随附包的安装来源优先级和 cache 语义统一由
-  [feng-deps.md](../docs/feng-deps.md#1-精确版本包来源) 定义。
+  [feng-deps.md](../specifications/feng-deps.md#1-精确版本包来源) 定义。
 - 当前官方发行的随附包集合包含 `std`。该集合由独立脚本一次构建为多平台 `.fb`，
   再作为单独 artifact 交给汇聚任务；具体 CI 实施边界见
   [Feng 发行包随附 std 的 CI 实施方案](./feng-std-release-package-dev.md)。
 - sysroot 的来源、版本、裁剪和许可信息见 §5.3。禁止复制 host `/usr`。
 - 分发包不包含 Feng 源码、中间产物或构建缓存；`pkg/` 中经过校验的随附 `.fb`
   是正式分发物，不属于构建缓存。
-- `feng` 按自身位置查找 `../lib/`、`../include/` 和 `../toolchain/llvm/bin/`，不使用 `FENG_HOME` 或 `FENG_TOOLCHAIN`。查找顺序见 [feng-build.md](../docs/feng-build.md) 和 [feng-cli.md](../docs/feng-cli.md)。
+- `feng` 按自身位置查找 `../lib/`、`../include/` 和 `../toolchain/llvm/bin/`，不使用 `FENG_HOME` 或 `FENG_TOOLCHAIN`。查找顺序见 [feng-build.md](../specifications/feng-build.md) 和 [feng-cli.md](../specifications/feng-cli.md)。
 
 ## 5 toolchain 形态
 
@@ -345,12 +345,12 @@ curl -fsSL https://feng-lang.com/install.sh |
 
 本阶段收敛发行包与源码开发的路径基础设施，并切换 driver 默认使用当前 host 的 bundled LLVM；同时完成 macOS native bundled Clang 必需的系统 SDK 定位。不引入显式目标平台、target triple、用户 `--sysroot` 或其他交叉编译逻辑，也不改变 Feng 自身现有 `build/` 产物层级。LLVM 可执行文件始终属于 host 工具，native 与后续交叉编译共用同一套定位结果，目标平台只影响后续传给 LLVM 的编译与链接参数。
 
-Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 值，也不支持 GCC。Linux host 在严格 C11 模式下统一启用 glibc 的 GNU feature namespace，以公开源码和测试实际使用的 GNU、XSI 与 POSIX.1-2008 接口。Feng 语义分析器直接调用 `fmod` 完成编译期浮点常量计算，因此仅为包含该语义分析器对象的 Linux host 工具与测试可执行文件链接 `libm`；这属于 Feng 编译器自身的构建依赖，不得用于替代 [feng-build.md](../docs/feng-build.md#25-收集链接信息) 规定的 Feng 用户程序 external 链接信息收集机制。
+Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 值，也不支持 GCC。Linux host 在严格 C11 模式下统一启用 glibc 的 GNU feature namespace，以公开源码和测试实际使用的 GNU、XSI 与 POSIX.1-2008 接口。Feng 语义分析器直接调用 `fmod` 完成编译期浮点常量计算，因此仅为包含该语义分析器对象的 Linux host 工具与测试可执行文件链接 `libm`；这属于 Feng 编译器自身的构建依赖，不得用于替代 [feng-build.md](../specifications/feng-build.md#25-收集链接信息) 规定的 Feng 用户程序 external 链接信息收集机制。
 
 - [x] Makefile 在缺失或目标不匹配时创建或更新 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>` 和 `build/toolchain/sysroot -> ../../toolchain/sysroot`；链接已经匹配且所有构建产物均为最新时，`make all` 不写入任何文件，并明确输出包含 `Nothing to be done` 的提示。
 - [x] 在 `src/cli/common.*` 统一实现 Feng 可执行文件、安装根、相对路径和 `PATH` 工具的查找与错误提示。runtime 和 host LLVM 共用该实现，`lldb-dap` 在 §8.4 接入。不增加工具链根目录环境变量。
 - [x] 测试可执行文件查找、相对路径、软链接布局和缺失路径错误。
-- [x] driver 按 [feng-build.md](../docs/feng-build.md) 的顺序选择 host 工具：`FENG_CC` / `FENG_AR` / `FENG_RANLIB`、bundled `clang` / `llvm-ar` / `llvm-ranlib`、`CC` / `AR` / `RANLIB`、系统 `cc` / `ar` / `ranlib`。native 和交叉编译共用该结果。
+- [x] driver 按 [feng-build.md](../specifications/feng-build.md) 的顺序选择 host 工具：`FENG_CC` / `FENG_AR` / `FENG_RANLIB`、bundled `clang` / `llvm-ar` / `llvm-ranlib`、`CC` / `AR` / `RANLIB`、系统 `cc` / `ar` / `ranlib`。native 和交叉编译共用该结果。
 - [x] 测试上述工具选择顺序。bundled 工具缺失时继续查找；bundled 工具损坏、环境变量无效或全部工具不可用时明确报错。本阶段不加入 `--target`、`--sysroot` 或目标 runtime 测试。
 - [x] macOS native 编译使用 `xcrun --sdk macosx --show-sdk-path` 定位 SDK，并传入一个 `-isysroot`。`xcrun` 或 SDK 不可用时直接报错，不增加显式 `--sysroot` 或跨目标选择。
 - [x] Makefile 固定使用 `clang` 构建 Feng，不检查编译器类型，也不依赖 GCC。Linux host 启用源码和测试所需的 GNU、XSI 与 POSIX.1-2008 声明；仅为使用语义分析器的 host 程序链接 `libm`，不依赖 macOS `libSystem` 的默认行为。
@@ -362,7 +362,7 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 本阶段只更新 `scripts/build_libunwind.sh`。
 
-平台标识以 [feng-os-arch.md](../docs/feng-os-arch.md) 为准：
+平台标识以 [feng-os-arch.md](../specifications/feng-os-arch.md) 为准：
 
 | 构建环境 | 预构建产物 |
 |----------|------------|
@@ -388,13 +388,13 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [x] Feng 编译器：在三个构建环境构建并运行；失败时更新构建脚本。各平台均输出 `build/bin/feng`，并能正常执行 `feng --version`。
 - [x] Feng runtime：在三个构建环境使用对应 SDK / sysroot 生成上表五份 runtime。每份只合并 `extlib/<platform>/libfeng_unwind.a` 中的同平台预构建库，不包含 libc，并通过平台、文件格式和 CPU 架构校验。
 - [x] 各平台的 Feng 编译器编译 `.ff` 文件时，均能找到对应平台的 runtime 和 SDK / sysroot。
-- [x] 三个发行平台的 `feng dap` 均按 [feng-cli.md](../docs/feng-cli.md) 定位并启动 `lldb-dap`，路径处理复用 §8.2，并通过定位失败、启动失败和真实调试测试。
+- [x] 三个发行平台的 `feng dap` 均按 [feng-cli.md](../specifications/feng-cli.md) 定位并启动 `lldb-dap`，路径处理复用 §8.2，并通过定位失败、启动失败和真实调试测试。
 - [x] 按 [feng-std-extlib-build.md](./feng-std-extlib-build.md) 更新标准库依赖的 extlib 预构建脚本，分别生成并校验三个发行 host 的预构建物；验收中发现的小型平台兼容问题在本阶段修复。
 - [x] `macos-arm64`、`linux-x64-gnu`、`linux-arm64-gnu` 的全量 `make test` 均通过。
 
 ### 8.5 支持交叉编译
 
-项目命令的参数行为以 [feng-cli.md](../docs/feng-cli.md#项目平台选择统一规则) 为准。
+项目命令的参数行为以 [feng-cli.md](../specifications/feng-cli.md#项目平台选择统一规则) 为准。
 
 - [x] 按 [feng-std-extlib-build.md](./feng-std-extlib-build.md) 更新标准库各 extlib 的预构建脚本，在三个发行 host 构建环境完整预构建并校验五个目标平台版本，供后续交叉编译验证使用。
 - [x] 直编支持 `--platform=<platform>` 和 `--sysroot=<path>`。
@@ -419,7 +419,7 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 - [x] `.github/workflows/release.yml`：版本发行与手动试发时并行运行独立
   `bundled_packages` Job；workflow 只调用随附包脚本并传递 artifact，汇聚任务消费
   同一份输入组装三个 host 发行包。
-- [x] `scripts/install.sh`：按 [feng-os-arch.md](../docs/feng-os-arch.md) 识别当前 host，下载并校验对应发行包，原子完成安装和 `PATH` 配置；失败时回滚已有安装且不留半成品。
+- [x] `scripts/install.sh`：按 [feng-os-arch.md](../specifications/feng-os-arch.md) 识别当前 host，下载并校验对应发行包，原子完成安装和 `PATH` 配置；失败时回滚已有安装且不留半成品。
 - [x] `.github/workflows/static.yml`：从 `website/` 与唯一源文件
   `scripts/install.sh` 生成 GitHub Pages staging，将在线安装脚本发布为官网根目录的
   `/install.sh`，不得在 `website/` 中维护脚本副本。

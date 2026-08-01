@@ -253,7 +253,7 @@ fit UserType<T> { ... }
 
 分为「必须、禁止、建议」。
 
-- [必须] 契约适配形式中,`fit A: B, C, ...` 的左侧必须是合法 fit 目标（具体 `type`、`enum` 或 [feng-fit-builtin-type-draft.md](./feng-fit-builtin-type-draft.md) 允许的内建目标）,右侧每一项都必须是 object-form `spec`。
+- [必须] 契约适配形式中,`fit A: B, C, ...` 的左侧必须是合法 fit 目标（具体 `type`、`enum` 或 [feng-fit-builtin-type.md](./feng-fit-builtin-type.md) 允许的内建目标）,右侧每一项都必须是 object-form `spec`。
 - [必须] 若目标 `type` 为泛型 `type`,则允许使用 `fit A<T>: B<T>`、`fit A<T>: B<T> {}` 与 `fit A<T> {}` 这类泛型 `fit` 形式。
 - [必须] 泛型 `fit` 左侧的类型参数列表必须逐位置引用目标泛型 `type` 已声明的类型参数。
 - [必须] 当 `fit` 左侧是具名 `type` 目标时,必须按“名称 + 泛型参数数量”解析到一个已存在的 `type` 声明；同名但泛型参数数量不同的 `type` 不得互相代替。
@@ -284,7 +284,7 @@ fit UserType<T> { ... }
 
 ## 6 编译期
 
-- 编译器必须检查 `fit A: ...` 中左侧是否是合法 fit 目标（具体 `type`、`enum` 或 [feng-fit-builtin-type-draft.md](./feng-fit-builtin-type-draft.md) 允许的内建目标）。
+- 编译器必须检查 `fit A: ...` 中左侧是否是合法 fit 目标（具体 `type`、`enum` 或 [feng-fit-builtin-type.md](./feng-fit-builtin-type.md) 允许的内建目标）。
 - 编译器必须在左侧为泛型 `type` 目标时,检查其是否逐位置引用了目标泛型 `type` 已声明的全部类型参数,并拒绝任何特化、增删、重排或改写。
 - 编译器必须在左侧为具名 `type` 目标时,先按“名称 + 泛型参数数量”解析目标 `type`；若不存在精确匹配的 `type` 声明,必须按“找不到目标 type 声明”报错。
 - 编译器必须检查契约适配右侧是否全部为 object-form `spec`。

@@ -51,7 +51,7 @@ open let values: List<Hidden>;         // 错误
 ### 2.1 可见性一致性
 
 有效可见范围、检查边界、递归组成类型、推导类型和诊断规则统一由
-[Feng 语言可见性规范](../docs/feng-visibility.md) 定义。
+[Feng 语言可见性规范](../specifications/feng-visibility.md) 定义。
 
 ### 2.2 私有表示依赖
 
@@ -87,7 +87,7 @@ open let values: List<Hidden>;         // 错误
 收录的私有依赖保持私有，只进入编译器内部声明查询，不进入用户名称查找、
 导入和补全。语义分析和 codegen 按声明身份使用这些依赖。
 
-本节规则由 `docs/feng-symbol-table.md` 定义；其他正式文档只引用，不重复定义。
+本节规则由 `docs/specifications/feng-symbol-table.md` 定义；其他正式文档只引用，不重复定义。
 
 ## 3. 根因
 
@@ -112,7 +112,7 @@ fcts 用例，且全量回归测试 `make test` 通过后，才可标记完成�
 
 - [x] **TODO 1：修复同包私有泛型表示类型具化**
 
-  - [x] 在 `docs/feng-visibility.md` 明确：私有成员可以使用其声明位置可访问的
+  - [x] 在 `docs/specifications/feng-visibility.md` 明确：私有成员可以使用其声明位置可访问的
         私有类型，泛型不改变该规则。
   - [x] 为 codegen 建立统一的具名泛型目标解析结果，包含目标声明及其所属
         program/module，不再仅返回按当前调用方可见性匹配的名称。
@@ -134,8 +134,8 @@ fcts 用例，且全量回归测试 `make test` 通过后，才可标记完成�
 
 - [x] **TODO 2：修复跨包私有表示依赖**
 
-  - [x] 在 `docs/feng-symbol-table.md` 定义第 2.2 节的依赖闭包、私有标记、
-        `sym_ref` 编码和内部查询规则；`docs/feng-package.md` 只保留引用。
+  - [x] 在 `docs/specifications/feng-symbol-table.md` 定义第 2.2 节的依赖闭包、私有标记、
+        `sym_ref` 编码和内部查询规则；`docs/specifications/feng-package.md` 只保留引用。
   - [x] 依赖闭包以已收录 `type` 的全部字段类型，以及已收录 `type`、函数和
         `fit` 的 reifiable 依赖为根；函数体和字段初始化器不在 `.ft` 阶段重新遍历。
   - [x] 按第 2.2 节统一收录私有 `type`、`enum`、`spec` 骨架，不区分是否泛型；
@@ -172,8 +172,8 @@ fcts 用例，且全量回归测试 `make test` 通过后，才可标记完成�
 
 - [x] **TODO 3：增加公开签名可见性一致检查**
 
-  - [x] 在 `docs/feng-visibility.md` 完整定义第 2.1 节规则；同步
-        `docs/feng-symbol-table.md`、`docs/feng-package.md` 的引用，不重复规则。
+  - [x] 在 `docs/specifications/feng-visibility.md` 完整定义第 2.1 节规则；同步
+        `docs/specifications/feng-symbol-table.md`、`docs/specifications/feng-package.md` 的引用，不重复规则。
   - [x] 统一表示并计算类型私有、模块私有、包内可见和包外公开四级有效可见范围；
         module、所属类型和成员逐级取最小范围。
   - [x] 基于已解析的目标声明递归检查组成类型，不以名称或 `.ft` 导出结果代替

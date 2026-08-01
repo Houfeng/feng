@@ -290,8 +290,8 @@ struct FengBuiltin__string r = FengFitBuiltin__mymod__string__i0__repeat__string
 
 ### Phase 1 — 文档
 
-- [x] 更新 `docs/feng-type.md`：static 成员语法、访问规则、可见性、泛型静态方法、跨包规则、禁止项
-- [x] 更新 `docs/feng-fit.md`：fit static func 语法、内建类型示例、重载规则、use 可见性规则，并明确禁止 fit 中的 `static let`/`static var`
+- [x] 更新 `docs/specifications/feng-type.md`：static 成员语法、访问规则、可见性、泛型静态方法、跨包规则、禁止项
+- [x] 更新 `docs/specifications/feng-fit.md`：fit static func 语法、内建类型示例、重载规则、use 可见性规则，并明确禁止 fit 中的 `static let`/`static var`
 
 ### Phase 2 — 词法器
 
@@ -350,8 +350,8 @@ struct FengBuiltin__string r = FengFitBuiltin__mymod__string__i0__repeat__string
 
 ### Phase 1 — 文档（先于所有代码变更）
 
-- 更新 `docs/feng-type.md`：补充 `static let`/`static var` 和 `static func` 语法，访问规则，可见性规则，泛型静态方法规则，跨包访问规则，禁止项（构造器/析构器不能加 static；spec 中不支持 static）
-- 更新 `docs/feng-fit.md`：补充 fit 体内 `static func` 语法，内建类型静态方法扩展示例，重载冲突规则（fit 静态方法只与同类型静态方法比较），fit 静态方法的 use 可见性规则，并明确禁止 fit 中的 `static let`/`static var`
+- 更新 `docs/specifications/feng-type.md`：补充 `static let`/`static var` 和 `static func` 语法，访问规则，可见性规则，泛型静态方法规则，跨包访问规则，禁止项（构造器/析构器不能加 static；spec 中不支持 static）
+- 更新 `docs/specifications/feng-fit.md`：补充 fit 体内 `static func` 语法，内建类型静态方法扩展示例，重载冲突规则（fit 静态方法只与同类型静态方法比较），fit 静态方法的 use 可见性规则，并明确禁止 fit 中的 `static let`/`static var`
 
 ### Phase 2 — 词法器
 
@@ -679,8 +679,8 @@ fit T { static let x: int = 0 }       // 禁止：fit 中不得声明 static let
 
 | 文件 | 变更内容 |
 |------|---------|
-| `docs/feng-type.md` | 补充 static 成员规范（先于代码） |
-| `docs/feng-fit.md` | 补充 fit 中 static func 规范（先于代码），明确禁止 static let/static var |
+| `docs/specifications/feng-type.md` | 补充 static 成员规范（先于代码） |
+| `docs/specifications/feng-fit.md` | 补充 fit 中 static func 规范（先于代码），明确禁止 static let/static var |
 | `src/lexer/token.h` | static 从 reserved 移入 keyword list |
 | `test/lexer/test_lexer.c` | 计数更新，删除 static 保留词测试，新增关键词测试 |
 | `src/parser/parser.h` | FengTypeMember::is_static，FengResolvedCallableKind 新增两个值 |
@@ -692,4 +692,4 @@ fit T { static let x: int = 0 }       // 禁止：fit 中不得声明 static let
 
 ## 未包含内容
 
-（本期内容已全部实现，spec 静态成员支持由 `dev/feng-object-form-spec-static-dev.md` 单独规划）
+（本期内容已全部实现，spec 静态成员支持由 `docs/engineering/feng-object-form-spec-static-dev.md` 单独规划）

@@ -2,7 +2,7 @@
 
 ## 状态: dev
 
-> [docs/feng-flow.md](../docs/feng-flow.md) §3 是 `match 目标值 { ... }` 模式匹配的专项规范；
+> [docs/specifications/feng-flow.md](../specifications/feng-flow.md) §3 是 `match 目标值 { ... }` 模式匹配的专项规范；
 > 本文只写 `expr match pattern` infix 运算的开发步骤与 TODO，不重复规范定义。
 
 ## 1 问题背景
@@ -29,7 +29,7 @@
 
 按 CLAUDE.md「先规范、后代码、再测试」要求，先回写规范再动代码。
 
-### 3.1 修改点（具体由人工审定后落到 [docs/feng-flow.md](../docs/feng-flow.md) §3）
+### 3.1 修改点（具体由人工审定后落到 [docs/specifications/feng-flow.md](../specifications/feng-flow.md) §3）
 
 - §3 新增「infix match 运算」子节，描述 `expr match pattern` 的语法、语义、pattern 形式、绑定作用域、优先级。
 - §3.1 / §3.2 标签形式说明中追加：标签形式同时作为 infix 运算的 pattern 使用；infix 形式的多 label 用 `|` 分隔（区别于块形式的 `,`）。
@@ -196,7 +196,7 @@ if x match UserType && y match OtherType { ... }
 - 如需改变顺序，使用括号：`(x match T) == y` 与 `x match (T == y)`（后者 `T == y` 不是合法 pattern，会报语法错误）。
 - `match` 优先级**高于**逻辑 `&&` / `||`：`a match T && b` 解析为 `(a match T) && b`，`a match T || b match U` 解析为 `(a match T) || (b match U)`。
 - `match` 优先级**高于**赋值 `=`：`let r = x match T` 解析为 `let r = (x match T)`。
-- 链式 `x match a match b` 按左结合解析为 `(x match a) match b`：`x match a` 返回 `bool`，`bool` 是常量相等性匹配的合法目标类型（见 [docs/feng-flow.md](../docs/feng-flow.md) §3.1），因此 `(x match a) match true` / `match false` 语义合法（虽然通常冗余，等价于 `x match a` 或 `!(x match a)`）；若 `b` 是类型 pattern 或区间 pattern，则由类型检查器报错（target 类型不匹配）。parser 不对链式做特殊检查，统一走左结合路径。
+- 链式 `x match a match b` 按左结合解析为 `(x match a) match b`：`x match a` 返回 `bool`，`bool` 是常量相等性匹配的合法目标类型（见 [docs/specifications/feng-flow.md](../specifications/feng-flow.md) §3.1），因此 `(x match a) match true` / `match false` 语义合法（虽然通常冗余，等价于 `x match a` 或 `!(x match a)`）；若 `b` 是类型 pattern 或区间 pattern，则由类型检查器报错（target 类型不匹配）。parser 不对链式做特殊检查，统一走左结合路径。
 - **`\|` 在 pattern 位置**：`x match 0 | 1 | 2` 中 `|` 是 label 分隔符（见 §3.3），不参与表达式优先级比较；parser 在 pattern 解析循环内消费所有连续 `|`-separated label，构造 label 数组。退出 pattern 解析后，剩余 `|` 按按位或运算符处理（`parse_bit_or` 层，低于 equality）。由于 `bool | int` 非法（AE0030），`(x match 0) | 1` 这种写法无意义，`|` 在 pattern 位置的「吃尽」行为不会产生歧义。
 
 ## 4 实现方案（后代码）
@@ -316,7 +316,7 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 | AE0030 | 按位运算符操作数类型不匹配 | 已支持 | 复用（覆盖 infix 中 `\|` 被误作按位或的场景，如 `(x match 0) \| 1`） |
 | AE1009 (新) | infix match 出现 binding 但 pattern 非 union member type | 不存在 | 新增 |
 
-具体错误码编号、文案，先在 [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md) 中确定后再落到代码。
+具体错误码编号、文案，先在 [docs/specifications/feng-error-codes-ae.md](../specifications/feng-error-codes-ae.md) 中确定后再落到代码。
 
 ## 6 影响范围分析
 
@@ -334,8 +334,8 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 
 | 文件 | 改动类型 | 规模 |
 | ---- | ------- | ---- |
-| `docs/feng-flow.md` | §3 新增 infix 运算子节 | +30 行 |
-| `docs/feng-error-codes-ae.md` | 新增 AE1009 条目 | +3 行 |
+| `docs/specifications/feng-flow.md` | §3 新增 infix 运算子节 | +30 行 |
+| `docs/specifications/feng-error-codes-ae.md` | 新增 AE1009 条目 | +3 行 |
 | `src/parser/parser.h` | 新增 `FengExprMatchOp` 与 `FENG_EXPR_MATCH_OP` | +15 行 |
 | `src/parser/parser.c` | infix match 运算符识别 + pattern 解析 | +120 行 |
 | `src/semantic/analyzer.c` | `FENG_EXPR_MATCH_OP` resolve 分支 | +100 行 |
@@ -439,8 +439,8 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 - 前置依赖：无
 - 范围：仅文档变更，无代码改动
 
-- [x] 更新 [docs/feng-flow.md](../docs/feng-flow.md) §3：新增「infix match 运算」子节，描述语法、pattern 形式、绑定作用域、优先级；既有标签形式说明中追加 infix 用法引用
-- [x] 更新 [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md)：新增 AE1009 条目（binding 用于非 union member pattern、多 label pattern 中 binding 与非 type label 混用）；不可见位置使用 binding 变量复用 AE0001，不引入新错误码；错误码编号与文案最终口径由人工审定
+- [x] 更新 [docs/specifications/feng-flow.md](../specifications/feng-flow.md) §3：新增「infix match 运算」子节，描述语法、pattern 形式、绑定作用域、优先级；既有标签形式说明中追加 infix 用法引用
+- [x] 更新 [docs/specifications/feng-error-codes-ae.md](../specifications/feng-error-codes-ae.md)：新增 AE1009 条目（binding 用于非 union member pattern、多 label pattern 中 binding 与非 type label 混用）；不可见位置使用 binding 变量复用 AE0001，不引入新错误码；错误码编号与文案最终口径由人工审定
 - [x] 全量回归点：`make test` 通过（仅文档变更，无代码行为变化）
 
 ### 8.2 步骤 2：AST 节点与 Parser 支持 infix match 运算符
@@ -511,8 +511,8 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 
 - [x] 执行 `make test` 全量回归通过
 - [x] 复核所有新增测试用例与既有测试用例无冲突
-- [x] 复核 `docs/feng-flow.md` / `docs/feng-error-codes-*.md` 与代码实现一致
-- [x] 复核 `dev/feng-match-operator-dev.md` 中实现方案与最终代码一致（行号、函数名、错误码编号如有调整需回写文档）
+- [x] 复核 `docs/specifications/feng-flow.md` / `docs/specifications/feng-error-codes-*.md` 与代码实现一致
+- [x] 复核 `docs/engineering/feng-match-operator-dev.md` 中实现方案与最终代码一致（行号、函数名、错误码编号如有调整需回写文档）
 - [x] 准备建议 commit message，由开发者自行提交
 
 ## 9 风险评估
@@ -540,8 +540,8 @@ BindingSet collect_visible_match_bindings(FengExpr *expr) {
 
 ## 11 交付约束
 
-- 所有实现必须以 [docs/feng-flow.md](../docs/feng-flow.md) §3 与本文档为准，不得在编码阶段临时放宽或收紧。
-- 错误码编号与文案必须先在 [docs/feng-error-codes-ae.md](../docs/feng-error-codes-ae.md) 中确定，再落到代码。
+- 所有实现必须以 [docs/specifications/feng-flow.md](../specifications/feng-flow.md) §3 与本文档为准，不得在编码阶段临时放宽或收紧。
+- 错误码编号与文案必须先在 [docs/specifications/feng-error-codes-ae.md](../specifications/feng-error-codes-ae.md) 中确定，再落到代码。
 - 每个阶段都以「先文档、后代码、再测试」的顺序落地，不修改既有测试语义，只新增覆盖。
 - 若实现过程中发现规范仍有缺口，先回写对应权威文档，再继续编码。
 - 实现过程中如发现新的不确定语义，必须由人工决策后才能继续。

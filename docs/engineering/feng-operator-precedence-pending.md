@@ -2,7 +2,7 @@
 
 > 状态：已交付（delivered）  
 > 日期：2026-07-11  
-> 关联规范：`docs/feng-expression.md` §5 运算符优先级
+> 关联规范：`docs/specifications/feng-expression.md` §5 运算符优先级
 
 ## 1. 问题概述
 
@@ -24,7 +24,7 @@ a & b == 7   // 被解析为 a & (b == 7)，而非 (a & b) == 7
 
 | 语言 | `==` vs `&` | `==` vs `\|` | 来源 |
 |---|---|---|---|
-| **Feng** | `==` > `&` | `==` > `\|` | `docs/feng-expression.md` §5 |
+| **Feng** | `==` > `&` | `==` > `\|` | `docs/specifications/feng-expression.md` §5 |
 | C / C++ | `==` > `&` | `==` > `\|` | Wikipedia: Operators in C and C++ |
 | Java | `==` > `&` | `==` > `\|` | JLS §15.22–15.23 |
 | C# | `==` > `&` | `==` > `\|` | C# 语言规范 |
@@ -78,7 +78,7 @@ Wikipedia 对 C 的批评原文：
 
 ## 3. Feng 当前设计
 
-Feng `docs/feng-expression.md` §5 优先级表（数值越小优先级越高）：
+Feng `docs/specifications/feng-expression.md` §5 优先级表（数值越小优先级越高）：
 
 | 优先级 | 形式 | 说明 |
 |---|---|---|
@@ -117,7 +117,7 @@ let result = a & b == 7;     // 等价于 (a & b) == 7
 
 - 所有形如 `expr & expr == expr`（无括号）的现有代码，语义将发生变化
 - 当前 `fcts/` 和 `test/` 中已有受影响的测试用例（如 `test_expression.ff` 中的 `operator precedence bitwise vs logical` 测试），需要同步调整
-- `docs/feng-expression.md` §5 优先级表需要重新排序
+- `docs/specifications/feng-expression.md` §5 优先级表需要重新排序
 
 ## 5. 拟定变更方案
 
@@ -172,7 +172,7 @@ Zig 文档的优先级表（从高到低，节选）：
 
 ### 涉及修改
 
-- `docs/feng-expression.md` §5 优先级表
+- `docs/specifications/feng-expression.md` §5 优先级表
 - `src/parser/parser.c` 运算符优先级解析顺序
 - `fcts/fcts_bin/src/test_expression.ff` 中受影响的优先级测试用例
 - `test/` 中受影响的 C 测试用例（如有）
@@ -206,14 +206,14 @@ Zig 文档的优先级表（从高到低，节选）：
 进度概览：`[ 7 / 7 ]`
 
 - [x] **TODO 1：更新文档 §5 优先级表**
-  - 文件：`docs/feng-expression.md` §5
+  - 文件：`docs/specifications/feng-expression.md` §5
   - 内容：将 `&` `^` `|`（原优先级 8/9/10）上移为 6/7/8，`< <= > >=`（原 6）顺延为 9，`== !=`（原 7）顺延为 10
   - 验证：文档内容与新优先级表一致，无遗漏层级
 
 - [x] **TODO 2：调整 parser 优先级链顺序**
   - 文件：`src/parser/parser.c`
   - 内容：将调用链从 `parse_shift → parse_comparison → parse_equality → parse_bit_and → parse_bit_xor → parse_bit_or` 调整为 `parse_shift → parse_bit_and → parse_bit_xor → parse_bit_or → parse_comparison → parse_equality`
-  - 注意：`parse_comparison` 内包含 infix `match` 运算符（与关系运算同级），调整后 match 的优先级也随之变为高于位运算，需确认 `dev/feng-match-operator-dev.md` 中记录的 match 语义不受影响
+  - 注意：`parse_comparison` 内包含 infix `match` 运算符（与关系运算同级），调整后 match 的优先级也随之变为高于位运算，需确认 `docs/engineering/feng-match-operator-dev.md` 中记录的 match 语义不受影响
   - 验证：编译通过，无警告
 
 - [x] **TODO 3：修正 `test_bitwise_expr_parsing` 断言**

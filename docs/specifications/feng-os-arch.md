@@ -1,7 +1,7 @@
 # Feng 平台标识规范
 
 > 本文件是 Feng 体系内“平台标识”的主规范，定义 `<os>-<arch>[-<abi>]` 格式、合法值、适用范围与归一化映射。
-> 其他文档（[feng-package.md](./feng-package.md) 的包目录、[feng-cli.md](./feng-cli.md) 的 `--platform` 参数、[feng-build.md](./feng-build.md) 的工具链转换、[feng-std-platform.md](./feng-std-platform.md) 的 API 行为、[../dev/feng-release-and-install.md](../dev/feng-release-and-install.md) 的分发物命名）仅引用本规范，不重复定义值域。
+> 其他文档（[feng-package.md](./feng-package.md) 的包目录、[feng-cli.md](./feng-cli.md) 的 `--platform` 参数、[feng-build.md](./feng-build.md) 的工具链转换、[feng-std-platform.md](./feng-std-platform.md) 的 API 行为、[../engineering/feng-release-and-install.md](../engineering/feng-release-and-install.md) 的分发物命名）仅引用本规范，不重复定义值域。
 
 ## 1 设计目标
 

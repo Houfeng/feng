@@ -123,9 +123,9 @@ extlib: "lib/"
 
 - [x] 7.1 全量测试所有 cases 通过。
 - [x] 7.2 文档-实现一致性复核：
-	- `docs/feng-build.md`
-	- `docs/feng-package.md`
-	- `docs/feng-cli.md`
+	- `docs/specifications/feng-build.md`
+	- `docs/specifications/feng-package.md`
+	- `docs/specifications/feng-cli.md`
 - [x] 7.3 变更说明整理：新增行为、冲突策略、已知限制。
 
 变更说明：

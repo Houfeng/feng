@@ -3,7 +3,7 @@
 > 状态：实施完成
 >
 > C ABI 类型与调用规则由
-> [Feng 语言 ABI 互操作规范](../docs/feng-interop.md) 定义；本文只定义 `extern func`
+> [Feng 语言 ABI 互操作规范](../specifications/feng-interop.md) 定义；本文只定义 `extern func`
 > 的 codegen 修复。
 
 ## 1. 问题
@@ -125,7 +125,7 @@ Feng 名称为 `writeText`，原生符号名为 `write`。
 ### 3.5 C variadic 跨包元数据
 
 C variadic 的语言规则由
-[Feng 语言 ABI 互操作规范](../docs/feng-interop.md) 定义。本方案只负责完整保存
+[Feng 语言 ABI 互操作规范](../specifications/feng-interop.md) 定义。本方案只负责完整保存
 固定参数个数，保证本包和跨包 codegen 使用相同元数据。
 
 ```feng
@@ -191,7 +191,7 @@ Feng 调用点 -> wrapper -> 原生符号
 ## 6. 实施 TODO
 
 - [x] TODO 1：补齐正式规范。
-  - [x] 在 `docs/feng-interop.md` 中定义 `@cdecl`、`@stdcall` 和 `@fastcall` 的
+  - [x] 在 `docs/specifications/feng-interop.md` 中定义 `@cdecl`、`@stdcall` 和 `@fastcall` 的
     可选固定参数个数。
   - [x] 明确参数形式、有效范围、C 原型含义及跨包保持要求。
   - [x] 明确省略或传入 `0` 均表示非 C variadic，不改变现有行为。

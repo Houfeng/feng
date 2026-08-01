@@ -2,8 +2,8 @@
 
 > 状态：已实现
 > 日期：2026-05-22
-> 关联规范：[docs/feng-type.md](../docs/feng-type.md)、[docs/feng-spec.md](../docs/feng-spec.md)、[docs/feng-expression.md](../docs/feng-expression.md)
-> 关联设计：[dev/feng-value-model-delivered.md](./feng-value-model-delivered.md)、[dev/feng-runtime-generics-delivered.md](./feng-runtime-generics-delivered.md)、[docs/feng-union-type.md](../docs/feng-union-type.md)
+> 关联规范：[docs/specifications/feng-type.md](../specifications/feng-type.md)、[docs/specifications/feng-spec.md](../specifications/feng-spec.md)、[docs/specifications/feng-expression.md](../specifications/feng-expression.md)
+> 关联设计：[docs/engineering/feng-value-model-delivered.md](./feng-value-model-delivered.md)、[docs/engineering/feng-runtime-generics-delivered.md](./feng-runtime-generics-delivered.md)、[docs/specifications/feng-union-type.md](../specifications/feng-union-type.md)
 
 ## 1. 背景
 
@@ -260,7 +260,7 @@ future tuple / union value 的接入，不应表现为：
     这是主改动面。当前 aggregate 相关锚点分布在值分类、runtime type 分类、generic descriptor 构造、字段 flatten、数组元素 lowering、结果槽与 cleanup 等多个位置；单文件内已有二十多个调用点直接依赖现有 spec-only helper。预计需要在这里完成统一 aggregate introspection contract 的建立、接管和旧 helper 收敛。
 2. `test/codegen/test_codegen.c`
     这是主回归面。现有 generic spec arg、aggregate return、aggregate field、if/match aggregate result 都应继续作为回归锚点；若本次改动只收敛抽象而不引入新 aggregate 语法，测试主要是保证 spec aggregate 路径不回退。
-3. `dev/feng-generics-aggregate-optimize.md`
+3. `docs/engineering/feng-generics-aggregate-optimize.md`
     方案文档需要同步记录影响面、实施顺序和验收口径。
 4. `src/runtime/feng_runtime.h`
     预期不需要改动 descriptor 结构定义；本轮仅允许注释层面的同步。若出现任何结构字段、枚举语义或 ABI 声明改动，应暂停并重新确认是否偏离 0 增量运行时开销目标。
@@ -277,7 +277,7 @@ future tuple / union value 的接入，不应表现为：
     其中包括：新增统一 aggregate introspection helper、替换现有 spec-only helper 的主要调用点、清理旧分派逻辑。
 2. `test/codegen/test_codegen.c`：约 40 到 90 行。
     主要用于补或改 focused regression，确保现有 spec aggregate 路径不回退。
-3. `dev/feng-generics-aggregate-optimize.md`：约 40 到 100 行。
+3. `docs/engineering/feng-generics-aggregate-optimize.md`：约 40 到 100 行。
     主要用于补实施影响、TODO 和验收说明。
 4. `src/runtime/feng_runtime.h`：0 行代码改动，最多允许注释同步。
     目标是保持 descriptor 结构定义与 runtime ABI 不变；若出现代码级改动，应重新审查是否偏离方案边界。

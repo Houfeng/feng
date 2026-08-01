@@ -89,7 +89,7 @@ typedef struct VisibleValueEntry {
  * FengDeclKind: plain type vs tuple and the three spec forms are separate
  * overload faces — same name across sub-forms is a conflict.
  *
- * See dev/feng-type-arity-overload-dev.md §0.3 for the full design. */
+ * See docs/engineering/feng-type-arity-overload-dev.md §0.3 for the full design. */
 typedef enum {
     FENG_OVERLOAD_CATEGORY_FUNCTION = 0,
     FENG_OVERLOAD_CATEGORY_TYPE,              /* plain type + @value type */
@@ -2299,8 +2299,8 @@ static bool append_slice(FengSlice **items, size_t *count, size_t *capacity, Fen
 }
 
 static bool is_builtin_type_name(FengSlice name) {
-    /* Built-in type names per docs/feng-builtin-type.md §2.
-     * After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
+    /* Built-in type names per docs/specifications/feng-builtin-type.md §2.
+     * After AST alias normalization (docs/engineering/feng-scalar-alias-optimize.md §6),
      * only canonical (width-explicit) names appear in type_ref nodes, so
      * aliases are no longer listed here. */
     static const char *builtin_names[] = {
@@ -2334,7 +2334,7 @@ size_t feng_get_host_pointer_size(void) {
 }
 
 static const char *canonical_builtin_type_name(FengSlice name, size_t pointer_size) {
-    /* Canonical (width-explicit) names per docs/feng-builtin-type.md §2 alias table.
+    /* Canonical (width-explicit) names per docs/specifications/feng-builtin-type.md §2 alias table.
      * Aliases collapse to their canonical width-explicit spelling for type identity checks.
      * `pointer_size` drives platform-dependent alias resolution (`int`, `uint`). */
     if (slice_equals_cstr(name, "uint")) {
@@ -2408,7 +2408,7 @@ static bool builtin_type_name_is_integer(FengSlice name) {
 /* Stronger check than the legacy "target is public" predicate: a target
  * module is *use-visible* from the current resolve context only if either
  * (a) it is the same module, or (b) the target is `open mod` AND the current
- * file imported it via a `use` declaration. Required by docs/feng-module.md
+ * file imported it via a `use` declaration. Required by docs/specifications/feng-module.md
  * to prevent ambient access to any public module without an explicit import. */
 static bool module_is_use_visible_from(const ResolveContext *ctx,
                                        const FengSemanticModule *target) {
@@ -2503,7 +2503,7 @@ static const VisibleValueEntry *find_visible_value(const VisibleValueEntry *entr
 
 /* —— 通用符号查找基础设施(规范 §7 第 1/2/3 类惰性歧义检测)——
  *
- * 设计原则(详见 dev/feng-module-optimize-dev.md §0.3):
+ * 设计原则(详见 docs/engineering/feng-module-optimize-dev.md §0.3):
  * - import_public_names 不做任何冲突检查,仅负责把 import 引入的 public
  *   符号加入 visible_types / visible_values,并保持现有 name 唯一约束。
  * - 因此 visible_types / visible_values 不能用来发现"被 import 跳过的同
@@ -5960,7 +5960,7 @@ static bool function_type_decl_matches_callable_signature_or_is_pending(
 /* Returns the canonical builtin name for an inferred expression type.
  * `pointer_size` is forwarded to canonical_builtin_type_name() so that
  * platform-dependent aliases (e.g. `int`) resolve to the correct width.
- * See dev/feng-scalar-alias-optimize.md §6.8. */
+ * See docs/engineering/feng-scalar-alias-optimize.md §6.8. */
 static const char *inferred_expr_type_builtin_canonical_name(InferredExprType expr_type, size_t pointer_size) {
     switch (expr_type.kind) {
         case FENG_INFERRED_EXPR_TYPE_BUILTIN:
@@ -7112,7 +7112,7 @@ static bool validate_try_catch_clause_result_type(ResolveContext *context,
 
 /* Match label literal extraction.
  *
- * Per docs/feng-flow.md, a match label single value must be a literal, or a `let`
+ * Per docs/specifications/feng-flow.md, a match label single value must be a literal, or a `let`
  * binding whose initializer is itself a literal (no operator-based constant folding,
  * no propagation across multiple bindings). Range labels share the same rules and
  * are restricted to integer endpoints. */
@@ -8765,7 +8765,7 @@ typedef struct VisibleMatchBindingSet {
 } VisibleMatchBindingSet;
 
 /* Recursively collect match bindings that are visible in if/while body scope.
- * Per docs/feng-flow.md §3.3:
+ * Per docs/specifications/feng-flow.md §3.3:
  * - `A && B` collects both sides (union of bindings)
  * - `A || B` subtree yields empty (can't guarantee either side bound)
  * - `!A` subtree yields empty (negation doesn't preserve binding)
@@ -9362,7 +9362,7 @@ static bool type_ref_is_numeric(const FengTypeRef *type_ref, size_t pointer_size
 
 static bool array_cast_writability_subset(const FengTypeRef *source,
                                           const FengTypeRef *target) {
-    /* docs/feng-builtin-type.md §5: an array cast may STRIP `!` from any
+    /* docs/specifications/feng-builtin-type.md §5: an array cast may STRIP `!` from any
      * layer but must never ADD `!`. Element type and depth must match. */
     if (source == NULL || target == NULL) {
         return false;
@@ -9972,7 +9972,7 @@ static bool type_member_is_public(const FengTypeMember *member) {
  * of whether the target lives in the same package as the fit declaration.
  * Members contributed by the fit block itself live on the fit decl, not on the
  * target type, so this helper only consults the target type's own member set.
- * See docs/feng-fit.md §4 / §5. */
+ * See docs/specifications/feng-fit.md §4 / §5. */
 static bool fit_body_blocks_private_access(const ResolveContext *context,
                                            const FengDecl *owner_type_decl,
                                            const FengTypeMember *member) {
@@ -12450,7 +12450,7 @@ static bool fit_decl_is_visible_from(const ResolveContext *ctx,
     }
     /* Cross-module fits become effective in the consumer only when (a) the
      * fit itself is `open fit`, and (b) the consumer file imported the fit's
-     * owning module via `use`. Mirrors docs/feng-fit.md §4: "其他 mod 通过
+     * owning module via `use`. Mirrors docs/specifications/feng-fit.md §4: "其他 mod 通过
      * use 引入当前模块后，该契约关系在其作用域内生效". */
     return fit_decl->visibility == FENG_VISIBILITY_PUBLIC &&
            module_is_use_visible_from(ctx, fit_module);
@@ -15187,7 +15187,7 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
             if (!validate_index_expr(context, target)) {
                 return false;
             }
-            /* docs/feng-builtin-type.md §5: writes via `[i] =` are only legal
+            /* docs/specifications/feng-builtin-type.md §5: writes via `[i] =` are only legal
              * when the indexed array layer is marked writable (`T[!]`). */
             {
                 InferredExprType object_type =
@@ -16579,7 +16579,7 @@ static bool expr_matches_expected_type_ref_when_inference_unknown(
 }
 
 /* Compile-time range check for an integer literal against a canonical integer target.
- * Per docs/feng-builtin-type.md §17: literals that overflow the target are compile errors. */
+ * Per docs/specifications/feng-builtin-type.md §17: literals that overflow the target are compile errors. */
 static bool integer_literal_fits_canonical_target(int64_t value, const char *canonical_target) {
     if (canonical_target == NULL) {
         return false;
@@ -16612,7 +16612,7 @@ static bool integer_literal_fits_canonical_target(int64_t value, const char *can
 }
 
 /* ---------------------------------------------------------------------------
- * Compile-time constant evaluation (per docs/feng-expression.md §3.x and §6.x)
+ * Compile-time constant evaluation (per docs/specifications/feng-expression.md §3.x and §6.x)
  *
  * Folds integer/float/bool literals, unary `-` `~` `!`, binary arithmetic
  * (`+ - * / %`), bitwise (`& | ^ << >>`), comparisons (`< <= > >= == !=`),
@@ -16667,7 +16667,7 @@ static bool promote_const_pair(FengConstValue *a, FengConstValue *b) {
 }
 
 /* Truncate `value` (treated as an unbounded integer) to the target builtin's bit pattern,
- * mirroring the C-style cast semantics promised by docs/feng-expression.md §3.4
+ * mirroring the C-style cast semantics promised by docs/specifications/feng-expression.md §3.4
  * ("整数到更小位宽整数的转换会按目标位宽截断高位"). The result is re-encoded as i64. */
 static int64_t truncate_int_to_canonical(int64_t value, const char *canonical_target) {
     if (canonical_target == NULL) {
@@ -16987,7 +16987,7 @@ static bool evaluate_constant_cast(ResolveContext *context,
     if (target == NULL) {
         return false;
     }
-    /* Numeric-to-numeric only (per docs/feng-expression.md §3.4). bool ↔ numeric is a
+    /* Numeric-to-numeric only (per docs/specifications/feng-expression.md §3.4). bool ↔ numeric is a
      * static error caught by cast_expr_types_are_valid; we don't fold across that boundary. */
     if (inner.kind == FENG_CONST_INT) {
         if (strcmp(target, "f32") == 0 || strcmp(target, "f64") == 0) {
@@ -17091,7 +17091,7 @@ static bool expr_is_pure_numeric_literal_expr_for_target_adaptation(const FengEx
 
 /* Numeric literal adaptation: an integer/float literal may be implicitly retyped to any
  * compatible numeric target type, subject to compile-time range checks. This realises the
- * "如需其他精度或宽度，必须显式标注类型" contract from docs/feng-builtin-type.md §16-§17,
+ * "如需其他精度或宽度，必须显式标注类型" contract from docs/specifications/feng-builtin-type.md §16-§17,
  * where the explicit annotation drives the literal's effective type. */
 static bool numeric_literal_adapts_to_target(ResolveContext *context,
                                              const FengExpr *expr,
@@ -17159,7 +17159,7 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
     }
 
     /* For numeric literal constants targeting a built-in numeric type, the literal-adaptation
-     * path (with compile-time range checking per docs/feng-builtin-type.md §17) is the sole
+     * path (with compile-time range checking per docs/specifications/feng-builtin-type.md §17) is the sole
      * authority — falling through to the default-inferred-type path would let oversized
      * literals like `let c: i32 = 9999999999;` slip past because the literal's *default*
      * inferred type happens to match the target's canonical name. */
@@ -17877,7 +17877,7 @@ static void materialize_object_spec_constraint_witness_if_applicable(
     /* Intersection-form constraint: materialize a per-member witness for each
      * leaf object-form member spec. Codegen's
      * cg_ensure_witness_instance_for_type assembles the merged witness by
-     * aliasing slots from these per-member witnesses (see dev/feng-intersection-
+     * aliasing slots from these per-member witnesses (see docs/engineering/feng-intersection-
      * type-draft.md §4.2). Satisfaction of the whole intersection was already
      * verified by generic_type_arg_satisfies_constraint; we still guard each
      * member defensively.
@@ -22305,7 +22305,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 return false;
             }
             /* For `A && B`, B can see match bindings introduced by A (per
-             * docs/feng-flow.md §3.3). Collect them from A's subtree and
+             * docs/specifications/feng-flow.md §3.3). Collect them from A's subtree and
              * register into a fresh scope so B's resolution finds them.
              * `||` / other operators don't propagate bindings. */
             if (expr->as.binary.op == FENG_TOKEN_AND_AND) {
@@ -22964,7 +22964,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
 
                 /* Collect visible match bindings from this clause's condition.
                  * They become visible in the if body scope (parent of the
-                 * body block's own scope). Per docs/feng-flow.md §3.3, only
+                 * body block's own scope). Per docs/specifications/feng-flow.md §3.3, only
                  * `&&` chains propagate bindings; `||` / `!` subtrees yield
                  * empty. Register BEFORE validating the condition so the
                  * binding's type is available to infer_expr_type. */
@@ -23405,7 +23405,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             return true;
 
         case FENG_STMT_BREAK:
-            /* docs/feng-defer.md §4.2 弱限制：defer 块直接位置禁止 break。
+            /* docs/specifications/feng-defer.md §4.2 弱限制：defer 块直接位置禁止 break。
              * 当 defer_depth > 0 且 loop_depth == 0 时，break 处于 defer 块
              * 直接位置（不在嵌套 for/while 内）。 */
             if (context->defer_depth > 0U && context->loop_depth == 0U) {
@@ -23426,7 +23426,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             return validate_loop_control_stmt(context, stmt, "continue");
 
         case FENG_STMT_DEFER: {
-            /* docs/feng-defer.md §4.2 强禁止：defer 块内任何位置禁止嵌套 defer。
+            /* docs/specifications/feng-defer.md §4.2 强禁止：defer 块内任何位置禁止嵌套 defer。
              * defer_depth > 0 表示当前已在 defer 块内（含嵌套子块）。 */
             bool ok;
             size_t saved_loop_depth;
@@ -23436,7 +23436,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                     stmt->token,
                     "AE1503", duplicate_cstr("defer block cannot contain nested 'defer'"));
             }
-            /* docs/feng-defer.md §4.3: defer 仅在函数体或函数体内嵌套的块作用域
+            /* docs/specifications/feng-defer.md §4.3: defer 仅在函数体或函数体内嵌套的块作用域
              * 中合法。current_callable_signature != NULL 是”当前处于函数体或
              * lambda 函数体作用域内”的判据——resolve_callable / lambda 进入
              * 函数体时会设置此字段并在退出时还原。 */
@@ -23446,7 +23446,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                     stmt->token,
                     "AE1506", duplicate_cstr("'defer' is only allowed inside function blocks"));
             }
-            /* docs/feng-defer.md §4.2：defer 块内 loop_depth 相对于 defer 块本身
+            /* docs/specifications/feng-defer.md §4.2：defer 块内 loop_depth 相对于 defer 块本身
              * 计算。进入 defer 块时保存外层 loop_depth 并重置为 0，使直接位置的
              * break/continue 被检测到（defer_depth>0 && loop_depth==0）；嵌套
              * for/while 会自行递增 loop_depth，其中 break/continue 合法。 */
@@ -24883,7 +24883,7 @@ static bool collect_type_decl_satisfied_specs(const ResolveContext *ctx,
     }
 
     /* Specs from every visible fit declaration (current module + cross-module
-     * `open fit`s the consumer has imported via `use`). Mirrors docs/feng-fit.md
+     * `open fit`s the consumer has imported via `use`). Mirrors docs/specifications/feng-fit.md
      * §4 — a `open fit` activates in the importing module after `use`. */
     if (ctx->analysis != NULL) {
         size_t m_idx;
@@ -25127,7 +25127,7 @@ static bool detect_cross_spec_method_conflicts(ResolveContext *ctx,
  * least one concrete type T (visible in the current analysis) that can be
  * supplied as an argument to both parameters under the visible explicit
  * contract relations (declared spec lists and `fit` declarations). This
- * mirrors docs/feng-function.md §5: "若同一重载集合中的两个候选在当前可见
+ * mirrors docs/specifications/feng-function.md §5: "若同一重载集合中的两个候选在当前可见
  * 的显式契约关系下可能同时匹配同一实参类型，必须视为签名冲突". The check
  * is intentionally nominal — duck typing is not considered. */
 static bool param_type_refs_potentially_overlap(const ResolveContext *ctx,
@@ -25997,7 +25997,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                         ok = false;
                         break;
                     }
-                    /* Per docs/feng-function.md: a callable-spec field whose
+                    /* Per docs/specifications/feng-function.md: a callable-spec field whose
                      * initializer is a lambda may capture the enclosing
                      * type's `self`, because the lambda runs only when the
                      * callable is invoked, after the object is constructed.
@@ -27055,7 +27055,7 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
     return ok;
 }
 
-/* —— Overload-category conflict helpers (dev/feng-type-arity-overload-dev.md §3.2/§3.3) ——
+/* —— Overload-category conflict helpers (docs/engineering/feng-type-arity-overload-dev.md §3.2/§3.3) ——
  *
  * Symbol conflict detection uses two arrays: visible_types (type/spec/enum)
  * and visible_values (function/binding). Within each array, entries from
@@ -28368,7 +28368,7 @@ static void precompute_imported_builtin_spec_witnesses(
 
 /* ==================== AST builtin alias normalization ====================
  *
- * Per dev/feng-scalar-alias-optimize.md §6: normalize all user-written alias
+ * Per docs/engineering/feng-scalar-alias-optimize.md §6: normalize all user-written alias
  * names (int, byte, float, double) in type_ref nodes to their canonical
  * width-explicit spelling (i32, i64, u8, f32, f64).  Runs once at the start of
  * semantic analysis so that downstream phases (codegen, symbol export, LSP)
@@ -28789,7 +28789,7 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
     CallableExceptionEscapeCache callable_exception_escape_cache;
     /* pointer_size drives platform-dependent alias resolution (int → i32/i64).
      * Caller (CLI layer) fills options->pointer_size from feng_get_host_pointer_size().
-     * Must be non-zero; see dev/feng-binary-literal-adaptation-bugfix.md §3. */
+     * Must be non-zero; see docs/engineering/feng-binary-literal-adaptation-bugfix.md §3. */
     if (options == NULL || options->pointer_size == 0U) {
         return false;
     }
@@ -28810,7 +28810,7 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
     /* Phase 0: normalize builtin alias names in all type_ref nodes across
      * every program.  After this pass, only canonical width-explicit names
      * (i32, i64, u8, f32, f64, ...) appear in the AST; downstream phases
-     * need not handle aliases.  See dev/feng-scalar-alias-optimize.md §6. */
+     * need not handle aliases.  See docs/engineering/feng-scalar-alias-optimize.md §6. */
     for (program_index = 0U; program_index < program_count; ++program_index) {
         feng_program_normalize_builtin_aliases((FengProgram *)programs[program_index], pointer_size);
     }
@@ -28921,7 +28921,7 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
      * link each site back to its justifying relation. Imported-package
      * modules must already be injected before this pass runs so their
      * declared_specs / parent_specs participate in the same relation table.
-     * See dev/feng-spec-semantic-draft.md §10. */
+     * See docs/engineering/feng-spec-semantic-delivered.md §10. */
     if (ok && error_count == 0U) {
         if (!feng_semantic_compute_spec_relations(analysis)) {
             ok = false;
@@ -28981,7 +28981,7 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                  &error_capacity);
     }
 
-    /* Post-pass: value-type cycle detection (dev/feng-value-type-dev.md
+    /* Post-pass: value-type cycle detection (docs/engineering/feng-value-type-dev.md
      * §3.5, §9.2). Rejects value types (tuples and `@value type` decls)
      * that directly or indirectly contain themselves as fields. Ordinary
      * (heap-allocated) type decls are not subject to this check. Runs

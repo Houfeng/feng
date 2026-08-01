@@ -4213,7 +4213,7 @@ static bool local_list_push_match_binding(FengLspLocalList *locals,
 }
 
 /* Collect infix-match bindings whose truth is guaranteed by an expression.
- * This mirrors docs/feng-flow.md: && combines bindings, while other wrappers
+ * This mirrors docs/specifications/feng-flow.md: && combines bindings, while other wrappers
  * do not propagate them into a sibling expression or condition body. */
 static bool collect_visible_match_op_bindings(const FengExpr *expr,
                                               FengLspLocalList *locals) {
@@ -9555,7 +9555,7 @@ static bool binding_signature_to_string_with_style(
 
 /* Format the narrowed static type of an infix-match binding from its validated
  * type labels. Chain patterns bind to their deepest type; multiple labels form
- * the subset union described by docs/feng-flow.md. */
+ * the subset union described by docs/specifications/feng-flow.md. */
 static bool match_binding_signature_to_string_with_style(
     FengLspString *buffer,
     const FengExpr *match_op,

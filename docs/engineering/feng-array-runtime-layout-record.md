@@ -4,7 +4,7 @@
 >
 > 目的：记录 `FengArray` 从多种候选结构收敛为“瘦引用 + 尾随内联 payload”的原因，避免后续重复推导或遗忘已经确认的取舍。
 >
-> 规范归属：数组语义以 [Feng 内建类型规范](../docs/feng-builtin-type.md) 为准，运行时生命周期以 [Feng 生命周期规范](../docs/feng-lifetime.md) 为准，切片能力以 [Feng 标准库数组扩展规范](../docs/feng-std-array.md) 为准。本文若与主规范不一致，以主规范为准。
+> 规范归属：数组语义以 [Feng 内建类型规范](../specifications/feng-builtin-type.md) 为准，运行时生命周期以 [Feng 生命周期规范](../specifications/feng-lifetime.md) 为准，切片能力以 [Feng 标准库数组扩展规范](../specifications/feng-std-array.md) 为准。本文若与主规范不一致，以主规范为准。
 
 ## 1. 决策背景
 

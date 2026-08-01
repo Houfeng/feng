@@ -1,6 +1,6 @@
 # Feng 语言 defer 规范
 
-这个文档只可用于描述 feng 语言 defer 语法，开发文档请参考 [dev/feng-defer-dev.md](../dev/feng-defer-dev.md)
+这个文档只可用于描述 feng 语言 defer 语法，开发文档请参考 [docs/engineering/feng-defer-dev.md](../engineering/feng-defer-dev.md)
 
 本文档用于补充 [feng-language.md](./feng-language.md) 中的 `defer` 概要说明,聚焦 Feng 语言中 `defer` 语句块的语法、执行时机与语句限制。托管局部在异常路径上的释放规则见 [Feng 语言异常模型规范](./feng-exception.md);`break` / `continue` / `return` / `throw` 的控制转移语义见 [Feng 语言流程控制规范](./feng-flow.md) 与 [Feng 语言异常模型规范](./feng-exception.md)。
 

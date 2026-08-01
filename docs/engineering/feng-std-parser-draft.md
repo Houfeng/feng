@@ -1232,7 +1232,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 **参考**：
 - C 版 AST 定义：`src/parser/parser.h`（`FengExpr`、`FengStmt`、`FengDecl` 等结构体）
-- 语法文档：`docs/feng-expression.md`、`docs/feng-flow.md`、`docs/feng-type.md`、`docs/feng-function.md`、`docs/feng-module.md`
+- 语法文档：`docs/specifications/feng-expression.md`、`docs/specifications/feng-flow.md`、`docs/specifications/feng-type.md`、`docs/specifications/feng-function.md`、`docs/specifications/feng-module.md`
 
 ### 6.2 Parser 核心框架（已完成）
 
@@ -1261,7 +1261,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 **参考**：
 - C 版：`parser.c:566-660`（`parse_type_ref` / `parse_type_args` / `parse_type_params`）
-- 语法文档：`docs/feng-type.md`、`docs/feng-generics-draft.md`
+- 语法文档：`docs/specifications/feng-type.md`、`docs/specifications/feng-generics-draft.md`
 
 ### 6.4 表达式解析 — 基础表达式（primary）
 
@@ -1279,7 +1279,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 **参考**：
 - C 版：`parser.c:2483-2680`（`parse_primary` / `parse_array_literal` / `parse_lambda` / `parse_tuple_literal_tail` / `parse_group_or_cast`）
-- 语法文档：`docs/feng-expression.md`
+- 语法文档：`docs/specifications/feng-expression.md`
 
 ### 6.5 表达式解析 — 后缀与中缀
 
@@ -1301,7 +1301,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 3. 若解析成功且后续 token 符合预期，确认为显式泛型 target
 4. 若解析失败，恢复 parser 状态，将 `<` 视为比较运算符
 
-**识别规则**（参见 `docs/feng-generics-draft.md` §4）：
+**识别规则**（参见 `docs/specifications/feng-generics-draft.md` §4）：
 
 当同时满足以下条件时，Parser 必须将 `<...>` 视为显式泛型 target：
 - postfix 目标以合法标识符结尾
@@ -1310,7 +1310,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 **参考**：
 - C 版：`parser.c:2437-2456`（`looks_like_explicit_generic_target_suffix`）、`parser.c:3601-4006`（`parse_postfix` / `parse_unary` / `parse_binary_series` / 各优先级层）
-- 语法文档：`docs/feng-expression.md`（运算符优先级表）、`docs/feng-generics-draft.md`（泛型识别规则）
+- 语法文档：`docs/specifications/feng-expression.md`（运算符优先级表）、`docs/specifications/feng-generics-draft.md`（泛型识别规则）
 
 ### 6.6 语句解析
 
@@ -1329,7 +1329,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 **参考**：
 - C 版：`parser.c:4010-4518`（`parse_block` / `parse_statement` / `parse_if_statement` / `parse_match_statement` / `parse_while_statement` / `parse_for_statement` / `parse_simple_statement`）
-- 语法文档：`docs/feng-flow.md`、`docs/feng-exception.md`、`docs/feng-defer.md`
+- 语法文档：`docs/specifications/feng-flow.md`、`docs/specifications/feng-exception.md`、`docs/specifications/feng-defer.md`
 
 ### 6.7 声明解析
 
@@ -1348,7 +1348,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 **参考**：
 - C 版：`parser.c:2178-2280`（`parse_declaration`）、`parser.c:381-440`（`parse_annotations`）、`parser.c:331-340`（`parse_visibility`）
-- 语法文档：`docs/feng-function.md`、`docs/feng-type.md`、`docs/feng-enum.md`、`docs/feng-spec.md`、`docs/feng-fit.md`、`docs/feng-binding.md`、`docs/feng-visibility.md`
+- 语法文档：`docs/specifications/feng-function.md`、`docs/specifications/feng-type.md`、`docs/specifications/feng-enum.md`、`docs/specifications/feng-spec.md`、`docs/specifications/feng-fit.md`、`docs/specifications/feng-binding.md`、`docs/specifications/feng-visibility.md`
 
 ### 6.8 模块与文件解析
 
@@ -1362,7 +1362,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 **参考**：
 - C 版：`parser.c:4518-5032`（`parse_program`）
-- 语法文档：`docs/feng-module.md`
+- 语法文档：`docs/specifications/feng-module.md`
 
 ### 6.9 FengAstDumper（后续阶段）
 

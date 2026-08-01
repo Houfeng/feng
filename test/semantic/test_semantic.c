@@ -350,7 +350,7 @@ static void test_function_return_only_overload_error(void) {
 }
 
 static void test_top_level_overload_overlap_via_fit_rejected(void) {
-    /* docs/feng-function.md §5: "若同一重载集合中的两个候选在当前可见的显式
+    /* docs/specifications/feng-function.md §5: "若同一重载集合中的两个候选在当前可见的显式
      * 契约关系下可能同时匹配同一实参类型，必须视为签名冲突". A Dog argument
      * could match both `pet(a: Animal)` and `pet(d: Dog)` because the visible
      * fit makes Dog satisfy Animal. The conflict must be reported at the
@@ -6072,7 +6072,7 @@ static void test_empty_array_literal_binding_accepts_explicit_target_type(void) 
     feng_program_free(program);
 }
 
-/* docs/feng-builtin-type.md §5: writing through `[i] =` is rejected when the
+/* docs/specifications/feng-builtin-type.md §5: writing through `[i] =` is rejected when the
  * indexed array layer lacks the writable mark `!`. */
 static void test_index_assignment_rejects_readonly_array(void) {
     const char *source =
@@ -9391,7 +9391,7 @@ static void test_self_is_invalid_outside_type_method(void) {
 }
 
 static void test_self_is_capturable_inside_method_lambda(void) {
-    /* Per docs/feng-function.md, lambdas declared inside a member method
+    /* Per docs/specifications/feng-function.md, lambdas declared inside a member method
      * (or constructor) body may capture the enclosing object's `self`. */
     const char *source =
         "module demo.main;\n"
@@ -9730,7 +9730,7 @@ static void test_numeric_literal_negative_to_unsigned_target_is_rejected(void) {
 }
 
 static void test_numeric_literal_overflows_default_int_target(void) {
-    /* Default integer literal type is `int` (i32) per docs/feng-builtin-type.md §16, so an
+    /* Default integer literal type is `int` (i32) per docs/specifications/feng-builtin-type.md §16, so an
      * out-of-range literal must be rejected even when the target's canonical name is i32. */
     const char *source =
         "module demo.main;\n"
@@ -15652,7 +15652,7 @@ static void test_spec_equality_int_not_recorded(void) {
     feng_program_free(program);
 }
 
-/* --- Value-kind classification tests (dev/feng-value-model-delivered.md §6.1) --- */
+/* --- Value-kind classification tests (docs/engineering/feng-value-model-delivered.md §6.1) --- */
 
 static const FengDecl *find_enum_decl_by_name(
         const FengSemanticAnalysis *analysis, const char *name) {
@@ -16853,7 +16853,7 @@ static void test_generic_type_bare_constructor_call_rejected(void) {
      * rejected — Feng does not infer type arguments from constructor params.
      * The compiler treats the bare name as a non-generic type lookup; with
      * T uninstantiated, no constructor matches the argument shape.
-     * Mirrors C# CS0305 behavior. See dev/feng-type-arity-overload-dev.md §0.2
+     * Mirrors C# CS0305 behavior. See docs/engineering/feng-type-arity-overload-dev.md §0.2
      * for the design rationale. */
     const char *source =
         "module demo.main;\n"
@@ -16889,7 +16889,7 @@ static void test_generic_type_bare_static_method_call_rejected(void) {
      * treats `Box` as a non-generic lookup; with T uninstantiated, the static
      * method signature cannot be matched, so the call falls back to the
      * overload-mismatch path. Mirrors C# CS0305 behavior. See
-     * dev/feng-type-arity-overload-dev.md §0.2 for the design rationale. */
+     * docs/engineering/feng-type-arity-overload-dev.md §0.2 for the design rationale. */
     const char *source =
         "module demo.main;\n"
         "type Box<T> {\n"

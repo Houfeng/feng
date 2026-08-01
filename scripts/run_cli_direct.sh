@@ -72,9 +72,9 @@ if expect_ok "help" "$FENG" --help; then
         failures=$((failures + 1))
     fi
     sed '$d' "$WORK/help.out" >"$WORK/help.content.out"
-    if ! cmp -s "$ROOT/chore/feng-usage.txt" "$WORK/help.content.out"; then
-        echo "FAIL[help] output differs from chore/feng-usage.txt"
-        diff -u "$ROOT/chore/feng-usage.txt" "$WORK/help.content.out" || true
+    if ! cmp -s "$ROOT/notes/feng-usage.txt" "$WORK/help.content.out"; then
+        echo "FAIL[help] output differs from notes/feng-usage.txt"
+        diff -u "$ROOT/notes/feng-usage.txt" "$WORK/help.content.out" || true
         failures=$((failures + 1))
     fi
 fi
@@ -255,7 +255,7 @@ fi
 # 7. runtime lookup failure diagnostic (FENG_RUNTIME_LIB removed).
 # Previously tested the FENG_RUNTIME_LIB environment variable pointing at a
 # nonexistent file. FENG_RUNTIME_LIB has been removed per the release plan
-# (dev/feng-release-and-install.md §4.1); runtime is now located via two-step
+# (docs/engineering/feng-release-and-install.md §4.1); runtime is now located via two-step
 # lookup: the single complete platform path <exe>/../lib/<os>-<arch>-<abi>/.
 # A missing-runtime case requires an isolated installation layout and is covered
 # by distribution manifest verification rather than this source-tree smoke test.

@@ -352,7 +352,7 @@ parser 只保留这种有效文档注释，并把它绑定到对应声明。
 ### Phase E：后续性能优化
 
 缓存、调度、交互请求路径和性能验收的主规范见
-[dev/feng-lsp-performance-optimize.md](feng-lsp-performance-optimize.md)。
+[docs/engineering/feng-lsp-performance-optimize.md](feng-lsp-performance-optimize.md)。
 
 - 是否需要为 workspace `.ft` 增加统一生产策略
 - 本地缓存失效策略

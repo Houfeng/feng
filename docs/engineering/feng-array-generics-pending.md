@@ -1,7 +1,7 @@
 # Feng 数组 `fit` 泛型约束待开发项
 
 > 本文档用于整理 `fit T[]` / `fit T[!]` 中由数组目标形式引入的元素类型参数如何声明、检查与导出约束。
-> [docs/feng-fit-builtin-type.md](../docs/feng-fit-builtin-type.md) 是内建类型作为 `fit` 目标的专项规范；本文只写开发步骤与待定事项，不重复定义数组本体语义。
+> [docs/specifications/feng-fit-builtin-type.md](../specifications/feng-fit-builtin-type.md) 是内建类型作为 `fit` 目标的专项规范；本文只写开发步骤与待定事项，不重复定义数组本体语义。
 
 ## 1. 当前前提
 
@@ -9,7 +9,7 @@
 - 当前文档和实现只支持无约束元素类型参数；尚不能表达 `T` 必须满足某个 `spec` 约束面。
 - 普通 Feng 泛型已经支持 `T: Spec` 形式的约束声明，并通过语义检查与 witness 支持共享方法体；该约束面当前包括 object-form `spec` 与 callable-form `spec`。
 - 数组 `fit` 目标引入的 `T` 属于 Feng 层语言泛型问题，继续走普通泛型约束 / witness 体系。
-- 该能力与 `@runtime extern func` 的 runtime API 泛型描述符互相独立。runtime API 泛型整理在 [dev/feng-runtime-generics-delivered.md](./feng-runtime-generics-delivered.md)。
+- 该能力与 `@runtime extern func` 的 runtime API 泛型描述符互相独立。runtime API 泛型整理在 [docs/engineering/feng-runtime-generics-delivered.md](./feng-runtime-generics-delivered.md)。
 
 ## 2. 目标
 
@@ -48,7 +48,7 @@ fit T[!]: Searchable<T> where T: Equal<T> {
 - 约束满足检查复用现有可见 `fit` / `spec` 关系。
 - 方法体内对 `T` 的 object-form 约束成员访问走普通 witness 分发。
 - 方法体内对 `T` 的 callable-form 约束直接调用走普通 callable constraint invoke witness 分发。
-- callable-form `spec` 可以作为 `T: Mapper` 这类泛型约束，但仍不得作为 `fit A: Mapper` 的右侧契约适配目标；`fit` 右侧契约适配边界继续遵循 [docs/feng-fit.md](../docs/feng-fit.md)。
+- callable-form `spec` 可以作为 `T: Mapper` 这类泛型约束，但仍不得作为 `fit A: Mapper` 的右侧契约适配目标；`fit` 右侧契约适配边界继续遵循 [docs/specifications/feng-fit.md](../specifications/feng-fit.md)。
 - 不能因为目标是内建数组 `fit` 就引入第二套约束语义。
 
 ### 3.2 与数组目标解析的关系
@@ -107,7 +107,7 @@ fit<T: Equal<T>> T[] {
 }
 ```
 
-该形态与普通泛型声明头接近，但会改变当前 `fit T[]` “由目标形式隐式引入 T”的书写模型。若采用，需要同步更新 [docs/feng-fit.md](../docs/feng-fit.md) 与 [docs/feng-fit-builtin-type.md](../docs/feng-fit-builtin-type.md)。
+该形态与普通泛型声明头接近，但会改变当前 `fit T[]` “由目标形式隐式引入 T”的书写模型。若采用，需要同步更新 [docs/specifications/feng-fit.md](../specifications/feng-fit.md) 与 [docs/specifications/feng-fit-builtin-type.md](../specifications/feng-fit-builtin-type.md)。
 
 ### 4.4 当前建议
 
@@ -128,7 +128,7 @@ fit T[!]: Searchable<T> where T: Equal<T> {
 ## 5. 语义规则草案
 
 - [必须] 数组目标形式引入的类型参数可以声明一个或多个普通泛型约束。
-- [必须] 约束目标的合法性、父约束传递、泛型 `spec` 实参检查，复用 [docs/feng-generics-draft.md](../docs/feng-generics-draft.md) 的普通泛型约束规则；当前包括 object-form `spec` 与 callable-form `spec`。
+- [必须] 约束目标的合法性、父约束传递、泛型 `spec` 实参检查，复用 [docs/specifications/feng-generics-draft.md](../specifications/feng-generics-draft.md) 的普通泛型约束规则；当前包括 object-form `spec` 与 callable-form `spec`。
 - [必须] `fit` 块体内，受 object-form 约束的元素类型参数可使用约束提供的字段、方法和 `spec` 视角能力。
 - [必须] `fit` 块体内，受 callable-form 约束的元素类型参数可按约束签名直接调用，例如 `func run(value: T) { value(arg); }` 这类路径必须复用普通 generic callable constraint invoke lowering。
 - [必须] 约束在 direct-call 与 spec-call 路径中都应保持与普通泛型方法一致的 witness 行为。
@@ -145,10 +145,10 @@ fit T[!]: Searchable<T> where T: Equal<T> {
 ### 6.1 规范收敛
 
 - [ ] 确认最终约束语法。
-- [ ] 更新 [docs/feng-fit-builtin-type.md](../docs/feng-fit-builtin-type.md)，加入数组目标形式引入类型参数的约束声明规则。
-- [ ] 必要时更新 [docs/feng-fit.md](../docs/feng-fit.md)，让通用 `fit` 语法能引用该约束子句。
-- [ ] 必要时更新 [docs/feng-generics-draft.md](../docs/feng-generics-draft.md)，说明该能力复用普通泛型约束语义。
-- [ ] 更新 [docs/feng-symbol-table.md](../docs/feng-symbol-table.md)，明确 `.ft` 中如何导出数组目标局部类型参数约束。
+- [ ] 更新 [docs/specifications/feng-fit-builtin-type.md](../specifications/feng-fit-builtin-type.md)，加入数组目标形式引入类型参数的约束声明规则。
+- [ ] 必要时更新 [docs/specifications/feng-fit.md](../specifications/feng-fit.md)，让通用 `fit` 语法能引用该约束子句。
+- [ ] 必要时更新 [docs/specifications/feng-generics-draft.md](../specifications/feng-generics-draft.md)，说明该能力复用普通泛型约束语义。
+- [ ] 更新 [docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md)，明确 `.ft` 中如何导出数组目标局部类型参数约束。
 
 验收口径：
 
@@ -189,7 +189,7 @@ fit T[!]: Searchable<T> where T: Equal<T> {
 - [ ] `.ft` 中 ARRAY type node 的元素 `TYPE_PARAM_REF` 必须关联约束事实。
 - [ ] 公开数组 `fit` 导出时，保留类型参数顺序、约束目标、右侧 `spec` 关系和未实例化成员签名。
 - [ ] `import` 外部包时，消费者只依赖 `.ft` 即可恢复数组目标约束并完成语义分析。
-- [ ] 孤儿适配导出规则继续按 [docs/feng-fit.md](../docs/feng-fit.md) 执行，不因元素类型约束而放宽。
+- [ ] 孤儿适配导出规则继续按 [docs/specifications/feng-fit.md](../specifications/feng-fit.md) 执行，不因元素类型约束而放宽。
 
 验收口径：
 
@@ -214,12 +214,12 @@ fit T[!]: Searchable<T> where T: Equal<T> {
 
 - [ ] 在具备约束语法后，评估 `indexOf` 是否应提供约束型 Feng 层实现、runtime helper 型实现，或两者分别承担不同能力。
 - [ ] 若声明 `Equal<T>` / `Comparable<T>` 等标准契约，必须先进入对应标准库 / 语言规范文档。
-- [ ] 更新 [docs/feng-std-array.md](../docs/feng-std-array.md)，只记录标准库数组 API 语义，不在其中重复数组目标约束主规则。
+- [ ] 更新 [docs/specifications/feng-std-array.md](../specifications/feng-std-array.md)，只记录标准库数组 API 语义，不在其中重复数组目标约束主规则。
 
 验收口径：
 
 - 标准库数组 API 的元素能力要求可被静态表达。
-- 数组本体语义仍以 [docs/feng-builtin-type.md](../docs/feng-builtin-type.md) 为准。
+- 数组本体语义仍以 [docs/specifications/feng-builtin-type.md](../specifications/feng-builtin-type.md) 为准。
 
 ### 6.7 测试与回归
 

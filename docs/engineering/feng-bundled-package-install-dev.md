@@ -2,7 +2,7 @@
 
 > 状态：实施完成，等待人工 Review。本文只收敛将编译器发行包顶层 `pkg/` 目录接入
 > `feng deps install` 的开发方案；正式依赖管理语义仍以
-> [feng-deps.md](../docs/feng-deps.md) 为主规范。实施前先更新主规范，再修改代码和测试。
+> [feng-deps.md](../specifications/feng-deps.md) 为主规范。实施前先更新主规范，再修改代码和测试。
 
 ## 1 目标
 
@@ -160,7 +160,7 @@ registry 包非法，不使用 `pkg/` 覆盖该错误。registry 的其他既有
 
 ### 8.1 主规范
 
-实施代码前更新 [feng-deps.md](../docs/feng-deps.md)：
+实施代码前更新 [feng-deps.md](../specifications/feng-deps.md)：
 
 - 在 registry 与全局 cache 规则中加入发行包 `pkg/` 备用安装来源。
 - 更新缺少 registry 时的行为：先查找 `pkg/`，未命中后报告包找不到。

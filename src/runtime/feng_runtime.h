@@ -34,7 +34,7 @@ typedef void (*FengFinalizerFn)(void *self);
 /* Codegen-emitted "release children" callback. Invoked by the ARC release
  * path immediately before `free()` to drop every managed reference held by
  * the dying object's fields. This slot is conceptually distinct from
- * `finalizer` — see docs/feng-lifetime.md §11/§13.2:
+ * `finalizer` — see docs/specifications/feng-lifetime.md §11/§13.2:
  *
  *   - `finalizer` is OPTIONAL and reflects user-declared semantics only.
  *     The cycle collector invokes it under the §13.2 two-phase rule and
@@ -117,7 +117,7 @@ typedef struct FengTypeDescriptor {
     const size_t *reified_field_offsets;
 
     /* Concrete aggregate (tuple) dependencies across all methods, indexed
-     * by globally stable sort key (see dev/feng-generic-optimize-dev.md §2.2). */
+     * by globally stable sort key (see docs/engineering/feng-generic-optimize-dev.md §2.2). */
     size_t reified_agg_deps_count;
     const struct FengAggregateDescriptor *const *reified_agg_deps;
 
@@ -257,7 +257,7 @@ void *feng_take(void **slot);
 /* --- Value model: by-value aggregates with managed slots --------------- */
 /*
  * The runtime classifies every Feng value into one of three categories
- * (see dev/feng-value-model-delivered.md §2):
+ * (see docs/engineering/feng-value-model-delivered.md §2):
  *
  *   FENG_VALUE_TRIVIAL          — bytes only, no retain/release; codegen
  *                                 emits direct C assignment / memcpy.
@@ -401,7 +401,7 @@ typedef struct FengAggregateDescriptor {
 typedef struct FengFunctionDescriptor {
     const char *name;
     /* Concrete aggregate (tuple) dependencies used in this invocation,
-     * sorted by key (see dev/feng-generic-optimize-dev.md §2.2). */
+     * sorted by key (see docs/engineering/feng-generic-optimize-dev.md §2.2). */
     size_t reified_agg_deps_count;
     const FengAggregateDescriptor *const *reified_agg_deps;
     /* Concrete managed (type) dependencies for instance creation,
@@ -508,7 +508,7 @@ bool feng_spec_subject_equal(void *left, void *right);
 typedef struct FengArray FengArray;
 
 /* Creates a fresh +1 array. Element classification follows
- * dev/feng-value-model-delivered.md §7.3:
+ * docs/engineering/feng-value-model-delivered.md §7.3:
  *
  *   FENG_VALUE_TRIVIAL          — `element_aggregate` MUST be NULL; slots
  *                                 hold raw bytes and finalize merely frees

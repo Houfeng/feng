@@ -1,6 +1,6 @@
 # runtime 与 codegen 目录与接口草案（Phase 1A）
 
-> 本文档配合 [feng-phase1a-tasks.md](./feng-phase1a-tasks.md)，给出 Phase 1A 实施时 `src/runtime/` 与 `src/codegen/` 的目录布局、对外头文件、关键 ABI 与命名约定。所有不在本草案中的接口在 1A 阶段一律不得对外暴露。
+> 本文档配合 [feng-phase1a-tasks-delivered.md](./feng-phase1a-tasks-delivered.md)，给出 Phase 1A 实施时 `src/runtime/` 与 `src/codegen/` 的目录布局、对外头文件、关键 ABI 与命名约定。所有不在本草案中的接口在 1A 阶段一律不得对外暴露。
 
 ## 1 目录布局
 

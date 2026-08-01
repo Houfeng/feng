@@ -28,7 +28,7 @@ Phase 2 的目标不是继续停留在“生成 C 文件”，而是把当前实
 
 - `--target` 在 Phase 2 首批实现中仅支持 `bin`；`lib` 明确保留给后续阶段，不在本阶段落地。
 - `--release` 在 Phase 2 首批实现中可先忽略，不作为阻塞项；如保留解析入口，应明确为“暂未生效”或“当前未实现”，避免误导为已有发布模式差异。
-- `--out` 按 [docs/feng-cli.md](docs/feng-cli.md#L44) 的说明视为输出根目录，而不是单个最终文件路径。
+- `--out` 按 [docs/specifications/feng-cli.md](../specifications/feng-cli.md#L44) 的说明视为输出根目录，而不是单个最终文件路径。
 - Phase 2 直编闭环至少需要落地以下目录语义：
   - `<out>/ir/c`：编译生成的 C 中间文件。
   - `<out>/bin`：最终可执行文件。
@@ -74,7 +74,7 @@ Phase 2 完成后，CLI 表面应满足以下结构：
 
 ### 4.1.1 输出目录结构
 
-Phase 2 指导实现需要与 [docs/feng-cli.md](docs/feng-cli.md#L44) 中已增加的 `--out` 说明保持一致。
+Phase 2 指导实现需要与 [docs/specifications/feng-cli.md](../specifications/feng-cli.md#L44) 中已增加的 `--out` 说明保持一致。
 
 建议当前阶段按以下方式落地：
 

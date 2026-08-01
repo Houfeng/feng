@@ -2,7 +2,7 @@
 
 > **状态：已交付**（4b-α + 4b-β + 4b-γ 全部落地，18/18 smoke + 全套单测零回归）。
 > 本文档原为实现草案；当 4b 三个子步骤全部完成后由 `feng-spec-codegen-pending.md` 改名收口，作为 4b 阶段的设计与实施记录。
-> 语言语义以 [docs/feng-spec.md](../docs/feng-spec.md)、[docs/feng-fit.md](../docs/feng-fit.md)、[docs/feng-function.md](../docs/feng-function.md) 为准。
+> 语言语义以 [docs/specifications/feng-spec.md](../specifications/feng-spec.md)、[docs/specifications/feng-fit.md](../specifications/feng-fit.md)、[docs/specifications/feng-function.md](../specifications/feng-function.md) 为准。
 > 值模型基座见 [feng-value-model-delivered.md](./feng-value-model-delivered.md)；本文档不重复其规范，只声明 spec 如何在该基座上落点。
 > 本文档只讨论非 C ABI 场景，不涉及 C ABI 与函数指针桥接（Phase 2 范畴）。
 
@@ -225,7 +225,7 @@ struct FengSpecDefault__demo__Named__Subject {
 
 - 该类型对开发者不可见，名字以 `Default__` 前缀；不允许出现在源码可见命名表里。
 - 是普通托管对象，走现有 `feng_object_new` 分配，参与 ARC 与 cycle collector。
-- spec 字段在该隐藏类型上以"自有字段"形式存在，由 codegen 填充默认零值（按 [feng-builtin-type.md](../docs/feng-builtin-type.md) 默认零值规范）。
+- spec 字段在该隐藏类型上以"自有字段"形式存在，由 codegen 填充默认零值（按 [feng-builtin-type.md](../specifications/feng-builtin-type.md) 默认零值规范）。
 
 ### 6.3 默认 witness \[4b-β]
 

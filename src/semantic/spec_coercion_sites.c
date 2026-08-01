@@ -2,7 +2,7 @@
  *
  * Stores one entry per AST FengExpr that the resolver confirmed as a
  * coercion into a spec slot (object-form or callable-form). See
- * dev/feng-spec-semantic-draft.md §6.2 / §8.3 / §8.4 / §10 Phase S1.
+ * docs/engineering/feng-spec-semantic-delivered.md §6.2 / §8.3 / §8.4 / §10 Phase S1.
  *
  * The table is populated incrementally during analysis (callers from
  * analyzer.c invoke the record_* APIs each time validate_expr_against_-

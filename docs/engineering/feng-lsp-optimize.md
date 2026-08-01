@@ -1,6 +1,6 @@
 # Feng LSP 关键字与注解补全优化
 
-> 关联文档：[dev/feng-lsp-delivered.md](feng-lsp-delivered.md)
+> 关联文档：[docs/engineering/feng-lsp-delivered.md](feng-lsp-delivered.md)
 > 本文档定义 Feng LSP 关键字上下文感知补全、注解补全、Snippet 支持的设计方案与实施任务。
 
 ---

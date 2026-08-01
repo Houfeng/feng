@@ -12,7 +12,7 @@
 2. 全局配置 `~/.feng/config.fm` 中 `[registry]` 节的 `url`
 
 编译器发行包可以按
-[Feng 分发与安装方案](../dev/feng-release-and-install.md#4-压缩包目录结构)
+[Feng 分发与安装方案](../engineering/feng-release-and-install.md#4-压缩包目录结构)
 在顶层 `pkg/` 中随附精确版本 `.fb`。随附包路径固定为:
 
 ```text

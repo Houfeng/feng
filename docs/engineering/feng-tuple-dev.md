@@ -1,6 +1,6 @@
 # 元组开发任务
 
-规范文档：[docs/feng-tuple.md](../docs/feng-tuple.md)
+规范文档：[docs/specifications/feng-tuple.md](../specifications/feng-tuple.md)
 
 ---
 

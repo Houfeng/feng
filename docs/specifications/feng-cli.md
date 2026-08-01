@@ -1,6 +1,6 @@
 # Feng CLI 命令与选项
 
-> 本文件仅描述 CLI 的命令、选项与参数，不涉及 CLI 内部处理逻辑。平台标识值以 [feng-os-arch.md](feng-os-arch.md) 为准，内部构建、工具链选择与平台转换流程以 [feng-build.md](feng-build.md) 为准，发行包内 runtime / LLVM / sysroot 布局以 [feng-release-and-install.md](../dev/feng-release-and-install.md) 为准。
+> 本文件仅描述 CLI 的命令、选项与参数，不涉及 CLI 内部处理逻辑。平台标识值以 [feng-os-arch.md](feng-os-arch.md) 为准，内部构建、工具链选择与平台转换流程以 [feng-build.md](feng-build.md) 为准，发行包内 runtime / LLVM / sysroot 布局以 [feng-release-and-install.md](../engineering/feng-release-and-install.md) 为准。
 
 ## 1 设计目标
 
@@ -70,7 +70,7 @@ feng lsp [--stdio]
 - diagnostics / hover / completion / definition / references / rename 统一复用现有 parser / semantic / imported-module 能力; 当前项目不存在本地 workspace `.ft` 时,必须直接回退到源码分析,不得要求用户先手动生成缓存。
 - 若当前项目目录下存在合法 `feng.fm`,LSP 按项目上下文解析整个项目源码并解析依赖包; 若不存在 `feng.fm`,则按单文件模式分析当前文档。
 - 对当前项目内已保存且与磁盘一致的文档,若 `build/<归一化 host 平台>/obj/symbols/**/*.ft` 可读,`hover` / `definition` / `completion` 可优先消费 workspace cache; 若缓存缺失、命中失败或当前文档存在未保存修改,则回退到源码分析。
-- `hover` 优先展示声明签名与文档注释; 绑定签名必须展示该绑定的静态类型,省略类型标注的绑定应使用 semantic 分析得到的初始化器推导类型,不得把缺失的语法类型误展示为 `void`; infix match 绑定必须在声明位置及其按 `docs/feng-flow.md` 可见的使用位置展示收窄后的静态类型,单 member 显示具体 member 类型,多 member 显示对应的子集 union 类型; 参数悬停签名必须保留参数可变性关键字(`let`/`var`)与参数类型; 函数或方法返回类型位置的类型标识符必须支持 `hover` 与 `definition`; 对声明悬停命中应以标识符为主,如 `fit` 扩展方法的 `func` 关键字位置不要求返回函数说明; 文档注释只识别已绑定到声明的 `/** */`,外部依赖包公开 `.ft` 中已规范化保存的文档注释也必须在 hover 中展示; 服务端应按客户端在 initialize 中声明的 Hover `contentFormat` 能力协商返回 `markdown` 或 `plaintext`,支持 Markdown 时应将声明签名与文档注释格式化为标准 Markdown,其中 `@foo bar ...` 风格的文档标签应按结构化参数项显示; 客户端未声明 Markdown 能力时必须回退为纯文本 Hover,保证跨编辑器兼容。
+- `hover` 优先展示声明签名与文档注释; 绑定签名必须展示该绑定的静态类型,省略类型标注的绑定应使用 semantic 分析得到的初始化器推导类型,不得把缺失的语法类型误展示为 `void`; infix match 绑定必须在声明位置及其按 `docs/specifications/feng-flow.md` 可见的使用位置展示收窄后的静态类型,单 member 显示具体 member 类型,多 member 显示对应的子集 union 类型; 参数悬停签名必须保留参数可变性关键字(`let`/`var`)与参数类型; 函数或方法返回类型位置的类型标识符必须支持 `hover` 与 `definition`; 对声明悬停命中应以标识符为主,如 `fit` 扩展方法的 `func` 关键字位置不要求返回函数说明; 文档注释只识别已绑定到声明的 `/** */`,外部依赖包公开 `.ft` 中已规范化保存的文档注释也必须在 hover 中展示; 服务端应按客户端在 initialize 中声明的 Hover `contentFormat` 能力协商返回 `markdown` 或 `plaintext`,支持 Markdown 时应将声明签名与文档注释格式化为标准 Markdown,其中 `@foo bar ...` 风格的文档标签应按结构化参数项显示; 客户端未声明 Markdown 能力时必须回退为纯文本 Hover,保证跨编辑器兼容。
 - LSP 用户可见的声明签名必须保留参数声明的表层语法; 对变长参数必须显示为 `T...`,不得把内部规范化后的 `T[]` 暴露在 hover 或 completion detail 中。
 - `definition` 以源码声明位置为主; 当前项目内定义应返回对应源文件位置。
 - `references` 返回当前工作区源码中的所有引用位置; 对外部依赖包符号,可返回本地工作区中的使用点,但不要求返回包内只读定义位置。
@@ -96,7 +96,7 @@ feng dap [--stdio]
 
 - `dap` 与 `lsp` 明确分层; `feng dap` 只负责调试协议代理,不承载语言服务能力。
 - `feng dap` 支持 macOS 与 Linux 上的 `lldb-dap` 后端,launch 入口只接受 `target=bin` 的本地非 `release` 构建产物。
-- `feng dap` 先在本地处理 `initialize`,随后在 DAP `launch` 前完成 `.fd` 装载与 binary 指纹校验。只有校验通过后才按以下顺序定位并拉起后端：非空 `FENG_LLDB_DAP` 显式指定的单个可执行文件、`<feng 可执行文件目录>/../toolchain/llvm/bin/lldb-dap`（发行布局见 [feng-release-and-install.md](../dev/feng-release-and-install.md)）、`PATH` 中的 `lldb-dap`、macOS `xcrun -f lldb-dap`。`FENG_LLDB_DAP` 指定的工具不可用、bundled 路径存在但损坏或已选后端启动失败时必须保留真实原因并明确报错，不得静默尝试后续候选；只有前一层未配置或 bundled 路径不存在时才能继续。环境变量值不作为 shell 命令解析，也不接受内嵌参数。进入代理阶段后,`setBreakpoints` 会把编辑器本地文件路径改写为 `PKG_NAME://<package-relative path>`,`stackTrace` 会把该逻辑 URI 回写为编辑器本地文件路径,并把 backend frame 名称重写为 Feng callable 名称,同时隐藏标记为 runtime / generated helper 的 frame。
+- `feng dap` 先在本地处理 `initialize`,随后在 DAP `launch` 前完成 `.fd` 装载与 binary 指纹校验。只有校验通过后才按以下顺序定位并拉起后端：非空 `FENG_LLDB_DAP` 显式指定的单个可执行文件、`<feng 可执行文件目录>/../toolchain/llvm/bin/lldb-dap`（发行布局见 [feng-release-and-install.md](../engineering/feng-release-and-install.md)）、`PATH` 中的 `lldb-dap`、macOS `xcrun -f lldb-dap`。`FENG_LLDB_DAP` 指定的工具不可用、bundled 路径存在但损坏或已选后端启动失败时必须保留真实原因并明确报错，不得静默尝试后续候选；只有前一层未配置或 bundled 路径不存在时才能继续。环境变量值不作为 shell 命令解析，也不接受内嵌参数。进入代理阶段后,`setBreakpoints` 会把编辑器本地文件路径改写为 `PKG_NAME://<package-relative path>`,`stackTrace` 会把该逻辑 URI 回写为编辑器本地文件路径,并把 backend frame 名称重写为 Feng callable 名称,同时隐藏标记为 runtime / generated helper 的 frame。
 - `feng dap` 在 DAP `launch` 请求中定位目标 binary 同级的 `.fd`,校验 sidecar 中记录的 binary 内容指纹与当前 binary 是否匹配; 校验失败必须直接拒绝会话。
 - `feng dap` 当前已负责在编辑器本地文件路径与 `PKG_NAME://<package-relative path>` 逻辑源码 URI 之间双向转换,并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame 过滤; `variables` 当前以 `.fd` 中声明的用户变量映射为白名单,会过滤未映射的 backend 临时变量,并优先用用户变量自己的读表达式回读显示值: 对 capture / `self` 等特殊 carrier 使用 `.fd.read_expr`,对普通参数与局部绑定则默认以其 backend lvalue 作为只读回读表达式,避免首次停下时直接暴露不稳定的 backend 原值; 当前 frame 可直接访问的模块级 binding 也需要出现在该 frame 的 `.fd` 变量映射中,这样 backend `Globals` scope 才能显示 Feng 名称; `.fd` 中每个用户变量记录现在都必须携带 `display_type`,数组类型沿用 Feng 语法显示为 `T[]` 或 `T[!]`; 对仍表现为 runtime carrier pointer 的数组 / 字符串变量,顶层变量显示会进一步收敛,其中数组显示为基于 runtime `length` 字段回读得到的 `元素类型[length=N]` 摘要,例如 `string[length=1]`,而字符串应优先显示实际字符串值,而不是沿用数组式的 `string[length=N]` 格式。为避免循环体首行断点命中 `for` 初始化之前的 backend 位置,调试构建还需要把三段式 `for` 的 header / body / update scaffolding 保持在稳定且分离的逻辑源码行上,并把一个 Feng binding 或表达式语句展开出的 `ensure_init` / 临时局部 / variadic 打包数组 / cleanup 注册持续锚定在同一源码行,不能把下一条语句的首个断点地址提前占走。`evaluate` 已支持只读 watch 子集中的 identifier、成员访问、常量整数字面量索引以及简单算术 / 比较表达式的 Feng 名称解析与后端读取改写; `frame_policy` 的 `COLLAPSE` 语义仍在后续子项中。
 - 当前首版不支持 attach、reverse debugging、具有副作用的 evaluate/watch,也不支持函数调用、赋值、非常量索引或其他未落入只读 watch 子集的 Feng 表达式求值。

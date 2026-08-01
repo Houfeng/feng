@@ -22,7 +22,7 @@ struct FengArray {
     /* Per-element storage size in bytes (fixed per array instance). */
     size_t element_size;
     const FengTypeDescriptor *element_desc;
-    /* Three-way classification per dev/feng-value-model-delivered.md §7.3.
+    /* Three-way classification per docs/engineering/feng-value-model-delivered.md §7.3.
      * TRIVIAL    — bytes only.
      * MANAGED_POINTER — payload is interpreted as `void *` slots.
      * AGGREGATE  — payload is interpreted as by-value aggregates of size
@@ -79,7 +79,7 @@ void feng_aggregate_release_and_clear_internal(
     const FengAggregateDescriptor *desc);
 
 /* Invoke a user-declared finalizer behind a sentinel exception barrier. Per
- * docs/feng-lifetime.md §13.2 / docs/feng-type.md, a finalizer must not let
+ * docs/specifications/feng-lifetime.md §13.2 / docs/specifications/feng-type.md, a finalizer must not let
  * an exception propagate past its body; if one does, the runtime panics
  * immediately rather than unwinding across ARC/collector C frames (which
  * would skip all subsequent ARC bookkeeping and corrupt the candidate

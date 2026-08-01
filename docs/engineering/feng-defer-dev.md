@@ -1,6 +1,6 @@
 # Feng defer 开发文档
 
-> 规范来源：[docs/feng-defer.md](../docs/feng-defer.md)
+> 规范来源：[docs/specifications/feng-defer.md](../specifications/feng-defer.md)
 > 本文记录实现方案、运行时机制、codegen 接入点与待办任务。
 
 ---
@@ -30,7 +30,7 @@
 
 ### 1.2 未选方案
 
-- **全量切换 `__attribute__((cleanup))`**：dev/feng-exception-dev.md 曾设想此方向，但属于大重构（20+ codegen 调用点 + landing pad 重写），不符合"即简单又完整"。`__attribute__((cleanup))` 在 Feng 异常（手动 libunwind 展开）路径上仍需手动 landing pad emit，优势不明显。**建议后续作为独立优化交付，本次不涉及。**
+- **全量切换 `__attribute__((cleanup))`**：docs/engineering/feng-exception-dev.md 曾设想此方向，但属于大重构（20+ codegen 调用点 + landing pad 重写），不符合"即简单又完整"。`__attribute__((cleanup))` 在 Feng 异常（手动 libunwind 展开）路径上仍需手动 landing pad emit，优势不明显。**建议后续作为独立优化交付，本次不涉及。**
 - **内联 emit（Swift/Zig 方式）**：codegen 在每个退出点（return / break / continue / throw / landing pad）前直接 emit defer 体代码。异常路径上 landing pad 需 emit defer 体，膨胀严重；且 codegen 需精确识别所有可能抛异常的点，复杂度大增。Feng 的异常机制（libunwind + personality 遍历 cleanup chain）决定了 runtime 必须能通过函数指针调用 defer 体，内联方案无法满足此要求。
 - **Go 式独立 defer 链表**：引入与 cleanup chain 并行的独立 defer 链表，两套机制并存，架构冗余，且异常路径需额外遍历 defer 链表。
 

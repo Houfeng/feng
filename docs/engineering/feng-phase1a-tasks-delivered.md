@@ -48,7 +48,7 @@
 
 ### T3 运行时骨架
 
-- 输入：[feng-lifetime.md](../docs/feng-lifetime.md) §4、§12.1、§12.2、§13.2 的 ARC 核心约束。
+- 输入：[feng-lifetime.md](../specifications/feng-lifetime.md) §4、§12.1、§12.2、§13.2 的 ARC 核心约束。
 - 产物：`src/runtime/feng_runtime.h` 公共头 + `src/runtime/`（`feng_object.c`、`feng_string.c`、`feng_array.c`、`feng_panic.c`、`feng_exception.c`）。
 - 验收：`build/lib/libfeng_runtime.a` 可独立链接；新增 `test/runtime/test_runtime.c` 覆盖 retain/release 计数、字符串拼接、数组读写越界 panic、异常 throw/catch/unwind、终结器单路径调用各 ≥ 1 个用例。
 
@@ -65,7 +65,7 @@
 
 ### T5 CLI 直接编译模式
 
-- 输入：[feng-cli.md](../docs/feng-cli.md) §2、[feng-build.md](../docs/feng-build.md) §2。
+- 输入：[feng-cli.md](../specifications/feng-cli.md) §2、[feng-build.md](../specifications/feng-build.md) §2。
 - 产物（src/cli/main.c 重组）：
   - 把现有 `feng lex|parse|semantic|check` 移入 `feng tool ...`。
   - 新增直接模式：`feng <files> --target=bin --out=<path> [--release]`，调用 codegen 写入临时 `.c`，再 fork `$CC`（默认 `cc`）链接 `libfeng_runtime.a`，产出可执行文件。
@@ -104,9 +104,9 @@ T3 (runtime + 单测) ───────────────────�
 ## 5 关联文档
 
 - [feng-plan.md](./feng-plan.md)
-- [feng-runtime-codegen-draft.md](./feng-runtime-codegen-draft.md)
-- [feng-phase1a-tests.md](./feng-phase1a-tests.md)
-- [docs/feng-lifetime.md](../docs/feng-lifetime.md)
-- [docs/feng-exception.md](../docs/feng-exception.md)
-- [docs/feng-cli.md](../docs/feng-cli.md)
-- [docs/feng-build.md](../docs/feng-build.md)
+- [feng-runtime-codegen-delivered.md](./feng-runtime-codegen-delivered.md)
+- [feng-phase1a-tests-delivered.md](./feng-phase1a-tests-delivered.md)
+- [docs/specifications/feng-lifetime.md](../specifications/feng-lifetime.md)
+- [docs/specifications/feng-exception.md](../specifications/feng-exception.md)
+- [docs/specifications/feng-cli.md](../specifications/feng-cli.md)
+- [docs/specifications/feng-build.md](../specifications/feng-build.md)

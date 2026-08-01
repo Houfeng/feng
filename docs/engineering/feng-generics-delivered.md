@@ -1,10 +1,10 @@
 # Feng 泛型实现开发文档
 
 > **状态**: 实现进行中。
-> 语言规范权威来源：[docs/feng-generics-draft.md](../docs/feng-generics-draft.md)
-> 符号表规范权威来源：[docs/feng-symbol-table.md](../docs/feng-symbol-table.md)
-> 前置任务（Phase 5.5 符号表重构）见 [dev/feng-plan.md](./feng-plan.md)。
-> **当前阶段优先级调整（2026-05-08）**：暂停 [dev/feng-fit-optimize-delivered.md](./feng-fit-optimize-delivered.md) 中的“fit 值类型”推进，先把泛型本身补齐到可支撑标准库 `Map`、约束调用、值类型与各类契约场景的完整状态；fit 值类型工作在泛型完整后继续。
+> 语言规范权威来源：[docs/specifications/feng-generics-draft.md](../specifications/feng-generics-draft.md)
+> 符号表规范权威来源：[docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md)
+> 前置任务（Phase 5.5 符号表重构）见 [docs/engineering/feng-plan.md](./feng-plan.md)。
+> **当前阶段优先级调整（2026-05-08）**：暂停 [docs/engineering/feng-fit-optimize-delivered.md](./feng-fit-optimize-delivered.md) 中的“fit 值类型”推进，先把泛型本身补齐到可支撑标准库 `Map`、约束调用、值类型与各类契约场景的完整状态；fit 值类型工作在泛型完整后继续。
 
 ---
 
@@ -46,7 +46,7 @@
 
 ### 2026-05-09 跨包泛型消费缺口
 
-本次复查进一步确认，`std Map` 的真实准入路径是“作为 `.fb` 包公开泛型 API，再由 consumer 通过 `import` 消费”。该路径必须满足 [feng-package.md](../docs/feng-package.md) 对公开 `.ft` 的要求：公开泛型 `type`、`spec`、顶层 `func` 与成员方法必须导出类型参数、约束、未实例化签名骨架、泛型父 `spec` / `fit` 使用事实，consumer 不能依赖 provider 源码或某个已单态化实例。
+本次复查进一步确认，`std Map` 的真实准入路径是“作为 `.fb` 包公开泛型 API，再由 consumer 通过 `import` 消费”。该路径必须满足 [feng-package.md](../specifications/feng-package.md) 对公开 `.ft` 的要求：公开泛型 `type`、`spec`、顶层 `func` 与成员方法必须导出类型参数、约束、未实例化签名骨架、泛型父 `spec` / `fit` 使用事实，consumer 不能依赖 provider 源码或某个已单态化实例。
 
 本轮按以下四项收口：
 
@@ -824,7 +824,7 @@ static void cg_emit_generic_method(CG *cg, ...) {
 
 **结论**：当前方案本身就位于“全单态化”和“动态派发”之间：布局与 wrapper 是单态的，主体语义是共享的，契约调用走静态 witness 槽位而不是运行时反射。未来若对本包源码可见实例追加更激进的全单态化，只需要在 wrapper / 发码策略层分流，不需要推翻共享主体 ABI。
 
-**规范更新**：`docs/feng-generics-draft.md` §9 需要按此方案重写（详见 G0-1）。
+**规范更新**：`docs/specifications/feng-generics-draft.md` §9 需要按此方案重写（详见 G0-1）。
 
 ---
 
@@ -908,7 +908,7 @@ pair(1, "x");
 
 以下任务列表按推荐实现顺序排列。每项任务完成后应补测试并执行全量回归。
 
-> **前置**：Phase 5.5 符号表结构重构必须先完成。详见 `dev/feng-plan.md`。
+> **前置**：Phase 5.5 符号表结构重构必须先完成。详见 `docs/engineering/feng-plan.md`。
 
 ---
 
@@ -916,9 +916,9 @@ pair(1, "x");
 
 | 编号 | 任务 | 产出 | 备注 |
 | --- | --- | --- | --- |
-| G0-1 | 决策 Q1 代码生成策略，写入 `docs/feng-generics-draft.md` §9 | 规范更新 | ✓ 已决策，参见 Q1 节；阻塞 G6 已解除 |
+| G0-1 | 决策 Q1 代码生成策略，写入 `docs/specifications/feng-generics-draft.md` §9 | 规范更新 | ✓ 已决策，参见 Q1 节；阻塞 G6 已解除 |
 | G0-2 | 决策 Q2 泛型约束是否可以写泛型 spec 实例，更新规范 §4 和 §5 | 规范更新 | ✓ 已决策，参见 Q2 节 |
-| G0-3 | 决策 Q3 泛型 type 默认零值规则，更新 `docs/feng-type.md` | 规范更新 | ✓ 已决策，参见 Q3 节（原阻塞 G4-19） |
+| G0-3 | 决策 Q3 泛型 type 默认零值规则，更新 `docs/specifications/feng-type.md` | 规范更新 | ✓ 已决策，参见 Q3 节（原阻塞 G4-19） |
 | G0-4 | 决策 Q4 `>>` token 处理策略 | 规范更新 | ✓ 已决策，参见 Q4 节；G1-2 可删除 |
 
 ---
@@ -1162,7 +1162,7 @@ struct {
 
 | 编号 | 任务 |
 | --- | --- |
-| G7-1 | Parser 测试：全量覆盖 `docs/feng-generics-draft.md` 中正确语法 1-9 和错误语法 1-12 |
+| G7-1 | Parser 测试：全量覆盖 `docs/specifications/feng-generics-draft.md` 中正确语法 1-9 和错误语法 1-12 |
 | G7-2 | 语义分析测试：泛型声明、重载、推导、object-form / callable-form 约束访问、invariance 各场景；union-form 随 union 阶段补齐 |
 | G7-3 | 符号表测试：泛型声明导出 / 跨包读取后语义等价验证 |
 | G7-4 | 代码生成 smoke：基础 `Box<T>`、`MyType<T, V>`、任意多个类型参数、泛型类型上的泛型方法、generic type shared body 内部 self-call |

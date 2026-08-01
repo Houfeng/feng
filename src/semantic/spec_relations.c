@@ -4,7 +4,7 @@
  * relations after the main resolve pass succeeds. Each relation entry
  * carries the full provenance chain (declared head/parent, fit head/parent
  * + provider module) so downstream stages — codegen, diagnostics,
- * conflict-by-visible-surface checks (see dev/feng-spec-semantic-draft.md
+ * conflict-by-visible-surface checks (see docs/engineering/feng-spec-semantic-delivered.md
  * §8.1) — can reason about relations without re-walking the AST.
  *
  * Visibility filtering is intentionally NOT applied here. The table is
@@ -34,7 +34,7 @@ static bool rel_slice_eq_cstr_local(FengSlice s, const char *text, size_t tlen) 
 #define REL_SEQ(s, lit) rel_slice_eq_cstr_local((s), (lit), sizeof(lit) - 1U)
 
 static const char *rel_builtin_canonical_name(FengSlice name) {
-    /* After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
+    /* After AST alias normalization (docs/engineering/feng-scalar-alias-optimize.md §6),
      * only canonical width-explicit names reach this function. */
     if (REL_SEQ(name, "i8"))                                 { return "i8"; }
     if (REL_SEQ(name, "i16"))                                { return "i16"; }

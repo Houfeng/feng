@@ -25,7 +25,7 @@ static void feng_finalize_managed(FengManagedHeader *header) {
 
     /* User-defined finalizer runs first so that its body still observes a fully
      * constructed object (including managed children). Per
-     * docs/feng-lifetime.md §13.2 ARC path, the runtime must re-check the
+     * docs/specifications/feng-lifetime.md §13.2 ARC path, the runtime must re-check the
      * refcount after the finalizer returns: if user code published `self` (or
      * indirectly increased the refcount) during finalization, the object has
      * been resurrected and MUST NOT be freed in this pass; the next time the

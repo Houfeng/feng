@@ -2,7 +2,7 @@
 
 > 状态：设计中（design）
 >
-> 本文档是 `dev/feng-std-tui-dev.md` 第七阶段（视图机制层）的主规范。
+> 本文档是 `docs/engineering/feng-std-tui-dev.md` 第七阶段（视图机制层）的主规范。
 > 当前接口基线以 `std/src/tui/Widget.ff`、`std/src/tui/Thickness.ff`、`std/src/tui/ViewManager.ff` 和 `std/src/tui/views/View.ff` 中已经定义的类型为准。
 
 ## 1 总体目标

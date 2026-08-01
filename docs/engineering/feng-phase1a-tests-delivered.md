@@ -1,6 +1,6 @@
 # Phase 1A smoke 与回归测试清单
 
-> 本清单约定 Phase 1A 必须落地的测试集合，配合 [feng-phase1a-tasks.md](./feng-phase1a-tasks.md) §1.2 的硬门槛使用。任何 1A PR 合入前必须保证下列用例 100% 通过。
+> 本清单约定 Phase 1A 必须落地的测试集合，配合 [feng-phase1a-tasks-delivered.md](./feng-phase1a-tasks-delivered.md) §1.2 的硬门槛使用。任何 1A PR 合入前必须保证下列用例 100% 通过。
 
 ## 1 单元测试
 

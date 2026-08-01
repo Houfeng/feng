@@ -392,7 +392,7 @@ type GHashMiniMap<K: GHashable, V> {
 }
 
 // === 重载决议场景：泛型候选必须先满足约束,非泛型候选优先 ===
-// 见 docs/feng-generics-draft.md §5 规则:类型参数推导+约束验证+非泛型优先分层.
+// 见 docs/specifications/feng-generics-draft.md §5 规则:类型参数推导+约束验证+非泛型优先分层.
 
 // 约束 spec:只有实现了 GTaggable 的类型才能被泛型重载接受.
 spec GTaggable {

@@ -5,7 +5,7 @@
  * time a coercion site for the (T, S) pair is recorded). Each entry holds
  * the per-member implementation source resolved against T's visible face
  * (T's own members + visible fits, per §8.1). See
- * dev/feng-spec-semantic-draft.md §6.5 / §9.5 / §10 Phase S3.
+ * docs/engineering/feng-spec-semantic-delivered.md §6.5 / §9.5 / §10 Phase S3.
  *
  * Mutation is funneled through this translation unit so the analyzer never
  * touches the storage layout directly. The reserve/append split lets the
@@ -37,7 +37,7 @@ static bool slice_equals_cstr_local(FengSlice slice, const char *text) {
 }
 
 static const char *canonical_builtin_type_name_local(FengSlice name) {
-    /* After AST alias normalization (dev/feng-scalar-alias-optimize.md §6),
+    /* After AST alias normalization (docs/engineering/feng-scalar-alias-optimize.md §6),
      * only canonical width-explicit names reach this function. */
     if (slice_equals_cstr_local(name, "i8")) {
         return "i8";

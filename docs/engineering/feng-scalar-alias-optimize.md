@@ -2,7 +2,7 @@
 
 > 状态：草案  
 > 日期：2026-06-24  
-> 关联规范：[docs/feng-language.md](../docs/feng-language.md)、[docs/feng-builtin-type.md](../docs/feng-builtin-type.md)
+> 关联规范：[docs/specifications/feng-language.md](../specifications/feng-language.md)、[docs/specifications/feng-builtin-type.md](../specifications/feng-builtin-type.md)
 
 ## 1. 背景
 
@@ -201,7 +201,7 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ## 7. 影响范围
 
-- 规范文档：`docs/feng-language.md`（别名表与关键字说明）、`docs/feng-builtin-type.md`（别名表、映射规则，以及正文中引用 `long` 的描述如 `string.length()` 返回类型）
+- 规范文档：`docs/specifications/feng-language.md`（别名表与关键字说明）、`docs/specifications/feng-builtin-type.md`（别名表、映射规则，以及正文中引用 `long` 的描述如 `string.length()` 返回类型）
 - 编译器：语义分析入口新增统一别名归一逻辑，下游 6 个文件的别名代码移除；codegen `k_builtin_types[]` 仅保留标准名条目，不再感知别名；LSP `runtime.c` 两处硬编码替换为 `is_builtin_type_name()` 调用，同时修复标准名未被识别为内建类型的现有遗漏
 - 标准库（`std/`）：约 639 处 `long` 使用需迁移为 `i64`，涉及 `stdio.ff`、`SystemInfo.ff`、`MemoryInfo.ff`、`TestContext.ff` 等文件
 - 兼容性测试（`fcts/`）：约 23 处 `long` 使用需迁移
@@ -226,8 +226,8 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ### Task 2：移除 `long` 别名
 
-- [x] 更新 `docs/feng-language.md`：别名表移除 `long`
-- [x] 更新 `docs/feng-builtin-type.md`：别名表与映射规则移除 `long`，正文中引用 `long` 的描述改为 `i64`（如 `string.length()` 返回类型）
+- [x] 更新 `docs/specifications/feng-language.md`：别名表移除 `long`
+- [x] 更新 `docs/specifications/feng-builtin-type.md`：别名表与映射规则移除 `long`，正文中引用 `long` 的描述改为 `i64`（如 `string.length()` 返回类型）
 - [x] 迁移标准库（`std/`，约 639 处）中使用 `long` 的代码为 `i64`
 - [x] 迁移兼容性测试（`fcts/`，约 23 处）中使用 `long` 的代码为 `i64`
 - [x] 迁移编译器测试（`test/`，3 处 `.ff` 文件）中使用 `long` 的代码为 `i64`
@@ -248,8 +248,8 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 > `uint` 是全新别名，无现有代码依赖，正好验证 Task 3 的平台位宽映射是否正确。
 
-- [x] 更新 `docs/feng-language.md`：别名表新增 `uint`（平台相关说明）
-- [x] 更新 `docs/feng-builtin-type.md`：别名表与映射规则新增 `uint`
+- [x] 更新 `docs/specifications/feng-language.md`：别名表新增 `uint`（平台相关说明）
+- [x] 更新 `docs/specifications/feng-builtin-type.md`：别名表与映射规则新增 `uint`
 - [x] 集中别名表新增 `uint` → `u32`（32 位）或 `u64`（64 位）；仅需修改 `canonical_builtin_type_name()`，codegen 等下游阶段无需变更
 - [x] 全量回归测试
 
@@ -290,8 +290,8 @@ static const char *canonical_builtin_type_name(FengSlice name, PlatformTarget ta
 
 ### Task 6：`int` 改为平台相关别名
 
-- [x] 更新 `docs/feng-language.md`：别名表中 `int` 标注为平台相关
-- [x] 更新 `docs/feng-builtin-type.md`：`int` 映射规则改为平台相关，整数字面量默认类型描述更新
+- [x] 更新 `docs/specifications/feng-language.md`：别名表中 `int` 标注为平台相关
+- [x] 更新 `docs/specifications/feng-builtin-type.md`：`int` 映射规则改为平台相关，整数字面量默认类型描述更新
 - [x] `canonical_builtin_type_name()` 中 `int` 映射从固定 `i32` 改为平台相关：32 位 → `i32`，64 位 → `i64`
 - [x] 核心编译器回归测试通过，无论是否通过，都停下等待 Review 和下一步指令
 

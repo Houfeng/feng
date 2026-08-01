@@ -2,7 +2,7 @@
 
 > 状态：待 Review  
 > 日期：2026-06-13  
-> 前置依赖：[Phase 1 - 错误输出格式优化](feng-error-optimize-phase1-draft.md)
+> 前置依赖：[Phase 1 - 错误输出格式优化](./feng-error-optimize-phase1-dev.md)
 
 ## 1. 背景
 

@@ -2,7 +2,7 @@
 
 > 状态：待决策  
 > 日期：2026-06-27  
-> 关联：[dev/feng-scalar-alias-optimize.md](feng-scalar-alias-optimize.md) Task 7
+> 关联：[docs/engineering/feng-scalar-alias-optimize.md](feng-scalar-alias-optimize.md) Task 7
 
 ## 背景
 

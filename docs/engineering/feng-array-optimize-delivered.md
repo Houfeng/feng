@@ -99,7 +99,7 @@
 
 文档存在实现与表述不一致：
 
-- `docs/feng-lifetime.md` 约 135-150 行把数组描述成概念上的尾部内联 `items[]`
+- `docs/specifications/feng-lifetime.md` 约 135-150 行把数组描述成概念上的尾部内联 `items[]`
 - 真实 runtime 当前却仍是 split layout
 
 这意味着：若本轮按“真正尾部内联”实施，生命周期文档反而会更接近真实实现；只需要把“概念表示”收紧为“当前实现表示”。
@@ -229,8 +229,8 @@ collector 中数组遍历与释放都要同步改成基于：
 
 优先文件：
 
-- `dev/feng-array-optimize-delivered.md`（本文）
-- `docs/feng-lifetime.md` 约 135-150 行
+- `docs/engineering/feng-array-optimize-delivered.md`（本文）
+- `docs/specifications/feng-lifetime.md` 约 135-150 行
 - `src/runtime/feng_array.c` 约 1-3 行文件头注释
 - `src/runtime/feng_runtime_internal.h` 约 14-31 行数组布局注释
 
@@ -284,7 +284,7 @@ collector 中数组遍历与释放都要同步改成基于：
 
 - [x] Todo-01：冻结方案文档与边界
 	目标：文档明确“第一步只做尾部内联，不做 list 迁移 API”。
-	交付：更新本文件；同步确认 `docs/feng-builtin-type.md` 与 `docs/feng-lifetime.md` 的职责边界描述正确。
+	交付：更新本文件；同步确认 `docs/specifications/feng-builtin-type.md` 与 `docs/specifications/feng-lifetime.md` 的职责边界描述正确。
 	验收：文档评审通过（不改代码）。
 
 - [x] Todo-02：更新 runtime 注释与布局说明
@@ -324,7 +324,7 @@ collector 中数组遍历与释放都要同步改成基于：
 
 - [x] Todo-09：全量回归与文档收口
 	目标：完成第一步交付闭环。
-	交付：更新 `docs/feng-lifetime.md` 运行时表示文字；执行全量回归。
+	交付：更新 `docs/specifications/feng-lifetime.md` 运行时表示文字；执行全量回归。
 	验收：`make test` 通过；本文件状态更新为“第一步已完成”。
 
 ## 6. 需要改动的文件与大体行数
@@ -333,8 +333,8 @@ collector 中数组遍历与释放都要同步改成基于：
 
 | 文件 | 大体行数 | 主要改动 |
 | --- | --- | --- |
-| `dev/feng-array-optimize-delivered.md` | 全文 | 记录本方案、边界、步骤与风险 |
-| `docs/feng-lifetime.md` | 约 135-150 行 | 将数组运行时布局说明收紧为真实实现 |
+| `docs/engineering/feng-array-optimize-delivered.md` | 全文 | 记录本方案、边界、步骤与风险 |
+| `docs/specifications/feng-lifetime.md` | 约 135-150 行 | 将数组运行时布局说明收紧为真实实现 |
 | `src/runtime/feng_runtime_internal.h` | 约 14-31 行 | 删除 `items` 字段，更新数组内部布局注释 |
 | `src/runtime/feng_array.c` | 约 1-3 行、16-49 行、53-163 行 | 更新注释、重写创建/访问器/释放路径 |
 | `src/runtime/feng_cycle.c` | 约 282-318 行、480-510 行、783-825 行 | 更新数组遍历与 free 路径 |
@@ -344,7 +344,7 @@ collector 中数组遍历与释放都要同步改成基于：
 | 文件 | 大体行数 | 核对目的 |
 | --- | --- | --- |
 | `src/codegen/codegen.c` | 约 6330-6370 行、9530-9555 行、10524-10708 行 | 确认数组访问统一经由 accessor，无需因布局变化改调用点 |
-| `docs/feng-builtin-type.md` | 约 181-183 行 | 确认数组 runtime 描述仍通过 lifecycle 文档引用，不需要补语义内容 |
+| `docs/specifications/feng-builtin-type.md` | 约 181-183 行 | 确认数组 runtime 描述仍通过 lifecycle 文档引用，不需要补语义内容 |
 | `Makefile` | 约 69-91 行 | 确认 runtime / 全量回归入口即可覆盖本次改动 |
 
 ### 6.3 必查测试文件
@@ -432,4 +432,4 @@ make test
 但这些内容都不应和本阶段的“尾部内联”布局改造绑定在同一批实现中。
 
 后续 array storage runtime contract API 及 `List<T>` 优化方案统一见
-`dev/feng-array-storage-dev.md`；本文不重复定义其容量模型、迁移语义与实施步骤。
+`docs/engineering/feng-array-storage-dev.md`；本文不重复定义其容量模型、迁移语义与实施步骤。

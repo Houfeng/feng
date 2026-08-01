@@ -1591,7 +1591,7 @@ static void test_cycle_collector_acyclic_object_never_enqueued(void) {
     feng_cycle_unlock();
 }
 
-/* --- Finalizer exception escape (docs/feng-lifetime.md §13.2) ---------- */
+/* --- Finalizer exception escape (docs/specifications/feng-lifetime.md §13.2) ---------- */
 
 #include <signal.h>
 #include <sys/wait.h>
@@ -2271,7 +2271,7 @@ static void test_aggregate_take_transfers_ownership(void) {
     ASSERT(dst.subject == b);
     ASSERT(dst.tag == 2);
     ASSERT(src.subject == NULL);
-    /* take preserves non-managed bytes in src (per dev/feng-value-model
+    /* take preserves non-managed bytes in src (per docs/engineering/feng-value-model
      * §5.2). */
     ASSERT(src.tag == 2);
     ASSERT(b->header.refcount == 1U);

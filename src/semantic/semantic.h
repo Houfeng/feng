@@ -86,7 +86,7 @@ typedef struct FengSemanticEnumInfo {
 } FengSemanticEnumInfo;
 
 /* Source classification for a single (type_decl, spec_decl) satisfaction
- * relation. See dev/feng-spec-semantic-draft.md §6 / §9.1. The distinction
+ * relation. See docs/engineering/feng-spec-semantic-delivered.md §6 / §9.1. The distinction
  * between HEAD and PARENT preserves the provenance chain needed for
  * diagnostics and for §8.1 visible-surface conflict checks.
  *
@@ -157,7 +157,7 @@ typedef struct FengSpecRelation {
     size_t source_capacity;
 } FengSpecRelation;
 
-/* Form of a spec coercion site — see dev/feng-spec-semantic-draft.md §6.2. */
+/* Form of a spec coercion site — see docs/engineering/feng-spec-semantic-delivered.md §6.2. */
 typedef enum FengSpecCoercionForm {
     /* Concrete type → object-form spec. The site references the SpecRelation
      * picked by the resolver for this (T, S) coercion. */
@@ -334,7 +334,7 @@ typedef struct FengSemanticAnalysis {
     /* Host pointer size in bytes (sizeof(void *)).  Propagated from
      * FengSemanticAnalyzeOptions.pointer_size at analysis entry.  Used by
      * canonical_builtin_type_name() through ResolveContext to resolve
-     * platform-dependent aliases.  See dev/feng-scalar-alias-optimize.md §6. */
+     * platform-dependent aliases.  See docs/engineering/feng-scalar-alias-optimize.md §6. */
     size_t pointer_size;
     FengSemanticInfo *infos;
     size_t info_count;
@@ -438,7 +438,7 @@ void feng_semantic_infos_free(FengSemanticInfo *infos, size_t info_count);
 
 /* Returns true if `name` is a builtin type name (standard name such as
  * i8..i64, u8..u64, f32, f64, bool, string, void).  After AST alias
- * normalization (dev/feng-scalar-alias-optimize.md §6), alias names are no
+ * normalization (docs/engineering/feng-scalar-alias-optimize.md §6), alias names are no
  * longer recognized because they have already been replaced in the AST. */
 bool feng_semantic_is_builtin_type_name(FengSlice name);
 
@@ -481,7 +481,7 @@ const FengSemanticEnumItemInfo *feng_semantic_find_enum_item_info(
  * success path of feng_semantic_analyze_with_options. */
 bool feng_semantic_compute_type_cyclicity(FengSemanticAnalysis *analysis);
 
-/* Internal post-pass entry — detects value-type cycles (dev/feng-value-
+/* Internal post-pass entry — detects value-type cycles (docs/engineering/feng-value-
  * type-dev.md §3.5, §9.2). Value types (tuples and `@value type` decls)
  * must have a finite size; a value type that directly or indirectly
  * contains itself as a field is rejected at compile time (AE1327).
@@ -514,7 +514,7 @@ const FengSpecRelation *feng_semantic_lookup_spec_relation(
  * `consumer_imports[0..consumer_import_count)`. DECLARED_* sources are
  * always visible. FIT_* sources are visible iff the fit's provider module
  * is the consumer module itself, or the fit is `open` and the consumer
- * imported the provider module. Mirrors docs/feng-fit.md §4. */
+ * imported the provider module. Mirrors docs/specifications/feng-fit.md §4. */
 bool feng_semantic_spec_relation_source_visible_from(
     const FengSpecRelationSource *source,
     const FengSemanticModule *consumer_module,
@@ -881,11 +881,11 @@ const FengSpecEquality *feng_semantic_lookup_spec_equality(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr);
 
-/* --- Value-kind classification (dev/feng-value-model-delivered.md §6.1) - */
+/* --- Value-kind classification (docs/engineering/feng-value-model-delivered.md §6.1) - */
 
 /* Runtime classification of a Feng value, mirroring runtime
  * FengValueKind in src/runtime/feng_runtime.h. Per
- * dev/feng-value-model-delivered.md §2 / §6.1 every Feng type belongs to
+ * docs/engineering/feng-value-model-delivered.md §2 / §6.1 every Feng type belongs to
  * exactly one of these three categories; codegen uses the classification
  * to pick an emit path (direct C copy / single-pointer ARC primitives /
  * the five aggregate APIs). The semantic layer is the single source of
@@ -924,7 +924,7 @@ FengSemanticValueKind feng_semantic_value_kind_of_builtin(FengSlice name);
  *   - FENG_DECL_TYPE → MANAGED_POINTER (heap object + FengManagedHeader).
  *   - FENG_DECL_SPEC, object form → AGGREGATE (fat value: subject +
  *     witness, see fat-value mapping in
- *     dev/feng-spec-codegen-pending.md §4).
+ *     docs/engineering/feng-spec-codegen-delivered.md §4).
  *   - FENG_DECL_SPEC, callable form → MANAGED_POINTER (closure pointer;
  *     callable specs are not fat values, see §8.4).
  *

@@ -2,7 +2,7 @@
 
 > 状态：草案（供 review）
 > 目标：为 C 不透明结构体指针提供正式的 Feng 类型表达。
-> 说明：本文是对 [dev/feng-interop-pending.md](./feng-interop-pending.md) 的补充草案；ABI 公共规则同步写入 [docs/feng-interop.md](../docs/feng-interop.md)。
+> 说明：本文是对 [docs/engineering/feng-interop-delivered.md](./feng-interop-delivered.md) 的补充草案；ABI 公共规则同步写入 [docs/specifications/feng-interop.md](../specifications/feng-interop.md)。
 
 ## 1. 规则概述
 
@@ -159,8 +159,8 @@ func run() {
 
 ### 9.1 文档同步
 
-- [x] 将本稿规则同步到 [dev/feng-interop-pending.md](./feng-interop-pending.md)。
-- [x] 将 ABI 公共规则同步到 [docs/feng-interop.md](../docs/feng-interop.md)。
+- [x] 将本稿规则同步到 [docs/engineering/feng-interop-delivered.md](./feng-interop-delivered.md)。
+- [x] 将 ABI 公共规则同步到 [docs/specifications/feng-interop.md](../specifications/feng-interop.md)。
 
 ### 9.2 语义实现
 

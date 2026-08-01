@@ -280,16 +280,16 @@ let gs = createAll<Gadget>(3);  // 3 个 Gadget.make()
 
 ### Phase 1 — 文档（先于所有代码变更）
 
-- `docs/feng-spec.md`：
+- `docs/specifications/feng-spec.md`：
   - **移除 §3 "错语法三"**（当前禁止 spec 静态成员的示例）
   - 在 §4（成员声明）新增 spec 静态成员语法、语义节
   - **移除 spec 不允许 constructor 的相关条款**（spec 不再有 constructor 概念，方法名 == spec 名视为普通方法）
   - 保留 spec 不允许 finalizer 的条款（`~` 前缀仍禁止）
-- `docs/feng-fit.md`：补充 fit 静态方法可满足 spec 静态方法约束（fit 仍不得声明 static let/var）
-- `docs/feng-error-codes-se.md`：
+- `docs/specifications/feng-fit.md`：补充 fit 静态方法可满足 spec 静态方法约束（fit 仍不得声明 static let/var）
+- `docs/specifications/feng-error-codes-se.md`：
   - **SE0602 标记为失效**（原"spec 成员不能声明为 static"已不适用；错误码空闲，未来根据情况决定是否用作他处理）
   - **AE0620 描述更新**：仅保留 finalizer 部分（spec 不再有 constructor 概念）
-- `dev/feng-static-member-dev.md`：移除「spec 中暂不支持声明静态成员」说明
+- `docs/engineering/feng-static-member-dev.md`：移除「spec 中暂不支持声明静态成员」说明
 
 ### Phase 2 — 解析器
 
@@ -817,10 +817,10 @@ func main(args: string[]) {
 
 | 文件 | 变更内容 |
 |------|---------|
-| `docs/feng-spec.md` | 移除 §3 "错语法三"；新增 spec 静态成员合法语法节；移除 spec constructor 相关条款 |
-| `docs/feng-fit.md` | 补充 fit 静态方法满足 spec 说明 |
-| `docs/feng-error-codes-se.md` | SE0602 标记为失效（空闲）；AE0620 描述更新（仅保留 finalizer） |
-| `dev/feng-static-member-dev.md` | 移除「暂不支持」说明 |
+| `docs/specifications/feng-spec.md` | 移除 §3 "错语法三"；新增 spec 静态成员合法语法节；移除 spec constructor 相关条款 |
+| `docs/specifications/feng-fit.md` | 补充 fit 静态方法满足 spec 说明 |
+| `docs/specifications/feng-error-codes-se.md` | SE0602 标记为失效（空闲）；AE0620 描述更新（仅保留 finalizer） |
+| `docs/engineering/feng-static-member-dev.md` | 移除「暂不支持」说明 |
 | `src/parser/parser.c` | `parse_spec_member`：接受 static；移除 spec constructor 判定（方法名 == spec 名视为 METHOD） |
 | `test/parser/test_parser.c` | 修改 SE0602 测试；新增静态成员测试 |
 | `src/semantic/analyzer.c` | 完全复用现有静态查找函数；`find_spec_object_member` 扩展 `include_static` 参数；扩展 `ResolvedTypeTarget`；修改 `compute_spec_witness_if_absent`、`validate_function_call_expr`、`infer_member_expr_type`；移除 spec CONSTRUCTOR 检查分支（保留 FINALIZER） |
@@ -852,16 +852,16 @@ func main(args: string[]) {
 
 ### Step 1 — 文档先行（无代码改动）
 
-- [ ] `docs/feng-spec.md`：
+- [ ] `docs/specifications/feng-spec.md`：
   - 移除 §3 "错语法三"（spec 静态成员禁止示例）
   - 在 §4 新增 spec 静态成员（`static let` / `static var` / `static func`）合法语法、语义节
   - 移除 spec constructor 相关条款（spec 不再有 constructor 概念）
   - 明确"spec 方法名可以与 spec 名相同（视为普通方法）"
-- [ ] `docs/feng-fit.md`：补充 fit 静态方法可满足 spec 静态方法约束（fit 仍不得声明 static let/var）
-- [ ] `docs/feng-error-codes-se.md`：
+- [ ] `docs/specifications/feng-fit.md`：补充 fit 静态方法可满足 spec 静态方法约束（fit 仍不得声明 static let/var）
+- [ ] `docs/specifications/feng-error-codes-se.md`：
   - SE0602 标记为失效（空闲，未来根据情况决定是否用作他处理）
   - AE0620 描述更新：仅保留 "cannot declare a finalizer"（移除 constructor 部分）
-- [ ] `dev/feng-static-member-dev.md`：移除「spec 中暂不支持声明静态成员」说明
+- [ ] `docs/engineering/feng-static-member-dev.md`：移除「spec 中暂不支持声明静态成员」说明
 - **交付**：文档定稿，作为后续代码改动的契约
 - **回归**：纯文档变更，无代码影响 → `make test` 与 `feng run fcts/fcts_bin` 均通过
 

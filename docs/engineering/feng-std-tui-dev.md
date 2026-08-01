@@ -39,7 +39,7 @@
 
 ### 2.2 视图逻辑层（第 4 层）
 
-- **组件树机制**：承载组件树、布局声明、布局结果、绘制调度、焦点与事件路由。第七阶段只实现机制层，详见 `dev/feng-std-tui-view-dev.md`。
+- **组件树机制**：承载组件树、布局声明、布局结果、绘制调度、焦点与事件路由。第七阶段只实现机制层，详见 `docs/engineering/feng-std-tui-view-dev.md`。
 - **后续扩展**：Text/Button/Input/List/ScrollView、VStack/HStack/Dock 等组件和布局容器均基于第七阶段机制继续扩展。
 
 ### 2.3 应用控制层（第 5 层）
@@ -111,7 +111,7 @@
 
 - Feng 没有继承，组件多态通过 `spec Widget` 实现，组件复用通过组合实现。
 - 第七阶段只定义 `ViewManager` + `Widget` 机制层，不实现高级组件。
-- 详细方案收敛在 `dev/feng-std-tui-view-dev.md`。
+- 详细方案收敛在 `docs/engineering/feng-std-tui-view-dev.md`。
 
 ### 3.5 TuiApp 设计
 
@@ -153,19 +153,19 @@
 ### 第四阶段：应用控制层 - 纯渲染（第 5 层）
 
 > 先实现 TuiApp 的渲染通路，以便在真实终端上验证 Screen 的实际绘制效果。
-> 实现方案详见 `dev/feng-std-tui-app-dev.md`。
+> 实现方案详见 `docs/engineering/feng-std-tui-app-dev.md`。
 
-- [x] 4.13 实现 TuiApp 渲染基础：详见 `dev/feng-std-tui-app-dev.md`（libuv TTY + libc signal + self-pipe + poll 多路复用）
+- [x] 4.13 实现 TuiApp 渲染基础：详见 `docs/engineering/feng-std-tui-app-dev.md`（libuv TTY + libc signal + self-pipe + poll 多路复用）
 - [x] 4.14 实现渲染主循环：调用 `Screen.buildPatchBytes()` 并写入 stdout，在真实终端验证 Screen 绘制效果
 - [x] 4.15 补充 std_test 用例：在 `test_tui.ff` 中新增 Raw Mode 进入/恢复、SIGWINCH 响应、渲染主循环等测试
 - [x] 4.16 全量回归测试：执行 `make test`，确认全部通过
 - [x] 4.17 等待人工 Review：开发者审查 TuiApp 纯渲染实现与测试用例，通过后方可进入第五阶段
 
-> **阶段四补充：stdin 排空（busy-loop 修复）**：Review 期间发现 `run()` 将 stdin 纳入 poll 监听集合（为阶段五预留），但循环体不读取 stdin 字节。Raw Mode 下 Ctrl+C 等按键不产生 SIGINT，而是作为原始字节到达 stdin；用户按下任意键后 stdin 持续可读，`poll()` 立即返回 → busy-loop（单核 100% 空转）。修复：`run()` 在 stdin 可读时读取并丢弃一批字节，仅排空缓冲区，不解析、不路由。stdin 为阻塞模式，每次 poll 只读一次（poll 仅保证一次 read 不阻塞），剩余数据由下一轮 poll 立即返回再读。阶段五将此排空逻辑替换为 VT100/xterm 输入解析状态机。详见 `dev/feng-std-tui-app-dev.md` §5.6。
+> **阶段四补充：stdin 排空（busy-loop 修复）**：Review 期间发现 `run()` 将 stdin 纳入 poll 监听集合（为阶段五预留），但循环体不读取 stdin 字节。Raw Mode 下 Ctrl+C 等按键不产生 SIGINT，而是作为原始字节到达 stdin；用户按下任意键后 stdin 持续可读，`poll()` 立即返回 → busy-loop（单核 100% 空转）。修复：`run()` 在 stdin 可读时读取并丢弃一批字节，仅排空缓冲区，不解析、不路由。stdin 为阻塞模式，每次 poll 只读一次（poll 仅保证一次 read 不阻塞），剩余数据由下一轮 poll 立即返回再读。阶段五将此排空逻辑替换为 VT100/xterm 输入解析状态机。详见 `docs/engineering/feng-std-tui-app-dev.md` §5.6。
 
 ### 第五阶段：应用控制层 - 输入支持（第 5 层）
 
-> 实现方案详见 `dev/feng-std-tui-input-dev.md`。
+> 实现方案详见 `docs/engineering/feng-std-tui-input-dev.md`。
 
 - [x] 4.18 实现事件类型：`KeyEvent.ff`（`SpecialKey` 枚举、`MOD_CONTROL`/`MOD_ALT`/`MOD_SHIFT` 常量、`Union<SpecialKey,u32>`、`KeyEvent` @value 类型 + `isControl()`/`isShift()`/`isPrintable()` 快捷方法）和 `MouseEvent.ff`（`MouseAction`/`MouseButton` 枚举、`MouseEvent` @value 类型 + `isControl()`/`isAlt()`/`isShift()` 快捷方法）
 - [x] 4.19 实现 InputManager（InputManager.ff）：`ParserState` 状态机 + `onKey`/`onMouse` 回调字段（`Action<KeyEvent>`/`Action<MouseEvent>`） + `feed(b: u8): void`；处理单字节字符、CSI/SS3 转义序列、UTF-8 多字节解码、鼠标 SGR 序列
@@ -182,7 +182,7 @@
 
 - [x] 4.24 重构 TuiApp 构造函数：移除 Screen 参数，Screen 改为 `let` 公开只读成员
 - [x] 4.25 重构 init()：进入 Raw Mode 后通过 `uv_tty_get_winsize` 获取终端尺寸，将内部 Screen 原地调整为真实尺寸
-- [x] 4.26 更新设计文档与代码示例：`dev/feng-std-tui-app-dev.md` 构造函数、init()、render() 等同步修改
+- [x] 4.26 更新设计文档与代码示例：`docs/engineering/feng-std-tui-app-dev.md` 构造函数、init()、render() 等同步修改
 - [x] 4.27 更新 std_test 用例：调整 TuiApp 相关测试，Screen 不再外部构造，改为从 TuiApp 获取
 - [x] 4.28 全量回归测试：执行 `make test`，确认全部通过
 - [x] 4.29 等待人工 Review：开发者审查 Screen 内部化重构，通过后方可进入第七阶段
@@ -190,7 +190,7 @@
 ### 第七阶段：视图机制层（第 4 层）
 
 > 本阶段只实现 `ViewManager` + `Widget` 机制层，不实现 Text/Button/Input/List/ScrollView 等高级组件。
-> 实现方案详见 `dev/feng-std-tui-view-dev.md`。
+> 实现方案详见 `docs/engineering/feng-std-tui-view-dev.md`。
 
 - [ ] 4.30 完善 Widget 机制：`Thickness`、布局枚举、`WidgetStyle` type、`WidgetFrame`、`Widget` spec、`std.tui.views.View`
 - [ ] 4.31 实现 ViewManager：root、focus、sequence、arrange/draw 流程、鼠标命中、键盘焦点路由、自下向上事件冒泡

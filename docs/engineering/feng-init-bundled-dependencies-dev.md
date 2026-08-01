@@ -33,9 +33,9 @@ std: "0.1.0"
 正式的项目清单、依赖管理、随附包来源和发行目录语义仍分别以下列主规范为准，本文
 只收敛本次开发方案，不重复定义已有规则：
 
-- [Feng CLI](../docs/feng-cli.md)
-- [Feng 包格式](../docs/feng-package.md)
-- [Feng 依赖管理机制](../docs/feng-deps.md)
+- [Feng CLI](../specifications/feng-cli.md)
+- [Feng 包格式](../specifications/feng-package.md)
+- [Feng 依赖管理机制](../specifications/feng-deps.md)
 - [Feng 分发与安装方案](./feng-release-and-install.md)
 
 ## 2. 已确认规则
@@ -177,7 +177,7 @@ feng build
 
 ### 5.1 主规范
 
-实施代码前，只在 [Feng CLI](../docs/feng-cli.md) 的 `feng init` 章节定义本行为：
+实施代码前，只在 [Feng CLI](../specifications/feng-cli.md) 的 `feng init` 章节定义本行为：
 
 - 安装根 `pkg/` 的定位方式；
 - 目录不存在时不生成依赖；
@@ -185,8 +185,8 @@ feng build
 - 将全部随附包写为直接精确版本依赖；
 - 完整校验和安装仍由 build/install 执行。
 
-[Feng 包格式](../docs/feng-package.md) 和
-[Feng 依赖管理机制](../docs/feng-deps.md) 已分别定义 manifest 与 `pkg/` 安装
+[Feng 包格式](../specifications/feng-package.md) 和
+[Feng 依赖管理机制](../specifications/feng-deps.md) 已分别定义 manifest 与 `pkg/` 安装
 语义，本次只按需引用 `feng init` 规则，不重复维护同一规范。
 
 ### 5.2 复用现有读取能力
@@ -279,7 +279,7 @@ manifest 源再增加一层公共封装。
 ## 8. 实施顺序
 
 - [x] TODO 0：等待本文人工 Review；Review 通过后再实施。
-- [x] TODO 1：更新 `docs/feng-cli.md` 中的 `feng init` 主规范。
+- [x] TODO 1：更新 `docs/specifications/feng-cli.md` 中的 `feng init` 主规范。
 - [x] TODO 2：复用现有 `FengZipReader` 与 `feng_fm_parse` 读取随附包坐标。
 - [x] TODO 3：实现安装根 `pkg/` 枚举和包坐标收集。
 - [x] TODO 4：将确定排序的随附包依赖写入新项目 `feng.fm`。

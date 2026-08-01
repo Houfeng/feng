@@ -93,7 +93,7 @@ typedef struct FengTypeParam {
 struct FengTypeRef {
     FengToken token;
     FengTypeRefKind kind;
-    /* Per docs/feng-builtin-type.md §5: a writable element layer is marked
+    /* Per docs/specifications/feng-builtin-type.md §5: a writable element layer is marked
      * with `[!]` on the corresponding array layer. Only meaningful when kind ==
      * FENG_TYPE_REF_ARRAY; ignored otherwise. */
     bool array_element_writable;

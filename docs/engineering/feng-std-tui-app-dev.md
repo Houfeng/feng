@@ -2,7 +2,7 @@
 
 > 状态：设计中（design）
 >
-> 本文档是 `dev/feng-std-tui-dev.md` 阶段四（应用控制层 - 纯渲染）的实现方案细化。
+> 本文档是 `docs/engineering/feng-std-tui-dev.md` 阶段四（应用控制层 - 纯渲染）的实现方案细化。
 > 仅在此记录 C ABI 外部函数声明、类型选择依据与渲染主循环设计，不重复 dev 主文档的路线规划。
 
 ## 1 总体策略
@@ -15,7 +15,7 @@
 - **libc signal() + self-pipe 绕开 sigaction 结构体**：`struct sigaction` 含 `sigset_t sa_mask` 内联数组（macOS 128 字节，Linux 1024+ 字节）。`signal()` 不涉及任何结构体，签名简洁。信号到达时写管道，将信号转为 fd，纳入 `poll()` 监听。
 - **poll() 多路复用驱动主循环**：`poll(stdin + sigpipe + 用户fds, -1)` 无事件时阻塞休眠，零 CPU；任一 fd 可读即唤醒。比 busy-wait `while` 轮询高效，比 libuv `uv_run` 简单（无 handle 生命周期管理、无 `@abi func` 模块级回调限制）。
 - **PollFd 值类型**：`@value @abi type PollFd` 直接建模 C `struct pollfd`，含 `i16` 字段，`&` 取地址传给 `poll()`，无需位操作或 C 封装函数。
-- **阶段五衔接**：阶段五 stdin 已在 poll 监听集合中，只需加读取逻辑。实现方案详见 `dev/feng-std-tui-input-dev.md`（InputManager + feed 解析分发）。异步 I/O 库通过构造函数传入通知 fd（如 epoll/kqueue/self-pipe 的管道读端），事件到达时通知主循环渲染。
+- **阶段五衔接**：阶段五 stdin 已在 poll 监听集合中，只需加读取逻辑。实现方案详见 `docs/engineering/feng-std-tui-input-dev.md`（InputManager + feed 解析分发）。异步 I/O 库通过构造函数传入通知 fd（如 epoll/kqueue/self-pipe 的管道读端），事件到达时通知主循环渲染。
 
 ### 1.2 各能力来源一览
 
@@ -407,7 +407,7 @@ open func render(): void {
    * 中 run() 对 stdin 可读事件做最小处理：每次 poll 返回后读取并丢弃一批字节，
    * 仅排空缓冲区，不解析、不路由。stdin 为阻塞模式，每次 poll 只读一次（poll
    * 仅保证一次 read 不阻塞），剩余数据由下一轮 poll 立即返回再读。阶段五在此
-   * 处替换为 InputManager.feed()，详见 `dev/feng-std-tui-input-dev.md`。
+   * 处替换为 InputManager.feed()，详见 `docs/engineering/feng-std-tui-input-dev.md`。
  */
 open func run(): void {
   self.running = true;
@@ -459,7 +459,7 @@ open func run(): void {
 > `poll(-1)` 无事件时阻塞休眠，零 CPU。任一 fd 可读即唤醒，TuiApp 处理内部 sigpipeR 和 stdin 排空，然后 render。
 > 退出由 `exit()` 置 `running = false`，下一轮 poll 返回后循环结束。
 >
-> **stdin 排空（阶段四临时措施）**：Raw Mode 关闭 `ISIG`，Ctrl+C 等按键不产生 SIGINT，而是作为原始字节（如 `0x03`）到达 stdin。阶段四无输入解析，若不排空 stdin，`poll()` 会因 stdin 持续可读而立即返回，造成 busy-loop。因此 run() 在 stdin 可读时读取并丢弃一批字节，仅排空缓冲区。stdin 为阻塞模式，每次 poll 只读一次（`poll` 仅保证一次 `read` 不阻塞；若用 while 循环第二次 `read` 会挂起），剩余数据由下一轮 poll 立即返回 `POLLIN` 再读——有界工作，非无限空转。阶段五将此排空逻辑替换为 InputManager.feed()，把字节流解析为 `KeyEvent`/`MouseEvent` 并通过 onKey/onMouse 回调分发。详见 `dev/feng-std-tui-input-dev.md`。
+> **stdin 排空（阶段四临时措施）**：Raw Mode 关闭 `ISIG`，Ctrl+C 等按键不产生 SIGINT，而是作为原始字节（如 `0x03`）到达 stdin。阶段四无输入解析，若不排空 stdin，`poll()` 会因 stdin 持续可读而立即返回，造成 busy-loop。因此 run() 在 stdin 可读时读取并丢弃一批字节，仅排空缓冲区。stdin 为阻塞模式，每次 poll 只读一次（`poll` 仅保证一次 `read` 不阻塞；若用 while 循环第二次 `read` 会挂起），剩余数据由下一轮 poll 立即返回 `POLLIN` 再读——有界工作，非无限空转。阶段五将此排空逻辑替换为 InputManager.feed()，把字节流解析为 `KeyEvent`/`MouseEvent` 并通过 onKey/onMouse 回调分发。详见 `docs/engineering/feng-std-tui-input-dev.md`。
 >
 > **TuiApp 不处理用户 fd 的数据**：TuiApp 只监听 fd 可读事件唤醒渲染，不向 fd 写入、不读取 fd 数据、不关闭 fd。fd 的生命周期由调用方管理。
 
@@ -587,7 +587,7 @@ TuiApp.exit()
 
 ## 9 阶段五衔接预留
 
-阶段四完成后，阶段五（输入支持）的衔接点。实现方案详见 `dev/feng-std-tui-input-dev.md`：
+阶段四完成后，阶段五（输入支持）的衔接点。实现方案详见 `docs/engineering/feng-std-tui-input-dev.md`：
 
 1. **stdin 已在 poll 监听集合中**：阶段四 `run()` 的 pollfd 数组已包含 stdin，阶段五将 stdin drain 替换为 `input.feed()` 逐字节喂入 InputManager 解析分发
 2. **InputManager 作为 TuiApp 公开成员**：阶段五新增 `let input: InputManager`，用户通过 `app.input.onKey = ...` / `app.input.onMouse = ...` 注册回调

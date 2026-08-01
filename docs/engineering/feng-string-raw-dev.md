@@ -2,7 +2,7 @@
 
 ## 规范阶段
 
-- [x] 编写反引号字符串字面量规范文档 `docs/feng-string-raw.md`
+- [x] 编写反引号字符串字面量规范文档 `docs/specifications/feng-string-raw.md`
 - [x] 明确语法规则（界定符、无 `\` 转义、`` `` `` 嵌入反引号、换行原样保留、空字符串合法）
 - [x] 明确 Codegen 处理方案（通过 `FENG_TOKEN_RAW_STRING` token kind 区分）
 

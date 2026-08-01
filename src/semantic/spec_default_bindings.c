@@ -2,7 +2,7 @@
  *
  * Stores one entry per AST node that the resolver confirmed as a
  * default-witness site for a spec-typed slot. See
- * dev/feng-spec-semantic-draft.md §6.3 / §9.3 / §10 Phase S2.
+ * docs/engineering/feng-spec-semantic-delivered.md §6.3 / §9.3 / §10 Phase S2.
  *
  * The table is populated incrementally during analysis (callers from
  * analyzer.c invoke the record API each time resolve_binding observes a

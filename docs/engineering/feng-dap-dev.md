@@ -725,9 +725,9 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 
 - [x] Phase 1：规范与边界收敛
   - [x] 收敛本方案文档。
-  - [x] 同步更新 `docs/feng-build.md`。
-  - [x] 同步更新 `docs/feng-cli.md`。
-  - [x] 同步更新 `docs/feng-symbol-table.md`。
+  - [x] 同步更新 `docs/specifications/feng-build.md`。
+  - [x] 同步更新 `docs/specifications/feng-cli.md`。
+  - [x] 同步更新 `docs/specifications/feng-symbol-table.md`。
   - [x] 明确 `.fd` 的产物语义、生命周期与 `.ft` 边界。
   - [x] 把“禁止改动词法 / 语法 / 语义层、禁止顺手改 unrelated 代码”的实施约束写死。
 

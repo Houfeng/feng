@@ -2,12 +2,12 @@
 
 > 状态：草案  
 > 日期：2026-06-24  
-> 关联规范：[docs/feng-builtin-type.md](../docs/feng-builtin-type.md)、[docs/feng-expression.md](../docs/feng-expression.md)  
-> 关联设计：[dev/feng-scalar-alias-optimize.md](./feng-scalar-alias-optimize.md)
+> 关联规范：[docs/specifications/feng-builtin-type.md](../specifications/feng-builtin-type.md)、[docs/specifications/feng-expression.md](../specifications/feng-expression.md)
+> 关联设计：[docs/engineering/feng-scalar-alias-optimize.md](./feng-scalar-alias-optimize.md)
 
 ## 1. 背景
 
-Feng 的数值字面量贴合策略（docs/feng-builtin-type.md §2）当前覆盖以下场景：
+Feng 的数值字面量贴合策略（docs/specifications/feng-builtin-type.md §2）当前覆盖以下场景：
 
 | 场景 | 贴合 | 示例 |
 | --- | --- | --- |
@@ -46,7 +46,7 @@ Go、Swift、Rust、Zig 四门现代语言全部支持二元运算中的字面�
 
 ### 3.1 扩展贴合定义
 
-在 `docs/feng-builtin-type.md` §2 的贴合定义中，增加二元运算场景：
+在 `docs/specifications/feng-builtin-type.md` §2 的贴合定义中，增加二元运算场景：
 
 > 当数值字面量或纯字面量数值常量表达式被绑定或传递到已确定的目标数值类型时，**或作为二元运算符的一侧操作数且对侧操作数为已确定的标量类型时**，按目标类型进行类型贴合。
 
@@ -358,7 +358,7 @@ let x = 12.5;       // double x = (double)(12.5);            ← 正确
 
 ### 4.3 规范文档改动
 
-**改动文件**：`docs/feng-builtin-type.md`
+**改动文件**：`docs/specifications/feng-builtin-type.md`
 
 - §2 贴合定义：扩展覆盖二元运算场景
 - §6 规则：新增一条 `[必须]` 规则，明确二元运算中字面量贴合的条件与范围检查
@@ -366,7 +366,7 @@ let x = 12.5;       // double x = (double)(12.5);            ← 正确
 
 ## 5. 影响范围
 
-- 规范文档：`docs/feng-builtin-type.md`（贴合定义扩展）
+- 规范文档：`docs/specifications/feng-builtin-type.md`（贴合定义扩展）
 - AST 节点：`src/parser/parser.h`（`FengExpr` 增加 `const FengTypeRef *type` 字段）
 - 编译器语义层：`src/semantic/analyzer.c`（`expr_matches_expected_type_ref` 贴合成功时写入 `type`；`infer_expr_type` 二元分支增加贴合及 `type` 写入；无类型标注绑定写入合成 `FengTypeRef`；新增 `numeric_literal_fits_inferred_target` 辅助函数）
 - 编译器 codegen 层：`src/codegen/codegen.c`（`cg_emit_literal` 读取 `type`，通过现有 `cg_resolve_type` 解析为 `CGType`，按目标类型发射；无新增辅助函数）
@@ -387,7 +387,7 @@ let x = 12.5;       // double x = (double)(12.5);            ← 正确
 
 > 分为 4 个独立步骤，每步完成后全量回归通过。步骤 1-3 仅影响语义层（codegen 不读 `type`，行为不变）；步骤 4 改 codegen + 新增测试。
 
-### 8.1 规范文档（docs/feng-builtin-type.md）
+### 8.1 规范文档（docs/specifications/feng-builtin-type.md）
 
 - [x] §2 语义：在「数值字面量的目标类型贴合」条目中，扩展贴合定义，补充二元运算场景
 - [x] §6 规则：新增一条 [必须] 规则，明确二元运算中字面量贴合的条件（一侧为纯数值字面量、对侧为已确定标量类型）与范围检查要求

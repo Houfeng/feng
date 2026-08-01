@@ -39,7 +39,7 @@
 2. `check_symbol_conflicts`（L22063）中 5 个分支（TYPE / ENUM / SPEC / GLOBAL_BINDING / FUNCTION）重复相同逻辑
 3. `find_visible_type_index` / `find_visible_value_index`（L2116 / L2128）逻辑完全相同
 4. `copy_visible_type_entries` / `copy_visible_value_entries`（L2382 / L2407）逻辑完全相同
-5. 跨种类同名漏检：`check_symbol_conflicts` 中 TYPE 只查 `visible_types`（L22094），FUNCTION 只查 `visible_values`（L22207），两张表之间不互查。规范 §7（`docs/feng-module.md` L154）明确说"以下规则对 type、enum、func、spec、let / var 统一适用"，但实现未覆盖跨种类场景
+5. 跨种类同名漏检：`check_symbol_conflicts` 中 TYPE 只查 `visible_types`（L22094），FUNCTION 只查 `visible_values`（L22207），两张表之间不互查。规范 §7（`docs/specifications/feng-module.md` L154）明确说"以下规则对 type、enum、func、spec、let / var 统一适用"，但实现未覆盖跨种类场景
 
 ### 0.4 ResolveContext 中的符号表分散
 

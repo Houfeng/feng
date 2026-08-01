@@ -18,7 +18,7 @@
 8. `feng_pointer_get_scalar`
 
 本轮新增以下 array storage contract API，完整语义与实施边界统一由
-`dev/feng-array-storage-dev.md` 定义，本文不重复维护算法细节：
+`docs/engineering/feng-array-storage-dev.md` 定义，本文不重复维护算法细节：
 
 1. `feng_array_storage_get_capacity`
 2. `feng_array_storage_insert`
@@ -125,25 +125,25 @@
 
 - C 符号：`intptr_t feng_array_storage_get_capacity(const FengGenericParamDescriptor *type, const FengArray *array)`
 - Feng 声明形态：`extern func feng_array_storage_get_capacity<T>(array: T[!]): int;`
-- 用途：读取容器 backing array 的固定容量；完整语义见 `dev/feng-array-storage-dev.md`。
+- 用途：读取容器 backing array 的固定容量；完整语义见 `docs/engineering/feng-array-storage-dev.md`。
 
 ### 2.10 `feng_array_storage_insert`
 
 - C 符号：`void feng_array_storage_insert(const FengGenericParamDescriptor *type, FengArray *array, intptr_t index, const void *value)`
 - Feng 声明形态：`extern func feng_array_storage_insert<T>(array: T[!], index: int, value: T): void;`
-- 用途：在已有容量内插入单个元素；完整语义与生命周期规则见 `dev/feng-array-storage-dev.md`。
+- 用途：在已有容量内插入单个元素；完整语义与生命周期规则见 `docs/engineering/feng-array-storage-dev.md`。
 
 ### 2.11 `feng_array_storage_remove`
 
 - C 符号：`void feng_array_storage_remove(const FengGenericParamDescriptor *type, FengArray *array, intptr_t index, intptr_t count)`
 - Feng 声明形态：`extern func feng_array_storage_remove<T>(array: T[!], index: int, count: int): void;`
-- 用途：删除 backing array 的指定元素区间；完整语义与生命周期规则见 `dev/feng-array-storage-dev.md`。
+- 用途：删除 backing array 的指定元素区间；完整语义与生命周期规则见 `docs/engineering/feng-array-storage-dev.md`。
 
 ### 2.12 `feng_array_storage_migrate`
 
 - C 符号：`FengArray *feng_array_storage_migrate(const FengGenericParamDescriptor *type, FengArray *array, intptr_t new_capacity)`
 - Feng 声明形态：`extern func feng_array_storage_migrate<T>(array: T[!], newCapacity: int): T[!];`
-- 用途：创建固定容量的新 backing array，不改变 RC 地转移保留前缀，正常释放截断后缀，并将旧数组设为逻辑空；旧数组、迁移元素和丢弃元素的完整语义统一见 `dev/feng-array-storage-dev.md` §5.4。
+- 用途：创建固定容量的新 backing array，不改变 RC 地转移保留前缀，正常释放截断后缀，并将旧数组设为逻辑空；旧数组、迁移元素和丢弃元素的完整语义统一见 `docs/engineering/feng-array-storage-dev.md` §5.4。
 
 ## 3. 维护规则
 

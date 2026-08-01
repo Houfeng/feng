@@ -1,7 +1,7 @@
 # Feng 联合类型待开发项
 
 > 本文档用于拆解 union-form 从规范到实现的施工顺序、边界与验收口径。
-> [docs/feng-union-type.md](../docs/feng-union-type.md) 是 union-form 的专项规范；本文只写开发步骤与 TODO，不重复规范定义。
+> [docs/specifications/feng-union-type.md](../specifications/feng-union-type.md) 是 union-form 的专项规范；本文只写开发步骤与 TODO，不重复规范定义。
 
 ## 1. 当前前提
 
@@ -20,10 +20,10 @@
 
 ### 2.1 规范并入
 
-- [x] 将 union-form 的主定义并入 `docs/feng-spec.md`。
-- [x] 在 `docs/feng-language.md` 中补 union-form 的总览入口，只做摘要与引用，不重复细则。
-- [x] 在 `docs/feng-type.md` 中补 union-form 的类型系统位置与引用。
-- [x] 在 `docs/feng-expression.md` 中补 union-form 显式转换边界的引用关系。
+- [x] 将 union-form 的主定义并入 `docs/specifications/feng-spec.md`。
+- [x] 在 `docs/specifications/feng-language.md` 中补 union-form 的总览入口，只做摘要与引用，不重复细则。
+- [x] 在 `docs/specifications/feng-type.md` 中补 union-form 的类型系统位置与引用。
+- [x] 在 `docs/specifications/feng-expression.md` 中补 union-form 显式转换边界的引用关系。
 - [x] 复核 `docs/` 中涉及 `match 目标值 { ... }`、`spec`、显式转换的交叉引用，避免重复定义与冲突措辞。
 
 验收口径：
@@ -86,7 +86,7 @@
 
 验收口径：
 
-- 分支内的收窄结果与 [docs/feng-union-type.md](../docs/feng-union-type.md) 一致。
+- 分支内的收窄结果与 [docs/specifications/feng-union-type.md](../specifications/feng-union-type.md) 一致。
 - 对仍是 union 子集的分支，诊断明确指出还需继续收窄。
 
 ### 2.6 基于现有 runtime 的布局接入与生命周期

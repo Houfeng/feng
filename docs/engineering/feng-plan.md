@@ -5,7 +5,7 @@
 - [x] **第一阶段**：实现 ARC 生命周期管理，拆成 1A 和 1B。1A 先做确定性 ARC 核心：托管对象头、retain/release、string、数组、普通 type、闭包环境、作用域退出清理、异常路径清理、终结器单路径释放；同时搭起 C 发码骨架。1B 再补 cycle collector、终结器复活检查、复杂终结器顺序和高级回收语义。其中 1A 阻塞第二阶段，1B 与第二阶段并行推进。
   - [x] **1A**：确定性 ARC 核心 + C 发码骨架（托管对象头、retain/release、string、数组、普通 type、闭包环境、作用域退出清理、异常路径清理、单路径终结器；本地源码 → C 最小闭环）。
   - [x] **1B**：补完 ARC 高风险能力（cycle collector、终结器复活检查、复杂终结器顺序、复杂异常/终结器交互、高级回收语义）。
-    - 备注：用户终结器 `func ~T()` 的端到端 cycle 场景 smoke 暂用单元测试覆盖；端到端 .ff 用例依赖“对象类型默认零值”语义决策（见 [feng-type.md §7](../docs/feng-type.md)），待后续阶段统一推进。
+    - 备注：用户终结器 `func ~T()` 的端到端 cycle 场景 smoke 暂用单元测试覆盖；端到端 .ff 用例依赖“对象类型默认零值”语义决策（见 [feng-type.md §7](../specifications/feng-type.md)），待后续阶段统一推进。
 
 - [x] **第二阶段**：暂保持 C ABI 现状不变，先不扩 C ABI，也不处理外部包，只支持本地源码直接编译到可执行文件，而不是只停在“生成目标代码文件”。这一阶段把单包本地编译闭环打通：语义分析输出进入 C 发码，生成 C 文件，调用宿主 C 编译器，连上最小运行时，跑通 hello world、对象、数组、控制流、异常这类本地程序。
 
@@ -13,7 +13,7 @@
 
 - [x] **第四阶段**：支持外部包 + 本地源码混编。打通显式 `.fb` 输入下的 `mod/.ft` 解析、跨包 `import` 消解与 `lib` 链接，让本地源码可以引用外部 `.fb`，同时保持当前本地源码路径不回退。依赖图解析、`registry`、`cache` 与 `feng deps` 改入第五阶段集中处理。
 
-- [x] **第五阶段**：建立包管理机制。围绕 `feng.fm` 的 `[dependencies]` / `[registry]`、本地路径依赖、全局缓存、`feng deps add/remove/install` 与 `feng build` 的依赖图展平规则完善构建工具；具体协议以 `docs/feng-deps.md` 与 `docs/feng-build.md` 为准。
+- [x] **第五阶段**：建立包管理机制。围绕 `feng.fm` 的 `[dependencies]` / `[registry]`、本地路径依赖、全局缓存、`feng deps add/remove/install` 与 `feng build` 的依赖图展平规则完善构建工具；具体协议以 `docs/specifications/feng-deps.md` 与 `docs/specifications/feng-build.md` 为准。
 
 - [x] **第六阶段**：细化 C ABI 兼容和互操作。把 `clib` 选择、`extern func`、`@abi`、调用约定、头文件生成、`string` 和数组桥接、异常不得越过 ABI 边界、C 侧长期持有对象的 retain/release 协议做成完整实现。这个阶段之前，不建议主动扩大 ABI 兼容集合。
 
@@ -266,7 +266,7 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 
 说明：
 
-- 具体规则以 `docs/feng-deps.md` 与 `docs/feng-build.md` 为准。
+- 具体规则以 `docs/specifications/feng-deps.md` 与 `docs/specifications/feng-build.md` 为准。
 - 本阶段关注构建工具侧依赖解析，不扩展 C ABI 兼容面。
 - 当前该阶段所定义范围已完成；C ABI 兼容与更完整的互操作能力继续放到 Phase 6。
 
@@ -274,7 +274,7 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 
 目标：
 
-- 在开始泛型实现之前，按照 `docs/feng-symbol-table.md` 新规范完成符号表底层结构重构，为泛型支持奠定基础。
+- 在开始泛型实现之前，按照 `docs/specifications/feng-symbol-table.md` 新规范完成符号表底层结构重构，为泛型支持奠定基础。
 
 范围：
 
@@ -290,7 +290,7 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 
 说明：
 
-- 规范文档权威来源：`docs/feng-symbol-table.md`。
+- 规范文档权威来源：`docs/specifications/feng-symbol-table.md`。
 - 此阶段只做结构重构，不实现泛型语法与语义；泛型实现在后续阶段展开。
 - 重构完成后，源码中不应再出现 `sig_ref`、`SIGS`、`PRMS` 相关逻辑。
 
@@ -353,17 +353,17 @@ LLVM 不是禁止项，但更适合作为 C 后端稳定之后的新增后端，
 
 ## 5. 关键文件
 
-- `dev/feng-phase3-delivered.md`：Phase 3 的施工权威入口，包含 `src/symbol/` 建议文件树与最小公共 API 边界。
-- `docs/feng-language.md`：语言总入口，已明确底层可映射为 C。
-- `docs/feng-principles.md`：已明确保持可直接编译为 C 的目标。
-- `docs/feng-lifetime.md`：ARC、cycle collector、终结器、C retain/release 的规范落点。
-- `docs/feng-exception.md`：异常路径清理、`finally`、ABI 边界异常约束。
-- `docs/feng-interop.md`：前几个阶段先冻结范围，第 6 阶段再系统扩展。
-- `docs/feng-deps.md`：`feng.fm` 的 `[dependencies]` / `[registry]`、本地路径依赖、全局缓存与 `feng deps` 行为规范。
-- `docs/feng-build.md`：编译器/构建工具分层。
-- `docs/feng-cli.md`：CLI 表面定义。
-- `docs/feng-package.md`：`.ft`、`.fb`、`feng.fm`、`mod` 目录规则。
-- [docs/feng-symbol-table.md](../docs/feng-symbol-table.md)：`.ft` 二进制布局、profile 分层与本地缓存规则。
+- `docs/engineering/feng-phase3-delivered.md`：Phase 3 的施工权威入口，包含 `src/symbol/` 建议文件树与最小公共 API 边界。
+- `docs/specifications/feng-language.md`：语言总入口，已明确底层可映射为 C。
+- `docs/specifications/feng-principles.md`：已明确保持可直接编译为 C 的目标。
+- `docs/specifications/feng-lifetime.md`：ARC、cycle collector、终结器、C retain/release 的规范落点。
+- `docs/specifications/feng-exception.md`：异常路径清理、`finally`、ABI 边界异常约束。
+- `docs/specifications/feng-interop.md`：前几个阶段先冻结范围，第 6 阶段再系统扩展。
+- `docs/specifications/feng-deps.md`：`feng.fm` 的 `[dependencies]` / `[registry]`、本地路径依赖、全局缓存与 `feng deps` 行为规范。
+- `docs/specifications/feng-build.md`：编译器/构建工具分层。
+- `docs/specifications/feng-cli.md`：CLI 表面定义。
+- `docs/specifications/feng-package.md`：`.ft`、`.fb`、`feng.fm`、`mod` 目录规则。
+- [docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md)：`.ft` 二进制布局、profile 分层与本地缓存规则。
 - `src/archive/`：规划中的 `.fb` 归档共享层；上层通常通过 `fb.*` 复用 `.fb` 级 reader / writer 能力，`zip.*` 仅作为内部容器封装保留给 `fb.*` 使用。
 - `src/cli/main.c`：当前 CLI 只有 `lex` / `parse` / `semantic` / `check`，后续要演进为真正驱动器。
 - `src/symbol/`：规划中的符号表核心层，统一承载中立模块符号图、`.ft` 导出 / 读取和查询适配；CLI 与打包层只调度其入口，不内嵌实现细节。

@@ -1740,7 +1740,7 @@ static void test_for_in_loop(void) {
 }
 
 static void test_block_yield_omits_trailing_semicolon(void) {
-    /* Per docs/feng-flow.md: trailing ';' on the last expression statement
+    /* Per docs/specifications/feng-flow.md: trailing ';' on the last expression statement
      * of a block may be omitted. */
     const char *source =
         "module demo.main;\n"

@@ -10,10 +10,10 @@
 本方案只决定本发行阶段的随附包集合包含 `std`。`.fb` 格式、项目平台选择、发行包
 目录结构及 `pkg/` 的安装来源语义分别以以下主规范为准，本文不重复定义：
 
-- [Feng 包格式](../docs/feng-package.md)
-- [Feng CLI](../docs/feng-cli.md)
-- [Feng 构建流程](../docs/feng-build.md)
-- [Feng 依赖管理机制](../docs/feng-deps.md)
+- [Feng 包格式](../specifications/feng-package.md)
+- [Feng CLI](../specifications/feng-cli.md)
+- [Feng 构建流程](../specifications/feng-build.md)
+- [Feng 依赖管理机制](../specifications/feng-deps.md)
 - [Feng 分发与安装方案](./feng-release-and-install.md)
 - [发行包随附包安装方案](./feng-bundled-package-install-dev.md)
 

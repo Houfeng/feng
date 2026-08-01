@@ -4316,7 +4316,7 @@ static FengStmt *parse_while_statement(Parser *parser) {
     return stmt;
 }
 
-/* Parse `defer { ... }`. Per docs/feng-defer.md §3.2 the body MUST be a
+/* Parse `defer { ... }`. Per docs/specifications/feng-defer.md §3.2 the body MUST be a
  * braced block; single-statement form is not allowed. */
 static FengStmt *parse_defer_statement(Parser *parser) {
     FengStmt *stmt = new_stmt(parser, FENG_STMT_DEFER, parser_previous_token(parser));
@@ -4599,7 +4599,7 @@ static FengStmt *parse_statement(Parser *parser) {
     if (stmt == NULL) {
         return NULL;
     }
-    /* Per docs/feng-flow.md: the trailing ';' on the last expression statement
+    /* Per docs/specifications/feng-flow.md: the trailing ';' on the last expression statement
      * of a block may be omitted (the value is still the block's yield). */
     if (stmt->kind == FENG_STMT_EXPR &&
         parser_current_token(parser).kind == FENG_TOKEN_RBRACE) {

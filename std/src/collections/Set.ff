@@ -6,7 +6,7 @@ open module std.collections;
  *
  * Implementation notes:
  * - Uses the key-only dense bucket-chain storage defined by
- *   `dev/feng-std-set-optimize.md`.
+ *   `docs/engineering/feng-std-set-optimize.md`.
  * - Average O(1) for add/remove/has under normal hash distribution.
  * - `entries` returns an immutable copy of all live keys with no order guarantee.
  */

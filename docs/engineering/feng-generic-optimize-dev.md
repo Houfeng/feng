@@ -2,7 +2,7 @@
 
 > 状态：待审批
 > 日期：2026-06-08
-> 关联规范：[dev/feng-generics-aggregate-optimize.md](./feng-generics-aggregate-optimize.md)、[dev/feng-value-model-delivered.md](./feng-value-model-delivered.md)
+> 关联规范：[docs/engineering/feng-generics-aggregate-optimize.md](./feng-generics-aggregate-optimize.md)、[docs/engineering/feng-value-model-delivered.md](./feng-value-model-delivered.md)
 
 ## 1. 问题
 

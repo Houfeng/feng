@@ -343,7 +343,7 @@ C 代码各文件改动规模：
 | if 解析移除 match 分支后正确性 | 低 | AST 层面 `FENG_STMT_IF` / `FENG_EXPR_IF` 与 `FENG_STMT_MATCH` / `FENG_EXPR_MATCH` 早已独立，semantic/codegen/dump/export/lsp 的 case 分支完全分开，parser 入口分发调整后下游零影响 |
 | `match` 关键字与用户代码标识符冲突 | 低 | Feng 已有关键字保护机制，`match` 作为新关键字的行为与其他关键字一致 |
 | 测试文件重命名导致 CI 脚本路径失效 | 低 | 测试运行器按目录扫描，不依赖硬编码文件名 |
-| 历史 dev 文档中 "if-match" 术语与现行语法不一致 | 低 | 除 `dev/feng-if-match-optimize-dev.md`（标题与主题即 if-match 优化，作为历史设计记录保留不动）外，其余 dev 文档已统一更新为 `match` 术语 |
+| 历史 dev 文档中 "if-match" 术语与现行语法不一致 | 低 | 除 `docs/engineering/feng-if-match-optimize-dev.md`（标题与主题即 if-match 优化，作为历史设计记录保留不动）外，其余 dev 文档已统一更新为 `match` 术语 |
 | CE0196 错误信息保留 "if/match" 是否引起混淆 | 低 | 该错误由 if 与 match 共用的 `cg_emit_branch_into_slot` 路径触发，"if/match" 合并写法准确反映实际触发场景，保留比强行改为 "match" 更准确 |
 
 ## 建议 commit message

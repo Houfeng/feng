@@ -7,9 +7,9 @@
 > 关联文档：
 > - [Feng LSP 已交付方案](feng-lsp-delivered.md)：定义 LSP 已交付能力与语义行为基线。
 > - [Feng LSP 性能优化方案](feng-lsp-performance-optimize.md)：定义最后一次成功分析、交互请求只读缓存与 Hover 性能门槛。
-> - [Feng 语言类型规范](../docs/feng-type.md)：定义普通 `type` 的语言规则。
-> - [Feng 语言元组规范](../docs/feng-tuple.md)：定义具名元组声明与元素规则。
-> - [Feng 语言 `spec` 规范](../docs/feng-spec.md)：定义 `spec` 的语言规则。
+> - [Feng 语言类型规范](../specifications/feng-type.md)：定义普通 `type` 的语言规则。
+> - [Feng 语言元组规范](../specifications/feng-tuple.md)：定义具名元组声明与元素规则。
+> - [Feng 语言 `spec` 规范](../specifications/feng-spec.md)：定义 `spec` 的语言规则。
 
 本文档是 Feng LSP 类型类别 Hover 展示的主方案。缓存、调度和性能指标统一引用
 `feng-lsp-performance-optimize.md`，本文不重复定义。
@@ -379,7 +379,7 @@ bool feng_symbol_decl_is_value_type(const FengSymbolDeclView *decl);
 
 预计实施范围：
 
-- `docs/feng-spec.md`：在编码前收敛四种 spec form 的主规范描述；
+- `docs/specifications/feng-spec.md`：在编码前收敛四种 spec form 的主规范描述；
 - `src/symbol/provider.h`、`src/symbol/provider.c`：增加 tuple/value 只读查询；
 - `src/cli/lsp/`：类别解析、声明核心形状格式化和 Hover 渲染；
 - 新增 LSP Hover 专项测试；
@@ -518,7 +518,7 @@ typedef struct FengLspHoverPresentation {
 
 ### 10.1 实施顺序
 
-1. 收敛 `docs/feng-spec.md` 中四种 spec form 及其术语。
+1. 收敛 `docs/specifications/feng-spec.md` 中四种 spec form 及其术语。
 2. 在 symbol provider 中公开 tuple/value 只读标志。
 3. 在 LSP 中建立统一类别枚举和标签映射。
 4. 统一 AST 与持久符号两条声明核心形状格式化路径。

@@ -1,7 +1,7 @@
 # Feng 标准库 extlib 预构建规范
 
 本文档是标准库原生依赖预构建的主规范。完整平台标识及目录命名以
-[feng-os-arch.md](../docs/feng-os-arch.md) 为准；各依赖的源码同步范围仍由各自
+[feng-os-arch.md](../specifications/feng-os-arch.md) 为准；各依赖的源码同步范围仍由各自
 开发文档定义。
 
 ## 1 构建范围

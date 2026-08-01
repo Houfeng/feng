@@ -2,7 +2,7 @@
 
 > 状态：设计中（design）
 >
-> 本文档是 `dev/feng-std-tui-dev.md` 阶段五（应用控制层 - 输入支持）的实现方案细化。
+> 本文档是 `docs/engineering/feng-std-tui-dev.md` 阶段五（应用控制层 - 输入支持）的实现方案细化。
 > 仅在此记录事件类型设计、VT100/xterm 输入解析状态机、事件路由机制，
 > 不重复 dev 主文档的路线规划。
 

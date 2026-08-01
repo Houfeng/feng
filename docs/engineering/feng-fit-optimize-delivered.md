@@ -1,8 +1,8 @@
 # Feng `fit` 调用优化开发指南
 
 > 本文档是本次 `fit` 调用优化的开发指导文档，定义施工范围、设计原则、实现步骤与验收口径。
-> 语言规则权威来源见 [docs/feng-fit-builtin-type-draft.md](../docs/feng-fit-builtin-type-draft.md)、[docs/feng-fit.md](../docs/feng-fit.md)、[docs/feng-builtin-type.md](../docs/feng-builtin-type.md)。
-> 符号表导出规范见 [docs/feng-symbol-table.md](../docs/feng-symbol-table.md)。
+> 语言规则权威来源见 [docs/specifications/feng-fit-builtin-type.md](../specifications/feng-fit-builtin-type.md)、[docs/specifications/feng-fit.md](../specifications/feng-fit.md)、[docs/specifications/feng-builtin-type.md](../specifications/feng-builtin-type.md)。
+> 符号表导出规范见 [docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md)。
 > 本文只写实现方案与任务拆解，不重复规范定义。
 
 ## 1. 目标
@@ -427,4 +427,4 @@ struct FengScalarBox {
 - fat spec 的外层运行时结构（value struct、vtable、coercion 包装模型）保持不动；escaping scalar spec 值允许引入 runtime-internal `FengScalarBox` 作为 stable subject owner。
 - `FengSpecRelation` 与 `FengSpecCoercionSite` 的主体键扩展必须与 witness sidecar key 扩展同步完成，不能让语义侧继续停留在 `type_decl`。
 - 若后续要放开更高 rank 数组 target 或其他内建类型 target，必须先更新规范再实现。
-- `FengScalarBox` 作为新增运行时内部结构，必须先在 [docs/feng-fit-builtin-type-draft.md](../docs/feng-fit-builtin-type-draft.md) 中补充运行时约束定义，再进入批次 C 实现。
+- `FengScalarBox` 作为新增运行时内部结构，必须先在 [docs/specifications/feng-fit-builtin-type.md](../specifications/feng-fit-builtin-type.md) 中补充运行时约束定义，再进入批次 C 实现。

@@ -2,11 +2,11 @@
 
 ## LE - 词法错误
 
-[词法错误](docs/feng-error-codes-le.md)
+[词法错误](./feng-error-codes-le.md)
 
 ## SE - 语法错误
 
-[语法错误](docs/feng-error-codes-se.md)
+[语法错误](./feng-error-codes-se.md)
 
 ## AE - 语义错误
 

@@ -371,7 +371,7 @@ extern func feng_user_debug(value: User): void;
 ### 11.1 Phase 0：规范与术语收敛
 
 - [x] 在开发文档中确认 `extern func` 的总定义不再限定为 C-only。
-- [x] 同步公共权威文档：把 `extern func` 的总定义回写到权威规范，并把 `docs/feng-interop.md` 收敛为 C ABI 路径权威，而不是继续覆盖全部 `extern func` 语义。
+- [x] 同步公共权威文档：把 `extern func` 的总定义回写到权威规范，并把 `docs/specifications/feng-interop.md` 收敛为 C ABI 路径权威，而不是继续覆盖全部 `extern func` 语义。
 - [x] 为 `@runtime` 明确首版适用位置、互斥规则、非公开定位，以及“签名语义与普通 Feng 函数一致”的原则。
 - [x] 明确顶层 intrinsic 迁入 `src/runtime/contract/` 子层；runtime 语义继续停留在 `src/runtime/` contract surface。
 

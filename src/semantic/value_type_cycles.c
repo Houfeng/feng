@@ -1,4 +1,4 @@
-/* Phase 1B value-type cycle detection (dev/feng-value-type-dev.md §3.5, §9.2).
+/* Phase 1B value-type cycle detection (docs/engineering/feng-value-type-dev.md §3.5, §9.2).
  *
  * Value types (tuples and `@value type` decls) are laid out inline — their
  * size must be known at compile time. A value type that directly or

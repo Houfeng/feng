@@ -1,6 +1,6 @@
 # Feng 变长参数实现开发文档
 
-> 规范来源：[docs/feng-function-variadic.md](../docs/feng-function-variadic.md)  
+> 规范来源：[docs/specifications/feng-function-variadic.md](../specifications/feng-function-variadic.md)
 > 本文记录实现原理、关键代码位置与待办任务。
 
 ---
@@ -67,8 +67,8 @@ if (has_variadic) {
 
 ### Phase 1：文档
 
-- [x] **V1**：新建 `docs/feng-function-variadic.md`，完整描述变参规范（语法、语义、规则、编译期、运行时）
-- [x] **V2**：在 `docs/feng-function.md` § 8 关联章节增加对 `feng-function-variadic.md` 的引用链接
+- [x] **V1**：新建 `docs/specifications/feng-function-variadic.md`，完整描述变参规范（语法、语义、规则、编译期、运行时）
+- [x] **V2**：在 `docs/specifications/feng-function.md` § 8 关联章节增加对 `feng-function-variadic.md` 的引用链接
 
 ### Phase 2：Parser
 

@@ -2,7 +2,7 @@
  *
  * Stores one entry per binary `==` / `!=` AST expression whose operands the
  * resolver determined to have a spec static type. The semantic conclusion
- * is "reference-identity comparison" per dev/feng-spec-semantic-draft.md
+ * is "reference-identity comparison" per docs/engineering/feng-spec-semantic-delivered.md
  * §6.6 / §9.6 — codegen reads this sidecar to keep spec equality decoupled
  * from the value-equality path used by `string` / `array`.
  *

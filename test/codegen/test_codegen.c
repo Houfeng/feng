@@ -2773,7 +2773,7 @@ static void test_generic_function_call_no_infer_rejected(void) {
      * 错语法九).
      *
      * TODO: 当前实现在 codegen 阶段报 CE0308，与规范期望的 semantic 阶段
-     * AE 码不符（错误码文档 docs/feng-error-codes-ce.md:129 标注
+     * AE 码不符（错误码文档 docs/specifications/feng-error-codes-ce.md:129 标注
      * CE0167→CE0308 "回到AE"，但实际未回到 AE 段；src/codegen/codegen.c
      * :27356 仍用旧码 CE0308）。此处先按实际错误码断言，后续修正实现
      * （让 semantic 阶段在调用点推导失败时报 AE 码）后将此测试迁移至

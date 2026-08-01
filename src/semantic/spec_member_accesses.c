@@ -2,7 +2,7 @@
  *
  * Stores one entry per AST member-expression whose owner static type the
  * resolver determined to be an object-form spec. See
- * dev/feng-spec-semantic-draft.md §6.4 / §9.4 / §10 Phase S2.
+ * docs/engineering/feng-spec-semantic-delivered.md §6.4 / §9.4 / §10 Phase S2.
  *
  * The table is populated incrementally by the analyzer:
  *   - validate_instance_member_expr records FIELD_READ / METHOD_CALL based

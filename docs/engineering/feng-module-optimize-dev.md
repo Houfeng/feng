@@ -1,10 +1,10 @@
 # Feng 模块符号冲突规则优化 TODO
 
-目标:完整实现 `docs/feng-module.md` §7 规范定义的六类符号冲突规则,本次聚焦其中第 1/2/3 类(import 相关)的惰性化,使 `type / enum / spec / func / let / var` 在 import 场景下行为统一。
+目标:完整实现 `docs/specifications/feng-module.md` §7 规范定义的六类符号冲突规则,本次聚焦其中第 1/2/3 类(import 相关)的惰性化,使 `type / enum / spec / func / let / var` 在 import 场景下行为统一。
 
 ## 0. 规范六类冲突 vs 当前实现 vs 本次优化范围
 
-`docs/feng-module.md` §7(L156-163)定义了六类符号冲突规则。**关键边界:涉及 import 的总是惰性(规则 1/2/3),纯本地的非 func 总是急切(规则 4)**。两者不重叠:规则 4 中"同模块(无论是否同文件)"特指**不涉及 import 的纯本地冲突**。
+`docs/specifications/feng-module.md` §7(L156-163)定义了六类符号冲突规则。**关键边界:涉及 import 的总是惰性(规则 1/2/3),纯本地的非 func 总是急切(规则 4)**。两者不重叠:规则 4 中"同模块(无论是否同文件)"特指**不涉及 import 的纯本地冲突**。
 
 | # | 冲突类别 | 规范要求 | 当前实现 | 本次优化 |
 |---|---|---|---|---|
@@ -82,7 +82,7 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
 
 ## 1. 错误码文档更新
 
-- [x] 1.1 `docs/feng-error-codes-ae.md` 通用段(AE00)新增 AE0005:
+- [x] 1.1 `docs/specifications/feng-error-codes-ae.md` 通用段(AE00)新增 AE0005:
     - 用途:import 引入名称的二义/多义冲突(规范第 1/2/3 类)
     - 触发位置:裸名引用时(惰性)
     - 涵盖场景:import vs import / import vs 本模块其他文件 / import vs 本文件
@@ -91,8 +91,8 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
         - import vs import(2 个 import):`'<name>' is ambiguous: imported from '<module1>' and '<module2>'; use a fully-qualified path or import alias to disambiguate`
         - import vs 本模块:`'<name>' is ambiguous: defined in current module and also imported from '<module>'; use a fully-qualified path or import alias to disambiguate`
         - 多 import(≥3 个):`'<name>' is ambiguous: imported from multiple modules (<module1>, <module2>, ...); use a fully-qualified path or import alias to disambiguate`
-- [x] 1.2 `docs/feng-error-codes-ae.md` AE0906 标记为废弃(本次优化后不再产生新错误,文档保留向后兼容)。
-- [x] 1.3 ~~`docs/feng-error-codes.md` 同步新增 AE0005 条目。~~ **按人工决策跳过**:`docs/feng-error-codes.md` 索引文档滞后严重(代码已使用分段方案 AE1302/AE1303 等,索引仍写 AE0005/AE0006 等旧编号且与代码不一致),本次不参考该文档,错误码以 `docs/feng-error-codes-ae.md` 分段方案为准。
+- [x] 1.2 `docs/specifications/feng-error-codes-ae.md` AE0906 标记为废弃(本次优化后不再产生新错误,文档保留向后兼容)。
+- [x] 1.3 ~~`docs/specifications/feng-error-codes.md` 同步新增 AE0005 条目。~~ **按人工决策跳过**:`docs/specifications/feng-error-codes.md` 索引文档滞后严重(代码已使用分段方案 AE1302/AE1303 等,索引仍写 AE0005/AE0006 等旧编号且与代码不一致),本次不参考该文档,错误码以 `docs/specifications/feng-error-codes-ae.md` 分段方案为准。
 
 预留编号(本次不引入,scope 阶段使用):
 - AE0002:第 4 类合并,同模块符号重复定义(非 func),替代 AE0213 / AE0214 / AE0215 / AE0216。
@@ -320,4 +320,4 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
 - **AE0002 名称重复**(1 个码):所有非重载的同名冲突统一使用,包括 type vs type、enum vs type、let/var vs func、func vs let/var、let/var vs let/var 等。同时修复第 4 类的跨种类漏检。
 - **AE0004 重载冲突**(1 个码):所有函数重载冲突统一使用,包括签名完全重复、仅返回值不同、可变参数重载冲突等。
 
-此优化与 `docs/feng-module.md` 中"type / spec / enum / func / let / var 统一适用"的原则对齐,属于 scope 阶段工作,不在本次 import 惰性检查优化范围内。
+此优化与 `docs/specifications/feng-module.md` 中"type / spec / enum / func / let / var 统一适用"的原则对齐,属于 scope 阶段工作,不在本次 import 惰性检查优化范围内。
