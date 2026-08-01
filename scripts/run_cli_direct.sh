@@ -72,9 +72,9 @@ if expect_ok "help" "$FENG" --help; then
         failures=$((failures + 1))
     fi
     sed '$d' "$WORK/help.out" >"$WORK/help.content.out"
-    if ! cmp -s "$ROOT/notes/feng-usage.txt" "$WORK/help.content.out"; then
-        echo "FAIL[help] output differs from notes/feng-usage.txt"
-        diff -u "$ROOT/notes/feng-usage.txt" "$WORK/help.content.out" || true
+    if ! cmp -s "$ROOT/docs/specifications/feng-cli-help.txt" "$WORK/help.content.out"; then
+        echo "FAIL[help] output differs from docs/specifications/feng-cli-help.txt"
+        diff -u "$ROOT/docs/specifications/feng-cli-help.txt" "$WORK/help.content.out" || true
         failures=$((failures + 1))
     fi
 fi

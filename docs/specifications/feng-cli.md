@@ -392,64 +392,11 @@ feng tool check [--target=<bin|lib>] <file> [more files...]
 
 - `compile` 归属于 `tool`，不作为长期保留的顶层主命令，避免把编译器调试入口暴露到普通项目工作流的主命名空间。
 
-## 7 帮助输出示例
+## 7 帮助输出
 
-示例:
+`feng --help` 的完整文本与排版以 [feng-cli-help.txt](./feng-cli-help.txt) 为准。该文件是本规范的组成部分，也是 CLI 回归测试校验帮助输出的唯一基准；调整帮助内容时，必须先更新该文件，再同步修改实现。
 
-```text
-Usage:
-  feng <command>  [options]                  Project command
-  feng <files>... [options]                  Direct compile
-
-Project:
-  feng init       [<name>]                   Project name
-                  [--target=bin|lib]         Project type
-  feng build      [<path>]                   Project root
-                  [--release]                Release mode
-                  [--platform=<platform>]... Target platform
-                  [--sysroot=<path>]         Target sysroot
-                  [--keep-ir]                Keep IR
-  feng check      [<path>]                   Project root
-                  [--format=text|json]       Input format
-  feng run        [<path>]                   Project root
-                  [--release]                Release mode
-                  [--keep-ir]                Keep IR
-                  [-- <args>...]             Program arguments
-  feng clean      [<path>]                   Project root
-  feng pack       [<path>]                   Project root
-                  [--platform=<platform>]... Target platform
-                  [--sysroot=<path>]         Target sysroot
-
-Dependence:
-  feng deps       add     <pkg-name>         Package name
-                          [<path>]           Project root
-  feng deps       remove  <pkg-name>         Package name
-                          [<path>]           Project root
-  feng deps       install [<path>]           Project root
-                          [--force]          Force reinstall
-
-Compile:
-  feng <files>... [--target=bin|lib]         Project type
-                  [--platform=<platform>]    Target platform
-                  [--sysroot=<path>]         Target sysroot
-                  [--out=<dir>]              Output directory
-                  [--name=<artifact>]        Artifact name
-                  [--release]                Release mode
-                  [--keep-ir]                Keep IR
-                  [--pkg=<fb-path>]...       Package list
-                  [--lib=<lib-path>]...      Library list
-
-Protocol:
-  feng lsp        [--stdio]                  Start LSP
-  feng dap        [--stdio]                  Start DAP
-
-Global:
-  -h, --help                                 Display help message
-  -v, --version                              Display version info
-
-```
-
-- 用户显式执行 `--help` 时,上述帮助文本输出到 stdout。
+- 用户显式执行 `--help` 时,帮助文本输出到 stdout。
 - 当 CLI 因参数错误、未知命令或缺少必要参数而附带输出同类 usage 时,该文本输出到 stderr。
 
 ## 8 有意不提供的命令
