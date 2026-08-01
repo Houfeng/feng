@@ -1,6 +1,6 @@
 # C 互操作
 
-Feng 通过显式 C ABI 声明调用原生库。互操作要求调用方准确描述外部签名、所有权与生命周期；完整规则以[C ABI 互操作规范](../../specifications/feng-interop.md)为准。
+Feng 通过显式 C ABI 声明调用原生库。互操作要求调用方准确描述外部签名、所有权与生命周期；完整规则以[C ABI 互操作规范](../../../specifications/feng-interop.md)为准。
 
 ## 导入 C 函数
 

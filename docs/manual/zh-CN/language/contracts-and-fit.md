@@ -1,6 +1,6 @@
 # 契约与 fit
 
-`spec` 声明能力边界，`type` 提供实现，`fit` 在不修改原类型定义的情况下建立满足关系或补充方法。详细规则见[`spec` 规范](../../specifications/feng-spec.md)和[`fit` 规范](../../specifications/feng-fit.md)。
+`spec` 声明能力边界，`type` 提供实现，`fit` 在不修改原类型定义的情况下建立满足关系或补充方法。详细规则见[`spec` 规范](../../../specifications/feng-spec.md)和[`fit` 规范](../../../specifications/feng-fit.md)。
 
 ## 对象契约
 

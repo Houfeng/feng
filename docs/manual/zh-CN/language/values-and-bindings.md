@@ -1,6 +1,6 @@
 # 值与绑定
 
-Feng 使用 `let` 声明不可重新赋值的绑定，使用 `var` 声明可以重新赋值的绑定。详细规则见[变量绑定与作用域规范](../../specifications/feng-binding.md)。
+Feng 使用 `let` 声明不可重新赋值的绑定，使用 `var` 声明可以重新赋值的绑定。详细规则见[变量绑定与作用域规范](../../../specifications/feng-binding.md)。
 
 ## 声明绑定
 

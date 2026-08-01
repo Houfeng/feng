@@ -1,6 +1,6 @@
 # 安装 Feng
 
-本章帮助你安装 Feng 工具链并确认命令可用。安装行为的工程说明见[发行与安装文档](../../engineering/feng-release-and-install.md)。
+本章帮助你安装 Feng 工具链并确认命令可用。安装行为的工程说明见[发行与安装文档](../../../engineering/feng-release-and-install.md)。
 
 ## 支持的平台
 
@@ -10,7 +10,7 @@
 - x86-64 Linux：`linux-x64-gnu`
 - ARM64 Linux：`linux-arm64-gnu`
 
-Windows、Intel Mac 与纯 musl Linux 主机当前没有官方工具包。完整的平台标识见[平台标识规范](../../specifications/feng-os-arch.md)。
+Windows、Intel Mac 与纯 musl Linux 主机当前没有官方工具包。完整的平台标识见[平台标识规范](../../../specifications/feng-os-arch.md)。
 
 ## 快速安装
 

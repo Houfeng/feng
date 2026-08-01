@@ -1,6 +1,6 @@
 # 依赖管理
 
-Feng 项目在 `feng.fm` 的 `[dependencies]` 中声明依赖。完整解析与缓存规则见[依赖管理规范](../../specifications/feng-deps.md)。
+Feng 项目在 `feng.fm` 的 `[dependencies]` 中声明依赖。完整解析与缓存规则见[依赖管理规范](../../../specifications/feng-deps.md)。
 
 ## 精确版本依赖
 

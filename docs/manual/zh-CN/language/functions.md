@@ -1,6 +1,6 @@
 # 函数
 
-函数用于组织行为，也可以通过可调用 `spec` 作为值传递。完整规则见[函数规范](../../specifications/feng-function.md)和[变长参数规范](../../specifications/feng-function-variadic.md)。
+函数用于组织行为，也可以通过可调用 `spec` 作为值传递。完整规则见[函数规范](../../../specifications/feng-function.md)和[变长参数规范](../../../specifications/feng-function-variadic.md)。
 
 ## 声明与调用
 

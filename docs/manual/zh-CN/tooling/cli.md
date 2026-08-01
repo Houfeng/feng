@@ -1,6 +1,6 @@
 # Feng CLI
 
-`feng` 同时提供项目工作流、语言服务入口和高级编译诊断。完整命令定义见[CLI 规范](../../specifications/feng-cli.md)，精确帮助文本见[CLI 帮助基准](../../specifications/feng-cli-help.txt)。
+`feng` 同时提供项目工作流、语言服务入口和高级编译诊断。完整命令定义见[CLI 规范](../../../specifications/feng-cli.md)，精确帮助文本见[CLI 帮助基准](../../../specifications/feng-cli-help.txt)。
 
 ## 全局帮助
 
