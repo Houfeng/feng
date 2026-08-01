@@ -436,5 +436,5 @@ void * _l_v_0 = &_ir3.item2;
 
 ```bash
 make test                    # 全量回归
-build/bin/feng run std_test  # 确认 for-in generic test cases 通过
+build/bin/feng run std/std_test  # 确认 for-in generic test cases 通过
 ```

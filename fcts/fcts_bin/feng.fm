@@ -6,5 +6,5 @@ src: "src/"
 out: "build/"
 
 [dependencies]
-std: "../../std"
+std: "../../std/std"
 fcts_lib: "../fcts_lib"

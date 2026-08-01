@@ -226,6 +226,6 @@ Feng 调用点 -> wrapper -> 原生符号
   - [x] 验证生成代码没有 extern wrapper 和额外运行时调用。
   - [x] 补齐同一原生符号对应不同指针、标量和返回值签名的编译器用例及 fcts
     用例。
-  - [x] 验证 `feng build std_test` 不再出现同名 extern 原型导致的
+  - [x] 验证 `feng build std/std_test` 不再出现同名 extern 原型导致的
     `-Wpointer-sign` 警告。
   - [x] `make test` 全量回归通过。

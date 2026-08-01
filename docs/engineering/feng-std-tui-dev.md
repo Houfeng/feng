@@ -125,14 +125,14 @@
 
 每个阶段遵循统一流程：实现代码 → 补充 std_test 用例 → 全量回归测试 → 等待人工 Review。
 
-- **std_test 用例**：在 `std_test/src/test_tui.ff` 中新增对应测试函数，注册到 `run_tui_tests()`，并在 `z_main.ff` 中调用。
+- **std_test 用例**：在 `std/std_test/src/test_tui.ff` 中新增对应测试函数，注册到 `run_tui_tests()`，并在 `z_main.ff` 中调用。
 - **全量回归测试**：执行 `make test`，确保所有测试套件通过
 - **人工 Review**：变更完成后通知开发者审查，审查通过后方可进入下一阶段。严禁跳过 Review 直接开始下一阶段。
 
 ### 第一阶段：Cell（渲染底座 - 最小单元）
 
 - [x] 4.1 完善 Cell：构造函数、静态常量、工厂方法
-- [x] 4.2 补充 std_test 用例：新增 `std_test/src/test_tui.ff`，覆盖 Cell 样式读写（前景色/背景色/粗体/斜体等各标志位）；注册 `run_tui_tests()` 并在 `z_main.ff` 中调用
+- [x] 4.2 补充 std_test 用例：新增 `std/std_test/src/test_tui.ff`，覆盖 Cell 样式读写（前景色/背景色/粗体/斜体等各标志位）；注册 `run_tui_tests()` 并在 `z_main.ff` 中调用
 - [x] 4.3 全量回归测试：执行 `make test`，确认全部通过
 - [x] 4.4 等待人工 Review：开发者审查 Cell 实现与测试用例，通过后方可进入第二阶段
 
@@ -210,7 +210,7 @@
 ## 5 文件组织
 
 ```text
-std/src/tui/
+std/std/src/tui/
   Cell.ff          # Cell（最小单元）
   Buffer.ff        # Buffer（Cell 矩阵 + 绘制原语）
   Screen.ff        # Screen（双缓冲 + Diff）（后续）
@@ -224,7 +224,7 @@ std/src/tui/
   KeyEvent.ff      # 键盘事件（后续）
   MouseEvent.ff    # 鼠标事件（后续）
 
-std/src/tui/views/
+std/std/src/tui/views/
   View.ff          # Widget 基础实现
 ```
 
@@ -238,5 +238,5 @@ std/src/tui/views/
 - 每个阶段实现后必须先补充 std_test 用例，再执行全量回归测试，最后等待人工 Review。
 - 严禁跳过人工 Review 直接进入下一阶段。
 - 全量回归测试命令统一使用 `make test`，必须确认全部通过（EXIT:0）。
-- std_test 用例文件统一放在 `std_test/src/test_tui.ff`，遵循现有 `test_*.ff` 命名与 `run_*_tests()` 注册模式。
+- std_test 用例文件统一放在 `std/std_test/src/test_tui.ff`，遵循现有 `test_*.ff` 命名与 `run_*_tests()` 注册模式。
 - std 中的功能默认使用 std_test 用例，不需要 fcts 用例；仅当遇到 Feng 语言层面的问题（语法、语义、类型系统等编译器行为）时，才新增 fcts 用例。

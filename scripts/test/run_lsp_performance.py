@@ -76,7 +76,7 @@ def main() -> int:
     """Run cheap Hover and dirty-document Completion latency samples."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--server", default="build/bin/feng")
-    parser.add_argument("--source", default="std_test/src/z_main.ff")
+    parser.add_argument("--source", default="std/std_test/src/z_main.ff")
     parser.add_argument("--samples", type=int, default=30)
     parser.add_argument("--no-enforce", action="store_true")
     args = parser.parse_args()

@@ -6,4 +6,4 @@ src: "src/"
 out: "build/"
 
 [dependencies]
-std: "../../std"
+std: "../../std/std"

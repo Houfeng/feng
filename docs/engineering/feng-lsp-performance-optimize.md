@@ -679,7 +679,7 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - `didSave` 只同步执行当前文件 parse，完整 semantic / project diagnostics 消费后台 candidate 结果；
 - 新增 `scripts/test/run_lsp_performance.py`，从真实 `feng lsp --stdio` 协议采样并检查 Hover P95、Completion P95 和交互 P99 门槛。
 
-在本机普通优化构建、`std_test/src/z_main.ff`、Hover 与 Completion 各 200 次采样下：
+在本机普通优化构建、`std/std_test/src/z_main.ff`、Hover 与 Completion 各 200 次采样下：
 
 | 指标 | 实测 |
 | --- | ---: |

@@ -4,7 +4,7 @@
 
 ## 背景
 
-`std/src/tui/Cell.ff` 中 `seal var value: u64` 字段与 `open func value(): u64` 方法同名，同模块内编译通过，但跨模块访问 `cell.value()` 时报：
+`std/std/src/tui/Cell.ff` 中 `seal var value: u64` 字段与 `open func value(): u64` 方法同名，同模块内编译通过，但跨模块访问 `cell.value()` 时报：
 
 ```
 AE0308: member 'value' of type 'Cell' is not accessible from the current module
@@ -100,7 +100,7 @@ if (ok && !validate_type_member_field_method_name_conflict(context, decl)) {
 
 ### 变更 6：修复 Cell.ff
 
-**文件**: `std/src/tui/Cell.ff`
+**文件**: `std/std/src/tui/Cell.ff`
 
 `value`/`style` 两对字段-方法同名需要重命名（方法或字段之一），由人工决策改名方向。
 

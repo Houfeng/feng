@@ -148,7 +148,7 @@ feng_std_extlib_cleanup() {
 feng_std_extlib_build_archive() {
   local source_dir="$1"
   local archive_name="$2"
-  local output_dir="${3:-${PROJECT_ROOT}/std/extlib/${FENG_STD_EXTLIB_PLATFORM}}"
+  local output_dir="${3:-${PROJECT_ROOT}/std/std/extlib/${FENG_STD_EXTLIB_PLATFORM}}"
   local staging_dir extracted_dir staged_archive output_archive
   local archive_format object_path object_format object_count
 

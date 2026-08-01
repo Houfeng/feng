@@ -2,7 +2,7 @@
 
 > 本文记录基于 Feng 实现的词法分析器（Lexer）设计，服务于自定义注解 Token 流变换和未来自举。
 > **状态**：草案阶段，尚未实现。
-> **目标**：在 `std/src/compiler/Lexer/` 中实现完整的 Feng 词法分析器，作为自定义注解 pre-Parse 阶段的基础设施。
+> **目标**：在 `std/std/src/compiler/Lexer/` 中实现完整的 Feng 词法分析器，作为自定义注解 pre-Parse 阶段的基础设施。
 
 ---
 
@@ -12,7 +12,7 @@
 
 1. **自定义注解近需**：`feng-custom-annotation-draft-2.md` 确定了 pre-Parse 阶段做 Token 流变换的路线，注解 handler 需要操作 Token 流，要求 Feng 层有 Lexer（产生 Token）和 Token 解析能力
 2. **自举远期目标**：Feng 计划自举（~2 年后），Lexer 是编译器前端核心组件
-3. **std/src/compiler/ 已预留目录**：`Lexer/`、`Parser/` 目录已创建，`FengToken.ff` 已占位
+3. **std/std/src/compiler/ 已预留目录**：`Lexer/`、`Parser/` 目录已创建，`FengToken.ff` 已占位
 
 ### 当前 C 版状态
 
@@ -69,10 +69,10 @@ FengToken — 6 words (48 bytes on 64-bit)
 ## 2 模块结构
 
 ```
-std/src/text/
+std/std/src/text/
 └── StringBuilder.ff         # 字符串构建器（Lexer 前置依赖）
 
-std/src/compiler/
+std/std/src/compiler/
 ├── Common/
 │   └── FengCompileError.ff  # 编译错误（Lexer/Parser 共用）
 └── Lexer/
@@ -89,7 +89,7 @@ std/src/compiler/
 
 ## 2b Common 类型
 
-**目录**：`std/src/compiler/Common/`
+**目录**：`std/std/src/compiler/Common/`
 **模块**：`std.compiler.common`
 
 ### FengCompileError
@@ -151,7 +151,7 @@ open type FengCompileError: JsonSerializable<FengCompileError>, Display {
 
 ## 3 Token 类型定义
 
-**目录**：`std/src/compiler/Lexer/`
+**目录**：`std/std/src/compiler/Lexer/`
 **模块**：`std.compiler.lexer`
 
 ### 3.1 FengTokenKind 枚举
@@ -441,7 +441,7 @@ open type FengTokenUtil {
 
 ## 4 Lexer 实现
 
-**文件**：`std/src/compiler/Lexer/FengLexer.ff`
+**文件**：`std/std/src/compiler/Lexer/FengLexer.ff`
 **模块**：`std.compiler.lexer`
 
 ### 4.1 设计
@@ -648,7 +648,7 @@ Lexer 不维护文档注释与目标声明的关联。`CommentDoc` 仅作为普�
 
 ## 5 FengTokenTransformer
 
-**文件**：`std/src/compiler/Lexer/FengTokenTransformer.ff`
+**文件**：`std/std/src/compiler/Lexer/FengTokenTransformer.ff`
 **模块**：`std.compiler.lexer`
 
 ### 5.1 设计
@@ -748,11 +748,11 @@ open type FengTokenTransformer {
 
 | 步骤 | 内容 | 前置 | 产出文件 |
 |------|------|------|---------|
-| 1 | StringBuilder 实现（详见 `feng-std-string-builder-dev.md`） | 无 | `std/src/text/StringBuilder.ff` |
-| 2 | FengCompileError 类型定义 | 无 | `std/src/compiler/Common/FengCompileError.ff` |
-| 3 | Token 类型定义 | 2 | `std/src/compiler/Lexer/FengToken.ff` |
-| 4 | Lexer 实现 | 1, 2, 3 | `std/src/compiler/Lexer/FengLexer.ff` |
-| 5 | FengTokenTransformer 实现 | 3, 4 | `std/src/compiler/Lexer/FengTokenTransformer.ff` |
+| 1 | StringBuilder 实现（详见 `feng-std-string-builder-dev.md`） | 无 | `std/std/src/text/StringBuilder.ff` |
+| 2 | FengCompileError 类型定义 | 无 | `std/std/src/compiler/Common/FengCompileError.ff` |
+| 3 | Token 类型定义 | 2 | `std/std/src/compiler/Lexer/FengToken.ff` |
+| 4 | Lexer 实现 | 1, 2, 3 | `std/std/src/compiler/Lexer/FengLexer.ff` |
+| 5 | FengTokenTransformer 实现 | 3, 4 | `std/std/src/compiler/Lexer/FengTokenTransformer.ff` |
 | 6 | Lexer 测试 | 1-5 | fcts 测试 |
 
 ---

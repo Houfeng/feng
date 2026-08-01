@@ -3,7 +3,7 @@
 > 状态：设计中（design）
 >
 > 本文档是 `docs/engineering/feng-std-tui-dev.md` 第七阶段（视图机制层）的主规范。
-> 当前接口基线以 `std/src/tui/Widget.ff`、`std/src/tui/Thickness.ff`、`std/src/tui/ViewManager.ff` 和 `std/src/tui/views/View.ff` 中已经定义的类型为准。
+> 当前接口基线以 `std/std/src/tui/Widget.ff`、`std/std/src/tui/Thickness.ff`、`std/std/src/tui/ViewManager.ff` 和 `std/std/src/tui/views/View.ff` 中已经定义的类型为准。
 
 ## 1 总体目标
 
@@ -36,7 +36,7 @@ TuiApp
 
 ### 3.1 布局枚举
 
-`std/src/tui/Widget.ff` 已定义：
+`std/std/src/tui/Widget.ff` 已定义：
 
 ```feng
 open enum WidgetPosition {
@@ -256,13 +256,13 @@ open type TuiApp {
 ## 11 文件规划
 
 ```text
-std/src/tui/
+std/std/src/tui/
   Thickness.ff       # 四边间距类型（已定义）
   Widget.ff          # 布局枚举、WidgetStyle、WidgetFrame、Widget（已定义）
   ViewManager.ff     # 视图管理器与 sequence（已定义骨架）
   TuiApp.ff          # 后续新增 view 成员并接入 ViewManager
 
-std/src/tui/views/
+std/std/src/tui/views/
   View.ff            # Widget 基础实现（已定义骨架）
 ```
 

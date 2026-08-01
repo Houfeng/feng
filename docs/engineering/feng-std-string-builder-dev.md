@@ -2,7 +2,7 @@
 
 > 本文记录 `std.text.StringBuilder` 的设计与实现。
 > **状态**：草案阶段，尚未实现。
-> **文件**：`std/src/text/StringBuilder.ff`
+> **文件**：`std/std/src/text/StringBuilder.ff`
 > **模块**：`std.text`
 
 ---

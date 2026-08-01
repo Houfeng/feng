@@ -307,7 +307,7 @@ HOST_OS := $(shell sh -c 'os=$$(uname -s); if [ "$$os" = Darwin ]; then printf m
 UNAME_M := $(shell uname -m)
 HOST_ARCH := $(if $(filter x86_64 amd64,$(UNAME_M)),x64,$(if $(filter arm64 aarch64,$(UNAME_M)),arm64,generic))
 HOST_PLATFORM := $(if $(filter linux,$(HOST_OS)),$(HOST_OS)-$(HOST_ARCH)-gnu,$(HOST_OS)-$(HOST_ARCH))
-OUTPUT_DIR ?= ../../std/extlib/$(HOST_PLATFORM)
+OUTPUT_DIR ?= ../../std/std/extlib/$(HOST_PLATFORM)
 OUTPUT_NAME ?= $(TARGET)
 OUTPUT_TARGET := $(OUTPUT_DIR)/$(OUTPUT_NAME)
 

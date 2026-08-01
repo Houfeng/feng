@@ -407,7 +407,7 @@ storage API 必须满足：
 
 ## 8. 第一阶段：实现并验证 storage API
 
-第一阶段只实现底层能力，不修改 `std/src/collections/List.ff`。
+第一阶段只实现底层能力，不修改 `std/std/src/collections/List.ff`。
 
 ### 8.1 文档
 

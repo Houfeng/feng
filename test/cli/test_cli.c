@@ -7095,7 +7095,7 @@ static void test_project_build_keeps_for_body_locals_after_prefix_binding(void) 
     output_path = path_join(workspace_dir, "lldb.txt");
     repo_root = getcwd(NULL, 0);
     ASSERT(repo_root != NULL);
-    std_path = path_join(repo_root, "std");
+    std_path = path_join(repo_root, "std/std");
     ASSERT(std_path != NULL);
     manifest_text = dup_printf("[package]\n"
                                "name: \"demo\"\n"

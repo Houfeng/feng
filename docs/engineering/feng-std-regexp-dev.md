@@ -1,13 +1,13 @@
 # std.text RegExp 正则表达式实现方案
 
-> 完整平台标识与 `std/extlib/<platform>/` 目录取值以 [../specifications/feng-os-arch.md](../specifications/feng-os-arch.md) 为准。
+> 完整平台标识与 `std/std/extlib/<platform>/` 目录取值以 [../specifications/feng-os-arch.md](../specifications/feng-os-arch.md) 为准。
 
 ## 1 背景
 
 ### 1.1 PCRE2 静态库（已就绪）
 
 `third_party/PCRE2/` 已 vendor PCRE2 10.45 源码，配置为 8-bit 静态库 + Unicode/UTF 支持，
-构建产物为 `std/extlib/<platform>/libfeng_std_pcre2.a`。
+构建产物为 `std/std/extlib/<platform>/libfeng_std_pcre2.a`。
 
 当前编译宏：
 - `PCRE2_CODE_UNIT_WIDTH=8` — 固定 8-bit code unit，与 Feng string 的 UTF-8 字节表示一致
@@ -624,7 +624,7 @@ open func destroy(): void {
 
 ## 7 string 扩展方法
 
-在 `std/src/text/RegExp.ff` 中通过 `fit string` 提供便捷方法，内部创建临时 `RegExp`。
+在 `std/std/src/text/RegExp.ff` 中通过 `fit string` 提供便捷方法，内部创建临时 `RegExp`。
 
 ```feng
 open fit string {
@@ -694,8 +694,8 @@ PCRE2 的 JIT 编译器（若后续启用）可将 `pcre2_match` 加速 3-10 倍
 |------|------|
 | `src/runtime/feng_runtime_contract.c` | 新增 `feng_pointer_get_scalar` |
 | `src/runtime/feng_runtime_contract.inc` | 注册 `feng_pointer_get_scalar` |
-| `std/src/text/RegExp.ff` | 实现 RegExp / Match / RegExpFlag + @cdecl 声明；定义 `matches` / `replacePattern` / `splitPattern` 便捷方法 |
-| `std_test/src/test_regexp.ff` | 新增测试用例 |
+| `std/std/src/text/RegExp.ff` | 实现 RegExp / Match / RegExpFlag + @cdecl 声明；定义 `matches` / `replacePattern` / `splitPattern` 便捷方法 |
+| `std/std_test/src/test_regexp.ff` | 新增测试用例 |
 
 ## 10 测试用例
 

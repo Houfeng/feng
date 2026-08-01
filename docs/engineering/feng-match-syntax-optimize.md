@@ -298,10 +298,10 @@ C 代码各文件改动规模：
 
 | 文件 | 变更内容 |
 | ---- | -------- |
-| `std/src/basic/Option.ff` | 文档注释中 `if value { ... }` 改为 `match value { ... }`（2 处） |
-| `std/src/async/Future.ff` | `return if self.owner { ... }` 改为 `return match self.owner { ... }`（第 32 行） |
-| `std/src/json/Json.ff` | 12 处 `return if value { ... }` 改为 `return match value { ... }`（第 29、41、53、67、79、91、103、115、129、141、153、215 行） |
-| `std/src/test/TestContext.ff` | 3 处 `if parentOutput/selfOutput { ... }` 改为 `match ... { ... }`（第 134、152、155 行） |
+| `std/std/src/basic/Option.ff` | 文档注释中 `if value { ... }` 改为 `match value { ... }`（2 处） |
+| `std/std/src/async/Future.ff` | `return if self.owner { ... }` 改为 `return match self.owner { ... }`（第 32 行） |
+| `std/std/src/json/Json.ff` | 12 处 `return if value { ... }` 改为 `return match value { ... }`（第 29、41、53、67、79、91、103、115、129、141、153、215 行） |
+| `std/std/src/test/TestContext.ff` | 3 处 `if parentOutput/selfOutput { ... }` 改为 `match ... { ... }`（第 134、152、155 行） |
 
 ### 8.2 示例
 

@@ -415,5 +415,5 @@ let r: Result<int> = none_val;
 
 - 问题发现：Parser 6.4 实施（`LambdaBody: Expression | Block`）
 - 相关代码：`src/semantic/analyzer.c`（`collect_normalized_union_member`、`validate_expr_against_expected_type`、`select_union_member_for_expr_type`）
-- AST 定义：`std/src/compiler/parser/FengAstNodes.ff`
+- AST 定义：`std/std/src/compiler/parser/FengAstNodes.ff`
 - 嵌套 spec union 实例：`LambdaBody`（:389）、`MatchTarget`（:422）、`ForUpdate`（:650）

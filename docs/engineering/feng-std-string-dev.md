@@ -4,7 +4,7 @@
 
 ### 1.1 RuneView 与 GraphemeView（已交付）
 
-`std/src/text/Rune.ff` 和 `std/src/text/Grapheme.ff` 提供 `RuneView` 和 `GraphemeView` 视图类型，
+`std/std/src/text/Rune.ff` 和 `std/std/src/text/Grapheme.ff` 提供 `RuneView` 和 `GraphemeView` 视图类型，
 分别实现了 `length()` 和 `at(index)` 方法。通过 `@cdecl` 调用 `third_party/libunistring/` 的 UTF-8
 rune/grapheme 子集，配合 `feng_pointer_move`/`feng_pointer_diff` 等 runtime 指针基础设施完成。
 
@@ -94,7 +94,7 @@ bool feng_string_range_equal(FengString *a, int64_t a_start, int64_t a_end,
 
 ## 4 方法签名与语义
 
-所有方法通过 `fit string` 扩展到 `string` 类型上，定义在 `std/src/text/String.ff` 中。
+所有方法通过 `fit string` 扩展到 `string` 类型上，定义在 `std/std/src/text/String.ff` 中。
 
 ### 4.1 搜索方法
 
@@ -268,7 +268,7 @@ U+3000 全角空格
 
 #### 实现
 
-`u8_prev` 需在 `std/src/text/Rune.ff` 中补充 `@cdecl` 声明（libunistring 已提供）。
+`u8_prev` 需在 `std/std/src/text/Rune.ff` 中补充 `@cdecl` 声明（libunistring 已提供）。
 
 ```feng
 /** 检查 Unicode code point 是否为空白字符。 */
@@ -375,9 +375,9 @@ open fit string {
 |------|------|
 | `src/runtime/feng_runtime_contract.c` | 新增 `feng_string_range_equal` |
 | `src/runtime/feng_runtime_contract.inc` | 注册 `feng_string_range_equal` |
-| `std/src/text/Rune.ff` | 补充 `u8_prev` 的 `@cdecl` 声明 |
-| `std/src/text/String.ff` | 新增 `feng_string_range_equal` 声明 + `isUnicodeWhitespace` + 10 个方法 |
-| `std_test/src/test_string.ff` | 追加测试用例 |
+| `std/std/src/text/Rune.ff` | 补充 `u8_prev` 的 `@cdecl` 声明 |
+| `std/std/src/text/String.ff` | 新增 `feng_string_range_equal` 声明 + `isUnicodeWhitespace` + 10 个方法 |
+| `std/std_test/src/test_string.ff` | 追加测试用例 |
 
 ## 8 测试用例
 
@@ -563,8 +563,8 @@ open func toUpperCase(): string {
 | `scripts/fetch_libunistring.sh` | 增加 unicase 模块同步 |
 | `third_party/libunistring/Makefile` | 新增 unicase 源文件 |
 | `third_party/libunistring/include/feng_u8_case.h` | 新增公开头 |
-| `std/src/text/String.ff` | 新增 9 个方法 + @cdecl 声明 |
-| `std_test/src/test_string.ff` | 追加测试用例 |
+| `std/std/src/text/String.ff` | 新增 9 个方法 + @cdecl 声明 |
+| `std/std_test/src/test_string.ff` | 追加测试用例 |
 
 ## 10 关联
 

@@ -10,7 +10,7 @@ OUTPUT_PARENT=""
 WORK_ROOT=""
 STAGING_ROOT=""
 BUNDLED_PROJECTS=(
-  "std"
+  "std/std"
 )
 
 # Print the supported bundled-package build invocation.

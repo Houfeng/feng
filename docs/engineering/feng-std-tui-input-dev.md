@@ -580,7 +580,7 @@ exit() 调用 `self.input.buildDisableMouseSgrBytes()`。
 ## 5 文件组织
 
 ```text
-std/src/tui/
+std/std/src/tui/
   KeyEvent.ff       # 新增：SpecialKey 枚举 / MOD_CONTROL,MOD_ALT,MOD_SHIFT 常量
   #                 #       Union<SpecialKey,u32> / KeyEvent @value 类型 + 快捷方法
   MouseEvent.ff     # 新增：MouseAction / MouseButton 枚举

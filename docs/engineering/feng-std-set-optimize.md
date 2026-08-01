@@ -143,7 +143,7 @@ keys.length() == size
 本次只修改：
 
 1. 本主规范。
-2. `std/src/collections/Set.ff`。
-3. `std_test/src/test_set.ff` 中新增的 Set 行为测试。
+2. `std/std/src/collections/Set.ff`。
+3. `std/std_test/src/test_set.ff` 中新增的 Set 行为测试。
 
 不修改编译器、runtime、Map、Hashable 或既有测试断言。

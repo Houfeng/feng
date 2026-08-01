@@ -256,7 +256,7 @@ bundled-packages-test: all
 	./scripts/run_release_bundled_packages.sh
 
 std-tests: cli
-	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng run ./std_test
+	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng run ./std/std_test
 
 fcts-tests: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp $(BIN_DIR)/feng run ./fcts/fcts_bin

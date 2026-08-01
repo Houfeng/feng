@@ -16,7 +16,7 @@ Supported operations:
 - Unicode code point case mapping: uc_tolower, uc_toupper
 
 Build:
-- `make` builds the static library and stages it into `../../std/extlib/<host-platform>` by default.
+- `make` builds the static library and stages it into `../../std/std/extlib/<host-platform>` by default.
 - `make OUTPUT_DIR=<path>` overrides the staging directory.
 - `make install` is an alias of the staging step.
 - default staged library name: `libfeng_std_unistring.a`

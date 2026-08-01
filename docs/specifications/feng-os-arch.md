@@ -101,7 +101,7 @@ linux-arm64-musl/
 - `SystemInfo.os()` 返回 `darwin`（macOS）、`linux`（Linux）、`windows` / `windows_nt`（Windows）等原生值。
 - `SystemInfo.arch()` 返回 `arm64`（macOS）、`aarch64`（Linux arm64）、`x86_64`、`amd64` 等原生值。
 
-消费 `SystemInfo` 的代码需自行兼容多种原生值，不由本规范强制归一化。例如 `std/src/fs/Dir.ff` 在判断 dirent 结构偏移时，需同时接受 `arm64`、`aarch64`、`x86_64` 等。
+消费 `SystemInfo` 的代码需自行兼容多种原生值，不由本规范强制归一化。例如 `std/std/src/fs/Dir.ff` 在判断 dirent 结构偏移时，需同时接受 `arm64`、`aarch64`、`x86_64` 等。
 
 这是分层设计：
 

@@ -19,7 +19,7 @@ Excluded:
 - upstream CMake/Autotools build system
 
 Build:
-- `make` builds the native static archive and stages it into `../../std/extlib/<host-platform>` by default.
+- `make` builds the native static archive and stages it into `../../std/std/extlib/<host-platform>` by default.
 - `make OUTPUT_DIR=<path>` overrides the staging directory.
 - `make install` is an alias of the staging step.
 - default staged library name: `libfeng_std_uv.a`

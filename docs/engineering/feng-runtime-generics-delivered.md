@@ -321,7 +321,7 @@ runtime 泛型 extern 的类型实参推导应从当前 `T[]` wrapped inference 
 
 ### 6.6 标准库接入
 
-- [x] 在 `std/src/collections/Array.ff` 中通过 runtime helper 实现 `indexOf`。
+- [x] 在 `std/std/src/collections/Array.ff` 中通过 runtime helper 实现 `indexOf`。
 - [x] 更新 [docs/specifications/feng-std-array.md](../specifications/feng-std-array.md) 中 `indexOf` 的标准库语义。
 - ~~补充 std / smoke 用例，覆盖基础标量、浮点、`string`、数组或对象等代表性元素类型。~~（上层覆盖补强项，不阻塞 runtime API 泛型核心能力交付。）
 

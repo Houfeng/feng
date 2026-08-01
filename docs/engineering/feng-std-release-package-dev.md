@@ -36,7 +36,7 @@
 - 不在编译器、依赖管理器或发行组装器中增加 `std` 特判。
 - 不改变现有三个原生编译器 Job 的构建、测试、component 内容和 artifact。
 - 不引入 `feng.lock`、指纹、内容寻址、包目录索引或平台包合并协议。
-- 不在 CI 中重新构建或维护 `std/extlib/`；继续使用仓库中已准备好的平台制品。
+- 不在 CI 中重新构建或维护 `std/std/extlib/`；继续使用仓库中已准备好的平台制品。
 - 不在本次决定未来除 `std` 以外还要随附哪些包。
 
 ## 3. 设计原则
@@ -85,13 +85,13 @@ release-bundled-packages
 ### 3.3 一次构建一个多平台 std 包
 
 随附包脚本在 Linux x64 环境使用 `build/bin/feng pack std` 的项目级多平台能力。
-调用不传 `--platform`，目标平台集合由 `std/feng.fm` 按主规范选择。
+调用不传 `--platform`，目标平台集合由 `std/std/feng.fm` 按主规范选择。
 
-当前 `std/feng.fm` 声明全部发行目标平台；Linux host 构建 `macos-arm64`
+当前 `std/std/feng.fm` 声明全部发行目标平台；Linux host 构建 `macos-arm64`
 `target=lib` 时沿用现有 SDK-free Mach-O 对象与静态归档路径。因此无需分别生成
 平台包，也不需要在汇聚阶段合并 `.fb`。
 
-`std` 包坐标来自 `std/feng.fm`。脚本和 workflow 都不硬编码
+`std` 包坐标来自 `std/std/feng.fm`。脚本和 workflow 都不硬编码
 `std-0.1.0.fb`，也不在本次增加“std 版本必须等于编译器发行版本”的新规则。
 
 ## 4. Job 拓扑
@@ -119,7 +119,7 @@ bundled_packages ────────────┘
 1. `needs: prepare`。
 2. 使用 Linux x64 runner 和与现有 Linux 发行构建兼容的 Ubuntu 容器。
 3. 安装构建脚本所需的最小系统命令。
-4. checkout 仓库并启用 Git LFS，取得 LLVM、sysroot 和 `std/extlib/`。
+4. checkout 仓库并启用 Git LFS，取得 LLVM、sysroot 和 `std/std/extlib/`。
 5. 使用现有 `scripts/release_version.sh set` 配置本次构建版本。
 6. 调用一次 `scripts/release_bundled_packages.sh`。
 7. 将脚本输出目录作为 `release-bundled-packages` artifact 上传，关闭二次压缩。
@@ -196,9 +196,9 @@ Linux host runtime，不承担全量回归职责。全量回归仍由现有三�
 
 这样做的目的：
 
-- 不读取或发布开发者现有的 `std/build/pkg/`。
+- 不读取或发布开发者现有的 `std/std/build/pkg/`。
 - 不把被 `.gitignore` 忽略的旧 `.fb` 混入发行 artifact。
-- 不删除、覆盖或依赖调用前已有的 `std/build/`。
+- 不删除、覆盖或依赖调用前已有的 `std/std/build/`。
 - 打包失败时可以整体清理本次临时目录。
 
 临时目录必须位于工程 `build/` 内，不在 `/tmp` 或 `/private/tmp` 中生成并执行编译
@@ -265,9 +265,9 @@ workflow 不传 `--project=std`，避免把发行包集合策略分散到 CI 配
 新增独立测试脚本，覆盖：
 
 - 从干净的独立 staging 构建 `std` 成功。
-- 最终目录只包含一个与 `std/feng.fm` 坐标一致的 `.fb`。
+- 最终目录只包含一个与 `std/std/feng.fm` 坐标一致的 `.fb`。
 - 包内平台集合及平台制品由真实 `feng pack` 成功路径生成。
-- 调用前已有 `std/build/pkg/` 时，输出不读取其中旧包。
+- 调用前已有 `std/std/build/pkg/` 时，输出不读取其中旧包。
 - 最终输出目录已存在时拒绝覆盖。
 - 构建或校验失败时不留下最终输出目录和部分包。
 
@@ -319,7 +319,7 @@ make test
 - GitHub Actions 中存在一个独立、单次执行的随附包 Job。
 - workflow 的 std 构建步骤只调用独立脚本，不展开核心构建与校验逻辑。
 - 随附包脚本在隔离目录中使用当前源码构建的 Feng 生成一个多平台 std `.fb`。
-- `std` 包坐标来自 `std/feng.fm`，workflow 与脚本不硬编码具体版本文件名。
+- `std` 包坐标来自 `std/std/feng.fm`，workflow 与脚本不硬编码具体版本文件名。
 - 三个 host 发行 zip 的 `pkg/` 中包含字节一致的同一份 std `.fb`。
 - 现有三个原生 Job、component 结构、普通 CI 路径、verify 和 publish 协议保持正确。
 - 任一原生 component 或随附包失败时均不会发布部分发行包。

@@ -1,14 +1,28 @@
-# STD 目录结构
+# 标准库
 
+本目录聚合标准库及其测试项目，自身不是 Feng 项目，不包含 `feng.fm`。
+
+```text
+std/
+├── std/          # 标准库项目
+└── std_test/     # 标准库测试项目
+```
+
+标准库源码位于仓库根目录下的 `std/std/src/`：
+
+```text
 src/
-├── basic/        # 基础共用类型、错误处理等
-├── collections/  # 集合及容器，Map/Set/List/Span 等数据结构
-├── fs/           # 文件系统，专职搞定文件、目录控制、路径切片
-├── io/           # 核心 IO 契约定义、比如 Stream，以及核心 Stdio
-├── net/          # 网络，套接字、IP寻址、DNS、TCP/UDP会话生命周期
-├── numeric/      # 标量扩展、数值计算、基础数学操作
-├── platform/     # 宿主环境相关（OS, Arch, CPU核心数静态常量）
-├── process/      # 进程（PID, 环境变量, 信号捕获, 派生子进程）
-├── text/         # String 类型扩展、零拷贝的 StringSpan 视窗、高效切片与解析工具
-├── thread/       # 进程内共享内存的多线程、锁与异步状态通知
-└── time/         # 单调纳秒时钟、自研纯 feng 历法公式
+├── basic/        # 基础共用类型与错误处理
+├── collections/  # 集合及容器
+├── fs/           # 文件系统与路径处理
+├── io/           # 核心 I/O 契约与标准输入输出
+├── net/          # 网络与套接字
+├── numeric/      # 标量扩展与数值计算
+├── platform/     # 宿主操作系统与体系结构信息
+├── process/      # 进程、环境变量与信号
+├── text/         # 字符串、Unicode 与文本处理
+├── thread/       # 多线程、锁与状态通知
+└── time/         # 时钟、日期与时间
+```
+
+标准库行为测试统一放在 `std/std_test/src/`，由仓库根目录的 `make std-tests` 执行。

@@ -2,7 +2,7 @@
 
 > 本文记录基于 Feng 实现的语法分析器（Parser）设计方向，服务于未来自举。
 > **状态**：草案阶段，尚未实现。依赖阶段一（Lexer）完成后启动。
-> **目标**：在 `std/src/compiler/Parser/` 中实现完整的 Feng 语法分析器，作为自举编译器的前端。
+> **目标**：在 `std/std/src/compiler/Parser/` 中实现完整的 Feng 语法分析器，作为自举编译器的前端。
 > **前置**：`feng-std-lexer-draft.md`（阶段一：Lexer + Token + TokenTransformer）。
 
 ---
@@ -67,7 +67,7 @@ Lexer 将空白和注释作为独立 Token 发射（`WhitespaceSpace`、`Whitesp
 ## 2 模块结构
 
 ```
-std/src/compiler/
+std/std/src/compiler/
 └── parser/
     ├── FengAstNodes.ff      # AST 节点类型定义（已实现）
     ├── FengParser.ff        # Parser 实现（递归下降）
@@ -80,7 +80,7 @@ std/src/compiler/
 
 ## 3 AST 节点类型
 
-**文件**：`std/src/compiler/parser/FengAstNodes.ff`
+**文件**：`std/std/src/compiler/parser/FengAstNodes.ff`
 **模块**：`std.compiler.parser`
 
 ### 3.1 整体设计思路
@@ -1035,7 +1035,7 @@ open type Program {
 
 ## 4 Parser 实现
 
-**文件**：`std/src/compiler/parser/FengParser.ff`
+**文件**：`std/std/src/compiler/parser/FengParser.ff`
 **模块**：`std.compiler.parser`
 
 ### 4.1 设计
@@ -1183,7 +1183,7 @@ Lambda 语法：`(params) -> expr` 或 `(params): ReturnType { block }`
 
 > **注意**：AstDumper 不在第一阶段实现，标记为后续任务。第一阶段 Parser 验证通过单元测试直接检查 AST 结构。
 
-**文件**：`std/src/compiler/parser/FengAstDumper.ff`
+**文件**：`std/std/src/compiler/parser/FengAstDumper.ff`
 **模块**：`std.compiler.parser`
 
 ### 5.1 设计
@@ -1228,7 +1228,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 ### 6.1 AST 节点类型定义（已完成）
 
-**产出**：`std/src/compiler/parser/FengAstNodes.ff`
+**产出**：`std/std/src/compiler/parser/FengAstNodes.ff`
 
 **参考**：
 - C 版 AST 定义：`src/parser/parser.h`（`FengExpr`、`FengStmt`、`FengDecl` 等结构体）
@@ -1236,7 +1236,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 ### 6.2 Parser 核心框架（已完成）
 
-**产出**：`std/src/compiler/parser/FengParser.ff`（构造器 + 基础工具方法）
+**产出**：`std/std/src/compiler/parser/FengParser.ff`（构造器 + 基础工具方法）
 
 **TODO**：
 - [x] `FengParser(lexer: FengLexer)` 构造器，初始化 `current` 为第一个 token
@@ -1368,7 +1368,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 > 不在第一阶段实现，待 Parser 核心功能稳定后再补充。
 
-**产出**：`std/src/compiler/parser/FengAstDumper.ff`
+**产出**：`std/std/src/compiler/parser/FengAstDumper.ff`
 
 **TODO**：
 - [ ] 实现 `dump(moduleFile: ModuleFile): string` 方法
@@ -1387,7 +1387,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 - [ ] 语句测试（if/match/while/for/return/throw）
 - [ ] 声明测试（type/enum/spec/fit/func/binding）
 - [ ] 错误测试（语法错误输入，验证错误码和位置）
-- [ ] 完整源文件测试（用 `std/src/**/*.ff` 作为输入）
+- [ ] 完整源文件测试（用 `std/std/src/**/*.ff` 作为输入）
 
 **参考**：
 - C 版测试：`test/parser/test_parser.c`
@@ -1432,7 +1432,7 @@ Parser 开发工作量较大，按以下分步 TODO 推进。每步完成后验�
 
 ### 7.2 完整源文件解析
 
-- 用 std 库中的 `.ff` 文件作为输入（如 `std/src/text/String.ff`）
+- 用 std 库中的 `.ff` 文件作为输入（如 `std/std/src/text/String.ff`）
 - 比较 C 版和 Feng 版的解析结果（ModuleFile 结构）
 
 ### 7.3 AST dump 对比（后续阶段）

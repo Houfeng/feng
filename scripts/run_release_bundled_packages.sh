@@ -7,7 +7,7 @@ BUILD_ROOT="${PROJECT_ROOT}/build"
 BUILDER="${SCRIPT_DIR}/release_bundled_packages.sh"
 WORKFLOW="${PROJECT_ROOT}/.github/workflows/release.yml"
 WORK_ROOT=""
-STALE_MARKER="${PROJECT_ROOT}/std/build/pkg/release-bundled-packages-stale-9.9.9.fb"
+STALE_MARKER="${PROJECT_ROOT}/std/std/build/pkg/release-bundled-packages-stale-9.9.9.fb"
 STALE_MARKER_CREATED=false
 
 # Report one bundled-package regression failure.
@@ -20,8 +20,8 @@ die() {
 cleanup() {
   if [[ "${STALE_MARKER_CREATED}" == "true" && -f "${STALE_MARKER}" ]]; then
     rm -f "${STALE_MARKER}"
-    rmdir "${PROJECT_ROOT}/std/build/pkg" 2>/dev/null || true
-    rmdir "${PROJECT_ROOT}/std/build" 2>/dev/null || true
+    rmdir "${PROJECT_ROOT}/std/std/build/pkg" 2>/dev/null || true
+    rmdir "${PROJECT_ROOT}/std/std/build" 2>/dev/null || true
   fi
   if [[ -n "${WORK_ROOT}" && -d "${WORK_ROOT}" ]]; then
     case "${WORK_ROOT}" in
@@ -110,7 +110,7 @@ STALE_MARKER_CREATED=true
 OUTPUT_ROOT="${WORK_ROOT}/output"
 "${BUILDER}" --output="${OUTPUT_ROOT}"
 
-SOURCE_MANIFEST="${PROJECT_ROOT}/std/feng.fm"
+SOURCE_MANIFEST="${PROJECT_ROOT}/std/std/feng.fm"
 PACKAGE_NAME="$(package_manifest_value "${SOURCE_MANIFEST}" "name")"
 PACKAGE_VERSION="$(package_manifest_value "${SOURCE_MANIFEST}" "version")"
 SOURCE_PLATFORMS="$(package_manifest_value "${SOURCE_MANIFEST}" "platform")"
@@ -121,7 +121,7 @@ PACKAGE_PATH="${OUTPUT_ROOT}/${EXPECTED_NAME}"
 [[ -f "${PACKAGE_PATH}" ]] ||
   die "expected std package was not published: ${PACKAGE_PATH}"
 [[ ! -e "${OUTPUT_ROOT}/${STALE_MARKER##*/}" ]] ||
-  die "builder copied stale std/build/pkg content"
+  die "builder copied stale std/std/build/pkg content"
 [[ "$(find "${OUTPUT_ROOT}" -mindepth 1 -maxdepth 1 -type f -name '*.fb' | wc -l | tr -d ' ')" == "1" ]] ||
   die "bundled package output must contain exactly one .fb"
 [[ -z "$(find "${OUTPUT_ROOT}" -mindepth 1 -maxdepth 1 ! -type f -print -quit)" ]] ||
@@ -134,16 +134,16 @@ unzip -tqq "${PACKAGE_PATH}" >/dev/null ||
 unzip -Z1 "${PACKAGE_PATH}" > "${ARCHIVE_LISTING}"
 unzip -p "${PACKAGE_PATH}" feng.fm > "${ARCHIVE_MANIFEST}"
 [[ "$(package_manifest_value "${ARCHIVE_MANIFEST}" "name")" == "${PACKAGE_NAME}" ]] ||
-  die "generated std package name differs from std/feng.fm"
+  die "generated std package name differs from std/std/feng.fm"
 [[ "$(package_manifest_value "${ARCHIVE_MANIFEST}" "version")" == "${PACKAGE_VERSION}" ]] ||
-  die "generated std package version differs from std/feng.fm"
+  die "generated std package version differs from std/std/feng.fm"
 [[ "$(package_manifest_value "${ARCHIVE_MANIFEST}" "platform")" == "${SOURCE_PLATFORMS}" ]] ||
-  die "generated std package platform set differs from std/feng.fm"
+  die "generated std package platform set differs from std/std/feng.fm"
 
 IFS=',' read -r -a PLATFORM_LIST <<< "${SOURCE_PLATFORMS}"
 for platform in "${PLATFORM_LIST[@]}"; do
   platform="$(printf '%s' "${platform}" | tr -d '[:space:]')"
-  [[ -n "${platform}" ]] || die "std/feng.fm contains an empty platform"
+  [[ -n "${platform}" ]] || die "std/std/feng.fm contains an empty platform"
   require_archive_entry \
     "${ARCHIVE_LISTING}" \
     "lib/${platform}/lib${PACKAGE_NAME}.a"

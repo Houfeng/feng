@@ -10,9 +10,9 @@
 
 | 构建环境 | 目标平台输出目录 |
 | --- | --- |
-| `macos-arm64` | `std/extlib/macos-arm64/` |
-| `linux-x64-gnu` | `std/extlib/linux-x64-gnu/`、`std/extlib/linux-x64-musl/` |
-| `linux-arm64-gnu` | `std/extlib/linux-arm64-gnu/`、`std/extlib/linux-arm64-musl/` |
+| `macos-arm64` | `std/std/extlib/macos-arm64/` |
+| `linux-x64-gnu` | `std/std/extlib/linux-x64-gnu/`、`std/std/extlib/linux-x64-musl/` |
+| `linux-arm64-gnu` | `std/std/extlib/linux-arm64-gnu/`、`std/std/extlib/linux-arm64-musl/` |
 
 每个目录必须包含：
 
@@ -44,7 +44,7 @@ GNU 与 musl 产物必须分别使用对应目标平台的 sysroot 构建，不�
 
 - 每次构建前必须清理 vendored Makefile 留下的对象，避免复用其他平台产物。
 - 先写入 `temp/` 下的本次构建 staging 目录；构建和校验全部成功后，再发布到
-  `std/extlib/<target-platform>/`。
+  `std/std/extlib/<target-platform>/`。
 - 每份归档必须使用 `file` 与 bundled `llvm-ar` 校验：归档非空，且全部对象的
   文件格式和 CPU 架构与 target 平台一致。
 - `scripts/build_std_extlibs.sh` 按目标平台依次构建四份依赖。

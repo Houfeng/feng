@@ -239,7 +239,7 @@ Zig 文档的优先级表（从高到低，节选）：
   - 验证：`feng run ./fcts/fcts_bin` 中表达式测试通过
 
 - [x] **TODO 6：排查 std/ 代码中无括号的 `位运算 == 比较` 写法**
-  - 范围：`std/src/**/*.ff`
+  - 范围：`std/std/src/**/*.ff`
   - 内容：搜索所有形如 `expr & expr == expr`、`expr | expr == expr`、`expr ^ expr == expr` 等无括号写法，逐一判断变更后语义是否变化；若语义变化则补加括号保持原有行为
   - 验证：`feng build std` 通过，std-tests 通过
 
