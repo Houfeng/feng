@@ -5,6 +5,8 @@
 .smoke
 local/
 node_modules/
+/website/node_modules/
+/website/docs/
 build/
 temp/
 third_party/**/*.a
