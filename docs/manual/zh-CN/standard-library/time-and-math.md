@@ -12,7 +12,7 @@ let angle = Math.sin(0.5);
 let bounded = Math.max(0.0, Math.min(1.0, value));
 ```
 
-`Math` 使用 `f64`，覆盖绝对值、最小值/最大值、三角与双曲函数、指数、对数、幂、平方根、取整和余数。精确列表见[Math 规范](../../../specifications/feng-std-math.md)。
+`Math` 使用 `f64`，覆盖绝对值、最小值/最大值、三角与双曲函数、指数、对数、幂、平方根、取整和余数。
 
 ## DateTime
 

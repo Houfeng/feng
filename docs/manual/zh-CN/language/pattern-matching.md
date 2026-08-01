@@ -1,6 +1,6 @@
 # 模式匹配
 
-`match` 可用于常量匹配和联合类型收窄，也可以作为返回 `bool` 的中缀运算。详细规则见[流程控制规范](../../../specifications/feng-flow.md)和[联合类型规范](../../../specifications/feng-union-type.md)。
+`match` 可用于常量匹配和联合类型收窄，也可以作为返回 `bool` 的中缀运算。
 
 ## 常量匹配
 

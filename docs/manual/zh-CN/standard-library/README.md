@@ -22,4 +22,4 @@ import std.text;
 - [时间与数学](./time-and-math.md)：`DateTime` 与 `Math`。
 - [平台与进程](./platform-and-process.md)：系统信息、内存、CPU 和子进程。
 
-本目录是任务导向指南，不替代标准库规范或源码中的 API 文档。需要精确的边界、错误和复杂度保证时，应继续阅读对应的 `docs/specifications/feng-std-*.md`。
+本目录按常见任务介绍标准库能力。各章节应直接说明用户需要了解的边界、错误和复杂度保证，不依赖手册目录之外的文档。

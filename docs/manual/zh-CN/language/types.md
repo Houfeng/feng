@@ -1,6 +1,6 @@
 # 类型
 
-Feng 是静态类型语言。类型在编译期确定，跨类型转换必须显式书写。权威规则见[内建类型规范](../../../specifications/feng-builtin-type.md)、[类型规范](../../../specifications/feng-type.md)和[元组规范](../../../specifications/feng-tuple.md)。
+Feng 是静态类型语言。类型在编译期确定，跨类型转换必须显式书写。
 
 ## 内建标量类型
 

@@ -1,6 +1,6 @@
 # 构建与运行
 
-本章介绍普通项目开发使用的构建命令。完整参数见[CLI 规范](../../../specifications/feng-cli.md)，平台行为见[编译与构建规范](../../../specifications/feng-build.md)。
+本章介绍普通项目开发使用的构建命令。
 
 ## 构建项目
 

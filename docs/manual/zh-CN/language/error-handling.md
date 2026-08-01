@@ -1,6 +1,6 @@
 # 异常处理
 
-Feng 使用 `throw` 抛出异常，使用 `try/catch` 捕获异常，使用 `defer` 安排作用域清理。详细规则见[异常模型规范](../../../specifications/feng-exception.md)和[`defer` 规范](../../../specifications/feng-defer.md)。
+Feng 使用 `throw` 抛出异常，使用 `try/catch` 捕获异常，使用 `defer` 安排作用域清理。
 
 ## 抛出异常
 

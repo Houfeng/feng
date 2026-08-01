@@ -18,7 +18,6 @@ println("Hello, {0}", name);
 stdio.writeErrorLine("warning");
 ```
 
-完整语义见[标准库 I/O 规范](../../../specifications/feng-std-io.md)。
 
 ## 路径
 
@@ -34,7 +33,7 @@ let extension = extname(path);
 let normalized = normalize("data/./users/../config");
 ```
 
-路径分隔符固定为 `/`。`resolve(base, target)` 使用调用方给出的 base，不读取当前工作目录。完整语义见[Path 规范](../../../specifications/feng-std-path.md)。
+路径分隔符固定为 `/`。`resolve(base, target)` 使用调用方给出的 base，不读取当前工作目录。
 
 ## 文件便利函数
 
@@ -80,4 +79,4 @@ for let entry in directory {
 }
 ```
 
-目录遍历结果使用 `EntryInfo`，条目类别使用 `EntryKind`。文件系统错误通过 Feng 异常报告；具体行为见[Filesystem 规范](../../../specifications/feng-std-fs.md)。
+目录遍历结果使用 `EntryInfo`，条目类别使用 `EntryKind`。文件系统错误通过 Feng 异常报告。

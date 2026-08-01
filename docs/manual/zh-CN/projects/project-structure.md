@@ -1,6 +1,6 @@
 # 项目结构
 
-Feng 项目由一个 `feng.fm` 清单、源文件目录和构建输出目录组成。清单格式以[包分发规范](../../../specifications/feng-package.md)为准。
+Feng 项目由一个 `feng.fm` 清单、源文件目录和构建输出目录组成。
 
 ## 典型布局
 

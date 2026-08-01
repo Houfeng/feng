@@ -16,7 +16,7 @@ let total_memory = MemoryInfo.totalBytes();
 
 `SystemInfo.os()` 和 `arch()` 返回底层系统的原生小写值，例如 `darwin`、`linux`、`arm64`、`aarch64` 或 `x86_64`。它们不是 Feng 构建参数使用的规范平台名；需要判断多个平台时应兼容可能的原生别名。
 
-`MemoryInfo` 还提供空闲、可用、约束和当前进程常驻内存查询。完整保证见[Platform 规范](../../../specifications/feng-std-platform.md)。
+`MemoryInfo` 还提供空闲、可用、约束和当前进程常驻内存查询。
 
 ## 环境与当前进程
 

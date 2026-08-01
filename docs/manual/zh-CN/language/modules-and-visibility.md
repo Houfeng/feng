@@ -1,6 +1,6 @@
 # 模块与可见性
 
-模块组织源代码，`open` 与 `seal` 控制声明的可见范围。详细规则见[模块规范](../../../specifications/feng-module.md)和[可见性规范](../../../specifications/feng-visibility.md)。
+模块组织源代码，`open` 与 `seal` 控制声明的可见范围。
 
 ## 声明模块
 

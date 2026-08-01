@@ -1,6 +1,6 @@
 # 流程控制
 
-Feng 提供条件分支、三种循环以及 `break`、`continue` 和 `return`。模式匹配单独见[模式匹配](./pattern-matching.md)，权威规则见[流程控制规范](../../../specifications/feng-flow.md)。
+Feng 提供条件分支、三种循环以及 `break`、`continue` 和 `return`。模式匹配单独见[模式匹配](./pattern-matching.md)。
 
 ## 条件分支
 
