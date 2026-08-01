@@ -1,0 +1,82 @@
+# 表达式
+
+表达式产生值，语句负责绑定、赋值或控制执行。完整的运算规则与优先级见[表达式与运算规范](../../specifications/feng-expression.md)。
+
+## 字面量与构造
+
+```feng
+let integer = 42;
+let decimal = 3.14;
+let enabled = true;
+let text = "Feng";
+let items = [1, 2, 3];
+let user = User { name: "Alice" };
+```
+
+数组创建使用 `Type[:length]`，索引访问使用 `value[index]`：
+
+```feng
+let bytes: byte[!] = byte[:256];
+bytes[0] = (byte)65;
+```
+
+## 算术与比较
+
+Feng 提供常用算术、关系、相等、逻辑、位与移位运算符：
+
+```feng
+let total = price * count + shipping;
+let in_range = score >= 60 && score <= 100;
+let same = left == right;
+let masked = flags & 0xff;
+```
+
+两个操作数通常必须具有相同静态类型。数值字面量可以贴合已确定的目标数值类型，但已经绑定的不同数值类型之间必须显式转换。
+
+逻辑 `&&` 和 `||` 短路求值。函数实参和二元运算数按从左到右顺序求值。
+
+## 显式转换
+
+转换写作 `(TargetType)expression`：
+
+```feng
+let small: i32 = 42;
+let wide = (i64)small;
+let ratio = (f64)small / 100.0;
+```
+
+显式写法不表示任意类型都可互转；具体合法范围由源类型与目标类型规则决定。
+
+## 赋值与复合赋值
+
+```feng
+var count = 0;
+count = count + 1;
+count += 2;
+count *= 3;
+
+var mask: i32 = 1;
+mask <<= 3;
+```
+
+赋值目标必须可写：`var` 绑定、`var` 成员或可写数组层的元素。复合赋值只对左侧目标求值一次。
+
+## 分支表达式
+
+`if`、`match` 和 `try/catch` 都可以产生值：
+
+```feng
+let label = if score >= 60 {
+  "pass";
+} else {
+  "fail";
+};
+
+let category = match code {
+  200 { "ok" }
+  400...499 { "client error" }
+  else { "other" }
+};
+```
+
+表达式形式的各正常分支必须产生一致类型的结果；最后一个表达式就是该块的值。详见[流程控制](./control-flow.md)、[模式匹配](./pattern-matching.md)和[异常处理](./error-handling.md)。

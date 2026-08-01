@@ -14,8 +14,42 @@
 
 使用手册应以 [语言与工具规范](../specifications/README.md) 为依据，侧重任务、示例和使用方式，不在手册中重新定义语言规则。实现设计、开发步骤和问题分析归入 [工程文档](../engineering/README.md)。
 
-## 当前内容
+## 手册目录
 
+### 入门
+
+- [安装 Feng](./getting-started/installation.md)
+- [快速开始](./getting-started/quick-start.md)
+- [第一个项目](./getting-started/first-project.md)
+
+### 语言指南
+
+- [值与绑定](./language/values-and-bindings.md)
+- [类型](./language/types.md)
+- [表达式](./language/expressions.md)
+- [函数](./language/functions.md)
+- [流程控制](./language/control-flow.md)
+- [模式匹配](./language/pattern-matching.md)
+- [自定义类型](./language/user-defined-types.md)
+- [契约与 fit](./language/contracts-and-fit.md)
+- [泛型](./language/generics.md)
+- [异常处理](./language/error-handling.md)
+- [模块与可见性](./language/modules-and-visibility.md)
+
+### 项目开发
+
+- [项目结构](./projects/project-structure.md)
+- [构建与运行](./projects/build-and-run.md)
+- [依赖管理](./projects/dependencies.md)
+- [检查、测试与调试](./projects/testing-and-debugging.md)
+
+### 标准库、工具与互操作
+
+- [标准库指南](./standard-library/README.md)
+- [CLI](./tooling/cli.md)
+- [编辑器](./tooling/editor.md)
+- [代码格式化](./tooling/formatter.md)
+- [C 互操作](./interop/c-interop.md)
 - [Feng 代码风格建议](./feng-style.md)
 
 ## 目录设计
