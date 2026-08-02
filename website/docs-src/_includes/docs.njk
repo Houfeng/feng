@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="{{ title }} — {{ interface.siteName }}">
+  <meta name="theme-color" content="#f7f8f5" data-theme-color>
+  <link rel="canonical" href="https://feng-lang.com{{ page.url }}">
+  <link rel="alternate" hreflang="{{ lang }}" href="https://feng-lang.com{{ page.url }}">
+  <link rel="alternate" hreflang="{{ 'zh-CN' if lang == 'en' else 'en' }}" href="https://feng-lang.com{{ alternateUrl }}">
+  <title>{{ title }} — {{ interface.siteName }}</title>
+  <script>
+    try {
+      const savedTheme = localStorage.getItem('feng-theme');
+      const hasSavedTheme = savedTheme === 'light' || savedTheme === 'dark';
+      const systemTheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      const initialTheme = hasSavedTheme ? savedTheme : systemTheme;
+      document.documentElement.dataset.theme = initialTheme;
+      document.documentElement.dataset.themeSource = hasSavedTheme ? 'saved' : 'system';
+      document.querySelector('[data-theme-color]').content = initialTheme === 'dark' ? '#111311' : '#f7f8f5';
+    } catch (_) {
+      const fallbackTheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      document.documentElement.dataset.theme = fallbackTheme;
+      document.documentElement.dataset.themeSource = 'system';
+      document.querySelector('[data-theme-color]').content = fallbackTheme === 'dark' ? '#111311' : '#f7f8f5';
+    }
+  </script>
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/docs/assets/docs.css">
+  <script defer src="/app.js"></script>
+  <script defer src="/docs/assets/docs.js"></script>
+</head>
+<body class="docs-page">
+  <a class="skip-link" href="#main">{{ interface.skip }}</a>
+
+  {% macro languageMenu() %}
+    <details class="language-menu" data-language-menu>
+      <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="{{ interface.language }}" title="{{ interface.language }}">
+        <svg class="language-menu__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="9"></circle>
+          <path d="M3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18"></path>
+        </svg>
+        <span class="language-menu__label" aria-hidden="true">{{ interface.language }}</span>
+        <svg class="language-menu__chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+          <path d="m7 10 5 5 5-5"></path>
+        </svg>
+      </summary>
+      <ul class="language-menu__popover" aria-label="{{ interface.language }}">
+        <li>
+          {% if lang == 'en' %}
+            <span class="language-menu__option" aria-current="page"><span>English</span><span class="language-menu__state">{{ interface.current }}</span></span>
+          {% else %}
+            <a class="language-menu__option" href="{{ alternateUrl }}" lang="en" hreflang="en"><span>English</span></a>
+          {% endif %}
+        </li>
+        <li>
+          {% if lang == 'zh-CN' %}
+            <span class="language-menu__option" aria-current="page"><span>简体中文</span><span class="language-menu__state">{{ interface.current }}</span></span>
+          {% else %}
+            <a class="language-menu__option" href="{{ alternateUrl }}" lang="zh-CN" hreflang="zh-CN"><span>简体中文</span></a>
+          {% endif %}
+        </li>
+      </ul>
+    </details>
+  {% endmacro %}
+
+  {% macro themeSwitch() %}
+    <div class="theme-switch" role="group" aria-label="{{ interface.colorMode }}">
+      <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="{{ interface.useLight }}" aria-pressed="false" title="{{ interface.useLight }}">
+        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="3.5"></circle>
+          <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
+        </svg>
+        <span class="theme-switch__label" aria-hidden="true">{{ interface.light }}</span>
+      </button>
+      <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="{{ interface.useDark }}" aria-pressed="false" title="{{ interface.useDark }}">
+        <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
+          <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
+        </svg>
+        <span class="theme-switch__label" aria-hidden="true">{{ interface.dark }}</span>
+      </button>
+    </div>
+  {% endmacro %}
+
+  <header class="site-header docs-header">
+    <div class="shell site-header__inner">
+      <a class="brand" href="{{ homepageUrl }}" aria-label="Feng {{ interface.home }}">
+        <span class="brand__mark" aria-hidden="true">F</span>
+        <span class="brand__name">Feng</span>
+      </a>
+
+      <nav class="site-nav site-nav--desktop" aria-label="{{ interface.chapters }}">
+        <a href="{{ homepageUrl }}#install">{{ interface.install }}</a>
+        <a href="/docs/{{ lang }}/" aria-current="page">{{ interface.docs }}</a>
+        <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">{{ interface.extension }}</a>
+        <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">{{ interface.openSource }}</a>
+        <div class="nav-settings">
+          {{ languageMenu() }}
+          {{ themeSwitch() }}
+        </div>
+      </nav>
+
+      <details class="site-menu" data-site-menu>
+        <summary class="site-menu__trigger" aria-label="{{ interface.menu }}">
+          <span class="visually-hidden">{{ interface.menu }}</span>
+          <span class="site-menu__lines" aria-hidden="true"></span>
+        </summary>
+        <nav class="site-nav site-nav--mobile" aria-label="{{ interface.chapters }}">
+          <a href="{{ homepageUrl }}#install">{{ interface.install }}</a>
+          <a href="/docs/{{ lang }}/" aria-current="page">{{ interface.docs }}</a>
+          <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">{{ interface.extension }}</a>
+          <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">{{ interface.openSource }}</a>
+          <div class="nav-settings">
+            {{ languageMenu() }}
+            {{ themeSwitch() }}
+          </div>
+        </nav>
+      </details>
+    </div>
+  </header>
+
+  {% macro manualNavigation(extraClass = '') %}
+    <nav class="docs-navigation {{ extraClass }}" aria-label="{{ interface.chapters }}">
+      <a class="docs-navigation__home{% if docKey == '' %} is-current{% endif %}" href="{{ docsNavigation.home.url }}"{% if docKey == '' %} aria-current="page"{% endif %}>
+        {{ docsNavigation.home.title }}
+      </a>
+      {% for section in docsNavigation.sections %}
+        <section class="docs-navigation__section">
+          <h2>{{ section.label }}</h2>
+          <ul>
+            {% for item in section.pages %}
+              <li>
+                <a class="{% if docKey == item.key %}is-current{% endif %}" href="{{ item.url }}"{% if docKey == item.key %} aria-current="page"{% endif %}>{{ item.title }}</a>
+              </li>
+            {% endfor %}
+          </ul>
+        </section>
+      {% endfor %}
+    </nav>
+  {% endmacro %}
+
+  <main id="main" class="docs-layout">
+    <aside class="docs-sidebar">
+      {{ manualNavigation() }}
+    </aside>
+
+    <article class="docs-article">
+      <details class="docs-mobile-navigation">
+        <summary>
+          <span>{{ interface.chapters }}</span>
+          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"></path></svg>
+        </summary>
+        {{ manualNavigation('docs-navigation--mobile') }}
+      </details>
+
+      <!-- DOCS_CONTENT_START -->
+      <div class="docs-content">
+        {{ content | safe }}
+      </div>
+      <!-- DOCS_CONTENT_END -->
+
+      {% if sequence.previous or sequence.next %}
+        <nav class="docs-pagination" aria-label="{{ interface.chapters }}">
+          {% if sequence.previous %}
+            <a class="docs-pagination__previous" href="{{ sequence.previous.url }}">
+              <span>{{ interface.previous }}</span>
+              <strong>{{ sequence.previous.title }}</strong>
+            </a>
+          {% else %}
+            <span></span>
+          {% endif %}
+          {% if sequence.next %}
+            <a class="docs-pagination__next" href="{{ sequence.next.url }}">
+              <span>{{ interface.next }}</span>
+              <strong>{{ sequence.next.title }}</strong>
+            </a>
+          {% endif %}
+        </nav>
+      {% endif %}
+    </article>
+
+    <aside class="docs-toc" aria-label="{{ interface.onThisPage }}">
+      <p>{{ interface.onThisPage }}</p>
+      <!-- DOCS_TOC -->
+    </aside>
+  </main>
+
+  <footer class="site-footer docs-footer">
+    <div class="shell site-footer__inner">
+      <span>Feng Language</span>
+      <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">{{ interface.openSource }}</a>
+    </div>
+  </footer>
+</body>
+</html>

@@ -31,12 +31,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - name: Install website dependencies
+        working-directory: website
+        run: npm ci
+      - name: Generate documentation
+        working-directory: website
+        run: npm run docs:build
       - name: Setup Pages
         uses: actions/configure-pages@v5
       - name: Prepare Pages artifact
         run: |
           mkdir -p build/pages
           cp -R website/. build/pages/
+          rm -rf build/pages/node_modules build/pages/docs-src
+          rm -f build/pages/package.json build/pages/package-lock.json build/pages/eleventy.config.js
           cp scripts/install.sh build/pages/install.sh
           bash -n build/pages/install.sh
       - name: Upload artifact
