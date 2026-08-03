@@ -40,14 +40,26 @@ typedef struct InitBundledDependencies {
 static const char *kBinTemplate =
     "module %s;\n"
     "\n"
+    "import std.collections;\n"
+    "import std.io;\n"
+    "import std.numeric;\n"
+    "import std.text;\n"
+    "\n"
     "func main(args: string[]) {\n"
+    "  let name = \"Feng\";\n"
+    "  println(\"Hello, {0}!\", name);\n"
     "}\n";
 
 static const char *kLibTemplate =
     "module %s;\n"
     "\n"
-    "func helper(): int {\n"
-    "  return 0;\n"
+    "import std.collections;\n"
+    "import std.io;\n"
+    "import std.numeric;\n"
+    "import std.text;\n"
+    "\n"
+    "open func hello(name: string) {\n"
+    "  return string.format(\"Hello, {0}!\", name);\n"
     "}\n";
 
 static void print_usage(const char *program, FILE *stream) {

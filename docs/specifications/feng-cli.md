@@ -181,7 +181,38 @@ feng init [<name>] [--target=<bin|lib>]
 - 初始化成功时写入当前目录下的 `feng.fm`,其中至少包含 `name`、`version`、`target`、`src` 与 `out` 字段; `version` 固定初始化为 `0.1.0`, `src` 与 `out` 分别初始化为 `src/` 与 `build/`。`platform` 字段的初始化规则以本节“项目平台选择统一规则”为准。
 - `target = bin` 时生成 `src/main.ff` 作为可执行项目入口模板; `target = lib` 时生成 `src/lib.ff` 作为库项目模板。
 - `init` 会先将 `<name>` 或当前目录名归一化为安全名称后再写入 `feng.fm` 与 starter 文件: 保留 ASCII 字母、数字、下划线与 `.` 分段,其他字符替换为 `_`; 每个分段若以数字开头或命中关键字 / 保留字,自动前缀 `_`; 若归一化后为空,回退为 `app`。
-- starter 源文件中的默认 `module` 声明使用当前包名,便于初始化后直接形成与项目名一致的默认示例; 若用户需要其他模块名,可自行修改源文件。
+- starter 源文件中的 `your_mod_name` 使用归一化后的当前包名。`target = bin` 的模板为:
+
+```feng
+module your_mod_name;
+
+import std.collections;
+import std.io;
+import std.numeric;
+import std.text;
+
+func main(args: string[]) {
+  let name = "Feng";
+  println("Hello, {0}!", name);
+}
+```
+
+`target = lib` 的模板为:
+
+```feng
+module your_mod_name;
+
+import std.collections;
+import std.io;
+import std.numeric;
+import std.text;
+
+open func hello(name: string) {
+  return string.format("Hello, {0}!", name);
+}
+```
+
+若用户需要其他模块名,可自行修改源文件。
 - `init` 根据当前正在运行的 Feng 可执行文件定位 `<feng-executable-directory>/../pkg/`,只枚举该目录顶层扩展名为 `.fb` 的随附包,不递归扫描子目录。目录不存在、为空或不含 `.fb` 时保持初始化成功,且不写入空的 `[dependencies]`。
 - 对每个随附包,`init` 从 `.fb` 根目录的 `feng.fm` 读取 `[package].name` 与 `[package].version`,不从文件名反向拆分坐标。全部随附包按包名排序后作为直接精确版本依赖写入新项目的 `[dependencies]`;该规则适用于所有包名和项目目标,不针对具体包增加特判。
 - 若随附 `.fb` 无法打开、根 manifest 无法读取或缺少包坐标,`init` 报错并按现有失败清理规则移除本次已创建的项目文件;若多个随附包声明相同包名,同样报错,不自行去重或选择版本。

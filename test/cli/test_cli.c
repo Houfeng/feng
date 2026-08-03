@@ -3765,7 +3765,14 @@ static void test_init_creates_bin_project(void) {
     ASSERT(strcmp(main_text,
                   "module demo_app;\n"
                   "\n"
+                  "import std.collections;\n"
+                  "import std.io;\n"
+                  "import std.numeric;\n"
+                  "import std.text;\n"
+                  "\n"
                   "func main(args: string[]) {\n"
+                  "  let name = \"Feng\";\n"
+                  "  println(\"Hello, {0}!\", name);\n"
                   "}\n") == 0);
 
     free(main_text);
@@ -3808,7 +3815,17 @@ static void test_init_creates_lib_project_using_current_directory_name(void) {
         "out: \"build/\"\n"
         "platform: \"macos-arm64,linux-x64-gnu,linux-x64-musl,"
         "linux-arm64-gnu,linux-arm64-musl\"\n");
-    expected_lib_text = dup_printf("module _9_demo_lib;\n\nfunc helper(): int {\n  return 0;\n}\n");
+    expected_lib_text = dup_printf(
+        "module _9_demo_lib;\n"
+        "\n"
+        "import std.collections;\n"
+        "import std.io;\n"
+        "import std.numeric;\n"
+        "import std.text;\n"
+        "\n"
+        "open func hello(name: string) {\n"
+        "  return string.format(\"Hello, {0}!\", name);\n"
+        "}\n");
     ASSERT(expected_manifest != NULL);
     ASSERT(expected_lib_text != NULL);
 
@@ -3912,7 +3929,14 @@ static void test_init_prefixes_keyword_package_name(void) {
     ASSERT(strcmp(main_text,
                   "module _if;\n"
                   "\n"
+                  "import std.collections;\n"
+                  "import std.io;\n"
+                  "import std.numeric;\n"
+                  "import std.text;\n"
+                  "\n"
                   "func main(args: string[]) {\n"
+                  "  let name = \"Feng\";\n"
+                  "  println(\"Hello, {0}!\", name);\n"
                   "}\n") == 0);
 
     free(main_text);
