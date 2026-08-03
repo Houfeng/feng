@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Serve the expected local release archive when this script is invoked as curl.
+# Serve deterministic release metadata and archives when invoked as curl.
 mock_curl() {
   local output=""
   local url=""
@@ -20,10 +20,31 @@ mock_curl() {
     shift
   done
 
-  [[ "${url}" == "${MOCK_EXPECTED_URL}" ]] || exit 3
-  [[ -n "${output}" ]] || exit 4
+  [[ -n "${url}" ]] || exit 3
   printf '%s\n' "${url}" >> "${MOCK_REQUEST_LOG}"
-  cp "${MOCK_ARCHIVE}" "${output}"
+  case "${url}" in
+    */releases/latest)
+      if [[ "${MOCK_LATEST_STATUS:-200}" == "network-error" ]]; then
+        exit 7
+      fi
+      printf '%s\n%s\n' \
+        "${MOCK_LATEST_STATUS:-200}" \
+        "${MOCK_LATEST_URL:-https://github.com/Houfeng/feng/releases/tag/v0.1.0}"
+      ;;
+    https://api.github.com/repos/Houfeng/feng/releases\?*)
+      [[ -n "${output}" ]] || exit 4
+      if [[ "${url}" == *"page=1" ]]; then
+        cp "${MOCK_RELEASES_JSON}" "${output}"
+      else
+        printf '[]\n' > "${output}"
+      fi
+      ;;
+    *)
+      [[ "${url}" == "${MOCK_EXPECTED_URL}" ]] || exit 5
+      [[ -n "${output}" ]] || exit 6
+      cp "${MOCK_ARCHIVE}" "${output}"
+      ;;
+  esac
 }
 
 if [[ "${FENG_INSTALL_TEST_MOCK_CURL:-0}" == "1" ]]; then
@@ -128,6 +149,40 @@ expect_failure() {
     die "installer reported an unexpected diagnostic for ${name}"
 }
 
+# Assert that one mocked release-resolution failure does not request an archive.
+expect_resolution_failure() {
+  local name="$1"
+  local expected="$2"
+  local latest_status="$3"
+  local releases_json="$4"
+  local test_home="${WORK_ROOT}/home-${name}"
+  local request_log="${WORK_ROOT}/${name}-requests.log"
+
+  mkdir -p "${test_home}"
+  : > "${request_log}"
+  if HOME="${test_home}" \
+     SHELL="/bin/zsh" \
+     TMPDIR="${INSTALL_TEMP}" \
+     MOCK_LATEST_STATUS="${latest_status}" \
+     MOCK_LATEST_URL="https://github.com/Houfeng/feng/releases/latest" \
+     MOCK_RELEASES_JSON="${releases_json}" \
+     MOCK_EXPECTED_URL="unused" \
+     MOCK_ARCHIVE="unused" \
+     MOCK_REQUEST_LOG="${request_log}" \
+     FENG_INSTALL_TEST_MOCK_CURL=1 \
+     PATH="${MOCK_BIN}:${PATH}" \
+       "${INSTALL_SCRIPT}" \
+       > "${WORK_ROOT}/${name}.out" \
+       2> "${WORK_ROOT}/${name}.err"; then
+    die "installer unexpectedly resolved a release for ${name}"
+  fi
+  grep -Fq -- "${expected}" "${WORK_ROOT}/${name}.err" ||
+    die "installer reported an unexpected resolution diagnostic for ${name}"
+  if grep -q '/releases/download/' "${request_log}"; then
+    die "installer requested an archive after release resolution failed for ${name}"
+  fi
+}
+
 trap cleanup EXIT
 mkdir -p "${PROJECT_ROOT}/build"
 WORK_ROOT="$(mktemp -d "${PROJECT_ROOT}/build/install-version-test.XXXXXX")"
@@ -182,8 +237,127 @@ expect_failure \
   "--version=v0.1.0" \
   "--version=v0.1.1"
 expect_failure \
-  "unsupported-argument" \
-  "unsupported argument: --channel=rc" \
+  "empty-channel" \
+  "--channel requires a channel name" \
+  "--channel="
+expect_failure \
+  "duplicate-channel" \
+  "--channel may only be specified once" \
+  "--channel=rc" \
+  "--channel=rc"
+expect_failure \
+  "unsupported-channel" \
+  "unsupported Feng release channel: beta" \
+  "--channel=beta"
+expect_failure \
+  "mutually-exclusive-selection" \
+  "--version and --channel are mutually exclusive" \
+  "--version=v0.1.0" \
   "--channel=rc"
 
-echo "install explicit version: prerelease selection and argument validation passed"
+RC_VERSION="0.10.0-rc.10"
+RC_PACKAGE_NAME="feng-${RC_VERSION}-${PLATFORM}"
+RC_ARCHIVE_PATH="${WORK_ROOT}/${RC_PACKAGE_NAME}.zip"
+RC_DOWNLOAD_URL="https://github.com/Houfeng/feng/releases/download/v${RC_VERSION}/${RC_PACKAGE_NAME}.zip"
+RELEASES_JSON="${WORK_ROOT}/releases.json"
+create_release_archive "${RC_VERSION}" "${PLATFORM}"
+cat > "${RELEASES_JSON}" <<'EOF'
+[
+  {"tag_name":"v0.10.0-rc2"},
+  {"tag_name":"v0.2.0-rc100"},
+  {"tag_name":"v0.10.0-rc.10"},
+  {"tag_name":"v0.10.0-beta.99"},
+  {"tag_name":"v0.9.0"}
+]
+EOF
+
+RC_HOME="${WORK_ROOT}/home-rc-channel"
+RC_REQUEST_LOG="${WORK_ROOT}/rc-channel-requests.log"
+mkdir -p "${RC_HOME}"
+: > "${RC_REQUEST_LOG}"
+HOME="${RC_HOME}" \
+SHELL="/bin/zsh" \
+TMPDIR="${INSTALL_TEMP}" \
+MOCK_RELEASES_JSON="${RELEASES_JSON}" \
+MOCK_ARCHIVE="${RC_ARCHIVE_PATH}" \
+MOCK_EXPECTED_URL="${RC_DOWNLOAD_URL}" \
+MOCK_REQUEST_LOG="${RC_REQUEST_LOG}" \
+FENG_INSTALL_TEST_MOCK_CURL=1 \
+PATH="${MOCK_BIN}:${PATH}" \
+  "${INSTALL_SCRIPT}" --channel=rc >/dev/null
+[[ "$(sed -n '1p' "${RC_HOME}/.feng/VERSION")" == "${RC_VERSION}" ]] ||
+  die "installer did not select the semantically greatest RC release"
+[[ "$(tail -n 1 "${RC_REQUEST_LOG}")" == "${RC_DOWNLOAD_URL}" ]] ||
+  die "RC channel did not request the selected release asset"
+
+FALLBACK_HOME="${WORK_ROOT}/home-rc-fallback"
+FALLBACK_REQUEST_LOG="${WORK_ROOT}/rc-fallback-requests.log"
+mkdir -p "${FALLBACK_HOME}"
+: > "${FALLBACK_REQUEST_LOG}"
+HOME="${FALLBACK_HOME}" \
+SHELL="/bin/zsh" \
+TMPDIR="${INSTALL_TEMP}" \
+MOCK_LATEST_STATUS=404 \
+MOCK_LATEST_URL="https://github.com/Houfeng/feng/releases/latest" \
+MOCK_RELEASES_JSON="${RELEASES_JSON}" \
+MOCK_ARCHIVE="${RC_ARCHIVE_PATH}" \
+MOCK_EXPECTED_URL="${RC_DOWNLOAD_URL}" \
+MOCK_REQUEST_LOG="${FALLBACK_REQUEST_LOG}" \
+FENG_INSTALL_TEST_MOCK_CURL=1 \
+PATH="${MOCK_BIN}:${PATH}" \
+  "${INSTALL_SCRIPT}" >/dev/null
+[[ "$(sed -n '1p' "${FALLBACK_HOME}/.feng/VERSION")" == "${RC_VERSION}" ]] ||
+  die "installer did not fall back to the greatest RC release"
+
+STABLE_VERSION="0.11.0"
+STABLE_PACKAGE_NAME="feng-${STABLE_VERSION}-${PLATFORM}"
+STABLE_ARCHIVE_PATH="${WORK_ROOT}/${STABLE_PACKAGE_NAME}.zip"
+STABLE_DOWNLOAD_URL="https://github.com/Houfeng/feng/releases/download/v${STABLE_VERSION}/${STABLE_PACKAGE_NAME}.zip"
+create_release_archive "${STABLE_VERSION}" "${PLATFORM}"
+STABLE_HOME="${WORK_ROOT}/home-stable"
+STABLE_REQUEST_LOG="${WORK_ROOT}/stable-requests.log"
+mkdir -p "${STABLE_HOME}"
+: > "${STABLE_REQUEST_LOG}"
+HOME="${STABLE_HOME}" \
+SHELL="/bin/zsh" \
+TMPDIR="${INSTALL_TEMP}" \
+MOCK_LATEST_STATUS=200 \
+MOCK_LATEST_URL="https://github.com/Houfeng/feng/releases/tag/v${STABLE_VERSION}" \
+MOCK_RELEASES_JSON="${RELEASES_JSON}" \
+MOCK_ARCHIVE="${STABLE_ARCHIVE_PATH}" \
+MOCK_EXPECTED_URL="${STABLE_DOWNLOAD_URL}" \
+MOCK_REQUEST_LOG="${STABLE_REQUEST_LOG}" \
+FENG_INSTALL_TEST_MOCK_CURL=1 \
+PATH="${MOCK_BIN}:${PATH}" \
+  "${INSTALL_SCRIPT}" >/dev/null
+[[ "$(sed -n '1p' "${STABLE_HOME}/.feng/VERSION")" == "${STABLE_VERSION}" ]] ||
+  die "installer did not prefer the latest stable release"
+if grep -q 'api.github.com' "${STABLE_REQUEST_LOG}"; then
+  die "installer queried RC releases when a stable release was available"
+fi
+
+NO_RC_JSON="${WORK_ROOT}/no-rc-releases.json"
+printf '%s\n' '[{"tag_name":"v1.0.0"}]' > "${NO_RC_JSON}"
+expect_resolution_failure \
+  "latest-network-error" \
+  "failed to resolve the latest Feng release" \
+  "network-error" \
+  "${RELEASES_JSON}"
+if grep -q 'api.github.com' "${WORK_ROOT}/latest-network-error-requests.log"; then
+  die "installer fell back to RC after a stable-release network error"
+fi
+expect_resolution_failure \
+  "latest-http-error" \
+  "failed to resolve the latest Feng release: HTTP 503" \
+  "503" \
+  "${RELEASES_JSON}"
+if grep -q 'api.github.com' "${WORK_ROOT}/latest-http-error-requests.log"; then
+  die "installer fell back to RC after a stable-release HTTP error"
+fi
+expect_resolution_failure \
+  "no-rc-release" \
+  "no Feng RC release is available" \
+  "404" \
+  "${NO_RC_JSON}"
+
+echo "install release selection: explicit version, stable, RC, fallback, and errors passed"

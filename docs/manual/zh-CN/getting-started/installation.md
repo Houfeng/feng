@@ -20,7 +20,9 @@ Windows、Intel Mac 与纯 musl Linux 主机当前没有官方工具包。
 curl -fsSL https://feng-lang.com/install.sh | bash
 ```
 
-安装脚本会下载与当前主机匹配的最新稳定版本，将工具链安装到 `~/.feng`，并把 `~/.feng/bin` 加入当前 shell 的启动文件。安装结束后重新打开终端，或按安装脚本最后输出的提示重新加载启动文件。
+安装脚本会下载与当前主机匹配的最新稳定版本；项目尚无稳定版本时，会改为安装版本号
+最高的 RC 版本。工具链安装到 `~/.feng`，并把 `~/.feng/bin` 加入当前 shell 的启动
+文件。安装结束后重新打开终端，或按安装脚本最后输出的提示重新加载启动文件。
 
 确认安装结果：
 
@@ -29,7 +31,13 @@ feng --version
 feng --help
 ```
 
-## 安装指定版本
+## 选择发布版本
+
+主动安装最新 RC 版本时，传入 `rc` 通道：
+
+```bash
+curl -fsSL https://feng-lang.com/install.sh | bash -s -- --channel=rc
+```
 
 安装脚本接受完整的 GitHub Release 标签。通过管道执行脚本时，用 `bash -s --` 传递参数：
 

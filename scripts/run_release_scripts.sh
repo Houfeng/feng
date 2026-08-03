@@ -231,7 +231,7 @@ create_mock_curl() {
     printf '%s\n' 'set -euo pipefail'
     printf '%s\n' 'for arg in "$@"; do'
     printf '%s\n' '  if [[ "${arg}" == *"/releases/latest" ]]; then'
-    printf '%s\n' '    printf "%s\\n" "https://github.com/Houfeng/feng/releases/tag/v0.1.0"'
+    printf '%s\n' '    printf "%s\\n%s\\n" "200" "https://github.com/Houfeng/feng/releases/tag/v0.1.0"'
     printf '%s\n' '    exit 0'
     printf '%s\n' '  fi'
     printf '%s\n' 'done'

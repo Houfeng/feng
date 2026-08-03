@@ -282,7 +282,15 @@ toolchain 精简产物在**本地维护**：开发者使用 LLVM、musl 与 GNU 
 curl -fsSL https://feng-lang.com/install.sh | bash
 ```
 
-默认安装 latest stable release。安装指定的正式版或 prerelease 时，显式传入完整 Git tag：
+默认安装 latest stable release；仓库尚无 stable release 时，回退安装版本号最高的 RC
+release。需要主动安装最新 RC 时使用 `rc` 通道：
+
+```bash
+curl -fsSL https://feng-lang.com/install.sh |
+  bash -s -- --channel=rc
+```
+
+安装指定的正式版或 prerelease 时，显式传入完整 Git tag：
 
 ```bash
 curl -fsSL https://feng-lang.com/install.sh |
@@ -294,9 +302,18 @@ curl -fsSL https://feng-lang.com/install.sh |
 - 脚本唯一源文件为仓库内的 `scripts/install.sh`，不得在 `website/` 中维护副本。
   GitHub Pages 工作流必须在部署 staging 中将该源文件发布为站点根目录的
   `/install.sh`，并与 `website/` 的静态内容一起上传。
-- 仅接受至多一个 `--version=v<version>` 参数，`<version>` 必须符合本规范的版本格式；不传参数时解析 GitHub Releases latest stable tag，显式传入时直接使用该 tag，因此可以安装正式版或 prerelease。
+- 接受至多一个 `--version=v<version>` 或 `--channel=rc` 参数，二者互斥。
+  `<version>` 必须符合本规范的版本格式；显式版本直接使用该 tag，因此可以安装正式版
+  或 prerelease。`rc` 通道只选择符合 `v<major>.<minor>.<patch>-rc<number>` 或
+  `v<major>.<minor>.<patch>-rc.<number>` 的已发布 GitHub Release，并按 major、minor、
+  patch、RC 序号依次比较，选择版本号最高者，不按发布时间选择。
+- 不传参数时先解析 GitHub Releases latest stable tag。仅当 GitHub 明确返回“没有
+  latest stable release”（HTTP 404）时，才按 `rc` 通道规则回退；网络错误、限流、
+  鉴权错误和服务端错误必须直接失败，不得静默安装 RC。仓库既无 stable release 也无
+  RC release 时必须失败。
 - 固定行为：
-  1. 自动检测目标平台（按 `uname -s` / `uname -m`），确定默认或显式指定的 release tag
+  1. 自动检测目标平台（按 `uname -s` / `uname -m`），按 stable、`rc` 通道或显式版本
+     确定 release tag
   2. 拼接下载 URL，下载 zip 到系统临时目录（`$TMPDIR`，回退 `/tmp`）；标准错误连接交互式终端时使用 curl progress bar 显式展示下载进度，非交互环境静默下载且保留错误输出
   3. 校验压缩包仅包含预期顶层目录、包内 `VERSION` 与 release tag 一致，并解压到 staging 目录
   4. 原子替换 `$HOME/.feng/`；已有安装在新目录替换成功前保持可用

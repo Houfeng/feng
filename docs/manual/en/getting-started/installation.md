@@ -20,7 +20,7 @@ Run this command in a terminal:
 curl -fsSL https://feng-lang.com/install.sh | bash
 ```
 
-The installer downloads the latest stable release for the current host, installs the toolchain in `~/.feng`, and adds `~/.feng/bin` to the startup file for the current shell. When installation finishes, open a new terminal or reload the startup file as instructed by the installer.
+The installer downloads the latest stable release for the current host. If the project has no stable release yet, it installs the RC release with the highest version instead. It installs the toolchain in `~/.feng` and adds `~/.feng/bin` to the startup file for the current shell. When installation finishes, open a new terminal or reload the startup file as instructed by the installer.
 
 Verify the installation:
 
@@ -29,7 +29,13 @@ feng --version
 feng --help
 ```
 
-## Install a Specific Version
+## Select a Release
+
+To explicitly install the latest RC release, select the `rc` channel:
+
+```bash
+curl -fsSL https://feng-lang.com/install.sh | bash -s -- --channel=rc
+```
 
 The installer accepts a complete GitHub Release tag. When piping the script to Bash, pass arguments with `bash -s --`:
 

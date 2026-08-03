@@ -15,6 +15,7 @@ INSTALL_COMMITTED=0
 INSTALL_BACKED_UP=0
 SHELL_FILE_COMMITTED=0
 REQUESTED_TAG=""
+REQUESTED_CHANNEL=""
 
 # Report one fatal installation error.
 die() {
@@ -28,7 +29,7 @@ require_cmd() {
     die "missing required command: $1"
 }
 
-# Parse the optional explicit GitHub Release tag.
+# Parse the optional explicit GitHub Release tag or release channel.
 parse_arguments() {
   while [[ "$#" -gt 0 ]]; do
     case "$1" in
@@ -38,6 +39,13 @@ parse_arguments() {
         REQUESTED_TAG="${1#--version=}"
         [[ -n "${REQUESTED_TAG}" ]] ||
           die "--version requires a release tag"
+        ;;
+      --channel=*)
+        [[ -z "${REQUESTED_CHANNEL}" ]] ||
+          die "--channel may only be specified once"
+        REQUESTED_CHANNEL="${1#--channel=}"
+        [[ -n "${REQUESTED_CHANNEL}" ]] ||
+          die "--channel requires a channel name"
         ;;
       *)
         die "unsupported argument: $1"
@@ -49,6 +57,12 @@ parse_arguments() {
   if [[ -n "${REQUESTED_TAG}" ]] &&
      [[ ! "${REQUESTED_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
     die "invalid Feng release tag: ${REQUESTED_TAG}"
+  fi
+  if [[ -n "${REQUESTED_CHANNEL}" && "${REQUESTED_CHANNEL}" != "rc" ]]; then
+    die "unsupported Feng release channel: ${REQUESTED_CHANNEL}"
+  fi
+  if [[ -n "${REQUESTED_TAG}" && -n "${REQUESTED_CHANNEL}" ]]; then
+    die "--version and --channel are mutually exclusive"
   fi
 }
 
@@ -75,27 +89,154 @@ detect_host_platform() {
   esac
 }
 
-# Resolve the latest GitHub Release tag without requiring a JSON parser.
-resolve_latest_tag() {
+# Resolve the latest stable GitHub Release tag.
+# Return status 2 only when GitHub explicitly reports that no stable release exists.
+resolve_latest_stable_tag() {
+  local response_file="${TEMP_ROOT}/latest-release-response"
+  local http_status
   local effective_url
   local tag
 
-  effective_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
-    "https://github.com/${REPOSITORY}/releases/latest")" ||
+  if ! curl --location --silent --show-error -o /dev/null \
+    -w '%{http_code}\n%{url_effective}\n' \
+    "https://github.com/${REPOSITORY}/releases/latest" \
+    > "${response_file}"; then
     die "failed to resolve the latest Feng release"
+  fi
+  http_status="$(sed -n '1p' "${response_file}")"
+  effective_url="$(sed -n '2p' "${response_file}")"
+  case "${http_status}" in
+    200)
+      ;;
+    404)
+      return 2
+      ;;
+    *)
+      die "failed to resolve the latest Feng release: HTTP ${http_status}"
+      ;;
+  esac
   tag="${effective_url##*/}"
-  [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] ||
+  [[ "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
     die "latest Feng release has an invalid tag: ${tag}"
   printf '%s\n' "${tag}"
 }
 
-# Resolve an explicit release tag or fall back to the latest stable release.
+# Report whether the first non-negative decimal integer is greater than the second.
+decimal_is_greater() {
+  local left="$1"
+  local right="$2"
+
+  while [[ "${#left}" -gt 1 && "${left}" == 0* ]]; do
+    left="${left#0}"
+  done
+  while [[ "${#right}" -gt 1 && "${right}" == 0* ]]; do
+    right="${right#0}"
+  done
+  if [[ "${#left}" -ne "${#right}" ]]; then
+    [[ "${#left}" -gt "${#right}" ]]
+    return
+  fi
+  [[ "${left}" > "${right}" ]]
+}
+
+# Report whether one valid RC tag has a greater semantic version than another.
+rc_tag_is_newer() {
+  local candidate="$1"
+  local current="$2"
+  local candidate_components=()
+  local current_components=()
+  local component_index
+
+  [[ "${candidate}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-rc(\.)?([0-9]+)$ ]] ||
+    return 1
+  candidate_components=(
+    "${BASH_REMATCH[1]}"
+    "${BASH_REMATCH[2]}"
+    "${BASH_REMATCH[3]}"
+    "${BASH_REMATCH[5]}"
+  )
+  if [[ -z "${current}" ]]; then
+    return 0
+  fi
+  [[ "${current}" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)-rc(\.)?([0-9]+)$ ]] ||
+    return 0
+  current_components=(
+    "${BASH_REMATCH[1]}"
+    "${BASH_REMATCH[2]}"
+    "${BASH_REMATCH[3]}"
+    "${BASH_REMATCH[5]}"
+  )
+  for component_index in 0 1 2 3; do
+    if decimal_is_greater \
+      "${candidate_components[component_index]}" \
+      "${current_components[component_index]}"; then
+      return 0
+    fi
+    if decimal_is_greater \
+      "${current_components[component_index]}" \
+      "${candidate_components[component_index]}"; then
+      return 1
+    fi
+  done
+  return 1
+}
+
+# Resolve the semantically greatest published RC release through GitHub's API.
+resolve_latest_rc_tag() {
+  local page=1
+  local response_file
+  local tag_field
+  local candidate
+  local selected=""
+
+  while true; do
+    response_file="${TEMP_ROOT}/github-releases-${page}.json"
+    curl --fail --location --silent --show-error \
+      -H 'Accept: application/vnd.github+json' \
+      "https://api.github.com/repos/${REPOSITORY}/releases?per_page=100&page=${page}" \
+      -o "${response_file}" ||
+      die "failed to resolve the latest Feng RC release"
+    if ! grep -q '"tag_name"' "${response_file}"; then
+      break
+    fi
+    while IFS= read -r tag_field; do
+      tag_field="${tag_field%\"}"
+      candidate="${tag_field##*\"}"
+      if rc_tag_is_newer "${candidate}" "${selected}"; then
+        selected="${candidate}"
+      fi
+    done < <(
+      grep -Eo \
+        '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-rc(\.)?[0-9]+"' \
+        "${response_file}" || true
+    )
+    page=$((page + 1))
+  done
+  [[ -n "${selected}" ]] || die "no Feng RC release is available"
+  printf '%s\n' "${selected}"
+}
+
+# Resolve an explicit release tag, selected channel, or default stable release.
 resolve_release_tag() {
+  local tag
+  local status
+
   if [[ -n "${REQUESTED_TAG}" ]]; then
     printf '%s\n' "${REQUESTED_TAG}"
-  else
-    resolve_latest_tag
+    return
   fi
+  if [[ "${REQUESTED_CHANNEL}" == "rc" ]]; then
+    resolve_latest_rc_tag
+    return
+  fi
+  if tag="$(resolve_latest_stable_tag)"; then
+    printf '%s\n' "${tag}"
+    return
+  else
+    status=$?
+  fi
+  [[ "${status}" -eq 2 ]] || return "${status}"
+  resolve_latest_rc_tag
 }
 
 # Download one release archive with terminal-aware progress reporting.
@@ -369,14 +510,14 @@ require_cmd unzip
 
 trap cleanup EXIT
 
+TEMP_BASE="${TMPDIR:-/tmp}"
+mkdir -p "${TEMP_BASE}"
+TEMP_ROOT="$(mktemp -d "${TEMP_BASE%/}/feng-install.XXXXXX")"
 PLATFORM="$(detect_host_platform)"
 TAG="$(resolve_release_tag)"
 VERSION="${TAG#v}"
 PACKAGE_NAME="feng-${VERSION}-${PLATFORM}"
 DOWNLOAD_URL="https://github.com/${REPOSITORY}/releases/download/${TAG}/${PACKAGE_NAME}.zip"
-TEMP_BASE="${TMPDIR:-/tmp}"
-mkdir -p "${TEMP_BASE}"
-TEMP_ROOT="$(mktemp -d "${TEMP_BASE%/}/feng-install.XXXXXX")"
 ARCHIVE_PATH="${TEMP_ROOT}/${PACKAGE_NAME}.zip"
 EXTRACT_ROOT="${TEMP_ROOT}/extract"
 mkdir -p "${EXTRACT_ROOT}"
