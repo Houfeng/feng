@@ -31,12 +31,12 @@ mock_curl() {
         "${MOCK_LATEST_STATUS:-200}" \
         "${MOCK_LATEST_URL:-https://github.com/Houfeng/feng/releases/tag/v0.1.0}"
       ;;
-    https://api.github.com/repos/Houfeng/feng/releases\?*)
+    https://github.com/Houfeng/feng/releases\?*)
       [[ -n "${output}" ]] || exit 4
       if [[ "${url}" == *"page=1" ]]; then
-        cp "${MOCK_RELEASES_JSON}" "${output}"
+        cp "${MOCK_RELEASES_PAGE}" "${output}"
       else
-        printf '[]\n' > "${output}"
+        printf '<html></html>\n' > "${output}"
       fi
       ;;
     *)
@@ -154,7 +154,7 @@ expect_resolution_failure() {
   local name="$1"
   local expected="$2"
   local latest_status="$3"
-  local releases_json="$4"
+  local releases_page="$4"
   local test_home="${WORK_ROOT}/home-${name}"
   local request_log="${WORK_ROOT}/${name}-requests.log"
 
@@ -165,7 +165,7 @@ expect_resolution_failure() {
      TMPDIR="${INSTALL_TEMP}" \
      MOCK_LATEST_STATUS="${latest_status}" \
      MOCK_LATEST_URL="https://github.com/Houfeng/feng/releases/latest" \
-     MOCK_RELEASES_JSON="${releases_json}" \
+     MOCK_RELEASES_PAGE="${releases_page}" \
      MOCK_EXPECTED_URL="unused" \
      MOCK_ARCHIVE="unused" \
      MOCK_REQUEST_LOG="${request_log}" \
@@ -259,16 +259,16 @@ RC_VERSION="0.10.0-rc.10"
 RC_PACKAGE_NAME="feng-${RC_VERSION}-${PLATFORM}"
 RC_ARCHIVE_PATH="${WORK_ROOT}/${RC_PACKAGE_NAME}.zip"
 RC_DOWNLOAD_URL="https://github.com/Houfeng/feng/releases/download/v${RC_VERSION}/${RC_PACKAGE_NAME}.zip"
-RELEASES_JSON="${WORK_ROOT}/releases.json"
+RELEASES_PAGE="${WORK_ROOT}/releases.html"
 create_release_archive "${RC_VERSION}" "${PLATFORM}"
-cat > "${RELEASES_JSON}" <<'EOF'
-[
-  {"tag_name":"v0.10.0-rc2"},
-  {"tag_name":"v0.2.0-rc100"},
-  {"tag_name":"v0.10.0-rc.10"},
-  {"tag_name":"v0.10.0-beta.99"},
-  {"tag_name":"v0.9.0"}
-]
+cat > "${RELEASES_PAGE}" <<'EOF'
+<html><body>
+<a href="/Houfeng/feng/releases/tag/v0.10.0-rc2">v0.10.0-rc2</a>
+<a href="/Houfeng/feng/releases/tag/v0.2.0-rc100">v0.2.0-rc100</a>
+<a href="/Houfeng/feng/releases/tag/v0.10.0-rc.10">v0.10.0-rc.10</a>
+<a href="/Houfeng/feng/releases/tag/v0.10.0-beta.99">v0.10.0-beta.99</a>
+<a href="/Houfeng/feng/releases/tag/v0.9.0">v0.9.0</a>
+</body></html>
 EOF
 
 RC_HOME="${WORK_ROOT}/home-rc-channel"
@@ -278,7 +278,7 @@ mkdir -p "${RC_HOME}"
 HOME="${RC_HOME}" \
 SHELL="/bin/zsh" \
 TMPDIR="${INSTALL_TEMP}" \
-MOCK_RELEASES_JSON="${RELEASES_JSON}" \
+MOCK_RELEASES_PAGE="${RELEASES_PAGE}" \
 MOCK_ARCHIVE="${RC_ARCHIVE_PATH}" \
 MOCK_EXPECTED_URL="${RC_DOWNLOAD_URL}" \
 MOCK_REQUEST_LOG="${RC_REQUEST_LOG}" \
@@ -297,9 +297,9 @@ mkdir -p "${FALLBACK_HOME}"
 HOME="${FALLBACK_HOME}" \
 SHELL="/bin/zsh" \
 TMPDIR="${INSTALL_TEMP}" \
-MOCK_LATEST_STATUS=404 \
-MOCK_LATEST_URL="https://github.com/Houfeng/feng/releases/latest" \
-MOCK_RELEASES_JSON="${RELEASES_JSON}" \
+MOCK_LATEST_STATUS=200 \
+MOCK_LATEST_URL="https://github.com/Houfeng/feng/releases" \
+MOCK_RELEASES_PAGE="${RELEASES_PAGE}" \
 MOCK_ARCHIVE="${RC_ARCHIVE_PATH}" \
 MOCK_EXPECTED_URL="${RC_DOWNLOAD_URL}" \
 MOCK_REQUEST_LOG="${FALLBACK_REQUEST_LOG}" \
@@ -323,7 +323,7 @@ SHELL="/bin/zsh" \
 TMPDIR="${INSTALL_TEMP}" \
 MOCK_LATEST_STATUS=200 \
 MOCK_LATEST_URL="https://github.com/Houfeng/feng/releases/tag/v${STABLE_VERSION}" \
-MOCK_RELEASES_JSON="${RELEASES_JSON}" \
+MOCK_RELEASES_PAGE="${RELEASES_PAGE}" \
 MOCK_ARCHIVE="${STABLE_ARCHIVE_PATH}" \
 MOCK_EXPECTED_URL="${STABLE_DOWNLOAD_URL}" \
 MOCK_REQUEST_LOG="${STABLE_REQUEST_LOG}" \
@@ -332,32 +332,34 @@ PATH="${MOCK_BIN}:${PATH}" \
   "${INSTALL_SCRIPT}" >/dev/null
 [[ "$(sed -n '1p' "${STABLE_HOME}/.feng/VERSION")" == "${STABLE_VERSION}" ]] ||
   die "installer did not prefer the latest stable release"
-if grep -q 'api.github.com' "${STABLE_REQUEST_LOG}"; then
+if grep -q 'releases?page=' "${STABLE_REQUEST_LOG}"; then
   die "installer queried RC releases when a stable release was available"
 fi
 
-NO_RC_JSON="${WORK_ROOT}/no-rc-releases.json"
-printf '%s\n' '[{"tag_name":"v1.0.0"}]' > "${NO_RC_JSON}"
+NO_RC_PAGE="${WORK_ROOT}/no-rc-releases.html"
+printf '%s\n' \
+  '<a href="/Houfeng/feng/releases/tag/v1.0.0">v1.0.0</a>' \
+  > "${NO_RC_PAGE}"
 expect_resolution_failure \
   "latest-network-error" \
   "failed to resolve the latest Feng release" \
   "network-error" \
-  "${RELEASES_JSON}"
-if grep -q 'api.github.com' "${WORK_ROOT}/latest-network-error-requests.log"; then
+  "${RELEASES_PAGE}"
+if grep -q 'releases?page=' "${WORK_ROOT}/latest-network-error-requests.log"; then
   die "installer fell back to RC after a stable-release network error"
 fi
 expect_resolution_failure \
   "latest-http-error" \
   "failed to resolve the latest Feng release: HTTP 503" \
   "503" \
-  "${RELEASES_JSON}"
-if grep -q 'api.github.com' "${WORK_ROOT}/latest-http-error-requests.log"; then
+  "${RELEASES_PAGE}"
+if grep -q 'releases?page=' "${WORK_ROOT}/latest-http-error-requests.log"; then
   die "installer fell back to RC after a stable-release HTTP error"
 fi
 expect_resolution_failure \
   "no-rc-release" \
   "no Feng RC release is available" \
   "404" \
-  "${NO_RC_JSON}"
+  "${NO_RC_PAGE}"
 
 echo "install release selection: explicit version, stable, RC, fallback, and errors passed"

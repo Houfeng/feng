@@ -308,9 +308,10 @@ curl -fsSL https://feng-lang.com/install.sh |
   `v<major>.<minor>.<patch>-rc.<number>` 的已发布 GitHub Release，并按 major、minor、
   patch、RC 序号依次比较，选择版本号最高者，不按发布时间选择。
 - 不传参数时先解析 GitHub Releases latest stable tag。仅当 GitHub 明确返回“没有
-  latest stable release”（HTTP 404）时，才按 `rc` 通道规则回退；网络错误、限流、
-  鉴权错误和服务端错误必须直接失败，不得静默安装 RC。仓库既无 stable release 也无
-  RC release 时必须失败。
+  latest stable release”（HTTP 404，或 `/releases/latest` 最终落到仓库 Release 列表）
+  时，才按 `rc` 通道规则回退；网络错误和服务端错误必须直接失败，不得静默安装 RC。
+  RC 版本从公开 GitHub Releases 分页中解析，不得依赖有匿名频率限制的 GitHub API。
+  仓库既无 stable release 也无 RC release 时必须失败。
 - 固定行为：
   1. 自动检测目标平台（按 `uname -s` / `uname -m`），按 stable、`rc` 通道或显式版本
      确定 release tag

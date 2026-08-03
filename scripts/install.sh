@@ -95,6 +95,7 @@ resolve_latest_stable_tag() {
   local response_file="${TEMP_ROOT}/latest-release-response"
   local http_status
   local effective_url
+  local releases_url="https://github.com/${REPOSITORY}/releases"
   local tag
 
   if ! curl --location --silent --show-error -o /dev/null \
@@ -107,6 +108,9 @@ resolve_latest_stable_tag() {
   effective_url="$(sed -n '2p' "${response_file}")"
   case "${http_status}" in
     200)
+      if [[ "${effective_url%/}" == "${releases_url}" ]]; then
+        return 2
+      fi
       ;;
     404)
       return 2
@@ -181,7 +185,7 @@ rc_tag_is_newer() {
   return 1
 }
 
-# Resolve the semantically greatest published RC release through GitHub's API.
+# Resolve the semantically greatest RC from the public GitHub Releases pages.
 resolve_latest_rc_tag() {
   local page=1
   local response_file
@@ -190,24 +194,23 @@ resolve_latest_rc_tag() {
   local selected=""
 
   while true; do
-    response_file="${TEMP_ROOT}/github-releases-${page}.json"
+    response_file="${TEMP_ROOT}/github-releases-${page}.html"
     curl --fail --location --silent --show-error \
-      -H 'Accept: application/vnd.github+json' \
-      "https://api.github.com/repos/${REPOSITORY}/releases?per_page=100&page=${page}" \
+      "https://github.com/${REPOSITORY}/releases?page=${page}" \
       -o "${response_file}" ||
       die "failed to resolve the latest Feng RC release"
-    if ! grep -q '"tag_name"' "${response_file}"; then
+    if ! grep -q "href=\"/${REPOSITORY}/releases/tag/" "${response_file}"; then
       break
     fi
     while IFS= read -r tag_field; do
       tag_field="${tag_field%\"}"
-      candidate="${tag_field##*\"}"
+      candidate="${tag_field##*/}"
       if rc_tag_is_newer "${candidate}" "${selected}"; then
         selected="${candidate}"
       fi
     done < <(
       grep -Eo \
-        '"tag_name"[[:space:]]*:[[:space:]]*"v[0-9]+\.[0-9]+\.[0-9]+-rc(\.)?[0-9]+"' \
+        "href=\"/${REPOSITORY}/releases/tag/v[0-9]+\.[0-9]+\.[0-9]+-rc(\.)?[0-9]+\"" \
         "${response_file}" || true
     )
     page=$((page + 1))
