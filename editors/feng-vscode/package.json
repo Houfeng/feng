@@ -79,7 +79,7 @@
             "properties": {
               "program": {
                 "type": "string",
-                "description": "Path to the Feng binary to debug. When omitted, the extension derives <out>/bin/<name> from the nearest target: \"bin\" feng.fm when possible."
+                "description": "Path to the Feng binary to debug. When omitted, the extension derives <out>/<host-platform>/bin/<name> from the nearest target: \"bin\" feng.fm when possible."
               },
               "cwd": {
                 "type": "string",

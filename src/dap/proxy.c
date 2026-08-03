@@ -3174,7 +3174,8 @@ static bool proxy_resolve_evaluate_identifier(const FengDebugArtifact *artifact,
         const FengCodegenMapingVariableRecord *record = artifact->info.variables + index;
         const char *candidate_expression;
 
-        if (strcmp(record->frame_backend_symbol, frame_backend_symbol) != 0 ||
+        if (record->kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD ||
+            strcmp(record->frame_backend_symbol, frame_backend_symbol) != 0 ||
             strcmp(record->display_name, identifier) != 0) {
             continue;
         }

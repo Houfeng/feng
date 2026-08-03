@@ -554,11 +554,29 @@ function parseProjectManifestDebugSettings(manifestPath) {
     return settings.name == null ? null : settings;
 }
 
-function getProjectDebugSettings(manifestPath) {
+/* Return the complete platform identifier used by a native host build. */
+function getHostPlatform(processApi = process) {
+    const osName = {
+        darwin: 'macos',
+        linux: 'linux',
+        win32: 'windows'
+    }[processApi.platform];
+    const archName = {
+        arm64: 'arm64',
+        x64: 'x64'
+    }[processApi.arch];
+
+    if (osName == null || archName == null) {
+        return null;
+    }
+    return osName === 'linux' ? `${osName}-${archName}-gnu` : `${osName}-${archName}`;
+}
+
+function getProjectDebugSettings(manifestPath, hostPlatform = getHostPlatform()) {
     const parsed = parseProjectManifestDebugSettings(manifestPath);
     let outRoot;
 
-    if (parsed == null) {
+    if (parsed == null || hostPlatform == null) {
         return null;
     }
 
@@ -567,7 +585,7 @@ function getProjectDebugSettings(manifestPath) {
         manifestPath,
         packageName: parsed.name,
         outRoot,
-        programPath: path.join(outRoot, 'bin', parsed.name),
+        programPath: path.join(outRoot, hostPlatform, 'bin', parsed.name),
         projectRoot: path.dirname(manifestPath),
         target: parsed.target
     };
@@ -1331,6 +1349,7 @@ module.exports = {
         findDebugManifestPath,
         findWorkspaceManifestPaths,
         getFormattingDocumentSelector,
+        getHostPlatform,
         getLanguageServiceDocumentSelector,
         getProjectDebugSettings,
         getPrimaryWorkspaceRoot,

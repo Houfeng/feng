@@ -7155,7 +7155,7 @@ static void test_project_build_keeps_for_body_locals_after_prefix_binding(void) 
 #endif
 }
 
-/* Ensure identifier evaluate requests rewrite Feng names to backend names. */
+/* Ensure identifier evaluate ignores field records and rewrites Feng names to backend names. */
 static void test_dap_rewrites_identifier_evaluate_expression(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x46U};
     static const char *kSourceText =
@@ -7223,6 +7223,15 @@ static void test_dap_rewrites_identifier_evaluate_expression(void) {
                                               "demo_pkg_main_backend",
                                               "demo.pkg.main",
                                               FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_codegen_maping_info_add_variable_with_parent_display_type(
+        &info,
+        NULL,
+        NULL,
+        "value",
+        ".value",
+        "int",
+        "Demo",
+        FENG_CODEGEN_MAPING_VARIABLE_FIELD));
     ASSERT(feng_codegen_maping_info_add_variable_with_display_type(&info,
                                                                    "demo_pkg_main_backend",
                                                                    "backend_local",

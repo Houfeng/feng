@@ -78,7 +78,7 @@ Its goal is to provide a stable and predictable formatting experience for daily 
 
 - The extension contributes a `feng` debug type that starts `feng dap --stdio`.
 - On macOS, `feng dap` first tries `lldb-dap` from `PATH`; if that misses, it falls back to `xcrun -f lldb-dap`, which keeps packaged VS Code sessions working even when Xcode's debugger binaries are not exported directly in `PATH`.
-- When a launch configuration omits `program`, the extension first tries to resolve it from the nearest `target: "bin"` project manifest by mapping `name` and `out` to `<out>/bin/<name>`, then falls back to the unique discovered workspace `target: "bin"` project when no active Feng file is available.
+- When a launch configuration omits `program`, the extension first tries to resolve it from the nearest `target: "bin"` project manifest by mapping `name` and `out` to `<out>/<host-platform>/bin/<name>`, then falls back to the unique discovered workspace `target: "bin"` project when no active Feng file is available.
 - When a launch configuration omits `preLaunchTask`, the extension binds it to the generated Feng build task for that project.
 - When VS Code generates a Feng `launch.json`, the extension also ensures `.vscode/tasks.json` contains the matching `type: "feng"` build task so the generated `preLaunchTask` resolves without manual setup.
 - Generated `program` and `cwd` values prefer `${workspaceFolder}`-style variables over absolute paths whenever the Feng project lives inside the active workspace folder.

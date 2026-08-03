@@ -222,12 +222,14 @@ async function run() {
                 createFengDebugConfigurationProvider,
                 createFengTaskProvider,
                 findProjectManifestPath,
+                getHostPlatform,
                 getProjectDebugSettings,
                 registerDebuggingSupport,
                 FENG_BUILD_TASK,
                 FENG_DEBUG_TYPE,
                 FENG_TASK_TYPE
             } = extension.__test__;
+            const hostPlatform = getHostPlatform();
             const workspaceFolder = createWorkspaceFolder(tempRoot);
             const taskProvider = createFengTaskProvider(mockVscode);
             let providedTasks;
@@ -237,6 +239,10 @@ async function run() {
             assert.strictEqual(FENG_DEBUG_TYPE, 'feng');
             assert.strictEqual(FENG_TASK_TYPE, 'feng');
             assert.strictEqual(FENG_BUILD_TASK, 'build');
+            assert.strictEqual(getHostPlatform({ platform: 'darwin', arch: 'arm64' }), 'macos-arm64');
+            assert.strictEqual(getHostPlatform({ platform: 'linux', arch: 'x64' }), 'linux-x64-gnu');
+            assert.strictEqual(getHostPlatform({ platform: 'win32', arch: 'x64' }), 'windows-x64');
+            assert.strictEqual(getHostPlatform({ platform: 'darwin', arch: 'ia32' }), null);
             assert.strictEqual(findProjectManifestPath(projectSourcePath), projectManifestPath);
             assert.strictEqual(findProjectManifestPath(projectRoot), projectManifestPath);
 
@@ -244,7 +250,7 @@ async function run() {
                 manifestPath: projectManifestPath,
                 packageName: 'hello_world',
                 outRoot: path.join(projectRoot, 'dist'),
-                programPath: path.join(projectRoot, 'dist', 'bin', 'hello_world'),
+                programPath: path.join(projectRoot, 'dist', hostPlatform, 'bin', 'hello_world'),
                 projectRoot,
                 target: 'bin'
             });
@@ -282,7 +288,7 @@ async function run() {
                 type: 'feng',
                 request: 'launch',
                 name: 'Debug hello_world',
-                program: '${workspaceFolder}/examples/hello_world/dist/bin/hello_world',
+                program: `\${workspaceFolder}/examples/hello_world/dist/${hostPlatform}/bin/hello_world`,
                 cwd: '${workspaceFolder}/examples/hello_world',
                 preLaunchTask: 'feng: build examples/hello_world'
             });
@@ -311,7 +317,7 @@ async function run() {
                 type: 'feng',
                 request: 'launch',
                 name: 'Debug hello_world',
-                program: path.join(projectRoot, 'dist', 'bin', 'hello_world'),
+                program: path.join(projectRoot, 'dist', hostPlatform, 'bin', 'hello_world'),
                 cwd: projectRoot,
                 preLaunchTask: 'feng: build examples/hello_world'
             });
@@ -337,6 +343,7 @@ async function run() {
             });
             const extension = loadExtensionModule(mockVscode);
             const provider = extension.__test__.createFengDebugConfigurationProvider(mockVscode);
+            const hostPlatform = extension.__test__.getHostPlatform();
             const workspaceFolder = createWorkspaceFolder(tempRoot);
             const providedConfigurations = await provider.provideDebugConfigurations(workspaceFolder);
             const tasksPath = path.join(tempRoot, '.vscode', 'tasks.json');
@@ -349,7 +356,7 @@ async function run() {
                 type: 'feng',
                 request: 'launch',
                 name: 'Debug hello_world',
-                program: '${workspaceFolder}/examples/hello_world/dist/bin/hello_world',
+                program: `\${workspaceFolder}/examples/hello_world/dist/${hostPlatform}/bin/hello_world`,
                 cwd: '${workspaceFolder}/examples/hello_world',
                 preLaunchTask: 'feng: build examples/hello_world'
             }]);
@@ -357,7 +364,7 @@ async function run() {
                 type: 'feng',
                 request: 'launch',
                 name: 'Debug hello_world',
-                program: path.join(projectRoot, 'dist', 'bin', 'hello_world'),
+                program: path.join(projectRoot, 'dist', hostPlatform, 'bin', 'hello_world'),
                 cwd: projectRoot,
                 preLaunchTask: 'feng: build examples/hello_world'
             });
