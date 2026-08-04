@@ -191,7 +191,11 @@ cli: runtime $(BIN_DIR)/feng
 
 runtime: $(RUNTIME_LIBS) $(RUNTIME_HEADERS)
 
-test: test-sanitize test-normal
+# Both phases clean and rebuild the same paths, so isolate them even when the
+# caller enables parallel make through -j or MAKEFLAGS.
+test:
+	$(MAKE) -j1 test-sanitize
+	$(MAKE) -j1 test-normal
 
 test-normal:
 	$(MAKE) clean
