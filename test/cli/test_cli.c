@@ -11496,6 +11496,118 @@ static void test_deps_resolve_builds_local_library_dependency(void) {
     feng_cli_project_error_dispose(&error);
 }
 
+/* Verify graph growth preserves a local project's resolved transitive dependencies. */
+static void test_deps_resolve_preserves_nested_local_project_dependencies(void) {
+    char template_path[] = "temp/feng_cli_deps_nested_local_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *parent_dir;
+    char *parent_src_dir;
+    char *leaf_dir;
+    char *leaf_src_dir;
+    char *project_manifest_path;
+    char *parent_manifest_path;
+    char *parent_source_path;
+    char *leaf_manifest_path;
+    char *leaf_source_path;
+    char *parent_bundle_path;
+    char *leaf_bundle_path;
+    char *resolved_parent_bundle_path = NULL;
+    char *resolved_leaf_bundle_path = NULL;
+    FengCliDepsResolved resolved = {0};
+    FengCliProjectError error = {0};
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "project");
+    parent_dir = path_join(workspace_dir, "local_parent");
+    parent_src_dir = path_join(parent_dir, "src");
+    leaf_dir = path_join(workspace_dir, "local_leaf");
+    leaf_src_dir = path_join(leaf_dir, "src");
+    project_manifest_path = path_join(project_dir, "feng.fm");
+    parent_manifest_path = path_join(parent_dir, "feng.fm");
+    parent_source_path = path_join(parent_src_dir, "lib.ff");
+    leaf_manifest_path = path_join(leaf_dir, "feng.fm");
+    leaf_source_path = path_join(leaf_src_dir, "lib.ff");
+    parent_bundle_path = path_join(parent_dir,
+                                   "build/pkg/local_parent-0.1.0.fb");
+    leaf_bundle_path = path_join(leaf_dir,
+                                 "build/pkg/local_leaf-0.1.0.fb");
+
+    mkdir_p(project_dir);
+    mkdir_p(parent_src_dir);
+    mkdir_p(leaf_src_dir);
+    write_text_file(leaf_manifest_path,
+                    "[package]\n"
+                    "name: \"local_leaf\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(leaf_source_path,
+                    "module local.leaf;\n"
+                    "open func leaf_value(): int { return 1; }\n");
+    write_text_file(parent_manifest_path,
+                    "[package]\n"
+                    "name: \"local_parent\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "local_leaf: \"../local_leaf\"\n");
+    write_text_file(parent_source_path,
+                    "module local.parent;\n"
+                    "open func parent_value(): int { return 2; }\n");
+    write_text_file(project_manifest_path,
+                    "[package]\n"
+                    "name: \"app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "local_parent: \"../local_parent\"\n");
+
+    ASSERT(feng_cli_deps_resolve_for_manifest("feng",
+                                              project_manifest_path,
+                                              false,
+                                              false,
+                                              &resolved,
+                                              &error));
+    ASSERT(resolved.package_count == 2U);
+    resolved_parent_bundle_path = realpath(parent_bundle_path, NULL);
+    resolved_leaf_bundle_path = realpath(leaf_bundle_path, NULL);
+    ASSERT(resolved_parent_bundle_path != NULL);
+    ASSERT(resolved_leaf_bundle_path != NULL);
+    ASSERT((strcmp(resolved.package_paths[0], resolved_parent_bundle_path) == 0 &&
+            strcmp(resolved.package_paths[1], resolved_leaf_bundle_path) == 0) ||
+           (strcmp(resolved.package_paths[1], resolved_parent_bundle_path) == 0 &&
+            strcmp(resolved.package_paths[0], resolved_leaf_bundle_path) == 0));
+
+    feng_cli_deps_resolved_dispose(&resolved);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(resolved_leaf_bundle_path);
+    free(resolved_parent_bundle_path);
+    free(leaf_bundle_path);
+    free(parent_bundle_path);
+    free(leaf_source_path);
+    free(leaf_manifest_path);
+    free(parent_source_path);
+    free(parent_manifest_path);
+    free(project_manifest_path);
+    free(leaf_src_dir);
+    free(leaf_dir);
+    free(parent_src_dir);
+    free(parent_dir);
+    free(project_dir);
+    feng_cli_project_error_dispose(&error);
+}
+
 static void test_deps_resolve_requires_registry_for_remote_dependency(void) {
     char template_path[] = "temp/feng_cli_deps_no_registry_XXXXXX";
     char *workspace_dir;
@@ -16022,6 +16134,7 @@ int main(void) {
     test_deps_resolve_uses_global_registry_config();
     test_deps_resolve_installs_remote_transitive_dependencies();
     test_deps_resolve_builds_local_library_dependency();
+    test_deps_resolve_preserves_nested_local_project_dependencies();
     test_deps_resolve_reports_transitive_version_conflict();
     test_deps_resolve_reports_local_dependency_cycle();
     test_deps_add_remote_updates_manifest_and_cache();

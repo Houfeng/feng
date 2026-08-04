@@ -2140,6 +2140,8 @@ static bool resolve_project_dependencies(ResolveState *state,
                     child_slot = state->node_count - 1U;
                 }
                 if (!child->resolved) {
+                    FengCliDepsResolved child_subtree = {0};
+
                     if (!read_project_manifest_from_disk(child_manifest_path, &child_manifest, error)) {
                         free(child_manifest_path);
                         free(project_registry);
@@ -2202,9 +2204,10 @@ static bool resolve_project_dependencies(ResolveState *state,
                     if (!resolve_project_dependencies(state,
                                                       child_manifest_path,
                                                       &child_manifest,
-                                                      &state->nodes[child_slot].subtree,
+                                                      &child_subtree,
                                                       error)) {
                         state->nodes[child_slot].visiting = false;
+                        feng_cli_deps_resolved_dispose(&child_subtree);
                         feng_cli_project_manifest_dispose(&child_manifest);
                         free(child_manifest_path);
                         free(project_registry);
@@ -2215,6 +2218,8 @@ static bool resolve_project_dependencies(ResolveState *state,
                                                            dependency->value,
                                                            error);
                     }
+                    /* Recursion may grow state->nodes, so publish by index after it returns. */
+                    state->nodes[child_slot].subtree = child_subtree;
                     if (state->materialize_local_projects &&
                         !build_local_project_bundle(state->program,
                                                     child_manifest_path,
