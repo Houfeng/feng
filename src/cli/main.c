@@ -101,7 +101,7 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
     feng_cli_print_usage_line(
         stream, "Target sysroot", "%*s[--sysroot=<path>]", project_indent, "");
     fprintf(stream, "\n");
-    fprintf(stream, "Dependence:\n");
+    fprintf(stream, "Dependency:\n");
     feng_cli_print_usage_line(
         stream, "Package name", "  %s deps       add     <pkg-name>", program);
     feng_cli_print_usage_line(
@@ -115,7 +115,7 @@ void feng_cli_print_usage(const char *program, FILE *stream) {
     feng_cli_print_usage_line(
         stream, "Force reinstall", "%*s[--force]", deps_indent, "");
     fprintf(stream, "\n");
-    fprintf(stream, "Compile:\n");
+    fprintf(stream, "Compilation:\n");
     feng_cli_print_usage_line(
         stream, "Project type", "  %s <files>... [--target=bin|lib]", program);
     feng_cli_print_usage_line(stream,

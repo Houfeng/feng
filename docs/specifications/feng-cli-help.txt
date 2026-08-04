@@ -21,7 +21,7 @@ Project:
                   [--platform=<platform>]... Target platform
                   [--sysroot=<path>]         Target sysroot
 
-Dependence:
+Dependency:
   feng deps       add     <pkg-name>         Package name
                           [<path>]           Project root
   feng deps       remove  <pkg-name>         Package name
@@ -29,7 +29,7 @@ Dependence:
   feng deps       install [<path>]           Project root
                           [--force]          Force reinstall
 
-Compile:
+Compilation:
   feng <files>... [--target=bin|lib]         Project type
                   [--platform=<platform>]    Target platform
                   [--sysroot=<path>]         Target sysroot
