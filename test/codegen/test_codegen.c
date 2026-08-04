@@ -7760,6 +7760,58 @@ static void test_generic_union_form_spec_codegen(void) {
     feng_program_free(program);
 }
 
+/* A generic union substitutes T with i32 during semantic analysis.  The
+ * adapted literal type stored on the AST must remain valid after the resolver
+ * context is released and codegen begins. */
+static void test_generic_union_literal_adaptation_type_lifetime(void) {
+    static const char *kSource =
+        "module feng.codegen.uniongenericliteral;\n"
+        "spec Result<T>: string | T;\n"
+        "func value(flag: bool): Result<i32> {\n"
+        "    return if flag { 42 } else { throw \"error\"; };\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "tests/generic_union_literal_adaptation_type_lifetime.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    {
+        bool sem_ok = feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                            &analysis, &errors, &error_count);
+        if (!sem_ok) {
+            for (size_t i = 0U; i < error_count; ++i) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[i].path, errors[i].token.line,
+                        errors[i].token.column, errors[i].message);
+            }
+        }
+        ASSERT(sem_ok);
+    }
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic union literal adaptation): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "(int32_t)INT32_C(42)") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_generic_union_form_match_expr_codegen(void) {
     static const char *kSource =
         "module feng.codegen.uniongenericexpr;\n"
@@ -8619,6 +8671,7 @@ int main(void) {
     test_tuple_managed_slots_codegen();
     test_union_form_spec_codegen();
     test_generic_union_form_spec_codegen();
+    test_generic_union_literal_adaptation_type_lifetime();
     test_generic_union_form_match_expr_codegen();
     test_tuple_union_cleanup_codegen();
     test_tuple_fit_codegen();

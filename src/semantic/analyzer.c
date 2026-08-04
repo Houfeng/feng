@@ -6760,9 +6760,9 @@ static bool validate_block_yields_expression(ResolveContext *context,
 /* Try to adapt a pure numeric literal expression to a numeric member of the
  * given union type.  Iterates over union members; for each member whose type
  * ref resolves to a built-in numeric canonical name, checks whether the
- * literal fits.  On success, sets literal_expr->type to the member's type
- * ref (borrowing the AST lifetime) and returns true.  Returns false if no
- * numeric member can accommodate the literal. */
+ * literal fits.  On success, sets literal_expr->type to a type ref that
+ * remains valid for the analysis lifetime and returns true.  Returns false
+ * if no numeric member can accommodate the literal. */
 static bool adapt_literal_expr_to_union_member(ResolveContext *context,
                                                FengExpr *literal_expr,
                                                const FengDecl *union_decl,
@@ -6780,8 +6780,9 @@ static bool adapt_literal_expr_to_union_member(ResolveContext *context,
         return false;
     }
     for (size_t index = 0U; index < info->member_count; ++index) {
+        const FengTypeRef *declared_member_type_ref = info->members[index].type_ref;
         const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
-            context, union_decl, union_type_ref, info->members[index].type_ref);
+            context, union_decl, union_type_ref, declared_member_type_ref);
         const char *canonical = type_ref_builtin_canonical_name(member_type_ref, context->pointer_size);
         bool member_is_float;
 
@@ -6794,6 +6795,18 @@ static bool adapt_literal_expr_to_union_member(ResolveContext *context,
             continue;
         }
         /* Literal fits this numeric union member. */
+        if (member_type_ref != declared_member_type_ref) {
+            FengTypeRef *persistent_member_type_ref =
+                clone_type_ref_for_inference(member_type_ref);
+
+            if (persistent_member_type_ref == NULL ||
+                !analysis_track_synthetic_type_ref(context->analysis,
+                                                   persistent_member_type_ref)) {
+                free_synthetic_type_ref(persistent_member_type_ref);
+                return false;
+            }
+            member_type_ref = persistent_member_type_ref;
+        }
         literal_expr->type = member_type_ref;
         return true;
     }

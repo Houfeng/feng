@@ -112,7 +112,7 @@ struct FengExpr {
 - `FengTypeRef` 已能表达所有类型：内建标量（`FENG_TYPE_REF_NAMED` 单段，如 `"i32"`）、用户类型（多段 + 泛型参数）、数组（`FENG_TYPE_REF_ARRAY`）、指针（`FENG_TYPE_REF_POINTER`）
 - 语义层完成贴合/推导后，将已有的或合成的 `FengTypeRef *` 挂到节点上
 - codegen 直接用现有的 `cg_resolve_type(cg, expr->type, ...)` 解析为 `CGType`，无需新增辅助函数
-- 生命周期：来自声明的 `FengTypeRef *`（如绑定类型注解、函数参数类型）借用 AST 生命周期；合成的 `FengTypeRef *` 由 `analysis_track_synthetic_type_ref` 管理，与 `FengSemanticAnalysis` 同生命周期
+- 生命周期：来自声明的 `FengTypeRef *`（如绑定类型注解、函数参数类型）借用 AST 生命周期；合成的 `FengTypeRef *` 由 `analysis_track_synthetic_type_ref` 管理，与 `FengSemanticAnalysis` 同生命周期。泛型实例替换产生且由 `ResolveContext` 持有的临时 `FengTypeRef *` 不得直接写入 `FengExpr.type`；写入前必须深拷贝并转交 `FengSemanticAnalysis` 持有，保证 codegen 读取期间有效
 
 **先例**：`FengResolvedCallable`（59 行）已是语义分析结果存储在 AST 节点上的先例；`lambda.captures` 注释为 "filled by the semantic analyzer"；`for_stmt.iter_result_type_ref` 注释为 "Synthesized by the analyzer; lifetime managed by FengSemanticAnalysis.synthesized_type_refs"。
 
