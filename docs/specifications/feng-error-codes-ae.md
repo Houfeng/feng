@@ -114,7 +114,7 @@
 | AE0502 | void 类型使用位置约束 | AE0165 | type 'void' is only valid as a function return type |
 | AE0503 | 返回类型推断失败需显式标注 | AE0223 | function '%.*s' requires an explicit return type because its return type could not be inferred |
 | AE0503 | 返回类型推断失败需显式标注 | AE0224 | method '%.*s.%.*s' requires an explicit return type because its return type could not be inferred |
-| AE0505 | 变参位置数组传递约束 | AE0078 | call target '%s' does not accept an existing array at a variadic argument position; pass elements individually |
+| AE0505 | 变参位置数组传递约束 | AE0078 | call target '%s' does not accept an existing array at a variadic argument position; use explicit '...array' forwarding for the complete variadic group |
 | AE0506 | 可调用签名缺失约束 | AE0079 | call target '%s' has no function type overload accepting %zu argument(s) |
 | AE0507 | 表达式可调用性约束 | AE0080 | expression '%s' is not callable |
 | AE0508 | 方法签名重复声明约束 | AE0110 | duplicate method signature '%.*s' in type '%.*s' |
@@ -135,6 +135,7 @@
 | AE0521 | 目标可调用类型重载消歧约束 | AE0106 | expression '%s' has multiple overloads matching expected function type '%s' |
 | AE0522 | 目标函数类型匹配约束 | AE0107 | expression '%s' does not match expected function type '%s' |
 | AE0523 | 目标函数类型显式标注约束 | AE0135 | expression '%s' requires an explicit target function type to resolve overloads |
+| AE0524 | 预打包变参数组转发约束 | AE0524 | prepacked variadic forwarding requires a variadic call target、prepacked variadic forwarding must begin at the first variadic argument position、prepacked variadic argument must match the target readonly variadic array type |
 
 ## 06/07 Spec段
 

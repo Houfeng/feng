@@ -95,7 +95,7 @@ if (has_variadic) {
   - 检测最后一个参数是否 `is_variadic`；若是，放宽计数检查为 `arg_count >= param_count - 1`（原来是精确相等）。
   - 对变参位的每个实参（索引 `fixed_count` 到 `arg_count-1`），单独调用 `expr_matches_expected_type_ref()` 检查其是否匹配变参元素类型（即 `params[last].type->as.inner`，即 `T[]` 的 inner `T`）。
   - 零实参时（`arg_count == param_count - 1`）：变参位合法，无需额外检查。
-  - 检测"已有 `T[]` 直接传入变参位"：若 `arg_count == param_count` 且第 `last` 个实参的类型是 `T[]`（数组类型），而参数要求的是变参（`is_variadic`），报错："变参位不接受已有数组，请逐个传入元素"，阻止通过。
+  - 检测"已有 `T[]` 作为普通实参直接传入变参位"：若 `arg_count == param_count` 且第 `last` 个实参的类型是 `T[]`（数组类型），而参数要求的是变参（`is_variadic`），报错并提示使用 `...array` 转发完整变参数组，阻止普通数组实参形式通过。
 
 - [x] **S2**：`src/semantic/analyzer.c`，`callable_parameters_match_args()`（line ~7000-7215）  
   **目标**：通过 callable-form spec 值调用时同样支持变参匹配。  

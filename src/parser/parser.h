@@ -202,6 +202,10 @@ struct FengExpr {
     FengToken token;
     FengExprKind kind;
     const FengTypeRef *type;  /* filled by the semantic analyzer; NULL means not inferred */
+    /* True only when this expression is the final argument in `call(...expr)`.
+     * The marker belongs to the containing call syntax and instructs semantic
+     * analysis/codegen to pass this array as an already packed variadic group. */
+    bool is_prepacked_variadic_arg;
     union {
         FengSlice identifier;
         bool boolean;

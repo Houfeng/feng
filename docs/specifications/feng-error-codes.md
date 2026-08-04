@@ -68,7 +68,7 @@
 | **AE0074** | 异常捕获错误 | '%s' cannot appear directly inside a catch block; |
 | **AE0075** | 语义检查错误 | '%s' statement is only allowed inside a 'while' or 'for' loop |
 | **AE0077** | 异常抛出错误 | throw statement requires a non-void expression |
-| **AE0078** | 调用目标无效 | call target '%s' does not accept an existing array at a variadic argument position; pass elements individually |
+| **AE0078** | 调用目标无效 | call target '%s' does not accept an existing array at a variadic argument position; use explicit '...array' forwarding for the complete variadic group |
 | **AE0079** | 调用目标无效 | call target '%s' has no function type overload accepting %zu argument(s) |
 | **AE0080** | 调用目标无效 | expression '%s' is not callable |
 | **AE0081** | 访问权限不足 | static member '%.*s' of type '%.*s' is not accessible from the current module |

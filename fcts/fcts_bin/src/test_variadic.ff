@@ -3,6 +3,7 @@ module fcts_bin;
 import std.io;
 import std.test;
 import std.collections;
+import fcts_lib.helper;
 
 // 变长参数函数
 func join_strings(sep: string, parts: string...): string {
@@ -22,8 +23,55 @@ func count_args(items: int...): int {
   return items.length();
 }
 
+// 零分配转发已有变参数组
+func forward_join_strings(sep: string, parts: string...): string {
+  return join_strings(sep, ...parts);
+}
+
+func receives_same_array(expected: int[], actual: int...): bool {
+  return expected == actual;
+}
+
+func generic_count_args<T>(items: T...): int {
+  return items.length();
+}
+
+func generic_forward_args<T>(items: T...): int {
+  return generic_count_args<T>(...items);
+}
+
+type VariadicRelay {
+  func count(items: int...): int {
+    return items.length();
+  }
+
+  func forward(items: int...): int {
+    return self.count(...items);
+  }
+
+  static func forwardStatic(items: int...): int {
+    return count_args(...items);
+  }
+
+  func genericForward<T>(items: T...): int {
+    return 1;
+  }
+
+  static func genericForwardStatic<T>(items: T...): int {
+    return 1;
+  }
+}
+
+var prepacked_eval_count: int = 0;
+
+func make_prepacked_args(): int[] {
+  prepacked_eval_count += 1;
+  return [7, 8];
+}
+
 // callable-form spec 中的变长参数
 spec Printer(args: string...): void;
+spec VariadicCounter(args: int...): int;
 
 /** 变长参数测试 */
 open func test_variadic() {
@@ -54,6 +102,66 @@ open func test_variadic() {
       };
       p("hello", "world");
       assert(true, "variadic callable-form spec");
+    });
+
+    test("prepacked variadic function forwarding", () {
+      let words: string[] = ["a", "b", "c"];
+      let result = forward_join_strings("-", ...words);
+      assert(result == "a-b-c", "prepacked variadic function forwarding");
+    });
+
+    test("prepacked variadic empty array", () {
+      let empty: int[] = [];
+      assert(count_args(...empty) == 0, "prepacked variadic empty array");
+    });
+
+    test("prepacked variadic preserves array identity", () {
+      let values: int[] = [1, 2, 3];
+      assert(receives_same_array(values, ...values),
+             "prepacked variadic preserves array identity");
+    });
+
+    test("prepacked variadic method forwarding", () {
+      let values: int[] = [1, 2, 3, 4];
+      let relay = VariadicRelay {};
+      assert(relay.forward(...values) == 4,
+             "prepacked variadic instance method forwarding");
+      assert(VariadicRelay.forwardStatic(...values) == 4,
+             "prepacked variadic static method forwarding");
+    });
+
+    test("prepacked generic variadic forwarding", () {
+      let values: int[] = [1, 2, 3];
+      let relay = VariadicRelay {};
+      assert(generic_forward_args(...values) == 3,
+             "prepacked generic function inference");
+      assert(relay.genericForward<int>(...values) == 1,
+             "prepacked generic instance method forwarding");
+      assert(VariadicRelay.genericForwardStatic<int>(...values) == 1,
+             "prepacked generic static method forwarding");
+    });
+
+    test("prepacked callable-form spec forwarding", () {
+      let counter: VariadicCounter = (args: int...) {
+        return args.length();
+      };
+      let values: int[] = [4, 5];
+      assert(counter(...values) == 2,
+             "prepacked callable-form spec forwarding");
+    });
+
+    test("prepacked cross-package variadic forwarding", () {
+      let values: int[] = [6, 7, 8];
+      assert(lib_count_args(...values) == 3,
+             "prepacked cross-package variadic forwarding");
+    });
+
+    test("prepacked expression evaluates once", () {
+      prepacked_eval_count = 0;
+      assert(count_args(...make_prepacked_args()) == 2,
+             "prepacked expression result");
+      assert(prepacked_eval_count == 1,
+             "prepacked expression evaluates once");
     });
   });
 }

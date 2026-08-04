@@ -14808,6 +14808,42 @@ static bool cg_pack_variadic_args(CG *cg,
     return true;
 }
 
+/* Produce the normalized array argument for a variadic call.  Ordinary calls
+ * allocate and pack their variadic suffix; an explicit final `...expr` is
+ * evaluated once as the already packed array and passed through unchanged. */
+static bool cg_emit_variadic_array_arg(CG *cg,
+                                       const FengExpr *call,
+                                       size_t fixed_count,
+                                       const CGType *array_type,
+                                       ExprResult *out) {
+    const FengExpr *last_arg;
+
+    if (call == NULL || call->kind != FENG_EXPR_CALL || array_type == NULL ||
+        array_type->kind != CG_TYPE_ARRAY) {
+        return false;
+    }
+    last_arg = call->as.call.arg_count > 0U
+                   ? call->as.call.args[call->as.call.arg_count - 1U]
+                   : NULL;
+    if (last_arg != NULL && last_arg->is_prepacked_variadic_arg) {
+        if (call->as.call.arg_count != fixed_count + 1U) {
+            return cg_fail(
+                cg,
+                call->token,
+                "CE0123", "codegen: prepacked variadic argument is not at the first variadic position");
+        }
+        return cg_emit_expr_for_expected_type(cg, last_arg, array_type, out);
+    }
+
+    return cg_pack_variadic_args(
+        cg,
+        &call->token,
+        call->as.call.args != NULL ? call->as.call.args + fixed_count : NULL,
+        call->as.call.arg_count - fixed_count,
+        array_type->element,
+        out);
+}
+
 static bool cg_emit_registered_call(CG *cg,
                                     const FengExpr *e,
                                     const FreeFn *fn,
@@ -14894,14 +14930,10 @@ static bool cg_emit_registered_call(CG *cg,
 
     /* Pack variadic arguments into a FengArray* and append as the last argument. */
     if (ok && fn_is_variadic) {
-        const CGType *elem_type = fn->param_types[fn->param_count - 1U]->element;
-        size_t variadic_arg_count = e->as.call.arg_count - fixed_count;
+        const CGType *array_type = fn->param_types[fn->param_count - 1U];
         ExprResult varr;
 
-        if (!cg_pack_variadic_args(cg, &e->token,
-                                   e->as.call.args ? e->as.call.args + fixed_count : NULL,
-                                   variadic_arg_count,
-                                   elem_type, &varr)) {
+        if (!cg_emit_variadic_array_arg(cg, e, fixed_count, array_type, &varr)) {
             ok = false;
         } else {
             if (cgtype_is_managed(varr.type) && varr.owns_ref) {
@@ -15231,14 +15263,13 @@ static bool cg_emit_callable_value_call(CG *cg,
 
     if (is_variadic) {
         ExprResult varr;
-        size_t variadic_arg_count = e->as.call.arg_count - fixed_count;
 
-        if (!cg_pack_variadic_args(cg,
-                                   &e->token,
-                                   e->as.call.args ? e->as.call.args + fixed_count : NULL,
-                                   variadic_arg_count,
-                                   spec->callable_param_types[spec->callable_param_count - 1U]->element,
-                                   &varr)) {
+        if (!cg_emit_variadic_array_arg(
+                cg,
+                e,
+                fixed_count,
+                spec->callable_param_types[spec->callable_param_count - 1U],
+                &varr)) {
             buf_free(&args_buf);
             return false;
         }
@@ -15370,12 +15401,12 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
         ExprResult varr;
         Buf addr; buf_init(&addr);
 
-        if (!cg_pack_variadic_args(cg,
-                                   &e->token,
-                                   e->as.call.args ? e->as.call.args + fixed_count : NULL,
-                                   e->as.call.arg_count - fixed_count,
-                                   constraint->callable_param_types[constraint->callable_param_count - 1U]->element,
-                                   &varr)) {
+        if (!cg_emit_variadic_array_arg(
+                cg,
+                e,
+                fixed_count,
+                constraint->callable_param_types[constraint->callable_param_count - 1U],
+                &varr)) {
             ok = false;
         } else {
             if ((cgtype_is_managed(varr.type) || cgtype_is_aggregate(varr.type)) && varr.owns_ref) {
@@ -16351,10 +16382,15 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         const CGType *variadic_elem_type = um->param_types[um->param_count - 1U] != NULL
             ? um->param_types[um->param_count - 1U]->element
             : NULL;
+        bool has_prepacked_variadic_arg =
+            arg_count > 0U &&
+            e->as.call.args[arg_count - 1U]->is_prepacked_variadic_arg;
         for (size_t i = fixed_param_count; i < arg_count; ++i) {
             if (!cg_emit_expr_for_expected_type(cg,
                                                 e->as.call.args[i],
-                                                variadic_elem_type,
+                                                has_prepacked_variadic_arg
+                                                    ? um->param_types[um->param_count - 1U]
+                                                    : variadic_elem_type,
                                                 &args[i])) {
                 ok = false;
                 goto cleanup;
@@ -16469,14 +16505,30 @@ static bool cg_emit_generic_static_method_call(CG *cg,
 
     /* Pack variadic arguments into an array for the last parameter slot. */
     if (method_is_variadic) {
-        size_t variadic_arg_count = arg_count - fixed_param_count;
-        const CGType *elem_type = um->param_types[um->param_count - 1U]->element;
         ExprResult varr;
+        bool has_prepacked_variadic_arg =
+            arg_count > 0U &&
+            e->as.call.args[arg_count - 1U]->is_prepacked_variadic_arg;
 
-        if (!cg_pack_variadic_args(cg, &e->token,
-                                   e->as.call.args ? e->as.call.args + fixed_param_count : NULL,
-                                   variadic_arg_count,
-                                   elem_type, &varr)) {
+        if (has_prepacked_variadic_arg) {
+            if (arg_count != fixed_param_count + 1U) {
+                cg_fail(cg,
+                        e->token,
+                        "CE0123", "codegen: prepacked variadic argument is not at the first variadic position");
+                ok = false;
+                goto cleanup;
+            }
+            varr = args[fixed_param_count];
+            er_init(&args[fixed_param_count]);
+        } else if (!cg_pack_variadic_args(
+                       cg,
+                       &e->token,
+                       e->as.call.args != NULL
+                           ? e->as.call.args + fixed_param_count
+                           : NULL,
+                       arg_count - fixed_param_count,
+                       um->param_types[um->param_count - 1U]->element,
+                       &varr)) {
             ok = false;
             goto cleanup;
         }
@@ -16815,16 +16867,11 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
         er_free(&arg);
     }
     if (um->is_variadic) {
-        const CGType *elem_type = um->param_types[um->param_count - 1U]->element;
-        size_t variadic_arg_count = e->as.call.arg_count - fixed_arg_limit;
+        const CGType *array_type = um->param_types[um->param_count - 1U];
         ExprResult varr;
 
-        if (!cg_pack_variadic_args(cg,
-                                   &e->token,
-                                   e->as.call.args + fixed_arg_limit,
-                                   variadic_arg_count,
-                                   elem_type,
-                                   &varr)) {
+        if (!cg_emit_variadic_array_arg(
+                cg, e, fixed_arg_limit, array_type, &varr)) {
             buf_free(&args_buf);
             return false;
         }
@@ -17763,13 +17810,10 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         }
         /* Pack variadic arguments into a FengArray* and append as the last argument. */
         if (um->is_variadic) {
-            const CGType *elem_type = um->param_types[um->param_count - 1U]->element;
-            size_t variadic_arg_count = e->as.call.arg_count - fixed_arg_limit;
+            const CGType *array_type = um->param_types[um->param_count - 1U];
             ExprResult varr;
-            if (!cg_pack_variadic_args(cg, &e->token,
-                                       e->as.call.args + fixed_arg_limit,
-                                       variadic_arg_count,
-                                       elem_type, &varr)) {
+            if (!cg_emit_variadic_array_arg(
+                    cg, e, fixed_arg_limit, array_type, &varr)) {
                 buf_free(&args_buf); er_free(&recv); return false;
             }
             if (cgtype_is_managed(varr.type) && varr.owns_ref) {
@@ -29152,23 +29196,59 @@ cleanup:
 /* Helper: infer the concrete CGType for type parameter `tp_idx` from
  * the actual call arguments.  Returns a cloned (heap-owned) CGType or NULL
  * if inference failed. */
-static CGType *cg_infer_type_arg(const GenericFn *gfn, size_t tp_idx,
-                                  ExprResult *args, size_t arg_count) {
+static CGType *cg_infer_type_arg(const GenericFn *gfn,
+                                 size_t tp_idx,
+                                 const FengExpr *call,
+                                 ExprResult *args,
+                                 size_t arg_count) {
     const FengCallableSignature *sig = &gfn->decl->as.function_decl;
     size_t param_count = sig->param_count;
     size_t n = arg_count < param_count ? arg_count : param_count;
     for (size_t i = 0; i < n; i++) {
         const FengParameter *p = &sig->params[i];
+        const char *tpname = gfn->type_param_names[tp_idx];
+
+        if (p->type == NULL) continue;
         /* A type param ref is: single-segment NAMED with 0 type_args whose
          * name matches the type param. */
-        if (!p->type || p->type->kind != FENG_TYPE_REF_NAMED) continue;
-        if (p->type->as.named.segment_count != 1) continue;
-        if (p->type->as.named.type_arg_count != 0) continue;
-        const FengSlice *seg = &p->type->as.named.segments[0];
-        const char *tpname = gfn->type_param_names[tp_idx];
-        if (seg->length == strlen(tpname) &&
-            memcmp(seg->data, tpname, seg->length) == 0) {
-            return cgtype_clone(args[i].type);
+        if (p->type->kind == FENG_TYPE_REF_NAMED &&
+            p->type->as.named.segment_count == 1U &&
+            p->type->as.named.type_arg_count == 0U) {
+            const FengSlice *segment = &p->type->as.named.segments[0];
+
+            if (segment->length == strlen(tpname) &&
+                memcmp(segment->data, tpname, segment->length) == 0) {
+                return cgtype_clone(args[i].type);
+            }
+        }
+
+        /* A variadic T... parameter is normalized to T[].  An explicit
+         * `...expr` actual already has that complete array shape, so infer T
+         * from its element type.  Ordinary generic variadic inference keeps
+         * its pre-existing codegen behavior. */
+        if (p->is_variadic &&
+            p->type->kind == FENG_TYPE_REF_ARRAY &&
+            p->type->as.inner != NULL &&
+            p->type->as.inner->kind == FENG_TYPE_REF_NAMED &&
+            p->type->as.inner->as.named.segment_count == 1U &&
+            p->type->as.inner->as.named.type_arg_count == 0U) {
+            const FengSlice *inner = &p->type->as.inner->as.named.segments[0];
+
+            if (inner->length != strlen(tpname) ||
+                memcmp(inner->data, tpname, inner->length) != 0) {
+                continue;
+            }
+            if (call == NULL || call->kind != FENG_EXPR_CALL ||
+                i >= call->as.call.arg_count ||
+                !call->as.call.args[i]->is_prepacked_variadic_arg) {
+                continue;
+            }
+            if (args[i].type == NULL ||
+                args[i].type->kind != CG_TYPE_ARRAY ||
+                args[i].type->element == NULL) {
+                return NULL;
+            }
+            return cgtype_clone(args[i].type->element);
         }
     }
     return NULL;
@@ -29720,7 +29800,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     if (!e->as.call.has_explicit_type_args) {
         /* Infer type arguments from actual argument types. */
         for (size_t i = 0; i < tp_count && ok; i++) {
-            type_args[i] = cg_infer_type_arg(gfn, i, args, arg_count);
+            type_args[i] = cg_infer_type_arg(gfn, i, e, args, arg_count);
             if (!type_args[i]) {
                 cg_fail(cg, e->token,
                     "CE0308", "codegen: cannot infer type argument %zu for generic function '%s'",

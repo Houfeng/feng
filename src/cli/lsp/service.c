@@ -2997,7 +2997,7 @@ static void wait_for_initial_query_state(FengLspService *service) {
     if (service == NULL || clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
         return;
     }
-    deadline.tv_nsec += 8L * 1000L * 1000L;
+    deadline.tv_nsec += 16L * 1000L * 1000L;
     if (deadline.tv_nsec >= 1000L * 1000L * 1000L) {
         ++deadline.tv_sec;
         deadline.tv_nsec -= 1000L * 1000L * 1000L;
@@ -17062,7 +17062,7 @@ static void wait_for_program_import_indexes(FengLspService *service,
         clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
         return;
     }
-    deadline.tv_nsec += 8L * 1000L * 1000L;
+    deadline.tv_nsec += 16L * 1000L * 1000L;
     if (deadline.tv_nsec >= 1000L * 1000L * 1000L) {
         ++deadline.tv_sec;
         deadline.tv_nsec -= 1000L * 1000L * 1000L;

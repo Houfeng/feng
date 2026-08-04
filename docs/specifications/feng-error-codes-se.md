@@ -148,6 +148,7 @@
 |----------|------|-------------|
 | SE1001 | 对象字面量字段缺少冒号 | expected ':' after object literal field name |
 | SE1002 | 对象字面量字符缺失 | expected '{' to start object literal、expected '}' to close object literal |
+| SE1003 | 预打包变参数组位置不合法 | prepacked variadic forwarding is only allowed before the final call argument、prepacked variadic forwarding must be the last call argument |
 
 > 注：算术/关系/逻辑运算符的语法错误在当前源码中未出现独立的 SE 错误码（这些在语义阶段 AE 中检查），SE10XX 目前仅覆盖对象字面量相关。后续如有新增可直接扩展。
 

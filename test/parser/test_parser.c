@@ -2393,6 +2393,76 @@ static void test_variadic_parameter_parses(void) {
     feng_program_free(program);
 }
 
+/* A final `...expr` call argument is retained explicitly in the AST. */
+static void test_prepacked_variadic_call_argument_parses(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func sink(level: int, values: int...): void { return; }\n"
+        "func forward(level: int, values: int...): void {\n"
+        "    sink(level, ...values);\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *forward_decl;
+    const FengExpr *call;
+
+    ASSERT(feng_parse_source(source, strlen(source), "prepacked_variadic_arg.f",
+                             &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 2U);
+    forward_decl = program->declarations[1];
+    ASSERT(forward_decl->kind == FENG_DECL_FUNCTION);
+    ASSERT(forward_decl->as.function_decl.body->statement_count == 1U);
+    call = forward_decl->as.function_decl.body->statements[0]->as.expr;
+    ASSERT(call->kind == FENG_EXPR_CALL);
+    ASSERT(call->as.call.arg_count == 2U);
+    ASSERT(!call->as.call.args[0]->is_prepacked_variadic_arg);
+    ASSERT(call->as.call.args[1]->is_prepacked_variadic_arg);
+    ASSERT(call->as.call.args[1]->kind == FENG_EXPR_IDENTIFIER);
+    assert_slice_text(call->as.call.args[1]->as.identifier, "values");
+
+    feng_program_free(program);
+}
+
+/* A prepacked variadic argument is syntactically required to be final. */
+static void test_prepacked_variadic_call_argument_must_be_last(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func sink(values: int...): void { return; }\n"
+        "func bad(values: int[]): void {\n"
+        "    sink(...values, 3);\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "prepacked_variadic_not_last.f",
+                              &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.code != NULL);
+    ASSERT(strcmp(error.code, "SE1003") == 0);
+    ASSERT(strstr(error.message,
+                  "prepacked variadic forwarding must be the last call argument") != NULL);
+}
+
+/* `...expr` is not a general prefix expression outside a call argument. */
+static void test_prepacked_variadic_marker_requires_call_argument(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func bad(values: int[]): int[] {\n"
+        "    return ...values;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "prepacked_variadic_outside_call.f",
+                              &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.code != NULL);
+    ASSERT(strcmp(error.code, "SE1003") == 0);
+    ASSERT(strstr(error.message,
+                  "prepacked variadic forwarding is only allowed before the final call argument") != NULL);
+}
+
 /* T4: variadic parameter must be the last parameter. */
 static void test_parse_error_variadic_not_last(void) {
     const char *source =
@@ -3230,6 +3300,9 @@ int main(void) {
     test_generic_target_expression_argument_parses();
     test_generic_type_target_member_parses();
     test_variadic_parameter_parses();
+    test_prepacked_variadic_call_argument_parses();
+    test_prepacked_variadic_call_argument_must_be_last();
+    test_prepacked_variadic_marker_requires_call_argument();
     test_parse_error_variadic_not_last();
     test_parse_error_extern_fn_variadic();
     test_tuple_type_declaration_parses();

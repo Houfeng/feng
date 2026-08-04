@@ -232,9 +232,20 @@ typedef enum ConstructorResolutionKind {
     FENG_CONSTRUCTOR_RESOLUTION_AMBIGUOUS
 } ConstructorResolutionKind;
 
+/* Reason a call candidate rejected an explicit `...expr` argument.  Larger
+ * values are more specific and win when an overload set contains candidates
+ * with different rejection reasons. */
+typedef enum PrepackedVariadicRejection {
+    FENG_PREPACKED_VARIADIC_REJECTION_NONE = 0,
+    FENG_PREPACKED_VARIADIC_REJECTION_TARGET_NOT_VARIADIC,
+    FENG_PREPACKED_VARIADIC_REJECTION_NOT_FIRST_VARIADIC,
+    FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH
+} PrepackedVariadicRejection;
+
 typedef struct ConstructorResolution {
     ConstructorResolutionKind kind;
     const FengTypeMember *constructor;
+    PrepackedVariadicRejection prepacked_variadic_rejection;
 } ConstructorResolution;
 
 typedef enum FunctionCallResolutionKind {
@@ -248,6 +259,7 @@ typedef struct FunctionCallResolution {
     const FengDecl *decl;
     const FengCallableSignature *callable;
     bool rejected_existing_array_for_variadic;
+    PrepackedVariadicRejection prepacked_variadic_rejection;
     int match_priority;
     const FengTypeMember *member;       /* set for type-method / fit-method */
     const FengDecl *owner_type_decl;    /* set for type-method / fit-method */
@@ -11017,13 +11029,14 @@ static bool callable_collect_call_type_args(ResolveContext *context,
             }
             continue;
         }
-        if (!allow_wrapped_inference ||
+        if ((!allow_wrapped_inference &&
+             !call_expr->as.call.args[arg_index]->is_prepacked_variadic_arg) ||
             !callable_type_ref_contains_type_params(callable, param_type)) {
             continue;
         }
-        /* Wrapped-shape inference such as `T[]` -> `int[]` is intentionally
-         * scoped to generic extern calls. Ordinary callable matching keeps the
-         * pre-existing direct-`T` inference surface unchanged. */
+        /* Wrapped-shape inference such as `T[]` -> `int[]` remains scoped to
+         * generic extern calls, except that explicit prepacked variadic arrays
+         * necessarily expose the normalized T[] parameter shape. */
         if (!callable_collect_type_args_from_arg_expr(context,
                                                       callable,
                                                       param_type,
@@ -11059,6 +11072,56 @@ static int compute_overload_match_priority(bool has_explicit_type_args,
     return exactly_match ? 0 : 1;
 }
 
+/* Return the explicit prepacked-variadic argument index, if one is present. */
+static bool find_prepacked_variadic_arg(FengExpr *const *args,
+                                        size_t arg_count,
+                                        size_t *out_index) {
+    size_t index;
+
+    if (out_index != NULL) {
+        *out_index = 0U;
+    }
+    for (index = 0U; index < arg_count; ++index) {
+        if (args != NULL && args[index] != NULL &&
+            args[index]->is_prepacked_variadic_arg) {
+            if (out_index != NULL) {
+                *out_index = index;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Validate the call-shape constraints that do not require expression typing. */
+static PrepackedVariadicRejection prepacked_variadic_shape_rejection(
+    FengExpr *const *args,
+    size_t arg_count,
+    bool is_variadic,
+    size_t fixed_count) {
+    size_t spread_index;
+
+    if (!find_prepacked_variadic_arg(args, arg_count, &spread_index)) {
+        return FENG_PREPACKED_VARIADIC_REJECTION_NONE;
+    }
+    if (!is_variadic) {
+        return FENG_PREPACKED_VARIADIC_REJECTION_TARGET_NOT_VARIADIC;
+    }
+    if (spread_index != fixed_count || spread_index + 1U != arg_count) {
+        return FENG_PREPACKED_VARIADIC_REJECTION_NOT_FIRST_VARIADIC;
+    }
+    return FENG_PREPACKED_VARIADIC_REJECTION_NONE;
+}
+
+/* Preserve the most specific rejection observed while probing overloads. */
+static void merge_prepacked_variadic_rejection(
+    PrepackedVariadicRejection *target,
+    PrepackedVariadicRejection candidate) {
+    if (target != NULL && candidate > *target) {
+        *target = candidate;
+    }
+}
+
 /* Top-level callable matcher. Ordinary parameters still use the normal
  * expected-type check; only parameter shapes that mention type params may
  * divert into generic argument collection, and only when the caller has opted
@@ -11068,7 +11131,8 @@ static bool callable_parameters_match_args(ResolveContext *context,
                                            FengExpr *const *args,
                                            size_t arg_count,
                                            bool allow_wrapped_inference,
-                                           bool *out_rejected_existing_array_for_variadic) {
+                                           bool *out_rejected_existing_array_for_variadic,
+                                           PrepackedVariadicRejection *out_prepacked_variadic_rejection) {
     size_t arg_index;
     FengTypeRef **type_args = NULL;
     bool *owned_type_args = NULL;
@@ -11076,6 +11140,8 @@ static bool callable_parameters_match_args(ResolveContext *context,
     bool is_variadic = callable->param_count > 0U &&
                        callable->params[callable->param_count - 1U].is_variadic;
     size_t fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
+    PrepackedVariadicRejection spread_rejection =
+        prepacked_variadic_shape_rejection(args, arg_count, is_variadic, fixed_count);
     /* Suppress literal type commit during overload candidate probing so that
      * each candidate test does not overwrite the literal node's type field. */
     bool saved_suppress = context->suppress_literal_type_commit;
@@ -11083,6 +11149,13 @@ static bool callable_parameters_match_args(ResolveContext *context,
 
     if (out_rejected_existing_array_for_variadic != NULL) {
         *out_rejected_existing_array_for_variadic = false;
+    }
+    if (out_prepacked_variadic_rejection != NULL) {
+        *out_prepacked_variadic_rejection = spread_rejection;
+    }
+    if (spread_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+        context->suppress_literal_type_commit = saved_suppress;
+        return false;
     }
 
     if (is_variadic) {
@@ -11110,7 +11183,7 @@ static bool callable_parameters_match_args(ResolveContext *context,
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
         const FengTypeRef *param_type;
 
-        if (arg_index < fixed_count) {
+        if (arg_index < fixed_count || args[arg_index]->is_prepacked_variadic_arg) {
             param_type = callable->params[arg_index].type;
         } else {
             /* Variadic position: match against element type T (stored as T[]->inner). */
@@ -11146,6 +11219,27 @@ static bool callable_parameters_match_args(ResolveContext *context,
             continue;
         }
 
+        /* A prepacked variadic array provides the concrete shape of the
+         * normalized T[] parameter, so generic variadic element types can be
+         * collected without enabling wrapped inference for ordinary args. */
+        if (args[arg_index]->is_prepacked_variadic_arg &&
+            callable_type_ref_contains_type_params(callable, param_type)) {
+            ok = callable_collect_type_args_from_arg_expr(context,
+                                                          callable,
+                                                          param_type,
+                                                          args[arg_index],
+                                                          type_args,
+                                                          owned_type_args);
+            if (!ok) {
+                if (out_prepacked_variadic_rejection != NULL) {
+                    *out_prepacked_variadic_rejection =
+                        FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH;
+                }
+                break;
+            }
+            continue;
+        }
+
         if (allow_wrapped_inference &&
             arg_index < fixed_count &&
             callable_type_ref_contains_type_params(callable, param_type)) {
@@ -11162,6 +11256,11 @@ static bool callable_parameters_match_args(ResolveContext *context,
         }
 
         if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
+            if (out_prepacked_variadic_rejection != NULL &&
+                args[arg_index]->is_prepacked_variadic_arg) {
+                *out_prepacked_variadic_rejection =
+                    FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH;
+            }
             if (out_rejected_existing_array_for_variadic != NULL &&
                 is_variadic &&
                 arg_count == callable->param_count &&
@@ -11224,7 +11323,8 @@ static bool callable_parameters_match_args_for_owner_instance(
     FengExpr *const *args,
     size_t arg_count,
     bool allow_wrapped_inference,
-    bool *out_rejected_existing_array_for_variadic) {
+    bool *out_rejected_existing_array_for_variadic,
+    PrepackedVariadicRejection *out_prepacked_variadic_rejection) {
     size_t arg_index;
     FengTypeRef **type_args = NULL;
     bool *owned_type_args = NULL;
@@ -11232,6 +11332,8 @@ static bool callable_parameters_match_args_for_owner_instance(
     bool is_variadic = callable->param_count > 0U &&
                        callable->params[callable->param_count - 1U].is_variadic;
     size_t fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
+    PrepackedVariadicRejection spread_rejection =
+        prepacked_variadic_shape_rejection(args, arg_count, is_variadic, fixed_count);
     /* Suppress literal type commit during overload candidate probing so that
      * each candidate test does not overwrite the literal node's type field. */
     bool saved_suppress = context->suppress_literal_type_commit;
@@ -11239,6 +11341,13 @@ static bool callable_parameters_match_args_for_owner_instance(
 
     if (out_rejected_existing_array_for_variadic != NULL) {
         *out_rejected_existing_array_for_variadic = false;
+    }
+    if (out_prepacked_variadic_rejection != NULL) {
+        *out_prepacked_variadic_rejection = spread_rejection;
+    }
+    if (spread_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+        context->suppress_literal_type_commit = saved_suppress;
+        return false;
     }
 
     if (is_variadic) {
@@ -11266,7 +11375,7 @@ static bool callable_parameters_match_args_for_owner_instance(
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
         const FengTypeRef *param_type;
 
-        if (arg_index < fixed_count) {
+        if (arg_index < fixed_count || args[arg_index]->is_prepacked_variadic_arg) {
             param_type = callable->params[arg_index].type;
         } else {
             /* Variadic position: match against element type T (stored as T[]->inner). */
@@ -11302,7 +11411,7 @@ static bool callable_parameters_match_args_for_owner_instance(
             continue;
         }
 
-        if (arg_index < fixed_count) {
+        if (arg_index < fixed_count || args[arg_index]->is_prepacked_variadic_arg) {
             param_type = substitute_type_ref_for_owner_instance(context,
                                                                 owner_type_decl,
                                                                 owner_type,
@@ -11317,6 +11426,23 @@ static bool callable_parameters_match_args_for_owner_instance(
             resolve_function_type_decl(context, param_type) == NULL) {
             ok = false;
             break;
+        }
+        if (args[arg_index]->is_prepacked_variadic_arg &&
+            callable_type_ref_contains_type_params(callable, param_type)) {
+            ok = callable_collect_type_args_from_arg_expr(context,
+                                                          callable,
+                                                          param_type,
+                                                          args[arg_index],
+                                                          type_args,
+                                                          owned_type_args);
+            if (!ok) {
+                if (out_prepacked_variadic_rejection != NULL) {
+                    *out_prepacked_variadic_rejection =
+                        FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH;
+                }
+                break;
+            }
+            continue;
         }
         if (allow_wrapped_inference &&
             arg_index < fixed_count &&
@@ -11333,6 +11459,11 @@ static bool callable_parameters_match_args_for_owner_instance(
             continue;
         }
         if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
+            if (out_prepacked_variadic_rejection != NULL &&
+                args[arg_index]->is_prepacked_variadic_arg) {
+                *out_prepacked_variadic_rejection =
+                    FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH;
+            }
             if (out_rejected_existing_array_for_variadic != NULL &&
                 is_variadic &&
                 arg_count == callable->param_count &&
@@ -11407,6 +11538,10 @@ static bool callable_parameters_exactly_match_args(
     is_variadic = callable->param_count > 0U &&
                   callable->params[callable->param_count - 1U].is_variadic;
     fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
+    if (prepacked_variadic_shape_rejection(args, arg_count, is_variadic, fixed_count) !=
+        FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+        return false;
+    }
     if (is_variadic) {
         if (arg_count < fixed_count) {
             return false;
@@ -11416,9 +11551,10 @@ static bool callable_parameters_exactly_match_args(
     }
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
-        const FengTypeRef *param_type = arg_index < fixed_count
-                                            ? callable->params[arg_index].type
-                                            : callable->params[fixed_count].type->as.inner;
+        const FengTypeRef *param_type =
+            arg_index < fixed_count || args[arg_index]->is_prepacked_variadic_arg
+                ? callable->params[arg_index].type
+                : callable->params[fixed_count].type->as.inner;
 
         if (!inferred_expr_type_exactly_matches_type_ref(context,
                                                          infer_expr_type(context, args[arg_index]),
@@ -11447,6 +11583,10 @@ static bool callable_parameters_exactly_match_args_for_owner_instance(
     is_variadic = callable->param_count > 0U &&
                   callable->params[callable->param_count - 1U].is_variadic;
     fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
+    if (prepacked_variadic_shape_rejection(args, arg_count, is_variadic, fixed_count) !=
+        FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+        return false;
+    }
     if (is_variadic) {
         if (arg_count < fixed_count) {
             return false;
@@ -11456,9 +11596,10 @@ static bool callable_parameters_exactly_match_args_for_owner_instance(
     }
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
-        const FengTypeRef *param_type = arg_index < fixed_count
-                                            ? callable->params[arg_index].type
-                                            : callable->params[fixed_count].type->as.inner;
+        const FengTypeRef *param_type =
+            arg_index < fixed_count || args[arg_index]->is_prepacked_variadic_arg
+                ? callable->params[arg_index].type
+                : callable->params[fixed_count].type->as.inner;
 
         param_type = substitute_type_ref_for_owner_instance(context,
                                                             owner_type_decl,
@@ -11914,15 +12055,22 @@ static ConstructorResolution resolve_accessible_constructor_overload(
             fit_body_blocks_private_access(context, type_decl, member)) {
             continue;
         }
+        PrepackedVariadicRejection spread_rejection =
+            FENG_PREPACKED_VARIADIC_REJECTION_NONE;
         if (use_owner_substitution) {
             if (!callable_parameters_match_args_for_owner_instance(
                     context, &member->as.callable, type_decl, NULL, owner_type,
-                    args, arg_count, false, NULL)) {
+                    args, arg_count, false, NULL, &spread_rejection)) {
+                merge_prepacked_variadic_rejection(
+                    &result.prepacked_variadic_rejection, spread_rejection);
                 continue;
             }
         } else {
             if (!callable_parameters_match_args(
-                    context, &member->as.callable, args, arg_count, false, NULL)) {
+                    context, &member->as.callable, args, arg_count, false, NULL,
+                    &spread_rejection)) {
+                merge_prepacked_variadic_rejection(
+                    &result.prepacked_variadic_rejection, spread_rejection);
                 continue;
             }
         }
@@ -11966,16 +12114,21 @@ static FunctionCallResolution resolve_top_level_function_overload(
             continue;
         }
         bool rejected_existing_array_for_variadic = false;
+        PrepackedVariadicRejection spread_rejection =
+            FENG_PREPACKED_VARIADIC_REJECTION_NONE;
 
         if (!callable_parameters_match_args(context,
                                             &decl->as.function_decl,
                                             args,
                                             arg_count,
                                             decl->is_extern,
-                                            &rejected_existing_array_for_variadic)) {
+                                            &rejected_existing_array_for_variadic,
+                                            &spread_rejection)) {
             if (rejected_existing_array_for_variadic) {
                 result.rejected_existing_array_for_variadic = true;
             }
+            merge_prepacked_variadic_rejection(
+                &result.prepacked_variadic_rejection, spread_rejection);
             continue;
         }
 
@@ -12182,13 +12335,17 @@ static bool function_type_parameters_match_args(ResolveContext *context,
                                                 const FengDecl *type_decl,
                                                 FengExpr *const *args,
                                                 size_t arg_count,
-                                                bool *out_rejected_existing_array_for_variadic) {
+                                                bool *out_rejected_existing_array_for_variadic,
+                                                PrepackedVariadicRejection *out_prepacked_variadic_rejection) {
     size_t arg_index;
     bool is_variadic;
     size_t fixed_count;
 
     if (out_rejected_existing_array_for_variadic != NULL) {
         *out_rejected_existing_array_for_variadic = false;
+    }
+    if (out_prepacked_variadic_rejection != NULL) {
+        *out_prepacked_variadic_rejection = FENG_PREPACKED_VARIADIC_REJECTION_NONE;
     }
 
     if (!decl_is_function_type(type_decl)) {
@@ -12201,6 +12358,17 @@ static bool function_type_parameters_match_args(ResolveContext *context,
     fixed_count = is_variadic ? type_decl->as.spec_decl.as.callable.param_count - 1U
                               : type_decl->as.spec_decl.as.callable.param_count;
 
+    {
+        PrepackedVariadicRejection spread_rejection =
+            prepacked_variadic_shape_rejection(args, arg_count, is_variadic, fixed_count);
+        if (out_prepacked_variadic_rejection != NULL) {
+            *out_prepacked_variadic_rejection = spread_rejection;
+        }
+        if (spread_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+            return false;
+        }
+    }
+
     if (is_variadic) {
         if (arg_count < fixed_count) {
             return false;
@@ -12211,7 +12379,7 @@ static bool function_type_parameters_match_args(ResolveContext *context,
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
         const FengTypeRef *param_type =
-            arg_index < fixed_count
+            arg_index < fixed_count || args[arg_index]->is_prepacked_variadic_arg
                 ? type_decl->as.spec_decl.as.callable.params[arg_index].type
                 : type_decl->as.spec_decl.as.callable.params[fixed_count].type->as.inner;
 
@@ -12221,6 +12389,11 @@ static bool function_type_parameters_match_args(ResolveContext *context,
             return false;
         }
         if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
+            if (out_prepacked_variadic_rejection != NULL &&
+                args[arg_index]->is_prepacked_variadic_arg) {
+                *out_prepacked_variadic_rejection =
+                    FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH;
+            }
             if (out_rejected_existing_array_for_variadic != NULL &&
                 is_variadic &&
                 arg_count == type_decl->as.spec_decl.as.callable.param_count &&
@@ -12244,13 +12417,17 @@ static bool function_type_parameters_match_args_for_instance(
     InferredExprType owner_type,
     FengExpr *const *args,
     size_t arg_count,
-    bool *out_rejected_existing_array_for_variadic) {
+    bool *out_rejected_existing_array_for_variadic,
+    PrepackedVariadicRejection *out_prepacked_variadic_rejection) {
     size_t arg_index;
     bool is_variadic;
     size_t fixed_count;
 
     if (out_rejected_existing_array_for_variadic != NULL) {
         *out_rejected_existing_array_for_variadic = false;
+    }
+    if (out_prepacked_variadic_rejection != NULL) {
+        *out_prepacked_variadic_rejection = FENG_PREPACKED_VARIADIC_REJECTION_NONE;
     }
 
     if (!decl_is_function_type(type_decl)) {
@@ -12263,6 +12440,17 @@ static bool function_type_parameters_match_args_for_instance(
     fixed_count = is_variadic ? type_decl->as.spec_decl.as.callable.param_count - 1U
                               : type_decl->as.spec_decl.as.callable.param_count;
 
+    {
+        PrepackedVariadicRejection spread_rejection =
+            prepacked_variadic_shape_rejection(args, arg_count, is_variadic, fixed_count);
+        if (out_prepacked_variadic_rejection != NULL) {
+            *out_prepacked_variadic_rejection = spread_rejection;
+        }
+        if (spread_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+            return false;
+        }
+    }
+
     if (is_variadic) {
         if (arg_count < fixed_count) {
             return false;
@@ -12273,7 +12461,7 @@ static bool function_type_parameters_match_args_for_instance(
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
         const FengTypeRef *declared_param_type =
-            arg_index < fixed_count
+            arg_index < fixed_count || args[arg_index]->is_prepacked_variadic_arg
                 ? type_decl->as.spec_decl.as.callable.params[arg_index].type
                 : type_decl->as.spec_decl.as.callable.params[fixed_count].type->as.inner;
         const FengTypeRef *param_type = substitute_type_ref_for_owner_instance(
@@ -12288,6 +12476,11 @@ static bool function_type_parameters_match_args_for_instance(
             return false;
         }
         if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
+            if (out_prepacked_variadic_rejection != NULL &&
+                args[arg_index]->is_prepacked_variadic_arg) {
+                *out_prepacked_variadic_rejection =
+                    FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH;
+            }
             if (out_rejected_existing_array_for_variadic != NULL &&
                 is_variadic &&
                 arg_count == type_decl->as.spec_decl.as.callable.param_count &&
@@ -12339,16 +12532,21 @@ static FunctionCallResolution resolve_module_public_function_overload(
                 continue;
             }
             bool rejected_existing_array_for_variadic = false;
+            PrepackedVariadicRejection spread_rejection =
+                FENG_PREPACKED_VARIADIC_REJECTION_NONE;
 
             if (!callable_parameters_match_args(context,
                                                 &decl->as.function_decl,
                                                 args,
                                                 arg_count,
                                                 decl->is_extern,
-                                                &rejected_existing_array_for_variadic)) {
+                                                &rejected_existing_array_for_variadic,
+                                                &spread_rejection)) {
                 if (rejected_existing_array_for_variadic) {
                     result.rejected_existing_array_for_variadic = true;
                 }
+                merge_prepacked_variadic_rejection(
+                    &result.prepacked_variadic_rejection, spread_rejection);
                 continue;
             }
 
@@ -12800,6 +12998,8 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
     (void)fit_module;
     {
         bool rejected_existing_array_for_variadic = false;
+        PrepackedVariadicRejection spread_rejection =
+            FENG_PREPACKED_VARIADIC_REJECTION_NONE;
 
         if (!callable_parameters_match_args_for_owner_instance(
                 st->context,
@@ -12810,10 +13010,13 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
                 st->args,
                 st->arg_count,
                 false,
-                &rejected_existing_array_for_variadic)) {
+                &rejected_existing_array_for_variadic,
+                &spread_rejection)) {
             if (rejected_existing_array_for_variadic) {
                 st->result.rejected_existing_array_for_variadic = true;
             }
+            merge_prepacked_variadic_rejection(
+                &st->result.prepacked_variadic_rejection, spread_rejection);
             return true;
         }
     }
@@ -12929,6 +13132,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
                         const FengTypeMember *member =
                             current->as.spec_decl.as.object.members[k];
                         bool rejected_existing_array_for_variadic = false;
+                        PrepackedVariadicRejection spread_rejection =
+                            FENG_PREPACKED_VARIADIC_REJECTION_NONE;
 
                         if (member->kind != FENG_TYPE_MEMBER_METHOD ||
                             !slice_equals(member->as.callable.name, name) ||
@@ -12941,10 +13146,13 @@ static FunctionCallResolution resolve_accessible_method_overload(
                                 args,
                                 arg_count,
                                 false,
-                                &rejected_existing_array_for_variadic)) {
+                                &rejected_existing_array_for_variadic,
+                                &spread_rejection)) {
                             if (rejected_existing_array_for_variadic) {
                                 result.rejected_existing_array_for_variadic = true;
                             }
+                            merge_prepacked_variadic_rejection(
+                                &result.prepacked_variadic_rejection, spread_rejection);
                             continue;
                         }
                         int priority = compute_overload_match_priority(
@@ -12997,6 +13205,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
                 const FengTypeMember *member = current->as.spec_decl.as.object.members[j];
 
                 bool rejected_existing_array_for_variadic = false;
+                PrepackedVariadicRejection spread_rejection =
+                    FENG_PREPACKED_VARIADIC_REJECTION_NONE;
 
                 if (member->kind != FENG_TYPE_MEMBER_METHOD ||
                     !slice_equals(member->as.callable.name, name) ||
@@ -13008,10 +13218,13 @@ static FunctionCallResolution resolve_accessible_method_overload(
                                                                        args,
                                                                        arg_count,
                                                                        false,
-                                                                       &rejected_existing_array_for_variadic)) {
+                                                                       &rejected_existing_array_for_variadic,
+                                                                       &spread_rejection)) {
                     if (rejected_existing_array_for_variadic) {
                         result.rejected_existing_array_for_variadic = true;
                     }
+                    merge_prepacked_variadic_rejection(
+                        &result.prepacked_variadic_rejection, spread_rejection);
                     continue;
                 }
                 int priority = compute_overload_match_priority(
@@ -13070,6 +13283,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
             const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
 
             bool rejected_existing_array_for_variadic = false;
+            PrepackedVariadicRejection spread_rejection =
+                FENG_PREPACKED_VARIADIC_REJECTION_NONE;
 
             if (member->is_static ||
                 member->kind != FENG_TYPE_MEMBER_METHOD ||
@@ -13084,10 +13299,13 @@ static FunctionCallResolution resolve_accessible_method_overload(
                                                                    args,
                                                                    arg_count,
                                                                    false,
-                                                                   &rejected_existing_array_for_variadic)) {
+                                                                   &rejected_existing_array_for_variadic,
+                                                                   &spread_rejection)) {
                 if (rejected_existing_array_for_variadic) {
                     result.rejected_existing_array_for_variadic = true;
                 }
+                merge_prepacked_variadic_rejection(
+                    &result.prepacked_variadic_rejection, spread_rejection);
                 continue;
             }
 
@@ -13180,6 +13398,8 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
     for (member_index = 0U; member_index < type_decl->as.type_decl.member_count; ++member_index) {
         const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
         bool rejected_existing_array_for_variadic = false;
+        PrepackedVariadicRejection spread_rejection =
+            FENG_PREPACKED_VARIADIC_REJECTION_NONE;
 
         if (!member->is_static ||
             member->kind != FENG_TYPE_MEMBER_METHOD ||
@@ -13194,10 +13414,13 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
                                                                args,
                                                                arg_count,
                                                                false,
-                                                               &rejected_existing_array_for_variadic)) {
+                                                               &rejected_existing_array_for_variadic,
+                                                               &spread_rejection)) {
             if (rejected_existing_array_for_variadic) {
                 result.rejected_existing_array_for_variadic = true;
             }
+            merge_prepacked_variadic_rejection(
+                &result.prepacked_variadic_rejection, spread_rejection);
             continue;
         }
 
@@ -13297,11 +13520,119 @@ static bool report_existing_array_rejected_for_variadic_call(ResolveContext *con
         context,
         callee != NULL ? callee->token : (FengToken){0},
         "AE0505", format_message(
-            "call target '%s' does not accept an existing array at a variadic argument position; pass elements individually",
+            "call target '%s' does not accept an existing array at a variadic argument position; use explicit '...array' forwarding for the complete variadic group",
             target_name != NULL ? target_name : "<expression>"));
 
     free(target_name);
     return ok;
+}
+
+/* Report the most specific semantic failure for an explicit `...expr`. */
+static bool report_prepacked_variadic_rejection(
+    ResolveContext *context,
+    const FengExpr *callee,
+    PrepackedVariadicRejection rejection) {
+    const char *message;
+
+    switch (rejection) {
+        case FENG_PREPACKED_VARIADIC_REJECTION_TARGET_NOT_VARIADIC:
+            message = "prepacked variadic forwarding requires a variadic call target";
+            break;
+        case FENG_PREPACKED_VARIADIC_REJECTION_NOT_FIRST_VARIADIC:
+            message = "prepacked variadic forwarding must begin at the first variadic argument position";
+            break;
+        case FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH:
+            message = "prepacked variadic argument must match the target readonly variadic array type";
+            break;
+        case FENG_PREPACKED_VARIADIC_REJECTION_NONE:
+            return true;
+    }
+
+    return resolver_append_error(
+        context,
+        callee != NULL ? callee->token : (FengToken){0},
+        "AE0524",
+        format_message("%s", message));
+}
+
+/* Re-check a selected generic callable after explicit type arguments are
+ * known.  Candidate probing infers method/function parameters from actuals;
+ * this final check substitutes the caller's explicit arguments and verifies
+ * the complete normalized variadic array type without changing ordinary
+ * generic-call diagnostics. */
+static bool validate_explicit_prepacked_variadic_argument(
+    ResolveContext *context,
+    const FengExpr *call_expr) {
+    const FengResolvedCallable *resolved;
+    const FengCallableSignature *callable = NULL;
+    const FengTypeRef *expected_type;
+    FengTypeRef *substituted_type;
+    InferredExprType owner_type;
+    size_t spread_index;
+
+    if (context == NULL || call_expr == NULL ||
+        call_expr->kind != FENG_EXPR_CALL ||
+        !call_expr->as.call.has_explicit_type_args ||
+        !find_prepacked_variadic_arg(call_expr->as.call.args,
+                                     call_expr->as.call.arg_count,
+                                     &spread_index)) {
+        return true;
+    }
+
+    resolved = &call_expr->as.call.resolved_callable;
+    if (resolved->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
+        resolved->function_decl != NULL) {
+        callable = &resolved->function_decl->as.function_decl;
+    } else if ((resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
+                resolved->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
+                resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD ||
+                resolved->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) &&
+               resolved->member != NULL) {
+        callable = &resolved->member->as.callable;
+    }
+
+    if (callable == NULL ||
+        callable->type_param_count != call_expr->as.call.explicit_type_arg_count ||
+        spread_index >= callable->param_count) {
+        return true;
+    }
+
+    expected_type = callable->params[spread_index].type;
+    memset(&owner_type, 0, sizeof(owner_type));
+    if (resolved->owner_instance_type_ref != NULL) {
+        owner_type.kind = FENG_INFERRED_EXPR_TYPE_TYPE_REF;
+        owner_type.type_ref = resolved->owner_instance_type_ref;
+        owner_type.type_decl = resolved->owner_type_decl;
+        expected_type = substitute_type_ref_for_owner_instance(
+            context, resolved->owner_type_decl, owner_type, expected_type);
+        expected_type = substitute_type_ref_for_fit_instance(
+            context, resolved->fit_decl, owner_type, expected_type);
+    }
+
+    substituted_type = clone_type_ref_substituting_type_params(
+        expected_type,
+        callable->type_params,
+        callable->type_param_count,
+        call_expr->as.call.explicit_type_args);
+    if (substituted_type == NULL) {
+        return resolver_append_error(
+            context,
+            call_expr->token,
+            "IE0001",
+            format_message("out of memory while validating prepacked variadic argument"));
+    }
+
+    if (!expr_matches_expected_type_ref(
+            context, call_expr->as.call.args[spread_index], substituted_type)) {
+        free_synthetic_type_ref(substituted_type);
+        return report_prepacked_variadic_rejection(
+            context,
+            call_expr->as.call.callee,
+            FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH);
+    }
+
+    free_synthetic_type_ref(substituted_type);
+    return true;
 }
 
 static bool validate_callable_typed_expr_call(ResolveContext *context,
@@ -13314,6 +13645,8 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
         resolve_callable_constraint_type_decl(context, callee_type);
     char *target_name = NULL;
     bool rejected_existing_array_for_variadic = false;
+    PrepackedVariadicRejection spread_rejection =
+        FENG_PREPACKED_VARIADIC_REJECTION_NONE;
 
     if (callee != NULL &&
         (callee->kind == FENG_EXPR_LAMBDA ||
@@ -13329,7 +13662,8 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                                                              callee_type,
                                                              args,
                                                              arg_count,
-                                                             &rejected_existing_array_for_variadic)) {
+                                                             &rejected_existing_array_for_variadic,
+                                                             &spread_rejection)) {
             if (!validate_borrowed_data_pointer_call_arguments(
                     context,
                     callee,
@@ -13348,6 +13682,9 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
             return true;
         }
 
+        if (spread_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+            return report_prepacked_variadic_rejection(context, callee, spread_rejection);
+        }
         if (rejected_existing_array_for_variadic) {
             return report_existing_array_rejected_for_variadic_call(context, callee);
         }
@@ -13372,7 +13709,8 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                                                 callee_constraint_decl,
                                                 args,
                                                 arg_count,
-                                                &rejected_existing_array_for_variadic)) {
+                                                &rejected_existing_array_for_variadic,
+                                                &spread_rejection)) {
             if (!validate_borrowed_data_pointer_call_arguments(
                     context,
                     callee,
@@ -13394,6 +13732,9 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
             return true;
         }
 
+        if (spread_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+            return report_prepacked_variadic_rejection(context, callee, spread_rejection);
+        }
         if (rejected_existing_array_for_variadic) {
             return report_existing_array_rejected_for_variadic_call(context, callee);
         }
@@ -14057,6 +14398,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                          callee_type,
                                                          expr->as.call.args,
                                                          expr->as.call.arg_count,
+                                                         NULL,
                                                          NULL)) {
         return inferred_expr_type_from_return_type_ref(
             substitute_type_ref_for_owner_instance(
@@ -14072,6 +14414,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                             callee_type_decl,
                                             expr->as.call.args,
                                             expr->as.call.arg_count,
+                                            NULL,
                                             NULL)) {
         return inferred_expr_type_from_return_type_ref(
             callee_type_decl->as.spec_decl.as.callable.return_type);
@@ -17583,7 +17926,9 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
     }
     for (i = 0U; i < arg_count; ++i) {
         const FengTypeRef *param_type =
-            i < fixed_count ? params[i].type : params[fixed_count].type->as.inner;
+            i < fixed_count || args[i]->is_prepacked_variadic_arg
+                ? params[i].type
+                : params[fixed_count].type->as.inner;
 
         if (resolve_function_type_decl(context, param_type) != NULL) {
             record_callable_spec_coercion_site(context, args[i], param_type);
@@ -17622,7 +17967,9 @@ static void record_object_arg_coercion_sites_for_owner_instance(
     }
     for (i = 0U; i < arg_count; ++i) {
         const FengTypeRef *declared_param_type =
-            i < fixed_count ? params[i].type : params[fixed_count].type->as.inner;
+            i < fixed_count || args[i]->is_prepacked_variadic_arg
+                ? params[i].type
+                : params[fixed_count].type->as.inner;
         const FengTypeRef *param_type = substitute_type_ref_for_owner_instance(
             context,
             owner_type_decl,
@@ -20144,6 +20491,12 @@ static bool validate_constructor_invocation(ResolveContext *context,
 
     declared_constructor_count = count_declared_constructors(type_decl);
     if (declared_constructor_count == 0U) {
+        if (find_prepacked_variadic_arg(args, arg_count, NULL)) {
+            return report_prepacked_variadic_rejection(
+                context,
+                target_expr,
+                FENG_PREPACKED_VARIADIC_REJECTION_TARGET_NOT_VARIADIC);
+        }
         if (arg_count == 0U) {
             return true;
         }
@@ -20189,6 +20542,11 @@ static bool validate_constructor_invocation(ResolveContext *context,
                            (int)type_decl->as.type_decl.name.length,
                            type_decl->as.type_decl.name.data,
                            arg_count));
+    }
+    if (resolution.prepacked_variadic_rejection !=
+        FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+        return report_prepacked_variadic_rejection(
+            context, target_expr, resolution.prepacked_variadic_rejection);
     }
 
     return resolver_append_error(
@@ -20463,6 +20821,11 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                        callee->as.member.member.data,
                                        expr->as.call.arg_count));
                 }
+                if (resolution.prepacked_variadic_rejection !=
+                    FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+                    return report_prepacked_variadic_rejection(
+                        context, callee, resolution.prepacked_variadic_rejection);
+                }
                 if (resolution.rejected_existing_array_for_variadic) {
                     return report_existing_array_rejected_for_variadic_call(context, callee);
                 }
@@ -20556,6 +20919,11 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                        (int)callee->as.member.member.length,
                                        callee->as.member.member.data,
                                        expr->as.call.arg_count));
+                }
+                if (resolution.prepacked_variadic_rejection !=
+                    FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+                    return report_prepacked_variadic_rejection(
+                        context, callee, resolution.prepacked_variadic_rejection);
                 }
                 if (resolution.rejected_existing_array_for_variadic) {
                     return report_existing_array_rejected_for_variadic_call(context, callee);
@@ -20723,6 +21091,11 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                    callee->as.member.member.data,
                                    expr->as.call.arg_count));
             }
+            if (resolution.prepacked_variadic_rejection !=
+                FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+                return report_prepacked_variadic_rejection(
+                    context, callee, resolution.prepacked_variadic_rejection);
+            }
             if (resolution.rejected_existing_array_for_variadic) {
                 return report_existing_array_rejected_for_variadic_call(context, callee);
             }
@@ -20810,6 +21183,11 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 free(owner_name);
                 return ok;
             }
+            if (resolution.prepacked_variadic_rejection !=
+                FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+                return report_prepacked_variadic_rejection(
+                    context, callee, resolution.prepacked_variadic_rejection);
+            }
             if (resolution.rejected_existing_array_for_variadic) {
                 return report_existing_array_rejected_for_variadic_call(context, callee);
             }
@@ -20896,6 +21274,11 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                        expr->as.call.arg_count));
                 }
 
+                if (resolution.prepacked_variadic_rejection !=
+                    FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+                    return report_prepacked_variadic_rejection(
+                        context, callee, resolution.prepacked_variadic_rejection);
+                }
                 if (resolution.rejected_existing_array_for_variadic) {
                     return report_existing_array_rejected_for_variadic_call(context, callee);
                 }
@@ -22233,6 +22616,9 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             }
             if (!validate_constructor_call_expr(context, expr) ||
                 !validate_function_call_expr(context, expr)) {
+                return false;
+            }
+            if (!validate_explicit_prepacked_variadic_argument(context, expr)) {
                 return false;
             }
             /* G4-13b: Arity check for explicit type args against resolved callable. */

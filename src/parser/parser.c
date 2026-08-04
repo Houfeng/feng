@@ -3685,6 +3685,12 @@ static FengExpr *parse_primary(Parser *parser) {
             }
             return try_expr;
         }
+        case FENG_TOKEN_ELLIPSIS:
+            (void)parser_error_current(
+                parser,
+                "SE1003",
+                "prepacked variadic forwarding is only allowed before the final call argument");
+            return NULL;
         default:
             (void)parser_error_current(
                 parser,
@@ -3750,6 +3756,8 @@ static FengExpr *parse_postfix(Parser *parser) {
                 bool saved_suppress = parser->suppress_object_literal_suffix;
                 parser->suppress_object_literal_suffix = false;
                 do {
+                    bool is_prepacked_variadic_arg =
+                        parser_match(parser, FENG_TOKEN_ELLIPSIS);
                     FengExpr *arg = parse_expression(parser);
 
                     if (arg == NULL) {
@@ -3757,9 +3765,20 @@ static FengExpr *parse_postfix(Parser *parser) {
                         free_expr(call);
                         return NULL;
                     }
+                    arg->is_prepacked_variadic_arg = is_prepacked_variadic_arg;
                     if (!APPEND_VALUE(parser, call->as.call.args, call->as.call.arg_count, arg_capacity, arg)) {
                         parser->suppress_object_literal_suffix = saved_suppress;
                         free_expr(arg);
+                        free_expr(call);
+                        return NULL;
+                    }
+                    if (is_prepacked_variadic_arg &&
+                        parser_check(parser, FENG_TOKEN_COMMA)) {
+                        parser->suppress_object_literal_suffix = saved_suppress;
+                        (void)parser_error_current(
+                            parser,
+                            "SE1003",
+                            "prepacked variadic forwarding must be the last call argument");
                         free_expr(call);
                         return NULL;
                     }

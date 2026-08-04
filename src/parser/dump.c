@@ -206,6 +206,9 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
                 if (index != 0U) {
                     fputs(", ", stream);
                 }
+                if (expr->as.call.args[index]->is_prepacked_variadic_arg) {
+                    fputs("...", stream);
+                }
                 dump_expr(stream, expr->as.call.args[index], 0);
             }
             fputc(')', stream);

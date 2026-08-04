@@ -715,7 +715,7 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 1. 交互路径取消每次请求都会进入的 10ms / 40ms 广泛冷启动等待；纯文本 Completion 在 parse / index 前返回，
    Signature Help、Completion Resolve、Definition、References 与 Rename 不再同步构建 project、
    dependency provider 或完整语义分析。仅当冷启动请求已经证明需要尚未发布的 import/provider 索引时，
-   允许一次最大 8ms（provider use-path 回退最大 16ms）的有界就绪窗口；普通 `foo.`、字面量、热缓存和编辑后请求不进入该窗口。
+   对首次冷查询和已解析程序的导入索引允许一次最大 16ms 的有界就绪窗口；初始 source-module 索引仍为最大 8ms，provider use-path 回退仍为最大 16ms。所有交互就绪窗口均不得超过 16ms；普通 `foo.`、字面量、热缓存和编辑后请求不进入该窗口。
 2. workspace provider 与 source module index 只在首次缺失或显式刷新时后台构建，candidate 完整成功后
    替换旧 published 对象；普通输入只更新文档 snapshot 并 debounce 完整分析。
 3. 协议读取、交互执行和后台分析分离；请求队列遵守 §9.4 的通知边界，支持优先级、取消、

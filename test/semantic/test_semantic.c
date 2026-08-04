@@ -17228,6 +17228,183 @@ static void test_variadic_rejects_existing_array_argument(void) {
     feng_program_free(program);
 }
 
+/* Prepacked arrays participate in ordinary overload resolution for free
+ * functions, instance/static methods, and callable-form spec values. */
+static void test_prepacked_variadic_calls_are_semantically_valid(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Counter(values: int...): int;\n"
+        "func log(level: int, values: string...): int { return level; }\n"
+        "func pick(values: string...): int { return 1; }\n"
+        "func pick(values: int[]): int { return 2; }\n"
+        "type Relay {\n"
+        "    func count(values: int...): int { return 3; }\n"
+        "    func forward(values: int...): int { return self.count(...values); }\n"
+        "    static func forwardStatic(values: int...): int { return 4; }\n"
+        "}\n"
+        "func run(relay: Relay, counter: Counter, words: string[], nums: int[]): int {\n"
+        "    let a = log(1, ...words);\n"
+        "    let b = pick(...words);\n"
+        "    let c = relay.forward(...nums);\n"
+        "    let d = Relay.forwardStatic(...nums);\n"
+        "    return a + b + c + d + counter(...nums);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("prepacked_variadic_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* `...expr` cannot target a non-variadic callable. */
+static void test_prepacked_variadic_rejects_non_variadic_target(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func sink(values: int[]): void { return; }\n"
+        "func run(values: int[]): void { sink(...values); }\n";
+    FengProgram *program = parse_program_or_die("prepacked_non_variadic_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0524") == 0);
+    ASSERT(strstr(errors[0].message, "requires a variadic call target") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* `...expr` occupies the complete variadic suffix and cannot follow ordinary
+ * variadic elements. */
+static void test_prepacked_variadic_rejects_prior_variadic_elements(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func sink(level: int, values: int...): void { return; }\n"
+        "func run(values: int[]): void { sink(1, 2, ...values); }\n";
+    FengProgram *program = parse_program_or_die("prepacked_position_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0524") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "must begin at the first variadic argument position") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* The prepacked expression must be an array rather than one variadic element. */
+static void test_prepacked_variadic_rejects_non_array_expression(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func sink(values: int...): void { return; }\n"
+        "func run(): void { sink(...1); }\n";
+    FengProgram *program = parse_program_or_die("prepacked_non_array_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0524") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "must match the target readonly variadic array type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* A prepacked array must have the target variadic element type. */
+static void test_prepacked_variadic_rejects_array_element_mismatch(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func sink(values: string...): void { return; }\n"
+        "func run(values: int[]): void { sink(...values); }\n";
+    FengProgram *program = parse_program_or_die("prepacked_element_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0524") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "must match the target readonly variadic array type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* A writable array is not implicitly converted into the readonly variadic
+ * group required by `...expr`. */
+static void test_prepacked_variadic_rejects_writable_array(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func sink(values: int...): void { return; }\n"
+        "func run(values: int[!]): void { sink(...values); }\n";
+    FengProgram *program = parse_program_or_die("prepacked_writable_array_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0524") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "must match the target readonly variadic array type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Explicit generic arguments still constrain the normalized variadic array
+ * type used by a prepacked argument. */
+static void test_prepacked_variadic_rejects_explicit_generic_type_mismatch(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func sink<T>(values: T...): void { return; }\n"
+        "func run(values: int[]): void { sink<string>(...values); }\n";
+    FengProgram *program = parse_program_or_die("prepacked_generic_type_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0524") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "must match the target readonly variadic array type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* T6: variadic callable-form specs accept variadic lambdas and remain callable through the spec value. */
 static void test_variadic_callable_spec_lambda_call_ok(void) {
     const char *source =
@@ -20882,6 +21059,13 @@ int main(void) {
     test_fixed_and_variadic_parameters_accept_calls();
     test_variadic_rejects_mismatched_element_type();
     test_variadic_rejects_existing_array_argument();
+    test_prepacked_variadic_calls_are_semantically_valid();
+    test_prepacked_variadic_rejects_non_variadic_target();
+    test_prepacked_variadic_rejects_prior_variadic_elements();
+    test_prepacked_variadic_rejects_non_array_expression();
+    test_prepacked_variadic_rejects_array_element_mismatch();
+    test_prepacked_variadic_rejects_writable_array();
+    test_prepacked_variadic_rejects_explicit_generic_type_mismatch();
     test_variadic_callable_spec_lambda_call_ok();
     test_variadic_overload_conflict_rejected();
     test_variadic_single_fixed_and_variadic_overload_conflict_rejected();

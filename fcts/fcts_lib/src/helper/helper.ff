@@ -2,10 +2,16 @@ open module fcts_lib.helper;
 
 import std.io;
 import std.text;
+import std.collections;
 
 /** 跨包辅助函数 */
 open func lib_helper(): int {
   return 42;
+}
+
+/** 跨包接收变参数组，用于验证 consumer 的预打包转发。 */
+open func lib_count_args(args: int...): int {
+  return args.length();
 }
 
 /** 检查辅助函数，根据 ok 输出 ✅ 或 ❌ emoji 前缀，后跟 msgs 以空格拼接的描述信息 */
