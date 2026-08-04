@@ -645,7 +645,7 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 - builtin 标量：直接复用 `lldb-dap` 原始值。
 - enum：若能从现有类型信息稳定恢复展示名，则做轻量重写；否则先退回原始整数值。
 - builtin 标量：直接复用 `lldb-dap` 原始值。
-- string：顶层显示优先回读实际 UTF-8 字符串值，不展开子字符。代理先以整数结果读取 `feng_string_length` 和 `feng_string_data`，再通过 DAP `readMemory` 按确切长度读取字符串字节；不得让 `lldb-dap` 直接格式化 `const char *` 或字符数组结果。
+- string：顶层显示优先回读实际 UTF-8 字符串值，不展开子字符。代理先以整数结果读取 `feng_string_length` 和 `feng_string_data`，再通过 DAP `readMemory` 按确切长度读取字符串字节；单次值回读上限为 1 MiB，超过上限时不得发送无界 `readMemory` 请求，而应回退到稳定类型摘要，避免尚未初始化或已损坏的运行时载体拖垮调试后端；不得让 `lldb-dap` 直接格式化 `const char *` 或字符数组结果。
 - array：顶层显示格式为 `元素类型[length=N]`；`variablesReference` 替换为 synthetic ref，支持按索引展开每个元素；元素展开通过 `feng_array_data` 系列 evaluate 表达式实现（见 §5.10.3）。
 - 用户类型（spec / object）：`variablesReference` 替换为 synthetic ref，支持按字段名展开；字段列表来自 `ENTS` 中 `parent_strid` 匹配的字段模板记录（见 §5.10.4）；字段本身若为数组或用户类型，递归触发展开。
 - enum：若能从现有类型信息稳定恢复展示名，则做轻量重写；否则退回原始整数值。

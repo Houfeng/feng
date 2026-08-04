@@ -25,6 +25,7 @@
 #define PROXY_IS_SYNTHETIC_REF(ref) ((ref) >= FENG_DAP_SYNTHETIC_REF_BASE)
 #define FENG_DAP_SYNTHETIC_ARRAY_ELEMENT_LIMIT 256U
 #define FENG_DAP_SYNTHETIC_MAX_DEPTH 3U
+#define FENG_DAP_RUNTIME_STRING_VALUE_BYTE_LIMIT UINT64_C(1048576)
 
 typedef enum FengDapReadStatus {
     FENG_DAP_READ_OK = 0,
@@ -4520,7 +4521,8 @@ static bool proxy_try_read_runtime_string_value(FengDapMessageReader *backend_re
         ok = true;
         goto cleanup;
     }
-    if (byte_count > (uint64_t)SIZE_MAX) {
+    if (byte_count > FENG_DAP_RUNTIME_STRING_VALUE_BYTE_LIMIT ||
+        byte_count > (uint64_t)SIZE_MAX) {
         ok = true;
         goto cleanup;
     }
