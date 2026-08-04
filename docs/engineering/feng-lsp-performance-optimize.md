@@ -646,6 +646,10 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - VS Code 插件测试；
 - 新增 LSP 性能基准。
 
+依赖后台 candidate、workspace index 或 provider 发布结果的协议回归用例，必须先通过协议响应观察
+所需状态已经发布，再执行原有行为断言。就绪同步必须设置有限重试次数，禁止用固定休眠时间推测
+线程调度是否完成，也不得放宽发布后的 Hover、Definition、Completion 或诊断结果断言。
+
 未经人工批准，不修改已有测试用例；性能覆盖通过新增测试或新增基准实现。
 
 ---

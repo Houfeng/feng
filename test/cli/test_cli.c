@@ -1608,6 +1608,135 @@ static char *run_lsp_server_capture(FILE *input) {
     return captured;
 }
 
+/* Runs one LSP session after a position request proves that its asynchronous
+ * index dependency is observable through the protocol. */
+static char *run_lsp_server_capture_after_position_ready(
+    const char *initialize,
+    const char *did_open,
+    const char *method,
+    const char *uri,
+    unsigned int line,
+    unsigned int character,
+    const char *ready_text,
+    const char *const *requests,
+    size_t request_count) {
+    enum { MAX_READY_PROBES = 64 };
+    int input_pipe[2];
+    int output_pipe[2];
+    FILE *errors = temp_file();
+    FILE *input;
+    pid_t child;
+    size_t probe_index;
+    size_t request_index;
+    char *readiness_output;
+    char *captured;
+    char *captured_errors;
+    bool ready;
+    int status;
+
+    ASSERT(errors != NULL);
+    ASSERT(pipe(input_pipe) == 0);
+    ASSERT(pipe(output_pipe) == 0);
+    child = fork();
+    ASSERT(child >= 0);
+    if (child == 0) {
+        FILE *server_input;
+        FILE *server_output;
+        int rc;
+
+        close(input_pipe[1]);
+        close(output_pipe[0]);
+        server_input = fdopen(input_pipe[0], "rb");
+        server_output = fdopen(output_pipe[1], "wb");
+        ASSERT(server_input != NULL);
+        ASSERT(server_output != NULL);
+        rc = feng_lsp_server_run(server_input, server_output, errors);
+        fclose(server_input);
+        fclose(server_output);
+        fclose(errors);
+        _exit(rc);
+    }
+
+    close(input_pipe[0]);
+    close(output_pipe[1]);
+    input = fdopen(input_pipe[1], "wb");
+    ASSERT(input != NULL);
+    write_lsp_message(input, initialize);
+    write_lsp_message(input, did_open);
+    for (probe_index = 0U; probe_index < MAX_READY_PROBES; ++probe_index) {
+        unsigned int probe_id = 1000U + (unsigned int)probe_index;
+        char *probe = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"%s\","
+            "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+            "\"position\":{\"line\":%u,\"character\":%u}}}",
+            probe_id,
+            method,
+            uri,
+            line,
+            character);
+
+        write_lsp_message(input, probe);
+        free(probe);
+    }
+    write_lsp_message(input,
+                      "{\"jsonrpc\":\"2.0\",\"id\":2000,"
+                      "\"method\":\"feng/testReadinessBarrier\",\"params\":null}");
+    ASSERT(fflush(input) == 0);
+    readiness_output = read_fd_until_contains(
+        output_pipe[0],
+        "\"id\":2000,\"error\":{\"code\":-32601,"
+        "\"message\":\"Method not found\"}}");
+    ready = strstr(readiness_output, ready_text) != NULL;
+    free(readiness_output);
+
+    for (request_index = 0U; request_index < request_count; ++request_index) {
+        write_lsp_message(input, requests[request_index]);
+    }
+    ASSERT(fflush(input) == 0);
+    fclose(input);
+    captured = read_fd_to_string(output_pipe[0]);
+    close(output_pipe[0]);
+    ASSERT(waitpid(child, &status, 0) == child);
+    captured_errors = read_text_stream(errors);
+    fclose(errors);
+    if (!ready || !WIFEXITED(status) || WEXITSTATUS(status) != 0) {
+        fprintf(stderr, "%s", captured_errors);
+    }
+    free(captured_errors);
+    ASSERT(ready);
+    ASSERT(WIFEXITED(status));
+    ASSERT(WEXITSTATUS(status) == 0);
+    return captured;
+}
+
+/* Runs one asserted position request after its matching readiness probe. */
+static char *run_lsp_single_position_response_after_ready(
+    const char *initialize,
+    const char *did_open,
+    const char *method,
+    const char *uri,
+    unsigned int line,
+    unsigned int character,
+    const char *ready_text,
+    const char *request,
+    const char *shutdown) {
+    const char *requests[] = {
+        request,
+        shutdown,
+        "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"
+    };
+
+    return run_lsp_server_capture_after_position_ready(initialize,
+                                                        did_open,
+                                                        method,
+                                                        uri,
+                                                        line,
+                                                        character,
+                                                        ready_text,
+                                                        requests,
+                                                        3U);
+}
+
 static char *file_uri_from_path(const char *path) {
     char resolved[PATH_MAX];
 
@@ -8424,14 +8553,14 @@ static char *capture_lsp_position_response_at_path(const char *source_path,
                                                    const char *initialize,
                                                    const char *method,
                                                    const char *needle,
-                                                   size_t char_offset) {
+                                                   size_t char_offset,
+                                                   const char *ready_text) {
     char *uri;
     char *escaped_text;
     char *did_open;
     char *request;
     char *shutdown;
     char *output;
-    FILE *input;
     unsigned int line;
     unsigned int character;
 
@@ -8449,16 +8578,15 @@ static char *capture_lsp_position_response_at_path(const char *source_path,
                          character);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = temp_file();
-    ASSERT(input != NULL);
-    write_lsp_message(input, initialize);
-    write_lsp_message(input, did_open);
-    write_lsp_message(input, request);
-    write_lsp_message(input, shutdown);
-    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
-
-    output = run_lsp_server_capture(input);
-    fclose(input);
+    output = run_lsp_single_position_response_after_ready(initialize,
+                                                          did_open,
+                                                          method,
+                                                          uri,
+                                                          line,
+                                                          character,
+                                                          ready_text,
+                                                          request,
+                                                          shutdown);
 
     free(shutdown);
     free(request);
@@ -10661,7 +10789,7 @@ static void test_lsp_project_cache_hit_survives_broken_dependency_source(void) {
     char *output;
     char *shared_real_path = NULL;
     char *shared_real_uri = NULL;
-    FILE *input;
+    const char *requests[6];
     unsigned int type_line;
     unsigned int type_character;
     unsigned int field_line;
@@ -10734,19 +10862,21 @@ static void test_lsp_project_cache_hit_survives_broken_dependency_source(void) {
                                              shared_real_uri);
     }
 
-    input = temp_file();
-    ASSERT(input != NULL);
-    write_lsp_message(input, initialize);
-    write_lsp_message(input, did_open);
-    write_lsp_message(input, hover_type);
-    write_lsp_message(input, definition_type);
-    write_lsp_message(input, hover_field);
-    write_lsp_message(input, completion_field);
-    write_lsp_message(input, shutdown);
-    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
-
-    output = run_lsp_server_capture(input);
-    fclose(input);
+    requests[0] = hover_type;
+    requests[1] = definition_type;
+    requests[2] = hover_field;
+    requests[3] = completion_field;
+    requests[4] = shutdown;
+    requests[5] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    output = run_lsp_server_capture_after_position_ready(initialize,
+                                                         did_open,
+                                                         "textDocument/hover",
+                                                         main_uri,
+                                                         type_line,
+                                                         type_character,
+                                                         "User from cache.",
+                                                         requests,
+                                                         6U);
 
     ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
     ASSERT(strstr(output, "\"id\":3,\"result\":null") == NULL);
@@ -14533,7 +14663,6 @@ static void test_lsp_use_path_completion(void) {
     char *completion_req;
     char *shutdown;
     char *output;
-    FILE *input;
     unsigned int comp_line;
     unsigned int comp_char;
     char *remove_error = NULL;
@@ -14574,16 +14703,16 @@ static void test_lsp_use_path_completion(void) {
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = temp_file();
-    ASSERT(input != NULL);
-    write_lsp_message(input, initialize);
-    write_lsp_message(input, did_open);
-    write_lsp_message(input, completion_req);
-    write_lsp_message(input, shutdown);
-    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
-
-    output = run_lsp_server_capture(input);
-    fclose(input);
+    output = run_lsp_single_position_response_after_ready(
+        initialize,
+        did_open,
+        "textDocument/completion",
+        main_uri,
+        comp_line,
+        comp_char,
+        "\"label\":\"lib\"",
+        completion_req,
+        shutdown);
 
     /* Completion must offer the next module path segment "lib" (from lib.ff).
      * Before the fix, the `use` context was not detected and the result was
@@ -14640,7 +14769,6 @@ static void test_lsp_use_path_completion_deduplicates_segments(void) {
     char *completion_req;
     char *shutdown;
     char *output;
-    FILE *input;
     unsigned int comp_line;
     unsigned int comp_char;
     char *remove_error = NULL;
@@ -14681,16 +14809,16 @@ static void test_lsp_use_path_completion_deduplicates_segments(void) {
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = temp_file();
-    ASSERT(input != NULL);
-    write_lsp_message(input, initialize);
-    write_lsp_message(input, did_open);
-    write_lsp_message(input, completion_req);
-    write_lsp_message(input, shutdown);
-    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
-
-    output = run_lsp_server_capture(input);
-    fclose(input);
+    output = run_lsp_single_position_response_after_ready(
+        initialize,
+        did_open,
+        "textDocument/completion",
+        main_uri,
+        comp_line,
+        comp_char,
+        "\"label\":\"b\"",
+        completion_req,
+        shutdown);
 
     ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(output, "\"label\":\"b\"") != NULL);
@@ -14762,7 +14890,6 @@ static void test_lsp_use_path_completion_deduplicates_segments_in_project_scan(v
     char *completion_req;
     char *shutdown;
     char *output;
-    FILE *input;
     unsigned int comp_line;
     unsigned int comp_char;
     char *remove_error = NULL;
@@ -14805,16 +14932,16 @@ static void test_lsp_use_path_completion_deduplicates_segments_in_project_scan(v
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = temp_file();
-    ASSERT(input != NULL);
-    write_lsp_message(input, initialize);
-    write_lsp_message(input, did_open);
-    write_lsp_message(input, completion_req);
-    write_lsp_message(input, shutdown);
-    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
-
-    output = run_lsp_server_capture(input);
-    fclose(input);
+    output = run_lsp_single_position_response_after_ready(
+        initialize,
+        did_open,
+        "textDocument/completion",
+        main_uri,
+        comp_line,
+        comp_char,
+        "\"label\":\"bar\"",
+        completion_req,
+        shutdown);
 
     ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(output, "\"label\":\"bar\"") != NULL);
@@ -14882,7 +15009,6 @@ static void test_lsp_imported_type_completion_after_use(void) {
     char *completion_req;
     char *shutdown;
     char *output;
-    FILE *input;
     unsigned int comp_line;
     unsigned int comp_char;
     char *remove_error = NULL;
@@ -14923,16 +15049,16 @@ static void test_lsp_imported_type_completion_after_use(void) {
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = temp_file();
-    ASSERT(input != NULL);
-    write_lsp_message(input, initialize);
-    write_lsp_message(input, did_open);
-    write_lsp_message(input, completion_req);
-    write_lsp_message(input, shutdown);
-    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
-
-    output = run_lsp_server_capture(input);
-    fclose(input);
+    output = run_lsp_single_position_response_after_ready(
+        initialize,
+        did_open,
+        "textDocument/completion",
+        main_uri,
+        comp_line,
+        comp_char,
+        "\"label\":\"Widget\"",
+        completion_req,
+        shutdown);
 
     /* The imported type `Widget` and function `make_widget` from the `use`d
      * module must appear as completion candidates in run()'s body. */
@@ -15004,7 +15130,6 @@ static void test_lsp_imported_type_completion_survives_project_semantic_failure(
     char *completion_req;
     char *shutdown;
     char *output;
-    FILE *input;
     unsigned int comp_line;
     unsigned int comp_char;
     char *remove_error = NULL;
@@ -15043,16 +15168,16 @@ static void test_lsp_imported_type_completion_survives_project_semantic_failure(
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = temp_file();
-    ASSERT(input != NULL);
-    write_lsp_message(input, initialize);
-    write_lsp_message(input, did_open);
-    write_lsp_message(input, completion_req);
-    write_lsp_message(input, shutdown);
-    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
-
-    output = run_lsp_server_capture(input);
-    fclose(input);
+    output = run_lsp_single_position_response_after_ready(
+        initialize,
+        did_open,
+        "textDocument/completion",
+        main_uri,
+        comp_line,
+        comp_char,
+        "\"label\":\"Widget\"",
+        completion_req,
+        shutdown);
 
     ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(output, "\"label\":\"helper\"") != NULL);
@@ -15119,7 +15244,6 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
     char *completion_req;
     char *shutdown;
     char *output;
-    FILE *input;
     unsigned int comp_line;
     unsigned int comp_char;
     char *remove_error = NULL;
@@ -15158,16 +15282,16 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
                                 comp_char);
     shutdown = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
 
-    input = temp_file();
-    ASSERT(input != NULL);
-    write_lsp_message(input, initialize);
-    write_lsp_message(input, did_open);
-    write_lsp_message(input, completion_req);
-    write_lsp_message(input, shutdown);
-    write_lsp_message(input, "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}");
-
-    output = run_lsp_server_capture(input);
-    fclose(input);
+    output = run_lsp_single_position_response_after_ready(
+        initialize,
+        did_open,
+        "textDocument/completion",
+        main_uri,
+        comp_line,
+        comp_char,
+        "\"label\":\"loop_example\"",
+        completion_req,
+        shutdown);
 
     ASSERT(strstr(output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(output, "\"label\":\"loop_example\"") != NULL);
@@ -15333,55 +15457,64 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
                                                               kInitialize,
                                                               "textDocument/hover",
                                                               "func consume(map: Map<string, int>): int {",
-                                                              strlen("func consume(map: "));
+                                                              strlen("func consume(map: "),
+                                                              "type Map<K, V>");
     hover_member_output = capture_lsp_position_response_at_path(main_path,
                                                                 kHoverSource,
                                                                 kInitialize,
                                                                 "textDocument/hover",
                                                                 "    return map.count;",
-                                                                strlen("    return map."));
+                                                                strlen("    return map."),
+                                                                "Number of stored entries.");
     hover_function_output = capture_lsp_position_response_at_path(main_path,
                                                                   kHoverSource,
                                                                   kInitialize,
                                                                   "textDocument/hover",
                                                                   "    return join(\"x\", \"a\");",
-                                                                  strlen("    return "));
+                                                                  strlen("    return "),
+                                                                  "Package join docs.");
     use_completion_output = capture_lsp_position_response_at_path(main_path,
                                                                   kUsePathSource,
                                                                   kInitialize,
                                                                   "textDocument/completion",
                                                                   "import test.lsp.pkg.",
-                                                                  strlen("import test.lsp.pkg."));
+                                                                  strlen("import test.lsp.pkg."),
+                                                                  "\"label\":\"collections\"");
     type_completion_output = capture_lsp_position_response_at_path(main_path,
                                                                    kTypeCompletionSource,
                                                                    kInitialize,
                                                                    "textDocument/completion",
                                                                    "    let value: Ma",
-                                                                   strlen("    let value: Ma"));
+                                                                   strlen("    let value: Ma"),
+                                                                   "\"label\":\"Map<K, V>\"");
     ctor_completion_output = capture_lsp_position_response_at_path(main_path,
                                                                    kCtorCompletionSource,
                                                                    kInitialize,
                                                                    "textDocument/completion",
                                                                    "    let value = M",
-                                                                   strlen("    let value = M"));
+                                                                   strlen("    let value = M"),
+                                                                   "\"label\":\"Map<K, V>\"");
     bare_completion_output = capture_lsp_position_response_at_path(main_path,
                                                                    kBareCompletionSource,
                                                                    kInitialize,
                                                                    "textDocument/completion",
                                                                    "    M",
-                                                                   strlen("    M"));
+                                                                   strlen("    M"),
+                                                                   "\"label\":\"Map<K, V>\"");
     function_completion_output = capture_lsp_position_response_at_path(main_path,
                                                                        kFunctionCompletionSource,
                                                                        kInitialize,
                                                                        "textDocument/completion",
                                                                        "    j",
-                                                                       strlen("    j"));
+                                                                       strlen("    j"),
+                                                                       "\"label\":\"join\"");
     member_completion_output = capture_lsp_position_response_at_path(main_path,
                                                                      kMemberCompletionSource,
                                                                      kInitialize,
                                                                      "textDocument/completion",
                                                                      "    return map.;",
-                                                                     strlen("    return map."));
+                                                                     strlen("    return map."),
+                                                                     "\"label\":\"count\"");
     write_text_file(consumer_manifest_path,
                     "[package]\n"
                     "name: \"lsp_pkgconsumer\"\n"
@@ -15397,13 +15530,15 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
                                                                              kInitialize,
                                                                              "textDocument/completion",
                                                                              "    let value = M",
-                                                                             strlen("    let value = M"));
+                                                                             strlen("    let value = M"),
+                                                                             "\"label\":\"Map<K, V>\"");
     local_dep_bare_completion_output = capture_lsp_position_response_at_path(main_path,
                                                                              kBareCompletionSource,
                                                                              kInitialize,
                                                                              "textDocument/completion",
                                                                              "    M",
-                                                                             strlen("    M"));
+                                                                             strlen("    M"),
+                                                                             "\"label\":\"Map<K, V>\"");
 
     ASSERT(strstr(hover_type_output, "\"id\":2,\"result\":null") == NULL);
     ASSERT(strstr(hover_type_output, "type Map<K, V>") != NULL);
@@ -15567,7 +15702,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     kInitialize,
                                                     "textDocument/hover",
                                                     "ref: RefType",
-                                                    strlen("ref: "));
+                                                    strlen("ref: "),
+                                                    "Kind: Reference Type");
     ASSERT(strstr(output,
                   "type RefType {...}\\n\\nKind: Reference Type") != NULL);
     free(output);
@@ -15577,7 +15713,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     kInitialize,
                                                     "textDocument/hover",
                                                     "ref.copy(ref)",
-                                                    strlen("ref."));
+                                                    strlen("ref."),
+                                                    "func copy(value: RefType): RefType");
     ASSERT(strstr(output, "func copy(value: RefType): RefType") != NULL);
     ASSERT(strstr(output, "test.lsp.hoverpkg.RefType") == NULL);
     free(output);
@@ -15587,7 +15724,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     kInitialize,
                                                     "textDocument/hover",
                                                     "value: ValueType",
-                                                    strlen("value: "));
+                                                    strlen("value: "),
+                                                    "Kind: Value Type");
     ASSERT(strstr(output,
                   "type ValueType {...}\\n\\nKind: Value Type") != NULL);
     ASSERT(strstr(output, "@value type ValueType") == NULL);
@@ -15598,7 +15736,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     kInitialize,
                                                     "textDocument/hover",
                                                     "tuple: TupleType",
-                                                    strlen("tuple: "));
+                                                    strlen("tuple: "),
+                                                    "Kind: Tuple Type");
     ASSERT(strstr(output,
                   "type TupleType(i32, string);\\n\\nKind: Tuple Type") != NULL);
     free(output);
@@ -15608,7 +15747,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     kInitialize,
                                                     "textDocument/hover",
                                                     "state: State",
-                                                    strlen("state: "));
+                                                    strlen("state: "),
+                                                    "Kind: Enum");
     ASSERT(strstr(output, "enum State\\n\\nKind: Enum") != NULL);
     free(output);
 
@@ -15617,7 +15757,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     kInitialize,
                                                     "textDocument/hover",
                                                     "State.Done",
-                                                    strlen("State."));
+                                                    strlen("State."),
+                                                    "Kind: Enum");
     ASSERT(strstr(output, "Done") != NULL);
     ASSERT(strstr(output, "Kind: Enum") != NULL);
     free(output);
@@ -15627,7 +15768,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     kInitialize,
                                                     "textDocument/hover",
                                                     "let constructed = RefType();",
-                                                    strlen("let constructed = "));
+                                                    strlen("let constructed = "),
+                                                    "Kind: Reference Type");
     ASSERT(strstr(output, "Kind: Reference Type") != NULL);
     free(output);
 
@@ -15636,7 +15778,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     kInitialize,
                                                     "textDocument/hover",
                                                     "object: ObjectShape",
-                                                    strlen("object: "));
+                                                    strlen("object: "),
+                                                    "Kind: Object Spec");
     ASSERT(strstr(output,
                   "spec ObjectShape {...}\\n\\nKind: Object Spec") != NULL);
     free(output);
@@ -15646,7 +15789,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     kInitialize,
                                                     "textDocument/hover",
                                                     "callback: CallbackShape",
-                                                    strlen("callback: "));
+                                                    strlen("callback: "),
+                                                    "Kind: Callback Spec");
     ASSERT(strstr(output,
                   "spec CallbackShape(input: i32): string;\\n\\nKind: Callback Spec") != NULL);
     free(output);
@@ -15656,7 +15800,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     kInitialize,
                                                     "textDocument/hover",
                                                     "unionValue: UnionShape",
-                                                    strlen("unionValue: "));
+                                                    strlen("unionValue: "),
+                                                    "Kind: Union Spec");
     ASSERT(strstr(output,
                   "spec UnionShape: RefType | ValueType;\\n\\nKind: Union Spec") != NULL);
     ASSERT(strstr(output, "test.lsp.hoverpkg.RefType") == NULL);
@@ -15667,7 +15812,8 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
                                                     kInitialize,
                                                     "textDocument/hover",
                                                     "intersectionValue: IntersectionShape",
-                                                    strlen("intersectionValue: "));
+                                                    strlen("intersectionValue: "),
+                                                    "Kind: Intersection Spec");
     ASSERT(strstr(output,
                   "spec IntersectionShape: ObjectShape & OtherShape;\\n\\nKind: Intersection Spec") != NULL);
     ASSERT(strstr(output, "test.lsp.hoverpkg.ObjectShape") == NULL);
