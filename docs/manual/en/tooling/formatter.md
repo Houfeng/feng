@@ -25,6 +25,7 @@ The Feng source formatter handles:
 - Trailing whitespace and line endings.
 - Spacing around binary, compound-assignment, and shift operators.
 - Common spacing for parameters, arguments, type annotations, commas, and object literals.
+- Tight spacing for variadic parameters `T...` and prepacked forwarding `...expr`, while preserving one space after a preceding argument comma.
 
 The manifest formatter handles:
 

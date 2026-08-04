@@ -65,6 +65,12 @@ runCase(
 );
 
 runCase(
+    'formats variadic declarations and prepacked forwarding as cohesive ellipses',
+    'func forward(level:int,args:string ...):void {\nlog(level,... args);\nlog(... args);\n}\n',
+    'func forward(level: int, args: string...): void {\n    log(level, ...args);\n    log(...args);\n}\n'
+);
+
+runCase(
     'indents multi-line parameter lists and for headers',
     'func main(\nargs:string[],\nlimit:int\n):void {\nfor(i=0;i<limit;i=i+1){\nprint(args[i]);\n}\n}\n',
     'func main(\n    args: string[],\n    limit: int\n): void {\n    for (i = 0; i < limit; i = i + 1) {\n        print(args[i]);\n    }\n}\n'

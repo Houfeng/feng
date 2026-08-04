@@ -41,7 +41,7 @@ const MULTI_CHAR_OPERATORS = new Set([
 ]);
 const SINGLE_CHAR_OPERATORS = new Set(['+', '-', '*', '/', '%', '=', '!', '<', '>', '&', '|', '^', '~']);
 const DELIMITERS = new Set(['(', ')', '[', ']', '{', '}']);
-const PUNCTUATION = new Set([',', ':', ';', '.']);
+const PUNCTUATION = new Set([',', ':', ';', '.', '...']);
 const BUILTIN_TYPE_IDENTIFIERS = new Set([
     'byte', 'short', 'int', 'long',
     'i8', 'i16', 'i32', 'i64',
@@ -320,6 +320,13 @@ function tokenize(source) {
 
             tokens.push({ type: 'number', value: source.slice(index, end) });
             index = end;
+            continue;
+        }
+
+        /* Recognize multi-character punctuation before its single-character prefix. */
+        if (PUNCTUATION.has(threeChars)) {
+            tokens.push(classifySymbol(threeChars));
+            index += 3;
             continue;
         }
 
