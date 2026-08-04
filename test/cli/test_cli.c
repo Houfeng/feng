@@ -1663,8 +1663,10 @@ static char *run_lsp_server_capture_after_position_ready(
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
+    ready = false;
     for (probe_index = 0U; probe_index < MAX_READY_PROBES; ++probe_index) {
         unsigned int probe_id = 1000U + (unsigned int)probe_index;
+        unsigned int barrier_id = 2000U + (unsigned int)probe_index;
         char *probe = dup_printf(
             "{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"%s\","
             "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
@@ -1674,20 +1676,28 @@ static char *run_lsp_server_capture_after_position_ready(
             uri,
             line,
             character);
+        char *barrier = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"id\":%u,"
+            "\"method\":\"feng/testReadinessBarrier\",\"params\":null}",
+            barrier_id);
+        char *barrier_response = dup_printf(
+            "\"id\":%u,\"error\":{\"code\":-32601,"
+            "\"message\":\"Method not found\"}}",
+            barrier_id);
 
         write_lsp_message(input, probe);
+        write_lsp_message(input, barrier);
         free(probe);
+        free(barrier);
+        ASSERT(fflush(input) == 0);
+        readiness_output = read_fd_until_contains(output_pipe[0], barrier_response);
+        free(barrier_response);
+        ready = strstr(readiness_output, ready_text) != NULL;
+        free(readiness_output);
+        if (ready) {
+            break;
+        }
     }
-    write_lsp_message(input,
-                      "{\"jsonrpc\":\"2.0\",\"id\":2000,"
-                      "\"method\":\"feng/testReadinessBarrier\",\"params\":null}");
-    ASSERT(fflush(input) == 0);
-    readiness_output = read_fd_until_contains(
-        output_pipe[0],
-        "\"id\":2000,\"error\":{\"code\":-32601,"
-        "\"message\":\"Method not found\"}}");
-    ready = strstr(readiness_output, ready_text) != NULL;
-    free(readiness_output);
 
     for (request_index = 0U; request_index < request_count; ++request_index) {
         write_lsp_message(input, requests[request_index]);
