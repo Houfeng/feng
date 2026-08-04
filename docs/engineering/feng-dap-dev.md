@@ -602,7 +602,7 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 - 编辑器把目标 binary、工作目录和 preLaunchTask 结果交给 `feng dap`。
 - `feng dap` 只加载目标 binary 同级的单个 `.fd`，并校验其中记录的 `META.content_fingerprint` 与当前 binary 重新计算的内容指纹是否匹配。
 - 校验通过后，由 `feng dap` 拉起并代理 `lldb-dap`。
-- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；同时已在 `setBreakpoints` / `stackTrace` 上完成本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换，并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame_policy 过滤；`variables` 已按当前 frame / scope 的可见集合完成 `.fd` 白名单过滤与 `backend_name -> display_name` 重写，并按“用户表达式优先”回读值：记录显式提供 `read_expr` 时直接用它，普通 `PARAM` / `BINDING` / `SELF` 若未提供 `read_expr` 则默认以 `backend_name` 作为只读回读表达式，从而在首次停下时也尽量避免直接暴露 backend `variables` 原值；若回读结果仍只是 runtime 载体指针，则顶层变量显示至少对 `FengArray *` / `FengString *` 通过读取 runtime `length` 字段收敛为稳定长度摘要，数组格式为 `元素类型[length=N]`，例如 `string[length=1]`，字符串格式为 `string[length=N]`。同时，三段式 `for` 的调试 codegen 需要把 header / body / update 的逻辑源码行切分稳定，避免循环体首行断点落到初始化尚未写回的 backend 地址。`evaluate` 已支持 identifier 子集的 Feng 名称解析与后端读取改写；`frame_policy` 的 `COLLAPSE` 语义以及更大范围的只读 watch 子集继续在后续子项叠加。
+- 当前已落地的 Phase 4 基线切面为：`feng dap` 本地响应 `initialize`，在 `launch` 前校验目标 binary 同级 `.fd` 与内容指纹，仅在校验通过后再拉起并接管 `lldb-dap`；同时已在 `setBreakpoints` / `stackTrace` 上完成本地文件路径与 `PKG_NAME://...` 逻辑源码 URI 的双向转换，并在 `stackTrace` 上完成 backend frame 名称重写与 `HIDDEN` frame_policy 过滤；`variables` 已按当前 frame / scope 的可见集合完成 `.fd` 白名单过滤与 `backend_name -> display_name` 重写，并按“用户表达式优先”回读值：记录显式提供 `read_expr` 时直接用它，普通 `PARAM` / `BINDING` / `SELF` 若未提供 `read_expr` 则默认以 `backend_name` 作为只读回读表达式，从而在首次停下时也尽量避免直接暴露 backend `variables` 原值；若回读结果仍只是 runtime 载体指针，则顶层变量显示至少对 `FengArray *` / `FengString *` 通过读取 runtime `length` 字段收敛为稳定长度摘要，数组格式为 `元素类型[length=N]`，例如 `string[length=1]`，字符串格式为 `string[length=N]`。字符串实际值读取不得要求 `lldb-dap` 格式化 `const char *` 或字符数组；代理只通过现有 runtime accessor 求得数值长度和数值数据地址，再通过 DAP `readMemory` 读取确切字节，避免后端格式化异常阻塞整个 `variables` 请求。同时，三段式 `for` 的调试 codegen 需要把 header / body / update 的逻辑源码行切分稳定，避免循环体首行断点落到初始化尚未写回的 backend 地址。`evaluate` 已支持 identifier 子集的 Feng 名称解析与后端读取改写；`frame_policy` 的 `COLLAPSE` 语义以及更大范围的只读 watch 子集继续在后续子项叠加。
 
 #### `setBreakpoints`
 
@@ -645,7 +645,7 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 - builtin 标量：直接复用 `lldb-dap` 原始值。
 - enum：若能从现有类型信息稳定恢复展示名，则做轻量重写；否则先退回原始整数值。
 - builtin 标量：直接复用 `lldb-dap` 原始值。
-- string：顶层显示优先回读实际 UTF-8 字符串值（通过 `feng_string_data`），不展开子字符。
+- string：顶层显示优先回读实际 UTF-8 字符串值，不展开子字符。代理先以整数结果读取 `feng_string_length` 和 `feng_string_data`，再通过 DAP `readMemory` 按确切长度读取字符串字节；不得让 `lldb-dap` 直接格式化 `const char *` 或字符数组结果。
 - array：顶层显示格式为 `元素类型[length=N]`；`variablesReference` 替换为 synthetic ref，支持按索引展开每个元素；元素展开通过 `feng_array_data` 系列 evaluate 表达式实现（见 §5.10.3）。
 - 用户类型（spec / object）：`variablesReference` 替换为 synthetic ref，支持按字段名展开；字段列表来自 `ENTS` 中 `parent_strid` 匹配的字段模板记录（见 §5.10.4）；字段本身若为数组或用户类型，递归触发展开。
 - enum：若能从现有类型信息稳定恢复展示名，则做轻量重写；否则退回原始整数值。

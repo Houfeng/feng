@@ -92,6 +92,13 @@ typedef struct FengDapEvaluatedVariable {
     bool has_variables_reference;
 } FengDapEvaluatedVariable;
 
+/* Decoded bytes returned by one proxy-internal DAP readMemory request. */
+typedef struct FengDapReadMemoryResult {
+    unsigned char *data;
+    size_t data_length;
+    bool has_data;
+} FengDapReadMemoryResult;
+
 /* Caches an out-of-order proxy-internal evaluate response for its original waiter. */
 typedef struct FengDapCachedInternalEvaluateResponse {
     uint64_t request_seq;
@@ -160,6 +167,15 @@ static void proxy_evaluated_variable_dispose(FengDapEvaluatedVariable *value) {
     }
     free(value->result);
     free(value->type);
+    memset(value, 0, sizeof(*value));
+}
+
+/* Release one decoded readMemory result. */
+static void proxy_read_memory_result_dispose(FengDapReadMemoryResult *value) {
+    if (value == NULL) {
+        return;
+    }
+    free(value->data);
     memset(value, 0, sizeof(*value));
 }
 
@@ -3886,6 +3902,124 @@ static bool proxy_parse_evaluated_variable_response_payload(const char *json,
     return true;
 }
 
+/* Convert one standard Base64 digit to its six-bit value. */
+static int proxy_base64_digit(unsigned char byte) {
+    if (byte >= 'A' && byte <= 'Z') {
+        return (int)(byte - 'A');
+    }
+    if (byte >= 'a' && byte <= 'z') {
+        return (int)(byte - 'a') + 26;
+    }
+    if (byte >= '0' && byte <= '9') {
+        return (int)(byte - '0') + 52;
+    }
+    if (byte == '+') {
+        return 62;
+    }
+    if (byte == '/') {
+        return 63;
+    }
+    return -1;
+}
+
+/* Decode the standard Base64 payload used by DAP readMemory responses. */
+static bool proxy_decode_base64(const char *encoded,
+                                unsigned char **out_data,
+                                size_t *out_length) {
+    unsigned char *data = NULL;
+    size_t encoded_length;
+    size_t data_length = 0U;
+    size_t index;
+
+    if (encoded == NULL || out_data == NULL || out_length == NULL) {
+        return false;
+    }
+    *out_data = NULL;
+    *out_length = 0U;
+    encoded_length = strlen(encoded);
+    if (encoded_length == 0U) {
+        return true;
+    }
+    if (encoded_length % 4U != 0U || encoded_length / 4U > SIZE_MAX / 3U) {
+        return false;
+    }
+    data = (unsigned char *)malloc((encoded_length / 4U) * 3U);
+    if (data == NULL) {
+        return false;
+    }
+    for (index = 0U; index < encoded_length; index += 4U) {
+        int first = proxy_base64_digit((unsigned char)encoded[index]);
+        int second = proxy_base64_digit((unsigned char)encoded[index + 1U]);
+        int third = encoded[index + 2U] == '='
+                        ? 0
+                        : proxy_base64_digit((unsigned char)encoded[index + 2U]);
+        int fourth = encoded[index + 3U] == '='
+                         ? 0
+                         : proxy_base64_digit((unsigned char)encoded[index + 3U]);
+        bool is_last = index + 4U == encoded_length;
+
+        if (first < 0 || second < 0 || third < 0 || fourth < 0 ||
+            (!is_last && (encoded[index + 2U] == '=' || encoded[index + 3U] == '=')) ||
+            (encoded[index + 2U] == '=' && encoded[index + 3U] != '=')) {
+            free(data);
+            return false;
+        }
+        data[data_length++] = (unsigned char)((first << 2) | (second >> 4));
+        if (encoded[index + 2U] != '=') {
+            data[data_length++] = (unsigned char)((second << 4) | (third >> 2));
+        }
+        if (encoded[index + 3U] != '=') {
+            data[data_length++] = (unsigned char)((third << 6) | fourth);
+        }
+    }
+    *out_data = data;
+    *out_length = data_length;
+    return true;
+}
+
+/* Parse and decode the body of one successful DAP readMemory response. */
+static bool proxy_parse_read_memory_response_payload(const char *json,
+                                                     size_t json_length,
+                                                     FengDapReadMemoryResult *out_value) {
+    const char *body_start;
+    const char *body_end;
+    const char *data_start;
+    const char *data_end;
+    const char *after_string;
+    char *encoded = NULL;
+    bool ok;
+
+    if (out_value == NULL) {
+        return false;
+    }
+    proxy_read_memory_result_dispose(out_value);
+    if (!proxy_json_find_object_member_loose(json,
+                                             json_length,
+                                             "body",
+                                             &body_start,
+                                             &body_end) ||
+        !proxy_json_find_object_member_loose(body_start,
+                                             (size_t)(body_end - body_start),
+                                             "data",
+                                             &data_start,
+                                             &data_end)) {
+        return true;
+    }
+    if (!proxy_json_parse_string_copy(data_start, data_end, &encoded, &after_string) ||
+        proxy_json_skip_whitespace(after_string, data_end) != data_end) {
+        free(encoded);
+        return false;
+    }
+    ok = proxy_decode_base64(encoded, &out_value->data, &out_value->data_length);
+    free(encoded);
+    if (!ok) {
+        proxy_read_memory_result_dispose(out_value);
+        return false;
+    }
+    out_value->has_data = true;
+    return true;
+}
+
 static bool proxy_send_internal_evaluate_request(int backend_stdin_fd,
                                                  FengDapRelayState *state,
                                                  uint64_t frame_id,
@@ -3927,6 +4061,57 @@ static bool proxy_send_internal_evaluate_request(int backend_stdin_fd,
                              payload,
                              error_fd,
                              "failed to send internal evaluate request to lldb-dap");
+    free(payload);
+    if (!ok) {
+        return false;
+    }
+    *out_request_seq = request_seq;
+    return true;
+}
+
+/* Send one proxy-internal DAP readMemory request for an exact byte range. */
+static bool proxy_send_internal_read_memory_request(int backend_stdin_fd,
+                                                    FengDapRelayState *state,
+                                                    const char *memory_reference,
+                                                    uint64_t byte_count,
+                                                    uint64_t *out_request_seq,
+                                                    int error_fd) {
+    uint64_t request_seq;
+    char *escaped_reference = NULL;
+    char *payload = NULL;
+    bool ok;
+
+    if (backend_stdin_fd < 0 || memory_reference == NULL ||
+        memory_reference[0] == '\0' || out_request_seq == NULL) {
+        proxy_report_error(error_fd,
+                           "failed to send internal readMemory request",
+                           "invalid readMemory request arguments");
+        return false;
+    }
+    request_seq = proxy_relay_state_next_internal_request_seq(state);
+    escaped_reference = proxy_json_escape(memory_reference);
+    if (escaped_reference == NULL) {
+        proxy_report_error(error_fd,
+                           "failed to send internal readMemory request",
+                           "out of memory");
+        return false;
+    }
+    payload = proxy_dup_printf(
+        "{\"seq\":%llu,\"type\":\"request\",\"command\":\"readMemory\",\"arguments\":{\"memoryReference\":\"%s\",\"offset\":0,\"count\":%llu}}",
+        (unsigned long long)request_seq,
+        escaped_reference,
+        (unsigned long long)byte_count);
+    free(escaped_reference);
+    if (payload == NULL) {
+        proxy_report_error(error_fd,
+                           "failed to send internal readMemory request",
+                           "out of memory");
+        return false;
+    }
+    ok = proxy_write_message(backend_stdin_fd,
+                             payload,
+                             error_fd,
+                             "failed to send internal readMemory request to lldb-dap");
     free(payload);
     if (!ok) {
         return false;
@@ -4059,6 +4244,79 @@ static bool proxy_collect_internal_evaluate_response(FengDapMessageReader *backe
     }
 }
 
+/* Collect one proxy-internal readMemory response while relaying unrelated events. */
+static bool proxy_collect_internal_read_memory_response(
+    FengDapMessageReader *backend_reader,
+    int backend_stdin_fd,
+    int output_fd,
+    const FengDebugArtifact *artifact,
+    FengDapRelayState *state,
+    uint64_t request_seq,
+    FengDapReadMemoryResult *out_value,
+    int error_fd) {
+    for (;;) {
+        FengDapMessage message = {0};
+        FengDapReadStatus status;
+        char *type = NULL;
+        char *command = NULL;
+        uint64_t response_seq = 0U;
+        bool is_match = false;
+        bool success = false;
+        bool ok = true;
+
+        status = proxy_reader_read_message(backend_reader, &message, error_fd);
+        if (status != FENG_DAP_READ_OK) {
+            proxy_message_dispose(&message);
+            return false;
+        }
+        if (proxy_json_get_string_member(message.payload,
+                                         message.payload_length,
+                                         "type",
+                                         &type) &&
+            proxy_json_get_string_member(message.payload,
+                                         message.payload_length,
+                                         "command",
+                                         &command) &&
+            proxy_json_get_u64_member(message.payload,
+                                      message.payload_length,
+                                      "request_seq",
+                                      &response_seq) &&
+            strcmp(type, "response") == 0 &&
+            strcmp(command, "readMemory") == 0 &&
+            response_seq == request_seq) {
+            is_match = true;
+            if (proxy_json_get_bool_member(message.payload,
+                                           message.payload_length,
+                                           "success",
+                                           &success) &&
+                success) {
+                ok = proxy_parse_read_memory_response_payload(message.payload,
+                                                              message.payload_length,
+                                                              out_value);
+            }
+        }
+        if (is_match) {
+            free(type);
+            free(command);
+            proxy_message_dispose(&message);
+            return ok;
+        }
+        ok = proxy_process_backend_relay_message(&message,
+                                                 backend_reader,
+                                                 backend_stdin_fd,
+                                                 output_fd,
+                                                 artifact,
+                                                 state,
+                                                 error_fd);
+        free(type);
+        free(command);
+        proxy_message_dispose(&message);
+        if (!ok) {
+            return false;
+        }
+    }
+}
+
 static const char *proxy_variable_read_expression(const FengCodegenMapingVariableRecord *record) {
     if (record == NULL) {
         return NULL;
@@ -4106,52 +4364,91 @@ static char *proxy_build_runtime_pointer_summary_expr(const char *type_text,
     return NULL;
 }
 
-static char *proxy_build_runtime_string_value_expr(const char *read_expression) {
+/* Build a scalar-only expression for the byte length of one Feng string. */
+static char *proxy_build_runtime_string_length_expr(const char *read_expression) {
     if (read_expression == NULL || read_expression[0] == '\0') {
         return NULL;
     }
-    return proxy_dup_printf("(const char *)feng_string_data((const FengString *)(%s))",
+    return proxy_dup_printf("(size_t)feng_string_length((const FengString *)(%s))",
                             read_expression);
 }
 
-static char *proxy_dup_quoted_debug_string_value(const char *text) {
-    const char *cursor;
-    const char *best_start = NULL;
-    const char *best_end = NULL;
-
-    if (text == NULL) {
+/* Build a scalar-only expression for the data address of one Feng string. */
+static char *proxy_build_runtime_string_data_address_expr(const char *read_expression) {
+    if (read_expression == NULL || read_expression[0] == '\0') {
         return NULL;
     }
-    cursor = text;
-    while (*cursor != '\0') {
-        const char *start;
-
-        if (*cursor != '"') {
-            ++cursor;
-            continue;
-        }
-        start = cursor++;
-        while (*cursor != '\0') {
-            if (*cursor == '\\' && cursor[1] != '\0') {
-                cursor += 2;
-                continue;
-            }
-            if (*cursor == '"') {
-                best_start = start;
-                best_end = cursor;
-                ++cursor;
-                break;
-            }
-            ++cursor;
-        }
-    }
-    if (best_start == NULL || best_end == NULL || best_end < best_start) {
-        return NULL;
-    }
-    return proxy_dup_bytes((const unsigned char *)best_start,
-                           (size_t)(best_end - best_start + 1U));
+    return proxy_dup_printf("(uintptr_t)feng_string_data((const FengString *)(%s))",
+                            read_expression);
 }
 
+/* Format exact Feng string bytes as one quoted debugger value. */
+static char *proxy_dup_quoted_debug_string_bytes(const unsigned char *data,
+                                                 size_t data_length) {
+    static const char hex_digits[] = "0123456789abcdef";
+    char *buffer = NULL;
+    size_t length = 0U;
+    size_t capacity = 0U;
+    size_t index;
+
+    if (data == NULL && data_length != 0U) {
+        return NULL;
+    }
+    if (!proxy_append_byte(&buffer, &length, &capacity, '"')) {
+        free(buffer);
+        return NULL;
+    }
+    for (index = 0U; index < data_length; ++index) {
+        unsigned char byte = data[index];
+        const char *escape = NULL;
+
+        switch (byte) {
+            case '\\': escape = "\\\\"; break;
+            case '"': escape = "\\\""; break;
+            case '\0': escape = "\\0"; break;
+            case '\n': escape = "\\n"; break;
+            case '\r': escape = "\\r"; break;
+            case '\t': escape = "\\t"; break;
+            default: break;
+        }
+        if (escape != NULL) {
+            if (!proxy_append_bytes(&buffer,
+                                    &length,
+                                    &capacity,
+                                    escape,
+                                    strlen(escape))) {
+                free(buffer);
+                return NULL;
+            }
+        } else if (byte < 0x20U || byte == 0x7FU) {
+            if (!proxy_append_byte(&buffer, &length, &capacity, '\\') ||
+                !proxy_append_byte(&buffer, &length, &capacity, 'x') ||
+                !proxy_append_byte(&buffer,
+                                   &length,
+                                   &capacity,
+                                   (unsigned char)hex_digits[byte >> 4U]) ||
+                !proxy_append_byte(&buffer,
+                                   &length,
+                                   &capacity,
+                                   (unsigned char)hex_digits[byte & 0x0FU])) {
+                free(buffer);
+                return NULL;
+            }
+        } else if (!proxy_append_byte(&buffer, &length, &capacity, byte)) {
+            free(buffer);
+            return NULL;
+        }
+    }
+    if (!proxy_append_byte(&buffer, &length, &capacity, '"') ||
+        !proxy_append_byte(&buffer, &length, &capacity, '\0')) {
+        free(buffer);
+        return NULL;
+    }
+    buffer[length - 1U] = '\0';
+    return buffer;
+}
+
+/* Read one Feng string without asking lldb-dap to format a character pointer. */
 static bool proxy_try_read_runtime_string_value(FengDapMessageReader *backend_reader,
                                                 int backend_stdin_fd,
                                                 int output_fd,
@@ -4161,8 +4458,14 @@ static bool proxy_try_read_runtime_string_value(FengDapMessageReader *backend_re
                                                 const char *read_expression,
                                                 char **out_value,
                                                 int error_fd) {
-    char *value_expr = NULL;
-    FengDapEvaluatedVariable evaluated = {0};
+    char *length_expr = NULL;
+    char *address_expr = NULL;
+    char *memory_reference = NULL;
+    FengDapEvaluatedVariable length_value = {0};
+    FengDapEvaluatedVariable address_value = {0};
+    FengDapReadMemoryResult memory_value = {0};
+    uint64_t byte_count = 0U;
+    uint64_t data_address = 0U;
     uint64_t request_seq = 0U;
     char *value = NULL;
     bool ok = false;
@@ -4173,14 +4476,18 @@ static bool proxy_try_read_runtime_string_value(FengDapMessageReader *backend_re
     if (frame_id == 0U || read_expression == NULL || read_expression[0] == '\0') {
         return true;
     }
-    value_expr = proxy_build_runtime_string_value_expr(read_expression);
-    if (value_expr == NULL) {
-        return true;
+    length_expr = proxy_build_runtime_string_length_expr(read_expression);
+    address_expr = proxy_build_runtime_string_data_address_expr(read_expression);
+    if (length_expr == NULL || address_expr == NULL) {
+        proxy_report_error(error_fd,
+                           "failed to read runtime string value",
+                           "out of memory");
+        goto cleanup;
     }
     if (!proxy_send_internal_evaluate_request(backend_stdin_fd,
                                               state,
                                               frame_id,
-                                              value_expr,
+                                              length_expr,
                                               &request_seq,
                                               error_fd) ||
         !proxy_collect_internal_evaluate_response(backend_reader,
@@ -4189,25 +4496,105 @@ static bool proxy_try_read_runtime_string_value(FengDapMessageReader *backend_re
                                                   artifact,
                                                   state,
                                                   request_seq,
-                                                  &evaluated,
+                                                  &length_value,
                                                   error_fd)) {
         goto cleanup;
     }
-    if (!evaluated.has_result || evaluated.result == NULL || evaluated.result[0] == '\0') {
+    if (!length_value.has_result ||
+        !proxy_parse_u64_cstr(length_value.result, &byte_count)) {
         ok = true;
         goto cleanup;
     }
-    value = proxy_dup_quoted_debug_string_value(evaluated.result);
-    if (value != NULL && out_value != NULL) {
+    if (byte_count == 0U) {
+        value = proxy_dup_printf("\"\"");
+        if (value == NULL) {
+            proxy_report_error(error_fd,
+                               "failed to read runtime string value",
+                               "out of memory");
+            goto cleanup;
+        }
+        if (out_value != NULL) {
+            *out_value = value;
+            value = NULL;
+        }
+        ok = true;
+        goto cleanup;
+    }
+    if (byte_count > (uint64_t)SIZE_MAX) {
+        ok = true;
+        goto cleanup;
+    }
+    if (!proxy_send_internal_evaluate_request(backend_stdin_fd,
+                                              state,
+                                              frame_id,
+                                              address_expr,
+                                              &request_seq,
+                                              error_fd) ||
+        !proxy_collect_internal_evaluate_response(backend_reader,
+                                                  backend_stdin_fd,
+                                                  output_fd,
+                                                  artifact,
+                                                  state,
+                                                  request_seq,
+                                                  &address_value,
+                                                  error_fd)) {
+        goto cleanup;
+    }
+    if (!address_value.has_result ||
+        !proxy_parse_u64_cstr(address_value.result, &data_address) ||
+        data_address == 0U) {
+        ok = true;
+        goto cleanup;
+    }
+    memory_reference = proxy_dup_printf("0x%llx", (unsigned long long)data_address);
+    if (memory_reference == NULL) {
+        proxy_report_error(error_fd,
+                           "failed to read runtime string value",
+                           "out of memory");
+        goto cleanup;
+    }
+    if (!proxy_send_internal_read_memory_request(backend_stdin_fd,
+                                                 state,
+                                                 memory_reference,
+                                                 byte_count,
+                                                 &request_seq,
+                                                 error_fd) ||
+        !proxy_collect_internal_read_memory_response(backend_reader,
+                                                     backend_stdin_fd,
+                                                     output_fd,
+                                                     artifact,
+                                                     state,
+                                                     request_seq,
+                                                     &memory_value,
+                                                     error_fd)) {
+        goto cleanup;
+    }
+    if (!memory_value.has_data || memory_value.data_length != (size_t)byte_count) {
+        ok = true;
+        goto cleanup;
+    }
+    value = proxy_dup_quoted_debug_string_bytes(memory_value.data,
+                                                memory_value.data_length);
+    if (value == NULL) {
+        proxy_report_error(error_fd,
+                           "failed to read runtime string value",
+                           "out of memory");
+        goto cleanup;
+    }
+    if (out_value != NULL) {
         *out_value = value;
         value = NULL;
     }
     ok = true;
 
 cleanup:
-    free(value_expr);
+    free(length_expr);
+    free(address_expr);
+    free(memory_reference);
     free(value);
-    proxy_evaluated_variable_dispose(&evaluated);
+    proxy_evaluated_variable_dispose(&length_value);
+    proxy_evaluated_variable_dispose(&address_value);
+    proxy_read_memory_result_dispose(&memory_value);
     return ok;
 }
 
