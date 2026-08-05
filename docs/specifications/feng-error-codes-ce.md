@@ -385,6 +385,9 @@
 | CE0914 | 解构绑定元素数量匹配约束 | CE0230 | codegen: destructuring arity mismatch | 回到AE |
 | CE0915 | 绑定类型或初始化器缺失 | CE0234 | codegen: binding without type or initializer not supported | 回到AE |
 | CE0916 | throw 标量装箱构造器缺失 | CE0285 | codegen: missing scalar box constructor for throw payload | 消解 |
+| CE0917 | 成员展开来源对象发码前提 | CE0377 | codegen: member mix source field is not lowerable、codegen: member mix source construction is not an object value | 回到IE |
+| CE0918 | 成员展开来源 reified 布局缺失 | CE0378 | codegen: member mix source requires missing reified layout | 回到IE |
+| CE0919 | 成员展开来源字段元数据缺失 | CE0379 | codegen: member mix source field index is missing、codegen: member mix source field is missing | 回到IE |
 
 ## 10 表达式/控制流段
 

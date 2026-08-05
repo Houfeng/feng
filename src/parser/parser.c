@@ -60,6 +60,20 @@ static void free_type_member(FengTypeMember *member);
 static void free_enum_items(FengEnumItem *items, size_t count);
 static void free_try_catch_clauses(FengTryCatchClause *clauses, size_t count);
 
+/* Return whether a parsed annotation list contains the requested built-in fact. */
+static bool parsed_annotations_contain_kind(const FengAnnotation *annotations,
+                                            size_t annotation_count,
+                                            FengAnnotationKind kind) {
+    size_t annotation_index;
+
+    for (annotation_index = 0U; annotation_index < annotation_count; ++annotation_index) {
+        if (annotations[annotation_index].builtin_kind == kind) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void free_annotation_fields(FengAnnotation *annotation) {
     size_t arg_index;
 
@@ -1267,6 +1281,60 @@ static bool parse_tuple_type_declaration_tail(Parser *parser, FengDecl *decl) {
                          "SE0001", "tuple type declarations must end with ';'");
 }
 
+/* Parse one of the three concrete-type member-expansion directives. */
+static bool parse_type_mixin_declaration(Parser *parser,
+                                         size_t member_index,
+                                         FengTypeMixinDecl *out_mixin) {
+    FengTypeMixinDecl mixin;
+
+    memset(&mixin, 0, sizeof(mixin));
+    mixin.token = parser_current_token(parser);
+    mixin.member_index = member_index;
+    if (!parser_match(parser, FENG_TOKEN_ELLIPSIS)) {
+        return parser_error_current(
+            parser,
+            "SE0313",
+            "member mix declarations must use '...: Type;', '...: Type = Construction;', or '... = Construction;'");
+    }
+
+    if (parser_match(parser, FENG_TOKEN_COLON)) {
+        mixin.source_type = parse_type_ref(parser);
+        if (mixin.source_type == NULL) {
+            return false;
+        }
+        if (parser_match(parser, FENG_TOKEN_ASSIGN)) {
+            mixin.source_constructor = parse_expression(parser);
+            if (mixin.source_constructor == NULL) {
+                free_type_ref(mixin.source_type);
+                return false;
+            }
+        }
+    } else if (parser_match(parser, FENG_TOKEN_ASSIGN)) {
+        mixin.infer_source_type = true;
+        mixin.source_constructor = parse_expression(parser);
+        if (mixin.source_constructor == NULL) {
+            return false;
+        }
+    } else {
+        return parser_error_current(
+            parser,
+            "SE0313",
+            "member mix declarations must use '...: Type;', '...: Type = Construction;', or '... = Construction;'");
+    }
+
+    if (!parser_expect(parser,
+                       FENG_TOKEN_SEMICOLON,
+                       "SE0001",
+                       "member mix declarations must end with ';'")) {
+        free_type_ref(mixin.source_type);
+        free_expr(mixin.source_constructor);
+        return false;
+    }
+
+    *out_mixin = mixin;
+    return true;
+}
+
 static FengDecl *parse_type_declaration(Parser *parser,
                                         FengSlice doc_comment,
                                         FengVisibility visibility,
@@ -1340,6 +1408,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
 
     {
         size_t member_capacity = 0U;
+        size_t mixin_capacity = 0U;
 
     while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
         FengAnnotation *member_annotations;
@@ -1365,6 +1434,40 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 "SE0307", "type member annotations must be followed immediately by a field or method; remove the trailing ';'");
             free_decl(decl);
             return NULL;
+        }
+
+        if (parser_check(parser, FENG_TOKEN_ELLIPSIS)) {
+            FengTypeMixinDecl mixin;
+
+            if (member_annotation_count != 0U ||
+                member_visibility != FENG_VISIBILITY_DEFAULT ||
+                is_static) {
+                free_annotations(member_annotations, member_annotation_count);
+                (void)parser_error_current(
+                    parser,
+                    "SE0313",
+                    "member mix declarations cannot use annotations, visibility, or 'static'");
+                free_decl(decl);
+                return NULL;
+            }
+            free_annotations(member_annotations, member_annotation_count);
+            if (!parse_type_mixin_declaration(parser,
+                                              decl->as.type_decl.member_count,
+                                              &mixin)) {
+                free_decl(decl);
+                return NULL;
+            }
+            if (!APPEND_VALUE(parser,
+                              decl->as.type_decl.mixins,
+                              decl->as.type_decl.mixin_count,
+                              mixin_capacity,
+                              mixin)) {
+                free_type_ref(mixin.source_type);
+                free_expr(mixin.source_constructor);
+                free_decl(decl);
+                return NULL;
+            }
+            continue;
         }
 
         if (parser_match(parser, FENG_TOKEN_KW_LET) || parser_match(parser, FENG_TOKEN_KW_VAR)) {
@@ -1546,6 +1649,10 @@ static FengDecl *parse_type_declaration(Parser *parser,
             member->is_static = is_static;
             member->annotations = member_annotations;
             member->annotation_count = member_annotation_count;
+            member->is_mixable = parsed_annotations_contain_kind(
+                member_annotations,
+                member_annotation_count,
+                FENG_ANNOTATION_MIXABLE);
             member->as.callable = callable;
         } else {
             free_annotations(member_annotations, member_annotation_count);
@@ -2033,6 +2140,10 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
     member->as.callable = callable;
     member->annotations = member_annotations;
     member->annotation_count = member_annotation_count;
+    member->is_mixable = parsed_annotations_contain_kind(
+        member_annotations,
+        member_annotation_count,
+        FENG_ANNOTATION_MIXABLE);
     return member;
 }
 
@@ -5076,6 +5187,11 @@ static void free_decl(FengDecl *decl) {
                 free_type_member(decl->as.type_decl.members[index]);
             }
             free(decl->as.type_decl.members);
+            for (index = 0U; index < decl->as.type_decl.mixin_count; ++index) {
+                free_type_ref(decl->as.type_decl.mixins[index].source_type);
+                free_expr(decl->as.type_decl.mixins[index].source_constructor);
+            }
+            free(decl->as.type_decl.mixins);
             for (index = 0U; index < decl->as.type_decl.declared_spec_count; ++index) {
                 free_type_ref(decl->as.type_decl.declared_specs[index]);
             }

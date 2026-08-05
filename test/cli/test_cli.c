@@ -1613,13 +1613,15 @@ static char *run_lsp_server_capture(FILE *input) {
 static char *run_lsp_server_capture_after_position_ready(
     const char *initialize,
     const char *did_open,
+    const char *after_open,
     const char *method,
     const char *uri,
     unsigned int line,
     unsigned int character,
     const char *ready_text,
     const char *const *requests,
-    size_t request_count) {
+    size_t request_count,
+    char **out_ready_output) {
     enum { MAX_READY_PROBES = 64 };
     int input_pipe[2];
     int output_pipe[2];
@@ -1634,6 +1636,9 @@ static char *run_lsp_server_capture_after_position_ready(
     bool ready;
     int status;
 
+    if (out_ready_output != NULL) {
+        *out_ready_output = NULL;
+    }
     ASSERT(errors != NULL);
     ASSERT(pipe(input_pipe) == 0);
     ASSERT(pipe(output_pipe) == 0);
@@ -1663,6 +1668,9 @@ static char *run_lsp_server_capture_after_position_ready(
     ASSERT(input != NULL);
     write_lsp_message(input, initialize);
     write_lsp_message(input, did_open);
+    if (after_open != NULL) {
+        write_lsp_message(input, after_open);
+    }
     ready = false;
     for (probe_index = 0U; probe_index < MAX_READY_PROBES; ++probe_index) {
         unsigned int probe_id = 1000U + (unsigned int)probe_index;
@@ -1693,6 +1701,10 @@ static char *run_lsp_server_capture_after_position_ready(
         readiness_output = read_fd_until_contains(output_pipe[0], barrier_response);
         free(barrier_response);
         ready = strstr(readiness_output, ready_text) != NULL;
+        if (ready && out_ready_output != NULL) {
+            *out_ready_output = readiness_output;
+            readiness_output = NULL;
+        }
         free(readiness_output);
         if (ready) {
             break;
@@ -1738,13 +1750,15 @@ static char *run_lsp_single_position_response_after_ready(
 
     return run_lsp_server_capture_after_position_ready(initialize,
                                                         did_open,
+                                                        NULL,
                                                         method,
                                                         uri,
                                                         line,
                                                         character,
                                                         ready_text,
                                                         requests,
-                                                        3U);
+                                                        3U,
+                                                        NULL);
 }
 
 static char *file_uri_from_path(const char *path) {
@@ -3342,6 +3356,115 @@ static void test_direct_build_consumes_package_constrained_generic_type(void) {
         "}\n",
         "constrained_generic_type_main",
         "constrained generic type ok\n");
+
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Verifies a binary-package consumer uses ordinary source construction before
+ * copying mixed fields, while the no-source form remains direct zero-init. */
+static void test_direct_build_consumes_package_mixin(void) {
+    char template_path[] = "temp/feng_cli_pkg_mixin_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    bundle_path = build_single_source_package_bundle(
+        workspace_dir,
+        "pkgmixin",
+        "open module test.cli.pkgmixin;\n"
+        "open spec Widget { func draw(area: int): int; }\n"
+        "open type View: Widget {\n"
+        "  open let initialized: int = 11;\n"
+        "  open let constructorBound: int;\n"
+        "  open let lateBound: int;\n"
+        "  open var mutableValue: int = 3;\n"
+        "  func View(value: int) { self.constructorBound = value; }\n"
+        "  @mixable\n"
+        "  open static func draw(target: Widget, area: int): int {\n"
+        "    return area + 1;\n"
+        "  }\n"
+        "}\n"
+        "open type ImplicitView {\n"
+        "  open let implicitInitialized: int = 21;\n"
+        "}\n"
+        "open type PrivateImplicitView {\n"
+        "  seal let hidden: int = 23;\n"
+        "  open func read(): int { return self.hidden; }\n"
+        "}\n"
+        "open type PackageButton: Widget {\n"
+        "  ...: View;\n"
+        "}\n"
+        "open type FitView: Widget {\n"
+        "}\n"
+        "open fit FitView {\n"
+        "  @mixable\n"
+        "  open static func draw(target: Widget, area: int): int {\n"
+        "    return area + 2;\n"
+        "  }\n"
+        "}\n");
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        bundle_path,
+        "module test.cli.pkgmixinmain;\n"
+        "import test.cli.pkgmixin;\n"
+        "@cdecl(\"libc\")\n"
+        "extern func puts(msg: string*): int;\n"
+        "type Button: Widget {\n"
+        "  ...: View = View(7);\n"
+        "  func Button() { self.lateBound = 19; }\n"
+        "}\n"
+        "type ZeroButton: Widget {\n"
+        "  ...: View;\n"
+        "  func ZeroButton() {\n"
+        "    self.initialized = 0;\n"
+        "    self.constructorBound = 0;\n"
+        "    self.lateBound = 0;\n"
+        "  }\n"
+        "}\n"
+        "type ImplicitButton {\n"
+        "  ...: ImplicitView = ImplicitView();\n"
+        "}\n"
+        "type PackageLeaf: Widget {\n"
+        "  ...: PackageButton;\n"
+        "}\n"
+        "type FitButton: Widget {\n"
+        "  ...: FitView;\n"
+        "}\n"
+        "func main(args: string[]) {\n"
+        "  let source = View(7);\n"
+        "  let implicitSource = ImplicitView();\n"
+        "  let privateImplicitSource = PrivateImplicitView();\n"
+        "  let button = Button();\n"
+        "  let implicitButton = ImplicitButton();\n"
+        "  let packageLeaf = PackageLeaf();\n"
+        "  let fitSource = FitView();\n"
+        "  let fitButton = FitButton();\n"
+        "  let zero = ZeroButton();\n"
+        "  if source.initialized == 11 && source.mutableValue == 3 &&\n"
+        "     source.constructorBound == 7 && button.initialized == 11 &&\n"
+        "     button.mutableValue == 3 && button.constructorBound == 7 &&\n"
+        "     button.lateBound == 19 &&\n"
+        "     button.draw(4) == 5 && Button.draw(button, 4) == 5 &&\n"
+        "     implicitSource.implicitInitialized == 21 &&\n"
+        "     implicitButton.implicitInitialized == 21 &&\n"
+        "     privateImplicitSource.read() == 23 &&\n"
+        "     packageLeaf.initialized == 0 &&\n"
+        "     packageLeaf.mutableValue == 0 && packageLeaf.draw(4) == 5 &&\n"
+        "     fitSource.draw(4) == 6 && FitView.draw(fitSource, 4) == 6 &&\n"
+        "     fitButton.draw(4) == 6 && FitButton.draw(fitButton, 4) == 6 &&\n"
+        "     zero.initialized == 0 && zero.mutableValue == 0 &&\n"
+        "     zero.constructorBound == 0 && zero.lateBound == 0 {\n"
+        "    puts(&\"package mixin ok\");\n"
+        "  }\n"
+        "}\n",
+        "mixin_main",
+        "package mixin ok\n");
 
     free(bundle_path);
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
@@ -11112,13 +11235,15 @@ static void test_lsp_project_cache_hit_survives_broken_dependency_source(void) {
     requests[5] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
     output = run_lsp_server_capture_after_position_ready(initialize,
                                                          did_open,
+                                                         NULL,
                                                          "textDocument/hover",
                                                          main_uri,
                                                          type_line,
                                                          type_character,
                                                          "User from cache.",
                                                          requests,
-                                                         6U);
+                                                         6U,
+                                                         NULL);
 
     ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
     ASSERT(strstr(output, "\"id\":3,\"result\":null") == NULL);
@@ -16345,6 +16470,285 @@ static void test_lsp_annotation_completion_filter_prefix(void) {
     free(output);
 }
 
+/* Verifies completion and hover metadata for the mixable builtin annotation. */
+static void test_lsp_mixable_annotation_completion_and_hover(void) {
+    static const char *kCompletionSource =
+        "module test.lsp.annotation.mixable_completion;\n"
+        "\n"
+        "@mix\n";
+    static const char *kHoverSource =
+        "module test.lsp.annotation.mixable_hover;\n"
+        "spec Widget {}\n"
+        "type View: Widget {\n"
+        "    @mixable\n"
+        "    static func draw(target: Widget): void {}\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *output = capture_lsp_completion_response(
+        kCompletionSource, "@mix\n", strlen("@mix"));
+
+    ASSERT(strstr(output, "\"label\":\"mixable\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"runtime\"") == NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kHoverSource,
+                                        kInitialize,
+                                        "@mixable",
+                                        strlen("@mix"));
+    ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(output, "@mixable") != NULL);
+    ASSERT(strstr(output, "mixable static method annotation") != NULL);
+    free(output);
+}
+
+/* Verifies generated mixin members participate in ordinary LSP surfaces and
+ * go-to-definition follows their source-member mapping. */
+static void test_lsp_mixin_member_completion_hover_and_definition(void) {
+    static const char *kSource =
+        "module test.lsp.mixin_members;\n"
+        "\n"
+        "spec Widget {\n"
+        "    func draw(area: int): int;\n"
+        "}\n"
+        "\n"
+        "type View: Widget {\n"
+        "    open let width: int;\n"
+        "\n"
+        "    @mixable\n"
+        "    open static func draw(target: Widget, area: int): int {\n"
+        "        return area;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "type Button: Widget {\n"
+        "    ...: View;\n"
+        "}\n"
+        "\n"
+        "func inspect(button: Button): int {\n"
+        "    let width: int = button.width;\n"
+        "    return button.draw(width);\n"
+        "}\n";
+    char template_path[] = "temp/feng_cli_lsp_mixin_members_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_text;
+    char *initialize;
+    char *did_open;
+    char *completion;
+    char *hover_field;
+    char *definition_field;
+    char *definition_method;
+    char *shutdown;
+    char *output;
+    char *expected_field_definition;
+    char *expected_method_definition;
+    unsigned int field_line;
+    unsigned int field_character;
+    unsigned int method_line;
+    unsigned int method_character;
+    unsigned int source_field_line;
+    unsigned int source_field_character;
+    unsigned int source_method_line;
+    unsigned int source_method_character;
+    char *remove_error = NULL;
+    const char *requests[6];
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+    find_line_character(kSource,
+                        "button.width",
+                        strlen("button."),
+                        &field_line,
+                        &field_character);
+    find_line_character(kSource,
+                        "button.draw",
+                        strlen("button."),
+                        &method_line,
+                        &method_character);
+    find_line_character(kSource,
+                        "open let width",
+                        strlen("open let "),
+                        &source_field_line,
+                        &source_field_character);
+    find_line_character(kSource,
+                        "open static func draw",
+                        strlen("open static func "),
+                        &source_method_line,
+                        &source_method_character);
+
+    uri = file_uri_from_path(source_path);
+    escaped_text = json_escape_text(kSource);
+    initialize = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        uri,
+        escaped_text);
+    completion = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/completion\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        uri,
+        field_line,
+        field_character);
+    hover_field = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/hover\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        uri,
+        field_line,
+        field_character);
+    definition_field = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        uri,
+        field_line,
+        field_character);
+    definition_method = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        uri,
+        method_line,
+        method_character);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+    expected_field_definition = dup_printf(
+        "\"id\":4,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+        uri,
+        source_field_line,
+        source_field_character);
+    expected_method_definition = dup_printf(
+        "\"id\":5,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+        uri,
+        source_method_line,
+        source_method_character);
+
+    requests[0] = completion;
+    requests[1] = hover_field;
+    requests[2] = definition_field;
+    requests[3] = definition_method;
+    requests[4] = shutdown;
+    requests[5] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    output = run_lsp_server_capture_after_position_ready(initialize,
+                                                          did_open,
+                                                          NULL,
+                                                          "textDocument/completion",
+                                                          uri,
+                                                          field_line,
+                                                          field_character,
+                                                          "\"label\":\"width\"",
+                                                          requests,
+                                                          6U,
+                                                          NULL);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
+    ASSERT(strstr(output, "\"label\":\"width\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"draw\"") != NULL);
+    ASSERT(strstr(output, "\"id\":3,\"result\":null") == NULL);
+    ASSERT(strstr(output, "let width:") != NULL);
+    ASSERT(strstr(output, expected_field_definition) != NULL);
+    ASSERT(strstr(output, expected_method_definition) != NULL);
+
+    free(output);
+    free(expected_method_definition);
+    free(expected_field_definition);
+    free(shutdown);
+    free(definition_method);
+    free(definition_field);
+    free(hover_field);
+    free(completion);
+    free(did_open);
+    free(initialize);
+    free(escaped_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
+/* Verifies mixin conflicts publish their original source declaration through
+ * standard LSP diagnostic relatedInformation. */
+static void test_lsp_mixin_diagnostic_related_information(void) {
+    static const char *kSource =
+        "module test.lsp.mixin_diagnostic;\n"
+        "spec Widget { func draw(area: int): int; }\n"
+        "type View: Widget {\n"
+        "    @mixable\n"
+        "    open static func draw(target: Widget, area: int): int { return area; }\n"
+        "}\n"
+        "type Button: Widget {\n"
+        "    ...: View;\n"
+        "    func draw(area: int): int { return area; }\n"
+        "}\n";
+    char template_path[] = "temp/feng_cli_lsp_mixin_diag_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_text;
+    char *initialize;
+    char *did_open;
+    char *did_save;
+    char *shutdown;
+    char *output;
+    char *diagnostic_output;
+    const char *requests[2];
+    unsigned int line;
+    unsigned int character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+    find_line_character(kSource,
+                        "...: View;",
+                        0U,
+                        &line,
+                        &character);
+    uri = file_uri_from_path(source_path);
+    escaped_text = json_escape_text(kSource);
+    initialize = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        uri,
+        escaped_text);
+    did_save = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}",
+        uri);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+
+    requests[0] = shutdown;
+    requests[1] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    output = run_lsp_server_capture_after_position_ready(
+        initialize,
+        did_open,
+        did_save,
+        "textDocument/hover",
+        uri,
+        line,
+        character,
+        "\"relatedInformation\":[",
+        requests,
+        2U,
+        &diagnostic_output);
+    ASSERT(diagnostic_output != NULL);
+    ASSERT(strstr(diagnostic_output, "\"relatedInformation\":[") != NULL);
+    ASSERT(strstr(diagnostic_output, "mixin source member is declared here") != NULL);
+    ASSERT(strstr(diagnostic_output, uri) != NULL);
+
+    free(diagnostic_output);
+    free(output);
+    free(shutdown);
+    free(did_save);
+    free(did_open);
+    free(initialize);
+    free(escaped_text);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -16471,6 +16875,9 @@ int main(void) {
     test_lsp_snippet_completion_no_duplicate_items();
     test_lsp_annotation_completion_all();
     test_lsp_annotation_completion_filter_prefix();
+    test_lsp_mixable_annotation_completion_and_hover();
+    test_lsp_mixin_member_completion_hover_and_definition();
+    test_lsp_mixin_diagnostic_related_information();
     test_direct_options_default_host_and_out_and_accept_sysroot();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
     test_direct_build_emits_symbol_tables();
@@ -16489,6 +16896,7 @@ int main(void) {
     test_direct_build_consumes_package_generic_spec_constraint();
     test_direct_build_consumes_package_constrained_generic_function();
     test_direct_build_consumes_package_constrained_generic_type();
+    test_direct_build_consumes_package_mixin();
     test_pack_bundle_manifest_rewrites_local_dependency_versions();
     test_project_check_accepts_source_file_path_and_local_dependencies();
     test_project_check_reports_enum_semantic_error_without_unknown_type();

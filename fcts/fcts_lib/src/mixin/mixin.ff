@@ -1,0 +1,79 @@
+open module fcts_lib.mixin;
+
+import std.collections;
+
+open spec LibWidget {
+  func draw(area: int): int;
+  func log(args: string...): void;
+}
+
+open type LibView: LibWidget {
+  open static var constructionCount: int = 0;
+  open static var loggedCount: int = 0;
+
+  open let initialized: int = 11;
+  open let constructorBound: int;
+  open let lateBound: int;
+  open var mutableValue: int = 3;
+  open var label: string = "lib";
+
+  func LibView(value: int) {
+    LibView.constructionCount += 1;
+    self.constructorBound = value;
+  }
+
+  @mixable
+  open static func draw(target: LibWidget, area: int): int {
+    return area + 1;
+  }
+
+  @mixable
+  open static func log(target: LibWidget, args: string...): void {
+    LibView.loggedCount = args.length();
+  }
+
+  @mixable
+  open static func ping(target: LibWidget) {
+    LibView.loggedCount += 1;
+  }
+}
+
+open type LibImplicitView {
+  open let initialized: int = 21;
+  open var label: string = "implicit";
+}
+
+open spec LibGenericWidget {}
+
+open type LibGenericView<T>: LibGenericWidget {
+  open let marker: int = 17;
+  open var value: T;
+
+  @mixable
+  open static func echo(target: LibGenericWidget, value: T): T {
+    return value;
+  }
+}
+
+open spec LibGenericMethodWidget {}
+
+open type LibGenericMethodView: LibGenericMethodWidget {
+  @mixable
+  open static func identity<T>(target: LibGenericMethodWidget, value: T): T {
+    return value;
+  }
+}
+
+open type LibFitView: LibWidget {
+}
+
+open fit LibFitView {
+  @mixable
+  open static func draw(target: LibWidget, area: int): int {
+    return area + 2;
+  }
+
+  @mixable
+  open static func log(target: LibWidget, args: string...): void {
+  }
+}

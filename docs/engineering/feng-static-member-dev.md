@@ -217,7 +217,7 @@ codegen 凭借这两个值直接生成无 `self` 参数的直接函数调用，�
 | 角色 | C 名称 |
 |------|--------|
 | type 体内静态方法 | `Feng__<mod>__<TypeName>__static__<method>__<sig>` |
-| fit 体内静态方法（用户类型） | `FengFit_<index>__Feng__<mod>__<TypeName>__<method>__<sig>` |
+| fit 体内静态方法（用户类型） | 使用 [`feng-fit.md`](../specifications/feng-fit.md) 定义的稳定 user-fit 前缀，再附加 `<method>__<sig>` |
 | fit 体内静态方法（内建类型） | `FengFitBuiltin__<mod>__<builtin_name>__<visibility><index>__<method>__<sig>` |
 
 无 `self` 参数，等价于模块级普通函数。

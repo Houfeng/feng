@@ -96,6 +96,9 @@
 | AE0325 | @iterator 返回类型约束 | AE0069 | @iterator method must return a named tuple type of the form (bool, E) |
 | AE0326 | 类型可迭代性缺失约束 | AE0180 | type '%s' is not iterable (no @iterable or @iterator method found) |
 | AE0327 | 声明签名可见性一致性约束 | (新增) | declaration '%s' has effective visibility '%s' but type '%s' has narrower effective visibility '%s' |
+| AE0328 | 成员展开来源具体类型约束 | (新增) | member mix source must resolve to a concrete object type but found '%s' |
+| AE0329 | 成员展开来源构造约束 | (新增) | member mix initializer must be an object construction expression |
+| AE0330 | 成员展开依赖无环约束 | (新增) | member mix expansion for type '%.*s' forms a cycle through source type '%.*s' |
 
 ## 04 枚举段
 
@@ -295,6 +298,13 @@
 | AE1323 | 借用指针非 extern 传参逃逸约束 | AE0102 | argument %zu expression '%s' is a borrowed data pointer formed by '&'; borrowed data pointers are only guaranteed valid for the current extern call and cannot be passed to non-extern callable '%s'; retain the original owner and form the pointer at the extern boundary |
 | AE1324 | 借用指针对象字段存储逃逸约束 | AE0103 | object literal field '%.*s' cannot store borrowed data pointer expression '%s'; borrowed data pointers are only guaranteed valid for the current extern call; retain the original owner instead of caching the raw pointer |
 | AE1325 | 借用指针赋值存储逃逸约束 | AE0104 | assignment target '%s' cannot store borrowed data pointer expression '%s'; borrowed data pointers are only guaranteed valid for the current extern call; retain the original owner instead of caching the raw pointer |
+| AE1329 | @mixable 无参数约束 | (新增) | @mixable annotation does not accept arguments |
+| AE1330 | @mixable 适用目标约束 | (新增) | @mixable can only be applied to static methods declared in a type or fit block |
+| AE1331 | @mixable 首参数存在性约束 | (新增) | @mixable static method '%.*s' must declare at least one parameter |
+| AE1332 | @mixable 首参数非变参约束 | (新增) | @mixable static method '%.*s' first parameter cannot be variadic |
+| AE1333 | @mixable 首参数 object-form spec 约束 | (新增) | @mixable static method '%.*s' first parameter must use an object-form spec |
+| AE1334 | @mixable 来源类型名义声明 spec 约束 | (新增) | type '%.*s' must nominally declare spec '%.*s' before declaring @mixable static method '%.*s' |
+| AE1335 | @mixable 目标类型名义声明 spec 约束 | (新增) | type '%.*s' must nominally declare spec '%.*s' before mixing @mixable static method '%.*s' |
 
 ## 14 异常处理段
 

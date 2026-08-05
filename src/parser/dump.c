@@ -573,6 +573,59 @@ static void dump_callable(FILE *stream, const FengCallableSignature *callable, i
     }
 }
 
+/* Dump one ordinary type member. Member-expansion directives use a separate
+ * AST node and are interleaved by the caller according to member_index. */
+static void dump_type_member(FILE *stream, const FengTypeMember *member, int indent) {
+    dump_annotations(stream, member->annotations, member->annotation_count, indent);
+    dump_indent(stream, indent);
+    fprintf(stream, "%s ", visibility_name(member->visibility));
+    if (member->is_static) {
+        fputs("static ", stream);
+    }
+    if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+        fprintf(stream, "field %s ", mutability_name(member->as.field.mutability));
+        dump_slice(stream, member->as.field.name);
+        fputs(": ", stream);
+        dump_type_ref(stream, member->as.field.type);
+        if (member->as.field.initializer != NULL) {
+            fputs(" = ", stream);
+            dump_expr(stream, member->as.field.initializer, 0);
+        }
+        fputc('\n', stream);
+    } else {
+        const char *kind_label;
+
+        switch (member->kind) {
+            case FENG_TYPE_MEMBER_CONSTRUCTOR:
+                kind_label = "constructor\n";
+                break;
+            case FENG_TYPE_MEMBER_FINALIZER:
+                kind_label = "finalizer\n";
+                break;
+            default:
+                kind_label = "method\n";
+                break;
+        }
+        fputs(kind_label, stream);
+        dump_callable(stream, &member->as.callable, indent + 1);
+    }
+}
+
+/* Dump one compile-time member-expansion directive. */
+static void dump_type_mixin(FILE *stream, const FengTypeMixinDecl *mixin, int indent) {
+    dump_indent(stream, indent);
+    fputs("mixin ...", stream);
+    if (mixin->source_type != NULL) {
+        fputs(": ", stream);
+        dump_type_ref(stream, mixin->source_type);
+    }
+    if (mixin->source_constructor != NULL) {
+        fputs(" = ", stream);
+        dump_expr(stream, mixin->source_constructor, 0);
+    }
+    fputc('\n', stream);
+}
+
 void feng_program_dump(FILE *stream, const FengProgram *program) {
     size_t index;
 
@@ -641,40 +694,25 @@ void feng_program_dump(FILE *stream, const FengProgram *program) {
                     }
                 }
                 fputc('\n', stream);
-                for (member_index = 0U; member_index < decl->as.type_decl.member_count; ++member_index) {
-                    const FengTypeMember *member = decl->as.type_decl.members[member_index];
+                {
+                    size_t explicit_index = 0U;
+                    size_t mixin_index = 0U;
 
-                    dump_annotations(stream, member->annotations, member->annotation_count, 2);
-                    dump_indent(stream, 2);
-                    fprintf(stream, "%s ", visibility_name(member->visibility));
-                    if (member->is_static) {
-                        fputs("static ", stream);
-                    }
-                    if (member->kind == FENG_TYPE_MEMBER_FIELD) {
-                        fprintf(stream, "field %s ", mutability_name(member->as.field.mutability));
-                        dump_slice(stream, member->as.field.name);
-                        fputs(": ", stream);
-                        dump_type_ref(stream, member->as.field.type);
-                        if (member->as.field.initializer != NULL) {
-                            fputs(" = ", stream);
-                            dump_expr(stream, member->as.field.initializer, 0);
+                    while (explicit_index < decl->as.type_decl.member_count ||
+                           mixin_index < decl->as.type_decl.mixin_count) {
+                        while (mixin_index < decl->as.type_decl.mixin_count &&
+                               decl->as.type_decl.mixins[mixin_index].member_index == explicit_index) {
+                            dump_type_mixin(stream,
+                                            &decl->as.type_decl.mixins[mixin_index],
+                                            2);
+                            mixin_index++;
                         }
-                        fputc('\n', stream);
-                    } else {
-                        const char *kind_label;
-                        switch (member->kind) {
-                            case FENG_TYPE_MEMBER_CONSTRUCTOR:
-                                kind_label = "constructor\n";
-                                break;
-                            case FENG_TYPE_MEMBER_FINALIZER:
-                                kind_label = "finalizer\n";
-                                break;
-                            default:
-                                kind_label = "method\n";
-                                break;
+                        if (explicit_index < decl->as.type_decl.member_count) {
+                            dump_type_member(stream,
+                                             decl->as.type_decl.members[explicit_index],
+                                             2);
+                            explicit_index++;
                         }
-                        fputs(kind_label, stream);
-                        dump_callable(stream, &member->as.callable, 3);
                     }
                 }
                 break;

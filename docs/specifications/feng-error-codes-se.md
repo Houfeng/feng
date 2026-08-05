@@ -68,6 +68,7 @@
 | SE0310 | 元组字面量逗号后缺少表达式 | tuple literals require an expression after ',' |
 | SE0311 | 对象字面量字段缺少冒号 | expected ':' after object literal field name |
 | SE0312 | 类型/元组/对象字符缺失 | expected '(' to start tuple type declaration、expected ')' to close tuple type declaration、expected ')' to close tuple literal、expected '{' to start object literal、expected '}' to close object literal/type body |
+| SE0313 | 成员展开声明形式不合法 | member mix declarations must use '...: Type;', '...: Type = Construction;', or '... = Construction;' |
 
 ## SE04XX - 枚举段
 
@@ -194,15 +195,15 @@
 | SE00XX 通用 | 6 |
 | SE01XX 绑定 | 10 |
 | SE02XX 数组 | 2 |
-| SE03XX 类型/元组 | 12 |
+| SE03XX 类型/元组 | 13 |
 | SE04XX 枚举 | 10 |
 | SE05XX 函数/Lambda | 18 |
 | SE06XX Spec | 10 |
 | SE08XX Fit | 8 |
 | SE09XX 模块/Import | 2 |
-| SE10XX 表达式 | 2 |
+| SE10XX 表达式 | 3 |
 | SE11XX 分支 | 7 |
 | SE12XX 循环 | 2 |
 | SE13XX 注解 | 2 |
 | SE14XX 异常处理 | 4 |
-| **合计** | **95** |
+| **合计** | **97** |

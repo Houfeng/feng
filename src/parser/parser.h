@@ -43,6 +43,7 @@ typedef struct FengStmt FengStmt;
 typedef struct FengBlock FengBlock;
 typedef struct FengDecl FengDecl;
 typedef struct FengTypeMember FengTypeMember;
+typedef struct FengTypeMixinDecl FengTypeMixinDecl;
 
 /* Resolution metadata attached by the semantic analyzer to call expressions.
  * Codegen and tooling consume this instead of re-running symbol lookup. */
@@ -344,6 +345,10 @@ struct FengBlock {
 struct FengStmt {
     FengToken token;
     FengStmtKind kind;
+    /* Compiler-generated mixin wrappers use a forwarding return even when
+     * an omitted source return type is later inferred as void.  Codegen then
+     * evaluates the forwarding call for its effects before returning. */
+    bool is_mixin_wrapper_forward_return;
     union {
         FengBlock *block;
         FengBinding binding;
@@ -424,11 +429,34 @@ typedef struct FengEnumItem {
     int64_t explicit_value;
 } FengEnumItem;
 
+/* A compile-time member-expansion directive in a concrete type body.
+ * `source_type` is NULL only for the inferred `... = Construction;` form.
+ * `source_constructor` is NULL only for the direct-default `...: Type;` form.
+ * `member_index` preserves the directive's position relative to explicit
+ * members without exposing it as an ordinary member before expansion. */
+struct FengTypeMixinDecl {
+    FengToken token;
+    FengTypeRef *source_type;
+    FengExpr *source_constructor;
+    bool infer_source_type;
+    size_t member_index;
+    size_t expanded_field_index; /* initialization position after field expansion */
+    const FengDecl *resolved_source_decl; /* filled by the semantic mixin pre-pass */
+};
+
 struct FengTypeMember {
     FengToken token;
     FengTypeMemberKind kind;
     FengVisibility visibility;
     bool is_static;
+    bool is_mixable; /* normalized declaration fact for a @mixable method */
+    bool is_mixin_static_wrapper;
+    bool is_mixin_instance_wrapper;
+    /* Non-NULL only for an ordinary field synthesized from a member mix.
+     * These borrowed pointers preserve initialization and diagnostic origin;
+     * the generated field itself remains an ordinary target member. */
+    const FengTypeMixinDecl *mixin_origin;
+    const FengTypeMember *mixin_source_member;
     FengSlice doc_comment;
     FengAnnotation *annotations;
     size_t annotation_count;
@@ -484,6 +512,9 @@ struct FengDecl {
             size_t type_param_count;
             FengTypeMember **members;
             size_t member_count;
+            FengTypeMixinDecl *mixins;
+            size_t mixin_count;
+            bool mixins_expanded;
             FengTypeRef **declared_specs;
             size_t declared_spec_count;
             bool is_tuple;

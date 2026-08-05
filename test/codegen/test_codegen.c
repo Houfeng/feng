@@ -1141,6 +1141,48 @@ static void test_builtin_fit_static_method_codegen(void) {
     feng_program_free(program);
 }
 
+/* User-type fit symbols use a target-local stable ordinal, so unrelated fits
+ * cannot change the producer/consumer implementation name. */
+static void test_user_fit_static_method_symbol_is_stable(void) {
+    static const char *kSource =
+        "module feng.codegen.fitstable;\n"
+        "type Other {}\n"
+        "fit Other { static func unrelated(): int { return 0; } }\n"
+        "type Box {}\n"
+        "open fit Box { open static func first(): int { return 1; } }\n"
+        "open fit Box { open static func second(): int { return 2; } }\n"
+        "func run_case(): int { return Box.first() + Box.second(); }\n";
+    FengProgram *program = parse_or_die(kSource, "fitstable.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(
+        out.c_source,
+        "FengFitUser__feng__codegen__fitstable__"
+        "Feng__feng__codegen__fitstable__Box__m0__first") != NULL);
+    ASSERT(strstr(
+        out.c_source,
+        "FengFitUser__feng__codegen__fitstable__"
+        "Feng__feng__codegen__fitstable__Box__m1__second") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_generic_static_methods_codegen(void) {
     static const char *kSource =
         "module feng.codegen.staticgen;\n"
@@ -8546,11 +8588,72 @@ static void test_literal_adaptation_tuple_literal(void) {
     feng_semantic_analysis_free(analysis);
 }
 
+/* Generated code constructs one explicit source and emits ordinary wrappers. */
+static void test_member_mix_fields_and_mixable_wrappers_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.mixin;\n"
+        "open spec Widget { func draw(area: int): int; func log(args: string...): void; }\n"
+        "open type View: Widget {\n"
+        "    open let x: int = 1;\n"
+        "    open var y: int = 2;\n"
+        "    @mixable open static func draw(target: Widget, area: int): int { return area + 1; }\n"
+        "    @mixable open static func log(target: Widget, args: string...): void {}\n"
+        "}\n"
+        "type Zero: Widget {\n"
+        "    ...: View;\n"
+        "    func Zero() { self.x = 0; }\n"
+        "}\n"
+        "type Copy: Widget { ...: View = View(); }\n"
+        "type Leaf: Widget { ...: Copy; }\n"
+        "func exercise(): int {\n"
+        "    let zero = Zero();\n"
+        "    let copy = Copy();\n"
+        "    let leaf = Leaf();\n"
+        "    leaf.log(\"a\", \"b\");\n"
+        "    return zero.x + copy.x + leaf.draw(1);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "mixin_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    /* Only the explicit `... = View()` directive materializes a source
+     * cleanup slot, even though two fields are copied from that one value. */
+    ASSERT(count_substr(output.c_source,
+                        "FengCleanupNode _cu__mixin_source") == 1U);
+    ASSERT(strstr(output.c_source,
+                  "Copy__static__draw__from__") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "Leaf__static__draw__from__") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "Leaf__draw__from__i64") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "Leaf__log__from__VA_s") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
 
     test_multi_file_bin();
+    test_member_mix_fields_and_mixable_wrappers_codegen();
     test_multi_file_lib();
     test_private_generic_representation_same_package_codegen();
     test_private_representation_cross_package_ft_codegen();
@@ -8561,6 +8664,7 @@ int main(void) {
     test_module_managed_var_assignment_marks_initialized_codegen();
     test_type_static_members_codegen();
     test_builtin_fit_static_method_codegen();
+    test_user_fit_static_method_symbol_is_stable();
     test_generic_static_methods_codegen();
     test_generic_type_static_field_codegen();
     test_generic_type_inferred_field_codegen();

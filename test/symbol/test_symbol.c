@@ -581,6 +581,129 @@ static void test_bounded_decl_ft_roundtrip_uses_inferred_initializer(void) {
     free(tmp_dir);
 }
 
+/* Verifies generated mixin members are exported as ordinary target members
+ * while the propagated static wrapper preserves its mixable declaration fact. */
+static void test_mixin_generated_members_ft_roundtrip(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.mixin_roundtrip;\n"
+        "open spec Widget {\n"
+        "    func draw(area: int): int;\n"
+        "}\n"
+        "open type View: Widget {\n"
+        "    open let id: int = 1;\n"
+        "    @mixable\n"
+        "    open static func draw(target: Widget, area: int): int {\n"
+        "        return area;\n"
+        "    }\n"
+        "}\n"
+        "open type Button: Widget {\n"
+        "    ...: View = View();\n"
+        "}\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query = {0};
+    FengSymbolError error = {0};
+    FengSlice segments[4];
+    const FengSymbolImportedModule *module = NULL;
+    const FengSymbolDeclView *button = NULL;
+    const FengSymbolDeclView *id_field = NULL;
+    const FengSemanticModule *semantic_module = NULL;
+    const FengDecl *semantic_button = NULL;
+    size_t static_draw_count = 0U;
+    size_t instance_draw_count = 0U;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("mixin_roundtrip.ff", kSource, public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("mixin_roundtrip");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+    button = feng_symbol_module_find_public_type(module, slice_from_cstr("Button"));
+    ASSERT(button != NULL);
+    id_field = feng_symbol_decl_find_public_member(button, slice_from_cstr("id"));
+    ASSERT(id_field != NULL);
+    ASSERT(feng_symbol_decl_has_bounded_decl(id_field));
+
+    for (size_t index = 0U;
+         index < feng_symbol_decl_member_count(button);
+         ++index) {
+        const FengSymbolDeclView *member =
+            feng_symbol_decl_member_at(button, index);
+
+        if (member == NULL ||
+            feng_symbol_decl_kind(member) != FENG_SYMBOL_DECL_KIND_METHOD ||
+            !slice_equals_cstr(feng_symbol_decl_name(member), "draw")) {
+            continue;
+        }
+        if (feng_symbol_decl_is_static(member)) {
+            ++static_draw_count;
+            ASSERT(feng_symbol_decl_is_mixable(member));
+        } else {
+            ++instance_draw_count;
+            ASSERT(!feng_symbol_decl_is_mixable(member));
+        }
+    }
+    ASSERT(static_draw_count == 1U);
+    ASSERT(instance_draw_count == 1U);
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    semantic_module = query.get_module(query.user, segments, 4U);
+    ASSERT(semantic_module != NULL);
+    for (size_t index = 0U;
+         index < semantic_module->programs[0]->declaration_count;
+         ++index) {
+        const FengDecl *decl =
+            semantic_module->programs[0]->declarations[index];
+
+        if (decl != NULL && decl->kind == FENG_DECL_TYPE &&
+            slice_equals_cstr(decl->as.type_decl.name, "Button")) {
+            semantic_button = decl;
+            break;
+        }
+    }
+    ASSERT(semantic_button != NULL);
+    static_draw_count = 0U;
+    instance_draw_count = 0U;
+    for (size_t index = 0U;
+         index < semantic_button->as.type_decl.member_count;
+         ++index) {
+        const FengTypeMember *member =
+            semantic_button->as.type_decl.members[index];
+
+        if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD ||
+            !slice_equals_cstr(member->as.callable.name, "draw")) {
+            continue;
+        }
+        if (member->is_static) {
+            ++static_draw_count;
+            ASSERT(member->is_mixable);
+        } else {
+            ++instance_draw_count;
+            ASSERT(!member->is_mixable);
+        }
+    }
+    ASSERT(static_draw_count == 1U);
+    ASSERT(instance_draw_count == 1U);
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_roundtrip_public_module_docs(void) {
     static const char *kSource =
         "open module feng.test.symbol.docs;\n"
@@ -2286,6 +2409,7 @@ int main(void) {
     test_union_spec_ft_roundtrip_preserves_normalized_members();
     test_intersection_spec_ft_roundtrip_preserves_members();
     test_bounded_decl_ft_roundtrip_uses_inferred_initializer();
+    test_mixin_generated_members_ft_roundtrip();
     test_roundtrip_public_module_docs();
     test_private_module_skipped();
     test_reader_rejects_bad_magic();

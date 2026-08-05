@@ -71,6 +71,12 @@ runCase(
 );
 
 runCase(
+    'formats member mix declarations and mixable methods',
+    'type Button:Widget{\n... : View;\n...:View=View();\n...=View();\n@mixable\nopen static func draw(target:Widget):void{}\n}\n',
+    'type Button: Widget {\n    ...: View;\n    ...: View = View();\n    ... = View();\n    @mixable\n    open static func draw(target: Widget): void {}\n}\n'
+);
+
+runCase(
     'indents multi-line parameter lists and for headers',
     'func main(\nargs:string[],\nlimit:int\n):void {\nfor(i=0;i<limit;i=i+1){\nprint(args[i]);\n}\n}\n',
     'func main(\n    args: string[],\n    limit: int\n): void {\n    for (i = 0; i < limit; i = i + 1) {\n        print(args[i]);\n    }\n}\n'

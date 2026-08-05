@@ -542,6 +542,8 @@ static bool cg_decl_has_field_members(const FengDecl *decl) {
  * field accesses are direct member loads. The generic `void *` form above is
  * used only for fall-back / unknown user types, which never reach the body.
  */
+typedef struct UserType UserType;
+
 typedef struct UserField {
     char   *feng_name;     /* e.g., "name" */
     char   *c_name;        /* sanitised */
@@ -559,8 +561,6 @@ typedef struct UserMethod {
     bool    is_variadic;   /* true when the last param is a variadic T... */
     const FengTypeMember *member;
 } UserMethod;
-
-typedef struct UserType UserType;
 
 typedef struct TypeStaticBinding {
     char   *feng_name;
@@ -833,7 +833,7 @@ typedef struct UserFit {
     UserMethod     *methods;      /* fit-body methods, c_name mangled with index */
     size_t          method_count;
     size_t          index;        /* per-program 0-based declaration order */
-    char           *c_prefix;     /* "FengFit_<idx>__<modT>__<T>" */
+    char           *c_prefix;     /* stable module/target/visibility/ordinal prefix */
     const FengProgram *owner_program;
 } UserFit;
 
@@ -1587,6 +1587,7 @@ static bool cg_emit_capture_cell_default_init(CG *cg,
                                               const char *cell_expr,
                                               const CGType *value_type,
                                               FengToken blame);
+static bool cg_emit_expr_stmt(CG *cg, const FengStmt *stmt);
 static bool cg_scope_bind_capture_cell(CG *cg,
                                        Scope *scope,
                                        FengSlice name,
@@ -10022,8 +10023,64 @@ static const UserSpecMember *cg_user_spec_member(const UserSpec *s,
 
 /* ------------- Fit registration (Step 4b-γ) ------------- */
 
+/* Build the stable implementation prefix for one user-type fit.  The
+ * ordinal is local to the declaring module, concrete target symbol, and fit
+ * visibility, so unrelated fits registered by a binary-package consumer do
+ * not change the producer's method symbol. */
+static char *cg_user_fit_c_prefix(CG *cg,
+                                  const FengDecl *decl,
+                                  const UserType *target) {
+    const FengProgram *owner_program = cg != NULL ? cg->cur_program : NULL;
+    char *owner_mangle;
+    bool is_public;
+    size_t ordinal = 0U;
+    Buf prefix;
+
+    if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_FIT ||
+        target == NULL || target->c_struct_name == NULL ||
+        owner_program == NULL) {
+        return NULL;
+    }
+    owner_mangle = cg_module_mangle(owner_program->module_segments,
+                                    owner_program->module_segment_count);
+    if (owner_mangle == NULL) {
+        return NULL;
+    }
+    is_public = decl->visibility == FENG_VISIBILITY_PUBLIC;
+    for (size_t index = 0U; index < cg->user_fit_count; ++index) {
+        const UserFit *registered = &cg->user_fits[index];
+        const FengDecl *candidate = registered->decl;
+        const FengProgram *candidate_owner = registered->owner_program;
+
+        if (candidate == NULL || candidate->kind != FENG_DECL_FIT ||
+            candidate_owner == NULL || registered->target == NULL ||
+            registered->target->c_struct_name == NULL ||
+            !cg_module_segments_equal(
+                candidate_owner->module_segments,
+                candidate_owner->module_segment_count,
+                owner_program->module_segments,
+                owner_program->module_segment_count) ||
+            strcmp(registered->target->c_struct_name,
+                   target->c_struct_name) != 0 ||
+            (candidate->visibility == FENG_VISIBILITY_PUBLIC) != is_public) {
+            continue;
+        }
+        ++ordinal;
+    }
+
+    buf_init(&prefix);
+    buf_append_fmt(&prefix,
+                   "FengFitUser__%s__%s__%s%zu",
+                   owner_mangle,
+                   target->c_struct_name,
+                   is_public ? "m" : "i",
+                   ordinal);
+    free(owner_mangle);
+    return prefix.data;
+}
+
 /* Register a `fit T :: S { ... }` shell: resolve the target T to a UserType
- * and assign a per-program index for symbol mangling. Member resolution is
+ * and assign its stable implementation prefix. Member resolution is
  * deferred to cg_register_user_fit_members so target T's methods (used by
  * cg_resolve_type for parameter / return types) are already populated. */
 static bool cg_register_user_fit_shell_for_target(CG *cg,
@@ -10050,10 +10107,8 @@ static bool cg_register_user_fit_shell_for_target(CG *cg,
     uf->target_index = target_index;
     uf->index = cg->user_fit_count;
     uf->owner_program = cg->cur_program;
-    Buf b; buf_init(&b);
-    buf_append_fmt(&b, "FengFit_%zu__%s", uf->index, target->c_struct_name);
-    if (!b.data) return false;
-    uf->c_prefix = b.data;
+    uf->c_prefix = cg_user_fit_c_prefix(cg, decl, target);
+    if (uf->c_prefix == NULL) return false;
     uf->spec_count = decl->as.fit_decl.spec_count;
     uf->specs = uf->spec_count ? calloc(uf->spec_count, sizeof *uf->specs) : NULL;
     uf->spec_indices = uf->spec_count ? calloc(uf->spec_count, sizeof *uf->spec_indices) : NULL;
@@ -12352,6 +12407,170 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
     return tmp;
 }
 
+/* C symbol for the source package's ordinary implicit-construction entry.
+ * Its reserved no-suffix spelling is distinct from explicit constructor
+ * overload symbols and is used only when no constructor is declared. */
+static char *cg_implicit_constructor_cname(const UserType *type) {
+    Buf name;
+    char *type_name;
+
+    if (type == NULL || type->decl == NULL ||
+        type->decl->kind != FENG_DECL_TYPE) {
+        return NULL;
+    }
+    type_name = cg_sanitize(type->decl->as.type_decl.name.data,
+                            type->decl->as.type_decl.name.length);
+    if (type_name == NULL) {
+        return NULL;
+    }
+    buf_init(&name);
+    buf_append_fmt(&name,
+                   "%s__ctor__%s",
+                   type->c_struct_name,
+                   type_name);
+    free(type_name);
+    return name.data;
+}
+
+/* Stable shared symbol used by every concrete instance of an imported
+ * generic type that relies on its implicit constructor. */
+static char *cg_generic_implicit_constructor_shared_cname(
+    CG *cg,
+    const FengDecl *decl) {
+    const GenericTypeDecl *generic_decl;
+    const FengProgram *owner_program;
+    char *owner_mangle;
+    char *type_name;
+    Buf name;
+
+    if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE) {
+        return NULL;
+    }
+    generic_decl = cg_find_generic_type_decl_by_decl(cg, decl);
+    owner_program = generic_decl != NULL
+        ? generic_decl->owner_program
+        : cg->cur_program;
+    owner_mangle = owner_program != NULL
+        ? cg_module_mangle(owner_program->module_segments,
+                           owner_program->module_segment_count)
+        : NULL;
+    type_name = cg_sanitize(decl->as.type_decl.name.data,
+                            decl->as.type_decl.name.length);
+    if (owner_mangle == NULL || type_name == NULL) {
+        free(owner_mangle);
+        free(type_name);
+        return NULL;
+    }
+    buf_init(&name);
+    buf_append_fmt(&name,
+                   "FengGenericImplicitCtor__%s__%s__G%zu",
+                   owner_mangle,
+                   type_name,
+                   decl->as.type_decl.type_param_count);
+    free(owner_mangle);
+    free(type_name);
+    return name.data;
+}
+
+/* Invoke the source package's ordinary implicit-constructor body.  This is
+ * used only when the source type came from a compiled package and therefore
+ * its field-initializer AST is intentionally absent from the consumer. */
+static bool cg_emit_imported_implicit_constructor_invoke(
+    CG *cg,
+    const UserType *type,
+    const char *self_expr,
+    FengToken blame) {
+    char *name;
+
+    if (cg == NULL || type == NULL || self_expr == NULL) {
+        return false;
+    }
+    if (type->field_count == 0U) {
+        return true;
+    }
+    if (type->is_generic_instance && type->generic_origin_decl != NULL) {
+        const char *descriptor_type = cg_user_type_is_value(type)
+            ? "FengAggregateDescriptor"
+            : "FengTypeDescriptor";
+        char *descriptor_expr = NULL;
+
+        name = cg_generic_implicit_constructor_shared_cname(
+            cg, type->generic_origin_decl);
+        if (name == NULL) {
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        if (type->generic_context_type_param_count > 0U) {
+            descriptor_expr = cg_rtd_expr_for_type(cg, type, blame);
+        } else {
+            Buf descriptor;
+
+            buf_init(&descriptor);
+            buf_append_fmt(&descriptor,
+                           "&%s",
+                           cg_user_type_is_value(type)
+                               ? type->c_aggregate_desc_name
+                               : type->c_desc_name);
+            descriptor_expr = descriptor.data;
+        }
+        if (descriptor_expr == NULL) {
+            free(name);
+            return false;
+        }
+        buf_append_fmt(&cg->fn_protos,
+                       "void %s(void *_self, const %s *_type_desc);\n",
+                       name,
+                       descriptor_type);
+        buf_append_fmt(cg->cur_body,
+                       "    %s((void *)%s, %s);\n",
+                       name,
+                       self_expr,
+                       descriptor_expr);
+        free(descriptor_expr);
+        free(name);
+        return true;
+    }
+
+    name = cg_implicit_constructor_cname(type);
+    if (name == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    buf_append_fmt(&cg->fn_protos,
+                   "void %s(struct %s *self);\n",
+                   name,
+                   type->c_struct_name);
+    buf_append_fmt(cg->cur_body,
+                   "    %s(%s);\n",
+                   name,
+                   self_expr);
+    free(name);
+    return true;
+}
+
+/* Emit phase one of ordinary object construction.  Explicit constructors
+ * execute this phase inside their source-defined body.  An implicit
+ * constructor stays inline while its AST is present, and calls the compiled
+ * source-package entry when consuming a binary package. */
+static bool cg_emit_construction_member_initializers(
+    CG *cg,
+    const UserType *type,
+    const UserMethod *constructor,
+    const char *self_expr,
+    FengToken blame) {
+    bool imported;
+
+    if (constructor != NULL) {
+        return true;
+    }
+    imported = cg_program_origin(cg, type->owner_program) ==
+        FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
+    if (imported) {
+        return cg_emit_imported_implicit_constructor_invoke(
+            cg, type, self_expr, blame);
+    }
+    return cg_emit_user_type_member_initializers(
+        cg, type, self_expr, blame);
+}
+
 static bool cg_emit_return_expr_result(CG *cg,
                                        FengToken blame,
                                        ExprResult *r) {
@@ -12478,6 +12697,57 @@ static bool cg_emit_constructor_invoke(CG *cg,
         return false;
     }
 
+    if (owner_type->is_generic_instance &&
+        owner_type->generic_origin_decl != NULL &&
+        owner_type->generic_context_type_param_count > 0U) {
+        char *shared_name = cg_generic_type_method_shared_cname(
+            cg, owner_type->generic_origin_decl, ctor->member);
+        char *descriptor_expr = cg_rtd_expr_for_type(
+            cg, owner_type, blame);
+        const char *descriptor_type = cg_user_type_is_value(owner_type)
+            ? "FengAggregateDescriptor"
+            : "FengTypeDescriptor";
+
+        if (shared_name == NULL || descriptor_expr == NULL) {
+            bool out_of_memory = shared_name == NULL;
+
+            free(shared_name);
+            free(descriptor_expr);
+            buf_free(&args_buf);
+            return out_of_memory
+                ? cg_fail(cg, blame, "IE0001", "codegen: out of memory")
+                : false;
+        }
+        buf_append_fmt(&cg->fn_protos,
+                       "void %s(void *_self, const %s *_type_desc",
+                       shared_name,
+                       descriptor_type);
+        for (size_t i = 0U; i < ctor->param_count; ++i) {
+            buf_append_cstr(&cg->fn_protos, ", ");
+            if (ctor->param_types[i] != NULL &&
+                ctor->param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
+                buf_append_fmt(&cg->fn_protos, "const void *_p%zu", i);
+            } else {
+                cg_emit_c_type(&cg->fn_protos, ctor->param_types[i]);
+                buf_append_fmt(&cg->fn_protos, " _p%zu", i);
+            }
+        }
+        buf_append_cstr(&cg->fn_protos, ");\n");
+        buf_append_fmt(cg->cur_body,
+                       "    %s((void *)%s, %s",
+                       shared_name,
+                       self_expr,
+                       descriptor_expr);
+        if (args_buf.data != NULL) {
+            buf_append(cg->cur_body, args_buf.data, args_buf.length);
+        }
+        buf_append_cstr(cg->cur_body, ");\n");
+        free(shared_name);
+        free(descriptor_expr);
+        buf_free(&args_buf);
+        return true;
+    }
+
     buf_append_fmt(cg->cur_body,
                    "    %s(%s",
                    ctor->c_name,
@@ -12551,7 +12821,8 @@ static bool cg_emit_value_type_construction(CG *cg,
             free(val_name);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
-        bool ok = cg_emit_user_type_member_initializers(cg, ut, addr.data, blame);
+        bool ok = cg_emit_construction_member_initializers(
+            cg, ut, ctor, addr.data, blame);
         buf_free(&addr);
         if (!ok) {
             free(val_name);
@@ -16315,13 +16586,18 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     size_t emitted_arg_count = 0U;
     CGType *concrete_return = NULL;
     char *ret_cname = NULL;
+    char *ret_storage_cname = NULL;
     char *dispatch_name = NULL;
+    const char *erased_return_desc = NULL;
+    bool ret_is_erased = false;
     bool ok = true;
 
     er_init(out);
-    if (sig == NULL || method_tp_count == 0U) {
+    if (sig == NULL ||
+        (method_tp_count == 0U &&
+         (owner_type == NULL || !owner_type->is_generic_instance))) {
         return cg_fail(cg, e->token,
-                       "CE0143", "codegen: internal: generic static method call missing type parameters");
+                       "CE0143", "codegen: internal: generic static method call is missing a generic owner or method type parameters");
     }
     if (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U) {
         return cg_fail(cg,
@@ -16611,7 +16887,11 @@ static bool cg_emit_generic_static_method_call(CG *cg,
                                          : 0U;
         size_t idx = um->return_type->generic_param_index;
 
-        if (idx >= owner_context_count && idx - owner_context_count < method_tp_count) {
+        if (idx < owner_context_count) {
+            concrete_return = cgtype_clone(um->return_type);
+            erased_return_desc = cg_generic_param_desc_name(cg, idx);
+        } else if (idx >= owner_context_count &&
+                   idx - owner_context_count < method_tp_count) {
             concrete_return = cgtype_clone(type_args[idx - owner_context_count]);
         } else if (owner_context_count == 0U && idx < method_tp_count) {
             concrete_return = cgtype_clone(type_args[idx]);
@@ -16632,16 +16912,39 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     }
 
     if (concrete_return->kind != CG_TYPE_VOID) {
-        char *cty = cg_ctype_dup(concrete_return);
-
         ret_cname = cg_fresh_temp(cg, "_gsmr");
-        if (cty == NULL || ret_cname == NULL) {
-            free(cty);
+        if (ret_cname == NULL) {
             ok = false;
             goto cleanup;
         }
-        buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
-        free(cty);
+        if (concrete_return->kind == CG_TYPE_GENERIC_PARAM) {
+            if (erased_return_desc == NULL) {
+                erased_return_desc = cg_generic_param_desc_name(
+                    cg, concrete_return->generic_param_index);
+            }
+            ret_storage_cname = cg_fresh_temp(cg, "_gsmr_storage");
+            if (erased_return_desc == NULL || ret_storage_cname == NULL) {
+                ok = false;
+                goto cleanup;
+            }
+            buf_append_fmt(cg->cur_body,
+                "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
+                "    void *%s = (void *)%s;\n",
+                ret_storage_cname,
+                erased_return_desc,
+                ret_cname,
+                ret_storage_cname);
+            ret_is_erased = true;
+        } else {
+            char *cty = cg_ctype_dup(concrete_return);
+
+            if (cty == NULL) {
+                ok = false;
+                goto cleanup;
+            }
+            buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
+            free(cty);
+        }
     }
 
     {
@@ -16652,13 +16955,16 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         bool method_is_imported = owner_type != NULL &&
             cg_program_origin(cg, owner_type->owner_program) ==
             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
+        bool owner_uses_shared_body = owner_type != NULL &&
+            owner_type->generic_context_type_param_count > 0U;
         const FengDecl *method_origin_decl = owner_type != NULL
             ? (owner_type->generic_origin_decl != NULL
                    ? owner_type->generic_origin_decl
                    : owner_type->decl)
             : NULL;
         const char *call_name = um->c_name;
-        if (method_is_imported && method_origin_decl != NULL) {
+        if ((method_is_imported || owner_uses_shared_body) &&
+            method_origin_decl != NULL) {
             dispatch_name = cg_generic_type_method_shared_cname(
                 cg, method_origin_decl, um->member);
             if (dispatch_name == NULL) {
@@ -16669,20 +16975,25 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         }
 
         bool has_arg = false;
+        char *owner_descriptor_expr = NULL;
 
         buf_append_fmt(cg->cur_body, "    %s(", call_name);
-        if (method_is_imported && owner_type->c_desc_name != NULL) {
+        if (owner_type != NULL &&
+            owner_type->generic_context_type_param_count > 0U) {
+            owner_descriptor_expr = cg_rtd_expr_for_type(
+                cg, owner_type, e->token);
+            if (owner_descriptor_expr == NULL) {
+                ok = false;
+                goto cleanup;
+            }
+            buf_append_cstr(cg->cur_body, owner_descriptor_expr);
+            has_arg = true;
+        } else if (method_is_imported && owner_type != NULL &&
+                   owner_type->c_desc_name != NULL) {
             buf_append_fmt(cg->cur_body, "&%s", owner_type->c_desc_name);
             has_arg = true;
         }
-        if (!cg_append_static_owner_context_args(cg,
-                                                 cg->cur_body,
-                                                 owner_type,
-                                                 &has_arg,
-                                                 e->token)) {
-            ok = false;
-            goto cleanup;
-        }
+        free(owner_descriptor_expr);
         for (size_t i = 0U; i < method_tp_count; ++i) {
             cg_append_call_arg_separator(cg->cur_body, &has_arg);
             buf_append_cstr(cg->cur_body, desc_exprs[i]);
@@ -16693,7 +17004,9 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         }
         if (ret_cname != NULL) {
             cg_append_call_arg_separator(cg->cur_body, &has_arg);
-            buf_append_fmt(cg->cur_body, "&%s", ret_cname);
+            buf_append_fmt(cg->cur_body,
+                           ret_is_erased ? "%s" : "&%s",
+                           ret_cname);
         }
         buf_append_cstr(cg->cur_body, ");\n");
     }
@@ -16701,7 +17014,8 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     if (ret_cname != NULL) {
         out->c_expr = strdup(ret_cname);
         out->type = concrete_return;
-        out->owns_ref = cgtype_is_managed(concrete_return) ||
+        out->owns_ref = ret_is_erased ||
+                        cgtype_is_managed(concrete_return) ||
                         cgtype_is_aggregate(concrete_return);
         concrete_return = NULL;
     } else {
@@ -16736,6 +17050,7 @@ cleanup:
     free(arg_exprs);
     free((void *)constraint_specs);
     cgtype_free(concrete_return);
+    free(ret_storage_cname);
     free(ret_cname);
     free(dispatch_name);
     return ok;
@@ -16754,7 +17069,12 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
     if (um == NULL) {
         return cg_fail(cg, e->token, "CE0150", "codegen: resolved static method was not registered");
     }
-    if (um->member != NULL && um->member->as.callable.type_param_count > 0U) {
+    if (um->member != NULL &&
+        (um->member->as.callable.type_param_count > 0U ||
+         (owner_type != NULL && owner_type->is_generic_instance &&
+          (owner_type->generic_context_type_param_count > 0U ||
+           cg_program_origin(cg, owner_type->owner_program) ==
+               FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE)))) {
         return cg_emit_generic_static_method_call(cg,
                                                   e,
                                                   owner_type,
@@ -17572,8 +17892,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 ut->feng_name,
                 (int)ma->as.member.member.length, ma->as.member.member.data);
         }
-        if (ut->is_generic_instance &&
-            um->member != NULL &&
+        if (um->member != NULL &&
             um->member->as.callable.type_param_count > 0U) {
             return cg_emit_generic_type_method_call(cg, e, &recv, ut, um, out);
         }
@@ -18016,7 +18335,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             }
         }
 
-        if (!cg_emit_user_type_member_initializers(cg, ut, obj_name, e->token)) {
+        if (!cg_emit_construction_member_initializers(
+                cg, ut, ctor, obj_name, e->token)) {
             free(obj_name);
             return false;
         }
@@ -18771,7 +19091,8 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         }
     }
 
-    if (!cg_emit_user_type_member_initializers(cg, ut, tmp, e->token)) {
+    if (!cg_emit_construction_member_initializers(
+            cg, ut, ctor, tmp, e->token)) {
         free(tmp);
         return false;
     }
@@ -21922,20 +22243,50 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             char *elem_cty = cg_ctype_dup(type->element);
             bool em = type->element ? cgtype_is_managed(type->element) : false;
             bool ea = type->element ? cgtype_is_aggregate(type->element) : false;
-            if (ea) {
+            if (type->element != NULL &&
+                type->element->kind == CG_TYPE_GENERIC_PARAM) {
+                const char *generic_desc = cg_generic_param_desc_name(
+                    cg, type->element->generic_param_index);
+
+                if (generic_desc == NULL) {
+                    free(desc); free(elem_cty); buf_free(&b);
+                    return cg_fail(
+                        cg,
+                        blame ? *blame : (FengToken){0},
+                        "CE0184", "codegen: generic array default value requires an active generic descriptor");
+                }
+                buf_append_fmt(&b,
+                    "feng_array_new_kinded("
+                    "%s->kind, (%s->kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS ? feng_generic_aggregate_descriptor(%s) : NULL), "
+                    "NULL, feng_generic_value_size(%s), (size_t)0)",
+                    generic_desc, generic_desc, generic_desc, generic_desc);
+            } else if (ea) {
                 /* Step 4b-γ §9.6 — aggregate-element arrays must encode the
                  * AGGREGATE element kind even at length 0 so the cycle
                  * collector tags the array correctly when later resized. */
                 const char *agg_desc = cg_aggregate_desc_name(type->element);
+                size_t rad_idx;
+
                 if (agg_desc == NULL) {
                     free(desc); free(elem_cty); buf_free(&b);
                     return cg_fail(cg, blame ? *blame : (FengToken){0},
                         "CE0224", "codegen: missing aggregate descriptor for spec array default-zero");
                 }
-                buf_append_fmt(&b,
-                    "feng_array_new_kinded("
-                    "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0)",
-                    agg_desc, elem_cty ? elem_cty : "void *");
+                if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+                    const char *rad_src =
+                        cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
+
+                    buf_append_fmt(&b,
+                        "feng_array_new_kinded("
+                        "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s->reified_agg_deps[%zu], "
+                        "NULL, %s->reified_agg_deps[%zu]->size, (size_t)0)",
+                        rad_src, rad_idx, rad_src, rad_idx);
+                } else {
+                    buf_append_fmt(&b,
+                        "feng_array_new_kinded("
+                        "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0)",
+                        agg_desc, elem_cty ? elem_cty : "void *");
+                }
             } else {
                 buf_append_fmt(&b, "feng_array_new(%s, sizeof(%s), %s, (size_t)0)",
                                desc ? desc : "NULL",
@@ -22210,56 +22561,196 @@ static bool cg_emit_destructure_binding(CG *cg, const FengStmt *stmt) {
     return true;
 }
 
-/* Emit a write into an object field, either as first construction-time
- * initialization or as an object-literal overwrite after constructor code. */
+/* Return one field's descriptor-provided offset index while emitting an open
+ * generic shared body; ordinary concrete layouts do not use this path. */
+static bool cg_user_field_reified_index(const CG *cg,
+                                        const UserField *field,
+                                        size_t *out_index) {
+    size_t field_index = 0U;
+
+    if (cg == NULL || field == NULL || field->member == NULL ||
+        cg->generic_type_method_field_offsets_name == NULL ||
+        cg->generic_type_method_decl == NULL ||
+        cg->generic_type_method_decl->kind != FENG_DECL_TYPE) {
+        return false;
+    }
+    for (size_t i = 0U;
+         i < cg->generic_type_method_decl->as.type_decl.member_count;
+         ++i) {
+        const FengTypeMember *member =
+            cg->generic_type_method_decl->as.type_decl.members[i];
+
+        if (member == NULL || member->kind != FENG_TYPE_MEMBER_FIELD ||
+            member->is_static) {
+            continue;
+        }
+        if (member == field->member) {
+            if (out_index != NULL) {
+                *out_index = field_index;
+            }
+            return true;
+        }
+        field_index++;
+    }
+    return false;
+}
+
 static bool cg_emit_user_field_value_store(CG *cg,
                                            const char *object_expr,
                                            const UserField *uf,
                                            ExprResult *value,
                                            FengToken blame,
                                            bool replace_existing) {
+    size_t reified_index = 0U;
+    bool uses_reified_offset;
+    Buf field_expr;
+
     if (cg == NULL || object_expr == NULL || uf == NULL || value == NULL) {
         return false;
+    }
+    uses_reified_offset = cg_user_field_reified_index(
+        cg, uf, &reified_index);
+    if (uses_reified_offset && uf->type != NULL &&
+        uf->type->kind == CG_TYPE_GENERIC_PARAM) {
+        const char *descriptor = cg_generic_param_desc_name(
+            cg, uf->type->generic_param_index);
+        char *destination = cg_fresh_temp(cg, "_ginit_dst");
+        char *source = cg_fresh_temp(cg, "_ginit_src");
+
+        if (descriptor == NULL || destination == NULL || source == NULL) {
+            free(destination);
+            free(source);
+            return cg_fail(cg,
+                           blame,
+                           descriptor == NULL ? "CE0237" : "IE0001",
+                           descriptor == NULL
+                               ? "codegen: missing generic descriptor for field initialization"
+                               : "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    void *%s = ((char *)%s + %s[%zu]);\n"
+            "    const void *%s = %s;\n"
+            "    switch (%s->kind) {\n"
+            "        case FENG_VALUE_TRIVIAL:\n"
+            "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
+            "            break;\n"
+            "        case FENG_VALUE_MANAGED_POINTER: {\n"
+            "            void *_new_value = *(void *const *)%s;\n",
+            destination, object_expr,
+            cg->generic_type_method_field_offsets_name, reified_index,
+            source, value->c_expr,
+            descriptor,
+            destination, source, descriptor,
+            source);
+        if (!value->owns_ref) {
+            buf_append_cstr(cg->cur_body,
+                "            feng_retain(_new_value);\n");
+        }
+        if (replace_existing) {
+            buf_append_fmt(cg->cur_body,
+                "            void *_old_value = *(void **)%s;\n"
+                "            *(void **)%s = _new_value;\n"
+                "            feng_release(_old_value);\n",
+                destination, destination);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "            *(void **)%s = _new_value;\n",
+                destination);
+        }
+        buf_append_fmt(cg->cur_body,
+            "            break;\n"
+            "        }\n"
+            "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+            "            feng_aggregate_assign(%s, %s, "
+            "feng_generic_aggregate_descriptor(%s));\n"
+            "            break;\n"
+            "    }\n",
+            destination, source, descriptor);
+        free(destination);
+        free(source);
+        return true;
+    }
+
+    buf_init(&field_expr);
+    if (uses_reified_offset) {
+        char *ctype = cg_ctype_dup(uf->type);
+
+        if (ctype == NULL) {
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        buf_append_fmt(&field_expr,
+                       "(*(%s *)((char *)%s + %s[%zu]))",
+                       ctype,
+                       object_expr,
+                       cg->generic_type_method_field_offsets_name,
+                       reified_index);
+        free(ctype);
+    } else {
+        buf_append_fmt(&field_expr,
+                       "%s->%s",
+                       object_expr,
+                       uf->c_name);
+    }
+    if (field_expr.data == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     if (cgtype_is_managed(uf->type)) {
         if (replace_existing) {
             if (value->owns_ref) {
                 buf_append_fmt(cg->cur_body,
-                    "    { void *_old = %s->%s; %s->%s = %s; feng_release(_old); }\n",
-                    object_expr, uf->c_name, object_expr, uf->c_name, value->c_expr);
+                    "    { void *_old = %s; %s = %s; feng_release(_old); }\n",
+                    field_expr.data, field_expr.data, value->c_expr);
             } else {
                 buf_append_fmt(cg->cur_body,
-                    "    feng_assign((void**)&%s->%s, %s);\n",
-                    object_expr, uf->c_name, value->c_expr);
+                    "    feng_assign((void **)&%s, %s);\n",
+                    field_expr.data, value->c_expr);
             }
         } else if (value->owns_ref) {
             buf_append_fmt(cg->cur_body,
-                "    %s->%s = %s;\n",
-                object_expr, uf->c_name, value->c_expr);
+                "    %s = %s;\n",
+                field_expr.data, value->c_expr);
         } else {
             buf_append_fmt(cg->cur_body,
-                "    %s->%s = %s; feng_retain(%s->%s);\n",
-                object_expr, uf->c_name, value->c_expr, object_expr, uf->c_name);
+                "    %s = %s; feng_retain(%s);\n",
+                field_expr.data, value->c_expr, field_expr.data);
         }
+        buf_free(&field_expr);
         return true;
     }
 
     if (cgtype_is_aggregate(uf->type)) {
         const char *agg_desc = cg_aggregate_desc_name(uf->type);
+        size_t rad_index;
 
         if (agg_desc == NULL) {
+            buf_free(&field_expr);
             return cg_fail(cg,
                            blame,
                            "CE0232", "codegen: missing aggregate descriptor for field '%s'",
                            uf->feng_name);
         }
         if (value->owns_ref && cg_materialize_to_local(cg, value, "_t") == NULL) {
+            buf_free(&field_expr);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
-        buf_append_fmt(cg->cur_body,
-            "    feng_aggregate_assign(&%s->%s, &%s, &%s);\n",
-            object_expr, uf->c_name, value->c_expr, agg_desc);
+        if (uses_reified_offset &&
+            cg_value_needs_reified_layout(cg, uf->type) &&
+            cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_index)) {
+            const char *rad_source = cg->generic_type_method_rad_via_desc
+                                         ? "_desc"
+                                         : "_td";
+
+            buf_append_fmt(cg->cur_body,
+                "    feng_aggregate_assign(&%s, &%s, "
+                "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]);\n",
+                field_expr.data, value->c_expr, rad_source, rad_index);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    feng_aggregate_assign(&%s, &%s, &%s);\n",
+                field_expr.data, value->c_expr, agg_desc);
+        }
+        buf_free(&field_expr);
         return true;
     }
 
@@ -22267,19 +22758,21 @@ static bool cg_emit_user_field_value_store(CG *cg,
         char *cty = cg_ctype_dup(uf->type);
 
         if (cty == NULL) {
+            buf_free(&field_expr);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (cgtype_is_by_value_struct(uf->type)) {
             buf_append_fmt(cg->cur_body,
-                "    %s->%s = %s;\n",
-                object_expr, uf->c_name, value->c_expr);
+                "    %s = %s;\n",
+                field_expr.data, value->c_expr);
         } else {
             buf_append_fmt(cg->cur_body,
-                "    %s->%s = (%s)(%s);\n",
-                object_expr, uf->c_name, cty, value->c_expr);
+                "    %s = (%s)(%s);\n",
+                field_expr.data, cty, value->c_expr);
         }
         free(cty);
     }
+    buf_free(&field_expr);
     return true;
 }
 
@@ -22318,14 +22811,61 @@ static bool cg_emit_generic_param_default_init(CG *cg,
     return true;
 }
 
+/* Address-form counterpart used by shared generic constructor bodies, where
+ * a reified field is located through the concrete descriptor rather than a C
+ * struct member expression. */
+static bool cg_emit_generic_param_default_init_at_address(
+    CG *cg,
+    const char *address_expr,
+    const CGType *type,
+    FengToken blame) {
+    const char *descriptor;
+
+    if (cg == NULL || address_expr == NULL || type == NULL ||
+        type->kind != CG_TYPE_GENERIC_PARAM) {
+        return false;
+    }
+    descriptor = cg_generic_param_desc_name(
+        cg, type->generic_param_index);
+    if (descriptor == NULL) {
+        return cg_fail(cg,
+                       blame,
+                       "CE0237", "codegen: missing generic descriptor for default value");
+    }
+    buf_append_fmt(cg->cur_body,
+        "    switch (%s->kind) {\n"
+        "        case FENG_VALUE_TRIVIAL:\n"
+        "            memset(%s, 0, feng_generic_value_size(%s));\n"
+        "            break;\n"
+        "        case FENG_VALUE_MANAGED_POINTER:\n"
+        "            *(void **)%s = NULL;\n"
+        "            break;\n"
+        "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+        "            feng_aggregate_default_init(%s, "
+        "feng_generic_aggregate_descriptor(%s));\n"
+        "            break;\n"
+        "    }\n",
+        descriptor,
+        address_expr, descriptor,
+        address_expr,
+        address_expr, descriptor);
+    return true;
+}
+
 /* Emit the no-initializer member default for one field during object construction. */
 static bool cg_emit_user_field_default_value(CG *cg,
                                              const char *object_expr,
                                              const UserField *uf,
                                              FengToken blame) {
+    size_t reified_index = 0U;
+    bool uses_reified_offset;
+    Buf field_expr;
+
     if (cg == NULL || object_expr == NULL || uf == NULL) {
         return false;
     }
+    uses_reified_offset = cg_user_field_reified_index(
+        cg, uf, &reified_index);
 
     if (uf->type != NULL && uf->type->kind == CG_TYPE_GENERIC_PARAM) {
         Buf lvalue;
@@ -22335,37 +22875,83 @@ static bool cg_emit_user_field_default_value(CG *cg,
         }
 
         buf_init(&lvalue);
-        buf_append_fmt(&lvalue, "%s->%s", object_expr, uf->c_name);
+        if (uses_reified_offset) {
+            buf_append_fmt(&lvalue,
+                           "((char *)%s + %s[%zu])",
+                           object_expr,
+                           cg->generic_type_method_field_offsets_name,
+                           reified_index);
+        } else {
+            buf_append_fmt(&lvalue, "%s->%s", object_expr, uf->c_name);
+        }
         if (lvalue.data == NULL) {
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
-        bool ok = cg_emit_generic_param_default_init(cg,
-                                                     lvalue.data,
-                                                     uf->type,
-                                                     blame);
+        bool ok = uses_reified_offset
+            ? cg_emit_generic_param_default_init_at_address(
+                  cg, lvalue.data, uf->type, blame)
+            : cg_emit_generic_param_default_init(
+                  cg, lvalue.data, uf->type, blame);
         buf_free(&lvalue);
         return ok;
     }
 
-    if (cgtype_is_aggregate(uf->type)) {
-        Buf lvalue;
-        bool ok;
+    buf_init(&field_expr);
+    if (uses_reified_offset) {
+        char *ctype = cg_ctype_dup(uf->type);
 
-        buf_init(&lvalue);
-        buf_append_fmt(&lvalue, "%s->%s", object_expr, uf->c_name);
-        if (lvalue.data == NULL) {
+        if (ctype == NULL) {
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
+        buf_append_fmt(&field_expr,
+                       "(*(%s *)((char *)%s + %s[%zu]))",
+                       ctype,
+                       object_expr,
+                       cg->generic_type_method_field_offsets_name,
+                       reified_index);
+        free(ctype);
+    } else {
+        buf_append_fmt(&field_expr,
+                       "%s->%s",
+                       object_expr,
+                       uf->c_name);
+    }
+    if (field_expr.data == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    if (cgtype_is_aggregate(uf->type)) {
+        bool ok;
+        const char *aggregate_desc = cg_aggregate_desc_name(uf->type);
+        size_t rad_index;
+
         buf_append_cstr(cg->cur_body, "    ");
-        ok = cg_append_aggregate_default_init_call(cg->cur_body, uf->type, lvalue.data);
-        buf_free(&lvalue);
+        if (uses_reified_offset && aggregate_desc != NULL &&
+            cg_value_needs_reified_layout(cg, uf->type) &&
+            cg_lookup_reified_agg_dep_index(
+                cg, aggregate_desc, &rad_index)) {
+            const char *rad_source = cg->generic_type_method_rad_via_desc
+                                         ? "_desc"
+                                         : "_td";
+
+            buf_append_fmt(cg->cur_body,
+                "feng_aggregate_default_init(&%s, "
+                "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu])",
+                field_expr.data, rad_source, rad_index);
+            ok = true;
+        } else {
+            ok = cg_append_aggregate_default_init_call(
+                cg->cur_body, uf->type, field_expr.data);
+        }
         if (!ok) {
+            buf_free(&field_expr);
             return cg_fail(cg,
                            blame,
                            "CE0233", "codegen: missing aggregate default-init rule for field '%s'",
                            uf->feng_name);
         }
         buf_append_cstr(cg->cur_body, ";\n");
+        buf_free(&field_expr);
         return true;
     }
 
@@ -22374,25 +22960,28 @@ static bool cg_emit_user_field_default_value(CG *cg,
         char *cty = NULL;
 
         if (!cg_default_value_expr(cg, uf->type, &blame, &def_expr)) {
+            buf_free(&field_expr);
             return false;
         }
         cty = cg_ctype_dup(uf->type);
         if (cty == NULL) {
             free(def_expr);
+            buf_free(&field_expr);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (cgtype_is_by_value_struct(uf->type)) {
             buf_append_fmt(cg->cur_body,
-                "    %s->%s = %s;\n",
-                object_expr, uf->c_name, def_expr);
+                "    %s = %s;\n",
+                field_expr.data, def_expr);
         } else {
             buf_append_fmt(cg->cur_body,
-                "    %s->%s = (%s)(%s);\n",
-                object_expr, uf->c_name, cty, def_expr);
+                "    %s = (%s)(%s);\n",
+                field_expr.data, cty, def_expr);
         }
         free(cty);
         free(def_expr);
     }
+    buf_free(&field_expr);
     return true;
 }
 
@@ -22434,6 +23023,202 @@ static bool cg_user_type_member_initializers_capture_self(const UserType *ut,
         }
     }
     return true;
+}
+
+/* Borrow one already-materialized source field without re-evaluating the
+ * source construction expression.  This mirrors ordinary member access but
+ * starts from an ExprResult shared by every field in one mixin group. */
+static bool cg_emit_mixin_source_field_borrow(CG *cg,
+                                              const ExprResult *source,
+                                              const UserField *source_field,
+                                              ExprResult *out,
+                                              FengToken blame) {
+    Buf expression;
+
+    if (cg == NULL || source == NULL || source->type == NULL ||
+        source->type->kind != CG_TYPE_OBJECT || source->type->user == NULL ||
+        source_field == NULL || out == NULL) {
+        return cg_fail(cg,
+                       blame,
+                       "CE0377", "codegen: member mix source field is not lowerable");
+    }
+    er_init(out);
+    buf_init(&expression);
+
+    if (cg_type_is_value_semantics(source->type)) {
+        if (cg_value_needs_reified_layout(cg, source->type)) {
+            const char *aggregate_desc = cg_aggregate_desc_name(source->type);
+            const char *rad_source = cg->generic_type_method_rad_via_desc
+                                         ? "_desc"
+                                         : "_td";
+            size_t rad_index;
+            size_t field_index = 0U;
+
+            if (aggregate_desc == NULL ||
+                !cg_lookup_reified_agg_dep_index(cg, aggregate_desc, &rad_index)) {
+                return cg_fail(
+                    cg,
+                    blame,
+                    "CE0378", "codegen: member mix source requires missing reified layout");
+            }
+            while (field_index < source->type->user->field_count &&
+                   &source->type->user->fields[field_index] != source_field) {
+                ++field_index;
+            }
+            if (field_index == source->type->user->field_count) {
+                return cg_fail(cg,
+                               blame,
+                               "CE0379", "codegen: member mix source field index is missing");
+            }
+            if (source_field->type != NULL &&
+                source_field->type->kind == CG_TYPE_GENERIC_PARAM) {
+                buf_append_fmt(
+                    &expression,
+                    "(void *)((char *)&(%s) + ((const FengAggregateDescriptor *)%s->reified_agg_deps[%zu])->reified_field_offsets[%zu])",
+                    source->c_expr,
+                    rad_source,
+                    rad_index,
+                    field_index);
+            } else {
+                char *ctype = cg_ctype_dup(source_field->type);
+
+                if (ctype == NULL) {
+                    return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+                }
+                buf_append_fmt(
+                    &expression,
+                    "(*(%s *)((char *)&(%s) + ((const FengAggregateDescriptor *)%s->reified_agg_deps[%zu])->reified_field_offsets[%zu]))",
+                    ctype,
+                    source->c_expr,
+                    rad_source,
+                    rad_index,
+                    field_index);
+                free(ctype);
+            }
+        } else {
+            buf_append_fmt(&expression,
+                           "(%s).%s",
+                           source->c_expr,
+                           source_field->c_name);
+        }
+    } else if (source_field->type != NULL &&
+               source_field->type->kind == CG_TYPE_GENERIC_PARAM) {
+        buf_append_fmt(&expression,
+                       "(void *)&((%s)->%s)",
+                       source->c_expr,
+                       source_field->c_name);
+    } else {
+        buf_append_fmt(&expression,
+                       "(%s)->%s",
+                       source->c_expr,
+                       source_field->c_name);
+    }
+
+    out->c_expr = expression.data;
+    out->type = cgtype_clone(source_field->type);
+    out->owns_ref = false;
+    if (out->c_expr == NULL || out->type == NULL) {
+        er_free(out);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    return true;
+}
+
+/* Emit one explicit-source mixin group.  A nested scope owns the temporary
+ * source, so it is released immediately after all generated target fields
+ * have copied their final values. */
+static bool cg_emit_user_type_mixin_initializer(CG *cg,
+                                                const UserType *target_type,
+                                                const FengTypeMixinDecl *mixin,
+                                                const char *object_expr,
+                                                FengToken blame) {
+    Scope *saved_scope;
+    Scope *source_scope;
+    ExprResult source;
+    bool ok = false;
+
+    if (cg == NULL || target_type == NULL || mixin == NULL ||
+        mixin->source_constructor == NULL || object_expr == NULL) {
+        return false;
+    }
+    saved_scope = cg->cur_scope;
+    source_scope = scope_push(saved_scope);
+    if (source_scope == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    cg->cur_scope = source_scope;
+    er_init(&source);
+
+    if (!cg_emit_expr(cg, mixin->source_constructor, &source)) {
+        goto cleanup;
+    }
+    if (cg_materialize_to_local(cg, &source, "_mixin_source") == NULL ||
+        source.type == NULL || source.type->kind != CG_TYPE_OBJECT ||
+        source.type->user == NULL) {
+        cg_fail(cg,
+                blame,
+                "CE0377", "codegen: member mix source construction is not an object value");
+        goto cleanup;
+    }
+
+    for (size_t field_index = 0U;
+         field_index < target_type->field_count;
+         ++field_index) {
+        const UserField *target_field = &target_type->fields[field_index];
+        const FengTypeMember *member = target_field->member;
+        const UserField *source_field;
+        ExprResult field_value;
+
+        if (member == NULL || member->mixin_origin != mixin) {
+            continue;
+        }
+        if (!member->as.field.declaration_bound) {
+            if (!cg_emit_user_field_default_value(cg,
+                                                  object_expr,
+                                                  target_field,
+                                                  member->token)) {
+                goto cleanup;
+            }
+            continue;
+        }
+        source_field = cg_user_type_field(
+            source.type->user,
+            member->as.field.name.data,
+            member->as.field.name.length);
+        if (source_field == NULL) {
+            cg_fail(cg,
+                    member->token,
+                    "CE0379", "codegen: member mix source field is missing");
+            goto cleanup;
+        }
+        if (!cg_emit_mixin_source_field_borrow(cg,
+                                               &source,
+                                               source_field,
+                                               &field_value,
+                                               member->token)) {
+            goto cleanup;
+        }
+        if (!cg_emit_user_field_value_store(cg,
+                                            object_expr,
+                                            target_field,
+                                            &field_value,
+                                            member->token,
+                                            false)) {
+            er_free(&field_value);
+            goto cleanup;
+        }
+        er_free(&field_value);
+    }
+    ok = true;
+
+cleanup:
+    er_free(&source);
+    if (ok) {
+        cg_release_scope(cg, source_scope);
+    }
+    cg->cur_scope = saved_scope;
+    scope_pop_free(source_scope);
+    return ok;
 }
 
 /* Emit the member declaration-initialization phase for a freshly allocated object. */
@@ -22523,10 +23308,36 @@ static bool cg_emit_user_type_member_initializers(CG *cg,
         buf_free(&self_deref);
     }
 
-    for (size_t i = 0; i < ut->field_count; ++i) {
+    for (size_t i = 0; i <= ut->field_count; ++i) {
+        if (ut->decl != NULL && ut->decl->kind == FENG_DECL_TYPE) {
+            for (size_t mixin_index = 0U;
+                 mixin_index < ut->decl->as.type_decl.mixin_count;
+                 ++mixin_index) {
+                const FengTypeMixinDecl *mixin =
+                    &ut->decl->as.type_decl.mixins[mixin_index];
+
+                if (mixin->source_constructor != NULL &&
+                    mixin->expanded_field_index == i &&
+                    !cg_emit_user_type_mixin_initializer(cg,
+                                                         ut,
+                                                         mixin,
+                                                         object_expr,
+                                                         mixin->token)) {
+                    goto cleanup;
+                }
+            }
+        }
+        if (i == ut->field_count) {
+            break;
+        }
         const UserField *uf = &ut->fields[i];
         const FengTypeMember *member = uf->member;
 
+        if (member != NULL && member->mixin_origin != NULL &&
+            member->mixin_origin->source_constructor != NULL) {
+            /* The containing explicit-source group initialized this field. */
+            continue;
+        }
         if (member != NULL && member->as.field.initializer != NULL) {
             ExprResult init;
             bool ok;
@@ -24030,6 +24841,20 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
     }
     if (!cg->cur_return_type ||
         cg->cur_return_type->kind == CG_TYPE_VOID) {
+        if (stmt->as.return_value != NULL &&
+            stmt->is_mixin_wrapper_forward_return) {
+            FengStmt expr_stmt = *stmt;
+
+            expr_stmt.kind = FENG_STMT_EXPR;
+            expr_stmt.as.expr = stmt->as.return_value;
+            if (!cg_emit_expr_stmt(cg, &expr_stmt)) {
+                return false;
+            }
+            cg_release_through(cg, NULL);
+            cg_emit_return_control_cleanup(cg);
+            buf_append_cstr(cg->cur_body, "    return;\n");
+            return true;
+        }
         if (stmt->as.return_value) {
             return cg_fail(cg, stmt->token,
                 "CE0264", "codegen: void function cannot return a value");
@@ -28537,6 +29362,20 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
 static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
     /* Void-return: just release and return. */
     if (!cg->cur_return_type || cg->cur_return_type->kind == CG_TYPE_VOID) {
+        if (stmt->as.return_value != NULL &&
+            stmt->is_mixin_wrapper_forward_return) {
+            FengStmt expr_stmt = *stmt;
+
+            expr_stmt.kind = FENG_STMT_EXPR;
+            expr_stmt.as.expr = stmt->as.return_value;
+            if (!cg_emit_expr_stmt(cg, &expr_stmt)) {
+                return false;
+            }
+            cg_release_through(cg, NULL);
+            cg_emit_return_control_cleanup(cg);
+            buf_append_cstr(cg->cur_body, "    return;\n");
+            return true;
+        }
         if (stmt->as.return_value) {
             return cg_fail(cg, stmt->token,
                 "CE0264", "codegen: void function cannot return a value");
@@ -30633,6 +31472,19 @@ static bool cg_append_witness_forward_arg(CG *cg,
     }
     buf_append_cstr(out, param_name);
     return true;
+}
+
+/* Open generic managed methods receive their concrete owner descriptor after
+ * `self`.  A spec witness already owns the managed subject pointer, so the
+ * ordinary object header is the authoritative source of that descriptor. */
+static void cg_append_managed_witness_owner_descriptor(Buf *out,
+                                                       const UserType *type) {
+    if (out != NULL && type != NULL &&
+        type->generic_context_type_param_count > 0U) {
+        buf_append_cstr(
+            out,
+            ", ((const FengManagedHeader *)_subject)->desc");
+    }
 }
 
 static bool cg_user_fit_targets_spec(const UserFit *fit, const UserSpec *spec) {
@@ -32815,6 +33667,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 cg_emit_c_type(fd, fm->return_type);
                 buf_append_fmt(fd, " _ret = %s((struct %s *)_subject",
                                fm->c_name, t->c_struct_name);
+                cg_append_managed_witness_owner_descriptor(fd, t);
                 for (size_t pi = 0; pi < sm->param_count; pi++) {
                     char pname[32];
                     snprintf(pname, sizeof pname, "p%zu", pi);
@@ -32861,6 +33714,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 buf_append_fmt(fd, "    return %s((struct %s *)_subject",
                                fm->c_name, t->c_struct_name);
             }
+            cg_append_managed_witness_owner_descriptor(fd, t);
             for (size_t pi = 0; pi < sm->param_count; pi++) {
                 char pname[32];
                 snprintf(pname, sizeof pname, "p%zu", pi);
@@ -32915,6 +33769,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 cg_emit_c_type(fd, um->return_type);
                 buf_append_fmt(fd, " _ret = %s((struct %s *)_subject",
                                um->c_name, t->c_struct_name);
+                cg_append_managed_witness_owner_descriptor(fd, t);
                 for (size_t pi = 0; pi < sm->param_count; pi++) {
                     char pname[32];
                     snprintf(pname, sizeof pname, "p%zu", pi);
@@ -32962,6 +33817,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 buf_append_fmt(fd, "    return %s((struct %s *)_subject",
                                um->c_name, t->c_struct_name);
             }
+            cg_append_managed_witness_owner_descriptor(fd, t);
             for (size_t pi = 0; pi < sm->param_count; pi++) {
                 char pname[32];
                 snprintf(pname, sizeof pname, "p%zu", pi);
@@ -33984,6 +34840,110 @@ static bool cg_pass_pre_register_functions(CG *cg,
     return true;
 }
 
+/* Emit the source-package implementation of an implicit constructor for a
+ * non-generic public type.  The ordinary construction call site allocates the
+ * object; this entry performs exactly the member declaration-initialization
+ * phase that precedes every user constructor body. */
+static bool cg_emit_implicit_constructor_entry(CG *cg,
+                                               const UserType *type,
+                                               FengCompileTarget target) {
+    FengTypeMember member;
+    FengBlock body;
+    UserMethod method;
+    bool ok;
+
+    if (cg == NULL || type == NULL || type->decl == NULL ||
+        type->constructor_count != 0U || type->field_count == 0U ||
+        target != FENG_COMPILE_TARGET_LIB ||
+        type->decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        return true;
+    }
+    memset(&member, 0, sizeof(member));
+    memset(&body, 0, sizeof(body));
+    memset(&method, 0, sizeof(method));
+    member.token = type->decl->token;
+    member.kind = FENG_TYPE_MEMBER_CONSTRUCTOR;
+    member.visibility = FENG_VISIBILITY_PUBLIC;
+    member.as.callable.token = type->decl->token;
+    member.as.callable.name = type->decl->as.type_decl.name;
+    member.as.callable.body = &body;
+    body.token = type->decl->token;
+
+    method.feng_name = strndup(member.as.callable.name.data,
+                               member.as.callable.name.length);
+    method.c_name = cg_implicit_constructor_cname(type);
+    method.return_type = cgtype_new(CG_TYPE_VOID);
+    method.member = &member;
+    if (method.feng_name == NULL || method.c_name == NULL ||
+        method.return_type == NULL) {
+        free(method.feng_name);
+        free(method.c_name);
+        cgtype_free(method.return_type);
+        return cg_fail(cg, member.token, "IE0001", "codegen: out of memory");
+    }
+    ok = cg_emit_user_method(cg, type, &method, false);
+    free(method.feng_name);
+    free(method.c_name);
+    cgtype_free(method.return_type);
+    return ok;
+}
+
+/* Emit the single shared implicit-constructor body consumed by every
+ * concrete instance of an external generic type. */
+static bool cg_emit_generic_implicit_constructor_entry(
+    CG *cg,
+    const FengDecl *decl,
+    FengCompileTarget target) {
+    FengTypeMember member;
+    FengBlock body;
+    char *shared_name;
+    bool has_instance_field = false;
+    bool has_constructor = false;
+    bool ok;
+
+    if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE ||
+        decl->as.type_decl.type_param_count == 0U ||
+        target != FENG_COMPILE_TARGET_LIB ||
+        decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        return true;
+    }
+    for (size_t i = 0U; i < decl->as.type_decl.member_count; ++i) {
+        const FengTypeMember *candidate = decl->as.type_decl.members[i];
+
+        if (candidate == NULL) {
+            continue;
+        }
+        if (candidate->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+            has_constructor = true;
+        } else if (candidate->kind == FENG_TYPE_MEMBER_FIELD &&
+                   !candidate->is_static) {
+            has_instance_field = true;
+        }
+    }
+    if (has_constructor || !has_instance_field) {
+        return true;
+    }
+
+    memset(&member, 0, sizeof(member));
+    memset(&body, 0, sizeof(body));
+    member.token = decl->token;
+    member.kind = FENG_TYPE_MEMBER_CONSTRUCTOR;
+    member.visibility = FENG_VISIBILITY_PUBLIC;
+    member.as.callable.token = decl->token;
+    member.as.callable.name = decl->as.type_decl.name;
+    member.as.callable.body = &body;
+    body.token = decl->token;
+
+    shared_name = cg_generic_implicit_constructor_shared_cname(cg, decl);
+    if (shared_name == NULL) {
+        return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
+    }
+    ok = cg_emit_generic_type_method_shared(
+        cg, decl, &member, target, false, shared_name);
+    free(shared_name);
+    return ok;
+}
+
 static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                                FengCompileTarget target) {
     if (cg_program_origin(cg, prog) == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
@@ -34005,6 +34965,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                 continue;
             case FENG_DECL_TYPE: {
                 if (d->as.type_decl.type_param_count > 0) {
+                    if (!cg_emit_generic_implicit_constructor_entry(
+                            cg, d, target)) {
+                        return false;
+                    }
                     for (size_t member_index = 0;
                          member_index < d->as.type_decl.member_count;
                          ++member_index) {
@@ -34045,6 +35009,9 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                     if (cg->user_types[k].decl == d) { ut = &cg->user_types[k]; break; }
                 }
                 if (!ut) return cg_fail(cg, d->token, "CE0350", "codegen: internal: type not registered");
+                if (!cg_emit_implicit_constructor_entry(cg, ut, target)) {
+                    return false;
+                }
                 for (size_t ci = 0; ci < ut->constructor_count; ci++) {
                     bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
                                           d->visibility == FENG_VISIBILITY_PUBLIC &&
@@ -34062,11 +35029,24 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                                           d->visibility == FENG_VISIBILITY_PUBLIC &&
                                           ut->methods[mi].member->visibility !=
                                               FENG_VISIBILITY_PRIVATE);
-                    if (!cg_emit_user_method(cg,
-                                             ut,
-                                             &ut->methods[mi],
-                                             needs_static)) {
-                        return false;
+                    if (ut->methods[mi].member->as.callable.type_param_count > 0U) {
+                        if (!cg_emit_generic_type_method_shared(cg,
+                                                               d,
+                                                               ut->methods[mi].member,
+                                                               target, false, NULL) ||
+                            !cg_emit_generic_type_method_wrapper(cg,
+                                                                 ut,
+                                                                 &ut->methods[mi],
+                                                                 NULL, NULL)) {
+                            return false;
+                        }
+                    } else {
+                        if (!cg_emit_user_method(cg,
+                                                 ut,
+                                                 &ut->methods[mi],
+                                                 needs_static)) {
+                            return false;
+                        }
                     }
                 }
                 for (size_t mi = 0; mi < ut->static_method_count; mi++) {
@@ -37724,6 +38704,91 @@ static void cg_clear_generic_type_context(CG *cg) {
     cg->generic_type_method_rad_via_desc = false;
 }
 
+/* Build the field/type view needed while emitting a generic constructor's
+ * shared body.  It is intentionally local to that body: registering an
+ * erased self instance globally would make ordinary generic lookup select it
+ * as a concrete program type. */
+static bool cg_init_generic_constructor_view(CG *cg,
+                                             const FengDecl *decl,
+                                             UserType *view) {
+    size_t field_count = 0U;
+    size_t field_index = 0U;
+
+    if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE ||
+        view == NULL) {
+        return false;
+    }
+    memset(view, 0, sizeof(*view));
+    for (size_t i = 0U; i < decl->as.type_decl.member_count; ++i) {
+        const FengTypeMember *member = decl->as.type_decl.members[i];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD &&
+            !member->is_static) {
+            field_count++;
+        }
+    }
+    view->decl = decl;
+    view->is_generic_instance = true;
+    view->generic_origin_decl = decl;
+    view->generic_context_type_param_count =
+        decl->as.type_decl.type_param_count;
+    view->fields = field_count > 0U
+        ? (UserField *)calloc(field_count, sizeof(*view->fields))
+        : NULL;
+    if (field_count > 0U && view->fields == NULL) {
+        return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
+    }
+    view->field_count = field_count;
+    for (size_t i = 0U; i < decl->as.type_decl.member_count; ++i) {
+        const FengTypeMember *member = decl->as.type_decl.members[i];
+        const FengTypeRef *field_type_ref;
+        UserField *field;
+
+        if (member == NULL || member->kind != FENG_TYPE_MEMBER_FIELD ||
+            member->is_static) {
+            continue;
+        }
+        field = &view->fields[field_index++];
+        field->member = member;
+        field->feng_name = strndup(member->as.field.name.data,
+                                   member->as.field.name.length);
+        field->c_name = cg_sanitize(member->as.field.name.data,
+                                    member->as.field.name.length);
+        field_type_ref = member->as.field.type;
+        if (field_type_ref == NULL && cg->analysis != NULL) {
+            const FengSemanticTypeFact *fact =
+                feng_semantic_lookup_type_fact(cg->analysis, member);
+
+            if (fact != NULL &&
+                fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                field_type_ref = fact->type_ref;
+            }
+        }
+        if (field->feng_name == NULL || field->c_name == NULL ||
+            !cg_resolve_type(cg,
+                             field_type_ref,
+                             &member->token,
+                             &field->type)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Release a local generic-constructor field view. */
+static void cg_free_generic_constructor_view(UserType *view) {
+    if (view == NULL) {
+        return;
+    }
+    for (size_t i = 0U; i < view->field_count; ++i) {
+        free(view->fields[i].feng_name);
+        free(view->fields[i].c_name);
+        cgtype_free(view->fields[i].type);
+    }
+    free(view->fields);
+    memset(view, 0, sizeof(*view));
+}
+
 static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                                                const FengTypeMember *member,
                                                FengCompileTarget target,
@@ -38156,6 +39221,21 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         }
     }
 
+    if (member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+        UserType constructor_view;
+
+        if (!cg_init_generic_constructor_view(
+                cg, decl, &constructor_view)) {
+            cg_free_generic_constructor_view(&constructor_view);
+            goto cleanup;
+        }
+        if (!cg_emit_user_type_member_initializers(
+                cg, &constructor_view, "_self", member->token)) {
+            cg_free_generic_constructor_view(&constructor_view);
+            goto cleanup;
+        }
+        cg_free_generic_constructor_view(&constructor_view);
+    }
     if (!cg_emit_block(cg, sig->body)) goto cleanup;
     cg_release_scope(cg, fn_scope);
     cg_emit_function_fallthrough_cleanup(cg);
@@ -38563,6 +39643,9 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             buf_append_fmt(body, "(void *)self, &%s", desc_name);
         }
         call_has_arg = true;
+    } else if (t->generic_context_type_param_count > 0U) {
+        buf_append_cstr(body, "_type_desc");
+        call_has_arg = true;
     } else {
         buf_append_fmt(body, "&%s", desc_name);
         call_has_arg = true;
@@ -38879,6 +39962,11 @@ static bool cg_emit_user_method(CG *cg,
         }
     }
 
+    if (m->member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR &&
+        !cg_emit_user_type_member_initializers(
+            cg, t, "self", m->member->token)) {
+        goto cleanup;
+    }
     if (!cg_emit_block(cg, m->member->as.callable.body)) goto cleanup;
     cg_release_scope(cg, fn_scope);
     cg_emit_function_fallthrough_cleanup(cg);

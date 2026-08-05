@@ -246,6 +246,7 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     bool has_calling_conv = false;
     bool has_abi_annotation = false;
     bool has_iter_annotation = false;
+    bool has_mixable_annotation = false;
 
     if (out_annotations == NULL || out_count == NULL) {
         return false;
@@ -260,8 +261,10 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
     has_calling_conv = symbol_decl->calling_convention != FENG_ANNOTATION_NONE;
     has_abi_annotation = symbol_decl->abi_annotated;
     has_iter_annotation = symbol_decl->is_iterable || symbol_decl->is_iterator;
+    has_mixable_annotation = symbol_decl->is_mixable;
 
-    if (!has_calling_conv && !has_abi_annotation && !has_iter_annotation) {
+    if (!has_calling_conv && !has_abi_annotation && !has_iter_annotation &&
+        !has_mixable_annotation) {
         return true;
     }
 
@@ -273,6 +276,9 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
         total_count++;
     }
     if (has_iter_annotation) {
+        total_count++;
+    }
+    if (has_mixable_annotation) {
         total_count++;
     }
 
@@ -354,6 +360,19 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
             annotations[idx].name.length = 8U;
             annotations[idx].builtin_kind = FENG_ANNOTATION_ITERATOR;
         }
+        annotations[idx].args = NULL;
+        annotations[idx].arg_count = 0U;
+    }
+
+    if (has_mixable_annotation) {
+        size_t idx = (has_calling_conv ? 1U : 0U) +
+                     (has_abi_annotation ? 1U : 0U) +
+                     (has_iter_annotation ? 1U : 0U);
+
+        annotations[idx].token = symbol_decl->token;
+        annotations[idx].name.data = "mixable";
+        annotations[idx].name.length = 7U;
+        annotations[idx].builtin_kind = FENG_ANNOTATION_MIXABLE;
         annotations[idx].args = NULL;
         annotations[idx].arg_count = 0U;
     }
@@ -897,6 +916,7 @@ static FengTypeMember *synthesize_type_member(const FengSymbolModuleGraph *modul
     member->token = member_decl->token;
     member->visibility = member_decl->visibility;
     member->is_static = member_decl->is_static;
+    member->is_mixable = member_decl->is_mixable;
     if (!clone_slice_as_slice(feng_symbol_decl_doc(member_decl), &member->doc_comment)) {
         free_synthetic_type_member(member);
         return NULL;

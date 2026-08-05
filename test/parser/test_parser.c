@@ -3208,6 +3208,161 @@ static void test_infix_match_op_mixed_with_relational_and_equality(void) {
     feng_program_free(program);
 }
 
+/* Parses all member-expansion forms and normalizes the mixable fact. */
+static void test_type_member_mixins_and_mixable_fact_parse(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Widget { func draw(): void; }\n"
+        "type View<T>: Widget { open var value: T; }\n"
+        "type Button<T>: Widget {\n"
+        "    var before: int;\n"
+        "    ...: View<T>;\n"
+        "    var middle: int;\n"
+        "    ...: View<T> = View<T>();\n"
+        "    ... = View<T>();\n"
+        "    @mixable\n"
+        "    open static func draw(target: Widget): void {}\n"
+        "    var after: int;\n"
+        "}\n"
+        "fit View<int> {\n"
+        "    @mixable\n"
+        "    open static func fitDraw(target: Widget): void {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *button;
+    const FengDecl *fit;
+    const FengTypeMixinDecl *default_mixin;
+    const FengTypeMixinDecl *bound_mixin;
+    const FengTypeMixinDecl *inferred_mixin;
+    const FengTypeMember *draw;
+
+    ASSERT(feng_parse_source(source, strlen(source), "member_mixins.ff", &program, &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 4U);
+
+    button = program->declarations[2];
+    ASSERT(button->kind == FENG_DECL_TYPE);
+    ASSERT(button->as.type_decl.member_count == 4U);
+    ASSERT(button->as.type_decl.mixin_count == 3U);
+
+    default_mixin = &button->as.type_decl.mixins[0];
+    ASSERT(default_mixin->token.kind == FENG_TOKEN_ELLIPSIS);
+    ASSERT(default_mixin->token.line == 6U);
+    ASSERT(default_mixin->source_type != NULL);
+    ASSERT(default_mixin->source_constructor == NULL);
+    ASSERT(!default_mixin->infer_source_type);
+    ASSERT(default_mixin->member_index == 1U);
+    ASSERT(default_mixin->source_type->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(default_mixin->source_type->as.named.type_arg_count == 1U);
+
+    bound_mixin = &button->as.type_decl.mixins[1];
+    ASSERT(bound_mixin->source_type != NULL);
+    ASSERT(bound_mixin->source_constructor != NULL);
+    ASSERT(!bound_mixin->infer_source_type);
+    ASSERT(bound_mixin->member_index == 2U);
+    ASSERT(bound_mixin->source_constructor->kind == FENG_EXPR_CALL);
+
+    inferred_mixin = &button->as.type_decl.mixins[2];
+    ASSERT(inferred_mixin->source_type == NULL);
+    ASSERT(inferred_mixin->source_constructor != NULL);
+    ASSERT(inferred_mixin->infer_source_type);
+    ASSERT(inferred_mixin->member_index == 2U);
+    ASSERT(inferred_mixin->source_constructor->kind == FENG_EXPR_CALL);
+
+    draw = button->as.type_decl.members[2];
+    ASSERT(draw->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(draw->is_static);
+    ASSERT(draw->is_mixable);
+    ASSERT(draw->annotation_count == 1U);
+    ASSERT(draw->annotations[0].builtin_kind == FENG_ANNOTATION_MIXABLE);
+
+    fit = program->declarations[3];
+    ASSERT(fit->kind == FENG_DECL_FIT);
+    ASSERT(fit->as.fit_decl.member_count == 1U);
+    ASSERT(fit->as.fit_decl.members[0]->is_static);
+    ASSERT(fit->as.fit_decl.members[0]->is_mixable);
+
+    feng_program_free(program);
+}
+
+/* AST dump interleaves expansion directives with explicit members. */
+static void test_type_member_mixin_ast_dump_preserves_order(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type View { open var value: int; }\n"
+        "type Button {\n"
+        "    var before: int;\n"
+        "    ...: View;\n"
+        "    var middle: int;\n"
+        "    ... = View();\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    FILE *stream;
+    char buffer[4096];
+    size_t length;
+    const char *before;
+    const char *default_mixin;
+    const char *middle;
+    const char *inferred_mixin;
+
+    ASSERT(feng_parse_source(source, strlen(source), "member_mixin_dump.ff", &program, &error));
+    stream = tmpfile();
+    ASSERT(stream != NULL);
+    feng_program_dump(stream, program);
+    ASSERT(fflush(stream) == 0);
+    ASSERT(fseek(stream, 0L, SEEK_SET) == 0);
+    length = fread(buffer, 1U, sizeof(buffer) - 1U, stream);
+    ASSERT(!ferror(stream));
+    buffer[length] = '\0';
+    ASSERT(fclose(stream) == 0);
+
+    before = strstr(buffer, "field var before: int");
+    default_mixin = strstr(buffer, "mixin ...: View");
+    middle = strstr(buffer, "field var middle: int");
+    inferred_mixin = strstr(buffer, "mixin ... = View()");
+    ASSERT(before != NULL);
+    ASSERT(default_mixin != NULL);
+    ASSERT(middle != NULL);
+    ASSERT(inferred_mixin != NULL);
+    ASSERT(before < default_mixin);
+    ASSERT(default_mixin < middle);
+    ASSERT(middle < inferred_mixin);
+
+    feng_program_free(program);
+}
+
+/* Rejects member-expansion syntax outside its three declared forms. */
+static void test_type_member_mixin_invalid_forms_rejected(void) {
+    static const struct {
+        const char *source;
+        const char *code;
+    } cases[] = {
+        {"module demo.main;\ntype Bad { ...; }\n", "SE0313"},
+        {"module demo.main;\ntype Bad { open ...: View; }\n", "SE0313"},
+        {"module demo.main;\ntype Bad { static ...: View; }\n", "SE0313"},
+        {"module demo.main;\nspec Bad { ...: View; }\n", "SE0003"},
+        {"module demo.main;\nfit View { ...: Other; }\n", "SE0808"},
+        {"module demo.main;\n...: View;\n", "SE0003"}
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        ASSERT(!feng_parse_source(cases[index].source,
+                                  strlen(cases[index].source),
+                                  "invalid_member_mixin.ff",
+                                  &program,
+                                  &error));
+        ASSERT(program == NULL);
+        ASSERT(error.code != NULL);
+        ASSERT(strcmp(error.code, cases[index].code) == 0);
+    }
+}
+
 int main(void) {
     test_top_level_declarations();
     test_annotation_accepts_two_arguments();
@@ -3327,6 +3482,9 @@ int main(void) {
     test_infix_match_op_pipe_does_not_become_bit_or();
     test_infix_match_op_left_associative_chains();
     test_infix_match_op_mixed_with_relational_and_equality();
+    test_type_member_mixins_and_mixable_fact_parse();
+    test_type_member_mixin_ast_dump_preserves_order();
+    test_type_member_mixin_invalid_forms_rejected();
     puts("parser tests passed");
     return 0;
 }

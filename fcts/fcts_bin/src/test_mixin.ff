@@ -1,0 +1,253 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.mixin;
+
+type ZeroMixedView: LibWidget {
+  ...: LibView;
+
+  func ZeroMixedView() {
+    self.initialized = 0;
+    self.constructorBound = 0;
+    self.lateBound = 0;
+  }
+}
+
+type ConstructedMixedView: LibWidget {
+  ...: LibView = LibView(7);
+
+  func ConstructedMixedView() {
+    self.lateBound = 19;
+  }
+}
+
+type InferredMixedView: LibWidget {
+  ... = LibView(8);
+}
+
+type LiteralMixedView: LibWidget {
+  ...: LibView = LibView(9) {
+    mutableValue: 12,
+    label: "literal"
+  };
+}
+
+type ImplicitMixedView {
+  ...: LibImplicitView = LibImplicitView();
+}
+
+type ButtonMixedView: LibWidget {
+  ...: LibView;
+
+  func ButtonMixedView() {
+    self.initialized = 0;
+    self.constructorBound = 0;
+    self.lateBound = 0;
+  }
+
+  @mixable
+  open static func draw(target: LibWidget, area: int): int {
+    return LibView.draw(target, area) + 10;
+  }
+}
+
+type LeafMixedView: LibWidget {
+  ...: ButtonMixedView;
+
+  func LeafMixedView() {
+    self.initialized = 0;
+    self.constructorBound = 0;
+    self.lateBound = 0;
+  }
+}
+
+type LocalFitView: LibWidget {
+}
+
+open fit LocalFitView {
+  @mixable
+  open static func draw(target: LibWidget, area: int): int {
+    return area + 2;
+  }
+
+  @mixable
+  open static func log(target: LibWidget, args: string...): void {
+  }
+}
+
+type FitMixedView: LibWidget {
+  ...: LocalFitView;
+}
+
+type ImportedFitMixedView: LibWidget {
+  ...: LibFitView;
+}
+
+open type GenericMixinSource<T> {
+  open var value: T;
+}
+
+type GenericMixinTarget<T> {
+  ...: GenericMixinSource<T>;
+}
+
+type GenericConstructedMixedView<T>: LibGenericWidget {
+  ...: LibGenericView<T> = LibGenericView<T>();
+}
+
+type GenericMethodMixedView: LibGenericMethodWidget {
+  ...: LibGenericMethodView;
+}
+
+func draw_mixed_widget(widget: LibWidget, area: int): int {
+  return widget.draw(area);
+}
+
+/** 成员展开与 mixable 行为复用测试。 */
+open func test_mixin() {
+  describe("member mixin", () {
+    test("ordinary cross-package construction completes every phase", () {
+      LibView.constructionCount = 0;
+      let source = LibView(7);
+      assert(LibView.constructionCount == 1,
+             "ordinary cross-package constructor runs once");
+      assert(source.initialized == 11,
+             "ordinary cross-package declaration-bound field initializes");
+      assert(source.mutableValue == 3,
+             "ordinary cross-package var initializer runs");
+      assert(source.constructorBound == 7,
+             "ordinary cross-package constructor-bound field initializes");
+    });
+
+    test("default-zero mix does not construct source", () {
+      LibView.constructionCount = 0;
+      let view = ZeroMixedView();
+      assert(LibView.constructionCount == 0,
+             "default-zero mix does not construct source");
+      assert(view.initialized == 0 && view.constructorBound == 0 &&
+             view.lateBound == 0 && view.mutableValue == 0,
+             "default-zero mix initializes generated fields directly");
+    });
+
+    test("explicit source is constructed once and copies final fields", () {
+      LibView.constructionCount = 0;
+      let view = ConstructedMixedView();
+      assert(LibView.constructionCount == 1,
+             "explicit mix source is constructed once");
+      assert(view.initialized == 11,
+             "declaration-bound source let is copied");
+      assert(view.constructorBound == 7,
+             "constructor-bound source let is copied");
+      assert(view.lateBound == 19,
+             "unbound source let stays available to the target constructor");
+      assert(view.mutableValue == 3,
+             "source var final value is copied");
+    });
+
+    test("inferred source type preserves construction binding", () {
+      LibView.constructionCount = 0;
+      let view = InferredMixedView();
+      assert(LibView.constructionCount == 1,
+             "inferred source construction runs once");
+      assert(view.initialized == 11 && view.constructorBound == 8 &&
+             view.mutableValue == 3,
+             "inferred source fields are copied");
+    });
+
+    test("object literal phase completes before fields are copied", () {
+      LibView.constructionCount = 0;
+      let view = LiteralMixedView();
+      assert(LibView.constructionCount == 1,
+             "object-literal source construction runs once");
+      assert(view.constructorBound == 9 && view.mutableValue == 12 &&
+             view.label == "literal",
+             "object-literal final field values are copied");
+    });
+
+    test("ordinary imported implicit construction initializes fields", () {
+      let source = LibImplicitView();
+      let mixed = ImplicitMixedView();
+      assert(source.initialized == 21 && source.label == "implicit",
+             "ordinary imported implicit construction initializes fields");
+      assert(mixed.initialized == 21 && mixed.label == "implicit",
+             "mixin consumes the ordinary implicit construction result");
+    });
+
+    test("mixable source has its own instance entry", () {
+      let view = LibView(1);
+      assert(view.draw(2) == 3,
+             "source mixable instance wrapper");
+    });
+
+    test("target override and multi-level static wrapper chain", () {
+      let button = ButtonMixedView();
+      let leaf = LeafMixedView();
+      assert(button.draw(2) == 13,
+             "target explicit mixable override");
+      assert(leaf.draw(2) == 13,
+             "multi-level mixable wrapper chain");
+      assert(draw_mixed_widget(leaf, 2) == 13,
+             "spec dispatch reaches generated instance wrapper");
+    });
+
+    test("mixable variadic wrapper forwards prepacked group", () {
+      LibView.loggedCount = 0;
+      let leaf = LeafMixedView();
+      leaf.log("a", "b", "c");
+      assert(LibView.loggedCount == 3,
+             "variadic mixable wrapper forwards all arguments");
+    });
+
+    test("inferred void mixable wrapper preserves side effects", () {
+      LibView.loggedCount = 0;
+      let leaf = LeafMixedView();
+      leaf.ping();
+      assert(LibView.loggedCount == 1,
+             "inferred void wrapper evaluates its source call");
+    });
+
+    test("visible fit mixable method participates", () {
+      let source = LocalFitView();
+      let target = FitMixedView();
+      assert(source.draw(1) == 3,
+             "fit source gets instance wrapper");
+      assert(target.draw(1) == 3,
+             "visible fit static method mixes to target");
+    });
+
+    test("cross-package visible fit mixable method participates", () {
+      let source = LibFitView();
+      let target = ImportedFitMixedView();
+      assert(source.draw(1) == 3 && LibFitView.draw(source, 1) == 3,
+             "imported fit exposes stable instance and static entries");
+      assert(target.draw(1) == 3 && ImportedFitMixedView.draw(target, 1) == 3,
+             "imported fit method mixes through stable cross-package symbols");
+    });
+
+    test("generic source field is substituted", () {
+      let target = GenericMixinTarget<string>();
+      target.value = "mixed";
+      assert(target.value == "mixed",
+             "generic mixin field type substitution");
+    });
+
+    test("cross-package generic construction and wrapper are preserved", () {
+      let source = LibGenericView<string>();
+      let target = GenericConstructedMixedView<string>();
+      assert(source.marker == 17 && source.value == "",
+             "ordinary generic implicit construction initializes fields");
+      assert(target.marker == 17 && target.value == "",
+             "generic mixin copies the ordinary construction result");
+      assert(target.echo("generic") == "generic",
+             "generic owner wrapper preserves substituted signature");
+    });
+
+    test("method-generic mixable wrapper preserves type parameters", () {
+      let target = GenericMethodMixedView();
+      assert(target.identity<string>("method") == "method",
+             "method-generic wrapper forwards its type argument");
+      assert(target.identity<int>(7) == 7,
+             "method-generic wrapper supports another instantiation");
+    });
+  });
+}

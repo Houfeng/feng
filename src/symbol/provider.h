@@ -115,6 +115,8 @@ const char *feng_symbol_decl_abi_library(const FengSymbolDeclView *decl);
 size_t feng_symbol_decl_abi_fixed_param_count(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_has_bounded_decl(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_is_static(const FengSymbolDeclView *decl);
+/* Return whether a method declaration carries the normalized mixable fact. */
+bool feng_symbol_decl_is_mixable(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_value_type(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_return_type(const FengSymbolDeclView *decl);
 const FengSymbolTypeView *feng_symbol_decl_fit_target(const FengSymbolDeclView *decl);

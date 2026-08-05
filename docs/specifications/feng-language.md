@@ -14,6 +14,7 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 | --- | --- |
 | 强类型 / 静态类型 | 所有类型在编译期确定，所有类型转换都必须显式写出，无 `any` 类型 |
 | `type` / `enum` 具名类型系统 | `type` 定义对象类型；`enum` 定义简单 int 枚举；普通对象类型采用托管引用语义；`@abi type` 为可参与 ABI 校验的对象类型 |
+| 成员展开 | `type` 内的 `...` 在编译期生成普通公开实例字段；`@mixable` 静态方法提供无继承的行为复用入口 |
 | `spec` / `fit` 显式契约 | `spec` 声明 object-form 契约、callable-form 签名或 union-form 候选集合，`fit` 显式建立"类型满足契约"关系，不做结构隐式匹配 |
 | `let` / `var` 绑定 | 不可变 / 可变绑定，支持类型推导与默认零值初始化 |
 | 函数与重载 | `func` 定义函数与方法，支持按参数类型重载，返回值不参与重载 |
@@ -42,7 +43,7 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 
 ## 3 关键字、保留字与内建注解
 
-当前规范共定义 `30` 个关键字、`5` 个保留字和 `7` 个内建注解及 `17` 个内建类型名及别名。
+当前规范共定义 `30` 个关键字、`5` 个保留字和 `8` 个内建注解及 `17` 个内建类型名及别名。
 
 - **关键字**: 词法阶段直接识别为 token，不得作为标识符。
 - **保留字**: 当前版本暂无对应语法，同样不得作为标识符。
@@ -132,9 +133,9 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 | `export` | 保留，当前不可用 |
 | `prop` | 保留，当前不可用 |
 
-### 3.5 内建注解（共7个）
+### 3.5 内建注解（共8个）
 
-详细用法见 [Feng 语言 C 互操作规范](./feng-interop.md)、[Feng 语言包分发规范](./feng-package.md) 与 [Feng 语言迭代器规范](./feng-iterator.md)。
+详细用法见 [Feng 语言 C 互操作规范](./feng-interop.md)、[Feng 语言包分发规范](./feng-package.md)、[Feng 语言迭代器规范](./feng-iterator.md) 与 [Feng 语言函数规范](./feng-function.md)。
 
 | 内建注解 | 适用位置 | 用途简述 |
 | --- | --- | --- |
@@ -145,6 +146,7 @@ Feng 是一门**强类型、静态类型、支持 `spec` 契约与 `fit` 显式�
 | `@runtime` | 顶层 `extern func` 声明前 | 声明该外部函数由编译器私有 runtime 层提供，与 `@abi` 及调用方式注解互斥 |
 | `@iterable` | `type` 方法声明前 | 标记该方法返回可迭代的迭代器对象，供 `for/in` 循环使用 |
 | `@iterator` | `type` 方法声明前 | 标记该方法为迭代器推进方法，返回 `(bool, Element)` 元组 |
+| `@mixable` | `type` 或 `fit` 静态方法声明前 | 标记可由 `...` 成员展开传播、并统一派生实例入口的静态方法 |
 
 > **`@runtime` 为非公开 API**：其接口随编译器版本变更，不做稳定性保证。除随编译器一起分发的标准库（`std`）外，任何其他包或业务代码均不建议使用。
 
@@ -158,11 +160,11 @@ Feng 通过 `extern func` 声明外部函数。`extern` 只能用于顶层 `func
 
 ## 6 类型系统与对象模型
 
-Feng 以 `type` 与 `enum` 定义具名类型；`spec` 统一声明 object-form 契约、callable-form 签名与 union-form 候选集合；`fit` 显式建立 object-form 适配关系；`let`/`var` 控制成员与变量的可变性。构造函数与终结器作为 `type` 的特殊成员，其声明与约束也统一见 [Feng 语言类型规范](./feng-type.md)。当前阶段 `enum` 仅支持简单的 int enum。详细规则分别见 [Feng 语言类型规范](./feng-type.md)、[Feng 语言 enum 规范](./feng-enum.md)、[Feng 语言变量绑定与作用域规范](./feng-binding.md)、[Feng 语言 `spec` 规范](./feng-spec.md)、[Feng 联合类型规范](./feng-union-type.md)、[Feng 语言 `fit` 规范](./feng-fit.md)。
+Feng 以 `type` 与 `enum` 定义具名类型；`spec` 统一声明 object-form 契约、callable-form 签名与 union-form 候选集合；`fit` 显式建立 object-form 适配关系；`let`/`var` 控制成员与变量的可变性。`type` 成员展开、构造函数与终结器的声明及约束统一见 [Feng 语言类型规范](./feng-type.md)。当前阶段 `enum` 仅支持简单的 int enum。详细规则分别见 [Feng 语言类型规范](./feng-type.md)、[Feng 语言 enum 规范](./feng-enum.md)、[Feng 语言变量绑定与作用域规范](./feng-binding.md)、[Feng 语言 `spec` 规范](./feng-spec.md)、[Feng 联合类型规范](./feng-union-type.md)、[Feng 语言 `fit` 规范](./feng-fit.md)。
 
 ## 7 函数、Lambda 与闭包
 
-Feng 用 `func` 定义函数与成员方法；构造函数与终结器作为 `type` 的特殊成员，规则见 [Feng 语言类型规范](./feng-type.md)；Lambda 是函数字面量的简写形式；闭包可捕获外部变量。其余函数规则见 [Feng 语言函数规范](./feng-function.md)。
+Feng 用 `func` 定义函数与成员方法；`@mixable` 静态方法提供成员展开的行为复用入口；构造函数与终结器作为 `type` 的特殊成员，规则见 [Feng 语言类型规范](./feng-type.md)；Lambda 是函数字面量的简写形式；闭包可捕获外部变量。其余函数规则见 [Feng 语言函数规范](./feng-function.md)。
 
 ## 8 表达式与运算
 

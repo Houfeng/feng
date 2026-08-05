@@ -12,11 +12,21 @@ extern "C" {
 #endif
 
 
+/* One secondary source location associated with a semantic diagnostic. */
+typedef struct FengSemanticRelatedLocation {
+    FengToken token;
+    const char *path;
+    char *message;
+} FengSemanticRelatedLocation;
+
+/* One semantic diagnostic and its optional structured source relations. */
 typedef struct FengSemanticError {
     FengToken token;
     const char *code;
     char *message;
     const char *path;
+    FengSemanticRelatedLocation *related_locations;
+    size_t related_location_count;
 } FengSemanticError;
 
 typedef struct FengSemanticInfo {

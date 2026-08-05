@@ -20403,7 +20403,460 @@ static void test_signature_visibility_effective_ranges(void) {
     }
 }
 
+/* Find one field on a semantically expanded type by name. */
+static const FengTypeMember *find_type_field_named(const FengDecl *type_decl,
+                                                    const char *name) {
+    size_t name_length = strlen(name);
+
+    ASSERT(type_decl != NULL);
+    ASSERT(type_decl->kind == FENG_DECL_TYPE);
+    for (size_t index = 0U; index < type_decl->as.type_decl.member_count; ++index) {
+        const FengTypeMember *member = type_decl->as.type_decl.members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD &&
+            member->as.field.name.length == name_length &&
+            memcmp(member->as.field.name.data, name, name_length) == 0) {
+            return member;
+        }
+    }
+    return NULL;
+}
+
+/* Find one static or instance method on an expanded type by name. */
+static const FengTypeMember *find_type_method_named(const FengDecl *type_decl,
+                                                     const char *name,
+                                                     bool is_static) {
+    size_t name_length = strlen(name);
+
+    ASSERT(type_decl != NULL);
+    ASSERT(type_decl->kind == FENG_DECL_TYPE);
+    for (size_t index = 0U; index < type_decl->as.type_decl.member_count; ++index) {
+        const FengTypeMember *member = type_decl->as.type_decl.members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->is_static == is_static &&
+            member->as.callable.name.length == name_length &&
+            memcmp(member->as.callable.name.data, name, name_length) == 0) {
+            return member;
+        }
+    }
+    return NULL;
+}
+
+/* Generated fields preserve the public surface and compile-time binding facts. */
+static void test_member_mix_fields_preserve_surface_and_binding_facts(void) {
+    const char *source =
+        "module demo.mixin_fields;\n"
+        "open type Source {\n"
+        "    open let initialized: int = 1;\n"
+        "    open let constructorBound: int;\n"
+        "    open var mutableValue: int = 3;\n"
+        "    seal let hidden: int = 4;\n"
+        "    static let staticValue: int = 5;\n"
+        "    func instanceMethod() {}\n"
+        "    func Source() { self.constructorBound = 2; }\n"
+        "}\n"
+        "type Zero {\n"
+        "    ...: Source;\n"
+        "    func Zero() { self.initialized = 0; self.constructorBound = 0; }\n"
+        "}\n"
+        "type Copy { ...: Source = Source(); }\n"
+        "type Inferred { ... = Source(); }\n";
+    FengProgram *program = parse_program_or_die("mixin_fields.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *zero;
+    const FengDecl *copy;
+    const FengDecl *inferred;
+    const FengTypeMember *zero_initialized;
+    const FengTypeMember *zero_constructor_bound;
+    const FengTypeMember *copy_initialized;
+    const FengTypeMember *copy_constructor_bound;
+    const FengTypeMember *copy_mutable;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    zero = find_type_decl_by_name(analysis, "Zero");
+    copy = find_type_decl_by_name(analysis, "Copy");
+    inferred = find_type_decl_by_name(analysis, "Inferred");
+    ASSERT(zero != NULL && copy != NULL && inferred != NULL);
+
+    zero_initialized = find_type_field_named(zero, "initialized");
+    zero_constructor_bound = find_type_field_named(zero, "constructorBound");
+    copy_initialized = find_type_field_named(copy, "initialized");
+    copy_constructor_bound = find_type_field_named(copy, "constructorBound");
+    copy_mutable = find_type_field_named(copy, "mutableValue");
+    ASSERT(zero_initialized != NULL && zero_constructor_bound != NULL);
+    ASSERT(copy_initialized != NULL && copy_constructor_bound != NULL &&
+           copy_mutable != NULL);
+    ASSERT(find_type_field_named(zero, "hidden") == NULL);
+    ASSERT(find_type_field_named(zero, "staticValue") == NULL);
+    ASSERT(find_type_method_named(zero, "instanceMethod", false) == NULL);
+    ASSERT(zero_initialized->as.field.mutability == FENG_MUTABILITY_LET);
+    ASSERT(!zero_initialized->as.field.declaration_bound);
+    ASSERT(!zero_constructor_bound->as.field.declaration_bound);
+    ASSERT(copy_initialized->as.field.declaration_bound);
+    ASSERT(copy_constructor_bound->as.field.declaration_bound);
+    ASSERT(copy_mutable->as.field.declaration_bound);
+    ASSERT(find_type_field_named(inferred, "initialized") != NULL);
+    ASSERT(copy->as.type_decl.mixins[0].source_constructor != NULL);
+    ASSERT(inferred->as.type_decl.mixins[0].source_type != NULL);
+    ASSERT(inferred->as.type_decl.mixins[0].resolved_source_decl ==
+           program->declarations[0]);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Source owner generic parameters are substituted into target field types. */
+static void test_member_mix_generic_field_type_is_substituted(void) {
+    const char *source =
+        "module demo.mixin_generic;\n"
+        "open type Source<T> { open var value: T; }\n"
+        "type Target<U> { ...: Source<U>; }\n";
+    FengProgram *program = parse_program_or_die("mixin_generic.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *target;
+    const FengTypeMember *value;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    target = find_type_decl_by_name(analysis, "Target");
+    value = find_type_field_named(target, "value");
+    ASSERT(value != NULL);
+    ASSERT(value->as.field.type != NULL);
+    ASSERT(value->as.field.type->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(value->as.field.type->as.named.segment_count == 1U);
+    ASSERT(value->as.field.type->as.named.segments[0].length == 1U);
+    ASSERT(memcmp(value->as.field.type->as.named.segments[0].data, "U", 1U) == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Expansion dependency cycles fail before any partial member materialization. */
+static void test_member_mix_dependency_cycle_reports_ae0330(void) {
+    const char *source =
+        "module demo.mixin_cycle;\n"
+        "type A { ...: B; open var a: int; }\n"
+        "type B { ...: A; open var b: int; }\n";
+    FengProgram *program = parse_program_or_die("mixin_cycle.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0330") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(errors[0].related_location_count == 1U);
+    ASSERT(errors[0].related_locations[0].token.line == 2U);
+    ASSERT(strstr(errors[0].related_locations[0].message,
+                  "cycle continues") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Member expansion follows the dependency graph rather than source order, so
+ * transitive fields and mixable behavior remain complete in reverse order. */
+static void test_member_mix_reverse_declaration_order_is_complete(void) {
+    const char *source =
+        "module demo.mixin_reverse_order;\n"
+        "open spec Widget { func draw(): int; }\n"
+        "type Leaf: Widget { ...: Middle; }\n"
+        "type Middle: Widget { ...: Base; }\n"
+        "open type Base: Widget {\n"
+        "  open var value: int;\n"
+        "  @mixable open static func draw(target: Widget): int { return 1; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("mixin_reverse_order.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *leaf;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    leaf = find_type_decl_by_name(analysis, "Leaf");
+    ASSERT(leaf != NULL);
+    ASSERT(find_type_field_named(leaf, "value") != NULL);
+    ASSERT(find_type_method_named(leaf, "draw", true) != NULL);
+    ASSERT(find_type_method_named(leaf, "draw", false) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Invalid source kinds and source expressions retain their assigned codes. */
+static void test_member_mix_source_diagnostics_are_stable(void) {
+    const char *sources[] = {
+        "module demo.mixin_bad_source; spec S {} type T { ...: S; }",
+        "module demo.mixin_bad_ctor; type Source {} type T { ...: Source = 1; }"
+    };
+    const char *codes[] = {"AE0328", "AE0329"};
+
+    for (size_t index = 0U; index < 2U; ++index) {
+        FengProgram *program = parse_program_or_die("mixin_bad.ff", sources[index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strcmp(errors[0].code, codes[index]) == 0);
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+/* Wrapper conflicts retain the originating source method relation. */
+static void test_mixable_wrapper_conflict_preserves_source_relation(void) {
+    const char *source =
+        "module demo.mixable_conflict;\n"
+        "spec Widget { func draw(area: int): int; }\n"
+        "type View: Widget {\n"
+        "  @mixable open static func draw(target: Widget, area: int): int { return area; }\n"
+        "}\n"
+        "type Button: Widget {\n"
+        "  ...: View;\n"
+        "  func draw(area: int): int { return area + 1; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("mixable_conflict.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0508") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(errors[0].related_location_count == 1U);
+    ASSERT(errors[0].related_locations[0].token.line == 4U);
+    ASSERT(strstr(errors[0].related_locations[0].message,
+                  "mixin source member") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Verifies target-explicit priority uses the ordinary contract-aware
+ * overload-overlap rule, rather than only syntax-identical parameter types. */
+static void test_mixable_static_candidate_skips_explicit_overlapping_method(void) {
+    const char *source =
+        "module demo.mixable_explicit_overlap;\n"
+        "spec Widget {}\n"
+        "spec Left {}\n"
+        "spec Right {}\n"
+        "type Both: Left, Right {}\n"
+        "type View: Widget {\n"
+        "  @mixable open static func choose(target: Widget, value: Left): int { return 1; }\n"
+        "}\n"
+        "type Button: Widget {\n"
+        "  ...: View;\n"
+        "  static func choose(target: Widget, value: Right): int { return 2; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "mixable_explicit_overlap.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *button;
+    size_t static_choose_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    button = find_type_decl_by_name(analysis, "Button");
+    ASSERT(button != NULL);
+    for (size_t index = 0U;
+         index < button->as.type_decl.member_count;
+         ++index) {
+        const FengTypeMember *member = button->as.type_decl.members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->is_static &&
+            member->as.callable.name.length == 6U &&
+            memcmp(member->as.callable.name.data, "choose", 6U) == 0) {
+            ++static_choose_count;
+            ASSERT(!member->is_mixin_static_wrapper);
+        }
+    }
+    ASSERT(static_choose_count == 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Static propagation and instance derivation remain complete across layers. */
+static void test_mixable_generates_static_and_instance_wrapper_chain(void) {
+    const char *source =
+        "module demo.mixable_chain;\n"
+        "spec Widget { func draw(area: int): int; func log(args: string...): void; }\n"
+        "type View: Widget {\n"
+        "  @mixable open static func draw(target: Widget, area: int): int { return area; }\n"
+        "  @mixable open static func log(target: Widget, args: string...): void {}\n"
+        "}\n"
+        "type Button: Widget { ...: View; }\n"
+        "type IconButton: Widget { ...: Button; }\n";
+    FengProgram *program = parse_program_or_die("mixable_chain.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *view;
+    const FengDecl *button;
+    const FengDecl *icon;
+    const FengTypeMember *view_static;
+    const FengTypeMember *view_instance;
+    const FengTypeMember *button_static;
+    const FengTypeMember *button_instance;
+    const FengTypeMember *icon_static;
+    const FengTypeMember *icon_instance;
+    const FengTypeMember *icon_log;
+    const FengStmt *log_forward;
+    const FengExpr *log_call;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    view = find_type_decl_by_name(analysis, "View");
+    button = find_type_decl_by_name(analysis, "Button");
+    icon = find_type_decl_by_name(analysis, "IconButton");
+    view_static = find_type_method_named(view, "draw", true);
+    view_instance = find_type_method_named(view, "draw", false);
+    button_static = find_type_method_named(button, "draw", true);
+    button_instance = find_type_method_named(button, "draw", false);
+    icon_static = find_type_method_named(icon, "draw", true);
+    icon_instance = find_type_method_named(icon, "draw", false);
+    ASSERT(view_static != NULL && view_instance != NULL);
+    ASSERT(button_static != NULL && button_instance != NULL);
+    ASSERT(icon_static != NULL && icon_instance != NULL);
+    ASSERT(view_static->is_mixable);
+    ASSERT(!view_instance->is_mixable && view_instance->is_mixin_instance_wrapper);
+    ASSERT(button_static->is_mixable && button_static->is_mixin_static_wrapper);
+    ASSERT(!button_instance->is_mixable && button_instance->is_mixin_instance_wrapper);
+    ASSERT(icon_static->is_mixable && icon_static->is_mixin_static_wrapper);
+    ASSERT(button_static->mixin_source_member == view_static);
+    ASSERT(icon_static->mixin_source_member == button_static);
+    ASSERT(button_instance->mixin_source_member == button_static);
+    ASSERT(view_static->as.callable.param_count == 2U);
+    ASSERT(view_instance->as.callable.param_count == 1U);
+    ASSERT(icon_instance->as.callable.param_count == 1U);
+
+    icon_log = find_type_method_named(icon, "log", false);
+    ASSERT(icon_log != NULL);
+    ASSERT(icon_log->as.callable.params[0].is_variadic);
+    log_forward = icon_log->as.callable.body->statements[0];
+    ASSERT(log_forward->kind == FENG_STMT_EXPR);
+    log_call = log_forward->as.expr;
+    ASSERT(log_call->kind == FENG_EXPR_CALL);
+    ASSERT(log_call->as.call.arg_count == 2U);
+    ASSERT(log_call->as.call.args[1]->is_prepacked_variadic_arg);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* A visible fit mixable method derives both source and mixed instance entries. */
+static void test_mixable_fit_generates_own_and_target_instance_wrappers(void) {
+    const char *source =
+        "module demo.mixable_fit;\n"
+        "spec Widget { func draw(area: int): int; }\n"
+        "type View: Widget {}\n"
+        "open fit View {\n"
+        "  @mixable open static func draw(target: Widget, area: int): int { return area; }\n"
+        "}\n"
+        "type Button: Widget { ...: View; }\n";
+    FengProgram *program = parse_program_or_die("mixable_fit.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *fit_decl = program->declarations[2];
+    const FengDecl *button;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(fit_decl->kind == FENG_DECL_FIT);
+    ASSERT(fit_decl->as.fit_decl.member_count == 2U);
+    ASSERT(fit_decl->as.fit_decl.members[0]->is_static);
+    ASSERT(fit_decl->as.fit_decl.members[0]->is_mixable);
+    ASSERT(!fit_decl->as.fit_decl.members[1]->is_static);
+    ASSERT(fit_decl->as.fit_decl.members[1]->is_mixin_instance_wrapper);
+    button = find_type_decl_by_name(analysis, "Button");
+    ASSERT(find_type_method_named(button, "draw", true) != NULL);
+    ASSERT(find_type_method_named(button, "draw", false) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Each mixable declaration constraint reports its dedicated diagnostic code. */
+static void test_mixable_contract_diagnostics_are_stable(void) {
+    const char *sources[] = {
+        "module demo.m0; spec W {} type V: W { @mixable(1) static func f(w: W) {} }",
+        "module demo.m1; spec W {} type V: W { @mixable func f(w: W) {} }",
+        "module demo.m2; spec W {} type V: W { @mixable static func f() {} }",
+        "module demo.m3; spec W {} type V: W { @mixable static func f(w: W...) {} }",
+        "module demo.m4; type V { @mixable static func f(value: int) {} }",
+        "module demo.m5; spec W {} type V { @mixable static func f(w: W) {} }",
+        "module demo.m6; spec W {} type V: W { @mixable open static func f(w: W) {} } type T { ...: V; }"
+    };
+    const char *codes[] = {
+        "AE1329", "AE1330", "AE1331", "AE1332", "AE1333", "AE1334", "AE1335"
+    };
+
+    for (size_t index = 0U; index < 7U; ++index) {
+        FengProgram *program = parse_program_or_die("mixable_bad.ff", sources[index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strcmp(errors[0].code, codes[index]) == 0);
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
 int main(void) {
+    test_member_mix_fields_preserve_surface_and_binding_facts();
+    test_member_mix_generic_field_type_is_substituted();
+    test_member_mix_dependency_cycle_reports_ae0330();
+    test_member_mix_reverse_declaration_order_is_complete();
+    test_member_mix_source_diagnostics_are_stable();
+    test_mixable_wrapper_conflict_preserves_source_relation();
+    test_mixable_static_candidate_skips_explicit_overlapping_method();
+    test_mixable_generates_static_and_instance_wrapper_chain();
+    test_mixable_fit_generates_own_and_target_instance_wrappers();
+    test_mixable_contract_diagnostics_are_stable();
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
     test_match_range_invalid_bounds_rejected();

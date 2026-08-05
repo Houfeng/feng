@@ -969,6 +969,11 @@ bool feng_symbol_decl_is_static(const FengSymbolDeclView *decl) {
     return decl != NULL && decl->is_static;
 }
 
+/* Return the normalized mixable fact restored from source or `.ft`. */
+bool feng_symbol_decl_is_mixable(const FengSymbolDeclView *decl) {
+    return decl != NULL && decl->is_mixable;
+}
+
 const FengSymbolTypeView *feng_symbol_decl_value_type(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->value_type : NULL;
 }

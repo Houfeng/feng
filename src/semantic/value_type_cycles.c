@@ -107,6 +107,8 @@ static bool vtc_append_error(FengSemanticError **errors,
                              char *message) {
     FengSemanticError error;
 
+    memset(&error, 0, sizeof(error));
+
     if (message == NULL) {
         code = "IE0001";
         message = vtc_format_message(

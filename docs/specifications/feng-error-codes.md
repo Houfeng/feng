@@ -207,7 +207,21 @@
 | **AE0226** | 语义检查错误 | target 'bin' requires a 'main(args: string[])' entry function but none was found |
 | **AE0227** | 语义检查错误 | 'main' entry must have signature 'main(args: string[])' |
 | **AE0228** | 返回语句错误 | 'main' entry must return void |
+| **AE0328** | 成员展开来源错误 | member mix source must resolve to a concrete object type but found '%s' |
+| **AE0329** | 成员展开构造错误 | member mix initializer must be an object construction expression |
+| **AE0330** | 循环依赖 | member mix expansion for type '%.*s' forms a cycle through source type '%.*s' |
+| **AE1329** | 注解使用错误 | @mixable annotation does not accept arguments |
+| **AE1330** | 注解使用错误 | @mixable can only be applied to static methods declared in a type or fit block |
+| **AE1331** | 注解使用错误 | @mixable static method '%.*s' must declare at least one parameter |
+| **AE1332** | 注解使用错误 | @mixable static method '%.*s' first parameter cannot be variadic |
+| **AE1333** | 注解使用错误 | @mixable static method '%.*s' first parameter must use an object-form spec |
+| **AE1334** | 规约定义错误 | type '%.*s' must nominally declare spec '%.*s' before declaring @mixable static method '%.*s' |
+| **AE1335** | 规约定义错误 | type '%.*s' must nominally declare spec '%.*s' before mixing @mixable static method '%.*s' |
 
+成员展开生成字段或 wrapper 后，普通成员检查继续使用既有错误码，不分配 mixin 专用
+冲突码。此类诊断的主位置必须映射到产生该成员的目标 `...` 声明或 `@mixable` 声明，
+并把实际来源字段或静态方法声明作为关联位置；AE0330 还必须关联展开依赖链中闭环的
+各个 `...` 声明。该来源映射只补充诊断位置，不改变错误的语义分类和错误码。
 
 ## CE - 发码错误
 
@@ -586,6 +600,9 @@
 | **CE0371** | 泛型实例化 | codegen: internal: failed to emit generic method wrapper '%s.%s' |
 | **CE0372** | 模块/程序 | codegen: no programs to compile |
 | **CE0373** | 模块/程序 | codegen: bin target requires `main` function |
+| **CE0377** | 成员展开 | codegen: member mix source field is not lowerable、codegen: member mix source construction is not an object value |
+| **CE0378** | 成员展开 | codegen: member mix source requires missing reified layout |
+| **CE0379** | 成员展开 | codegen: member mix source field index is missing、codegen: member mix source field is missing |
 
 
 ## IE - 基础错误

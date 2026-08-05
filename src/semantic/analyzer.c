@@ -2043,6 +2043,22 @@ static bool inject_external_modules_from_decl(
                                                           decl->as.type_decl.type_param_count)) {
                 return false;
             }
+            for (size_t mixin_index = 0U;
+                 mixin_index < decl->as.type_decl.mixin_count;
+                 ++mixin_index) {
+                if (!inject_external_modules_from_type_ref(
+                        analysis,
+                        imported_query,
+                        program,
+                        decl->as.type_decl.mixins[mixin_index].source_type) ||
+                    !inject_external_modules_from_expr(
+                        analysis,
+                        imported_query,
+                        program,
+                        decl->as.type_decl.mixins[mixin_index].source_constructor)) {
+                    return false;
+                }
+            }
             for (size_t spec_index = 0U;
                  spec_index < decl->as.type_decl.declared_spec_count;
                  ++spec_index) {
@@ -3318,6 +3334,15 @@ static bool validate_supported_decl_annotations(ResolveContext *context, const F
     for (annotation_index = 0U; annotation_index < decl->annotation_count; ++annotation_index) {
         const FengAnnotation *annotation = &decl->annotations[annotation_index];
 
+        if (annotation->builtin_kind == FENG_ANNOTATION_MIXABLE) {
+            return resolver_append_error(
+                context,
+                annotation->token,
+                "AE1330",
+                format_message(
+                    "@mixable can only be applied to static methods declared in a type or fit block"));
+        }
+
         if (annotation->builtin_kind != FENG_ANNOTATION_CUSTOM) {
             continue;
         }
@@ -3365,6 +3390,24 @@ static bool validate_supported_member_annotations(ResolveContext *context,
 
     for (annotation_index = 0U; annotation_index < member->annotation_count; ++annotation_index) {
         const FengAnnotation *annotation = &member->annotations[annotation_index];
+
+        if (annotation->builtin_kind == FENG_ANNOTATION_MIXABLE) {
+            if (annotation->arg_count != 0U) {
+                return resolver_append_error(
+                    context,
+                    annotation->token,
+                    "AE1329",
+                    format_message("@mixable annotation does not accept arguments"));
+            }
+            if (member->kind != FENG_TYPE_MEMBER_METHOD || !member->is_static) {
+                return resolver_append_error(
+                    context,
+                    annotation->token,
+                    "AE1330",
+                    format_message(
+                        "@mixable can only be applied to static methods declared in a type or fit block"));
+            }
+        }
 
         if (annotation->builtin_kind != FENG_ANNOTATION_CUSTOM) {
             continue;
@@ -3600,6 +3643,13 @@ static bool append_error(FengSemanticError **errors,
                          FengToken token,
                          const char *code,
                          char *message);
+
+static bool append_latest_error_related_location(
+    FengSemanticError *errors,
+    size_t error_count,
+    const char *path,
+    FengToken token,
+    char *message);
 
 static bool analysis_append_info(const FengSemanticAnalysis *analysis,
                                  const char *path,
@@ -4506,6 +4556,7 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
 static ResolvedTypeTarget resolve_type_target_expr_exact_arity(ResolveContext *context,
                                                                const FengExpr *target_expr,
                                                                size_t type_param_count);
+static const FengExpr *member_mix_construction_target(const FengExpr *expr);
 static InferredExprType resolved_type_target_owner_type(const ResolvedTypeTarget *target);
 static bool type_decl_satisfies_spec_decl(const ResolveContext *ctx,
                                           const FengDecl *type_decl,
@@ -19614,6 +19665,136 @@ static bool type_decl_is_abi_stable(const ResolveContext *context,
     return true;
 }
 
+/* Return whether a declaration directly owns one member pointer. */
+static bool semantic_decl_contains_member(const FengDecl *decl,
+                                          const FengTypeMember *member) {
+    FengTypeMember *const *members = NULL;
+    size_t member_count = 0U;
+
+    if (decl == NULL || member == NULL) {
+        return false;
+    }
+    switch (decl->kind) {
+        case FENG_DECL_TYPE:
+            members = decl->as.type_decl.members;
+            member_count = decl->as.type_decl.member_count;
+            break;
+        case FENG_DECL_SPEC:
+            if (decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+                return false;
+            }
+            members = decl->as.spec_decl.as.object.members;
+            member_count = decl->as.spec_decl.as.object.member_count;
+            break;
+        case FENG_DECL_FIT:
+            members = decl->as.fit_decl.members;
+            member_count = decl->as.fit_decl.member_count;
+            break;
+        default:
+            return false;
+    }
+    for (size_t index = 0U; index < member_count; ++index) {
+        if (members[index] == member) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Find the source program that owns one semantic member declaration. */
+static const FengProgram *semantic_member_program(
+    const FengSemanticAnalysis *analysis,
+    const FengTypeMember *member) {
+    if (analysis == NULL || member == NULL) {
+        return NULL;
+    }
+    for (size_t module_index = 0U;
+         module_index < analysis->module_count;
+         ++module_index) {
+        const FengSemanticModule *module = &analysis->modules[module_index];
+
+        for (size_t program_index = 0U;
+             program_index < module->program_count;
+             ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+
+            for (size_t decl_index = 0U;
+                 decl_index < program->declaration_count;
+                 ++decl_index) {
+                if (semantic_decl_contains_member(
+                        program->declarations[decl_index], member)) {
+                    return program;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Follow a generated mixin member chain to its original declaration. */
+static const FengTypeMember *semantic_mixin_source_member(
+    const FengTypeMember *member) {
+    while (member != NULL && member->mixin_source_member != NULL &&
+           member->mixin_source_member != member) {
+        member = member->mixin_source_member;
+    }
+    return member;
+}
+
+/* Attach the original declaration of one generated member to the latest
+ * semantic error. Ordinary hand-written members require no relation. */
+static bool append_mixin_member_related_location(
+    ResolveContext *context,
+    const FengTypeMember *member) {
+    const FengTypeMember *source_member;
+    const FengProgram *source_program;
+
+    if (member == NULL || member->mixin_source_member == NULL ||
+        context == NULL || context->errors == NULL ||
+        context->error_count == NULL) {
+        return true;
+    }
+    source_member = semantic_mixin_source_member(member);
+    source_program = semantic_member_program(context->analysis, source_member);
+    return append_latest_error_related_location(
+        *context->errors,
+        *context->error_count,
+        source_program != NULL ? source_program->path : context->program->path,
+        source_member->token,
+        format_message("mixin source member is declared here"));
+}
+
+/* Attach both distinct generated sources involved in one member conflict. */
+static bool append_mixin_conflict_related_locations(
+    ResolveContext *context,
+    const FengTypeMember *left,
+    const FengTypeMember *right) {
+    const FengTypeMember *left_source = semantic_mixin_source_member(left);
+    const FengTypeMember *right_source = semantic_mixin_source_member(right);
+
+    if (!append_mixin_member_related_location(context, left)) {
+        return false;
+    }
+    if (right != NULL && right->mixin_source_member != NULL &&
+        right_source != left_source) {
+        return append_mixin_member_related_location(context, right);
+    }
+    return true;
+}
+
+/* Prefer a generated member token as the primary location of a conflict. */
+static FengToken mixin_conflict_primary_token(const FengTypeMember *left,
+                                              const FengTypeMember *right,
+                                              FengToken fallback) {
+    if (left != NULL && left->mixin_source_member != NULL) {
+        return left->token;
+    }
+    if (right != NULL && right->mixin_source_member != NULL) {
+        return right->token;
+    }
+    return fallback;
+}
+
 static bool validate_type_member_overloads(ResolveContext *context, const FengDecl *decl) {
     size_t i;
     size_t j;
@@ -19648,35 +19829,48 @@ static bool validate_type_member_overloads(ResolveContext *context, const FengDe
                 continue;
             }
             if (parameters_equal(si, sj)) {
+                bool error_ok;
+
                 if (return_type_equals(si->return_type, sj->return_type)) {
-                    ok = resolver_append_error(
-                             context,
-                             si->token,
-                             "AE0508", format_message(
-                                 "duplicate method signature '%.*s' in type '%.*s'",
-                                 (int)si->name.length, si->name.data,
-                                 (int)decl->as.type_decl.name.length,
-                                 decl->as.type_decl.name.data)) && ok;
+                    error_ok = resolver_append_error(
+                        context,
+                        mixin_conflict_primary_token(mi, mj, si->token),
+                        "AE0508", format_message(
+                            "duplicate method signature '%.*s' in type '%.*s'",
+                            (int)si->name.length, si->name.data,
+                            (int)decl->as.type_decl.name.length,
+                            decl->as.type_decl.name.data));
                 } else {
-                    ok = resolver_append_error(
-                             context,
-                             si->token,
-                             "AE0509", format_message(
-                                 "method overloads in type '%.*s' cannot differ only by return type: '%.*s'",
-                                 (int)decl->as.type_decl.name.length,
-                                 decl->as.type_decl.name.data,
-                                 (int)si->name.length, si->name.data)) && ok;
+                    error_ok = resolver_append_error(
+                        context,
+                        mixin_conflict_primary_token(mi, mj, si->token),
+                        "AE0509", format_message(
+                            "method overloads in type '%.*s' cannot differ only by return type: '%.*s'",
+                            (int)decl->as.type_decl.name.length,
+                            decl->as.type_decl.name.data,
+                            (int)si->name.length, si->name.data));
                 }
+                if (error_ok) {
+                    error_ok = append_mixin_conflict_related_locations(
+                        context, mi, mj);
+                }
+                ok = error_ok && ok;
             } else if ((sig_is_variadic(si) || sig_is_variadic(sj)) &&
                        variadic_parameters_conflict(si, sj)) {
-                ok = resolver_append_error(
-                         context,
-                         si->token,
-                         "AE0510", format_message(
-                             "variadic method overload conflicts with existing method '%.*s' in type '%.*s'",
-                             (int)si->name.length, si->name.data,
-                             (int)decl->as.type_decl.name.length,
-                             decl->as.type_decl.name.data)) && ok;
+                bool error_ok = resolver_append_error(
+                    context,
+                    mixin_conflict_primary_token(mi, mj, si->token),
+                    "AE0510", format_message(
+                        "variadic method overload conflicts with existing method '%.*s' in type '%.*s'",
+                        (int)si->name.length, si->name.data,
+                        (int)decl->as.type_decl.name.length,
+                        decl->as.type_decl.name.data));
+
+                if (error_ok) {
+                    error_ok = append_mixin_conflict_related_locations(
+                        context, mi, mj);
+                }
+                ok = error_ok && ok;
             }
         }
     }
@@ -19721,15 +19915,23 @@ static bool validate_type_member_field_method_name_conflict(ResolveContext *cont
             if (!slice_equals(si->name, mj->as.field.name)) {
                 continue;
             }
-            ok = resolver_append_error(
-                     context,
-                     si->token,
-                     "AE0513", format_message(
-                         "field '%.*s' and method '%.*s' in type '%.*s' cannot share the same name within the same conflict surface (static or instance)",
-                         (int)mj->as.field.name.length, mj->as.field.name.data,
-                         (int)si->name.length, si->name.data,
-                         (int)decl->as.type_decl.name.length,
-                         decl->as.type_decl.name.data)) && ok;
+            {
+                bool error_ok = resolver_append_error(
+                    context,
+                    mixin_conflict_primary_token(mi, mj, si->token),
+                    "AE0513", format_message(
+                        "field '%.*s' and method '%.*s' in type '%.*s' cannot share the same name within the same conflict surface (static or instance)",
+                        (int)mj->as.field.name.length, mj->as.field.name.data,
+                        (int)si->name.length, si->name.data,
+                        (int)decl->as.type_decl.name.length,
+                        decl->as.type_decl.name.data));
+
+                if (error_ok) {
+                    error_ok = append_mixin_conflict_related_locations(
+                        context, mi, mj);
+                }
+                ok = error_ok && ok;
+            }
         }
     }
 
@@ -19773,32 +19975,45 @@ static bool validate_fit_member_overloads(ResolveContext *context, const FengDec
                 continue;
             }
             if (parameters_equal(si, sj)) {
+                bool error_ok;
+
                 if (return_type_equals(si->return_type, sj->return_type)) {
-                    ok = resolver_append_error(
-                             context,
-                             si->token,
-                             "AE0801", format_message(
-                                 "duplicate method signature '%.*s' in fit target '%s'",
-                                 (int)si->name.length, si->name.data,
-                                 target_name != NULL ? target_name : "<unknown>")) && ok;
+                    error_ok = resolver_append_error(
+                        context,
+                        mixin_conflict_primary_token(mi, mj, si->token),
+                        "AE0801", format_message(
+                            "duplicate method signature '%.*s' in fit target '%s'",
+                            (int)si->name.length, si->name.data,
+                            target_name != NULL ? target_name : "<unknown>"));
                 } else {
-                    ok = resolver_append_error(
-                             context,
-                             si->token,
-                             "AE0802", format_message(
-                                 "method overloads in fit target '%s' cannot differ only by return type: '%.*s'",
-                                 target_name != NULL ? target_name : "<unknown>",
-                                 (int)si->name.length, si->name.data)) && ok;
+                    error_ok = resolver_append_error(
+                        context,
+                        mixin_conflict_primary_token(mi, mj, si->token),
+                        "AE0802", format_message(
+                            "method overloads in fit target '%s' cannot differ only by return type: '%.*s'",
+                            target_name != NULL ? target_name : "<unknown>",
+                            (int)si->name.length, si->name.data));
                 }
+                if (error_ok) {
+                    error_ok = append_mixin_conflict_related_locations(
+                        context, mi, mj);
+                }
+                ok = error_ok && ok;
             } else if ((sig_is_variadic(si) || sig_is_variadic(sj)) &&
                        variadic_parameters_conflict(si, sj)) {
-                ok = resolver_append_error(
-                         context,
-                         si->token,
-                         "AE0803", format_message(
-                             "variadic method overload conflicts with existing method '%.*s' in fit target '%s'",
-                             (int)si->name.length, si->name.data,
-                             target_name != NULL ? target_name : "<unknown>")) && ok;
+                bool error_ok = resolver_append_error(
+                    context,
+                    mixin_conflict_primary_token(mi, mj, si->token),
+                    "AE0803", format_message(
+                        "variadic method overload conflicts with existing method '%.*s' in fit target '%s'",
+                        (int)si->name.length, si->name.data,
+                        target_name != NULL ? target_name : "<unknown>"));
+
+                if (error_ok) {
+                    error_ok = append_mixin_conflict_related_locations(
+                        context, mi, mj);
+                }
+                ok = error_ok && ok;
             }
         }
     }
@@ -21503,6 +21718,8 @@ static bool append_error(FengSemanticError **errors,
                          char *message) {
     FengSemanticError error;
 
+    memset(&error, 0, sizeof(error));
+
     if (message == NULL) {
         code = "IE0001";
         message = duplicate_cstr("out of memory during semantic analysis");
@@ -21525,6 +21742,40 @@ static bool append_error(FengSemanticError **errors,
         return false;
     }
 
+    return true;
+}
+
+/* Attach one owned secondary source location to the most recent error. */
+static bool append_latest_error_related_location(
+    FengSemanticError *errors,
+    size_t error_count,
+    const char *path,
+    FengToken token,
+    char *message) {
+    FengSemanticError *error;
+    FengSemanticRelatedLocation *grown;
+    FengSemanticRelatedLocation related;
+
+    if (message == NULL) {
+        return false;
+    }
+    if (errors == NULL || error_count == 0U) {
+        free(message);
+        return false;
+    }
+    error = &errors[error_count - 1U];
+    grown = (FengSemanticRelatedLocation *)realloc(
+        error->related_locations,
+        (error->related_location_count + 1U) * sizeof(*grown));
+    if (grown == NULL) {
+        free(message);
+        return false;
+    }
+    related.token = token;
+    related.path = path;
+    related.message = message;
+    error->related_locations = grown;
+    error->related_locations[error->related_location_count++] = related;
     return true;
 }
 
@@ -25661,14 +25912,20 @@ static bool validate_type_member_overload_overlap(ResolveContext *context,
                 continue;
             }
             if (signatures_potentially_overlap(context, si, sj)) {
-                ok = resolver_append_error(
-                         context,
-                         si->token,
-                         "AE0706", format_message(
-                             "method overloads in type '%.*s' may both match the same arguments under visible contract relations: '%.*s'",
-                             (int)decl->as.type_decl.name.length,
-                             decl->as.type_decl.name.data,
-                             (int)si->name.length, si->name.data)) && ok;
+                bool error_ok = resolver_append_error(
+                    context,
+                    mixin_conflict_primary_token(mi, mj, si->token),
+                    "AE0706", format_message(
+                        "method overloads in type '%.*s' may both match the same arguments under visible contract relations: '%.*s'",
+                        (int)decl->as.type_decl.name.length,
+                        decl->as.type_decl.name.data,
+                        (int)si->name.length, si->name.data));
+
+                if (error_ok) {
+                    error_ok = append_mixin_conflict_related_locations(
+                        context, mi, mj);
+                }
+                ok = error_ok && ok;
             }
         }
     }
@@ -25720,13 +25977,19 @@ static bool validate_fit_member_overload_overlap(ResolveContext *context,
                 continue;
             }
             if (signatures_potentially_overlap(context, si, sj)) {
-                ok = resolver_append_error(
-                         context,
-                         si->token,
-                         "AE0805", format_message(
-                             "method overloads in fit target '%s' may both match the same arguments under visible contract relations: '%.*s'",
-                             target_name != NULL ? target_name : "<unknown>",
-                             (int)si->name.length, si->name.data)) && ok;
+                bool error_ok = resolver_append_error(
+                    context,
+                    mixin_conflict_primary_token(mi, mj, si->token),
+                    "AE0805", format_message(
+                        "method overloads in fit target '%s' may both match the same arguments under visible contract relations: '%.*s'",
+                        target_name != NULL ? target_name : "<unknown>",
+                        (int)si->name.length, si->name.data));
+
+                if (error_ok) {
+                    error_ok = append_mixin_conflict_related_locations(
+                        context, mi, mj);
+                }
+                ok = error_ok && ok;
             }
         }
     }
@@ -26318,6 +26581,205 @@ static bool resolve_intersection_spec_form(ResolveContext *context, const FengDe
     return ok;
 }
 
+/* Read the constructor overload selected while resolving a source expression. */
+static const FengTypeMember *member_mix_selected_constructor(
+    const FengExpr *source_constructor) {
+    const FengExpr *target = member_mix_construction_target(source_constructor);
+
+    if (target != NULL && target->kind == FENG_EXPR_CALL &&
+        target->as.call.resolved_callable.kind ==
+            FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR) {
+        return target->as.call.resolved_callable.member;
+    }
+    return NULL;
+}
+
+/* Return whether the source object-literal phase explicitly binds a field. */
+static bool member_mix_object_literal_binds_field(const FengExpr *source_constructor,
+                                                  FengSlice field_name) {
+    if (source_constructor == NULL ||
+        source_constructor->kind != FENG_EXPR_OBJECT_LITERAL) {
+        return false;
+    }
+    for (size_t index = 0U;
+         index < source_constructor->as.object_literal.field_count;
+         ++index) {
+        if (slice_equals(source_constructor->as.object_literal.fields[index].name,
+                         field_name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Resolve explicit source construction once as a semantic expression and
+ * propagate its compile-time final-binding facts to the generated fields.
+ * The code generator separately guarantees one runtime evaluation. */
+static bool resolve_type_member_mix_initializers(ResolveContext *context,
+                                                 const FengDecl *type_decl) {
+    if (context == NULL || type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
+        return true;
+    }
+
+    for (size_t mixin_index = 0U;
+         mixin_index < type_decl->as.type_decl.mixin_count;
+         ++mixin_index) {
+        const FengTypeMixinDecl *mixin = &type_decl->as.type_decl.mixins[mixin_index];
+        const FengTypeMember *constructor;
+        ResolvedTypeTarget constructed_target;
+
+        if (mixin->source_constructor == NULL) {
+            continue;
+        }
+        if (!resolve_expr(context, mixin->source_constructor, false)) {
+            return false;
+        }
+        if (!validate_expr_against_expected_type(context,
+                                                 mixin->source_constructor,
+                                                 mixin->source_type)) {
+            return false;
+        }
+        constructed_target = resolve_type_target_expr(
+            context,
+            member_mix_construction_target(mixin->source_constructor),
+            true);
+        if (constructed_target.type_decl != mixin->resolved_source_decl) {
+            return resolver_append_error(
+                context,
+                mixin->token,
+                "AE0329",
+                format_message(
+                    "member mix initializer must construct the declared source type"));
+        }
+        constructor = member_mix_selected_constructor(mixin->source_constructor);
+
+        for (size_t member_index = 0U;
+             member_index < type_decl->as.type_decl.member_count;
+             ++member_index) {
+            FengTypeMember *member = type_decl->as.type_decl.members[member_index];
+            const FengTypeMember *source_field;
+            bool declaration_bound;
+
+            if (member == NULL || member->kind != FENG_TYPE_MEMBER_FIELD ||
+                member->mixin_origin != mixin ||
+                member->mixin_source_member == NULL) {
+                continue;
+            }
+            source_field = member->mixin_source_member;
+            declaration_bound =
+                source_field->as.field.mutability == FENG_MUTABILITY_VAR ||
+                field_has_declaration_initializer(source_field) ||
+                constructor_binds_let_field(mixin->resolved_source_decl,
+                                            constructor,
+                                            source_field->as.field.name) ||
+                member_mix_object_literal_binds_field(
+                    mixin->source_constructor,
+                    source_field->as.field.name);
+            if (declaration_bound && !member->as.field.declaration_bound) {
+                member->as.field.declaration_bound = true;
+                if (context->callable_return_cache != NULL) {
+                    context->callable_return_cache->changed = true;
+                }
+            }
+        }
+    }
+    return true;
+}
+
+/* Check the declaration-head relation used by mixable's nominal precheck. */
+static bool type_nominally_declares_spec(const ResolveContext *context,
+                                         const FengDecl *type_decl,
+                                         const FengDecl *spec_decl) {
+    if (context == NULL || type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC) {
+        return false;
+    }
+    for (size_t index = 0U;
+         index < type_decl->as.type_decl.declared_spec_count;
+         ++index) {
+        if (resolve_type_ref_decl(
+                context,
+                type_decl->as.type_decl.declared_specs[index]) == spec_decl) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Validate one normalized mixable declaration before ordinary member checks. */
+static bool validate_mixable_method_contract(ResolveContext *context,
+                                             const FengTypeMember *member,
+                                             const FengDecl *owner_type,
+                                             const char *nominal_error_code) {
+    const FengDecl *spec_decl;
+
+    if (member == NULL || !member->is_mixable) {
+        return true;
+    }
+    if (member->kind != FENG_TYPE_MEMBER_METHOD || !member->is_static) {
+        return resolver_append_error(
+            context,
+            member->token,
+            "AE1330",
+            format_message(
+                "@mixable can only be applied to static methods declared in a type or fit block"));
+    }
+    if (member->as.callable.param_count == 0U) {
+        return resolver_append_error(
+            context,
+            member->token,
+            "AE1331",
+            format_message(
+                "@mixable static method '%.*s' must declare at least one parameter",
+                (int)member->as.callable.name.length,
+                member->as.callable.name.data));
+    }
+    if (member->as.callable.params[0].is_variadic) {
+        return resolver_append_error(
+            context,
+            member->as.callable.params[0].token,
+            "AE1332",
+            format_message(
+                "@mixable static method '%.*s' first parameter cannot be variadic",
+                (int)member->as.callable.name.length,
+                member->as.callable.name.data));
+    }
+    if (!resolve_type_ref(context, member->as.callable.params[0].type, false)) {
+        return false;
+    }
+    spec_decl = resolve_type_ref_decl(context, member->as.callable.params[0].type);
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return resolver_append_error(
+            context,
+            member->as.callable.params[0].token,
+            "AE1333",
+            format_message(
+                "@mixable static method '%.*s' first parameter must use an object-form spec",
+                (int)member->as.callable.name.length,
+                member->as.callable.name.data));
+    }
+    if (!type_nominally_declares_spec(context, owner_type, spec_decl)) {
+        return resolver_append_error(
+            context,
+            member->as.callable.params[0].token,
+            nominal_error_code,
+            format_message(
+                "type '%.*s' must nominally declare spec '%.*s' before declaring @mixable static method '%.*s'",
+                owner_type != NULL && owner_type->kind == FENG_DECL_TYPE
+                    ? (int)owner_type->as.type_decl.name.length
+                    : 0,
+                owner_type != NULL && owner_type->kind == FENG_DECL_TYPE
+                    ? owner_type->as.type_decl.name.data
+                    : "",
+                (int)spec_decl->as.spec_decl.name.length,
+                spec_decl->as.spec_decl.name.data,
+                (int)member->as.callable.name.length,
+                member->as.callable.name.data));
+    }
+    return true;
+}
+
 static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
     size_t index;
 
@@ -26371,6 +26833,9 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     break;
                 }
             }
+            if (ok && !resolve_type_member_mix_initializers(context, decl)) {
+                ok = false;
+            }
             for (index = 0U; ok && index < decl->as.type_decl.member_count; ++index) {
                 const FengTypeMember *member = decl->as.type_decl.members[index];
                 const FengDecl *previous_type_decl = context->current_type_decl;
@@ -26382,6 +26847,14 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 }
 
                 if (!validate_runtime_annotation_on_member(context, member)) {
+                    ok = false;
+                    break;
+                }
+
+                if (!validate_mixable_method_contract(context,
+                                                       member,
+                                                       decl,
+                                                       "AE1334")) {
                     ok = false;
                     break;
                 }
@@ -26427,9 +26900,37 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                             break;
                         }
 
-                        field_type = member->as.field.type != NULL
-                                         ? inferred_expr_type_from_type_ref(member->as.field.type)
-                                         : infer_expr_type(context, member->as.field.initializer);
+                        if (member->as.field.type != NULL) {
+                            field_type = inferred_expr_type_from_type_ref(member->as.field.type);
+                        } else if (member->mixin_source_member != NULL &&
+                                   member->mixin_origin != NULL) {
+                            const FengSemanticTypeFact *source_fact =
+                                feng_semantic_lookup_type_fact(
+                                    context->analysis,
+                                    member->mixin_source_member);
+
+                            field_type = inferred_expr_type_from_type_fact(source_fact);
+                            if (field_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+                                field_type.type_ref != NULL) {
+                                InferredExprType source_owner =
+                                    inferred_expr_type_from_type_ref(
+                                        member->mixin_origin->source_type);
+
+                                field_type.type_ref =
+                                    substitute_type_ref_for_owner_instance(
+                                        context,
+                                        member->mixin_origin->resolved_source_decl,
+                                        source_owner,
+                                        field_type.type_ref);
+                            }
+                            if (!inferred_expr_type_is_known(field_type) &&
+                                context->callable_return_cache != NULL) {
+                                context->callable_return_cache->changed = true;
+                            }
+                        } else {
+                            field_type = infer_expr_type(context,
+                                                         member->as.field.initializer);
+                        }
                         if (!record_type_fact_for_site(context, member, field_type)) {
                             ok = false;
                             break;
@@ -26626,6 +27127,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                                                &prev_tp_count)) {
                     return false;
                 }
+
             }
             if (fit_target_collect_array_local_type_param(context,
                                                           decl->as.fit_decl.target,
@@ -26673,6 +27175,17 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 bool member_ok;
 
                 if (!validate_supported_member_annotations(context, member)) {
+                    if (fit_scope_pushed) {
+                        resolver_pop_type_params(context, prev_fit_tp, prev_fit_tp_count);
+                    }
+                    resolver_pop_type_params(context, prev_tp, prev_tp_count);
+                    return false;
+                }
+
+                if (!validate_mixable_method_contract(context,
+                                                       member,
+                                                       fit_target_decl,
+                                                       "AE1334")) {
                     if (fit_scope_pushed) {
                         resolver_pop_type_params(context, prev_fit_tp, prev_fit_tp_count);
                     }
@@ -27454,6 +27967,265 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
     return ok;
 }
 
+/* Return the direct construction target accepted by member-mix syntax.
+ * Object-literal construction keeps its constructor target in `target`;
+ * ordinary construction is represented directly by a call expression. */
+static const FengExpr *member_mix_construction_target(const FengExpr *expr) {
+    if (expr == NULL) {
+        return NULL;
+    }
+    if (expr->kind == FENG_EXPR_CALL) {
+        return expr;
+    }
+    if (expr->kind == FENG_EXPR_OBJECT_LITERAL) {
+        const FengExpr *target = expr->as.object_literal.target;
+
+        if (target != NULL &&
+            (target->kind == FENG_EXPR_IDENTIFIER ||
+             target->kind == FENG_EXPR_MEMBER ||
+             target->kind == FENG_EXPR_CALL)) {
+            return target;
+        }
+    }
+    return NULL;
+}
+
+/* Materialize the type reference encoded by a construction target.  The
+ * returned tree is owned by the caller and is used to normalize the inferred
+ * `... = Construction` form into the same fact shape as the explicit forms. */
+static FengTypeRef *member_mix_type_ref_from_construction_target(
+    const FengExpr *construction_target) {
+    const FengExpr *path_expr = construction_target;
+    FengTypeRef *type_ref;
+    FengSlice *segments;
+    size_t segment_count = 0U;
+    FengTypeRef *const *type_args = NULL;
+    size_t type_arg_count = 0U;
+
+    if (path_expr == NULL) {
+        return NULL;
+    }
+    if (path_expr->kind == FENG_EXPR_CALL) {
+        type_args = path_expr->as.call.explicit_type_args;
+        type_arg_count = path_expr->as.call.explicit_type_arg_count;
+        path_expr = path_expr->as.call.callee;
+    } else if (path_expr->kind == FENG_EXPR_GENERIC_TARGET) {
+        type_args = path_expr->as.generic_target.type_args;
+        type_arg_count = path_expr->as.generic_target.type_arg_count;
+        path_expr = path_expr->as.generic_target.target;
+    }
+    if (path_expr == NULL ||
+        (path_expr->kind != FENG_EXPR_IDENTIFIER && path_expr->kind != FENG_EXPR_MEMBER)) {
+        return NULL;
+    }
+
+    segments = expr_path_segments_alloc(path_expr, &segment_count);
+    if (segments == NULL || segment_count == 0U) {
+        free(segments);
+        return NULL;
+    }
+    type_ref = (FengTypeRef *)calloc(1U, sizeof(*type_ref));
+    if (type_ref == NULL) {
+        free(segments);
+        return NULL;
+    }
+    type_ref->token = construction_target->token;
+    type_ref->kind = FENG_TYPE_REF_NAMED;
+    type_ref->as.named.segments = segments;
+    type_ref->as.named.segment_count = segment_count;
+    if (type_arg_count > 0U) {
+        type_ref->as.named.type_args =
+            (FengTypeRef **)calloc(type_arg_count, sizeof(FengTypeRef *));
+        if (type_ref->as.named.type_args == NULL) {
+            free_synthetic_type_ref(type_ref);
+            return NULL;
+        }
+        type_ref->as.named.type_arg_count = type_arg_count;
+        for (size_t index = 0U; index < type_arg_count; ++index) {
+            type_ref->as.named.type_args[index] = clone_type_ref_for_inference(type_args[index]);
+            if (type_ref->as.named.type_args[index] == NULL) {
+                free_synthetic_type_ref(type_ref);
+                return NULL;
+            }
+        }
+    }
+    return type_ref;
+}
+
+/* Resolve only member-mix source edges.  This pass runs after module/provider
+ * injection but before expansion and ordinary semantic analysis, so every
+ * source is interpreted in the lexical imports and generic scope of the type
+ * that declared the `...` directive. */
+static bool resolve_program_mixin_sources(
+    const FengSemanticAnalysis *analysis,
+    const FengSemanticModule *module,
+    const FengProgram *program,
+    const VisibleTypeEntry *visible_types,
+    size_t visible_type_count,
+    const VisibleValueEntry *visible_values,
+    size_t visible_value_count,
+    const FunctionOverloadSetEntry *function_sets,
+    size_t function_set_count,
+    FengSemanticError **errors,
+    size_t *error_count,
+    size_t *error_capacity) {
+    ResolveContext context;
+    AliasEntry *aliases = NULL;
+    size_t alias_count = 0U;
+    size_t alias_capacity = 0U;
+    ImportedModuleEntry *imported_modules = NULL;
+    size_t imported_module_count = 0U;
+    size_t imported_module_capacity = 0U;
+    bool ok = true;
+
+    memset(&context, 0, sizeof(context));
+    context.analysis = analysis;
+    context.module = module;
+    context.program = program;
+    context.pointer_size = analysis->pointer_size;
+    context.visible_types = visible_types;
+    context.visible_type_count = visible_type_count;
+    context.visible_values = visible_values;
+    context.visible_value_count = visible_value_count;
+    context.function_sets = function_sets;
+    context.function_set_count = function_set_count;
+    context.errors = errors;
+    context.error_count = error_count;
+    context.error_capacity = error_capacity;
+
+    ok = build_program_aliases(analysis, program, &aliases, &alias_count, &alias_capacity);
+    for (size_t use_index = 0U; use_index < program->use_count && ok; ++use_index) {
+        size_t target_index = find_module_index_by_path(
+            analysis,
+            program->uses[use_index].segments,
+            program->uses[use_index].segment_count);
+        ImportedModuleEntry entry;
+        bool already = false;
+
+        if (target_index == analysis->module_count) {
+            continue;
+        }
+        entry.target_module = &analysis->modules[target_index];
+        for (size_t index = 0U; index < imported_module_count; ++index) {
+            if (imported_modules[index].target_module == entry.target_module) {
+                already = true;
+                break;
+            }
+        }
+        if (!already) {
+            ok = append_raw((void **)&imported_modules,
+                            &imported_module_count,
+                            &imported_module_capacity,
+                            sizeof(entry),
+                            &entry);
+        }
+    }
+    context.aliases = aliases;
+    context.alias_count = alias_count;
+    context.imported_modules = imported_modules;
+    context.imported_module_count = imported_module_count;
+
+    for (size_t decl_index = 0U;
+         decl_index < program->declaration_count && ok;
+         ++decl_index) {
+        FengDecl *decl = program->declarations[decl_index];
+        const TypeParamEntry *previous_type_params = NULL;
+        size_t previous_type_param_count = 0U;
+
+        if (decl == NULL || decl->kind != FENG_DECL_TYPE ||
+            decl->as.type_decl.mixin_count == 0U) {
+            continue;
+        }
+        if (!resolver_push_type_params(&context,
+                                       decl->as.type_decl.type_params,
+                                       decl->as.type_decl.type_param_count,
+                                       &previous_type_params,
+                                       &previous_type_param_count)) {
+            ok = false;
+            break;
+        }
+
+        for (size_t mixin_index = 0U;
+             mixin_index < decl->as.type_decl.mixin_count && ok;
+             ++mixin_index) {
+            FengTypeMixinDecl *mixin = &decl->as.type_decl.mixins[mixin_index];
+            const FengExpr *construction_target = NULL;
+            const FengDecl *constructed_decl = NULL;
+            char *source_name;
+
+            if (mixin->source_constructor != NULL) {
+                ResolvedTypeTarget target;
+
+                construction_target = member_mix_construction_target(
+                    mixin->source_constructor);
+                if (construction_target == NULL) {
+                    ok = resolver_append_error(
+                        &context,
+                        mixin->token,
+                        "AE0329",
+                        format_message(
+                            "member mix initializer must be an object construction expression"));
+                    break;
+                }
+                target = resolve_type_target_expr(&context, construction_target, true);
+                constructed_decl = target.type_decl;
+                if (mixin->infer_source_type && mixin->source_type == NULL) {
+                    mixin->source_type =
+                        member_mix_type_ref_from_construction_target(construction_target);
+                    if (mixin->source_type == NULL) {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+
+            if (!resolve_type_ref(&context, mixin->source_type, false)) {
+                ok = false;
+                break;
+            }
+            mixin->resolved_source_decl = resolve_type_ref_decl(&context, mixin->source_type);
+            if (mixin->resolved_source_decl == NULL ||
+                mixin->resolved_source_decl->kind != FENG_DECL_TYPE) {
+                source_name = format_type_ref_name(mixin->source_type);
+                ok = resolver_append_error(
+                    &context,
+                    mixin->token,
+                    "AE0328",
+                    format_message(
+                        "member mix source must resolve to a concrete object type but found '%s'",
+                        source_name != NULL ? source_name : "<unknown>"));
+                free(source_name);
+                break;
+            }
+            if (constructed_decl != NULL && constructed_decl != mixin->resolved_source_decl) {
+                ok = resolver_append_error(
+                    &context,
+                    mixin->token,
+                    "AE0329",
+                    format_message(
+                        "member mix initializer must construct the declared source type"));
+                break;
+            }
+            if (mixin->source_constructor != NULL &&
+                (constructed_decl == NULL || constructed_decl->kind != FENG_DECL_TYPE)) {
+                ok = resolver_append_error(
+                    &context,
+                    mixin->token,
+                    "AE0329",
+                    format_message(
+                        "member mix initializer must be an object construction expression"));
+            }
+        }
+        resolver_pop_type_params(
+            &context, previous_type_params, previous_type_param_count);
+    }
+
+    resolver_free_scopes(&context);
+    free(aliases);
+    free(imported_modules);
+    return ok;
+}
+
 /* —— Overload-category conflict helpers (docs/engineering/feng-type-arity-overload-dev.md §3.2/§3.3) ——
  *
  * Symbol conflict detection uses two arrays: visible_types (type/spec/enum)
@@ -27547,10 +28319,34 @@ static bool has_type_name_only_conflict(const VisibleTypeEntry *types,
     return false;
 }
 
+/* Select the progressively richer module pass used during mixin lowering. */
+typedef enum SemanticModulePass {
+    SEMANTIC_MODULE_PASS_MIXIN_SOURCES = 0,
+    SEMANTIC_MODULE_PASS_MIXIN_STATIC_WRAPPERS,
+    SEMANTIC_MODULE_PASS_FULL
+} SemanticModulePass;
+
+static bool expand_program_mixable_static_wrappers(
+    const FengSemanticAnalysis *analysis,
+    const FengSemanticModule *module,
+    const FengProgram *program,
+    const VisibleTypeEntry *visible_types,
+    size_t visible_type_count,
+    const VisibleValueEntry *visible_values,
+    size_t visible_value_count,
+    const FunctionOverloadSetEntry *function_sets,
+    size_t function_set_count,
+    bool *changed,
+    FengSemanticError **errors,
+    size_t *error_count,
+    size_t *error_capacity);
+
 static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                    const FengSemanticModule *module,
+                                   SemanticModulePass pass,
                                    CallableReturnCache *callable_return_cache,
                                    CallableExceptionEscapeCache *callable_exception_escape_cache,
+                                   bool *mixin_wrappers_changed,
                                    FengSemanticError **errors,
                                    size_t *error_count,
                                    size_t *error_capacity) {
@@ -28075,7 +28871,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                                   error_capacity);
         }
 
-        if (ok) {
+        if (ok && pass == SEMANTIC_MODULE_PASS_FULL) {
             ok = resolve_program_names(analysis,
                                        module,
                                        program,
@@ -28090,6 +28886,34 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                        errors,
                                        error_count,
                                        error_capacity);
+        } else if (ok && pass == SEMANTIC_MODULE_PASS_MIXIN_SOURCES) {
+            ok = resolve_program_mixin_sources(analysis,
+                                               module,
+                                               program,
+                                               program_visible_types,
+                                               program_visible_type_count,
+                                               program_visible_values,
+                                               program_visible_value_count,
+                                               program_function_sets,
+                                               program_function_set_count,
+                                               errors,
+                                               error_count,
+                                               error_capacity);
+        } else if (ok) {
+            ok = expand_program_mixable_static_wrappers(
+                analysis,
+                module,
+                program,
+                program_visible_types,
+                program_visible_type_count,
+                program_visible_values,
+                program_visible_value_count,
+                program_function_sets,
+                program_function_set_count,
+                mixin_wrappers_changed,
+                errors,
+                error_count,
+                error_capacity);
         }
 
         free(program_visible_types);
@@ -28101,6 +28925,1482 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
     free(visible_values);
     free_function_overload_sets(function_sets, function_set_count);
     return ok;
+}
+
+/* One local concrete type in the member-expansion dependency graph. */
+typedef struct MixinTypeEntry {
+    FengDecl *decl;
+    const FengProgram *program;
+    unsigned char cycle_state; /* 0 = unseen, 1 = visiting, 2 = complete */
+} MixinTypeEntry;
+
+/* Find a dependency-graph entry by declaration identity. */
+static size_t find_mixin_type_entry(const MixinTypeEntry *entries,
+                                    size_t entry_count,
+                                    const FengDecl *decl) {
+    for (size_t index = 0U; index < entry_count; ++index) {
+        if (entries[index].decl == decl) {
+            return index;
+        }
+    }
+    return entry_count;
+}
+
+/* Validate the expansion graph before mutating any member array.  Ordinary
+ * field/signature type-reference cycles are intentionally absent from this
+ * graph and remain the responsibility of their existing semantic passes. */
+static bool validate_mixin_cycle_from(MixinTypeEntry *entries,
+                                      size_t entry_count,
+                                      size_t entry_index,
+                                      size_t *entry_stack,
+                                      const FengTypeMixinDecl **edge_stack,
+                                      const char **edge_path_stack,
+                                      size_t depth,
+                                      FengSemanticError **errors,
+                                      size_t *error_count,
+                                      size_t *error_capacity) {
+    MixinTypeEntry *entry = &entries[entry_index];
+    FengDecl *decl = entry->decl;
+
+    if (entry->cycle_state == 2U) {
+        return true;
+    }
+    entry_stack[depth] = entry_index;
+    entry->cycle_state = 1U;
+    for (size_t mixin_index = 0U;
+         mixin_index < decl->as.type_decl.mixin_count;
+         ++mixin_index) {
+        const FengTypeMixinDecl *mixin = &decl->as.type_decl.mixins[mixin_index];
+        const FengDecl *source = mixin->resolved_source_decl;
+        size_t source_index = find_mixin_type_entry(entries, entry_count, source);
+
+        if (source_index == entry_count) {
+            continue;
+        }
+        if (entries[source_index].cycle_state == 1U) {
+            size_t cycle_start = 0U;
+            bool appended;
+
+            while (cycle_start <= depth &&
+                   entry_stack[cycle_start] != source_index) {
+                ++cycle_start;
+            }
+            appended = append_error(
+                errors,
+                error_count,
+                error_capacity,
+                entry->program != NULL ? entry->program->path : NULL,
+                mixin->token,
+                "AE0330",
+                format_message(
+                    "member mix expansion for type '%.*s' forms a cycle through source type '%.*s'",
+                    (int)decl->as.type_decl.name.length,
+                    decl->as.type_decl.name.data,
+                    (int)source->as.type_decl.name.length,
+                    source->as.type_decl.name.data));
+            for (size_t stack_index = cycle_start + 1U;
+                 appended && stack_index <= depth;
+                 ++stack_index) {
+                appended = append_latest_error_related_location(
+                    *errors,
+                    *error_count,
+                    edge_path_stack[stack_index],
+                    edge_stack[stack_index]->token,
+                    format_message("member mix expansion cycle continues here"));
+            }
+            return false;
+        }
+        if (entries[source_index].cycle_state == 0U) {
+            edge_stack[depth + 1U] = mixin;
+            edge_path_stack[depth + 1U] =
+                entry->program != NULL ? entry->program->path : NULL;
+            if (!validate_mixin_cycle_from(entries,
+                                           entry_count,
+                                           source_index,
+                                           entry_stack,
+                                           edge_stack,
+                                           edge_path_stack,
+                                           depth + 1U,
+                                           errors,
+                                           error_count,
+                                           error_capacity)) {
+                return false;
+            }
+        }
+    }
+    entry->cycle_state = 2U;
+    return true;
+}
+
+/* Apply target-explicit priority to an incoming instance-field candidate. */
+static bool target_explicit_member_conflicts_with_mixed_field(
+    const FengDecl *target,
+    FengSlice field_name) {
+    if (target == NULL || target->kind != FENG_DECL_TYPE) {
+        return false;
+    }
+    for (size_t index = 0U; index < target->as.type_decl.member_count; ++index) {
+        const FengTypeMember *member = target->as.type_decl.members[index];
+
+        if (member == NULL || member->mixin_origin != NULL || member->is_static) {
+            continue;
+        }
+        if (member->kind == FENG_TYPE_MEMBER_FIELD &&
+            slice_equals(member->as.field.name, field_name)) {
+            return true;
+        }
+        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+            slice_equals(member->as.callable.name, field_name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Create one ordinary target field from a visible source field declaration. */
+static FengTypeMember *create_mixed_field(const FengTypeMixinDecl *mixin,
+                                          const FengTypeMember *source_field) {
+    const FengDecl *source_decl;
+    FengTypeMember *field;
+    FengTypeRef *field_type;
+
+    if (mixin == NULL || source_field == NULL ||
+        source_field->kind != FENG_TYPE_MEMBER_FIELD ||
+        mixin->resolved_source_decl == NULL ||
+        mixin->resolved_source_decl->kind != FENG_DECL_TYPE) {
+        return NULL;
+    }
+    source_decl = mixin->resolved_source_decl;
+    if (source_field->as.field.type == NULL) {
+        field_type = NULL;
+    } else if (source_decl->as.type_decl.type_param_count > 0U &&
+        mixin->source_type != NULL &&
+        mixin->source_type->kind == FENG_TYPE_REF_NAMED &&
+        mixin->source_type->as.named.type_arg_count ==
+            source_decl->as.type_decl.type_param_count) {
+        field_type = clone_type_ref_substituting_type_params(
+            source_field->as.field.type,
+            source_decl->as.type_decl.type_params,
+            source_decl->as.type_decl.type_param_count,
+            mixin->source_type->as.named.type_args);
+    } else {
+        field_type = clone_type_ref_for_inference(source_field->as.field.type);
+    }
+    if (source_field->as.field.type != NULL && field_type == NULL) {
+        return NULL;
+    }
+
+    field = (FengTypeMember *)calloc(1U, sizeof(*field));
+    if (field == NULL) {
+        free_synthetic_type_ref(field_type);
+        return NULL;
+    }
+    field->token = mixin->token;
+    field->kind = FENG_TYPE_MEMBER_FIELD;
+    field->visibility = source_field->visibility;
+    field->is_static = false;
+    field->mixin_origin = mixin;
+    field->mixin_source_member = source_field;
+    field->as.field.mutability = source_field->as.field.mutability;
+    field->as.field.name = source_field->as.field.name;
+    field->as.field.type = field_type;
+    /* The explicit-construction form computes this fact after resolving its
+     * selected constructor and object-literal bindings.  The zero form stays
+     * unbound for let fields and uses ordinary default initialization. */
+    field->as.field.declaration_bound = false;
+    return field;
+}
+
+/* Roll back one generated field before normal AST ownership takes over. */
+static void free_generated_mixed_field(FengTypeMember *field) {
+    if (field == NULL) {
+        return;
+    }
+    free_synthetic_type_ref(field->as.field.type);
+    free(field);
+}
+
+/* Clone a callable-surface type from a source generic instance into the
+ * target type scope.  Method type parameters are distinct from owner type
+ * parameters under Feng's existing collision rules and therefore remain
+ * untouched by this substitution. */
+static FengTypeRef *clone_mixin_callable_type_ref(
+    const FengTypeRef *type_ref,
+    const FengDecl *source_owner,
+    const FengTypeRef *source_instance) {
+    if (type_ref == NULL) {
+        return NULL;
+    }
+    if (source_owner != NULL && source_owner->kind == FENG_DECL_TYPE &&
+        source_owner->as.type_decl.type_param_count > 0U &&
+        source_instance != NULL && source_instance->kind == FENG_TYPE_REF_NAMED &&
+        source_instance->as.named.type_arg_count ==
+            source_owner->as.type_decl.type_param_count) {
+        return clone_type_ref_substituting_type_params(
+            type_ref,
+            source_owner->as.type_decl.type_params,
+            source_owner->as.type_decl.type_param_count,
+            source_instance->as.named.type_args);
+    }
+    return clone_type_ref_for_inference(type_ref);
+}
+
+/* Free the limited expression shapes synthesized for ordinary forwarding
+ * wrapper bodies.  Successful wrappers are owned by the normal parser AST
+ * teardown; this helper is only for construction failure rollback. */
+static void free_mixin_wrapper_expr(FengExpr *expr) {
+    if (expr == NULL) {
+        return;
+    }
+    if (expr->kind == FENG_EXPR_CALL) {
+        free_mixin_wrapper_expr(expr->as.call.callee);
+        for (size_t index = 0U; index < expr->as.call.arg_count; ++index) {
+            free_mixin_wrapper_expr(expr->as.call.args[index]);
+        }
+        free(expr->as.call.args);
+        for (size_t index = 0U;
+             index < expr->as.call.explicit_type_arg_count;
+             ++index) {
+            free_synthetic_type_ref(
+                expr->as.call.explicit_type_args[index]);
+        }
+        free(expr->as.call.explicit_type_args);
+    } else if (expr->kind == FENG_EXPR_MEMBER) {
+        free_mixin_wrapper_expr(expr->as.member.object);
+    } else if (expr->kind == FENG_EXPR_GENERIC_TARGET) {
+        free_mixin_wrapper_expr(expr->as.generic_target.target);
+        for (size_t index = 0U;
+             index < expr->as.generic_target.type_arg_count;
+             ++index) {
+            free_synthetic_type_ref(expr->as.generic_target.type_args[index]);
+        }
+        free(expr->as.generic_target.type_args);
+    }
+    free(expr);
+}
+
+/* Roll back a partially constructed generated wrapper member. */
+static void free_mixin_wrapper_member(FengTypeMember *member) {
+    if (member == NULL) {
+        return;
+    }
+    for (size_t index = 0U;
+         index < member->as.callable.type_param_count;
+         ++index) {
+        free_synthetic_type_ref(
+            member->as.callable.type_params[index].constraint);
+    }
+    free(member->as.callable.type_params);
+    for (size_t index = 0U; index < member->as.callable.param_count; ++index) {
+        free_synthetic_type_ref(member->as.callable.params[index].type);
+    }
+    free(member->as.callable.params);
+    free_synthetic_type_ref(member->as.callable.return_type);
+    if (member->as.callable.body != NULL) {
+        for (size_t index = 0U;
+             index < member->as.callable.body->statement_count;
+             ++index) {
+            FengStmt *stmt = member->as.callable.body->statements[index];
+
+            if (stmt != NULL && stmt->kind == FENG_STMT_RETURN) {
+                free_mixin_wrapper_expr(stmt->as.return_value);
+            } else if (stmt != NULL && stmt->kind == FENG_STMT_EXPR) {
+                free_mixin_wrapper_expr(stmt->as.expr);
+            }
+            free(stmt);
+        }
+        free(member->as.callable.body->statements);
+        free(member->as.callable.body);
+    }
+    free(member);
+}
+
+/* Allocate one expression node for a generated wrapper body. */
+static FengExpr *new_mixin_wrapper_expr(FengExprKind kind, FengToken token) {
+    FengExpr *expr = (FengExpr *)calloc(1U, sizeof(*expr));
+
+    if (expr != NULL) {
+        expr->kind = kind;
+        expr->token = token;
+    }
+    return expr;
+}
+
+/* Convert a named type reference to the ordinary expression target used by
+ * a fully-qualified static call (for example module.View<T>). */
+static FengExpr *mixin_type_target_expr_from_ref(const FengTypeRef *type_ref) {
+    FengExpr *target = NULL;
+
+    if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED ||
+        type_ref->as.named.segment_count == 0U) {
+        return NULL;
+    }
+    target = new_mixin_wrapper_expr(FENG_EXPR_IDENTIFIER, type_ref->token);
+    if (target == NULL) {
+        return NULL;
+    }
+    target->as.identifier = type_ref->as.named.segments[0];
+    for (size_t index = 1U;
+         index < type_ref->as.named.segment_count;
+         ++index) {
+        FengExpr *member =
+            new_mixin_wrapper_expr(FENG_EXPR_MEMBER, type_ref->token);
+
+        if (member == NULL) {
+            free_mixin_wrapper_expr(target);
+            return NULL;
+        }
+        member->as.member.object = target;
+        member->as.member.member = type_ref->as.named.segments[index];
+        target = member;
+    }
+    if (type_ref->as.named.type_arg_count > 0U) {
+        FengExpr *generic =
+            new_mixin_wrapper_expr(FENG_EXPR_GENERIC_TARGET, type_ref->token);
+
+        if (generic == NULL) {
+            free_mixin_wrapper_expr(target);
+            return NULL;
+        }
+        generic->as.generic_target.target = target;
+        generic->as.generic_target.type_args = (FengTypeRef **)calloc(
+            type_ref->as.named.type_arg_count, sizeof(FengTypeRef *));
+        if (generic->as.generic_target.type_args == NULL) {
+            free_mixin_wrapper_expr(generic);
+            return NULL;
+        }
+        generic->as.generic_target.type_arg_count =
+            type_ref->as.named.type_arg_count;
+        for (size_t index = 0U;
+             index < type_ref->as.named.type_arg_count;
+             ++index) {
+            generic->as.generic_target.type_args[index] =
+                clone_type_ref_for_inference(
+                    type_ref->as.named.type_args[index]);
+            if (generic->as.generic_target.type_args[index] == NULL) {
+                free_mixin_wrapper_expr(generic);
+                return NULL;
+            }
+        }
+        target = generic;
+    }
+    return target;
+}
+
+/* Build the current concrete type reference, including its owner parameters,
+ * for an instance wrapper's fully qualified static call. */
+static FengTypeRef *mixin_owner_instance_type_ref(const FengDecl *owner) {
+    FengTypeRef *type_ref;
+
+    if (owner == NULL || owner->kind != FENG_DECL_TYPE) {
+        return NULL;
+    }
+    type_ref = (FengTypeRef *)calloc(1U, sizeof(*type_ref));
+    if (type_ref == NULL) {
+        return NULL;
+    }
+    type_ref->token = owner->token;
+    type_ref->kind = FENG_TYPE_REF_NAMED;
+    type_ref->as.named.segments =
+        (FengSlice *)calloc(1U, sizeof(FengSlice));
+    if (type_ref->as.named.segments == NULL) {
+        free(type_ref);
+        return NULL;
+    }
+    type_ref->as.named.segments[0] = owner->as.type_decl.name;
+    type_ref->as.named.segment_count = 1U;
+    if (owner->as.type_decl.type_param_count > 0U) {
+        type_ref->as.named.type_args = (FengTypeRef **)calloc(
+            owner->as.type_decl.type_param_count, sizeof(FengTypeRef *));
+        if (type_ref->as.named.type_args == NULL) {
+            free_synthetic_type_ref(type_ref);
+            return NULL;
+        }
+        type_ref->as.named.type_arg_count =
+            owner->as.type_decl.type_param_count;
+        for (size_t index = 0U;
+             index < owner->as.type_decl.type_param_count;
+             ++index) {
+            FengTypeRef *arg = (FengTypeRef *)calloc(1U, sizeof(*arg));
+
+            if (arg == NULL) {
+                free_synthetic_type_ref(type_ref);
+                return NULL;
+            }
+            arg->token = owner->as.type_decl.type_params[index].token;
+            arg->kind = FENG_TYPE_REF_NAMED;
+            arg->as.named.segments =
+                (FengSlice *)calloc(1U, sizeof(FengSlice));
+            if (arg->as.named.segments == NULL) {
+                free(arg);
+                free_synthetic_type_ref(type_ref);
+                return NULL;
+            }
+            arg->as.named.segments[0] =
+                owner->as.type_decl.type_params[index].name;
+            arg->as.named.segment_count = 1U;
+            type_ref->as.named.type_args[index] = arg;
+        }
+    }
+    return type_ref;
+}
+
+/* Clone method generic parameters, substituting source-owner parameters. */
+static bool clone_mixin_wrapper_type_params(
+    const FengCallableSignature *source,
+    const FengDecl *source_owner,
+    const FengTypeRef *source_instance,
+    FengCallableSignature *target) {
+    if (source->type_param_count == 0U) {
+        return true;
+    }
+    target->type_params = (FengTypeParam *)calloc(
+        source->type_param_count, sizeof(FengTypeParam));
+    if (target->type_params == NULL) {
+        return false;
+    }
+    target->type_param_count = source->type_param_count;
+    for (size_t index = 0U; index < source->type_param_count; ++index) {
+        target->type_params[index].token = source->type_params[index].token;
+        target->type_params[index].name = source->type_params[index].name;
+        target->type_params[index].constraint = clone_mixin_callable_type_ref(
+            source->type_params[index].constraint,
+            source_owner,
+            source_instance);
+        if (source->type_params[index].constraint != NULL &&
+            target->type_params[index].constraint == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Clone a wrapper parameter suffix and substitute source-owner parameters. */
+static bool clone_mixin_wrapper_params(
+    const FengCallableSignature *source,
+    size_t first_param,
+    const FengDecl *source_owner,
+    const FengTypeRef *source_instance,
+    FengCallableSignature *target) {
+    if (first_param > source->param_count) {
+        return false;
+    }
+    target->param_count = source->param_count - first_param;
+    if (target->param_count == 0U) {
+        return true;
+    }
+    target->params = (FengParameter *)calloc(
+        target->param_count, sizeof(FengParameter));
+    if (target->params == NULL) {
+        return false;
+    }
+    for (size_t index = 0U; index < target->param_count; ++index) {
+        const FengParameter *source_param = &source->params[first_param + index];
+        FengParameter *target_param = &target->params[index];
+
+        target_param->token = source_param->token;
+        target_param->mutability = source_param->mutability;
+        target_param->name = source_param->name;
+        target_param->is_variadic = source_param->is_variadic;
+        target_param->type = clone_mixin_callable_type_ref(
+            source_param->type, source_owner, source_instance);
+        if (source_param->type != NULL && target_param->type == NULL) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Build a one-statement wrapper body that performs an ordinary qualified
+ * static call.  The final variadic parameter is forwarded through the
+ * existing prepacked `...args` AST marker. */
+static FengBlock *create_mixin_wrapper_body(
+    FengToken token,
+    FengExpr *type_target,
+    const FengCallableSignature *wrapper_signature,
+    bool inject_self,
+    bool explicit_void_return) {
+    FengExpr *member = NULL;
+    FengExpr *callee = NULL;
+    FengExpr *call = NULL;
+    FengStmt *stmt = NULL;
+    FengBlock *body = NULL;
+    size_t call_arg_count = wrapper_signature->param_count +
+                            (inject_self ? 1U : 0U);
+
+    if (type_target == NULL) {
+        return NULL;
+    }
+    member = new_mixin_wrapper_expr(FENG_EXPR_MEMBER, token);
+    if (member == NULL) {
+        free_mixin_wrapper_expr(type_target);
+        return NULL;
+    }
+    member->as.member.object = type_target;
+    member->as.member.member = wrapper_signature->name;
+    callee = member;
+    call = new_mixin_wrapper_expr(FENG_EXPR_CALL, token);
+    if (call == NULL) {
+        free_mixin_wrapper_expr(callee);
+        return NULL;
+    }
+    call->as.call.callee = callee;
+    if (wrapper_signature->type_param_count > 0U) {
+        call->as.call.explicit_type_args = (FengTypeRef **)calloc(
+            wrapper_signature->type_param_count, sizeof(FengTypeRef *));
+        if (call->as.call.explicit_type_args == NULL) {
+            free_mixin_wrapper_expr(call);
+            return NULL;
+        }
+        call->as.call.has_explicit_type_args = true;
+        call->as.call.explicit_type_arg_count =
+            wrapper_signature->type_param_count;
+        for (size_t index = 0U;
+             index < wrapper_signature->type_param_count;
+             ++index) {
+            FengTypeRef *arg = (FengTypeRef *)calloc(1U, sizeof(*arg));
+
+            if (arg == NULL) {
+                free_mixin_wrapper_expr(call);
+                return NULL;
+            }
+            arg->token = wrapper_signature->type_params[index].token;
+            arg->kind = FENG_TYPE_REF_NAMED;
+            arg->as.named.segments =
+                (FengSlice *)calloc(1U, sizeof(FengSlice));
+            if (arg->as.named.segments == NULL) {
+                free(arg);
+                free_mixin_wrapper_expr(call);
+                return NULL;
+            }
+            arg->as.named.segments[0] =
+                wrapper_signature->type_params[index].name;
+            arg->as.named.segment_count = 1U;
+            call->as.call.explicit_type_args[index] = arg;
+        }
+    }
+    if (call_arg_count > 0U) {
+        call->as.call.args =
+            (FengExpr **)calloc(call_arg_count, sizeof(FengExpr *));
+        if (call->as.call.args == NULL) {
+            free_mixin_wrapper_expr(call);
+            return NULL;
+        }
+        call->as.call.arg_count = call_arg_count;
+    }
+    if (inject_self) {
+        call->as.call.args[0] =
+            new_mixin_wrapper_expr(FENG_EXPR_SELF, token);
+        if (call->as.call.args[0] == NULL) {
+            free_mixin_wrapper_expr(call);
+            return NULL;
+        }
+        call->as.call.args[0]->as.identifier = (FengSlice){"self", 4U};
+    }
+    for (size_t index = 0U;
+         index < wrapper_signature->param_count;
+         ++index) {
+        size_t arg_index = index + (inject_self ? 1U : 0U);
+        FengExpr *arg = new_mixin_wrapper_expr(
+            FENG_EXPR_IDENTIFIER,
+            wrapper_signature->params[index].token);
+
+        if (arg == NULL) {
+            free_mixin_wrapper_expr(call);
+            return NULL;
+        }
+        arg->as.identifier = wrapper_signature->params[index].name;
+        if (index + 1U == wrapper_signature->param_count &&
+            wrapper_signature->params[index].is_variadic) {
+            arg->is_prepacked_variadic_arg = true;
+        }
+        call->as.call.args[arg_index] = arg;
+    }
+
+    stmt = (FengStmt *)calloc(1U, sizeof(*stmt));
+    body = (FengBlock *)calloc(1U, sizeof(*body));
+    if (stmt == NULL || body == NULL) {
+        free(stmt);
+        free(body);
+        free_mixin_wrapper_expr(call);
+        return NULL;
+    }
+    stmt->token = token;
+    if (explicit_void_return) {
+        stmt->kind = FENG_STMT_EXPR;
+        stmt->as.expr = call;
+    } else {
+        stmt->kind = FENG_STMT_RETURN;
+        stmt->is_mixin_wrapper_forward_return = true;
+        stmt->as.return_value = call;
+    }
+    body->token = token;
+    body->statements = (FengStmt **)calloc(1U, sizeof(FengStmt *));
+    if (body->statements == NULL) {
+        free_mixin_wrapper_expr(call);
+        free(stmt);
+        free(body);
+        return NULL;
+    }
+    body->statements[0] = stmt;
+    body->statement_count = 1U;
+    return body;
+}
+
+/* Create a target static wrapper that forwards to the selected source
+ * declaration and keeps the mixable fact for later propagation. */
+static FengTypeMember *create_mixin_static_wrapper(
+    const FengTypeMixinDecl *mixin,
+    const FengTypeMember *source_method,
+    const FengDecl *source_owner) {
+    FengTypeMember *wrapper =
+        (FengTypeMember *)calloc(1U, sizeof(*wrapper));
+    FengCallableSignature *target;
+    const FengCallableSignature *source;
+
+    if (wrapper == NULL || mixin == NULL || source_method == NULL) {
+        free(wrapper);
+        return NULL;
+    }
+    source = &source_method->as.callable;
+    target = &wrapper->as.callable;
+    wrapper->token = mixin->token;
+    wrapper->kind = FENG_TYPE_MEMBER_METHOD;
+    wrapper->visibility = source_method->visibility;
+    wrapper->is_static = true;
+    wrapper->is_mixable = true;
+    wrapper->is_mixin_static_wrapper = true;
+    wrapper->mixin_origin = mixin;
+    wrapper->mixin_source_member = source_method;
+    target->token = mixin->token;
+    target->name = source->name;
+    if (!clone_mixin_wrapper_type_params(
+            source, source_owner, mixin->source_type, target) ||
+        !clone_mixin_wrapper_params(
+            source, 0U, source_owner, mixin->source_type, target)) {
+        free_mixin_wrapper_member(wrapper);
+        return NULL;
+    }
+    target->return_type = clone_mixin_callable_type_ref(
+        source->return_type, source_owner, mixin->source_type);
+    if (source->return_type != NULL && target->return_type == NULL) {
+        free_mixin_wrapper_member(wrapper);
+        return NULL;
+    }
+    target->body = create_mixin_wrapper_body(
+        wrapper->token,
+        mixin_type_target_expr_from_ref(mixin->source_type),
+        target,
+        false,
+        target->return_type != NULL && type_ref_is_void(target->return_type));
+    if (target->body == NULL) {
+        free_mixin_wrapper_member(wrapper);
+        return NULL;
+    }
+    return wrapper;
+}
+
+/* Derive the ordinary instance entry for one retained mixable static method. */
+static FengTypeMember *create_mixin_instance_wrapper(
+    const FengTypeMember *static_method,
+    FengExpr *owner_type_target) {
+    FengTypeMember *wrapper =
+        (FengTypeMember *)calloc(1U, sizeof(*wrapper));
+    FengCallableSignature *target;
+    const FengCallableSignature *source;
+
+    if (wrapper == NULL || static_method == NULL || owner_type_target == NULL) {
+        free(wrapper);
+        free_mixin_wrapper_expr(owner_type_target);
+        return NULL;
+    }
+    source = &static_method->as.callable;
+    target = &wrapper->as.callable;
+    wrapper->token = static_method->token;
+    wrapper->kind = FENG_TYPE_MEMBER_METHOD;
+    wrapper->visibility = static_method->visibility;
+    wrapper->is_static = false;
+    wrapper->is_mixable = false;
+    wrapper->is_mixin_instance_wrapper = true;
+    wrapper->mixin_origin = static_method->mixin_origin;
+    wrapper->mixin_source_member = static_method;
+    target->token = static_method->token;
+    target->name = source->name;
+    if (!clone_mixin_wrapper_type_params(source, NULL, NULL, target) ||
+        !clone_mixin_wrapper_params(source, 1U, NULL, NULL, target)) {
+        free_mixin_wrapper_expr(owner_type_target);
+        free_mixin_wrapper_member(wrapper);
+        return NULL;
+    }
+    target->return_type = clone_type_ref_for_inference(source->return_type);
+    if (source->return_type != NULL && target->return_type == NULL) {
+        free_mixin_wrapper_expr(owner_type_target);
+        free_mixin_wrapper_member(wrapper);
+        return NULL;
+    }
+    target->body = create_mixin_wrapper_body(
+        wrapper->token,
+        owner_type_target,
+        target,
+        true,
+        target->return_type != NULL && type_ref_is_void(target->return_type));
+    if (target->body == NULL) {
+        free_mixin_wrapper_member(wrapper);
+        return NULL;
+    }
+    return wrapper;
+}
+
+/* Compare wrapper parameter surfaces using ordinary semantic type equality. */
+static bool mixin_callable_parameters_equal(
+    const ResolveContext *context,
+    const FengCallableSignature *left,
+    const FengCallableSignature *right) {
+    if (left == NULL || right == NULL ||
+        left->param_count != right->param_count) {
+        return false;
+    }
+    for (size_t index = 0U; index < left->param_count; ++index) {
+        if (left->params[index].is_variadic !=
+                right->params[index].is_variadic ||
+            !type_refs_semantically_equal(
+                context,
+                left->params[index].type,
+                right->params[index].type)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Apply the existing variadic-overlap rule to two wrapper signatures. */
+static bool mixin_variadic_parameters_conflict(
+    const ResolveContext *context,
+    const FengCallableSignature *left,
+    const FengCallableSignature *right) {
+    size_t left_fixed = sig_fixed_count(left);
+    size_t right_fixed = sig_fixed_count(right);
+    size_t compare_count;
+
+    if (left_fixed < right_fixed) {
+        if (!sig_is_variadic(left)) {
+            return false;
+        }
+        compare_count = right_fixed;
+    } else if (left_fixed > right_fixed) {
+        if (!sig_is_variadic(right)) {
+            return false;
+        }
+        compare_count = left_fixed;
+    } else {
+        compare_count = left_fixed;
+    }
+    for (size_t index = 0U; index < compare_count; ++index) {
+        if (!type_refs_semantically_equal(
+                context,
+                sig_param_type_at(left, index),
+                sig_param_type_at(right, index))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Apply target-explicit priority to one incoming static wrapper candidate. */
+static bool target_explicit_member_conflicts_with_mixin_static_wrapper(
+    const ResolveContext *context,
+    const FengDecl *target,
+    const FengTypeMember *candidate) {
+    if (target == NULL || candidate == NULL ||
+        target->kind != FENG_DECL_TYPE ||
+        candidate->kind != FENG_TYPE_MEMBER_METHOD || !candidate->is_static) {
+        return false;
+    }
+    for (size_t index = 0U;
+         index < target->as.type_decl.member_count;
+         ++index) {
+        const FengTypeMember *member = target->as.type_decl.members[index];
+
+        if (member == NULL || member->mixin_origin != NULL ||
+            member->is_mixin_static_wrapper ||
+            member->is_mixin_instance_wrapper || !member->is_static) {
+            continue;
+        }
+        if (member->kind == FENG_TYPE_MEMBER_FIELD &&
+            slice_equals(member->as.field.name,
+                         candidate->as.callable.name)) {
+            return true;
+        }
+        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+            slice_equals(member->as.callable.name,
+                         candidate->as.callable.name) &&
+            member->as.callable.type_param_count ==
+                candidate->as.callable.type_param_count &&
+            (mixin_callable_parameters_equal(context,
+                                             &member->as.callable,
+                                             &candidate->as.callable) ||
+             ((sig_is_variadic(&member->as.callable) ||
+               sig_is_variadic(&candidate->as.callable)) &&
+              mixin_variadic_parameters_conflict(
+                  context,
+                  &member->as.callable,
+                  &candidate->as.callable)) ||
+             signatures_potentially_overlap(context,
+                                             &member->as.callable,
+                                             &candidate->as.callable))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Prevent a fixed-point round from regenerating the same source wrapper. */
+static bool target_already_has_mixin_static_wrapper(
+    const FengDecl *target,
+    const FengTypeMixinDecl *mixin,
+    const FengTypeMember *source_method) {
+    for (size_t index = 0U;
+         index < target->as.type_decl.member_count;
+         ++index) {
+        const FengTypeMember *member = target->as.type_decl.members[index];
+
+        if (member != NULL && member->is_mixin_static_wrapper &&
+            member->mixin_origin == mixin &&
+            member->mixin_source_member == source_method) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Validate the public source surface needed before a method can be mixed. */
+static bool mixable_source_method_is_candidate(
+    ResolveContext *context,
+    const FengTypeMember *method,
+    const FengDecl **out_first_spec) {
+    const FengDecl *spec_decl;
+
+    if (out_first_spec != NULL) {
+        *out_first_spec = NULL;
+    }
+    if (method == NULL || method->kind != FENG_TYPE_MEMBER_METHOD ||
+        !method->is_static || !method->is_mixable ||
+        !type_member_is_public(method) ||
+        method->as.callable.param_count == 0U ||
+        method->as.callable.params[0].is_variadic ||
+        !resolve_type_ref(context,
+                          method->as.callable.params[0].type,
+                          false)) {
+        return false;
+    }
+    spec_decl = resolve_type_ref_decl(
+        context, method->as.callable.params[0].type);
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return false;
+    }
+    if (out_first_spec != NULL) {
+        *out_first_spec = spec_decl;
+    }
+    return true;
+}
+
+/* Validate and append one source method's static wrapper candidate. */
+static bool append_mixin_static_wrapper_candidate(
+    ResolveContext *context,
+    FengDecl *target,
+    const FengTypeMixinDecl *mixin,
+    const FengTypeMember *source_method,
+    bool *changed) {
+    const FengDecl *first_spec = NULL;
+    FengTypeMember *wrapper;
+    FengTypeMember **grown;
+
+    if (!mixable_source_method_is_candidate(
+            context, source_method, &first_spec)) {
+        return context->errors == NULL || context->error_count == NULL ||
+               *context->error_count == 0U;
+    }
+    if (!type_nominally_declares_spec(context, target, first_spec)) {
+        return resolver_append_error(
+                   context,
+                   mixin->token,
+                   "AE1335",
+                   format_message(
+                       "type '%.*s' must nominally declare spec '%.*s' before mixing @mixable static method '%.*s'",
+                       (int)target->as.type_decl.name.length,
+                       target->as.type_decl.name.data,
+                       (int)first_spec->as.spec_decl.name.length,
+                       first_spec->as.spec_decl.name.data,
+                       (int)source_method->as.callable.name.length,
+                       source_method->as.callable.name.data)) &&
+               false;
+    }
+    if (target_already_has_mixin_static_wrapper(
+            target, mixin, source_method)) {
+        return true;
+    }
+    wrapper = create_mixin_static_wrapper(
+        mixin, source_method, mixin->resolved_source_decl);
+    if (wrapper == NULL) {
+        return false;
+    }
+    if (target_explicit_member_conflicts_with_mixin_static_wrapper(
+            context, target, wrapper)) {
+        free_mixin_wrapper_member(wrapper);
+        return true;
+    }
+    grown = (FengTypeMember **)realloc(
+        target->as.type_decl.members,
+        (target->as.type_decl.member_count + 1U) * sizeof(FengTypeMember *));
+    if (grown == NULL) {
+        free_mixin_wrapper_member(wrapper);
+        return false;
+    }
+    target->as.type_decl.members = grown;
+    target->as.type_decl.members[target->as.type_decl.member_count++] = wrapper;
+    if (changed != NULL) {
+        *changed = true;
+    }
+    return true;
+}
+
+/* State shared by the ordinary visible-fit method visitor. */
+typedef struct MixinFitStaticCollect {
+    ResolveContext *context;
+    FengDecl *target;
+    const FengTypeMixinDecl *mixin;
+    bool *changed;
+    bool ok;
+} MixinFitStaticCollect;
+
+/* Feed one visible fit static method through normal wrapper selection. */
+static bool collect_mixin_fit_static_method(
+    const FengTypeMember *member,
+    const FengSemanticModule *fit_module,
+    const FengDecl *fit_decl,
+    void *userdata) {
+    MixinFitStaticCollect *state = (MixinFitStaticCollect *)userdata;
+
+    (void)fit_module;
+    (void)fit_decl;
+    if (!append_mixin_static_wrapper_candidate(
+            state->context,
+            state->target,
+            state->mixin,
+            member,
+            state->changed)) {
+        state->ok = false;
+        return false;
+    }
+    return true;
+}
+
+/* Recursively materialize one type's generated fields in declaration order. */
+static bool expand_type_mixed_fields(FengDecl *target) {
+    FengTypeMember **original_members;
+    size_t original_count;
+    FengTypeMember **expanded_members = NULL;
+    size_t expanded_count = 0U;
+    size_t expanded_capacity = 0U;
+    size_t expanded_field_count = 0U;
+
+    if (target == NULL || target->kind != FENG_DECL_TYPE ||
+        target->as.type_decl.mixins_expanded) {
+        return true;
+    }
+    original_members = target->as.type_decl.members;
+    original_count = target->as.type_decl.member_count;
+
+    for (size_t position = 0U; position <= original_count; ++position) {
+        for (size_t mixin_index = 0U;
+             mixin_index < target->as.type_decl.mixin_count;
+             ++mixin_index) {
+            FengTypeMixinDecl *mixin = &target->as.type_decl.mixins[mixin_index];
+            const FengDecl *source = mixin->resolved_source_decl;
+
+            if (mixin->member_index != position || source == NULL ||
+                source->kind != FENG_DECL_TYPE) {
+                continue;
+            }
+            mixin->expanded_field_index = expanded_field_count;
+            if (!((FengDecl *)source)->as.type_decl.mixins_expanded &&
+                !expand_type_mixed_fields((FengDecl *)source)) {
+                goto fail;
+            }
+            for (size_t source_index = 0U;
+                 source_index < source->as.type_decl.member_count;
+                 ++source_index) {
+                const FengTypeMember *source_member =
+                    source->as.type_decl.members[source_index];
+                FengTypeMember *generated;
+
+                if (source_member == NULL ||
+                    source_member->kind != FENG_TYPE_MEMBER_FIELD ||
+                    source_member->is_static ||
+                    !type_member_is_public(source_member) ||
+                    target_explicit_member_conflicts_with_mixed_field(
+                        target, source_member->as.field.name)) {
+                    continue;
+                }
+                generated = create_mixed_field(mixin, source_member);
+                if (generated == NULL ||
+                    !append_raw((void **)&expanded_members,
+                                &expanded_count,
+                                &expanded_capacity,
+                                sizeof(generated),
+                                &generated)) {
+                    free_generated_mixed_field(generated);
+                    goto fail;
+                }
+                ++expanded_field_count;
+            }
+        }
+        if (position < original_count &&
+            !append_raw((void **)&expanded_members,
+                        &expanded_count,
+                        &expanded_capacity,
+                        sizeof(original_members[position]),
+                        &original_members[position])) {
+            goto fail;
+        }
+        if (position < original_count && original_members[position] != NULL &&
+            original_members[position]->kind == FENG_TYPE_MEMBER_FIELD) {
+            ++expanded_field_count;
+        }
+    }
+
+    free(original_members);
+    target->as.type_decl.members = expanded_members;
+    target->as.type_decl.member_count = expanded_count;
+    target->as.type_decl.mixins_expanded = true;
+    return true;
+
+fail:
+    for (size_t index = 0U; index < expanded_count; ++index) {
+        if (expanded_members[index] != NULL &&
+            expanded_members[index]->mixin_origin != NULL) {
+            free_generated_mixed_field(expanded_members[index]);
+        }
+    }
+    free(expanded_members);
+    return false;
+}
+
+/* Expand one program's static behavior candidates using exactly the same
+ * lexical aliases, imports, and fit visibility surface as an ordinary
+ * hand-written qualified static call in that program. */
+static bool expand_program_mixable_static_wrappers(
+    const FengSemanticAnalysis *analysis,
+    const FengSemanticModule *module,
+    const FengProgram *program,
+    const VisibleTypeEntry *visible_types,
+    size_t visible_type_count,
+    const VisibleValueEntry *visible_values,
+    size_t visible_value_count,
+    const FunctionOverloadSetEntry *function_sets,
+    size_t function_set_count,
+    bool *changed,
+    FengSemanticError **errors,
+    size_t *error_count,
+    size_t *error_capacity) {
+    ResolveContext context;
+    AliasEntry *aliases = NULL;
+    size_t alias_count = 0U;
+    size_t alias_capacity = 0U;
+    ImportedModuleEntry *imported_modules = NULL;
+    size_t imported_module_count = 0U;
+    size_t imported_module_capacity = 0U;
+    bool ok = true;
+
+    memset(&context, 0, sizeof(context));
+    context.analysis = analysis;
+    context.module = module;
+    context.program = program;
+    context.pointer_size = analysis->pointer_size;
+    context.visible_types = visible_types;
+    context.visible_type_count = visible_type_count;
+    context.visible_values = visible_values;
+    context.visible_value_count = visible_value_count;
+    context.function_sets = function_sets;
+    context.function_set_count = function_set_count;
+    context.errors = errors;
+    context.error_count = error_count;
+    context.error_capacity = error_capacity;
+
+    ok = build_program_aliases(
+        analysis, program, &aliases, &alias_count, &alias_capacity);
+    for (size_t use_index = 0U;
+         use_index < program->use_count && ok;
+         ++use_index) {
+        size_t target_index = find_module_index_by_path(
+            analysis,
+            program->uses[use_index].segments,
+            program->uses[use_index].segment_count);
+        ImportedModuleEntry entry;
+        bool already = false;
+
+        if (target_index == analysis->module_count) {
+            continue;
+        }
+        entry.target_module = &analysis->modules[target_index];
+        for (size_t index = 0U;
+             index < imported_module_count;
+             ++index) {
+            if (imported_modules[index].target_module == entry.target_module) {
+                already = true;
+                break;
+            }
+        }
+        if (!already) {
+            ok = append_raw((void **)&imported_modules,
+                            &imported_module_count,
+                            &imported_module_capacity,
+                            sizeof(entry),
+                            &entry);
+        }
+    }
+    context.aliases = aliases;
+    context.alias_count = alias_count;
+    context.imported_modules = imported_modules;
+    context.imported_module_count = imported_module_count;
+
+    for (size_t decl_index = 0U;
+         decl_index < program->declaration_count && ok;
+         ++decl_index) {
+        FengDecl *target = program->declarations[decl_index];
+        const TypeParamEntry *previous_type_params = NULL;
+        size_t previous_type_param_count = 0U;
+
+        if (target == NULL || target->kind != FENG_DECL_TYPE ||
+            target->as.type_decl.mixin_count == 0U) {
+            continue;
+        }
+        if (!resolver_push_type_params(
+                &context,
+                target->as.type_decl.type_params,
+                target->as.type_decl.type_param_count,
+                &previous_type_params,
+                &previous_type_param_count)) {
+            ok = false;
+            break;
+        }
+        for (size_t mixin_index = 0U;
+             mixin_index < target->as.type_decl.mixin_count && ok;
+             ++mixin_index) {
+            const FengTypeMixinDecl *mixin =
+                &target->as.type_decl.mixins[mixin_index];
+            const FengDecl *source = mixin->resolved_source_decl;
+            MixinFitStaticCollect fit_state;
+
+            if (source == NULL || source->kind != FENG_DECL_TYPE) {
+                continue;
+            }
+            for (size_t member_index = 0U;
+                 member_index < source->as.type_decl.member_count && ok;
+                 ++member_index) {
+                ok = append_mixin_static_wrapper_candidate(
+                    &context,
+                    target,
+                    mixin,
+                    source->as.type_decl.members[member_index],
+                    changed);
+            }
+            if (!ok) {
+                break;
+            }
+            memset(&fit_state, 0, sizeof(fit_state));
+            fit_state.context = &context;
+            fit_state.target = target;
+            fit_state.mixin = mixin;
+            fit_state.changed = changed;
+            fit_state.ok = true;
+            (void)visit_visible_fit_methods_for_type(
+                &context,
+                source,
+                (FengSlice){0},
+                false,
+                true,
+                collect_mixin_fit_static_method,
+                &fit_state);
+            ok = fit_state.ok;
+        }
+        resolver_pop_type_params(
+            &context, previous_type_params, previous_type_param_count);
+    }
+
+    resolver_free_scopes(&context);
+    free(aliases);
+    free(imported_modules);
+    return ok;
+}
+
+/* Derive instance wrappers for every retained mixable static type method. */
+static bool append_all_type_mixable_instance_wrappers(FengDecl *type_decl) {
+    size_t static_surface_count;
+    FengTypeRef *owner_ref;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
+        return true;
+    }
+    static_surface_count = type_decl->as.type_decl.member_count;
+    owner_ref = mixin_owner_instance_type_ref(type_decl);
+    if (owner_ref == NULL) {
+        return false;
+    }
+    for (size_t index = 0U; index < static_surface_count; ++index) {
+        const FengTypeMember *member = type_decl->as.type_decl.members[index];
+        FengExpr *owner_target;
+        FengTypeMember *wrapper;
+        FengTypeMember **grown;
+
+        if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD ||
+            !member->is_static || !member->is_mixable ||
+            member->as.callable.param_count == 0U) {
+            continue;
+        }
+        owner_target = mixin_type_target_expr_from_ref(owner_ref);
+        wrapper = create_mixin_instance_wrapper(member, owner_target);
+        if (wrapper == NULL) {
+            free_synthetic_type_ref(owner_ref);
+            return false;
+        }
+        grown = (FengTypeMember **)realloc(
+            type_decl->as.type_decl.members,
+            (type_decl->as.type_decl.member_count + 1U) *
+                sizeof(FengTypeMember *));
+        if (grown == NULL) {
+            free_mixin_wrapper_member(wrapper);
+            free_synthetic_type_ref(owner_ref);
+            return false;
+        }
+        type_decl->as.type_decl.members = grown;
+        type_decl->as.type_decl.members[
+            type_decl->as.type_decl.member_count++] = wrapper;
+    }
+    free_synthetic_type_ref(owner_ref);
+    return true;
+}
+
+/* Derive fit-owned instance wrappers beside their mixable static methods. */
+static bool append_all_fit_mixable_instance_wrappers(FengDecl *fit_decl) {
+    size_t static_surface_count;
+
+    if (fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT) {
+        return true;
+    }
+    static_surface_count = fit_decl->as.fit_decl.member_count;
+    for (size_t index = 0U; index < static_surface_count; ++index) {
+        const FengTypeMember *member = fit_decl->as.fit_decl.members[index];
+        FengExpr *owner_target;
+        FengTypeMember *wrapper;
+        FengTypeMember **grown;
+
+        if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD ||
+            !member->is_static || !member->is_mixable ||
+            member->as.callable.param_count == 0U) {
+            continue;
+        }
+        owner_target =
+            mixin_type_target_expr_from_ref(fit_decl->as.fit_decl.target);
+        wrapper = create_mixin_instance_wrapper(member, owner_target);
+        if (wrapper == NULL) {
+            return false;
+        }
+        grown = (FengTypeMember **)realloc(
+            fit_decl->as.fit_decl.members,
+            (fit_decl->as.fit_decl.member_count + 1U) *
+                sizeof(FengTypeMember *));
+        if (grown == NULL) {
+            free_mixin_wrapper_member(wrapper);
+            return false;
+        }
+        fit_decl->as.fit_decl.members = grown;
+        fit_decl->as.fit_decl.members[
+            fit_decl->as.fit_decl.member_count++] = wrapper;
+    }
+    return true;
+}
+
+/* Derive every local type and fit instance wrapper after static propagation. */
+static bool append_all_mixable_instance_wrappers(
+    FengSemanticAnalysis *analysis) {
+    for (size_t module_index = 0U;
+         module_index < analysis->module_count;
+         ++module_index) {
+        FengSemanticModule *module = &analysis->modules[module_index];
+
+        if (module->origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            continue;
+        }
+        for (size_t program_index = 0U;
+             program_index < module->program_count;
+             ++program_index) {
+            FengProgram *program = (FengProgram *)module->programs[program_index];
+
+            for (size_t decl_index = 0U;
+                 decl_index < program->declaration_count;
+                 ++decl_index) {
+                FengDecl *decl = program->declarations[decl_index];
+
+                if (decl != NULL && decl->kind == FENG_DECL_TYPE) {
+                    if (!append_all_type_mixable_instance_wrappers(decl)) {
+                        return false;
+                    }
+                } else if (decl != NULL && decl->kind == FENG_DECL_FIT) {
+                    if (!append_all_fit_mixable_instance_wrappers(decl)) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+/* Expand every local type only after the complete dependency graph has passed
+ * cycle validation.  Imported `.ft` types already expose their final ordinary
+ * member surface and therefore do not carry raw mixin directives. */
+static bool expand_all_mixed_fields(FengSemanticAnalysis *analysis,
+                                    FengSemanticError **errors,
+                                    size_t *error_count,
+                                    size_t *error_capacity) {
+    MixinTypeEntry *entries = NULL;
+    size_t entry_count = 0U;
+    size_t entry_capacity = 0U;
+    size_t *entry_stack = NULL;
+    const FengTypeMixinDecl **edge_stack = NULL;
+    const char **edge_path_stack = NULL;
+    bool ok = true;
+
+    for (size_t module_index = 0U;
+         module_index < analysis->module_count && ok;
+         ++module_index) {
+        FengSemanticModule *module = &analysis->modules[module_index];
+
+        if (module->origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            continue;
+        }
+        for (size_t program_index = 0U;
+             program_index < module->program_count && ok;
+             ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+
+            for (size_t decl_index = 0U;
+                 decl_index < program->declaration_count;
+                 ++decl_index) {
+                FengDecl *decl = program->declarations[decl_index];
+                MixinTypeEntry entry;
+
+                if (decl == NULL || decl->kind != FENG_DECL_TYPE) {
+                    continue;
+                }
+                entry.decl = decl;
+                entry.program = program;
+                entry.cycle_state = 0U;
+                ok = append_raw((void **)&entries,
+                                &entry_count,
+                                &entry_capacity,
+                                sizeof(entry),
+                                &entry);
+                if (!ok) {
+                    break;
+                }
+            }
+        }
+    }
+
+    if (ok && entry_count > 0U) {
+        entry_stack = (size_t *)calloc(entry_count, sizeof(*entry_stack));
+        edge_stack = (const FengTypeMixinDecl **)calloc(
+            entry_count, sizeof(*edge_stack));
+        edge_path_stack = (const char **)calloc(
+            entry_count, sizeof(*edge_path_stack));
+        ok = entry_stack != NULL && edge_stack != NULL &&
+             edge_path_stack != NULL;
+    }
+    for (size_t index = 0U; index < entry_count && ok; ++index) {
+        if (entries[index].cycle_state == 0U) {
+            ok = validate_mixin_cycle_from(entries,
+                                           entry_count,
+                                           index,
+                                           entry_stack,
+                                           edge_stack,
+                                           edge_path_stack,
+                                           0U,
+                                           errors,
+                                           error_count,
+                                           error_capacity);
+        }
+    }
+    for (size_t index = 0U; index < entry_count && ok; ++index) {
+        ok = expand_type_mixed_fields(entries[index].decl);
+    }
+    free(entry_stack);
+    free(edge_stack);
+    free(edge_path_stack);
+    free(entries);
+    return ok;
+}
+
+/* Propagate mixable static behavior to a fixed point before deriving any
+ * instance entry.  Expansion cycles have already been rejected, so the
+ * maximum useful number of rounds is bounded by the number of declarations. */
+static bool expand_all_mixable_static_wrappers(
+    FengSemanticAnalysis *analysis,
+    FengSemanticError **errors,
+    size_t *error_count,
+    size_t *error_capacity) {
+    size_t declaration_count = 0U;
+
+    for (size_t module_index = 0U;
+         module_index < analysis->module_count;
+         ++module_index) {
+        const FengSemanticModule *module = &analysis->modules[module_index];
+
+        if (module->origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            continue;
+        }
+        for (size_t program_index = 0U;
+             program_index < module->program_count;
+             ++program_index) {
+            declaration_count +=
+                module->programs[program_index]->declaration_count;
+        }
+    }
+    for (size_t iteration = 0U;
+         iteration <= declaration_count;
+         ++iteration) {
+        bool changed = false;
+        bool ok = true;
+
+        for (size_t module_index = 0U;
+             module_index < analysis->module_count && ok &&
+             (error_count == NULL || *error_count == 0U);
+             ++module_index) {
+            if (analysis->modules[module_index].origin ==
+                FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+                continue;
+            }
+            ok = check_symbol_conflicts(
+                analysis,
+                &analysis->modules[module_index],
+                SEMANTIC_MODULE_PASS_MIXIN_STATIC_WRAPPERS,
+                NULL,
+                NULL,
+                &changed,
+                errors,
+                error_count,
+                error_capacity);
+        }
+        if (!ok || (error_count != NULL && *error_count > 0U)) {
+            return false;
+        }
+        if (!changed) {
+            return true;
+        }
+    }
+    return false;
 }
 
 static size_t count_all_callables(const FengSemanticAnalysis *analysis) {
@@ -28137,6 +30437,10 @@ static size_t count_all_callables(const FengSemanticAnalysis *analysis) {
                 }
 
                 if (decl->kind == FENG_DECL_TYPE) {
+                    /* Mixin binding/type facts can require one additional
+                     * fixed-point step per dependency edge when the source
+                     * declaration appears later in program order. */
+                    count += decl->as.type_decl.mixin_count;
                     for (member_index = 0U;
                          member_index < decl->as.type_decl.member_count;
                          ++member_index) {
@@ -29061,6 +31365,10 @@ static void normalize_decl(FengDecl *decl, size_t pointer_size) {
             for (i = 0; i < decl->as.type_decl.type_param_count; ++i) {
                 normalize_type_ref(decl->as.type_decl.type_params[i].constraint, pointer_size);
             }
+            for (i = 0; i < decl->as.type_decl.mixin_count; ++i) {
+                normalize_type_ref(decl->as.type_decl.mixins[i].source_type, pointer_size);
+                normalize_expr(decl->as.type_decl.mixins[i].source_constructor, pointer_size);
+            }
             for (i = 0; i < decl->as.type_decl.member_count; ++i) {
                 FengTypeMember *member = decl->as.type_decl.members[i];
                 if (member == NULL) {
@@ -29309,10 +31617,46 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
         }
     }
 
-    /* Pre-register union-spec member info for all modules so that
-     * cross-file union-variant matching works regardless of file order. */
-    if (ok) {
+    /* Phase M1/M2: resolve every raw member-mix source in its declaring
+     * program context, reject expansion cycles, then materialize ordinary
+     * target fields before spec relations and normal member checking. */
+    for (program_index = 0U;
+         program_index < analysis->module_count && ok && error_count == 0U;
+         ++program_index) {
+        if (analysis->modules[program_index].origin ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            continue;
+        }
+        ok = check_symbol_conflicts(analysis,
+                                    &analysis->modules[program_index],
+                                    SEMANTIC_MODULE_PASS_MIXIN_SOURCES,
+                                    &callable_return_cache,
+                                    &callable_exception_escape_cache,
+                                    NULL,
+                                    &errors,
+                                    &error_count,
+                                    &error_capacity);
+    }
+    if (ok && error_count == 0U) {
+        ok = expand_all_mixed_fields(analysis,
+                                     &errors,
+                                     &error_count,
+                                     &error_capacity);
+    }
+    /* Nominal spec relations do not depend on generated method bodies, but
+     * the ordinary overload-overlap rule needs them while applying target
+     * explicit-member priority to static wrapper candidates.  Build the
+     * sidecar after fields are expanded and before wrapper selection. */
+    if (ok && error_count == 0U) {
         precompute_union_spec_infos(analysis);
+        ok = feng_semantic_compute_spec_relations(analysis);
+    }
+    if (ok && error_count == 0U) {
+        ok = expand_all_mixable_static_wrappers(
+            analysis, &errors, &error_count, &error_capacity);
+    }
+    if (ok && error_count == 0U) {
+        ok = append_all_mixable_instance_wrappers(analysis);
     }
 
     /* Phase S1a: spec satisfaction relation sidecar must be available
@@ -29321,12 +31665,8 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
      * modules must already be injected before this pass runs so their
      * declared_specs / parent_specs participate in the same relation table.
      * See docs/engineering/feng-spec-semantic-delivered.md §10. */
-    if (ok && error_count == 0U) {
-        if (!feng_semantic_compute_spec_relations(analysis)) {
-            ok = false;
-            goto finish;
-        }
-    }
+    /* The sidecar was built immediately before mixable wrapper selection;
+     * wrapper generation does not change nominal declaration relations. */
 
     /* Phase S3-pre: pre-compute spec witnesses for builtin-subject spec
      * relations that the on-demand resolution pass would miss (e.g. imported
@@ -29353,8 +31693,10 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
             }
             ok = check_symbol_conflicts(analysis,
                                         &analysis->modules[program_index],
+                                        SEMANTIC_MODULE_PASS_FULL,
                                         &callable_return_cache,
                                         &callable_exception_escape_cache,
+                                        NULL,
                                         &errors,
                                         &error_count,
                                         &error_capacity);
@@ -29503,6 +31845,12 @@ void feng_semantic_errors_free(FengSemanticError *errors, size_t error_count) {
     }
 
     for (index = 0U; index < error_count; ++index) {
+        for (size_t related_index = 0U;
+             related_index < errors[index].related_location_count;
+             ++related_index) {
+            free(errors[index].related_locations[related_index].message);
+        }
+        free(errors[index].related_locations);
         free(errors[index].message);
     }
     free(errors);

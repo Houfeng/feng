@@ -1265,6 +1265,22 @@ static bool writer_emit_decl_attrs(WriterContext *ctx,
             return false;
         }
     }
+    if (decl->is_mixable) {
+        FengSymbolFtAttrRecord attr;
+
+        memset(&attr, 0, sizeof(attr));
+        attr.symbol_id = symbol_id;
+        attr.kind = (uint16_t)FENG_SYMBOL_ATTR_MIXABLE_METHOD;
+        if (!append_record((void **)&ctx->attrs,
+                           &ctx->attr_count,
+                           sizeof(attr),
+                           &attr,
+                           path,
+                           token,
+                           out_error)) {
+            return false;
+        }
+    }
     /* 具体化 aggregate 依赖。 */
     if (decl->reifiable_agg_dep_count > 0U) {
         size_t dep_index;

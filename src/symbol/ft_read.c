@@ -1251,6 +1251,10 @@ static bool parse_attrs(ReadContext *ctx,
             decl->is_iterator = true;
             continue;
         }
+        if (kind == FENG_SYMBOL_ATTR_MIXABLE_METHOD) {
+            decl->is_mixable = true;
+            continue;
+        }
         if (kind == FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP) {
             FengSymbolTypeView *type = parse_type_by_id(ctx, value0, path, out_error);
             FengSymbolTypeView **grown;

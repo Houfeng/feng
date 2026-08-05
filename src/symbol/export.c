@@ -1931,6 +1931,7 @@ static bool apply_decl_annotations(FengSymbolDeclView *decl,
     decl->abi_annotated = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ABI);
     decl->is_iterable = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ITERABLE);
     decl->is_iterator = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_ITERATOR);
+    decl->is_mixable = annotations_contain_kind(annotations, annotation_count, FENG_ANNOTATION_MIXABLE);
     if (callconv != NULL) {
         decl->calling_convention = callconv->builtin_kind;
         if (allow_library && callconv->arg_count > 0U) {
@@ -2656,7 +2657,8 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
         }
     }
 
-            decl->is_static = member->is_static;
+    decl->is_static = member->is_static;
+    decl->is_mixable = member->is_mixable;
 
     if (!register_source_decl(ctx, member, decl, path, member->token, out_error)) {
         feng_symbol_internal_decl_free_members(decl);

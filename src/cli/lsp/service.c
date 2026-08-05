@@ -129,6 +129,15 @@ typedef struct FengLspModuleIndex {
     size_t module_capacity;
 } FengLspModuleIndex;
 
+/* One protocol-level secondary source location for a diagnostic. */
+typedef struct FengLspDiagnosticRelatedEntry {
+    char *path;
+    char *message;
+    unsigned int line;
+    unsigned int column;
+    unsigned int end_column;
+} FengLspDiagnosticRelatedEntry;
+
 /* One protocol diagnostic normalized from parser or semantic output. */
 typedef struct FengLspDiagnosticEntry {
     char *path;
@@ -138,6 +147,8 @@ typedef struct FengLspDiagnosticEntry {
     unsigned int column;
     unsigned int end_column;
     int severity;
+    FengLspDiagnosticRelatedEntry *related;
+    size_t related_count;
 } FengLspDiagnosticEntry;
 
 typedef struct FengLspDiagnosticCollector {
@@ -1907,6 +1918,13 @@ static void diagnostics_dispose(FengLspDiagnosticCollector *collector) {
     size_t index;
 
     for (index = 0U; index < collector->count; ++index) {
+        for (size_t related_index = 0U;
+             related_index < collector->items[index].related_count;
+             ++related_index) {
+            free(collector->items[index].related[related_index].path);
+            free(collector->items[index].related[related_index].message);
+        }
+        free(collector->items[index].related);
         free(collector->items[index].path);
         free(collector->items[index].message);
     }
@@ -1943,6 +1961,45 @@ static bool diagnostics_append(FengLspDiagnosticCollector *collector,
         free(entry.message);
         return false;
     }
+    return true;
+}
+
+/* Append one structured secondary location to the latest diagnostic. */
+static bool diagnostics_append_related(FengLspDiagnosticCollector *collector,
+                                       const char *path,
+                                       unsigned int line,
+                                       unsigned int column,
+                                       size_t token_length,
+                                       const char *message) {
+    FengLspDiagnosticEntry *diagnostic;
+    FengLspDiagnosticRelatedEntry *grown;
+    FengLspDiagnosticRelatedEntry entry = {0};
+
+    if (collector == NULL || collector->count == 0U) {
+        return false;
+    }
+    diagnostic = &collector->items[collector->count - 1U];
+    entry.path = dup_cstr(path != NULL ? path : "");
+    entry.message = dup_cstr(message != NULL ? message : "related location");
+    entry.line = line == 0U ? 1U : line;
+    entry.column = column == 0U ? 1U : column;
+    entry.end_column =
+        entry.column + (unsigned int)(token_length > 0U ? token_length : 1U);
+    if (entry.path == NULL || entry.message == NULL) {
+        free(entry.path);
+        free(entry.message);
+        return false;
+    }
+    grown = (FengLspDiagnosticRelatedEntry *)realloc(
+        diagnostic->related,
+        (diagnostic->related_count + 1U) * sizeof(*grown));
+    if (grown == NULL) {
+        free(entry.path);
+        free(entry.message);
+        return false;
+    }
+    diagnostic->related = grown;
+    diagnostic->related[diagnostic->related_count++] = entry;
     return true;
 }
 
@@ -1988,14 +2045,31 @@ static void on_semantic_error_collect(void *user,
     (void)error_index;
     (void)error_count;
     (void)source;
-    (void)diagnostics_append(collector,
-                             error->path,
-                             error->token.line,
-                             error->token.column,
-                             error->token.length,
-                             1,
-                             "semantic",
-                             error->message);
+    if (!diagnostics_append(collector,
+                            error->path,
+                            error->token.line,
+                            error->token.column,
+                            error->token.length,
+                            1,
+                            "semantic",
+                            error->message)) {
+        return;
+    }
+    for (size_t index = 0U;
+         index < error->related_location_count;
+         ++index) {
+        const FengSemanticRelatedLocation *related =
+            &error->related_locations[index];
+
+        if (!diagnostics_append_related(collector,
+                                        related->path,
+                                        related->token.line,
+                                        related->token.column,
+                                        related->token.length,
+                                        related->message)) {
+            return;
+        }
+    }
 }
 
 static void on_semantic_info_collect(void *user,
@@ -3106,8 +3180,57 @@ static bool diagnostics_json_for_path(const FengLspDiagnosticCollector *collecto
             !string_append_cstr(json, ",\"source\":") ||
             !string_append_json_string(json, entry->source) ||
             !string_append_cstr(json, ",\"message\":") ||
-            !string_append_json_string(json, entry->message) ||
-            !string_append_cstr(json, "}")) {
+            !string_append_json_string(json, entry->message)) {
+            return false;
+        }
+        if (entry->related_count > 0U) {
+            if (!string_append_cstr(json, ",\"relatedInformation\":[")) {
+                return false;
+            }
+            for (size_t related_index = 0U;
+                 related_index < entry->related_count;
+                 ++related_index) {
+                const FengLspDiagnosticRelatedEntry *related =
+                    &entry->related[related_index];
+                char *related_uri = path_to_file_uri(related->path);
+
+                if (related_uri == NULL) {
+                    return false;
+                }
+                if ((related_index > 0U && !string_append_cstr(json, ",")) ||
+                    !string_append_cstr(json, "{\"location\":{\"uri\":") ||
+                    !string_append_json_string(json, related_uri) ||
+                    !string_append_cstr(json, ",\"range\":{\"start\":{\"line\":") ||
+                    !string_append_format(
+                        json, "%u", related->line > 0U ? related->line - 1U : 0U) ||
+                    !string_append_cstr(json, ",\"character\":") ||
+                    !string_append_format(
+                        json,
+                        "%u",
+                        related->column > 0U ? related->column - 1U : 0U) ||
+                    !string_append_cstr(json, "},\"end\":{\"line\":") ||
+                    !string_append_format(
+                        json, "%u", related->line > 0U ? related->line - 1U : 0U) ||
+                    !string_append_cstr(json, ",\"character\":") ||
+                    !string_append_format(
+                        json,
+                        "%u",
+                        related->end_column > 0U
+                            ? related->end_column - 1U
+                            : 0U) ||
+                    !string_append_cstr(json, "}}},\"message\":") ||
+                    !string_append_json_string(json, related->message) ||
+                    !string_append_cstr(json, "}")) {
+                    free(related_uri);
+                    return false;
+                }
+                free(related_uri);
+            }
+            if (!string_append_cstr(json, "]")) {
+                return false;
+            }
+        }
+        if (!string_append_cstr(json, "}")) {
             return false;
         }
     }
@@ -4166,6 +4289,90 @@ static const FengSemanticModule *find_decl_module(const FengLspAnalysisSession *
         }
     }
     return NULL;
+}
+
+/* Return whether one declaration directly owns the requested member. */
+static bool declaration_contains_member(const FengDecl *decl,
+                                        const FengTypeMember *member) {
+    FengTypeMember *const *members = NULL;
+    size_t member_count = 0U;
+
+    if (decl == NULL || member == NULL) {
+        return false;
+    }
+    switch (decl->kind) {
+        case FENG_DECL_TYPE:
+            members = decl->as.type_decl.members;
+            member_count = decl->as.type_decl.member_count;
+            break;
+        case FENG_DECL_SPEC:
+            if (decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+                return false;
+            }
+            members = decl->as.spec_decl.as.object.members;
+            member_count = decl->as.spec_decl.as.object.member_count;
+            break;
+        case FENG_DECL_FIT:
+            members = decl->as.fit_decl.members;
+            member_count = decl->as.fit_decl.member_count;
+            break;
+        default:
+            return false;
+    }
+    for (size_t index = 0U; index < member_count; ++index) {
+        if (members[index] == member) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Find the program and declaration that own a semantic member pointer. */
+static const FengSemanticModule *find_member_module(
+    const FengLspAnalysisSession *session,
+    const FengTypeMember *member,
+    const FengDecl **out_decl,
+    const FengProgram **out_program) {
+    *out_decl = NULL;
+    *out_program = NULL;
+    if (member == NULL || session->analysis == NULL) {
+        return NULL;
+    }
+    for (size_t module_index = 0U;
+         module_index < session->analysis->module_count;
+         ++module_index) {
+        const FengSemanticModule *module =
+            &session->analysis->modules[module_index];
+
+        for (size_t program_index = 0U;
+             program_index < module->program_count;
+             ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+
+            for (size_t decl_index = 0U;
+                 decl_index < program->declaration_count;
+                 ++decl_index) {
+                const FengDecl *decl = program->declarations[decl_index];
+
+                if (declaration_contains_member(decl, member)) {
+                    *out_decl = decl;
+                    *out_program = program;
+                    return module;
+                }
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Follow generated mixin members back to the original source declaration. */
+static const FengTypeMember *mixin_definition_source_member(
+    const FengTypeMember *member) {
+    while (member != NULL && member->mixin_source_member != NULL &&
+           member->mixin_source_member != member) {
+        member = member->mixin_source_member;
+    }
+    return member;
 }
 
 static bool local_list_push(FengLspLocalList *locals,
@@ -15294,6 +15501,22 @@ static bool definition_location_from_analysis(const FengLspAnalysisSession *sess
                                  target_program != NULL ? target_program->path : NULL,
                                  target->decl->token);
         case FENG_LSP_RESOLVED_MEMBER:
+            if (target->member != NULL &&
+                target->member->mixin_source_member != NULL) {
+                const FengTypeMember *source_member =
+                    mixin_definition_source_member(target->member);
+                const FengDecl *source_decl = NULL;
+
+                (void)find_member_module(session,
+                                         source_member,
+                                         &source_decl,
+                                         &target_program);
+                if (source_decl != NULL && target_program != NULL) {
+                    return location_json(result,
+                                         target_program->path,
+                                         source_member->token);
+                }
+            }
             (void)find_decl_module(session, target->decl, &target_program);
             if (target_program == NULL && session->analysis == NULL) {
                 target_program = program;
