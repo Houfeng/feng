@@ -36,7 +36,8 @@ Feng 没有继承，也没有增加继承的计划。retained-mode GUI/TUI 组�
    `self`。
 4. 生成字段和 wrapper 尽早进入普通成员表，后续复用现有可见性、重载、冲突、泛型、
    `spec` 满足、方法值、构造、生命周期和代码生成规则。
-5. 目标显式成员优先；除此之外，生成结果与等价手写字段和 wrapper 一致。
+5. 目标显式成员优先用于筛选字段和 mix 产生的静态 wrapper；最终保留的
+   `@mixable` 静态方法必须无条件派生实例 wrapper，派生后由现有成员规则处理。
 6. 不为目标实例保存隐藏来源对象、隐藏 base 字段、方法环境或运行时类型链。
 
 ## 3 设计目标
@@ -304,9 +305,13 @@ type View: Widget {
 `@mixable` 不允许参数，也不表达来源实例、类型链、alias 或其他注入方式。固定注入项
 只有目标实例。
 
-### 9.2 声明类型自身的实例入口
+### 9.2 统一派生实例入口
 
-`@mixable` 静态方法在其声明类型中额外生成一个同名普通实例 wrapper。上例概念生成：
+每个类型最终成员面中保留的 `@mixable` 静态方法，都无条件为该类型派生一个同名普通
+实例 wrapper。该规则不区分静态方法是类型显式声明的，还是从另一个来源 mix 得到的
+静态 wrapper。
+
+对于显式声明 `@mixable` 静态方法的 `View`，概念生成：
 
 ```feng
 type View: Widget {
@@ -321,15 +326,22 @@ type View: Widget {
 ```
 
 实例 wrapper 删除静态方法的第一个参数，并把当前实例 `self` 按该参数的 object-form
-`spec` 视角作为第一个普通实参。实例 wrapper 是普通实例方法，可以参与声明类型的
-`spec` 满足、方法值、重载和代码生成，但它自身不参与后续 mix。
+`spec` 视角作为第一个普通实参。wrapper 始终调用当前类型自己的同名静态方法，使
+该静态方法成为当前类型实例行为的唯一入口。
 
-### 9.3 目标静态 wrapper 和实例 wrapper
+实例 wrapper 生成后是普通实例方法，可以参与 `spec` 满足、方法值、重载、冲突和
+代码生成，但它自身不参与后续 mix。
 
-当目标展开来源时，每个符合条件的 `@mixable` 静态方法同时生成：
+### 9.3 目标静态 wrapper
 
-1. 一个目标静态 wrapper，保留来源静态方法的完整签名；
-2. 一个目标实例 wrapper，删除第一个 object-form `spec` 参数。
+当目标展开来源时，每个符合条件的 `@mixable` 静态方法只直接生成一个目标静态
+wrapper。该 wrapper：
+
+- 保留来源静态方法的完整签名；
+- 方法体只执行完整限定的来源静态调用；
+- 继续携带 `mixable` 声明事实。
+
+目标静态 wrapper 进入目标最终成员面后，再统一应用 §9.2，派生目标实例 wrapper。
 
 例如：
 
@@ -343,24 +355,33 @@ type Button: Widget {
 
 ```feng
 type Button: Widget {
+    @mixable
     static func draw(target: Widget, area: Area): void {
         View.draw(target, area);
     }
 
     func draw(area: Area): void {
-        View.draw(self, area);
+        Button.draw(self, area);
     }
 }
 ```
 
-wrapper 只执行完整限定的来源静态调用，不复制来源方法体。来源方法内部的静态字段
-访问仍属于来源类型；需要访问或动态调用目标能力时，来源方法必须通过第一个 `spec`
-参数完成。
+这里的两个步骤分别是：
+
+```text
+mix View.draw
+  → 生成 Button.@mixable static draw
+  → @mixable 统一派生 Button 实例 draw
+```
+
+静态 wrapper 不复制来源方法体。来源方法内部的静态字段访问仍属于来源类型；需要
+访问或动态调用目标能力时，来源方法必须通过第一个 `spec` 参数完成。
 
 ### 9.4 多层 mix 的行为传播
 
-目标生成的静态 wrapper 必须继续携带同一个 `mixable` 声明事实。以后该目标作为另一
-个 `...` 的来源时，静态 wrapper 继续生成下一层静态和实例 wrapper：
+目标生成的静态 wrapper 必须继续携带同一个 `mixable` 声明事实。该事实先使当前目标
+按 §9.2 派生实例 wrapper；以后当前目标作为另一个 `...` 的来源时，又使下一层生成
+新的 `@mixable` 静态 wrapper，并再次统一派生下一层实例 wrapper：
 
 ```text
 IconButton.draw()
@@ -390,8 +411,8 @@ type Button: Widget {
 }
 ```
 
-目标显式声明优先，来源中与其冲突的生成 wrapper 按 §11 跳过。Button 自己的
-`@mixable` 方法生成普通实例入口：
+目标显式声明优先，来源中与其冲突的静态 wrapper 候选按 §11 跳过。Button 自己最终
+保留的 `@mixable` 静态方法按 §9.2 无条件派生普通实例入口：
 
 ```text
 button.draw(area)
@@ -414,13 +435,16 @@ button.draw(area)
 static func log(target: Widget, args: string...): void;
 ```
 
-实例 wrapper 概念为：
+在声明类型 `View` 中，实例 wrapper 概念为：
 
 ```feng
 func log(args: string...): void {
     View.log(self, ...args);
 }
 ```
+
+如果该方法 mix 到 `Button`，则先生成 `Button.log` 静态 wrapper，派生的实例 wrapper
+调用 `Button.log(self, ...args)`。两种调用都使用同一个预打包数组。
 
 `...args` 的语法、类型检查、求值和零分配要求以
 [`feng-function-variadic.md`](../specifications/feng-function-variadic.md) 为唯一规范
@@ -450,19 +474,32 @@ type View: Widget {
 
 ## 11 显式成员优先与冲突
 
-### 11.1 目标显式成员优先
+### 11.1 mix 候选的目标显式成员优先
 
-如果目标类型显式定义的成员与待生成字段或 wrapper 冲突，则不生成该成员。冲突判断
-完全使用 Feng 现有规则：
+如果目标类型显式定义的成员与待生成字段或目标静态 wrapper 冲突，则不生成对应 mix
+候选。冲突判断完全使用 Feng 现有规则：
 
 - 字段使用现有字段级冲突规则；
 - 方法使用现有方法级冲突和重载规则；
 - 静态成员与实例成员的冲突面使用现有规则；
 - 字段与方法的冲突使用现有规则。
 
-本方案不另行定义按名称、按签名或按来源顺序覆盖的规则。
+本方案不另行定义按名称、按签名或按来源顺序覆盖的规则。该优先规则只用于筛选从
+`...` 来源产生的字段和静态 wrapper 候选，不用于跳过 §9.2 的实例 wrapper。
 
-### 11.2 多个来源的生成成员冲突
+### 11.2 实例 wrapper 不跳过
+
+目标最终成员面中的每个 `@mixable` 静态方法都必须无条件派生实例 wrapper。编译器
+不得因为目标已经存在同名字段、实例方法或另一个派生 wrapper 而预先跳过生成。
+
+所有实例 wrapper 生成后，与其他普通成员一起进入现有成员表。如果属于合法重载，
+则按现有规则接受；如果发生字段、方法、静态/实例成员或派生签名冲突，则由后续现有
+冲突检查自然报错。本方案不增加 `@mixable` 专用冲突算法或诊断。
+
+这保证不会出现静态方法已经 mix 到目标，但对应实例入口因显式成员优先而被静默遮蔽
+的情况。
+
+### 11.3 多个来源的生成成员冲突
 
 两个不同 `...` 产生的生成成员之间没有第一个来源或最后一个来源优先规则。它们进入
 同一个普通成员集合；若等价手写声明会冲突，则按现有诊断报错。
@@ -527,12 +564,13 @@ Lex / Parse
   → 确认来源为具体 type 声明
   → 收集公开可见实例字段
   → 收集公开可见 @mixable 静态方法及可见 fit 静态方法
-  → 为声明类型自身的 @mixable 静态方法生成实例 wrapper
-  → 根据现有规则跳过与目标显式成员冲突的候选
-  → 生成目标普通字段、静态 wrapper 和实例 wrapper
+  → 根据现有规则跳过与目标显式成员冲突的字段和静态 wrapper 候选
+  → 生成目标普通字段和保留 mixable 事实的静态 wrapper
+  → 对类型最终保留的每个 @mixable 静态方法无条件派生实例 wrapper
   → 根据来源构造路径计算 let 显式绑定集合
   → 在现有成员声明及绑定初值阶段生成普通字段绑定
   → 建立包含生成成员的普通成员表
+  → 使用现有规则检查实例 wrapper 在内的全部成员冲突与重载
   → 执行现有 spec 检查及其他语义分析
   → 执行现有代码生成
 ```
@@ -590,8 +628,8 @@ Lex / Parse
 
 - [ ] 更新 `docs/specifications/feng-type.md`，定义三种 `...` 语法、具体 `type` 来源、
   只展开公开实例字段、默认零值直接初始化、显式来源构造一次求值和 `let` 绑定状态。
-- [ ] 更新 `docs/specifications/feng-function.md`，定义 `@mixable` 静态方法约束、声明
-  类型实例入口、目标静态和实例 wrapper、多层传播、泛型及变参签名保持。
+- [ ] 更新 `docs/specifications/feng-function.md`，定义 `@mixable` 静态方法约束、最终
+  静态成员统一派生实例 wrapper、目标静态 wrapper、多层传播、泛型及变参签名保持。
 - [ ] 在 `feng-type.md` 中定义目标位置可见且可普通调用的公开 `fit Source`
   `@mixable` 静态方法参与来源成员面；其他规范只引用，不重复语义。
 - [ ] 在现有诊断码主规范中分配语法、来源类型、来源构造、`@mixable` 声明约束和生成
@@ -618,16 +656,20 @@ Lex / Parse
 
 - [ ] 验证第一个参数是非变长 object-form `spec`，并检查声明类型和展开目标的名义
   spec 声明关系。
-- [ ] 为声明类型自身的 `@mixable` 静态方法生成普通实例 wrapper。
-- [ ] 为展开目标生成完整签名的静态 wrapper 和删除第一个参数的实例 wrapper。
+- [ ] 为展开目标生成保留完整签名和 `mixable` 事实的静态 wrapper。
+- [ ] 对每个类型最终保留的 `@mixable` 静态方法统一派生删除第一个参数的实例
+  wrapper；实例 wrapper 调用当前类型自己的同名静态方法。
 - [ ] 来源自身和目标位置可见 `fit` 中的 `@mixable` 静态方法使用相同生成规则。
 - [ ] 生成静态 wrapper 保留 `mixable` 事实；生成实例 wrapper 不保留。
+- [ ] 实例 wrapper 不执行显式成员优先跳过；无条件生成后进入现有成员表，由现有冲突
+  和重载检查决定是否合法。
 - [ ] wrapper 保持泛型参数、普通参数、返回类型、可见性和变参标记。
 - [ ] 变参调用只使用已实现的 `...args`，不得增加 wrapper 专用 codegen。
 
 ### 16.6 TODO 5：冲突、跨包和导出
 
-- [ ] 使用现有规则跳过与目标显式成员冲突的候选。
+- [ ] 使用现有规则跳过与目标显式成员冲突的字段和静态 wrapper 候选，不跳过实例
+  wrapper。
 - [ ] 多来源生成成员之间不设置隐式优先级。
 - [ ] 同包声明与 `.ft` provider 对字段、构造绑定、方法签名和 `mixable` 事实提供一致
   查询结果。
@@ -664,9 +706,9 @@ TODO 开始前通过代码调查确认。
 
 行为复用
   → @mixable 静态方法
-  → 声明类型自身生成实例入口
-  → mix 目标生成静态 wrapper 和实例 wrapper
-  → 静态 wrapper 保留 mixable 事实以支持多层 mix
+  → 每个类型最终保留的 @mixable 静态方法统一派生实例 wrapper
+  → mix 目标只直接生成静态 wrapper
+  → 静态 wrapper 保留 mixable 事实，并在当前层派生实例 wrapper、支持下一层 mix
 ```
 
 该模型不包含继承、类型链、隐藏来源实例、静态字段复制、实例方法提升或动态 `self`
