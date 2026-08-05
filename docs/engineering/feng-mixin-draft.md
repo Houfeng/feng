@@ -315,6 +315,7 @@ type View: Widget {
 
 ```feng
 type View: Widget {
+    @mixable
     static func draw(target: Widget, area: Area): void {
         // 原始方法体
     }
