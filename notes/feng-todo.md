@@ -24,3 +24,10 @@
   - 函数契约 `spec User<T1>()` 、`spec User<T1, T2>()`
   - 联合契约 `spec User<T1, T2>: T1 | T2` 、`spec User<T1, T2, T3>: T1 | T2 | T3`
 - [x] 支持 defer 语句
+- [ ] 支持 spec match 具体类型（spec 的 subject 指针指向描述符，应该能实现）
+      - 注意：具体类型是否满足某个 spec 无运行时信息
+- [ ] spec 向上转换（已有相关草案文档）
+- [ ] 将 try/throw 重构为，error_flag 方案(_Thread_local 或 参数)
+      - throw 改为设置 flag + 短路返回，可能 throw 的函数染色（跨包记录到 ft）
+      - 可能 throw 的函数，要求调用时必采用 try
+      - try one_func(); 无 catch 时自动向上传递
