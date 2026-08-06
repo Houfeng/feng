@@ -71,11 +71,11 @@ workflow 不得自行执行 toolchain 归档、asset 命名、下载、解压或
 
 ### 3.3 最新预构建、失败关闭
 
-CI 固定从当前 GitHub repository 的非 draft Release 中，按发布时间选择最新的
-`toolchain-prebuilt/<version>` tag。该规则中的“最新”只在 `toolchain-prebuilt/`
-命名空间内计算，不得使用 GitHub 仓库级 `latest` 而误选普通 Feng `v*`
-Release。Release、asset 或目录结构任一不匹配时立即失败，不得回退到
-Git LFS 或其他隐式来源。
+CI 固定通过 GitHub matching refs API 枚举当前 repository 中
+`toolchain-prebuilt/` 前缀的 tag，读取对应 Release 的 `publishedAt`，选择发布时间最新的
+tag 并下载其 Release asset。该规则不枚举普通 Feng Release；“最新”只在
+`toolchain-prebuilt/` 命名空间内计算，不得使用 GitHub 仓库级 `latest`。Release、
+asset 或目录结构任一不匹配时立即失败，不得回退到 Git LFS 或其他隐式来源。
 
 ## 4. Prebuilt Release 契约
 
@@ -153,8 +153,8 @@ scripts/toolchain-prebuilt-fetch.sh
 
 脚本职责：
 
-1. 查询当前 repository 的最新 100 个 Release，过滤 draft 和非
-   `toolchain-prebuilt/` tag，按 `published_at` 选择最新一个。
+1. 通过 matching refs API 查询当前 repository 的 `toolchain-prebuilt/` 前缀 tag，
+   读取各 tag 对应 Release 的 `publishedAt` 并选择最新一个。
 2. 根据 tag 推导唯一 asset 名称并下载，不使用仓库级 latest Release。
 3. 在仓库 `build/` 下创建本次调用专用的下载和解包 staging。
 4. 解包前拒绝绝对路径、`..` 路径和非规范顶层目录。
@@ -236,7 +236,8 @@ workflow 发布步骤通过可控替身验证已有 Release 和只有 tag 两种
 
 - 完整 `toolchain/` 目录被恢复。
 - 三套 host LLVM 和全部四套 Linux sysroot 均存在。
-- 没有符合前缀的 Release、缺失 asset 或下载失败时失败。
+- 没有符合前缀的 tag、Release 查询失败、缺失 asset 或下载失败时失败。
+- 普通 Release 数量不影响 Toolchain tag 的发现。
 - 路径穿越、越界符号链接、设备文件和错误顶层目录被拒绝。
 - 最终目录原子替换，失败时不留下部分内容。
 - 仅在 `toolchain-prebuilt/` 命名空间内选择最新 Release，不回退到 Git LFS。

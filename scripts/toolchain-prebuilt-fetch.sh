@@ -37,17 +37,38 @@ verify_inputs() {
   done
 }
 
-# Resolve the most recently published non-draft toolchain prebuilt Release.
+# Resolve the most recently published Release under the prebuilt tag prefix.
 resolve_latest_tag() {
+  local tags
   local tag
+  local published_at
+  local latest_tag=""
+  local latest_published_at=""
 
-  tag="$(
-    gh api "repos/${REPOSITORY}/releases?per_page=100" \
-      --jq 'map(select(.draft == false and (.tag_name | startswith("toolchain-prebuilt/")))) | sort_by(.published_at) | last | .tag_name // ""'
-  )"
-  [[ "${tag}" =~ ^toolchain-prebuilt/[0-9A-Za-z][0-9A-Za-z._-]*$ ]] ||
-    die "no published toolchain prebuilt Release found in ${REPOSITORY}"
-  printf '%s\n' "${tag}"
+  tags="$(
+    gh api \
+      "repos/${REPOSITORY}/git/matching-refs/tags/toolchain-prebuilt/" \
+      --jq '.[] | .ref | select(startswith("refs/tags/toolchain-prebuilt/")) | ltrimstr("refs/tags/")'
+  )" || die "failed to list toolchain prebuilt tags in ${REPOSITORY}"
+  while IFS= read -r tag; do
+    [[ -n "${tag}" ]] || continue
+    [[ "${tag}" =~ ^toolchain-prebuilt/[0-9A-Za-z][0-9A-Za-z._-]*$ ]] ||
+      die "invalid toolchain prebuilt tag returned by GitHub: ${tag}"
+    published_at="$(
+      gh release view "${tag}" \
+        --repo "${REPOSITORY}" \
+        --json=publishedAt \
+        --jq=.publishedAt
+    )" || die "failed to query toolchain prebuilt Release: ${tag}"
+    if [[ -z "${latest_published_at}" ||
+          "${published_at}" > "${latest_published_at}" ]]; then
+      latest_published_at="${published_at}"
+      latest_tag="${tag}"
+    fi
+  done <<< "${tags}"
+  [[ -n "${latest_tag}" ]] ||
+    die "no toolchain prebuilt tag found in ${REPOSITORY}"
+  printf '%s\n' "${latest_tag}"
 }
 
 # Download the unique asset derived from the selected prebuilt tag.

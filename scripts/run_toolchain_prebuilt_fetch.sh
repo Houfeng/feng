@@ -7,6 +7,9 @@ WORK_ROOT=""
 FIXTURE_ROOT=""
 MOCK_BIN=""
 MOCK_LOG=""
+TEST_VERSION="latest"
+TEST_TAG="toolchain-prebuilt/${TEST_VERSION}"
+OLDER_TAG="toolchain-prebuilt/older"
 
 # Report one fatal toolchain-prebuilt fetch regression failure.
 die() {
@@ -75,28 +78,50 @@ set -euo pipefail
 printf '%s\n' "$*" >> "${MOCK_GH_LOG}"
 case "${1:-}" in
   api)
-    printf '%s\n' "${MOCK_RELEASE_TAG:-}"
+    [[ "${2:-}" == \
+      "repos/Houfeng/feng/git/matching-refs/tags/toolchain-prebuilt/" ]] ||
+      exit 2
+    printf '%s\n' "${MOCK_OLDER_TAG:-}" "${MOCK_RELEASE_TAG:-}"
     ;;
   release)
-    [[ "${2:-}" == "download" ]] || exit 2
-    directory=""
-    pattern=""
-    shift 3
-    while [[ "$#" -gt 0 ]]; do
-      case "$1" in
-        --dir)
+    case "${2:-}" in
+      view)
+        case "${3:-}" in
+          "${MOCK_OLDER_TAG:-}")
+            printf '%s\n' "${MOCK_OLDER_PUBLISHED_AT}"
+            ;;
+          "${MOCK_RELEASE_TAG:-}")
+            printf '%s\n' "${MOCK_RELEASE_PUBLISHED_AT}"
+            ;;
+          *)
+            exit 2
+            ;;
+        esac
+        ;;
+      download)
+        directory=""
+        pattern=""
+        shift 3
+        while [[ "$#" -gt 0 ]]; do
+          case "$1" in
+            --dir)
+              shift
+              directory="$1"
+              ;;
+            --pattern)
+              shift
+              pattern="$1"
+              ;;
+          esac
           shift
-          directory="$1"
-          ;;
-        --pattern)
-          shift
-          pattern="$1"
-          ;;
-      esac
-      shift
-    done
-    [[ -n "${directory}" && -n "${pattern}" ]]
-    cp "${MOCK_RELEASE_ARCHIVE}" "${directory}/${pattern}"
+        done
+        [[ -n "${directory}" && -n "${pattern}" ]]
+        cp "${MOCK_RELEASE_ARCHIVE}" "${directory}/${pattern}"
+        ;;
+      *)
+        exit 2
+        ;;
+    esac
     ;;
   *)
     exit 2
@@ -113,7 +138,10 @@ run_fetch() {
     GH_TOKEN=test-token \
     GITHUB_REPOSITORY=Houfeng/feng \
     MOCK_GH_LOG="${MOCK_LOG}" \
-    MOCK_RELEASE_TAG="${MOCK_RELEASE_TAG-toolchain-prebuilt/20260806}" \
+    MOCK_OLDER_TAG="${MOCK_OLDER_TAG-${OLDER_TAG}}" \
+    MOCK_OLDER_PUBLISHED_AT=2026-01-01T00:00:00Z \
+    MOCK_RELEASE_TAG="${MOCK_RELEASE_TAG-${TEST_TAG}}" \
+    MOCK_RELEASE_PUBLISHED_AT=2026-01-02T00:00:00Z \
     MOCK_RELEASE_ARCHIVE="${MOCK_RELEASE_ARCHIVE}" \
     "${FIXTURE_ROOT}/scripts/toolchain-prebuilt-fetch.sh"
 }
@@ -129,14 +157,14 @@ cp "${SCRIPT_DIR}/toolchain-prebuilt-fetch.sh" "${FIXTURE_ROOT}/scripts/"
 create_mock_gh "${MOCK_BIN}/gh"
 
 VALID_SOURCE="${WORK_ROOT}/valid-source"
-VALID_ARCHIVE="${WORK_ROOT}/toolchain-prebuilt-20260806.tar.gz"
+VALID_ARCHIVE="${WORK_ROOT}/toolchain-prebuilt-${TEST_VERSION}.tar.gz"
 mkdir -p "${VALID_SOURCE}"
 create_toolchain "${VALID_SOURCE}"
 create_archive "${VALID_SOURCE}" "${VALID_ARCHIVE}"
 reset_fixture_project
 MOCK_RELEASE_ARCHIVE="${VALID_ARCHIVE}"
 FETCH_OUTPUT="$(run_fetch)"
-[[ "${FETCH_OUTPUT}" == *"Restored toolchain-prebuilt/20260806"* ]] ||
+[[ "${FETCH_OUTPUT}" == *"Restored ${TEST_TAG}"* ]] ||
   die "fetch script did not report the selected prebuilt tag"
 [[ ! -e "${FIXTURE_ROOT}/toolchain/original-marker" ]] ||
   die "fetch script did not replace the checkout toolchain"
@@ -144,11 +172,17 @@ FETCH_OUTPUT="$(run_fetch)"
   die "fetch script did not restore the host LLVM layout"
 [[ "$(readlink "${FIXTURE_ROOT}/toolchain/llvm/linux-x64-gnu/bin/llvm-ranlib")" == "llvm-ar" ]] ||
   die "fetch script did not preserve internal symbolic links"
-grep -Fq 'api repos/Houfeng/feng/releases?per_page=100' "${MOCK_LOG}" ||
-  die "fetch script did not query repository releases"
-grep -Fq 'release download toolchain-prebuilt/20260806' "${MOCK_LOG}" ||
+grep -Fq \
+  'api repos/Houfeng/feng/git/matching-refs/tags/toolchain-prebuilt/' \
+  "${MOCK_LOG}" ||
+  die "fetch script did not query matching toolchain prebuilt tags"
+grep -Fq "release view ${OLDER_TAG}" "${MOCK_LOG}" ||
+  die "fetch script did not query the older matching Release"
+grep -Fq "release view ${TEST_TAG}" "${MOCK_LOG}" ||
+  die "fetch script did not query the latest matching Release"
+grep -Fq "release download ${TEST_TAG}" "${MOCK_LOG}" ||
   die "fetch script did not download the selected prebuilt release"
-grep -Fq -- '--pattern toolchain-prebuilt-20260806.tar.gz' "${MOCK_LOG}" ||
+grep -Fq -- "--pattern toolchain-prebuilt-${TEST_VERSION}.tar.gz" "${MOCK_LOG}" ||
   die "fetch script did not request the derived asset name"
 
 INCOMPLETE_SOURCE="${WORK_ROOT}/incomplete-source"
@@ -181,6 +215,7 @@ fi
 
 reset_fixture_project
 MOCK_RELEASE_ARCHIVE="${VALID_ARCHIVE}"
+MOCK_OLDER_TAG=""
 MOCK_RELEASE_TAG=""
 if run_fetch >/dev/null 2>&1; then
   die "fetch script accepted a missing toolchain prebuilt release"
@@ -189,7 +224,8 @@ fi
   die "missing release changed the checkout toolchain"
 
 reset_fixture_project
-MOCK_RELEASE_TAG="toolchain-prebuilt/20260806"
+MOCK_OLDER_TAG="${OLDER_TAG}"
+MOCK_RELEASE_TAG="${TEST_TAG}"
 MOCK_RELEASE_ARCHIVE="${WORK_ROOT}/missing-asset.tar.gz"
 if run_fetch >/dev/null 2>&1; then
   die "fetch script accepted a missing toolchain prebuilt asset"
