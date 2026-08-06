@@ -547,7 +547,7 @@ svg {
 
 .hero__traits {
   align-self: end;
-  padding-bottom: 5px;
+  padding-bottom: 20px;
 }
 
 .hero__traits ul {
@@ -556,6 +556,7 @@ svg {
   margin: 0;
   padding: 0;
   border-top: 1px solid var(--line);
+  background: var(--page);
   list-style: none;
 }
 
