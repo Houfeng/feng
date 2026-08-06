@@ -32,7 +32,7 @@
   background-image: none;
 }
 
-.docs-page .docs-header .site-nav > a[aria-current="page"] {
+.docs-page .docs-header .site-nav--desktop > a[aria-current="page"] {
   color: var(--ink);
 }
 

@@ -1278,6 +1278,10 @@ svg {
     font-size: clamp(2rem, 9.8vw, 3.15rem);
   }
 
+  :is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"], [lang="ru"], [lang="de"], [lang="fr"]) .hero h1 span {
+    white-space: normal;
+  }
+
   .hero__lead {
     margin-top: 30px;
     font-size: 1rem;
