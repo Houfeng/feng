@@ -19,23 +19,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Install publication dependencies
-        run: >-
-          sudo apt-get update &&
-          sudo apt-get install -y --no-install-recommends
-          ca-certificates file git-lfs gzip jq
-
       - name: Checkout with toolchain assets
         uses: actions/checkout@v6
         with:
           lfs: true
 
-      - name: Publish immutable toolchain prebuilt
+      - name: Publish toolchain prebuilt
         env:
           GH_TOKEN: ${{ github.token }}
-          REPOSITORY: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-        run: >-
-          scripts/toolchain-prebuilt-publish.sh
-          --repository="${REPOSITORY}"
-          --tag="${TAG}"
+          GH_REPO: ${{ github.repository }}
+        run: scripts/toolchain-prebuilt-publish.sh

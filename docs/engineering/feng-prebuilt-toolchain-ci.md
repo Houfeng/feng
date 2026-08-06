@@ -19,8 +19,8 @@
 
 ### 2.1 本次范围
 
-- 新增一个独立的预构建发布脚本，将仓库 `toolchain/` 发布为固定、不可变的
-  GitHub Release assets。
+- 新增一个独立的预构建发布脚本，将仓库 `toolchain/` 压缩并发布为一个
+  GitHub Release asset。
 - 新增一个独立的预构建拉取脚本，根据版本锁下载、校验并恢复 CI 所需的
   `toolchain/` 目录。
 - 新增独立的预构建发布 workflow，由 `toolchain-prebuilt/` 前缀 tag 触发。
@@ -66,14 +66,13 @@ workflow 负责：
 - 调用预构建发布或拉取脚本；
 - 调用现有构建、测试和发行入口。
 
-workflow 不得自行执行 toolchain 归档、Release 状态处理、asset 命名、摘要计算、
-下载重试、压缩包校验或目录安装。
+workflow 不得自行执行 toolchain 归档、asset 命名、下载、解压或目录安装。
 
 ### 3.3 固定版本、失败关闭
 
 CI 必须使用版本锁中的固定 repository、固定 `toolchain-prebuilt/<version>` tag、固定 asset
-名称和固定 SHA-256，不使用 `latest`、浮动 tag 或未校验下载。Release、asset、摘要、
-目录结构或平台校验任一不匹配时立即失败，不得回退到 Git LFS 或其他隐式来源。
+名称和固定 SHA-256，不使用 `latest`、浮动 tag 或未校验下载。Release、asset、摘要或
+目录结构任一不匹配时立即失败，不得回退到 Git LFS 或其他隐式来源。
 
 ## 4. Prebuilt Release 契约
 
@@ -99,44 +98,16 @@ tag 必须指向包含待发布 `toolchain/` 完整内容的确定 commit。发�
 
 ### 4.2 Assets
 
-一个 prebuilt Release 固定包含：
+一个 prebuilt Release 固定包含一个 asset：
 
 ```text
-feng-llvm-macos-arm64.tar.gz
-feng-llvm-linux-x64-gnu.tar.gz
-feng-llvm-linux-arm64-gnu.tar.gz
-feng-sysroot-linux-all.tar.gz
-manifest.json
-SHA256SUMS
+toolchain-prebuilt-<version>.tar.gz
 ```
 
-三份 LLVM asset 分别对应一个 host 平台。sysroot asset 包含主规范定义的全部四套
-Linux sysroot：
+归档包含完整的 `toolchain/` 目录，包括三套 host LLVM 和全部四套 Linux sysroot。
+归档必须保留普通文件权限、可执行位、符号链接和 `toolchain/` 内部相对布局。
 
-```text
-linux-x64-gnu
-linux-x64-musl
-linux-arm64-gnu
-linux-arm64-musl
-```
-
-sysroot 只作为一份公共 asset 发布，最终组装时放入每一份 host 发行包，以保留完整
-交叉编译能力。每个 asset 必须小于 GitHub Release 的单文件大小上限。
-
-归档必须保留普通文件权限、可执行位和符号链接，不得解引用符号链接或改变 toolchain
-内部相对布局。每个归档只能包含一个规范顶层目录，不得包含绝对路径、`..` 路径、
-设备文件或其他不安全成员。
-
-### 4.3 Manifest 与版本锁
-
-`manifest.json` 至少记录：
-
-- prebuilt tag；
-- 来源 commit SHA；
-- LLVM 版本；
-- 三个 host 平台；
-- 四个 sysroot 平台；
-- 每个 asset 的名称、字节数和 SHA-256。
+### 4.3 版本锁
 
 仓库根目录新增普通 Git 文件：
 
@@ -144,77 +115,61 @@ sysroot 只作为一份公共 asset 发布，最终组装时放入每一份 host
 toolchain-prebuilt.lock
 ```
 
-版本锁至少记录 Release repository、完整 tag、asset 名称和 SHA-256。发布脚本可以在
-`build/` 下生成待审核的版本锁候选文件，但不得自动修改、暂存或提交仓库中的版本锁。
+版本锁至少记录 Release repository、完整 tag、asset 名称和 SHA-256。版本锁由开发者
+在预构建发布成功后更新；发布脚本不得修改、暂存或提交版本锁。
 
-### 4.4 不可变性
+### 4.4 发布规则
 
-仓库必须启用 GitHub immutable releases。发布脚本先创建 draft Release，全部 asset
-上传并验证成功后再发布；发布后必须确认 Release 为 immutable。已存在同名 Release
-或任一同名 asset 时必须失败，不得覆盖、替换或追加。
+发布脚本创建普通 GitHub Release，并在创建时上传归档。已存在同名 Release 时由
+GitHub CLI 直接失败；脚本不得查询或修改仓库级 Release 设置，不得覆盖已有 Release
+或 asset。
 
 ## 5. 预构建发布脚本
 
 唯一入口：
 
 ```text
-scripts/toolchain-prebuilt-publish.sh \
-  --repository=<owner/repository> \
-  --tag=<toolchain-prebuilt-tag>
+scripts/toolchain-prebuilt-publish.sh
 ```
 
-脚本使用仓库根目录和 `toolchain/` 的规范位置，不依赖调用者当前工作目录。首版不接受
-自定义 asset 名称、平台集合或目录布局，避免 workflow 与脚本共同定义发布契约。
+脚本从 GitHub Actions 提供的 `GH_REPO` 和 `GITHUB_REF_NAME` 读取 repository 与 tag，
+使用仓库根目录和 `toolchain/` 的规范位置，不接受命令行参数，也不依赖调用者当前工作
+目录。
 
 脚本职责：
 
-1. 校验参数只指定一次且 tag 符合 `toolchain-prebuilt/<version>`。
-2. 校验 tag 与当前 checkout commit 的关系，拒绝发布其他 commit 的内容。
-3. 确认 `toolchain/` 中不存在未物化的 Git LFS pointer。
-4. 校验三套 host LLVM 和四套 Linux sysroot 的完整性、平台与必要工具。
-5. 在仓库 `build/` 下创建本次调用专用 staging，不在 `/tmp` 或 `/private/tmp` 中
-   生成并执行产物。
-6. 生成四份安全、可复现的归档以及 `manifest.json`、`SHA256SUMS`。
-7. 重新读取归档，校验成员、权限、符号链接、摘要和大小。
-8. 确认目标 Release 不存在，创建 draft Release 并上传全部 assets。
-9. 校验远端 assets 的名称、大小和摘要，发布 Release。
-10. 确认 Release 为 immutable，输出版本锁候选文件路径。
+1. 校验 repository、tag 上下文以及 `toolchain/` 目录存在。
+2. 在仓库 `build/` 下创建本次调用专用 staging。
+3. 将完整 `toolchain/` 目录压缩为固定名称的单个归档。
+4. 使用 `gh release create` 创建普通 Release，并同时上传归档。
 
-任何准备、归档、校验、上传或发布失败都必须返回非零状态。脚本不得修改
-`toolchain/`、版本锁、Git index、tag 或 commit。
+任何准备、归档、上传或发布失败都必须返回非零状态。脚本不得修改 `toolchain/`、
+版本锁、Git index、tag 或 commit，也不得执行与归档发布无关的远端配置查询或校验。
 
 ## 6. 预构建拉取脚本
 
 唯一入口：
 
 ```text
-scripts/toolchain-prebuilt-fetch.sh \
-  [--host-platform=<host-platform>]... \
-  [--with-sysroots]
+scripts/toolchain-prebuilt-fetch.sh
 ```
 
-`--host-platform` 可重复，取值由主规范的平台矩阵约束。至少指定一个 host 平台或
-指定 `--with-sysroots`。脚本固定读取仓库根目录的 `toolchain-prebuilt.lock`，不允许
-workflow 覆盖 repository、tag、asset 名称或摘要。
+脚本固定读取仓库根目录的 `toolchain-prebuilt.lock`，不允许 workflow 覆盖 repository、
+tag、asset 名称或摘要。
 
 脚本职责：
 
 1. 严格解析并校验版本锁。
-2. 根据参数计算唯一、确定的 asset 集合。
-3. 下载固定 Release 的固定 assets，不查询或使用 latest Release。
+2. 下载固定 Release 的固定 asset，不查询或使用 latest Release。
 4. 在仓库 `build/` 下创建本次调用专用的下载和解包 staging。
 5. 校验下载文件大小和 SHA-256 后再解包。
 6. 拒绝绝对路径、`..` 路径、越界符号链接、设备文件和非规范顶层目录。
-7. 校验每套 LLVM 的 host 平台、必要工具、权限和布局。
-8. 指定 `--with-sysroots` 时，校验全部四套 Linux sysroot，禁止只恢复当前 host
-   架构的 sysroot。
-9. 全部输入通过后，将所请求内容原子安装到对应 `toolchain/llvm/<host-platform>/`
-   和 `toolchain/sysroot/`。
-10. 清理 staging 并输出恢复的 prebuilt tag 与平台集合。
+7. 校验完整 `toolchain/` 布局。
+8. 全部输入通过后原子恢复完整 `toolchain/` 目录。
+9. 清理 staging 并输出恢复的 prebuilt tag。
 
-脚本只允许替换参数明确选择的规范子目录，不得删除整个仓库根目录、未选择的平台或
-其他开发者文件。失败时不得留下部分恢复的最终目录；若替换已开始，必须恢复调用前
-目录或保持完整的新目录。
+脚本不得删除仓库根目录或其他开发者文件。失败时不得留下部分恢复的最终目录；若
+替换已开始，必须恢复调用前目录或保持完整的新目录。
 
 ## 7. Workflow 接线
 
@@ -232,8 +187,7 @@ on:
 该 workflow 只包含一个发布 Job：
 
 1. 以 `lfs: true` checkout tag 指向的 commit。
-2. 准备 Git LFS、归档工具、GitHub CLI 和 CA 证书等传输依赖。
-3. 以最小 `contents: write` 权限调用 `scripts/toolchain-prebuilt-publish.sh`。
+2. 以最小 `contents: write` 权限调用 `scripts/toolchain-prebuilt-publish.sh`。
 
 创建 GitHub Release 及上传 assets 的逻辑不得展开在 YAML 中。创建 Release 不再创建
 新 tag，因此不会递归触发该 workflow。
@@ -249,16 +203,6 @@ checkout（lfs: false）
   -> 调用原有入口
 ```
 
-目标参数如下：
-
-| Job | `--host-platform` | `--with-sysroots` | 后续入口 |
-|-----|-------------------|-------------------|----------|
-| `component_macos` | `macos-arm64` | 否 | `make test`、`release_component.sh` |
-| `component_linux` x64 | `linux-x64-gnu` | 是 | `make test`、`release_component.sh` |
-| `component_linux` arm64 | `linux-arm64-gnu` | 是 | `make test`、`release_component.sh` |
-| `bundled_packages` | `linux-x64-gnu` | 是 | `release_bundled_packages.sh` |
-| `assemble` | 三个 host 平台 | 是 | `release_assemble.sh` |
-
 `prepare`、`finalize_macos`、`verify_macos`、`verify_linux` 和 `publish` 不直接读取仓库
 toolchain，因此不调用拉取脚本。
 
@@ -268,13 +212,12 @@ toolchain，因此不调用拉取脚本。
 ## 8. 错误处理与安全要求
 
 - tag、Release、asset 或版本锁缺失时失败。
-- Release 可变、来源 commit 不匹配或存在额外/重复 asset 时失败。
-- 网络失败允许有限重试，但摘要或内容校验失败不得重试为其他来源。
+- 摘要或内容校验失败时不得重试为其他来源。
 - 下载凭证不得写入日志、归档、版本锁或最终 toolchain。
 - 公共仓库下载仍须使用固定 HTTPS 地址并校验证书。
 - GitHub token 只授予对应 Job 所需的最小权限。
-- 发布和拉取脚本中的所有函数均按项目要求添加职责注释；关键校验必须有必要的内部
-  注释，不得把复杂 shell 逻辑复制到 workflow。
+- 发布和拉取脚本中的所有函数均按项目要求添加职责注释，不得把 shell 逻辑复制到
+  workflow。
 - 不增加 compiler 或 runtime 开销，不改变运行时行为。
 
 ## 9. 测试与验收
@@ -282,20 +225,17 @@ toolchain，因此不调用拉取脚本。
 ### 9.1 发布脚本专项测试
 
 - 非 `toolchain-prebuilt/` tag 被拒绝。
-- 缺少 LLVM、sysroot、必要工具或已物化文件时被拒绝。
-- 归档保留可执行位与符号链接。
-- 不安全归档成员被拒绝。
-- manifest、SHA256SUMS、asset 大小和平台集合正确。
-- Release 已存在、asset 重名、上传失败或 Release 非 immutable 时失败。
-- 失败后不修改源码 toolchain、版本锁、Git index 或现有 Release。
+- 缺少 `toolchain/` 目录时失败。
+- 归档包含完整 `toolchain/`，并保留可执行位与符号链接。
+- Release 创建或上传失败时失败。
+- 失败后不修改源码 toolchain、版本锁、Git index、tag、commit 或现有 Release。
 
 外部 GitHub 状态通过可控替身验证，专项测试不得创建真实 Release。
 
 ### 9.2 拉取脚本专项测试
 
-- 单个和多个 host 平台选择正确。
-- `--with-sysroots` 恢复且只恢复一份完整的四平台 sysroot 集合。
-- 未知平台、重复或冲突参数被拒绝。
+- 完整 `toolchain/` 目录被恢复。
+- 三套 host LLVM 和全部四套 Linux sysroot 均存在。
 - 缺失 asset、下载失败、大小不符和 SHA-256 不符时失败。
 - 路径穿越、越界符号链接、设备文件和错误顶层目录被拒绝。
 - 最终目录原子替换，失败时不留下部分内容。
@@ -303,7 +243,7 @@ toolchain，因此不调用拉取脚本。
 
 ### 9.3 集成验收
 
-1. 发布首个 `toolchain-prebuilt/<version>` Release，并确认 immutable 和全部摘要。
+1. 发布首个 `toolchain-prebuilt/<version>` Release，并确认归档可下载和解压。
 2. 在三个原生 host 分别从空的已物化 toolchain 状态执行拉取脚本。
 3. 比较恢复内容与 tag 对应 Git LFS toolchain，确认目录、文件、权限、符号链接和
    SHA-256 一致。
@@ -321,8 +261,8 @@ toolchain，因此不调用拉取脚本。
 2. 实现并专项测试 `scripts/toolchain-prebuilt-publish.sh`。
 3. 实现并专项测试 `scripts/toolchain-prebuilt-fetch.sh`。
 4. 临时恢复 Git LFS 访问，或在持有完整 LFS 对象的受信开发环境准备首版 assets。
-5. 创建首个 `toolchain-prebuilt/<version>` tag，由独立 workflow 发布 immutable Release。
-6. 人工审核发布脚本生成的版本锁候选，并提交 `toolchain-prebuilt.lock`。
+5. 创建首个 `toolchain-prebuilt/<version>` tag，由独立 workflow 发布普通 Release。
+6. 根据已发布归档更新并提交 `toolchain-prebuilt.lock`。
 7. 修改现有 CI/Release workflow：checkout 使用 `lfs: false`，随后调用拉取脚本。
 8. 完成三个 host 的全量回归和一次完整试发。
 9. 确认一段稳定运行期内普通 CI、试发和正式发布均不再消耗 Git LFS 下载带宽。
@@ -347,8 +287,8 @@ GitHub 远端 LFS 对象不会因删除工作树文件、tag、commit 或本地�
 
 ## 12. 完成标准
 
-- `toolchain-prebuilt/**` tag 可通过单一脚本发布固定、完整、不可变的 Release。
-- CI 可通过单一脚本恢复所需 host LLVM 和完整 sysroot。
+- `toolchain-prebuilt/**` tag 可通过单一脚本发布包含完整 `toolchain/` 的 Release。
+- CI 可通过单一脚本恢复完整 `toolchain/`。
 - workflow 中不存在归档、下载、摘要校验或目录安装实现。
 - 现有构建、测试和发行脚本不包含 prebuilt 概念且接口不变。
 - 三份最终发行包的结构和交叉编译能力与主规范一致。
