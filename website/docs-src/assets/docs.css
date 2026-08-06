@@ -29,6 +29,7 @@
 
 .docs-page {
   overflow: visible;
+  background-image: none;
 }
 
 .docs-page .docs-header .site-nav > a[aria-current="page"] {
