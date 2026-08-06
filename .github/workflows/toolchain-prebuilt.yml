@@ -1,0 +1,41 @@
+name: Publish toolchain prebuilt
+
+on:
+  push:
+    tags:
+      - "toolchain-prebuilt/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: toolchain-prebuilt-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish toolchain prebuilt
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Install publication dependencies
+        run: >-
+          sudo apt-get update &&
+          sudo apt-get install -y --no-install-recommends
+          ca-certificates file git-lfs gzip jq
+
+      - name: Checkout with toolchain assets
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Publish immutable toolchain prebuilt
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: >-
+          scripts/toolchain-prebuilt-publish.sh
+          --repository="${REPOSITORY}"
+          --tag="${TAG}"
