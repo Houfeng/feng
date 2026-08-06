@@ -1326,7 +1326,7 @@ svg {
   }
 
   .install-panel__footer {
-    padding: 23px 22px 27px;
+    padding: 23px 16px 27px;
   }
 
   .platform-list {
@@ -1335,8 +1335,20 @@ svg {
     gap: 11px 16px;
   }
 
-  .platform-list li:first-child {
-    grid-column: 1 / -1;
+  .platform-list li {
+    position: relative;
+    min-width: 0;
+    display: block;
+    padding-left: 17px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .platform-list li span {
+    position: absolute;
+    top: 50%;
+    left: 3px;
+    transform: translateY(-50%);
   }
 
   .language-section__inner {
