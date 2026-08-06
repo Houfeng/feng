@@ -496,7 +496,7 @@ svg {
   padding-bottom: clamp(20px, 1.8vw, 24px);
 }
 
-:is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"]) .hero {
+:is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"], [lang="ru"], [lang="de"], [lang="fr"]) .hero {
   padding-top: clamp(70px, 7.5vw, 96px);
 }
 
@@ -519,13 +519,13 @@ svg {
   white-space: nowrap;
 }
 
-:is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"]) .hero h1 {
+:is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"], [lang="ru"], [lang="de"], [lang="fr"]) .hero h1 {
   font-size: clamp(3.5rem, 5.8vw, 5.4rem);
   letter-spacing: 0;
   line-height: 1;
 }
 
-:is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"]) .hero h1 span:first-child {
+:is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"], [lang="ru"], [lang="de"], [lang="fr"]) .hero h1 span:first-child {
   text-transform: uppercase;
 }
 
@@ -1263,7 +1263,7 @@ svg {
     padding-bottom: 20px;
   }
 
-  :is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"]) .hero {
+  :is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"], [lang="ru"], [lang="de"], [lang="fr"]) .hero {
     padding-top: 44px;
   }
 
@@ -1272,7 +1272,7 @@ svg {
     letter-spacing: -0.075em;
   }
 
-  :is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"]) .hero h1 {
+  :is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"], [lang="ru"], [lang="de"], [lang="fr"]) .hero h1 {
     font-size: clamp(2rem, 9.8vw, 3.15rem);
   }
 

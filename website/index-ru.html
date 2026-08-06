@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Feng é uma linguagem de programação de tipagem estática para desenvolvedores e IA. Sua sintaxe concisa, contratos explícitos, gerenciamento automático de memória e interoperabilidade com C tornam o código claro e confiável.">
+  <meta name="description" content="Feng — статически типизированный язык программирования для разработчиков и ИИ. Лаконичный синтаксис, явные контракты, автоматическое управление памятью и совместимость с C делают код понятным и надёжным.">
   <meta name="theme-color" content="#f7f8f5" data-theme-color>
   <meta property="og:type" content="website">
-  <meta property="og:title" content="Feng — Clareza por design">
-  <meta property="og:description" content="Uma linguagem de programação de tipagem estática para desenvolvedores e IA.">
-  <title>Linguagem de programação Feng</title>
+  <meta property="og:title" content="Feng — Ясность в основе">
+  <meta property="og:description" content="Статически типизированный язык программирования для разработчиков и ИИ.">
+  <title>Язык программирования Feng</title>
   <script>
     try {
       const savedTheme = localStorage.getItem('feng-theme');
@@ -29,107 +29,107 @@
   <script defer src="app.js"></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Ir para o conteúdo principal</a>
+  <a class="skip-link" href="#main">Перейти к основному содержанию</a>
 
   <header class="site-header">
     <div class="shell site-header__inner">
-      <a class="brand" href="#top" aria-label="Página inicial do Feng">
+      <a class="brand" href="#top" aria-label="Главная Feng">
         <span class="brand__mark" aria-hidden="true">F</span>
         <span class="brand__name">Feng</span>
       </a>
 
-      <nav class="site-nav site-nav--desktop" aria-label="Navegação principal">
-        <a href="#install">Instalar</a>
-        <a href="/docs/en/">Documentação</a>
-        <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">Extensão</a>
-        <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Código aberto</a>
+      <nav class="site-nav site-nav--desktop" aria-label="Основная навигация">
+        <a href="#install">Установка</a>
+        <a href="/docs/en/">Документация</a>
+        <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">Расширение</a>
+        <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Исходный код</a>
         <div class="nav-settings">
           <details class="language-menu" data-language-menu>
-            <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="Escolher idioma" title="Escolher idioma">
+            <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="Выбрать язык" title="Выбрать язык">
               <svg class="language-menu__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="9"></circle>
                 <path d="M3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18"></path>
               </svg>
-              <span class="language-menu__label" aria-hidden="true">Idioma</span>
+              <span class="language-menu__label" aria-hidden="true">Язык</span>
               <svg class="language-menu__chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <path d="m7 10 5 5 5-5"></path>
               </svg>
             </summary>
-            <ul class="language-menu__popover" aria-label="Idioma">
+            <ul class="language-menu__popover" aria-label="Язык">
               <li><a class="language-menu__option" href="index.html"><span>English</span></a></li>
               <li><a class="language-menu__option" href="index-zh.html"><span>简体中文</span></a></li>
               <li><a class="language-menu__option" href="index-es.html"><span>Español</span></a></li>
-              <li><span class="language-menu__option" aria-current="page"><span>Português</span><span class="language-menu__state">Atual</span></span></li>
+              <li><a class="language-menu__option" href="index-pt-br.html"><span>Português</span></a></li>
               <li><a class="language-menu__option" href="index-ja.html"><span>日本語</span></a></li>
-              <li><a class="language-menu__option" href="index-ru.html"><span>Русский</span></a></li>
+              <li><span class="language-menu__option" aria-current="page"><span>Русский</span><span class="language-menu__state">Текущий</span></span></li>
               <li><a class="language-menu__option" href="index-de.html"><span>Deutsch</span></a></li>
               <li><a class="language-menu__option" href="index-fr.html"><span>Français</span></a></li>
             </ul>
           </details>
-          <div class="theme-switch" role="group" aria-label="Modo de cor">
-            <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="Usar modo claro" aria-pressed="false" title="Usar modo claro">
+          <div class="theme-switch" role="group" aria-label="Цветовая тема">
+            <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="Использовать светлую тему" aria-pressed="false" title="Использовать светлую тему">
               <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="3.5"></circle>
                 <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
               </svg>
-              <span class="theme-switch__label" aria-hidden="true">Claro</span>
+              <span class="theme-switch__label" aria-hidden="true">Светлая</span>
             </button>
-            <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="Usar modo escuro" aria-pressed="false" title="Usar modo escuro">
+            <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="Использовать тёмную тему" aria-pressed="false" title="Использовать тёмную тему">
               <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
               </svg>
-              <span class="theme-switch__label" aria-hidden="true">Escuro</span>
+              <span class="theme-switch__label" aria-hidden="true">Тёмная</span>
             </button>
           </div>
         </div>
       </nav>
 
       <details class="site-menu" data-site-menu>
-        <summary class="site-menu__trigger" aria-label="Alternar menu de navegação">
-          <span class="visually-hidden">Alternar menu de navegação</span>
+        <summary class="site-menu__trigger" aria-label="Открыть или закрыть меню навигации">
+          <span class="visually-hidden">Открыть или закрыть меню навигации</span>
           <span class="site-menu__lines" aria-hidden="true"></span>
         </summary>
-        <nav class="site-nav site-nav--mobile" aria-label="Navegação móvel">
-          <a href="#install">Instalar</a>
-          <a href="/docs/en/">Documentação</a>
-          <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">Extensão</a>
-          <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Código aberto</a>
+        <nav class="site-nav site-nav--mobile" aria-label="Мобильная навигация">
+          <a href="#install">Установка</a>
+          <a href="/docs/en/">Документация</a>
+          <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">Расширение</a>
+          <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Исходный код</a>
           <div class="nav-settings">
             <details class="language-menu" data-language-menu>
-              <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="Escolher idioma" title="Escolher idioma">
+              <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="Выбрать язык" title="Выбрать язык">
                 <svg class="language-menu__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="9"></circle>
                   <path d="M3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18"></path>
                 </svg>
-                <span class="language-menu__label" aria-hidden="true">Idioma</span>
+                <span class="language-menu__label" aria-hidden="true">Язык</span>
                 <svg class="language-menu__chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <path d="m7 10 5 5 5-5"></path>
                 </svg>
               </summary>
-              <ul class="language-menu__popover" aria-label="Idioma">
+              <ul class="language-menu__popover" aria-label="Язык">
                 <li><a class="language-menu__option" href="index.html"><span>English</span></a></li>
                 <li><a class="language-menu__option" href="index-zh.html"><span>简体中文</span></a></li>
                 <li><a class="language-menu__option" href="index-es.html"><span>Español</span></a></li>
-                <li><span class="language-menu__option" aria-current="page"><span>Português</span><span class="language-menu__state">Atual</span></span></li>
+                <li><a class="language-menu__option" href="index-pt-br.html"><span>Português</span></a></li>
                 <li><a class="language-menu__option" href="index-ja.html"><span>日本語</span></a></li>
-                <li><a class="language-menu__option" href="index-ru.html"><span>Русский</span></a></li>
+                <li><span class="language-menu__option" aria-current="page"><span>Русский</span><span class="language-menu__state">Текущий</span></span></li>
                 <li><a class="language-menu__option" href="index-de.html"><span>Deutsch</span></a></li>
                 <li><a class="language-menu__option" href="index-fr.html"><span>Français</span></a></li>
               </ul>
             </details>
-            <div class="theme-switch" role="group" aria-label="Modo de cor">
-              <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="Usar modo claro" aria-pressed="false" title="Usar modo claro">
+            <div class="theme-switch" role="group" aria-label="Цветовая тема">
+              <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="Использовать светлую тему" aria-pressed="false" title="Использовать светлую тему">
                 <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="3.5"></circle>
                   <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
                 </svg>
-                <span class="theme-switch__label" aria-hidden="true">Claro</span>
+                <span class="theme-switch__label" aria-hidden="true">Светлая</span>
               </button>
-              <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="Usar modo escuro" aria-pressed="false" title="Usar modo escuro">
+              <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="Использовать тёмную тему" aria-pressed="false" title="Использовать тёмную тему">
                 <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
                 </svg>
-                <span class="theme-switch__label" aria-hidden="true">Escuro</span>
+                <span class="theme-switch__label" aria-hidden="true">Тёмная</span>
               </button>
             </div>
           </div>
@@ -141,43 +141,43 @@
   <main id="main">
     <section class="hero shell" id="top" aria-labelledby="hero-title">
       <div class="hero__intro">
-        <h1 id="hero-title"><span>Feng,</span><span>Clareza por design</span></h1>
-        <p class="hero__lead">Feng ajuda desenvolvedores e IA a escrever código claro, confiável e fácil de manter</p>
+        <h1 id="hero-title"><span>Feng,</span><span>Ясность в основе</span></h1>
+        <p class="hero__lead">Feng помогает разработчикам и ИИ писать понятный, надёжный и удобный в сопровождении код</p>
       </div>
 
       <div class="hero__traits">
-        <ul aria-label="Recursos do Feng">
-          <li>Amigável à IA</li>
-          <li>Contratos explícitos</li>
-          <li>Tipagem estática</li>
-          <li>Memória gerenciada</li>
-          <li>Compilada</li>
-          <li>Multiplataforma</li>
+        <ul aria-label="Особенности Feng">
+          <li>Для разработчиков и ИИ</li>
+          <li>Явные контракты</li>
+          <li>Статическая типизация</li>
+          <li>Управляемая память</li>
+          <li>Компилируемый</li>
+          <li>Кроссплатформенный</li>
         </ul>
       </div>
 
       <section class="install-panel" id="install" data-command aria-labelledby="install-title">
         <header class="install-panel__header">
-          <h2 id="install-title">Instalação rápida</h2>
-          <p>Copie o comando e execute-o no terminal</p>
+          <h2 id="install-title">Быстрая установка</h2>
+          <p>Скопируйте команду и выполните её в терминале</p>
         </header>
 
         <div class="command-bar">
-          <div class="command-bar__code" aria-label="Comando de instalação">
+          <div class="command-bar__code" aria-label="Команда установки">
             <span class="command-bar__prompt" aria-hidden="true">$</span>
             <code>curl -fsSL https://feng-lang.com/install.sh | bash</code>
           </div>
-          <button class="copy-button" type="button" data-copy-command aria-label="Copiar comando de instalação">
+          <button class="copy-button" type="button" data-copy-command aria-label="Скопировать команду установки">
             <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
               <rect x="9" y="9" width="11" height="11" rx="2"></rect>
               <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path>
             </svg>
-            <span data-copy-label>Copiar</span>
+            <span data-copy-label>Копировать</span>
           </button>
         </div>
 
         <footer class="install-panel__footer">
-          <ul class="platform-list" aria-label="Plataformas compatíveis">
+          <ul class="platform-list" aria-label="Поддерживаемые платформы">
             <li><span aria-hidden="true"></span>macOS Apple Silicon</li>
             <li><span aria-hidden="true"></span>Linux x86-64</li>
             <li><span aria-hidden="true"></span>Linux ARM64</li>
@@ -186,25 +186,25 @@
             <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
               <path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"></path>
             </svg>
-            <span>Download manual</span>
+            <span>Скачать вручную</span>
           </a>
         </footer>
         <span class="visually-hidden" role="status" aria-live="polite" data-copy-status></span>
       </section>
     </section>
 
-    <section class="language-section" aria-label="Exemplos de código Feng">
+    <section class="language-section" aria-label="Примеры кода Feng">
       <div class="shell language-section__inner">
         <div class="code-tabs" data-code-tabs>
-          <nav class="code-tabs__list" data-code-tab-list aria-label="Escolha um exemplo de código">
-            <a class="code-tabs__tab" id="tab-hello" href="#example-hello" data-code-tab>Olá, mundo</a>
-            <a class="code-tabs__tab" id="tab-type" href="#example-type" data-code-tab>Definir um tipo</a>
-            <a class="code-tabs__tab" id="tab-contract" href="#example-contract" data-code-tab>Declarar contratos</a>
-            <a class="code-tabs__tab" id="tab-generics" href="#example-generics" data-code-tab>Definir genéricos</a>
-            <a class="code-tabs__tab" id="tab-loop" href="#example-loop" data-code-tab>Laços</a>
-            <a class="code-tabs__tab" id="tab-branch" href="#example-branch" data-code-tab>Condicionais</a>
-            <a class="code-tabs__tab" id="tab-match" href="#example-match" data-code-tab>Correspondência de padrões</a>
-            <a class="code-tabs__tab" id="tab-exception" href="#example-exception" data-code-tab>Tratamento de exceções</a>
+          <nav class="code-tabs__list" data-code-tab-list aria-label="Выберите пример кода">
+            <a class="code-tabs__tab" id="tab-hello" href="#example-hello" data-code-tab>Привет, мир</a>
+            <a class="code-tabs__tab" id="tab-type" href="#example-type" data-code-tab>Определение типа</a>
+            <a class="code-tabs__tab" id="tab-contract" href="#example-contract" data-code-tab>Объявление контрактов</a>
+            <a class="code-tabs__tab" id="tab-generics" href="#example-generics" data-code-tab>Определение обобщений</a>
+            <a class="code-tabs__tab" id="tab-loop" href="#example-loop" data-code-tab>Циклы</a>
+            <a class="code-tabs__tab" id="tab-branch" href="#example-branch" data-code-tab>Условия</a>
+            <a class="code-tabs__tab" id="tab-match" href="#example-match" data-code-tab>Сопоставление с образцом</a>
+            <a class="code-tabs__tab" id="tab-exception" href="#example-exception" data-code-tab>Обработка исключений</a>
           </nav>
 
           <div class="code-tabs__panel" id="example-hello" data-code-panel>
@@ -212,25 +212,25 @@
 
 <span class="syntax-keyword">import</span> std.io;
 
-<span class="syntax-dim">// main é o único ponto de entrada de um programa executável</span>
+<span class="syntax-dim">// main — единственная точка входа исполняемой программы</span>
 <span class="syntax-keyword">func</span> main(args: string[]) {
-  println(<span class="syntax-string">"Olá, mundo!"</span>);
+  println(<span class="syntax-string">"Привет, мир!"</span>);
 }</code></pre>
           </div>
 
           <div class="code-tabs__panel" id="example-type" data-code-panel>
             <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
-<span class="syntax-dim">// type organiza dados e comportamento em um tipo estático</span>
+<span class="syntax-dim">// type объединяет данные и поведение в статический тип</span>
 <span class="syntax-keyword">type</span> User {
-  <span class="syntax-dim">// campos let são somente leitura; campos var podem ser alterados</span>
+  <span class="syntax-dim">// поля let доступны только для чтения; поля var можно изменять</span>
   <span class="syntax-keyword">let</span> name: string;
   <span class="syntax-keyword">let</span> email: string;
   <span class="syntax-keyword">var</span> active: bool;
 
-  <span class="syntax-dim">// Métodos acessam a instância atual por meio de self</span>
+  <span class="syntax-dim">// Методы обращаются к текущему экземпляру через self</span>
   <span class="syntax-keyword">func</span> greeting(): string {
-    <span class="syntax-keyword">return</span> <span class="syntax-string">"Olá, "</span> + self.name;
+    <span class="syntax-keyword">return</span> <span class="syntax-string">"Привет, "</span> + self.name;
   }
 }</code></pre>
           </div>
@@ -238,7 +238,7 @@
           <div class="code-tabs__panel" id="example-contract" data-code-panel>
             <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
-<span class="syntax-dim">// Um contrato de objeto declara o comportamento exigido</span>
+<span class="syntax-dim">// Контракт объекта объявляет требуемое поведение</span>
 <span class="syntax-keyword">spec</span> Named {
   <span class="syntax-keyword">func</span> name(): string;
 }
@@ -247,20 +247,20 @@
   <span class="syntax-keyword">func</span> save(): void;
 }
 
-<span class="syntax-dim">// Um contrato de função declara a assinatura completa de um valor chamável</span>
+<span class="syntax-dim">// Контракт функции объявляет полную сигнатуру вызываемого значения</span>
 <span class="syntax-keyword">spec</span> Formatter(value: string): string;
 
-<span class="syntax-dim">// Um contrato de união aceita valores de vários tipos candidatos</span>
+<span class="syntax-dim">// Контракт объединения принимает значения нескольких возможных типов</span>
 <span class="syntax-keyword">spec</span> Identifier: int | string;
 
-<span class="syntax-dim">// Um contrato de interseção exige todos os contratos membros</span>
+<span class="syntax-dim">// Контракт пересечения требует выполнения всех входящих контрактов</span>
 <span class="syntax-keyword">spec</span> Entity: Named &amp; Persistable;
 
 <span class="syntax-keyword">type</span> User {
   <span class="syntax-keyword">let</span> username: string;
 }
 
-<span class="syntax-dim">// fit satisfaz contratos de objeto sem alterar a declaração do tipo</span>
+<span class="syntax-dim">// fit реализует контракты объекта без изменения объявления типа</span>
 <span class="syntax-keyword">fit</span> User: Named, Persistable {
   <span class="syntax-keyword">func</span> name(): string {
     <span class="syntax-keyword">return</span> self.username;
@@ -276,14 +276,14 @@
 
 <span class="syntax-keyword">import</span> std.io;
 
-<span class="syntax-dim">// T torna a lógica reutilizável sem perder a tipagem estática</span>
+<span class="syntax-dim">// T позволяет повторно использовать логику, сохраняя статическую типизацию</span>
 <span class="syntax-keyword">func</span> identity&lt;T&gt;(value: T): T {
   <span class="syntax-keyword">return</span> value;
 }
 
 <span class="syntax-keyword">func</span> main(args: string[]) {
   <span class="syntax-keyword">let</span> language = identity(<span class="syntax-string">"Feng"</span>);
-  println(<span class="syntax-string">"Olá, {0}!"</span>, language);
+  println(<span class="syntax-string">"Привет, {0}!"</span>, language);
 }</code></pre>
           </div>
 
@@ -293,18 +293,18 @@
 <span class="syntax-keyword">func</span> calculate_total(): int {
   <span class="syntax-keyword">var</span> total = 0;
 
-  <span class="syntax-dim">// Um laço for de três partes serve para um intervalo de contagem definido</span>
+  <span class="syntax-dim">// Трёхчастный цикл for подходит для заданного диапазона</span>
   <span class="syntax-keyword">for var</span> i = 1; i &lt;= 3; i += 1 {
     total += i;
   }
 
-  <span class="syntax-dim">// for/in percorre os elementos do array em ordem</span>
+  <span class="syntax-dim">// for/in последовательно перебирает элементы массива</span>
   <span class="syntax-keyword">let</span> values = [4, 5, 6];
   <span class="syntax-keyword">for let</span> value <span class="syntax-keyword">in</span> values {
     total += value;
   }
 
-  <span class="syntax-dim">// while verifica novamente a condição antes de cada iteração</span>
+  <span class="syntax-dim">// while повторно проверяет условие перед каждой итерацией</span>
   <span class="syntax-keyword">var</span> remaining = 2;
   <span class="syntax-keyword">while</span> remaining &gt; 0 {
     total += remaining;
@@ -320,20 +320,20 @@
 <span class="syntax-keyword">func</span> evaluate(score: int): string {
   <span class="syntax-keyword">var</span> status = <span class="syntax-string">""</span>;
 
-  <span class="syntax-dim">// Uma instrução if/else executa ações diferentes conforme a condição</span>
+  <span class="syntax-dim">// Оператор if/else выполняет разные действия в зависимости от условия</span>
   <span class="syntax-keyword">if</span> score &gt;= 60 {
-    status = <span class="syntax-string">"Aprovado"</span>;
+    status = <span class="syntax-string">"Зачёт"</span>;
   } <span class="syntax-keyword">else</span> {
-    status = <span class="syntax-string">"Reprovado"</span>;
+    status = <span class="syntax-string">"Незачёт"</span>;
   }
 
-  <span class="syntax-dim">// Uma expressão if produz diretamente um valor para vincular</span>
+  <span class="syntax-dim">// Выражение if непосредственно создаёт значение для привязки</span>
   <span class="syntax-keyword">let</span> level = <span class="syntax-keyword">if</span> score &gt;= 90 {
-    <span class="syntax-string">"Excelente"</span>
+    <span class="syntax-string">"Отлично"</span>
   } <span class="syntax-keyword">else if</span> score &gt;= 60 {
-    <span class="syntax-string">"Aprovado"</span>
+    <span class="syntax-string">"Допущен"</span>
   } <span class="syntax-keyword">else</span> {
-    <span class="syntax-string">"Precisa melhorar"</span>
+    <span class="syntax-string">"Нужно улучшить"</span>
   };
   <span class="syntax-keyword">return</span> status + <span class="syntax-string">": "</span> + level;
 }</code></pre>
@@ -345,18 +345,18 @@
 <span class="syntax-keyword">func</span> describe(code: int): string {
   <span class="syntax-keyword">var</span> detail = <span class="syntax-string">""</span>;
 
-  <span class="syntax-dim">// Uma instrução match executa o primeiro ramo correspondente</span>
+  <span class="syntax-dim">// Оператор match выполняет первую подходящую ветвь</span>
   <span class="syntax-keyword">match</span> code {
-    200 { detail = <span class="syntax-string">"Solicitação concluída"</span>; }
-    404 { detail = <span class="syntax-string">"Recurso não encontrado"</span>; }
-    <span class="syntax-keyword">else</span> { detail = <span class="syntax-string">"Status desconhecido"</span>; }
+    200 { detail = <span class="syntax-string">"Запрос выполнен"</span>; }
+    404 { detail = <span class="syntax-string">"Ресурс не найден"</span>; }
+    <span class="syntax-keyword">else</span> { detail = <span class="syntax-string">"Неизвестный статус"</span>; }
   }
 
-  <span class="syntax-dim">// Uma expressão match retorna o valor do ramo correspondente</span>
+  <span class="syntax-dim">// Выражение match возвращает значение подходящей ветви</span>
   <span class="syntax-keyword">let</span> category = <span class="syntax-keyword">match</span> code {
-    200...299 { <span class="syntax-string">"Sucesso"</span> }
-    400...499 { <span class="syntax-string">"Erro do cliente"</span> }
-    <span class="syntax-keyword">else</span> { <span class="syntax-string">"Outro"</span> }
+    200...299 { <span class="syntax-string">"Успех"</span> }
+    400...499 { <span class="syntax-string">"Ошибка клиента"</span> }
+    <span class="syntax-keyword">else</span> { <span class="syntax-string">"Другое"</span> }
   };
   <span class="syntax-keyword">return</span> category + <span class="syntax-string">": "</span> + detail;
 }</code></pre>
@@ -369,24 +369,24 @@
 
 <span class="syntax-keyword">func</span> require_port(port: int): int {
   <span class="syntax-keyword">if</span> port &lt;= 0 {
-    <span class="syntax-dim">// throw encerra o caminho atual e passa uma exceção ao chamador</span>
-    <span class="syntax-keyword">throw</span> <span class="syntax-string">"A porta deve ser positiva"</span>;
+    <span class="syntax-dim">// throw завершает текущий путь и передаёт исключение вызывающей стороне</span>
+    <span class="syntax-keyword">throw</span> <span class="syntax-string">"Порт должен быть положительным"</span>;
   }
   <span class="syntax-keyword">return</span> port;
 }
 
 <span class="syntax-keyword">func</span> main(args: string[]) {
-  <span class="syntax-dim">// A forma de instrução executa ações ao tratar uma exceção</span>
+  <span class="syntax-dim">// Форма оператора выполняет действия при обработке исключения</span>
   <span class="syntax-keyword">try</span> require_port(-1) <span class="syntax-keyword">catch</span> error: string {
     println(error);
   };
 
-  <span class="syntax-dim">// A forma de expressão pode fornecer um valor alternativo em caso de exceção</span>
+  <span class="syntax-dim">// Форма выражения может вернуть резервное значение при исключении</span>
   <span class="syntax-keyword">let</span> port = <span class="syntax-keyword">try</span> require_port(-1) <span class="syntax-keyword">catch</span> error: string {
     println(error);
     3000
   };
-  println(<span class="syntax-string">"Usando a porta: {0}"</span>, port);
+  println(<span class="syntax-string">"Используется порт: {0}"</span>, port);
 }</code></pre>
           </div>
         </div>
@@ -396,8 +396,8 @@
 
   <footer class="site-footer">
     <div class="shell site-footer__inner">
-      <p><span aria-hidden="true">©</span> Projeto da Linguagem Feng</p>
-      <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Código aberto</a>
+      <p><span aria-hidden="true">©</span> Проект языка Feng</p>
+      <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Исходный код</a>
     </div>
   </footer>
 </body>

@@ -1,14 +1,14 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="fr">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Feng é uma linguagem de programação de tipagem estática para desenvolvedores e IA. Sua sintaxe concisa, contratos explícitos, gerenciamento automático de memória e interoperabilidade com C tornam o código claro e confiável.">
+  <meta name="description" content="Feng est un langage de programmation à typage statique pour les développeurs et l’IA. Sa syntaxe concise, ses contrats explicites, sa gestion automatique de la mémoire et son interopérabilité avec C rendent le code clair et fiable.">
   <meta name="theme-color" content="#f7f8f5" data-theme-color>
   <meta property="og:type" content="website">
-  <meta property="og:title" content="Feng — Clareza por design">
-  <meta property="og:description" content="Uma linguagem de programação de tipagem estática para desenvolvedores e IA.">
-  <title>Linguagem de programação Feng</title>
+  <meta property="og:title" content="Feng — Clarté intégrée">
+  <meta property="og:description" content="Un langage de programmation à typage statique pour les développeurs et l’IA.">
+  <title>Langage de programmation Feng</title>
   <script>
     try {
       const savedTheme = localStorage.getItem('feng-theme');
@@ -29,107 +29,107 @@
   <script defer src="app.js"></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Ir para o conteúdo principal</a>
+  <a class="skip-link" href="#main">Aller au contenu principal</a>
 
   <header class="site-header">
     <div class="shell site-header__inner">
-      <a class="brand" href="#top" aria-label="Página inicial do Feng">
+      <a class="brand" href="#top" aria-label="Accueil de Feng">
         <span class="brand__mark" aria-hidden="true">F</span>
         <span class="brand__name">Feng</span>
       </a>
 
-      <nav class="site-nav site-nav--desktop" aria-label="Navegação principal">
-        <a href="#install">Instalar</a>
-        <a href="/docs/en/">Documentação</a>
-        <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">Extensão</a>
-        <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Código aberto</a>
+      <nav class="site-nav site-nav--desktop" aria-label="Navigation principale">
+        <a href="#install">Installer</a>
+        <a href="/docs/en/">Documentation</a>
+        <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">Extension</a>
+        <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Code source</a>
         <div class="nav-settings">
           <details class="language-menu" data-language-menu>
-            <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="Escolher idioma" title="Escolher idioma">
+            <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="Choisir la langue" title="Choisir la langue">
               <svg class="language-menu__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="9"></circle>
                 <path d="M3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18"></path>
               </svg>
-              <span class="language-menu__label" aria-hidden="true">Idioma</span>
+              <span class="language-menu__label" aria-hidden="true">Langue</span>
               <svg class="language-menu__chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <path d="m7 10 5 5 5-5"></path>
               </svg>
             </summary>
-            <ul class="language-menu__popover" aria-label="Idioma">
+            <ul class="language-menu__popover" aria-label="Langue">
               <li><a class="language-menu__option" href="index.html"><span>English</span></a></li>
               <li><a class="language-menu__option" href="index-zh.html"><span>简体中文</span></a></li>
               <li><a class="language-menu__option" href="index-es.html"><span>Español</span></a></li>
-              <li><span class="language-menu__option" aria-current="page"><span>Português</span><span class="language-menu__state">Atual</span></span></li>
+              <li><a class="language-menu__option" href="index-pt-br.html"><span>Português</span></a></li>
               <li><a class="language-menu__option" href="index-ja.html"><span>日本語</span></a></li>
               <li><a class="language-menu__option" href="index-ru.html"><span>Русский</span></a></li>
               <li><a class="language-menu__option" href="index-de.html"><span>Deutsch</span></a></li>
-              <li><a class="language-menu__option" href="index-fr.html"><span>Français</span></a></li>
+              <li><span class="language-menu__option" aria-current="page"><span>Français</span><span class="language-menu__state">Actuelle</span></span></li>
             </ul>
           </details>
-          <div class="theme-switch" role="group" aria-label="Modo de cor">
-            <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="Usar modo claro" aria-pressed="false" title="Usar modo claro">
+          <div class="theme-switch" role="group" aria-label="Thème de couleur">
+            <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="Utiliser le mode clair" aria-pressed="false" title="Utiliser le mode clair">
               <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <circle cx="12" cy="12" r="3.5"></circle>
                 <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
               </svg>
-              <span class="theme-switch__label" aria-hidden="true">Claro</span>
+              <span class="theme-switch__label" aria-hidden="true">Clair</span>
             </button>
-            <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="Usar modo escuro" aria-pressed="false" title="Usar modo escuro">
+            <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="Utiliser le mode sombre" aria-pressed="false" title="Utiliser le mode sombre">
               <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                 <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
               </svg>
-              <span class="theme-switch__label" aria-hidden="true">Escuro</span>
+              <span class="theme-switch__label" aria-hidden="true">Sombre</span>
             </button>
           </div>
         </div>
       </nav>
 
       <details class="site-menu" data-site-menu>
-        <summary class="site-menu__trigger" aria-label="Alternar menu de navegação">
-          <span class="visually-hidden">Alternar menu de navegação</span>
+        <summary class="site-menu__trigger" aria-label="Afficher ou masquer le menu de navigation">
+          <span class="visually-hidden">Afficher ou masquer le menu de navigation</span>
           <span class="site-menu__lines" aria-hidden="true"></span>
         </summary>
-        <nav class="site-nav site-nav--mobile" aria-label="Navegação móvel">
-          <a href="#install">Instalar</a>
-          <a href="/docs/en/">Documentação</a>
-          <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">Extensão</a>
-          <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Código aberto</a>
+        <nav class="site-nav site-nav--mobile" aria-label="Navigation mobile">
+          <a href="#install">Installer</a>
+          <a href="/docs/en/">Documentation</a>
+          <a href="https://marketplace.visualstudio.com/items?itemName=houfeng.feng-language" target="_blank" rel="noopener noreferrer">Extension</a>
+          <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Code source</a>
           <div class="nav-settings">
             <details class="language-menu" data-language-menu>
-              <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="Escolher idioma" title="Escolher idioma">
+              <summary class="nav-icon-button language-menu__trigger" data-language-trigger aria-label="Choisir la langue" title="Choisir la langue">
                 <svg class="language-menu__icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="9"></circle>
                   <path d="M3 12h18M12 3a15.3 15.3 0 0 1 0 18M12 3a15.3 15.3 0 0 0 0 18"></path>
                 </svg>
-                <span class="language-menu__label" aria-hidden="true">Idioma</span>
+                <span class="language-menu__label" aria-hidden="true">Langue</span>
                 <svg class="language-menu__chevron" aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <path d="m7 10 5 5 5-5"></path>
                 </svg>
               </summary>
-              <ul class="language-menu__popover" aria-label="Idioma">
+              <ul class="language-menu__popover" aria-label="Langue">
                 <li><a class="language-menu__option" href="index.html"><span>English</span></a></li>
                 <li><a class="language-menu__option" href="index-zh.html"><span>简体中文</span></a></li>
                 <li><a class="language-menu__option" href="index-es.html"><span>Español</span></a></li>
-                <li><span class="language-menu__option" aria-current="page"><span>Português</span><span class="language-menu__state">Atual</span></span></li>
+                <li><a class="language-menu__option" href="index-pt-br.html"><span>Português</span></a></li>
                 <li><a class="language-menu__option" href="index-ja.html"><span>日本語</span></a></li>
                 <li><a class="language-menu__option" href="index-ru.html"><span>Русский</span></a></li>
                 <li><a class="language-menu__option" href="index-de.html"><span>Deutsch</span></a></li>
-                <li><a class="language-menu__option" href="index-fr.html"><span>Français</span></a></li>
+                <li><span class="language-menu__option" aria-current="page"><span>Français</span><span class="language-menu__state">Actuelle</span></span></li>
               </ul>
             </details>
-            <div class="theme-switch" role="group" aria-label="Modo de cor">
-              <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="Usar modo claro" aria-pressed="false" title="Usar modo claro">
+            <div class="theme-switch" role="group" aria-label="Thème de couleur">
+              <button class="theme-switch__option" type="button" data-theme-option="light" aria-label="Utiliser le mode clair" aria-pressed="false" title="Utiliser le mode clair">
                 <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="3.5"></circle>
                   <path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"></path>
                 </svg>
-                <span class="theme-switch__label" aria-hidden="true">Claro</span>
+                <span class="theme-switch__label" aria-hidden="true">Clair</span>
               </button>
-              <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="Usar modo escuro" aria-pressed="false" title="Usar modo escuro">
+              <button class="theme-switch__option" type="button" data-theme-option="dark" aria-label="Utiliser le mode sombre" aria-pressed="false" title="Utiliser le mode sombre">
                 <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
                   <path d="M20.5 14.2A8.4 8.4 0 0 1 9.8 3.5a8.5 8.5 0 1 0 10.7 10.7Z"></path>
                 </svg>
-                <span class="theme-switch__label" aria-hidden="true">Escuro</span>
+                <span class="theme-switch__label" aria-hidden="true">Sombre</span>
               </button>
             </div>
           </div>
@@ -141,43 +141,43 @@
   <main id="main">
     <section class="hero shell" id="top" aria-labelledby="hero-title">
       <div class="hero__intro">
-        <h1 id="hero-title"><span>Feng,</span><span>Clareza por design</span></h1>
-        <p class="hero__lead">Feng ajuda desenvolvedores e IA a escrever código claro, confiável e fácil de manter</p>
+        <h1 id="hero-title"><span>Feng,</span><span>Clarté intégrée</span></h1>
+        <p class="hero__lead">Feng aide les développeurs et l’IA à écrire du code clair, fiable et facile à maintenir</p>
       </div>
 
       <div class="hero__traits">
-        <ul aria-label="Recursos do Feng">
-          <li>Amigável à IA</li>
-          <li>Contratos explícitos</li>
-          <li>Tipagem estática</li>
-          <li>Memória gerenciada</li>
-          <li>Compilada</li>
-          <li>Multiplataforma</li>
+        <ul aria-label="Caractéristiques de Feng">
+          <li>Adapté à l’IA</li>
+          <li>Contrats explicites</li>
+          <li>Typage statique</li>
+          <li>Mémoire gérée</li>
+          <li>Compilé</li>
+          <li>Multiplateforme</li>
         </ul>
       </div>
 
       <section class="install-panel" id="install" data-command aria-labelledby="install-title">
         <header class="install-panel__header">
-          <h2 id="install-title">Instalação rápida</h2>
-          <p>Copie o comando e execute-o no terminal</p>
+          <h2 id="install-title">Installation rapide</h2>
+          <p>Copiez la commande et exécutez-la dans votre terminal</p>
         </header>
 
         <div class="command-bar">
-          <div class="command-bar__code" aria-label="Comando de instalação">
+          <div class="command-bar__code" aria-label="Commande d’installation">
             <span class="command-bar__prompt" aria-hidden="true">$</span>
             <code>curl -fsSL https://feng-lang.com/install.sh | bash</code>
           </div>
-          <button class="copy-button" type="button" data-copy-command aria-label="Copiar comando de instalação">
+          <button class="copy-button" type="button" data-copy-command aria-label="Copier la commande d’installation">
             <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
               <rect x="9" y="9" width="11" height="11" rx="2"></rect>
               <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path>
             </svg>
-            <span data-copy-label>Copiar</span>
+            <span data-copy-label>Copier</span>
           </button>
         </div>
 
         <footer class="install-panel__footer">
-          <ul class="platform-list" aria-label="Plataformas compatíveis">
+          <ul class="platform-list" aria-label="Plateformes prises en charge">
             <li><span aria-hidden="true"></span>macOS Apple Silicon</li>
             <li><span aria-hidden="true"></span>Linux x86-64</li>
             <li><span aria-hidden="true"></span>Linux ARM64</li>
@@ -186,25 +186,25 @@
             <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24">
               <path d="M12 3v12m0 0 5-5m-5 5-5-5M5 21h14"></path>
             </svg>
-            <span>Download manual</span>
+            <span>Téléchargement manuel</span>
           </a>
         </footer>
         <span class="visually-hidden" role="status" aria-live="polite" data-copy-status></span>
       </section>
     </section>
 
-    <section class="language-section" aria-label="Exemplos de código Feng">
+    <section class="language-section" aria-label="Exemples de code Feng">
       <div class="shell language-section__inner">
         <div class="code-tabs" data-code-tabs>
-          <nav class="code-tabs__list" data-code-tab-list aria-label="Escolha um exemplo de código">
-            <a class="code-tabs__tab" id="tab-hello" href="#example-hello" data-code-tab>Olá, mundo</a>
-            <a class="code-tabs__tab" id="tab-type" href="#example-type" data-code-tab>Definir um tipo</a>
-            <a class="code-tabs__tab" id="tab-contract" href="#example-contract" data-code-tab>Declarar contratos</a>
-            <a class="code-tabs__tab" id="tab-generics" href="#example-generics" data-code-tab>Definir genéricos</a>
-            <a class="code-tabs__tab" id="tab-loop" href="#example-loop" data-code-tab>Laços</a>
-            <a class="code-tabs__tab" id="tab-branch" href="#example-branch" data-code-tab>Condicionais</a>
-            <a class="code-tabs__tab" id="tab-match" href="#example-match" data-code-tab>Correspondência de padrões</a>
-            <a class="code-tabs__tab" id="tab-exception" href="#example-exception" data-code-tab>Tratamento de exceções</a>
+          <nav class="code-tabs__list" data-code-tab-list aria-label="Choisir un exemple de code">
+            <a class="code-tabs__tab" id="tab-hello" href="#example-hello" data-code-tab>Bonjour le monde</a>
+            <a class="code-tabs__tab" id="tab-type" href="#example-type" data-code-tab>Définir un type</a>
+            <a class="code-tabs__tab" id="tab-contract" href="#example-contract" data-code-tab>Déclarer des contrats</a>
+            <a class="code-tabs__tab" id="tab-generics" href="#example-generics" data-code-tab>Définir des génériques</a>
+            <a class="code-tabs__tab" id="tab-loop" href="#example-loop" data-code-tab>Boucles</a>
+            <a class="code-tabs__tab" id="tab-branch" href="#example-branch" data-code-tab>Conditions</a>
+            <a class="code-tabs__tab" id="tab-match" href="#example-match" data-code-tab>Filtrage par motif</a>
+            <a class="code-tabs__tab" id="tab-exception" href="#example-exception" data-code-tab>Gestion des exceptions</a>
           </nav>
 
           <div class="code-tabs__panel" id="example-hello" data-code-panel>
@@ -212,25 +212,25 @@
 
 <span class="syntax-keyword">import</span> std.io;
 
-<span class="syntax-dim">// main é o único ponto de entrada de um programa executável</span>
+<span class="syntax-dim">// main est l’unique point d’entrée d’un programme exécutable</span>
 <span class="syntax-keyword">func</span> main(args: string[]) {
-  println(<span class="syntax-string">"Olá, mundo!"</span>);
+  println(<span class="syntax-string">"Bonjour le monde !"</span>);
 }</code></pre>
           </div>
 
           <div class="code-tabs__panel" id="example-type" data-code-panel>
             <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
-<span class="syntax-dim">// type organiza dados e comportamento em um tipo estático</span>
+<span class="syntax-dim">// type regroupe les données et le comportement dans un type statique</span>
 <span class="syntax-keyword">type</span> User {
-  <span class="syntax-dim">// campos let são somente leitura; campos var podem ser alterados</span>
+  <span class="syntax-dim">// les champs let sont en lecture seule ; les champs var peuvent être modifiés</span>
   <span class="syntax-keyword">let</span> name: string;
   <span class="syntax-keyword">let</span> email: string;
   <span class="syntax-keyword">var</span> active: bool;
 
-  <span class="syntax-dim">// Métodos acessam a instância atual por meio de self</span>
+  <span class="syntax-dim">// Les méthodes accèdent à l’instance courante via self</span>
   <span class="syntax-keyword">func</span> greeting(): string {
-    <span class="syntax-keyword">return</span> <span class="syntax-string">"Olá, "</span> + self.name;
+    <span class="syntax-keyword">return</span> <span class="syntax-string">"Bonjour, "</span> + self.name;
   }
 }</code></pre>
           </div>
@@ -238,7 +238,7 @@
           <div class="code-tabs__panel" id="example-contract" data-code-panel>
             <pre tabindex="0"><code><span class="syntax-dim">module</span> app;
 
-<span class="syntax-dim">// Um contrato de objeto declara o comportamento exigido</span>
+<span class="syntax-dim">// Un contrat d’objet déclare le comportement requis</span>
 <span class="syntax-keyword">spec</span> Named {
   <span class="syntax-keyword">func</span> name(): string;
 }
@@ -247,20 +247,20 @@
   <span class="syntax-keyword">func</span> save(): void;
 }
 
-<span class="syntax-dim">// Um contrato de função declara a assinatura completa de um valor chamável</span>
+<span class="syntax-dim">// Un contrat de fonction déclare la signature complète d’une valeur appelable</span>
 <span class="syntax-keyword">spec</span> Formatter(value: string): string;
 
-<span class="syntax-dim">// Um contrato de união aceita valores de vários tipos candidatos</span>
+<span class="syntax-dim">// Un contrat d’union accepte les valeurs de plusieurs types possibles</span>
 <span class="syntax-keyword">spec</span> Identifier: int | string;
 
-<span class="syntax-dim">// Um contrato de interseção exige todos os contratos membros</span>
+<span class="syntax-dim">// Un contrat d’intersection exige tous les contrats membres</span>
 <span class="syntax-keyword">spec</span> Entity: Named &amp; Persistable;
 
 <span class="syntax-keyword">type</span> User {
   <span class="syntax-keyword">let</span> username: string;
 }
 
-<span class="syntax-dim">// fit satisfaz contratos de objeto sem alterar a declaração do tipo</span>
+<span class="syntax-dim">// fit satisfait les contrats d’objet sans modifier la déclaration du type</span>
 <span class="syntax-keyword">fit</span> User: Named, Persistable {
   <span class="syntax-keyword">func</span> name(): string {
     <span class="syntax-keyword">return</span> self.username;
@@ -276,14 +276,14 @@
 
 <span class="syntax-keyword">import</span> std.io;
 
-<span class="syntax-dim">// T torna a lógica reutilizável sem perder a tipagem estática</span>
+<span class="syntax-dim">// T rend la logique réutilisable tout en conservant le typage statique</span>
 <span class="syntax-keyword">func</span> identity&lt;T&gt;(value: T): T {
   <span class="syntax-keyword">return</span> value;
 }
 
 <span class="syntax-keyword">func</span> main(args: string[]) {
   <span class="syntax-keyword">let</span> language = identity(<span class="syntax-string">"Feng"</span>);
-  println(<span class="syntax-string">"Olá, {0}!"</span>, language);
+  println(<span class="syntax-string">"Bonjour, {0} !"</span>, language);
 }</code></pre>
           </div>
 
@@ -293,18 +293,18 @@
 <span class="syntax-keyword">func</span> calculate_total(): int {
   <span class="syntax-keyword">var</span> total = 0;
 
-  <span class="syntax-dim">// Um laço for de três partes serve para um intervalo de contagem definido</span>
+  <span class="syntax-dim">// Une boucle for en trois parties convient à une plage de comptage définie</span>
   <span class="syntax-keyword">for var</span> i = 1; i &lt;= 3; i += 1 {
     total += i;
   }
 
-  <span class="syntax-dim">// for/in percorre os elementos do array em ordem</span>
+  <span class="syntax-dim">// for/in parcourt les éléments du tableau dans l’ordre</span>
   <span class="syntax-keyword">let</span> values = [4, 5, 6];
   <span class="syntax-keyword">for let</span> value <span class="syntax-keyword">in</span> values {
     total += value;
   }
 
-  <span class="syntax-dim">// while verifica novamente a condição antes de cada iteração</span>
+  <span class="syntax-dim">// while vérifie de nouveau sa condition avant chaque itération</span>
   <span class="syntax-keyword">var</span> remaining = 2;
   <span class="syntax-keyword">while</span> remaining &gt; 0 {
     total += remaining;
@@ -320,20 +320,20 @@
 <span class="syntax-keyword">func</span> evaluate(score: int): string {
   <span class="syntax-keyword">var</span> status = <span class="syntax-string">""</span>;
 
-  <span class="syntax-dim">// Uma instrução if/else executa ações diferentes conforme a condição</span>
+  <span class="syntax-dim">// Une instruction if/else effectue des actions différentes selon la condition</span>
   <span class="syntax-keyword">if</span> score &gt;= 60 {
-    status = <span class="syntax-string">"Aprovado"</span>;
+    status = <span class="syntax-string">"Réussi"</span>;
   } <span class="syntax-keyword">else</span> {
-    status = <span class="syntax-string">"Reprovado"</span>;
+    status = <span class="syntax-string">"Échec"</span>;
   }
 
-  <span class="syntax-dim">// Uma expressão if produz diretamente um valor para vincular</span>
+  <span class="syntax-dim">// Une expression if produit directement une valeur à lier</span>
   <span class="syntax-keyword">let</span> level = <span class="syntax-keyword">if</span> score &gt;= 90 {
-    <span class="syntax-string">"Excelente"</span>
+    <span class="syntax-string">"Excellent"</span>
   } <span class="syntax-keyword">else if</span> score &gt;= 60 {
-    <span class="syntax-string">"Aprovado"</span>
+    <span class="syntax-string">"Admis"</span>
   } <span class="syntax-keyword">else</span> {
-    <span class="syntax-string">"Precisa melhorar"</span>
+    <span class="syntax-string">"À améliorer"</span>
   };
   <span class="syntax-keyword">return</span> status + <span class="syntax-string">": "</span> + level;
 }</code></pre>
@@ -345,18 +345,18 @@
 <span class="syntax-keyword">func</span> describe(code: int): string {
   <span class="syntax-keyword">var</span> detail = <span class="syntax-string">""</span>;
 
-  <span class="syntax-dim">// Uma instrução match executa o primeiro ramo correspondente</span>
+  <span class="syntax-dim">// Une instruction match exécute la première branche correspondante</span>
   <span class="syntax-keyword">match</span> code {
-    200 { detail = <span class="syntax-string">"Solicitação concluída"</span>; }
-    404 { detail = <span class="syntax-string">"Recurso não encontrado"</span>; }
-    <span class="syntax-keyword">else</span> { detail = <span class="syntax-string">"Status desconhecido"</span>; }
+    200 { detail = <span class="syntax-string">"Requête réussie"</span>; }
+    404 { detail = <span class="syntax-string">"Ressource introuvable"</span>; }
+    <span class="syntax-keyword">else</span> { detail = <span class="syntax-string">"État inconnu"</span>; }
   }
 
-  <span class="syntax-dim">// Uma expressão match retorna o valor do ramo correspondente</span>
+  <span class="syntax-dim">// Une expression match renvoie la valeur de la branche correspondante</span>
   <span class="syntax-keyword">let</span> category = <span class="syntax-keyword">match</span> code {
-    200...299 { <span class="syntax-string">"Sucesso"</span> }
-    400...499 { <span class="syntax-string">"Erro do cliente"</span> }
-    <span class="syntax-keyword">else</span> { <span class="syntax-string">"Outro"</span> }
+    200...299 { <span class="syntax-string">"Succès"</span> }
+    400...499 { <span class="syntax-string">"Erreur client"</span> }
+    <span class="syntax-keyword">else</span> { <span class="syntax-string">"Autre"</span> }
   };
   <span class="syntax-keyword">return</span> category + <span class="syntax-string">": "</span> + detail;
 }</code></pre>
@@ -369,24 +369,24 @@
 
 <span class="syntax-keyword">func</span> require_port(port: int): int {
   <span class="syntax-keyword">if</span> port &lt;= 0 {
-    <span class="syntax-dim">// throw encerra o caminho atual e passa uma exceção ao chamador</span>
-    <span class="syntax-keyword">throw</span> <span class="syntax-string">"A porta deve ser positiva"</span>;
+    <span class="syntax-dim">// throw termine le chemin courant et transmet une exception à l’appelant</span>
+    <span class="syntax-keyword">throw</span> <span class="syntax-string">"Le port doit être positif"</span>;
   }
   <span class="syntax-keyword">return</span> port;
 }
 
 <span class="syntax-keyword">func</span> main(args: string[]) {
-  <span class="syntax-dim">// A forma de instrução executa ações ao tratar uma exceção</span>
+  <span class="syntax-dim">// La forme instruction effectue des actions lors du traitement d’une exception</span>
   <span class="syntax-keyword">try</span> require_port(-1) <span class="syntax-keyword">catch</span> error: string {
     println(error);
   };
 
-  <span class="syntax-dim">// A forma de expressão pode fornecer um valor alternativo em caso de exceção</span>
+  <span class="syntax-dim">// La forme expression peut fournir une valeur de repli en cas d’exception</span>
   <span class="syntax-keyword">let</span> port = <span class="syntax-keyword">try</span> require_port(-1) <span class="syntax-keyword">catch</span> error: string {
     println(error);
     3000
   };
-  println(<span class="syntax-string">"Usando a porta: {0}"</span>, port);
+  println(<span class="syntax-string">"Port utilisé : {0}"</span>, port);
 }</code></pre>
           </div>
         </div>
@@ -396,8 +396,8 @@
 
   <footer class="site-footer">
     <div class="shell site-footer__inner">
-      <p><span aria-hidden="true">©</span> Projeto da Linguagem Feng</p>
-      <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Código aberto</a>
+      <p><span aria-hidden="true">©</span> Projet du langage Feng</p>
+      <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">Code source</a>
     </div>
   </footer>
 </body>

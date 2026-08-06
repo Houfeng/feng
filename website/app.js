@@ -44,6 +44,33 @@ const INTERFACE_TEXT = {
     dark: 'oscuro',
     useTheme: (theme) => `Usar modo ${theme}`,
   },
+  ru: {
+    copied: 'Скопировано',
+    retry: 'Повторить',
+    copiedStatus: 'Команда установки скопирована',
+    retryStatus: 'Не удалось скопировать. Повторите попытку',
+    light: 'светлую',
+    dark: 'тёмную',
+    useTheme: (theme) => `Использовать ${theme} тему`,
+  },
+  de: {
+    copied: 'Kopiert',
+    retry: 'Erneut versuchen',
+    copiedStatus: 'Installationsbefehl kopiert',
+    retryStatus: 'Kopieren fehlgeschlagen. Erneut versuchen',
+    light: 'hellen',
+    dark: 'dunklen',
+    useTheme: (theme) => `${theme} Modus verwenden`,
+  },
+  fr: {
+    copied: 'Copié',
+    retry: 'Réessayer',
+    copiedStatus: 'Commande d’installation copiée',
+    retryStatus: 'Échec de la copie. Réessayez',
+    light: 'clair',
+    dark: 'sombre',
+    useTheme: (theme) => `Utiliser le mode ${theme}`,
+  },
 };
 
 /** Returns interface text for the current page language with an English fallback. */

@@ -57,9 +57,12 @@
 | --- | --- | --- | --- | --- | --- |
 | 英文 | `en` | `index.html` | `English` | `Clarity by design` | `/docs/en/` |
 | 简体中文 | `zh-CN` | `index-zh.html` | `简体中文` | `自有章法` | `/docs/zh-CN/` |
+| 西班牙语 | `es` | `index-es.html` | `Español` | `Claridad por diseño` | `/docs/en/` |
 | 巴西葡萄牙语 | `pt-BR` | `index-pt-br.html` | `Português` | `Clareza por design` | `/docs/en/` |
 | 日语 | `ja` | `index-ja.html` | `日本語` | `明快さを設計する` | `/docs/en/` |
-| 西班牙语 | `es` | `index-es.html` | `Español` | `Claridad por diseño` | `/docs/en/` |
+| 俄语 | `ru` | `index-ru.html` | `Русский` | `Ясность в основе` | `/docs/en/` |
+| 德语 | `de` | `index-de.html` | `Deutsch` | `Klarheit mit System` | `/docs/en/` |
+| 法语 | `fr` | `index-fr.html` | `Français` | `Clarté intégrée` | `/docs/en/` |
 
 - 每个首页必须完整使用对应语言，包括页面元信息、导航、正文、无障碍文本与交互反馈。
 - 首页语言通过语言菜单手动切换，不增加自动跳转逻辑。
