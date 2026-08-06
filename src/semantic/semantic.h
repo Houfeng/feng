@@ -388,13 +388,16 @@ typedef struct FengSemanticAnalysis {
     FengReifiableDepSet *reifiable_dep_sets;
     size_t reifiable_dep_set_count;
     size_t reifiable_dep_set_capacity;
-    /* 为 GENERIC_TARGET 表达式合成的 FengTypeRef（堆分配）。
-     * AST 中 GENERIC_TARGET 将类型名放在表达式层、类型参数放在 type_args 中，
-     * 不存在整体的 FengTypeRef 节点。收集阶段合成等效的 FengTypeRef 供
-     * dep 记录引用，由 analysis 持有并在释放时统一释放。 */
+    /* 由语义分析器合成或深拷贝、并被跨阶段元数据借用的完整 FengTypeRef 树。
+     * analysis 拥有根节点及其递归 type_args / inner / segments。 */
     FengTypeRef **synthesized_type_refs;
     size_t synthesized_type_ref_count;
     size_t synthesized_type_ref_capacity;
+    /* reifiable deps post-pass 为 GENERIC_TARGET 合成的轻量包装引用。
+     * analysis 仅拥有包装节点及 segments；type_args 借用源码 AST。 */
+    FengTypeRef **reifiable_wrapper_type_refs;
+    size_t reifiable_wrapper_type_ref_count;
+    size_t reifiable_wrapper_type_ref_capacity;
     /* Coercion site 拥有的 type ref 克隆（堆分配，递归包含 type_args / inner）。
      * target_spec_type_ref 可能来自 resolver 的 per-program synthetic type-ref
      * 池（在 resolver_free_scopes 中释放，先于 codegen），因此 record_* 入口将

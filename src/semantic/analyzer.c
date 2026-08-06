@@ -17527,6 +17527,35 @@ static bool numeric_literal_adapts_to_target(ResolveContext *context,
     return false;
 }
 
+/* Persist a literal's resolved type for codegen.  expected type refs can come
+ * from declaration ASTs or from resolver-owned generic substitution results;
+ * cloning unconditionally keeps this boundary independent of the source
+ * lifetime and prevents temporary refs from escaping through FengExpr.type. */
+static bool persist_literal_type_ref(ResolveContext *context,
+                                     const FengExpr *expr,
+                                     const FengTypeRef *type_ref) {
+    FengTypeRef *persistent_type_ref;
+
+    if (context == NULL || expr == NULL || type_ref == NULL) {
+        return true;
+    }
+
+    persistent_type_ref = clone_type_ref_for_inference(type_ref);
+    if (persistent_type_ref == NULL ||
+        !analysis_track_synthetic_type_ref(context->analysis,
+                                           persistent_type_ref)) {
+        free_synthetic_type_ref(persistent_type_ref);
+        return resolver_append_error(
+            context,
+            expr->token,
+            "IE0001",
+            format_message("out of memory while persisting numeric literal type"));
+    }
+
+    ((FengExpr *)expr)->type = persistent_type_ref;
+    return true;
+}
+
 static bool expr_matches_expected_type_ref(ResolveContext *context,
                                            const FengExpr *expr,
                                            const FengTypeRef *expected_type_ref) {
@@ -17579,8 +17608,9 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
             (value.kind == FENG_CONST_INT || value.kind == FENG_CONST_FLOAT)) {
             if (numeric_literal_adapts_to_target(context, expr, expected_type_ref)) {
                 /* Adaptation succeeded: hang the target type on the literal node
-                 * so that codegen can read it directly.  expected_type_ref comes
-                 * from a declaration and borrows the AST lifetime.
+                 * so that codegen can read it directly.  expected_type_ref may
+                 * be a resolver-owned generic substitution result, so persist
+                 * an analysis-owned deep clone before storing it.
                  *
                  * When called during overload-resolution candidate probing
                  * (suppress_literal_type_commit is true), the type must NOT
@@ -17588,8 +17618,9 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
                  * parameter type and the last write would win non-deterministically.
                  * The correct type is committed after resolution picks the unique
                  * winner (see commit_literal_arg_adaptations_for_resolved_call). */
-                if (!context->suppress_literal_type_commit) {
-                    ((FengExpr *)expr)->type = expected_type_ref;
+                if (!context->suppress_literal_type_commit &&
+                    !persist_literal_type_ref(context, expr, expected_type_ref)) {
+                    return false;
                 }
                 return true;
             }
@@ -20849,20 +20880,42 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
     return true;
 }
 
-static void record_resolved_callable_from_resolution(
-    const FengExpr *call_expr, const FunctionCallResolution *resolution,
+/* Record overload-resolution metadata that is consumed after ResolveContext
+ * teardown.  owner_instance_type_ref may come from the resolver's temporary
+ * type-ref pool, so persist a complete clone in the analysis before attaching
+ * it to the AST. */
+static bool record_resolved_callable_from_resolution(
+    ResolveContext *context, const FengExpr *call_expr,
+    const FunctionCallResolution *resolution,
     const FengTypeRef *owner_instance_type_ref) {
     FengExpr *mutable_expr = (FengExpr *)call_expr;
     FengResolvedCallable *slot;
+    FengTypeRef *persistent_owner_ref = NULL;
 
     if (mutable_expr == NULL || mutable_expr->kind != FENG_EXPR_CALL ||
         resolution == NULL ||
         resolution->kind != FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
-        return;
+        return true;
+    }
+
+    if (owner_instance_type_ref != NULL) {
+        persistent_owner_ref =
+            clone_type_ref_for_inference(owner_instance_type_ref);
+        if (persistent_owner_ref == NULL ||
+            !analysis_track_synthetic_type_ref(context->analysis,
+                                               persistent_owner_ref)) {
+            free_synthetic_type_ref(persistent_owner_ref);
+            resolver_append_error(
+                context,
+                call_expr->token,
+                "IE0001",
+                format_message("out of memory while recording resolved callable"));
+            return false;
+        }
     }
 
     slot = &mutable_expr->as.call.resolved_callable;
-    slot->owner_instance_type_ref = owner_instance_type_ref;
+    slot->owner_instance_type_ref = persistent_owner_ref;
     if (resolution->fit_decl != NULL) {
         slot->kind = resolution->member != NULL && resolution->member->is_static
                          ? FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD
@@ -20870,7 +20923,7 @@ static void record_resolved_callable_from_resolution(
         slot->owner_type_decl = resolution->owner_type_decl;
         slot->member = resolution->member;
         slot->fit_decl = resolution->fit_decl;
-        return;
+        return true;
     }
     if (resolution->member != NULL) {
         slot->kind = resolution->member->is_static
@@ -20878,13 +20931,14 @@ static void record_resolved_callable_from_resolution(
                          : FENG_RESOLVED_CALLABLE_TYPE_METHOD;
         slot->owner_type_decl = resolution->owner_type_decl;
         slot->member = resolution->member;
-        return;
+        return true;
     }
     if (resolution->decl != NULL) {
         slot->kind = FENG_RESOLVED_CALLABLE_FUNCTION;
         slot->function_decl = resolution->decl;
-        return;
+        return true;
     }
+    return true;
 }
 
 /* After overload resolution picks the unique winner, commit the literal
@@ -21021,7 +21075,10 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
                                                                         resolution.callable);
-                    record_resolved_callable_from_resolution(expr, &resolution, NULL);
+                    if (!record_resolved_callable_from_resolution(
+                            context, expr, &resolution, NULL)) {
+                        return false;
+                    }
                     record_object_arg_coercion_sites(context,
                                                      expr->as.call.args,
                                                      expr->as.call.arg_count,
@@ -21118,8 +21175,13 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
                                                                         resolution.callable);
-                    record_resolved_callable_from_resolution(expr, &resolution,
-                                                             static_owner_type.type_ref);
+                    if (!record_resolved_callable_from_resolution(
+                            context,
+                            expr,
+                            &resolution,
+                            static_owner_type.type_ref)) {
+                        return false;
+                    }
                     record_object_arg_coercion_sites_for_owner_instance(context,
                                                                         expr->as.call.args,
                                                                         expr->as.call.arg_count,
@@ -21289,8 +21351,10 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 materialize_callable_type_param_constraint_witnesses(context,
                                                                     expr,
                                                                     resolution.callable);
-                record_resolved_callable_from_resolution(expr, &resolution,
-                                                         owner_type.type_ref);
+                if (!record_resolved_callable_from_resolution(
+                        context, expr, &resolution, owner_type.type_ref)) {
+                    return false;
+                }
                 record_object_arg_coercion_sites_for_owner_instance(context,
                                                                     expr->as.call.args,
                                                                     expr->as.call.arg_count,
@@ -21379,8 +21443,10 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 materialize_callable_type_param_constraint_witnesses(context,
                                                                     expr,
                                                                     resolution.callable);
-                record_resolved_callable_from_resolution(expr, &resolution,
-                                                         owner_type.type_ref);
+                if (!record_resolved_callable_from_resolution(
+                        context, expr, &resolution, owner_type.type_ref)) {
+                    return false;
+                }
                 record_object_arg_coercion_sites_for_owner_instance(context,
                                                                     expr->as.call.args,
                                                                     expr->as.call.arg_count,
@@ -21475,7 +21541,10 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
                                                                         resolution.callable);
-                    record_resolved_callable_from_resolution(expr, &resolution, NULL);
+                    if (!record_resolved_callable_from_resolution(
+                            context, expr, &resolution, NULL)) {
+                        return false;
+                    }
                     record_object_arg_coercion_sites(context,
                                                      expr->as.call.args,
                                                      expr->as.call.arg_count,
@@ -31821,11 +31890,21 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
         free(analysis->reifiable_dep_sets[index].deps);
     }
     free(analysis->reifiable_dep_sets);
+    /* synthesized_type_refs contains complete trees cloned or synthesized by
+     * the analyzer for metadata that outlives ResolveContext. */
     for (index = 0U; index < analysis->synthesized_type_ref_count; ++index) {
-        free(analysis->synthesized_type_refs[index]->as.named.segments);
-        free(analysis->synthesized_type_refs[index]);
+        free_synthetic_type_ref(analysis->synthesized_type_refs[index]);
     }
     free(analysis->synthesized_type_refs);
+    /* GENERIC_TARGET wrappers borrow type_args from the source AST and own
+     * only their root node and path segments. */
+    for (index = 0U;
+         index < analysis->reifiable_wrapper_type_ref_count;
+         ++index) {
+        free(analysis->reifiable_wrapper_type_refs[index]->as.named.segments);
+        free(analysis->reifiable_wrapper_type_refs[index]);
+    }
+    free(analysis->reifiable_wrapper_type_refs);
     /* coercion_owned_type_refs holds deep clones (with owned type_args / inner)
      * produced by spec_coercion_sites.c record_* entry points. Free them
      * recursively so nested type_args / inner don't leak. */

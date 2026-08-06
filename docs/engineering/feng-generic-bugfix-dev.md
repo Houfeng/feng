@@ -288,6 +288,30 @@ case FENG_STMT_FOR:
 
 自游标（self-cursor）路径（L18437-18491）也需要同样处理：存储 `iter_result_type_ref` 并确保在 `collect_from_stmt` 中收集。
 
+### 跨阶段语义元数据中的 `FengTypeRef` 生命周期
+
+`resolve_program_names` 结束时会释放 `ResolveContext.synthetic_type_refs`，而
+reifiable deps 收集和 codegen 均在其后执行。因此，写入 AST 语义元数据、类型
+事实或其他 analysis 侧表且会被后续阶段读取的 `FengTypeRef *`，必须满足以下
+生命周期规则：
+
+1. 来自声明或源码 AST 的类型引用可以借用 AST 生命周期。
+2. 由 resolver 合成、替换或克隆出的临时类型引用不得直接逃逸；写入跨阶段
+   元数据前必须深拷贝完整类型树，并由 `FengSemanticAnalysis` 持有。
+3. `FengResolvedCallable.owner_instance_type_ref` 属于跨阶段元数据。记录调用解析
+   结果时必须保存 analysis 持有的深拷贝，不能保存 `InferredExprType.type_ref`
+   中可能由 resolver 临时池持有的原始指针。
+4. `FengSemanticAnalysis.synthesized_type_refs` 只持有完整拥有的类型树，释放
+   analysis 时递归释放 `type_args`、`inner`、`segments` 及节点本身。
+5. reifiable deps 收集阶段为 `GENERIC_TARGET` 构造的轻量包装引用仅拥有包装节点
+   与 `segments`，其 `type_args` 借用 AST；这类包装引用使用独立的
+   `reifiable_wrapper_type_refs` 管理，避免与完整拥有的类型树共用析构规则。
+
+该规则是表达式类型生命周期规则的泛化；字面量适配的同类约束见
+[`feng-binary-literal-adaptation.md`](./feng-binary-literal-adaptation.md) §4.1.1。
+本变更仅修复编译期所有权，不改变 runtime ABI、生成代码或运行时开销，也不
+依赖 ASan 配置。
+
 ## 涉及位置
 
 | 位置 | 变更 | 性质 |

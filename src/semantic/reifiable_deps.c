@@ -354,26 +354,27 @@ static bool rd_expr_collect_path_segments(const FengExpr *expr,
     }
 }
 
-/* 将合成的 FengTypeRef 存入 analysis 的 synthesized_type_refs 中管理生命周期。 */
+/* 存储仅拥有根节点和 segments 的 GENERIC_TARGET 包装引用。其 type_args
+ * 借用源码 AST，必须与 analysis 持有的完整类型树使用不同的析构规则。 */
 static bool rd_store_synthesized_ref(FengSemanticAnalysis *analysis,
                                      FengTypeRef *ref) {
-    if (analysis->synthesized_type_ref_count ==
-        analysis->synthesized_type_ref_capacity) {
-        size_t new_capacity = analysis->synthesized_type_ref_capacity == 0U
+    if (analysis->reifiable_wrapper_type_ref_count ==
+        analysis->reifiable_wrapper_type_ref_capacity) {
+        size_t new_capacity = analysis->reifiable_wrapper_type_ref_capacity == 0U
                                   ? 8U
-                                  : analysis->synthesized_type_ref_capacity * 2U;
+                                  : analysis->reifiable_wrapper_type_ref_capacity * 2U;
         FengTypeRef **grown = (FengTypeRef **)realloc(
-            analysis->synthesized_type_refs,
+            analysis->reifiable_wrapper_type_refs,
             new_capacity * sizeof(*grown));
 
         if (grown == NULL) {
             return false;
         }
-        analysis->synthesized_type_refs = grown;
-        analysis->synthesized_type_ref_capacity = new_capacity;
+        analysis->reifiable_wrapper_type_refs = grown;
+        analysis->reifiable_wrapper_type_ref_capacity = new_capacity;
     }
-    analysis->synthesized_type_refs[analysis->synthesized_type_ref_count++] =
-        ref;
+    analysis->reifiable_wrapper_type_refs[
+        analysis->reifiable_wrapper_type_ref_count++] = ref;
     return true;
 }
 
