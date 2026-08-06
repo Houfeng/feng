@@ -24,8 +24,24 @@ jobs:
         with:
           lfs: true
 
-      - name: Publish toolchain prebuilt
+      - name: Package toolchain prebuilt
+        id: package
+        run: scripts/toolchain-prebuilt-publish.sh
+
+      - name: Upload toolchain prebuilt
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: scripts/toolchain-prebuilt-publish.sh
+          TAG: ${{ github.ref_name }}
+          ASSET: ${{ steps.package.outputs.asset }}
+        run: |
+          VERSION="${TAG#toolchain-prebuilt/}"
+          if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release upload "${TAG}" "${ASSET}"
+          else
+            gh release create "${TAG}" "${ASSET}" \
+              --verify-tag \
+              --latest=false \
+              --title="Feng toolchain prebuilt ${VERSION}" \
+              --notes="Feng toolchain prebuilt ${VERSION}."
+          fi

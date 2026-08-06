@@ -4,7 +4,8 @@ on:
   push:
     branches:
       - "**"
-  create:
+    tags-ignore:
+      - "toolchain-prebuilt/**"
   pull_request:
   workflow_dispatch:
 
@@ -18,9 +19,6 @@ concurrency:
 jobs:
   prepare:
     name: Resolve build version
-    if: >-
-      github.event_name != 'create' ||
-      (github.ref_type == 'tag' && startsWith(github.ref_name, 'v'))
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}

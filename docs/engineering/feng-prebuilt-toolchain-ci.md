@@ -90,9 +90,9 @@ toolchain-prebuilt/<version>
 toolchain-prebuilt/llvm-22.1.8-r1
 ```
 
-tag 必须指向包含待发布 `toolchain/` 完整内容的确定 commit。发布流程由 push tag
-触发，并为同名 tag 创建 GitHub Release；不得先在 GitHub UI 创建同名 Release 后
-再触发发布脚本。
+tag 必须指向包含待发布 `toolchain/` 完整内容的确定 commit。开发者可以在本地创建并
+push tag，也可以在 GitHub 页面创建 tag 或同名 Release。tag push 统一触发 workflow；
+workflow 不创建或修改 tag。
 
 已发布 tag 不得复用。内容发生任何变化时必须创建新 tag。
 
@@ -120,9 +120,9 @@ toolchain-prebuilt.lock
 
 ### 4.4 发布规则
 
-发布脚本创建普通 GitHub Release，并在创建时上传归档。已存在同名 Release 时由
-GitHub CLI 直接失败；脚本不得查询或修改仓库级 Release 设置，不得覆盖已有 Release
-或 asset。
+发布脚本只生成归档，不创建 Release、tag 或其他远端对象。workflow 的发布步骤在同名
+Release 已存在时上传归档，不存在时为触发它的现有 tag 创建 Release 并上传归档。
+已有同名 asset 时失败，不得覆盖。
 
 ## 5. 预构建发布脚本
 
@@ -132,19 +132,19 @@ GitHub CLI 直接失败；脚本不得查询或修改仓库级 Release 设置，
 scripts/toolchain-prebuilt-publish.sh
 ```
 
-脚本从 GitHub Actions 提供的 `GH_REPO` 和 `GITHUB_REF_NAME` 读取 repository 与 tag，
-使用仓库根目录和 `toolchain/` 的规范位置，不接受命令行参数，也不依赖调用者当前工作
-目录。
+脚本从 GitHub Actions 提供的 `GITHUB_REF_NAME` 读取 tag，通过 `GITHUB_OUTPUT`
+返回归档路径，使用仓库根目录和 `toolchain/` 的规范位置，不接受命令行参数，也不
+依赖调用者当前工作目录。
 
 脚本职责：
 
-1. 校验 repository、tag 上下文以及 `toolchain/` 目录存在。
-2. 在仓库 `build/` 下创建本次调用专用 staging。
-3. 将完整 `toolchain/` 目录压缩为固定名称的单个归档。
-4. 使用 `gh release create` 创建普通 Release，并同时上传归档。
+1. 校验 tag 上下文以及 `toolchain/` 目录存在。
+2. 在仓库 `build/toolchain-prebuilt/` 下生成固定名称的单个归档。
+3. 将完整 `toolchain/` 目录压缩到归档中。
+4. 通过 GitHub Actions step output 返回归档路径。
 
-任何准备、归档、上传或发布失败都必须返回非零状态。脚本不得修改 `toolchain/`、
-版本锁、Git index、tag 或 commit，也不得执行与归档发布无关的远端配置查询或校验。
+任何准备或归档失败都必须返回非零状态。脚本不得访问 GitHub API，不得修改
+`toolchain/`、版本锁、Git index、tag 或 commit。
 
 ## 6. 预构建拉取脚本
 
@@ -187,10 +187,11 @@ on:
 该 workflow 只包含一个发布 Job：
 
 1. 以 `lfs: true` checkout tag 指向的 commit。
-2. 以最小 `contents: write` 权限调用 `scripts/toolchain-prebuilt-publish.sh`。
+2. 调用 `scripts/toolchain-prebuilt-publish.sh` 生成归档。
+3. 以最小 `contents: write` 权限发布归档：同名 Release 已存在时上传，不存在时为
+   当前已有 tag 创建 Release 并上传。
 
-创建 GitHub Release 及上传 assets 的逻辑不得展开在 YAML 中。创建 Release 不再创建
-新 tag，因此不会递归触发该 workflow。
+workflow 和脚本均不得创建或移动 tag。
 
 ### 7.2 现有 CI/Release workflow
 
@@ -205,6 +206,9 @@ checkout（lfs: false）
 
 `prepare`、`finalize_macos`、`verify_macos`、`verify_linux` 和 `publish` 不直接读取仓库
 toolchain，因此不调用拉取脚本。
+
+现有 `release.yml` 的 tag push 触发必须排除 `toolchain-prebuilt/**`；预构建 tag 只触发
+本节定义的独立 workflow，不触发现有 Feng 构建与发行任务。
 
 现有构建和发行脚本的命令行、输入输出、artifact 和依赖关系保持不变。YAML 不向这些
 脚本传入 prebuilt tag 或 Release 信息。
@@ -227,10 +231,10 @@ toolchain，因此不调用拉取脚本。
 - 非 `toolchain-prebuilt/` tag 被拒绝。
 - 缺少 `toolchain/` 目录时失败。
 - 归档包含完整 `toolchain/`，并保留可执行位与符号链接。
-- Release 创建或上传失败时失败。
-- 失败后不修改源码 toolchain、版本锁、Git index、tag、commit 或现有 Release。
+- 失败后不修改源码 toolchain、版本锁、Git index、tag 或 commit。
 
-外部 GitHub 状态通过可控替身验证，专项测试不得创建真实 Release。
+workflow 发布步骤通过可控替身验证已有 Release 和只有 tag 两种路径，不得在专项测试中
+创建真实 Release。
 
 ### 9.2 拉取脚本专项测试
 
@@ -261,7 +265,8 @@ toolchain，因此不调用拉取脚本。
 2. 实现并专项测试 `scripts/toolchain-prebuilt-publish.sh`。
 3. 实现并专项测试 `scripts/toolchain-prebuilt-fetch.sh`。
 4. 临时恢复 Git LFS 访问，或在持有完整 LFS 对象的受信开发环境准备首版 assets。
-5. 创建首个 `toolchain-prebuilt/<version>` tag，由独立 workflow 发布普通 Release。
+5. 在本地或 GitHub 页面创建首个 `toolchain-prebuilt/<version>` tag，由独立
+   workflow 生成并发布预构建归档。
 6. 根据已发布归档更新并提交 `toolchain-prebuilt.lock`。
 7. 修改现有 CI/Release workflow：checkout 使用 `lfs: false`，随后调用拉取脚本。
 8. 完成三个 host 的全量回归和一次完整试发。
@@ -287,7 +292,8 @@ GitHub 远端 LFS 对象不会因删除工作树文件、tag、commit 或本地�
 
 ## 12. 完成标准
 
-- `toolchain-prebuilt/**` tag 可通过单一脚本发布包含完整 `toolchain/` 的 Release。
+- `toolchain-prebuilt/**` tag 可触发独立 workflow，通过单一脚本生成包含完整
+  `toolchain/` 的归档并发布到同名 Release。
 - CI 可通过单一脚本恢复完整 `toolchain/`。
 - workflow 中不存在归档、下载、摘要校验或目录安装实现。
 - 现有构建、测试和发行脚本不包含 prebuilt 概念且接口不变。

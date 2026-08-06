@@ -118,7 +118,8 @@ case "${COMMAND}" in
   resolve)
     [[ -n "${EVENT_NAME}" ]] || die "--event-name is required for resolve"
     [[ -n "${REF_TYPE}" ]] || die "--ref-type is required for resolve"
-    if [[ "${EVENT_NAME}" == "create" ]]; then
+    if [[ "${EVENT_NAME}" == "create" ||
+          ("${EVENT_NAME}" == "push" && "${REF_TYPE}" == "tag" && "${REF_NAME}" == v*) ]]; then
       [[ "${REF_TYPE}" == "tag" ]] ||
         die "create event does not reference a tag: ${REF_TYPE}"
       [[ "${REF_NAME}" == v* ]] ||

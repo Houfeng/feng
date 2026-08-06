@@ -163,9 +163,9 @@ feng-<version>-<platform>/
 
 ### 6.1 触发
 
-GitHub Actions 工作流 `release.yml` 由所有分支的 push、所有 pull request 以及 GitHub 仓库的 Git ref `create` 事件触发，并支持 `workflow_dispatch` 手动触发。`create` 事件仅在新建符合 `v<version>` 的 tag 时进入正式发布；新建 branch 或非版本 tag 不执行构建。每次发布只新建一个版本 tag，不批量创建或 push 多个 tag。所有有效触发方式均须在三个原生 runner 完成构建和 `make test`；普通分支 push 与 pull request 到此结束，不上传发布构件，也不汇聚发行包。
+GitHub Actions 工作流 `release.yml` 由所有分支的 push、除 `toolchain-prebuilt/**` 外的所有 tag push、所有 pull request 触发，并支持 `workflow_dispatch` 手动触发。只有符合 `v<version>` 的 tag 才进入正式发布；其他普通 tag 只执行构建和测试，`toolchain-prebuilt/**` tag 完全不触发该工作流。每次发布只新建一个版本 tag，不批量创建或 push 多个 tag。所有有效触发方式均须在三个原生 runner 完成构建和 `make test`；普通分支 push、普通 tag push 与 pull request 到此结束，不上传发布构件，也不汇聚发行包。
 
-版本 tag 的 `create` 事件表示正式发布：工作流读取 tag，校验其符合 `v<version>` 并以去掉 `v` 后的内容作为权威发布版本，注入 Feng 构建并用于发行包名和包内 `VERSION`。三个原生构建和测试全部成功后才上传原生构件、汇聚并验证三份发行包。若该 tag 尚无 GitHub Release，工作流创建 Release 并上传发行包；若直接在 GitHub 创建 tag 时已同时生成同名 Release，则校验 prerelease 状态后向该 Release 上传发行包，draft Release 在上传成功后发布。已发布且不可变的 Release 无法追加资产，工作流必须报错。带 `-<prerelease>` 后缀的版本必须创建为 GitHub prerelease，不得成为在线安装脚本解析的 latest stable release。`workflow_dispatch` 用于试发，读取根 `VERSION`，执行相同构建、汇聚与校验并上传完整发行包 workflow artifact，但不得创建或更新 GitHub Release。
+版本 tag 的 push 事件表示正式发布：工作流读取 tag，校验其符合 `v<version>` 并以去掉 `v` 后的内容作为权威发布版本，注入 Feng 构建并用于发行包名和包内 `VERSION`。三个原生构建和测试全部成功后才上传原生构件、汇聚并验证三份发行包。若该 tag 尚无 GitHub Release，工作流创建 Release 并上传发行包；若直接在 GitHub 创建 tag 时已同时生成同名 Release，则校验 prerelease 状态后向该 Release 上传发行包，draft Release 在上传成功后发布。已发布且不可变的 Release 无法追加资产，工作流必须报错。带 `-<prerelease>` 后缀的版本必须创建为 GitHub prerelease，不得成为在线安装脚本解析的 latest stable release。`workflow_dispatch` 用于试发，读取根 `VERSION`，执行相同构建、汇聚与校验并上传完整发行包 workflow artifact，但不得创建或更新 GitHub Release。
 
 工作流 YAML 只声明触发条件、host runner / Linux job container、权限、任务依赖、执行条件与 artifact 传输，不实现版本解析、构件归档与解包、发行包汇聚、安装验收编排或 GitHub Release 状态处理。上述主要逻辑必须位于仓库内可独立执行和回归的脚本中，CI 与本机使用同一入口。脚本优先使用 shell；允许在确有必要时使用 Node.js，禁止使用 Python，采用其他实现语言前必须人工批准。
 
@@ -185,7 +185,7 @@ strategy:
 
 macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架构 GNU / musl sysroot 生成该架构的两份 runtime。各 host 平台的精简 LLVM 产物位于仓库 `toolchain/llvm/<host-platform>/`，四份 Linux 目标 sysroot 位于仓库 `toolchain/sysroot/<platform>/`，均由 git lfs 管理。
 
-版本 tag 创建或手动试发的三个原生构件任务全部成功后，独立汇聚任务下载三份构件并组装三份 `feng-<version>-<platform>.zip`。因此发布流程不要求 Linux 生成 macOS runtime，也不要求 macOS 或任一 Linux host 单独产生完整 release zip。普通分支 push 与 pull request 不执行该汇聚任务。
+版本 tag push 或手动试发的三个原生构件任务全部成功后，独立汇聚任务下载三份构件并组装三份 `feng-<version>-<platform>.zip`。因此发布流程不要求 Linux 生成 macOS runtime，也不要求 macOS 或任一 Linux host 单独产生完整 release zip。普通分支 push 与 pull request 不执行该汇聚任务。
 
 ### 6.3 原生构建、汇聚与 macOS 最终化步骤
 
@@ -426,7 +426,7 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 本阶段编写以下文件：
 
 - [x] 新增仓库根 `VERSION`，并由 Makefile 将其作为普通构建的默认版本来源；GitHub 仓库中新建的版本 tag 是正式发布的权威版本来源，工作流将其注入构建，确保可执行文件版本、发行包名和包内版本一致。
-- [x] `.github/workflows/release.yml`：所有分支 push 和 pull request 均在三个发行平台构建 Feng 编译器和对应 runtime 并运行 `make test`；版本 tag 创建与手动试发在全部构建和测试成功后，通过 `scripts/release_component.sh` 校验并上传三组固定结构的原生构件，再调用 `scripts/release_assemble.sh`。版本 tag 创建后，正式发布任务通过独立 shell 创建或更新同名 GitHub Release；手动试发只上传 workflow artifact。工作流自身只保留环境和任务声明，主要逻辑不以内联 shell 实现。
+- [x] `.github/workflows/release.yml`：所有分支 push、除 `toolchain-prebuilt/**` 外的普通 tag push 和 pull request 均在三个发行平台构建 Feng 编译器和对应 runtime 并运行 `make test`；`v*` 版本 tag push 与手动试发在全部构建和测试成功后，通过 `scripts/release_component.sh` 校验并上传三组固定结构的原生构件，再调用 `scripts/release_assemble.sh`。版本 tag push 后，正式发布任务通过独立 shell 创建或更新同名 GitHub Release；手动试发只上传 workflow artifact。工作流自身只保留环境和任务声明，主要逻辑不以内联 shell 实现。
 - [x] `scripts/release_component.sh`、`scripts/release_assemble.sh`、`scripts/release_verify_install.sh` 统一使用 `release_` 前缀并可独立执行；版本解析、构件归档与解包、安装验收编排及 GitHub Release 发布也由可本机回归的 `release_` 前缀 shell 提供。
 - [x] `scripts/release_assemble.sh`：按 §6.3 的构件结构汇总三组构件，校验构件摘要、三个 Feng 可执行文件、五份 runtime 和公共头文件，在临时目录完整生成并校验三个发行包后再移入输出目录。每个包包含对应平台的 Feng 编译器与 LLVM，以及五份 runtime、四份 Linux sysroot、公共头文件和 `VERSION`。
 - [x] `scripts/release_assemble.sh`：接收通用随附包目录，校验所有 `.fb` 的包名、版本
