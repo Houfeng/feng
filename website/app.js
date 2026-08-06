@@ -1,3 +1,56 @@
+const INTERFACE_TEXT = {
+  en: {
+    copied: 'Copied',
+    retry: 'Try again',
+    copiedStatus: 'Install command copied',
+    retryStatus: 'Copy failed. Please try again',
+    light: 'light',
+    dark: 'dark',
+    useTheme: (theme) => `Use ${theme} mode`,
+  },
+  'zh-CN': {
+    copied: '已复制',
+    retry: '请重试',
+    copiedStatus: '安装命令已复制',
+    retryStatus: '复制失败，请重试',
+    light: '浅色',
+    dark: '深色',
+    useTheme: (theme) => `使用${theme}模式`,
+  },
+  'pt-BR': {
+    copied: 'Copiado',
+    retry: 'Tentar novamente',
+    copiedStatus: 'Comando de instalação copiado',
+    retryStatus: 'Falha ao copiar. Tente novamente',
+    light: 'claro',
+    dark: 'escuro',
+    useTheme: (theme) => `Usar modo ${theme}`,
+  },
+  ja: {
+    copied: 'コピーしました',
+    retry: 'もう一度試す',
+    copiedStatus: 'インストールコマンドをコピーしました',
+    retryStatus: 'コピーできませんでした。もう一度お試しください',
+    light: 'ライト',
+    dark: 'ダーク',
+    useTheme: (theme) => `${theme}モードを使用`,
+  },
+  es: {
+    copied: 'Copiado',
+    retry: 'Intentar de nuevo',
+    copiedStatus: 'Comando de instalación copiado',
+    retryStatus: 'No se pudo copiar. Inténtalo de nuevo',
+    light: 'claro',
+    dark: 'oscuro',
+    useTheme: (theme) => `Usar modo ${theme}`,
+  },
+};
+
+/** Returns interface text for the current page language with an English fallback. */
+function getInterfaceText() {
+  return INTERFACE_TEXT[document.documentElement.lang] ?? INTERFACE_TEXT.en;
+}
+
 /** Copies text through the legacy selection API when Clipboard API access is unavailable. */
 function copyWithFallback(text) {
   const helper = document.createElement('textarea');
@@ -34,20 +87,7 @@ async function copyCommand(command) {
 
 /** Connects each installation command to its adjacent copy button. */
 function setupCommandCopying() {
-  const isEnglish = document.documentElement.lang.startsWith('en');
-  const feedback = isEnglish
-    ? {
-        copied: 'Copied',
-        retry: 'Try again',
-        copiedStatus: 'Install command copied',
-        retryStatus: 'Copy failed. Please try again',
-      }
-    : {
-        copied: '已复制',
-        retry: '请重试',
-        copiedStatus: '安装命令已复制',
-        retryStatus: '复制失败，请重试',
-      };
+  const feedback = getInterfaceText();
 
   document.querySelectorAll('[data-command]').forEach((container) => {
     const button = container.querySelector('[data-copy-command]');
@@ -187,14 +227,12 @@ function getActiveTheme() {
 
 /** Synchronizes every visible theme control with the active theme. */
 function syncThemeControls(theme) {
-  const isEnglish = document.documentElement.lang.startsWith('en');
+  const text = getInterfaceText();
 
   document.querySelectorAll('[data-theme-option]').forEach((button) => {
     const option = button.dataset.themeOption;
-    const optionLabel = isEnglish
-      ? (option === 'dark' ? 'dark' : 'light')
-      : (option === 'dark' ? '深色' : '浅色');
-    const accessibleLabel = isEnglish ? `Use ${optionLabel} mode` : `使用${optionLabel}模式`;
+    const optionLabel = option === 'dark' ? text.dark : text.light;
+    const accessibleLabel = text.useTheme(optionLabel);
     button.setAttribute('aria-pressed', String(option === theme));
     button.setAttribute('aria-label', accessibleLabel);
     button.setAttribute('title', accessibleLabel);
