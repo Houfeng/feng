@@ -547,7 +547,11 @@ svg {
 
 .hero__traits {
   align-self: end;
-  padding-bottom: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background-color: var(--page);
+  transition: background-color 180ms ease, border-color 180ms ease;
 }
 
 .hero__traits ul {
@@ -555,10 +559,7 @@ svg {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   margin: 0;
   padding: 0;
-  border-top: 1px solid var(--line);
-  background-color: var(--page);
   list-style: none;
-  transition: background-color 180ms ease, border-color 180ms ease;
 }
 
 .hero__traits li {
@@ -573,6 +574,10 @@ svg {
   font-weight: 540;
   white-space: nowrap;
   transition: border-color 180ms ease;
+}
+
+.hero__traits li:nth-last-child(-n+2) {
+  border-bottom: 0;
 }
 
 .hero__traits li::before {
@@ -921,7 +926,7 @@ svg {
   }
 
   .hero__traits {
-    width: min(100%, 620px);
+    width: 100%;
   }
 
   .install-panel {
