@@ -37,11 +37,12 @@ jobs:
         run: |
           VERSION="${TAG#toolchain-prebuilt/}"
           if gh release view "${TAG}" >/dev/null 2>&1; then
+            gh release edit "${TAG}" --prerelease
             gh release upload "${TAG}" "${ASSET}"
           else
             gh release create "${TAG}" "${ASSET}" \
               --verify-tag \
-              --latest=false \
+              --prerelease \
               --title="Feng toolchain prebuilt ${VERSION}" \
               --notes="Feng toolchain prebuilt ${VERSION}."
           fi

@@ -113,7 +113,9 @@ toolchain-prebuilt-<version>.tar.gz
 ### 4.3 发布规则
 
 发布脚本只生成归档，不创建 Release、tag 或其他远端对象。workflow 的发布步骤在同名
-Release 已存在时上传归档，不存在时为触发它的现有 tag 创建 Release 并上传归档。
+Release 已存在时，先将其设置为 prerelease，再上传归档；不存在时为触发它的现有 tag
+创建 prerelease 并上传归档。Toolchain Release 统一使用 prerelease，不占用 Feng 的
+仓库级 Latest。
 已有同名 asset 时失败，不得覆盖。
 
 ## 5. 预构建发布脚本
@@ -181,8 +183,9 @@ on:
 
 1. 以 `lfs: true` checkout tag 指向的 commit。
 2. 调用 `scripts/toolchain-prebuilt-publish.sh` 生成归档。
-3. 以最小 `contents: write` 权限发布归档：同名 Release 已存在时上传，不存在时为
-   当前已有 tag 创建 Release 并上传。
+3. 以最小 `contents: write` 权限发布归档：同名 Release 已存在时通过
+   `gh release edit --prerelease` 设置为 prerelease 后上传；不存在时通过
+   `gh release create --prerelease` 为当前已有 tag 创建 prerelease 并上传。
 
 workflow 和脚本均不得创建或移动 tag。
 
@@ -226,8 +229,8 @@ toolchain，因此不调用拉取脚本。
 - 归档包含完整 `toolchain/`，并保留可执行位与符号链接。
 - 失败后不修改源码 toolchain、Git index、tag 或 commit。
 
-workflow 发布步骤通过可控替身验证已有 Release 和只有 tag 两种路径，不得在专项测试中
-创建真实 Release。
+workflow 发布步骤通过可控替身验证已有 Release 和只有 tag 两种路径，两种路径都必须
+将 Toolchain Release 标记为 prerelease，且不得在专项测试中创建真实 Release。
 
 ### 9.2 拉取脚本专项测试
 
@@ -286,6 +289,8 @@ GitHub 远端 LFS 对象不会因删除工作树文件、tag、commit 或本地�
 
 - `toolchain-prebuilt/**` tag 可触发独立 workflow，通过单一脚本生成包含完整
   `toolchain/` 的归档并发布到同名 Release。
+- Toolchain Release 标记为 prerelease；拉取端仅在 `toolchain-prebuilt/` 命名空间内
+  选择最新已发布版本。
 - CI 可通过单一脚本恢复完整 `toolchain/`。
 - workflow 中不存在归档、下载、摘要校验或目录安装实现。
 - 现有构建、测试和发行脚本不包含 prebuilt 概念且接口不变。
