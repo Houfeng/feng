@@ -1284,7 +1284,11 @@ svg {
   }
 
   :is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"], [lang="ru"], [lang="de"], [lang="fr"]) .hero h1 span {
-    white-space: normal;
+    white-space: nowrap;
+  }
+
+  :is([lang="en"], [lang="pt-BR"], [lang="ja"], [lang="es"], [lang="ru"], [lang="de"], [lang="fr"]) .hero h1 span:last-child {
+    font-size: clamp(1.75rem, 9vw, 3.15rem);
   }
 
   .hero__lead {
