@@ -1235,6 +1235,8 @@ svg {
   .download-link {
     width: 100%;
     min-height: 44px;
+    border: 1px solid var(--terminal-line);
+    border-radius: 9px;
   }
 }
 
