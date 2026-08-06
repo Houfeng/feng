@@ -57,7 +57,7 @@
 | --- | --- | --- | --- | --- | --- |
 | 英文 | `en` | `index.html` | `English` | `Clarity by design` | `/docs/en/` |
 | 简体中文 | `zh-CN` | `index-zh.html` | `简体中文` | `自有章法` | `/docs/zh-CN/` |
-| 巴西葡萄牙语 | `pt-BR` | `index-pt-br.html` | `Português (Brasil)` | `Clareza por design` | `/docs/en/` |
+| 巴西葡萄牙语 | `pt-BR` | `index-pt-br.html` | `Português` | `Clareza por design` | `/docs/en/` |
 | 日语 | `ja` | `index-ja.html` | `日本語` | `明快さを設計する` | `/docs/en/` |
 | 西班牙语 | `es` | `index-es.html` | `Español` | `Claridad por diseño` | `/docs/en/` |
 
