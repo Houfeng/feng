@@ -181,7 +181,7 @@ strategy:
       # 扩展时追加：macos-x64、windows-x64 等
 ```
 
-三个平台任务互不交叉构建 Feng 可执行文件，只在对应 native host 产出当前 host 平台的 `feng`。macOS 使用 `macos-26` arm64 runner，并显式选择与本机一致的 Xcode 26.3、macOS 26.2 SDK、Homebrew `llvm@21` 21.1.8 和 Homebrew `coreutils`；`$(brew --prefix llvm@21)/bin` 必须位于构建任务 `PATH` 首位，使 Makefile 构建 Feng 实际调用的 host `clang` 与本机一致，`coreutils` 提供 smoke 回归脚本所需的 `timeout`，不得依赖 runner 的隐式工具解析结果，也不得将构建 Feng 自身使用的 host Clang 与 Feng 编译 `.ff` 时使用的 bundled Clang 混为同一工具。两个 Linux host runner 分别提供 x64 与 arm64 CPU，在 `ubuntu:26.04` job container 中安装与本机 `feng-ubuntu-dev:26.04` 相同的构建依赖，并校验 Ubuntu 26.04、Clang 21 后再执行任务。未参与构建的 `cc` 不作为 CI 环境约束。Git、Git LFS 与 CA 证书可作为 CI checkout 的传输依赖额外安装，不改变构建工具基线。
+三个平台任务互不交叉构建 Feng 可执行文件，只在对应 native host 产出当前 host 平台的 `feng`。macOS 使用 `macos-26` arm64 runner，并显式选择与本机一致的 Xcode 26.3、macOS 26.2 SDK、Homebrew `llvm@21` 21.1.8 和 Homebrew `coreutils`；`$(brew --prefix llvm@21)/bin` 必须位于构建任务 `PATH` 首位，使 Makefile 构建 Feng 实际调用的 host `clang` 与本机一致，`coreutils` 提供 smoke 回归脚本所需的 `timeout`，不得依赖 runner 的隐式工具解析结果，也不得将构建 Feng 自身使用的 host Clang 与 Feng 编译 `.ff` 时使用的 bundled Clang 混为同一工具。两个 Linux host runner 分别提供 x64 与 arm64 CPU，在 `ubuntu:26.04` job container 中安装与本机 `feng-ubuntu-dev:26.04` 相同的构建依赖，并校验 Ubuntu 26.04、Clang 21 后再执行任务。未参与构建的 `cc` 不作为 CI 环境约束。Git、GitHub CLI 与 CA 证书可作为 CI checkout 和预构建下载的传输依赖额外安装，不改变构建工具基线。CI checkout 固定关闭 Git LFS，并在任何构建或组装脚本读取 `toolchain/` 之前调用 `scripts/toolchain-prebuilt-fetch.sh`，按 [Feng CI 预构建 Toolchain Release 实施方案](./feng-prebuilt-toolchain-ci.md)恢复完整目录。
 
 macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架构 GNU / musl sysroot 生成该架构的两份 runtime。各 host 平台的精简 LLVM 产物位于仓库 `toolchain/llvm/<host-platform>/`，四份 Linux 目标 sysroot 位于仓库 `toolchain/sysroot/<platform>/`，均由 git lfs 管理。
 
@@ -191,19 +191,21 @@ macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架
 
 原生构件任务：
 
-1. checkout 仓库（含 git lfs 管理的精简 LLVM 与 Linux sysroot）
-2. 安装当前 host 的必要构建依赖；CI 不依赖 Python 可执行程序
-3. 直接使用仓库 `extlib/<platform>/libfeng_unwind.a` 中已经预构建并校验的五个平台产物；CI 不重复执行 `scripts/build_libunwind.sh`
-4. 执行当前 host 全量 `make test`，生成 `build/bin/feng`、公共 `build/include/` 及 §6.2 分配给当前任务的一份或两份 runtime；三个任务合计产出五份最终 `libfeng_runtime.a`，但不向 Makefile 增加用于交叉构建 Feng 可执行文件自身的 `TARGET_PLATFORM`
-5. 仅在版本 tag 创建或手动试发时校验 `feng` 的格式和 CPU 架构，并逐一校验 runtime 归档成员的格式和 CPU 架构
-6. 仅在版本 tag 创建或手动试发时生成并上传 `release-component-<host-platform>`。构件解压后的固定结构为 `<host-platform>/bin/feng`、`<host-platform>/lib/<runtime-platform>/libfeng_runtime.a`、`<host-platform>/include/` 和 `<host-platform>/SHA256SUMS`；`SHA256SUMS` 记录上述全部文件的 SHA-256。macOS 构件包含一份 runtime，两个 Linux 构件分别包含同架构的 GNU 与 musl runtime。
+1. checkout 仓库但不拉取 Git LFS 对象
+2. 安装当前 host 的必要构建依赖和 GitHub CLI；CI 不依赖 Python 可执行程序
+3. 调用 `scripts/toolchain-prebuilt-fetch.sh` 恢复完整 `toolchain/`
+4. 直接使用仓库 `extlib/<platform>/libfeng_unwind.a` 中已经预构建并校验的五个平台产物；CI 不重复执行 `scripts/build_libunwind.sh`
+5. 执行当前 host 全量 `make test`，生成 `build/bin/feng`、公共 `build/include/` 及 §6.2 分配给当前任务的一份或两份 runtime；三个任务合计产出五份最终 `libfeng_runtime.a`，但不向 Makefile 增加用于交叉构建 Feng 可执行文件自身的 `TARGET_PLATFORM`
+6. 仅在版本 tag 创建或手动试发时校验 `feng` 的格式和 CPU 架构，并逐一校验 runtime 归档成员的格式和 CPU 架构
+7. 仅在版本 tag 创建或手动试发时生成并上传 `release-component-<host-platform>`。构件解压后的固定结构为 `<host-platform>/bin/feng`、`<host-platform>/lib/<runtime-platform>/libfeng_runtime.a`、`<host-platform>/include/` 和 `<host-platform>/SHA256SUMS`；`SHA256SUMS` 记录上述全部文件的 SHA-256。macOS 构件包含一份 runtime，两个 Linux 构件分别包含同架构的 GNU 与 musl runtime。
 
-LSP / DAP 行为由第 4 步 `make test` 中的原生用例验证，干净安装验收不重复执行协议测试，也不为此引入 Python 可执行程序。Linux LLVM 内随包分发的私有 `libpython3.11.so.1.0` 仅用于 LLDB 初始化，不是 CI Python 依赖。
+LSP / DAP 行为由第 5 步 `make test` 中的原生用例验证，干净安装验收不重复执行协议测试，也不为此引入 Python 可执行程序。Linux LLVM 内随包分发的私有 `libpython3.11.so.1.0` 仅用于 LLDB 初始化，不是 CI Python 依赖。
 
 随附包任务：
 
 1. 仅在版本 tag 创建或手动试发时，与三个原生构件任务并行运行
-2. 在 Linux x64 发行构建环境 checkout 完整 LFS 资源并配置本次构建版本
+2. 在 Linux x64 发行构建环境 checkout 代码，调用统一拉取脚本恢复
+   `toolchain/`，并配置本次构建版本
 3. 调用 `scripts/release_bundled_packages.sh` 独立入口构建当前随附包集合
 4. 将该入口原子发布的目录上传为唯一的 `release-bundled-packages` artifact
 

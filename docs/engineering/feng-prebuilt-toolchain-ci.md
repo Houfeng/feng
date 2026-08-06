@@ -1,6 +1,6 @@
 # Feng CI 预构建 Toolchain Release 实施方案
 
-> 状态：分步实施中；预构建发布脚本及其 workflow 已实施，拉取端与现有 CI 接线尚未实施。
+> 状态：分步实施中；预构建发布端已验证，拉取端与现有 CI 接线已实施，待 CI 验证。
 
 ## 1. 目标
 
@@ -21,8 +21,9 @@
 
 - 新增一个独立的预构建发布脚本，将仓库 `toolchain/` 压缩并发布为一个
   GitHub Release asset。
-- 新增一个独立的预构建拉取脚本，根据版本锁下载、校验并恢复 CI 所需的
-  `toolchain/` 目录。
+- 新增一个独立的预构建拉取脚本，选择最新已发布的
+  `toolchain-prebuilt/*` Release asset，校验并恢复 CI 所需的 `toolchain/`
+  目录。
 - 新增独立的预构建发布 workflow，由 `toolchain-prebuilt/` 前缀 tag 触发。
 - 将现有 CI/Release workflow 的 checkout 改为不自动拉取 Git LFS，并在 checkout
   后调用预构建拉取脚本。
@@ -68,11 +69,13 @@ workflow 负责：
 
 workflow 不得自行执行 toolchain 归档、asset 命名、下载、解压或目录安装。
 
-### 3.3 固定版本、失败关闭
+### 3.3 最新预构建、失败关闭
 
-CI 必须使用版本锁中的固定 repository、固定 `toolchain-prebuilt/<version>` tag、固定 asset
-名称和固定 SHA-256，不使用 `latest`、浮动 tag 或未校验下载。Release、asset、摘要或
-目录结构任一不匹配时立即失败，不得回退到 Git LFS 或其他隐式来源。
+CI 固定从当前 GitHub repository 的非 draft Release 中，按发布时间选择最新的
+`toolchain-prebuilt/<version>` tag。该规则中的“最新”只在 `toolchain-prebuilt/`
+命名空间内计算，不得使用 GitHub 仓库级 `latest` 而误选普通 Feng `v*`
+Release。Release、asset 或目录结构任一不匹配时立即失败，不得回退到
+Git LFS 或其他隐式来源。
 
 ## 4. Prebuilt Release 契约
 
@@ -107,18 +110,7 @@ toolchain-prebuilt-<version>.tar.gz
 归档包含完整的 `toolchain/` 目录，包括三套 host LLVM 和全部四套 Linux sysroot。
 归档必须保留普通文件权限、可执行位、符号链接和 `toolchain/` 内部相对布局。
 
-### 4.3 版本锁
-
-仓库根目录新增普通 Git 文件：
-
-```text
-toolchain-prebuilt.lock
-```
-
-版本锁至少记录 Release repository、完整 tag、asset 名称和 SHA-256。版本锁由开发者
-在预构建发布成功后更新；发布脚本不得修改、暂存或提交版本锁。
-
-### 4.4 发布规则
+### 4.3 发布规则
 
 发布脚本只生成归档，不创建 Release、tag 或其他远端对象。workflow 的发布步骤在同名
 Release 已存在时上传归档，不存在时为触发它的现有 tag 创建 Release 并上传归档。
@@ -144,7 +136,7 @@ scripts/toolchain-prebuilt-publish.sh
 4. 通过 GitHub Actions step output 返回归档路径。
 
 任何准备或归档失败都必须返回非零状态。脚本不得访问 GitHub API，不得修改
-`toolchain/`、版本锁、Git index、tag 或 commit。
+`toolchain/`、Git index、tag 或 commit。
 
 ## 6. 预构建拉取脚本
 
@@ -154,19 +146,20 @@ scripts/toolchain-prebuilt-publish.sh
 scripts/toolchain-prebuilt-fetch.sh
 ```
 
-脚本固定读取仓库根目录的 `toolchain-prebuilt.lock`，不允许 workflow 覆盖 repository、
-tag、asset 名称或摘要。
+脚本不接受命令行参数，从 GitHub Actions 提供的 `GITHUB_REPOSITORY`
+读取 repository，并由 `GH_TOKEN` 向 GitHub API 进行只读访问。
 
 脚本职责：
 
-1. 严格解析并校验版本锁。
-2. 下载固定 Release 的固定 asset，不查询或使用 latest Release。
-4. 在仓库 `build/` 下创建本次调用专用的下载和解包 staging。
-5. 校验下载文件大小和 SHA-256 后再解包。
-6. 拒绝绝对路径、`..` 路径、越界符号链接、设备文件和非规范顶层目录。
-7. 校验完整 `toolchain/` 布局。
-8. 全部输入通过后原子恢复完整 `toolchain/` 目录。
-9. 清理 staging 并输出恢复的 prebuilt tag。
+1. 查询当前 repository 的最新 100 个 Release，过滤 draft 和非
+   `toolchain-prebuilt/` tag，按 `published_at` 选择最新一个。
+2. 根据 tag 推导唯一 asset 名称并下载，不使用仓库级 latest Release。
+3. 在仓库 `build/` 下创建本次调用专用的下载和解包 staging。
+4. 解包前拒绝绝对路径、`..` 路径和非规范顶层目录。
+5. 解包后拒绝越界符号链接、设备文件，并校验三套 host LLVM 和
+   全部四套 Linux sysroot。
+6. 全部输入通过后整体替换 checkout 中的 `toolchain/` 目录。
+7. 清理 staging 并输出恢复的 prebuilt tag。
 
 脚本不得删除仓库根目录或其他开发者文件。失败时不得留下部分恢复的最终目录；若
 替换已开始，必须恢复调用前目录或保持完整的新目录。
@@ -215,9 +208,9 @@ toolchain，因此不调用拉取脚本。
 
 ## 8. 错误处理与安全要求
 
-- tag、Release、asset 或版本锁缺失时失败。
-- 摘要或内容校验失败时不得重试为其他来源。
-- 下载凭证不得写入日志、归档、版本锁或最终 toolchain。
+- Release 或 asset 缺失时失败。
+- 内容校验失败时不得重试为其他来源。
+- 下载凭证不得写入日志、归档或最终 toolchain。
 - 公共仓库下载仍须使用固定 HTTPS 地址并校验证书。
 - GitHub token 只授予对应 Job 所需的最小权限。
 - 发布和拉取脚本中的所有函数均按项目要求添加职责注释，不得把 shell 逻辑复制到
@@ -231,7 +224,7 @@ toolchain，因此不调用拉取脚本。
 - 非 `toolchain-prebuilt/` tag 被拒绝。
 - 缺少 `toolchain/` 目录时失败。
 - 归档包含完整 `toolchain/`，并保留可执行位与符号链接。
-- 失败后不修改源码 toolchain、版本锁、Git index、tag 或 commit。
+- 失败后不修改源码 toolchain、Git index、tag 或 commit。
 
 workflow 发布步骤通过可控替身验证已有 Release 和只有 tag 两种路径，不得在专项测试中
 创建真实 Release。
@@ -240,10 +233,10 @@ workflow 发布步骤通过可控替身验证已有 Release 和只有 tag 两种
 
 - 完整 `toolchain/` 目录被恢复。
 - 三套 host LLVM 和全部四套 Linux sysroot 均存在。
-- 缺失 asset、下载失败、大小不符和 SHA-256 不符时失败。
+- 没有符合前缀的 Release、缺失 asset 或下载失败时失败。
 - 路径穿越、越界符号链接、设备文件和错误顶层目录被拒绝。
 - 最终目录原子替换，失败时不留下部分内容。
-- 不读取 latest Release，不回退到 Git LFS。
+- 仅在 `toolchain-prebuilt/` 命名空间内选择最新 Release，不回退到 Git LFS。
 
 ### 9.3 集成验收
 
@@ -267,13 +260,12 @@ workflow 发布步骤通过可控替身验证已有 Release 和只有 tag 两种
 4. 临时恢复 Git LFS 访问，或在持有完整 LFS 对象的受信开发环境准备首版 assets。
 5. 在本地或 GitHub 页面创建首个 `toolchain-prebuilt/<version>` tag，由独立
    workflow 生成并发布预构建归档。
-6. 根据已发布归档更新并提交 `toolchain-prebuilt.lock`。
-7. 修改现有 CI/Release workflow：checkout 使用 `lfs: false`，随后调用拉取脚本。
-8. 完成三个 host 的全量回归和一次完整试发。
-9. 确认一段稳定运行期内普通 CI、试发和正式发布均不再消耗 Git LFS 下载带宽。
-10. 稳定后再决定是否进入 §11 的历史 LFS 清理阶段。
+6. 修改现有 CI/Release workflow：checkout 使用 `lfs: false`，随后调用拉取脚本。
+7. 完成三个 host 的全量回归和一次完整试发。
+8. 确认一段稳定运行期内普通 CI、试发和正式发布均不再消耗 Git LFS 下载带宽。
+9. 稳定后再决定是否进入 §11 的历史 LFS 清理阶段。
 
-步骤 5 成功前不得切换现有 CI；步骤 8 完成前不得删除或重写现有 LFS 历史。
+步骤 5 成功前不得切换现有 CI；步骤 7 完成前不得删除或重写现有 LFS 历史。
 
 ## 11. 后续历史 LFS 清理
 

@@ -50,13 +50,18 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     steps:
-      - name: Checkout with release assets
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          lfs: true
+          lfs: false
 
       - name: Install macOS build environment
-        run: brew install coreutils llvm@21
+        run: brew install coreutils gh llvm@21
+
+      - name: Restore toolchain prebuilt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/toolchain-prebuilt-fetch.sh
 
       - name: Configure build version
         run: scripts/release_version.sh set --version="${{ needs.prepare.outputs.version }}"
@@ -108,13 +113,18 @@ jobs:
         run: >-
           apt-get update &&
           apt-get install -y --no-install-recommends
-          binutils ca-certificates clang file git git-lfs libc6-dev
+          binutils ca-certificates clang file gh git libc6-dev
           libclang-rt-dev lld make nodejs unzip zip
 
-      - name: Checkout with release assets
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          lfs: true
+          lfs: false
+
+      - name: Restore toolchain prebuilt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/toolchain-prebuilt-fetch.sh
 
       - name: Configure build version
         run: scripts/release_version.sh set --version="${{ needs.prepare.outputs.version }}"
@@ -155,13 +165,18 @@ jobs:
         run: >-
           apt-get update &&
           apt-get install -y --no-install-recommends
-          binutils ca-certificates clang file git git-lfs libc6-dev
+          binutils ca-certificates clang file gh git libc6-dev
           libclang-rt-dev lld make nodejs unzip zip
 
-      - name: Checkout with release assets
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          lfs: true
+          lfs: false
+
+      - name: Restore toolchain prebuilt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/toolchain-prebuilt-fetch.sh
 
       - name: Configure build version
         run: scripts/release_version.sh set --version="${{ needs.prepare.outputs.version }}"
@@ -200,12 +215,17 @@ jobs:
         run: >-
           apt-get update &&
           apt-get install -y --no-install-recommends
-          binutils ca-certificates file git git-lfs unzip zip
+          binutils ca-certificates file gh git unzip zip
 
-      - name: Checkout with release assets
+      - name: Checkout
         uses: actions/checkout@v6
         with:
-          lfs: true
+          lfs: false
+
+      - name: Restore toolchain prebuilt
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/toolchain-prebuilt-fetch.sh
 
       - name: Configure build version
         run: scripts/release_version.sh set --version="${{ needs.prepare.outputs.version }}"
