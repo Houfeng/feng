@@ -452,9 +452,10 @@ struct FengTypeMember {
     bool is_mixable; /* normalized declaration fact for a @mixable method */
     bool is_mixin_static_wrapper;
     bool is_mixin_instance_wrapper;
-    /* Non-NULL only for an ordinary field synthesized from a member mix.
-     * These borrowed pointers preserve initialization and diagnostic origin;
-     * the generated field itself remains an ordinary target member. */
+    /* Non-NULL only for a field or wrapper synthesized from a member mix.
+     * These borrowed pointers preserve initialization, diagnostic, Definition,
+     * and LSP presentation origin; the generated member remains an ordinary
+     * target member after expansion. */
     const FengTypeMixinDecl *mixin_origin;
     const FengTypeMember *mixin_source_member;
     FengSlice doc_comment;

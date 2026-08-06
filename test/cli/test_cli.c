@@ -16664,6 +16664,469 @@ static void test_lsp_mixin_member_completion_hover_and_definition(void) {
     free(source_path);
 }
 
+/* Verifies that Hover on a mixin directive presents its complete generated
+ * surface while every source-side syntax position reuses ordinary Hover. */
+static void test_lsp_mixin_declaration_and_source_hover(void) {
+    static const char *kSource =
+        "module test.lsp.mixin_declaration_hover;\n"
+        "\n"
+        "spec Widget {\n"
+        "    func draw(area: int): int;\n"
+        "}\n"
+        "\n"
+        "open let replacement: string = \"literal\";\n"
+        "\n"
+        "open func seed(): int { return 9; }\n"
+        "\n"
+        "type View: Widget {\n"
+        "    open var mutableValue: int = 3;\n"
+        "    open var label: string = \"view\";\n"
+        "    seal let hidden: int = 1;\n"
+        "    open static let shared: int = 2;\n"
+        "\n"
+        "    open func localOnly(): int { return 0; }\n"
+        "    open static func ignored(target: Widget): void {}\n"
+        "\n"
+        "    @mixable\n"
+        "    open static func draw(target: Widget, area: int): int {\n"
+        "        return area;\n"
+        "    }\n"
+        "\n"
+        "    func View(value: int) { self.mutableValue = value; }\n"
+        "}\n"
+        "\n"
+        "type Extra {\n"
+        "    open let extra: bool;\n"
+        "}\n"
+        "\n"
+        "type Button: Widget {\n"
+        "    ...: View = View(seed()) {\n"
+        "        mutableValue: 12,\n"
+        "        label: replacement\n"
+        "    };\n"
+        "    ...: Extra;\n"
+        "    open var label: string;\n"
+        "}\n"
+        "\n"
+        "type Inferred: Widget {\n"
+        "    ... = View(seed());\n"
+        "}\n";
+    static const char *kPlaintextInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{\"textDocument\":{\"hover\":{\"contentFormat\":[\"plaintext\"]}}}}}";
+    static const char *kMarkdownInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{\"textDocument\":{\"hover\":{\"contentFormat\":[\"markdown\",\"plaintext\"]}}}}}";
+    const char *integer_type = sizeof(void *) >= 8U ? "i64" : "i32";
+    char *expected_field = dup_printf("var mutableValue: %s", integer_type);
+    char *expected_wrappers = dup_printf(
+        "static func draw(target: Widget, area: %s): %s\\n"
+        "func draw(area: %s): %s",
+        integer_type,
+        integer_type,
+        integer_type,
+        integer_type);
+    char *expected_markdown = dup_printf(
+        "```feng\\nvar mutableValue: %s\\n"
+        "static func draw(target: Widget, area: %s): %s\\n"
+        "func draw(area: %s): %s\\n```",
+        integer_type,
+        integer_type,
+        integer_type,
+        integer_type,
+        integer_type);
+    char *expected_constructor = dup_printf("ctor View(value: %s): void",
+                                             integer_type);
+    char *expected_seed = dup_printf("func seed(): %s", integer_type);
+    char *output;
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "    ...: View = View(seed()) {",
+                                        strlen("    "));
+    ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(output, expected_field) != NULL);
+    ASSERT(strstr(output, expected_wrappers) != NULL);
+    ASSERT(strstr(output, "var label: string") == NULL);
+    ASSERT(strstr(output, "hidden") == NULL);
+    ASSERT(strstr(output, "shared") == NULL);
+    ASSERT(strstr(output, "localOnly") == NULL);
+    ASSERT(strstr(output, "ignored") == NULL);
+    ASSERT(strstr(output, "extra") == NULL);
+    ASSERT(strstr(output, "member mix") == NULL);
+    ASSERT(strstr(output, "source: View") == NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kMarkdownInitialize,
+                                        "    ...: View = View(seed()) {",
+                                        strlen("    "));
+    ASSERT(strstr(output, expected_markdown) != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "    ...: View = View(seed()) {",
+                                        strlen("    ...: "));
+    ASSERT(strstr(output, "type View") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "    ...: View = View(seed()) {",
+                                        strlen("    ...: View = "));
+    ASSERT(strstr(output, expected_constructor) != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "    ...: View = View(seed()) {",
+                                        strlen("    ...: View = View("));
+    ASSERT(strstr(output, expected_seed) != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "        mutableValue: 12,",
+                                        strlen("        "));
+    ASSERT(strstr(output, expected_field) != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "        label: replacement",
+                                        strlen("        "));
+    ASSERT(strstr(output, "var label: string") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "        label: replacement",
+                                        strlen("        label: "));
+    ASSERT(strstr(output, "let replacement: string") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kPlaintextInitialize,
+                                        "    ... = View(seed());",
+                                        strlen("    ... = "));
+    ASSERT(strstr(output, expected_constructor) != NULL);
+    ASSERT(strstr(output, "type View") == NULL);
+    free(output);
+    free(expected_seed);
+    free(expected_constructor);
+    free(expected_markdown);
+    free(expected_wrappers);
+    free(expected_field);
+}
+
+/* Verifies aggregate mixin Hover uses final substituted and transitive target
+ * members, including wrappers contributed by a visible fit. */
+static void test_lsp_mixin_hover_generics_multilevel_and_fit(void) {
+    static const char *kSource =
+        "module test.lsp.mixin_hover_final_surface;\n"
+        "\n"
+        "open type GenericView<T> {\n"
+        "    open var value: T;\n"
+        "}\n"
+        "\n"
+        "type GenericButton {\n"
+        "    ...: GenericView<int>;\n"
+        "}\n"
+        "\n"
+        "spec Widget {\n"
+        "    func draw(area: int): int;\n"
+        "}\n"
+        "\n"
+        "type View: Widget {\n"
+        "    open let width: int;\n"
+        "    @mixable\n"
+        "    open static func draw(target: Widget, area: int): int {\n"
+        "        return area;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "type Layer: Widget {\n"
+        "    ...: View;\n"
+        "}\n"
+        "\n"
+        "type Leaf: Widget {\n"
+        "    ...: Layer;\n"
+        "}\n"
+        "\n"
+        "type FitView: Widget {}\n"
+        "\n"
+        "open fit FitView {\n"
+        "    @mixable\n"
+        "    open static func draw(target: Widget, area: int): int {\n"
+        "        return area + 1;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "type FitButton: Widget {\n"
+        "    ...: FitView;\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    const char *integer_type = sizeof(void *) >= 8U ? "i64" : "i32";
+    char *expected_generic = dup_printf("var value: %s", integer_type);
+    char *expected_width = dup_printf("let width: %s", integer_type);
+    char *expected_static = dup_printf(
+        "static func draw(target: Widget, area: %s): %s",
+        integer_type,
+        integer_type);
+    char *expected_instance = dup_printf("func draw(area: %s): %s",
+                                         integer_type,
+                                         integer_type);
+    char *output;
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    ...: GenericView<int>;",
+                                        strlen("    "));
+    ASSERT(strstr(output, expected_generic) != NULL);
+    ASSERT(strstr(output, "var value: T") == NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    ...: Layer;",
+                                        strlen("    "));
+    ASSERT(strstr(output, expected_width) != NULL);
+    ASSERT(strstr(output, expected_static) != NULL);
+    ASSERT(strstr(output, expected_instance) != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    ...: FitView;",
+                                        strlen("    "));
+    ASSERT(strstr(output, expected_static) != NULL);
+    ASSERT(strstr(output, expected_instance) != NULL);
+    free(output);
+    free(expected_instance);
+    free(expected_static);
+    free(expected_width);
+    free(expected_generic);
+}
+
+/* Verifies mixin Hover is identical for a source type in another project
+ * source module and for a source type loaded from an external .fb package. */
+static void test_lsp_mixin_hover_cross_module_and_package(void) {
+    static const char *kPackageSource =
+        "open module test.lsp.mixin_hover_package;\n"
+        "\n"
+        "open spec PackageWidget {\n"
+        "    func draw(area: int): int;\n"
+        "}\n"
+        "\n"
+        "open type PackageView: PackageWidget {\n"
+        "    open var packageValue: int;\n"
+        "    @mixable\n"
+        "    open static func draw(target: PackageWidget, area: int): int {\n"
+        "        return area;\n"
+        "    }\n"
+        "    open func PackageView(value: int) { self.packageValue = value; }\n"
+        "}\n";
+    static const char *kSharedSource =
+        "open module test.lsp.mixin_hover_shared;\n"
+        "\n"
+        "open spec LocalWidget {\n"
+        "    func draw(area: int): int;\n"
+        "}\n"
+        "\n"
+        "open type LocalView: LocalWidget {\n"
+        "    open let localValue: string;\n"
+        "    @mixable\n"
+        "    open static func draw(target: LocalWidget, area: int): int {\n"
+        "        return area;\n"
+        "    }\n"
+        "}\n";
+    static const char *kMainSource =
+        "module test.lsp.mixin_hover_consumer;\n"
+        "import test.lsp.mixin_hover_shared;\n"
+        "import test.lsp.mixin_hover_package;\n"
+        "\n"
+        "type LocalButton: LocalWidget {\n"
+        "    ...: LocalView;\n"
+        "}\n"
+        "\n"
+        "type PackageButton: PackageWidget {\n"
+        "    ...: PackageView = PackageView(3) {\n"
+        "        packageValue: 4\n"
+        "    };\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    const char *integer_type = sizeof(void *) >= 8U ? "i64" : "i32";
+    char template_path[] = "temp/feng_lsp_mixin_hover_cross_package_XXXXXX";
+    char *workspace_dir;
+    char *package_dir;
+    char *package_manifest;
+    char *package_src_dir;
+    char *package_source_path;
+    char *bundle_path;
+    char *consumer_dir;
+    char *consumer_manifest;
+    char *consumer_src_dir;
+    char *shared_path;
+    char *main_path;
+    char *output;
+    char *expected_local_static;
+    char *expected_package_field;
+    char *expected_package_static;
+    char *expected_constructor;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    package_dir = path_join(workspace_dir, "package");
+    package_manifest = path_join(package_dir, "feng.fm");
+    package_src_dir = path_join(package_dir, "src");
+    package_source_path = path_join(package_src_dir, "view.ff");
+    bundle_path = path_join(package_dir,
+                            "build/pkg/lsp_mixin_hover_package-0.1.0.fb");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_dir, "src");
+    shared_path = path_join(consumer_src_dir, "shared.ff");
+    main_path = path_join(consumer_src_dir, "main.ff");
+
+    mkdir_p(package_src_dir);
+    mkdir_p(consumer_src_dir);
+    write_text_file(package_manifest,
+                    "[package]\n"
+                    "name: \"lsp_mixin_hover_package\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(package_source_path, kPackageSource);
+    {
+        char *argv[] = { package_dir };
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    ASSERT(path_exists(bundle_path));
+
+    write_text_file(consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_mixin_hover_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "lsp_mixin_hover_package: "
+                    "\"../package/build/pkg/lsp_mixin_hover_package-0.1.0.fb\"\n");
+    write_text_file(shared_path, kSharedSource);
+    write_text_file(main_path, kMainSource);
+    expected_local_static = dup_printf(
+        "static func draw(target: LocalWidget, area: %s): %s",
+        integer_type,
+        integer_type);
+    expected_package_field = dup_printf("var packageValue: %s", integer_type);
+    expected_package_static = dup_printf(
+        "static func draw(target: PackageWidget, area: %s): %s",
+        integer_type,
+        integer_type);
+    expected_constructor = dup_printf("ctor PackageView(value: %s): void",
+                                       integer_type);
+
+    output = capture_lsp_position_response_at_path(
+        main_path,
+        kMainSource,
+        kInitialize,
+        "textDocument/hover",
+        "    ...: LocalView;",
+        strlen("    "),
+        "let localValue: string");
+    ASSERT(strstr(output, "let localValue: string") != NULL);
+    ASSERT(strstr(output, expected_local_static) != NULL);
+    if (sizeof(void *) >= 8U) {
+        ASSERT(strstr(output, "func draw(area: i64): i64") != NULL);
+    } else {
+        ASSERT(strstr(output, "func draw(area: i32): i32") != NULL);
+    }
+    free(output);
+
+    output = capture_lsp_position_response_at_path(
+        main_path,
+        kMainSource,
+        kInitialize,
+        "textDocument/hover",
+        "    ...: LocalView;",
+        strlen("    ...: "),
+        "type LocalView");
+    ASSERT(strstr(output, "type LocalView") != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(
+        main_path,
+        kMainSource,
+        kInitialize,
+        "textDocument/hover",
+        "    ...: PackageView = PackageView(3) {",
+        strlen("    "),
+        expected_package_field);
+    ASSERT(strstr(output, expected_package_field) != NULL);
+    ASSERT(strstr(output, expected_package_static) != NULL);
+    if (sizeof(void *) >= 8U) {
+        ASSERT(strstr(output, "func draw(area: i64): i64") != NULL);
+    } else {
+        ASSERT(strstr(output, "func draw(area: i32): i32") != NULL);
+    }
+    free(output);
+
+    output = capture_lsp_position_response_at_path(
+        main_path,
+        kMainSource,
+        kInitialize,
+        "textDocument/hover",
+        "    ...: PackageView = PackageView(3) {",
+        strlen("    ...: "),
+        "type PackageView");
+    ASSERT(strstr(output, "type PackageView") != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(
+        main_path,
+        kMainSource,
+        kInitialize,
+        "textDocument/hover",
+        "    ...: PackageView = PackageView(3) {",
+        strlen("    ...: PackageView = "),
+        expected_constructor);
+    ASSERT(strstr(output, expected_constructor) != NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(
+        main_path,
+        kMainSource,
+        kInitialize,
+        "textDocument/hover",
+        "        packageValue: 4",
+        strlen("        "),
+        expected_package_field);
+    ASSERT(strstr(output, expected_package_field) != NULL);
+    free(output);
+
+    free(expected_constructor);
+    free(expected_package_static);
+    free(expected_package_field);
+    free(expected_local_static);
+    free(main_path);
+    free(shared_path);
+    free(consumer_src_dir);
+    free(consumer_manifest);
+    free(consumer_dir);
+    free(bundle_path);
+    free(package_source_path);
+    free(package_src_dir);
+    free(package_manifest);
+    free(package_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 /* Verifies mixin conflicts publish their original source declaration through
  * standard LSP diagnostic relatedInformation. */
 static void test_lsp_mixin_diagnostic_related_information(void) {
@@ -16877,6 +17340,9 @@ int main(void) {
     test_lsp_annotation_completion_filter_prefix();
     test_lsp_mixable_annotation_completion_and_hover();
     test_lsp_mixin_member_completion_hover_and_definition();
+    test_lsp_mixin_declaration_and_source_hover();
+    test_lsp_mixin_hover_generics_multilevel_and_fit();
+    test_lsp_mixin_hover_cross_module_and_package();
     test_lsp_mixin_diagnostic_related_information();
     test_direct_options_default_host_and_out_and_accept_sysroot();
     test_direct_build_cleans_stale_ir_on_frontend_failure();

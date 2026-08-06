@@ -1,6 +1,6 @@
 # Feng mixin LSP Hover 优化开发方案
 
-> 状态：待实施
+> 状态：已实施
 >
 > 日期：2026-08-06
 >
@@ -305,28 +305,28 @@ Hover 请求的新增工作限于：
 
 ### 9.1 规范
 
-- [ ] 在 `docs/specifications/feng-cli.md` 收敛 `...` 复合 Hover 以及右侧普通 Hover
+- [x] 在 `docs/specifications/feng-cli.md` 收敛 `...` 复合 Hover 以及右侧普通 Hover
   复用规则。
 
 ### 9.2 查询与展示
 
-- [ ] 增加 `...` token 的精确定位和复合 Hover 构建。
-- [ ] 按当前 `mixin_origin` 输出实际生成的字段、静态 wrapper 和实例 wrapper。
-- [ ] 静态 wrapper 签名显示 `static`，且不添加标题或来源说明。
-- [ ] 排除生成成员共享 token 对普通成员声明命中的干扰。
+- [x] 增加 `...` token 的精确定位和复合 Hover 构建。
+- [x] 按当前 `mixin_origin` 输出实际生成的字段、静态 wrapper 和实例 wrapper。
+- [x] 静态 wrapper 签名显示 `static`，且不添加标题或来源说明。
+- [x] 排除生成成员共享 token 对普通成员声明命中的干扰。
 
 ### 9.3 右侧普通 Hover 复用
 
-- [ ] 将显式 `source_type` 接入 AST 与 symbol/cache 类型引用查询。
-- [ ] 将 `source_constructor` 接入普通类型、调用、表达式和对象字段遍历。
-- [ ] 推导形式忽略仅由语义阶段合成的 `source_type` Hover 命中。
-- [ ] 在普通对象字面量 owner 解析中统一支持构造调用 target。
+- [x] 将显式 `source_type` 接入 AST 与 symbol/cache 类型引用查询。
+- [x] 将 `source_constructor` 接入普通类型、调用、表达式和对象字段遍历。
+- [x] 推导形式忽略仅由语义阶段合成的 `source_type` Hover 命中。
+- [x] 在普通对象字面量 owner 解析中统一支持构造调用 target。
 
 ### 9.4 测试与回归
 
-- [ ] 新增第 8 节所列 LSP 协议测试。
-- [ ] 验证查询不触发同步分析、构建或磁盘 I/O。
-- [ ] 在 Codex 沙箱外执行 `make test` 全量回归。
+- [x] 新增第 8 节所列 LSP 协议测试。
+- [x] 验证查询不触发同步分析、构建或磁盘 I/O。
+- [x] 在 Codex 沙箱外执行 `make test` 全量回归。
 
 ## 10. 验收标准
 

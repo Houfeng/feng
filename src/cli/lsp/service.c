@@ -3951,8 +3951,36 @@ static size_t decl_end(const FengDecl *decl) {
             }
             break;
         case FENG_DECL_TYPE:
+            for (index = 0U; index < decl->as.type_decl.mixin_count; ++index) {
+                const FengTypeMixinDecl *mixin = &decl->as.type_decl.mixins[index];
+                size_t limit = token_end_offset(mixin->token);
+
+                if (!mixin->infer_source_type && mixin->source_type != NULL) {
+                    size_t type_end = type_ref_end(mixin->source_type);
+
+                    if (type_end > limit) {
+                        limit = type_end;
+                    }
+                }
+                if (mixin->source_constructor != NULL) {
+                    size_t constructor_end = expr_end(mixin->source_constructor);
+
+                    if (constructor_end > limit) {
+                        limit = constructor_end;
+                    }
+                }
+                if (limit > end) {
+                    end = limit;
+                }
+            }
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
-                size_t limit = member_end(decl->as.type_decl.members[index]);
+                const FengTypeMember *member = decl->as.type_decl.members[index];
+                size_t limit;
+
+                if (member->mixin_origin != NULL) {
+                    continue;
+                }
+                limit = member_end(member);
                 if (limit > end) {
                     end = limit;
                 }
@@ -4779,9 +4807,12 @@ static const FengDecl *find_enclosing_decl(const FengProgram *program,
         }
         if (decl->kind == FENG_DECL_TYPE) {
             for (member_index = 0U; member_index < decl->as.type_decl.member_count; ++member_index) {
-                if (offset >= decl->as.type_decl.members[member_index]->token.offset &&
-                    offset <= member_end(decl->as.type_decl.members[member_index])) {
-                    *out_member = decl->as.type_decl.members[member_index];
+                const FengTypeMember *member = decl->as.type_decl.members[member_index];
+
+                if (member->mixin_origin == NULL &&
+                    offset >= member->token.offset &&
+                    offset <= member_end(member)) {
+                    *out_member = member;
                     return decl;
                 }
             }
@@ -7906,11 +7937,20 @@ static bool find_decl_token_hit_member(const char *source_text,
                                        size_t offset,
                                        FengLspResolvedTarget *target) {
     size_t index;
-    bool hit_member_name = offset_in_slice_from_source(source_text,
-                                                       member_name_slice(member),
-                                                       offset);
-    bool hit_member_token = offset_in_token(member->token, offset);
+    bool hit_member_name;
+    bool hit_member_token;
 
+    /* Generated mixin members have no declaration identifier in the target
+     * source. Their token and name slices belong to the expansion directive
+     * or source member and must not participate in raw-source declaration
+     * lookup. Ordinary use sites are resolved through member expressions. */
+    if (member->mixin_origin != NULL) {
+        return false;
+    }
+    hit_member_name = offset_in_slice_from_source(source_text,
+                                                  member_name_slice(member),
+                                                  offset);
+    hit_member_token = offset_in_token(member->token, offset);
     if (hit_member_name ||
         (hit_member_token &&
          !(owner_decl != NULL &&
@@ -8191,6 +8231,9 @@ static bool find_type_ref_in_member(const FengDecl *owner_decl,
     size_t owner_type_param_count = 0U;
     FengTypeParam inferred_type_param = {0};
 
+    if (member == NULL || member->mixin_origin != NULL) {
+        return false;
+    }
     /* Extract type params from the owner decl so field type refs like T in
      * `var value: T` inside `type Box<T>` can resolve to the type parameter. */
     if (owner_decl != NULL) {
@@ -9002,6 +9045,31 @@ static bool find_type_ref_hit(const FengDecl *decl,
                     return true;
                 }
             }
+            for (index = 0U; index < decl->as.type_decl.mixin_count; ++index) {
+                const FengTypeMixinDecl *mixin = &decl->as.type_decl.mixins[index];
+
+                if ((!mixin->infer_source_type &&
+                     resolve_type_ref_at_offset(session,
+                                                program,
+                                                mixin->source_type,
+                                                offset,
+                                                target,
+                                                decl,
+                                                decl->as.type_decl.type_params,
+                                                decl->as.type_decl.type_param_count)) ||
+                    find_type_ref_in_expr(mixin->source_constructor,
+                                          program,
+                                          session,
+                                          offset,
+                                          target,
+                                          decl,
+                                          NULL,
+                                          0U,
+                                          decl->as.type_decl.type_params,
+                                          decl->as.type_decl.type_param_count)) {
+                    return true;
+                }
+            }
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
                 if (find_type_ref_in_member(decl,
                                             decl->as.type_decl.members[index],
@@ -9425,9 +9493,20 @@ static const FengExpr *find_expr_hit_in_decl(const FengDecl *decl, size_t offset
         case FENG_DECL_FUNCTION:
             return find_expr_hit_in_block(decl->as.function_decl.body, offset);
         case FENG_DECL_TYPE:
+            for (index = 0U; index < decl->as.type_decl.mixin_count; ++index) {
+                const FengExpr *hit = find_expr_hit(
+                    decl->as.type_decl.mixins[index].source_constructor,
+                    offset);
+
+                if (hit != NULL) {
+                    return hit;
+                }
+            }
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
                 const FengTypeMember *member = decl->as.type_decl.members[index];
-                const FengExpr *hit = member->kind == FENG_TYPE_MEMBER_FIELD
+                const FengExpr *hit = member->mixin_origin != NULL
+                                          ? NULL
+                                          : member->kind == FENG_TYPE_MEMBER_FIELD
                                           ? find_expr_hit(member->as.field.initializer, offset)
                                           : find_expr_hit_in_block(member->as.callable.body, offset);
                 if (hit != NULL) {
@@ -11832,9 +11911,20 @@ static const FengExpr *find_call_hit_in_decl(const FengDecl *decl, size_t offset
         case FENG_DECL_FUNCTION:
             return find_call_hit_in_block(decl->as.function_decl.body, offset);
         case FENG_DECL_TYPE:
+            for (index = 0U; index < decl->as.type_decl.mixin_count; ++index) {
+                const FengExpr *hit = find_call_hit_expr(
+                    decl->as.type_decl.mixins[index].source_constructor,
+                    offset);
+
+                if (hit != NULL) {
+                    return hit;
+                }
+            }
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
                 const FengTypeMember *member = decl->as.type_decl.members[index];
-                const FengExpr *hit = member->kind == FENG_TYPE_MEMBER_FIELD
+                const FengExpr *hit = member->mixin_origin != NULL
+                                          ? NULL
+                                          : member->kind == FENG_TYPE_MEMBER_FIELD
                                           ? find_call_hit_expr(member->as.field.initializer, offset)
                                           : find_call_hit_in_block(member->as.callable.body, offset);
                 if (hit != NULL) {
@@ -12088,6 +12178,10 @@ static bool resolve_object_field_target_decl(const FengLspAnalysisSession *sessi
                                              size_t offset,
                                              const FengLspLocalList *locals,
                                              FengLspResolvedTarget *target);
+static bool find_object_field_syntax_hit_decl(const FengDecl *decl,
+                                              size_t offset,
+                                              const FengExpr **out_construction,
+                                              FengSlice *out_name);
 
 static bool resolve_target_at(const FengLspAnalysisSession *session,
                               const FengProgram *program,
@@ -12353,222 +12447,188 @@ static bool resolve_expr_reference_target(const FengLspAnalysisSession *session,
     return target->kind != FENG_LSP_RESOLVED_NONE;
 }
 
-static bool resolve_object_field_target_block(const FengLspAnalysisSession *session,
-                                              const FengProgram *program,
-                                              const FengBlock *block,
-                                              size_t offset,
-                                              const FengLspLocalList *locals,
-                                              FengLspResolvedTarget *target);
+/* Forward declaration for object-field syntax traversal through nested blocks. */
+static bool find_object_field_syntax_hit_block(const FengBlock *block,
+                                               size_t offset,
+                                               const FengExpr **out_construction,
+                                               FengSlice *out_name);
 
-static bool resolve_object_field_target_expr(const FengLspAnalysisSession *session,
-                                             const FengProgram *program,
-                                             const FengExpr *expr,
-                                             size_t offset,
-                                             const FengLspLocalList *locals,
-                                             FengLspResolvedTarget *target) {
+/* Find an object-literal field token and return its ordinary construction
+ * target. Resolution is deliberately separate so AST and persistent-symbol
+ * providers can consume the same source shape without mixin-specific rules. */
+static bool find_object_field_syntax_hit_expr(const FengExpr *expr,
+                                              size_t offset,
+                                              const FengExpr **out_construction,
+                                              FengSlice *out_name) {
     size_t index;
 
-    if (expr == NULL || offset < expr->token.offset || offset > expr_end(expr)) {
+    if (expr == NULL || offset < expr_start(expr) || offset > expr_end(expr)) {
         return false;
     }
     switch (expr->kind) {
         case FENG_EXPR_ARRAY_LITERAL:
             for (index = 0U; index < expr->as.array_literal.count; ++index) {
-                if (resolve_object_field_target_expr(session,
-                                                     program,
-                                                     expr->as.array_literal.items[index],
-                                                     offset,
-                                                     locals,
-                                                     target)) {
+                if (find_object_field_syntax_hit_expr(expr->as.array_literal.items[index],
+                                                      offset,
+                                                      out_construction,
+                                                      out_name)) {
                     return true;
                 }
             }
             return false;
         case FENG_EXPR_TUPLE_LITERAL:
             for (index = 0U; index < expr->as.tuple_literal.count; ++index) {
-                if (resolve_object_field_target_expr(session,
-                                                     program,
-                                                     expr->as.tuple_literal.items[index],
-                                                     offset,
-                                                     locals,
-                                                     target)) {
+                if (find_object_field_syntax_hit_expr(expr->as.tuple_literal.items[index],
+                                                      offset,
+                                                      out_construction,
+                                                      out_name)) {
                     return true;
                 }
             }
             return false;
         case FENG_EXPR_GENERIC_TARGET:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.generic_target.target,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(expr->as.generic_target.target,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_EXPR_ARRAY_NEW:
-            return resolve_object_field_target_expr(session, program,
-                                                    expr->as.array_new.size,
-                                                    offset, locals, target);
-        case FENG_EXPR_OBJECT_LITERAL: {
-            FengLspResolvedTarget owner_target = {0};
-
-            if (resolve_object_field_target_expr(session,
-                                                 program,
-                                                 expr->as.object_literal.target,
-                                                 offset,
-                                                 locals,
-                                                 target)) {
+            return find_object_field_syntax_hit_expr(expr->as.array_new.size,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
+        case FENG_EXPR_OBJECT_LITERAL:
+            if (find_object_field_syntax_hit_expr(expr->as.object_literal.target,
+                                                  offset,
+                                                  out_construction,
+                                                  out_name)) {
                 return true;
             }
-            (void)resolve_expr_target(session,
-                                      program,
-                                      expr->as.object_literal.target,
-                                      locals,
-                                      &owner_target);
             for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
-                if (offset_in_token(expr->as.object_literal.fields[index].token, offset) &&
-                    owner_target.kind == FENG_LSP_RESOLVED_DECL) {
-                    target->kind = FENG_LSP_RESOLVED_MEMBER;
-                    target->decl = owner_target.decl;
-                    target->member = find_member_by_name(owner_target.decl,
-                                                         expr->as.object_literal.fields[index].name);
-                    return target->member != NULL;
+                const FengObjectFieldInit *field = &expr->as.object_literal.fields[index];
+
+                if (offset_in_token(field->token, offset)) {
+                    *out_construction = expr->as.object_literal.target;
+                    *out_name = field->name;
+                    return true;
                 }
-                if (resolve_object_field_target_expr(session,
-                                                     program,
-                                                     expr->as.object_literal.fields[index].value,
-                                                     offset,
-                                                     locals,
-                                                     target)) {
+                if (find_object_field_syntax_hit_expr(field->value,
+                                                      offset,
+                                                      out_construction,
+                                                      out_name)) {
                     return true;
                 }
             }
             return false;
-        }
         case FENG_EXPR_CALL:
-            if (resolve_object_field_target_expr(session,
-                                                 program,
-                                                 expr->as.call.callee,
-                                                 offset,
-                                                 locals,
-                                                 target)) {
+            if (find_object_field_syntax_hit_expr(expr->as.call.callee,
+                                                  offset,
+                                                  out_construction,
+                                                  out_name)) {
                 return true;
             }
             for (index = 0U; index < expr->as.call.arg_count; ++index) {
-                if (resolve_object_field_target_expr(session,
-                                                     program,
-                                                     expr->as.call.args[index],
-                                                     offset,
-                                                     locals,
-                                                     target)) {
+                if (find_object_field_syntax_hit_expr(expr->as.call.args[index],
+                                                      offset,
+                                                      out_construction,
+                                                      out_name)) {
                     return true;
                 }
             }
             return false;
         case FENG_EXPR_MEMBER:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.member.object,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(expr->as.member.object,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_EXPR_INDEX:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.index.object,
-                                                    offset,
-                                                    locals,
-                                                    target) ||
-                   resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.index.index,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(expr->as.index.object,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name) ||
+                   find_object_field_syntax_hit_expr(expr->as.index.index,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_EXPR_UNARY:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.unary.operand,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(expr->as.unary.operand,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_EXPR_BINARY:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.binary.left,
-                                                    offset,
-                                                    locals,
-                                                    target) ||
-                   resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.binary.right,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(expr->as.binary.left,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name) ||
+                   find_object_field_syntax_hit_expr(expr->as.binary.right,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_EXPR_LAMBDA:
-            if (expr->as.lambda.is_block_body) {
-                size_t statement_index;
-
-                for (statement_index = 0U;
-                     expr->as.lambda.body_block != NULL &&
-                     statement_index < expr->as.lambda.body_block->statement_count;
-                     ++statement_index) {
-                    const FengStmt *statement = expr->as.lambda.body_block->statements[statement_index];
-
-                    if (statement != NULL && offset >= statement->token.offset && offset <= stmt_end(statement)) {
-                        break;
-                    }
-                }
-                return false;
-            }
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.lambda.body,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return expr->as.lambda.is_block_body
+                       ? find_object_field_syntax_hit_block(expr->as.lambda.body_block,
+                                                            offset,
+                                                            out_construction,
+                                                            out_name)
+                       : find_object_field_syntax_hit_expr(expr->as.lambda.body,
+                                                           offset,
+                                                           out_construction,
+                                                           out_name);
         case FENG_EXPR_CAST:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.cast.value,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(expr->as.cast.value,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_EXPR_IF:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.if_expr.condition,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(expr->as.if_expr.condition,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name) ||
+                   find_object_field_syntax_hit_block(expr->as.if_expr.then_block,
+                                                      offset,
+                                                      out_construction,
+                                                      out_name) ||
+                   find_object_field_syntax_hit_block(expr->as.if_expr.else_block,
+                                                      offset,
+                                                      out_construction,
+                                                      out_name);
         case FENG_EXPR_MATCH:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.match_expr.target,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            if (find_object_field_syntax_hit_expr(expr->as.match_expr.target,
+                                                  offset,
+                                                  out_construction,
+                                                  out_name)) {
+                return true;
+            }
+            for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                if (find_object_field_syntax_hit_block(
+                        expr->as.match_expr.branches[index].body,
+                        offset,
+                        out_construction,
+                        out_name)) {
+                    return true;
+                }
+            }
+            return find_object_field_syntax_hit_block(expr->as.match_expr.else_block,
+                                                      offset,
+                                                      out_construction,
+                                                      out_name);
         case FENG_EXPR_MATCH_OP:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    expr->as.match_op.target,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(expr->as.match_op.target,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_EXPR_TRY:
-            if (resolve_object_field_target_expr(session,
-                                                 program,
-                                                 expr->as.try_expr.body,
-                                                 offset,
-                                                 locals,
-                                                 target)) {
+            if (find_object_field_syntax_hit_expr(expr->as.try_expr.body,
+                                                  offset,
+                                                  out_construction,
+                                                  out_name)) {
                 return true;
             }
             for (index = 0U; index < expr->as.try_expr.clause_count; ++index) {
-                if (resolve_object_field_target_block(session,
-                                                      program,
-                                                      expr->as.try_expr.clauses[index].body,
-                                                      offset,
-                                                      locals,
-                                                      target)) {
+                if (find_object_field_syntax_hit_block(
+                        expr->as.try_expr.clauses[index].body,
+                        offset,
+                        out_construction,
+                        out_name)) {
                     return true;
                 }
             }
@@ -12584,205 +12644,132 @@ static bool resolve_object_field_target_expr(const FengLspAnalysisSession *sessi
     return false;
 }
 
-static bool resolve_object_field_target_stmt(const FengLspAnalysisSession *session,
-                                             const FengProgram *program,
-                                             const FengStmt *stmt,
-                                             size_t offset,
-                                             const FengLspLocalList *locals,
-                                             FengLspResolvedTarget *target);
-
-static bool resolve_object_field_target_block(const FengLspAnalysisSession *session,
-                                              const FengProgram *program,
-                                              const FengBlock *block,
+/* Find an object-field token inside one statement. */
+static bool find_object_field_syntax_hit_stmt(const FengStmt *stmt,
                                               size_t offset,
-                                              const FengLspLocalList *locals,
-                                              FengLspResolvedTarget *target) {
-    size_t index;
-
-    if (block == NULL || offset < block->token.offset || offset > block_end(block)) {
-        return false;
-    }
-    for (index = 0U; index < block->statement_count; ++index) {
-        if (resolve_object_field_target_stmt(session,
-                                             program,
-                                             block->statements[index],
-                                             offset,
-                                             locals,
-                                             target)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-static bool resolve_object_field_target_stmt(const FengLspAnalysisSession *session,
-                                             const FengProgram *program,
-                                             const FengStmt *stmt,
-                                             size_t offset,
-                                             const FengLspLocalList *locals,
-                                             FengLspResolvedTarget *target) {
+                                              const FengExpr **out_construction,
+                                              FengSlice *out_name) {
     size_t index;
 
     if (stmt == NULL || offset < stmt->token.offset || offset > stmt_end(stmt)) {
         return false;
     }
     switch (stmt->kind) {
-        case FENG_STMT_BLOCK:
-            return resolve_object_field_target_block(session,
-                                                     program,
-                                                     stmt->as.block,
-                                                     offset,
-                                                     locals,
-                                                     target);
-        case FENG_STMT_DEFER:
-            return resolve_object_field_target_block(session,
-                                                     program,
-                                                     stmt->as.defer_block,
-                                                     offset,
-                                                     locals,
-                                                     target);
         case FENG_STMT_BINDING:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    stmt->as.binding.initializer,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(stmt->as.binding.initializer,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_STMT_ASSIGN:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    stmt->as.assign.target,
-                                                    offset,
-                                                    locals,
-                                                    target) ||
-                   resolve_object_field_target_expr(session,
-                                                    program,
-                                                    stmt->as.assign.value,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(stmt->as.assign.target,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name) ||
+                   find_object_field_syntax_hit_expr(stmt->as.assign.value,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_STMT_TRY:
         case FENG_STMT_EXPR:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    stmt->as.expr,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(stmt->as.expr,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
+        case FENG_STMT_BLOCK:
+            return find_object_field_syntax_hit_block(stmt->as.block,
+                                                      offset,
+                                                      out_construction,
+                                                      out_name);
+        case FENG_STMT_DEFER:
+            return find_object_field_syntax_hit_block(stmt->as.defer_block,
+                                                      offset,
+                                                      out_construction,
+                                                      out_name);
         case FENG_STMT_IF:
             for (index = 0U; index < stmt->as.if_stmt.clause_count; ++index) {
-                if (resolve_object_field_target_expr(session,
-                                                     program,
-                                                     stmt->as.if_stmt.clauses[index].condition,
-                                                     offset,
-                                                     locals,
-                                                     target) ||
-                    resolve_object_field_target_block(session,
-                                                      program,
-                                                      stmt->as.if_stmt.clauses[index].block,
-                                                      offset,
-                                                      locals,
-                                                      target)) {
+                if (find_object_field_syntax_hit_expr(
+                        stmt->as.if_stmt.clauses[index].condition,
+                        offset,
+                        out_construction,
+                        out_name) ||
+                    find_object_field_syntax_hit_block(
+                        stmt->as.if_stmt.clauses[index].block,
+                        offset,
+                        out_construction,
+                        out_name)) {
                     return true;
                 }
             }
-            return resolve_object_field_target_block(session,
-                                                     program,
-                                                     stmt->as.if_stmt.else_block,
-                                                     offset,
-                                                     locals,
-                                                     target);
+            return find_object_field_syntax_hit_block(stmt->as.if_stmt.else_block,
+                                                      offset,
+                                                      out_construction,
+                                                      out_name);
         case FENG_STMT_MATCH:
-            if (resolve_object_field_target_expr(session,
-                                                 program,
-                                                 stmt->as.match_stmt.target,
-                                                 offset,
-                                                 locals,
-                                                 target)) {
+            if (find_object_field_syntax_hit_expr(stmt->as.match_stmt.target,
+                                                  offset,
+                                                  out_construction,
+                                                  out_name)) {
                 return true;
             }
             for (index = 0U; index < stmt->as.match_stmt.branch_count; ++index) {
-                if (resolve_object_field_target_block(session,
-                                                      program,
-                                                      stmt->as.match_stmt.branches[index].body,
-                                                      offset,
-                                                      locals,
-                                                      target)) {
+                if (find_object_field_syntax_hit_block(
+                        stmt->as.match_stmt.branches[index].body,
+                        offset,
+                        out_construction,
+                        out_name)) {
                     return true;
                 }
             }
-            return resolve_object_field_target_block(session,
-                                                     program,
-                                                     stmt->as.match_stmt.else_block,
-                                                     offset,
-                                                     locals,
-                                                     target);
+            return find_object_field_syntax_hit_block(stmt->as.match_stmt.else_block,
+                                                      offset,
+                                                      out_construction,
+                                                      out_name);
         case FENG_STMT_WHILE:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    stmt->as.while_stmt.condition,
-                                                    offset,
-                                                    locals,
-                                                    target) ||
-                   resolve_object_field_target_block(session,
-                                                    program,
-                                                    stmt->as.while_stmt.body,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(stmt->as.while_stmt.condition,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name) ||
+                   find_object_field_syntax_hit_block(stmt->as.while_stmt.body,
+                                                      offset,
+                                                      out_construction,
+                                                      out_name);
         case FENG_STMT_FOR:
             if (stmt->as.for_stmt.is_for_in) {
-                return resolve_object_field_target_expr(session,
-                                                        program,
-                                                        stmt->as.for_stmt.iter_expr,
-                                                        offset,
-                                                        locals,
-                                                        target) ||
-                       resolve_object_field_target_block(session,
-                                                        program,
-                                                        stmt->as.for_stmt.body,
-                                                        offset,
-                                                        locals,
-                                                        target);
+                return find_object_field_syntax_hit_expr(stmt->as.for_stmt.iter_expr,
+                                                         offset,
+                                                         out_construction,
+                                                         out_name) ||
+                       find_object_field_syntax_hit_block(stmt->as.for_stmt.body,
+                                                          offset,
+                                                          out_construction,
+                                                          out_name);
             }
-            return resolve_object_field_target_stmt(session,
-                                                    program,
-                                                    stmt->as.for_stmt.init,
-                                                    offset,
-                                                    locals,
-                                                    target) ||
-                   resolve_object_field_target_expr(session,
-                                                    program,
-                                                    stmt->as.for_stmt.condition,
-                                                    offset,
-                                                    locals,
-                                                    target) ||
-                   resolve_object_field_target_stmt(session,
-                                                    program,
-                                                    stmt->as.for_stmt.update,
-                                                    offset,
-                                                    locals,
-                                                    target) ||
-                   resolve_object_field_target_block(session,
-                                                    program,
-                                                    stmt->as.for_stmt.body,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_stmt(stmt->as.for_stmt.init,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name) ||
+                   find_object_field_syntax_hit_expr(stmt->as.for_stmt.condition,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name) ||
+                   find_object_field_syntax_hit_stmt(stmt->as.for_stmt.update,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name) ||
+                   find_object_field_syntax_hit_block(stmt->as.for_stmt.body,
+                                                      offset,
+                                                      out_construction,
+                                                      out_name);
         case FENG_STMT_RETURN:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    stmt->as.return_value,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(stmt->as.return_value,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_STMT_THROW:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    stmt->as.throw_value,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(stmt->as.throw_value,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_STMT_BREAK:
         case FENG_STMT_CONTINUE:
             return false;
@@ -12790,12 +12777,32 @@ static bool resolve_object_field_target_stmt(const FengLspAnalysisSession *sessi
     return false;
 }
 
-static bool resolve_object_field_target_decl(const FengLspAnalysisSession *session,
-                                             const FengProgram *program,
-                                             const FengDecl *decl,
-                                             size_t offset,
-                                             const FengLspLocalList *locals,
-                                             FengLspResolvedTarget *target) {
+/* Find an object-field token inside one block. */
+static bool find_object_field_syntax_hit_block(const FengBlock *block,
+                                               size_t offset,
+                                               const FengExpr **out_construction,
+                                               FengSlice *out_name) {
+    size_t index;
+
+    if (block == NULL || offset < block->token.offset || offset > block_end(block)) {
+        return false;
+    }
+    for (index = 0U; index < block->statement_count; ++index) {
+        if (find_object_field_syntax_hit_stmt(block->statements[index],
+                                             offset,
+                                             out_construction,
+                                             out_name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Find an object-field token in a declaration's original source nodes. */
+static bool find_object_field_syntax_hit_decl(const FengDecl *decl,
+                                              size_t offset,
+                                              const FengExpr **out_construction,
+                                              FengSlice *out_name) {
     size_t index;
 
     if (decl == NULL || offset < decl->token.offset || offset > decl_end(decl)) {
@@ -12803,66 +12810,66 @@ static bool resolve_object_field_target_decl(const FengLspAnalysisSession *sessi
     }
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
-            return resolve_object_field_target_expr(session,
-                                                    program,
-                                                    decl->as.binding.initializer,
-                                                    offset,
-                                                    locals,
-                                                    target);
+            return find_object_field_syntax_hit_expr(decl->as.binding.initializer,
+                                                     offset,
+                                                     out_construction,
+                                                     out_name);
         case FENG_DECL_ENUM:
             return false;
         case FENG_DECL_FUNCTION:
-            return resolve_object_field_target_block(session,
-                                                     program,
-                                                     decl->as.function_decl.body,
-                                                     offset,
-                                                     locals,
-                                                     target);
+            return find_object_field_syntax_hit_block(decl->as.function_decl.body,
+                                                      offset,
+                                                      out_construction,
+                                                      out_name);
         case FENG_DECL_TYPE:
+            for (index = 0U; index < decl->as.type_decl.mixin_count; ++index) {
+                if (find_object_field_syntax_hit_expr(
+                        decl->as.type_decl.mixins[index].source_constructor,
+                        offset,
+                        out_construction,
+                        out_name)) {
+                    return true;
+                }
+            }
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
                 const FengTypeMember *member = decl->as.type_decl.members[index];
 
-                if (member->kind == FENG_TYPE_MEMBER_FIELD) {
-                    if (resolve_object_field_target_expr(session,
-                                                         program,
-                                                         member->as.field.initializer,
-                                                         offset,
-                                                         locals,
-                                                         target)) {
-                        return true;
-                    }
-                } else if (resolve_object_field_target_block(session,
-                                                             program,
-                                                             member->as.callable.body,
-                                                             offset,
-                                                             locals,
-                                                             target)) {
+                if (member->mixin_origin != NULL) {
+                    continue;
+                }
+                if ((member->kind == FENG_TYPE_MEMBER_FIELD &&
+                     find_object_field_syntax_hit_expr(member->as.field.initializer,
+                                                       offset,
+                                                       out_construction,
+                                                       out_name)) ||
+                    (member->kind != FENG_TYPE_MEMBER_FIELD &&
+                     find_object_field_syntax_hit_block(member->as.callable.body,
+                                                        offset,
+                                                        out_construction,
+                                                        out_name))) {
                     return true;
                 }
             }
             return false;
         case FENG_DECL_SPEC:
-            if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
-                for (index = 0U; index < decl->as.spec_decl.as.object.member_count; ++index) {
-                    const FengTypeMember *member = decl->as.spec_decl.as.object.members[index];
+            if (decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+                return false;
+            }
+            for (index = 0U; index < decl->as.spec_decl.as.object.member_count; ++index) {
+                const FengTypeMember *member =
+                    decl->as.spec_decl.as.object.members[index];
 
-                    if (member->kind == FENG_TYPE_MEMBER_FIELD) {
-                        if (resolve_object_field_target_expr(session,
-                                                             program,
-                                                             member->as.field.initializer,
-                                                             offset,
-                                                             locals,
-                                                             target)) {
-                            return true;
-                        }
-                    } else if (resolve_object_field_target_block(session,
-                                                                 program,
-                                                                 member->as.callable.body,
-                                                                 offset,
-                                                                 locals,
-                                                                 target)) {
-                        return true;
-                    }
+                if ((member->kind == FENG_TYPE_MEMBER_FIELD &&
+                     find_object_field_syntax_hit_expr(member->as.field.initializer,
+                                                       offset,
+                                                       out_construction,
+                                                       out_name)) ||
+                    (member->kind != FENG_TYPE_MEMBER_FIELD &&
+                     find_object_field_syntax_hit_block(member->as.callable.body,
+                                                        offset,
+                                                        out_construction,
+                                                        out_name))) {
+                    return true;
                 }
             }
             return false;
@@ -12870,27 +12877,58 @@ static bool resolve_object_field_target_decl(const FengLspAnalysisSession *sessi
             for (index = 0U; index < decl->as.fit_decl.member_count; ++index) {
                 const FengTypeMember *member = decl->as.fit_decl.members[index];
 
-                if (member->kind == FENG_TYPE_MEMBER_FIELD) {
-                    if (resolve_object_field_target_expr(session,
-                                                         program,
-                                                         member->as.field.initializer,
-                                                         offset,
-                                                         locals,
-                                                         target)) {
-                        return true;
-                    }
-                } else if (resolve_object_field_target_block(session,
-                                                             program,
-                                                             member->as.callable.body,
-                                                             offset,
-                                                             locals,
-                                                             target)) {
+                if ((member->kind == FENG_TYPE_MEMBER_FIELD &&
+                     find_object_field_syntax_hit_expr(member->as.field.initializer,
+                                                       offset,
+                                                       out_construction,
+                                                       out_name)) ||
+                    (member->kind != FENG_TYPE_MEMBER_FIELD &&
+                     find_object_field_syntax_hit_block(member->as.callable.body,
+                                                        offset,
+                                                        out_construction,
+                                                        out_name))) {
                     return true;
                 }
             }
             return false;
     }
     return false;
+}
+
+
+/* Resolve an object-literal field through the AST-backed type provider. */
+static bool resolve_object_field_target_decl(const FengLspAnalysisSession *session,
+                                             const FengProgram *program,
+                                             const FengDecl *decl,
+                                             size_t offset,
+                                             const FengLspLocalList *locals,
+                                             FengLspResolvedTarget *target) {
+    const FengExpr *construction = NULL;
+    const FengDecl *owner;
+    FengSlice name = {0};
+
+    if (!find_object_field_syntax_hit_decl(decl,
+                                           offset,
+                                           &construction,
+                                           &name)) {
+        return false;
+    }
+    owner = resolve_owner_decl_from_object_expr(session,
+                                                 program,
+                                                 construction,
+                                                 locals);
+    if (owner == NULL) {
+        return false;
+    }
+    target->member = find_member_by_name(owner, name);
+    if (target->member == NULL ||
+        target->member->kind != FENG_TYPE_MEMBER_FIELD) {
+        memset(target, 0, sizeof(*target));
+        return false;
+    }
+    target->kind = FENG_LSP_RESOLVED_MEMBER;
+    target->decl = owner;
+    return true;
 }
 
 static bool collect_references_in_type_ref(const FengLspAnalysisSession *session,
@@ -14065,11 +14103,18 @@ static bool find_symbol_decl_token_hit_member(const FengLspCacheQueryContext *co
                                               size_t offset,
                                               FengLspCacheResolvedTarget *target) {
     size_t index;
-    bool hit_member_name = offset_in_slice_from_source(context->source_text,
-                                                       member_name_slice(member),
-                                                       offset);
-    bool hit_member_token = offset_in_token(member->token, offset);
+    bool hit_member_name;
+    bool hit_member_token;
 
+    /* Generated members have no declaration spelling in the consumer source;
+     * the persistent-symbol path follows the same rule as AST lookup. */
+    if (member->mixin_origin != NULL) {
+        return false;
+    }
+    hit_member_name = offset_in_slice_from_source(context->source_text,
+                                                  member_name_slice(member),
+                                                  offset);
+    hit_member_token = offset_in_token(member->token, offset);
     if (hit_member_name ||
         (hit_member_token &&
          !(owner_decl != NULL &&
@@ -14385,6 +14430,9 @@ static bool find_symbol_type_ref_in_member(const FengLspCacheQueryContext *conte
                                            FengLspCacheResolvedTarget *target) {
     size_t index;
 
+    if (member == NULL || member->mixin_origin != NULL) {
+        return false;
+    }
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
         return resolve_symbol_type_ref_at_offset(context, member->as.field.type, offset, target,
                                                  NULL, NULL, 0U);
@@ -14597,6 +14645,21 @@ static bool find_symbol_type_ref_hit(const FengLspCacheQueryContext *context,
                     return true;
                 }
             }
+            for (index = 0U; index < decl->as.type_decl.mixin_count; ++index) {
+                const FengTypeMixinDecl *mixin = &decl->as.type_decl.mixins[index];
+
+                if (!mixin->infer_source_type &&
+                    resolve_symbol_type_ref_at_offset(
+                        context,
+                        mixin->source_type,
+                        offset,
+                        target,
+                        decl,
+                        decl->as.type_decl.type_params,
+                        decl->as.type_decl.type_param_count)) {
+                    return true;
+                }
+            }
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
                 if (find_symbol_type_ref_in_member(context,
                                                    decl,
@@ -14764,6 +14827,37 @@ static const FengSymbolDeclView *resolve_symbol_expr_target(const FengLspCacheQu
     return NULL;
 }
 
+/* Resolve an object-literal field through the persistent symbol provider. */
+static bool resolve_symbol_object_field_target_decl(
+    const FengLspCacheQueryContext *context,
+    const FengDecl *decl,
+    size_t offset,
+    FengLspCacheResolvedTarget *target) {
+    const FengExpr *construction = NULL;
+    const FengSymbolDeclView *owner;
+    FengSlice name = {0};
+
+    if (!find_object_field_syntax_hit_decl(decl,
+                                           offset,
+                                           &construction,
+                                           &name)) {
+        return false;
+    }
+    owner = resolve_symbol_type_constructor_expr(context, construction);
+    if (owner == NULL) {
+        return false;
+    }
+    target->member = find_symbol_decl_member_by_name(owner, name, false);
+    if (target->member == NULL ||
+        feng_symbol_decl_kind(target->member) != FENG_SYMBOL_DECL_KIND_FIELD) {
+        memset(target, 0, sizeof(*target));
+        return false;
+    }
+    target->kind = FENG_LSP_RESOLVED_MEMBER;
+    target->decl = owner;
+    return true;
+}
+
 static bool resolve_symbol_target_at(const FengLspCacheQueryContext *context,
                                      size_t offset,
                                      FengLspCacheResolvedTarget *target) {
@@ -14797,6 +14891,13 @@ static bool resolve_symbol_target_at(const FengLspCacheQueryContext *context,
             local_list_dispose(&locals);
             return true;
         }
+    }
+    if (resolve_symbol_object_field_target_decl(context,
+                                                enclosing_decl,
+                                                offset,
+                                                target)) {
+        local_list_dispose(&locals);
+        return true;
     }
     expr = find_expr_hit_in_decl(enclosing_decl, offset);
     if (expr != NULL) {
@@ -15274,6 +15375,62 @@ static bool hover_presentation_for_cache_target(
     return presentation->signature.data != NULL;
 }
 
+/* Build the aggregate Hover shown for one exact `...` expansion token.
+ * The final target member table is the sole source of truth because it already
+ * contains conflict filtering, generic substitution, visible fit expansion,
+ * and the stable generated-member order. */
+static bool hover_presentation_for_mixin(const FengLspAnalysisSession *session,
+                                         const FengProgram *program,
+                                         size_t offset,
+                                         FengLspHoverPresentation *presentation) {
+    size_t decl_index;
+
+    if (session == NULL || program == NULL || presentation == NULL) {
+        return false;
+    }
+    for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
+        const FengDecl *decl = program->declarations[decl_index];
+        size_t mixin_index;
+
+        if (decl == NULL || decl->kind != FENG_DECL_TYPE ||
+            offset < decl->token.offset || offset > decl_end(decl)) {
+            continue;
+        }
+        for (mixin_index = 0U; mixin_index < decl->as.type_decl.mixin_count;
+             ++mixin_index) {
+            const FengTypeMixinDecl *mixin = &decl->as.type_decl.mixins[mixin_index];
+            bool wrote_member = false;
+            size_t member_index;
+
+            if (!offset_in_token(mixin->token, offset)) {
+                continue;
+            }
+            for (member_index = 0U; member_index < decl->as.type_decl.member_count;
+                 ++member_index) {
+                const FengTypeMember *member = decl->as.type_decl.members[member_index];
+
+                if (member == NULL || member->mixin_origin != mixin) {
+                    continue;
+                }
+                if ((wrote_member &&
+                     !string_append_cstr(&presentation->signature, "\n")) ||
+                    (member->is_static &&
+                     !string_append_cstr(&presentation->signature, "static ")) ||
+                    !member_signature_to_string_with_session_and_style(
+                        &presentation->signature,
+                        session,
+                        member,
+                        FENG_LSP_TYPE_NAME_SHORT)) {
+                    return false;
+                }
+                wrote_member = true;
+            }
+            return wrote_member;
+        }
+    }
+    return false;
+}
+
 /* Returns whether cached source positions are exact for the current document. */
 static bool analysis_matches_document(const FengLspAnalysisSession *session,
                                       const FengLspDocument *document) {
@@ -15394,11 +15551,17 @@ static bool handle_hover_request(FengLspService *service,
                                            service->last_successful_generation,
                                            offset)) {
         program = find_program(session, document->path);
-        if (program != NULL && resolve_target_at(session, program, offset, &target)) {
-            has_hover = hover_presentation_for_target(session,
-                                                       program,
-                                                       &target,
-                                                       &presentation);
+        if (program != NULL) {
+            has_hover = hover_presentation_for_mixin(session,
+                                                     program,
+                                                     offset,
+                                                     &presentation);
+            if (!has_hover && resolve_target_at(session, program, offset, &target)) {
+                has_hover = hover_presentation_for_target(session,
+                                                           program,
+                                                           &target,
+                                                           &presentation);
+            }
         }
     }
     pthread_mutex_unlock(&service->analysis_mutex);
