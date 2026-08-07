@@ -20815,6 +20815,68 @@ static void test_mixable_fit_generates_own_and_target_instance_wrappers(void) {
     feng_program_free(program);
 }
 
+/* Mixable prechecks accept the same transitive parent-spec relation as ordinary coercion. */
+static void test_mixable_accepts_transitive_parent_spec_relation(void) {
+    const char *source =
+        "module demo.mixable_parent_spec;\n"
+        "spec Widget { func draw(area: int): int; }\n"
+        "spec ContainerWidget: Widget {}\n"
+        "type View: ContainerWidget {\n"
+        "  @mixable open static func draw(target: Widget, area: int): int { return area; }\n"
+        "}\n"
+        "type Container: ContainerWidget { ...: View; }\n";
+    FengProgram *program = parse_program_or_die("mixable_parent_spec.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *view;
+    const FengDecl *container;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    view = find_type_decl_by_name(analysis, "View");
+    container = find_type_decl_by_name(analysis, "Container");
+    ASSERT(find_type_method_named(view, "draw", false) != NULL);
+    ASSERT(find_type_method_named(container, "draw", true) != NULL);
+    ASSERT(find_type_method_named(container, "draw", false) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Mixable prechecks accept a visible fit relation just like ordinary spec use. */
+static void test_mixable_accepts_visible_fit_spec_relation(void) {
+    const char *source =
+        "module demo.mixable_fit_spec;\n"
+        "spec Widget { func draw(area: int): int; }\n"
+        "type View {}\n"
+        "open fit View: Widget {\n"
+        "  @mixable open static func draw(target: Widget, area: int): int { return area; }\n"
+        "}\n"
+        "type Container { ...: View; }\n"
+        "fit Container: Widget;\n";
+    FengProgram *program = parse_program_or_die("mixable_fit_spec.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *container;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    container = find_type_decl_by_name(analysis, "Container");
+    ASSERT(find_type_method_named(container, "draw", true) != NULL);
+    ASSERT(find_type_method_named(container, "draw", false) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* Each mixable declaration constraint reports its dedicated diagnostic code. */
 static void test_mixable_contract_diagnostics_are_stable(void) {
     const char *sources[] = {
@@ -20856,6 +20918,8 @@ int main(void) {
     test_mixable_static_candidate_skips_explicit_overlapping_method();
     test_mixable_generates_static_and_instance_wrapper_chain();
     test_mixable_fit_generates_own_and_target_instance_wrappers();
+    test_mixable_accepts_transitive_parent_spec_relation();
+    test_mixable_accepts_visible_fit_spec_relation();
     test_mixable_contract_diagnostics_are_stable();
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();

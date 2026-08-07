@@ -26755,26 +26755,6 @@ static bool resolve_type_member_mix_initializers(ResolveContext *context,
     return true;
 }
 
-/* Check the declaration-head relation used by mixable's nominal precheck. */
-static bool type_nominally_declares_spec(const ResolveContext *context,
-                                         const FengDecl *type_decl,
-                                         const FengDecl *spec_decl) {
-    if (context == NULL || type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
-        spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC) {
-        return false;
-    }
-    for (size_t index = 0U;
-         index < type_decl->as.type_decl.declared_spec_count;
-         ++index) {
-        if (resolve_type_ref_decl(
-                context,
-                type_decl->as.type_decl.declared_specs[index]) == spec_decl) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /* Validate one normalized mixable declaration before ordinary member checks. */
 static bool validate_mixable_method_contract(ResolveContext *context,
                                              const FengTypeMember *member,
@@ -26828,7 +26808,7 @@ static bool validate_mixable_method_contract(ResolveContext *context,
                 (int)member->as.callable.name.length,
                 member->as.callable.name.data));
     }
-    if (!type_nominally_declares_spec(context, owner_type, spec_decl)) {
+    if (!type_decl_satisfies_spec_decl(context, owner_type, spec_decl)) {
         return resolver_append_error(
             context,
             member->as.callable.params[0].token,
@@ -29890,7 +29870,7 @@ static bool append_mixin_static_wrapper_candidate(
         return context->errors == NULL || context->error_count == NULL ||
                *context->error_count == 0U;
     }
-    if (!type_nominally_declares_spec(context, target, first_spec)) {
+    if (!type_decl_satisfies_spec_decl(context, target, first_spec)) {
         return resolver_append_error(
                    context,
                    mixin->token,
