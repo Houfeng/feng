@@ -110,7 +110,7 @@
 ### 3.4 组件树设计（后续专门设计）
 
 - Feng 没有继承，组件多态通过 `spec Widget` 实现，组件复用通过组合实现。
-- 第七阶段只定义 `ViewManager` + `Widget` 机制层，不实现高级组件。
+- 第七阶段定义 `ViewManager` + `Widget`/`ContainerWidget` 机制层，不完整实现高级组件；Text/Button 只保留验证骨架。
 - 详细方案收敛在 `docs/engineering/feng-std-tui-view-dev.md`。
 
 ### 3.5 TuiApp 设计
@@ -189,10 +189,10 @@
 
 ### 第七阶段：视图机制层（第 4 层）
 
-> 本阶段只实现 `ViewManager` + `Widget` 机制层，不实现 Text/Button/Input/List/ScrollView 等高级组件。
+> 本阶段只实现 `ViewManager` + `Widget`/`ContainerWidget` 机制层，不完整实现 Text/Button/Input/List/ScrollView 等高级组件；Text/Button 只保留验证骨架。
 > 实现方案详见 `docs/engineering/feng-std-tui-view-dev.md`。
 
-- [ ] 4.30 完善 Widget 机制：`Thickness`、布局枚举、`WidgetStyle` type、`WidgetFrame`、`Widget` spec、`std.tui.views.View`
+- [ ] 4.30 完善 Widget 机制：`Thickness`、布局枚举、`WidgetStyle` type、`WidgetFrame`、`Widget`/`ContainerWidget` spec、`std.tui.views.View`/`Container`
 - [ ] 4.31 实现 ViewManager：root、focus、sequence、arrange/draw 流程、鼠标命中、键盘焦点路由、自下向上事件冒泡
 - [ ] 4.32 集成 ViewManager 至 TuiApp：新增 `view: ViewManager` 成员，并接入 `Screen`/`InputManager`
 - [ ] 4.33 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、arrange/frame 计算、sequence 命中、事件冒泡等测试
@@ -218,7 +218,7 @@ std/std/src/tui/
   RgbColor.ff      # RgbColor 结构（RGB 颜色）
   Ansi.ff          # ANSI 转义序列生成器（后续）
   Thickness.ff     # 四边间距类型
-  Widget.ff        # 布局枚举、WidgetStyle、WidgetFrame、Widget
+  Widget.ff        # 布局枚举、WidgetStyle、WidgetFrame、Widget、ContainerWidget
   ViewManager.ff   # 视图机制层管理器与 sequence
   TuiApp.ff        # 应用程序入口与主循环（后续）
   KeyEvent.ff      # 键盘事件（后续）
@@ -226,6 +226,9 @@ std/std/src/tui/
 
 std/std/src/tui/views/
   View.ff          # Widget 基础实现
+  Container.ff     # ContainerWidget 基础实现
+  Text.ff          # View 展开验证骨架
+  Button.ff        # View 展开验证骨架
 ```
 
 ## 6 约束
