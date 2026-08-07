@@ -1,7 +1,6 @@
 open module std.tui.views;
 
 import std;
-import std.collections;
 import std.tui;
 
 open type View: Widget {
@@ -18,12 +17,7 @@ open type View: Widget {
   /**
    * 父组件；仅由组件树 API 维护
    */
-  var parent: Option<Widget>;
-
-  /**
-   * 子组件集合；集合内部负责维护 parent 引用
-   */
-  let children: List<Widget>;
+  var parent: Option<ContainerWidget>;
 
   /**
    * 键盘事件回调
@@ -51,11 +45,11 @@ open type View: Widget {
   var onWheel: Action<MouseEvent>;
 
   /**
-   * 对齐并计算当前组件及其子组件的 frame
+   * 对齐并计算当前组件的 frame
+   * 容器组件自行决定是否及如何布局子组件
    */
   @mixable
   static func arrange(widget: Widget, manager: ViewManager): void {
-    
   }
 
   /**
@@ -65,5 +59,21 @@ open type View: Widget {
   @mixable
   static func draw(widget: Widget, manager: ViewManager): void {
     manager.trace(widget);
+  }
+
+  /**
+   * 检查当前组件是否为指定组件的祖先
+   * 使用循环沿 parent 链向上查找，不使用递归
+   */
+  @mixable
+  static func isAncestor(widget: Widget, w: Widget): bool {
+    var current: Option<ContainerWidget> = w.parent;
+    while current match let parent: ContainerWidget {
+      if widget == parent {
+        return true;
+      }
+      current = parent.parent;
+    }
+    return false;
   }
 }

@@ -1,0 +1,67 @@
+open module std.tui.views;
+
+import std;
+import std.collections;
+import std.tui;
+
+/**
+ * Container 容器组件基础实现
+ * 仅管理组件树关系，不默认布局或绘制子组件
+ */
+open type Container: ContainerWidget {
+  /**
+   * 展开 View 提供的公共状态与 Widget 默认行为
+   */
+  ...: View;
+
+  /**
+   * 直接子组件集合
+   */
+  let children: List<Widget>;
+
+  /**
+   * 添加子组件；已有父容器时先从旧父容器移除
+   * 循环关系会在修改组件树前抛出 tui/widget/cycle
+   */
+  @mixable
+  static func addChild(container: ContainerWidget, child: Widget): void {
+    if child == container || child.isAncestor(container) {
+      throw "tui/widget/cycle";
+    }
+
+    match child.parent {
+      parent: ContainerWidget {
+        parent.removeChild(child);
+      }
+      else {}
+    }
+
+    container.children.add(child);
+    child.parent = container;
+  }
+
+  /**
+   * 移除直接子组件；子组件不存在时静默返回
+   */
+  @mixable
+  static func removeChild(container: ContainerWidget, child: Widget): void {
+    for var index: int = 0; index < container.children.size(); index = index + 1 {
+      if container.children.get(index) == child {
+        container.children.remove(index);
+        child.parent = none;
+        return;
+      }
+    }
+  }
+
+  /**
+   * 移除所有直接子组件并清除其 parent 引用
+   */
+  @mixable
+  static func clearChildren(container: ContainerWidget): void {
+    for let child in container.children {
+      child.parent = none;
+    }
+    container.children.clear();
+  }
+}

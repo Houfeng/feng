@@ -140,12 +140,7 @@ open spec Widget {
   /**
    * 父组件；仅由组件树 API 维护
    */
-  var parent: Option<Widget>;
-
-  /**
-   * 子组件集合；集合内部负责维护 parent 引用
-   */
-  let children: List<Widget>;
+  var parent: Option<ContainerWidget>;
 
   /**
    * 键盘事件回调
@@ -173,7 +168,8 @@ open spec Widget {
   var onWheel: Action<MouseEvent>;
 
   /**
-   * 对齐并计算当前组件及其子组件的 frame
+   * 对齐并计算当前组件的 frame
+   * 容器组件自行决定是否及如何布局子组件
    */
   func arrange(manager: ViewManager): void;
 
@@ -182,4 +178,35 @@ open spec Widget {
    * 需要组件将自身添加到 ViewManager 的 sequence 中，保证绘制顺序正确
    */
   func draw(manager: ViewManager): void;
+
+  /**
+   * 检查当前组件是否为指定组件的祖先
+   * 当前组件与指定组件相同时返回 false
+   */
+  func isAncestor(w: Widget): bool;
+}
+
+/**
+ * ContainerWidget 容器组件契约
+ */
+open spec ContainerWidget: Widget {
+  /**
+   * 直接子组件集合
+   */
+  let children: List<Widget>;
+
+  /**
+   * 添加子组件；已有父容器时自动迁移
+   */
+  func addChild(child: Widget): void;
+
+  /**
+   * 移除子组件；子组件不存在时静默返回
+   */
+  func removeChild(child: Widget): void;
+
+  /**
+   * 移除所有直接子组件
+   */
+  func clearChildren(): void;
 }
