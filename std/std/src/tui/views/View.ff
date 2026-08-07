@@ -55,7 +55,7 @@ open type View: Widget {
    */
   @mixable
   static func arrange(widget: Widget, manager: ViewManager): void {
-
+    
   }
 
   /**
@@ -64,6 +64,6 @@ open type View: Widget {
    */
   @mixable
   static func draw(widget: Widget, manager: ViewManager): void {
-
+    manager.trace(widget);
   }
 }

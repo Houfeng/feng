@@ -2,6 +2,49 @@ open module std.tui;
 
 import std.collections;
 
+/**
+ * ViewManager 是一个管理所有 widgets 的类
+ * 它负责管理 widgets 的布局、绘制、事件处理等功能
+ */
 open type ViewManager {
+  /**
+   * 记录绘制顺序
+   * 用于 widgets 的鼠标事件层级处理，越靠后的 widget 说明层级越高，鼠标事件优先处理
+   * 有 zIndex 的 widget 需要组件，需要在绘制时自行保障顺序（通常在父组件中）
+   */
   seal let sequence: List<Widget>;
+
+  /**
+   * 跟踪绘制顺序
+   * @param widget 需要跟踪的 widget
+   */
+  open func trace(widget: Widget): void {
+    self.sequence.add(widget);
+  }
+
+  /**
+   * 根组件
+   * 所有的 widgets 都是从 root 开始递归调用 arrange 和 draw 方法
+   */
+  open var root: Widget;
+
+  /**
+   * 第一阶段：布局
+   * 从 Root 开始，递归调用每个 Widget 的 arrange 方法，计算每个 Widget 的位置和大小
+   * 布局结阶段结束后，所有 widgets 的 frame 都已经计算完成
+   */
+  open func arrange() {
+    self.root.arrange(self);
+  }
+
+  /**
+   * 第二阶段：绘制
+   * 从 Root 开始，递归调用每个 Widget 的 draw 方法，绘制每个 Widget
+   * 绘制阶段结束后，所有 widgets 都已经绘制完成
+   */
+  open func draw() {
+    self.sequence.clear();
+    self.root.draw(self);
+  }
+
 }

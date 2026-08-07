@@ -4,7 +4,7 @@ import std;
 import std.collections;
 
 /**
- * WidgetPosition 组件布局类型
+ * WidgetPosition 组件定位方式
  */
 open enum WidgetPosition {
   /** 普通布局，由父组件控制 */
@@ -175,11 +175,11 @@ open spec Widget {
   /**
    * 对齐并计算当前组件及其子组件的 frame
    */
-  static func arrange(widget: Widget, manager: ViewManager): void;
+  func arrange(manager: ViewManager): void;
 
   /**
    * 绘制当前组件；绘制阶段只使用 frame，不重新解释 style
    * 需要组件将自身添加到 ViewManager 的 sequence 中，保证绘制顺序正确
    */
-  static func draw(widget: Widget, manager: ViewManager): void;
+  func draw(manager: ViewManager): void;
 }
