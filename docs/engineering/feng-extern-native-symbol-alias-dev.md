@@ -92,6 +92,12 @@ feng__std_test__helpers__writeText__from__i32__p_string__i64(...);
 
 调用约定宏继续写入各自声明。原生符号必须按 C 字符串规则转义后输出。
 
+由于 C 前端只看到彼此独立的 Feng 完整生成名，同一原生符号对应的
+多个不同 extern 签名不再构成 C 层的重复声明，也不会与 Clang 已知的
+标准库函数原型发生声明冲突。因此生成 C 的编译驱动不得全局禁用
+`-Wincompatible-library-redeclaration`；若该诊断再次出现，应视为 extern
+声明绕过独立生成名的 codegen 错误处理。
+
 ### 3.3 注册、去重和查找
 
 1. `ExternFn` 分别保存 Feng 名称、Feng 完整生成名、原生符号名、声明身份和所属
