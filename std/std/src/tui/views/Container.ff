@@ -25,19 +25,19 @@ open type Container: ContainerWidget {
    */
   @mixable
   static func addChild(container: ContainerWidget, child: Widget): void {
-    if child == container || child.isAncestor(container) {
-      throw "tui/widget/cycle";
-    }
+    // if child == container || child.isAncestor(container) {
+    //   throw "tui/widget/cycle";
+    // }
 
-    match child.parent {
-      parent: ContainerWidget {
-        parent.removeChild(child);
-      }
-      else {}
-    }
+    // match child.parent {
+    //   parent: ContainerWidget {
+    //     parent.removeChild(child);
+    //   }
+    //   else {}
+    // }
 
-    container.children.add(child);
-    child.parent = container;
+    // container.children.add(child);
+    // child.parent = container;
   }
 
   /**
