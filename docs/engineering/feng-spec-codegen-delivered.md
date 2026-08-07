@@ -122,6 +122,24 @@ struct FengSpecValue__demo__Named {
 
 不使用统一 `void* + void*` 的两字段无名结构：会丢失 witness 静态类型，迫使每个 callsite 强转，易错。
 
+#### 4.1.1 C tag 前置声明顺序
+
+codegen 必须在生成任何 spec witness struct body、callable ABI 函数指针 typedef
+或其他可能包含函数原型的声明之前，于 C 文件作用域统一前置声明所有
+已注册 spec 的具名 tag：
+
+- object / intersection / union-form spec 的 `FengSpecValue__*`；
+- callable-form spec 的 `FengClosure__*`；
+- 所有 spec 的 `FengSpecWitness__*`。
+
+该阶段必须与 witness body 及 value / closure body 生成阶段分离，不得依赖 spec
+注册顺序或在单个 spec 生成过程中“遇到后再声明”。这保证 spec 值或
+callable closure 出现在当前 spec、后续 spec 或循环引用的 witness 方法参数中时，
+C tag 始终引用同一个文件作用域类型，不会在函数参数列表内隐式引入
+仅具有函数原型作用域的同名 tag。
+
+该规则仅规范 C 声明依赖，不改变 fat spec 布局、witness ABI 或运行时开销。
+
 ### 4.2 witness 表结构 \[已交付 4b-α]
 
 每个 object-form `spec S` 生成独立 witness 表 typedef：

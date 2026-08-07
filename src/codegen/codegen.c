@@ -10717,16 +10717,32 @@ static bool cg_append_union_member_slot_descriptor(CG *cg,
 
 static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out);
 
-/* Forward declarations for spec value-struct + witness-struct body, plus the
- * value-struct definition. The witness-struct body is emitted here (not
+/* Emit every named C tag owned by one registered spec. This pass runs for all
+ * specs before any witness body or callable ABI function-pointer typedef is
+ * emitted, so a spec type first mentioned inside a function parameter list
+ * resolves to the file-scope tag instead of creating a prototype-scope tag.
+ * Repeated declarations would be legal C, but keeping tags in this dedicated
+ * pass makes declaration dependencies independent of spec registration order. */
+static void cg_emit_user_spec_tag_forwards(CG *cg, const UserSpec *s) {
+    if (s->c_value_struct_name != NULL) {
+        buf_append_fmt(&cg->headers, "struct %s;\n", s->c_value_struct_name);
+    }
+    if (s->c_closure_struct_name != NULL) {
+        buf_append_fmt(&cg->headers, "struct %s;\n", s->c_closure_struct_name);
+    }
+    if (s->c_witness_struct_name != NULL) {
+        buf_append_fmt(&cg->headers, "struct %s;\n", s->c_witness_struct_name);
+    }
+}
+
+/* Emit the witness-struct body and the remaining declarations/definitions for
+ * one spec. All spec-owned C tags have already been declared at file scope by
+ * cg_emit_user_spec_tag_forwards. The witness body is emitted here (not
  * deferred to cg_emit_user_spec_definition) so it precedes witness-instance
  * tentative definitions in the headers buffer. */
 static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
     if (s->form == FENG_SPEC_FORM_CALLABLE) {
         cg_emit_callable_abi_function_pointer_typedef(&cg->headers, s);
-        if (s->c_closure_struct_name != NULL) {
-            buf_append_fmt(&cg->headers, "struct %s;\n", s->c_closure_struct_name);
-        }
         cg_emit_witness_struct_body(cg, s, &cg->headers);
         /* Forward-declare the closure type descriptor so that generic
          * type instances referencing it (e.g. List<WakerFn>) can compile
@@ -10742,11 +10758,9 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
     if (s->form == FENG_SPEC_FORM_UNION) {
         /* Union spec struct body is emitted by cg_emit_value_and_union_struct_bodies_sorted
          * (Pass 3.5a) which topologically sorts value types and union specs together.
-         * Here we only emit a forward declaration and the descriptor extern. */
+         * Its tag was emitted by cg_emit_user_spec_tag_forwards; here we emit
+         * only the witness body and descriptor declaration. */
         cg_emit_witness_struct_body(cg, s, &cg->headers);
-        if (s->c_value_struct_name != NULL) {
-            buf_append_fmt(&cg->headers, "struct %s;\n", s->c_value_struct_name);
-        }
         bool ext_visible = cg_user_spec_descriptor_is_externally_visible(cg, s);
         buf_append_fmt(&cg->headers,
             ext_visible ? "extern const FengAggregateDescriptor %s;\n"
@@ -35624,6 +35638,12 @@ static bool cg_emit_all_programs(CG *cg,
      * source file. */
     for (size_t i = 0; i < cg->user_type_count; i++) {
         cg_emit_user_type_forward(cg, &cg->user_types[i]);
+    }
+    /* Declare every spec-owned C tag before emitting any witness signature.
+     * A tag first introduced inside a function parameter list has prototype
+     * scope in C and would be incompatible with the later file-scope body. */
+    for (size_t i = 0; i < cg->user_spec_count; i++) {
+        cg_emit_user_spec_tag_forwards(cg, &cg->user_specs[i]);
     }
     for (size_t i = 0; i < cg->user_spec_count; i++) {
         cg_emit_user_spec_forward(cg, &cg->user_specs[i]);

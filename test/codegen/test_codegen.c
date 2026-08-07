@@ -1483,6 +1483,81 @@ static void test_spec_static_member_witness_codegen(void) {
     feng_program_free(program);
 }
 
+/* Every spec-owned C tag must have file scope before any witness signature,
+ * regardless of member staticness, parameter position, spec form, or source
+ * declaration order. */
+static void test_spec_c_tags_precede_all_witness_signatures_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.spectagforward;\n"
+        "spec Uses {\n"
+        "    static func useSelf(value: Uses): void;\n"
+        "    static func useLater(value: Later): void;\n"
+        "    static func useCallback(value: Callback): void;\n"
+        "    static func useChoice(value: Choice): void;\n"
+        "    func visit(value: Later): void;\n"
+        "}\n"
+        "spec Later {}\n"
+        "spec Callback(value: int): void;\n"
+        "spec Choice: int | string;\n";
+    FengProgram *program = parse_or_die(kSource, "spectagforward.ff");
+    const FengProgram *programs[1] = { program };
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    if (error_count != 0U) {
+        fprintf(stderr, "semantic error (spec tag forwards): %s\n",
+                errors[0].message ? errors[0].message : "(unknown)");
+    }
+    ASSERT(error_count == 0U);
+
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (spec tag forwards): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+
+    const char *uses_tag = strstr(
+        out.c_source,
+        "struct FengSpecValue__feng__codegen__spectagforward__Uses;\n");
+    const char *later_tag = strstr(
+        out.c_source,
+        "struct FengSpecValue__feng__codegen__spectagforward__Later;\n");
+    const char *callback_tag = strstr(
+        out.c_source,
+        "struct FengClosure__feng__codegen__spectagforward__Callback;\n");
+    const char *choice_tag = strstr(
+        out.c_source,
+        "struct FengSpecValue__feng__codegen__spectagforward__Choice;\n");
+    const char *uses_witness = strstr(
+        out.c_source,
+        "struct FengSpecWitness__feng__codegen__spectagforward__Uses {");
+
+    ASSERT(uses_tag != NULL);
+    ASSERT(later_tag != NULL);
+    ASSERT(callback_tag != NULL);
+    ASSERT(choice_tag != NULL);
+    ASSERT(uses_witness != NULL);
+    ASSERT(uses_tag < uses_witness);
+    ASSERT(later_tag < uses_witness);
+    ASSERT(callback_tag < uses_witness);
+    ASSERT(choice_tag < uses_witness);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Step 3 — spec static field (var) witness setter thunk forwards without
  * a subject. */
 static void test_spec_static_var_witness_codegen(void) {
@@ -8670,6 +8745,7 @@ int main(void) {
     test_generic_type_inferred_field_codegen();
     test_generic_type_inferred_field_concrete_call_codegen();
     test_spec_static_member_witness_codegen();
+    test_spec_c_tags_precede_all_witness_signatures_codegen();
     test_spec_static_var_witness_codegen();
     test_generic_param_static_method_codegen();
     test_generic_param_static_field_read_codegen();
