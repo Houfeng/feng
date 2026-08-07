@@ -203,8 +203,8 @@ type Stream: ReadWrite {}
 - union-form `spec` 只描述值进入时的 member 选择与收窄边界,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标; union-form 的专门规则见 [feng-union-type.md](./feng-union-type.md)。
 - intersection-form `spec` 只描述多个 object-form 契约的组合约束,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标。
 - 对象形状 `spec` 支持沿已显式声明的名义契约关系建立父视角: 具体 `type` 可进入当前可见契约闭包中已证明满足的 object-form `spec` 位置; 子 object-form `spec` 值也可进入其直接或传递父 `spec` 位置。
-- 赋值、初始化、传参、返回、字段写入、数组元素写入及具有明确候选参数类型的调用位置允许上述上下文向上 coercion。该 coercion 是由开发者已经声明的 `type T: S`、`fit T: S` 或 `spec S1: S2` 名义关系建立的契约视角投影,不构成无名义关系类型之间的一般隐式转换。
-- 当重载候选中同时存在源 object-form `spec` 的精确类型匹配和需要向父 `spec` coercion 的匹配时,必须优先精确匹配; 若没有精确匹配,只允许选择唯一最具体的可行父 `spec` 候选; 多个互不具有更具体关系的父 `spec` 候选同时成立时,必须按现有重载歧义规则诊断,不得按声明顺序兜底。
+- 赋值、初始化、传参、返回、字段写入、数组元素写入及已由合法无重叠重载集合唯一确定目标参数类型的调用位置允许上述上下文向上 coercion。该 coercion 是由开发者已经声明的 `type T: S`、`fit T: S` 或 `spec S1: S2` 名义关系建立的契约视角投影,不构成无名义关系类型之间的一般隐式转换。
+- 上下文向上 coercion 参与现有重载重叠检查: 若同一实参类型可精确匹配一个候选并向上 coercion 到另一个候选,或可向上 coercion 到多个候选,该重载集合必须在声明阶段视为冲突; 不以“精确优先”或“最具体优先”消解重叠候选。
 - 具体 `type` 与 object-form `spec` 值也可通过显式 cast 建立上述同一父视角; 显式形式不扩大可达的契约关系集合。
 - 对象形状 `spec` 的上下文向上 coercion 与显式 cast 资格必须在编译期确定; 运行时不得重新搜索满足关系,也不得依据对象真实具体类型临时决定转换是否成立。
 - 对象形状 `spec` 的上下文向上 coercion 或显式 cast 一旦合法,编译器必须直接按目标 `spec` 视角发码; 运行时不得再做候选 `spec` 搜索、试探转换或回退。
@@ -254,8 +254,8 @@ type Stream: ReadWrite {}
 - [必须] 当 callable-form `spec` 的显式转换因实例化后签名完全一致而成立时,编译器必须将其 lower 为不增加每次调用开销的目标视角切换; 不得为此分配新的 wrapper/closure,也不得增加额外 invoke 转发层。
 - [禁止] 不同 callable-form `spec` 仅因签名结构相同而发生隐式匹配。
 - [必须] 对象形状 `spec` 的上下文向上 coercion 只允许两类名义视角投影: 具体 `type` 到其当前可见契约闭包中已满足的 object-form `spec`,以及子 object-form `spec` 到其直接或传递父 object-form `spec`。
-- [必须] 上述上下文向上 coercion 适用于赋值、初始化、传参、返回、字段写入、数组元素写入及具有明确候选参数类型的调用位置；它不得扩展为无名义契约关系类型之间的一般隐式转换。
-- [必须] object-form `spec` 重载候选的精确类型匹配优先于需要向父 `spec` coercion 的匹配；没有精确匹配时只允许选择唯一最具体的可行父 `spec` 候选,多个互不具有更具体关系的可行父 `spec` 候选必须诊断为歧义。
+- [必须] 上述上下文向上 coercion 适用于赋值、初始化、传参、返回、字段写入、数组元素写入及已由合法无重叠重载集合唯一确定目标参数类型的调用位置；它不得扩展为无名义契约关系类型之间的一般隐式转换。
+- [必须] object-form `spec` 的上下文向上 coercion 必须参与普通重载重叠检查；若同一实参类型可匹配同一重载集合中的多个候选,必须在声明阶段视为签名冲突,不得通过精确匹配优先级、父级距离或调用点显式 cast 保留该重载集合。
 - [必须] 对象形状 `spec` 的显式 cast 允许建立与上下文向上 coercion 相同的两类父视角,但不得扩大可达的契约关系集合。
 - [必须] 对象形状 `spec` 的上下文向上 coercion 与显式 cast 资格必须仅依据当前可见契约关系在编译期确定。
 - [必须] 对象形状 `spec` 的上下文向上 coercion 或显式 cast 一旦成立,编译器必须直接构造静态已知的目标 `spec` 视角; 运行时不得再做候选搜索、试探或回退。
@@ -290,7 +290,7 @@ type Stream: ReadWrite {}
 - 编译器必须仅在两个 callable-form `spec` 的实例化后签名完全一致时接受显式转换,并在语义分析阶段拒绝其他 callable-form `spec` 转换。
 - 编译器必须把实例化后签名完全一致的 callable-form `spec` 显式转换 lower 为零转发的目标视角重解释; 不得为该转换生成新的 wrapper/closure,也不得让转换后的每次调用比转换前多一层 invoke forwarding。
 - 编译器必须在语义分析阶段根据当前可见契约关系判定对象形状 `spec` 的上下文 coercion 与显式 cast 是否属于允许的向上视角投影,并拒绝父到子、无关 `spec` 或依赖运行时对象具体类型的转换。
-- 编译器必须在赋值、初始化、传参、返回、字段写入、数组元素写入及重载候选检查中统一应用 object-form `spec` 上下文向上 coercion；重载解析必须先选择精确类型匹配,再从需要向父 `spec` coercion 的候选中选择唯一最具体者,并诊断多个互不更具体的可行父候选。
+- 编译器必须在赋值、初始化、传参、返回、字段写入、数组元素写入及重载重叠检查中统一应用 object-form `spec` 上下文向上 coercion；若具体 `type` 与其满足的 `spec`、子 `spec` 与其父 `spec`，或其他契约关系使同一实参类型可匹配多个重载候选,必须在声明阶段诊断签名冲突。
 - 编译器必须在 union-form 进入站点按精确直接 member 优先、嵌套 union-form 多级链路间接匹配次之的规则确定 active member 路径；多条可达路径构成歧义时必须报错，不得按声明顺序兜底。
 - 编译器必须在 union-form `match 目标值 { ... }` 中只接受 union 直接成员类型标签与 `else`，拒绝字面量标签和区间标签；穷尽性检查只验证直接成员是否被覆盖。
 - 编译器必须在 intersection-form 使用位置检查源类型是否名义满足展平后的全部 object-form member,并使用合并 witness 支持成员访问与泛型约束。

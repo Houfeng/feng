@@ -43,7 +43,7 @@ let explicitA = (A)b;
 
 ### 2.1 上下文向上 Coercion
 
-赋值、初始化、参数传递、返回值、字段写入、数组元素写入及重载候选检查等具有明确目标类型的位置，若源是 object-form 子 `spec`、目标是其直接或传递父 object-form `spec`，允许自动建立父视角：
+赋值、初始化、参数传递、返回值、字段写入、数组元素写入及已由合法无重叠重载集合唯一确定目标参数类型的调用位置，若源是 object-form 子 `spec`、目标是其直接或传递父 object-form `spec`，允许自动建立父视角：
 
 ```feng
 let parent: Parent = child;
@@ -63,15 +63,23 @@ let parent = (Parent)child;
 
 显式形式不能用于父到子、无关 `spec`，也不能依据 subject 的运行时具体类型建立静态类型不可达的视角。
 
-### 2.3 重载候选
+### 2.3 重载集合边界
 
-Object-form `spec` 实参的重载候选按以下优先级处理：
+Feng 的重载集合必须由调用方实参类型准确区分，不使用“精确优先”或“最具体优先”保留可能重叠的候选。Object-form `spec` 向上 coercion 必须纳入现有重载重叠检查。
 
-1. 源 spec 与参数 spec 精确相同的候选优先。
-2. 没有精确匹配时，从可经父关系 coercion 到达的候选中选择唯一最具体者。
-3. 多个可行父候选互不具有更具体关系时诊断为歧义，不按声明顺序选择。
+以下重载均不合法：
 
-候选确定后，semantic 才为该实参记录父级路径。
+```feng
+func test(value: UserType) {}
+func test(value: UserSpec) {} // UserType 满足 UserSpec
+
+func show(value: ChildSpec) {}
+func show(value: ParentSpec) {} // ChildSpec: ParentSpec
+```
+
+因为同一个实参类型可同时匹配两个候选，编译器必须在声明阶段诊断签名冲突。调用点显式 cast 不用于挽救已经重叠的重载集合。
+
+对于通过重叠检查的合法重载集合，调用解析唯一确定目标函数后，该参数位置才形成明确 expected type，并按普通参数 coercion 规则记录父级路径。
 
 ### 2.4 非目标
 
@@ -299,7 +307,7 @@ Semantic 应为合法上下文 coercion 或显式 cast 记录至少以下信息�
 
 Codegen 只能消费该结论，不得重新判断父关系或自行选择另一条路径。
 
-重载候选检查期间只能临时计算可达性与具体性；仅在候选唯一确定后记录正式 coercion sidecar，避免为未选候选生成 witness 依赖。
+重载重叠检查必须把子 `spec` 到父 `spec` 的可达性视为参数类型重叠关系，不得仅通过搜索当前可见具体实现类型间接推断。对于已经通过重叠检查的合法集合，仅在调用目标唯一确定后记录正式 coercion sidecar，避免为未选候选生成 witness 依赖。
 
 ## 7. Codegen 设计
 
@@ -406,7 +414,7 @@ Provider 与 consumer 必须由这些事实生成一致的 witness 结构和父�
 文档 Review 通过后，按以下顺序实施：
 
 1. Semantic：在 expected-type 位置与显式 cast 中接受合法的 object-form 子 `spec` 到祖先 `spec` 视角投影，并记录确定的直接父路径。
-2. 重载解析：接入精确匹配、唯一最具体父候选与歧义规则。
+2. 重载检查：把子 `spec` 到父 `spec` 的名义可达性纳入声明阶段重叠检查，保持现有“重叠即冲突”规则。
 3. Codegen 声明：在 witness 结构中追加具名直接父字段及所需前向声明。
 4. Witness 生成：按同一主体实现键递归生成并初始化直接父 witness 闭包。
 5. Codegen 表达式：将上下文 coercion 与显式 cast 统一 lower 为保留 subject 的固定父字段读取链。
@@ -426,9 +434,9 @@ Provider 与 consumer 必须由这些事实生成一致的 witness 结构和父�
 - 菱形父视角投影成功并选择声明顺序下的确定路径。
 - 泛型父 spec 的类型实参替换正确。
 - 跨模块与跨包父关系恢复正确。
-- 重载精确 spec 候选优先于需要父级 coercion 的候选。
-- 没有精确匹配时选择唯一最具体的父 spec 候选。
-- 多个互不更具体的父 spec 候选诊断为歧义。
+- 具体 `type` 与其满足的 spec 参数重载在声明阶段诊断冲突。
+- 子 spec 与父 spec 参数重载在声明阶段诊断冲突，即使当前没有可见具体实现类型。
+- 多个父 spec 参数可接纳同一实参类型时在声明阶段诊断冲突。
 - 父到子、无关 spec、依赖运行时具体类型的上下文 coercion 与显式 cast 继续失败。
 
 ### 11.2 Codegen
@@ -468,4 +476,3 @@ Provider 与 consumer 必须由这些事实生成一致的 witness 结构和父�
 5. 生成代码不存在运行时搜索、遍历、分支、包装或分配。
 6. 投影后成员调用成本不增加。
 7. 新增测试与全量回归全部通过。
-
