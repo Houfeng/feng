@@ -148,28 +148,38 @@ open spec Widget {
   let children: List<Widget>;
 
   /**
+   * 键盘事件回调
+   */
+  var onKey: Action<KeyEvent>;
+
+  /**
+   * 鼠标按下事件回调
+   */
+  var onMouseDown: Action<MouseEvent>;
+
+  /**
+   * 鼠标移动事件回调
+   */
+  var onMouseMove: Action<MouseEvent>;
+
+  /**
+   * 鼠标释放事件回调
+   */
+  var onMouseUp: Action<MouseEvent>;
+
+  /**
+   * 鼠标滚轮事件回调
+   */
+  var onWheel: Action<MouseEvent>;
+
+  /**
    * 对齐并计算当前组件及其子组件的 frame
    */
-  func arrange(manager: ViewManager): void;
+  static func arrange(widget: Widget, manager: ViewManager): void;
 
   /**
    * 绘制当前组件；绘制阶段只使用 frame，不重新解释 style
    * 需要组件将自身添加到 ViewManager 的 sequence 中，保证绘制顺序正确
    */
-  func draw(manager: ViewManager): void;
-
-  /** 键盘事件回调 */
-  var onKey: Action<KeyEvent>;
-
-  /** 鼠标按下事件回调 */
-  var onMouseDown: Action<MouseEvent>;
-
-  /** 鼠标移动事件回调 */
-  var onMouseMove: Action<MouseEvent>;
-
-  /** 鼠标释放事件回调 */
-  var onMouseUp: Action<MouseEvent>;
-
-  /** 鼠标滚轮事件回调 */
-  var onWheel: Action<MouseEvent>;
+  static func draw(widget: Widget, manager: ViewManager): void;
 }

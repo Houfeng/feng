@@ -1,0 +1,9 @@
+open module std.tui.views;
+
+import std;
+import std.collections;
+import std.tui;
+
+open type Button: Widget {
+  ...: View;
+}
