@@ -1,0 +1,33 @@
+module feng.smoke;
+
+@cdecl("libc") extern func puts(msg: string*): int;
+
+spec Label {
+    func text(): string;
+}
+
+type LabelValue: Label {
+    let value: string;
+
+    func text(): string {
+        return self.value;
+    }
+}
+
+spec Holder {
+    let label: Label;
+}
+
+type HolderValue: Holder {
+    let label: Label;
+}
+
+func main(args: string[]) {
+    var current: Label = LabelValue { value: "before" };
+    let holder: Holder = HolderValue {
+        label: LabelValue { value: "after" }
+    };
+
+    current = holder.label;
+    puts(&current.text());
+}

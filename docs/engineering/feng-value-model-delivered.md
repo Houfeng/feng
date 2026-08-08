@@ -450,6 +450,8 @@ fat spec 作为参数 / 返回值时，使用**具名 C struct 按值传递**。
 | 对象字段为 spec | §7.4 展平进对象 `managed_fields` |
 | 数组元素为 spec | §7.3 元素分类为 aggregate |
 
+`feng_aggregate_assign` / `feng_aggregate_take` 的源参数必须是 C 可寻址值。已可寻址的源表达式直接传地址；不可寻址的借用结果先生成仅限当前语句的浅拷贝临时值，不额外 retain/release；不可寻址的拥有结果按现有受管临时值路径处理。
+
 ## 9 实施阶段
 
 ### 9.1 Phase 1：模型落地 + fat spec 接入（spec 发码前置，必做）

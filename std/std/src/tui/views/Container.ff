@@ -25,19 +25,14 @@ open type Container: ContainerWidget {
    */
   @mixable
   static func addChild(container: ContainerWidget, child: Widget): void {
-    // if child == container || child.isAncestor(container) {
-    //   throw "tui/widget/cycle";
-    // }
-
-    // match child.parent {
-    //   parent: ContainerWidget {
-    //     parent.removeChild(child);
-    //   }
-    //   else {}
-    // }
-
-    // container.children.add(child);
-    // child.parent = container;
+    if child == (Widget)container || child.isAncestor(container) {
+      throw "tui/widget/cycle";
+    }
+    if child.parent match parent: ContainerWidget {
+      parent.removeChild(child);
+    }
+    container.children.add(child);
+    child.parent = container;
   }
 
   /**
@@ -45,7 +40,7 @@ open type Container: ContainerWidget {
    */
   @mixable
   static func removeChild(container: ContainerWidget, child: Widget): void {
-    for var index: int = 0; index < container.children.size(); index = index + 1 {
+    for var index: int = 0; index < container.children.size(); index += 1 {
       if container.children.get(index) == child {
         container.children.remove(index);
         child.parent = none;

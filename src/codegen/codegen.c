@@ -1729,6 +1729,9 @@ static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
 static bool cg_emit_field_release(CG *cg, Buf *td, const char *field_name,
                                   const CGType *t, FengToken blame);
 static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix);
+static bool cg_prepare_aggregate_assign_source(CG *cg,
+                                               ExprResult *source,
+                                               const char *prefix);
 static bool cg_emit_constructor_invoke(CG *cg,
                                        FengExpr *const *args,
                                        size_t arg_count,
@@ -11943,14 +11946,18 @@ struct ExprResult {
     CGType *type;         /* malloc'd */
     /* When true, the C expression evaluates to a fresh +1 reference that the
      * caller MUST either store in a slot (transferring ownership) or wrap in
-     * a temporary and release after use. Only meaningful for managed types. */
+     * a temporary and release after use. Meaningful for managed and
+     * aggregate types. */
     bool    owns_ref;
+    /* True when c_expr is a C lvalue whose address can be taken directly. */
+    bool    is_addressable;
 };
 
 static void er_init(ExprResult *r) {
     r->c_expr = NULL;
     r->type = NULL;
     r->owns_ref = false;
+    r->is_addressable = false;
 }
 
 static bool cg_tuple_user_has_field_count(const UserType *ut, size_t count) {
@@ -12146,7 +12153,7 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
                                field->feng_name);
             }
         }
-        if (value->owns_ref && cg_materialize_to_local(cg, value, "_t") == NULL) {
+        if (!cg_prepare_aggregate_assign_source(cg, value, "_t")) {
             buf_free(&lvalue);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
@@ -12455,6 +12462,7 @@ static bool cg_emit_tuple_cast_to_type(CG *cg,
         field_value.c_expr = field_expr.data;
         field_value.type = cgtype_clone(target->user->fields[i].type);
         field_value.owns_ref = false;
+        field_value.is_addressable = true;
         if (field_value.c_expr == NULL || field_value.type == NULL) {
             er_free(&field_value);
             free(tmp);
@@ -12504,6 +12512,7 @@ static bool cg_emit_imported_binding_expr(CG *cg,
     buf_append_fmt(cg->cur_body, "    %s();\n", ensure_init_name);
     out->c_expr = slot_name;
     out->owns_ref = false;
+    out->is_addressable = true;
     free(ensure_init_name);
     return true;
 }
@@ -12631,7 +12640,7 @@ static bool cg_emit_imported_binding_assign(CG *cg,
                            stmt->token,
                            "CE0074", "codegen: missing aggregate descriptor for assignment");
         }
-        if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
+        if (!cg_prepare_aggregate_assign_source(cg, &v, "_t")) {
             er_free(&v);
             cgtype_free(binding_type);
             free(slot_name);
@@ -12663,6 +12672,7 @@ static void er_free(ExprResult *r) {
     r->c_expr = NULL;
     r->type = NULL;
     r->owns_ref = false;
+    r->is_addressable = false;
 }
 
 /* Materialise an ExprResult into a fresh C local so its lifetime spans the
@@ -12732,7 +12742,49 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
     free(r->c_expr);
     r->c_expr = strdup(tmp);
     r->owns_ref = false;
+    r->is_addressable = true;
     return tmp;
+}
+
+/* Ensure that an aggregate source can be passed to a pointer-based runtime
+ * operation. Owned results use the regular managed temporary path. A borrowed
+ * C rvalue needs only a statement-local shallow copy: the destination
+ * operation retains its managed slots before the borrowed owner can expire. */
+static bool cg_prepare_aggregate_assign_source(CG *cg,
+                                               ExprResult *source,
+                                               const char *prefix) {
+    char *tmp;
+    char *ctype;
+
+    if (cg == NULL || source == NULL || source->type == NULL ||
+        !cgtype_is_aggregate(source->type)) {
+        return false;
+    }
+    if (source->owns_ref) {
+        return cg_materialize_to_local(cg, source, prefix) != NULL;
+    }
+    if (source->is_addressable) {
+        return true;
+    }
+
+    tmp = cg_fresh_temp(cg, prefix);
+    ctype = cg_ctype_dup(source->type);
+    if (tmp == NULL || ctype == NULL) {
+        free(tmp);
+        free(ctype);
+        return false;
+    }
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body,
+                   "    %s %s = %s;\n",
+                   ctype,
+                   tmp,
+                   source->c_expr);
+    free(ctype);
+    free(source->c_expr);
+    source->c_expr = tmp;
+    source->is_addressable = true;
+    return true;
 }
 
 /* C symbol for the source package's ordinary implicit-construction entry.
@@ -14615,6 +14667,7 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
         out->c_expr = strdup(l->c_name);
         out->type = cgtype_clone(l->type);
         out->owns_ref = false;  /* borrow from local slot */
+        out->is_addressable = true;
         return out->c_expr && out->type;
     }
     const ModuleBinding *mb = cg_find_module_binding(cg,
@@ -14624,6 +14677,7 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
         out->c_expr = cg_module_binding_slot_expr_dup(mb);
         out->type = cgtype_clone(mb->type);
         out->owns_ref = false;  /* borrow from static slot */
+        out->is_addressable = true;
         return out->c_expr && out->type;
     }
     {
@@ -15174,6 +15228,7 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
                 out->c_expr = strdup(n->c_expr);
                 out->type = cgtype_clone(n->type);
                 out->owns_ref = false;
+                out->is_addressable = true;
                 return out->c_expr != NULL && out->type != NULL;
             }
         }
@@ -15197,6 +15252,7 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
             out->c_expr = strdup(l->c_name);
             out->type = cgtype_clone(l->type);
             out->owns_ref = false;
+            out->is_addressable = true;
             ok = out->c_expr && out->type;
             break;
         }
@@ -15312,9 +15368,14 @@ static bool cg_pack_variadic_args(CG *cg,
             cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
             return false;
         }
-        if ((cgtype_is_managed(items[i].type) || cgtype_is_aggregate(items[i].type)) &&
-            items[i].owns_ref) {
+        if (cgtype_is_managed(items[i].type) && items[i].owns_ref) {
             cg_materialize_to_local(cg, &items[i], "_t");
+        } else if (cgtype_is_aggregate(items[i].type) &&
+                   !cg_prepare_aggregate_assign_source(cg, &items[i], "_t")) {
+            for (size_t k = 0; k <= i; ++k) er_free(&items[k]);
+            free(items);
+            cgtype_free(elem); free(arr_tmp); free(elem_cty); free(desc_expr);
+            return cg_fail(cg, *tok, "IE0001", "codegen: out of memory packing variadic arguments");
         }
     }
 
@@ -18786,6 +18847,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
             out->c_expr = strdup(binding->c_name);
             out->type = cgtype_clone(binding->type);
             out->owns_ref = false;
+            out->is_addressable = true;
             return out->c_expr != NULL && out->type != NULL;
         }
     }
@@ -18859,6 +18921,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         }
         out->type = field_type;
         out->owns_ref = false;
+        out->is_addressable = true;
         er_free(&recv);
         return out->c_expr && out->type;
     }
@@ -18980,6 +19043,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
             out->c_expr = b.data;
             out->type = cgtype_clone(uf->type);
             out->owns_ref = false;
+            out->is_addressable = recv.is_addressable;
             er_free(&recv);
             return out->c_expr && out->type;
         }
@@ -18989,6 +19053,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         out->c_expr = b.data;
         out->type = cgtype_clone(uf->type);
         out->owns_ref = false;
+        out->is_addressable = recv.is_addressable;
         er_free(&recv);
         return out->c_expr && out->type;
     }
@@ -19022,6 +19087,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
     out->c_expr = b.data;
     out->type = cgtype_clone(uf->type);
     out->owns_ref = false;   /* borrow */
+    out->is_addressable = true;
     er_free(&recv);
     return out->c_expr && out->type;
 }
@@ -19633,11 +19699,14 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
         }
         if (cgtype_is_managed(items[i].type) && items[i].owns_ref) {
             cg_materialize_to_local(cg, &items[i], "_t");
-        } else if (cgtype_is_aggregate(items[i].type) && items[i].owns_ref) {
-            /* Step 4b-γ — fat aggregate carries +1 on its managed slots; the
-             * scope's aggregate cleanup must drive the eventual release once
-             * we hand the value off to feng_aggregate_assign. */
-            cg_materialize_to_local(cg, &items[i], "_t");
+        } else if (cgtype_is_aggregate(items[i].type)) {
+            /* Aggregate sources must be addressable for the pointer-based
+             * slot write; owned results additionally need scope cleanup. */
+            if (!cg_prepare_aggregate_assign_source(cg, &items[i], "_t")) {
+                for (size_t k = 0; k <= i; ++k) er_free(&items[k]);
+                free(items);
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+            }
         }
     }
     /* Choose the slot type. If a non-array narrowing target was supplied
@@ -19947,6 +20016,7 @@ static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out) {
     out->c_expr = b.data;
     out->type = cgtype_clone(recv.type->element);
     out->owns_ref = false;   /* borrowed */
+    out->is_addressable = true;
     er_free(&idx); er_free(&recv);
     return out->c_expr && out->type;
 }
@@ -20160,6 +20230,13 @@ static bool cg_emit_branch_into_slot(CG *cg,
                         "        feng_aggregate_take(&%s, &%s, &%s);\n",
                         ifv_name, r.c_expr, agg_desc);
                 } else {
+                    if (!cg_prepare_aggregate_assign_source(cg, &r, "_t")) {
+                        er_free(&r);
+                        cg->cur_scope = bsc->parent;
+                        scope_pop_free(bsc);
+                        return cg_fail(cg, err_token,
+                            "IE0001", "codegen: out of memory");
+                    }
                     buf_append_fmt(cg->cur_body,
                         "        feng_aggregate_assign(&%s, &%s, &%s);\n",
                         ifv_name, r.c_expr, agg_desc);
@@ -20268,6 +20345,10 @@ static bool cg_assign_expr_result_to_slot(CG *cg,
                            r->c_expr,
                            agg_desc);
         } else {
+            if (!cg_prepare_aggregate_assign_source(cg, r, "_t")) {
+                return cg_fail(cg, err_token,
+                               "IE0001", "codegen: out of memory");
+            }
             buf_append_fmt(cg->cur_body,
                            "        feng_aggregate_assign(&%s, &%s, &%s);\n",
                            slot_name,
@@ -20451,6 +20532,7 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
      * In both cases the surface contract is "borrowed-from-slot": owns_ref
      * is false, callers that need to retain do so themselves. */
     out->owns_ref = false;
+    out->is_addressable = true;
 
     free(cond_tmp);
     free(ifv);
@@ -21171,6 +21253,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         out->c_expr = strdup(ifv);
         out->type = result_type;
         out->owns_ref = false;
+        out->is_addressable = true;
         free(ifv);
         return out->c_expr != NULL;
     }
@@ -21264,6 +21347,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     out->c_expr = strdup(ifv);
     out->type = result_type;
     out->owns_ref = false;
+    out->is_addressable = true;
 
     free(tgt_tmp);
     free(ifv);
@@ -22108,6 +22192,7 @@ static bool cg_emit_try_expr(CG *cg,
     out->c_expr = strdup(is_void ? "((void)0)" : slot_name);
     out->type = result_type;
     out->owns_ref = false;
+    out->is_addressable = !is_void;
 
     free(slot_name);
     free(marker_name);
@@ -22385,6 +22470,7 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         /* Borrowed subjects stay tied to the materialised local; scalar-like
          * subjects own only when the selected storage mode boxes them. */
         out->owns_ref = subject_owned;
+        out->is_addressable = false;
     }
     return true;
 }
@@ -23190,7 +23276,7 @@ static bool cg_emit_user_field_value_store(CG *cg,
                            "CE0232", "codegen: missing aggregate descriptor for field '%s'",
                            uf->feng_name);
         }
-        if (value->owns_ref && cg_materialize_to_local(cg, value, "_t") == NULL) {
+        if (!cg_prepare_aggregate_assign_source(cg, value, "_t")) {
             buf_free(&field_expr);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
@@ -24287,8 +24373,11 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return cg_fail(cg, stmt->token,
                     "CE0243", "codegen: missing aggregate descriptor for spec array element write");
             }
-            if (v.owns_ref) {
-                cg_materialize_to_local(cg, &v, "_t");
+            if (!cg_prepare_aggregate_assign_source(cg, &v, "_t")) {
+                free(elem_cty); free(idx_tmp);
+                er_free(&v); er_free(&ix); er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "IE0001", "codegen: out of memory");
             }
             size_t rad_idx;
             if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
@@ -24421,8 +24510,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                                            stmt->token,
                                            "CE0246", "codegen: missing aggregate descriptor for static binding write");
                         }
-                        if (v.owns_ref) {
-                            cg_materialize_to_local(cg, &v, "_t");
+                        if (!cg_prepare_aggregate_assign_source(cg, &v, "_t")) {
+                            er_free(&v);
+                            return cg_fail(cg, stmt->token,
+                                           "IE0001", "codegen: out of memory");
                         }
                         buf_append_fmt(cg->cur_body,
                                        "    feng_aggregate_assign(&%s, &%s, &%s);\n",
@@ -24629,7 +24720,12 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     return cg_fail(cg, stmt->token,
                         "CE0251", "codegen: missing aggregate descriptor for generic method field write");
                 }
-                if (v.owns_ref) cg_materialize_to_local(cg, &v, "_t");
+                if (!cg_prepare_aggregate_assign_source(cg, &v, "_t")) {
+                    er_free(&v); free(field_addr); free(field_cty);
+                    cgtype_free(field_type); er_free(&recv);
+                    return cg_fail(cg, stmt->token,
+                        "IE0001", "codegen: out of memory");
+                }
                 buf_append_fmt(cg->cur_body,
                     "    feng_aggregate_assign(%s, &%s, &%s);\n",
                     field_addr, v.c_expr, agg_desc);
@@ -25060,7 +25156,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return cg_fail(cg, stmt->token,
                                "CE0257", "codegen: missing aggregate descriptor for member assignment");
             }
-            if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
+            if (!cg_prepare_aggregate_assign_source(cg, &v, "_t")) {
                 er_free(&v);
                 er_free(&recv);
                 return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
@@ -25181,7 +25277,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return cg_fail(cg, stmt->token,
                                "CE0261", "codegen: missing aggregate descriptor for module assignment");
             }
-            if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
+            if (!cg_prepare_aggregate_assign_source(cg, &v, "_t")) {
                 er_free(&v);
                 return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
             }
@@ -25272,7 +25368,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             return cg_fail(cg, stmt->token,
                            "CE0263", "codegen: missing aggregate descriptor for local assignment");
         }
-        if (v.owns_ref && cg_materialize_to_local(cg, &v, "_t") == NULL) {
+        if (!cg_prepare_aggregate_assign_source(cg, &v, "_t")) {
             er_free(&v);
             return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
@@ -37028,7 +37124,7 @@ static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
                            mb->binding->token,
                            "CE0360", "codegen: missing aggregate descriptor for module binding");
         }
-        if (r.owns_ref && cg_materialize_to_local(cg, &r, "_t") == NULL) {
+        if (!cg_prepare_aggregate_assign_source(cg, &r, "_t")) {
             er_free(&r);
             cg->cur_scope = NULL; scope_pop_free(fn_scope);
             cg->cur_body = NULL;
