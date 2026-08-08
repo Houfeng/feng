@@ -1,12 +1,12 @@
 # 泛型重载决议优化开发设计
 
-> **状态**：方案待人工 Review，未实施。
+> **状态**：方案待人工 Review，未实施；代码实施等待 Object-form Spec 向上转换完整交付。
 >
 > **日期**：2026-08-08。
 >
 > **范围**：函数与方法调用的候选筛选、逐参数优先级、调用点消歧，以及对应的重载声明合法性。
 >
-> **关联开发**：[Object-form Spec 向上 Coercion 开发设计](./feng-object-spec-upcasting-dev.md)。两项开发独立实施；本文不实现 `spec` 向上 coercion 或 witness 变更。
+> **前置开发**：[Object-form Spec 向上 Coercion 开发设计](./feng-object-spec-upcasting-dev.md)。先完整交付 object-form 子 `spec` 到父 `spec` 的向上转换并完成回归，再实施本文；本文不实现 coercion 或 witness 变更。
 
 ## 1. 核心决策
 
@@ -337,9 +337,11 @@ pick(value); // 与上一调用选择相同候选
 
 ## 8. 与 Spec 向上 Coercion 的关系
 
-本次只建立重载候选比较框架，不新增子 `spec` 值到父 `spec` 值的转换资格。后续实现 `spec` 向上 coercion 后，新产生的父级候选按本文自然进入“非泛型父级 `spec`”或“调用级泛型父级 `spec`”。
+Object-form Spec 向上转换是本文的前置交付。必须先按 [Object-form Spec 向上 Coercion 开发设计](./feng-object-spec-upcasting-dev.md) 完成转换资格、父级路径、witness ABI、lowering、泛型名义父实例和跨包行为，并通过专项测试与全量回归；在此前不得开始本文代码实施。
 
-Witness 父级路径只在唯一候选选定、目标形参确定后记录；候选探测不得生成最终 lowering 结论。本文审批后，[Object-form Spec 向上 Coercion 开发设计](./feng-object-spec-upcasting-dev.md)只引用本文的重载规则，不重复定义。
+前置阶段保持其文档确定的当前重载处理。本文随后只调整重载声明合法性与候选比较，使已经合法的父级匹配进入“非泛型父级 `spec`”或“调用级泛型父级 `spec`”；不新增或改变子 `spec` 到父 `spec` 的转换资格，也不修改已经交付的 witness ABI 与 lowering。
+
+本文实施后，候选探测仍只能判断父级转换是否适用。唯一候选和目标形参确定后，继续复用前置阶段已经交付的父级路径与 coercion sidecar 记录机制；未选候选不得生成最终 witness lowering 结论。
 
 ## 9. Semantic 实现约束
 
@@ -400,10 +402,10 @@ Semantic 选定唯一声明后，继续记录类型实参及替换后的参数�
 
 - [x] 整理本开发设计，明确外层类型形状、七级优先级和逐参数比较规则。
 - [ ] 人工 Review 并确认本方案。
+- [ ] 完整实施并回归 [Object-form Spec 向上 Coercion 开发设计](./feng-object-spec-upcasting-dev.md)；其专项测试与全量 `make test` 通过以前，不开始本文的权威规范和代码实施。
 - [ ] 更新 [Feng 函数规范](../specifications/feng-function.md)，将候选适用性、逐参数比较、二义性和声明合法性收敛为权威规则。
 - [ ] 更新 [Feng 泛型规范草案](../specifications/feng-generics-draft.md)，删除“所有非泛型候选全局优先”的旧规则并引用函数规范。
 - [ ] 检查 `AE0511` 文案是否适用于新的调用点二义性；不需要新诊断码时不改错误码规范。
-- [ ] 更新 [Object-form Spec 向上 Coercion 开发设计](./feng-object-spec-upcasting-dev.md)，仅引用权威重载规则并删除重复或过时结论。
 
 ### 10.2 Semantic 实现
 
