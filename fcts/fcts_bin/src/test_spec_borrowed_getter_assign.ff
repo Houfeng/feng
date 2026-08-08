@@ -1,0 +1,105 @@
+module fcts_bin;
+
+import std;
+import std.test;
+
+/**
+ * 模拟 TUI Widget 的父组件契约。
+ */
+spec BorrowedGetterWidget {
+  var parent: Option<BorrowedGetterContainer>;
+}
+
+/**
+ * 模拟 TUI ContainerWidget 的子契约。
+ */
+spec BorrowedGetterContainer: BorrowedGetterWidget {
+  let identifier: string;
+}
+
+/**
+ * 用于构造普通组件的 object-form spec subject。
+ */
+type BorrowedGetterLeaf: BorrowedGetterWidget {
+  var parent: Option<BorrowedGetterContainer>;
+}
+
+/**
+ * 用于构造容器组件的 object-form spec subject。
+ */
+type BorrowedGetterContainerItem: BorrowedGetterContainer {
+  var parent: Option<BorrowedGetterContainer>;
+  let identifier: string;
+}
+
+/**
+ * 沿父链迭代检查祖先，保持与 TUI View.isAncestor 相同的赋值形态。
+ */
+func borrowedGetterIsAncestor(widget: BorrowedGetterWidget,
+                             value: BorrowedGetterWidget): bool {
+  var current: Option<BorrowedGetterContainer> = value.parent;
+  while current match let parent: BorrowedGetterContainer {
+    if widget == (BorrowedGetterWidget)parent {
+      return true;
+    }
+    current = parent.parent;
+  }
+  return false;
+}
+
+/**
+ * 将 spec 字段 getter 返回的借用聚合值赋给已有局部变量。
+ */
+func borrowedGetterDetachParent(value: BorrowedGetterWidget): Option<BorrowedGetterContainer> {
+  var current: Option<BorrowedGetterContainer> = none;
+  current = value.parent;
+  value.parent = none;
+  return current;
+}
+
+/**
+ * 验证 object-form spec 聚合字段 getter 的局部变量赋值行为。
+ */
+open func test_spec_borrowed_getter_assign() {
+  describe("borrowed aggregate spec getter assignment", () {
+    test("walks a multi-level container parent chain", () {
+      let root: BorrowedGetterContainer = BorrowedGetterContainerItem {
+        identifier: "root"
+      };
+      let middle: BorrowedGetterContainer = BorrowedGetterContainerItem {
+        parent: root,
+        identifier: "middle"
+      };
+      let leaf: BorrowedGetterWidget = BorrowedGetterLeaf { parent: middle };
+      let detached: BorrowedGetterWidget = BorrowedGetterLeaf {};
+
+      assert(borrowedGetterIsAncestor((BorrowedGetterWidget)root, leaf),
+             "transitive root ancestor");
+      assert(borrowedGetterIsAncestor((BorrowedGetterWidget)middle, leaf),
+             "direct middle ancestor");
+      assert(!borrowedGetterIsAncestor(leaf, leaf),
+             "a widget is not its own ancestor");
+      assert(!borrowedGetterIsAncestor(detached, leaf),
+             "unrelated widget is not an ancestor");
+      assert(!borrowedGetterIsAncestor((BorrowedGetterWidget)root, detached),
+             "empty parent terminates the traversal");
+    });
+
+    test("retains a borrowed parent after clearing its source field", () {
+      let parent: BorrowedGetterContainer = BorrowedGetterContainerItem {
+        identifier: "retained"
+      };
+      let leaf: BorrowedGetterWidget = BorrowedGetterLeaf { parent: parent };
+      let detachedParent = borrowedGetterDetachParent(leaf);
+
+      if detachedParent match let retained: BorrowedGetterContainer {
+        assert(retained.identifier == "retained",
+               "assigned aggregate keeps the borrowed parent alive");
+      } else {
+        assert(false, "assigned aggregate preserves its union member");
+      }
+      assert(!borrowedGetterIsAncestor((BorrowedGetterWidget)parent, leaf),
+             "cleared source field no longer exposes the parent");
+    });
+  });
+}

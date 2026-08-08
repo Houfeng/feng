@@ -39,5 +39,6 @@ func main(args: string[]) {
       test_private_generic_representation();
       test_cross_package_private_representation();
       test_spec_upcast();
+      test_spec_borrowed_getter_assign();
   });
 }
