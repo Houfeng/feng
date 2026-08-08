@@ -20929,26 +20929,27 @@ static bool spec_upcast_type_ref_leaf_is(const FengTypeRef *type_ref,
 static const FengSpecCoercionSite *assert_object_spec_upcast_site(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr,
-    const FengDecl *source_spec,
     const FengDecl *target_spec,
-    size_t path_length) {
+    const size_t *parent_indices,
+    size_t parent_index_count) {
     const FengSpecCoercionSite *site =
         feng_semantic_lookup_spec_coercion_site(analysis, expr);
 
     ASSERT(site != NULL);
     ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT_UPCAST);
-    ASSERT(site->source_spec_decl == source_spec);
-    ASSERT(site->source_spec_type_ref != NULL);
     ASSERT(site->target_spec_decl == target_spec);
     ASSERT(site->target_spec_type_ref != NULL);
-    ASSERT(site->object_upcast_path != NULL);
-    ASSERT(site->object_upcast_path_length == path_length);
+    ASSERT(site->object_upcast_parent_indices != NULL);
+    ASSERT(site->object_upcast_parent_index_count == parent_index_count);
+    for (size_t index = 0U; index < parent_index_count; ++index) {
+        ASSERT(site->object_upcast_parent_indices[index] == parent_indices[index]);
+    }
     ASSERT(site->relation == NULL);
     return site;
 }
 
 /* Direct, transitive, source-order diamond, explicit, and generic paths are
- * recorded as fully instantiated direct-parent sequences. */
+ * recorded as direct-parent declaration-index sequences. */
 static void test_object_spec_upcast_records_selected_parent_paths(void) {
     const char *source =
         "module demo.spec_upcast.paths;\n"
@@ -20977,12 +20978,12 @@ static void test_object_spec_upcast_records_selected_parent_paths(void) {
     const FengDecl *root;
     const FengDecl *left;
     const FengDecl *right;
-    const FengDecl *diamond;
     const FengDecl *generic_parent;
-    const FengDecl *generic_child;
-    const FengDecl *mapped_child;
     const FengExpr *initializer;
     const FengSpecCoercionSite *site;
+    const size_t left_path[] = {0U};
+    const size_t root_path[] = {0U, 0U};
+    const size_t right_path[] = {1U};
 
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                  &analysis, &errors, &error_count));
@@ -20991,65 +20992,50 @@ static void test_object_spec_upcast_records_selected_parent_paths(void) {
     root = find_spec_decl_by_name(analysis, "Root");
     left = find_spec_decl_by_name(analysis, "Left");
     right = find_spec_decl_by_name(analysis, "Right");
-    diamond = find_spec_decl_by_name(analysis, "Diamond");
     generic_parent = find_spec_decl_by_name(analysis, "GenericParent");
-    generic_child = find_spec_decl_by_name(analysis, "GenericChild");
-    mapped_child = find_spec_decl_by_name(analysis, "MappedChild");
     ASSERT(exercise != NULL && root != NULL && left != NULL && right != NULL);
-    ASSERT(diamond != NULL && generic_parent != NULL && generic_child != NULL);
-    ASSERT(mapped_child != NULL);
+    ASSERT(generic_parent != NULL);
 
     initializer = nth_let_initializer(&exercise->as.function_decl, 0U);
     site = assert_object_spec_upcast_site(analysis, initializer,
-                                          diamond, left, 1U);
-    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0], "Left"));
+                                          left, left_path, 1U);
 
     initializer = nth_let_initializer(&exercise->as.function_decl, 1U);
     site = assert_object_spec_upcast_site(analysis, initializer,
-                                          diamond, root, 2U);
-    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0], "Left"));
-    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[1], "Root"));
+                                          root, root_path, 2U);
 
     initializer = nth_let_initializer(&exercise->as.function_decl, 2U);
     site = assert_object_spec_upcast_site(analysis, initializer,
-                                          diamond, right, 1U);
-    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0], "Right"));
+                                          right, right_path, 1U);
 
     initializer = nth_let_initializer(&exercise->as.function_decl, 3U);
     ASSERT(initializer != NULL && initializer->kind == FENG_EXPR_CAST);
     site = assert_object_spec_upcast_site(analysis,
                                           initializer->as.cast.value,
-                                          diamond, root, 2U);
-    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0], "Left"));
-    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[1], "Root"));
+                                          root, root_path, 2U);
     ASSERT(feng_semantic_lookup_spec_coercion_site(analysis, initializer) == NULL);
 
     initializer = nth_let_initializer(&exercise->as.function_decl, 4U);
     site = assert_object_spec_upcast_site(analysis, initializer,
-                                          generic_child, generic_parent, 1U);
-    ASSERT(spec_upcast_type_ref_leaf_is(site->source_spec_type_ref,
-                                        "GenericChild"));
-    ASSERT(site->source_spec_type_ref->as.named.type_arg_count == 1U);
-    ASSERT(spec_upcast_type_ref_leaf_is(
-        site->source_spec_type_ref->as.named.type_args[0], "i32"));
-    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0],
+                                          generic_parent, left_path, 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->target_spec_type_ref,
                                         "GenericParent"));
-    ASSERT(site->object_upcast_path[0]->as.named.type_arg_count == 1U);
+    ASSERT(site->target_spec_type_ref->as.named.type_arg_count == 1U);
     ASSERT(spec_upcast_type_ref_leaf_is(
-        site->object_upcast_path[0]->as.named.type_args[0], "i32"));
+        site->target_spec_type_ref->as.named.type_args[0], "i32"));
 
     initializer = nth_let_initializer(&exercise->as.function_decl, 5U);
     site = assert_object_spec_upcast_site(analysis, initializer,
-                                          mapped_child, generic_parent, 1U);
-    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0],
+                                          generic_parent, left_path, 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->target_spec_type_ref,
                                         "GenericParent"));
-    ASSERT(site->object_upcast_path[0]->as.named.type_arg_count == 1U);
+    ASSERT(site->target_spec_type_ref->as.named.type_arg_count == 1U);
     ASSERT(spec_upcast_type_ref_leaf_is(
-        site->object_upcast_path[0]->as.named.type_args[0], "Box"));
-    ASSERT(site->object_upcast_path[0]->as.named.type_args[0]
+        site->target_spec_type_ref->as.named.type_args[0], "Box"));
+    ASSERT(site->target_spec_type_ref->as.named.type_args[0]
                ->as.named.type_arg_count == 1U);
     ASSERT(spec_upcast_type_ref_leaf_is(
-        site->object_upcast_path[0]->as.named.type_args[0]
+        site->target_spec_type_ref->as.named.type_args[0]
             ->as.named.type_args[0],
         "i32"));
 
@@ -21079,6 +21065,7 @@ static void test_object_spec_upcast_preserves_current_overload_priority(void) {
     const FengExpr *exact_call;
     const FengExpr *parent_call;
     const FengExpr *parent_cast;
+    const size_t direct_parent_path[] = {0U};
 
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                  &analysis, &errors, &error_count));
@@ -21109,8 +21096,8 @@ static void test_object_spec_upcast_preserves_current_overload_priority(void) {
     ASSERT(assert_object_spec_upcast_site(
                analysis,
                parent_cast->as.cast.value,
-               find_spec_decl_by_name(analysis, "Child"),
                find_spec_decl_by_name(analysis, "Parent"),
+               direct_parent_path,
                1U) != NULL);
 
     feng_semantic_errors_free(errors, error_count);

@@ -323,7 +323,7 @@ W(DefaultSubject(P), P)
 1. 解析并实例化源、目标 `spec` 引用。
 2. 仅沿 object-form `spec` 的名义直接父边检查目标是否可达。
 3. 按 §3.4 选择确定路径。
-4. 记录从源到目标的直接父边序列，供 codegen 使用。
+4. 记录从源到目标的直接父级声明序号序列，供 codegen 使用。
 
 上下文位置的目标不可达时，按现有类型不匹配规则诊断；显式 cast 的目标不可达时，保持现有非法 cast 诊断。不得因为源值运行时可能保存某个满足目标的具体类型而接受转换。
 
@@ -331,14 +331,16 @@ W(DefaultSubject(P), P)
 
 ### 6.2 Sidecar 信息
 
-Semantic 应为合法上下文 coercion 或显式 cast 记录至少以下信息：
+Semantic 应为合法上下文 coercion 或显式 cast 记录以下信息：
 
-- 源 object-form `spec` 的实例化身份；
 - 目标 object-form `spec` 的实例化身份；
-- 按顺序排列的直接父边路径；
-- 每条边实例化后的父 `spec` 引用。
+- 按顺序排列的直接父级声明序号路径；每个序号表示当前 `spec`
+  的 `parent_specs` 中被选中的直接父级位置。
 
-Codegen 只能消费该结论，不得重新判断父关系或自行选择另一条路径。
+源 object-form `spec` 的实例化身份由 codegen 的原始表达式结果提供，无需在
+sidecar 中重复保存。Codegen 从该精确源 `UserSpec` 开始，按序号逐级读取已有的
+`direct_parent_spec_indices`，由此获得每一层精确泛型父实例并生成具名 witness
+字段读取链。Codegen 不得重新搜索父关系或自行选择另一条路径。
 
 重载候选探测必须把合法的子 `spec` 到父 `spec` 转换作为参数适用性，但不得借此修改当前声明重叠检查或候选优先级。候选探测期间只保留临时可达性结论；仅在当前重载算法选定唯一目标后记录正式 coercion sidecar，避免为未选候选生成 witness 依赖。
 
@@ -451,7 +453,7 @@ Provider 与 consumer 必须由这些事实生成一致的 witness 结构和父�
 
 文档 Review 通过后，按以下顺序实施：
 
-1. Semantic：在 expected-type 位置与显式 cast 中接受合法的 object-form 子 `spec` 到祖先 `spec` 视角投影，并记录确定的直接父路径。
+1. Semantic：在 expected-type 位置与显式 cast 中接受合法的 object-form 子 `spec` 到祖先 `spec` 视角投影，并记录确定的直接父级声明序号路径。
 2. 调用候选集成：把父级转换纳入参数适用性探测，但保持当前声明检查和整体三级优先级；只在唯一目标选定后记录正式 coercion sidecar。
 3. Codegen 声明：在 witness 结构中追加具名直接父字段及所需前向声明。
 4. Witness 生成：按同一主体实现键递归生成并初始化直接父 witness 闭包。

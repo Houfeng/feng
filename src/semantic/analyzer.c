@@ -4259,50 +4259,45 @@ static const FengTypeRef *instantiate_parent_spec_ref_for_instance(
 }
 
 /* Compiler-owned scratch path for one object-spec upcast probe. Each entry
- * is an instantiated direct-parent ref and is freed by
- * object_spec_upcast_path_free after matching or sidecar recording. */
+ * is the selected direct parent's source declaration index. */
 typedef struct ObjectSpecUpcastPath {
-    FengTypeRef **refs;
+    size_t *parent_indices;
     size_t count;
     size_t capacity;
 } ObjectSpecUpcastPath;
 
-/* Release every compiler-owned ref in one scratch upcast path. */
+/* Release one scratch upcast path. */
 static void object_spec_upcast_path_free(ObjectSpecUpcastPath *path) {
     if (path == NULL) {
         return;
     }
-    for (size_t index = 0U; index < path->count; ++index) {
-        free_synthetic_type_ref(path->refs[index]);
-    }
-    free(path->refs);
+    free(path->parent_indices);
     memset(path, 0, sizeof(*path));
 }
 
-/* Append one owned direct-parent ref to a scratch upcast path. */
+/* Append one direct-parent declaration index to a scratch upcast path. */
 static bool object_spec_upcast_path_append(ObjectSpecUpcastPath *path,
-                                           FengTypeRef *parent_ref) {
-    if (path == NULL || parent_ref == NULL) {
+                                           size_t parent_index) {
+    if (path == NULL) {
         return false;
     }
     if (path->count == path->capacity) {
         size_t new_capacity = path->capacity == 0U ? 4U : path->capacity * 2U;
-        FengTypeRef **grown = (FengTypeRef **)realloc(
-            path->refs, new_capacity * sizeof(*grown));
+        size_t *grown = (size_t *)realloc(
+            path->parent_indices, new_capacity * sizeof(*grown));
 
         if (grown == NULL) {
             return false;
         }
-        path->refs = grown;
+        path->parent_indices = grown;
         path->capacity = new_capacity;
     }
-    path->refs[path->count++] = parent_ref;
+    path->parent_indices[path->count++] = parent_index;
     return true;
 }
 
-/* Depth-first, source-order nominal parent lookup. The path owns cloned,
- * fully substituted direct-parent refs so candidate probing has no side
- * effects in the resolver's long-lived synthetic-ref pool. */
+/* Depth-first, source-order nominal parent lookup. Instantiated refs live
+ * only for the recursive probe; the selected path stores declaration indices. */
 static bool find_object_spec_upcast_path_recursive(
     const ResolveContext *context,
     const FengDecl *source_decl,
@@ -4347,12 +4342,13 @@ static bool find_object_spec_upcast_path_recursive(
         parent_decl = resolve_type_ref_decl(context, parent_ref);
         if (parent_decl == NULL || parent_decl->kind != FENG_DECL_SPEC ||
             parent_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
-            !object_spec_upcast_path_append(path, parent_ref)) {
+            !object_spec_upcast_path_append(path, parent_index)) {
             free_synthetic_type_ref(parent_ref);
             continue;
         }
         if (parent_decl == target_decl &&
             type_refs_semantically_equal(context, parent_ref, target_type_ref)) {
+            free_synthetic_type_ref(parent_ref);
             return true;
         }
         if (find_object_spec_upcast_path_recursive(context,
@@ -4361,20 +4357,20 @@ static bool find_object_spec_upcast_path_recursive(
                                                    target_decl,
                                                    target_type_ref,
                                                    path)) {
+            free_synthetic_type_ref(parent_ref);
             return true;
         }
-        free_synthetic_type_ref(path->refs[--path->count]);
+        free_synthetic_type_ref(parent_ref);
+        --path->count;
     }
     return false;
 }
 
-/* Find one valid object-spec upcast path and expose its source identity. */
+/* Find one valid object-spec upcast path. */
 static bool find_object_spec_upcast_path(
     const ResolveContext *context,
     InferredExprType source_type,
     const FengTypeRef *target_type_ref,
-    const FengDecl **out_source_decl,
-    const FengTypeRef **out_source_type_ref,
     ObjectSpecUpcastPath *out_path) {
     const FengTypeRef *source_type_ref = NULL;
     const FengDecl *source_decl = NULL;
@@ -4406,12 +4402,6 @@ static bool find_object_spec_upcast_path(
                                                 out_path)) {
         object_spec_upcast_path_free(out_path);
         return false;
-    }
-    if (out_source_decl != NULL) {
-        *out_source_decl = source_decl;
-    }
-    if (out_source_type_ref != NULL) {
-        *out_source_type_ref = source_type_ref;
     }
     return true;
 }
@@ -5501,8 +5491,6 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
                     find_object_spec_upcast_path(context,
                                                  expr_type,
                                                  type_ref,
-                                                 NULL,
-                                                 NULL,
                                                  &upcast_path)) {
                     object_spec_upcast_path_free(&upcast_path);
                     return true;
@@ -5531,8 +5519,6 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
                 if (find_object_spec_upcast_path(context,
                                                  expr_type,
                                                  type_ref,
-                                                 NULL,
-                                                 NULL,
                                                  &upcast_path)) {
                     object_spec_upcast_path_free(&upcast_path);
                     return true;
@@ -18105,24 +18091,18 @@ static void record_object_spec_coercion_site_if_applicable(
     }
     expr_type = infer_expr_type(context, expr);
     if (target_decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
-        const FengDecl *source_spec_decl = NULL;
-        const FengTypeRef *source_spec_type_ref = NULL;
         ObjectSpecUpcastPath upcast_path;
 
         if (find_object_spec_upcast_path(context,
                                          expr_type,
                                          expected_type_ref,
-                                         &source_spec_decl,
-                                         &source_spec_type_ref,
                                          &upcast_path)) {
             (void)feng_semantic_record_object_spec_upcast_site(
                 context->analysis,
                 expr,
-                source_spec_decl,
-                source_spec_type_ref,
                 target_decl,
                 expected_type_ref,
-                (const FengTypeRef *const *)upcast_path.refs,
+                upcast_path.parent_indices,
                 upcast_path.count);
             object_spec_upcast_path_free(&upcast_path);
             return;
@@ -32049,7 +32029,7 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     }
     free(analysis->spec_relations);
     for (index = 0U; index < analysis->spec_coercion_site_count; ++index) {
-        free((void *)analysis->spec_coercion_sites[index].object_upcast_path);
+        free(analysis->spec_coercion_sites[index].object_upcast_parent_indices);
     }
     free(analysis->spec_coercion_sites);
     feng_semantic_free_union_spec_infos(analysis);

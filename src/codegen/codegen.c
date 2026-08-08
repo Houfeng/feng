@@ -22133,8 +22133,8 @@ static bool cg_emit_object_spec_upcast(CG *cg,
     er_init(out);
     if (cg == NULL || e == NULL || site == NULL ||
         site->form != FENG_SPEC_COERCION_FORM_OBJECT_UPCAST ||
-        site->object_upcast_path == NULL ||
-        site->object_upcast_path_length == 0U) {
+        site->object_upcast_parent_indices == NULL ||
+        site->object_upcast_parent_index_count == 0U) {
         return false;
     }
     if (!cg_emit_expr_raw(cg, e, &source)) {
@@ -22167,52 +22167,23 @@ static bool cg_emit_object_spec_upcast(CG *cg,
     buf_init(&witness_expr);
     buf_append_fmt(&witness_expr, "%s.witness", source_tmp);
     for (size_t path_index = 0U;
-         path_index < site->object_upcast_path_length;
+         path_index < site->object_upcast_parent_index_count;
          ++path_index) {
-        CGType *parent_type = NULL;
-        const UserSpec *parent_spec;
-        bool direct_parent = false;
+        size_t parent_index =
+            site->object_upcast_parent_indices[path_index];
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, current_spec, parent_index);
 
-        if (!cg_resolve_type(cg,
-                             site->object_upcast_path[path_index],
-                             &e->token,
-                             &parent_type)) {
-            buf_free(&witness_expr);
-            free(source_tmp);
-            er_free(&source);
-            return false;
-        }
-        if (parent_type == NULL || parent_type->kind != CG_TYPE_SPEC ||
-            parent_type->user_spec == NULL) {
-            cgtype_free(parent_type);
+        if (parent_spec == NULL) {
             buf_free(&witness_expr);
             free(source_tmp);
             er_free(&source);
             return cg_fail(cg, e->token,
-                           "CE0197", "codegen: object-spec upcast path contains a non-object parent");
-        }
-        parent_spec = parent_type->user_spec;
-        for (size_t parent_index = 0U;
-             parent_index < current_spec->direct_parent_spec_count;
-             ++parent_index) {
-            if (cg_user_spec_direct_parent(cg, current_spec, parent_index) ==
-                parent_spec) {
-                direct_parent = true;
-                break;
-            }
-        }
-        if (!direct_parent) {
-            cgtype_free(parent_type);
-            buf_free(&witness_expr);
-            free(source_tmp);
-            er_free(&source);
-            return cg_fail(cg, e->token,
-                           "CE0198", "codegen: semantic object-spec upcast path is not a direct-parent chain");
+                           "CE0198", "codegen: semantic object-spec upcast path contains an invalid direct-parent index");
         }
         buf_append_cstr(&witness_expr, "->");
         cg_append_spec_parent_field_name(&witness_expr, parent_spec);
         current_spec = parent_spec;
-        cgtype_free(parent_type);
     }
     if (!cg_resolve_type(cg,
                          site->target_spec_type_ref,
