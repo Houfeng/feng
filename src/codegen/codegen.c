@@ -793,6 +793,11 @@ typedef struct UserSpec {
     char   *c_default_callable_new_name;   /* callable-form factory  (default-zero) */
     UserSpecMember *members;
     size_t          member_count;
+    /* Direct object-form parents in source declaration order. Indices remain
+     * stable when cg->user_specs reallocates and identify exact generic
+     * instances such as Parent<int>. */
+    size_t         *direct_parent_spec_indices;
+    size_t          direct_parent_spec_count;
     bool            members_registered;
     bool            members_registering;
     CGType         *callable_return_type;
@@ -1276,6 +1281,7 @@ typedef struct CG {
     } *spec_slot_witness_tables;
     size_t spec_slot_witness_table_count;
     size_t spec_slot_witness_table_capacity;
+    size_t spec_slot_witness_counter;
     struct {
         const struct UserType *type;
         const struct UserSpec *spec;
@@ -1283,6 +1289,24 @@ typedef struct CG {
     } *value_box_witness_tables;
     size_t value_box_witness_table_count;
     size_t value_box_witness_table_capacity;
+    /* Enum/builtin/array witness cache. The semantic subject key is stable
+     * for the analysis lifetime; storage distinguishes borrowed scalar
+     * subjects from boxed owners. */
+    struct {
+        FengSemanticSubjectKey subject_key;
+        FengSpecObjectSubjectStorageKind storage;
+        const struct UserSpec *spec;
+        char *c_var;
+    } *subject_witness_tables;
+    size_t subject_witness_table_count;
+    size_t subject_witness_table_capacity;
+    struct {
+        const struct UserSpec *root;
+        const struct UserSpec *target;
+        char *c_var;
+    } *default_parent_witnesses;
+    size_t default_parent_witness_count;
+    size_t default_parent_witness_capacity;
     bool scalar_box_support_emitted;
     size_t subject_witness_counter;
     ModuleBinding *module_bindings;
@@ -1411,12 +1435,23 @@ typedef struct CG {
     size_t           expr_narrowing_capacity;
 } CG;
 
-/* 判断值语义类型（tuple 或 @value）是否依赖未特化泛型参数（即共享体中的布局不可靠）。 */
+/* Return true when a shared generic body must obtain the aggregate
+ * descriptor from its reified dependency table. Value-semantics types need
+ * it for layout; object specs need the concrete instance's lifecycle and
+ * default-value authority even though their fat-value layout is fixed. */
 static bool cg_value_needs_reified_layout(const CG *cg, const CGType *type) {
-    return cg_type_is_value_semantics(type) &&
-           type->user != NULL &&
-           type->user->generic_context_type_param_count > 0U &&
-           (cg->in_generic_type_method || cg->in_generic_fn);
+    bool has_open_generic_identity;
+
+    if (cg == NULL || type == NULL ||
+        (!cg->in_generic_type_method && !cg->in_generic_fn)) {
+        return false;
+    }
+    has_open_generic_identity =
+        (cg_type_is_value_semantics(type) && type->user != NULL &&
+         type->user->generic_context_type_param_count > 0U) ||
+        (type->kind == CG_TYPE_SPEC && type->user_spec != NULL &&
+         type->user_spec->generic_context_type_param_count > 0U);
+    return has_open_generic_identity;
 }
 
 /* Descriptor external visibility: requires both module and type to be PUBLIC. */
@@ -1482,6 +1517,10 @@ static bool cg_emit_array_literal(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out);
+static bool cg_emit_object_spec_upcast(CG *cg,
+                                       const FengExpr *e,
+                                       const FengSpecCoercionSite *site,
+                                       ExprResult *out);
 static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out);
@@ -1632,6 +1671,8 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
                                         const char **out_var);
 static bool cg_user_spec_witness_prefix_compatible(const UserSpec *src,
                                                    const UserSpec *dst);
+static bool cg_user_spec_member_compatible(const UserSpecMember *src,
+                                           const UserSpecMember *dst);
 static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
                                               const FengDecl *function_decl,
                                               FengToken blame,
@@ -4460,6 +4501,30 @@ static const UserSpec *cg_user_spec_by_index(const CG *cg, size_t index) {
     return &cg->user_specs[index];
 }
 
+/* Return one exact direct-parent spec instance in source declaration order. */
+static const UserSpec *cg_user_spec_direct_parent(const CG *cg,
+                                                  const UserSpec *spec,
+                                                  size_t parent_index) {
+    if (cg == NULL || spec == NULL ||
+        parent_index >= spec->direct_parent_spec_count ||
+        spec->direct_parent_spec_indices == NULL) {
+        return NULL;
+    }
+    return cg_user_spec_by_index(cg,
+                                 spec->direct_parent_spec_indices[parent_index]);
+}
+
+/* Parent witness fields use the parent's complete stable witness-struct name,
+ * which already includes module identity and instantiated generic arguments. */
+static void cg_append_spec_parent_field_name(Buf *out,
+                                             const UserSpec *parent_spec) {
+    if (out == NULL || parent_spec == NULL ||
+        parent_spec->c_witness_struct_name == NULL) {
+        return;
+    }
+    buf_append_fmt(out, "parent__%s", parent_spec->c_witness_struct_name);
+}
+
 static bool cg_user_spec_constraint_indices(CG *cg,
                                             const UserSpec **constraints,
                                             size_t constraint_count,
@@ -6425,6 +6490,40 @@ static UserSpec *cg_find_generic_instance_user_spec_for_ref(CG *cg,
         generic_decl->decl,
         ref->as.named.type_args,
         ref->as.named.type_arg_count);
+}
+
+/* Resolve the open-instance aggregate descriptor symbol used as the
+ * compile-time key for one reified aggregate dependency. Both generic value
+ * types and generic object specs participate; the latter keep a fixed value
+ * layout but still require the concrete descriptor for lifecycle/default
+ * semantics in a shared body. */
+static const char *cg_open_generic_aggregate_descriptor_name(
+    CG *cg,
+    const FengTypeRef *ref) {
+    UserSpec *spec_instance;
+    const GenericTypeDecl *type_decl;
+    const UserType *type_instance;
+
+    if (cg == NULL || ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
+        ref->as.named.type_arg_count == 0U) {
+        return NULL;
+    }
+    spec_instance = cg_find_generic_instance_user_spec_for_ref(cg, ref);
+    if (spec_instance != NULL &&
+        spec_instance->generic_context_type_param_count > 0U) {
+        return spec_instance->c_aggregate_desc_name;
+    }
+    type_decl = cg_find_generic_type_decl(cg, ref);
+    if (type_decl == NULL) {
+        return NULL;
+    }
+    type_instance = cg_find_open_generic_instance(
+        cg,
+        &(UserType){
+            .is_generic_instance = true,
+            .generic_origin_decl = type_decl->decl,
+        });
+    return type_instance != NULL ? type_instance->c_aggregate_desc_name : NULL;
 }
 
 static UserType *cg_find_generic_instance_user_type(CG *cg,
@@ -9922,9 +10021,19 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
         }
         return true;
     }
+    s->direct_parent_spec_count = decl->as.spec_decl.parent_spec_count;
+    if (s->direct_parent_spec_count > 0U) {
+        s->direct_parent_spec_indices = (size_t *)calloc(
+            s->direct_parent_spec_count,
+            sizeof(*s->direct_parent_spec_indices));
+        if (s->direct_parent_spec_indices == NULL) {
+            return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
+        }
+    }
     for (size_t parent_index = 0; parent_index < decl->as.spec_decl.parent_spec_count; ++parent_index) {
         CGType *parent_type = NULL;
         UserSpec *parent_spec = NULL;
+        size_t parent_spec_index;
         if (!cg_resolve_type_for_user_spec_member(cg,
                                                   s,
                                                   decl->as.spec_decl.parent_specs[parent_index],
@@ -9938,6 +10047,12 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                 "CE0046", "codegen: spec parent did not resolve to an object-form spec");
         }
         parent_spec = (UserSpec *)parent_type->user_spec;
+        if (!cg_user_spec_index(cg, parent_spec, &parent_spec_index)) {
+            cgtype_free(parent_type);
+            return cg_fail(cg, decl->token,
+                "CE0046", "codegen: resolved spec parent is not registered");
+        }
+        s->direct_parent_spec_indices[parent_index] = parent_spec_index;
         if (!cg_ensure_user_spec_members_registered(cg, parent_spec)) {
             cgtype_free(parent_type);
             return false;
@@ -10796,7 +10911,6 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
  * in the headers buffer before any witness-instance tentative definitions
  * (which reference the struct type). */
 static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
-    (void)cg;
     if (s->form == FENG_SPEC_FORM_CALLABLE) {
         buf_append_fmt(out, "struct %s {\n    void (*invoke)(const void *_callee",
                        s->c_witness_struct_name);
@@ -10869,10 +10983,168 @@ static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
             }
         }
     }
+    for (size_t parent_index = 0U;
+         parent_index < s->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, s, parent_index);
+
+        if (parent_spec == NULL) {
+            (void)cg_fail(cg, s->decl->token,
+                          "CE0046", "codegen: direct parent spec is not registered");
+            continue;
+        }
+        buf_append_fmt(out, "    const struct %s *",
+                       parent_spec->c_witness_struct_name);
+        cg_append_spec_parent_field_name(out, parent_spec);
+        buf_append_cstr(out, ";\n");
+        emitted++;
+    }
     if (emitted == 0) {
         buf_append_cstr(out, "    char _padding;\n");
     }
     buf_append_cstr(out, "};\n\n");
+}
+
+/* Emit W(DefaultSubject(root), target). Parent views reuse root's default
+ * member thunks so every projection keeps the same hidden subject storage.
+ * The (root,target) cache makes a diamond converge on one ancestor witness. */
+static bool cg_ensure_default_parent_witness(CG *cg,
+                                             const UserSpec *root,
+                                             const UserSpec *target,
+                                             FengToken blame,
+                                             const char **out_var) {
+    const char **parent_witness_vars = NULL;
+    Buf var;
+
+    if (cg == NULL || root == NULL || target == NULL || out_var == NULL) {
+        return false;
+    }
+    if (root == target) {
+        *out_var = root->c_default_witness_name;
+        return true;
+    }
+    for (size_t index = 0U;
+         index < cg->default_parent_witness_count;
+         ++index) {
+        if (cg->default_parent_witnesses[index].root == root &&
+            cg->default_parent_witnesses[index].target == target) {
+            *out_var = cg->default_parent_witnesses[index].c_var;
+            return true;
+        }
+    }
+    if (target->direct_parent_spec_count > 0U) {
+        parent_witness_vars = (const char **)calloc(
+            target->direct_parent_spec_count,
+            sizeof(*parent_witness_vars));
+        if (parent_witness_vars == NULL) {
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+    }
+    for (size_t parent_index = 0U;
+         parent_index < target->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, target, parent_index);
+
+        if (parent_spec == NULL ||
+            !cg_ensure_default_parent_witness(
+                cg,
+                root,
+                parent_spec,
+                blame,
+                &parent_witness_vars[parent_index])) {
+            free(parent_witness_vars);
+            return false;
+        }
+    }
+
+    buf_init(&var);
+    buf_append_fmt(&var,
+                   "FengSpecDefaultProjection__%s__as__%s",
+                   root->c_witness_struct_name,
+                   target->c_witness_struct_name);
+    if (var.data == NULL) {
+        free(parent_witness_vars);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    buf_append_fmt(&cg->type_defs,
+                   "static const struct %s %s = {\n",
+                   target->c_witness_struct_name,
+                   var.data);
+    for (size_t member_index = 0U;
+         member_index < target->member_count;
+         ++member_index) {
+        const UserSpecMember *target_member = &target->members[member_index];
+        const UserSpecMember *root_member = cg_user_spec_member(
+            root,
+            target_member->feng_name,
+            strlen(target_member->feng_name));
+
+        if (root_member == NULL ||
+            !cg_user_spec_member_compatible(root_member, target_member)) {
+            free(parent_witness_vars);
+            buf_free(&var);
+            return cg_fail(cg, blame,
+                           "CE0048", "codegen: default subject parent witness member mismatch");
+        }
+        if (target_member->kind == USM_KIND_FIELD) {
+            buf_append_fmt(&cg->type_defs,
+                           "    .get_%s = &%s__get_%s,\n",
+                           target_member->c_field_name,
+                           root->c_default_witness_name,
+                           root_member->c_field_name);
+            if (target_member->is_var) {
+                buf_append_fmt(&cg->type_defs,
+                               "    .set_%s = &%s__set_%s,\n",
+                               target_member->c_field_name,
+                               root->c_default_witness_name,
+                               root_member->c_field_name);
+            }
+        } else {
+            buf_append_fmt(&cg->type_defs,
+                           "    .%s = &%s__%s,\n",
+                           target_member->c_field_name,
+                           root->c_default_witness_name,
+                           root_member->c_field_name);
+        }
+    }
+    for (size_t parent_index = 0U;
+         parent_index < target->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, target, parent_index);
+
+        buf_append_cstr(&cg->type_defs, "    .");
+        cg_append_spec_parent_field_name(&cg->type_defs, parent_spec);
+        buf_append_fmt(&cg->type_defs,
+                       " = &%s,\n",
+                       parent_witness_vars[parent_index]);
+    }
+    buf_append_cstr(&cg->type_defs, "};\n\n");
+    free(parent_witness_vars);
+
+    if (cg->default_parent_witness_count ==
+        cg->default_parent_witness_capacity) {
+        size_t new_capacity = cg->default_parent_witness_capacity == 0U
+                                  ? 8U
+                                  : cg->default_parent_witness_capacity * 2U;
+        void *grown = realloc(cg->default_parent_witnesses,
+                              new_capacity * sizeof(*cg->default_parent_witnesses));
+
+        if (grown == NULL) {
+            buf_free(&var);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        cg->default_parent_witnesses = grown;
+        cg->default_parent_witness_capacity = new_capacity;
+    }
+    cg->default_parent_witnesses[cg->default_parent_witness_count].root = root;
+    cg->default_parent_witnesses[cg->default_parent_witness_count].target = target;
+    cg->default_parent_witnesses[cg->default_parent_witness_count].c_var = var.data;
+    cg->default_parent_witness_count++;
+    *out_var = var.data;
+    return true;
 }
 
 static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
@@ -11445,6 +11717,35 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     }
     buf_append_cstr(td, "\n");
 
+    const char **default_parent_witness_vars = NULL;
+    if (s->direct_parent_spec_count > 0U) {
+        default_parent_witness_vars = (const char **)calloc(
+            s->direct_parent_spec_count,
+            sizeof(*default_parent_witness_vars));
+        if (default_parent_witness_vars == NULL) {
+            (void)cg_fail(cg, s->decl->token,
+                          "IE0001", "codegen: out of memory");
+            return;
+        }
+    }
+    for (size_t parent_index = 0U;
+         parent_index < s->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, s, parent_index);
+
+        if (parent_spec == NULL ||
+            !cg_ensure_default_parent_witness(
+                cg,
+                s,
+                parent_spec,
+                s->decl->token,
+                &default_parent_witness_vars[parent_index])) {
+            free(default_parent_witness_vars);
+            return;
+        }
+    }
+
     /* Default witness instance — same struct layout as a (T,S) witness; only
      * the function pointers differ. */
     buf_append_fmt(td, "static const struct %s %s = {\n",
@@ -11466,7 +11767,20 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
                            sm->c_field_name);
         }
     }
+    for (size_t parent_index = 0U;
+         parent_index < s->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, s, parent_index);
+
+        buf_append_cstr(td, "    .");
+        cg_append_spec_parent_field_name(td, parent_spec);
+        buf_append_fmt(td,
+                       " = &%s,\n",
+                       default_parent_witness_vars[parent_index]);
+    }
     buf_append_cstr(td, "};\n\n");
+    free(default_parent_witness_vars);
 
     /* Real default-init function: allocate fresh subject (+1) and bind
      * the default witness. Per docs/engineering/feng-spec-codegen-delivered.md §6.4 the
@@ -19688,6 +20002,26 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
                        e->token,
                        "CE0191", "codegen: callable-form cast operand must be a callable-form spec value");
     }
+    if (target->kind == CG_TYPE_SPEC) {
+        ExprResult inner;
+
+        if (!cg_emit_expr(cg, e->as.cast.value, &inner)) {
+            cgtype_free(target);
+            return false;
+        }
+        if (inner.type == NULL || inner.type->kind != CG_TYPE_SPEC ||
+            inner.type->user_spec != target->user_spec) {
+            er_free(&inner);
+            cgtype_free(target);
+            return cg_fail(cg,
+                           e->token,
+                           "CE0195", "codegen: object-form spec cast operand did not project to the target spec");
+        }
+        cgtype_free(inner.type);
+        inner.type = target;
+        *out = inner;
+        return true;
+    }
     if (target->kind == CG_TYPE_ARRAY) {
         ExprResult inner;
 
@@ -21780,6 +22114,144 @@ static bool cg_emit_try_expr(CG *cg,
     return out->c_expr != NULL;
 }
 
+/* Lower one semantic-selected nominal spec path. The raw source is evaluated
+ * into an unowned C alias exactly once; ownership remains attached to the
+ * projected ExprResult, so the projection itself emits no retain/release. */
+static bool cg_emit_object_spec_upcast(CG *cg,
+                                       const FengExpr *e,
+                                       const FengSpecCoercionSite *site,
+                                       ExprResult *out) {
+    ExprResult source;
+    const UserSpec *current_spec;
+    CGType *target_type = NULL;
+    char *source_cty = NULL;
+    char *source_tmp = NULL;
+    Buf witness_expr;
+    Buf result_expr;
+    bool source_owns_ref;
+
+    er_init(out);
+    if (cg == NULL || e == NULL || site == NULL ||
+        site->form != FENG_SPEC_COERCION_FORM_OBJECT_UPCAST ||
+        site->object_upcast_path == NULL ||
+        site->object_upcast_path_length == 0U) {
+        return false;
+    }
+    if (!cg_emit_expr_raw(cg, e, &source)) {
+        return false;
+    }
+    if (source.type == NULL || source.type->kind != CG_TYPE_SPEC ||
+        source.type->user_spec == NULL) {
+        er_free(&source);
+        return cg_fail(cg, e->token,
+                       "CE0196", "codegen: object-spec upcast source is not an object-form spec value");
+    }
+    current_spec = source.type->user_spec;
+    source_owns_ref = source.owns_ref;
+    source_cty = cg_ctype_dup(source.type);
+    source_tmp = cg_fresh_temp(cg, "_spec_view");
+    if (source_cty == NULL || source_tmp == NULL) {
+        free(source_cty);
+        free(source_tmp);
+        er_free(&source);
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+    }
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body,
+                   "    %s %s = %s;\n",
+                   source_cty,
+                   source_tmp,
+                   source.c_expr);
+    free(source_cty);
+
+    buf_init(&witness_expr);
+    buf_append_fmt(&witness_expr, "%s.witness", source_tmp);
+    for (size_t path_index = 0U;
+         path_index < site->object_upcast_path_length;
+         ++path_index) {
+        CGType *parent_type = NULL;
+        const UserSpec *parent_spec;
+        bool direct_parent = false;
+
+        if (!cg_resolve_type(cg,
+                             site->object_upcast_path[path_index],
+                             &e->token,
+                             &parent_type)) {
+            buf_free(&witness_expr);
+            free(source_tmp);
+            er_free(&source);
+            return false;
+        }
+        if (parent_type == NULL || parent_type->kind != CG_TYPE_SPEC ||
+            parent_type->user_spec == NULL) {
+            cgtype_free(parent_type);
+            buf_free(&witness_expr);
+            free(source_tmp);
+            er_free(&source);
+            return cg_fail(cg, e->token,
+                           "CE0197", "codegen: object-spec upcast path contains a non-object parent");
+        }
+        parent_spec = parent_type->user_spec;
+        for (size_t parent_index = 0U;
+             parent_index < current_spec->direct_parent_spec_count;
+             ++parent_index) {
+            if (cg_user_spec_direct_parent(cg, current_spec, parent_index) ==
+                parent_spec) {
+                direct_parent = true;
+                break;
+            }
+        }
+        if (!direct_parent) {
+            cgtype_free(parent_type);
+            buf_free(&witness_expr);
+            free(source_tmp);
+            er_free(&source);
+            return cg_fail(cg, e->token,
+                           "CE0198", "codegen: semantic object-spec upcast path is not a direct-parent chain");
+        }
+        buf_append_cstr(&witness_expr, "->");
+        cg_append_spec_parent_field_name(&witness_expr, parent_spec);
+        current_spec = parent_spec;
+        cgtype_free(parent_type);
+    }
+    if (!cg_resolve_type(cg,
+                         site->target_spec_type_ref,
+                         &e->token,
+                         &target_type)) {
+        buf_free(&witness_expr);
+        free(source_tmp);
+        er_free(&source);
+        return false;
+    }
+    if (target_type == NULL || target_type->kind != CG_TYPE_SPEC ||
+        target_type->user_spec == NULL || target_type->user_spec != current_spec) {
+        cgtype_free(target_type);
+        buf_free(&witness_expr);
+        free(source_tmp);
+        er_free(&source);
+        return cg_fail(cg, e->token,
+                       "CE0199", "codegen: object-spec upcast path does not end at its semantic target");
+    }
+
+    buf_init(&result_expr);
+    buf_append_fmt(&result_expr,
+                   "((struct %s){ .subject = %s.subject, .witness = %s })",
+                   target_type->user_spec->c_value_struct_name,
+                   source_tmp,
+                   witness_expr.data);
+    buf_free(&witness_expr);
+    free(source_tmp);
+    er_free(&source);
+    if (result_expr.data == NULL) {
+        cgtype_free(target_type);
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+    }
+    out->c_expr = result_expr.data;
+    out->type = target_type;
+    out->owns_ref = source_owns_ref;
+    return true;
+}
+
 static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     if (cg->failed) return false;
     bool ok;
@@ -21788,6 +22260,9 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     const FengUnionCoercionSite *union_site =
         feng_semantic_lookup_union_coercion_site(cg->analysis, e);
 
+    if (cs && cs->form == FENG_SPEC_COERCION_FORM_OBJECT_UPCAST) {
+        return cg_emit_object_spec_upcast(cg, e, cs, out);
+    }
     if (cs && cs->form == FENG_SPEC_COERCION_FORM_ABI_FUNCTION_POINTER) {
         return cg_emit_abi_function_pointer_site(cg, e, cs, out);
     }
@@ -29485,7 +29960,9 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         }
 
         if (!r.owns_ref) {
-            const char *copy_src = cg_type_is_value_user(r.type) ? "&%s" : "%s";
+            const char *copy_src = cgtype_is_by_value_struct(r.type)
+                                       ? "&%s"
+                                       : "%s";
             buf_append_fmt(cg->cur_body,
                 "    _Alignas(max_align_t) char %s[%s->size];\n"
                 "    memcpy(%s, ",
@@ -29500,7 +29977,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         } else {
             /* @value type 的 c_expr 是 struct 值（非指针），取地址用 &；
              * tuple 的 c_expr 是 char[]（退化为指针），(void *) 即可。 */
-            const char *src_fmt = cg_type_is_value_user(r.type)
+            const char *src_fmt = cgtype_is_by_value_struct(r.type)
                 ? "&%s" : "(void *)%s";
             buf_append_fmt(cg->cur_body,
                 "    _Alignas(max_align_t) char %s[%s->size];\n"
@@ -29909,27 +30386,14 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                                 for (size_t i = 0; i < ac; ++i) {
                                     const FengReifiableDep *dep =
                                         &fn_rad_set->deps[sorted[i].idx];
-                                    const FengDecl *dep_origin = NULL;
-                                    if (dep->type_ref != NULL &&
-                                        dep->type_ref->kind == FENG_TYPE_REF_NAMED &&
-                                        dep->type_ref->as.named.type_arg_count > 0U) {
-                                        const GenericTypeDecl *gtd =
-                                            cg_find_generic_type_decl(cg,
-                                                dep->type_ref);
-                                        if (gtd != NULL) dep_origin = gtd->decl;
-                                    }
-                                    if (dep_origin != NULL) {
-                                        const UserType *erased =
-                                            cg_find_open_generic_instance(
-                                                cg,
-                                                &(UserType){
-                                                    .is_generic_instance = true,
-                                                    .generic_origin_decl = dep_origin
-                                                });
-                                        if (erased != NULL) {
-                                            cg->generic_type_method_rad_descs[i] =
-                                                strdup(erased->c_aggregate_desc_name);
-                                        }
+                                    const char *descriptor_name =
+                                        cg_open_generic_aggregate_descriptor_name(
+                                            cg,
+                                            dep->type_ref);
+
+                                    if (descriptor_name != NULL) {
+                                        cg->generic_type_method_rad_descs[i] =
+                                            strdup(descriptor_name);
                                     }
                                 }
                             }
@@ -31432,6 +31896,79 @@ static const char *cg_spec_slot_witness_lookup(const CG *cg,
     return NULL;
 }
 
+/* Compare semantic subject keys for codegen witness-cache identity. */
+static bool cg_subject_keys_equal(const FengSemanticSubjectKey *left,
+                                  const FengSemanticSubjectKey *right) {
+    if (left == NULL || right == NULL || left->kind != right->kind) {
+        return false;
+    }
+    switch (left->kind) {
+        case FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL:
+            return left->as.type_decl == right->as.type_decl;
+        case FENG_SEMANTIC_SUBJECT_KEY_BUILTIN:
+            return left->as.builtin_canonical_name != NULL &&
+                   right->as.builtin_canonical_name != NULL &&
+                   strcmp(left->as.builtin_canonical_name,
+                          right->as.builtin_canonical_name) == 0;
+        case FENG_SEMANTIC_SUBJECT_KEY_ARRAY:
+            return left->as.array.rank == right->as.array.rank &&
+                   left->as.array.writable_mask == right->as.array.writable_mask &&
+                   cg_type_ref_equal(left->as.array.element_type_ref,
+                                     right->as.array.element_type_ref);
+        case FENG_SEMANTIC_SUBJECT_KEY_INVALID:
+            return false;
+    }
+    return false;
+}
+
+/* Find a cached non-user-type witness for one subject storage and spec. */
+static const char *cg_subject_witness_table_lookup(
+    const CG *cg,
+    const FengSemanticSubjectKey *subject_key,
+    FengSpecObjectSubjectStorageKind storage,
+    const UserSpec *spec) {
+    for (size_t index = 0U;
+         index < cg->subject_witness_table_count;
+         ++index) {
+        if (cg->subject_witness_tables[index].storage == storage &&
+            cg->subject_witness_tables[index].spec == spec &&
+            cg_subject_keys_equal(&cg->subject_witness_tables[index].subject_key,
+                                  subject_key)) {
+            return cg->subject_witness_tables[index].c_var;
+        }
+    }
+    return NULL;
+}
+
+/* Cache a newly emitted non-user-type witness variable. */
+static bool cg_subject_witness_table_add(
+    CG *cg,
+    const FengSemanticSubjectKey *subject_key,
+    FengSpecObjectSubjectStorageKind storage,
+    const UserSpec *spec,
+    char *c_var) {
+    if (cg->subject_witness_table_count == cg->subject_witness_table_capacity) {
+        size_t new_capacity = cg->subject_witness_table_capacity == 0U
+                                  ? 8U
+                                  : cg->subject_witness_table_capacity * 2U;
+        void *grown = realloc(cg->subject_witness_tables,
+                              new_capacity * sizeof(*cg->subject_witness_tables));
+
+        if (grown == NULL) {
+            return false;
+        }
+        cg->subject_witness_tables = grown;
+        cg->subject_witness_table_capacity = new_capacity;
+    }
+    cg->subject_witness_tables[cg->subject_witness_table_count].subject_key =
+        *subject_key;
+    cg->subject_witness_tables[cg->subject_witness_table_count].storage = storage;
+    cg->subject_witness_tables[cg->subject_witness_table_count].spec = spec;
+    cg->subject_witness_tables[cg->subject_witness_table_count].c_var = c_var;
+    cg->subject_witness_table_count++;
+    return true;
+}
+
 typedef struct CGWitnessBinding {
     FengSpecWitnessSourceKind source_kind;
     const UserField *field;
@@ -31501,24 +32038,175 @@ static void cg_append_managed_witness_owner_descriptor(Buf *out,
     }
 }
 
-static bool cg_user_fit_targets_spec(const UserFit *fit, const UserSpec *spec) {
-    if (fit == NULL || spec == NULL) return false;
-    for (size_t i = 0; i < fit->spec_count; ++i) {
-        if (fit->specs[i] == spec) return true;
-        if (fit->specs[i] != NULL && fit->specs[i]->decl != NULL &&
-            spec->decl != NULL && fit->specs[i]->decl == spec->decl) {
+/* Match one type-ref against an open generic pattern for a single context
+ * parameter. Other context parameters are wildcards during this pass; the
+ * caller repeats the walk for every parameter so repeated occurrences must
+ * bind consistently without allocating a temporary substitution table. */
+static bool cg_type_ref_matches_open_context_parameter(
+    const FengTypeRef *actual,
+    const FengTypeRef *pattern,
+    char *const *context_names,
+    size_t context_count,
+    const char *parameter_name,
+    const FengTypeRef **binding) {
+    if (actual == NULL || pattern == NULL || parameter_name == NULL ||
+        binding == NULL) {
+        return false;
+    }
+    if (pattern->kind == FENG_TYPE_REF_NAMED &&
+        pattern->as.named.segment_count == 1U &&
+        pattern->as.named.type_arg_count == 0U) {
+        FengSlice name = pattern->as.named.segments[0];
+
+        for (size_t index = 0U; index < context_count; ++index) {
+            const char *context_name = context_names[index];
+
+            if (context_name == NULL || strlen(context_name) != name.length ||
+                memcmp(context_name, name.data, name.length) != 0) {
+                continue;
+            }
+            if (strcmp(context_name, parameter_name) != 0) {
+                return true;
+            }
+            if (*binding == NULL) {
+                *binding = actual;
+                return true;
+            }
+            return cg_type_ref_equal(*binding, actual);
+        }
+    }
+    if (actual->kind != pattern->kind) {
+        return false;
+    }
+    if (pattern->kind == FENG_TYPE_REF_ARRAY &&
+        pattern->array_element_writable != actual->array_element_writable) {
+        return false;
+    }
+    if (pattern->kind == FENG_TYPE_REF_POINTER ||
+        pattern->kind == FENG_TYPE_REF_ARRAY) {
+        return cg_type_ref_matches_open_context_parameter(
+            actual->as.inner,
+            pattern->as.inner,
+            context_names,
+            context_count,
+            parameter_name,
+            binding);
+    }
+    if (pattern->as.named.segment_count != actual->as.named.segment_count ||
+        pattern->as.named.type_arg_count != actual->as.named.type_arg_count) {
+        return false;
+    }
+    for (size_t index = 0U;
+         index < pattern->as.named.segment_count;
+         ++index) {
+        if (!cg_module_segments_equal(&pattern->as.named.segments[index],
+                                      1U,
+                                      &actual->as.named.segments[index],
+                                      1U)) {
+            return false;
+        }
+    }
+    for (size_t index = 0U;
+         index < pattern->as.named.type_arg_count;
+         ++index) {
+        if (!cg_type_ref_matches_open_context_parameter(
+                actual->as.named.type_args[index],
+                pattern->as.named.type_args[index],
+                context_names,
+                context_count,
+                parameter_name,
+                binding)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Return true when a concrete or differently-open instance satisfies the
+ * exact structural pattern of an open generic witness target. This is the
+ * compile-time substitution performed for generic constraints, not nominal
+ * covariance between two concrete generic instances. */
+static bool cg_user_spec_matches_open_witness_target(
+    const UserSpec *candidate,
+    const UserSpec *target) {
+    if (candidate == NULL || target == NULL || !candidate->is_generic_instance ||
+        !target->is_generic_instance ||
+        candidate->generic_origin_decl != target->generic_origin_decl ||
+        candidate->generic_type_arg_count != target->generic_type_arg_count ||
+        target->generic_context_type_param_count == 0U) {
+        return false;
+    }
+    for (size_t parameter_index = 0U;
+         parameter_index < target->generic_context_type_param_count;
+         ++parameter_index) {
+        const char *parameter_name =
+            target->generic_context_type_param_names[parameter_index];
+        const FengTypeRef *binding = NULL;
+
+        for (size_t arg_index = 0U;
+             arg_index < target->generic_type_arg_count;
+             ++arg_index) {
+            if (!cg_type_ref_matches_open_context_parameter(
+                    candidate->generic_type_args[arg_index],
+                    target->generic_type_args[arg_index],
+                    target->generic_context_type_param_names,
+                    target->generic_context_type_param_count,
+                    parameter_name,
+                    &binding)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/* Return true when `candidate` exactly matches `target`, structurally
+ * instantiates its open generic pattern, or names a nominal child whose
+ * direct-parent graph reaches it. Concrete generic identities remain exact,
+ * so this does not infer variance. */
+static bool cg_user_spec_reaches_ancestor(const CG *cg,
+                                          const UserSpec *candidate,
+                                          const UserSpec *target) {
+    if (cg == NULL || candidate == NULL || target == NULL) {
+        return false;
+    }
+    if (candidate == target ||
+        cg_user_spec_matches_open_witness_target(candidate, target)) {
+        return true;
+    }
+    for (size_t parent_index = 0U;
+         parent_index < candidate->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent =
+            cg_user_spec_direct_parent(cg, candidate, parent_index);
+
+        if (cg_user_spec_reaches_ancestor(cg, parent, target)) {
             return true;
         }
     }
     return false;
 }
 
-static bool cg_builtin_fit_targets_spec(const BuiltinFit *fit, const UserSpec *spec) {
-    if (fit == NULL || spec == NULL) return false;
+/* Check whether a user fit's declared specs reach one witness target. */
+static bool cg_user_fit_targets_spec(const CG *cg,
+                                     const UserFit *fit,
+                                     const UserSpec *spec) {
+    if (cg == NULL || fit == NULL || spec == NULL) return false;
     for (size_t i = 0; i < fit->spec_count; ++i) {
-        if (fit->specs[i] == spec) return true;
-        if (fit->specs[i] != NULL && fit->specs[i]->decl != NULL &&
-            spec->decl != NULL && fit->specs[i]->decl == spec->decl) {
+        if (cg_user_spec_reaches_ancestor(cg, fit->specs[i], spec)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Check whether a builtin fit's declared specs reach one witness target. */
+static bool cg_builtin_fit_targets_spec(const CG *cg,
+                                        const BuiltinFit *fit,
+                                        const UserSpec *spec) {
+    if (cg == NULL || fit == NULL || spec == NULL) return false;
+    for (size_t i = 0; i < fit->spec_count; ++i) {
+        if (cg_user_spec_reaches_ancestor(cg, fit->specs[i], spec)) {
             return true;
         }
     }
@@ -31694,7 +32382,7 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
     }
 
     Buf var; buf_init(&var);
-    buf_append_fmt(&var, "FengSpecSlotWitness__%zu", cg->spec_slot_witness_table_count);
+    buf_append_fmt(&var, "FengSpecSlotWitness__%zu", cg->spec_slot_witness_counter++);
     if (var.data == NULL) {
         return false;
     }
@@ -31833,6 +32521,34 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
             }
         }
 
+        const char **parent_witness_vars = NULL;
+        if (dst->direct_parent_spec_count > 0U) {
+            parent_witness_vars = (const char **)calloc(
+                dst->direct_parent_spec_count,
+                sizeof(*parent_witness_vars));
+            if (parent_witness_vars == NULL) {
+                buf_free(&var);
+                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            }
+        }
+        for (size_t parent_index = 0U;
+             parent_index < dst->direct_parent_spec_count;
+             ++parent_index) {
+            const UserSpec *parent_spec =
+                cg_user_spec_direct_parent(cg, dst, parent_index);
+
+            if (parent_spec == NULL ||
+                !cg_ensure_spec_slot_witness(cg,
+                                             src,
+                                             parent_spec,
+                                             blame,
+                                             &parent_witness_vars[parent_index])) {
+                free(parent_witness_vars);
+                buf_free(&var);
+                return false;
+            }
+        }
+
         buf_append_fmt(wd, "static const struct %s %s = {\n",
                        dst->c_witness_struct_name, var.data);
         for (size_t i = 0; i < dst->member_count; ++i) {
@@ -31853,7 +32569,18 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
                                dst_member->c_field_name);
             }
         }
+        for (size_t parent_index = 0U;
+             parent_index < dst->direct_parent_spec_count;
+             ++parent_index) {
+            const UserSpec *parent_spec =
+                cg_user_spec_direct_parent(cg, dst, parent_index);
+
+            buf_append_cstr(wd, "    .");
+            cg_append_spec_parent_field_name(wd, parent_spec);
+            buf_append_fmt(wd, " = &%s,\n", parent_witness_vars[parent_index]);
+        }
         buf_append_cstr(wd, "};\n\n");
+        free(parent_witness_vars);
     }
 
     if (cg->spec_slot_witness_table_count + 1 > cg->spec_slot_witness_table_capacity) {
@@ -31944,7 +32671,7 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
         for (size_t fit_index = 0; fit_index < cg->user_fit_count; ++fit_index) {
             const UserFit *fit = &cg->user_fits[fit_index];
 
-            if (fit->target != t || !cg_user_fit_targets_spec(fit, s)) {
+            if (fit->target != t || !cg_user_fit_targets_spec(cg, fit, s)) {
                 continue;
             }
             if (cg->cur_program != NULL && fit->owner_program != NULL &&
@@ -32002,7 +32729,7 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
     for (size_t fit_index = 0; fit_index < cg->user_fit_count; ++fit_index) {
         const UserFit *fit = &cg->user_fits[fit_index];
 
-        if (fit->target != t || !cg_user_fit_targets_spec(fit, s)) {
+        if (fit->target != t || !cg_user_fit_targets_spec(cg, fit, s)) {
             continue;
         }
         if (cg->cur_program != NULL && fit->owner_program != NULL &&
@@ -32052,6 +32779,17 @@ static bool cg_ensure_witness_instance(
     if (cg == NULL || subject_key == NULL || s == NULL || out_var == NULL) {
         return false;
     }
+    if (subject_key->kind != FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL ||
+        subject_key->as.type_decl == NULL ||
+        subject_key->as.type_decl->kind == FENG_DECL_ENUM) {
+        const char *cached = cg_subject_witness_table_lookup(
+            cg, subject_key, scalar_subject_storage, s);
+
+        if (cached != NULL) {
+            *out_var = cached;
+            return true;
+        }
+    }
     if (subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL) {
         if (subject_key->as.type_decl != NULL &&
             subject_key->as.type_decl->kind == FENG_DECL_ENUM) {
@@ -32097,7 +32835,12 @@ static bool cg_ensure_witness_instance(
                         buf_free(&prefix);
                         free(s_san);
                         return cg_fail(cg, blame,
-                            "CE0318", "codegen: internal: witness slot count mismatch for non-type subject");
+                            "CE0318", "codegen: internal: witness slot count mismatch for non-type subject '%.*s' as spec '%s' (expected at least %zu, got %zu)",
+                            (int)subject_key->as.type_decl->as.enum_decl.name.length,
+                            subject_key->as.type_decl->as.enum_decl.name.data,
+                            s->feng_name,
+                            s->member_count,
+                            witness->member_count);
                     }
 
                     wm = &witness->members[i];
@@ -32135,7 +32878,7 @@ static bool cg_ensure_witness_instance(
                         const UserMethod *candidate_method = NULL;
 
                         if (!cg_builtin_fit_matches_subject(candidate, CG_TYPE_I32, enum_decl) ||
-                            !cg_builtin_fit_targets_spec(candidate, s)) {
+                            !cg_builtin_fit_targets_spec(cg, candidate, s)) {
                             continue;
                         }
                         candidate_method =
@@ -32167,7 +32910,7 @@ static bool cg_ensure_witness_instance(
                         const BuiltinFit *candidate = &cg->builtin_fits[bi];
 
                         if (!cg_builtin_fit_matches_subject(candidate, CG_TYPE_I32, enum_decl) ||
-                            !cg_builtin_fit_targets_spec(candidate, s)) {
+                            !cg_builtin_fit_targets_spec(cg, candidate, s)) {
                             continue;
                         }
                         for (size_t mi = 0U; mi < candidate->method_count; ++mi) {
@@ -32204,7 +32947,7 @@ static bool cg_ensure_witness_instance(
                             s->feng_name);
                     }
                 }
-                if (bf == NULL || !cg_builtin_fit_targets_spec(bf, s) ||
+                if (bf == NULL || !cg_builtin_fit_targets_spec(cg, bf, s) ||
                     !cg_builtin_fit_matches_subject(bf, CG_TYPE_I32, enum_decl)) {
                     buf_free(&prefix);
                     free(s_san);
@@ -32342,6 +33085,38 @@ static bool cg_ensure_witness_instance(
             {
                 Buf var;
                 Buf *fd = &cg->witness_defs;
+                const char **parent_witness_vars = NULL;
+
+                if (s->direct_parent_spec_count > 0U) {
+                    parent_witness_vars = (const char **)calloc(
+                        s->direct_parent_spec_count,
+                        sizeof(*parent_witness_vars));
+                    if (parent_witness_vars == NULL) {
+                        buf_free(&prefix);
+                        free(s_san);
+                        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+                    }
+                }
+                for (size_t parent_index = 0U;
+                     parent_index < s->direct_parent_spec_count;
+                     ++parent_index) {
+                    const UserSpec *parent_spec =
+                        cg_user_spec_direct_parent(cg, s, parent_index);
+
+                    if (parent_spec == NULL ||
+                        !cg_ensure_witness_instance(
+                            cg,
+                            subject_key,
+                            parent_spec,
+                            scalar_subject_storage,
+                            blame,
+                            &parent_witness_vars[parent_index])) {
+                        free(parent_witness_vars);
+                        buf_free(&prefix);
+                        free(s_san);
+                        return false;
+                    }
+                }
 
                 buf_init(&var);
                 buf_append_fmt(&var, "FengWitness__%s__subject_%zu__as__%s__%s",
@@ -32362,8 +33137,30 @@ static bool cg_ensure_witness_instance(
                     buf_append_fmt(fd, "    .%s = &%s__%s,\n",
                                    sm->c_field_name, prefix.data, sm->c_field_name);
                 }
+                for (size_t parent_index = 0U;
+                     parent_index < s->direct_parent_spec_count;
+                     ++parent_index) {
+                    const UserSpec *parent_spec =
+                        cg_user_spec_direct_parent(cg, s, parent_index);
+
+                    buf_append_cstr(fd, "    .");
+                    cg_append_spec_parent_field_name(fd, parent_spec);
+                    buf_append_fmt(fd, " = &%s,\n",
+                                   parent_witness_vars[parent_index]);
+                }
                 buf_append_cstr(fd, "};\n\n");
 
+                free(parent_witness_vars);
+                if (!cg_subject_witness_table_add(cg,
+                                                  subject_key,
+                                                  scalar_subject_storage,
+                                                  s,
+                                                  var.data)) {
+                    buf_free(&var);
+                    buf_free(&prefix);
+                    free(s_san);
+                    return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+                }
                 *out_var = var.data;
             }
             buf_free(&prefix);
@@ -32427,7 +33224,10 @@ static bool cg_ensure_witness_instance(
             buf_free(&prefix);
             free(s_san);
             return cg_fail(cg, blame,
-                "CE0318", "codegen: internal: witness slot count mismatch for non-type subject");
+                "CE0318", "codegen: internal: witness slot count mismatch for non-type subject as spec '%s' (expected at least %zu, got %zu)",
+                s->feng_name,
+                s->member_count,
+                witness->member_count);
         }
 
         const FengSpecWitnessMember *wm = &witness->members[i];
@@ -32463,7 +33263,7 @@ static bool cg_ensure_witness_instance(
             for (size_t bi = 0U; bi < cg->builtin_fit_count; ++bi) {
                 const BuiltinFit *candidate = &cg->builtin_fits[bi];
                 if (!cg_builtin_fit_matches_subject(candidate, subject_kind, NULL) ||
-                    !cg_builtin_fit_targets_spec(candidate, s)) {
+                    !cg_builtin_fit_targets_spec(cg, candidate, s)) {
                     continue;
                 }
                 const UserMethod *candidate_method =
@@ -32480,7 +33280,7 @@ static bool cg_ensure_witness_instance(
                 }
             }
         }
-        if (bf == NULL || !cg_builtin_fit_targets_spec(bf, s) ||
+        if (bf == NULL || !cg_builtin_fit_targets_spec(cg, bf, s) ||
             !cg_builtin_fit_matches_subject(bf, subject_kind, NULL)) {
             buf_free(&prefix);
             free(s_san);
@@ -32671,6 +33471,37 @@ static bool cg_ensure_witness_instance(
         buf_append_cstr(fd, ");\n}\n\n");
     }
 
+    const char **parent_witness_vars = NULL;
+    if (s->direct_parent_spec_count > 0U) {
+        parent_witness_vars = (const char **)calloc(
+            s->direct_parent_spec_count,
+            sizeof(*parent_witness_vars));
+        if (parent_witness_vars == NULL) {
+            buf_free(&prefix);
+            free(s_san);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+    }
+    for (size_t parent_index = 0U;
+         parent_index < s->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, s, parent_index);
+
+        if (parent_spec == NULL ||
+            !cg_ensure_witness_instance(cg,
+                                        subject_key,
+                                        parent_spec,
+                                        scalar_subject_storage,
+                                        blame,
+                                        &parent_witness_vars[parent_index])) {
+            free(parent_witness_vars);
+            buf_free(&prefix);
+            free(s_san);
+            return false;
+        }
+    }
+
     Buf var;
     buf_init(&var);
     buf_append_fmt(&var, "FengWitness__%s__subject_%zu__as__%s__%s",
@@ -32692,8 +33523,29 @@ static bool cg_ensure_witness_instance(
         buf_append_fmt(fd, "    .%s = &%s__%s,\n",
                        sm->c_field_name, prefix.data, sm->c_field_name);
     }
+    for (size_t parent_index = 0U;
+         parent_index < s->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, s, parent_index);
+
+        buf_append_cstr(fd, "    .");
+        cg_append_spec_parent_field_name(fd, parent_spec);
+        buf_append_fmt(fd, " = &%s,\n", parent_witness_vars[parent_index]);
+    }
     buf_append_cstr(fd, "};\n\n");
 
+    free(parent_witness_vars);
+    if (!cg_subject_witness_table_add(cg,
+                                      subject_key,
+                                      scalar_subject_storage,
+                                      s,
+                                      var.data)) {
+        buf_free(&var);
+        buf_free(&prefix);
+        free(s_san);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
     *out_var = var.data;
     buf_free(&prefix);
     free(s_san);
@@ -33102,6 +33954,35 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
         }
     }
 
+    const char **parent_witness_vars = NULL;
+    if (s->direct_parent_spec_count > 0U) {
+        parent_witness_vars = (const char **)calloc(
+            s->direct_parent_spec_count,
+            sizeof(*parent_witness_vars));
+        if (parent_witness_vars == NULL) {
+            buf_free(&prefix); free(t_san); free(s_san);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+    }
+    for (size_t parent_index = 0U;
+         parent_index < s->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, s, parent_index);
+
+        if (parent_spec == NULL ||
+            !cg_ensure_value_box_witness_instance(
+                cg,
+                t,
+                parent_spec,
+                blame,
+                &parent_witness_vars[parent_index])) {
+            free(parent_witness_vars);
+            buf_free(&prefix); free(t_san); free(s_san);
+            return false;
+        }
+    }
+
     Buf var;
     buf_init(&var);
     buf_append_fmt(&var, "FengWitness__%s__%s__%s__as__%s__%s",
@@ -33128,7 +34009,18 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                            sm->c_field_name, prefix.data, sm->c_field_name);
         }
     }
+    for (size_t parent_index = 0U;
+         parent_index < s->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, s, parent_index);
+
+        buf_append_cstr(fd, "    .");
+        cg_append_spec_parent_field_name(fd, parent_spec);
+        buf_append_fmt(fd, " = &%s,\n", parent_witness_vars[parent_index]);
+    }
     buf_append_cstr(fd, "};\n\n");
+    free(parent_witness_vars);
 
     if (cg->value_box_witness_table_count + 1U > cg->value_box_witness_table_capacity) {
         size_t cap = cg->value_box_witness_table_capacity
@@ -33919,6 +34811,37 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
         }
     }
 
+    /* Ensure the direct-parent witness closure for the same subject before
+     * initializing this table. Existing (T,S) caching deduplicates diamonds. */
+    const char **parent_witness_vars = NULL;
+    if (s->direct_parent_spec_count > 0U) {
+        parent_witness_vars = (const char **)calloc(
+            s->direct_parent_spec_count,
+            sizeof(*parent_witness_vars));
+        if (parent_witness_vars == NULL) {
+            buf_free(&prefix); free(t_san); free(s_san);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+    }
+    for (size_t parent_index = 0U;
+         parent_index < s->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, s, parent_index);
+
+        if (parent_spec == NULL ||
+            !cg_ensure_witness_instance_for_type(
+                cg,
+                t,
+                parent_spec,
+                blame,
+                &parent_witness_vars[parent_index])) {
+            free(parent_witness_vars);
+            buf_free(&prefix); free(t_san); free(s_san);
+            return false;
+        }
+    }
+
     /* Witness table instance. */
     Buf var; buf_init(&var);
     buf_append_fmt(&var, "FengWitness__%s__%s__as__%s__%s",
@@ -33946,7 +34869,18 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             }
         }
     }
+    for (size_t parent_index = 0U;
+         parent_index < s->direct_parent_spec_count;
+         ++parent_index) {
+        const UserSpec *parent_spec =
+            cg_user_spec_direct_parent(cg, s, parent_index);
+
+        buf_append_cstr(fd, "    .");
+        cg_append_spec_parent_field_name(fd, parent_spec);
+        buf_append_fmt(fd, " = &%s,\n", parent_witness_vars[parent_index]);
+    }
     buf_append_cstr(fd, "};\n\n");
+    free(parent_witness_vars);
 
     /* Cache. */
     if (cg->witness_table_count + 1 > cg->witness_table_capacity) {
@@ -39035,27 +39969,14 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                             for (size_t i = 0; i < ac; ++i) {
                                 const FengReifiableDep *dep =
                                     &rad_dep_set->deps[sorted[i].idx];
-                                const FengDecl *dep_origin = NULL;
-                                if (dep->type_ref != NULL &&
-                                    dep->type_ref->kind == FENG_TYPE_REF_NAMED &&
-                                    dep->type_ref->as.named.type_arg_count > 0U) {
-                                    const GenericTypeDecl *gtd =
-                                        cg_find_generic_type_decl(cg,
-                                            dep->type_ref);
-                                    if (gtd != NULL) dep_origin = gtd->decl;
-                                }
-                                if (dep_origin != NULL) {
-                                    const UserType *erased =
-                                        cg_find_open_generic_instance(
-                                            cg,
-                                            &(UserType){
-                                                .is_generic_instance = true,
-                                                .generic_origin_decl = dep_origin
-                                            });
-                                    if (erased != NULL) {
-                                        cg->generic_type_method_rad_descs[i] =
-                                            strdup(erased->c_aggregate_desc_name);
-                                    }
+                                const char *descriptor_name =
+                                    cg_open_generic_aggregate_descriptor_name(
+                                        cg,
+                                        dep->type_ref);
+
+                                if (descriptor_name != NULL) {
+                                    cg->generic_type_method_rad_descs[i] =
+                                        strdup(descriptor_name);
                                 }
                             }
                         }
@@ -39333,6 +40254,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     const UserSpec **wrapper_context_constraint_specs = NULL;
     const UserSpec **constraint_specs = NULL;
     CGType **origin_param_types = NULL;
+    char **origin_param_bridge_names = NULL;
     char **desc_exprs = NULL;
     const char **method_desc_names = NULL;
     int saved_tmp_counter = cg->tmp_counter;
@@ -39415,8 +40337,13 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     }
 
     origin_param_types = sig->param_count ? calloc(sig->param_count, sizeof *origin_param_types) : NULL;
+    origin_param_bridge_names = sig->param_count
+                                    ? calloc(sig->param_count,
+                                             sizeof *origin_param_bridge_names)
+                                    : NULL;
     desc_exprs = tp_count ? calloc(tp_count, sizeof *desc_exprs) : NULL;
-    if ((sig->param_count && !origin_param_types) || (tp_count && !desc_exprs)) {
+    if ((sig->param_count && (!origin_param_types || !origin_param_bridge_names)) ||
+        (tp_count && !desc_exprs)) {
         cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
@@ -39644,6 +40571,33 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         buf_append_cstr(body, "    (void)_out;\n");
     }
 
+    /* An open generic object-spec instance and its concrete instantiation
+     * have different C struct tags but the same fixed {subject,witness}
+     * value layout. Bridge only that representation before calling the
+     * shared generic body; the memcpy creates an unowned alias and therefore
+     * must not introduce ARC operations. */
+    for (size_t i = 0U; i < m->param_count; ++i) {
+        if (origin_param_types[i] == NULL || m->param_types[i] == NULL ||
+            origin_param_types[i]->kind != CG_TYPE_SPEC ||
+            m->param_types[i]->kind != CG_TYPE_SPEC ||
+            origin_param_types[i]->user_spec == m->param_types[i]->user_spec) {
+            continue;
+        }
+        origin_param_bridge_names[i] = cg_fresh_temp(cg, "_spec_param");
+        if (origin_param_bridge_names[i] == NULL) {
+            goto cleanup;
+        }
+        buf_append_cstr(body, "    ");
+        cg_emit_c_type(body, origin_param_types[i]);
+        buf_append_fmt(body,
+                       " %s;\n"
+                       "    memcpy(&%s, &%s, sizeof %s);\n",
+                       origin_param_bridge_names[i],
+                       origin_param_bridge_names[i],
+                       m->param_names[i] != NULL ? m->param_names[i] : "_p",
+                       origin_param_bridge_names[i]);
+    }
+
     char *ret_tmp = NULL;
     if (method_tp_count == 0U && m->return_type->kind != CG_TYPE_VOID) {
         ret_tmp = cg_fresh_temp(cg, "_ret");
@@ -39696,7 +40650,11 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
                 buf_append_fmt(body, "%s", param_name);
             }
         } else {
-            buf_append_fmt(body, "%s", param_name);
+            buf_append_fmt(body,
+                           "%s",
+                           origin_param_bridge_names[i] != NULL
+                               ? origin_param_bridge_names[i]
+                               : param_name);
         }
         call_has_arg = true;
     }
@@ -39731,6 +40689,7 @@ cleanup:
         for (size_t i = 0; i < sig->param_count; ++i) cgtype_free(origin_param_types[i]);
     }
     free(origin_param_types);
+    cg_free_cstr_array(origin_param_bridge_names, sig->param_count);
     free((void *)constraint_specs);
     if (desc_exprs) {
         for (size_t i = 0; i < tp_count; ++i) free(desc_exprs[i]);
@@ -40920,6 +41879,7 @@ static void cg_dispose(CG *cg) {
             cg_type_ref_free(us->generic_type_args[j]);
         }
         free(us->generic_type_args);
+        free(us->direct_parent_spec_indices);
         cgtype_free(us->callable_return_type);
         for (size_t j = 0; j < us->callable_param_count; ++j) {
             cgtype_free(us->callable_param_types[j]);
@@ -41016,6 +41976,14 @@ static void cg_dispose(CG *cg) {
         free(cg->value_box_witness_tables[i].c_var);
     }
     free(cg->value_box_witness_tables);
+    for (size_t i = 0; i < cg->subject_witness_table_count; ++i) {
+        free(cg->subject_witness_tables[i].c_var);
+    }
+    free(cg->subject_witness_tables);
+    for (size_t i = 0; i < cg->default_parent_witness_count; ++i) {
+        free(cg->default_parent_witnesses[i].c_var);
+    }
+    free(cg->default_parent_witnesses);
     for (size_t i = 0; i < cg->module_binding_count; i++) {
         free(cg->module_bindings[i].feng_name);
         free(cg->module_bindings[i].c_name);

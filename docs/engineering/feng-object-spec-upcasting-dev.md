@@ -1,6 +1,6 @@
 # Object-form Spec 向上 Coercion 开发设计
 
-> **状态**：方案已确定，待人工 Review，未实施。
+> **状态**：已实施，待人工代码 Review。
 > **日期**：2026-08-08。
 > **范围**：object-form 子 `spec` 值到其父 `spec` 值的上下文向上 coercion 与显式 cast，包括泛型名义父 `spec` 实例。
 > **权威语义**：语言层资格与禁止项以 [Feng 语言 `spec` 规范](../specifications/feng-spec.md) 为准；本文只定义编译器与 witness ABI 的实现方案。

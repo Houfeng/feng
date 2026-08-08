@@ -1036,6 +1036,24 @@ static FengTypeMember **synthesize_type_members(const FengSymbolModuleGraph *mod
     return members;
 }
 
+/* Count concrete members, excluding type parameters stored in the member list. */
+static size_t symbol_decl_concrete_member_count(
+    const FengSymbolDeclView *symbol_decl) {
+    size_t count = 0U;
+    size_t index;
+
+    if (symbol_decl == NULL) {
+        return 0U;
+    }
+    for (index = 0U; index < symbol_decl->member_count; ++index) {
+        if (symbol_decl->members[index] != NULL &&
+            symbol_decl->members[index]->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 static FengEnumItem *synthesize_enum_items(const FengSymbolDeclView *symbol_decl,
                                           size_t *out_count) {
     FengEnumItem *items;
@@ -1158,21 +1176,9 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                 synthesize_type_members(module,
                                         symbol_decl,
                                         &synth_decl->decl.as.type_decl.member_count);
-            {
-                /* member_count includes TYPE_PARAM entries, but synthesize_type_members
-                 * skips them.  Use the non-TYPE_PARAM count for the failure check so
-                 * that generic types with no real fields/methods (e.g. open type Future<T> {})
-                 * are not misreported as synthesis failures. */
-                size_t real_member_count = 0U;
-                for (size_t mi = 0U; mi < symbol_decl->member_count; ++mi) {
-                    if (symbol_decl->members[mi] != NULL &&
-                        symbol_decl->members[mi]->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
-                        ++real_member_count;
-                    }
-                }
-                if (real_member_count > 0U && synth_decl->decl.as.type_decl.members == NULL) {
-                    break;
-                }
+            if (symbol_decl_concrete_member_count(symbol_decl) > 0U &&
+                synth_decl->decl.as.type_decl.members == NULL) {
+                break;
             }
             synth_decl->decl.as.type_decl.declared_specs =
                 synthesize_type_ref_list(symbol_decl->declared_specs,
@@ -1247,7 +1253,7 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                     synthesize_type_members(module,
                                             symbol_decl,
                                             &synth_decl->decl.as.spec_decl.as.object.member_count);
-                if (symbol_decl->member_count > 0U &&
+                if (symbol_decl_concrete_member_count(symbol_decl) > 0U &&
                     synth_decl->decl.as.spec_decl.as.object.members == NULL) {
                     break;
                 }
@@ -1297,20 +1303,9 @@ static bool synthesize_decl_from_symbol(SynthDecl *synth_decl,
                 synthesize_type_members(module,
                                         symbol_decl,
                                         &synth_decl->decl.as.fit_decl.member_count);
-            {
-                /* Same rationale as the TYPE branch: member_count includes TYPE_PARAM
-                 * entries that synthesize_type_members intentionally skips. */
-                size_t real_member_count = 0U;
-                for (size_t mi = 0U; mi < symbol_decl->member_count; ++mi) {
-                    if (symbol_decl->members[mi] != NULL &&
-                        symbol_decl->members[mi]->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
-                        ++real_member_count;
-                    }
-                }
-                if (real_member_count > 0U &&
-                    synth_decl->decl.as.fit_decl.members == NULL) {
-                    break;
-                }
+            if (symbol_decl_concrete_member_count(symbol_decl) > 0U &&
+                synth_decl->decl.as.fit_decl.members == NULL) {
+                break;
             }
             synth_decl->decl.as.fit_decl.has_body =
                 symbol_decl->member_count > 0U || symbol_decl->declared_spec_count == 0U;

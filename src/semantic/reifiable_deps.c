@@ -291,8 +291,15 @@ static bool determine_dep_kind(const FengDecl *decl,
             }
             return true;
         case FENG_DECL_SPEC:
-            /* spec 是契约，不是可实例化的类型，运行时表示（存在容器）大小固定，
-             * 不随类型参数变化，无需具体化描述符。 */
+            /* Object-spec fat values have a fixed layout, but their concrete
+             * aggregate descriptor still owns instance-specific default
+             * semantics and is the lifecycle authority in shared generic
+             * bodies. Collect it through the ordinary aggregate dependency
+             * path rather than using an incomplete open-instance descriptor. */
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+                *out_kind = FENG_REIFIABLE_DEP_KIND_AGGREGATE;
+                return true;
+            }
             return false;
         default:
             return false;

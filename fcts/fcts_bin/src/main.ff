@@ -38,5 +38,6 @@ func main(args: string[]) {
       test_mixin();
       test_private_generic_representation();
       test_cross_package_private_representation();
+      test_spec_upcast();
   });
 }

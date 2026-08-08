@@ -1,0 +1,162 @@
+module feng.smoke;
+
+@cdecl("libc") extern func puts(msg: string*): int;
+
+spec Root {
+    var name: string;
+    func label(): string;
+}
+
+spec Child: Root {}
+
+type Item: Child {
+    var name: string;
+    func label(): string { return self.name; }
+}
+
+spec Left: Root {}
+spec Right: Root {}
+spec Diamond: Left, Right {}
+
+type DiamondItem: Diamond {
+    var name: string;
+    func label(): string { return self.name; }
+}
+
+type Box<T> {
+    let value: T;
+}
+
+spec GenericParent<T> {
+    func genericLabel(): string;
+}
+
+spec GenericChild<T>: GenericParent<T> {}
+spec MappedChild<T>: GenericParent<Box<T>> {}
+
+type GenericItem: GenericChild<i32>, MappedChild<i32> {
+    func genericLabel(): string { return "generic"; }
+}
+
+type GenericHolder<T> {
+    func lift(value: MappedChild<T>): GenericParent<Box<T>> {
+        return value;
+    }
+}
+
+type Holder {
+    var parent: Root;
+}
+
+spec SubjectParent {
+    func subjectLabel(): string;
+}
+
+spec SubjectChild: SubjectParent {}
+
+fit i32: SubjectChild {
+    func subjectLabel(): string { return "scalar"; }
+}
+
+fit int[]: SubjectChild {
+    func subjectLabel(): string { return "array"; }
+}
+
+enum Tone {
+    Light,
+    Dark
+}
+
+fit Tone: SubjectChild {
+    func subjectLabel(): string { return "enum"; }
+}
+
+type Pair(i32, i32);
+
+fit Pair: SubjectChild {
+    func subjectLabel(): string { return "tuple"; }
+}
+
+@value
+type ValueSubject {
+    var value: string;
+}
+
+fit ValueSubject: SubjectChild {
+    func subjectLabel(): string { return self.value; }
+}
+
+func acceptRoot(value: Root): string {
+    return value.label();
+}
+
+func returnRoot(value: Child): Root {
+    return value;
+}
+
+func makeDiamond(): Diamond {
+    puts(&"source-once");
+    return DiamondItem { name: "diamond" };
+}
+
+func printSubject(value: SubjectParent) {
+    puts(&value.subjectLabel());
+}
+
+func main(args: string[]) {
+    let child: Child = Item { name: "direct" };
+    let root: Root = child;
+    puts(&root.label());
+    puts(&acceptRoot(child));
+    puts(&returnRoot(child).label());
+    puts(&((Root)child).label());
+
+    let diamond: Diamond = DiamondItem { name: "diamond" };
+    let left: Left = diamond;
+    let right: Right = diamond;
+    let leftRoot: Root = left;
+    let rightRoot: Root = right;
+    puts(&leftRoot.label());
+    puts(&rightRoot.label());
+    puts(&((Root)diamond).label());
+    puts(&acceptRoot(makeDiamond()));
+
+    let holder = Holder { parent: diamond };
+    puts(&holder.parent.label());
+    holder.parent = child;
+    puts(&holder.parent.label());
+
+    let roots: Root[!] = Root[:2];
+    roots[0] = diamond;
+    roots[1] = child;
+    puts(&roots[0].label());
+    roots[1] = diamond;
+    puts(&roots[1].label());
+
+    let defaultChild: Child;
+    let defaultRoot: Root = defaultChild;
+    defaultRoot.name = "default";
+    puts(&defaultChild.name);
+
+    let genericChild: GenericChild<i32> = GenericItem {};
+    let genericParent: GenericParent<i32> = genericChild;
+    puts(&genericParent.genericLabel());
+    let mappedChild: MappedChild<i32> = GenericItem {};
+    let mappedParent: GenericParent<Box<i32>> = mappedChild;
+    puts(&mappedParent.genericLabel());
+    let genericHolder = GenericHolder<i32>();
+    puts(&genericHolder.lift(mappedChild).genericLabel());
+
+    let scalarChild: SubjectChild = (i32)1;
+    printSubject(scalarChild);
+    let values: int[] = [1, 2];
+    let arrayChild: SubjectChild = values;
+    printSubject(arrayChild);
+    let enumChild: SubjectChild = Tone.Dark;
+    printSubject(enumChild);
+    let pair: Pair = ((i32)1, (i32)2);
+    let tupleChild: SubjectChild = pair;
+    printSubject(tupleChild);
+    let valueChild: SubjectChild = ValueSubject { value: "value" };
+    printSubject(valueChild);
+}

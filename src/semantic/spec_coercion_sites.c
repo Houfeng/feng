@@ -210,6 +210,68 @@ bool feng_semantic_record_object_spec_coercion_site(
     return true;
 }
 
+bool feng_semantic_record_object_spec_upcast_site(
+        const FengSemanticAnalysis *analysis_const,
+        const FengExpr *expr,
+        const FengDecl *source_spec_decl,
+        const FengTypeRef *source_spec_type_ref,
+        const FengDecl *target_spec_decl,
+        const FengTypeRef *target_spec_type_ref,
+        const FengTypeRef *const *parent_path,
+        size_t parent_path_length) {
+    FengSemanticAnalysis *analysis;
+    const FengTypeRef *owned_source_ref;
+    const FengTypeRef *owned_target_ref;
+    const FengTypeRef **owned_path;
+    FengSpecCoercionSite *slot;
+
+    if (analysis_const == NULL || expr == NULL || source_spec_decl == NULL ||
+        target_spec_decl == NULL ||
+        target_spec_type_ref == NULL || parent_path == NULL ||
+        parent_path_length == 0U) {
+        return false;
+    }
+    analysis = (FengSemanticAnalysis *)analysis_const;
+    owned_source_ref = source_spec_type_ref != NULL
+                           ? analysis_clone_type_ref(analysis, source_spec_type_ref)
+                           : NULL;
+    owned_target_ref = analysis_clone_type_ref(analysis, target_spec_type_ref);
+    if ((source_spec_type_ref != NULL && owned_source_ref == NULL) ||
+        owned_target_ref == NULL) {
+        return false;
+    }
+    owned_path = (const FengTypeRef **)calloc(parent_path_length,
+                                               sizeof(*owned_path));
+    if (owned_path == NULL) {
+        return false;
+    }
+    for (size_t index = 0U; index < parent_path_length; ++index) {
+        owned_path[index] = analysis_clone_type_ref(analysis, parent_path[index]);
+        if (owned_path[index] == NULL) {
+            free(owned_path);
+            return false;
+        }
+    }
+    slot = reserve_site_slot(analysis, expr);
+    if (slot == NULL) {
+        free(owned_path);
+        return false;
+    }
+    free((void *)slot->object_upcast_path);
+    memset(slot, 0, sizeof(*slot));
+    slot->expr = expr;
+    slot->form = FENG_SPEC_COERCION_FORM_OBJECT_UPCAST;
+    slot->source_spec_decl = source_spec_decl;
+    slot->source_spec_type_ref = owned_source_ref;
+    slot->target_spec_decl = target_spec_decl;
+    slot->target_spec_type_ref = owned_target_ref;
+    slot->object_upcast_path = owned_path;
+    slot->object_upcast_path_length = parent_path_length;
+    slot->object_subject_storage = FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER;
+    slot->callable_source = FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER;
+    return true;
+}
+
 bool feng_semantic_record_callable_spec_coercion_site(
         const FengSemanticAnalysis *analysis_const,
         const FengExpr *expr,

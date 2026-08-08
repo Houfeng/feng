@@ -20908,6 +20908,298 @@ static void test_mixable_contract_diagnostics_are_stable(void) {
     }
 }
 
+/* Return whether a named type ref ends in the requested source-level name. */
+static bool spec_upcast_type_ref_leaf_is(const FengTypeRef *type_ref,
+                                         const char *name) {
+    const FengSlice *leaf;
+    size_t name_length;
+
+    if (type_ref == NULL || name == NULL ||
+        type_ref->kind != FENG_TYPE_REF_NAMED ||
+        type_ref->as.named.segment_count == 0U) {
+        return false;
+    }
+    leaf = &type_ref->as.named.segments[type_ref->as.named.segment_count - 1U];
+    name_length = strlen(name);
+    return leaf->length == name_length &&
+           memcmp(leaf->data, name, name_length) == 0;
+}
+
+/* Assert the common identity and path invariants of one recorded upcast. */
+static const FengSpecCoercionSite *assert_object_spec_upcast_site(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr,
+    const FengDecl *source_spec,
+    const FengDecl *target_spec,
+    size_t path_length) {
+    const FengSpecCoercionSite *site =
+        feng_semantic_lookup_spec_coercion_site(analysis, expr);
+
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_OBJECT_UPCAST);
+    ASSERT(site->source_spec_decl == source_spec);
+    ASSERT(site->source_spec_type_ref != NULL);
+    ASSERT(site->target_spec_decl == target_spec);
+    ASSERT(site->target_spec_type_ref != NULL);
+    ASSERT(site->object_upcast_path != NULL);
+    ASSERT(site->object_upcast_path_length == path_length);
+    ASSERT(site->relation == NULL);
+    return site;
+}
+
+/* Direct, transitive, source-order diamond, explicit, and generic paths are
+ * recorded as fully instantiated direct-parent sequences. */
+static void test_object_spec_upcast_records_selected_parent_paths(void) {
+    const char *source =
+        "module demo.spec_upcast.paths;\n"
+        "type Box<T> { let value: T; }\n"
+        "spec Root {}\n"
+        "spec Left: Root {}\n"
+        "spec Right: Root {}\n"
+        "spec Diamond: Left, Right {}\n"
+        "spec GenericParent<T> {}\n"
+        "spec GenericChild<T>: GenericParent<T> {}\n"
+        "spec MappedChild<T>: GenericParent<Box<T>> {}\n"
+        "func exercise(d: Diamond, c: GenericChild<i32>, m: MappedChild<i32>) {\n"
+        "    let direct: Left = d;\n"
+        "    let transitive: Root = d;\n"
+        "    let right: Right = d;\n"
+        "    let explicit = (Root)d;\n"
+        "    let generic: GenericParent<i32> = c;\n"
+        "    let mapped: GenericParent<Box<i32>> = m;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_upcast_paths.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *exercise;
+    const FengDecl *root;
+    const FengDecl *left;
+    const FengDecl *right;
+    const FengDecl *diamond;
+    const FengDecl *generic_parent;
+    const FengDecl *generic_child;
+    const FengDecl *mapped_child;
+    const FengExpr *initializer;
+    const FengSpecCoercionSite *site;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    exercise = find_function_decl_in_program(program, "exercise");
+    root = find_spec_decl_by_name(analysis, "Root");
+    left = find_spec_decl_by_name(analysis, "Left");
+    right = find_spec_decl_by_name(analysis, "Right");
+    diamond = find_spec_decl_by_name(analysis, "Diamond");
+    generic_parent = find_spec_decl_by_name(analysis, "GenericParent");
+    generic_child = find_spec_decl_by_name(analysis, "GenericChild");
+    mapped_child = find_spec_decl_by_name(analysis, "MappedChild");
+    ASSERT(exercise != NULL && root != NULL && left != NULL && right != NULL);
+    ASSERT(diamond != NULL && generic_parent != NULL && generic_child != NULL);
+    ASSERT(mapped_child != NULL);
+
+    initializer = nth_let_initializer(&exercise->as.function_decl, 0U);
+    site = assert_object_spec_upcast_site(analysis, initializer,
+                                          diamond, left, 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0], "Left"));
+
+    initializer = nth_let_initializer(&exercise->as.function_decl, 1U);
+    site = assert_object_spec_upcast_site(analysis, initializer,
+                                          diamond, root, 2U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0], "Left"));
+    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[1], "Root"));
+
+    initializer = nth_let_initializer(&exercise->as.function_decl, 2U);
+    site = assert_object_spec_upcast_site(analysis, initializer,
+                                          diamond, right, 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0], "Right"));
+
+    initializer = nth_let_initializer(&exercise->as.function_decl, 3U);
+    ASSERT(initializer != NULL && initializer->kind == FENG_EXPR_CAST);
+    site = assert_object_spec_upcast_site(analysis,
+                                          initializer->as.cast.value,
+                                          diamond, root, 2U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0], "Left"));
+    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[1], "Root"));
+    ASSERT(feng_semantic_lookup_spec_coercion_site(analysis, initializer) == NULL);
+
+    initializer = nth_let_initializer(&exercise->as.function_decl, 4U);
+    site = assert_object_spec_upcast_site(analysis, initializer,
+                                          generic_child, generic_parent, 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->source_spec_type_ref,
+                                        "GenericChild"));
+    ASSERT(site->source_spec_type_ref->as.named.type_arg_count == 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(
+        site->source_spec_type_ref->as.named.type_args[0], "i32"));
+    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0],
+                                        "GenericParent"));
+    ASSERT(site->object_upcast_path[0]->as.named.type_arg_count == 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(
+        site->object_upcast_path[0]->as.named.type_args[0], "i32"));
+
+    initializer = nth_let_initializer(&exercise->as.function_decl, 5U);
+    site = assert_object_spec_upcast_site(analysis, initializer,
+                                          mapped_child, generic_parent, 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->object_upcast_path[0],
+                                        "GenericParent"));
+    ASSERT(site->object_upcast_path[0]->as.named.type_arg_count == 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(
+        site->object_upcast_path[0]->as.named.type_args[0], "Box"));
+    ASSERT(site->object_upcast_path[0]->as.named.type_args[0]
+               ->as.named.type_arg_count == 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(
+        site->object_upcast_path[0]->as.named.type_args[0]
+            ->as.named.type_args[0],
+        "i32"));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* The existing overload ordering keeps an exact child parameter ahead of an
+ * applicable parent parameter, and records only the selected parent's cast. */
+static void test_object_spec_upcast_preserves_current_overload_priority(void) {
+    const char *source =
+        "module demo.spec_upcast.overload;\n"
+        "spec Parent {}\n"
+        "spec Child: Parent {}\n"
+        "func choose(value: Child): i32 { return 1; }\n"
+        "func choose(value: Parent): i32 { return 2; }\n"
+        "func exact(value: Child): i32 { return choose(value); }\n"
+        "func parent(value: Child): i32 { return choose((Parent)value); }\n";
+    FengProgram *program = parse_program_or_die("spec_upcast_overload.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *exact;
+    const FengDecl *parent;
+    const FengExpr *exact_call;
+    const FengExpr *parent_call;
+    const FengExpr *parent_cast;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    exact = find_function_decl_in_program(program, "exact");
+    parent = find_function_decl_in_program(program, "parent");
+    ASSERT(exact != NULL && parent != NULL);
+    exact_call = exact->as.function_decl.body->statements[0]->as.return_value;
+    parent_call = parent->as.function_decl.body->statements[0]->as.return_value;
+    ASSERT(exact_call != NULL && exact_call->kind == FENG_EXPR_CALL);
+    ASSERT(parent_call != NULL && parent_call->kind == FENG_EXPR_CALL);
+    ASSERT(exact_call->as.call.resolved_callable.kind ==
+           FENG_RESOLVED_CALLABLE_FUNCTION);
+    ASSERT(parent_call->as.call.resolved_callable.kind ==
+           FENG_RESOLVED_CALLABLE_FUNCTION);
+    ASSERT(spec_upcast_type_ref_leaf_is(
+        exact_call->as.call.resolved_callable.function_decl
+            ->as.function_decl.params[0].type,
+        "Child"));
+    ASSERT(spec_upcast_type_ref_leaf_is(
+        parent_call->as.call.resolved_callable.function_decl
+            ->as.function_decl.params[0].type,
+        "Parent"));
+    ASSERT(feng_semantic_lookup_spec_coercion_site(
+               analysis, exact_call->as.call.args[0]) == NULL);
+    parent_cast = parent_call->as.call.args[0];
+    ASSERT(parent_cast != NULL && parent_cast->kind == FENG_EXPR_CAST);
+    ASSERT(assert_object_spec_upcast_site(
+               analysis,
+               parent_cast->as.cast.value,
+               find_spec_decl_by_name(analysis, "Child"),
+               find_spec_decl_by_name(analysis, "Parent"),
+               1U) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Assert that one rejected source contains the expected stable diagnostic. */
+static void assert_object_spec_upcast_error_code(const char *path,
+                                                 const char *source,
+                                                 const char *expected_code) {
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool found = false;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count > 0U);
+    for (size_t error_index = 0U;
+         error_index < error_count;
+         ++error_index) {
+        if (strcmp(errors[error_index].code, expected_code) == 0) {
+            found = true;
+            break;
+        }
+    }
+    ASSERT(found);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Upcasting does not permit downcasts, unrelated spec views, runtime-subject
+ * guesses, generic variance, or unresolved same-rank overload candidates. */
+static void test_object_spec_upcast_rejects_out_of_scope_conversions(void) {
+    const char *downcast =
+        "module demo.spec_upcast.downcast;\n"
+        "spec Parent {}\n"
+        "spec Child: Parent {}\n"
+        "func bad(value: Parent) { let child: Child = value; }\n";
+    const char *unrelated =
+        "module demo.spec_upcast.unrelated;\n"
+        "spec First {}\n"
+        "spec Second {}\n"
+        "type Both: First, Second {}\n"
+        "func bad(value: First) { let second: Second = value; }\n";
+    const char *variance =
+        "module demo.spec_upcast.variance;\n"
+        "spec Animal {}\n"
+        "spec Dog: Animal {}\n"
+        "spec Parent<T> {}\n"
+        "func bad(value: Parent<Dog>) { let parent: Parent<Animal> = value; }\n";
+    const char *explicit_downcast =
+        "module demo.spec_upcast.explicit_downcast;\n"
+        "spec Parent {}\n"
+        "spec Child: Parent {}\n"
+        "func bad(value: Parent) { let child = (Child)value; }\n";
+    const char *explicit_unrelated =
+        "module demo.spec_upcast.explicit_unrelated;\n"
+        "spec First {}\n"
+        "spec Second {}\n"
+        "func bad(value: First) { let second = (Second)value; }\n";
+    const char *ambiguous =
+        "module demo.spec_upcast.ambiguous;\n"
+        "spec Root {}\n"
+        "spec Left: Root {}\n"
+        "spec Right: Root {}\n"
+        "spec Both: Left, Right {}\n"
+        "func choose(value: Left): i32 { return 1; }\n"
+        "func choose(value: Right): i32 { return 2; }\n"
+        "func bad(value: Both): i32 { return choose(value); }\n";
+
+    assert_object_spec_upcast_error_code("spec_upcast_downcast.ff",
+                                         downcast, "AE1003");
+    assert_object_spec_upcast_error_code("spec_upcast_unrelated.ff",
+                                         unrelated, "AE1003");
+    assert_object_spec_upcast_error_code("spec_upcast_variance.ff",
+                                         variance, "AE1003");
+    assert_object_spec_upcast_error_code("spec_upcast_explicit_downcast.ff",
+                                         explicit_downcast, "AE0051");
+    assert_object_spec_upcast_error_code("spec_upcast_explicit_unrelated.ff",
+                                         explicit_unrelated, "AE0051");
+    assert_object_spec_upcast_error_code("spec_upcast_ambiguous.ff",
+                                         ambiguous, "AE0511");
+}
+
 int main(void) {
     test_member_mix_fields_preserve_surface_and_binding_facts();
     test_member_mix_generic_field_type_is_substituted();
@@ -20984,6 +21276,9 @@ int main(void) {
     test_spec_coercion_callable_top_level_fn();
     test_spec_coercion_callable_lambda();
     test_spec_coercion_callable_lambda_argument();
+    test_object_spec_upcast_records_selected_parent_paths();
+    test_object_spec_upcast_preserves_current_overload_priority();
+    test_object_spec_upcast_rejects_out_of_scope_conversions();
     test_generic_callable_spec_instance_adapts_untyped_callable_values();
     test_generic_callable_spec_instance_rejects_lambda_parameter_mismatch();
     test_generic_callable_spec_instance_rejects_lambda_return_mismatch();

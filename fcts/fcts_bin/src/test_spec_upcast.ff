@@ -1,0 +1,336 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.lib_spec_upcast;
+
+spec UpcastRootView {
+  let identifier: string;
+  var name: string;
+  func label(): string;
+}
+
+spec UpcastChildView: UpcastRootView {}
+
+spec UpcastBranchView: UpcastRootView {
+  func branchLabel(): string;
+}
+
+spec UpcastLeafView: UpcastBranchView {}
+spec UpcastLeftView: UpcastRootView {}
+spec UpcastRightView: UpcastRootView {}
+spec UpcastDiamondView: UpcastLeftView, UpcastRightView {}
+
+type UpcastChildItem: UpcastChildView {
+  let identifier: string;
+  var name: string;
+
+  func label(): string {
+    return self.identifier + ":" + self.name;
+  }
+}
+
+type UpcastLeafItem: UpcastLeafView {
+  let identifier: string;
+  var name: string;
+
+  func label(): string {
+    return self.identifier + ":" + self.name;
+  }
+
+  func branchLabel(): string {
+    return "branch:" + self.name;
+  }
+}
+
+type UpcastDiamondItem: UpcastDiamondView {
+  let identifier: string;
+  var name: string;
+
+  func label(): string {
+    return self.identifier + ":" + self.name;
+  }
+}
+
+type UpcastRootHolder {
+  var view: UpcastRootView;
+}
+
+type UpcastGenericBox<T> {
+  let value: T;
+}
+
+spec UpcastGenericParent<T> {
+  func genericValue(): T;
+}
+
+spec UpcastGenericChild<T>: UpcastGenericParent<T> {}
+spec UpcastGenericMappedChild<T>: UpcastGenericParent<UpcastGenericBox<T>> {}
+
+type UpcastGenericIntItem: UpcastGenericChild<int> {
+  func genericValue(): int {
+    return 42;
+  }
+}
+
+type UpcastGenericMappedItem: UpcastGenericMappedChild<int> {
+  func genericValue(): UpcastGenericBox<int> {
+    return UpcastGenericBox<int> { value: 43 };
+  }
+}
+
+type UpcastGenericProjector<T> {
+  func project(value: UpcastGenericMappedChild<T>): UpcastGenericParent<UpcastGenericBox<T>> {
+    return value;
+  }
+}
+
+spec UpcastSubjectParent {
+  func subjectLabel(): string;
+}
+
+spec UpcastSubjectChild: UpcastSubjectParent {}
+
+fit i32: UpcastSubjectChild {
+  func subjectLabel(): string {
+    return "scalar";
+  }
+}
+
+fit int[]: UpcastSubjectChild {
+  func subjectLabel(): string {
+    return "array";
+  }
+}
+
+enum UpcastSubjectTone {
+  Light,
+  Dark
+}
+
+fit UpcastSubjectTone: UpcastSubjectChild {
+  func subjectLabel(): string {
+    return "enum";
+  }
+}
+
+type UpcastSubjectPair(i32, i32);
+
+fit UpcastSubjectPair: UpcastSubjectChild {
+  func subjectLabel(): string {
+    return "tuple";
+  }
+}
+
+@value
+type UpcastValueSubject {
+  let value: string;
+}
+
+fit UpcastValueSubject: UpcastSubjectChild {
+  func subjectLabel(): string {
+    return self.value;
+  }
+}
+
+type UpcastObjectSubject: UpcastSubjectChild {
+  let value: string;
+
+  func subjectLabel(): string {
+    return self.value;
+  }
+}
+
+spec UpcastOverloadParent {}
+spec UpcastOverloadChild: UpcastOverloadParent {}
+
+func chooseUpcastView(value: UpcastOverloadChild): string {
+  return "child";
+}
+
+func chooseUpcastView(value: UpcastOverloadParent): string {
+  return "parent";
+}
+
+type LocalCrossPackageUpcastItem: CrossPackageChild<int> {
+  func crossPackageLabel(): string {
+    return "consumer";
+  }
+}
+
+type UpcastLifetimeItem: UpcastChildView {
+  open static var finalized: int = 0;
+  let identifier: string;
+  var name: string;
+
+  func label(): string {
+    return self.identifier + ":" + self.name;
+  }
+
+  func ~UpcastLifetimeItem() {
+    UpcastLifetimeItem.finalized += 1;
+  }
+}
+
+var upcastProjectionSourceCalls: int = 0;
+
+func acceptUpcastRoot(value: UpcastRootView): string {
+  return value.label();
+}
+
+func returnUpcastRoot(value: UpcastChildView): UpcastRootView {
+  return value;
+}
+
+func makeUpcastDiamond(): UpcastDiamondView {
+  upcastProjectionSourceCalls += 1;
+  return UpcastDiamondItem { identifier: "once", name: "diamond" };
+}
+
+func projectUpcastLifetimeItem() {
+  let child: UpcastChildView = UpcastLifetimeItem { identifier: "life", name: "time" };
+  let parent: UpcastRootView = child;
+  assert(parent.label() == "life:time", "projected lifetime item remains usable");
+}
+
+func assertUpcastSubject(value: UpcastSubjectParent, expected: string) {
+  assert(value.subjectLabel() == expected, expected);
+}
+
+open func test_spec_upcast() {
+  describe("object-form spec upcasting", () {
+    test("direct coercion preserves method and field dispatch", () {
+      let item = UpcastChildItem { identifier: "direct", name: "before" };
+      let child: UpcastChildView = item;
+      let root: UpcastRootView = child;
+      assert(root.identifier == "direct", "parent let getter");
+      assert(root.name == "before", "parent var getter");
+      root.name = "after";
+      assert(root.label() == "direct:after", "parent method and var setter");
+      assert(item.name == "after", "setter keeps original subject");
+    });
+
+    test("transitive coercion and casts use the ancestor view", () {
+      let leaf: UpcastLeafView = UpcastLeafItem { identifier: "leaf", name: "value" };
+      let branch: UpcastBranchView = leaf;
+      let root: UpcastRootView = leaf;
+      let castBranch = (UpcastBranchView)leaf;
+      let castRoot = (UpcastRootView)leaf;
+      assert(branch.branchLabel() == "branch:value", "direct parent cast target");
+      assert(root.label() == "leaf:value", "transitive implicit target");
+      assert(castBranch.branchLabel() == "branch:value", "direct explicit cast");
+      assert(castRoot.label() == "leaf:value", "transitive explicit cast");
+    });
+
+    test("parameter and return expected types project automatically", () {
+      let child: UpcastChildView = UpcastChildItem { identifier: "flow", name: "value" };
+      assert(acceptUpcastRoot(child) == "flow:value", "parameter expected type");
+      assert(returnUpcastRoot(child).label() == "flow:value", "return expected type");
+    });
+
+    test("field initialization and assignment project automatically", () {
+      let first: UpcastChildView = UpcastChildItem { identifier: "field", name: "first" };
+      let second: UpcastChildView = UpcastChildItem { identifier: "field", name: "second" };
+      let holder = UpcastRootHolder { view: first };
+      assert(holder.view.label() == "field:first", "field initializer");
+      holder.view = second;
+      assert(holder.view.label() == "field:second", "field assignment");
+    });
+
+    test("array element writes project automatically", () {
+      let child: UpcastChildView = UpcastChildItem { identifier: "array", name: "child" };
+      let diamond: UpcastDiamondView = UpcastDiamondItem { identifier: "array", name: "diamond" };
+      let views: UpcastRootView[!] = UpcastRootView[:2];
+      views[0] = child;
+      views[1] = diamond;
+      assert(views[0].label() == "array:child", "direct array element write");
+      assert(views[1].label() == "array:diamond", "transitive array element write");
+    });
+
+    test("multiple parents and diamond paths converge on one subject", () {
+      let diamond: UpcastDiamondView = UpcastDiamondItem { identifier: "diamond", name: "before" };
+      let left: UpcastLeftView = diamond;
+      let right: UpcastRightView = diamond;
+      let leftRoot: UpcastRootView = left;
+      let rightRoot: UpcastRootView = right;
+      leftRoot.name = "after";
+      assert(rightRoot.name == "after", "both paths keep the same subject");
+      assert(leftRoot == rightRoot, "both paths preserve reference identity");
+    });
+
+    test("source expression is evaluated exactly once", () {
+      upcastProjectionSourceCalls = 0;
+      let root: UpcastRootView = makeUpcastDiamond();
+      assert(root.label() == "once:diamond", "projected source result");
+      assert(upcastProjectionSourceCalls == 1, "source evaluated once");
+    });
+
+    test("default child subject remains the projected parent subject", () {
+      let child: UpcastChildView;
+      let root: UpcastRootView = child;
+      assert(root.identifier == "", "default inherited let field");
+      root.name = "default";
+      assert(child.name == "default", "default subject shared by parent view");
+    });
+
+    test("exact and mapped generic parents substitute type arguments", () {
+      let exactChild: UpcastGenericChild<int> = UpcastGenericIntItem {};
+      let exactParent: UpcastGenericParent<int> = exactChild;
+      assert(exactParent.genericValue() == 42, "Child<int> to Parent<int>");
+
+      let mappedChild: UpcastGenericMappedChild<int> = UpcastGenericMappedItem {};
+      let mappedParent: UpcastGenericParent<UpcastGenericBox<int>> = mappedChild;
+      assert(mappedParent.genericValue().value == 43, "mapped generic parent");
+
+      let projector = UpcastGenericProjector<int>();
+      let projected = projector.project(mappedChild);
+      assert(projected.genericValue().value == 43, "open generic context");
+    });
+
+    test("all supported subject storage forms keep their implementation", () {
+      let scalarChild: UpcastSubjectChild = (i32)1;
+      assertUpcastSubject(scalarChild, "scalar");
+
+      let numbers: int[] = [1, 2];
+      let arrayChild: UpcastSubjectChild = numbers;
+      assertUpcastSubject(arrayChild, "array");
+
+      let enumChild: UpcastSubjectChild = UpcastSubjectTone.Dark;
+      assertUpcastSubject(enumChild, "enum");
+
+      let pair: UpcastSubjectPair = ((i32)1, (i32)2);
+      let tupleChild: UpcastSubjectChild = pair;
+      assertUpcastSubject(tupleChild, "tuple");
+
+      let valueChild: UpcastSubjectChild = UpcastValueSubject { value: "value" };
+      assertUpcastSubject(valueChild, "value");
+
+      let objectChild: UpcastSubjectChild = UpcastObjectSubject { value: "object" };
+      assertUpcastSubject(objectChild, "object");
+    });
+
+    test("projection follows ordinary ownership without extra subject", () {
+      UpcastLifetimeItem.finalized = 0;
+      projectUpcastLifetimeItem();
+      assert(UpcastLifetimeItem.finalized == 1, "one subject is finalized exactly once");
+    });
+
+    test("current overload priority keeps exact child before parent", () {
+      let child: UpcastOverloadChild;
+      assert(chooseUpcastView(child) == "child", "exact child candidate");
+      let parent: UpcastOverloadParent = child;
+      assert(chooseUpcastView(parent) == "parent", "explicit parent static type");
+    });
+
+    test("cross-package provider and consumer witnesses share parent layout", () {
+      let providerChild: CrossPackageChild<int> = makeCrossPackageChild();
+      let providerParent: CrossPackageParent<int> = providerChild;
+      assert(providerParent.crossPackageLabel() == "provider", "provider witness");
+      let providerCast = (CrossPackageParent<int>)providerChild;
+      assert(providerCast.crossPackageLabel() == "provider", "provider explicit cast");
+
+      let consumerChild: CrossPackageChild<int> = LocalCrossPackageUpcastItem {};
+      let consumerParent: CrossPackageParent<int> = consumerChild;
+      assert(consumerParent.crossPackageLabel() == "consumer", "consumer witness");
+    });
+  });
+}

@@ -172,6 +172,10 @@ typedef enum FengSpecCoercionForm {
     /* Concrete type → object-form spec. The site references the SpecRelation
      * picked by the resolver for this (T, S) coercion. */
     FENG_SPEC_COERCION_FORM_OBJECT = 0,
+    /* Object-form child spec value -> nominal parent spec view. The subject
+     * is preserved and codegen follows object_upcast_path through the source
+     * witness's named direct-parent fields. */
+    FENG_SPEC_COERCION_FORM_OBJECT_UPCAST,
     /* Callable value → callable-form spec / function type. Carries the
      * value-source classification per §6.2; signature is read from the
      * target callable decl. */
@@ -241,6 +245,13 @@ typedef struct FengSpecCoercionSite {
      * stable across the entire compile regardless of whether the original
      * was an AST-owned ref or a resolver synthetic ref. */
     const FengTypeRef *target_spec_type_ref;
+    /* OBJECT_UPCAST only: instantiated source spec identity and the ordered
+     * direct-parent spec refs selected by semantic DFS. Each path entry is
+     * the parent reached by one edge; the last entry equals the target. */
+    const FengDecl *source_spec_decl;
+    const FengTypeRef *source_spec_type_ref;
+    const FengTypeRef **object_upcast_path;
+    size_t object_upcast_path_length;
     /* OBJECT form only: the SpecRelation entry that justifies this coercion.
      * Always non-NULL for FORM_OBJECT (analyzer asserts the lookup succeeds
      * before recording). NULL for FORM_CALLABLE per §8.4 and NULL for
@@ -555,6 +566,19 @@ bool feng_semantic_record_object_spec_coercion_site(
     const FengTypeRef *target_spec_type_ref,
     const FengSpecRelation *relation,
     FengSpecObjectSubjectStorageKind object_subject_storage);
+
+/* Record an object-form child-spec -> parent-spec projection. `parent_path`
+ * contains the instantiated direct-parent ref reached at each edge, in
+ * source-to-target order. The analysis clones all supplied type refs. */
+bool feng_semantic_record_object_spec_upcast_site(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr,
+    const FengDecl *source_spec_decl,
+    const FengTypeRef *source_spec_type_ref,
+    const FengDecl *target_spec_decl,
+    const FengTypeRef *target_spec_type_ref,
+    const FengTypeRef *const *parent_path,
+    size_t parent_path_length);
 
 /* Record an intersection-form coercion site (`expr` of concrete type
  * `src_type_decl` flowing into a slot typed as intersection-form spec

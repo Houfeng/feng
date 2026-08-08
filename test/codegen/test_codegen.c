@@ -8723,6 +8723,107 @@ static void test_member_mix_fields_and_mixable_wrappers_codegen(void) {
     feng_program_free(program);
 }
 
+/* Object-spec upcasts use direct-parent witness fields, preserve the subject,
+ * converge diamond ancestors, instantiate generic parents, and evaluate the
+ * projected source expression exactly once. */
+static void test_object_spec_upcast_witness_and_lowering_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.spec_upcast;\n"
+        "spec Root { func marker(): i32; }\n"
+        "spec Left: Root {}\n"
+        "spec Right: Root {}\n"
+        "spec Diamond: Left, Right {}\n"
+        "spec GenericParent<T> { func value(): T; }\n"
+        "spec GenericChild<T>: GenericParent<T> {}\n"
+        "type Item: Diamond {\n"
+        "    func marker(): i32 { return 7; }\n"
+        "}\n"
+        "type GenericItem: GenericChild<i32> {\n"
+        "    func value(): i32 { return 8; }\n"
+        "}\n"
+        "var sourceCalls: i32 = 0;\n"
+        "func makeDiamond(): Diamond {\n"
+        "    sourceCalls += 1;\n"
+        "    return Item {};\n"
+        "}\n"
+        "func exercise(value: Diamond, generic: GenericChild<i32>): Root {\n"
+        "    let left: Left = value;\n"
+        "    let right: Right = value;\n"
+        "    let root: Root = value;\n"
+        "    let explicit = (Root)value;\n"
+        "    let once: Root = makeDiamond();\n"
+        "    let genericParent: GenericParent<i32> = generic;\n"
+        "    let concreteChild: GenericChild<i32> = GenericItem {};\n"
+        "    let concreteParent: GenericParent<i32> = concreteChild;\n"
+        "    return root;\n"
+        "}\n";
+    static const char *kDiamondWitnessStruct =
+        "struct FengSpecWitness__feng__codegen__spec_upcast__Diamond {\n"
+        "    int32_t (*marker)(void *_subject);\n"
+        "    const struct FengSpecWitness__feng__codegen__spec_upcast__Left *parent__FengSpecWitness__feng__codegen__spec_upcast__Left;\n"
+        "    const struct FengSpecWitness__feng__codegen__spec_upcast__Right *parent__FengSpecWitness__feng__codegen__spec_upcast__Right;\n"
+        "};";
+    static const char *kTransitivePath =
+        "witness->parent__FengSpecWitness__feng__codegen__spec_upcast__Left"
+        "->parent__FengSpecWitness__feng__codegen__spec_upcast__Root";
+    static const char *kDiamondRootInitializer =
+        ".parent__FengSpecWitness__feng__codegen__spec_upcast__Root = "
+        "&FengWitness__feng__codegen__spec_upcast__Item__as__feng__codegen__spec_upcast__Root,";
+    static const char *kGenericParentInitializer =
+        ".parent__FengSpecWitness__feng__codegen__spec_upcast__GenericParent__G__i32 = "
+        "&FengWitness__feng__codegen__spec_upcast__GenericItem__as__feng__codegen__spec_upcast__GenericParent_i32_,";
+    static const char *kMakeDiamondSymbol =
+        "feng__feng__codegen__spec_upcast__makeDiamond__from__void";
+    FengProgram *program = parse_or_die(kSource, "spec_upcast_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                   NULL, &output, &codegen_error)) {
+        fprintf(stderr, "codegen error (object spec upcast): %s\n",
+                codegen_error.message != NULL
+                    ? codegen_error.message
+                    : "unknown codegen error");
+        ASSERT(false);
+    }
+    ASSERT(output.c_source != NULL);
+
+    /* The child table has flattened dispatch slots followed by only its two
+     * direct parents, in source order. Root is reached through Left/Right. */
+    ASSERT(strstr(output.c_source, kDiamondWitnessStruct) != NULL);
+    ASSERT(strstr(output.c_source, kTransitivePath) != NULL);
+
+    /* Left and Right reuse the one Item-as-Root witness in the diamond. */
+    ASSERT(count_substr(output.c_source, kDiamondRootInitializer) == 2U);
+
+    /* The nominal generic edge is emitted for the exact i32 instance. */
+    ASSERT(strstr(output.c_source, kGenericParentInitializer) != NULL);
+
+    /* Projection copies the same subject and changes only the witness path. */
+    ASSERT(strstr(output.c_source,
+                  "){ .subject = _spec_view") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".witness = _spec_view") != NULL);
+
+    /* Prototype, definition, and one call are the only occurrences. A
+     * duplicated projection evaluation would add another call occurrence. */
+    ASSERT(count_substr(output.c_source, kMakeDiamondSymbol) == 3U);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -8796,6 +8897,7 @@ int main(void) {
     test_fit_builtin_array_open_generic_value_return_codegen();
     test_fit_builtin_and_array_object_spec_coercion_codegen();
     test_fit_enum_object_spec_coercion_codegen();
+    test_object_spec_upcast_witness_and_lowering_codegen();
     test_object_spec_thunk_subject_cast_shape_codegen();
     test_intersection_spec_witness_struct_codegen();
     test_intersection_spec_witness_instance_codegen();

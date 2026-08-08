@@ -1,0 +1,17 @@
+open module fcts_lib.test.lib_spec_upcast;
+
+open spec CrossPackageParent<T> {
+  func crossPackageLabel(): string;
+}
+
+open spec CrossPackageChild<T>: CrossPackageParent<T> {}
+
+open type CrossPackageItem: CrossPackageChild<int> {
+  func crossPackageLabel(): string {
+    return "provider";
+  }
+}
+
+open func makeCrossPackageChild(): CrossPackageChild<int> {
+  return CrossPackageItem {};
+}
