@@ -1,9 +1,10 @@
 # Object-form Spec 向上 Coercion 开发设计
 
 > **状态**：方案已确定，待人工 Review，未实施。
-> **日期**：2026-08-07。
-> **范围**：object-form 子 `spec` 值到其父 `spec` 值的上下文向上 coercion 与显式 cast。
+> **日期**：2026-08-08。
+> **范围**：object-form 子 `spec` 值到其父 `spec` 值的上下文向上 coercion 与显式 cast，包括泛型名义父 `spec` 实例。
 > **权威语义**：语言层资格与禁止项以 [Feng 语言 `spec` 规范](../specifications/feng-spec.md) 为准；本文只定义编译器与 witness ABI 的实现方案。
+> **后续开发**：[泛型重载决议优化开发设计](./feng-generic-overload-resolution-optimize-dev.md)。本文先实施向上转换并保持当前重载处理，后续专项再统一调整重载声明合法性与候选优先级。
 
 ## 1. 目标
 
@@ -43,7 +44,7 @@ let explicitA = (A)b;
 
 ### 2.1 上下文向上 Coercion
 
-赋值、初始化、参数传递、返回值、字段写入、数组元素写入及已由合法无重叠重载集合唯一确定目标参数类型的调用位置，若源是 object-form 子 `spec`、目标是其直接或传递父 object-form `spec`，允许自动建立父视角：
+赋值、初始化、参数传递、返回值、字段写入、数组元素写入及已由当前重载规则唯一确定目标参数类型的调用位置，若源是 object-form 子 `spec`、目标是其直接或传递父 object-form `spec`，允许自动建立父视角：
 
 ```feng
 let parent: Parent = child;
@@ -63,23 +64,29 @@ let parent = (Parent)child;
 
 显式形式不能用于父到子、无关 `spec`，也不能依据 subject 的运行时具体类型建立静态类型不可达的视角。
 
-### 2.3 重载集合边界
+### 2.3 重载处理保持现状
 
-Feng 的重载集合必须由调用方实参类型准确区分，不使用“精确优先”或“最具体优先”保留可能重叠的候选。Object-form `spec` 向上 coercion 必须纳入现有重载重叠检查。
-
-以下重载均不合法：
+本文只新增 object-form 子 `spec` 到父 `spec` 的匹配与值视角转换，不在同一阶段修改重载声明检查、候选优先级或调用点消歧算法。以下声明是否通过，继续完全由当前声明检查决定：
 
 ```feng
-func test(value: UserType) {}
-func test(value: UserSpec) {} // UserType 满足 UserSpec
-
 func show(value: ChildSpec) {}
-func show(value: ParentSpec) {} // ChildSpec: ParentSpec
+func show(value: ParentSpec) {}
 ```
 
-因为同一个实参类型可同时匹配两个候选，编译器必须在声明阶段诊断签名冲突。调用点显式 cast 不用于挽救已经重叠的重载集合。
+若该重载集合通过当前声明检查，新增父级转换只让 `ParentSpec` 候选按现有匹配规则成为适用候选，仍使用当前整体三级优先级：
 
-对于通过重叠检查的合法重载集合，调用解析唯一确定目标函数后，该参数位置才形成明确 expected type，并按普通参数 coercion 规则记录父级路径。
+```text
+非泛型精确匹配 > 非泛型非精确匹配 > 泛型匹配
+```
+
+因此：
+
+- 实参静态类型为 `ChildSpec` 时，`ChildSpec` 参数是精确匹配，`ParentSpec` 参数是经向上转换的非精确匹配，选择 `ChildSpec` 候选。
+- 实参先显式转换或标注为 `ParentSpec` 时，只有 `ParentSpec` 候选适用。
+- 多个适用候选在当前整体优先级下同级且没有唯一结果时，继续在调用点报告现有 `AE0511`。
+- 当前声明检查已经拒绝的重载继续拒绝；本文不放开，也不新增拒绝规则。
+
+候选探测只判断父级转换是否适用，不得为每个被探测候选记录正式 coercion sidecar。只有当前重载规则选定唯一调用目标、目标形参类型确定后，才记录父级路径并交给 codegen lowering；未选候选不得产生 witness 依赖。
 
 ### 2.4 当前兼容性核查与实施边界
 
@@ -91,28 +98,18 @@ func show(value: ParentSpec) {} // ChildSpec: ParentSpec
 - 现有 semantic 测试允许两个没有共同满足类型、彼此也无父子关系的 `spec` 参数构成重载。
 - 当前没有直接覆盖 `ChildSpec` / `ParentSpec` 参数重载的测试。
 
-当前重载重叠检查在两个参数均为 `spec` 时，主要通过搜索可见具体类型是否同时满足二者来判断重叠；因此当尚无具体实现类型时，父子 `spec` 重载可能被接受。这是重叠检查未直接纳入 `spec` 名义父级可达关系的实现缺口，不作为已交付语言能力保留。
+当前重载重叠检查在两个参数均为 `spec` 时，主要通过搜索可见具体类型是否同时满足二者来判断重叠；因此当尚无具体实现类型时，父子 `spec` 重载可能被接受。本文明确保留这一当前行为，不把 `spec` 名义父级可达关系新增到声明重叠检查，也不删除现有 `type` / `spec`、共同满足类型或变长参数等检查。
 
-本次实施只做保持现有重载原则所必需的一致性补齐：
-
-1. 当两个 object-form `spec` 参数存在直接或传递父子关系时，直接判定参数类型重叠。
-2. 继续在声明阶段使用现有重叠诊断，不把冲突延后到调用点。
-3. 不删除或放宽现有 `type` / `spec`、共同满足类型等重叠检查。
-4. 不增加精确优先、最具体优先、父级距离排序或其他重载候选计分。
-5. 不改变两个无父子关系且没有共同满足类型的 `spec` 参数可以重载的现有行为。
-
-上述补齐属于向上 coercion 扩大可匹配关系后对既有重载不重叠约束的同步，不属于重载功能优化。
+当前 [Feng 语言 `spec` 规范](../specifications/feng-spec.md) 仍包含“父级 coercion 造成的重叠必须在声明阶段拒绝”的既有结论，而当前实现并未完整覆盖。本文按已确认的阶段顺序保留该实现现状，将其作为后续重载专项统一处理的已知过渡差异；本阶段完成标准不宣称已经交付最终重载语义。代码实施前必须在本文 Review 后同步确认权威规范的阶段表述，不能让实现边界与权威规范保持未说明的冲突。
 
 ### 2.5 阶段决策
 
 本次开发按以下阶段边界执行：
 
-1. 先保持重载规则一致：具体 `UserType: UserSpec` 使 `UserType` / `UserSpec` 参数重载冲突；同理，`ChildSpec: ParentSpec` 使 `ChildSpec` / `ParentSpec` 参数重载冲突。
-2. 在该一致规则下完成 object-form `spec` 上下文向上 coercion、显式 cast、witness 父级入口及全部正确性场景。
-3. 本次不调整重载声明合法性、候选优先级或调用点消歧规则，也不为可能的后续放宽预埋分支或特判。
-4. Spec 向上 coercion 完成交付后，再由人工单独决定是否启动重载规则重构。
-
-未来若讨论允许上述重叠重载，必须作为独立设计统一评估 `Type` / `Spec` 与 `ChildSpec` / `ParentSpec`，并同时覆盖顶层函数、成员方法、静态方法、构造函数、泛型候选、函数值和跨包调用。本文不选择该未来方案，也不承诺实施。
+1. 先完整实现 object-form `spec` 上下文向上 coercion、显式 cast、witness 父级入口及全部正确性场景。
+2. 同时支持非泛型与泛型名义父关系，包括 `Child<int> -> Parent<int>`；不得把泛型场景留给重载专项补齐。
+3. 本阶段不修改现有重载声明检查、整体三级优先级或调用点二义性规则，也不为后续七级优先级预埋分支或特判。
+4. 本阶段完整回归后，再按 [泛型重载决议优化开发设计](./feng-generic-overload-resolution-optimize-dev.md) 独立实施重载规则优化。
 
 ### 2.6 非目标
 
@@ -125,6 +122,7 @@ func show(value: ParentSpec) {} // ChildSpec: ParentSpec
 - union-form 到共同 object-form `spec` 的投影。
 - intersection-form 到单个 object-form `spec` 的投影。
 - callable-form `spec` 的转换。
+- 泛型实例的协变或逆变；名义声明产生的 `Child<int> -> Parent<int>` 不属于 variance，但不得据 `DogSpec: AnimalSpec` 推导 `Parent<DogSpec> -> Parent<AnimalSpec>`。
 - object-form `spec` 值布局、成员调用约定或引用身份比较语义。
 - 允许当前被重叠检查拒绝的重载集合。
 - 重载候选优先级、计分、父级距离比较或调用点消歧策略。
@@ -342,7 +340,7 @@ Semantic 应为合法上下文 coercion 或显式 cast 记录至少以下信息�
 
 Codegen 只能消费该结论，不得重新判断父关系或自行选择另一条路径。
 
-重载重叠检查必须把子 `spec` 到父 `spec` 的可达性视为参数类型重叠关系，不得仅通过搜索当前可见具体实现类型间接推断。对于已经通过重叠检查的合法集合，仅在调用目标唯一确定后记录正式 coercion sidecar，避免为未选候选生成 witness 依赖。
+重载候选探测必须把合法的子 `spec` 到父 `spec` 转换作为参数适用性，但不得借此修改当前声明重叠检查或候选优先级。候选探测期间只保留临时可达性结论；仅在当前重载算法选定唯一目标后记录正式 coercion sidecar，避免为未选候选生成 witness 依赖。
 
 ## 7. Codegen 设计
 
@@ -403,17 +401,22 @@ source.subject == target.subject
 例如：
 
 ```feng
-spec A<T> {}
-spec B<T>: A<T> {}
+spec Parent<T> {}
+spec Child<T>: Parent<T> {}
+
+let child: Child<int> = ...;
+let parent: Parent<int> = child;
 ```
 
-实例化 `B<U>` 的直接父字段必须具有 `A<U>` 的完整实例化身份：
+实例化 `Child<U>` 的直接父字段必须具有 `Parent<U>` 的完整实例化身份：
 
 ```text
-W(K, B<U>).parent_A_U -> W(K, A<U>)
+W(K, Child<U>).parent_Parent_U -> W(K, Parent<U>)
 ```
 
-Semantic 记录的路径和 codegen 生成的字段必须使用相同的类型实参替换结果。不得在运行时解析、比较或恢复泛型实参。
+`Child<int> -> Parent<int>` 是对已声明名义父关系做类型实参替换，不是泛型实例的协变或逆变。Semantic 记录的路径和 codegen 生成的字段必须使用相同的类型实参替换结果；显式声明为 `Child<T>: Parent<List<T>>` 时，父入口必须对应 `Parent<List<T>>`。不得在运行时解析、比较或恢复泛型实参。
+
+泛型实例继续保持不变。即使 `DogSpec: AnimalSpec`，也不因此建立 `Parent<DogSpec> -> Parent<AnimalSpec>`；本文只沿 `spec` 声明中显式列出的父实例关系投影。
 
 ### 8.2 跨包恢复
 
@@ -449,17 +452,17 @@ Provider 与 consumer 必须由这些事实生成一致的 witness 结构和父�
 文档 Review 通过后，按以下顺序实施：
 
 1. Semantic：在 expected-type 位置与显式 cast 中接受合法的 object-form 子 `spec` 到祖先 `spec` 视角投影，并记录确定的直接父路径。
-2. 重载一致性：仅把子 `spec` 到父 `spec` 的名义可达性纳入现有声明阶段重叠检查，使其与既有 `type` / `spec` 冲突规则一致；不调整候选解析与优先级。
+2. 调用候选集成：把父级转换纳入参数适用性探测，但保持当前声明检查和整体三级优先级；只在唯一目标选定后记录正式 coercion sidecar。
 3. Codegen 声明：在 witness 结构中追加具名直接父字段及所需前向声明。
 4. Witness 生成：按同一主体实现键递归生成并初始化直接父 witness 闭包。
 5. Codegen 表达式：将上下文 coercion 与显式 cast 统一 lower 为保留 subject 的固定父字段读取链。
 6. 默认 subject：补齐默认主体到全部父视角的 witness 生成。
-7. 泛型与跨包：验证类型实参替换、声明恢复和链接符号一致性。
+7. 泛型与跨包：验证 `Child<T> -> Parent<T>` 等名义父实例的类型实参替换、声明恢复和链接符号一致性，不引入 variance。
 8. 测试：新增 semantic、codegen 与 FCTS 覆盖，最后执行全量回归 `make test`。
 
 不得通过只放宽类型匹配或 cast 校验、只支持单父单层、只处理普通对象 subject，或在失败时改用默认 witness 的方式交付不完整实现。
 
-本次完成后停止在 spec 向上 coercion 的交付边界；未经后续人工决策，不继续修改重载合法性或候选解析策略。
+本次完成后停止在 spec 向上 coercion 的交付边界；重载合法性和候选优先级后续按独立开发设计实施，不在本阶段顺带修改。
 
 ## 11. 测试范围
 
@@ -470,11 +473,13 @@ Provider 与 consumer 必须由这些事实生成一致的 witness 结构和父�
 - 多父分别建立父视角成功。
 - 菱形父视角投影成功并选择声明顺序下的确定路径。
 - 泛型父 spec 的类型实参替换正确。
+- `Child<int> -> Parent<int>` 与开放泛型上下文中的 `Child<T> -> Parent<T>` 均成功。
+- `Child<T>: Parent<List<T>>` 等显式父实例映射使用正确的替换结果。
+- `Parent<DogSpec> -> Parent<AnimalSpec>` 不因 `DogSpec: AnimalSpec` 而成立。
 - 跨模块与跨包父关系恢复正确。
-- 具体 `type` 与其满足的 spec 参数重载在声明阶段诊断冲突。
-- 新增独立测试：子 spec 与父 spec 参数重载在声明阶段诊断冲突，即使当前没有可见具体实现类型。
-- 多个父 spec 参数可接纳同一实参类型时在声明阶段诊断冲突。
-- 两个无父子关系且没有共同满足类型的 spec 参数继续允许重载。
+- 现有声明重叠检查的接受与拒绝结果不因本阶段被主动扩大或放宽。
+- 当前声明检查允许 `ChildSpec` / `ParentSpec` 参数重载时，`ChildSpec` 静态实参选择当前精确候选，显式转换为 `ParentSpec` 后选择父级候选。
+- 新增父级转换导致多个候选按当前优先级同级时，调用继续报告 `AE0511`。
 - 父到子、无关 spec、依赖运行时具体类型的上下文 coercion 与显式 cast 继续失败。
 
 ### 11.2 Codegen
@@ -499,6 +504,7 @@ Provider 与 consumer 必须由这些事实生成一致的 witness 结构和父�
 - 默认 spec 值建立父视角。
 - boxed/value subject 建立父视角。
 - 泛型父 spec 视角投影。
+- `Child<int> -> Parent<int>` 端到端行为，以及泛型实例不发生协变或逆变。
 - 跨包 provider/consumer 视角投影。
 
 完成非文档实现后，必须按项目规则在 Codex 沙箱外执行全量回归 `make test`。
@@ -508,9 +514,10 @@ Provider 与 consumer 必须由这些事实生成一致的 witness 结构和父�
 仅当以下条件全部满足，object-form `spec` 向上 coercion/cast 才视为完成：
 
 1. 规范允许的 expected-type 位置和显式 cast 均可建立父视角。
-2. 直接父、传递祖先、多父、菱形和泛型场景均可用。
+2. 直接父、传递祖先、多父、菱形和泛型名义父场景均可用，包括 `Child<int> -> Parent<int>`，且不引入协变或逆变。
 3. 所有 subject storage 形态均通过同一直接父 witness 机制工作。
 4. 默认 subject 和跨包场景不存在语义降级。
 5. 生成代码不存在运行时搜索、遍历、分支、包装或分配。
 6. 投影后成员调用成本不增加。
-7. 新增测试与全量回归全部通过。
+7. 当前声明重叠检查和整体三级重载优先级没有在本阶段被修改；候选探测只为唯一选中目标记录正式 coercion sidecar。
+8. 新增测试与全量回归全部通过。
