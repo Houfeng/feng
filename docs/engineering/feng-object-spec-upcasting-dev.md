@@ -81,7 +81,40 @@ func show(value: ParentSpec) {} // ChildSpec: ParentSpec
 
 对于通过重叠检查的合法重载集合，调用解析唯一确定目标函数后，该参数位置才形成明确 expected type，并按普通参数 coercion 规则记录父级路径。
 
-### 2.4 非目标
+### 2.4 当前兼容性核查与实施边界
+
+截至本设计定稿时，仓库中没有发现依赖 `ChildSpec` / `ParentSpec` 可以组成重载的生产代码或测试：
+
+- `std`、FCTS、examples 与 smoke 中存在 object-form 父子 `spec`，但没有同名函数或方法分别以该子、父 `spec` 作为同一参数位置的重载。
+- 现有 semantic 测试要求具体 `type` 与其满足的 `spec` 参数重载在声明阶段被拒绝。
+- 现有 semantic 测试要求两个具有共同具体满足类型的 `spec` 参数重载在声明阶段被拒绝。
+- 现有 semantic 测试允许两个没有共同满足类型、彼此也无父子关系的 `spec` 参数构成重载。
+- 当前没有直接覆盖 `ChildSpec` / `ParentSpec` 参数重载的测试。
+
+当前重载重叠检查在两个参数均为 `spec` 时，主要通过搜索可见具体类型是否同时满足二者来判断重叠；因此当尚无具体实现类型时，父子 `spec` 重载可能被接受。这是重叠检查未直接纳入 `spec` 名义父级可达关系的实现缺口，不作为已交付语言能力保留。
+
+本次实施只做保持现有重载原则所必需的一致性补齐：
+
+1. 当两个 object-form `spec` 参数存在直接或传递父子关系时，直接判定参数类型重叠。
+2. 继续在声明阶段使用现有重叠诊断，不把冲突延后到调用点。
+3. 不删除或放宽现有 `type` / `spec`、共同满足类型等重叠检查。
+4. 不增加精确优先、最具体优先、父级距离排序或其他重载候选计分。
+5. 不改变两个无父子关系且没有共同满足类型的 `spec` 参数可以重载的现有行为。
+
+上述补齐属于向上 coercion 扩大可匹配关系后对既有重载不重叠约束的同步，不属于重载功能优化。
+
+### 2.5 阶段决策
+
+本次开发按以下阶段边界执行：
+
+1. 先保持重载规则一致：具体 `UserType: UserSpec` 使 `UserType` / `UserSpec` 参数重载冲突；同理，`ChildSpec: ParentSpec` 使 `ChildSpec` / `ParentSpec` 参数重载冲突。
+2. 在该一致规则下完成 object-form `spec` 上下文向上 coercion、显式 cast、witness 父级入口及全部正确性场景。
+3. 本次不调整重载声明合法性、候选优先级或调用点消歧规则，也不为可能的后续放宽预埋分支或特判。
+4. Spec 向上 coercion 完成交付后，再由人工单独决定是否启动重载规则重构。
+
+未来若讨论允许上述重叠重载，必须作为独立设计统一评估 `Type` / `Spec` 与 `ChildSpec` / `ParentSpec`，并同时覆盖顶层函数、成员方法、静态方法、构造函数、泛型候选、函数值和跨包调用。本文不选择该未来方案，也不承诺实施。
+
+### 2.6 非目标
 
 本次不实现或改变：
 
@@ -93,6 +126,8 @@ func show(value: ParentSpec) {} // ChildSpec: ParentSpec
 - intersection-form 到单个 object-form `spec` 的投影。
 - callable-form `spec` 的转换。
 - object-form `spec` 值布局、成员调用约定或引用身份比较语义。
+- 允许当前被重叠检查拒绝的重载集合。
+- 重载候选优先级、计分、父级距离比较或调用点消歧策略。
 
 ## 3. 已确定的 Witness 方案
 
@@ -414,7 +449,7 @@ Provider 与 consumer 必须由这些事实生成一致的 witness 结构和父�
 文档 Review 通过后，按以下顺序实施：
 
 1. Semantic：在 expected-type 位置与显式 cast 中接受合法的 object-form 子 `spec` 到祖先 `spec` 视角投影，并记录确定的直接父路径。
-2. 重载检查：把子 `spec` 到父 `spec` 的名义可达性纳入声明阶段重叠检查，保持现有“重叠即冲突”规则。
+2. 重载一致性：仅把子 `spec` 到父 `spec` 的名义可达性纳入现有声明阶段重叠检查，使其与既有 `type` / `spec` 冲突规则一致；不调整候选解析与优先级。
 3. Codegen 声明：在 witness 结构中追加具名直接父字段及所需前向声明。
 4. Witness 生成：按同一主体实现键递归生成并初始化直接父 witness 闭包。
 5. Codegen 表达式：将上下文 coercion 与显式 cast 统一 lower 为保留 subject 的固定父字段读取链。
@@ -423,6 +458,8 @@ Provider 与 consumer 必须由这些事实生成一致的 witness 结构和父�
 8. 测试：新增 semantic、codegen 与 FCTS 覆盖，最后执行全量回归 `make test`。
 
 不得通过只放宽类型匹配或 cast 校验、只支持单父单层、只处理普通对象 subject，或在失败时改用默认 witness 的方式交付不完整实现。
+
+本次完成后停止在 spec 向上 coercion 的交付边界；未经后续人工决策，不继续修改重载合法性或候选解析策略。
 
 ## 11. 测试范围
 
@@ -435,8 +472,9 @@ Provider 与 consumer 必须由这些事实生成一致的 witness 结构和父�
 - 泛型父 spec 的类型实参替换正确。
 - 跨模块与跨包父关系恢复正确。
 - 具体 `type` 与其满足的 spec 参数重载在声明阶段诊断冲突。
-- 子 spec 与父 spec 参数重载在声明阶段诊断冲突，即使当前没有可见具体实现类型。
+- 新增独立测试：子 spec 与父 spec 参数重载在声明阶段诊断冲突，即使当前没有可见具体实现类型。
 - 多个父 spec 参数可接纳同一实参类型时在声明阶段诊断冲突。
+- 两个无父子关系且没有共同满足类型的 spec 参数继续允许重载。
 - 父到子、无关 spec、依赖运行时具体类型的上下文 coercion 与显式 cast 继续失败。
 
 ### 11.2 Codegen
