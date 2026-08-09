@@ -29987,6 +29987,46 @@ static bool mixin_variadic_parameters_conflict(
     return true;
 }
 
+/* Compare two mixable callable surfaces after independently dropping a
+ * leading parameter prefix.  Offset zero preserves the complete static
+ * surface; offset one represents the ordinary instance-wrapper projection. */
+static bool mixin_callable_surfaces_conflict(
+    const ResolveContext *context,
+    const FengCallableSignature *left,
+    size_t left_param_offset,
+    const FengCallableSignature *right,
+    size_t right_param_offset) {
+    FengCallableSignature left_surface;
+    FengCallableSignature right_surface;
+
+    if (left == NULL || right == NULL ||
+        !slice_equals(left->name, right->name) ||
+        left->type_param_count != right->type_param_count ||
+        left_param_offset > left->param_count ||
+        right_param_offset > right->param_count) {
+        return false;
+    }
+    left_surface = *left;
+    right_surface = *right;
+    left_surface.param_count -= left_param_offset;
+    right_surface.param_count -= right_param_offset;
+    left_surface.params = left_surface.param_count > 0U
+        ? left->params + left_param_offset
+        : NULL;
+    right_surface.params = right_surface.param_count > 0U
+        ? right->params + right_param_offset
+        : NULL;
+
+    return mixin_callable_parameters_equal(
+               context, &left_surface, &right_surface) ||
+           ((sig_is_variadic(&left_surface) ||
+             sig_is_variadic(&right_surface)) &&
+            mixin_variadic_parameters_conflict(
+                context, &left_surface, &right_surface)) ||
+           signatures_potentially_overlap(
+               context, &left_surface, &right_surface);
+}
+
 /* Apply target-explicit priority to one incoming static wrapper candidate. */
 static bool target_explicit_member_conflicts_with_mixin_static_wrapper(
     const ResolveContext *context,
@@ -30013,22 +30053,21 @@ static bool target_explicit_member_conflicts_with_mixin_static_wrapper(
             return true;
         }
         if (member->kind == FENG_TYPE_MEMBER_METHOD &&
-            slice_equals(member->as.callable.name,
-                         candidate->as.callable.name) &&
-            member->as.callable.type_param_count ==
-                candidate->as.callable.type_param_count &&
-            (mixin_callable_parameters_equal(context,
-                                             &member->as.callable,
-                                             &candidate->as.callable) ||
-             ((sig_is_variadic(&member->as.callable) ||
-               sig_is_variadic(&candidate->as.callable)) &&
-              mixin_variadic_parameters_conflict(
+            (mixin_callable_surfaces_conflict(
+                 context,
+                 &member->as.callable,
+                 0U,
+                 &candidate->as.callable,
+                 0U) ||
+             (member->is_mixable && candidate->is_mixable &&
+              member->as.callable.param_count > 0U &&
+              candidate->as.callable.param_count > 0U &&
+              mixin_callable_surfaces_conflict(
                   context,
                   &member->as.callable,
-                  &candidate->as.callable)) ||
-             signatures_potentially_overlap(context,
-                                             &member->as.callable,
-                                             &candidate->as.callable))) {
+                  1U,
+                  &candidate->as.callable,
+                  1U)))) {
             return true;
         }
     }

@@ -83,6 +83,119 @@ type ImportedFitMixedView: LibWidget {
   ...: LibFitView;
 }
 
+spec ProjectedButtonWidget: LibWidget {
+}
+
+spec ProjectedIconWidget: ProjectedButtonWidget {
+}
+
+type ProjectedButtonMixedView: ProjectedButtonWidget {
+  ...: LibView;
+
+  func ProjectedButtonMixedView() {
+    self.initialized = 0;
+    self.constructorBound = 0;
+    self.lateBound = 0;
+  }
+
+  @mixable
+  open static func draw(target: ProjectedButtonWidget,
+                        area: int): int {
+    return LibView.draw(target, area) + 10;
+  }
+
+  @mixable
+  open static func log(target: ProjectedButtonWidget,
+                       args: string...): void {
+    LibView.log(target, ...args);
+    LibView.loggedCount += 10;
+  }
+}
+
+type ProjectedIconMixedView: ProjectedIconWidget {
+  ...: ProjectedButtonMixedView;
+
+  func ProjectedIconMixedView() {
+    self.initialized = 0;
+    self.constructorBound = 0;
+    self.lateBound = 0;
+  }
+
+  @mixable
+  open static func draw(target: ProjectedIconWidget,
+                        area: int): int {
+    return ProjectedButtonMixedView.draw(target, area) + 100;
+  }
+}
+
+spec ProjectedGenericWidget: LibGenericMethodWidget {
+}
+
+type ProjectedGenericMixedView: ProjectedGenericWidget {
+  ...: LibGenericMethodView;
+
+  @mixable
+  open static func identity<T>(target: ProjectedGenericWidget,
+                               value: T): T {
+    return LibGenericMethodView.identity<T>(target, value);
+  }
+}
+
+spec ProjectionMarker {
+}
+
+spec ProjectionCombinedMarker: ProjectionMarker {
+}
+
+type ProjectionLeft: ProjectionMarker {
+  @mixable
+  open static func pick(target: ProjectionMarker,
+                        value: int): int {
+    return value + 1;
+  }
+}
+
+type ProjectionRight: ProjectionMarker {
+  @mixable
+  open static func pick(target: ProjectionMarker,
+                        value: int): int {
+    return value + 2;
+  }
+}
+
+type ProjectionCombined: ProjectionCombinedMarker {
+  ...: ProjectionLeft;
+  ...: ProjectionRight;
+
+  @mixable
+  open static func pick(target: ProjectionCombinedMarker,
+                        value: int): int {
+    return ProjectionLeft.pick(target, value) +
+           ProjectionRight.pick(target, value);
+  }
+}
+
+type ProjectionIntSource: ProjectionMarker {
+  @mixable
+  open static func select(target: ProjectionMarker,
+                          value: int): int {
+    return value + 1;
+  }
+}
+
+type ProjectionStringSource: ProjectionMarker {
+  @mixable
+  open static func select(target: ProjectionMarker,
+                          value: string): string {
+    return value + "!";
+  }
+}
+
+type ProjectionOverloaded: ProjectionMarker {
+  ...: ProjectionIntSource;
+  ...: ProjectionStringSource;
+}
+
 open type GenericMixinSource<T> {
   open var value: T;
 }
@@ -188,6 +301,42 @@ open func test_mixin() {
              "multi-level mixable wrapper chain");
       assert(draw_mixed_widget(leaf, 2) == 13,
              "spec dispatch reaches generated instance wrapper");
+    });
+
+    test("instance projection composes child-spec draw layers", () {
+      let button = ProjectedButtonMixedView();
+      let icon = ProjectedIconMixedView();
+      assert(button.draw(2) == 13,
+             "child-spec target replaces the source instance projection");
+      assert(icon.draw(2) == 113,
+             "each child-spec layer explicitly composes its source");
+      assert(draw_mixed_widget(icon, 2) == 113,
+             "root spec dispatch reaches the final projected wrapper");
+    });
+
+    test("instance projection preserves variadic and generic behavior", () {
+      LibView.loggedCount = 0;
+      let icon = ProjectedIconMixedView();
+      let generic = ProjectedGenericMixedView();
+      icon.log("a", "b", "c");
+      assert(LibView.loggedCount == 13,
+             "child-spec variadic projection forwards one prepacked group");
+      assert(generic.identity<string>("generic") == "generic" &&
+             generic.identity<int>(7) == 7,
+             "child-spec generic projection preserves type parameters");
+    });
+
+    test("target projection explicitly composes multiple sources", () {
+      let combined = ProjectionCombined();
+      assert(combined.pick(2) == 7,
+             "one explicit target projection replaces both source wrappers");
+    });
+
+    test("distinct source projections remain instance overloads", () {
+      let overloaded = ProjectionOverloaded();
+      assert(overloaded.select(2) == 3 &&
+             overloaded.select("mixed") == "mixed!",
+             "different projected parameters retain both source wrappers");
     });
 
     test("mixable variadic wrapper forwards prepacked group", () {

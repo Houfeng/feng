@@ -20708,6 +20708,197 @@ static void test_mixable_static_candidate_skips_explicit_overlapping_method(void
     feng_program_free(program);
 }
 
+/* Target-explicit mixable methods replace source candidates when deleting
+ * their distinct receiver specs produces the same instance signature. */
+static void test_mixable_instance_projection_prefers_explicit_target_method(void) {
+    const char *source =
+        "module demo.mixable_instance_projection;\n"
+        "spec Widget { func draw(area: int): int; }\n"
+        "spec ButtonWidget: Widget {}\n"
+        "spec IconWidget: ButtonWidget {}\n"
+        "type View: Widget {\n"
+        "  @mixable open static func draw(target: Widget, area: int): int { return area + 1; }\n"
+        "  @mixable open static func collect(target: Widget, values: int...): int { return 1; }\n"
+        "  @mixable open static func identity<T>(target: Widget, value: T): T { return value; }\n"
+        "}\n"
+        "type Button: ButtonWidget {\n"
+        "  ...: View;\n"
+        "  @mixable open static func draw(target: ButtonWidget, area: int): int { return View.draw(target, area) + 10; }\n"
+        "  @mixable open static func collect(target: ButtonWidget, values: int...): int { return View.collect(target, ...values) + 10; }\n"
+        "  @mixable open static func identity<T>(target: ButtonWidget, value: T): T { return View.identity<T>(target, value); }\n"
+        "}\n"
+        "type Icon: IconWidget {\n"
+        "  ...: Button;\n"
+        "  @mixable open static func draw(target: IconWidget, area: int): int { return Button.draw(target, area) + 100; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "mixable_instance_projection.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *button;
+    const FengDecl *icon;
+    size_t button_draw_static_count = 0U;
+    size_t button_draw_instance_count = 0U;
+    size_t button_collect_static_count = 0U;
+    size_t button_collect_instance_count = 0U;
+    size_t button_identity_static_count = 0U;
+    size_t button_identity_instance_count = 0U;
+    size_t icon_draw_static_count = 0U;
+    size_t icon_draw_instance_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    button = find_type_decl_by_name(analysis, "Button");
+    icon = find_type_decl_by_name(analysis, "Icon");
+    ASSERT(button != NULL && icon != NULL);
+
+    for (size_t index = 0U;
+         index < button->as.type_decl.member_count;
+         ++index) {
+        const FengTypeMember *member = button->as.type_decl.members[index];
+        const FengSlice name = member != NULL &&
+                member->kind == FENG_TYPE_MEMBER_METHOD
+            ? member->as.callable.name
+            : (FengSlice){0};
+
+        if (name.length == 4U && memcmp(name.data, "draw", 4U) == 0) {
+            if (member->is_static) {
+                ++button_draw_static_count;
+                ASSERT(!member->is_mixin_static_wrapper);
+            } else {
+                ++button_draw_instance_count;
+                ASSERT(member->is_mixin_instance_wrapper);
+            }
+        } else if (name.length == 7U &&
+                   memcmp(name.data, "collect", 7U) == 0) {
+            if (member->is_static) {
+                ++button_collect_static_count;
+                ASSERT(!member->is_mixin_static_wrapper);
+            } else {
+                ++button_collect_instance_count;
+                ASSERT(member->is_mixin_instance_wrapper);
+            }
+        } else if (name.length == 8U &&
+                   memcmp(name.data, "identity", 8U) == 0) {
+            if (member->is_static) {
+                ++button_identity_static_count;
+                ASSERT(!member->is_mixin_static_wrapper);
+            } else {
+                ++button_identity_instance_count;
+                ASSERT(member->is_mixin_instance_wrapper);
+            }
+        }
+    }
+    ASSERT(button_draw_static_count == 1U);
+    ASSERT(button_draw_instance_count == 1U);
+    ASSERT(button_collect_static_count == 1U);
+    ASSERT(button_collect_instance_count == 1U);
+    ASSERT(button_identity_static_count == 1U);
+    ASSERT(button_identity_instance_count == 1U);
+
+    for (size_t index = 0U;
+         index < icon->as.type_decl.member_count;
+         ++index) {
+        const FengTypeMember *member = icon->as.type_decl.members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->as.callable.name.length == 4U &&
+            memcmp(member->as.callable.name.data, "draw", 4U) == 0) {
+            if (member->is_static) {
+                ++icon_draw_static_count;
+                ASSERT(!member->is_mixin_static_wrapper);
+            } else {
+                ++icon_draw_instance_count;
+                ASSERT(member->is_mixin_instance_wrapper);
+            }
+        }
+    }
+    ASSERT(icon_draw_static_count == 1U);
+    ASSERT(icon_draw_instance_count == 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Multiple sources retain no implicit priority: equal instance projections
+ * conflict, while distinct projections remain ordinary instance overloads. */
+static void test_mixable_multiple_source_projection_boundaries(void) {
+    const char *conflicting =
+        "module demo.mixable_multi_projection_conflict;\n"
+        "spec Marker {}\n"
+        "type Left: Marker { @mixable open static func pick(target: Marker, value: int): int { return value + 1; } }\n"
+        "type Right: Marker { @mixable open static func pick(target: Marker, value: int): int { return value + 2; } }\n"
+        "type Combined: Marker { ...: Left; ...: Right; }\n";
+    const char *overloaded =
+        "module demo.mixable_multi_projection_overload;\n"
+        "spec Marker {}\n"
+        "type Left: Marker { @mixable open static func pick(target: Marker, value: int): int { return value + 1; } }\n"
+        "type Right: Marker { @mixable open static func pick(target: Marker, value: string): string { return value; } }\n"
+        "type Combined: Marker { ...: Left; ...: Right; }\n";
+    FengProgram *program = parse_program_or_die(
+        "mixable_multi_projection_conflict.ff", conflicting);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool found_instance_conflict = false;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    for (size_t index = 0U; index < error_count; ++index) {
+        if (strcmp(errors[index].code, "AE0508") == 0) {
+            found_instance_conflict = true;
+        }
+    }
+    ASSERT(found_instance_conflict);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+
+    program = parse_program_or_die(
+        "mixable_multi_projection_overload.ff", overloaded);
+    programs[0] = program;
+    analysis = NULL;
+    errors = NULL;
+    error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    {
+        const FengDecl *combined = find_type_decl_by_name(analysis, "Combined");
+        size_t static_pick_count = 0U;
+        size_t instance_pick_count = 0U;
+
+        ASSERT(combined != NULL);
+        for (size_t index = 0U;
+             index < combined->as.type_decl.member_count;
+             ++index) {
+            const FengTypeMember *member =
+                combined->as.type_decl.members[index];
+
+            if (member == NULL ||
+                member->kind != FENG_TYPE_MEMBER_METHOD ||
+                member->as.callable.name.length != 4U ||
+                memcmp(member->as.callable.name.data, "pick", 4U) != 0) {
+                continue;
+            }
+            if (member->is_static) {
+                ++static_pick_count;
+            } else {
+                ++instance_pick_count;
+            }
+        }
+        ASSERT(static_pick_count == 2U);
+        ASSERT(instance_pick_count == 2U);
+    }
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* Static propagation and instance derivation remain complete across layers. */
 static void test_mixable_generates_static_and_instance_wrapper_chain(void) {
     const char *source =
@@ -21195,6 +21386,8 @@ int main(void) {
     test_member_mix_source_diagnostics_are_stable();
     test_mixable_wrapper_conflict_preserves_source_relation();
     test_mixable_static_candidate_skips_explicit_overlapping_method();
+    test_mixable_instance_projection_prefers_explicit_target_method();
+    test_mixable_multiple_source_projection_boundaries();
     test_mixable_generates_static_and_instance_wrapper_chain();
     test_mixable_fit_generates_own_and_target_instance_wrappers();
     test_mixable_accepts_transitive_parent_spec_relation();

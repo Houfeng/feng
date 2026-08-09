@@ -1,6 +1,6 @@
 # Feng mixin `@mixable` 目标显式优先优化开发设计
 
-> **状态**：方案待人工 Review，未实施。
+> **状态**：已实施并完成全量回归。
 >
 > **日期**：2026-08-09。
 >
@@ -294,16 +294,16 @@ Compiler tests 负责检查展开后的成员数量、来源关系、冲突诊�
 
 ## 8. 实施步骤与 TODO
 
-- [ ] 人工 Review 并确认本文方案。
-- [ ] 更新 [Feng 语言函数规范](../specifications/feng-function.md)，收敛实例投影和目标
+- [x] 人工 Review 并确认本文方案。
+- [x] 更新 [Feng 语言函数规范](../specifications/feng-function.md)，收敛实例投影和目标
   显式优先的权威语义。
-- [ ] 更新
+- [x] 更新
   [泛型重载决议优化开发设计](./feng-generic-overload-resolution-optimize-dev.md)，引用新的
   `@mixable` 投影规则，删除与本文不一致的候选跳过描述。
-- [ ] 在 Semantic 来源静态 wrapper 候选筛选中增加实例投影冲突检查。
-- [ ] 经人工批准后增加 compiler tests 与 FCTS，不修改未获批准的既有测试。
-- [ ] 运行专项测试。
-- [ ] 在沙箱外运行全量回归 `make test`。
+- [x] 在 Semantic 来源静态 wrapper 候选筛选中增加实例投影冲突检查。
+- [x] 经人工批准后增加 compiler tests 与 FCTS，不修改未获批准的既有测试。
+- [x] 运行专项测试。
+- [x] 在沙箱外运行全量回归 `make test`。
 
 ## 9. 验收标准
 
