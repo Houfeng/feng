@@ -111,6 +111,9 @@ open type WidgetStyle {
   var verticalAlign: WidgetAlign;
 }
 
+/**
+ * 组件的最终布局区域
+ */
 @value
 open type WidgetFrame {
   /** 左上角列坐标（0-based） */

@@ -13,6 +13,16 @@ The extension recognizes:
 - `.fb`: Feng Bundles.
 - `.ft`: Feng symbol tables.
 
+## Documentation Comments
+
+When you type `/**` in a Feng source file, the extension automatically inserts a documentation-comment closing delimiter with a leading space. Pressing Enter then expands and aligns the standard multiline documentation-comment structure:
+
+```feng
+/**
+ *
+ */
+```
+
 ## CLI Path
 
 By default, the extension launches `feng` from `PATH`. If the command is not in `PATH`, specify it in the VS Code settings:
