@@ -8103,6 +8103,57 @@ static bool find_decl_token_hit(const char *source_text,
     return false;
 }
 
+/* Resolves the owner or item segment of a qualified enum-item type label. */
+static bool resolve_enum_item_type_ref_at_offset(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengTypeRef *type_ref,
+    size_t offset,
+    FengLspResolvedTarget *target) {
+    const FengCliLoadedSource *source;
+    FengTypeRef owner_ref;
+    const FengDecl *owner_decl;
+    const FengEnumItem *item;
+    FengSlice owner_name;
+    FengSlice item_name;
+
+    if (session == NULL || program == NULL || type_ref == NULL || target == NULL ||
+        type_ref->kind != FENG_TYPE_REF_NAMED ||
+        type_ref->as.named.segment_count < 2U) {
+        return false;
+    }
+    owner_ref = *type_ref;
+    --owner_ref.as.named.segment_count;
+    owner_ref.as.named.type_args = NULL;
+    owner_ref.as.named.type_arg_count = 0U;
+    owner_decl = resolve_named_type_ref(session, program, &owner_ref);
+    if (owner_decl == NULL || owner_decl->kind != FENG_DECL_ENUM) {
+        return false;
+    }
+    source = find_source(session, program->path);
+    if (source == NULL) {
+        return false;
+    }
+    owner_name = owner_ref.as.named.segments[owner_ref.as.named.segment_count - 1U];
+    item_name = type_ref->as.named.segments[type_ref->as.named.segment_count - 1U];
+    if (offset_in_slice_from_source(source->source, item_name, offset)) {
+        item = find_enum_item_by_name(owner_decl, item_name);
+        if (item == NULL) {
+            return false;
+        }
+        target->kind = FENG_LSP_RESOLVED_ENUM_ITEM;
+        target->decl = owner_decl;
+        target->enum_item = item;
+        return true;
+    }
+    if (offset_in_slice_from_source(source->source, owner_name, offset)) {
+        target->kind = FENG_LSP_RESOLVED_DECL;
+        target->decl = owner_decl;
+        return true;
+    }
+    return false;
+}
+
 /* Recursively check whether offset falls within type_ref (including generic
  * type arguments, pointer inner, and array inner).  When a hit is found the
  * named type is resolved and target is populated.
@@ -8125,6 +8176,13 @@ static bool resolve_type_ref_at_offset(const FengLspAnalysisSession *session,
     }
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
+            if (resolve_enum_item_type_ref_at_offset(session,
+                                                     program,
+                                                     type_ref,
+                                                     offset,
+                                                     target)) {
+                return true;
+            }
             if (offset >= type_ref->token.offset && offset <= named_type_ref_end(type_ref)) {
                 const FengDecl *decl = resolve_named_type_ref(session, program, type_ref);
                 if (decl != NULL) {
@@ -8335,6 +8393,46 @@ static bool find_type_ref_in_member(const FengDecl *owner_decl,
                                         owner_type_param_count);
 }
 
+/* Resolves type references carried by one match label at the cursor offset. */
+static bool resolve_match_label_type_ref_at_offset(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengMatchLabel *label,
+    size_t offset,
+    FengLspResolvedTarget *target,
+    const FengDecl *owner_decl,
+    const FengTypeParam *type_params,
+    size_t type_param_count) {
+    size_t index;
+
+    if (label == NULL || label->kind != FENG_MATCH_LABEL_TYPE) {
+        return false;
+    }
+    if (resolve_type_ref_at_offset(session,
+                                   program,
+                                   label->type,
+                                   offset,
+                                   target,
+                                   owner_decl,
+                                   type_params,
+                                   type_param_count)) {
+        return true;
+    }
+    for (index = 0U; index < label->type_chain_count; ++index) {
+        if (resolve_type_ref_at_offset(session,
+                                       program,
+                                       label->type_chain[index],
+                                       offset,
+                                       target,
+                                       owner_decl,
+                                       type_params,
+                                       type_param_count)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Walk an expression tree looking for TypeRefs inside generic targets
  * (e.g. T in `Span<T>`), explicit call type args (e.g. T in `func<T>(...)`),
  * cast types, and array-new element types.  Recurses into sub-expressions. */
@@ -8515,51 +8613,26 @@ static bool find_type_ref_in_expr(const FengExpr *expr,
             }
             for (index = 0U; index < expr->as.match_op.label_count; ++index) {
                 const FengMatchLabel *label = &expr->as.match_op.labels[index];
-                size_t type_index;
 
-                if (label->kind != FENG_MATCH_LABEL_TYPE) {
-                    continue;
-                }
-                if (label->type_chain_count == 0U) {
-                    if (resolve_type_ref_at_offset(session,
-                                                   program,
-                                                   label->type,
-                                                   offset,
-                                                   target,
-                                                   owner_decl,
-                                                   member_type_params,
-                                                   member_type_param_count) ||
-                        resolve_type_ref_at_offset(session,
-                                                   program,
-                                                   label->type,
-                                                   offset,
-                                                   target,
-                                                   owner_decl,
-                                                   owner_type_params,
-                                                   owner_type_param_count)) {
-                        return true;
-                    }
-                    continue;
-                }
-                for (type_index = 0U; type_index < label->type_chain_count; ++type_index) {
-                    if (resolve_type_ref_at_offset(session,
-                                                   program,
-                                                   label->type_chain[type_index],
-                                                   offset,
-                                                   target,
-                                                   owner_decl,
-                                                   member_type_params,
-                                                   member_type_param_count) ||
-                        resolve_type_ref_at_offset(session,
-                                                   program,
-                                                   label->type_chain[type_index],
-                                                   offset,
-                                                   target,
-                                                   owner_decl,
-                                                   owner_type_params,
-                                                   owner_type_param_count)) {
-                        return true;
-                    }
+                if (resolve_match_label_type_ref_at_offset(
+                        session,
+                        program,
+                        label,
+                        offset,
+                        target,
+                        owner_decl,
+                        member_type_params,
+                        member_type_param_count) ||
+                    resolve_match_label_type_ref_at_offset(
+                        session,
+                        program,
+                        label,
+                        offset,
+                        target,
+                        owner_decl,
+                        owner_type_params,
+                        owner_type_param_count)) {
+                    return true;
                 }
             }
             return false;
@@ -8628,6 +8701,33 @@ static bool find_type_ref_in_expr(const FengExpr *expr,
                 return true;
             }
             for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                const FengMatchBranch *branch = &expr->as.match_expr.branches[index];
+                size_t label_index;
+
+                for (label_index = 0U; label_index < branch->label_count; ++label_index) {
+                    const FengMatchLabel *label = &branch->labels[label_index];
+
+                    if (resolve_match_label_type_ref_at_offset(
+                            session,
+                            program,
+                            label,
+                            offset,
+                            target,
+                            owner_decl,
+                            member_type_params,
+                            member_type_param_count) ||
+                        resolve_match_label_type_ref_at_offset(
+                            session,
+                            program,
+                            label,
+                            offset,
+                            target,
+                            owner_decl,
+                            owner_type_params,
+                            owner_type_param_count)) {
+                        return true;
+                    }
+                }
                 if (find_type_ref_in_block_exprs(expr->as.match_expr.branches[index].body,
                                                  program, session, offset, target,
                                                  owner_decl,
@@ -8765,6 +8865,34 @@ static bool find_type_ref_in_block_exprs(const FengBlock *block,
                     return true;
                 }
                 for (branch_index = 0U; branch_index < stmt->as.match_stmt.branch_count; ++branch_index) {
+                    const FengMatchBranch *branch =
+                        &stmt->as.match_stmt.branches[branch_index];
+                    size_t label_index;
+
+                    for (label_index = 0U; label_index < branch->label_count; ++label_index) {
+                        const FengMatchLabel *label = &branch->labels[label_index];
+
+                        if (resolve_match_label_type_ref_at_offset(
+                                session,
+                                program,
+                                label,
+                                offset,
+                                target,
+                                owner_decl,
+                                member_type_params,
+                                member_type_param_count) ||
+                            resolve_match_label_type_ref_at_offset(
+                                session,
+                                program,
+                                label,
+                                offset,
+                                target,
+                                owner_decl,
+                                owner_type_params,
+                                owner_type_param_count)) {
+                            return true;
+                        }
+                    }
                     if (find_type_ref_in_block_exprs(stmt->as.match_stmt.branches[branch_index].body,
                                                      program, session, offset, target, owner_decl,
                                                      member_type_params, member_type_param_count,
@@ -12295,7 +12423,9 @@ static bool resolved_target_supports_references(const FengLspResolvedTarget *tar
         case FENG_LSP_RESOLVED_MEMBER:
             return target->member != NULL;
         case FENG_LSP_RESOLVED_ENUM_ITEM:
-            return false;
+            return target->decl != NULL &&
+                   target->decl->kind == FENG_DECL_ENUM &&
+                   target->enum_item != NULL;
         case FENG_LSP_RESOLVED_PARAM:
             return target->parameter != NULL;
         case FENG_LSP_RESOLVED_BINDING:
@@ -12315,10 +12445,23 @@ static const FengProgram *find_decl_owner_program_in_session(
     const FengLspAnalysisSession *session,
     const FengDecl *decl);
 
-static bool resolved_target_can_rename(const FengLspAnalysisSession *session,
-                                       const FengLspResolvedTarget *target) {
+/* Returns whether a declaration is backed by writable workspace source. */
+static bool resolved_decl_has_writable_source(const FengLspAnalysisSession *session,
+                                              const FengDecl *decl) {
     const FengProgram *owner_program = NULL;
 
+    if (session == NULL || decl == NULL) {
+        return false;
+    }
+    (void)find_decl_module(session, decl, &owner_program);
+    if (owner_program == NULL && session->analysis == NULL) {
+        owner_program = find_decl_owner_program_in_session(session, decl);
+    }
+    return owner_program != NULL && find_source(session, owner_program->path) != NULL;
+}
+
+static bool resolved_target_can_rename(const FengLspAnalysisSession *session,
+                                       const FengLspResolvedTarget *target) {
     if (!resolved_target_supports_references(target)) {
         return false;
     }
@@ -12330,14 +12473,11 @@ static bool resolved_target_can_rename(const FengLspAnalysisSession *session,
             if (target->decl->kind != FENG_DECL_GLOBAL_BINDING &&
                 target->decl->kind != FENG_DECL_TYPE &&
                 target->decl->kind != FENG_DECL_SPEC &&
+                target->decl->kind != FENG_DECL_ENUM &&
                 target->decl->kind != FENG_DECL_FUNCTION) {
                 return false;
             }
-            (void)find_decl_module(session, target->decl, &owner_program);
-            if (owner_program == NULL && session != NULL && session->analysis == NULL) {
-                owner_program = find_decl_owner_program_in_session(session, target->decl);
-            }
-            return owner_program != NULL && find_source(session, owner_program->path) != NULL;
+            return resolved_decl_has_writable_source(session, target->decl);
         case FENG_LSP_RESOLVED_MEMBER:
             if (target->member == NULL) {
                 return false;
@@ -12346,13 +12486,12 @@ static bool resolved_target_can_rename(const FengLspAnalysisSession *session,
                 target->member->kind != FENG_TYPE_MEMBER_METHOD) {
                 return false;
             }
-            (void)find_decl_module(session, target->decl, &owner_program);
-            if (owner_program == NULL && session != NULL && session->analysis == NULL) {
-                owner_program = find_decl_owner_program_in_session(session, target->decl);
-            }
-            return owner_program != NULL && find_source(session, owner_program->path) != NULL;
+            return resolved_decl_has_writable_source(session, target->decl);
         case FENG_LSP_RESOLVED_ENUM_ITEM:
-            return false;
+            return target->decl != NULL &&
+                   target->decl->kind == FENG_DECL_ENUM &&
+                   target->enum_item != NULL &&
+                   resolved_decl_has_writable_source(session, target->decl);
         case FENG_LSP_RESOLVED_PARAM:
         case FENG_LSP_RESOLVED_BINDING:
             return true;
@@ -13567,13 +13706,17 @@ static bool collect_references_in_match_type_label(
     if (type_ref != NULL && type_ref->kind == FENG_TYPE_REF_NAMED &&
         type_ref->as.named.segment_count > 1U) {
         FengTypeRef owner_ref = *type_ref;
+        const FengDecl *owner_decl;
+        const FengEnumItem *enum_item;
+        FengSlice item_name;
         FengLspResolvedTarget candidate = {0};
 
         --owner_ref.as.named.segment_count;
         owner_ref.as.named.type_args = NULL;
         owner_ref.as.named.type_arg_count = 0U;
+        owner_decl = resolve_named_type_ref(session, program, &owner_ref);
         candidate.kind = FENG_LSP_RESOLVED_DECL;
-        candidate.decl = resolve_named_type_ref(session, program, &owner_ref);
+        candidate.decl = owner_decl;
         if (candidate.decl != NULL &&
             !add_reference_if_match(
                 references,
@@ -13582,6 +13725,22 @@ static bool collect_references_in_match_type_label(
                 target,
                 &candidate)) {
             return false;
+        }
+        if (owner_decl != NULL && owner_decl->kind == FENG_DECL_ENUM) {
+            item_name = type_ref->as.named.segments[type_ref->as.named.segment_count - 1U];
+            enum_item = find_enum_item_by_name(owner_decl, item_name);
+            if (enum_item != NULL) {
+                candidate.kind = FENG_LSP_RESOLVED_ENUM_ITEM;
+                candidate.decl = owner_decl;
+                candidate.enum_item = enum_item;
+                if (!add_reference_if_match(references,
+                                            source,
+                                            item_name,
+                                            target,
+                                            &candidate)) {
+                    return false;
+                }
+            }
         }
     }
     return true;
@@ -14088,6 +14247,18 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                                               target,
                                               references);
         case FENG_DECL_ENUM:
+            if (include_declaration && target != NULL &&
+                target->kind == FENG_LSP_RESOLVED_ENUM_ITEM &&
+                target->decl == decl) {
+                for (index = 0U; index < decl->as.enum_decl.item_count; ++index) {
+                    const FengEnumItem *item = &decl->as.enum_decl.items[index];
+
+                    if (target->enum_item == item &&
+                        !reference_list_push_slice(references, source, item->name)) {
+                        return false;
+                    }
+                }
+            }
             return true;
         case FENG_DECL_FUNCTION:
             return collect_references_in_type_params(

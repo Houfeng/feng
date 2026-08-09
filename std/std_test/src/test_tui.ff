@@ -6,6 +6,8 @@ import std.collections;
 import std.text;
 
 import std.tui;
+import std.tui.input;
+import std.tui.screen;
 
 // ─── 静态常量 ──────────────────────────────────────────────────────────────
 

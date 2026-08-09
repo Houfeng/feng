@@ -10653,8 +10653,8 @@ static void test_lsp_function_decl_site_definition_references_and_rename(void) {
     free(source_path);
 }
 
-/* Verifies type references are collected from cross-file signatures, generic
- * arguments, array construction, and match labels. */
+/* Verifies cross-file type and enum-item references and rename edits across
+ * signatures, generic arguments, array construction, and match labels. */
 static void test_lsp_type_references_cover_all_ast_positions(void) {
     static const char *kManifest =
         "[package]\n"
@@ -10717,14 +10717,28 @@ static void test_lsp_type_references_cover_all_ast_positions(void) {
     char *declaration_uri;
     char *usage_uri;
     char *escaped_declaration;
+    char *escaped_usage;
     char *initialize;
     char *did_open;
-    char *references;
+    char *did_open_usage;
+    char *type_references;
+    char *type_prepare_rename;
+    char *type_rename;
+    char *item_references;
+    char *item_prepare_rename;
+    char *item_rename;
+    char *item_use_references;
+    char *item_use_prepare_rename;
+    char *item_use_rename;
     char *shutdown;
     char *output;
-    const char *requests[3];
+    const char *requests[11];
     unsigned int declaration_line;
     unsigned int declaration_character;
+    unsigned int item_declaration_line;
+    unsigned int item_declaration_character;
+    unsigned int item_use_line;
+    unsigned int item_use_character;
     size_t index;
     char *remove_error = NULL;
 
@@ -10744,9 +10758,20 @@ static void test_lsp_type_references_cover_all_ast_positions(void) {
                         strlen("open enum "),
                         &declaration_line,
                         &declaration_character);
+    find_line_character(kDeclarationSource,
+                        "    none = 0,",
+                        strlen("    "),
+                        &item_declaration_line,
+                        &item_declaration_character);
+    find_line_character(kUsageSource,
+                        "            Style.none { 0; }",
+                        strlen("            Style."),
+                        &item_use_line,
+                        &item_use_character);
     declaration_uri = file_uri_from_path(declaration_path);
     usage_uri = file_uri_from_path(usage_path);
     escaped_declaration = json_escape_text(kDeclarationSource);
+    escaped_usage = json_escape_text(kUsageSource);
     initialize = dup_printf(
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
         "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
@@ -10756,7 +10781,13 @@ static void test_lsp_type_references_cover_all_ast_positions(void) {
         "\"version\":1,\"text\":\"%s\"}}}",
         declaration_uri,
         escaped_declaration);
-    references = dup_printf(
+    did_open_usage = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}",
+        usage_uri,
+        escaped_usage);
+    type_references = dup_printf(
         "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/references\","
         "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
         "\"position\":{\"line\":%u,\"character\":%u},"
@@ -10764,27 +10795,104 @@ static void test_lsp_type_references_cover_all_ast_positions(void) {
         declaration_uri,
         declaration_line,
         declaration_character);
+    type_prepare_rename = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/prepareRename\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u}}}",
+        declaration_uri,
+        declaration_line,
+        declaration_character);
+    type_rename = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/rename\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"newName\":\"TextStyle\"}}",
+        declaration_uri,
+        declaration_line,
+        declaration_character);
+    item_references = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/references\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"context\":{\"includeDeclaration\":true}}}",
+        declaration_uri,
+        item_declaration_line,
+        item_declaration_character);
+    item_prepare_rename = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/prepareRename\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u}}}",
+        declaration_uri,
+        item_declaration_line,
+        item_declaration_character);
+    item_rename = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"textDocument/rename\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"newName\":\"plain\"}}",
+        declaration_uri,
+        item_declaration_line,
+        item_declaration_character);
+    item_use_references = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"textDocument/references\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"context\":{\"includeDeclaration\":true}}}",
+        usage_uri,
+        item_use_line,
+        item_use_character);
+    item_use_prepare_rename = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"textDocument/prepareRename\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u}}}",
+        usage_uri,
+        item_use_line,
+        item_use_character);
+    item_use_rename = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"textDocument/rename\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"newName\":\"empty\"}}",
+        usage_uri,
+        item_use_line,
+        item_use_character);
     shutdown = dup_printf(
-        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
-    requests[0] = references;
-    requests[1] = shutdown;
-    requests[2] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+        "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"shutdown\",\"params\":null}");
+    requests[0] = type_references;
+    requests[1] = type_prepare_rename;
+    requests[2] = type_rename;
+    requests[3] = item_references;
+    requests[4] = item_prepare_rename;
+    requests[5] = item_rename;
+    requests[6] = item_use_references;
+    requests[7] = item_use_prepare_rename;
+    requests[8] = item_use_rename;
+    requests[9] = shutdown;
+    requests[10] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
 
     output = run_lsp_server_capture_after_position_ready(initialize,
                                                          did_open,
-                                                         NULL,
+                                                         did_open_usage,
                                                          "textDocument/references",
                                                          declaration_uri,
                                                          declaration_line,
                                                          declaration_character,
                                                          usage_uri,
                                                          requests,
-                                                         3U,
+                                                         11U,
                                                          NULL);
 
     ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
-    ASSERT(count_occurrences(output, declaration_uri) == 1);
-    ASSERT(count_occurrences(output, usage_uri) == 12);
+    ASSERT(strstr(output, "\"id\":3,\"result\":{\"range\":") != NULL);
+    ASSERT(count_occurrences(output, "\"placeholder\":\"Style\"") == 1);
+    ASSERT(count_occurrences(output, "\"newText\":\"TextStyle\"") == 13);
+    ASSERT(strstr(output, "\"id\":5,\"result\":[{\"uri\":") != NULL);
+    ASSERT(strstr(output, "\"id\":6,\"result\":{\"range\":") != NULL);
+    ASSERT(count_occurrences(output, "\"newText\":\"plain\"") == 2);
+    ASSERT(strstr(output, "\"id\":8,\"result\":[{\"uri\":") != NULL);
+    ASSERT(strstr(output, "\"id\":10,\"result\":{\"range\":") != NULL);
+    ASSERT(count_occurrences(output, "\"placeholder\":\"none\"") == 2);
+    ASSERT(count_occurrences(output, "\"newText\":\"empty\"") == 2);
     for (index = 0U; index < sizeof(kUsageNeedles) / sizeof(kUsageNeedles[0]); ++index) {
         const char *style = strstr(kUsageNeedles[index], "Style");
         unsigned int line;
@@ -10808,9 +10916,19 @@ static void test_lsp_type_references_cover_all_ast_positions(void) {
 
     free(output);
     free(shutdown);
-    free(references);
+    free(item_use_rename);
+    free(item_use_prepare_rename);
+    free(item_use_references);
+    free(item_rename);
+    free(item_prepare_rename);
+    free(item_references);
+    free(type_rename);
+    free(type_prepare_rename);
+    free(type_references);
+    free(did_open_usage);
     free(did_open);
     free(initialize);
+    free(escaped_usage);
     free(escaped_declaration);
     free(usage_uri);
     free(declaration_uri);
