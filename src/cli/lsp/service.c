@@ -12404,6 +12404,9 @@ static FengSlice call_callee_name_slice(const FengExpr *callee) {
     if (callee == NULL) {
         return (FengSlice){0};
     }
+    if (callee->kind == FENG_EXPR_GENERIC_TARGET) {
+        return call_callee_name_slice(callee->as.generic_target.target);
+    }
     if (callee->kind == FENG_EXPR_IDENTIFIER) {
         return callee->as.identifier;
     }
@@ -12947,6 +12950,40 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                                        const FengLspResolvedTarget *target,
                                        FengLspReferenceList *references);
 
+/* Collects declaration and type references carried by callable parameters. */
+static bool collect_references_in_parameters(const FengLspAnalysisSession *session,
+                                             const FengProgram *program,
+                                             const FengCliLoadedSource *source,
+                                             const FengParameter *params,
+                                             size_t param_count,
+                                             bool include_declaration,
+                                             const FengLspResolvedTarget *target,
+                                             FengLspReferenceList *references);
+
+/* Collects references from a contiguous list of match labels. */
+static bool collect_references_in_match_labels(const FengLspAnalysisSession *session,
+                                               const FengProgram *program,
+                                               const FengCliLoadedSource *source,
+                                               const FengDecl *owner_decl,
+                                               const FengTypeMember *owner_member,
+                                               const FengMatchLabel *labels,
+                                               size_t label_count,
+                                               const FengLspResolvedTarget *target,
+                                               FengLspReferenceList *references);
+
+/* Collects labels and bodies shared by statement and expression match forms. */
+static bool collect_references_in_match_branches(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengCliLoadedSource *source,
+    const FengDecl *owner_decl,
+    const FengTypeMember *owner_member,
+    const FengMatchBranch *branches,
+    size_t branch_count,
+    bool include_declaration,
+    const FengLspResolvedTarget *target,
+    FengLspReferenceList *references);
+
 static bool collect_references_in_stmt(const FengLspAnalysisSession *session,
                                        const FengProgram *program,
                                        const FengCliLoadedSource *source,
@@ -13060,18 +13097,43 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
             }
             return true;
         case FENG_EXPR_GENERIC_TARGET:
-            return collect_references_in_expr(session,
+            if (!collect_references_in_expr(session,
+                                            program,
+                                            source,
+                                            owner_decl,
+                                            owner_member,
+                                            expr->as.generic_target.target,
+                                            target,
+                                            references)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.generic_target.type_arg_count; ++index) {
+                if (!collect_references_in_type_ref(
+                        session,
+                        program,
+                        source,
+                        expr->as.generic_target.type_args[index],
+                        target,
+                        references)) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_EXPR_ARRAY_NEW:
+            return collect_references_in_type_ref(session,
+                                                  program,
+                                                  source,
+                                                  expr->as.array_new.element_type,
+                                                  target,
+                                                  references) &&
+                   collect_references_in_expr(session,
                                               program,
                                               source,
                                               owner_decl,
                                               owner_member,
-                                              expr->as.generic_target.target,
+                                              expr->as.array_new.size,
                                               target,
                                               references);
-        case FENG_EXPR_ARRAY_NEW:
-            return collect_references_in_expr(session, program, source, owner_decl,
-                                              owner_member, expr->as.array_new.size,
-                                              target, references);
         case FENG_EXPR_OBJECT_LITERAL:
         {
             FengLspResolvedTarget owner_target = {0};
@@ -13155,6 +13217,17 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                                                    references)) {
                 return false;
             }
+            for (index = 0U; index < expr->as.call.explicit_type_arg_count; ++index) {
+                if (!collect_references_in_type_ref(
+                        session,
+                        program,
+                        source,
+                        expr->as.call.explicit_type_args[index],
+                        target,
+                        references)) {
+                    return false;
+                }
+            }
             for (index = 0U; index < expr->as.call.arg_count; ++index) {
                 if (!collect_references_in_expr(session,
                                                 program,
@@ -13213,6 +13286,16 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                                               target,
                                               references);
         case FENG_EXPR_LAMBDA:
+            if (!collect_references_in_parameters(session,
+                                                  program,
+                                                  source,
+                                                  expr->as.lambda.params,
+                                                  expr->as.lambda.param_count,
+                                                  false,
+                                                  target,
+                                                  references)) {
+                return false;
+            }
             if (expr->as.lambda.is_block_body) {
                 return collect_references_in_block(session,
                                                    program,
@@ -13285,20 +13368,18 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                                             references)) {
                 return false;
             }
-            for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
-                if (!collect_references_in_block(session,
-                                                 program,
-                                                 source,
-                                                 owner_decl,
-                                                 owner_member,
-                                                 expr->as.match_expr.branches[index].body,
-                                                 false,
-                                                 target,
-                                                 references)) {
-                    return false;
-                }
-            }
-            return collect_references_in_block(session,
+            return collect_references_in_match_branches(
+                       session,
+                       program,
+                       source,
+                       owner_decl,
+                       owner_member,
+                       expr->as.match_expr.branches,
+                       expr->as.match_expr.branch_count,
+                       false,
+                       target,
+                       references) &&
+                   collect_references_in_block(session,
                                                program,
                                                source,
                                                owner_decl,
@@ -13318,50 +13399,15 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                                             references)) {
                 return false;
             }
-            for (index = 0U; index < expr->as.match_op.label_count; ++index) {
-                const FengMatchLabel *label = &expr->as.match_op.labels[index];
-                if (label->kind == FENG_MATCH_LABEL_VALUE) {
-                    if (!collect_references_in_expr(session,
-                                                    program,
-                                                    source,
-                                                    owner_decl,
-                                                    owner_member,
-                                                    label->value,
-                                                    target,
-                                                    references)) {
-                        return false;
-                    }
-                } else if (label->kind == FENG_MATCH_LABEL_RANGE) {
-                    if (!collect_references_in_expr(session,
-                                                    program,
-                                                    source,
-                                                    owner_decl,
-                                                    owner_member,
-                                                    label->range_low,
-                                                    target,
-                                                    references) ||
-                        !collect_references_in_expr(session,
-                                                    program,
-                                                    source,
-                                                    owner_decl,
-                                                    owner_member,
-                                                    label->range_high,
-                                                    target,
-                                                    references)) {
-                        return false;
-                    }
-                } else if (label->kind == FENG_MATCH_LABEL_TYPE) {
-                    if (!collect_references_in_type_ref(session,
-                                                        program,
-                                                        source,
-                                                        label->type,
-                                                        target,
-                                                        references)) {
-                        return false;
-                    }
-                }
-            }
-            return true;
+            return collect_references_in_match_labels(session,
+                                                      program,
+                                                      source,
+                                                      owner_decl,
+                                                      owner_member,
+                                                      expr->as.match_op.labels,
+                                                      expr->as.match_op.label_count,
+                                                      target,
+                                                      references);
         case FENG_EXPR_TRY:
             if (!collect_references_in_expr(session,
                                             program,
@@ -13411,6 +13457,8 @@ static bool collect_references_in_type_ref(const FengLspAnalysisSession *session
                                            const FengTypeRef *type_ref,
                                            const FengLspResolvedTarget *target,
                                            FengLspReferenceList *references) {
+    size_t index;
+
     if (type_ref == NULL) {
         return true;
     }
@@ -13427,6 +13475,16 @@ static bool collect_references_in_type_ref(const FengLspAnalysisSession *session
                                     &candidate)) {
             return false;
         }
+        for (index = 0U; index < type_ref->as.named.type_arg_count; ++index) {
+            if (!collect_references_in_type_ref(session,
+                                                program,
+                                                source,
+                                                type_ref->as.named.type_args[index],
+                                                target,
+                                                references)) {
+                return false;
+            }
+        }
         return true;
     }
     return collect_references_in_type_ref(session,
@@ -13437,20 +13495,237 @@ static bool collect_references_in_type_ref(const FengLspAnalysisSession *session
                                           references);
 }
 
-static bool collect_param_declarations(const FengCliLoadedSource *source,
-                                       const FengParameter *params,
-                                       size_t param_count,
-                                       bool include_declaration,
-                                       const FengLspResolvedTarget *target,
-                                       FengLspReferenceList *references) {
+/* Collects parameter declarations when requested and always visits their types. */
+static bool collect_references_in_parameters(const FengLspAnalysisSession *session,
+                                             const FengProgram *program,
+                                             const FengCliLoadedSource *source,
+                                             const FengParameter *params,
+                                             size_t param_count,
+                                             bool include_declaration,
+                                             const FengLspResolvedTarget *target,
+                                             FengLspReferenceList *references) {
     size_t index;
 
-    if (!include_declaration || target == NULL || target->kind != FENG_LSP_RESOLVED_PARAM) {
+    for (index = 0U; index < param_count; ++index) {
+        if (include_declaration && target != NULL &&
+            target->kind == FENG_LSP_RESOLVED_PARAM &&
+            target->parameter == &params[index] &&
+            !reference_list_push_slice(references, source, params[index].name)) {
+            return false;
+        }
+        if (!collect_references_in_type_ref(session,
+                                            program,
+                                            source,
+                                            params[index].type,
+                                            target,
+                                            references)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Collects constraint type references declared by generic parameters. */
+static bool collect_references_in_type_params(const FengLspAnalysisSession *session,
+                                              const FengProgram *program,
+                                              const FengCliLoadedSource *source,
+                                              const FengTypeParam *type_params,
+                                              size_t type_param_count,
+                                              const FengLspResolvedTarget *target,
+                                              FengLspReferenceList *references) {
+    size_t index;
+
+    for (index = 0U; index < type_param_count; ++index) {
+        if (!collect_references_in_type_ref(session,
+                                            program,
+                                            source,
+                                            type_params[index].constraint,
+                                            target,
+                                            references)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Collects a match type label and its possible enum-owner prefix. */
+static bool collect_references_in_match_type_label(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengCliLoadedSource *source,
+    const FengTypeRef *type_ref,
+    const FengLspResolvedTarget *target,
+    FengLspReferenceList *references) {
+    if (!collect_references_in_type_ref(session,
+                                        program,
+                                        source,
+                                        type_ref,
+                                        target,
+                                        references)) {
+        return false;
+    }
+    if (type_ref != NULL && type_ref->kind == FENG_TYPE_REF_NAMED &&
+        type_ref->as.named.segment_count > 1U) {
+        FengTypeRef owner_ref = *type_ref;
+        FengLspResolvedTarget candidate = {0};
+
+        --owner_ref.as.named.segment_count;
+        owner_ref.as.named.type_args = NULL;
+        owner_ref.as.named.type_arg_count = 0U;
+        candidate.kind = FENG_LSP_RESOLVED_DECL;
+        candidate.decl = resolve_named_type_ref(session, program, &owner_ref);
+        if (candidate.decl != NULL &&
+            !add_reference_if_match(
+                references,
+                source,
+                owner_ref.as.named.segments[owner_ref.as.named.segment_count - 1U],
+                target,
+                &candidate)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Collects references from one match label, including chained type labels. */
+static bool collect_references_in_match_label(const FengLspAnalysisSession *session,
+                                              const FengProgram *program,
+                                              const FengCliLoadedSource *source,
+                                              const FengDecl *owner_decl,
+                                              const FengTypeMember *owner_member,
+                                              const FengMatchLabel *label,
+                                              const FengLspResolvedTarget *target,
+                                              FengLspReferenceList *references) {
+    size_t index;
+
+    if (label == NULL) {
         return true;
     }
-    for (index = 0U; index < param_count; ++index) {
-        if (target->parameter == &params[index] &&
-            !reference_list_push_slice(references, source, params[index].name)) {
+    if (label->kind == FENG_MATCH_LABEL_VALUE) {
+        return collect_references_in_expr(session,
+                                          program,
+                                          source,
+                                          owner_decl,
+                                          owner_member,
+                                          label->value,
+                                          target,
+                                          references);
+    }
+    if (label->kind == FENG_MATCH_LABEL_RANGE) {
+        return collect_references_in_expr(session,
+                                          program,
+                                          source,
+                                          owner_decl,
+                                          owner_member,
+                                          label->range_low,
+                                          target,
+                                          references) &&
+               collect_references_in_expr(session,
+                                          program,
+                                          source,
+                                          owner_decl,
+                                          owner_member,
+                                          label->range_high,
+                                          target,
+                                          references);
+    }
+    if (label->type_chain_count == 0U) {
+        return collect_references_in_match_type_label(session,
+                                                      program,
+                                                      source,
+                                                      label->type,
+                                                      target,
+                                                      references) &&
+               collect_references_in_expr(session,
+                                          program,
+                                          source,
+                                          owner_decl,
+                                          owner_member,
+                                          label->value,
+                                          target,
+                                          references);
+    }
+    if (!collect_references_in_match_type_label(session,
+                                                program,
+                                                source,
+                                                label->type,
+                                                target,
+                                                references)) {
+        return false;
+    }
+    for (index = 0U; index < label->type_chain_count; ++index) {
+        if (!collect_references_in_match_type_label(session,
+                                                    program,
+                                                    source,
+                                                    label->type_chain[index],
+                                                    target,
+                                                    references)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Collects references from a contiguous list of match labels. */
+static bool collect_references_in_match_labels(const FengLspAnalysisSession *session,
+                                               const FengProgram *program,
+                                               const FengCliLoadedSource *source,
+                                               const FengDecl *owner_decl,
+                                               const FengTypeMember *owner_member,
+                                               const FengMatchLabel *labels,
+                                               size_t label_count,
+                                               const FengLspResolvedTarget *target,
+                                               FengLspReferenceList *references) {
+    size_t index;
+
+    for (index = 0U; index < label_count; ++index) {
+        if (!collect_references_in_match_label(session,
+                                               program,
+                                               source,
+                                               owner_decl,
+                                               owner_member,
+                                               &labels[index],
+                                               target,
+                                               references)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Collects references from every label and body in a match branch list. */
+static bool collect_references_in_match_branches(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengCliLoadedSource *source,
+    const FengDecl *owner_decl,
+    const FengTypeMember *owner_member,
+    const FengMatchBranch *branches,
+    size_t branch_count,
+    bool include_declaration,
+    const FengLspResolvedTarget *target,
+    FengLspReferenceList *references) {
+    size_t index;
+
+    for (index = 0U; index < branch_count; ++index) {
+        if (!collect_references_in_match_labels(session,
+                                                program,
+                                                source,
+                                                owner_decl,
+                                                owner_member,
+                                                branches[index].labels,
+                                                branches[index].label_count,
+                                                target,
+                                                references) ||
+            !collect_references_in_block(session,
+                                         program,
+                                         source,
+                                         owner_decl,
+                                         owner_member,
+                                         branches[index].body,
+                                         include_declaration,
+                                         target,
+                                         references)) {
             return false;
         }
     }
@@ -13582,20 +13857,18 @@ static bool collect_references_in_stmt(const FengLspAnalysisSession *session,
                                             references)) {
                 return false;
             }
-            for (index = 0U; index < stmt->as.match_stmt.branch_count; ++index) {
-                if (!collect_references_in_block(session,
-                                                 program,
-                                                 source,
-                                                 owner_decl,
-                                                 owner_member,
-                                                 stmt->as.match_stmt.branches[index].body,
-                                                 include_declaration,
-                                                 target,
-                                                 references)) {
-                    return false;
-                }
-            }
-            return collect_references_in_block(session,
+            return collect_references_in_match_branches(
+                       session,
+                       program,
+                       source,
+                       owner_decl,
+                       owner_member,
+                       stmt->as.match_stmt.branches,
+                       stmt->as.match_stmt.branch_count,
+                       include_declaration,
+                       target,
+                       references) &&
+                   collect_references_in_block(session,
                                                program,
                                                source,
                                                owner_decl,
@@ -13747,12 +14020,21 @@ static bool collect_references_in_member(const FengLspAnalysisSession *session,
                                           target,
                                           references);
     }
-    return collect_param_declarations(source,
-                                      member->as.callable.params,
-                                      member->as.callable.param_count,
-                                      include_declaration,
-                                      target,
-                                      references) &&
+    return collect_references_in_type_params(session,
+                                             program,
+                                             source,
+                                             member->as.callable.type_params,
+                                             member->as.callable.type_param_count,
+                                             target,
+                                             references) &&
+           collect_references_in_parameters(session,
+                                            program,
+                                            source,
+                                            member->as.callable.params,
+                                            member->as.callable.param_count,
+                                            include_declaration,
+                                            target,
+                                            references) &&
            collect_references_in_type_ref(session,
                                           program,
                                           source,
@@ -13808,12 +14090,23 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
         case FENG_DECL_ENUM:
             return true;
         case FENG_DECL_FUNCTION:
-            return collect_param_declarations(source,
-                                              decl->as.function_decl.params,
-                                              decl->as.function_decl.param_count,
-                                              include_declaration,
-                                              target,
-                                              references) &&
+            return collect_references_in_type_params(
+                       session,
+                       program,
+                       source,
+                       decl->as.function_decl.type_params,
+                       decl->as.function_decl.type_param_count,
+                       target,
+                       references) &&
+                   collect_references_in_parameters(
+                       session,
+                       program,
+                       source,
+                       decl->as.function_decl.params,
+                       decl->as.function_decl.param_count,
+                       include_declaration,
+                       target,
+                       references) &&
                    collect_references_in_type_ref(session,
                                                   program,
                                                   source,
@@ -13830,6 +14123,35 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                                               target,
                                               references);
         case FENG_DECL_TYPE:
+            if (!collect_references_in_type_params(session,
+                                                   program,
+                                                   source,
+                                                   decl->as.type_decl.type_params,
+                                                   decl->as.type_decl.type_param_count,
+                                                   target,
+                                                   references)) {
+                return false;
+            }
+            for (index = 0U; index < decl->as.type_decl.mixin_count; ++index) {
+                const FengTypeMixinDecl *mixin = &decl->as.type_decl.mixins[index];
+
+                if (!collect_references_in_type_ref(session,
+                                                    program,
+                                                    source,
+                                                    mixin->source_type,
+                                                    target,
+                                                    references) ||
+                    !collect_references_in_expr(session,
+                                                program,
+                                                source,
+                                                decl,
+                                                NULL,
+                                                mixin->source_constructor,
+                                                target,
+                                                references)) {
+                    return false;
+                }
+            }
             for (index = 0U; index < decl->as.type_decl.declared_spec_count; ++index) {
                 if (!collect_references_in_type_ref(session,
                                                     program,
@@ -13854,6 +14176,15 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
             }
             return true;
         case FENG_DECL_SPEC:
+            if (!collect_references_in_type_params(session,
+                                                   program,
+                                                   source,
+                                                   decl->as.spec_decl.type_params,
+                                                   decl->as.spec_decl.type_param_count,
+                                                   target,
+                                                   references)) {
+                return false;
+            }
             for (index = 0U; index < decl->as.spec_decl.parent_spec_count; ++index) {
                 if (!collect_references_in_type_ref(session,
                                                     program,
@@ -13874,6 +14205,43 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                                                       include_declaration,
                                                       target,
                                                       references)) {
+                        return false;
+                    }
+                }
+            } else if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+                return collect_references_in_parameters(
+                           session,
+                           program,
+                           source,
+                           decl->as.spec_decl.as.callable.params,
+                           decl->as.spec_decl.as.callable.param_count,
+                           include_declaration,
+                           target,
+                           references) &&
+                       collect_references_in_type_ref(
+                           session,
+                           program,
+                           source,
+                           decl->as.spec_decl.as.callable.return_type,
+                           target,
+                           references);
+            } else {
+                FengTypeRef *const *members =
+                    decl->as.spec_decl.form == FENG_SPEC_FORM_UNION
+                        ? decl->as.spec_decl.as.union_form.members
+                        : decl->as.spec_decl.as.intersection_form.members;
+                size_t member_count =
+                    decl->as.spec_decl.form == FENG_SPEC_FORM_UNION
+                        ? decl->as.spec_decl.as.union_form.member_count
+                        : decl->as.spec_decl.as.intersection_form.member_count;
+
+                for (index = 0U; index < member_count; ++index) {
+                    if (!collect_references_in_type_ref(session,
+                                                        program,
+                                                        source,
+                                                        members[index],
+                                                        target,
+                                                        references)) {
                         return false;
                     }
                 }

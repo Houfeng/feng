@@ -10653,6 +10653,175 @@ static void test_lsp_function_decl_site_definition_references_and_rename(void) {
     free(source_path);
 }
 
+/* Verifies type references are collected from cross-file signatures, generic
+ * arguments, array construction, and match labels. */
+static void test_lsp_type_references_cover_all_ast_positions(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"lsp_type_references\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kDeclarationSource =
+        "open module test.lsp.type_references;\n"
+        "\n"
+        "open enum Style {\n"
+        "    none = 0,\n"
+        "    bold = 1\n"
+        "}\n"
+        "\n"
+        "open type Box<T> {}\n"
+        "\n"
+        "open func identity<T>(value: T): T {\n"
+        "    return value;\n"
+        "}\n";
+    static const char *kUsageSource =
+        "open module test.lsp.type_references;\n"
+        "\n"
+        "open spec StyleHandler(value: Style): Style;\n"
+        "\n"
+        "open type Buffer {\n"
+        "    func styleToBits(s: Style): int {\n"
+        "        return match s {\n"
+        "            Style.none { 0; }\n"
+        "            Style.bold { 1; }\n"
+        "            else { 0; }\n"
+        "        };\n"
+        "    }\n"
+        "\n"
+        "    func combine(styles: Style[]): void {}\n"
+        "\n"
+        "    func nested(value: Box<Style>): void {}\n"
+        "\n"
+        "    func build(value: Style): Style {\n"
+        "        let copy = identity<Style>(value);\n"
+        "        let items: Style[!] = Style[:1];\n"
+        "        return copy;\n"
+        "    }\n"
+        "}\n";
+    static const char *kUsageNeedles[] = {
+        "value: Style): Style;",
+        "func styleToBits(s: Style): int",
+        "Style.none { 0; }",
+        "func nested(value: Box<Style>): void",
+        "let copy = identity<Style>(value);",
+        "let items: Style[!] = Style[:1];"
+    };
+    char template_path[] = "temp/feng_cli_lsp_type_refs_XXXXXX";
+    char *workspace_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *declaration_path;
+    char *usage_path;
+    char *declaration_uri;
+    char *usage_uri;
+    char *escaped_declaration;
+    char *initialize;
+    char *did_open;
+    char *references;
+    char *shutdown;
+    char *output;
+    const char *requests[3];
+    unsigned int declaration_line;
+    unsigned int declaration_character;
+    size_t index;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    manifest_path = path_join(workspace_dir, "feng.fm");
+    src_dir = path_join(workspace_dir, "src");
+    declaration_path = path_join(src_dir, "declaration.ff");
+    usage_path = path_join(src_dir, "usage.ff");
+    mkdir_p(src_dir);
+    write_text_file(manifest_path, kManifest);
+    write_text_file(declaration_path, kDeclarationSource);
+    write_text_file(usage_path, kUsageSource);
+
+    find_line_character(kDeclarationSource,
+                        "open enum Style {",
+                        strlen("open enum "),
+                        &declaration_line,
+                        &declaration_character);
+    declaration_uri = file_uri_from_path(declaration_path);
+    usage_uri = file_uri_from_path(usage_path);
+    escaped_declaration = json_escape_text(kDeclarationSource);
+    initialize = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}");
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}",
+        declaration_uri,
+        escaped_declaration);
+    references = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/references\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"context\":{\"includeDeclaration\":true}}}",
+        declaration_uri,
+        declaration_line,
+        declaration_character);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+    requests[0] = references;
+    requests[1] = shutdown;
+    requests[2] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    output = run_lsp_server_capture_after_position_ready(initialize,
+                                                         did_open,
+                                                         NULL,
+                                                         "textDocument/references",
+                                                         declaration_uri,
+                                                         declaration_line,
+                                                         declaration_character,
+                                                         usage_uri,
+                                                         requests,
+                                                         3U,
+                                                         NULL);
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[") != NULL);
+    ASSERT(count_occurrences(output, declaration_uri) == 1);
+    ASSERT(count_occurrences(output, usage_uri) == 12);
+    for (index = 0U; index < sizeof(kUsageNeedles) / sizeof(kUsageNeedles[0]); ++index) {
+        const char *style = strstr(kUsageNeedles[index], "Style");
+        unsigned int line;
+        unsigned int character;
+        char *expected;
+
+        ASSERT(style != NULL);
+        find_line_character(kUsageSource,
+                            kUsageNeedles[index],
+                            (size_t)(style - kUsageNeedles[index]),
+                            &line,
+                            &character);
+        expected = dup_printf(
+            "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+            usage_uri,
+            line,
+            character);
+        ASSERT(strstr(output, expected) != NULL);
+        free(expected);
+    }
+
+    free(output);
+    free(shutdown);
+    free(references);
+    free(did_open);
+    free(initialize);
+    free(escaped_declaration);
+    free(usage_uri);
+    free(declaration_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(usage_path);
+    free(declaration_path);
+    free(src_dir);
+    free(manifest_path);
+}
+
 static void test_lsp_rename_accepts_identifier_end_position(void) {
     static const char *kSource =
         "module test.lsp.renameend;\n"
@@ -17315,6 +17484,7 @@ int main(void) {
     test_lsp_member_completion_infers_constructor_call_overloads();
     test_lsp_member_references_and_rename_from_object_literal_field();
     test_lsp_function_decl_site_definition_references_and_rename();
+    test_lsp_type_references_cover_all_ast_positions();
     test_lsp_rename_accepts_identifier_end_position();
     test_lsp_definition_references_rename_with_broken_code();
     test_lsp_no_crash_on_library_file_without_main();
