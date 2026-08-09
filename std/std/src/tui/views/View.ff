@@ -3,6 +3,10 @@ open module std.tui.views;
 import std;
 import std.tui;
 
+/**
+ * 基础视图组件
+ * 基他组件可通过 mixin View 来获得基础的布局、绘制、事件处理能力
+ */
 open type View: Widget {
   /**
    * 用户声明的布局与样式约束
