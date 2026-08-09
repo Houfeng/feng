@@ -1,7 +1,9 @@
-open module std.tui.views;
+open module std.tui.widgets;
 
 import std;
-import std.tui;
+import std.collections;
+import std.tui.view;
+import std.tui.input;
 
 /**
  * 基础视图组件

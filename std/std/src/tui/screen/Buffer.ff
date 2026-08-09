@@ -1,4 +1,4 @@
-open module std.tui;
+open module std.tui.screen;
 
 import std;
 

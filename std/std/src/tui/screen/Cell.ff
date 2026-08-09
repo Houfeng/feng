@@ -1,4 +1,4 @@
-open module std.tui;
+open module std.tui.screen;
 
 /**
  * Cell represents a single character cell in a terminal user interface (TUI).

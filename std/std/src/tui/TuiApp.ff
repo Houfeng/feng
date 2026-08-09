@@ -2,6 +2,9 @@ open module std.tui;
 
 import std;
 import std.collections;
+import std.tui.input;
+import std.tui.screen;
+import std.tui.view;
 
 // ─── runtime 内存分配（与 Thread.ff 模式一致） ──────────────────────────────
 

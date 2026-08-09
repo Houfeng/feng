@@ -1,7 +1,9 @@
-open module std.tui;
+open module std.tui.view;
 
 import std;
 import std.collections;
+import std.tui.screen;
+import std.tui.input;
 
 /**
  * WidgetPosition 组件定位方式

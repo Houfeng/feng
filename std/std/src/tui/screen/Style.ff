@@ -1,4 +1,4 @@
-open module std.tui;
+open module std.tui.screen;
 
 /**
  * Style 表示终端文本样式的枚举类型。
