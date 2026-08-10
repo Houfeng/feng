@@ -61,6 +61,17 @@
 2. 外部包公开泛型类型后，consumer 构造具体实例并调用成员方法时，必须正确生成实例类型、默认零值构造符声明/实现引用以及对应成员方法符号。
 3. 外部包公开泛型 `spec` 后，consumer 必须能通过 `import` 引入该 spec，实现 `type Key: Eq<Key>`，并把 imported generic spec 作为本地泛型约束使用。
 
+### 2026-08-10 跨包泛型 spec 实例归属修复
+
+泛型 `spec` 具体实例的声明归属必须始终是泛型 `spec` 的定义程序，不得由首次引用或实例化它的 consumer 决定。代码生成必须分开以下两个概念：
+
+- `owner_program`：决定实例符号的 module mangling、导入可见性和链接属性，固定为泛型声明所在程序；
+- `instantiation_program`：仅表示当前具体实例的使用上下文，用于解析实参及可见声明，不得改变符号归属。
+
+跨包 consumer 需要在本地生成的 imported callable-form 泛型 `spec` 默认工厂必须使用内部链接，不得与 provider 库中的同名符号冲突。回归用例必须覆盖本地 `type` 通过 mixin 展开 imported type，且展开成员包含 imported `Action<T>` 字段的最终编译与链接路径。
+
+imported 泛型 `spec` 的具体实例不保证已在 provider 中物化；consumer 引用的具体 object-form 实例必须在 consumer 侧生成所需的默认实现和描述符。公开描述符继续使用可合并的 weak 定义，使 provider 已物化同一实例时不产生重复符号。
+
 ### 2026-05-11 全量修复拆分（先全局 codegen，再泛型特有路径）
 
 以下拆分用于本轮“完全修复”实施，目标是先补齐全局 codegen 值模型与 coercion 能力，再把泛型入口接入同一套稳定抽象，避免在泛型层堆叠一次性特判。

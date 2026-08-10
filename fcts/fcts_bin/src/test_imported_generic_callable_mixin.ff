@@ -1,0 +1,30 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import fcts_lib.test;
+
+/**
+ * 在 consumer 中展开包含 imported `Action<T>` 字段的跨包 type。
+ */
+type ImportedGenericCallableMixed {
+  ...: LibGenericCallableMixin;
+}
+
+/**
+ * 验证跨包泛型 callable spec 实例的符号归属与 mixin 行为。
+ */
+open func test_imported_generic_callable_mixin(): void {
+  describe("imported generic callable mixin", () {
+    test("expanded Action<T> field links and invokes", () {
+      let mixed = ImportedGenericCallableMixed();
+      var received = 0;
+      mixed.callback = (event: LibCallableEvent) {
+        received = event.value;
+      };
+      mixed.callback(LibCallableEvent(42));
+      assert(received == 42,
+             "cross-package expanded generic callable field invokes");
+    });
+  });
+}

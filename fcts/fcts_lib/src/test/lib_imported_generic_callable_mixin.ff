@@ -1,0 +1,28 @@
+open module fcts_lib.test;
+
+import std;
+
+/**
+ * 跨包泛型 callable mixin 回归使用的事件值。
+ */
+open type LibCallableEvent {
+  /** 事件携带的整数值。 */
+  open let value: int;
+
+  /** 创建携带指定值的事件。 */
+  func LibCallableEvent(value: int) {
+    self.value = value;
+  }
+}
+
+/**
+ * 包含 imported `Action<T>` 字段的跨包 mixin 源。
+ */
+open type LibGenericCallableMixin {
+  /** 由 consumer 赋值的单播回调。 */
+  open var callback: Action<LibCallableEvent>;
+
+  /** 构造可展开的 mixin 源。 */
+  func LibGenericCallableMixin() {
+  }
+}

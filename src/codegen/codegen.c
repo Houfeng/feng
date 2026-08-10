@@ -813,6 +813,10 @@ typedef struct UserSpec {
     size_t          generic_type_arg_count;
     char          **generic_context_type_param_names;
     size_t          generic_context_type_param_count;
+    /* Program whose source reference requested this concrete instance.
+     * It supplies visibility for substituted consumer-owned type arguments,
+     * while owner_program remains the generic spec declaration's program. */
+    const FengProgram *instantiation_program;
     /* Owning program — see UserType.owner_program. */
     const FengProgram *owner_program;
 } UserSpec;
@@ -7346,7 +7350,10 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
 
     UserSpec *s = &cg->user_specs[cg->user_spec_count++];
     memset(s, 0, sizeof *s);
-    s->owner_program = cg->cur_program != NULL ? cg->cur_program : generic_decl->owner_program;
+    s->owner_program = generic_decl->owner_program;
+    s->instantiation_program = cg->cur_program != NULL
+        ? cg->cur_program
+        : generic_decl->owner_program;
     s->decl = decl;
     s->form = decl->as.spec_decl.form;
     s->is_generic_instance = true;
@@ -10125,7 +10132,9 @@ static bool cg_ensure_user_spec_members_registered(CG *cg, UserSpec *s) {
     }
     s->members_registering = true;
     saved_program = cg->cur_program;
-    cg->cur_program = s->owner_program;
+    cg->cur_program = s->instantiation_program != NULL
+        ? s->instantiation_program
+        : s->owner_program;
     ok = cg_register_user_spec_members(cg, s);
     cg->cur_program = saved_program;
     s->members_registering = false;
@@ -36609,7 +36618,9 @@ static bool cg_emit_all_programs(CG *cg,
     }
     /* Pass 2.5: register spec members. */
     for (size_t i = 0; i < cg->user_spec_count; i++) {
-        cg->cur_program = cg->user_specs[i].owner_program;
+        cg->cur_program = cg->user_specs[i].instantiation_program != NULL
+            ? cg->user_specs[i].instantiation_program
+            : cg->user_specs[i].owner_program;
         bool ok = cg_ensure_user_spec_members_registered(cg, &cg->user_specs[i]);
         cg->cur_program = NULL;
         if (!ok) return false;
@@ -36781,16 +36792,23 @@ static bool cg_emit_all_programs(CG *cg,
              *   FengClosureDesc type descriptor both use internal linkage,
              *   and the consumer needs them to create closure values
              *   inline, so we must emit our own copy here.
+             * - Concrete generic specs are instantiated on demand and may
+             *   not have been materialized by the provider. Public aggregate
+             *   descriptors use weak definitions, so emitting a consumer
+             *   copy also remains valid when the provider has one.
              * - Private object-form representation specs have no externally
              *   visible aggregate descriptor in the provider library, so the
              *   consumer must emit its own default witness and descriptor. */
             if (cg->user_specs[i].generic_context_type_param_count > 0U ||
+                cg->user_specs[i].is_generic_instance ||
                 cg->user_specs[i].form == FENG_SPEC_FORM_UNION ||
                 cg->user_specs[i].form == FENG_SPEC_FORM_CALLABLE ||
                 cg->user_specs[i].form == FENG_SPEC_FORM_INTERSECTION ||
                 !cg_user_spec_descriptor_is_externally_visible(
                     cg, &cg->user_specs[i])) {
-                cg->cur_program = cg->user_specs[i].owner_program;
+                cg->cur_program = cg->user_specs[i].instantiation_program != NULL
+                    ? cg->user_specs[i].instantiation_program
+                    : cg->user_specs[i].owner_program;
                 cg_emit_user_spec_definition(cg, &cg->user_specs[i]);
                 cg->cur_program = NULL;
                 if (cg->failed) return false;
@@ -36800,7 +36818,9 @@ static bool cg_emit_all_programs(CG *cg,
         if (!cg_emit_module_header(cg, cg->user_specs[i].owner_program)) {
             return false;
         }
-        cg->cur_program = cg->user_specs[i].owner_program;
+        cg->cur_program = cg->user_specs[i].instantiation_program != NULL
+            ? cg->user_specs[i].instantiation_program
+            : cg->user_specs[i].owner_program;
         cg_emit_user_spec_definition(cg, &cg->user_specs[i]);
         cg->cur_program = NULL;
         if (cg->failed) return false;

@@ -36,6 +36,7 @@ func main(args: string[]) {
       test_value_type();
       test_value_type_array();
       test_inferred_generic_field();
+      test_imported_generic_callable_mixin();
       test_mixin();
       test_private_generic_representation();
       test_cross_package_private_representation();

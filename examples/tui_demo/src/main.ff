@@ -10,7 +10,36 @@ import std.tui.widgets;
 import std.tui.view;
 
 /**
- * TUI demo: 通过 TuiApp 内部 Screen 绘制 "hello world"，并启动主循环。
+ * 拖动示例的根容器：占满 Screen，并按子组件顺序自治布局和绘制。
+ */
+type DragSurface: ContainerWidget {
+  ...: Container;
+
+  /**
+   * 先布局根容器，再布局所有直接子组件。
+   */
+  @mixable
+  static func arrange(surface: ContainerWidget, manager: ViewManager): void {
+    View.arrange(surface, manager);
+    for let child in surface.children {
+      child.arrange(manager);
+    }
+  }
+
+  /**
+   * 先绘制并跟踪根容器，再按顺序绘制所有直接子组件。
+   */
+  @mixable
+  static func draw(surface: ContainerWidget, manager: ViewManager): void {
+    View.draw(surface, manager);
+    for let child in surface.children {
+      child.draw(manager);
+    }
+  }
+}
+
+/**
+ * TUI demo: 使用 ViewManager 绘制并拖动一个 20×20 的矩形。
  *
  * 运行方式：./build/bin/feng run ./examples/tui_demo
  * 退出方式：Ctrl+C 终止进程（atexit handler 会恢复终端模式）。
@@ -26,22 +55,66 @@ func main(args: string[]) {
       app.exit();
     }
   };
-  // app.input.onMouse = (event: MouseEvent) {
-  //   // 鼠标点击时在终端打印坐标
-  //   // if event.action == MouseAction.press {
-  //   //   app.screen.buffer().draw(event.x, event.y, "Hello");
-  //   // }
-  //   app.screen.buffer().clear();
-  //   app.screen.buffer().draw(event.x, event.y, "Hello", RgbColor(255, 0, 0));
-  // };
-  // // 在内部 Screen 的 back buffer 上绘制 "hello world"（带粗体样式）
-  // app.screen.buffer().draw(10, 10, "hello world", Style.bold);
-  let rootView = View();
-  rootView.style.width = (f32)0.5;
-  rootView.style.height = (f32)0.5;
-  rootView.style.horizontalAlign = WidgetAlign.Center;
-  rootView.style.verticalAlign = WidgetAlign.Center;
-  rootView.style.backColor = RgbColor(0, 0, 255);
-  app.view.root = rootView;
+
+  // 根容器占满 Screen，使移出矩形后的 move/release 仍有命中目标。
+  let surface = DragSurface();
+  app.view.root = surface;
+
+  // 初始居中的 20×20 蓝色矩形。
+  let rectangle = View();
+  rectangle.style.width = (u32)20;
+  rectangle.style.height = (u32)20;
+  rectangle.style.horizontalAlign = WidgetAlign.Center;
+  rectangle.style.verticalAlign = WidgetAlign.Center;
+  rectangle.style.backColor = RgbColor(0, 0, 255);
+  surface.addChild(rectangle);
+
+  var dragging = false;
+  var dragOffsetX: u32 = 0;
+  var dragOffsetY: u32 = 0;
+
+  // 只有经过 ViewManager 命中矩形的左键按下才开始拖动。
+  rectangle.onMouseDown = (event: MouseEvent) {
+    if event.button == MouseButton.left {
+      dragging = true;
+      dragOffsetX = event.x - rectangle.frame.x;
+      dragOffsetY = event.y - rectangle.frame.y;
+    }
+  };
+
+  // move 事件在矩形内会冒泡到根容器，移出后则直接命中根容器。
+  surface.onMouseMove = (event: MouseEvent) {
+    if event.action == MouseAction.move && dragging {
+      var x: u32 = 0;
+      var y: u32 = 0;
+      if event.x > dragOffsetX {
+        x = event.x - dragOffsetX;
+      }
+      if event.y > dragOffsetY {
+        y = event.y - dragOffsetY;
+      }
+
+      let screenWidth = app.view.getScreenWidth();
+      let screenHeight = app.view.getScreenHeight();
+      let maxX: u32 = if screenWidth > rectangle.frame.width {
+        screenWidth - rectangle.frame.width;
+      } else { 0; };
+      let maxY: u32 = if screenHeight > rectangle.frame.height {
+        screenHeight - rectangle.frame.height;
+      } else { 0; };
+      if x > maxX { x = maxX; }
+      if y > maxY { y = maxY; }
+
+      rectangle.style.position = WidgetPosition.Fixed;
+      rectangle.style.x = x;
+      rectangle.style.y = y;
+    }
+  };
+
+  // release 同样由根容器结束拖动，不需要覆盖 InputManager 的分发回调。
+  surface.onMouseUp = (event: MouseEvent) {
+    dragging = false;
+  };
+
   app.run();
 }
