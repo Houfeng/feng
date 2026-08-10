@@ -64,7 +64,8 @@
 - [x] 实现赋值、变量初始化、传参、返回等 union 进入站点的可接受性检查。
 - [x] 实现“精确 member 优先”的 active member 选择规则。
 - [x] 实现重叠 `spec` member 的进入冲突诊断，禁止按声明顺序兜底。
-- [x] 只允许开发者先显式转换到目标 `spec` member，再写入 union-form。
+- [x] 重叠 `spec` member 产生进入歧义时，只允许开发者先显式转换到目标 `spec` member，再写入 union-form。
+- [x] active member 选定后，先复用既有转换生成叶子成员值，再组装 union-form payload。
 - [x] 禁止 `union -> common spec` 投影。
 - [x] 复核 object-form `spec` 的向上转换资格与 union member 选择之间的衔接。
 

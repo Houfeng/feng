@@ -4,7 +4,10 @@ import std;
 import std.text;
 import std.numeric;
 import std.tui;
-
+import std.tui.input;
+import std.tui.screen;
+import std.tui.widgets;
+import std.tui.view;
 
 /**
  * TUI demo: 通过 TuiApp 内部 Screen 绘制 "hello world"，并启动主循环。
@@ -23,15 +26,22 @@ func main(args: string[]) {
       app.exit();
     }
   };
-  app.input.onMouse = (event: MouseEvent) {
-    // 鼠标点击时在终端打印坐标
-    // if event.action == MouseAction.press {
-    //   app.screen.buffer().draw(event.x, event.y, "Hello");
-    // }
-    app.screen.buffer().clear();
-    app.screen.buffer().draw(event.x, event.y, "Hello", RgbColor(255, 0, 0));
-  };
-  // 在内部 Screen 的 back buffer 上绘制 "hello world"（带粗体样式）
-  app.screen.buffer().draw(10, 10, "hello world", Style.bold);
+  // app.input.onMouse = (event: MouseEvent) {
+  //   // 鼠标点击时在终端打印坐标
+  //   // if event.action == MouseAction.press {
+  //   //   app.screen.buffer().draw(event.x, event.y, "Hello");
+  //   // }
+  //   app.screen.buffer().clear();
+  //   app.screen.buffer().draw(event.x, event.y, "Hello", RgbColor(255, 0, 0));
+  // };
+  // // 在内部 Screen 的 back buffer 上绘制 "hello world"（带粗体样式）
+  // app.screen.buffer().draw(10, 10, "hello world", Style.bold);
+  let rootView = View();
+  rootView.style.width = (f32)0.5;
+  rootView.style.height = (f32)0.5;
+  rootView.style.horizontalAlign = WidgetAlign.Center;
+  rootView.style.verticalAlign = WidgetAlign.Center;
+  rootView.style.backColor = RgbColor(0, 0, 255);
+  app.view.root = rootView;
   app.run();
 }

@@ -1496,6 +1496,11 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt);
 typedef struct ExprResult ExprResult;
 static bool cg_emit_expr(CG *cg, const FengExpr *expr, ExprResult *out);
 static bool cg_emit_expr_raw(CG *cg, const FengExpr *expr, ExprResult *out);
+static bool cg_emit_expr_with_spec_coercion(
+    CG *cg,
+    const FengExpr *expr,
+    const FengSpecCoercionSite *site,
+    ExprResult *out);
 static bool cg_emit_initializer_for_declared_type(CG *cg,
                                                   const FengExpr *initializer,
                                                   const CGType *decl_type,
@@ -15143,6 +15148,8 @@ static bool cg_emit_union_spec_coercion(CG *cg,
                                         const FengUnionCoercionSite *site,
                                         ExprResult *out) {
     const UserSpec *target_spec = NULL;
+    const FengSpecCoercionSite *leaf_spec_site =
+        feng_semantic_lookup_spec_coercion_site(cg->analysis, e);
     ExprResult source;
     Buf expr;
     bool payload_owns_ref = false;
@@ -15168,7 +15175,10 @@ static bool cg_emit_union_spec_coercion(CG *cg,
         site = &patched_site;
     }
 
-    if (!cg_emit_expr_raw(cg, e, &source)) {
+    /* Member selection and member conversion are separate semantic steps.
+     * Emit any conversion required by the selected leaf before wrapping the
+     * resulting value in the union path. */
+    if (!cg_emit_expr_with_spec_coercion(cg, e, leaf_spec_site, &source)) {
         return false;
     }
 
@@ -22308,13 +22318,16 @@ static bool cg_emit_object_spec_upcast(CG *cg,
     return true;
 }
 
-static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
+/* Emits an expression and applies one already-resolved spec conversion, but
+ * deliberately does not consult the union sidecar. Union emission uses this
+ * helper for its selected leaf, then wraps the converted value in union tags. */
+static bool cg_emit_expr_with_spec_coercion(
+        CG *cg,
+        const FengExpr *e,
+        const FengSpecCoercionSite *cs,
+        ExprResult *out) {
     if (cg->failed) return false;
     bool ok;
-    const FengSpecCoercionSite *cs =
-        feng_semantic_lookup_spec_coercion_site(cg->analysis, e);
-    const FengUnionCoercionSite *union_site =
-        feng_semantic_lookup_union_coercion_site(cg->analysis, e);
 
     if (cs && cs->form == FENG_SPEC_COERCION_FORM_OBJECT_UPCAST) {
         return cg_emit_object_spec_upcast(cg, e, cs, out);
@@ -22324,9 +22337,6 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     }
     if (cs && cs->form == FENG_SPEC_COERCION_FORM_CALLABLE) {
         return cg_emit_callable_spec_coercion(cg, e, cs, out);
-    }
-    if (union_site != NULL) {
-        return cg_emit_union_spec_coercion(cg, e, union_site, out);
     }
     ok = cg_emit_expr_raw(cg, e, out);
     if (!ok) return false;
@@ -22473,6 +22483,24 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         out->is_addressable = false;
     }
     return true;
+}
+
+/* Emits the complete conversion pipeline for one expression. A union entry
+ * first converts to its selected leaf member and only then constructs the
+ * outer tagged-union representation. */
+static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
+    const FengSpecCoercionSite *spec_site;
+    const FengUnionCoercionSite *union_site;
+
+    if (cg->failed) {
+        return false;
+    }
+    spec_site = feng_semantic_lookup_spec_coercion_site(cg->analysis, e);
+    union_site = feng_semantic_lookup_union_coercion_site(cg->analysis, e);
+    if (union_site != NULL) {
+        return cg_emit_union_spec_coercion(cg, e, union_site, out);
+    }
+    return cg_emit_expr_with_spec_coercion(cg, e, spec_site, out);
 }
 
 /* ===================== statement emission ===================== */

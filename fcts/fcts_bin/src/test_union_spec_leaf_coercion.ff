@@ -1,0 +1,96 @@
+module fcts_bin;
+
+import std;
+import std.test;
+
+/** Object-form spec used to verify conversion before union payload storage. */
+spec UnionLeafNamed {
+  func text(): string;
+}
+
+/** Concrete source type for union leaf conversion tests. */
+type UnionLeafUser: UnionLeafNamed {
+  let value: string;
+
+  /** Returns the stored value through object-spec dispatch. */
+  func text(): string {
+    return self.value;
+  }
+}
+
+/** Direct union with one object-form spec member. */
+spec UnionLeafValue: UnionLeafNamed | int;
+
+/** Nested union used to verify propagation of the selected leaf conversion. */
+spec NestedUnionLeafValue: UnionLeafValue | bool;
+
+/** Parent spec used to verify spec upcasting at a union leaf. */
+spec UnionLeafParent {
+  func parentText(): string;
+}
+
+/** Child spec whose values can be projected to UnionLeafParent. */
+spec UnionLeafChild: UnionLeafParent {}
+
+/** Concrete implementation of the child spec. */
+type UnionLeafChildUser: UnionLeafChild {
+  /** Implements the inherited parent-spec method. */
+  func parentText(): string {
+    return "parent";
+  }
+}
+
+/** Union whose selected leaf requires a child-to-parent spec conversion. */
+spec UnionLeafParentValue: UnionLeafParent | int;
+
+/** Verifies that union entry applies the selected leaf member conversion. */
+open func test_union_spec_leaf_coercion() {
+  describe("union spec leaf coercion", () {
+    test("concrete type enters direct object-spec member", () {
+      let value: UnionLeafValue = UnionLeafUser { value: "direct" };
+      let actual = match value {
+        let named: UnionLeafNamed { named.text() }
+        let number: int { "unexpected" }
+        else { "unexpected" }
+      };
+      assert(actual == "direct", "direct union member keeps a valid witness");
+    });
+
+    test("concrete type enters Option object-spec member", () {
+      let value: Option<UnionLeafNamed> = UnionLeafUser { value: "option" };
+      let actual = match value {
+        let named: UnionLeafNamed { named.text() }
+        None { "unexpected" }
+        else { "unexpected" }
+      };
+      assert(actual == "option", "Option spec member keeps a valid witness");
+    });
+
+    test("concrete type enters nested object-spec member", () {
+      let value: NestedUnionLeafValue = UnionLeafUser { value: "nested" };
+      let actual = match value {
+        let inner: UnionLeafValue {
+          match inner {
+            let named: UnionLeafNamed { named.text() }
+            let number: int { "unexpected" }
+            else { "unexpected" }
+          }
+        }
+        let flag: bool { "unexpected" }
+        else { "unexpected" }
+      };
+      assert(actual == "nested", "nested union member keeps a valid witness");
+    });
+
+    test("child spec enters parent-spec member", () {
+      let child: UnionLeafChild = UnionLeafChildUser();
+      let value: UnionLeafParentValue = child;
+      let actual = match value {
+        let parent: UnionLeafParent { parent.parentText() }
+        let number: int { "unexpected" }
+        else { "unexpected" }
+      };
+      assert(actual == "parent", "union leaf applies child-to-parent projection");
+    });
+  });
+}

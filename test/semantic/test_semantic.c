@@ -18127,6 +18127,48 @@ static void test_union_entry_records_exact_member_site(void) {
     feng_program_free(program);
 }
 
+/* A concrete value entering an object-spec union member requires two
+ * independent semantic decisions on the same expression: select the union
+ * member and construct the object-spec fat value stored in that member. */
+static void test_union_entry_records_object_spec_leaf_coercion(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Named { let name: string; }\n"
+        "type User: Named { let name: string; }\n"
+        "type Empty {}\n"
+        "spec MaybeNamed: Empty | Named;\n"
+        "let value: MaybeNamed = User { name: \"Alice\" };\n";
+    FengProgram *program = parse_program_or_die(
+        "union_object_spec_leaf_coercion.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengExpr *initializer;
+    const FengUnionCoercionSite *union_site;
+    const FengSpecCoercionSite *spec_site;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(program->declaration_count == 5U);
+    ASSERT(program->declarations[4]->kind == FENG_DECL_GLOBAL_BINDING);
+
+    initializer = program->declarations[4]->as.binding.initializer;
+    union_site = feng_semantic_lookup_union_coercion_site(analysis, initializer);
+    spec_site = feng_semantic_lookup_spec_coercion_site(analysis, initializer);
+    ASSERT(union_site != NULL);
+    ASSERT(union_site->target_union_decl == program->declarations[3]);
+    ASSERT(union_site->member_index == 1U);
+    ASSERT(spec_site != NULL);
+    ASSERT(spec_site->form == FENG_SPEC_COERCION_FORM_OBJECT);
+    ASSERT(spec_site->target_spec_decl == program->declarations[0]);
+    ASSERT(spec_site->relation != NULL);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_union_entry_ambiguous_spec_member_requires_explicit_cast(void) {
     const char *source =
         "module demo.main;\n"
@@ -22024,6 +22066,7 @@ int main(void) {
     test_union_form_spec_rejects_type_declared_spec_clause();
     test_union_form_spec_rejects_fit_spec_clause();
     test_union_entry_records_exact_member_site();
+    test_union_entry_records_object_spec_leaf_coercion();
     test_union_entry_ambiguous_spec_member_requires_explicit_cast();
     test_union_entry_explicit_cast_selects_spec_member();
     test_union_match_accepts_type_labels();

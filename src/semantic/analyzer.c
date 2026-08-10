@@ -5555,6 +5555,9 @@ typedef struct UnionMemberSelection {
     bool ambiguous;
     size_t member_index;
     const FengTypeRef *member_type_ref;
+    /* Final non-union member reached by path_indices. This can differ from
+     * member_type_ref when the selected direct member is a nested union. */
+    const FengTypeRef *leaf_type_ref;
     size_t path_indices[UNION_MAX_PATH_DEPTH];
     size_t path_length;
 } UnionMemberSelection;
@@ -5616,6 +5619,7 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
             result.matched = true;
             result.member_index = index;
             result.member_type_ref = member_type_ref;
+            result.leaf_type_ref = member_type_ref;
             result.path_indices[0] = index;
             result.path_length = 1U;
             return result;
@@ -5644,6 +5648,7 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
                 result.matched = true;
                 result.member_index = index;
                 result.member_type_ref = member_type_ref;
+                result.leaf_type_ref = nested.leaf_type_ref;
                 result.path_indices[0] = index;
                 size_t copy_len = nested.path_length;
                 if (copy_len + 1U > UNION_MAX_PATH_DEPTH) {
@@ -5661,6 +5666,7 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
         result.ambiguous = true;
         result.matched = false;
         result.member_type_ref = NULL;
+        result.leaf_type_ref = NULL;
         return result;
     }
     if (match_count == 1U) {
@@ -5684,6 +5690,7 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
             result.matched = true;
             result.member_index = index;
             result.member_type_ref = member_type_ref;
+            result.leaf_type_ref = member_type_ref;
             result.path_indices[0] = index;
             result.path_length = 1U;
         } else {
@@ -5694,6 +5701,7 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
     if (result.ambiguous) {
         result.matched = false;
         result.member_type_ref = NULL;
+        result.leaf_type_ref = NULL;
     }
     return result;
 }
@@ -18047,6 +18055,26 @@ static bool expr_is_callable_value_reference(ResolveContext *context, const Feng
 
 /* Phase S1b — SpecCoercionSite recording helpers (§6.2). */
 
+/* Records the ordinary conversion required before a source value can be
+ * stored in the selected leaf member of a union. The union sidecar chooses
+ * tags; this sidecar preserves representation-changing conversions such as
+ * concrete type -> object-form spec and child spec -> parent spec. */
+static void record_union_leaf_spec_coercion_if_applicable(
+        ResolveContext *context,
+        const FengExpr *expr,
+        const UnionMemberSelection *selection) {
+    if (context == NULL || expr == NULL || selection == NULL ||
+        !selection->matched || selection->leaf_type_ref == NULL) {
+        return;
+    }
+    record_callable_spec_coercion_site(context, expr, selection->leaf_type_ref);
+    record_object_spec_coercion_site_if_applicable(
+        context,
+        expr,
+        selection->leaf_type_ref,
+        FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
+}
+
 static void record_union_coercion_site_if_applicable(ResolveContext *context,
                                                      const FengExpr *expr,
                                                      const FengTypeRef *expected_type_ref) {
@@ -18092,6 +18120,7 @@ static void record_union_coercion_site_if_applicable(ResolveContext *context,
                                                    selection.member_type_ref,
                                                    selection.path_indices,
                                                    selection.path_length);
+    record_union_leaf_spec_coercion_if_applicable(context, expr, &selection);
 }
 
 static const FengDecl *concrete_type_decl_of_inferred(const ResolveContext *context,
@@ -19566,6 +19595,8 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
                                                                    selection.member_type_ref,
                                                                    selection.path_indices,
                                                                    selection.path_length);
+                    record_union_leaf_spec_coercion_if_applicable(
+                        context, expr, &selection);
                     return true;
                 }
                 if (selection.ambiguous) {

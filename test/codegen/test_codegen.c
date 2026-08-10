@@ -7816,6 +7816,66 @@ static void test_union_form_spec_codegen(void) {
     feng_program_free(program);
 }
 
+/* A source that reaches an object-form spec leaf through a union path must be
+ * converted to the fat spec representation before the union payload is
+ * initialized. Cover both direct and nested union paths. */
+static void test_union_object_spec_leaf_coercion_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.unionleafspec;\n"
+        "spec Named { func name(): string; }\n"
+        "type User: Named {\n"
+        "    let value: string;\n"
+        "    func name(): string { return self.value; }\n"
+        "}\n"
+        "type Empty {}\n"
+        "spec MaybeNamed: Empty | Named;\n"
+        "spec NestedMaybeNamed: MaybeNamed | bool;\n"
+        "func make(value: string): MaybeNamed {\n"
+        "    return User { value: value };\n"
+        "}\n"
+        "func make_nested(value: string): NestedMaybeNamed {\n"
+        "    return User { value: value };\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "tests/union_object_spec_leaf_coercion_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                      NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (union object-spec leaf coercion): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(
+        out.c_source,
+        ".payload.m1 = ((struct FengSpecValue__feng__codegen__unionleafspec__Named){ .subject =") != NULL);
+    ASSERT(strstr(
+        out.c_source,
+        ".witness = &FengWitness__feng__codegen__unionleafspec__User__as__feng__codegen__unionleafspec__Named") != NULL);
+    ASSERT(strstr(
+        out.c_source,
+        ".payload.m0 = ((struct FengSpecValue__feng__codegen__unionleafspec__MaybeNamed)") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_generic_union_form_spec_codegen(void) {
     static const char *kSource =
         "module feng.codegen.uniongeneric;\n"
@@ -8952,6 +9012,7 @@ int main(void) {
     test_tuple_value_codegen_core();
     test_tuple_managed_slots_codegen();
     test_union_form_spec_codegen();
+    test_union_object_spec_leaf_coercion_codegen();
     test_generic_union_form_spec_codegen();
     test_generic_union_literal_adaptation_type_lifetime();
     test_generic_union_form_match_expr_codegen();
