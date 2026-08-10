@@ -50,6 +50,9 @@
 | | `fd` | `uv_file` (`int`) | `i32` | C 的 int = 32 位 |
 | | `readable` | `int` | `i32` | C 的 int = 32 位 |
 | | 返回值 | `int` | `i32` | C 的 int = 32 位 |
+| `uv_stream_set_blocking` | `stream` | `uv_stream_t*` | `int` | `uv_tty_t*` 以指针值传入 |
+| | `blocking` | `int` | `i32` | `1` 表示阻塞写出 |
+| | 返回值 | `int` | `i32` | |
 | `uv_tty_set_mode` | `tty` | `uv_tty_t*` | `int` | 指针值 |
 | | `mode` | `uv_tty_mode_t` (enum) | `i32` | C enum = int = 32 位 |
 | | 返回值 | `int` | `i32` | |
@@ -93,6 +96,9 @@ extern func feng_alloc(size: int): int;
 
 @runtime
 extern func feng_free(ptr: int): void;
+
+@runtime
+extern func feng_pointer_move(ptr: byte*, offset: int): byte*;
 ```
 
 ### 3.2 libuv TTY API
@@ -105,6 +111,10 @@ extern func uv_default_loop(): int;
 /** 初始化 TTY 句柄。fd=0 为 stdin（readable=1），fd=1 为 stdout（readable=0） */
 @cdecl("feng_std_uv", "uv_tty_init")
 extern func uv_tty_init(loop: int, tty: int, fd: i32, readable: i32): i32;
+
+/** 将 TTY 输出流切换为阻塞模式，供同步完整帧写出使用 */
+@cdecl("feng_std_uv", "uv_stream_set_blocking")
+extern func uv_stream_set_blocking(stream: int, blocking: i32): i32;
 
 /** 设置终端模式：UV_TTY_MODE_NORMAL=0, UV_TTY_MODE_RAW=1, UV_TTY_MODE_IO=2 */
 @cdecl("feng_std_uv", "uv_tty_set_mode")
@@ -298,6 +308,7 @@ func TuiApp(fds: i32[]) {
  * 幂等：重复调用安全。
  * @throws "tui/app/alloc-failed" — feng_alloc 失败
  * @throws "tui/app/tty-init-failed" — uv_tty_init 失败
+ * @throws "tui/app/blocking-failed" — 无法将 TTY 输出流切换为阻塞模式
  * @throws "tui/app/raw-mode-failed" — uv_tty_set_mode 失败
  * @throws "tui/app/size-failed" — 无法取得有效终端尺寸
  * @throws "tui/app/pipe-failed" — pipe() 失败
@@ -314,6 +325,13 @@ open func init(): void {
     feng_free(self.tty);
     self.tty = 0;
     throw "tui/app/tty-init-failed";
+  }
+  // render() 同步提交完整帧；阻塞模式保证短写后可继续写出，而不会立即得到 EAGAIN
+  let blockingRc = uv_stream_set_blocking(self.tty, 1);
+  if blockingRc != 0 {
+    feng_free(self.tty);
+    self.tty = 0;
+    throw "tui/app/blocking-failed";
   }
   // 进入 Raw Mode
   let modeRc = uv_tty_set_mode(self.tty, UV_TTY_MODE_RAW);
@@ -354,12 +372,36 @@ open func init(): void {
 
 ### 5.5 render() — 渲染一帧
 
+`write()` 允许返回小于请求长度的正数。TuiApp 必须循环写出剩余字节；否则
+`Screen` 已将完整 back buffer 同步到 front buffer，而物理终端只收到 patch 前缀，
+后续 diff 也无法补发丢失部分。返回 `0` 或负数均视为写出失败。
+
+终端 resize 后，旧画面可能由终端重排，不能作为新尺寸下的 diff 基准。
+成功调整 `Screen` 尺寸后必须先追加物理清屏序列，再重新布局和绘制当前帧。
+
+```feng
+/** 将字节完整写入 stdout，处理 write() 短写。 */
+seal func writeOutput(bytes: byte[]): void {
+  var offset: int = 0;
+  let length = bytes.length();
+  let data: byte* = &bytes;
+  while offset < length {
+    let written = c_write(STDOUT_FD, feng_pointer_move(data, offset),
+      (uint)(length - offset));
+    if written <= 0 {
+      throw "tui/app/write-failed";
+    }
+    offset += written;
+  }
+}
+```
+
 ```feng
 /**
- * 渲染一帧：检查 resize、调用 Screen.buildPatchBytes()、写入 stdout。
+ * 渲染一帧：检查 resize、调度 View 布局与绘制、生成 Screen patch 并完整写入 stdout。
  * 单帧渲染，由 run() 事件循环调用，也可在测试中单独调用。
  * 直接使用 byte[]，不经过 string 中间转换。
- * @throws "tui/app/write-failed" — write 返回负值
+ * @throws "tui/app/write-failed" — stdout 无法继续写出
  */
 open func render(): void {
   // 检查窗口尺寸变化标志（由 sigpipe 可读时置位）
@@ -369,19 +411,16 @@ open func render(): void {
     let rc = uv_tty_get_winsize(self.tty, &w, &h);
     if rc == 0 {
       self.screen.resize((u32)w[0], (u32)h[0]);
+      self.screen.clearScreen();
     }
     self.resizeRequested = false;
   }
+  self.view.arrange();
+  self.view.draw();
   // 调用 Screen.buildPatchBytes() 生成 ANSI 序列字节
   let ansi = self.screen.buildPatchBytes();
-  // 直接写入 stdout，无需 string → byte[] 转换
-  let len = ansi.length();
-  if len > 0 {
-    let written = c_write(STDOUT_FD, &ansi, (uint)len);
-    if written < 0 {
-      throw "tui/app/write-failed";
-    }
-  }
+  // 直接完整写入 stdout，无需 string → byte[] 转换
+  self.writeOutput(ansi);
 }
 ```
 
@@ -548,9 +587,11 @@ TuiApp.run()
         └── render()
               ├── if resizeRequested:
               │     uv_tty_get_winsize → screen.resize(w, h)
+              │     screen.clearScreen()
               │     resizeRequested = false
+              ├── view.arrange() → view.draw()
               ├── screen.buildPatchBytes() → byte[]     ← 零转换
-              └── c_write(STDOUT_FD, &ansi, len)    ← 零转换
+              └── writeOutput(ansi) → 循环 c_write 直至完整写出
 
 SIGWINCH 中断 → handleSigwinch() → c_write(sigpipeW)
   → poll 唤醒 → c_read(sigpipeR) → resizeRequested = true → render()
@@ -572,7 +613,9 @@ TuiApp.exit()
 | init() 幂等性 | 连续调用两次 init()，第二次不重复分配 |
 | render() 空帧输出 | Screen 空白时 render() 后 stdout 无额外输出 |
 | render() 有内容输出 | buffer.draw 后 render()，stdout 包含正确 ANSI 序列 |
+| render() 短写 | 在限制单次写入量的 PTY 中渲染大帧，确认最后一个 cell 仍被输出 |
 | resize 标志处理 | 手动设 resizeRequested=true，render() 后检查 screen 尺寸已更新 |
+| resize 物理清屏 | 触发 PTY 尺寸变化，确认新帧前包含清屏序列且旧画面不残留 |
 | exit() 幂等性 | 连续调用两次 exit()，第二次不重复恢复 |
 
 ### 8.2 不可测试项（需真实终端）

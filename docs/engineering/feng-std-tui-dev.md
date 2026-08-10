@@ -100,7 +100,7 @@
   - `clear()` — 组合 `clearBuffer()` + `clearScreen()`，完整重置（清空缓冲区 + 清物理终端）。
   - `hideCursor()` — 发射隐藏光标序列（`\x1b[?25l`）到 output 缓冲。
   - `showCursor()` — 发射显示光标序列（`\x1b[?25h`）到 output 缓冲。
-  - `resize(width, height)` — 重建 front/back 为新尺寸空白 Buffer，旧内容不迁移（TUI resize 时旧内容无法对齐，由上层组件树负责重新布局）。上层重新绘制 back 后，以空白 front 为基准生成新尺寸下的 diff。
+  - `resize(width, height)` — 重建 front/back 为新尺寸空白 Buffer，旧内容不迁移（TUI resize 时旧内容无法对齐，由上层组件树负责重新布局）。`TuiApp` 在 resize 后先清空物理终端，再重新绘制 back 并生成新尺寸下的 diff。
   - `buildPatchBytes(): byte[]` — 构建 diff 后的 ANSI 转义序列字节，由调用方直接写入 stdout，零 string 中间转换。主体实现方法不执行 I/O；构建完成后会同步 front、重置并清空内部输出状态。已写入 output 的清屏/光标序列会与 diff 序列一同输出。
   - `buildPatchString(): string` — 调用 `buildPatchBytes()` 后 `string.fromUtf8Bytes()` 转换返回，供测试使用。
 - **ANSI 序列生成**：
@@ -117,6 +117,7 @@
 
 - **Raw Mode 与终端尺寸**：通过 `@cdecl("libuv")` 导入 `uv_tty_init`、`uv_tty_set_mode`、`uv_tty_reset_mode` 与 `uv_tty_get_winsize`。
 - **SIGWINCH**：通过 `@cdecl("libc")` 导入 `signal`，信号处理器只写入 self-pipe；主循环通过 `poll()` 监听管道，并在普通执行上下文中处理 resize。
+- **完整帧输出**：`render()` 对 `write()` 的短写继续写出剩余 ANSI 字节；resize 成功后先清空物理终端，再按新尺寸布局和绘制，避免旧画面重排后残留。
 - **终端恢复**：`exit()` 负责正常路径清理，并通过 `atexit` 注册的清理函数兜底恢复 Raw Mode。
 - **输入解析**：VT100/xterm 转义序列状态机，纯 Feng 实现。
 - **事件路由**：当前由 `InputManager` 调用 `onKey`/`onMouse` 回调；第七阶段接入 `ViewManager` 后，再下发给焦点或命中节点。

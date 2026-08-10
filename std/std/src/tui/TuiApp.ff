@@ -24,6 +24,13 @@ extern func feng_alloc(size: int): int;
 @runtime
 extern func feng_free(ptr: int): void;
 
+/**
+ * 将原生指针向后移动指定字节数。
+ * 用于 libc write() 短写后定位尚未写出的字节区间。
+ */
+@runtime
+extern func feng_pointer_move(ptr: byte*, offset: int): byte*;
+
 // ─── libuv TTY API ──────────────────────────────────────────────────────────
 
 /** uv_loop_t* — 默认事件循环句柄（指针值，用 int 承载） */
@@ -41,6 +48,16 @@ extern func uv_default_loop(): int;
  */
 @cdecl("feng_std_uv", "uv_tty_init")
 extern func uv_tty_init(loop: int, tty: int, fd: i32, readable: i32): i32;
+
+/**
+ * 设置 TTY stream 的阻塞模式。
+ * TuiApp 使用同步帧输出，因此初始化后切换为阻塞写出，确保短写可继续提交。
+ * @param stream - uv_tty_t 句柄指针值
+ * @param blocking - 1=阻塞，0=非阻塞
+ * @return 0 成功，非 0 失败
+ */
+@cdecl("feng_std_uv", "uv_stream_set_blocking")
+extern func uv_stream_set_blocking(stream: int, blocking: i32): i32;
 
 /**
  * 设置终端模式。
@@ -280,6 +297,26 @@ open type TuiApp {
     return self.running;
   }
 
+  /**
+   * 将一组字节完整写入 stdout。
+   * libc write() 允许短写，因此持续写出剩余部分；返回 0 或负数表示无法继续写出。
+   * @param bytes - 需要按顺序完整写出的字节
+   * @throws "tui/app/write-failed" — stdout 无法继续写出
+   */
+  seal func writeOutput(bytes: byte[]): void {
+    var offset: int = 0;
+    let length = bytes.length();
+    let data: byte* = &bytes;
+    while offset < length {
+      let written = c_write(STDOUT_FD, feng_pointer_move(data, offset),
+        (uint)(length - offset));
+      if written <= 0 {
+        throw "tui/app/write-failed";
+      }
+      offset += written;
+    }
+  }
+
   // ─── 构造函数 ─────────────────────────────────────────────────────────────
 
   /**
@@ -327,6 +364,7 @@ open type TuiApp {
    * 幂等：重复调用安全。
    * @throws "tui/app/alloc-failed" — feng_alloc 失败
    * @throws "tui/app/tty-init-failed" — uv_tty_init 失败
+   * @throws "tui/app/blocking-failed" — 无法将 TTY 输出流切换为阻塞模式
    * @throws "tui/app/raw-mode-failed" — uv_tty_set_mode 失败
    * @throws "tui/app/size-failed" — 无法取得有效终端尺寸
    * @throws "tui/app/pipe-failed" — pipe() 失败
@@ -343,6 +381,13 @@ open type TuiApp {
       feng_free(self.tty);
       self.tty = 0;
       throw "tui/app/tty-init-failed";
+    }
+    // render() 同步提交完整帧；阻塞模式保证短写后可继续写出，而不会立即得到 EAGAIN。
+    let blockingRc = uv_stream_set_blocking(self.tty, 1);
+    if blockingRc != 0 {
+      feng_free(self.tty);
+      self.tty = 0;
+      throw "tui/app/blocking-failed";
     }
     // 进入 Raw Mode
     let modeRc = uv_tty_set_mode(self.tty, UV_TTY_MODE_RAW);
@@ -391,7 +436,7 @@ open type TuiApp {
    * 直接使用 byte[]，不经过 string 中间转换。
    * run() 启动时已通过 clearScreen()/hideCursor() 写入 output 的清屏与光标序列，
    * 会随首帧 buildPatchBytes() 一同输出到终端。
-   * @throws "tui/app/write-failed" — write 返回负值
+   * @throws "tui/app/write-failed" — stdout 无法继续写出
    */
   open func render(): void {
     // 检查窗口尺寸变化标志（由 sigpipe 可读时置位）
@@ -401,6 +446,8 @@ open type TuiApp {
       let rc = uv_tty_get_winsize(self.tty, &w, &h);
       if rc == 0 {
         self.screen.resize((u32)w[0], (u32)h[0]);
+        // 终端可能已重排旧画面；新 front/back 无法通过 diff 清除这些物理残留。
+        self.screen.clearScreen();
       }
       self.resizeRequested = false;
     }
@@ -409,14 +456,8 @@ open type TuiApp {
     self.view.draw();
     // 调用 Screen.buildPatchBytes() 生成 ANSI 序列字节
     let ansi = self.screen.buildPatchBytes();
-    // 直接写入 stdout，无需 string → byte[] 转换
-    let len = ansi.length();
-    if len > 0 {
-      let written = c_write(STDOUT_FD, &ansi, (uint)len);
-      if written < 0 {
-        throw "tui/app/write-failed";
-      }
-    }
+    // 直接完整写入 stdout，无需 string → byte[] 转换
+    self.writeOutput(ansi);
   }
 
   /**

@@ -68,7 +68,8 @@ open type Screen {
   /**
    * 调整屏幕尺寸：重建 front/back 为新尺寸的空白 Buffer。
    * 旧内容不迁移——TUI resize 时旧内容无法对齐，由上层组件树负责重新布局。
-   * front 同时清空，使下次 render() 产生全量重绘。
+   * front 同时清空；物理终端中的旧内容由上层在 resize 后显式清屏，
+   * 再以新的空白 front 为基准绘制当前画面。
    * @param width - 新列数
    * @param height - 新行数
    */
