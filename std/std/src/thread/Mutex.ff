@@ -20,7 +20,10 @@ extern func uv_mutex_unlock(handle: int): void;
  */
 open type Mutex {
 
-  seal let handle: int;
+  /**
+   * Native mutex handle used by low-level synchronization primitives.
+   */
+  open let handle: int;
 
   /**
    * Creates a new mutex.
@@ -57,13 +60,6 @@ open type Mutex {
    */
   open func unlock(): void {
     uv_mutex_unlock(self.handle);
-  }
-
-  /**
-   * Return the native mutex handle required by synchronization primitives.
-   */
-  open func nativeHandle(): int {
-    return self.handle;
   }
 
   /**

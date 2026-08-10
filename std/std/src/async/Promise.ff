@@ -10,21 +10,21 @@ import std;
 open type Promise<T> {
 
   seal let future: Future<T>;
-  seal let state: FutureState;
+  seal let _state: FutureState;
 
   seal let value: T;
   seal let error: Error;
 
   func Promise() {
-    self.state = FutureState.Pending;
+    self._state = FutureState.Pending;
     self.future = Future<T>(self);
   }
 
   /**
    * Get the current state of this promise.
    */
-  func getState(): FutureState {
-    return self.state;
+  func state(): FutureState {
+    return self._state;
   }
 
   /**
@@ -38,9 +38,9 @@ open type Promise<T> {
   func reject(error: Error): void {}
 
   func await(): T {
-    if (self.state == FutureState.Resolved) {
+    if (self._state == FutureState.Resolved) {
       return self.value;
-    } else if (self.state == FutureState.Rejected) {
+    } else if (self._state == FutureState.Rejected) {
       throw self.error;
     } else {
       // TODO: Implement waiting for the promise to be resolved or rejected.

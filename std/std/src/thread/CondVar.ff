@@ -60,7 +60,7 @@ open type CondVar {
    * The mutex is re-acquired before this function returns.
    */
   open func wait(mutex: Mutex): void {
-    uv_cond_wait(self.handle, mutex.nativeHandle());
+    uv_cond_wait(self.handle, mutex.handle);
   }
 
   /**
@@ -68,7 +68,7 @@ open type CondVar {
    * Returns true if signaled, false if the timeout expired.
    */
   open func timedWait(mutex: Mutex, timeoutNs: u64): bool {
-    let result = uv_cond_timedwait(self.handle, mutex.nativeHandle(), timeoutNs);
+    let result = uv_cond_timedwait(self.handle, mutex.handle, timeoutNs);
     return result == 0;
   }
 
