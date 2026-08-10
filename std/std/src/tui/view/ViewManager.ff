@@ -28,6 +28,7 @@ open type ViewManager {
   func ViewManager(screen: Screen) {
     self.screen = screen;
     self.sequence = List<Widget>();
+    self.root = none;
   }
 
   /**
@@ -49,6 +50,15 @@ open type ViewManager {
   }
 
   /**
+   * 获取当前 Screen 的 back buffer。
+   * Screen resize 后 Buffer 会被替换，组件不应缓存返回值。
+   * @return 当前绘制使用的 Buffer
+   */
+  open func getScreenBuffer(): Buffer {
+    return self.screen.buffer();
+  }
+
+  /**
    * 跟踪绘制顺序
    * @param widget 需要跟踪的 widget
    */
@@ -60,7 +70,7 @@ open type ViewManager {
    * 根组件
    * 所有的 widgets 都是从 root 开始递归调用 arrange 和 draw 方法
    */
-  open var root: Widget;
+  open var root: Option<Widget>;
 
   /**
    * 第一阶段：布局
@@ -68,7 +78,9 @@ open type ViewManager {
    * 布局结阶段结束后，所有 widgets 的 frame 都已经计算完成
    */
   open func arrange() {
-    self.root.arrange(self);
+    if self.root match root: Widget {
+      root.arrange(self);
+    }
   }
 
   /**
@@ -78,7 +90,10 @@ open type ViewManager {
    */
   open func draw() {
     self.sequence.clear();
-    self.root.draw(self);
+    if self.root match root: Widget {
+      self.screen.buffer().clear();
+      root.draw(self);
+    }
   }
 
 }

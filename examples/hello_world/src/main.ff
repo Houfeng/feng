@@ -15,6 +15,7 @@ func test() {
 }
 
 type User: JsonSerializable<User> {
+  seal var name2:string;
   var name: string;
   var age: int;
   static func toJson(value: User): JsonObject {
@@ -40,6 +41,7 @@ func main(args: string[]) {
   println(Json.stringify(obj));
   println("------------------------------------");
   let user = User { name: "alice", age: 20 };
+  user.name2 = "bob";
   println("user: {0}", Json.stringify(user));
   let user2 = Json.parse(Json.stringify(user));
   println("user2: {0}", Json.stringify(user2));

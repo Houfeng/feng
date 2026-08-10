@@ -293,7 +293,7 @@ open type Buffer {
    * @param fg - 前景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, text: string, fg: RgbColor, styles: Style...): void {
+  func draw(x: u32, y: u32, text: string, fg: Option<RgbColor>, styles: Style...): void {
     self.draw(x, y, text, fg, none, styles);
   }
 
@@ -307,7 +307,7 @@ open type Buffer {
    * @param fg - 前景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: RgbColor, styles: Style...): void {
+  func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, styles: Style...): void {
     self.draw(x, y, w, h, text, fg, none, styles);
   }
 
@@ -319,7 +319,7 @@ open type Buffer {
    * @param fg - 前景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, value: u64, fg: RgbColor, styles: Style...): void {
+  func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, styles: Style...): void {
     self.draw(x, y, value, fg, none, styles);
   }
 
@@ -333,7 +333,7 @@ open type Buffer {
    * @param fg - 前景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: RgbColor, styles: Style...): void {
+  func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, styles: Style...): void {
     self.draw(x, y, w, h, value, fg, none, styles);
   }
 
@@ -348,7 +348,7 @@ open type Buffer {
    * @param bg - 背景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, text: string, fg: RgbColor, bg: RgbColor, styles: Style...): void {
+  open func draw(x: u32, y: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style...): void {
     self.draw(x, y, text, fg, bg, styles);
   }
 
@@ -363,7 +363,7 @@ open type Buffer {
    * @param bg - 背景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: RgbColor, bg: RgbColor, styles: Style...): void {
+  open func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style...): void {
     self.draw(x, y, w, h, text, fg, bg, styles);
   }
 
@@ -376,7 +376,7 @@ open type Buffer {
    * @param bg - 背景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, value: u64, fg: RgbColor, bg: RgbColor, styles: Style...): void {
+  open func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style...): void {
     self.draw(x, y, value, fg, bg, styles);
   }
 
@@ -391,7 +391,7 @@ open type Buffer {
    * @param bg - 背景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: RgbColor, bg: RgbColor, styles: Style...): void {
+  open func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style...): void {
     self.draw(x, y, w, h, value, fg, bg, styles);
   }
 

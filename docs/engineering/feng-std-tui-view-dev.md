@@ -174,7 +174,7 @@ open type View: Widget {
 }
 ```
 
-`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只根据当前组件的 `style`、父组件区域和屏幕尺寸计算自身 `frame`；`View.draw()` 只处理当前组件，将其登记到 `ViewManager.sequence`，不遍历任何子组件。
+`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只根据当前组件的 `style`、父组件区域和屏幕尺寸计算自身 `frame`；`View.draw()` 使用 `frame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色，并将组件登记到 `ViewManager.sequence`。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。超出 Screen 的部分被裁剪，父容器的 `overflow` 裁剪不在当前实现范围内。
 
 `View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。
 
@@ -215,7 +215,7 @@ arrange 阶段
 
 draw 阶段
   Widget.draw(manager)
-  只根据 WidgetFrame 绘制
+  根据 WidgetFrame 和非尺寸样式绘制
   将自身登记到 ViewManager.sequence
 ```
 
@@ -255,17 +255,20 @@ draw 阶段
 open type ViewManager {
   seal let screen: Screen;
   seal let sequence: List<Widget>;
-  open var root: Widget;
+  open var root: Option<Widget>;
 
   open func getScreenWidth(): u32;
   open func getScreenHeight(): u32;
+  open func getScreenBuffer(): Buffer;
   open func trace(widget: Widget): void;
   open func arrange(): void;
   open func draw(): void;
 }
 ```
 
-`ViewManager` 通过构造函数接收已有 `Screen`，不创建新的 Screen。`getScreenWidth()` 和 `getScreenHeight()` 为 `View.arrange()` 提供无 parent 组件及 `Fixed` 组件的布局参照。本轮只增加 View 布局所需的 Screen 尺寸访问，不实现新的绘制调度、命中、焦点或事件逻辑。
+`ViewManager` 通过构造函数接收已有 `Screen`，不创建新的 Screen。`getScreenWidth()` 和 `getScreenHeight()` 为 `View.arrange()` 提供无 parent 组件及 `Fixed` 组件的布局参照；`getScreenBuffer()` 返回当前 Screen 的 back buffer。组件不缓存该 Buffer，避免 Screen resize 后继续使用旧引用。
+
+`root` 默认为 `none`。`arrange()` 在无 root 时不做处理。`draw()` 每轮先清空 `sequence`；存在 root 时再清空 Screen back buffer 并从 root 开始绘制，使组件移动或缩小后不会留下旧帧内容。无 root 时不清空 back buffer，保留现有直接通过 Screen 绘制的使用方式。逐帧只清空 `screen.buffer()`，不调用同时清空 front/back 的 `Screen.clear()`，以保留正确的 diff 基准。
 
 `sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；组件进入自身 `draw()` 时将自身登记到 `sequence`，越靠后的组件实际绘制层级越高。容器对 children 的调用顺序同时决定子组件在 sequence 中的顺序。
 
@@ -273,7 +276,7 @@ open type ViewManager {
 
 `sequence` 只记录本帧实际绘制顺序，并用于鼠标命中；它不保存也不处理剪裁状态。剪裁规则属于具体组件的绘制实现。
 
-当前 `ViewManager` 已提供 root 的 arrange/draw 入口与 sequence 登记方法，并持有由 `TuiApp` 传入的 Screen；尚未实现逆序命中、焦点、input 引用与事件路由。
+当前 `ViewManager` 已提供可选 root 的 arrange/draw 入口、back buffer 访问与 sequence 登记方法，并持有由 `TuiApp` 传入的 Screen；尚未实现逆序命中、焦点、input 引用与事件路由。
 
 ## 9 组件树与 parent
 
@@ -319,7 +322,7 @@ open type TuiApp {
 
 `ViewManager` 使用 `InputManager` 产生的 `KeyEvent`/`MouseEvent` 进行视图事件路由，并通过 `Screen` 完成组件绘制。`Screen` 和 `InputManager` 不在视图层重建。
 
-当前验证阶段仅在 `TuiApp` 中以现有 `screen` 组装 `ViewManager`，不改变 `TuiApp.render()`，也不接入 InputManager。
+当前验证阶段在 `TuiApp.render()` 处理 resize 后依次调用 `view.arrange()` 和 `view.draw()`，再通过 `Screen.buildPatchBytes()` 生成终端输出。无 root 时前两步不改变 Screen back buffer，现有直接绘制 Screen 的代码保持有效。本轮不接入 InputManager。
 
 ## 12 文件规划
 

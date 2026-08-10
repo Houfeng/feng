@@ -194,7 +194,7 @@ open spec Widget {
   func arrange(manager: ViewManager): void;
 
   /**
-   * 绘制当前组件；绘制阶段只使用 frame，不重新解释 style
+   * 根据 frame 和非尺寸样式绘制当前组件
    * 需要组件将自身添加到 ViewManager 的 sequence 中，保证绘制顺序正确
    */
   func draw(manager: ViewManager): void;

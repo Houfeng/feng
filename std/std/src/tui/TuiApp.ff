@@ -253,7 +253,7 @@ open type TuiApp {
   let screen: Screen = Screen(0, 0);
   /** 输入管理器（公开只读成员，构造时创建，用户通过此注册回调） */
   let input: InputManager;
-  /** 视图管理器；复用当前 TuiApp 的 Screen，本阶段只用于验证 View 布局 */
+  /** 视图管理器；复用当前 TuiApp 的 Screen，render() 中调度 View 布局与绘制 */
   let view: ViewManager;
   /** 窗口尺寸已变化标志：sigpipe 可读时置位，render() 中检查并清零 */
   seal var resizeRequested: bool;
@@ -386,7 +386,7 @@ open type TuiApp {
   }
 
   /**
-   * 渲染一帧：检查 resize、调用 Screen.buildPatchBytes()、写入 stdout。
+   * 渲染一帧：检查 resize、调度 View 布局与绘制、生成 Screen patch 并写入 stdout。
    * 单帧渲染，由 run() 事件循环调用，也可在测试中单独调用。
    * 直接使用 byte[]，不经过 string 中间转换。
    * run() 启动时已通过 clearScreen()/hideCursor() 写入 output 的清屏与光标序列，
@@ -404,6 +404,9 @@ open type TuiApp {
       }
       self.resizeRequested = false;
     }
+    // ViewManager 在存在 root 时重新布局并绘制本帧；无 root 时保留现有 Screen 内容
+    self.view.arrange();
+    self.view.draw();
     // 调用 Screen.buildPatchBytes() 生成 ANSI 序列字节
     let ansi = self.screen.buildPatchBytes();
     // 直接写入 stdout，无需 string → byte[] 转换

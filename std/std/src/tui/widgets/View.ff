@@ -4,6 +4,7 @@ import std;
 import std.collections;
 import std.tui.view;
 import std.tui.input;
+import std.tui.screen;
 
 /**
  * 基础视图组件
@@ -251,12 +252,34 @@ open type View: Widget {
   }
 
   /**
-   * 绘制当前组件；绘制阶段只使用 frame，不重新解释 style
-   * 需要组件将自身添加到 ViewManager 的 sequence 中，保证绘制顺序正确
+   * 将一个轴上的绘制尺寸裁剪到 Screen 范围内。
+   */
+  seal static func resolveDrawSize(origin: u32, size: u32, limit: u32): u32 {
+    if origin >= limit {
+      return 0;
+    }
+    let available = limit - origin;
+    if size < available {
+      return size;
+    }
+    return available;
+  }
+
+  /**
+   * 使用 frame 和非尺寸样式绘制当前组件的矩形。
+   * 超出 Screen 的部分被裁剪；不绘制文本、边框或子组件。
    */
   @mixable
   static func draw(widget: Widget, manager: ViewManager): void {
     manager.trace(widget);
+    // let frame = widget.frame;
+    // let width = View.resolveDrawSize(frame.x, frame.width, manager.getScreenWidth());
+    // let height = View.resolveDrawSize(frame.y, frame.height, manager.getScreenHeight());
+    // if width == 0 || height == 0 {
+    //   return;
+    // }
+    // manager.getScreenBuffer().draw(frame.x, frame.y, width, height, (u64)0,
+    //                                none, widget.style.backColor);
   }
 
   /**

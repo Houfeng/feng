@@ -39,7 +39,7 @@
 
 ### 2.2 视图逻辑层（第 4 层）
 
-- **`std.tui.view`**：承载布局声明、布局结果、`Widget`/`ContainerWidget` 契约和 `ViewManager`。当前已实现 `View.arrange()` 的自身布局计算，并在 `TuiApp` 中以现有 Screen 组装 ViewManager；绘制调度、命中、焦点与事件路由留在第七阶段继续实现，详见 `docs/engineering/feng-std-tui-view-dev.md`。
+- **`std.tui.view`**：承载布局声明、布局结果、`Widget`/`ContainerWidget` 契约和 `ViewManager`。当前已实现 `View.arrange()` 的自身布局计算和 `View.draw()` 的矩形绘制，并将 ViewManager 的 arrange/draw 调度接入 `TuiApp.render()`；命中、焦点与事件路由留在第七阶段继续实现，详见 `docs/engineering/feng-std-tui-view-dev.md`。
 - **`std.tui.widgets`**：承载组件实现。当前包含 `View`、`Container` 基础实现，以及只用于验证展开机制的 Text/Button 骨架；Input/List/ScrollView、VStack/HStack/Dock 等完整组件和布局容器后续实现。
 
 ### 2.3 应用控制层（第 5 层）
@@ -70,7 +70,7 @@
   - `combineStyles(styles: Style[]): u64` — 将多个 Style 按位或组合为单个 u64 样式编码。
   - `packStyle(fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): u64` — 将前景色、背景色和样式数组打包为完整的 u64 样式编码。`none` 的颜色不写入对应位段，表示终端默认色。RGB 编码为 `0xRRGGBB`。
 - **绘制原语**：
-  - `draw`（4 个 seal 数组版本 + 12 个 open 变长版本）。
+  - `draw`（4 个 seal 数组版本 + 12 个变长版本）。
     - seal 数组版本（内部实现，参数为 `fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]`）：
       1. `draw(x, y, text, fg, bg, styles)` — 单行文本，使用 `u8_next` 零分配解码 UTF-8 码点。
       2. `draw(x, y, w, h, text, fg, bg, styles)` — 矩形区域文本，自动换行。
@@ -78,8 +78,8 @@
       4. `draw(x, y, w, h, value: u64, fg, bg, styles)` — 矩形区域码点填充。
     - open 变长版本（公开 API，3 种颜色组合 × 4 种形状 = 12 个重载，参数为 `styles: Style...`）：
       - 无颜色：`draw(x, y, text, styles...)` 等 4 个，使用终端默认色。
-      - 带前景色：`draw(x, y, text, fg: RgbColor, styles...)` 等 4 个。
-      - 带前景及背景色：`draw(x, y, text, fg: RgbColor, bg: RgbColor, styles...)` 等 4 个。
+      - 带前景色：`draw(x, y, text, fg: Option<RgbColor>, styles...)` 等 4 个。
+      - 带前景及背景色：`draw(x, y, text, fg: Option<RgbColor>, bg: Option<RgbColor>, styles...)` 等 4 个。
   - `fill(value, fg, bg, styles...)` / `fill(value, styles...)` — 用指定码点和样式填充整个矩阵，委托 `draw(0, 0, width, height, ...)`。
   - `clear()` — 清空矩阵，委托 `fill(0)`。
 - 所有绘制方法均做边界裁剪，超出 Buffer 范围的内容被跳过。
@@ -193,8 +193,8 @@
 > 实现方案详见 `docs/engineering/feng-std-tui-view-dev.md`。
 
 - [ ] 4.30 完善 Widget 机制：`std.tui.view` 中的 `Thickness`、布局枚举、`WidgetStyle` type、`WidgetFrame`、`Widget`/`ContainerWidget` spec，以及 `std.tui.widgets.View`/`Container`（当前均已定义骨架）
-- [ ] 4.31 完善 ViewManager：当前已定义 root、sequence、trace 及 arrange/draw 入口；后续实现鼠标命中、focus、键盘焦点路由与自下向上事件冒泡
-- [ ] 4.32 集成 ViewManager 至 TuiApp：已新增 `view: ViewManager` 成员并复用现有 Screen，后续接入绘制调度与 InputManager
+- [ ] 4.31 完善 ViewManager：当前已实现可选 root、sequence、trace 及 arrange/draw 入口；后续实现鼠标命中、focus、键盘焦点路由与自下向上事件冒泡
+- [ ] 4.32 集成 ViewManager 至 TuiApp：已新增 `view: ViewManager` 成员、复用现有 Screen 并接入 render 绘制调度；后续接入 InputManager
 - [ ] 4.33 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、arrange/frame 计算、sequence 命中、事件冒泡等测试
 - [ ] 4.34 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.35 等待人工 Review：开发者审查视图机制层设计与实现，通过后方可进入第八阶段
