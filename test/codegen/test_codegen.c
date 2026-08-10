@@ -6626,10 +6626,21 @@ static void test_generic_value_construction_uses_reified_storage_codegen(void) {
     ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
                                      NULL, &out, &cgerr));
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source,
+    const char *size_decl = strstr(
+        out.c_source, "const size_t _val_size");
+    ASSERT(size_decl != NULL);
+    const char *size_read = strstr(
+        size_decl, "reified_agg_deps[0])->size");
+    ASSERT(size_read != NULL);
+    const char *zero_fill = strstr(size_read, ", 0, _val_size");
+    ASSERT(zero_fill != NULL);
+    const char *zero_fill_end = strchr(zero_fill, '\n');
+    ASSERT(zero_fill_end != NULL);
+    const char *next_size_read = strstr(
+        size_read + 1U, "reified_agg_deps[0])->size");
+    ASSERT(next_size_read == NULL || next_size_read >= zero_fill_end);
+    ASSERT(strstr(size_decl,
                   "_Alignas(max_align_t) char _val") != NULL);
-    ASSERT(strstr(out.c_source,
-                  "reified_agg_deps[0])->size") != NULL);
     ASSERT(strstr(out.c_source,
                   "Holder__G__T _val") == NULL);
     compile_generated_c_or_die(out.c_source);

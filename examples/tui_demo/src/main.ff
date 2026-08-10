@@ -63,7 +63,7 @@ func main(args: string[]) {
   // 初始居中的 20×20 蓝色矩形。
   let rectangle = View();
   rectangle.style.width = (u32)20;
-  rectangle.style.height = (u32)20;
+  rectangle.style.height = (u32)10;
   rectangle.style.horizontalAlign = WidgetAlign.Center;
   rectangle.style.verticalAlign = WidgetAlign.Center;
   rectangle.style.backColor = RgbColor(0, 0, 255);

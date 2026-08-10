@@ -13180,6 +13180,7 @@ static bool cg_emit_value_type_construction(CG *cg,
                                             FengToken blame,
                                             ExprResult *out) {
     char *val_name = NULL;
+    char *storage_size_name = NULL;
     CGType *val_type = NULL;
     char *descriptor_expr = NULL;
     bool uses_reified_storage = false;
@@ -13207,6 +13208,13 @@ static bool cg_emit_value_type_construction(CG *cg,
             cgtype_free(val_type);
             return false;
         }
+        storage_size_name = cg_fresh_temp(cg, "_val_size");
+        if (storage_size_name == NULL) {
+            free(val_name);
+            free(descriptor_expr);
+            cgtype_free(val_type);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
     }
 
     /* Step 1 — stack-allocate and zero-initialise.  An open generic value
@@ -13214,16 +13222,19 @@ static bool cg_emit_value_type_construction(CG *cg,
      * its concrete descriptor is the sole size authority. */
     if (!cg_emit_line_directive_force(cg, blame)) {
         free(val_name);
+        free(storage_size_name);
         free(descriptor_expr);
         cgtype_free(val_type);
         return false;
     }
     if (uses_reified_storage) {
         buf_append_fmt(cg->cur_body,
-                       "    _Alignas(max_align_t) char %s[(%s)->size];\n"
-                       "    memset(%s, 0, (%s)->size);\n",
-                       val_name, descriptor_expr,
-                       val_name, descriptor_expr);
+                       "    const size_t %s = (%s)->size;\n"
+                       "    _Alignas(max_align_t) char %s[%s];\n"
+                       "    memset(%s, 0, %s);\n",
+                       storage_size_name, descriptor_expr,
+                       val_name, storage_size_name,
+                       val_name, storage_size_name);
     } else {
         buf_append_fmt(cg->cur_body,
                        "    struct %s %s = {0};\n",
@@ -13242,6 +13253,7 @@ static bool cg_emit_value_type_construction(CG *cg,
         }
         if (addr.data == NULL) {
             free(val_name);
+            free(storage_size_name);
             free(descriptor_expr);
             cgtype_free(val_type);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
@@ -13251,6 +13263,7 @@ static bool cg_emit_value_type_construction(CG *cg,
         buf_free(&addr);
         if (!ok) {
             free(val_name);
+            free(storage_size_name);
             free(descriptor_expr);
             cgtype_free(val_type);
             return false;
@@ -13269,6 +13282,7 @@ static bool cg_emit_value_type_construction(CG *cg,
         }
         if (addr.data == NULL) {
             free(val_name);
+            free(storage_size_name);
             free(descriptor_expr);
             cgtype_free(val_type);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
@@ -13278,6 +13292,7 @@ static bool cg_emit_value_type_construction(CG *cg,
         buf_free(&addr);
         if (!ok) {
             free(val_name);
+            free(storage_size_name);
             free(descriptor_expr);
             cgtype_free(val_type);
             return false;
@@ -13299,6 +13314,7 @@ static bool cg_emit_value_type_construction(CG *cg,
     } else {
         out->c_expr = val_name;   /* transfer ownership of val_name */
     }
+    free(storage_size_name);
     free(descriptor_expr);
     if (out->c_expr == NULL) {
         cgtype_free(val_type);
