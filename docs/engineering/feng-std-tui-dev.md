@@ -194,9 +194,9 @@
 > 实现方案详见 `docs/engineering/feng-std-tui-view-dev.md`。
 
 - [x] 4.30 完善 Widget 基础机制：实现 `Thickness`、布局枚举、`WidgetStyle`、`WidgetFrame`、`Widget`/`ContainerWidget`，以及 `View`/`Container` 的基础行为和组件树关系维护
-- [x] 4.31 实现 View 布局与绘制：支持 Normal/Relative/Absolute/Fixed、尺寸与间距解析、对齐、祖先裁剪、矩形绘制及 sequence 登记
+- [x] 4.31 实现 View 布局与绘制：支持 Normal/Relative/Absolute/Fixed、尺寸与间距解析、对齐、祖先裁剪、矩形绘制、drawFrame 缓存及 sequence 登记
 - [x] 4.32 实现 ViewManager 基础调度并集成至 TuiApp：提供可选 root、sequence、trace、arrange/draw 入口，复用现有 Screen 并接入 `TuiApp.render()`
-- [ ] 4.33 实现 ViewManager 鼠标事件分发：将 MouseEvent 改为支持 `stop()`/`isStopped()` 的引用类型，接入 InputManager 单播 `onMouse`，实现逆序命中与自下向上冒泡
+- [ ] 4.33 实现 ViewManager 鼠标事件分发：将 MouseEvent 改为支持 `stop()`/`isStopped()` 的引用类型，接入 InputManager 单播 `onMouse`，基于缓存的 drawFrame 实现逆序命中与自下向上冒泡
 - [ ] 4.34 补充 std_test 用例：覆盖 Widget 契约、parent 维护、arrange/frame、sequence 命中、裁剪、鼠标回调选择、冒泡及停止传播
 - [ ] 4.35 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.36 等待人工 Review：开发者审查鼠标事件分发设计与实现，通过后再处理焦点和键盘路由

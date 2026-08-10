@@ -2,6 +2,7 @@ open module std.tui.view;
 
 import std;
 import std.collections;
+import std.tui.input;
 import std.tui.screen;
 
 /**
@@ -59,11 +60,100 @@ open type ViewManager {
   }
 
   /**
-   * 跟踪绘制顺序
+   * 缓存组件本帧实际绘制区域并跟踪绘制顺序。
    * @param widget 需要跟踪的 widget
+   * @param drawFrame 经过祖先和 Screen 裁剪后的实际绘制区域
    */
-  open func trace(widget: Widget): void {
+  open func trace(widget: Widget, drawFrame: WidgetFrame): void {
+    widget.drawFrame = drawFrame;
     self.sequence.add(widget);
+  }
+
+  /**
+   * 判断屏幕坐标是否位于指定矩形内。
+   * 使用 u64 计算右、下边界，避免 u32 坐标与尺寸相加时溢出。
+   * @param frame 需要检查的矩形
+   * @param x 屏幕列坐标
+   * @param y 屏幕行坐标
+   * @return 坐标是否位于矩形内
+   */
+  seal func containsPoint(frame: WidgetFrame, x: u32, y: u32): bool {
+    if frame.width == 0 || frame.height == 0 || x < frame.x || y < frame.y {
+      return false;
+    }
+    let right = (u64)frame.x + (u64)frame.width;
+    let bottom = (u64)frame.y + (u64)frame.height;
+    return (u64)x < right && (u64)y < bottom;
+  }
+
+  /**
+   * 按本帧实际绘制顺序从后向前查找最上层命中组件。
+   * 命中直接读取 draw 阶段缓存的 drawFrame，不重新遍历祖先或读取样式。
+   * @param x 屏幕列坐标
+   * @param y 屏幕行坐标
+   * @return 首个命中的组件；未命中时返回 none
+   */
+  seal func hitTest(x: u32, y: u32): Option<Widget> {
+    var index = self.sequence.size();
+    while index > 0 {
+      index -= 1;
+      let widget = self.sequence.get(index);
+      if self.containsPoint(widget.drawFrame, x, y) {
+        return widget;
+      }
+    }
+    return none;
+  }
+
+  /**
+   * 根据鼠标动作调用组件对应的单播回调。
+   * 滚轮按钮优先映射为 onWheel，其余事件按 action 分发。
+   * @param widget 当前接收事件的组件
+   * @param event 需要分发的鼠标事件
+   */
+  seal func invokeMouse(widget: Widget, event: MouseEvent): void {
+    if event.button == MouseButton.wheelUp || event.button == MouseButton.wheelDown {
+      let handler = widget.onWheel;
+      handler(event);
+      return;
+    }
+    match event.action {
+      MouseAction.press {
+        let handler = widget.onMouseDown;
+        handler(event);
+      }
+      MouseAction.move {
+        let handler = widget.onMouseMove;
+        handler(event);
+      }
+      MouseAction.release {
+        let handler = widget.onMouseUp;
+        handler(event);
+      }
+    }
+  }
+
+  /**
+   * 从本帧最上层命中组件开始分发鼠标事件，并沿 parent 自下向上冒泡。
+   * 每个回调返回后检查 event.isStopped()；停止后不再调用父组件回调。
+   * 未命中任何组件时静默返回。
+   * @param event InputManager 解析得到的鼠标事件
+   */
+  open func dispatchMouse(event: MouseEvent): void {
+    if self.hitTest(event.x, event.y) match let target: Widget {
+      var current = target;
+      while true {
+        self.invokeMouse(current, event);
+        if event.isStopped() {
+          return;
+        }
+        if current.parent match let parent: ContainerWidget {
+          current = (Widget)parent;
+        } else {
+          return;
+        }
+      }
+    }
   }
 
   /**

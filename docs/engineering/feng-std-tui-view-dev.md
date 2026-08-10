@@ -111,7 +111,7 @@ open type Thickness {
 
 ### 3.4 WidgetFrame
 
-`WidgetFrame` 是 `@value` 类型，只保存 `arrange` 后的最终矩形：
+`WidgetFrame` 是 `@value` 矩形类型，同时用于保存布局结果和本帧实际绘制区域：
 
 ```feng
 @value
@@ -123,7 +123,9 @@ open type WidgetFrame {
 }
 ```
 
-用户声明值保存在 `WidgetStyle` 中，计算结果写入 `WidgetFrame`。`draw`、命中测试和事件坐标判断均使用 `WidgetFrame`，不在绘制阶段重新解析声明值。
+用户声明值保存在 `WidgetStyle` 中；`arrange()` 将布局结果写入 `frame`，`draw()` 将
+经过祖先和 Screen 裁剪的本帧实际绘制区域写入 `drawFrame`。事件命中只读取
+`drawFrame`，不在事件阶段重新遍历祖先或解析当前样式。
 
 ## 4 Widget 契约
 
@@ -133,6 +135,7 @@ open type WidgetFrame {
 open spec Widget {
   let style: WidgetStyle;
   var frame: WidgetFrame;
+  var drawFrame: WidgetFrame;
   var parent: Option<ContainerWidget>;
 
   func arrange(manager: ViewManager): void;
@@ -151,6 +154,7 @@ open spec Widget {
 
 - `style` 引用不可重新绑定；
 - `frame` 是 `@value` 布局结果，由 `arrange()` 整体写回；
+- `drawFrame` 是 `@value` 绘制快照，由 `draw()` 计算并在登记 sequence 时整体写回；
 - `parent` 只能是容器组件，根组件的 `parent` 为 `none`；
 - `arrange`、`draw` 使用 `func` 定义，不是可由外部替换的回调字段；
 - `isAncestor(w)` 判断当前组件是否为 `w` 的祖先，不把自身视为自身的祖先；
@@ -165,6 +169,7 @@ open spec Widget {
 open type View: Widget {
   let style: WidgetStyle;
   var frame: WidgetFrame;
+  var drawFrame: WidgetFrame;
   var parent: Option<ContainerWidget>;
 
   func arrange(manager: ViewManager): void;
@@ -179,7 +184,7 @@ open type View: Widget {
 }
 ```
 
-`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只根据当前组件的 `style`、祖先组件区域和屏幕尺寸计算自身 `frame`；`View.draw()` 使用 `frame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色，并将有效绘制区域非空的组件登记到 `ViewManager.sequence`。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame`、Screen 与最近一个 `overflow == Hidden` 祖先组件 `frame` 的交集；不存在这样的祖先时只与 Screen 求交。
+`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只根据当前组件的 `style`、祖先组件区域和屏幕尺寸计算自身 `frame`；`View.draw()` 使用 `frame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色，并通过 `ViewManager.trace(widget, drawFrame)` 同时缓存有效绘制区域和登记绘制顺序。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame`、Screen 与最近一个 `overflow == Hidden` 祖先组件 `frame` 的交集；不存在这样的祖先时只与 Screen 求交。
 
 `View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。
 
@@ -221,7 +226,7 @@ arrange 阶段
 draw 阶段
   Widget.draw(manager)
   根据 WidgetFrame 和非尺寸样式绘制
-  将自身登记到 ViewManager.sequence
+  缓存 drawFrame 并登记到 ViewManager.sequence
 ```
 
 `ViewManager.arrange()` 和 `ViewManager.draw()` 只调用 root。每个组件自行决定是否、何时以及按什么顺序调用 children 的 `arrange()` 和 `draw()`；例如虚拟滚动容器可以只绘制当前可见的子组件。
@@ -255,9 +260,9 @@ draw 阶段
 
 ### 7.3 绘制裁剪
 
-`View.draw()` 先查找离自身最近的 `overflow == Hidden` 祖先组件。自身 `frame` 与该祖先组件 `frame` 求交后，再与 Screen 求交，得到本次有效绘制区域；不存在这样的祖先时，自身 `frame` 直接与 Screen 求交。裁剪结果只用于本次绘制，不写回自身 `frame`。
+`View.draw()` 先查找离自身最近的 `overflow == Hidden` 祖先组件。自身 `frame` 与该祖先组件 `frame` 求交后，再与 Screen 求交，得到本次有效绘制区域；不存在这样的祖先时，自身 `frame` 直接与 Screen 求交。裁剪结果不写回布局 `frame`，而是在登记 sequence 时写入 `drawFrame`，作为本帧绘制与后续鼠标命中的共同快照。
 
-裁剪使用完整矩形求交，同时计算裁剪后的 `x`、`y`、`width` 和 `height`，不使用只能处理 Screen 右侧或下侧边界的单轴长度计算。有效区域的任一尺寸为 0 时不写入 Buffer，也不登记到 `sequence`。
+裁剪使用完整矩形求交，同时计算裁剪后的 `x`、`y`、`width` 和 `height`，不使用只能处理 Screen 右侧或下侧边界的单轴长度计算。有效区域的任一尺寸为 0 时不写入 Buffer，也不登记到 `sequence`；此时旧 `drawFrame` 即使仍存在，也因组件不在本帧 sequence 中而不会参与命中。
 
 ## 8 ViewManager 与 sequence
 
@@ -272,7 +277,7 @@ open type ViewManager {
   open func getScreenWidth(): u32;
   open func getScreenHeight(): u32;
   open func getScreenBuffer(): Buffer;
-  open func trace(widget: Widget): void;
+  open func trace(widget: Widget, drawFrame: WidgetFrame): void;
   open func arrange(): void;
   open func draw(): void;
 }
@@ -282,11 +287,11 @@ open type ViewManager {
 
 `root` 默认为 `none`。`arrange()` 在无 root 时不做处理。`draw()` 每轮先清空 `sequence`；存在 root 时再清空 Screen back buffer 并从 root 开始绘制，使组件移动或缩小后不会留下旧帧内容。无 root 时不清空 back buffer，保留现有直接通过 Screen 绘制的使用方式。逐帧只清空 `screen.buffer()`，不调用同时清空 front/back 的 `Screen.clear()`，以保留正确的 diff 基准。
 
-`sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；组件进入自身 `draw()` 时将自身登记到 `sequence`，越靠后的组件实际绘制层级越高。容器对 children 的调用顺序同时决定子组件在 sequence 中的顺序。
+`sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；组件完成有效绘制区域计算后调用 `trace(widget, drawFrame)`，该方法先将区域写入 `widget.drawFrame`，再将组件登记到 `sequence`，保证绘制快照与顺序登记不会分离。越靠后的组件实际绘制层级越高，容器对 children 的调用顺序同时决定子组件在 sequence 中的顺序。
 
-鼠标命中时从 `sequence` 末尾向前查找，并按与绘制一致的有效区域判断事件坐标；第一个命中的组件即为目标组件。第七阶段不支持透明穿透，因此命中顶层组件后不继续向下查找。
+鼠标命中时从 `sequence` 末尾向前查找，并直接使用每个组件缓存的 `drawFrame` 判断事件坐标；第一个命中的组件即为目标组件。第七阶段不支持透明穿透，因此命中顶层组件后不继续向下查找。
 
-`sequence` 只记录本帧实际绘制顺序，并用于鼠标命中；它不保存剪裁状态。命中阶段按与 `View.draw()` 相同的规则重新计算组件的有效区域。
+`drawFrame` 表示用户当前看到的上一帧区域。即使布局、样式或组件树在绘制后发生修改，事件阶段也不重新计算命中区域；下一次 draw 会更新 sequence 与 `drawFrame`。这既保持命中与实际画面一致，也避免 1003 鼠标移动事件中反复遍历祖先。
 
 当前 `ViewManager` 已提供可选 root 的 arrange/draw 入口、back buffer 访问与 sequence 登记方法，并持有由 `TuiApp` 传入的 Screen；下一步实现逆序命中与鼠标事件路由。焦点与键盘路由不在本次实现范围内。
 
@@ -322,8 +327,7 @@ open type ViewManager {
 
 鼠标事件按以下规则分发：
 
-1. 从 `sequence` 末尾向前命中第一个包含事件坐标的 Widget；命中区域使用与绘制
-   相同的 Screen 和最近 `overflow == Hidden` 祖先裁剪规则；
+1. 从 `sequence` 末尾向前查找第一个 `drawFrame` 包含事件坐标的 Widget；
 2. `wheelUp`/`wheelDown` 调用 `onWheel`，其余事件按 `press`、`move`、`release`
    分别调用 `onMouseDown`、`onMouseMove`、`onMouseUp`；
 3. 当前 Widget 回调返回后检查 `event.isStopped()`；已停止则结束分发，否则沿
@@ -383,7 +387,7 @@ std/std/src/tui/widgets/
 1. 已完成 `Widget`/`ContainerWidget`、`View`/`Container`、组件树和 `ViewManager.sequence` 基础机制；
 2. 已完成 `View.arrange()`、`View.draw()`、root 调度及 TuiApp 渲染集成；
 3. 将 `MouseEvent` 改为引用类型，增加 `stop()` 与 `isStopped()`；
-4. 实现与绘制裁剪一致的 sequence 逆序命中；
+4. 在 draw 阶段缓存 `drawFrame`，实现基于该快照的 sequence 逆序命中；
 5. 实现鼠标回调选择、自下向上冒泡及停止传播；
 6. 将 `InputManager.onMouse` 单播回调接入 ViewManager，不接管 `onKey`；
 7. 补充 MouseEvent、命中、裁剪、层级、冒泡和停止传播的 std_test 用例；

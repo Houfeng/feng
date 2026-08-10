@@ -341,12 +341,14 @@ open type TuiApp {
   // ─── 构造函数 ─────────────────────────────────────────────────────────────
 
   /**
-   * 构造函数（无外部 fd）：创建 InputManager，不做 TTY 初始化。
+   * 构造函数（无外部 fd）：创建 InputManager 和 ViewManager，将单播鼠标输入
+   * 绑定到 ViewManager，不做 TTY 初始化。
    * screen 已在字段声明处显式初始绑定为零尺寸 Screen，不在构造函数中重复绑定。
    */
   func TuiApp() {
     self.input = InputManager();
     self.view = ViewManager(self.screen);
+    self.input.onMouse = self.view.dispatchMouse;
     self.tty = 0;
     self.loop = 0;
     self.resizeRequested = false;
@@ -358,7 +360,8 @@ open type TuiApp {
   }
 
   /**
-   * 构造函数（有外部 fd）：创建 InputManager 并保存外部通知 fd 数组，不做 TTY 初始化。
+   * 构造函数（有外部 fd）：创建 InputManager 和 ViewManager，将单播鼠标输入
+   * 绑定到 ViewManager，并保存外部通知 fd 数组，不做 TTY 初始化。
    * screen 已在字段声明处显式初始绑定为零尺寸 Screen，不在构造函数中重复绑定。
    * 异步 I/O 库场景使用：fds 为异步 I/O 库的通知 fd（如 epoll/kqueue/self-pipe 管道读端）。
    * TuiApp 只监听 fd 可读事件唤醒渲染，不向 fd 写入、不处理关闭——fd 的生命周期由调用方管理。
@@ -367,6 +370,7 @@ open type TuiApp {
   func TuiApp(fds: i32[]) {
     self.input = InputManager();
     self.view = ViewManager(self.screen);
+    self.input.onMouse = self.view.dispatchMouse;
     self.tty = 0;
     self.loop = 0;
     self.resizeRequested = false;

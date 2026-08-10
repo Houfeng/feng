@@ -35,8 +35,8 @@ open enum MouseButton {
 /**
  * MouseEvent 表示一个鼠标事件。
  *
- * @value 类型，所有字段为 `let`——结构体初始化后不可变。
- * InputManager 构造 MouseEvent 实例后调用 onMouse 分发，应用拿到的是只读快照。
+ * 普通引用类型，输入载荷字段均为 `let`，构造后不可变。
+ * 同一事件实例在 Widget 树中逐级传播，stop()/isStopped() 维护共享的停止状态。
  *
  * 修饰键来自 SGR 鼠标序列（mode 1006）的 button 高位编码，
  * 由终端主动报告，100% 可靠——isControl/isAlt/isShift 均准确。
@@ -44,7 +44,6 @@ open enum MouseButton {
  * 坐标为 0-based，与 Screen/Buffer 的坐标体系统一。
  * InputManager 解析时将终端 SGR 序列的 1-based 坐标减 1。
  */
-@value
 open type MouseEvent {
 
   /** 鼠标动作类型 */
@@ -62,6 +61,9 @@ open type MouseEvent {
   /** 修饰键位标志（MOD_CONTROL / MOD_ALT / MOD_SHIFT 的按位或，100% 可靠） */
   let mods: u8;
 
+  /** 是否已停止后续传播；仅由 stop() 修改 */
+  seal var stopped: bool;
+
   /**
    * 默认构造函数：action=press, button=none, x=0, y=0, mods=0。
    */
@@ -71,6 +73,7 @@ open type MouseEvent {
     self.x = 0;
     self.y = 0;
     self.mods = 0;
+    self.stopped = false;
   }
 
   /**
@@ -87,6 +90,7 @@ open type MouseEvent {
     self.x = x;
     self.y = y;
     self.mods = mods;
+    self.stopped = false;
   }
 
   // ─── 快捷判定方法（均 100% 可靠，来自 SGR button 高位） ───────────────
@@ -113,5 +117,21 @@ open type MouseEvent {
    */
   func isShift(): bool {
     return (self.mods & MOD_SHIFT) != 0;
+  }
+
+  /**
+   * 停止当前回调完成后的后续事件传播。
+   * 重复调用保持停止状态，不中断当前回调。
+   */
+  func stop(): void {
+    self.stopped = true;
+  }
+
+  /**
+   * 查询事件是否已停止后续传播。
+   * @return stop() 是否已经被调用
+   */
+  func isStopped(): bool {
+    return self.stopped;
   }
 }
