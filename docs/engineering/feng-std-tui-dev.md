@@ -193,18 +193,19 @@
 > 本阶段只实现 `ViewManager` + `Widget`/`ContainerWidget` 机制层，不完整实现 Text/Button/Input/List/ScrollView 等高级组件；Text/Button 只保留验证骨架。
 > 实现方案详见 `docs/engineering/feng-std-tui-view-dev.md`。
 
-- [ ] 4.30 完善 Widget 机制：`std.tui.view` 中的 `Thickness`、布局枚举、`WidgetStyle` type、`WidgetFrame`、`Widget`/`ContainerWidget` spec，以及 `std.tui.widgets.View`/`Container`（当前均已定义骨架）
-- [ ] 4.31 完善 ViewManager：当前已实现可选 root、sequence、trace 及 arrange/draw 入口；后续实现鼠标命中、focus、键盘焦点路由与自下向上事件冒泡
-- [ ] 4.32 集成 ViewManager 至 TuiApp：已新增 `view: ViewManager` 成员、复用现有 Screen 并接入 render 绘制调度；后续接入 InputManager
-- [ ] 4.33 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、arrange/frame 计算、sequence 命中、事件冒泡等测试
-- [ ] 4.34 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.35 等待人工 Review：开发者审查视图机制层设计与实现，通过后方可进入第八阶段
+- [x] 4.30 完善 Widget 基础机制：实现 `Thickness`、布局枚举、`WidgetStyle`、`WidgetFrame`、`Widget`/`ContainerWidget`，以及 `View`/`Container` 的基础行为和组件树关系维护
+- [x] 4.31 实现 View 布局与绘制：支持 Normal/Relative/Absolute/Fixed、尺寸与间距解析、对齐、祖先裁剪、矩形绘制及 sequence 登记
+- [x] 4.32 实现 ViewManager 基础调度并集成至 TuiApp：提供可选 root、sequence、trace、arrange/draw 入口，复用现有 Screen 并接入 `TuiApp.render()`
+- [ ] 4.33 实现 ViewManager 事件分发：接入 InputManager，实现鼠标逆序命中、焦点管理、键盘焦点路由与自下向上事件冒泡
+- [ ] 4.34 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、arrange/frame 计算、sequence 命中、焦点与事件冒泡等测试
+- [ ] 4.35 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.36 等待人工 Review：开发者审查视图机制层设计与实现，通过后方可进入第八阶段
 
 ### 第八阶段：测试与验证
 
-- [ ] 4.36 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
-- [ ] 4.37 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.38 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
+- [ ] 4.37 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
+- [ ] 4.38 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.39 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
 
 > **fcts 用例策略**：std 中的功能默认使用 std_test 用例，不需要 fcts 用例。仅当遇到 Feng 语言层面的问题（如语法、语义、类型系统等编译器行为）时，才在 `fcts/fcts_bin/src/` 中新增 fcts 用例进行兼容性验证。
 
