@@ -1,6 +1,8 @@
 open module std.tui.view;
 
+import std;
 import std.collections;
+import std.tui.screen;
 
 /**
  * ViewManager 是一个管理所有 widgets 的类
@@ -8,11 +10,43 @@ import std.collections;
  */
 open type ViewManager {
   /**
+   * TuiApp 创建的 Screen；ViewManager 只持有引用，不重复创建。
+   */
+  seal let screen: Screen;
+
+  /**
    * 记录绘制顺序
    * 用于 widgets 的鼠标事件层级处理，越靠后的 widget 说明层级越高，鼠标事件优先处理
    * 有 zIndex 的 widget 需要组件，需要在绘制时自行保障顺序（通常在父组件中）
    */
   seal let sequence: List<Widget>;
+
+  /**
+   * 使用已有 Screen 创建 ViewManager。
+   * @param screen 视图布局和绘制使用的 Screen
+   */
+  func ViewManager(screen: Screen) {
+    self.screen = screen;
+    self.sequence = List<Widget>();
+  }
+
+  /**
+   * 获取当前 Screen 宽度。
+   * @return Screen 列数
+   */
+  open func getScreenWidth(): u32 {
+    let size = self.screen.size();
+    return size.item1;
+  }
+
+  /**
+   * 获取当前 Screen 高度。
+   * @return Screen 行数
+   */
+  open func getScreenHeight(): u32 {
+    let size = self.screen.size();
+    return size.item2;
+  }
 
   /**
    * 跟踪绘制顺序

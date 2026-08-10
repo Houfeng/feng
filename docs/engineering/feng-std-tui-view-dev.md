@@ -3,7 +3,7 @@
 > 状态：设计中（design）
 >
 > 本文档是 `docs/engineering/feng-std-tui-dev.md` 第七阶段（视图机制层）的主规范。
-> 当前接口基线以 `std/std/src/tui/Widget.ff`、`std/std/src/tui/Thickness.ff`、`std/std/src/tui/ViewManager.ff` 和 `std/std/src/tui/views/` 中已经定义的骨架类型为准。
+> 当前接口基线以 `std/std/src/tui/view/` 和 `std/std/src/tui/widgets/` 中已经定义的骨架类型为准。
 
 ## 1 总体目标
 
@@ -24,7 +24,7 @@ TuiApp
 
 - `Widget`/`ContainerWidget` spec 与 `WidgetStyle` type；
 - `WidgetFrame`、`Thickness` 及布局相关枚举；
-- `std.tui.views.View` 与 `std.tui.views.Container` 基础实现；
+- `std.tui.widgets.View` 与 `std.tui.widgets.Container` 基础实现；
 - `ViewManager` 的组件树、绘制顺序、命中、焦点及事件路由；
 - `ViewManager` 与 `TuiApp`、`Screen`、`InputManager` 的集成。
 
@@ -36,7 +36,7 @@ TuiApp
 
 ### 3.1 布局枚举
 
-`std/std/src/tui/Widget.ff` 已定义：
+`std/std/src/tui/view/Widget.ff` 已定义：
 
 ```feng
 open enum WidgetPosition {
@@ -127,7 +127,7 @@ open type WidgetFrame {
 ```feng
 open spec Widget {
   let style: WidgetStyle;
-  let frame: WidgetFrame;
+  var frame: WidgetFrame;
   var parent: Option<ContainerWidget>;
 
   func arrange(manager: ViewManager): void;
@@ -144,7 +144,8 @@ open spec Widget {
 
 其中：
 
-- `style` 和 `frame` 引用不可重新绑定；
+- `style` 引用不可重新绑定；
+- `frame` 是 `@value` 布局结果，由 `arrange()` 整体写回；
 - `parent` 只能是容器组件，根组件的 `parent` 为 `none`；
 - `arrange`、`draw` 使用 `func` 定义，不是可由外部替换的回调字段；
 - `isAncestor(w)` 判断当前组件是否为 `w` 的祖先，不把自身视为自身的祖先；
@@ -153,12 +154,12 @@ open spec Widget {
 
 ## 5 View 基础组件
 
-基础组件定义在 `std.tui.views` 子模块中：
+基础组件定义在 `std.tui.widgets` 子模块中：
 
 ```feng
 open type View: Widget {
   let style: WidgetStyle;
-  let frame: WidgetFrame;
+  var frame: WidgetFrame;
   var parent: Option<ContainerWidget>;
 
   func arrange(manager: ViewManager): void;
@@ -173,7 +174,7 @@ open type View: Widget {
 }
 ```
 
-`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只处理当前组件的布局与 `frame`；`View.draw()` 只处理当前组件，将其登记到 `ViewManager.sequence`，不遍历任何子组件。
+`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只根据当前组件的 `style`、父组件区域和屏幕尺寸计算自身 `frame`；`View.draw()` 只处理当前组件，将其登记到 `ViewManager.sequence`，不遍历任何子组件。
 
 `View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。
 
@@ -191,7 +192,7 @@ open spec ContainerWidget: Widget {
 }
 ```
 
-基础实现定义在 `std.tui.views` 子模块中：
+基础实现定义在 `std.tui.widgets` 子模块中：
 
 ```feng
 open type Container: ContainerWidget {
@@ -224,9 +225,17 @@ draw 阶段
 
 ### 7.1 Normal 排列
 
-`position == Normal` 时，组件由父组件安排，并根据 `margin`、`padding`、`width`、`height`、`horizontalAlign` 和 `verticalAlign` 计算最终区域。`x`/`y` 不参与计算。
+`position == Normal` 时，组件根据父组件 content 区域计算最终区域；父组件 content 区域是父组件 `frame` 扣除父组件 `padding` 后的区域。无 parent 的根组件以整个 Screen 为参照区域。`x`/`y` 不参与 Normal 布局。
 
-`Full` 表示对应方向填满父组件分配的可用空间。`Full` 与显式 `width`/`height` 同时设置时的优先级尚未由现有类型定义确定，进入实现前需要人工确认。
+每个轴独立按以下顺序计算：
+
+1. 百分比 margin 以该轴的参照区域尺寸为基数，先解析自身两侧 margin；
+2. 从参照区域扣除两侧 margin，得到该轴的可用区域；
+3. `Full` 忽略该轴的 `width`/`height` 并占满可用区域；
+4. `Start`、`Center`、`End` 根据 `width`/`height` 计算尺寸，并在可用区域的起始、中间或末端定位；
+5. 百分比 `width`/`height` 以扣除自身 margin 后的可用区域为基数，转换为 `u32` 时向零截断。
+
+`padding` 不改变组件自身的 `frame`，由具体容器在计算其 children 的参照区域时使用。组件自行决定是否及如何触发 children 的布局，`ViewManager` 不参与子组件布局。
 
 ### 7.2 Absolute 与 Fixed
 
@@ -234,7 +243,9 @@ draw 阶段
 - `Fixed` 使用 `x`/`y` 相对屏幕定位；
 - 两者均忽略 `horizontalAlign` 和 `verticalAlign`；
 - `width`/`height` 仍支持固定值或百分比；
-- `margin`、百分比参照范围及父级裁剪规则按 Review 后确定的 arrange 规则执行。
+- 自身 margin 先从参照区域扣除，百分比 `width`/`height` 再以剩余区域为基数；
+- `x`/`y` 的百分比仍以未扣除自身 margin 的参照区域为基数，最终位置叠加起始侧 margin；
+- 父级裁剪不属于本轮 `View.arrange()` 的实现范围。
 
 ## 8 ViewManager 与 sequence
 
@@ -242,14 +253,19 @@ draw 阶段
 
 ```feng
 open type ViewManager {
+  seal let screen: Screen;
   seal let sequence: List<Widget>;
   open var root: Widget;
 
+  open func getScreenWidth(): u32;
+  open func getScreenHeight(): u32;
   open func trace(widget: Widget): void;
   open func arrange(): void;
   open func draw(): void;
 }
 ```
+
+`ViewManager` 通过构造函数接收已有 `Screen`，不创建新的 Screen。`getScreenWidth()` 和 `getScreenHeight()` 为 `View.arrange()` 提供无 parent 组件及 `Fixed` 组件的布局参照。本轮只增加 View 布局所需的 Screen 尺寸访问，不实现新的绘制调度、命中、焦点或事件逻辑。
 
 `sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；组件进入自身 `draw()` 时将自身登记到 `sequence`，越靠后的组件实际绘制层级越高。容器对 children 的调用顺序同时决定子组件在 sequence 中的顺序。
 
@@ -257,7 +273,7 @@ open type ViewManager {
 
 `sequence` 只记录本帧实际绘制顺序，并用于鼠标命中；它不保存也不处理剪裁状态。剪裁规则属于具体组件的绘制实现。
 
-当前 `ViewManager` 已提供 root 的 arrange/draw 入口与 sequence 登记方法，尚未实现逆序命中、焦点、screen/input 引用与事件路由。
+当前 `ViewManager` 已提供 root 的 arrange/draw 入口与 sequence 登记方法，并持有由 `TuiApp` 传入的 Screen；尚未实现逆序命中、焦点、input 引用与事件路由。
 
 ## 9 组件树与 parent
 
@@ -303,16 +319,20 @@ open type TuiApp {
 
 `ViewManager` 使用 `InputManager` 产生的 `KeyEvent`/`MouseEvent` 进行视图事件路由，并通过 `Screen` 完成组件绘制。`Screen` 和 `InputManager` 不在视图层重建。
 
+当前验证阶段仅在 `TuiApp` 中以现有 `screen` 组装 `ViewManager`，不改变 `TuiApp.render()`，也不接入 InputManager。
+
 ## 12 文件规划
 
 ```text
 std/std/src/tui/
+  TuiApp.ff          # 组装 Screen、InputManager 和 ViewManager
+
+std/std/src/tui/view/
   Thickness.ff       # 四边间距类型（已定义）
   Widget.ff          # 布局枚举、WidgetStyle、WidgetFrame、Widget、ContainerWidget
-  ViewManager.ff     # 视图管理器与 sequence（已定义骨架）
-  TuiApp.ff          # 后续新增 view 成员并接入 ViewManager
+  ViewManager.ff     # 视图管理器、Screen 引用与 sequence
 
-std/std/src/tui/views/
+std/std/src/tui/widgets/
   View.ff            # Widget 基础实现（已定义骨架）
   Container.ff       # ContainerWidget 基础实现
   Text.ff            # 仅用于验证 View 展开，不完整实现
@@ -324,7 +344,7 @@ std/std/src/tui/views/
 ## 13 实施步骤
 
 1. Review 并确认 `Widget`/`ContainerWidget`、`View`/`Container` 和 `ViewManager.sequence` 契约；
-2. 补全 `WidgetStyle` 默认值以及 `View` 的初始化与 `@mixable` 默认行为；
+2. 实现 `View.arrange()` 的自身布局计算，并通过 `ViewManager` 读取 Screen 尺寸；
 3. 实现 `Container` 的 children 存储、自动迁移、幂等移除和 parent 同步维护；
 4. 实现非递归 `isAncestor` 与 `"tui/widget/cycle"` 循环阻止；
 5. 完善 `ViewManager` 的 root、sequence 登记、arrange/draw 根调度与逆序命中；
@@ -343,10 +363,8 @@ std/std/src/tui/views/
 
 - `WidgetStyle` 的默认值；
 - `View` 与 `Container` 的构造和字段初始化方式；
-- `u32`/`float` 尺寸、坐标及 `Thickness` 百分比的精确参照范围和取整规则；
-- `Full` 与显式 `width`/`height` 同时设置时的优先级；
-- `Absolute`/`Fixed` 的 margin 与裁剪规则；
+- `Absolute`/`Fixed` 的父级裁剪规则；
 - `overflow == Hidden` 的裁剪状态由何处保存和传递；
 - `spec` 的 `seal` 成员落地后，如何在保持公开树操作 API 不变的前提下收紧 children/parent 存储访问；
-- root、焦点以及 `Screen`/`InputManager` 与 `ViewManager` 的具体关系；
+- root、焦点以及 `InputManager` 与 `ViewManager` 的具体关系；
 - 现有 `@value` 事件回调如何表达阻止冒泡。

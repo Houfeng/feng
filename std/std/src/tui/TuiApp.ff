@@ -253,6 +253,8 @@ open type TuiApp {
   let screen: Screen = Screen(0, 0);
   /** 输入管理器（公开只读成员，构造时创建，用户通过此注册回调） */
   let input: InputManager;
+  /** 视图管理器；复用当前 TuiApp 的 Screen，本阶段只用于验证 View 布局 */
+  let view: ViewManager;
   /** 窗口尺寸已变化标志：sigpipe 可读时置位，render() 中检查并清零 */
   seal var resizeRequested: bool;
   /** 是否已初始化（防止重复 init / 重复 exit） */
@@ -286,6 +288,7 @@ open type TuiApp {
    */
   func TuiApp() {
     self.input = InputManager();
+    self.view = ViewManager(self.screen);
     self.tty = 0;
     self.loop = 0;
     self.resizeRequested = false;
@@ -305,6 +308,7 @@ open type TuiApp {
    */
   func TuiApp(fds: i32[]) {
     self.input = InputManager();
+    self.view = ViewManager(self.screen);
     self.tty = 0;
     self.loop = 0;
     self.resizeRequested = false;

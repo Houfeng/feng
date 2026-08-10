@@ -19,7 +19,7 @@ open type View: Widget {
    * 布局阶段计算后的最终区域信息
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
-  let frame: WidgetFrame;
+  var frame: WidgetFrame;
 
   /**
    * 父组件；仅由组件树 API 维护
@@ -53,11 +53,201 @@ open type View: Widget {
   var onWheel: Action<MouseEvent>;
 
   /**
+   * 按指定参照尺寸解析固定值或百分比值。
+   * 百分比转换为 u32 时向零截断；非正数及 NaN 解析为 0，超出 u32 范围时取最大值。
+   */
+  seal static func resolveLength(value: Union<u32, float>, reference: u32): u32 {
+    return match value {
+      fixed: u32 { fixed }
+      ratio: float {
+        var value: u32 = 0;
+        if ratio == ratio && ratio > 0.0 {
+          let resolved = (double)reference * (double)ratio;
+          if resolved >= 4294967295.0 {
+            value = (u32)4294967295;
+          } else {
+            value = (u32)resolved;
+          }
+        }
+        value;
+      }
+      else { 0 }
+    };
+  }
+
+  /**
+   * 从参照尺寸中扣除两侧间距，扣除量过大时返回 0。
+   */
+  seal static func resolveAvailableSize(reference: u32, leading: u32, trailing: u32): u32 {
+    let occupied = (u64)leading + (u64)trailing;
+    if occupied >= (u64)reference {
+      return 0;
+    }
+    return reference - (u32)occupied;
+  }
+
+  /**
+   * 对 u32 坐标执行饱和加法。
+   */
+  seal static func addCoordinate(value: u32, offset: u32): u32 {
+    let result = (u64)value + (u64)offset;
+    if result >= (u64)4294967295 {
+      return (u32)4294967295;
+    }
+    return (u32)result;
+  }
+
+  /**
+   * 对 u32 坐标执行饱和减法。
+   */
+  seal static func subtractCoordinate(value: u32, offset: u32): u32 {
+    if offset >= value {
+      return 0;
+    }
+    return value - offset;
+  }
+
+  /**
+   * 根据对齐方式在一个轴的可用区域中定位组件。
+   * 组件尺寸超过可用区域时仍保持 Center/End 语义，并在坐标小于 0 时截断到 0。
+   */
+  seal static func resolveAlignedPosition(origin: u32, available: u32,
+                                           size: u32, align: WidgetAlign): u32 {
+    match align {
+      WidgetAlign.Center {
+        if size <= available {
+          return View.addCoordinate(origin, (available - size) / (u32)2);
+        }
+        return View.subtractCoordinate(origin, (size - available) / (u32)2);
+      }
+      WidgetAlign.End {
+        if size <= available {
+          return View.addCoordinate(origin, available - size);
+        }
+        return View.subtractCoordinate(origin, size - available);
+      }
+      else {
+        return origin;
+      }
+    }
+  }
+
+  /**
+   * 解析当前组件的布局参照区域。
+   * Normal 使用父组件扣除 padding 后的 content 区域；Absolute 使用父 frame；
+   * Fixed 或无 parent 时使用整个 Screen。
+   */
+  seal static func resolveReferenceFrame(widget: Widget, manager: ViewManager): WidgetFrame {
+    let reference = WidgetFrame();
+    reference.x = 0;
+    reference.y = 0;
+    reference.width = manager.getScreenWidth();
+    reference.height = manager.getScreenHeight();
+
+    if widget.style.position == WidgetPosition.Fixed {
+      return reference;
+    }
+
+    if widget.parent match parent: ContainerWidget {
+      let parentWidget = (Widget)parent;
+      reference.x = parentWidget.frame.x;
+      reference.y = parentWidget.frame.y;
+      reference.width = parentWidget.frame.width;
+      reference.height = parentWidget.frame.height;
+
+      if widget.style.position == WidgetPosition.Normal {
+        let padding = parentWidget.style.padding;
+        let top = View.resolveLength(padding.top, reference.height);
+        let right = View.resolveLength(padding.right, reference.width);
+        let bottom = View.resolveLength(padding.bottom, reference.height);
+        let left = View.resolveLength(padding.left, reference.width);
+        reference.x = View.addCoordinate(reference.x, left);
+        reference.y = View.addCoordinate(reference.y, top);
+        reference.width = View.resolveAvailableSize(reference.width, left, right);
+        reference.height = View.resolveAvailableSize(reference.height, top, bottom);
+      }
+    }
+
+    return reference;
+  }
+
+  /**
+   * 解析组件最终宽度。
+   */
+  seal static func resolveWidth(widget: Widget, referenceWidth: u32,
+                                  left: u32, right: u32): u32 {
+    let available = View.resolveAvailableSize(referenceWidth, left, right);
+    if widget.style.position == WidgetPosition.Normal &&
+       widget.style.horizontalAlign == WidgetAlign.Full {
+      return available;
+    }
+    return View.resolveLength(widget.style.width, available);
+  }
+
+  /**
+   * 解析组件最终高度。
+   */
+  seal static func resolveHeight(widget: Widget, referenceHeight: u32,
+                                   top: u32, bottom: u32): u32 {
+    let available = View.resolveAvailableSize(referenceHeight, top, bottom);
+    if widget.style.position == WidgetPosition.Normal &&
+       widget.style.verticalAlign == WidgetAlign.Full {
+      return available;
+    }
+    return View.resolveLength(widget.style.height, available);
+  }
+
+  /**
+   * 解析组件最终横坐标。
+   */
+  seal static func resolveX(widget: Widget, reference: WidgetFrame,
+                             left: u32, right: u32, width: u32): u32 {
+    let marginOrigin = View.addCoordinate(reference.x, left);
+    if widget.style.position == WidgetPosition.Normal {
+      let available = View.resolveAvailableSize(reference.width, left, right);
+      return View.resolveAlignedPosition(marginOrigin, available, width,
+                                         widget.style.horizontalAlign);
+    }
+    let offset = View.resolveLength(widget.style.x, reference.width);
+    return View.addCoordinate(View.addCoordinate(reference.x, offset), left);
+  }
+
+  /**
+   * 解析组件最终纵坐标。
+   */
+  seal static func resolveY(widget: Widget, reference: WidgetFrame,
+                             top: u32, bottom: u32, height: u32): u32 {
+    let marginOrigin = View.addCoordinate(reference.y, top);
+    if widget.style.position == WidgetPosition.Normal {
+      let available = View.resolveAvailableSize(reference.height, top, bottom);
+      return View.resolveAlignedPosition(marginOrigin, available, height,
+                                         widget.style.verticalAlign);
+    }
+    let offset = View.resolveLength(widget.style.y, reference.height);
+    return View.addCoordinate(View.addCoordinate(reference.y, offset), top);
+  }
+
+  /**
    * 对齐并计算当前组件的 frame
    * 容器组件自行决定是否及如何布局子组件
    */
   @mixable
   static func arrange(widget: Widget, manager: ViewManager): void {
+    let reference = View.resolveReferenceFrame(widget, manager);
+    let margin = widget.style.margin;
+    let top = View.resolveLength(margin.top, reference.height);
+    let right = View.resolveLength(margin.right, reference.width);
+    let bottom = View.resolveLength(margin.bottom, reference.height);
+    let left = View.resolveLength(margin.left, reference.width);
+    let width = View.resolveWidth(widget, reference.width, left, right);
+    let height = View.resolveHeight(widget, reference.height, top, bottom);
+
+    let frame = WidgetFrame();
+    frame.x = View.resolveX(widget, reference, left, right, width);
+    frame.y = View.resolveY(widget, reference, top, bottom, height);
+    frame.width = width;
+    frame.height = height;
+    widget.frame = frame;
   }
 
   /**

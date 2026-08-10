@@ -39,7 +39,7 @@
 
 ### 2.2 视图逻辑层（第 4 层）
 
-- **`std.tui.view`**：承载布局声明、布局结果、`Widget`/`ContainerWidget` 契约和 `ViewManager`。当前已定义组件树及 arrange/draw 调度骨架；命中、焦点与事件路由留在第七阶段继续实现，详见 `docs/engineering/feng-std-tui-view-dev.md`。
+- **`std.tui.view`**：承载布局声明、布局结果、`Widget`/`ContainerWidget` 契约和 `ViewManager`。当前已实现 `View.arrange()` 的自身布局计算，并在 `TuiApp` 中以现有 Screen 组装 ViewManager；绘制调度、命中、焦点与事件路由留在第七阶段继续实现，详见 `docs/engineering/feng-std-tui-view-dev.md`。
 - **`std.tui.widgets`**：承载组件实现。当前包含 `View`、`Container` 基础实现，以及只用于验证展开机制的 Text/Button 骨架；Input/List/ScrollView、VStack/HStack/Dock 等完整组件和布局容器后续实现。
 
 ### 2.3 应用控制层（第 5 层）
@@ -194,7 +194,7 @@
 
 - [ ] 4.30 完善 Widget 机制：`std.tui.view` 中的 `Thickness`、布局枚举、`WidgetStyle` type、`WidgetFrame`、`Widget`/`ContainerWidget` spec，以及 `std.tui.widgets.View`/`Container`（当前均已定义骨架）
 - [ ] 4.31 完善 ViewManager：当前已定义 root、sequence、trace 及 arrange/draw 入口；后续实现鼠标命中、focus、键盘焦点路由与自下向上事件冒泡
-- [ ] 4.32 集成 ViewManager 至 TuiApp：新增 `view: ViewManager` 成员，并接入 `Screen`/`InputManager`
+- [ ] 4.32 集成 ViewManager 至 TuiApp：已新增 `view: ViewManager` 成员并复用现有 Screen，后续接入绘制调度与 InputManager
 - [ ] 4.33 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、arrange/frame 计算、sequence 命中、事件冒泡等测试
 - [ ] 4.34 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.35 等待人工 Review：开发者审查视图机制层设计与实现，通过后方可进入第八阶段
