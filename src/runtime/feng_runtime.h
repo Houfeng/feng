@@ -68,6 +68,14 @@ typedef struct FengManagedFieldDescriptor {
     const struct FengAggregateDescriptor *aggregate_desc;
 } FengManagedFieldDescriptor;
 
+/* Mutable per-closed-type state for one generic type static binding. The
+ * descriptor keeps the table address while generated shared generic bodies
+ * use a compile-time member index; no runtime name lookup is performed. */
+typedef struct FengStaticBindingState {
+    void *storage;
+    bool initialized;
+} FengStaticBindingState;
+
 typedef struct FengTypeDescriptor {
     const char *name;            /* fully-qualified, debug-only */
     size_t size;                 /* total instance bytes incl. header (0 for variable-length) */
@@ -125,6 +133,10 @@ typedef struct FengTypeDescriptor {
      * methods, indexed by globally stable sort key. */
     size_t reified_type_deps_count;
     const struct FengTypeDescriptor *const *reified_type_deps;
+
+    /* Per-closed-type static binding state in declaration order. Non-generic
+     * types and generic types without static bindings leave this NULL. */
+    FengStaticBindingState *static_bindings;
 } FengTypeDescriptor;
 
 typedef struct FengTrivialDescriptor {
@@ -386,6 +398,10 @@ typedef struct FengAggregateDescriptor {
     const struct FengAggregateDescriptor *const *reified_agg_deps;
     size_t reified_type_deps_count;
     const struct FengTypeDescriptor *const *reified_type_deps;
+
+    /* Same closed generic static state carried by FengTypeDescriptor. Value
+     * type shared methods receive this aggregate descriptor instead. */
+    FengStaticBindingState *static_bindings;
 } FengAggregateDescriptor;
 
 /* Static description of a concrete invocation of a standalone generic function.

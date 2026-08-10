@@ -632,6 +632,75 @@ struct UserType {
     const FengProgram *owner_program;
 };
 
+/** Return whether a user type represents an instance of a generic origin. */
+static bool cg_user_type_is_generic_origin_instance(const UserType *type) {
+    return type != NULL &&
+           type->is_generic_instance &&
+           type->generic_origin_decl != NULL &&
+           type->generic_origin_decl->kind == FENG_DECL_TYPE &&
+           type->generic_origin_decl->as.type_decl.type_param_count > 0U;
+}
+
+/** Return whether a generated generic instance owns per-closed static state. */
+static bool cg_user_type_uses_static_binding_states(const UserType *type) {
+    return cg_user_type_is_generic_origin_instance(type) &&
+           type->generic_context_type_param_count == 0U &&
+           type->static_binding_count > 0U;
+}
+
+/** Build the C symbol of a generic instance's static binding state table. */
+static char *cg_user_type_static_binding_states_name_dup(const UserType *type) {
+    Buf name;
+
+    if (type == NULL || type->c_struct_name == NULL) {
+        return NULL;
+    }
+    buf_init(&name);
+    buf_append_fmt(&name, "%s__static_binding_states", type->c_struct_name);
+    return name.data;
+}
+
+/** Resolve a static binding's declaration-order index within its owner. */
+static bool cg_type_static_binding_index(const TypeStaticBinding *binding,
+                                         size_t *out_index) {
+    const UserType *owner;
+
+    if (binding == NULL || binding->owner_type == NULL) {
+        return false;
+    }
+    owner = binding->owner_type;
+    for (size_t index = 0U; index < owner->static_binding_count; ++index) {
+        if (&owner->static_bindings[index] == binding) {
+            if (out_index != NULL) {
+                *out_index = index;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/** Build the lvalue expression for one generic instance static state entry. */
+static char *cg_type_static_binding_state_expr_dup(
+    const TypeStaticBinding *binding) {
+    char *states_name;
+    size_t index;
+    Buf expression;
+
+    if (!cg_type_static_binding_index(binding, &index)) {
+        return NULL;
+    }
+    states_name = cg_user_type_static_binding_states_name_dup(
+        binding->owner_type);
+    if (states_name == NULL) {
+        return NULL;
+    }
+    buf_init(&expression);
+    buf_append_fmt(&expression, "%s[%zu]", states_name, index);
+    free(states_name);
+    return expression.data;
+}
+
 static bool cg_user_type_is_abi(const struct UserType *t) {
     return t != NULL && t->is_abi_type;
 }
@@ -1710,6 +1779,10 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
                                                   const FengExpr *member_expr,
                                                   ExprResult *recv,
                                                   ExprResult *out);
+static char *cg_generic_type_static_ensure_shared_cname(
+    CG *cg,
+    const FengDecl *decl,
+    const FengTypeMember *member);
 static char *cg_generic_type_method_shared_cname(CG *cg,
                                                  const FengDecl *decl,
                                                  const FengTypeMember *member);
@@ -1718,6 +1791,11 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                                                FengCompileTarget target,
                                                bool has_func_desc,
                                                const char *shared_name_override);
+static bool cg_emit_generic_type_static_binding_ensure_shared(
+    CG *cg,
+    const FengDecl *decl,
+    const FengTypeMember *member,
+    FengCompileTarget target);
 static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
                                                 const UserMethod *m,
                                                 const char *func_desc_expr,
@@ -5116,6 +5194,11 @@ static void cg_refresh_user_type_references(CG *cg,
             cg_refresh_cgtype_user_types(type->fields[j].type, old_base, old_count, cg->user_types);
         }
         for (size_t j = 0; j < type->static_binding_count; ++j) {
+            type->static_bindings[j].owner_type = cg_remap_user_type_ptr(
+                old_base,
+                old_count,
+                cg->user_types,
+                type->static_bindings[j].owner_type);
             cg_refresh_cgtype_user_types(type->static_bindings[j].type, old_base, old_count, cg->user_types);
         }
         for (size_t j = 0; j < type->constructor_count; ++j) {
@@ -9358,6 +9441,26 @@ static bool cg_init_type_static_binding(CG *cg,
     return cg_resolve_user_field_type(cg, t, member, &binding->type);
 }
 
+/** Emit zero-initialized C storage for a Feng static binding by value category. */
+static void cg_emit_static_storage_decl(Buf *out,
+                                        bool exports_public_surface,
+                                        bool weak_definition,
+                                        const char *cty,
+                                        const char *c_name,
+                                        const CGType *type) {
+    const char *prefix = weak_definition
+                             ? "__attribute__((weak)) "
+                             : (exports_public_surface ? "" : "static ");
+
+    if (cgtype_is_managed(type)) {
+        buf_append_fmt(out, "%s%s %s = NULL;\n", prefix, cty, c_name);
+    } else if (cgtype_is_aggregate(type) || cgtype_is_by_value_struct(type)) {
+        buf_append_fmt(out, "%s%s %s = {0};\n", prefix, cty, c_name);
+    } else {
+        buf_append_fmt(out, "%s%s %s = 0;\n", prefix, cty, c_name);
+    }
+}
+
 static bool cg_emit_type_static_binding_decl(CG *cg, const TypeStaticBinding *binding) {
     char *cty;
 
@@ -9370,24 +9473,52 @@ static bool cg_emit_type_static_binding_decl(CG *cg, const TypeStaticBinding *bi
                        binding->member != NULL ? binding->member->token : (FengToken){0},
                        "IE0001", "codegen: out of memory");
     }
-    if (cgtype_is_managed(binding->type)) {
+    cg_emit_static_storage_decl(&cg->statics,
+                                binding->exports_public_surface,
+                                cg_user_type_is_generic_origin_instance(
+                                    binding->owner_type) &&
+                                    binding->owner_type->generic_context_type_param_count == 0U,
+                                cty,
+                                binding->c_name,
+                                binding->type);
+    if (!cg_user_type_is_generic_origin_instance(binding->owner_type)) {
         buf_append_fmt(&cg->statics,
-                       "%s%s %s = NULL;\n",
-                       binding->exports_public_surface ? "" : "static ",
-                       cty,
-                       binding->c_name);
-    } else {
-        buf_append_fmt(&cg->statics,
-                       "%s%s %s = 0;\n",
-                       binding->exports_public_surface ? "" : "static ",
-                       cty,
-                       binding->c_name);
+                       "static bool %s = false;\n",
+                       binding->c_inited_name);
     }
-    buf_append_fmt(&cg->statics, "static bool %s = false;\n", binding->c_inited_name);
-    buf_append_fmt(&cg->fn_protos,
-                   "%svoid %s(void);\n",
-                   binding->exports_public_surface ? "" : "static ",
-                   binding->c_ensure_init_name);
+    if (!cg_user_type_is_generic_origin_instance(binding->owner_type)) {
+        buf_append_fmt(&cg->fn_protos,
+                       "%svoid %s(void);\n",
+                       binding->exports_public_surface ? "" : "static ",
+                       binding->c_ensure_init_name);
+    } else if (binding->exports_public_surface &&
+               cg_program_origin(cg, binding->owner_type->owner_program) ==
+                   FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        char *shared_ensure =
+            cg_generic_type_static_ensure_shared_cname(
+                cg,
+                binding->owner_type->generic_origin_decl,
+                binding->member);
+        const char *descriptor_type =
+            cg_user_type_is_value(binding->owner_type)
+                ? "FengAggregateDescriptor"
+                : "FengTypeDescriptor";
+
+        if (shared_ensure == NULL) {
+            free(cty);
+            return cg_fail(cg,
+                           binding->member != NULL
+                               ? binding->member->token
+                               : (FengToken){0},
+                           "IE0001", "codegen: out of memory");
+        }
+        buf_append_fmt(&cg->fn_protos,
+            "void %s(const %s *_type_desc, "
+            "FengStaticBindingState *_state);\n",
+            shared_ensure,
+            descriptor_type);
+        free(shared_ensure);
+    }
     free(cty);
     return true;
 }
@@ -9445,8 +9576,11 @@ static bool cg_register_user_type_members(CG *cg, UserType *t, FengCompileTarget
                     (target == FENG_COMPILE_TARGET_LIB ||
                      cg_program_origin(cg, t->owner_program) ==
                          FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE);
-                if (cg_program_origin(cg, t->owner_program) !=
-                    FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE &&
+                if (((!cg_user_type_is_generic_origin_instance(t) &&
+                      cg_program_origin(cg, t->owner_program) !=
+                          FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) ||
+                     (cg_user_type_is_generic_origin_instance(t) &&
+                      t->generic_context_type_param_count == 0U)) &&
                     !cg_emit_type_static_binding_decl(cg, sb)) {
                     return false;
                 }
@@ -9508,6 +9642,31 @@ static bool cg_register_user_type_members(CG *cg, UserType *t, FengCompileTarget
     t->method_count = mi;
     t->static_binding_count = sbi;
     t->static_method_count = smi;
+    if (cg_user_type_uses_static_binding_states(t) &&
+        (cg_program_origin(cg, t->owner_program) !=
+             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE ||
+         t->generic_context_type_param_count == 0U)) {
+        char *states_name = cg_user_type_static_binding_states_name_dup(t);
+        const char *linkage = "__attribute__((weak)) ";
+
+        if (states_name == NULL) {
+            return cg_fail(cg, t->decl->token,
+                           "IE0001", "codegen: out of memory");
+        }
+        buf_append_fmt(&cg->statics,
+                       "%sFengStaticBindingState %s[] = {\n",
+                       linkage,
+                       states_name);
+        for (size_t binding_index = 0U;
+             binding_index < t->static_binding_count;
+             ++binding_index) {
+            buf_append_fmt(&cg->statics,
+                           "    { .storage = (void *)&%s, .initialized = false },\n",
+                           t->static_bindings[binding_index].c_name);
+        }
+        buf_append_cstr(&cg->statics, "};\n");
+        free(states_name);
+    }
     return cg_debug_add_user_type_field_records(cg, t, decl->token);
 }
 
@@ -11948,9 +12107,124 @@ static void cg_emit_module_binding_ensure_init_call(CG *cg,
     buf_append_fmt(cg->cur_body, "    %s();\n", mb->c_ensure_init_name);
 }
 
-static void cg_emit_type_static_binding_ensure_init_call(CG *cg,
-                                                         const TypeStaticBinding *binding) {
+static bool cg_emit_type_static_binding_ensure_init_call(
+    CG *cg,
+    const TypeStaticBinding *binding) {
+    if (cg_user_type_is_generic_origin_instance(binding->owner_type)) {
+        char *state_expr = cg_type_static_binding_state_expr_dup(binding);
+        char *ensure_name = cg_generic_type_static_ensure_shared_cname(
+            cg,
+            binding->owner_type->generic_origin_decl,
+            binding->member);
+        const char *descriptor_name = cg_user_type_is_value(binding->owner_type)
+                                          ? binding->owner_type->c_aggregate_desc_name
+                                          : binding->owner_type->c_desc_name;
+
+        if (state_expr == NULL || ensure_name == NULL ||
+            descriptor_name == NULL) {
+            free(state_expr);
+            free(ensure_name);
+            return cg_fail(cg,
+                           binding->member != NULL
+                               ? binding->member->token
+                               : (FengToken){0},
+                           "IE0001", "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+                       "    %s(&%s, &%s);\n",
+                       ensure_name,
+                       descriptor_name,
+                       state_expr);
+        free(state_expr);
+        free(ensure_name);
+        return true;
+    }
     buf_append_fmt(cg->cur_body, "    %s();\n", binding->c_ensure_init_name);
+    return true;
+}
+
+/** Return whether an erased generic body must select this static via a descriptor. */
+static bool cg_static_binding_uses_shared_state(
+    const CG *cg,
+    const UserType *target) {
+    return cg != NULL &&
+           cg->in_generic_fn &&
+           target != NULL &&
+           cg_user_type_is_generic_origin_instance(target) &&
+           target->generic_context_type_param_count > 0U;
+}
+
+/** Emit one descriptor-indexed generic static state lookup and direct ensure call. */
+static bool cg_emit_shared_static_binding_state(
+    CG *cg,
+    const UserType *target,
+    const TypeStaticBinding *binding,
+    FengToken blame,
+    char **out_state_name) {
+    const FengDecl *origin;
+    const char *descriptor_type;
+    char *descriptor_expr = NULL;
+    char *descriptor_name = NULL;
+    char *state_name = NULL;
+    char *ensure_name = NULL;
+    size_t binding_index;
+
+    if (out_state_name != NULL) {
+        *out_state_name = NULL;
+    }
+    if (!cg_static_binding_uses_shared_state(cg, target) ||
+        binding == NULL || binding->member == NULL ||
+        !cg_type_static_binding_index(binding, &binding_index)) {
+        return false;
+    }
+    origin = target->generic_origin_decl;
+    if (origin == cg->generic_type_method_decl) {
+        descriptor_expr = strdup("_td");
+    } else {
+        descriptor_expr = cg_rtd_expr_for_type(cg, target, blame);
+    }
+    descriptor_name = cg_fresh_temp(cg, "_static_desc");
+    state_name = cg_fresh_temp(cg, "_static_state");
+    ensure_name = cg_generic_type_static_ensure_shared_cname(
+        cg,
+        origin,
+        binding->member);
+    if (descriptor_expr == NULL || descriptor_name == NULL ||
+        state_name == NULL || ensure_name == NULL) {
+        free(descriptor_expr);
+        free(descriptor_name);
+        free(state_name);
+        free(ensure_name);
+        if (!cg->failed) {
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        return false;
+    }
+    descriptor_type = cg_user_type_is_value(target)
+                          ? "FengAggregateDescriptor"
+                          : "FengTypeDescriptor";
+    buf_append_fmt(cg->cur_body,
+        "    const %s *%s = %s;\n"
+        "    FengStaticBindingState *%s = &%s->static_bindings[%zu];\n"
+        "    %s(%s, %s);\n",
+        descriptor_type,
+        descriptor_name,
+        descriptor_expr,
+        state_name,
+        descriptor_name,
+        binding_index,
+        ensure_name,
+        descriptor_name,
+        state_name);
+    free(descriptor_expr);
+    free(descriptor_name);
+    free(ensure_name);
+    if (out_state_name != NULL) {
+        *out_state_name = state_name;
+    } else {
+        free(state_name);
+    }
+    return true;
 }
 
 /* ===================== expression emission ===================== */
@@ -11966,6 +12240,94 @@ struct ExprResult {
     /* True when c_expr is a C lvalue whose address can be taken directly. */
     bool    is_addressable;
 };
+
+/** Store a same-parameter erased value into generic static storage. */
+static bool cg_emit_generic_static_binding_store(
+    CG *cg,
+    const char *storage_expr,
+    const CGType *target_type,
+    ExprResult *value,
+    FengToken blame,
+    bool replace_existing) {
+    const char *descriptor;
+    char *source_name;
+
+    if (cg == NULL || storage_expr == NULL || target_type == NULL ||
+        target_type->kind != CG_TYPE_GENERIC_PARAM || value == NULL ||
+        value->type == NULL || value->type->kind != CG_TYPE_GENERIC_PARAM ||
+        value->type->generic_param_index != target_type->generic_param_index) {
+        return cg_fail(cg, blame,
+                       "CE0248", "codegen: generic static assignment requires a value with the same generic type parameter");
+    }
+    descriptor = cg_generic_param_desc_name(
+        cg,
+        target_type->generic_param_index);
+    source_name = cg_fresh_temp(cg, "_static_source");
+    if (descriptor == NULL || source_name == NULL) {
+        free(source_name);
+        return cg_fail(cg,
+                       blame,
+                       descriptor == NULL ? "CE0237" : "IE0001",
+                       descriptor == NULL
+                           ? "codegen: missing generic descriptor for static assignment"
+                           : "codegen: out of memory");
+    }
+    buf_append_fmt(cg->cur_body,
+        "    const void *%s = %s;\n"
+        "    switch (%s->kind) {\n"
+        "        case FENG_VALUE_TRIVIAL:\n"
+        "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
+        "            break;\n"
+        "        case FENG_VALUE_MANAGED_POINTER: {\n"
+        "            void *_new_value = *(void *const *)%s;\n",
+        source_name,
+        value->c_expr,
+        descriptor,
+        storage_expr,
+        source_name,
+        descriptor,
+        source_name);
+    if (!value->owns_ref) {
+        buf_append_cstr(cg->cur_body,
+                        "            feng_retain(_new_value);\n");
+    }
+    if (replace_existing) {
+        buf_append_fmt(cg->cur_body,
+            "            void *_old_value = *(void **)%s;\n"
+            "            *(void **)%s = _new_value;\n"
+            "            feng_release(_old_value);\n",
+            storage_expr,
+            storage_expr);
+    } else {
+        buf_append_fmt(cg->cur_body,
+            "            *(void **)%s = _new_value;\n",
+            storage_expr);
+    }
+    buf_append_cstr(cg->cur_body,
+        "            break;\n"
+        "        }\n"
+        "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n");
+    if (value->owns_ref) {
+        buf_append_fmt(cg->cur_body,
+            "            feng_aggregate_take(%s, (void *)%s, "
+            "feng_generic_aggregate_descriptor(%s));\n",
+            storage_expr,
+            source_name,
+            descriptor);
+    } else {
+        buf_append_fmt(cg->cur_body,
+            "            feng_aggregate_assign(%s, %s, "
+            "feng_generic_aggregate_descriptor(%s));\n",
+            storage_expr,
+            source_name,
+            descriptor);
+    }
+    buf_append_cstr(cg->cur_body,
+        "            break;\n"
+        "    }\n");
+    free(source_name);
+    return true;
+}
 
 static void er_init(ExprResult *r) {
     r->c_expr = NULL;
@@ -17041,6 +17403,72 @@ static bool cg_append_static_owner_context_args(CG *cg,
     return true;
 }
 
+/* Return whether one static-method parameter uses the erased pointer ABI in
+ * the shared generic body.  Closed and imported instances have concrete
+ * semantic parameter types, so recover the corresponding source member by
+ * declaration ordinal instead of relying on deserialized AST identity. */
+static bool cg_generic_static_method_param_uses_erased_abi(
+    const UserType *owner_type,
+    const UserMethod *method,
+    size_t param_index) {
+    const FengDecl *origin;
+    const FengTypeMember *origin_member = NULL;
+    size_t method_ordinal = (size_t)-1;
+    size_t current_ordinal = 0U;
+
+    if (method == NULL || param_index >= method->param_count) {
+        return false;
+    }
+    if (method->param_types[param_index] != NULL &&
+        method->param_types[param_index]->kind == CG_TYPE_GENERIC_PARAM) {
+        return true;
+    }
+    if (owner_type == NULL || !owner_type->is_generic_instance ||
+        owner_type->generic_origin_decl == NULL ||
+        owner_type->generic_origin_decl->kind != FENG_DECL_TYPE) {
+        return false;
+    }
+    for (size_t i = 0U; i < owner_type->static_method_count; ++i) {
+        if (&owner_type->static_methods[i] == method) {
+            method_ordinal = i;
+            break;
+        }
+    }
+    if (method_ordinal == (size_t)-1) {
+        return false;
+    }
+
+    origin = owner_type->generic_origin_decl;
+    for (size_t i = 0U; i < origin->as.type_decl.member_count; ++i) {
+        const FengTypeMember *candidate = origin->as.type_decl.members[i];
+
+        if (candidate == NULL || candidate->kind != FENG_TYPE_MEMBER_METHOD ||
+            !candidate->is_static) {
+            continue;
+        }
+        if (current_ordinal == method_ordinal) {
+            origin_member = candidate;
+            break;
+        }
+        current_ordinal++;
+    }
+    if (origin_member == NULL ||
+        param_index >= origin_member->as.callable.param_count) {
+        return false;
+    }
+
+    return cg_type_ref_is_direct_type_param(
+               origin_member->as.callable.params[param_index].type,
+               origin->as.type_decl.type_params,
+               origin->as.type_decl.type_param_count,
+               NULL) ||
+           cg_type_ref_is_direct_type_param(
+               origin_member->as.callable.params[param_index].type,
+               origin_member->as.callable.type_params,
+               origin_member->as.callable.type_param_count,
+               NULL);
+}
+
 static bool cg_emit_generic_static_method_call(CG *cg,
                                                const FengExpr *e,
                                                const UserType *owner_type,
@@ -17198,8 +17626,8 @@ static bool cg_emit_generic_static_method_call(CG *cg,
 
     /* Build arg_exprs for fixed arguments. */
     for (size_t i = 0U; i < fixed_param_count; ++i) {
-        if (um->param_types[i] != NULL &&
-            um->param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
+        if (cg_generic_static_method_param_uses_erased_abi(
+                owner_type, um, i)) {
             char *tmp = cg_fresh_temp(cg, "_gsma");
 
             if (tmp == NULL) {
@@ -17297,8 +17725,8 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     } else {
         /* Non-variadic: build remaining arg_exprs (generic param handling). */
         for (size_t i = fixed_param_count; i < arg_count; ++i) {
-            if (um->param_types[i] != NULL &&
-                um->param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
+            if (cg_generic_static_method_param_uses_erased_abi(
+                    owner_type, um, i)) {
                 char *tmp = cg_fresh_temp(cg, "_gsma");
 
                 if (tmp == NULL) {
@@ -17464,9 +17892,19 @@ static bool cg_emit_generic_static_method_call(CG *cg,
             }
             buf_append_cstr(cg->cur_body, owner_descriptor_expr);
             has_arg = true;
-        } else if (method_is_imported && owner_type != NULL &&
-                   owner_type->c_desc_name != NULL) {
-            buf_append_fmt(cg->cur_body, "&%s", owner_type->c_desc_name);
+        } else if (method_is_imported && owner_type != NULL) {
+            const char *owner_descriptor = cg_user_type_is_value(owner_type)
+                                               ? owner_type->c_aggregate_desc_name
+                                               : owner_type->c_desc_name;
+
+            if (owner_descriptor == NULL) {
+                cg_fail(cg,
+                        e->token,
+                        "CE0142", "codegen: generic static method call is missing its owner descriptor");
+                ok = false;
+                goto cleanup;
+            }
+            buf_append_fmt(cg->cur_body, "&%s", owner_descriptor);
             has_arg = true;
         }
         free(owner_descriptor_expr);
@@ -18930,7 +19368,49 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
                                                : NULL;
 
         if (binding != NULL) {
-            cg_emit_type_static_binding_ensure_init_call(cg, binding);
+            if (cg_static_binding_uses_shared_state(cg, static_target)) {
+                char *state_name = NULL;
+
+                if (!cg_emit_shared_static_binding_state(cg,
+                                                         static_target,
+                                                         binding,
+                                                         e->token,
+                                                         &state_name)) {
+                    free(state_name);
+                    return false;
+                }
+                if (binding->type->kind == CG_TYPE_GENERIC_PARAM) {
+                    Buf storage;
+
+                    buf_init(&storage);
+                    buf_append_fmt(&storage, "%s->storage", state_name);
+                    out->c_expr = storage.data;
+                } else {
+                    char *cty = cg_ctype_dup(binding->type);
+                    Buf storage;
+
+                    if (cty == NULL) {
+                        free(state_name);
+                        return cg_fail(cg, e->token,
+                                       "IE0001", "codegen: out of memory");
+                    }
+                    buf_init(&storage);
+                    buf_append_fmt(&storage,
+                                   "(*(%s *)%s->storage)",
+                                   cty,
+                                   state_name);
+                    free(cty);
+                    out->c_expr = storage.data;
+                }
+                free(state_name);
+                out->type = cgtype_clone(binding->type);
+                out->owns_ref = false;
+                out->is_addressable = true;
+                return out->c_expr != NULL && out->type != NULL;
+            }
+            if (!cg_emit_type_static_binding_ensure_init_call(cg, binding)) {
+                return false;
+            }
             out->c_expr = strdup(binding->c_name);
             out->type = cgtype_clone(binding->type);
             out->owns_ref = false;
@@ -24242,6 +24722,194 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     return true;
 }
 
+/** Emit assignment to a static binding selected through a generic descriptor. */
+static bool cg_emit_shared_static_binding_assign(
+    CG *cg,
+    const FengStmt *stmt,
+    const UserType *target,
+    const TypeStaticBinding *binding,
+    bool is_compound,
+    FengTokenKind binary_op) {
+    char *state_name = NULL;
+    char *destination = NULL;
+    char *cty = NULL;
+    bool ok = false;
+
+    if (!cg_emit_shared_static_binding_state(cg,
+                                             target,
+                                             binding,
+                                             stmt->token,
+                                             &state_name)) {
+        goto cleanup;
+    }
+    if (binding->type->kind == CG_TYPE_GENERIC_PARAM) {
+        ExprResult value;
+        Buf storage;
+
+        if (is_compound) {
+            cg_fail(cg,
+                    stmt->token,
+                    "CE0245", "codegen: compound assignment requires a numeric static binding type");
+            goto cleanup;
+        }
+        if (!cg_emit_expr_for_expected_type(cg,
+                                            stmt->as.assign.value,
+                                            binding->type,
+                                            &value)) {
+            goto cleanup;
+        }
+        buf_init(&storage);
+        buf_append_fmt(&storage, "%s->storage", state_name);
+        ok = storage.data != NULL &&
+             cg_emit_generic_static_binding_store(cg,
+                                                  storage.data,
+                                                  binding->type,
+                                                  &value,
+                                                  stmt->token,
+                                                  true);
+        buf_free(&storage);
+        er_free(&value);
+        goto cleanup;
+    }
+
+    cty = cg_ctype_dup(binding->type);
+    if (cty == NULL) {
+        cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    {
+        Buf lvalue;
+
+        buf_init(&lvalue);
+        buf_append_fmt(&lvalue,
+                       "(*(%s *)%s->storage)",
+                       cty,
+                       state_name);
+        destination = lvalue.data;
+    }
+    if (destination == NULL) {
+        cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+
+    if (is_compound) {
+        char *old_name;
+        ExprResult value;
+        Buf expression;
+
+        if (!cgtype_is_numeric(binding->type->kind)) {
+            cg_fail(cg,
+                    stmt->token,
+                    "CE0245", "codegen: compound assignment requires a numeric static binding type");
+            goto cleanup;
+        }
+        old_name = cg_fresh_temp(cg, "_old");
+        if (old_name == NULL) {
+            cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+        buf_append_fmt(cg->cur_body,
+                       "    %s %s = %s;\n",
+                       cty,
+                       old_name,
+                       destination);
+        if (!cg_emit_expr(cg, stmt->as.assign.value, &value)) {
+            free(old_name);
+            goto cleanup;
+        }
+        buf_init(&expression);
+        if (!cg_append_numeric_op_expr(&expression,
+                                       binding->type->kind,
+                                       old_name,
+                                       binary_op,
+                                       value.c_expr)) {
+            buf_free(&expression);
+            er_free(&value);
+            free(old_name);
+            cg_fail(cg,
+                    stmt->token,
+                    "CE0073", "codegen: unsupported compound assignment operator");
+            goto cleanup;
+        }
+        buf_append_fmt(cg->cur_body,
+                       "    %s = (%s)(%s);\n",
+                       destination,
+                       cty,
+                       expression.data);
+        buf_free(&expression);
+        er_free(&value);
+        free(old_name);
+        ok = true;
+        goto cleanup;
+    }
+
+    {
+        ExprResult value;
+
+        if (!cg_emit_expr_for_expected_type(cg,
+                                            stmt->as.assign.value,
+                                            binding->type,
+                                            &value)) {
+            goto cleanup;
+        }
+        if (cgtype_is_managed(binding->type)) {
+            if (value.owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                    "    { void *_old = %s; %s = %s; feng_release(_old); }\n",
+                    destination,
+                    destination,
+                    value.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    feng_assign((void **)&%s, %s);\n",
+                    destination,
+                    value.c_expr);
+            }
+        } else if (cgtype_is_aggregate(binding->type)) {
+            const char *aggregate_descriptor =
+                cg_aggregate_desc_name(binding->type);
+
+            if (aggregate_descriptor == NULL) {
+                er_free(&value);
+                cg_fail(cg,
+                        stmt->token,
+                        "CE0246", "codegen: missing aggregate descriptor for static binding write");
+                goto cleanup;
+            }
+            if (!cg_prepare_aggregate_assign_source(cg, &value, "_t")) {
+                er_free(&value);
+                cg_fail(cg, stmt->token,
+                        "IE0001", "codegen: out of memory");
+                goto cleanup;
+            }
+            buf_append_fmt(cg->cur_body,
+                "    feng_aggregate_assign(%s->storage, &%s, &%s);\n",
+                state_name,
+                value.c_expr,
+                aggregate_descriptor);
+        } else if (cgtype_is_by_value_struct(binding->type)) {
+            buf_append_fmt(cg->cur_body,
+                           "    %s = %s;\n",
+                           destination,
+                           value.c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "    %s = (%s)(%s);\n",
+                           destination,
+                           cty,
+                           value.c_expr);
+        }
+        er_free(&value);
+        ok = true;
+    }
+
+cleanup:
+    free(cty);
+    free(destination);
+    free(state_name);
+    return ok;
+}
+
 static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
     const FengExpr *target = stmt->as.assign.target;
     const bool is_compound = cg_assignment_is_compound(stmt->as.assign.op);
@@ -24535,7 +25203,17 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                                    static_target->feng_name,
                                    binding->feng_name);
                 }
-                cg_emit_type_static_binding_ensure_init_call(cg, binding);
+                if (cg_static_binding_uses_shared_state(cg, static_target)) {
+                    return cg_emit_shared_static_binding_assign(cg,
+                                                                stmt,
+                                                                static_target,
+                                                                binding,
+                                                                is_compound,
+                                                                binary_op);
+                }
+                if (!cg_emit_type_static_binding_ensure_init_call(cg, binding)) {
+                    return false;
+                }
                 if (is_compound) {
                     char *cty = cg_ctype_dup(binding->type);
                     char *old_tmp = NULL;
@@ -24632,11 +25310,18 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                             er_free(&v);
                             return false;
                         }
-                        buf_append_fmt(cg->cur_body,
-                                       "    %s = (%s)(%s);\n",
-                                       binding->c_name,
-                                       cty,
-                                       v.c_expr);
+                        if (cgtype_is_by_value_struct(binding->type)) {
+                            buf_append_fmt(cg->cur_body,
+                                           "    %s = %s;\n",
+                                           binding->c_name,
+                                           v.c_expr);
+                        } else {
+                            buf_append_fmt(cg->cur_body,
+                                           "    %s = (%s)(%s);\n",
+                                           binding->c_name,
+                                           cty,
+                                           v.c_expr);
+                        }
                         free(cty);
                     }
                     er_free(&v);
@@ -35836,26 +36521,12 @@ static bool cg_pass_register_module_bindings(CG *cg,
         const ModuleBinding *mb = &cg->module_bindings[cg->module_binding_count - 1];
         char *cty = cg_ctype_dup(mb->type);
         if (!cty) return cg_fail(cg, d->token, "IE0001", "codegen: out of memory");
-        if (cgtype_is_managed(mb->type)) {
-            buf_append_fmt(&cg->statics,
-                           "%s%s %s = NULL;\n",
-                           mb->exports_public_surface ? "" : "static ",
-                           cty,
-                           mb->c_name);
-        } else if (cgtype_is_aggregate(mb->type) ||
-                   cgtype_is_by_value_struct(mb->type)) {
-            buf_append_fmt(&cg->statics,
-                           "%s%s %s = {0};\n",
-                           mb->exports_public_surface ? "" : "static ",
-                           cty,
-                           mb->c_name);
-        } else {
-            buf_append_fmt(&cg->statics,
-                           "%s%s %s = 0;\n",
-                           mb->exports_public_surface ? "" : "static ",
-                           cty,
-                           mb->c_name);
-        }
+        cg_emit_static_storage_decl(&cg->statics,
+                                    mb->exports_public_surface,
+                                    false,
+                                    cty,
+                                    mb->c_name,
+                                    mb->type);
         buf_append_fmt(&cg->statics, "static bool %s = false;\n", mb->c_inited_name);
         buf_append_fmt(&cg->fn_protos,
                        "%svoid %s(void);\n",
@@ -36085,6 +36756,19 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                 continue;
             case FENG_DECL_TYPE: {
                 if (d->as.type_decl.type_param_count > 0) {
+                    for (size_t member_index = 0U;
+                         member_index < d->as.type_decl.member_count;
+                         ++member_index) {
+                        const FengTypeMember *member =
+                            d->as.type_decl.members[member_index];
+
+                        if (member->kind == FENG_TYPE_MEMBER_FIELD &&
+                            member->is_static &&
+                            !cg_emit_generic_type_static_binding_ensure_shared(
+                                cg, d, member, target)) {
+                            return false;
+                        }
+                    }
                     if (!cg_emit_generic_implicit_constructor_entry(
                             cg, d, target)) {
                         return false;
@@ -37295,6 +37979,225 @@ static bool cg_emit_module_binding_ensure_init(CG *cg, const ModuleBinding *mb) 
     return true;
 }
 
+/** Initialize one descriptor-selected generic static storage slot. */
+static bool cg_emit_type_static_binding_state_init(
+    CG *cg,
+    const TypeStaticBinding *binding,
+    const char *state_expr) {
+    const FengExpr *initializer;
+    char *cty = NULL;
+    Buf destination;
+
+    if (cg == NULL || binding == NULL || binding->member == NULL ||
+        binding->type == NULL || state_expr == NULL) {
+        return false;
+    }
+    initializer = binding->member->as.field.initializer;
+    if (binding->type->kind == CG_TYPE_GENERIC_PARAM) {
+        if (initializer == NULL) {
+            Buf storage;
+
+            buf_init(&storage);
+            buf_append_fmt(&storage, "%s->storage", state_expr);
+            if (storage.data == NULL ||
+                !cg_emit_generic_param_default_init_at_address(
+                    cg,
+                    storage.data,
+                    binding->type,
+                    binding->member->token)) {
+                buf_free(&storage);
+                return false;
+            }
+            buf_free(&storage);
+            return true;
+        }
+        {
+            Scope *parent_scope = cg->cur_scope;
+            Scope *scope = scope_push(parent_scope);
+            ExprResult value;
+            Buf storage;
+
+            if (scope == NULL) {
+                return cg_fail(cg, binding->member->token,
+                               "IE0001", "codegen: out of memory");
+            }
+            cg->cur_scope = scope;
+            buf_append_cstr(cg->cur_body, "    {\n");
+            if (!cg_emit_initializer_for_declared_type(cg,
+                                                       initializer,
+                                                       binding->type,
+                                                       &value)) {
+                cg->cur_scope = parent_scope;
+                scope_pop_free(scope);
+                return false;
+            }
+            buf_init(&storage);
+            buf_append_fmt(&storage, "%s->storage", state_expr);
+            if (storage.data == NULL ||
+                !cg_emit_generic_static_binding_store(cg,
+                                                      storage.data,
+                                                      binding->type,
+                                                      &value,
+                                                      binding->member->token,
+                                                      false)) {
+                buf_free(&storage);
+                er_free(&value);
+                cg->cur_scope = parent_scope;
+                scope_pop_free(scope);
+                return false;
+            }
+            buf_free(&storage);
+            er_free(&value);
+            cg_release_scope(cg, scope);
+            buf_append_cstr(cg->cur_body, "    }\n");
+            cg->cur_scope = parent_scope;
+            scope_pop_free(scope);
+            return true;
+        }
+    }
+
+    cty = cg_ctype_dup(binding->type);
+    if (cty == NULL) {
+        return cg_fail(cg, binding->member->token,
+                       "IE0001", "codegen: out of memory");
+    }
+    buf_init(&destination);
+    buf_append_fmt(&destination,
+                   "(*(%s *)%s->storage)",
+                   cty,
+                   state_expr);
+    if (destination.data == NULL) {
+        free(cty);
+        return cg_fail(cg, binding->member->token,
+                       "IE0001", "codegen: out of memory");
+    }
+
+    if (initializer == NULL) {
+        if (cgtype_is_aggregate(binding->type)) {
+            const char *descriptor = cg_aggregate_desc_name(binding->type);
+
+            if (descriptor == NULL) {
+                buf_free(&destination);
+                free(cty);
+                return cg_fail(cg,
+                               binding->member->token,
+                               "CE0374", "codegen: missing aggregate default-init rule for generic static binding");
+            }
+            buf_append_fmt(cg->cur_body,
+                "    feng_aggregate_default_init(%s->storage, &%s);\n",
+                state_expr,
+                descriptor);
+        } else {
+            char *default_expression = NULL;
+
+            if (!cg_default_value_expr(cg,
+                                       binding->type,
+                                       &binding->member->token,
+                                       &default_expression)) {
+                buf_free(&destination);
+                free(cty);
+                return false;
+            }
+            if (cgtype_is_by_value_struct(binding->type)) {
+                buf_append_fmt(cg->cur_body,
+                    "    %s = %s;\n",
+                    destination.data,
+                    default_expression);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "    %s = (%s)(%s);\n",
+                    destination.data,
+                    cty,
+                    default_expression);
+            }
+            free(default_expression);
+        }
+        buf_free(&destination);
+        free(cty);
+        return true;
+    }
+
+    {
+        Scope *parent_scope = cg->cur_scope;
+        Scope *scope = scope_push(parent_scope);
+        ExprResult value;
+
+        if (scope == NULL) {
+            buf_free(&destination);
+            free(cty);
+            return cg_fail(cg, binding->member->token,
+                           "IE0001", "codegen: out of memory");
+        }
+        cg->cur_scope = scope;
+        buf_append_cstr(cg->cur_body, "    {\n");
+        if (!cg_emit_initializer_for_declared_type(cg,
+                                                   initializer,
+                                                   binding->type,
+                                                   &value)) {
+            cg->cur_scope = parent_scope;
+            scope_pop_free(scope);
+            buf_free(&destination);
+            free(cty);
+            return false;
+        }
+        if (cgtype_is_managed(binding->type)) {
+            if (value.owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                               "        %s = %s;\n",
+                               destination.data,
+                               value.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "        %s = %s; feng_retain(%s);\n",
+                    destination.data,
+                    value.c_expr,
+                    destination.data);
+            }
+        } else if (cgtype_is_aggregate(binding->type)) {
+            const char *descriptor = cg_aggregate_desc_name(binding->type);
+
+            if (descriptor == NULL ||
+                !cg_prepare_aggregate_assign_source(cg, &value, "_t")) {
+                er_free(&value);
+                cg->cur_scope = parent_scope;
+                scope_pop_free(scope);
+                buf_free(&destination);
+                free(cty);
+                return cg_fail(cg,
+                               binding->member->token,
+                               descriptor == NULL ? "CE0246" : "IE0001",
+                               descriptor == NULL
+                                   ? "codegen: missing aggregate descriptor for generic static binding write"
+                                   : "codegen: out of memory");
+            }
+            buf_append_fmt(cg->cur_body,
+                "        feng_aggregate_assign(%s->storage, &%s, &%s);\n",
+                state_expr,
+                value.c_expr,
+                descriptor);
+        } else if (cgtype_is_by_value_struct(binding->type)) {
+            buf_append_fmt(cg->cur_body,
+                           "        %s = %s;\n",
+                           destination.data,
+                           value.c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           "        %s = (%s)(%s);\n",
+                           destination.data,
+                           cty,
+                           value.c_expr);
+        }
+        er_free(&value);
+        cg_release_scope(cg, scope);
+        buf_append_cstr(cg->cur_body, "    }\n");
+        cg->cur_scope = parent_scope;
+        scope_pop_free(scope);
+    }
+    buf_free(&destination);
+    free(cty);
+    return true;
+}
+
 static bool cg_emit_type_static_binding_init(CG *cg, const TypeStaticBinding *binding) {
     const FengExpr *init;
 
@@ -37329,11 +38232,18 @@ static bool cg_emit_type_static_binding_init(CG *cg, const TypeStaticBinding *bi
                     free(def_expr);
                     return cg_fail(cg, binding->member->token, "IE0001", "codegen: out of memory");
                 }
-                buf_append_fmt(cg->cur_body,
-                               "    %s = (%s)(%s);\n",
-                               binding->c_name,
-                               cty,
-                               def_expr);
+                if (cgtype_is_by_value_struct(binding->type)) {
+                    buf_append_fmt(cg->cur_body,
+                                   "    %s = %s;\n",
+                                   binding->c_name,
+                                   def_expr);
+                } else {
+                    buf_append_fmt(cg->cur_body,
+                                   "    %s = (%s)(%s);\n",
+                                   binding->c_name,
+                                   cty,
+                                   def_expr);
+                }
                 free(cty);
             }
             free(def_expr);
@@ -37369,6 +38279,31 @@ static bool cg_emit_type_static_binding_init(CG *cg, const TypeStaticBinding *bi
                                r.c_expr,
                                binding->c_name);
             }
+        } else if (cgtype_is_aggregate(binding->type)) {
+            const char *desc = cg_aggregate_desc_name(binding->type);
+
+            if (desc == NULL) {
+                er_free(&r);
+                cg->cur_scope = NULL;
+                scope_pop_free(fn_scope);
+                cg->cur_body = NULL;
+                return cg_fail(cg,
+                               binding->member->token,
+                               "CE0246", "codegen: missing aggregate descriptor for static binding write");
+            }
+            if (!cg_prepare_aggregate_assign_source(cg, &r, "_t")) {
+                er_free(&r);
+                cg->cur_scope = NULL;
+                scope_pop_free(fn_scope);
+                cg->cur_body = NULL;
+                return cg_fail(cg, binding->member->token,
+                               "IE0001", "codegen: out of memory");
+            }
+            buf_append_fmt(cg->cur_body,
+                           "        feng_aggregate_assign(&%s, &%s, &%s);\n",
+                           binding->c_name,
+                           r.c_expr,
+                           desc);
         } else {
             char *cty = cg_ctype_dup(binding->type);
 
@@ -37379,11 +38314,18 @@ static bool cg_emit_type_static_binding_init(CG *cg, const TypeStaticBinding *bi
                 cg->cur_body = NULL;
                 return cg_fail(cg, binding->member->token, "IE0001", "codegen: out of memory");
             }
-            buf_append_fmt(cg->cur_body,
-                           "        %s = (%s)(%s);\n",
-                           binding->c_name,
-                           cty,
-                           r.c_expr);
+            if (cgtype_is_by_value_struct(binding->type)) {
+                buf_append_fmt(cg->cur_body,
+                               "        %s = %s;\n",
+                               binding->c_name,
+                               r.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                               "        %s = (%s)(%s);\n",
+                               binding->c_name,
+                               cty,
+                               r.c_expr);
+            }
             free(cty);
         }
         er_free(&r);
@@ -37406,7 +38348,9 @@ static bool cg_emit_type_static_binding_ensure_init(CG *cg,
                    "%svoid %s(void) {\n",
                    binding->exports_public_surface ? "" : "static ",
                    binding->c_ensure_init_name);
-    buf_append_fmt(&cg->fn_defs, "    if (%s) return;\n", binding->c_inited_name);
+    buf_append_fmt(&cg->fn_defs,
+                   "    if (%s) return;\n",
+                   binding->c_inited_name);
 
     cg->cur_body = &cg->fn_defs;
     if (!cg_emit_type_static_binding_init(cg, binding)) {
@@ -37418,7 +38362,9 @@ static bool cg_emit_type_static_binding_ensure_init(CG *cg,
     }
 
     cg->cur_body = &cg->fn_defs;
-    buf_append_fmt(&cg->fn_defs, "    %s = true;\n", binding->c_inited_name);
+    buf_append_fmt(&cg->fn_defs,
+                   "    %s = true;\n",
+                   binding->c_inited_name);
     buf_append_cstr(&cg->fn_defs, "}\n\n");
 
     cg->cur_body = prev_body;
@@ -37433,6 +38379,7 @@ static bool cg_pass_emit_type_static_binding_ensure_inits(CG *cg) {
         const UserType *type = &cg->user_types[type_index];
 
         if (type->static_binding_count == 0U ||
+            cg_user_type_is_generic_origin_instance(type) ||
             cg_program_origin(cg, type->owner_program) ==
                 FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
             continue;
@@ -38753,6 +39700,23 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
                 "    .reified_type_deps = %s__rtd,\n",
                 value_type_dep_count, t->c_aggregate_desc_name);
         }
+        if (cg_user_type_uses_static_binding_states(t) &&
+            (cg_program_origin(cg, t->owner_program) !=
+                 FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE ||
+             t->generic_context_type_param_count == 0U)) {
+            char *states_name = cg_user_type_static_binding_states_name_dup(t);
+
+            if (states_name == NULL) {
+                (void)cg_fail(cg, t->decl->token,
+                              "IE0001", "codegen: out of memory");
+                buf_free(&equal_fn_name);
+                return;
+            }
+            buf_append_fmt(td,
+                "    .static_bindings = %s,\n",
+                states_name);
+            free(states_name);
+        }
         buf_append_cstr(td, "};\n\n");
     } else {
         bool ext_visible = cg_user_type_descriptor_is_externally_visible(cg, t);
@@ -38848,6 +39812,22 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
 }
 
 static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
+    if (cg_user_type_uses_static_binding_states(t) &&
+        (cg_program_origin(cg, t->owner_program) !=
+             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE ||
+         t->generic_context_type_param_count == 0U)) {
+        char *states_name = cg_user_type_static_binding_states_name_dup(t);
+
+        if (states_name == NULL) {
+            (void)cg_fail(cg, t->decl->token,
+                          "IE0001", "codegen: out of memory");
+            return;
+        }
+        buf_append_fmt(&cg->headers,
+                       "extern FengStaticBindingState %s[];\n",
+                       states_name);
+        free(states_name);
+    }
     if (cg_user_type_is_value_semantics(t)) {
         if (t->field_count == 0U) {
             /* Zero-field value types (e.g. None()) have no type dependencies and
@@ -39335,6 +40315,22 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
             "    .reified_type_deps = %s__rtd,\n",
             reified_type_dep_count, t->c_desc_name);
     }
+    if (cg_user_type_uses_static_binding_states(t) &&
+        (cg_program_origin(cg, t->owner_program) !=
+             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE ||
+         t->generic_context_type_param_count == 0U)) {
+        char *states_name = cg_user_type_static_binding_states_name_dup(t);
+
+        if (states_name == NULL) {
+            (void)cg_fail(cg, t->decl->token,
+                          "IE0001", "codegen: out of memory");
+            return;
+        }
+        buf_append_fmt(td,
+            "    .static_bindings = %s,\n",
+            states_name);
+        free(states_name);
+    }
     buf_append_cstr(td, "    .equal_fn = NULL,\n");
     buf_append_cstr(td, "};\n\n");
 
@@ -39707,6 +40703,71 @@ static bool cg_generic_type_member_uses_public_symbol(const FengDecl *decl,
            member->visibility != FENG_VISIBILITY_PRIVATE;
 }
 
+/** Build the internal shared ensure-init symbol for one generic static field. */
+static char *cg_generic_type_static_ensure_shared_cname(
+    CG *cg,
+    const FengDecl *decl,
+    const FengTypeMember *member) {
+    const GenericTypeDecl *generic_decl;
+    const FengProgram *owner_program;
+    char *owner_mangle;
+    char *type_name;
+    char *field_name;
+    size_t ordinal = 0U;
+    Buf symbol;
+
+    if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE ||
+        member == NULL || member->kind != FENG_TYPE_MEMBER_FIELD ||
+        !member->is_static) {
+        return NULL;
+    }
+    generic_decl = cg_find_generic_type_decl_by_decl(cg, decl);
+    owner_program = generic_decl != NULL
+                        ? generic_decl->owner_program
+                        : cg->cur_program;
+    owner_mangle = owner_program != NULL
+                       ? cg_module_mangle(owner_program->module_segments,
+                                          owner_program->module_segment_count)
+                       : (cg->module_mangle != NULL
+                              ? strdup(cg->module_mangle)
+                              : NULL);
+    type_name = cg_sanitize(decl->as.type_decl.name.data,
+                            decl->as.type_decl.name.length);
+    field_name = cg_sanitize(member->as.field.name.data,
+                             member->as.field.name.length);
+    if (owner_mangle == NULL || type_name == NULL || field_name == NULL) {
+        free(owner_mangle);
+        free(type_name);
+        free(field_name);
+        return NULL;
+    }
+    for (size_t index = 0U;
+         index < decl->as.type_decl.member_count;
+         ++index) {
+        const FengTypeMember *candidate = decl->as.type_decl.members[index];
+
+        if (candidate == member) {
+            break;
+        }
+        if (candidate != NULL &&
+            candidate->kind == FENG_TYPE_MEMBER_FIELD &&
+            candidate->is_static) {
+            ordinal++;
+        }
+    }
+    buf_init(&symbol);
+    buf_append_fmt(&symbol,
+                   "FengGenericStaticEnsure__%s__%s__s%zu__%s",
+                   owner_mangle,
+                   type_name,
+                   ordinal,
+                   field_name);
+    free(owner_mangle);
+    free(type_name);
+    free(field_name);
+    return symbol.data;
+}
+
 static char *cg_generic_type_method_shared_cname(CG *cg,
                                                  const FengDecl *decl,
                                                  const FengTypeMember *member) {
@@ -39924,6 +40985,176 @@ static void cg_free_generic_constructor_view(UserType *view) {
     }
     free(view->fields);
     memset(view, 0, sizeof(*view));
+}
+
+/** Emit the directly called shared ensure-init body for one generic static field. */
+static bool cg_emit_generic_type_static_binding_ensure_shared(
+    CG *cg,
+    const FengDecl *decl,
+    const FengTypeMember *member,
+    FengCompileTarget target) {
+    TypeStaticBinding generic_binding = {0};
+    size_t type_param_count;
+    char **type_param_names = NULL;
+    const char **descriptor_names = NULL;
+    const UserSpec **constraint_specs = NULL;
+    char *function_name = NULL;
+    Scope *function_scope = NULL;
+    const char *descriptor_type;
+    bool exports_public_surface;
+    int saved_temp_counter;
+    int saved_local_counter;
+    bool ok = false;
+
+    if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE ||
+        member == NULL || member->kind != FENG_TYPE_MEMBER_FIELD ||
+        !member->is_static) {
+        return false;
+    }
+    generic_binding.member = member;
+    type_param_count = decl->as.type_decl.type_param_count;
+    type_param_names = type_param_count > 0U
+                           ? calloc(type_param_count,
+                                    sizeof(*type_param_names))
+                           : NULL;
+    descriptor_names = type_param_count > 0U
+                           ? calloc(type_param_count,
+                                    sizeof(*descriptor_names))
+                           : NULL;
+    if (type_param_count > 0U &&
+        (type_param_names == NULL || descriptor_names == NULL)) {
+        cg_fail(cg, member->token,
+                "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    for (size_t index = 0U; index < type_param_count; ++index) {
+        FengSlice name = decl->as.type_decl.type_params[index].name;
+        Buf descriptor_name;
+
+        type_param_names[index] = strndup(name.data, name.length);
+        if (type_param_names[index] == NULL) {
+            cg_fail(cg, member->token,
+                    "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+        buf_init(&descriptor_name);
+        buf_append_fmt(&descriptor_name,
+                       "_%s",
+                       type_param_names[index]);
+        descriptor_names[index] = descriptor_name.data;
+        if (descriptor_names[index] == NULL) {
+            cg_fail(cg, member->token,
+                    "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+    }
+    if (!cg_build_generic_param_constraints(cg,
+                                             decl->as.type_decl.type_params,
+                                             type_param_count,
+                                             member->token,
+                                             &constraint_specs)) {
+        goto cleanup;
+    }
+    function_name = cg_generic_type_static_ensure_shared_cname(
+        cg,
+        decl,
+        member);
+    if (function_name == NULL) {
+        cg_fail(cg, member->token,
+                "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    descriptor_type = decl->as.type_decl.is_value
+                          ? "FengAggregateDescriptor"
+                          : "FengTypeDescriptor";
+    exports_public_surface =
+        target == FENG_COMPILE_TARGET_LIB &&
+        cg_generic_type_member_uses_public_symbol(decl,
+                                                  member);
+    buf_append_fmt(&cg->fn_protos,
+                   "%svoid %s(const %s *_type_desc, "
+                   "FengStaticBindingState *_state);\n",
+                   exports_public_surface ? "" : "static ",
+                   function_name,
+                   descriptor_type);
+    buf_append_fmt(&cg->fn_defs,
+                   "%svoid %s(const %s *_type_desc, "
+                   "FengStaticBindingState *_state) {\n"
+                   "    const %s *_td = _type_desc;\n"
+                   "    (void)_type_desc; (void)_td;\n",
+                   exports_public_surface ? "" : "static ",
+                   function_name,
+                   descriptor_type,
+                   descriptor_type);
+    for (size_t index = 0U; index < type_param_count; ++index) {
+        buf_append_fmt(&cg->fn_defs,
+            "    const FengGenericParamDescriptor *%s = "
+            "_td->reified_generic_params[%zu];\n"
+            "    (void)%s;\n",
+            descriptor_names[index],
+            index,
+            descriptor_names[index]);
+    }
+    buf_append_cstr(&cg->fn_defs,
+                    "    if (_state->initialized) return;\n");
+
+    saved_temp_counter = cg->tmp_counter;
+    saved_local_counter = cg->local_counter;
+    cg->tmp_counter = 0;
+    cg->local_counter = 0;
+    cg_activate_generic_type_context(cg,
+                                     type_param_count,
+                                     type_param_names,
+                                     constraint_specs,
+                                     descriptor_names);
+    cg->in_generic_type_method = true;
+    cg->generic_type_method_decl = decl;
+    cg->generic_type_method_field_offsets_name = NULL;
+    cg->cur_body = &cg->fn_defs;
+    cg->cur_return_type = NULL;
+    cg->cur_fn_is_main = false;
+    function_scope = scope_push(NULL);
+    if (function_scope == NULL) {
+        cg_fail(cg, member->token,
+                "IE0001", "codegen: out of memory");
+        goto restore_context;
+    }
+    cg->cur_scope = function_scope;
+    if (!cg_resolve_user_field_type(cg,
+                                    NULL,
+                                    member,
+                                    &generic_binding.type)) {
+        goto restore_context;
+    }
+    if (!cg_emit_type_static_binding_state_init(cg,
+                                                &generic_binding,
+                                                "_state")) {
+        goto restore_context;
+    }
+    buf_append_cstr(&cg->fn_defs,
+                    "    _state->initialized = true;\n"
+                    "}\n\n");
+    ok = true;
+
+restore_context:
+    if (function_scope != NULL) {
+        cg->cur_scope = NULL;
+        scope_pop_free(function_scope);
+        function_scope = NULL;
+    }
+    cg->cur_body = NULL;
+    cg->cur_return_type = NULL;
+    cg_clear_generic_type_context(cg);
+    cg->tmp_counter = saved_temp_counter;
+    cg->local_counter = saved_local_counter;
+
+cleanup:
+    cgtype_free(generic_binding.type);
+    free(function_name);
+    free((void *)constraint_specs);
+    cg_free_const_cstr_array(descriptor_names, type_param_count);
+    cg_free_cstr_array(type_param_names, type_param_count);
+    return ok;
 }
 
 static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,

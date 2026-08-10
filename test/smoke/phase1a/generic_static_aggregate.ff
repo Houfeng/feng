@@ -1,0 +1,138 @@
+module feng.smoke;
+
+@cdecl("libc") extern func puts(msg: string*): int;
+
+spec Named {
+    func name(): string;
+}
+
+spec NamedFactory<T> {
+    static func make(): T;
+}
+
+type User: Named, NamedFactory<User> {
+    let value: string;
+    open static var makeCount: i32;
+
+    func name(): string {
+        return self.value;
+    }
+
+    static func make(): User {
+        User.makeCount += 1;
+        return User { value: "factory-initial" };
+    }
+}
+
+type StaticSlot<T> {
+    open static var current: T;
+    open static let empty: T;
+
+    func StaticSlot() {}
+
+    func set(value: T): void {
+        StaticSlot<T>.current = value;
+    }
+
+    func get(): T {
+        return StaticSlot<T>.current;
+    }
+
+    func clear(): void {
+        StaticSlot<T>.current = StaticSlot<T>.empty;
+    }
+}
+
+type InitializedSlot<T: NamedFactory<T>> {
+    open static var current: T = T.make();
+
+    static func get(): T {
+        return InitializedSlot<T>.current;
+    }
+}
+
+type StaticSlotProxy<T> {
+    static func get(): T {
+        return StaticSlot<T>.current;
+    }
+}
+
+@value
+type ValueStaticSlot<T> {
+    var marker: i32;
+    open static var current: T;
+
+    static func set(value: T): void {
+        ValueStaticSlot<T>.current = value;
+    }
+
+    static func get(): T {
+        return ValueStaticSlot<T>.current;
+    }
+}
+
+func genericStaticGet<T>(): T {
+    return StaticSlot<T>.current;
+}
+
+type SpecStatics {
+    open static var current: Named = User { value: "spec-initial" };
+}
+
+@value
+type Pair {
+    var left: i32;
+    var right: i32;
+}
+
+type ValueStatics {
+    open static var current: Pair;
+    open static var initialized: Pair = Pair { left: 3, right: 4 };
+}
+
+func main(args: string[]) {
+    let named = StaticSlot<Named>();
+    let strings = StaticSlot<string>();
+
+    named.set(User { value: "named-first" });
+    strings.set("string-value");
+    puts(&named.get().name());
+    puts(&strings.get());
+    puts(&StaticSlotProxy<Named>.get().name());
+    puts(&genericStaticGet<Named>().name());
+
+    puts(&InitializedSlot<User>.get().name());
+    puts(&InitializedSlot<User>.current.name());
+    if User.makeCount == 1 {
+        puts(&"initialized-once");
+    }
+
+    ValueStaticSlot<Named>.set(User { value: "value-slot" });
+    puts(&ValueStaticSlot<Named>.get().name());
+
+    named.set(User { value: "named-second" });
+    puts(&named.get().name());
+    named.clear();
+    if named.get() == StaticSlot<Named>.empty {
+        puts(&"named-cleared");
+    }
+    puts(&strings.get());
+
+    puts(&SpecStatics.current.name());
+    SpecStatics.current = User { value: "spec-replaced" };
+    puts(&SpecStatics.current.name());
+
+    let defaultPair = ValueStatics.current;
+    if defaultPair.left == 0 && defaultPair.right == 0 {
+        puts(&"value-default");
+    }
+    let initializedPair = ValueStatics.initialized;
+    if initializedPair.left == 3 && initializedPair.right == 4 {
+        puts(&"value-initialized");
+    }
+    ValueStatics.current = Pair { left: 5, right: 6 };
+    let replacedPair = ValueStatics.current;
+    if replacedPair.left == 5 && replacedPair.right == 6 {
+        puts(&"value-replaced");
+    }
+}

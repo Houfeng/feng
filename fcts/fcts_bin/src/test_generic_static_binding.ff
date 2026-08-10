@@ -1,0 +1,140 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+spec FctsStaticNamed {
+  func name(): string;
+}
+
+type FctsStaticUser: FctsStaticNamed {
+  let value: string;
+
+  func name(): string {
+    return self.value;
+  }
+}
+
+type FctsFactoryValue: LibStaticFactory<FctsFactoryValue> {
+  let value: i32;
+  open static var makeCount: i32;
+
+  static func make(): FctsFactoryValue {
+    FctsFactoryValue.makeCount += 1;
+    return FctsFactoryValue { value: 41 };
+  }
+}
+
+@value
+type FctsAggregateFactoryValue: LibStaticFactory<FctsAggregateFactoryValue> {
+  let value: string;
+  open static var makeCount: i32;
+
+  static func make(): FctsAggregateFactoryValue {
+    FctsAggregateFactoryValue.makeCount += 1;
+    return FctsAggregateFactoryValue { value: "aggregate-initial" };
+  }
+}
+
+func fctsGenericStaticGet<T>(): T {
+  return LibGenericStaticSlot<T>.current;
+}
+
+/** Generic static fields retain one state per closed type across package ABI. */
+open func test_generic_static_binding() {
+  describe("generic static binding", () {
+    test("cross-package object-form spec storage", () {
+      LibGenericStaticSlot<FctsStaticNamed>.set(
+        FctsStaticUser { value: "first" }
+      );
+      assert(
+        LibGenericStaticSlot<FctsStaticNamed>.get().name() == "first",
+        "provider shared method reads consumer aggregate static state"
+      );
+      assert(
+        LibGenericStaticSlot<FctsStaticNamed>.current.name() == "first",
+        "explicit closed access observes shared state"
+      );
+      assert(
+        fctsGenericStaticGet<FctsStaticNamed>().name() == "first",
+        "consumer generic function selects imported closed state"
+      );
+    });
+
+    test("closed generic static states are isolated", () {
+      LibGenericStaticSlot<string>.set("text");
+      LibGenericStaticSlot<FctsStaticNamed>.set(
+        FctsStaticUser { value: "named" }
+      );
+      assert(
+        LibGenericStaticSlot<string>.get() == "text",
+        "string closed state remains independent"
+      );
+      assert(
+        LibGenericStaticSlot<FctsStaticNamed>.get().name() == "named",
+        "aggregate closed state remains independent"
+      );
+    });
+
+    test("generic static default and clear", () {
+      LibGenericStaticSlot<FctsStaticNamed>.clear();
+      assert(
+        LibGenericStaticSlot<FctsStaticNamed>.get() ==
+          LibGenericStaticSlot<FctsStaticNamed>.empty,
+        "clear assigns the closed type default value"
+      );
+    });
+
+    test("cross-package sealed static representation", () {
+      LibGenericStaticSlot<FctsStaticNamed>.setHidden(
+        FctsStaticUser { value: "hidden" }
+      );
+      assert(
+        LibGenericStaticSlot<FctsStaticNamed>.getHidden().name() == "hidden",
+        "closed sidecar preserves a provider-only static field ordinal"
+      );
+    });
+
+    test("cross-package generic static initializer runs once", () {
+      assert(
+        LibInitializedStaticSlot<FctsFactoryValue>.get().value == 41,
+        "provider helper initializes consumer closed storage"
+      );
+      assert(
+        LibInitializedStaticSlot<FctsFactoryValue>.current.value == 41,
+        "direct access reuses initialized storage"
+      );
+      assert(
+        FctsFactoryValue.makeCount == 1,
+        "shared and direct paths use one initialized flag"
+      );
+    });
+
+    test("aggregate generic static initializer transfers ownership", () {
+      assert(
+        LibInitializedStaticSlot<FctsAggregateFactoryValue>.get().value ==
+          "aggregate-initial",
+        "owned aggregate initializer is stored in closed static state"
+      );
+      assert(
+        LibInitializedStaticSlot<FctsAggregateFactoryValue>.current.value ==
+          "aggregate-initial",
+        "direct access observes the initialized aggregate state"
+      );
+      assert(
+        FctsAggregateFactoryValue.makeCount == 1,
+        "aggregate initializer runs once"
+      );
+    });
+
+    test("cross-package generic value-type owner", () {
+      LibValueStaticSlot<FctsStaticNamed>.set(
+        FctsStaticUser { value: "value-owner" }
+      );
+      assert(
+        LibValueStaticSlot<FctsStaticNamed>.get().name() == "value-owner",
+        "aggregate descriptor carries generic static state"
+      );
+    });
+  });
+}

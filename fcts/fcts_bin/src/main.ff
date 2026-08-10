@@ -27,6 +27,7 @@ func main(args: string[]) {
       test_exception();
       test_array();
       test_generic();
+      test_generic_static_binding();
       test_variadic();
       test_tuple();
       test_iterator();

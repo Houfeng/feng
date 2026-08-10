@@ -1,0 +1,57 @@
+open module fcts_lib.test;
+
+/** Cross-package factory contract used by generic static initializers. */
+open spec LibStaticFactory<T> {
+  static func make(): T;
+}
+
+/** Cross-package generic static storage for every Feng value category. */
+open type LibGenericStaticSlot<T> {
+  open static var current: T;
+  static var hidden: T;
+  open static let empty: T;
+
+  open static func set(value: T) {
+    LibGenericStaticSlot<T>.current = value;
+  }
+
+  open static func get(): T {
+    return LibGenericStaticSlot<T>.current;
+  }
+
+  open static func clear() {
+    LibGenericStaticSlot<T>.current = LibGenericStaticSlot<T>.empty;
+  }
+
+  open static func setHidden(value: T) {
+    LibGenericStaticSlot<T>.hidden = value;
+  }
+
+  open static func getHidden(): T {
+    return LibGenericStaticSlot<T>.hidden;
+  }
+}
+
+/** Cross-package lazy initializer compiled only into the provider library. */
+open type LibInitializedStaticSlot<T: LibStaticFactory<T>> {
+  open static var current: T = T.make();
+
+  open static func get(): T {
+    return LibInitializedStaticSlot<T>.current;
+  }
+}
+
+/** Value-type owner whose shared static methods receive an aggregate descriptor. */
+@value
+open type LibValueStaticSlot<T> {
+  var marker: i32;
+  open static var current: T;
+
+  open static func set(value: T) {
+    LibValueStaticSlot<T>.current = value;
+  }
+
+  open static func get(): T {
+    return LibValueStaticSlot<T>.current;
+  }
+}
