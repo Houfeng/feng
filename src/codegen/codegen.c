@@ -13181,6 +13181,8 @@ static bool cg_emit_value_type_construction(CG *cg,
                                             ExprResult *out) {
     char *val_name = NULL;
     CGType *val_type = NULL;
+    char *descriptor_expr = NULL;
+    bool uses_reified_storage = false;
 
     er_init(out);
     if (cg == NULL || ut == NULL) {
@@ -13191,28 +13193,57 @@ static bool cg_emit_value_type_construction(CG *cg,
     if (val_name == NULL) {
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
+    val_type = cgtype_new(CG_TYPE_OBJECT);
+    if (val_type == NULL) {
+        free(val_name);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    val_type->user = (UserType *)ut;
+    uses_reified_storage = cg_value_needs_reified_layout(cg, val_type);
+    if (uses_reified_storage) {
+        descriptor_expr = cg_rtd_expr_for_type(cg, ut, blame);
+        if (descriptor_expr == NULL) {
+            free(val_name);
+            cgtype_free(val_type);
+            return false;
+        }
+    }
 
-    /* Step 1 — stack-allocate and zero-initialise.
-     * struct X _val = {0}; */
+    /* Step 1 — stack-allocate and zero-initialise.  An open generic value
+     * instance has only a placeholder C struct layout in the shared body;
+     * its concrete descriptor is the sole size authority. */
     if (!cg_emit_line_directive_force(cg, blame)) {
         free(val_name);
+        free(descriptor_expr);
+        cgtype_free(val_type);
         return false;
     }
-    buf_append_fmt(cg->cur_body,
-                   "    struct %s %s = {0};\n",
-                   ut->c_struct_name, val_name);
+    if (uses_reified_storage) {
+        buf_append_fmt(cg->cur_body,
+                       "    _Alignas(max_align_t) char %s[(%s)->size];\n"
+                       "    memset(%s, 0, (%s)->size);\n",
+                       val_name, descriptor_expr,
+                       val_name, descriptor_expr);
+    } else {
+        buf_append_fmt(cg->cur_body,
+                       "    struct %s %s = {0};\n",
+                       ut->c_struct_name, val_name);
+    }
 
     /* Step 2 — run field default-init / member initialisers.
-     * Pass (&_val) as object_expr (pointer); cg_emit_user_type_member_initializers
-     * and its helpers use -> access through the pointer, so this works
-     * identically to the normal-type heap path.  Parentheses are required
-     * because &_val->field parses as &(_val->field), not (&_val)->field. */
+     * The reified buffer already decays to the required storage pointer. */
     {
         Buf addr;
         buf_init(&addr);
-        buf_append_fmt(&addr, "(&%s)", val_name);
+        if (uses_reified_storage) {
+            buf_append_cstr(&addr, val_name);
+        } else {
+            buf_append_fmt(&addr, "(&%s)", val_name);
+        }
         if (addr.data == NULL) {
             free(val_name);
+            free(descriptor_expr);
+            cgtype_free(val_type);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         bool ok = cg_emit_construction_member_initializers(
@@ -13220,6 +13251,8 @@ static bool cg_emit_value_type_construction(CG *cg,
         buf_free(&addr);
         if (!ok) {
             free(val_name);
+            free(descriptor_expr);
+            cgtype_free(val_type);
             return false;
         }
     }
@@ -13229,9 +13262,15 @@ static bool cg_emit_value_type_construction(CG *cg,
     {
         Buf addr;
         buf_init(&addr);
-        buf_append_fmt(&addr, "&%s", val_name);
+        if (uses_reified_storage) {
+            buf_append_cstr(&addr, val_name);
+        } else {
+            buf_append_fmt(&addr, "&%s", val_name);
+        }
         if (addr.data == NULL) {
             free(val_name);
+            free(descriptor_expr);
+            cgtype_free(val_type);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         bool ok = cg_emit_constructor_invoke(cg, args, arg_count,
@@ -13239,6 +13278,8 @@ static bool cg_emit_value_type_construction(CG *cg,
         buf_free(&addr);
         if (!ok) {
             free(val_name);
+            free(descriptor_expr);
+            cgtype_free(val_type);
             return false;
         }
     }
@@ -13246,15 +13287,26 @@ static bool cg_emit_value_type_construction(CG *cg,
     /* Step 4 — build the owned result.
      * type is CG_TYPE_OBJECT with the @value UserType attached;
      * cg_aggregate_facts will route it to trivial/aggregate as needed. */
-    val_type = cgtype_new(CG_TYPE_OBJECT);
-    if (val_type == NULL) {
+    if (uses_reified_storage) {
+        Buf value_expr;
+        buf_init(&value_expr);
+        buf_append_fmt(&value_expr,
+                       "(*(struct %s *)(void *)%s)",
+                       ut->c_struct_name,
+                       val_name);
+        out->c_expr = value_expr.data;
         free(val_name);
+    } else {
+        out->c_expr = val_name;   /* transfer ownership of val_name */
+    }
+    free(descriptor_expr);
+    if (out->c_expr == NULL) {
+        cgtype_free(val_type);
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
-    val_type->user = (UserType *)ut;
-    out->c_expr = val_name;       /* transfer ownership of val_name */
     out->type = val_type;
     out->owns_ref = true;
+    out->is_addressable = true;
     return true;
 }
 

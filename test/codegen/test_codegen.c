@@ -6583,6 +6583,64 @@ static void test_generic_aggregate_return_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kGenericValueConstructionReifiedStorageSrc =
+    "module feng.codegen.generic_value_construction;\n"
+    "spec Item {\n"
+    "    func value(): int;\n"
+    "}\n"
+    "type ItemImpl: Item {\n"
+    "    func value(): int { return 42; }\n"
+    "}\n"
+    "@value\n"
+    "type Holder<T> {\n"
+    "    let item: T;\n"
+    "    func Holder(item: T) { self.item = item; }\n"
+    "}\n"
+    "type Factory<T> {\n"
+    "    func make(item: T): Holder<T> {\n"
+    "        return Holder<T>(item);\n"
+    "    }\n"
+    "}\n"
+    "func use_factory(): int {\n"
+    "    let item: Item = ItemImpl();\n"
+    "    return Factory<Item>().make(item).item.value();\n"
+    "}\n";
+
+/* A shared generic body must not allocate Holder<T> with the erased C struct
+ * size. Object-form Item is wider than the placeholder T slot, so the
+ * constructor target must use the concrete aggregate descriptor's size. */
+static void test_generic_value_construction_uses_reified_storage_codegen(void) {
+    FengProgram *program = parse_or_die(
+        kGenericValueConstructionReifiedStorageSrc,
+        "generic_value_construction.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_Alignas(max_align_t) char _val") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "reified_agg_deps[0])->size") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Holder__G__T _val") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static const char *kGenericTypeGenericMethodSrc =
     "module feng.codegen.gf8;\n"
     "type Box<T> {\n"
@@ -8994,6 +9052,7 @@ int main(void) {
     test_enum_match_statement_codegen();
     test_enum_match_expression_codegen();
     test_generic_aggregate_return_codegen();
+    test_generic_value_construction_uses_reified_storage_codegen();
     test_generic_type_generic_method_codegen();
     test_generic_scalar_instance_direct_call_codegen();
     test_phase_e_aggregate_generic_arg_three_entrances_codegen();

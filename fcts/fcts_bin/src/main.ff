@@ -43,5 +43,6 @@ func main(args: string[]) {
       test_spec_upcast();
       test_spec_borrowed_getter_assign();
       test_seal_member_visibility();
+      test_tui_widget_iteration();
   });
 }

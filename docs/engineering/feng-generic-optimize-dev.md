@@ -33,7 +33,8 @@ feng: panic: feng_aggregate: unknown forwarded slot kind 6 in 'JsonPayload'
 ### 1.5 受影响的代码路径（`src/codegen/codegen.c`）
 
 1. **数组创建**（~L15448）：`feng_array_new(NULL, sizeof(未特化struct), false, n)` — element_size 错误，element_aggregate 使用未特化描述符
-2. **Tuple 局部变量**（~L9667）：`struct <未特化形态> _tuple; memset(...)` — 栈变量太小
+2. **共享体局部聚合**：局部绑定、tuple 临时值及值类型构造表达式若声明为
+   `struct <未特化形态>`，其栈空间都可能小于具体实例
 3. **数组元素写入**（~L18376）：`((未特化元素类型*)data)[idx] = value` — stride 错误
 4. **数组元素读取 / for-in**（~L20526）：stride 错误
 5. **Wrapper `_ret_buf`**（~L28443）：接收返回值的缓冲区按未特化大小分配，偏小
@@ -583,6 +584,11 @@ memset(_mem, 0, _ed->size);
 feng_aggregate_default_init(_mem, _ed);
 ```
 
+这里的“局部变量”包括显式局部绑定、tuple 临时值，以及构造表达式产生的
+owned 临时值。共享体内构造 `Value<T>` 时，构造目标本身必须使用上述
+descriptor-sized 对齐存储，并将其地址传给成员初始化和构造函数；不得先声明
+未特化的 `struct Value__G__T` 再让具体构造函数按 reified 字段偏移写入。
+
 #### 2.6.3 修复数组元素写入（~L18376）
 
 ```c
@@ -730,7 +736,9 @@ Wrapper 传入描述符，共享体从描述符读取泛型参数和字段偏移
 核心 bug 修复：使用具体化描述符替代 `sizeof(未特化 struct)`。
 
 - [x] §2.6.1 数组创建：`feng_array_new_kinded()` 使用 `reified_agg_deps[i]->size` 和具体化描述符
-- [x] §2.6.2 局部变量栈分配：VLA/alloca + `desc->size`，`feng_aggregate_default_init`
+- [ ] §2.6.2 局部变量栈分配：显式绑定、tuple 临时值和值类型构造临时值统一使用 VLA/alloca + `desc->size`，并按表达式语义通过具体化 descriptor 初始化
+  - [x] 值类型构造临时值：按 descriptor 分配，并将动态存储地址传给成员初始化和构造函数
+  - [ ] 显式局部绑定及其所有权转移路径统一使用 descriptor-sized 存储
 - [x] §2.6.3 数组元素写入：stride 使用 `reified_agg_deps[i]->size`
 - [x] §2.6.4 数组元素读取/for-in：stride 使用 `reified_agg_deps[i]->size`
 - [x] §2.6.5 Wrapper `_ret_buf`：按具体化类型大小分配返回值缓冲区
@@ -741,4 +749,5 @@ Wrapper 传入描述符，共享体从描述符读取泛型参数和字段偏移
 
 - [ ] `feng run examples/hello_world --keep-ir` 验证输出正确
 - [ ] 跨包泛型实例化场景验证（codegen 从导入符号的 `reifiable_agg_deps`/`reifiable_type_deps` 生成完整描述符树）
-- [ ] `make test` 全量回归通过
+- [x] 共享体构造含 object-form spec 泛型实参的值类型，并覆盖 `List<Widget>` 的迭代与 cleanup 链完整性
+- [x] `make test` 全量回归通过

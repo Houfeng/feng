@@ -1,0 +1,55 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import std.tui.view;
+import std.tui.widgets as widgets;
+
+/**
+ * 覆盖容器遍历所使用的 List<Widget>.iter() 共享泛型路径。
+ */
+type TuiIterationContainer: ContainerWidget {
+  ...: widgets.Container;
+
+  /**
+   * 遍历 object-form Widget 子组件并返回数量。
+   */
+  func countChildren(): int {
+    var count = 0;
+    for let child in self.children {
+      count += 1;
+    }
+    return count;
+  }
+}
+
+/**
+ * 验证共享泛型体构造 ListIterator<Widget> 时使用具体化聚合布局。
+ */
+open func test_tui_widget_iteration() {
+  describe("TUI Widget generic iteration", () {
+    test("iterates object-form Widget children without corrupting cleanup state", () {
+      let container = TuiIterationContainer();
+      let first = widgets.View {};
+      let second = widgets.View {};
+
+      container.addChild(first);
+      container.addChild(second);
+
+      assert(container.countChildren() == 2,
+             "List<Widget> iterator visits every child");
+      if first.parent match parent: ContainerWidget {
+        assert((Widget)parent == (Widget)container,
+               "first child keeps its container parent");
+      } else {
+        assert(false, "first child has a container parent");
+      }
+      if second.parent match parent: ContainerWidget {
+        assert((Widget)parent == (Widget)container,
+               "second child keeps its container parent");
+      } else {
+        assert(false, "second child has a container parent");
+      }
+    });
+  });
+}
