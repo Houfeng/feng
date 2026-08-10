@@ -139,11 +139,13 @@ open spec Widget {
 
   /**
    * 布局阶段计算后的最终区域信息
+   * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
   let frame: WidgetFrame;
 
   /**
    * 父组件；仅由组件树 API 维护
+   * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
   var parent: Option<ContainerWidget>;
 
