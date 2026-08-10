@@ -197,10 +197,12 @@ open enum MouseButton {
 
 ### 2.6 MouseEvent（MouseEvent.ff）
 
-所有字段为 `let`——结构体初始化后不可变：
+`MouseEvent` 是普通引用类型。输入载荷字段均为 `let`，构造后不可变；内部仅维护
+`stopped` 传播状态，使同一事件实例经过 ViewManager 逐级分发时，后续处理方可以观察
+前序处理方调用 `stop()` 的结果。具体冒泡规则由
+`docs/engineering/feng-std-tui-view-dev.md` 定义。
 
 ```feng
-@value
 open type MouseEvent {
   /** 鼠标动作类型 */
   let action: MouseAction;
@@ -213,12 +215,16 @@ open type MouseEvent {
   /** 修饰键位标志（MOD_CONTROL / MOD_ALT / MOD_SHIFT，来自 SGR 鼠标序列的 button 高位，100% 可靠） */
   let mods: u8;
 
+  /** 是否已停止后续传播，仅由 stop() 修改 */
+  seal var stopped: bool;
+
   func MouseEvent() {
     self.action = MouseAction.press;
     self.button = MouseButton.none;
     self.x = 0;
     self.y = 0;
     self.mods = 0;
+    self.stopped = false;
   }
 
   func MouseEvent(action: MouseAction, button: MouseButton, x: u32, y: u32, mods: u8) {
@@ -227,13 +233,20 @@ open type MouseEvent {
     self.x = x;
     self.y = y;
     self.mods = mods;
+    self.stopped = false;
   }
 
   func isControl(): bool { return (self.mods & MOD_CONTROL) != 0; }
   func isAlt(): bool { return (self.mods & MOD_ALT) != 0; }
   func isShift(): bool { return (self.mods & MOD_SHIFT) != 0; }
+  func stop(): void { self.stopped = true; }
+  func isStopped(): bool { return self.stopped; }
 }
 ```
+
+`stop()` 是幂等操作，只阻止当前回调完成后的后续传播，不中断当前回调，也不表示
+阻止默认行为。当前没有捕获阶段、多播处理器或 `preventDefault` 语义，因此不增加
+`stopPropagation()`、`stopImmediatePropagation()` 等更细分的接口。
 
 ## 3 InputManager — VT100/xterm 状态机（InputManager.ff）
 
@@ -307,6 +320,8 @@ open type InputManager {
 >
 > **onKey/onMouse 为 `open var`**：用户直接赋值注册
 > （`manager.onKey = func(event: KeyEvent) { ... };`），不需要 setter 方法。
+> 两个字段均为单播回调槽；再次赋值会替换原回调，不维护处理器集合，也不隐式组合
+> 新旧回调。TUI 第一版较完整后，再单独评估是否需要多播。
 >
 > **未注册时的零值行为**：Feng 没有 null。`onKey`/`onMouse` 声明为
 > `Action<T>`（非 `Union<None, Action<T>>`），未显式赋值时自动绑定默认零值
@@ -584,7 +599,7 @@ std/std/src/tui/
   KeyEvent.ff       # 新增：SpecialKey 枚举 / MOD_CONTROL,MOD_ALT,MOD_SHIFT 常量
   #                 #       Union<SpecialKey,u32> / KeyEvent @value 类型 + 快捷方法
   MouseEvent.ff     # 新增：MouseAction / MouseButton 枚举
-  #                 #       MouseEvent @value 类型 + 快捷方法（isControl/isAlt/isShift）
+  #                 #       MouseEvent 引用类型 + 快捷方法及传播停止状态
   InputManager.ff   # 新增：VT100/xterm 状态机 + onKey/onMouse (Action<T>)
   #                 #       feed(byte): void
   TuiApp.ff         # 修改：新增 input: InputManager 公开成员

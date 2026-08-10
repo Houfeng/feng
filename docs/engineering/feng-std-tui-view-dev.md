@@ -25,12 +25,15 @@ TuiApp
 - `Widget`/`ContainerWidget` spec 与 `WidgetStyle` type；
 - `WidgetFrame`、`Thickness` 及布局相关枚举；
 - `std.tui.widgets.View` 与 `std.tui.widgets.Container` 基础实现；
-- `ViewManager` 的组件树、绘制顺序、命中、焦点及事件路由；
+- `ViewManager` 的组件树、绘制顺序、命中及事件路由；
 - `ViewManager` 与 `TuiApp`、`Screen`、`InputManager` 的集成。
 
 第七阶段不完整实现 Text/Button/Input/List/Table/Dialog 等高级组件，也不实现 VStack/HStack/Dock/ScrollView/Grid 等布局容器。`Text` 和 `Button` 可保留最小类型骨架，仅用于验证 `Widget` 契约、`...: View` 成员展开和 `@mixable` wrapper，不在本阶段实现文本绘制或按钮交互。CSS、选择器、级联样式、复杂捕获阶段、透明穿透和复杂 z-index 同样不在本阶段范围内。
 
 叶子组件直接满足 `Widget` spec，容器组件满足 `ContainerWidget` spec；两者分别可通过成员展开复用 `View` 或 `Container` 的状态与行为。上层组装组件树时不需要 `asWidget()` 之类的转换 API。
+
+当前事件分发切片只实现鼠标命中、鼠标回调选择和自下向上的冒泡。焦点管理、键盘
+焦点路由及多播事件均留到后续步骤，不与本次鼠标分发一起实现。
 
 ## 3 已定义的核心类型
 
@@ -285,7 +288,7 @@ open type ViewManager {
 
 `sequence` 只记录本帧实际绘制顺序，并用于鼠标命中；它不保存剪裁状态。命中阶段按与 `View.draw()` 相同的规则重新计算组件的有效区域。
 
-当前 `ViewManager` 已提供可选 root 的 arrange/draw 入口、back buffer 访问与 sequence 登记方法，并持有由 `TuiApp` 传入的 Screen；尚未实现逆序命中、焦点、input 引用与事件路由。
+当前 `ViewManager` 已提供可选 root 的 arrange/draw 入口、back buffer 访问与 sequence 登记方法，并持有由 `TuiApp` 传入的 Screen；下一步实现逆序命中与鼠标事件路由。焦点与键盘路由不在本次实现范围内。
 
 ## 9 组件树与 parent
 
@@ -313,9 +316,24 @@ open type ViewManager {
 - `onKey: Action<KeyEvent>`；
 - `onMouseDown`、`onMouseMove`、`onMouseUp`、`onWheel: Action<MouseEvent>`。
 
-`KeyEvent` 和 `MouseEvent` 均为不可变的 `@value` 快照。当前定义不新增 `WidgetEvent`，也未定义 `target`、`currentTarget`、`stopPropagation()`、`preventDefault()`、`clone()` 或事件池化语义。
+`MouseEvent` 按 `docs/engineering/feng-std-tui-input-dev.md` 定义为引用类型：输入载荷
+不可变，传播状态由 `stop()` 和 `isStopped()` 管理。`stop()` 在当前 Widget 回调返回后
+生效，只阻止后续父组件回调；不会中断当前回调。重复调用 `stop()` 保持停止状态。
 
-`ViewManager` 后续负责根据焦点和 `sequence` 选择起始组件，并按 `parent` 自下向上传递事件。现有回调签名没有传播状态或返回值，因此“如何阻止继续向上传递”尚未由当前接口表达，需要在实现事件冒泡前人工确定。
+鼠标事件按以下规则分发：
+
+1. 从 `sequence` 末尾向前命中第一个包含事件坐标的 Widget；命中区域使用与绘制
+   相同的 Screen 和最近 `overflow == Hidden` 祖先裁剪规则；
+2. `wheelUp`/`wheelDown` 调用 `onWheel`，其余事件按 `press`、`move`、`release`
+   分别调用 `onMouseDown`、`onMouseMove`、`onMouseUp`；
+3. 当前 Widget 回调返回后检查 `event.isStopped()`；已停止则结束分发，否则沿
+   `parent` 继续向上传递；
+4. 未命中 Widget 时静默返回；不执行 root 兜底回调；
+5. 当前不定义捕获阶段、`target`、`currentTarget`、默认行为、透明穿透、事件克隆或
+   事件池化。
+
+每个 Widget 的每类事件仍只有一个 `Action<MouseEvent>` 回调字段，InputManager 的
+`onMouse` 也保持单播；本阶段不引入处理器列表或隐式多播。
 
 ## 11 与 TuiApp/InputManager 的集成
 
@@ -329,9 +347,16 @@ open type TuiApp {
 }
 ```
 
-`ViewManager` 使用 `InputManager` 产生的 `KeyEvent`/`MouseEvent` 进行视图事件路由，并通过 `Screen` 完成组件绘制。`Screen` 和 `InputManager` 不在视图层重建。
+`ViewManager` 使用 `InputManager` 产生的 `MouseEvent` 进行视图事件路由，并通过
+`Screen` 完成组件绘制。`Screen` 和 `InputManager` 不在视图层重建。
 
-当前验证阶段在 `TuiApp.render()` 处理 resize 后依次调用 `view.arrange()` 和 `view.draw()`，再通过 `Screen.buildPatchBytes()` 生成终端输出。无 root 时前两步不改变 Screen back buffer，现有直接绘制 Screen 的代码保持有效。本轮不接入 InputManager。
+`TuiApp.render()` 处理 resize 后依次调用 `view.arrange()` 和 `view.draw()`，再通过
+`Screen.buildPatchBytes()` 生成终端输出。无 root 时前两步不改变 Screen back buffer，
+现有直接绘制 Screen 的代码保持有效。
+
+本次集成只将 `InputManager.onMouse` 单播回调绑定到 ViewManager 的鼠标分发入口，
+不接管 `onKey`。由于 `onMouse` 是单播 `open var`，应用之后直接重新赋值会替换
+ViewManager 路由；本阶段不自动组合两个回调。焦点和键盘事件在后续步骤接入。
 
 ## 12 文件规划
 
@@ -355,19 +380,15 @@ std/std/src/tui/widgets/
 
 ## 13 实施步骤
 
-1. Review 并确认 `Widget`/`ContainerWidget`、`View`/`Container` 和 `ViewManager.sequence` 契约；
-2. 实现 `View.arrange()` 的自身布局计算，并通过 `ViewManager` 读取 Screen 尺寸；
-3. 实现 `Container` 的 children 存储、自动迁移、幂等移除和 parent 同步维护；
-4. 实现非递归 `isAncestor` 与 `"tui/widget/cycle"` 循环阻止；
-5. 完善 `ViewManager` 的 root、sequence 登记、arrange/draw 根调度与逆序命中；
-6. 由具体组件实现 children 的 arrange/draw 调度策略，验证只有实际绘制组件进入 sequence；
-7. 补充焦点管理，从 `InputManager` 接收事件并实现鼠标命中与键盘焦点路由；
-8. 在事件接口确定后实现自下向上的冒泡及阻止传播；
-9. 集成 `ViewManager` 到 `TuiApp`；
-10. 使用 Text/Button 最小骨架验证 `...: View` 与 `@mixable` wrapper；
-11. 补充 std_test 用例；
-12. 执行全量回归测试 `make test`；
-13. 等待人工 Review，通过后再进入后续组件扩展阶段。
+1. 已完成 `Widget`/`ContainerWidget`、`View`/`Container`、组件树和 `ViewManager.sequence` 基础机制；
+2. 已完成 `View.arrange()`、`View.draw()`、root 调度及 TuiApp 渲染集成；
+3. 将 `MouseEvent` 改为引用类型，增加 `stop()` 与 `isStopped()`；
+4. 实现与绘制裁剪一致的 sequence 逆序命中；
+5. 实现鼠标回调选择、自下向上冒泡及停止传播；
+6. 将 `InputManager.onMouse` 单播回调接入 ViewManager，不接管 `onKey`；
+7. 补充 MouseEvent、命中、裁剪、层级、冒泡和停止传播的 std_test 用例；
+8. 执行全量回归测试 `make test`；
+9. 等待人工 Review，通过后再开始焦点与键盘路由。
 
 ## 14 Review 关注点
 
@@ -376,5 +397,4 @@ std/std/src/tui/widgets/
 - `WidgetStyle` 的默认值；
 - `View` 与 `Container` 的构造和字段初始化方式；
 - `spec` 的 `seal` 成员落地后，如何在保持公开树操作 API 不变的前提下收紧 children/parent 存储访问；
-- root、焦点以及 `InputManager` 与 `ViewManager` 的具体关系；
-- 现有 `@value` 事件回调如何表达阻止冒泡。
+- 后续焦点、键盘路由与 root 的具体关系。

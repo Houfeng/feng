@@ -168,7 +168,7 @@
 
 > 实现方案详见 `docs/engineering/feng-std-tui-input-dev.md`。
 
-- [x] 4.18 实现事件类型：`KeyEvent.ff`（`SpecialKey` 枚举、`MOD_CONTROL`/`MOD_ALT`/`MOD_SHIFT` 常量、`Union<SpecialKey,u32>`、`KeyEvent` @value 类型 + `isControl()`/`isShift()`/`isPrintable()` 快捷方法）和 `MouseEvent.ff`（`MouseAction`/`MouseButton` 枚举、`MouseEvent` @value 类型 + `isControl()`/`isAlt()`/`isShift()` 快捷方法）
+- [x] 4.18 实现事件类型：`KeyEvent.ff`（`SpecialKey` 枚举、`MOD_CONTROL`/`MOD_ALT`/`MOD_SHIFT` 常量、`Union<SpecialKey,u32>`、`KeyEvent` @value 类型 + `isControl()`/`isShift()`/`isPrintable()` 快捷方法）和 `MouseEvent.ff`（`MouseAction`/`MouseButton` 枚举、鼠标事件字段及 `isControl()`/`isAlt()`/`isShift()` 快捷方法；第七阶段将其调整为支持停止传播的引用类型）
 - [x] 4.19 实现 InputManager（InputManager.ff）：`ParserState` 状态机 + `onKey`/`onMouse` 回调字段（`Action<KeyEvent>`/`Action<MouseEvent>`） + `feed(b: u8): void`；处理单字节字符、CSI/SS3 转义序列、UTF-8 多字节解码、鼠标 SGR 序列
 - [x] 4.20 集成 InputManager 至 TuiApp：新增 `let input: InputManager` 公开只读成员；`run()` 中 stdin drain 替换为逐字节 `input.feed()`；`init()` 发送鼠标启用序列（`\x1b[?1006h\x1b[?1003h`，SGR + 全移动报告含悬停），`exit()` 发送禁用序列
 - [x] 4.21 补充 std_test 用例：在 `test_tui.ff` 中新增事件类型快捷方法、InputManager 解析状态机（VT100/xterm 转义序列、UTF-8、鼠标 SGR）、回调分发等测试
@@ -196,16 +196,17 @@
 - [x] 4.30 完善 Widget 基础机制：实现 `Thickness`、布局枚举、`WidgetStyle`、`WidgetFrame`、`Widget`/`ContainerWidget`，以及 `View`/`Container` 的基础行为和组件树关系维护
 - [x] 4.31 实现 View 布局与绘制：支持 Normal/Relative/Absolute/Fixed、尺寸与间距解析、对齐、祖先裁剪、矩形绘制及 sequence 登记
 - [x] 4.32 实现 ViewManager 基础调度并集成至 TuiApp：提供可选 root、sequence、trace、arrange/draw 入口，复用现有 Screen 并接入 `TuiApp.render()`
-- [ ] 4.33 实现 ViewManager 事件分发：接入 InputManager，实现鼠标逆序命中、焦点管理、键盘焦点路由与自下向上事件冒泡
-- [ ] 4.34 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、arrange/frame 计算、sequence 命中、焦点与事件冒泡等测试
+- [ ] 4.33 实现 ViewManager 鼠标事件分发：将 MouseEvent 改为支持 `stop()`/`isStopped()` 的引用类型，接入 InputManager 单播 `onMouse`，实现逆序命中与自下向上冒泡
+- [ ] 4.34 补充 std_test 用例：覆盖 Widget 契约、parent 维护、arrange/frame、sequence 命中、裁剪、鼠标回调选择、冒泡及停止传播
 - [ ] 4.35 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.36 等待人工 Review：开发者审查视图机制层设计与实现，通过后方可进入第八阶段
+- [ ] 4.36 等待人工 Review：开发者审查鼠标事件分发设计与实现，通过后再处理焦点和键盘路由
+- [ ] 4.37 后续实现焦点管理与键盘焦点路由
 
 ### 第八阶段：测试与验证
 
-- [ ] 4.37 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
-- [ ] 4.38 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.39 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
+- [ ] 4.38 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
+- [ ] 4.39 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.40 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
 
 > **fcts 用例策略**：std 中的功能默认使用 std_test 用例，不需要 fcts 用例。仅当遇到 Feng 语言层面的问题（如语法、语义、类型系统等编译器行为）时，才在 `fcts/fcts_bin/src/` 中新增 fcts 用例进行兼容性验证。
 
