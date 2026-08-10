@@ -41,6 +41,7 @@ TuiApp
 ```feng
 open enum WidgetPosition {
   Normal,
+  Relative,
   Absolute,
   Fixed
 }
@@ -59,7 +60,8 @@ open enum WidgetOverflow {
 ```
 
 - `Normal`：由父组件的排列逻辑定位；
-- `Absolute`：相对父组件定位；
+- `Relative`：与 `Normal` 使用相同的普通流布局，但可作为后代 `Absolute` 组件的定位参照；
+- `Absolute`：相对最近的非 `Normal` 祖先组件定位；不存在时相对屏幕定位；
 - `Fixed`：相对屏幕定位；
 - `Full`/`Start`/`Center`/`End`：分别表示填满、起始、居中和末端对齐；
 - `Visible`/`Hidden`：分别表示允许显示溢出内容和裁剪溢出内容。滚动由后续 `ScrollView` 实现，不加入 `WidgetOverflow`。
@@ -85,7 +87,7 @@ open type WidgetStyle {
 }
 ```
 
-尺寸和坐标使用 `Union<u32, float>`：`u32` 表示固定终端单元数，`float` 表示百分比。`x`/`y` 仅用于 `Absolute` 和 `Fixed`，`Normal` 忽略二者。`Absolute` 的相对坐标以父组件为参照，且不受父组件 `padding` 影响；`Fixed` 以屏幕为参照。浮动组件忽略 `horizontalAlign` 和 `verticalAlign`。
+尺寸和坐标使用 `Union<u32, float>`：`u32` 表示固定终端单元数，`float` 表示百分比。`x`/`y` 仅用于 `Absolute` 和 `Fixed`，`Normal`、`Relative` 忽略二者。`Absolute` 的相对坐标以最近的非 `Normal` 祖先组件为参照，且不受该祖先组件 `padding` 影响；不存在非 `Normal` 祖先时以屏幕为参照。`Fixed` 始终以屏幕为参照。`Absolute` 和 `Fixed` 忽略 `horizontalAlign` 和 `verticalAlign`。
 
 `foreColor`/`backColor` 为 `none` 时使用终端默认色。`overflow == Hidden` 时裁剪超出组件区域的绘制；滚动能力由后续组件实现。
 
@@ -174,7 +176,7 @@ open type View: Widget {
 }
 ```
 
-`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只根据当前组件的 `style`、父组件区域和屏幕尺寸计算自身 `frame`；`View.draw()` 使用 `frame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色，并将组件登记到 `ViewManager.sequence`。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。超出 Screen 的部分被裁剪，父容器的 `overflow` 裁剪不在当前实现范围内。
+`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只根据当前组件的 `style`、祖先组件区域和屏幕尺寸计算自身 `frame`；`View.draw()` 使用 `frame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色，并将有效绘制区域非空的组件登记到 `ViewManager.sequence`。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame`、Screen 与最近一个 `overflow == Hidden` 祖先组件 `frame` 的交集；不存在这样的祖先时只与 Screen 求交。
 
 `View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。
 
@@ -223,9 +225,9 @@ draw 阶段
 
 `arrange` 和 `draw` 都接收同一个 `ViewManager`。组件通过 manager 获取本轮调度所需的视图上下文。只有实际调用 `draw()` 并执行 sequence 登记的组件才参与本帧鼠标命中。
 
-### 7.1 Normal 排列
+### 7.1 Normal 与 Relative 排列
 
-`position == Normal` 时，组件根据父组件 content 区域计算最终区域；父组件 content 区域是父组件 `frame` 扣除父组件 `padding` 后的区域。无 parent 的根组件以整个 Screen 为参照区域。`x`/`y` 不参与 Normal 布局。
+`position == Normal` 或 `Relative` 时，组件根据直接父组件 content 区域计算最终区域；父组件 content 区域是父组件 `frame` 扣除父组件 `padding` 后的区域。无 parent 的根组件以整个 Screen 为参照区域。`x`/`y` 不参与 `Normal` 或 `Relative` 布局。两者的自身布局行为一致，区别仅在于 `Relative` 可以成为后代 `Absolute` 组件的定位参照，而 `Normal` 会被查找过程跳过。
 
 每个轴独立按以下顺序计算：
 
@@ -239,13 +241,20 @@ draw 阶段
 
 ### 7.2 Absolute 与 Fixed
 
-- `Absolute` 使用 `x`/`y` 相对父组件定位，坐标不受父组件 `padding` 影响；
+- `Absolute` 沿 parent 链查找最近的非 `Normal` 祖先组件，并使用 `x`/`y` 相对该祖先组件的 `frame` 定位；`Relative`、`Absolute` 和 `Fixed` 祖先均可成为参照；
+- `Absolute` 不受定位参照组件的 `padding` 影响；不存在非 `Normal` 祖先组件时以屏幕为参照；
 - `Fixed` 使用 `x`/`y` 相对屏幕定位；
 - 两者均忽略 `horizontalAlign` 和 `verticalAlign`；
 - `width`/`height` 仍支持固定值或百分比；
 - 自身 margin 先从参照区域扣除，百分比 `width`/`height` 再以剩余区域为基数；
 - `x`/`y` 的百分比仍以未扣除自身 margin 的参照区域为基数，最终位置叠加起始侧 margin；
-- 父级裁剪不属于本轮 `View.arrange()` 的实现范围。
+- 裁剪不改变 arrange 产生的 `frame`，只在 `draw` 阶段计算有效绘制区域。
+
+### 7.3 绘制裁剪
+
+`View.draw()` 先查找离自身最近的 `overflow == Hidden` 祖先组件。自身 `frame` 与该祖先组件 `frame` 求交后，再与 Screen 求交，得到本次有效绘制区域；不存在这样的祖先时，自身 `frame` 直接与 Screen 求交。裁剪结果只用于本次绘制，不写回自身 `frame`。
+
+裁剪使用完整矩形求交，同时计算裁剪后的 `x`、`y`、`width` 和 `height`，不使用只能处理 Screen 右侧或下侧边界的单轴长度计算。有效区域的任一尺寸为 0 时不写入 Buffer，也不登记到 `sequence`。
 
 ## 8 ViewManager 与 sequence
 
@@ -272,9 +281,9 @@ open type ViewManager {
 
 `sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；组件进入自身 `draw()` 时将自身登记到 `sequence`，越靠后的组件实际绘制层级越高。容器对 children 的调用顺序同时决定子组件在 sequence 中的顺序。
 
-鼠标命中时从 `sequence` 末尾向前查找，第一个包含事件坐标的 `WidgetFrame` 即为目标组件。第七阶段不支持透明穿透，因此命中顶层组件后不继续向下查找。
+鼠标命中时从 `sequence` 末尾向前查找，并按与绘制一致的有效区域判断事件坐标；第一个命中的组件即为目标组件。第七阶段不支持透明穿透，因此命中顶层组件后不继续向下查找。
 
-`sequence` 只记录本帧实际绘制顺序，并用于鼠标命中；它不保存也不处理剪裁状态。剪裁规则属于具体组件的绘制实现。
+`sequence` 只记录本帧实际绘制顺序，并用于鼠标命中；它不保存剪裁状态。命中阶段按与 `View.draw()` 相同的规则重新计算组件的有效区域。
 
 当前 `ViewManager` 已提供可选 root 的 arrange/draw 入口、back buffer 访问与 sequence 登记方法，并持有由 `TuiApp` 传入的 Screen；尚未实现逆序命中、焦点、input 引用与事件路由。
 
@@ -366,8 +375,6 @@ std/std/src/tui/widgets/
 
 - `WidgetStyle` 的默认值；
 - `View` 与 `Container` 的构造和字段初始化方式；
-- `Absolute`/`Fixed` 的父级裁剪规则；
-- `overflow == Hidden` 的裁剪状态由何处保存和传递；
 - `spec` 的 `seal` 成员落地后，如何在保持公开树操作 API 不变的前提下收紧 children/parent 存储访问；
 - root、焦点以及 `InputManager` 与 `ViewManager` 的具体关系；
 - 现有 `@value` 事件回调如何表达阻止冒泡。

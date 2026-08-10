@@ -109,6 +109,13 @@ open type View: Widget {
   }
 
   /**
+   * 判断定位方式是否参与普通流布局。
+   */
+  seal static func isNormalFlow(position: WidgetPosition): bool {
+    return position == WidgetPosition.Normal || position == WidgetPosition.Relative;
+  }
+
+  /**
    * 根据对齐方式在一个轴的可用区域中定位组件。
    * 组件尺寸超过可用区域时仍保持 Center/End 语义，并在坐标小于 0 时截断到 0。
    */
@@ -135,8 +142,9 @@ open type View: Widget {
 
   /**
    * 解析当前组件的布局参照区域。
-   * Normal 使用父组件扣除 padding 后的 content 区域；Absolute 使用父 frame；
-   * Fixed 或无 parent 时使用整个 Screen。
+   * Normal/Relative 使用直接父组件扣除 padding 后的 content 区域；
+   * Absolute 使用最近的非 Normal 祖先 frame；Fixed 使用整个 Screen。
+   * Absolute 不存在非 Normal 祖先、或普通流组件无 parent 时使用整个 Screen。
    */
   seal static func resolveReferenceFrame(widget: Widget, manager: ViewManager): WidgetFrame {
     let reference = WidgetFrame();
@@ -149,6 +157,18 @@ open type View: Widget {
       return reference;
     }
 
+    if widget.style.position == WidgetPosition.Absolute {
+      var current: Option<ContainerWidget> = widget.parent;
+      while current match let parent: ContainerWidget {
+        let parentWidget = (Widget)parent;
+        if parentWidget.style.position != WidgetPosition.Normal {
+          return parentWidget.frame;
+        }
+        current = parentWidget.parent;
+      }
+      return reference;
+    }
+
     if widget.parent match parent: ContainerWidget {
       let parentWidget = (Widget)parent;
       reference.x = parentWidget.frame.x;
@@ -156,7 +176,7 @@ open type View: Widget {
       reference.width = parentWidget.frame.width;
       reference.height = parentWidget.frame.height;
 
-      if widget.style.position == WidgetPosition.Normal {
+      if View.isNormalFlow(widget.style.position) {
         let padding = parentWidget.style.padding;
         let top = View.resolveLength(padding.top, reference.height);
         let right = View.resolveLength(padding.right, reference.width);
@@ -178,7 +198,7 @@ open type View: Widget {
   seal static func resolveWidth(widget: Widget, referenceWidth: u32,
     left: u32, right: u32): u32 {
     let available = View.resolveAvailableSize(referenceWidth, left, right);
-    if widget.style.position == WidgetPosition.Normal &&
+    if View.isNormalFlow(widget.style.position) &&
     widget.style.horizontalAlign == WidgetAlign.Full {
       return available;
     }
@@ -191,7 +211,7 @@ open type View: Widget {
   seal static func resolveHeight(widget: Widget, referenceHeight: u32,
     top: u32, bottom: u32): u32 {
     let available = View.resolveAvailableSize(referenceHeight, top, bottom);
-    if widget.style.position == WidgetPosition.Normal &&
+    if View.isNormalFlow(widget.style.position) &&
     widget.style.verticalAlign == WidgetAlign.Full {
       return available;
     }
@@ -204,7 +224,7 @@ open type View: Widget {
   seal static func resolveX(widget: Widget, reference: WidgetFrame,
     left: u32, right: u32, width: u32): u32 {
     let marginOrigin = View.addCoordinate(reference.x, left);
-    if widget.style.position == WidgetPosition.Normal {
+    if View.isNormalFlow(widget.style.position) {
       let available = View.resolveAvailableSize(reference.width, left, right);
       return View.resolveAlignedPosition(marginOrigin, available, width,
       widget.style.horizontalAlign);
@@ -219,7 +239,7 @@ open type View: Widget {
   seal static func resolveY(widget: Widget, reference: WidgetFrame,
     top: u32, bottom: u32, height: u32): u32 {
     let marginOrigin = View.addCoordinate(reference.y, top);
-    if widget.style.position == WidgetPosition.Normal {
+    if View.isNormalFlow(widget.style.position) {
       let available = View.resolveAvailableSize(reference.height, top, bottom);
       return View.resolveAlignedPosition(marginOrigin, available, height,
       widget.style.verticalAlign);
@@ -252,17 +272,65 @@ open type View: Widget {
   }
 
   /**
-   * 将一个轴上的绘制尺寸裁剪到 Screen 范围内。
+   * 计算两个矩形的交集；无交集时返回宽高为 0 的矩形。
+   * 使用 u64 计算边界，避免 u32 坐标与尺寸相加时溢出。
    */
-  seal static func resolveDrawSize(origin: u32, size: u32, limit: u32): u32 {
-    if origin >= limit {
-      return 0;
+  seal static func intersectFrame(first: WidgetFrame, second: WidgetFrame): WidgetFrame {
+    var left = first.x;
+    if second.x > left {
+      left = second.x;
     }
-    let available = limit - origin;
-    if size < available {
-      return size;
+    var top = first.y;
+    if second.y > top {
+      top = second.y;
     }
-    return available;
+
+    var right = (u64)first.x + (u64)first.width;
+    let secondRight = (u64)second.x + (u64)second.width;
+    if secondRight < right {
+      right = secondRight;
+    }
+    var bottom = (u64)first.y + (u64)first.height;
+    let secondBottom = (u64)second.y + (u64)second.height;
+    if secondBottom < bottom {
+      bottom = secondBottom;
+    }
+
+    let result = WidgetFrame();
+    result.x = left;
+    result.y = top;
+    if right <= (u64)left || bottom <= (u64)top {
+      result.width = 0;
+      result.height = 0;
+      return result;
+    }
+    result.width = (u32)(right - (u64)left);
+    result.height = (u32)(bottom - (u64)top);
+    return result;
+  }
+
+  /**
+   * 解析当前组件的有效绘制区域。
+   * 先使用最近的 overflow=Hidden 祖先 frame 裁剪，再裁剪到 Screen。
+   */
+  seal static func resolveDrawFrame(widget: Widget, manager: ViewManager): WidgetFrame {
+    var result = widget.frame;
+    var current: Option<ContainerWidget> = widget.parent;
+    while current match let parent: ContainerWidget {
+      let parentWidget = (Widget)parent;
+      if parentWidget.style.overflow == WidgetOverflow.Hidden {
+        result = View.intersectFrame(result, parentWidget.frame);
+        break;
+      }
+      current = parentWidget.parent;
+    }
+
+    let screen = WidgetFrame();
+    screen.x = 0;
+    screen.y = 0;
+    screen.width = manager.getScreenWidth();
+    screen.height = manager.getScreenHeight();
+    return View.intersectFrame(result, screen);
   }
 
   /**
@@ -271,14 +339,12 @@ open type View: Widget {
    */
   @mixable
   static func draw(widget: Widget, manager: ViewManager): void {
-    manager.trace(widget);
-    let frame = widget.frame;
-    let width = View.resolveDrawSize(frame.x, frame.width, manager.getScreenWidth());
-    let height = View.resolveDrawSize(frame.y, frame.height, manager.getScreenHeight());
-    if width == 0 || height == 0 {
+    let frame = View.resolveDrawFrame(widget, manager);
+    if frame.width == 0 || frame.height == 0 {
       return;
     }
-    manager.getScreenBuffer().draw(frame.x, frame.y, width, height, (u64)0,
+    manager.trace(widget);
+    manager.getScreenBuffer().draw(frame.x, frame.y, frame.width, frame.height, (u64)0,
       none, widget.style.backColor);
   }
 

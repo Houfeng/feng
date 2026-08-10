@@ -11,7 +11,9 @@ import std.tui.input;
 open enum WidgetPosition {
   /** 普通布局，由父组件控制 */
   Normal,
-  /** 绝对布局，相对于父组件定位 */
+  /** 与 Normal 使用相同布局，但可作为 Absolute 后代的定位参照 */
+  Relative,
+  /** 绝对布局，相对于最近的非 Normal 祖先定位 */
   Absolute,
   /** 固定布局，相对于屏幕定位 */
   Fixed
@@ -46,31 +48,32 @@ open enum WidgetOverflow {
 open type WidgetStyle {
   /**
    * 组件布局类型。
-   * Normal 使用父组件扣除 padding 后的 content 区域；Absolute 使用父组件 frame；
-   * Fixed 使用整个 Screen。无 parent 时以整个 Screen 为参照区域。
+   * Normal/Relative 使用直接父组件扣除 padding 后的 content 区域；
+   * Absolute 使用最近的非 Normal 祖先 frame；Fixed 使用整个 Screen。
+   * Relative 的自身布局与 Normal 相同，但可作为 Absolute 后代的定位参照。
    */
   var position: WidgetPosition;
 
   /**
-   * X 坐标，仅用于 Absolute/Fixed，Normal 布局时忽略。
+   * X 坐标，仅用于 Absolute/Fixed，Normal/Relative 布局时忽略。
    * u32 表示固定终端单元数，float 表示相对参照区域宽度的百分比；
    * 百分比基数不扣除自身 margin。最终 frame.x 还会叠加 margin.left，
-   * Absolute 的相对坐标不受父组件 padding 影响。
+   * Absolute 的相对坐标不受定位参照祖先的 padding 影响。
    */
   var x: Union<u32, float>;
 
   /**
-   * Y 坐标，仅用于 Absolute/Fixed，Normal 布局时忽略。
+   * Y 坐标，仅用于 Absolute/Fixed，Normal/Relative 布局时忽略。
    * u32 表示固定终端单元数，float 表示相对参照区域高度的百分比；
    * 百分比基数不扣除自身 margin。最终 frame.y 还会叠加 margin.top，
-   * Absolute 的相对坐标不受父组件 padding 影响。
+   * Absolute 的相对坐标不受定位参照祖先的 padding 影响。
    */
   var y: Union<u32, float>;
 
   /**
    * 宽度，u32 表示固定终端单元数，float 表示百分比。
    * 固定宽度保持原值，不扣除 margin；百分比宽度以参照区域扣除
-   * margin.left/right 后的剩余宽度为基数。Normal + horizontalAlign=Full
+   * margin.left/right 后的剩余宽度为基数。Normal/Relative + horizontalAlign=Full
    * 时忽略 width，直接占满扣除左右 margin 后的可用宽度。
    */
   var width: Union<u32, float>;
@@ -78,7 +81,7 @@ open type WidgetStyle {
   /**
    * 高度，u32 表示固定终端单元数，float 表示百分比。
    * 固定高度保持原值，不扣除 margin；百分比高度以参照区域扣除
-   * margin.top/bottom 后的剩余高度为基数。Normal + verticalAlign=Full
+   * margin.top/bottom 后的剩余高度为基数。Normal/Relative + verticalAlign=Full
    * 时忽略 height，直接占满扣除上下 margin 后的可用高度。
    */
   var height: Union<u32, float>;
@@ -95,8 +98,8 @@ open type WidgetStyle {
 
   /**
    * 填充间距，不改变组件自身 frame。
-   * Normal 子组件以父组件 frame 扣除 padding 后的 content 区域为布局参照；
-   * Absolute 子组件的相对坐标不受父组件 padding 影响。
+   * Normal/Relative 子组件以直接父组件 frame 扣除 padding 后的 content 区域为布局参照；
+   * Absolute 子组件的相对坐标不受定位参照祖先的 padding 影响。
    */
   var padding: Thickness;
 
@@ -112,14 +115,14 @@ open type WidgetStyle {
   var overflow: WidgetOverflow;
 
   /**
-   * Normal 布局的水平对齐方式；Absolute/Fixed 时忽略。
+   * Normal/Relative 布局的水平对齐方式；Absolute/Fixed 时忽略。
    * Start/Center/End 在扣除左右 margin 后的可用区域内定位固定或百分比宽度；
    * Full 忽略 width 并占满该可用区域。
    */
   var horizontalAlign: WidgetAlign;
 
   /**
-   * Normal 布局的垂直对齐方式；Absolute/Fixed 时忽略。
+   * Normal/Relative 布局的垂直对齐方式；Absolute/Fixed 时忽略。
    * Start/Center/End 在扣除上下 margin 后的可用区域内定位固定或百分比高度；
    * Full 忽略 height 并占满该可用区域。
    */
