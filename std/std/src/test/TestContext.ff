@@ -49,6 +49,13 @@ type TestContext {
    */
   seal let stack: List<TestState>;
 
+  /**
+   * Return whether no test suite or case is currently active.
+   */
+  func isTopLevel(): bool {
+    return self.stack.size() == 0;
+  }
+
   func current(): TestState {
     return self.stack.get(self.stack.size() - 1);
   }

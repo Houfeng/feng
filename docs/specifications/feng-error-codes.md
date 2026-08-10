@@ -71,7 +71,7 @@
 | **AE0078** | 调用目标无效 | call target '%s' does not accept an existing array at a variadic argument position; use explicit '...array' forwarding for the complete variadic group |
 | **AE0079** | 调用目标无效 | call target '%s' has no function type overload accepting %zu argument(s) |
 | **AE0080** | 调用目标无效 | expression '%s' is not callable |
-| **AE0081** | 访问权限不足 | static member '%.*s' of type '%.*s' is not accessible from the current module |
+| **AE0081** | 访问权限不足 | static member '%.*s' of type '%.*s' is not accessible from the current type scope |
 | **AE0082** | 成员不存在 | type '%.*s' has no static member '%.*s' |
 | **AE0083** | 枚举定义错误 | enum '%.*s' has no item '%.*s' |
 | **AE0084** | 静态成员访问错误 | static member '%.*s' must be accessed through its type |
@@ -82,7 +82,7 @@
 | **AE0089** | 成员不存在 | spec '%.*s' has no member '%.*s' |
 | **AE0090** | 成员不存在 | type '%.*s' has no member '%.*s' |
 | **AE0091** | 访问权限不足 | fit body cannot access private member '%.*s' of target type '%.*s' |
-| **AE0092** | 访问权限不足 | member '%.*s' of type '%.*s' is not accessible from the current module |
+| **AE0092** | 访问权限不足 | member '%.*s' of type '%.*s' is not accessible from the current type scope |
 | **AE0093** | 语义检查错误 | object literal field '%.*s' repeats final binding of let member '%.*s' already completed by declaration initializer |
 | **AE0094** | 语义检查错误 | object literal field '%.*s' repeats final binding of let member '%.*s' already completed by constructor '%.*s' |
 | **AE0095** | 成员不存在 | let member '%.*s' cannot be directly assigned outside constructors |

@@ -205,11 +205,6 @@ open type EntryInfo {
   let kind: EntryKind;
 
   /**
-   * Directory path.
-   */
-  seal var dirPath: byte[];
-
-  /**
    * Get the full metadata of this entry, calling POSIX stat internally (following symlinks).
    * @return StatInfo of the entry
    */

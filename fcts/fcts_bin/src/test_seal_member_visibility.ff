@@ -1,0 +1,31 @@
+module fcts_bin;
+
+import std.test;
+import fcts_bin.seal_member_visibility;
+
+/// type seal 成员访问边界与同名重载行为测试。
+open func test_seal_member_visibility() {
+  describe("type seal member visibility", () {
+    test("owner type can access seal field", () {
+      let fixture = SealMemberFixture {};
+      fixture.setValue(42);
+      assert(fixture.getValue() == 42,
+             "owner type accesses its seal field");
+    });
+
+    test("inaccessible instance overload does not shadow accessible overload", () {
+      let fixture = SealMemberFixture {};
+      assert(fixture.select(1, 2) == 202,
+             "accessible variadic instance overload is selected");
+      assert(fixture.selectArray([1, 2]) == 102,
+             "owner type selects seal array instance overload");
+    });
+
+    test("inaccessible static overload does not shadow accessible overload", () {
+      assert(SealMemberFixture.selectStatic(1, 2) == 402,
+             "accessible variadic static overload is selected");
+      assert(SealMemberFixture.selectStaticArray([1, 2]) == 302,
+             "owner type selects seal array static overload");
+    });
+  });
+}

@@ -60,6 +60,13 @@ open type Mutex {
   }
 
   /**
+   * Return the native mutex handle required by synchronization primitives.
+   */
+  open func nativeHandle(): int {
+    return self.handle;
+  }
+
+  /**
    * Destroys the mutex and frees its resources.
    */
   open func destroy(): void {

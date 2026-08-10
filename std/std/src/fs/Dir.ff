@@ -138,8 +138,7 @@ open type Dir {
       return (false, EntryInfo {
         name: "",
         path: "",
-        kind: EntryKind.Other,
-        dirPath: byte[:(int)0]
+        kind: EntryKind.Other
       });
     }
     return (true, entry);
@@ -176,8 +175,7 @@ open type Dir {
       return EntryInfo {
         name: "",
         path: "",
-        kind: EntryKind.Other,
-        dirPath: byte[:(int)0]
+        kind: EntryKind.Other
       };
     }
 
@@ -227,8 +225,7 @@ open type Dir {
     return EntryInfo {
       name: name,
       path: fullPath,
-      kind: kind,
-      dirPath: feng_string_to_utf8_bytes(self.dirPath)
+      kind: kind
     };
   }
 

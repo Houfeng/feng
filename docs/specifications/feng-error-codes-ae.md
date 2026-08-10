@@ -73,13 +73,13 @@
 | AE0302 | 元组元素数量匹配约束 | AE0017 | tuple literal has %zu element(s) but tuple type '%s' expects %zu |
 | AE0301 | 元组目标命名类型约束 | AE0139 | tuple literal requires an explicit named tuple target type |
 | AE0304 | 泛型约束中的元组限制 | AE0211 | type parameter '%.*s': tuple type cannot be used as a constraint; use a spec constraint |
-| AE0305 | 静态成员模块可见性约束 | AE0081 | static member '%.*s' of type '%.*s' is not accessible from the current module |
+| AE0305 | 静态成员 type 可见性约束 | AE0081 | static member '%.*s' of type '%.*s' is not accessible from the current type scope |
 | AE0309 | 静态成员不存在约束 | AE0082 | type '%.*s' has no static member '%.*s' |
 | AE0310 | 静态成员访问方式约束 | AE0084 | static member '%.*s' must be accessed through its type |
 | AE0306 | 实例成员不存在约束 | AE0086 | type '%s' has no member '%.*s' |
 | AE0306 | 实例成员不存在约束 | AE0090 | type '%.*s' has no member '%.*s' |
 | AE0307 | fit 私有成员访问约束 | AE0091 | fit body cannot access private member '%.*s' of target type '%.*s' |
-| AE0308 | 实例成员模块可见性约束 | AE0092 | member '%.*s' of type '%.*s' is not accessible from the current module |
+| AE0308 | 实例成员 type 可见性约束 | AE0092 | member '%.*s' of type '%.*s' is not accessible from the current type scope |
 | AE0312 | 构造目标对象类型约束 | AE0140 | %s '%.*s' is not an object type and cannot be constructed |
 | AE0313 | 构造器参数匹配缺失约束 | AE0141 | type '%.*s' has no constructor accepting %zu argument(s) |
 | AE0314 | 构造器重载二义性约束 | AE0142 | type '%.*s' has multiple accessible constructors matching %zu argument(s); argument types are ambiguous |

@@ -1,0 +1,48 @@
+open module fcts_bin.seal_member_visibility;
+
+import std.collections;
+
+/// 用于验证 type seal 成员访问边界和同名重载选择的组件。
+open type SealMemberFixture {
+  seal var value: int;
+
+  /// 通过声明类型自身写入 seal 字段。
+  func setValue(value: int) {
+    self.value = value;
+  }
+
+  /// 通过声明类型自身读取 seal 字段。
+  func getValue(): int {
+    return self.value;
+  }
+
+  /// 仅声明类型内部可见的数组重载。
+  seal func select(values: int[]): int {
+    return 100 + values.length();
+  }
+
+  /// 跨 module 可见的变长参数重载。
+  func select(values: int...): int {
+    return 200 + values.length();
+  }
+
+  /// 通过声明类型自身调用 seal 数组重载。
+  func selectArray(values: int[]): int {
+    return self.select(values);
+  }
+
+  /// 仅声明类型内部可见的静态数组重载。
+  seal static func selectStatic(values: int[]): int {
+    return 300 + values.length();
+  }
+
+  /// 跨 module 可见的静态变长参数重载。
+  static func selectStatic(values: int...): int {
+    return 400 + values.length();
+  }
+
+  /// 通过声明类型自身调用 seal 静态数组重载。
+  static func selectStaticArray(values: int[]): int {
+    return SealMemberFixture.selectStatic(values);
+  }
+}

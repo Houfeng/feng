@@ -21,6 +21,13 @@ open type Promise<T> {
   }
 
   /**
+   * Get the current state of this promise.
+   */
+  func getState(): FutureState {
+    return self.state;
+  }
+
+  /**
    * Resolve the promise with the given value.
    */
   func resolve(value: T): void {}

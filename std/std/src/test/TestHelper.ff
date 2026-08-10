@@ -28,7 +28,7 @@ open spec TestFunction(): void;
  * @param fn Test function
  */
 func execute(name: string, kind: TestKind, skip: bool, fn: TestFunction): void {
-  let isTopLevel = context.stack.size() == 0;
+  let isTopLevel = context.isTopLevel();
   if isTopLevel {
     println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
   }

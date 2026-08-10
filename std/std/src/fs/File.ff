@@ -105,7 +105,7 @@ open type File {
    * @return UTF-8 string of the remaining file contents
    */
   open func readText(): string {
-    let bytes = self.readAllBytes();
+    let bytes = readAllBytes(self);
     return string.fromUtf8Bytes(bytes);
   }
 
@@ -186,34 +186,6 @@ open type File {
   }
 
   /**
-   * Internal: read all remaining bytes from the file.
-   */
-  seal func readAllBytes(): byte[] {
-    let allBytes = List<byte>();
-    let chunk: byte[!] = byte[:(int)4096];
-    while true {
-      let count = self.read(chunk);
-      if count == (int)0 {
-        break;
-      }
-      for var i: int = (int)0; i < count; i += (int)1 {
-        allBytes.add(chunk[i]);
-      }
-    }
-    return allBytes.entries();
-  }
-
-  /**
-   * Internal: write all bytes to the file.
-   */
-  seal func writeAllBytes(bytes: byte[]) {
-    let written = self.write(bytes);
-    if written != bytes.length() {
-      throw "fs/write-failed";
-    }
-  }
-
-  /**
    * Internal: check whether the file is open; throws if already closed.
    */
   seal func ensureOpen() {
@@ -224,6 +196,34 @@ open type File {
 }
 
 // ---- 顶层便捷函数 ----
+
+/**
+ * Read all remaining bytes through the public File stream API.
+ */
+seal func readAllBytes(file: File): byte[] {
+  let allBytes = List<byte>();
+  let chunk: byte[!] = byte[:(int)4096];
+  while true {
+    let count = file.read(chunk);
+    if count == (int)0 {
+      break;
+    }
+    for var i: int = (int)0; i < count; i += (int)1 {
+      allBytes.add(chunk[i]);
+    }
+  }
+  return allBytes.entries();
+}
+
+/**
+ * Write all bytes through the public File stream API.
+ */
+seal func writeAllBytes(file: File, bytes: byte[]): void {
+  let written = file.write(bytes);
+  if written != bytes.length() {
+    throw "fs/write-failed";
+  }
+}
 
 /**
  * Read the entire file as a UTF-8 string.
@@ -264,7 +264,7 @@ open func writeText(path: string, text: string): void {
  */
 open func readBytes(path: string): byte[] {
   let file = File.create(path, FileMode.Read);
-  let result = try file.readAllBytes() catch ex: string {
+  let result = try readAllBytes(file) catch ex: string {
     file.close();
     throw ex;
   };
@@ -280,7 +280,7 @@ open func readBytes(path: string): byte[] {
  */
 open func writeBytes(path: string, bytes: byte[]): void {
   let file = File.create(path, FileMode.WriteTrunc);
-  try file.writeAllBytes(bytes) catch ex: string {
+  try writeAllBytes(file, bytes) catch ex: string {
     file.close();
     throw ex;
   };

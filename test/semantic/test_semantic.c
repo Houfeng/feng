@@ -4963,6 +4963,134 @@ static void test_private_method_is_inaccessible_across_modules(void) {
     feng_program_free(main_program);
 }
 
+static void test_seal_type_members_are_inaccessible_outside_owner_in_same_module(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *code;
+    } cases[] = {
+        {
+            "same_module_seal_instance_field.f",
+            "module demo.main;\n"
+            "type Vault { seal var secret: int; }\n"
+            "func run(vault: Vault): int { return vault.secret; }\n",
+            "AE0308"
+        },
+        {
+            "same_module_seal_instance_method.f",
+            "module demo.main;\n"
+            "type Vault { seal func secret(): int { return 1; } }\n"
+            "func run(vault: Vault): int { return vault.secret(); }\n",
+            "AE0308"
+        },
+        {
+            "same_module_seal_static_field.f",
+            "module demo.main;\n"
+            "type Vault { seal static let secret: int = 1; }\n"
+            "func run(): int { return Vault.secret; }\n",
+            "AE0305"
+        },
+        {
+            "same_module_seal_static_method.f",
+            "module demo.main;\n"
+            "type Vault { seal static func secret(): int { return 1; } }\n"
+            "func run(): int { return Vault.secret(); }\n",
+            "AE0305"
+        },
+        {
+            "same_module_seal_constructor.f",
+            "module demo.main;\n"
+            "type Vault { seal func Vault(value: int) {} }\n"
+            "func run(): Vault { return Vault(1); }\n",
+            "AE0315"
+        },
+        {
+            "same_module_seal_object_field.f",
+            "module demo.main;\n"
+            "type Vault { seal var secret: int; }\n"
+            "func run(): Vault { return Vault { secret: 1 }; }\n",
+            "AE1007"
+        }
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = parse_program_or_die(cases[index].path, cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strcmp(errors[0].code, cases[index].code) == 0);
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+static void test_seal_type_members_are_accessible_inside_owner(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Vault {\n"
+        "    seal var value: int;\n"
+        "    seal static var count: int = 0;\n"
+        "    seal func Vault(value: int) { self.value = value; }\n"
+        "    seal func bump(): void { self.value += 1; }\n"
+        "    seal static func bumpCount(): void { Vault.count += 1; }\n"
+        "    static func create(value: int): Vault { return Vault(value); }\n"
+        "    func exercise(): int {\n"
+        "        self.bump();\n"
+        "        Vault.bumpCount();\n"
+        "        return self.value + Vault.count;\n"
+        "    }\n"
+        "}\n"
+        "func run(): int { return Vault.create(2).exercise(); }\n";
+    FengProgram *program = parse_program_or_die("seal_owner_access_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_inaccessible_overload_does_not_shadow_accessible_overload(void) {
+    const char *provider_source =
+        "open module demo.visibility.provider;\n"
+        "open type Painter {\n"
+        "    seal func draw(styles: int[]): int { return 1; }\n"
+        "    func draw(styles: int...): int { return 2; }\n"
+        "    seal static func render(styles: int[]): int { return 3; }\n"
+        "    static func render(styles: int...): int { return 4; }\n"
+        "}\n";
+    const char *consumer_source =
+        "module demo.visibility.consumer;\n"
+        "import demo.visibility.provider;\n"
+        "func run(painter: Painter): int {\n"
+        "    return painter.draw(1, 2) + Painter.render(3, 4);\n"
+        "}\n";
+    FengProgram *provider_program =
+        parse_program_or_die("visible_overload_provider.f", provider_source);
+    FengProgram *consumer_program =
+        parse_program_or_die("visible_overload_consumer.f", consumer_source);
+    const FengProgram *programs[] = {provider_program, consumer_program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(provider_program);
+    feng_program_free(consumer_program);
+}
+
 static void test_private_generic_type_is_inaccessible_across_modules(void) {
     const char *base_source =
         "open module demo.private_generic.base;\n"
@@ -10618,7 +10746,7 @@ static void test_object_literal_rejects_inaccessible_private_field(void) {
     feng_program_free(main_program);
 }
 
-static void test_object_literal_allows_private_field_inside_same_module(void) {
+static void test_object_literal_rejects_private_field_outside_owner_in_same_module(void) {
     const char *source_a =
         "module demo.main;\n"
         "type User {\n"
@@ -10637,12 +10765,15 @@ static void test_object_literal_allows_private_field_inside_same_module(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(analysis != NULL);
-    ASSERT(errors == NULL);
-    ASSERT(error_count == 0U);
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(analysis == NULL);
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "object_literal_same_module_b.f") == 0);
+    ASSERT(errors[0].token.line == 3U);
+    ASSERT(strcmp(errors[0].code, "AE1007") == 0);
 
-    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program_a);
     feng_program_free(program_b);
 }
@@ -21665,6 +21796,9 @@ int main(void) {
     test_function_typed_local_binding_is_callable();
     test_non_callable_local_binding_reports_error();
     test_private_method_is_inaccessible_across_modules();
+    test_seal_type_members_are_inaccessible_outside_owner_in_same_module();
+    test_seal_type_members_are_accessible_inside_owner();
+    test_inaccessible_overload_does_not_shadow_accessible_overload();
     test_private_generic_type_is_inaccessible_across_modules();
     test_top_level_function_value_selects_overload_by_explicit_binding_type();
     test_top_level_function_value_selects_overload_by_parameter_context();
@@ -21870,7 +22004,7 @@ int main(void) {
     test_object_literal_allows_unbound_let_member();
     test_object_literal_rejects_duplicate_fields();
     test_object_literal_rejects_inaccessible_private_field();
-    test_object_literal_allows_private_field_inside_same_module();
+    test_object_literal_rejects_private_field_outside_owner_in_same_module();
     test_spec_type_satisfaction_succeeds();
     test_object_form_spec_allows_method_same_name_as_spec();
     test_object_form_spec_rejects_finalizer_member();

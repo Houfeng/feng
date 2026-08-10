@@ -30,7 +30,7 @@ open type Future<T> {
    */
   func state(): FutureState {
     return match self.owner {
-      p: Promise<T> { p.state }
+      p: Promise<T> { p.getState() }
       else { FutureState.Pending }
     };
   }
