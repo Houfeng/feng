@@ -39,13 +39,13 @@
 
 ### 2.2 视图逻辑层（第 4 层）
 
-- **`std.tui.view`**：承载布局声明、布局结果、`Widget`/`ContainerWidget` 契约和 `ViewManager`。当前已实现 `View.arrange()` 的自身布局计算和 `View.draw()` 的矩形绘制，并将 ViewManager 的 arrange/draw 调度接入 `TuiApp.render()`；命中、焦点与事件路由留在第七阶段继续实现，详见 `docs/engineering/feng-std-tui-view-dev.md`。
+- **`std.tui.view`**：承载布局声明、布局结果、`Widget`/`ContainerWidget` 契约和 `ViewManager`。当前已实现 `View.arrange()` 的自身布局计算和 `View.draw()` 的矩形绘制，并将 ViewManager 的 arrange/draw 调度接入 `TuiApp.render()`；鼠标逆序命中与冒泡路由已经实现，焦点与键盘路由后续实现，详见 `docs/engineering/feng-std-tui-view-dev.md`。
 - **`std.tui.widgets`**：承载组件实现。当前包含 `View`、`Container` 基础实现，以及只用于验证展开机制的 Text/Button 骨架；Input/List/ScrollView、VStack/HStack/Dock 等完整组件和布局容器后续实现。
 
 ### 2.3 应用控制层（第 5 层）
 
 - **`std.tui.TuiApp` 生命周期**：启动时通过 libuv TTY API 进入 Raw Mode，通过 `SIGWINCH` + self-pipe 响应 Resize，并在正常退出及 `atexit` 清理中恢复终端状态。
-- **`std.tui.input` 输入解析**：`InputManager` 读取 stdin 字节流，通过状态机解析为 `KeyEvent` 或 `MouseEvent` 并调用输入回调。向焦点组件路由事件属于第七阶段的 `ViewManager` 集成，当前尚未接入。
+- **`std.tui.input` 输入解析**：`InputManager` 读取 stdin 字节流，通过状态机解析为 `KeyEvent` 或 `MouseEvent` 并调用输入回调。鼠标事件已经接入 `ViewManager`；向焦点组件路由键盘事件后续实现。
 
 ## 3 关键设计决策
 
@@ -120,7 +120,7 @@
 - **完整帧输出**：`render()` 对 `write()` 的短写继续写出剩余 ANSI 字节；resize 成功后先清空物理终端，再按新尺寸布局和绘制，避免旧画面重排后残留。
 - **终端恢复**：`exit()` 负责正常路径清理，并通过 `atexit` 注册的清理函数兜底恢复 Raw Mode。
 - **输入解析**：VT100/xterm 转义序列状态机，纯 Feng 实现。
-- **事件路由**：当前由 `InputManager` 调用 `onKey`/`onMouse` 回调；第七阶段接入 `ViewManager` 后，再下发给焦点或命中节点。
+- **事件路由**：`InputManager.onMouse` 已接入 `ViewManager`，按本帧缓存的 `drawFrame` 逆序命中，并沿 parent 链向上冒泡；焦点管理与键盘焦点路由后续实现。
 
 ## 4 实施路线
 
@@ -168,7 +168,7 @@
 
 > 实现方案详见 `docs/engineering/feng-std-tui-input-dev.md`。
 
-- [x] 4.18 实现事件类型：`KeyEvent.ff`（`SpecialKey` 枚举、`MOD_CONTROL`/`MOD_ALT`/`MOD_SHIFT` 常量、`Union<SpecialKey,u32>`、`KeyEvent` @value 类型 + `isControl()`/`isShift()`/`isPrintable()` 快捷方法）和 `MouseEvent.ff`（`MouseAction`/`MouseButton` 枚举、鼠标事件字段及 `isControl()`/`isAlt()`/`isShift()` 快捷方法；第七阶段将其调整为支持停止传播的引用类型）
+- [x] 4.18 实现事件类型：`KeyEvent.ff`（`SpecialKey` 枚举、`MOD_CONTROL`/`MOD_ALT`/`MOD_SHIFT` 常量、`Union<SpecialKey,u32>`、`KeyEvent` @value 类型 + `isControl()`/`isShift()`/`isPrintable()` 快捷方法）和 `MouseEvent.ff`（`MouseAction`/`MouseButton` 枚举、鼠标事件字段及 `isControl()`/`isAlt()`/`isShift()` 快捷方法；后续已在 4.33 调整为支持停止传播的引用类型）
 - [x] 4.19 实现 InputManager（InputManager.ff）：`ParserState` 状态机 + `onKey`/`onMouse` 回调字段（`Action<KeyEvent>`/`Action<MouseEvent>`） + `feed(b: u8): void`；处理单字节字符、CSI/SS3 转义序列、UTF-8 多字节解码、鼠标 SGR 序列
 - [x] 4.20 集成 InputManager 至 TuiApp：新增 `let input: InputManager` 公开只读成员；`run()` 中 stdin drain 替换为逐字节 `input.feed()`；`init()` 发送鼠标启用序列（`\x1b[?1006h\x1b[?1003h`，SGR + 全移动报告含悬停），`exit()` 发送禁用序列
 - [x] 4.21 补充 std_test 用例：在 `test_tui.ff` 中新增事件类型快捷方法、InputManager 解析状态机（VT100/xterm 转义序列、UTF-8、鼠标 SGR）、回调分发等测试
@@ -196,9 +196,9 @@
 - [x] 4.30 完善 Widget 基础机制：实现 `Thickness`、布局枚举、`WidgetStyle`、`WidgetFrame`、`Widget`/`ContainerWidget`，以及 `View`/`Container` 的基础行为和组件树关系维护
 - [x] 4.31 实现 View 布局与绘制：支持 Normal/Relative/Absolute/Fixed、尺寸与间距解析、对齐、祖先裁剪、矩形绘制、drawFrame 缓存及 sequence 登记
 - [x] 4.32 实现 ViewManager 基础调度并集成至 TuiApp：提供可选 root、sequence、trace、arrange/draw 入口，复用现有 Screen 并接入 `TuiApp.render()`
-- [ ] 4.33 实现 ViewManager 鼠标事件分发：将 MouseEvent 改为支持 `stop()`/`isStopped()` 的引用类型，接入 InputManager 单播 `onMouse`，基于缓存的 drawFrame 实现逆序命中与自下向上冒泡
+- [x] 4.33 实现 ViewManager 鼠标事件分发：将 MouseEvent 改为支持 `stop()`/`isStopped()` 的引用类型，接入 InputManager 单播 `onMouse`，基于缓存的 drawFrame 实现逆序命中与自下向上冒泡
 - [ ] 4.34 补充 std_test 用例：覆盖 Widget 契约、parent 维护、arrange/frame、sequence 命中、裁剪、鼠标回调选择、冒泡及停止传播
-- [ ] 4.35 全量回归测试：执行 `make test`，确认全部通过
+- [x] 4.35 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.36 等待人工 Review：开发者审查鼠标事件分发设计与实现，通过后再处理焦点和键盘路由
 - [ ] 4.37 后续实现焦点管理与键盘焦点路由
 
@@ -231,7 +231,7 @@ std/std/src/tui/
   view/                    # std.tui.view：视图契约与管理机制
     Thickness.ff           # 四边间距类型
     Widget.ff              # 布局类型、Widget 与 ContainerWidget
-    ViewManager.ff         # arrange/draw 调度与 sequence
+    ViewManager.ff         # arrange/draw 调度、sequence、鼠标命中与冒泡
 
   widgets/                 # std.tui.widgets：组件实现
     View.ff                # Widget 基础实现
