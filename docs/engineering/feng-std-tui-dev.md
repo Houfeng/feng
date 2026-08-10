@@ -2,11 +2,11 @@
 
 > 状态：设计中（design）
 >
-> 本文档用于规划 `std.tui` 模块的完整实现路线，是实现的唯一权威依据。
+> 本文档用于规划 `std.tui` 模块族的完整实现路线，是实现的唯一权威依据。
 
 ## 1 目标
 
-构建一个极完整、好用且好看的终端用户界面（TUI）框架，作为 `std.tui` 标准库的一部分。
+构建一个极完整、好用且好看的终端用户界面（TUI）框架，作为 `std.tui` 标准库模块族的一部分。
 
 ## 2 分层架构
 
@@ -16,7 +16,7 @@
 │     生命周期 / Raw Mode / 信号 / 事件路由      │
 ├──────────────────────────────────────────────┤
 │  4. Widget Tree (视图逻辑层)                   │
-│     组件树 / 状态 / 样式 / 布局（后续设计）      │
+│     组件树 / 状态 / 样式 / 布局（机制完善中）    │
 ├──────────────────────────────────────────────┤
 │  3. Screen (渲染底座 - 差异同步)               │
 │     双缓冲 / Diff 引擎 / ANSI 序列生成          │
@@ -31,21 +31,21 @@
 
 ### 2.1 渲染底座（第 1-3 层）
 
-- **Cell**：纯粹的数据容器。`@value` 类型，16 字节布局（`u64 value` + `u64 style`），值语义保证内存绝对连续排列。成员为 `open var`，可直接字段赋值修改；同时提供 foreColor/backColor/bold/dim 等便利 getter/setter 方法对。
-- **Style**：`open enum`，9 个枚举项（none/bold/dim/italic/underline/blink/reverse/hidden/strikethrough），使用小整数序号。类型安全，调用方只能传入合法样式。
-- **RgbColor**：`@value` 类型，3 个 `u8` 字段（r/g/b），表示 RGB 颜色。配合 `Option<RgbColor>` 使用，`none` 表示终端默认色。
-- **Buffer**：管理 `Cell[]` 矩阵。通过直接字段赋值（`cells[idx].value = ...`）就地修改元素，利用 `@value` 类型的语义，不需要可写数组。提供统一的 `draw` 重载体系（文本/码点 × 单点/矩形 × 无色/前景/前景+背景）、`fill`、`clear` 绘制原语，内部通过 `styleToBits`/`combineStyles`/`packStyle` 将 Style 枚举与 RgbColor 打包为 Cell 的样式编码。
-- **Screen**：封装双缓冲内存同步与差异比对（Diff）引擎。向下对接 stdout，生成 ANSI 转义序列，通过批量 I/O 冲刷。不关心业务逻辑。
+- **`std.tui.screen.Cell`**：纯粹的数据容器。`@value` 类型，16 字节布局（`u64 value` + `u64 style`），值语义保证内存绝对连续排列。成员为 `open var`，可直接字段赋值修改；同时提供 foreColor/backColor/bold/dim 等便利 getter/setter 方法对。
+- **`std.tui.screen.Style`**：`open enum`，9 个枚举项（none/bold/dim/italic/underline/blink/reverse/hidden/strikethrough），使用小整数序号。类型安全，调用方只能传入合法样式。
+- **`std.tui.screen.RgbColor`**：`@value` 类型，3 个 `u8` 字段（r/g/b），表示 RGB 颜色。配合 `Option<RgbColor>` 使用，`none` 表示终端默认色。
+- **`std.tui.screen.Buffer`**：管理 `Cell[]` 矩阵。通过直接字段赋值（`cells[idx].value = ...`）就地修改元素，利用 `@value` 类型的语义，不需要可写数组。提供统一的 `draw` 重载体系（文本/码点 × 单点/矩形 × 无色/前景/前景+背景）、`fill`、`clear` 绘制原语，内部通过 `styleToBits`/`combineStyles`/`packStyle` 将 Style 枚举与 RgbColor 打包为 Cell 的样式编码。
+- **`std.tui.screen.Screen`**：封装双缓冲内存同步与差异比对（Diff）引擎。ANSI 转义序列生成也内聚在 Screen 中；Screen 只构建输出字节，不执行 stdout I/O，不关心业务逻辑。
 
 ### 2.2 视图逻辑层（第 4 层）
 
-- **组件树机制**：承载组件树、布局声明、布局结果、绘制调度、焦点与事件路由。第七阶段只实现机制层，详见 `docs/engineering/feng-std-tui-view-dev.md`。
-- **后续扩展**：Text/Button/Input/List/ScrollView、VStack/HStack/Dock 等组件和布局容器均基于第七阶段机制继续扩展。
+- **`std.tui.view`**：承载布局声明、布局结果、`Widget`/`ContainerWidget` 契约和 `ViewManager`。当前已定义组件树及 arrange/draw 调度骨架；命中、焦点与事件路由留在第七阶段继续实现，详见 `docs/engineering/feng-std-tui-view-dev.md`。
+- **`std.tui.widgets`**：承载组件实现。当前包含 `View`、`Container` 基础实现，以及只用于验证展开机制的 Text/Button 骨架；Input/List/ScrollView、VStack/HStack/Dock 等完整组件和布局容器后续实现。
 
 ### 2.3 应用控制层（第 5 层）
 
-- **生命周期**：启动时进入 Raw Mode，注册 `SIGWINCH` 响应 Resize，程序退出或崩溃时保证终端状态绝对恢复。
-- **输入流解析与路由**：读取 stdin 字节流，通过状态机解析为 `KeyEvent` 或 `MouseEvent`，下发给焦点节点，计算状态变更后触发 `Screen.buildPatchBytes()`。
+- **`std.tui.TuiApp` 生命周期**：启动时通过 libuv TTY API 进入 Raw Mode，通过 `SIGWINCH` + self-pipe 响应 Resize，并在正常退出及 `atexit` 清理中恢复终端状态。
+- **`std.tui.input` 输入解析**：`InputManager` 读取 stdin 字节流，通过状态机解析为 `KeyEvent` 或 `MouseEvent` 并调用输入回调。向焦点组件路由事件属于第七阶段的 `ViewManager` 集成，当前尚未接入。
 
 ## 3 关键设计决策
 
@@ -100,8 +100,8 @@
   - `clear()` — 组合 `clearBuffer()` + `clearScreen()`，完整重置（清空缓冲区 + 清物理终端）。
   - `hideCursor()` — 发射隐藏光标序列（`\x1b[?25l`）到 output 缓冲。
   - `showCursor()` — 发射显示光标序列（`\x1b[?25h`）到 output 缓冲。
-  - `resize(width, height)` — 重建 front/back 为新尺寸空白 Buffer，旧内容不迁移（TUI resize 时旧内容无法对齐，由上层组件树负责重新布局）。front 同时清空，使下次 `buildPatchBytes()` 产生全量重绘。
-  - `buildPatchBytes(): byte[]` — 构建 diff 后的 ANSI 转义序列字节，由调用方直接写入 stdout，零 string 中间转换。主体实现方法。不执行 I/O，纯函数。已写入 output 的清屏/光标序列会与 diff 序列一同输出，输出后 output 清空。
+  - `resize(width, height)` — 重建 front/back 为新尺寸空白 Buffer，旧内容不迁移（TUI resize 时旧内容无法对齐，由上层组件树负责重新布局）。上层重新绘制 back 后，以空白 front 为基准生成新尺寸下的 diff。
+  - `buildPatchBytes(): byte[]` — 构建 diff 后的 ANSI 转义序列字节，由调用方直接写入 stdout，零 string 中间转换。主体实现方法不执行 I/O；构建完成后会同步 front、重置并清空内部输出状态。已写入 output 的清屏/光标序列会与 diff 序列一同输出。
   - `buildPatchString(): string` — 调用 `buildPatchBytes()` 后 `string.fromUtf8Bytes()` 转换返回，供测试使用。
 - **ANSI 序列生成**：
   - SGR（Select Graphic Rendition）：前景色 `38;2;r;g;b`，背景色 `48;2;r;g;b`，样式标志 `1`(bold) `2`(dim) `3`(italic) `4`(underline) `5`(blink) `7`(reverse) `8`(hidden) `9`(strikethrough)。
@@ -109,21 +109,21 @@
 
 ### 3.4 组件树设计（后续专门设计）
 
-- Feng 没有继承，组件多态通过 `spec Widget` 实现，组件复用通过组合实现。
-- 第七阶段定义 `ViewManager` + `Widget`/`ContainerWidget` 机制层，不完整实现高级组件；Text/Button 只保留验证骨架。
+- Feng 没有继承，组件多态通过 `std.tui.view.Widget` spec 实现，组件复用通过组合及 `@mixable` 静态方法实现。
+- `std.tui.view` 已定义 `ViewManager` + `Widget`/`ContainerWidget` 骨架，`std.tui.widgets` 已定义 `View`/`Container` 基础实现；第七阶段继续完善机制层，不完整实现高级组件，Text/Button 只保留验证骨架。
 - 详细方案收敛在 `docs/engineering/feng-std-tui-view-dev.md`。
 
 ### 3.5 TuiApp 设计
 
-- **Raw Mode**：通过 `@cdecl("libc")` 导入 `tcgetattr`/`tcsetattr`。
-- **SIGWINCH**：通过 `@cdecl("libc")` 导入 `signal`/`sigaction`，配合 `ioctl TIOCGWINSZ`。
-- **终端恢复保证**：正常路径用 `defer` 保证恢复；异常/信号路径用 `atexit` 注册清理钩子。
+- **Raw Mode 与终端尺寸**：通过 `@cdecl("libuv")` 导入 `uv_tty_init`、`uv_tty_set_mode`、`uv_tty_reset_mode` 与 `uv_tty_get_winsize`。
+- **SIGWINCH**：通过 `@cdecl("libc")` 导入 `signal`，信号处理器只写入 self-pipe；主循环通过 `poll()` 监听管道，并在普通执行上下文中处理 resize。
+- **终端恢复**：`exit()` 负责正常路径清理，并通过 `atexit` 注册的清理函数兜底恢复 Raw Mode。
 - **输入解析**：VT100/xterm 转义序列状态机，纯 Feng 实现。
-- **事件路由**：解析为 `KeyEvent`/`MouseEvent`，下发给焦点节点。
+- **事件路由**：当前由 `InputManager` 调用 `onKey`/`onMouse` 回调；第七阶段接入 `ViewManager` 后，再下发给焦点或命中节点。
 
 ## 4 实施路线
 
-每个阶段遵循统一流程：实现代码 → 补充 std_test 用例 → 全量回归测试 → 等待人工 Review。
+每个阶段遵循统一流程：更新设计文档 → 实现代码 → 补充 std_test 用例 → 全量回归测试 → 等待人工 Review。
 
 - **std_test 用例**：在 `std/std_test/src/test_tui.ff` 中新增对应测试函数，注册到 `run_tui_tests()`，并在 `z_main.ff` 中调用。
 - **全量回归测试**：执行 `make test`，确保所有测试套件通过
@@ -131,14 +131,14 @@
 
 ### 第一阶段：Cell（渲染底座 - 最小单元）
 
-- [x] 4.1 完善 Cell：构造函数、静态常量、工厂方法
+- [x] 4.1 完善 Cell：构造函数、静态常量、颜色及样式读写方法
 - [x] 4.2 补充 std_test 用例：新增 `std/std_test/src/test_tui.ff`，覆盖 Cell 样式读写（前景色/背景色/粗体/斜体等各标志位）；注册 `run_tui_tests()` 并在 `z_main.ff` 中调用
 - [x] 4.3 全量回归测试：执行 `make test`，确认全部通过
 - [x] 4.4 等待人工 Review：开发者审查 Cell 实现与测试用例，通过后方可进入第二阶段
 
 ### 第二阶段：Buffer（渲染底座 - 数据容器）
 
-- [x] 4.5 实现 Buffer：Cell 矩阵管理 + 绘制原语（`setCell`、`drawText`、`fill`、`clear`）
+- [x] 4.5 实现 Buffer：Cell 矩阵管理 + 绘制原语（`draw` 重载、`fill`、`clear`）
 - [x] 4.6 补充 std_test 用例：在 `test_tui.ff` 中新增 Buffer 矩阵索引、绘制原语、边界校验等测试
 - [x] 4.7 全量回归测试：执行 `make test`，确认全部通过
 - [x] 4.8 等待人工 Review：开发者审查 Buffer 实现与测试用例，通过后方可进入第三阶段
@@ -192,8 +192,8 @@
 > 本阶段只实现 `ViewManager` + `Widget`/`ContainerWidget` 机制层，不完整实现 Text/Button/Input/List/ScrollView 等高级组件；Text/Button 只保留验证骨架。
 > 实现方案详见 `docs/engineering/feng-std-tui-view-dev.md`。
 
-- [ ] 4.30 完善 Widget 机制：`Thickness`、布局枚举、`WidgetStyle` type、`WidgetFrame`、`Widget`/`ContainerWidget` spec、`std.tui.views.View`/`Container`
-- [ ] 4.31 实现 ViewManager：root、focus、sequence、arrange/draw 流程、鼠标命中、键盘焦点路由、自下向上事件冒泡
+- [ ] 4.30 完善 Widget 机制：`std.tui.view` 中的 `Thickness`、布局枚举、`WidgetStyle` type、`WidgetFrame`、`Widget`/`ContainerWidget` spec，以及 `std.tui.widgets.View`/`Container`（当前均已定义骨架）
+- [ ] 4.31 完善 ViewManager：当前已定义 root、sequence、trace 及 arrange/draw 入口；后续实现鼠标命中、focus、键盘焦点路由与自下向上事件冒泡
 - [ ] 4.32 集成 ViewManager 至 TuiApp：新增 `view: ViewManager` 成员，并接入 `Screen`/`InputManager`
 - [ ] 4.33 补充 std_test 用例：在 `test_tui.ff` 中新增 Widget 契约满足、parent 自动维护、arrange/frame 计算、sequence 命中、事件冒泡等测试
 - [ ] 4.34 全量回归测试：执行 `make test`，确认全部通过
@@ -211,24 +211,30 @@
 
 ```text
 std/std/src/tui/
-  Cell.ff          # Cell（最小单元）
-  Buffer.ff        # Buffer（Cell 矩阵 + 绘制原语）
-  Screen.ff        # Screen（双缓冲 + Diff）（后续）
-  Style.ff         # Style 枚举（样式类型安全）
-  RgbColor.ff      # RgbColor 结构（RGB 颜色）
-  Ansi.ff          # ANSI 转义序列生成器（后续）
-  Thickness.ff     # 四边间距类型
-  Widget.ff        # 布局枚举、WidgetStyle、WidgetFrame、Widget、ContainerWidget
-  ViewManager.ff   # 视图机制层管理器与 sequence
-  TuiApp.ff        # 应用程序入口与主循环（后续）
-  KeyEvent.ff      # 键盘事件（后续）
-  MouseEvent.ff    # 鼠标事件（后续）
+  TuiApp.ff                # std.tui：应用程序入口与主循环
 
-std/std/src/tui/views/
-  View.ff          # Widget 基础实现
-  Container.ff     # ContainerWidget 基础实现
-  Text.ff          # View 展开验证骨架
-  Button.ff        # View 展开验证骨架
+  input/                   # std.tui.input：输入事件与解析
+    InputManager.ff        # VT100/xterm 输入状态机
+    KeyEvent.ff            # 键盘事件
+    MouseEvent.ff          # 鼠标事件
+
+  screen/                  # std.tui.screen：渲染底座
+    Cell.ff                # 最小渲染单元
+    Buffer.ff              # Cell 矩阵与绘制原语
+    Screen.ff              # 双缓冲、Diff 与 ANSI 序列生成
+    Style.ff               # 样式枚举
+    RgbColor.ff            # RGB 颜色值
+
+  view/                    # std.tui.view：视图契约与管理机制
+    Thickness.ff           # 四边间距类型
+    Widget.ff              # 布局类型、Widget 与 ContainerWidget
+    ViewManager.ff         # arrange/draw 调度与 sequence
+
+  widgets/                 # std.tui.widgets：组件实现
+    View.ff                # Widget 基础实现
+    Container.ff           # ContainerWidget 基础实现
+    Text.ff                # View 展开验证骨架
+    Button.ff              # View 展开验证骨架
 ```
 
 ## 6 约束
