@@ -205,6 +205,7 @@ extern func c_close(fd: i32): i32;
 | `UV_TTY_MODE_RAW` | `1` | Raw 输入模式 |
 | `UV_TTY_MODE_IO` | `2` | IPC 二进制安全模式（Unix-only） |
 | `POLLIN` | `1` | fd 可读事件 |
+| `POLL_TIMEOUT_NOW` | `0` | 立即返回，仅用于排空已就绪的 resize 通知 |
 | `POLL_TIMEOUT_BLOCK` | `-1` | 无限等待 |
 | `SIGWINCH` | `28` | 窗口大小变化信号（macOS/Linux 一致） |
 | `STDIN_FD` | `0` | stdin 文件描述符 |
@@ -428,6 +429,28 @@ open func render(): void {
 
 ### 5.6 run() — 启动主循环
 
+SIGWINCH self-pipe 只表示“终端尺寸可能已经变化”，不记录必须逐条执行的事件。
+主循环收到通知后，应读取当前已就绪的全部通知字节并合并为一次
+`resizeRequested`，随后只按终端的最新尺寸渲染一帧。这样连续拖动窗口时不会
+重放已经过期的中间尺寸。管道读端保持阻塞模式；每次继续读取前先用零超时
+`poll()` 确认仍然可读，避免排空后阻塞。
+
+```feng
+/** 排空当前已就绪的 SIGWINCH 通知，并合并为一次 resize 请求。 */
+seal func drainResizeNotifications(buffer: byte[!]): void {
+  var fd = PollFd(self.sigpipeR, POLLIN);
+  var ready = true;
+  while ready {
+    let count = c_read(self.sigpipeR, &buffer, (uint)buffer.length());
+    if count <= 0 { break; }
+    fd.revents = 0;
+    let rc = c_poll(&fd, 1, POLL_TIMEOUT_NOW);
+    ready = rc > 0 && fd.revents & POLLIN != 0;
+  }
+  self.resizeRequested = true;
+}
+```
+
 ```feng
 /**
  * 启动主循环：poll() 多路复用驱动。
@@ -460,6 +483,8 @@ open func run(): void {
   // stdin + sigpipeR
   pfds[0] = PollFd(STDIN_FD, POLLIN);
   pfds[1] = PollFd(self.sigpipeR, POLLIN);
+  // 单次读取一批 SIGWINCH 通知，由 drainResizeNotifications() 排空当前积压
+  let resizeBuf: byte[!] = byte[:256];
   // 用户 fds
   for var i: int = 0; i < self.fds.length(); i += 1 {
     pfds[i + 2] = PollFd(self.fds[i], POLLIN);
@@ -476,9 +501,7 @@ open func run(): void {
     if rc > 0 {
       // 处理 sigpipeR（信号到达）
       if pfds[1].revents & POLLIN != 0 {
-        let dummy: byte[!] = byte[:1];
-        c_read(self.sigpipeR, &dummy, 1);
-        self.resizeRequested = true;
+        self.drainResizeNotifications(resizeBuf);
       }
       // 排空 stdin（阶段四：只读取丢弃，防 busy-loop；阶段五替换为 InputManager.feed）
       // poll 保证至少一次 read 不会阻塞；stdin 为阻塞模式，若用 while 循环
@@ -495,7 +518,7 @@ open func run(): void {
 ```
 
 > `run()` 是主循环入口，无参数。pollfd 数组在循环前一次性构造，循环内只重置 `revents`。
-> `poll(-1)` 无事件时阻塞休眠，零 CPU。任一 fd 可读即唤醒，TuiApp 处理内部 sigpipeR 和 stdin 排空，然后 render。
+> `poll(-1)` 无事件时阻塞休眠，零 CPU。任一 fd 可读即唤醒；sigpipeR 当前已就绪的通知会先合并为一次 resize 请求，然后本轮只 render 一次。
 > 退出由 `exit()` 置 `running = false`，下一轮 poll 返回后循环结束。
 >
 > **stdin 排空（阶段四临时措施）**：Raw Mode 关闭 `ISIG`，Ctrl+C 等按键不产生 SIGINT，而是作为原始字节（如 `0x03`）到达 stdin。阶段四无输入解析，若不排空 stdin，`poll()` 会因 stdin 持续可读而立即返回，造成 busy-loop。因此 run() 在 stdin 可读时读取并丢弃一批字节，仅排空缓冲区。stdin 为阻塞模式，每次 poll 只读一次（`poll` 仅保证一次 `read` 不阻塞；若用 while 循环第二次 `read` 会挂起），剩余数据由下一轮 poll 立即返回 `POLLIN` 再读——有界工作，非无限空转。阶段五将此排空逻辑替换为 InputManager.feed()，把字节流解析为 `KeyEvent`/`MouseEvent` 并通过 onKey/onMouse 回调分发。详见 `docs/engineering/feng-std-tui-input-dev.md`。
@@ -546,7 +569,7 @@ func handleSigwinch(signum: i32): void {
 }
 ```
 
-> **self-pipe 模式**：`signal()` 回调无法唤醒 `poll()`，通过写管道将信号转为 fd 事件。主循环 `poll` 监听管道读端，信号到达时写管道 → poll 唤醒 → 读走数据 → 置 resizeRequested → render。
+> **self-pipe 模式**：`signal()` 回调无法直接唤醒 `poll()`，通过写管道将信号转为 fd 事件。管道字节仅表示 resize 状态已经变化，不要求逐条重放；主循环合并当前已就绪的通知后，只读取最新终端尺寸并 render 一次。
 > `sigpipeW` 是模块级 `seal var`，`init()` 中赋值。`signal()` 回调无法访问 TuiApp 实例，但写管道是信号安全操作。
 
 ### 6.2 atexit handler
@@ -581,7 +604,7 @@ TuiApp.run()
         ├── poll(pollfd, -1)              ← 阻塞，无事件时零 CPU
         │
         ├── if sigpipeR 可读:
-        │     c_read(sigpipeR) → resizeRequested = true
+        │     排空当前已就绪通知 → resizeRequested = true
         │
         ├── （阶段五）if stdin 可读: input.feed() 解析分发
         └── render()
@@ -594,7 +617,7 @@ TuiApp.run()
               └── writeOutput(ansi) → 循环 c_write 直至完整写出
 
 SIGWINCH 中断 → handleSigwinch() → c_write(sigpipeW)
-  → poll 唤醒 → c_read(sigpipeR) → resizeRequested = true → render()
+  → poll 唤醒 → 合并当前已就绪通知 → resizeRequested = true → render()
 
 TuiApp.exit()
   ├── self.running = false
@@ -615,6 +638,7 @@ TuiApp.exit()
 | render() 有内容输出 | buffer.draw 后 render()，stdout 包含正确 ANSI 序列 |
 | render() 短写 | 在限制单次写入量的 PTY 中渲染大帧，确认最后一个 cell 仍被输出 |
 | resize 标志处理 | 手动设 resizeRequested=true，render() 后检查 screen 尺寸已更新 |
+| resize 通知合并 | 在 PTY 中连续触发 SIGWINCH，确认当前已就绪通知不会被逐条重绘 |
 | resize 物理清屏 | 触发 PTY 尺寸变化，确认新帧前包含清屏序列且旧画面不残留 |
 | exit() 幂等性 | 连续调用两次 exit()，第二次不重复恢复 |
 

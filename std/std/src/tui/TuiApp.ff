@@ -205,6 +205,8 @@ seal let UV_TTY_MODE_RAW: i32 = 1;
 seal let UV_TTY_MODE_IO: i32 = 2;
 /** fd 可读事件（poll events / revents） */
 seal let POLLIN: i16 = 1;
+/** poll 立即返回（仅检查当前已就绪事件） */
+seal let POLL_TIMEOUT_NOW: i32 = 0;
 /** poll 无限等待（无事件时阻塞休眠，零 CPU） */
 seal let POLL_TIMEOUT_BLOCK: i32 = -1;
 /** 窗口大小变化信号（macOS/Linux 一致） */
@@ -231,7 +233,7 @@ seal var sigpipeW: i32 = 0;
 /**
  * SIGWINCH 信号回调：写信号管道唤醒主循环。
  * 信号中断上下文中只做 write（信号安全操作），不做复杂逻辑。
- * 主循环 poll 返回后读走管道数据，置 resizeRequested 标志。
+ * 主循环 poll 返回后合并当前已就绪的管道通知，置 resizeRequested 标志。
  * @param signum - 信号编号（SIGWINCH）
  */
 @abi
@@ -315,6 +317,25 @@ open type TuiApp {
       }
       offset += written;
     }
+  }
+
+  /**
+   * 排空当前已就绪的 SIGWINCH self-pipe 通知，并合并为一次 resize 请求。
+   * 管道读端保持阻塞模式；每次继续读取前通过零超时 poll() 确认可读，
+   * 避免在已排空的管道上阻塞。
+   * @param buffer - 复用的通知读取缓冲区
+   */
+  seal func drainResizeNotifications(buffer: byte[!]): void {
+    var fd = PollFd(self.sigpipeR, POLLIN);
+    var ready = true;
+    while ready {
+      let count = c_read(self.sigpipeR, &buffer, (uint)buffer.length());
+      if count <= 0 { break; }
+      fd.revents = 0;
+      let rc = c_poll(&fd, (i32)1, POLL_TIMEOUT_NOW);
+      ready = rc > 0 && fd.revents & POLLIN != 0;
+    }
+    self.resizeRequested = true;
   }
 
   // ─── 构造函数 ─────────────────────────────────────────────────────────────
@@ -488,6 +509,8 @@ open type TuiApp {
     // stdin + sigpipeR
     pfds[0] = PollFd(STDIN_FD, POLLIN);
     pfds[1] = PollFd(self.sigpipeR, POLLIN);
+    // SIGWINCH 通知是状态提示；每次唤醒合并当前积压，只按最新尺寸渲染一帧
+    let resizeBuf: byte[!] = byte[:256];
     // 用户 fds
     for var i: int = 0; i < self.fds.length(); i += 1 {
       pfds[i + 2] = PollFd(self.fds[i], POLLIN);
@@ -504,9 +527,7 @@ open type TuiApp {
       if rc > 0 {
         // 处理 sigpipeR（信号到达）
         if pfds[1].revents & POLLIN != 0 {
-          let dummy: byte[!] = byte[:1];
-          c_read(self.sigpipeR, &dummy, 1);
-          self.resizeRequested = true;
+          self.drainResizeNotifications(resizeBuf);
         }
         // 处理 stdin：逐字节喂入 InputManager 解析分发
         if pfds[0].revents & POLLIN != 0 {
