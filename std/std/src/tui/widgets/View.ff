@@ -113,7 +113,7 @@ open type View: Widget {
    * 组件尺寸超过可用区域时仍保持 Center/End 语义，并在坐标小于 0 时截断到 0。
    */
   seal static func resolveAlignedPosition(origin: u32, available: u32,
-                                           size: u32, align: WidgetAlign): u32 {
+    size: u32, align: WidgetAlign): u32 {
     match align {
       WidgetAlign.Center {
         if size <= available {
@@ -176,10 +176,10 @@ open type View: Widget {
    * 解析组件最终宽度。
    */
   seal static func resolveWidth(widget: Widget, referenceWidth: u32,
-                                  left: u32, right: u32): u32 {
+    left: u32, right: u32): u32 {
     let available = View.resolveAvailableSize(referenceWidth, left, right);
     if widget.style.position == WidgetPosition.Normal &&
-       widget.style.horizontalAlign == WidgetAlign.Full {
+    widget.style.horizontalAlign == WidgetAlign.Full {
       return available;
     }
     return View.resolveLength(widget.style.width, available);
@@ -189,10 +189,10 @@ open type View: Widget {
    * 解析组件最终高度。
    */
   seal static func resolveHeight(widget: Widget, referenceHeight: u32,
-                                   top: u32, bottom: u32): u32 {
+    top: u32, bottom: u32): u32 {
     let available = View.resolveAvailableSize(referenceHeight, top, bottom);
     if widget.style.position == WidgetPosition.Normal &&
-       widget.style.verticalAlign == WidgetAlign.Full {
+    widget.style.verticalAlign == WidgetAlign.Full {
       return available;
     }
     return View.resolveLength(widget.style.height, available);
@@ -202,12 +202,12 @@ open type View: Widget {
    * 解析组件最终横坐标。
    */
   seal static func resolveX(widget: Widget, reference: WidgetFrame,
-                             left: u32, right: u32, width: u32): u32 {
+    left: u32, right: u32, width: u32): u32 {
     let marginOrigin = View.addCoordinate(reference.x, left);
     if widget.style.position == WidgetPosition.Normal {
       let available = View.resolveAvailableSize(reference.width, left, right);
       return View.resolveAlignedPosition(marginOrigin, available, width,
-                                         widget.style.horizontalAlign);
+      widget.style.horizontalAlign);
     }
     let offset = View.resolveLength(widget.style.x, reference.width);
     return View.addCoordinate(View.addCoordinate(reference.x, offset), left);
@@ -217,12 +217,12 @@ open type View: Widget {
    * 解析组件最终纵坐标。
    */
   seal static func resolveY(widget: Widget, reference: WidgetFrame,
-                             top: u32, bottom: u32, height: u32): u32 {
+    top: u32, bottom: u32, height: u32): u32 {
     let marginOrigin = View.addCoordinate(reference.y, top);
     if widget.style.position == WidgetPosition.Normal {
       let available = View.resolveAvailableSize(reference.height, top, bottom);
       return View.resolveAlignedPosition(marginOrigin, available, height,
-                                         widget.style.verticalAlign);
+      widget.style.verticalAlign);
     }
     let offset = View.resolveLength(widget.style.y, reference.height);
     return View.addCoordinate(View.addCoordinate(reference.y, offset), top);
@@ -272,14 +272,14 @@ open type View: Widget {
   @mixable
   static func draw(widget: Widget, manager: ViewManager): void {
     manager.trace(widget);
-    // let frame = widget.frame;
-    // let width = View.resolveDrawSize(frame.x, frame.width, manager.getScreenWidth());
-    // let height = View.resolveDrawSize(frame.y, frame.height, manager.getScreenHeight());
-    // if width == 0 || height == 0 {
-    //   return;
-    // }
-    // manager.getScreenBuffer().draw(frame.x, frame.y, width, height, (u64)0,
-    //                                none, widget.style.backColor);
+    let frame = widget.frame;
+    let width = View.resolveDrawSize(frame.x, frame.width, manager.getScreenWidth());
+    let height = View.resolveDrawSize(frame.y, frame.height, manager.getScreenHeight());
+    if width == 0 || height == 0 {
+      return;
+    }
+    manager.getScreenBuffer().draw(frame.x, frame.y, width, height, (u64)0,
+      none, widget.style.backColor);
   }
 
   /**
