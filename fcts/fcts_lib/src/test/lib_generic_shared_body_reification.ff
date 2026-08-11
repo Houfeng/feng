@@ -231,3 +231,33 @@ open type LibSharedOwner<T> {
     return LibSharedOwner<T>.combineStatic<U>(first, second);
   }
 }
+
+/**
+ * Generic owner combining an inferred List<T> field with method-local
+ * List<T> and List<U> dependencies.
+ */
+open type LibSharedOwnerAndMethodLists<T> {
+  /** Owner-level inferred generic field. */
+  let values = List<T>();
+
+  /** Construct an owner with an empty owner-level list. */
+  func LibSharedOwnerAndMethodLists() {}
+
+  /**
+   * Return values that have passed independently through the owner field,
+   * an owner-level local and a method-level local.
+   */
+  open func collect<U>(ownerValue: T, methodValue: U): LibSharedPair<T, U> {
+    self.values.add(ownerValue);
+    let a = List<T>();
+    let b = List<U>();
+    a.add(self.values.get(0));
+    b.add(methodValue);
+    return LibSharedPair<T, U>(
+      a.get(0),
+      b.get(0),
+      a.get(0),
+      "owner-field-and-method-locals"
+    );
+  }
+}

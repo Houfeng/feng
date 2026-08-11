@@ -17181,6 +17181,34 @@ static void test_generic_method_type_param_collides_with_type_param(void) {
     feng_program_free(program);
 }
 
+static void test_generic_method_rejects_owner_and_method_type_argument_mismatch(void) {
+    /* Owner-level T and method-level U are independent: a closed List<U>
+     * value cannot initialize a List<T> binding in the generic definition. */
+    const char *source =
+        "module demo.main;\n"
+        "type List<V> {}\n"
+        "type UserType<T> {\n"
+        "    func test<U>(param: U): void {\n"
+        "        let value: List<T> = List<U>();\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_owner_method_type_mismatch.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE1003") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "does not match expected type 'List<T>'") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* G7 semantic additions */
 
 static void test_generic_function_two_type_params_ok(void) {
@@ -22246,6 +22274,7 @@ int main(void) {
     test_generic_type_bare_static_method_call_rejected();
     test_generic_type_explicit_type_args_static_field_access();
     test_generic_method_type_param_collides_with_type_param();
+    test_generic_method_rejects_owner_and_method_type_argument_mismatch();
     test_generic_function_two_type_params_ok();
     test_generic_spec_generic_parent_forwarding_ok();
     test_generic_duplicate_fn_by_type_param_name_only_rejected();

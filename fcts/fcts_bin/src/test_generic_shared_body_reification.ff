@@ -142,6 +142,21 @@ open func test_generic_shared_body_reification(): void {
              "owner T and method U retain separate descriptor scopes");
     });
 
+    test("generic owner field and method locals keep T and U independent", () {
+      let owner = LibSharedOwnerAndMethodLists<string>();
+      let result = owner.collect<SharedBodyWidePayload>(
+        "field-and-local-T",
+        SharedBodyWidePayload("local-U-left", "local-U-right", 48)
+      );
+      assert(result.first == "field-and-local-T" &&
+             result.repeated == "field-and-local-T" &&
+             result.second.first == "local-U-left" &&
+             result.second.second == "local-U-right" &&
+             result.second.number == 48 &&
+             result.marker == "owner-field-and-method-locals",
+             "List<T> field and List<T>/List<U> locals use their own scopes");
+    });
+
     test("non-generic owner static method closes method dependencies", () {
       let result = LibSharedMethodOwner.wrapStatic<SharedBodyManagedPayload>(
         SharedBodyManagedPayload("static-method-U")

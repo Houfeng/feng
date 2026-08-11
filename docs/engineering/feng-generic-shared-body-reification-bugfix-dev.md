@@ -435,6 +435,8 @@ FT 编码可以复用现有 SYMS 对 callable 声明的身份、TYPS 对类型�
 - 泛型 owner 方法体使用 owner 的 `T`；
 - 非泛型 owner 的泛型方法体使用方法级 `U`；
 - 泛型 owner 的泛型方法同时使用 `T`、`U`；
+- 同一泛型 owner 同时包含推断字段 `List<T>`，并在泛型方法中分别构造
+  `List<T>`、`List<U>`，将两类局部值返回给调用方断言；
 - 静态方法与实例方法；
 - 参数、返回值、显式/推断局部值；
 - provider 定义、consumer 具化的跨包路径。
@@ -460,6 +462,8 @@ FT 编码可以复用现有 SYMS 对 callable 声明的身份、TYPS 对类型�
 
 compiler tests 需要锁定：
 
+- 泛型 owner 的方法级 `T`、`U` 保持独立，`List<T>` 变量不能接收
+  `List<U>`，并在定义处报告 `AE1003`；
 - 顶层、静态、实例共享体隐藏参数顺序；
 - `FengFunctionDescriptor.reified_callable_deps` 静态初始化结构；
 - open dependency 与 closed dependency 的 slot 顺序一致；
