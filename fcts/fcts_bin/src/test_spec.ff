@@ -41,6 +41,16 @@ type GenericCallableHolder {
   var mapper: GenericMapper<int>;
 }
 
+/** 保存任意类型默认值的开放泛型槽位。 */
+type GenericCallableDefaultSlot<T> {
+  let value: T;
+}
+
+/** 通过嵌套开放泛型字段保存泛型 callable-form spec。 */
+type GenericCallableDefaultOwner<T> {
+  let slot: GenericCallableDefaultSlot<GenericMapper<T>>;
+}
+
 /** 通过泛型 callable-form spec 实例调用传入的映射函数。 */
 func apply_generic_mapper(mapper: GenericMapper<int>, value: int): int {
   return mapper(value);
@@ -193,6 +203,12 @@ open func test_spec() {
       let holder = GenericCallableHolder();
       holder.mapper = (value: int) -> value + 3;
       assert(holder.mapper(39) == 42, "generic callable-form spec field assignment");
+    });
+
+    test("nested open generic callable field default", () {
+      let owner = GenericCallableDefaultOwner<int>();
+      assert(owner.slot.value(41) == 0,
+             "closed callable descriptor installs the nested generic default");
     });
 
     test("spec field matching", () {
