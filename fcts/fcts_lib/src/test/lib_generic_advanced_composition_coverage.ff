@@ -1,0 +1,84 @@
+open module fcts_lib.test;
+
+import std;
+
+/** Descriptor-sized value transported through both generic scopes. */
+@value
+open type LibAdvancedComposite<T> {
+  /** Payload whose representation is selected by the closed T descriptor. */
+  open var value: T;
+
+  /** Managed field following the generic payload. */
+  open var label: string;
+
+  /** Scalar tail used to verify the complete concrete layout. */
+  open var revision: i64;
+
+  /** Construct a populated composite value. */
+  func LibAdvancedComposite(value: T, label: string, revision: i64) {
+    self.value = value;
+    self.label = label;
+    self.revision = revision;
+  }
+}
+
+/** Tuple carrying values from the owner and method generic scopes. */
+open type LibAdvancedPair<T, U>(
+  LibAdvancedComposite<T>,
+  LibAdvancedComposite<U>,
+  T,
+  U
+);
+
+/** Result whose layout depends independently on T and U. */
+@value
+open type LibAdvancedTransfer<T, U> {
+  /** Tuple containing both composite and direct generic slots. */
+  open var pair: LibAdvancedPair<T, U>;
+
+  /** Managed field following the two-scope tuple. */
+  open var marker: string;
+
+  /** Scalar tail verifying the complete result layout. */
+  open var revision: i64;
+
+  /** Construct a populated two-scope transfer result. */
+  func LibAdvancedTransfer(
+    pair: LibAdvancedPair<T, U>,
+    marker: string,
+    revision: i64
+  ) {
+    self.pair = pair;
+    self.marker = marker;
+    self.revision = revision;
+  }
+}
+
+/** Imported generic owner whose method adds an independent generic scope. */
+open type LibAdvancedFlow<T> {
+  /** Construct an empty flow object. */
+  func LibAdvancedFlow() {
+  }
+
+  /**
+   * Map a T-dependent composite to a U-dependent composite and return both.
+   *
+   * The shared body must keep the owner T descriptor and method U descriptor
+   * distinct while adapting the callable parameter and aggregate return ABI.
+   */
+  open func map<U>(
+    mapper: Func<LibAdvancedComposite<T>, LibAdvancedComposite<U> >,
+    input: LibAdvancedComposite<T>,
+    marker: string,
+    revision: i64
+  ): LibAdvancedTransfer<T, U> {
+    let output = mapper(input);
+    let pair: LibAdvancedPair<T, U> = (
+      input,
+      output,
+      input.value,
+      output.value
+    );
+    return LibAdvancedTransfer<T, U>(pair, marker, revision);
+  }
+}

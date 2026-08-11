@@ -1,0 +1,112 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import fcts_lib.test;
+
+/** Consumer-defined wide value used as an imported method type argument. */
+@value
+type AdvancedConsumerWideValue {
+  /** First managed slot. */
+  let first: string;
+
+  /** Second managed slot. */
+  let second: string;
+
+  /** Scalar tail used to detect incomplete copies. */
+  let number: i64;
+
+  /** Construct a populated wide value. */
+  func AdvancedConsumerWideValue(first: string, second: string, number: i64) {
+    self.first = first;
+    self.second = second;
+    self.number = number;
+  }
+}
+
+/** Map a managed owner payload to a consumer-defined wide method payload. */
+func mapAdvancedStringToWide(
+  input: LibAdvancedComposite<string>
+): LibAdvancedComposite<AdvancedConsumerWideValue> {
+  let wide = AdvancedConsumerWideValue(
+    input.value + "-first",
+    input.label + "-second",
+    input.revision + 1
+  );
+  return LibAdvancedComposite<AdvancedConsumerWideValue>(
+    wide,
+    "wide-output",
+    input.revision + 2
+  );
+}
+
+/** Verify high-risk generic combinations not closed by the first hardening pass. */
+open func test_generic_advanced_composition_coverage(): void {
+  describe("generic advanced composition coverage", () {
+    test("owner scalar and method managed scopes remain distinct", () {
+      let flow = LibAdvancedFlow<i64>();
+      let input = LibAdvancedComposite<i64>(41, "scalar-input", 42);
+      let result = flow.map<string>(
+        (current: LibAdvancedComposite<i64>) ->
+          LibAdvancedComposite<string>(
+            "managed-output",
+            current.label + "-mapped",
+            current.revision + 1
+          ),
+        input,
+        "scalar-managed-transfer",
+        44
+      );
+
+      assert(result.pair.item1.value == 41 &&
+             result.pair.item1.label == "scalar-input" &&
+             result.pair.item1.revision == 42,
+             "owner T composite keeps every scalar-source field");
+      assert(result.pair.item2.value == "managed-output" &&
+             result.pair.item2.label == "scalar-input-mapped" &&
+             result.pair.item2.revision == 43,
+             "method U composite keeps every managed-result field");
+      assert(result.pair.item3 == 41 &&
+             result.pair.item4 == "managed-output",
+             "two-scope tuple preserves both direct generic slots");
+      assert(result.marker == "scalar-managed-transfer" &&
+             result.revision == 44,
+             "two-scope result preserves its managed and scalar tail");
+    });
+
+    test("owner managed and method wide value scopes remain distinct", () {
+      let flow = LibAdvancedFlow<string>();
+      let input = LibAdvancedComposite<string>(
+        "managed-input",
+        "managed-label",
+        51
+      );
+      let result = flow.map<AdvancedConsumerWideValue>(
+        mapAdvancedStringToWide,
+        input,
+        "managed-wide-transfer",
+        54
+      );
+
+      assert(result.pair.item1.value == "managed-input" &&
+             result.pair.item1.label == "managed-label" &&
+             result.pair.item1.revision == 51,
+             "owner T composite keeps every managed-source field");
+      assert(result.pair.item2.value.first == "managed-input-first" &&
+             result.pair.item2.value.second == "managed-label-second" &&
+             result.pair.item2.value.number == 52,
+             "method U composite keeps the complete consumer wide value");
+      assert(result.pair.item2.label == "wide-output" &&
+             result.pair.item2.revision == 53,
+             "method U composite keeps fields following the wide payload");
+      assert(result.pair.item3 == "managed-input" &&
+             result.pair.item4.first == "managed-input-first" &&
+             result.pair.item4.second == "managed-label-second" &&
+             result.pair.item4.number == 52,
+             "two-scope tuple preserves direct managed and wide slots");
+      assert(result.marker == "managed-wide-transfer" &&
+             result.revision == 54,
+             "wide two-scope result preserves its complete tail");
+    });
+  });
+}

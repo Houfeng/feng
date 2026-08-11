@@ -6171,6 +6171,62 @@ static bool cg_type_param_scope_contains(const CGTypeParamScope *scope,
     return false;
 }
 
+/**
+ * Extend a possibly two-part generic scope with one nested declaration scope.
+ *
+ * CGTypeParamScope keeps the common owner/member pair without allocation. If
+ * the incoming scope already uses both parts, its parameters are shallowly
+ * flattened into an owned prefix so another nested scope can be appended.
+ * The referenced FengTypeParam declarations remain owned by their ASTs.
+ */
+static bool cg_type_param_scope_extend(
+    const CGTypeParamScope *base,
+    const FengTypeParam *nested,
+    size_t nested_count,
+    CGTypeParamScope *out_scope,
+    FengTypeParam **out_owned_prefix) {
+    CGTypeParamScope empty = {0};
+    size_t prefix_count;
+
+    if (out_scope == NULL || out_owned_prefix == NULL) {
+        return false;
+    }
+    *out_owned_prefix = NULL;
+    *out_scope = base != NULL ? *base : empty;
+    if (nested_count == 0U) {
+        return true;
+    }
+    if (out_scope->second_count == 0U) {
+        out_scope->second = nested;
+        out_scope->second_count = nested_count;
+        return true;
+    }
+
+    prefix_count = out_scope->first_count + out_scope->second_count;
+    FengTypeParam *prefix = prefix_count > 0U
+        ? calloc(prefix_count, sizeof(*prefix))
+        : NULL;
+    if (prefix_count > 0U && prefix == NULL) {
+        return false;
+    }
+    if (out_scope->first_count > 0U) {
+        memcpy(prefix,
+               out_scope->first,
+               out_scope->first_count * sizeof(*prefix));
+    }
+    if (out_scope->second_count > 0U) {
+        memcpy(prefix + out_scope->first_count,
+               out_scope->second,
+               out_scope->second_count * sizeof(*prefix));
+    }
+    out_scope->first = prefix;
+    out_scope->first_count = prefix_count;
+    out_scope->second = nested;
+    out_scope->second_count = nested_count;
+    *out_owned_prefix = prefix;
+    return true;
+}
+
 static bool cg_type_ref_contains_type_param(const FengTypeRef *ref,
                                             const CGTypeParamScope *scope) {
     if (ref == NULL || scope == NULL) return false;
@@ -7562,6 +7618,89 @@ static bool cg_collect_generic_instances_from_type_params_from_program(
     CGTypeParamScope scope,
     const FengProgram *reference_program);
 
+/**
+ * Collect generic instances referenced by one instantiated callable member.
+ *
+ * Owner type parameters are first substituted with the current instance
+ * arguments. Any still-open instantiation scope is then combined with the
+ * callable's own generic parameters before collecting constraints, parameter
+ * types, and the return type.
+ */
+static bool cg_collect_instantiated_callable_member_instances(
+    CG *cg,
+    const FengCallableSignature *callable,
+    const FengTypeParam *owner_type_params,
+    size_t owner_type_param_count,
+    FengTypeRef *const *owner_type_args,
+    CGTypeParamScope inherited_scope,
+    const FengProgram *reference_program) {
+    CGTypeParamScope callable_scope;
+    FengTypeParam *owned_scope_prefix = NULL;
+    bool ok = true;
+
+    if (callable == NULL) {
+        return true;
+    }
+    if (!cg_type_param_scope_extend(&inherited_scope,
+                                    callable->type_params,
+                                    callable->type_param_count,
+                                    &callable_scope,
+                                    &owned_scope_prefix)) {
+        return cg_fail(cg, callable->token, "IE0001", "codegen: out of memory");
+    }
+    for (size_t index = 0U; ok && index < callable->type_param_count; ++index) {
+        const FengTypeRef *constraint = callable->type_params[index].constraint;
+        FengTypeRef *substituted;
+
+        if (constraint == NULL) {
+            continue;
+        }
+        substituted = cg_type_ref_substitute(constraint,
+                                              owner_type_params,
+                                              owner_type_param_count,
+                                              owner_type_args);
+        if (substituted == NULL) {
+            ok = false;
+            break;
+        }
+        ok = cg_collect_generic_instances_from_type_ref_from_program(
+            cg, substituted, callable_scope, reference_program);
+        cg_type_ref_free(substituted);
+    }
+    for (size_t index = 0U; ok && index < callable->param_count; ++index) {
+        FengTypeRef *substituted = cg_type_ref_substitute(
+            callable->params[index].type,
+            owner_type_params,
+            owner_type_param_count,
+            owner_type_args);
+
+        if (substituted == NULL) {
+            ok = false;
+            break;
+        }
+        ok = cg_collect_generic_instances_from_type_ref_from_program(
+            cg, substituted, callable_scope, reference_program);
+        cg_type_ref_free(substituted);
+    }
+    if (ok && callable->return_type != NULL) {
+        FengTypeRef *substituted = cg_type_ref_substitute(
+            callable->return_type,
+            owner_type_params,
+            owner_type_param_count,
+            owner_type_args);
+
+        if (substituted == NULL) {
+            ok = false;
+        } else {
+            ok = cg_collect_generic_instances_from_type_ref_from_program(
+                cg, substituted, callable_scope, reference_program);
+            cg_type_ref_free(substituted);
+        }
+    }
+    free(owned_scope_prefix);
+    return ok;
+}
+
 static bool cg_register_generic_type_instance_shell(CG *cg,
                                                     const GenericTypeDecl *generic_decl,
                                                     FengTypeRef *const *type_args,
@@ -7732,15 +7871,11 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
         return false;
     }
 
-    /* When the instance being registered is an open (context-aware) instance,
-     * cascaded generic references in members must also be registered with the
-     * same context scope so lookups in Pass 2 find them. For concrete instances
-     * (has_open_type_arg == false), an empty scope is correct. */
-    CGTypeParamScope member_scope = {0};
-    if (has_open_type_arg) {
-        member_scope.first = decl->as.type_decl.type_params;
-        member_scope.first_count = decl->as.type_decl.type_param_count;
-    }
+    /* Substituted members inherit the instantiation point's still-open
+     * parameters. A callable member adds its own generic scope below. */
+    CGTypeParamScope member_scope = open_scope != NULL
+        ? *open_scope
+        : (CGTypeParamScope){0};
     for (size_t i = 0; i < decl->as.type_decl.member_count; ++i) {
         const FengTypeMember *member = decl->as.type_decl.members[i];
         if (member->kind == FENG_TYPE_MEMBER_FIELD) {
@@ -7776,29 +7911,15 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
         } else if (member->kind == FENG_TYPE_MEMBER_METHOD ||
                    member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
             const FengCallableSignature *callable = &member->as.callable;
-            for (size_t param_index = 0; param_index < callable->param_count; ++param_index) {
-                FengTypeRef *sub = cg_type_ref_substitute(callable->params[param_index].type,
-                                                          decl->as.type_decl.type_params,
-                                                          decl->as.type_decl.type_param_count,
-                                                          type_args);
-                bool ok;
-                if (!sub) return false;
-                ok = cg_collect_generic_instances_from_type_ref_from_program(
-                    cg, sub, member_scope, generic_decl->owner_program);
-                cg_type_ref_free(sub);
-                if (!ok) return false;
-            }
-            if (callable->return_type != NULL) {
-                FengTypeRef *sub = cg_type_ref_substitute(callable->return_type,
-                                                          decl->as.type_decl.type_params,
-                                                          decl->as.type_decl.type_param_count,
-                                                          type_args);
-                bool ok;
-                if (!sub) return false;
-                ok = cg_collect_generic_instances_from_type_ref_from_program(
-                    cg, sub, member_scope, generic_decl->owner_program);
-                cg_type_ref_free(sub);
-                if (!ok) return false;
+            if (!cg_collect_instantiated_callable_member_instances(
+                    cg,
+                    callable,
+                    decl->as.type_decl.type_params,
+                    decl->as.type_decl.type_param_count,
+                    type_args,
+                    member_scope,
+                    generic_decl->owner_program)) {
+                return false;
             }
         }
     }
@@ -9245,7 +9366,10 @@ static bool cg_resolve_type_for_user_method_member(CG *cg,
                                                    CGType **out_type) {
     FengTypeRef *substituted = NULL;
     const FengTypeRef *effective_ref = ref;
-    char **method_type_param_names = NULL;
+    const FengDecl *owner_decl = NULL;
+    CGTypeParamScope scope = {0};
+    char **type_param_names = NULL;
+    size_t type_param_count = 0U;
     bool saved_in_generic_fn = cg->in_generic_fn;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
@@ -9256,6 +9380,17 @@ static bool cg_resolve_type_for_user_method_member(CG *cg,
     if (sig == NULL || sig->type_param_count == 0U) {
         return cg_resolve_type_for_user_type_member(cg, owner, ref, fallback, out_type);
     }
+    if (owner != NULL) {
+        owner_decl = owner->is_generic_instance
+                         ? owner->generic_origin_decl
+                         : owner->decl;
+    }
+    if (owner_decl != NULL && owner_decl->kind == FENG_DECL_TYPE) {
+        scope.first = owner_decl->as.type_decl.type_params;
+        scope.first_count = owner_decl->as.type_decl.type_param_count;
+    }
+    scope.second = sig->type_params;
+    scope.second_count = sig->type_param_count;
     if (owner != NULL && owner->is_generic_instance && ref != NULL) {
         substituted = cg_type_ref_substitute(
             ref,
@@ -9267,30 +9402,40 @@ static bool cg_resolve_type_for_user_method_member(CG *cg,
         }
         effective_ref = substituted;
     }
-    if (!cg_callable_type_param_names(cg, sig, fallback ? *fallback : sig->token,
-                                      &method_type_param_names)) {
+    if (!cg_type_param_scope_copy_names(
+            &scope, &type_param_names, &type_param_count)) {
         cg_type_ref_free(substituted);
-        return false;
+        return cg_fail(cg,
+                       fallback ? *fallback : sig->token,
+                       "IE0001", "codegen: out of memory");
     }
 
     cg->in_generic_fn = true;
-    cg->generic_fn_type_param_count = sig->type_param_count;
-    cg->generic_fn_type_param_names = method_type_param_names;
+    cg->generic_fn_type_param_count = type_param_count;
+    cg->generic_fn_type_param_names = type_param_names;
     cg->generic_fn_type_param_constraints = NULL;
     cg->generic_fn_type_param_descs = NULL;
 
-    ok = cg_resolve_type_from_program(cg,
-                                      effective_ref,
-                                      owner != NULL ? owner->owner_program : NULL,
-                                      fallback,
-                                      out_type);
+    ok = cg_collect_generic_instances_from_type_ref_from_program(
+        cg,
+        effective_ref,
+        scope,
+        owner != NULL ? owner->owner_program : NULL);
+    if (ok) {
+        ok = cg_resolve_type_from_program(
+            cg,
+            effective_ref,
+            owner != NULL ? owner->owner_program : NULL,
+            fallback,
+            out_type);
+    }
 
     cg->in_generic_fn = saved_in_generic_fn;
     cg->generic_fn_type_param_count = saved_tp_count;
     cg->generic_fn_type_param_names = saved_tp_names;
     cg->generic_fn_type_param_constraints = saved_tp_constraints;
     cg->generic_fn_type_param_descs = saved_tp_descs;
-    cg_free_cstr_array(method_type_param_names, sig->type_param_count);
+    cg_free_cstr_array(type_param_names, type_param_count);
     cg_type_ref_free(substituted);
     return ok;
 }
