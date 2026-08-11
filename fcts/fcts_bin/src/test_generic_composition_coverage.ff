@@ -179,5 +179,39 @@ open func test_generic_composition_coverage(): void {
              result.value.revision == 94,
              "callable-form spec returns the complete composite payload");
     });
+
+    test("mutually related generic types preserve both graph directions", () {
+      let left = LibCompositionMutualLeft<string>("left-payload");
+      let right = LibCompositionMutualRight<string>("right-payload");
+
+      let returnedRight = left.connectRight(right);
+      let returnedLeft = right.connectLeft(left);
+      let snapshot = libCompositionBuildMutualSnapshot<string>(
+        returnedLeft,
+        returnedRight,
+        "edge-payload",
+        "mutual-snapshot",
+        101
+      );
+
+      assert(returnedRight.payload == "right-payload" &&
+             left.rightAt(0).payload == "right-payload" &&
+             left.rightStateAt(0).payload == "right-payload",
+             "left field parameter and return preserve the right endpoint");
+      assert(returnedLeft.payload == "left-payload" &&
+             right.leftAt(0).payload == "left-payload" &&
+             right.leftStateAt(0).payload == "left-payload",
+             "right field parameter and return preserve the left endpoint");
+      assert(snapshot.pair.item1[0].payload == "left-payload" &&
+             snapshot.pair.item2[0].payload == "right-payload" &&
+             snapshot.pair.item3 == "edge-payload",
+             "generic tuple preserves both endpoints and their edge payload");
+      assert(snapshot.marker == "mutual-snapshot" &&
+             snapshot.revision == 101,
+             "value snapshot preserves its managed and scalar tail");
+
+      left.clearRights();
+      right.clearLefts();
+    });
   });
 }

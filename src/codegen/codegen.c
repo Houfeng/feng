@@ -7164,6 +7164,12 @@ static UserSpec *cg_find_generic_instance_user_spec_for_ref(CG *cg,
         ref->as.named.type_arg_count);
 }
 
+static UserType *cg_find_generic_instance_user_type_with_active_context(
+    CG *cg,
+    const FengDecl *origin_decl,
+    FengTypeRef *const *type_args,
+    size_t type_arg_count);
+
 /* Resolve the open-instance aggregate descriptor symbol used as the
  * compile-time key for one reified aggregate dependency. Both generic value
  * types and generic object specs participate; the latter keep a fixed value
@@ -7189,12 +7195,11 @@ static const char *cg_open_generic_aggregate_descriptor_name(
     if (type_decl == NULL) {
         return NULL;
     }
-    type_instance = cg_find_open_generic_instance(
+    type_instance = cg_find_generic_instance_user_type_with_active_context(
         cg,
-        &(UserType){
-            .is_generic_instance = true,
-            .generic_origin_decl = type_decl->decl,
-        });
+        type_decl->decl,
+        ref->as.named.type_args,
+        ref->as.named.type_arg_count);
     return type_instance != NULL ? type_instance->c_aggregate_desc_name : NULL;
 }
 
@@ -7224,12 +7229,11 @@ static const char *cg_open_generic_managed_descriptor_name(
         type_decl->decl->as.type_decl.is_value) {
         return NULL;
     }
-    type_instance = cg_find_open_generic_instance(
+    type_instance = cg_find_generic_instance_user_type_with_active_context(
         cg,
-        &(UserType){
-            .is_generic_instance = true,
-            .generic_origin_decl = type_decl->decl,
-        });
+        type_decl->decl,
+        ref->as.named.type_args,
+        ref->as.named.type_arg_count);
     return type_instance != NULL ? type_instance->c_desc_name : NULL;
 }
 
@@ -9276,6 +9280,105 @@ static bool cg_resolve_type_for_user_method_member(CG *cg,
     cg_free_cstr_array(method_type_param_names, sig->type_param_count);
     cg_type_ref_free(substituted);
     return ok;
+}
+
+/* Resolve one generic method parameter exactly as the shared body resolves
+ * its original declaration slot.  The resulting physical-layout fact is the
+ * ABI authority; a substituted instance type must not redefine that ABI. */
+static bool cg_resolve_shared_method_declared_param_type(
+    CG *cg,
+    const FengTypeParam *outer_type_params,
+    size_t outer_type_param_count,
+    const FengProgram *owner_program,
+    const FengTypeMember *member,
+    size_t param_index,
+    CGType **out_type) {
+    const FengCallableSignature *sig;
+    CGTypeParamScope scope;
+    char **type_param_names = NULL;
+    size_t type_param_count = 0U;
+    bool saved_in_generic_fn;
+    size_t saved_tp_count;
+    char **saved_tp_names;
+    const UserSpec **saved_tp_constraints;
+    const char **saved_tp_descs;
+    bool ok;
+
+    if (cg == NULL || member == NULL ||
+        member->kind != FENG_TYPE_MEMBER_METHOD) {
+        return false;
+    }
+    sig = &member->as.callable;
+    if (param_index >= sig->param_count) {
+        return false;
+    }
+    scope = (CGTypeParamScope){
+        .first = outer_type_params,
+        .first_count = outer_type_param_count,
+        .second = sig->type_params,
+        .second_count = sig->type_param_count,
+    };
+    if (!cg_type_param_scope_copy_names(
+            &scope, &type_param_names, &type_param_count)) {
+        return cg_fail(cg, member->token,
+                       "IE0001", "codegen: out of memory");
+    }
+
+    saved_in_generic_fn = cg->in_generic_fn;
+    saved_tp_count = cg->generic_fn_type_param_count;
+    saved_tp_names = cg->generic_fn_type_param_names;
+    saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    saved_tp_descs = cg->generic_fn_type_param_descs;
+    cg->in_generic_fn = type_param_count > 0U;
+    cg->generic_fn_type_param_count = type_param_count;
+    cg->generic_fn_type_param_names = type_param_names;
+    cg->generic_fn_type_param_constraints = NULL;
+    cg->generic_fn_type_param_descs = NULL;
+
+    ok = cg_resolve_type_from_program(cg,
+                                      sig->params[param_index].type,
+                                      owner_program,
+                                      &sig->params[param_index].token,
+                                      out_type);
+
+    cg->in_generic_fn = saved_in_generic_fn;
+    cg->generic_fn_type_param_count = saved_tp_count;
+    cg->generic_fn_type_param_names = saved_tp_names;
+    cg->generic_fn_type_param_constraints = saved_tp_constraints;
+    cg->generic_fn_type_param_descs = saved_tp_descs;
+    cg_free_cstr_array(type_param_names, type_param_count);
+    return ok;
+}
+
+/* Query the address/direct ABI selected by a generic method's original
+ * declaration slot.  This must match cg_emit_generic_type_method_shared. */
+static bool cg_shared_method_param_uses_address_abi(
+    CG *cg,
+    const FengDecl *owner_decl,
+    const FengTypeMember *member,
+    size_t param_index,
+    bool *out_uses_address) {
+    CGType *declared_type = NULL;
+    const FengProgram *owner_program;
+
+    if (owner_decl == NULL || owner_decl->kind != FENG_DECL_TYPE ||
+        out_uses_address == NULL) {
+        return false;
+    }
+    owner_program = cg_find_decl_owner_program(cg, owner_decl);
+    if (!cg_resolve_shared_method_declared_param_type(
+            cg,
+            owner_decl->as.type_decl.type_params,
+            owner_decl->as.type_decl.type_param_count,
+            owner_program,
+            member,
+            param_index,
+            &declared_type)) {
+        return false;
+    }
+    *out_uses_address = cg_shared_generic_param_uses_address(declared_type);
+    cgtype_free(declared_type);
+    return true;
 }
 
 static bool cg_resolve_type_for_user_spec_member(CG *cg,
@@ -13104,6 +13207,32 @@ struct ExprResult {
     char   *reified_descriptor_c_name;
     char   *reified_size_c_name;
 };
+
+/* Lower one shared-method argument according to the declaration-selected
+ * ABI.  Address slots reuse stable lvalue storage when available and create
+ * only the statement-lifetime local required for an rvalue. */
+static char *cg_shared_method_argument_expr_dup(CG *cg,
+                                                ExprResult *argument,
+                                                bool uses_address_abi,
+                                                const char *temp_prefix) {
+    if (cg == NULL || argument == NULL || argument->type == NULL) {
+        return NULL;
+    }
+    if ((cgtype_is_managed(argument->type) ||
+         cgtype_is_aggregate(argument->type)) &&
+        argument->owns_ref &&
+        cg_materialize_to_local(cg, argument, temp_prefix) == NULL) {
+        return NULL;
+    }
+    if (uses_address_abi) {
+        if (!argument->is_addressable &&
+            cg_materialize_to_local(cg, argument, temp_prefix) == NULL) {
+            return NULL;
+        }
+        return cg_aggregate_result_address_dup(argument);
+    }
+    return strdup(argument->c_expr);
+}
 
 /** Store a same-parameter erased value into generic static storage. */
 static bool cg_emit_generic_static_binding_store(
@@ -18560,59 +18689,11 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     }
 
     for (size_t i = 0; i < arg_count; ++i) {
-        if (um->param_types[i] != NULL &&
-            um->param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
-            char *tmp = cg_fresh_temp(cg, "_gma");
-            if (tmp == NULL) {
-                ok = false;
-                goto cleanup;
-            }
-            if (args[i].type != NULL && args[i].type->kind == CG_TYPE_GENERIC_PARAM) {
-                buf_append_fmt(cg->cur_body, "    const void *%s = %s;\n",
-                               tmp,
-                               args[i].c_expr);
-                arg_exprs[i] = strdup(tmp);
-            } else {
-                char *cty = cg_ctype_dup(args[i].type);
-                if (cty == NULL) {
-                    free(tmp);
-                    ok = false;
-                    goto cleanup;
-                }
-                buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
-                               cty,
-                               tmp,
-                               args[i].c_expr);
-                if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
-                    if (!cg_register_local_for_cleanup(cg, tmp, args[i].type, e->token)) {
-                        free(cty);
-                        free(tmp);
-                        ok = false;
-                        goto cleanup;
-                    }
-                    args[i].owns_ref = false;
-                } else if (cgtype_is_aggregate(args[i].type) && args[i].owns_ref) {
-                    if (!cg_register_local_for_cleanup(cg, tmp, args[i].type, e->token)) {
-                        free(cty);
-                        free(tmp);
-                        ok = false;
-                        goto cleanup;
-                    }
-                    args[i].owns_ref = false;
-                }
-                Buf ab;
-                buf_init(&ab);
-                buf_append_fmt(&ab, "&%s", tmp);
-                arg_exprs[i] = ab.data;
-                free(cty);
-            }
-            free(tmp);
-        } else {
-            if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
-                cg_materialize_to_local(cg, &args[i], "_gma");
-            }
-            arg_exprs[i] = strdup(args[i].c_expr);
-        }
+        bool uses_address_abi =
+            cg_shared_generic_param_uses_address(um->param_types[i]);
+
+        arg_exprs[i] = cg_shared_method_argument_expr_dup(
+            cg, &args[i], uses_address_abi, "_gma");
         if (arg_exprs[i] == NULL) {
             cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             ok = false;
@@ -18886,53 +18967,16 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
             ok = false;
             goto cleanup;
         }
-        if (param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
-            if (args[i].type != NULL && args[i].type->kind == CG_TYPE_GENERIC_PARAM) {
-                arg_exprs[i] = strdup(args[i].c_expr);
-            } else {
-                char *tmp = cg_fresh_temp(cg, "_gsm");
-                char *cty = cg_ctype_dup(args[i].type);
-                if (tmp == NULL || cty == NULL) {
-                    free(tmp);
-                    free(cty);
-                    ok = false;
-                    goto cleanup;
-                }
-                buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
-                               cty,
-                               tmp,
-                               args[i].c_expr);
-                if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
-                    if (!cg_register_local_for_cleanup(cg, tmp, args[i].type, e->token)) {
-                        free(tmp);
-                        free(cty);
-                        ok = false;
-                        goto cleanup;
-                    }
-                    args[i].owns_ref = false;
-                } else if (cgtype_is_aggregate(args[i].type) && args[i].owns_ref) {
-                    if (!cg_register_local_for_cleanup(cg, tmp, args[i].type, e->token)) {
-                        free(tmp);
-                        free(cty);
-                        ok = false;
-                        goto cleanup;
-                    }
-                    args[i].owns_ref = false;
-                }
-                Buf arg;
-                buf_init(&arg);
-                buf_append_fmt(&arg, "&%s", tmp);
-                arg_exprs[i] = arg.data;
-                free(tmp);
-                free(cty);
+        {
+            bool uses_address_abi = false;
+
+            if (!cg_shared_method_param_uses_address_abi(
+                    cg, owner, member, i, &uses_address_abi)) {
+                ok = false;
+                goto cleanup;
             }
-        } else {
-            if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
-                cg_materialize_to_local(cg, &args[i], "_gsm");
-            } else if (cgtype_is_aggregate(args[i].type) && args[i].owns_ref) {
-                cg_materialize_to_local(cg, &args[i], "_gsm");
-            }
-            arg_exprs[i] = strdup(args[i].c_expr);
+            arg_exprs[i] = cg_shared_method_argument_expr_dup(
+                cg, &args[i], uses_address_abi, "_gsm");
         }
         if (arg_exprs[i] == NULL) {
             cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
@@ -19095,30 +19139,44 @@ static bool cg_append_static_owner_context_args(CG *cg,
     return true;
 }
 
-/* Return whether one static-method parameter uses the erased pointer ABI in
- * the shared generic body.  Closed and imported instances have concrete
- * semantic parameter types, so recover the corresponding source member by
- * declaration ordinal instead of relying on deserialized AST identity. */
-static bool cg_generic_static_method_param_uses_erased_abi(
+/* Resolve one static method's original declaration slot and query the ABI
+ * used by its shared body.  Closed and imported instances recover the source
+ * member by declaration ordinal instead of relying on AST pointer identity. */
+static bool cg_generic_static_method_param_uses_address_abi(
+    CG *cg,
     const UserType *owner_type,
     const UserMethod *method,
-    size_t param_index) {
-    const FengDecl *origin;
-    const FengTypeMember *origin_member = NULL;
+    const BuiltinFit *builtin_fit,
+    size_t param_index,
+    bool *out_uses_address) {
+    const FengDecl *origin = NULL;
+    const FengTypeMember *origin_member;
     size_t method_ordinal = (size_t)-1;
     size_t current_ordinal = 0U;
 
-    if (method == NULL || param_index >= method->param_count) {
+    if (cg == NULL || method == NULL || param_index >= method->param_count ||
+        out_uses_address == NULL) {
         return false;
     }
-    if (method->param_types[param_index] != NULL &&
-        method->param_types[param_index]->kind == CG_TYPE_GENERIC_PARAM) {
+    (void)builtin_fit;
+    if (owner_type == NULL ||
+        (owner_type->generic_context_type_param_count == 0U &&
+         cg_program_origin(cg, owner_type->owner_program) !=
+             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE)) {
+        *out_uses_address = cg_shared_generic_param_uses_address(
+            method->param_types[param_index]);
         return true;
     }
-    if (owner_type == NULL || !owner_type->is_generic_instance ||
-        owner_type->generic_origin_decl == NULL ||
-        owner_type->generic_origin_decl->kind != FENG_DECL_TYPE) {
+    origin_member = method->member;
+    origin = owner_type->generic_origin_decl != NULL
+                 ? owner_type->generic_origin_decl
+                 : owner_type->decl;
+    if (origin == NULL || origin->kind != FENG_DECL_TYPE) {
         return false;
+    }
+    if (!owner_type->is_generic_instance) {
+        return cg_shared_method_param_uses_address_abi(
+            cg, origin, origin_member, param_index, out_uses_address);
     }
     for (size_t i = 0U; i < owner_type->static_method_count; ++i) {
         if (&owner_type->static_methods[i] == method) {
@@ -19130,7 +19188,7 @@ static bool cg_generic_static_method_param_uses_erased_abi(
         return false;
     }
 
-    origin = owner_type->generic_origin_decl;
+    origin_member = NULL;
     for (size_t i = 0U; i < origin->as.type_decl.member_count; ++i) {
         const FengTypeMember *candidate = origin->as.type_decl.members[i];
 
@@ -19149,16 +19207,8 @@ static bool cg_generic_static_method_param_uses_erased_abi(
         return false;
     }
 
-    return cg_type_ref_is_direct_type_param(
-               origin_member->as.callable.params[param_index].type,
-               origin->as.type_decl.type_params,
-               origin->as.type_decl.type_param_count,
-               NULL) ||
-           cg_type_ref_is_direct_type_param(
-               origin_member->as.callable.params[param_index].type,
-               origin_member->as.callable.type_params,
-               origin_member->as.callable.type_param_count,
-               NULL);
+    return cg_shared_method_param_uses_address_abi(
+        cg, origin, origin_member, param_index, out_uses_address);
 }
 
 static bool cg_emit_generic_static_method_call(CG *cg,
@@ -19318,56 +19368,15 @@ static bool cg_emit_generic_static_method_call(CG *cg,
 
     /* Build arg_exprs for fixed arguments. */
     for (size_t i = 0U; i < fixed_param_count; ++i) {
-        if (cg_generic_static_method_param_uses_erased_abi(
-                owner_type, um, i)) {
-            char *tmp = cg_fresh_temp(cg, "_gsma");
+        bool uses_address_abi = false;
 
-            if (tmp == NULL) {
-                ok = false;
-                goto cleanup;
-            }
-            if (args[i].type != NULL && args[i].type->kind == CG_TYPE_GENERIC_PARAM) {
-                buf_append_fmt(cg->cur_body, "    const void *%s = %s;\n",
-                               tmp,
-                               args[i].c_expr);
-                arg_exprs[i] = strdup(tmp);
-            } else {
-                char *cty = cg_ctype_dup(args[i].type);
-
-                if (cty == NULL) {
-                    free(tmp);
-                    ok = false;
-                    goto cleanup;
-                }
-                buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
-                               cty,
-                               tmp,
-                               args[i].c_expr);
-                if ((cgtype_is_managed(args[i].type) || cgtype_is_aggregate(args[i].type)) &&
-                    args[i].owns_ref) {
-                    if (!cg_register_local_for_cleanup(cg, tmp, args[i].type, e->token)) {
-                        free(cty);
-                        free(tmp);
-                        ok = false;
-                        goto cleanup;
-                    }
-                    args[i].owns_ref = false;
-                }
-                Buf addr;
-                buf_init(&addr);
-                buf_append_fmt(&addr, "&%s", tmp);
-                arg_exprs[i] = addr.data;
-                free(cty);
-            }
-            free(tmp);
-        } else {
-            if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
-                cg_materialize_to_local(cg, &args[i], "_gsma");
-            } else if (cgtype_is_aggregate(args[i].type) && args[i].owns_ref) {
-                cg_materialize_to_local(cg, &args[i], "_gsma");
-            }
-            arg_exprs[i] = strdup(args[i].c_expr);
+        if (!cg_generic_static_method_param_uses_address_abi(
+                cg, owner_type, um, builtin_fit, i, &uses_address_abi)) {
+            ok = false;
+            goto cleanup;
         }
+        arg_exprs[i] = cg_shared_method_argument_expr_dup(
+            cg, &args[i], uses_address_abi, "_gsma");
         if (arg_exprs[i] == NULL) {
             cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             ok = false;
@@ -19417,56 +19426,15 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     } else {
         /* Non-variadic: build remaining arg_exprs (generic param handling). */
         for (size_t i = fixed_param_count; i < arg_count; ++i) {
-            if (cg_generic_static_method_param_uses_erased_abi(
-                    owner_type, um, i)) {
-                char *tmp = cg_fresh_temp(cg, "_gsma");
+            bool uses_address_abi = false;
 
-                if (tmp == NULL) {
-                    ok = false;
-                    goto cleanup;
-                }
-                if (args[i].type != NULL && args[i].type->kind == CG_TYPE_GENERIC_PARAM) {
-                    buf_append_fmt(cg->cur_body, "    const void *%s = %s;\n",
-                                   tmp,
-                                   args[i].c_expr);
-                    arg_exprs[i] = strdup(tmp);
-                } else {
-                    char *cty = cg_ctype_dup(args[i].type);
-
-                    if (cty == NULL) {
-                        free(tmp);
-                        ok = false;
-                        goto cleanup;
-                    }
-                    buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
-                                   cty,
-                                   tmp,
-                                   args[i].c_expr);
-                    if ((cgtype_is_managed(args[i].type) || cgtype_is_aggregate(args[i].type)) &&
-                        args[i].owns_ref) {
-                        if (!cg_register_local_for_cleanup(cg, tmp, args[i].type, e->token)) {
-                            free(cty);
-                            free(tmp);
-                            ok = false;
-                            goto cleanup;
-                        }
-                        args[i].owns_ref = false;
-                    }
-                    Buf addr;
-                    buf_init(&addr);
-                    buf_append_fmt(&addr, "&%s", tmp);
-                    arg_exprs[i] = addr.data;
-                    free(cty);
-                }
-                free(tmp);
-            } else {
-                if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
-                    cg_materialize_to_local(cg, &args[i], "_gsma");
-                } else if (cgtype_is_aggregate(args[i].type) && args[i].owns_ref) {
-                    cg_materialize_to_local(cg, &args[i], "_gsma");
-                }
-                arg_exprs[i] = strdup(args[i].c_expr);
+            if (!cg_generic_static_method_param_uses_address_abi(
+                    cg, owner_type, um, builtin_fit, i, &uses_address_abi)) {
+                ok = false;
+                goto cleanup;
             }
+            arg_exprs[i] = cg_shared_method_argument_expr_dup(
+                cg, &args[i], uses_address_abi, "_gsma");
             if (arg_exprs[i] == NULL) {
                 cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 ok = false;
@@ -20678,7 +20646,11 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             size_t arg_count = e->as.call.arg_count;
             ExprResult *args = arg_count
                 ? calloc(arg_count, sizeof *args) : NULL;
-            if (arg_count && args == NULL) {
+            char **arg_exprs = arg_count
+                ? calloc(arg_count, sizeof *arg_exprs) : NULL;
+            if (arg_count && (args == NULL || arg_exprs == NULL)) {
+                free(args);
+                free(arg_exprs);
                 free(shared_name);
                 free(rtd_expr);
                 er_free(&recv);
@@ -20687,6 +20659,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             }
             bool call_ok = true;
             for (size_t i = 0; i < arg_count; i++) {
+                bool uses_address_abi = false;
+
                 if (!cg_emit_expr_for_expected_type(cg,
                                                     e->as.call.args[i],
                                                     um->param_types[i],
@@ -20694,13 +20668,27 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     call_ok = false;
                     break;
                 }
-                if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
-                    cg_materialize_to_local(cg, &args[i], "_t");
+                if (!cg_shared_method_param_uses_address_abi(
+                        cg,
+                        ut->generic_origin_decl,
+                        um->member,
+                        i,
+                        &uses_address_abi)) {
+                    call_ok = false;
+                    break;
+                }
+                arg_exprs[i] = cg_shared_method_argument_expr_dup(
+                    cg, &args[i], uses_address_abi, "_t");
+                if (arg_exprs[i] == NULL) {
+                    call_ok = false;
+                    break;
                 }
             }
             if (!call_ok) {
                 for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+                for (size_t i = 0; i < arg_count; i++) free(arg_exprs[i]);
                 free(args);
+                free(arg_exprs);
                 free(shared_name);
                 free(rtd_expr);
                 er_free(&recv);
@@ -20716,7 +20704,9 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 ret_tmp = cg_fresh_temp(cg, "_osr");
                 if (ret_tmp == NULL) {
                     for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+                    for (size_t i = 0; i < arg_count; i++) free(arg_exprs[i]);
                     free(args);
+                    free(arg_exprs);
                     free(shared_name);
                     free(rtd_expr);
                     er_free(&recv);
@@ -20735,7 +20725,9 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     if (cty == NULL) {
                         free(ret_tmp);
                         for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+                        for (size_t i = 0; i < arg_count; i++) free(arg_exprs[i]);
                         free(args);
+                        free(arg_exprs);
                         free(shared_name);
                         free(rtd_expr);
                         er_free(&recv);
@@ -20759,22 +20751,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                                shared_name, recv.c_expr, rtd_expr);
             }
             for (size_t i = 0; i < arg_count; i++) {
-                bool param_is_gp =
-                    um->param_types[i] != NULL &&
-                    um->param_types[i]->kind == CG_TYPE_GENERIC_PARAM;
-                bool arg_is_gp =
-                    args[i].type != NULL &&
-                    args[i].type->kind == CG_TYPE_GENERIC_PARAM;
-                if (param_is_gp && !arg_is_gp) {
-                    /* Shared body expects const void *; pass address. */
-                    if (cgtype_is_aggregate(args[i].type)) {
-                        buf_append_fmt(&b, ", %s", args[i].c_expr);
-                    } else {
-                        buf_append_fmt(&b, ", &%s", args[i].c_expr);
-                    }
-                } else {
-                    buf_append_fmt(&b, ", %s", args[i].c_expr);
-                }
+                buf_append_fmt(&b, ", %s", arg_exprs[i]);
             }
             if (has_return) {
                 if (ret_is_gp) {
@@ -20788,7 +20765,9 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             buf_append(cg->cur_body, b.data, b.length);
             buf_free(&b);
             for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+            for (size_t i = 0; i < arg_count; i++) free(arg_exprs[i]);
             free(args);
+            free(arg_exprs);
             free(shared_name);
             free(rtd_expr);
             if (has_return) {
@@ -41062,7 +41041,9 @@ static const char *cg_managed_pointer_static_desc_expr(const CGType *type) {
             if (cg_type_is_value_semantics(type)) {
                 return "NULL";
             }
-            if (type->user != NULL && type->user->c_desc_name != NULL) {
+            if (type->user != NULL &&
+                type->user->generic_context_type_param_count == 0U &&
+                type->user->c_desc_name != NULL) {
                 return type->user->c_desc_name;
             }
             return "NULL";
@@ -41253,7 +41234,9 @@ static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
                     buf_append_cstr(td, "&feng_array_descriptor");
                     break;
                 case CG_TYPE_OBJECT:
-                    if (ft->user && ft->user->c_desc_name != NULL) {
+                    if (ft->user != NULL &&
+                        ft->user->generic_context_type_param_count == 0U &&
+                        ft->user->c_desc_name != NULL) {
                         buf_append_fmt(td, "&%s", ft->user->c_desc_name);
                     } else {
                         buf_append_cstr(td, "NULL");

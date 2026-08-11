@@ -1,6 +1,7 @@
 open module fcts_lib.test;
 
 import std;
+import std.collections;
 
 /** Reference leaf used by the heterogeneous generic composition tests. */
 open type LibCompositionLeaf<T> {
@@ -208,4 +209,159 @@ open func libCompositionMapSpecPacket<T>(
   packet: LibCompositionSpecPacket<T>
 ): LibCompositionSpecPacket<T> {
   return mapper(packet);
+}
+
+/** Non-cyclic state copied from a left endpoint. */
+open type LibCompositionMutualLeftState<T> {
+  /** Copied left payload. */
+  open let payload: T;
+
+  /** Construct a left state value. */
+  func LibCompositionMutualLeftState(payload: T) {
+    self.payload = payload;
+  }
+}
+
+/** Non-cyclic state copied from a right endpoint. */
+open type LibCompositionMutualRightState<T> {
+  /** Copied right payload. */
+  open let payload: T;
+
+  /** Construct a right state value. */
+  func LibCompositionMutualRightState(payload: T) {
+    self.payload = payload;
+  }
+}
+
+/** Left endpoint in a mutually related generic object graph. */
+open type LibCompositionMutualLeft<T> {
+  /** Payload owned by the left endpoint. */
+  open let payload: T;
+
+  /** Right endpoints connected through an empty-default array boundary. */
+  open var rights: LibCompositionMutualRight<T>[] = [];
+
+  /** Non-cyclic state copied from each connected right endpoint. */
+  open let rightStates = List<LibCompositionMutualRightState<T> >();
+
+  /** Construct an unconnected left endpoint. */
+  func LibCompositionMutualLeft(payload: T) {
+    self.payload = payload;
+  }
+
+  /** Store and return a right endpoint through the shared generic body. */
+  open func connectRight(
+    right: LibCompositionMutualRight<T>
+  ): LibCompositionMutualRight<T> {
+    self.rights = [right];
+    self.rightStates.add(
+      LibCompositionMutualRightState<T>(right.payload)
+    );
+    return self.rights[0];
+  }
+
+  /** Return a stored right endpoint. */
+  open func rightAt(index: int): LibCompositionMutualRight<T> {
+    return self.rights[index];
+  }
+
+  /** Return the copied state for a stored right endpoint. */
+  open func rightStateAt(index: int): LibCompositionMutualRightState<T> {
+    return self.rightStates.get(index);
+  }
+
+  /** Remove all right links so the behavior test does not retain a cycle. */
+  open func clearRights() {
+    self.rights = [];
+    self.rightStates.clear();
+  }
+}
+
+/** Right endpoint in a mutually related generic object graph. */
+open type LibCompositionMutualRight<T> {
+  /** Payload owned by the right endpoint. */
+  open let payload: T;
+
+  /** Left endpoints connected through an empty-default array boundary. */
+  open var lefts: LibCompositionMutualLeft<T>[] = [];
+
+  /** Non-cyclic state copied from each connected left endpoint. */
+  open let leftStates = List<LibCompositionMutualLeftState<T> >();
+
+  /** Construct an unconnected right endpoint. */
+  func LibCompositionMutualRight(payload: T) {
+    self.payload = payload;
+  }
+
+  /** Store and return a left endpoint through the shared generic body. */
+  open func connectLeft(
+    left: LibCompositionMutualLeft<T>
+  ): LibCompositionMutualLeft<T> {
+    self.lefts = [left];
+    self.leftStates.add(
+      LibCompositionMutualLeftState<T>(left.payload)
+    );
+    return self.lefts[0];
+  }
+
+  /** Return a stored left endpoint. */
+  open func leftAt(index: int): LibCompositionMutualLeft<T> {
+    return self.lefts[index];
+  }
+
+  /** Return the copied state for a stored left endpoint. */
+  open func leftStateAt(index: int): LibCompositionMutualLeftState<T> {
+    return self.leftStates.get(index);
+  }
+
+  /** Remove all left links so the behavior test does not retain a cycle. */
+  open func clearLefts() {
+    self.lefts = [];
+    self.leftStates.clear();
+  }
+}
+
+/** Tuple containing both endpoints and the payload carried across their edge. */
+open type LibCompositionMutualPair<T>(
+  LibCompositionMutualLeft<T>[],
+  LibCompositionMutualRight<T>[],
+  T
+);
+
+/** Value snapshot embedding the tuple formed by the mutually related types. */
+@value
+open type LibCompositionMutualSnapshot<T> {
+  /** Both graph endpoints and their generic edge payload. */
+  open var pair: LibCompositionMutualPair<T>;
+
+  /** Managed value following the generic tuple. */
+  open var marker: string;
+
+  /** Scalar tail used to verify the complete value layout. */
+  open var revision: i64;
+
+  /** Construct a populated graph snapshot. */
+  func LibCompositionMutualSnapshot(
+    pair: LibCompositionMutualPair<T>,
+    marker: string,
+    revision: i64
+  ) {
+    self.pair = pair;
+    self.marker = marker;
+    self.revision = revision;
+  }
+}
+
+/** Build and return a value snapshot from both sides of the generic graph. */
+open func libCompositionBuildMutualSnapshot<T>(
+  left: LibCompositionMutualLeft<T>,
+  right: LibCompositionMutualRight<T>,
+  payload: T,
+  marker: string,
+  revision: i64
+): LibCompositionMutualSnapshot<T> {
+  let lefts: LibCompositionMutualLeft<T>[] = [left];
+  let rights: LibCompositionMutualRight<T>[] = [right];
+  let pair: LibCompositionMutualPair<T> = (lefts, rights, payload);
+  return LibCompositionMutualSnapshot<T>(pair, marker, revision);
 }
