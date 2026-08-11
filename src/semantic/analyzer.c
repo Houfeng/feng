@@ -31279,6 +31279,188 @@ static const FengDecl *analysis_resolve_named_type_ref(
     return NULL;
 }
 
+/* Resolve an imported declaration's unqualified member ref in its declaring
+ * module before falling back to the analysis-wide qualified-name lookup. */
+static const FengDecl *analysis_resolve_named_type_ref_from_module(
+    const FengSemanticAnalysis *analysis,
+    const FengSemanticModule *declaring_module,
+    const FengTypeRef *ref) {
+    const FengDecl *decl;
+
+    if (analysis == NULL || ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
+        ref->as.named.segment_count == 0U) {
+        return NULL;
+    }
+    if (ref->as.named.segment_count == 1U && declaring_module != NULL) {
+        decl = find_module_public_type_decl(
+            declaring_module,
+            ref->as.named.segments[0],
+            ref->as.named.type_arg_count);
+        if (decl != NULL) {
+            return decl;
+        }
+    }
+    return analysis_resolve_named_type_ref(analysis, ref);
+}
+
+/* Append one object-form leaf to an imported intersection's flattened set. */
+static bool append_unique_intersection_leaf(const FengDecl ***items,
+                                            size_t *count,
+                                            size_t *capacity,
+                                            const FengDecl *leaf) {
+    size_t index;
+
+    for (index = 0U; index < *count; ++index) {
+        if ((*items)[index] == leaf) {
+            return true;
+        }
+    }
+    return append_raw((void **)items, count, capacity, sizeof(**items), &leaf);
+}
+
+/* Try to flatten one imported intersection. A false result with
+ * `out_pending` set means that a nested intersection must be computed first. */
+static bool precompute_imported_intersection_spec_info(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticModule *declaring_module,
+    const FengDecl *decl,
+    bool *out_pending) {
+    const FengDecl **flattened = NULL;
+    size_t flattened_count = 0U;
+    size_t flattened_capacity = 0U;
+    size_t member_index;
+
+    *out_pending = false;
+    for (member_index = 0U;
+         member_index < decl->as.spec_decl.as.intersection_form.member_count;
+         ++member_index) {
+        const FengTypeRef *member_ref =
+            decl->as.spec_decl.as.intersection_form.members[member_index];
+        const FengDecl *member_decl = analysis_resolve_named_type_ref_from_module(
+            analysis, declaring_module, member_ref);
+
+        if (member_decl == NULL || member_decl->kind != FENG_DECL_SPEC) {
+            free(flattened);
+            *out_pending = true;
+            return false;
+        }
+        if (member_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+            const FengIntersectionSpecInfo *inner =
+                feng_semantic_lookup_intersection_spec_info(analysis, member_decl);
+
+            if (inner == NULL) {
+                free(flattened);
+                *out_pending = true;
+                return false;
+            }
+            for (size_t inner_index = 0U;
+                 inner_index < inner->flattened_member_count;
+                 ++inner_index) {
+                if (!append_unique_intersection_leaf(
+                        &flattened,
+                        &flattened_count,
+                        &flattened_capacity,
+                        inner->flattened_members[inner_index])) {
+                    free(flattened);
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (member_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
+            !append_unique_intersection_leaf(&flattened,
+                                             &flattened_count,
+                                             &flattened_capacity,
+                                             member_decl)) {
+            free(flattened);
+            return false;
+        }
+    }
+
+    return feng_semantic_record_intersection_spec_info(
+        analysis, decl, flattened, flattened_count);
+}
+
+/* Imported packages have already validated their declarations and are skipped
+ * by the local resolve pass. Rebuild their derived intersection metadata in
+ * dependency order so consumer-side constraint checks see the same surface. */
+static bool precompute_imported_intersection_spec_infos(
+    FengSemanticAnalysis *analysis) {
+    size_t intersection_count = 0U;
+    size_t iteration;
+
+    if (analysis == NULL) {
+        return true;
+    }
+    for (size_t module_index = 0U;
+         module_index < analysis->module_count;
+         ++module_index) {
+        const FengSemanticModule *module = &analysis->modules[module_index];
+
+        if (module->origin != FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            continue;
+        }
+        for (size_t program_index = 0U;
+             program_index < module->program_count;
+             ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+
+            for (size_t decl_index = 0U;
+                 decl_index < program->declaration_count;
+                 ++decl_index) {
+                const FengDecl *decl = program->declarations[decl_index];
+
+                if (decl != NULL && decl->kind == FENG_DECL_SPEC &&
+                    decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                    ++intersection_count;
+                }
+            }
+        }
+    }
+
+    for (iteration = 0U; iteration < intersection_count; ++iteration) {
+        bool changed = false;
+
+        for (size_t module_index = 0U;
+             module_index < analysis->module_count;
+             ++module_index) {
+            const FengSemanticModule *module = &analysis->modules[module_index];
+
+            if (module->origin != FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+                continue;
+            }
+            for (size_t program_index = 0U;
+                 program_index < module->program_count;
+                 ++program_index) {
+                const FengProgram *program = module->programs[program_index];
+
+                for (size_t decl_index = 0U;
+                     decl_index < program->declaration_count;
+                     ++decl_index) {
+                    const FengDecl *decl = program->declarations[decl_index];
+                    bool pending;
+
+                    if (decl == NULL || decl->kind != FENG_DECL_SPEC ||
+                        decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION ||
+                        feng_semantic_lookup_intersection_spec_info(analysis, decl) != NULL) {
+                        continue;
+                    }
+                    if (precompute_imported_intersection_spec_info(
+                            analysis, module, decl, &pending)) {
+                        changed = true;
+                    } else if (!pending) {
+                        return false;
+                    }
+                }
+            }
+        }
+        if (!changed) {
+            break;
+        }
+    }
+    return true;
+}
+
 /* Find the spec type ref in a fit decl's spec list that resolves to the
  * given spec_decl.  Returns the concrete type ref (e.g. Hashable<string>)
  * or NULL if no match is found. */
@@ -32122,6 +32304,9 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
      * sidecar after fields are expanded and before wrapper selection. */
     if (ok && error_count == 0U) {
         precompute_union_spec_infos(analysis);
+        ok = precompute_imported_intersection_spec_infos(analysis);
+    }
+    if (ok && error_count == 0U) {
         ok = feng_semantic_compute_spec_relations(analysis);
     }
     if (ok && error_count == 0U) {

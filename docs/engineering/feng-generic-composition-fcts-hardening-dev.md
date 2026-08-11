@@ -125,8 +125,8 @@ spec 值需要经过字段、参数和返回值，并在消费端调用成员或
 - [x] 第一组完成后的 `make test`
 - [x] 第二组：lambda、顶层函数值和成员函数值
 - [x] 第二组完成后的 `make test`
-- [ ] 第三组：多种 spec 的组合数据流
-- [ ] 第三组完成后的 `make test`
+- [x] 第三组：多种 spec 的组合数据流
+- [x] 第三组完成后的 `make test`
 - [ ] 第四组：泛型类型间的双向包含
 - [ ] 第四组完成后的 `make test`
 - [ ] 最终核对新增用例与现有用例无等价重复
@@ -174,3 +174,44 @@ roundTrip<i64>(value);
 修复规则为：显式类型实参数量仅能针对已经成功解析的调用目标检查。调用解析失败且已有
 主诊断时，不追加缺少目标依据的类型实参数量诊断。该修复只调整编译期诊断流程，不改变
 合法程序行为、运行时 ABI 或运行时开销。
+
+### 7.4 imported 泛型交叉约束缺少扁平成员信息（已修复）
+
+第三组专项运行发现两个连续问题。首先，`.ft` 写入 union / intersection 的结构成员序列
+时，在序列区间中穿插了泛型成员自身的类型实参序列；读取方按连续区间读取，导致
+`Intersection<T>: Left<T> & Right` 的 `Left<T>` 在跨包后丢失或错位。其次，交叉 spec 的
+扁平成员 sidecar 只在本地声明进入 semantic resolve 时生成，而 imported package 会跳过
+该阶段。即使类型引用完整，consumer 仍无法取得 imported intersection 的扁平成员集合，
+并会在泛型候选约束检查时把同时实现所有成员 spec 的具体类型错误地判定为不满足约束。
+
+修复要求：union / intersection 写入必须先递归序列化全部成员类型，再一次性写入外层连续
+成员区间；在本地声明解析前，还要按声明所在模块及嵌套交叉 spec 的依赖顺序，为所有
+imported intersection spec 预计算同一种扁平成员 sidecar。本地声明仍由现有完整验证流程
+生成并覆盖。两项修复不得引入新的运行时表示或路径，只补齐 `.ft` 和编译期 imported 元数据，
+因此不改变 runtime、生成 ABI 或 Feng 程序运行时开销。
+
+### 7.5 闭合与开放泛型 object-spec 的 witness ABI 不兼容（已修复）
+
+修复 7.4 后，第三组继续到宿主 C 编译阶段。`Spec<string>` 的闭合 witness 对签名依赖
+`T` 的成员使用具体 C ABI，而共享泛型函数中的 `Spec<T>` witness 使用地址参数和 out-slot
+擦除 ABI。现有 spec 值直接传入 `func consume<T>(value: Spec<T>)` 时虽然
+`{ subject, witness }` 值布局固定，但两种 witness 方法签名不兼容，不能通过结构体复制或
+C 强制转换安全桥接。
+
+已批准采用以下通用方案：
+
+1. 泛型 object-form / intersection-form spec 的成员 ABI 由泛型 spec 原始声明槽位决定，
+   不根据某个闭合实例替换后的具体类型重新分类；
+2. 槽位不依赖 spec 类型参数时继续使用直接 ABI；已知为引用表示的泛型相关槽位使用擦除
+   指针 ABI；其他依赖类型参数的参数使用地址 ABI，返回值使用 out-slot；
+3. 同一泛型 spec 原点的闭合与开放实例共享兼容的固定 fat-value / witness C 表示；各实例
+   仍保留各自的类型描述符、aggregate 描述符、具体 witness 常量和名义类型信息；
+4. 具体 witness thunk 在已知闭合类型的编译期上下文中完成稳定槽位 ABI 与实现方法 ABI
+   之间的转换，不做运行时类型判断；
+5. 禁止堆适配、装箱、sidecar、descriptor 动态分派、函数指针强制转换和额外间接调用层；
+   spec 值继续保持 `{ subject, witness }` 两个机器字；
+6. 非泛型 spec 的表示与调用 ABI 保持不变，runtime 私有 ABI 和 runtime 源文件保持不变。
+
+依赖类型参数的闭合 spec 成员调用会使用统一地址参数或 out-slot。这是共享泛型体与二进制
+分发共同要求的必要调用约定，不以当前不兼容、无法正确执行的路径作为有效性能基线；除此
+之外不得增加 Feng 程序运行时开销。

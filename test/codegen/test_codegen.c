@@ -5636,13 +5636,8 @@ static void test_generic_object_spec_instance_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    {
-        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
-        char box_pattern[128];
-        snprintf(box_pattern, sizeof(box_pattern),
-                 "FengSpecValue__feng__codegen__gs1__Box__G__%s", int_canonical);
-        ASSERT(strstr(out.c_source, box_pattern) != NULL);
-    }
+    ASSERT(strstr(out.c_source,
+                  "FengSpecValue__feng__codegen__gs1__Box__GenericABI") != NULL);
     ASSERT(strstr(out.c_source, "->fetch(") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -5737,9 +5732,8 @@ static void test_generic_object_spec_coercion_codegen(void) {
     {
         const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
         char pattern[256];
-        snprintf(pattern, sizeof(pattern),
-                 "FengSpecValue__feng__codegen__gs3__Box__G__%s", int_canonical);
-        ASSERT(strstr(out.c_source, pattern) != NULL);
+        ASSERT(strstr(out.c_source,
+                      "FengSpecValue__feng__codegen__gs3__Box__GenericABI") != NULL);
         snprintf(pattern, sizeof(pattern),
                  "FengWitness__feng__codegen__gs3__IntBox__as__feng__codegen__gs3__Box_%s_",
                  int_canonical);
@@ -8953,7 +8947,7 @@ static void test_object_spec_upcast_witness_and_lowering_codegen(void) {
         ".parent__FengSpecWitness__feng__codegen__spec_upcast__Root = "
         "&FengWitness__feng__codegen__spec_upcast__Item__as__feng__codegen__spec_upcast__Root,";
     static const char *kGenericParentInitializer =
-        ".parent__FengSpecWitness__feng__codegen__spec_upcast__GenericParent__G__i32 = "
+        ".parent__FengSpecWitness__feng__codegen__spec_upcast__GenericParent__GenericABI = "
         "&FengWitness__feng__codegen__spec_upcast__GenericItem__as__feng__codegen__spec_upcast__GenericParent_i32_,";
     static const char *kMakeDiamondSymbol =
         "feng__feng__codegen__spec_upcast__makeDiamond__from__void";
@@ -8986,7 +8980,7 @@ static void test_object_spec_upcast_witness_and_lowering_codegen(void) {
     /* Left and Right reuse the one Item-as-Root witness in the diamond. */
     ASSERT(count_substr(output.c_source, kDiamondRootInitializer) == 2U);
 
-    /* The nominal generic edge is emitted for the exact i32 instance. */
+    /* The canonical generic parent slot points to the exact i32 witness. */
     ASSERT(strstr(output.c_source, kGenericParentInitializer) != NULL);
 
     /* Projection copies the same subject and changes only the witness path. */

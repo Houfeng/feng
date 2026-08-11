@@ -602,6 +602,45 @@ static uint32_t writer_serialize_spec_object_type(WriterContext *ctx,
     return (uint32_t)ctx->type_count;
 }
 
+/* Serialize nested member types before reserving the enclosing contiguous
+ * TSEQ interval. Nested generic types may append their own TSEQ entries. */
+static bool writer_serialize_spec_member_sequence(
+    WriterContext *ctx,
+    FengSymbolTypeView *const *members,
+    size_t member_count,
+    uint32_t *out_tseq_start,
+    const char *path,
+    FengToken token,
+    FengSymbolError *out_error) {
+    uint32_t *member_type_ids;
+    size_t member_index;
+
+    member_type_ids = (uint32_t *)calloc(member_count, sizeof(*member_type_ids));
+    if (member_type_ids == NULL) {
+        return feng_symbol_internal_set_error(
+            out_error, path, token, "out of memory serializing spec member sequence");
+    }
+    for (member_index = 0U; member_index < member_count; ++member_index) {
+        member_type_ids[member_index] = writer_serialize_type(
+            ctx, members[member_index], path, token, out_error);
+        if (members[member_index] != NULL && member_type_ids[member_index] == 0U) {
+            free(member_type_ids);
+            return false;
+        }
+    }
+
+    *out_tseq_start = (uint32_t)ctx->tseq_count;
+    for (member_index = 0U; member_index < member_count; ++member_index) {
+        if (!writer_append_tseq(
+                ctx, 0U, member_type_ids[member_index], 0U, path, token, out_error)) {
+            free(member_type_ids);
+            return false;
+        }
+    }
+    free(member_type_ids);
+    return true;
+}
+
 static uint32_t writer_serialize_spec_union_type(WriterContext *ctx,
                                                  const FengSymbolDeclView *decl,
                                                  uint32_t spec_symbol_id,
@@ -615,20 +654,14 @@ static uint32_t writer_serialize_spec_union_type(WriterContext *ctx,
         return 0U;
     }
 
-    tseq_start = (uint32_t)ctx->tseq_count;
-    for (size_t member_index = 0U; member_index < decl->union_member_count; ++member_index) {
-        uint32_t member_type_id = writer_serialize_type(ctx,
-                                                        decl->union_members[member_index],
-                                                        path,
-                                                        token,
-                                                        out_error);
-
-        if (decl->union_members[member_index] != NULL && member_type_id == 0U) {
-            return 0U;
-        }
-        if (!writer_append_tseq(ctx, 0U, member_type_id, 0U, path, token, out_error)) {
-            return 0U;
-        }
+    if (!writer_serialize_spec_member_sequence(ctx,
+                                               decl->union_members,
+                                               decl->union_member_count,
+                                               &tseq_start,
+                                               path,
+                                               token,
+                                               out_error)) {
+        return 0U;
     }
 
     memset(&record, 0, sizeof(record));
@@ -661,20 +694,14 @@ static uint32_t writer_serialize_spec_intersection_type(WriterContext *ctx,
         return 0U;
     }
 
-    tseq_start = (uint32_t)ctx->tseq_count;
-    for (size_t member_index = 0U; member_index < decl->intersection_member_count; ++member_index) {
-        uint32_t member_type_id = writer_serialize_type(ctx,
-                                                        decl->intersection_members[member_index],
-                                                        path,
-                                                        token,
-                                                        out_error);
-
-        if (decl->intersection_members[member_index] != NULL && member_type_id == 0U) {
-            return 0U;
-        }
-        if (!writer_append_tseq(ctx, 0U, member_type_id, 0U, path, token, out_error)) {
-            return 0U;
-        }
+    if (!writer_serialize_spec_member_sequence(ctx,
+                                               decl->intersection_members,
+                                               decl->intersection_member_count,
+                                               &tseq_start,
+                                               path,
+                                               token,
+                                               out_error)) {
+        return 0U;
     }
 
     memset(&record, 0, sizeof(record));

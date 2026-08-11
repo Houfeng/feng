@@ -796,6 +796,15 @@ static bool cg_init_user_type_value_symbols(UserType *t) {
            t->c_value_box_release_children_name != NULL;
 }
 
+/* Stable C ABI selected from a generic declaration slot before substituting
+ * its generic arguments. Closed instances retain this selection so open and
+ * closed code always use one function prototype. */
+typedef enum CGCallableABIKind {
+    CG_CALLABLE_ABI_DIRECT = 0,
+    CG_CALLABLE_ABI_ERASED_POINTER,
+    CG_CALLABLE_ABI_ADDRESS
+} CGCallableABIKind;
+
 /* Spec registry. Object-form specs lower to by-value fat structs; callable-
  * form specs lower to managed closure pointers plus a constraint-surface
  * witness with a single erased `invoke` slot. */
@@ -808,6 +817,11 @@ typedef struct UserSpecMember {
     } kind;
     /* For FIELD: the field's declared type. For METHOD: the method return type. */
     CGType  *type;
+    /* Stable ABI selected from the generic spec's original declaration slot.
+     * FIELD uses this for both getter return and setter value; METHOD uses it
+     * for the return slot. Closed and open instances of one generic spec must
+     * retain the same classification. */
+    CGCallableABIKind value_abi_kind;
     /* FIELD only: true when the spec declared `var` (mutable). `let` and the
      * default both record false; only `var` triggers a setter slot in the
      * witness struct (see cg_emit_user_spec_definition). */
@@ -818,6 +832,7 @@ typedef struct UserSpecMember {
     bool     is_static;
     /* METHOD only: declared parameter types (excluding the implicit subject). */
     CGType **param_types;
+    CGCallableABIKind *param_abi_kinds;
     char   **param_names;       /* informational, mirrors signature */
     size_t   param_count;
     const FengTypeMember *member;
@@ -842,15 +857,6 @@ typedef struct UserSpecMember {
      * a heap pointer, not a UserSpec* index. */
     FengTypeRef *source_member_type_ref;
 } UserSpecMember;
-
-/* Stable C ABI selected from a callable declaration slot before substituting
- * its generic arguments. Closed instances retain this selection so a shared
- * generic caller and a concrete callback always use one function prototype. */
-typedef enum CGCallableABIKind {
-    CG_CALLABLE_ABI_DIRECT = 0,
-    CG_CALLABLE_ABI_ERASED_POINTER,
-    CG_CALLABLE_ABI_ADDRESS
-} CGCallableABIKind;
 
 typedef struct UserSpec {
     char   *feng_name;                /* e.g., "Named" */
@@ -8130,7 +8136,14 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
     if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_UNION ||
         s->form == FENG_SPEC_FORM_INTERSECTION) {
         Buf vb; buf_init(&vb);
-        buf_append_fmt(&vb, "FengSpecValue__%s__%s", owner_mangle, symbol.data);
+        if (s->form == FENG_SPEC_FORM_OBJECT ||
+            s->form == FENG_SPEC_FORM_INTERSECTION) {
+            buf_append_fmt(&vb, "FengSpecValue__%s__%s__GenericABI",
+                           owner_mangle, base_san);
+        } else {
+            buf_append_fmt(&vb, "FengSpecValue__%s__%s",
+                           owner_mangle, symbol.data);
+        }
         s->c_value_struct_name = vb.data;
 
         Buf db; buf_init(&db);
@@ -8150,7 +8163,14 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         s->c_aggregate_init_fn_name = ib.data;
 
         Buf wb; buf_init(&wb);
-        buf_append_fmt(&wb, "FengSpecWitness__%s__%s", owner_mangle, symbol.data);
+        if (s->form == FENG_SPEC_FORM_OBJECT ||
+            s->form == FENG_SPEC_FORM_INTERSECTION) {
+            buf_append_fmt(&wb, "FengSpecWitness__%s__%s__GenericABI",
+                           owner_mangle, base_san);
+        } else {
+            buf_append_fmt(&wb, "FengSpecWitness__%s__%s",
+                           owner_mangle, symbol.data);
+        }
         s->c_witness_struct_name = wb.data;
 
         if (s->form == FENG_SPEC_FORM_OBJECT || s->form == FENG_SPEC_FORM_INTERSECTION) {
@@ -9507,6 +9527,7 @@ static bool cg_user_spec_clone_inherited_member(UserSpec *s,
     if (!cg_user_spec_append_member_slot(s, &dst)) return false;
     dst->kind = src->kind;
     dst->type = cgtype_clone(src->type);
+    dst->value_abi_kind = src->value_abi_kind;
     dst->is_var = src->is_var;
     dst->is_static = src->is_static;
     dst->param_count = src->param_count;
@@ -9517,10 +9538,14 @@ static bool cg_user_spec_clone_inherited_member(UserSpec *s,
     if (dst->feng_name == NULL || dst->c_field_name == NULL) return false;
     if (src->param_count > 0U) {
         dst->param_types = calloc(src->param_count, sizeof *dst->param_types);
+        dst->param_abi_kinds = calloc(src->param_count,
+                                      sizeof *dst->param_abi_kinds);
         dst->param_names = calloc(src->param_count, sizeof *dst->param_names);
-        if (dst->param_types == NULL || dst->param_names == NULL) return false;
+        if (dst->param_types == NULL || dst->param_abi_kinds == NULL ||
+            dst->param_names == NULL) return false;
         for (size_t i = 0; i < src->param_count; ++i) {
             dst->param_types[i] = cgtype_clone(src->param_types[i]);
+            dst->param_abi_kinds[i] = src->param_abi_kinds[i];
             dst->param_names[i] = strdup(src->param_names[i]);
             if ((src->param_types[i] != NULL && dst->param_types[i] == NULL) ||
                 dst->param_names[i] == NULL) {
@@ -9559,6 +9584,7 @@ static bool cg_user_spec_clone_intersection_member(UserSpec *s,
     }
     dst->kind = src->kind;
     dst->type = cgtype_clone(src->type);
+    dst->value_abi_kind = src->value_abi_kind;
     dst->is_var = src->is_var;
     dst->is_static = src->is_static;
     dst->param_count = src->param_count;
@@ -9571,10 +9597,14 @@ static bool cg_user_spec_clone_intersection_member(UserSpec *s,
     if (dst->feng_name == NULL || dst->c_field_name == NULL) return false;
     if (src->param_count > 0U) {
         dst->param_types = calloc(src->param_count, sizeof *dst->param_types);
+        dst->param_abi_kinds = calloc(src->param_count,
+                                      sizeof *dst->param_abi_kinds);
         dst->param_names = calloc(src->param_count, sizeof *dst->param_names);
-        if (dst->param_types == NULL || dst->param_names == NULL) return false;
+        if (dst->param_types == NULL || dst->param_abi_kinds == NULL ||
+            dst->param_names == NULL) return false;
         for (size_t i = 0; i < src->param_count; ++i) {
             dst->param_types[i] = cgtype_clone(src->param_types[i]);
+            dst->param_abi_kinds[i] = src->param_abi_kinds[i];
             dst->param_names[i] = strdup(src->param_names[i]);
             if ((src->param_types[i] != NULL && dst->param_types[i] == NULL) ||
                 dst->param_names[i] == NULL) {
@@ -9589,8 +9619,17 @@ static bool cg_user_spec_append_decl_member(CG *cg,
                                             UserSpec *s,
                                             const FengTypeMember *m) {
     UserSpecMember *sm = NULL;
+    CGTypeParamScope spec_scope;
 
     if (m == NULL) return true;
+    spec_scope = (CGTypeParamScope){
+        .first = s->generic_origin_decl != NULL
+                     ? s->generic_origin_decl->as.spec_decl.type_params
+                     : s->decl->as.spec_decl.type_params,
+        .first_count = s->generic_origin_decl != NULL
+                           ? s->generic_origin_decl->as.spec_decl.type_param_count
+                           : s->decl->as.spec_decl.type_param_count,
+    };
     if (!cg_user_spec_append_member_slot(s, &sm)) return false;
     sm->member = m;
     sm->is_static = m->is_static;
@@ -9601,6 +9640,8 @@ static bool cg_user_spec_append_decl_member(CG *cg,
         sm->c_field_name = cg_sanitize(m->as.field.name.data, m->as.field.name.length);
         if (!cg_resolve_type_for_user_spec_member(cg, s, m->as.field.type,
                                                   &m->token, &sm->type)) return false;
+        sm->value_abi_kind = cg_callable_decl_slot_abi_kind(
+            m->as.field.type, &spec_scope, sm->type);
     } else if (m->kind == FENG_TYPE_MEMBER_METHOD) {
         sm->kind = USM_KIND_METHOD;
         const FengCallableSignature *sig = &m->as.callable;
@@ -9609,19 +9650,30 @@ static bool cg_user_spec_append_decl_member(CG *cg,
         sm->param_count = sig->param_count;
         sm->param_types = sig->param_count
             ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
+        sm->param_abi_kinds = sig->param_count
+            ? calloc(sig->param_count, sizeof *sm->param_abi_kinds) : NULL;
         sm->param_names = sig->param_count
             ? calloc(sig->param_count, sizeof(char*)) : NULL;
+        if (sig->param_count > 0U &&
+            (sm->param_types == NULL || sm->param_abi_kinds == NULL ||
+             sm->param_names == NULL)) {
+            return false;
+        }
         for (size_t pi = 0; pi < sig->param_count; pi++) {
             if (!cg_resolve_type_for_user_spec_member(cg,
                                                       s,
                                                       sig->params[pi].type,
                                                       &sig->params[pi].token,
                                                       &sm->param_types[pi])) return false;
+            sm->param_abi_kinds[pi] = cg_callable_decl_slot_abi_kind(
+                sig->params[pi].type, &spec_scope, sm->param_types[pi]);
             sm->param_names[pi] = strndup(sig->params[pi].name.data,
                                           sig->params[pi].name.length);
         }
         if (!cg_resolve_type_for_user_spec_member(cg, s, sig->return_type,
                                                   &sig->token, &sm->type)) return false;
+        sm->value_abi_kind = cg_callable_decl_slot_abi_kind(
+            sig->return_type, &spec_scope, sm->type);
     } else {
         return cg_fail(cg, m->token,
             "CE0039", "codegen: spec member kind not supported (Step 4b-α only handles fields/methods)");
@@ -11653,6 +11705,38 @@ static bool cg_append_union_member_slot_descriptor(CG *cg,
 
 static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out);
 
+/* Generic object/intersection spec instances share one fixed two-word value
+ * and witness C representation per declaration origin. Instance descriptors
+ * and witness constants remain distinct; only the nominal C carrier is
+ * canonical so a binary-distributed shared body can accept every closure. */
+static bool cg_user_spec_uses_canonical_generic_object_abi(
+    const UserSpec *spec) {
+    return spec != NULL && spec->is_generic_instance &&
+           spec->generic_origin_decl != NULL &&
+           spec->generic_origin_decl->kind == FENG_DECL_SPEC &&
+           spec->generic_origin_decl->as.spec_decl.type_param_count > 0U &&
+           (spec->form == FENG_SPEC_FORM_OBJECT ||
+            spec->form == FENG_SPEC_FORM_INTERSECTION);
+}
+
+/* Return whether this instance owns emission of its origin's shared C tags. */
+static bool cg_user_spec_emits_canonical_generic_object_abi(
+    const CG *cg,
+    const UserSpec *spec) {
+    if (!cg_user_spec_uses_canonical_generic_object_abi(spec)) {
+        return true;
+    }
+    for (size_t index = 0U; index < cg->user_spec_count; ++index) {
+        const UserSpec *candidate = &cg->user_specs[index];
+
+        if (candidate->generic_origin_decl == spec->generic_origin_decl &&
+            cg_user_spec_uses_canonical_generic_object_abi(candidate)) {
+            return candidate == spec;
+        }
+    }
+    return false;
+}
+
 /* Emit every named C tag owned by one registered spec. This pass runs for all
  * specs before any witness body or callable ABI function-pointer typedef is
  * emitted, so a spec type first mentioned inside a function parameter list
@@ -11713,10 +11797,12 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
      * struct body is emitted here (not just forward-declared) so it precedes
      * any witness-instance tentative definitions that appear later in
      * headers during type-descriptor generation. */
-    cg_emit_witness_struct_body(cg, s, &cg->headers);
-    buf_append_fmt(&cg->headers,
-        "struct %s { void *subject; const struct %s *witness; };\n",
-        s->c_value_struct_name, s->c_witness_struct_name);
+    if (cg_user_spec_emits_canonical_generic_object_abi(cg, s)) {
+        cg_emit_witness_struct_body(cg, s, &cg->headers);
+        buf_append_fmt(&cg->headers,
+            "struct %s { void *subject; const struct %s *witness; };\n",
+            s->c_value_struct_name, s->c_witness_struct_name);
+    }
     bool ext_visible = cg_user_spec_descriptor_is_externally_visible(cg, s);
     buf_append_fmt(&cg->headers,
         ext_visible ? "extern const FengAggregateDescriptor %s;\n"
@@ -11749,34 +11835,24 @@ static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
         if (sm->kind == USM_KIND_METHOD) {
-            bool returns_generic = (sm->type != NULL &&
-                                   sm->type->kind == CG_TYPE_GENERIC_PARAM);
             buf_append_cstr(out, "    ");
-            if (returns_generic) {
-                /* Aggregate return: outer `void` + trailing `void *_out`. */
-                if (sm->is_static) {
-                    buf_append_fmt(out, "void (*%s)(", sm->c_field_name);
-                } else {
-                    buf_append_fmt(out, "void (*%s)(void *_subject", sm->c_field_name);
-                }
+            cg_emit_callable_abi_return_type(out,
+                                             sm->type,
+                                             sm->value_abi_kind);
+            if (sm->is_static) {
+                buf_append_fmt(out, " (*%s)(", sm->c_field_name);
             } else {
-                cg_emit_c_type(out, sm->type);
-                if (sm->is_static) {
-                    buf_append_fmt(out, " (*%s)(", sm->c_field_name);
-                } else {
-                    buf_append_fmt(out, " (*%s)(void *_subject", sm->c_field_name);
-                }
+                buf_append_fmt(out, " (*%s)(void *_subject", sm->c_field_name);
             }
             for (size_t pi = 0; pi < sm->param_count; pi++) {
                 if (!sm->is_static || pi > 0U) {
                     buf_append_cstr(out, ", ");
                 }
-                cg_emit_c_type(out, sm->param_types[pi]);
+                cg_emit_callable_abi_param_type(out,
+                                                sm->param_types[pi],
+                                                sm->param_abi_kinds[pi]);
             }
-            if (returns_generic) {
-                /* _out follows either the implicit subject (instance), the
-                 * first user param (static with params), or opens the param
-                 * list (static with no user params and aggregate return). */
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
                 if (!sm->is_static || sm->param_count > 0U) {
                     buf_append_cstr(out, ", ");
                 }
@@ -11786,11 +11862,23 @@ static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
             emitted++;
         } else if (sm->kind == USM_KIND_FIELD) {
             buf_append_cstr(out, "    ");
-            cg_emit_c_type(out, sm->type);
+            cg_emit_callable_abi_return_type(out,
+                                             sm->type,
+                                             sm->value_abi_kind);
             if (sm->is_static) {
-                buf_append_fmt(out, " (*get_%s)(void);\n", sm->c_field_name);
+                if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                    buf_append_fmt(out, " (*get_%s)(void *_out);\n",
+                                   sm->c_field_name);
+                } else {
+                    buf_append_fmt(out, " (*get_%s)(void);\n", sm->c_field_name);
+                }
             } else {
-                buf_append_fmt(out, " (*get_%s)(void *_subject);\n", sm->c_field_name);
+                buf_append_fmt(out, " (*get_%s)(void *_subject",
+                               sm->c_field_name);
+                if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                    buf_append_cstr(out, ", void *_out");
+                }
+                buf_append_cstr(out, ");\n");
             }
             emitted++;
             if (sm->is_var) {
@@ -11801,7 +11889,9 @@ static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
                 } else {
                     buf_append_cstr(out, ")(void *_subject, ");
                 }
-                cg_emit_c_type(out, sm->type);
+                cg_emit_callable_abi_param_type(out,
+                                                sm->type,
+                                                sm->value_abi_kind);
                 buf_append_cstr(out, " value);\n");
                 emitted++;
             }
@@ -11828,6 +11918,212 @@ static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
         buf_append_cstr(out, "    char _padding;\n");
     }
     buf_append_cstr(out, "};\n\n");
+}
+
+/* Emit a closed default value through one stable spec-member return ABI.
+ * Open generic spec definitions never emit default witnesses; every type
+ * reaching this helper therefore has an exact closed representation. */
+static bool cg_emit_spec_default_abi_result(CG *cg,
+                                            Buf *out,
+                                            const CGType *type,
+                                            CGCallableABIKind abi_kind,
+                                            FengToken blame) {
+    char *default_expr = NULL;
+
+    if (type == NULL || type->kind == CG_TYPE_VOID) {
+        buf_append_cstr(out, "}\n");
+        return true;
+    }
+    if (cgtype_is_aggregate(type)) {
+        char *result_ctype = cg_ctype_dup(type);
+        Buf init_call;
+
+        buf_init(&init_call);
+        if (result_ctype == NULL ||
+            !cg_append_aggregate_default_init_call(&init_call,
+                                                   type,
+                                                   "_default_ret")) {
+            free(result_ctype);
+            buf_free(&init_call);
+            return false;
+        }
+        buf_append_fmt(out, "    %s _default_ret;\n", result_ctype);
+        buf_append_fmt(out, "    %s;\n", init_call.data);
+        if (abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+            buf_append_cstr(out,
+                "    memcpy(_out, &_default_ret, sizeof _default_ret);\n}\n");
+        } else {
+            buf_append_cstr(out, "    return _default_ret;\n}\n");
+        }
+        free(result_ctype);
+        buf_free(&init_call);
+        return true;
+    }
+    if (!cg_default_value_expr(cg, type, &blame, &default_expr)) {
+        free(default_expr);
+        return false;
+    }
+    if (abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        buf_append_cstr(out, "    ");
+        cg_emit_c_type(out, type);
+        buf_append_fmt(out,
+                       " _default_ret = %s;\n"
+                       "    memcpy(_out, &_default_ret, sizeof _default_ret);\n}\n",
+                       default_expr);
+    } else if (abi_kind == CG_CALLABLE_ABI_ERASED_POINTER) {
+        buf_append_fmt(out, "    return (void *)(%s);\n}\n", default_expr);
+    } else {
+        buf_append_fmt(out, "    return %s;\n}\n", default_expr);
+    }
+    free(default_expr);
+    return true;
+}
+
+/* Emit one default-witness field getter/setter pair through the field's
+ * stable generic-spec ABI. */
+static bool cg_emit_default_spec_field_thunks(CG *cg,
+                                               Buf *out,
+                                               const UserSpec *spec,
+                                               const UserSpecMember *member) {
+    buf_append_cstr(out, "static ");
+    cg_emit_callable_abi_return_type(out,
+                                     member->type,
+                                     member->value_abi_kind);
+    buf_append_fmt(out, " %s__get_%s(",
+                   spec->c_default_witness_name,
+                   member->c_field_name);
+    if (!member->is_static) {
+        buf_append_cstr(out, "void *_subject");
+    }
+    if (member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        if (!member->is_static) buf_append_cstr(out, ", ");
+        buf_append_cstr(out, "void *_out");
+    } else if (member->is_static) {
+        buf_append_cstr(out, "void");
+    }
+    buf_append_cstr(out, ") {\n");
+    if (member->is_static) {
+        if (!cg_emit_spec_default_abi_result(cg,
+                                             out,
+                                             member->type,
+                                             member->value_abi_kind,
+                                             spec->decl->token)) {
+            return false;
+        }
+    } else if (member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        buf_append_fmt(out,
+            "    memcpy(_out, &((struct %s *)_subject)->%s, "
+            "sizeof ((struct %s *)_subject)->%s);\n}\n",
+            spec->c_default_subject_struct_name,
+            member->c_field_name,
+            spec->c_default_subject_struct_name,
+            member->c_field_name);
+    } else {
+        if (member->value_abi_kind == CG_CALLABLE_ABI_ERASED_POINTER) {
+            buf_append_cstr(out, "    return (void *)");
+        } else {
+            buf_append_cstr(out, "    return ");
+        }
+        buf_append_fmt(out,
+            "((struct %s *)_subject)->%s;\n}\n",
+            spec->c_default_subject_struct_name,
+            member->c_field_name);
+    }
+    if (!member->is_var) return true;
+
+    buf_append_fmt(out, "static void %s__set_%s(",
+                   spec->c_default_witness_name,
+                   member->c_field_name);
+    if (!member->is_static) {
+        buf_append_cstr(out, "void *_subject, ");
+    }
+    cg_emit_callable_abi_param_type(out,
+                                    member->type,
+                                    member->value_abi_kind);
+    buf_append_cstr(out, " value) {\n");
+    if (member->is_static) {
+        buf_append_cstr(out, "    (void)value;\n}\n");
+        return true;
+    }
+    if (cgtype_is_managed(member->type)) {
+        buf_append_fmt(out,
+            "    feng_assign((void **)&((struct %s *)_subject)->%s, ",
+            spec->c_default_subject_struct_name,
+            member->c_field_name);
+        cg_append_callable_abi_argument_value(out,
+                                              member->type,
+                                              member->value_abi_kind,
+                                              "value");
+        buf_append_cstr(out, ");\n}\n");
+    } else if (cgtype_is_aggregate(member->type)) {
+        const char *descriptor = cg_aggregate_desc_name(member->type);
+
+        if (descriptor == NULL) return false;
+        buf_append_fmt(out,
+            "    feng_aggregate_assign(&((struct %s *)_subject)->%s, ",
+            spec->c_default_subject_struct_name,
+            member->c_field_name);
+        if (member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+            buf_append_cstr(out, "value");
+        } else {
+            buf_append_cstr(out, "&value");
+        }
+        buf_append_fmt(out, ", &%s);\n}\n", descriptor);
+    } else {
+        buf_append_fmt(out,
+            "    ((struct %s *)_subject)->%s = ",
+            spec->c_default_subject_struct_name,
+            member->c_field_name);
+        cg_append_callable_abi_argument_value(out,
+                                              member->type,
+                                              member->value_abi_kind,
+                                              "value");
+        buf_append_cstr(out, ";\n}\n");
+    }
+    return true;
+}
+
+/* Emit one default-witness method that ignores its inputs and returns the
+ * source type's default value through the stable generic-spec ABI. */
+static bool cg_emit_default_spec_method_thunk(CG *cg,
+                                               Buf *out,
+                                               const UserSpec *spec,
+                                               const UserSpecMember *member) {
+    buf_append_cstr(out, "static ");
+    cg_emit_callable_abi_return_type(out,
+                                     member->type,
+                                     member->value_abi_kind);
+    buf_append_fmt(out, " %s__%s(",
+                   spec->c_default_witness_name,
+                   member->c_field_name);
+    if (!member->is_static) {
+        buf_append_cstr(out, "void *_subject");
+    }
+    for (size_t index = 0U; index < member->param_count; ++index) {
+        if (!member->is_static || index > 0U) buf_append_cstr(out, ", ");
+        cg_emit_callable_abi_param_type(out,
+                                        member->param_types[index],
+                                        member->param_abi_kinds[index]);
+        buf_append_fmt(out, " _p%zu", index);
+    }
+    if (member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        if (!member->is_static || member->param_count > 0U) {
+            buf_append_cstr(out, ", ");
+        }
+        buf_append_cstr(out, "void *_out");
+    } else if (member->is_static && member->param_count == 0U) {
+        buf_append_cstr(out, "void");
+    }
+    buf_append_cstr(out, ") {\n");
+    if (!member->is_static) buf_append_cstr(out, "    (void)_subject;\n");
+    for (size_t index = 0U; index < member->param_count; ++index) {
+        buf_append_fmt(out, "    (void)_p%zu;\n", index);
+    }
+    return cg_emit_spec_default_abi_result(cg,
+                                           out,
+                                           member->type,
+                                           member->value_abi_kind,
+                                           spec->decl->token);
 }
 
 /* Emit W(DefaultSubject(root), target). Parent views reuse root's default
@@ -12442,192 +12738,9 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
         if (sm->kind == USM_KIND_FIELD) {
-            if (sm->is_static) {
-                /* Static field default getter — no _subject, returns the
-                 * type's default-zero value. */
-                buf_append_cstr(td, "static ");
-                cg_emit_c_type(td, sm->type);
-                buf_append_fmt(td, " %s__get_%s(void) {\n",
-                               s->c_default_witness_name, sm->c_field_name);
-                if (cgtype_is_aggregate(sm->type)) {
-                    char *ret_cty = cg_ctype_dup(sm->type);
-                    Buf init_call;
-                    buf_init(&init_call);
-                    if (ret_cty == NULL ||
-                        !cg_append_aggregate_default_init_call(&init_call,
-                                                              sm->type,
-                                                              "_default_ret")) {
-                        free(ret_cty);
-                        buf_free(&init_call);
-                        return;
-                    }
-                    buf_append_fmt(td, "    %s _default_ret;\n", ret_cty);
-                    buf_append_fmt(td, "    %s;\n", init_call.data);
-                    buf_append_cstr(td, "    return _default_ret;\n}\n");
-                    free(ret_cty);
-                    buf_free(&init_call);
-                } else {
-                    char *expr = NULL;
-                    if (!cg_default_value_expr(cg, sm->type, &s->decl->token, &expr)) {
-                        free(expr);
-                        return;
-                    }
-                    buf_append_fmt(td, "    return %s;\n}\n", expr);
-                    free(expr);
-                }
-                if (sm->is_var) {
-                    /* Static field default setter (var) — no _subject; the
-                     * default witness has no backing type storage so writes
-                     * are silently discarded. */
-                    buf_append_fmt(td, "static void %s__set_%s(",
-                                   s->c_default_witness_name, sm->c_field_name);
-                    cg_emit_c_type(td, sm->type);
-                    buf_append_cstr(td, " value) {\n    (void)value;\n}\n");
-                }
-                continue;
-            }
-            buf_append_cstr(td, "static ");
-            cg_emit_c_type(td, sm->type);
-            buf_append_fmt(td, " %s__get_%s(void *_subject) {\n",
-                           s->c_default_witness_name, sm->c_field_name);
-            buf_append_fmt(td,
-                "    return ((struct %s *)_subject)->%s;\n",
-                s->c_default_subject_struct_name, sm->c_field_name);
-            buf_append_cstr(td, "}\n");
-            if (sm->is_var) {
-                buf_append_fmt(td,
-                    "static void %s__set_%s(void *_subject, ",
-                    s->c_default_witness_name, sm->c_field_name);
-                cg_emit_c_type(td, sm->type);
-                buf_append_cstr(td, " value) {\n");
-                if (cgtype_is_managed(sm->type)) {
-                    buf_append_fmt(td,
-                        "    feng_assign((void **)&((struct %s *)_subject)->%s, value);\n",
-                        s->c_default_subject_struct_name, sm->c_field_name);
-                } else if (cgtype_is_aggregate(sm->type)) {
-                    const char *agg_desc = cg_aggregate_desc_name(sm->type);
-                    if (agg_desc == NULL) {
-                        return;
-                    }
-                    buf_append_fmt(td,
-                        "    feng_aggregate_assign(&((struct %s *)_subject)->%s, &value, &%s);\n",
-                        s->c_default_subject_struct_name, sm->c_field_name, agg_desc);
-                } else {
-                    buf_append_fmt(td,
-                        "    ((struct %s *)_subject)->%s = value;\n",
-                        s->c_default_subject_struct_name, sm->c_field_name);
-                }
-                buf_append_cstr(td, "}\n");
-            }
+            if (!cg_emit_default_spec_field_thunks(cg, td, s, sm)) return;
         } else if (sm->kind == USM_KIND_METHOD) {
-            if (sm->is_static) {
-                /* Static method default thunk — no _subject, returns the
-                 * default-zero value of the return type. */
-                if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
-                    buf_append_fmt(td, "static void %s__%s(",
-                                   s->c_default_witness_name, sm->c_field_name);
-                    for (size_t pi = 0; pi < sm->param_count; pi++) {
-                        if (pi > 0) buf_append_cstr(td, ", ");
-                        cg_emit_c_type(td, sm->param_types[pi]);
-                        buf_append_fmt(td, " _p%zu", pi);
-                    }
-                    if (sm->param_count > 0) buf_append_cstr(td, ", ");
-                    buf_append_cstr(td, "void *_out) {\n");
-                    for (size_t pi = 0; pi < sm->param_count; pi++) {
-                        buf_append_fmt(td, "    (void)_p%zu;\n", pi);
-                    }
-                    buf_append_cstr(td, "    (void)_out;\n}\n");
-                    continue;
-                }
-                buf_append_cstr(td, "static ");
-                cg_emit_c_type(td, sm->type);
-                buf_append_fmt(td, " %s__%s(",
-                               s->c_default_witness_name, sm->c_field_name);
-                for (size_t pi = 0; pi < sm->param_count; pi++) {
-                    if (pi > 0) buf_append_cstr(td, ", ");
-                    cg_emit_c_type(td, sm->param_types[pi]);
-                    buf_append_fmt(td, " _p%zu", pi);
-                }
-                if (sm->param_count == 0) buf_append_cstr(td, "void");
-                buf_append_cstr(td, ") {\n");
-                for (size_t pi = 0; pi < sm->param_count; pi++) {
-                    buf_append_fmt(td, "    (void)_p%zu;\n", pi);
-                }
-                if (sm->type->kind == CG_TYPE_VOID) {
-                    buf_append_cstr(td, "}\n");
-                } else if (cgtype_is_aggregate(sm->type)) {
-                    char *ret_cty = cg_ctype_dup(sm->type);
-                    Buf init_call;
-                    buf_init(&init_call);
-                    if (ret_cty == NULL ||
-                        !cg_append_aggregate_default_init_call(&init_call,
-                                                              sm->type,
-                                                              "_default_ret")) {
-                        free(ret_cty);
-                        buf_free(&init_call);
-                        return;
-                    }
-                    buf_append_fmt(td, "    %s _default_ret;\n", ret_cty);
-                    buf_append_fmt(td, "    %s;\n", init_call.data);
-                    buf_append_cstr(td, "    return _default_ret;\n}\n");
-                    free(ret_cty);
-                    buf_free(&init_call);
-                } else {
-                    char *expr = NULL;
-                    if (!cg_default_value_expr(cg, sm->type, &s->decl->token, &expr)) {
-                        free(expr);
-                        return;
-                    }
-                    buf_append_fmt(td, "    return %s;\n}\n", expr);
-                    free(expr);
-                }
-                continue;
-            }
-            buf_append_cstr(td, "static ");
-            cg_emit_c_type(td, sm->type);
-            buf_append_fmt(td, " %s__%s(void *_subject",
-                           s->c_default_witness_name, sm->c_field_name);
-            for (size_t pi = 0; pi < sm->param_count; pi++) {
-                buf_append_cstr(td, ", ");
-                cg_emit_c_type(td, sm->param_types[pi]);
-                buf_append_fmt(td, " _p%zu", pi);
-            }
-            buf_append_cstr(td, ") {\n    (void)_subject;\n");
-            for (size_t pi = 0; pi < sm->param_count; pi++) {
-                buf_append_fmt(td, "    (void)_p%zu;\n", pi);
-            }
-            if (sm->type->kind == CG_TYPE_VOID) {
-                buf_append_cstr(td, "}\n");
-            } else if (cgtype_is_aggregate(sm->type)) {
-                /* Aggregate return type (object-form / union-form spec):
-                 * declare a local, default-init it, and return by value.
-                 * Per docs/specifications/feng-spec.md §7 line 215 the default witness
-                 * method thunk must return the spec's default zero. */
-                char *ret_cty = cg_ctype_dup(sm->type);
-                Buf init_call;
-                buf_init(&init_call);
-                if (ret_cty == NULL ||
-                    !cg_append_aggregate_default_init_call(&init_call,
-                                                          sm->type,
-                                                          "_default_ret")) {
-                    free(ret_cty);
-                    buf_free(&init_call);
-                    return;
-                }
-                buf_append_fmt(td, "    %s _default_ret;\n", ret_cty);
-                buf_append_fmt(td, "    %s;\n", init_call.data);
-                buf_append_cstr(td, "    return _default_ret;\n}\n");
-                free(ret_cty);
-                buf_free(&init_call);
-            } else {
-                char *expr = NULL;
-                if (!cg_default_value_expr(cg, sm->type, &s->decl->token, &expr)) {
-                    free(expr);
-                    return;
-                }
-                buf_append_fmt(td, "    return %s;\n}\n", expr);
-                free(expr);
-            }
+            if (!cg_emit_default_spec_method_thunk(cg, td, s, sm)) return;
         }
     }
     buf_append_cstr(td, "\n");
@@ -19897,7 +20010,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 er_free(&recv);
                 return false;
             }
-            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
                 const char *ret_desc = cg_generic_param_desc_name(cg, sm->type->generic_param_index);
                 char *ret_storage = cg_fresh_temp(cg, "_spec_ret_storage");
                 char *ret_slot = cg_fresh_temp(cg, "_spec_ret");
@@ -20015,6 +20128,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             bool ok = true;
             for (size_t i = 0; i < e->as.call.arg_count; i++) {
                 ExprResult ar;
+                char *argument_address = NULL;
                 if (!cg_emit_expr_for_expected_type(cg,
                                                     e->as.call.args[i],
                                                     sm->param_types[i],
@@ -20025,10 +20139,114 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     cg_materialize_to_local(cg, &ar, "_t");
                 }
                 buf_append_cstr(&args_buf, ", ");
-                buf_append_cstr(&args_buf, ar.c_expr);
+                if (sm->param_abi_kinds[i] == CG_CALLABLE_ABI_ADDRESS) {
+                    if (!ar.is_addressable &&
+                        cg_materialize_to_local(cg, &ar, "_spec_arg") == NULL) {
+                        er_free(&ar);
+                        ok = false;
+                        break;
+                    }
+                    argument_address = cg_aggregate_result_address_dup(&ar);
+                    if (argument_address == NULL) {
+                        er_free(&ar);
+                        ok = false;
+                        break;
+                    }
+                    buf_append_cstr(&args_buf, argument_address);
+                    free(argument_address);
+                } else {
+                    buf_append_cstr(&args_buf, ar.c_expr);
+                }
                 er_free(&ar);
             }
             if (!ok) { buf_free(&args_buf); er_free(&recv); return false; }
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                char *result_name = cg_fresh_temp(cg, "_spec_result");
+                const char *result_argument_prefix = "&";
+
+                if (result_name == NULL) {
+                    buf_free(&args_buf);
+                    er_free(&recv);
+                    return cg_fail(cg, e->token,
+                                   "IE0001", "codegen: out of memory");
+                }
+                if (sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                    const char *descriptor = cg_generic_param_desc_name(
+                        cg, sm->type->generic_param_index);
+
+                    if (descriptor == NULL) {
+                        free(result_name);
+                        buf_free(&args_buf);
+                        er_free(&recv);
+                        return cg_fail(cg, e->token,
+                            "CE0158", "codegen: missing descriptor for generic spec method return");
+                    }
+                    buf_append_fmt(cg->cur_body,
+                        "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
+                        "    memset(%s, 0, feng_generic_value_size(%s));\n",
+                        result_name, descriptor, result_name, descriptor);
+                    out->c_expr = strdup(result_name);
+                    out->is_addressable = true;
+                    out->is_storage_address = true;
+                    result_argument_prefix = "";
+                } else if (cg_type_uses_reified_storage(cg, sm->type)) {
+                    if (!cg_emit_reified_storage_declaration(
+                            cg,
+                            sm->type,
+                            result_name,
+                            e->token,
+                            &out->reified_descriptor_c_name,
+                            &out->reified_size_c_name)) {
+                        free(result_name);
+                        buf_free(&args_buf);
+                        er_free(&recv);
+                        return false;
+                    }
+                    out->c_expr = strdup(result_name);
+                    out->is_addressable = true;
+                    out->is_storage_address = true;
+                    out->uses_reified_storage = true;
+                    result_argument_prefix = "";
+                } else {
+                    char *result_ctype = cg_ctype_dup(sm->type);
+
+                    if (result_ctype == NULL) {
+                        free(result_name);
+                        buf_free(&args_buf);
+                        er_free(&recv);
+                        return cg_fail(cg, e->token,
+                                       "IE0001", "codegen: out of memory");
+                    }
+                    buf_append_fmt(cg->cur_body,
+                                   "    %s %s;\n",
+                                   result_ctype,
+                                   result_name);
+                    free(result_ctype);
+                    out->c_expr = strdup(result_name);
+                    out->is_addressable = true;
+                }
+                if (out->c_expr == NULL) {
+                    free(result_name);
+                    buf_free(&args_buf);
+                    er_free(&recv);
+                    return cg_fail(cg, e->token,
+                                   "IE0001", "codegen: out of memory");
+                }
+                buf_append_fmt(cg->cur_body,
+                    "    %s.witness->%s(%s.subject%s, %s%s);\n",
+                    recv.c_expr,
+                    sm->c_field_name,
+                    recv.c_expr,
+                    args_buf.data ? args_buf.data : "",
+                    result_argument_prefix,
+                    result_name);
+                free(result_name);
+                buf_free(&args_buf);
+                out->type = cgtype_clone(sm->type);
+                out->owns_ref = true;
+                er_free(&recv);
+                return out->c_expr != NULL && out->type != NULL;
+            }
             Buf b; buf_init(&b);
             buf_append_fmt(&b, "%s.witness->%s(%s.subject%s)",
                            recv.c_expr, sm->c_field_name, recv.c_expr,
@@ -34905,8 +35123,24 @@ static bool cg_append_witness_forward_arg(CG *cg,
                                           Buf *out,
                                           const CGType *spec_type,
                                           const CGType *impl_type,
+                                          CGCallableABIKind spec_abi_kind,
                                           const char *param_name,
                                           FengToken blame) {
+    if (spec_abi_kind == CG_CALLABLE_ABI_ADDRESS && impl_type != NULL) {
+        char *cty = cg_ctype_dup(impl_type);
+        if (cty == NULL) {
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        buf_append_fmt(out, "*((%s const *)%s)", cty, param_name);
+        free(cty);
+        return true;
+    }
+    if (spec_abi_kind == CG_CALLABLE_ABI_ERASED_POINTER && impl_type != NULL) {
+        buf_append_cstr(out, "((");
+        cg_emit_c_type(out, impl_type);
+        buf_append_fmt(out, ")%s)", param_name);
+        return true;
+    }
     if (spec_type != NULL && spec_type->kind == CG_TYPE_GENERIC_PARAM &&
         impl_type != NULL && impl_type->kind != CG_TYPE_GENERIC_PARAM) {
         char *cty = cg_ctype_dup(impl_type);
@@ -35699,8 +35933,8 @@ static bool cg_ensure_witness_instance(
             const FengSpecWitness *witness = NULL;
             const size_t witness_id = cg->subject_witness_counter++;
             const char *spec_unique_name =
-                (s->generic_context_type_param_count > 0U && s->c_witness_struct_name)
-                    ? s->c_witness_struct_name
+                (s->generic_context_type_param_count > 0U && s->c_aggregate_desc_name)
+                    ? s->c_aggregate_desc_name
                     : s->feng_name;
             char *s_san = NULL;
             Buf prefix;
@@ -35863,7 +36097,7 @@ static bool cg_ensure_witness_instance(
                         "CE0325", "codegen: fit method '%s' was not registered", sm->feng_name);
                 }
 
-                if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
                     Buf *fp = &cg->fn_protos;
                     Buf *fd = &cg->witness_defs;
 
@@ -35871,7 +36105,9 @@ static bool cg_ensure_witness_instance(
                                    prefix.data, sm->c_field_name);
                     for (size_t pi = 0; pi < sm->param_count; ++pi) {
                         buf_append_cstr(fp, ", ");
-                        cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                         buf_append_fmt(fp, " p%zu", pi);
                     }
                     buf_append_cstr(fp, ", void *_out);\n");
@@ -35880,7 +36116,9 @@ static bool cg_ensure_witness_instance(
                                    prefix.data, sm->c_field_name);
                     for (size_t pi = 0; pi < sm->param_count; ++pi) {
                         buf_append_cstr(fd, ", ");
-                        cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                         buf_append_fmt(fd, " p%zu", pi);
                     }
                     buf_append_cstr(fd, ", void *_out) {\n    ");
@@ -35909,6 +36147,7 @@ static bool cg_ensure_witness_instance(
                                                            fd,
                                                            sm->param_types[pi],
                                                            fm->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
                                                            pname,
                                                            blame)) {
                             buf_free(&prefix);
@@ -35929,7 +36168,9 @@ static bool cg_ensure_witness_instance(
                     buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
                     for (size_t pi = 0; pi < sm->param_count; ++pi) {
                         buf_append_cstr(fp, ", ");
-                        cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                         buf_append_fmt(fp, " p%zu", pi);
                     }
                     buf_append_cstr(fp, ");\n");
@@ -35939,7 +36180,9 @@ static bool cg_ensure_witness_instance(
                     buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
                     for (size_t pi = 0; pi < sm->param_count; ++pi) {
                         buf_append_cstr(fd, ", ");
-                        cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                         buf_append_fmt(fd, " p%zu", pi);
                     }
                     buf_append_cstr(fd, ") {\n");
@@ -35973,6 +36216,7 @@ static bool cg_ensure_witness_instance(
                                                            fd,
                                                            sm->param_types[pi],
                                                            fm->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
                                                            pname,
                                                            blame)) {
                             buf_free(&prefix);
@@ -36102,8 +36346,8 @@ static bool cg_ensure_witness_instance(
 
     const size_t witness_id = cg->subject_witness_counter++;
     const char *spec_unique_name =
-        (s->generic_context_type_param_count > 0U && s->c_witness_struct_name)
-            ? s->c_witness_struct_name
+        (s->generic_context_type_param_count > 0U && s->c_aggregate_desc_name)
+            ? s->c_aggregate_desc_name
             : s->feng_name;
     char *s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
     if (s_san == NULL) {
@@ -36200,13 +36444,15 @@ static bool cg_ensure_witness_instance(
          * method symbol used by direct-call (fm->c_name). Do not synthesize
          * a separate box-only method implementation symbol. */
 
-        if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
             Buf *fp = &cg->fn_protos;
             buf_append_fmt(fp, "static void %s__%s(void *_subject",
                            prefix.data, sm->c_field_name);
             for (size_t pi = 0; pi < sm->param_count; ++pi) {
                 buf_append_cstr(fp, ", ");
-                cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                 buf_append_fmt(fp, " p%zu", pi);
             }
             buf_append_cstr(fp, ", void *_out);\n");
@@ -36216,7 +36462,9 @@ static bool cg_ensure_witness_instance(
                            prefix.data, sm->c_field_name);
             for (size_t pi = 0; pi < sm->param_count; ++pi) {
                 buf_append_cstr(fd, ", ");
-                cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                 buf_append_fmt(fd, " p%zu", pi);
             }
             buf_append_cstr(fd, ", void *_out) {\n    ");
@@ -36258,9 +36506,10 @@ static bool cg_ensure_witness_instance(
                 buf_append_cstr(fd, ", ");
                 if (!cg_append_witness_forward_arg(cg,
                                                    fd,
-                                                   sm->param_types[pi],
-                                                   fm->param_types[pi],
-                                                   pname,
+                                                           sm->param_types[pi],
+                                                           fm->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
+                                                           pname,
                                                    blame)) {
                     buf_free(&prefix);
                     free(s_san);
@@ -36277,7 +36526,9 @@ static bool cg_ensure_witness_instance(
         buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
         for (size_t pi = 0; pi < sm->param_count; ++pi) {
             buf_append_cstr(fp, ", ");
-            cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
             buf_append_fmt(fp, " p%zu", pi);
         }
         buf_append_cstr(fp, ");\n");
@@ -36288,7 +36539,9 @@ static bool cg_ensure_witness_instance(
         buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
         for (size_t pi = 0; pi < sm->param_count; ++pi) {
             buf_append_cstr(fd, ", ");
-            cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
             buf_append_fmt(fd, " p%zu", pi);
         }
         buf_append_cstr(fd, ") {\n");
@@ -36361,9 +36614,10 @@ static bool cg_ensure_witness_instance(
             buf_append_cstr(fd, ", ");
             if (!cg_append_witness_forward_arg(cg,
                                                fd,
-                                               sm->param_types[pi],
-                                               fm->param_types[pi],
-                                               pname,
+                                                           sm->param_types[pi],
+                                                           fm->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
+                                                           pname,
                                                blame)) {
                 buf_free(&prefix);
                 free(s_san);
@@ -36498,8 +36752,8 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
         ? NULL
         : feng_semantic_lookup_spec_witness(cg->analysis, &subject_key, s->decl);
     char *t_san = cg_sanitize(t->feng_name, strlen(t->feng_name));
-    const char *spec_unique_name = s->generic_context_type_param_count > 0U && s->c_witness_struct_name
-        ? s->c_witness_struct_name
+    const char *spec_unique_name = s->generic_context_type_param_count > 0U && s->c_aggregate_desc_name
+        ? s->c_aggregate_desc_name
         : s->feng_name;
     char *s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
     if (t_san == NULL || s_san == NULL) {
@@ -36613,7 +36867,7 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                     sm->feng_name);
             }
 
-            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
                 Buf *fp = &cg->fn_protos;
                 Buf *fd = &cg->witness_defs;
 
@@ -36621,7 +36875,9 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                                prefix.data, sm->c_field_name);
                 for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                     buf_append_cstr(fp, ", ");
-                    cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                     buf_append_fmt(fp, " p%zu", pi);
                 }
                 buf_append_cstr(fp, ", void *_out);\n");
@@ -36630,7 +36886,9 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                                prefix.data, sm->c_field_name);
                 for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                     buf_append_cstr(fd, ", ");
-                    cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                     buf_append_fmt(fd, " p%zu", pi);
                 }
                 buf_append_cstr(fd, ", void *_out) {\n    ");
@@ -36647,9 +36905,10 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                     buf_append_cstr(fd, ", ");
                     if (!cg_append_witness_forward_arg(cg,
                                                        fd,
-                                                       sm->param_types[pi],
-                                                       fm->param_types[pi],
-                                                       pname,
+                                                           sm->param_types[pi],
+                                                           fm->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
+                                                           pname,
                                                        blame)) {
                         buf_free(&prefix); free(t_san); free(s_san);
                         return false;
@@ -36665,7 +36924,9 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
             buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
             for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                 buf_append_cstr(fp, ", ");
-                cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                 buf_append_fmt(fp, " p%zu", pi);
             }
             buf_append_cstr(fp, ");\n");
@@ -36676,7 +36937,9 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
             buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
             for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                 buf_append_cstr(fd, ", ");
-                cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                 buf_append_fmt(fd, " p%zu", pi);
             }
             buf_append_cstr(fd, ") {\n");
@@ -36700,9 +36963,10 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                 buf_append_cstr(fd, ", ");
                 if (!cg_append_witness_forward_arg(cg,
                                                    fd,
-                                                   sm->param_types[pi],
-                                                   fm->param_types[pi],
-                                                   pname,
+                                                           sm->param_types[pi],
+                                                           fm->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
+                                                           pname,
                                                    blame)) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return false;
@@ -36725,7 +36989,7 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                     sm->feng_name, t->feng_name);
             }
 
-            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
                 Buf *fp = &cg->fn_protos;
                 Buf *fd = &cg->witness_defs;
 
@@ -36733,7 +36997,9 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                                prefix.data, sm->c_field_name);
                 for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                     buf_append_cstr(fp, ", ");
-                    cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                     buf_append_fmt(fp, " p%zu", pi);
                 }
                 buf_append_cstr(fp, ", void *_out);\n");
@@ -36742,7 +37008,9 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                                prefix.data, sm->c_field_name);
                 for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                     buf_append_cstr(fd, ", ");
-                    cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                     buf_append_fmt(fd, " p%zu", pi);
                 }
                 buf_append_cstr(fd, ", void *_out) {\n    ");
@@ -36758,9 +37026,10 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                     buf_append_cstr(fd, ", ");
                     if (!cg_append_witness_forward_arg(cg,
                                                        fd,
-                                                       sm->param_types[pi],
-                                                       um->param_types[pi],
-                                                       pname,
+                                                           sm->param_types[pi],
+                                                           um->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
+                                                           pname,
                                                        blame)) {
                         buf_free(&prefix); free(t_san); free(s_san);
                         return false;
@@ -36776,7 +37045,9 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
             buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
             for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                 buf_append_cstr(fp, ", ");
-                cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                 buf_append_fmt(fp, " p%zu", pi);
             }
             buf_append_cstr(fp, ");\n");
@@ -36787,7 +37058,9 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
             buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
             for (size_t pi = 0U; pi < sm->param_count; ++pi) {
                 buf_append_cstr(fd, ", ");
-                cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                 buf_append_fmt(fd, " p%zu", pi);
             }
             buf_append_cstr(fd, ") {\n");
@@ -36809,9 +37082,10 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                 buf_append_cstr(fd, ", ");
                 if (!cg_append_witness_forward_arg(cg,
                                                    fd,
-                                                   sm->param_types[pi],
-                                                   um->param_types[pi],
-                                                   pname,
+                                                           sm->param_types[pi],
+                                                           um->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
+                                                           pname,
                                                    blame)) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return false;
@@ -36974,8 +37248,8 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
          * context uses c_witness_struct_name (encodes type args); otherwise
          * use the bare feng name so the mangling matches object-form's
          * FengSpecWitness__<mod>__<T>__as__<mod>__<S> convention. */
-        const char *spec_unique_name = s->generic_context_type_param_count > 0U && s->c_witness_struct_name
-            ? s->c_witness_struct_name
+        const char *spec_unique_name = s->generic_context_type_param_count > 0U && s->c_aggregate_desc_name
+            ? s->c_aggregate_desc_name
             : s->feng_name;
         char *s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
         if (!t_san || !s_san) { free(t_san); free(s_san); return false; }
@@ -37171,8 +37445,8 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
     /* Emit one thunk per spec method member (in spec member order). Field
      * accessor thunks are deferred to 4b-β. */
     char *t_san = cg_sanitize(t->feng_name, strlen(t->feng_name));
-    const char *spec_unique_name = s->generic_context_type_param_count > 0U && s->c_witness_struct_name
-        ? s->c_witness_struct_name
+    const char *spec_unique_name = s->generic_context_type_param_count > 0U && s->c_aggregate_desc_name
+        ? s->c_aggregate_desc_name
         : s->feng_name;
     char *s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
     if (!t_san || !s_san) { free(t_san); free(s_san); return false; }
@@ -37290,12 +37564,14 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 /* Aggregate return path: spec static method returning a generic
                  * type parameter (e.g., static func make(): T) writes the
                  * return through a trailing void *_out. */
-                if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
                     Buf *fp = &cg->fn_protos;
                     buf_append_fmt(fp, "static void %s__%s(", prefix.data, sm->c_field_name);
                     for (size_t pi = 0; pi < sm->param_count; pi++) {
                         if (pi > 0) buf_append_cstr(fp, ", ");
-                        cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                         buf_append_fmt(fp, " p%zu", pi);
                     }
                     if (sm->param_count > 0) buf_append_cstr(fp, ", ");
@@ -37305,7 +37581,9 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                     buf_append_fmt(fd, "static void %s__%s(", prefix.data, sm->c_field_name);
                     for (size_t pi = 0; pi < sm->param_count; pi++) {
                         if (pi > 0) buf_append_cstr(fd, ", ");
-                        cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                         buf_append_fmt(fd, " p%zu", pi);
                     }
                     if (sm->param_count > 0) buf_append_cstr(fd, ", ");
@@ -37320,6 +37598,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                                                            fd,
                                                            sm->param_types[pi],
                                                            um->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
                                                            pname,
                                                            blame)) {
                             buf_free(&prefix); free(t_san); free(s_san);
@@ -37336,7 +37615,9 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 buf_append_fmt(fp, " %s__%s(", prefix.data, sm->c_field_name);
                 for (size_t pi = 0; pi < sm->param_count; pi++) {
                     if (pi > 0) buf_append_cstr(fp, ", ");
-                    cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                     buf_append_fmt(fp, " p%zu", pi);
                 }
                 if (sm->param_count == 0) buf_append_cstr(fp, "void");
@@ -37348,7 +37629,9 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 buf_append_fmt(fd, " %s__%s(", prefix.data, sm->c_field_name);
                 for (size_t pi = 0; pi < sm->param_count; pi++) {
                     if (pi > 0) buf_append_cstr(fd, ", ");
-                    cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                     buf_append_fmt(fd, " p%zu", pi);
                 }
                 if (sm->param_count == 0) buf_append_cstr(fd, "void");
@@ -37364,9 +37647,10 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                     if (pi > 0) buf_append_cstr(fd, ", ");
                     if (!cg_append_witness_forward_arg(cg,
                                                        fd,
-                                                       sm->param_types[pi],
-                                                       um->param_types[pi],
-                                                       pname,
+                                                           sm->param_types[pi],
+                                                           um->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
+                                                           pname,
                                                        blame)) {
                         buf_free(&prefix); free(t_san); free(s_san);
                         return false;
@@ -37452,13 +37736,15 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                     "CE0341", "codegen: internal: fit method '%s' not found in fit body for type '%s'",
                     sm->feng_name, t->feng_name);
             }
-            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
                 Buf *fp = &cg->fn_protos;
                 buf_append_fmt(fp, "static void %s__%s(void *_subject",
                                prefix.data, sm->c_field_name);
                 for (size_t pi = 0; pi < sm->param_count; pi++) {
                     buf_append_cstr(fp, ", ");
-                    cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                     buf_append_fmt(fp, " p%zu", pi);
                 }
                 buf_append_cstr(fp, ", void *_out);\n");
@@ -37468,7 +37754,9 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                                prefix.data, sm->c_field_name);
                 for (size_t pi = 0; pi < sm->param_count; pi++) {
                     buf_append_cstr(fd, ", ");
-                    cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                     buf_append_fmt(fd, " p%zu", pi);
                 }
                 buf_append_cstr(fd, ", void *_out) {\n    ");
@@ -37482,9 +37770,10 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                     buf_append_cstr(fd, ", ");
                     if (!cg_append_witness_forward_arg(cg,
                                                        fd,
-                                                       sm->param_types[pi],
-                                                       fm->param_types[pi],
-                                                       pname,
+                                                           sm->param_types[pi],
+                                                           fm->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
+                                                           pname,
                                                        blame)) {
                         buf_free(&prefix); free(t_san); free(s_san);
                         return false;
@@ -37499,7 +37788,9 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
             for (size_t pi = 0; pi < sm->param_count; pi++) {
                 buf_append_cstr(fp, ", ");
-                cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                 buf_append_fmt(fp, " p%zu", pi);
             }
             buf_append_cstr(fp, ");\n");
@@ -37510,7 +37801,9 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
             for (size_t pi = 0; pi < sm->param_count; pi++) {
                 buf_append_cstr(fd, ", ");
-                cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                 buf_append_fmt(fd, " p%zu", pi);
             }
             buf_append_cstr(fd, ") {\n");
@@ -37529,9 +37822,10 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 buf_append_cstr(fd, ", ");
                 if (!cg_append_witness_forward_arg(cg,
                                                    fd,
-                                                   sm->param_types[pi],
-                                                   fm->param_types[pi],
-                                                   pname,
+                                                           sm->param_types[pi],
+                                                           fm->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
+                                                           pname,
                                                    blame)) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return false;
@@ -37554,13 +37848,15 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                     "CE0342", "codegen: internal: type '%s' has no method '%s' to satisfy spec '%s'",
                     t->feng_name, sm->feng_name, s->feng_name);
             }
-            if (sm->type != NULL && sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
                 Buf *fp = &cg->fn_protos;
                 buf_append_fmt(fp, "static void %s__%s(void *_subject",
                                prefix.data, sm->c_field_name);
                 for (size_t pi = 0; pi < sm->param_count; pi++) {
                     buf_append_cstr(fp, ", ");
-                    cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                     buf_append_fmt(fp, " p%zu", pi);
                 }
                 buf_append_cstr(fp, ", void *_out);\n");
@@ -37570,7 +37866,9 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                                prefix.data, sm->c_field_name);
                 for (size_t pi = 0; pi < sm->param_count; pi++) {
                     buf_append_cstr(fd, ", ");
-                    cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                     buf_append_fmt(fd, " p%zu", pi);
                 }
                 buf_append_cstr(fd, ", void *_out) {\n    ");
@@ -37584,9 +37882,10 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                     buf_append_cstr(fd, ", ");
                     if (!cg_append_witness_forward_arg(cg,
                                                        fd,
-                                                       sm->param_types[pi],
-                                                       um->param_types[pi],
-                                                       pname,
+                                                           sm->param_types[pi],
+                                                           um->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
+                                                           pname,
                                                        blame)) {
                         buf_free(&prefix); free(t_san); free(s_san);
                         return false;
@@ -37602,7 +37901,9 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             buf_append_fmt(fp, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
             for (size_t pi = 0; pi < sm->param_count; pi++) {
                 buf_append_cstr(fp, ", ");
-                cg_emit_c_type(fp, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fp,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                 buf_append_fmt(fp, " p%zu", pi);
             }
             buf_append_cstr(fp, ");\n");
@@ -37615,7 +37916,9 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             buf_append_fmt(fd, " %s__%s(void *_subject", prefix.data, sm->c_field_name);
             for (size_t pi = 0; pi < sm->param_count; pi++) {
                 buf_append_cstr(fd, ", ");
-                cg_emit_c_type(fd, sm->param_types[pi]);
+                        cg_emit_callable_abi_param_type(fd,
+                                                        sm->param_types[pi],
+                                                        sm->param_abi_kinds[pi]);
                 buf_append_fmt(fd, " p%zu", pi);
             }
             buf_append_cstr(fd, ") {\n");
@@ -37632,9 +37935,10 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 buf_append_cstr(fd, ", ");
                 if (!cg_append_witness_forward_arg(cg,
                                                    fd,
-                                                   sm->param_types[pi],
-                                                   um->param_types[pi],
-                                                   pname,
+                                                           sm->param_types[pi],
+                                                           um->param_types[pi],
+                                                           sm->param_abi_kinds[pi],
+                                                           pname,
                                                    blame)) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return false;
@@ -45349,6 +45653,7 @@ static void cg_dispose(CG *cg) {
                 free(sm->param_names[k]);
             }
             free(sm->param_types);
+            free(sm->param_abi_kinds);
             free(sm->param_names);
         }
         free(us->members);
