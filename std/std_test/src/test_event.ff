@@ -1,0 +1,96 @@
+module std_test;
+
+import std;
+import std.test;
+
+var eventTotal: i32 = 0;
+
+func eventAdd(value: i32): void {
+  eventTotal += value;
+}
+
+func eventAddTwice(value: i32): void {
+  eventTotal += value * 2;
+}
+
+func event_on_emit_invokes_listeners_in_order() {
+  eventTotal = 0;
+  let event = Event<i32>();
+  event.on(eventAdd);
+  event.on(eventAddTwice);
+
+  event.emit(3);
+
+  check(eventTotal == 9, "event/on-emit");
+}
+
+func event_off_removes_matching_listener() {
+  eventTotal = 0;
+  let event = Event<i32>();
+  event.on(eventAdd);
+  event.on(eventAddTwice);
+
+  event.off(eventAdd);
+  event.emit(3);
+
+  check(eventTotal == 6, "event/off-removes-listener");
+}
+
+func event_off_removes_only_first_duplicate() {
+  eventTotal = 0;
+  let event = Event<i32>();
+  event.on(eventAdd);
+  event.on(eventAdd);
+
+  event.off(eventAdd);
+  event.emit(4);
+
+  check(eventTotal == 4, "event/off-removes-first-duplicate");
+}
+
+func event_off_absent_listener_is_noop() {
+  eventTotal = 0;
+  let event = Event<i32>();
+  event.on(eventAdd);
+
+  event.off(eventAddTwice);
+  event.emit(5);
+
+  check(eventTotal == 5, "event/off-absent-noop");
+}
+
+func event_clear_removes_all_listeners() {
+  eventTotal = 0;
+  let event = Event<i32>();
+  event.on(eventAdd);
+  event.on(eventAddTwice);
+
+  event.clear();
+  event.emit(7);
+
+  check(eventTotal == 0, "event/clear");
+}
+
+func callable_equality_uses_closure_identity() {
+  let first: Action<i32> = (value: i32) {
+    eventTotal += value;
+  };
+  let alias = first;
+  let second: Action<i32> = (value: i32) {
+    eventTotal += value;
+  };
+
+  check(first == alias, "event/callable-equality-alias");
+  check(first != second, "event/callable-equality-distinct");
+}
+
+open func run_event_tests() {
+  describe("event tests", () {
+    test("event_on_emit_invokes_listeners_in_order()", () { event_on_emit_invokes_listeners_in_order(); });
+    test("event_off_removes_matching_listener()", () { event_off_removes_matching_listener(); });
+    test("event_off_removes_only_first_duplicate()", () { event_off_removes_only_first_duplicate(); });
+    test("event_off_absent_listener_is_noop()", () { event_off_absent_listener_is_noop(); });
+    test("event_clear_removes_all_listeners()", () { event_clear_removes_all_listeners(); });
+    test("callable_equality_uses_closure_identity()", () { callable_equality_uses_closure_identity(); });
+  });
+}

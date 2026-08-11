@@ -141,9 +141,25 @@ open type List<T> {
    * @param index - zero-based position of the element to remove
    * @panic if `index` is less than zero or greater than or equal to size()
    */
-  open func remove(index: int) {
+  open func removeAt(index: int) {
     feng_array_storage_remove(self.items, index, (int)1);
     self.shrink();
+  }
+
+  /**
+   * Removes the first element equal to `item` while preserving relative order.
+   * @param item - element value to remove
+   * @return true when an element was removed; false when no element matched
+   */
+  open func remove(item: T): bool {
+    let length = self.items.length();
+    for var index: int = 0; index < length; index += (int)1 {
+      if feng_expression_equal(self.items[index], item) {
+        self.removeAt(index);
+        return true;
+      }
+    }
+    return false;
   }
 
   /**

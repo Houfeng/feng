@@ -473,7 +473,7 @@ storage API 必须满足：
 
 - [x] `List.add` 使用 `get_capacity + migrate（必要时）+ insert(length, item)`。
 - [x] `List.insert(index, item)` 使用 `get_capacity + migrate（必要时）+ insert(index, item)`，只插入单个元素。
-- [x] `List.remove` 使用 `remove(index, 1) + migrate（满足缩容策略时）`。
+- [x] `List.removeAt` 使用 `remove(index, 1) + migrate（满足缩容策略时）`。
 - [x] `List.clear` 使用 `remove(0, length)`。
 - [x] `List.size` 使用 `items.length()`。
 

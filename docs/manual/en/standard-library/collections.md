@@ -38,12 +38,13 @@ names.insert(1, "Carol");
 
 let first = names.get(0);
 names.set(0, "Alicia");
-names.remove(1);
+names.removeAt(1);
+let removed = names.remove("Bob");
 let count = names.size();
 let items = names.entries();
 ```
 
-`entries()` returns a read-only array copy. `List<T>` supports `for/in`:
+`removeAt(index)` removes by position; `remove(item)` removes the first matching element and reports whether it was found. `entries()` returns a read-only array copy. `List<T>` supports `for/in`:
 
 ```feng
 for let name in names {

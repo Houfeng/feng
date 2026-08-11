@@ -8,6 +8,7 @@ func main(args: string[]) {
     run_map_tests();
     run_set_tests();
     run_list_tests();
+    run_event_tests();
     run_length_tests();
     run_math_tests();
     run_platform_tests();

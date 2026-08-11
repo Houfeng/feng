@@ -41,7 +41,7 @@ open func normalize(path: string): string {
       // For absolute paths or when stack has real segments (not ".."), pop
       if isAbs || (stack.size() > (int)0 && stack.get(stack.size() - (int)1) != "..") {
         if stack.size() > (int)0 {
-          stack.remove(stack.size() - (int)1);
+          stack.removeAt(stack.size() - (int)1);
         }
       } else {
         // For relative paths with no parent to pop, keep ".."

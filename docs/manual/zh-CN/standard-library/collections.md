@@ -38,12 +38,13 @@ names.insert(1, "Carol");
 
 let first = names.get(0);
 names.set(0, "Alicia");
-names.remove(1);
+names.removeAt(1);
+let removed = names.remove("Bob");
 let count = names.size();
 let items = names.entries();
 ```
 
-`entries()` 返回只读数组副本。`List<T>` 支持 `for/in`：
+`removeAt(index)` 按位置删除；`remove(item)` 删除第一个匹配元素并返回是否找到。`entries()` 返回只读数组副本。`List<T>` 支持 `for/in`：
 
 ```feng
 for let name in names {

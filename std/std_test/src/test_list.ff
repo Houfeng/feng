@@ -40,7 +40,7 @@ func list_set_index() {
   check(l.get(1) == 20, "list/set-index-other-unchanged");
 }
 
-func list_remove_shifts() {
+func list_remove_at_shifts() {
   let l = List<i32>();
   let a: i32 = 10;
   let b: i32 = 20;
@@ -48,12 +48,12 @@ func list_remove_shifts() {
   l.add(a);
   l.add(b);
   l.add(c);
-  l.remove(0);
-  check(l.get(0) == 20, "list/remove-shifts-first");
-  check(l.get(1) == 30, "list/remove-shifts-second");
+  l.removeAt(0);
+  check(l.get(0) == 20, "list/remove-at-shifts-first");
+  check(l.get(1) == 30, "list/remove-at-shifts-second");
 }
 
-func list_size_after_remove() {
+func list_size_after_remove_at() {
   let l = List<i32>();
   let a: i32 = 1;
   let b: i32 = 2;
@@ -61,8 +61,55 @@ func list_size_after_remove() {
   l.add(a);
   l.add(b);
   l.add(c);
-  l.remove(1);
-  check(l.size() == 2, "list/size-after-remove");
+  l.removeAt(1);
+  check(l.size() == 2, "list/size-after-remove-at");
+}
+
+func list_remove_value_first_match() {
+  let l = List<i32>();
+  l.add(10);
+  l.add(20);
+  l.add(20);
+  l.add(30);
+
+  check(l.remove(20), "list/remove-value-found");
+  check(l.size() == 3, "list/remove-value-size");
+  check(l.get(0) == 10, "list/remove-value-first");
+  check(l.get(1) == 20, "list/remove-value-keeps-second-match");
+  check(l.get(2) == 30, "list/remove-value-last");
+}
+
+func list_remove_value_absent() {
+  let l = List<i32>();
+  l.add(10);
+  l.add(20);
+
+  check(!l.remove(99), "list/remove-value-absent");
+  check(l.size() == 2, "list/remove-value-absent-size");
+  check(l.get(0) == 10, "list/remove-value-absent-first");
+  check(l.get(1) == 20, "list/remove-value-absent-second");
+}
+
+func list_remove_value_uses_string_equality() {
+  let l = List<string>();
+  let prefix = "feng";
+  let stored = prefix + "-lang";
+  let target = "feng-lang";
+  l.add(stored);
+
+  check(l.remove(target), "list/remove-value-string-found");
+  check(l.size() == 0, "list/remove-value-string-size");
+}
+
+func list_remove_value_uses_object_identity() {
+  let stored = RefBox { value: 7 };
+  let equalFields = RefBox { value: 7 };
+  let l = List<RefBox>();
+  l.add(stored);
+
+  check(!l.remove(equalFields), "list/remove-value-object-distinct");
+  check(l.remove(stored), "list/remove-value-object-identical");
+  check(l.size() == 0, "list/remove-value-object-size");
 }
 
 func list_multiple_elements() {
@@ -182,13 +229,13 @@ func list_clear_reuses_storage() {
   check(l.get(0) == "gamma", "list/clear-reuse-value");
 }
 
-func list_remove_shrinks_and_preserves_order() {
+func list_remove_at_shrinks_and_preserves_order() {
   let l = List<i32>();
   for var i: int = 0; i < 32; i = i + 1 {
     l.add((i32)i);
   }
   for var i: int = 0; i < 28; i = i + 1 {
-    l.remove(0);
+    l.removeAt(0);
   }
 
   check(l.size() == 4, "list/shrink-size");
@@ -305,8 +352,12 @@ open func run_list_tests() {
     test("list_add_get()", () { list_add_get(); });
     test("list_size()", () { list_size(); });
     test("list_set_index()", () { list_set_index(); });
-    test("list_remove_shifts()", () { list_remove_shifts(); });
-    test("list_size_after_remove()", () { list_size_after_remove(); });
+    test("list_remove_at_shifts()", () { list_remove_at_shifts(); });
+    test("list_size_after_remove_at()", () { list_size_after_remove_at(); });
+    test("list_remove_value_first_match()", () { list_remove_value_first_match(); });
+    test("list_remove_value_absent()", () { list_remove_value_absent(); });
+    test("list_remove_value_uses_string_equality()", () { list_remove_value_uses_string_equality(); });
+    test("list_remove_value_uses_object_identity()", () { list_remove_value_uses_object_identity(); });
     test("list_multiple_elements()", () { list_multiple_elements(); });
     test("list_entities_order()", () { list_entities_order(); });
     test("list_entities_count()", () { list_entities_count(); });
@@ -317,7 +368,7 @@ open func run_list_tests() {
     test("list_insert_grows_full_storage()", () { list_insert_grows_full_storage(); });
     test("list_capacity_constructor_starts_empty()", () { list_capacity_constructor_starts_empty(); });
     test("list_clear_reuses_storage()", () { list_clear_reuses_storage(); });
-    test("list_remove_shrinks_and_preserves_order()", () { list_remove_shrinks_and_preserves_order(); });
+    test("list_remove_at_shrinks_and_preserves_order()", () { list_remove_at_shrinks_and_preserves_order(); });
     test("list_insert_managed_element()", () { list_insert_managed_element(); });
     test("list_for_in_basic()", () { list_for_in_basic(); });
     test("list_for_in_empty()", () { list_for_in_empty(); });

@@ -5559,6 +5559,41 @@ static void test_callable_spec_top_level_fn_codegen(void) {
     feng_program_free(program);
 }
 
+static void test_callable_spec_reference_identity_equality_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.callable_equality;\n"
+        "spec Action(value: int): void;\n"
+        "func same(left: Action, right: Action): bool {\n"
+        "    return left == right;\n"
+        "}\n"
+        "func different(left: Action, right: Action): bool {\n"
+        "    return left != right;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "callable_equality.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, " == (void *)") != NULL);
+    ASSERT(strstr(out.c_source, " != (void *)") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericCallableConstraintSrc =
     "module feng.codegen.cb2;\n"
     "spec Mapper(x: int): int;\n"
@@ -5684,6 +5719,39 @@ static void test_generic_callable_spec_instance_codegen(void) {
         ASSERT(strstr(out.c_source, pattern) != NULL);
     }
     ASSERT(strstr(out.c_source, "->invoke(") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static void test_open_generic_callable_field_default_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.open_callable_default;\n"
+        "spec Action<T>(value: T): void;\n"
+        "type Slot<T> {\n"
+        "    let missing: T;\n"
+        "}\n"
+        "type Owner<T> {\n"
+        "    let slot: Slot<Action<T>>;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "open_callable_default.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -9086,9 +9154,11 @@ int main(void) {
     test_generic_managed_return_let_binding_codegen();
     test_generic_spec_arg_codegen();
     test_callable_spec_top_level_fn_codegen();
+    test_callable_spec_reference_identity_equality_codegen();
     test_generic_callable_constraint_codegen();
     test_generic_object_spec_instance_codegen();
     test_generic_callable_spec_instance_codegen();
+    test_open_generic_callable_field_default_codegen();
     test_generic_object_spec_coercion_codegen();
     test_generic_callable_spec_coercion_codegen();
     test_callable_spec_method_coercion_codegen();

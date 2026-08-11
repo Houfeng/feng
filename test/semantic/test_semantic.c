@@ -15783,6 +15783,41 @@ static void test_spec_equality_int_not_recorded(void) {
     feng_program_free(program);
 }
 
+static void test_spec_equality_callable_identity_accepted(void) {
+    /* Callable-form spec equality is valid reference-identity comparison.
+     * It does not use the object-form aggregate subject sidecar because a
+     * callable value is already represented by one managed closure pointer. */
+    const char *src =
+        "open module demo.eq_callable;\n"
+        "spec Action(value: int): void;\n"
+        "func same(left: Action, right: Action): bool {\n"
+        "    return left == right;\n"
+        "}\n"
+        "func different(left: Action, right: Action): bool {\n"
+        "    return left != right;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("eq_callable.ff", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    const FengExpr *eq = find_first_binary_op_in_decls(program, FENG_TOKEN_EQ);
+    const FengExpr *ne = find_first_binary_op_in_decls(program, FENG_TOKEN_NE);
+    ASSERT(eq != NULL);
+    ASSERT(ne != NULL);
+    ASSERT(feng_semantic_lookup_spec_equality(analysis, eq) == NULL);
+    ASSERT(feng_semantic_lookup_spec_equality(analysis, ne) == NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* --- Value-kind classification tests (docs/engineering/feng-value-model-delivered.md §6.1) --- */
 
 static const FengDecl *find_enum_decl_by_name(
@@ -21656,6 +21691,7 @@ int main(void) {
     test_spec_equality_object_neq_recorded();
     test_spec_equality_string_not_recorded();
     test_spec_equality_int_not_recorded();
+    test_spec_equality_callable_identity_accepted();
     test_duplicate_type_across_files_same_module();
     test_duplicate_binding_across_files_same_module();
     test_function_return_only_overload_error();

@@ -306,7 +306,7 @@ type Stream: ReadWrite {}
 - 返回 `void` 的行为签名提供空实现; 返回非 `void` 的行为签名返回其返回类型默认零值; 若返回值是 `spec` 类型,则返回该 `spec` 对应的默认 witness。
 - 通过具体类型名访问 spec 静态成员的运行时开销与访问 `type` 静态成员完全一致; 通过泛型类型参数访问 spec 静态成员时,采用与 spec 实例方法 witness 表一致的间接分派策略,不在运行时引入额外的候选搜索或回退。
 - 每次对 `spec` 类型执行默认初始化时,都会创建该 `spec` 默认 witness 的新实例,不复用共享单例。
-- `spec` 值上的 `==` / `!=` 默认比较引用身份,不执行深度比较。
+- object-form 与 intersection-form `spec` 值上的 `==` / `!=` 比较其 subject 引用身份，不执行深度比较；callable-form `spec` 值上的 `==` / `!=` 比较 callable/closure 引用身份，不比较捕获内容、绑定对象或调用签名。union-form `spec` 未收窄前仍不允许直接使用 `==` / `!=`。
 - 代码以 `spec` 视角访问成员或发起调用时,运行时可采用分发表、内联缓存、静态去虚化或其他等价策略完成成员映射与分发。
 - callable-form `spec` 的显式转换不引入运行时签名比较、候选搜索、wrapper/closure 分配或额外调用转发; 对实例化后签名完全一致的 callable-form `spec`,转换前后经该值发起的调用开销必须保持同级。
 - 对象形状 `spec` 的上下文向上 coercion 与显式 cast 不引入运行时满足关系搜索、候选比较或回退; 运行时只执行编译期已选定的 `spec` 视角构造与成员分发。

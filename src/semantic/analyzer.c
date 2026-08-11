@@ -19156,9 +19156,10 @@ static void record_spec_equality_if_applicable(ResolveContext *context,
     if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC) {
         return;
     }
-    /* Object-form specs only — callable-form specs cannot be operands of
-     * `==` / `!=` (binary_expr_types_are_valid would not have accepted a
-     * function-typed operand here). Defensive guard. */
+    /* Object-form specs use the aggregate subject-identity sidecar.
+     * Callable-form specs are managed closure references and take the direct
+     * reference-identity lowering path in codegen. Other forms keep their
+     * dedicated semantic restrictions. */
     if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
         return;
     }

@@ -1,0 +1,45 @@
+open module std;
+
+import std.collections;
+
+/**
+ * The Event type represents a generic event system that allows registering,
+ * unregistering, and invoking listeners (callbacks) with a specific argument type.
+ * It provides a standard mechanism for event-driven programming.
+ */
+open type Event<T> {
+  seal let listeners: List<Action<T>>;
+
+  /**
+   * Appends a listener to be invoked when the event is triggered.
+   * Duplicate listener references are retained as separate entries.
+   */
+  open func on(listener: Action<T>): void {
+    self.listeners.add(listener);
+  }
+
+  /**
+   * Unregisters the first listener with the same callable identity.
+   * A missing listener leaves the event unchanged.
+   */
+  open func off(listener: Action<T>): void {
+    self.listeners.remove(listener);
+  }
+
+  /**
+   * Triggers the event, invoking listeners in registration order.
+   */
+  open func emit(arg: T): void {
+    for let listener in self.listeners {
+      listener(arg);
+    }
+  }
+
+  /**
+   * Clears all registered listeners from the event.
+   */
+  open func clear(): void {
+    self.listeners.clear();
+  }
+
+}

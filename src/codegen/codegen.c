@@ -746,6 +746,19 @@ static bool cg_type_is_value_semantics(const CGType *t) {
     return cg_type_is_tuple_user(t) || cg_type_is_value_user(t);
 }
 
+/* Return whether equality for this lowered managed-pointer category is
+ * defined as direct reference identity. String is intentionally excluded
+ * because it has content equality, while value-semantics user types use
+ * their aggregate equality descriptors. */
+static bool cg_type_has_reference_identity_equality(const CGType *t) {
+    if (t == NULL) {
+        return false;
+    }
+    return t->kind == CG_TYPE_ARRAY ||
+           t->kind == CG_TYPE_CALLABLE ||
+           (t->kind == CG_TYPE_OBJECT && !cg_type_is_value_semantics(t));
+}
+
 static bool cg_user_type_is_value_semantics(const struct UserType *t) {
     return cg_user_type_is_tuple(t) || cg_user_type_is_value(t);
 }
@@ -15616,12 +15629,13 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
         return out->c_expr && out->type;
     }
 
-    /* Object/Array equality: reference identity (pointer comparison).
-     * Excludes value-semantics types (tuple, @value) which use equal_fn. */
+    /* Object/Array/Callable equality: reference identity (pointer
+     * comparison). Excludes value-semantics types (tuple, @value), which use
+     * equal_fn, and strings, which use content equality above. */
     if ((e->as.binary.op == FENG_TOKEN_EQ || e->as.binary.op == FENG_TOKEN_NE) &&
-        (lr.type->kind == CG_TYPE_OBJECT || lr.type->kind == CG_TYPE_ARRAY) &&
+        cg_type_has_reference_identity_equality(lr.type) &&
         lr.type->kind == rr.type->kind &&
-        !cg_type_is_value_semantics(lr.type)) {
+        cg_type_has_reference_identity_equality(rr.type)) {
         const char *cop2 = (e->as.binary.op == FENG_TOKEN_EQ) ? "==" : "!=";
         Buf b; buf_init(&b);
         buf_append_fmt(&b, "(bool)((void *)%s %s (void *)%s)", lr.c_expr, cop2, rr.c_expr);
@@ -42937,16 +42951,32 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                     free(elem_cty);
                     break;
                 }
-                case CG_TYPE_CALLABLE:
+                case CG_TYPE_CALLABLE: {
+                    const FengToken *field_token = t->fields[i].member != NULL
+                                                       ? &t->fields[i].member->token
+                                                       : &t->decl->token;
+                    char *default_expr = NULL;
+
+                    /* Open generic type instances are compile-time layout
+                     * identities. Their type-parameter fields already keep
+                     * the zeroed placeholder here; an open callable field
+                     * must do the same because its concrete descriptor is
+                     * supplied only by a closed instance. */
                     if (ft->user_spec != NULL &&
-                        ft->user_spec->c_default_callable_new_name != NULL) {
-                        buf_append_fmt(td,
-                            "    _o->%s = (struct %s *)%s();\n",
-                            t->fields[i].c_name,
-                            ft->user_spec->c_closure_struct_name,
-                            ft->user_spec->c_default_callable_new_name);
+                        ft->user_spec->generic_context_type_param_count > 0U) {
+                        break;
                     }
+                    if (!cg_default_value_expr(cg, ft, field_token, &default_expr)) {
+                        free(default_expr);
+                        return;
+                    }
+                    buf_append_fmt(td,
+                        "    _o->%s = %s;\n",
+                        t->fields[i].c_name,
+                        default_expr);
+                    free(default_expr);
                     break;
+                }
                 case CG_TYPE_OBJECT:
                     if (ft->user) {
                         if (cg_user_type_is_value_semantics(ft->user)) {
