@@ -4175,6 +4175,37 @@ static const FengTypeRef *substitute_type_ref_for_owner_instance(
     return substituted;
 }
 
+/* Substitute a callable's explicitly supplied type arguments into one
+ * parameter surface before overload applicability is checked. */
+static const FengTypeRef *substitute_type_ref_for_explicit_callable_args(
+    ResolveContext *context,
+    const FengCallableSignature *callable,
+    const FengTypeRef *const *explicit_type_args,
+    size_t explicit_type_arg_count,
+    const FengTypeRef *type_ref) {
+    FengTypeRef *substituted;
+
+    if (context == NULL || callable == NULL || type_ref == NULL ||
+        explicit_type_args == NULL || callable->type_param_count == 0U ||
+        callable->type_param_count != explicit_type_arg_count) {
+        return type_ref;
+    }
+
+    substituted = clone_type_ref_substituting_type_params(
+        type_ref,
+        callable->type_params,
+        callable->type_param_count,
+        (FengTypeRef *const *)explicit_type_args);
+    if (substituted == NULL) {
+        return type_ref;
+    }
+    if (!resolver_track_synthetic_type_ref(context, substituted)) {
+        free_synthetic_type_ref(substituted);
+        return type_ref;
+    }
+    return substituted;
+}
+
 static const FengDecl *resolve_type_ref_decl(const ResolveContext *context,
                                              const FengTypeRef *type_ref);
 
@@ -11391,6 +11422,8 @@ static bool callable_parameters_match_args(ResolveContext *context,
                                            const FengCallableSignature *callable,
                                            FengExpr *const *args,
                                            size_t arg_count,
+                                           const FengTypeRef *const *explicit_type_args,
+                                           size_t explicit_type_arg_count,
                                            bool allow_wrapped_inference,
                                            bool *out_rejected_existing_array_for_variadic,
                                            PrepackedVariadicRejection *out_prepacked_variadic_rejection) {
@@ -11439,6 +11472,23 @@ static bool callable_parameters_match_args(ResolveContext *context,
             context->suppress_literal_type_commit = saved_suppress;
             return false;
         }
+        if (explicit_type_args != NULL &&
+            explicit_type_arg_count == callable->type_param_count) {
+            for (arg_index = 0U;
+                 arg_index < callable->type_param_count;
+                 ++arg_index) {
+                type_args[arg_index] =
+                    clone_type_ref_for_inference(explicit_type_args[arg_index]);
+                if (type_args[arg_index] == NULL) {
+                    ok = false;
+                    break;
+                }
+                owned_type_args[arg_index] = true;
+            }
+            if (!ok) {
+                goto cleanup;
+            }
+        }
     }
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
@@ -11450,6 +11500,12 @@ static bool callable_parameters_match_args(ResolveContext *context,
             /* Variadic position: match against element type T (stored as T[]->inner). */
             param_type = callable->params[fixed_count].type->as.inner;
         }
+        param_type = substitute_type_ref_for_explicit_callable_args(
+            context,
+            callable,
+            explicit_type_args,
+            explicit_type_arg_count,
+            param_type);
 
         /* When the param type is a bare type parameter (e.g., T), skip the
          * lambda guard — the concrete type is not yet known at probing time
@@ -11558,6 +11614,7 @@ static bool callable_parameters_match_args(ResolveContext *context,
         }
     }
 
+cleanup:
     if (owned_type_args != NULL) {
         for (arg_index = 0U; arg_index < callable->type_param_count; ++arg_index) {
             if (owned_type_args[arg_index]) {
@@ -11583,6 +11640,8 @@ static bool callable_parameters_match_args_for_owner_instance(
     InferredExprType owner_type,
     FengExpr *const *args,
     size_t arg_count,
+    const FengTypeRef *const *explicit_type_args,
+    size_t explicit_type_arg_count,
     bool allow_wrapped_inference,
     bool *out_rejected_existing_array_for_variadic,
     PrepackedVariadicRejection *out_prepacked_variadic_rejection) {
@@ -11631,6 +11690,23 @@ static bool callable_parameters_match_args_for_owner_instance(
             context->suppress_literal_type_commit = saved_suppress;
             return false;
         }
+        if (explicit_type_args != NULL &&
+            explicit_type_arg_count == callable->type_param_count) {
+            for (arg_index = 0U;
+                 arg_index < callable->type_param_count;
+                 ++arg_index) {
+                type_args[arg_index] =
+                    clone_type_ref_for_inference(explicit_type_args[arg_index]);
+                if (type_args[arg_index] == NULL) {
+                    ok = false;
+                    break;
+                }
+                owned_type_args[arg_index] = true;
+            }
+            if (!ok) {
+                goto cleanup;
+            }
+        }
     }
 
     for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
@@ -11643,35 +11719,6 @@ static bool callable_parameters_match_args_for_owner_instance(
             param_type = callable->params[fixed_count].type->as.inner;
         }
 
-        /* When the param type is a bare type parameter (e.g., T), skip the
-         * lambda guard — the concrete type is not yet known at probing time
-         * and the explicit type arg (if any) will drive adaptation later in
-         * callable_collect_call_type_args. */
-        if (args[arg_index] != NULL &&
-            args[arg_index]->kind == FENG_EXPR_LAMBDA &&
-            !param_type_is_type_param_ref(callable, param_type) &&
-            resolve_function_type_decl(context, param_type) == NULL) {
-            ok = false;
-            break;
-        }
-
-        /* G4-12: a type-parameter position accepts any argument type, but the
-         * inferred type argument must still be collected so that the declared
-         * constraint (if any) can be validated after the loop. When inference
-         * fails for this argument we keep the historical accept-by-default
-         * behavior — the type argument stays NULL, the constraint check below
-         * skips it, and the final applicability decision is left to the
-         * post-selection witness materializer. */
-        if (arg_index < fixed_count && param_type_is_type_param_ref(callable, param_type)) {
-            (void)callable_collect_type_args_from_arg_expr(context,
-                                                          callable,
-                                                          param_type,
-                                                          args[arg_index],
-                                                          type_args,
-                                                          owned_type_args);
-            continue;
-        }
-
         if (arg_index < fixed_count || args[arg_index]->is_prepacked_variadic_arg) {
             param_type = substitute_type_ref_for_owner_instance(context,
                                                                 owner_type_decl,
@@ -11681,6 +11728,25 @@ static bool callable_parameters_match_args_for_owner_instance(
                                                               fit_decl,
                                                               owner_type,
                                                               param_type);
+        }
+        param_type = substitute_type_ref_for_explicit_callable_args(
+            context,
+            callable,
+            explicit_type_args,
+            explicit_type_arg_count,
+            param_type);
+
+        /* A still-open direct method type parameter accepts the argument and
+         * contributes to inference. Explicit arguments have already replaced
+         * this surface and therefore follow the ordinary compatibility path. */
+        if (arg_index < fixed_count && param_type_is_type_param_ref(callable, param_type)) {
+            (void)callable_collect_type_args_from_arg_expr(context,
+                                                          callable,
+                                                          param_type,
+                                                          args[arg_index],
+                                                          type_args,
+                                                          owned_type_args);
+            continue;
         }
         if (args[arg_index] != NULL &&
             args[arg_index]->kind == FENG_EXPR_LAMBDA &&
@@ -11771,6 +11837,7 @@ static bool callable_parameters_match_args_for_owner_instance(
         }
     }
 
+cleanup:
     if (owned_type_args != NULL) {
         for (arg_index = 0U; arg_index < callable->type_param_count; ++arg_index) {
             if (owned_type_args[arg_index]) {
@@ -12322,15 +12389,15 @@ static ConstructorResolution resolve_accessible_constructor_overload(
         if (use_owner_substitution) {
             if (!callable_parameters_match_args_for_owner_instance(
                     context, &member->as.callable, type_decl, NULL, owner_type,
-                    args, arg_count, false, NULL, &spread_rejection)) {
+                    args, arg_count, NULL, 0U, false, NULL, &spread_rejection)) {
                 merge_prepacked_variadic_rejection(
                     &result.prepacked_variadic_rejection, spread_rejection);
                 continue;
             }
         } else {
             if (!callable_parameters_match_args(
-                    context, &member->as.callable, args, arg_count, false, NULL,
-                    &spread_rejection)) {
+                    context, &member->as.callable, args, arg_count, NULL, 0U,
+                    false, NULL, &spread_rejection)) {
                 merge_prepacked_variadic_rejection(
                     &result.prepacked_variadic_rejection, spread_rejection);
                 continue;
@@ -12360,6 +12427,7 @@ static FunctionCallResolution resolve_top_level_function_overload(
     FengExpr *const *args,
     size_t arg_count,
     bool has_explicit_type_args,
+    const FengTypeRef *const *explicit_type_args,
     size_t explicit_type_arg_count) {
     size_t decl_index;
     FunctionCallResolution result;
@@ -12383,6 +12451,8 @@ static FunctionCallResolution resolve_top_level_function_overload(
                                             &decl->as.function_decl,
                                             args,
                                             arg_count,
+                                            explicit_type_args,
+                                            explicit_type_arg_count,
                                             decl->is_extern,
                                             &rejected_existing_array_for_variadic,
                                             &spread_rejection)) {
@@ -12774,6 +12844,7 @@ static FunctionCallResolution resolve_module_public_function_overload(
     FengExpr *const *args,
     size_t arg_count,
     bool has_explicit_type_args,
+    const FengTypeRef *const *explicit_type_args,
     size_t explicit_type_arg_count) {
     size_t program_index;
     FunctionCallResolution result;
@@ -12802,6 +12873,8 @@ static FunctionCallResolution resolve_module_public_function_overload(
                                                 &decl->as.function_decl,
                                                 args,
                                                 arg_count,
+                                                explicit_type_args,
+                                                explicit_type_arg_count,
                                                 decl->is_extern,
                                                 &rejected_existing_array_for_variadic,
                                                 &spread_rejection)) {
@@ -13312,6 +13385,7 @@ typedef struct FitOverloadResolveCtx {
     FengExpr *const *args;
     size_t arg_count;
     bool has_explicit_type_args;
+    const FengTypeRef *const *explicit_type_args;
     size_t explicit_type_arg_count;
     FunctionCallResolution result;
 } FitOverloadResolveCtx;
@@ -13336,6 +13410,8 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
                 st->owner_type,
                 st->args,
                 st->arg_count,
+                st->explicit_type_args,
+                st->explicit_type_arg_count,
                 false,
                 &rejected_existing_array_for_variadic,
                 &spread_rejection)) {
@@ -13391,6 +13467,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
     FengExpr *const *args,
     size_t arg_count,
     bool has_explicit_type_args,
+    const FengTypeRef *const *explicit_type_args,
     size_t explicit_type_arg_count) {
     size_t member_index;
     FunctionCallResolution result;
@@ -13405,6 +13482,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
         st.args = args;
         st.arg_count = arg_count;
         st.has_explicit_type_args = has_explicit_type_args;
+        st.explicit_type_args = explicit_type_args;
         st.explicit_type_arg_count = explicit_type_arg_count;
         st.result = result;
         (void)visit_visible_fit_methods_for_owner_type(context,
@@ -13473,6 +13551,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
                                 owner_type,
                                 args,
                                 arg_count,
+                                explicit_type_args,
+                                explicit_type_arg_count,
                                 false,
                                 &rejected_existing_array_for_variadic,
                                 &spread_rejection)) {
@@ -13545,6 +13625,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
                                                                        owner_type,
                                                                        args,
                                                                        arg_count,
+                                                                       explicit_type_args,
+                                                                       explicit_type_arg_count,
                                                                        false,
                                                                        &rejected_existing_array_for_variadic,
                                                                        &spread_rejection)) {
@@ -13626,6 +13708,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
                                                                    owner_type,
                                                                    args,
                                                                    arg_count,
+                                                                   explicit_type_args,
+                                                                   explicit_type_arg_count,
                                                                    false,
                                                                    &rejected_existing_array_for_variadic,
                                                                    &spread_rejection)) {
@@ -13677,6 +13761,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
     st.args = args;
     st.arg_count = arg_count;
     st.has_explicit_type_args = has_explicit_type_args;
+    st.explicit_type_args = explicit_type_args;
     st.explicit_type_arg_count = explicit_type_arg_count;
     st.result = result;
     (void)visit_visible_fit_methods_for_type(context, type_decl, name, true, false,
@@ -13693,6 +13778,7 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
     FengExpr *const *args,
     size_t arg_count,
     bool has_explicit_type_args,
+    const FengTypeRef *const *explicit_type_args,
     size_t explicit_type_arg_count) {
     size_t member_index;
     FunctionCallResolution result;
@@ -13707,6 +13793,7 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
         st.args = args;
         st.arg_count = arg_count;
         st.has_explicit_type_args = has_explicit_type_args;
+        st.explicit_type_args = explicit_type_args;
         st.explicit_type_arg_count = explicit_type_arg_count;
         st.result = result;
         (void)visit_visible_fit_methods_for_owner_type(context,
@@ -13742,6 +13829,8 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
                                                                owner_type,
                                                                args,
                                                                arg_count,
+                                                               explicit_type_args,
+                                                               explicit_type_arg_count,
                                                                false,
                                                                &rejected_existing_array_for_variadic,
                                                                &spread_rejection)) {
@@ -13794,6 +13883,7 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
     st.args = args;
     st.arg_count = arg_count;
     st.has_explicit_type_args = has_explicit_type_args;
+    st.explicit_type_args = explicit_type_args;
     st.explicit_type_arg_count = explicit_type_arg_count;
     st.result = result;
     (void)visit_visible_fit_methods_for_type(context, type_decl, name, true, true,
@@ -14381,6 +14471,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                     expr->as.call.args,
                                                     expr->as.call.arg_count,
                                                     expr->as.call.has_explicit_type_args,
+                                                    (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                     expr->as.call.explicit_type_arg_count);
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
@@ -14428,6 +14519,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                               expr->as.call.args,
                                                               expr->as.call.arg_count,
                                                               expr->as.call.has_explicit_type_args,
+                                                              (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                               expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
@@ -14465,6 +14557,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                               expr->as.call.args,
                                                               expr->as.call.arg_count,
                                                               expr->as.call.has_explicit_type_args,
+                                                              (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                               expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
@@ -14546,6 +14639,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                             expr->as.call.args,
                                                             expr->as.call.arg_count,
                                                             expr->as.call.has_explicit_type_args,
+                                                            (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                             expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
@@ -14590,6 +14684,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                             expr->as.call.args,
                                                             expr->as.call.arg_count,
                                                             expr->as.call.has_explicit_type_args,
+                                                            (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                             expr->as.call.explicit_type_arg_count);
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                 resolution.callable != NULL) {
@@ -14786,6 +14881,7 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
                                                             expr->as.call.args,
                                                             expr->as.call.arg_count,
                                                             expr->as.call.has_explicit_type_args,
+                                                            (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                             expr->as.call.explicit_type_arg_count);
 
                     if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
@@ -14810,6 +14906,7 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
                                                                     expr->as.call.args,
                                                                     expr->as.call.arg_count,
                                                                     expr->as.call.has_explicit_type_args,
+                                                                    (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                                     expr->as.call.explicit_type_arg_count);
 
                         if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
@@ -14834,6 +14931,7 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
                                                                     expr->as.call.args,
                                                                     expr->as.call.arg_count,
                                                                     expr->as.call.has_explicit_type_args,
+                                                                    (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                                     expr->as.call.explicit_type_arg_count);
                     if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                         callable_return_inference_is_pending(context, resolution.callable)) {
@@ -21362,6 +21460,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                     expr->as.call.args,
                                                                     expr->as.call.arg_count,
                                                                     expr->as.call.has_explicit_type_args,
+                                                                    (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                                     expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
@@ -21463,6 +21562,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                        expr->as.call.args,
                                                                        expr->as.call.arg_count,
                                                                        expr->as.call.has_explicit_type_args,
+                                                                       (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                                        expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
@@ -21639,6 +21739,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                             expr->as.call.args,
                                                             expr->as.call.arg_count,
                                                             expr->as.call.has_explicit_type_args,
+                                                            (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                             expr->as.call.explicit_type_arg_count);
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
@@ -21731,6 +21832,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                             expr->as.call.args,
                                                             expr->as.call.arg_count,
                                                             expr->as.call.has_explicit_type_args,
+                                                            (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                             expr->as.call.explicit_type_arg_count);
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
@@ -21828,6 +21930,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                         expr->as.call.args,
                                                         expr->as.call.arg_count,
                                                         expr->as.call.has_explicit_type_args,
+                                                        (const FengTypeRef *const *)expr->as.call.explicit_type_args,
                                                         expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
@@ -23259,7 +23362,8 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 return false;
             }
             /* G4-13b: Arity check for explicit type args against resolved callable. */
-            if (expr->as.call.has_explicit_type_args) {
+            if (expr->as.call.has_explicit_type_args &&
+                expr->as.call.resolved_callable.kind != FENG_RESOLVED_CALLABLE_NONE) {
                 const FengResolvedCallable *rc = &expr->as.call.resolved_callable;
                 size_t callable_type_param_count = 0U;
                 if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&

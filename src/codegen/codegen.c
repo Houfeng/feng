@@ -32160,7 +32160,7 @@ static bool cg_emit_imported_function_decl(CG *cg, const FengDecl *decl) {
             }
             for (size_t i = 0U; i < sig->param_count; ++i) {
                 buf_append_cstr(&cg->fn_protos, ", ");
-                if (param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
+                if (cg_shared_generic_param_uses_address(param_types[i])) {
                     buf_append_fmt(&cg->fn_protos, "const void *_p_%.*s",
                                    (int)sig->params[i].name.length,
                                    sig->params[i].name.data);

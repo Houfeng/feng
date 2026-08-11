@@ -1,0 +1,82 @@
+open module fcts_lib.test;
+
+import std;
+
+/** Reference leaf used by the heterogeneous generic composition tests. */
+open type LibCompositionLeaf<T> {
+  /** Generic payload. */
+  open let payload: T;
+
+  /** Managed field following the generic payload. */
+  open let label: string;
+
+  /** Scalar field following the managed field. */
+  open let code: i64;
+
+  /** Construct a populated leaf. */
+  func LibCompositionLeaf(payload: T, label: string, code: i64) {
+    self.payload = payload;
+    self.label = label;
+    self.code = code;
+  }
+}
+
+/** Tuple layer combining a generic reference family and a direct generic slot. */
+open type LibCompositionPair<T>(LibCompositionLeaf<T>, T);
+
+/** Value layer whose concrete layout depends transitively on T. */
+@value
+open type LibCompositionValue<T> {
+  /** Nested generic tuple. */
+  open var pair: LibCompositionPair<T>;
+
+  /** Managed field after the nested tuple. */
+  open var marker: string;
+
+  /** Scalar tail used to verify the complete concrete layout. */
+  open var revision: i64;
+
+  /** Construct a populated value layer. */
+  func LibCompositionValue(
+    pair: LibCompositionPair<T>,
+    marker: string,
+    revision: i64
+  ) {
+    self.pair = pair;
+    self.marker = marker;
+    self.revision = revision;
+  }
+}
+
+/** Reference layer storing the descriptor-sized value and its leaf. */
+open type LibCompositionEnvelope<T> {
+  /** Stored heterogeneous value. */
+  open var value: LibCompositionValue<T>;
+
+  /** Independently stored reference leaf. */
+  open var leaf: LibCompositionLeaf<T>;
+
+  /** Construct a populated envelope. */
+  func LibCompositionEnvelope(
+    value: LibCompositionValue<T>,
+    leaf: LibCompositionLeaf<T>
+  ) {
+    self.value = value;
+    self.leaf = leaf;
+  }
+
+  /** Store and return a value through the generic member-function body. */
+  open func replaceValue(
+    next: LibCompositionValue<T>
+  ): LibCompositionValue<T> {
+    self.value = next;
+    return self.value;
+  }
+}
+
+/** Return an heterogeneous value through a generic top-level function body. */
+open func libCompositionRoundTrip<T>(
+  value: LibCompositionValue<T>
+): LibCompositionValue<T> {
+  return value;
+}

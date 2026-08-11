@@ -40,6 +40,7 @@ func main(args: string[]) {
       test_imported_generic_callable_mixin();
       test_nested_generic_callback();
       test_reified_value_callable();
+      test_generic_composition_coverage();
       test_mixin();
       test_private_generic_representation();
       test_cross_package_private_representation();

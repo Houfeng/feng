@@ -1,0 +1,54 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import fcts_lib.test;
+
+/** Verify combinations that are not covered by the individual generic tests. */
+open func test_generic_composition_coverage(): void {
+  describe("generic composition coverage", () {
+    test("heterogeneous nested generic layout with scalar payload", () {
+      let leaf = LibCompositionLeaf<i64>(41, "scalar-leaf", 42);
+      let pair: LibCompositionPair<i64> = (leaf, 43);
+      let value = LibCompositionValue<i64>(pair, "scalar-value", 44);
+      let envelope = LibCompositionEnvelope<i64>(value, leaf);
+
+      let fromTopLevel = libCompositionRoundTrip<i64>(value);
+      let fromMember = envelope.replaceValue(fromTopLevel);
+
+      assert(fromMember.pair.item1.payload == 41,
+             "nested reference payload survives scalar layout");
+      assert(fromMember.pair.item1.label == "scalar-leaf" &&
+             fromMember.pair.item1.code == 42,
+             "nested reference tail survives scalar layout");
+      assert(fromMember.pair.item2 == 43 &&
+             fromMember.marker == "scalar-value" &&
+             fromMember.revision == 44,
+             "tuple payload and value tail survive scalar layout");
+      assert(envelope.leaf.payload == 41,
+             "ordinary generic member stores the scalar leaf");
+    });
+
+    test("heterogeneous nested generic layout with managed payload", () {
+      let leaf = LibCompositionLeaf<string>("managed-payload", "managed-leaf", 51);
+      let pair: LibCompositionPair<string> = (leaf, "managed-tuple");
+      let value = LibCompositionValue<string>(pair, "managed-value", 52);
+      let envelope = LibCompositionEnvelope<string>(value, leaf);
+
+      let fromTopLevel = libCompositionRoundTrip<string>(value);
+      let fromMember = envelope.replaceValue(fromTopLevel);
+
+      assert(fromMember.pair.item1.payload == "managed-payload",
+             "nested reference payload survives managed layout");
+      assert(fromMember.pair.item1.label == "managed-leaf" &&
+             fromMember.pair.item1.code == 51,
+             "nested reference tail survives managed layout");
+      assert(fromMember.pair.item2 == "managed-tuple" &&
+             fromMember.marker == "managed-value" &&
+             fromMember.revision == 52,
+             "tuple payload and value tail survive managed layout");
+      assert(envelope.leaf.payload == "managed-payload",
+             "ordinary generic member stores the managed leaf");
+    });
+  });
+}
