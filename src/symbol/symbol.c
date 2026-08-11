@@ -227,6 +227,22 @@ static void decl_dispose(FengSymbolDeclView *decl, bool free_self) {
     }
     free(decl->reifiable_type_deps);
 
+    for (index = 0U; index < decl->reifiable_callable_dep_count; ++index) {
+        FengSymbolCallableDepView *dependency =
+            &decl->reifiable_callable_deps[index];
+
+        free(dependency->target_module_name);
+        feng_symbol_internal_type_free(dependency->owner_instance_type);
+        for (size_t arg_index = 0U;
+             arg_index < dependency->callable_type_arg_count;
+             ++arg_index) {
+            feng_symbol_internal_type_free(
+                dependency->callable_type_args[arg_index]);
+        }
+        free(dependency->callable_type_args);
+    }
+    free(decl->reifiable_callable_deps);
+
     memset(decl, 0, sizeof(*decl));
     if (free_self) {
         free(decl);
@@ -488,6 +504,27 @@ static void remap_decl_type_targets(FengSymbolDeclView *decl,
     for (index = 0U; index < decl->reifiable_type_dep_count; ++index) {
         remap_type_target(decl->reifiable_type_deps[index], pairs, pair_count);
     }
+    for (index = 0U;
+         index < decl->reifiable_callable_dep_count;
+         ++index) {
+        FengSymbolCallableDepView *dependency =
+            &decl->reifiable_callable_deps[index];
+
+        if (dependency->local_target_decl != NULL) {
+            dependency->local_target_decl = find_decl_clone(
+                pairs, pair_count, dependency->local_target_decl);
+        }
+        remap_type_target(dependency->owner_instance_type,
+                          pairs,
+                          pair_count);
+        for (size_t arg_index = 0U;
+             arg_index < dependency->callable_type_arg_count;
+             ++arg_index) {
+            remap_type_target(dependency->callable_type_args[arg_index],
+                              pairs,
+                              pair_count);
+        }
+    }
     for (index = 0U; index < decl->member_count; ++index) {
         remap_decl_type_targets(decl->members[index], pairs, pair_count);
     }
@@ -529,6 +566,8 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     clone->members = NULL;
     clone->reifiable_agg_deps = NULL;
     clone->reifiable_type_deps = NULL;
+    clone->reifiable_callable_deps = NULL;
+    clone->reifiable_callable_dep_count = 0U;
 
     if ((decl->abi_library != NULL && clone->abi_library == NULL) ||
         (decl->abi_symbol != NULL && clone->abi_symbol == NULL) ||
@@ -661,6 +700,79 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
             if (decl->reifiable_type_deps[index] != NULL && clone->reifiable_type_deps[index] == NULL) {
                 decl_dispose(clone, true);
                 return NULL;
+            }
+        }
+    }
+
+    if (decl->reifiable_callable_dep_count > 0U) {
+        clone->reifiable_callable_deps =
+            (FengSymbolCallableDepView *)calloc(
+                decl->reifiable_callable_dep_count,
+                sizeof(*clone->reifiable_callable_deps));
+        if (clone->reifiable_callable_deps == NULL) {
+            feng_symbol_internal_set_error(
+                out_error,
+                decl->path,
+                decl->token,
+                "out of memory cloning reifiable callable deps");
+            decl_dispose(clone, true);
+            return NULL;
+        }
+        clone->reifiable_callable_dep_count =
+            decl->reifiable_callable_dep_count;
+        for (index = 0U;
+             index < decl->reifiable_callable_dep_count;
+             ++index) {
+            const FengSymbolCallableDepView *source_dependency =
+                &decl->reifiable_callable_deps[index];
+            FengSymbolCallableDepView *target_dependency =
+                &clone->reifiable_callable_deps[index];
+
+            target_dependency->local_target_decl =
+                source_dependency->local_target_decl;
+            target_dependency->kind = source_dependency->kind;
+            target_dependency->target_symbol_id =
+                source_dependency->target_symbol_id;
+            target_dependency->target_module_name =
+                feng_symbol_internal_dup_cstr(
+                    source_dependency->target_module_name);
+            target_dependency->owner_instance_type =
+                feng_symbol_internal_type_clone(
+                    source_dependency->owner_instance_type,
+                    out_error);
+            if ((source_dependency->target_module_name != NULL &&
+                 target_dependency->target_module_name == NULL) ||
+                (source_dependency->owner_instance_type != NULL &&
+                 target_dependency->owner_instance_type == NULL)) {
+                decl_dispose(clone, true);
+                return NULL;
+            }
+            if (source_dependency->callable_type_arg_count > 0U) {
+                target_dependency->callable_type_args =
+                    (FengSymbolTypeView **)calloc(
+                        source_dependency->callable_type_arg_count,
+                        sizeof(*target_dependency->callable_type_args));
+                if (target_dependency->callable_type_args == NULL) {
+                    decl_dispose(clone, true);
+                    return NULL;
+                }
+                target_dependency->callable_type_arg_count =
+                    source_dependency->callable_type_arg_count;
+                for (size_t arg_index = 0U;
+                     arg_index < source_dependency->callable_type_arg_count;
+                     ++arg_index) {
+                    target_dependency->callable_type_args[arg_index] =
+                        feng_symbol_internal_type_clone(
+                            source_dependency->callable_type_args[arg_index],
+                            out_error);
+                    if (source_dependency->callable_type_args[arg_index] !=
+                            NULL &&
+                        target_dependency->callable_type_args[arg_index] ==
+                            NULL) {
+                        decl_dispose(clone, true);
+                        return NULL;
+                    }
+                }
             }
         }
     }

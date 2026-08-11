@@ -37,6 +37,22 @@ typedef struct FengSymbolParamView {
     FengSymbolTypeView *type;
 } FengSymbolParamView;
 
+/* One direct callable dependency carried by a function/method symbol. The
+ * cross-module callee identity is the pair (target_module_name,
+ * target_symbol_id). A local declaration pointer is retained before
+ * serialization so the writer can assign its deterministic symbol id after
+ * dependency-closure selection. */
+typedef struct FengSymbolCallableDepView {
+    FengResolvedCallableKind kind;
+    const void *target_source_node;
+    struct FengSymbolDeclView *local_target_decl;
+    char *target_module_name;
+    uint32_t target_symbol_id;
+    FengSymbolTypeView *owner_instance_type;
+    FengSymbolTypeView **callable_type_args;
+    size_t callable_type_arg_count;
+} FengSymbolCallableDepView;
+
 struct FengSymbolTypeView {
     FengSymbolTypeKind kind;
     /* Resolved declaration identity for named and type-parameter references. */
@@ -114,6 +130,13 @@ struct FengSymbolDeclView {
     size_t reifiable_agg_dep_count;
     FengSymbolTypeView **reifiable_type_deps;
     size_t reifiable_type_dep_count;
+    FengSymbolCallableDepView *reifiable_callable_deps;
+    size_t reifiable_callable_dep_count;
+    /* Original deterministic id when this declaration came from an FT.
+     * Source-built graphs assign the same stable tree id before export. */
+    uint32_t ft_symbol_id;
+    /* Compile-time source identity used only while building a symbol graph. */
+    const void *source_node;
 };
 
 typedef struct FengSymbolRelation {

@@ -38,6 +38,8 @@ typedef struct WriterContext {
     size_t doc_count;
     FengSymbolFtAttrRecord *attrs;
     size_t attr_count;
+    FengSymbolFtCallableDepRecord *callable_deps;
+    size_t callable_dep_count;
     FengSymbolFtSpanRecord *spans;
     size_t span_count;
     DeclIdMap *decl_ids;
@@ -145,6 +147,7 @@ static void writer_context_dispose(WriterContext *ctx) {
     free(ctx->rels);
     free(ctx->docs);
     free(ctx->attrs);
+    free(ctx->callable_deps);
     free(ctx->spans);
     free(ctx->decl_ids);
     memset(ctx, 0, sizeof(*ctx));
@@ -901,6 +904,22 @@ static bool writer_select_type_dependencies(WriterContext *ctx,
     }
 }
 
+/* Select one local callable dependency together with its owner chain so the
+ * target keeps a valid declaration hierarchy even when it is non-public. */
+static bool writer_select_decl_with_owners(WriterContext *ctx,
+                                           FengSymbolDeclView *decl,
+                                           const char *path,
+                                           FengSymbolError *out_error) {
+    if (decl == NULL) {
+        return true;
+    }
+    if (decl->owner != NULL &&
+        !writer_select_decl_with_owners(ctx, decl->owner, path, out_error)) {
+        return false;
+    }
+    return writer_select_decl(ctx, decl, path, out_error);
+}
+
 /* Expand the dependency closure from every type surface of a selected declaration. */
 static bool writer_select_decl_dependencies(WriterContext *ctx,
                                             const FengSymbolDeclView *decl,
@@ -962,6 +981,34 @@ static bool writer_select_decl_dependencies(WriterContext *ctx,
             return false;
         }
     }
+    for (index = 0U; index < decl->reifiable_callable_dep_count; ++index) {
+        const FengSymbolCallableDepView *dependency =
+            &decl->reifiable_callable_deps[index];
+        size_t arg_index;
+
+        if (dependency->local_target_decl != NULL &&
+            !writer_select_decl_with_owners(
+                ctx, dependency->local_target_decl, path, out_error)) {
+            return false;
+        }
+        if (!writer_select_type_dependencies(ctx,
+                                             dependency->owner_instance_type,
+                                             path,
+                                             out_error)) {
+            return false;
+        }
+        for (arg_index = 0U;
+             arg_index < dependency->callable_type_arg_count;
+             ++arg_index) {
+            if (!writer_select_type_dependencies(
+                    ctx,
+                    dependency->callable_type_args[arg_index],
+                    path,
+                    out_error)) {
+                return false;
+            }
+        }
+    }
     return true;
 }
 
@@ -984,7 +1031,32 @@ static bool writer_assign_decl_ids(WriterContext *ctx,
                                                       decl->token,
                                                       "symbol id exceeds .ft range");
             }
-            ctx->decl_ids[index].id = (*next_id)++;
+            uint32_t assigned_id = decl->ft_symbol_id;
+            size_t used_index;
+
+            if (assigned_id == 0U) {
+                assigned_id = (*next_id)++;
+            } else if (assigned_id >= *next_id) {
+                *next_id = assigned_id + 1U;
+                if (*next_id == 0U) {
+                    return feng_symbol_internal_set_error(
+                        out_error,
+                        path,
+                        decl->token,
+                        "symbol id exceeds .ft range");
+                }
+            }
+            for (used_index = 0U; used_index < index; ++used_index) {
+                if (ctx->decl_ids[used_index].id == assigned_id) {
+                    return feng_symbol_internal_set_error(
+                        out_error,
+                        path,
+                        decl->token,
+                        "duplicate stable .ft symbol id %u",
+                        assigned_id);
+                }
+            }
+            ctx->decl_ids[index].id = assigned_id;
             break;
         }
     }
@@ -1432,6 +1504,104 @@ static bool writer_emit_span(WriterContext *ctx,
                          out_error);
 }
 
+/* Serialize the fixed-slot direct callable dependencies of one symbol. */
+static bool writer_emit_callable_deps(WriterContext *ctx,
+                                      const FengSymbolDeclView *decl,
+                                      uint32_t symbol_id,
+                                      const char *path,
+                                      FengToken token,
+                                      FengSymbolError *out_error) {
+    size_t dependency_index;
+
+    for (dependency_index = 0U;
+         dependency_index < decl->reifiable_callable_dep_count;
+         ++dependency_index) {
+        const FengSymbolCallableDepView *dependency =
+            &decl->reifiable_callable_deps[dependency_index];
+        FengSymbolFtCallableDepRecord record;
+        uint32_t *arg_type_ids = NULL;
+        size_t arg_index;
+
+        memset(&record, 0, sizeof(record));
+        record.caller_symbol_id = symbol_id;
+        record.target_module_str = writer_intern_string(
+            ctx, dependency->target_module_name, path, token, out_error);
+        record.target_symbol_id = dependency->local_target_decl != NULL
+                                      ? writer_find_decl_id(
+                                            ctx,
+                                            dependency->local_target_decl)
+                                      : dependency->target_symbol_id;
+        record.kind = (uint16_t)dependency->kind;
+        record.owner_instance_type_id = writer_serialize_type(
+            ctx,
+            dependency->owner_instance_type,
+            path,
+            token,
+            out_error);
+        if (record.target_module_str == 0U ||
+            record.target_symbol_id == 0U ||
+            (dependency->owner_instance_type != NULL &&
+             record.owner_instance_type_id == 0U)) {
+            return false;
+        }
+        if (dependency->callable_type_arg_count > 0U) {
+            arg_type_ids = (uint32_t *)calloc(
+                dependency->callable_type_arg_count,
+                sizeof(*arg_type_ids));
+            if (arg_type_ids == NULL) {
+                return feng_symbol_internal_set_error(
+                    out_error,
+                    path,
+                    token,
+                    "out of memory serializing callable dependency arguments");
+            }
+            for (arg_index = 0U;
+                 arg_index < dependency->callable_type_arg_count;
+                 ++arg_index) {
+                arg_type_ids[arg_index] = writer_serialize_type(
+                    ctx,
+                    dependency->callable_type_args[arg_index],
+                    path,
+                    token,
+                    out_error);
+                if (dependency->callable_type_args[arg_index] != NULL &&
+                    arg_type_ids[arg_index] == 0U) {
+                    free(arg_type_ids);
+                    return false;
+                }
+            }
+            record.callable_arg_start = (uint32_t)ctx->tseq_count;
+            record.callable_arg_count =
+                (uint32_t)dependency->callable_type_arg_count;
+            for (arg_index = 0U;
+                 arg_index < dependency->callable_type_arg_count;
+                 ++arg_index) {
+                if (!writer_append_tseq(ctx,
+                                        0U,
+                                        arg_type_ids[arg_index],
+                                        0U,
+                                        path,
+                                        token,
+                                        out_error)) {
+                    free(arg_type_ids);
+                    return false;
+                }
+            }
+            free(arg_type_ids);
+        }
+        if (!append_record((void **)&ctx->callable_deps,
+                           &ctx->callable_dep_count,
+                           sizeof(record),
+                           &record,
+                           path,
+                           token,
+                           out_error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool writer_collect_decl(WriterContext *ctx,
                                 const FengSymbolDeclView *decl,
                                 uint32_t owner_id,
@@ -1444,7 +1614,7 @@ static bool writer_collect_decl(WriterContext *ctx,
 
     memset(&record, 0, sizeof(record));
     symbol_id = writer_find_decl_id(ctx, decl);
-    if (symbol_id == 0U || symbol_id != (uint32_t)(ctx->sym_count + 1U)) {
+    if (symbol_id == 0U) {
         return feng_symbol_internal_set_error(out_error,
                                               path,
                                               decl->token,
@@ -1593,6 +1763,12 @@ static bool writer_collect_decl(WriterContext *ctx,
                        decl->token,
                        out_error) ||
         !writer_emit_decl_attrs(ctx, decl, symbol_id, path, decl->token, out_error) ||
+        !writer_emit_callable_deps(ctx,
+                                   decl,
+                                   symbol_id,
+                                   path,
+                                   decl->token,
+                                   out_error) ||
         !writer_emit_span(ctx, decl, symbol_id, path, decl->token, out_error)) {
         return false;
     }
@@ -1800,9 +1976,10 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     Buffer rels = {0};
     Buffer docs = {0};
     Buffer attrs = {0};
+    Buffer callable_deps = {0};
     Buffer spans = {0};
     Buffer payload = {0};
-    FengSymbolFtSectionEntry sections[8];
+    FengSymbolFtSectionEntry sections[9];
     size_t section_count = 0U;
     FengSymbolFtHeader header;
     FILE *file = NULL;
@@ -1825,6 +2002,7 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
         !build_fixed_section(&rels, ctx.rels, ctx.rel_count, sizeof(*ctx.rels), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&docs, ctx.docs, ctx.doc_count, sizeof(*ctx.docs), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&attrs, ctx.attrs, ctx.attr_count, sizeof(*ctx.attrs), path, module->root_decl.token, out_error) ||
+        !build_fixed_section(&callable_deps, ctx.callable_deps, ctx.callable_dep_count, sizeof(*ctx.callable_deps), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&spans, ctx.spans, ctx.span_count, sizeof(*ctx.spans), path, module->root_decl.token, out_error)) {
         goto cleanup;
     }
@@ -1866,6 +2044,7 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
                             (uint64_t)(FENG_SYMBOL_FT_SECTION_ENTRY_SIZE *
                                        (5U + (ctx.doc_count > 0U ? 1U : 0U) +
                                         (ctx.attr_count > 0U ? 1U : 0U) +
+                                        (ctx.callable_dep_count > 0U ? 1U : 0U) +
                                         (profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE && ctx.span_count > 0U ? 1U : 0U)));
     APPEND_SECTION(FENG_SYMBOL_FT_SEC_STRS,
                    FENG_SYMBOL_FT_SEC_FLAG_REQUIRED | FENG_SYMBOL_FT_SEC_FLAG_SORTED,
@@ -1907,6 +2086,14 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
                        (uint32_t)ctx.attr_count,
                        (uint32_t)sizeof(FengSymbolFtAttrRecord),
                        &attrs);
+    }
+    if (ctx.callable_dep_count > 0U) {
+        APPEND_SECTION(FENG_SYMBOL_FT_SEC_CALLABLE_DEPS,
+                       FENG_SYMBOL_FT_SEC_FLAG_REQUIRED |
+                           FENG_SYMBOL_FT_SEC_FLAG_FIXED_ENTRY,
+                       (uint32_t)ctx.callable_dep_count,
+                       (uint32_t)sizeof(FengSymbolFtCallableDepRecord),
+                       &callable_deps);
     }
     if (profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE && ctx.span_count > 0U) {
         header.flags |= FENG_SYMBOL_FT_FLAG_HAS_SPANS;
@@ -1957,6 +2144,7 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     buffer_free(&rels);
     buffer_free(&docs);
     buffer_free(&attrs);
+    buffer_free(&callable_deps);
     buffer_free(&spans);
     buffer_free(&payload);
     return true;
@@ -1972,6 +2160,7 @@ cleanup:
     buffer_free(&tseqs);
     buffer_free(&rels);
     buffer_free(&attrs);
+    buffer_free(&callable_deps);
     buffer_free(&spans);
     buffer_free(&payload);
     return false;

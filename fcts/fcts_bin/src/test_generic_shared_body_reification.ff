@@ -1,0 +1,244 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import fcts_lib.test;
+
+/** Consumer-defined managed payload used to close an imported shared body. */
+type SharedBodyManagedPayload {
+  /** Observable payload. */
+  open let text: string;
+
+  /** Construct a managed payload. */
+  func SharedBodyManagedPayload(text: string) {
+    self.text = text;
+  }
+}
+
+/** Consumer-defined wide value used to verify descriptor-sized return storage. */
+@value
+type SharedBodyWidePayload {
+  /** First managed slot. */
+  open let first: string;
+
+  /** Second managed slot. */
+  open let second: string;
+
+  /** Scalar tail. */
+  open let number: i64;
+
+  /** Construct a populated wide value. */
+  func SharedBodyWidePayload(first: string, second: string, number: i64) {
+    self.first = first;
+    self.second = second;
+    self.number = number;
+  }
+}
+
+/** Consumer subject used through the provider's object-form spec. */
+type SharedBodyNamedPayload: LibSharedNamed {
+  /** Name returned through the spec witness. */
+  open let value: string;
+
+  /** Construct a named subject. */
+  func SharedBodyNamedPayload(value: string) {
+    self.value = value;
+  }
+
+  /** Implement LibSharedNamed. */
+  func name(): string {
+    return self.value;
+  }
+}
+
+/** Verify direct dependencies owned by top-level generic shared bodies. */
+open func test_generic_shared_body_reification(): void {
+  describe("generic shared-body reification", () {
+    test("top-level shared body closes scalar dependencies", () {
+      let result = libSharedLeaf<i64>(41, "scalar");
+      assert(result.value == 41 && result.marker == "scalar" &&
+             result.revision == 1,
+             "scalar parameter local and result use one closed descriptor graph");
+    });
+
+    test("top-level shared body closes managed dependencies", () {
+      let result = libSharedLeaf<SharedBodyManagedPayload>(
+        SharedBodyManagedPayload("managed"),
+        "managed-marker"
+      );
+      assert(result.value.text == "managed" &&
+             result.marker == "managed-marker" && result.revision == 1,
+             "managed payload and result tail survive the imported shared body");
+    });
+
+    test("top-level shared body closes wide value dependencies", () {
+      let result = libSharedLeaf<SharedBodyWidePayload>(
+        SharedBodyWidePayload("wide-left", "wide-right", 42),
+        "wide-marker"
+      );
+      assert(result.value.first == "wide-left" &&
+             result.value.second == "wide-right" &&
+             result.value.number == 42 && result.marker == "wide-marker" &&
+             result.revision == 1,
+             "descriptor-sized result storage preserves every consumer field");
+    });
+
+    test("top-level shared body closes object-form spec dependencies", () {
+      let named: LibSharedNamed = SharedBodyNamedPayload("named");
+      let result = libSharedLeaf<LibSharedNamed>(named, "spec-marker");
+      assert(result.value.name() == "named" &&
+             result.marker == "spec-marker" && result.revision == 1,
+             "object-form subject and witness survive the generic result");
+    });
+
+    test("top-level shared body closes callable-form spec dependencies", () {
+      let mapper: LibSharedMapper = (value: i64) -> "mapped";
+      let result = libSharedLeaf<LibSharedMapper>(mapper, "callable-marker");
+      assert(result.value(43) == "mapped" &&
+             result.marker == "callable-marker" && result.revision == 1,
+             "callable subject and witness survive the generic result");
+    });
+
+    test("top-level shared body closes nested derived dependencies", () {
+      let result = libSharedNestedDirect<string>("nested");
+      assert(result.first.value == "nested" &&
+             result.first.marker == "nested-box" &&
+             result.first.revision == 2 && result.second == "nested" &&
+             result.repeated.value == "nested" &&
+             result.marker == "nested-pair",
+             "List<Box<T>> and Pair<Box<T>, T> retain their complete layout");
+    });
+
+    test("generic owner instance method closes owner-level dependencies", () {
+      let owner = LibSharedOwner<string>("owner-value");
+      let result = owner.ownerOnly();
+      assert(result.value == "owner-value" &&
+             result.marker == "owner-only" && result.revision == 3,
+             "owner T closes the method result and inferred List<T> local");
+    });
+
+    test("non-generic owner instance method closes method dependencies", () {
+      let owner = LibSharedMethodOwner();
+      let result = owner.wrap<SharedBodyWidePayload>(
+        SharedBodyWidePayload("method-left", "method-right", 44)
+      );
+      assert(result.value.first == "method-left" &&
+             result.value.second == "method-right" &&
+             result.value.number == 44 &&
+             result.marker == "method-owner" && result.revision == 1,
+             "method U closes instance parameters locals and results");
+    });
+
+    test("generic owner instance method keeps T and U scopes independent", () {
+      let owner = LibSharedOwner<string>("owner-T");
+      let result = owner.combine<SharedBodyWidePayload>(
+        SharedBodyWidePayload("method-U-left", "method-U-right", 45)
+      );
+      assert(result.first == "owner-T" &&
+             result.second.first == "method-U-left" &&
+             result.second.second == "method-U-right" &&
+             result.second.number == 45 && result.repeated == "owner-T" &&
+             result.marker == "owner:method",
+             "owner T and method U retain separate descriptor scopes");
+    });
+
+    test("non-generic owner static method closes method dependencies", () {
+      let result = LibSharedMethodOwner.wrapStatic<SharedBodyManagedPayload>(
+        SharedBodyManagedPayload("static-method-U")
+      );
+      assert(result.value.text == "static-method-U" &&
+             result.marker == "static-method-owner" && result.revision == 1,
+             "method U closes static parameters explicit locals and results");
+    });
+
+    test("generic owner static method keeps T and U scopes independent", () {
+      let result = LibSharedOwner<string>.combineStatic<
+        SharedBodyManagedPayload
+      >("static-owner-T", SharedBodyManagedPayload("static-method-U"));
+      assert(result.first.text == "static-method-U" &&
+             result.second == "static-owner-T" &&
+             result.repeated.text == "static-method-U" &&
+             result.marker == "reordered-second:reordered-first",
+             "static owner T and method U close the imported descriptor graph");
+    });
+
+    test("shared caller deduplicates a closed callee descriptor", () {
+      let result = libSharedDuplicate<string>("duplicate");
+      assert(result.first == "duplicate" && result.second == "duplicate" &&
+             result.repeated == "duplicate" &&
+             result.marker == "first:second",
+             "one closed leaf descriptor serves both direct call sites");
+    });
+
+    test("shared caller reorders and crops generic arguments", () {
+      let result = libSharedReorder<i64, string>(46, "reordered");
+      assert(result.first == "reordered" && result.second == 46 &&
+             result.repeated == "reordered" &&
+             result.marker == "reordered-second:reordered-first",
+             "callee descriptors receive U then T without merging scopes");
+    });
+
+    test("shared caller repeats one argument into two callee positions", () {
+      let value = SharedBodyManagedPayload("repeated");
+      let result = libSharedRepeat<SharedBodyManagedPayload>(value);
+      assert(result.first.text == "repeated" &&
+             result.second.text == "repeated" &&
+             result.repeated.text == "repeated" && result.marker == "joined",
+             "the <T,T> callee node preserves both parameter positions");
+    });
+
+    test("direct recursive descriptor graph reuses its registered shell", () {
+      let result = libSharedCountdown<SharedBodyWidePayload>(
+        SharedBodyWidePayload("count-left", "count-right", 47),
+        4
+      );
+      assert(result.first == "count-left" &&
+             result.second == "count-right" && result.number == 47,
+             "direct recursion terminates with descriptor-sized values intact");
+    });
+
+    test("mutually recursive descriptor graph reuses both shells", () {
+      let result = libSharedMutualLeft<SharedBodyManagedPayload>(
+        SharedBodyManagedPayload("mutual"),
+        5
+      );
+      assert(result.text == "mutual",
+             "mutual recursion terminates without expanding descriptor nodes");
+    });
+
+    test("instance shared caller forwards to another generic method", () {
+      let owner = LibSharedOwner<string>("through-owner");
+      let result = owner.combineThrough<SharedBodyManagedPayload>(
+        SharedBodyManagedPayload("through-method")
+      );
+      assert(result.first == "through-owner" &&
+             result.second.text == "through-method" &&
+             result.repeated == "through-owner" &&
+             result.marker == "owner:method",
+             "instance method descriptor points at the closed method callee");
+    });
+
+    test("static shared caller forwards to another generic method", () {
+      let result = LibSharedOwner<string>.combineStaticThrough<
+        SharedBodyManagedPayload
+      >("through-static-owner", SharedBodyManagedPayload("through-static-U"));
+      assert(result.first.text == "through-static-U" &&
+             result.second == "through-static-owner" &&
+             result.repeated.text == "through-static-U" &&
+             result.marker == "reordered-second:reordered-first",
+             "static method descriptor points at the closed static callee");
+    });
+
+    test("non-generic owner methods forward their method-level scope", () {
+      let owner = LibSharedMethodOwner();
+      let instanceResult = owner.wrapThrough<string>("instance-through");
+      let staticResult =
+        LibSharedMethodOwner.wrapStaticThrough<string>("static-through");
+      assert(instanceResult.value == "instance-through" &&
+             instanceResult.marker == "method-owner" &&
+             staticResult.value == "static-through" &&
+             staticResult.marker == "static-method-owner",
+             "non-generic owner callers retain method U in both call forms");
+    });
+  });
+}

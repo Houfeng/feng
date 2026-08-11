@@ -3,13 +3,20 @@
 #include <stdlib.h>
 #include <string.h>
 
+static bool rd_type_ref_equals(const FengTypeRef *left,
+                               const FengTypeRef *right);
+static bool extract_fit_target_implicit_type_param(
+    const FengTypeRef *target_ref,
+    FengTypeParam *out_param);
+
 /* ===================================================================
  * ReifiableDepSet 基础 API（get_or_create / append / lookup）
  * =================================================================== */
 
-FengReifiableDepSet *feng_semantic_get_or_create_reifiable_dep_set(
+FengReifiableDepSet *feng_semantic_get_or_create_member_reifiable_dep_set(
     FengSemanticAnalysis *analysis,
-    const FengDecl *owner_decl) {
+    const FengDecl *owner_decl,
+    const FengTypeMember *owner_member) {
     size_t index;
     FengReifiableDepSet *slot;
 
@@ -18,7 +25,8 @@ FengReifiableDepSet *feng_semantic_get_or_create_reifiable_dep_set(
     }
 
     for (index = 0U; index < analysis->reifiable_dep_set_count; ++index) {
-        if (analysis->reifiable_dep_sets[index].owner_decl == owner_decl) {
+        if (analysis->reifiable_dep_sets[index].owner_decl == owner_decl &&
+            analysis->reifiable_dep_sets[index].owner_member == owner_member) {
             return &analysis->reifiable_dep_sets[index];
         }
     }
@@ -41,7 +49,15 @@ FengReifiableDepSet *feng_semantic_get_or_create_reifiable_dep_set(
     slot = &analysis->reifiable_dep_sets[analysis->reifiable_dep_set_count++];
     memset(slot, 0, sizeof(*slot));
     slot->owner_decl = owner_decl;
+    slot->owner_member = owner_member;
     return slot;
+}
+
+FengReifiableDepSet *feng_semantic_get_or_create_reifiable_dep_set(
+    FengSemanticAnalysis *analysis,
+    const FengDecl *owner_decl) {
+    return feng_semantic_get_or_create_member_reifiable_dep_set(
+        analysis, owner_decl, NULL);
 }
 
 bool feng_semantic_reifiable_dep_set_append(
@@ -55,9 +71,9 @@ bool feng_semantic_reifiable_dep_set_append(
         return false;
     }
 
-    /* 去重：相同 type_ref 指针不重复追加。 */
+    /* 去重：按完整类型表达式身份合并，不能依赖 AST 指针。 */
     for (index = 0U; index < dep_set->dep_count; ++index) {
-        if (dep_set->deps[index].type_ref == type_ref &&
+        if (rd_type_ref_equals(dep_set->deps[index].type_ref, type_ref) &&
             dep_set->deps[index].kind == kind) {
             return true;
         }
@@ -84,9 +100,10 @@ bool feng_semantic_reifiable_dep_set_append(
     return true;
 }
 
-const FengReifiableDepSet *feng_semantic_lookup_reifiable_dep_set(
+const FengReifiableDepSet *feng_semantic_lookup_member_reifiable_dep_set(
     const FengSemanticAnalysis *analysis,
-    const FengDecl *owner_decl) {
+    const FengDecl *owner_decl,
+    const FengTypeMember *owner_member) {
     size_t index;
 
     if (analysis == NULL || owner_decl == NULL) {
@@ -94,11 +111,95 @@ const FengReifiableDepSet *feng_semantic_lookup_reifiable_dep_set(
     }
 
     for (index = 0U; index < analysis->reifiable_dep_set_count; ++index) {
-        if (analysis->reifiable_dep_sets[index].owner_decl == owner_decl) {
+        if (analysis->reifiable_dep_sets[index].owner_decl == owner_decl &&
+            analysis->reifiable_dep_sets[index].owner_member == owner_member) {
             return &analysis->reifiable_dep_sets[index];
         }
     }
 
+    return NULL;
+}
+
+const FengReifiableDepSet *feng_semantic_lookup_reifiable_dep_set(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *owner_decl) {
+    return feng_semantic_lookup_member_reifiable_dep_set(
+        analysis, owner_decl, NULL);
+}
+
+bool feng_semantic_record_imported_symbol_identity(
+    FengSemanticAnalysis *analysis,
+    const void *source_node,
+    const void *symbol_decl,
+    const char *module_name,
+    uint32_t symbol_id) {
+    FengImportedSymbolIdentity *grown;
+    FengImportedSymbolIdentity *slot;
+
+    if (analysis == NULL || source_node == NULL || symbol_decl == NULL ||
+        module_name == NULL ||
+        symbol_id == 0U) {
+        return false;
+    }
+    for (size_t index = 0U;
+         index < analysis->imported_symbol_identity_count;
+         ++index) {
+        if (analysis->imported_symbol_identities[index].source_node ==
+            source_node) {
+            return strcmp(
+                       analysis->imported_symbol_identities[index].module_name,
+                       module_name) == 0 &&
+                   analysis->imported_symbol_identities[index].symbol_decl ==
+                       symbol_decl &&
+                   analysis->imported_symbol_identities[index].symbol_id ==
+                       symbol_id;
+        }
+    }
+    if (analysis->imported_symbol_identity_count ==
+        analysis->imported_symbol_identity_capacity) {
+        size_t new_capacity =
+            analysis->imported_symbol_identity_capacity == 0U
+                ? 16U
+                : analysis->imported_symbol_identity_capacity * 2U;
+
+        grown = (FengImportedSymbolIdentity *)realloc(
+            analysis->imported_symbol_identities,
+            new_capacity * sizeof(*grown));
+        if (grown == NULL) {
+            return false;
+        }
+        analysis->imported_symbol_identities = grown;
+        analysis->imported_symbol_identity_capacity = new_capacity;
+    }
+    slot = &analysis->imported_symbol_identities[
+        analysis->imported_symbol_identity_count++];
+    memset(slot, 0, sizeof(*slot));
+    slot->module_name = strdup(module_name);
+    if (slot->module_name == NULL) {
+        analysis->imported_symbol_identity_count--;
+        return false;
+    }
+    slot->source_node = source_node;
+    slot->symbol_decl = symbol_decl;
+    slot->symbol_id = symbol_id;
+    return true;
+}
+
+const FengImportedSymbolIdentity *
+feng_semantic_lookup_imported_symbol_identity(
+    const FengSemanticAnalysis *analysis,
+    const void *source_node) {
+    if (analysis == NULL || source_node == NULL) {
+        return NULL;
+    }
+    for (size_t index = 0U;
+         index < analysis->imported_symbol_identity_count;
+         ++index) {
+        if (analysis->imported_symbol_identities[index].source_node ==
+            source_node) {
+            return &analysis->imported_symbol_identities[index];
+        }
+    }
     return NULL;
 }
 
@@ -133,6 +234,156 @@ static bool rd_path_equals(const FengSlice *a, size_t an,
         }
     }
     return true;
+}
+
+/* 比较两个 caller-view 类型表达式。依赖身份必须按完整结构去重，不能依赖
+ * AST 指针身份，否则显式/推断或重复出现的等价类型会得到不同 slot。 */
+static bool rd_type_ref_equals(const FengTypeRef *left,
+                               const FengTypeRef *right) {
+    size_t index;
+
+    if (left == right) {
+        return true;
+    }
+    if (left == NULL || right == NULL || left->kind != right->kind) {
+        return false;
+    }
+    switch (left->kind) {
+        case FENG_TYPE_REF_NAMED:
+            if (!rd_path_equals(left->as.named.segments,
+                                left->as.named.segment_count,
+                                right->as.named.segments,
+                                right->as.named.segment_count) ||
+                left->as.named.type_arg_count !=
+                    right->as.named.type_arg_count) {
+                return false;
+            }
+            for (index = 0U;
+                 index < left->as.named.type_arg_count;
+                 ++index) {
+                if (!rd_type_ref_equals(
+                        left->as.named.type_args[index],
+                        right->as.named.type_args[index])) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            return left->array_element_writable ==
+                       right->array_element_writable &&
+                   rd_type_ref_equals(left->as.inner, right->as.inner);
+    }
+    return false;
+}
+
+/* 判断已解析 callable 是否使用共享 ABI。构造器继续使用 type descriptor
+ * 路径，不属于 callable descriptor graph。 */
+static bool rd_resolved_callable_uses_shared_abi(
+    const FengResolvedCallable *resolved) {
+    if (resolved == NULL) {
+        return false;
+    }
+    if (resolved->kind == FENG_RESOLVED_CALLABLE_FUNCTION) {
+        return resolved->function_decl != NULL &&
+               resolved->function_decl->kind == FENG_DECL_FUNCTION &&
+               !resolved->function_decl->is_extern &&
+               resolved->function_decl->as.function_decl.type_param_count > 0U;
+    }
+    if (resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
+        resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD ||
+        resolved->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
+        resolved->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) {
+        FengTypeParam implicit_fit_param;
+
+        return resolved->member != NULL &&
+               (resolved->member->as.callable.type_param_count > 0U ||
+                (resolved->owner_type_decl != NULL &&
+                 resolved->owner_type_decl->kind == FENG_DECL_TYPE &&
+                 resolved->owner_type_decl->as.type_decl.type_param_count >
+                     0U) ||
+                ((resolved->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
+                  resolved->kind ==
+                      FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) &&
+                 resolved->fit_decl != NULL &&
+                 resolved->fit_decl->kind == FENG_DECL_FIT &&
+                 extract_fit_target_implicit_type_param(
+                     resolved->fit_decl->as.fit_decl.target,
+                     &implicit_fit_param)));
+    }
+    return false;
+}
+
+/* 将 direct generic callee 追加到当前 callable dependency set。 */
+static bool rd_append_callable_dep(FengReifiableDepSet *dep_set,
+                                   const FengResolvedCallable *resolved) {
+    FengReifiableCallableDep *slot;
+    size_t index;
+
+    if (dep_set == NULL ||
+        !rd_resolved_callable_uses_shared_abi(resolved)) {
+        return true;
+    }
+    for (index = 0U; index < dep_set->callable_dep_count; ++index) {
+        const FengReifiableCallableDep *existing =
+            &dep_set->callable_deps[index];
+        size_t arg_index;
+
+        if (existing->kind != resolved->kind ||
+            existing->function_decl != resolved->function_decl ||
+            existing->owner_type_decl != resolved->owner_type_decl ||
+            existing->member != resolved->member ||
+            existing->fit_decl != resolved->fit_decl ||
+            !rd_type_ref_equals(existing->owner_instance_type_ref,
+                                resolved->owner_instance_type_ref) ||
+            existing->callable_type_arg_count !=
+                resolved->callable_type_arg_count) {
+            continue;
+        }
+        for (arg_index = 0U;
+             arg_index < existing->callable_type_arg_count;
+             ++arg_index) {
+            if (!rd_type_ref_equals(existing->callable_type_args[arg_index],
+                                    resolved->callable_type_args[arg_index])) {
+                break;
+            }
+        }
+        if (arg_index == existing->callable_type_arg_count) {
+            return true;
+        }
+    }
+    if (dep_set->callable_dep_count == dep_set->callable_dep_capacity) {
+        size_t new_capacity = dep_set->callable_dep_capacity == 0U
+                                  ? 4U
+                                  : dep_set->callable_dep_capacity * 2U;
+        FengReifiableCallableDep *grown =
+            (FengReifiableCallableDep *)realloc(
+                dep_set->callable_deps,
+                new_capacity * sizeof(*grown));
+
+        if (grown == NULL) {
+            return false;
+        }
+        dep_set->callable_deps = grown;
+        dep_set->callable_dep_capacity = new_capacity;
+    }
+    slot = &dep_set->callable_deps[dep_set->callable_dep_count++];
+    memset(slot, 0, sizeof(*slot));
+    slot->kind = resolved->kind;
+    slot->function_decl = resolved->function_decl;
+    slot->owner_type_decl = resolved->owner_type_decl;
+    slot->member = resolved->member;
+    slot->fit_decl = resolved->fit_decl;
+    slot->owner_instance_type_ref = resolved->owner_instance_type_ref;
+    slot->callable_type_args = resolved->callable_type_args;
+    slot->callable_type_arg_count = resolved->callable_type_arg_count;
+    return true;
+}
+
+bool feng_semantic_reifiable_dep_set_append_callable(
+    FengReifiableDepSet *dep_set,
+    const FengResolvedCallable *resolved) {
+    return rd_append_callable_dep(dep_set, resolved);
 }
 
 /* ---- type_ref 中是否含有对 type_params 的引用 ------------------------- */
@@ -288,6 +539,101 @@ static const FengDecl *find_type_decl_by_named_ref(
         }
     }
     return NULL;
+}
+
+/* Locate the declaration domain that owns a resolved type member. This is
+ * used for iterator-protocol calls synthesized after ordinary call
+ * resolution, whose AST contains the selected member but no call node. */
+static bool rd_find_member_owner(
+    const FengSemanticAnalysis *analysis,
+    const FengTypeMember *member,
+    const FengDecl **out_owner_type_decl,
+    const FengDecl **out_fit_decl) {
+    size_t module_index;
+
+    *out_owner_type_decl = NULL;
+    *out_fit_decl = NULL;
+    if (analysis == NULL || member == NULL) {
+        return false;
+    }
+    for (module_index = 0U;
+         module_index < analysis->module_count;
+         ++module_index) {
+        const FengSemanticModule *module =
+            &analysis->modules[module_index];
+        size_t program_index;
+
+        for (program_index = 0U;
+             program_index < module->program_count;
+             ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+            size_t decl_index;
+
+            for (decl_index = 0U;
+                 decl_index < program->declaration_count;
+                 ++decl_index) {
+                const FengDecl *decl = program->declarations[decl_index];
+                FengTypeMember *const *members = NULL;
+                size_t member_count = 0U;
+                size_t member_index;
+
+                if (decl->kind == FENG_DECL_TYPE) {
+                    members = decl->as.type_decl.members;
+                    member_count = decl->as.type_decl.member_count;
+                } else if (decl->kind == FENG_DECL_FIT) {
+                    members = decl->as.fit_decl.members;
+                    member_count = decl->as.fit_decl.member_count;
+                } else {
+                    continue;
+                }
+                for (member_index = 0U;
+                     member_index < member_count;
+                     ++member_index) {
+                    if (members[member_index] != member) {
+                        continue;
+                    }
+                    if (decl->kind == FENG_DECL_TYPE) {
+                        *out_owner_type_decl = decl;
+                    } else {
+                        *out_fit_decl = decl;
+                        *out_owner_type_decl =
+                            find_type_decl_by_named_ref(
+                                analysis, decl->as.fit_decl.target);
+                    }
+                    return *out_owner_type_decl != NULL;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/* Record one iterator-protocol call synthesized by for/in lowering using the
+ * same resolved-call identity as an explicit instance method invocation. */
+static void rd_collect_synthesized_method_call(
+    CollectContext *ctx,
+    const FengTypeMember *member,
+    const FengTypeRef *owner_instance_type_ref) {
+    FengResolvedCallable resolved;
+    const FengDecl *owner_type_decl;
+    const FengDecl *fit_decl;
+
+    if (ctx == NULL || member == NULL ||
+        !rd_find_member_owner(ctx->analysis,
+                              member,
+                              &owner_type_decl,
+                              &fit_decl)) {
+        return;
+    }
+    memset(&resolved, 0, sizeof(resolved));
+    resolved.kind = fit_decl != NULL
+        ? FENG_RESOLVED_CALLABLE_FIT_METHOD
+        : FENG_RESOLVED_CALLABLE_TYPE_METHOD;
+    resolved.owner_type_decl = owner_type_decl;
+    resolved.member = member;
+    resolved.fit_decl = fit_decl;
+    resolved.owner_instance_type_ref = owner_instance_type_ref;
+    (void)rd_append_callable_dep(ctx->dep_set, &resolved);
 }
 
 /* ---- 确定 dep kind ---------------------------------------------------- */
@@ -479,6 +825,34 @@ static void rd_try_collect_generic_target(CollectContext *ctx,
 static void collect_from_expr(CollectContext *ctx, const FengExpr *expr);
 static void collect_from_block(CollectContext *ctx, const FengBlock *block);
 static void collect_from_stmt(CollectContext *ctx, const FengStmt *stmt);
+
+/* 收集 match 分支标签引用的类型。类型绑定与普通类型标签共用 labels，
+ * `A -> B` 链式标签则需要逐层收集完整的 type_chain。 */
+static void collect_from_match_branch_labels(CollectContext *ctx,
+                                             const FengMatchBranch *branch) {
+    size_t label_index;
+
+    if (ctx == NULL || branch == NULL) {
+        return;
+    }
+    for (label_index = 0U; label_index < branch->label_count; ++label_index) {
+        const FengMatchLabel *label = &branch->labels[label_index];
+        size_t chain_index;
+
+        if (label->kind != FENG_MATCH_LABEL_TYPE) {
+            continue;
+        }
+        if (label->type_chain_count > 0U) {
+            for (chain_index = 0U;
+                 chain_index < label->type_chain_count;
+                 ++chain_index) {
+                try_collect_type_ref(ctx, label->type_chain[chain_index]);
+            }
+        } else {
+            try_collect_type_ref(ctx, label->type);
+        }
+    }
+}
 
 /* ---- 对单个 type_ref 尝试收集 ------------------------------------------ */
 
@@ -700,6 +1074,7 @@ static void rd_try_collect_call_return_type_dep(CollectContext *ctx,
 
     /* 2. 建立形参→实参映射。 */
     if (rc->owner_type_decl != NULL &&
+        rc->owner_type_decl->kind == FENG_DECL_TYPE &&
         rc->owner_instance_type_ref != NULL &&
         rc->owner_instance_type_ref->kind == FENG_TYPE_REF_NAMED) {
         callee_type_params =
@@ -819,11 +1194,29 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
                 try_collect_type_ref(ctx,
                                     expr->as.call.explicit_type_args[i]);
             }
+            /* 已解析方法调用保存了 caller 视角的完整 owner 实例类型。
+             * 该事实同时覆盖局部、参数、字段及复杂表达式接收者，避免再从
+             * 成员访问语法反推接收者类型。 */
+            try_collect_type_ref(
+                ctx,
+                expr->as.call.resolved_callable.owner_instance_type_ref);
+            (void)rd_append_callable_dep(
+                ctx->dep_set, &expr->as.call.resolved_callable);
             rd_try_collect_call_return_type_dep(ctx, expr);
             return;
 
         case FENG_EXPR_MEMBER:
             collect_from_expr(ctx, expr->as.member.object);
+            {
+                const FengSemanticTypeFact *member_fact =
+                    feng_semantic_lookup_type_fact(ctx->analysis, expr);
+
+                if (member_fact != NULL &&
+                    member_fact->kind ==
+                        FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                    try_collect_type_ref(ctx, member_fact->type_ref);
+                }
+            }
             return;
 
         case FENG_EXPR_INDEX:
@@ -864,6 +1257,7 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
             for (i = 0U; i < expr->as.match_expr.branch_count; ++i) {
                 const FengMatchBranch *branch =
                     &expr->as.match_expr.branches[i];
+                collect_from_match_branch_labels(ctx, branch);
                 collect_from_block(ctx, branch->body);
             }
             collect_from_block(ctx, expr->as.match_expr.else_block);
@@ -948,6 +1342,7 @@ static void collect_from_stmt(CollectContext *ctx, const FengStmt *stmt) {
             for (i = 0U; i < stmt->as.match_stmt.branch_count; ++i) {
                 const FengMatchBranch *branch =
                     &stmt->as.match_stmt.branches[i];
+                collect_from_match_branch_labels(ctx, branch);
                 collect_from_block(ctx, branch->body);
             }
             collect_from_block(ctx, stmt->as.match_stmt.else_block);
@@ -969,6 +1364,25 @@ static void collect_from_stmt(CollectContext *ctx, const FengStmt *stmt) {
              * 必须在此显式收集，否则共享体中 RTD/RAD 查找会失败。
              * iter_cursor_type_ref 和 iter_result_type_ref 由 analyzer 代入
              * 后克隆，生命周期由 Analysis 管理，此处安全读取。 */
+            {
+                const FengSemanticTypeFact *iter_source_fact =
+                    feng_semantic_lookup_type_fact(
+                        ctx->analysis, stmt->as.for_stmt.iter_expr);
+
+                if (iter_source_fact != NULL &&
+                    iter_source_fact->kind ==
+                        FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+                    try_collect_type_ref(ctx, iter_source_fact->type_ref);
+                    rd_collect_synthesized_method_call(
+                        ctx,
+                        stmt->as.for_stmt.iter_iterable_method,
+                        iter_source_fact->type_ref);
+                }
+            }
+            rd_collect_synthesized_method_call(
+                ctx,
+                stmt->as.for_stmt.iter_iterator_method,
+                stmt->as.for_stmt.iter_cursor_type_ref);
             try_collect_type_ref(ctx, stmt->as.for_stmt.iter_cursor_type_ref);
             try_collect_type_ref(ctx, stmt->as.for_stmt.iter_result_type_ref);
             collect_from_block(ctx, stmt->as.for_stmt.body);
@@ -1060,32 +1474,31 @@ static void collect_from_callable(CollectContext *ctx,
 
 /* ---- 泛型类型的依赖收集 ------------------------------------------------ */
 
-static void collect_for_generic_type(FengSemanticAnalysis *analysis,
-                                     const FengDecl *decl) {
+static void collect_for_type(FengSemanticAnalysis *analysis,
+                             const FengDecl *decl) {
     CollectContext ctx;
     FengReifiableDepSet *dep_set;
     size_t i;
 
-    if (decl->as.type_decl.type_param_count == 0U) {
-        return;
-    }
-
-    dep_set = feng_semantic_get_or_create_reifiable_dep_set(analysis, decl);
-    if (dep_set == NULL) {
-        return;
-    }
-
     memset(&ctx, 0, sizeof(ctx));
     ctx.analysis = analysis;
-    ctx.dep_set = dep_set;
     ctx.type_params = decl->as.type_decl.type_params;
     ctx.type_param_count = decl->as.type_decl.type_param_count;
+
+    dep_set = NULL;
+    if (ctx.type_param_count > 0U) {
+        dep_set = feng_semantic_get_or_create_reifiable_dep_set(analysis, decl);
+    }
 
     /* 成员字段类型 + 初始化表达式。 */
     for (i = 0U; i < decl->as.type_decl.member_count; ++i) {
         const FengTypeMember *member = decl->as.type_decl.members[i];
 
         if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+            if (dep_set == NULL) {
+                continue;
+            }
+            ctx.dep_set = dep_set;
             /* Inferred fields (field.type == NULL, e.g.
              * `let items = List<T>()`) carry their type only as a semantic
              * type fact.  Fall back to it so the generic instance type_ref
@@ -1105,8 +1518,26 @@ static void collect_for_generic_type(FengSemanticAnalysis *analysis,
             collect_from_expr(&ctx, member->as.field.initializer);
             continue;
         }
-        /* 方法 / 构造器 / finalizer。 */
-        collect_from_callable(&ctx, &member->as.callable);
+
+        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+            (ctx.type_param_count > 0U ||
+             member->as.callable.type_param_count > 0U)) {
+            /* 普通方法拥有独立的函数描述符，方法级参数不能进入静态的
+             * owner type descriptor。 */
+            ctx.dep_set =
+                feng_semantic_get_or_create_member_reifiable_dep_set(
+                    analysis, decl, member);
+            if (ctx.dep_set != NULL) {
+                collect_from_callable(&ctx, &member->as.callable);
+            }
+            continue;
+        }
+
+        if (dep_set != NULL) {
+            /* 构造器与 finalizer 暂沿用既有 type descriptor ABI。 */
+            ctx.dep_set = dep_set;
+            collect_from_callable(&ctx, &member->as.callable);
+        }
     }
 }
 
@@ -1282,7 +1713,7 @@ bool feng_semantic_collect_reifiable_deps(FengSemanticAnalysis *analysis) {
 
                 switch (decl->kind) {
                     case FENG_DECL_TYPE:
-                        collect_for_generic_type(analysis, decl);
+                        collect_for_type(analysis, decl);
                         break;
                     case FENG_DECL_FUNCTION:
                         collect_for_generic_function(analysis, decl);

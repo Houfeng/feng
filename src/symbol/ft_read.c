@@ -16,6 +16,7 @@ typedef struct ReadContext {
     const FengSymbolFtSectionEntry *rels_section;
     const FengSymbolFtSectionEntry *docs_section;
     const FengSymbolFtSectionEntry *attrs_section;
+    const FengSymbolFtSectionEntry *callable_deps_section;
     const FengSymbolFtSectionEntry *spns_section;
     char **strings;
     size_t string_count;
@@ -177,6 +178,8 @@ static bool load_required_sections(ReadContext *ctx,
     ctx->rels_section = find_section(ctx, FENG_SYMBOL_FT_SEC_RELS);
     ctx->docs_section = find_section(ctx, FENG_SYMBOL_FT_SEC_DOCS);
     ctx->attrs_section = find_section(ctx, FENG_SYMBOL_FT_SEC_ATTRS);
+    ctx->callable_deps_section = find_section(
+        ctx, FENG_SYMBOL_FT_SEC_CALLABLE_DEPS);
     ctx->spns_section = find_section(ctx, FENG_SYMBOL_FT_SEC_SPNS);
 
     if (ctx->strs_section == NULL || ctx->syms_section == NULL || ctx->typs_section == NULL ||
@@ -866,6 +869,7 @@ static bool parse_symbols(ReadContext *ctx,
         }
         decl_kind = decode_decl_kind(kind);
         decl->kind = decl_kind;
+        decl->ft_symbol_id = id;
         decl->visibility = (flags & FENG_SYMBOL_FT_SYM_FLAG_PUBLIC) != 0U ? FENG_VISIBILITY_PUBLIC
                                                                           : FENG_VISIBILITY_PRIVATE;
         decl->mutability = (flags & FENG_SYMBOL_FT_SYM_FLAG_MUTABLE) != 0U ? FENG_MUTABILITY_VAR
@@ -1347,6 +1351,154 @@ static bool parse_spans(ReadContext *ctx, const char *path, FengSymbolError *out
     return true;
 }
 
+/* Restore direct callable dependencies and their caller-view type arguments. */
+static bool parse_callable_dependencies(ReadContext *ctx,
+                                        const char *path,
+                                        FengSymbolError *out_error) {
+    const unsigned char *section;
+    const unsigned char *base;
+    const unsigned char *tseq_base;
+    uint64_t section_offset;
+    uint64_t section_size;
+    uint32_t count;
+    uint32_t tseq_total;
+    uint32_t index;
+    const char *current_module_name;
+
+    if (ctx->callable_deps_section == NULL) {
+        return true;
+    }
+    section = (const unsigned char *)ctx->callable_deps_section;
+    section_offset = read_u64_le(section + 0x08);
+    section_size = read_u64_le(section + 0x10);
+    count = read_u32_le(section + 0x04);
+    if (read_u32_le(section + 0x18) !=
+            sizeof(FengSymbolFtCallableDepRecord) ||
+        section_size !=
+            (uint64_t)count * sizeof(FengSymbolFtCallableDepRecord) ||
+        !validate_range(ctx,
+                        section_offset,
+                        section_size,
+                        path,
+                        out_error)) {
+        return feng_symbol_internal_set_error(
+            out_error,
+            path,
+            (FengToken){0},
+            "malformed callable dependency section");
+    }
+    base = ctx->data + section_offset;
+    tseq_total = read_u32_le(
+        (const unsigned char *)ctx->tseq_section + 0x04);
+    tseq_base = ctx->data + read_u64_le(
+        (const unsigned char *)ctx->tseq_section + 0x08);
+    current_module_name = string_at(ctx, ctx->module_full_name_str);
+
+    for (index = 0U; index < count; ++index) {
+        const unsigned char *record =
+            base + (size_t)index * sizeof(FengSymbolFtCallableDepRecord);
+        uint32_t caller_symbol_id = read_u32_le(record + 0x00);
+        uint32_t target_module_str = read_u32_le(record + 0x04);
+        uint32_t target_symbol_id = read_u32_le(record + 0x08);
+        uint16_t kind = read_u16_le(record + 0x0C);
+        uint32_t owner_instance_type_id = read_u32_le(record + 0x10);
+        uint32_t callable_arg_start = read_u32_le(record + 0x14);
+        uint32_t callable_arg_count = read_u32_le(record + 0x18);
+        const char *target_module_name = string_at(ctx, target_module_str);
+        FengSymbolDeclView *caller = decl_by_symbol_id(ctx, caller_symbol_id);
+        FengSymbolCallableDepView *grown;
+        FengSymbolCallableDepView *dependency;
+        uint32_t arg_index;
+
+        if (caller == NULL || target_module_str == 0U ||
+            target_module_name == NULL || target_symbol_id == 0U ||
+            kind < FENG_RESOLVED_CALLABLE_FUNCTION ||
+            kind > FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD ||
+            callable_arg_start > tseq_total ||
+            callable_arg_count > tseq_total - callable_arg_start) {
+            return feng_symbol_internal_set_error(
+                out_error,
+                path,
+                (FengToken){0},
+                "invalid callable dependency record %u",
+                index);
+        }
+        grown = (FengSymbolCallableDepView *)realloc(
+            caller->reifiable_callable_deps,
+            (caller->reifiable_callable_dep_count + 1U) * sizeof(*grown));
+        if (grown == NULL) {
+            return feng_symbol_internal_set_error(
+                out_error,
+                path,
+                (FengToken){0},
+                "out of memory loading callable dependency");
+        }
+        caller->reifiable_callable_deps = grown;
+        dependency = &caller->reifiable_callable_deps[
+            caller->reifiable_callable_dep_count];
+        memset(dependency, 0, sizeof(*dependency));
+        ++caller->reifiable_callable_dep_count;
+        dependency->kind = (FengResolvedCallableKind)kind;
+        dependency->target_module_name =
+            feng_symbol_internal_dup_cstr(target_module_name);
+        dependency->target_symbol_id = target_symbol_id;
+        dependency->owner_instance_type = parse_type_by_id(
+            ctx, owner_instance_type_id, path, out_error);
+        if (dependency->target_module_name == NULL ||
+            (owner_instance_type_id != 0U &&
+             dependency->owner_instance_type == NULL)) {
+            free(dependency->target_module_name);
+            dependency->target_module_name = NULL;
+            feng_symbol_internal_type_free(
+                dependency->owner_instance_type);
+            dependency->owner_instance_type = NULL;
+            return false;
+        }
+        if (current_module_name != NULL &&
+            strcmp(current_module_name, target_module_name) == 0) {
+            dependency->local_target_decl =
+                decl_by_symbol_id(ctx, target_symbol_id);
+            if (dependency->local_target_decl == NULL) {
+                return feng_symbol_internal_set_error(
+                    out_error,
+                    path,
+                    (FengToken){0},
+                    "local callable dependency target %u was not found",
+                    target_symbol_id);
+            }
+        }
+        if (callable_arg_count > 0U) {
+            dependency->callable_type_args =
+                (FengSymbolTypeView **)calloc(
+                    callable_arg_count,
+                    sizeof(*dependency->callable_type_args));
+            if (dependency->callable_type_args == NULL) {
+                return feng_symbol_internal_set_error(
+                    out_error,
+                    path,
+                    (FengToken){0},
+                    "out of memory loading callable dependency arguments");
+            }
+            dependency->callable_type_arg_count = callable_arg_count;
+            for (arg_index = 0U; arg_index < callable_arg_count; ++arg_index) {
+                const unsigned char *arg_record =
+                    tseq_base +
+                    (size_t)(callable_arg_start + arg_index) *
+                        sizeof(FengSymbolFtTseqRecord);
+                uint32_t type_id = read_u32_le(arg_record + 0x04);
+
+                dependency->callable_type_args[arg_index] =
+                    parse_type_by_id(ctx, type_id, path, out_error);
+                if (type_id != 0U &&
+                    dependency->callable_type_args[arg_index] == NULL) {
+                    return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 static bool parse_relations(ReadContext *ctx,
                             const char *path,
                             FengSymbolError *out_error) {
@@ -1400,6 +1552,7 @@ bool feng_symbol_ft_read_bytes_internal(const void *data,
         !attach_decl_hierarchy(&ctx, source_name, out_error) ||
         !parse_module_segments(&ctx, source_name, out_error) ||
         !parse_attrs(&ctx, source_name, out_error) ||
+        !parse_callable_dependencies(&ctx, source_name, out_error) ||
         !parse_spans(&ctx, source_name, out_error) ||
         !parse_relations(&ctx, source_name, out_error)) {
         read_context_dispose(&ctx);

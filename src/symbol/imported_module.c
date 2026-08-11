@@ -13,6 +13,8 @@ typedef struct SynthDecl {
     const FengSymbolDeclView *symbol_view; /* borrowed: original symbol view */
     FengTypeRef **reifiable_dep_refs;      /* owned: converted dep type refs */
     size_t reifiable_dep_ref_count;
+    const FengTypeRef ***reifiable_callable_arg_arrays; /* owned pointer arrays */
+    size_t reifiable_callable_arg_array_count;
 } SynthDecl;
 
 /* One synthetic FengProgram holding public declarations and private dependencies. */
@@ -1345,6 +1347,12 @@ static void entry_free_partial(SynthModuleEntry *entry) {
                 free_synthetic_type_ref(sd->reifiable_dep_refs[ri]);
             }
             free(sd->reifiable_dep_refs);
+            for (ri = 0U;
+                 ri < sd->reifiable_callable_arg_array_count;
+                 ++ri) {
+                free((void *)sd->reifiable_callable_arg_arrays[ri]);
+            }
+            free(sd->reifiable_callable_arg_arrays);
             free_synthetic_decl_payload(&sd->decl);
             free(sd->name_buf);
         }
@@ -1673,6 +1681,554 @@ static void populate_imported_intersection_infos(
     }
 }
 
+/* Append one imported dependency TypeRef to the owning synthetic declaration
+ * so its lifetime remains tied to the imported-module cache. */
+static bool append_imported_reifiable_dep_ref(SynthDecl *decl,
+                                               FengTypeRef *type_ref) {
+    FengTypeRef **grown;
+
+    if (decl == NULL || type_ref == NULL) {
+        return false;
+    }
+    grown = (FengTypeRef **)realloc(
+        decl->reifiable_dep_refs,
+        (decl->reifiable_dep_ref_count + 1U) * sizeof(*grown));
+    if (grown == NULL) {
+        return false;
+    }
+    decl->reifiable_dep_refs = grown;
+    decl->reifiable_dep_refs[decl->reifiable_dep_ref_count++] = type_ref;
+    return true;
+}
+
+/* Retain one callable type-argument pointer array for the imported cache
+ * lifetime. The individual type trees are owned by reifiable_dep_refs. */
+static bool append_imported_callable_arg_array(
+    SynthDecl *decl,
+    const FengTypeRef **type_args) {
+    const FengTypeRef ***grown;
+
+    if (decl == NULL || type_args == NULL) {
+        return false;
+    }
+    grown = (const FengTypeRef ***)realloc(
+        decl->reifiable_callable_arg_arrays,
+        (decl->reifiable_callable_arg_array_count + 1U) * sizeof(*grown));
+    if (grown == NULL) {
+        return false;
+    }
+    decl->reifiable_callable_arg_arrays = grown;
+    decl->reifiable_callable_arg_arrays[
+        decl->reifiable_callable_arg_array_count++] = type_args;
+    return true;
+}
+
+/* Materialize or locate one imported module cache entry by dot name. */
+static SynthModuleEntry *cache_entry_for_module_name(
+    FengSymbolImportedModuleCache *cache,
+    const char *module_name) {
+    char *copy;
+    FengSlice *segments;
+    size_t segment_count = 1U;
+    size_t index = 0U;
+    char *segment_start;
+    char *cursor;
+    const FengSemanticModule *semantic_module;
+
+    if (cache == NULL || module_name == NULL || module_name[0] == '\0') {
+        return NULL;
+    }
+    for (cursor = (char *)module_name; *cursor != '\0'; ++cursor) {
+        if (*cursor == '.') {
+            ++segment_count;
+        }
+    }
+    copy = dup_bytes(module_name, strlen(module_name));
+    segments = (FengSlice *)calloc(segment_count, sizeof(*segments));
+    if (copy == NULL || segments == NULL) {
+        free(copy);
+        free(segments);
+        return NULL;
+    }
+    segment_start = copy;
+    for (cursor = copy;; ++cursor) {
+        if (*cursor != '.' && *cursor != '\0') {
+            continue;
+        }
+        segments[index].data = segment_start;
+        segments[index].length = (size_t)(cursor - segment_start);
+        ++index;
+        if (*cursor == '\0') {
+            break;
+        }
+        *cursor = '\0';
+        segment_start = cursor + 1;
+    }
+    semantic_module = cache_get_module(cache, segments, segment_count);
+    free(segments);
+    free(copy);
+    if (semantic_module == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < cache->entry_count; ++index) {
+        if (&cache->entries[index].sem_mod == semantic_module) {
+            return &cache->entries[index];
+        }
+    }
+    return NULL;
+}
+
+/* Find one exact FT symbol within a declaration tree. */
+static const FengSymbolDeclView *find_symbol_by_ft_id(
+    const FengSymbolDeclView *decl,
+    uint32_t symbol_id) {
+    size_t index;
+
+    if (decl == NULL || symbol_id == 0U) {
+        return NULL;
+    }
+    if (decl->ft_symbol_id == symbol_id) {
+        return decl;
+    }
+    for (index = 0U; index < decl->member_count; ++index) {
+        const FengSymbolDeclView *found = find_symbol_by_ft_id(
+            decl->members[index], symbol_id);
+
+        if (found != NULL) {
+            return found;
+        }
+    }
+    return NULL;
+}
+
+/* Find the exact symbol in one imported module. */
+static const FengSymbolDeclView *cache_find_symbol_by_identity(
+    FengSymbolImportedModuleCache *cache,
+    const char *module_name,
+    uint32_t symbol_id) {
+    SynthModuleEntry *entry = cache_entry_for_module_name(cache, module_name);
+    size_t index;
+
+    if (entry == NULL || entry->prog == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < entry->prog->decl_count; ++index) {
+        const FengSymbolDeclView *found = find_symbol_by_ft_id(
+            entry->prog->decls[index].symbol_view, symbol_id);
+
+        if (found != NULL) {
+            return found;
+        }
+    }
+    return NULL;
+}
+
+/* Resolve a named type view to its synthesized imported declaration. */
+static const SynthDecl *cache_find_synth_type_for_view(
+    FengSymbolImportedModuleCache *cache,
+    const FengSymbolTypeView *type) {
+    char *const *segments = NULL;
+    size_t segment_count = 0U;
+    size_t type_arg_count = 0U;
+    char *module_name;
+    size_t module_length = 0U;
+    size_t cursor = 0U;
+    size_t index;
+    SynthModuleEntry *entry;
+
+    if (cache == NULL || type == NULL) {
+        return NULL;
+    }
+    if (type->target_decl != NULL) {
+        return cache_find_synth_decl_for_symbol(cache, type->target_decl);
+    }
+    if (type->kind == FENG_SYMBOL_TYPE_KIND_NAMED) {
+        segments = type->as.named.segments;
+        segment_count = type->as.named.segment_count;
+    } else if (type->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) {
+        segments = type->as.named_generic.segments;
+        segment_count = type->as.named_generic.segment_count;
+        type_arg_count = type->as.named_generic.type_arg_count;
+    } else {
+        return NULL;
+    }
+    if (segments == NULL || segment_count < 2U) {
+        return NULL;
+    }
+    for (index = 0U; index + 1U < segment_count; ++index) {
+        module_length += strlen(segments[index]);
+    }
+    module_length += segment_count - 2U;
+    module_name = (char *)malloc(module_length + 1U);
+    if (module_name == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index + 1U < segment_count; ++index) {
+        size_t length = strlen(segments[index]);
+
+        if (index > 0U) {
+            module_name[cursor++] = '.';
+        }
+        memcpy(module_name + cursor, segments[index], length);
+        cursor += length;
+    }
+    module_name[cursor] = '\0';
+    entry = cache_entry_for_module_name(cache, module_name);
+    free(module_name);
+    if (entry == NULL || entry->prog == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < entry->prog->decl_count; ++index) {
+        const SynthDecl *candidate = &entry->prog->decls[index];
+        const FengSymbolDeclView *candidate_symbol = candidate->symbol_view;
+
+        if (candidate_symbol != NULL &&
+            candidate_symbol->kind == FENG_SYMBOL_DECL_KIND_TYPE &&
+            candidate_symbol->name != NULL &&
+            strcmp(candidate_symbol->name,
+                   segments[segment_count - 1U]) == 0 &&
+            candidate_symbol->type_param_count == type_arg_count) {
+            return candidate;
+        }
+    }
+    return NULL;
+}
+
+/* Map one top-level or immediate member symbol back to its synthesized AST
+ * declaration/member pair. */
+static bool cache_find_ast_callable_for_symbol(
+    FengSymbolImportedModuleCache *cache,
+    const FengSymbolDeclView *symbol,
+    const FengDecl **out_decl,
+    const FengTypeMember **out_member) {
+    const FengSymbolDeclView *top;
+    const SynthDecl *synthetic;
+    FengTypeMember *const *members = NULL;
+    size_t member_count = 0U;
+    size_t symbol_index;
+    size_t ast_index = 0U;
+
+    *out_decl = NULL;
+    *out_member = NULL;
+    if (cache == NULL || symbol == NULL) {
+        return false;
+    }
+    top = symbol;
+    while (top->owner != NULL &&
+           top->owner->kind != FENG_SYMBOL_DECL_KIND_MODULE) {
+        top = top->owner;
+    }
+    synthetic = cache_find_synth_decl_for_symbol(cache, top);
+    if (synthetic == NULL) {
+        return false;
+    }
+    *out_decl = &synthetic->decl;
+    if (symbol == top) {
+        return true;
+    }
+    if (synthetic->decl.kind == FENG_DECL_TYPE) {
+        members = synthetic->decl.as.type_decl.members;
+        member_count = synthetic->decl.as.type_decl.member_count;
+    } else if (synthetic->decl.kind == FENG_DECL_FIT) {
+        members = synthetic->decl.as.fit_decl.members;
+        member_count = synthetic->decl.as.fit_decl.member_count;
+    } else if (synthetic->decl.kind == FENG_DECL_SPEC &&
+               synthetic->decl.as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+        members = synthetic->decl.as.spec_decl.as.object.members;
+        member_count = synthetic->decl.as.spec_decl.as.object.member_count;
+    } else {
+        return false;
+    }
+    for (symbol_index = 0U; symbol_index < top->member_count; ++symbol_index) {
+        const FengSymbolDeclView *candidate = top->members[symbol_index];
+
+        if (candidate == NULL ||
+            candidate->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+            continue;
+        }
+        if (ast_index >= member_count) {
+            return false;
+        }
+        if (candidate == symbol) {
+            *out_member = members[ast_index];
+            return true;
+        }
+        ++ast_index;
+    }
+    return false;
+}
+
+/* Build the dot-joined module identity stored alongside local FT symbol ids. */
+static char *imported_module_name_dup(const SynthModuleEntry *entry) {
+    size_t total = 0U;
+    size_t index;
+    size_t cursor = 0U;
+    char *name;
+
+    if (entry == NULL || entry->segment_count == 0U) {
+        return dup_bytes("", 0U);
+    }
+    for (index = 0U; index < entry->segment_count; ++index) {
+        total += entry->segments[index].length;
+    }
+    total += entry->segment_count - 1U;
+    name = (char *)malloc(total + 1U);
+    if (name == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < entry->segment_count; ++index) {
+        if (index > 0U) {
+            name[cursor++] = '.';
+        }
+        memcpy(name + cursor,
+               entry->segments[index].data,
+               entry->segments[index].length);
+        cursor += entry->segments[index].length;
+    }
+    name[cursor] = '\0';
+    return name;
+}
+
+/* Record exact FT identities for a synthesized top-level declaration and
+ * every concrete member represented in its AST. */
+static void record_imported_symbol_identities(
+    FengSemanticAnalysis *analysis,
+    const SynthDecl *synthetic,
+    const char *module_name) {
+    const FengSymbolDeclView *symbol_view;
+    FengTypeMember *const *ast_members = NULL;
+    size_t ast_member_count = 0U;
+    size_t symbol_index;
+    size_t ast_index = 0U;
+
+    if (analysis == NULL || synthetic == NULL || module_name == NULL ||
+        synthetic->symbol_view == NULL) {
+        return;
+    }
+    symbol_view = synthetic->symbol_view;
+    (void)feng_semantic_record_imported_symbol_identity(
+        analysis,
+        &synthetic->decl,
+        symbol_view,
+        module_name,
+        symbol_view->ft_symbol_id);
+
+    if (synthetic->decl.kind == FENG_DECL_TYPE) {
+        ast_members = synthetic->decl.as.type_decl.members;
+        ast_member_count = synthetic->decl.as.type_decl.member_count;
+    } else if (synthetic->decl.kind == FENG_DECL_FIT) {
+        ast_members = synthetic->decl.as.fit_decl.members;
+        ast_member_count = synthetic->decl.as.fit_decl.member_count;
+    } else if (synthetic->decl.kind == FENG_DECL_SPEC &&
+               synthetic->decl.as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+        ast_members = synthetic->decl.as.spec_decl.as.object.members;
+        ast_member_count =
+            synthetic->decl.as.spec_decl.as.object.member_count;
+    }
+
+    for (symbol_index = 0U;
+         symbol_index < symbol_view->member_count;
+         ++symbol_index) {
+        const FengSymbolDeclView *member_view =
+            symbol_view->members[symbol_index];
+
+        if (member_view == NULL ||
+            member_view->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+            continue;
+        }
+        if (ast_index >= ast_member_count) {
+            break;
+        }
+        (void)feng_semantic_record_imported_symbol_identity(
+            analysis,
+            ast_members[ast_index],
+            member_view,
+            module_name,
+            member_view->ft_symbol_id);
+        ++ast_index;
+    }
+}
+
+/* Restore aggregate and managed dependency views for one declaration or
+ * callable member into the semantic side table. */
+static void restore_imported_reifiable_deps(
+    FengSymbolImportedModuleCache *cache,
+    FengSemanticAnalysis *analysis,
+    SynthDecl *storage_owner,
+    const FengDecl *owner_decl,
+    const FengTypeMember *owner_member,
+    const FengSymbolDeclView *symbol_view) {
+    FengReifiableDepSet *dep_set;
+    size_t index;
+
+    if (analysis == NULL || storage_owner == NULL || owner_decl == NULL ||
+        symbol_view == NULL ||
+        (symbol_view->reifiable_agg_dep_count == 0U &&
+         symbol_view->reifiable_type_dep_count == 0U &&
+         symbol_view->reifiable_callable_dep_count == 0U)) {
+        return;
+    }
+
+    dep_set = owner_member != NULL
+                  ? feng_semantic_get_or_create_member_reifiable_dep_set(
+                        analysis, owner_decl, owner_member)
+                  : feng_semantic_get_or_create_reifiable_dep_set(
+                        analysis, owner_decl);
+    if (dep_set == NULL) {
+        return;
+    }
+
+    for (index = 0U; index < symbol_view->reifiable_agg_dep_count; ++index) {
+        FengTypeRef *ref = synthesize_type_ref(
+            symbol_view->reifiable_agg_deps[index]);
+
+        if (ref == NULL) {
+            continue;
+        }
+        if (!append_imported_reifiable_dep_ref(storage_owner, ref)) {
+            free_synthetic_type_ref(ref);
+            continue;
+        }
+        (void)feng_semantic_reifiable_dep_set_append(
+            dep_set, FENG_REIFIABLE_DEP_KIND_AGGREGATE, ref);
+    }
+
+    for (index = 0U; index < symbol_view->reifiable_type_dep_count; ++index) {
+        FengTypeRef *ref = synthesize_type_ref(
+            symbol_view->reifiable_type_deps[index]);
+
+        if (ref == NULL) {
+            continue;
+        }
+        if (!append_imported_reifiable_dep_ref(storage_owner, ref)) {
+            free_synthetic_type_ref(ref);
+            continue;
+        }
+        (void)feng_semantic_reifiable_dep_set_append(
+            dep_set, FENG_REIFIABLE_DEP_KIND_MANAGED, ref);
+    }
+
+    for (index = 0U;
+         index < symbol_view->reifiable_callable_dep_count;
+         ++index) {
+        const FengSymbolCallableDepView *dependency =
+            &symbol_view->reifiable_callable_deps[index];
+        const FengSymbolDeclView *target_symbol =
+            cache_find_symbol_by_identity(cache,
+                                          dependency->target_module_name,
+                                          dependency->target_symbol_id);
+        const FengDecl *target_decl = NULL;
+        const FengTypeMember *target_member = NULL;
+        FengResolvedCallable resolved;
+        FengTypeRef *owner_instance_ref = NULL;
+        const FengTypeRef **callable_args = NULL;
+        size_t arg_index;
+
+        if (target_symbol == NULL ||
+            !cache_find_ast_callable_for_symbol(cache,
+                                                target_symbol,
+                                                &target_decl,
+                                                &target_member)) {
+            continue;
+        }
+        memset(&resolved, 0, sizeof(resolved));
+        resolved.kind = dependency->kind;
+        if (dependency->kind == FENG_RESOLVED_CALLABLE_FUNCTION) {
+            if (target_decl->kind != FENG_DECL_FUNCTION ||
+                target_member != NULL) {
+                continue;
+            }
+            resolved.function_decl = target_decl;
+        } else if (dependency->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
+                   dependency->kind ==
+                       FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD) {
+            if (target_decl->kind != FENG_DECL_TYPE ||
+                target_member == NULL) {
+                continue;
+            }
+            resolved.owner_type_decl = target_decl;
+            resolved.member = target_member;
+        } else if (dependency->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
+                   dependency->kind ==
+                       FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) {
+            const FengSymbolDeclView *fit_symbol = target_symbol;
+            const SynthDecl *owner_synthetic;
+
+            while (fit_symbol->owner != NULL &&
+                   fit_symbol->owner->kind !=
+                       FENG_SYMBOL_DECL_KIND_MODULE) {
+                fit_symbol = fit_symbol->owner;
+            }
+            owner_synthetic = cache_find_synth_type_for_view(
+                cache, fit_symbol->fit_target);
+            if (target_decl->kind != FENG_DECL_FIT ||
+                target_member == NULL ||
+                (owner_synthetic != NULL &&
+                 owner_synthetic->decl.kind != FENG_DECL_TYPE)) {
+                continue;
+            }
+            resolved.fit_decl = target_decl;
+            resolved.owner_type_decl = owner_synthetic != NULL
+                                           ? &owner_synthetic->decl
+                                           : NULL;
+            resolved.member = target_member;
+        } else {
+            continue;
+        }
+
+        owner_instance_ref = synthesize_type_ref(
+            dependency->owner_instance_type);
+        if (dependency->owner_instance_type != NULL &&
+            owner_instance_ref == NULL) {
+            continue;
+        }
+        if (owner_instance_ref != NULL &&
+            !append_imported_reifiable_dep_ref(storage_owner,
+                                                owner_instance_ref)) {
+            free_synthetic_type_ref(owner_instance_ref);
+            continue;
+        }
+        resolved.owner_instance_type_ref = owner_instance_ref;
+        if (dependency->callable_type_arg_count > 0U) {
+            callable_args = (const FengTypeRef **)calloc(
+                dependency->callable_type_arg_count,
+                sizeof(*callable_args));
+            if (callable_args == NULL) {
+                continue;
+            }
+            for (arg_index = 0U;
+                 arg_index < dependency->callable_type_arg_count;
+                 ++arg_index) {
+                FengTypeRef *arg_ref = synthesize_type_ref(
+                    dependency->callable_type_args[arg_index]);
+
+                if (dependency->callable_type_args[arg_index] != NULL &&
+                    arg_ref == NULL) {
+                    break;
+                }
+                if (arg_ref != NULL &&
+                    !append_imported_reifiable_dep_ref(storage_owner,
+                                                        arg_ref)) {
+                    free_synthetic_type_ref(arg_ref);
+                    break;
+                }
+                callable_args[arg_index] = arg_ref;
+            }
+            if (arg_index != dependency->callable_type_arg_count ||
+                !append_imported_callable_arg_array(storage_owner,
+                                                    callable_args)) {
+                free((void *)callable_args);
+                continue;
+            }
+            resolved.callable_type_args = callable_args;
+            resolved.callable_type_arg_count =
+                dependency->callable_type_arg_count;
+        }
+        (void)feng_semantic_reifiable_dep_set_append_callable(dep_set,
+                                                               &resolved);
+    }
+}
+
 /* Restore imported codegen facts in the semantic side-table abstraction. */
 void feng_symbol_imported_module_cache_populate_codegen_metadata(
     FengSymbolImportedModuleCache *cache,
@@ -1684,68 +2240,65 @@ void feng_symbol_imported_module_cache_populate_codegen_metadata(
     }
     for (ei = 0U; ei < cache->entry_count; ++ei) {
         SynthModuleEntry *entry = &cache->entries[ei];
+        SynthProgram *program = entry->prog;
+        char *module_name;
         size_t di;
 
-        if (entry->prog == NULL) {
+        if (program == NULL) {
             continue;
         }
-        for (di = 0U; di < entry->prog->decl_count; ++di) {
-            SynthDecl *sd = &entry->prog->decls[di];
+        module_name = imported_module_name_dup(entry);
+        if (module_name == NULL) {
+            continue;
+        }
+        for (di = 0U; di < program->decl_count; ++di) {
+            SynthDecl *sd = &program->decls[di];
             const FengSymbolDeclView *sv = sd->symbol_view;
-            size_t total_deps;
-            size_t ri;
-            FengReifiableDepSet *dep_set;
+            size_t symbol_member_index;
+            size_t ast_member_index;
 
             if (sv == NULL) {
                 continue;
             }
-            total_deps = sv->reifiable_agg_dep_count +
-                         sv->reifiable_type_dep_count;
-            if (total_deps == 0U) {
+            record_imported_symbol_identities(
+                analysis, sd, module_name);
+            restore_imported_reifiable_deps(
+                cache, analysis, sd, &sd->decl, NULL, sv);
+
+            if (sd->decl.kind != FENG_DECL_TYPE) {
                 continue;
             }
 
-            /* Allocate storage for converted FengTypeRef pointers. */
-            sd->reifiable_dep_refs = (FengTypeRef **)calloc(
-                total_deps, sizeof(FengTypeRef *));
-            if (sd->reifiable_dep_refs == NULL) {
-                continue;
-            }
+            /* Symbol views store method type parameters as children, while
+             * the synthesized AST member array excludes them. Walk both
+             * representations in their common concrete-member order. */
+            ast_member_index = 0U;
+            for (symbol_member_index = 0U;
+                 symbol_member_index < sv->member_count;
+                 ++symbol_member_index) {
+                const FengSymbolDeclView *member_view =
+                    sv->members[symbol_member_index];
 
-            dep_set = feng_semantic_get_or_create_reifiable_dep_set(
-                analysis, &sd->decl);
-            if (dep_set == NULL) {
-                free(sd->reifiable_dep_refs);
-                sd->reifiable_dep_refs = NULL;
-                continue;
-            }
-
-            /* Convert aggregate deps. */
-            for (ri = 0U; ri < sv->reifiable_agg_dep_count; ++ri) {
-                FengTypeRef *ref = synthesize_type_ref(
-                    sv->reifiable_agg_deps[ri]);
-                if (ref == NULL) {
+                if (member_view == NULL ||
+                    member_view->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
                     continue;
                 }
-                sd->reifiable_dep_refs[sd->reifiable_dep_ref_count] = ref;
-                sd->reifiable_dep_ref_count++;
-                feng_semantic_reifiable_dep_set_append(
-                    dep_set, FENG_REIFIABLE_DEP_KIND_AGGREGATE, ref);
-            }
-
-            /* Convert managed deps. */
-            for (ri = 0U; ri < sv->reifiable_type_dep_count; ++ri) {
-                FengTypeRef *ref = synthesize_type_ref(
-                    sv->reifiable_type_deps[ri]);
-                if (ref == NULL) {
-                    continue;
+                if (ast_member_index >= sd->decl.as.type_decl.member_count) {
+                    break;
                 }
-                sd->reifiable_dep_refs[sd->reifiable_dep_ref_count] = ref;
-                sd->reifiable_dep_ref_count++;
-                feng_semantic_reifiable_dep_set_append(
-                    dep_set, FENG_REIFIABLE_DEP_KIND_MANAGED, ref);
+                if (member_view->kind == FENG_SYMBOL_DECL_KIND_METHOD) {
+                    restore_imported_reifiable_deps(
+                        cache,
+                        analysis,
+                        sd,
+                        &sd->decl,
+                        sd->decl.as.type_decl.members[ast_member_index],
+                        member_view);
+                }
+                ++ast_member_index;
             }
         }
+        free(module_name);
     }
     populate_imported_intersection_infos(cache, analysis);
 }

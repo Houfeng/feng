@@ -67,6 +67,10 @@ typedef struct FengResolvedCallable {
      * 对方法返回类型做参数代入以收集间接泛型依赖。由语义分析结果持有完整
      * 类型树，本字段仅借用 FengSemanticAnalysis 生命周期。 */
     const FengTypeRef *owner_instance_type_ref;
+    /* 调用解析得到的函数/方法级泛型实参，顺序与 callable 声明一致。
+     * 数组由 AST 节点拥有；各 type_ref 由 FengSemanticAnalysis 持有。 */
+    const FengTypeRef **callable_type_args;
+    size_t callable_type_arg_count;
 } FengResolvedCallable;
 
 typedef struct FengParameter {

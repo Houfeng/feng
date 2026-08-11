@@ -424,6 +424,10 @@ typedef struct FengFunctionDescriptor {
      * sorted by key. */
     size_t reified_type_deps_count;
     const FengTypeDescriptor *const *reified_type_deps;
+    /* Concrete direct generic callable dependencies used by this invocation.
+     * Slots are assigned statically; shared bodies perform only indexed reads. */
+    size_t reified_callable_deps_count;
+    const struct FengFunctionDescriptor *const *reified_callable_deps;
 } FengFunctionDescriptor;
 
 static inline const FengTrivialDescriptor *feng_generic_trivial_descriptor(

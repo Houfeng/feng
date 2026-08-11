@@ -1535,6 +1535,7 @@ static bool fill_intersection_members_with_tparams(const BuildContext *ctx,
 static bool fill_reifiable_deps(const BuildContext *ctx,
                                 FengSymbolDeclView *decl,
                                 const FengDecl *source_decl,
+                                const FengTypeMember *source_member,
                                 const FengTypeParam *type_params,
                                 size_t type_param_count,
                                 const char *path,
@@ -1543,8 +1544,13 @@ static bool fill_reifiable_deps(const BuildContext *ctx,
     const FengReifiableDepSet *dep_set;
     size_t index;
 
-    dep_set = feng_semantic_lookup_reifiable_dep_set(ctx->analysis, source_decl);
-    if (dep_set == NULL || dep_set->dep_count == 0U) {
+    dep_set = source_member != NULL
+                  ? feng_semantic_lookup_member_reifiable_dep_set(
+                        ctx->analysis, source_decl, source_member)
+                  : feng_semantic_lookup_reifiable_dep_set(
+                        ctx->analysis, source_decl);
+    if (dep_set == NULL ||
+        (dep_set->dep_count == 0U && dep_set->callable_dep_count == 0U)) {
         return true;
     }
 
@@ -1584,6 +1590,144 @@ static bool fill_reifiable_deps(const BuildContext *ctx,
                 return false;
             }
         }
+    }
+
+    for (index = 0U; index < dep_set->callable_dep_count; ++index) {
+        const FengReifiableCallableDep *source_dependency =
+            &dep_set->callable_deps[index];
+        FengSymbolCallableDepView dependency;
+        const FengDecl *target_owner_decl = NULL;
+        const FengSemanticModule *target_module;
+        const FengImportedSymbolIdentity *imported_identity;
+        FengSymbolCallableDepView *grown;
+        size_t arg_index;
+
+        memset(&dependency, 0, sizeof(dependency));
+        dependency.kind = source_dependency->kind;
+        dependency.target_source_node =
+            source_dependency->function_decl != NULL
+                ? (const void *)source_dependency->function_decl
+                : (const void *)source_dependency->member;
+        target_owner_decl = source_dependency->function_decl != NULL
+                                ? source_dependency->function_decl
+                                : source_dependency->fit_decl != NULL
+                                      ? source_dependency->fit_decl
+                                      : source_dependency->owner_type_decl;
+        imported_identity =
+            feng_semantic_lookup_imported_symbol_identity(
+                ctx->analysis, dependency.target_source_node);
+        if (imported_identity != NULL) {
+            dependency.target_module_name =
+                feng_symbol_internal_dup_cstr(imported_identity->module_name);
+            dependency.target_symbol_id = imported_identity->symbol_id;
+        } else {
+            target_module = find_decl_owner_module(ctx->analysis,
+                                                   target_owner_decl);
+            if (target_module == NULL) {
+                return feng_symbol_internal_set_error(
+                    out_error,
+                    path,
+                    token,
+                    "cannot locate callable dependency owner module");
+            }
+            dependency.target_module_name =
+                join_segments(target_module->segments,
+                              target_module->segment_count);
+        }
+        if (dependency.target_module_name == NULL) {
+            return feng_symbol_internal_set_error(
+                out_error,
+                path,
+                token,
+                "out of memory recording callable dependency module");
+        }
+        dependency.local_target_decl = find_source_decl(
+            ctx->source_map,
+            ctx->source_count,
+            dependency.target_source_node);
+        dependency.owner_instance_type =
+            build_type_from_type_ref_with_tparams(
+                ctx,
+                source_dependency->owner_instance_type_ref,
+                type_params,
+                type_param_count,
+                path,
+                token,
+                out_error);
+        if (source_dependency->owner_instance_type_ref != NULL &&
+            dependency.owner_instance_type == NULL) {
+            free(dependency.target_module_name);
+            return false;
+        }
+        if (source_dependency->callable_type_arg_count > 0U) {
+            dependency.callable_type_args =
+                (FengSymbolTypeView **)calloc(
+                    source_dependency->callable_type_arg_count,
+                    sizeof(*dependency.callable_type_args));
+            if (dependency.callable_type_args == NULL) {
+                free(dependency.target_module_name);
+                feng_symbol_internal_type_free(
+                    dependency.owner_instance_type);
+                return feng_symbol_internal_set_error(
+                    out_error,
+                    path,
+                    token,
+                    "out of memory recording callable dependency arguments");
+            }
+            dependency.callable_type_arg_count =
+                source_dependency->callable_type_arg_count;
+            for (arg_index = 0U;
+                 arg_index < source_dependency->callable_type_arg_count;
+                 ++arg_index) {
+                dependency.callable_type_args[arg_index] =
+                    build_type_from_type_ref_with_tparams(
+                        ctx,
+                        source_dependency->callable_type_args[arg_index],
+                        type_params,
+                        type_param_count,
+                        path,
+                        token,
+                        out_error);
+                if (source_dependency->callable_type_args[arg_index] != NULL &&
+                    dependency.callable_type_args[arg_index] == NULL) {
+                    size_t cleanup_index;
+
+                    for (cleanup_index = 0U;
+                         cleanup_index < arg_index;
+                         ++cleanup_index) {
+                        feng_symbol_internal_type_free(
+                            dependency.callable_type_args[cleanup_index]);
+                    }
+                    free(dependency.callable_type_args);
+                    free(dependency.target_module_name);
+                    feng_symbol_internal_type_free(
+                        dependency.owner_instance_type);
+                    return false;
+                }
+            }
+        }
+        grown = (FengSymbolCallableDepView *)realloc(
+            decl->reifiable_callable_deps,
+            (decl->reifiable_callable_dep_count + 1U) * sizeof(*grown));
+        if (grown == NULL) {
+            for (arg_index = 0U;
+                 arg_index < dependency.callable_type_arg_count;
+                 ++arg_index) {
+                feng_symbol_internal_type_free(
+                    dependency.callable_type_args[arg_index]);
+            }
+            free(dependency.callable_type_args);
+            free(dependency.target_module_name);
+            feng_symbol_internal_type_free(dependency.owner_instance_type);
+            return feng_symbol_internal_set_error(
+                out_error,
+                path,
+                token,
+                "out of memory growing callable dependency list");
+        }
+        decl->reifiable_callable_deps = grown;
+        decl->reifiable_callable_deps[
+            decl->reifiable_callable_dep_count++] = dependency;
     }
 
     return true;
@@ -1804,6 +1948,7 @@ static bool register_source_decl(BuildContext *ctx,
                                  const char *path,
                                  FengToken token,
                                  FengSymbolError *out_error) {
+    decl->source_node = source;
     return append_source_map(&ctx->source_map,
                              &ctx->source_count,
                              source,
@@ -2646,7 +2791,14 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
                                         false,
                                         path,
                                         member->token,
-                                        out_error)) {
+                                        out_error) ||
+                (member->kind == FENG_TYPE_MEMBER_METHOD &&
+                 !fill_reifiable_deps(ctx, decl, owner_source_decl, member,
+                                      effective_tparams,
+                                      effective_tparam_count,
+                                      path,
+                                      member->token,
+                                      out_error))) {
                 free(merged_tparams);
                 feng_symbol_internal_decl_free_members(decl);
                 free(decl);
@@ -2800,7 +2952,7 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                     return NULL;
                 }
             }
-            if (!fill_reifiable_deps(ctx, decl, source_decl,
+            if (!fill_reifiable_deps(ctx, decl, source_decl, NULL,
                                      ctx->type_params,
                                      ctx->type_param_count,
                                      path,
@@ -3064,7 +3216,7 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                     return NULL;
                 }
             }
-            if (!fill_reifiable_deps(ctx, decl, source_decl,
+            if (!fill_reifiable_deps(ctx, decl, source_decl, NULL,
                                      ctx->type_params,
                                      ctx->type_param_count,
                                      path,
@@ -3138,7 +3290,7 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                                         path,
                                         source_decl->token,
                                         out_error) ||
-                !fill_reifiable_deps(ctx, decl, source_decl,
+                !fill_reifiable_deps(ctx, decl, source_decl, NULL,
                                      ctx->type_params,
                                      ctx->type_param_count,
                                      path,
@@ -3475,6 +3627,20 @@ static void bind_decl_type_targets(FengSymbolModuleGraph *graph,
     for (index = 0U; index < decl->reifiable_type_dep_count; ++index) {
         bind_type_target(graph, decl, decl->reifiable_type_deps[index]);
     }
+    for (index = 0U; index < decl->reifiable_callable_dep_count; ++index) {
+        FengSymbolCallableDepView *dependency =
+            &decl->reifiable_callable_deps[index];
+        size_t arg_index;
+
+        bind_type_target(graph, decl, dependency->owner_instance_type);
+        for (arg_index = 0U;
+             arg_index < dependency->callable_type_arg_count;
+             ++arg_index) {
+            bind_type_target(graph,
+                             decl,
+                             dependency->callable_type_args[arg_index]);
+        }
+    }
     for (index = 0U; index < decl->member_count; ++index) {
         bind_decl_type_targets(graph, decl->members[index]);
     }
@@ -3644,6 +3810,115 @@ static char *module_output_path(const char *root,
     return path;
 }
 
+/* Assign stable declaration-tree ids before profile-specific FT filtering.
+ * Package-public and workspace exports therefore use the same module-local
+ * identity even when one profile omits declarations. */
+static bool assign_graph_decl_ids(FengSymbolDeclView *decl,
+                                  uint32_t *next_id,
+                                  const char *path,
+                                  FengSymbolError *out_error) {
+    size_t index;
+
+    if (decl == NULL || next_id == NULL || *next_id == 0U) {
+        return feng_symbol_internal_set_error(
+            out_error,
+            path,
+            decl != NULL ? decl->token : (FengToken){0},
+            "symbol id exceeds .ft range");
+    }
+    decl->ft_symbol_id = (*next_id)++;
+    for (index = 0U; index < decl->member_count; ++index) {
+        if (!assign_graph_decl_ids(
+                decl->members[index], next_id, path, out_error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Find a source-backed declaration in one module tree. */
+static FengSymbolDeclView *find_graph_decl_by_source(
+    FengSymbolDeclView *decl,
+    const void *source_node) {
+    size_t index;
+
+    if (decl == NULL || source_node == NULL) {
+        return NULL;
+    }
+    if (decl->source_node == source_node) {
+        return decl;
+    }
+    for (index = 0U; index < decl->member_count; ++index) {
+        FengSymbolDeclView *found = find_graph_decl_by_source(
+            decl->members[index], source_node);
+
+        if (found != NULL) {
+            return found;
+        }
+    }
+    return NULL;
+}
+
+/* Resolve source identities in callable dependencies after every local
+ * module graph has been built and assigned stable ids. */
+static bool resolve_graph_callable_dependencies(
+    FengSymbolGraph *graph,
+    FengSymbolModuleGraph *caller_module,
+    FengSymbolDeclView *decl,
+    FengSymbolError *out_error) {
+    size_t dep_index;
+    size_t member_index;
+
+    for (dep_index = 0U;
+         dep_index < decl->reifiable_callable_dep_count;
+         ++dep_index) {
+        FengSymbolCallableDepView *dependency =
+            &decl->reifiable_callable_deps[dep_index];
+
+        if (dependency->target_symbol_id == 0U) {
+            size_t module_index;
+
+            for (module_index = 0U;
+                 module_index < graph->module_count;
+                 ++module_index) {
+                FengSymbolModuleGraph *target_module =
+                    graph->modules[module_index];
+                FengSymbolDeclView *target = find_graph_decl_by_source(
+                    &target_module->root_decl,
+                    dependency->target_source_node);
+
+                if (target == NULL) {
+                    continue;
+                }
+                dependency->target_symbol_id = target->ft_symbol_id;
+                if (target_module == caller_module) {
+                    dependency->local_target_decl = target;
+                }
+                break;
+            }
+        }
+        if (dependency->target_symbol_id == 0U ||
+            dependency->target_module_name == NULL ||
+            dependency->target_module_name[0] == '\0') {
+            return feng_symbol_internal_set_error(
+                out_error,
+                decl->path,
+                decl->token,
+                "cannot resolve callable dependency symbol identity");
+        }
+    }
+    for (member_index = 0U; member_index < decl->member_count; ++member_index) {
+        if (!resolve_graph_callable_dependencies(
+                graph,
+                caller_module,
+                decl->members[member_index],
+                out_error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool feng_symbol_build_graph(const FengSemanticAnalysis *analysis,
                              FengSymbolGraph **out_graph,
                              FengSymbolError *out_error) {
@@ -3678,6 +3953,31 @@ bool feng_symbol_build_graph(const FengSemanticAnalysis *analysis,
             if (module_graph != NULL) {
                 feng_symbol_internal_module_free(module_graph);
             }
+            feng_symbol_graph_free(graph);
+            return false;
+        }
+    }
+
+    for (module_index = 0U; module_index < graph->module_count; ++module_index) {
+        uint32_t next_id = 1U;
+        FengSymbolModuleGraph *module = graph->modules[module_index];
+
+        if (!assign_graph_decl_ids(&module->root_decl,
+                                   &next_id,
+                                   module->primary_path,
+                                   out_error)) {
+            feng_symbol_graph_free(graph);
+            return false;
+        }
+    }
+    for (module_index = 0U; module_index < graph->module_count; ++module_index) {
+        FengSymbolModuleGraph *module = graph->modules[module_index];
+
+        if (!resolve_graph_callable_dependencies(
+                graph,
+                module,
+                &module->root_decl,
+                out_error)) {
             feng_symbol_graph_free(graph);
             return false;
         }

@@ -42,6 +42,7 @@ func main(args: string[]) {
       test_reified_value_callable();
       test_generic_composition_coverage();
       test_generic_advanced_composition_coverage();
+      test_generic_shared_body_reification();
       test_mixin();
       test_private_generic_representation();
       test_cross_package_private_representation();

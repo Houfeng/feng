@@ -1,6 +1,6 @@
 # Feng 泛型共享体具化修复开发文档
 
-> 状态：待 Review
+> 状态：已完成
 >
 > 实施顺序：本专项完成并通过全量回归后，再继续
 > [feng-generic-advanced-composition-fcts-hardening-dev.md](./feng-generic-advanced-composition-fcts-hardening-dev.md)。
@@ -346,9 +346,16 @@ open dependency 和 closed dependency 必须由同一个规范化 key 算法分�
 - 直接泛型参数按其现有固定/地址 ABI 传递；
 - descriptor-sized 参数使用地址表示；
 - descriptor-sized 返回值使用调用方提供的 `_out`；
+- 直接泛型参数返回值同样由调用方按 `FengGenericParamDescriptor` 的闭合大小声明对齐存储，不能使用
+  指针大小的 `void *` 局部变量代替返回槽；
 - 派生 aggregate 的大小、字段偏移、复制和清理由闭合 `FengAggregateDescriptor` 决定；
 - 派生 managed type 的分配和泛型方法调用使用闭合 `FengTypeDescriptor`；
 - 局部显式绑定、推断绑定、临时值和返回接收槽必须使用同一闭合描述符，不能落回 open C 占位布局。
+
+直接泛型参数值在共享体内统一采用“存储地址”表示。每个 owning 存储声明时只读取一次泛型参数
+descriptor、只计算一次闭合大小；参数转发不得再次对存储地址取址。其作用域清理由 descriptor 的
+`kind` 选择既有 pointer cleanup 或 aggregate cleanup，trivial 值不注册 cleanup。该规则统一覆盖顶层函数、
+静态方法、实例方法、callable/spec 调用和递归调用，不按调用形式增加分支特判。
 
 ## 7. `.ft` 与跨包恢复
 
@@ -395,6 +402,9 @@ FT 编码可以复用现有 SYMS 对 callable 声明的身份、TYPS 对类型�
 - 调用需要函数描述符的泛型 callee 时增加一次
   `_func_desc->reified_callable_deps[slot]` 固定索引读取；
 - 所有 descriptor graph 节点和数组均为编译期生成的 `static const` 数据。
+- 共享体实际拥有直接泛型参数临时值或局部值时，按既有泛型值 ABI 对 `kind` 做生命周期分派；
+  descriptor 与 size 在该存储声明处各缓存一次。该分派是 erased owning 值正确 ARC/aggregate 清理所必需，
+  不影响闭合非泛型路径，也不增加运行时查找、分配或类型树遍历。
 
 不存在按泛型嵌套深度进行的运行时遍历。上述固定成本是本方案为保持共享二进制和零动态具化所引入的
 完整运行时边界，实施中不得再扩大。
@@ -459,23 +469,23 @@ compiler tests 需要锁定：
 
 ## 10. 实施步骤
 
-- [ ] 更新主泛型实现说明中 dependency owner 与方法 `_func_desc` ABI
-- [ ] 扩展语义 reifiable dependency 结构，按 type / callable domain 分离
-- [ ] 从规范化语义类型事实统一收集显式与推断依赖
-- [ ] 为 direct callable dependency 增加稳定身份、类型实参映射和去重 key
-- [ ] 扩展 `FengSymbolDeclView` 及 FT round-trip
-- [ ] 扩展 `FengFunctionDescriptor.reified_callable_deps`
-- [ ] 实现通用闭合 dependency ensure/register 管线，修复 `CE0031`
-- [ ] 统一规范化 key 与 slot 映射，修复 `CE0007`
-- [ ] 顶层函数 wrapper 正确生成 aggregate/type/callable descriptor graph
-- [ ] 静态方法共享体和 wrapper 增加 `_func_desc`
-- [ ] 实例方法共享体和 wrapper 增加 `_func_desc`
-- [ ] fit 既有 `_desc` 路径适配新增 descriptor 字段并回归
-- [ ] 第一组新增测试及 `make test`
-- [ ] 第二组新增测试及 `make test`
-- [ ] 第三组新增测试及 `make test`
-- [ ] 核对没有类型名、包名、参数位置或测试模型特判
-- [ ] 最终 `make test` 无失败和 sanitizer 报告
+- [x] 更新主泛型实现说明中 dependency owner 与方法 `_func_desc` ABI
+- [x] 扩展语义 reifiable dependency 结构，按 type / callable domain 分离
+- [x] 从规范化语义类型事实统一收集显式与推断依赖
+- [x] 为 direct callable dependency 增加稳定身份、类型实参映射和去重 key
+- [x] 扩展 `FengSymbolDeclView` 及 FT round-trip
+- [x] 扩展 `FengFunctionDescriptor.reified_callable_deps`
+- [x] 实现通用闭合 dependency ensure/register 管线，修复 `CE0031`
+- [x] 统一规范化 key 与 slot 映射，修复 `CE0007`
+- [x] 顶层函数 wrapper 正确生成 aggregate/type/callable descriptor graph
+- [x] 静态方法共享体和 wrapper 增加 `_func_desc`
+- [x] 实例方法共享体和 wrapper 增加 `_func_desc`
+- [x] fit 既有 `_desc` 路径适配新增 descriptor 字段并回归
+- [x] 第一组新增测试及 `make test`
+- [x] 第二组新增测试及 `make test`
+- [x] 第三组新增测试及 `make test`
+- [x] 核对没有类型名、包名、参数位置或测试模型特判
+- [x] 最终 `make test` 无失败和 sanitizer 报告
 
 完成全部步骤并通过最终回归前，不得恢复
 [feng-generic-advanced-composition-fcts-hardening-dev.md](./feng-generic-advanced-composition-fcts-hardening-dev.md)

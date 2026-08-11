@@ -4699,8 +4699,10 @@ static bool callable_collect_call_type_args(ResolveContext *context,
                                             const FengExpr *call_expr,
                                             const FengCallableSignature *callable,
                                             bool allow_wrapped_inference,
+                                            bool preserve_first_direct_binding,
                                             FengTypeRef **type_args,
                                             bool *owned_type_args);
+static void normalize_type_ref(FengTypeRef *type_ref, size_t pointer_size);
 static bool validate_type_param_constraints(ResolveContext *context,
                                             const FengTypeParam *type_params,
                                             size_t type_param_count);
@@ -4855,6 +4857,7 @@ static const FengTypeRef *substitute_callable_return_type_for_call(
                                          call_expr,
                                          callable,
                                          allow_wrapped_inference,
+                                         false,
                                          type_args,
                                          owned_type_args)) {
         goto cleanup;
@@ -11247,11 +11250,18 @@ static bool callable_collect_type_args_from_arg_expr(ResolveContext *context,
 /* Central type-argument collector for a call expression. It merges three
  * sources in order: explicit type args, direct-`T` positions, and optionally
  * wrapped-shape positions guarded by `allow_wrapped_inference`. That guard is
- * the semantic boundary that keeps wrapped inference extern-only. */
+ * the semantic boundary that keeps wrapped inference extern-only.
+ *
+ * During ordinary overload applicability probing, direct `T` positions keep
+ * the first inferred binding and deliberately tolerate later incompatible
+ * argument types; the selected-call metadata path passes
+ * preserve_first_direct_binding=true to reproduce that established decision
+ * exactly. Other consumers retain strict unification. */
 static bool callable_collect_call_type_args(ResolveContext *context,
                                             const FengExpr *call_expr,
                                             const FengCallableSignature *callable,
                                             bool allow_wrapped_inference,
+                                            bool preserve_first_direct_binding,
                                             FengTypeRef **type_args,
                                             bool *owned_type_args) {
     size_t type_param_index;
@@ -11317,7 +11327,9 @@ static bool callable_collect_call_type_args(ResolveContext *context,
                                                           call_expr->as.call.args[arg_index],
                                                           type_args,
                                                           owned_type_args)) {
-                return false;
+                if (!preserve_first_direct_binding) {
+                    return false;
+                }
             }
             continue;
         }
@@ -14389,6 +14401,73 @@ static InferredExprType infer_lambda_body_type(ResolveContext *context, const Fe
     return ok ? body_type : inferred_expr_type_unknown();
 }
 
+/* Build the caller-view owner instance for an explicitly instantiated generic
+ * constructor. The resolver owns the returned tree; callers that publish it
+ * beyond ResolveContext lifetime must clone it into FengSemanticAnalysis. */
+static FengTypeRef *synthesize_constructor_owner_instance_type_ref(
+    ResolveContext *context,
+    const FengExpr *expr,
+    const FengDecl *type_decl) {
+    FengTypeRef *instance_ref;
+    FengSlice *segments;
+    size_t segment_count = 0U;
+
+    if (context == NULL || expr == NULL || expr->kind != FENG_EXPR_CALL ||
+        type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        type_decl->as.type_decl.type_param_count == 0U ||
+        !expr->as.call.has_explicit_type_args ||
+        expr->as.call.explicit_type_arg_count !=
+            type_decl->as.type_decl.type_param_count) {
+        return NULL;
+    }
+
+    segments = expr_path_segments_alloc(expr->as.call.callee, &segment_count);
+    if (segments == NULL || segment_count == 0U) {
+        free(segments);
+        segment_count = 1U;
+        segments = (FengSlice *)malloc(sizeof(*segments));
+        if (segments == NULL) {
+            return NULL;
+        }
+        segments[0] = type_decl->as.type_decl.name;
+    }
+
+    instance_ref = (FengTypeRef *)calloc(1U, sizeof(*instance_ref));
+    if (instance_ref == NULL) {
+        free(segments);
+        return NULL;
+    }
+    instance_ref->token = expr->token;
+    instance_ref->kind = FENG_TYPE_REF_NAMED;
+    instance_ref->as.named.segments = segments;
+    instance_ref->as.named.segment_count = segment_count;
+    instance_ref->as.named.type_arg_count =
+        expr->as.call.explicit_type_arg_count;
+    instance_ref->as.named.type_args = (FengTypeRef **)calloc(
+        expr->as.call.explicit_type_arg_count,
+        sizeof(*instance_ref->as.named.type_args));
+    if (instance_ref->as.named.type_args == NULL) {
+        free_synthetic_type_ref(instance_ref);
+        return NULL;
+    }
+    for (size_t arg_index = 0U;
+         arg_index < expr->as.call.explicit_type_arg_count;
+         ++arg_index) {
+        instance_ref->as.named.type_args[arg_index] =
+            clone_type_ref_for_inference(
+                expr->as.call.explicit_type_args[arg_index]);
+        if (instance_ref->as.named.type_args[arg_index] == NULL) {
+            free_synthetic_type_ref(instance_ref);
+            return NULL;
+        }
+    }
+    if (!resolver_track_synthetic_type_ref(context, instance_ref)) {
+        free_synthetic_type_ref(instance_ref);
+        return NULL;
+    }
+    return instance_ref;
+}
+
 static InferredExprType infer_call_expr_type(ResolveContext *context, const FengExpr *expr) {
     const FengExpr *callee;
     ResolvedTypeTarget target;
@@ -14414,43 +14493,12 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
     }
 
     if (target.type_decl != NULL) {
-        if (target.type_decl->kind == FENG_DECL_TYPE &&
-            target.type_decl->as.type_decl.type_param_count > 0U &&
-            expr->as.call.has_explicit_type_args &&
-            expr->as.call.explicit_type_arg_count ==
-                target.type_decl->as.type_decl.type_param_count) {
-            FengTypeRef *instance_ref = (FengTypeRef *)calloc(1U, sizeof(*instance_ref));
-            if (instance_ref != NULL) {
-                instance_ref->token = expr->token;
-                instance_ref->kind = FENG_TYPE_REF_NAMED;
-                instance_ref->as.named.segment_count = 1U;
-                instance_ref->as.named.segments = (FengSlice *)malloc(sizeof(FengSlice));
-                instance_ref->as.named.type_arg_count = expr->as.call.explicit_type_arg_count;
-                instance_ref->as.named.type_args =
-                    (FengTypeRef **)calloc(expr->as.call.explicit_type_arg_count,
-                                           sizeof(FengTypeRef *));
-                if (instance_ref->as.named.segments != NULL &&
-                    (expr->as.call.explicit_type_arg_count == 0U ||
-                     instance_ref->as.named.type_args != NULL)) {
-                    bool ok = true;
-                    instance_ref->as.named.segments[0] = target.type_decl->as.type_decl.name;
-                    for (size_t arg_index = 0U;
-                         arg_index < expr->as.call.explicit_type_arg_count;
-                         ++arg_index) {
-                        instance_ref->as.named.type_args[arg_index] =
-                            clone_type_ref_for_inference(
-                                expr->as.call.explicit_type_args[arg_index]);
-                        if (instance_ref->as.named.type_args[arg_index] == NULL) {
-                            ok = false;
-                            break;
-                        }
-                    }
-                    if (ok && resolver_track_synthetic_type_ref(context, instance_ref)) {
-                        return inferred_expr_type_from_type_ref(instance_ref);
-                    }
-                }
-                free_synthetic_type_ref(instance_ref);
-            }
+        FengTypeRef *instance_ref =
+            synthesize_constructor_owner_instance_type_ref(
+                context, expr, target.type_decl);
+
+        if (instance_ref != NULL) {
+            return inferred_expr_type_from_type_ref(instance_ref);
         }
         return inferred_expr_type_from_decl(target.type_decl);
     }
@@ -18437,18 +18485,35 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
     }
 }
 
-static void record_object_arg_coercion_sites_for_owner_instance(
+/* Record argument coercions against the fully selected callable instance.
+ * Owner arguments and callable-local arguments are substituted in declaration
+ * order before determining callable/spec coercions, so a generic method's
+ * lambda and aggregate parameter surfaces use the same closed types as its
+ * resolved-call metadata. */
+static void record_object_arg_coercion_sites_for_resolved_call(
     ResolveContext *context,
-    FengExpr *const *args,
-    size_t arg_count,
-    const FengParameter *params,
-    size_t param_count,
+    const FengExpr *call_expr,
+    const FengCallableSignature *callable,
     const FengDecl *owner_type_decl,
     InferredExprType owner_type) {
     size_t i;
     bool is_variadic;
     size_t fixed_count;
+    FengExpr *const *args;
+    size_t arg_count;
+    const FengParameter *params;
+    size_t param_count;
+    const FengResolvedCallable *resolved;
 
+    if (call_expr == NULL || call_expr->kind != FENG_EXPR_CALL ||
+        callable == NULL) {
+        return;
+    }
+    args = call_expr->as.call.args;
+    arg_count = call_expr->as.call.arg_count;
+    params = callable->params;
+    param_count = callable->param_count;
+    resolved = &call_expr->as.call.resolved_callable;
     if (params == NULL || args == NULL) {
         return;
     }
@@ -18470,6 +18535,12 @@ static void record_object_arg_coercion_sites_for_owner_instance(
             owner_type_decl,
             owner_type,
             declared_param_type);
+        param_type = substitute_type_ref_for_explicit_callable_args(
+            context,
+            callable,
+            resolved->callable_type_args,
+            resolved->callable_type_arg_count,
+            param_type);
         if (resolve_function_type_decl(context, param_type) != NULL) {
             record_callable_spec_coercion_site(context, args[i], param_type);
             continue;
@@ -18916,6 +18987,7 @@ static void materialize_callable_type_param_constraint_witnesses(
                                          call_expr,
                                          callable,
                                          call_expr_allows_wrapped_generic_extern_inference(call_expr),
+                                         false,
                                          type_args,
                                          owned_type_args)) {
         goto cleanup;
@@ -21258,9 +21330,31 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
 
     if (target.type_decl->kind == FENG_DECL_TYPE) {
         FengExpr *mutable_expr = (FengExpr *)expr;
+        FengTypeRef *owner_instance_ref =
+            synthesize_constructor_owner_instance_type_ref(
+                context, expr, target.type_decl);
+
         mutable_expr->as.call.resolved_callable.kind = FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR;
         mutable_expr->as.call.resolved_callable.owner_type_decl = target.type_decl;
         mutable_expr->as.call.resolved_callable.member = constructor_member;
+        if (owner_instance_ref != NULL) {
+            FengTypeRef *persistent_owner_ref =
+                clone_type_ref_for_inference(owner_instance_ref);
+
+            if (persistent_owner_ref == NULL ||
+                !analysis_track_synthetic_type_ref(context->analysis,
+                                                   persistent_owner_ref)) {
+                free_synthetic_type_ref(persistent_owner_ref);
+                return resolver_append_error(
+                    context,
+                    expr->token,
+                    "IE0001",
+                    format_message(
+                        "out of memory while recording constructor owner type"));
+            }
+            mutable_expr->as.call.resolved_callable.owner_instance_type_ref =
+                persistent_owner_ref;
+        }
         if (expr->as.call.has_explicit_type_args) {
             materialize_named_type_param_constraint_witnesses(
                 context,
@@ -21294,11 +21388,76 @@ static bool record_resolved_callable_from_resolution(
     FengExpr *mutable_expr = (FengExpr *)call_expr;
     FengResolvedCallable *slot;
     FengTypeRef *persistent_owner_ref = NULL;
+    FengTypeRef *synthetic_owner_ref = NULL;
 
     if (mutable_expr == NULL || mutable_expr->kind != FENG_EXPR_CALL ||
         resolution == NULL ||
         resolution->kind != FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
         return true;
+    }
+
+    /* `self.method()` is inferred from the owner declaration and therefore
+     * has no instance type_ref. Reconstruct the ordinary open owner instance
+     * from declaration-ordered type parameters so downstream callable
+     * dependency closure sees the same `Owner<T...>` shape as other calls. */
+    if (owner_instance_type_ref == NULL &&
+        resolution->owner_type_decl != NULL &&
+        resolution->owner_type_decl->kind == FENG_DECL_TYPE &&
+        resolution->owner_type_decl->as.type_decl.type_param_count > 0U &&
+        context->current_type_decl == resolution->owner_type_decl) {
+        const FengDecl *owner_decl = resolution->owner_type_decl;
+        size_t owner_param_count =
+            owner_decl->as.type_decl.type_param_count;
+
+        synthetic_owner_ref = (FengTypeRef *)calloc(
+            1U, sizeof(*synthetic_owner_ref));
+        if (synthetic_owner_ref != NULL) {
+            synthetic_owner_ref->token = call_expr->token;
+            synthetic_owner_ref->kind = FENG_TYPE_REF_NAMED;
+            synthetic_owner_ref->as.named.segments =
+                (FengSlice *)malloc(sizeof(FengSlice));
+            synthetic_owner_ref->as.named.type_args =
+                (FengTypeRef **)calloc(
+                    owner_param_count,
+                    sizeof(*synthetic_owner_ref->as.named.type_args));
+            if (synthetic_owner_ref->as.named.segments != NULL &&
+                synthetic_owner_ref->as.named.type_args != NULL) {
+                bool owner_ok = true;
+
+                synthetic_owner_ref->as.named.segments[0] =
+                    owner_decl->as.type_decl.name;
+                synthetic_owner_ref->as.named.segment_count = 1U;
+                synthetic_owner_ref->as.named.type_arg_count =
+                    owner_param_count;
+                for (size_t index = 0U;
+                     index < owner_param_count;
+                     ++index) {
+                    FengTypeRef *arg =
+                        (FengTypeRef *)calloc(1U, sizeof(*arg));
+
+                    if (arg == NULL) {
+                        owner_ok = false;
+                        break;
+                    }
+                    arg->token = owner_decl->as.type_decl.type_params[index].token;
+                    arg->kind = FENG_TYPE_REF_NAMED;
+                    arg->as.named.segments =
+                        (FengSlice *)malloc(sizeof(FengSlice));
+                    if (arg->as.named.segments == NULL) {
+                        free(arg);
+                        owner_ok = false;
+                        break;
+                    }
+                    arg->as.named.segments[0] =
+                        owner_decl->as.type_decl.type_params[index].name;
+                    arg->as.named.segment_count = 1U;
+                    synthetic_owner_ref->as.named.type_args[index] = arg;
+                }
+                if (owner_ok) {
+                    owner_instance_type_ref = synthetic_owner_ref;
+                }
+            }
+        }
     }
 
     if (owner_instance_type_ref != NULL) {
@@ -21316,9 +21475,90 @@ static bool record_resolved_callable_from_resolution(
             return false;
         }
     }
+    free_synthetic_type_ref(synthetic_owner_ref);
 
     slot = &mutable_expr->as.call.resolved_callable;
     slot->owner_instance_type_ref = persistent_owner_ref;
+    free((void *)slot->callable_type_args);
+    slot->callable_type_args = NULL;
+    slot->callable_type_arg_count = 0U;
+    if (resolution->callable != NULL &&
+        resolution->callable->type_param_count > 0U) {
+        size_t type_arg_count =
+            resolution->callable->type_param_count;
+        FengTypeRef **inferred_type_args = (FengTypeRef **)calloc(
+            type_arg_count, sizeof(*inferred_type_args));
+        bool *owned_type_args = (bool *)calloc(
+            type_arg_count, sizeof(*owned_type_args));
+        const FengTypeRef **persistent_type_args =
+            (const FengTypeRef **)calloc(
+                type_arg_count, sizeof(*persistent_type_args));
+        bool type_args_ok = inferred_type_args != NULL &&
+                            owned_type_args != NULL &&
+                            persistent_type_args != NULL;
+        bool type_args_incomplete = false;
+        bool persist_failed = false;
+
+        if (type_args_ok) {
+            type_args_ok = callable_collect_call_type_args(
+                context,
+                call_expr,
+                resolution->callable,
+                resolution->decl != NULL && resolution->decl->is_extern,
+                true,
+                inferred_type_args,
+                owned_type_args);
+        }
+        for (size_t index = 0U;
+             index < type_arg_count && type_args_ok;
+             ++index) {
+            FengTypeRef *persistent_type_arg;
+
+            if (inferred_type_args[index] == NULL) {
+                type_args_incomplete = true;
+                break;
+            }
+            persistent_type_arg =
+                clone_type_ref_for_inference(inferred_type_args[index]);
+            if (persistent_type_arg == NULL ||
+                !analysis_track_synthetic_type_ref(
+                    context->analysis, persistent_type_arg)) {
+                free_synthetic_type_ref(persistent_type_arg);
+                type_args_ok = false;
+                persist_failed = true;
+                break;
+            }
+            normalize_type_ref(persistent_type_arg, context->pointer_size);
+            persistent_type_args[index] = persistent_type_arg;
+        }
+        for (size_t index = 0U; index < type_arg_count; ++index) {
+            if (owned_type_args != NULL && owned_type_args[index]) {
+                free_synthetic_type_ref(inferred_type_args[index]);
+            }
+        }
+        free(inferred_type_args);
+        free(owned_type_args);
+        if (!type_args_ok || type_args_incomplete) {
+            free(persistent_type_args);
+            /* Preserve the existing semantic/codegen boundary for calls whose
+             * type arguments cannot be inferred at all. The later codegen
+             * diagnostic remains authoritative; resolved-call metadata is
+             * simply absent for that invalid call. */
+            if (type_args_incomplete && !persist_failed) {
+                goto callable_type_args_done;
+            }
+            resolver_append_error(
+                context,
+                call_expr->token,
+                "IE0001",
+                format_message(
+                    "failed to persist resolved callable type arguments"));
+            return false;
+        }
+        slot->callable_type_args = persistent_type_args;
+        slot->callable_type_arg_count = type_arg_count;
+    }
+callable_type_args_done:
     if (resolution->fit_decl != NULL) {
         slot->kind = resolution->member != NULL && resolution->member->is_static
                          ? FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD
@@ -21483,12 +21723,12 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                             context, expr, &resolution, NULL)) {
                         return false;
                     }
-                    record_object_arg_coercion_sites(context,
-                                                     expr->as.call.args,
-                                                     expr->as.call.arg_count,
-                                                     resolution.callable->params,
-                                                     resolution.callable->param_count,
-                                                     FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
+                    record_object_arg_coercion_sites_for_resolved_call(
+                        context,
+                        expr,
+                        resolution.callable,
+                        NULL,
+                        inferred_expr_type_unknown());
                     commit_literal_arg_adaptations_for_resolved_call(
                         context,
                         expr->as.call.args,
@@ -21587,13 +21827,12 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                             static_owner_type.type_ref)) {
                         return false;
                     }
-                    record_object_arg_coercion_sites_for_owner_instance(context,
-                                                                        expr->as.call.args,
-                                                                        expr->as.call.arg_count,
-                                                                        resolution.callable->params,
-                                                                        resolution.callable->param_count,
-                                                                        static_target.type_decl,
-                                                                        static_owner_type);
+                    record_object_arg_coercion_sites_for_resolved_call(
+                        context,
+                        expr,
+                        resolution.callable,
+                        static_target.type_decl,
+                        static_owner_type);
                     commit_literal_arg_adaptations_for_resolved_call(
                         context,
                         expr->as.call.args,
@@ -21761,13 +22000,12 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                         context, expr, &resolution, owner_type.type_ref)) {
                     return false;
                 }
-                record_object_arg_coercion_sites_for_owner_instance(context,
-                                                                    expr->as.call.args,
-                                                                    expr->as.call.arg_count,
-                                                                    resolution.callable->params,
-                                                                    resolution.callable->param_count,
-                                                                    owner_type_decl,
-                                                                    owner_type);
+                record_object_arg_coercion_sites_for_resolved_call(
+                    context,
+                    expr,
+                    resolution.callable,
+                    owner_type_decl,
+                    owner_type);
                 commit_literal_arg_adaptations_for_resolved_call(
                     context,
                     expr->as.call.args,
@@ -21854,13 +22092,12 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                         context, expr, &resolution, owner_type.type_ref)) {
                     return false;
                 }
-                record_object_arg_coercion_sites_for_owner_instance(context,
-                                                                    expr->as.call.args,
-                                                                    expr->as.call.arg_count,
-                                                                    resolution.callable->params,
-                                                                    resolution.callable->param_count,
-                                                                    NULL,
-                                                                    owner_type);
+                record_object_arg_coercion_sites_for_resolved_call(
+                    context,
+                    expr,
+                    resolution.callable,
+                    NULL,
+                    owner_type);
                 commit_literal_arg_adaptations_for_resolved_call(
                     context,
                     expr->as.call.args,
@@ -21953,12 +22190,12 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                             context, expr, &resolution, NULL)) {
                         return false;
                     }
-                    record_object_arg_coercion_sites(context,
-                                                     expr->as.call.args,
-                                                     expr->as.call.arg_count,
-                                                     resolution.callable->params,
-                                                     resolution.callable->param_count,
-                                                     FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
+                    record_object_arg_coercion_sites_for_resolved_call(
+                        context,
+                        expr,
+                        resolution.callable,
+                        NULL,
+                        inferred_expr_type_unknown());
                     commit_literal_arg_adaptations_for_resolved_call(
                         context,
                         expr->as.call.args,
@@ -23403,21 +23640,34 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
 
         case FENG_EXPR_MEMBER:
             if (resolve_alias_member_expr(context, expr)) {
-                return true;
+                return record_type_fact_for_site(
+                    context, expr, infer_expr_type(context, expr));
             }
             if (expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_SELF) {
-                return resolve_self_member_expr(context, expr, allow_self);
+                if (!resolve_self_member_expr(context, expr, allow_self)) {
+                    return false;
+                }
+                return record_type_fact_for_site(
+                    context, expr, infer_expr_type(context, expr));
             }
             {
                 ResolvedTypeTarget target =
                     resolve_type_target_expr(context, expr->as.member.object, false);
 
                 if (target.type_decl != NULL || target.is_builtin_type_name) {
-                    return validate_instance_member_expr(context, expr);
+                    if (!validate_instance_member_expr(context, expr)) {
+                        return false;
+                    }
+                    return record_type_fact_for_site(
+                        context, expr, infer_expr_type(context, expr));
                 }
             }
-            return resolve_expr(context, expr->as.member.object, allow_self) &&
-                   validate_instance_member_expr(context, expr);
+            if (!resolve_expr(context, expr->as.member.object, allow_self) ||
+                !validate_instance_member_expr(context, expr)) {
+                return false;
+            }
+            return record_type_fact_for_site(
+                context, expr, infer_expr_type(context, expr));
 
         case FENG_EXPR_INDEX:
             return resolve_expr(context, expr->as.index.object, allow_self) &&
@@ -24222,6 +24472,15 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                 ok = resolve_expr(context, stmt->as.for_stmt.iter_expr, allow_self);
                 if (ok) {
                     iter_type = infer_expr_type(context, stmt->as.for_stmt.iter_expr);
+                    /* for-in 的 iter()/next() 调用由 codegen 合成，源码 AST
+                     * 没有可供后续依赖收集读取的 call owner。保存已经解析的
+                     * iterable 表达式类型，作为该 lowering 的语义事实。 */
+                    ok = record_type_fact_for_site(
+                        context,
+                        stmt->as.for_stmt.iter_expr,
+                        iter_type);
+                }
+                if (ok) {
                     if (iter_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
                         iter_type.type_ref != NULL &&
                         iter_type.type_ref->kind == FENG_TYPE_REF_ARRAY) {
@@ -31738,7 +31997,6 @@ static void precompute_imported_builtin_spec_witnesses(
  * single-segment NAMED refs are candidates (multi-segment refs are qualified
  * module paths, never builtin aliases). */
 
-static void normalize_type_ref(FengTypeRef *type_ref, size_t pointer_size);
 static void normalize_expr(FengExpr *expr, size_t pointer_size);
 static void normalize_stmt(FengStmt *stmt, size_t pointer_size);
 static void normalize_block(FengBlock *block, size_t pointer_size);
@@ -32481,8 +32739,15 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     free(analysis->spec_equalities);
     for (index = 0U; index < analysis->reifiable_dep_set_count; ++index) {
         free(analysis->reifiable_dep_sets[index].deps);
+        free(analysis->reifiable_dep_sets[index].callable_deps);
     }
     free(analysis->reifiable_dep_sets);
+    for (index = 0U;
+         index < analysis->imported_symbol_identity_count;
+         ++index) {
+        free(analysis->imported_symbol_identities[index].module_name);
+    }
+    free(analysis->imported_symbol_identities);
     /* synthesized_type_refs contains complete trees cloned or synthesized by
      * the analyzer for metadata that outlives ResolveContext. */
     for (index = 0U; index < analysis->synthesized_type_ref_count; ++index) {

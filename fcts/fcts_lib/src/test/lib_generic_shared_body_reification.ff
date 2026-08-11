@@ -1,0 +1,233 @@
+open module fcts_lib.test;
+
+import std;
+import std.collections;
+
+/** Object-form payload used to close generic shared callables through a spec. */
+open spec LibSharedNamed {
+  /** Stable name exposed through the object-form witness. */
+  func name(): string;
+}
+
+/** Callable-form payload used as a generic shared-callable type argument. */
+open spec LibSharedMapper(value: i64): string;
+
+/** Generic result with managed and scalar fields following the generic slot. */
+@value
+open type LibSharedBox<T> {
+  /** Generic payload. */
+  open var value: T;
+
+  /** Managed tail verifying the complete closed layout. */
+  open var marker: string;
+
+  /** Scalar tail verifying the complete closed layout. */
+  open var revision: i64;
+
+  /** Construct a populated result. */
+  func LibSharedBox(value: T, marker: string, revision: i64) {
+    self.value = value;
+    self.marker = marker;
+    self.revision = revision;
+  }
+}
+
+/** Two-scope result used to verify argument reordering and repetition. */
+@value
+open type LibSharedPair<T, U> {
+  /** Value from the first generic scope. */
+  open var first: T;
+
+  /** Value from the second generic scope. */
+  open var second: U;
+
+  /** Repeated first-scope value. */
+  open var repeated: T;
+
+  /** Managed tail. */
+  open var marker: string;
+
+  /** Construct a populated two-scope result. */
+  func LibSharedPair(first: T, second: U, repeated: T, marker: string) {
+    self.first = first;
+    self.second = second;
+    self.repeated = repeated;
+    self.marker = marker;
+  }
+}
+
+/** Build and read a derived List<T> entirely inside one top-level shared body. */
+open func libSharedLeaf<T>(value: T, marker: string): LibSharedBox<T> {
+  let values = List<T>();
+  values.add(value);
+  return LibSharedBox<T>(values.get(0), marker, 1);
+}
+
+/**
+ * Compose List<Box<T>> and Pair<Box<T>, T> inside one shared body so every
+ * descriptor layer is closed by its immediate owner.
+ */
+open func libSharedNestedDirect<T>(
+  value: T
+): LibSharedPair<LibSharedBox<T>, T> {
+  let boxes = List<LibSharedBox<T>>();
+  boxes.add(LibSharedBox<T>(value, "nested-box", 2));
+  let box = boxes.get(0);
+  return LibSharedPair<LibSharedBox<T>, T>(
+    box,
+    value,
+    box,
+    "nested-pair"
+  );
+}
+
+/** Call the same closed generic callee twice; its descriptor must be deduplicated. */
+open func libSharedDuplicate<T>(value: T): LibSharedPair<T, T> {
+  let values = List<T>();
+  values.add(value);
+  let first = libSharedLeaf<T>(value, "first");
+  let second = libSharedLeaf<T>(value, "second");
+  return LibSharedPair<T, T>(
+    values.get(0),
+    second.value,
+    first.value,
+    first.marker + ":" + second.marker
+  );
+}
+
+/** Reorder T/U while forwarding them through another generic shared body. */
+open func libSharedReorder<T, U>(first: T, second: U): LibSharedPair<U, T> {
+  let secondBox = libSharedLeaf<U>(second, "reordered-second");
+  let firstBox = libSharedLeaf<T>(first, "reordered-first");
+  return LibSharedPair<U, T>(
+    secondBox.value,
+    firstBox.value,
+    secondBox.value,
+    secondBox.marker + ":" + firstBox.marker
+  );
+}
+
+/** Join two independently selected generic arguments in one shared callee. */
+open func libSharedJoin<T, U>(first: T, second: U): LibSharedPair<T, U> {
+  return LibSharedPair<T, U>(first, second, first, "joined");
+}
+
+/** Repeat one caller argument into both callee generic parameter positions. */
+open func libSharedRepeat<T>(value: T): LibSharedPair<T, T> {
+  return libSharedJoin<T, T>(value, value);
+}
+
+/** Direct recursive generic shared callable. */
+open func libSharedCountdown<T>(value: T, count: i64): T {
+  let values = List<T>();
+  values.add(value);
+  let current = values.get(0);
+  if count <= 0 {
+    return current;
+  }
+  return libSharedCountdown<T>(current, count - 1);
+}
+
+/** First half of a mutually recursive generic callable graph. */
+open func libSharedMutualLeft<T>(value: T, count: i64): T {
+  let values = List<T>();
+  values.add(value);
+  let current = values.get(0);
+  if count <= 0 {
+    return current;
+  }
+  return libSharedMutualRight<T>(current, count - 1);
+}
+
+/** Second half of a mutually recursive generic callable graph. */
+open func libSharedMutualRight<T>(value: T, count: i64): T {
+  let values = List<T>();
+  values.add(value);
+  let current = values.get(0);
+  if count <= 0 {
+    return current;
+  }
+  return libSharedMutualLeft<T>(current, count - 1);
+}
+
+/** Non-generic owner whose generic methods depend only on method-level U. */
+open type LibSharedMethodOwner {
+  /** Construct a method-generic owner. */
+  func LibSharedMethodOwner() {}
+
+  /** Instance shared body using a method-level parameter and derived locals. */
+  open func wrap<U>(value: U): LibSharedBox<U> {
+    let values = List<U>();
+    values.add(value);
+    return libSharedLeaf<U>(values.get(0), "method-owner");
+  }
+
+  /** Static shared body using a method-level parameter and derived locals. */
+  open static func wrapStatic<U>(value: U): LibSharedBox<U> {
+    let values: List<U> = List<U>();
+    values.add(value);
+    return libSharedLeaf<U>(values.get(0), "static-method-owner");
+  }
+
+  /** Instance caller forwarding to another method-generic shared body. */
+  open func wrapThrough<U>(value: U): LibSharedBox<U> {
+    return self.wrap<U>(value);
+  }
+
+  /** Static caller forwarding to another method-generic shared body. */
+  open static func wrapStaticThrough<U>(value: U): LibSharedBox<U> {
+    return LibSharedMethodOwner.wrapStatic<U>(value);
+  }
+}
+
+/** Generic owner covering owner-level and method-level descriptor scopes. */
+open type LibSharedOwner<T> {
+  /** Owner payload. */
+  open var value: T;
+
+  /** Construct a populated owner. */
+  func LibSharedOwner(value: T) {
+    self.value = value;
+  }
+
+  /** Instance shared body using only the owner-level generic parameter. */
+  open func ownerOnly(): LibSharedBox<T> {
+    let values = List<T>();
+    values.add(self.value);
+    return LibSharedBox<T>(values.get(0), "owner-only", 3);
+  }
+
+  /** Instance shared body using T, U, direct derived types and shared callees. */
+  open func combine<U>(second: U): LibSharedPair<T, U> {
+    let firstBox = libSharedLeaf<T>(self.value, "owner");
+    let secondBox = libSharedLeaf<U>(second, "method");
+    let firstValues = List<T>();
+    let secondValues = List<U>();
+    firstValues.add(firstBox.value);
+    secondValues.add(secondBox.value);
+    return LibSharedPair<T, U>(
+      firstValues.get(0),
+      secondValues.get(0),
+      firstValues.get(0),
+      firstBox.marker + ":" + secondBox.marker
+    );
+  }
+
+  /** Static shared body using owner T and independent method U. */
+  open static func combineStatic<U>(first: T, second: U): LibSharedPair<U, T> {
+    return libSharedReorder<T, U>(first, second);
+  }
+
+  /** Instance caller forwarding owner T and method U to another method. */
+  open func combineThrough<U>(second: U): LibSharedPair<T, U> {
+    return self.combine<U>(second);
+  }
+
+  /** Static caller forwarding owner T and method U to another static method. */
+  open static func combineStaticThrough<U>(
+    first: T,
+    second: U
+  ): LibSharedPair<U, T> {
+    return LibSharedOwner<T>.combineStatic<U>(first, second);
+  }
+}

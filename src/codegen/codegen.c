@@ -1237,6 +1237,12 @@ typedef struct Local {
      * value's storage. Taking its address again would pass a pointer to the
      * storage pointer instead of a pointer to the value. */
     bool      is_storage_address;
+    /* A direct generic parameter value is represented by descriptor-sized
+     * erased storage.  The descriptor and size are cached once when the
+     * storage is declared; lifecycle dispatch uses those cached names. */
+    bool      uses_erased_generic_storage;
+    char     *erased_generic_descriptor_c_name;
+    char     *erased_generic_size_c_name;
     /* A layout-reified by-value aggregate is represented by descriptor-sized
      * address storage rather than by the open generic C placeholder struct.
      * The descriptor/size expressions are cached when the storage is
@@ -1287,6 +1293,8 @@ static void scope_pop_free(Scope *s) {
         free(s->items[i].capture_cell_c_name);
         free(s->items[i].capture_cell_struct_name);
         free(s->items[i].capture_cell_desc_name);
+        free(s->items[i].erased_generic_descriptor_c_name);
+        free(s->items[i].erased_generic_size_c_name);
         free(s->items[i].reified_descriptor_c_name);
         free(s->items[i].reified_size_c_name);
         cgtype_free(s->items[i].type);
@@ -1311,6 +1319,9 @@ static bool scope_add(Scope *s, const char *name, const char *c_name,
     l->is_param = is_param;
     l->is_unknown_exception = false;
     l->is_storage_address = false;
+    l->uses_erased_generic_storage = false;
+    l->erased_generic_descriptor_c_name = NULL;
+    l->erased_generic_size_c_name = NULL;
     l->uses_reified_storage = false;
     l->reified_descriptor_c_name = NULL;
     l->reified_size_c_name = NULL;
@@ -1329,6 +1340,28 @@ static bool scope_mark_last_storage_address(Scope *s) {
     }
     s->items[s->count - 1U].is_storage_address = true;
     return true;
+}
+
+/* Record descriptor-sized storage for one direct generic parameter local.
+ * This metadata is compile-time-only; generated code uses the cached C
+ * locals supplied by the declaration site. */
+static bool scope_mark_last_erased_generic_storage(
+    Scope *s,
+    const char *descriptor_c_name,
+    const char *size_c_name) {
+    Local *local;
+
+    if (s == NULL || s->count == 0U || descriptor_c_name == NULL ||
+        size_c_name == NULL) {
+        return false;
+    }
+    local = &s->items[s->count - 1U];
+    local->is_storage_address = true;
+    local->uses_erased_generic_storage = true;
+    local->erased_generic_descriptor_c_name = strdup(descriptor_c_name);
+    local->erased_generic_size_c_name = strdup(size_c_name);
+    return local->erased_generic_descriptor_c_name != NULL &&
+           local->erased_generic_size_c_name != NULL;
 }
 
 /* Record the address-storage representation of the most recently registered
@@ -1471,6 +1504,16 @@ typedef struct CGNamedGenericTarget {
     const GenericTypeDecl *type;
     const GenericSpecDecl *spec;
 } CGNamedGenericTarget;
+
+/* One compile-time node in the statically emitted closed callable descriptor
+ * graph. `emitting` breaks recursive cycles after the shell declaration has
+ * been published; runtime never constructs or looks up these nodes. */
+typedef struct CGClosedCallableDescriptorNode {
+    char *key;
+    char *c_name;
+    bool emitting;
+    bool emitted;
+} CGClosedCallableDescriptorNode;
 
 typedef struct CG {
     /* Output sections concatenated at the end. */
@@ -1700,6 +1743,11 @@ typedef struct CG {
     char       **generic_type_method_rad_descs;
     size_t       generic_type_method_rad_count;
     bool         generic_type_method_rad_via_desc;
+    char       **generic_callable_dep_keys;
+    size_t       generic_callable_dep_count;
+    CGClosedCallableDescriptorNode *closed_callable_descriptor_nodes;
+    size_t       closed_callable_descriptor_node_count;
+    size_t       closed_callable_descriptor_node_capacity;
     char       **captured_binding_names;
     size_t       captured_binding_name_count;
     bool         current_callable_captures_self;
@@ -1860,6 +1908,13 @@ static bool cg_emit_reified_storage_declaration(CG *cg,
                                                 FengToken blame,
                                                 char **out_descriptor_c_name,
                                                 char **out_size_c_name);
+static bool cg_emit_erased_generic_storage_declaration(
+    CG *cg,
+    const CGType *type,
+    const char *storage_c_name,
+    FengToken blame,
+    char **out_descriptor_c_name,
+    char **out_size_c_name);
 static bool cg_emit_reified_parameter_descriptor(CG *cg,
                                                  const CGType *type,
                                                  FengToken blame,
@@ -1928,6 +1983,10 @@ static void cg_emit_cleanup_push_for_reified_aggregate_storage(
     CG *cg,
     const char *cname,
     const char *descriptor_c_name);
+static void cg_emit_cleanup_push_for_erased_generic_storage(
+    CG *cg,
+    const char *cname,
+    const char *descriptor_c_name);
 static bool cg_union_member_index_for_label(CG *cg,
                                             const UserSpec *spec,
                                             const FengMatchLabel *label,
@@ -1942,9 +2001,16 @@ static char *cg_build_label_condition(CG *cg,
                                        const UserSpec *root_spec,
                                        const FengMatchLabel *label);
 static bool cg_register_local_for_cleanup(CG *cg,
-                                const char *cname,
-                                const CGType *type,
-                                FengToken token);
+                                          const char *cname,
+                                          const CGType *type,
+                                          FengToken token);
+static bool cg_register_erased_generic_storage_for_cleanup(
+    CG *cg,
+    const char *cname,
+    const CGType *type,
+    const char *descriptor_c_name,
+    const char *size_c_name,
+    FengToken token);
 static void cg_emit_cleanup_pops_for_aggregate_local(Buf *out, const CGType *type);
 static void cg_emit_cleanup_zero_for_aggregate_local(Buf *out,
                                                      const char *cname,
@@ -2102,6 +2168,30 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
                                                 const UserMethod *m,
                                                 const char *func_desc_expr,
                                                 const char *shared_name_override);
+static bool cg_emit_closed_callable_fdesc(
+    CG *cg,
+    const FengReifiableDepSet *dep_set,
+    const FengTypeParam *type_params,
+    size_t type_param_count,
+    FengTypeRef *const *type_args,
+    const FengProgram *reference_program,
+    FengToken blame,
+    const char *identity_name,
+    const char *display_name,
+    char **out_expr);
+static bool cg_activate_callable_dep_mapping(
+    CG *cg,
+    const FengReifiableDepSet *dep_set,
+    const FengSlice *caller_type_param_names,
+    size_t caller_type_param_count);
+static char *cg_callable_descriptor_expr_for_call(
+    CG *cg,
+    const FengExpr *call_expr,
+    FengToken blame);
+static char *cg_callable_descriptor_expr_for_dep(
+    CG *cg,
+    const FengReifiableCallableDep *dep,
+    FengToken blame);
 static char *cg_fit_method_shared_cname(CG *cg,
                                         const UserFit *uf,
                                         const FengTypeMember *member);
@@ -7618,6 +7708,153 @@ static bool cg_collect_generic_instances_from_type_params_from_program(
     CGTypeParamScope scope,
     const FengProgram *reference_program);
 
+/* Close one callable's direct reifiable type dependencies at a concrete call
+ * site and register every generic type/spec instance before the emission
+ * passes resolve descriptor symbols. */
+static bool cg_collect_closed_reifiable_dep_instances(
+    CG *cg,
+    const FengReifiableDepSet *dep_set,
+    const FengTypeParam *type_params,
+    size_t type_param_count,
+    FengTypeRef *const *type_args,
+    CGTypeParamScope caller_scope,
+    const FengProgram *reference_program,
+    FengToken blame) {
+    if (dep_set == NULL || dep_set->dep_count == 0U) {
+        return true;
+    }
+    if (type_param_count > 0U && type_args == NULL) {
+        return true;
+    }
+    for (size_t index = 0U; index < dep_set->dep_count; ++index) {
+        FengTypeRef *closed_ref = cg_type_ref_substitute(
+            dep_set->deps[index].type_ref,
+            type_params,
+            type_param_count,
+            type_args);
+        bool ok;
+
+        if (closed_ref == NULL) {
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        ok = cg_collect_generic_instances_from_type_ref_from_program(
+            cg, closed_ref, caller_scope, reference_program);
+        cg_type_ref_free(closed_ref);
+        if (!ok) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Close direct dependencies for a resolved top-level or type method call.
+ * Owner type arguments precede method arguments, matching the semantic key. */
+static bool cg_collect_resolved_call_reifiable_dep_instances(
+    CG *cg,
+    const FengExpr *call_expr,
+    CGTypeParamScope caller_scope) {
+    const FengResolvedCallable *resolved;
+
+    if (cg == NULL || call_expr == NULL ||
+        call_expr->kind != FENG_EXPR_CALL) {
+        return true;
+    }
+    resolved = &call_expr->as.call.resolved_callable;
+
+    if (resolved->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
+        resolved->function_decl != NULL) {
+        const FengDecl *function_decl = resolved->function_decl;
+        const FengCallableSignature *callable =
+            &function_decl->as.function_decl;
+        const FengReifiableDepSet *dep_set =
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis,
+                                                   function_decl);
+
+        if (callable->type_param_count == 0U ||
+            !call_expr->as.call.has_explicit_type_args ||
+            call_expr->as.call.explicit_type_arg_count !=
+                callable->type_param_count) {
+            return true;
+        }
+        return cg_collect_closed_reifiable_dep_instances(
+            cg,
+            dep_set,
+            callable->type_params,
+            callable->type_param_count,
+            call_expr->as.call.explicit_type_args,
+            caller_scope,
+            cg_find_decl_owner_program(cg, function_decl),
+            call_expr->token);
+    }
+
+    if ((resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
+         resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD) &&
+        resolved->owner_type_decl != NULL && resolved->member != NULL) {
+        const FengDecl *owner_decl = resolved->owner_type_decl;
+        const FengCallableSignature *callable = &resolved->member->as.callable;
+        const FengTypeRef *owner_instance = resolved->owner_instance_type_ref;
+        const size_t owner_count = owner_decl->as.type_decl.type_param_count;
+        const size_t method_count = callable->type_param_count;
+        const size_t combined_count = owner_count + method_count;
+        FengTypeParam *combined_params = NULL;
+        FengTypeRef **combined_args = NULL;
+        const FengReifiableDepSet *dep_set =
+            feng_semantic_lookup_member_reifiable_dep_set(
+                cg->analysis, owner_decl, resolved->member);
+        bool ok;
+
+        if (owner_count > 0U &&
+            (owner_instance == NULL ||
+             owner_instance->kind != FENG_TYPE_REF_NAMED ||
+             owner_instance->as.named.type_arg_count != owner_count)) {
+            return true;
+        }
+        if (method_count > 0U &&
+            (!call_expr->as.call.has_explicit_type_args ||
+             call_expr->as.call.explicit_type_arg_count != method_count)) {
+            return true;
+        }
+        if (combined_count == 0U) {
+            return true;
+        }
+
+        combined_params = (FengTypeParam *)calloc(
+            combined_count, sizeof(*combined_params));
+        combined_args = (FengTypeRef **)calloc(
+            combined_count, sizeof(*combined_args));
+        if (combined_params == NULL || combined_args == NULL) {
+            free(combined_params);
+            free(combined_args);
+            return cg_fail(cg, call_expr->token,
+                           "IE0001", "codegen: out of memory");
+        }
+        for (size_t index = 0U; index < owner_count; ++index) {
+            combined_params[index] = owner_decl->as.type_decl.type_params[index];
+            combined_args[index] = owner_instance->as.named.type_args[index];
+        }
+        for (size_t index = 0U; index < method_count; ++index) {
+            combined_params[owner_count + index] = callable->type_params[index];
+            combined_args[owner_count + index] =
+                call_expr->as.call.explicit_type_args[index];
+        }
+        ok = cg_collect_closed_reifiable_dep_instances(
+            cg,
+            dep_set,
+            combined_params,
+            combined_count,
+            combined_args,
+            caller_scope,
+            cg_find_decl_owner_program(cg, owner_decl),
+            call_expr->token);
+        free(combined_params);
+        free(combined_args);
+        return ok;
+    }
+
+    (void)caller_scope;
+    return true;
+}
+
 /**
  * Collect generic instances referenced by one instantiated callable member.
  *
@@ -7819,6 +8056,28 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
                                                 type_arg_count)) {
         buf_free(&symbol);
         return false;
+    }
+    /* Open instances retain their complete descriptor-slot context. Encode
+     * that context in the compile-time C identity, as generic specs already
+     * do, so two valid scopes such as [U] and [T,U] cannot emit colliding
+     * placeholder types while still using different generic-param indices. */
+    if (t->generic_context_type_param_count > 0U) {
+        buf_append_cstr(&symbol, "__CTX");
+        for (size_t i = 0U;
+             i < t->generic_context_type_param_count;
+             ++i) {
+            char *context_name = cg_sanitize(
+                t->generic_context_type_param_names[i],
+                strlen(t->generic_context_type_param_names[i]));
+
+            if (context_name == NULL) {
+                buf_free(&symbol);
+                return false;
+            }
+            buf_append_cstr(&symbol, "__");
+            buf_append_cstr(&symbol, context_name);
+            free(context_name);
+        }
     }
 
     Buf struct_name; buf_init(&struct_name);
@@ -13356,6 +13615,11 @@ struct ExprResult {
      * This is independent from whether the storage has dynamic aggregate
      * layout authority. */
     bool    is_storage_address;
+    /* Direct generic parameter storage whose concrete size and lifecycle
+     * are selected by a FengGenericParamDescriptor at runtime. */
+    bool    uses_erased_generic_storage;
+    char   *erased_generic_descriptor_c_name;
+    char   *erased_generic_size_c_name;
     /* True when c_expr already evaluates to the address of descriptor-sized
      * storage. Such an expression must never be copied through the open
      * generic C placeholder struct. */
@@ -13486,6 +13750,9 @@ static void er_init(ExprResult *r) {
     r->owns_ref = false;
     r->is_addressable = false;
     r->is_storage_address = false;
+    r->uses_erased_generic_storage = false;
+    r->erased_generic_descriptor_c_name = NULL;
+    r->erased_generic_size_c_name = NULL;
     r->uses_reified_storage = false;
     r->reified_descriptor_c_name = NULL;
     r->reified_size_c_name = NULL;
@@ -14210,6 +14477,8 @@ static bool cg_emit_imported_binding_assign(CG *cg,
 static void er_free(ExprResult *r) {
     if (!r) return;
     free(r->c_expr);
+    free(r->erased_generic_descriptor_c_name);
+    free(r->erased_generic_size_c_name);
     free(r->reified_descriptor_c_name);
     free(r->reified_size_c_name);
     cgtype_free(r->type);
@@ -14218,6 +14487,9 @@ static void er_free(ExprResult *r) {
     r->owns_ref = false;
     r->is_addressable = false;
     r->is_storage_address = false;
+    r->uses_erased_generic_storage = false;
+    r->erased_generic_descriptor_c_name = NULL;
+    r->erased_generic_size_c_name = NULL;
     r->uses_reified_storage = false;
     r->reified_descriptor_c_name = NULL;
     r->reified_size_c_name = NULL;
@@ -14323,6 +14595,58 @@ static bool cg_emit_reified_storage_declaration(CG *cg,
     return true;
 }
 
+/* Declare exact stack storage for one direct generic parameter value.  The
+ * hidden parameter descriptor is read once and its size is cached once;
+ * subsequent calls and cleanup use only these local names. */
+static bool cg_emit_erased_generic_storage_declaration(
+    CG *cg,
+    const CGType *type,
+    const char *storage_c_name,
+    FengToken blame,
+    char **out_descriptor_c_name,
+    char **out_size_c_name) {
+    const char *descriptor_expr;
+    char *descriptor_name;
+    char *size_name;
+
+    if (cg == NULL || type == NULL ||
+        type->kind != CG_TYPE_GENERIC_PARAM || storage_c_name == NULL ||
+        out_descriptor_c_name == NULL || out_size_c_name == NULL) {
+        return false;
+    }
+    descriptor_expr = cg_generic_param_desc_name(
+        cg, type->generic_param_index);
+    if (descriptor_expr == NULL) {
+        return cg_fail(cg,
+                       blame,
+                       "CE0237", "codegen: missing generic descriptor for erased storage");
+    }
+    descriptor_name = cg_fresh_temp(cg, "_gpd");
+    size_name = cg_fresh_temp(cg, "_gsize");
+    if (descriptor_name == NULL || size_name == NULL) {
+        free(descriptor_name);
+        free(size_name);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body,
+                   "    const FengGenericParamDescriptor *%s = %s;\n"
+                   "    const size_t %s = feng_generic_value_size(%s);\n"
+                   "    _Alignas(max_align_t) char %s[%s];\n"
+                   "    memset(%s, 0, %s);\n",
+                   descriptor_name,
+                   descriptor_expr,
+                   size_name,
+                   descriptor_name,
+                   storage_c_name,
+                   size_name,
+                   storage_c_name,
+                   size_name);
+    *out_descriptor_c_name = descriptor_name;
+    *out_size_c_name = size_name;
+    return true;
+}
+
 /* Cache the descriptor for one borrowed address-form parameter. The
  * parameter already points at caller-owned exact storage, so it requires no
  * size read, local allocation or copy. */
@@ -14411,6 +14735,106 @@ static char *cg_aggregate_result_address_dup(const ExprResult *result) {
  * by caller's responsibility — caller must free). The type is transferred to
  * the local in scope so the caller MUST NOT use r->type afterwards. */
 static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) {
+    if (r != NULL && r->type != NULL &&
+        r->type->kind == CG_TYPE_GENERIC_PARAM) {
+        char *storage_name = cg_fresh_temp(cg, prefix);
+        char *descriptor_name = NULL;
+        char *size_name = NULL;
+
+        if (storage_name == NULL ||
+            !cg_emit_erased_generic_storage_declaration(
+                cg,
+                r->type,
+                storage_name,
+                (FengToken){0},
+                &descriptor_name,
+                &size_name)) {
+            free(storage_name);
+            free(descriptor_name);
+            free(size_name);
+            return NULL;
+        }
+        cg_emit_current_stmt_line_directive_force(cg);
+        buf_append_fmt(cg->cur_body,
+            "    switch (%s->kind) {\n"
+            "        case FENG_VALUE_TRIVIAL:\n"
+            "            memcpy(%s, %s, %s);\n"
+            "            break;\n"
+            "        case FENG_VALUE_MANAGED_POINTER: {\n"
+            "            void *_generic_value = *(void *const *)%s;\n",
+            descriptor_name,
+            storage_name,
+            r->c_expr,
+            size_name,
+            r->c_expr);
+        if (r->owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                "            *(void **)%s = _generic_value;\n"
+                "            *(void **)%s = NULL;\n",
+                storage_name,
+                r->c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "            feng_retain(_generic_value);\n"
+                "            *(void **)%s = _generic_value;\n",
+                storage_name);
+        }
+        buf_append_fmt(cg->cur_body,
+            "            break;\n"
+            "        }\n"
+            "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n");
+        if (r->owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                "            memcpy(%s, %s, %s);\n"
+                "            memset(%s, 0, %s);\n",
+                storage_name,
+                r->c_expr,
+                size_name,
+                r->c_expr,
+                size_name);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "            feng_aggregate_assign(%s, %s, "
+                "feng_generic_aggregate_descriptor(%s));\n",
+                storage_name,
+                r->c_expr,
+                descriptor_name);
+        }
+        buf_append_cstr(cg->cur_body,
+            "            break;\n"
+            "    }\n");
+        if (!cg_register_erased_generic_storage_for_cleanup(
+                cg,
+                storage_name,
+                r->type,
+                descriptor_name,
+                size_name,
+                (FengToken){0})) {
+            free(storage_name);
+            free(descriptor_name);
+            free(size_name);
+            return NULL;
+        }
+        free(r->c_expr);
+        free(r->erased_generic_descriptor_c_name);
+        free(r->erased_generic_size_c_name);
+        r->c_expr = strdup(storage_name);
+        r->erased_generic_descriptor_c_name = strdup(descriptor_name);
+        r->erased_generic_size_c_name = strdup(size_name);
+        r->owns_ref = false;
+        r->is_addressable = true;
+        r->is_storage_address = true;
+        r->uses_erased_generic_storage = true;
+        free(descriptor_name);
+        free(size_name);
+        if (r->c_expr == NULL ||
+            r->erased_generic_descriptor_c_name == NULL ||
+            r->erased_generic_size_c_name == NULL) {
+            free(storage_name);
+            return NULL;
+        }
+        return storage_name;
+    }
     if (cg_type_uses_reified_storage(cg, r->type)) {
         char *storage_name = NULL;
         char *descriptor_name = NULL;
@@ -16848,6 +17272,14 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
         out->owns_ref = false;  /* borrow from local slot */
         out->is_addressable = true;
         out->is_storage_address = l->is_storage_address;
+        out->uses_erased_generic_storage =
+            l->uses_erased_generic_storage;
+        if (l->uses_erased_generic_storage) {
+            out->erased_generic_descriptor_c_name =
+                strdup(l->erased_generic_descriptor_c_name);
+            out->erased_generic_size_c_name =
+                strdup(l->erased_generic_size_c_name);
+        }
         out->uses_reified_storage = l->uses_reified_storage;
         if (l->uses_reified_storage) {
             out->reified_descriptor_c_name =
@@ -18239,6 +18671,8 @@ static bool cg_emit_callable_value_call(CG *cg,
 
     if (spec->callable_return_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
         char *result_name = cg_fresh_temp(cg, "_call_result");
+        char *erased_descriptor_name = NULL;
+        char *erased_size_name = NULL;
 
         if (result_name == NULL) {
             buf_free(&args_buf);
@@ -18246,21 +18680,18 @@ static bool cg_emit_callable_value_call(CG *cg,
             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
         if (spec->callable_return_type->kind == CG_TYPE_GENERIC_PARAM) {
-            const char *descriptor = cg_generic_param_desc_name(
-                cg, spec->callable_return_type->generic_param_index);
-
-            if (descriptor == NULL) {
+            if (!cg_emit_erased_generic_storage_declaration(
+                    cg,
+                    spec->callable_return_type,
+                    result_name,
+                    e->token,
+                    &erased_descriptor_name,
+                    &erased_size_name)) {
                 free(result_name);
                 buf_free(&args_buf);
                 er_free(callee);
-                return cg_fail(cg, e->token,
-                               "CE0129", "codegen: callable generic result has no descriptor");
+                return false;
             }
-            buf_append_fmt(cg->cur_body,
-                "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
-                "    memset(%s, 0, feng_generic_value_size(%s));\n",
-                result_name, descriptor,
-                result_name, descriptor);
             out->c_expr = strdup(result_name);
             out->is_addressable = true;
             out->is_storage_address = true;
@@ -18300,6 +18731,8 @@ static bool cg_emit_callable_value_call(CG *cg,
             out->is_addressable = true;
         }
         if (out->c_expr == NULL) {
+            free(erased_descriptor_name);
+            free(erased_size_name);
             free(result_name);
             buf_free(&args_buf);
             er_free(callee);
@@ -18314,6 +18747,33 @@ static bool cg_emit_callable_value_call(CG *cg,
                        (spec->callable_return_type->kind == CG_TYPE_GENERIC_PARAM ||
                         out->uses_reified_storage) ? "" : "&",
                        result_name);
+        if (spec->callable_return_type->kind == CG_TYPE_GENERIC_PARAM) {
+            out->type = cgtype_clone(spec->callable_return_type);
+            if (out->type == NULL ||
+                !cg_register_erased_generic_storage_for_cleanup(
+                    cg,
+                    result_name,
+                    out->type,
+                    erased_descriptor_name,
+                    erased_size_name,
+                    e->token)) {
+                free(erased_descriptor_name);
+                free(erased_size_name);
+                free(result_name);
+                buf_free(&args_buf);
+                er_free(callee);
+                er_free(out);
+                return false;
+            }
+            out->owns_ref = false;
+            out->uses_erased_generic_storage = true;
+            out->erased_generic_descriptor_c_name = erased_descriptor_name;
+            out->erased_generic_size_c_name = erased_size_name;
+            erased_descriptor_name = NULL;
+            erased_size_name = NULL;
+        }
+        free(erased_descriptor_name);
+        free(erased_size_name);
         free(result_name);
     } else {
         Buf invocation;
@@ -18327,10 +18787,11 @@ static bool cg_emit_callable_value_call(CG *cg,
         out->c_expr = invocation.data;
     }
     buf_free(&args_buf);
-    out->type = cgtype_clone(spec->callable_return_type);
-    out->owns_ref = cgtype_is_managed(out->type) ||
-                    cgtype_is_aggregate(out->type) ||
-                    out->type->kind == CG_TYPE_GENERIC_PARAM;
+    if (out->type == NULL) {
+        out->type = cgtype_clone(spec->callable_return_type);
+        out->owns_ref = cgtype_is_managed(out->type) ||
+                        cgtype_is_aggregate(out->type);
+    }
     bool ok = out->c_expr && out->type;
     er_free(callee);
     return ok;
@@ -18473,27 +18934,26 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
         constraint->callable_return_type->kind != CG_TYPE_VOID) {
         char *ret_tmp = cg_fresh_temp(cg, "_cr");
         bool return_is_storage_address = false;
+        bool return_uses_erased_generic_storage = false;
+        char *erased_descriptor_name = NULL;
+        char *erased_size_name = NULL;
 
         if (ret_tmp == NULL) {
             free(ret_tmp);
             ok = false;
         } else {
             if (constraint->callable_return_type->kind == CG_TYPE_GENERIC_PARAM) {
-                const char *result_descriptor = cg_generic_param_desc_name(
-                    cg,
-                    constraint->callable_return_type->generic_param_index);
-
-                if (result_descriptor == NULL) {
+                if (!cg_emit_erased_generic_storage_declaration(
+                        cg,
+                        constraint->callable_return_type,
+                        ret_tmp,
+                        e->token,
+                        &erased_descriptor_name,
+                        &erased_size_name)) {
                     ok = false;
                 } else {
-                    buf_append_fmt(cg->cur_body,
-                        "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
-                        "    memset(%s, 0, feng_generic_value_size(%s));\n",
-                        ret_tmp,
-                        result_descriptor,
-                        ret_tmp,
-                        result_descriptor);
                     return_is_storage_address = true;
+                    return_uses_erased_generic_storage = true;
                 }
             } else if (cg_type_uses_reified_storage(
                            cg, constraint->callable_return_type)) {
@@ -18536,12 +18996,33 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
             out->type = cgtype_clone(constraint->callable_return_type);
             out->owns_ref = out->type != NULL &&
                 (cgtype_is_managed(out->type) ||
-                 cgtype_is_aggregate(out->type) ||
-                 out->type->kind == CG_TYPE_GENERIC_PARAM);
+                 cgtype_is_aggregate(out->type));
             out->is_addressable = true;
             out->is_storage_address = return_is_storage_address;
-            ok = out->c_expr && out->type;
+            if (return_uses_erased_generic_storage) {
+                if (out->c_expr == NULL || out->type == NULL ||
+                    !cg_register_erased_generic_storage_for_cleanup(
+                        cg,
+                        ret_tmp,
+                        out->type,
+                        erased_descriptor_name,
+                        erased_size_name,
+                        e->token)) {
+                    ok = false;
+                } else {
+                    out->owns_ref = false;
+                    out->uses_erased_generic_storage = true;
+                    out->erased_generic_descriptor_c_name =
+                        erased_descriptor_name;
+                    out->erased_generic_size_c_name = erased_size_name;
+                    erased_descriptor_name = NULL;
+                    erased_size_name = NULL;
+                }
+            }
+            ok = ok && out->c_expr && out->type;
         }
+        free(erased_descriptor_name);
+        free(erased_size_name);
         free(ret_tmp);
     } else {
         buf_append_fmt(cg->cur_body, "    ((const struct %s *)%s->witness)->invoke(%s",
@@ -18729,6 +19210,97 @@ static CGType *cg_infer_method_type_arg(const FengCallableSignature *sig,
     return NULL;
 }
 
+/* Resolve the selected callable's return type after applying both generic
+ * layers recorded by semantic analysis.  Owner parameters are substituted
+ * first, followed by callable-local parameters; the resulting closed (or
+ * caller-relative open) type is then resolved in the declaring program. */
+static bool cg_resolve_selected_callable_return_type(
+    CG *cg,
+    const FengExpr *call_expr,
+    const FengCallableSignature *callable,
+    FengToken blame,
+    CGType **out_type) {
+    const FengResolvedCallable *resolved;
+    const FengTypeRef *effective_ref;
+    FengTypeRef *owner_substituted = NULL;
+    FengTypeRef *callable_substituted = NULL;
+    const FengProgram *reference_program = NULL;
+    bool ok;
+
+    if (out_type == NULL) {
+        return false;
+    }
+    *out_type = NULL;
+    if (cg == NULL || call_expr == NULL ||
+        call_expr->kind != FENG_EXPR_CALL || callable == NULL) {
+        return false;
+    }
+    if (callable->return_type == NULL) {
+        *out_type = cgtype_new(CG_TYPE_VOID);
+        return *out_type != NULL;
+    }
+
+    resolved = &call_expr->as.call.resolved_callable;
+    effective_ref = callable->return_type;
+    if (resolved->owner_type_decl != NULL &&
+        resolved->owner_type_decl->kind == FENG_DECL_TYPE) {
+        const FengDecl *owner_decl = resolved->owner_type_decl;
+        size_t owner_count = owner_decl->as.type_decl.type_param_count;
+
+        reference_program = cg_find_decl_owner_program(cg, owner_decl);
+        if (owner_count > 0U) {
+            if (resolved->owner_instance_type_ref == NULL ||
+                resolved->owner_instance_type_ref->kind != FENG_TYPE_REF_NAMED ||
+                resolved->owner_instance_type_ref->as.named.type_arg_count !=
+                    owner_count) {
+                return cg_fail(
+                    cg, blame, "CE0297",
+                    "codegen: selected generic method return type is missing owner arguments");
+            }
+            owner_substituted = cg_type_ref_substitute(
+                effective_ref,
+                owner_decl->as.type_decl.type_params,
+                owner_count,
+                resolved->owner_instance_type_ref->as.named.type_args);
+            if (owner_substituted == NULL) {
+                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            }
+            effective_ref = owner_substituted;
+        }
+    } else if (resolved->fit_decl != NULL) {
+        reference_program =
+            cg_find_decl_owner_program(cg, resolved->fit_decl);
+    } else if (resolved->function_decl != NULL) {
+        reference_program =
+            cg_find_decl_owner_program(cg, resolved->function_decl);
+    }
+
+    if (callable->type_param_count > 0U) {
+        if (resolved->callable_type_arg_count != callable->type_param_count) {
+            cg_type_ref_free(owner_substituted);
+            return cg_fail(
+                cg, blame, "CE0298",
+                "codegen: selected generic callable return type is missing callable arguments");
+        }
+        callable_substituted = cg_type_ref_substitute(
+            effective_ref,
+            callable->type_params,
+            callable->type_param_count,
+            (FengTypeRef *const *)resolved->callable_type_args);
+        if (callable_substituted == NULL) {
+            cg_type_ref_free(owner_substituted);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        effective_ref = callable_substituted;
+    }
+
+    ok = cg_resolve_type_from_program(
+        cg, effective_ref, reference_program, &blame, out_type);
+    cg_type_ref_free(callable_substituted);
+    cg_type_ref_free(owner_substituted);
+    return ok;
+}
+
 static bool cg_emit_generic_type_method_call(CG *cg,
                                              const FengExpr *e,
                                              ExprResult *recv,
@@ -18743,8 +19315,16 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     const UserSpec **constraint_specs = NULL;
     char **desc_exprs = NULL;
     char **arg_exprs = NULL;
+    char *func_desc_expr = NULL;
+    char *dispatch_name = NULL;
     CGType *concrete_return = NULL;
     char *ret_cname = NULL;
+    char *ret_erased_descriptor_name = NULL;
+    char *ret_erased_size_name = NULL;
+    char *ret_reified_descriptor_name = NULL;
+    char *ret_reified_size_name = NULL;
+    bool return_uses_erased_generic_storage = false;
+    bool return_uses_reified_storage = false;
     bool ok = true;
 
     er_init(out);
@@ -18847,6 +19427,90 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         }
     }
 
+    if (cg->in_generic_fn) {
+        func_desc_expr =
+            cg_callable_descriptor_expr_for_call(cg, e, e->token);
+        if (func_desc_expr == NULL) {
+            ok = false;
+            goto cleanup;
+        }
+    } else {
+        const FengDecl *owner_decl = ut->generic_origin_decl != NULL
+                                         ? ut->generic_origin_decl
+                                         : ut->decl;
+        const size_t owner_tp_count = owner_decl != NULL
+                                          ? owner_decl->as.type_decl.type_param_count
+                                          : 0U;
+        const size_t combined_count = owner_tp_count + method_tp_count;
+        FengTypeParam *combined_params = combined_count > 0U
+                                             ? (FengTypeParam *)calloc(
+                                                   combined_count,
+                                                   sizeof(*combined_params))
+                                             : NULL;
+        FengTypeRef **combined_args = combined_count > 0U
+                                          ? (FengTypeRef **)calloc(
+                                                combined_count,
+                                                sizeof(*combined_args))
+                                          : NULL;
+        FengTypeRef **owned_method_refs = method_tp_count > 0U
+                                               ? (FengTypeRef **)calloc(
+                                                     method_tp_count,
+                                                     sizeof(*owned_method_refs))
+                                               : NULL;
+        const FengReifiableDepSet *dep_set = owner_decl != NULL
+            ? feng_semantic_lookup_member_reifiable_dep_set(
+                  cg->analysis, owner_decl, um->member)
+            : NULL;
+
+        if ((combined_count > 0U &&
+             (combined_params == NULL || combined_args == NULL)) ||
+            (method_tp_count > 0U && owned_method_refs == NULL)) {
+            free(combined_params);
+            free(combined_args);
+            free(owned_method_refs);
+            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+            ok = false;
+            goto cleanup;
+        }
+        for (size_t index = 0U; index < owner_tp_count; ++index) {
+            combined_params[index] = owner_decl->as.type_decl.type_params[index];
+            combined_args[index] = ut->generic_type_args[index];
+        }
+        for (size_t index = 0U; index < method_tp_count; ++index) {
+            combined_params[owner_tp_count + index] = sig->type_params[index];
+            owned_method_refs[index] = cg_type_ref_from_cgtype(
+                cg, type_args[index], e->token);
+            if (owned_method_refs[index] == NULL) {
+                ok = false;
+                break;
+            }
+            combined_args[owner_tp_count + index] = owned_method_refs[index];
+        }
+        if (ok &&
+            !cg_emit_closed_callable_fdesc(
+                cg,
+                dep_set,
+                combined_params,
+                combined_count,
+                combined_args,
+                cg_find_decl_owner_program(cg, owner_decl),
+                e->token,
+                um->c_name,
+                um->feng_name,
+                &func_desc_expr)) {
+            ok = false;
+        }
+        for (size_t index = 0U; index < method_tp_count; ++index) {
+            cg_type_ref_free(owned_method_refs[index]);
+        }
+        free(owned_method_refs);
+        free(combined_args);
+        free(combined_params);
+        if (!ok) {
+            goto cleanup;
+        }
+    }
+
     for (size_t i = 0; i < arg_count; ++i) {
         bool uses_address_abi =
             cg_shared_generic_param_uses_address(um->param_types[i]);
@@ -18860,40 +19524,95 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         }
     }
 
-    if (um->return_type == NULL || um->return_type->kind == CG_TYPE_VOID) {
-        concrete_return = cgtype_new(CG_TYPE_VOID);
-    } else if (um->return_type->kind == CG_TYPE_GENERIC_PARAM) {
-        size_t idx = um->return_type->generic_param_index;
-        concrete_return = idx < method_tp_count ? cgtype_clone(type_args[idx]) : NULL;
-    } else {
-        concrete_return = cgtype_clone(um->return_type);
-    }
-    if (concrete_return == NULL) {
-        cg_fail(cg, e->token, "CE0138", "codegen: cannot determine concrete generic method return type");
+    if (!cg_resolve_selected_callable_return_type(
+            cg, e, sig, e->token, &concrete_return)) {
         ok = false;
         goto cleanup;
     }
 
     if (concrete_return->kind != CG_TYPE_VOID) {
-        char *cty = cg_ctype_dup(concrete_return);
         ret_cname = cg_fresh_temp(cg, "_gmr");
-        if (cty == NULL || ret_cname == NULL) {
-            free(cty);
+        return_uses_erased_generic_storage =
+            concrete_return->kind == CG_TYPE_GENERIC_PARAM;
+        return_uses_reified_storage =
+            cg_type_uses_reified_storage(cg, concrete_return);
+        if (ret_cname == NULL) {
             ok = false;
             goto cleanup;
         }
-        buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
-        free(cty);
+        if (return_uses_erased_generic_storage) {
+            if (!cg_emit_erased_generic_storage_declaration(
+                    cg,
+                    concrete_return,
+                    ret_cname,
+                    e->token,
+                    &ret_erased_descriptor_name,
+                    &ret_erased_size_name)) {
+                ok = false;
+                goto cleanup;
+            }
+        } else if (return_uses_reified_storage) {
+            if (!cg_emit_reified_storage_declaration(
+                    cg,
+                    concrete_return,
+                    ret_cname,
+                    e->token,
+                    &ret_reified_descriptor_name,
+                    &ret_reified_size_name)) {
+                ok = false;
+                goto cleanup;
+            }
+        } else {
+            char *cty = cg_ctype_dup(concrete_return);
+
+            if (cty == NULL) {
+                ok = false;
+                goto cleanup;
+            }
+            buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
+            free(cty);
+        }
+    }
+
+    /* Imported non-generic owners do not have a consumer-local wrapper for a
+     * method-generic member. Call their exported shared entry directly. */
+    const char *call_name = um->c_name;
+    bool calls_imported_shared =
+        cg_program_origin(cg, ut->owner_program) ==
+        FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE &&
+        !ut->is_generic_instance;
+    if (calls_imported_shared) {
+        dispatch_name = cg_generic_type_method_shared_cname(
+            cg, ut->decl, um->member);
+        if (dispatch_name == NULL) {
+            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+            ok = false;
+            goto cleanup;
+        }
+        call_name = dispatch_name;
     }
 
     /* §9.15: ordinary value storage needs its address; descriptor-sized
      * storage is already represented by an address expression. */
-    buf_append_fmt(cg->cur_body, "    %s(%s%s", um->c_name,
+    buf_append_fmt(cg->cur_body, "    %s(%s%s", call_name,
                    cg_type_is_value_semantics(recv->type) &&
                            !recv->uses_reified_storage
                        ? "&"
                        : "",
                    recv->c_expr);
+    if (calls_imported_shared) {
+        const char *type_descriptor = cg_user_type_is_value(ut)
+                                          ? ut->c_aggregate_desc_name
+                                          : ut->c_desc_name;
+        if (type_descriptor == NULL) {
+            cg_fail(cg, e->token,
+                    "CE0142", "codegen: generic method call is missing its owner descriptor");
+            ok = false;
+            goto cleanup;
+        }
+        buf_append_fmt(cg->cur_body, ", &%s", type_descriptor);
+    }
+    buf_append_fmt(cg->cur_body, ", %s", func_desc_expr);
     for (size_t i = 0; i < method_tp_count; ++i) {
         buf_append_fmt(cg->cur_body, ", %s", desc_exprs[i]);
     }
@@ -18901,16 +19620,68 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         buf_append_fmt(cg->cur_body, ", %s", arg_exprs[i]);
     }
     if (ret_cname != NULL) {
-        buf_append_fmt(cg->cur_body, ", &%s", ret_cname);
+        buf_append_fmt(cg->cur_body,
+                       (return_uses_erased_generic_storage ||
+                        return_uses_reified_storage) ? ", %s" : ", &%s",
+                       ret_cname);
     }
     buf_append_cstr(cg->cur_body, ");\n");
 
     if (ret_cname != NULL) {
         out->c_expr = strdup(ret_cname);
         out->type = concrete_return;
-        out->owns_ref = cgtype_is_managed(concrete_return) ||
-                        cgtype_is_aggregate(concrete_return);
         concrete_return = NULL;
+        if (return_uses_erased_generic_storage) {
+            if (out->c_expr == NULL ||
+                !cg_register_erased_generic_storage_for_cleanup(
+                    cg,
+                    ret_cname,
+                    out->type,
+                    ret_erased_descriptor_name,
+                    ret_erased_size_name,
+                    e->token)) {
+                ok = false;
+                goto cleanup;
+            }
+            out->owns_ref = false;
+            out->is_addressable = true;
+            out->is_storage_address = true;
+            out->uses_erased_generic_storage = true;
+            out->erased_generic_descriptor_c_name =
+                ret_erased_descriptor_name;
+            out->erased_generic_size_c_name = ret_erased_size_name;
+            ret_erased_descriptor_name = NULL;
+            ret_erased_size_name = NULL;
+        } else if (return_uses_reified_storage) {
+            if (out->c_expr == NULL ||
+                !scope_add(cg->cur_scope,
+                           ret_cname,
+                           ret_cname,
+                           cgtype_clone(out->type),
+                           false) ||
+                !scope_mark_last_reified_storage(
+                    cg->cur_scope,
+                    ret_reified_descriptor_name,
+                    ret_reified_size_name)) {
+                cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                ok = false;
+                goto cleanup;
+            }
+            cg_emit_cleanup_push_for_reified_aggregate_storage(
+                cg, ret_cname, ret_reified_descriptor_name);
+            out->owns_ref = false;
+            out->is_addressable = true;
+            out->is_storage_address = true;
+            out->uses_reified_storage = true;
+            out->reified_descriptor_c_name =
+                ret_reified_descriptor_name;
+            out->reified_size_c_name = ret_reified_size_name;
+            ret_reified_descriptor_name = NULL;
+            ret_reified_size_name = NULL;
+        } else {
+            out->owns_ref = cgtype_is_managed(out->type) ||
+                            cgtype_is_aggregate(out->type);
+        }
     } else {
         out->c_expr = strdup("((void)0)");
         out->type = concrete_return;
@@ -18941,8 +19712,14 @@ cleanup:
         for (size_t i = 0; i < arg_count; ++i) free(arg_exprs[i]);
     }
     free(arg_exprs);
+    free(func_desc_expr);
+    free(dispatch_name);
     free((void *)constraint_specs);
     cgtype_free(concrete_return);
+    free(ret_erased_descriptor_name);
+    free(ret_erased_size_name);
+    free(ret_reified_descriptor_name);
+    free(ret_reified_size_name);
     free(ret_cname);
     er_free(recv);
     return ok;
@@ -19007,8 +19784,13 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
     char **arg_exprs = NULL;
     CGType *return_type = NULL;
     char *ret_cname = NULL;
-    char *ret_storage_cname = NULL;
+    char *ret_erased_descriptor_name = NULL;
+    char *ret_erased_size_name = NULL;
+    char *ret_reified_descriptor_name = NULL;
+    char *ret_reified_size_name = NULL;
+    char *func_desc_expr = NULL;
     bool ret_is_erased = false;
+    bool ret_uses_reified_storage = false;
     bool ok = true;
 
     er_init(out);
@@ -19144,13 +19926,8 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
         }
     }
 
-    size_t return_method_tp_index = 0U;
-    if (cg_type_ref_is_direct_type_param(sig->return_type,
-                                        sig->type_params,
-                                        method_tp_count,
-                                        &return_method_tp_index)) {
-        return_type = cgtype_clone(type_args[return_method_tp_index]);
-    } else if (!cg_resolve_type(cg, sig->return_type, &member->token, &return_type)) {
+    if (!cg_resolve_selected_callable_return_type(
+            cg, e, sig, member->token, &return_type)) {
         ok = false;
         goto cleanup;
     }
@@ -19161,20 +19938,29 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
             goto cleanup;
         }
         if (return_type->kind == CG_TYPE_GENERIC_PARAM) {
-            const char *desc = cg_generic_param_desc_name(cg, return_type->generic_param_index);
-            ret_storage_cname = cg_fresh_temp(cg, "_gsm_ret_storage");
-            if (desc == NULL || ret_storage_cname == NULL) {
+            if (!cg_emit_erased_generic_storage_declaration(
+                    cg,
+                    return_type,
+                    ret_cname,
+                    e->token,
+                    &ret_erased_descriptor_name,
+                    &ret_erased_size_name)) {
                 ok = false;
                 goto cleanup;
             }
-            buf_append_fmt(cg->cur_body,
-                "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
-                "    void *%s = (void *)%s;\n",
-                ret_storage_cname,
-                desc,
-                ret_cname,
-                ret_storage_cname);
             ret_is_erased = true;
+        } else if (cg_type_uses_reified_storage(cg, return_type)) {
+            if (!cg_emit_reified_storage_declaration(
+                    cg,
+                    return_type,
+                    ret_cname,
+                    e->token,
+                    &ret_reified_descriptor_name,
+                    &ret_reified_size_name)) {
+                ok = false;
+                goto cleanup;
+            }
+            ret_uses_reified_storage = true;
         } else {
             char *cty = cg_ctype_dup(return_type);
             if (cty == NULL) {
@@ -19186,17 +19972,26 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
         }
     }
 
-    /* §6.7: shared body self-call — recv + _td + method-level descs;
+    func_desc_expr =
+        cg_callable_descriptor_expr_for_call(cg, e, e->token);
+    if (func_desc_expr == NULL) {
+        ok = false;
+        goto cleanup;
+    }
+
+    /* §6.7: shared body self-call — recv + _td + callable descriptor +
+     * method-level descs;
      * type-level params are obtained from _type_desc inside shared body. */
     /* §9.15: pass the address of ordinary value storage; a reified
      * receiver expression already denotes its exact storage address. */
-    buf_append_fmt(cg->cur_body, "    %s(%s%s, _td",
+    buf_append_fmt(cg->cur_body, "    %s(%s%s, _td, %s",
                    shared_name,
                    cg_type_is_value_semantics(recv->type) &&
                            !recv->uses_reified_storage
                        ? "&"
                        : "",
-                   recv->c_expr);
+                   recv->c_expr,
+                   func_desc_expr);
     for (size_t i = 0; i < method_tp_count; ++i) {
         buf_append_fmt(cg->cur_body, ", %s", desc_exprs[i]);
     }
@@ -19204,16 +19999,69 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
         buf_append_fmt(cg->cur_body, ", %s", arg_exprs[i]);
     }
     if (ret_cname != NULL) {
-        buf_append_fmt(cg->cur_body, ret_is_erased ? ", %s" : ", &%s", ret_cname);
+        buf_append_fmt(cg->cur_body,
+                       ret_is_erased || ret_uses_reified_storage
+                           ? ", %s"
+                           : ", &%s",
+                       ret_cname);
     }
     buf_append_cstr(cg->cur_body, ");\n");
 
     if (ret_cname != NULL) {
         out->c_expr = strdup(ret_cname);
         out->type = return_type;
-        out->owns_ref = ret_is_erased || cgtype_is_managed(return_type) ||
-                        cgtype_is_aggregate(return_type);
         return_type = NULL;
+        if (ret_is_erased) {
+            if (out->c_expr == NULL ||
+                !cg_register_erased_generic_storage_for_cleanup(
+                    cg,
+                    ret_cname,
+                    out->type,
+                    ret_erased_descriptor_name,
+                    ret_erased_size_name,
+                    e->token)) {
+                ok = false;
+                goto cleanup;
+            }
+            out->owns_ref = false;
+            out->is_addressable = true;
+            out->is_storage_address = true;
+            out->uses_erased_generic_storage = true;
+            out->erased_generic_descriptor_c_name =
+                ret_erased_descriptor_name;
+            out->erased_generic_size_c_name = ret_erased_size_name;
+            ret_erased_descriptor_name = NULL;
+            ret_erased_size_name = NULL;
+        } else if (ret_uses_reified_storage) {
+            if (out->c_expr == NULL ||
+                !scope_add(cg->cur_scope,
+                           ret_cname,
+                           ret_cname,
+                           cgtype_clone(out->type),
+                           false) ||
+                !scope_mark_last_reified_storage(
+                    cg->cur_scope,
+                    ret_reified_descriptor_name,
+                    ret_reified_size_name)) {
+                cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                ok = false;
+                goto cleanup;
+            }
+            cg_emit_cleanup_push_for_reified_aggregate_storage(
+                cg, ret_cname, ret_reified_descriptor_name);
+            out->owns_ref = false;
+            out->is_addressable = true;
+            out->is_storage_address = true;
+            out->uses_reified_storage = true;
+            out->reified_descriptor_c_name =
+                ret_reified_descriptor_name;
+            out->reified_size_c_name = ret_reified_size_name;
+            ret_reified_descriptor_name = NULL;
+            ret_reified_size_name = NULL;
+        } else {
+            out->owns_ref = ret_is_erased || cgtype_is_managed(out->type) ||
+                            cgtype_is_aggregate(out->type);
+        }
     } else {
         out->c_expr = strdup("((void)0)");
         out->type = return_type;
@@ -19262,8 +20110,12 @@ cleanup:
     free(desc_exprs);
     free(arg_exprs);
     cgtype_free(return_type);
-    free(ret_storage_cname);
+    free(ret_erased_descriptor_name);
+    free(ret_erased_size_name);
+    free(ret_reified_descriptor_name);
+    free(ret_reified_size_name);
     free(ret_cname);
+    free(func_desc_expr);
     free(shared_name);
     er_free(recv);
     return ok;
@@ -19391,10 +20243,15 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     size_t emitted_arg_count = 0U;
     CGType *concrete_return = NULL;
     char *ret_cname = NULL;
-    char *ret_storage_cname = NULL;
+    char *ret_erased_descriptor_name = NULL;
+    char *ret_erased_size_name = NULL;
+    char *ret_reified_descriptor_name = NULL;
+    char *ret_reified_size_name = NULL;
     char *dispatch_name = NULL;
-    const char *erased_return_desc = NULL;
+    char *func_desc_expr = NULL;
     bool ret_is_erased = false;
+    bool ret_uses_reified_storage = false;
+    bool returns_directly = false;
     bool ok = true;
 
     er_init(out);
@@ -19409,6 +20266,8 @@ static bool cg_emit_generic_static_method_call(CG *cg,
                        e->token,
                        "CE0144", "codegen: generic builtin static fit methods are not supported yet");
     }
+    returns_directly = builtin_fit != NULL &&
+        !cg_builtin_fit_return_uses_out(builtin_fit, um);
     if (e->as.call.has_explicit_type_args &&
         e->as.call.explicit_type_arg_count != method_tp_count) {
         return cg_fail(cg, e->token,
@@ -19525,6 +20384,92 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         }
     }
 
+    if (cg->in_generic_fn) {
+        func_desc_expr =
+            cg_callable_descriptor_expr_for_call(cg, e, e->token);
+        if (func_desc_expr == NULL) {
+            ok = false;
+            goto cleanup;
+        }
+    } else {
+        const FengDecl *owner_decl = owner_type != NULL
+            ? (owner_type->generic_origin_decl != NULL
+                   ? owner_type->generic_origin_decl
+                   : owner_type->decl)
+            : NULL;
+        const size_t owner_tp_count = owner_decl != NULL
+                                          ? owner_decl->as.type_decl.type_param_count
+                                          : 0U;
+        const size_t combined_count = owner_tp_count + method_tp_count;
+        FengTypeParam *combined_params = combined_count > 0U
+                                             ? (FengTypeParam *)calloc(
+                                                   combined_count,
+                                                   sizeof(*combined_params))
+                                             : NULL;
+        FengTypeRef **combined_args = combined_count > 0U
+                                          ? (FengTypeRef **)calloc(
+                                                combined_count,
+                                                sizeof(*combined_args))
+                                          : NULL;
+        FengTypeRef **owned_method_refs = method_tp_count > 0U
+                                               ? (FengTypeRef **)calloc(
+                                                     method_tp_count,
+                                                     sizeof(*owned_method_refs))
+                                               : NULL;
+        const FengReifiableDepSet *dep_set = owner_decl != NULL
+            ? feng_semantic_lookup_member_reifiable_dep_set(
+                  cg->analysis, owner_decl, um->member)
+            : NULL;
+
+        if ((combined_count > 0U &&
+             (combined_params == NULL || combined_args == NULL)) ||
+            (method_tp_count > 0U && owned_method_refs == NULL)) {
+            free(combined_params);
+            free(combined_args);
+            free(owned_method_refs);
+            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+            ok = false;
+            goto cleanup;
+        }
+        for (size_t index = 0U; index < owner_tp_count; ++index) {
+            combined_params[index] = owner_decl->as.type_decl.type_params[index];
+            combined_args[index] = owner_type->generic_type_args[index];
+        }
+        for (size_t index = 0U; index < method_tp_count; ++index) {
+            combined_params[owner_tp_count + index] = sig->type_params[index];
+            owned_method_refs[index] = cg_type_ref_from_cgtype(
+                cg, type_args[index], e->token);
+            if (owned_method_refs[index] == NULL) {
+                ok = false;
+                break;
+            }
+            combined_args[owner_tp_count + index] = owned_method_refs[index];
+        }
+        if (ok &&
+            !cg_emit_closed_callable_fdesc(
+                cg,
+                dep_set,
+                combined_params,
+                combined_count,
+                combined_args,
+                cg_find_decl_owner_program(cg, owner_decl),
+                e->token,
+                um->c_name,
+                um->feng_name,
+                &func_desc_expr)) {
+            ok = false;
+        }
+        for (size_t index = 0U; index < method_tp_count; ++index) {
+            cg_type_ref_free(owned_method_refs[index]);
+        }
+        free(owned_method_refs);
+        free(combined_args);
+        free(combined_params);
+        if (!ok) {
+            goto cleanup;
+        }
+    }
+
     /* Build arg_exprs for fixed arguments. */
     for (size_t i = 0U; i < fixed_param_count; ++i) {
         bool uses_address_abi = false;
@@ -19602,31 +20547,18 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         }
     }
 
-    if (um->return_type == NULL || um->return_type->kind == CG_TYPE_VOID) {
-        concrete_return = cgtype_new(CG_TYPE_VOID);
-    } else if (um->return_type->kind == CG_TYPE_GENERIC_PARAM) {
-        size_t owner_context_count = owner_type != NULL
-                                         ? owner_type->generic_context_type_param_count
-                                         : 0U;
-        size_t idx = um->return_type->generic_param_index;
-
-        if (idx < owner_context_count) {
-            concrete_return = cgtype_clone(um->return_type);
-            erased_return_desc = cg_generic_param_desc_name(cg, idx);
-        } else if (idx >= owner_context_count &&
-                   idx - owner_context_count < method_tp_count) {
-            concrete_return = cgtype_clone(type_args[idx - owner_context_count]);
-        } else if (owner_context_count == 0U && idx < method_tp_count) {
-            concrete_return = cgtype_clone(type_args[idx]);
-        }
-    } else {
-        concrete_return = builtin_fit != NULL
-                              ? cg_instantiate_builtin_fit_return_type(cg,
+    if (builtin_fit != NULL) {
+        concrete_return = um->return_type == NULL
+                              ? cgtype_new(CG_TYPE_VOID)
+                              : cg_instantiate_builtin_fit_return_type(cg,
                                                                        builtin_fit,
                                                                        um->return_type,
                                                                        NULL,
-                                                                       e->token)
-                              : cgtype_clone(um->return_type);
+                                                                       e->token);
+    } else if (!cg_resolve_selected_callable_return_type(
+                   cg, e, sig, e->token, &concrete_return)) {
+        ok = false;
+        goto cleanup;
     }
     if (concrete_return == NULL) {
         cg_fail(cg, e->token, "CE0149", "codegen: cannot determine generic static method return type");
@@ -19641,23 +20573,29 @@ static bool cg_emit_generic_static_method_call(CG *cg,
             goto cleanup;
         }
         if (concrete_return->kind == CG_TYPE_GENERIC_PARAM) {
-            if (erased_return_desc == NULL) {
-                erased_return_desc = cg_generic_param_desc_name(
-                    cg, concrete_return->generic_param_index);
-            }
-            ret_storage_cname = cg_fresh_temp(cg, "_gsmr_storage");
-            if (erased_return_desc == NULL || ret_storage_cname == NULL) {
+            if (!cg_emit_erased_generic_storage_declaration(
+                    cg,
+                    concrete_return,
+                    ret_cname,
+                    e->token,
+                    &ret_erased_descriptor_name,
+                    &ret_erased_size_name)) {
                 ok = false;
                 goto cleanup;
             }
-            buf_append_fmt(cg->cur_body,
-                "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
-                "    void *%s = (void *)%s;\n",
-                ret_storage_cname,
-                erased_return_desc,
-                ret_cname,
-                ret_storage_cname);
             ret_is_erased = true;
+        } else if (cg_type_uses_reified_storage(cg, concrete_return)) {
+            if (!cg_emit_reified_storage_declaration(
+                    cg,
+                    concrete_return,
+                    ret_cname,
+                    e->token,
+                    &ret_reified_descriptor_name,
+                    &ret_reified_size_name)) {
+                ok = false;
+                goto cleanup;
+            }
+            ret_uses_reified_storage = true;
         } else {
             char *cty = cg_ctype_dup(concrete_return);
 
@@ -19700,7 +20638,14 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         bool has_arg = false;
         char *owner_descriptor_expr = NULL;
 
-        buf_append_fmt(cg->cur_body, "    %s(", call_name);
+        if (returns_directly && ret_cname != NULL) {
+            buf_append_fmt(cg->cur_body,
+                           "    %s = %s(",
+                           ret_cname,
+                           call_name);
+        } else {
+            buf_append_fmt(cg->cur_body, "    %s(", call_name);
+        }
         if (owner_type != NULL &&
             owner_type->generic_context_type_param_count > 0U) {
             owner_descriptor_expr = cg_rtd_expr_for_type(
@@ -19727,6 +20672,8 @@ static bool cg_emit_generic_static_method_call(CG *cg,
             has_arg = true;
         }
         free(owner_descriptor_expr);
+        cg_append_call_arg_separator(cg->cur_body, &has_arg);
+        buf_append_cstr(cg->cur_body, func_desc_expr);
         for (size_t i = 0U; i < method_tp_count; ++i) {
             cg_append_call_arg_separator(cg->cur_body, &has_arg);
             buf_append_cstr(cg->cur_body, desc_exprs[i]);
@@ -19735,10 +20682,12 @@ static bool cg_emit_generic_static_method_call(CG *cg,
             cg_append_call_arg_separator(cg->cur_body, &has_arg);
             buf_append_cstr(cg->cur_body, arg_exprs[i]);
         }
-        if (ret_cname != NULL) {
+        if (ret_cname != NULL && !returns_directly) {
             cg_append_call_arg_separator(cg->cur_body, &has_arg);
             buf_append_fmt(cg->cur_body,
-                           ret_is_erased ? "%s" : "&%s",
+                           ret_is_erased || ret_uses_reified_storage
+                               ? "%s"
+                               : "&%s",
                            ret_cname);
         }
         buf_append_cstr(cg->cur_body, ");\n");
@@ -19747,10 +20696,59 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     if (ret_cname != NULL) {
         out->c_expr = strdup(ret_cname);
         out->type = concrete_return;
-        out->owns_ref = ret_is_erased ||
-                        cgtype_is_managed(concrete_return) ||
-                        cgtype_is_aggregate(concrete_return);
         concrete_return = NULL;
+        if (ret_is_erased) {
+            if (out->c_expr == NULL ||
+                !cg_register_erased_generic_storage_for_cleanup(
+                    cg,
+                    ret_cname,
+                    out->type,
+                    ret_erased_descriptor_name,
+                    ret_erased_size_name,
+                    e->token)) {
+                ok = false;
+                goto cleanup;
+            }
+            out->owns_ref = false;
+            out->is_addressable = true;
+            out->is_storage_address = true;
+            out->uses_erased_generic_storage = true;
+            out->erased_generic_descriptor_c_name =
+                ret_erased_descriptor_name;
+            out->erased_generic_size_c_name = ret_erased_size_name;
+            ret_erased_descriptor_name = NULL;
+            ret_erased_size_name = NULL;
+        } else if (ret_uses_reified_storage) {
+            if (out->c_expr == NULL ||
+                !scope_add(cg->cur_scope,
+                           ret_cname,
+                           ret_cname,
+                           cgtype_clone(out->type),
+                           false) ||
+                !scope_mark_last_reified_storage(
+                    cg->cur_scope,
+                    ret_reified_descriptor_name,
+                    ret_reified_size_name)) {
+                cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                ok = false;
+                goto cleanup;
+            }
+            cg_emit_cleanup_push_for_reified_aggregate_storage(
+                cg, ret_cname, ret_reified_descriptor_name);
+            out->owns_ref = false;
+            out->is_addressable = true;
+            out->is_storage_address = true;
+            out->uses_reified_storage = true;
+            out->reified_descriptor_c_name =
+                ret_reified_descriptor_name;
+            out->reified_size_c_name = ret_reified_size_name;
+            ret_reified_descriptor_name = NULL;
+            ret_reified_size_name = NULL;
+        } else {
+            out->owns_ref = ret_is_erased ||
+                            cgtype_is_managed(out->type) ||
+                            cgtype_is_aggregate(out->type);
+        }
     } else {
         out->c_expr = strdup("((void)0)");
         out->type = concrete_return;
@@ -19783,9 +20781,13 @@ cleanup:
     free(arg_exprs);
     free((void *)constraint_specs);
     cgtype_free(concrete_return);
-    free(ret_storage_cname);
+    free(ret_erased_descriptor_name);
+    free(ret_erased_size_name);
+    free(ret_reified_descriptor_name);
+    free(ret_reified_size_name);
     free(ret_cname);
     free(dispatch_name);
+    free(func_desc_expr);
     return ok;
 }
 
@@ -20138,17 +21140,24 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 return false;
             }
             if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
-                const char *ret_desc = cg_generic_param_desc_name(cg, sm->type->generic_param_index);
-                char *ret_storage = cg_fresh_temp(cg, "_spec_ret_storage");
                 char *ret_slot = cg_fresh_temp(cg, "_spec_ret");
-                if (ret_desc == NULL || ret_storage == NULL || ret_slot == NULL) {
-                    free(ret_storage);
+                char *ret_descriptor_name = NULL;
+                char *ret_size_name = NULL;
+                if (ret_slot == NULL ||
+                    !cg_emit_erased_generic_storage_declaration(
+                        cg,
+                        sm->type,
+                        ret_slot,
+                        e->token,
+                        &ret_descriptor_name,
+                        &ret_size_name)) {
                     free(ret_slot);
+                    free(ret_descriptor_name);
+                    free(ret_size_name);
                     free(subject_expr);
                     buf_free(&args_buf);
                     er_free(&recv);
-                    return cg_fail(cg, e->token,
-                        "CE0158", "codegen: missing descriptor for generic spec method return");
+                    return false;
                 }
                 if (is_static_dispatch) {
                     /* Static spec method: args_buf has no leading ", ";
@@ -20157,13 +21166,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                      * only the out-param to avoid a dangling leading comma. */
                     if (args_buf.data && args_buf.data[0] != '\0') {
                         buf_append_fmt(cg->cur_body,
-                            "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
-                            "    void *%s = (void *)%s;\n"
                             "    ((const struct %s *)%s->witness)->%s(%s, %s);\n",
-                            ret_storage,
-                            ret_desc,
-                            ret_slot,
-                            ret_storage,
                             us->c_witness_struct_name,
                             desc_name,
                             sm->c_field_name,
@@ -20171,13 +21174,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                             ret_slot);
                     } else {
                         buf_append_fmt(cg->cur_body,
-                            "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
-                            "    void *%s = (void *)%s;\n"
                             "    ((const struct %s *)%s->witness)->%s(%s);\n",
-                            ret_storage,
-                            ret_desc,
-                            ret_slot,
-                            ret_storage,
                             us->c_witness_struct_name,
                             desc_name,
                             sm->c_field_name,
@@ -20185,13 +21182,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     }
                 } else {
                     buf_append_fmt(cg->cur_body,
-                        "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
-                        "    void *%s = (void *)%s;\n"
                         "    ((const struct %s *)%s->witness)->%s(%s%s, %s);\n",
-                        ret_storage,
-                        ret_desc,
-                        ret_slot,
-                        ret_storage,
                         us->c_witness_struct_name,
                         desc_name,
                         sm->c_field_name,
@@ -20201,8 +21192,29 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 }
                 out->c_expr = strdup(ret_slot);
                 out->type = cgtype_clone(sm->type);
-                out->owns_ref = true;
-                free(ret_storage);
+                if (out->c_expr == NULL || out->type == NULL ||
+                    !cg_register_erased_generic_storage_for_cleanup(
+                        cg,
+                        ret_slot,
+                        out->type,
+                        ret_descriptor_name,
+                        ret_size_name,
+                        e->token)) {
+                    free(ret_slot);
+                    free(ret_descriptor_name);
+                    free(ret_size_name);
+                    free(subject_expr);
+                    buf_free(&args_buf);
+                    er_free(&recv);
+                    er_free(out);
+                    return false;
+                }
+                out->owns_ref = false;
+                out->is_addressable = true;
+                out->is_storage_address = true;
+                out->uses_erased_generic_storage = true;
+                out->erased_generic_descriptor_c_name = ret_descriptor_name;
+                out->erased_generic_size_c_name = ret_size_name;
                 free(ret_slot);
                 free(subject_expr);
                 buf_free(&args_buf);
@@ -20289,6 +21301,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             if (!ok) { buf_free(&args_buf); er_free(&recv); return false; }
             if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
                 char *result_name = cg_fresh_temp(cg, "_spec_result");
+                char *erased_descriptor_name = NULL;
+                char *erased_size_name = NULL;
                 const char *result_argument_prefix = "&";
 
                 if (result_name == NULL) {
@@ -20298,20 +21312,18 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                                    "IE0001", "codegen: out of memory");
                 }
                 if (sm->type->kind == CG_TYPE_GENERIC_PARAM) {
-                    const char *descriptor = cg_generic_param_desc_name(
-                        cg, sm->type->generic_param_index);
-
-                    if (descriptor == NULL) {
+                    if (!cg_emit_erased_generic_storage_declaration(
+                            cg,
+                            sm->type,
+                            result_name,
+                            e->token,
+                            &erased_descriptor_name,
+                            &erased_size_name)) {
                         free(result_name);
                         buf_free(&args_buf);
                         er_free(&recv);
-                        return cg_fail(cg, e->token,
-                            "CE0158", "codegen: missing descriptor for generic spec method return");
+                        return false;
                     }
-                    buf_append_fmt(cg->cur_body,
-                        "    max_align_t %s[(feng_generic_value_size(%s) + sizeof(max_align_t) - 1U) / sizeof(max_align_t)];\n"
-                        "    memset(%s, 0, feng_generic_value_size(%s));\n",
-                        result_name, descriptor, result_name, descriptor);
                     out->c_expr = strdup(result_name);
                     out->is_addressable = true;
                     out->is_storage_address = true;
@@ -20353,6 +21365,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     out->is_addressable = true;
                 }
                 if (out->c_expr == NULL) {
+                    free(erased_descriptor_name);
+                    free(erased_size_name);
                     free(result_name);
                     buf_free(&args_buf);
                     er_free(&recv);
@@ -20367,10 +21381,38 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     args_buf.data ? args_buf.data : "",
                     result_argument_prefix,
                     result_name);
+                out->type = cgtype_clone(sm->type);
+                if (sm->type->kind == CG_TYPE_GENERIC_PARAM) {
+                    if (out->type == NULL ||
+                        !cg_register_erased_generic_storage_for_cleanup(
+                            cg,
+                            result_name,
+                            out->type,
+                            erased_descriptor_name,
+                            erased_size_name,
+                            e->token)) {
+                        free(erased_descriptor_name);
+                        free(erased_size_name);
+                        free(result_name);
+                        buf_free(&args_buf);
+                        er_free(&recv);
+                        er_free(out);
+                        return false;
+                    }
+                    out->owns_ref = false;
+                    out->uses_erased_generic_storage = true;
+                    out->erased_generic_descriptor_c_name =
+                        erased_descriptor_name;
+                    out->erased_generic_size_c_name = erased_size_name;
+                    erased_descriptor_name = NULL;
+                    erased_size_name = NULL;
+                } else {
+                    out->owns_ref = true;
+                }
+                free(erased_descriptor_name);
+                free(erased_size_name);
                 free(result_name);
                 buf_free(&args_buf);
-                out->type = cgtype_clone(sm->type);
-                out->owns_ref = true;
                 er_free(&recv);
                 return out->c_expr != NULL && out->type != NULL;
             }
@@ -20795,9 +21837,13 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             char *shared_name = cg_generic_type_method_shared_cname(
                 cg, ut->generic_origin_decl, um->member);
             char *rtd_expr = cg_rtd_expr_for_type(cg, ut, e->token);
-            if (shared_name == NULL || rtd_expr == NULL) {
+            char *func_desc_expr =
+                cg_callable_descriptor_expr_for_call(cg, e, e->token);
+            if (shared_name == NULL || rtd_expr == NULL ||
+                func_desc_expr == NULL) {
                 free(shared_name);
                 free(rtd_expr);
+                free(func_desc_expr);
                 er_free(&recv);
                 return false;
             }
@@ -20812,6 +21858,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 free(arg_exprs);
                 free(shared_name);
                 free(rtd_expr);
+                free(func_desc_expr);
                 er_free(&recv);
                 return cg_fail(cg, e->token,
                     "IE0001", "codegen: out of memory");
@@ -20850,15 +21897,36 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 free(arg_exprs);
                 free(shared_name);
                 free(rtd_expr);
+                free(func_desc_expr);
                 er_free(&recv);
                 return false;
             }
             /* Determine return handling. */
             bool has_return = um->return_type != NULL &&
                               um->return_type->kind != CG_TYPE_VOID;
-            bool ret_is_gp = has_return &&
-                             um->return_type->kind == CG_TYPE_GENERIC_PARAM;
+            bool ret_is_storage_address = false;
+            bool ret_uses_erased_generic_storage = false;
+            bool ret_uses_reified_storage = false;
+            CGType *concrete_return = NULL;
             char *ret_tmp = NULL;
+            char *ret_descriptor_name = NULL;
+            char *ret_size_name = NULL;
+            if (!cg_resolve_selected_callable_return_type(
+                    cg,
+                    e,
+                    &um->member->as.callable,
+                    e->token,
+                    &concrete_return)) {
+                for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+                for (size_t i = 0; i < arg_count; i++) free(arg_exprs[i]);
+                free(args);
+                free(arg_exprs);
+                free(shared_name);
+                free(rtd_expr);
+                free(func_desc_expr);
+                er_free(&recv);
+                return false;
+            }
             if (has_return) {
                 ret_tmp = cg_fresh_temp(cg, "_osr");
                 if (ret_tmp == NULL) {
@@ -20868,19 +21936,59 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     free(arg_exprs);
                     free(shared_name);
                     free(rtd_expr);
+                    free(func_desc_expr);
+                    cgtype_free(concrete_return);
                     er_free(&recv);
                     return cg_fail(cg, e->token,
                         "IE0001", "codegen: out of memory");
                 }
-                if (ret_is_gp) {
-                    /* Generic-param return: use runtime-sized buffer from
-                     * the type descriptor so the shared body has enough
-                     * space regardless of the concrete type. */
-                    buf_append_fmt(cg->cur_body,
-                        "    uint8_t %s[%s->size];\n",
-                        ret_tmp, rtd_expr);
+                if (concrete_return->kind == CG_TYPE_GENERIC_PARAM) {
+                    if (!cg_emit_erased_generic_storage_declaration(
+                            cg,
+                            concrete_return,
+                            ret_tmp,
+                            e->token,
+                            &ret_descriptor_name,
+                            &ret_size_name)) {
+                        free(ret_tmp);
+                        for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+                        for (size_t i = 0; i < arg_count; i++) free(arg_exprs[i]);
+                        free(args);
+                        free(arg_exprs);
+                        free(shared_name);
+                        free(rtd_expr);
+                        free(func_desc_expr);
+                        cgtype_free(concrete_return);
+                        er_free(&recv);
+                        return false;
+                    }
+                    ret_is_storage_address = true;
+                    ret_uses_erased_generic_storage = true;
+                } else if (cg_type_uses_reified_storage(
+                               cg, concrete_return)) {
+                    if (!cg_emit_reified_storage_declaration(
+                            cg,
+                            concrete_return,
+                            ret_tmp,
+                            e->token,
+                            &ret_descriptor_name,
+                            &ret_size_name)) {
+                        free(ret_tmp);
+                        for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+                        for (size_t i = 0; i < arg_count; i++) free(arg_exprs[i]);
+                        free(args);
+                        free(arg_exprs);
+                        free(shared_name);
+                        free(rtd_expr);
+                        free(func_desc_expr);
+                        cgtype_free(concrete_return);
+                        er_free(&recv);
+                        return false;
+                    }
+                    ret_is_storage_address = true;
+                    ret_uses_reified_storage = true;
                 } else {
-                    char *cty = cg_ctype_dup(um->return_type);
+                    char *cty = cg_ctype_dup(concrete_return);
                     if (cty == NULL) {
                         free(ret_tmp);
                         for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
@@ -20889,6 +21997,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         free(arg_exprs);
                         free(shared_name);
                         free(rtd_expr);
+                        free(func_desc_expr);
+                        cgtype_free(concrete_return);
                         er_free(&recv);
                         return cg_fail(cg, e->token,
                             "IE0001", "codegen: out of memory");
@@ -20897,28 +22007,28 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     free(cty);
                 }
             }
-            /* Build: shared_name((void *)recv, rtd_expr, args..., [&_out]) */
+            /* Build: shared_name((void *)recv, rtd_expr, func_desc,
+             * args..., [_out]). */
             Buf b; buf_init(&b);
             /* §9.15: ordinary value storage needs an address; a reified
              * receiver expression already is the exact storage address. */
             if (cg_type_is_value_semantics(recv.type) &&
                 !recv.uses_reified_storage) {
-                buf_append_fmt(&b, "%s((void *)&%s, %s",
-                               shared_name, recv.c_expr, rtd_expr);
+                buf_append_fmt(&b, "%s((void *)&%s, %s, %s",
+                               shared_name, recv.c_expr, rtd_expr,
+                               func_desc_expr);
             } else {
-                buf_append_fmt(&b, "%s((void *)%s, %s",
-                               shared_name, recv.c_expr, rtd_expr);
+                buf_append_fmt(&b, "%s((void *)%s, %s, %s",
+                               shared_name, recv.c_expr, rtd_expr,
+                               func_desc_expr);
             }
             for (size_t i = 0; i < arg_count; i++) {
                 buf_append_fmt(&b, ", %s", arg_exprs[i]);
             }
             if (has_return) {
-                if (ret_is_gp) {
-                    /* VLA decays to pointer; pass directly as void *_out. */
-                    buf_append_fmt(&b, ", %s", ret_tmp);
-                } else {
-                    buf_append_fmt(&b, ", &%s", ret_tmp);
-                }
+                buf_append_fmt(&b,
+                               ret_is_storage_address ? ", %s" : ", &%s",
+                               ret_tmp);
             }
             buf_append_cstr(&b, ");\n");
             buf_append(cg->cur_body, b.data, b.length);
@@ -20929,22 +22039,56 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             free(arg_exprs);
             free(shared_name);
             free(rtd_expr);
+            free(func_desc_expr);
             if (has_return) {
-                /* For generic-param return, the VLA buffer (ret_tmp) decays
-                 * to a pointer in expressions.  The shared body writes the
-                 * value directly into the buffer, and the generic return
-                 * handler (cg_emit_generic_return) reads from it via the
-                 * switch/case pattern using memcpy(_out, <buf>, size). */
                 out->c_expr = strdup(ret_tmp);
-                out->type = cgtype_clone(um->return_type);
-                out->owns_ref = cgtype_is_managed(um->return_type) ||
-                                cgtype_is_aggregate(um->return_type);
+                out->type = concrete_return;
+                concrete_return = NULL;
+                out->owns_ref = cgtype_is_managed(out->type) ||
+                                cgtype_is_aggregate(out->type);
+                out->is_addressable = true;
+                out->is_storage_address = ret_is_storage_address;
+                if (ret_uses_erased_generic_storage) {
+                    if (out->c_expr == NULL ||
+                        !cg_register_erased_generic_storage_for_cleanup(
+                            cg,
+                            ret_tmp,
+                            out->type,
+                            ret_descriptor_name,
+                            ret_size_name,
+                            e->token)) {
+                        er_free(out);
+                        free(ret_tmp);
+                        free(ret_descriptor_name);
+                        free(ret_size_name);
+                        er_free(&recv);
+                        return false;
+                    }
+                    out->owns_ref = false;
+                    out->uses_erased_generic_storage = true;
+                    out->erased_generic_descriptor_c_name =
+                        ret_descriptor_name;
+                    out->erased_generic_size_c_name = ret_size_name;
+                    ret_descriptor_name = NULL;
+                    ret_size_name = NULL;
+                }
+                out->uses_reified_storage = ret_uses_reified_storage;
+                if (ret_uses_reified_storage) {
+                    out->reified_descriptor_c_name = ret_descriptor_name;
+                    out->reified_size_c_name = ret_size_name;
+                    ret_descriptor_name = NULL;
+                    ret_size_name = NULL;
+                }
                 free(ret_tmp);
             } else {
                 out->c_expr = strdup("((void)0)");
-                out->type = cgtype_new(CG_TYPE_VOID);
+                out->type = concrete_return;
+                concrete_return = NULL;
                 out->owns_ref = false;
             }
+            cgtype_free(concrete_return);
+            free(ret_descriptor_name);
+            free(ret_size_name);
             er_free(&recv);
             return out->c_expr && out->type;
         }
@@ -25090,7 +26234,32 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
             }
             continue;
         }
-        if (cgtype_is_managed(l->type)) {
+        if (l->uses_erased_generic_storage) {
+            cg_emit_current_stmt_line_directive_force(cg);
+            buf_append_fmt(cg->cur_body,
+                "    switch (%s->kind) {\n"
+                "        case FENG_VALUE_TRIVIAL:\n"
+                "            break;\n"
+                "        case FENG_VALUE_MANAGED_POINTER:\n"
+                "            feng_cleanup_pop();\n"
+                "            feng_release(*(void **)%s);\n"
+                "            *(void **)%s = NULL;\n"
+                "            break;\n"
+                "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+                "            feng_cleanup_pop();\n"
+                "            feng_aggregate_release(%s, "
+                "feng_generic_aggregate_descriptor(%s));\n"
+                "            memset(%s, 0, %s);\n"
+                "            break;\n"
+                "    }\n",
+                l->erased_generic_descriptor_c_name,
+                l->c_name,
+                l->c_name,
+                l->c_name,
+                l->erased_generic_descriptor_c_name,
+                l->c_name,
+                l->erased_generic_size_c_name);
+        } else if (cgtype_is_managed(l->type)) {
             cg_emit_current_stmt_line_directive_force(cg);
             buf_append_fmt(cg->cur_body,
                            "    feng_cleanup_pop(); feng_release(%s); %s = NULL;\n",
@@ -25212,6 +26381,39 @@ static bool cg_register_local_for_cleanup(CG *cg,
     return true;
 }
 
+/* Register one owning direct-generic value.  Shared code cannot classify T
+ * statically, so the descriptor selects the existing pointer or aggregate
+ * cleanup node; trivial values register no node. */
+static bool cg_register_erased_generic_storage_for_cleanup(
+    CG *cg,
+    const char *cname,
+    const CGType *type,
+    const char *descriptor_c_name,
+    const char *size_c_name,
+    FengToken token) {
+    CGType *owned_type;
+
+    if (cg == NULL || cname == NULL || type == NULL ||
+        type->kind != CG_TYPE_GENERIC_PARAM || descriptor_c_name == NULL ||
+        size_c_name == NULL) {
+        return false;
+    }
+    owned_type = cgtype_clone(type);
+    if (owned_type == NULL ||
+        !scope_add(cg->cur_scope, cname, cname, owned_type, false)) {
+        cgtype_free(owned_type);
+        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
+    }
+    if (!scope_mark_last_erased_generic_storage(cg->cur_scope,
+                                                descriptor_c_name,
+                                                size_c_name)) {
+        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
+    }
+    cg_emit_cleanup_push_for_erased_generic_storage(
+        cg, cname, descriptor_c_name);
+    return true;
+}
+
 /* Register every managed pointer slot of an aggregate local on the cleanup
  * chain. The exact slot addresses are owned by the aggregate facts provider. */
 static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
@@ -25258,6 +26460,36 @@ static void cg_emit_cleanup_push_for_reified_aggregate_storage(
                    cname,
                    cname,
                    descriptor_c_name);
+}
+
+/* Pair one erased generic storage slot with the existing cleanup-chain node
+ * matching its closed value kind.  No runtime descriptor lookup or heap
+ * allocation is introduced. */
+static void cg_emit_cleanup_push_for_erased_generic_storage(
+    CG *cg,
+    const char *cname,
+    const char *descriptor_c_name) {
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body,
+        "    FengCleanupNode _cu_%s;\n"
+        "    switch (%s->kind) {\n"
+        "        case FENG_VALUE_TRIVIAL:\n"
+        "            break;\n"
+        "        case FENG_VALUE_MANAGED_POINTER:\n"
+        "            feng_cleanup_push(&_cu_%s, (void **)%s);\n"
+        "            break;\n"
+        "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+        "            feng_cleanup_push_aggregate(&_cu_%s, %s, "
+        "feng_generic_aggregate_descriptor(%s));\n"
+        "            break;\n"
+        "    }\n",
+        cname,
+        descriptor_c_name,
+        cname,
+        cname,
+        cname,
+        cname,
+        descriptor_c_name);
 }
 
 /* Emit one feng_cleanup_pop per cleanup node previously registered for the
@@ -26628,6 +27860,136 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     }
     char *cname = cg_local_cname(cg, b->name.data, b->name.length);
     if (!cname) { if (has_init) er_free(&init); cgtype_free(decl_type); return false; }
+
+    if (decl_type->kind == CG_TYPE_GENERIC_PARAM) {
+        char *descriptor_name = NULL;
+        char *size_name = NULL;
+
+        if (has_init && !init.is_storage_address &&
+            cg_materialize_to_local(cg, &init, "_bind_generic_source") == NULL) {
+            er_free(&init);
+            free(cname);
+            cgtype_free(decl_type);
+            return cg_fail(cg, b->token,
+                           "CE0235", "codegen: generic binding source has no stable storage");
+        }
+        if (!cg_emit_erased_generic_storage_declaration(
+                cg,
+                decl_type,
+                cname,
+                b->token,
+                &descriptor_name,
+                &size_name)) {
+            if (has_init) er_free(&init);
+            free(cname);
+            cgtype_free(decl_type);
+            return false;
+        }
+        if (has_init) {
+            buf_append_fmt(cg->cur_body,
+                "    switch (%s->kind) {\n"
+                "        case FENG_VALUE_TRIVIAL:\n"
+                "            memcpy(%s, %s, %s);\n"
+                "            break;\n"
+                "        case FENG_VALUE_MANAGED_POINTER: {\n"
+                "            void *_generic_value = *(void *const *)%s;\n",
+                descriptor_name,
+                cname,
+                init.c_expr,
+                size_name,
+                init.c_expr);
+            if (init.owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                    "            *(void **)%s = _generic_value;\n"
+                    "            *(void **)%s = NULL;\n",
+                    cname,
+                    init.c_expr);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "            feng_retain(_generic_value);\n"
+                    "            *(void **)%s = _generic_value;\n",
+                    cname);
+            }
+            buf_append_cstr(cg->cur_body,
+                "            break;\n"
+                "        }\n"
+                "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n");
+            if (init.owns_ref) {
+                buf_append_fmt(cg->cur_body,
+                    "            memcpy(%s, %s, %s);\n"
+                    "            memset(%s, 0, %s);\n",
+                    cname,
+                    init.c_expr,
+                    size_name,
+                    init.c_expr,
+                    size_name);
+            } else {
+                buf_append_fmt(cg->cur_body,
+                    "            feng_aggregate_assign(%s, %s, "
+                    "feng_generic_aggregate_descriptor(%s));\n",
+                    cname,
+                    init.c_expr,
+                    descriptor_name);
+            }
+            buf_append_cstr(cg->cur_body,
+                "            break;\n"
+                "    }\n");
+            er_free(&init);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "    switch (%s->kind) {\n"
+                "        case FENG_VALUE_TRIVIAL:\n"
+                "            break;\n"
+                "        case FENG_VALUE_MANAGED_POINTER:\n"
+                "            *(void **)%s = NULL;\n"
+                "            break;\n"
+                "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+                "            feng_aggregate_default_init(%s, "
+                "feng_generic_aggregate_descriptor(%s));\n"
+                "            break;\n"
+                "    }\n",
+                descriptor_name,
+                cname,
+                cname,
+                descriptor_name);
+        }
+        if (!scope_add(cg->cur_scope,
+                       "_unused_internal_name__",
+                       cname,
+                       decl_type,
+                       false) ||
+            !scope_mark_last_erased_generic_storage(cg->cur_scope,
+                                                    descriptor_name,
+                                                    size_name)) {
+            free(cname);
+            free(descriptor_name);
+            free(size_name);
+            return cg_fail(cg, b->token, "IE0001", "codegen: out of memory");
+        }
+        Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1U];
+        free(added->name);
+        added->name = strndup(b->name.data, b->name.length);
+        if (added->name == NULL ||
+            !cg_debug_add_variable_record_slice_cgtype(
+                cg,
+                cname,
+                b->name,
+                NULL,
+                decl_type,
+                FENG_CODEGEN_MAPING_VARIABLE_BINDING,
+                b->token)) {
+            free(cname);
+            free(descriptor_name);
+            free(size_name);
+            return false;
+        }
+        cg_emit_cleanup_push_for_erased_generic_storage(
+            cg, cname, descriptor_name);
+        free(cname);
+        free(descriptor_name);
+        free(size_name);
+        return true;
+    }
 
     char *cty = cg_ctype_dup(decl_type);
     if (!cg_emit_line_directive_force(cg, b->token)) {
@@ -28523,7 +29885,66 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                                         stmt->as.assign.value,
                                         l->type,
                                         &v)) return false;
-    if (cgtype_is_managed(l->type)) {
+    if (l->uses_erased_generic_storage) {
+        if (!v.is_storage_address &&
+            cg_materialize_to_local(cg, &v, "_assign_generic_source") == NULL) {
+            er_free(&v);
+            return cg_fail(cg, stmt->token,
+                           "CE0263", "codegen: generic local assignment source has no stable storage");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    switch (%s->kind) {\n"
+            "        case FENG_VALUE_TRIVIAL:\n"
+            "            memcpy(%s, %s, %s);\n"
+            "            break;\n"
+            "        case FENG_VALUE_MANAGED_POINTER:\n",
+            l->erased_generic_descriptor_c_name,
+            l->c_name,
+            v.c_expr,
+            l->erased_generic_size_c_name);
+        if (v.owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                "            feng_release(*(void **)%s);\n"
+                "            *(void **)%s = *(void **)%s;\n"
+                "            *(void **)%s = NULL;\n",
+                l->c_name,
+                l->c_name,
+                v.c_expr,
+                v.c_expr);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "            feng_assign((void **)%s, *(void *const *)%s);\n",
+                l->c_name,
+                v.c_expr);
+        }
+        buf_append_cstr(cg->cur_body,
+            "            break;\n"
+            "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n");
+        if (v.owns_ref) {
+            buf_append_fmt(cg->cur_body,
+                "            feng_aggregate_release(%s, "
+                "feng_generic_aggregate_descriptor(%s));\n"
+                "            memcpy(%s, %s, %s);\n"
+                "            memset(%s, 0, %s);\n",
+                l->c_name,
+                l->erased_generic_descriptor_c_name,
+                l->c_name,
+                v.c_expr,
+                l->erased_generic_size_c_name,
+                v.c_expr,
+                l->erased_generic_size_c_name);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "            feng_aggregate_assign(%s, %s, "
+                "feng_generic_aggregate_descriptor(%s));\n",
+                l->c_name,
+                v.c_expr,
+                l->erased_generic_descriptor_c_name);
+        }
+        buf_append_cstr(cg->cur_body,
+            "            break;\n"
+            "    }\n");
+    } else if (cgtype_is_managed(l->type)) {
         if (v.owns_ref) {
             /* Release old, take +1. */
             buf_append_fmt(cg->cur_body,
@@ -29865,6 +31286,39 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
     return true;
 }
 
+/* Resolve the callable descriptor for an iterator-protocol method synthesized
+ * by for/in lowering. The semantic pass records the same owner/member/fit and
+ * owner-instance identity, so this uses the ordinary fixed callable slot. */
+static char *cg_for_in_method_descriptor_expr(
+    CG *cg,
+    const UserType *owner_type,
+    const UserFit *owner_fit,
+    const FengTypeMember *member,
+    const FengTypeRef *owner_instance_type_ref,
+    FengToken blame) {
+    FengReifiableCallableDep dep;
+    const FengDecl *owner_decl;
+
+    if (owner_type == NULL || member == NULL) {
+        return NULL;
+    }
+    owner_decl = owner_type->generic_origin_decl != NULL
+        ? owner_type->generic_origin_decl
+        : owner_type->decl;
+    if (owner_decl == NULL) {
+        return NULL;
+    }
+    memset(&dep, 0, sizeof(dep));
+    dep.kind = owner_fit != NULL
+        ? FENG_RESOLVED_CALLABLE_FIT_METHOD
+        : FENG_RESOLVED_CALLABLE_TYPE_METHOD;
+    dep.owner_type_decl = owner_decl;
+    dep.member = member;
+    dep.fit_decl = owner_fit != NULL ? owner_fit->decl : NULL;
+    dep.owner_instance_type_ref = owner_instance_type_ref;
+    return cg_callable_descriptor_expr_for_dep(cg, &dep, blame);
+}
+
 /* Emit for/in loop using the iterator protocol (@iterable/@iterator). */
 static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
     int id = cg->label_counter++;
@@ -29894,11 +31348,13 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
      * @iterable (not a decl lookup which finds the wrong instance). */
     const UserType *cursor_ut = NULL;
     const UserMethod *iter_um = NULL;
+    const UserFit *iterator_user_fit = NULL;
     char *cursor_var = NULL;
 
     if (iterable_method != NULL) {
         /* Find @iterable method on the source type (UserType or BuiltinFit). */
         const UserMethod *iterable_um = NULL;
+        const UserFit *iterable_user_fit = NULL;
         bool iterable_is_builtin_fit = false;
         const UserType *src_ut = src.type != NULL && src.type->user != NULL
             ? src.type->user : NULL;
@@ -29918,7 +31374,10 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             for (size_t fi = 0; fi < cg->user_fit_count; fi++) {
                 iterable_um = cg_user_fit_method_by_member(
                     &cg->user_fits[fi], iterable_method);
-                if (iterable_um) break;
+                if (iterable_um) {
+                    iterable_user_fit = &cg->user_fits[fi];
+                    break;
+                }
             }
         }
         if (!iterable_um) {
@@ -29944,6 +31403,18 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 "CE0274", "codegen: iterator cursor type not found");
         }
         iter_um = cg_user_type_method_by_member(cursor_ut, iterator_method);
+        if (!iter_um) {
+            for (size_t fit_index = 0U;
+                 fit_index < cg->user_fit_count;
+                 ++fit_index) {
+                iter_um = cg_user_fit_method_by_member(
+                    &cg->user_fits[fit_index], iterator_method);
+                if (iter_um != NULL) {
+                    iterator_user_fit = &cg->user_fits[fit_index];
+                    break;
+                }
+            }
+        }
         if (!iter_um) {
             er_free(&src);
             cg_release_scope(cg, outer_scope);
@@ -29999,15 +31470,34 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 "&(const FengFunctionDescriptor){.name = \"%s\"});\n",
                 cursor_cty, cursor_var, iterable_um->c_name, src_addr, src.c_expr,
                 iterable_um->feng_name);
-        } else if (cg->in_generic_type_method && src_ut != NULL &&
+        } else if (cg->in_generic_fn && src_ut != NULL &&
                    src_ut->generic_context_type_param_count > 0U) {
             /* Shared body cross-type call: iter() on another generic type.
              * Use the target's shared body name and calling convention. */
-            char *shared_iter = cg_generic_type_method_shared_cname(
-                cg, src_ut->generic_origin_decl, iterable_method);
+            char *shared_iter = iterable_user_fit != NULL
+                ? cg_fit_method_shared_cname(
+                      cg, iterable_user_fit, iterable_method)
+                : cg_generic_type_method_shared_cname(
+                      cg, src_ut->generic_origin_decl, iterable_method);
             char *rtd_expr = cg_rtd_expr_for_type(cg, src_ut, stmt->token);
-            if (!shared_iter || !rtd_expr) {
-                free(shared_iter); free(rtd_expr);
+            const FengSemanticTypeFact *source_fact =
+                feng_semantic_lookup_type_fact(
+                    cg->analysis, stmt->as.for_stmt.iter_expr);
+            char *func_desc_expr = cg_for_in_method_descriptor_expr(
+                cg,
+                src_ut,
+                iterable_user_fit,
+                iterable_method,
+                source_fact != NULL &&
+                        source_fact->kind ==
+                            FENG_SEMANTIC_TYPE_FACT_TYPE_REF
+                    ? source_fact->type_ref
+                    : NULL,
+                stmt->token);
+            if (!shared_iter || !rtd_expr || !func_desc_expr) {
+                free(shared_iter);
+                free(rtd_expr);
+                free(func_desc_expr);
                 free(cursor_cty); free(cursor_var);
                 er_free(&src);
                 cg_release_scope(cg, outer_scope);
@@ -30016,11 +31506,13 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 return false;
             }
             buf_append_fmt(cg->cur_body,
-                "    %s %s; %s((void *)%s%s, %s, &%s);\n",
+                "    %s %s; %s((void *)%s%s, %s, %s, &%s);\n",
                 cursor_cty, cursor_var,
-                shared_iter, src_addr, src.c_expr, rtd_expr, cursor_var);
+                shared_iter, src_addr, src.c_expr, rtd_expr,
+                func_desc_expr, cursor_var);
             free(shared_iter);
             free(rtd_expr);
+            free(func_desc_expr);
         } else {
             Buf iter_call; buf_init(&iter_call);
             buf_append_fmt(&iter_call, "%s(%s%s", iterable_um->c_name, src_addr, src.c_expr);
@@ -30067,6 +31559,18 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 "CE0274", "codegen: iterator cursor type not found");
         }
         iter_um = cg_user_type_method_by_member(cursor_ut, iterator_method);
+        if (!iter_um) {
+            for (size_t fit_index = 0U;
+                 fit_index < cg->user_fit_count;
+                 ++fit_index) {
+                iter_um = cg_user_fit_method_by_member(
+                    &cg->user_fits[fit_index], iterator_method);
+                if (iter_um != NULL) {
+                    iterator_user_fit = &cg->user_fits[fit_index];
+                    break;
+                }
+            }
+        }
         if (!iter_um) {
             er_free(&src);
             cg_release_scope(cg, outer_scope);
@@ -30167,14 +31671,26 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
     const char *cursor_addr = (cursor_ut != NULL &&
                                cg_user_type_is_value_semantics(cursor_ut))
                                   ? "&" : "";
-    if (cg->in_generic_type_method && cursor_ut != NULL &&
+    if (cg->in_generic_fn && cursor_ut != NULL &&
         cursor_ut->generic_context_type_param_count > 0U) {
         /* Shared body cross-type call for next(). */
-        char *shared_next = cg_generic_type_method_shared_cname(
-            cg, cursor_ut->generic_origin_decl, iterator_method);
+        char *shared_next = iterator_user_fit != NULL
+            ? cg_fit_method_shared_cname(
+                  cg, iterator_user_fit, iterator_method)
+            : cg_generic_type_method_shared_cname(
+                  cg, cursor_ut->generic_origin_decl, iterator_method);
         char *rtd_expr = cg_rtd_expr_for_type(cg, cursor_ut, stmt->token);
-        if (!shared_next || !rtd_expr) {
-            free(shared_next); free(rtd_expr);
+        char *func_desc_expr = cg_for_in_method_descriptor_expr(
+            cg,
+            cursor_ut,
+            iterator_user_fit,
+            iterator_method,
+            stmt->as.for_stmt.iter_cursor_type_ref,
+            stmt->token);
+        if (!shared_next || !rtd_expr || !func_desc_expr) {
+            free(shared_next);
+            free(rtd_expr);
+            free(func_desc_expr);
             free(result_var); free(result_cty);
             cgtype_free(element_type); cgtype_free(result_type);
             free(cont_label_owned);
@@ -30189,11 +31705,13 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             return false;
         }
         buf_append_fmt(cg->cur_body,
-            "        %s %s; %s((void *)%s%s, %s, &%s);\n",
+            "        %s %s; %s((void *)%s%s, %s, %s, &%s);\n",
             result_cty, result_var,
-            shared_next, cursor_addr, cursor_var, rtd_expr, result_var);
+            shared_next, cursor_addr, cursor_var, rtd_expr,
+            func_desc_expr, result_var);
         free(shared_next);
         free(rtd_expr);
+        free(func_desc_expr);
     } else {
         Buf next_call; buf_init(&next_call);
         buf_append_fmt(&next_call, "%s(%s%s", iter_um->c_name, cursor_addr, cursor_var);
@@ -32243,10 +33761,11 @@ static void cg_emit_free_fn_abi_proto(Buf *out, const FreeFn *fn, bool needs_sta
     buf_append_cstr(out, ");\n");
 }
 
-static void cg_emit_user_method_proto(Buf *out,
-                                      const UserType *t,
-                                      const UserMethod *m,
-                                      bool needs_static) {
+static void cg_emit_user_method_proto_ex(Buf *out,
+                                         const UserType *t,
+                                         const UserMethod *m,
+                                         bool needs_static,
+                                         bool has_func_desc) {
     bool is_static_method = m != NULL && m->member != NULL && m->member->is_static;
     bool has_param = false;
 
@@ -32270,6 +33789,11 @@ static void cg_emit_user_method_proto(Buf *out,
         buf_append_fmt(out, "const %s *_type_desc", td_type);
         has_param = true;
     }
+    if (has_func_desc) {
+        if (has_param) buf_append_cstr(out, ", ");
+        buf_append_cstr(out, "const FengFunctionDescriptor *_func_desc");
+        has_param = true;
+    }
     for (size_t i = 0; i < m->param_count; i++) {
         if (has_param) {
             buf_append_cstr(out, ", ");
@@ -32287,6 +33811,72 @@ static void cg_emit_user_method_proto(Buf *out,
         buf_append_cstr(out, "void");
     }
     buf_append_cstr(out, ");\n");
+}
+
+/* Emit the ordinary method ABI, which has no callable descriptor. */
+static void cg_emit_user_method_proto(Buf *out,
+                                      const UserType *t,
+                                      const UserMethod *m,
+                                      bool needs_static) {
+    cg_emit_user_method_proto_ex(out, t, m, needs_static, false);
+}
+
+/* Emit the exported shared-body ABI for an imported method-generic member.
+ * Both instance and static methods use the same descriptor ordering as the
+ * provider definition: owner descriptor, callable descriptor, method generic
+ * descriptors, ordinary parameters, and the optional output slot. */
+static bool cg_emit_imported_generic_method_shared_proto(CG *cg,
+                                                         const UserType *type,
+                                                         const UserMethod *method) {
+    const FengCallableSignature *signature;
+    char *shared_name;
+    const char *type_descriptor_name;
+
+    if (cg == NULL || type == NULL || method == NULL ||
+        type->decl == NULL || method->member == NULL) {
+        return false;
+    }
+    signature = &method->member->as.callable;
+    shared_name = cg_generic_type_method_shared_cname(
+        cg, type->decl, method->member);
+    if (shared_name == NULL) {
+        return cg_fail(cg, method->member->token,
+                       "IE0001", "codegen: out of memory");
+    }
+    type_descriptor_name = cg_user_type_is_value(type)
+                               ? "FengAggregateDescriptor"
+                               : "FengTypeDescriptor";
+
+    buf_append_fmt(&cg->fn_protos, "void %s(", shared_name);
+    if (!method->member->is_static) {
+        buf_append_cstr(&cg->fn_protos, "void *_self, ");
+    }
+    buf_append_fmt(&cg->fn_protos,
+                   "const %s *_type_desc, "
+                   "const FengFunctionDescriptor *_desc",
+                   type_descriptor_name);
+    for (size_t index = 0U; index < signature->type_param_count; ++index) {
+        buf_append_fmt(&cg->fn_protos,
+                       ", const FengGenericParamDescriptor *_%.*s",
+                       (int)signature->type_params[index].name.length,
+                       signature->type_params[index].name.data);
+    }
+    for (size_t index = 0U; index < method->param_count; ++index) {
+        buf_append_cstr(&cg->fn_protos, ", ");
+        if (cg_shared_generic_param_uses_address(method->param_types[index])) {
+            buf_append_fmt(&cg->fn_protos, "const void *_p%zu", index);
+        } else {
+            cg_emit_c_type(&cg->fn_protos, method->param_types[index]);
+            buf_append_fmt(&cg->fn_protos, " _p%zu", index);
+        }
+    }
+    if (method->return_type != NULL &&
+        method->return_type->kind != CG_TYPE_VOID) {
+        buf_append_cstr(&cg->fn_protos, ", void *_out");
+    }
+    buf_append_cstr(&cg->fn_protos, ");\n");
+    free(shared_name);
+    return true;
 }
 
 /* Builtin array fits share one body across all element types.  A value-
@@ -32761,6 +34351,954 @@ static char *cg_resolve_dep_descriptor_name(CG *cg,
     return result;
 }
 
+/* Return the stable shared-body symbol that identifies one callable
+ * dependency independently of its closed type arguments. Caller frees. */
+static char *cg_callable_dep_identity_name(
+    CG *cg,
+    const FengReifiableCallableDep *dep) {
+    if (cg == NULL || dep == NULL) {
+        return NULL;
+    }
+    if (dep->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
+        dep->function_decl != NULL) {
+        const GenericFn *generic_fn =
+            cg_find_generic_fn_by_decl(cg, dep->function_decl);
+
+        return generic_fn != NULL ? strdup(generic_fn->c_name) : NULL;
+    }
+    if ((dep->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
+         dep->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) &&
+        dep->fit_decl != NULL && dep->member != NULL) {
+        for (size_t index = 0U; index < cg->user_fit_count; ++index) {
+            const UserFit *fit = &cg->user_fits[index];
+
+            if (fit->decl == dep->fit_decl) {
+                return cg_fit_method_shared_cname(cg, fit, dep->member);
+            }
+        }
+    }
+    if (dep->owner_type_decl != NULL && dep->member != NULL) {
+        return cg_generic_type_method_shared_cname(
+            cg, dep->owner_type_decl, dep->member);
+    }
+    return NULL;
+}
+
+/* Resolve the semantic dependency set owned by a direct callee. */
+static const FengReifiableDepSet *cg_callable_dep_set(
+    const CG *cg,
+    const FengReifiableCallableDep *dep) {
+    if (cg == NULL || dep == NULL) {
+        return NULL;
+    }
+    if (dep->kind == FENG_RESOLVED_CALLABLE_FUNCTION) {
+        return feng_semantic_lookup_reifiable_dep_set(
+            cg->analysis, dep->function_decl);
+    }
+    if (dep->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
+        dep->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) {
+        return feng_semantic_lookup_reifiable_dep_set(
+            cg->analysis, dep->fit_decl);
+    }
+    return feng_semantic_lookup_member_reifiable_dep_set(
+        cg->analysis, dep->owner_type_decl, dep->member);
+}
+
+/* A dependency-free shared callable receives a static empty descriptor
+ * directly and therefore does not consume a caller callable-dependency slot.
+ * Cycles containing no aggregate/type dependency also collapse to empty. */
+static bool cg_callable_dep_set_has_descriptor_data_inner(
+    const CG *cg,
+    const FengReifiableDepSet *dep_set,
+    const FengReifiableDepSet *const *stack,
+    size_t stack_count) {
+    const FengReifiableDepSet **next_stack;
+    bool has_data = false;
+
+    if (dep_set == NULL) {
+        return false;
+    }
+    if (dep_set->dep_count > 0U) {
+        return true;
+    }
+    for (size_t index = 0U; index < stack_count; ++index) {
+        if (stack[index] == dep_set) {
+            return false;
+        }
+    }
+    next_stack = (const FengReifiableDepSet **)calloc(
+        stack_count + 1U, sizeof(*next_stack));
+    if (next_stack == NULL) {
+        return false;
+    }
+    if (stack_count > 0U) {
+        memcpy(next_stack, stack, stack_count * sizeof(*next_stack));
+    }
+    next_stack[stack_count] = dep_set;
+    for (size_t index = 0U;
+         index < dep_set->callable_dep_count;
+         ++index) {
+        if (cg_callable_dep_set_has_descriptor_data_inner(
+                cg,
+                cg_callable_dep_set(cg,
+                                    &dep_set->callable_deps[index]),
+                next_stack,
+                stack_count + 1U)) {
+            has_data = true;
+            break;
+        }
+    }
+    free(next_stack);
+    return has_data;
+}
+
+static bool cg_callable_dep_set_has_descriptor_data(
+    const CG *cg,
+    const FengReifiableDepSet *dep_set) {
+    return cg_callable_dep_set_has_descriptor_data_inner(
+        cg, dep_set, NULL, 0U);
+}
+
+/* Canonical open callable dependency key used by both shared-body slot
+ * assignment and closed wrapper materialization. */
+static char *cg_callable_dep_sort_key(
+    CG *cg,
+    const FengReifiableCallableDep *dep,
+    const FengSlice *caller_type_param_names,
+    size_t caller_type_param_count) {
+    char *identity = cg_callable_dep_identity_name(cg, dep);
+    Buf key;
+
+    if (identity == NULL) {
+        return NULL;
+    }
+    buf_init(&key);
+    buf_append_cstr(&key, identity);
+    free(identity);
+    if (dep->owner_instance_type_ref != NULL) {
+        char *owner_key = cg_reifiable_sort_key(
+            dep->owner_instance_type_ref,
+            caller_type_param_names,
+            caller_type_param_count,
+            true);
+
+        if (owner_key == NULL) {
+            buf_free(&key);
+            return NULL;
+        }
+        buf_append_cstr(&key, "|owner=");
+        buf_append_cstr(&key, owner_key);
+        free(owner_key);
+    }
+    for (size_t index = 0U;
+         index < dep->callable_type_arg_count;
+         ++index) {
+        char *arg_key = cg_reifiable_sort_key(
+            dep->callable_type_args[index],
+            caller_type_param_names,
+            caller_type_param_count,
+            true);
+
+        if (arg_key == NULL) {
+            buf_free(&key);
+            return NULL;
+        }
+        buf_append_cstr(&key, "|arg=");
+        buf_append_cstr(&key, arg_key);
+        free(arg_key);
+    }
+    return key.data;
+}
+
+/* Build the canonical callable slot map for the active shared body. */
+static bool cg_activate_callable_dep_mapping(
+    CG *cg,
+    const FengReifiableDepSet *dep_set,
+    const FengSlice *caller_type_param_names,
+    size_t caller_type_param_count) {
+    char **keys;
+    size_t count = 0U;
+
+    for (size_t index = 0U; index < cg->generic_callable_dep_count; ++index) {
+        free(cg->generic_callable_dep_keys[index]);
+    }
+    free(cg->generic_callable_dep_keys);
+    cg->generic_callable_dep_keys = NULL;
+    cg->generic_callable_dep_count = 0U;
+    if (dep_set == NULL) {
+        return true;
+    }
+    for (size_t index = 0U;
+         index < dep_set->callable_dep_count;
+         ++index) {
+        if (cg_callable_dep_set_has_descriptor_data(
+                cg,
+                cg_callable_dep_set(cg,
+                                    &dep_set->callable_deps[index]))) {
+            ++count;
+        }
+    }
+    if (count == 0U) {
+        return true;
+    }
+    keys = (char **)calloc(count, sizeof(*keys));
+    if (keys == NULL) {
+        return cg_fail(cg, dep_set->owner_decl->token,
+                       "IE0001", "codegen: out of memory");
+    }
+    {
+        size_t next = 0U;
+
+        for (size_t index = 0U;
+             index < dep_set->callable_dep_count;
+             ++index) {
+            if (!cg_callable_dep_set_has_descriptor_data(
+                    cg,
+                    cg_callable_dep_set(
+                        cg, &dep_set->callable_deps[index]))) {
+                continue;
+            }
+            keys[next] = cg_callable_dep_sort_key(
+                cg,
+                &dep_set->callable_deps[index],
+                caller_type_param_names,
+                caller_type_param_count);
+            if (keys[next] == NULL) {
+                for (size_t free_index = 0U;
+                     free_index < next;
+                     ++free_index) {
+                    free(keys[free_index]);
+                }
+                free(keys);
+                return cg_fail(cg, dep_set->owner_decl->token,
+                               "IE0001", "codegen: out of memory");
+            }
+            ++next;
+        }
+    }
+    for (size_t index = 1U; index < count; ++index) {
+        char *current = keys[index];
+        size_t previous = index;
+
+        while (previous > 0U &&
+               strcmp(keys[previous - 1U], current) > 0) {
+            keys[previous] = keys[previous - 1U];
+            --previous;
+        }
+        keys[previous] = current;
+    }
+    cg->generic_callable_dep_keys = keys;
+    cg->generic_callable_dep_count = count;
+    return true;
+}
+
+/* Resolve the function descriptor argument for one generic shared callee in
+ * an active shared body. Dependency-free callees use an empty descriptor and
+ * therefore add no caller slot/read. */
+static char *cg_callable_descriptor_expr_for_dep(
+    CG *cg,
+    const FengReifiableCallableDep *dep,
+    FengToken blame) {
+    const FengReifiableDepSet *callee_dep_set;
+    FengSlice *param_names = NULL;
+    char *key = NULL;
+    char *result = NULL;
+
+    if (cg == NULL || dep == NULL) {
+        return NULL;
+    }
+    callee_dep_set = cg_callable_dep_set(cg, dep);
+    if (!cg_callable_dep_set_has_descriptor_data(cg, callee_dep_set)) {
+        char *identity = cg_callable_dep_identity_name(cg, dep);
+        Buf empty;
+
+        buf_init(&empty);
+        buf_append_fmt(
+            &empty,
+            "&(const FengFunctionDescriptor){.name = \"%s\"}",
+            identity != NULL ? identity : "generic callable");
+        free(identity);
+        return empty.data;
+    }
+    if (cg->generic_fn_type_param_count > 0U) {
+        param_names = (FengSlice *)calloc(
+            cg->generic_fn_type_param_count, sizeof(*param_names));
+        if (param_names == NULL) {
+            cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            return NULL;
+        }
+        for (size_t index = 0U;
+             index < cg->generic_fn_type_param_count;
+             ++index) {
+            param_names[index].data =
+                cg->generic_fn_type_param_names[index];
+            param_names[index].length = strlen(
+                cg->generic_fn_type_param_names[index]);
+        }
+    }
+    key = cg_callable_dep_sort_key(
+        cg,
+        dep,
+        param_names,
+        cg->generic_fn_type_param_count);
+    free(param_names);
+    if (key == NULL) {
+        cg_fail(cg, blame, "CE0295",
+                "codegen: failed to build generic callable dependency key");
+        return NULL;
+    }
+    for (size_t index = 0U;
+         index < cg->generic_callable_dep_count;
+         ++index) {
+        if (strcmp(key, cg->generic_callable_dep_keys[index]) == 0) {
+            Buf expression;
+
+            buf_init(&expression);
+            buf_append_fmt(
+                &expression,
+                "_desc->reified_callable_deps[%zu]",
+                index);
+            result = expression.data;
+            break;
+        }
+    }
+    free(key);
+    if (result == NULL) {
+        cg_fail(cg, blame, "CE0296",
+                "codegen: no reified callable dependency found for generic call");
+    }
+    return result;
+}
+
+/* Resolve one explicit call through the same canonical dependency identity
+ * used by synthesized callable sites. */
+static char *cg_callable_descriptor_expr_for_call(
+    CG *cg,
+    const FengExpr *call_expr,
+    FengToken blame) {
+    FengReifiableCallableDep dep;
+    const FengResolvedCallable *resolved;
+
+    if (cg == NULL || call_expr == NULL ||
+        call_expr->kind != FENG_EXPR_CALL) {
+        return NULL;
+    }
+    resolved = &call_expr->as.call.resolved_callable;
+    memset(&dep, 0, sizeof(dep));
+    dep.kind = resolved->kind;
+    dep.function_decl = resolved->function_decl;
+    dep.owner_type_decl = resolved->owner_type_decl;
+    dep.member = resolved->member;
+    dep.fit_decl = resolved->fit_decl;
+    dep.owner_instance_type_ref = resolved->owner_instance_type_ref;
+    dep.callable_type_args = resolved->callable_type_args;
+    dep.callable_type_arg_count = resolved->callable_type_arg_count;
+    return cg_callable_descriptor_expr_for_dep(cg, &dep, blame);
+}
+
+/* Materialize one callee's declaration-ordered parameter list and its closed
+ * caller-substituted type arguments. Caller frees both arrays and every
+ * returned type argument. */
+static bool cg_close_callable_dep_type_args(
+    CG *cg,
+    const FengReifiableCallableDep *dep,
+    const FengTypeParam *caller_type_params,
+    size_t caller_type_param_count,
+    FengTypeRef *const *caller_type_args,
+    FengToken blame,
+    FengTypeParam **out_params,
+    FengTypeRef ***out_args,
+    size_t *out_count) {
+    const FengTypeParam *owner_params = NULL;
+    const FengTypeParam *callable_params = NULL;
+    size_t owner_count = 0U;
+    size_t callable_count = 0U;
+    FengTypeParam *params = NULL;
+    FengTypeRef **args = NULL;
+
+    *out_params = NULL;
+    *out_args = NULL;
+    *out_count = 0U;
+    if (dep == NULL) {
+        return false;
+    }
+    if (dep->owner_type_decl != NULL &&
+        dep->owner_type_decl->kind == FENG_DECL_TYPE) {
+        owner_params = dep->owner_type_decl->as.type_decl.type_params;
+        owner_count = dep->owner_type_decl->as.type_decl.type_param_count;
+    }
+    if (dep->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
+        dep->function_decl != NULL) {
+        callable_params =
+            dep->function_decl->as.function_decl.type_params;
+        callable_count =
+            dep->function_decl->as.function_decl.type_param_count;
+    } else if (dep->member != NULL) {
+        callable_params = dep->member->as.callable.type_params;
+        callable_count = dep->member->as.callable.type_param_count;
+    }
+    if (owner_count > 0U &&
+        (dep->owner_instance_type_ref == NULL ||
+         dep->owner_instance_type_ref->kind != FENG_TYPE_REF_NAMED ||
+         dep->owner_instance_type_ref->as.named.type_arg_count !=
+             owner_count)) {
+        return cg_fail(cg, blame,
+                       "CE0292", "codegen: generic callable dependency is missing owner type arguments");
+    }
+    if (dep->callable_type_arg_count != callable_count) {
+        return cg_fail(cg, blame,
+                       "CE0293", "codegen: generic callable dependency has inconsistent callable type arguments");
+    }
+    if (owner_count + callable_count == 0U) {
+        return true;
+    }
+    params = (FengTypeParam *)calloc(
+        owner_count + callable_count, sizeof(*params));
+    args = (FengTypeRef **)calloc(
+        owner_count + callable_count, sizeof(*args));
+    if (params == NULL || args == NULL) {
+        free(params);
+        free(args);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    for (size_t index = 0U; index < owner_count; ++index) {
+        params[index] = owner_params[index];
+        args[index] = cg_type_ref_substitute(
+            dep->owner_instance_type_ref->as.named.type_args[index],
+            caller_type_params,
+            caller_type_param_count,
+            caller_type_args);
+        if (args[index] == NULL) {
+            goto failure;
+        }
+    }
+    for (size_t index = 0U; index < callable_count; ++index) {
+        params[owner_count + index] = callable_params[index];
+        args[owner_count + index] = cg_type_ref_substitute(
+            dep->callable_type_args[index],
+            caller_type_params,
+            caller_type_param_count,
+            caller_type_args);
+        if (args[owner_count + index] == NULL) {
+            goto failure;
+        }
+    }
+    *out_params = params;
+    *out_args = args;
+    *out_count = owner_count + callable_count;
+    return true;
+
+failure:
+    for (size_t index = 0U;
+         index < owner_count + callable_count;
+         ++index) {
+        cg_type_ref_free(args[index]);
+    }
+    free(args);
+    free(params);
+    return cg_fail(cg, blame,
+                   "CE0294", "codegen: failed to close callable dependency type arguments");
+}
+
+/* Emit one static function descriptor for a fully closed callable invocation.
+ * The dependency order is the same canonical sort used by the shared body. */
+static bool cg_emit_closed_callable_fdesc(CG *cg,
+                                          const FengReifiableDepSet *dep_set,
+                                          const FengTypeParam *type_params,
+                                          size_t type_param_count,
+                                          FengTypeRef *const *type_args,
+                                          const FengProgram *reference_program,
+                                          FengToken blame,
+                                          const char *identity_name,
+                                          const char *display_name,
+                                          char **out_expr) {
+    typedef struct ClosedDep {
+        size_t dep_index;
+        char *sort_key;
+        char *descriptor_name;
+    } ClosedDep;
+    typedef struct ClosedCallableDep {
+        size_t dep_index;
+        char *sort_key;
+        char *descriptor_expr;
+    } ClosedCallableDep;
+
+    FengSlice *param_names = NULL;
+    ClosedDep *aggregate_deps = NULL;
+    ClosedDep *managed_deps = NULL;
+    ClosedCallableDep *callable_deps = NULL;
+    size_t aggregate_count = 0U;
+    size_t managed_count = 0U;
+    size_t callable_count = 0U;
+    char *descriptor_var = NULL;
+    char *aggregate_var = NULL;
+    char *managed_var = NULL;
+    char *callable_var = NULL;
+    char *node_key = NULL;
+    CGClosedCallableDescriptorNode *node = NULL;
+    size_t node_index = (size_t)-1;
+    bool ok = false;
+
+    if (out_expr == NULL) {
+        return false;
+    }
+    *out_expr = NULL;
+
+    {
+        Buf key;
+
+        buf_init(&key);
+        buf_append_cstr(&key,
+                        identity_name != NULL
+                            ? identity_name
+                            : (display_name != NULL
+                                   ? display_name
+                                   : "generic callable"));
+        for (size_t index = 0U; index < type_param_count; ++index) {
+            char *type_key = cg_reifiable_sort_key(
+                type_args[index], NULL, 0U, true);
+
+            if (type_key == NULL) {
+                buf_free(&key);
+                goto cleanup;
+            }
+            buf_append_cstr(&key, "|");
+            buf_append_cstr(&key, type_key);
+            free(type_key);
+        }
+        node_key = key.data;
+    }
+    for (size_t index = 0U;
+         index < cg->closed_callable_descriptor_node_count;
+         ++index) {
+        if (strcmp(cg->closed_callable_descriptor_nodes[index].key,
+                   node_key) == 0) {
+            Buf expression;
+
+            buf_init(&expression);
+            buf_append_fmt(
+                &expression,
+                "&%s",
+                cg->closed_callable_descriptor_nodes[index].c_name);
+            *out_expr = expression.data;
+            ok = *out_expr != NULL;
+            goto cleanup;
+        }
+    }
+    if (cg->closed_callable_descriptor_node_count ==
+        cg->closed_callable_descriptor_node_capacity) {
+        size_t new_capacity =
+            cg->closed_callable_descriptor_node_capacity == 0U
+                ? 16U
+                : cg->closed_callable_descriptor_node_capacity * 2U;
+        CGClosedCallableDescriptorNode *grown =
+            (CGClosedCallableDescriptorNode *)realloc(
+                cg->closed_callable_descriptor_nodes,
+                new_capacity * sizeof(*grown));
+
+        if (grown == NULL) {
+            goto cleanup;
+        }
+        cg->closed_callable_descriptor_nodes = grown;
+        cg->closed_callable_descriptor_node_capacity = new_capacity;
+    }
+    node = &cg->closed_callable_descriptor_nodes[
+        cg->closed_callable_descriptor_node_count];
+    node_index = cg->closed_callable_descriptor_node_count;
+    memset(node, 0, sizeof(*node));
+    node->key = strdup(node_key);
+    {
+        Buf name;
+
+        buf_init(&name);
+        buf_append_fmt(
+            &name,
+            "_feng_closed_callable_desc_%zu",
+            cg->closed_callable_descriptor_node_count);
+        node->c_name = name.data;
+    }
+    if (node->key == NULL || node->c_name == NULL) {
+        free(node->key);
+        free(node->c_name);
+        memset(node, 0, sizeof(*node));
+        goto cleanup;
+    }
+    node->emitting = true;
+    cg->closed_callable_descriptor_node_count++;
+    buf_append_fmt(&cg->statics,
+                   "static const FengFunctionDescriptor %s;\n",
+                   node->c_name);
+
+    if (dep_set != NULL) {
+        for (size_t index = 0U; index < dep_set->dep_count; ++index) {
+            if (dep_set->deps[index].kind ==
+                FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
+                ++aggregate_count;
+            } else {
+                ++managed_count;
+            }
+        }
+        for (size_t index = 0U;
+             index < dep_set->callable_dep_count;
+             ++index) {
+            if (cg_callable_dep_set_has_descriptor_data(
+                    cg,
+                    cg_callable_dep_set(
+                        cg, &dep_set->callable_deps[index]))) {
+                ++callable_count;
+            }
+        }
+    }
+    if (type_param_count > 0U) {
+        param_names = (FengSlice *)calloc(type_param_count,
+                                          sizeof(*param_names));
+        if (param_names == NULL) {
+            goto cleanup;
+        }
+        for (size_t index = 0U; index < type_param_count; ++index) {
+            param_names[index] = type_params[index].name;
+        }
+    }
+    aggregate_deps = aggregate_count > 0U
+                         ? (ClosedDep *)calloc(aggregate_count,
+                                               sizeof(*aggregate_deps))
+                         : NULL;
+    managed_deps = managed_count > 0U
+                       ? (ClosedDep *)calloc(managed_count,
+                                             sizeof(*managed_deps))
+                       : NULL;
+    callable_deps = callable_count > 0U
+                        ? (ClosedCallableDep *)calloc(
+                              callable_count, sizeof(*callable_deps))
+                        : NULL;
+    if ((aggregate_count > 0U && aggregate_deps == NULL) ||
+        (managed_count > 0U && managed_deps == NULL) ||
+        (callable_count > 0U && callable_deps == NULL)) {
+        goto cleanup;
+    }
+
+    if (dep_set != NULL && callable_count > 0U) {
+        size_t callable_index = 0U;
+
+        for (size_t index = 0U;
+             index < dep_set->callable_dep_count;
+             ++index) {
+            const FengReifiableCallableDep *callable_dep =
+                &dep_set->callable_deps[index];
+
+            if (!cg_callable_dep_set_has_descriptor_data(
+                    cg, cg_callable_dep_set(cg, callable_dep))) {
+                continue;
+            }
+            callable_deps[callable_index].dep_index = index;
+            callable_deps[callable_index].sort_key =
+                cg_callable_dep_sort_key(
+                    cg,
+                    callable_dep,
+                    param_names,
+                    type_param_count);
+            if (callable_deps[callable_index].sort_key == NULL) {
+                goto cleanup;
+            }
+            ++callable_index;
+        }
+    }
+
+    if (dep_set != NULL) {
+        size_t aggregate_index = 0U;
+        size_t managed_index = 0U;
+
+        for (size_t index = 0U; index < dep_set->dep_count; ++index) {
+            ClosedDep *slot;
+
+            if (dep_set->deps[index].kind ==
+                FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
+                slot = &aggregate_deps[aggregate_index++];
+            } else {
+                slot = &managed_deps[managed_index++];
+            }
+            slot->dep_index = index;
+            slot->sort_key = cg_reifiable_sort_key(
+                dep_set->deps[index].type_ref,
+                param_names,
+                type_param_count,
+                true);
+            if (slot->sort_key == NULL) {
+                goto cleanup;
+            }
+        }
+    }
+
+#define SORT_CLOSED_DEPS(items, count)                                           \
+    do {                                                                         \
+        for (size_t _i = 1U; _i < (count); ++_i) {                              \
+            ClosedDep _current = (items)[_i];                                    \
+            size_t _j = _i;                                                      \
+            while (_j > 0U &&                                                    \
+                   strcmp((items)[_j - 1U].sort_key,                             \
+                          _current.sort_key) > 0) {                              \
+                (items)[_j] = (items)[_j - 1U];                                  \
+                --_j;                                                            \
+            }                                                                    \
+            (items)[_j] = _current;                                              \
+        }                                                                        \
+    } while (0)
+
+    SORT_CLOSED_DEPS(aggregate_deps, aggregate_count);
+    SORT_CLOSED_DEPS(managed_deps, managed_count);
+#undef SORT_CLOSED_DEPS
+    for (size_t index = 1U; index < callable_count; ++index) {
+        ClosedCallableDep current = callable_deps[index];
+        size_t previous = index;
+
+        while (previous > 0U &&
+               strcmp(callable_deps[previous - 1U].sort_key,
+                      current.sort_key) > 0) {
+            callable_deps[previous] = callable_deps[previous - 1U];
+            --previous;
+        }
+        callable_deps[previous] = current;
+    }
+
+    for (size_t index = 0U; index < aggregate_count; ++index) {
+        aggregate_deps[index].descriptor_name =
+            cg_resolve_dep_descriptor_name(
+                cg,
+                dep_set->deps[aggregate_deps[index].dep_index].type_ref,
+                type_params,
+                type_param_count,
+                type_args,
+                reference_program,
+                FENG_REIFIABLE_DEP_KIND_AGGREGATE,
+                &blame);
+        if (aggregate_deps[index].descriptor_name == NULL) {
+            goto cleanup;
+        }
+    }
+    for (size_t index = 0U; index < managed_count; ++index) {
+        managed_deps[index].descriptor_name =
+            cg_resolve_dep_descriptor_name(
+                cg,
+                dep_set->deps[managed_deps[index].dep_index].type_ref,
+                type_params,
+                type_param_count,
+                type_args,
+                reference_program,
+                FENG_REIFIABLE_DEP_KIND_MANAGED,
+                &blame);
+        if (managed_deps[index].descriptor_name == NULL) {
+            goto cleanup;
+        }
+    }
+    for (size_t index = 0U; index < callable_count; ++index) {
+        const FengReifiableCallableDep *callable_dep =
+            &dep_set->callable_deps[callable_deps[index].dep_index];
+        const FengReifiableDepSet *callee_dep_set =
+            cg_callable_dep_set(cg, callable_dep);
+        const FengDecl *reference_decl =
+            callable_dep->function_decl != NULL
+                ? callable_dep->function_decl
+                : (callable_dep->fit_decl != NULL
+                       ? callable_dep->fit_decl
+                       : callable_dep->owner_type_decl);
+        FengTypeParam *callee_params = NULL;
+        FengTypeRef **callee_args = NULL;
+        size_t callee_count = 0U;
+        char *callee_identity = NULL;
+        char *callee_display = NULL;
+
+        if (!cg_close_callable_dep_type_args(
+                cg,
+                callable_dep,
+                type_params,
+                type_param_count,
+                type_args,
+                blame,
+                &callee_params,
+                &callee_args,
+                &callee_count)) {
+            goto cleanup;
+        }
+        callee_identity =
+            cg_callable_dep_identity_name(cg, callable_dep);
+        if (callable_dep->function_decl != NULL) {
+            FengSlice name =
+                callable_dep->function_decl->as.function_decl.name;
+            callee_display = strndup(name.data, name.length);
+        } else if (callable_dep->member != NULL) {
+            FengSlice name = callable_dep->member->as.callable.name;
+            callee_display = strndup(name.data, name.length);
+        }
+        if (callee_identity == NULL || callee_display == NULL ||
+            !cg_emit_closed_callable_fdesc(
+                cg,
+                callee_dep_set,
+                callee_params,
+                callee_count,
+                callee_args,
+                cg_find_decl_owner_program(cg, reference_decl),
+                blame,
+                callee_identity,
+                callee_display,
+                &callable_deps[index].descriptor_expr)) {
+            free(callee_identity);
+            free(callee_display);
+            for (size_t arg_index = 0U;
+                 arg_index < callee_count;
+                 ++arg_index) {
+                cg_type_ref_free(callee_args[arg_index]);
+            }
+            free(callee_args);
+            free(callee_params);
+            goto cleanup;
+        }
+        free(callee_identity);
+        free(callee_display);
+        for (size_t arg_index = 0U;
+             arg_index < callee_count;
+             ++arg_index) {
+            cg_type_ref_free(callee_args[arg_index]);
+        }
+        free(callee_args);
+        free(callee_params);
+    }
+
+    node = node_index < cg->closed_callable_descriptor_node_count
+               ? &cg->closed_callable_descriptor_nodes[node_index]
+               : NULL;
+    descriptor_var = node != NULL ? strdup(node->c_name) : NULL;
+    if (descriptor_var == NULL) {
+        goto cleanup;
+    }
+    if (aggregate_count > 0U) {
+        Buf name;
+        buf_init(&name);
+        buf_append_fmt(&name, "%s__agg", descriptor_var);
+        aggregate_var = name.data;
+        if (aggregate_var == NULL) {
+            goto cleanup;
+        }
+        buf_append_fmt(&cg->statics,
+            "static const FengAggregateDescriptor *const %s[] = {",
+            aggregate_var);
+        for (size_t index = 0U; index < aggregate_count; ++index) {
+            buf_append_fmt(&cg->statics,
+                           "%s&%s",
+                           index == 0U ? "" : ", ",
+                           aggregate_deps[index].descriptor_name);
+        }
+        buf_append_cstr(&cg->statics, "};\n");
+    }
+    if (managed_count > 0U) {
+        Buf name;
+        buf_init(&name);
+        buf_append_fmt(&name, "%s__type", descriptor_var);
+        managed_var = name.data;
+        if (managed_var == NULL) {
+            goto cleanup;
+        }
+        buf_append_fmt(&cg->statics,
+            "static const FengTypeDescriptor *const %s[] = {",
+            managed_var);
+        for (size_t index = 0U; index < managed_count; ++index) {
+            buf_append_fmt(&cg->statics,
+                           "%s&%s",
+                           index == 0U ? "" : ", ",
+                           managed_deps[index].descriptor_name);
+        }
+        buf_append_cstr(&cg->statics, "};\n");
+    }
+    if (callable_count > 0U) {
+        Buf name;
+        buf_init(&name);
+        buf_append_fmt(&name, "%s__callable", descriptor_var);
+        callable_var = name.data;
+        if (callable_var == NULL) {
+            goto cleanup;
+        }
+        buf_append_fmt(&cg->statics,
+                       "static const FengFunctionDescriptor *const %s[] = {",
+                       callable_var);
+        for (size_t index = 0U; index < callable_count; ++index) {
+            buf_append_fmt(&cg->statics,
+                           "%s%s",
+                           index == 0U ? "" : ", ",
+                           callable_deps[index].descriptor_expr);
+        }
+        buf_append_cstr(&cg->statics, "};\n");
+    }
+    buf_append_fmt(&cg->statics,
+                   "static const FengFunctionDescriptor %s = {"
+                   ".name = \"%s\"",
+                   descriptor_var,
+                   display_name != NULL ? display_name : "generic callable");
+    if (aggregate_count > 0U) {
+        buf_append_fmt(&cg->statics,
+                       ", .reified_agg_deps_count = %zu, "
+                       ".reified_agg_deps = %s",
+                       aggregate_count,
+                       aggregate_var);
+    }
+    if (managed_count > 0U) {
+        buf_append_fmt(&cg->statics,
+                       ", .reified_type_deps_count = %zu, "
+                       ".reified_type_deps = %s",
+                       managed_count,
+                       managed_var);
+    }
+    if (callable_count > 0U) {
+        buf_append_fmt(&cg->statics,
+                       ", .reified_callable_deps_count = %zu, "
+                       ".reified_callable_deps = %s",
+                       callable_count,
+                       callable_var);
+    }
+    buf_append_cstr(&cg->statics, "};\n");
+    node->emitting = false;
+    node->emitted = true;
+
+    {
+        Buf expression;
+        buf_init(&expression);
+        buf_append_fmt(&expression, "&%s", descriptor_var);
+        *out_expr = expression.data;
+    }
+    ok = *out_expr != NULL;
+
+cleanup:
+    if (!ok && !cg->failed) {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    if (aggregate_deps != NULL) {
+        for (size_t index = 0U; index < aggregate_count; ++index) {
+            free(aggregate_deps[index].sort_key);
+            free(aggregate_deps[index].descriptor_name);
+        }
+    }
+    if (managed_deps != NULL) {
+        for (size_t index = 0U; index < managed_count; ++index) {
+            free(managed_deps[index].sort_key);
+            free(managed_deps[index].descriptor_name);
+        }
+    }
+    if (callable_deps != NULL) {
+        for (size_t index = 0U; index < callable_count; ++index) {
+            free(callable_deps[index].sort_key);
+            free(callable_deps[index].descriptor_expr);
+        }
+    }
+    free(aggregate_deps);
+    free(managed_deps);
+    free(callable_deps);
+    free(param_names);
+    free(node_key);
+    free(descriptor_var);
+    free(aggregate_var);
+    free(managed_var);
+    free(callable_var);
+    return ok;
+}
+
 /* Resolve one descriptor family for a concrete builtin-array fit call.  The
  * result order must match the shared body's independently sorted dependency
  * map so both sides address the same descriptor index. */
@@ -33178,22 +35716,25 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         /* Erased return type T: dispatch via the descriptor for T. */
         size_t idx = cg->cur_return_type->generic_param_index;
         const char *desc = cg->generic_fn_type_param_descs[idx];
-        cg_release_through(cg, NULL);
-        cg_emit_return_control_cleanup(cg);
+        /* Establish the caller-owned +1 result before releasing local
+         * storage.  A borrowed local may be the final owner in this frame;
+         * releasing first would read freed bytes. */
         if (r.owns_ref) {
             buf_append_fmt(cg->cur_body,
                 "    switch (%s->kind) {\n"
                 "        case FENG_VALUE_TRIVIAL:\n"
                 "            memcpy(_out, %s, feng_generic_value_size(%s)); break;\n"
                 "        case FENG_VALUE_MANAGED_POINTER:\n"
-                "            *(void **)_out = *(void *const *)%s; break;\n"
+                "            *(void **)_out = *(void *const *)%s;\n"
+                "            *(void **)%s = NULL; break;\n"
                 "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-                "            memcpy(_out, %s, feng_generic_value_size(%s)); break;\n"
-                "    }\n"
-                "    return;\n",
+                "            memcpy(_out, %s, feng_generic_value_size(%s));\n"
+                "            memset(%s, 0, feng_generic_value_size(%s)); break;\n"
+                "    }\n",
                 desc,
                 r.c_expr, desc,
-                r.c_expr,
+                r.c_expr, r.c_expr,
+                r.c_expr, desc,
                 r.c_expr, desc);
         } else {
             buf_append_fmt(cg->cur_body,
@@ -33208,14 +35749,16 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
                 "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
                 "            feng_aggregate_retain((void *)%s, feng_generic_aggregate_descriptor(%s));\n"
                 "            memcpy(_out, %s, feng_generic_value_size(%s)); break;\n"
-                "    }\n"
-                "    return;\n",
+                "    }\n",
                 desc,
                 r.c_expr, desc,
                 r.c_expr,
                 r.c_expr, desc,
                 r.c_expr, desc);
         }
+        cg_release_through(cg, NULL);
+        cg_emit_return_control_cleanup(cg);
+        buf_append_cstr(cg->cur_body, "    return;\n");
         er_free(&r);
         return true;
     }
@@ -33666,6 +36209,36 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                     free(fn_tp_names_rad);
                 }
             }
+        }
+
+        {
+            const FengReifiableDepSet *fn_callable_set =
+                feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl);
+            FengSlice *active_param_names = tp_count > 0U
+                ? (FengSlice *)calloc(
+                      tp_count, sizeof(*active_param_names))
+                : NULL;
+
+            if (tp_count > 0U && active_param_names == NULL) {
+                cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
+                cg->cur_scope = NULL;
+                scope_pop_free(fn_scope);
+                goto cleanup_params;
+            }
+            for (size_t index = 0U; index < tp_count; ++index) {
+                active_param_names[index] = sig->type_params[index].name;
+            }
+            if (!cg_activate_callable_dep_mapping(
+                    cg,
+                    fn_callable_set,
+                    active_param_names,
+                    tp_count)) {
+                free(active_param_names);
+                cg->cur_scope = NULL;
+                scope_pop_free(fn_scope);
+                goto cleanup_params;
+            }
+            free(active_param_names);
         }
 
         if (!cg_emit_function_eh_prologue(cg, decl->token)) {
@@ -34503,163 +37076,77 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
 
     /* ---- Step 5: determine concrete return type ---- */
     CGType *concrete_return = NULL;
-    {
-        /* Temporarily re-enable type-param resolution to resolve the
-         * return type ref.  The result may be CG_TYPE_GENERIC_PARAM,
-         * which we then substitute. */
-        cg->in_generic_fn = true;
-        cg->generic_return_uses_out = false;
-        cg->generic_fn_type_param_count = tp_count;
-        cg->generic_fn_type_param_names = gfn->type_param_names;
-        cg->generic_fn_type_param_constraints = NULL;
-        cg->generic_fn_type_param_descs = NULL;
-        CGType *rt = NULL;
-        if (sig->return_type) {
-            ok = cg_resolve_type(cg, sig->return_type, &e->token, &rt);
-        } else {
-            rt = cgtype_new(CG_TYPE_VOID);
-            ok = (rt != NULL);
-        }
-        cg->in_generic_fn = saved_in_generic_fn;
-        cg->generic_return_uses_out = saved_generic_return_uses_out;
-        cg->generic_fn_type_param_count = saved_tp_count;
-        cg->generic_fn_type_param_names = saved_tp_names;
-        cg->generic_fn_type_param_constraints = saved_tp_constraints;
-        cg->generic_fn_type_param_descs = saved_tp_descs;
-        if (!ok || !rt) {
-            cgtype_free(rt);
-            for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
-            free(arg_addr_exprs);
-            for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
-            free(desc_exprs);
-            goto bail;
-        }
-        if (rt->kind == CG_TYPE_GENERIC_PARAM) {
-            size_t idx = rt->generic_param_index;
-            cgtype_free(rt);
-            concrete_return = idx < tp_count ? cgtype_clone(type_args[idx]) : NULL;
-            if (!concrete_return) {
-                cg_fail(cg, e->token, "CE0309", "codegen: cannot determine concrete return type");
-                for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
-                free(arg_addr_exprs);
-                for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
-                free(desc_exprs);
-                goto bail;
-            }
-        } else {
-            concrete_return = rt;
-        }
-    }
-    if (concrete_return != NULL &&
-        concrete_return->kind == CG_TYPE_OBJECT &&
-        concrete_return->user != NULL &&
-        concrete_return->user->is_generic_instance &&
-        concrete_return->user->generic_context_type_param_count > 0U &&
-        concrete_return->user->generic_origin_decl != NULL) {
-        const GenericTypeDecl *return_generic_decl = cg_find_generic_type_decl_by_decl(
-            cg,
-            concrete_return->user->generic_origin_decl);
-        FengTypeRef **return_type_args = concrete_return->user->generic_type_arg_count > 0U
-            ? calloc(concrete_return->user->generic_type_arg_count, sizeof *return_type_args)
-            : NULL;
-        bool return_type_args_ok = return_generic_decl != NULL &&
-            (concrete_return->user->generic_type_arg_count == 0U || return_type_args != NULL);
-
-        for (size_t i = 0; return_type_args_ok && i < concrete_return->user->generic_type_arg_count; ++i) {
-            CGType *resolved_arg = NULL;
-            size_t direct_tp_index = 0U;
-
-            if (cg_type_ref_is_direct_type_param(concrete_return->user->generic_type_args[i],
-                                                sig->type_params,
-                                                tp_count,
-                                                &direct_tp_index)) {
-                if (direct_tp_index >= tp_count) {
-                    return_type_args_ok = false;
-                    break;
-                }
-                return_type_args[i] = cg_type_ref_from_cgtype(cg,
-                                                              type_args[direct_tp_index],
-                                                              e->token);
-            } else {
-                if (!cg_resolve_type(cg,
-                                     concrete_return->user->generic_type_args[i],
-                                     &e->token,
-                                     &resolved_arg)) {
-                    return_type_args_ok = false;
-                    break;
-                }
-                return_type_args[i] = cg_type_ref_from_cgtype(cg, resolved_arg, e->token);
-                cgtype_free(resolved_arg);
-            }
-            if (return_type_args[i] == NULL) {
-                return_type_args_ok = false;
-            }
-        }
-        if (return_type_args_ok &&
-            !cg_register_generic_type_instance_shell(cg,
-                                                     return_generic_decl,
-                                                     return_type_args,
-                                                     concrete_return->user->generic_type_arg_count,
-                                                     e->token,
-                                                     NULL)) {
-            return_type_args_ok = false;
-        }
-        if (!return_type_args_ok) {
-            for (size_t i = 0; i < concrete_return->user->generic_type_arg_count; ++i) {
-                cg_type_ref_free(return_type_args != NULL ? return_type_args[i] : NULL);
-            }
-            free(return_type_args);
-            for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
-            free(arg_addr_exprs);
-            for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
-            free(desc_exprs);
-            goto bail;
-        }
-        UserType *registered_return = cg_find_generic_instance_user_type(
-            cg,
-            concrete_return->user->generic_origin_decl,
-            return_type_args,
-            concrete_return->user->generic_type_arg_count);
-        for (size_t i = 0; i < concrete_return->user->generic_type_arg_count; ++i) {
-            cg_type_ref_free(return_type_args[i]);
-        }
-        free(return_type_args);
-        if (registered_return != NULL) {
-            if (registered_return->field_count == 0U &&
-                registered_return->decl != NULL &&
-                registered_return->decl->kind == FENG_DECL_TYPE &&
-                registered_return->decl->as.type_decl.member_count > 0U) {
-                const FengProgram *saved_program = cg->cur_program;
-                cg->cur_program = registered_return->instantiation_program != NULL
-                    ? registered_return->instantiation_program
-                    : registered_return->owner_program;
-                if (!cg_register_user_type_members(cg, registered_return, FENG_COMPILE_TARGET_BIN)) {
-                    cg->cur_program = saved_program;
-                    for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
-                    free(arg_addr_exprs);
-                    for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
-                    free(desc_exprs);
-                    goto bail;
-                }
-                if (cg_user_type_is_value_semantics(registered_return)) {
-                    cg_emit_value_type_struct_body(cg, registered_return);
-                }
-                cg_emit_user_type_forward(cg, registered_return);
-                cg_emit_user_type_definition(cg, registered_return);
-                cg->cur_program = saved_program;
-            }
-            concrete_return->user = registered_return;
-        }
+    if (!cg_resolve_selected_callable_return_type(
+            cg, e, sig, e->token, &concrete_return)) {
+        for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
+        free(arg_addr_exprs);
+        for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
+        free(desc_exprs);
+        goto bail;
     }
     bool has_out_param = (concrete_return->kind != CG_TYPE_VOID);
 
     /* ---- Step 5½: generate FengFunctionDescriptor (§2.4) ---- */
+    char *call_func_desc_expr = NULL;
+    {
+        const FengReifiableDepSet *fn_dep_set =
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis, gfn->decl);
+
+        if (saved_in_generic_fn) {
+            call_func_desc_expr =
+                cg_callable_descriptor_expr_for_call(cg, e, e->token);
+        } else {
+            FengTypeRef **concrete_type_refs = tp_count > 0U
+                ? (FengTypeRef **)calloc(
+                      tp_count, sizeof(*concrete_type_refs))
+                : NULL;
+            bool refs_ok = tp_count == 0U || concrete_type_refs != NULL;
+
+            for (size_t index = 0U; index < tp_count && refs_ok; ++index) {
+                concrete_type_refs[index] =
+                    cg_type_ref_from_cgtype(cg, type_args[index], e->token);
+                refs_ok = concrete_type_refs[index] != NULL;
+            }
+            if (refs_ok) {
+                refs_ok = cg_emit_closed_callable_fdesc(
+                    cg,
+                    fn_dep_set,
+                    sig->type_params,
+                    tp_count,
+                    concrete_type_refs,
+                    gfn->owner_program,
+                    e->token,
+                    gfn->c_name,
+                    gfn->feng_name,
+                    &call_func_desc_expr);
+            }
+            for (size_t index = 0U; index < tp_count; ++index) {
+                cg_type_ref_free(
+                    concrete_type_refs != NULL
+                        ? concrete_type_refs[index]
+                        : NULL);
+            }
+            free(concrete_type_refs);
+            if (!refs_ok && !cg->failed) {
+                cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+            }
+        }
+        if (call_func_desc_expr == NULL) {
+            for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
+            free(arg_addr_exprs);
+            for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
+            free(desc_exprs);
+            cgtype_free(concrete_return);
+            goto bail;
+        }
+    }
     bool has_fn_desc = false;
     {
         const FengReifiableDepSet *fn_dep_set =
             feng_semantic_lookup_reifiable_dep_set(cg->analysis, gfn->decl);
 
-        if (fn_dep_set != NULL && fn_dep_set->dep_count > 0U) {
+        if (call_func_desc_expr == NULL &&
+            fn_dep_set != NULL && fn_dep_set->dep_count > 0U) {
             const FengCallableSignature *fn_sig = &gfn->decl->as.function_decl;
 
             /* Build FengTypeRef* array for concrete type args. */
@@ -34854,16 +37341,59 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
 
     /* ---- Step 6: allocate result local and emit the call ---- */
     char *ret_cname = NULL;
+    char *ret_erased_descriptor_name = NULL;
+    char *ret_erased_size_name = NULL;
+    char *ret_reified_descriptor_name = NULL;
+    char *ret_reified_size_name = NULL;
+    bool return_uses_erased_generic_storage =
+        has_out_param && concrete_return->kind == CG_TYPE_GENERIC_PARAM;
+    bool return_uses_reified_storage =
+        has_out_param &&
+        cg_type_uses_reified_storage(cg, concrete_return);
     if (has_out_param) {
         ret_cname = cg_fresh_temp(cg, "_gr");
-        char *cty = cg_ctype_dup(concrete_return);
-        /* Zero-init so managed slots start NULL. */
-        buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
-        free(cty);
+        if (ret_cname == NULL) {
+            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+            goto generic_call_result_failure;
+        }
+        if (return_uses_erased_generic_storage) {
+            if (!cg_emit_erased_generic_storage_declaration(
+                    cg,
+                    concrete_return,
+                    ret_cname,
+                    e->token,
+                    &ret_erased_descriptor_name,
+                    &ret_erased_size_name)) {
+                goto generic_call_result_failure;
+            }
+        } else if (return_uses_reified_storage) {
+            if (!cg_emit_reified_storage_declaration(
+                    cg,
+                    concrete_return,
+                    ret_cname,
+                    e->token,
+                    &ret_reified_descriptor_name,
+                    &ret_reified_size_name)) {
+                goto generic_call_result_failure;
+            }
+        } else {
+            char *cty = cg_ctype_dup(concrete_return);
+
+            if (cty == NULL) {
+                cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                goto generic_call_result_failure;
+            }
+            /* The callee establishes every returned slot through `_out`. */
+            buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
+            free(cty);
+        }
     }
 
     /* Emit the call expression. §6.7: pass &desc as first arg. */
-    if (has_fn_desc) {
+    if (call_func_desc_expr != NULL) {
+        buf_append_fmt(cg->cur_body, "    %s(%s",
+                       gfn->c_name, call_func_desc_expr);
+    } else if (has_fn_desc) {
         buf_append_fmt(cg->cur_body, "    %s(&%s__desc",
                        gfn->c_name, gfn->c_name);
     } else {
@@ -34881,7 +37411,10 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     }
     if (has_out_param) {
         buf_append_cstr(cg->cur_body, ", ");
-        buf_append_fmt(cg->cur_body, "&%s", ret_cname);
+        buf_append_fmt(cg->cur_body,
+                       (return_uses_erased_generic_storage ||
+                        return_uses_reified_storage) ? "%s" : "&%s",
+                       ret_cname);
     }
     buf_append_cstr(cg->cur_body, ");\n");
 
@@ -34889,34 +37422,98 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     if (has_out_param) {
         out->c_expr = strdup(ret_cname);
         out->type = concrete_return;
-        out->owns_ref = cgtype_is_managed(concrete_return) ||
-                        cgtype_is_aggregate(concrete_return);
-        if (out->owns_ref) {
-            if (!cg_register_local_for_cleanup(cg, ret_cname, concrete_return, e->token)) {
+        if (return_uses_erased_generic_storage) {
+            if (out->c_expr == NULL ||
+                !cg_register_erased_generic_storage_for_cleanup(
+                    cg,
+                    ret_cname,
+                    concrete_return,
+                    ret_erased_descriptor_name,
+                    ret_erased_size_name,
+                    e->token)) {
                 free(out->c_expr);
                 out->c_expr = NULL;
                 out->type = NULL;
                 cgtype_free(concrete_return);
-                for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
-                free(arg_addr_exprs);
-                for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
-                free(desc_exprs);
-                for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
-                free(args);
-                for (size_t i = 0; i < tp_count; i++) cgtype_free(type_args[i]);
-                free(type_args);
-                free(ret_cname);
-                return false;
+                goto generic_call_result_failure_without_return_type;
             }
-            /* For aggregate (spec fat value) and managed (refcounted
-             * heap object) returns: the cleanup chain now owns the +1
-             * reference.  Callers that create an alias (let binding,
-             * materialize-to-local, return) must retain before aliasing,
-             * so signal the value as borrowed (owns_ref=false).  Without
-             * this, a `let w = make<T>();` would copy the borrowed pointer
-             * into a new cleanup-registered local, and both cleanups would
-             * release the same +1 — double-free at scope exit. */
             out->owns_ref = false;
+            out->is_addressable = true;
+            out->is_storage_address = true;
+            out->uses_erased_generic_storage = true;
+            out->erased_generic_descriptor_c_name =
+                ret_erased_descriptor_name;
+            out->erased_generic_size_c_name = ret_erased_size_name;
+            ret_erased_descriptor_name = NULL;
+            ret_erased_size_name = NULL;
+        } else if (return_uses_reified_storage) {
+            if (out->c_expr == NULL ||
+                !scope_add(cg->cur_scope,
+                           ret_cname,
+                           ret_cname,
+                           cgtype_clone(concrete_return),
+                           false) ||
+                !scope_mark_last_reified_storage(
+                    cg->cur_scope,
+                    ret_reified_descriptor_name,
+                    ret_reified_size_name)) {
+                free(out->c_expr);
+                out->c_expr = NULL;
+                out->type = NULL;
+                cgtype_free(concrete_return);
+                cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                goto generic_call_result_failure_without_return_type;
+            }
+            cg_emit_cleanup_push_for_reified_aggregate_storage(
+                cg, ret_cname, ret_reified_descriptor_name);
+            out->owns_ref = false;
+            out->is_addressable = true;
+            out->is_storage_address = true;
+            out->uses_reified_storage = true;
+            out->reified_descriptor_c_name =
+                ret_reified_descriptor_name;
+            out->reified_size_c_name = ret_reified_size_name;
+            ret_reified_descriptor_name = NULL;
+            ret_reified_size_name = NULL;
+        } else {
+            out->owns_ref = cgtype_is_managed(concrete_return) ||
+                            cgtype_is_aggregate(concrete_return);
+            if (out->owns_ref) {
+                if (!cg_register_local_for_cleanup(
+                        cg, ret_cname, concrete_return, e->token)) {
+                    free(out->c_expr);
+                    out->c_expr = NULL;
+                    out->type = NULL;
+                    cgtype_free(concrete_return);
+                    for (size_t i = 0; i < arg_count; i++) {
+                        free(arg_addr_exprs[i]);
+                    }
+                    free(arg_addr_exprs);
+                    for (size_t i = 0; i < tp_count; i++) {
+                        free(desc_exprs[i]);
+                    }
+                    free(desc_exprs);
+                    for (size_t i = 0; i < arg_count; i++) {
+                        er_free(&args[i]);
+                    }
+                    free(args);
+                    for (size_t i = 0; i < tp_count; i++) {
+                        cgtype_free(type_args[i]);
+                    }
+                    free(type_args);
+                    free(ret_cname);
+                    return false;
+                }
+                /* For aggregate (spec fat value) and managed (refcounted
+                 * heap object) returns: the cleanup chain now owns the +1
+                 * reference. Callers that create an alias (let binding,
+                 * materialize-to-local, return) must retain before aliasing,
+                 * so signal the value as borrowed (owns_ref=false). Without
+                 * this, a `let w = make<T>();` would copy the borrowed pointer
+                 * into a new cleanup-registered local, and both cleanups would
+                 * release the same +1 — double-free at scope exit. */
+                out->owns_ref = false;
+            }
         }
     } else {
         out->c_expr = strdup("((void)0)");
@@ -34934,7 +37531,31 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     for (size_t i = 0; i < tp_count; i++) cgtype_free(type_args[i]);
     free(type_args);
     free(ret_cname);
+    free(ret_erased_descriptor_name);
+    free(ret_erased_size_name);
+    free(ret_reified_descriptor_name);
+    free(ret_reified_size_name);
+    free(call_func_desc_expr);
     return out->c_expr && out->type;
+
+generic_call_result_failure:
+    cgtype_free(concrete_return);
+generic_call_result_failure_without_return_type:
+    for (size_t i = 0; i < arg_count; i++) free(arg_addr_exprs[i]);
+    free(arg_addr_exprs);
+    for (size_t i = 0; i < tp_count; i++) free(desc_exprs[i]);
+    free(desc_exprs);
+    for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
+    free(args);
+    for (size_t i = 0; i < tp_count; i++) cgtype_free(type_args[i]);
+    free(type_args);
+    free(ret_cname);
+    free(ret_erased_descriptor_name);
+    free(ret_erased_size_name);
+    free(ret_reified_descriptor_name);
+    free(ret_reified_size_name);
+    free(call_func_desc_expr);
+    return false;
 
 bail:
     for (size_t i = 0; i < arg_count; i++) er_free(&args[i]);
@@ -38565,6 +41186,10 @@ static bool cg_collect_generic_instances_from_expr(CG *cg, const FengExpr *expr,
                                                           expr->as.generic_target.target,
                                                           scope);
         case FENG_EXPR_CALL:
+            if (!cg_collect_resolved_call_reifiable_dep_instances(
+                    cg, expr, scope)) {
+                return false;
+            }
             if (expr->as.call.has_explicit_type_args) {
                 for (size_t i = 0; i < expr->as.call.explicit_type_arg_count; ++i) {
                     if (!cg_collect_generic_instances_from_type_ref(cg,
@@ -39268,7 +41893,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                             member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) {
                             continue;
                         }
-                        if (!cg_emit_generic_type_method_shared(cg, d, member, target, false, NULL)) return false;
+                        if (!cg_emit_generic_type_method_shared(
+                                cg, d, member, target,
+                                member->kind == FENG_TYPE_MEMBER_METHOD,
+                                NULL)) return false;
                     }
                     for (size_t k = 0; k < cg->user_type_count; ++k) {
                         const UserType *ut = &cg->user_types[k];
@@ -39324,7 +41952,7 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                         if (!cg_emit_generic_type_method_shared(cg,
                                                                d,
                                                                ut->methods[mi].member,
-                                                               target, false, NULL) ||
+                                                               target, true, NULL) ||
                             !cg_emit_generic_type_method_wrapper(cg,
                                                                  ut,
                                                                  &ut->methods[mi],
@@ -39349,7 +41977,7 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                         if (!cg_emit_generic_type_method_shared(cg,
                                                                d,
                                                                ut->static_methods[mi].member,
-                                                               target, false, NULL) ||
+                                                               target, true, NULL) ||
                             !cg_emit_generic_type_method_wrapper(cg,
                                                                  ut,
                                                                  &ut->static_methods[mi],
@@ -40078,7 +42706,19 @@ static bool cg_emit_all_programs(CG *cg,
             continue;
         }
         for (size_t mi = 0; mi < t->method_count; mi++) {
-            cg_emit_user_method_proto(&cg->fn_protos, t, &t->methods[mi], false);
+            const UserMethod *method = &t->methods[mi];
+            const FengCallableSignature *signature =
+                method->member != NULL ? &method->member->as.callable : NULL;
+
+            if (signature != NULL && signature->type_param_count > 0U) {
+                if (!cg_emit_imported_generic_method_shared_proto(
+                        cg, t, method)) {
+                    return false;
+                }
+            } else {
+                cg_emit_user_method_proto(
+                    &cg->fn_protos, t, method, false);
+            }
         }
         for (size_t mi = 0; mi < t->static_method_count; mi++) {
             const UserMethod *sm = &t->static_methods[mi];
@@ -40087,44 +42727,10 @@ static bool cg_emit_all_programs(CG *cg,
             size_t sm_tp_count = sm_sig != NULL ? sm_sig->type_param_count : 0U;
 
             if (sm_tp_count > 0U && t->decl != NULL) {
-                /* Imported generic static method on a non-generic type:
-                 * emit dispatch-style forward declaration using the
-                 * exported FengGenericMethod__ symbol name. */
-                char *sm_shared = cg_generic_type_method_shared_cname(
-                    cg, t->decl, sm->member);
-                if (sm_shared == NULL) {
-                    return cg_fail(cg, sm->member->token, "IE0001",
-                                   "codegen: out of memory");
+                if (!cg_emit_imported_generic_method_shared_proto(
+                        cg, t, sm)) {
+                    return false;
                 }
-                bool has_out = sm->return_type != NULL &&
-                               sm->return_type->kind != CG_TYPE_VOID;
-                buf_append_fmt(&cg->fn_protos, "void %s(", sm_shared);
-                const char *sm_td_type = cg_user_type_is_value(t)
-                    ? "FengAggregateDescriptor" : "FengTypeDescriptor";
-                buf_append_fmt(&cg->fn_protos,
-                                "const %s *_type_desc", sm_td_type);
-                for (size_t tpi = 0; tpi < sm_tp_count; ++tpi) {
-                    buf_append_cstr(&cg->fn_protos, ", ");
-                    buf_append_fmt(&cg->fn_protos,
-                                   "const FengGenericParamDescriptor *_%.*s",
-                                   (int)sm_sig->type_params[tpi].name.length,
-                                   sm_sig->type_params[tpi].name.data);
-                }
-                for (size_t pi = 0; pi < sm->param_count; ++pi) {
-                    buf_append_cstr(&cg->fn_protos, ", ");
-                    if (cg_shared_generic_param_uses_address(
-                            sm->param_types[pi])) {
-                        buf_append_fmt(&cg->fn_protos, "const void *_p%zu", pi);
-                    } else {
-                        cg_emit_c_type(&cg->fn_protos, sm->param_types[pi]);
-                        buf_append_fmt(&cg->fn_protos, " _p%zu", pi);
-                    }
-                }
-                if (has_out) {
-                    buf_append_cstr(&cg->fn_protos, ", void *_out");
-                }
-                buf_append_cstr(&cg->fn_protos, ");\n");
-                free(sm_shared);
             } else {
                 cg_emit_user_method_proto(&cg->fn_protos, t, sm, false);
             }
@@ -43407,6 +46013,12 @@ static void cg_clear_generic_type_context(CG *cg) {
     cg->generic_type_method_rad_descs = NULL;
     cg->generic_type_method_rad_count = 0;
     cg->generic_type_method_rad_via_desc = false;
+    for (size_t i = 0U; i < cg->generic_callable_dep_count; ++i) {
+        free(cg->generic_callable_dep_keys[i]);
+    }
+    free(cg->generic_callable_dep_keys);
+    cg->generic_callable_dep_keys = NULL;
+    cg->generic_callable_dep_count = 0U;
 }
 
 /* Build the field/type view needed while emitting a generic constructor's
@@ -43761,13 +46373,21 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
      * 创建依赖泛型的托管对象时能直接用具体描述符分配。 */
     {
         const FengReifiableDepSet *rtd_dep_set =
-            feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl);
+            has_func_desc && shared_name_override == NULL
+                ? feng_semantic_lookup_member_reifiable_dep_set(
+                      cg->analysis, decl, member)
+                : feng_semantic_lookup_reifiable_dep_set(
+                      cg->analysis, decl);
         if (rtd_dep_set != NULL && rtd_dep_set->dep_count > 0U) {
             FengSlice *owner_tp_names = (FengSlice *)calloc(
-                outer_tp_count, sizeof(FengSlice));
+                tp_count, sizeof(FengSlice));
             if (owner_tp_names != NULL) {
                 for (size_t i = 0; i < outer_tp_count; ++i) {
                     owner_tp_names[i] = decl->as.type_decl.type_params[i].name;
+                }
+                for (size_t i = 0; i < method_tp_count; ++i) {
+                    owner_tp_names[outer_tp_count + i] =
+                        sig->type_params[i].name;
                 }
                 typedef struct { size_t idx; char *key; } RTDSort;
                 size_t mc = 0;
@@ -43787,7 +46407,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                             sorted[si].idx = i;
                             sorted[si].key = cg_reifiable_sort_key(
                                 rtd_dep_set->deps[i].type_ref,
-                                owner_tp_names, outer_tp_count, true);
+                                owner_tp_names, tp_count, true);
                             si++;
                         }
                         for (size_t i = 1; i < mc; ++i) {
@@ -43804,6 +46424,8 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                             (char **)calloc(mc, sizeof(char *));
                         if (cg->generic_type_method_rtd_descs != NULL) {
                             cg->generic_type_method_rtd_count = mc;
+                            cg->generic_type_method_rtd_via_desc =
+                                has_func_desc;
                             for (size_t i = 0; i < mc; ++i) {
                                 const FengReifiableDep *dep =
                                     &rtd_dep_set->deps[sorted[i].idx];
@@ -43831,13 +46453,21 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
      * 操作依赖泛型的聚合类型时能使用正确的大小和描述符。 */
     {
         const FengReifiableDepSet *rad_dep_set =
-            feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl);
+            has_func_desc && shared_name_override == NULL
+                ? feng_semantic_lookup_member_reifiable_dep_set(
+                      cg->analysis, decl, member)
+                : feng_semantic_lookup_reifiable_dep_set(
+                      cg->analysis, decl);
         if (rad_dep_set != NULL && rad_dep_set->dep_count > 0U) {
             FengSlice *owner_tp_names_rad = (FengSlice *)calloc(
-                outer_tp_count, sizeof(FengSlice));
+                tp_count, sizeof(FengSlice));
             if (owner_tp_names_rad != NULL) {
                 for (size_t i = 0; i < outer_tp_count; ++i) {
                     owner_tp_names_rad[i] = decl->as.type_decl.type_params[i].name;
+                }
+                for (size_t i = 0; i < method_tp_count; ++i) {
+                    owner_tp_names_rad[outer_tp_count + i] =
+                        sig->type_params[i].name;
                 }
                 typedef struct { size_t idx; char *key; } RADSort;
                 size_t ac = 0;
@@ -43857,7 +46487,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                             sorted[si].idx = i;
                             sorted[si].key = cg_reifiable_sort_key(
                                 rad_dep_set->deps[i].type_ref,
-                                owner_tp_names_rad, outer_tp_count, true);
+                                owner_tp_names_rad, tp_count, true);
                             si++;
                         }
                         for (size_t i = 1; i < ac; ++i) {
@@ -43874,6 +46504,8 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                             (char **)calloc(ac, sizeof(char *));
                         if (cg->generic_type_method_rad_descs != NULL) {
                             cg->generic_type_method_rad_count = ac;
+                            cg->generic_type_method_rad_via_desc =
+                                has_func_desc;
                             for (size_t i = 0; i < ac; ++i) {
                                 const FengReifiableDep *dep =
                                     &rad_dep_set->deps[sorted[i].idx];
@@ -43895,6 +46527,40 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                 free(owner_tp_names_rad);
             }
         }
+    }
+
+    {
+        const FengReifiableDepSet *callable_dep_set =
+            has_func_desc && shared_name_override == NULL
+                ? feng_semantic_lookup_member_reifiable_dep_set(
+                      cg->analysis, decl, member)
+                : feng_semantic_lookup_reifiable_dep_set(
+                      cg->analysis, decl);
+        FengSlice *active_param_names = tp_count > 0U
+            ? (FengSlice *)calloc(tp_count, sizeof(*active_param_names))
+            : NULL;
+
+        if (tp_count > 0U && active_param_names == NULL) {
+            cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+        for (size_t index = 0U; index < outer_tp_count; ++index) {
+            active_param_names[index] =
+                decl->as.type_decl.type_params[index].name;
+        }
+        for (size_t index = 0U; index < method_tp_count; ++index) {
+            active_param_names[outer_tp_count + index] =
+                sig->type_params[index].name;
+        }
+        if (!cg_activate_callable_dep_mapping(
+                cg,
+                callable_dep_set,
+                active_param_names,
+                tp_count)) {
+            free(active_param_names);
+            goto cleanup;
+        }
+        free(active_param_names);
     }
 
     if (!cg_resolve_type(cg, sig->return_type, &member->token, &return_type)) goto cleanup;
@@ -44145,6 +46811,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             "CE0370", "codegen: internal: generic instance method missing origin type");
     }
     const FengCallableSignature *sig = &m->member->as.callable;
+    char *owned_func_desc_expr = NULL;
     char *shared_name = shared_name_override
         ? strdup(shared_name_override)
         : cg_generic_type_method_shared_cname(cg, decl, m->member);
@@ -44161,6 +46828,11 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     size_t tp_count = decl->as.type_decl.type_param_count;
     size_t method_tp_count = sig->type_param_count;
     size_t combined_tp_count = tp_count + method_tp_count;
+    bool receives_func_desc =
+        m->member->kind == FENG_TYPE_MEMBER_METHOD &&
+        func_desc_expr == NULL &&
+        (method_tp_count > 0U ||
+         t->generic_context_type_param_count > 0U);
     char **type_param_names = NULL;
     char **method_type_param_names = NULL;
     char **combined_type_param_names = NULL;
@@ -44174,6 +46846,34 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     int saved_tmp_counter = cg->tmp_counter;
     int saved_local_counter = cg->local_counter;
     bool ok = false;
+
+    /* A fully closed owner and a non-generic method have one closed callable
+     * instance. Bind its descriptor inside the thin wrapper, so ordinary
+     * callers keep the existing wrapper ABI. Method-generic wrappers remain
+     * call-site-parametric and therefore receive the callable descriptor. */
+    if (m->member->kind == FENG_TYPE_MEMBER_METHOD &&
+        func_desc_expr == NULL &&
+        method_tp_count == 0U &&
+        t->generic_context_type_param_count == 0U) {
+        const FengReifiableDepSet *method_dep_set =
+            feng_semantic_lookup_member_reifiable_dep_set(
+                cg->analysis, decl, m->member);
+
+        if (!cg_emit_closed_callable_fdesc(
+                cg,
+                method_dep_set,
+                decl->as.type_decl.type_params,
+                tp_count,
+                t->generic_type_args,
+                cg_find_decl_owner_program(cg, decl),
+                m->member->token,
+                shared_name,
+                m->feng_name,
+                &owned_func_desc_expr)) {
+            goto cleanup;
+        }
+        func_desc_expr = owned_func_desc_expr;
+    }
 
     if (!cg_generic_type_param_names(cg, decl, &type_param_names)) goto cleanup;
     if (!cg_build_generic_param_constraints(cg, decl->as.type_decl.type_params,
@@ -44318,7 +47018,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             buf_append_fmt(&cg->fn_protos, "const %s *_type_desc", type_desc_c_type);
             proto_has_param = true;
         }
-        if (func_desc_expr != NULL) {
+        if (func_desc_expr != NULL || receives_func_desc) {
             if (proto_has_param) buf_append_cstr(&cg->fn_protos, ", ");
             buf_append_cstr(&cg->fn_protos,
                             "const FengFunctionDescriptor *_desc");
@@ -44356,7 +47056,8 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     Buf *body = &cg->fn_defs;
 
     if (method_tp_count == 0U) {
-        cg_emit_user_method_proto(&cg->fn_protos, t, m, true);
+        cg_emit_user_method_proto_ex(&cg->fn_protos, t, m, true,
+                                     receives_func_desc);
         buf_append_cstr(body, "static ");
         cg_emit_c_type(body, m->return_type);
         buf_append_fmt(body, " %s(", m->c_name);
@@ -44368,6 +47069,12 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         if (t->generic_context_type_param_count > 0U) {
             if (body_has_param) buf_append_cstr(body, ", ");
             buf_append_fmt(body, "const %s *_type_desc", type_desc_c_type);
+            body_has_param = true;
+        }
+        if (receives_func_desc) {
+            if (body_has_param) buf_append_cstr(body, ", ");
+            buf_append_cstr(body,
+                            "const FengFunctionDescriptor *_func_desc");
             body_has_param = true;
         }
         for (size_t i = 0; i < m->param_count; ++i) {
@@ -44396,6 +47103,12 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         if (t->generic_context_type_param_count > 0U) {
             if (proto_has_param) buf_append_cstr(proto, ", ");
             buf_append_fmt(proto, "const %s *_type_desc", type_desc_c_type);
+            proto_has_param = true;
+        }
+        if (receives_func_desc) {
+            if (proto_has_param) buf_append_cstr(proto, ", ");
+            buf_append_cstr(proto,
+                            "const FengFunctionDescriptor *_func_desc");
             proto_has_param = true;
         }
         for (size_t i = 0; i < method_tp_count; ++i) {
@@ -44437,6 +47150,12 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
             buf_append_fmt(body, "const %s *_type_desc", type_desc_c_type);
             wrapper_body_has_param = true;
         }
+        if (receives_func_desc) {
+            if (wrapper_body_has_param) buf_append_cstr(body, ", ");
+            buf_append_cstr(body,
+                            "const FengFunctionDescriptor *_func_desc");
+            wrapper_body_has_param = true;
+        }
         for (size_t i = 0; i < method_tp_count; ++i) {
             if (wrapper_body_has_param) buf_append_cstr(body, ", ");
             buf_append_fmt(body, "const FengGenericParamDescriptor *%s",
@@ -44473,6 +47192,9 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
     }
     for (size_t i = 0; i < method_tp_count; ++i) {
         buf_append_fmt(body, "    (void)%s;\n", method_desc_names[i]);
+    }
+    if (receives_func_desc) {
+        buf_append_cstr(body, "    (void)_func_desc;\n");
     }
     for (size_t i = 0; i < m->param_count; ++i) {
         buf_append_fmt(body, "    (void)%s;\n", m->param_names[i] ? m->param_names[i] : "_p");
@@ -44534,9 +47256,12 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
         buf_append_fmt(body, "&%s", desc_name);
         call_has_arg = true;
     }
-    if (func_desc_expr != NULL) {
+    if (func_desc_expr != NULL || receives_func_desc) {
         if (call_has_arg) buf_append_cstr(body, ", ");
-        buf_append_cstr(body, func_desc_expr);
+        buf_append_cstr(body,
+                        func_desc_expr != NULL
+                            ? func_desc_expr
+                            : "_func_desc");
         call_has_arg = true;
     }
     /* only method-level desc_exprs; type-level params are from descriptor */
@@ -44618,6 +47343,7 @@ cleanup:
     cg_free_cstr_array(method_type_param_names, method_tp_count);
     cg_free_cstr_array(combined_type_param_names, combined_tp_count);
     cg_free_cstr_array(type_param_names, tp_count);
+    free(owned_func_desc_expr);
     free(shared_name);
     cg->tmp_counter = saved_tmp_counter;
     cg->local_counter = saved_local_counter;
@@ -45910,6 +48636,17 @@ static void cg_dispose(CG *cg) {
         free(cg->string_literals[i].c_var);
     }
     free(cg->string_literals);
+    for (size_t i = 0U; i < cg->generic_callable_dep_count; ++i) {
+        free(cg->generic_callable_dep_keys[i]);
+    }
+    free(cg->generic_callable_dep_keys);
+    for (size_t i = 0U;
+         i < cg->closed_callable_descriptor_node_count;
+         ++i) {
+        free(cg->closed_callable_descriptor_nodes[i].key);
+        free(cg->closed_callable_descriptor_nodes[i].c_name);
+    }
+    free(cg->closed_callable_descriptor_nodes);
     for (size_t i = 0; i < cg->expr_narrowing_count; i++) {
         free(cg->expr_narrowings[i].c_expr);
         cgtype_free(cg->expr_narrowings[i].type);

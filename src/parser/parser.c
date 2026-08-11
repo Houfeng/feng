@@ -4967,6 +4967,7 @@ static void free_expr(FengExpr *expr) {
             free(expr->as.call.args);
             free_type_arg_refs(expr->as.call.explicit_type_args,
                                expr->as.call.explicit_type_arg_count);
+            free((void *)expr->as.call.resolved_callable.callable_type_args);
             break;
         case FENG_EXPR_MEMBER:
             free_expr(expr->as.member.object);

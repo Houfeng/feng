@@ -5075,6 +5075,225 @@ static void test_generic_fn_call_codegen(void) {
     feng_program_free(program);
 }
 
+/* Top-level generic shared bodies must close direct managed/aggregate
+ * dependencies and receive descriptor-sized derived values through the out
+ * ABI without falling back to an open placeholder C layout. */
+static void test_generic_shared_body_direct_dependencies_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_shared_direct;\n"
+        "@value\n"
+        "type Box<T> {\n"
+        "    open let value: T;\n"
+        "    open let marker: string;\n"
+        "    func Box(value: T, marker: string) {\n"
+        "        self.value = value;\n"
+        "        self.marker = marker;\n"
+        "    }\n"
+        "}\n"
+        "type Bucket<T> {\n"
+        "    var value: T;\n"
+        "    func Bucket(value: T) { self.value = value; }\n"
+        "    func get(): T { return self.value; }\n"
+        "}\n"
+        "func leaf<T>(value: T): Box<T> {\n"
+        "    let bucket = Bucket<T>(value);\n"
+        "    return Box<T>(bucket.get(), \"leaf\");\n"
+        "}\n"
+        "func use(): string {\n"
+        "    let result = leaf<string>(\"value\");\n"
+        "    return result.value + result.marker;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "generic_shared_direct.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                   NULL, &out, &cgerr)) {
+        fprintf(stderr, "codegen error (generic shared direct deps): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "const FengFunctionDescriptor *_desc") != NULL);
+    ASSERT(strstr(out.c_source, "_desc->reified_agg_deps[") != NULL);
+    ASSERT(strstr(out.c_source, "_desc->reified_type_deps[") != NULL);
+    ASSERT(strstr(out.c_source, "->reified_generic_params[") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_Alignas(max_align_t) char _val") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Method-generic shared bodies must place the owner and callable descriptors
+ * before method-level generic descriptors for both instance and static ABI. */
+static void test_generic_shared_method_descriptor_order_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_shared_methods;\n"
+        "@value\n"
+        "type Box<T> {\n"
+        "    open let value: T;\n"
+        "    func Box(value: T) { self.value = value; }\n"
+        "}\n"
+        "type Bucket<T> {\n"
+        "    var value: T;\n"
+        "    func Bucket(value: T) { self.value = value; }\n"
+        "    func get(): T { return self.value; }\n"
+        "}\n"
+        "type MethodOwner {\n"
+        "    func MethodOwner() {}\n"
+        "    func wrap<U>(value: U): Box<U> {\n"
+        "        let bucket = Bucket<U>(value);\n"
+        "        return Box<U>(bucket.get());\n"
+        "    }\n"
+        "    static func wrapStatic<U>(value: U): Box<U> {\n"
+        "        let bucket = Bucket<U>(value);\n"
+        "        return Box<U>(bucket.get());\n"
+        "    }\n"
+        "}\n"
+        "type Owner<T> {\n"
+        "    var value: T;\n"
+        "    func Owner(value: T) { self.value = value; }\n"
+        "    func pair<U>(second: U): Box<U> {\n"
+        "        let first = Bucket<T>(self.value);\n"
+        "        let next = Bucket<U>(second);\n"
+        "        first.get();\n"
+        "        return Box<U>(next.get());\n"
+        "    }\n"
+        "    static func pairStatic<U>(first: T, second: U): Box<U> {\n"
+        "        let ownerValue = Bucket<T>(first);\n"
+        "        let methodValue = Bucket<U>(second);\n"
+        "        ownerValue.get();\n"
+        "        return Box<U>(methodValue.get());\n"
+        "    }\n"
+        "}\n"
+        "func use(): string {\n"
+        "    let methodOwner = MethodOwner();\n"
+        "    let first = methodOwner.wrap<string>(\"first\");\n"
+        "    let second = MethodOwner.wrapStatic<string>(\"second\");\n"
+        "    let owner = Owner<i64>(41);\n"
+        "    let third = owner.pair<string>(\"third\");\n"
+        "    let fourth = Owner<i64>.pairStatic<string>(42, \"fourth\");\n"
+        "    return first.value + second.value + third.value + fourth.value;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "generic_shared_methods.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                   NULL, &out, &cgerr)) {
+        fprintf(stderr, "codegen error (generic shared methods): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "void *_self, const FengTypeDescriptor *_type_desc, "
+                  "const FengFunctionDescriptor *_desc, "
+                  "const FengGenericParamDescriptor *_U") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "const FengTypeDescriptor *_type_desc, "
+                  "const FengFunctionDescriptor *_desc, "
+                  "const FengGenericParamDescriptor *_U") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Direct generic-parameter results use descriptor-sized address storage in
+ * every shared callable path.  A wide closed value must never be lowered
+ * through a pointer-sized C local, including recursive and method calls. */
+static void test_generic_direct_result_uses_descriptor_sized_storage_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_direct_result_storage;\n"
+        "@value\n"
+        "type Wide {\n"
+        "    open let first: string;\n"
+        "    open let second: string;\n"
+        "    open let number: i64;\n"
+        "    func Wide(first: string, second: string, number: i64) {\n"
+        "        self.first = first;\n"
+        "        self.second = second;\n"
+        "        self.number = number;\n"
+        "    }\n"
+        "}\n"
+        "func recurse<T>(value: T, count: i64): T {\n"
+        "    let current: T = value;\n"
+        "    if count <= 0 { return current; }\n"
+        "    return recurse<T>(current, count - 1);\n"
+        "}\n"
+        "type Owner {\n"
+        "    func Owner() {}\n"
+        "    func pass<U>(value: U): U { return value; }\n"
+        "    static func passStatic<U>(value: U): U { return value; }\n"
+        "}\n"
+        "func use(): Wide {\n"
+        "    let value = Wide(\"left\", \"right\", 7);\n"
+        "    let recursive = recurse<Wide>(value, 2);\n"
+        "    let owner = Owner();\n"
+        "    let instance = owner.pass<Wide>(recursive);\n"
+        "    return Owner.passStatic<Wide>(instance);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "generic_direct_result_storage.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                   NULL, &out, &cgerr)) {
+        fprintf(stderr, "codegen error (generic direct result storage): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "const FengGenericParamDescriptor *_gpd") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_Alignas(max_align_t) char _gr") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_cleanup_push_aggregate(&_cu_") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_generic_aggregate_descriptor(_gpd") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static const char *kGenericManagedReturnLetBindingSrc =
     "module feng.codegen.gf_managed_ret;\n"
     "type Widget {\n"
@@ -9151,6 +9370,9 @@ int main(void) {
     test_generic_fn_codegen();
     test_generic_type_decl_no_crash();
     test_generic_fn_call_codegen();
+    test_generic_shared_body_direct_dependencies_codegen();
+    test_generic_shared_method_descriptor_order_codegen();
+    test_generic_direct_result_uses_descriptor_sized_storage_codegen();
     test_generic_managed_return_let_binding_codegen();
     test_generic_spec_arg_codegen();
     test_callable_spec_top_level_fn_codegen();

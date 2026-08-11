@@ -333,18 +333,48 @@ typedef struct FengReifiableDep {
     const FengTypeRef *type_ref;
 } FengReifiableDep;
 
-/* 一个泛型声明的全部具体化依赖。
- * owner_decl 标识所属泛型声明：
- *   - 泛型类型：FENG_DECL_TYPE（聚合该类型所有方法的依赖）
- *   - 独立泛型函数：FENG_DECL_FUNCTION
- *   - fit 泛型方法：fit 下的方法声明
+/* 当前共享 callable 直接调用的另一个泛型共享 callable。所有类型引用
+ * 均已转换为 caller 视角，但仍可包含 caller 的活动泛型参数。 */
+typedef struct FengReifiableCallableDep {
+    FengResolvedCallableKind kind;
+    const FengDecl *function_decl;
+    const FengDecl *owner_type_decl;
+    const FengTypeMember *member;
+    const FengDecl *fit_decl;
+    const FengTypeRef *owner_instance_type_ref;
+    const FengTypeRef *const *callable_type_args;
+    size_t callable_type_arg_count;
+} FengReifiableCallableDep;
+
+/* 一个泛型声明或 callable 的全部具体化依赖。
+ * owner_decl 标识顶层声明；owner_member 非 NULL 时标识该声明内的
+ * callable member：
+ *   - 泛型类型结构：FENG_DECL_TYPE + NULL
+ *   - 类型方法：FENG_DECL_TYPE + 对应 FengTypeMember
+ *   - 独立泛型函数：FENG_DECL_FUNCTION + NULL
+ *   - fit 既有路径：FENG_DECL_FIT + NULL
  * deps 数组按收集顺序追加，同一类型引用不重复记录。 */
 typedef struct FengReifiableDepSet {
     const FengDecl *owner_decl;
+    const FengTypeMember *owner_member;
     FengReifiableDep *deps;
     size_t dep_count;
     size_t dep_capacity;
+    FengReifiableCallableDep *callable_deps;
+    size_t callable_dep_count;
+    size_t callable_dep_capacity;
 } FengReifiableDepSet;
+
+/* Stable FT identity attached to an AST declaration/member synthesized from
+ * an imported module. The pair (module_name, symbol_id) uniquely identifies
+ * a callable across package symbol graphs; source_node is only a compile-time
+ * lookup key and never reaches generated Feng code. */
+typedef struct FengImportedSymbolIdentity {
+    const void *source_node;
+    const void *symbol_decl;
+    char *module_name;
+    uint32_t symbol_id;
+} FengImportedSymbolIdentity;
 
 typedef struct FengSemanticAnalysis {
     FengSemanticModule *modules;
@@ -397,6 +427,9 @@ typedef struct FengSemanticAnalysis {
     FengReifiableDepSet *reifiable_dep_sets;
     size_t reifiable_dep_set_count;
     size_t reifiable_dep_set_capacity;
+    FengImportedSymbolIdentity *imported_symbol_identities;
+    size_t imported_symbol_identity_count;
+    size_t imported_symbol_identity_capacity;
     /* 由语义分析器合成或深拷贝、并被跨阶段元数据借用的完整 FengTypeRef 树。
      * analysis 拥有根节点及其递归 type_args / inner / segments。 */
     FengTypeRef **synthesized_type_refs;
@@ -967,10 +1000,16 @@ FengSemanticValueKind feng_semantic_value_kind_of_decl(const FengDecl *decl);
 
 /* --- ReifiableDepSet (§2.2.1 具体化依赖收集) ----------------------------- */
 
-/* 获取或创建 owner_decl 的具体化依赖集。 */
+/* 获取或创建 owner_decl 的声明级具体化依赖集。 */
 FengReifiableDepSet *feng_semantic_get_or_create_reifiable_dep_set(
     FengSemanticAnalysis *analysis,
     const FengDecl *owner_decl);
+
+/* 获取或创建 owner_decl 中 owner_member 的 callable 具体化依赖集。 */
+FengReifiableDepSet *feng_semantic_get_or_create_member_reifiable_dep_set(
+    FengSemanticAnalysis *analysis,
+    const FengDecl *owner_decl,
+    const FengTypeMember *owner_member);
 
 /* 向依赖集追加一条具体化依赖。相同 type_ref 不重复追加。 */
 bool feng_semantic_reifiable_dep_set_append(
@@ -978,13 +1017,36 @@ bool feng_semantic_reifiable_dep_set_append(
     FengReifiableDepKind kind,
     const FengTypeRef *type_ref);
 
-/* 查找 owner_decl 的具体化依赖集，不存在时返回 NULL。 */
+/* Append one resolved direct generic callable dependency. */
+bool feng_semantic_reifiable_dep_set_append_callable(
+    FengReifiableDepSet *dep_set,
+    const FengResolvedCallable *resolved);
+
+/* 查找 owner_decl 的声明级具体化依赖集，不存在时返回 NULL。 */
 const FengReifiableDepSet *feng_semantic_lookup_reifiable_dep_set(
     const FengSemanticAnalysis *analysis,
     const FengDecl *owner_decl);
 
-/* Post-pass：遍历所有本地模块中的泛型声明（泛型类型、独立泛型函数、
- * fit 泛型方法），收集待具体化依赖到 analysis->reifiable_dep_sets 侧表。
+/* 查找 owner_decl 中 owner_member 的 callable 具体化依赖集。 */
+const FengReifiableDepSet *feng_semantic_lookup_member_reifiable_dep_set(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *owner_decl,
+    const FengTypeMember *owner_member);
+
+/* Record/lookup a stable imported FT identity for one synthesized AST node. */
+bool feng_semantic_record_imported_symbol_identity(
+    FengSemanticAnalysis *analysis,
+    const void *source_node,
+    const void *symbol_decl,
+    const char *module_name,
+    uint32_t symbol_id);
+const FengImportedSymbolIdentity *
+feng_semantic_lookup_imported_symbol_identity(
+    const FengSemanticAnalysis *analysis,
+    const void *source_node);
+
+/* Post-pass：遍历所有本地模块中的泛型声明与 callable，收集待具体化
+ * 依赖到 analysis->reifiable_dep_sets 侧表。
  * 在 fixpoint 循环完成后、type cyclicity 计算前调用。 */
 bool feng_semantic_collect_reifiable_deps(FengSemanticAnalysis *analysis);
 
