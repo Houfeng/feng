@@ -1,6 +1,8 @@
 module fcts_bin;
 
 import std;
+import std.collections;
+import std.numeric;
 import std.test;
 import fcts_lib.test;
 
@@ -38,6 +40,167 @@ func mapAdvancedStringToWide(
     "wide-output",
     input.revision + 2
   );
+}
+
+/**
+ * Exercise every second-group control-flow path while managed leaves remain
+ * observable through the returned descriptor-sized values.
+ */
+func runAdvancedControlFlowLifetime(): i64 {
+  let flow = LibAdvancedFlow<string>();
+  let first = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("first"),
+    "first-composite",
+    61
+  );
+  let second = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("second"),
+    "second-composite",
+    62
+  );
+
+  let ifResult = flow.selectIf<LibAdvancedLifetimeLeaf>(false, first, second);
+  assert(ifResult.value.value == "second" &&
+         ifResult.label == "second-composite" && ifResult.revision == 62,
+         "if join keeps the selected aggregate alive and complete");
+
+  let matchResult = flow.selectMatch<LibAdvancedLifetimeLeaf>(0, first, second);
+  assert(matchResult.value.value == "first" &&
+         matchResult.label == "first-composite" && matchResult.revision == 61,
+         "match join keeps the selected aggregate alive and complete");
+
+  let loopResult = flow.selectLoop<LibAdvancedLifetimeLeaf>(first, second);
+  assert(loopResult.value.value == "first" &&
+         loopResult.label == "first-composite" && loopResult.revision == 61,
+         "loop replacement survives continue and break cleanup");
+
+  let earlyResult = flow.selectNestedReturn<LibAdvancedLifetimeLeaf>(
+    true,
+    second,
+    first
+  );
+  assert(earlyResult.value.value == "second" &&
+         earlyResult.label == "second-composite" && earlyResult.revision == 62,
+         "nested early return transfers the complete aggregate");
+
+  let ownedResult = flow.passOwned<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("owned"),
+    "owned-composite",
+    63
+  );
+  assert(ownedResult.value.value == "owned" &&
+         ownedResult.label == "owned-composite" && ownedResult.revision == 63,
+         "owned constructor argument survives the nested shared call");
+
+  let capturedResult = flow.mapCaptured<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("captured"),
+    "captured-composite",
+    64
+  );
+  assert(capturedResult.value.value == "captured" &&
+         capturedResult.label == "captured-composite" &&
+         capturedResult.revision == 64,
+         "capturing lambda returns the complete descriptor-sized value");
+
+  return LibAdvancedLifetimeLeaf.createdCount();
+}
+
+/** Exercise descriptor-sized container elements with observable leaves. */
+func runAdvancedContainerLifetime(): i64 {
+  let flow = LibAdvancedFlow<string>();
+  let first = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("container-first"),
+    "container-first-label",
+    91
+  );
+  let second = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("container-second"),
+    "container-second-label",
+    92
+  );
+  let replacement = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("container-replacement"),
+    "container-replacement-label",
+    93
+  );
+
+  let array = flow.processArray<LibAdvancedLifetimeLeaf>(
+    first,
+    second,
+    replacement
+  );
+  let list = flow.processList<LibAdvancedLifetimeLeaf>(
+    first,
+    second,
+    replacement
+  );
+  let option = flow.processOption<LibAdvancedLifetimeLeaf>(
+    first,
+    replacement,
+    true
+  );
+
+  assert(array[0].value.value == "container-replacement" &&
+         array[1].value.value == "container-first",
+         "array container keeps copied managed leaves alive");
+  assert(list.size() == 3 &&
+         list.get(0).value.value == "container-first" &&
+         list.get(1).value.value == "container-replacement" &&
+         list.get(2).value.value == "container-second",
+         "List container keeps values after growth, clear, and refill");
+  let optionValue = match option {
+    let value: LibAdvancedComposite<LibAdvancedLifetimeLeaf> {
+      value.value.value
+    }
+    None { "missing" }
+    else { "unexpected" }
+  };
+  assert(optionValue == "container-replacement",
+         "Option replacement keeps the managed leaf alive");
+  return LibAdvancedLifetimeLeaf.createdCount();
+}
+
+/** Exercise union copies with managed descriptor-sized payloads. */
+func runAdvancedUnionLifetime(): i64 {
+  let choice = libAdvancedMakeUnionComposite<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("union-choice"),
+    "union-choice-label",
+    151
+  );
+  let fallback = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("union-fallback"),
+    "union-fallback-label",
+    152
+  );
+  let envelope = libAdvancedWrapUnion<LibAdvancedLifetimeLeaf>(
+    choice,
+    fallback,
+    "union-envelope",
+    153
+  );
+  let choiceValue = match envelope.choice {
+    let value: LibAdvancedComposite<LibAdvancedLifetimeLeaf> {
+      value.value.value
+    }
+    LibAdvancedUnionReference { "reference" }
+    i64 { "scalar" }
+    else { "unexpected" }
+  };
+  let tupleValue = match envelope.values.item1 {
+    let value: LibAdvancedComposite<LibAdvancedLifetimeLeaf> {
+      value.value.value
+    }
+    LibAdvancedUnionReference { "reference" }
+    i64 { "scalar" }
+    else { "unexpected" }
+  };
+
+  assert(choiceValue == "union-choice" && tupleValue == "union-choice" &&
+         envelope.values.item2.value.value == "union-fallback" &&
+         envelope.values.item3 == "union-envelope" &&
+         envelope.revision == 153,
+         "union envelope preserves every managed nested field");
+  return LibAdvancedLifetimeLeaf.createdCount();
 }
 
 /** Verify high-risk generic combinations not closed by the first hardening pass. */
@@ -107,6 +270,283 @@ open func test_generic_advanced_composition_coverage(): void {
       assert(result.marker == "managed-wide-transfer" &&
              result.revision == 54,
              "wide two-scope result preserves its complete tail");
+    });
+
+    test("reified control flow preserves ownership and finalizes once", () {
+      LibAdvancedLifetimeLeaf.resetCounts();
+      let created = runAdvancedControlFlowLifetime();
+      assert(created == 4,
+             "control-flow exercise constructs the expected managed leaves");
+      let finalized = LibAdvancedLifetimeLeaf.finalizedCount();
+      assert(finalized == created,
+             "every managed leaf is finalized exactly once after scope exit " +
+             "(created={0}, finalized={1})",
+             created.toString(),
+             finalized.toString());
+    });
+
+    test("generic lambda captures direct values by reference", () {
+      let flow = LibAdvancedFlow<string>();
+      let methodScalar = flow.captureDirect<i64>(70, 71);
+      let methodManaged = flow.captureDirect<string>("before", "after");
+      let methodWide = flow.captureDirect<AdvancedConsumerWideValue>(
+        AdvancedConsumerWideValue("old-first", "old-second", 71),
+        AdvancedConsumerWideValue("new-first", "new-second", 72)
+      );
+      let topLevelWide = libAdvancedCaptureTopLevel<AdvancedConsumerWideValue>(
+        AdvancedConsumerWideValue("top-old-first", "top-old-second", 73),
+        AdvancedConsumerWideValue("top-new-first", "top-new-second", 74)
+      );
+
+      assert(methodScalar == 71,
+             "method lambda observes replacement of scalar U");
+      assert(methodManaged == "after",
+             "method lambda observes replacement of managed U");
+      assert(methodWide.first == "new-first" &&
+             methodWide.second == "new-second" && methodWide.number == 72,
+             "method lambda preserves the complete replacement wide U");
+      assert(topLevelWide.first == "top-new-first" &&
+             topLevelWide.second == "top-new-second" &&
+             topLevelWide.number == 74,
+             "top-level lambda preserves the complete replacement wide U");
+    });
+
+    test("generic lambda captures descriptor-sized aggregate by reference", () {
+      let flow = LibAdvancedFlow<string>();
+      let result = flow.captureComposite<AdvancedConsumerWideValue>(
+        LibAdvancedComposite<AdvancedConsumerWideValue>(
+          AdvancedConsumerWideValue("old-first", "old-second", 81),
+          "old-label",
+          82
+        ),
+        LibAdvancedComposite<AdvancedConsumerWideValue>(
+          AdvancedConsumerWideValue("new-first", "new-second", 83),
+          "new-label",
+          84
+        )
+      );
+
+      assert(result.value.first == "new-first" &&
+             result.value.second == "new-second" &&
+             result.value.number == 83 &&
+             result.label == "new-label" && result.revision == 84,
+             "lambda preserves the complete replacement Composite<U>");
+    });
+
+    test("descriptor-sized arrays copy overwrite and return elements", () {
+      let flow = LibAdvancedFlow<string>();
+      let first = LibAdvancedComposite<i64>(101, "array-first", 102);
+      let second = LibAdvancedComposite<i64>(103, "array-second", 104);
+      var replacement = LibAdvancedComposite<i64>(105, "array-new", 106);
+      let values = flow.processArray<i64>(first, second, replacement);
+      replacement.value = 999;
+      replacement.label = "changed";
+
+      assert(values.length() == 2 &&
+             values[0].value == 105 && values[0].label == "array-new" &&
+             values[0].revision == 106,
+             "array overwrite preserves every replacement field");
+      assert(values[1].value == 101 && values[1].label == "array-first" &&
+             values[1].revision == 102,
+             "array read-copy remains independent of later source mutation");
+    });
+
+    test("descriptor-sized List supports growth mutation clear and return", () {
+      let flow = LibAdvancedFlow<i64>();
+      let values = flow.processList<string>(
+        LibAdvancedComposite<string>("first", "list-first", 111),
+        LibAdvancedComposite<string>("second", "list-second", 112),
+        LibAdvancedComposite<string>("replacement", "list-new", 113)
+      );
+
+      assert(values.size() == 3,
+             "List is refilled with three values after clear");
+      assert(values.get(0).value == "first" &&
+             values.get(0).label == "list-first" &&
+             values.get(0).revision == 111,
+             "List get preserves the observed value through growth");
+      assert(values.get(1).value == "replacement" &&
+             values.get(1).label == "list-new" &&
+             values.get(1).revision == 113 &&
+             values.get(2).value == "second",
+             "List overwrite removal clear and return preserve final values");
+    });
+
+    test("descriptor-sized Option transitions between none and some", () {
+      let flow = LibAdvancedFlow<string>();
+      let first = LibAdvancedComposite<i64>(121, "option-first", 122);
+      let replacement = LibAdvancedComposite<i64>(123, "option-new", 124);
+      let present = flow.processOption<i64>(first, replacement, true);
+      let absent = flow.processOption<i64>(first, replacement, false);
+      let presentValid = match present {
+        let value: LibAdvancedComposite<i64> {
+          value.value == 123 && value.label == "option-new" &&
+          value.revision == 124
+        }
+        None { false }
+        else { false }
+      };
+      let absentValid = match absent {
+        None { true }
+        else { false }
+      };
+
+      assert(presentValid,
+             "Option some replacement preserves every aggregate field");
+      assert(absentValid,
+             "Option replacement with none clears the aggregate member");
+    });
+
+    test("generic containers release every explicit managed leaf", () {
+      LibAdvancedLifetimeLeaf.resetCounts();
+      let created = runAdvancedContainerLifetime();
+      let finalized = LibAdvancedLifetimeLeaf.finalizedCount();
+      assert(created == 3 && finalized == created,
+             "array List and Option release every explicit leaf exactly once " +
+             "(created={0}, finalized={1})",
+             created.toString(),
+             finalized.toString());
+    });
+
+    test("concrete leaves satisfy a generic union constraint directly", () {
+      let reference = libAdvancedAcceptUnionLeaf<
+        AdvancedConsumerWideValue,
+        LibAdvancedUnionReference
+      >(LibAdvancedUnionReference("constraint-reference", 131));
+      let composite = libAdvancedAcceptUnionLeaf<
+        AdvancedConsumerWideValue,
+        LibAdvancedComposite<AdvancedConsumerWideValue>
+      >(
+        LibAdvancedComposite<AdvancedConsumerWideValue>(
+          AdvancedConsumerWideValue("constraint-first", "constraint-second", 132),
+          "constraint-composite",
+          133
+        )
+      );
+      let scalar = libAdvancedAcceptUnionLeaf<
+        AdvancedConsumerWideValue,
+        i64
+      >(134);
+
+      assert(reference.label == "constraint-reference" &&
+             reference.code == 131,
+             "ordinary reference leaf satisfies the union constraint");
+      assert(composite.value.first == "constraint-first" &&
+             composite.value.second == "constraint-second" &&
+             composite.value.number == 132 &&
+             composite.label == "constraint-composite" &&
+             composite.revision == 133,
+             "descriptor-sized leaf satisfies the union constraint");
+      assert(scalar == 134,
+             "scalar leaf satisfies the union constraint");
+    });
+
+    test("imported generic union parameters and returns preserve all branches", () {
+      let reference = libAdvancedPassUnion<AdvancedConsumerWideValue>(
+        libAdvancedMakeUnionReference<AdvancedConsumerWideValue>(
+          "reference-branch",
+          141
+        )
+      );
+      let composite = libAdvancedPassUnion<AdvancedConsumerWideValue>(
+        libAdvancedMakeUnionComposite<AdvancedConsumerWideValue>(
+          AdvancedConsumerWideValue("branch-first", "branch-second", 142),
+          "composite-branch",
+          143
+        )
+      );
+      let scalar = libAdvancedPassUnion<AdvancedConsumerWideValue>(
+        libAdvancedMakeUnionScalar<AdvancedConsumerWideValue>(144)
+      );
+      let referenceValid = match reference {
+        let value: LibAdvancedUnionReference {
+          value.label == "reference-branch" && value.code == 141
+        }
+        LibAdvancedComposite<AdvancedConsumerWideValue> { false }
+        i64 { false }
+        else { false }
+      };
+      let compositeValid = match composite {
+        let value: LibAdvancedComposite<AdvancedConsumerWideValue> {
+          value.value.first == "branch-first" &&
+          value.value.second == "branch-second" &&
+          value.value.number == 142 &&
+          value.label == "composite-branch" && value.revision == 143
+        }
+        LibAdvancedUnionReference { false }
+        i64 { false }
+        else { false }
+      };
+      let scalarValid = match scalar {
+        let value: i64 { value == 144 }
+        LibAdvancedUnionReference { false }
+        LibAdvancedComposite<AdvancedConsumerWideValue> { false }
+        else { false }
+      };
+
+      assert(referenceValid && compositeValid && scalarValid,
+             "reference descriptor-sized and scalar union branches survive shared calls");
+    });
+
+    test("generic union fields survive tuple and value envelope composition", () {
+      let fallback = LibAdvancedComposite<AdvancedConsumerWideValue>(
+        AdvancedConsumerWideValue("fallback-first", "fallback-second", 146),
+        "fallback-composite",
+        147
+      );
+      let envelope = libAdvancedWrapUnion<AdvancedConsumerWideValue>(
+        libAdvancedMakeUnionComposite<AdvancedConsumerWideValue>(
+          AdvancedConsumerWideValue("choice-first", "choice-second", 145),
+          "choice-composite",
+          148
+        ),
+        fallback,
+        "envelope-marker",
+        149
+      );
+      let directValid = match envelope.choice {
+        let value: LibAdvancedComposite<AdvancedConsumerWideValue> {
+          value.value.first == "choice-first" &&
+          value.value.second == "choice-second" &&
+          value.value.number == 145 &&
+          value.label == "choice-composite" && value.revision == 148
+        }
+        LibAdvancedUnionReference { false }
+        i64 { false }
+        else { false }
+      };
+      let tupleValid = match envelope.values.item1 {
+        let value: LibAdvancedComposite<AdvancedConsumerWideValue> {
+          value.value.first == "choice-first" &&
+          value.value.second == "choice-second" &&
+          value.value.number == 145
+        }
+        LibAdvancedUnionReference { false }
+        i64 { false }
+        else { false }
+      };
+
+      assert(directValid && tupleValid,
+             "union remains narrowable through direct and tuple envelope fields");
+      assert(envelope.values.item2.value.first == "fallback-first" &&
+             envelope.values.item2.value.second == "fallback-second" &&
+             envelope.values.item2.value.number == 146 &&
+             envelope.values.item2.label == "fallback-composite" &&
+             envelope.values.item2.revision == 147 &&
+             envelope.values.item3 == "envelope-marker" &&
+             envelope.revision == 149,
+             "value envelope preserves fields following both generic aggregates");
+    });
+
+    test("generic union composition releases managed leaves exactly once", () {
+      LibAdvancedLifetimeLeaf.resetCounts();
+      let created = runAdvancedUnionLifetime();
+      let finalized = LibAdvancedLifetimeLeaf.finalizedCount();
+      assert(created == 2 && finalized == created,
+             "union tuple and envelope release every explicit leaf exactly once " +
+             "(created={0}, finalized={1})",
+             created.toString(),
+             finalized.toString());
     });
   });
 }

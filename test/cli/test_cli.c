@@ -14893,6 +14893,209 @@ static void test_project_run_release_reuses_build_pipeline(void) {
     free(dep_project_dir);
 }
 
+/* Verify imported generic descriptors drive cycle collection end to end. */
+static void test_project_run_collects_cross_package_generic_cycle(void) {
+    char template_path[] = "temp/feng_cli_generic_cycle_XXXXXX";
+    char *workspace_dir;
+    char *repo_root;
+    char *std_project_dir;
+    char *dep_project_dir;
+    char *dep_manifest_path;
+    char *dep_src_dir;
+    char *dep_source_path;
+    char *root_project_dir;
+    char *root_manifest_path;
+    char *root_src_dir;
+    char *root_source_path;
+    char *root_manifest_text;
+    char *saved_threshold = NULL;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    repo_root = getcwd(NULL, 0);
+    ASSERT(repo_root != NULL);
+    std_project_dir = path_join(repo_root, "std/std");
+
+    dep_project_dir = path_join(workspace_dir, "dep");
+    dep_manifest_path = path_join(dep_project_dir, "feng.fm");
+    dep_src_dir = path_join(dep_project_dir, "src");
+    dep_source_path = path_join(dep_src_dir, "cycle.ff");
+    root_project_dir = path_join(workspace_dir, "root");
+    root_manifest_path = path_join(root_project_dir, "feng.fm");
+    root_src_dir = path_join(root_project_dir, "src");
+    root_source_path = path_join(root_src_dir, "main.ff");
+    root_manifest_text = dup_printf(
+        "[package]\n"
+        "name: \"generic_cycle_app\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"bin\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n"
+        "\n"
+        "[dependencies]\n"
+        "std: \"%s\"\n"
+        "generic_cycle_dep: \"../dep\"\n",
+        std_project_dir);
+    ASSERT(root_manifest_text != NULL);
+
+    mkdir_p(dep_src_dir);
+    mkdir_p(root_src_dir);
+    write_text_file(dep_manifest_path,
+                    "[package]\n"
+                    "name: \"generic_cycle_dep\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(
+        dep_source_path,
+        "open module test.cli.genericcycle.provider;\n"
+        "\n"
+        "/** Left endpoint of an imported generic object cycle. */\n"
+        "open type GenericCycleLeft<T> {\n"
+        "  /** Managed payload whose representation is selected by T. */\n"
+        "  open let payload: T;\n"
+        "\n"
+        "  /** Right endpoints connected through an array-managed edge. */\n"
+        "  open var rights: GenericCycleRight<T>[] = [];\n"
+        "\n"
+        "  /** Construct an unconnected left endpoint. */\n"
+        "  func GenericCycleLeft(payload: T) {\n"
+        "    self.payload = payload;\n"
+        "  }\n"
+        "\n"
+        "  /** Connect and return the opposite endpoint. */\n"
+        "  open func connect(right: GenericCycleRight<T>): GenericCycleRight<T> {\n"
+        "    self.rights = [right];\n"
+        "    return self.rights[0];\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "/** Right endpoint of an imported generic object cycle. */\n"
+        "open type GenericCycleRight<T> {\n"
+        "  /** Managed payload whose representation is selected by T. */\n"
+        "  open let payload: T;\n"
+        "\n"
+        "  /** Left endpoints connected through an array-managed edge. */\n"
+        "  open var lefts: GenericCycleLeft<T>[] = [];\n"
+        "\n"
+        "  /** Construct an unconnected right endpoint. */\n"
+        "  func GenericCycleRight(payload: T) {\n"
+        "    self.payload = payload;\n"
+        "  }\n"
+        "\n"
+        "  /** Connect and return the opposite endpoint. */\n"
+        "  open func connect(left: GenericCycleLeft<T>): GenericCycleLeft<T> {\n"
+        "    self.lefts = [left];\n"
+        "    return self.lefts[0];\n"
+        "  }\n"
+        "}\n");
+    write_text_file(root_manifest_path, root_manifest_text);
+    write_text_file(
+        root_source_path,
+        "module test.cli.genericcycle.consumer;\n"
+        "\n"
+        "import std.test;\n"
+        "import test.cli.genericcycle.provider;\n"
+        "\n"
+        "/** Consumer-owned payload used to observe collection of the cycle. */\n"
+        "type GenericCycleLeaf {\n"
+        "  /** Explicit non-default leaves created by this test. */\n"
+        "  static var created: i64 = 0;\n"
+        "\n"
+        "  /** Explicit non-default leaves finalized by the collector. */\n"
+        "  static var finalized: i64 = 0;\n"
+        "\n"
+        "  /** Marker distinguishing explicit leaves from default values. */\n"
+        "  let marker: string;\n"
+        "\n"
+        "  /** Construct one observable payload. */\n"
+        "  func GenericCycleLeaf(marker: string) {\n"
+        "    self.marker = marker;\n"
+        "    GenericCycleLeaf.created += 1;\n"
+        "  }\n"
+        "\n"
+        "  /** Record collection of an explicit payload. */\n"
+        "  func ~GenericCycleLeaf() {\n"
+        "    if self.marker != \"\" {\n"
+        "      GenericCycleLeaf.finalized += 1;\n"
+        "    }\n"
+        "  }\n"
+        "\n"
+        "  /** Reset observable lifecycle state. */\n"
+        "  static func reset() {\n"
+        "    GenericCycleLeaf.created = 0;\n"
+        "    GenericCycleLeaf.finalized = 0;\n"
+        "  }\n"
+        "\n"
+        "  /** Return the number of explicit leaves created. */\n"
+        "  static func createdCount(): i64 {\n"
+        "    return GenericCycleLeaf.created;\n"
+        "  }\n"
+        "\n"
+        "  /** Return the number of explicit leaves finalized. */\n"
+        "  static func finalizedCount(): i64 {\n"
+        "    return GenericCycleLeaf.finalized;\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "/** Create a real cycle and drop every external reference naturally. */\n"
+        "func createUnreachableGenericCycle(): void {\n"
+        "  let left = GenericCycleLeft<GenericCycleLeaf>(\n"
+        "    GenericCycleLeaf(\"left\")\n"
+        "  );\n"
+        "  let right = GenericCycleRight<GenericCycleLeaf>(\n"
+        "    GenericCycleLeaf(\"right\")\n"
+        "  );\n"
+        "  let returnedRight = left.connect(right);\n"
+        "  let returnedLeft = right.connect(left);\n"
+        "\n"
+        "  assert(returnedRight.payload.marker == \"right\" &&\n"
+        "         returnedLeft.payload.marker == \"left\",\n"
+        "         \"both imported generic graph directions remain readable\");\n"
+        "}\n"
+        "\n"
+        "/** Run the isolated generic cycle collection verification. */\n"
+        "func main(args: string[]) {\n"
+        "  GenericCycleLeaf.reset();\n"
+        "  createUnreachableGenericCycle();\n"
+        "  assert(GenericCycleLeaf.createdCount() == 2,\n"
+        "         \"the graph creates exactly two explicit payloads\");\n"
+        "  assert(GenericCycleLeaf.finalizedCount() == 2,\n"
+        "         \"the unreachable imported generic cycle releases both payloads\");\n"
+        "}\n");
+
+    if (getenv("FENG_GC_THRESHOLD") != NULL) {
+        saved_threshold = dup_cstr(getenv("FENG_GC_THRESHOLD"));
+    }
+    ASSERT(setenv("FENG_GC_THRESHOLD", "1", 1) == 0);
+    {
+        char *argv[] = { root_project_dir };
+        ASSERT(feng_cli_project_run_main("feng", 1, argv) == 0);
+    }
+    if (saved_threshold != NULL) {
+        ASSERT(setenv("FENG_GC_THRESHOLD", saved_threshold, 1) == 0);
+    } else {
+        ASSERT(unsetenv("FENG_GC_THRESHOLD") == 0);
+    }
+
+    free(saved_threshold);
+    free(root_manifest_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(root_source_path);
+    free(root_src_dir);
+    free(root_manifest_path);
+    free(root_project_dir);
+    free(dep_source_path);
+    free(dep_src_dir);
+    free(dep_manifest_path);
+    free(dep_project_dir);
+    free(std_project_dir);
+    free(repo_root);
+}
+
 static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(void) {
     char template_path[] = "temp/feng_cli_pack_release_flags_XXXXXX";
     char *workspace_dir;
@@ -17675,6 +17878,7 @@ int main(void) {
     test_project_build_lib_stages_assets_under_output_root();
     test_project_build_lib_stages_extlib_assets_without_assets_layer();
     test_project_run_release_reuses_build_pipeline();
+    test_project_run_collects_cross_package_generic_cycle();
     test_project_pack_uses_release_build_and_public_ft_excludes_spans();
     test_project_pack_includes_staged_assets_in_bundle();
     test_project_pack_includes_extlib_assets_without_assets_layer();

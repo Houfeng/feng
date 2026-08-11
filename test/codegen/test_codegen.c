@@ -6188,6 +6188,80 @@ static void test_callable_spec_lambda_local_capture_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kGenericLambdaDynamicCaptureSrc =
+    "module feng.codegen.generic_lambda_capture;\n"
+    "spec Reader<R>(): R;\n"
+    "@value\n"
+    "type Pair<A, B> {\n"
+    "    var first: A;\n"
+    "    var second: B;\n"
+    "    var label: string;\n"
+    "}\n"
+    "func captureDirect<T>(initial: T, replacement: T): T {\n"
+    "    var captured = initial;\n"
+    "    let read: Reader<T> = () -> captured;\n"
+    "    captured = replacement;\n"
+    "    return read();\n"
+    "}\n"
+    "type Owner<T> {\n"
+    "    func capturePair<U>(initial: Pair<T, U>, replacement: Pair<T, U>): Pair<T, U> {\n"
+    "        var captured = initial;\n"
+    "        let read: Reader<Pair<T, U> > = () -> captured;\n"
+    "        captured = replacement;\n"
+    "        return read();\n"
+    "    }\n"
+    "}\n";
+
+/* Generic lambdas preserve their creating callable's descriptor context and
+ * store concrete-size captures in the capture cell's existing allocation. */
+static void test_generic_lambda_dynamic_capture_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericLambdaDynamicCaptureSrc,
+                                        "generic_lambda_capture.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic lambda dynamic capture): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "const FengFunctionDescriptor *_reified_function_desc;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "const FengTypeDescriptor *_reified_owner_desc;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "const FengGenericParamDescriptor *_reified_param0;") != NULL);
+    ASSERT(strstr(out.c_source, "FengArray *_cap0;") != NULL);
+    ASSERT(strstr(out.c_source, "feng_array_new_kinded(") != NULL);
+    ASSERT(strstr(out.c_source, "feng_array_data(_lambda->_cap0)") != NULL);
+    ASSERT(strstr(out.c_source, "switch (_T->kind)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_aggregate_assign(feng_array_data(") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengCaptureCell__feng__codegen__generic_lambda_capture") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kCallableSpecLambdaSelfCaptureSrc =
     "module feng.codegen.gs7;\n"
     "spec Reader(): int;\n"
@@ -6660,6 +6734,73 @@ static void test_match_expr_aggregate_result_codegen(void) {
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "feng_aggregate_default_init(&_ifv") != NULL);
     ASSERT(strstr(out.c_source, "feng_aggregate_assign(&_ifv") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+static const char *kGenericExpressionJoinResultSrc =
+    "module feng.codegen.generic_join;\n"
+    "@value\n"
+    "type Box<T> {\n"
+    "    var value: T;\n"
+    "    var label: string;\n"
+    "}\n"
+    "type Flow {\n"
+    "    func pickIf<T>(flag: bool, left: Box<T>, right: Box<T>): Box<T> {\n"
+    "        return if flag { left; } else { right; };\n"
+    "    }\n"
+    "    func pickMatch<T>(tag: i32, left: Box<T>, right: Box<T>): Box<T> {\n"
+    "        return match tag { 0 { left; } else { right; } };\n"
+    "    }\n"
+    "    func pickTry<T>(left: Box<T>, right: Box<T>): Box<T> {\n"
+    "        return try left catch ex: string { right; };\n"
+    "    }\n"
+    "}\n";
+
+/* All expression joins preserve descriptor-sized address storage instead of
+ * copying through the open generic placeholder aggregate. */
+static void test_generic_expression_join_result_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericExpressionJoinResultSrc,
+                                        "generic_join.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic expression join): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(count_substr(out.c_source,
+                        "feng_aggregate_default_init(_ifv") >= 2U);
+    ASSERT(count_substr(out.c_source,
+                        "feng_aggregate_assign(_ifv") >= 4U);
+    ASSERT(strstr(out.c_source,
+                  "feng_aggregate_default_init(_tryv") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_aggregate_assign(_tryv") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_aggregate_assign(&_ifv") == NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_aggregate_assign(&_tryv") == NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -8393,6 +8534,121 @@ static void test_generic_union_literal_adaptation_type_lifetime(void) {
     feng_program_free(program);
 }
 
+/* A union whose payload contains a descriptor-sized generic value must use
+ * the closed union/member descriptors. Aggregate array stores must also
+ * preserve an address-form parameter instead of taking its address twice. */
+static void test_generic_union_reified_storage_and_array_source_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.unionreified;\n"
+        "@value\n"
+        "type Box<T> {\n"
+        "    let value: T;\n"
+        "    let label: string;\n"
+        "}\n"
+        "spec Maybe<T>: string | Box<T>;\n"
+        "func exercise<T>(first: Box<T>, second: Box<T>): Maybe<T> {\n"
+        "    let values = [first, second];\n"
+        "    var result: Maybe<T> = first;\n"
+        "    result = second;\n"
+        "    return result;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "tests/generic_union_reified_storage_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic reified union): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "_Alignas(max_align_t) char _union") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".nested = ((const FengAggregateDescriptor *)_desc->reified_agg_deps[") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, _desc->reified_agg_deps[") != NULL);
+    ASSERT(strstr(out.c_source, "&_p_first") == NULL);
+    ASSERT(strstr(out.c_source, "&_p_second") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
+/* Union-form generic constraints validate membership at compile time and do
+ * not add a witness to any concrete generic parameter descriptor. */
+static void test_generic_union_constraint_omits_runtime_witness_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.unionconstraint;\n"
+        "type Reference { let label: string; let code: i64; }\n"
+        "@value\n"
+        "type Box<T> { let value: T; let label: string; let code: i64; }\n"
+        "spec Choice<T>: Reference | Box<T> | i64;\n"
+        "func accept<T, U: Choice<T>>(value: U): U { return value; }\n"
+        "func exercise(): i64 {\n"
+        "    let reference = accept<string, Reference>(\n"
+        "        Reference { label: \"reference\", code: 1 });\n"
+        "    let aggregate = accept<string, Box<string>>(\n"
+        "        Box<string> { value: \"aggregate\", label: \"box\", code: 2 });\n"
+        "    let scalar = accept<string, i64>(3);\n"
+        "    return reference.code + aggregate.code + scalar;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "tests/generic_union_constraint_no_witness_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic union constraint): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FENG_VALUE_TRIVIAL") != NULL);
+    ASSERT(strstr(out.c_source, "FENG_VALUE_MANAGED_POINTER") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS") != NULL);
+    ASSERT(count_substr(out.c_source, ".witness = NULL") >= 3U);
+    ASSERT(strstr(out.c_source, ".witness = &") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_generic_union_form_match_expr_codegen(void) {
     static const char *kSource =
         "module feng.codegen.uniongenericexpr;\n"
@@ -9385,6 +9641,7 @@ int main(void) {
     test_generic_callable_spec_coercion_codegen();
     test_callable_spec_method_coercion_codegen();
     test_callable_spec_lambda_local_capture_codegen();
+    test_generic_lambda_dynamic_capture_codegen();
     test_callable_spec_lambda_self_capture_codegen();
     test_callable_spec_lambda_argument_codegen();
     test_callable_spec_other_coercion_codegen();
@@ -9399,6 +9656,7 @@ int main(void) {
     test_generic_constrained_aggregate_spec_value_codegen();
     test_if_expr_aggregate_result_codegen();
     test_match_expr_aggregate_result_codegen();
+    test_generic_expression_join_result_codegen();
     test_match_statement_codegen();
     test_enum_match_statement_codegen();
     test_enum_match_expression_codegen();
@@ -9425,6 +9683,8 @@ int main(void) {
     test_union_object_spec_leaf_coercion_codegen();
     test_generic_union_form_spec_codegen();
     test_generic_union_literal_adaptation_type_lifetime();
+    test_generic_union_reified_storage_and_array_source_codegen();
+    test_generic_union_constraint_omits_runtime_witness_codegen();
     test_generic_union_form_match_expr_codegen();
     test_tuple_union_cleanup_codegen();
     test_tuple_fit_codegen();

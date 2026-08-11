@@ -1,6 +1,7 @@
 open module fcts_lib.test;
 
 import std;
+import std.collections;
 
 /** Descriptor-sized value transported through both generic scopes. */
 @value
@@ -30,6 +31,56 @@ open type LibAdvancedPair<T, U>(
   U
 );
 
+/** Ordinary reference member of the advanced generic union. */
+open type LibAdvancedUnionReference {
+  /** Managed text carried by the reference branch. */
+  open let label: string;
+
+  /** Scalar tail carried by the reference branch. */
+  open let code: i64;
+
+  /** Construct a populated reference branch. */
+  func LibAdvancedUnionReference(label: string, code: i64) {
+    self.label = label;
+    self.code = code;
+  }
+}
+
+/** Union combining reference, descriptor-sized, and scalar representations. */
+open spec LibAdvancedUnion<T>:
+  LibAdvancedUnionReference | LibAdvancedComposite<T> | i64;
+
+/** Tuple embedding an advanced union and a descriptor-sized fallback. */
+open type LibAdvancedUnionTuple<T>(
+  LibAdvancedUnion<T>,
+  LibAdvancedComposite<T>,
+  string
+);
+
+/** Value envelope whose fields exercise union and tuple descriptor nesting. */
+@value
+open type LibAdvancedUnionEnvelope<T> {
+  /** Union field copied through an imported shared body. */
+  open var choice: LibAdvancedUnion<T>;
+
+  /** Tuple containing another copy of the union and its fallback value. */
+  open var values: LibAdvancedUnionTuple<T>;
+
+  /** Scalar tail verifying the complete envelope layout. */
+  open var revision: i64;
+
+  /** Construct a populated union envelope. */
+  func LibAdvancedUnionEnvelope(
+    choice: LibAdvancedUnion<T>,
+    values: LibAdvancedUnionTuple<T>,
+    revision: i64
+  ) {
+    self.choice = choice;
+    self.values = values;
+    self.revision = revision;
+  }
+}
+
 /** Result whose layout depends independently on T and U. */
 @value
 open type LibAdvancedTransfer<T, U> {
@@ -51,6 +102,47 @@ open type LibAdvancedTransfer<T, U> {
     self.pair = pair;
     self.marker = marker;
     self.revision = revision;
+  }
+}
+
+/** Managed leaf with observable construction and finalization counts. */
+open type LibAdvancedLifetimeLeaf {
+  /** Number of leaves constructed since the last reset. */
+  static var created: i64 = 0;
+
+  /** Number of leaves finalized since the last reset. */
+  static var finalized: i64 = 0;
+
+  /** Stable value used after aggregate copies and control-flow joins. */
+  open let value: string;
+
+  /** Construct one observable managed leaf. */
+  func LibAdvancedLifetimeLeaf(value: string) {
+    self.value = value;
+    LibAdvancedLifetimeLeaf.created += 1;
+  }
+
+  /** Record finalization for an explicitly constructed, non-default leaf. */
+  func ~LibAdvancedLifetimeLeaf() {
+    if self.value != "" {
+      LibAdvancedLifetimeLeaf.finalized += 1;
+    }
+  }
+
+  /** Reset counters before an isolated lifecycle exercise. */
+  open static func resetCounts(): void {
+    LibAdvancedLifetimeLeaf.created = 0;
+    LibAdvancedLifetimeLeaf.finalized = 0;
+  }
+
+  /** Return the number of constructed leaves. */
+  open static func createdCount(): i64 {
+    return LibAdvancedLifetimeLeaf.created;
+  }
+
+  /** Return the number of finalized leaves. */
+  open static func finalizedCount(): i64 {
+    return LibAdvancedLifetimeLeaf.finalized;
   }
 }
 
@@ -81,4 +173,220 @@ open type LibAdvancedFlow<T> {
     );
     return LibAdvancedTransfer<T, U>(pair, marker, revision);
   }
+
+  /** Select a descriptor-sized value through an if-expression join. */
+  open func selectIf<U>(
+    flag: bool,
+    left: LibAdvancedComposite<U>,
+    right: LibAdvancedComposite<U>
+  ): LibAdvancedComposite<U> {
+    return if flag { left } else { right };
+  }
+
+  /** Select a descriptor-sized value through a match-expression join. */
+  open func selectMatch<U>(
+    tag: i64,
+    first: LibAdvancedComposite<U>,
+    second: LibAdvancedComposite<U>
+  ): LibAdvancedComposite<U> {
+    return match tag {
+      0 { first }
+      else { second }
+    };
+  }
+
+  /**
+   * Reassign a descriptor-sized local across loop iterations and leave
+   * iteration scopes through both continue and break.
+   */
+  open func selectLoop<U>(
+    first: LibAdvancedComposite<U>,
+    second: LibAdvancedComposite<U>
+  ): LibAdvancedComposite<U> {
+    var result = first;
+    for var index: i64 = 0; index < 5; index += 1 {
+      if index == 1 {
+        result = second;
+        continue;
+      }
+      if index == 3 {
+        break;
+      }
+      result = first;
+    }
+    return result;
+  }
+
+  /** Return a descriptor-sized value early from nested scopes. */
+  open func selectNestedReturn<U>(
+    takeEarly: bool,
+    value: LibAdvancedComposite<U>,
+    fallback: LibAdvancedComposite<U>
+  ): LibAdvancedComposite<U> {
+    if takeEarly {
+      if value.revision > 0 {
+        return value;
+      }
+    }
+    return fallback;
+  }
+
+  /** Return a descriptor-sized argument unchanged from a shared method. */
+  open func pass<U>(
+    value: LibAdvancedComposite<U>
+  ): LibAdvancedComposite<U> {
+    return value;
+  }
+
+  /** Pass an owned constructor result directly to another shared method. */
+  open func passOwned<U>(
+    value: U,
+    label: string,
+    revision: i64
+  ): LibAdvancedComposite<U> {
+    return self.pass<U>(
+      LibAdvancedComposite<U>(value, label, revision)
+    );
+  }
+
+  /** Capture state in a lambda that returns a descriptor-sized value. */
+  open func mapCaptured<U>(
+    value: U,
+    label: string,
+    revision: i64
+  ): LibAdvancedComposite<U> {
+    let capturedLabel = label;
+    let capturedRevision = revision;
+    let mapper: Func<U, LibAdvancedComposite<U> > =
+      (current: U) -> LibAdvancedComposite<U>(
+        current,
+        capturedLabel,
+        capturedRevision
+      );
+    return mapper(value);
+  }
+
+  /** Capture and replace a direct method-generic value by reference. */
+  open func captureDirect<U>(initial: U, replacement: U): U {
+    var captured = initial;
+    let read: Func<U> = () -> captured;
+    captured = replacement;
+    return read();
+  }
+
+  /** Capture and replace a descriptor-sized method-generic aggregate. */
+  open func captureComposite<U>(
+    initial: LibAdvancedComposite<U>,
+    replacement: LibAdvancedComposite<U>
+  ): LibAdvancedComposite<U> {
+    var captured = initial;
+    let read: Func<LibAdvancedComposite<U> > = () -> captured;
+    captured = replacement;
+    return read();
+  }
+
+  /** Copy, read, overwrite, and return descriptor-sized array elements. */
+  open func processArray<U>(
+    first: LibAdvancedComposite<U>,
+    second: LibAdvancedComposite<U>,
+    replacement: LibAdvancedComposite<U>
+  ): LibAdvancedComposite<U>[] {
+    let items: LibAdvancedComposite<U>[!] = [first, second];
+    let observed = items[0];
+    items[0] = replacement;
+    items[1] = observed;
+    return (LibAdvancedComposite<U>[])items;
+  }
+
+  /** Exercise List growth, read, overwrite, removal, clear, and return. */
+  open func processList<U>(
+    first: LibAdvancedComposite<U>,
+    second: LibAdvancedComposite<U>,
+    replacement: LibAdvancedComposite<U>
+  ): List<LibAdvancedComposite<U> > {
+    let items = List<LibAdvancedComposite<U> >();
+    for var index: int = 0; index < 12; index += 1 {
+      items.add(first);
+    }
+    let observed = items.get(0);
+    items.set(0, replacement);
+    items.removeAt(1);
+    items.clear();
+    items.add(observed);
+    items.add(replacement);
+    items.add(second);
+    return items;
+  }
+
+  /** Exercise Option none, some, replacement, and return transitions. */
+  open func processOption<U>(
+    first: LibAdvancedComposite<U>,
+    replacement: LibAdvancedComposite<U>,
+    keepValue: bool
+  ): Option<LibAdvancedComposite<U> > {
+    var result: Option<LibAdvancedComposite<U> > = none;
+    result = first;
+    result = replacement;
+    if keepValue {
+      return result;
+    }
+    result = none;
+    return result;
+  }
+}
+
+/** Capture and replace a direct top-level generic value by reference. */
+open func libAdvancedCaptureTopLevel<U>(initial: U, replacement: U): U {
+  var captured = initial;
+  let read: Func<U> = () -> captured;
+  captured = replacement;
+  return read();
+}
+
+/** Construct the ordinary reference branch of an advanced generic union. */
+open func libAdvancedMakeUnionReference<T>(
+  label: string,
+  code: i64
+): LibAdvancedUnion<T> {
+  return LibAdvancedUnionReference(label, code);
+}
+
+/** Construct the descriptor-sized branch of an advanced generic union. */
+open func libAdvancedMakeUnionComposite<T>(
+  value: T,
+  label: string,
+  revision: i64
+): LibAdvancedUnion<T> {
+  return LibAdvancedComposite<T>(value, label, revision);
+}
+
+/** Construct the scalar branch of an advanced generic union. */
+open func libAdvancedMakeUnionScalar<T>(value: i64): LibAdvancedUnion<T> {
+  return value;
+}
+
+/** Pass an advanced generic union through an imported shared body. */
+open func libAdvancedPassUnion<T>(
+  value: LibAdvancedUnion<T>
+): LibAdvancedUnion<T> {
+  return value;
+}
+
+/** Embed a union in both direct and tuple fields of a value envelope. */
+open func libAdvancedWrapUnion<T>(
+  choice: LibAdvancedUnion<T>,
+  fallback: LibAdvancedComposite<T>,
+  marker: string,
+  revision: i64
+): LibAdvancedUnionEnvelope<T> {
+  let values: LibAdvancedUnionTuple<T> = (choice, fallback, marker);
+  return LibAdvancedUnionEnvelope<T>(choice, values, revision);
+}
+
+/** Return a concrete leaf admitted directly by a generic union constraint. */
+open func libAdvancedAcceptUnionLeaf<
+  T,
+  U: LibAdvancedUnion<T>
+>(value: U): U {
+  return value;
 }

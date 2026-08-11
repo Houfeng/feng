@@ -655,12 +655,13 @@ static bool determine_dep_kind(const FengDecl *decl,
             }
             return true;
         case FENG_DECL_SPEC:
-            /* Object-spec fat values have a fixed layout, but their concrete
-             * aggregate descriptor still owns instance-specific default
-             * semantics and is the lifecycle authority in shared generic
-             * bodies. Collect it through the ordinary aggregate dependency
-             * path rather than using an incomplete open-instance descriptor. */
-            if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+            /* Every by-value spec form uses an aggregate descriptor as its
+             * concrete lifecycle/default authority. Object/intersection
+             * carriers are fixed-size fat values; a union may additionally
+             * obtain its physical size from the closed descriptor. */
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT ||
+                decl->as.spec_decl.form == FENG_SPEC_FORM_UNION ||
+                decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
                 *out_kind = FENG_REIFIABLE_DEP_KIND_AGGREGATE;
                 return true;
             }

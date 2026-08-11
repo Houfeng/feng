@@ -1,6 +1,6 @@
 # Feng 泛型高阶组合场景 FCTS 补强开发文档
 
-> 状态：实施暂停（先完成泛型共享体具化修复）
+> 状态：已完成
 >
 > 泛型语言规则以
 > [feng-generics-draft.md](../specifications/feng-generics-draft.md) 为准；基础组合覆盖及上一轮修复记录见
@@ -9,7 +9,7 @@
 >
 > 第一组暴露出的共享体具化缺口已转入独立前置专项：
 > [feng-generic-shared-body-reification-bugfix-dev.md](./feng-generic-shared-body-reification-bugfix-dev.md)。
-> 该专项完成并通过最终 `make test` 前，本文不继续后续分组。
+> 该专项已经完成并通过最终 `make test`，本文从第二组继续实施。
 
 ## 1 目标
 
@@ -53,7 +53,8 @@
 - `fcts/fcts_bin/src/main.ff` 只增加一次新测试入口调用，不修改任何已有测试的语义或断言；
 - 测试库不使用 `puts` 或其他额外输出；
 - 不修改已有测试文件。若缺陷修复确实要求调整已有测试，必须先取得人工批准；
-- compiler tests 只用于锁定诊断、AST、Semantic 或生成 C 结构，语言行为继续由 FCTS 验证。
+- compiler tests 通常只用于锁定诊断、AST、Semantic 或生成 C 结构，语言行为由 FCTS 验证；
+  第四组循环回收因验证时点限制，按 §4.4 的专项边界改由 `test/cli` 端到端子进程验收。
 
 ## 4 分组实施
 
@@ -123,8 +124,14 @@
 测试必须创建失去外部引用的真实循环，不能调用 `clear`、手工置空或以其他方式主动断环。
 循环检测应完全复用现有类型描述符、managed-field 元数据及自动循环回收机制；禁止为测试暴露 runtime 私有入口。
 
-为避免把 runtime 内部阈值写成语言契约，用例只允许验证现有公开执行生命周期内能够稳定观察到的回收结果。
-如果当前公开行为无法在程序退出前稳定观察回收结果，应停止本组，先提交“是否增加公开回收触发能力或改由 runtime/CLI 测试验收”的人工决策，不能编写依赖私有阈值的脆弱 FCTS。
+本组不写入 FCTS，改由 `test/cli` 创建并运行独立的跨包 provider/consumer 工程。测试子进程在启动时
+通过生命周期规范公开定义的 `FENG_GC_THRESHOLD=1` 固定收集触发条件，使最后一个外部引用释放后
+能够在 Feng 用户代码中立即断言终结器计数。该设置只属于测试子进程环境，不改变 FCTS 默认命令、
+产品默认阈值、runtime API 或 runtime ABI。
+
+CLI 用例必须同时验证 provider 导出、consumer `.ft` 恢复、泛型闭合类型描述符、managed-field
+遍历和实际循环回收，不能只检查生成 C 文本。现有 `test/runtime` 已覆盖回收算法及直接、数组、
+aggregate 槽遍历，本组不重复增加等价的手工描述符测试。
 
 验收：专项运行通过后，在沙箱外执行一次 `make test`。
 
@@ -163,25 +170,25 @@
 ## 6 完成标准
 
 - [x] 盘点第二轮高风险组合并排除与上一轮等价的用例
-- [ ] 前置专项：泛型共享体具化修复及其最终 `make test`
-- [ ] 第一组：双层泛型作用域与多个独立类型参数
-- [ ] 第一组完成后的 `make test`
-- [ ] 第二组：复杂 reified 值的控制流与生命周期
-- [ ] 第二组完成后的 `make test`
-- [ ] 第三组：复杂泛型值作为容器元素
-- [ ] 第三组完成后的 `make test`
-- [ ] 第四组：泛型双向对象图的循环回收或经人工确认的替代验收
-- [ ] 第四组完成后的 `make test`
-- [ ] 第五组：union-form 与复合泛型数据流
-- [ ] 第五组完成后的 `make test`
-- [ ] 最终核对新增用例与既有 FCTS 无等价重复
-- [ ] 最终 `make test` 无 sanitizer 报告
+- [x] 前置专项：泛型共享体具化修复及其最终 `make test`
+- [x] 第一组：双层泛型作用域与多个独立类型参数
+- [x] 第一组完成后的 `make test`
+- [x] 第二组：复杂 reified 值的控制流与生命周期
+- [x] 第二组完成后的 `make test`
+- [x] 第三组：复杂泛型值作为容器元素
+- [x] 第三组完成后的 `make test`
+- [x] 第四组：泛型双向对象图的循环回收或经人工确认的替代验收
+- [x] 第四组完成后的 `make test`
+- [x] 第五组：union-form 与复合泛型数据流
+- [x] 第五组完成后的 `make test`
+- [x] 最终核对新增用例与既有 FCTS 无等价重复
+- [x] 最终 `make test` 无 sanitizer 报告
 
 完成前不得把本文状态改为“已完成”。
 
 ## 7 实施中发现的缺陷
 
-### 7.1 imported 泛型方法成员签名缺少双层泛型作用域实例注册（已修复，待回归）
+### 7.1 imported 泛型方法成员签名缺少双层泛型作用域实例注册（已修复并完成回归）
 
 第一组首次专项运行在 consumer codegen 阶段报告：
 
@@ -245,4 +252,135 @@ consumer 闭合 owner 为 `Flow<i64>` 后，需要解析的精确成员签名包
 
 完整 ABI、依赖 domain、FT 恢复、递归 descriptor graph、测试矩阵及实施步骤统一定义在
 [feng-generic-shared-body-reification-bugfix-dev.md](./feng-generic-shared-body-reification-bugfix-dev.md)，本文不再重复。
-该前置专项完成并通过最终 `make test` 后，才恢复第一组及后续分组。
+该前置专项已经完成并通过最终 `make test`；第一组也已完成专项验证和全量回归，后续从第二组继续。
+
+### 7.3 泛型共享体未统一接入 lambda 捕获降级（已修复并完成回归）
+
+第二组在 imported 泛型方法共享体内创建捕获局部状态的 lambda 时报错：
+
+```text
+CE0102: codegen: lambda capture 'capturedLabel' was not lowered to a capture cell
+```
+
+根因是可调用体发码入口不一致：普通顶层函数、普通成员方法和 fit 方法都会先分析
+lambda 捕获，再将被捕获的参数、`self` 和局部绑定提升为引用捕获单元；顶层泛型函数和
+泛型类型共享方法漏掉了同一阶段，导致创建闭包时无法找到捕获单元。
+
+通用修复规则：
+
+1. 顶层函数、静态方法和实例方法的普通体与泛型共享体必须共用同一套捕获分析、
+   绑定提升和清理规则；
+2. 捕获保持权威规范中的引用捕获语义；`var` 与外层共享同一存储，`let` 保持不可重新赋值，
+   闭包延长捕获绑定及其托管成员的生命期；
+3. lambda invoke 体若依赖类型级或方法级泛参，闭包环境必须保存创建点已有的具化描述符
+   引用，invoke 体仍按现有静态 slot 读取约定取得闭合依赖；
+4. 修复必须按绑定的通用表示分类处理固定布局、直接泛参和 descriptor-sized 聚合，不得针对
+   某个测试类型、容器、参数位置或包增加特判；
+5. 普通非泛型闭包和已有固定布局捕获保持现有发码与开销。具化描述符是现有静态数据，
+   只在原本无法正确发码的泛型 lambda 环境中保存必要指针，不新增 runtime ABI、运行时
+   descriptor 构造、名称查找、额外堆分配或非泛型路径开销。
+
+修复必须由 compiler test 锁定两类共享体的捕获单元与描述符传递结构，并由本组
+FCTS 验证跨包泛型方法中的完整值、引用捕获和生命周期结果。
+
+当前实现对固定布局捕获继续使用原有 typed capture cell；直接泛参与 descriptor-sized
+聚合则以一元素 kinded array 作为捕获单元本身，由既有 array 元素描述统一负责具体大小、
+复制、ARC 与循环遍历。该路径仍只有一次捕获单元分配，不修改 runtime ABI，也不增加
+固定布局或非泛型闭包的运行时操作。闭包只保存共享体 invoke 所必需的静态 descriptor 指针。
+
+第二组的生命周期用例还确认：按值聚合结果槽在分支写入前会执行类型规定的默认初始化；
+若聚合中含普通引用类型字段，其默认对象也会正常进入终结流程，但不会调用显式构造器。
+因此生命周期计数必须用非默认标记区分测试显式创建的叶子，不能把“显式构造器调用次数”
+直接当作该类型全部实例的创建次数。该行为属于现有默认值与终结语义，不是重复释放。
+
+### 7.4 分支表达式结果槽丢失 descriptor-sized 存储信息（已修复并完成回归）
+
+修复 7.3 后，`if` 与 `match` 表达式返回 `Composite<U>` 时，生成 C 曾引用开放泛型
+aggregate descriptor，consumer 链接阶段因而报告未定义符号。根因是表达式分支汇合只保存
+逻辑结果类型，没有保留结果槽的具体 descriptor、size 及“C 表达式本身就是存储地址”的
+表示信息；普通固定布局聚合可以沿用静态 C 类型，descriptor-sized 聚合则不能。
+
+通用修复规则：
+
+1. `if`、`match` 与 `try/catch` 表达式共用同一种结果槽抽象；
+2. descriptor-sized 聚合结果槽在声明处一次读取具体 descriptor 与 size，分支写入、结果传播
+   和作用域清理全部复用同一份信息；
+3. 分支写入统一按 borrowed/owned 分别执行 aggregate assign/take，结果不得退化为开放泛型
+   placeholder 的 C 值复制；
+4. 固定布局标量、托管引用和聚合保持原有表示及运行时操作，不新增 runtime ABI 或堆分配。
+
+### 7.5 共享体中的泛型 union 值仍按开放占位布局构造（已修复并完成回归）
+
+第三组首次专项运行在 imported 泛型方法共享体中构造
+`Option<Composite<U>>` 时，生成 C 对开放占位结构体执行聚合初始化，并引用开放
+`Composite<U>` 的静态 aggregate descriptor。前者不能代表闭合 union 的物理大小，
+后者也不是可链接的具化 descriptor，因而产生 C 初始化告警和未定义符号。
+
+该问题不属于 `Option` 或某个成员类型，而是 union-form spec 布局依赖泛参时未接入
+descriptor-sized 聚合的通用表示。通用修复规则为：
+
+1. union 的任一直接成员布局依赖泛参时，该 union 本身必须归类为
+   descriptor-sized 聚合；嵌套 union 和嵌套 `@value type` 递归复用同一布局判定；
+2. 共享体必须从已有 callable descriptor 依赖槽取得闭合 union 及其聚合成员的
+   descriptor，按具体 size 声明存储，不得读取开放占位结构体的 `sizeof`；
+3. union 构造统一写入 tag、活动成员的 forward slot 和 payload；payload 复制或移动
+   必须按成员的具体值种类与 descriptor 处理，嵌套 union 递归复用同一构造路径；
+4. 修复只补齐原本无法正确发码的 descriptor-sized union 路径；固定布局 union
+   保持原有 C 值表示。不新增 runtime ABI、运行时 descriptor 构造、名称查找或堆分配。
+
+修复需由 compiler test 锁定泛型 union 的 descriptor-sized 存储、闭合成员 descriptor
+和地址形式 ABI，并由第三组 FCTS 验证 `none/some` 转换、成员替换、返回值与精确释放次数。
+
+### 7.6 数组字面量对地址形式聚合重复取地址（已修复并完成回归）
+
+修复 7.5 后，第三组的第一个数组用例在运行期崩溃。生成 C 显示，数组字面量
+已正确将 descriptor-sized 参数识别为“C 表达式本身就是值存储地址”，但写入数组
+槽时仍模板化地生成 `&source`，实际把“参数指针变量的地址”传给
+`feng_aggregate_assign`，导致按聚合 descriptor 越界读取。
+
+通用修复规则为：数组字面量的聚合元素写入，统一通过 `ExprResult` 的地址抽象
+获取源存储；普通可寻址 C 值生成 `&value`，直接泛参或
+descriptor-sized 值则直接复用其存储地址。不以类型名、参数位置或是否 imported 分支。
+该修复只改正生成 C 的地址形成，不新增 runtime ABI、运行时操作或分配。
+
+### 7.7 第四组缺少可确定观察循环回收结果的 FCTS 时点（已决策并完成回归）
+
+第四组实施前的现状审计确认：生成的 C 入口会在 Feng `main` 返回、模块级托管值释放之后调用
+`feng_runtime_shutdown()`，因而退出时仍在候选缓冲区中的真实循环会被最终回收；但该调用发生在
+Feng 用户代码全部结束之后，FCTS 无法在其后通过 `std.test` 断言终结器计数。
+
+程序运行期间只在候选缓冲区达到阈值时触发收集。权威生命周期规范允许实现选择默认阈值，并允许
+进程启动时通过 `FENG_GC_THRESHOLD` 覆盖；循环对象的具体释放时机不具备确定性。因此，在普通
+`./build/bin/feng run fcts/fcts_bin` 命令中创建固定数量的循环、依赖当前默认阈值或依赖此前用例
+遗留的候选数量，都不能形成稳定的语言行为断言。
+
+已确定改由 `test/cli` 运行独立的跨包工程，并在测试子进程启动时设置规范公开的
+`FENG_GC_THRESHOLD=1`。该方案使回收在 Feng 用户代码仍可观察时同步发生，同时不依赖实现默认阈值，
+不修改 FCTS，不暴露测试专用 runtime 入口，也不新增公开回收 API。具体测试约束见 §4.4。
+
+### 7.8 imported 泛型 union-form 约束的标量叶子被错误要求 witness（已修复并完成回归）
+
+第五组首次专项运行在调用 imported 泛型函数时报告：
+
+```text
+CE0329: codegen: missing semantic witness for object-form spec coercion
+```
+
+触发声明与调用形态为：
+
+```feng
+func accept<T, U: GenericUnion<T>>(value: U): U { return value; }
+accept<WideValue, i64>(value);
+```
+
+其中 `GenericUnion<T>` 的直接成员包含 `i64`。按 union-form 权威规范，union-form 约束只在编译期
+验证实际类型是否为直接 member，不物化 object-form witness；`i64` 实参也不应进入 spec coercion。
+当前失败说明 imported 约束恢复或泛型调用隐藏参数发码仍把该约束错误归入 object-form witness 路径。
+
+修复必须按约束 spec 的实际 form 统一分类：只有 object-form 约束生成并传递 witness；union-form
+约束只执行既有编译期成员资格检查。provider 本地与 imported 声明、基础类型、引用类型和聚合类型
+实参必须复用同一规则，不得针对 `i64`、当前函数或当前包增加特判。修复不得改变 runtime ABI、
+增加运行时参数或引入 Feng 程序运行时开销。
+
+实现已在泛型描述符隐藏参数发码的统一入口按约束 form 分类：union-form 约束固定使用空 witness，
+其余约束继续保持原有 witness ABI。该修复不增加隐藏参数、运行时操作或分配，也不改变 runtime ABI。
