@@ -1609,7 +1609,9 @@ static char *run_lsp_server_capture(FILE *input) {
 }
 
 /* Runs one LSP session after a position request proves that its asynchronous
- * index dependency is observable through the protocol. */
+ * index dependency is observable through the protocol. Unsuccessful probes
+ * wait briefly so the asynchronous index can progress under cold or loaded
+ * test environments. */
 static char *run_lsp_server_capture_after_position_ready(
     const char *initialize,
     const char *did_open,
@@ -1622,7 +1624,10 @@ static char *run_lsp_server_capture_after_position_ready(
     const char *const *requests,
     size_t request_count,
     char **out_ready_output) {
-    enum { MAX_READY_PROBES = 64 };
+    enum {
+        MAX_READY_PROBES = 200,
+        READY_PROBE_DELAY_US = 25U * 1000U
+    };
     int input_pipe[2];
     int output_pipe[2];
     FILE *errors = temp_file();
@@ -1708,6 +1713,9 @@ static char *run_lsp_server_capture_after_position_ready(
         free(readiness_output);
         if (ready) {
             break;
+        }
+        if (probe_index + 1U < MAX_READY_PROBES) {
+            (void)usleep(READY_PROBE_DELAY_US);
         }
     }
 

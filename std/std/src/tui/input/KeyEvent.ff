@@ -97,10 +97,10 @@ open let MOD_ALT: u8 = 2;
 open let MOD_SHIFT: u8 = 4;
 
 /**
- * KeyEvent 表示一个键盘事件。
+ * KeyEvent 表示一个带路由目标类型的键盘事件。
  *
- * @value 类型，所有字段为 `let`——结构体初始化后不可变。
- * InputManager 构造 KeyEvent 实例后调用 onKey 分发，应用拿到的是只读快照。
+ * @value 类型，content/mods 构造后不可变。target 在 InputManager 完成解析时尚未绑定，
+ * 后续焦点路由实现后由路由器在进入 Widget 回调前绑定。
  *
  * 按键内容通过 `Union<SpecialKey, u32>` 互斥表达：
  * - `SpecialKey` 分支：特殊键（方向键、功能键、Enter 等）
@@ -109,7 +109,13 @@ open let MOD_SHIFT: u8 = 4;
  * 修饰键用 `u8` 位标志表示，快捷方法仅在 100% 能确定时返回 true。
  */
 @value
-open type KeyEvent {
+open type KeyEvent<T> {
+
+  /** 路由目标；仅在 hasTarget() 返回 true 时有效。 */
+  var target: T;
+
+  /** target 是否已经由路由器绑定。 */
+  seal var _hasTarget: bool;
 
   /**
    * 按键内容：SpecialKey=特殊键，u32=可打印字符码点。
@@ -127,6 +133,7 @@ open type KeyEvent {
    * 默认构造函数：content=u32(0), mods=0。
    */
   func KeyEvent() {
+    self._hasTarget = false;
     self.content = (u32)0;
     self.mods = 0;
   }
@@ -137,6 +144,7 @@ open type KeyEvent {
    * @param mods - 修饰键位标志的按位或
    */
   func KeyEvent(content: Union<u32, SpecialKey>, mods: u8) {
+    self._hasTarget = false;
     self.content = content;
     self.mods = mods;
   }
@@ -177,5 +185,23 @@ open type KeyEvent {
       c: u32 { c != (u32)0; }
       else { false; }
     };
+  }
+
+  /**
+   * 绑定事件路由目标。
+   * 当前由后续焦点路由器使用；InputManager 本身不绑定目标。
+   * @param target 路由选中的目标
+   */
+  func bindTarget(target: T): void {
+    self.target = target;
+    self._hasTarget = true;
+  }
+
+  /**
+   * 查询 target 是否已经由路由器绑定。
+   * @return target 是否有效
+   */
+  func hasTarget(): bool {
+    return self._hasTarget;
   }
 }

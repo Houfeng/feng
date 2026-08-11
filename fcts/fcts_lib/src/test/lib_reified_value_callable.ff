@@ -1,0 +1,195 @@
+open module fcts_lib.test;
+
+import std;
+
+/** Object-form spec used to make a generic value field wider than one word. */
+open spec LibReifiedNamed {
+  /** Return the stable test label. */
+  func label(): string;
+}
+
+/** Concrete object-form spec implementation exported to the consumer. */
+open type LibReifiedNamedValue: LibReifiedNamed {
+  /** Stored label. */
+  open let value: string;
+
+  /** Return the stored label. */
+  func label(): string {
+    return self.value;
+  }
+}
+
+/** Managed value wider than one machine word. */
+@value
+open type LibReifiedWideValue {
+  /** First managed slot. */
+  open var first: string;
+
+  /** Second managed slot. */
+  open var second: string;
+
+  /** Scalar tail used to verify the full value was copied. */
+  open var number: i64;
+
+  /** Construct a fully populated wide value. */
+  func LibReifiedWideValue(first: string, second: string, number: i64) {
+    self.first = first;
+    self.second = second;
+    self.number = number;
+  }
+}
+
+/** Generic value whose physical layout depends directly on T. */
+@value
+open type LibReifiedBox<T> {
+  /** Reified payload. */
+  open var value: T;
+
+  /** Managed field after the reified payload verifies following offsets. */
+  open var marker: string;
+
+  /** Construct a populated box. */
+  func LibReifiedBox(value: T, marker: string) {
+    self.value = value;
+    self.marker = marker;
+  }
+}
+
+/** Nested generic value used to verify transitive layout dependencies. */
+@value
+open type LibReifiedOuter<T> {
+  /** Nested descriptor-sized value. */
+  open var box: LibReifiedBox<T>;
+
+  /** Field after the nested value verifies the outer concrete offset table. */
+  open var suffix: string;
+
+  /** Construct a populated nested value. */
+  func LibReifiedOuter(box: LibReifiedBox<T>, suffix: string) {
+    self.box = box;
+    self.suffix = suffix;
+  }
+}
+
+/** Generic value whose fields have a fixed physical layout for every T. */
+@value
+open type LibReifiedStableArray<T> {
+  /** Managed array reference; the element type does not change this field's size. */
+  open let values: T[];
+
+  /** Scalar tail verifies ordinary direct-field layout. */
+  open let index: int;
+
+  /** Construct a fixed-layout generic value. */
+  func LibReifiedStableArray(values: T[], index: int) {
+    self.values = values;
+    self.index = index;
+  }
+}
+
+/** Generic reference family used by the callable pointer ABI test. */
+open type LibReifiedReference<T> {
+  /** Reified object field. */
+  open let value: T;
+
+  /** Construct a reference wrapper. */
+  func LibReifiedReference(value: T) {
+    self.value = value;
+  }
+}
+
+/** Generic callable whose declared parameter is a known reference family. */
+open spec LibReifiedReferenceAction<T>(value: LibReifiedReference<T>): void;
+
+/** Generic callable with known-reference parameter and return families. */
+open spec LibReifiedReferenceMapper<T>(value: LibReifiedReference<T>): LibReifiedReference<T>;
+
+/** Cross-package shared-body operations covering all reified local forms. */
+open type LibReifiedFlow<T> {
+  /** Construct the flow. */
+  func LibReifiedFlow() {
+  }
+
+  /** Return a constructor expression directly. */
+  open func construct(value: T, marker: string): LibReifiedBox<T> {
+    return LibReifiedBox<T>(value, marker);
+  }
+
+  /** Default-initialize, write fields, copy, and return the copy. */
+  open func defaultCopy(value: T, marker: string): LibReifiedBox<T> {
+    var source: LibReifiedBox<T>;
+    source.value = value;
+    source.marker = marker;
+    var result = source;
+    return result;
+  }
+
+  /** Reassign an existing descriptor-sized local from an owned value. */
+  open func replace(first: T, second: T): LibReifiedBox<T> {
+    var result = LibReifiedBox<T>(first, "first");
+    result = LibReifiedBox<T>(second, "second");
+    return result;
+  }
+
+  /** Construct and return a transitively reified nested value. */
+  open func nested(value: T): LibReifiedOuter<T> {
+    let box = LibReifiedBox<T>(value, "inner");
+    let outer = LibReifiedOuter<T>(box, "outer");
+    return outer;
+  }
+
+  /** Copy and return a fixed-layout generic value through the shared body. */
+  open func stableArray(values: T[], index: int): LibReifiedStableArray<T> {
+    let source = LibReifiedStableArray<T>(values, index);
+    let result = source;
+    return result;
+  }
+
+  /** Invoke a callback whose argument is a reified-layout value. */
+  open func invokeValue(callback: Action<LibReifiedBox<T> >, value: T): void {
+    callback(LibReifiedBox<T>(value, "callback"));
+  }
+
+  /** Invoke std Action<T>, whose direct generic slot always uses address ABI. */
+  open func invokeReference(callback: Action<LibReifiedReference<T> >, value: T): void {
+    callback(LibReifiedReference<T>(value));
+  }
+
+  /** Invoke a callable whose declaration fixes the outer reference shape. */
+  open func invokeKnownReference(callback: LibReifiedReferenceAction<T>, value: T): void {
+    callback(LibReifiedReference<T>(value));
+  }
+
+  /** Return a direct generic slot through std Func<T, R>. */
+  open func mapDirect(callback: Func<T, T>, value: T): T {
+    return callback(value);
+  }
+
+  /** Create and invoke a default direct-slot callable in a generic type body. */
+  open func defaultMap(value: T): T {
+    var callback: Func<T, T>;
+    return callback(value);
+  }
+
+  /** Return a descriptor-sized generic value through std Func<T, R>. */
+  open func mapValue(
+    callback: Func<LibReifiedBox<T>, LibReifiedBox<T> >,
+    value: T
+  ): LibReifiedBox<T> {
+    return callback(LibReifiedBox<T>(value, "input"));
+  }
+
+  /** Return the default of a descriptor-sized generic callable result. */
+  open func defaultBox(value: T): LibReifiedBox<T> {
+    var callback: Func<LibReifiedBox<T>, LibReifiedBox<T> >;
+    return callback(LibReifiedBox<T>(value, "ignored"));
+  }
+
+  /** Return a known generic reference family without address wrapping. */
+  open func mapKnownReference(
+    callback: LibReifiedReferenceMapper<T>,
+    value: T
+  ): LibReifiedReference<T> {
+    return callback(LibReifiedReference<T>(value));
+  }
+}

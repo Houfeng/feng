@@ -1,0 +1,34 @@
+open module fcts_lib.test;
+
+import std;
+
+/**
+ * 跨包嵌套泛型 callable 回归使用的事件值。
+ */
+@value
+open type LibNestedGenericEvent<T> {
+  /** 事件载荷。 */
+  open let value: T;
+
+  /** 使用指定载荷创建事件。 */
+  func LibNestedGenericEvent(value: T) {
+    self.value = value;
+  }
+}
+
+/**
+ * 导出 `Action<LibNestedGenericEvent<T>>` 字段并在泛型类型方法中直接调用。
+ */
+open type LibNestedGenericDispatcher<T> {
+  /** 由 consumer 赋值的单播回调。 */
+  open var callback: Action<LibNestedGenericEvent<T>>;
+
+  /** 构造 dispatcher。 */
+  func LibNestedGenericDispatcher() {
+  }
+
+  /** 将载荷封装成嵌套泛型事件后调用 callback。 */
+  open func dispatch(value: T): void {
+    self.callback(LibNestedGenericEvent<T>(value));
+  }
+}

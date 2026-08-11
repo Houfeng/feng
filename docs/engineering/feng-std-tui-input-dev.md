@@ -8,9 +8,9 @@
 
 ## 1 总体策略
 
-**InputManager 独立 + spec 回调注入**：InputManager 作为独立 `open type`
-负责将 stdin 字节流通过状态机解析为 `KeyEvent`/`MouseEvent`，并在内部直接
-分发到 `onKey`/`onMouse` 回调。TuiApp 持有 `input: InputManager` 公开成员，
+**InputManager 独立 + spec 回调注入**：InputManager 作为独立泛型 `open type`
+负责将 stdin 字节流通过状态机解析为 `KeyEvent<T>`/`MouseEvent<T>`，并在内部直接
+分发到 `onKey`/`onMouse` 回调。TuiApp 持有 `input: InputManager<Widget>` 公开成员，
 在 `run()` 中将 stdin 字节逐个喂入 `feed()`。应用层在回调中修改状态，
 回调返回后 `run()` 自动调用 `render()`。
 
@@ -108,22 +108,32 @@ seal let MOD_SHIFT: u8 = 4;
 
 ### 2.4 KeyEvent（KeyEvent.ff）
 
-所有字段为 `let`——结构体初始化后不可变：
+`T` 表示后续事件路由使用的目标类型，避免输入层直接依赖视图层的 `Widget`。
+`target` 在 InputManager 刚完成解析时尚未绑定；焦点与键盘路由实现后，由路由器在
+进入 Widget 回调前绑定。由于 Feng 当前不支持 `Option<T>` 作为开放泛型成员布局，
+事件使用默认 `T` 存储配合布尔状态表达是否已绑定，不把默认值误判为有效目标。
+其余字段为 `let`，结构体初始化后不可变：
 
 ```feng
 @value
-open type KeyEvent {
+open type KeyEvent<T> {
+  /** 路由目标；仅在 hasTarget() 为 true 时有效 */
+  var target: T;
+  /** target 是否已经由路由器绑定 */
+  seal var _hasTarget: bool;
   /** 按键内容：SpecialKey=特殊键，u32=可打印字符码点 */
   let content: Union<SpecialKey, u32>;
   /** 修饰键位标志（KeyEvent 仅含可靠推断的 MOD_CONTROL/MOD_SHIFT，不设 MOD_ALT） */
   let mods: u8;
 
   func KeyEvent() {
+    self._hasTarget = false;
     self.content = (u32)0;
     self.mods = 0;
   }
 
   func KeyEvent(content: Union<SpecialKey, u32>, mods: u8) {
+    self._hasTarget = false;
     self.content = content;
     self.mods = mods;
   }
@@ -154,14 +164,17 @@ open type KeyEvent {
       else { false; }
     };
   }
+  func bindTarget(target: T): void { ... }
+  func hasTarget(): bool { ... }
 }
 ```
 
 > **KeyEvent 不提供 isAlt()**：ESC 前缀无法 100% 消歧，KeyEvent 不设置 MOD_ALT。
 > MouseEvent 提供 isAlt()——SGR 鼠标序列的 button 高位显式报告 Alt 状态，100% 可靠。
 >
-> **所有字段为 `let`**：KeyEvent 是不可变值对象，初始化后字段不可修改。
-> InputManager 构造 KeyEvent 实例后调用 onKey 分发，应用拿到的是只读快照。
+> `content` 和 `mods` 为不可变输入快照；`target` 只供后续路由阶段绑定。
+> 当前尚未实现焦点和键盘路由，因此直接通过 `InputManager.onKey` 收到的
+> `KeyEvent<T>.hasTarget()` 返回 false，此时不得读取 `target` 作为有效事件来源。
 >
 > **各场景 KeyEvent 值**：
 >
@@ -197,13 +210,21 @@ open enum MouseButton {
 
 ### 2.6 MouseEvent（MouseEvent.ff）
 
-`MouseEvent` 是普通引用类型。输入载荷字段均为 `let`，构造后不可变；内部仅维护
-`stopped` 传播状态，使同一事件实例经过 ViewManager 逐级分发时，后续处理方可以观察
-前序处理方调用 `stop()` 的结果。具体冒泡规则由
+`MouseEvent<T>` 是普通引用类型，`T` 表示路由目标类型。输入载荷字段均为 `let`，
+构造后不可变；`target` 在 InputManager 刚完成解析时尚未绑定，ViewManager 在进入
+Widget 回调前将其绑定为命中或锁定目标。事件内部同时维护传播停止状态和该闭合事件
+类型的锁定目标，使同一事件实例经过 ViewManager 逐级分发时，后续处理方可以观察
+前序处理方调用 `stop()` 的结果。具体路由、冒泡和锁定规则由
 `docs/engineering/feng-std-tui-view-dev.md` 定义。
 
 ```feng
-open type MouseEvent {
+open type MouseEvent<T> {
+  /** 路由目标；仅在 hasTarget() 为 true 时有效 */
+  var target: T;
+  /** target 是否已经由路由器绑定 */
+  seal var _hasTarget: bool;
+  /** 当前事件的 target 是否代表现有锁定目标 */
+  seal var _targetOwnsLock: bool;
   /** 鼠标动作类型 */
   let action: MouseAction;
   /** 按下的按钮（move 时为 none） */
@@ -217,8 +238,16 @@ open type MouseEvent {
 
   /** 是否已停止后续传播，仅由 stop() 修改 */
   seal var stopped: bool;
+  /** 当前闭合事件类型是否存在锁定目标 */
+  seal static var _locked: bool;
+  /** 当前闭合事件类型的锁定目标 */
+  seal static var _lockedTarget: T;
+  /** 用于释放锁定目标引用的默认 T */
+  seal static let _emptyTarget: T;
 
   func MouseEvent() {
+    self._hasTarget = false;
+    self._targetOwnsLock = false;
     self.action = MouseAction.press;
     self.button = MouseButton.none;
     self.x = 0;
@@ -228,6 +257,8 @@ open type MouseEvent {
   }
 
   func MouseEvent(action: MouseAction, button: MouseButton, x: u32, y: u32, mods: u8) {
+    self._hasTarget = false;
+    self._targetOwnsLock = false;
     self.action = action;
     self.button = button;
     self.x = x;
@@ -239,14 +270,28 @@ open type MouseEvent {
   func isControl(): bool { return (self.mods & MOD_CONTROL) != 0; }
   func isAlt(): bool { return (self.mods & MOD_ALT) != 0; }
   func isShift(): bool { return (self.mods & MOD_SHIFT) != 0; }
+  func bindTarget(target: T): void { ... }
+  func bindLockedTarget(target: T): void { ... }
+  func hasTarget(): bool { ... }
   func stop(): void { self.stopped = true; }
   func isStopped(): bool { return self.stopped; }
+  func lock(): bool { ... }
+  func unlock(): void { ... }
+  func isLocked(): bool { ... }
+  static func hasLockedTarget(): bool { ... }
+  static func lockedTarget(): T { ... }
 }
 ```
 
 `stop()` 是幂等操作，只阻止当前回调完成后的后续传播，不中断当前回调，也不表示
 阻止默认行为。当前没有捕获阶段、多播处理器或 `preventDefault` 语义，因此不增加
 `stopPropagation()`、`stopImmediatePropagation()` 等更细分的接口。
+
+`lock()` 仅在 `hasTarget()` 为 true 时有效。未锁定时由当前目标取得锁定；后续事件由
+ViewManager 通过锁定路由记录当前事件的 target 代表锁定目标，因此同一锁定目标可重复调用，
+普通命中目标不能抢占。`unlock()` 只有取得锁定的事件，或由锁定路由绑定到该目标的
+后续事件才能释放；其他来源的事件调用时静默不处理。`isLocked()` 表示当前闭合
+`MouseEvent<T>` 是否存在锁定目标。锁定不记录鼠标按钮，也不根据 release 自动解除。
 
 ## 3 InputManager — VT100/xterm 状态机（InputManager.ff）
 
@@ -273,7 +318,7 @@ open enum ParserState {
 ### 3.3 类型设计
 
 ```feng
-open type InputManager {
+open type InputManager<T> {
   /** 状态机当前状态 */
   seal var state: ParserState;
   /** 转义序列参数累积缓冲（CSI 参数） */
@@ -284,10 +329,10 @@ open type InputManager {
   seal var utf8Remaining: i32;
   /** UTF-8 解码出的码点（中间累积用） */
   seal var utf8Codepoint: u32;
-  /** 键盘事件回调（Action<KeyEvent>，用户直接赋值注册） */
-  open var onKey: Action<KeyEvent>;
-  /** 鼠标事件回调（Action<MouseEvent>，用户直接赋值注册） */
-  open var onMouse: Action<MouseEvent>;
+  /** 键盘事件回调（Action<KeyEvent<T>>，用户直接赋值注册） */
+  open var onKey: Action<KeyEvent<T>>;
+  /** 鼠标事件回调（Action<MouseEvent<T>>，用户直接赋值注册） */
+  open var onMouse: Action<MouseEvent<T>>;
 
   func InputManager() { ... }
 
@@ -312,14 +357,14 @@ open type InputManager {
 }
 ```
 
-> **回调类型复用 std 的 `Action<T>`**：`onKey: Action<KeyEvent>`、
-> `onMouse: Action<MouseEvent>`，不自定义 KeyHandler/MouseHandler spec。
+> **回调类型复用 std 的 `Action<T>`**：`onKey: Action<KeyEvent<T>>`、
+> `onMouse: Action<MouseEvent<T>>`，不自定义 KeyHandler/MouseHandler spec。
 > `Action<T>` 是 `open spec Action<T>(arg1: T): void`（见 `std/basic/Func.ff`），
 > 正好匹配单参数 void 回调签名。`feed()` 是 Feng 函数，内部调用
 > `self.onKey(event)` 是 Feng→Feng 调用，不经 C ABI。
 >
 > **onKey/onMouse 为 `open var`**：用户直接赋值注册
-> （`manager.onKey = func(event: KeyEvent) { ... };`），不需要 setter 方法。
+> （`manager.onKey = func(event: KeyEvent<T>) { ... };`），不需要 setter 方法。
 > 两个字段均为单播回调槽；再次赋值会替换原回调，不维护处理器集合，也不隐式组合
 > 新旧回调。TUI 第一版较完整后，再单独评估是否需要多播。
 >
@@ -509,7 +554,7 @@ open type TuiApp {
   // ... 阶段四已有字段 ...
 
   /** 输入管理器（公开只读成员，构造时创建，用户通过此注册回调） */
-  let input: InputManager;
+  let input: InputManager<Widget>;
 }
 ```
 
@@ -596,21 +641,14 @@ exit() 调用 `self.input.buildDisableMouseSgrBytes()`。
 
 ```text
 std/std/src/tui/
-  KeyEvent.ff       # 新增：SpecialKey 枚举 / MOD_CONTROL,MOD_ALT,MOD_SHIFT 常量
-  #                 #       Union<SpecialKey,u32> / KeyEvent @value 类型 + 快捷方法
-  MouseEvent.ff     # 新增：MouseAction / MouseButton 枚举
-  #                 #       MouseEvent 引用类型 + 快捷方法及传播停止状态
-  InputManager.ff   # 新增：VT100/xterm 状态机 + onKey/onMouse (Action<T>)
-  #                 #       feed(byte): void
-  TuiApp.ff         # 修改：新增 input: InputManager 公开成员
-  #                 #       run() drain → input.feed() 逐字节喂入
-  #                 #       init() 增加鼠标启用序列（1006+1003）
-  #                 #       exit() 增加鼠标禁用序列
-  Cell.ff           # 不变
-  Buffer.ff         # 不变
-  Screen.ff         # 不变
-  Style.ff          # 不变
-  RgbColor.ff       # 不变
+  TuiApp.ff             # 组装 input: InputManager<Widget>，并在主循环喂入字节
+
+  input/
+    KeyEvent.ff         # KeyEvent<T> @value 类型、target 与按键快捷方法
+    MouseEvent.ff       # MouseEvent<T> 引用类型、target、lock 与传播状态
+    InputManager.ff     # 泛型 VT100/xterm 状态机、单播回调与 feed(byte)
+
+  screen/               # Cell、Buffer、Screen、Style、RgbColor；本方案不修改
 ```
 
 ## 6 测试策略
@@ -660,6 +698,9 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 | onKey 回调触发 | 赋值 onKey，feed 可打印字节，验证回调被调用且参数正确 |
 | onMouse 回调触发 | 赋值 onMouse，feed 鼠标序列，验证回调被调用且参数正确 |
 | 未注册回调时事件丢弃 | 不赋值 onKey/onMouse，feed 字节，零值回调执行空操作无异常 |
+| 解析阶段不绑定 target | InputManager 回调中验证 hasTarget() 为 false |
+| target 绑定 | 路由器调用 bindTarget() 后验证 hasTarget() 与 target |
+| 鼠标锁定 | 验证未绑定拒绝、首次取得、同目标重复、其他目标不能抢占或释放、锁定路由释放 |
 
 ### 6.3 不可测试项（需真实终端）
 
@@ -685,10 +726,10 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 
 ## 8 阶段五实施步骤
 
-1. 实现 KeyEvent.ff — SpecialKey 枚举 + Modifiers 常量 + Union<SpecialKey,u32> + KeyEvent 类型 + 快捷方法
-2. 实现 MouseEvent.ff — MouseAction/MouseButton 枚举 + MouseEvent 类型 + 快捷方法
-3. 实现 InputManager.ff — VT100/xterm 状态机 + onKey/onMouse (Action<T>) + feed
-4. 修改 TuiApp.ff — 新增 input 公开成员 + run() 集成 + 鼠标启用/禁用
+1. 实现 KeyEvent.ff — SpecialKey 枚举 + Modifiers 常量 + Union<SpecialKey,u32> + KeyEvent<T> 类型 + 快捷方法
+2. 实现 MouseEvent.ff — MouseAction/MouseButton 枚举 + MouseEvent<T> 类型 + 快捷方法
+3. 实现 InputManager.ff — 泛型 VT100/xterm 状态机 + onKey/onMouse (Action<T>) + feed
+4. 修改 TuiApp.ff — 新增 `input: InputManager<Widget>` 公开成员 + run() 集成 + 鼠标启用/禁用
 5. 补充 std_test 用例 — InputManager 单元测试 + 回调分发测试
 6. 全量回归测试 — `make test`
 7. 等待人工 Review

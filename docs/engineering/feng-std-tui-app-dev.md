@@ -227,7 +227,9 @@ open type TuiApp {
   /** Screen 渲染底座；声明处绑定零尺寸实例，init() 时原地调整为终端真实尺寸 */
   let screen: Screen = Screen(0, 0);
   /** 输入管理器；用户通过此成员注册输入回调 */
-  let input: InputManager;
+  let input: InputManager<Widget>;
+  /** 视图管理器；复用当前 TuiApp 的 Screen */
+  let view: ViewManager;
   /** 窗口尺寸已变化标志：sigpipe 可读时置位，render() 中检查并清零 */
   seal var resizeRequested: bool;
   /** 是否已初始化（防止重复 init / 重复 exit） */
@@ -267,7 +269,9 @@ open type TuiApp {
  * screen 已在字段声明处显式初始绑定为零尺寸 Screen，不在构造函数中重复绑定。
  */
 func TuiApp() {
-  self.input = InputManager();
+  self.input = InputManager<Widget>();
+  self.view = ViewManager(self.screen);
+  self.input.onMouse = self.view.dispatchMouse;
   self.tty = 0;
   self.loop = 0;
   self.resizeRequested = false;
@@ -286,7 +290,9 @@ func TuiApp() {
  * @param fds - 外部通知 fd 数组，poll 监听可读事件
  */
 func TuiApp(fds: i32[]) {
-  self.input = InputManager();
+  self.input = InputManager<Widget>();
+  self.view = ViewManager(self.screen);
+  self.input.onMouse = self.view.dispatchMouse;
   self.tty = 0;
   self.loop = 0;
   self.resizeRequested = false;
@@ -657,7 +663,7 @@ TuiApp.exit()
 阶段四完成后，阶段五（输入支持）的衔接点。实现方案详见 `docs/engineering/feng-std-tui-input-dev.md`：
 
 1. **stdin 已在 poll 监听集合中**：阶段四 `run()` 的 pollfd 数组已包含 stdin，阶段五将 stdin drain 替换为 `input.feed()` 逐字节喂入 InputManager 解析分发
-2. **InputManager 作为 TuiApp 公开成员**：阶段五新增 `let input: InputManager`，用户通过 `app.input.onKey = ...` / `app.input.onMouse = ...` 注册回调
+2. **InputManager 作为 TuiApp 公开成员**：当前为 `let input: InputManager<Widget>`，用户通过 `app.input.onKey = ...` 注册键盘回调；鼠标单播槽默认接入 ViewManager，直接重赋 `app.input.onMouse` 会替换该路由
 3. **SIGWINCH 已通过 self-pipe 处理**：阶段四已将 SIGWINCH 转为 fd 纳入 poll，无需迁移
 
 ## 10 平台注意

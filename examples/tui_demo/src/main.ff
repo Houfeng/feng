@@ -49,14 +49,14 @@ func main(args: string[]) {
   let app = TuiApp();
   app.init();
   defer { app.exit(); }
-  app.input.onKey = (event: KeyEvent) {
+  app.input.onKey = (event: KeyEvent<Widget>) {
     // 按下 Ctrl+C 时退出应用
     if event.isControl() && event.content match let c: u32 && c == 0x03 {
       app.exit();
     }
   };
 
-  // 根容器占满 Screen，使移出矩形后的 move/release 仍有命中目标。
+  // 根容器占满 Screen，负责自治布局和绘制子组件。
   let surface = DragSurface();
   app.view.root = surface;
 
@@ -74,16 +74,16 @@ func main(args: string[]) {
   var dragOffsetY: u32 = 0;
 
   // 只有经过 ViewManager 命中矩形的左键按下才开始拖动。
-  rectangle.onMouseDown = (event: MouseEvent) {
-    if event.button == MouseButton.left {
+  rectangle.onMouseDown = (event: MouseEvent<Widget>) {
+    if event.button == MouseButton.left && event.lock() {
       dragging = true;
       dragOffsetX = event.x - rectangle.frame.x;
       dragOffsetY = event.y - rectangle.frame.y;
     }
   };
 
-  // move 事件在矩形内会冒泡到根容器，移出后则直接命中根容器。
-  surface.onMouseMove = (event: MouseEvent) {
+  // lock 后即使鼠标移出矩形，move 事件仍直接路由到矩形。
+  rectangle.onMouseMove = (event: MouseEvent<Widget>) {
     if event.action == MouseAction.move && dragging {
       var x: u32 = 0;
       var y: u32 = 0;
@@ -111,9 +111,10 @@ func main(args: string[]) {
     }
   };
 
-  // release 同样由根容器结束拖动，不需要覆盖 InputManager 的分发回调。
-  surface.onMouseUp = (event: MouseEvent) {
+  // release 仍路由到锁定的矩形，由锁定目标显式结束拖动并释放锁定。
+  rectangle.onMouseUp = (event: MouseEvent<Widget>) {
     dragging = false;
+    event.unlock();
   };
 
   app.run();

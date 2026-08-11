@@ -1,0 +1,39 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import fcts_lib.test;
+
+/**
+ * 验证 FT 嵌套泛型类型参数、泛型类型 callable 成员调用及闭合实例去重。
+ */
+open func test_nested_generic_callback(): void {
+  describe("nested generic callback", () {
+    test("preserves nested type and invokes generic member callback", () {
+      let dispatcher = LibNestedGenericDispatcher<int>();
+      var received = 0;
+      dispatcher.callback = (event: LibNestedGenericEvent<int>) {
+        received = event.value;
+      };
+      dispatcher.dispatch(41);
+      assert(received == 41,
+             "generic type directly invokes nested generic callable field");
+    });
+
+    test("deduplicates the same closed type from multiple FT declarations", () {
+      let dispatcher = LibNestedGenericDispatcher<int>();
+      let mirror = LibNestedGenericCallbackMirror();
+      var total = 0;
+      dispatcher.callback = (event: LibNestedGenericEvent<int>) {
+        total += event.value;
+      };
+      mirror.callback = (event: LibNestedGenericEvent<int>) {
+        total += event.value;
+      };
+      dispatcher.dispatch(20);
+      mirror.dispatch(22);
+      assert(total == 42,
+             "multiple FT declaration paths share one closed generic type");
+    });
+  });
+}

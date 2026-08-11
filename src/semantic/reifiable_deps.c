@@ -217,6 +217,20 @@ static FengSlice rd_decl_type_name(const FengDecl *decl) {
     }
 }
 
+/* Return the generic arity participating in type/spec declaration identity. */
+static size_t rd_decl_type_arity(const FengDecl *decl) {
+    if (decl == NULL) {
+        return 0U;
+    }
+    if (decl->kind == FENG_DECL_TYPE) {
+        return decl->as.type_decl.type_param_count;
+    }
+    if (decl->kind == FENG_DECL_SPEC) {
+        return decl->as.spec_decl.type_param_count;
+    }
+    return 0U;
+}
+
 /* 在 analysis 所有模块中按名称查找 FENG_DECL_TYPE 或 FENG_DECL_SPEC。
  * 不做可见性过滤——语义分析已通过，此处仅用于确定 dep kind。 */
 static const FengDecl *find_type_decl_by_named_ref(
@@ -247,7 +261,9 @@ static const FengDecl *find_type_decl_by_named_ref(
             for (di = 0U; di < prog->declaration_count; ++di) {
                 const FengDecl *d = prog->declarations[di];
                 if ((d->kind == FENG_DECL_TYPE || d->kind == FENG_DECL_SPEC) &&
-                    rd_slice_equals(rd_decl_type_name(d), name)) {
+                    rd_slice_equals(rd_decl_type_name(d), name) &&
+                    rd_decl_type_arity(d) ==
+                        type_ref->as.named.type_arg_count) {
                     return d;
                 }
             }
@@ -263,7 +279,9 @@ static const FengDecl *find_type_decl_by_named_ref(
             for (di = 0U; di < prog->declaration_count; ++di) {
                 const FengDecl *d = prog->declarations[di];
                 if ((d->kind == FENG_DECL_TYPE || d->kind == FENG_DECL_SPEC) &&
-                    rd_slice_equals(rd_decl_type_name(d), name)) {
+                    rd_slice_equals(rd_decl_type_name(d), name) &&
+                    rd_decl_type_arity(d) ==
+                        type_ref->as.named.type_arg_count) {
                     return d;
                 }
             }
@@ -298,6 +316,13 @@ static bool determine_dep_kind(const FengDecl *decl,
              * path rather than using an incomplete open-instance descriptor. */
             if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
                 *out_kind = FENG_REIFIABLE_DEP_KIND_AGGREGATE;
+                return true;
+            }
+            /* Callable-form spec values are managed closure pointers. A
+             * shared body needs the concrete callable descriptor when it
+             * default-initializes a generic callable instance. */
+            if (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+                *out_kind = FENG_REIFIABLE_DEP_KIND_MANAGED;
                 return true;
             }
             return false;

@@ -45,7 +45,7 @@
 ### 2.3 应用控制层（第 5 层）
 
 - **`std.tui.TuiApp` 生命周期**：启动时通过 libuv TTY API 进入 Raw Mode，通过 `SIGWINCH` + self-pipe 响应 Resize，并在正常退出及 `atexit` 清理中恢复终端状态。
-- **`std.tui.input` 输入解析**：`InputManager` 读取 stdin 字节流，通过状态机解析为 `KeyEvent` 或 `MouseEvent` 并调用输入回调。鼠标事件已经接入 `ViewManager`；向焦点组件路由键盘事件后续实现。
+- **`std.tui.input` 输入解析**：`InputManager<T>` 读取 stdin 字节流，通过状态机解析为 `KeyEvent<T>` 或 `MouseEvent<T>` 并调用输入回调。TuiApp 使用 `InputManager<Widget>`；鼠标事件已经接入 `ViewManager`，向焦点组件路由键盘事件后续实现。
 
 ## 3 关键设计决策
 
@@ -120,7 +120,7 @@
 - **完整帧输出**：`render()` 对 `write()` 的短写继续写出剩余 ANSI 字节；resize 成功后先清空物理终端，再按新尺寸布局和绘制，避免旧画面重排后残留。
 - **终端恢复**：`exit()` 负责正常路径清理，并通过 `atexit` 注册的清理函数兜底恢复 Raw Mode。
 - **输入解析**：VT100/xterm 转义序列状态机，纯 Feng 实现。
-- **事件路由**：`InputManager.onMouse` 已接入 `ViewManager`，按本帧缓存的 `drawFrame` 逆序命中，并沿 parent 链向上冒泡；焦点管理与键盘焦点路由后续实现。
+- **事件路由**：`InputManager<Widget>.onMouse` 已接入 `ViewManager`；未锁定时按本帧缓存的 `drawFrame` 逆序命中，锁定时直接选择锁定目标，然后绑定 `event.target` 并沿 parent 链向上冒泡。焦点管理与键盘焦点路由后续实现。
 
 ## 4 实施路线
 
@@ -168,9 +168,9 @@
 
 > 实现方案详见 `docs/engineering/feng-std-tui-input-dev.md`。
 
-- [x] 4.18 实现事件类型：`KeyEvent.ff`（`SpecialKey` 枚举、`MOD_CONTROL`/`MOD_ALT`/`MOD_SHIFT` 常量、`Union<SpecialKey,u32>`、`KeyEvent` @value 类型 + `isControl()`/`isShift()`/`isPrintable()` 快捷方法）和 `MouseEvent.ff`（`MouseAction`/`MouseButton` 枚举、鼠标事件字段及 `isControl()`/`isAlt()`/`isShift()` 快捷方法；后续已在 4.33 调整为支持停止传播的引用类型）
-- [x] 4.19 实现 InputManager（InputManager.ff）：`ParserState` 状态机 + `onKey`/`onMouse` 回调字段（`Action<KeyEvent>`/`Action<MouseEvent>`） + `feed(b: u8): void`；处理单字节字符、CSI/SS3 转义序列、UTF-8 多字节解码、鼠标 SGR 序列
-- [x] 4.20 集成 InputManager 至 TuiApp：新增 `let input: InputManager` 公开只读成员；`run()` 中 stdin drain 替换为逐字节 `input.feed()`；`init()` 发送鼠标启用序列（`\x1b[?1006h\x1b[?1003h`，SGR + 全移动报告含悬停），`exit()` 发送禁用序列
+- [x] 4.18 实现事件类型：`KeyEvent.ff`（`SpecialKey` 枚举、`MOD_CONTROL`/`MOD_ALT`/`MOD_SHIFT` 常量、`Union<SpecialKey,u32>`、`KeyEvent<T>` @value 类型 + target/快捷方法）和 `MouseEvent.ff`（`MouseAction`/`MouseButton` 枚举、`MouseEvent<T>` 引用类型、target、传播停止及 lock 能力）
+- [x] 4.19 实现 InputManager（InputManager.ff）：泛型 `InputManager<T>` + `ParserState` 状态机 + `onKey`/`onMouse` 单播回调字段 + `feed(b: u8): void`；处理单字节字符、CSI/SS3 转义序列、UTF-8 多字节解码、鼠标 SGR 序列
+- [x] 4.20 集成 InputManager 至 TuiApp：新增 `let input: InputManager<Widget>` 公开只读成员；`run()` 中 stdin drain 替换为逐字节 `input.feed()`；`init()` 发送鼠标启用序列（`\x1b[?1006h\x1b[?1003h`，SGR + 全移动报告含悬停），`exit()` 发送禁用序列
 - [x] 4.21 补充 std_test 用例：在 `test_tui.ff` 中新增事件类型快捷方法、InputManager 解析状态机（VT100/xterm 转义序列、UTF-8、鼠标 SGR）、回调分发等测试
 - [x] 4.22 全量回归测试：执行 `make test`，确认全部通过
 - [x] 4.23 等待人工 Review：开发者审查输入解析与事件分发实现，通过后方可进入第六阶段
@@ -199,14 +199,18 @@
 - [x] 4.33 实现 ViewManager 鼠标事件分发：将 MouseEvent 改为支持 `stop()`/`isStopped()` 的引用类型，接入 InputManager 单播 `onMouse`，基于缓存的 drawFrame 实现逆序命中与自下向上冒泡
 - [ ] 4.34 补充 std_test 用例：覆盖 Widget 契约、parent 维护、arrange/frame、sequence 命中、裁剪、鼠标回调选择、冒泡及停止传播
 - [x] 4.35 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.36 等待人工 Review：开发者审查鼠标事件分发设计与实现，通过后再处理焦点和键盘路由
-- [ ] 4.37 后续实现焦点管理与键盘焦点路由
+- [x] 4.36 将 KeyEvent、MouseEvent 与 InputManager 泛型化，通过 `T` 表达事件路由目标类型；增加 MouseEvent target 与 lock/unlock/isLocked 能力，并让 ViewManager 优先向锁定目标路由
+- [x] 4.37 将 tui_demo 拖动改为由矩形自身 lock 后处理越界 move/release，不再在根容器绑定拖动事件
+- [x] 4.38 补充 std_test 用例：覆盖 target、锁定取得/重复/抢占/释放、锁定后越界路由、目标在冒泡中保持不变及停止传播
+- [ ] 4.39 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.40 等待人工 Review：开发者审查鼠标 target 与 lock 设计和实现，通过后再处理焦点和键盘路由
+- [ ] 4.41 后续实现焦点管理与键盘焦点路由
 
 ### 第八阶段：测试与验证
 
-- [ ] 4.38 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
-- [ ] 4.39 全量回归测试：执行 `make test`，确认全部通过
-- [ ] 4.40 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
+- [ ] 4.42 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试
+- [ ] 4.43 全量回归测试：执行 `make test`，确认全部通过
+- [ ] 4.44 等待人工 Review：开发者审查全部 TUI 实现与测试覆盖，通过后交付完成
 
 > **fcts 用例策略**：std 中的功能默认使用 std_test 用例，不需要 fcts 用例。仅当遇到 Feng 语言层面的问题（如语法、语义、类型系统等编译器行为）时，才在 `fcts/fcts_bin/src/` 中新增 fcts 用例进行兼容性验证。
 

@@ -1,0 +1,317 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import fcts_lib.test;
+
+/** Function-value callback accumulator for the wide value case. */
+var reifiedFunctionTotal: i64;
+
+/** Receive a wide reified box through a top-level function value. */
+func receiveReifiedWide(box: LibReifiedBox<LibReifiedWideValue>): void {
+  reifiedFunctionTotal = box.value.number;
+  if box.value.first == "left" && box.value.second == "right" &&
+     box.marker == "callback" {
+    reifiedFunctionTotal += 1;
+  }
+}
+
+/** Return a complete wide box through a top-level function adapter. */
+func mapReifiedWide(
+  box: LibReifiedBox<LibReifiedWideValue>
+): LibReifiedBox<LibReifiedWideValue> {
+  return LibReifiedBox<LibReifiedWideValue>(box.value, "function-result");
+}
+
+/** Non-generic callable used to verify direct-ABI to generic-ABI rewrapping. */
+spec ExactReifiedWideMapper(
+  box: LibReifiedBox<LibReifiedWideValue>
+): LibReifiedBox<LibReifiedWideValue>;
+
+/** Non-generic callable used as a concrete callable constraint argument. */
+spec ExactReifiedI64Mapper(value: i64): i64;
+
+/** ABI-identical callable view used to verify allocation-free conversion. */
+spec ExactReifiedI64MapperView(value: i64): i64;
+
+/** Preserve a value whose type satisfies a callable-form generic constraint. */
+func preserveReifiedCallableConstraint<T: Func<i64, i64>>(callback: T): T {
+  return callback;
+}
+
+/** Create and invoke a default generic callable in an independent shared body. */
+func defaultReifiedMap<T>(value: T): T {
+  var callback: Func<T, T>;
+  return callback(value);
+}
+
+/** Invoke a wide callable-form constraint through the erased witness ABI. */
+func mapWideConstraint<C: ExactReifiedWideMapper>(
+  value: LibReifiedBox<LibReifiedWideValue>,
+  callback: C
+): LibReifiedBox<LibReifiedWideValue> {
+  return callback(value);
+}
+
+/** Instance method-value callback receiver. */
+type ReifiedMethodReceiver {
+  /** Observed value. */
+  open var received: i64;
+
+  /** Store the complete callback payload. */
+  open func receive(box: LibReifiedBox<LibReifiedWideValue>): void {
+    self.received = box.value.number;
+    if box.value.first == "left" && box.value.second == "right" &&
+       box.marker == "callback" {
+      self.received += 1;
+    }
+  }
+
+  /** Return a complete callback payload through a bound method adapter. */
+  open func map(
+    box: LibReifiedBox<LibReifiedWideValue>
+  ): LibReifiedBox<LibReifiedWideValue> {
+    return LibReifiedBox<LibReifiedWideValue>(box.value, "method-result");
+  }
+}
+
+/** Verify descriptor-sized values and stable generic callable parameters. */
+open func test_reified_value_callable(): void {
+  describe("reified value and callable ABI", () {
+    test("i64 constructor binding copy and return", () {
+      let flow = LibReifiedFlow<i64>();
+      let result = flow.defaultCopy(41, "i64");
+      assert(result.value == 41 && result.marker == "i64",
+             "i64 box preserves every field through shared-body locals");
+    });
+
+    test("string managed slot survives local replacement", () {
+      let flow = LibReifiedFlow<string>();
+      let result = flow.replace("discarded", "kept");
+      assert(result.value == "kept" && result.marker == "second",
+             "owned replacement moves the full descriptor-sized value");
+    });
+
+    test("object-form spec payload preserves subject and witness", () {
+      let flow = LibReifiedFlow<LibReifiedNamed>();
+      let named: LibReifiedNamed = LibReifiedNamedValue { value: "spec" };
+      let result = flow.defaultCopy(named, "marker");
+      assert(result.value.label() == "spec" && result.marker == "marker",
+             "spec subject and witness survive the reified local copy");
+    });
+
+    test("wide managed value is not truncated to the open placeholder", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("left", "right", 41);
+      let result = flow.construct(wide, "wide");
+      assert(result.value.first == "left" &&
+             result.value.second == "right" &&
+             result.value.number == 41 && result.marker == "wide",
+             "all managed and scalar fields survive construction and return");
+    });
+
+    test("nested transitive layout uses both concrete descriptors", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("nested-left", "nested-right", 42);
+      let result = flow.nested(wide);
+      assert(result.box.value.first == "nested-left" &&
+             result.box.value.second == "nested-right" &&
+             result.box.value.number == 42 &&
+             result.box.marker == "inner" && result.suffix == "outer",
+             "outer and inner offsets use their concrete descriptors");
+    });
+
+    test("generic value with T array keeps fixed physical layout", () {
+      let flow = LibReifiedFlow<string>();
+      let values: string[] = ["zero", "one", "two"];
+      let result = flow.stableArray(values, 1);
+      assert(result.index == 1 && result.values[result.index] == "one",
+             "T array remains a fixed-size managed field in a generic value");
+    });
+
+    test("lambda receives a reified-layout value", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("left", "right", 43);
+      var received: i64 = 0;
+      flow.invokeValue((box: LibReifiedBox<LibReifiedWideValue>) {
+        received = box.value.number;
+        if box.value.first == "left" && box.value.second == "right" &&
+           box.marker == "callback" {
+          received += 1;
+        }
+      }, wide);
+      assert(received == 44,
+             "lambda callback observes the complete closed value");
+    });
+
+    test("top-level function value uses the same callable ABI", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("left", "right", 45);
+      reifiedFunctionTotal = 0;
+      flow.invokeValue(receiveReifiedWide, wide);
+      assert(reifiedFunctionTotal == 46,
+             "function adapter receives one complete semantic value copy");
+    });
+
+    test("instance method value uses the same callable ABI", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("left", "right", 47);
+      let receiver = ReifiedMethodReceiver();
+      flow.invokeValue(receiver.receive, wide);
+      assert(receiver.received == 48,
+             "bound method adapter preserves the value payload");
+    });
+
+    test("std Action reference instance keeps its direct-slot address ABI", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("reference-left", "reference-right", 49);
+      var received: i64 = 0;
+      flow.invokeReference((value: LibReifiedReference<LibReifiedWideValue>) {
+        received = value.value.number;
+        if value.value.first == "reference-left" &&
+           value.value.second == "reference-right" {
+          received += 1;
+        }
+      }, wide);
+      assert(received == 50,
+             "a direct generic slot remains address-based for reference instances");
+    });
+
+    test("known generic reference family uses erased pointer ABI", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("known-left", "known-right", 51);
+      var received: i64 = 0;
+      flow.invokeKnownReference((value: LibReifiedReference<LibReifiedWideValue>) {
+        received = value.value.number;
+      }, wide);
+      assert(received == 51,
+             "a declaration-known reference family stays pointer-sized");
+    });
+
+    test("std Func returns a direct scalar slot through shared code", () {
+      let flow = LibReifiedFlow<i64>();
+      let result = flow.mapDirect((value: i64) -> value + 1, 51);
+      assert(result == 52,
+             "direct generic parameter return uses the canonical out slot");
+    });
+
+    test("std Func returns a managed direct slot with ownership", () {
+      let flow = LibReifiedFlow<string>();
+      let result = flow.mapDirect((value: string) -> value + "-mapped", "managed");
+      assert(result == "managed-mapped",
+             "managed return ownership survives the canonical out slot");
+    });
+
+    test("generic type body creates a default direct-slot callable", () {
+      let flow = LibReifiedFlow<i64>();
+      let result = flow.defaultMap(99);
+      assert(result == 0,
+             "closed callable descriptor installs the scalar default implementation");
+    });
+
+    test("generic function body creates a default aggregate callable", () {
+      let wide = LibReifiedWideValue("discarded-left", "discarded-right", 99);
+      let result = defaultReifiedMap(wide);
+      assert(result.first == "" && result.second == "" && result.number == 0,
+             "function descriptor resolves the closed aggregate default implementation");
+    });
+
+    test("callable generic constraint maps a wide aggregate value", () {
+      let wide = LibReifiedWideValue("constraint-left", "constraint-right", 52);
+      let box = LibReifiedBox<LibReifiedWideValue>(wide, "constraint-input");
+      let callback: ExactReifiedWideMapper =
+        (value: LibReifiedBox<LibReifiedWideValue>) ->
+          LibReifiedBox<LibReifiedWideValue>(
+            LibReifiedWideValue(
+              value.value.first,
+              value.value.second,
+              value.value.number + 1
+            ),
+            "constraint-result"
+          );
+      let result = mapWideConstraint(box, callback);
+      assert(result.value.first == "constraint-left" &&
+             result.value.second == "constraint-right" &&
+             result.value.number == 53 && result.marker == "constraint-result",
+             "constraint witness preserves address parameters and out storage");
+    });
+
+    test("lambda returns a descriptor-sized generic value", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("lambda-left", "lambda-right", 53);
+      let result = flow.mapValue(
+        (box: LibReifiedBox<LibReifiedWideValue>) ->
+          LibReifiedBox<LibReifiedWideValue>(box.value, "lambda-result"),
+        wide
+      );
+      assert(result.value.number == 53 && result.marker == "lambda-result",
+             "lambda writes the complete value into caller-owned storage");
+    });
+
+    test("top-level function returns through the same generic callable ABI", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("function-left", "function-right", 54);
+      let result = flow.mapValue(mapReifiedWide, wide);
+      assert(result.value.number == 54 && result.marker == "function-result",
+             "function adapter writes the complete returned value");
+    });
+
+    test("instance method returns through the same generic callable ABI", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("method-left", "method-right", 55);
+      let receiver = ReifiedMethodReceiver();
+      let result = flow.mapValue(receiver.map, wide);
+      assert(result.value.number == 55 && result.marker == "method-result",
+             "bound method adapter writes the complete returned value");
+    });
+
+    test("default callable returns a descriptor-sized generic family", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("discarded-left", "discarded-right", 99);
+      let result = flow.defaultBox(wide);
+      assert(result.value.first == "" && result.value.second == "" &&
+             result.value.number == 0 && result.marker == "",
+             "closed noop initializes every field through the aggregate descriptor");
+    });
+
+    test("callable rewrap bridges direct and generic address ABI", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("rewrap-left", "rewrap-right", 56);
+      let exact: ExactReifiedWideMapper =
+        (box: LibReifiedBox<LibReifiedWideValue>) ->
+          LibReifiedBox<LibReifiedWideValue>(box.value, "rewrapped");
+      let generic: Func<LibReifiedBox<LibReifiedWideValue>, LibReifiedBox<LibReifiedWideValue> > =
+        (Func<LibReifiedBox<LibReifiedWideValue>, LibReifiedBox<LibReifiedWideValue> >)exact;
+      let result = flow.mapValue(generic, wide);
+      assert(result.value.number == 56 && result.marker == "rewrapped",
+             "rewrap adapts parameters and returned storage without boxing");
+    });
+
+    test("callable-form generic constraint preserves its concrete value", () {
+      let exact: ExactReifiedI64Mapper = (value: i64) -> value + 1;
+      let preserved = preserveReifiedCallableConstraint(exact);
+      let mapper: Func<i64, i64> = (Func<i64, i64>)preserved;
+      let result = mapper(56);
+      assert(result == 57,
+             "constraint metadata and callable conversion preserve behavior");
+    });
+
+    test("ABI-identical callable conversion keeps direct invocation", () {
+      let exact: ExactReifiedI64Mapper = (value: i64) -> value + 2;
+      let view = (ExactReifiedI64MapperView)exact;
+      assert(view(56) == 58,
+             "an ABI-identical callable conversion changes only the static view");
+    });
+
+    test("known reference mapper keeps erased pointer return ABI", () {
+      let flow = LibReifiedFlow<LibReifiedWideValue>();
+      let wide = LibReifiedWideValue("reference-map-left", "reference-map-right", 58);
+      let result = flow.mapKnownReference(
+        (value: LibReifiedReference<LibReifiedWideValue>) -> value,
+        wide
+      );
+      assert(result.value.number == 58,
+             "known reference parameter and return use pointer representation");
+    });
+  });
+}

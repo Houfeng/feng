@@ -26,7 +26,7 @@ open enum ParserState {
  * InputManager 是终端输入解析器——VT100/xterm 状态机。
  *
  * 将 stdin 字节流逐字节喂入 `feed()`，内部通过状态机解析为
- * `KeyEvent` 或 `MouseEvent`，解析完成后直接调用 `onKey`/`onMouse`
+ * `KeyEvent<T>` 或 `MouseEvent<T>`，解析完成后直接调用 `onKey`/`onMouse`
  * 回调分发。序列未完成时不产生任何输出。
  *
  * 处理三类输入：
@@ -36,11 +36,11 @@ open enum ParserState {
  * - UTF-8 多字节字符（中文、Emoji 等）
  *
  * 回调注入：`onKey`/`onMouse` 为 `open var`，用户直接赋值注册
- * （`manager.onKey = func(event: KeyEvent) { ... };`）。
+ * （`manager.onKey = func(event: KeyEvent<T>) { ... };`）。
  * Feng 无 null，未显式赋值的 `Action<T>` 自动绑定默认零值（default witness），
  * 调用时执行空操作——事件被静默丢弃，无异常。
  */
-open type InputManager {
+open type InputManager<T> {
 
   /** 状态机当前状态 */
   seal var state: ParserState;
@@ -59,9 +59,9 @@ open type InputManager {
   /** UTF-8 期望续传字节数（剩余） */
   seal var utf8Remaining: i32;
   /** 键盘事件回调（用户直接赋值注册） */
-  open var onKey: Action<KeyEvent>;
+  open var onKey: Action<KeyEvent<T>>;
   /** 鼠标事件回调（用户直接赋值注册） */
-  open var onMouse: Action<MouseEvent>;
+  open var onMouse: Action<MouseEvent<T>>;
 
   /**
    * 默认构造函数：初始化为 ground 态，回调未注册（默认零值，事件静默丢弃）。
@@ -538,7 +538,7 @@ open type InputManager {
    * @param mods - 修饰键位标志
    */
   seal func emitKey(key: SpecialKey, mods: u8): void {
-    let event = KeyEvent(key, mods);
+    let event = KeyEvent<T>(key, mods);
     self.onKey(event);
   }
 
@@ -550,7 +550,7 @@ open type InputManager {
    */
   seal func emitKeyPrintable(codepoint: u32, mods: u8): void {
     let content: Union < u32, SpecialKey > = codepoint;
-    let event = KeyEvent(content, mods);
+    let event = KeyEvent<T>(content, mods);
     self.onKey(event);
   }
 
@@ -564,7 +564,7 @@ open type InputManager {
    * @param mods - 修饰键位标志
    */
   seal func emitMouse(action: MouseAction, button: MouseButton, x: u32, y: u32, mods: u8): void {
-    let event = MouseEvent(action, button, x, y, mods);
+    let event = MouseEvent<T>(action, button, x, y, mods);
     self.onMouse(event);
   }
 

@@ -1,0 +1,20 @@
+open module fcts_lib.test;
+
+import std;
+
+/**
+ * 从另一个 FT 声明路径引用同一个闭合嵌套泛型 callable 类型。
+ */
+open type LibNestedGenericCallbackMirror {
+  /** 与 LibNestedGenericDispatcher<int>.callback 相同的闭合 callable 类型。 */
+  open var callback: Action<LibNestedGenericEvent<int>>;
+
+  /** 构造 mirror。 */
+  func LibNestedGenericCallbackMirror() {
+  }
+
+  /** 调用闭合嵌套泛型 callback。 */
+  open func dispatch(value: int): void {
+    self.callback(LibNestedGenericEvent<int>(value));
+  }
+}

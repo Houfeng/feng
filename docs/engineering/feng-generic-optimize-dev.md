@@ -585,11 +585,14 @@ feng_aggregate_default_init(_mem, _ed);
 ```
 
 这里的“局部变量”包括显式局部绑定、tuple 临时值，以及构造表达式产生的
-owned 临时值。共享体内构造 `Value<T>` 时，构造目标本身必须使用上述
+owned 临时值。共享体内构造布局直接或传递依赖泛型参数的按值聚合时，构造目标本身必须使用上述
 descriptor-sized 对齐存储，并将其地址传给成员初始化和构造函数；不得先声明
-未特化的 `struct Value__G__T` 再让具体构造函数按 reified 字段偏移写入。
+对应的未特化 open generic C struct，再让具体构造函数按 reified 字段偏移写入。
 同一个动态临时值的大小必须只从 descriptor 读取一次，并由栈空间分配和清零
 共同复用该局部 `size`，避免重复读取 descriptor。
+
+当前 codegen 对局部绑定和表达式物化仍存在未完整执行本规则的路径，修复与验收见
+[feng-reified-value-generic-callable-bugfix.md](./feng-reified-value-generic-callable-bugfix.md)。
 
 #### 2.6.3 修复数组元素写入（~L18376）
 

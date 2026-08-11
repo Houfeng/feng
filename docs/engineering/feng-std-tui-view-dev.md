@@ -12,7 +12,7 @@
 ```text
 TuiApp
   ├─ screen: Screen          # 渲染底座，负责双缓冲与 diff 输出
-  ├─ input: InputManager     # 输入底座，负责终端字节流解析
+  ├─ input: InputManager<Widget> # 输入底座，负责终端字节流解析
   └─ view: ViewManager       # 视图机制层，负责组件树、arrange/draw 调度与事件路由
 ```
 
@@ -32,8 +32,8 @@ TuiApp
 
 叶子组件直接满足 `Widget` spec，容器组件满足 `ContainerWidget` spec；两者分别可通过成员展开复用 `View` 或 `Container` 的状态与行为。上层组装组件树时不需要 `asWidget()` 之类的转换 API。
 
-当前事件分发切片只实现鼠标命中、鼠标回调选择和自下向上的冒泡。焦点管理、键盘
-焦点路由及多播事件均留到后续步骤，不与本次鼠标分发一起实现。
+当前事件分发切片实现鼠标命中、目标绑定、锁定、鼠标回调选择和自下向上的冒泡。
+焦点管理、键盘焦点路由及多播事件均留到后续步骤，不与本次鼠标分发一起实现。
 
 ## 3 已定义的核心类型
 
@@ -142,11 +142,11 @@ open spec Widget {
   func draw(manager: ViewManager): void;
   func isAncestor(w: Widget): bool;
 
-  var onKey: Action<KeyEvent>;
-  var onMouseDown: Action<MouseEvent>;
-  var onMouseMove: Action<MouseEvent>;
-  var onMouseUp: Action<MouseEvent>;
-  var onWheel: Action<MouseEvent>;
+  var onKey: Action<KeyEvent<Widget>>;
+  var onMouseDown: Action<MouseEvent<Widget>>;
+  var onMouseMove: Action<MouseEvent<Widget>>;
+  var onMouseUp: Action<MouseEvent<Widget>>;
+  var onWheel: Action<MouseEvent<Widget>>;
 }
 ```
 
@@ -176,11 +176,11 @@ open type View: Widget {
   func draw(manager: ViewManager): void;
   func isAncestor(w: Widget): bool;
 
-  var onKey: Action<KeyEvent>;
-  var onMouseDown: Action<MouseEvent>;
-  var onMouseMove: Action<MouseEvent>;
-  var onMouseUp: Action<MouseEvent>;
-  var onWheel: Action<MouseEvent>;
+  var onKey: Action<KeyEvent<Widget>>;
+  var onMouseDown: Action<MouseEvent<Widget>>;
+  var onMouseMove: Action<MouseEvent<Widget>>;
+  var onMouseUp: Action<MouseEvent<Widget>>;
+  var onWheel: Action<MouseEvent<Widget>>;
 }
 ```
 
@@ -293,7 +293,9 @@ open type ViewManager {
 
 `drawFrame` 表示用户当前看到的上一帧区域。即使布局、样式或组件树在绘制后发生修改，事件阶段也不重新计算命中区域；下一次 draw 会更新 sequence 与 `drawFrame`。这既保持命中与实际画面一致，也避免 1003 鼠标移动事件中反复遍历祖先。
 
-当前 `ViewManager` 已提供可选 root 的 arrange/draw 入口、back buffer 访问与 sequence 登记方法，并持有由 `TuiApp` 传入的 Screen；下一步实现逆序命中与鼠标事件路由。焦点与键盘路由不在本次实现范围内。
+当前 `ViewManager` 已提供可选 root 的 arrange/draw 入口、back buffer 访问、sequence
+登记、逆序命中及鼠标事件路由，并持有由 `TuiApp` 传入的 Screen。焦点与键盘路由
+不在本次实现范围内。
 
 ## 9 组件树与 parent
 
@@ -316,28 +318,42 @@ open type ViewManager {
 
 ## 10 事件接口
 
-`Widget` 当前直接使用已有基础事件类型：
+`Widget` 使用以自身契约为目标类型的泛型事件：
 
-- `onKey: Action<KeyEvent>`；
-- `onMouseDown`、`onMouseMove`、`onMouseUp`、`onWheel: Action<MouseEvent>`。
+- `onKey: Action<KeyEvent<Widget>>`；
+- `onMouseDown`、`onMouseMove`、`onMouseUp`、`onWheel: Action<MouseEvent<Widget>>`。
 
-`MouseEvent` 按 `docs/engineering/feng-std-tui-input-dev.md` 定义为引用类型：输入载荷
-不可变，传播状态由 `stop()` 和 `isStopped()` 管理。`stop()` 在当前 Widget 回调返回后
-生效，只阻止后续父组件回调；不会中断当前回调。重复调用 `stop()` 保持停止状态。
+`KeyEvent<T>`、`MouseEvent<T>` 的事件载荷和基础接口由
+`docs/engineering/feng-std-tui-input-dev.md` 定义。`MouseEvent<T>` 是引用类型，
+传播状态由 `stop()` 和 `isStopped()` 管理。`stop()` 在当前 Widget 回调返回后生效，
+只阻止后续父组件回调；不会中断当前回调。重复调用 `stop()` 保持停止状态。
 
 鼠标事件按以下规则分发：
 
-1. 从 `sequence` 末尾向前查找第一个 `drawFrame` 包含事件坐标的 Widget；
-2. `wheelUp`/`wheelDown` 调用 `onWheel`，其余事件按 `press`、`move`、`release`
+1. 若 `MouseEvent<Widget>` 已有锁定目标，直接选择该目标，不执行坐标命中；否则从
+   `sequence` 末尾向前查找第一个 `drawFrame` 包含事件坐标的 Widget；
+2. 普通命中使用 `bindTarget()`，锁定路由使用 `bindLockedTarget()`，将选中的 Widget
+   写入同一事件实例的 `target`，并由后者记录当前事件属于锁定目标。Widget 回调中
+   `hasTarget()` 必为 true；事件冒泡期间 `target` 保持不变，
+   表示最初命中或锁定的事件来源，不随当前接收回调的 Widget 改变；
+3. `wheelUp`/`wheelDown` 调用 `onWheel`，其余事件按 `press`、`move`、`release`
    分别调用 `onMouseDown`、`onMouseMove`、`onMouseUp`；
-3. 当前 Widget 回调返回后检查 `event.isStopped()`；已停止则结束分发，否则沿
+4. 当前 Widget 回调返回后检查 `event.isStopped()`；已停止则结束分发，否则沿
    `parent` 继续向上传递；
-4. 未命中 Widget 时静默返回；不执行 root 兜底回调；
-5. 当前不定义捕获阶段、`target`、`currentTarget`、默认行为、透明穿透、事件克隆或
-   事件池化。
+5. 没有锁定目标且未命中 Widget 时静默返回；不执行 root 兜底回调；
+6. 当前不定义捕获阶段、`currentTarget`、默认行为、透明穿透、事件克隆或事件池化。
 
-每个 Widget 的每类事件仍只有一个 `Action<MouseEvent>` 回调字段，InputManager 的
+每个 Widget 的每类事件仍只有一个 `Action<MouseEvent<Widget>>` 回调字段，
+`InputManager<Widget>` 的
 `onMouse` 也保持单播；本阶段不引入处理器列表或隐式多播。
+
+`MouseEvent<Widget>.lock()` 由当前 `target` 请求锁定。首个目标取得锁定后，后续鼠标
+事件即使移出该 Widget 的 `drawFrame`，仍从锁定目标开始分发并沿其当前 parent 链冒泡。
+同一目标重复 lock 成功，其他目标不能抢占；`unlock()` 仅允许取得锁定的事件，或由
+锁定路由绑定到该目标的后续事件释放。
+锁定状态保存在闭合事件类型 `MouseEvent<Widget>` 的静态字段中，不放入 ViewManager，
+不记录鼠标按钮，也不在 release 时自动解除。调用方必须显式 unlock；这允许拖动等交互
+按自身状态决定结束时机。
 
 ## 11 与 TuiApp/InputManager 的集成
 
@@ -346,12 +362,13 @@ open type ViewManager {
 ```feng
 open type TuiApp {
   let screen: Screen;
-  let input: InputManager;
+  let input: InputManager<Widget>;
   let view: ViewManager;
 }
 ```
 
-`ViewManager` 使用 `InputManager` 产生的 `MouseEvent` 进行视图事件路由，并通过
+`ViewManager` 使用 `InputManager<Widget>` 产生的 `MouseEvent<Widget>` 进行视图事件
+路由，并通过
 `Screen` 完成组件绘制。`Screen` 和 `InputManager` 不在视图层重建。
 
 `TuiApp.render()` 处理 resize 后依次调用 `view.arrange()` 和 `view.draw()`，再通过
@@ -386,13 +403,16 @@ std/std/src/tui/widgets/
 
 1. 已完成 `Widget`/`ContainerWidget`、`View`/`Container`、组件树和 `ViewManager.sequence` 基础机制；
 2. 已完成 `View.arrange()`、`View.draw()`、root 调度及 TuiApp 渲染集成；
-3. 将 `MouseEvent` 改为引用类型，增加 `stop()` 与 `isStopped()`；
+3. 已将 `MouseEvent` 改为引用类型，增加 `stop()` 与 `isStopped()`；
 4. 在 draw 阶段缓存 `drawFrame`，实现基于该快照的 sequence 逆序命中；
 5. 实现鼠标回调选择、自下向上冒泡及停止传播；
 6. 将 `InputManager.onMouse` 单播回调接入 ViewManager，不接管 `onKey`；
-7. 补充 MouseEvent、命中、裁剪、层级、冒泡和停止传播的 std_test 用例；
-8. 执行全量回归测试 `make test`；
-9. 等待人工 Review，通过后再开始焦点与键盘路由。
+7. 将 KeyEvent、MouseEvent 与 InputManager 泛型化，通过 `T` 表达路由目标类型；
+8. 为 MouseEvent 增加 target、lock()/unlock()/isLocked()，并让 ViewManager 优先向
+   锁定目标路由；
+9. 补充 MouseEvent、target、lock、命中、裁剪、层级、冒泡和停止传播的 std_test 用例；
+10. 执行全量回归测试 `make test`；
+11. 等待人工 Review，通过后再开始焦点与键盘路由。
 
 ## 14 Review 关注点
 

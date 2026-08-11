@@ -111,7 +111,7 @@ open type ViewManager {
    * @param widget 当前接收事件的组件
    * @param event 需要分发的鼠标事件
    */
-  seal func invokeMouse(widget: Widget, event: MouseEvent): void {
+  seal func invokeMouse(widget: Widget, event: MouseEvent<Widget>): void {
     if event.button == MouseButton.wheelUp || event.button == MouseButton.wheelDown {
       let handler = widget.onWheel;
       handler(event);
@@ -134,13 +134,25 @@ open type ViewManager {
   }
 
   /**
-   * 从本帧最上层命中组件开始分发鼠标事件，并沿 parent 自下向上冒泡。
+   * 从锁定目标或本帧最上层命中组件开始分发鼠标事件，并沿 parent 自下向上冒泡。
+   * 锁定目标优先于坐标命中；选定目标会写入 event.target，并在本次冒泡期间保持不变。
    * 每个回调返回后检查 event.isStopped()；停止后不再调用父组件回调。
    * 未命中任何组件时静默返回。
    * @param event InputManager 解析得到的鼠标事件
    */
-  open func dispatchMouse(event: MouseEvent): void {
-    if self.hitTest(event.x, event.y) match let target: Widget {
+  open func dispatchMouse(event: MouseEvent<Widget>): void {
+    var selected: Option<Widget> = none;
+    if MouseEvent<Widget>.hasLockedTarget() {
+      selected = MouseEvent<Widget>.lockedTarget();
+    } else {
+      selected = self.hitTest(event.x, event.y);
+    }
+    if selected match let target: Widget {
+      if MouseEvent<Widget>.hasLockedTarget() {
+        event.bindLockedTarget(target);
+      } else {
+        event.bindTarget(target);
+      }
       var current = target;
       while true {
         self.invokeMouse(current, event);

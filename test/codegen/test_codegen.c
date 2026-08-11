@@ -6626,21 +6626,75 @@ static void test_generic_value_construction_uses_reified_storage_codegen(void) {
     ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
                                      NULL, &out, &cgerr));
     ASSERT(out.c_source != NULL);
+    const char *descriptor_decl = strstr(
+        out.c_source, "const FengAggregateDescriptor *_rad");
+    ASSERT(descriptor_decl != NULL);
+    const char *descriptor_decl_end = strchr(descriptor_decl, '\n');
+    ASSERT(descriptor_decl_end != NULL);
+    const char *descriptor_read = strstr(
+        descriptor_decl, "reified_agg_deps[0]");
+    ASSERT(descriptor_read != NULL && descriptor_read < descriptor_decl_end);
+
+    const char *descriptor_name_marker = strchr(descriptor_decl, '*');
+    ASSERT(descriptor_name_marker != NULL);
+    const char *descriptor_name_begin = descriptor_name_marker + 1U;
+    const char *descriptor_name_end = strchr(descriptor_name_begin, ' ');
+    ASSERT(descriptor_name_end != NULL);
+    size_t descriptor_name_length =
+        (size_t)(descriptor_name_end - descriptor_name_begin);
+    ASSERT(descriptor_name_length > 0U && descriptor_name_length < 64U);
+    char descriptor_size_pattern[80];
+    int descriptor_size_pattern_length = snprintf(
+        descriptor_size_pattern,
+        sizeof descriptor_size_pattern,
+        "%.*s->size",
+        (int)descriptor_name_length,
+        descriptor_name_begin);
+    ASSERT(descriptor_size_pattern_length > 0 &&
+           (size_t)descriptor_size_pattern_length <
+               sizeof descriptor_size_pattern);
+
     const char *size_decl = strstr(
-        out.c_source, "const size_t _val_size");
+        descriptor_decl_end, "const size_t _rsize");
     ASSERT(size_decl != NULL);
-    const char *size_read = strstr(
-        size_decl, "reified_agg_deps[0])->size");
-    ASSERT(size_read != NULL);
-    const char *zero_fill = strstr(size_read, ", 0, _val_size");
+    const char *size_decl_end = strchr(size_decl, '\n');
+    ASSERT(size_decl_end != NULL);
+    const char *size_read = strstr(size_decl, descriptor_size_pattern);
+    ASSERT(size_read != NULL && size_read < size_decl_end);
+
+    const char *size_name_begin = size_decl + strlen("const size_t ");
+    const char *size_name_end = strchr(size_name_begin, ' ');
+    ASSERT(size_name_end != NULL);
+    size_t size_name_length = (size_t)(size_name_end - size_name_begin);
+    ASSERT(size_name_length > 0U && size_name_length < 64U);
+    char storage_size_pattern[80];
+    int storage_size_pattern_length = snprintf(
+        storage_size_pattern,
+        sizeof storage_size_pattern,
+        "[%.*s]",
+        (int)size_name_length,
+        size_name_begin);
+    ASSERT(storage_size_pattern_length > 0 &&
+           (size_t)storage_size_pattern_length < sizeof storage_size_pattern);
+    char zero_fill_pattern[80];
+    int zero_fill_pattern_length = snprintf(
+        zero_fill_pattern,
+        sizeof zero_fill_pattern,
+        ", 0, %.*s)",
+        (int)size_name_length,
+        size_name_begin);
+    ASSERT(zero_fill_pattern_length > 0 &&
+           (size_t)zero_fill_pattern_length < sizeof zero_fill_pattern);
+
+    const char *storage_decl = strstr(
+        size_decl_end, "_Alignas(max_align_t) char _val");
+    ASSERT(storage_decl != NULL);
+    const char *storage_decl_end = strchr(storage_decl, '\n');
+    ASSERT(storage_decl_end != NULL);
+    const char *storage_size = strstr(storage_decl, storage_size_pattern);
+    ASSERT(storage_size != NULL && storage_size < storage_decl_end);
+    const char *zero_fill = strstr(storage_decl_end, zero_fill_pattern);
     ASSERT(zero_fill != NULL);
-    const char *zero_fill_end = strchr(zero_fill, '\n');
-    ASSERT(zero_fill_end != NULL);
-    const char *next_size_read = strstr(
-        size_read + 1U, "reified_agg_deps[0])->size");
-    ASSERT(next_size_read == NULL || next_size_read >= zero_fill_end);
-    ASSERT(strstr(size_decl,
-                  "_Alignas(max_align_t) char _val") != NULL);
     ASSERT(strstr(out.c_source,
                   "Holder__G__T _val") == NULL);
     compile_generated_c_or_die(out.c_source);

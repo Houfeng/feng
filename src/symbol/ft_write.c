@@ -358,6 +358,7 @@ static uint32_t writer_serialize_type(WriterContext *ctx,
             break;
 
         case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC: {
+            uint32_t *arg_type_ids = NULL;
             uint32_t tseq_start;
             size_t arg_index;
             char *base_name = join_string_array_with_dot(type->as.named_generic.segments,
@@ -375,22 +376,50 @@ static uint32_t writer_serialize_type(WriterContext *ctx,
                 return 0U;
             }
             record.sym_ref = writer_find_decl_id(ctx, type->target_decl);
+            if (type->as.named_generic.type_arg_count > 0U) {
+                arg_type_ids = (uint32_t *)calloc(
+                    type->as.named_generic.type_arg_count,
+                    sizeof(*arg_type_ids));
+                if (arg_type_ids == NULL) {
+                    feng_symbol_internal_set_error(out_error,
+                                                   path,
+                                                   token,
+                                                   "out of memory serializing generic type arguments");
+                    return 0U;
+                }
+            }
+            /* Recursive type serialization may append its own TSEQ records.
+             * Resolve every nested argument first, then reserve the outer
+             * generic's contiguous TSEQ interval. */
+            for (arg_index = 0U; arg_index < type->as.named_generic.type_arg_count; ++arg_index) {
+                arg_type_ids[arg_index] = writer_serialize_type(
+                    ctx,
+                    type->as.named_generic.type_args[arg_index],
+                    path,
+                    token,
+                    out_error);
+                if (type->as.named_generic.type_args[arg_index] != NULL &&
+                    arg_type_ids[arg_index] == 0U) {
+                    free(arg_type_ids);
+                    return 0U;
+                }
+            }
             tseq_start = (uint32_t)(ctx->tseq_count + 1U);
             record.elem_start = tseq_start;
             record.elem_count = (uint32_t)type->as.named_generic.type_arg_count;
             for (arg_index = 0U; arg_index < type->as.named_generic.type_arg_count; ++arg_index) {
-                uint32_t arg_type_id = writer_serialize_type(ctx,
-                                                             type->as.named_generic.type_args[arg_index],
-                                                             path,
-                                                             token,
-                                                             out_error);
-                if (type->as.named_generic.type_args[arg_index] != NULL && arg_type_id == 0U) {
-                    return 0U;
-                }
-                if (!writer_append_tseq(ctx, 0U, arg_type_id, 0U, path, token, out_error)) {
+                if (!writer_append_tseq(ctx,
+                                        0U,
+                                        arg_type_ids[arg_index],
+                                        0U,
+                                        path,
+                                        token,
+                                        out_error)) {
+                    free(arg_type_ids);
                     return 0U;
                 }
             }
+            free(arg_type_ids);
             break;
         }
 

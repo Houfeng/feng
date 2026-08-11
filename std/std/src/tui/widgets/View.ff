@@ -38,27 +38,27 @@ open type View: Widget {
   /**
    * 键盘事件回调
    */
-  var onKey: Action<KeyEvent>;
+  var onKey: Action<KeyEvent<Widget>>;
 
   /**
    * 鼠标按下事件回调
    */
-  var onMouseDown: Action<MouseEvent>;
+  var onMouseDown: Action<MouseEvent<Widget>>;
 
   /**
    * 鼠标移动事件回调
    */
-  var onMouseMove: Action<MouseEvent>;
+  var onMouseMove: Action<MouseEvent<Widget>>;
 
   /**
    * 鼠标释放事件回调
    */
-  var onMouseUp: Action<MouseEvent>;
+  var onMouseUp: Action<MouseEvent<Widget>>;
 
   /**
    * 鼠标滚轮事件回调
    */
-  var onWheel: Action<MouseEvent>;
+  var onWheel: Action<MouseEvent<Widget>>;
 
   /**
    * 按指定参照尺寸解析固定值或百分比值。

@@ -271,7 +271,7 @@ open type TuiApp {
   /** Screen 渲染底座；声明处绑定零尺寸实例，init() 时原地调整为终端真实尺寸 */
   let screen: Screen = Screen(0, 0);
   /** 输入管理器（公开只读成员，构造时创建，用户通过此注册回调） */
-  let input: InputManager;
+  let input: InputManager<Widget>;
   /** 视图管理器；复用当前 TuiApp 的 Screen，render() 中调度 View 布局与绘制 */
   let view: ViewManager;
   /** 窗口尺寸已变化标志：sigpipe 可读时置位，render() 中检查并清零 */
@@ -346,7 +346,7 @@ open type TuiApp {
    * screen 已在字段声明处显式初始绑定为零尺寸 Screen，不在构造函数中重复绑定。
    */
   func TuiApp() {
-    self.input = InputManager();
+    self.input = InputManager<Widget>();
     self.view = ViewManager(self.screen);
     self.input.onMouse = self.view.dispatchMouse;
     self.tty = 0;
@@ -368,7 +368,7 @@ open type TuiApp {
    * @param fds - 外部通知 fd 数组，poll 监听可读事件
    */
   func TuiApp(fds: i32[]) {
-    self.input = InputManager();
+    self.input = InputManager<Widget>();
     self.view = ViewManager(self.screen);
     self.input.onMouse = self.view.dispatchMouse;
     self.tty = 0;

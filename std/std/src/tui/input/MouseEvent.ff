@@ -33,10 +33,12 @@ open enum MouseButton {
 }
 
 /**
- * MouseEvent 表示一个鼠标事件。
+ * MouseEvent 表示一个带路由目标类型的鼠标事件。
  *
  * 普通引用类型，输入载荷字段均为 `let`，构造后不可变。
- * 同一事件实例在 Widget 树中逐级传播，stop()/isStopped() 维护共享的停止状态。
+ * target 在 InputManager 完成解析时尚未绑定，由 ViewManager 在进入 Widget 回调前
+ * 绑定为命中或锁定目标。同一事件实例在 Widget 树中逐级传播，target 保持不变，
+ * stop()/isStopped() 维护共享的停止状态。
  *
  * 修饰键来自 SGR 鼠标序列（mode 1006）的 button 高位编码，
  * 由终端主动报告，100% 可靠——isControl/isAlt/isShift 均准确。
@@ -44,7 +46,16 @@ open enum MouseButton {
  * 坐标为 0-based，与 Screen/Buffer 的坐标体系统一。
  * InputManager 解析时将终端 SGR 序列的 1-based 坐标减 1。
  */
-open type MouseEvent {
+open type MouseEvent<T> {
+
+  /** 路由目标；仅在 hasTarget() 返回 true 时有效。 */
+  var target: T;
+
+  /** target 是否已经由路由器绑定。 */
+  seal var _hasTarget: bool;
+
+  /** 当前事件的 target 是否代表现有锁定目标。 */
+  seal var _targetOwnsLock: bool;
 
   /** 鼠标动作类型 */
   let action: MouseAction;
@@ -64,10 +75,21 @@ open type MouseEvent {
   /** 是否已停止后续传播；仅由 stop() 修改 */
   seal var stopped: bool;
 
+  /** 当前闭合 MouseEvent<T> 是否存在锁定目标。 */
+  seal static var _locked: bool;
+
+  /** 当前闭合 MouseEvent<T> 的锁定目标。 */
+  seal static var _lockedTarget: T;
+
+  /** 用于释放锁定目标引用的默认 T。 */
+  seal static let _emptyTarget: T;
+
   /**
    * 默认构造函数：action=press, button=none, x=0, y=0, mods=0。
    */
   func MouseEvent() {
+    self._hasTarget = false;
+    self._targetOwnsLock = false;
     self.action = MouseAction.press;
     self.button = MouseButton.none;
     self.x = 0;
@@ -85,6 +107,8 @@ open type MouseEvent {
    * @param mods - 修饰键位标志的按位或
    */
   func MouseEvent(action: MouseAction, button: MouseButton, x: u32, y: u32, mods: u8) {
+    self._hasTarget = false;
+    self._targetOwnsLock = false;
     self.action = action;
     self.button = button;
     self.x = x;
@@ -120,6 +144,35 @@ open type MouseEvent {
   }
 
   /**
+   * 绑定事件路由目标。
+   * InputManager 只解析输入，ViewManager 在进入 Widget 回调前调用该方法。
+   * @param target 路由选中的目标
+   */
+  func bindTarget(target: T): void {
+    self.target = target;
+    self._hasTarget = true;
+    self._targetOwnsLock = false;
+  }
+
+  /**
+   * 绑定静态锁定目标，并标记当前事件可以代表该目标继续 lock 或 unlock。
+   * @param target 当前闭合 MouseEvent<T> 保存的锁定目标
+   */
+  func bindLockedTarget(target: T): void {
+    self.target = target;
+    self._hasTarget = true;
+    self._targetOwnsLock = true;
+  }
+
+  /**
+   * 查询 target 是否已经由路由器绑定。
+   * @return target 是否有效
+   */
+  func hasTarget(): bool {
+    return self._hasTarget;
+  }
+
+  /**
    * 停止当前回调完成后的后续事件传播。
    * 重复调用保持停止状态，不中断当前回调。
    */
@@ -133,5 +186,60 @@ open type MouseEvent {
    */
   func isStopped(): bool {
     return self.stopped;
+  }
+
+  /**
+   * 请求由当前路由目标锁定后续鼠标事件。
+   * 未绑定 target 时失败；首个目标取得锁定，同一目标可重复锁定，其他目标不能抢占。
+   * @return 当前目标是否拥有锁定
+   */
+  func lock(): bool {
+    if !self._hasTarget {
+      return false;
+    }
+    if MouseEvent<T>._locked {
+      return self._targetOwnsLock;
+    }
+    MouseEvent<T>._lockedTarget = self.target;
+    MouseEvent<T>._locked = true;
+    self._targetOwnsLock = true;
+    return true;
+  }
+
+  /**
+   * 释放当前目标拥有的锁定。
+   * 未绑定 target 或锁定属于其他目标时静默不处理。
+   */
+  func unlock(): void {
+    if self._hasTarget && self._targetOwnsLock && MouseEvent<T>._locked {
+      MouseEvent<T>._lockedTarget = MouseEvent<T>._emptyTarget;
+      MouseEvent<T>._locked = false;
+      self._targetOwnsLock = false;
+    }
+  }
+
+  /**
+   * 查询当前闭合 MouseEvent<T> 是否存在锁定目标。
+   * @return 是否已有目标锁定鼠标事件
+   */
+  func isLocked(): bool {
+    return MouseEvent<T>._locked;
+  }
+
+  /**
+   * 查询当前闭合 MouseEvent<T> 是否存在锁定目标。
+   * @return 是否存在锁定目标
+   */
+  static func hasLockedTarget(): bool {
+    return MouseEvent<T>._locked;
+  }
+
+  /**
+   * 获取当前闭合 MouseEvent<T> 的锁定目标，供事件路由器选择分发起点。
+   * 调用前必须先确认 hasLockedTarget() 为 true。
+   * @return 锁定目标
+   */
+  static func lockedTarget(): T {
+    return MouseEvent<T>._lockedTarget;
   }
 }
