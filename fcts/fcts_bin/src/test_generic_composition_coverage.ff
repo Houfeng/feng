@@ -4,6 +4,31 @@ import std;
 import std.test;
 import fcts_lib.test;
 
+/** Map a closed heterogeneous value through a top-level function value. */
+func mapCompositionTopLevel(
+  value: LibCompositionValue<string>
+): LibCompositionValue<string> {
+  return LibCompositionValue<string>(
+    value.pair,
+    "top-level",
+    value.revision + 1
+  );
+}
+
+/** Instance method-value source for the heterogeneous callable flow. */
+type CompositionMethodMapper {
+  /** Map a closed heterogeneous value through a bound method value. */
+  open func map(
+    value: LibCompositionValue<string>
+  ): LibCompositionValue<string> {
+    return LibCompositionValue<string>(
+      value.pair,
+      "method",
+      value.revision + 3
+    );
+  }
+}
+
 /** Verify combinations that are not covered by the individual generic tests. */
 open func test_generic_composition_coverage(): void {
   describe("generic composition coverage", () {
@@ -49,6 +74,110 @@ open func test_generic_composition_coverage(): void {
              "tuple payload and value tail survive managed layout");
       assert(envelope.leaf.payload == "managed-payload",
              "ordinary generic member stores the managed leaf");
+    });
+
+    test("lambda maps the heterogeneous value through generic callable ABI", () {
+      let leaf = LibCompositionLeaf<string>("lambda-payload", "lambda-leaf", 61);
+      let pair: LibCompositionPair<string> = (leaf, "lambda-tuple");
+      let value = LibCompositionValue<string>(pair, "input", 62);
+      let flow = LibCompositionCallableFlow<string>();
+
+      let result = flow.map(
+        (current: LibCompositionValue<string>) ->
+          LibCompositionValue<string>(
+            current.pair,
+            "lambda",
+            current.revision + 2
+          ),
+        value
+      );
+
+      assert(result.pair.item1.payload == "lambda-payload" &&
+             result.pair.item1.label == "lambda-leaf" &&
+             result.pair.item1.code == 61,
+             "lambda preserves the nested reference layer");
+      assert(result.pair.item2 == "lambda-tuple" &&
+             result.marker == "lambda" && result.revision == 64,
+             "lambda returns the complete heterogeneous value");
+    });
+
+    test("top-level function value maps the heterogeneous value", () {
+      let leaf = LibCompositionLeaf<string>("top-payload", "top-leaf", 71);
+      let pair: LibCompositionPair<string> = (leaf, "top-tuple");
+      let value = LibCompositionValue<string>(pair, "input", 72);
+      let flow = LibCompositionCallableFlow<string>();
+
+      let result = flow.map(mapCompositionTopLevel, value);
+
+      assert(result.pair.item1.payload == "top-payload" &&
+             result.pair.item1.label == "top-leaf" &&
+             result.pair.item1.code == 71,
+             "top-level function preserves the nested reference layer");
+      assert(result.pair.item2 == "top-tuple" &&
+             result.marker == "top-level" && result.revision == 73,
+             "top-level function returns the complete heterogeneous value");
+    });
+
+    test("instance method value maps the heterogeneous value", () {
+      let leaf = LibCompositionLeaf<string>("method-payload", "method-leaf", 81);
+      let pair: LibCompositionPair<string> = (leaf, "method-tuple");
+      let value = LibCompositionValue<string>(pair, "input", 82);
+      let flow = LibCompositionCallableFlow<string>();
+      let mapper = CompositionMethodMapper();
+
+      let result = flow.map(mapper.map, value);
+
+      assert(result.pair.item1.payload == "method-payload" &&
+             result.pair.item1.label == "method-leaf" &&
+             result.pair.item1.code == 81,
+             "bound method preserves the nested reference layer");
+      assert(result.pair.item2 == "method-tuple" &&
+             result.marker == "method" && result.revision == 85,
+             "bound method returns the complete heterogeneous value");
+    });
+
+    test("multiple generic spec forms share one composite data flow", () {
+      let leaf = LibCompositionLeaf<string>("spec-payload", "spec-leaf", 91);
+      let pair: LibCompositionPair<string> = (leaf, "spec-tuple");
+      let value = LibCompositionValue<string>(pair, "spec-input", 92);
+      let subject = LibCompositionSpecSubject<string>(
+        "subject-payload",
+        "subject-detail",
+        93
+      );
+      let child: LibCompositionDetailed<string> = subject;
+      let packet = libCompositionBuildSpecPacket<string>(child, value);
+      let mapper: LibCompositionPacketMapper<string> =
+        (current: LibCompositionSpecPacket<string>) ->
+          LibCompositionSpecPacket<string>(
+            current.subject,
+            LibCompositionValue<string>(
+              current.value.pair,
+              "spec-mapped",
+              current.value.revision + 2
+            ),
+            current.detail + "-mapped"
+          );
+
+      let completeRevision = libCompositionCheckComplete(
+        subject,
+        "subject-payload"
+      );
+      let result = libCompositionMapSpecPacket<string>(mapper, packet);
+
+      assert(completeRevision == 93,
+             "intersection constraint invokes both object-form contracts");
+      assert(result.subject.read() == "subject-payload" &&
+             result.detail == "subject-detail-mapped",
+             "child-to-parent projection survives field parameter and return paths");
+      assert(result.value.pair.item1.payload == "spec-payload" &&
+             result.value.pair.item1.label == "spec-leaf" &&
+             result.value.pair.item1.code == 91,
+             "callable-form spec preserves the nested reference layer");
+      assert(result.value.pair.item2 == "spec-tuple" &&
+             result.value.marker == "spec-mapped" &&
+             result.value.revision == 94,
+             "callable-form spec returns the complete composite payload");
     });
   });
 }

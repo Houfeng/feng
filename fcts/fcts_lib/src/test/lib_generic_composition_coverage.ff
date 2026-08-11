@@ -80,3 +80,132 @@ open func libCompositionRoundTrip<T>(
 ): LibCompositionValue<T> {
   return value;
 }
+
+/** Invoke a callable with the complete heterogeneous generic value. */
+open type LibCompositionCallableFlow<T> {
+  /** Construct an empty flow object. */
+  func LibCompositionCallableFlow() {
+  }
+
+  /** Pass the value through a generic callable parameter and return path. */
+  open func map(
+    callback: Func<LibCompositionValue<T>, LibCompositionValue<T> >,
+    value: LibCompositionValue<T>
+  ): LibCompositionValue<T> {
+    return callback(value);
+  }
+}
+
+/** Parent object-form contract carried by the composite spec packet. */
+open spec LibCompositionReadable<T> {
+  /** Return the generic payload. */
+  func read(): T;
+}
+
+/** Child object-form contract used at the packet construction boundary. */
+open spec LibCompositionDetailed<T>: LibCompositionReadable<T> {
+  /** Return the subject detail. */
+  func detail(): string;
+}
+
+/** Independent contract combined with the child contract by an intersection. */
+open spec LibCompositionRevisioned {
+  /** Return the subject revision. */
+  func specRevision(): i64;
+}
+
+/** Generic named intersection used as a callable constraint. */
+open spec LibCompositionComplete<T>:
+  LibCompositionDetailed<T> & LibCompositionRevisioned;
+
+/** Concrete subject satisfying every contract in the named intersection. */
+open type LibCompositionSpecSubject<T>:
+  LibCompositionDetailed<T>, LibCompositionRevisioned {
+  /** Generic payload returned through the parent contract. */
+  open let payload: T;
+
+  /** Managed detail returned through the child contract. */
+  open let label: string;
+
+  /** Scalar revision returned through the independent contract. */
+  open let version: i64;
+
+  /** Construct a fully populated subject. */
+  func LibCompositionSpecSubject(payload: T, label: string, version: i64) {
+    self.payload = payload;
+    self.label = label;
+    self.version = version;
+  }
+
+  /** Implement the generic parent contract. */
+  func read(): T {
+    return self.payload;
+  }
+
+  /** Implement the generic child contract. */
+  func detail(): string {
+    return self.label;
+  }
+
+  /** Implement the independent intersection member contract. */
+  func specRevision(): i64 {
+    return self.version;
+  }
+}
+
+/** Value packet combining an object-spec value and the heterogeneous payload. */
+@value
+open type LibCompositionSpecPacket<T> {
+  /** Parent-spec view stored after a child-to-parent conversion. */
+  open var subject: LibCompositionReadable<T>;
+
+  /** Heterogeneous generic payload transported with the witness value. */
+  open var value: LibCompositionValue<T>;
+
+  /** Detail captured through the child-spec view. */
+  open var detail: string;
+
+  /** Construct a populated packet. */
+  func LibCompositionSpecPacket(
+    subject: LibCompositionReadable<T>,
+    value: LibCompositionValue<T>,
+    detail: string
+  ) {
+    self.subject = subject;
+    self.value = value;
+    self.detail = detail;
+  }
+}
+
+/** Callable-form contract transporting the complete spec packet. */
+open spec LibCompositionPacketMapper<T>(
+  packet: LibCompositionSpecPacket<T>
+): LibCompositionSpecPacket<T>;
+
+/** Build a packet while projecting the generic child contract to its parent. */
+open func libCompositionBuildSpecPacket<T>(
+  subject: LibCompositionDetailed<T>,
+  value: LibCompositionValue<T>
+): LibCompositionSpecPacket<T> {
+  return LibCompositionSpecPacket<T>(subject, value, subject.detail());
+}
+
+/** Invoke both members of a named generic intersection constraint. */
+open func libCompositionCheckComplete<
+  T,
+  U: LibCompositionComplete<T>
+>(subject: U, payload: T): i64 {
+  let detail = subject.detail();
+  if detail == "" {
+    return 0;
+  }
+  return subject.specRevision();
+}
+
+/** Pass a packet through the generic callable-form contract. */
+open func libCompositionMapSpecPacket<T>(
+  mapper: LibCompositionPacketMapper<T>,
+  packet: LibCompositionSpecPacket<T>
+): LibCompositionSpecPacket<T> {
+  return mapper(packet);
+}
