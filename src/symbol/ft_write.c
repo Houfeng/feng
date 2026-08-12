@@ -837,7 +837,10 @@ static bool writer_select_skeleton_members(WriterContext *ctx,
         if (decl->kind == FENG_SYMBOL_DECL_KIND_TYPE) {
             required = required ||
                        (member != NULL &&
-                        member->kind == FENG_SYMBOL_DECL_KIND_FIELD);
+                        (member->kind == FENG_SYMBOL_DECL_KIND_FIELD ||
+                         (decl->type_param_count > 0U &&
+                          member->kind ==
+                              FENG_SYMBOL_DECL_KIND_FINALIZER)));
         } else if (decl->kind == FENG_SYMBOL_DECL_KIND_ENUM) {
             required = required ||
                        (member != NULL &&

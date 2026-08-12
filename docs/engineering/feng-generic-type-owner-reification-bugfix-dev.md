@@ -1,12 +1,12 @@
 # Feng 泛型类型 owner 依赖具化修复开发文档
 
-> 状态：待 Review，尚未实施
+> 状态：已完成（2026-08-12，全量回归通过）
 >
 > 本专项采用“方案一”：泛型类型的实例/静态字段初始化、全部构造函数及终结器统一使用类型描述符中的
 > owner dependency slots；普通实例方法与静态方法继续使用各自的函数描述符。
 >
 > [feng-generic-cross-feature-fcts-hardening-dev.md](./feng-generic-cross-feature-fcts-hardening-dev.md)
-> 已暂停。只有本专项完成并通过全量回归后，才恢复该文档第三组及后续分组。
+> 已恢复；其中第三组已按本专项结果完成，后续从第四组继续。
 
 ## 1. 依据与目标
 
@@ -99,6 +99,18 @@ type UserType<T> {
 该规则须先在权威泛型规范中明确。非法声明中的 `U` 不得进入 owner dependency set，也不得继续生成
 任何共享体、描述符或 wrapper。
 
+### 2.4 开放泛型引用实例的字段偏移未统一使用闭合描述符
+
+共享体内不仅 `value: T` 本身的存储依赖闭合类型；位于该字段之后的普通字段，其实际偏移也会随 `T`
+的闭合布局变化。当前发码仅对字段类型直接为泛参的访问使用 `reified_field_offsets`，对同一开放泛型
+实例中的其他字段仍使用开放占位 C 结构体直接访问。当 `T` 闭合为 descriptor-sized 聚合值时，这会让
+后续字段读写落到错误地址；标量和托管指针实例只是因占位宽度相同而偶然可用。
+
+因此，共享体访问开放泛型引用实例的任意字段时，都必须从该实例的闭合 `FengTypeDescriptor` 取得固定
+字段偏移。该规则同时覆盖读取、普通赋值、复合赋值和托管/聚合字段的生命周期操作，不按字段名称、
+字段类型、构造函数、终结器或静态初始化场景增加特判。普通闭合类型与非泛型类型继续使用编译期 C
+结构体偏移。
+
 ## 3. 方案一及职责边界
 
 ### 3.1 描述符职责
@@ -114,7 +126,7 @@ const struct FengFunctionDescriptor *const *reified_callable_deps;
 
 | owner 代码位置 | dependency slots |
 |---|---|
-| 实例字段声明类型与初始化表达式 | type/aggregate/callable descriptor |
+| 实例字段声明类型与初始化表达式（含成员 mixin 的源构造表达式） | type/aggregate/callable descriptor |
 | 静态字段声明类型与初始化表达式 | type/aggregate/callable descriptor |
 | 隐式构造阶段 | type/aggregate/callable descriptor |
 | 每个显式构造函数的参数类型与函数体 | type/aggregate/callable descriptor |
@@ -191,6 +203,23 @@ FUNCTION: _desc->reified_agg_deps[slot]
 - 字段推断类型和显式字段类型；
 - 实例字段和静态字段初始化。
 
+共享字段初始化中的“未显式初始化字段”仍必须遵守既有 default-zero 语义。`FengTypeDescriptor` 增加统一
+的 `default_zero_init(value_out, descriptor)` 入口；编译器在每个闭合 managed 类型描述符中静态填入该
+类型的默认零值实现。共享体初始化未知 managed 泛参 `T` 时，通过 `T` 的具化描述符调用该入口；不得把
+managed 泛参统一写为 `NULL`。
+
+各类型仍由编译器按既有语义处理自身这一层：`string` 产生空字符串，array 依据闭合元素描述产生空数组，
+callable 产生编译器生成的 noop closure，普通及泛型 `type` 递归初始化每个字段的类型默认零值。普通和
+泛型 `type` 的 default-zero 都不得执行字段声明初始化表达式、隐式/显式构造函数或对象字面量阶段。
+复合类型描述符只引用其直接子级描述符，不在 default-zero 入口中进行类型名称判断、动态具化或递归
+描述符查找。
+
+静态已知类型继续使用既有直接发码，不增加间接调用；非泛型数组、已闭合数组、非泛型 `type` 和已闭合
+`type` 的 default-zero 运行时路径及开销必须与改造前完全一致。闭合数组描述符必须作为编译期生成的
+静态只读数据或既有固定 reified slot 提供，不得在运行时临时组装。仅共享体初始化真正未知的 managed
+泛参时，才通过具化描述符进行一次函数指针调用。该路径不得增加运行时名称查找、slot 搜索、缓存、锁、
+装箱，或 default-zero 语义之外的对象分配。
+
 ### 3.5 泛型类型终结器
 
 普通泛型 `type` 的 provider 生成一个可由 consumer 链接的共享终结器主体；它是包内生成 ABI 的导出
@@ -230,6 +259,15 @@ void Feng_UserType_finalizer_shared(
 所有 descriptor shell 和符号前向声明先注册，再连接只读依赖数组，以支持相互引用的静态描述符图。
 共享体只读取调用点已生成的闭合图，不得在运行时递归具化、按名称查找或缓存补全。
 
+### 3.7 开放泛型引用实例的字段访问
+
+共享体中的开放泛型引用实例先通过现有 type dependency 固定 slot 取得闭合 `FengTypeDescriptor`，随后按
+编译期已确定的字段索引读取 `reified_field_offsets[field]`。字段类型是否直接引用泛参不影响该选择；
+因为决定字段地址的是整个闭合 owner 的布局，而不是该字段自身的类型。
+
+同一字段访问只读取一次对应字段偏移。字段地址确定后，标量、托管引用、descriptor-sized 聚合值及直接
+泛参继续复用既有读写与所有权规则，不增加运行时分支、名称查找、slot 搜索或动态具化。
+
 ## 4. ABI 与性能边界
 
 ### 4.1 已确认的私有 ABI 调整
@@ -237,6 +275,10 @@ void Feng_UserType_finalizer_shared(
 本专项按人工确认的方案一，为 `FengTypeDescriptor` 和 `FengAggregateDescriptor` 增加 callable dependency
 计数与数组指针。它们属于 Feng 编译器和 runtime 之间的私有描述符 ABI，所有静态初始化器和读取方必须
 同步更新。
+
+同时为 `FengTypeDescriptor` 增加 managed 值的 `default_zero_init` 入口。具化后的普通 type、泛型 type、
+string、array 和 callable descriptor 均必须填入准确实现；`FengGenericParamDescriptor` 不重复保存该入口。
+trivial 与 aggregate 分别继续使用 `FengTrivialDescriptor.size` 和 `FengAggregateDescriptor.default_init`。
 
 不修改：
 
@@ -254,6 +296,8 @@ void Feng_UserType_finalizer_shared(
 - 不增加运行时名称查找、slot 搜索、依赖遍历、动态具化、缓存、锁或堆分配；
 - 没有 callable dependency 的描述符使用 `0/NULL`，对应代码不产生额外读取；
 - 普通非泛型路径保持原发码和运行时成本；
+- 非泛型及已闭合数组/type 的 default-zero 保持既有直接发码，不进入 descriptor 间接分发；
+- 已闭合数组的描述符只使用静态只读数据或既有固定 slot，不在运行时构造；
 - descriptor 增加的只读数组只包含编译期去重后的依赖指针。
 
 如实施中发现必须突破以上任一性能或 ABI 边界，立即停止并提交人工 Review。
@@ -283,7 +327,9 @@ void Feng_UserType_finalizer_shared(
 2. 让通用 descriptor graph 注册管线递归生成 owner callable dependencies；
 3. 将共享发码的依赖来源显式化，三类 slot 使用一致的 TYPE/FUNCTION 选择；
 4. 字段、隐式构造和所有显式构造函数统一从 `_td` 读取；
-5. 普通方法、静态方法、fit 和顶层函数继续从 `_desc` 读取并保持回归通过。
+5. 开放泛型引用实例的全部字段读写统一使用闭合类型描述符中的 `reified_field_offsets`；
+6. 为闭合 managed 类型描述符生成正确的 default-zero 入口，并让未知 managed 泛参通过 descriptor 调用；
+7. 普通方法、静态方法、fit 和顶层函数继续从 `_desc` 读取并保持回归通过。
 
 ### 5.4 泛型终结器
 
@@ -295,11 +341,11 @@ void Feng_UserType_finalizer_shared(
 
 ### 5.5 测试与恢复原计划
 
-完成 compiler regression 和 FCTS 后执行沙箱外 `make test`。全量回归通过后：
+compiler regression、FCTS 和沙箱外 `make test` 均已完成。全量回归通过后已：
 
 1. 将本文状态改为“已完成”；
 2. 恢复 [feng-generic-cross-feature-fcts-hardening-dev.md](./feng-generic-cross-feature-fcts-hardening-dev.md)；
-3. 将其中第三组按本专项结果标记完成，再继续第四组，不重复维护本专项的 ABI 规则。
+3. 将其中第三组按本专项结果标记完成；后续从第四组继续，不重复维护本专项的 ABI 规则。
 
 ## 6. 测试计划
 
@@ -330,6 +376,7 @@ FCTS 不承担循环回收场景；泛型终结器参与循环回收的验证放
 - Codegen：字段、两个构造函数和终结器整体确定 owner slots；同一依赖跨成员复用相同 slot，且不会生成
   构造函数 `FengFunctionDescriptor`；
 - Codegen：泛型终结器共享主体接收 type descriptor，闭合 thunk 保持 `void (*)(void *)`；
+- Codegen：宽聚合泛参之前和之后的字段均按闭合引用类型描述符读写，不能使用开放占位结构偏移；
 - 跨包：provider 完整 owner slot schema、`.ft` 恢复和 consumer 闭合 descriptor graph 一致，私有成员
   不因元数据导出而改变可见性；
 - Lifecycle：普通释放、异常离开构造路径和循环回收中，终结器及其泛型局部值无泄漏、重复释放或悬垂。
@@ -353,18 +400,21 @@ make test
 
 ## 7. 完成标准
 
-- [ ] 泛型主规范与错误码目录明确构造函数/终结器方法级泛参的 Semantic 禁止规则
-- [ ] Semantic 在依赖收集前拒绝构造函数和终结器的方法级泛参
-- [ ] `FengTypeDescriptor` 增加 owner callable dependency slots
-- [ ] `FengAggregateDescriptor` 增加 owner callable dependency slots
-- [ ] owner 字段、隐式/显式构造函数、终结器作为整体完成统一收集、排序、去重和 slot 分配
-- [ ] `.ft` 完整保存 owner slot schema，consumer 与 provider 使用完全相同的固定偏移
-- [ ] TYPE/FUNCTION 依赖来源覆盖 aggregate/type/callable 三类 slot
-- [ ] 泛型字段初始化和多个构造函数完整支持示例中的 `Box1<T>`、`test<T>`、`Box2<T>`、`Box3<T>`
-- [ ] 泛型普通 `type` 终结器完整支持示例中的 `Box4<T>`
-- [ ] imported provider 与 consumer 二进制分发路径通过
-- [ ] 普通 `type`、`@value type`、静态字段及三类代表性 `T` 的 FCTS 通过
-- [ ] Semantic、Codegen、跨包和生命周期 compiler regression 通过
-- [ ] 未增加构造/终结器 `_func_desc`、运行时搜索、遍历、分配或动态具化
-- [ ] 沙箱外 `make test` 全量通过
-- [ ] 恢复跨特性 FCTS 加固文档并继续其后续分组
+- [x] 泛型主规范与错误码目录明确构造函数/终结器方法级泛参的 Semantic 禁止规则
+- [x] Semantic 在依赖收集前拒绝构造函数和终结器的方法级泛参
+- [x] `FengTypeDescriptor` 增加 owner callable dependency slots
+- [x] `FengAggregateDescriptor` 增加 owner callable dependency slots
+- [x] owner 字段、隐式/显式构造函数、终结器作为整体完成统一收集、排序、去重和 slot 分配
+- [x] `.ft` 完整保存 owner slot schema，consumer 与 provider 使用完全相同的固定偏移
+- [x] TYPE/FUNCTION 依赖来源覆盖 aggregate/type/callable 三类 slot
+- [x] 泛型字段初始化和多个构造函数完整支持示例中的 `Box1<T>`、`test<T>`、`Box2<T>`、`Box3<T>`
+- [x] 泛型普通 `type` 终结器完整支持示例中的 `Box4<T>`
+- [x] 开放泛型引用实例的全部字段读写使用闭合描述符偏移
+- [x] `FengTypeDescriptor.default_zero_init` 覆盖 string、array、callable、普通及泛型 type
+- [x] 未知 managed 泛参使用具化 descriptor 的 default-zero 入口而不是写入 `NULL`
+- [x] imported provider 与 consumer 二进制分发路径通过
+- [x] 普通 `type`、`@value type`、静态字段及三类代表性 `T` 的 FCTS 通过
+- [x] Semantic、Codegen、跨包和生命周期 compiler regression 通过
+- [x] 未增加构造/终结器 `_func_desc`、运行时搜索、遍历、分配或动态具化
+- [x] 沙箱外 `make test` 全量通过
+- [x] 恢复跨特性 FCTS 加固文档并将第三组标记完成；后续从第四组继续

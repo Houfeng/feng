@@ -9,6 +9,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Forward declaration used by the descriptor-compatible default-zero entry. */
+FengString *feng_string_default(void);
+
+/* Store the immortal empty-string singleton as the default-zero value. */
+static void feng_string_default_zero_init(
+    void *value_out,
+    const FengTypeDescriptor *descriptor) {
+    (void)descriptor;
+    *(FengString **)value_out = feng_string_default();
+}
+
 /* Descriptor equality compares immutable string payload bytes, not pointer
  * identity, so generic equality preserves the language-level string contract. */
 static bool feng_string_descriptor_equal(const void *left, const void *right) {
@@ -27,6 +38,7 @@ static bool feng_string_descriptor_equal(const void *left, const void *right) {
 const FengTypeDescriptor feng_string_descriptor = {
     .name = "feng.builtin.string",
     .size = 0U, /* variable length; allocator computes per instance */
+    .default_zero_init = feng_string_default_zero_init,
     .finalizer = NULL,
     .equal_fn = feng_string_descriptor_equal,
     .reified_generic_params_count = 0, .reified_generic_params = NULL,

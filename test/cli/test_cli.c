@@ -15096,6 +15096,161 @@ static void test_project_run_collects_cross_package_generic_cycle(void) {
     free(repo_root);
 }
 
+/* Verify a closed generic finalizer receives its owner descriptor when the
+ * cycle collector, rather than ordinary ARC, discovers the object. */
+static void test_project_run_collects_generic_finalizer_cycle(void) {
+    char template_path[] = "temp/feng_cli_generic_finalizer_cycle_XXXXXX";
+    char *workspace_dir;
+    char *repo_root;
+    char *std_project_dir;
+    char *project_manifest_path;
+    char *project_src_dir;
+    char *project_source_path;
+    char *project_manifest_text;
+    char *saved_threshold = NULL;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    repo_root = getcwd(NULL, 0);
+    ASSERT(repo_root != NULL);
+    std_project_dir = path_join(repo_root, "std/std");
+    project_manifest_path = path_join(workspace_dir, "feng.fm");
+    project_src_dir = path_join(workspace_dir, "src");
+    project_source_path = path_join(project_src_dir, "main.ff");
+    project_manifest_text = dup_printf(
+        "[package]\n"
+        "name: \"generic_finalizer_cycle_app\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"bin\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n"
+        "\n"
+        "[dependencies]\n"
+        "std: \"%s\"\n",
+        std_project_dir);
+    ASSERT(project_manifest_text != NULL);
+
+    mkdir_p(project_src_dir);
+    write_text_file(project_manifest_path, project_manifest_text);
+    write_text_file(
+        project_source_path,
+        "module test.cli.genericfinalizercycle;\n"
+        "\n"
+        "import std.test;\n"
+        "\n"
+        "/** Descriptor-sized payload closing the generic cycle nodes. */\n"
+        "@value\n"
+        "type GenericFinalizerWideValue {\n"
+        "  /** First managed payload slot. */\n"
+        "  let first: string;\n"
+        "\n"
+        "  /** Second managed payload slot. */\n"
+        "  let second: string;\n"
+        "\n"
+        "  /** Construct one observable wide payload. */\n"
+        "  func GenericFinalizerWideValue(first: string, second: string) {\n"
+        "    self.first = first;\n"
+        "    self.second = second;\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "/** Generic dependency instantiated inside the node finalizer. */\n"
+        "type GenericFinalizerBox<T> {\n"
+        "  /** Reified payload storage forcing the closed box layout. */\n"
+        "  var value: T;\n"
+        "\n"
+        "  /** Marker following the reified payload in physical layout. */\n"
+        "  let marker: string;\n"
+        "\n"
+        "  /** Construct the finalizer-local dependency. */\n"
+        "  func GenericFinalizerBox() {\n"
+        "    self.marker = \"generic-finalizer\";\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "/** Observable state outside the unreachable object graph. */\n"
+        "type GenericFinalizerState {\n"
+        "  static var finalized: i64 = 0;\n"
+        "\n"
+        "  /** Reset the finalizer counter. */\n"
+        "  static func reset(): void { GenericFinalizerState.finalized = 0; }\n"
+        "\n"
+        "  /** Record one closed generic node finalizer. */\n"
+        "  static func record(): void { GenericFinalizerState.finalized += 1; }\n"
+        "\n"
+        "  /** Return the observed finalizer count. */\n"
+        "  static func count(): i64 { return GenericFinalizerState.finalized; }\n"
+        "}\n"
+        "\n"
+        "/** Generic reference node participating in a two-object cycle. */\n"
+        "type GenericFinalizerNode<T> {\n"
+        "  /** Reified payload retained by this node. */\n"
+        "  let payload: T;\n"
+        "\n"
+        "  /** Opposite nodes forming managed cycle edges. */\n"
+        "  var nexts: GenericFinalizerNode<T>[] = [];\n"
+        "\n"
+        "  /** Construct one disconnected node. */\n"
+        "  func GenericFinalizerNode(payload: T) { self.payload = payload; }\n"
+        "\n"
+        "  /** Connect this node to its opposite endpoint. */\n"
+        "  func connect(next: GenericFinalizerNode<T>): void { self.nexts = [next]; }\n"
+        "\n"
+        "  /** Exercise a type-owner dependency while recording finalization. */\n"
+        "  func ~GenericFinalizerNode() {\n"
+        "    let box = GenericFinalizerBox<T>();\n"
+        "    if box.marker == \"generic-finalizer\" {\n"
+        "      GenericFinalizerState.record();\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "/** Create a closed generic cycle and release all external roots. */\n"
+        "func createGenericFinalizerCycle(): void {\n"
+        "  let left = GenericFinalizerNode<GenericFinalizerWideValue>(\n"
+        "    GenericFinalizerWideValue(\"left-first\", \"left-second\")\n"
+        "  );\n"
+        "  let right = GenericFinalizerNode<GenericFinalizerWideValue>(\n"
+        "    GenericFinalizerWideValue(\"right-first\", \"right-second\")\n"
+        "  );\n"
+        "  left.connect(right);\n"
+        "  right.connect(left);\n"
+        "}\n"
+        "\n"
+        "/** Run the isolated generic-finalizer cycle verification. */\n"
+        "func main(args: string[]) {\n"
+        "  GenericFinalizerState.reset();\n"
+        "  createGenericFinalizerCycle();\n"
+        "  assert(GenericFinalizerState.count() == 2,\n"
+        "         \"cycle collection invokes each closed generic finalizer once\");\n"
+        "}\n");
+
+    if (getenv("FENG_GC_THRESHOLD") != NULL) {
+        saved_threshold = dup_cstr(getenv("FENG_GC_THRESHOLD"));
+    }
+    ASSERT(setenv("FENG_GC_THRESHOLD", "1", 1) == 0);
+    {
+        char *argv[] = { workspace_dir };
+        ASSERT(feng_cli_project_run_main("feng", 1, argv) == 0);
+    }
+    if (saved_threshold != NULL) {
+        ASSERT(setenv("FENG_GC_THRESHOLD", saved_threshold, 1) == 0);
+    } else {
+        ASSERT(unsetenv("FENG_GC_THRESHOLD") == 0);
+    }
+
+    free(saved_threshold);
+    free(project_manifest_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(project_source_path);
+    free(project_src_dir);
+    free(project_manifest_path);
+    free(std_project_dir);
+    free(repo_root);
+}
+
 static void test_project_pack_uses_release_build_and_public_ft_excludes_spans(void) {
     char template_path[] = "temp/feng_cli_pack_release_flags_XXXXXX";
     char *workspace_dir;
@@ -17879,6 +18034,7 @@ int main(void) {
     test_project_build_lib_stages_extlib_assets_without_assets_layer();
     test_project_run_release_reuses_build_pipeline();
     test_project_run_collects_cross_package_generic_cycle();
+    test_project_run_collects_generic_finalizer_cycle();
     test_project_pack_uses_release_build_and_public_ft_excludes_spans();
     test_project_pack_includes_staged_assets_in_bundle();
     test_project_pack_includes_extlib_assets_without_assets_layer();

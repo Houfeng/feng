@@ -134,6 +134,7 @@
 | CE0172 | 共享泛型方法发射失败 | CE0369 | codegen: internal: failed to emit shared generic method '%.*s' | 回到IE |
 | CE0173 | 泛型实例方法 origin type 缺失 | CE0370 | codegen: internal: generic instance method missing origin type | 回到IE |
 | CE0174 | 泛型方法包装发射失败 | CE0371 | codegen: internal: failed to emit generic method wrapper '%s.%s' | 回到IE |
+| CE0175 | owner callable dependency 闭合失败 | CE0376 | codegen: cannot build owner callable dependency key for '%s' in '%s'、codegen: failed to close owner callable dependency '%s' for '%s' | 回到IE |
 
 ## 02 聚合描述符段
 

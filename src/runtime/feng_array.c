@@ -94,6 +94,68 @@ const FengTypeDescriptor feng_array_descriptor = {
     .reified_type_deps_count = 0,      .reified_type_deps = NULL,
 };
 
+/* Produce an empty array from the element metadata carried by one closed
+ * array descriptor. Each descriptor layer is responsible only for its direct
+ * element, so nested arrays naturally recurse through their own descriptor
+ * when they are themselves default-initialized. */
+void feng_array_default_zero_init(
+    void *value_out,
+    const FengTypeDescriptor *descriptor) {
+    const FengGenericParamDescriptor *element;
+    FengArray *result;
+
+    if (value_out == NULL || descriptor == NULL ||
+        descriptor->reified_generic_params_count != 1U ||
+        descriptor->reified_generic_params == NULL ||
+        descriptor->reified_generic_params[0] == NULL) {
+        feng_panic("feng_array_default_zero_init: closed array descriptor requires one element parameter");
+    }
+    element = descriptor->reified_generic_params[0];
+    switch (element->kind) {
+        case FENG_VALUE_TRIVIAL: {
+            const FengTrivialDescriptor *trivial =
+                (const FengTrivialDescriptor *)element->descriptor;
+
+            if (trivial == NULL) {
+                feng_panic("feng_array_default_zero_init: trivial element descriptor is NULL");
+            }
+            result = feng_array_new_kinded(
+                FENG_VALUE_TRIVIAL, NULL, NULL, trivial->size, 0U);
+            break;
+        }
+        case FENG_VALUE_MANAGED_POINTER: {
+            const FengTypeDescriptor *managed =
+                (const FengTypeDescriptor *)element->descriptor;
+
+            if (managed == NULL) {
+                feng_panic("feng_array_default_zero_init: managed element descriptor is NULL");
+            }
+            result = feng_array_new_kinded(
+                FENG_VALUE_MANAGED_POINTER, NULL, NULL, sizeof(void *), 0U);
+            break;
+        }
+        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS: {
+            const FengAggregateDescriptor *aggregate =
+                (const FengAggregateDescriptor *)element->descriptor;
+
+            if (aggregate == NULL) {
+                feng_panic("feng_array_default_zero_init: aggregate element descriptor is NULL");
+            }
+            result = feng_array_new_kinded(
+                FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS,
+                aggregate,
+                NULL,
+                aggregate->size,
+                0U);
+            break;
+        }
+        default:
+            feng_panic("feng_array_default_zero_init: unknown element kind=%d",
+                       (int)element->kind);
+    }
+    *(FengArray **)value_out = result;
+}
+
 void feng_array_finalize_internal(struct FengArray *a) {
     void *payload;
 

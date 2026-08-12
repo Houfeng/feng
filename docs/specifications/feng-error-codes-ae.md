@@ -84,7 +84,7 @@
 | AE0313 | 构造器参数匹配缺失约束 | AE0141 | type '%.*s' has no constructor accepting %zu argument(s) |
 | AE0314 | 构造器重载二义性约束 | AE0142 | type '%.*s' has multiple accessible constructors matching %zu argument(s); argument types are ambiguous |
 | AE0315 | 构造器可见性约束 | AE0143 | type '%.*s' has no accessible constructor accepting %zu argument(s) |
-| AE0316 | 泛型类型 finalizer 禁用 | AE0070 | generic type '%.*s' cannot declare a finalizer |
+| AE0316 | 构造函数/终结器方法级泛参禁用 | (新增) | constructor '%.*s' cannot declare type parameters / finalizer '~%.*s' cannot declare type parameters |
 | AE0317 | @abi 类型 finalizer 禁用 | AE0071 | type '%.*s' is marked as @abi and cannot declare a finalizer |
 | AE0318 | finalizer 唯一性约束 | AE0072 | type '%.*s' declares more than one finalizer |
 | AE0319 | @iterable 方法唯一性约束 | AE0063 | type '%.*s' has multiple @iterable methods |

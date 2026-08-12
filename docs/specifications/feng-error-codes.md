@@ -61,7 +61,6 @@
 | **AE0067** | 返回语句错误 | return type of @iterable method has no @iterator method |
 | **AE0068** | 注解使用错误 | @iterator method must take no parameters |
 | **AE0069** | 返回语句错误 | @iterator method must return a named tuple type of the form (bool, E) |
-| **AE0070** | 泛型使用错误 | generic type '%.*s' cannot declare a finalizer |
 | **AE0071** | 语义检查错误 | type '%.*s' is marked as @abi and cannot declare a finalizer |
 | **AE0072** | 语义检查错误 | type '%.*s' declares more than one finalizer |
 | **AE0073** | 语义检查错误 | '%s' cannot appear directly inside an 'if' expression block; |
@@ -600,6 +599,7 @@
 | **CE0371** | 泛型实例化 | codegen: internal: failed to emit generic method wrapper '%s.%s' |
 | **CE0372** | 模块/程序 | codegen: no programs to compile |
 | **CE0373** | 模块/程序 | codegen: bin target requires `main` function |
+| **CE0376** | 泛型实例化 | codegen: cannot build owner callable dependency key for '%s' in '%s'、codegen: failed to close owner callable dependency '%s' for '%s' |
 | **CE0377** | 成员展开 | codegen: member mix source field is not lowerable、codegen: member mix source construction is not an object value |
 | **CE0378** | 成员展开 | codegen: member mix source requires missing reified layout |
 | **CE0379** | 成员展开 | codegen: member mix source field index is missing、codegen: member mix source field is missing |

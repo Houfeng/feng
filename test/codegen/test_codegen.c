@@ -544,7 +544,7 @@ static void test_private_generic_representation_same_package_codegen(void) {
     ASSERT(strstr(out.c_source,
                   "PrivateEntry__G__string") != NULL);
     ASSERT(strstr(out.c_source,
-                  "(void *)&((") != NULL);
+                  "->reified_field_offsets[") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -5224,6 +5224,175 @@ static void test_generic_shared_method_descriptor_order_codegen(void) {
     feng_program_free(program);
 }
 
+/* Type-owner shared bodies use one closed type descriptor for field,
+ * constructor, static-initializer, and finalizer dependencies. Open generic
+ * reference fields must also use the closed descriptor's physical offsets. */
+static void test_generic_type_owner_reification_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_type_owner;\n"
+        "@value\n"
+        "type Wide {\n"
+        "    open let first: string;\n"
+        "    open let second: string;\n"
+        "    func Wide(first: string, second: string) {\n"
+        "        self.first = first;\n"
+        "        self.second = second;\n"
+        "    }\n"
+        "}\n"
+        "type Box<T> {\n"
+        "    open var value: T;\n"
+        "    open let marker: string;\n"
+        "    func Box(marker: string) { self.marker = marker; }\n"
+        "}\n"
+        "func makeBox<T>(): Box<T> { return Box<T>(\"callable\"); }\n"
+        "type Owner<T> {\n"
+        "    open var direct = Box<T>(\"field\");\n"
+        "    open var callable = makeBox<T>();\n"
+        "    open var marker: string;\n"
+        "    func Owner(value: T) {\n"
+        "        let box = Box<T>(\"constructor\");\n"
+        "        self.direct.value = value;\n"
+        "        self.marker = box.marker;\n"
+        "    }\n"
+        "    func ~Owner() {\n"
+        "        let box = Box<T>(\"finalizer\");\n"
+        "        box.marker;\n"
+        "    }\n"
+        "}\n"
+        "type StaticOwner<T> {\n"
+        "    open static let value = makeBox<T>();\n"
+        "}\n"
+        "func use(): string {\n"
+        "    let owner = Owner<Wide>(Wide(\"left\", \"right\"));\n"
+        "    let arrayBox = Box<Wide[]>(\"array\");\n"
+        "    return owner.marker + StaticOwner<Wide>.value.marker + arrayBox.marker;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "generic_type_owner.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                   NULL, &out, &cgerr)) {
+        fprintf(stderr, "codegen error (generic type owner reification): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".reified_callable_deps_count = 1") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_td->reified_callable_deps[0]") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_generic_type_descriptor(_T)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "->default_zero_init(") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".default_zero_init = feng_array_default_zero_init") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".default_zero_init = FengTypeDesc__feng__codegen__generic_type_owner__Box") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "->reified_field_offsets[1]") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "(_l_box_0)->marker") == NULL);
+    ASSERT(strstr(out.c_source,
+                  "__finalize(void *_self)") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Statically known arrays and ordinary reference types keep the original
+ * direct default-zero expressions. Descriptor dispatch is reserved for a
+ * shared body whose declared value type is an unresolved generic parameter. */
+static void test_non_generic_default_zero_stays_direct_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.direct_default_zero;\n"
+        "type Plain {\n"
+        "    open let text: string;\n"
+        "}\n"
+        "func use(): void {\n"
+        "    let values: i64[];\n"
+        "    let plain: Plain;\n"
+        "    values;\n"
+        "    plain;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "direct_default_zero.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_array_new(NULL, sizeof(int64_t), false, (size_t)0)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  " = Feng__feng__codegen__direct_default_zero__Plain__default_zero();") != NULL);
+    ASSERT(strstr(out.c_source, "->default_zero_init(") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* A fully closed generic reference type also keeps its generated direct
+ * factory call. The origin's shared default-zero entry may use descriptor
+ * dispatch internally, but the closed call site must not be redirected to it. */
+static void test_closed_generic_default_zero_stays_direct_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.closed_default_zero;\n"
+        "type Box<T> {\n"
+        "    open let value: T;\n"
+        "}\n"
+        "func use(): void {\n"
+        "    let box: Box<i64>;\n"
+        "    box;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "closed_default_zero.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  " = Feng__feng__codegen__closed_default_zero__Box__G__i64__default_zero();") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Direct generic-parameter results use descriptor-sized address storage in
  * every shared callable path.  A wide closed value must never be lowered
  * through a pointer-sized C local, including recursive and method calls. */
@@ -5535,7 +5704,11 @@ static void test_generic_runtime_type_kind_codegen(void) {
     ASSERT(strstr(out.c_source,
                   ".kind = FENG_VALUE_MANAGED_POINTER, .descriptor = &feng_string_descriptor") != NULL);
     ASSERT(strstr(out.c_source,
-                  ".kind = FENG_VALUE_MANAGED_POINTER, .descriptor = &feng_array_descriptor") != NULL);
+                  ".kind = FENG_VALUE_MANAGED_POINTER, .descriptor = &_feng_closed_array_desc_") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "static const FengTypeDescriptor _feng_closed_array_desc_") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "&(const FengTypeDescriptor){.name = \"feng.builtin.array\"") == NULL);
     ASSERT(strstr(out.c_source,
                   ".kind = FENG_VALUE_MANAGED_POINTER, .descriptor = &FengTypeDesc__feng__codegen__gf9__User") != NULL);
     ASSERT(strstr(out.c_source,
@@ -9795,6 +9968,9 @@ int main(void) {
     test_generic_fn_call_codegen();
     test_generic_shared_body_direct_dependencies_codegen();
     test_generic_shared_method_descriptor_order_codegen();
+    test_generic_type_owner_reification_codegen();
+    test_non_generic_default_zero_stays_direct_codegen();
+    test_closed_generic_default_zero_stays_direct_codegen();
     test_generic_direct_result_uses_descriptor_sized_storage_codegen();
     test_generic_managed_return_let_binding_codegen();
     test_generic_spec_arg_codegen();

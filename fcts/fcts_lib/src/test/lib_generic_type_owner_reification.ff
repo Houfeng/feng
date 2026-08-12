@@ -1,0 +1,218 @@
+open module fcts_lib.test;
+
+/** Observable provider state for closed generic owner finalizers. */
+open type LibOwnerReificationState {
+  static var finalized: i64 = 0;
+
+  /** Reset the finalizer observation counter. */
+  open static func reset(): void {
+    LibOwnerReificationState.finalized = 0;
+  }
+
+  /** Record one generic owner finalizer invocation. */
+  open static func record(): void {
+    LibOwnerReificationState.finalized += 1;
+  }
+
+  /** Return the number of observed generic owner finalizers. */
+  open static func finalizedCount(): i64 {
+    return LibOwnerReificationState.finalized;
+  }
+}
+
+/** Field-initializer dependency corresponding to Box1<T>. */
+open type LibOwnerBox1<T> {
+  /** Generic payload retained by the closed box. */
+  open var value: T;
+
+  /** Construction marker used by consumer assertions. */
+  open let marker: string;
+
+  /** Construct the first owner-level dependency. */
+  func LibOwnerBox1() {
+    self.marker = "box1-field";
+  }
+}
+
+/** Callable field-initializer dependency corresponding to test<T>(). */
+open type LibOwnerCallableBox<T> {
+  /** Generic payload retained by the callable result. */
+  open var value: T;
+
+  /** Construction marker used by consumer assertions. */
+  open let marker: string;
+
+  /** Construct one callable-produced dependency. */
+  func LibOwnerCallableBox() {
+    self.marker = "callable-field";
+  }
+}
+
+/** Constructor dependency corresponding to Box2<T>. */
+open type LibOwnerBox2<T> {
+  /** Generic payload forcing the closed managed descriptor. */
+  open var value: T;
+
+  /** Construction marker used by consumer assertions. */
+  open let marker: string;
+
+  /** Construct the no-argument-constructor dependency. */
+  func LibOwnerBox2() {
+    self.marker = "box2-default-ctor";
+  }
+}
+
+/** Constructor dependency corresponding to Box3<T>. */
+open type LibOwnerBox3<T> {
+  /** Generic payload forcing the closed managed descriptor. */
+  open var value: T;
+
+  /** Construction marker used by consumer assertions. */
+  open let marker: string;
+
+  /** Construct the overloaded-constructor dependency. */
+  func LibOwnerBox3() {
+    self.marker = "box3-overloaded-ctor";
+  }
+}
+
+/** Finalizer dependency corresponding to Box4<T>. */
+open type LibOwnerBox4<T> {
+  /** Generic payload forcing the closed managed descriptor. */
+  open var value: T;
+
+  /** Construction marker used by the shared finalizer. */
+  open let marker: string;
+
+  /** Construct the finalizer-local dependency. */
+  func LibOwnerBox4() {
+    self.marker = "box4-finalizer";
+  }
+}
+
+/** Build the generic callable result used by an owner field initializer. */
+open func libOwnerMakeCallableBox<T>(): LibOwnerCallableBox<T> {
+  return LibOwnerCallableBox<T>();
+}
+
+/**
+ * Generic reference owner whose fields, constructors, and finalizer share one
+ * type-descriptor dependency table.
+ */
+open type LibOwnerReifiedReference<T> {
+  /** Direct generic field initialization (Box1<T>). */
+  open var direct = LibOwnerBox1<T>();
+
+  /** Generic callable field initialization (test<T>()). */
+  open var callable = libOwnerMakeCallableBox<T>();
+
+  /** Marker produced by the selected constructor body. */
+  open var constructorMarker: string;
+
+  /** Scalar argument retained by the overloaded constructor. */
+  open var constructorTag: i64;
+
+  /** Exercise the no-argument constructor's Box2<T> dependency. */
+  func LibOwnerReifiedReference() {
+    let box = LibOwnerBox2<T>();
+    self.constructorMarker = box.marker;
+  }
+
+  /** Exercise the overloaded constructor's Box3<T> dependency. */
+  func LibOwnerReifiedReference(value: T, tag: i64) {
+    let box = LibOwnerBox3<T>();
+    self.direct.value = value;
+    self.callable.value = value;
+    self.constructorMarker = box.marker;
+    self.constructorTag = tag;
+  }
+
+  /** Exercise the owner-level Box4<T> dependency during finalization. */
+  func ~LibOwnerReifiedReference() {
+    let box = LibOwnerBox4<T>();
+    if box.marker == "box4-finalizer" {
+      LibOwnerReificationState.record();
+    }
+  }
+}
+
+/** Generic owner relying solely on the implicit constructor path. */
+open type LibOwnerReifiedImplicit<T> {
+  /** Explicitly typed owner dependency. */
+  open var explicit: LibOwnerBox1<T> = LibOwnerBox1<T>();
+
+  /** Inferred direct owner dependency. */
+  open var inferred = LibOwnerBox1<T>();
+
+  /** Inferred callable owner dependency. */
+  open var callable = libOwnerMakeCallableBox<T>();
+}
+
+/** Verify the same owner-slot contract inside the provider package. */
+open func libOwnerProviderProbe(): bool {
+  let owner = LibOwnerReifiedImplicit<i64>();
+  return owner.explicit.marker == "box1-field" &&
+         owner.inferred.marker == "box1-field" &&
+         owner.callable.marker == "callable-field";
+}
+
+/** Aggregate dependency used by the generic value owner. */
+@value
+open type LibOwnerAggregateBox<T> {
+  /** Generic aggregate payload. */
+  open var value: T;
+
+  /** Construction marker used by consumer assertions. */
+  open let marker: string;
+
+  /** Construct one aggregate owner dependency. */
+  func LibOwnerAggregateBox(marker: string) {
+    self.marker = marker;
+  }
+}
+
+/** Build an aggregate result through a generic callable dependency. */
+open func libOwnerMakeAggregateBox<T>(): LibOwnerAggregateBox<T> {
+  return LibOwnerAggregateBox<T>("aggregate-callable-field");
+}
+
+/** Generic value owner sharing owner slots across fields and constructors. */
+@value
+open type LibOwnerReifiedValue<T> {
+  /** Direct aggregate field dependency. */
+  open var direct = LibOwnerAggregateBox<T>("aggregate-direct-field");
+
+  /** Callable-produced aggregate field dependency. */
+  open var callable = libOwnerMakeAggregateBox<T>();
+
+  /** Marker produced by the selected constructor body. */
+  open var constructorMarker: string;
+
+  /** Scalar argument retained by the overloaded constructor. */
+  open var constructorTag: i64;
+
+  /** Exercise aggregate owner slots in the no-argument constructor. */
+  func LibOwnerReifiedValue() {
+    let box = LibOwnerAggregateBox<T>("aggregate-default-ctor");
+    self.constructorMarker = box.marker;
+  }
+
+  /** Exercise aggregate owner slots in the overloaded constructor. */
+  func LibOwnerReifiedValue(value: T, tag: i64) {
+    let box = LibOwnerAggregateBox<T>("aggregate-overloaded-ctor");
+    self.direct.value = value;
+    self.callable.value = value;
+    self.constructorMarker = box.marker;
+    self.constructorTag = tag;
+  }
+}
+
+/** Generic static field initialized through an owner-level callable slot. */
+open type LibOwnerReifiedStatic<T> {
+  open static let value = libOwnerMakeCallableBox<T>();
+
+  /** Return the provider-initialized static field marker. */
+  open static func marker(): string {
+    return LibOwnerReifiedStatic<T>.value.marker;
+  }
+}

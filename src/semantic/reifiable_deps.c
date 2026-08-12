@@ -1569,6 +1569,19 @@ static void collect_for_type(FengSemanticAnalysis *analysis,
         dep_set = feng_semantic_get_or_create_reifiable_dep_set(analysis, decl);
     }
 
+    /* A member mixin source constructor executes in the instance-field
+     * initialization phase.  Its open generic type/callable dependencies
+     * therefore belong to the same owner descriptor set as ordinary field
+     * initializers, constructors, and the finalizer. */
+    if (dep_set != NULL) {
+        ctx.dep_set = dep_set;
+        for (i = 0U; i < decl->as.type_decl.mixin_count; ++i) {
+            collect_from_expr(
+                &ctx,
+                decl->as.type_decl.mixins[i].source_constructor);
+        }
+    }
+
     /* 成员字段类型 + 初始化表达式。 */
     for (i = 0U; i < decl->as.type_decl.member_count; ++i) {
         const FengTypeMember *member = decl->as.type_decl.members[i];

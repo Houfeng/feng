@@ -1,0 +1,187 @@
+module fcts_bin;
+
+import std.test;
+import std.collections;
+import fcts_lib.test;
+
+/** Consumer-defined descriptor-sized value used as a closed owner argument. */
+@value
+type OwnerReificationWideValue {
+  /** First managed slot. */
+  open let first: string;
+
+  /** Second managed slot. */
+  open let second: string;
+
+  /** Scalar tail. */
+  open let number: i64;
+
+  /** Construct a populated descriptor-sized value. */
+  func OwnerReificationWideValue(first: string, second: string, number: i64) {
+    self.first = first;
+    self.second = second;
+    self.number = number;
+  }
+}
+
+/** Consumer-managed leaf used to verify owner field cleanup. */
+type OwnerReificationManagedLeaf {
+  static var finalized: i64 = 0;
+
+  /** Non-default marker retained by the generic owner. */
+  open let marker: string;
+
+  /** Construct one observable managed leaf. */
+  func OwnerReificationManagedLeaf(marker: string) {
+    self.marker = marker;
+  }
+
+  /** Record release of an explicitly constructed leaf. */
+  func ~OwnerReificationManagedLeaf() {
+    if self.marker != "" {
+      OwnerReificationManagedLeaf.finalized += 1;
+    }
+  }
+
+  /** Reset the managed-leaf lifecycle counter. */
+  open static func reset(): void {
+    OwnerReificationManagedLeaf.finalized = 0;
+  }
+
+  /** Return the number of finalized managed leaves. */
+  open static func finalizedCount(): i64 {
+    return OwnerReificationManagedLeaf.finalized;
+  }
+}
+
+/** Consumer object used as a managed generic default-zero argument. */
+type OwnerReificationDefaultObject {
+  /** Recursive managed default expected to be the empty string. */
+  open let marker: string;
+}
+
+/** Consumer callable used as a managed generic default-zero argument. */
+spec OwnerReificationDefaultCallable(): i64;
+
+/** Create and release a scalar closed owner through its default constructor. */
+func exerciseScalarOwnerDefault(): void {
+  let owner = LibOwnerReifiedReference<i64>();
+  assert(owner.direct.marker == "box1-field" &&
+         owner.callable.marker == "callable-field" &&
+         owner.constructorMarker == "box2-default-ctor",
+         "default construction uses all scalar owner dependency slots");
+}
+
+/** Create and release a managed closed owner through its overloaded constructor. */
+func exerciseManagedOwnerOverload(): void {
+  let owner = LibOwnerReifiedReference<OwnerReificationManagedLeaf>(
+    OwnerReificationManagedLeaf("managed-owner"),
+    7
+  );
+  assert(owner.direct.value.marker == "managed-owner" &&
+         owner.callable.value.marker == "managed-owner" &&
+         owner.constructorMarker == "box3-overloaded-ctor" &&
+         owner.constructorTag == 7,
+         "overloaded construction preserves the managed owner argument");
+}
+
+/** Create and release a wide-value closed owner through its overloaded constructor. */
+func exerciseWideOwnerOverload(): void {
+  let owner = LibOwnerReifiedReference<OwnerReificationWideValue>(
+    OwnerReificationWideValue("wide-left", "wide-right", 8),
+    9
+  );
+  assert(owner.direct.value.first == "wide-left" &&
+         owner.direct.value.second == "wide-right" &&
+         owner.direct.value.number == 8,
+         "overloaded construction preserves the direct descriptor-sized field");
+  assert(owner.callable.value.first == "wide-left" &&
+         owner.callable.value.second == "wide-right" &&
+         owner.callable.value.number == 8,
+         "overloaded construction preserves the callable descriptor-sized field");
+  assert(owner.constructorMarker == "box3-overloaded-ctor" &&
+         owner.constructorTag == 9,
+         "overloaded construction selects the wide-value constructor body");
+}
+
+/** Verify type-owner dependency slots across packages and value categories. */
+open func test_generic_type_owner_reification(): void {
+  describe("generic type-owner reification", () {
+    test("reference owner default constructor and finalizer", () {
+      LibOwnerReificationState.reset();
+      exerciseScalarOwnerDefault();
+      assert(LibOwnerReificationState.finalizedCount() == 1,
+             "the scalar closed owner runs its shared finalizer once");
+    });
+
+    test("reference owner overloaded constructor and managed cleanup", () {
+      LibOwnerReificationState.reset();
+      OwnerReificationManagedLeaf.reset();
+      exerciseManagedOwnerOverload();
+      assert(LibOwnerReificationState.finalizedCount() == 1 &&
+             OwnerReificationManagedLeaf.finalizedCount() == 1,
+             "the managed owner finalizes once and releases its shared leaf");
+    });
+
+    test("reference owner preserves descriptor-sized values", () {
+      LibOwnerReificationState.reset();
+      exerciseWideOwnerOverload();
+      assert(LibOwnerReificationState.finalizedCount() == 1,
+             "the wide-value closed owner runs its shared finalizer once");
+    });
+
+    test("implicit constructor shares explicit inferred and callable slots", () {
+      let owner = LibOwnerReifiedImplicit<OwnerReificationWideValue>();
+      assert(owner.explicit.marker == "box1-field" &&
+             owner.inferred.marker == "box1-field" &&
+             owner.callable.marker == "callable-field",
+             "the implicit constructor initializes every owner dependency");
+      assert(libOwnerProviderProbe(),
+             "provider and consumer use the same owner-slot contract");
+    });
+
+    test("value owner default and overloaded constructors share slots", () {
+      let defaultOwner = LibOwnerReifiedValue<i64>();
+      let wideOwner = LibOwnerReifiedValue<OwnerReificationWideValue>(
+        OwnerReificationWideValue("aggregate-left", "aggregate-right", 10),
+        11
+      );
+      assert(defaultOwner.direct.marker == "aggregate-direct-field" &&
+             defaultOwner.callable.marker == "aggregate-callable-field" &&
+             defaultOwner.constructorMarker == "aggregate-default-ctor" &&
+             wideOwner.direct.value.first == "aggregate-left" &&
+             wideOwner.direct.value.second == "aggregate-right" &&
+             wideOwner.direct.value.number == 10 &&
+             wideOwner.callable.value.first == "aggregate-left" &&
+             wideOwner.callable.value.second == "aggregate-right" &&
+             wideOwner.callable.value.number == 10 &&
+             wideOwner.constructorMarker == "aggregate-overloaded-ctor" &&
+             wideOwner.constructorTag == 11,
+             "aggregate owner fields and both constructors use one slot table");
+    });
+
+    test("generic static initializer uses the type owner descriptor", () {
+      assert(LibOwnerReifiedStatic<OwnerReificationWideValue>.marker() ==
+               "callable-field",
+             "static method observes its initialized callable dependency");
+      assert(LibOwnerReifiedStatic<OwnerReificationWideValue>.value.marker ==
+               "callable-field",
+             "direct static access observes its initialized callable dependency");
+    });
+
+    test("closed managed descriptors provide generic default zero values", () {
+      let text = LibOwnerBox1<string>();
+      let array = LibOwnerBox1<i64[]>();
+      let nestedArray = LibOwnerBox1<string[][]>();
+      let object = LibOwnerBox1<OwnerReificationDefaultObject>();
+      let callable = LibOwnerBox1<OwnerReificationDefaultCallable>();
+
+      assert(text.value == "" &&
+             array.value.length() == 0 &&
+             nestedArray.value.length() == 0 &&
+             object.value.marker == "" &&
+             callable.value() == 0,
+             "the reified managed descriptor preserves every default-zero family");
+    });
+  });
+}

@@ -1523,6 +1523,29 @@ typedef struct CGClosedCallableDescriptorNode {
     bool emitted;
 } CGClosedCallableDescriptorNode;
 
+/* One compile-time node for a statically closed builtin array descriptor.
+ * The generated program only takes the address of the emitted read-only
+ * object; it never constructs or looks up a closed descriptor at runtime. */
+typedef struct CGClosedArrayDescriptorNode {
+    char *key;
+    char *c_name;
+} CGClosedArrayDescriptorNode;
+
+/* Compile-time source of reified dependency slots for one shared body. The
+ * generated program performs no source test: codegen selects a fixed `_td`
+ * or `_desc` expression for every slot access. */
+typedef enum CGReifiedDependencySource {
+    CG_REIFIED_DEP_SOURCE_TYPE,
+    CG_REIFIED_DEP_SOURCE_FUNCTION
+} CGReifiedDependencySource;
+
+/* Select the field-initialization semantics for a synthetic or declared
+ * generic constructor-shaped shared body. */
+typedef enum CGGenericConstructorInitMode {
+    CG_GENERIC_CONSTRUCTOR_INIT_DECLARED,
+    CG_GENERIC_CONSTRUCTOR_INIT_DEFAULT_ZERO
+} CGGenericConstructorInitMode;
+
 typedef struct CG {
     /* Output sections concatenated at the end. */
     Buf headers;        /* #include / extern decls / forward decls */
@@ -1757,9 +1780,15 @@ typedef struct CG {
     bool         generic_type_method_rad_via_desc;
     char       **generic_callable_dep_keys;
     size_t       generic_callable_dep_count;
+    /* True for function/member dependency sets carried by `_desc`; false
+     * for owner dependency sets carried by `_td`. */
+    bool         generic_callable_dep_via_desc;
     CGClosedCallableDescriptorNode *closed_callable_descriptor_nodes;
     size_t       closed_callable_descriptor_node_count;
     size_t       closed_callable_descriptor_node_capacity;
+    CGClosedArrayDescriptorNode *closed_array_descriptor_nodes;
+    size_t       closed_array_descriptor_node_count;
+    size_t       closed_array_descriptor_node_capacity;
     char       **captured_binding_names;
     size_t       captured_binding_name_count;
     bool         current_callable_captures_self;
@@ -1799,6 +1828,18 @@ static bool cg_value_needs_reified_layout(const CG *cg, const CGType *type) {
         (type->kind == CG_TYPE_SPEC && type->user_spec != NULL &&
          type->user_spec->generic_context_type_param_count > 0U);
     return has_open_generic_identity;
+}
+
+/* Return true when an open generic reference instance must locate every
+ * field through its closed descriptor. A field that does not itself mention
+ * a type parameter may still move when an earlier field has reified layout. */
+static bool cg_reference_needs_reified_field_layout(const CG *cg,
+                                                    const CGType *type) {
+    return cg != NULL && type != NULL &&
+           (cg->in_generic_type_method || cg->in_generic_fn) &&
+           type->kind == CG_TYPE_OBJECT && type->user != NULL &&
+           !cg_type_is_value_semantics(type) &&
+           type->user->generic_context_type_param_count > 0U;
 }
 
 static bool cg_type_layout_depends_on_generic_parameter(const CGType *type);
@@ -2205,7 +2246,8 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                                                const FengTypeMember *member,
                                                FengCompileTarget target,
                                                bool has_func_desc,
-                                               const char *shared_name_override);
+                                               const char *shared_name_override,
+                                               CGGenericConstructorInitMode init_mode);
 static bool cg_emit_generic_type_static_binding_ensure_shared(
     CG *cg,
     const FengDecl *decl,
@@ -2230,7 +2272,15 @@ static bool cg_activate_callable_dep_mapping(
     CG *cg,
     const FengReifiableDepSet *dep_set,
     const FengSlice *caller_type_param_names,
-    size_t caller_type_param_count);
+    size_t caller_type_param_count,
+    CGReifiedDependencySource source);
+static bool cg_activate_reified_dependency_mapping(
+    CG *cg,
+    const FengReifiableDepSet *dep_set,
+    const FengSlice *caller_type_param_names,
+    size_t caller_type_param_count,
+    CGReifiedDependencySource source,
+    FengToken blame);
 static char *cg_callable_descriptor_expr_for_call(
     CG *cg,
     const FengExpr *call_expr,
@@ -2985,7 +3035,8 @@ static char *cg_rtd_expr_for_managed_descriptor(CG *cg,
         }
     }
     cg_fail(cg, blame,
-            "CE0007", "codegen: no reified_type_dep found for generic managed dependency");
+            "CE0007", "codegen: no reified_type_dep found for generic managed dependency '%s'",
+            descriptor_name);
     return NULL;
 }
 
@@ -3001,6 +3052,14 @@ static char *cg_rtd_expr_for_type(CG *cg,
         cg_fail(cg, blame,
                 "CE0006", "codegen: cg_rtd_expr_for_type called on non-generic type");
         return NULL;
+    }
+
+    /* The open instance of the current generic owner is represented by the
+     * shared body's `_td` argument itself; it is not (and must not be)
+     * duplicated in the owner's derived dependency slots. */
+    if (cg->generic_type_method_decl != NULL &&
+        ut->generic_origin_decl == cg->generic_type_method_decl) {
+        return strdup("_td");
     }
 
     if (cg_user_type_is_value(ut)) {
@@ -8498,7 +8557,8 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
             cg_type_ref_free(sub);
             if (!ok) return false;
         } else if (member->kind == FENG_TYPE_MEMBER_METHOD ||
-                   member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+                   member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
+                   member->kind == FENG_TYPE_MEMBER_FINALIZER) {
             const FengCallableSignature *callable = &member->as.callable;
             if (!cg_collect_instantiated_callable_member_instances(
                     cg,
@@ -8511,6 +8571,18 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
                 return false;
             }
         }
+    }
+    if (!cg_collect_closed_reifiable_dep_instances(
+            cg,
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl),
+            decl->as.type_decl.type_params,
+            decl->as.type_decl.type_param_count,
+            type_args,
+            member_scope,
+            generic_decl->owner_program,
+            blame)) {
+        cg_free_cstr_array(context_names, context_count);
+        return false;
     }
     cg_free_cstr_array(context_names, context_count);
     return true;
@@ -8711,6 +8783,21 @@ static CGType *cg_instantiate_builtin_fit_return_type(CG *cg,
                     free(type_args);
                     return NULL;
                 }
+            }
+            if (!cg_emit_user_finalizer(cg, concrete_user)) {
+                Buf emitted_defs = cg->fn_defs;
+                cg->fn_defs = cg->witness_defs;
+                cg->witness_defs = emitted_defs;
+                cg->cur_body = saved_cur_body;
+                cg->cur_return_type = saved_cur_return_type;
+                cg->cur_scope = saved_cur_scope;
+                cg->cur_fn_is_main = saved_cur_fn_is_main;
+                cg->cur_program = saved_program;
+                for (size_t i = 0; i < open_arg_count; ++i) {
+                    cg_type_ref_free(type_args[i]);
+                }
+                free(type_args);
+                return NULL;
             }
             {
                 Buf emitted_defs = cg->fn_defs;
@@ -13238,11 +13325,30 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
          * managed-object paths keep using &descriptor. The typed noop is
          * erased only while stored and converted back to the exact canonical
          * invoke type before it is ever called. */
+        if (s->generic_context_type_param_count == 0U) {
+            buf_append_fmt(
+                &cg->headers,
+                "static void %s__default_zero_init("
+                "void *_out, const FengTypeDescriptor *_descriptor);\n",
+                s->c_closure_desc_name);
+        }
         buf_append_fmt(td,
             "static const FengCallableTypeDescriptor %s__record = {\n"
             "    .base = {\n"
             "        .name = \"%s\",\n"
-            "        .size = sizeof(struct %s),\n"
+            "        .size = sizeof(struct %s),\n",
+            s->c_closure_desc_name,
+            s->feng_name,
+            s->c_closure_struct_name);
+        if (s->generic_context_type_param_count == 0U) {
+            buf_append_fmt(
+                td,
+                "        .default_zero_init = %s__default_zero_init,\n",
+                s->c_closure_desc_name);
+        } else {
+            buf_append_cstr(td, "        .default_zero_init = NULL,\n");
+        }
+        buf_append_fmt(td,
             "        .finalizer = NULL,\n"
             "        .release_children = %s__release_children,\n"
             "        .is_potentially_cyclic = true,\n"
@@ -13253,9 +13359,6 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             "    },\n"
             "    .default_invoke = (void (*)(void))%s,\n"
             "};\n\n",
-            s->c_closure_desc_name,
-            s->feng_name,
-            s->c_closure_struct_name,
             s->c_closure_desc_name,
             s->c_closure_desc_name,
             s->c_default_callable_noop_name);
@@ -13315,6 +13418,18 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
                     s->c_closure_struct_name,
                     s->c_closure_desc_name,
                     s->c_default_callable_noop_name);
+            }
+
+            if (s->generic_context_type_param_count == 0U) {
+                buf_append_fmt(
+                    td,
+                    "static void %s__default_zero_init("
+                    "void *_out, const FengTypeDescriptor *_descriptor) {\n"
+                    "    (void)_descriptor;\n"
+                    "    *(void **)_out = %s();\n"
+                    "}\n\n",
+                    s->c_closure_desc_name,
+                    s->c_default_callable_new_name);
             }
         }
 
@@ -15433,18 +15548,20 @@ static char *cg_implicit_constructor_cname(const UserType *type) {
     return name.data;
 }
 
-/* Stable shared symbol used by every concrete instance of an imported
- * generic type that relies on its implicit constructor. */
-static char *cg_generic_implicit_constructor_shared_cname(
+/* Build one stable provider/consumer ABI symbol for a generated generic
+ * owner helper. */
+static char *cg_generic_owner_helper_cname(
     CG *cg,
-    const FengDecl *decl) {
+    const FengDecl *decl,
+    const char *role) {
     const GenericTypeDecl *generic_decl;
     const FengProgram *owner_program;
     char *owner_mangle;
     char *type_name;
     Buf name;
 
-    if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE) {
+    if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE ||
+        role == NULL) {
         return NULL;
     }
     generic_decl = cg_find_generic_type_decl_by_decl(cg, decl);
@@ -15464,7 +15581,8 @@ static char *cg_generic_implicit_constructor_shared_cname(
     }
     buf_init(&name);
     buf_append_fmt(&name,
-                   "FengGenericImplicitCtor__%s__%s__G%zu",
+                   "%s__%s__%s__G%zu",
+                   role,
                    owner_mangle,
                    type_name,
                    decl->as.type_decl.type_param_count);
@@ -15473,15 +15591,40 @@ static char *cg_generic_implicit_constructor_shared_cname(
     return name.data;
 }
 
+/* Stable shared symbol used by every concrete instance of a generic type
+ * that relies on its implicit constructor. */
+static char *cg_generic_implicit_constructor_shared_cname(
+    CG *cg,
+    const FengDecl *decl) {
+    return cg_generic_owner_helper_cname(
+        cg, decl, "FengGenericImplicitCtor");
+}
+
+/* Stable shared symbols for default-zero initialization and allocation. */
+static char *cg_generic_default_zero_init_shared_cname(
+    CG *cg,
+    const FengDecl *decl) {
+    return cg_generic_owner_helper_cname(
+        cg, decl, "FengGenericDefaultZeroInit");
+}
+
+static char *cg_generic_default_zero_shared_cname(
+    CG *cg,
+    const FengDecl *decl) {
+    return cg_generic_owner_helper_cname(
+        cg, decl, "FengGenericDefaultZero");
+}
+
 /* Invoke the source package's ordinary implicit-constructor body.  This is
  * used only when the source type came from a compiled package and therefore
  * its field-initializer AST is intentionally absent from the consumer. */
-static bool cg_emit_imported_implicit_constructor_invoke(
+static bool cg_emit_compiled_implicit_constructor_invoke(
     CG *cg,
     const UserType *type,
     const char *self_expr,
     FengToken blame) {
     char *name;
+    bool imported;
 
     if (cg == NULL || type == NULL || self_expr == NULL) {
         return false;
@@ -15489,6 +15632,8 @@ static bool cg_emit_imported_implicit_constructor_invoke(
     if (type->field_count == 0U) {
         return true;
     }
+    imported = cg_program_origin(cg, type->owner_program) ==
+        FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
     if (type->is_generic_instance && type->generic_origin_decl != NULL) {
         const char *descriptor_type = cg_user_type_is_value(type)
             ? "FengAggregateDescriptor"
@@ -15517,10 +15662,16 @@ static bool cg_emit_imported_implicit_constructor_invoke(
             free(name);
             return false;
         }
-        buf_append_fmt(&cg->fn_protos,
-                       "void %s(void *_self, const %s *_type_desc);\n",
-                       name,
-                       descriptor_type);
+        /* Source generic declarations emit their own linkage-correct
+         * prototype together with the shared body.  Imported declarations
+         * need the public ABI declaration locally because their body lives
+         * in the provider package. */
+        if (imported) {
+            buf_append_fmt(&cg->fn_protos,
+                           "void %s(void *_self, const %s *_type_desc);\n",
+                           name,
+                           descriptor_type);
+        }
         buf_append_fmt(cg->cur_body,
                        "    %s((void *)%s, %s);\n",
                        name,
@@ -15557,15 +15708,21 @@ static bool cg_emit_construction_member_initializers(
     const UserMethod *constructor,
     const char *self_expr,
     FengToken blame) {
-    bool imported;
-
     if (constructor != NULL) {
         return true;
     }
-    imported = cg_program_origin(cg, type->owner_program) ==
-        FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
-    if (imported) {
-        return cg_emit_imported_implicit_constructor_invoke(
+    /* Every closed instance of a generic type executes the same owner-level
+     * shared initializer body.  Besides keeping provider and consumer ABI
+     * identical, this is what lets initializers containing open callable
+     * expressions such as make<T>() read the closed callable dependency from
+     * the type descriptor instead of trying to lower T at a concrete caller. */
+    if (type->is_generic_instance && type->generic_origin_decl != NULL) {
+        return cg_emit_compiled_implicit_constructor_invoke(
+            cg, type, self_expr, blame);
+    }
+    if (cg_program_origin(cg, type->owner_program) ==
+        FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return cg_emit_compiled_implicit_constructor_invoke(
             cg, type, self_expr, blame);
     }
     return cg_emit_user_type_member_initializers(
@@ -23643,6 +23800,75 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
     if (cgtype_is_managed(recv.type) && recv.owns_ref) {
         cg_materialize_to_local(cg, &recv, "_t");
     }
+    if (cg_reference_needs_reified_field_layout(cg, recv.type)) {
+        char *descriptor = cg_rtd_expr_for_type(cg, ut, e->token);
+        char *field_descriptor = NULL;
+        size_t field_index = 0U;
+        Buf field_address;
+        Buf value;
+
+        while (field_index < ut->field_count &&
+               &ut->fields[field_index] != uf) {
+            ++field_index;
+        }
+        if (descriptor == NULL || field_index == ut->field_count) {
+            free(descriptor);
+            er_free(&recv);
+            if (!cg->failed) {
+                return cg_fail(cg, e->token,
+                               "CE0176", "codegen: reified field index is missing for type '%s'",
+                               ut->feng_name);
+            }
+            return false;
+        }
+
+        buf_init(&field_address);
+        buf_append_fmt(&field_address,
+                       "((char *)%s + %s->reified_field_offsets[%zu])",
+                       recv.c_expr, descriptor, field_index);
+        buf_init(&value);
+        if (uf->type != NULL && uf->type->kind == CG_TYPE_GENERIC_PARAM) {
+            buf_append_fmt(&value, "(void *)%s", field_address.data);
+        } else if (cg_type_uses_reified_storage(cg, uf->type)) {
+            buf_append_fmt(&value, "(void *)%s", field_address.data);
+            field_descriptor =
+                cg_reified_aggregate_descriptor_expr_dup(cg,
+                                                          uf->type,
+                                                          e->token);
+        } else {
+            char *ctype = cg_ctype_dup(uf->type);
+
+            if (ctype == NULL) {
+                buf_free(&value);
+                buf_free(&field_address);
+                free(descriptor);
+                er_free(&recv);
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+            }
+            buf_append_fmt(&value,
+                           "(*(%s *)%s)",
+                           ctype, field_address.data);
+            free(ctype);
+        }
+        buf_free(&field_address);
+        free(descriptor);
+
+        out->c_expr = value.data;
+        out->type = cgtype_clone(uf->type);
+        out->owns_ref = false;
+        out->is_addressable = true;
+        out->is_storage_address =
+            uf->type != NULL &&
+            (uf->type->kind == CG_TYPE_GENERIC_PARAM ||
+             cg_type_uses_reified_storage(cg, uf->type));
+        out->uses_reified_storage =
+            cg_type_uses_reified_storage(cg, uf->type);
+        out->reified_descriptor_c_name = field_descriptor;
+        er_free(&recv);
+        return out->c_expr != NULL && out->type != NULL &&
+               (!out->uses_reified_storage ||
+                out->reified_descriptor_c_name != NULL);
+    }
     Buf b; buf_init(&b);
     if (uf->type != NULL && uf->type->kind == CG_TYPE_GENERIC_PARAM) {
         /* Erased generic values are represented by the address of their
@@ -27733,6 +27959,40 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
                     "CE0226", "codegen: type '%s' contains reference cycles and has no default zero value; provide an explicit initializer",
                     type->user->feng_name != NULL ? type->user->feng_name : "<unknown>");
             }
+            if (cg_reference_needs_reified_field_layout(cg, type)) {
+                char *descriptor = cg_rtd_expr_for_type(
+                    cg,
+                    type->user,
+                    blame ? *blame : (FengToken){0});
+                char *factory = cg_generic_default_zero_shared_cname(
+                    cg, type->user->generic_origin_decl);
+
+                if (descriptor == NULL || factory == NULL) {
+                    free(descriptor);
+                    free(factory);
+                    buf_free(&b);
+                    if (!cg->failed) {
+                        return cg_fail(cg,
+                                       blame ? *blame : (FengToken){0},
+                                       "IE0001", "codegen: out of memory");
+                    }
+                    return false;
+                }
+                if (cg_program_origin(cg, type->user->owner_program) ==
+                    FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+                    buf_append_fmt(&cg->fn_protos,
+                                   "void *%s(const FengTypeDescriptor *_type_desc);\n",
+                                   factory);
+                }
+                buf_append_fmt(&b,
+                               "(struct %s *)%s(%s)",
+                               type->user->c_struct_name,
+                               factory,
+                               descriptor);
+                free(descriptor);
+                free(factory);
+                break;
+            }
             if (type->user->c_default_zero_name == NULL) {
                 buf_free(&b);
                 return cg_fail(cg, blame ? *blame : (FengToken){0},
@@ -28208,6 +28468,8 @@ static bool cg_emit_generic_param_default_init(CG *cg,
                                                const char *lvalue_expr,
                                                const CGType *type,
                                                FengToken blame) {
+    char *managed_descriptor;
+
     if (cg == NULL || lvalue_expr == NULL || type == NULL ||
         type->kind != CG_TYPE_GENERIC_PARAM) {
         return false;
@@ -28219,23 +28481,32 @@ static bool cg_emit_generic_param_default_init(CG *cg,
                        blame,
                        "CE0237", "codegen: missing generic descriptor for default value");
     }
+    managed_descriptor = cg_fresh_temp(cg, "_default_type_desc");
+    if (managed_descriptor == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
 
     buf_append_fmt(cg->cur_body,
         "    switch (%s->kind) {\n"
         "        case FENG_VALUE_TRIVIAL:\n"
         "            memset(&%s, 0, feng_generic_value_size(%s));\n"
         "            break;\n"
-        "        case FENG_VALUE_MANAGED_POINTER:\n"
-        "            *(void **)&%s = NULL;\n"
+        "        case FENG_VALUE_MANAGED_POINTER: {\n"
+        "            const FengTypeDescriptor *%s = "
+        "feng_generic_type_descriptor(%s);\n"
+        "            %s->default_zero_init(&%s, %s);\n"
         "            break;\n"
+        "        }\n"
         "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
         "            feng_aggregate_default_init(&%s, feng_generic_aggregate_descriptor(%s));\n"
         "            break;\n"
         "    }\n",
         desc,
         lvalue_expr, desc,
-        lvalue_expr,
+        managed_descriptor, desc,
+        managed_descriptor, lvalue_expr, managed_descriptor,
         lvalue_expr, desc);
+    free(managed_descriptor);
     return true;
 }
 
@@ -28248,6 +28519,7 @@ static bool cg_emit_generic_param_default_init_at_address(
     const CGType *type,
     FengToken blame) {
     const char *descriptor;
+    char *managed_descriptor;
 
     if (cg == NULL || address_expr == NULL || type == NULL ||
         type->kind != CG_TYPE_GENERIC_PARAM) {
@@ -28260,14 +28532,21 @@ static bool cg_emit_generic_param_default_init_at_address(
                        blame,
                        "CE0237", "codegen: missing generic descriptor for default value");
     }
+    managed_descriptor = cg_fresh_temp(cg, "_default_type_desc");
+    if (managed_descriptor == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
     buf_append_fmt(cg->cur_body,
         "    switch (%s->kind) {\n"
         "        case FENG_VALUE_TRIVIAL:\n"
         "            memset(%s, 0, feng_generic_value_size(%s));\n"
         "            break;\n"
-        "        case FENG_VALUE_MANAGED_POINTER:\n"
-        "            *(void **)%s = NULL;\n"
+        "        case FENG_VALUE_MANAGED_POINTER: {\n"
+        "            const FengTypeDescriptor *%s = "
+        "feng_generic_type_descriptor(%s);\n"
+        "            %s->default_zero_init(%s, %s);\n"
         "            break;\n"
+        "        }\n"
         "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
         "            feng_aggregate_default_init(%s, "
         "feng_generic_aggregate_descriptor(%s));\n"
@@ -28275,8 +28554,10 @@ static bool cg_emit_generic_param_default_init_at_address(
         "    }\n",
         descriptor,
         address_expr, descriptor,
-        address_expr,
+        managed_descriptor, descriptor,
+        managed_descriptor, address_expr, managed_descriptor,
         address_expr, descriptor);
+    free(managed_descriptor);
     return true;
 }
 
@@ -28413,6 +28694,31 @@ static bool cg_emit_user_field_default_value(CG *cg,
     return true;
 }
 
+/* Initialize every instance field to its type-level default zero.  This is
+ * intentionally distinct from declaration initialization: field initializer
+ * expressions and user constructors are not part of an object's default-zero
+ * value. */
+static bool cg_emit_user_type_default_field_values(CG *cg,
+                                                   const UserType *type,
+                                                   const char *object_expr,
+                                                   FengToken blame) {
+    if (cg == NULL || type == NULL || object_expr == NULL) {
+        return false;
+    }
+    for (size_t index = 0U; index < type->field_count; ++index) {
+        const UserField *field = &type->fields[index];
+
+        if (!cg_emit_user_field_default_value(
+                cg,
+                object_expr,
+                field,
+                field->member != NULL ? field->member->token : blame)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool cg_user_type_member_initializers_capture_self(const UserType *ut,
                                                           bool *out_captures_self) {
     if (out_captures_self == NULL) {
@@ -28529,6 +28835,47 @@ static bool cg_emit_mixin_source_field_borrow(CG *cg,
                            source->c_expr,
                            source_field->c_name);
         }
+    } else if (cg_reference_needs_reified_field_layout(cg, source->type)) {
+        char *descriptor = cg_rtd_expr_for_type(
+            cg, source->type->user, blame);
+        size_t field_index = 0U;
+
+        while (field_index < source->type->user->field_count &&
+               &source->type->user->fields[field_index] != source_field) {
+            ++field_index;
+        }
+        if (descriptor == NULL ||
+            field_index == source->type->user->field_count) {
+            free(descriptor);
+            return cg_fail(cg,
+                           blame,
+                           "CE0379", "codegen: member mix source field index is missing");
+        }
+        if (source_field->type != NULL &&
+            source_field->type->kind == CG_TYPE_GENERIC_PARAM) {
+            buf_append_fmt(
+                &expression,
+                "(void *)((char *)%s + %s->reified_field_offsets[%zu])",
+                source->c_expr,
+                descriptor,
+                field_index);
+        } else {
+            char *ctype = cg_ctype_dup(source_field->type);
+
+            if (ctype == NULL) {
+                free(descriptor);
+                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            }
+            buf_append_fmt(
+                &expression,
+                "(*(%s *)((char *)%s + %s->reified_field_offsets[%zu]))",
+                ctype,
+                source->c_expr,
+                descriptor,
+                field_index);
+            free(ctype);
+        }
+        free(descriptor);
     } else if (source_field->type != NULL &&
                source_field->type->kind == CG_TYPE_GENERIC_PARAM) {
         buf_append_fmt(&expression,
@@ -29447,15 +29794,15 @@ cleanup:
     return ok;
 }
 
-/* Assign a field of a descriptor-sized @value local. The receiver expression
- * is already an address; field offsets and nested aggregate descriptors come
- * from the same reified dependency metadata used for reads. */
-static bool cg_emit_reified_value_field_assign(CG *cg,
-                                               const FengStmt *stmt,
-                                               ExprResult *receiver,
-                                               const UserField *field,
-                                               bool is_compound,
-                                               FengTokenKind binary_op) {
+/* Assign a field whose address is provided by a closed descriptor. Aggregate
+ * receivers already use address-form storage; reference receivers use their
+ * object pointer and obtain the FengTypeDescriptor from the active slot. */
+static bool cg_emit_reified_user_field_assign(CG *cg,
+                                              const FengStmt *stmt,
+                                              ExprResult *receiver,
+                                              const UserField *field,
+                                              bool is_compound,
+                                              FengTokenKind binary_op) {
     const char *descriptor_expr = receiver->reified_descriptor_c_name;
     char *owned_descriptor_expr = NULL;
     char *field_address = NULL;
@@ -29463,10 +29810,15 @@ static bool cg_emit_reified_value_field_assign(CG *cg,
     bool ok = false;
 
     if (descriptor_expr == NULL) {
-        owned_descriptor_expr =
-            cg_reified_aggregate_descriptor_expr_dup(cg,
-                                                      receiver->type,
-                                                      stmt->token);
+        if (cg_reference_needs_reified_field_layout(cg, receiver->type)) {
+            owned_descriptor_expr =
+                cg_rtd_expr_for_type(cg, receiver->type->user, stmt->token);
+        } else {
+            owned_descriptor_expr =
+                cg_reified_aggregate_descriptor_expr_dup(cg,
+                                                          receiver->type,
+                                                          stmt->token);
+        }
         descriptor_expr = owned_descriptor_expr;
     }
     while (field_index < receiver->type->user->field_count &&
@@ -30555,13 +30907,14 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         if (cgtype_is_managed(recv.type) && recv.owns_ref) {
             cg_materialize_to_local(cg, &recv, "_t");
         }
-        if (recv.uses_reified_storage) {
-            bool assigned = cg_emit_reified_value_field_assign(cg,
-                                                               stmt,
-                                                               &recv,
-                                                               uf,
-                                                               is_compound,
-                                                               binary_op);
+        if (recv.uses_reified_storage ||
+            cg_reference_needs_reified_field_layout(cg, recv.type)) {
+            bool assigned = cg_emit_reified_user_field_assign(cg,
+                                                              stmt,
+                                                              &recv,
+                                                              uf,
+                                                              is_compound,
+                                                              binary_op);
             er_free(&recv);
             return assigned;
         }
@@ -35526,7 +35879,8 @@ static bool cg_activate_callable_dep_mapping(
     CG *cg,
     const FengReifiableDepSet *dep_set,
     const FengSlice *caller_type_param_names,
-    size_t caller_type_param_count) {
+    size_t caller_type_param_count,
+    CGReifiedDependencySource source) {
     char **keys;
     size_t count = 0U;
 
@@ -35536,6 +35890,8 @@ static bool cg_activate_callable_dep_mapping(
     free(cg->generic_callable_dep_keys);
     cg->generic_callable_dep_keys = NULL;
     cg->generic_callable_dep_count = 0U;
+    cg->generic_callable_dep_via_desc =
+        source == CG_REIFIED_DEP_SOURCE_FUNCTION;
     if (dep_set == NULL) {
         return true;
     }
@@ -35603,6 +35959,160 @@ static bool cg_activate_callable_dep_mapping(
     return true;
 }
 
+/* Build the canonical aggregate, managed, and callable slot maps for one
+ * shared body. All three categories use the same dependency source so fields,
+ * constructors, and finalizers cannot accidentally mix `_td` and `_desc`. */
+static bool cg_activate_reified_dependency_mapping(
+    CG *cg,
+    const FengReifiableDepSet *dep_set,
+    const FengSlice *caller_type_param_names,
+    size_t caller_type_param_count,
+    CGReifiedDependencySource source,
+    FengToken blame) {
+    typedef struct CGReifiedDepSortEntry {
+        size_t dep_index;
+        char *key;
+    } CGReifiedDepSortEntry;
+    const FengReifiableDepKind kinds[] = {
+        FENG_REIFIABLE_DEP_KIND_MANAGED,
+        FENG_REIFIABLE_DEP_KIND_AGGREGATE,
+    };
+    bool via_function_descriptor =
+        source == CG_REIFIED_DEP_SOURCE_FUNCTION;
+
+    for (size_t index = 0U;
+         index < cg->generic_type_method_rtd_count;
+         ++index) {
+        free(cg->generic_type_method_rtd_descs[index]);
+    }
+    free(cg->generic_type_method_rtd_descs);
+    cg->generic_type_method_rtd_descs = NULL;
+    cg->generic_type_method_rtd_count = 0U;
+    cg->generic_type_method_rtd_via_desc = via_function_descriptor;
+    for (size_t index = 0U;
+         index < cg->generic_type_method_rad_count;
+         ++index) {
+        free(cg->generic_type_method_rad_descs[index]);
+    }
+    free(cg->generic_type_method_rad_descs);
+    cg->generic_type_method_rad_descs = NULL;
+    cg->generic_type_method_rad_count = 0U;
+    cg->generic_type_method_rad_via_desc = via_function_descriptor;
+
+    for (size_t kind_index = 0U;
+         kind_index < sizeof(kinds) / sizeof(kinds[0]);
+         ++kind_index) {
+        FengReifiableDepKind kind = kinds[kind_index];
+        CGReifiedDepSortEntry *entries = NULL;
+        char ***descriptor_names =
+            kind == FENG_REIFIABLE_DEP_KIND_MANAGED
+                ? &cg->generic_type_method_rtd_descs
+                : &cg->generic_type_method_rad_descs;
+        size_t *descriptor_count =
+            kind == FENG_REIFIABLE_DEP_KIND_MANAGED
+                ? &cg->generic_type_method_rtd_count
+                : &cg->generic_type_method_rad_count;
+        size_t count = 0U;
+        size_t next = 0U;
+
+        if (dep_set == NULL) {
+            continue;
+        }
+        for (size_t index = 0U; index < dep_set->dep_count; ++index) {
+            if (dep_set->deps[index].kind == kind) {
+                ++count;
+            }
+        }
+        if (count == 0U) {
+            continue;
+        }
+        entries = (CGReifiedDepSortEntry *)calloc(
+            count, sizeof(*entries));
+        if (entries == NULL) {
+            return cg_fail(cg, blame,
+                           "IE0001", "codegen: out of memory");
+        }
+        for (size_t index = 0U; index < dep_set->dep_count; ++index) {
+            if (dep_set->deps[index].kind != kind) {
+                continue;
+            }
+            entries[next].dep_index = index;
+            entries[next].key = cg_reifiable_sort_key(
+                dep_set->deps[index].type_ref,
+                caller_type_param_names,
+                caller_type_param_count,
+                true);
+            if (entries[next].key == NULL) {
+                for (size_t free_index = 0U;
+                     free_index < next;
+                     ++free_index) {
+                    free(entries[free_index].key);
+                }
+                free(entries);
+                return cg_fail(cg, blame,
+                               "IE0001", "codegen: out of memory");
+            }
+            ++next;
+        }
+        for (size_t index = 1U; index < count; ++index) {
+            CGReifiedDepSortEntry current = entries[index];
+            size_t previous = index;
+
+            while (previous > 0U &&
+                   strcmp(entries[previous - 1U].key,
+                          current.key) > 0) {
+                entries[previous] = entries[previous - 1U];
+                --previous;
+            }
+            entries[previous] = current;
+        }
+        *descriptor_names = (char **)calloc(
+            count, sizeof(**descriptor_names));
+        if (*descriptor_names == NULL) {
+            for (size_t index = 0U; index < count; ++index) {
+                free(entries[index].key);
+            }
+            free(entries);
+            return cg_fail(cg, blame,
+                           "IE0001", "codegen: out of memory");
+        }
+        *descriptor_count = count;
+        for (size_t index = 0U; index < count; ++index) {
+            const FengReifiableDep *dep =
+                &dep_set->deps[entries[index].dep_index];
+            const char *descriptor_name =
+                kind == FENG_REIFIABLE_DEP_KIND_MANAGED
+                    ? cg_open_generic_managed_descriptor_name(
+                          cg, dep->type_ref)
+                    : cg_open_generic_aggregate_descriptor_name(
+                          cg, dep->type_ref);
+
+            if (descriptor_name != NULL) {
+                (*descriptor_names)[index] = strdup(descriptor_name);
+                if ((*descriptor_names)[index] == NULL) {
+                    for (size_t free_index = 0U;
+                         free_index < count;
+                         ++free_index) {
+                        free(entries[free_index].key);
+                    }
+                    free(entries);
+                    return cg_fail(cg, blame,
+                                   "IE0001", "codegen: out of memory");
+                }
+            }
+            free(entries[index].key);
+        }
+        free(entries);
+    }
+
+    return cg_activate_callable_dep_mapping(
+        cg,
+        dep_set,
+        caller_type_param_names,
+        caller_type_param_count,
+        source);
+}
+
 /* Resolve the function descriptor argument for one generic shared callee in
  * an active shared body. Dependency-free callees use an empty descriptor and
  * therefore add no caller slot/read. */
@@ -35667,7 +36177,8 @@ static char *cg_callable_descriptor_expr_for_dep(
             buf_init(&expression);
             buf_append_fmt(
                 &expression,
-                "_desc->reified_callable_deps[%zu]",
+                "%s->reified_callable_deps[%zu]",
+                cg->generic_callable_dep_via_desc ? "_desc" : "_td",
                 index);
             result = expression.data;
             break;
@@ -35936,7 +36447,7 @@ static bool cg_emit_closed_callable_fdesc(CG *cg,
     }
     node->emitting = true;
     cg->closed_callable_descriptor_node_count++;
-    buf_append_fmt(&cg->statics,
+    buf_append_fmt(&cg->headers,
                    "static const FengFunctionDescriptor %s;\n",
                    node->c_name);
 
@@ -36310,6 +36821,233 @@ cleanup:
     return ok;
 }
 
+/* Close one direct generic callable dependency against the current owner or
+ * function type arguments and emit/reuse its function descriptor graph. */
+static bool cg_emit_closed_callable_dep_expr(
+    CG *cg,
+    const FengReifiableCallableDep *callable_dep,
+    const FengTypeParam *caller_type_params,
+    size_t caller_type_param_count,
+    FengTypeRef *const *caller_type_args,
+    FengToken blame,
+    char **out_expr) {
+    const FengReifiableDepSet *callee_dep_set;
+    const FengDecl *reference_decl;
+    FengTypeParam *callee_params = NULL;
+    FengTypeRef **callee_args = NULL;
+    size_t callee_count = 0U;
+    char *callee_identity = NULL;
+    char *callee_display = NULL;
+    bool ok = false;
+
+    if (cg == NULL || callable_dep == NULL || out_expr == NULL) {
+        return false;
+    }
+    *out_expr = NULL;
+    callee_dep_set = cg_callable_dep_set(cg, callable_dep);
+    reference_decl = callable_dep->function_decl != NULL
+        ? callable_dep->function_decl
+        : (callable_dep->fit_decl != NULL
+               ? callable_dep->fit_decl
+               : callable_dep->owner_type_decl);
+
+    if (!cg_close_callable_dep_type_args(
+            cg,
+            callable_dep,
+            caller_type_params,
+            caller_type_param_count,
+            caller_type_args,
+            blame,
+            &callee_params,
+            &callee_args,
+            &callee_count)) {
+        goto cleanup;
+    }
+    callee_identity = cg_callable_dep_identity_name(cg, callable_dep);
+    if (callable_dep->function_decl != NULL) {
+        FengSlice name = callable_dep->function_decl->as.function_decl.name;
+        callee_display = strndup(name.data, name.length);
+    } else if (callable_dep->member != NULL) {
+        FengSlice name = callable_dep->member->as.callable.name;
+        callee_display = strndup(name.data, name.length);
+    }
+    if (callee_identity == NULL || callee_display == NULL) {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    ok = cg_emit_closed_callable_fdesc(
+        cg,
+        callee_dep_set,
+        callee_params,
+        callee_count,
+        callee_args,
+        cg_find_decl_owner_program(cg, reference_decl),
+        blame,
+        callee_identity,
+        callee_display,
+        out_expr);
+
+cleanup:
+    free(callee_identity);
+    free(callee_display);
+    for (size_t index = 0U; index < callee_count; ++index) {
+        cg_type_ref_free(callee_args[index]);
+    }
+    free(callee_args);
+    free(callee_params);
+    return ok;
+}
+
+/* Emit the owner-wide direct-callable descriptor array. Its canonical order
+ * is identical to the slot map activated while emitting fields,
+ * constructors, and the finalizer shared body. */
+static bool cg_emit_owner_callable_dep_array(
+    CG *cg,
+    Buf *out,
+    const char *owner_descriptor_name,
+    const FengReifiableDepSet *dep_set,
+    const FengTypeParam *owner_type_params,
+    size_t owner_type_param_count,
+    FengTypeRef *const *owner_type_args,
+    FengToken blame,
+    size_t *out_count) {
+    typedef struct OwnerCallableDep {
+        size_t dep_index;
+        char *sort_key;
+        char *descriptor_expr;
+    } OwnerCallableDep;
+
+    FengSlice *param_names = NULL;
+    OwnerCallableDep *deps = NULL;
+    size_t count = 0U;
+    size_t failed_dep_index = SIZE_MAX;
+    bool ok = false;
+
+    if (cg == NULL || out == NULL || owner_descriptor_name == NULL ||
+        out_count == NULL) {
+        return false;
+    }
+    *out_count = 0U;
+    if (dep_set == NULL) {
+        return true;
+    }
+    for (size_t index = 0U;
+         index < dep_set->callable_dep_count;
+         ++index) {
+        if (cg_callable_dep_set_has_descriptor_data(
+                cg,
+                cg_callable_dep_set(cg, &dep_set->callable_deps[index]))) {
+            ++count;
+        }
+    }
+    if (count == 0U) {
+        return true;
+    }
+    if (owner_type_param_count > 0U) {
+        param_names = (FengSlice *)calloc(
+            owner_type_param_count, sizeof(*param_names));
+    }
+    deps = (OwnerCallableDep *)calloc(count, sizeof(*deps));
+    if ((owner_type_param_count > 0U && param_names == NULL) || deps == NULL) {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    for (size_t index = 0U; index < owner_type_param_count; ++index) {
+        param_names[index] = owner_type_params[index].name;
+    }
+    {
+        size_t next = 0U;
+
+        for (size_t index = 0U;
+             index < dep_set->callable_dep_count;
+             ++index) {
+            const FengReifiableCallableDep *dep =
+                &dep_set->callable_deps[index];
+
+            if (!cg_callable_dep_set_has_descriptor_data(
+                    cg, cg_callable_dep_set(cg, dep))) {
+                continue;
+            }
+            deps[next].dep_index = index;
+            deps[next].sort_key = cg_callable_dep_sort_key(
+                cg, dep, param_names, owner_type_param_count);
+            if (deps[next].sort_key == NULL) {
+                char *identity =
+                    cg_callable_dep_identity_name(cg, dep);
+                (void)cg_fail(
+                    cg,
+                    blame,
+                    "CE0376",
+                    "codegen: cannot build owner callable dependency key "
+                    "for '%s' in '%s'",
+                    identity != NULL ? identity : "<unknown>",
+                    owner_descriptor_name);
+                free(identity);
+                goto cleanup;
+            }
+            ++next;
+        }
+    }
+    for (size_t index = 1U; index < count; ++index) {
+        OwnerCallableDep current = deps[index];
+        size_t previous = index;
+
+        while (previous > 0U &&
+               strcmp(deps[previous - 1U].sort_key,
+                      current.sort_key) > 0) {
+            deps[previous] = deps[previous - 1U];
+            --previous;
+        }
+        deps[previous] = current;
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        if (!cg_emit_closed_callable_dep_expr(
+                cg,
+                &dep_set->callable_deps[deps[index].dep_index],
+                owner_type_params,
+                owner_type_param_count,
+                owner_type_args,
+                blame,
+                &deps[index].descriptor_expr)) {
+            failed_dep_index = index;
+            goto cleanup;
+        }
+    }
+
+    buf_append_fmt(
+        out,
+        "static const FengFunctionDescriptor *const %s__rcd[] = {\n",
+        owner_descriptor_name);
+    for (size_t index = 0U; index < count; ++index) {
+        buf_append_fmt(out, "    %s,\n", deps[index].descriptor_expr);
+    }
+    buf_append_cstr(out, "};\n\n");
+    *out_count = count;
+    ok = true;
+
+cleanup:
+    if (!ok && !cg->failed) {
+        (void)cg_fail(cg, blame,
+                      "CE0376",
+                      "codegen: failed to close owner callable dependency "
+                      "'%s' for '%s'",
+                      failed_dep_index < count &&
+                              deps[failed_dep_index].sort_key != NULL
+                          ? deps[failed_dep_index].sort_key
+                          : "<unknown>",
+                      owner_descriptor_name);
+    }
+    if (deps != NULL) {
+        for (size_t index = 0U; index < count; ++index) {
+            free(deps[index].sort_key);
+            free(deps[index].descriptor_expr);
+        }
+    }
+    free(deps);
+    free(param_names);
+    return ok;
+}
+
 /* Resolve one descriptor family for a concrete builtin-array fit call.  The
  * result order must match the shared body's independently sorted dependency
  * map so both sides address the same descriptor index. */
@@ -36528,11 +37266,166 @@ static bool cg_generic_constraint_requires_witness(
            constraint_spec->form != FENG_SPEC_FORM_UNION;
 }
 
-/* Build a compound-literal expression for a FengGenericParamDescriptor
- * matching the given concrete CGType.  *out is set to a heap-allocated C
- * expression string; caller frees.
- * Returns false (with error set) if the type is not yet supported as a
- * generic type argument (e.g. future aggregates without flatten rules). */
+/* Return whether a managed type expression is fully closed at code-generation
+ * time. Closed arrays can be emitted once as read-only descriptor nodes;
+ * expressions that still contain a callable/owner generic parameter remain
+ * wrapper data and must use that parameter's incoming descriptor. */
+static bool cg_type_descriptor_is_statically_closed(const CGType *type) {
+    if (type == NULL) {
+        return false;
+    }
+    switch (type->kind) {
+        case CG_TYPE_GENERIC_PARAM:
+            return false;
+        case CG_TYPE_ARRAY:
+        case CG_TYPE_POINTER:
+            return type->element != NULL &&
+                   cg_type_descriptor_is_statically_closed(type->element);
+        case CG_TYPE_OBJECT:
+            return type->user != NULL &&
+                   type->user->generic_context_type_param_count == 0U;
+        case CG_TYPE_CALLABLE:
+        case CG_TYPE_SPEC:
+            return type->user_spec != NULL &&
+                   type->user_spec->generic_context_type_param_count == 0U;
+        default:
+            return true;
+    }
+}
+
+/* Build the FengTypeDescriptor expression for an array used as a generic
+ * argument. A statically closed array is deduplicated into file-scope const
+ * data, so passing it has exactly the same runtime cost as passing the former
+ * builtin descriptor address. Only an array that still contains an active
+ * generic parameter uses a wrapper-scoped compound descriptor. */
+static bool cg_closed_array_descriptor_expr(CG *cg,
+                                            const CGType *array_type,
+                                            const FengToken *tok,
+                                            char **out) {
+    char *element_descriptor = NULL;
+    Buf expression;
+
+    if (cg == NULL || array_type == NULL ||
+        array_type->kind != CG_TYPE_ARRAY || array_type->element == NULL ||
+        tok == NULL || out == NULL) {
+        return false;
+    }
+    if (!cg_generic_descriptor_expr(cg,
+                                    array_type->element,
+                                    NULL,
+                                    tok,
+                                    &element_descriptor)) {
+        return false;
+    }
+
+    if (cg_type_descriptor_is_statically_closed(array_type)) {
+        Buf key;
+        CGClosedArrayDescriptorNode *node;
+
+        buf_init(&key);
+        buf_append_fmt(&key,
+                       "%c|%s",
+                       array_type->array_element_writable ? 'W' : 'R',
+                       element_descriptor);
+        if (key.data == NULL) {
+            free(element_descriptor);
+            return cg_fail(cg, *tok,
+                           "IE0001", "codegen: out of memory");
+        }
+        for (size_t index = 0U;
+             index < cg->closed_array_descriptor_node_count;
+             ++index) {
+            node = &cg->closed_array_descriptor_nodes[index];
+            if (strcmp(node->key, key.data) == 0) {
+                buf_init(&expression);
+                buf_append_fmt(&expression, "&%s", node->c_name);
+                buf_free(&key);
+                free(element_descriptor);
+                *out = expression.data;
+                return *out != NULL;
+            }
+        }
+        if (cg->closed_array_descriptor_node_count ==
+            cg->closed_array_descriptor_node_capacity) {
+            size_t new_capacity =
+                cg->closed_array_descriptor_node_capacity == 0U
+                    ? 16U
+                    : cg->closed_array_descriptor_node_capacity * 2U;
+            CGClosedArrayDescriptorNode *grown =
+                (CGClosedArrayDescriptorNode *)realloc(
+                    cg->closed_array_descriptor_nodes,
+                    new_capacity * sizeof(*grown));
+
+            if (grown == NULL) {
+                buf_free(&key);
+                free(element_descriptor);
+                return cg_fail(cg, *tok,
+                               "IE0001", "codegen: out of memory");
+            }
+            cg->closed_array_descriptor_nodes = grown;
+            cg->closed_array_descriptor_node_capacity = new_capacity;
+        }
+        node = &cg->closed_array_descriptor_nodes[
+            cg->closed_array_descriptor_node_count];
+        memset(node, 0, sizeof(*node));
+        node->key = key.data;
+        {
+            Buf name;
+
+            buf_init(&name);
+            buf_append_fmt(&name,
+                           "_feng_closed_array_desc_%zu",
+                           cg->closed_array_descriptor_node_count);
+            node->c_name = name.data;
+        }
+        if (node->c_name == NULL) {
+            free(node->key);
+            memset(node, 0, sizeof(*node));
+            free(element_descriptor);
+            return cg_fail(cg, *tok,
+                           "IE0001", "codegen: out of memory");
+        }
+        cg->closed_array_descriptor_node_count++;
+        buf_append_fmt(&cg->headers,
+                       "static const FengTypeDescriptor %s;\n",
+                       node->c_name);
+        buf_append_fmt(
+            &cg->statics,
+            "static const FengGenericParamDescriptor *const %s__rgp[] = {"
+            "%s};\n"
+            "static const FengTypeDescriptor %s = {"
+            ".name = \"feng.builtin.array\", "
+            ".size = 0U, "
+            ".default_zero_init = feng_array_default_zero_init, "
+            ".reified_generic_params_count = 1U, "
+            ".reified_generic_params = %s__rgp};\n",
+            node->c_name,
+            element_descriptor,
+            node->c_name,
+            node->c_name);
+        buf_init(&expression);
+        buf_append_fmt(&expression, "&%s", node->c_name);
+        free(element_descriptor);
+        *out = expression.data;
+        return *out != NULL;
+    }
+
+    buf_init(&expression);
+    buf_append_fmt(
+        &expression,
+        "&(const FengTypeDescriptor){"
+        ".name = \"feng.builtin.array\", "
+        ".size = 0U, "
+        ".default_zero_init = feng_array_default_zero_init, "
+        ".reified_generic_params_count = 1U, "
+        ".reified_generic_params = "
+        "(const FengGenericParamDescriptor *const[]){%s}}",
+        element_descriptor);
+    free(element_descriptor);
+    *out = expression.data;
+    return *out != NULL;
+}
+
 static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                                        const UserSpec *constraint_spec,
                                        const FengToken *tok, char **out) {
@@ -36661,7 +37554,20 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             break;
         }
         case CG_VK_MANAGED_POINTER: {
-            char *descriptor_expr = cg_managed_pointer_descriptor_expr(t);
+            char *descriptor_expr = NULL;
+
+            if (t != NULL && t->kind == CG_TYPE_ARRAY) {
+                if (!cg_closed_array_descriptor_expr(cg,
+                                                     t,
+                                                     tok,
+                                                     &descriptor_expr)) {
+                    free(owned_witness_expr);
+                    buf_free(&b);
+                    return false;
+                }
+            } else {
+                descriptor_expr = cg_managed_pointer_descriptor_expr(t);
+            }
             if (!descriptor_expr) {
                 free(owned_witness_expr);
                 buf_free(&b);
@@ -37095,154 +38001,10 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         cg->active_caught_unwind_count = 0;
         cg->cur_function_has_frame_marker = false;
 
-        /* 预计算 reified_type_deps 映射，使独立泛型函数共享体内
-         * 创建依赖泛型的托管对象时能直接用具体描述符分配。 */
+        /* One canonical mapping keeps aggregate, managed, and callable slots
+         * on the same function-descriptor authority. */
         {
-            const FengReifiableDepSet *fn_rtd_set =
-                feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl);
-            if (fn_rtd_set != NULL && fn_rtd_set->dep_count > 0U) {
-                const FengCallableSignature *fn_sig = &decl->as.function_decl;
-                FengSlice *fn_tp_names = (FengSlice *)calloc(
-                    fn_sig->type_param_count, sizeof(FengSlice));
-                if (fn_tp_names != NULL) {
-                    for (size_t i = 0; i < fn_sig->type_param_count; ++i) {
-                        fn_tp_names[i] = fn_sig->type_params[i].name;
-                    }
-                    typedef struct { size_t idx; char *key; } RTDSort;
-                    size_t mc = 0;
-                    for (size_t i = 0; i < fn_rtd_set->dep_count; ++i) {
-                        if (fn_rtd_set->deps[i].kind ==
-                            FENG_REIFIABLE_DEP_KIND_MANAGED) {
-                            mc++;
-                        }
-                    }
-                    if (mc > 0U) {
-                        RTDSort *sorted = (RTDSort *)calloc(mc, sizeof(RTDSort));
-                        if (sorted != NULL) {
-                            size_t si = 0;
-                            for (size_t i = 0; i < fn_rtd_set->dep_count; ++i) {
-                                if (fn_rtd_set->deps[i].kind !=
-                                    FENG_REIFIABLE_DEP_KIND_MANAGED) continue;
-                                sorted[si].idx = i;
-                                sorted[si].key = cg_reifiable_sort_key(
-                                    fn_rtd_set->deps[i].type_ref,
-                                    fn_tp_names,
-                                    fn_sig->type_param_count, true);
-                                si++;
-                            }
-                            for (size_t i = 1; i < mc; ++i) {
-                                RTDSort tmp = sorted[i];
-                                size_t j = i;
-                                while (j > 0 &&
-                                       strcmp(sorted[j - 1].key, tmp.key) > 0) {
-                                    sorted[j] = sorted[j - 1];
-                                    j--;
-                                }
-                                sorted[j] = tmp;
-                            }
-                            cg->generic_type_method_rtd_descs =
-                                (char **)calloc(mc, sizeof(char *));
-                            if (cg->generic_type_method_rtd_descs != NULL) {
-                                cg->generic_type_method_rtd_count = mc;
-                                cg->generic_type_method_rtd_via_desc = true;
-                                for (size_t i = 0; i < mc; ++i) {
-                                    const FengReifiableDep *dep =
-                                        &fn_rtd_set->deps[sorted[i].idx];
-                                    const char *descriptor_name =
-                                        cg_open_generic_managed_descriptor_name(
-                                            cg,
-                                            dep->type_ref);
-
-                                    if (descriptor_name != NULL) {
-                                        cg->generic_type_method_rtd_descs[i] =
-                                            strdup(descriptor_name);
-                                    }
-                                }
-                            }
-                            for (size_t i = 0; i < mc; ++i) free(sorted[i].key);
-                            free(sorted);
-                        }
-                    }
-                    free(fn_tp_names);
-                }
-            }
-        }
-
-        /* 预计算 reified_agg_deps 映射，使独立泛型函数共享体内
-         * 操作依赖泛型的聚合类型时能使用正确的大小和描述符。 */
-        {
-            const FengReifiableDepSet *fn_rad_set =
-                feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl);
-            if (fn_rad_set != NULL && fn_rad_set->dep_count > 0U) {
-                const FengCallableSignature *fn_sig_rad = &decl->as.function_decl;
-                FengSlice *fn_tp_names_rad = (FengSlice *)calloc(
-                    fn_sig_rad->type_param_count, sizeof(FengSlice));
-                if (fn_tp_names_rad != NULL) {
-                    for (size_t i = 0; i < fn_sig_rad->type_param_count; ++i) {
-                        fn_tp_names_rad[i] = fn_sig_rad->type_params[i].name;
-                    }
-                    typedef struct { size_t idx; char *key; } RADSort;
-                    size_t ac = 0;
-                    for (size_t i = 0; i < fn_rad_set->dep_count; ++i) {
-                        if (fn_rad_set->deps[i].kind ==
-                            FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
-                            ac++;
-                        }
-                    }
-                    if (ac > 0U) {
-                        RADSort *sorted = (RADSort *)calloc(ac, sizeof(RADSort));
-                        if (sorted != NULL) {
-                            size_t si = 0;
-                            for (size_t i = 0; i < fn_rad_set->dep_count; ++i) {
-                                if (fn_rad_set->deps[i].kind !=
-                                    FENG_REIFIABLE_DEP_KIND_AGGREGATE) continue;
-                                sorted[si].idx = i;
-                                sorted[si].key = cg_reifiable_sort_key(
-                                    fn_rad_set->deps[i].type_ref,
-                                    fn_tp_names_rad,
-                                    fn_sig_rad->type_param_count, true);
-                                si++;
-                            }
-                            for (size_t i = 1; i < ac; ++i) {
-                                RADSort tmp = sorted[i];
-                                size_t j = i;
-                                while (j > 0 &&
-                                       strcmp(sorted[j - 1].key, tmp.key) > 0) {
-                                    sorted[j] = sorted[j - 1];
-                                    j--;
-                                }
-                                sorted[j] = tmp;
-                            }
-                            cg->generic_type_method_rad_descs =
-                                (char **)calloc(ac, sizeof(char *));
-                            if (cg->generic_type_method_rad_descs != NULL) {
-                                cg->generic_type_method_rad_count = ac;
-                                cg->generic_type_method_rad_via_desc = true;
-                                for (size_t i = 0; i < ac; ++i) {
-                                    const FengReifiableDep *dep =
-                                        &fn_rad_set->deps[sorted[i].idx];
-                                    const char *descriptor_name =
-                                        cg_open_generic_aggregate_descriptor_name(
-                                            cg,
-                                            dep->type_ref);
-
-                                    if (descriptor_name != NULL) {
-                                        cg->generic_type_method_rad_descs[i] =
-                                            strdup(descriptor_name);
-                                    }
-                                }
-                            }
-                            for (size_t i = 0; i < ac; ++i) free(sorted[i].key);
-                            free(sorted);
-                        }
-                    }
-                    free(fn_tp_names_rad);
-                }
-            }
-        }
-
-        {
-            const FengReifiableDepSet *fn_callable_set =
+            const FengReifiableDepSet *fn_dep_set =
                 feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl);
             FengSlice *active_param_names = tp_count > 0U
                 ? (FengSlice *)calloc(
@@ -37258,11 +38020,13 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
             for (size_t index = 0U; index < tp_count; ++index) {
                 active_param_names[index] = sig->type_params[index].name;
             }
-            if (!cg_activate_callable_dep_mapping(
+            if (!cg_activate_reified_dependency_mapping(
                     cg,
-                    fn_callable_set,
+                    fn_dep_set,
                     active_param_names,
-                    tp_count)) {
+                    tp_count,
+                    CG_REIFIED_DEP_SOURCE_FUNCTION,
+                    decl->token)) {
                 free(active_param_names);
                 cg->cur_scope = NULL;
                 scope_pop_free(fn_scope);
@@ -42528,7 +43292,8 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                             return false;
                         }
                     } else if (member->kind == FENG_TYPE_MEMBER_METHOD ||
-                               member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+                               member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
+                               member->kind == FENG_TYPE_MEMBER_FINALIZER) {
                         if (!cg_collect_generic_instances_from_callable(cg, &member->as.callable, scope)) {
                             cg->cur_program = NULL;
                             return false;
@@ -42805,6 +43570,37 @@ static bool cg_pass_pre_register_functions(CG *cg,
     return true;
 }
 
+/* Register every top-level generic callable before closed owner descriptors
+ * are emitted. Descriptor graphs identify callable nodes by their final C
+ * symbols, so both source and imported generic functions must already have
+ * their stable overload-aware names at that point. */
+static bool cg_pass_register_generic_functions_for_descriptors(
+    CG *cg,
+    const FengProgram *prog) {
+    if (!cg_emit_module_header(cg, prog)) {
+        return false;
+    }
+    cg->cur_program = prog;
+    for (size_t index = 0U;
+         index < prog->declaration_count;
+         ++index) {
+        const FengDecl *decl = prog->declarations[index];
+
+        if (decl->kind != FENG_DECL_FUNCTION || decl->is_extern ||
+            decl->as.function_decl.type_param_count == 0U ||
+            cg_find_generic_fn_by_decl(cg, decl) != NULL) {
+            continue;
+        }
+        if (!cg_register_generic_fn(cg, decl)) {
+            cg->cur_program = NULL;
+            return cg_fail(cg, decl->token,
+                           "IE0001", "codegen: out of memory");
+        }
+    }
+    cg->cur_program = NULL;
+    return true;
+}
+
 /* Emit the source-package implementation of an implicit constructor for a
  * non-generic public type.  The ordinary construction call site allocates the
  * object; this entry performs exactly the member declaration-initialization
@@ -42867,9 +43663,7 @@ static bool cg_emit_generic_implicit_constructor_entry(
     bool ok;
 
     if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE ||
-        decl->as.type_decl.type_param_count == 0U ||
-        target != FENG_COMPILE_TARGET_LIB ||
-        decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        decl->as.type_decl.type_param_count == 0U) {
         return true;
     }
     for (size_t i = 0U; i < decl->as.type_decl.member_count; ++i) {
@@ -42904,9 +43698,84 @@ static bool cg_emit_generic_implicit_constructor_entry(
         return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
     }
     ok = cg_emit_generic_type_method_shared(
-        cg, decl, &member, target, false, shared_name);
+        cg, decl, &member, target, false, shared_name,
+        CG_GENERIC_CONSTRUCTOR_INIT_DECLARED);
     free(shared_name);
     return ok;
+}
+
+/* Emit one shared default-zero initializer plus its allocation factory for a
+ * generic managed type.  The factory is selected statically by the generic
+ * origin; the closed descriptor is supplied from the caller's fixed owner
+ * type-dependency slot. */
+static bool cg_emit_generic_default_zero_entry(CG *cg,
+                                               const FengDecl *decl,
+                                               FengCompileTarget target) {
+    FengTypeMember member;
+    FengBlock body;
+    char *init_name = NULL;
+    char *factory_name = NULL;
+    bool exported;
+    bool ok;
+
+    if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE ||
+        decl->as.type_decl.type_param_count == 0U ||
+        decl->as.type_decl.is_value) {
+        return true;
+    }
+    memset(&member, 0, sizeof(member));
+    memset(&body, 0, sizeof(body));
+    member.token = decl->token;
+    member.kind = FENG_TYPE_MEMBER_CONSTRUCTOR;
+    member.visibility = FENG_VISIBILITY_PUBLIC;
+    member.as.callable.token = decl->token;
+    member.as.callable.name = decl->as.type_decl.name;
+    member.as.callable.body = &body;
+    body.token = decl->token;
+
+    init_name = cg_generic_default_zero_init_shared_cname(cg, decl);
+    factory_name = cg_generic_default_zero_shared_cname(cg, decl);
+    if (init_name == NULL || factory_name == NULL) {
+        free(init_name);
+        free(factory_name);
+        return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
+    }
+    ok = cg_emit_generic_type_method_shared(
+        cg,
+        decl,
+        &member,
+        target,
+        false,
+        init_name,
+        CG_GENERIC_CONSTRUCTOR_INIT_DEFAULT_ZERO);
+    if (!ok) {
+        free(init_name);
+        free(factory_name);
+        return false;
+    }
+
+    exported = target == FENG_COMPILE_TARGET_LIB &&
+        decl->visibility == FENG_VISIBILITY_PUBLIC;
+    if (!exported) {
+        buf_append_cstr(&cg->fn_protos, "static ");
+    }
+    buf_append_fmt(&cg->fn_protos,
+                   "void *%s(const FengTypeDescriptor *_type_desc);\n",
+                   factory_name);
+    if (!exported) {
+        buf_append_cstr(&cg->fn_defs, "static ");
+    }
+    buf_append_fmt(&cg->fn_defs,
+                   "void *%s(const FengTypeDescriptor *_type_desc) {\n"
+                   "    void *_self = feng_object_new(_type_desc);\n"
+                   "    %s(_self, _type_desc);\n"
+                   "    return _self;\n"
+                   "}\n\n",
+                   factory_name,
+                   init_name);
+    free(init_name);
+    free(factory_name);
+    return true;
 }
 
 static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
@@ -42943,6 +43812,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                             return false;
                         }
                     }
+                    if (!cg_emit_generic_default_zero_entry(
+                            cg, d, target)) {
+                        return false;
+                    }
                     if (!cg_emit_generic_implicit_constructor_entry(
                             cg, d, target)) {
                         return false;
@@ -42952,13 +43825,15 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                          ++member_index) {
                         const FengTypeMember *member = d->as.type_decl.members[member_index];
                         if (member->kind != FENG_TYPE_MEMBER_METHOD &&
-                            member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) {
+                            member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR &&
+                            member->kind != FENG_TYPE_MEMBER_FINALIZER) {
                             continue;
                         }
                         if (!cg_emit_generic_type_method_shared(
                                 cg, d, member, target,
                                 member->kind == FENG_TYPE_MEMBER_METHOD,
-                                NULL)) return false;
+                                NULL,
+                                CG_GENERIC_CONSTRUCTOR_INIT_DECLARED)) return false;
                     }
                     for (size_t k = 0; k < cg->user_type_count; ++k) {
                         const UserType *ut = &cg->user_types[k];
@@ -42979,6 +43854,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                         }
                         for (size_t mi = 0; mi < ut->static_method_count; ++mi) {
                             if (!cg_emit_generic_type_method_wrapper(cg, ut, &ut->static_methods[mi], NULL, NULL)) { cg->cur_program = saved_prog; return false; }
+                        }
+                        if (!cg_emit_user_finalizer(cg, ut)) {
+                            cg->cur_program = saved_prog;
+                            return false;
                         }
                         cg->cur_program = saved_prog;
                     }
@@ -43014,7 +43893,8 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                         if (!cg_emit_generic_type_method_shared(cg,
                                                                d,
                                                                ut->methods[mi].member,
-                                                               target, true, NULL) ||
+                                                               target, true, NULL,
+                                                               CG_GENERIC_CONSTRUCTOR_INIT_DECLARED) ||
                             !cg_emit_generic_type_method_wrapper(cg,
                                                                  ut,
                                                                  &ut->methods[mi],
@@ -43039,7 +43919,8 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                         if (!cg_emit_generic_type_method_shared(cg,
                                                                d,
                                                                ut->static_methods[mi].member,
-                                                               target, true, NULL) ||
+                                                               target, true, NULL,
+                                                               CG_GENERIC_CONSTRUCTOR_INIT_DECLARED) ||
                             !cg_emit_generic_type_method_wrapper(cg,
                                                                  ut,
                                                                  &ut->static_methods[mi],
@@ -43095,7 +43976,8 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                                 if (!sname) return false;
                                 if (!cg_emit_generic_type_method_shared(
                                         cg, origin, uf->methods[mi].member,
-                                        target, true, sname)) {
+                                        target, true, sname,
+                                        CG_GENERIC_CONSTRUCTOR_INIT_DECLARED)) {
                                     free(sname);
                                     return false;
                                 }
@@ -43601,6 +44483,15 @@ static bool cg_emit_all_programs(CG *cg,
      * so field types are resolved, and before Pass 3 (type forward emit)
      * which references c_aggregate_desc_name in forward declarations. */
     if (!cg_update_value_type_descriptor_names(cg)) return false;
+    /* Pass 2d: close callable graph identities before type descriptors.
+     * Owner descriptors may contain function-descriptor nodes for generic
+     * field initializers, constructors, and finalizers. */
+    for (size_t p = 0U; p < program_count; ++p) {
+        if (!cg_pass_register_generic_functions_for_descriptors(
+                cg, programs[p])) {
+            return false;
+        }
+    }
     /* Pass 3 + 3.5a/3.5b: emit type forwards/defs and spec forwards/defs.
      * These walk the global cg shell arrays. cur_program is pinned per
      * element so any diagnostic raised mid-emission reports the correct
@@ -43865,6 +44756,10 @@ static bool cg_emit_all_programs(CG *cg,
                 cg->cur_program = NULL;
                 return false;
             }
+        }
+        if (!cg_emit_user_finalizer(cg, t)) {
+            cg->cur_program = NULL;
+            return false;
         }
         cg->cur_program = NULL;
     }
@@ -45686,6 +46581,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
          * and reified_type_deps from there. */
         size_t value_agg_dep_count = 0U;
         size_t value_type_dep_count = 0U;
+        size_t value_callable_dep_count = 0U;
         if (t->is_generic_instance &&
             t->generic_context_type_param_count == 0U &&
             t->generic_origin_decl != NULL) {
@@ -45810,6 +46706,35 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
             }
         }
 
+        if (t->is_generic_instance &&
+            t->generic_context_type_param_count == 0U &&
+            t->generic_origin_decl != NULL) {
+            const FengDecl *value_origin = t->generic_origin_decl;
+            const FengReifiableDepSet *value_dep_set =
+                feng_semantic_lookup_reifiable_dep_set(
+                    cg->analysis, value_origin);
+            const FengProgram *saved_program = cg->cur_program;
+
+            if (t->instantiation_program != NULL) {
+                cg->cur_program = t->instantiation_program;
+            }
+            if (!cg_emit_owner_callable_dep_array(
+                    cg,
+                    td,
+                    t->c_aggregate_desc_name,
+                    value_dep_set,
+                    value_origin->as.type_decl.type_params,
+                    value_origin->as.type_decl.type_param_count,
+                    t->generic_type_args,
+                    t->decl->token,
+                    &value_callable_dep_count)) {
+                cg->cur_program = saved_program;
+                buf_free(&equal_fn_name);
+                return;
+            }
+            cg->cur_program = saved_program;
+        }
+
         bool ext_visible = cg_user_type_descriptor_is_externally_visible(cg, t);
         buf_append_fmt(td,
             ext_visible
@@ -45858,6 +46783,12 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
                 "    .reified_type_deps_count = %zu,\n"
                 "    .reified_type_deps = %s__rtd,\n",
                 value_type_dep_count, t->c_aggregate_desc_name);
+        }
+        if (value_callable_dep_count > 0U) {
+            buf_append_fmt(td,
+                "    .reified_callable_deps_count = %zu,\n"
+                "    .reified_callable_deps = %s__rcd,\n",
+                value_callable_dep_count, t->c_aggregate_desc_name);
         }
         if (cg_user_type_uses_static_binding_states(t) &&
             (cg_program_origin(cg, t->owner_program) !=
@@ -46034,9 +46965,22 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
 /* Emit struct body, finalizer, and descriptor into `type_defs`. */
 static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     Buf *td = &cg->type_defs;
+    bool descriptor_has_default_zero;
+
     if (cg_user_type_is_value_semantics(t)) {
         cg_emit_value_type_definition(cg, t);
         return;
+    }
+    descriptor_has_default_zero =
+        cg_user_type_is_default_zero_safe(cg, t) &&
+        (!t->is_generic_instance ||
+         t->generic_context_type_param_count == 0U);
+    if (descriptor_has_default_zero) {
+        buf_append_fmt(
+            &cg->headers,
+            "static void %s__default_zero_init("
+            "void *_out, const FengTypeDescriptor *_descriptor);\n",
+            t->c_desc_name);
     }
     buf_append_fmt(td, "struct %s {\n", t->c_struct_name);
     buf_append_cstr(td, "    FengManagedHeader _hdr;\n");
@@ -46164,6 +47108,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     size_t reified_field_offset_count = 0U;
     size_t reified_agg_dep_count = 0U;
     size_t reified_type_dep_count = 0U;
+    size_t reified_callable_dep_count = 0U;
 
     if (t->is_generic_instance &&
         t->generic_context_type_param_count == 0U &&
@@ -46418,6 +47363,20 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
             free(owner_tparam_names);
         }
 
+        if (!cg_emit_owner_callable_dep_array(
+                cg,
+                td,
+                t->c_desc_name,
+                dep_set,
+                t->generic_origin_decl->as.type_decl.type_params,
+                t->generic_origin_decl->as.type_decl.type_param_count,
+                t->generic_type_args,
+                t->decl->token,
+                &reified_callable_dep_count)) {
+            cg->cur_program = saved_program;
+            return;
+        }
+
         cg->cur_program = saved_program;
     }
 
@@ -46429,15 +47388,23 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     buf_append_fmt(td,
         "%sconst FengTypeDescriptor %s = {\n"
         "    .name = \"%s.%s\",\n"
-        "    .size = sizeof(struct %s),\n"
+        "    .size = sizeof(struct %s),\n",
+        t->is_generic_instance ? "__attribute__((weak)) " : "",
+        t->c_desc_name,
+        cg->module_dot_name, t->feng_name,
+        t->c_struct_name);
+    if (descriptor_has_default_zero) {
+        buf_append_fmt(td,
+                       "    .default_zero_init = %s__default_zero_init,\n",
+                       t->c_desc_name);
+    } else {
+        buf_append_cstr(td, "    .default_zero_init = NULL,\n");
+    }
+    buf_append_fmt(td,
         "    .finalizer = %s,\n"
         "    .release_children = %s,\n"
         "    .is_potentially_cyclic = %s,\n"
         "    .managed_field_count = %zu,\n",
-        t->is_generic_instance ? "__attribute__((weak)) " : "",
-        t->c_desc_name,
-        cg->module_dot_name, t->feng_name,
-        t->c_struct_name,
         t->c_finalizer_name ? t->c_finalizer_name : "NULL",
         t->c_release_children_name ? t->c_release_children_name : "NULL",
         is_cyclic ? "true" : "false",
@@ -46473,6 +47440,12 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
             "    .reified_type_deps_count = %zu,\n"
             "    .reified_type_deps = %s__rtd,\n",
             reified_type_dep_count, t->c_desc_name);
+    }
+    if (reified_callable_dep_count > 0U) {
+        buf_append_fmt(td,
+            "    .reified_callable_deps_count = %zu,\n"
+            "    .reified_callable_deps = %s__rcd,\n",
+            reified_callable_dep_count, t->c_desc_name);
     }
     if (cg_user_type_uses_static_binding_states(t) &&
         (cg_program_origin(cg, t->owner_program) !=
@@ -46825,6 +47798,21 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
         free(t->c_default_zero_name);
         t->c_default_zero_name = NULL;
     }
+
+    if (descriptor_has_default_zero) {
+        /* Every closed instance already owns a statically generated recursive
+         * default-zero factory. Using it here keeps private imported
+         * representations local to the consumer and adds no runtime lookup. */
+        buf_append_fmt(
+            &cg->fn_defs,
+            "static void %s__default_zero_init("
+            "void *_out, const FengTypeDescriptor *_descriptor) {\n"
+            "    (void)_descriptor;\n"
+            "    *(void **)_out = %s();\n"
+            "}\n\n",
+            t->c_desc_name,
+            t->c_default_zero_name);
+    }
 }
 
 static void cg_free_cstr_array(char **items, size_t count) {
@@ -46856,10 +47844,11 @@ static bool cg_generic_type_param_names(CG *cg, const FengDecl *decl,
     return true;
 }
 
-/* Public-surface generic type methods use ordinal m<N> so consumers that only
- * see the bundle interface assign the same index as the library. A public
- * type's non-private members belong to that public surface, including members
- * with default visibility. */
+/* Public-surface generic type callables use ordinal m<N> so consumers that
+ * only see the bundle interface assign the same index as the library. A
+ * generic finalizer of a public type is always a generated ABI symbol: its
+ * source visibility still controls Feng access, while the consumer needs the
+ * shared body to construct the closed runtime finalizer thunk. */
 static bool cg_generic_type_member_exports_public_surface(const FengDecl *decl,
                                                           const FengTypeMember *member,
                                                           FengCompileTarget target) {
@@ -46867,7 +47856,8 @@ static bool cg_generic_type_member_exports_public_surface(const FengDecl *decl,
            decl != NULL &&
            decl->visibility == FENG_VISIBILITY_PUBLIC &&
            member != NULL &&
-           member->visibility != FENG_VISIBILITY_PRIVATE;
+           (member->kind == FENG_TYPE_MEMBER_FINALIZER ||
+            member->visibility != FENG_VISIBILITY_PRIVATE);
 }
 
 static bool cg_generic_type_member_uses_public_symbol(const FengDecl *decl,
@@ -46875,7 +47865,8 @@ static bool cg_generic_type_member_uses_public_symbol(const FengDecl *decl,
     return decl != NULL &&
            decl->visibility == FENG_VISIBILITY_PUBLIC &&
            member != NULL &&
-           member->visibility != FENG_VISIBILITY_PRIVATE;
+           (member->kind == FENG_TYPE_MEMBER_FINALIZER ||
+            member->visibility != FENG_VISIBILITY_PRIVATE);
 }
 
 /** Build the internal shared ensure-init symbol for one generic static field. */
@@ -46971,16 +47962,16 @@ static char *cg_generic_type_method_shared_cname(CG *cg,
         return NULL;
     }
     Buf b; buf_init(&b);
-    /* Public methods use the public ordinal (m<N>, counting only public
-     * methods and constructors). Private/internal members use their private
-     * ordinal (i<N>). This ensures consumers that only see the public
-     * interface assign the same m<N> index as the library. */
+    /* Public callables use the public ordinal (m<N>, counting public methods,
+     * constructors, and the generated-ABI finalizer). Private/internal
+     * callables use their private ordinal (i<N>). */
     bool is_pub = cg_generic_type_member_uses_public_symbol(decl, member);
     size_t ordinal = 0;
     for (size_t _i = 0; _i < decl->as.type_decl.member_count; ++_i) {
         const FengTypeMember *_c = decl->as.type_decl.members[_i];
         if (_c->kind != FENG_TYPE_MEMBER_METHOD &&
-            _c->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) continue;
+            _c->kind != FENG_TYPE_MEMBER_CONSTRUCTOR &&
+            _c->kind != FENG_TYPE_MEMBER_FINALIZER) continue;
         if (cg_generic_type_member_uses_public_symbol(decl, _c) != is_pub) continue;
         if (_c == member) break;
         ordinal++;
@@ -47081,6 +48072,7 @@ static void cg_clear_generic_type_context(CG *cg) {
     free(cg->generic_callable_dep_keys);
     cg->generic_callable_dep_keys = NULL;
     cg->generic_callable_dep_count = 0U;
+    cg->generic_callable_dep_via_desc = false;
 }
 
 /* Build the field/type view needed while emitting a generic constructor's
@@ -47291,6 +48283,35 @@ static bool cg_emit_generic_type_static_binding_ensure_shared(
     cg->in_generic_type_method = true;
     cg->generic_type_method_decl = decl;
     cg->generic_type_method_field_offsets_name = NULL;
+    {
+        const FengReifiableDepSet *owner_dep_set =
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl);
+        FengSlice *active_param_names = type_param_count > 0U
+            ? (FengSlice *)calloc(type_param_count,
+                                  sizeof(*active_param_names))
+            : NULL;
+
+        if (type_param_count > 0U && active_param_names == NULL) {
+            cg_fail(cg, member->token,
+                    "IE0001", "codegen: out of memory");
+            goto restore_context;
+        }
+        for (size_t index = 0U; index < type_param_count; ++index) {
+            active_param_names[index] =
+                decl->as.type_decl.type_params[index].name;
+        }
+        if (!cg_activate_reified_dependency_mapping(
+                cg,
+                owner_dep_set,
+                active_param_names,
+                type_param_count,
+                CG_REIFIED_DEP_SOURCE_TYPE,
+                member->token)) {
+            free(active_param_names);
+            goto restore_context;
+        }
+        free(active_param_names);
+    }
     cg->cur_body = &cg->fn_defs;
     cg->cur_return_type = NULL;
     cg->cur_fn_is_main = false;
@@ -47342,7 +48363,8 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                                                const FengTypeMember *member,
                                                FengCompileTarget target,
                                                bool has_func_desc,
-                                               const char *shared_name_override) {
+                                               const char *shared_name_override,
+                                               CGGenericConstructorInitMode init_mode) {
     const FengCallableSignature *sig = &member->as.callable;
     char *shared_name = shared_name_override
         ? strdup(shared_name_override)
@@ -47439,168 +48461,10 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     cg->generic_type_method_decl = decl;
     cg->generic_type_method_field_offsets_name = is_static_method ? NULL : "_td->reified_field_offsets";
 
-    /* §2.6.6 前置：预计算 reified_type_deps 映射，使共享体内
-     * 创建依赖泛型的托管对象时能直接用具体描述符分配。 */
+    /* Fields/constructors/finalizers select TYPE; ordinary methods select
+     * FUNCTION. The same mapping owns all three dependency categories. */
     {
-        const FengReifiableDepSet *rtd_dep_set =
-            has_func_desc && shared_name_override == NULL
-                ? feng_semantic_lookup_member_reifiable_dep_set(
-                      cg->analysis, decl, member)
-                : feng_semantic_lookup_reifiable_dep_set(
-                      cg->analysis, decl);
-        if (rtd_dep_set != NULL && rtd_dep_set->dep_count > 0U) {
-            FengSlice *owner_tp_names = (FengSlice *)calloc(
-                tp_count, sizeof(FengSlice));
-            if (owner_tp_names != NULL) {
-                for (size_t i = 0; i < outer_tp_count; ++i) {
-                    owner_tp_names[i] = decl->as.type_decl.type_params[i].name;
-                }
-                for (size_t i = 0; i < method_tp_count; ++i) {
-                    owner_tp_names[outer_tp_count + i] =
-                        sig->type_params[i].name;
-                }
-                typedef struct { size_t idx; char *key; } RTDSort;
-                size_t mc = 0;
-                for (size_t i = 0; i < rtd_dep_set->dep_count; ++i) {
-                    if (rtd_dep_set->deps[i].kind ==
-                        FENG_REIFIABLE_DEP_KIND_MANAGED) {
-                        mc++;
-                    }
-                }
-                if (mc > 0U) {
-                    RTDSort *sorted = (RTDSort *)calloc(mc, sizeof(RTDSort));
-                    if (sorted != NULL) {
-                        size_t si = 0;
-                        for (size_t i = 0; i < rtd_dep_set->dep_count; ++i) {
-                            if (rtd_dep_set->deps[i].kind !=
-                                FENG_REIFIABLE_DEP_KIND_MANAGED) continue;
-                            sorted[si].idx = i;
-                            sorted[si].key = cg_reifiable_sort_key(
-                                rtd_dep_set->deps[i].type_ref,
-                                owner_tp_names, tp_count, true);
-                            si++;
-                        }
-                        for (size_t i = 1; i < mc; ++i) {
-                            RTDSort tmp = sorted[i];
-                            size_t j = i;
-                            while (j > 0 &&
-                                   strcmp(sorted[j - 1].key, tmp.key) > 0) {
-                                sorted[j] = sorted[j - 1];
-                                j--;
-                            }
-                            sorted[j] = tmp;
-                        }
-                        cg->generic_type_method_rtd_descs =
-                            (char **)calloc(mc, sizeof(char *));
-                        if (cg->generic_type_method_rtd_descs != NULL) {
-                            cg->generic_type_method_rtd_count = mc;
-                            cg->generic_type_method_rtd_via_desc =
-                                has_func_desc;
-                            for (size_t i = 0; i < mc; ++i) {
-                                const FengReifiableDep *dep =
-                                    &rtd_dep_set->deps[sorted[i].idx];
-                                const char *descriptor_name =
-                                    cg_open_generic_managed_descriptor_name(
-                                        cg,
-                                        dep->type_ref);
-
-                                if (descriptor_name != NULL) {
-                                    cg->generic_type_method_rtd_descs[i] =
-                                        strdup(descriptor_name);
-                                }
-                            }
-                        }
-                        for (size_t i = 0; i < mc; ++i) free(sorted[i].key);
-                        free(sorted);
-                    }
-                }
-                free(owner_tp_names);
-            }
-        }
-    }
-
-    /* §2.6.1-§2.6.4：预计算 reified_agg_deps 映射，使共享体内
-     * 操作依赖泛型的聚合类型时能使用正确的大小和描述符。 */
-    {
-        const FengReifiableDepSet *rad_dep_set =
-            has_func_desc && shared_name_override == NULL
-                ? feng_semantic_lookup_member_reifiable_dep_set(
-                      cg->analysis, decl, member)
-                : feng_semantic_lookup_reifiable_dep_set(
-                      cg->analysis, decl);
-        if (rad_dep_set != NULL && rad_dep_set->dep_count > 0U) {
-            FengSlice *owner_tp_names_rad = (FengSlice *)calloc(
-                tp_count, sizeof(FengSlice));
-            if (owner_tp_names_rad != NULL) {
-                for (size_t i = 0; i < outer_tp_count; ++i) {
-                    owner_tp_names_rad[i] = decl->as.type_decl.type_params[i].name;
-                }
-                for (size_t i = 0; i < method_tp_count; ++i) {
-                    owner_tp_names_rad[outer_tp_count + i] =
-                        sig->type_params[i].name;
-                }
-                typedef struct { size_t idx; char *key; } RADSort;
-                size_t ac = 0;
-                for (size_t i = 0; i < rad_dep_set->dep_count; ++i) {
-                    if (rad_dep_set->deps[i].kind ==
-                        FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
-                        ac++;
-                    }
-                }
-                if (ac > 0U) {
-                    RADSort *sorted = (RADSort *)calloc(ac, sizeof(RADSort));
-                    if (sorted != NULL) {
-                        size_t si = 0;
-                        for (size_t i = 0; i < rad_dep_set->dep_count; ++i) {
-                            if (rad_dep_set->deps[i].kind !=
-                                FENG_REIFIABLE_DEP_KIND_AGGREGATE) continue;
-                            sorted[si].idx = i;
-                            sorted[si].key = cg_reifiable_sort_key(
-                                rad_dep_set->deps[i].type_ref,
-                                owner_tp_names_rad, tp_count, true);
-                            si++;
-                        }
-                        for (size_t i = 1; i < ac; ++i) {
-                            RADSort tmp = sorted[i];
-                            size_t j = i;
-                            while (j > 0 &&
-                                   strcmp(sorted[j - 1].key, tmp.key) > 0) {
-                                sorted[j] = sorted[j - 1];
-                                j--;
-                            }
-                            sorted[j] = tmp;
-                        }
-                        cg->generic_type_method_rad_descs =
-                            (char **)calloc(ac, sizeof(char *));
-                        if (cg->generic_type_method_rad_descs != NULL) {
-                            cg->generic_type_method_rad_count = ac;
-                            cg->generic_type_method_rad_via_desc =
-                                has_func_desc;
-                            for (size_t i = 0; i < ac; ++i) {
-                                const FengReifiableDep *dep =
-                                    &rad_dep_set->deps[sorted[i].idx];
-                                const char *descriptor_name =
-                                    cg_open_generic_aggregate_descriptor_name(
-                                        cg,
-                                        dep->type_ref);
-
-                                if (descriptor_name != NULL) {
-                                    cg->generic_type_method_rad_descs[i] =
-                                        strdup(descriptor_name);
-                                }
-                            }
-                        }
-                        for (size_t i = 0; i < ac; ++i) free(sorted[i].key);
-                        free(sorted);
-                    }
-                }
-                free(owner_tp_names_rad);
-            }
-        }
-    }
-
-    {
-        const FengReifiableDepSet *callable_dep_set =
+        const FengReifiableDepSet *dep_set =
             has_func_desc && shared_name_override == NULL
                 ? feng_semantic_lookup_member_reifiable_dep_set(
                       cg->analysis, decl, member)
@@ -47622,11 +48486,15 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
             active_param_names[outer_tp_count + index] =
                 sig->type_params[index].name;
         }
-        if (!cg_activate_callable_dep_mapping(
+        if (!cg_activate_reified_dependency_mapping(
                 cg,
-                callable_dep_set,
+                dep_set,
                 active_param_names,
-                tp_count)) {
+                tp_count,
+                has_func_desc
+                    ? CG_REIFIED_DEP_SOURCE_FUNCTION
+                    : CG_REIFIED_DEP_SOURCE_TYPE,
+                member->token)) {
             free(active_param_names);
             goto cleanup;
         }
@@ -47867,8 +48735,11 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
             cg_free_generic_constructor_view(&constructor_view);
             goto cleanup;
         }
-        if (!cg_emit_user_type_member_initializers(
-                cg, &constructor_view, "_self", member->token)) {
+        if (!(init_mode == CG_GENERIC_CONSTRUCTOR_INIT_DEFAULT_ZERO
+                  ? cg_emit_user_type_default_field_values(
+                        cg, &constructor_view, "_self", member->token)
+                  : cg_emit_user_type_member_initializers(
+                        cg, &constructor_view, "_self", member->token))) {
             cg_free_generic_constructor_view(&constructor_view);
             goto cleanup;
         }
@@ -49342,15 +50213,41 @@ cleanup:
     return ok;
 }
 
-/* Emit the user finalizer thunk body. Mirrors cg_emit_user_method but with
- * the runtime FengFinalizerFn(void *self) entry signature and a synthetic
- * `self` binding. The forward declaration is emitted earlier in
- * cg_emit_user_type_definition so the descriptor can take the symbol's
- * address before the body exists. */
+/* Emit the user finalizer entry. A closed generic type uses a thin runtime-ABI
+ * thunk that binds its type descriptor to the provider's shared finalizer
+ * body. A non-generic type keeps the direct body with a synthetic `self`
+ * binding. The entry declaration is emitted earlier with the type descriptor. */
 static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
     if (!t->finalizer) return true;
     const FengTypeMember *fm = t->finalizer;
     Buf *body = &cg->fn_defs;
+
+    if (t->is_generic_instance && t->generic_origin_decl != NULL) {
+        char *shared_name = cg_generic_type_method_shared_cname(
+            cg, t->generic_origin_decl, fm);
+
+        if (shared_name == NULL) {
+            return cg_fail(cg, fm->token,
+                           "IE0001", "codegen: out of memory");
+        }
+        if (cg_program_origin(cg, t->owner_program) ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            buf_append_fmt(&cg->fn_protos,
+                           "void %s(void *_self, const "
+                           "FengTypeDescriptor *_type_desc);\n",
+                           shared_name);
+        }
+        buf_append_fmt(body,
+                       "static void %s(void *_self) {\n"
+                       "    %s(_self, &%s);\n"
+                       "}\n\n",
+                       t->c_finalizer_name,
+                       shared_name,
+                       t->c_desc_name);
+        free(shared_name);
+        return true;
+    }
+
     buf_append_fmt(body, "static void %s(void *_self) {\n",
                    t->c_finalizer_name);
     buf_append_fmt(body, "    struct %s *self = (struct %s *)_self;\n",
@@ -49778,6 +50675,13 @@ static void cg_dispose(CG *cg) {
         free(cg->closed_callable_descriptor_nodes[i].c_name);
     }
     free(cg->closed_callable_descriptor_nodes);
+    for (size_t i = 0U;
+         i < cg->closed_array_descriptor_node_count;
+         ++i) {
+        free(cg->closed_array_descriptor_nodes[i].key);
+        free(cg->closed_array_descriptor_nodes[i].c_name);
+    }
+    free(cg->closed_array_descriptor_nodes);
     for (size_t i = 0; i < cg->expr_narrowing_count; i++) {
         free(cg->expr_narrowings[i].c_expr);
         cgtype_free(cg->expr_narrowings[i].type);

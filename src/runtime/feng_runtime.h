@@ -76,9 +76,19 @@ typedef struct FengStaticBindingState {
     bool initialized;
 } FengStaticBindingState;
 
+/* Produces the language-defined default-zero value for one closed managed
+ * type descriptor. `value_out` addresses one managed-pointer result slot;
+ * the function stores an owned reference (or an immortal reference) there.
+ * It never runs field declaration initializers or constructors. */
+struct FengTypeDescriptor;
+typedef void (*FengTypeDefaultZeroInitFn)(
+    void *value_out,
+    const struct FengTypeDescriptor *descriptor);
+
 typedef struct FengTypeDescriptor {
     const char *name;            /* fully-qualified, debug-only */
     size_t size;                 /* total instance bytes incl. header (0 for variable-length) */
+    FengTypeDefaultZeroInitFn default_zero_init; /* closed managed default-zero */
     FengFinalizerFn finalizer;   /* optional user-defined finalizer (semantic) */
     FengReleaseChildrenFn release_children; /* codegen-emitted; see typedef */
 
@@ -133,6 +143,12 @@ typedef struct FengTypeDescriptor {
      * methods, indexed by globally stable sort key. */
     size_t reified_type_deps_count;
     const struct FengTypeDescriptor *const *reified_type_deps;
+
+    /* Concrete direct generic callable dependencies used by fields,
+     * constructors, and the finalizer of this closed owner type. Slots are
+     * assigned once across the complete owner surface. */
+    size_t reified_callable_deps_count;
+    const struct FengFunctionDescriptor *const *reified_callable_deps;
 
     /* Per-closed-type static binding state in declaration order. Non-generic
      * types and generic types without static bindings leave this NULL. */
@@ -399,6 +415,11 @@ typedef struct FengAggregateDescriptor {
     size_t reified_type_deps_count;
     const struct FengTypeDescriptor *const *reified_type_deps;
 
+    /* Closed generic callable dependencies shared by all field initializers
+     * and constructors of this aggregate owner. */
+    size_t reified_callable_deps_count;
+    const struct FengFunctionDescriptor *const *reified_callable_deps;
+
     /* Same closed generic static state carried by FengTypeDescriptor. Value
      * type shared methods receive this aggregate descriptor instead. */
     FengStaticBindingState *static_bindings;
@@ -553,6 +574,12 @@ FengArray *feng_array_new_kinded(FengValueKind element_kind,
                                  const FengTypeDescriptor *element_desc,
                                  size_t element_size,
                                  size_t length);
+
+/* Descriptor-compatible default-zero entry for a closed array type. The
+ * descriptor must carry exactly one reified element parameter. */
+void feng_array_default_zero_init(
+    void *value_out,
+    const FengTypeDescriptor *descriptor);
 
 /* Legacy two-way constructor preserved verbatim for callers that have not
  * yet adopted the kinded API. Wraps feng_array_new_kinded with

@@ -1,6 +1,6 @@
 # Feng 泛型跨特性场景 FCTS 补强开发文档
 
-> 状态：暂停
+> 状态：进行中（第一至第三组已完成，待第四组）
 >
 > 泛型语言规则以
 > [feng-generics-draft.md](../specifications/feng-generics-draft.md) 为准；前两轮组合覆盖及修复记录见
@@ -8,10 +8,9 @@
 > [feng-generic-advanced-composition-fcts-hardening-dev.md](./feng-generic-advanced-composition-fcts-hardening-dev.md)。
 > 本文只补现有语言能力仍缺少的跨特性行为闭环，不新增泛型语义。
 >
-> 第三组暴露出泛型类型 owner 缺少 callable dependency slots，以及泛型终结器实现与权威规范不一致。
-> 当前暂停本计划，先实施
-> [feng-generic-type-owner-reification-bugfix-dev.md](./feng-generic-type-owner-reification-bugfix-dev.md)；
-> 该专项通过全量回归后，再恢复第三组并继续后续分组。
+> 第三组曾暴露出泛型类型 owner 缺少 callable dependency slots，以及泛型终结器实现与权威规范不一致。
+> [feng-generic-type-owner-reification-bugfix-dev.md](./feng-generic-type-owner-reification-bugfix-dev.md)
+> 已完成并通过全量回归；第三组现已完成，本计划从第四组继续。
 
 ## 1 目标
 
@@ -110,10 +109,9 @@
 
 ### 4.3 第三组：泛型构造器主体具化
 
-> 当前暂停：先完成
-> [feng-generic-type-owner-reification-bugfix-dev.md](./feng-generic-type-owner-reification-bugfix-dev.md)。
-> 本节只保留跨特性 FCTS 的实施位置；描述符职责、构造/终结器共享体 ABI 和专项回归统一由引用文档定义，
-> 不在本文重复维护。
+> 已完成。描述符职责、构造/终结器共享体 ABI 和专项回归统一由
+> [feng-generic-type-owner-reification-bugfix-dev.md](./feng-generic-type-owner-reification-bugfix-dev.md)
+> 定义，本文只保留跨特性 FCTS 的覆盖结果，不重复维护这些规则。
 
 定义 imported 泛型普通 `type` 和泛型 `@value type`，其构造器主体同时：
 
@@ -205,8 +203,8 @@ fit 提供的方法。至少覆盖：
 - [x] 第一组完成后的 `make test`
 - [x] 第二组：逃逸泛型闭包
 - [x] 第二组完成后的 `make test`
-- [ ] 第三组：泛型构造器主体具化
-- [ ] 第三组完成后的 `make test`
+- [x] 第三组：泛型构造器主体具化
+- [x] 第三组完成后的 `make test`
 - [ ] 第四组：目标类型推导与静态工厂/静态字段约束
 - [ ] 第四组完成后的 `make test`
 - [ ] 第五组：跨包泛型 `fit` 与多种 subject 表示

@@ -10578,6 +10578,48 @@ static bool validate_iterator_annotations(ResolveContext *context, const FengDec
     return true;
 }
 
+/* Reject method-level type parameters on constructors and finalizers. These
+ * special members may use owner type parameters, but never introduce a
+ * callable-local generic scope of their own. */
+static bool validate_special_member_type_params(
+    ResolveContext *context,
+    const FengTypeMember *member) {
+    const FengCallableSignature *callable;
+    const FengTypeParam *first_param;
+
+    if (context == NULL || member == NULL ||
+        (member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR &&
+         member->kind != FENG_TYPE_MEMBER_FINALIZER)) {
+        return true;
+    }
+
+    callable = &member->as.callable;
+    if (callable->type_param_count == 0U) {
+        return true;
+    }
+    first_param = &callable->type_params[0];
+
+    if (member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
+        return resolver_append_error(
+            context,
+            first_param->token,
+            "AE0316", format_message(
+                "constructor '%.*s' cannot declare type parameters",
+                (int)callable->name.length,
+                callable->name.data));
+    }
+
+    return resolver_append_error(
+        context,
+        first_param->token,
+        "AE0316", format_message(
+            "finalizer '~%.*s' cannot declare type parameters",
+            (int)callable->name.length,
+            callable->name.data));
+}
+
+/* Validate finalizer eligibility and uniqueness for one concrete or generic
+ * owner type. Generic ownership alone does not prohibit a finalizer. */
 static bool validate_type_finalizer_constraints(ResolveContext *context, const FengDecl *type_decl) {
     size_t member_index;
     const FengTypeMember *first_finalizer = NULL;
@@ -10585,25 +10627,6 @@ static bool validate_type_finalizer_constraints(ResolveContext *context, const F
     bool type_has_value;
 
     if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
-        return true;
-    }
-
-    /* G4-18: Generic types cannot declare a finalizer. */
-    if (type_decl->as.type_decl.type_param_count > 0U) {
-        for (member_index = 0U;
-             member_index < type_decl->as.type_decl.member_count;
-             ++member_index) {
-            const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
-            if (member->kind == FENG_TYPE_MEMBER_FINALIZER) {
-                return resolver_append_error(
-                    context,
-                    member->token,
-                    "AE0316", format_message(
-                        "generic type '%.*s' cannot declare a finalizer",
-                        (int)decl_typeish_name(type_decl).length,
-                        decl_typeish_name(type_decl).data));
-            }
-        }
         return true;
     }
 
@@ -27703,6 +27726,11 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     }
                     context->current_type_decl = previous_type_decl;
                     continue;
+                }
+
+                if (!validate_special_member_type_params(context, member)) {
+                    ok = false;
+                    break;
                 }
 
                 context->current_type_decl = decl;

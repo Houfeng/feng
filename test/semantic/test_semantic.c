@@ -16863,15 +16863,35 @@ static void test_generic_non_generic_type_with_type_args_rejected(void) {
     feng_program_free(program);
 }
 
-static void test_generic_type_with_finalizer_rejected(void) {
-    /* A generic type cannot declare a finalizer (G4-18). */
+static void test_generic_type_with_finalizer_allowed(void) {
+    /* A generic owner may declare a non-generic finalizer and use T. */
     const char *source =
         "module demo.main;\n"
         "type Box<T> {\n"
         "    open let value: T;\n"
-        "    func ~Box() {}\n"
+        "    func ~Box() { let copy: T = self.value; }\n"
         "}\n";
     FengProgram *program = parse_program_or_die("gen_fin.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_constructor_method_type_params_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    func Box<U>() {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_ctor_type_param.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -16880,7 +16900,32 @@ static void test_generic_type_with_finalizer_rejected(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                   &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
-    ASSERT(strstr(errors[0].message, "finalizer") != NULL);
+    ASSERT(strcmp(errors[0].code, "AE0316") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "constructor 'Box' cannot declare type parameters") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+static void test_finalizer_method_type_params_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> {\n"
+        "    func ~Box<U>() {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("gen_fin_type_param.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0316") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "finalizer '~Box' cannot declare type parameters") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -22266,7 +22311,9 @@ int main(void) {
     test_generic_type_param_constraint_must_be_spec();
     test_generic_type_ref_arity_too_many();
     test_generic_non_generic_type_with_type_args_rejected();
-    test_generic_type_with_finalizer_rejected();
+    test_generic_type_with_finalizer_allowed();
+    test_constructor_method_type_params_rejected();
+    test_finalizer_method_type_params_rejected();
     test_generic_explicit_type_args_arity_mismatch();
     test_generic_type_constructor_explicit_type_args_ok();
     test_generic_type_constructor_explicit_type_args_arity_mismatch();
