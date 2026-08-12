@@ -12,6 +12,14 @@ extern func pipe(fds: i32*): i32;
 @cdecl("libc")
 extern func dup2(from: i32, to: i32): i32;
 
+/** Duplicates a file descriptor for temporary test redirection. */
+@cdecl("libc", "dup")
+extern func duplicateFd(fd: i32): i32;
+
+/** Reads captured bytes from a test pipe. */
+@cdecl("libc", "read")
+extern func readFd(fd: i32, buf: byte*, count: uint): int;
+
 @cdecl("libc")
 extern func close(fd: i32): i32;
 
@@ -56,4 +64,78 @@ open func replaceStdin(text: string) {
   if close(fds[0]) != (i32)0 {
     failNow("harness/stdin-close-read");
   }
+}
+
+/**
+ * Captures the bounded stdout emitted by a test action.
+ * The action must emit less than the operating-system pipe capacity.
+ * @param fn Test action whose stdout is captured
+ * @param capacity Maximum number of bytes returned to the caller
+ * @return Captured stdout bytes decoded as UTF-8
+ */
+open func captureStdout(fn: TestFunction, capacity: int): string {
+  if capacity <= (int)0 {
+    failNow("harness/stdout-capacity");
+  }
+
+  let fds: i32[!] = i32[: (int)2];
+  if pipe(&fds) != (i32)0 {
+    failNow("harness/stdout-pipe");
+  }
+
+  let savedStdout = duplicateFd((i32)1);
+  if savedStdout < (i32)0 {
+    close(fds[0]);
+    close(fds[1]);
+    failNow("harness/stdout-dup");
+  }
+  if dup2(fds[1], (i32)1) < (i32)0 {
+    close(savedStdout);
+    close(fds[0]);
+    close(fds[1]);
+    failNow("harness/stdout-dup2-capture");
+  }
+  if close(fds[1]) != (i32)0 {
+    dup2(savedStdout, (i32)1);
+    close(savedStdout);
+    close(fds[0]);
+    failNow("harness/stdout-close-write");
+  }
+
+  var restorePending = true;
+  defer {
+    if restorePending {
+      dup2(savedStdout, (i32)1);
+      close(savedStdout);
+      close(fds[0]);
+    }
+  }
+
+  fn();
+
+  if dup2(savedStdout, (i32)1) < (i32)0 {
+    failNow("harness/stdout-dup2-restore");
+  }
+  if close(savedStdout) != (i32)0 {
+    failNow("harness/stdout-close-saved");
+  }
+  restorePending = false;
+
+  let buffer: byte[!] = byte[: capacity];
+  let count = readFd(fds[0], &buffer, (uint)capacity);
+  if count < (int)0 {
+    close(fds[0]);
+    failNow("harness/stdout-read");
+  }
+  if count == capacity {
+    let overflow: byte[!] = byte[: (int)1];
+    if readFd(fds[0], &overflow, (uint)1) != (int)0 {
+      close(fds[0]);
+      failNow("harness/stdout-overflow");
+    }
+  }
+  if close(fds[0]) != (i32)0 {
+    failNow("harness/stdout-close-read");
+  }
+  return string.fromUtf8Bytes((byte[])buffer, count);
 }

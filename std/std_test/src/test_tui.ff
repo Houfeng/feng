@@ -805,17 +805,21 @@ func tuiapp_render_empty_no_throw() {
   check(caught == false, "tui/app/render-empty-no-throw");
 }
 
-// ─── render() 有内容输出（不依赖 TTY 初始化，buildPatchBytes 有内容即触发 write） ─────────
+// ─── render() 有内容输出（不依赖 TTY 初始化，捕获 stdout 以避免 ANSI 污染终端） ─────────
 
 func tuiapp_render_with_content() {
   let app = TuiApp();
   app.screen.resize(10, 5);
   app.screen.buffer().draw(0, 0, "Hi");
-  // resizeRequested=false，直接 buildPatchBytes（有内容）+ write
-  // 非 TTY 环境 write 可能失败，但写 stdout(fd=1) 通常成功
+  // resizeRequested=false，直接 buildPatchBytes（有内容）+ write；
+  // 保留真实 render/write 链路，但将 ANSI 字节捕获到测试管道中。
   var caught = false;
-  try app.render() catch ex: string { caught = true; };
+  let output = try captureStdout(() { app.render(); }, (int)64) catch ex: string {
+    caught = true;
+    "";
+  };
   check(caught == false, "tui/app/render-with-content");
+  check(output == "\x1b[1;1HH\x1b[1;2Hi", "tui/app/render-with-content-output");
 }
 
 func tuiapp_run_startup_clears_screen_keeps_buffer() {
