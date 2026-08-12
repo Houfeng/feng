@@ -11884,6 +11884,69 @@ static void test_fit_enum_satisfies_generic_constraint(void) {
     feng_program_free(program);
 }
 
+/* A selected generic callable with no explicit, argument-derived or target-
+ * derived type argument must fail during semantic analysis. */
+static void test_generic_call_without_inference_source_rejected(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func make<T>(): T {\n"
+        "    let value: T;\n"
+        "    return value;\n"
+        "}\n"
+        "func run(): void {\n"
+        "    let value = make();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "generic_call_without_inference_source.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(errors[0].code != NULL);
+    ASSERT(strcmp(errors[0].code, "AE0525") == 0);
+    ASSERT(strstr(errors[0].message,
+                  "provide an explicit type argument or a target type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* A target type may determine T structurally, but the resulting concrete type
+ * must still satisfy the callable's declared static factory constraint. */
+static void test_generic_target_inference_rejects_unsatisfied_constraint(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Factory<T> {\n"
+        "    static func make(): T;\n"
+        "}\n"
+        "type Unsupported {}\n"
+        "func create<T: Factory<T>>(): T {\n"
+        "    return T.make();\n"
+        "}\n"
+        "func run(): void {\n"
+        "    let value: Unsupported = create();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "generic_target_unsatisfied_constraint.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(errors[0].code != NULL);
+    ASSERT(strcmp(errors[0].code, "AE0512") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Overload resolution rule: a generic candidate whose type argument fails the
  * declared constraint must be excluded from the candidate set. When a
  * non-generic overload is applicable, it must win; if no candidate survives,
@@ -22218,6 +22281,8 @@ int main(void) {
     test_fit_enum_method_callable_on_item();
     test_fit_enum_satisfies_spec_typed_parameter();
     test_fit_enum_satisfies_generic_constraint();
+    test_generic_call_without_inference_source_rejected();
+    test_generic_target_inference_rejects_unsatisfied_constraint();
     test_generic_overload_constraint_excludes_candidate();
     test_generic_overload_selected_when_only_candidate();
     test_non_generic_overload_preferred_over_generic();

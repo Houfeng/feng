@@ -1,0 +1,99 @@
+open module fcts_lib.test;
+
+import std.collections;
+
+/** Named tuple used as one complete direct generic argument. */
+open type LibRemainingTuple<T>(T, string, i64);
+
+/** Fixed-layout generic value used to verify fit self address transport. */
+@value
+open type LibRemainingFixedFitValue<T> {
+  /** Observable scalar payload independent of T's physical layout. */
+  open var value: i64;
+
+  /** Construct one fixed-layout value receiver. */
+  func LibRemainingFixedFitValue(value: i64) {
+    self.value = value;
+  }
+}
+
+/** Extend the fixed-layout value with an instance method using implicit self. */
+open fit LibRemainingFixedFitValue<T> {
+  /** Replace the receiver payload through the implicit self reference. */
+  open func replace(value: i64): void {
+    self.value = value;
+  }
+}
+
+/** Round-trip one direct generic argument through an imported shared body. */
+open func libRemainingIdentity<T>(value: T): T {
+  return value;
+}
+
+/** Mutate only this shared call's value-parameter copy through a fit method. */
+open func libRemainingMutateFixedFitReceiver<T>(
+  subject: LibRemainingFixedFitValue<T>,
+  replacement: i64
+): LibRemainingFixedFitValue<T> {
+  subject.replace(replacement);
+  return subject;
+}
+
+/**
+ * Construct, read, overwrite, and return a two-dimensional array whose
+ * elements have descriptor-sized generic value layout.
+ */
+open func libRemainingProcessMatrix<T>(
+  first: LibAdvancedComposite<T>,
+  second: LibAdvancedComposite<T>,
+  replacement: LibAdvancedComposite<T>
+): LibAdvancedComposite<T>[][] {
+  let rows: LibAdvancedComposite<T>[][!] = [
+    [first, second],
+    [second, first]
+  ];
+  let observed = rows[0][0];
+  rows[0] = [replacement, observed];
+  return (LibAdvancedComposite<T>[][])rows;
+}
+
+/** Slice and return a span whose element layout depends on open T. */
+open func libRemainingSliceSpan<T>(
+  values: Span<LibAdvancedComposite<T> >,
+  start: int,
+  end: int
+): Span<LibAdvancedComposite<T> > {
+  return values.slice(start, end);
+}
+
+/** Return descriptor-sized variadic arguments as their packed array. */
+open func libRemainingVariadic<T>(
+  values: LibAdvancedComposite<T>...
+): LibAdvancedComposite<T>[] {
+  return values;
+}
+
+/** Forward one prepacked descriptor-sized variadic group unchanged. */
+open func libRemainingForwardVariadic<T>(
+  values: LibAdvancedComposite<T>...
+): LibAdvancedComposite<T>[] {
+  return libRemainingVariadic<T>(...values);
+}
+
+/**
+ * Insert, read, overwrite, and return a map whose value has open generic
+ * descriptor-sized layout.
+ */
+open func libRemainingProcessMap<K: Hashable<K>, T>(
+  key: K,
+  observedKey: K,
+  first: LibAdvancedComposite<T>,
+  replacement: LibAdvancedComposite<T>
+): Map<K, LibAdvancedComposite<T> > {
+  let values = Map<K, LibAdvancedComposite<T> >();
+  values.set(key, first);
+  let observed = values.get(key);
+  values.set(key, replacement);
+  values.set(observedKey, observed);
+  return values;
+}

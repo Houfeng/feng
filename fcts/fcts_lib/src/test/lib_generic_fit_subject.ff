@@ -1,0 +1,279 @@
+open module fcts_lib.test;
+
+/** Value envelope proving indirect references to a fit spec type parameter. */
+@value
+open type LibGenericFitPacket<T> {
+  /** Generic payload transported through fit methods. */
+  open var value: T;
+
+  /** Managed marker ensuring string instances use aggregate value storage. */
+  open let marker: string;
+
+  /** Construct a packet with a visible payload and marker. */
+  func LibGenericFitPacket(value: T, marker: string) {
+    self.value = value;
+    self.marker = marker;
+  }
+
+  /** Replace the payload through the packet's implicit self address. */
+  open func replace(value: T): void {
+    self.value = value;
+  }
+}
+
+/** Pair of inner and outer observations across one by-value call boundary. */
+@value
+open type LibGenericFitObservation<T> {
+  /** Value observed inside the nested callable. */
+  open let inner: T;
+
+  /** Value observed from the caller-owned parameter after the nested call. */
+  open let outer: T;
+
+  /** Construct one complete observation pair. */
+  func LibGenericFitObservation(inner: T, outer: T) {
+    self.inner = inner;
+    self.outer = outer;
+  }
+}
+
+/** Generic object-form contract implemented by exported fit declarations. */
+open spec LibGenericFitSubject<T> {
+  /** Read the subject payload directly as T. */
+  func read(): T;
+
+  /** Write a direct T parameter into the subject. */
+  func write(value: T): void;
+
+  /** Write and read through the same subject receiver. */
+  func project(value: T): T;
+
+  /** Round-trip a composite value that indirectly references T. */
+  func exchange(packet: LibGenericFitPacket<T>): LibGenericFitPacket<T>;
+
+  /** Mutate and return only a by-value packet parameter copy. */
+  func rewrite(
+    packet: LibGenericFitPacket<T>,
+    replacement: T
+  ): LibGenericFitPacket<T>;
+}
+
+/** Managed generic reference subject implemented only through a fit. */
+open type LibGenericFitReference<T> {
+  /** Mutable payload observed through both the concrete and spec views. */
+  open var value: T;
+
+  /** Number of writes performed through the fit implementation. */
+  open var writes: i64;
+
+  /** Construct one reference subject. */
+  func LibGenericFitReference(value: T) {
+    self.value = value;
+    self.writes = 0;
+  }
+}
+
+/** Export the generic reference subject's contract implementation. */
+open fit LibGenericFitReference<T>: LibGenericFitSubject<T> {
+  /** Read the current reference payload. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Mutate the original reference subject. */
+  open func write(value: T): void {
+    self.value = value;
+    self.writes = self.writes + 1;
+  }
+
+  /** Write and return the updated reference payload. */
+  open func project(value: T): T {
+    self.value = value;
+    self.writes = self.writes + 1;
+    return self.value;
+  }
+
+  /** Return the supplied indirect-T packet unchanged. */
+  open func exchange(
+    packet: LibGenericFitPacket<T>
+  ): LibGenericFitPacket<T> {
+    return packet;
+  }
+
+  /** Rewrite only the method's packet parameter copy. */
+  open func rewrite(
+    packet: LibGenericFitPacket<T>,
+    replacement: T
+  ): LibGenericFitPacket<T> {
+    packet.replace(replacement);
+    return packet;
+  }
+}
+
+/** Descriptor-sized generic value subject implemented only through a fit. */
+@value
+open type LibGenericFitValue<T> {
+  /** Mutable generic payload. */
+  open var value: T;
+
+  /** Managed field following the generic payload. */
+  open var label: string;
+
+  /** Construct one value subject. */
+  func LibGenericFitValue(value: T, label: string) {
+    self.value = value;
+    self.label = label;
+  }
+}
+
+/** Export the generic value subject's contract implementation. */
+open fit LibGenericFitValue<T>: LibGenericFitSubject<T> {
+  /** Read the current value payload. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Mutate only the value instance represented by the active subject. */
+  open func write(value: T): void {
+    self.value = value;
+  }
+
+  /** Write and return the updated value payload. */
+  open func project(value: T): T {
+    self.value = value;
+    return self.value;
+  }
+
+  /** Return the supplied indirect-T packet unchanged. */
+  open func exchange(
+    packet: LibGenericFitPacket<T>
+  ): LibGenericFitPacket<T> {
+    return packet;
+  }
+
+  /** Rewrite only the method's packet parameter copy. */
+  open func rewrite(
+    packet: LibGenericFitPacket<T>,
+    replacement: T
+  ): LibGenericFitPacket<T> {
+    packet.replace(replacement);
+    return packet;
+  }
+}
+
+/** Concrete enum subject proving non-object fit witness representation. */
+open enum LibGenericFitTone {
+  Low,
+  High
+}
+
+/** Export a concrete enum fit under the same generic contract family. */
+open fit LibGenericFitTone: LibGenericFitSubject<string> {
+  /** Convert the enum subject to its textual payload. */
+  open func read(): string {
+    return if self == LibGenericFitTone.Low { "low" } else { "high" };
+  }
+
+  /** Enum subjects are immutable, so writes intentionally have no effect. */
+  open func write(value: string): void {
+  }
+
+  /** Return the immutable enum payload after the ignored write. */
+  open func project(value: string): string {
+    return if self == LibGenericFitTone.Low { "low" } else { "high" };
+  }
+
+  /** Return the supplied string packet unchanged. */
+  open func exchange(
+    packet: LibGenericFitPacket<string>
+  ): LibGenericFitPacket<string> {
+    return packet;
+  }
+
+  /** Rewrite only the method's packet parameter copy. */
+  open func rewrite(
+    packet: LibGenericFitPacket<string>,
+    replacement: string
+  ): LibGenericFitPacket<string> {
+    packet.replace(replacement);
+    return packet;
+  }
+}
+
+/** Callable surface used to verify address-ABI parameter value semantics. */
+open spec LibGenericFitProjector<T, U>(subject: U, replacement: T): T;
+
+/** Method owner covering instance and static generic shared entries. */
+open type LibGenericFitMethodRouter {
+  /** Mutate only the instance method's by-value subject parameter. */
+  open func project<T, U: LibGenericFitSubject<T>>(
+    subject: U,
+    replacement: T
+  ): T {
+    subject.write(replacement);
+    return subject.read();
+  }
+
+  /** Mutate only the static method's by-value subject parameter. */
+  open static func projectStatic<T, U: LibGenericFitSubject<T>>(
+    subject: U,
+    replacement: T
+  ): T {
+    subject.write(replacement);
+    return subject.read();
+  }
+}
+
+/** Apply the fit witness selected by a generic constraint. */
+open func libGenericFitApply<T, U: LibGenericFitSubject<T>>(
+  subject: U,
+  packet: LibGenericFitPacket<T>
+): LibGenericFitPacket<T> {
+  subject.write(packet.value);
+  return subject.exchange(
+    LibGenericFitPacket<T>(subject.read(), packet.marker)
+  );
+}
+
+/** Forward the same constrained subject to another imported generic callable. */
+open func libGenericFitForward<T, U: LibGenericFitSubject<T>>(
+  subject: U,
+  packet: LibGenericFitPacket<T>
+): LibGenericFitPacket<T> {
+  return libGenericFitApply<T, U>(subject, packet);
+}
+
+/** Read a constrained subject without first converting it to a spec value. */
+open func libGenericFitRead<T, U: LibGenericFitSubject<T>>(subject: U): T {
+  return subject.read();
+}
+
+/** Accept and return a spec value whose surface transitively references T. */
+open func libGenericFitIdentity<T>(
+  subject: LibGenericFitSubject<T>
+): LibGenericFitSubject<T> {
+  return subject;
+}
+
+/** Verify a callable-form spec receives its own by-value subject parameter. */
+open func libGenericFitCallableProject<T, U: LibGenericFitSubject<T>>(
+  subject: U,
+  replacement: T
+): LibGenericFitObservation<T> {
+  let projector: LibGenericFitProjector<T, U> = (
+    candidate: U,
+    next: T
+  ) -> candidate.project(next);
+  let inner = projector(subject, replacement);
+  return LibGenericFitObservation<T>(inner, subject.read());
+}
+
+/** Verify a generic object-spec witness receives a copied value parameter. */
+open func libGenericFitWitnessParameter<T, U: LibGenericFitSubject<T>>(
+  subject: U,
+  packet: LibGenericFitPacket<T>,
+  replacement: T
+): LibGenericFitObservation<T> {
+  let rewritten = subject.rewrite(packet, replacement);
+  return LibGenericFitObservation<T>(rewritten.value, packet.value);
+}

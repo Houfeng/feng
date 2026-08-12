@@ -1,0 +1,165 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+/** Local counterpart verifying the same static witness member ordering. */
+spec LocalTargetFactory<T> {
+  /** Human-readable identity supplied by each factory implementation. */
+  static let label: string;
+
+  /** Mutable state used to verify static witness reads and writes. */
+  static var count: i64;
+
+  /** Create one value of the factory's self type. */
+  static func make(seed: i64): T;
+}
+
+/** Fixed-layout value with a scalar payload. */
+@value
+type TargetScalarValue:
+  LibTargetFactory<TargetScalarValue>,
+  LocalTargetFactory<TargetScalarValue> {
+  /** Factory result payload. */
+  let value: i64;
+
+  /** Imported and local constraints share this immutable static field. */
+  static let label: string = "scalar";
+
+  /** Imported and local constraints share this mutable static field. */
+  static var count: i64;
+
+  /** Create a scalar-payload result. */
+  static func make(seed: i64): TargetScalarValue {
+    return TargetScalarValue { value: seed + 1 };
+  }
+}
+
+/** Managed reference result produced through the same static contract. */
+type TargetReferenceValue:
+  LibTargetFactory<TargetReferenceValue>,
+  LocalTargetFactory<TargetReferenceValue> {
+  /** Factory result payload. */
+  let value: i64;
+
+  /** Imported and local constraints share this immutable static field. */
+  static let label: string = "reference";
+
+  /** Imported and local constraints share this mutable static field. */
+  static var count: i64;
+
+  /** Create a managed reference result. */
+  static func make(seed: i64): TargetReferenceValue {
+    return TargetReferenceValue { value: seed + 2 };
+  }
+}
+
+/** Descriptor-sized value result produced through the same static contract. */
+@value
+type TargetWideValue:
+  LibTargetFactory<TargetWideValue>,
+  LocalTargetFactory<TargetWideValue> {
+  /** First managed field. */
+  let first: string;
+
+  /** Second managed field. */
+  let second: string;
+
+  /** Scalar tail proving that the complete value is returned. */
+  let value: i64;
+
+  /** Imported and local constraints share this immutable static field. */
+  static let label: string = "wide";
+
+  /** Imported and local constraints share this mutable static field. */
+  static var count: i64;
+
+  /** Create a descriptor-sized result. */
+  static func make(seed: i64): TargetWideValue {
+    return TargetWideValue {
+      first: "wide-first",
+      second: "wide-second",
+      value: seed + 3
+    };
+  }
+}
+
+/** Create through a locally declared static factory contract. */
+func localTargetCreate<T: LocalTargetFactory<T>>(seed: i64): T {
+  T.count = T.count + 1;
+  return T.make(seed);
+}
+
+/** Verify target inference and static contract dispatch across package ABI. */
+open func test_generic_factory_target_inference(): void {
+  describe("generic factory target inference", () {
+    test("explicit type arguments use the imported static factory", () {
+      TargetScalarValue.count = 0;
+      let value = libTargetCreate<TargetScalarValue>(40);
+      assert(value.value == 41,
+             "explicit generic factory call returns the complete value");
+      assert(TargetScalarValue.count == 1,
+             "imported generic code writes the concrete static field");
+    });
+
+    test("binding target infers imported top-level type arguments", () {
+      TargetReferenceValue.count = 0;
+      TargetWideValue.count = 0;
+
+      let reference: TargetReferenceValue = libTargetCreate(40);
+      let wide: TargetWideValue = libTargetCreate(40);
+
+      assert(reference.value == 42,
+             "target type infers a managed reference result");
+      assert(wide.first == "wide-first" && wide.second == "wide-second" &&
+             wide.value == 43,
+             "target type infers a descriptor-sized result");
+      assert(TargetReferenceValue.count == 1 && TargetWideValue.count == 1,
+             "each inferred type selects its own static witness state");
+    });
+
+    test("composite binding target infers nested type arguments", () {
+      TargetWideValue.count = 0;
+
+      let envelope: LibTargetEnvelope<TargetWideValue> =
+        libTargetCreateEnvelope(70);
+
+      assert(envelope.value.first == "wide-first" &&
+             envelope.value.second == "wide-second" &&
+             envelope.value.value == 73,
+             "nested return structure infers and preserves the complete value");
+      assert(TargetWideValue.count == 1,
+             "nested target selects the matching static witness state");
+    });
+
+    test("binding target infers imported method type arguments", () {
+      TargetScalarValue.count = 0;
+      TargetReferenceValue.count = 0;
+
+      let host = LibTargetFactoryHost();
+      let scalar: TargetScalarValue =
+        LibTargetFactoryHost.createStatic(50);
+      let reference: TargetReferenceValue = host.create(50);
+
+      assert(scalar.value == 51 && reference.value == 52,
+             "static and instance method targets infer independent results");
+      assert(TargetScalarValue.count == 1 &&
+             TargetReferenceValue.count == 1,
+             "inferred methods dispatch through the matching static witness");
+    });
+
+    test("local and imported contracts share static member semantics", () {
+      libTargetSetCount<TargetWideValue>(10);
+      assert(libTargetCount<TargetWideValue>() == 10 &&
+             libTargetLabel<TargetWideValue>() == "wide",
+             "imported ft restores static let and var witness slots");
+
+      let local: TargetWideValue = localTargetCreate(60);
+      assert(local.first == "wide-first" && local.second == "wide-second" &&
+             local.value == 63,
+             "local target inference returns the same complete value shape");
+      assert(TargetWideValue.count == 11,
+             "local and imported contracts address the same concrete field");
+    });
+  });
+}

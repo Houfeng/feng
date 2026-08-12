@@ -4698,6 +4698,7 @@ static bool callable_type_ref_contains_type_params(const FengCallableSignature *
 static bool callable_collect_call_type_args(ResolveContext *context,
                                             const FengExpr *call_expr,
                                             const FengCallableSignature *callable,
+                                            const FengTypeRef *target_inference_return_type,
                                             bool allow_wrapped_inference,
                                             bool preserve_first_direct_binding,
                                             FengTypeRef **type_args,
@@ -4812,6 +4813,27 @@ static const FengTypeRef *substitute_type_ref_for_fit_instance(
     return substituted;
 }
 
+/* Return the callable signature identified by one resolved call record. */
+static const FengCallableSignature *resolved_callable_signature(
+    const FengResolvedCallable *resolved) {
+    if (resolved == NULL) {
+        return NULL;
+    }
+    if (resolved->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
+        resolved->function_decl != NULL &&
+        resolved->function_decl->kind == FENG_DECL_FUNCTION) {
+        return &resolved->function_decl->as.function_decl;
+    }
+    if ((resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
+         resolved->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
+         resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD ||
+         resolved->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) &&
+        resolved->member != NULL) {
+        return &resolved->member->as.callable;
+    }
+    return NULL;
+}
+
 static const FengTypeRef *substitute_callable_return_type_for_call(
     ResolveContext *context,
     const FengDecl *owner_type_decl,
@@ -4842,6 +4864,26 @@ static const FengTypeRef *substitute_callable_return_type_for_call(
         return return_type_ref;
     }
 
+    /* A resolved call already owns the authoritative caller-view generic
+     * arguments. Reuse them during later type checks instead of attempting to
+     * infer again after the surrounding target context has been restored. */
+    if (resolved_callable_signature(&call_expr->as.call.resolved_callable) == callable &&
+        call_expr->as.call.resolved_callable.callable_type_arg_count ==
+            callable->type_param_count) {
+        substituted = clone_type_ref_substituting_type_params(
+            return_type_ref,
+            callable->type_params,
+            callable->type_param_count,
+            (FengTypeRef *const *)
+                call_expr->as.call.resolved_callable.callable_type_args);
+        if (substituted != NULL &&
+            resolver_track_synthetic_type_ref(context, substituted)) {
+            return substituted;
+        }
+        free_synthetic_type_ref(substituted);
+        substituted = NULL;
+    }
+
     type_args = calloc(callable->type_param_count, sizeof *type_args);
     owned_type_args = calloc(callable->type_param_count, sizeof *owned_type_args);
     if (type_args == NULL || owned_type_args == NULL) {
@@ -4856,6 +4898,7 @@ static const FengTypeRef *substitute_callable_return_type_for_call(
     if (!callable_collect_call_type_args(context,
                                          call_expr,
                                          callable,
+                                         return_type_ref,
                                          allow_wrapped_inference,
                                          false,
                                          type_args,
@@ -11270,10 +11313,133 @@ static bool callable_collect_type_args_from_arg_expr(ResolveContext *context,
     return ok;
 }
 
+/* Collect missing callable type arguments by structurally comparing the
+ * caller-view return type with the current expression target. Earlier explicit
+ * and argument-derived bindings remain authoritative; target inference fills
+ * only unbound slots, while ordinary expected-type validation checks the final
+ * result compatibility after overload selection. */
+static bool callable_collect_missing_type_args_from_target_refs(
+    ResolveContext *context,
+    const FengCallableSignature *callable,
+    const FengTypeRef *return_type,
+    const FengTypeRef *target_type,
+    FengTypeRef **type_args,
+    bool *owned_type_args) {
+    size_t type_arg_index;
+
+    if (context == NULL || callable == NULL || return_type == NULL ||
+        target_type == NULL || type_args == NULL || owned_type_args == NULL) {
+        return false;
+    }
+
+    if (param_type_is_type_param_ref(callable, return_type)) {
+        if (!callable_find_type_param_index(callable,
+                                            return_type->as.named.segments[0],
+                                            &type_arg_index)) {
+            return false;
+        }
+        if (type_args[type_arg_index] != NULL) {
+            return true;
+        }
+        type_args[type_arg_index] = clone_type_ref_for_inference(target_type);
+        if (type_args[type_arg_index] == NULL) {
+            return false;
+        }
+        owned_type_args[type_arg_index] = true;
+        return true;
+    }
+
+    if (return_type->kind != target_type->kind) {
+        return false;
+    }
+    switch (return_type->kind) {
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            return callable_collect_missing_type_args_from_target_refs(
+                context,
+                callable,
+                return_type->as.inner,
+                target_type->as.inner,
+                type_args,
+                owned_type_args);
+
+        case FENG_TYPE_REF_NAMED: {
+            const FengDecl *return_decl = resolve_type_ref_decl(context, return_type);
+            const FengDecl *target_decl = resolve_type_ref_decl(context, target_type);
+            size_t index;
+
+            if (return_decl != NULL || target_decl != NULL) {
+                if (return_decl != target_decl) {
+                    return false;
+                }
+            } else if (!type_ref_equals(return_type, target_type)) {
+                return false;
+            }
+            if (return_type->as.named.type_arg_count !=
+                target_type->as.named.type_arg_count) {
+                return false;
+            }
+            for (index = 0U;
+                 index < return_type->as.named.type_arg_count;
+                 ++index) {
+                if (!callable_collect_missing_type_args_from_target_refs(
+                        context,
+                        callable,
+                        return_type->as.named.type_args[index],
+                        target_type->as.named.type_args[index],
+                        type_args,
+                        owned_type_args)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Merge the current expression target into callable type arguments through
+ * the caller-view return type. The target path supports both direct T and
+ * nested shapes such as Composite<T>; explicit generic calls deliberately
+ * skip this inference source and only validate their result afterward. */
+static bool callable_collect_type_args_from_target(
+    ResolveContext *context,
+    bool has_explicit_type_args,
+    const FengCallableSignature *callable,
+    const FengTypeRef *target_inference_return_type,
+    FengTypeRef **type_args,
+    bool *owned_type_args) {
+    const FengTypeRef *expected_type;
+
+    if (context == NULL || callable == NULL ||
+        type_args == NULL || owned_type_args == NULL) {
+        return false;
+    }
+    if (has_explicit_type_args ||
+        target_inference_return_type == NULL ||
+        !callable_type_ref_contains_type_params(callable,
+                                                target_inference_return_type)) {
+        return true;
+    }
+
+    expected_type = context->current_expr_expected_type_ref;
+    if (expected_type == NULL) {
+        return true;
+    }
+    return callable_collect_missing_type_args_from_target_refs(
+        context,
+        callable,
+        target_inference_return_type,
+        expected_type,
+        type_args,
+        owned_type_args);
+}
+
 /* Central type-argument collector for a call expression. It merges three
- * sources in order: explicit type args, direct-`T` positions, and optionally
- * wrapped-shape positions guarded by `allow_wrapped_inference`. That guard is
- * the semantic boundary that keeps wrapped inference extern-only.
+ * sources in order: explicit type args, call-argument types, and the current
+ * target type. Wrapped call-argument shapes remain guarded by
+ * `allow_wrapped_inference`; return-to-target inference always uses the full
+ * structural shape required by the generic specification.
  *
  * During ordinary overload applicability probing, direct `T` positions keep
  * the first inferred binding and deliberately tolerate later incompatible
@@ -11283,6 +11449,7 @@ static bool callable_collect_type_args_from_arg_expr(ResolveContext *context,
 static bool callable_collect_call_type_args(ResolveContext *context,
                                             const FengExpr *call_expr,
                                             const FengCallableSignature *callable,
+                                            const FengTypeRef *target_inference_return_type,
                                             bool allow_wrapped_inference,
                                             bool preserve_first_direct_binding,
                                             FengTypeRef **type_args,
@@ -11374,7 +11541,13 @@ static bool callable_collect_call_type_args(ResolveContext *context,
         }
     }
 
-    return true;
+    return callable_collect_type_args_from_target(
+        context,
+        call_expr->as.call.has_explicit_type_args,
+        callable,
+        target_inference_return_type,
+        type_args,
+        owned_type_args);
 }
 
 /* Overload match priority tiers, shared by every resolve_*_overload path.
@@ -11628,6 +11801,16 @@ static bool callable_parameters_match_args(ResolveContext *context,
         }
     }
 
+    if (ok && callable->type_param_count > 0U) {
+        ok = callable_collect_type_args_from_target(
+            context,
+            explicit_type_arg_count > 0U,
+            callable,
+            callable->return_type,
+            type_args,
+            owned_type_args);
+    }
+
     /* A generic candidate is applicable only when every inferred type argument
      * satisfies its declared constraint; otherwise the candidate is dropped so
      * it cannot compete with non-generic overloads. */
@@ -11849,6 +12032,27 @@ static bool callable_parameters_match_args_for_owner_instance(
             ok = false;
             break;
         }
+    }
+
+    if (ok && callable->type_param_count > 0U) {
+        const FengTypeRef *target_inference_return_type =
+            substitute_type_ref_for_owner_instance(context,
+                                                   owner_type_decl,
+                                                   owner_type,
+                                                   callable->return_type);
+
+        target_inference_return_type = substitute_type_ref_for_fit_instance(
+            context,
+            fit_decl,
+            owner_type,
+            target_inference_return_type);
+        ok = callable_collect_type_args_from_target(
+            context,
+            explicit_type_arg_count > 0U,
+            callable,
+            target_inference_return_type,
+            type_args,
+            owned_type_args);
     }
 
     /* A generic candidate is applicable only when every inferred type argument
@@ -18592,7 +18796,6 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
                                                    FengTypeRef *const *type_args) {
     const FengTypeParam *type_param;
     const FengTypeRef *actual_type_ref;
-    const FengDecl *actual_type_decl;
     const FengDecl *constraint_decl;
     FengTypeRef *substituted = NULL;
     const FengTypeRef *constraint_ref;
@@ -18628,8 +18831,6 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
         return true;
     }
 
-    actual_type_decl = resolve_type_ref_decl(context, actual_type_ref);
-
     /* Substitute type parameters referenced inside the constraint (for example
      * JsonSerializable<T> -> JsonSerializable<Actual>) before checking. When
      * substitution cannot complete (some referenced type param has no inferred
@@ -18653,19 +18854,6 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
      * without needing full spec-implication analysis. */
     if (type_refs_semantically_equal(context, actual_type_ref, constraint_ref)) {
         result = true;
-    } else if (actual_type_decl != NULL && decl_is_named_fit_target(actual_type_decl)) {
-        result = type_decl_satisfies_spec_type_ref(context, actual_type_decl, constraint_ref);
-    } else if (actual_type_ref->kind == FENG_TYPE_REF_NAMED &&
-               actual_type_ref->as.named.segment_count == 1U &&
-               actual_type_ref->as.named.type_arg_count == 0U &&
-               is_builtin_type_name(actual_type_ref->as.named.segments[0])) {
-        const char *builtin_name =
-            canonical_builtin_type_name(actual_type_ref->as.named.segments[0], context->pointer_size);
-        if (builtin_name != NULL) {
-            FengSemanticSubjectKey subject_key =
-                feng_semantic_subject_key_for_builtin(builtin_name);
-            result = subject_key_satisfies_spec_decl(context, &subject_key, constraint_decl);
-        }
     } else if (actual_type_ref->kind == FENG_TYPE_REF_NAMED &&
                actual_type_ref->as.named.segment_count == 1U &&
                actual_type_ref->as.named.type_arg_count == 0U &&
@@ -18678,6 +18866,10 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
          * materializer will finalize the answer at instantiation. Conservatively
          * accept so transitive generic call sites remain compilable. */
         result = true;
+    } else {
+        result = type_ref_satisfies_spec_type_ref(context,
+                                                  actual_type_ref,
+                                                  constraint_ref);
     }
 
     if (substituted != NULL) {
@@ -18987,10 +19179,14 @@ static void materialize_named_type_param_constraint_witnesses(
 static void materialize_callable_type_param_constraint_witnesses(
     ResolveContext *context,
     const FengExpr *call_expr,
-    const FengCallableSignature *callable) {
+    const FengCallableSignature *callable,
+    const FengDecl *owner_type_decl,
+    const FengDecl *fit_decl,
+    InferredExprType owner_type) {
     size_t i;
     FengTypeRef **type_args = NULL;
     bool *owned_type_args = NULL;
+    const FengTypeRef *target_inference_return_type;
 
     if (context == NULL || call_expr == NULL || callable == NULL) {
         return;
@@ -19006,9 +19202,20 @@ static void materialize_callable_type_param_constraint_witnesses(
         free(owned_type_args);
         return;
     }
+    target_inference_return_type = substitute_type_ref_for_owner_instance(
+        context,
+        owner_type_decl,
+        owner_type,
+        callable->return_type);
+    target_inference_return_type = substitute_type_ref_for_fit_instance(
+        context,
+        fit_decl,
+        owner_type,
+        target_inference_return_type);
     if (!callable_collect_call_type_args(context,
                                          call_expr,
                                          callable,
+                                         target_inference_return_type,
                                          call_expr_allows_wrapped_generic_extern_inference(call_expr),
                                          false,
                                          type_args,
@@ -21509,6 +21716,16 @@ static bool record_resolved_callable_from_resolution(
         resolution->callable->type_param_count > 0U) {
         size_t type_arg_count =
             resolution->callable->type_param_count;
+        InferredExprType owner_type = persistent_owner_ref != NULL
+                                          ? inferred_expr_type_from_type_ref(
+                                                persistent_owner_ref)
+                                          : inferred_expr_type_unknown();
+        const FengTypeRef *target_inference_return_type =
+            substitute_type_ref_for_owner_instance(
+                context,
+                resolution->owner_type_decl,
+                owner_type,
+                resolution->callable->return_type);
         FengTypeRef **inferred_type_args = (FengTypeRef **)calloc(
             type_arg_count, sizeof(*inferred_type_args));
         bool *owned_type_args = (bool *)calloc(
@@ -21520,13 +21737,20 @@ static bool record_resolved_callable_from_resolution(
                             owned_type_args != NULL &&
                             persistent_type_args != NULL;
         bool type_args_incomplete = false;
-        bool persist_failed = false;
+        size_t incomplete_type_arg_index = 0U;
+
+        target_inference_return_type = substitute_type_ref_for_fit_instance(
+            context,
+            resolution->fit_decl,
+            owner_type,
+            target_inference_return_type);
 
         if (type_args_ok) {
             type_args_ok = callable_collect_call_type_args(
                 context,
                 call_expr,
                 resolution->callable,
+                target_inference_return_type,
                 resolution->decl != NULL && resolution->decl->is_extern,
                 true,
                 inferred_type_args,
@@ -21539,6 +21763,7 @@ static bool record_resolved_callable_from_resolution(
 
             if (inferred_type_args[index] == NULL) {
                 type_args_incomplete = true;
+                incomplete_type_arg_index = index;
                 break;
             }
             persistent_type_arg =
@@ -21548,7 +21773,6 @@ static bool record_resolved_callable_from_resolution(
                     context->analysis, persistent_type_arg)) {
                 free_synthetic_type_ref(persistent_type_arg);
                 type_args_ok = false;
-                persist_failed = true;
                 break;
             }
             normalize_type_ref(persistent_type_arg, context->pointer_size);
@@ -21561,15 +21785,21 @@ static bool record_resolved_callable_from_resolution(
         }
         free(inferred_type_args);
         free(owned_type_args);
-        if (!type_args_ok || type_args_incomplete) {
+        if (type_args_incomplete) {
             free(persistent_type_args);
-            /* Preserve the existing semantic/codegen boundary for calls whose
-             * type arguments cannot be inferred at all. The later codegen
-             * diagnostic remains authoritative; resolved-call metadata is
-             * simply absent for that invalid call. */
-            if (type_args_incomplete && !persist_failed) {
-                goto callable_type_args_done;
-            }
+            resolver_append_error(
+                context,
+                call_expr->token,
+                "AE0525",
+                format_message(
+                    "cannot infer type argument %zu for generic callable '%.*s'; provide an explicit type argument or a target type",
+                    incomplete_type_arg_index,
+                    (int)resolution->callable->name.length,
+                    resolution->callable->name.data));
+            return false;
+        }
+        if (!type_args_ok) {
+            free(persistent_type_args);
             resolver_append_error(
                 context,
                 call_expr->token,
@@ -21581,7 +21811,6 @@ static bool record_resolved_callable_from_resolution(
         slot->callable_type_args = persistent_type_args;
         slot->callable_type_arg_count = type_arg_count;
     }
-callable_type_args_done:
     if (resolution->fit_decl != NULL) {
         slot->kind = resolution->member != NULL && resolution->member->is_static
                          ? FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD
@@ -21741,7 +21970,10 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     note_callable_exception_escape(context, resolution.callable);
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
-                                                                        resolution.callable);
+                                                                        resolution.callable,
+                                                                        NULL,
+                                                                        NULL,
+                                                                        inferred_expr_type_unknown());
                     if (!record_resolved_callable_from_resolution(
                             context, expr, &resolution, NULL)) {
                         return false;
@@ -21842,7 +22074,10 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     note_callable_exception_escape(context, resolution.callable);
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
-                                                                        resolution.callable);
+                                                                        resolution.callable,
+                                                                        static_target.type_decl,
+                                                                        resolution.fit_decl,
+                                                                        static_owner_type);
                     if (!record_resolved_callable_from_resolution(
                             context,
                             expr,
@@ -21932,7 +22167,10 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     note_callable_exception_escape(context, spec_sig);
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
-                                                                        spec_sig);
+                                                                        spec_sig,
+                                                                        NULL,
+                                                                        NULL,
+                                                                        inferred_expr_type_unknown());
                     return true;
                 }
                 return resolver_append_error(
@@ -22018,7 +22256,10 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 note_callable_exception_escape(context, resolution.callable);
                 materialize_callable_type_param_constraint_witnesses(context,
                                                                     expr,
-                                                                    resolution.callable);
+                                                                    resolution.callable,
+                                                                    owner_type_decl,
+                                                                    resolution.fit_decl,
+                                                                    owner_type);
                 if (!record_resolved_callable_from_resolution(
                         context, expr, &resolution, owner_type.type_ref)) {
                     return false;
@@ -22110,7 +22351,10 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 note_callable_exception_escape(context, resolution.callable);
                 materialize_callable_type_param_constraint_witnesses(context,
                                                                     expr,
-                                                                    resolution.callable);
+                                                                    resolution.callable,
+                                                                    NULL,
+                                                                    resolution.fit_decl,
+                                                                    owner_type);
                 if (!record_resolved_callable_from_resolution(
                         context, expr, &resolution, owner_type.type_ref)) {
                     return false;
@@ -22208,7 +22452,10 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     note_callable_exception_escape(context, resolution.callable);
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
-                                                                        resolution.callable);
+                                                                        resolution.callable,
+                                                                        NULL,
+                                                                        NULL,
+                                                                        inferred_expr_type_unknown());
                     if (!record_resolved_callable_from_resolution(
                             context, expr, &resolution, NULL)) {
                         return false;

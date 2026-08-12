@@ -206,6 +206,7 @@
 | **AE0226** | 语义检查错误 | target 'bin' requires a 'main(args: string[])' entry function but none was found |
 | **AE0227** | 语义检查错误 | 'main' entry must have signature 'main(args: string[])' |
 | **AE0228** | 返回语句错误 | 'main' entry must return void |
+| **AE0525** | 泛型使用错误 | cannot infer type argument %zu for generic callable '%.*s'; provide an explicit type argument or a target type |
 | **AE0328** | 成员展开来源错误 | member mix source must resolve to a concrete object type but found '%s' |
 | **AE0329** | 成员展开构造错误 | member mix initializer must be an object construction expression |
 | **AE0330** | 循环依赖 | member mix expansion for type '%.*s' forms a cycle through source type '%.*s' |

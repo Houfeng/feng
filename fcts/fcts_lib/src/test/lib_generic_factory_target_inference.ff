@@ -1,0 +1,64 @@
+open module fcts_lib.test;
+
+/** Cross-package static factory contract used by target-type inference tests. */
+open spec LibTargetFactory<T> {
+  /** Human-readable identity supplied by each factory implementation. */
+  static let label: string;
+
+  /** Mutable state used to verify static witness reads and writes. */
+  static var count: i64;
+
+  /** Create one value of the factory's self type. */
+  static func make(seed: i64): T;
+}
+
+/** Create a value through an imported static factory contract. */
+open func libTargetCreate<T: LibTargetFactory<T>>(seed: i64): T {
+  T.count = T.count + 1;
+  return T.make(seed);
+}
+
+/** Composite result used to infer a type argument nested in a return type. */
+@value
+open type LibTargetEnvelope<T> {
+  /** Value created through the static factory contract. */
+  open let value: T;
+}
+
+/** Create a value whose inferred type argument is nested in the result. */
+open func libTargetCreateEnvelope<T: LibTargetFactory<T>>(
+  seed: i64
+): LibTargetEnvelope<T> {
+  T.count = T.count + 1;
+  return LibTargetEnvelope<T> { value: T.make(seed) };
+}
+
+/** Read an immutable static field through an imported generic constraint. */
+open func libTargetLabel<T: LibTargetFactory<T>>(): string {
+  return T.label;
+}
+
+/** Read mutable static state through an imported generic constraint. */
+open func libTargetCount<T: LibTargetFactory<T>>(): i64 {
+  return T.count;
+}
+
+/** Write mutable static state through an imported generic constraint. */
+open func libTargetSetCount<T: LibTargetFactory<T>>(value: i64): void {
+  T.count = value;
+}
+
+/** Imported owner providing static and instance generic factory methods. */
+open type LibTargetFactoryHost {
+  /** Create through a generic static method whose T may come from the target. */
+  open static func createStatic<T: LibTargetFactory<T>>(seed: i64): T {
+    T.count = T.count + 1;
+    return T.make(seed);
+  }
+
+  /** Create through a generic instance method whose T may come from the target. */
+  open func create<T: LibTargetFactory<T>>(seed: i64): T {
+    T.count = T.count + 1;
+    return T.make(seed);
+  }
+}

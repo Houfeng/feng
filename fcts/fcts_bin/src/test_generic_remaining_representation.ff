@@ -1,0 +1,141 @@
+module fcts_bin;
+
+import std.collections;
+import std.test;
+import std.text;
+import fcts_lib.test;
+
+/** Exercise the remaining managed container paths with observable leaves. */
+func runGenericRemainingLifetime(): i64 {
+  let first = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("remaining-first"),
+    "first",
+    201
+  );
+  let second = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("remaining-second"),
+    "second",
+    202
+  );
+  let replacement = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("remaining-replacement"),
+    "replacement",
+    203
+  );
+
+  let matrix = libRemainingProcessMatrix<LibAdvancedLifetimeLeaf>(
+    first,
+    second,
+    replacement
+  );
+  assert(matrix.length() == 2 && matrix[0].length() == 2 &&
+         matrix[0][0].value.value == "remaining-replacement" &&
+         matrix[0][1].value.value == "remaining-first" &&
+         matrix[1][0].value.value == "remaining-second",
+         "two-dimensional array preserves every replaced value");
+
+  let source: LibAdvancedComposite<LibAdvancedLifetimeLeaf>[] = [
+    first,
+    replacement,
+    second
+  ];
+  let span = libRemainingSliceSpan<LibAdvancedLifetimeLeaf>(
+    source.slice(0, source.length()),
+    1,
+    3
+  );
+  assert(span.length() == 2 &&
+         span.get(0).value.value == "remaining-replacement" &&
+         span.get(1).value.value == "remaining-second",
+         "Span parameter slice and return preserve descriptor-sized elements");
+
+  let variadic = libRemainingVariadic<LibAdvancedLifetimeLeaf>(
+    first,
+    second,
+    replacement
+  );
+  let packed: LibAdvancedComposite<LibAdvancedLifetimeLeaf>[] = [
+    replacement,
+    first
+  ];
+  let forwarded = libRemainingForwardVariadic<LibAdvancedLifetimeLeaf>(
+    ...packed
+  );
+  assert(variadic.length() == 3 &&
+         variadic[2].value.value == "remaining-replacement" &&
+         forwarded.length() == 2 &&
+         forwarded[0].value.value == "remaining-replacement" &&
+         forwarded[1].value.value == "remaining-first",
+         "ordinary and prepacked variadics preserve full generic values");
+
+  let mapped = libRemainingProcessMap<
+    string,
+    LibAdvancedLifetimeLeaf
+  >("current", "observed", first, replacement);
+  assert(mapped.count() == 2 &&
+         mapped.get("current").value.value == "remaining-replacement" &&
+         mapped.get("observed").value.value == "remaining-first",
+         "Map insert read overwrite and return preserve generic values");
+
+  return LibAdvancedLifetimeLeaf.createdCount();
+}
+
+/** Verify the remaining generic representation and standard-container paths. */
+open func test_generic_remaining_representation(): void {
+  describe("generic remaining representation coverage", () {
+    test("enum tuple array and generic reference are direct T values", () {
+      let tone = libRemainingIdentity<LibGenericFitTone>(
+        LibGenericFitTone.High
+      );
+      let tupleValue: LibRemainingTuple<string> = ("tuple", "marker", 211);
+      let tupleResult = libRemainingIdentity<LibRemainingTuple<string> >(
+        tupleValue
+      );
+      let arrayValue: LibAdvancedComposite<string>[] = [
+        LibAdvancedComposite<string>("array", "array-label", 212)
+      ];
+      let arrayResult = libRemainingIdentity<
+        LibAdvancedComposite<string>[]
+      >(arrayValue);
+      let listValue = List<LibAdvancedComposite<string> >();
+      listValue.add(
+        LibAdvancedComposite<string>("list", "list-label", 213)
+      );
+      let listResult = libRemainingIdentity<
+        List<LibAdvancedComposite<string> >
+      >(listValue);
+
+      assert(tone == LibGenericFitTone.High,
+             "imported enum remains a complete trivial T");
+      assert(tupleResult.item1 == "tuple" &&
+             tupleResult.item2 == "marker" && tupleResult.item3 == 211,
+             "closed named tuple remains a complete aggregate T");
+      assert(arrayResult.length() == 1 &&
+             arrayResult[0].value == "array" &&
+             arrayResult[0].revision == 212,
+             "array remains the same managed T value");
+      assert(listResult.size() == 1 &&
+             listResult.get(0).value == "list" &&
+             listResult.get(0).revision == 213,
+             "closed generic reference remains the same managed T value");
+
+      var fitSubject = LibRemainingFixedFitValue<string>(214);
+      fitSubject.replace(215);
+      let fitResult = libRemainingMutateFixedFitReceiver<string>(
+        fitSubject,
+        216
+      );
+      assert(fitSubject.value == 215 && fitResult.value == 216,
+             "fit self references the direct receiver or its parameter copy");
+    });
+
+    test("nested containers finalize every managed leaf exactly once", () {
+      LibAdvancedLifetimeLeaf.resetCounts();
+      let created = runGenericRemainingLifetime();
+      let finalized = LibAdvancedLifetimeLeaf.finalizedCount();
+
+      assert(created == 3 && finalized == created,
+             "matrix Span variadic and Map release every leaf exactly once");
+    });
+  });
+}

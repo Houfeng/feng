@@ -1,0 +1,129 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+/** Verify imported generic fit witnesses and every required subject form. */
+open func test_generic_fit_subject(): void {
+  describe("generic fit subject representation", () {
+    test("reference fit survives imported generic forwarding", () {
+      let subject = LibGenericFitReference<string>("before");
+      let result = libGenericFitForward<
+        string,
+        LibGenericFitReference<string>
+      >(
+        subject,
+        LibGenericFitPacket<string>("after", "reference")
+      );
+
+      assert(subject.value == "after" && subject.writes == 1,
+             "reference fit mutates the original subject exactly once");
+      assert(result.value == "after" && result.marker == "reference",
+             "forwarded witness returns the complete indirect-T packet");
+    });
+
+    test("value fit preserves caller value semantics", () {
+      let subject = LibGenericFitValue<string>("before", "value-owner");
+      let result = libGenericFitForward<
+        string,
+        LibGenericFitValue<string>
+      >(
+        subject,
+        LibGenericFitPacket<string>("after", "value")
+      );
+
+      assert(subject.value == "before" && subject.label == "value-owner",
+             "generic value subject is passed by value");
+      assert(result.value == "after" && result.marker == "value",
+             "fit mutation is visible inside the copied value subject");
+    });
+
+    test("value fit self still mutates its direct receiver", () {
+      var subject = LibGenericFitValue<string>("before", "self");
+
+      subject.write("after");
+
+      assert(subject.value == "after" && subject.label == "self",
+             "implicit self remains the original value receiver address");
+    });
+
+    test("generic instance and static methods copy value parameters", () {
+      let router = LibGenericFitMethodRouter();
+      let instanceSubject = LibGenericFitValue<string>("before", "instance");
+      let staticSubject = LibGenericFitValue<string>("before", "static");
+
+      let instanceResult = router.project<
+        string,
+        LibGenericFitValue<string>
+      >(instanceSubject, "instance-after");
+      let staticResult = LibGenericFitMethodRouter.projectStatic<
+        string,
+        LibGenericFitValue<string>
+      >(staticSubject, "static-after");
+
+      assert(instanceResult == "instance-after" &&
+             instanceSubject.value == "before",
+             "instance generic method mutates only its parameter copy");
+      assert(staticResult == "static-after" &&
+             staticSubject.value == "before",
+             "static generic method mutates only its parameter copy");
+    });
+
+    test("callable address parameters copy value subjects", () {
+      let subject = LibGenericFitValue<string>("before", "callable");
+      let observed = libGenericFitCallableProject<
+        string,
+        LibGenericFitValue<string>
+      >(subject, "after");
+
+      assert(observed.inner == "after" && observed.outer == "before",
+             "nested callable sees its mutation without changing its caller");
+      assert(subject.value == "before" && subject.label == "callable",
+             "callable forwarding preserves the outermost value");
+    });
+
+    test("spec witness address parameters copy composite values", () {
+      let subject = LibGenericFitReference<string>("subject");
+      let packet = LibGenericFitPacket<string>("before", "witness");
+      let observed = libGenericFitWitnessParameter<
+        string,
+        LibGenericFitReference<string>
+      >(subject, packet, "after");
+
+      assert(observed.inner == "after" && observed.outer == "before",
+             "witness receives an independent composite parameter");
+      assert(packet.value == "before" && packet.marker == "witness",
+             "witness parameter mutation does not reach the caller");
+    });
+
+    test("enum fit uses its concrete imported subject representation", () {
+      let value = libGenericFitRead<string, LibGenericFitTone>(
+        LibGenericFitTone.High
+      );
+      let result = libGenericFitForward<string, LibGenericFitTone>(
+        LibGenericFitTone.Low,
+        LibGenericFitPacket<string>("ignored", "enum")
+      );
+
+      assert(value == "high", "enum fit dispatch reads the original item");
+      assert(result.value == "low" && result.marker == "enum",
+             "enum subject remains immutable through generic forwarding");
+    });
+
+    test("spec parameters and returns preserve the fit subject", () {
+      let subject = LibGenericFitReference<string>("before");
+      let view: LibGenericFitSubject<string> = subject;
+      let returned = libGenericFitIdentity<string>(view);
+
+      returned.write("through-spec");
+      let packet = returned.exchange(
+        LibGenericFitPacket<string>(returned.read(), "spec")
+      );
+
+      assert(subject.value == "through-spec" && subject.writes == 1,
+             "returned spec view keeps the reference fit subject");
+      assert(packet.value == "through-spec" && packet.marker == "spec",
+             "spec method parameter and return preserve indirect T");
+    });
+  });
+}

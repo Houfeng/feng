@@ -139,6 +139,7 @@
 | AE0522 | 目标函数类型匹配约束 | AE0107 | expression '%s' does not match expected function type '%s' |
 | AE0523 | 目标函数类型显式标注约束 | AE0135 | expression '%s' requires an explicit target function type to resolve overloads |
 | AE0524 | 预打包变参数组转发约束 | AE0524 | prepacked variadic forwarding requires a variadic call target、prepacked variadic forwarding must begin at the first variadic argument position、prepacked variadic argument must match the target readonly variadic array type |
+| AE0525 | 泛型调用类型实参推导完整性 | （新增） | cannot infer type argument %zu for generic callable '%.*s'; provide an explicit type argument or a target type |
 
 ## 06/07 Spec段
 
