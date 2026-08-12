@@ -2122,6 +2122,7 @@ static void restore_imported_reifiable_deps(
         FengResolvedCallable resolved;
         FengTypeRef *owner_instance_ref = NULL;
         const FengTypeRef **callable_args = NULL;
+        FengTypeRef *target_callable_ref = NULL;
         size_t arg_index;
 
         if (target_symbol == NULL ||
@@ -2189,6 +2190,18 @@ static void restore_imported_reifiable_deps(
             continue;
         }
         resolved.owner_instance_type_ref = owner_instance_ref;
+        target_callable_ref = synthesize_type_ref(
+            dependency->target_callable_type);
+        if (dependency->target_callable_type != NULL &&
+            target_callable_ref == NULL) {
+            continue;
+        }
+        if (target_callable_ref != NULL &&
+            !append_imported_reifiable_dep_ref(
+                storage_owner, target_callable_ref)) {
+            free_synthetic_type_ref(target_callable_ref);
+            continue;
+        }
         if (dependency->callable_type_arg_count > 0U) {
             callable_args = (const FengTypeRef **)calloc(
                 dependency->callable_type_arg_count,
@@ -2224,8 +2237,14 @@ static void restore_imported_reifiable_deps(
             resolved.callable_type_arg_count =
                 dependency->callable_type_arg_count;
         }
-        (void)feng_semantic_reifiable_dep_set_append_callable(dep_set,
-                                                               &resolved);
+        if (dependency->purpose ==
+            FENG_SYMBOL_CALLABLE_DEP_METHOD_VALUE) {
+            (void)feng_semantic_reifiable_dep_set_append_method_value(
+                dep_set, &resolved, target_callable_ref);
+        } else {
+            (void)feng_semantic_reifiable_dep_set_append_callable(
+                dep_set, &resolved);
+        }
     }
 }
 

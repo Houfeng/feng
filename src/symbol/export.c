@@ -1603,6 +1603,8 @@ static bool fill_reifiable_deps(const BuildContext *ctx,
         size_t arg_index;
 
         memset(&dependency, 0, sizeof(dependency));
+        dependency.purpose =
+            (FengSymbolCallableDepPurpose)source_dependency->purpose;
         dependency.kind = source_dependency->kind;
         dependency.target_source_node =
             source_dependency->function_decl != NULL
@@ -1659,6 +1661,22 @@ static bool fill_reifiable_deps(const BuildContext *ctx,
             free(dependency.target_module_name);
             return false;
         }
+        dependency.target_callable_type =
+            build_type_from_type_ref_with_tparams(
+                ctx,
+                source_dependency->target_callable_type_ref,
+                type_params,
+                type_param_count,
+                path,
+                token,
+                out_error);
+        if (source_dependency->target_callable_type_ref != NULL &&
+            dependency.target_callable_type == NULL) {
+            free(dependency.target_module_name);
+            feng_symbol_internal_type_free(
+                dependency.owner_instance_type);
+            return false;
+        }
         if (source_dependency->callable_type_arg_count > 0U) {
             dependency.callable_type_args =
                 (FengSymbolTypeView **)calloc(
@@ -1668,6 +1686,8 @@ static bool fill_reifiable_deps(const BuildContext *ctx,
                 free(dependency.target_module_name);
                 feng_symbol_internal_type_free(
                     dependency.owner_instance_type);
+                feng_symbol_internal_type_free(
+                    dependency.target_callable_type);
                 return feng_symbol_internal_set_error(
                     out_error,
                     path,
@@ -1702,6 +1722,8 @@ static bool fill_reifiable_deps(const BuildContext *ctx,
                     free(dependency.target_module_name);
                     feng_symbol_internal_type_free(
                         dependency.owner_instance_type);
+                    feng_symbol_internal_type_free(
+                        dependency.target_callable_type);
                     return false;
                 }
             }
@@ -1719,6 +1741,7 @@ static bool fill_reifiable_deps(const BuildContext *ctx,
             free(dependency.callable_type_args);
             free(dependency.target_module_name);
             feng_symbol_internal_type_free(dependency.owner_instance_type);
+            feng_symbol_internal_type_free(dependency.target_callable_type);
             return feng_symbol_internal_set_error(
                 out_error,
                 path,

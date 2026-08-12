@@ -15,7 +15,7 @@
 
 #define FENG_SYMBOL_FT_BYTE_ORDER_LE 0x01U
 #define FENG_SYMBOL_FT_VERSION_MAJOR 0x01U
-#define FENG_SYMBOL_FT_VERSION_MINOR 0x02U
+#define FENG_SYMBOL_FT_VERSION_MINOR 0x03U
 
 #define FENG_SYMBOL_FT_HEADER_SIZE 64U
 #define FENG_SYMBOL_FT_SECTION_ENTRY_SIZE 32U
@@ -203,10 +203,11 @@ typedef struct FengSymbolFtCallableDepRecord {
     uint32_t target_module_str;
     uint32_t target_symbol_id;
     uint16_t kind;
-    uint16_t reserved0;
+    uint16_t purpose;
     uint32_t owner_instance_type_id;
     uint32_t callable_arg_start;
     uint32_t callable_arg_count;
+    uint32_t target_callable_type_id;
 } FengSymbolFtCallableDepRecord;
 
 typedef struct FengSymbolFtSpanRecord {

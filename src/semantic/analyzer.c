@@ -19494,6 +19494,8 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
     const FengDecl *target_decl;
     CallableValueResolution resolution;
     FengSpecCoercionCallableSource source;
+    const FengTypeRef *receiver_type_ref = NULL;
+    FengTypeRef *synthetic_receiver_type_ref = NULL;
 
     if (context == NULL || context->analysis == NULL || expr == NULL ||
         expected_type_ref == NULL) {
@@ -19515,6 +19517,74 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
         resolution.callable_member == NULL) {
         source = FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER;
     }
+    if (source == FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE &&
+        expr->kind == FENG_EXPR_MEMBER && expr->as.member.object != NULL) {
+        InferredExprType receiver_type =
+            infer_expr_type(context, expr->as.member.object);
+
+        if (receiver_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+            receiver_type_ref = receiver_type.type_ref;
+        } else if (receiver_type.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
+                   receiver_type.type_decl != NULL &&
+                   receiver_type.type_decl->kind == FENG_DECL_TYPE) {
+            const FengDecl *receiver_decl = receiver_type.type_decl;
+            size_t type_param_count =
+                receiver_decl->as.type_decl.type_param_count;
+
+            synthetic_receiver_type_ref = (FengTypeRef *)calloc(
+                1U, sizeof(*synthetic_receiver_type_ref));
+            if (synthetic_receiver_type_ref != NULL) {
+                synthetic_receiver_type_ref->token = expr->token;
+                synthetic_receiver_type_ref->kind = FENG_TYPE_REF_NAMED;
+                synthetic_receiver_type_ref->as.named.segments =
+                    (FengSlice *)malloc(sizeof(FengSlice));
+                synthetic_receiver_type_ref->as.named.type_args =
+                    type_param_count > 0U
+                        ? (FengTypeRef **)calloc(
+                              type_param_count,
+                              sizeof(*synthetic_receiver_type_ref->as.named.type_args))
+                        : NULL;
+                if (synthetic_receiver_type_ref->as.named.segments != NULL &&
+                    (type_param_count == 0U ||
+                     synthetic_receiver_type_ref->as.named.type_args != NULL)) {
+                    bool complete = true;
+
+                    synthetic_receiver_type_ref->as.named.segments[0] =
+                        receiver_decl->as.type_decl.name;
+                    synthetic_receiver_type_ref->as.named.segment_count = 1U;
+                    synthetic_receiver_type_ref->as.named.type_arg_count =
+                        type_param_count;
+                    for (size_t index = 0U;
+                         index < type_param_count;
+                         ++index) {
+                        FengTypeRef *arg =
+                            (FengTypeRef *)calloc(1U, sizeof(*arg));
+
+                        if (arg == NULL) {
+                            complete = false;
+                            break;
+                        }
+                        arg->token = receiver_decl->as.type_decl.type_params[index].token;
+                        arg->kind = FENG_TYPE_REF_NAMED;
+                        arg->as.named.segments =
+                            (FengSlice *)malloc(sizeof(FengSlice));
+                        if (arg->as.named.segments == NULL) {
+                            free(arg);
+                            complete = false;
+                            break;
+                        }
+                        arg->as.named.segments[0] =
+                            receiver_decl->as.type_decl.type_params[index].name;
+                        arg->as.named.segment_count = 1U;
+                        synthetic_receiver_type_ref->as.named.type_args[index] = arg;
+                    }
+                    if (complete) {
+                        receiver_type_ref = synthetic_receiver_type_ref;
+                    }
+                }
+            }
+        }
+    }
     (void)feng_semantic_record_callable_spec_coercion_site(
         context->analysis,
         expr,
@@ -19525,7 +19595,9 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
         resolution.callable_member,
         resolution.callable_owner_type_decl,
         resolution.callable_fit_decl,
+        receiver_type_ref,
         resolution.lambda_expr);
+    free_synthetic_type_ref(synthetic_receiver_type_ref);
 }
 
 static void record_abi_function_pointer_site(ResolveContext *context,

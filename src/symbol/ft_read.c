@@ -1401,9 +1401,11 @@ static bool parse_callable_dependencies(ReadContext *ctx,
         uint32_t target_module_str = read_u32_le(record + 0x04);
         uint32_t target_symbol_id = read_u32_le(record + 0x08);
         uint16_t kind = read_u16_le(record + 0x0C);
+        uint16_t purpose = read_u16_le(record + 0x0E);
         uint32_t owner_instance_type_id = read_u32_le(record + 0x10);
         uint32_t callable_arg_start = read_u32_le(record + 0x14);
         uint32_t callable_arg_count = read_u32_le(record + 0x18);
+        uint32_t target_callable_type_id = read_u32_le(record + 0x1C);
         const char *target_module_name = string_at(ctx, target_module_str);
         FengSymbolDeclView *caller = decl_by_symbol_id(ctx, caller_symbol_id);
         FengSymbolCallableDepView *grown;
@@ -1414,6 +1416,7 @@ static bool parse_callable_dependencies(ReadContext *ctx,
             target_module_name == NULL || target_symbol_id == 0U ||
             kind < FENG_RESOLVED_CALLABLE_FUNCTION ||
             kind > FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD ||
+            purpose > FENG_SYMBOL_CALLABLE_DEP_METHOD_VALUE ||
             callable_arg_start > tseq_total ||
             callable_arg_count > tseq_total - callable_arg_start) {
             return feng_symbol_internal_set_error(
@@ -1439,19 +1442,28 @@ static bool parse_callable_dependencies(ReadContext *ctx,
         memset(dependency, 0, sizeof(*dependency));
         ++caller->reifiable_callable_dep_count;
         dependency->kind = (FengResolvedCallableKind)kind;
+        dependency->purpose =
+            (FengSymbolCallableDepPurpose)purpose;
         dependency->target_module_name =
             feng_symbol_internal_dup_cstr(target_module_name);
         dependency->target_symbol_id = target_symbol_id;
         dependency->owner_instance_type = parse_type_by_id(
             ctx, owner_instance_type_id, path, out_error);
+        dependency->target_callable_type = parse_type_by_id(
+            ctx, target_callable_type_id, path, out_error);
         if (dependency->target_module_name == NULL ||
             (owner_instance_type_id != 0U &&
-             dependency->owner_instance_type == NULL)) {
+             dependency->owner_instance_type == NULL) ||
+            (target_callable_type_id != 0U &&
+             dependency->target_callable_type == NULL)) {
             free(dependency->target_module_name);
             dependency->target_module_name = NULL;
             feng_symbol_internal_type_free(
                 dependency->owner_instance_type);
             dependency->owner_instance_type = NULL;
+            feng_symbol_internal_type_free(
+                dependency->target_callable_type);
+            dependency->target_callable_type = NULL;
             return false;
         }
         if (current_module_name != NULL &&

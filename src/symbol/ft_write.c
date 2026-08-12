@@ -1000,6 +1000,12 @@ static bool writer_select_decl_dependencies(WriterContext *ctx,
                                              out_error)) {
             return false;
         }
+        if (!writer_select_type_dependencies(ctx,
+                                             dependency->target_callable_type,
+                                             path,
+                                             out_error)) {
+            return false;
+        }
         for (arg_index = 0U;
              arg_index < dependency->callable_type_arg_count;
              ++arg_index) {
@@ -1535,16 +1541,25 @@ static bool writer_emit_callable_deps(WriterContext *ctx,
                                             dependency->local_target_decl)
                                       : dependency->target_symbol_id;
         record.kind = (uint16_t)dependency->kind;
+        record.purpose = (uint16_t)dependency->purpose;
         record.owner_instance_type_id = writer_serialize_type(
             ctx,
             dependency->owner_instance_type,
             path,
             token,
             out_error);
+        record.target_callable_type_id = writer_serialize_type(
+            ctx,
+            dependency->target_callable_type,
+            path,
+            token,
+            out_error);
         if (record.target_module_str == 0U ||
             record.target_symbol_id == 0U ||
             (dependency->owner_instance_type != NULL &&
-             record.owner_instance_type_id == 0U)) {
+             record.owner_instance_type_id == 0U) ||
+            (dependency->target_callable_type != NULL &&
+             record.target_callable_type_id == 0U)) {
             return false;
         }
         if (dependency->callable_type_arg_count > 0U) {

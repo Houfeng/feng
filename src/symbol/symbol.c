@@ -233,6 +233,7 @@ static void decl_dispose(FengSymbolDeclView *decl, bool free_self) {
 
         free(dependency->target_module_name);
         feng_symbol_internal_type_free(dependency->owner_instance_type);
+        feng_symbol_internal_type_free(dependency->target_callable_type);
         for (size_t arg_index = 0U;
              arg_index < dependency->callable_type_arg_count;
              ++arg_index) {
@@ -517,6 +518,9 @@ static void remap_decl_type_targets(FengSymbolDeclView *decl,
         remap_type_target(dependency->owner_instance_type,
                           pairs,
                           pair_count);
+        remap_type_target(dependency->target_callable_type,
+                          pairs,
+                          pair_count);
         for (size_t arg_index = 0U;
              arg_index < dependency->callable_type_arg_count;
              ++arg_index) {
@@ -730,6 +734,7 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
 
             target_dependency->local_target_decl =
                 source_dependency->local_target_decl;
+            target_dependency->purpose = source_dependency->purpose;
             target_dependency->kind = source_dependency->kind;
             target_dependency->target_symbol_id =
                 source_dependency->target_symbol_id;
@@ -740,10 +745,16 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
                 feng_symbol_internal_type_clone(
                     source_dependency->owner_instance_type,
                     out_error);
+            target_dependency->target_callable_type =
+                feng_symbol_internal_type_clone(
+                    source_dependency->target_callable_type,
+                    out_error);
             if ((source_dependency->target_module_name != NULL &&
                  target_dependency->target_module_name == NULL) ||
                 (source_dependency->owner_instance_type != NULL &&
-                 target_dependency->owner_instance_type == NULL)) {
+                 target_dependency->owner_instance_type == NULL) ||
+                (source_dependency->target_callable_type != NULL &&
+                 target_dependency->target_callable_type == NULL)) {
                 decl_dispose(clone, true);
                 return NULL;
             }

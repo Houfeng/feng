@@ -1,0 +1,111 @@
+open module fcts_lib.test;
+
+/** Produces one value from an imported value-receiver method closure. */
+open spec LibValueMethodProducer<T>(): T;
+
+/** Replaces one value in an imported value-receiver method closure. */
+open spec LibValueMethodReplacer<T>(next: T): T;
+
+/** Generic value receiver whose final layout is selected by the consumer. */
+@value
+open type LibValueMethodCell<T> {
+  /** Payload copied into the method-value closure. */
+  open var value: T;
+
+  /** Construct one populated receiver. */
+  func LibValueMethodCell(value: T) {
+    self.value = value;
+  }
+
+  /** Read the current captured payload. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Replace the captured payload and return its previous value. */
+  open func replace(next: T): T {
+    let previous = self.value;
+    self.value = next;
+    return previous;
+  }
+}
+
+/** Result proving that owner-level T and method-level U stay independent. */
+@value
+open type LibValueMethodPair<T, U> {
+  /** Value read through the owner-level method closure. */
+  open var owner: T;
+
+  /** Value read through the method-level method closure. */
+  open var method: U;
+
+  /** Construct a result containing both descriptor domains. */
+  func LibValueMethodPair(owner: T, method: U) {
+    self.owner = owner;
+    self.method = method;
+  }
+}
+
+/** Generic value owner that forms method values from self in shared bodies. */
+@value
+open type LibValueMethodOwner<T> {
+  /** Owner-level payload. */
+  open var value: T;
+
+  /** Construct one populated owner. */
+  func LibValueMethodOwner(value: T) {
+    self.value = value;
+  }
+
+  /** Read the owner-level payload. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Form and return self.read inside an imported generic owner method. */
+  open func reader(): LibValueMethodProducer<T> {
+    return self.read;
+  }
+
+  /**
+   * Form one method value from owner T and another from method U in the same
+   * imported shared body.
+   */
+  open func readBoth<U>(other: LibValueMethodCell<U>): LibValueMethodPair<T, U> {
+    let ownerReader: LibValueMethodProducer<T> = self.read;
+    let methodReader: LibValueMethodProducer<U> = other.read;
+    return LibValueMethodPair<T, U>(ownerReader(), methodReader());
+  }
+}
+
+/** Generic tuple whose imported fit method is used as a method value. */
+open type LibValueMethodTuple<T>(T, string);
+
+/** Supply an imported fit method for the generic tuple receiver. */
+open fit LibValueMethodTuple<T> {
+  /** Return the tuple's descriptor-sized generic field. */
+  open func first(): T {
+    return self.item1;
+  }
+}
+
+/** Forward one method closure through the existing generic callable ABI. */
+open func libForwardValueMethodProducer<T>(
+  producer: LibValueMethodProducer<T>
+): LibValueMethodProducer<T> {
+  return producer;
+}
+
+/** Form value.replace inside an imported top-level generic shared body. */
+open func libBindValueMethodReplace<T>(
+  value: LibValueMethodCell<T>
+): LibValueMethodReplacer<T> {
+  return value.replace;
+}
+
+/** Form an imported tuple fit method in a top-level generic shared body. */
+open func libBindValueMethodTupleFirst<T>(
+  value: LibValueMethodTuple<T>
+): LibValueMethodProducer<T> {
+  return libForwardValueMethodProducer<T>(value.first);
+}

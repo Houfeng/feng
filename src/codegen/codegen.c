@@ -1558,6 +1558,19 @@ typedef struct CGClosedArrayDescriptorNode {
     char *c_name;
 } CGClosedArrayDescriptorNode;
 
+/* Generated support shared by ordinary fixed-layout binding and reified
+ * method-value formation. All strings are owned by the CG registry. */
+typedef struct CGCallableMethodValueSupport {
+    const struct UserSpec *spec;
+    const struct UserType *owner;
+    const struct UserMethod *method;
+    char *c_bind_fn;
+    char *c_adapter_fn;
+    char *c_value_closure_struct;
+    char *c_value_closure_desc;
+    char *c_reified_descriptor;
+} CGCallableMethodValueSupport;
+
 /* Compile-time source of reified dependency slots for one shared body. The
  * generated program performs no source test: codegen selects a fixed `_td`
  * or `_desc` expression for every slot access. */
@@ -1632,12 +1645,7 @@ typedef struct CG {
     } *callable_fn_values;
     size_t callable_fn_value_count;
     size_t callable_fn_value_capacity;
-    struct {
-        const struct UserSpec *spec;
-        const struct UserType *owner;
-        const struct UserMethod *method;
-        char *c_bind_fn;
-    } *callable_method_values;
+    CGCallableMethodValueSupport *callable_method_values;
     size_t callable_method_value_count;
     size_t callable_method_value_capacity;
     /* Fit registry (Step 4b-γ). Sibling of user_specs. Each entry models
@@ -2336,6 +2344,14 @@ static bool cg_emit_closed_callable_fdesc(
     FengToken blame,
     const char *identity_name,
     const char *display_name,
+    char **out_expr);
+static bool cg_emit_closed_callable_dep_expr(
+    CG *cg,
+    const FengReifiableCallableDep *callable_dep,
+    const FengTypeParam *caller_type_params,
+    size_t caller_type_param_count,
+    FengTypeRef *const *caller_type_args,
+    FengToken blame,
     char **out_expr);
 static bool cg_activate_callable_dep_mapping(
     CG *cg,
@@ -6283,14 +6299,17 @@ static bool cg_emit_fixed_value_callable_method_support(
     const UserMethod *method,
     FengToken blame,
     const char *adapter_name,
-    const char *bind_name) {
-    Buf closure_struct;
-    Buf closure_desc;
+    const char *bind_name,
+    const char **out_closure_struct,
+    const char **out_closure_desc) {
+    char *closure_struct = NULL;
+    char *closure_desc = NULL;
     CGType receiver_type;
     size_t receiver_pointer_slot_count;
 
     if (cg == NULL || spec == NULL || owner == NULL || method == NULL ||
         adapter_name == NULL || bind_name == NULL ||
+        out_closure_struct == NULL || out_closure_desc == NULL ||
         owner->c_struct_name == NULL || owner->c_aggregate_desc_name == NULL) {
         return cg_fail(cg, blame,
             "CE0028", "codegen: invalid fixed value callable method-value request");
@@ -6302,13 +6321,23 @@ static bool cg_emit_fixed_value_callable_method_support(
     receiver_pointer_slot_count =
         cg_aggregate_pointer_slot_count(&receiver_type);
 
-    buf_init(&closure_struct);
-    buf_init(&closure_desc);
-    buf_append_fmt(&closure_struct, "%s__ValueClosure", bind_name);
-    buf_append_fmt(&closure_desc, "%s__ValueClosureDesc", bind_name);
-    if (closure_struct.data == NULL || closure_desc.data == NULL) {
-        buf_free(&closure_struct);
-        buf_free(&closure_desc);
+    {
+        Buf name;
+
+        buf_init(&name);
+        buf_append_fmt(&name, "%s__ValueClosure", bind_name);
+        closure_struct = name.data;
+    }
+    {
+        Buf name;
+
+        buf_init(&name);
+        buf_append_fmt(&name, "%s__ValueClosureDesc", bind_name);
+        closure_desc = name.data;
+    }
+    if (closure_struct == NULL || closure_desc == NULL) {
+        free(closure_struct);
+        free(closure_desc);
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
@@ -6316,7 +6345,7 @@ static bool cg_emit_fixed_value_callable_method_support(
                    "struct %s {\n"
                    "    FengManagedHeader _hdr;\n"
                    "    void *_self;\n    ",
-                   closure_struct.data);
+                   closure_struct);
     cg_emit_callable_abi_return_type(&cg->type_defs,
                                      spec->callable_return_type,
                                      spec->callable_return_abi_kind);
@@ -6339,10 +6368,10 @@ static bool cg_emit_fixed_value_callable_method_support(
         buf_init(&receiver_base);
         buf_append_fmt(&receiver_base,
                        "offsetof(struct %s, _receiver)",
-                       closure_struct.data);
+                       closure_struct);
         if (receiver_base.data == NULL) {
-            buf_free(&closure_struct);
-            buf_free(&closure_desc);
+            free(closure_struct);
+            free(closure_desc);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(&cg->type_defs,
@@ -6351,11 +6380,11 @@ static bool cg_emit_fixed_value_callable_method_support(
                        "    feng_aggregate_release(&_o->_receiver, &%s);\n"
                        "}\n\n"
                        "static const FengManagedFieldDescriptor %s__managed_fields[] = {\n",
-                       closure_desc.data,
-                       closure_struct.data,
-                       closure_struct.data,
+                       closure_desc,
+                       closure_struct,
+                       closure_struct,
                        owner->c_aggregate_desc_name,
-                       closure_desc.data);
+                       closure_desc);
         cg_emit_aggregate_pointer_slot_rows(&cg->type_defs,
                                             receiver_base.data,
                                             &receiver_type);
@@ -6369,18 +6398,18 @@ static bool cg_emit_fixed_value_callable_method_support(
                    "    .size = sizeof(struct %s),\n"
                    "    .default_zero_init = NULL,\n"
                    "    .finalizer = NULL,\n",
-                   closure_desc.data,
-                   closure_struct.data,
-                   closure_struct.data);
+                   closure_desc,
+                   closure_struct,
+                   closure_struct);
     if (receiver_pointer_slot_count > 0U) {
         buf_append_fmt(&cg->type_defs,
                        "    .release_children = %s__release_children,\n"
                        "    .is_potentially_cyclic = true,\n"
                        "    .managed_field_count = %zu,\n"
                        "    .managed_fields = %s__managed_fields,\n",
-                       closure_desc.data,
+                       closure_desc,
                        receiver_pointer_slot_count,
-                       closure_desc.data);
+                       closure_desc);
     } else {
         buf_append_cstr(&cg->type_defs,
                         "    .release_children = NULL,\n"
@@ -6431,8 +6460,8 @@ static bool cg_emit_fixed_value_callable_method_support(
     buf_append_fmt(&cg->witness_defs,
                    ") {\n    struct %s *_bound = (struct %s *)_closure;\n"
                    "    struct %s *_self = &_bound->_receiver;\n    ",
-                   closure_struct.data,
-                   closure_struct.data,
+                   closure_struct,
+                   closure_struct,
                    owner->c_struct_name);
     if (spec->callable_return_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
         buf_append_cstr(&cg->witness_defs, "*(");
@@ -6463,9 +6492,9 @@ static bool cg_emit_fixed_value_callable_method_support(
                    spec->c_closure_struct_name,
                    bind_name,
                    owner->c_struct_name,
-                   closure_struct.data,
-                   closure_struct.data,
-                   closure_desc.data,
+                   closure_struct,
+                   closure_struct,
+                   closure_desc,
                    adapter_name);
     if (receiver_pointer_slot_count > 0U) {
         buf_append_fmt(&cg->witness_defs,
@@ -6482,8 +6511,8 @@ static bool cg_emit_fixed_value_callable_method_support(
                    "}\n\n",
                    spec->c_closure_struct_name);
 
-    buf_free(&closure_struct);
-    buf_free(&closure_desc);
+    *out_closure_struct = closure_struct;
+    *out_closure_desc = closure_desc;
     return true;
 }
 
@@ -6494,6 +6523,8 @@ static bool cg_ensure_callable_method_value(CG *cg, const UserSpec *spec,
                                             const char **out_bind_fn) {
     char *adapter_name = NULL;
     char *bind_name = NULL;
+    const char *value_closure_struct = NULL;
+    const char *value_closure_desc = NULL;
 
     if (out_bind_fn == NULL || spec == NULL || owner == NULL || method == NULL ||
         spec->form != FENG_SPEC_FORM_CALLABLE) {
@@ -6548,7 +6579,9 @@ static bool cg_ensure_callable_method_value(CG *cg, const UserSpec *spec,
                                                          method,
                                                          blame,
                                                          adapter_name,
-                                                         bind_name)) {
+                                                         bind_name,
+                                                         &value_closure_struct,
+                                                         &value_closure_desc)) {
             free(adapter_name);
             free(bind_name);
             return false;
@@ -6635,15 +6668,59 @@ static bool cg_ensure_callable_method_value(CG *cg, const UserSpec *spec,
                    adapter_name);
 
 record_callable_method_value:
+    memset(&cg->callable_method_values[cg->callable_method_value_count],
+           0,
+           sizeof cg->callable_method_values[cg->callable_method_value_count]);
     cg->callable_method_values[cg->callable_method_value_count].spec = spec;
     cg->callable_method_values[cg->callable_method_value_count].owner = owner;
     cg->callable_method_values[cg->callable_method_value_count].method = method;
     cg->callable_method_values[cg->callable_method_value_count].c_bind_fn = bind_name;
+    cg->callable_method_values[cg->callable_method_value_count].c_adapter_fn =
+        adapter_name;
+    cg->callable_method_values[cg->callable_method_value_count].c_value_closure_struct =
+        (char *)value_closure_struct;
+    cg->callable_method_values[cg->callable_method_value_count].c_value_closure_desc =
+        (char *)value_closure_desc;
     cg->callable_method_value_count += 1;
 
-    free(adapter_name);
     *out_bind_fn = bind_name;
     return true;
+}
+
+/* Return generated method-value support after ensuring its adapter and
+ * closure layout have been emitted. The returned entry is CG-owned. */
+static const CGCallableMethodValueSupport *cg_callable_method_value_support(
+    CG *cg,
+    const UserSpec *spec,
+    const UserType *owner,
+    const UserMethod *method,
+    FengToken blame) {
+    const char *unused_bind_fn = NULL;
+
+    if (!cg_ensure_callable_method_value(cg,
+                                         spec,
+                                         owner,
+                                         method,
+                                         blame,
+                                         &unused_bind_fn)) {
+        return NULL;
+    }
+    for (size_t index = 0U;
+         index < cg->callable_method_value_count;
+         ++index) {
+        const CGCallableMethodValueSupport *support =
+            &cg->callable_method_values[index];
+
+        if (support->spec == spec && support->owner == owner &&
+            support->method == method) {
+            return support;
+        }
+    }
+    (void)cg_fail(cg,
+                  blame,
+                  "IE0002",
+                  "codegen: callable method-value support was not retained");
+    return NULL;
 }
 
 /* ---- Generic registry helpers (G6) ---- */
@@ -8524,6 +8601,41 @@ static bool cg_collect_closed_reifiable_dep_instances_inner(
         FengTypeRef **callee_args = NULL;
         size_t callee_count = 0U;
         bool ok;
+
+        if (callable_dep->purpose ==
+            FENG_REIFIABLE_CALLABLE_DEP_METHOD_VALUE) {
+            const FengTypeRef *method_value_refs[] = {
+                callable_dep->owner_instance_type_ref,
+                callable_dep->target_callable_type_ref,
+            };
+
+            for (size_t ref_index = 0U;
+                 ref_index < sizeof(method_value_refs) /
+                                 sizeof(method_value_refs[0]);
+                 ++ref_index) {
+                FengTypeRef *closed_ref = cg_type_ref_substitute(
+                    method_value_refs[ref_index],
+                    type_params,
+                    type_param_count,
+                    type_args);
+
+                if (closed_ref == NULL) {
+                    return cg_fail(cg,
+                                   blame,
+                                   "IE0001",
+                                   "codegen: out of memory");
+                }
+                ok = cg_collect_generic_instances_from_type_ref_from_program(
+                    cg,
+                    closed_ref,
+                    caller_scope,
+                    reference_program);
+                cg_type_ref_free(closed_ref);
+                if (!ok) {
+                    return false;
+                }
+            }
+        }
 
         if (!cg_close_callable_dep_type_args(cg,
                                              callable_dep,
@@ -18778,6 +18890,7 @@ static bool cg_emit_callable_method_coercion(CG *cg,
     const UserFit *selected_fit = NULL;
     const FengDecl *receiver_owner_decl = NULL;
     const char *bind_fn = NULL;
+    char *method_value_descriptor_expr = NULL;
     char *receiver_argument = NULL;
     ExprResult recv;
 
@@ -18800,10 +18913,105 @@ static bool cg_emit_callable_method_coercion(CG *cg,
     if (!cg_emit_expr(cg, e->as.member.object, &recv)) {
         return false;
     }
-    if (recv.type == NULL || recv.type->kind != CG_TYPE_OBJECT || recv.type->user == NULL) {
+    if (recv.type == NULL || recv.type->kind != CG_TYPE_OBJECT) {
         er_free(&recv);
         return cg_fail(cg, e->token,
             "CE0112", "codegen: callable method coercion source must be an object value");
+    }
+    if (recv.type->user == NULL ||
+        recv.type->user->generic_context_type_param_count > 0U) {
+        FengReifiableCallableDep dependency;
+        char *descriptor_name;
+        char *closure_name;
+
+        memset(&dependency, 0, sizeof(dependency));
+        dependency.purpose = FENG_REIFIABLE_CALLABLE_DEP_METHOD_VALUE;
+        dependency.kind = cs->callable_fit_decl != NULL
+                              ? FENG_RESOLVED_CALLABLE_FIT_METHOD
+                              : FENG_RESOLVED_CALLABLE_TYPE_METHOD;
+        dependency.owner_type_decl = cs->callable_owner_type_decl;
+        dependency.member = cs->callable_member;
+        dependency.fit_decl = cs->callable_fit_decl;
+        dependency.owner_instance_type_ref =
+            cs->callable_receiver_type_ref;
+        dependency.target_callable_type_ref =
+            cs->target_spec_type_ref;
+        method_value_descriptor_expr =
+            cg_callable_descriptor_expr_for_dep(
+                cg, &dependency, e->token);
+        receiver_argument =
+            e->as.member.object->kind == FENG_EXPR_SELF
+                ? strdup(recv.c_expr)
+                : cg_aggregate_result_address_dup(&recv);
+        descriptor_name = cg_fresh_temp(cg, "_method_value_desc");
+        closure_name = cg_fresh_temp(cg, "_method_value_closure");
+        if (method_value_descriptor_expr == NULL ||
+            receiver_argument == NULL || descriptor_name == NULL ||
+            closure_name == NULL) {
+            free(descriptor_name);
+            free(closure_name);
+            free(receiver_argument);
+            free(method_value_descriptor_expr);
+            er_free(&recv);
+            return cg_fail(cg,
+                           e->token,
+                           "IE0001",
+                           "codegen: failed to lower a reified value method receiver");
+        }
+        buf_append_fmt(
+            cg->cur_body,
+            "    const FengMethodValueDescriptor *%s = "
+            "(const FengMethodValueDescriptor *)%s;\n"
+            "    FengMethodValueClosurePrefix *%s = "
+            "(FengMethodValueClosurePrefix *)feng_object_new(%s->closure_desc);\n"
+            "    %s->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
+            "    %s->_self = NULL;\n"
+            "    %s->invoke = %s->invoke;\n"
+            "    feng_aggregate_assign((char *)%s + %s->receiver_offset, "
+            "%s, %s->receiver_desc);\n",
+            descriptor_name,
+            method_value_descriptor_expr,
+            closure_name,
+            descriptor_name,
+            closure_name,
+            closure_name,
+            closure_name,
+            descriptor_name,
+            closure_name,
+            descriptor_name,
+            receiver_argument,
+            descriptor_name);
+        {
+            Buf expression;
+
+            buf_init(&expression);
+            buf_append_fmt(&expression,
+                           "(struct %s *)%s",
+                           target_spec->c_closure_struct_name,
+                           closure_name);
+            out->c_expr = expression.data;
+        }
+        out->type = cgtype_new(CG_TYPE_CALLABLE);
+        if (out->c_expr == NULL || out->type == NULL) {
+            er_free(out);
+            free(descriptor_name);
+            free(closure_name);
+            free(receiver_argument);
+            free(method_value_descriptor_expr);
+            er_free(&recv);
+            return cg_fail(cg,
+                           e->token,
+                           "IE0001",
+                           "codegen: out of memory");
+        }
+        out->type->user_spec = target_spec;
+        out->owns_ref = true;
+        free(descriptor_name);
+        free(closure_name);
+        free(receiver_argument);
+        free(method_value_descriptor_expr);
+        er_free(&recv);
+        return true;
     }
     receiver_owner_decl = recv.type->user->is_generic_instance
                               ? recv.type->user->generic_origin_decl
@@ -18847,6 +19055,7 @@ static bool cg_emit_callable_method_coercion(CG *cg,
     if (!cg_ensure_callable_method_value(cg, target_spec, recv.type->user,
                                          method, e->token, &bind_fn)) {
         free(receiver_argument);
+        free(method_value_descriptor_expr);
         er_free(&recv);
         return false;
     }
@@ -18868,6 +19077,7 @@ static bool cg_emit_callable_method_coercion(CG *cg,
     out->type->user_spec = target_spec;
     out->owns_ref = true;
     free(receiver_argument);
+    free(method_value_descriptor_expr);
     er_free(&recv);
     return true;
 }
@@ -37022,6 +37232,18 @@ static bool cg_callable_dep_set_has_descriptor_data(
         cg, dep_set, NULL, 0U);
 }
 
+/* Method-value dependencies carry their own closed receiver/callable
+ * metadata and therefore always consume one descriptor slot. Direct calls
+ * keep the existing dependency-set emptiness optimisation. */
+static bool cg_callable_dep_requires_slot(
+    const CG *cg,
+    const FengReifiableCallableDep *dep) {
+    return dep != NULL &&
+           (dep->purpose == FENG_REIFIABLE_CALLABLE_DEP_METHOD_VALUE ||
+            cg_callable_dep_set_has_descriptor_data(
+                cg, cg_callable_dep_set(cg, dep)));
+}
+
 /* Canonical open callable dependency key used by both shared-body slot
  * assignment and closed wrapper materialization. */
 static char *cg_callable_dep_sort_key(
@@ -37036,6 +37258,7 @@ static char *cg_callable_dep_sort_key(
         return NULL;
     }
     buf_init(&key);
+    buf_append_fmt(&key, "purpose=%u|", (unsigned)dep->purpose);
     buf_append_cstr(&key, identity);
     free(identity);
     if (dep->owner_instance_type_ref != NULL) {
@@ -37070,6 +37293,21 @@ static char *cg_callable_dep_sort_key(
         buf_append_cstr(&key, arg_key);
         free(arg_key);
     }
+    if (dep->target_callable_type_ref != NULL) {
+        char *target_key = cg_reifiable_sort_key(
+            dep->target_callable_type_ref,
+            caller_type_param_names,
+            caller_type_param_count,
+            true);
+
+        if (target_key == NULL) {
+            buf_free(&key);
+            return NULL;
+        }
+        buf_append_cstr(&key, "|target=");
+        buf_append_cstr(&key, target_key);
+        free(target_key);
+    }
     return key.data;
 }
 
@@ -37097,10 +37335,8 @@ static bool cg_activate_callable_dep_mapping(
     for (size_t index = 0U;
          index < dep_set->callable_dep_count;
          ++index) {
-        if (cg_callable_dep_set_has_descriptor_data(
-                cg,
-                cg_callable_dep_set(cg,
-                                    &dep_set->callable_deps[index]))) {
+        if (cg_callable_dep_requires_slot(
+                cg, &dep_set->callable_deps[index])) {
             ++count;
         }
     }
@@ -37118,10 +37354,8 @@ static bool cg_activate_callable_dep_mapping(
         for (size_t index = 0U;
              index < dep_set->callable_dep_count;
              ++index) {
-            if (!cg_callable_dep_set_has_descriptor_data(
-                    cg,
-                    cg_callable_dep_set(
-                        cg, &dep_set->callable_deps[index]))) {
+            if (!cg_callable_dep_requires_slot(
+                    cg, &dep_set->callable_deps[index])) {
                 continue;
             }
             keys[next] = cg_callable_dep_sort_key(
@@ -37319,7 +37553,6 @@ static char *cg_callable_descriptor_expr_for_dep(
     CG *cg,
     const FengReifiableCallableDep *dep,
     FengToken blame) {
-    const FengReifiableDepSet *callee_dep_set;
     FengSlice *param_names = NULL;
     char *key = NULL;
     char *result = NULL;
@@ -37327,8 +37560,7 @@ static char *cg_callable_descriptor_expr_for_dep(
     if (cg == NULL || dep == NULL) {
         return NULL;
     }
-    callee_dep_set = cg_callable_dep_set(cg, dep);
-    if (!cg_callable_dep_set_has_descriptor_data(cg, callee_dep_set)) {
+    if (!cg_callable_dep_requires_slot(cg, dep)) {
         char *identity = cg_callable_dep_identity_name(cg, dep);
         Buf empty;
 
@@ -37662,10 +37894,8 @@ static bool cg_emit_closed_callable_fdesc(CG *cg,
         for (size_t index = 0U;
              index < dep_set->callable_dep_count;
              ++index) {
-            if (cg_callable_dep_set_has_descriptor_data(
-                    cg,
-                    cg_callable_dep_set(
-                        cg, &dep_set->callable_deps[index]))) {
+            if (cg_callable_dep_requires_slot(
+                    cg, &dep_set->callable_deps[index])) {
                 ++callable_count;
             }
         }
@@ -37707,8 +37937,7 @@ static bool cg_emit_closed_callable_fdesc(CG *cg,
             const FengReifiableCallableDep *callable_dep =
                 &dep_set->callable_deps[index];
 
-            if (!cg_callable_dep_set_has_descriptor_data(
-                    cg, cg_callable_dep_set(cg, callable_dep))) {
+            if (!cg_callable_dep_requires_slot(cg, callable_dep)) {
                 continue;
             }
             callable_deps[callable_index].dep_index = index;
@@ -37814,6 +38043,21 @@ static bool cg_emit_closed_callable_fdesc(CG *cg,
     for (size_t index = 0U; index < callable_count; ++index) {
         const FengReifiableCallableDep *callable_dep =
             &dep_set->callable_deps[callable_deps[index].dep_index];
+
+        if (callable_dep->purpose ==
+            FENG_REIFIABLE_CALLABLE_DEP_METHOD_VALUE) {
+            if (!cg_emit_closed_callable_dep_expr(
+                    cg,
+                    callable_dep,
+                    type_params,
+                    type_param_count,
+                    type_args,
+                    blame,
+                    &callable_deps[index].descriptor_expr)) {
+                goto cleanup;
+            }
+            continue;
+        }
         const FengReifiableDepSet *callee_dep_set =
             cg_callable_dep_set(cg, callable_dep);
         const FengDecl *reference_decl =
@@ -38043,6 +38287,169 @@ static bool cg_emit_closed_callable_dep_expr(
         return false;
     }
     *out_expr = NULL;
+
+    if (callable_dep->purpose ==
+        FENG_REIFIABLE_CALLABLE_DEP_METHOD_VALUE) {
+        const FengProgram *reference_program =
+            cg_find_decl_owner_program(
+                cg,
+                callable_dep->fit_decl != NULL
+                    ? callable_dep->fit_decl
+                    : callable_dep->owner_type_decl);
+        FengTypeRef *closed_owner_ref = NULL;
+        FengTypeRef *closed_target_ref = NULL;
+        CGType *owner_type = NULL;
+        CGType *target_type = NULL;
+        bool owner_handled = false;
+        bool target_handled = false;
+        const UserFit *fit = NULL;
+        const UserMethod *method = NULL;
+        const CGCallableMethodValueSupport *support;
+
+        closed_owner_ref = cg_type_ref_substitute(
+            callable_dep->owner_instance_type_ref,
+            caller_type_params,
+            caller_type_param_count,
+            caller_type_args);
+        closed_target_ref = cg_type_ref_substitute(
+            callable_dep->target_callable_type_ref,
+            caller_type_params,
+            caller_type_param_count,
+            caller_type_args);
+        if (closed_owner_ref == NULL || closed_target_ref == NULL) {
+            (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            goto method_value_cleanup;
+        }
+        if (!cg_try_resolve_declared_generic_type_ref(
+                cg,
+                callable_dep->owner_instance_type_ref,
+                closed_owner_ref,
+                reference_program,
+                &blame,
+                &owner_type,
+                &owner_handled) ||
+            (!owner_handled &&
+             !cg_resolve_type_from_program(cg,
+                                           closed_owner_ref,
+                                           reference_program,
+                                           &blame,
+                                           &owner_type))) {
+            goto method_value_cleanup;
+        }
+        if (!cg_try_resolve_declared_generic_type_ref(
+                cg,
+                callable_dep->target_callable_type_ref,
+                closed_target_ref,
+                reference_program,
+                &blame,
+                &target_type,
+                &target_handled) ||
+            (!target_handled &&
+             !cg_resolve_type_from_program(cg,
+                                           closed_target_ref,
+                                           reference_program,
+                                           &blame,
+                                           &target_type))) {
+            goto method_value_cleanup;
+        }
+        if (owner_type == NULL || owner_type->kind != CG_TYPE_OBJECT ||
+            owner_type->user == NULL ||
+            !cg_user_type_is_value_semantics(owner_type->user) ||
+            target_type == NULL || target_type->kind != CG_TYPE_CALLABLE ||
+            target_type->user_spec == NULL) {
+            (void)cg_fail(
+                cg,
+                blame,
+                "IE0002",
+                "codegen: closed method-value dependency has an invalid receiver or callable type");
+            goto method_value_cleanup;
+        }
+        if (callable_dep->fit_decl != NULL) {
+            fit = cg_find_user_fit_by_decl_and_target(
+                cg, callable_dep->fit_decl, owner_type->user);
+            method = cg_user_fit_method_by_member(
+                fit, callable_dep->member);
+        } else {
+            method = cg_user_type_method_by_member(
+                owner_type->user, callable_dep->member);
+        }
+        if (method == NULL) {
+            (void)cg_fail(cg,
+                          blame,
+                          "IE0002",
+                          "codegen: closed method-value target method was not registered");
+            goto method_value_cleanup;
+        }
+        support = cg_callable_method_value_support(
+            cg,
+            target_type->user_spec,
+            owner_type->user,
+            method,
+            blame);
+        if (support == NULL || support->c_value_closure_struct == NULL ||
+            support->c_value_closure_desc == NULL ||
+            support->c_adapter_fn == NULL) {
+            if (!cg->failed) {
+                (void)cg_fail(
+                    cg,
+                    blame,
+                    "IE0002",
+                    "codegen: value method support is missing reified closure metadata");
+            }
+            goto method_value_cleanup;
+        }
+        if (support->c_reified_descriptor == NULL) {
+            CGCallableMethodValueSupport *mutable_support =
+                (CGCallableMethodValueSupport *)support;
+            Buf name;
+
+            buf_init(&name);
+            buf_append_fmt(&name,
+                           "%s__ReifiedDescriptor",
+                           support->c_bind_fn);
+            mutable_support->c_reified_descriptor = name.data;
+            if (mutable_support->c_reified_descriptor == NULL) {
+                (void)cg_fail(cg,
+                              blame,
+                              "IE0001",
+                              "codegen: out of memory");
+                goto method_value_cleanup;
+            }
+            buf_append_fmt(
+                &cg->statics,
+                "static const FengMethodValueDescriptor %s = {\n"
+                "    .base = { .name = \"%s\" },\n"
+                "    .closure_desc = &%s,\n"
+                "    .receiver_desc = &%s,\n"
+                "    .receiver_offset = offsetof(struct %s, _receiver),\n"
+                "    .invoke = (void (*)(void))%s,\n"
+                "};\n",
+                mutable_support->c_reified_descriptor,
+                method->feng_name,
+                support->c_value_closure_desc,
+                owner_type->user->c_aggregate_desc_name,
+                support->c_value_closure_struct,
+                support->c_adapter_fn);
+        }
+        {
+            Buf expression;
+
+            buf_init(&expression);
+            buf_append_fmt(&expression,
+                           "&%s.base",
+                           support->c_reified_descriptor);
+            *out_expr = expression.data;
+        }
+        ok = *out_expr != NULL;
+
+method_value_cleanup:
+        cgtype_free(owner_type);
+        cgtype_free(target_type);
+        cg_type_ref_free(closed_owner_ref);
+        cg_type_ref_free(closed_target_ref);
+        return ok;
+    }
+
     callee_dep_set = cg_callable_dep_set(cg, callable_dep);
     reference_decl = callable_dep->function_decl != NULL
         ? callable_dep->function_decl
@@ -38133,9 +38540,8 @@ static bool cg_emit_owner_callable_dep_array(
     for (size_t index = 0U;
          index < dep_set->callable_dep_count;
          ++index) {
-        if (cg_callable_dep_set_has_descriptor_data(
-                cg,
-                cg_callable_dep_set(cg, &dep_set->callable_deps[index]))) {
+        if (cg_callable_dep_requires_slot(
+                cg, &dep_set->callable_deps[index])) {
             ++count;
         }
     }
@@ -38163,8 +38569,7 @@ static bool cg_emit_owner_callable_dep_array(
             const FengReifiableCallableDep *dep =
                 &dep_set->callable_deps[index];
 
-            if (!cg_callable_dep_set_has_descriptor_data(
-                    cg, cg_callable_dep_set(cg, dep))) {
+            if (!cg_callable_dep_requires_slot(cg, dep)) {
                 continue;
             }
             deps[next].dep_index = index;
@@ -51948,6 +52353,23 @@ static char *cg_finalize(CG *cg) {
         "    void (*default_invoke)(void);\n"
         "} FengCallableTypeDescriptor;\n"
         "\n"
+        "/* Codegen-private closed value method metadata. The base prefix is\n"
+        " * stored in an existing reified callable-dependency slot. */\n"
+        "typedef struct FengMethodValueDescriptor {\n"
+        "    FengFunctionDescriptor base;\n"
+        "    const FengTypeDescriptor *closure_desc;\n"
+        "    const FengAggregateDescriptor *receiver_desc;\n"
+        "    size_t receiver_offset;\n"
+        "    void (*invoke)(void);\n"
+        "} FengMethodValueDescriptor;\n"
+        "\n"
+        "/* Every callable closure shares this exact leading layout. */\n"
+        "typedef struct FengMethodValueClosurePrefix {\n"
+        "    FengManagedHeader _hdr;\n"
+        "    void *_self;\n"
+        "    void (*invoke)(void);\n"
+        "} FengMethodValueClosurePrefix;\n"
+        "\n"
         "#if defined(__clang__)\n"
         "#pragma clang diagnostic ignored \"-Wbuiltin-requires-header\"\n"
         "#endif\n"
@@ -52155,6 +52577,10 @@ static void cg_dispose(CG *cg) {
     free(cg->callable_fn_values);
     for (size_t i = 0; i < cg->callable_method_value_count; ++i) {
         free(cg->callable_method_values[i].c_bind_fn);
+        free(cg->callable_method_values[i].c_adapter_fn);
+        free(cg->callable_method_values[i].c_value_closure_struct);
+        free(cg->callable_method_values[i].c_value_closure_desc);
+        free(cg->callable_method_values[i].c_reified_descriptor);
     }
     free(cg->callable_method_values);
     /* G6: generic function registry cleanup. */

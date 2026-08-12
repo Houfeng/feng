@@ -37,12 +37,20 @@ typedef struct FengSymbolParamView {
     FengSymbolTypeView *type;
 } FengSymbolParamView;
 
+/* Serialized/compiler-symbol counterpart of the semantic callable dependency
+ * purpose. Values intentionally match FengReifiableCallableDepPurpose. */
+typedef enum FengSymbolCallableDepPurpose {
+    FENG_SYMBOL_CALLABLE_DEP_DIRECT_CALL = 0,
+    FENG_SYMBOL_CALLABLE_DEP_METHOD_VALUE
+} FengSymbolCallableDepPurpose;
+
 /* One direct callable dependency carried by a function/method symbol. The
  * cross-module callee identity is the pair (target_module_name,
  * target_symbol_id). A local declaration pointer is retained before
  * serialization so the writer can assign its deterministic symbol id after
  * dependency-closure selection. */
 typedef struct FengSymbolCallableDepView {
+    FengSymbolCallableDepPurpose purpose;
     FengResolvedCallableKind kind;
     const void *target_source_node;
     struct FengSymbolDeclView *local_target_decl;
@@ -51,6 +59,7 @@ typedef struct FengSymbolCallableDepView {
     FengSymbolTypeView *owner_instance_type;
     FengSymbolTypeView **callable_type_args;
     size_t callable_type_arg_count;
+    FengSymbolTypeView *target_callable_type;
 } FengSymbolCallableDepView;
 
 struct FengSymbolTypeView {

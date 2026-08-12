@@ -267,6 +267,7 @@ bool feng_semantic_record_callable_spec_coercion_site(
     const FengTypeMember *callable_member,
     const FengDecl *callable_owner_type_decl,
     const FengDecl *callable_fit_decl,
+    const FengTypeRef *callable_receiver_type_ref,
     const FengExpr *callable_lambda_expr) {
     if (analysis_const == NULL || expr == NULL || target_spec_decl == NULL ||
         target_spec_type_ref == NULL) {
@@ -274,7 +275,15 @@ bool feng_semantic_record_callable_spec_coercion_site(
     }
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
     const FengTypeRef *owned_type_ref = analysis_clone_type_ref(analysis, target_spec_type_ref);
+    const FengTypeRef *owned_receiver_type_ref =
+        callable_receiver_type_ref != NULL
+            ? analysis_clone_type_ref(analysis, callable_receiver_type_ref)
+            : NULL;
     if (owned_type_ref == NULL) {
+        return false;
+    }
+    if (callable_receiver_type_ref != NULL &&
+        owned_receiver_type_ref == NULL) {
         return false;
     }
     FengSpecCoercionSite *slot = reserve_site_slot(analysis, expr);
@@ -293,6 +302,7 @@ bool feng_semantic_record_callable_spec_coercion_site(
     slot->callable_member = callable_member;
     slot->callable_owner_type_decl = callable_owner_type_decl;
     slot->callable_fit_decl = callable_fit_decl;
+    slot->callable_receiver_type_ref = owned_receiver_type_ref;
     slot->callable_lambda_expr = callable_lambda_expr;
     return true;
 }

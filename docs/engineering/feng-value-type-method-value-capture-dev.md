@@ -1,6 +1,6 @@
 # Feng 值类型方法值接收者捕获与泛型 FCTS 加固开发文档
 
-> 状态：已通过人工 Review，实施中
+> 状态：实施完成，已通过完整回归验证
 >
 > 方法值与 `self` 的权威语义以
 > [Feng 函数规范](../specifications/feng-function.md) 和
@@ -278,6 +278,9 @@ Semantic/compiler regression 覆盖：
 
 专项 FCTS 与 compiler tests 通过后，在沙箱外执行最终完整 `make test`。
 
+实施结果：专项 FCTS 通过 736/736；Semantic 与 Codegen 回归通过；最终完整 `make test` 通过，未发现
+sanitizer、性能约束或既有路径回归。
+
 ## 6 每组缺陷处理流程
 
 每组严格执行以下步骤：
@@ -298,15 +301,15 @@ Semantic/compiler regression 覆盖：
 - [x] 第一组完成后的完整 `make test`
 - [x] 第二组：闭合泛型值接收者与方法值 ABI
 - [x] 第二组完成后的完整 `make test`
-- [ ] 第三组：共享泛型体内形成值接收者方法值
-- [ ] 第三组完成后的完整 `make test`
-- [ ] 第四组：生命周期、异常与负向诊断
-- [ ] 第四组完成后的完整 `make test`
-- [ ] 核对 §3.2 的非目标没有被实现或测试变更隐式扩展
-- [ ] 核对新增用例覆盖 §4 的全部运行时表示与 §5 的全部非等价路径
-- [ ] 核对值类型进入泛型和形成方法值时均未装箱，只有显式进入 object-form spec 视角的既有路径装箱
-- [ ] 核对没有类型名、包名、方法名、参数位置或测试模型特判
-- [ ] 最终 `make test` 无失败和 sanitizer 报告
+- [x] 第三组：共享泛型体内形成值接收者方法值
+- [x] 第三组完成后的完整 `make test`
+- [x] 第四组：生命周期、异常与负向诊断
+- [x] 第四组完成后的完整 `make test`
+- [x] 核对 §3.2 的非目标没有被实现或测试变更隐式扩展
+- [x] 核对新增用例覆盖 §4 的全部运行时表示与 §5 的全部非等价路径
+- [x] 核对值类型进入泛型和形成方法值时均未装箱，只有显式进入 object-form spec 视角的既有路径装箱
+- [x] 核对没有类型名、包名、方法名、参数位置或测试模型特判
+- [x] 最终 `make test` 无失败和 sanitizer 报告
 
 ## 8 实施中发现的问题
 
@@ -342,3 +345,25 @@ Semantic/compiler regression 覆盖：
   descriptor 的符号前缀同样取实际 owner descriptor；
 - ABI/性能影响：只修正生成 C 的静态 descriptor 类型与符号；运行时无新增间接层、分配或查找；
 - 状态：已修复，第二组专项 FCTS（727/727）与完整 `make test` 均通过。
+
+### 8.4 第三组：共享体缺少闭合值接收者 method-value 组合依赖
+
+- 最小复现：imported 泛型 owner 的共享方法执行 `return self.read;` 时，Codegen 将开放布局的值类型
+  `self` 当作普通对象方法值来源并报告 `CE0112`；顶层共享泛型函数中的 `return value.replace;` 即使绕过
+  该检查，现有固定布局 binder 也只能按 provider 侧开放 C 结构复制，不能表示 consumer 才确定的闭合布局；
+- 根因：现有 method-value 支持只为发码点已闭合的接收者生成固定 closure、typed adapter 与直接 binder；
+  共享体没有把“目标 callable + 闭合 receiver + 实际方法”作为一个可具化组合依赖收集，因而错误要求
+  provider 发码时直接取得闭合 `UserType`。`Producer<T>` 的结构匹配和 `Cell<T>` 的 aggregate 依赖本身均
+  已可确定，缺失的是把二者与 `Cell<T>.read` 关联起来的固定 slot；
+- 生产级通用方案：把 method value 作为 reified callable dependency 的独立用途。consumer 为每个闭合组合
+  静态生成与普通闭合路径相同的 closure descriptor 和 typed adapter，并生成 codegen-private 组合描述符，
+  其中记录 closure descriptor、receiver aggregate descriptor、receiver payload 偏移和 typed adapter。组合
+  描述符以既有 `FengFunctionDescriptor` 为稳定前缀，继续放入 `reified_callable_deps` 的规范化固定 slot；
+  provider 共享体按 slot 读取该描述符，执行原有的一次 closure 分配、按 aggregate descriptor 复制 receiver，
+  并把 typed adapter 写入 closure。依赖的开放身份及目标 callable 实例必须进入 `.ft`，由 consumer 完成闭合；
+- ABI/性能影响：不修改 runtime API/ABI，也不增加 descriptor 字段；只扩展编译器、`.ft` 和生成 C 之间的
+  method-value 依赖记录。现有闭合/非泛型方法值与无此依赖的共享体不增加任何运行时操作；新支持路径形成
+  方法值时只有固定 slot 读取、原有一次 closure 分配和既定的 receiver 按值复制，没有 binder 间接调用；
+  形成后的 closure 继续直达 typed adapter，不增加调用层、分配、装箱、搜索或动态具化；
+- 状态：已按上述固定 slot 方案修复；第三组跨包专项 FCTS（731/731）、性能约束与完整
+  `make test` 均通过。

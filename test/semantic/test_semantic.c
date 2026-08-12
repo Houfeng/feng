@@ -5362,6 +5362,130 @@ static void test_method_value_requires_explicit_type_when_overloaded(void) {
     feng_program_free(program);
 }
 
+/* Value-receiver method values obey the same target-typed signature and
+ * overload rules as reference receivers before codegen selects value capture. */
+static void test_value_method_value_signature_and_overload_rules(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *code;
+    } rejected[] = {
+        {
+            "value_method_param_mismatch_error.f",
+            "module demo.value_method.param_mismatch;\n"
+            "spec Target(value: string): int;\n"
+            "@value type Counter {\n"
+            "    func read(value: int): int { return value; }\n"
+            "}\n"
+            "func run(value: Counter) { let target: Target = value.read; }\n",
+            "AE0522"
+        },
+        {
+            "value_method_return_mismatch_error.f",
+            "module demo.value_method.return_mismatch;\n"
+            "spec Target(): string;\n"
+            "@value type Counter {\n"
+            "    func read(): int { return 1; }\n"
+            "}\n"
+            "func run(value: Counter) { let target: Target = value.read; }\n",
+            "AE0522"
+        },
+        {
+            "value_method_overload_target_error.f",
+            "module demo.value_method.overload_error;\n"
+            "@value type Counter {\n"
+            "    func read(): int { return 1; }\n"
+            "    func read(value: int): int { return value; }\n"
+            "}\n"
+            "func run(value: Counter) { let target = value.read; }\n",
+            "AE0523"
+        }
+    };
+    const char *accepted =
+        "module demo.value_method.overload_ok;\n"
+        "spec Reader(): int;\n"
+        "@value type Counter {\n"
+        "    func read(): int { return 1; }\n"
+        "    func read(value: int): int { return value; }\n"
+        "}\n"
+        "func accept(reader: Reader): int { return reader(); }\n"
+        "func make(value: Counter): Reader { return value.read; }\n"
+        "func run(value: Counter): int {\n"
+        "    let reader: Reader = value.read;\n"
+        "    return reader() + accept(value.read) + make(value)();\n"
+        "}\n";
+
+    for (size_t index = 0U;
+         index < sizeof(rejected) / sizeof(rejected[0]);
+         ++index) {
+        FengProgram *program =
+            parse_program_or_die(rejected[index].path, rejected[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].code, rejected[index].code) == 0);
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+    {
+        FengProgram *program =
+            parse_program_or_die("value_method_overload_ok.f", accepted);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                     &analysis, &errors, &error_count));
+        ASSERT(error_count == 0U);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* A method hidden by its owner must stay unavailable as a method value in a
+ * consumer module; callable target typing does not bypass member visibility. */
+static void test_imported_value_method_value_respects_visibility(void) {
+    const char *provider_source =
+        "open module demo.value_method.visibility_provider;\n"
+        "@value open type Vault {\n"
+        "    seal func secret(): int { return 1; }\n"
+        "}\n";
+    const char *consumer_source =
+        "module demo.value_method.visibility_consumer;\n"
+        "import demo.value_method.visibility_provider;\n"
+        "spec Reader(): int;\n"
+        "func run(value: Vault) { let reader: Reader = value.secret; }\n";
+    FengProgram *provider = parse_program_or_die(
+        "value_method_visibility_provider.f", provider_source);
+    FengProgram *consumer = parse_program_or_die(
+        "value_method_visibility_consumer.f", consumer_source);
+    const FengProgram *programs[] = {provider, consumer};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool found_inaccessible = false;
+
+    ASSERT(!feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    for (size_t index = 0U; index < error_count; ++index) {
+        if (strcmp(errors[index].path,
+                   "value_method_visibility_consumer.f") == 0 &&
+            strcmp(errors[index].code, "AE0308") == 0) {
+            found_inaccessible = true;
+        }
+    }
+    ASSERT(found_inaccessible);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(provider);
+    feng_program_free(consumer);
+}
+
 static void test_top_level_function_value_binding_rejects_non_matching_target_type(void) {
     const char *source =
         "module demo.main;\n"
@@ -22026,6 +22150,8 @@ int main(void) {
     test_method_value_selects_overload_by_parameter_context();
     test_method_value_selects_overload_by_return_type_context();
     test_method_value_requires_explicit_type_when_overloaded();
+    test_value_method_value_signature_and_overload_rules();
+    test_imported_value_method_value_respects_visibility();
     test_alias_function_value_argument_rejects_non_matching_target_type();
     test_method_value_argument_rejects_non_matching_target_type();
     test_function_typed_call_result_rejects_non_matching_binding_type();

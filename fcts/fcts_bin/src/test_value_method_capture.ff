@@ -3,6 +3,7 @@ module fcts_bin;
 import std;
 import std.numeric;
 import std.test;
+import fcts_lib.test;
 
 /** Produces one integer from a captured value receiver. */
 spec ValueMethodIntProducer(): int;
@@ -124,6 +125,23 @@ type ValueMethodProducerHolder<T> {
   var producer: ValueMethodProducer<T>;
 }
 
+/** Consumer-only wide value used to close imported shared method bodies. */
+@value
+type ImportedValueMethodWideValue {
+  var first: string;
+  var second: string;
+  var number: i64;
+}
+
+/** All managed payload forms required by method-value lifetime coverage. */
+@value
+type ValueMethodLifetimeBundle {
+  var text: string;
+  var leaf: LibAdvancedLifetimeLeaf;
+  var view: ValueMethodNamedView;
+  var callback: ValueMethodStringProducer;
+}
+
 /** Supplies a fit-body method-value path for a value receiver. */
 fit ValueMethodCounter {
   func fitRead(): int {
@@ -150,6 +168,107 @@ func invokeValueMethodProducer(producer: ValueMethodIntProducer): int {
 func makeValueMethodReader(value: int): ValueMethodIntProducer {
   let local = ValueMethodCounter { value: value };
   return local.read;
+}
+
+/** Form an escaping imported shared-body method value around one managed leaf. */
+func makeValueMethodLifetimeReader(
+  value: string
+): LibValueMethodProducer<LibAdvancedLifetimeLeaf> {
+  let owner = LibValueMethodOwner<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf(value)
+  );
+  return owner.reader();
+}
+
+/** Verify ordinary scope exit releases one captured managed receiver. */
+func verifyValueMethodNormalLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  {
+    let reader = makeValueMethodLifetimeReader("normal-leaf");
+    assert(reader().value == "normal-leaf",
+           "the captured receiver remains alive after its factory returns");
+  }
+  return LibAdvancedLifetimeLeaf.createdCount() == 1 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 1;
+}
+
+/** Verify replacing the sole callable reference releases the old receiver. */
+func verifyValueMethodOverwriteLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var oldReleased = false;
+  {
+    var reader = makeValueMethodLifetimeReader("overwrite-first");
+    reader = makeValueMethodLifetimeReader("overwrite-second");
+    oldReleased = LibAdvancedLifetimeLeaf.finalizedCount() == 1 &&
+                  reader().value == "overwrite-second";
+  }
+  return oldReleased && LibAdvancedLifetimeLeaf.createdCount() == 2 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 2;
+}
+
+/** Verify copied callable references keep one shared method closure alive. */
+func verifyValueMethodSharedReferenceLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var retainedOld = false;
+  var releasedOld = false;
+  {
+    var current = makeValueMethodLifetimeReader("shared-first");
+    {
+      let retained = current;
+      current = makeValueMethodLifetimeReader("shared-second");
+      retainedOld = LibAdvancedLifetimeLeaf.finalizedCount() == 0 &&
+                    retained().value == "shared-first";
+    }
+    releasedOld = LibAdvancedLifetimeLeaf.finalizedCount() == 1 &&
+                  current().value == "shared-second";
+  }
+  return retainedOld && releasedOld &&
+         LibAdvancedLifetimeLeaf.createdCount() == 2 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 2;
+}
+
+/** Throw while a value-receiver method closure remains in the active frame. */
+func throwWithValueMethodLifetime(): void {
+  let reader = makeValueMethodLifetimeReader("exception-leaf");
+  assert(reader().value == "exception-leaf",
+         "the method closure is usable before exceptional cleanup");
+  throw "value-method-lifetime";
+}
+
+/** Verify exceptional cleanup releases an in-scope method closure once. */
+func verifyValueMethodExceptionLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var caught = false;
+  try throwWithValueMethodLifetime() catch error: string {
+    caught = error == "value-method-lifetime";
+  };
+  return caught && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 1;
+}
+
+/** Verify every managed payload form survives and cleans up with the receiver. */
+func verifyValueMethodManagedPayloadLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var valid = false;
+  {
+    let view: ValueMethodNamedView = ValueMethodNamedObject("bundle-view");
+    let callback: ValueMethodStringProducer = () -> "bundle-callback";
+    let bundle = ValueMethodLifetimeBundle {
+      text: "bundle-text",
+      leaf: LibAdvancedLifetimeLeaf("bundle-leaf"),
+      view: view,
+      callback: callback
+    };
+    let owner = LibValueMethodOwner<ValueMethodLifetimeBundle>(bundle);
+    let reader = owner.reader();
+    let result = reader();
+    valid = result.text == "bundle-text" &&
+            result.leaf.value == "bundle-leaf" &&
+            result.view.label() == "bundle-view" &&
+            result.callback() == "bundle-callback";
+  }
+  return valid && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 1;
 }
 
 /** First value-receiver method-value conformance group. */
@@ -320,6 +439,106 @@ open func test_value_method_capture() {
       holder.producer = secondSource.read;
       assert(holder.producer() == 106 && alias() == 105,
              "overwriting the field releases only its old callable reference");
+    });
+
+    test("imported top-level shared body forms a value method", () {
+      let initial = ImportedValueMethodWideValue {
+        first: "top-initial-left",
+        second: "top-initial-right",
+        number: 301
+      };
+      let next = ImportedValueMethodWideValue {
+        first: "top-next-left",
+        second: "top-next-right",
+        number: 302
+      };
+      let source = LibValueMethodCell<ImportedValueMethodWideValue>(initial);
+      let replace = libBindValueMethodReplace<ImportedValueMethodWideValue>(
+        source
+      );
+      let previous = replace(next);
+      let current = replace(initial);
+      assert(previous.first == "top-initial-left" &&
+             previous.second == "top-initial-right" &&
+             previous.number == 301 && current.first == "top-next-left" &&
+             current.second == "top-next-right" && current.number == 302 &&
+             source.value.first == "top-initial-left",
+             "function descriptor closes the copied receiver and callable ABI");
+    });
+
+    test("imported generic owner forms self method value", () {
+      let value = ImportedValueMethodWideValue {
+        first: "owner-left",
+        second: "owner-right",
+        number: 303
+      };
+      var owner = LibValueMethodOwner<ImportedValueMethodWideValue>(value);
+      let reader = owner.reader();
+      owner.value.number = 304;
+      let result = reader();
+      assert(result.first == "owner-left" && result.second == "owner-right" &&
+             result.number == 303,
+             "owner descriptor closes the self receiver copied in the method");
+    });
+
+    test("imported generic method keeps owner T and method U separate", () {
+      let owner = LibValueMethodOwner<string>("owner-domain");
+      let methodValue = ImportedValueMethodWideValue {
+        first: "method-left",
+        second: "method-right",
+        number: 305
+      };
+      let other = LibValueMethodCell<ImportedValueMethodWideValue>(methodValue);
+      let result = owner.readBoth<ImportedValueMethodWideValue>(other);
+      assert(result.owner == "owner-domain" &&
+             result.method.first == "method-left" &&
+             result.method.second == "method-right" &&
+             result.method.number == 305,
+             "owner and function descriptor slots close independent receivers");
+    });
+
+    test("imported generic tuple fit forms and forwards a method value", () {
+      let first = ImportedValueMethodWideValue {
+        first: "tuple-left",
+        second: "tuple-right",
+        number: 306
+      };
+      let source: LibValueMethodTuple<ImportedValueMethodWideValue> = (
+        first,
+        "tuple-marker"
+      );
+      let reader = libBindValueMethodTupleFirst<ImportedValueMethodWideValue>(
+        source
+      );
+      let result = reader();
+      assert(result.first == "tuple-left" && result.second == "tuple-right" &&
+             result.number == 306,
+             "imported fit metadata and generic callable forwarding stay valid");
+    });
+
+    test("captured managed receiver finalizes once on normal exit", () {
+      assert(verifyValueMethodNormalLifetime(),
+             "normal cleanup releases the captured receiver exactly once");
+    });
+
+    test("overwriting a method value releases only its old receiver", () {
+      assert(verifyValueMethodOverwriteLifetime(),
+             "callable assignment retires the replaced receiver exactly once");
+    });
+
+    test("copied callables keep the method closure alive until last release", () {
+      assert(verifyValueMethodSharedReferenceLifetime(),
+             "the receiver follows existing callable reference ownership");
+    });
+
+    test("exception unwinding releases a method closure exactly once", () {
+      assert(verifyValueMethodExceptionLifetime(),
+             "exception cleanup neither leaks nor double releases the receiver");
+    });
+
+    test("all managed payload forms survive the captured receiver", () {
+      assert(verifyValueMethodManagedPayloadLifetime(),
+             "string object spec callable and managed object retain correctly");
     });
 
   });

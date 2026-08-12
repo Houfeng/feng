@@ -5,6 +5,9 @@
 
 static bool rd_type_ref_equals(const FengTypeRef *left,
                                const FengTypeRef *right);
+static bool type_ref_contains_type_param(const FengTypeRef *type_ref,
+                                         const FengTypeParam *type_params,
+                                         size_t type_param_count);
 static bool extract_fit_target_implicit_type_param(
     const FengTypeRef *target_ref,
     FengTypeParam *out_param);
@@ -329,7 +332,8 @@ static bool rd_append_callable_dep(FengReifiableDepSet *dep_set,
             &dep_set->callable_deps[index];
         size_t arg_index;
 
-        if (existing->kind != resolved->kind ||
+        if (existing->purpose != FENG_REIFIABLE_CALLABLE_DEP_DIRECT_CALL ||
+            existing->kind != resolved->kind ||
             existing->function_decl != resolved->function_decl ||
             existing->owner_type_decl != resolved->owner_type_decl ||
             existing->member != resolved->member ||
@@ -369,6 +373,7 @@ static bool rd_append_callable_dep(FengReifiableDepSet *dep_set,
     }
     slot = &dep_set->callable_deps[dep_set->callable_dep_count++];
     memset(slot, 0, sizeof(*slot));
+    slot->purpose = FENG_REIFIABLE_CALLABLE_DEP_DIRECT_CALL;
     slot->kind = resolved->kind;
     slot->function_decl = resolved->function_decl;
     slot->owner_type_decl = resolved->owner_type_decl;
@@ -380,10 +385,120 @@ static bool rd_append_callable_dep(FengReifiableDepSet *dep_set,
     return true;
 }
 
+/* Append one target-typed bound method-value formation dependency. Unlike a
+ * direct call this dependency is always materialized: its closed descriptor
+ * combines the receiver layout, selected implementation, and callable ABI. */
+static bool rd_append_method_value_dep_resolved(
+    FengReifiableDepSet *dep_set,
+    const FengResolvedCallable *resolved,
+    const FengTypeRef *target_callable_type_ref) {
+    FengReifiableCallableDep *slot;
+    size_t index;
+
+    if (dep_set == NULL || resolved == NULL ||
+        resolved->member == NULL ||
+        resolved->owner_type_decl == NULL ||
+        resolved->owner_instance_type_ref == NULL ||
+        target_callable_type_ref == NULL) {
+        return true;
+    }
+    /* Reference receivers keep the existing pointer-capture lowering.  A
+     * composite reified method-value descriptor is required only when the
+     * receiver is a value whose closed layout is selected by type arguments. */
+    if (resolved->owner_type_decl->kind != FENG_DECL_TYPE ||
+        (!resolved->owner_type_decl->as.type_decl.is_tuple &&
+         !resolved->owner_type_decl->as.type_decl.is_value)) {
+        return true;
+    }
+    for (index = 0U; index < dep_set->callable_dep_count; ++index) {
+        const FengReifiableCallableDep *existing =
+            &dep_set->callable_deps[index];
+
+        if (existing->purpose == FENG_REIFIABLE_CALLABLE_DEP_METHOD_VALUE &&
+            existing->kind == resolved->kind &&
+            existing->owner_type_decl ==
+                resolved->owner_type_decl &&
+            existing->member == resolved->member &&
+            existing->fit_decl == resolved->fit_decl &&
+            rd_type_ref_equals(existing->owner_instance_type_ref,
+                               resolved->owner_instance_type_ref) &&
+            rd_type_ref_equals(existing->target_callable_type_ref,
+                               target_callable_type_ref)) {
+            return true;
+        }
+    }
+    if (dep_set->callable_dep_count == dep_set->callable_dep_capacity) {
+        size_t new_capacity = dep_set->callable_dep_capacity == 0U
+                                  ? 4U
+                                  : dep_set->callable_dep_capacity * 2U;
+        FengReifiableCallableDep *grown =
+            (FengReifiableCallableDep *)realloc(
+                dep_set->callable_deps,
+                new_capacity * sizeof(*grown));
+
+        if (grown == NULL) {
+            return false;
+        }
+        dep_set->callable_deps = grown;
+        dep_set->callable_dep_capacity = new_capacity;
+    }
+    slot = &dep_set->callable_deps[dep_set->callable_dep_count++];
+    memset(slot, 0, sizeof(*slot));
+    slot->purpose = FENG_REIFIABLE_CALLABLE_DEP_METHOD_VALUE;
+    slot->kind = resolved->kind;
+    slot->owner_type_decl = resolved->owner_type_decl;
+    slot->member = resolved->member;
+    slot->fit_decl = resolved->fit_decl;
+    slot->owner_instance_type_ref = resolved->owner_instance_type_ref;
+    slot->callable_type_args = resolved->callable_type_args;
+    slot->callable_type_arg_count = resolved->callable_type_arg_count;
+    slot->target_callable_type_ref = target_callable_type_ref;
+    return true;
+}
+
+static bool rd_append_method_value_dep(
+    FengReifiableDepSet *dep_set,
+    const FengSpecCoercionSite *site,
+    const FengTypeParam *type_params,
+    size_t type_param_count) {
+    FengResolvedCallable resolved;
+
+    if (site == NULL ||
+        site->form != FENG_SPEC_COERCION_FORM_CALLABLE ||
+        site->callable_source !=
+            FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE) {
+        return true;
+    }
+    if (!type_ref_contains_type_param(site->callable_receiver_type_ref,
+                                      type_params,
+                                      type_param_count)) {
+        return true;
+    }
+    memset(&resolved, 0, sizeof(resolved));
+    resolved.kind = site->callable_fit_decl != NULL
+                        ? FENG_RESOLVED_CALLABLE_FIT_METHOD
+                        : FENG_RESOLVED_CALLABLE_TYPE_METHOD;
+    resolved.owner_type_decl = site->callable_owner_type_decl;
+    resolved.member = site->callable_member;
+    resolved.fit_decl = site->callable_fit_decl;
+    resolved.owner_instance_type_ref =
+        site->callable_receiver_type_ref;
+    return rd_append_method_value_dep_resolved(
+        dep_set, &resolved, site->target_spec_type_ref);
+}
+
 bool feng_semantic_reifiable_dep_set_append_callable(
     FengReifiableDepSet *dep_set,
     const FengResolvedCallable *resolved) {
     return rd_append_callable_dep(dep_set, resolved);
+}
+
+bool feng_semantic_reifiable_dep_set_append_method_value(
+    FengReifiableDepSet *dep_set,
+    const FengResolvedCallable *resolved,
+    const FengTypeRef *target_callable_type_ref) {
+    return rd_append_method_value_dep_resolved(
+        dep_set, resolved, target_callable_type_ref);
 }
 
 /* ---- type_ref 中是否含有对 type_params 的引用 ------------------------- */
@@ -1301,9 +1416,16 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
         case FENG_EXPR_MEMBER:
             collect_from_expr(ctx, expr->as.member.object);
             {
+                const FengSpecCoercionSite *site =
+                    feng_semantic_lookup_spec_coercion_site(
+                        ctx->analysis, expr);
                 const FengSemanticTypeFact *member_fact =
                     feng_semantic_lookup_type_fact(ctx->analysis, expr);
 
+                (void)rd_append_method_value_dep(ctx->dep_set,
+                                                 site,
+                                                 ctx->type_params,
+                                                 ctx->type_param_count);
                 if (member_fact != NULL &&
                     member_fact->kind ==
                         FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {

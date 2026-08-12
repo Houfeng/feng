@@ -6272,6 +6272,77 @@ static void test_callable_spec_method_coercion_codegen(void) {
     feng_program_free(program);
 }
 
+/* Closed and shared value-receiver method formation both allocate exactly one
+ * callable closure and never route the receiver through a spec box. */
+static void test_value_method_capture_codegen_has_direct_closure_lowering(void) {
+    const char *source =
+        "module feng.codegen.value_method_lowering;\n"
+        "spec Reader<T>(): T;\n"
+        "@value type Cell<T> {\n"
+        "    var value: T;\n"
+        "    func read(): T { return self.value; }\n"
+        "}\n"
+        "func bind<T>(value: Cell<T>): Reader<T> {\n"
+        "    return value.read;\n"
+        "}\n"
+        "func use(): i64 {\n"
+        "    let cell = Cell<i64> { value: 41 };\n"
+        "    let direct: Reader<i64> = cell.read;\n"
+        "    let shared = bind<i64>(cell);\n"
+        "    return direct() + shared();\n"
+        "}\n";
+    FengProgram *program =
+        parse_or_die(source, "value_method_direct_closure_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    /* The shared body performs one fixed-slot read and one existing closure
+     * allocation. No binder call, search, or second allocation is emitted. */
+    ASSERT(count_substr(output.c_source,
+                        "const FengMethodValueDescriptor *_method_value_desc") ==
+           1U);
+    ASSERT(count_substr(output.c_source,
+                        "(FengMethodValueClosurePrefix *)feng_object_new(") ==
+           1U);
+    ASSERT(count_substr(output.c_source,
+                        "_desc->reified_callable_deps[") == 1U);
+
+    /* The fixed-layout path retains its single ValueClosure allocation. */
+    ASSERT(count_substr(output.c_source,
+                        "feng_object_new(&FengCallableBind__") == 1U);
+
+    /* Spec-box descriptors may be declared for object-spec coercion support,
+     * but method-value formation must never allocate one. */
+    for (const char *line = output.c_source;
+         (line = strstr(line, "feng_object_new(&")) != NULL;
+         ++line) {
+        const char *line_end = strchr(line, '\n');
+
+        if (line_end == NULL) {
+            line_end = line + strlen(line);
+        }
+        ASSERT(!span_contains(line, line_end, "__spec_box"));
+    }
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static const char *kCallableSpecLambdaLocalCaptureSrc =
     "module feng.codegen.gs6;\n"
     "spec Mapper(x: int): int;\n"
@@ -9937,6 +10008,7 @@ int main(void) {
     test_generic_object_spec_coercion_codegen();
     test_generic_callable_spec_coercion_codegen();
     test_callable_spec_method_coercion_codegen();
+    test_value_method_capture_codegen_has_direct_closure_lowering();
     test_callable_spec_lambda_local_capture_codegen();
     test_generic_lambda_dynamic_capture_codegen();
     test_lambda_tuple_body_uses_callable_return_target_codegen();
