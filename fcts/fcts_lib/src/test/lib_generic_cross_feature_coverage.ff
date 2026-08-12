@@ -1,0 +1,208 @@
+open module fcts_lib.test;
+
+import std;
+import std.collections;
+
+/** Return one generic value from an imported shared body. */
+open func libCrossFeaturePass<T>(value: T): T {
+  return value;
+}
+
+/** Exercise a non-throwing try expression with a generic aggregate result. */
+open func libCrossFeatureTryNormal<T>(value: T): T {
+  return try libCrossFeaturePass<T>(value) catch ex: string {
+    value;
+  };
+}
+
+/** Select one direct generic value through an if-expression join. */
+open func libCrossFeatureChooseIf<T>(condition: bool, left: T, right: T): T {
+  return if condition {
+    libCrossFeaturePass<T>(left);
+  } else {
+    right;
+  };
+}
+
+/** Select one direct generic value through a match-expression join. */
+open func libCrossFeatureChooseMatch<T>(tag: i32, left: T, right: T): T {
+  return match tag {
+    0 { libCrossFeaturePass<T>(left); }
+    else { right; }
+  };
+}
+
+/** Throw a concrete exception while a direct generic value remains live. */
+open func libCrossFeatureThrow<T>(value: T): T {
+  let values = List<T>();
+  values.add(value);
+  let kept = values.get(0);
+  throw "generic-direct";
+  return kept;
+}
+
+/** Catch a concrete exception and return a direct generic fallback. */
+open func libCrossFeatureRecover<T>(value: T, fallback: T): T {
+  return try libCrossFeatureThrow<T>(value) catch ex: string {
+    fallback;
+  };
+}
+
+/** Propagate an exception while a direct generic value remains live. */
+open func libCrossFeaturePropagate<T>(value: T): T {
+  let kept = libCrossFeaturePass<T>(value);
+  return libCrossFeatureThrow<T>(kept);
+}
+
+/** Throw a concrete exception while a descriptor-sized value remains live. */
+open func libCrossFeatureThrowComposite<T>(
+  value: LibAdvancedComposite<T>
+): LibAdvancedComposite<T> {
+  let values = List<LibAdvancedComposite<T> >();
+  values.add(value);
+  let kept = values.get(0);
+  throw "generic-composite";
+  return kept;
+}
+
+/** Catch a concrete exception and return an aggregate generic fallback. */
+open func libCrossFeatureRecoverComposite<T>(
+  value: LibAdvancedComposite<T>,
+  fallback: LibAdvancedComposite<T>
+): LibAdvancedComposite<T> {
+  return try libCrossFeatureThrowComposite<T>(value) catch ex: string {
+    fallback;
+  };
+}
+
+/**
+ * Capture a generic value in defer and report it on normal or exceptional exit.
+ */
+open func libCrossFeatureDeferObserve<T>(
+  initial: T,
+  replacement: T,
+  observer: Action<T>,
+  throwAfterReplacement: bool
+): T {
+  var current = initial;
+  defer {
+    observer(current);
+  }
+  current = replacement;
+  if throwAfterReplacement {
+    throw "generic-defer";
+  }
+  return current;
+}
+
+/** Return an escaping closure that owns one direct generic value. */
+open func libCrossFeatureCaptureDirect<T>(value: T): Func<T> {
+  let captured = value;
+  return () -> captured;
+}
+
+/** Return an escaping closure that owns one descriptor-sized generic value. */
+open func libCrossFeatureCaptureComposite<T>(
+  value: LibAdvancedComposite<T>
+): Func<LibAdvancedComposite<T> > {
+  let captured = value;
+  return () -> captured;
+}
+
+/** Generic owner producing closures that combine owner and method scopes. */
+open type LibCrossFeatureClosureOwner<T> {
+  /** Value supplied by the owner generic scope. */
+  open let ownerValue: T;
+
+  /** Construct an owner with one captured candidate. */
+  func LibCrossFeatureClosureOwner(ownerValue: T) {
+    self.ownerValue = ownerValue;
+  }
+
+  /** Return an escaping closure that reads both owner T and method U. */
+  open func capturePair<U>(
+    methodValue: U
+  ): Func<LibAdvancedPair<T, U> > {
+    let capturedOwner = self.ownerValue;
+    let capturedMethod = methodValue;
+    let ownerComposite = LibAdvancedComposite<T>(
+      capturedOwner,
+      "closure-owner",
+      91
+    );
+    let methodComposite = LibAdvancedComposite<U>(
+      capturedMethod,
+      "closure-method",
+      92
+    );
+    return () -> (
+      ownerComposite,
+      methodComposite,
+      capturedOwner,
+      capturedMethod
+    );
+  }
+}
+
+/** Imported reference owner whose constructor derives and stores generic values. */
+open type LibCrossFeatureConstructedReference<T> {
+  /** Original constructor input. */
+  open let original: T;
+
+  /** Value recovered from a constructor-local List<T>. */
+  open let listed: T;
+
+  /** Complete descriptor-sized value assembled by the constructor. */
+  open let composite: LibAdvancedComposite<T>;
+
+  /** Constructor-local list size after inserting the input. */
+  open let count: i64;
+
+  /** Construct all fields through owner-generic derived dependencies. */
+  func LibCrossFeatureConstructedReference(value: T) {
+    let values = List<T>();
+    values.add(value);
+    let listed = values.get(0);
+    let passed = libCrossFeatureTryNormal<T>(listed);
+    self.original = value;
+    self.listed = passed;
+    self.composite = LibAdvancedComposite<T>(
+      passed,
+      "constructed-reference",
+      101
+    );
+    self.count = values.size();
+  }
+}
+
+/** Imported value owner whose constructor derives and stores generic values. */
+@value
+open type LibCrossFeatureConstructedValue<T> {
+  /** Original constructor input. */
+  open let original: T;
+
+  /** Value recovered from a constructor-local List<T>. */
+  open let listed: T;
+
+  /** Complete descriptor-sized value assembled by the constructor. */
+  open let composite: LibAdvancedComposite<T>;
+
+  /** Constructor-local list size after inserting the input. */
+  open let count: i64;
+
+  /** Construct all fields through owner-generic derived dependencies. */
+  func LibCrossFeatureConstructedValue(value: T) {
+    let values = List<T>();
+    values.add(value);
+    let listed = values.get(0);
+    let passed = libCrossFeatureTryNormal<T>(listed);
+    self.original = value;
+    self.listed = passed;
+    self.composite = LibAdvancedComposite<T>(
+      passed,
+      "constructed-value",
+      102
+    );
+    self.count = values.size();
+  }
+}

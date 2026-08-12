@@ -6262,6 +6262,101 @@ static void test_generic_lambda_dynamic_capture_codegen(void) {
     feng_program_free(program);
 }
 
+/* A non-void expression lambda inherits its callable return target, allowing
+ * target-only expressions such as named-tuple literals to use the same
+ * expected-type lowering as an ordinary return statement. */
+static void test_lambda_tuple_body_uses_callable_return_target_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.lambda_tuple_target;\n"
+        "type Pair<T, U>(T, U);\n"
+        "spec Reader<T>(): Pair<T, string>;\n"
+        "func capture<T>(value: T): Reader<T> {\n"
+        "    let captured = value;\n"
+        "    return () -> (captured, \"targeted\");\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource,
+                                        "lambda_tuple_target.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengLambda__feng__codegen__lambda_tuple_target") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_aggregate_assign") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* An owned fixed-layout aggregate passed directly to a shared generic
+ * callable adopts its producer temporary into the current cleanup scope. */
+static void test_generic_call_adopts_owned_aggregate_argument_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_owned_argument;\n"
+        "@value type Payload {\n"
+        "    let text: string;\n"
+        "    func Payload(text: string) { self.text = text; }\n"
+        "}\n"
+        "func consume<T>(value: T): void {}\n"
+        "func exercise(): void {\n"
+        "    consume<Payload>(Payload(\"owned\"));\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource,
+                                        "generic_owned_argument.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "FengCleanupNode _cu__val") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng__feng__codegen__generic_owned_argument__consume_G__from__X") != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_release(&_val") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static const char *kCallableSpecLambdaSelfCaptureSrc =
     "module feng.codegen.gs7;\n"
     "spec Reader(): int;\n"
@@ -7796,6 +7891,78 @@ static void test_try_catch_return_codegen(void) {
     feng_codegen_error_free(&cgerr);
     feng_semantic_analysis_free(analysis);
     free(errors);
+    feng_program_free(program);
+}
+
+/* A generic call result inside a try protected range uses descriptor-sized
+ * C storage. The range must form its own lexical block so the landing-pad
+ * preservation jump never enters the scope of that variably sized storage. */
+static void test_generic_try_body_reified_storage_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generictry;\n"
+        "@value\n"
+        "type Box<T> {\n"
+        "    let value: T;\n"
+        "}\n"
+        "func pass<T>(value: T): T {\n"
+        "    return value;\n"
+        "}\n"
+        "func recover<T>(value: T): T {\n"
+        "    return try pass<T>(value) catch ex: string { value; };\n"
+        "}\n"
+        "func chooseIf<T>(flag: bool, left: T, right: T): T {\n"
+        "    return if flag { pass<T>(left); } else { right; };\n"
+        "}\n"
+        "func chooseMatch<T>(tag: i32, left: T, right: T): T {\n"
+        "    return match tag { 0 { pass<T>(left); } else { right; } };\n"
+        "}\n"
+        "func passBox<T>(value: Box<T>): Box<T> {\n"
+        "    return value;\n"
+        "}\n"
+        "func recoverBox<T>(value: Box<T>): Box<T> {\n"
+        "    return try passBox<T>(value) catch ex: string { value; };\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "generic_try.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_try_frame_push(&_try_marker") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ";\n    {\n    _try_begin_") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_Alignas(max_align_t) char _gr") != NULL);
+    ASSERT(count_substr(out.c_source,
+                        "_Alignas(max_align_t) char _ifv") >= 2U);
+    ASSERT(strstr(out.c_source,
+                  "_Alignas(max_align_t) char _tryv") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_try_end_") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ": ;\n    }\n    feng_frame_pop();") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -9642,6 +9809,8 @@ int main(void) {
     test_callable_spec_method_coercion_codegen();
     test_callable_spec_lambda_local_capture_codegen();
     test_generic_lambda_dynamic_capture_codegen();
+    test_lambda_tuple_body_uses_callable_return_target_codegen();
+    test_generic_call_adopts_owned_aggregate_argument_codegen();
     test_callable_spec_lambda_self_capture_codegen();
     test_callable_spec_lambda_argument_codegen();
     test_callable_spec_other_coercion_codegen();
@@ -9670,6 +9839,7 @@ int main(void) {
     test_callable_field_default_and_explicit_initialization_codegen();
     test_void_try_expression_codegen();
     test_try_catch_return_codegen();
+    test_generic_try_body_reified_storage_codegen();
     test_empty_array_literal_codegen_uses_target_contexts();
     test_user_constructor_forms_codegen();
     test_variadic_zero_args_codegen();

@@ -13966,10 +13966,10 @@ struct ExprResult {
 /* Lower one shared-method argument according to the declaration-selected
  * ABI.  Address slots reuse stable lvalue storage when available and create
  * only the statement-lifetime local required for an rvalue. */
-static char *cg_shared_method_argument_expr_dup(CG *cg,
-                                                ExprResult *argument,
-                                                bool uses_address_abi,
-                                                const char *temp_prefix) {
+static char *cg_shared_callable_argument_expr_dup(CG *cg,
+                                                  ExprResult *argument,
+                                                  bool uses_address_abi,
+                                                  const char *temp_prefix) {
     if (cg == NULL || argument == NULL || argument->type == NULL) {
         return NULL;
     }
@@ -15270,6 +15270,32 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
             free(storage_name);
             return NULL;
         }
+        return storage_name;
+    }
+
+    if (cgtype_is_aggregate(r->type) && r->owns_ref &&
+        r->is_addressable) {
+        char *storage_name = strdup(r->c_expr);
+        char *scope_name = cg_fresh_temp(cg, prefix);
+
+        /* Owned fixed-layout aggregate producers already materialize into a
+         * unique C local. Adopt that storage directly instead of copying it
+         * into a second temporary solely to attach Feng cleanup metadata. */
+        if (storage_name == NULL || scope_name == NULL ||
+            !scope_add(cg->cur_scope,
+                       scope_name,
+                       storage_name,
+                       cgtype_clone(r->type),
+                       false)) {
+            free(storage_name);
+            free(scope_name);
+            return NULL;
+        }
+        cg_emit_cleanup_push_for_aggregate_local(cg,
+                                                 storage_name,
+                                                 r->type);
+        r->owns_ref = false;
+        free(scope_name);
         return storage_name;
     }
 
@@ -17500,7 +17526,17 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
         if (!cg_emit_line_directive(cg, lambda_expr->token)) {
             goto cleanup;
         }
-        if (!cg_emit_expr(cg, lambda_expr->as.lambda.body, &result)) goto cleanup;
+        if (spec->callable_return_type->kind == CG_TYPE_VOID) {
+            if (!cg_emit_expr(cg, lambda_expr->as.lambda.body, &result)) {
+                goto cleanup;
+            }
+        } else if (!cg_emit_expr_for_expected_type(
+                       cg,
+                       lambda_expr->as.lambda.body,
+                       spec->callable_return_type,
+                       &result)) {
+            goto cleanup;
+        }
         if (spec->callable_return_type->kind == CG_TYPE_VOID) {
             buf_append_fmt(&fn, "    %s;\n", result.c_expr);
             er_free(&result);
@@ -20334,7 +20370,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         bool uses_address_abi =
             cg_shared_generic_param_uses_address(um->param_types[i]);
 
-        arg_exprs[i] = cg_shared_method_argument_expr_dup(
+        arg_exprs[i] = cg_shared_callable_argument_expr_dup(
             cg, &args[i], uses_address_abi, "_gma");
         if (arg_exprs[i] == NULL) {
             cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
@@ -20735,7 +20771,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
                 ok = false;
                 goto cleanup;
             }
-            arg_exprs[i] = cg_shared_method_argument_expr_dup(
+            arg_exprs[i] = cg_shared_callable_argument_expr_dup(
                 cg, &args[i], uses_address_abi, "_gsm");
         }
         if (arg_exprs[i] == NULL) {
@@ -21298,7 +21334,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
             ok = false;
             goto cleanup;
         }
-        arg_exprs[i] = cg_shared_method_argument_expr_dup(
+        arg_exprs[i] = cg_shared_callable_argument_expr_dup(
             cg, &args[i], uses_address_abi, "_gsma");
         if (arg_exprs[i] == NULL) {
             cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
@@ -21356,7 +21392,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
                 ok = false;
                 goto cleanup;
             }
-            arg_exprs[i] = cg_shared_method_argument_expr_dup(
+            arg_exprs[i] = cg_shared_callable_argument_expr_dup(
                 cg, &args[i], uses_address_abi, "_gsma");
             if (arg_exprs[i] == NULL) {
                 cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
@@ -22702,7 +22738,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     call_ok = false;
                     break;
                 }
-                arg_exprs[i] = cg_shared_method_argument_expr_dup(
+                arg_exprs[i] = cg_shared_callable_argument_expr_dup(
                     cg, &args[i], uses_address_abi, "_t");
                 if (arg_exprs[i] == NULL) {
                     call_ok = false;
@@ -24719,9 +24755,13 @@ static bool cg_branch_terminates_with_throw(const FengBlock *block) {
 }
 
 /* Representation metadata for one outer result slot shared by expression
- * branches. Descriptor-sized aggregates use address storage plus cached
- * descriptor/size locals; fixed-layout results keep their existing C slot. */
+ * branches. Direct generic parameters and descriptor-sized aggregates use
+ * address storage plus cached descriptor/size locals; fixed-layout results
+ * keep their existing C slot. */
 typedef struct CGExpressionJoinSlot {
+    bool uses_erased_generic_storage;
+    char *erased_generic_descriptor_c_name;
+    char *erased_generic_size_c_name;
     bool uses_reified_storage;
     char *reified_descriptor_c_name;
     char *reified_size_c_name;
@@ -24732,17 +24772,32 @@ static void cg_expression_join_slot_free(CGExpressionJoinSlot *slot) {
     if (slot == NULL) {
         return;
     }
+    free(slot->erased_generic_descriptor_c_name);
+    free(slot->erased_generic_size_c_name);
     free(slot->reified_descriptor_c_name);
     free(slot->reified_size_c_name);
     memset(slot, 0, sizeof(*slot));
 }
 
-/* Copy reified join-slot metadata into the expression result consumed by
- * later assignment, call, or return lowering. */
+/* Copy dynamic join-slot representation metadata into the expression result
+ * consumed by later assignment, call, or return lowering. */
 static bool cg_expression_join_slot_apply_to_result(
     const CGExpressionJoinSlot *slot,
     ExprResult *result) {
-    if (slot == NULL || result == NULL || !slot->uses_reified_storage) {
+    if (slot == NULL || result == NULL) {
+        return true;
+    }
+    if (slot->uses_erased_generic_storage) {
+        result->is_storage_address = true;
+        result->uses_erased_generic_storage = true;
+        result->erased_generic_descriptor_c_name =
+            strdup(slot->erased_generic_descriptor_c_name);
+        result->erased_generic_size_c_name =
+            strdup(slot->erased_generic_size_c_name);
+        return result->erased_generic_descriptor_c_name != NULL &&
+               result->erased_generic_size_c_name != NULL;
+    }
+    if (!slot->uses_reified_storage) {
         return true;
     }
     result->is_storage_address = true;
@@ -24771,6 +24826,27 @@ static bool cg_emit_expression_join_slot(CG *cg,
         return false;
     }
     memset(out_slot, 0, sizeof(*out_slot));
+
+    if (result_type->kind == CG_TYPE_GENERIC_PARAM) {
+        if (!cg_emit_erased_generic_storage_declaration(
+                cg,
+                result_type,
+                slot_name,
+                blame,
+                &out_slot->erased_generic_descriptor_c_name,
+                &out_slot->erased_generic_size_c_name) ||
+            !cg_register_erased_generic_storage_for_cleanup(
+                cg,
+                slot_name,
+                result_type,
+                out_slot->erased_generic_descriptor_c_name,
+                out_slot->erased_generic_size_c_name,
+                blame)) {
+            return false;
+        }
+        out_slot->uses_erased_generic_storage = true;
+        return true;
+    }
 
     if (aggregate && cg_type_uses_reified_storage(cg, result_type)) {
         if (!cg_emit_reified_storage_declaration(
@@ -24874,6 +24950,14 @@ static bool cg_assign_expr_result_to_join_slot(
                        "        (void)(%s);\n",
                        result->c_expr);
         return true;
+    }
+    if (slot != NULL && slot->uses_erased_generic_storage) {
+        return cg_emit_generic_value_store(cg,
+                                           slot_name,
+                                           result_type,
+                                           result,
+                                           blame,
+                                           false);
     }
     if (managed) {
         if (result->owns_ref) {
@@ -25204,20 +25288,12 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
      * is false, callers that need to retain do so themselves. */
     out->owns_ref = false;
     out->is_addressable = true;
-    if (join_slot.uses_reified_storage) {
-        out->is_storage_address = true;
-        out->uses_reified_storage = true;
-        out->reified_descriptor_c_name =
-            strdup(join_slot.reified_descriptor_c_name);
-        out->reified_size_c_name = strdup(join_slot.reified_size_c_name);
-        if (out->reified_descriptor_c_name == NULL ||
-            out->reified_size_c_name == NULL) {
-            er_free(out);
-            free(cond_tmp);
-            free(ifv);
-            cg_expression_join_slot_free(&join_slot);
-            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
-        }
+    if (!cg_expression_join_slot_apply_to_result(&join_slot, out)) {
+        er_free(out);
+        free(cond_tmp);
+        free(ifv);
+        cg_expression_join_slot_free(&join_slot);
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
 
     free(cond_tmp);
@@ -26678,6 +26754,7 @@ static bool cg_emit_try_expr(CG *cg,
                    "    if (%s) goto %s;\n"
                    "    FengFrameMarker %s;\n"
                    "    feng_try_frame_push(&%s);\n"
+                   "    {\n"
                    "    %s: ;\n",
                    region_name,
                    registered_name,
@@ -26720,6 +26797,7 @@ static bool cg_emit_try_expr(CG *cg,
     }
     buf_append_fmt(cg->cur_body,
                    "    %s: ;\n"
+                   "    }\n"
                    "    feng_frame_pop();\n"
                    "    goto %s;\n"
                    "    %s: ;\n"
@@ -38035,20 +38113,11 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
                 cgtype_free(pt);
             }
         }
-        if (uses_address_abi) {
-            if (!args[i].is_addressable &&
-                cg_materialize_to_local(cg, &args[i], "_ga") == NULL) {
-                ok = false;
-                break;
-            }
-            arg_addr_exprs[i] = cg_aggregate_result_address_dup(&args[i]);
-        } else {
-            /* Non-generic param: pass by value as usual. */
-            if (cgtype_is_managed(args[i].type) && args[i].owns_ref) {
-                cg_materialize_to_local(cg, &args[i], "_ga");
-            }
-            arg_addr_exprs[i] = strdup(args[i].c_expr);
-        }
+        arg_addr_exprs[i] = cg_shared_callable_argument_expr_dup(
+            cg,
+            &args[i],
+            uses_address_abi,
+            "_ga");
         if (!arg_addr_exprs[i]) { cg_fail(cg, e->token, "IE0001", "codegen: out of memory"); ok = false; }
     }
 

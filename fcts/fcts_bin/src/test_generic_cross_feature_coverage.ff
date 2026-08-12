@@ -1,0 +1,389 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import fcts_lib.test;
+
+/** Wide consumer value used as a closed descriptor-sized generic argument. */
+@value
+type CrossFeatureWideValue {
+  /** First managed field. */
+  let first: string;
+
+  /** Second managed field. */
+  let second: string;
+
+  /** Scalar tail verifying the complete value layout. */
+  let number: i64;
+
+  /** Construct a populated wide value. */
+  func CrossFeatureWideValue(first: string, second: string, number: i64) {
+    self.first = first;
+    self.second = second;
+    self.number = number;
+  }
+}
+
+/** Catch and rethrow an exception after imported direct-generic propagation. */
+func rethrowCrossFeatureLeaf(value: LibAdvancedLifetimeLeaf): void {
+  try libCrossFeaturePropagate<LibAdvancedLifetimeLeaf>(value)
+  catch ex: string {
+    throw "rethrown:" + ex;
+  };
+}
+
+/** Catch and rethrow an exception while a closed aggregate remains live. */
+func rethrowCrossFeatureComposite(
+  value: LibAdvancedComposite<LibAdvancedLifetimeLeaf>
+): void {
+  try libCrossFeatureThrowComposite<LibAdvancedLifetimeLeaf>(value)
+  catch ex: string {
+    throw "rethrown:" + ex;
+  };
+}
+
+/** Exercise managed exception values and return their explicit creation count. */
+func runCrossFeatureExceptionLifetime(): i64 {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  {
+    let direct = LibAdvancedLifetimeLeaf("direct-throw");
+    try libCrossFeatureThrow<LibAdvancedLifetimeLeaf>(direct)
+    catch ex: string {
+      assert(ex == "generic-direct",
+             "direct generic local survives until a concrete throw");
+    };
+
+    let propagated = LibAdvancedLifetimeLeaf("propagated-throw");
+    try libCrossFeaturePropagate<LibAdvancedLifetimeLeaf>(propagated)
+    catch ex: string {
+      assert(ex == "generic-direct",
+             "exception propagates through a shared generic caller");
+    };
+
+    let rethrown = LibAdvancedLifetimeLeaf("rethrown-direct");
+    try rethrowCrossFeatureLeaf(rethrown)
+    catch ex: string {
+      assert(ex == "rethrown:generic-direct",
+             "consumer catch rethrows after generic propagation");
+    };
+
+    let compositeLeaf = LibAdvancedLifetimeLeaf("composite-throw");
+    let composite = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+      compositeLeaf,
+      "composite-label",
+      41
+    );
+    try rethrowCrossFeatureComposite(composite)
+    catch ex: string {
+      assert(ex == "rethrown:generic-composite",
+             "consumer rethrows while a generic aggregate remains live");
+    };
+
+    let recoveredLeaf = LibAdvancedLifetimeLeaf("recovered-fallback");
+    let recovered = libCrossFeatureRecover<LibAdvancedLifetimeLeaf>(
+      direct,
+      recoveredLeaf
+    );
+    assert(recovered.value == "recovered-fallback",
+           "shared catch returns a direct generic fallback");
+
+    let fallbackLeaf = LibAdvancedLifetimeLeaf("aggregate-fallback");
+    let fallback = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+      fallbackLeaf,
+      "fallback-label",
+      42
+    );
+    let recoveredComposite =
+      libCrossFeatureRecoverComposite<LibAdvancedLifetimeLeaf>(
+        composite,
+        fallback
+      );
+    assert(recoveredComposite.value.value == "aggregate-fallback" &&
+           recoveredComposite.label == "fallback-label" &&
+           recoveredComposite.revision == 42,
+           "shared catch returns a complete aggregate generic fallback");
+  }
+  return LibAdvancedLifetimeLeaf.createdCount();
+}
+
+/** Exercise defer capture on both normal and exceptional exits. */
+func runCrossFeatureDeferLifetime(): i64 {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  {
+    let first = LibAdvancedLifetimeLeaf("defer-first");
+    let replacement = LibAdvancedLifetimeLeaf("defer-replacement");
+    var observed = "";
+    let returned = libCrossFeatureDeferObserve<LibAdvancedLifetimeLeaf>(
+      first,
+      replacement,
+      (value: LibAdvancedLifetimeLeaf) {
+        observed = value.value;
+      },
+      false
+    );
+    assert(returned.value == "defer-replacement" &&
+           observed == "defer-replacement",
+           "normal defer observes the replaced generic value");
+
+    let thrownFirst = LibAdvancedLifetimeLeaf("defer-throw-first");
+    let thrownReplacement = LibAdvancedLifetimeLeaf("defer-throw-replacement");
+    var thrownObserved = "";
+    try libCrossFeatureDeferObserve<LibAdvancedLifetimeLeaf>(
+      thrownFirst,
+      thrownReplacement,
+      (value: LibAdvancedLifetimeLeaf) {
+        thrownObserved = value.value;
+      },
+      true
+    ) catch ex: string {
+      assert(ex == "generic-defer", "defer helper throws the expected value");
+    };
+    assert(thrownObserved == "defer-throw-replacement",
+           "exceptional defer observes the replaced generic value");
+  }
+  return LibAdvancedLifetimeLeaf.createdCount();
+}
+
+/** Verify copied direct-generic closures release both captured leaves. */
+func verifyCrossFeatureDirectClosureLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  {
+    var current: Func<LibAdvancedLifetimeLeaf> =
+      libCrossFeatureCaptureDirect<LibAdvancedLifetimeLeaf>(
+        LibAdvancedLifetimeLeaf("closure-first")
+      );
+    let retained = current;
+    current = libCrossFeatureCaptureDirect<LibAdvancedLifetimeLeaf>(
+      LibAdvancedLifetimeLeaf("closure-second")
+    );
+    assert(retained().value == "closure-first" &&
+           current().value == "closure-second",
+           "copied closure survives overwrite with independent capture");
+  }
+  return LibAdvancedLifetimeLeaf.createdCount() == 2 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 2;
+}
+
+/** Verify one descriptor-sized closure capture releases its managed leaf. */
+func verifyCrossFeatureCompositeClosureLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  {
+    let composite = libCrossFeatureCaptureComposite<LibAdvancedLifetimeLeaf>(
+      LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
+        LibAdvancedLifetimeLeaf("closure-composite"),
+        "closure-composite-label",
+        93
+      )
+    );
+    let compositeValue = composite();
+    assert(compositeValue.value.value == "closure-composite" &&
+           compositeValue.label == "closure-composite-label" &&
+           compositeValue.revision == 93,
+           "escaping closure preserves a managed descriptor-sized value");
+  }
+  return LibAdvancedLifetimeLeaf.createdCount() == 1 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 1;
+}
+
+/** Verify an owner/method generic closure releases both captured leaves. */
+func verifyCrossFeatureOwnerClosureLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  {
+    let owner = LibCrossFeatureClosureOwner<LibAdvancedLifetimeLeaf>(
+      LibAdvancedLifetimeLeaf("closure-owner-leaf")
+    );
+    let pairReader = owner.capturePair<LibAdvancedLifetimeLeaf>(
+      LibAdvancedLifetimeLeaf("closure-method-leaf")
+    );
+    let pair = pairReader();
+    assert(pair.item1.value.value == "closure-owner-leaf" &&
+           pair.item2.value.value == "closure-method-leaf" &&
+           pair.item3.value == "closure-owner-leaf" &&
+           pair.item4.value == "closure-method-leaf",
+           "escaping method closure preserves both generic scopes");
+  }
+  return LibAdvancedLifetimeLeaf.createdCount() == 2 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 2;
+}
+
+/** Verify generic behavior spanning independent language features. */
+open func test_generic_cross_feature_coverage(): void {
+  describe("generic cross-feature coverage", () {
+    test("generic try expression preserves scalar and wide results", () {
+      let scalar = libCrossFeatureTryNormal<i64>(17);
+      let wide = libCrossFeatureTryNormal<CrossFeatureWideValue>(
+        CrossFeatureWideValue("try-first", "try-second", 18)
+      );
+      assert(scalar == 17, "normal generic try preserves a scalar");
+      assert(wide.first == "try-first" && wide.second == "try-second" &&
+             wide.number == 18,
+             "normal generic try preserves every wide field");
+
+      let ifWide = libCrossFeatureChooseIf<CrossFeatureWideValue>(
+        true,
+        CrossFeatureWideValue("if-first", "if-second", 19),
+        CrossFeatureWideValue("if-other", "if-other-second", 20)
+      );
+      let matchWide = libCrossFeatureChooseMatch<CrossFeatureWideValue>(
+        1,
+        CrossFeatureWideValue("match-other", "match-other-second", 21),
+        CrossFeatureWideValue("match-first", "match-second", 22)
+      );
+      assert(ifWide.first == "if-first" && ifWide.second == "if-second" &&
+             ifWide.number == 19,
+             "generic if join preserves every wide field");
+      assert(matchWide.first == "match-first" &&
+             matchWide.second == "match-second" && matchWide.number == 22,
+             "generic match join preserves every wide field");
+    });
+
+    test("generic exceptions propagate rethrow and release exactly once", () {
+      let created = runCrossFeatureExceptionLifetime();
+      assert(created == 6,
+             "exception exercise creates the expected explicit leaves");
+      let finalized = LibAdvancedLifetimeLeaf.finalizedCount();
+      assert(finalized == created,
+             "generic exception paths finalize every leaf exactly once");
+    });
+
+    test("generic defer captures replacement on normal and exceptional exits", () {
+      let created = runCrossFeatureDeferLifetime();
+      assert(created == 4,
+             "defer exercise creates the expected explicit leaves");
+      let finalized = LibAdvancedLifetimeLeaf.finalizedCount();
+      assert(finalized == created,
+             "generic defer paths finalize every leaf exactly once");
+    });
+
+    test("top-level generic closures escape with direct captured values", () {
+      let scalar = libCrossFeatureCaptureDirect<i64>(31);
+      let managed = libCrossFeatureCaptureDirect<string>("escaped-managed");
+      let wide = libCrossFeatureCaptureDirect<CrossFeatureWideValue>(
+        CrossFeatureWideValue("escaped-first", "escaped-second", 32)
+      );
+
+      assert(scalar() == 31, "escaping closure preserves a scalar T");
+      assert(managed() == "escaped-managed",
+             "escaping closure preserves a managed T");
+      let wideValue = wide();
+      assert(wideValue.first == "escaped-first" &&
+             wideValue.second == "escaped-second" && wideValue.number == 32,
+             "escaping closure preserves every wide T field");
+    });
+
+    test("generic closures escape with composite and two-scope captures", () {
+      let compositeReader =
+        libCrossFeatureCaptureComposite<CrossFeatureWideValue>(
+          LibAdvancedComposite<CrossFeatureWideValue>(
+            CrossFeatureWideValue("composite-first", "composite-second", 33),
+            "composite-tail",
+            34
+          )
+        );
+      let composite = compositeReader();
+      assert(composite.value.first == "composite-first" &&
+             composite.value.second == "composite-second" &&
+             composite.value.number == 33 &&
+             composite.label == "composite-tail" && composite.revision == 34,
+             "escaping closure preserves complete Composite<T>");
+
+      let owner = LibCrossFeatureClosureOwner<string>("owner-value");
+      let pairReader = owner.capturePair<CrossFeatureWideValue>(
+        CrossFeatureWideValue("method-first", "method-second", 35)
+      );
+      let pair = pairReader();
+      assert(pair.item1.value == "owner-value" &&
+             pair.item1.label == "closure-owner" &&
+             pair.item1.revision == 91 &&
+             pair.item2.value.first == "method-first" &&
+             pair.item2.value.second == "method-second" &&
+             pair.item2.value.number == 35 &&
+             pair.item2.label == "closure-method" &&
+             pair.item2.revision == 92 &&
+             pair.item3 == "owner-value" &&
+             pair.item4.first == "method-first" &&
+             pair.item4.second == "method-second" &&
+             pair.item4.number == 35,
+             "method closure preserves owner T and method U after return");
+    });
+
+    test("escaping generic closure copies release captures exactly once", () {
+      assert(verifyCrossFeatureDirectClosureLifetime(),
+             "copied direct-generic closures release every captured leaf");
+      assert(verifyCrossFeatureCompositeClosureLifetime(),
+             "descriptor-sized closure releases its captured leaf");
+      assert(verifyCrossFeatureOwnerClosureLifetime(),
+             "owner and method generic closure releases both captured leaves");
+    });
+
+    test("imported generic reference constructor derives complete values", () {
+      let scalar = LibCrossFeatureConstructedReference<i64>(41);
+      assert(scalar.original == 41 && scalar.listed == 41 &&
+             scalar.composite.value == 41 &&
+             scalar.composite.label == "constructed-reference" &&
+             scalar.composite.revision == 101 && scalar.count == 1,
+             "reference constructor preserves scalar owner dependencies");
+
+      let managed = LibCrossFeatureConstructedReference<string>(
+        "constructed-managed"
+      );
+      assert(managed.original == "constructed-managed" &&
+             managed.listed == "constructed-managed" &&
+             managed.composite.value == "constructed-managed" &&
+             managed.composite.label == "constructed-reference" &&
+             managed.composite.revision == 101 && managed.count == 1,
+             "reference constructor preserves managed owner dependencies");
+
+      let wide = LibCrossFeatureConstructedReference<CrossFeatureWideValue>(
+        CrossFeatureWideValue("reference-first", "reference-second", 42)
+      );
+      assert(wide.original.first == "reference-first" &&
+             wide.original.second == "reference-second" &&
+             wide.original.number == 42 &&
+             wide.listed.first == "reference-first" &&
+             wide.listed.second == "reference-second" &&
+             wide.listed.number == 42 &&
+             wide.composite.value.first == "reference-first" &&
+             wide.composite.value.second == "reference-second" &&
+             wide.composite.value.number == 42 &&
+             wide.composite.label == "constructed-reference" &&
+             wide.composite.revision == 101 && wide.count == 1,
+             "reference constructor preserves descriptor-sized dependencies");
+    });
+
+    test("imported generic value constructor derives complete values", () {
+      let scalar = LibCrossFeatureConstructedValue<i64>(51);
+      assert(scalar.original == 51 && scalar.listed == 51 &&
+             scalar.composite.value == 51 &&
+             scalar.composite.label == "constructed-value" &&
+             scalar.composite.revision == 102 && scalar.count == 1,
+             "value constructor preserves scalar owner dependencies");
+
+      let managed = LibCrossFeatureConstructedValue<string>(
+        "constructed-managed-value"
+      );
+      assert(managed.original == "constructed-managed-value" &&
+             managed.listed == "constructed-managed-value" &&
+             managed.composite.value == "constructed-managed-value" &&
+             managed.composite.label == "constructed-value" &&
+             managed.composite.revision == 102 && managed.count == 1,
+             "value constructor preserves managed owner dependencies");
+
+      let wide = LibCrossFeatureConstructedValue<CrossFeatureWideValue>(
+        CrossFeatureWideValue("value-first", "value-second", 52)
+      );
+      assert(wide.original.first == "value-first" &&
+             wide.original.second == "value-second" &&
+             wide.original.number == 52 &&
+             wide.listed.first == "value-first" &&
+             wide.listed.second == "value-second" &&
+             wide.listed.number == 52 &&
+             wide.composite.value.first == "value-first" &&
+             wide.composite.value.second == "value-second" &&
+             wide.composite.value.number == 52 &&
+             wide.composite.label == "constructed-value" &&
+             wide.composite.revision == 102 && wide.count == 1,
+             "value constructor preserves descriptor-sized dependencies");
+    });
+  });
+}

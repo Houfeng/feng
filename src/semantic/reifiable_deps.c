@@ -1138,6 +1138,83 @@ static void rd_try_collect_call_return_type_dep(CollectContext *ctx,
     try_collect_type_ref(ctx, substituted);
 }
 
+/* Collect the caller-view signature required to lower a lambda into its
+ * resolved callable-form spec. Lambda parameter annotations alone do not
+ * describe target-only result forms such as `Pair<T, string>`: the target
+ * callable signature is the authoritative ABI and layout source. */
+static void rd_collect_lambda_target_signature_deps(CollectContext *ctx,
+                                                    const FengExpr *expr) {
+    const FengSpecCoercionSite *site;
+    const FengDecl *spec_decl;
+    const FengTypeRef *target_ref;
+    FengTypeRef *const *type_args = NULL;
+    size_t type_arg_count = 0U;
+    size_t index;
+
+    if (ctx == NULL || expr == NULL ||
+        expr->kind != FENG_EXPR_LAMBDA) {
+        return;
+    }
+    site = feng_semantic_lookup_spec_coercion_site(ctx->analysis, expr);
+    if (site == NULL || site->form != FENG_SPEC_COERCION_FORM_CALLABLE ||
+        site->callable_lambda_expr != expr) {
+        return;
+    }
+    spec_decl = site->target_spec_decl;
+    target_ref = site->target_spec_type_ref;
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_CALLABLE ||
+        target_ref == NULL) {
+        return;
+    }
+
+    /* The callable instance itself may be default-initialized or otherwise
+     * consumed by the shared body, so retain the ordinary managed dependency
+     * in addition to the signature's transitive layout dependencies. */
+    try_collect_type_ref(ctx, target_ref);
+    if (target_ref->kind == FENG_TYPE_REF_NAMED) {
+        type_args = target_ref->as.named.type_args;
+        type_arg_count = target_ref->as.named.type_arg_count;
+    }
+
+    for (index = 0U;
+         index <= spec_decl->as.spec_decl.as.callable.param_count;
+         ++index) {
+        const FengTypeRef *signature_ref =
+            index < spec_decl->as.spec_decl.as.callable.param_count
+                ? spec_decl->as.spec_decl.as.callable.params[index].type
+                : spec_decl->as.spec_decl.as.callable.return_type;
+        FengTypeRef *substituted;
+
+        if (signature_ref == NULL) {
+            continue;
+        }
+        if (spec_decl->as.spec_decl.type_param_count == 0U) {
+            try_collect_type_ref(ctx, signature_ref);
+            continue;
+        }
+        if (type_args == NULL ||
+            type_arg_count != spec_decl->as.spec_decl.type_param_count) {
+            /* Semantic resolution already validates callable arity. A
+             * mismatched site cannot yield a sound caller-view dependency. */
+            continue;
+        }
+        substituted = rd_clone_type_ref_substituting(
+            signature_ref,
+            spec_decl->as.spec_decl.type_params,
+            spec_decl->as.spec_decl.type_param_count,
+            type_args);
+        if (substituted == NULL) {
+            continue;
+        }
+        if (!rd_store_synthesized_ref(ctx->analysis, substituted)) {
+            rd_free_synthesized_type_ref(substituted);
+            continue;
+        }
+        try_collect_type_ref(ctx, substituted);
+    }
+}
+
 /* ---- 表达式收集（参照 inject_external_modules_from_expr 模式） ---------- */
 
 static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
@@ -1235,6 +1312,7 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
             return;
 
         case FENG_EXPR_LAMBDA:
+            rd_collect_lambda_target_signature_deps(ctx, expr);
             for (i = 0U; i < expr->as.lambda.param_count; ++i) {
                 try_collect_type_ref(ctx, expr->as.lambda.params[i].type);
             }
